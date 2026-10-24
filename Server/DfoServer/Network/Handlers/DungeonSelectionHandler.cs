@@ -36,7 +36,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             bool Guard() => context.Session.CanPublishDungeonSelection(hellSelection);
             await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "formal_hell_selection_opened", Guard);
             await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(hellSelection.Character.Id), "formal_hell_selection_state", Guard);
-            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(target), "formal_hell_select_notice", Guard);
+            await GriefTowerProjection.SelectionAsync(context,dungeons,target,"formal_hell_select_notice",Guard);
             return CommandResult.Handled;
         }
         var continuation = context.Session.CompleteFormalDungeonContinuation(entry.DungeonIndex);
@@ -132,7 +132,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (dungeon == 0)
             await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(TimeProvider.System, context.Session.AssaultDailyCounts(TimeProvider.System.GetLocalNow())), "assault_mode_daily_info", CanSend);
         if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector)
-            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(legendTarget), "dungeon_select_notice", CanSend);
+            await GriefTowerProjection.SelectionAsync(context,dungeons,legendTarget,"dungeon_select_notice",CanSend);
         return CommandResult.Handled;
     }
 

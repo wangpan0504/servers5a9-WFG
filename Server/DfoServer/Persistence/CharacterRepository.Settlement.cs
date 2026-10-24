@@ -83,6 +83,9 @@ internal sealed partial class CharacterRepository
         {
             var restored = ReadCardCommit(db, tx, owner.Account, prepared, current, expected, true, gained, proficiencyGained);
             restored = restored with { LuckyStarTotal = ReadAccountWallet(db, owner.Account, tx).RentalPoints };
+            if (prepared.Grief is { } grief)
+                restored = restored with { GriefReward = grief.Reward, MailId = ReadGriefClear(db,tx,owner,prepared),
+                    Inventory = new(expected.Inventory,current.Inventory,"grief_tower_reward") };
             tx.Commit();
             return restored;
         }
@@ -199,6 +202,7 @@ internal sealed partial class CharacterRepository
               $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract,$potion,$adventure,$otherBonus,$bonusJson,$proficiencyGained)
             """;
         command.ExecuteNonQuery();
+        uint? griefMail = CommitGriefClear(db,tx,owner,expected,prepared);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久通关成长结果与候选不一致");
@@ -241,8 +245,10 @@ internal sealed partial class CharacterRepository
             LuckyStarGained = luckyStar.Granted,
             LuckyStarTotal = luckyStar.Total,
             Card = prepared.Card, Options = prepared.Options,
+            GriefReward = prepared.Grief?.Reward, MailId = griefMail,
             BlackDiamond = prepared.Options?.BlackDiamond,
-            Inventory = creatureInventory is { Changed: true } ? new(expected.Inventory, committed.Inventory, "creature_experience") : null
+            Inventory = prepared.Grief?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true }
+                ? new(expected.Inventory, committed.Inventory, prepared.Grief is null ? "creature_experience" : "grief_tower_reward") : null
         };
     });
 

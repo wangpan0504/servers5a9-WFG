@@ -73,10 +73,16 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
                 maze.MapSpecification is not null || maze.GreedGrid.Cells is not [{ Index: 1 }] ||
                 maze.LayeredMaps.Count != 0 || maze.WarpMaps.Count != 0 || maze.ConditionalMaps.Count != 0 ||
                 maze.StoryStages.Count != 0 || maze.BossEntrance is not null || maze.HellParty is not null) return maze;
-            var grief = pool.Where(row => row.Kind == "[normal]" && (row.Layouts & 2) != 0).ToArray();
-            if (grief is not [{ Id: 100247, Layouts: 2, Dungeons: [5115] } candidate] ||
-                !candidate.Path.Equals("map/towerofgrief_down/100247_001.map",StringComparison.OrdinalIgnoreCase)) return maze;
-            return maze with { IsGriefTower = true, MapSpecification = [new("boss",start,candidate.Id,candidate.Path)] };
+            // 本版57、58层声明boss，其余98层声明normal；都须核对唯一实际归属，不能只套首层类型。
+            var grief = pool.Where(row => row.Kind is "[normal]" or "[boss]" && (row.Layouts & 2) != 0).ToArray();
+            if (grief is not [{ Layouts: 2, Dungeons.Length: 1 } candidate] || candidate.Dungeons[0] != definition.Id ||
+                !(candidate.Path.StartsWith("map/towerofgrief_down/",StringComparison.OrdinalIgnoreCase) ||
+                  candidate.Path.StartsWith("map/towerofgrief_up/",StringComparison.OrdinalIgnoreCase))) return maze;
+            // 无专表身份时保留原首层的精确资源约束；其它层必须来自已验证的专表。
+            if (definition.GriefFloor is null && (candidate.Kind != "[normal]" || candidate.Id != 100247 ||
+                !candidate.Path.Equals("map/towerofgrief_down/100247_001.map",StringComparison.OrdinalIgnoreCase))) return maze;
+            var griefRoom = new DungeonMap("boss",start,candidate.Id,candidate.Path);
+            return maze with { IsGriefTower = true, GriefRoom = griefRoom, MapSpecification = [griefRoom] };
         }
         // 本版职业体验是无出口的真实单房间；只接受已核验的资源归属、类型、坐标与AA，不放宽普通空格。
         if (definition.IsClassExperience && maze.Width == 1 && maze.Height == 1 && maze.Starts.Count == 1 && maze.Bosses.Count == 1 &&

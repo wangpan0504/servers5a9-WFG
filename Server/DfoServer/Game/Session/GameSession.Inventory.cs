@@ -68,7 +68,8 @@ internal sealed partial class GameSession
         ReferenceEquals(Selected, receipt.Character));
 
     public InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError = 1,
-        bool requireTown = true, SessionPhase? requiredPhase = null) => PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase);
+        bool requireTown = true, SessionPhase? requiredPhase = null, InventorySlot? usedItem = null) =>
+        PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase, usedItem: usedItem);
 
     public InventoryResult SellAtShop(SellItemRequest request, InventoryShopService shop) =>
         PlanAndCommitInventory(character => shop.Sell(character, request), requireTown: false);
@@ -88,18 +89,23 @@ internal sealed partial class GameSession
     }
 
     public InventoryResult PlanAndCommitBooster(Func<Character, InventoryResult> plan,
-        DfoServer.GameWorld.Items.BoosterUsePlacesDefinition places) =>
+        DfoServer.GameWorld.Items.BoosterUsePlacesDefinition places, int itemId = 0) =>
         PlanAndCommitInventory(plan, 19, requireTown: false, allowSettlement: false, additionalGuard: () =>
             places.PendingRule is null && (!places.Village && !places.SeriaRoom ||
                 Phase == SessionPhase.Town && (places.Village || places.SeriaRoom && Selected is { } character &&
-                    towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character)))));
+                    towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character)))), consumableItemId: itemId);
+
+    public InventoryResult UsePremiumContract(ConsumableUseRequest request, InventoryPremiumContractUseService service) =>
+        PlanAndCommitInventory(character => service.Plan(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds()),
+            123, requireTown: false, allowSettlement: false, consumableItemId: request.ItemId);
 
     public InventoryResult RepairEquipment(RepairEquipmentRequest request, InventoryRepairService repair) =>
         // 战斗中的耐久由本版客户端维护；CMD23 mode1触发后仍核对副本实例、契约期限与当日次数。
         PlanAndCommitInventory(character => repair.Repair(character, request,
             clientBattleWear: Phase == SessionPhase.Dungeon && formalDungeon is not null,
             inDungeon: Phase is SessionPhase.Dungeon or SessionPhase.Settlement), 19,
-            requireTown: request.Mode != 1 && request.RepairItemSlot < 0, allowSettlement: true);
+            requireTown: request.Mode != 1 && request.RepairItemSlot < 0, allowSettlement: true,
+            usedItem: request.RepairItemSlot >= 0 ? new(InventoryListType.Main, request.RepairItemSlot) : null);
 
     public InventoryResult DisjointEquipment(DisjointRequest request, InventoryDisjointService disjoint, out DisjointReceipt? receipt)
     {
@@ -111,7 +117,8 @@ internal sealed partial class GameSession
     }
 
     InventoryResult PlanAndCommitInventory(Func<Character, InventoryResult> plan, ushort invalidStateError,
-        bool requireTown, bool allowSettlement, SessionPhase? requiredPhase = null, Func<bool>? additionalGuard = null)
+        bool requireTown, bool allowSettlement, SessionPhase? requiredPhase = null, Func<bool>? additionalGuard = null,
+        int? consumableItemId = null, InventorySlot? usedItem = null)
     {
         var capture = owner.Execute(() => (Character: CanPlan() ? Selected : null,
             SelectionEpoch, Phase, Dungeon: formalDungeon, Identity: formalDungeon?.Run.Snapshot.Identity));
@@ -127,13 +134,16 @@ internal sealed partial class GameSession
                 !ReferenceEquals(formalDungeon, capture.Dungeon) || formalDungeon?.Run.Snapshot.Identity != capture.Identity ||
                 !ReferenceEquals(Selected, character))
                 return InventoryResult.Reject(invalidStateError);
-            return CommitInventory(character, result, invalidStateError);
+            var committed = CommitInventory(character, result, invalidStateError);
+            if (committed.Accepted && UsedItemId(character) is { } itemId) CommitDungeonItemUse(itemId);
+            return committed;
         });
 
         bool CanPlan()
         {
             if (pendingRental is not null || additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
                 requiredPhase is { } expected && Phase != expected || formalDungeon?.PendingTutorialClear is not null) return false;
+            if (UsedItemId(Selected) is { } itemId && !CanUseDungeonItem(itemId)) return false;
             // 城镇未提交手册和已安装回答缓存可随库存自然失效；副本继续保留专用取放资格。
             if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();
             return (Phase == SessionPhase.Town || !HasUncommittedQuestQuickClear) &&
@@ -142,5 +152,8 @@ internal sealed partial class GameSession
                 (Phase == SessionPhase.Town || Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
                     formalDungeon is { HasPendingFatigue: false } dungeon && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement);
         }
+
+        int? UsedItemId(Character character) => usedItem is { } slot ?
+            character.Inventory.Find(slot)?.Core.ItemId ?? 0 : consumableItemId;
     }
 }

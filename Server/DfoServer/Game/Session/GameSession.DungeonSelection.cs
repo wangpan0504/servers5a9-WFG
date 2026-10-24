@@ -9,6 +9,22 @@ internal sealed partial class GameSession
     long dungeonSelectionId;
     public DungeonSelectionContext? CurrentDungeonSelection { get; private set; }
 
+    public (int Layer, bool ClearedToday)? GriefTowerSelection(DungeonCatalog catalog)
+    {
+        int entrance = catalog.GriefTower.FloorsByDungeon.Values.Single(floor => floor.Layer == 1).DungeonId;
+        return owner.Execute<(int, bool)?>(() =>
+        {
+            if (!Ready || Selected is not { } character ||
+                !towns.Areas.TryGetValue((character.Position.Town,character.Position.Area),out var area) ||
+                area.DungeonWorldMap is not { } world || !towns.DungeonMaps.TryGetValue(world,out var map) ||
+                !map.Options.Any(option => option.DungeonId == entrance)) return null;
+            var state = repository.ReadGriefTower(owner,character.Id).State;
+            int day = QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow());
+            // 客户端楼层setter只接受1..100；通完100层的持久终止值101仍显示末层。
+            return (Math.Min(state.Layer,catalog.GriefTower.TopLayer),state.CharacterDay == day && state.CharacterCleared);
+        });
+    }
+
     public int PrepareLegendDungeonSelection(DungeonCatalog dungeons, Func<int, int>? draw = null, DateTimeOffset? localNow = null)
     {
         var before = owner.Execute(() => (Selected, CurrentDungeonSelection, SelectionEpoch, Phase));

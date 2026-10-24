@@ -301,6 +301,12 @@ internal sealed partial class GameSession
         if (pending.Committed is { } installed)
             return receipt with { Character = installed.Character, Commit = installed with { Duplicate = true },
                 TicketAcknowledged=pending.TicketAcknowledged, Reason = "重复最终回答恢复同一手册提交" };
+        var usedItem = pending.Plan.Ticket?.Item ?? pending.Plan.LevelUpTicket?.Item;
+        if (usedItem is not null && !CanUseDungeonItem(usedItem.Core.ItemId))
+        {
+            pendingQuestQuickClear = null;
+            return receipt with { Prepared = pending.Plan, Reason = "悲叹之塔禁止使用此道具或使用次数已耗尽" };
+        }
         // 只有进入仓储提交才占用恢复状态；异常保留最终答案和原操作身份，不能重抽范围。
         pendingQuestQuickClear = pending with { CommitStarted = true };
         QuestQuickClearCommit commit;
@@ -312,6 +318,7 @@ internal sealed partial class GameSession
         }
         if (!commit.ProjectionCurrent) throw new InvalidOperationException("手册已提交但原角色已变化，需要重连恢复");
         Selected = commit.Character; completed = QuestEligibility.Completed(Selected);
+        if (!commit.Duplicate && usedItem is not null) CommitDungeonItemUse(usedItem.Core.ItemId);
         if (pending.Plan.LevelUpTicket is { } levelUpSource) RecordLevelUpCooldown(levelUpSource);
         // ACK1431发送丢失后可恢复同一结果；已安装提交不再阻止切日。
         pendingQuestQuickClear = retainAnswered ? pending with { Committed = commit, CommitStarted = false } : null;

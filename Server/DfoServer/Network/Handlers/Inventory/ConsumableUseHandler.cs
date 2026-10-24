@@ -75,9 +75,7 @@ internal sealed class ConsumableUseHandler(InventoryConsumableUseService use, Se
         {
             var before = context.Owner.Execute(() => (Character: context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
             var premium = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(123) :
-                context.Session.PlanAndCommitInventory(character => contracts.Plan(character,
-                    new(tutorialRequest.Position, tutorialRequest.Token, tutorialRequest.ItemId, 0),
-                    contracts.Clock.GetUtcNow().ToUnixTimeSeconds()), 123, requireTown: false);
+                context.Session.UsePremiumContract(new(tutorialRequest.Position, tutorialRequest.Token, tutorialRequest.ItemId, 0), contracts);
             bool Guard() => premium.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
                 context.Owner.Execute(() => ReferenceEquals(before.Character, context.Session.Selected) &&
                     before.SelectionEpoch == context.Session.SelectionEpoch && before.Phase == context.Session.Phase);

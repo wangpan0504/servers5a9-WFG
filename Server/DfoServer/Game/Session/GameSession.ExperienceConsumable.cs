@@ -24,6 +24,7 @@ internal sealed partial class GameSession
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "commit-unknown", Guard: capture.Guard);
             if (!CanUseConsumable() || !CanPublishConsumable(capture.Guard))
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed", Guard: capture.Guard);
+            if (!CanUseDungeonItem(plan.Source.Core.ItemId)) return Reject("grief-item-not-allowed-or-exhausted");
             if (plan.Definition.VillageOnly && Phase != SessionPhase.Town) return Reject("village-only");
             if (plan.Definition.SeriaRoomOnly && !towns.IsRoom(expected.Position, QuestEligibility.Completed(expected)))
                 return Reject("seria-room-only");
@@ -37,6 +38,7 @@ internal sealed partial class GameSession
             var character = repository.CommitExperienceConsumable(owner, plan, now);
             pendingConsumableUse = null;
             Selected = character;
+            CommitDungeonItemUse(plan.Source.Core.ItemId);
             if (plan.Definition.CoolTime > 0)
                 usedConsumables[plan.Definition.CoolGroup] = new(null, plan.Source.Uid, service.Clock.GetTimestamp(), plan.Definition.CoolTime, service.Clock);
             var inventory = new InventoryResult(true, 0, plan.Inventory)

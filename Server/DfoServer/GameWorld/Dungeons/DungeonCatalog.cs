@@ -64,6 +64,8 @@ internal sealed record DungeonMaze(
     public bool IsTrainingRoom { get; init; }
     public bool IsClassExperience { get; init; }
     public bool IsGriefTower { get; init; }
+    // 资源池已核验的同层唯一MAP；静态拓扑必须继续匹配它，不能只凭模式布尔值放宽BB。
+    public DungeonMap? GriefRoom { get; init; }
     // 实验性（#259）：比赛副本的 1x1 单图迷宫，地图取自 PVF 地图反向 [dungeon] 声明。
     public bool IsTournament { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
@@ -141,7 +143,10 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool IsRaid => RawSections.Any(row => row.Tag == "raid dungeon" && row.Tokens is [{ Type: 0, Value: 1 }]) ||
         RawSections.Any(row => (row.Tag is "raid normal dungeon" or "anton dungeon") && row.Tokens.Count == 0);
     // 资源识别与正式准入分开；畸形声明也不能落回普通入场。
-    public bool RequiresGriefEntryContract => Id == 5115;
+    public bool RequiresGriefEntryContract => Id == 5115 || GriefFloor is not null ||
+        Path.StartsWith("dungeon/towers/grief/", StringComparison.OrdinalIgnoreCase) ||
+        RawSections.Any(row => row.Tag == "tower of grief");
+    public GriefTowerFloor? GriefFloor { get; init; }
     public bool IsBossRushDungeon => string.Equals(DungeonType?.Trim(), "boss rush dungeon", StringComparison.OrdinalIgnoreCase);
     public bool IsDazzlementTower => string.Equals(DungeonType?.Trim(), "tower of dazzlement", StringComparison.OrdinalIgnoreCase);
     // 0409EC16 把唯一整数收成非零字节；本资源里合法形状是单独的 1。
@@ -179,8 +184,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     // #511 [use fatigue only start dungeon] N：只认唯一一段且恰为一个 1..65535 的整数；其他形状返回 null（保持逐房扣点）。
     public ushort? StartFatigue => RawSections.Where(row => row.Tag == "use fatigue only start dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } amount] }] ? (ushort)amount.Value : null;
-    public bool IsGriefTower => Id == 5115 &&
-        Path.Equals("dungeon/towers/grief/5115_001.dgn", StringComparison.OrdinalIgnoreCase) &&
+    public bool IsGriefTower => (GriefFloor is { } floor && floor.DungeonId == Id &&
+        Path.StartsWith("dungeon/towers/grief/", StringComparison.OrdinalIgnoreCase) ||
+        Id == 5115 && Path.Equals("dungeon/towers/grief/5115_001.dgn", StringComparison.OrdinalIgnoreCase)) &&
         RawSections.Where(row => row.Tag == "tower of grief").ToArray() is [{ Tokens.Count: 0 }];
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
     public bool AllowsPractice => !IsTutorial && !IsClassExperience && !IsTournament && Id != 5000 &&
@@ -307,12 +313,15 @@ internal sealed class DungeonCatalog
     private readonly IReadOnlyDictionary<int, string> dungeons, maps;
     private readonly ConcurrentDictionary<int, Lazy<DungeonDefinition>> definitions = new();
     private readonly Lazy<DungeonMapPool> mapPool;
+    private readonly Lazy<GriefTowerCatalog> griefTower;
     private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps)
     {
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
         mapPool = new(() => DungeonMapPool.Load(archive,maps),LazyThreadSafetyMode.ExecutionAndPublication);
+        griefTower = new(() => new GriefTowerCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
     }
     public int DungeonCount => dungeons.Count;
+    public GriefTowerCatalog GriefTower => griefTower.Value;
 
     public static DungeonCatalog Load(PvfArchive pvf)
     {
@@ -328,7 +337,14 @@ internal sealed class DungeonCatalog
         if (id < 0 || !dungeons.TryGetValue(id, out var path))
             throw new InvalidDataException("副本索引不存在: " + id);
         // Lazy 在完整解析成功后才发布 Definition；失败缓存为异常，不发布局部 maze。
-        return definitions.GetOrAdd(id, _ => new(() => ParseResource(id, path, archive.ReadTokens(path), archive.ResolveString, maps, archive.Contains), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        return definitions.GetOrAdd(id, _ => new(() =>
+        {
+            var definition = ParseResource(id, path, archive.ReadTokens(path), archive.ResolveString, maps, archive.Contains);
+            if (!definition.RequiresGriefEntryContract) return definition;
+            if (!GriefTower.FloorsByDungeon.TryGetValue(id, out var floor))
+                throw new InvalidDataException("悲叹副本未登记于楼层专表: " + id);
+            return definition with { GriefFloor = floor };
+        }, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
 
     public DungeonMaze ResolveOrdinaryMaze(DungeonDefinition definition, DungeonMaze maze, Func<int,int>? draw = null, bool hellParty = false)

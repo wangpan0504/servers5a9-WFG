@@ -189,7 +189,7 @@ internal static class DungeonMapPoolTests
             var expected = scenario.Replay ? character with { CompletedQuests = [2929] } : character;
             That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [resolved] },expected,5115,scenario.Quest,0,
                 out var entry,out string reason,quest: quest,isReplay: scenario.Replay) && entry is null &&
-                reason == "grief-tower-entry-contract-unsupported","资源几何不能让普通、显式或回放绕过未知票据/疲劳准入合同");
+                reason == "grief-tower-admission-required","资源几何不能让普通、显式或回放绕过未知票据/疲劳准入合同");
         }
     }
 
@@ -324,7 +324,7 @@ internal static class DungeonMapPoolTests
             "真实100247仍保留敌对Boss APC470，不为单房拓扑删除演员");
         var eligible = new Character(99,0,"GriefResource",0,new(38,2,1085,249),null) { Level = 90 };
         That(!DungeonEntryPlan.TryCreate(catalog,eligible,5115,0,0,out var entry,out string reason) && entry is null &&
-            reason == "grief-tower-entry-contract-unsupported","真实目录正式入口仍明确拒绝，资源成功不创建Run");
+            reason == "grief-tower-admission-required","真实目录正式入口仍明确拒绝，资源成功不创建Run");
         That(griefDefinition.DisableFatigueConsumption && griefDefinition.EnterWithoutFatigue &&
             griefDefinition.RequiredItemRows.SequenceEqual([new(10161065,1,1), new(4473,1,1)]),
             "5115 同时声明无疲劳、enter without fatigue=1，以及两行票据三元组");

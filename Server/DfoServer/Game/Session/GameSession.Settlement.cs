@@ -27,6 +27,7 @@ internal sealed partial class GameSession
         public bool CardsShown { get; set; }
         public byte? SelectedCard { get; set; }
         public DungeonCardReward? Card { get; set; }
+        public GriefTowerReward? GriefReward { get; set; }
         public uint? MailId { get; set; }
         public bool AutoRevealScheduled { get; set; }
         public DungeonCardReward? BlackDiamond { get; set; }
@@ -110,7 +111,8 @@ internal sealed partial class GameSession
     public FormalDungeonSettlementResult SettleFormalDungeon(ushort actorId, byte rankPoint, byte maximumRankPoint,
         byte[] reportBody, DungeonCatalog dungeons, DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth,
         DungeonCardRewardPolicy? cards = null, int luckyStarLimit = 0,
-        Events.ServerEventState? goldCardEvent = null, AdventureCatalog? adventure = null)
+        Events.ServerEventState? goldCardEvent = null, AdventureCatalog? adventure = null,
+        ItemCatalog? griefItems = null, EpicPieceCatalog? griefPieces = null)
     {
         var capture = owner.Execute(() => (Character: Ready && Phase == SessionPhase.Settlement ? Selected : null,
             Dungeon: formalDungeon, Points: formalDungeon?.Run.CreatureExperiencePoints ?? 0,
@@ -122,6 +124,17 @@ internal sealed partial class GameSession
         {
             var grown = creatures.Experience(character, capture.Points, creatures.Clock.GetUtcNow().ToUnixTimeSeconds());
             if (grown.Plan is { Changed: true } changed) creatureInventory = changed;
+        }
+        GriefTowerClearReward? griefReward = null;
+        if (!capture.Prepared && capture.Character is { } griefCharacter &&
+            capture.Dungeon is { Entry.Maze.IsGriefTower: true, Run.ClearFact: not null } griefDungeon &&
+            maximumRankPoint == rankPoint)
+        {
+            if (griefItems is null || griefPieces is null) return new(DungeonRunOutcome.Rejected);
+            var progress = repository.ReadGriefTower(owner,griefCharacter.Id);
+            griefReward = GriefTowerClearReward.Prepare(dungeons.GriefTower,progress,checked((int)griefDungeon.Entry.DungeonId),
+                griefCharacter with { Inventory = creatureInventory?.After ?? griefCharacter.Inventory },griefItems,griefPieces,
+                griefDungeon.Draw,(timeProvider ?? TimeProvider.System).GetUtcNow());
         }
         return owner.Execute(() =>
     {
@@ -153,17 +166,18 @@ internal sealed partial class GameSession
         if (dungeon.Settlement is null && !((dungeon.Entry.IsTutorial || dungeon.Entry.DisableMonsterAndClearExperience) && reward.TotalExperience == 0) &&
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
-        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo ? cards?.Prepare(
+        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo && !dungeon.Entry.Maze.IsGriefTower ? cards?.Prepare(
             dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count) : null);
         var options = dungeon.Settlement?.Pending.Options;
-        if (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo && cards is not null)
+        if (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo && !dungeon.Entry.Maze.IsGriefTower && cards is not null)
         {
             var now = DateTimeOffset.UtcNow;
             var membership = repository.LoadCardMembership(owner,Selected!.Id,now);
             options = cards.PrepareOptions(dungeons.Get(checked((int)dungeon.Entry.DungeonId)),dungeon.Entry.Difficulty,
                 fact.ConfirmedDeathEvents.Count,membership,now,goldCardEvent);
         }
-        var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options,creatureInventory);
+        var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options,creatureInventory,
+            dungeon.Settlement?.Pending.Grief ?? griefReward);
         if (prepared.Pending is null || prepared.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
@@ -174,7 +188,7 @@ internal sealed partial class GameSession
                 MonsterBossExperience = dungeon.KillBossExperience,
                 MonsterExperienceEntries = [.. dungeon.KillObjectExperience]
             }, Selected!)
-            { CardPolicy = dungeon.Entry.IsCosmo ? null : cards };
+            { CardPolicy = dungeon.Entry.IsCosmo || dungeon.Entry.Maze.IsGriefTower ? null : cards };
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");
         InventoryResult? inventory = null;
@@ -212,6 +226,7 @@ internal sealed partial class GameSession
                 throw new InvalidOperationException("已提交通关结算不能确认原准备");
             Selected = commit.Character;
             settlement.Card = commit.Card;
+            settlement.GriefReward = commit.GriefReward;
             settlement.MailId = commit.MailId;
             settlement.BlackDiamond = commit.BlackDiamond ?? prepared.Pending.Options?.BlackDiamond;
             settlement.GainedExperience = commit.GainedExperience;
@@ -256,13 +271,13 @@ internal sealed partial class GameSession
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,
                 Adventure = adventureCommit,
-                Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond };
+                Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond,GriefReward = settlement.GriefReward };
         });
     }
 
     public FormalDungeonReceipt? AdvanceFormalDungeonCards(bool showCards) => owner.Execute(() =>
     {
-        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true ||
+        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
             formalDungeon?.Settlement is not { Committed: true } settlement)
             return null;
         if (showCards)
@@ -276,7 +291,7 @@ internal sealed partial class GameSession
 
     public FormalFreeCardResult? SelectFormalDungeonFreeCard(byte row, byte card) => owner.Execute<FormalFreeCardResult?>(() =>
     {
-        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true ||
+        if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
             formalDungeon?.Settlement is not { Committed: true, CardsShown: true } settlement ||
             row != 0 || card != 0 || settlement.SelectedCard is { } old && old != card)
             return null;
@@ -326,7 +341,8 @@ internal sealed partial class GameSession
 
     bool MatchesCardInstance(FormalDungeonReceipt receipt) => Ready && Phase == SessionPhase.Settlement &&
         receipt.Generation == owner.Generation && receipt.SelectionEpoch == SelectionEpoch &&
-        formalDungeon?.Entry.IsCosmo != true && formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity;
+        formalDungeon?.Entry.IsCosmo != true && formalDungeon?.Entry.Maze.IsGriefTower != true &&
+        formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity;
 
     // 牌面属于已提交实例，与之后德利拉物品服务产生的新库存revision无关。
     public bool CanPublishDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>

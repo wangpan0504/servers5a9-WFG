@@ -28,7 +28,7 @@ internal sealed partial class GameSession
         if (formalDungeon!.CharacterDead) return null;
         var character = Selected!;
         long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
-        bool blessing = character.Inventory.ConsumableStates.Concat(formalDungeon!.FreeConsumableEffects).Any(row => row.Kind == ConsumableStateKind.Effect &&
+        bool blessing = !formalDungeon!.Entry.Maze.IsGriefTower && character.Inventory.ConsumableStates.Concat(formalDungeon.FreeConsumableEffects).Any(row => row.Kind == ConsumableStateKind.Effect &&
             GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId) && row.Active(now));
         var after = ConsumableStatePolicy.CrossBoundary(character.Inventory, ConsumableMaintenance.Death,
             now);
@@ -64,7 +64,8 @@ internal sealed partial class GameSession
     // 扣币提交失败时保留死亡状态；只有实际提交结果才能发布复活。
     public InventoryResult? ReviveFormalCharacter(ushort targetKey) => owner.Execute(() =>
     {
-        if (!CanChangeDungeonLife() || !formalDungeon!.CharacterDead || Selected!.Id != targetKey) return null;
+        if (!CanChangeDungeonLife() || !formalDungeon!.CharacterDead || Selected!.Id != targetKey ||
+            formalDungeon.Entry.Maze.IsGriefTower) return null;
         var result = CommitInventory(Selected, DungeonRevive.Plan(Selected,PreservesDungeonConsumables));
         if (result.Accepted) formalDungeon.CharacterDead = false;
         return result;

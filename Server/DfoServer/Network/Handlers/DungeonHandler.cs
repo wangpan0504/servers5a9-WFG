@@ -170,6 +170,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             RejectReason = receipt is null && !continuation && !replay ? context.Session.LastFormalDungeonRejection : null,
             HellTicket = receipt?.HellTicket, EntryItem = receipt?.Entry.EntryItem, StartFatigue = receipt?.Entry.StartFatigue,
             EntryFatigueCharged = receipt?.EntryFatigueCharged, EntryCostNote = receipt?.Entry.EntryCostNote,
+            GriefLayer = receipt?.Entry.GriefLayer, Grief = receipt?.GriefAdmission?.Decision,
             CharacterId = character.Id, CharacterName = character.Name });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
@@ -200,10 +201,12 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main, [.. receipt.HellConsumedSlots]), "hell_party_entry_items", Guard);
         }
-        if (!receipt.EntryItemConsumedSlots.IsDefaultOrEmpty && receipt.Entry.EntryItem is { } entryItem)
+        if (!receipt.EntryItemConsumedSlots.IsDefaultOrEmpty)
         {
             // #510/#511 普通入场票已在入场提交时与疲劳、尝试号同事务扣除；把背包变化投给客户端并留日志。
-            log.Write("dungeon_entry_item_consumed", new { Connection = context.Id, receipt.Entry.DungeonId, entryItem.ItemId, entryItem.Count,
+            log.Write("dungeon_entry_item_consumed", new { Connection = context.Id, receipt.Entry.DungeonId,
+                ItemId = receipt.Entry.EntryItem?.ItemId ?? GriefTowerEntryDecision.InvitationItem,
+                Count = receipt.Entry.EntryItem?.Count ?? 1,
                 Slots = receipt.EntryItemConsumedSlots.Select(slot => slot.Index).ToArray(), receipt.EntryFatigueCharged,
                 CharacterId = character.Id, CharacterName = character.Name });
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,

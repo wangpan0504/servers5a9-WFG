@@ -193,6 +193,9 @@ internal static class SelfTestRunner
         WarpMazeConditionsTests.Run();
         DungeonClearConditionTests.Run();
         DungeonMapPoolTests.RunCore();
+        GriefTowerResourceTests.RunCore();
+        GriefTowerRewardTests.RunCore();
+        GriefTowerPersistenceTests.RunCore();
         DungeonClassExperienceTests.RunCore();
         DungeonPracticeTests.RunCore();
         DungeonResourceSurveyTests.RunCore();
@@ -310,6 +313,7 @@ internal static class SelfTestRunner
         DungeonDropPacketsTests.Run();
         await DungeonDeathProtocolTests.RunAsync(towns, pvf);
         DungeonEntryPlanTests.Run(pvf);
+        GriefTowerClearTests.RunResources(pvf,itemResources.Items,itemResources.EpicPieces);
         TournamentSettlementTests.Run();
         MainlineQuestBatchTests.Run(pvf, itemResources);
         DungeonMapPoolTests.Run(pvf);

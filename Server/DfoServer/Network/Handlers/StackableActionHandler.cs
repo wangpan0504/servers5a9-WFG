@@ -131,7 +131,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             result = !valid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
                 context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, before.Selected)
                     ? mileage!.Plan(character, source, before.Phase == Game.Session.SessionPhase.Town) : InventoryResult.Reject(19),
-                    19, requireTown: false, requiredPhase: before.Phase);
+                    19, requireTown: false, requiredPhase: before.Phase, usedItem: source);
         }
         catch (Exception error) when (error is DbException or InvalidDataException or KeyNotFoundException)
         {
@@ -163,7 +163,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
         var result = !valid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(19) :
             context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, before.Selected)
                 ? periodExtensions!.Plan(character, source, target, definition, before.Phase == Game.Session.SessionPhase.Town)
-                : InventoryResult.Reject(19), 19, requireTown: false, requiredPhase: before.Phase);
+                : InventoryResult.Reject(19), 19, requireTown: false, requiredPhase: before.Phase, usedItem: source);
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
             ReferenceEquals(context.Session.Selected, before.Selected) && context.Session.SelectionEpoch == before.SelectionEpoch &&
             context.Session.Phase == before.Phase);
@@ -327,7 +327,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
                     new(InventoryListType.Pet, (short)targetIndex), request.SecondArgument, capture.Phase == Game.Session.SessionPhase.Town)
                 : creatureChanges.Plan(character, new(InventoryListType.Main, (short)request.Slot), new(InventoryListType.Pet, (short)targetIndex),
                     capture.Phase == Game.Session.SessionPhase.Town),
-                0, requireTown: request.Action == CreatureChangeDefinition.Action, requiredPhase: capture.Phase);
+                0, requireTown: request.Action == CreatureChangeDefinition.Action, requiredPhase: capture.Phase,
+                usedItem: new(InventoryListType.Main, (short)request.Slot));
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
             context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, capture.Selected) &&
                 context.Session.SelectionEpoch == capture.SelectionEpoch && context.Session.Phase == capture.Phase);

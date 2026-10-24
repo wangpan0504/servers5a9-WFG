@@ -57,6 +57,7 @@ internal static class DungeonEntryPlanTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
+        GriefTowerResourceTests.Run(pvf);
         SpecialNormalDungeonEntryTests.Run(pvf);
 
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);

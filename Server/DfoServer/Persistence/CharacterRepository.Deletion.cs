@@ -12,6 +12,7 @@ internal sealed partial class CharacterRepository
     static readonly string[] DeletionTables =
     [
         "character_tutorial_receipts", "character_tutorial_state",
+        "character_grief_tower_clears", "character_grief_tower_entries", "character_grief_tower",
         "character_title_book_slots", "character_title_progress", "character_title_sections",
         "character_dungeon_card_options", "character_dungeon_card_rewards",
         "character_dungeon_drop_pickups", "character_dungeon_drop_objects", "character_dungeon_drop_batches",

@@ -51,9 +51,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         // 活动查询不占用账号锁；同一份结算准备冻结资格与倍率。
         var goldCardEvent = events?.Read(Game.Events.ServerEventService.DoubleGoldCardId);
         var result = context.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint,
-            request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent, adventure);
+            request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent, adventure,items,pieces);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, parsed.RankPoint,
-            result.Reward, result.GainedExperience, result.ProficiencyGained, result.Card, result.MailId, result.Receipt?.Snapshot.Identity,
+            result.Reward, result.GainedExperience, result.ProficiencyGained, result.Card, result.GriefReward, result.MailId, result.Receipt?.Snapshot.Identity,
             Adventure = result.Adventure is { } progression
                 ? new { progression.State.Level, progression.State.Experience, progression.MaximumLevelExperience,
                     progression.State.CapsuleExperience, BravePoints = progression.State.Points[0] }
@@ -76,7 +76,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         bool tournament = receipt.Entry.IsTournament;
         // 超星空保留真实通关经验提交，但不发布普通结果页或翻牌奖励。
         bool cosmo = receipt.Entry.IsCosmo;
-        if (!tournament && !cosmo)
+        bool grief = receipt.Entry.Maze.IsGriefTower;
+        if (!tournament && !cosmo && !grief)
             await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
         var previous = result.PreviousCharacter ?? throw new InvalidOperationException("通关结算缺少真实提交前角色");
         if (CharacterExperienceNotice.ShouldPublish(previous.Level))
@@ -96,7 +97,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "formal_clear_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard,
             previousLearning: previous.Learning);
-        if (!receipt.Entry.IsTutorial && !cosmo)
+        if (!receipt.Entry.IsTutorial && !cosmo && !grief)
             await DungeonCardMembershipProjection.RefreshAsync(context);
         if (tournament)
         {
@@ -104,6 +105,10 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Notify(NotiPacketType.TOURNAMENT_CLEAR_REWARD,
                 DungeonSettlementPackets.TournamentReward(DungeonTournamentPlan.RoundCount, effective), "formal_tournament_clear_reward", Guard);
         }
+        else if (grief)
+            await context.Notify(NotiPacketType.TOG_CLEAR_REWARD,GriefTowerPackets.ClearReward(receipt.ClearTimeMilliseconds,
+                result.Receipt.Entry.GriefLayer ?? throw new InvalidOperationException("悲叹通关缺少已冻结楼层"),
+                result.GriefReward ?? throw new InvalidOperationException("悲叹通关缺少已提交奖励")),"formal_grief_clear_reward",Guard);
         else if (!cosmo)
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(effective),
             result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
@@ -295,7 +300,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     "formal_cosmo_other_selection", SelectionGuard);
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "formal_cosmo_selection_opened", SelectionGuard);
                 await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(selection.Character.Id), "formal_cosmo_selection_state", SelectionGuard);
-                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(target), "formal_cosmo_selection_notice", SelectionGuard);
+                await GriefTowerProjection.SelectionAsync(context,dungeons,target,"formal_cosmo_selection_notice",SelectionGuard);
                 log.Write("formal_hell_selection", new { Connection = context.Id, selection.Character.Id, selection.SelectionId,
                     current.Entry.DungeonId, LegendDungeon = target });
                 return CommandResult.Handled;
@@ -333,7 +338,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             // 普通地图实机同样不续发15；确认后发送完整选图，后续选中副本的15仍沿正常入口。
             await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "formal_result_selector_wake", OpeningGuard);
             await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(opening.Character.Id), "formal_result_selection_state", OpeningGuard);
-            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(legendTarget), "formal_result_selection_notice", OpeningGuard);
+            await GriefTowerProjection.SelectionAsync(context,dungeons,legendTarget,"formal_result_selection_notice",OpeningGuard);
             log.Write("formal_dungeon_other_selection", new { Connection = context.Id, current.Entry.DungeonId,
                 opening.Character.Id, opening.SelectionId, LegendDungeon = legendTarget });
             return CommandResult.Handled;

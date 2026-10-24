@@ -81,6 +81,7 @@ internal interface ICharacterRepository
         WeeklyDungeonEntry? weekly = null);
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务提交。
     Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge);
+    GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId);
     QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId);
     QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan);
     QuestLifecycleCommit CommitQuestLifecycle(AccountOwners.Lease owner, QuestLifecyclePlan plan);

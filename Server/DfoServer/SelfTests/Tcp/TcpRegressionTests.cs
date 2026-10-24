@@ -162,6 +162,7 @@ internal static class TcpRegressionTests
         ("dungeon-probe", DungeonProbeTcpTests.RunAsync),
         ("experience-bonuses", FormalDungeonTcpTests.RunExperienceBonusesAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
+        ("grief-tower", FormalDungeonTcpTests.RunGriefAsync),
         ("durability", FormalDungeonTcpTests.RunDurabilityAsync),
         ("dungeon-training", FormalDungeonTcpTests.RunTrainingAsync),
         ("class-experience", FormalDungeonTcpTests.RunClassExperienceAsync),
@@ -186,6 +187,7 @@ internal static class TcpRegressionTests
             DungeonMonsterPlanTests.Run(resources.Archive);
             SinglePlayerDungeonRunTests.Run(resources.Archive);
             DungeonSettlementTests.RunResources(resources.Archive);
+            GriefTowerClearTests.RunResources(resources.Archive,resources.ItemResources.Items,resources.ItemResources.EpicPieces);
             DungeonSettlementTests.RunAdventureResources(resources.Archive);
             DungeonSettlementTests.RunProficiencyResources(resources.Archive);
             DungeonSettlementSessionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);

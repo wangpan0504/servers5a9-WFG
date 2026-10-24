@@ -188,6 +188,8 @@ internal static class SqliteMigrations
         new(81, "光环传送独立冷却", AddAuraCooldowns),
         // 客户端368按银行分别提交300B快捷聊天原文；账号级保存，173按两段长度回放。
         new(82, "账号快捷聊天银行", static (db, tx) => Execute(db, tx, QuickChatSchema)),
+        new(83, "悲叹账号日次数与角色挑战账本", GriefTowerSchema.Upgrade),
+        new(84, "悲叹冻结奖励与通关回执", GriefTowerSchema.UpgradeClear),
     ];
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
@@ -1700,6 +1702,8 @@ internal static class SqliteMigrations
             using var reader = query.ExecuteReader();
         }
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
+        GriefTowerSchema.Validate(db, tx);
+        GriefTowerSchema.ValidateClear(db, tx);
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),

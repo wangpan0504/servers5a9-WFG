@@ -42,7 +42,8 @@ internal sealed record DungeonEntryPlan(
     public bool HasFreeCombatConsumption => IsPractice || IsTrainingRoom || IsClassExperience;
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
-    public bool RequiresFatigueOwner => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice;
+    public int? GriefLayer { get; init; }
+    public bool RequiresFatigueOwner => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower;
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
@@ -96,7 +97,7 @@ internal sealed record DungeonEntryPlan(
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
-        bool hellParty = false, bool hellLegend = false, bool practice = false)
+        bool hellParty = false, bool hellLegend = false, bool practice = false, GriefTowerAdmission? grief = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -115,13 +116,14 @@ internal sealed record DungeonEntryPlan(
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
             maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty),allowClearedTerminalQuest:allowClearedTerminalQuest,
-            hellParty:hellParty,hellLegend:hellLegend,practice:practice);
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice,grief:grief);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
-        Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false)
+        Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
+        GriefTowerAdmission? grief = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -144,7 +146,7 @@ internal sealed record DungeonEntryPlan(
                 definition.StartFatigue != 8)
             { reason = "cosmo-entry-contract-unsupported"; return false; }
         }
-        // 几何支持不代表票据、扣费和楼层已经实现。疲劳标记先按客户端谓词核对，其余字段继续拒绝。
+        // 悲叹只能由已核对账号额度和当前楼层的专用准入进入，不能借普通入口跳层或叠加两张票。
         if (definition.RequiresGriefEntryContract)
         {
             // 029FFAA0 在定义 +0x619（[no fatigue]）非零时返回不要求疲劳。
@@ -156,9 +158,16 @@ internal sealed record DungeonEntryPlan(
                 reason = "grief-tower-fatigue-mismatch";
                 return false;
             }
-            reason = "grief-tower-entry-contract-unsupported";
-            return false;
+            if (grief is not { Decision.Accepted: true } || grief.DungeonId != dungeonId ||
+                definition.GriefFloor is not { } floor || floor.Layer != grief.Before.State.Layer ||
+                questId != 0 && (quest is null || !QuestDungeonClearProgress.MatchesAlternative(quest,dungeonId,difficulty)) ||
+                difficulty != 0 || isReplay || hellParty || hellLegend || practice)
+            {
+                reason = "grief-tower-admission-required";
+                return false;
+            }
         }
+        else if (grief is not null) { reason = "grief-tower-resource-mismatch"; return false; }
         // 02A00360 只识别类型码 0x54。5×5 网格和把 6,6 搬进格子都不是这条房间合同。
         if (definition.IsBossRushDungeon)
         {
@@ -473,6 +482,7 @@ internal sealed record DungeonEntryPlan(
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
             IsPractice = practice,
+            GriefLayer = grief?.Before.State.Layer,
             HellParty = hellParty && !cosmo ? activeHell : null,
             IsHellLegend = hellParty && !cosmo && hellLegend,
             IsCosmo = cosmo,
@@ -481,7 +491,7 @@ internal sealed record DungeonEntryPlan(
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
-        plan = WithEntryCost(plan, definition, hellParty || isReplay);
+        plan = WithEntryCost(plan, definition, hellParty || isReplay || grief is not null);
         reason = "resource-plan-ready";
         return true;
     }
@@ -516,8 +526,9 @@ internal sealed record DungeonEntryPlan(
             target.DungeonId == dungeonId && (target.MinimumDifficulty == -1 || target.MinimumDifficulty <= difficulty);
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
             quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear && !normalMission && !dailyClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
-            // 支线杀怪保留0..3，列表通关沿正式0..4难度域；-1不限，仍须命中dungeon info。
-            quest.Grade == "[side]" && !dailyClear && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
+            // 悲叹列表通关的目标由int data给出；已核对专用准入后不强求不存在的dungeon info。
+            // 其它支线仍须命中dungeon info，杀怪保留0..3，列表通关沿正式0..4难度域。
+            quest.Grade == "[side]" && !dailyClear && !(definition.IsGriefTower && listClear) && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
                 (row.Parameter == -1 || (quest.Condition == "[hunt monster]" && row.Parameter is >= 0 and <= 3 ||
                     listClear && row.Parameter is >= 0 and <= 4) && row.Parameter <= difficulty)) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||

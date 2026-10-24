@@ -14,6 +14,15 @@ internal sealed partial class GameSession
     readonly Dictionary<int, UsedConsumable> usedConsumables = new();
     InventoryPlan? pendingConsumableUse;
 
+    bool CanUseDungeonItem(int itemId) => formalDungeon is not { Entry.Maze.IsGriefTower: true } grief ||
+        grief.GriefItems?.CanUse(itemId) == true;
+
+    void CommitDungeonItemUse(int itemId)
+    {
+        if (formalDungeon is { Entry.Maze.IsGriefTower: true } grief)
+            (grief.GriefItems ?? throw new InvalidOperationException("悲叹实例缺少物品使用规则")).CommitUse(itemId);
+    }
+
     bool CanUseConsumable() => pendingRental is null && !HasPendingTownQuestCommit && Ready && Selected is not null && Phase is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon?.HasPendingFatigue != true &&
         formalDungeon?.Run.HasPendingDeath != true && formalDungeon?.Run.HasPendingSettlement != true && !HasPendingFormalCard && formalDungeon?.Ground.HasPendingOperation != true;
@@ -41,6 +50,8 @@ internal sealed partial class GameSession
             if (ClosedUse(service, request) is { } repeated) return repeated;
             if (!CanPublishConsumable(captured.Guard) || !CanUseConsumable())
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed");
+            if (!CanUseDungeonItem(request.ItemId))
+                return Reject("grief-item-not-allowed-or-exhausted");
             if ((definition.SummonsApc || definition.RequiresDungeon) && (formalDungeon?.CharacterDead != false ||
                 formalDungeon.Run.Phase != DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon))
                 return Reject(definition.SummonsApc ? "summon_requires_living_dungeon_character" : "projectile_requires_living_dungeon_character");
@@ -86,6 +97,7 @@ internal sealed partial class GameSession
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。
             pendingConsumableUse = null;
             if (!result.Accepted) return Reject("source-expired");
+            CommitDungeonItemUse(request.ItemId);
             if (freeEffects is { } effects) formalDungeon!.FreeConsumableEffects = effects;
             usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock)
                 { Maintenance = preserve ? (byte)0 : definition.CooltimeMaintenance };

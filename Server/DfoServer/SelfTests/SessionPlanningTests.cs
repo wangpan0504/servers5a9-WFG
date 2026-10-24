@@ -770,6 +770,10 @@ internal static class SessionPlanningTests
                 INSERT INTO character_crack_daily(character_id,account,day,clear_count,daily_reward) VALUES({{id}},'planning',740000,1,0);
                 INSERT INTO character_growup_change(character_id,account,change_count) VALUES({{id}},'planning',2);
                 INSERT INTO character_weekly_dungeon(character_id,account,week,slot,used) VALUES({{id}},'planning',20261022,0,3);
+                INSERT INTO account_grief_tower VALUES('planning',20261023,1);
+                INSERT INTO character_grief_tower VALUES({{id}},'planning',20261023,0,1,'1234567890abcdef1234567890abcdef',1);
+                INSERT INTO character_grief_tower_entries VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,20261023,1,5115,0,1,1,1);
+                INSERT INTO character_grief_tower_clears VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','1234567890abcdef1234567890abcdef',1,20261023,1,5115,'{}',NULL,1);
                 INSERT INTO character_dungeon_fatigue_receipts VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,1,1,1,'test',0,1,'{}','{}');
                 INSERT INTO character_gold_card_uses VALUES({{id}},'planning',20261011,2);
                 INSERT INTO character_quest_daily_clear VALUES({{id}},'planning',13200,20261011,'1234567890abcdef1234567890abcdef',1);

@@ -20,8 +20,7 @@ internal sealed record DungeonStaticTopology(
             return Unsupported("未提供显式地图，不能生成静态连接");
         // 该标记只由严格资源池设置；仍核对唯一实际地图，不能借它放行普通BB。
         if (maze.IsGriefTower && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
-            grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss", Id: 100247 } grief] &&
-            grief.Path.Equals("map/towerofgrief_down/100247_001.map",StringComparison.OrdinalIgnoreCase) &&
+            grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss" } grief] && grief == maze.GriefRoom &&
             grief.Position == new DungeonPoint(0,0) && maze.Starts.SequenceEqual([grief.Position]) && maze.Bosses.SequenceEqual([grief.Position]) &&
             maze.QuestConnectionTokens.Count == 0 && maze.LayeredMaps.Count == 0 && maze.WarpMaps.Count == 0 &&
             maze.ConditionalMaps.Count == 0 && maze.StoryStages.Count == 0 && maze.BossEntrance is null && maze.HellParty is null)

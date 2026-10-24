@@ -6,7 +6,7 @@ namespace DfoServer.Game.Dungeons;
 // Identity/MapId 是本次待安装实例的身份与起始房间，写入疲劳扣点账本。
 // Weekly 是本次入场计入的冒险团每周地下城列；没有费用时走普通预留，同样按同一事务累加。
 internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, DungeonRunIdentity Identity, int MapId,
-    WeeklyDungeonEntry? Weekly = null)
+    WeeklyDungeonEntry? Weekly = null, GriefTowerAdmission? Grief = null)
 {
-    public bool IsEmpty => Items is null && Fatigue == 0;
+    public bool IsEmpty => Items is null && Fatigue == 0 && Grief is null;
 }

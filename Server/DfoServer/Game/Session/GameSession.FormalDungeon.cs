@@ -25,6 +25,8 @@ internal sealed partial class GameSession
         public bool HasPendingFatigue { get; set; }
         public DungeonInventoryDiscardPreparation? PendingInventoryDiscard { get; set; }
         public bool CharacterDead { get; set; }
+        public GriefTowerItemUse? GriefItems { get; init; }
+        public GriefTowerAdmission? GriefAdmission { get; init; }
         public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];
         public long DeathSerial { get; set; }
         public Location? OrdinaryReturnPosition { get; init; }
@@ -104,6 +106,36 @@ internal sealed partial class GameSession
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
         if (expected is null || expected.DungeonState is null)
             return RejectFormal("session-not-ready-or-no-dungeon-state");
+        GriefTowerAdmission? grief = null;
+        uint selectionDungeon = dungeonId;
+        if (dungeonId <= int.MaxValue && catalog.GriefTower.FloorsByDungeon.TryGetValue((int)dungeonId, out var requestedGrief))
+        {
+            if (difficulty != 0 || retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice)
+                return RejectFormal("grief-tower-mode-conflict");
+            var progress = repository.ReadGriefTower(owner,expected.Id);
+            // 选图控制器以首层副本作为塔入口；实际层由账号下该角色的持久账本和专表共同确定。
+            var entrance = catalog.GriefTower.FloorsByDungeon.Values.Single(floor => floor.Layer == 1);
+            var floor = catalog.GriefTower.FloorsByDungeon.Values.SingleOrDefault(floor => floor.Layer == progress.State.Layer);
+            if (floor is null) return RejectFormal("grief-tower-completed");
+            if (requestedGrief.Layer != 1 && requestedGrief != floor) return RejectFormal("grief-tower-floor-mismatch");
+            dungeonId = checked((uint)floor.DungeonId);
+            selectionDungeon = checked((uint)entrance.DungeonId);
+            if (questId != 0 && (questId >= 30000 || questCatalog is null || !questCatalog.TryGet((int)questId,out var griefQuest) ||
+                !QuestDungeonClearProgress.MatchesAlternative(griefQuest,dungeonId,difficulty)))
+                return RejectFormal("grief-tower-quest-mismatch");
+            var decision = GriefTowerEntryPolicy.Evaluate(catalog.GriefTower,progress.State,floor.DungeonId,
+                expected.Level,progress.AdventureLevel,1,(timeProvider ?? TimeProvider.System).GetUtcNow());
+            if (!decision.Accepted) return RejectFormal(decision.Reason);
+            grief = new(progress,decision,floor.DungeonId);
+            if (decision.UsesInvitation)
+            {
+                if (pieces is null) return RejectFormal("grief-tower-item-catalog-unavailable");
+                var ticket = InventoryMaterialConsumptionService.Plan(expected.Inventory,
+                    [new ItemMaterialCost(GriefTowerEntryDecision.InvitationItem,1)],pieces,
+                    (timeProvider ?? TimeProvider.System).GetUtcNow());
+                if (!ticket.Accepted || ticket.Plan is null) return RejectFormal("grief-tower-invitation-required");
+            }
+        }
         // #233 强袭：只有 ACK1547 授权过的任务副本可绕过选图地图选项，改以主副本(7300)在当前选图中核对。
         var assault = practice ? null : owner.Execute(() => CurrentAssaultAuthorization(expected, dungeonId, questId));
         if (assault is not null)
@@ -118,7 +150,7 @@ internal sealed partial class GameSession
             if (!AssaultModeEntryPolicy.ConsumptionPlan(expected.Inventory, assault.Selection.Requirement, assault.Pieces,
                 DateTimeOffset.UtcNow).Accepted) return RejectFormal("assault-consumption-rejected");
         }
-        uint optionDungeon = assault?.Selection.Parent ?? dungeonId;
+        uint optionDungeon = assault?.Selection.Parent ?? selectionDungeon;
         if ((dungeonId == 7142) != classExperience || classExperience && (questId != 0 || difficulty != 0 || retry is not null ||
             selection is not { IsClassExperience: true } || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("class-experience-selection-mismatch");
@@ -174,7 +206,7 @@ internal sealed partial class GameSession
             repository.LoadQuestClear(owner, expected, (ushort)questId) is not null;
         if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out var entryReason, allowClearedQuest, quest,draw,questCatalog,
             allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null,
-            hellParty: hellParty,hellLegend: hellLegend,practice: practice))
+            hellParty: hellParty,hellLegend: hellLegend,practice: practice,grief:grief))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         if (hellParty && entry!.HellParty is null && !entry.IsCosmo) return RejectFormal("hell-party-room-unavailable");
         HellPartyTicket? hellTicket = null;
@@ -222,6 +254,8 @@ internal sealed partial class GameSession
                 questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return RejectFormal("route-quest-not-eligible");
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes,crackRewards);
+        if (prepared is not null && entry.Maze.IsGriefTower)
+            prepared = prepared with { Dungeon = prepared.Dungeon with { GriefItems = new(catalog.GriefTower), GriefAdmission = grief } };
         // 只有正式入场计入冒险团每周地下城信息：练习、训练、职业体验与比赛不消耗次数。
         WeeklyDungeonEntry? weekly = null;
         if (!entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTournament && !entry.IsTrainingRoom &&
@@ -428,6 +462,8 @@ internal sealed partial class GameSession
         // 先持久预留key/attempt；通知失败也不回绕key或复用旧身份。
         var character = prepared.Character;
         var installing = prepared.Dungeon;
+        if (installing.GriefAdmission is { } grief &&
+            grief.Decision.Day != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow())) return null;
         if (installing.Entry.IsPractice && (installing.Entry.HellParty is not null || installing.Entry.IsHellLegend ||
             installing.HellTicket is not null || installing.Assault is not null)) return null;
         System.Collections.Immutable.ImmutableArray<InventorySlot> assaultSlots = [];
@@ -459,6 +495,15 @@ internal sealed partial class GameSession
             hellSlots = hellPlan.ChangedSlots;
         }
         System.Collections.Immutable.ImmutableArray<InventorySlot> entrySlots = [];
+        if (installing.GriefAdmission is { Decision.UsesInvitation: true })
+        {
+            if (installing.EntryPieces is not { } griefPieces || entryItems is not null) return null;
+            var spent = InventoryMaterialConsumptionService.Plan(character.Inventory,
+                [new ItemMaterialCost(GriefTowerEntryDecision.InvitationItem,1)],griefPieces,
+                (timeProvider ?? TimeProvider.System).GetUtcNow());
+            if (!spent.Accepted || spent.Plan is not { } griefPlan) return null;
+            entryItems = griefPlan;
+        }
         if (installing.Entry.EntryItem is { } entryItem)
         {
             if (entryItems is not null) throw new InvalidDataException("普通入场票不能叠加深渊入场费用");
@@ -472,12 +517,12 @@ internal sealed partial class GameSession
         // 无限疲劳开关与逐房规则一致：不扣余额也不写扣点账本。
         ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : installing.Entry.StartFatigue;
         Character committed;
-        if (entryItems is not null || entryFatigue > 0)
+        if (entryItems is not null || entryFatigue > 0 || installing.GriefAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             committed = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                 new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                    prepared.Weekly));
+                    prepared.Weekly,installing.GriefAdmission));
             if (installing.HellTicket is null) entrySlots = entryItems?.ChangedSlots ?? [];
             if (committed.Revision != installing.Entry.CharacterRevision)
             {
@@ -501,7 +546,8 @@ internal sealed partial class GameSession
         CurrentDungeonSelection = null;
         SetState(SessionPhase.Loading);
         return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
-            EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue };
+            EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue,
+            GriefAdmission = installing.GriefAdmission };
     }
 
     bool CanReplaceSettledDungeon(FormalDungeon? dungeon, FormalDungeonReceipt receipt) =>

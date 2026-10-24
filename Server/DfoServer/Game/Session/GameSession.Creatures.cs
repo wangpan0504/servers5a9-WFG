@@ -100,6 +100,7 @@ internal sealed partial class GameSession
         {
             if (!CanPublishConsumable(captured.Guard) || !CanUseConsumable())
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "creature-state-changed");
+            if (!CanUseDungeonItem(request.ItemId)) return Reject("grief-item-not-allowed-or-exhausted");
             if (creatureFeedUse is { } previous && previous.SelectionEpoch == SelectionEpoch &&
                 service.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(previous.CoolTime))
                 return previous.Request == request ? new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "creature-ambiguous-repeat") :
@@ -108,6 +109,7 @@ internal sealed partial class GameSession
             var source = character.Inventory.Find(request.Position)!;
             if (source.IsExpired(service.Clock.GetUtcNow().ToUnixTimeSeconds())) return Reject("creature-feed-expired");
             var committed = CommitInventory(character, planned);
+            if (committed.Accepted) CommitDungeonItemUse(request.ItemId);
             creatureFeedUse = new(request, SelectionEpoch, service.Clock.GetTimestamp(), coolTime);
             return new ConsumableUseResult(ConsumableUseOutcome.Committed, "creature-fed", committed, UseGuard()) { SourceUid = source.Uid };
         });
