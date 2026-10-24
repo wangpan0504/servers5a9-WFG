@@ -24,6 +24,12 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
+        if (context.Session.HasMultiplePartyMembers?.Invoke() == true)
+        {
+            log.Write("party_selection_rejected", new { Connection = context.Id, Reason = "multiplayer-dungeon-pending" });
+            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "party_selection_unavailable");
+            return CommandResult.Handled;
+        }
         if (context.Session.Phase == SessionPhase.Dungeon ||
             context.Session.Phase == SessionPhase.Settlement && context.Session.FormalDungeonResultFocus() is { Entry.IsCosmo: true })
         {

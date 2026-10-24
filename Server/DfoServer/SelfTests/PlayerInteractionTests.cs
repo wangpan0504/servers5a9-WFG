@@ -13,6 +13,52 @@ internal static class PlayerInteractionTests
         That(ChannelPackets.Endpoint("127.0.0.1", 12345, 22)[3] == 22 &&
             ChannelPackets.Endpoint("127.0.0.1", 12345, 59)[3] == 59,
             "LOGIN模式跟随实际频道类型，普通与特殊入口不能固定为0或22");
+        var create = PartyRequests.Information(Convert.FromHexString("000404000000000500000000000007"));
+        That(create.Operation == 0 && create.Settings is { TitleCode: 4, Capacity: 4, Dungeon: 0, Difficulty: 5, Option: 7 },
+            "真实寻找队伍创建15字节请求保留所有字段");
+        byte[] search = Convert.FromHexString("030001000000000000000000001C0003000000000100000100070000000000000000000000000000000000000000000000000000000000000000");
+        That(PartyRequests.Directory(search) is { Actor: 3, Page: 0, Sort: 1, Recruiting: true, Kind: 0, Options: 7, Keyword: "" },
+            "真实J面板1404从18B路由头后读取40B查询，不把频道当作页码");
+        Reject<InvalidDataException>(() => PartyRequests.Directory(search[..^1]), "队伍查询截断拒绝");
+        Reject<InvalidDataException>(() => PartyRequests.Directory([..search, 0]), "队伍查询额外尾部拒绝");
+        byte[] badSearch = search.ToArray(); Array.Fill(badSearch, (byte)65, 26, 32);
+        Reject<InvalidDataException>(() => PartyRequests.Directory(badSearch), "队伍查询定长字符串必须终止");
+        Bytes(PartyPackets.Directory(2, 28, [], 0), [0, 0, 0, 0],
+            "空查询发送页数0的NOTI9，隐藏旧行且不进入空页纠正的重复查询分支");
+        That(BitConverter.ToUInt16(PartyPackets.Directory(2, 28, [], 31), 2) == 4,
+            "查询第二个u16是十行一页的总页数，不是9999增量哨兵或队伍总数");
+        byte[] titled = Convert.FromHexString("010004000000B6D3CEe902785634120903020104060508");
+        var edit = PartyRequests.Information(titled);
+        That(edit.Operation == 1 && edit.Settings is { Title: "队伍", Capacity: 2, Dungeon: 0x12345678,
+            Difficulty: 9, Argument: 0x203, Flag: 1, Kind: 4, KindArgument: 0x506, Option: 8 },
+            "自定义标题按CP936长度前缀，副本号为u32而非S4的u16");
+        Reject<InvalidDataException>(() => PartyRequests.Information(titled[..^1]), "队伍设置截断拒绝");
+        Reject<InvalidDataException>(() => PartyRequests.Information([..titled, 0]), "队伍设置额外尾部拒绝");
+        byte[] LongTitle(int count) => DfoServer.Testing.TcpPeer.Build(w =>
+        {
+            w.Write((byte)0); w.Write((byte)0); w.Write(count); w.Write(Enumerable.Repeat((byte)65, count).ToArray());
+            w.Write(Convert.FromHexString("04000000000500000000000007"));
+        });
+        That(PartyRequests.Information(LongTitle(63)).Settings.Title.Length == 63, "64B标题缓冲保留末尾NUL");
+        Reject<InvalidDataException>(() => PartyRequests.Information(LongTitle(64)), "标题不能越过原生64B缓冲");
+        That(PartyRequests.Information(Convert.FromHexString("0104040000000005000000010000")).Settings.Option is null,
+            "原生operation1/kind1快捷修改的14字节包不误判为截断");
+        byte[] coded = PartyPackets.Information(1, 2, 10, [(0, 42)], 0, false, create.Settings);
+        That(coded[12] == 4 && coded[13] == 0 && coded[14] == 4 && BitConverter.ToUInt32(coded, 15) == 0 &&
+            coded[19] == 5 && coded[36] == 7 && coded[37] == 1,
+            "预设标题不写字符串，人数上限与完整info块不挤占名册数量");
+        byte[] endpointBody = Convert.FromHexString("051A19ACF81A19ACF80075000200000C000000303065303163356130343163");
+        var endpoint = PartyRequests.Endpoint(endpointBody);
+        Bytes(PartyPackets.Realtime([(0x1234, 2)]), Convert.FromHexString("013412640002"),
+            "城镇队伍HUD按本版Data+35C安装100百分比及真实槽位");
+        That(endpoint is { Nat: 5, InnerAddress: 0xF8AC191A, OuterAddress: 0xF8AC191A, Port: 29952, Mtu: 512 },
+            "真实UDP报告独立解析地址、端口与MTU");
+        Reject<InvalidDataException>(() => PartyRequests.Endpoint(endpointBody[..^1]), "UDP机器标识长度不符拒绝");
+        Reject<InvalidDataException>(() => PartyRequests.Endpoint([..endpointBody, 0]), "UDP额外尾部拒绝");
+        byte[] invalidPort = endpointBody.ToArray(); invalidPort[9] = invalidPort[10] = 0;
+        Reject<InvalidDataException>(() => PartyRequests.Endpoint(invalidPort), "UDP零端口拒绝");
+        byte[] invalidMtu = endpointBody.ToArray(); invalidMtu[11] = invalidMtu[12] = 0;
+        Reject<InvalidDataException>(() => PartyRequests.Endpoint(invalidMtu), "UDP非法MTU拒绝");
         byte[] menu = Convert.FromHexString("34120F00000000000000000000");
         That(CharacterRequests.TryPeerMenu(menu, out ushort target) && target == 0x1234, "实测13B右键请求识别目标");
         That(!CharacterRequests.TryPeerMenu([0x34, 0x12, 2, 0, 0, 0, 0, 0, 0, 0, 0], out _),

@@ -91,6 +91,7 @@ internal static class SocialTcpTests
             That(adventure.AsSpan(19 + 5272, 40).SequenceEqual(new byte[40]) && adventure.AsSpan(19 + 7424, 8).SequenceEqual(new byte[8]),
                 "公开冒险团不泄漏真实商店余额、勇猛经验或胶囊余额");
             alpha.Barrier(); beta.Barrier();
+            PartyInteraction(fixture, alpha, beta);
             using (var owner = owners.Acquire("socialb", () => { }))
                 repository.Create(owner, CharacterCreation.Prepare("SocialBAlt", resources.Characters.Get(1),
                     resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get));
@@ -98,6 +99,11 @@ internal static class SocialTcpTests
             foreach (ushort slot in new ushort[] { 1, 0 })
             {
                 beta.Send(7);
+                if (slot == 1)
+                {
+                    beta.Expect(0, 6, Build(w => w.Write(alpha.Id)));
+                    alpha.Expect(0, 6, Build(w => w.Write(original)));
+                }
                 beta.Expect(1, 7, [1]); beta.Expect(0, 2);
                 Refresh(alpha, 1, accountOnline: false, characterOnline: false, accountAdventure: "TeamB");
                 beta.Select(slot);
@@ -110,6 +116,7 @@ internal static class SocialTcpTests
             That(fixture.Query("SELECT count(*) FROM account_social_links") is [[2L]],
                 "换角不新增账号好友边，双方始终各一条冒险团关系");
         }
+        VerifyPartyDirectory(fixture);
         await fixture.StopAsync(); await fixture.StartAsync("social-reopen", isolatedProcess: true);
         using (var alpha = Open(fixture, "sociala"))
         {
@@ -134,6 +141,230 @@ internal static class SocialTcpTests
         {
             using var db = new SqliteConnection("Data Source=" + fixture.Database + ";Pooling=False;Foreign Keys=True");
             db.Open(); using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery();
+        }
+    }
+    static void PartyInteraction(TcpTestFixture fixture, TcpPeer alpha, TcpPeer beta)
+    {
+        byte[] Peer(ushort id, byte mode, bool invitation, uint value = 0) => Build(w =>
+        {
+            w.Write(id); w.Write(mode); w.Write(value);
+            if (invitation) w.Write(new byte[mode == 0 ? 6 : 4]);
+        });
+        byte[] Party(int count, bool removed = false) => Build(w =>
+        {
+            w.Write((ushort)1); w.Write((ushort)9999); w.Write((ushort)1); w.Write((byte)2); w.Write((byte)10);
+            w.Write((byte)0); w.Write(removed ? (byte)3 : (byte)0); w.Write((byte)0);
+            if (removed) return;
+            w.Write((byte)0); w.Write((byte)0); WriteName(w, "队伍");
+            w.Write((byte)0); w.Write((byte)4); w.Write(new byte[21]); w.Write((byte)7);
+            w.Write((byte)count);
+            for (byte i = 0; i < count; i++) { w.Write(i); w.Write(i == 0 ? alpha.Id : beta.Id); w.Write(new byte[5]); }
+            w.Write(new byte[10]);
+        });
+        void PartyInfo(TcpPeer peer, int count)
+        {
+            for (int i = 0; i < count; i++) peer.Expect(0, 2);
+            peer.Expect(0, 153, Build(w =>
+            {
+                w.Write((byte)count);
+                for (byte i = 0; i < count; i++) { w.Write(i == 0 ? alpha.Id : beta.Id); w.Write((byte)100); w.Write((byte)0); w.Write(i); }
+            }));
+            var endpoints = peer.Expect(0, 11).Body;
+            That(endpoints[0] == count && endpoints.Length == 1 + 22 * count && endpoints[11] == 0x75 && endpoints[12] == 0 && endpoints[22] == 100,
+                "队友UDP端点先于名册，端口以网络字节序发送且不覆盖城镇血条为零");
+            peer.Expect(0, 9, Party(count));
+            peer.Expect(0, 11, endpoints);
+            peer.Expect(0, 153, Build(w =>
+            {
+                w.Write((byte)count);
+                for (byte i = 0; i < count; i++) { w.Write(i == 0 ? alpha.Id : beta.Id); w.Write((byte)100); w.Write((byte)0); w.Write(i); }
+            }));
+            peer.Expect(0, 26, [0]);
+        }
+        alpha.Send(2, Convert.FromHexString("051A19ACF81A19ACF80075000200000C000000303065303163356130343163"));
+        beta.Send(2, Convert.FromHexString("051A19ACF81A19ACF80075000200000C000000303065303163356130343163"));
+        alpha.Barrier(); beta.Barrier();
+        alpha.Send(10, Peer(beta.Id, 0, true)); alpha.Expect(1, 10, [1]);
+        beta.Expect(0, 2); beta.Expect(0, 7, Build(w => { w.Write(alpha.Id); w.Write((byte)0); w.Write(new byte[14]); }));
+        beta.Send(11, Peer(alpha.Id, 0, false)); beta.Expect(1, 11, [1, ..Build(w => w.Write(alpha.Id)), 0]);
+        PartyInfo(alpha, 2); PartyInfo(beta, 2);
+        alpha.Expect(0, 2); alpha.Expect(0, 8, Peer(beta.Id, 0, false));
+        beta.Send(2, Convert.FromHexString("051A19ACF81A19ACF800F5000200000C000000303065303163356130343163"));
+        foreach (var peer in new[] { alpha, beta })
+        {
+            var changed = peer.Expect(0, 11).Body;
+            That(changed.Length == 45 && changed[33] == 0xf5 && changed[34] == 0,
+                "队员端口变化只刷新实际端点，不重建Actor或队伍名册");
+        }
+        // 组队状态下从独立房间到公共地图，再离开并返回；每次场景绑定后恢复相同队伍。
+        alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24)); PartyInfo(alpha, 2); alpha.Expect(1, 1347, [1]);
+        PartyInfo(beta, 2); beta.Barrier();
+        beta.Send(1426); beta.SendBarrier(); beta.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
+        PartyInfo(beta, 2); beta.Expect(1, 1347, [1]);
+        alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22)); PartyInfo(alpha, 2); alpha.Barrier();
+        alpha.Send(36, Area(38, 1, 450, 234, 38, 0)); alpha.SendBarrier();
+        alpha.Batch((0, 6), (0, 23), (0, 24), (0, 1379)); PartyInfo(alpha, 2); alpha.Expect(1, 1347, [1]);
+        beta.Expect(0, 6); PartyInfo(beta, 2); beta.Barrier();
+        alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
+        PartyInfo(alpha, 2); alpha.Expect(1, 1347, [1]);
+        beta.Batch((0, 2), (0, 3), (0, 23), (0, 22)); PartyInfo(beta, 2); beta.Barrier();
+        alpha.Send(14, [1]); alpha.Expect(1, 14, [1]); PartyInfo(alpha, 1); beta.Expect(0, 9, Party(0, true));
+        beta.Expect(0, 9, Party(1));
+        alpha.Send(13); alpha.Expect(1, 13, [1]); alpha.Expect(0, 9, Party(0, true));
+        beta.Expect(0, 9, Party(0, true));
+    }
+    static void VerifyPartyDirectory(TcpTestFixture fixture)
+    {
+        using var leader = Open(fixture, "panela");
+        using var observer = Open(fixture, "panelb");
+        leader.Create("PanelA"); observer.Create("PanelB");
+        foreach (var peer in new[] { leader, observer })
+        {
+            fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
+            peer.Select(prepared: true);
+        }
+        leader.Send(1426); leader.Batch((0, 23), (0, 24)); leader.Barrier();
+        observer.Send(1426); observer.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
+        leader.Batch((0, 2), (0, 3), (0, 23), (0, 22)); leader.Barrier(); observer.Barrier();
+        leader.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5)); leader.Batch((0, 6), (0, 23), (0, 24)); observer.Expect(0, 6);
+        observer.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5));
+        observer.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
+        leader.Batch((0, 2), (0, 3), (0, 23), (0, 22)); leader.Barrier(); observer.Barrier();
+        leader.Send(12, Convert.FromHexString("000404000000000500000000000007"));
+        byte[] created = OwnInformation();
+        That(created.Length == 56 && created[12] == 4 && created[14] == 4 && created[19] == 5 && created[36] == 7 &&
+            created[37] == 1 && created[38] == 0 && U16(created, 39) == leader.Id,
+            "真实创建按钮请求返回完整预设标题、容量、难度及单人名册，没有伪造通用ACK");
+        observer.Expect(0, 9, created);
+        // 同屏队长可邀请异区队员；未打开J查询的旁观者也必须先得到被引用的Actor。
+        using (var guest = Open(fixture, "panelc"))
+        {
+            guest.Create("PanelC");
+            fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", guest.Id);
+            guest.Select(prepared: true); guest.Barrier();
+            leader.Send(10, Build(w => { w.Write(guest.Id); w.Write((byte)0); w.Write(0u); w.Write(new byte[6]); }));
+            leader.Expect(1, 10, [1]); guest.Expect(0, 2); guest.Expect(0, 7);
+            guest.Send(11, Build(w => { w.Write(leader.Id); w.Write((byte)0); w.Write(0u); }));
+            guest.Expect(1, 11, [1, ..Build(w => w.Write(leader.Id)), 0]);
+            leader.Batch((0, 2), (0, 2), (0, 153), (0, 11));
+            byte[] joined = leader.Expect(0, 9).Body;
+            leader.Batch((0, 11), (0, 153), (0, 26), (0, 2), (0, 8));
+            guest.Batch((0, 2), (0, 2), (0, 153), (0, 11)); guest.Expect(0, 9, joined);
+            guest.Batch((0, 11), (0, 153), (0, 26));
+            byte[] remoteMember = observer.Expect(0, 2).Body;
+            That(remoteMember[0] == 0 && U16(remoteMember, 121) == guest.Id,
+                "被动名册也先安装异区队员公开Actor，不创建同屏坐标或实体");
+            observer.Expect(0, 9, joined);
+            guest.Send(13); guest.Expect(1, 13, [1]); guest.Expect(0, 9);
+            Bytes(OwnInformation(), created, "异区队员离开后保留原队长及设置");
+            observer.Expect(0, 9, created);
+            leader.Barrier(); guest.Barrier(); observer.Barrier();
+        }
+        observer.Send(12, Convert.FromHexString("010504000000000500000000000007"));
+        observer.Expect(1, 12, [0, 21, 0]);
+        leader.Send(12, Build(w => { w.Write((byte)1); w.Write((byte)0); WriteName(w, "一起冒险");
+            w.Write((byte)3); w.Write(1234u); w.Write((byte)2); w.Write((ushort)0); w.Write((byte)0);
+            w.Write((byte)0); w.Write((ushort)0); w.Write((byte)7); }));
+        byte[] edited = OwnInformation();
+        That(U16(edited, 4) == U16(created, 4) && edited[12] == 0 && U32(edited, 13) == 8 &&
+            DecodeName(edited, 17, 8) == "一起冒险" && edited[26] == 3 && U32(edited, 42) == 1234,
+            "修改队伍保留原ID，完整回放自定义标题、人数及副本设置");
+        observer.Expect(0, 9, edited);
+        leader.Send(12, Build(w => { w.Write((byte)1); w.Write((byte)5); w.Write((byte)3); w.Write(1234u);
+            w.Write((byte)2); w.Write((ushort)0); w.Write((byte)0); w.Write((byte)1); w.Write((ushort)0); }));
+        edited = OwnInformation();
+        That(edited[12] == 5 && edited[14] == 3 && edited[23] == 1 && U32(edited, 30) == 1234 && edited[36] == 7,
+            "原生快捷标题更新使用14字节布局，保留原招募选项并正确回填目标副本");
+        observer.Expect(0, 9, edited);
+        observer.Send(7); observer.Batch((0, 6), (1, 7), (0, 2)); leader.Expect(0, 6);
+        observer.Select(prepared: true);
+        observer.Send(1426); observer.Batch((0, 23), (0, 24));
+        observer.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5));
+        observer.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
+        leader.Batch((0, 2), (0, 3), (0, 23), (0, 22));
+        observer.Expect(0, 9, edited);
+        leader.Send(15, new byte[4]); leader.Batch((0, 6), (1, 15), (0, 3), (0, 1536), (0, 27));
+        observer.Expect(0, 6);
+        var hidden = observer.Expect(0, 9).Body;
+        That(hidden.Length == 11 && hidden[9] == 3 && U16(hidden, 4) == U16(created, 4),
+            "队长打开副本选择后，其他玩家移除其城镇招募行");
+        leader.Send(132); leader.Batch((1, 132), (0, 3), (0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
+        observer.Batch((0, 2), (0, 3), (0, 23), (0, 22));
+        observer.Expect(0, 9, edited);
+        // 真实J面板通过1404查询；增量名册正确不代表列表已经绘制。
+        byte[] Query(ushort actor, string keyword = "", ushort page = 0, byte kind = 1) => Build(w =>
+        {
+            w.Write(actor); w.Write((byte)1); w.Write(new byte[10]); w.Write((ushort)10); w.Write(actor); w.Write((byte)0);
+            w.Write(page); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); w.Write((byte)1); w.Write(kind); w.Write((byte)7);
+            var text = DfoServer.Game.Characters.CharacterName.Encoding.GetBytes(keyword);
+            w.Write(text); w.Write(new byte[32 - text.Length]);
+        });
+        byte[] queryResult = edited.ToArray(); queryResult[2] = 1; queryResult[3] = 0;
+        observer.Send(1404, Query(observer.Id)); observer.Expect(0, 9, queryResult);
+        observer.Send(1404, Query(observer.Id, "无匹配")); observer.Expect(0, 9, [0, 0, 0, 0]);
+        observer.Send(1404, Query(observer.Id, page: 100)); observer.Expect(0, 9, [0, 0, 1, 0]);
+        observer.Send(1404, Query(observer.Id, kind: 0)); observer.Expect(0, 9, [0, 0, 0, 0]);
+        observer.Send(1404, Query(leader.Id)); observer.Barrier();
+        observer.NoFrame(100, "查询不能借路由头查询其他角色", (0, 9));
+        observer.Send(1404, Query(observer.Id, "PanelA")); observer.Expect(0, 9, queryResult);
+        observer.Send(36, Area(38, 0, 629, 196, 38, 2));
+        observer.Batch((0, 6), (0, 23), (0, 24)); leader.Expect(0, 6);
+        RemoteDirectory();
+        observer.Barrier();
+        observer.NoFrame(100, "异区队伍资料不能生成城镇实体、位置或移动", (0, 3), (0, 22), (0, 23), (0, 24));
+        // 使用无队伍客户端实收58B默认请求，路由字段仍不参与授权。
+        byte[] nativeQuery = Convert.FromHexString("030001000000000000000000001C0003000000000100000106070000000000000000000000000000000000000000000000000000000000000000");
+        nativeQuery[0] = nativeQuery[15] = (byte)observer.Id;
+        nativeQuery[1] = nativeQuery[16] = (byte)(observer.Id >> 8);
+        observer.Send(1404, nativeQuery); observer.Expect(0, 9, [0, 0, 0, 0]);
+        leader.Send(12, Convert.FromHexString("010404000000000500000000000007"));
+        edited = OwnInformation();
+        queryResult = edited.ToArray(); queryResult[2] = 1; queryResult[3] = 0;
+        RemoteDirectory();
+        // 切区后的查询、异区创建与队长切区都必须继续发现当前队伍。
+        leader.Send(13); leader.Expect(1, 13, [1]); leader.Expect(0, 9);
+        observer.Expect(0, 9, [0, 0, 0, 0]);
+        leader.Send(12, Convert.FromHexString("000404000000000500000000000007"));
+        edited = OwnInformation();
+        queryResult = edited.ToArray(); queryResult[2] = 1; queryResult[3] = 0;
+        RemoteDirectory();
+        leader.Send(36, Area(38, 0, 629, 196, 38, 2));
+        leader.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22)); OwnInformation();
+        observer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); observer.Expect(0, 9, queryResult);
+        leader.Send(36, Area(38, 1, 450, 234, 38, 0));
+        leader.Batch((0, 6), (0, 23), (0, 24), (0, 1379)); OwnInformation(); observer.Expect(0, 6);
+        RemoteDirectory();
+        leader.Send(1404, Query(leader.Id, kind: 6)); leader.Expect(0, 9, queryResult);
+        leader.Send(13); leader.Expect(1, 13, [1]);
+        byte[] removed = leader.Expect(0, 9).Body;
+        That(removed.Length == 11 && removed[9] == 3 && U16(removed, 4) == U16(edited, 4), "退出最后一人删除真实队伍");
+        // 异步目录可能已投递切区后的同一快照；逐条核对后仍必须收到退队空列表。
+        var last = observer.Read();
+        for (int pending = 0; pending < 4 && last is { Kind: 0, Opcode: 2 }; pending++)
+        {
+            That(last.Body[0] == 0 && U16(last.Body, 121) == leader.Id, "退队前已发送的目录资料仍属于同一队长");
+            observer.Expect(0, 9, queryResult);
+            last = observer.Read();
+        }
+        That(last is { Kind: 0, Opcode: 9 }, "目录在有界已发送快照之后收到退队结果");
+        Bytes(last.Body, [0, 0, 0, 0], "退队后队伍列表最终为空");
+        leader.Expect(0, 9, [0, 0, 0, 0]);
+        leader.Barrier(); observer.Barrier();
+
+        void RemoteDirectory()
+        {
+            var remote = observer.Expect(0, 2).Body;
+            That(remote[0] == 0 && U16(remote, 1) == 1 && U16(remote, 121) == leader.Id,
+                "异区名册前先安装当前队长公开资料，不能引用缺失Actor或安装本人资料");
+            observer.Expect(0, 9, queryResult);
+        }
+
+        byte[] OwnInformation()
+        {
+            leader.Batch((0, 2), (0, 153), (0, 11));
+            byte[] body = leader.Expect(0, 9).Body;
+            leader.Batch((0, 11), (0, 153), (0, 26));
+            return body;
         }
     }
     static byte[] Refresh(TcpPeer peer, int count, byte[]? requests = null, bool accountOnline = true,

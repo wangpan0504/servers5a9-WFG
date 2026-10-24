@@ -546,7 +546,7 @@ internal sealed partial class GameSession
         return null;
     }
 
-    bool CanEnterFormalDungeon(FormalDungeonReceipt? retry) => !HasPendingTownQuestCommit && (retry is null ?
+    bool CanEnterFormalDungeon(FormalDungeonReceipt? retry) => HasMultiplePartyMembers?.Invoke() != true && !HasPendingTownQuestCommit && (retry is null ?
         Phase is SessionPhase.Town or SessionPhase.MapSelect && formalDungeon is null :
         CanPublishFormalDungeon(retry) && CanReplaceSettledDungeon(formalDungeon, retry) && !HasPendingQuestScene && !HasPendingFormalCard);
 

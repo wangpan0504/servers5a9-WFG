@@ -8,6 +8,7 @@ namespace DfoServer.Network.Protocol;
 internal sealed class GameConnectionContext(ConnectionContext connection, AccountOwners.Lease owner, GameSession session, GameConnectionSender sender,
     IGameConnectionActivity? activity = null, ChannelIdentity channel = default)
 {
+    public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }
     public int Id => connection.Id;
     public IPAddress Peer => connection.Peer;
     public CancellationToken Stop => connection.Stop;

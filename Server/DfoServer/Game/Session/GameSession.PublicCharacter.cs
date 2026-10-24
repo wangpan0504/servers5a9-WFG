@@ -6,7 +6,7 @@ using DfoServer.GameWorld.Adventure;
 namespace DfoServer.Game.Session;
 
 internal sealed record PublicCharacterSnapshot(Character Character, ChannelIdentity Channel, SessionPhase Phase,
-    int AdventureLevel, string AdventureName, bool PremiumPcRoom, ushort PartyId, Func<bool> IsCurrent, Func<bool> IsUnchanged);
+    int AdventureLevel, string AdventureName, bool PremiumPcRoom, Func<bool> IsCurrent, Func<bool> IsUnchanged);
 
 internal sealed partial class GameSession
 {
@@ -34,12 +34,11 @@ internal sealed partial class GameSession
                 if (!Ready || Selected is not { } character || character.Id != characterId) return null;
                 long epoch = SelectionEpoch;
                 var phase = Phase;
-                var party = singleParty;
                 // 发布在请求者账号锁内检查：只读目标的失效标记，不再获取目标账号锁。
                 bool Current() => owner.IsCurrent && Ready && SelectionEpoch == epoch && Selected?.Id == characterId;
-                bool Unchanged() => Current() && Phase == phase && ReferenceEquals(Selected, character) && ReferenceEquals(singleParty, party);
+                bool Unchanged() => Current() && Phase == phase && ReferenceEquals(Selected, character);
                 return new PublicCharacterSnapshot(character, ChannelEntry?.Identity ?? default, Phase,
-                    ReadAdventureLevel(), ReadAdventureName(), PremiumPcRoom, party?.Id ?? ushort.MaxValue, Current, Unchanged);
+                    ReadAdventureLevel(), ReadAdventureName(), PremiumPcRoom, Current, Unchanged);
             });
         }
         catch (InvalidOperationException error) when (error.Message == "Stale account generation")

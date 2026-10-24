@@ -1,42 +1,82 @@
-using DfoServer.Game.Parties;
-using DfoServer.GameWorld.Channels;
+using DfoServer.Game.Party;
 
 namespace DfoServer.Network.Builders;
 
 internal static class PartyPackets
 {
-    public static byte[] Rejected() => [0, 19, 0];
+    // 023A2237读取一个u8；023A24B3..24B8写入UDP管理器的主机槽位。
+    public static byte[] Host(byte slot) => slot < 4 ? [slot] : throw new ArgumentOutOfRangeException(nameof(slot));
 
-    public static byte[] Cleared(ushort id, ChannelIdentity channel) =>
-        [1, 0, 15, 39, (byte)id, (byte)(id >> 8), channel.ServerIndex, channel.Number, 0, 3, 0];
-
-    // 023B9E70：本版完整设置、单成员槽表和清理记录，未知附加玩法均按未启用发送。
-    public static byte[] Info(SoloPartyReceipt receipt, ChannelIdentity channel)
+    public static byte[] Endpoints(PartyEndpointRow[] rows) => SocialPackets.Build(w =>
     {
-        using var stream = new MemoryStream(); using var writer = new BinaryWriter(stream);
-        byte kind = receipt.Removed ? (byte)3 : receipt.Created ? (byte)0 : (byte)1;
-        if (receipt.Removed) return Cleared(receipt.Party.Id, channel);
-        writer.Write((ushort)1);
-        writer.Write((ushort)9999);
-        writer.Write(receipt.Party.Id);
-        writer.Write(channel.ServerIndex); writer.Write(channel.Number);
-        writer.Write((byte)0); writer.Write(kind); writer.Write((byte)0);
-        var settings = receipt.Party.Settings;
-        writer.Write((byte)0); writer.Write(settings.TitlePreset);
-        if (settings.TitlePreset == 0) PacketEncoding.WriteString(writer, settings.Title!);
-        writer.Write((byte)0); writer.Write(settings.MemberCode); // 不伪造回归队伍标记。
-        writer.Write(0); writer.Write(settings.SelectionCode); writer.Write(settings.SelectionValue);
-        writer.Write(settings.RecruitFlag); writer.Write(settings.TargetMode); writer.Write(settings.TargetId);
-        // 037E7160比较模型+116与请求selectionId；不是旧参考写入的前部模型+120。
-        writer.Write(new byte[4]); writer.Write(settings.SelectionId); writer.Write((ushort)0); writer.Write(settings.Extra);
-        if (kind == 0)
+        w.Write(checked((byte)rows.Length));
+        foreach (var row in rows)
         {
-            writer.Write((byte)1); writer.Write((byte)0); writer.Write(receipt.Party.LeaderId);
-            writer.Write((byte)0); writer.Write((byte)100); writer.Write(new byte[3]);
-            writer.Write((byte)0); // 额外成员行数量。
-            writer.Write(new byte[7]); writer.Write(settings.TargetMode); // 队长槽0及附加玩法关闭。
+            var e = row.Endpoint;
+            w.Write(row.Actor); w.Write(e.InnerAddress); w.Write(e.OuterAddress);
+            w.Write((byte)(e.Port >> 8)); w.Write((byte)e.Port);
+            w.Write(row.Account); w.Write(e.Nat); w.Write(e.Mtu); w.Write((byte)100);
         }
-        writer.Write((byte)0); // 可选附加结构选择器。
-        return stream.ToArray();
+    });
+    public static byte[] Realtime((ushort Actor, byte Slot)[] rows) => SocialPackets.Build(w =>
+    {
+        // 023CE4B0写Data+35C，025FD5A4将其用于血条及无战斗实体时的蓝条；城镇为100%。
+        w.Write(checked((byte)rows.Length));
+        foreach (var row in rows) { w.Write(row.Actor); w.Write((byte)100); w.Write((byte)0); w.Write(row.Slot); }
+    });
+    public static byte[] Peer(ushort actor, byte mode, uint peer, bool invite) => SocialPackets.Build(w =>
+    {
+        w.Write(actor); w.Write(mode); w.Write(peer);
+        if (invite) { w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); w.Write(0u); }
+    });
+    public static byte[] Response(ushort actor, byte mode = 0) => SocialPackets.Build(w =>
+    {
+        w.Write((byte)1); w.Write(actor); w.Write(mode);
+    });
+    public static byte[] Failure(ushort error, byte mode = 0) => SocialPackets.Build(w =>
+    {
+        w.Write((byte)0); w.Write(error); w.Write(mode);
+    });
+    public static byte[] Information(ushort id, byte server, byte channel, (byte Slot, ushort Actor)[] members, byte leader, bool removed,
+        PartySettings? settings = null) => SocialPackets.Build(w =>
+    {
+        // 023B9E70：本频道成员已由Actor安装，名册不附跨频道角色块。
+        w.Write((ushort)1); w.Write((ushort)9999);
+        InformationBlock(w, id, server, channel, members, leader, removed, settings);
+    });
+
+    public static byte[] Directory(byte server, byte channel, PartySnapshot[] rows, int total) => SocialPackets.Build(w =>
+    {
+        // 查询头重置旧行的排序索引（不删除队内对象），随后按包内次序安装至多三页。
+        // 总数为0必须回0页；空结果却回1页会令023B9F2E反复触发纠正页码查询。
+        w.Write(checked((ushort)rows.Length)); w.Write(checked((ushort)((total + 9) / 10)));
+        foreach (var row in rows)
+            InformationBlock(w, row.Id, server, channel, row.Members.Select(m => (m.Slot, m.Actor.Character.Id)).ToArray(),
+                row.Leader, false, row.Settings);
+    });
+
+    static void InformationBlock(BinaryWriter w, ushort id, byte server, byte channel,
+        (byte Slot, ushort Actor)[] members, byte leader, bool removed, PartySettings? settings)
+    {
+        w.Write(id); w.Write(server); w.Write(channel);
+        w.Write((byte)0); w.Write(removed ? (byte)3 : (byte)0); w.Write((byte)0);
+        if (removed) return;
+        // action0完整info块；保留已确认宽度的未命名字段为零，不借用S4固定8槽结构。
+        var info = settings ?? PartySettings.Default;
+        w.Write((byte)0); w.Write(info.TitleCode);
+        if (info.TitleCode == 0) PacketEncoding.WriteString(w, info.Title);
+        // 01B4BC0F/22/86回填创建窗口：容量在+4C，目标副本在+74，招募选项在+1E4。
+        w.Write((byte)0); w.Write(info.Capacity); w.Write(0u); w.Write(info.Difficulty); w.Write(info.Argument); w.Write(info.Flag);
+        w.Write(info.Kind); w.Write(info.KindArgument); w.Write(new byte[4]); w.Write(info.Dungeon);
+        w.Write(new byte[2]); w.Write(info.Option ?? PartySettings.Default.Option!.Value);
+        w.Write(checked((byte)members.Length));
+        foreach (var member in members.OrderBy(m => m.Slot))
+        {
+            w.Write(member.Slot); w.Write(member.Actor);
+            w.Write(new byte[5]); // 023BAF86/99/AB/C0/FFE，五个独立u8。
+        }
+        w.Write((byte)0); // 023BB0F7额外成员记录数量。
+        w.Write((byte)0); w.Write(leader); w.Write(new byte[6]); // 023BB300..427八个u8。
+        w.Write((byte)0); // 023BB8A9扩展类型；0不带后续数据。
     }
 }

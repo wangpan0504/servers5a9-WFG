@@ -249,7 +249,6 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     void Invalidate(string reason, bool publishExpertJob = true)
     {
-        singleParty = null;
         InvalidateExpertJobStore(publishExpertJob);
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
         formalDungeon = null;
