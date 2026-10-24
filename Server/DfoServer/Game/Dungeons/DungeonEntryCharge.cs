@@ -8,5 +8,7 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, DungeonRunIdentity Identity, int MapId,
     WeeklyDungeonEntry? Weekly = null, GriefTowerAdmission? Grief = null)
 {
-    public bool IsEmpty => Items is null && Fatigue == 0 && Grief is null;
+    public DungeonSpecialEntry? Special { get; init; }
+    public int DungeonId { get; init; }
+    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Grief is null;
 }

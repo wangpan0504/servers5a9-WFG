@@ -168,6 +168,8 @@ internal static class TcpRegressionTests
         ("class-experience", FormalDungeonTcpTests.RunClassExperienceAsync),
         ("dungeon-practice", FormalDungeonTcpTests.RunPracticeAsync),
         ("dungeon-revive", FormalDungeonTcpTests.RunReviveAsync),
+        ("dungeon-altars", FormalDungeonTcpTests.RunAltarsAsync),
+        ("dungeon-despair", FormalDungeonTcpTests.RunDespairAsync),
         ("hero-tomb-entry", FormalDungeonTcpTests.RunHeroTombAsync),
         ("special-normal-entry", FormalDungeonTcpTests.RunSpecialNormalAsync),
         ("dungeon-entry-plan", (_, _, resources) =>

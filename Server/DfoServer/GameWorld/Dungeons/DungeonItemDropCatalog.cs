@@ -53,7 +53,21 @@ internal sealed class DungeonItemDropCatalog
     }
 
     public static DungeonItemDropCatalog Load(ItemCatalog items) => new(items.DropCandidates());
+    public static DungeonItemDropCatalog LoadAltar(ItemCatalog items) => new(items.DropCandidates(includeSpecialEquipment: true).Where(template => template.Grade > 0));
     internal static DungeonItemDropCatalog Create(IEnumerable<ItemTemplate> templates) => new(templates);
+
+    // 历史_itemTypeVerify：2接收非堆叠装备，4只接收宠物及宠物装备；空池保持空，不回退稀有度或等级。
+    public DungeonItemDropPool AltarPool(bool creaturesOnly, int minimumGrade, int maximumGrade, int rarity)
+    {
+        if (rarity is < 0 or > 6 || minimumGrade > maximumGrade) throw new ArgumentOutOfRangeException(nameof(rarity));
+        var result = new List<ItemTemplate>();
+        ItemKind[] kinds = creaturesOnly ? [ItemKind.Creature, ItemKind.CreatureEquipment] :
+            [ItemKind.Equipment, ItemKind.Avatar, ItemKind.Creature, ItemKind.CreatureEquipment];
+        for (int grade = Math.Max(1, minimumGrade); grade <= Math.Min(200, maximumGrade); grade++)
+        foreach (var kind in kinds)
+            if (buckets.TryGetValue((kind, grade, rarity), out var entries)) result.AddRange(entries);
+        return new(result);
+    }
 
     public DungeonItemDropPool Pool(ItemKind kind, int minimumGrade, int maximumGrade, int rarity)
     {

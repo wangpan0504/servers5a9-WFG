@@ -66,8 +66,15 @@ internal sealed partial class GameSession
     {
         if (!CanChangeDungeonLife() || !formalDungeon!.CharacterDead || Selected!.Id != targetKey ||
             formalDungeon.Entry.Maze.IsGriefTower) return null;
+        if (formalDungeon.Entry.CoinLimit is { } maximum && formalDungeon.ReviveCount >= maximum)
+            return InventoryResult.Reject();
         var result = CommitInventory(Selected, DungeonRevive.Plan(Selected,PreservesDungeonConsumables));
-        if (result.Accepted) formalDungeon.CharacterDead = false;
+        if (result.Accepted)
+        {
+            formalDungeon.CharacterDead = false;
+            formalDungeon.AltarRevivalDue = null;
+            formalDungeon.ReviveCount++;
+        }
         return result;
     });
 

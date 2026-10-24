@@ -35,7 +35,8 @@ internal sealed partial class GameSession
         bool requireTown = true) => owner.Execute(() =>
     {
         if (pendingRental is not null || !Ready || requireTown && Phase != SessionPhase.Town || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
-            formalDungeon?.PendingTutorialClear is not null || formalDungeon?.PendingInventoryDiscard is not null)
+            formalDungeon?.PendingTutorialClear is not null || formalDungeon?.PendingInventoryDiscard is not null ||
+            formalDungeon?.AltarSettlement is { Stage: < 2 })
             return InventoryResult.Reject(invalidStateError);
         var result = operation(Selected);
         return CommitInventory(Selected, result, invalidStateError);

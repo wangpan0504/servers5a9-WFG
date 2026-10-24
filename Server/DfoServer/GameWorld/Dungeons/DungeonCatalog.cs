@@ -66,6 +66,8 @@ internal sealed record DungeonMaze(
     public bool IsGriefTower { get; init; }
     // 资源池已核验的同层唯一MAP；静态拓扑必须继续匹配它，不能只凭模式布尔值放宽BB。
     public DungeonMap? GriefRoom { get; init; }
+    public bool IsDespairTower { get; init; }
+    public bool IsUltimateAltar { get; init; }
     // 实验性（#259）：比赛副本的 1x1 单图迷宫，地图取自 PVF 地图反向 [dungeon] 声明。
     public bool IsTournament { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
@@ -119,6 +121,12 @@ internal sealed record DungeonMaze(
 
 internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
 {
+    public int? CoinLimit => RawSections.Where(row => row.Tag == "coin limit").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: >= 0 } count] }] ? count.Value : null;
+    public byte AltarKind => RawSections.Where(row => row.Tag == "blood dungeon").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: 1 or 2 } kind] }] ? (byte)kind.Value : (byte)0;
+    public int AltarMaxRounds => RawSections.Where(row => row.Tag == "blood max round").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 and <= byte.MaxValue } count] }] ? count.Value : 0;
     public int DummyAppearCount => RawSections.Where(row => row.Tag == "dummy appear count").ToArray() is
         [{ Tokens: [{ Type: 0, Value: >= 0 and < ushort.MaxValue } count] }] ? count.Value : 0;
     public string? DungeonType { get; init; }
@@ -147,6 +155,7 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         Path.StartsWith("dungeon/towers/grief/", StringComparison.OrdinalIgnoreCase) ||
         RawSections.Any(row => row.Tag == "tower of grief");
     public GriefTowerFloor? GriefFloor { get; init; }
+    public bool IsDespairTower => RawSections.Where(row => row.Tag == "tower of despair").ToArray() is [{ Tokens.Count: 0 }];
     public bool IsBossRushDungeon => string.Equals(DungeonType?.Trim(), "boss rush dungeon", StringComparison.OrdinalIgnoreCase);
     public bool IsDazzlementTower => string.Equals(DungeonType?.Trim(), "tower of dazzlement", StringComparison.OrdinalIgnoreCase);
     // 0409EC16 把唯一整数收成非零字节；本资源里合法形状是单独的 1。
@@ -314,11 +323,17 @@ internal sealed class DungeonCatalog
     private readonly ConcurrentDictionary<int, Lazy<DungeonDefinition>> definitions = new();
     private readonly Lazy<DungeonMapPool> mapPool;
     private readonly Lazy<GriefTowerCatalog> griefTower;
+    private readonly Lazy<DungeonAltarAdmissionCatalog> altarAdmission;
+    public DungeonAltarAdmissionCatalog AltarAdmission => altarAdmission.Value;
+    private readonly Lazy<TowerOfDespairCatalog> despair;
+    public TowerOfDespairCatalog Despair => despair.Value;
     private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps)
     {
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
         mapPool = new(() => DungeonMapPool.Load(archive,maps),LazyThreadSafetyMode.ExecutionAndPublication);
         griefTower = new(() => new GriefTowerCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
+        altarAdmission = new(() => DungeonAltarAdmissionCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
+        despair = new(() => TowerOfDespairCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
     }
     public int DungeonCount => dungeons.Count;
     public GriefTowerCatalog GriefTower => griefTower.Value;

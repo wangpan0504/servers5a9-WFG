@@ -23,6 +23,7 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     public ImmutableArray<InventorySlot> EntryItemConsumedSlots { get; init; } = [];
     public ushort EntryFatigueCharged { get; init; }
     public GriefTowerAdmission? GriefAdmission { get; init; }
+    public DungeonSpecialEntry? SpecialEntry { get; init; }
     // 演出返回只确认缓存呈现，不重新执行业务装载或授权基础图演员。
     public Guid ScriptedReturnId { get; init; }
     public bool NavigationReplay { get; init; }

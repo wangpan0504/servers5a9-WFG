@@ -56,6 +56,14 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitTitleAchievement");
         using var tx = write.Transaction;
+        var current = CommitTitleAchievementInTransaction(db, tx, owner, plan);
+        tx.Commit();
+        return current;
+    });
+
+    Character CommitTitleAchievementInTransaction(SqliteConnection db, SqliteTransaction tx,
+        AccountOwners.Lease owner, TitleAchievementPlan plan)
+    {
         var expected = plan.Before;
         var current = Require(db, tx, owner.Account, expected.Name);
         ValidateInventoryPlan(current, plan.Inventory);
@@ -108,7 +116,6 @@ internal sealed partial class CharacterRepository
             var (postalError, _) = DeliverMailInTransaction(db, tx, delivery);
             if (postalError != MailboxError.None) throw new InvalidOperationException("称号奖励邮件无法提交：" + postalError);
         }
-        tx.Commit();
         return current with { TitleProgress = plan.Progress, TitleSections = plan.Sections };
-    });
+    }
 }

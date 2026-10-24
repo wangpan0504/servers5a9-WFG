@@ -43,6 +43,7 @@ internal sealed record DungeonRoomDefinition(
     public IReadOnlyList<int> EventMonsterPositions { get; init; } = Array.Empty<int>();
     public IReadOnlyList<DungeonRoomNpc> Npcs { get; init; } = [];
     public string? NpcMetadataError { get; init; }
+    public PvfMapAltarWaves? AltarWaves { get; init; }
     public IReadOnlyList<DfoServer.GameWorld.Characters.TutorialCinematicEvidence> TutorialCinematics { get; init; } = [];
     public DungeonCinematicLayerReturn? CinematicLayerReturn { get; init; }
     public DungeonScriptedLayerReturn? ScriptedLayerReturn { get; init; }
@@ -103,6 +104,13 @@ internal sealed class DungeonRoomCatalog
         var tokens = archive.ReadTokens(path);
         var room = ParseResource(map with { Path = path }, tokens, archive.ResolveString, monsters, passiveObjects, archive.Contains,
             requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
+        if (room.AltarWaves is { } altar)
+            foreach (int ordinal in altar.Phases.Select(phase => phase.MonsterOrdinal).Distinct())
+            {
+                int id = altar.Monsters[ordinal].Values[0];
+                if (!monsters.TryGetValue(id, out string? monsterPath) || monsterPath.Length == 0 || !archive.Contains(monsterPath))
+                    throw new InvalidDataException("祭坛实际生成的怪物定义不存在：" + id);
+            }
         // 基础图的ON START MAP也可声明向下换层；和末层返回共用同一严格ACT/CMT识别。
         return room with
         {
@@ -453,7 +461,8 @@ internal sealed class DungeonRoomCatalog
         // 未解释的 NPC 元数据不收窄原入场/战斗能力，但不能作为任务会面的真实来源。
         return new(map, Freeze(monsterRows), Freeze(objectRows), buffs, teams)
             { AiCharacters = Freeze(actors), SpecialObjects = Freeze(specialObjects), EventMonsterPositions = eventPositions,
-                Npcs = npcs, NpcMetadataError = npcError, DeclaredType = declaredType };
+                Npcs = npcs, NpcMetadataError = npcError, DeclaredType = declaredType,
+                AltarWaves = MapAltarWaves.Read(tokens, resolve) };
 
         string Resolve(int id, IReadOnlyDictionary<int, string> paths, string kind)
         {

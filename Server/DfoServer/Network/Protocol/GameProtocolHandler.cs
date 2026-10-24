@@ -24,7 +24,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     NativeChannel? native = null, DfoServer.GameWorld.Items.ItemCatalog? items = null,
     ExperienceBonusService? experienceBonuses = null,
     DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null, DfoServer.Game.ExpertJob.ExpertJobStoreBoard? expertStores = null,
-    TownPresence? presence = null) : IConnectionProtocol
+    TownPresence? presence = null, CharacterLevelProjection? levels = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -53,6 +53,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         var elevator = new DungeonElevatorProjection(context, log);
         context.Elevator = elevator;
+        var altar = new DungeonAltarProjection(context, log, projection, inventory, levels, time);
+        context.Altar = altar;
         var death = new DungeonDeathProjection(context, projection, log, time);
         context.Death = death;
         var revival = new DungeonRevivalProjection(context, log, time);
@@ -186,6 +188,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await death.DisposeAsync();
             if (context.Cards is not null) await context.Cards.DisposeAsync();
             await elevator.DisposeAsync();
+            await altar.DisposeAsync();
             online.RemoveConnection(connection.Id, session);
             online.Remove(login.Owner.Account, session);
             projection.Remove(context);

@@ -190,6 +190,7 @@ internal static class SqliteMigrations
         new(82, "账号快捷聊天银行", static (db, tx) => Execute(db, tx, QuickChatSchema)),
         new(83, "悲叹账号日次数与角色挑战账本", GriefTowerSchema.Upgrade),
         new(84, "悲叹冻结奖励与通关回执", GriefTowerSchema.UpgradeClear),
+        new(85, "塔与祭坛原子入场与结算账本", DungeonSpecialEntrySchema.Upgrade),
     ];
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
@@ -1805,6 +1806,10 @@ internal static class SqliteMigrations
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",
         "SELECT character_id,account,next_object_key,last_attempt,capsule_experience,proficiency_level,proficiency_experience,recommended_dungeon_clears FROM character_dungeon_state LIMIT 0",
+        "SELECT character_id,account,instance_id,task_attempt,service_day,kind,dungeon_id,layer,gold,revision FROM dungeon_special_entry_receipts LIMIT 0",
+        "SELECT character_id,account,instance_id,event_id,task_attempt,epoch,dungeon_id,completed_rounds,maximum_rounds,play_milliseconds,cleared,death_events,reward_json,gained_experience,proficiency_gained FROM dungeon_altar_clear_receipts LIMIT 0",
+        "SELECT character_id,account,next_layer,last_clear_day,clear_count FROM dungeon_despair_progress LIMIT 0",
+        "SELECT character_id,account,instance_id,event_id,task_attempt,epoch,dungeon_id,clear_day,play_milliseconds,death_events,assets_json FROM dungeon_despair_clear_receipts LIMIT 0",
         "SELECT character_id,account,used,maximum,used_maximum,remaining,context_auxiliary,selection_auxiliary FROM character_fatigue LIMIT 0",
         "SELECT character_id,account,instance_id,task_attempt,map_id,epoch,generation,rule_id,before_revision,revision,before_state,after_state FROM character_dungeon_fatigue_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,map_id,monster_key,combat_sequence,generation,amount,rule_id,resource_source,monster_id,monster_level,before_level,after_level,before_experience,after_experience,revision,proficiency_gain FROM character_dungeon_growth_receipts LIMIT 0",

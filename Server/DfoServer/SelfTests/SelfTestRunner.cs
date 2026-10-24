@@ -187,6 +187,7 @@ internal static class SelfTestRunner
         DungeonSpecificCardRewardsTests.RunCore();
         HarlemMaterialDropTests.RunCore();
         DungeonElevatorTests.Run();
+        DungeonAltarTests.Run();
         DungeonStoryFlowTests.Run();
         DungeonScriptedLayerReturnTests.Run();
         DungeonScriptedReturnSessionTests.RunCore();
@@ -337,6 +338,8 @@ internal static class SelfTestRunner
         HellPartyEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemMaterialDropTests.RunResources(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         DungeonEntryCostTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
+        DungeonSpecialEntryTests.Run(towns,characters,sharedSkills,Testing.SelfTestCatalogs.Growth(pvf,sharedSkills),sharedQuests);
+        DungeonAltarRewardTests.Run(pvf,itemResources);
         StadiumQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         QuestScriptedSettlementTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         FriendlyAiCharacterDeathTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);

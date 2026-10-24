@@ -102,6 +102,7 @@ internal sealed partial class CharacterRepository
         long revision = charge.Items is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
         ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore, charge.Weekly);
         CommitGriefEntry(db, tx, owner, expected, charge, checked(revision + 1));
+        WriteSpecialEntry(db, tx, owner, expected, charge, checked(revision + 1));
         if (fatigueBefore is not null && fatigueAfter is not null)
         {
             using var command = db.CreateCommand();

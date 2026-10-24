@@ -53,7 +53,7 @@ internal static class DungeonPackets
 
     // NOTI27 在 023D8AC0 的空列表足迹：计数字段为 0 时不读列表项，共 42 字节。
     // 顺序是 u32、u32、u8、u32、u8、u8、u8、u32、u16、u16、u32、u8、u8、u32、u32、u8、u16、u8。
-    public static byte[] EmptySelectNotice(int hellLegendDungeon = 0, int griefLayer = 0)
+    public static byte[] EmptySelectNotice(int hellLegendDungeon = 0, int griefLayer = 0, ushort despairLayer = 0)
     {
         if (hellLegendDungeon < 0) throw new ArgumentOutOfRangeException(nameof(hellLegendDungeon));
         if (griefLayer is < 0 or > 100) throw new ArgumentOutOfRangeException(nameof(griefLayer));
@@ -62,6 +62,8 @@ internal static class DungeonPackets
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), checked((uint)hellLegendDungeon));
         // 023D9B20读取末尾u16，经01E0DD30写入root+E8的悲叹楼层。
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(39),checked((ushort)griefLayer));
+        if (despairLayer > 100) throw new ArgumentOutOfRangeException(nameof(despairLayer));
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(20), despairLayer);
         return body;
     }
 

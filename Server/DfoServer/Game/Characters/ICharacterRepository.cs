@@ -82,6 +82,12 @@ internal interface ICharacterRepository
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务提交。
     Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge);
     GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId);
+    DungeonSpecialEntryUsage LoadSpecialEntryUsage(AccountOwners.Lease owner, Character expected, int day, DungeonSpecialEntryKind kind);
+    DungeonDespairProgress LoadDespairProgress(AccountOwners.Lease owner, Character expected);
+    DungeonDespairClearCommit CommitDungeonDespairClear(AccountOwners.Lease owner, SinglePlayerDungeonRun run,
+        PreparedDungeonDespairClear prepared);
+    DungeonAltarSettlementCommit CommitDungeonAltarSettlement(AccountOwners.Lease owner, SinglePlayerDungeonRun run,
+        PreparedDungeonAltarSettlement prepared, CharacterGrowthCatalog growth);
     QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId);
     QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan);
     QuestLifecycleCommit CommitQuestLifecycle(AccountOwners.Lease owner, QuestLifecyclePlan plan);

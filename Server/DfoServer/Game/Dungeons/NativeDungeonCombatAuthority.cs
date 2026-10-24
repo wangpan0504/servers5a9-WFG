@@ -22,6 +22,7 @@ internal sealed record NativeDungeonDeathObservation(
 
 internal sealed record NativeDungeonDeathResult(DungeonRunOutcome Outcome, ConfirmedDungeonMonsterDeath? Death = null);
 internal sealed record NativeDungeonScriptedDeathObservation(uint MonsterKey, uint ActorFlags, bool ChecksumMatches, string BodySha256);
+internal sealed record NativeDungeonAltarDeathObservation(ushort MonsterKey, string BodySha256);
 
 // 正式死亡报告的实例与提交身份；来源和目标统计用于审计，不作为死亡门槛。
 // 调用方在原正式实例owner内串行使用；缓存只保存本实例已签发事实，不复制在线角色状态。
@@ -52,6 +53,7 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
         NativeDungeonDeathObservation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
+        if (run.CurrentAltar is not null) return new(DungeonRunOutcome.Rejected);
         return Issue(run,expectedIdentity,observation.MonsterKey,observation.ChecksumMatches,observation.BodySha256,observation);
     }
 
@@ -59,7 +61,17 @@ internal sealed class NativeDungeonCombatAuthority : DungeonCombatAuthority
         NativeDungeonScriptedDeathObservation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
+        if (run.CurrentAltar is not null) return new(DungeonRunOutcome.Rejected);
         return Issue(run,expectedIdentity,observation.MonsterKey,observation.ChecksumMatches,observation.BodySha256,observation);
+    }
+
+    public NativeDungeonDeathResult ValidateAndIssueAltar(SinglePlayerDungeonRun run, DungeonRunIdentity expectedIdentity,
+        NativeDungeonAltarDeathObservation observation)
+    {
+        if (run.CurrentAltar is not { } altar || !altar.WasPublished(observation.MonsterKey))
+            return new(DungeonRunOutcome.Rejected);
+        // CMD255本身没有统计校验字段；完整计数/长度由专用Parser核验，这里只授权原实例已发布的祭坛对象。
+        return Issue(run, expectedIdentity, observation.MonsterKey, true, observation.BodySha256, observation);
     }
 
     NativeDungeonDeathResult Issue(SinglePlayerDungeonRun run, DungeonRunIdentity expectedIdentity, uint monsterKey,

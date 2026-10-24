@@ -18,13 +18,15 @@ using DfoServer.Network.Builders.Inventory;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
+internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dungeons, DungeonRoomCatalog rooms,
     CharacterGrowthCatalog growth, DungeonKillExperienceCatalog rewards, TownProjection town, CharacterLevelProjection levelProjection,
     DungeonMonsterDropCatalog? drops = null, ItemCatalog? items = null, EpicPieceCatalog? pieces = null,
     GoldLimitCatalog? goldLimits = null, QuestProjection? quests = null,
     Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
     TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null,
-    CrackDimensionRewardServices? crackRewards = null) : IGameCommandModule
+    CrackDimensionRewardServices? crackRewards = null, DungeonAltarRewardPolicy? altarRewards = null,
+    DungeonDespairRewardPolicy? despairRewards = null, DfoServer.Game.Titles.TitleAchievementService? titles = null,
+    TitleProjection? titleProjection = null, InventoryProjection? inventoryProjection = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -38,6 +40,9 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         commands.Register(CmdPacketType.GIVEUP_GAME, ReturnAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.GET_ITEM, PickupAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.DUNGEON_EVENT_STORY_PAUSE, StoryPauseAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.DIE_BLOOD_MONSTER, AltarDeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.BLOOD_ROUND_UI_PREPARE_FINISH_, AltarPreparedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.SELECT_ULTIMATE_DIFFICULTY, AltarDifficultyAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
     }
 
     async Task<CommandResult> CharacterDeathAsync(GameConnectionContext context, Packet request)
@@ -48,9 +53,10 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             Character = receipt?.Character.Id, receipt?.Snapshot.Identity, receipt?.AutomaticRevival });
         if (receipt is not null)
         {
+            bool altar = !receipt.AutomaticRevival && receipt.Monsters.Altar is not null && altarRewards is not null;
             if (context.Death is not null)
             {
-                if (receipt.AutomaticRevival) await context.Death.StopAsync();
+                if (receipt.AutomaticRevival || altar) await context.Death.StopAsync();
                 else await context.Death.StartAsync();
             }
             bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
@@ -59,6 +65,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             if (receipt.AutomaticRevival)
                 await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(receipt.Character.Id, (byte)2),
                     "formal_character_blessing_revived", Guard);
+            if (altar && context.Session.WaitDungeonAltarRevival() is { } waiting && context.Altar is not null)
+                await context.Altar.WakeAfterDeathAsync(waiting, () => context.Session.BeginDungeonAltarSettlement(altarRewards!, growth));
         }
         return CommandResult.Handled;
     }
@@ -88,6 +96,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (receipt.PreviousQuests is { } old && !old.SequenceEqual(receipt.Character.ActiveMainQuests))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
                 "formal_revive_quest_conditions", Guard);
+        if (context.Altar is not null && context.Session.ResumeDungeonAltar() is { } resumed)
+            await context.Altar.WakeAsync(resumed);
         return CommandResult.Handled;
     }
 
@@ -130,6 +140,8 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         bool replay = selection.Unknown8 == 1 && !direct && selection.Unknown16 != 0;
         bool practice = selection.Unknown8 == 1 && !direct && !replay;
         bool continuation = context.Session.HasDungeonContinuationRequest();
+        if (selection.DungeonIndex is 11006 or 11007 && (altarRewards is null || context.Altar is null))
+            return CommandResult.Unhandled;
         // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_party_entry.go）：op16 请求体 [7]=1（HellPartyRequestFlag）且 [8]=0 表示"挑战深渊派对"。
         // 实机样本：94D6591104000001 00FFFF 0000000000 E2170000 00 00000000（副本号 291100308=哈林 [dungeon] 列表里的黑暗都市）。
         // [16:20]（任务号 6114）深渊入场时不参与路线，按 questId=0 的普通入场处理。
@@ -177,11 +189,19 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         // 指定直入的15没有打开选图场景；先建立27上下文，28/29进入主游戏后由客户端安装临时体验技能。
         if (direct)
-            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(),
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(0, despairLayer: context.Session.DespairSelectionLayer()),
                 experience ? "formal_class_experience_scene_transition" : "formal_training_scene_transition", Guard);
-        await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry), "formal_dungeon_information", Guard);
+        if (receipt.SpecialEntry is { Kind: DungeonSpecialEntryKind.Despair, Layer: >= 10 and <= 90 } despair && despair.Layer % 10 == 0)
+            await context.Notify(NotiPacketType.USER_APC_INFO_TOD, DungeonDespairPackets.LocalPlayerOpponent(despair.Layer),
+                "formal_despair_local_opponent", Guard);
+        if (receipt.Monsters.Altar is not null)
+            await context.Notify(NotiPacketType.BLOOD_INFO, DungeonAltarPackets.Information(receipt.Entry), "formal_altar_information", Guard);
+        else
+            await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry), "formal_dungeon_information", Guard);
         // 实验性（#259）：比赛副本先发 NOTI386 对阵/对手，再以 NOTI387 替代 NOTI29（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
-        if (receipt.Entry.IsTournament && receipt.Monsters.Tournament is { } tournament)
+        if (receipt.Monsters.Altar is not null)
+            await context.Notify(NotiPacketType.START_BLOOD_MAP, DungeonAltarPackets.StartMap(receipt.Entry, receipt.MapSeed), "formal_altar_map", Guard);
+        else if (receipt.Entry.IsTournament && receipt.Monsters.Tournament is { } tournament)
         {
             await context.Notify(NotiPacketType.TOURNAMENT_INFO, DungeonPackets.TournamentInfo(receipt.Entry, tournament),
                 "formal_tournament_info", Guard);
@@ -200,6 +220,13 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
                 Slots = receipt.HellConsumedSlots.Select(slot => slot.Index).ToArray(), CharacterId = character.Id, CharacterName = character.Name });
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main, [.. receipt.HellConsumedSlots]), "hell_party_entry_items", Guard);
+        }
+        if (receipt.SpecialEntry is { Gold: > 0 } special)
+        {
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main, [new(InventoryListType.Main, 0)]), "formal_altar_entry_gold", Guard);
+            log.Write("formal_altar_entry_committed", new { Connection = context.Id, receipt.Entry.DungeonId,
+                special.Day, special.Kind, special.Gold, EntryNumber = special.Expected.CharacterEntries + 1 });
         }
         if (!receipt.EntryItemConsumedSlots.IsDefaultOrEmpty)
         {
@@ -256,10 +283,12 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (receipt.Entry.UsesFatigue)
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
+        if (context.Altar is not null && context.Session.StartDungeonAltar(receipt) is { } altar)
+            await context.Altar.WakeAsync(altar);
         if (receipt.HellPartyRoomCleared)
             await context.Notify(NotiPacketType.HELL_PARTY_CLEAR, DungeonPackets.HellPartyCleared(), "formal_hell_party_clear", Guard);
         if (receipt.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
-            await DungeonSettlementProjection.EnableAsync(context);
+            await EnableSettlementAsync(context);
         return CommandResult.Handled;
     }
 
@@ -283,7 +312,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
                         () => context.Session.CanPublishQuestLifecycle(progress));
                 await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(progress.Character.ActiveMainQuests),
                     "formal_passive_quest_conditions",() => context.Session.CanPublishQuestLifecycle(progress));
-                await DungeonSettlementProjection.EnableAsync(context);
+                await EnableSettlementAsync(context);
             }
             return CommandResult.Handled;
         }
@@ -319,7 +348,11 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ProficiencyGained, result.ClearFact, result.RoomClearFact });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return CommandResult.Unhandled;
-        if (result.Receipt is not { } receipt) return CommandResult.Handled;
+        if (result.Receipt is not { } receipt)
+        {
+            if (result.Outcome == DungeonRunOutcome.Duplicate) await EnableSettlementAsync(context, result.MonsterKey);
+            return CommandResult.Handled;
+        }
         if (result.SpecialChildRetired)
         {
             if (result.Elevator is { } elevator)
@@ -354,7 +387,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             foreach (ushort key in result.CulledMonsterKeys)
                 await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(key, [], enteredDungeon), "formal_clear_room_cull", Guard);
             if (result.ClearFact is not null)
-                await DungeonSettlementProjection.EnableAsync(context, result.MonsterKey);
+                await EnableSettlementAsync(context, result.MonsterKey);
             return CommandResult.Handled;
         }
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");
@@ -371,9 +404,10 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
             await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(key, [], enteredDungeon), "formal_clear_room_cull", Guard);
         // 秘药分量非 0 时，客户端会先拼出经验明细。31 若排在这条 NOTI37 之后，02D23170 看到明细窗口仍在就跳过结算锁存。
         // 普通击杀仍保持 37 然后 115/31。只有带秘药的通关击杀把许可提前到经验通知之前。
-        bool potionClear = result.ClearFact is not null && display.PotionExperience > 0;
+        // 绝望348会提交资产/称号并替换角色快照，必须在本次击杀成长投影之后；普通31许可不替换快照。
+        bool potionClear = !receipt.Entry.IsDespair && result.ClearFact is not null && display.PotionExperience > 0;
         if (potionClear)
-            await DungeonSettlementProjection.EnableAsync(context, result.MonsterKey);
+            await EnableSettlementAsync(context, result.MonsterKey);
         if (CharacterExperienceNotice.ShouldPublish(previousLevel))
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_kill_experience", Guard);
         if (result.QuestDropSlots.Count > 0)
@@ -397,7 +431,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (!closed && result.PreviousQuests is { } previous && receipt.Character.ActiveMainQuests.Any(row => previous.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);
         if (result.ClearFact is not null && !potionClear)
-            await DungeonSettlementProjection.EnableAsync(context, result.MonsterKey);
+            await EnableSettlementAsync(context, result.MonsterKey);
         return CommandResult.Handled;
     }
 
@@ -448,6 +482,13 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         bool published = false;
         bool Guard() => published = context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveAccepted(), "formal_move_ack", Guard);
+        if (receipt.Monsters.Altar is not null)
+        {
+            if (context.Altar is not null) await context.Altar.StopAsync();
+            await context.Notify(NotiPacketType.START_BLOOD_MAP,
+                DungeonAltarPackets.StartMap(receipt.Entry, receipt.MapSeed, receipt.Snapshot.MapPayload), "formal_altar_next_map", Guard);
+            return CommandResult.Handled;
+        }
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
             receipt.Snapshot.MapOperation,receipt.Snapshot.MapPayload, receipt.PassiveItems), "formal_next_map", Guard);
         if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo && receipt.Snapshot.MapPayload != DungeonMapPayload.Cached)
@@ -473,6 +514,7 @@ internal sealed class DungeonHandler(ServerLog log, DungeonCatalog dungeons, Dun
         if (request.Body.Length != 0) return CommandResult.Unhandled;
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
+        if (context.Altar is not null) await context.Altar.StopAsync();
         if (context.Death is not null) await context.Death.StopAsync();
         bool Guard() => context.Session.CanPublishTravel(receipt);
         await context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack", Guard);

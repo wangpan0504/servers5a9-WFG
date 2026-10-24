@@ -47,8 +47,10 @@ internal sealed class ItemResources
     readonly Lazy<ExpertJobScriptCatalog> expertJobs;
     public ExpertJobScriptCatalog ExpertJobs => expertJobs.Value;
     readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
+    readonly Lazy<DungeonItemDropCatalog> dungeonAltarItems;
     readonly Lazy<DungeonSpecialDropCatalog> dungeonSpecialDrops;
     public DungeonItemDropCatalog DungeonDropItems => dungeonDropItems.Value;
+    public DungeonItemDropCatalog DungeonAltarItems => dungeonAltarItems.Value;
     public DungeonSpecialDropCatalog DungeonSpecialDrops => dungeonSpecialDrops.Value;
 
     public ItemResources(PvfArchive archive)
@@ -94,6 +96,7 @@ internal sealed class ItemResources
         RandomOptions = new(archive, equipment);
         TextureChanges = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
+        dungeonAltarItems = new(() => DungeonItemDropCatalog.LoadAltar(Items));
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
         MagicBoxes = new(archive, stackable);
         Rental = RentalCatalog.Load(archive);

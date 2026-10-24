@@ -246,9 +246,15 @@ internal static class ServerRuntime
             var crackRewards = new CrackDimensionRewardServices(
                 CrackDimensionCatalog.Load(pvf, itemResources.Items.Contains),
                 itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+            var altarRewards = new DungeonAltarRewardPolicy(DungeonAltarRewardCatalog.Load(pvf), DungeonAltarClearItemCatalog.Load(pvf),
+                itemResources.DungeonAltarItems, DungeonKillExperienceCatalog.Load(pvf),
+                itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+            var despairRewards = new DungeonDespairRewardPolicy(DungeonAltarClearItemCatalog.Load(pvf),
+                itemResources.DungeonAltarItems, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
-                drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards);
+                drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
+                despairRewards,titleService,titleProjection,inventoryProjection);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -400,7 +406,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,levelProjection);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;

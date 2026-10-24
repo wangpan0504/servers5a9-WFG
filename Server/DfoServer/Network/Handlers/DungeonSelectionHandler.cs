@@ -51,7 +51,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             if (continuation.Opened)
             {
                 await context.Notify(NotiPacketType.USER_STATE,DungeonPackets.DungeonPlayerState(continuationSelection.Character.Id),"formal_next_quest_entry_state",Guard);
-                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.EmptySelectNotice(),"formal_next_quest_scene_transition",Guard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.EmptySelectNotice(0, despairLayer: context.Session.DespairSelectionLayer()),"formal_next_quest_scene_transition",Guard);
             }
             return CommandResult.Handled;
         }

@@ -65,6 +65,30 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
         var bosses = maze.Bosses.Where(point => !hellParty || point != maze.HellParty?.Room).Distinct().ToArray();
         if (starts.Length == 0 || bosses.Length == 0) return maze;
         var start = starts[0]; var boss = bosses[0];
+        // 绝望单层的BB是专用单房；只从同一DGN归属的唯一MAP解析，不通过名字或楼层算地图编号。
+        // 第15/25/55层资源包含真实多房间，继续走下方普通连接解析。
+        if (definition.IsDespairTower && maze.Width == 1 && maze.Height == 1 &&
+            maze.Starts.Count == 1 && maze.Bosses.Count == 1 && start == new DungeonPoint(0, 0) && boss == start &&
+            maze.GreedGrid.Cells is [{ Index: 1 }] && maze.MapSpecification is null && maze.MapAlternatives.Count == 0 &&
+            maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.WarpMaps.Count == 0 &&
+            maze.StoryStages.Count == 0 && maze.BossEntrance is null && maze.HellParty is null)
+        {
+            if (pool is [{ Kind: "[normal]" or "[boss]", Layouts: 2 } candidate])
+                return maze with { IsDespairTower = true, MapSpecification = [new("boss", start, candidate.Id, candidate.Path)] };
+            return maze;
+        }
+        // 极限祭坛把唯一map声明用于同格Boss房；核对MAP归属与BB，不对普通迷宫放宽出口。
+        if (definition.AltarKind == 2 && definition.AltarMaxRounds > 0 && maze.Width == 1 && maze.Height == 1 &&
+            maze.Starts.Count == 1 && maze.Bosses.Count == 1 && start == new DungeonPoint(0, 0) && boss == start &&
+            maze.GreedGrid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "map" } declared] &&
+            declared.Position == start && maze.MapAlternatives.Count == 0 && maze.LayeredMaps.Count == 0 &&
+            maze.ConditionalMaps.Count == 0 && maze.WarpMaps.Count == 0 && maze.StoryStages.Count == 0 && maze.HellParty is null)
+        {
+            var matching = pool.Where(row => row.Id == declared.Id && row.Path == declared.Path && row.Kind == "[boss]" && row.Layouts == 2).ToArray();
+            if (matching.Length == 1)
+                return maze with { IsUltimateAltar = true, MapSpecification = [declared with { Kind = "boss" }] };
+            return maze;
+        }
         // 悲叹之塔的原始BB是单房声明，不把右出口补成网格外房间。
         if (definition.RequiresGriefEntryContract)
         {

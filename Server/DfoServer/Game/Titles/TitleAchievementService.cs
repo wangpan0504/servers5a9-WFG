@@ -14,6 +14,25 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
 {
     public TitleCatalog Catalog => titles;
 
+    // 绝望称号只由原实例真实通关事实驱动；不接受客户端累计数或GM完成入口代替楼层证明。
+    public TitleAchievementResult DespairClear(Character character, Dungeons.DungeonClearFact fact,
+        GameWorld.Dungeons.TowerOfDespairFloor floor, DateTimeOffset now)
+    {
+        if (fact.Identity.CharacterId != character.Id || fact.DungeonId != floor.DungeonId ||
+            floor.Layer is < 1 or > 100 || floor.DungeonId != 11007 + floor.Layer || fact.ConfirmedDeathEvents.Count == 0)
+            return TitleAchievementResult.Reject(floor.TitleQuestId);
+        if (floor.TitleQuestId == -1) return new(true, 0, 0, default);
+        if (!titles.Quests.TryGetValue(floor.TitleQuestId, out var definition) ||
+            definition.Quest.Grade != "[title]" || definition.Quest.Condition != "[condition under clear]" ||
+            definition.Quest.SubType != 6 || !definition.Quest.IntData.SequenceEqual(new[] { floor.DungeonId, -1 }) ||
+            !titles.QuestCategories.GetValueOrDefault(floor.TitleQuestId, []).Contains(3) ||
+            !QuestEligibility.Evaluate(character, definition.Quest, quests, allowAboveMaximum: true).Eligible)
+            return TitleAchievementResult.Reject(floor.TitleQuestId);
+        if (character.TitleProgress.GetValueOrDefault(floor.TitleQuestId)?.Remaining.Complete == true)
+            return new(true, 0, floor.TitleQuestId, default);
+        return Prepare(character, [(floor.TitleQuestId, default(TitleCounters))], floor.TitleQuestId, now);
+    }
+
     public TitleAchievementResult Trigger(Character character, TitleTriggerRequest request, DateTimeOffset now)
     {
         if (!titles.Quests.TryGetValue(request.QuestId, out var definition) ||

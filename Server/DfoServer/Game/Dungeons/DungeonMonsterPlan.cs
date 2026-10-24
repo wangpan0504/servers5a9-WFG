@@ -10,6 +10,7 @@ internal sealed record DungeonPlannedMonster(
     DungeonRoomMonster? Source)
 {
     public DungeonRoomAiCharacter? AiCharacter { get; init; }
+    public DungeonAltarActor? AltarActor { get; init; }
     public byte SpawnType { get; init; }
     public bool IsBlocking { get; init; } = true;
     public int Team { get; init; } = Source?.Team is >= 0 ? Source.Team.Value : 100;
@@ -19,7 +20,7 @@ internal sealed record DungeonPlannedMonster(
     public bool IsScriptedRetirement => Source?.ScriptedRetirement == true;
     public int EnemyType => AiCharacter is null ? 1 : 2;
     public bool CanReportDeath => AiCharacter is null ? IsBlocking : AiCharacter.Faction == "[monster]";
-    public bool IsBoss => !IsDummyMapBoss && CanReportDeath && (Source?.RankKind == "[boss]" || AiCharacter?.RankKind == "[boss]");
+    public bool IsBoss => !IsDummyMapBoss && CanReportDeath && (Source?.RankKind == "[boss]" || AiCharacter?.RankKind == "[boss]" || AltarActor?.Rank == 3);
     // 本版dummy按Boss生成；经验与掉落仍沿旧端的精英品级，不把显示修复变成奖励调整。
     public byte RewardType => IsDummyMapBoss ? (byte)1 : AiCharacter is null ? SpawnType : checked((byte)(SpawnType - 5));
     public bool IsScriptedBoss => Source?.RankKind == "[boss]" && Source.Modifiers.SequenceEqual(new[] { "[dummy]" });
@@ -33,6 +34,19 @@ internal sealed record DungeonPlannedSpecialObject(ushort ObjectKey, DungeonRoom
 // 冻结房间对象身份和阵营资格；不建立战斗、死亡、清房或奖励状态。
 internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyList<DungeonPlannedMonster> Monsters)
 {
+    public DungeonAltarPlan? Altar { get; init; }
+
+    internal static DungeonMonsterPlan FromAltarRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey,
+        int level, Func<int, int> draw)
+    {
+        if (room.AltarWaves is null || room.Monsters.Count != 0 || room.AiCharacters.Count != 0 || room.SpecialObjects.Count != 0)
+            throw new InvalidDataException("祭坛房间必须使用独立波次且不混入普通演员");
+        var altar = DungeonAltarPlan.Create(DungeonAltarDefinition.Read(room.AltarWaves), characterId, firstObjectKey,
+            level, room.Map.Kind == "boss", draw);
+        return new(room, altar.Actors.Select(actor => new DungeonPlannedMonster(actor.Phase.Ordinal, actor.ObjectKey,
+            actor.Phase.MonsterId, actor.Level, null) { AltarActor = actor, SpawnType = actor.Rank }).ToArray())
+            { Altar = altar, BasisLevel = level };
+    }
     public IReadOnlyList<DungeonPlannedSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonPlannedSpecialObject>();
     public DungeonMonsterPlan WithChampionRolls(IReadOnlyList<int> percents, byte difficulty, Func<int, int> draw)
     {
@@ -97,6 +111,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
     internal static DungeonMonsterPlan FromRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey, int? basisLevel = null,
         bool includeSpecial = true, int? playerTeam = null)
     {
+        if (room.AltarWaves is not null)
+            throw new NotSupportedException("unsupported: 祭坛波次需要专用调度，不能作为普通怪物房间生成");
         if (basisLevel is < 1 or > byte.MaxValue)
             throw new InvalidDataException("副本基准等级超出演员创建范围");
         if (room.MonsterTeams is { } teams && teams.Count > room.Monsters.Count)

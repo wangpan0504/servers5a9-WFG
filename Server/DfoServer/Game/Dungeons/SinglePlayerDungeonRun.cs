@@ -86,10 +86,12 @@ internal sealed partial class SinglePlayerDungeonRun
     {
         public DungeonMonsterPlan Plan { get; } = plan;
         public DungeonElevatorState? Elevator { get; } = DungeonElevatorState.Create(plan);
+        public DungeonAltarState? Altar { get; } = plan.Altar is { } altar ? new(altar) : null;
         public HashSet<ushort> Dead { get; } = [];
         public HashSet<ushort> Culled { get; } = [];
         public bool Loaded { get; set; }
-        public bool Cleared => Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey) || Culled.Contains(monster.ObjectKey));
+        public bool Cleared => Altar is { } altar ? altar.Completed :
+            Plan.Monsters.All(monster => !monster.IsBlocking || Dead.Contains(monster.ObjectKey) || Culled.Contains(monster.ObjectKey));
     }
     private sealed record ActionFact(DungeonRunIdentity Identity, string Kind, DungeonPoint? Target);
     private DungeonEntryPlan entry;
@@ -144,6 +146,10 @@ internal sealed partial class SinglePlayerDungeonRun
     internal bool HasPendingPassiveClear => pendingPassiveClear is not null;
     internal uint DungeonId => entry.DungeonId;
     internal DungeonElevatorState? CurrentElevator => current.Elevator;
+    internal DungeonAltarState? CurrentAltar => current.Altar;
+    internal int CompletedAltarRounds => allRooms.Where(room => !ReferenceEquals(room, current) && room.Altar?.Completed == true)
+        .Sum(room => room.Altar!.Plan.Definition.RoundCount);
+    internal bool AdvanceAltar(long now) => !HasPendingDeath && current.Altar?.Advance(current.Dead, now) == true;
     internal bool UsesCombatAuthority(DungeonCombatAuthority candidate) => ReferenceEquals(authority, candidate);
     internal void RebasePreparedRevision(long revision)
     {
@@ -161,7 +167,7 @@ internal sealed partial class SinglePlayerDungeonRun
     }
     internal DungeonPlannedMonster? CurrentLivingMonster(ushort key) =>
         Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
-        !current.Dead.Contains(key) && !current.Culled.Contains(key)
+        !current.Dead.Contains(key) && !current.Culled.Contains(key) && (current.Altar is null || current.Altar.WasPublished(key))
             ? current.Plan.Monsters.SingleOrDefault(monster => monster.ObjectKey == key && (monster.CanReportDeath || monster.IsSpecialChild ||
                 entry.IsTutorial && (monster.IsScriptedRetirement || monster.AiCharacter?.Faction is "[character]" or "[neutral]"))) : null;
     // 实验性（未在95客户端实证）：深渊派对波次怪不在 Monsters 里，客户端上报其死亡时只登记，不参与清房/经验/掉落。
@@ -189,13 +195,14 @@ internal sealed partial class SinglePlayerDungeonRun
     }
     public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
     public DungeonClearFact? ClearFact { get; private set; }
-    public bool HasPendingSettlement => pendingSettlement is not null;
+    public bool HasPendingSettlement => pendingSettlement is not null || pendingAltarSettlement is not null || pendingDespairClear is not null;
     // 剧情入场不扣持久疲劳；宠物仍按真实首次加载的房间成长，回访不重复计点。
     public int CreatureExperiencePoints => entry.IsTutorial || entry.IsTrainingRoom || entry.IsClassExperience || entry.IsQuestReplay || entry.IsPractice
         ? 0 : allRooms.Count(room => room.Loaded);
     public DungeonRunSnapshot Snapshot => new(identity, Phase, current.Plan.Room.Map,
         Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
-            !current.Culled.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray()))
+            !current.Culled.Contains(monster.ObjectKey) && (current.Altar is null || current.Altar.WasPublished(monster.ObjectKey)))
+            .Select(monster => monster.ObjectKey).ToArray()))
         { MapOperation = mapOperation, MapPayload = mapPayload, ConsumedFatigue = consumedFatigue, BossPosition = BossPosition(activeDummyStage) };
 
     private DungeonPoint BossPosition(int stage) => dummyRooms.Length > 0 ? dummyRooms[stage].Plan.Room.Map.Position : entry.BossMap.Position;
@@ -318,6 +325,39 @@ internal sealed partial class SinglePlayerDungeonRun
         var keys = new HashSet<ushort>();
         foreach (DungeonMonsterPlan plan in approvedRoute.Rooms)
         {
+            if (plan.Altar is { } altar)
+            {
+                try
+                {
+                    if (plan.Monsters.Count == 0 || entry.BasisLevel is not { } altarLevel ||
+                        plan.SpecialObjects.Count != 0 || plan.HellWaves.Count != 0 || plan.Tournament is not null)
+                        throw new InvalidDataException("祭坛计划包含其他演员合同");
+                    var checkedPlan = DungeonMonsterPlan.FromAltarRoom(plan.Room, entry.CharacterId,
+                        plan.Monsters[0].ObjectKey, altarLevel, _ => 0);
+                    var expected = checkedPlan.Altar!;
+                    if (altar.Definition.Ultimate != expected.Definition.Ultimate ||
+                        !altar.Definition.Phases.SequenceEqual(expected.Definition.Phases) ||
+                        !altar.Actors.Select(actor => actor with { Kind = 19 }).SequenceEqual(expected.Actors.Select(actor => actor with { Kind = 19 })) ||
+                        altar.Actors.Any(actor => actor.Kind > 19) || altar.Actors.Count(actor => actor.Kind < 19) > (altar.Definition.Ultimate ? 0 : 1) ||
+                        altar.Rounds.Length != expected.Rounds.Length || altar.Rounds.Zip(expected.Rounds).Any(pair =>
+                            pair.First.Round != pair.Second.Round || pair.First.Difficulty != pair.Second.Difficulty ||
+                            pair.First.Batches.Length != pair.Second.Batches.Length || pair.First.Batches.Zip(pair.Second.Batches).Any(batch =>
+                                batch.First.DelayMilliseconds != batch.Second.DelayMilliseconds || batch.First.Interval != batch.Second.Interval ||
+                                !batch.First.Actors.Select(actor => actor with { Kind = 19 }).SequenceEqual(batch.Second.Actors.Select(actor => actor with { Kind = 19 })))) ||
+                        plan.Monsters.Count != altar.Actors.Length || plan.Monsters.Zip(altar.Actors).Any(pair =>
+                            pair.First.AltarActor != pair.Second || pair.First.Source is not null || pair.First.AiCharacter is not null ||
+                            pair.First.MonsterId != pair.Second.Phase.MonsterId || pair.First.ObjectKey != pair.Second.ObjectKey ||
+                            pair.First.CandidateLevel != altarLevel || pair.First.SpawnType != pair.Second.Rank ||
+                            !pair.First.IsBlocking || pair.First.IsFriendly || pair.First.Team != 100 || !keys.Add(pair.First.ObjectKey)))
+                        throw new InvalidDataException("祭坛对象或时间线与资源不一致");
+                }
+                catch (Exception error) when (error is InvalidDataException or NotSupportedException or OverflowException)
+                {
+                    reason = "invalid: 祭坛房间规划不完整";
+                    return false;
+                }
+                continue;
+            }
             if (entry.PlayerTeam is { } playerTeam && plan.PlayerTeam is { } plannedTeam && plannedTeam != playerTeam)
             {
                 reason = "invalid: 房间阵营与已确认入场上下文不匹配";
@@ -598,7 +638,7 @@ internal sealed partial class SinglePlayerDungeonRun
             return SameDeath(pendingDeath.Death, confirmed)
                 ? new(DungeonRunOutcome.Accepted, pendingDeath) : new(DungeonRunOutcome.Rejected);
         if (!Matches(confirmed.Identity) || Phase is not (SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement) ||
-            pendingSettlement is not null || confirmed.EventId == Guid.Empty ||
+            HasPendingSettlement || committedAltarSettlement is not null || committedDespairClear is not null || confirmed.EventId == Guid.Empty ||
             !CanAdvance() || confirmed.CombatSequence <= 0 || combatSequences.Contains(confirmed.CombatSequence) ||
             CurrentLivingMonster(confirmed.MonsterKey) is null)
             return new(DungeonRunOutcome.Rejected);
@@ -608,7 +648,7 @@ internal sealed partial class SinglePlayerDungeonRun
         bool settles = !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && (TerminalBossCleared(confirmed.MonsterKey) ||
             conditionClears && IsTerminalRoom());
         // 明确的猎杀条件同样清退当前房间；非终点不产生通关事实，清退不产生击杀奖励。
-        ushort[] culled = settles || conditionClears ? current.Plan.Monsters.Where(monster => monster.IsBlocking &&
+        ushort[] culled = current.Altar is null && (settles || conditionClears) ? current.Plan.Monsters.Where(monster => monster.IsBlocking &&
             (conditionClears || !monster.IsBoss) &&
             monster.ObjectKey != confirmed.MonsterKey && !current.Dead.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray() : [];
         // 中途任务目标保留原Boss与结算；仅最后可信阻挡死亡推进清房epoch。
@@ -625,7 +665,8 @@ internal sealed partial class SinglePlayerDungeonRun
             settles ? SinglePlayerDungeonPhase.Settlement : Phase, current.Plan.Room.Map,
             Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
                 !current.Culled.Contains(monster.ObjectKey) && !culled.Contains(monster.ObjectKey) &&
-                monster.ObjectKey != confirmed.MonsterKey).Select(monster => monster.ObjectKey).ToArray()))
+                monster.ObjectKey != confirmed.MonsterKey && (current.Altar is null || current.Altar.WasPublished(monster.ObjectKey)))
+                .Select(monster => monster.ObjectKey).ToArray()))
             { MapOperation = mapOperation,MapPayload = mapPayload, ConsumedFatigue = consumedFatigue, BossPosition = BossPosition(nextStage) };
         DungeonClearFact? clear = settles
             ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) { ClearMap = current.Plan.Room.Map } : null;
@@ -694,7 +735,7 @@ internal sealed partial class SinglePlayerDungeonRun
     {
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
-        if (entry.IsPractice || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
+        if (entry.IsPractice || entry.DungeonId is >= 11008 and <= 11107 || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
             HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial && !entry.DisableMonsterAndClearExperience ||
             entry.DisableMonsterAndClearExperience && reward.TotalExperience != 0 ||
             (ulong)reward.BaseExperience + reward.RankExperience + reward.ExtraExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
@@ -925,6 +966,8 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null, bool passiveConfirmed = false)
     {
+        if (current.Altar is { } altar)
+            return IsTerminalRoom() && (altar.Completed || altar.CanComplete(current.Dead, preparedMonsterKey));
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。
         if (!IsTerminalRoom() || !HasCommittedPassiveBaseDeaths() || HasPendingBossDeaths(preparedMonsterKey) ||
             passiveClearTarget is not null && !HasCommittedPassiveClearCondition && !passiveConfirmed)

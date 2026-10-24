@@ -13,6 +13,7 @@ internal static class DungeonRoomCatalogTests
     {
         int checks = Count;
         var fixture = new Fixture();
+        AltarResources(fixture);
         That(fixture.Parse([fixture.Tag("type"),fixture.String("[boss]")]).DeclaredType == "[boss]" &&
             fixture.Parse(fixture.Monster()).DeclaredType is null,
             "MAP真实类型独立保留，迷宫身份不补造缺失类型");
@@ -166,6 +167,46 @@ internal static class DungeonRoomCatalogTests
         Console.WriteLine($"PASS {Count - checks} dungeon room team metadata assertions");
     }
 
+    static void AltarResources(Fixture fixture)
+    {
+        PvfToken[] monster = [.. new[] { 1, 0, 440, 222, 0, 5000, 4000, 1, 0, 1 }.Select(value => new PvfToken(0,value))];
+        PvfToken[] phase = [new(0,0),new(0,0),new(0,5000),new(2,BitConverter.SingleToInt32Bits(1.5f)),new(0,0),new(0,0)];
+        var blood = fixture.Parse([.. fixture.Block("blood monster",monster),.. fixture.Block("blood phase time",phase)]);
+        That(blood.Monsters.Count == 0 && blood.AltarWaves is { Ultimate: false, Monsters.Length: 1, Phases.Length: 1 } &&
+            blood.AltarWaves.Monsters[0].Values.SequenceEqual(monster.Select(value => value.Value)) &&
+            blood.AltarWaves.Phases[0] is { Round: 0, MonsterOrdinal: 0, Time: 5000, RawFactor: 1.5f, SpawnOrder: 0, GroupCount: 0, Difficulty: 0 },
+            "祭坛十整数和阶段浮点字段独立保存，不错当普通怪物八整数或补造演员");
+        TestCheck.Reject<NotSupportedException>(() => DungeonMonsterPlan.FromRoom(blood,1,100),
+            "普通入口不能绕过专用波次将祭坛生成为已清空房间");
+        foreach (char difficulty in "ABCDE")
+        {
+            var ultimate = fixture.Parse([.. fixture.Block("ultimate monster",monster),
+                .. fixture.Block("ultimate phase time",[.. phase,fixture.String(difficulty.ToString())])]);
+            That(ultimate.AltarWaves is { Ultimate: true } && ultimate.AltarWaves.Phases[0].Difficulty == difficulty - 'A' + 1,
+                "极限难度按原生A至E映射1至5，不限死为两档");
+        }
+        That(fixture.Parse(fixture.Monster()).AltarWaves is null,"普通地图不创建祭坛元数据");
+        var badIndex = phase.ToArray(); badIndex[1] = new(0,1);
+        var badFactor = phase.ToArray(); badFactor[3] = new(2,BitConverter.SingleToInt32Bits(float.NaN));
+        foreach (var invalid in new PvfToken[][]
+        {
+            [.. fixture.Block("blood monster",monster)],
+            [.. fixture.Block("blood monster",monster[..^1]),.. fixture.Block("blood phase time",phase)],
+            [.. fixture.Block("blood monster",monster),.. fixture.Block("blood phase time",phase[..^1])],
+            [.. fixture.Block("blood monster",monster),.. fixture.Block("blood phase time",badIndex)],
+            [.. fixture.Block("blood monster",monster),.. fixture.Block("blood phase time",badFactor)],
+            [.. fixture.Block("blood monster",monster),.. fixture.Block("blood monster",monster),.. fixture.Block("blood phase time",phase)],
+            [.. fixture.Block("ultimate monster",monster),.. fixture.Block("ultimate phase time",[.. phase,fixture.String("F")])],
+            [.. fixture.Block("ultimate monster",monster),.. fixture.Block("ultimate phase time",[.. phase,new(0,1)])],
+            [.. fixture.Block("blood monster",monster),.. fixture.Block("ultimate phase time",[.. phase,fixture.String("A")])],
+            [.. fixture.Block("condition",[.. fixture.Block("blood monster",monster),.. fixture.Block("blood phase time",phase)])]
+        }) TestCheck.Reject<InvalidDataException>(() => fixture.Parse(invalid),"畸形、混合或条件祭坛声明不能静默丢弃或放行");
+        monster[0] = new(0,99);
+        phase[3] = new(2,0);
+        That(blood.AltarWaves!.Monsters[0].Values[0] == 1 && blood.AltarWaves.Phases[0].RawFactor == 1.5f,
+            "祭坛源记录冻结输入，不受调用方修改影响");
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
@@ -190,6 +231,74 @@ internal static class DungeonRoomCatalogTests
             && candidate.QuestConnectionTokens[1] == new PvfToken(0, 3145));
         var first = maze.MapSpecification!.Single(map => map.Position == maze.Starts.Single());
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var despair = TowerOfDespairCatalog.Load(pvf);
+        var admission = DungeonAltarAdmissionCatalog.Load(pvf);
+        var altarRewards = DungeonAltarRewardCatalog.Load(pvf);
+        var clearItems = DungeonAltarClearItemCatalog.Load(pvf);
+        That(altarRewards.ItemProbabilities.SequenceEqual([50,47,100]) && altarRewards.GoldWeight == 7f &&
+            altarRewards.Experience(15, 100, 1, false) == 12000 && altarRewards.Experience(7, 100, 1, true) == 14000 &&
+            altarRewards.UltimateRewards.All(row => row[1] == 0 && row[2] == 0),
+            "实际祭坛专用奖励倍率、入场序号和禁用的极限额外奖励完整读取");
+        That(clearItems.Probabilities.Length == 5 && clearItems.Probabilities.All(row => row.Probability == 10000 && row.RawExtra == 0) &&
+            clearItems.KindWeights.SequenceEqual([0,9500,0,500]) && clearItems.ItemReferences.Single(row => row.Level == 70) is { Value0: 7, Value1: 3 } &&
+            clearItems.GoldReferences.Any(row => row.Level == 70) && clearItems.SoloGoldRate == 1.02f && clearItems.RankGoldRate == 0.1f,
+            "祭坛翻牌使用本版四列默认行和自己的类别、稀有度、等级引用，不能套普通怪物表");
+        That(admission.BloodFee(60, 0) == 22000 && admission.BloodFee(60, 1) == 29200 &&
+            admission.BloodFee(60, 2) == 46000 && admission.BloodFee(95, 11) == 568000,
+            "真实无尽收费表按已入次数选择下一次阈值，并保留lotto与价格百分比");
+        foreach (var floor in despair.Floors)
+        {
+            var floorDefinition = dungeons.Get(floor.DungeonId);
+            var floorMaze = dungeons.ResolveOrdinaryMaze(floorDefinition, floorDefinition.Mazes.Single(), _ => 0);
+            That(floorDefinition.IsDespairTower && floorMaze.StaticTopology.Supported &&
+                floorMaze.StaticTopology.Rooms!.Count == (floor.Layer == 15 ? 3 : floor.Layer == 25 ? 4 : floor.Layer == 55 ? 2 : 1),
+                "绝望真实楼层保留单房或多房路线：" + floor.Layer);
+            ushort nextFloorKey = 256;
+            foreach (var floorMap in floorMaze.MapSpecification!)
+            {
+                var floorRoom = catalog.Get(floorMap, requirePassiveDefinitions: false);
+                var floorPlan = DungeonMonsterPlan.FromRoom(floorRoom, 1, nextFloorKey, floorDefinition.BasisLevel);
+                That(floorPlan.Monsters.Count > 0, "绝望楼层实际房间存在可实例化演员：" + floor.Layer);
+                nextFloorKey = checked((ushort)floorPlan.NextObjectKey);
+            }
+        }
+        var altarMap = new DungeonMap("map",new(0,0),17030,"map/towerofultimate/start.map");
+        var ultimateDefinition = dungeons.Get(11007);
+        var ultimateMaze = dungeons.ResolveOrdinaryMaze(ultimateDefinition, ultimateDefinition.Mazes.Single(), _ => 0);
+        That(ultimateDefinition.AltarKind == 2 && ultimateDefinition.AltarMaxRounds == 7 && ultimateMaze.IsUltimateAltar &&
+            ultimateMaze.StaticTopology.Supported && ultimateMaze.MapSpecification is [{ Kind: "boss", Id: 17030 }],
+            "真实极限单房按唯一map声明及MAP归属解析，不补造BB网格外出口");
+        var altar = catalog.Get(altarMap,requirePassiveDefinitions:false).AltarWaves;
+        That(altar is { Ultimate: true, Monsters.Length: 20, Phases.Length: 20 } &&
+            altar.Phases.Select(row => row.Round).Distinct().SequenceEqual(Enumerable.Range(0,7)) &&
+            altar.Phases.Select(row => row.Difficulty).Distinct().SequenceEqual(new byte[] { 1,2 }) &&
+            altar.Monsters[0].Values.SequenceEqual([56017,0,440,222,0,5000,4000,1,0,1]),
+            "真实极限地图17030完整读取七轮20行与A/B选择，不从普通monster块猜演员");
+        var ultimatePlan = DungeonMonsterPlan.FromAltarRoom(catalog.Get(altarMap with { Kind = "boss" }, requirePassiveDefinitions: false),
+            1, 256, 70, _ => 0);
+        That(ultimatePlan.Altar is { Actors.Length: 20, Rounds.Length: 12 } && ultimatePlan.Altar.Actors.All(actor => actor.Level == 70),
+            "真实极限七回合十二个难度分支展开20个独立对象");
+        var altarPaths = DungeonCatalog.ParseDirectory(pvf.ReadTokens("map/map.lst"),pvf.ResolveString,"map");
+        (string Name,int Monsters,int Phases,int Actors)[] bloodSources =
+        [
+            ("f(0,0)start_lugaru.map",54,61,115), ("f(0,0)start_slime.map",36,36,197), ("f(0,0)start_spider.map",38,106,129),
+            ("f(1,0)normal_dragonknight.map",37,37,109), ("f(1,0)normal_goblin.map",35,43,109),
+            ("f(1,0)normal_soldier.map",70,70,118), ("f(2,0)boss_undead.map",61,40,204)
+        ];
+        foreach (var source in bloodSources)
+        {
+            var path = "map/towerofbloodyfight/" + source.Name;
+            var map = new DungeonMap("map",new(0,0),altarPaths.Single(pair => pair.Value == path).Key,path);
+            var actual = catalog.Get(map,requirePassiveDefinitions:false).AltarWaves;
+            That(actual is { Ultimate: false } && actual.Monsters.Length == source.Monsters && actual.Phases.Length == source.Phases &&
+                actual.Phases.Select(row => row.Round).Distinct().SequenceEqual(Enumerable.Range(0,5)) &&
+                actual.Phases.All(row => row.Difficulty == 0),
+                "无尽祭坛实际候选保留完整五轮、重复怪物引用与阶段行：" + source.Name);
+            var expanded = DungeonMonsterPlan.FromAltarRoom(catalog.Get(map, requirePassiveDefinitions: false), 1, 256, 60, _ => 0);
+            That(expanded.Altar is { } altarPlan && altarPlan.Actors.Length == source.Actors && altarPlan.Rounds.Length == 5 &&
+                expanded.Monsters.Select(actor => actor.ObjectKey).Distinct().Count() == source.Actors,
+                "真实无尽生成数量包含每阶段重复及递增且对象键唯一：" + source.Name);
+        }
         var room = catalog.Get(first);
         var storyMap = dungeons.Get(9).Mazes.SelectMany(candidate => candidate.MapSpecification ?? []).Single(map => map.Id == 76155);
         var story = catalog.Get(storyMap);

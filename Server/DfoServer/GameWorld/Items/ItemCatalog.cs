@@ -112,13 +112,13 @@ internal sealed class ItemCatalog
     // 在资源装配阶段枚举；正creation rate的普通道具完整解析，失败不得静默删除候选。
     // 逐项解析互不依赖（PVF 按位置读取、缓存与模板表均线程安全），有序并行后结果与串行一致；
     // 原先串行约占服务启动 4 秒。任一项失败仍以原异常终止装配。
-    public IEnumerable<ItemTemplate> DropCandidates()
+    public IEnumerable<ItemTemplate> DropCandidates(bool includeSpecialEquipment = false)
     {
         var rows = equipment.Concat(stackable).OrderBy(row => row.Key).ToArray();
         try
         {
             return rows.AsParallel().AsOrdered().WithDegreeOfParallelism(Math.Clamp(Environment.ProcessorCount / 2, 1, 8))
-                .Select(row => DropCandidate(row.Key, row.Value)).Where(template => template is not null).Select(template => template!).ToArray();
+                .Select(row => DropCandidate(row.Key, row.Value, includeSpecialEquipment)).Where(template => template is not null).Select(template => template!).ToArray();
         }
         catch (AggregateException error) when (error.InnerExceptions.Count >= 1)
         {
@@ -127,7 +127,7 @@ internal sealed class ItemCatalog
         }
     }
 
-    ItemTemplate? DropCandidate(int id, string path)
+    ItemTemplate? DropCandidate(int id, string path, bool includeSpecialEquipment)
     {
         if (id <= 2)
             return null;
@@ -141,7 +141,9 @@ internal sealed class ItemCatalog
         if (rate == 0)
             return null;
         var template = Get(id);
-        return template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession ? template : null;
+        return template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession ||
+            includeSpecialEquipment && isEquipment && template.Kind is ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment
+            ? template : null;
     }
 
     internal static int CreationRate(PvfDocument document)

@@ -43,7 +43,7 @@ internal sealed partial class GameSession
     public (FormalDungeonReceipt Receipt, ushort? BossKey)? EnableFormalDungeonSettlement(ushort? reportedBossKey = null) => owner.Execute(() =>
     {
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
-            dungeon.SettlementEnabled || dungeon.Run.ClearFact is null)
+            dungeon.SettlementEnabled || dungeon.Run.ClearFact is null || dungeon.Run.CurrentAltar is not null || dungeon.Entry.IsDespair)
             return ((FormalDungeonReceipt, ushort?)?)null;
         var snapshot = dungeon.Run.Snapshot;
         if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort?)?)null;
@@ -139,7 +139,7 @@ internal sealed partial class GameSession
         return owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice ||
-            dungeon.Run.ClearFact is not { } fact || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
+            dungeon.Run.ClearFact is not { } fact || dungeon.Run.CurrentAltar is not null || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         if (!capture.Prepared && (!ReferenceEquals(Selected, capture.Character) || !ReferenceEquals(dungeon, capture.Dungeon)))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
@@ -422,7 +422,7 @@ internal sealed partial class GameSession
 
     bool HasPendingFormalCard => formalDungeon?.Settlement?.Claim is not null;
     static bool HasFinishedDungeon(FormalDungeon? dungeon) => dungeon is not null &&
-        (dungeon.Settlement is { Committed: true } || (dungeon.Entry.IsPractice || dungeon.Entry.IsCosmo) &&
+        (dungeon.Settlement is { Committed: true } || dungeon.Run.HasCommittedAltarSettlement || dungeon.Run.HasCommittedDespairClear || (dungeon.Entry.IsPractice || dungeon.Entry.IsCosmo) &&
             dungeon.SettlementEnabled && dungeon.Run.ClearFact is not null && !dungeon.Run.HasPendingSettlement);
 
     bool CanUseSettlementNpcServices() => !HasPendingFormalCard && Phase == SessionPhase.Settlement && formalDungeon is { } dungeon &&

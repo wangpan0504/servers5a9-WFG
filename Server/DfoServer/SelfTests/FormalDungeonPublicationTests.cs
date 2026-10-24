@@ -890,6 +890,12 @@ internal static class FormalDungeonPublicationTests
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey, weekly);
         public Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
         public DfoServer.Game.Dungeons.GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId) => inner.ReadGriefTower(owner, characterId);
+        public DfoServer.Game.Dungeons.DungeonSpecialEntryUsage LoadSpecialEntryUsage(AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.DungeonSpecialEntryKind kind) => inner.LoadSpecialEntryUsage(owner, expected, day, kind);
+        public DfoServer.Game.Dungeons.DungeonDespairProgress LoadDespairProgress(AccountOwners.Lease owner, Character expected) => inner.LoadDespairProgress(owner, expected);
+        public DfoServer.Game.Dungeons.DungeonDespairClearCommit CommitDungeonDespairClear(AccountOwners.Lease owner, DfoServer.Game.Dungeons.SinglePlayerDungeonRun run,
+            DfoServer.Game.Dungeons.PreparedDungeonDespairClear prepared) => inner.CommitDungeonDespairClear(owner, run, prepared);
+        public DungeonAltarSettlementCommit CommitDungeonAltarSettlement(AccountOwners.Lease owner, SinglePlayerDungeonRun run,
+            PreparedDungeonAltarSettlement prepared, CharacterGrowthCatalog growth) => inner.CommitDungeonAltarSettlement(owner, run, prepared, growth);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan) => inner.CommitQuestCompletion(owner, plan);
         public QuestLifecycleCommit CommitQuestLifecycle(AccountOwners.Lease owner, QuestLifecyclePlan plan) => inner.CommitQuestLifecycle(owner, plan);

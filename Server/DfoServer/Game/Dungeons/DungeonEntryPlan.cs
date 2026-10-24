@@ -31,6 +31,9 @@ internal sealed record DungeonEntryPlan(
     public bool DisableClearReward { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
     public bool DisableGiveupPenalty { get; init; }
+    public int? CoinLimit { get; init; }
+    public bool IsAltar => DungeonId is 11006 or 11007;
+    public bool IsDespair => DungeonId is >= 11008 and <= 11107;
     public bool DisableFatigueConsumption { get; init; }
     public Guid QuestAcceptanceId { get; init; }
     // 带原接取身份的普通路线，含猎杀、收集及列表通关；同样核对普通入场费用。
@@ -459,6 +462,7 @@ internal sealed record DungeonEntryPlan(
             DisableClearReward = definition.DisableClearReward,
             DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience,
             DisableGiveupPenalty = definition.DisableGiveupPenalty,
+            CoinLimit = definition.Id is >= 11006 and <= 11107 ? definition.CoinLimit : null,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
             MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
