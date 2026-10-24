@@ -14,7 +14,7 @@ internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Lead
 {
     public PartySettings Settings { get; init; } = PartySettings.Default;
 }
-internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged }
+internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged }
 internal sealed record PartyNotice(PartyNoticeKind Kind, PartyMember Recipient, PartyMember? Peer = null,
     PartySnapshot? Party = null, uint PeerId = 0, Func<bool>? Guard = null);
 internal sealed record PartyResult(ushort Error, PartyNotice[] Notices)
@@ -214,6 +214,34 @@ internal sealed class PartyService
             }
         });
     }
+    public PartyResult TransferLeader(GameSession session, byte slot, bool blocked = false)
+    {
+        if (blocked || Capture(session) is not { } member) return Reject();
+        PartySnapshot? expected;
+        PartyMember? target;
+        lock (gate)
+        {
+            expected = Find(member);
+            target = expected?.Members.FirstOrDefault(m => m.Slot == slot);
+        }
+        if (expected is null || target is null || ReferenceEquals(target.Actor.Session, session)) return Reject();
+        return Pair(member, target, () =>
+        {
+            lock (gate)
+            {
+                // 获取双方 owner 后重新核对快照，不能委任给已离队、换角或被接管的会话。
+                if (!ReferenceEquals(Find(member), expected) || !member.IsCurrent() || !target.IsCurrent() ||
+                    !session.CanChangeTownParty || !target.Actor.Session.CanChangeTownParty ||
+                    expected.Members.Any(m => !m.IsCurrent() || m.Actor.Session.Phase != SessionPhase.Town) ||
+                    expected.Members.Single(m => ReferenceEquals(m.Actor.Session, session)).Slot != expected.Leader)
+                    return Reject();
+                var party = expected with { Leader = slot, Revision = ++revision };
+                parties.Set(party.Id, party);
+                return new PartyResult(0, party.Members.Select(m => new PartyNotice(PartyNoticeKind.LeaderChanged, m,
+                    Party: party, Guard: () => Latest(party, m))).ToArray());
+            }
+        });
+    }
     public PartyResult Leave(GameSession session, byte? kickSlot = null, bool blocked = false)
     {
         if (blocked || Capture(session) is not { } member) return Reject(19);
@@ -273,8 +301,9 @@ internal sealed class PartyService
         lock (gate)
         {
             var party = parties.SnapshotValues().FirstOrDefault(p => p.Members.Any(m => ReferenceEquals(m.Actor.Session, session) && m.IsCurrent()));
-            return party is null ? [] : party.Members.Select(m => new PartyNotice(PartyNoticeKind.SceneChanged, m, Party: party,
-                Guard: () => Latest(party, m))).ToArray();
+            var member = party?.Members.Single(m => ReferenceEquals(m.Actor.Session, session));
+            return party is null || member is null ? [] : [new(PartyNoticeKind.SceneChanged, member, Party: party,
+                Guard: () => Latest(party, member))];
         }
     }
     public void Detach(GameSession session)

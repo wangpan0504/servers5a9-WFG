@@ -166,17 +166,29 @@ internal static class SocialTcpTests
             w.Write(id); w.Write(mode); w.Write(value);
             if (invitation) w.Write(new byte[mode == 0 ? 6 : 4]);
         });
-        byte[] Party(int count, bool removed = false) => Build(w =>
+        byte[] Party(int count, bool removed = false, byte leader = 0, bool membersOnly = false) => Build(w =>
         {
             w.Write((ushort)1); w.Write((ushort)9999); w.Write((ushort)1); w.Write((byte)2); w.Write((byte)10);
-            w.Write((byte)0); w.Write(removed ? (byte)3 : (byte)0); w.Write((byte)0);
+            w.Write((byte)0); w.Write(removed ? (byte)3 : membersOnly ? (byte)2 : (byte)0); w.Write((byte)0);
             if (removed) return;
-            w.Write((byte)0); w.Write((byte)0); WriteName(w, "队伍");
-            w.Write((byte)0); w.Write((byte)4); w.Write(new byte[21]); w.Write((byte)7);
+            if (!membersOnly)
+            {
+                w.Write((byte)0); w.Write((byte)0); WriteName(w, "队伍");
+                w.Write((byte)0); w.Write((byte)4); w.Write(new byte[21]); w.Write((byte)7);
+            }
             w.Write((byte)count);
             for (byte i = 0; i < count; i++) { w.Write(i); w.Write(i == 0 ? alpha.Id : beta.Id); w.Write(new byte[5]); }
-            w.Write(new byte[10]);
+            w.Write((byte)0); w.Write((byte)0); w.Write(leader); w.Write(new byte[7]);
         });
+        byte[] Realtime(int count) => Build(w =>
+        {
+            w.Write((byte)count);
+            for (byte i = 0; i < count; i++) { w.Write(i == 0 ? alpha.Id : beta.Id); w.Write((byte)100); w.Write((byte)0); w.Write(i); }
+        });
+        void SceneInfo(TcpPeer peer)
+        {
+            peer.Expect(0, 9, Party(2)); peer.Expect(0, 153, Realtime(2));
+        }
         void PartyInfo(TcpPeer peer, int count)
         {
             for (int i = 0; i < count; i++) peer.Expect(0, 2);
@@ -205,6 +217,20 @@ internal static class SocialTcpTests
         beta.Send(11, Peer(alpha.Id, 0, false)); beta.Expect(1, 11, [1, ..Build(w => w.Write(alpha.Id)), 0]);
         PartyInfo(alpha, 2); PartyInfo(beta, 2);
         alpha.Expect(0, 2); alpha.Expect(0, 8, Peer(beta.Id, 0, false));
+        alpha.Barrier(); beta.Barrier();
+        void Transfer(TcpPeer from, byte slot)
+        {
+            from.Send(121, [slot]); from.Expect(1, 121, [1]);
+            foreach (var peer in new[] { alpha, beta })
+            {
+                peer.Expect(0, 26, [slot]); peer.Expect(0, 9, Party(2, leader: slot, membersOnly: true));
+                peer.Expect(0, 153, Realtime(2)); peer.Barrier();
+            }
+        }
+        Transfer(alpha, 1);
+        alpha.Send(121, [1]); alpha.Barrier(); beta.Barrier();
+        alpha.Send(14, [1]); alpha.Expect(1, 14, [0, 4, 0]); alpha.Barrier(); beta.Barrier();
+        Transfer(beta, 0);
         beta.Send(2, Convert.FromHexString("051A19ACF81A19ACF800F5000200000C000000303065303163356130343163"));
         foreach (var peer in new[] { alpha, beta })
         {
@@ -213,17 +239,17 @@ internal static class SocialTcpTests
                 "队员端口变化只刷新实际端点，不重建Actor或队伍名册");
         }
         // 组队状态下从独立房间到公共地图，再离开并返回；每次场景绑定后恢复相同队伍。
-        alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24)); PartyInfo(alpha, 2); alpha.Expect(1, 1347, [1]);
-        PartyInfo(beta, 2); beta.Barrier();
+        alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24)); SceneInfo(alpha); alpha.Expect(1, 1347, [1]);
+        beta.Barrier();
         beta.Send(1426); beta.SendBarrier(); beta.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
-        PartyInfo(beta, 2); beta.Expect(1, 1347, [1]);
-        alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22)); PartyInfo(alpha, 2); alpha.Barrier();
+        SceneInfo(beta); beta.Expect(1, 1347, [1]);
+        alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22)); alpha.Barrier();
         alpha.Send(36, Area(38, 1, 450, 234, 38, 0)); alpha.SendBarrier();
-        alpha.Batch((0, 6), (0, 23), (0, 24), (0, 1379)); PartyInfo(alpha, 2); alpha.Expect(1, 1347, [1]);
-        beta.Expect(0, 6); PartyInfo(beta, 2); beta.Barrier();
+        alpha.Batch((0, 6), (0, 23), (0, 24), (0, 1379)); SceneInfo(alpha); alpha.Expect(1, 1347, [1]);
+        beta.Expect(0, 6); beta.Barrier();
         alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
-        PartyInfo(alpha, 2); alpha.Expect(1, 1347, [1]);
-        beta.Batch((0, 2), (0, 3), (0, 23), (0, 22)); PartyInfo(beta, 2); beta.Barrier();
+        SceneInfo(alpha); alpha.Expect(1, 1347, [1]);
+        beta.Batch((0, 2), (0, 3), (0, 23), (0, 22)); beta.Barrier();
         alpha.Send(14, [1]); alpha.Expect(1, 14, [1]); PartyInfo(alpha, 1); beta.Expect(0, 9, Party(0, true));
         beta.Expect(0, 9, Party(1));
         alpha.Send(13); alpha.Expect(1, 13, [1]); alpha.Expect(0, 9, Party(0, true));
@@ -271,9 +297,16 @@ internal static class SocialTcpTests
             That(remoteMember[0] == 0 && U16(remoteMember, 121) == guest.Id,
                 "被动名册也先安装异区队员公开Actor，不创建同屏坐标或实体");
             observer.Expect(0, 9, joined);
+            // 本人打开目录时已有异区队友，查询不能再次安装队友Actor并改变队伍成员引用。
+            byte[] ownQuery = joined.ToArray(); ownQuery[2] = 1; ownQuery[3] = 0;
+            guest.Send(1404, Query(guest.Id, kind: 0)); guest.Expect(0, 9, ownQuery); guest.Barrier();
             guest.Send(13); guest.Expect(1, 13, [1]); guest.Expect(0, 9);
             Bytes(OwnInformation(), created, "异区队员离开后保留原队长及设置");
             observer.Expect(0, 9, created);
+            byte[] remainingQuery = created.ToArray(); remainingQuery[2] = 1; remainingQuery[3] = 0;
+            var formerLeader = guest.Expect(0, 2).Body;
+            That(U16(formerLeader, 121) == leader.Id, "离队后查询别人的异区队伍仍补齐公开资料");
+            guest.Expect(0, 9, remainingQuery);
             leader.Barrier(); guest.Barrier(); observer.Barrier();
         }
         observer.Send(12, Convert.FromHexString("010504000000000500000000000007"));
@@ -345,10 +378,10 @@ internal static class SocialTcpTests
         queryResult = edited.ToArray(); queryResult[2] = 1; queryResult[3] = 0;
         RemoteDirectory();
         leader.Send(36, Area(38, 0, 629, 196, 38, 2));
-        leader.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22)); OwnInformation();
+        leader.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22)); OwnSceneInformation();
         observer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); observer.Expect(0, 9, queryResult);
         leader.Send(36, Area(38, 1, 450, 234, 38, 0));
-        leader.Batch((0, 6), (0, 23), (0, 24), (0, 1379)); OwnInformation(); observer.Expect(0, 6);
+        leader.Batch((0, 6), (0, 23), (0, 24), (0, 1379)); OwnSceneInformation(); observer.Expect(0, 6);
         RemoteDirectory();
         leader.Send(1404, Query(leader.Id, kind: 6)); leader.Expect(0, 9, queryResult);
         leader.Send(13); leader.Expect(1, 13, [1]);
@@ -373,6 +406,14 @@ internal static class SocialTcpTests
             That(remote[0] == 0 && U16(remote, 1) == 1 && U16(remote, 121) == leader.Id,
                 "异区名册前先安装当前队长公开资料，不能引用缺失Actor或安装本人资料");
             observer.Expect(0, 9, queryResult);
+        }
+
+        void OwnSceneInformation()
+        {
+            leader.Expect(0, 9, edited); leader.Expect(0, 153, Build(w =>
+            {
+                w.Write((byte)1); w.Write(leader.Id); w.Write((byte)100); w.Write((byte)0); w.Write((byte)0);
+            }));
         }
 
         byte[] OwnInformation()

@@ -10,6 +10,11 @@ internal sealed record PartyDirectoryQuery(ushort Actor, ushort Page, byte Sort,
 
 internal static class PartyRequests
 {
+    public static byte Leader(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 1) throw new InvalidDataException("委任队长请求长度错误");
+        return body[0];
+    }
     public static PartyDirectoryQuery Directory(ReadOnlySpan<byte> body)
     {
         // 01463630/014D5D10：18B路由头后为40B查询，不能当作任意peer转发。

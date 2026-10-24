@@ -20,6 +20,7 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
         commands.Register(CmdPacketType.SET_PARTY_INFO, InformationAsync, nameof(PlayerInteractionHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.LEAVE_PARTY, LeaveAsync, nameof(PlayerInteractionHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.WALKOUT_PARTY_MEMBER, LeaveAsync, nameof(PlayerInteractionHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CHANGE_HOST, TransferLeaderAsync, nameof(PlayerInteractionHandler), UserStateRequirement.WorldReady);
     }
     Task<CommandResult> DirectoryAsync(GameConnectionContext context, Packet request)
     {
@@ -88,6 +89,19 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
         var replied = body.Length == 7 || !result.Accepted
             ? context.Reply(CmdPacketType.RESPONSE_PEER, result.Accepted ? PartyPackets.Response(target) : PartyPackets.Failure(result.Error), "party_response_result")
             : Task.CompletedTask;
+        parties.Publish(result.Notices);
+        await replied;
+        return CommandResult.Handled;
+    }
+    async Task<CommandResult> TransferLeaderAsync(GameConnectionContext context, Packet request)
+    {
+        byte slot = PartyRequests.Leader(request.Body);
+        var result = parties.TransferLeader(context.Session, slot, context.BlocksTownActions);
+        log.Write(result.Accepted ? "party_leader_changed" : "party_rejected", new { Connection = context.Id,
+            request.Opcode, TargetSlot = slot, result.Error });
+        // ACK121成功分支已确认；失败提示的业务含义尚未确认，不借用其它命令错误码。
+        if (!result.Accepted) return CommandResult.Handled;
+        var replied = context.Reply(CmdPacketType.CHANGE_HOST, [1], "party_leader_result");
         parties.Publish(result.Notices);
         await replied;
         return CommandResult.Handled;

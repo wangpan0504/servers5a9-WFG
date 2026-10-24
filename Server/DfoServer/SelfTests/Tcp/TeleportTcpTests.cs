@@ -161,6 +161,7 @@ internal static class TeleportTcpTests
 
         async Task SingleMemberPartyAsync(TcpPeer peer, ushort slot)
         {
+            byte[] information = [];
             peer.Send(1426); peer.Expect(0, 23); peer.Expect(0, 24); peer.Barrier();
             CreateParty();
             var before = fixture.Query("SELECT revision,town,area,x,y FROM characters WHERE id=$p0", peer.Id)[0];
@@ -183,7 +184,7 @@ internal static class TeleportTcpTests
                     "单成员按本版377的队长槽0及八行格式声明已同意，不等待不存在的队员或错用角色ID当槽");
                 peer.Expect(0, 379, Effect(1, peer.Id)); peer.Expect(0, 6, Build(w => w.Write(observer.Id)));
                 peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 379, Effect(2, peer.Id));
-                PartyInformation(); peer.Expect(0, 378, Cooldown(0, 600)); peer.Barrier();
+                SceneInformation(); peer.Expect(0, 378, Cooldown(0, 600)); peer.Barrier();
                 observer.Expect(0, 379, Effect(3, peer.Id)); observer.Expect(0, 379, Effect(1, peer.Id));
                 observer.Expect(0, 6, Build(w => w.Write(peer.Id)));
                 var hidden = observer.Expect(0, 9).Body;
@@ -205,13 +206,25 @@ internal static class TeleportTcpTests
             peer.Send(434, Party(39, 3, 783, 205, 1)); peer.Expect(1, 434, [1]);
             peer.Expect(0, 379, Effect(3, peer.Id)); peer.Expect(0, 377); peer.Expect(0, 379, Effect(1, peer.Id));
             peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 379, Effect(2, peer.Id));
-            PartyInformation(); peer.Expect(0, 378, Cooldown(0, 600)); peer.Barrier();
+            SceneInformation(); peer.Expect(0, 378, Cooldown(0, 600)); peer.Barrier();
 
             void CreateParty()
             {
                 peer.Send(12, Convert.FromHexString("000304000000000500000000000007")); PartyInformation(); peer.Barrier();
             }
-            void PartyInformation() => peer.Batch((0, 2), (0, 153), (0, 11), (0, 9), (0, 11), (0, 153), (0, 26));
+            void PartyInformation()
+            {
+                peer.Batch((0, 2), (0, 153), (0, 11)); information = peer.Expect(0, 9).Body;
+                peer.Batch((0, 11), (0, 153), (0, 26));
+            }
+            void SceneInformation()
+            {
+                peer.Expect(0, 9, information);
+                peer.Expect(0, 153, Build(w =>
+                {
+                    w.Write((byte)1); w.Write(peer.Id); w.Write((byte)100); w.Write((byte)0); w.Write((byte)0);
+                }));
+            }
             void RejectCooldown()
             {
                 var saved = fixture.Query("SELECT revision,town,area,x,y FROM characters WHERE id=$p0", peer.Id)[0];

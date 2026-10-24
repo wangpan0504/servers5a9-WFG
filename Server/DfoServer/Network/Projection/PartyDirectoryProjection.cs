@@ -95,8 +95,8 @@ internal sealed class PartyDirectoryProjection : IAsyncDisposable
                         ReferenceEquals(active, Volatile.Read(ref queryState)) && rows.All(parties.IsCurrent) &&
                         members.All(m => m!.IsCurrent());
                     foreach (var member in members)
-                        if (Scene(member!) != scene)
-                            // 同频道名册只引用Actor ID；异区先安装资料，不发送实体位置/入场包。
+                        if (Scene(member!) != scene && (own is null || own.Members.All(m => m.Actor.Character.Id != member!.Character.Id)))
+                            // 异区目录补齐公开资料；本队成员已安装，不能借查询重建引用。
                             await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(member!.Character, member.Channel,
                                 DateTimeOffset.UtcNow.ToUnixTimeSeconds(), member.AdventureName,
                                 member.Phase == SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
@@ -117,6 +117,9 @@ internal sealed class PartyDirectoryProjection : IAsyncDisposable
                     }
                 async Task<bool> Send(PartySnapshot party, bool removed)
                 {
+                    // 名册提交可能先于Changed通知。旧查询不能因IsCurrent过滤掉旧快照，
+                    // 就把仍在当前场景的新版队伍误判成删除；删除也要核对本轮观察到的版本。
+                    var captured = removed ? all.FirstOrDefault(p => p.Id == party.Id) : null;
                     if (!removed)
                         foreach (var member in party.Members)
                         {
@@ -133,7 +136,8 @@ internal sealed class PartyDirectoryProjection : IAsyncDisposable
                         identity.Channel.ServerIndex, checked((byte)identity.Channel.Number),
                         party.Members.Select(m => (m.Slot, m.Actor.Character.Id)).ToArray(), party.Leader, removed, party.Settings),
                         removed ? "party_directory_removed" : "party_directory_updated", () => writing = Guard() &&
-                            (removed ? parties.Current(session)?.Id != party.Id : parties.IsCurrent(party)));
+                            (removed ? parties.Current(session)?.Id != party.Id && (captured is null || parties.IsCurrent(captured))
+                                : parties.IsCurrent(party)));
                     return writing;
                 }
                 foreach (var old in known.Values.Where(p => !visible.ContainsKey(p.Id)).ToArray())

@@ -162,6 +162,28 @@ internal static class SocialTests
                 "多人队伍不能进入现有单人普通选图或职业体验");
             That(parties.Respond(sb, actor.Character.Id, 0, true) is { Accepted: true, Notices.Length: 0 } && !parties.Leave(sb, 0).Accepted,
                 "同队接受重发幂等且普通队员不能踢队长");
+            var originalParty = parties.Current(sa)!;
+            var scene = parties.SceneChanged(sb);
+            That(scene is [{ Kind: DfoServer.Game.Party.PartyNoticeKind.SceneChanged }] &&
+                ReferenceEquals(scene[0].Recipient.Actor.Session, sb) && ReferenceEquals(scene[0].Party, originalParty),
+                "切区只恢复当前接收者，保留队伍对象、成员引用与连接，不向静止队友重发入队投影");
+            That(!parties.TransferLeader(sb, 0).Accepted && !parties.TransferLeader(sa, 0).Accepted &&
+                !parties.TransferLeader(sa, 4).Accepted && !parties.TransferLeader(sa, 3).Accepted &&
+                !parties.TransferLeader(sa, 1, true).Accepted && ReferenceEquals(parties.Current(sa), originalParty),
+                "普通队员、自身槽、越界、空槽及活动占用不能改变队长或队伍快照");
+            var transferred = parties.TransferLeader(sa, 1);
+            var nextParty = parties.Current(sb)!;
+            That(transferred.Accepted && transferred.Notices.Length == 2 &&
+                transferred.Notices.All(n => n.Kind == DfoServer.Game.Party.PartyNoticeKind.LeaderChanged && n.Guard?.Invoke() == true) &&
+                nextParty.Leader == 1 && nextParty.Id == originalParty.Id && nextParty.Revision > originalParty.Revision &&
+                ReferenceEquals(nextParty.Members, originalParty.Members) && nextParty.Settings == originalParty.Settings &&
+                scene[0].Guard?.Invoke() == false,
+                "委任仅提交队长和版本；不重建ID、成员槽位或设置，旧场景恢复不能覆盖新队长");
+            That(!parties.TransferLeader(sa, 1).Accepted && !parties.SetInformation(sa, 1, settings with { Capacity = 4 }).Accepted &&
+                !parties.Leave(sa, 1).Accepted && parties.SetInformation(sb, 1, nextParty.Settings).Accepted,
+                "委任后原队长立即失去委任、修改及踢人权限，新队长获得设置权限");
+            That(parties.TransferLeader(sb, 0).Accepted && transferred.Notices.All(n => n.Guard?.Invoke() == false),
+                "新队长可委任回来，迟到的旧队长投影失效");
             var left = parties.Leave(sb);
             That(left.Accepted && !parties.HasMultipleMembers(sa) && parties.PartyId(other.Character.Id) == ushort.MaxValue &&
                 joined.Notices.Where(n => n.Kind == DfoServer.Game.Party.PartyNoticeKind.Updated).All(n => n.Guard?.Invoke() == false),
@@ -173,6 +195,12 @@ internal static class SocialTests
             sb.ReturnToRoster(); sb.Select(0); sb.MarkReady();
             That(!parties.Respond(sb, actor.Character.Id, 0, true).Accepted && invite.Notices[0].Guard?.Invoke() == false,
                 "换角epoch失效后不能接受旧邀请或收到迟到邀请");
+            parties.Invite(sa, sb, 0);
+            That(parties.Respond(sb, actor.Character.Id, 0, true).Accepted, "当前会话仍可重新组队");
+            sb.ReturnToRoster(); sb.Select(0); sb.MarkReady();
+            That(!parties.TransferLeader(sa, 1).Accepted && parties.Current(sa)!.Leader == 0,
+                "目标换角后即使旧槽位尚未清理，也不能把队长委任给新epoch");
+            parties.Detach(sa);
             parties.Detach(sb);
             other = sb.CaptureSocialActor()!;
             That(AccountOwners.Lease.ExecuteTogether(a, b, () => a.Execute(() => b.Execute(() => 7))) == 7,

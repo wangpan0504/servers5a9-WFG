@@ -42,7 +42,13 @@ internal static class PartyPackets
     {
         // 023B9E70：本频道成员已由Actor安装，名册不附跨频道角色块。
         w.Write((ushort)1); w.Write((ushort)9999);
-        InformationBlock(w, id, server, channel, members, leader, removed, settings);
+        InformationBlock(w, id, server, channel, members, leader, removed ? (byte)3 : (byte)0, settings);
+    });
+
+    public static byte[] Members(ushort id, byte server, byte channel, (byte Slot, ushort Actor)[] members, byte leader) => SocialPackets.Build(w =>
+    {
+        w.Write((ushort)1); w.Write((ushort)9999);
+        InformationBlock(w, id, server, channel, members, leader, 2, null);
     });
 
     public static byte[] Directory(byte server, byte channel, PartySnapshot[] rows, int total) => SocialPackets.Build(w =>
@@ -52,23 +58,27 @@ internal static class PartyPackets
         w.Write(checked((ushort)rows.Length)); w.Write(checked((ushort)((total + 9) / 10)));
         foreach (var row in rows)
             InformationBlock(w, row.Id, server, channel, row.Members.Select(m => (m.Slot, m.Actor.Character.Id)).ToArray(),
-                row.Leader, false, row.Settings);
+                row.Leader, 0, row.Settings);
     });
 
     static void InformationBlock(BinaryWriter w, ushort id, byte server, byte channel,
-        (byte Slot, ushort Actor)[] members, byte leader, bool removed, PartySettings? settings)
+        (byte Slot, ushort Actor)[] members, byte leader, byte action, PartySettings? settings)
     {
         w.Write(id); w.Write(server); w.Write(channel);
-        w.Write((byte)0); w.Write(removed ? (byte)3 : (byte)0); w.Write((byte)0);
-        if (removed) return;
-        // action0完整info块；保留已确认宽度的未命名字段为零，不借用S4固定8槽结构。
-        var info = settings ?? PartySettings.Default;
-        w.Write((byte)0); w.Write(info.TitleCode);
-        if (info.TitleCode == 0) PacketEncoding.WriteString(w, info.Title);
-        // 01B4BC0F/22/86回填创建窗口：容量在+4C，目标副本在+74，招募选项在+1E4。
-        w.Write((byte)0); w.Write(info.Capacity); w.Write(0u); w.Write(info.Difficulty); w.Write(info.Argument); w.Write(info.Flag);
-        w.Write(info.Kind); w.Write(info.KindArgument); w.Write(new byte[4]); w.Write(info.Dungeon);
-        w.Write(new byte[2]); w.Write(info.Option ?? PartySettings.Default.Option!.Value);
+        w.Write((byte)0); w.Write(action); w.Write((byte)0);
+        if (action == 3) return;
+        if (action == 0)
+        {
+            // action0完整info块；保留已确认宽度的未命名字段为零，不借用S4固定8槽结构。
+            var info = settings ?? PartySettings.Default;
+            w.Write((byte)0); w.Write(info.TitleCode);
+            if (info.TitleCode == 0) PacketEncoding.WriteString(w, info.Title);
+            // 01B4BC0F/22/86回填创建窗口：容量在+4C，目标副本在+74，招募选项在+1E4。
+            w.Write((byte)0); w.Write(info.Capacity); w.Write(0u); w.Write(info.Difficulty); w.Write(info.Argument); w.Write(info.Flag);
+            w.Write(info.Kind); w.Write(info.KindArgument); w.Write(new byte[4]); w.Write(info.Dungeon);
+            w.Write(new byte[2]); w.Write(info.Option ?? PartySettings.Default.Option!.Value);
+        }
+        // 023BA64E/023BB88C：action2只更新成员及扩展，不读取设置段。
         w.Write(checked((byte)members.Length));
         foreach (var member in members.OrderBy(m => m.Slot))
         {

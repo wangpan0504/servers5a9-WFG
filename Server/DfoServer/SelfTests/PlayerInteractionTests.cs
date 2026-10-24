@@ -51,6 +51,12 @@ internal static class PlayerInteractionTests
         var endpoint = PartyRequests.Endpoint(endpointBody);
         Bytes(PartyPackets.Realtime([(0x1234, 2)]), Convert.FromHexString("013412640002"),
             "城镇队伍HUD按本版Data+35C安装100百分比及真实槽位");
+        That(PartyRequests.Leader([1]) == 1, "真实委任121请求读取目标槽位而非角色ID");
+        Reject<InvalidDataException>(() => PartyRequests.Leader([]), "委任请求不能缺少槽位");
+        Reject<InvalidDataException>(() => PartyRequests.Leader([1, 0]), "委任请求不能携带多余字段");
+        Bytes(PartyPackets.Members(0x1234, 2, 10, [(2, 0x2345), (0, 0x3456)], 2),
+            Convert.FromHexString("01000F273412020A000200020056340000000000024523000000000000000200000000000000"),
+            "action2跳过设置段，按稳定槽序发送成员和实际队长，再以空扩展结束");
         That(endpoint is { Nat: 5, InnerAddress: 0xF8AC191A, OuterAddress: 0xF8AC191A, Port: 29952, Mtu: 512 },
             "真实UDP报告独立解析地址、端口与MTU");
         Reject<InvalidDataException>(() => PartyRequests.Endpoint(endpointBody[..^1]), "UDP机器标识长度不符拒绝");
