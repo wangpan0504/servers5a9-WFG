@@ -51,6 +51,8 @@ internal static class AuctionPackets
     const int EntrySealOffset = 13;
     /// <summary>读取条目快照字段所需的最小长度（最大用到封印 @13）。</summary>
     const int EntryMinimumLength = 14;
+    const int EpicExchangeTrailerSize = 12;
+    const uint EpicExchangeTrailerMagic = 0x4F585045; // 持久BLOB专用ASCII "EPXO"，不属于客户端条目。
 
     public static byte[] ServiceNotice(byte serviceType)
     {
@@ -270,14 +272,20 @@ internal static class AuctionPackets
     static int RemainingSeconds(long expiresAtUnix, long now) => (int)Math.Clamp(expiresAtUnix - now, 0, int.MaxValue);
 
     /// <summary>
-    /// 挂牌保存的物品条目字节快照（123B）。排列仍由物品模块的唯一编码入口产生，
-    /// 拍卖行不另建一套物品编码；读路径只按固定偏移取块内需要的字段。
+    /// 挂牌持久快照：旧核心123B；带装备来源时另附12B服务端trailer。
+    /// 前123B仍由唯一物品编码入口产生；trailer不能作为客户端条目发送。
     /// </summary>
     public static byte[] ItemEntrySnapshot(ItemCore core)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         ItemListProtocolWriter.Write(writer, 0, core);
+        if (core.EpicExchangeOrigin is { } origin)
+        {
+            writer.Write(EpicExchangeTrailerMagic);
+            writer.Write(origin.Version);
+            writer.Write(origin.SourceItemId);
+        }
         return stream.ToArray();
     }
 
@@ -295,14 +303,17 @@ internal static class AuctionPackets
     /// **没有写在条目里的**：物品种类（`Kind`，挂牌表单独一列，因此由调用方传入）、
     /// `IsRental`（租赁标记不入客户端核心；上架本来就拒绝带期限与租赁实例，还回来的实例不会是租赁）。
     ///
-    /// 快照损坏（长度不足 123B、两个计数字节与实际内容不符、核心自洽校验失败）时抛
+    /// 来源仅从完整135B持久trailer恢复，旧123B不推断来源。未知长度、magic、版本、源ID或种类拒绝。
+    /// 旧程序只能读123B，回退前须处理135B存档，不能静默截断来源。
+    /// 快照损坏（长度不为123/135B、两个计数字节与实际内容不符）时抛
     /// <see cref="InvalidDataException"/>：调用方必须**拒绝取消**而不是拿半个核心去发放。
     /// </summary>
     public static ItemCore ItemCoreFromEntry(byte[] entry, ItemKind kind)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        if (entry.Length != ItemListProtocolWriter.EntrySize)
-            throw new InvalidDataException($"拍卖行物品条目快照长度应为 {ItemListProtocolWriter.EntrySize}B，实际 {entry.Length}B");
+        if (entry.Length != ItemListProtocolWriter.EntrySize &&
+            entry.Length != ItemListProtocolWriter.EntrySize + EpicExchangeTrailerSize)
+            throw new InvalidDataException($"拍卖行物品条目快照长度应为123B或135B，实际 {entry.Length}B");
         using var stream = new MemoryStream(entry, writable: false);
         using var reader = new BinaryReader(stream);
         _ = reader.ReadInt16(); // [0..1] 槽位：挂牌保存时固定写 0，不属于核心。
@@ -372,6 +383,16 @@ internal static class AuctionPackets
         if (stream.Position != ItemListProtocolWriter.EntrySize)
             throw new InvalidDataException("拍卖行物品条目快照的字段宽度与编码入口不一致");
 
+        EpicExchangeOrigin? origin = null;
+        if (entry.Length != ItemListProtocolWriter.EntrySize)
+        {
+            if (reader.ReadUInt32() != EpicExchangeTrailerMagic)
+                throw new InvalidDataException("拍卖行装备来源trailer标识无效");
+            origin = new(reader.ReadInt32(), reader.ReadInt32());
+            if (kind != ItemKind.Equipment || origin.Version != 1 || origin.SourceItemId <= 0)
+                throw new InvalidDataException("拍卖行装备来源版本、源编号或物品种类无效");
+        }
+
         var core = new ItemCore(itemId, kind, value)
         {
             Attr = attr,
@@ -415,7 +436,8 @@ internal static class AuctionPackets
             Extension110 = extension110,
             Extension114 = new ItemExtension(extension114Flag, extension114Value),            Extension119 = extension119,
             Extension120 = extension120,
-            Extension121 = extension121
+            Extension121 = extension121,
+            EpicExchangeOrigin = origin
         };
         // 两个计数字节是冗余信息（写入端按「非零个数」算）：与读回来的内容不符说明快照被改坏，
         // 宁可拒绝发道具，也不把半个核心还进背包。
@@ -472,7 +494,7 @@ internal static class AuctionPackets
         }
         else
         {
-            int available = Math.Max(0, entry.Length - layout.EntryOffset);
+            int available = Math.Max(0, Math.Min(entry.Length, ItemListProtocolWriter.EntrySize) - layout.EntryOffset);
             int copy = Math.Min(layout.ItemSize, available);
             Array.Copy(entry, layout.EntryOffset, block, 0, copy);
         }

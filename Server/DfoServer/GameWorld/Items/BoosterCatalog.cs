@@ -29,6 +29,7 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     public bool AllowsFirstGrowType(byte growType) => FirstGrowTypes.IsEmpty || FirstGrowTypes.Contains((byte)(growType & 15));
     public bool UnsealsRandomOptions { get; init; }
     public bool SetsDisjointInstanceType { get; init; }
+    public bool SetsEpicExchangeInstanceType { get; init; }
     public byte? DailyRetainedLimit { get; init; }
     public bool Available => PendingRule is null && (Pools.Length != 0 || Selection is not null || !PackageRewards.IsDefaultOrEmpty);
 }
@@ -111,10 +112,24 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 !IsRootDeclaration(tags, declaration.Index))
                 return new([], "set disjoint instance type");
         }
+        var epicDeclarations = Regex.Matches(tags,
+            @"\[\s*/?\s*set\s+epic\s+exchange\s+instance\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        bool setsEpicExchangeInstanceType = epicDeclarations.Count != 0;
+        if (setsEpicExchangeInstanceType)
+        {
+            if (type != "booster selection" || epicDeclarations.Count != 1 || text.Count(value => value == '`') % 2 != 0)
+                return new([], "set epic exchange instance type");
+            var declaration = epicDeclarations[0];
+            int end = declaration.Index + declaration.Length;
+            int next = tags.IndexOf('[', end);
+            if (!declaration.Value.Equals("[set epic exchange instance type]", StringComparison.OrdinalIgnoreCase) ||
+                !string.IsNullOrWhiteSpace(text[end..(next < 0 ? text.Length : next)]) ||
+                !IsRootDeclaration(tags, declaration.Index))
+                return new([], "set epic exchange instance type");
+        }
         foreach (string tag in new[] { "cooltime maintenance", "effect maintenance", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime",
             "random box", "random box removal items", "raid booster item", "convert boost item", "check usable itemlevel",
-            "set epic exchange instance type",
             "daybreak drop item", "battle royal", "action usable server type", "usable game server type", "usable server type" })
             if (tags.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase))
                 return new([], tag);
@@ -179,7 +194,11 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             return new([], null, null, rewards.ToImmutable());
         }
         if (type == "booster selection")
-            return BoosterSelectionDefinition.Parse(text) with { SetsDisjointInstanceType = setsDisjointInstanceType };
+            return BoosterSelectionDefinition.Parse(text) with
+            {
+                SetsDisjointInstanceType = setsDisjointInstanceType,
+                SetsEpicExchangeInstanceType = setsEpicExchangeInstanceType
+            };
         var blocks = Regex.Matches(text, @"\[booster info\](.*?)\[/booster info\]", RegexOptions.Singleline);
         if (blocks.Count != 1)
             return new([], "礼包奖池缺失或重复");
