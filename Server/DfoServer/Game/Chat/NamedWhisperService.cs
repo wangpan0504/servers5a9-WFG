@@ -20,7 +20,7 @@ internal sealed class NamedWhisperService(OnlineSessionDirectory online, DfoServ
         var notice = new ChatNotice(ChatKind.Whisper, request.Layer, identity.Channel.Number)
         {
             Named = new(request.Type, 0, actor.Name, identity.Channel.ServerIndex,
-                ChatText.Truncate(request.Text, out _), target.Name) { AdventureName = identity.AdventureName },
+                ChatText.Truncate(request.Text, out _)) { AdventureName = identity.AdventureName },
             Guard = () => identity.IsCurrent() && peer.IsCurrent()
         };
         bool delivered = session.TryDeliverChat(row => row.CharacterId == target.CharacterId, notice);
