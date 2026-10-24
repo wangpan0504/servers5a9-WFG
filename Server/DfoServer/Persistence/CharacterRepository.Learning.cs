@@ -107,7 +107,11 @@ internal sealed partial class CharacterRepository
     }
 
     private static bool SameLearning(CharacterLearningState current, CharacterLearningState expected) =>
-        current.Experience == expected.Experience && current.BonusSp == expected.BonusSp && current.BonusTp == expected.BonusTp &&
+        current.Experience == expected.Experience && SameLearningSkills(current, expected);
+
+    // 经验存于characters；只有学习内容变化才需要写两树及主树投影。
+    private static bool SameLearningSkills(CharacterLearningState current, CharacterLearningState expected) =>
+        current.BonusSp == expected.BonusSp && current.BonusTp == expected.BonusTp &&
         current.ExpertContractExpiresAt == expected.ExpertContractExpiresAt && current.Trees.Count == expected.Trees.Count &&
         current.Trees.OrderBy(tree => tree.Context).Zip(expected.Trees.OrderBy(tree => tree.Context)).All(pair =>
             pair.First.SameCombos(pair.Second) && pair.First.Context == pair.Second.Context && pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&

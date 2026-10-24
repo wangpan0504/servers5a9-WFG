@@ -15,10 +15,15 @@ using System.Collections.Immutable;
 
 namespace DfoServer;
 
-internal static class DungeonGrowthRepositoryTests
+internal static partial class DungeonGrowthRepositoryTests
 {
     public static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
     {
+        if (Environment.GetEnvironmentVariable("DFO_GROWTH_READ_BENCHMARK") == "1")
+        {
+            RunReadBenchmark(towns, pvf, characters);
+            return;
+        }
         int checks = Count;
         string root = Path.Combine(Path.GetTempPath(), "S5A9-growth-repository-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -42,6 +47,7 @@ internal static class DungeonGrowthRepositoryTests
             string huntPath = Path.Combine(root,"hunt.db");
             var huntRepository = new CharacterRepository(huntPath,new QuestCatalog(new() { [100] = hunt }));
             var huntBefore = huntRepository.Create(owner,fixture with { Name = "HuntTxn", ActiveMainQuests = [new(0,3145,1),new(1,100,2)] });
+            ForbidLearningWrites(huntPath, huntBefore.Id);
             var (huntRun,huntAuthority) = CreateRun(huntBefore);
             var huntPending = huntRun.PrepareConfirmedDeath(huntAuthority.Death(huntRun.Snapshot.Identity,20,1)).Pending!;
             HuntSql("CREATE TRIGGER fail_hunt AFTER UPDATE ON character_active_main_quests WHEN NEW.quest_id=100 BEGIN SELECT RAISE(ABORT,'hunt rollback'); END");
@@ -61,6 +67,9 @@ internal static class DungeonGrowthRepositoryTests
             That(huntFinished.Character.ActiveMainQuests.Single(row => row.QuestId == 100).ConditionState == 0 &&
                 huntFinished.Character.Learning.Experience == 144 && !huntFinished.Character.CompletedQuests.Contains(100),
                 "第二次真实死亡达成猎杀，进度归零不自动领奖或写完成位");
+            That(System.Text.Json.JsonSerializer.Serialize(huntFinished.Character) ==
+                System.Text.Json.JsonSerializer.Serialize(huntRepository.LoadCharacter(owner, huntBefore.Slot)),
+                "同级击杀不重写技能表，提交快照包含真实猎杀条件且与独立重读一致");
             void HuntSql(string sql)
             {
                 using var db = new SqliteConnection("Data Source=" + huntPath + ";Pooling=False"); db.Open();
@@ -193,6 +202,7 @@ internal static class DungeonGrowthRepositoryTests
         Console.WriteLine($"PASS {Count - checks} 副本成长原子提交、去重、回滚与迁移断言");
         RunSessionPublication(towns, pvf, characters);
         RunProficiencyKills(towns, pvf, characters);
+        RunSparseReads(towns, pvf, characters);
 
         DungeonExperienceReward Reward(uint amount, PreparedDungeonDeath prepared) =>
             new("fixture-only", DungeonKillExperienceCatalog.ResourcePath, prepared.Monster.MonsterId, prepared.Monster.CandidateLevel, amount);
@@ -360,6 +370,7 @@ internal static class DungeonGrowthRepositoryTests
                 Name = "ProfKillMax", Level = CharacterGrowthCatalog.MaximumSupportedLevel,
                 InitialLearning = fixture.InitialLearning with { Experience = cap }, DungeonState = new(256, 1, 0, 20, 0)
             });
+            ForbidLearningWrites(path, maxed.Id);
             var (maxRun, maxAuthority) = CreateRun(maxed);
             var maxPending = maxRun.PrepareConfirmedDeath(maxAuthority.Death(maxRun.Snapshot.Identity, 20, 1)).Pending!;
             var maxReward = KillReward(maxPending, 1000);
@@ -373,7 +384,8 @@ internal static class DungeonGrowthRepositoryTests
                 "满级击杀经验整单记入熟练度，角色经验保持95级入口线");
             var maxReplay = repository.CommitDungeonGrowth(owner, maxed, maxRun, maxPending, maxReward, growth);
             That(maxReplay.Duplicate && maxReplay.GainedExperience == 0 && maxReplay.ProficiencyGained == 1000 &&
-                SkillRepositoryTests.Equal(maxReplay.Character, maxCommit.Character),
+                SkillRepositoryTests.Equal(maxReplay.Character, maxCommit.Character) &&
+                SkillRepositoryTests.Equal(repository.LoadCharacter(owner, maxed.Slot), maxCommit.Character),
                 "满级击杀重复报告按回执回放同额熟练度到账，不重复推进");
 
             // 英雄90封顶：289级没有下一行经验条，击杀经验丢弃，回执保存0且不写熟练度。
@@ -409,6 +421,32 @@ internal static class DungeonGrowthRepositoryTests
                 crossingCommit.Character.Learning.Experience == cap && crossingState.ProficiencyLevel == 0 &&
                 crossingState.ProficiencyExperience == 400,
                 "跨95级入口线的击杀经验按入口线拆分到角色与熟练度，合计等于整单");
+
+            // 已知来源角色使用生产装配的技能目录：升级及同级自动同步都不能被免写分支吞掉。
+            var automatic = repository.Create(owner, fixture with
+            {
+                Name = "AutoKill", InitialLearning = fixture.InitialLearning with { BonusSp = 0, BonusTp = 0 },
+                DungeonState = new(256, 1, 0, 0, 0)
+            });
+            var automaticGrowth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
+            var (autoRun, autoAuthority) = CreateRun(automatic);
+            var autoPending = autoRun.PrepareConfirmedDeath(autoAuthority.Death(autoRun.Snapshot.Identity, 20, 1)).Pending!;
+            var autoCommit = repository.CommitDungeonGrowth(owner, automatic, autoRun, autoPending,
+                KillReward(autoPending, checked((uint)cap)), automaticGrowth);
+            var changedSkill = autoCommit.Character.Skills.First(skill => automatic.Skills.Any(old => old.Id == skill.Id && old.Level < skill.Level));
+            That(autoCommit.Character.Level == 95 && System.Text.Json.JsonSerializer.Serialize(autoCommit.Character) ==
+                System.Text.Json.JsonSerializer.Serialize(repository.LoadCharacter(owner, automatic.Slot)),
+                "跨级自动技能、双树点数与返回快照均与独立读库一致");
+            autoRun.ConfirmCommittedDeath(autoPending);
+            var edited = repository.UpdateProgress(owner, new(CharacterProgressField.Skill, owner.Account, automatic.Name, changedSkill.Id, 1));
+            var sameLevelPending = autoRun.PrepareConfirmedDeath(autoAuthority.Death(autoRun.Snapshot.Identity, 21, 2)).Pending!;
+            var synchronized = repository.CommitDungeonGrowth(owner, edited, autoRun, sameLevelPending,
+                KillReward(sameLevelPending, 1), automaticGrowth);
+            That(synchronized.Character.Level == edited.Level && synchronized.GainedExperience == 0 &&
+                synchronized.Character.Skills.Single(skill => skill.Id == changedSkill.Id).Level == changedSkill.Level &&
+                System.Text.Json.JsonSerializer.Serialize(synchronized.Character) ==
+                System.Text.Json.JsonSerializer.Serialize(repository.LoadCharacter(owner, automatic.Slot)),
+                "同级满级击杀仍同步实际变化的自动技能，不以等级未变跳过必要写入");
         }
         finally
         {
@@ -426,6 +464,23 @@ internal static class DungeonGrowthRepositoryTests
             cmd.CommandText = sql;
             return cmd.ExecuteScalar();
         }
+    }
+
+    // 用SQLite拒写触发器验证热点没有无效技能写入，不依赖计时阈值或源码形状。
+    private static void ForbidLearningWrites(string path, ushort characterId)
+    {
+        using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
+        db.Open();
+        using var command = db.CreateCommand();
+        foreach (string table in new[] { "character_skill_point_sources", "character_tp_sources", "character_skill_commands",
+            "character_skill_combos", "character_skill_bindings", "character_skill_points", "character_skills" })
+            foreach (string operation in new[] { "INSERT", "UPDATE", "DELETE" })
+            {
+                string row = operation == "DELETE" ? "OLD" : "NEW";
+                command.CommandText = $"CREATE TRIGGER no_growth_{table}_{operation}_{characterId} BEFORE {operation} ON {table} " +
+                    $"WHEN {row}.character_id={characterId} BEGIN SELECT RAISE(ABORT,'unchanged learning was rewritten'); END";
+                command.ExecuteNonQuery();
+            }
     }
 
     private static (SinglePlayerDungeonRun Run, FixtureAuthority Authority) CreateRun(Character character)

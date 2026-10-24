@@ -243,42 +243,10 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
     static Character ReadProgress(SqliteConnection db, Character character, SqliteTransaction? transaction = null, AccountInventory? shared = null,
         (int[] Completed, System.Collections.Immutable.ImmutableDictionary<int,int> Daily, System.Collections.Immutable.ImmutableDictionary<int,byte> Answers)? accountQuests = null)
     {
+        character = ReadQuestProgress(db, character, transaction, accountQuests);
         using var query = db.CreateCommand();
         query.Transaction = transaction;
         query.Parameters.AddWithValue("$id", character.Id);
-        query.CommandText = "SELECT quest_id,daily_period,answer FROM character_completed_quests WHERE character_id=$id ORDER BY quest_id";
-        var quests = new List<int>();
-        var claims = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<int, int>();
-        var answers = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<int,byte>();
-        using (var reader = query.ExecuteReader())
-        {
-            while (reader.Read())
-            {
-                quests.Add(reader.GetInt32(0));
-                if (reader.GetInt32(1) != 0) claims.Add(reader.GetInt32(0), reader.GetInt32(1));
-                if (!reader.IsDBNull(2)) answers.Add(reader.GetInt32(0),checked((byte)reader.GetInt32(2)));
-            }
-        }
-
-        query.CommandText = "SELECT skill_id,level FROM character_skills WHERE character_id=$id ORDER BY skill_id";
-        var skills = new List<CharacterSkill>();
-        using (var reader = query.ExecuteReader())
-        {
-            while (reader.Read())
-                skills.Add(new(checked((ushort)reader.GetInt32(0)), checked((byte)reader.GetInt32(1))));
-        }
-
-        query.CommandText = "SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$id ORDER BY slot";
-        var active = new List<ActiveMainQuest>();
-        using (var reader = query.ExecuteReader())
-        {
-            while (reader.Read())
-                active.Add(new(checked((byte)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)), checked((uint)reader.GetInt64(2)))
-                {
-                    AcceptanceId = Guid.ParseExact(reader.GetString(3), "N")
-                });
-        }
-
         query.CommandText = """
             SELECT COALESCE(g.game_options,a.game_options) FROM characters c
             LEFT JOIN character_game_settings g ON g.character_id=c.id AND g.account=c.account
@@ -287,22 +255,15 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             """;
         byte flags = DfoServer.Game.Settings.ClientSettingsRules.VisibilityFlags(
             query.ExecuteScalar() is byte[] options ? [.. options] : default);
-        var accountProgress = accountQuests ?? ReadAccountQuests(db, character.Id, transaction);
         var expBonus = ReadExpBonus(db, character.Id, transaction);
         var expertJob = ReadExpertJob(db, character.Id, transaction);
         var expertMeta = ReadExpertMeta(db, character.Id, transaction);
         return character with
         {
-            CompletedQuests = quests.ToArray(),
-            QuestDailyClaims = claims.ToImmutable(),
-            QuestAnswers = answers.ToImmutable(),
-            AccountCompletedQuests = accountProgress.Completed,
-            AccountQuestDailyClaims = accountProgress.Daily,
-            AccountQuestAnswers = accountProgress.Answers,
             VisibilityFlags = flags,
-            Skills = skills.ToArray(),
+            Skills = ReadCharacterSkills(db, character.Id, transaction),
             Guild = ReadGuildMembership(db, character.Id, transaction),
-            ActiveMainQuests = active.ToArray(),
+            ActiveMainQuests = ReadActiveMainQuests(db, character.Id, transaction),
             Learning = ReadLearning(db, character.Id, transaction),
             PermanentStats = ReadPermanentStats(db, character.Id, transaction),
             Inventory = ReadInventory(db, character.Id, transaction, shared),
@@ -323,6 +284,63 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             TitleSections = ReadTitleSections(db, character.Id, transaction),
             CollectBox = ReadCollectBox(db, character.Id, transaction)
         };
+    }
+
+    static Character ReadQuestProgress(SqliteConnection db, Character character, SqliteTransaction? transaction,
+        (int[] Completed, System.Collections.Immutable.ImmutableDictionary<int,int> Daily, System.Collections.Immutable.ImmutableDictionary<int,byte> Answers)? accountQuests = null)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = transaction;
+        query.Parameters.AddWithValue("$id", character.Id);
+        query.CommandText = "SELECT quest_id,daily_period,answer FROM character_completed_quests WHERE character_id=$id ORDER BY quest_id";
+        var quests = new List<int>();
+        var claims = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<int,int>();
+        var answers = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<int,byte>();
+        using (var reader = query.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                quests.Add(reader.GetInt32(0));
+                if (reader.GetInt32(1) != 0) claims.Add(reader.GetInt32(0), reader.GetInt32(1));
+                if (!reader.IsDBNull(2)) answers.Add(reader.GetInt32(0), checked((byte)reader.GetInt32(2)));
+            }
+        }
+        var accountProgress = accountQuests ?? ReadAccountQuests(db, character.Id, transaction);
+        return character with
+        {
+            CompletedQuests = quests.ToArray(), QuestDailyClaims = claims.ToImmutable(), QuestAnswers = answers.ToImmutable(),
+            AccountCompletedQuests = accountProgress.Completed, AccountQuestDailyClaims = accountProgress.Daily,
+            AccountQuestAnswers = accountProgress.Answers
+        };
+    }
+
+    static CharacterSkill[] ReadCharacterSkills(SqliteConnection db, ushort id, SqliteTransaction? transaction)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = transaction;
+        query.Parameters.AddWithValue("$id", id);
+        query.CommandText = "SELECT skill_id,level FROM character_skills WHERE character_id=$id ORDER BY skill_id";
+        using var reader = query.ExecuteReader();
+        var skills = new List<CharacterSkill>();
+        while (reader.Read())
+            skills.Add(new(checked((ushort)reader.GetInt32(0)), checked((byte)reader.GetInt32(1))));
+        return skills.ToArray();
+    }
+
+    static ActiveMainQuest[] ReadActiveMainQuests(SqliteConnection db, ushort id, SqliteTransaction? transaction)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = transaction;
+        query.Parameters.AddWithValue("$id", id);
+        query.CommandText = "SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$id ORDER BY slot";
+        using var reader = query.ExecuteReader();
+        var active = new List<ActiveMainQuest>();
+        while (reader.Read())
+            active.Add(new(checked((byte)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)), checked((uint)reader.GetInt64(2)))
+            {
+                AcceptanceId = Guid.ParseExact(reader.GetString(3), "N")
+            });
+        return active.ToArray();
     }
 
     static (int[] Completed, System.Collections.Immutable.ImmutableDictionary<int,int> Daily, System.Collections.Immutable.ImmutableDictionary<int,byte> Answers) ReadAccountQuests(SqliteConnection db,

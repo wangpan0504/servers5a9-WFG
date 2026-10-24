@@ -53,9 +53,12 @@ internal static partial class FormalDungeonTcpTests
                 character = DfoServer.Game.Inventory.Services.InventoryService.Commit(repository, owner, character, grants.Grant(character, [new(1000, 5), new(1, 2)]));
                 PrepareDelilahServices(repository,owner,character,resources);
             }
+            fixture.Sql("UPDATE character_dungeon_state SET next_object_key=65536 WHERE character_id=$p0", peer.Id);
             peer.Select();
             EntryTown(peer);
             var map = Enter(peer);
+            That(U16(map, 25) == 256 && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
+                "耗尽旧角色经真实TCP恢复首图，沿完整击杀/拾取/结算流程仅预留一次尝试");
             RejectDelilahServices(fixture,peer,"Loading");
             RejectDungeonShop(fixture,peer);
             var target = new (byte X, byte Y)[] { (1, 1), (2, 1), (2, 0), (3, 0), (4, 0) };

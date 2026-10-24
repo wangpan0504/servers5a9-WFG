@@ -314,6 +314,33 @@ internal sealed partial class GameSession
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
+        // 延续游标可避免相邻普通挑战立即复用编号；只有新实例的完整准备超界时重试。
+        // 重试不写库、不安装Run、不发送包；历史账本按实例隔离，原尝试号仍单调递增。
+        uint first = state.NextObjectKey;
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                return PrepareFormalDungeonKeyRange(expected, epoch, entry, rooms, drops, items, draw, pieces,
+                    first, prepareDrops, tutorialReturn, tutorialScenes, crackRewards);
+            }
+            catch (DungeonObjectKeyOverflowException)
+            {
+                if (first == CharacterDungeonState.FirstObjectKey) break;
+                first = CharacterDungeonState.FirstObjectKey;
+            }
+        }
+        return RejectFormal("instance-object-key-capacity-exceeded");
+    }
+
+    PreparedFormalDungeon? PrepareFormalDungeonKeyRange(Character expected,long epoch,DungeonEntryPlan entry,
+        DungeonRoomCatalog rooms,DungeonMonsterDropCatalog? drops,ItemCatalog? items,Func<int,int>? draw,EpicPieceCatalog? pieces,
+        uint firstObjectKey,
+        Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
+        Location? tutorialReturn, TutorialScenes? tutorialScenes, CrackDimensionRewardServices? crackRewards)
+    {
+        if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
+        state.Validate();
         if (entry.RequiresFatigueOwner && expected.Fatigue is null ||
             entry.UsesFatigue && FatigueForClient(expected).Remaining == 0) return RejectFormal("fatigue-exhausted");
         // #511 [use fatigue only start dungeon] N：余额（客户端可见值与库内值取小）不足 N 时不进图，不扣到负数。
@@ -330,19 +357,19 @@ internal sealed partial class GameSession
             try { questDrops = QuestDropResources.Create(expected,entry,questCatalog,items,pieces,contracts?.Growth); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return RejectFormal("quest-drop-resources-unsupported"); }
         }
-        if (state.NextObjectKey > ushort.MaxValue || state.LastAttempt == long.MaxValue)
-            return RejectFormal("object-key-or-attempt-overflow");
+        if (state.LastAttempt == long.MaxValue) return RejectFormal("attempt-overflow");
+        if (firstObjectKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("对象key尾部已耗尽");
         var topology = entry!.Maze.StaticTopology;
         if (!topology.Supported) return RejectFormal("maze-topology-unsupported");
         var plans = new List<DungeonMonsterPlan>();
-        uint next = state.NextObjectKey;
+        uint next = firstObjectKey;
         uint mapSeed = checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue));
         try
         {
             foreach (var map in entry.Maze.MapSpecification!.Concat(entry.Maze.DummyStages)
                 .Concat(entry.Maze.LayeredMaps).Concat(entry.Maze.ConditionalMaps).Distinct())
             {
-                if (next > ushort.MaxValue) return RejectFormal("object-key-overflow");
+                if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("整条路线对象key超界");
                 var room = rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: entry.IsTutorial);
                 if (entry.IsTutorial) room = (tutorialScenes ?? throw new InvalidDataException("训练动作目录未装配")).Apply(room);
                 // 实验性（#259）：比赛副本在唯一比赛图上追加四轮对手（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
@@ -367,7 +394,8 @@ internal sealed partial class GameSession
                 plans.Sum(plan => plan.Altar!.Rounds.Select(row => row.Round).Distinct().Count()) != (entry.DungeonId == 11006 ? 15 : 7)))
                 return RejectFormal("altar-room-round-contract-mismatch");
         }
-        catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException) { return RejectFormal("room-data-unsupported"); }
+        catch (Exception error) when (error is not DungeonObjectKeyOverflowException &&
+            error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException) { return RejectFormal("room-data-unsupported"); }
         var pools = new Dictionary<int, DungeonExplicitDropPool>();
         var dropPlans = ImmutableDictionary.CreateBuilder<ushort, DungeonDropGenerationPlan>();
         var hellRewardPlans = ImmutableDictionary.CreateBuilder<ushort, DungeonDropGenerationPlan>();
@@ -407,7 +435,7 @@ internal sealed partial class GameSession
                 for (int ordinal = 0; ordinal < Math.Max(1, rewardGeneration?.MaximumObjects ?? dropGeneration?.MaximumObjects ?? 1); ordinal++)
                 {
                     if (next == expected.Id) next++;
-                    if (next > ushort.MaxValue) return RejectFormal("ground-reservation-overflow");
+                    if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("地面对象预留超界");
                     ushort groundX = 0, groundY = 0;
                     if (monster.Source is { } source)
                     {
@@ -448,7 +476,7 @@ internal sealed partial class GameSession
                     for (int ordinal = 0; ordinal < prepared.Contents.Length; ordinal++)
                     {
                         if (next == expected.Id) next++;
-                        if (next > ushort.MaxValue) return null;
+                        if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("被动掉落预留超界");
                         var source = prepared.Parent.Source.RawValues;
                         passiveGrounds.Add(new(eventId, run!.Snapshot.Identity,
                             new(prepared.Parent.ObjectKey, next++, prepared.Map, unchecked((ushort)source[1]),
@@ -461,7 +489,8 @@ internal sealed partial class GameSession
                     }
                 }
             }
-            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException)
+            catch (Exception error) when (error is not DungeonObjectKeyOverflowException &&
+                error is InvalidDataException or NotSupportedException or FileNotFoundException or OverflowException)
             { return null; }
         }
         var ground = new DungeonGroundState(run!, route.Rooms, groundReservations, drops is null ? "" : "monster/monster.lst", passiveGrounds);
@@ -499,7 +528,7 @@ internal sealed partial class GameSession
         if (HasPendingTownQuestCommit || !Ready || SelectionEpoch != prepared.SelectionEpoch || !ReferenceEquals(Selected,prepared.Character)) return null;
         if (prepared.Dungeon.Entry.IsClassExperience && (prepared.ClassExperienceSelection is not { IsClassExperience: true } ||
             !ReferenceEquals(CurrentDungeonSelection, prepared.ClassExperienceSelection))) return null;
-        // 先持久预留key/attempt；通知失败也不回绕key或复用旧身份。
+        // 先持久预留本实例key/attempt；通知失败不重新安装或复用原实例身份。
         var character = prepared.Character;
         var installing = prepared.Dungeon;
         if (installing.GriefAdmission is { } grief &&

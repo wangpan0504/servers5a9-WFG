@@ -43,7 +43,7 @@ internal sealed record DungeonAltarPlan(DungeonAltarDefinition Definition, Immut
                         for (int i = 0; i < phase.CountAt(repeat); i++)
                         {
                             if (next == characterId) next++;
-                            if (next > ushort.MaxValue) throw new InvalidDataException("祭坛对象键耗尽");
+                            if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("祭坛对象键耗尽");
                             byte kind = 19;
                             if (!specialAssigned && phase.Round == specialRound)
                             {

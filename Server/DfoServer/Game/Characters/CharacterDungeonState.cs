@@ -4,7 +4,8 @@ namespace DfoServer.Game.Characters;
 internal sealed record CharacterDungeonState(uint NextObjectKey, long LastAttempt,
     uint GrowthCapsuleExperience, uint ProficiencyLevel, ulong ProficiencyExperience)
 {
-    public static CharacterDungeonState NewOrdinary => new(256, 0, 0, 0, 0);
+    public const uint FirstObjectKey = 256;
+    public static CharacterDungeonState NewOrdinary => new(FirstObjectKey, 0, 0, 0, 0);
     public void Validate()
     {
         if (NextObjectKey is < 1 or > 65536 || LastAttempt < 0 || ProficiencyExperience > long.MaxValue)

@@ -111,6 +111,14 @@ internal static class QuestDropTests
         That(Roll(boosted,selected with { Quests = new Dictionary<int,StoryQuest> { [cappedDrop.Id] = cappedDrop } },_ => 0)
             .Outcomes.Single() is { Rolled: 2, Granted: 1 }, "加成仍受资源持有上限约束");
         Reject<InvalidDataException>(() => Roll(boosted,selected,_ => 2), "非法额外随机值明确拒绝");
+        var noMatch = Roll(advanced, selected with { Quests = new Dictionary<int,StoryQuest>() }, _ => 0);
+        var missed = Roll(advanced, selected with { Quests = new Dictionary<int,StoryQuest>
+            { [oneDrop.Id] = oneDrop with { Definition = oneDrop.Definition! with { Drops = [new(1,1,3,-1,9002,1,1,-1)] } } } }, _ => 99);
+        var capped = Roll(advanced, selected with { Quests = new Dictionary<int,StoryQuest>
+            { [oneDrop.Id] = oneDrop with { Definition = oneDrop.Definition! with { Drops = [new(1,1,3,-1,9002,1,100,0)] } } } }, _ => 0);
+        That(!noMatch.ReadsInventory && missed.ReadsInventory && capped.ReadsInventory &&
+            !noMatch.Inventory.Changed && !missed.Inventory.Changed && !capped.Inventory.Changed,
+            "相同零奖励区分无库存依赖、随机未中及持有上限，后两者仍须库存复验");
 
     }
 

@@ -43,6 +43,8 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
     public int MapId { get; } = mapId;
     public InventoryPlan Inventory { get; } = inventory;
     public ImmutableArray<QuestDropOutcome> Outcomes { get; } = outcomes;
+    // 只有Create核实本次规划完全未依赖库存时才允许省去库存复验；外部构造默认保守校验。
+    public bool ReadsInventory { get; private init; } = true;
     public string Snapshot { get; } = JsonSerializer.Serialize(new
     {
         expected.Id,expected.Revision,EventId = eventId,Identity = identity,MapId = mapId,TemplateId = templateId,
@@ -57,12 +59,15 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
         if (eventId == Guid.Empty || identity.CharacterId != character.Id || identity.QuestId != entry.QuestId ||
             mapId <= 0 || templateId <= 0 || enemyType is not (1 or 2 or 3)) throw new InvalidDataException("任务掉落需要真实场景事件");
         var after = character.Inventory;
+        bool readsInventory = false;
         var outcomes = ImmutableArray.CreateBuilder<QuestDropOutcome>();
         foreach (var active in character.ActiveMainQuests.OrderBy(row => row.Slot))
         {
             if (!QuestHuntProgress.Bound(active,entry) || !resources.Quests.TryGetValue(active.QuestId,out var quest)) continue;
             foreach (var row in quest.Definition!.Drops.Where(row => row.Matches(entry.DungeonId,entry.Difficulty,templateId,enemyType,cleared)))
             {
+                // 已满上限、随机未中或背包已满也读取了资产前提，不能按Granted==0跳过复验。
+                readsInventory = true;
                 long held = after.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == row.ItemId &&
                     !item.IsExpired(now.ToUnixTimeSeconds())).Sum(item => (long)item.Core.Count);
                 long limit = row.MaximumHeld;
@@ -114,6 +119,6 @@ internal sealed class QuestDropPlan(Character expected, Guid eventId, DungeonRun
             }
         }
         return new(character,eventId,identity,mapId,templateId,enemyType,cleared,now,outcomes.ToImmutable(),
-            new(character.Inventory,after,"quest_drop"));
+            new(character.Inventory,after,"quest_drop")) { ReadsInventory = readsInventory };
     }
 }

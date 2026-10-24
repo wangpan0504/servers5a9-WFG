@@ -334,6 +334,11 @@ internal static class SinglePlayerDungeonRunTests
         var entry = new DungeonEntryPlan(99, 17, 3, 3145, 0, 0, maze, start, boss) { InitializationCounterSupported = true };
         var route = new DungeonFixedRoute([Plan(start, 10), WithTeams(Plan(middle, 11), 0), BossPlan(boss, 12)],
             [new(start.Position, middle.Position), new(middle.Position, boss.Position)]);
+        var firstRoom = route.Rooms[0];
+        var oversized = firstRoom with { Room = firstRoom.Room with
+            { Monsters = Enumerable.Repeat(firstRoom.Room.Monsters[0], 65536).ToArray() } };
+        That(!SinglePlayerDungeonRun.TryCreate(entry, 1, 100, route with { Rooms = [oversized, .. route.Rooms.Skip(1)] },
+            authority, out _, out _), "单个房间超出16位编号容量时保留准入拒绝，不抛出未处理异常");
         foreach (bool reuse in new[] { false, true })
         {
             That(SinglePlayerDungeonRun.TryCreate(entry with { IndividualMapMovement = reuse }, 1, 100, route, authority, out var created, out _),

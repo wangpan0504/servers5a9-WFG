@@ -36,9 +36,6 @@ internal sealed partial class CharacterRepository
         // 精确重放只读receipt，不申请writer；新事实升级写事务失败时由原ID恢复。
         using var write = db.BeginWrite("CharacterRepository.CommitDungeonGrowth", deferred: true);
         using var tx = write.Transaction;
-        var current = Require(db, tx, owner.Account, expected.Name);
-        if (current.Id != expected.Id)
-            throw new InvalidOperationException("成长角色或账号已变化");
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id);
@@ -66,6 +63,10 @@ internal sealed partial class CharacterRepository
                 proficiencyGained = checked((uint)reader.GetInt64(15));
             }
         }
+        var current = duplicate ? Require(db, tx, owner.Account, expected.Name)
+            : ReadDungeonGrowthCharacter(db, tx, owner.Account, expected, questDrops);
+        if (current.Id != expected.Id)
+            throw new InvalidOperationException("成长角色或账号已变化");
         // 同ID重读返回当前持久角色；不根据旧expected再次加经验，也不重发清图事实。
         if (duplicate)
         {
@@ -100,8 +101,13 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("成长revision或账号已变化");
         // 自动等级、双树余额和既有主树投影随同一经验事实提交。
-        WriteLearning(db, tx, expected.Id, plan.Learning);
-        WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
+        bool learningChanged = !SameLearningSkills(current.Learning, plan.Learning);
+        if (learningChanged)
+            WriteLearning(db, tx, expected.Id, plan.Learning);
+        bool skillsChanged = !current.Skills.SequenceEqual(plan.Learning.Trees.Single(tree => tree.Context == 0).Skills
+            .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id));
+        if (skillsChanged)
+            WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
         // 副本击杀经验计入冒险团：按角色更新前的有效位置推进里程，满级部分按资源倍率折算。
         if (CreditAdventure(db, tx, owner.Account, expected.Id, AdventureCreditSource.Earned, amount,
                 EffectivePosition(current.Level, current.Learning.Experience), current.Level, plan.TargetLevel,
@@ -134,7 +140,27 @@ internal sealed partial class CharacterRepository
                 Inventory = inventoryCharacter.Inventory },quests);
             WriteQuestConditions(db,tx,expected.Id,current.ActiveMainQuests,active);
         }
-        var committed = Require(db, tx, owner.Account, expected.Name);
+        // 复用本事务实读的角色和库存提交结果，只重读成长及任务实际可变的字段。
+        // 不能使用调用方旧expected替代current，也不能发布带临时UID的库存规划。
+        command.CommandText = "SELECT level,revision FROM characters WHERE id=$id AND account=$account";
+        byte committedLevel;
+        long committedRevision;
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read()) throw new InvalidOperationException("成长角色或账号已变化");
+            committedLevel = checked((byte)reader.GetInt32(0));
+            committedRevision = reader.GetInt64(1);
+        }
+        var committed = inventoryCharacter with
+        {
+            Level = committedLevel,
+            Revision = committedRevision,
+            Learning = ReadLearning(db, expected.Id, tx),
+            Skills = skillsChanged ? ReadCharacterSkills(db, expected.Id, tx) : current.Skills,
+            SkillSwitchInventory = skillsChanged ? ReadSkillSwitchInventory(db, expected.Id, tx) : inventoryCharacter.SkillSwitchInventory,
+            DungeonState = ReadDungeonState(db, expected.Id, tx),
+            ActiveMainQuests = quests is null ? inventoryCharacter.ActiveMainQuests : ReadActiveMainQuests(db, expected.Id, tx)
+        };
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");
         tx.Commit();

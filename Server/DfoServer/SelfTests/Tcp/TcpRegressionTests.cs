@@ -162,6 +162,11 @@ internal static class TcpRegressionTests
         ("dungeon-probe", DungeonProbeTcpTests.RunAsync),
         ("experience-bonuses", FormalDungeonTcpTests.RunExperienceBonusesAsync),
         ("formal-dungeon", FormalDungeonTcpTests.RunAsync),
+        ("dungeon-growth", async (_, _, resources) =>
+        {
+            DungeonGrowthRepositoryTests.Run(resources.Towns, resources.Archive, resources.Characters);
+            await FormalDungeonSessionTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+        }),
         ("grief-tower", FormalDungeonTcpTests.RunGriefAsync),
         ("durability", FormalDungeonTcpTests.RunDurabilityAsync),
         ("dungeon-training", FormalDungeonTcpTests.RunTrainingAsync),
@@ -195,7 +200,6 @@ internal static class TcpRegressionTests
             DungeonSettlementSessionTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             HarlemMaterialDropTests.RunResources(resources.Towns, resources.Archive, resources.Characters,
                 resources.ItemResources, resources.Quests, resources.Learning);
-            await FormalDungeonSessionTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             await FormalDungeonPublicationTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         }),
         ("dungeon-drop-storage", (_, _, resources) =>

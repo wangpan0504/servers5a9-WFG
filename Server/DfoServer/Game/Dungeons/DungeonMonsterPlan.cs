@@ -74,7 +74,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         foreach (var wave in waves)
         {
             if (next == characterId) next++;
-            if (next > ushort.MaxValue) throw new InvalidDataException("深渊波次 object key 超出 ushort 范围");
+            if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("深渊波次 object key 超出 ushort 范围");
             result.Add(wave with { ObjectKey = (ushort)next++, PacketIndex = wave.Type >= 5 ? apcIndex++ : normalIndex++ });
         }
         // 深渊装备只从最后一波掉：恶魔是前面的波次，死后出来的 APC/随从才是最后一波。
@@ -152,7 +152,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (nextKey == characterId)
                 nextKey++;
             if (nextKey > ushort.MaxValue)
-                throw new InvalidDataException("房间怪物对象 key 超出 ushort 容量");
+                throw new DungeonObjectKeyOverflowException("房间怪物对象 key 超出 ushort 容量");
             // Full03 0425C88D先置模板+24=0；0425D27B的未匹配rank成功尾部保留0。
             // 仅兼容真实450001的裸[named]，保留原标记；不放开任意未知品级或附加效果。
             // 资源品级经模板+24进入客户端记录+14：普通0、精英1/2、Boss3。
@@ -186,7 +186,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
                 source.RankKind is not ("[normal]" or "[champion]" or "[super champion]" or "[boss]"))
                 throw new NotSupportedException($"unsupported: 地图 {room.Map.Id} 的APC资源行 {index} 尚未支持");
             if (nextKey == characterId) nextKey++;
-            if (nextKey > ushort.MaxValue) throw new InvalidDataException("房间APC对象key超出ushort容量");
+            if (nextKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("房间APC对象key超出ushort容量");
             // Full03 03FA9810确认类型5..8走APC构造器；APC索引属于独立MAP数组。
             result.Add(new(index,(ushort)nextKey++,source.Id,source.Level,null)
             {
@@ -231,7 +231,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
         ushort Allocate()
         {
             if (nextKey == characterId) nextKey++;
-            if (nextKey > ushort.MaxValue) throw new InvalidDataException("特殊actor的对象key耗尽");
+            if (nextKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("特殊actor的对象key耗尽");
             return checked((ushort)nextKey++);
         }
     }

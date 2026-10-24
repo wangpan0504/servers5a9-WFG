@@ -119,11 +119,11 @@ internal static class DungeonMonsterPlanTests
         var lastSpecialKey = DungeonMonsterPlan.FromRoom(specialRoom, 0, 65532, 5);
         That(lastSpecialKey.SpecialObjects.Single().ObjectKey == 65534 && lastSpecialKey.Monsters[^1].ObjectKey == ushort.MaxValue,
             "普通怪、特殊父对象和子怪共享容量，最后一个ushort key仍可使用");
-        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(specialRoom, 0, 65534, 5),
+        Reject<DungeonObjectKeyOverflowException>(() => DungeonMonsterPlan.FromRoom(specialRoom, 0, 65534, 5),
             "普通怪占满ushort后，特殊父对象仍须拒绝key溢出而不是复用或绕回");
-        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(specialRoom, 0, 65533, 5),
+        Reject<DungeonObjectKeyOverflowException>(() => DungeonMonsterPlan.FromRoom(specialRoom, 0, 65533, 5),
             "普通怪与特殊父对象占满ushort后，特殊子怪仍须拒绝key溢出");
-        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(specialRoom, ushort.MaxValue, 65532, 5),
+        Reject<DungeonObjectKeyOverflowException>(() => DungeonMonsterPlan.FromRoom(specialRoom, ushort.MaxValue, 65532, 5),
             "特殊子怪跳过末尾角色key后拒绝耗尽的共享容量");
         foreach (int automatic in new[] { 0, -1 })
         {
@@ -297,8 +297,8 @@ internal static class DungeonMonsterPlanTests
         // 普通怪容量不依赖房间装饰物；特殊父子共享容量由合成夹具独立验证。
         That(DungeonMonsterPlan.FromRoom(first.Room, 0, 65532, includeSpecial: false).Monsters[^1].ObjectKey == ushort.MaxValue,
             "last ushort key is usable when it does not collide");
-        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(first.Room, 0, 65533, includeSpecial: false), "allocation refuses overflow instead of wrapping");
-        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromRoom(first.Room, ushort.MaxValue, 65532, includeSpecial: false),
+        Reject<DungeonObjectKeyOverflowException>(() => DungeonMonsterPlan.FromRoom(first.Room, 0, 65533, includeSpecial: false), "allocation refuses overflow instead of wrapping");
+        Reject<DungeonObjectKeyOverflowException>(() => DungeonMonsterPlan.FromRoom(first.Room, ushort.MaxValue, 65532, includeSpecial: false),
             "skipping the last ushort character key refuses exhausted capacity");
 
         var source = first.Room.Monsters[0];

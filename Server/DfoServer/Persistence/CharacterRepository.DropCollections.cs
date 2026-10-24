@@ -60,12 +60,12 @@ internal sealed partial class CharacterRepository
         {
             command.Parameters.Clear();
             BindDropObject(command, expected.Id, ground);
-            command.CommandText = "SELECT count(*) FROM character_dungeon_loot_receipts WHERE character_id=$id AND ground_key=$key";
+            command.CommandText = "SELECT count(*) FROM character_dungeon_loot_receipts WHERE character_id=$id AND instance_id=$instance AND ground_key=$key";
             if (Convert.ToInt64(command.ExecuteScalar()) != 0)
-                throw new InvalidDataException("完整集合不能复用历史单件掉落的地面key");
+                throw new InvalidDataException("同实例完整集合不能复用单件掉落的地面key");
             command.CommandText = """
-                INSERT INTO character_dungeon_drop_objects(character_id,event_id,ordinal,ground_key,core,gold_amount,x,y,record_slot)
-                VALUES($id,$event,$ordinal,$key,$core,$gold,$x,$y,$slot)
+                INSERT INTO character_dungeon_drop_objects(character_id,event_id,instance_id,ordinal,ground_key,core,gold_amount,x,y,record_slot)
+                VALUES($id,$event,$instance,$ordinal,$key,$core,$gold,$x,$y,$slot)
                 """;
             command.ExecuteNonQuery();
         }
@@ -132,6 +132,7 @@ internal sealed partial class CharacterRepository
     {
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$event", ground.DeathEventId.ToString("N"));
+        command.Parameters.AddWithValue("$instance", ground.DeathIdentity.InstanceId.ToString("N"));
         command.Parameters.AddWithValue("$ordinal", ground.Reservation.Ordinal);
         command.Parameters.AddWithValue("$key", ground.Reservation.GroundKey);
         command.Parameters.AddWithValue("$core", (object?)CoreJson(ground) ?? DBNull.Value);
@@ -151,7 +152,7 @@ internal sealed partial class CharacterRepository
               o.ordinal,o.core,o.gold_amount,o.x,o.y,o.record_slot
             FROM character_dungeon_drop_objects o JOIN character_dungeon_drop_batches b
               ON b.character_id=o.character_id AND b.event_id=o.event_id
-            WHERE o.character_id=$id AND o.ground_key=$key AND o.event_id=$event
+            WHERE o.character_id=$id AND o.instance_id=$instance AND o.ground_key=$key AND o.event_id=$event
             """;
         using var reader = command.ExecuteReader();
         if (!reader.Read() || reader.GetString(0) != account || reader.GetString(1) != ground.DeathIdentity.InstanceId.ToString("N") ||
@@ -193,9 +194,10 @@ internal sealed partial class CharacterRepository
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", current.Id);
         command.Parameters.AddWithValue("$key", ground.Reservation.GroundKey);
+        command.Parameters.AddWithValue("$instance", prepared.Identity.InstanceId.ToString("N"));
         command.CommandText = passive ? PassivePickupSelect : """
             SELECT account,event_id,instance_id,task_attempt,epoch,destination_slot,item_uid,after_core,currency_kind,amount,
-              after_balance,account_revision,revision FROM character_dungeon_drop_pickups WHERE character_id=$id AND ground_key=$key
+              after_balance,account_revision,revision FROM character_dungeon_drop_pickups WHERE character_id=$id AND instance_id=$instance AND ground_key=$key
             """;
         using (var reader = command.ExecuteReader())
         {
@@ -256,7 +258,6 @@ internal sealed partial class CharacterRepository
         var actual = currency is null ? committed.Inventory.Find(destination) ?? throw new InvalidOperationException("提交后缺少目的物品") : null;
         command.Parameters.AddWithValue("$account", dbOwner.Account);
         command.Parameters.AddWithValue("$event", ground.DeathEventId.ToString("N"));
-        command.Parameters.AddWithValue("$instance", prepared.Identity.InstanceId.ToString("N"));
         command.Parameters.AddWithValue("$attempt", prepared.Identity.TaskAttempt);
         command.Parameters.AddWithValue("$epoch", prepared.Identity.Epoch);
         command.Parameters.AddWithValue("$slot", actual is null ? DBNull.Value : destination.Index);

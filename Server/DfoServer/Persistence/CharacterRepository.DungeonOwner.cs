@@ -137,8 +137,8 @@ internal sealed partial class CharacterRepository
     static CharacterDungeonState ReservationState(Character expected, uint nextObjectKey)
     {
         var state = expected.DungeonState ?? throw new InvalidOperationException("副本owner未初始化");
-        // 修炼场没有静态演员时只推进尝试号；对象key保持高水位，仍禁止回绕。
-        if (nextObjectKey < state.NextObjectKey || nextObjectKey > 65536 || state.LastAttempt == long.MaxValue)
+        // 本入口只预留新尝试，允许新实例复用旧数值；同实例的丢弃仍走独立的单调游标提交。
+        if (nextObjectKey is < 1 or > 65536 || state.LastAttempt == long.MaxValue)
             throw new InvalidDataException("副本对象key或尝试号耗尽");
         return state;
     }

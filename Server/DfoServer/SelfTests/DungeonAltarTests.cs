@@ -36,6 +36,8 @@ internal static class DungeonAltarTests
             [new([1001, 0, 300, 200, 800, 7000, 2000, 1, 1, 3]), new([1002, 0, 400, 210, 0, 5000, 4000, 1, 0, 1])],
             [new(0, 0, 1000, 1.5f, 0, 1, 0), new(1, 1, 3000, 2f, 0, 0, 0)]);
         var definition = DungeonAltarDefinition.Read(resource);
+        Reject<DungeonObjectKeyOverflowException>(() => DungeonAltarPlan.Create(definition, 12, ushort.MaxValue, 60, true, _ => 0),
+            "祭坛尾部容量不足使用专用耗尽异常，使新实例可重试完整编号范围");
         var plan = DungeonAltarPlan.Create(definition, 12, 10, 60, true, _ => 0);
         That(plan.Actors.Length == 7 && plan.NextObjectKey == 18 && plan.Actors.All(actor => actor.ObjectKey != 12),
             "祭坛递增生成数量1+2+3，键分配跳过角色并跨回合保持唯一");

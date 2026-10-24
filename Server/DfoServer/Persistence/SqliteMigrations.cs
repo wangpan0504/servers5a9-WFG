@@ -194,6 +194,7 @@ internal static class SqliteMigrations
         // 装扮预设：默认容量1、上限6（客户端槽数组6项），扩展券CMD515 action216累加；
         // 预设按槽位存JSON，槽位是身份且允许空洞，不另建平行在线状态。
         new(86, "装扮预设容量与预设", AddAvatarPresetStateColumn),
+        new(87, "副本地面对象及拾取账本按实例隔离", DungeonObjectKeySchema.Upgrade),
     ];
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
@@ -643,7 +644,8 @@ internal static class SqliteMigrations
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
             string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("UID迁移缺少原拾取回执: " + table);
             string canonical = NormalizeTable(actual, table);
-            if (canonical == NormalizeTable(current, table)) continue;
+            if (canonical == NormalizeTable(current, table) ||
+                canonical == NormalizeTable(DungeonObjectKeySchema.Definition(current, table), table)) continue;
             if (canonical != NormalizeTable(previous, table))
                 throw new InvalidDataException("UID迁移不是已确认的原拾取结构: " + table);
             query.CommandText = """
@@ -1294,6 +1296,7 @@ internal static class SqliteMigrations
         .Replace("\"character_quest_lifecycle_receipts\"", "character_quest_lifecycle_receipts")
         .Replace("\"character_dungeon_settlement_receipts\"", "character_dungeon_settlement_receipts")
         .Replace("\"character_dungeon_drop_objects\"", "character_dungeon_drop_objects")
+        .Replace("\"character_dungeon_drop_batches\"", "character_dungeon_drop_batches")
         .Replace("\"character_dungeon_loot_receipts\"", "character_dungeon_loot_receipts")
         .Replace("\"characters\"", "characters");
 
@@ -1727,7 +1730,10 @@ internal static class SqliteMigrations
             ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
             ("character_dungeon_settlement_receipts",ZeroExperienceDungeonSchema.SettlementSql),
+            ("character_dungeon_loot_receipts",DungeonLootSchema),
             ("character_dungeon_pickup_receipts",DungeonPickupSchemaV45),
+            ("character_dungeon_drop_batches",DungeonDropCollectionSchema.Definition.Split(';').Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_batches(", StringComparison.Ordinal))),
+            ("character_dungeon_drop_objects",DungeonDropCollectionSchema.Definition.Split(';').Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_objects(", StringComparison.Ordinal))),
             ("character_dungeon_drop_pickups",DungeonDropCollectionSchema.PickupDefinition),
             ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema),
             ("character_collectbox_state",CollectBoxStateTableSchema),
@@ -1742,7 +1748,7 @@ internal static class SqliteMigrations
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
             query.Parameters.AddWithValue("$table",table);
-            if (query.ExecuteScalar() is not string actual || NormalizeTable(actual,table) != NormalizeTable(expected,table))
+            if (query.ExecuteScalar() is not string actual || NormalizeTable(actual,table) != NormalizeTable(DungeonObjectKeySchema.Definition(expected, table),table))
                 throw new InvalidDataException("关键表的约束或外键不是已确认结构: " + table);
         }
         using var constraints = db.CreateCommand();

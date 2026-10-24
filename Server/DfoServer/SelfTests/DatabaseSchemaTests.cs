@@ -157,6 +157,7 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            ObjectKeyUpgrade(root);
             AuraCooldownUpgrade(root);
             ZeroExperienceUpgrade(root);
             ItemMakingUpgrade(root);
@@ -527,6 +528,7 @@ internal static partial class DatabaseSchemaTests
 
     static void RewindPickupUids(SqliteConnection db)
     {
+        RewindObjectKeys(db);
         RewindQuestDungeonAlternatives(db);
         foreach (string table in new[] { "character_dungeon_pickup_receipts", "character_dungeon_drop_pickups" })
             ChangeReceiptDefinition(db, table, sql => sql.Replace("item_uid>0", "item_uid BETWEEN 1 AND 2147483647", StringComparison.Ordinal));
@@ -2433,7 +2435,7 @@ internal static partial class DatabaseSchemaTests
                         "普通账本重建保留外部完整集合三层引用、全部行及附属索引触发器");
                     Reject<SqliteException>(() => Execute(db, "UPDATE character_dungeon_drop_objects SET event_id='missing'"),
                         "集合外键在重建及重命名后仍拒绝不存在的原成长来源");
-                    Reject<SqliteException>(() => Execute(db, "INSERT INTO character_dungeon_drop_objects VALUES(1,'legacy',1,513,NULL,99,100,200,0)"),
+                    Reject<SqliteException>(() => Execute(db, "INSERT INTO character_dungeon_drop_objects SELECT character_id,event_id,instance_id,1,513,NULL,99,100,200,0 FROM character_dungeon_drop_batches WHERE event_id='legacy'"),
                         "集合附属触发器在重建后仍生效");
                 }
             }
@@ -3245,6 +3247,7 @@ internal static partial class DatabaseSchemaTests
     // 使用真实集合DDL与明确合成行，验证旧版已有集合随成长父表迁移完整保留。
     private static void AddDropDependencyFixture(SqliteConnection db)
     {
+        RewindObjectKeys(db);
         using (var tx = db.BeginTransaction())
         {
             DungeonDropCollectionSchema.Upgrade(db, tx);

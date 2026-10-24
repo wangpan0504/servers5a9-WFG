@@ -371,7 +371,7 @@ internal sealed partial class SinglePlayerDungeonRun
                 resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel,
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam);
             }
-            catch (Exception error) when (error is NotSupportedException or InvalidDataException)
+            catch (Exception error) when (error is NotSupportedException or InvalidDataException or DungeonObjectKeyOverflowException)
             {
                 reason = "unsupported: 房间怪物生成规则未闭合";
                 return false;

@@ -42,6 +42,7 @@ internal static class FormalDungeonSessionTests
         OtherAdmissions();
         RejectedEntry();
         Reservation();
+        ObjectKeyReuse();
         UnknownOwner();
         Invalidation();
         RecordedNormalStatistics();
@@ -590,10 +591,20 @@ internal static class FormalDungeonSessionTests
                 if (state == 1)
                 {
                     var last = f.Session.Selected!;
-                    Check(last.DungeonState!.NextObjectKey == 65536 && f.Session.RetryFormalDungeon(settled.Receipt!, catalog, rooms, drops, itemResources.Items) is null &&
-                        f.Session.Phase == SessionPhase.Settlement && f.Session.CanPublishFormalDungeon(settled.Receipt!) && Same(last, f.Read()),
-                        "对象key耗尽拒绝新尝试但保留原结算实例、身份和资产");
-                    Check(f.Session.ReturnFromFormalDungeon() is not null, "再挑战身份耗尽拒绝后仍可合法返回城镇");
+                    Check(last.DungeonState!.NextObjectKey == 65536, "再挑战前本局恰好用尽对象编号");
+                    f.Sql("CREATE TRIGGER fail_key_retry AFTER UPDATE ON character_dungeon_state BEGIN SELECT RAISE(ABORT,'key retry rollback'); END");
+                    Reject<SqliteException>(() => f.Session.RetryFormalDungeon(settled.Receipt!, catalog, rooms, drops, itemResources.Items),
+                        "回绕预留失败不能消费原结算实例");
+                    Check(f.Session.Phase == SessionPhase.Settlement && f.Session.CanPublishFormalDungeon(settled.Receipt!) && Same(last, f.Read()),
+                        "回绕SQL回滚保留原实例、角色、资产和高水位");
+                    f.Sql("DROP TRIGGER fail_key_retry");
+                    var recovered = f.Session.RetryFormalDungeon(settled.Receipt!, catalog, rooms, drops, itemResources.Items);
+                    Check(recovered is not null && recovered.Monsters.Monsters[0].ObjectKey == CharacterDungeonState.FirstObjectKey &&
+                        recovered.Snapshot.Identity.TaskAttempt == last.DungeonState.LastAttempt + 1 &&
+                        recovered.Snapshot.Identity.InstanceId != settled.Receipt!.Snapshot.Identity.InstanceId &&
+                        !f.Session.CanPublishFormalDungeon(settled.Receipt!), "耗尽后再挑战复用编号但创建新的尝试身份");
+                    Check(f.Session.CompleteFormalDungeonLoading() is not null && f.Session.ReturnFromFormalDungeon() is not null,
+                        "回绕再挑战完成加载后仍可合法返回城镇");
                 }
                 else if (state == 2)
                 {
@@ -967,8 +978,10 @@ internal static class FormalDungeonSessionTests
                 f.Sql("UPDATE character_dungeon_state SET next_object_key=65536");
                 f.SelectEntry();
                 var selected = f.Session.Selected!;
-                Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null && Same(selected, f.Read()),
-                    "对象key耗尽拒绝完整路线，不回绕");
+                var recovered = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms);
+                Check(recovered is not null && recovered.Monsters.Monsters[0].ObjectKey == CharacterDungeonState.FirstObjectKey &&
+                    f.Read().DungeonState!.LastAttempt == 1 && f.Read().Revision == selected.Revision + 1,
+                    "存量65536游标在新实例恢复完整路线，仅提交一次尝试与revision");
             }
             using (var f = new Fixture("ResAttempt", towns, characters, learning, quests))
             {
@@ -983,15 +996,12 @@ internal static class FormalDungeonSessionTests
                 f.Sql("UPDATE character_dungeon_state SET next_object_key=65535");
                 f.SelectEntry();
                 var selected = f.Session.Selected!;
-                Check(f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is null,
-                    "剩余单个key不能部分预留完整3145路线");
-                Check(ReferenceEquals(selected, f.Session.Selected) && Same(selected, f.Read()) &&
-                    f.Session.DungeonSnapshot is null && f.Session.Phase == SessionPhase.Town,
-                    "锁外路线容量拒绝不留下角色revision、owner预留或run");
-                var last = f.Repository.ReserveDungeonAttempt(f.Owner, selected, 65536);
-                Check(last.DungeonState!.NextObjectKey == 65536 && last.DungeonState.LastAttempt == 1 && Same(last, f.Read()),
-                    "仓储最后key区间可保存65536高水位哨兵");
-                Reject<InvalidDataException>(() => f.Repository.ReserveDungeonAttempt(f.Owner, last, 1), "高水位不能回绕到1");
+                var recovered = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms);
+                Check(recovered is not null && recovered.Monsters.Monsters[0].ObjectKey == CharacterDungeonState.FirstObjectKey &&
+                    recovered.Character.DungeonState!.LastAttempt == 1 && Same(recovered.Character, f.Read()),
+                    "末尾不足整条路线时从起点准备新实例，不提交失败的部分预留");
+                Reject<InvalidOperationException>(() => f.Repository.ReserveDungeonAttempt(f.Owner, selected, 300),
+                    "回收后旧revision和旧游标不能重复提交尝试");
             }
         }
 
@@ -1020,6 +1030,57 @@ internal static class FormalDungeonSessionTests
                 f.Session.Phase == SessionPhase.MapSelect && ReferenceEquals(context, f.Session.CurrentDungeonSelection) &&
                 f.Session.CanPublishDungeonSelection(selection), "旧unknown角色拒绝不改角色、revision或原选图返回上下文");
             Check(f.Session.ReturnFromDungeonSelection() is not null, "缺owner拒绝后仍可返回城镇");
+        }
+
+        void ObjectKeyReuse()
+        {
+            using var f = new Fixture("KeyReuse", towns, characters, learning, quests);
+            var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
+            var plan = new DungeonDropGenerationPlan("key-reuse-fixture", [new(10000, null, 15, 15, new(1, 1, 0))]);
+            FormalDungeonReceipt? previous = null;
+            uint cursor = CharacterDungeonState.FirstObjectKey;
+            int wraps = 0, pickupRuns = 0;
+            uint? reusedGroundKey = null;
+            for (int attempt = 1; attempt <= 500; attempt++)
+            {
+                f.SelectEntry();
+                var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
+                    draw: _ => 0, prepareDrops: _ => _ => plan)
+                    ?? throw new InvalidOperationException("连续入场被拒：" + f.Session.LastFormalDungeonRejection);
+                bool wrapped = entry.Character.DungeonState!.NextObjectKey < cursor;
+                if (wrapped) wraps++;
+                Check(entry.Snapshot.Identity.TaskAttempt == attempt && entry.Character.DungeonState.NextObjectKey <= 65536 &&
+                    (previous is null || !f.Session.CanPublishFormalDungeon(previous)), "跨局复用保留单调attempt并拒绝旧实例发布");
+                f.Session.CompleteFormalDungeonLoading();
+                if (wrapped && previous is not null)
+                {
+                    var stale = f.Session.ObserveFormalDungeonDeath(Observation(previous, previous.Monsters.Monsters[0]), kills, growth);
+                    Check(stale.Reward is null && stale.Receipt is null, "回绕前一局的高位怪物请求不能给当前低位怪物发奖");
+                }
+                if (attempt == 1 || wrapped)
+                {
+                    var observation = Observation(entry, entry.Monsters.Monsters[0]);
+                    var death = f.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+                    Check(death.Drops.Length == 15, "跨局复用仍提交完整15件冻结掉落");
+                    var ground = death.Drops[0];
+                    reusedGroundKey ??= ground.Reservation.GroundKey;
+                    Check(ground.Reservation.GroundKey == reusedGroundKey, "测试确实复用了历史地面编号");
+                    var pickup = f.Session.PickFormalDungeonItem(ground.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits);
+                    Check(pickup.Outcome == DungeonRunOutcome.Accepted &&
+                        f.Session.PickFormalDungeonItem(ground.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits).Outcome == DungeonRunOutcome.Rejected &&
+                        f.Session.ObserveFormalDungeonDeath(observation, kills, growth).Outcome == DungeonRunOutcome.Duplicate,
+                        "跨实例同key可以拾取，同实例死亡和拾取重复不多发奖励");
+                    pickupRuns++;
+                }
+                previous = entry;
+                cursor = f.Session.Selected!.DungeonState!.NextObjectKey;
+                f.Session.ReturnToRoster();
+            }
+            Check(wraps >= 2 && f.Read().DungeonState!.LastAttempt == 500 &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_objects")) == pickupRuns * 15 &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM character_dungeon_drop_pickups")) == pickupRuns &&
+                Convert.ToInt64(f.Query("SELECT count(*) FROM pragma_foreign_key_check")) == 0,
+                "500次真实Session入场跨过多轮65535，历史掉落/拾取全部保留且外键完整");
         }
 
         void Invalidation()
