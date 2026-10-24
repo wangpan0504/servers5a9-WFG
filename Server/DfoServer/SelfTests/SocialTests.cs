@@ -25,9 +25,9 @@ internal static class SocialTests
             "1376行首大区2不能写角色42，角色名在前、冒险团唯一键在后");
         Bytes(SocialPackets.AccountFriends([friend with { Online = false, Channel = 0 }]).AsSpan(1, 3).ToArray(),
             [2, 0, 2], "离线行保留本服大区和频道服务器，不使用角色ID或离线哨兵覆盖大区");
-        Bytes(ChatPackets.NamedMessage(new(36, 0, "A", 2, "hi", "B") { AdventureName = "TeamA" }),
-            Convert.FromHexString("2400010000004102020000006869050000005465616D410100000042"),
-            "1对1正文后先读附加名字串，再读接收者，不能让窗口把接收者当附加串吞掉");
+        Bytes(ChatPackets.NamedMessage(new(36, 0, "A", 2, "hi") { AdventureName = "TeamA" }),
+            Convert.FromHexString("2400010000004102020000006869050000005465616D410100000041"),
+            "1对1正文后先读附加名字串，再读发送者作为会话对象，不能让接收端回复自己");
         var captured = SocialRequests.Account(Convert.FromHexString("0400000031323371030000003132330103000000313233"), 1439);
         That(captured is { Name: "123q", Message: "123", Group: 1, Memo: "123", Server: 0 },
             "真实1439按冒险团、留言、分组、备注解析，不把分组当服务器或留言当角色");
@@ -94,7 +94,7 @@ internal static class SocialTests
             var send = new ChatSend(36, 1, 0, 2, "hi") { TargetName = "SocialB" };
             That(named.Send(sa, send).Rejection == "blacklisted" && received is null, "被拉黑者1对1消息不投递");
             repo.ChangeCharacterLink(other, "SocialA", true, true, "", now);
-            That(named.Send(sa, send).Accepted && received is { Name: "SocialA", Recipient: "SocialB", Text: "hi" }, "解除后按名字只投目标");
+            That(named.Send(sa, send).Accepted && received is { Name: "SocialA", Text: "hi" }, "解除后按名字只投目标，消息保留发送者身份");
             sb.ReturnToRoster();
             That(named.Send(sa, send).TargetOffline, "切角中的旧角色不继续接收");
             sb.Select(0); sb.MarkReady(); other = sb.CaptureSocialActor()!;

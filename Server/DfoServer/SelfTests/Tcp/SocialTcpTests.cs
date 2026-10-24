@@ -43,11 +43,18 @@ internal static class SocialTcpTests
                 w.Write(mode); w.Write((ushort)1); w.Write(0u); WriteName(w, value); WriteName(w, target); w.Write(server);
             });
             alpha.Send(17, Named(36, "一对一"));
-            beta.Expect(0, 65, Build(w => { w.Write((byte)36); w.Write((byte)0); WriteName(w, "SocialA"); w.Write((byte)2);
-                WriteName(w, "一对一"); WriteName(w, "TeamA"); WriteName(w, "SocialB"); }));
-            beta.Send(17, Named(36, "一对一回复", "SocialA"));
+            var incoming = beta.Expect(0, 65, Build(w => { w.Write((byte)36); w.Write((byte)0); WriteName(w, "SocialA"); w.Write((byte)2);
+                WriteName(w, "一对一"); WriteName(w, "TeamA"); WriteName(w, "SocialA"); })).Body;
+            // 按消费者的字段顺序取窗口对象再回复，不能在测试里硬编码正确目标掩盖错误下行。
+            using var messageReader = new BinaryReader(new MemoryStream(incoming));
+            string MessageName() => System.Text.Encoding.GetEncoding(936).GetString(messageReader.ReadBytes(checked((int)messageReader.ReadUInt32())));
+            messageReader.ReadUInt16(); MessageName(); messageReader.ReadByte(); MessageName(); MessageName();
+            string replyTarget = MessageName();
+            That(replyTarget == "SocialA" && messageReader.BaseStream.Position == incoming.Length,
+                "接收方1vs1窗口按发送者寻址，不能把自己设为回复对象");
+            beta.Send(17, Named(36, "一对一回复", replyTarget));
             alpha.Expect(0, 65, Build(w => { w.Write((byte)36); w.Write((byte)0); WriteName(w, "SocialB"); w.Write((byte)2);
-                WriteName(w, "一对一回复"); WriteName(w, "TeamB"); WriteName(w, "SocialA"); }));
+                WriteName(w, "一对一回复"); WriteName(w, "TeamB"); WriteName(w, "SocialB"); }));
             alpha.Send(17, Named(1, "悄悄话"));
             beta.Expect(0, 65, Build(w => { w.Write((byte)1); w.Write((byte)0); WriteName(w, "SocialA"); w.Write((byte)2);
                 WriteName(w, "悄悄话"); WriteName(w, "TeamA"); }));

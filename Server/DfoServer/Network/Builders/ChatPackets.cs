@@ -22,7 +22,7 @@ namespace DfoServer.Network.Builders;
 /// </summary>
 internal static class ChatPackets
 {
-    // 023B0210：正文后必读附加名字串（023B0365），type36随后再读接收者名字（023B0386）。
+    // 023B0210：正文后必读附加名字串（023B0365），type36再读接收端的会话对象（023B0386）。
     public static byte[] NamedMessage(NamedChatMessage message)
     {
         using var stream = new MemoryStream();
@@ -33,7 +33,8 @@ internal static class ChatPackets
         writer.Write(message.Server);
         PacketEncoding.WriteString(writer, message.Text);
         PacketEncoding.WriteString(writer, message.AdventureName);
-        if (message.Mode == 36) PacketEncoding.WriteString(writer, message.Recipient);
+        // 02E2FF44把末串作为1vs1窗口键；接收端的聊天对象是发送者，不能填接收者自己。
+        if (message.Mode == 36) PacketEncoding.WriteString(writer, message.Name);
         return stream.ToArray();
     }
 
