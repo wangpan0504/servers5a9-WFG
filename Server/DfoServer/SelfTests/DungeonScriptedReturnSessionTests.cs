@@ -170,9 +170,9 @@ internal static class DungeonScriptedReturnSessionTests
             frozen = QuestLifecyclePlan.PayImageCommunication(Session.Selected!, 6032, Acceptance, 0, quests, DateTimeOffset.UtcNow);
             // 正常构造真实plan；空scope仅用于测试pending布尔门禁，不提交跳过事务。
             quick = (QuestQuickClearPlan)typeof(QuestQuickClearPlan).GetConstructors(Instance)
-                .Single(ctor => ctor.GetParameters().Length == 12).Invoke([Session.Selected!, Guid.NewGuid(), 1,
+                .Single(ctor => ctor.GetParameters().Length == 13).Invoke([Session.Selected!, Guid.NewGuid(), 1,
                     ImmutableArray<StoryQuest>.Empty, ImmutableDictionary<int, byte>.Empty, ImmutableArray<int>.Empty,
-                    quests, null, null, null, null, null]);
+                    quests, null, null, null, null, null, false]);
             if (clear)
             {
                 var death = authority.ValidateAndIssueScripted(Run,Run.Snapshot.Identity,new(30,0,true,new string('A',64)));

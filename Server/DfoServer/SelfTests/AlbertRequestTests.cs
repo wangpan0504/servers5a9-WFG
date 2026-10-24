@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Quests;
@@ -29,6 +30,73 @@ internal static class AlbertRequestTests
             seek is {MainQuest:3458,Condition:"[seeking]",CompleteNpc:2} && seek.IntData.SequenceEqual([10164800,3]) &&
             !QuestRelationProgress.ZeroRewardChild(hunt) && !QuestRelationProgress.ZeroRewardChild(seek),
             "阿尔伯特真实资源保持56–99等级、3457前置、顺序猎杀子与有奖励寻物子");
+        // 690原截图是3473的0/3，不是哈林后继。先复现95级跳过父任务却残留有奖励子槽。
+        using(var orphan = Make(0,[new(0,3458,1),new(1,3473,1)],[3457,3472,6045],level:95))
+        {
+            That(QuestQuickClearPlan.TryCreateManual(orphan.Read(),Guid.NewGuid(),orphan.Catalog,
+                System.Collections.Immutable.ImmutableDictionary<int,byte>.Empty,out var skipped,out string reason),
+                "真实95级阿尔伯特父链手册规划："+reason);
+            That(skipped!.CompletedAfter.Contains(3458) && !skipped.ActiveAfter.Any(row=>row.QuestId==3473),
+                "手册完成3458时必须同步清理其有奖3473活动槽，不能留下0/3孤儿任务");
+            var before=orphan.Read();
+            orphan.Sql("CREATE TRIGGER orphan_skip_abort AFTER INSERT ON character_quest_skip_receipts BEGIN SELECT RAISE(ABORT,'orphan rollback'); END");
+            Reject<SqliteException>(()=>orphan.Repository.CommitQuestQuickClear(orphan.Owner,skipped),"父跳过和子槽清理晚期故障整批回滚");
+            That(QuestCompletionRepositoryTests.Same(before,orphan.Read()),"回滚保留0/3原接取与完整资产");
+            orphan.Sql("DROP TRIGGER orphan_skip_abort");
+            var commit=orphan.Repository.CommitQuestQuickClear(orphan.Owner,skipped);
+            That(commit.Character.ActiveMainQuests.Length==0 && !commit.Character.CompletedQuests.Contains(3473) &&
+                Materials(commit.Character)==0 && commit.Character.Inventory.Gold==before.Inventory.Gold && commit.Character.Learning.Experience==before.Learning.Experience,
+                "跳过只清有奖子槽，不伪造子完成、不扣料补料或补发金币经验");
+            That(orphan.Repository.CommitQuestQuickClear(orphan.Owner,skipped).Duplicate,"同操作重试不重复清理或发奖");
+        }
+        using(var legacy=Make(0,[new(0,3473,1)],[3457,3472,3458,6045],level:95))
+        {
+            var before=legacy.Read();
+            foreach(var excluded in new[] {seek with {Grade="[side]"},seek with {MainQuest=null},
+                seek with {Rewards=[new(0,0,null),new(0,0,null)]},
+                seek with {Definition=seek.Definition! with {AccountQuest=true}},
+                seek with {Definition=seek.Definition! with {SelectRewards=[new(0,10164800,null),new(0,1,null)]}},
+                seek with {Condition="[question]"},seek with {DeclaredGoldMultiple=1}})
+            {
+                var isolated=new QuestCatalog(new[] {parent,hunt,excluded,quests.Get(3457)}.ToDictionary(q=>q.Id));
+                That(!QuestQuickClearPlan.TryCreateOrphanRepair(before,isolated,out _),
+                    "旧档清理拒绝独立、零奖励已有恢复路径、账号、选择奖励、问答及金币子任务");
+            }
+            legacy.Session.ReturnToRoster();
+            var reconnect=new GameSession(legacy.Repository,towns,legacy.Owner,questCatalog:legacy.Catalog);
+            try
+            {
+                legacy.Sql("CREATE TRIGGER orphan_reconnect_abort AFTER INSERT ON character_quest_skip_receipts BEGIN SELECT RAISE(ABORT,'orphan reconnect rollback'); END");
+                Reject<SqliteException>(()=>reconnect.Select(0),"旧档选角清理失败不能发布半修复角色");
+                That(reconnect.Selected is null && QuestCompletionRepositoryTests.Same(before,legacy.Read()),"旧档修复SQL回滚且选角未发布");
+                legacy.Sql("DROP TRIGGER orphan_reconnect_abort");
+                reconnect.Select(0);
+                var after=legacy.Read();
+                That(after.ActiveMainQuests.Length==0 && after.CompletedQuests.SequenceEqual(before.CompletedQuests) &&
+                    Materials(after)==0 && after.Inventory.Gold==before.Inventory.Gold && after.Learning.Experience==before.Learning.Experience,
+                    "旧档重选只清孤儿槽，不补有奖子完成位或资产");
+                reconnect.ReturnToRoster(); reconnect.Select(0);
+                That(QuestCompletionRepositoryTests.Same(after,legacy.Read()),"重复重选修复幂等不再升revision");
+            }
+            finally { reconnect.End(); }
+        }
+        using(var ordinary=Make(0,[new(0,3458,1),new(1,3473,1)],[3457,3472],level:95))
+        {
+            That(!QuestQuickClearPlan.TryCreateOrphanRepair(ordinary.Read(),ordinary.Catalog,out _) &&
+                ordinary.Finish(ushort.MaxValue,3458).Outcome==QuestFinishOutcome.Rejected && ordinary.Read().ActiveMainQuests.Length==2,
+                "父未完成的正常0/3仍等待收集，重选修复不免费代过任务");
+        }
+        using(var levelup=Make(0,[new(0,3458,1),new(1,3473,1)],[3457,3472,6045],level:94,levelTicket:true))
+        {
+            var before=levelup.Read();
+            var source=new LevelUpTicketService(items.Items,growth).Prepare(before,before.Inventory.Items.Single(row=>row.Core.ItemId==490705250).Position);
+            That(QuestQuickClearPlan.TryCreateLevelUpTicket(before,Guid.NewGuid(),levelup.Catalog,source,
+                System.Collections.Immutable.ImmutableDictionary<int,byte>.Empty,out var plan,out string reason,towns),"实际94→95升级券父链规划："+reason);
+            var after=levelup.Repository.CommitQuestQuickClear(levelup.Owner,plan!).Character;
+            That(after.Level==95 && after.ActiveMainQuests.Length==0 && after.CompletedQuests.Contains(3458) &&
+                !after.CompletedQuests.Contains(3473) && Materials(after)==0 && !after.Inventory.Items.Any(row=>row.Core.ItemId==490705250),
+                "真实升级券原子扣券升级并清父子槽，不补发碎片或伪造子完成");
+        }
         var reset = new CharacterProgressReset(characters,skills,growth);
         // 仅准备3472已达成的持久接取，不替代158副本26只怪物的完整猎杀验收。
         using (var f = Make(2,[new(0,3458,2),new(1,3472,0)],[3457]))
@@ -150,17 +218,26 @@ internal static class AlbertRequestTests
         }
         Console.WriteLine($"PASS {Count-checks} 阿尔伯特父子交付、原生末子合并及保存回放资源断言；不包含客户端验收");
 
-        OrdinaryFixture Make(int count,ActiveMainQuest[] active,int[] done,bool loseResult=false) => new(towns,characters,skills,growth,parameters,items,seek,
+        OrdinaryFixture Make(int count,ActiveMainQuest[] active,int[] done,bool loseResult=false,byte level=56,bool levelTicket=false) => new(towns,characters,skills,growth,parameters,items,seek,
             materialCount:0,definitions:[parent,hunt,seek,quests.Get(3457)],active:active,loseResult:loseResult,configure:candidate =>
             {
                 var template = items.Items.Get(10164800);
                 var range = ItemSlotBoundService.Range(template.Kind,candidate.Inventory.Expansion);
                 short slot = Enumerable.Range(range.Start,range.End-range.Start+1).Select(value => checked((short)value))
                     .First(value => candidate.Inventory.Find(new(InventoryListType.Main,value)) is null);
-                return candidate with {Level=56,AcceptedStoryLevel=1,CompletedQuests=done,
-                    InitialLearning=SkillPointLedger.Synchronize(0,0,56,candidate.InitialLearning with
-                        {Experience=growth.GetLevelStartExperience(56)},skills),
-                    Inventory=candidate.Inventory with {Items=candidate.Inventory.Items.Add(new(0,new(InventoryListType.Main,slot),
+                if(levelTicket)
+                {
+                    var ticket=items.Items.Get(490705250);
+                    var slots=ItemSlotBoundService.Range(ticket.Kind,candidate.Inventory.Expansion);
+                    short target=Enumerable.Range(slots.Start,slots.End-slots.Start+1).Select(v=>(short)v)
+                        .First(v=>candidate.Inventory.Find(new(InventoryListType.Main,v)) is null);
+                    candidate=candidate with {Inventory=candidate.Inventory with {Items=candidate.Inventory.Items.Add(new(0,
+                        new(InventoryListType.Main,target),InventoryRewardGrantService.Create(ticket,1)))}};
+                }
+                return candidate with {Level=level,AcceptedStoryLevel=1,CompletedQuests=done,
+                    InitialLearning=SkillPointLedger.Synchronize(0,0,level,candidate.InitialLearning with
+                        {Experience=growth.GetLevelStartExperience(level)},skills),
+                    Inventory=count==0 ? candidate.Inventory : candidate.Inventory with {Items=candidate.Inventory.Items.Add(new(0,new(InventoryListType.Main,slot),
                         InventoryRewardGrantService.Create(template,count)))} };
             });
         static int Materials(Character character) => character.Inventory.Items.Where(item =>

@@ -38,6 +38,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public int RepairPrice { get; init; }
     public int CreationRate { get; init; }
     public bool DisjointForbidden { get; init; }
+    public bool BossDrop { get; init; }
     public bool AmplifyPollutionForbidden { get; init; }
     public int DisjointValue { get; init; }
     public int PortableDisjointLevel { get; init; } = -1;

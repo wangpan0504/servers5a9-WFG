@@ -190,18 +190,33 @@ internal static class ExpertJobCraft
         return current;
     }
 
-    public static InventoryReward[] DisjointProducts(Character character, ExpertJobScriptCatalog scripts, ItemTemplate template,
-        ItemCore core)
+    public static InventoryReward[] DisjointProducts(int machineGrade, ExpertJobDisjointRules rules, ItemTemplate template,
+        ItemCore core, Func<int, int> next, bool ownMachine = false)
     {
-        if (character.ExpertJobType != 3) return [];
-        int gradeKey = Math.Max(0, character.ExpertMachineGrade - 1);
-        int state = EquipmentState(core);
-        if (!scripts.TryDisjointResult(3, gradeKey, template.Rarity, state, out var row))
-            return [];
-        int sell = Math.Max(1, template.ShopPrice.GetSellGold(core.Durability, template.Durability));
-        int adjusted = Math.Max(1, sell * 11 / 10);
-        int count = Math.Max(1, (int)Math.Floor(adjusted * row.Multiplier / scripts.BaseConst(3)));
-        return [new InventoryReward(row.ItemId, count)];
+        int state = (core.AmplifyType & 0x80) != 0 ? 1 : template.Rarity == 3 && template.BossDrop ? 2 : 0;
+        if (machineGrade <= 0 || !rules.TryGet(machineGrade - 1, template.Rarity, state, out var row)) return [];
+        // 分解采用模板分解价值，不使用NPC出售的耐久与90%折价。
+        long adjusted = checked((long)(Math.Max(1, template.DisjointValue) * 1.1f));
+        long thousandths = checked(adjusted * 1000 / rules.BaseConst);
+        int count = Math.Max(1, checked((int)(thousandths * row.Multiplier / 1000.0f)));
+        var rewards = new List<InventoryReward> { new(row.ItemId, count) };
+        int bigWinPercent = row.BigWinPercent + (ownMachine ? rules.OwnMachineBigWinPercent(machineGrade) : 0);
+        bool bigWin = next(10000) < Math.Min(100, bigWinPercent) * 100;
+        var pool = rules.Pool(bigWin ? row.BigWinTable : row.AdditionalTable, bigWin);
+        int roll = next(10000);
+        foreach (var candidate in pool)
+        {
+            if (candidate.Weight == 0 || template.Grade < candidate.MinimumGrade || template.Grade > candidate.MaximumGrade) continue;
+            // df_game_r 0896D6AB采用万分域绝对权重和包含边界；空区间不补偿或归一化。
+            if (roll <= candidate.Weight)
+            {
+                int amount = Math.Max(1, checked((int)(template.Grade / candidate.Divisor)));
+                rewards.Add(new(candidate.ItemId, amount));
+                break;
+            }
+            roll -= candidate.Weight;
+        }
+        return rewards.ToArray();
     }
 
     public static bool TryPlanGiveUp(Character character, ExpertJobScriptCatalog scripts, out InventoryPlan wallet,
@@ -269,15 +284,6 @@ internal static class ExpertJobCraft
         endurance = max;
         error = 0;
         return true;
-    }
-
-    public static int DisjointExperience(Character character, ExpertJobScriptCatalog scripts, Func<int, int> next)
-    {
-        var (min, max) = scripts.DisjointGain(character.ExpertJobType);
-        if (max < min || min < 0) return character.ExpertJobExperience;
-        int gain = min;
-        if (max > min) gain += next(max - min + 1);
-        return character.ExpertJobExperience > int.MaxValue - gain ? character.ExpertJobExperience : character.ExpertJobExperience + gain;
     }
 
     public static int EquipmentState(ItemCore core)

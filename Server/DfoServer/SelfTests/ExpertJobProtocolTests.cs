@@ -1,5 +1,7 @@
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Game.Inventory.Models;
+using System.Buffers.Binary;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -9,6 +11,16 @@ internal static class ExpertJobProtocolTests
     public static void Run()
     {
         int checks = Count;
+        foreach (byte type in new byte[] { 1, 2, 3, 4 })
+            That(QuestPackets.Finish(2710, 0, 0, [], 0, [], expertJobType: type) is
+                [1, 150, 10, 0, 0, 0, 0, 0, 0, 20, var actual, 0, 0] && actual == type,
+                "授职ACK34使用mode20、真实类型及两页count，不冒充零物品奖励");
+        Reject<InvalidDataException>(() => QuestPackets.Finish(2710, 0, 0, [], 0, [], expertJobType: 5),
+            "授职拒绝越界类型");
+        Reject<InvalidDataException>(() => QuestPackets.Finish(2710, 0, 0, [], 0, [], growType: 1, expertJobType: 3),
+            "主职业与副职业奖励不可混写同一mode");
+        That(QuestPackets.Finish(10021, 17, 0, [], 0, []) is [1, 37, 39, 17, 0, 0, 0, 0, 0, 0],
+            "分解师末步的self disjoint类型17走普通奖励头，不被writer白名单拒绝");
         That(ExpertJobPackets.Fail(10) is [0, 10, 0] && ExpertJobPackets.Fail(19) is [0, 19, 0],
             "ACK 239/238 失败是 success:u8 + error:u16");
         That(ExpertJobPackets.GiveUpSuccess() is [1, 0, 0, 0, 0, 0, 0],
@@ -64,6 +76,14 @@ internal static class ExpertJobProtocolTests
         That(disjoint is { OwnerActor: 1, SourceSlot: 2, SourceList: 3 }, "C2S 235 是店主演员、源槽和源列表");
         Reject<InvalidDataException>(() => ExpertJobRequests.ReadDisjoint([1, 0, 2, 0]), "235 拒绝缺失源列表");
         Reject<InvalidDataException>(() => ExpertJobRequests.ReadDisjoint([1, 0, 2, 0, 0, 0]), "235 拒绝多余尾部");
+        var fragment = new DisjointReceipt(new(new(InventoryListType.Main, 5), -1, 0), [new(-1, 9000, 90)]);
+        var fragmentAck = ExpertJobPackets.DisjointResult(7, fragment, 123, 299);
+        That(fragmentAck.Length == 25 && fragmentAck[6] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(fragmentAck.AsSpan(7)) == ushort.MaxValue &&
+            BinaryPrimitives.ReadInt32LittleEndian(fragmentAck.AsSpan(9)) == 9000 && BinaryPrimitives.ReadInt32LittleEndian(fragmentAck.AsSpan(13)) == 90 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(fragmentAck.AsSpan(17)) == 123 && BinaryPrimitives.ReadUInt32LittleEndian(fragmentAck.AsSpan(21)) == 299,
+            "235碎片展示行保留FFFF、本次增量及完整金币耐久尾部");
+        Reject<InvalidDataException>(() => ExpertJobPackets.DisjointResult(7, fragment with { Rewards = [new(-2, 9000, 90)] }, 0, 0),
+            "235只允许已定义的FFFF展示哨兵，不接受其他负槽位");
         var store = ExpertJobRequests.ReadCreateStore([0, 0, 0, 0, 0, 7, 0, 0, 0, 8, 0, 9, 0, 10, 0]);
         That(store is { Mode: 0, Name: "", First: 7, Second: 8, Third: 9, Fourth: 10 },
             "C2S 598 是 mode:u8 + 03BDF850 字符串 + u32 + 三个 u16");

@@ -42,8 +42,8 @@ internal static partial class FormalDungeonTcpTests
             }
             using var peer = Open(fixture);
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
-            // 新角色悲叹状态为第1层，祭坛所在世界地图同时含悲叹入口。
-            SelectMap(peer,griefLayer:1);
+            // 新角色悲叹为第1层；塔类入口仍严格核对1536→1303→27。
+            SelectTowerMap(peer,griefLayer:1);
             var request = Selection();
             BinaryPrimitives.WriteUInt32LittleEndian(request,id);
             BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),0);

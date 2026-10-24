@@ -1,4 +1,5 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Quests;
@@ -48,7 +49,7 @@ internal static class QuestProfessionReward
             var initialized = SkillLearning.Initialize(expected.Job, skills.FreeSkills(expected.Job, target), skills);
             if (!initialized.Success)
                 throw new NotSupportedException("转职分支赠技无法初始化: " + initialized.Failure);
-            learning = initialized.State! with
+            learning = ExpertJobSkills.Preserve(expected.Job, initialized.State!, learning, skills) with
             {
                 Experience = learning.Experience,
                 BonusSp = learning.BonusSp,

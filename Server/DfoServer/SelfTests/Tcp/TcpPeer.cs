@@ -13,7 +13,7 @@ internal sealed record WirePacket(byte Kind, ushort Opcode, byte[] Body, bool Pr
 internal sealed class TcpPeer : IDisposable
 {
     public static readonly (byte Kind, ushort Opcode)[] Entry =
-        [(1, 4), (0, 1382), (0, 2), (0, 2), (0, 13), (0, 988), (0, 13), (0, 13), (0, 950), (0, 53), (0, 427), (0, 1152), (0, 3), (0, 1153), (0, 22), (0, 23), (0, 24), (0, 1379), (0, 124)];
+        [(1, 4), (0, 1382), (0, 2), (0, 2), (0, 13), (0, 988), (0, 356), (0, 13), (0, 13), (0, 950), (0, 53), (0, 427), (0, 1152), (0, 3), (0, 1153), (0, 22), (0, 23), (0, 24), (0, 1379), (0, 124)];
     public static readonly (byte Kind, ushort Opcode)[] PreparedEntry =
         [(1, 4), (0, 1382), (0, 2), (0, 2), (0, 13), (0, 988), (0, 356), (0, 13), (0, 13), (0, 950), (0, 53), (0, 427), (0, 1152), (0, 3), (0, 1153), (0, 22), (0, 23), (0, 24), (0, 1379), (0, 124)];
     readonly TcpClient client = new()
@@ -383,6 +383,33 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(pcroom + 1 < body.Length && body[pcroom] == (pcRoom ? 1 : 0) && body[pcroom + 1] == (active ? 1 : 0),
             "全局网吧身份与账号黑钻外观各自发送，不互相开启或清除");
     }
+    public void ExpectUnusedDailyBoosterReset()
+    {
+        // 调钟可能被上一请求尾部或本次屏障观察；精确收齐一次ACK和完整零次数日界视图。
+        TestCheck.That(InitialDailyBoosterPackets.Length > 0, "日界同步已有完整初始化名册");
+        SendBarrier();
+        bool acknowledged = false;
+        int resetChunks = 0;
+        while (!acknowledged || resetChunks < InitialDailyBoosterPackets.Length)
+        {
+            var packet = Read();
+            if (packet is { Kind: 1, Opcode: 1347 } && !acknowledged)
+            {
+                TestCheck.Bytes(packet.Body, [1], "跨日日界同步屏障ACK");
+                acknowledged = true;
+            }
+            else
+            {
+                TestCheck.That(packet is { Kind: 0, Opcode: 541 } && resetChunks < InitialDailyBoosterPackets.Length,
+                    $"跨日只允许一次屏障ACK与完整541分片，实际{packet.Kind}/{packet.Opcode}");
+                var expected = InitialDailyBoosterPackets[resetChunks++];
+                TestCheck.That(Inventory.DailyBoosterProjectionTests.Decode(expected).Values.All(used => used == 0),
+                    "本用例没有消费每日礼盒，跨日完整恢复零次数");
+                TestCheck.Bytes(packet.Body, expected, "跨日541名册、分片顺序及零次数与初始化一致");
+            }
+        }
+    }
+
     public void CheckBlackDiamondRefresh(bool active, bool dungeon = false, bool appearanceChanged = true, bool pcRoom = false,
         bool allowDailyReset = false)
     {
@@ -529,7 +556,7 @@ internal sealed class TcpPeer : IDisposable
                 .. (room ? new (byte Kind, ushort Opcode)[] { (0, 1379) } : []), (0, 124), (0, 24)];
         else if (!room)
             expected = [.. expected.Where(p => p != ((byte)0, (ushort)1379))];
-        int afterCargo = prepared ? 9 : 8;
+        int afterCargo = 9;
         // 保留普通入城断言的返回索引，特殊容器单独暴露；线上顺序仍逐包严格验证。
         var ack = Expect(expected[0].Kind, expected[0].Opcode);
         var permission = Expect(0, 5);
@@ -724,7 +751,7 @@ internal sealed class TcpPeer : IDisposable
             "本人Actor与1375回放同一账号名称，窄字段不截断双字节字符");
         if (appearanceFlags.HasValue)
             TestCheck.That(packets[2].Body[^23] == appearanceFlags.Value, "Actor外观flags与设置后357一致");
-        TestCheck.That(packets[prepared ? 7 : 6].Body[0] == 2 && packets[prepared ? 8 : 7].Body[0] == 12,
+        TestCheck.That(packets[7].Body[0] == 2 && packets[8].Body[0] == 12,
             "personal and account cargo initialize before locks");
         TestCheck.That(packets[4].Body[0] == 0, "main inventory initialization precedes cargo");
         ushort expansionSlots = U16(packets[4].Body, 1);
@@ -733,7 +760,9 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
         if (expertJobInfo is not null) Expect(0, 205, expertJobInfo);
         ReadWeeklyDungeon();
-        return packets.ToArray();
+        // 新增的空历史356已逐包校验，并由CompletedQuestHistory暴露；
+        // 普通角色的返回数组保留既有仓库等索引，避免无关业务用例随初始化包插入而迁移。
+        return prepared ? packets : [.. packets.Where(packet => packet is not { Kind: 0, Opcode: 356 })];
 
         void ReadSeriaInitialization()
         {
@@ -796,12 +825,9 @@ internal sealed class TcpPeer : IDisposable
                     w.Write(appearanceFlags.Value);
                 }));
             AvailableQuests = Expect(0, 21).Body;
-            if (prepared)
-            {
-                CompletedQuestHistory = Expect(0, 356).Body;
-                TestCheck.Bytes(CompletedQuestHistory, middle.Single(packet => packet.Opcode == 356).Body,
-                    "入城21后恢复同一角色完成历史，保留前面的场景完成位");
-            }
+            CompletedQuestHistory = Expect(0, 356).Body;
+            TestCheck.Bytes(CompletedQuestHistory, middle.Single(packet => packet.Opcode == 356).Body,
+                "入城21后恢复同一角色完成历史及月轮山显示标记，空历史也不省略");
             var skins = weaponSkins ?? (Owned: Array.Empty<int>(), Selected: 0);
             Expect(0, 1557, Build(w =>
             {

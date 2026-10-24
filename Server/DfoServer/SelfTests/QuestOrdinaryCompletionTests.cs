@@ -30,6 +30,7 @@ internal static class QuestOrdinaryCompletionTests
         int checks = Count;
         var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf); var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
         var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        QuestHarlemContinuationTests.Run(towns,pvf,characters,items,quests);
         QuestGoldMailTests.Run(towns, characters, items, learning, growth, parameters);
         QuestInventoryPendingTests.Run(towns, characters, items, learning, growth, parameters);
         QuestTownMutationPendingTests.Run(towns, characters, items, learning, growth, parameters);
@@ -883,11 +884,20 @@ internal static class QuestOrdinaryCompletionTests
                 parameters, items.Items, items.GoldLimits, items.EpicPieces, growth, DateTimeOffset.UtcNow);
             That(malformed.Plan is null && CurrencyWallet.Get(f.Read().Inventory, CurrencyKind.ClearCube) == 100,
                 "类型超出 1–4 时不扣无色小晶块");
+            if (sample.Id == 2702)
+            {
+                string before = System.Text.Json.JsonSerializer.Serialize(f.Read());
+                f.Sql("CREATE TRIGGER fail_qualification AFTER INSERT ON character_quest_completion_receipts BEGIN SELECT RAISE(ABORT,'qualification rollback'); END");
+                TestCheck.Reject<SqliteException>(() => f.Finish(ushort.MaxValue, (ushort)sample.Id), "授职回执末段失败向上传递");
+                That(f.Receipts == 0 && System.Text.Json.JsonSerializer.Serialize(f.Read()) == before,
+                    "授职末段失败回滚资格、双树、材料及任务，不留下半份赠技");
+                f.Sql("DROP TRIGGER fail_qualification");
+            }
             var result = f.Finish(ushort.MaxValue, (ushort)sample.Id);
             var commit = result.Receipt!.Commit;
             byte[] ack = DfoServer.Network.Builders.QuestPackets.Finish((ushort)sample.Id, commit.ConditionType, commit.GainedExperience,
                 commit.Consumed.Select(row => new DfoServer.Network.Builders.QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(),
-                commit.DirectGoldAmount, []);
+                commit.DirectGoldAmount, [], expertJobType: commit.ExpertJobType);
             using var db = f.Open();
             using var command = db.CreateCommand();
             command.CommandText = "SELECT job_type FROM character_expert_job";
@@ -898,10 +908,21 @@ internal static class QuestOrdinaryCompletionTests
                 commit.Consumed[0].Position.Index == ItemSlotBoundService.CurrencySlot(CurrencyKind.ClearCube) &&
                 commit.Character.ExpertJobType == sample.Type && commit.Character.CompletedQuests.Contains(sample.Id) &&
                 CurrencyWallet.Get(commit.Character.Inventory, CurrencyKind.ClearCube) == 0 &&
-                (long)command.ExecuteScalar()! == sample.Type && ack[^2] == 0 && ack[^1] == 0 &&
+                (long)command.ExecuteScalar()! == sample.Type && ack[^4] == 20 && ack[^3] == sample.Type && ack[^2] == 0 && ack[^1] == 0 &&
                 f.Receipts == 1 && actor.Length == actorBlind.Length &&
                 ActorExpertJobType(actor, actorBlind) == sample.Type,
-                "副职业 " + sample.Id + " 扣除 100 无色、经验为 0、类型落库，ACK 为寻物 mode0 零奖励，Actor 投影 I+3B0");
+                "副职业 " + sample.Id + " 扣除 100 无色、经验为 0、类型落库，ACK 使用mode20，Actor 投影 I+3B0");
+            var grants = scripts.Skills(sample.Type);
+            That(grants is [{ Level: 1 }] && grants[0].Id == (sample.Type switch { 1 => 191, 2 => 193, 3 => 194, _ => 192 }) &&
+                commit.Character.Learning.Trees.All(tree => grants.All(grant => tree.Skills.Any(skill => skill.Id == grant.Id && skill.Level == grant.Level))) &&
+                commit.Character.Learning.Trees.Zip(funded.Learning.Trees).All(pair => pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp),
+                "四份EXJ的真实赠技进入双树且不扣SP/TP，规范Skills与重读一致");
+            var synchronized = SkillPointLedger.Synchronize(0, 0, 20, commit.Character.Learning, learning);
+            var reset = SkillPointLedger.Reset(0, 0, 20, synchronized, 0, learning, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            var changed = QuestProfessionReward.Prepare(commit.Character, 1, 20, synchronized, learning, DateTimeOffset.UtcNow);
+            That(reset.Success && new[] { reset.State!, changed }.All(state => state.Trees.All(tree =>
+                    grants.All(grant => tree.Skills.Any(skill => skill.Id == grant.Id && skill.Level >= grant.Level)))),
+                "等级核算、洗点和主职业重建保留独立副职业赠技，不误算为普通SP消费");
             var replay = f.Finish(ushort.MaxValue, (ushort)sample.Id);
             var saved = f.Read();
             That(replay.Outcome == QuestFinishOutcome.AlreadyCompleted && saved.ExpertJobType == sample.Type &&
@@ -920,7 +941,8 @@ internal static class QuestOrdinaryCompletionTests
                 given.Character.ExpertGiveUpState == 1 && (long)clearedCommand.ExecuteScalar()! == 0 &&
                 (long)metaCommand.ExecuteScalar()! == 1 &&
                 ActorExpertJobType(actor, actorCleared) == sample.Type &&
-                f.Read().ExpertJobType == 0 && f.Read().ExpertGiveUpState == 1,
+                f.Read().ExpertJobType == 0 && f.Read().ExpertGiveUpState == 1 &&
+                f.Read().Learning.Trees.All(tree => tree.Skills.All(skill => !grants.Any(grant => grant.Id == skill.Id))),
                 "C2S 239 扣 1000 金后清 character_expert_job，放弃档留在 meta，Actor I+3B0 回到 0");
             if (sample.Id == 2702)
             {
@@ -931,6 +953,12 @@ internal static class QuestOrdinaryCompletionTests
                 f.Session.ReturnToRoster();
                 f.Session.Select(0);
                 f.Session.MarkReady();
+                That(f.Session.InitializeLearning(learning, scripts) == SkillLearningFailure.None &&
+                    f.Read().Learning.Trees.All(tree => tree.Skills.Any(skill => skill.Id == 191 && skill.Level == 1)),
+                    "存量已授职角色入城补齐缺失赠技，不重领任务或扣材料");
+                long revision = f.Read().Revision;
+                That(f.Session.InitializeLearning(learning, scripts) == SkillLearningFailure.None && f.Read().Revision == revision,
+                    "已有正确赠技不重复保存或增加revision");
                 var second = f.Session.GiveUpExpertJob(scripts);
                 That(second.Error == 0 && second.Character!.Inventory.Gold == 9_000 && second.Character.ExpertGiveUpState == 2 &&
                     f.Read().ExpertJobType == 0,
@@ -1194,7 +1222,7 @@ internal static class QuestOrdinaryCompletionTests
         public QuestLifecycleReceipt? Change(ushort id, QuestLifecycleAction action, QuestClientCondition? condition = null) =>
             Session.ChangeQuest(id, action, Catalog, items.Items, items.GoldLimits, items.EpicPieces, condition);
         public QuestFinishResult Finish(ushort selector, ushort questId = 100, ushort multiplier = 1) => Session.FinishQuest(questId, selector, Catalog, parameters,
-            items.Items, items.GoldLimits, items.EpicPieces, growth,multiplier);
+            items.Items, items.GoldLimits, items.EpicPieces, growth,multiplier,items.ExpertJobs);
         public SqliteConnection Open() { var db = new SqliteConnection("Data Source=" + Path.Combine(root, "game.db") + ";Pooling=False"); db.Open(); return db; }
         public long Receipts { get { using var db = Open(); using var c = db.CreateCommand(); c.CommandText = "SELECT count(*) FROM character_quest_completion_receipts"; return (long)c.ExecuteScalar()!; } }
         public void Sql(string sql) { using var db = Open(); using var c = db.CreateCommand(); c.CommandText = sql; c.ExecuteNonQuery(); }

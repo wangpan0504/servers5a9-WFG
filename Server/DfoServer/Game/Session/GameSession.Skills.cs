@@ -1,12 +1,14 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    public SkillLearningFailure InitializeLearning(SkillLearningCatalog catalog) => InitializeLearning(character =>
+    public SkillLearningFailure InitializeLearning(SkillLearningCatalog catalog, ExpertJobScriptCatalog? expertJobs = null) => InitializeLearning(character =>
     {
         var result = SkillLearning.Initialize(character, catalog.Get);
         if (!result.Success) return result;
@@ -14,6 +16,8 @@ internal sealed partial class GameSession
         {
             int contractLevels = catalog.ActiveExpertContractLevels(result.State!.ExpertContractExpiresAt, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             var state = SkillPointLedger.Synchronize(character.Job, character.GrowType, character.Level, result.State!, catalog, contractLevels);
+            if (expertJobs is not null && character.ExpertJobType is >= 1 and <= 4)
+                state = ExpertJobSkills.Grant(character.Job, state, expertJobs.Skills(character.ExpertJobType), catalog);
             return result with { State = state, TotalSp = state.BonusSp is int bonus ? checked(catalog.TotalSp(character.Level) + bonus) : null,
                 TotalTp = state.BonusTp is int tpBonus ? checked(catalog.TotalTp(character.Level) + tpBonus) : null };
         }

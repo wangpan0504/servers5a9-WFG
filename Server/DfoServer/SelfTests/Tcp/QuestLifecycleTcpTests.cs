@@ -192,6 +192,9 @@ internal static class QuestLifecycleTcpTests
                 f.Sql("DELETE FROM character_active_main_quests; INSERT INTO character_completed_quests(character_id,quest_id) VALUES(1,3145)");
                 peer.Select(prepared: true);
                 byte[] initialHistory = peer.CompletedQuestHistory;
+                That(initialHistory[4 + 13700] == 1 &&
+                    f.Query("SELECT count(*) FROM character_completed_quests WHERE quest_id=13700") is [[0L]],
+                    "已有真实任务进度角色同样补月轮山显示位且不入库");
                 That(List(peer.AvailableQuests, 1).Contains(4873), "完成前置后登录列表下发真实4873定义");
                 peer.Send(31, Convert.FromHexString("1F000913"));
                 peer.Expect(1, 31, Convert.FromHexString("0109130100000000"));
@@ -266,7 +269,8 @@ internal static class QuestLifecycleTcpTests
                     "4873跨级在Player后重装SKILLINFO，两树余额与前置EXP一致");
                 int[] available = List(peer.Expect(0, 21).Body, 3);
                 var completed4873 = peer.Expect(0,356).Body;
-                That(completed4873.Length == 30004 && completed4873[4+4873] == 1,"整次投影最后同步真实4873完成位");
+                That(completed4873.Length == 30004 && completed4873[4+4873] == 1 && completed4873[4+13700] == 1,
+                    "整次投影最后同步真实4873完成位并保留月轮山显示标记");
                 That(!available.Contains(4873) && available.Contains(3146), "4873交付阶段补到Lv3后立即开放3146");
                 That(f.Query("SELECT revision,experience,gold FROM characters") is [[long next,2035L,101L]] && next == revision + 1,
                     "普通和阶段同一次revision保存XP和原Gold");
@@ -534,7 +538,7 @@ internal static class QuestLifecycleTcpTests
             {
                 peer.Create("QuestAlt"); peer.Select(slot: 1);
                 That(List(peer.AvailableQuests,1).Contains(29989),"同账号另一角色可接尚未交付的账号任务");
-                peer.Send(31,[31,0,37,117]); peer.Expect(1,31,[1,37,117,1,0,0,0,0]); peer.Expect(0,21);
+                peer.Send(31,[31,0,37,117]); peer.Expect(1,31,[1,37,117,1,0,0,0,0]); peer.Expect(0,21); peer.Expect(0,356);
                 That(f.Query("SELECT count(*) FROM character_active_main_quests WHERE quest_id=29989") is [[2L]],
                     "账号任务接取分别保存两个角色的独立接取身份");
             }
@@ -600,7 +604,7 @@ internal static class QuestLifecycleTcpTests
                     peer.Send(31,[31,0,34,117]);
                     var accepted = peer.Expect(1,31).Body;
                     That(accepted.Length == 18 && U32(accepted,3) == 0 && U32(accepted,14) == 6,$"批量寻物赠品6与接取初值一次保存，ACK31使用10B赠品行：{Convert.ToHexString(accepted)}");
-                    peer.Expect(0,14); peer.Expect(0,21);
+                    peer.Expect(0,14); peer.Expect(0,21); peer.Expect(0,356);
                     peer.Send(34,[34,0,34,117,255,255,2,0,255,255]);
                     var finished = Finished(peer).Body;
                     That(finished.Length == 56 && finished[3] == 0 && finished[8] == 1 && finished[9] == 0 && U32(finished,12) == 6 &&
@@ -1032,13 +1036,15 @@ internal static class QuestLifecycleTcpTests
                 That(State(native.Id) == before && Materials(native.Id) == 4,
                     "真实3473足额时即使客户端报告缺料仍回权威0，不重复写库、扣料、发奖或全量刷新");
             }
-            // 重放报告中的31顺序，恢复父显示，不把重接请求当作扣料或领奖。
-            foreach (byte child in new byte[] {144,145})
+            // 已完成3472仍回放574/356。已接取3473只回error18，重复请求也不能再引出356。
+            peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[0,18,0]);
+            peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
+            History(peer.Expect(0,356).Body,3472); peer.Barrier();
+            That(State(native.Id) == before,"重接已完成3472只回放父0/末子0，不写库、不扣料或发奖");
+            for (int repeat = 0; repeat < 2; repeat++)
             {
-                peer.Send(31,[31,0,child,13]); peer.Expect(1,31,[0,18,0]);
-                peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
-                History(peer.Expect(0,356).Body,3472); peer.Barrier();
-                That(State(native.Id) == before,"报告中的重接只恢复实际足额父0/末子0，不写库、不扣料或发奖");
+                peer.Send(31,[31,0,145,13]); peer.Expect(1,31,[0,18,0]); peer.Barrier();
+                That(State(native.Id) == before,"重接已接取3473不回放574/356，也不写库、扣料或发奖");
             }
             peer.Send(34,[34,0,130,13,255,255,1,0,255,255]);
             var ack = Finished(peer).Body;

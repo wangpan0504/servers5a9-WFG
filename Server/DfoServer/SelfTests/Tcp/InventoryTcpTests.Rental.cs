@@ -123,7 +123,7 @@ internal static partial class InventoryTcpTests
             peer.Select(questSlot);
             peer.Send(31,Convert.FromHexString("1F008521"));
             peer.Expect(1,31,Convert.FromHexString("0185210100000000"));
-            peer.Expect(0,21);peer.Barrier();
+            peer.Expect(0,21);peer.Expect(0,356);peer.Barrier();
             var acceptance = fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=8581",peer.Id)[0][0];
             string before = Snapshot(fixture);
             peer.Send(33,Convert.FromHexString("210085210000"));peer.Expect(1,33,[0,19,0]);peer.Barrier();

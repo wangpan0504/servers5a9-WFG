@@ -268,7 +268,7 @@ internal static class QuestCorePublicationTests
                 {
                     output.Frames.Clear();
                     That(await commands.DispatchAsync(context,Identity(31,id)) == CommandResult.Handled &&
-                        output.Opcodes.SequenceEqual(new ushort[] {31,21}) && output.Frames[0][16] == 1,
+                        output.Opcodes.SequenceEqual(new ushort[] {31,21,356}) && output.Frames[0][16] == 1,
                         "真实31独立接取隐藏父及全部子项 "+id);
                 }
                 var accepted = f.Read();

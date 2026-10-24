@@ -14,6 +14,7 @@ internal sealed partial class CharacterRepository
     {
         var expected = plan.Expected;
         var scope = plan.ScopeQuestIds.ToHashSet();
+        var removal = QuestQuickClearPlan.RemovalScope(expected,scope,quests);
         var newCompleted = scope.Except(QuestEligibility.Completed(expected)).Order().ToArray();
         bool validIdentity = plan.IsPreparedSkip
             ? plan.OperationId != Guid.Empty && plan.AcceptanceId == Guid.Empty && plan.ParentKey is null && plan.QuestionQuestId is null &&
@@ -24,11 +25,12 @@ internal sealed partial class CharacterRepository
                 scope.SetEquals(plan.Interval.Concat(plan.AreaQuests).Select(quest => quest.Id).Append(plan.Question.Id).Append(plan.MarkerQuestId));
         var expectedAnswers = plan.IsPreparedSkip ? expected.QuestAnswers.SetItems(plan.ManualAnswers) : expected.QuestAnswers.SetItem(plan.Question.Id,plan.Answer);
         if (expected.Id == 0 || !validIdentity ||
+            plan.IsOrphanRepair && (!plan.IsManual || scope.Count!=0 || plan.Inventory.Changed || removal.Count==0) ||
             !plan.NewCompletedQuestIds.SequenceEqual(newCompleted) ||
             !plan.CompletedAfter.SequenceEqual(expected.CompletedQuests.Concat(newCompleted).Distinct().Order()) ||
-            !plan.RemovedActive.SequenceEqual(expected.ActiveMainQuests.Where(row => scope.Contains(row.QuestId))) ||
+            !plan.RemovedActive.SequenceEqual(expected.ActiveMainQuests.Where(row => removal.Contains(row.QuestId))) ||
             !plan.ActiveAfter.Select(row => (row.Slot,row.QuestId,row.AcceptanceId)).SequenceEqual(
-                expected.ActiveMainQuests.Where(row => !scope.Contains(row.QuestId)).Select(row => (row.Slot,row.QuestId,row.AcceptanceId))) ||
+                expected.ActiveMainQuests.Where(row => !removal.Contains(row.QuestId)).Select(row => (row.Slot,row.QuestId,row.AcceptanceId))) ||
             !QuestCycle.SameAnswers(plan.AnswersAfter,expectedAnswers) ||
             plan.SyncedQuestIds.Any(id => !scope.Contains(id)) ||
             !plan.AccountCompletedAfter.SequenceEqual(expected.AccountCompletedQuests.Concat(plan.SyncedQuestIds).Distinct().Order()) ||

@@ -59,6 +59,9 @@ internal sealed partial class GameSession
         public HellPartyTicket? HellTicket { get; init; }
         public HellPartyTicket? LegendTicket { get; init; }
         public EpicPieceCatalog? HellPieces { get; init; }
+        public ImmutableArray<CosmoPassCost> CosmoPasses { get; init; } = [];
+        public int CosmoInvitationCount { get; init; }
+        public int CosmoStoneCount { get; init; }
         // #510/#511 普通入场票（[required item]「物品 1 1」）的规划目录；入场提交时按最新背包重算。
         public EpicPieceCatalog? EntryPieces { get; init; }
         // 入场代价：DungeonIncountInfo 角色/账号次数与频道专属城镇 [required item] 消耗，入场提交时同一事务扣除。
@@ -269,6 +272,8 @@ internal sealed partial class GameSession
         if (hellParty && entry!.HellParty is null && !entry.IsCosmo) return RejectFormal("hell-party-room-unavailable");
         HellPartyTicket? hellTicket = null;
         HellPartyTicket? legendTicket = null;
+        var cosmoPasses = entry!.IsCosmo && items is not null ? items.CosmoPasses() : [];
+        var cosmoDefinitionForCost = entry.IsCosmo ? catalog.Get(checked((int)dungeonId)) : null;
         // 密门不收费；星空裂缝在原深渊邀请函之外消耗客户端指定的灵石，数量来自迷宫声明。
         if (hellParty && !sealDoor)
         {
@@ -278,14 +283,19 @@ internal sealed partial class GameSession
             var dungeonDefinition = catalog.Get(checked((int)dungeonId));
             int ticketCount = entry!.IsCosmo ? dungeonDefinition.CosmoInvitationCount :
                 HellPartyEntryCost.RequiredCount(entry.HellParty!, dungeonDefinition.MinimumLevel);
-            var ticketPlan = pieces is null ? (null, null) : HellPartyEntryCost.Plan(expected.Inventory, hellTickets, ticketCount, pieces, DateTimeOffset.UtcNow);
+            var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+            var pass = entry.IsCosmo && pieces is not null ? HellPartyEntryCost.CosmoPass(expected.Inventory, cosmoPasses, pieces, now) : (null, null, null);
+            bool usesPass = pass.Item1 is not null;
+            var ticketPlan = usesPass ? (pass.Item1, pass.Item3) : pieces is null ? (null, null) :
+                HellPartyEntryCost.Plan(expected.Inventory, hellTickets, ticketCount, pieces, now);
             if (ticketPlan.Item1 is null) return RejectFormal("hell-party-item-required");
             hellTicket = ticketPlan.Item1;
-            if (hellLegend || entry.IsCosmo)
+            legendTicket = usesPass ? pass.Item2 : null;
+            if (!usesPass && (hellLegend || entry.IsCosmo))
             {
                 int count = entry.IsCosmo ? dungeonDefinition.CosmoStoneCount : entry.HellParty!.LegendRequiredCount;
                 var stones = pieces is null || ticketPlan.Item2 is null ? (null, null) :
-                    HellPartyEntryCost.Plan(ticketPlan.Item2.After, [HellPartyEntryCost.LegendStone], count, pieces, DateTimeOffset.UtcNow);
+                    HellPartyEntryCost.Plan(ticketPlan.Item2.After, [HellPartyEntryCost.LegendStone], count, pieces, now);
                 if (stones.Item1 is null) return RejectFormal("hell-party-item-required");
                 legendTicket = stones.Item1;
             }
@@ -332,8 +342,9 @@ internal sealed partial class GameSession
             WeeklyDungeonPolicy.SlotOf(catalog.Get(checked((int)dungeonId))) is { } weeklySlot)
             weekly = new(WeeklyDungeonPolicy.WeekKey((timeProvider ?? TimeProvider.System).GetUtcNow()), weeklySlot);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
-            // #510/#511 普通入场票已覆盖同一 [required item] 时，频道专属城镇不再重复扣这件物品，只保留次数。
-            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, EntryPieces = pieces, SpecialEntry = specialEntry,
+            // 普通入场票已覆盖相同物品时，频道代价只保留次数；超星空通行证规划字段仍完整传入提交阶段。
+            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
+                CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry,
                 ChannelCost = channelCost is { Consume: not null } && entry.EntryItem is not null ? channelCost with { Consume = null } : channelCost } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
@@ -608,7 +619,7 @@ internal sealed partial class GameSession
             ItemMaterialCost[] costs = installing.LegendTicket is { } stone
                 ? [new(hellTicket.ItemId, hellTicket.Count), new(stone.ItemId, stone.Count)]
                 : [new(hellTicket.ItemId, hellTicket.Count)];
-            var spent = InventoryMaterialConsumptionService.Plan(character.Inventory, costs, hellPieces, DateTimeOffset.UtcNow);
+            var spent = InventoryMaterialConsumptionService.Plan(character.Inventory, costs, hellPieces, (timeProvider ?? TimeProvider.System).GetUtcNow());
             if (!spent.Accepted || spent.Plan is not { } hellPlan) return null;
             entryItems = hellPlan;
             hellSlots = hellPlan.ChangedSlots;

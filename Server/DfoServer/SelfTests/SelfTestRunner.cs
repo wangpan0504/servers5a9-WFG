@@ -54,6 +54,7 @@ internal static class SelfTestRunner
         AvatarDisjointTests.RunCore();
         AvatarPresetTests.RunCore();
         DisjointSpecialTests.RunCore();
+        PlayerDisjointTests.RunCore();
         SkillSwitchInventoryTests.RunCore();
         FrameCrcTests.Run();
         await NativeFrameTests.RunAsync();
@@ -72,6 +73,7 @@ internal static class SelfTestRunner
         AuctionNoticeTests.Run();
         AuctionReplyTests.Run();
         DungeonRequestTests.Run();
+        DungeonEntryCostTests.RunCore();
         AssaultModePacketTests.Run();
         RiftDailyPacketTests.Run();
         ParticularHellPartyTests.Run();
