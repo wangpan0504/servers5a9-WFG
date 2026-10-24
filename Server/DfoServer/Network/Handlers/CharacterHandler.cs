@@ -39,6 +39,16 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
 
     async Task<CommandResult> SelectAsync(GameConnectionContext context, Packet request)
     {
+        try { return await SelectCoreAsync(context, request); }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            log.Write("select_failed", new { Connection = context.Id, Reason = error.GetType().Name, error.Message });
+            throw;
+        }
+    }
+
+    async Task<CommandResult> SelectCoreAsync(GameConnectionContext context, Packet request)
+    {
         // 原生换频道直接发C2S4；普通选角先请求C2S8，返回选角也有已推送名册。
         bool resumeTown = !context.RosterRequested && !context.SelectionRosterPushed;
         context.Session.SelectFromRosterIndex(CharacterRequests.Select(request.Body), goldLimits, resumeTown);

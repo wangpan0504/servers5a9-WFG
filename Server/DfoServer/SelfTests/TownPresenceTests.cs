@@ -429,6 +429,24 @@ internal static class TownPresenceTests
             await qSend.Send(1, 1347, [1], "phase-effect-barrier");
             That(Frames(qStream).All(f => f.Opcode == 1347), "不同PVF阶段不接收传送到达或出发特效");
             That(presence.Count == 0, "phase fixture cleans up both memberships");
+            await pSend.ClearScene();
+            await qSend.ClearScene();
+            presence.Join(p, pSend, cp);
+            presence.Join(q, qSend, cq);
+            await pSend.Send(1, 1347, [1], "phase-rejoin-barrier");
+            await qSend.Send(1, 1347, [1], "phase-rejoin-barrier");
+            int pAt = Frames(pStream).Length, qAt = Frames(qStream).Length;
+            cp = cp with { CompletedQuests = [phase.Quest], Position = cp.Position with { X = 451 } };
+            presence.Move(p, pSend, cp);
+            await pSend.Send(1, 1347, [1], "phase-shift-barrier");
+            await qSend.Send(1, 1347, [1], "phase-shift-barrier");
+            var pAdded = Frames(pStream).Skip(pAt).ToArray();
+            var qAdded = Frames(qStream).Skip(qAt).ToArray();
+            That(pAdded.Any(frame => frame.Opcode == 2) && qAdded.Any(frame => frame.Opcode == 2) && presence.Count == 2,
+                "同区阶段任务完成后移动改入新PVF场景，双方同屏且不断线");
+            presence.Remove(pSend);
+            presence.Remove(qSend);
+            That(presence.Count == 0, "阶段迁移夹具释放双方成员");
             foreach (string scenario in new[] { "current", "stale-source", "stale-view" })
             foreach (bool partyPreparation in new[] { false, true })
             {
