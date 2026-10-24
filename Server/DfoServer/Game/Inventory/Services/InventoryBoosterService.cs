@@ -280,7 +280,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 }
                 // 该声明只约束领取到的实例是装备；本服没有实例级“不可分解”字段，官方同款装备本身可分解，
                 // 因此不按模板 DisjointForbidden 收窄，也不猜测实例标志。
-                if (definition.SetsDisjointInstanceType && catalog.Get(id).Kind != ItemKind.Equipment)
+                if ((definition.SetsDisjointInstanceType || definition.SetsEpicExchangeInstanceType) &&
+                    catalog.Get(id).Kind != ItemKind.Equipment)
                     return InventoryResult.Reject(19);
                 if (lottery && (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
                     contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id) ||
@@ -447,7 +448,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         else
             grants.AddRange(totals.Select(pair => new InventoryReward(pair.Key, pair.Value)));
         InventoryResult grant;
-        if (definition.UnsealsRandomOptions)
+        if (definition.UnsealsRandomOptions || definition.SetsEpicExchangeInstanceType)
         {
             var range = ItemSlotBoundService.Range(ItemKind.Equipment, paid.Expansion);
             int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Main &&
@@ -463,9 +464,12 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         var core = InventoryRewardGrantService.Create(catalog.Get(reward.ItemId), utcNow: now,
                             upgrade: reward.Upgrade, refinement: reward.Refinement, shopExpiration: shopExpiration,
                             ignoreUsablePeriod: ignoreUsablePeriod);
-                        // 同ID多件也逐件抽取，保留创建时的强化、锻造、封装、耐久及期限。
-                        core = InventoryRandomOptionService.Initialize(core, unsealDefinitions[reward.ItemId],
-                            (random ?? Random.Shared).NextInt64);
+                        // 同ID多件仍逐件创建，保留强化、锻造、封装、耐久及期限。
+                        if (definition.UnsealsRandomOptions)
+                            core = InventoryRandomOptionService.Initialize(core, unsealDefinitions[reward.ItemId],
+                                (random ?? Random.Shared).NextInt64);
+                        if (definition.SetsEpicExchangeInstanceType)
+                            core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId) };
                         instances.Add(new(0, default, core));
                     }
             }

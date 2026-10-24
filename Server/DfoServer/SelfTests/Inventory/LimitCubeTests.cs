@@ -132,8 +132,62 @@ internal static class LimitCubeTests
             convertedItem.Core.GenuineUpgrade == 0 && convertedItem.Core.Random0 == default,
             "装备转换仅继承附魔卡、附魔等级和封装，其他实例属性按结果模板重建");
 
+        RunEpicExchangeOriginPropagation();
         RunIndependentAttributePairCore();
         Console.WriteLine($"PASS {Count - checks} 变更券目录、权重、原子规划及338号协议断言");
+    }
+
+    public static void RunEpicExchangeOriginPropagation()
+    {
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+        var origin = new EpicExchangeOrigin(1, 490705251);
+        var fixture = new Fixture();
+        var ordinary = fixture.EquipmentCharacter();
+        var target = ordinary.Inventory.Find(new(InventoryListType.Main, 9))!;
+        var marked = ordinary with { Inventory = ordinary.Inventory with
+        {
+            Items = ordinary.Inventory.Items.Replace(target, target with { Core = target.Core with { EpicExchangeOrigin = origin } })
+        } };
+        string before = System.Text.Json.JsonSerializer.Serialize(marked);
+        var baseline = fixture.Service(_ => 0).Apply(ordinary, new(9, Fixture.EquipmentTarget, 86),
+            out var baselineReceipt, out _, now);
+        That(baseline.Accepted && baseline.Plan is not null && baselineReceipt is not null,
+            "传播回归前置：既有Equipment→Equipment夹具仍合法");
+        var converted = fixture.Service(_ => 0).Apply(marked, new(9, Fixture.EquipmentTarget, 86),
+            out var receipt, out var rejection, now);
+        That(converted.Accepted && converted.Plan is not null && receipt is not null && rejection is null,
+            "带来源的合法装备变更不能新增拒绝");
+        var result = converted.Plan!.After.Find(receipt!.ResultSlot)!;
+        var ordinaryResult = baseline.Plan!.After.Find(baselineReceipt!.ResultSlot)!;
+        That(result.Core.EpicExchangeOrigin == origin &&
+            result.Core with { EpicExchangeOrigin = null } == ordinaryResult.Core && result.Uid == ordinaryResult.Uid &&
+            converted.Plan.After.Find(new(InventoryListType.Main, 86)) == baseline.Plan.After.Find(new(InventoryListType.Main, 86)) &&
+            System.Text.Json.JsonSerializer.Serialize(marked) == before,
+            "Equipment→Equipment仅额外继承来源，原附魔/封装/模板重建/券消费/输入快照规则不变");
+
+        // 复用原Fixture的真实Apply路径，只将合成券的结果行改为该Fixture已有Consumable模板。
+        var crossFixture = new Fixture(equipmentToStackable: true);
+        var crossOrdinary = crossFixture.EquipmentCharacter();
+        var crossTarget = crossOrdinary.Inventory.Find(new(InventoryListType.Main, 9))!;
+        var crossMarked = crossOrdinary with { Inventory = crossOrdinary.Inventory with
+        {
+            Items = crossOrdinary.Inventory.Items.Replace(crossTarget,
+                crossTarget with { Core = crossTarget.Core with { EpicExchangeOrigin = origin } })
+        } };
+        before = System.Text.Json.JsonSerializer.Serialize(crossMarked);
+        var plainCross = crossFixture.Service(_ => 0).Apply(crossOrdinary, new(9, Fixture.EquipmentTarget, 86),
+            out var plainCrossReceipt, out _, now);
+        var markedCross = crossFixture.Service(_ => 0).Apply(crossMarked, new(9, Fixture.EquipmentTarget, 86),
+            out var markedCrossReceipt, out _, now);
+        That(plainCross.Accepted && markedCross.Accepted && plainCross.Plan is not null && markedCross.Plan is not null &&
+            plainCrossReceipt is not null && markedCrossReceipt is not null,
+            "Equipment→Consumable原有合法域转换保留，不能为来源加新禁转换");
+        var crossResult = markedCross.Plan!.After.Find(markedCrossReceipt!.ResultSlot)!;
+        That(crossResult.Core.ItemId == Fixture.ResultA && crossResult.Core.Kind == ItemKind.Consumable &&
+            crossResult.Core.EpicExchangeOrigin is null && crossResult.Core.Count == 1 &&
+            System.Text.Json.JsonSerializer.Serialize(markedCross.Plan.After) == System.Text.Json.JsonSerializer.Serialize(plainCross.Plan!.After) &&
+            System.Text.Json.JsonSerializer.Serialize(crossMarked) == before,
+            "旧装备消费终结来源，新非装备资产与普通转换完全相同且不额外分堆");
     }
 
     public static void RunIndependentAttributePairCore()
@@ -216,7 +270,7 @@ internal static class LimitCubeTests
         public ItemCatalog Items { get; }
         public LimitCubeCatalog Cubes { get; }
 
-        public Fixture()
+        public Fixture(bool equipmentToStackable = false)
         {
             var stackable = new Dictionary<int, string>
             {
@@ -255,6 +309,9 @@ internal static class LimitCubeTests
                     2
                     """
             };
+            if (equipmentToStackable)
+                files["stackable/equipment-ticket.stk"] = files["stackable/equipment-ticket.stk"]
+                    .Replace("201 1 1", ResultA + " 1 1", StringComparison.Ordinal);
             Cubes = new(path => files[path], stackable, equipment);
             Items = new(null!, equipment, stackable, 0);
             Items.PrefillTemplates(new Dictionary<int, ItemTemplate>
