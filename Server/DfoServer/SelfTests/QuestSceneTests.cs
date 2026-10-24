@@ -639,14 +639,22 @@ internal static class QuestSceneTests
         That(f.Session.ReturnFromFormalDungeon() is not null,"未交付任务可沿原退出回城");
         Reselect();
         var repeated = f.Session.EnterFormalDungeon(291100319,0,0,dungeons,rooms);
-        That(repeated is not null && repeated.Entry.BossMap == target && repeated.Entry.TerminalLayerMap is null &&
+        That(repeated is { Entry.IsOrdinary: true, Entry.RouteQuestId: 0, Entry.Maze.QuestConnectionTokens.Count: 0 } &&
+            repeated.Entry.TerminalLayerMap is null &&
             repeated.Entry.QuestAcceptances.Any(row => row.AcceptanceId == original.AcceptanceId) &&
             f.Repository.LoadQuestClear(f.Owner,f.Session.Selected!,6032) == first &&
             f.Read().ActiveMainQuests.Single(row => row.QuestId == 6032).ConditionState == 0,
-            "同接取已达成未34后普通0凭原持久账本重入，保留末层及首清图凭据");
-        ClearTerminal(repeated!);
+            "同接取已达成未34后普通0凭原持久账本进入循环普通路线，保留原接取及首清图凭据");
+        var loopPath = QuestStoryRouteTests.Path(repeated!.Entry.Maze.StaticTopology,repeated.Entry.StartMap.Position,repeated.Entry.BossMap.Position);
+        for (int index = 0; index < loopPath.Length; index++)
+        {
+            Clear(f.Session.CompleteFormalDungeonLoading()!);
+            if (index == loopPath.Length-1) break;
+            That(f.Session.MoveFormalDungeon(checked((byte)loopPath[index+1].X),checked((byte)loopPath[index+1].Y)) is not null,
+                "完成未交后按真实循环图路线清房过门");
+        }
         That(f.Session.Phase == SessionPhase.Settlement && f.Repository.LoadQuestClear(f.Owner,f.Session.Selected!,6032) == first &&
-            !f.Read().CompletedQuests.Contains(6032), "再次真实末层死亡不覆盖首清图凭据或代替34领奖");
+            !f.Read().CompletedQuests.Contains(6032), "循环图死亡不覆盖首清图凭据或代替34领奖");
 
         void ClearTerminal(FormalDungeonReceipt entered)
         {
