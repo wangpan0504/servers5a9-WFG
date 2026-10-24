@@ -39,7 +39,7 @@ internal static class LimitCubeTests
             "CMD338失败使用D95公共状态加u16错误信封");
 
         var fixture = new Fixture();
-        var definition = fixture.Cubes.Get(TicketId)!;
+        var definition = fixture.Cubes.Get(Fixture.GenericTicket)!;
         That(definition.Targets is [{ ItemId: TargetId, Count: 1 }] &&
             definition.Materials.Select(row => (row.ItemId, row.Count))
                 .SequenceEqual(new[] { (3037, 2), (Fixture.MaterialId, 1) }) &&
@@ -54,8 +54,8 @@ internal static class LimitCubeTests
         That(unsupported.Get(1) is null, "非variant0变更券不进入当前入口");
         var malformedCatalog = new LimitCubeCatalog(_ => Fixture.StackableText.Replace(
             $"{Fixture.ResultB} 1 1", $"{Fixture.ResultB} 1", StringComparison.Ordinal),
-            new Dictionary<int, string> { [TicketId] = "bad.stk" });
-        Reject<InvalidDataException>(() => malformedCatalog.Get(TicketId),
+            new Dictionary<int, string> { [Fixture.GenericTicket] = "bad.stk" });
+        Reject<InvalidDataException>(() => malformedCatalog.Get(Fixture.GenericTicket),
             "截断结果行不能被数字前缀补成合法奖池");
 
         var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
@@ -63,7 +63,7 @@ internal static class LimitCubeTests
         var result = fixture.Service(_ => 0).Apply(character,
             new(95, TargetId, 85), out var receipt, out var rejection, now);
         That(result.Accepted && rejection is null && receipt is
-            { TicketItemId: TicketId, TargetItemId: TargetId, ResultItemId: Fixture.ResultA,
+            { TicketItemId: Fixture.GenericTicket, TargetItemId: TargetId, ResultItemId: Fixture.ResultA,
                 ResultCount: 1, Roll: 0, TotalWeight: 4 },
             "首个权重边界选择第一项并返回实际结果信息");
         var after = result.Plan!.After;
@@ -132,11 +132,35 @@ internal static class LimitCubeTests
             convertedItem.Core.GenuineUpgrade == 0 && convertedItem.Core.Random0 == default,
             "装备转换仅继承附魔卡、附魔等级和封装，其他实例属性按结果模板重建");
 
+        RunIndependentAttributePairCore();
         Console.WriteLine($"PASS {Count - checks} 变更券目录、权重、原子规划及338号协议断言");
+    }
+
+    public static void RunIndependentAttributePairCore()
+    {
+        var fixture = new IndependentAttributePairTests.Fixture();
+        var character = fixture.CubeCharacter();
+        var bounds = new List<long>();
+        var service = fixture.CubeService(bound =>
+        {
+            bounds.Add(bound);
+            return 0;
+        });
+        var result = service.Apply(character, new(95, TargetId, 85),
+            out var receipt, out var rejection, DateTimeOffset.FromUnixTimeSeconds(1_800_000_000));
+        var after = result.Plan?.After;
+        That(result.Accepted && rejection is null && receipt is { ResultItemId: 490705315, ResultCount: 1 } &&
+            after is not null && after.AccountWallet.Get(CurrencyKind.ClearCube) == 0 &&
+            after.Find(new(InventoryListType.Main, 85))?.Core.Count == 1 &&
+            after.Find(new(InventoryListType.Main, 95)) is null,
+            "完整66珠夹具可重掷同属性珠，原目标、券1及账号无色10按原规划支付");
+        That(bounds.SequenceEqual(new long[] { 11, 11 }),
+            $"395须实际独立有放回抽取11属性两次；预期上界[11,11]，实际[{string.Join(',', bounds)}]");
     }
 
     public static void RunResources(ItemResources resources)
     {
+        IndependentAttributePairTests.RunResources(resources);
         var definition = resources.LimitCubes.Get(TicketId);
         That(definition is not null &&
             definition.Targets.Any(row => row.ItemId == TargetId && row.Count > 0) &&
@@ -159,6 +183,7 @@ internal static class LimitCubeTests
 
     sealed class Fixture
     {
+        internal const int GenericTicket = 500;
         internal const int ResultA = 490705359;
         internal const int ResultB = 490705360;
         internal const int MaterialId = 700;
@@ -195,7 +220,7 @@ internal static class LimitCubeTests
         {
             var stackable = new Dictionary<int, string>
             {
-                [TicketId] = "ticket.stk", [EquipmentTicket] = "equipment-ticket.stk"
+                [GenericTicket] = "ticket.stk", [EquipmentTicket] = "equipment-ticket.stk"
             };
             var equipment = new Dictionary<int, string>
             {
@@ -234,7 +259,7 @@ internal static class LimitCubeTests
             Items = new(null!, equipment, stackable, 0);
             Items.PrefillTemplates(new Dictionary<int, ItemTemplate>
             {
-                [TicketId] = Stack(TicketId), [EquipmentTicket] = Stack(EquipmentTicket),
+                [GenericTicket] = Stack(GenericTicket), [EquipmentTicket] = Stack(EquipmentTicket),
                 [TargetId] = Stack(TargetId),
                 [ResultA] = Stack(ResultA) with { Expiration = new(1_700_000_000) },
                 [ResultB] = Stack(ResultB) with { Expiration = new(1_700_000_000) },
@@ -256,7 +281,7 @@ internal static class LimitCubeTests
         {
             var rows = new List<InventoryItem>
             {
-                new(1, Bag(85), new(TicketId, ItemKind.Consumable, 2)
+                new(1, Bag(85), new(GenericTicket, ItemKind.Consumable, 2)
                     { SortLockFlag = 1, EquipmentLockId = ticketLocked ? (byte)1 : (byte)0, ExpireTime = ticketExpiry }),
                 new(2, Bag(95), new(TargetId, ItemKind.Consumable, targetCount)
                     { EquipmentLockId = targetLocked ? (byte)1 : (byte)0, ExpireTime = targetExpiry })

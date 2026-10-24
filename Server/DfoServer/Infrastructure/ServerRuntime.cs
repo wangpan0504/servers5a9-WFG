@@ -55,6 +55,12 @@ internal static class ServerRuntime
         if (!itemResources.ItemMakingSkills.Available)
             log.Write("resource_warning", new { Stage = "Item making skills", Missing = "etc/itemmakingskill.etc", Disabled = "带制作熟练度声明的配方" });
         var timer = Stopwatch.StartNew();
+        var attributePairs = IndependentAttributePairCatalog.Load(
+            Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
+            itemResources.Items, itemResources.Boosters, itemResources.LimitCubes, itemResources.Enchantments,
+            itemResources.EpicPieces, itemResources.Contracts, id => Game.Currency.CurrencyWallet.RewardKind(id) is not null);
+        log.Write("startup", new { Stage = "Independent attribute pairs", State = "complete",
+            attributePairs.Revision, attributePairs.ValidatedFamilies, Reason = attributePairs.UnavailableReason });
         // 支持模板全集在监听就绪前准备，首位玩家选角不承担STK扫描。
         var boosterTimer = Stopwatch.StartNew();
         int dailyBoosterTemplates = itemResources.Boosters.DailyRetainedTemplateIds.Count;
@@ -321,7 +327,7 @@ internal static class ServerRuntime
                 itemResources.EpicPieces), inventoryProjection, log),
             new LimitCubeHandler(new InventoryLimitCubeService(itemResources.Items, itemResources.LimitCubes,
                 itemResources.EpicPieces, itemResources.Contracts, itemResources.Boosters.DirectActivationItems,
-                debugSettings: debugSettings), inventoryProjection, log),
+                debugSettings: debugSettings, attributePairs: attributePairs), inventoryProjection, log),
             new EmblemCompoundHandler(new InventoryEmblemCompoundService(itemResources.Items,
                 itemResources.EmblemCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,
@@ -353,7 +359,8 @@ internal static class ServerRuntime
             new CompoundHandler(new InventoryRecipeCraftService(itemResources.ItemRecipes, itemResources.Items,
                 itemResources.EpicPieces, itemResources.GoldLimits, itemResources.ItemMakingSkills, clock), inventoryProjection, log),
             new BoosterHandler(new InventoryBoosterService(itemResources.Items, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces,
-                debugSettings: debugSettings, contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages, clock: clock, randomOptions: itemResources.RandomOptions), inventoryProjection,
+                debugSettings: debugSettings, contracts: itemResources.Contracts, avatars: itemResources.AvatarPackages, clock: clock, randomOptions: itemResources.RandomOptions,
+                attributePairs: attributePairs), inventoryProjection,
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings), inventoryProjection),

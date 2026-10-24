@@ -122,6 +122,7 @@ internal sealed class BoosterHandler(InventoryBoosterService booster, InventoryP
             MatchingPools = matchingPools, TotalPools = totalPools,
             result.Accepted, result.Error,
             Reason = reason ?? result.RejectReason ?? (result.Accepted ? "accepted" : "operation_rejected"),
+            SelectionSummary = receipt?.SelectionSummary,
             Revision = result.Receipt?.Character.Revision });
         await context.Reply(CmdPacketType.USE_BOOSTER_ITEM, BoosterPackets.Opened(result, receipt),
             result.Accepted ? "booster_opened" : "booster_open_rejected", Guard);

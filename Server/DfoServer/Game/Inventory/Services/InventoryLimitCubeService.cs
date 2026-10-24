@@ -9,7 +9,8 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCatalog cubes, EpicPieceCatalog pieces,
     PremiumContractCatalog contracts, IReadOnlySet<int>? directActivationItems = null,
-    Func<long, long>? random = null, GameDebugSettings? debugSettings = null)
+    Func<long, long>? random = null, GameDebugSettings? debugSettings = null,
+    IndependentAttributePairCatalog? attributePairs = null)
 {
     const ushort Rejection = 1;
     readonly Func<long, long> draw = random ?? Random.Shared.NextInt64;
@@ -76,6 +77,11 @@ internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCata
             !target.Core.IsStackable && required != 1 || results.IsDefaultOrEmpty)
             return Reject("target-condition", out rejection);
 
+        var selection = (attributePairs ?? IndependentAttributePairCatalog.RequiredOnly)
+            .Resolve(ticket.Core.ItemId, AttributePairEntryKind.LimitCube);
+        if (selection.Kind == AttributePairResolutionKind.RequiredUnavailable)
+            return Reject("selection-policy", out rejection);
+
         InventorySnapshot paid;
         var removeTarget = InventoryDeleteService.Plan(before, target.Position, target.Core.Value, required.Value);
         if (!removeTarget.Accepted)
@@ -92,18 +98,29 @@ internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCata
         long totalWeight;
         long roll;
         ResolvedResult selected;
+        byte[]? trace = null;
         try
         {
-            totalWeight = results.Aggregate(0L, (sum, row) => checked(sum + row.Rule.Weight));
-            roll = Next(totalWeight);
-            long remaining = roll;
-            selected = results.First(row =>
+            if (selection.Policy is { } policy)
             {
-                if (remaining < row.Rule.Weight)
-                    return true;
-                remaining -= row.Rule.Weight;
-                return false;
-            });
+                var sample = IndependentAttributePairSampler.Next(policy, Next);
+                trace = [sample.Ordinal];
+                roll = sample.Ordinal;
+                totalWeight = 121;
+                selected = results.Single(row => row.Rule.ItemId == sample.ItemId);
+            }
+            else
+            {
+                totalWeight = results.Aggregate(0L, (sum, row) => checked(sum + row.Rule.Weight));
+                roll = Next(totalWeight);
+                long remaining = roll;
+                selected = results.First(row =>
+                {
+                    if (remaining < row.Rule.Weight) return true;
+                    remaining -= row.Rule.Weight;
+                    return false;
+                });
+            }
         }
         catch (Exception error) when (error is InvalidDataException or InvalidOperationException or OverflowException)
         {
@@ -141,7 +158,11 @@ internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCata
 
         long? deadline = EarliestDeadline(before, paid, output);
         receipt = new(ticket.Core.ItemId, target.Core.ItemId, selected.Rule.ItemId,
-            checked((ushort)selected.Rule.Count), output.Position, roll, totalWeight);
+            checked((ushort)selected.Rule.Count), output.Position, roll, totalWeight)
+        {
+            SelectionTrace = trace,
+            SelectionSummary = trace is null ? null : IndependentAttributePairSampler.Describe(selection.Policy!, trace)
+        };
         return new(true, 0, new(before, after, "use_limit_cube",
             new InventoryCharacterPrecondition(character, deadline)));
 

@@ -8,21 +8,50 @@ namespace DfoServer.GameWorld.Items;
 
 internal sealed record EnchantmentDefinition(int BeadItemId, int CardItemId, byte Upgrade,
     ImmutableHashSet<(ItemKind Kind, byte Slot)> Targets, ImmutableHashSet<int> LimitedItems);
+internal sealed record EnchantmentEffect(string Tag, ImmutableArray<int> IntegerValues);
 
 // 宝珠与卡片共享当前PVF的STK目录；只解析实际使用的依赖，不扫描所有卡片。
 internal sealed class EnchantmentCatalog
 {
     readonly Func<string, string> read;
     readonly IReadOnlyDictionary<int, string> stackable;
+    readonly Func<string, PvfTokenDocument>? readDocument;
     readonly ConcurrentDictionary<int, Lazy<EnchantmentDefinition?>> definitions = new();
 
     public EnchantmentCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
-        : this(archive.ReadText, stackable) { }
+        : this(archive.ReadText, stackable, path => new(archive.ReadTokens(path), archive.ResolveString)) { }
 
-    internal EnchantmentCatalog(Func<string, string> read, IReadOnlyDictionary<int, string> stackable)
+    internal EnchantmentCatalog(Func<string, string> read, IReadOnlyDictionary<int, string> stackable,
+        Func<string, PvfTokenDocument>? readDocument = null)
     {
         this.read = read;
         this.stackable = stackable;
+        this.readDocument = readDocument;
+    }
+
+    // 仅供显式属性对族校验完整效果；普通Get及CMD272不附加本族规则。
+    public ImmutableArray<EnchantmentEffect> ReadEffects(int cardId, byte index)
+    {
+        if (readDocument is null || !stackable.TryGetValue(cardId, out string? path))
+            throw new InvalidDataException("属性对卡片缺少token读取器或路径");
+        var document = readDocument("stackable/" + path);
+        if (!document.Diagnostics.IsEmpty)
+            throw new InvalidDataException("属性对卡片块结构无效");
+        var tables = document.Sections.Where(row => row.Name == "enchant table").ToArray();
+        if (tables.Length != 1 || !tables[0].IsBlock || !tables[0].Values.IsEmpty ||
+            tables[0].Children.Any(row => row.Name != "enchant index" || !row.IsBlock ||
+                row.Values.Length != 1 || row.Values[0].Type != 0) ||
+            tables[0].Children.Select(row => row.Values[0].Value).Distinct().Count() != tables[0].Children.Length)
+            throw new InvalidDataException("属性对卡片效果表无效");
+        var entries = tables[0].Children.Where(row => row.Values[0].Value == index).ToArray();
+        if (entries.Length != 1 || entries[0].Children.IsEmpty)
+            throw new InvalidDataException("属性对卡片效果索引缺失或重复");
+        return entries[0].Children.Select(row =>
+        {
+            if (row.IsBlock || !row.Children.IsEmpty || row.Values.IsEmpty || row.Values.Any(token => token.Type != 0))
+                throw new InvalidDataException("属性对卡片效果必须保留完整整数向量");
+            return new EnchantmentEffect("[" + row.Name + "]", row.Values.Select(token => token.Value).ToImmutableArray());
+        }).ToImmutableArray();
     }
 
     public EnchantmentDefinition? Get(int itemId)

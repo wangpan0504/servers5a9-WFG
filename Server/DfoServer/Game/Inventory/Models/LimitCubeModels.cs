@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace DfoServer.Game.Inventory.Models;
 
 internal sealed record LimitCubeRequest(short TargetSlot, int TargetItemId, short TicketSlot)
@@ -7,4 +9,8 @@ internal sealed record LimitCubeRequest(short TargetSlot, int TargetItemId, shor
 }
 
 internal sealed record LimitCubeReceipt(int TicketItemId, int TargetItemId, int ResultItemId,
-    ushort ResultCount, InventorySlot ResultSlot, long Roll, long TotalWeight);
+    ushort ResultCount, InventorySlot ResultSlot, long Roll, long TotalWeight)
+{
+    public AttributePairSelectionSummary? SelectionSummary { get; init; }
+    [JsonIgnore] public byte[]? SelectionTrace { get; init; }
+}
