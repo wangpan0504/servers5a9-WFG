@@ -38,8 +38,13 @@ internal interface IChatDirectoryStore
 /// <see cref="ChatNotice"/>，由 Network 侧决定发 <c>0x172</c>（可点击）还是退化 <c>0x0C</c>。
 /// </para>
 /// </summary>
-internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery delivery)
+internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery delivery, DfoServer.Game.Social.ISocialStore? social = null)
 {
+    int Deliver(ChatOrigin sender, Func<ChatRecipient, bool> filter, ChatNotice notice)
+    {
+        var blocked = social?.BlockingCharacters(sender.CharacterId);
+        return delivery.DeliverAll(recipient => blocked?.Contains(recipient.CharacterId) != true && filter(recipient), notice);
+    }
     // 实机样本里两种喇叭 arg 分别是背包槽位，道具 id 由客户端资源固定为 36/37。
     public const int ServerMegaphoneItemId = 36;
     public const int ChannelMegaphoneItemId = 37;
@@ -122,7 +127,7 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
     ChatDispatch Normal(ChatSend request, ChatOrigin sender, byte[]? textBytes = null, byte[]? itemRecords = null)
     {
         var notice = NoticeOf(ChatKind.Normal, request, sender, textBytes, itemRecords);
-        int recipients = delivery.DeliverAll(recipient => recipient.Scene == sender.Scene, notice);
+        int recipients = Deliver(sender, recipient => recipient.Scene == sender.Scene, notice);
         return new(true, recipients, LayerFallback: recipients > 1);
     }
 
@@ -137,7 +142,7 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
             return ChatDispatch.Rejected("not-in-guild");
         var accounts = new HashSet<string>(directory.GuildMemberAccounts(guildId), StringComparer.Ordinal);
         var notice = NoticeOf(ChatKind.Guild, request, sender, textBytes, itemRecords);
-        int recipients = delivery.DeliverAll(recipient => recipient.GuildId == guildId && accounts.Contains(recipient.Account), notice);
+        int recipients = Deliver(sender, recipient => recipient.GuildId == guildId && accounts.Contains(recipient.Account), notice);
         return new(true, recipients);
     }
 
@@ -150,6 +155,7 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
         if (request.Arg is 0 or > ushort.MaxValue)
             return ChatDispatch.Rejected("target-range");
         ushort target = (ushort)request.Arg;
+        if (social?.IsBlocked(target, sender.CharacterId) == true) return ChatDispatch.Rejected("blacklisted");
         var notice = NoticeOf(ChatKind.Whisper, request, sender, null);
         string? account = directory.AccountOfCharacter(target);
         return account is not null && delivery.DeliverTo(account, recipient => recipient.CharacterId == target, notice)
@@ -165,8 +171,8 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
     {
         var notice = new ChatNotice(kind, 0, sender.ChannelNumber, Megaphone: new MegaphoneText(sender.Name, text));
         int recipients = kind == ChatKind.ServerMegaphone
-            ? delivery.DeliverAll(_ => true, notice)
-            : delivery.DeliverAll(recipient => recipient.Scene.Channel == sender.Scene.Channel, notice);
+            ? Deliver(sender, _ => true, notice)
+            : Deliver(sender, recipient => recipient.Scene.Channel == sender.Scene.Channel, notice);
         return new(true, recipients);
     }
 }

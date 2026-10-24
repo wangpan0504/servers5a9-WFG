@@ -425,7 +425,7 @@ internal static partial class FormalDungeonTcpTests
                 return packet;
             }
         }
-        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"black-diamond FormalTcp 0",out string clearBlackReply) &&
+        That(ExecuteOfflineGm(fixture,"black-diamond FormalTcp 0",out string clearBlackReply) &&
             clearBlackReply.StartsWith("OK "), "后续普通角色回归前只关闭黑钻，黄金牌、活动和回归资格保持独立");
         VerifyEntryRecoveryAndJobs(fixture, kills);
         VerifyOrdinaryEntry(fixture);

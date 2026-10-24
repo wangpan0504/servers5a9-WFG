@@ -71,7 +71,11 @@ internal static class ChatWire
 /// <paramref name="Layer"/> 是发送时客户端所在的层 id（不是角色 id）；<paramref name="Arg"/> 按类别解释：
 /// 悄悄话是目标角色 id，两种喇叭是主背包槽位，普通/公会为 0。
 /// </summary>
-internal readonly record struct ChatSend(byte Type, ushort Layer, uint Arg, uint TextLength, string Text);
+internal readonly record struct ChatSend(byte Type, ushort Layer, uint Arg, uint TextLength, string Text)
+{
+    public string? TargetName { get; init; }
+    public byte TargetServer { get; init; }
+}
 
 /// <summary>
 /// <c>CMD 0x01A8 ITEM_HYPERLINK_MESSAGE</c> 的解析结果（实测 179 字节，见 <c>Docs/协议/聊天.md</c> 第 7 节）：
@@ -108,6 +112,9 @@ internal sealed record ChatRecipient(string Account, ushort CharacterId, long? G
 /// </summary>
 internal sealed record MegaphoneText(string Speaker, string Text);
 
+/// <summary>按角色名投递的悄悄话或1vs1消息，接收方身份在发送前复验。</summary>
+internal sealed record NamedChatMessage(byte Mode, byte Status, string Name, byte Server, string Text, string Recipient);
+
 /// <summary>
 /// 一次聊天投递的领域描述，不含 opcode 与字节布局（Game 层不引用 Network，由 Network/Projection 翻译）：
 /// 普通/公会/悄悄话用 <see cref="Text"/> 生成 <c>NOTI 0x000C</c>（正文 = <c>[type][层 id][v=0][u32 字节数][CP936 文本]</c>）；
@@ -124,7 +131,11 @@ internal sealed record MegaphoneText(string Speaker, string Text);
 /// GM <c>notice</c> 是管理入口，由 Development 侧直接构造 <c>NOTI 0x06AD</c> 弹框，不经过本记录。
 /// </summary>
 internal sealed record ChatNotice(ChatKind Kind, ushort Layer, byte Channel, string Text = "",
-    MegaphoneText? Megaphone = null, byte[]? TextBytes = null, byte[]? ItemRecords = null, string Speaker = "");
+    MegaphoneText? Megaphone = null, byte[]? TextBytes = null, byte[]? ItemRecords = null, string Speaker = "")
+{
+    public NamedChatMessage? Named { get; init; }
+    public Func<bool>? Guard { get; init; }
+}
 
 /// <summary>
 /// 投递结果。<paramref name="Recipients"/> 是已交给各连接发送队列的会话数（不等于已写到 socket）；

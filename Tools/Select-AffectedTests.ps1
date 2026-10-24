@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 按改动路径选择需要运行的检查与 TCP 测试组：开发内循环只跑受影响部分，合并前用 -Full 执行全量。
 
@@ -73,6 +73,7 @@ $schemaGroups = @('database-schema','settings-storage','inventory-persistence','
 # 路径关键词到测试组；同时补充对应的资源定向组（这些组按需运行，不在默认全量 TCP 中）。
 $keywordGroups = [ordered]@{
     'Quest'      = 'quest-lifecycle','quest-extras','quest-chains','quest-chain-settlement','quest-metro','quest-auto-daily','quest-gold-mail','quest-question-state','quest-continuation','quest-core-rewards','quest-initialization','story-digest'
+    'Social|PlayerInteraction|PublicCharacter|NamedWhisper' = 'social','presence','chat','channel-entry'
     'Story'      = 'story-digest','story-cinematic','story-scenes','story-quest-entry','story-publication'
     'Dungeon|GriefTower' = 'formal-dungeon','dungeon-growth','grief-tower','dungeon-training','class-experience','dungeon-revive','dungeon-altars','dungeon-despair','hero-tomb-entry','dungeon-probe','dungeon-settlement','dungeon-entry-plan'
     'Booster'    = 'booster','booster-selection','booster-equipment','daily-retained-booster'

@@ -10,10 +10,11 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class CharacterHandler(CharacterCatalog characters, TownProjection projection, ServerLog log, GoldLimitCatalog goldLimits,
+internal sealed partial class CharacterHandler(CharacterCatalog characters, TownProjection projection, ServerLog log, GoldLimitCatalog goldLimits,
     SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null, AdventureProjection? adventure = null,
     ExpertJobScriptCatalog? expertJobs = null, AdventureWeeklyProjection? weekly = null,
-    AvatarPresetProjection? avatarPresets = null, AvatarPresetService? avatarPresetService = null) : IGameCommandModule
+    AvatarPresetProjection? avatarPresets = null, AvatarPresetService? avatarPresetService = null,
+    DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -66,6 +67,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         if (avatarPresets is not null) await avatarPresets.DeliverAsync(context);
         // 每周地下城固定在入城完成包之后、任务核对与同屏加入之前下发，包序稳定且不依赖其他投影结果。
         if (weekly is not null) await weekly.DeliverAsync(context, includeReset: true);
+        social?.Initialize(context);
         await projection.ReconcileQuestsAsync(context);
         projection.Join(context);
         return CommandResult.Handled;
@@ -158,7 +160,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
     async Task<CommandResult> RosterAsync(GameConnectionContext context, Packet request)
     {
         if (!CharacterRequests.IsRoster(request.Body))
-            return CommandResult.Unhandled;
+            return await OtherPlayerAsync(context, request);
         if (context.SelectionRosterPushed)
         {
             // 返回选角已主动发送名册；客户端仍会按原流程补发一次 C2S8，此帧只确认请求已消费。

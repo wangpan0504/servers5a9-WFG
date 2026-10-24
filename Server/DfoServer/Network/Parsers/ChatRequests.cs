@@ -65,6 +65,20 @@ internal static class ChatRequests
         if (textLength > (uint)(body.Length - HeaderLength))
             return false;
         send = new(type, layer, arg, textLength, ChatText.Encoding.GetString(body.Slice(HeaderLength, (int)textLength)));
+        if (type is 1 or 36)
+        {
+            int at = HeaderLength + (int)textLength;
+            if (body.Length < at + 5) return false;
+            int length = BinaryPrimitives.ReadInt32LittleEndian(body[at..]);
+            if (length is < 1 or > 12 || body.Length != at + 5 + length) return false;
+            try
+            {
+                string name = DfoServer.Game.Characters.CharacterName.Encoding.GetString(body.Slice(at + 4, length));
+                if (!DfoServer.Game.Characters.CharacterName.IsValid(name)) return false;
+                send = send with { TargetName = name, TargetServer = body[^1] };
+            }
+            catch (System.Text.DecoderFallbackException) { return false; }
+        }
         return true;
     }
 

@@ -30,6 +30,10 @@ internal static class ChannelEntryTcpTests
         using var alpha = Open(fixture, "entrya", gamePort: endpoints[11], channelNumber: 11);
         using var isolated = Open(fixture, "entryb", gamePort: endpoints[12], channelNumber: 12);
         int nativePort = NativePort(fixture);
+        var channelCatalog = DfoServer.Infrastructure.ServerRuntime.LoadChannels(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
+        That(alpha.LoginEndpoint[3] == channelCatalog.Entry(11).Type &&
+            isolated.LoginEndpoint[3] == channelCatalog.Entry(12).Type,
+            "LOGIN第3偏移安装实际入口频道类型，使客户端冒险团准入与频道目录一致");
         That(U32(alpha.LoginEndpoint, 13 + checked((int)U32(alpha.LoginEndpoint, 9))) == nativePort &&
             U32(isolated.LoginEndpoint, 13 + checked((int)U32(isolated.LoginEndpoint, 9))) == nativePort &&
             !endpoints.Values.Contains(nativePort) && U32(alpha.LoginEndpoint, 5) != 0 && U32(isolated.LoginEndpoint, 5) != 0,
@@ -42,6 +46,16 @@ internal static class ChannelEntryTcpTests
         alpha.Send(35, Move(633, 196)); alpha.Barrier(); isolated.Barrier();
         That(fixture.Query("SELECT id,name FROM characters ORDER BY id") is [[_, "EntryA"], [_, "EntryB"]],
             "不同频道城镇不互发入场和移动，但仍共用角色库及账号归属");
+        alpha.Send(10, Build(w => { w.Write(isolated.Id); w.Write((byte)15); w.Write(new byte[10]); }));
+        alpha.Barrier();
+        alpha.Send(8, Build(w => { w.Write(isolated.Id); w.Write((byte)3); }));
+        var remoteActor = alpha.ExpectOtherPlayerActor(isolated.Id, 12).Body;
+        var remoteInfo = alpha.Expect(0, 2).Body;
+        That(remoteActor[0] == 0 && remoteActor[4] == 12 && U16(remoteActor, 121) == isolated.Id &&
+            remoteInfo[0] == 3 && remoteInfo[4] == 12 && U16(remoteInfo, 14) == isolated.Id,
+            "跨频道资料使用目标频道缓存，右键peer请求不假装同频道目标");
+        alpha.Barrier();
+        isolated.Barrier();
         isolated.Send(3, [1]); isolated.Expect(1, 3, [1]); isolated.Closed();
         using var beta = Open(fixture, "entryb", gamePort: endpoints[11], channelNumber: 11);
         beta.Select(resumeTown: true, room: false);

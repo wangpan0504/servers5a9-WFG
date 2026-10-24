@@ -22,6 +22,20 @@ namespace DfoServer.Network.Builders;
 /// </summary>
 internal static class ChatPackets
 {
+    // 023B0210：type、结果、名字、服务器、正文；1对1聊天(type36)再读接收者名字。
+    public static byte[] NamedMessage(NamedChatMessage message)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(message.Mode);
+        writer.Write(message.Status);
+        PacketEncoding.WriteString(writer, message.Name);
+        writer.Write(message.Server);
+        PacketEncoding.WriteString(writer, message.Text);
+        if (message.Mode == 36) PacketEncoding.WriteString(writer, message.Recipient);
+        return stream.ToArray();
+    }
+
     /// <summary><c>0x000C</c> 正文头长度：<c>[u8 type][u16 层 id][u8 v][u32 字节长度]</c>。</summary>
     public const int HeaderLength = 8;
 

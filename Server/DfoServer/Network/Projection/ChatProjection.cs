@@ -22,7 +22,13 @@ internal static class ChatProjection
 {
     public static void Notice(GameConnectionContext context, ChatNotice notice)
     {
-        bool CanSend() => context.Session.Ready && context.Session.Selected is not null;
+        bool CanSend() => context.Session.Ready && context.Session.Selected is not null && (notice.Guard?.Invoke() ?? true);
+        if (notice.Named is { } named)
+        {
+            context.Sender.Post(0, (ushort)NotiPacketType.MESSAGE_OTHER_CHANNEL,
+                ChatPackets.NamedMessage(named), "chat_named_message", CanSend);
+            return;
+        }
         if (notice.Megaphone is { } text)
         {
             context.Sender.Post(0, (ushort)NotiPacketType.MEGAPHONE_MSG,

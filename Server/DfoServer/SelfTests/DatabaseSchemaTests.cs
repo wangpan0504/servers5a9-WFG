@@ -157,6 +157,7 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            PlayerInteractionPreviewUpgrade(root);
             ObjectKeyUpgrade(root);
             AuraCooldownUpgrade(root);
             ZeroExperienceUpgrade(root);

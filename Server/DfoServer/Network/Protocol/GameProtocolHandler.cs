@@ -24,7 +24,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     NativeChannel? native = null, DfoServer.GameWorld.Items.ItemCatalog? items = null,
     ExperienceBonusService? experienceBonuses = null,
     DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null, DfoServer.Game.ExpertJob.ExpertJobStoreBoard? expertStores = null,
-    TownPresence? presence = null, CharacterLevelProjection? levels = null) : IConnectionProtocol
+    TownPresence? presence = null, CharacterLevelProjection? levels = null,
+    DfoServer.Game.Social.SocialService? social = null) : IConnectionProtocol
 {
     public async Task RunAsync(ConnectionContext connection)
     {
@@ -80,6 +81,10 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.CLOSE_EXPERT_JOB_STORE,
                     ExpertJobPackets.CloseStoreNotice(id), "expert_job_store_invalidated");
         };
+        session.SocialNoticeArrived = view => SocialProjection.Notice(context, view);
+        session.SocialAccountDeleted = (name, guard) => sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_DELETE,
+            SocialPackets.Name(name), "account_friend_deleted", guard);
+        ushort socialCharacter = 0;
         NativeChannel.Registration? nativeRegistration = null;
         try
         {
@@ -107,7 +112,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             nativeRegistration = native?.Register(context);
             adventure?.Prepare(context);
             await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(connection.ServerAddress(options),
-                native?.Port ?? login.Channel.Port, nativeRegistration?.Token ?? 0), "endpoint");
+                native?.Port ?? login.Channel.Port, login.Channel.Entry.Type, nativeRegistration?.Token ?? 0), "endpoint");
             var roster = session.PrepareRoster();
             await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "roster",
                 () => session.CanPublishRoster(roster));
@@ -155,6 +160,12 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     continue;
                 if (result == CommandResult.CloseConnection)
                     return;
+                ushort currentSocial = session.Ready ? session.Selected?.Id ?? (ushort)0 : (ushort)0;
+                if (socialCharacter != currentSocial)
+                {
+                    if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account);
+                    socialCharacter = currentSocial;
+                }
                 // 提交后的自动刷新单独重试，不与已完成的命令一起重放。
                 var (refreshed, _) = await SqliteBusyRetry.TryExecuteAsync(async () =>
                 {
@@ -191,6 +202,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await altar.DisposeAsync();
             online.RemoveConnection(connection.Id, session);
             online.Remove(login.Owner.Account, session);
+            if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account);
             projection.Remove(context);
             context.Activity?.Reset();
             session.End();

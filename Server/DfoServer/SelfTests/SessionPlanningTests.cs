@@ -738,7 +738,8 @@ internal static class SessionPlanningTests
             Rows("SELECT * FROM shop_purchase_counts WHERE character_id=0 ORDER BY rowid");
 
         public long[] PrivateRows(ushort id) => Tables().Where(table => table.StartsWith("character_", StringComparison.Ordinal))
-            .Select(table => Convert.ToInt64(Scalar("SELECT count(*) FROM \"" + table + "\" WHERE character_id=" + id))).ToArray();
+            .Select(table => Convert.ToInt64(Scalar("SELECT count(*) FROM \"" + table + "\" WHERE " +
+                (table == "character_social_links" ? "owner_id=" + id + " OR target_id=" : "character_id=") + id))).ToArray();
 
         public void SeedDeletionGraph(ushort id)
         {
@@ -836,6 +837,8 @@ internal static class SessionPlanningTests
                 INSERT INTO character_collectbox_state VALUES({{id}},'planning',2);
                 INSERT INTO character_collectbox_slots VALUES({{id}},'planning',2,3,104);
                 INSERT INTO character_collectbox_expirations VALUES({{id}},'planning',2,2000000000);
+                INSERT INTO character_social_links(owner_id,target_id,kind,created,memo)
+                  SELECT {{id}},id,0,0,'' FROM characters WHERE id<>{{id}} ORDER BY id LIMIT 1;
                 """);
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
         }

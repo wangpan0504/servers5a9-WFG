@@ -195,6 +195,8 @@ internal static class SqliteMigrations
         // 预设按槽位存JSON，槽位是身份且允许空洞，不另建平行在线状态。
         new(86, "装扮预设容量与预设", AddAvatarPresetStateColumn),
         new(87, "副本地面对象及拾取账本按实例隔离", DungeonObjectKeySchema.Upgrade),
+        new(88, "玩家社交关系", SocialSchema.Upgrade),
+        new(89, "冒险团好友申请者分组与备注", SocialSchema.UpgradeRequests),
     ];
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
@@ -1634,8 +1636,9 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
-        // 仅精确匹配已知预览结构时补齐正式迁移，保留原冷却与资产。
+        // 两类预览库按互斥结构识别，不以同号版本替代已发布迁移。
         if (version is 78 or 79 && current >= 81 && IsAuraCooldownPreview(db, tx, version)) version = 77;
+        if (version is >= 78 and <= 80 && current >= 89 && IsPlayerInteractionPreview(db, tx, version)) version = 77;
         // #233 验收构建曾把强袭表作为v47发布：该库v47有强袭表却缺master的角色栏扩展，视为v46，重跑v47起（v50强袭建表幂等）。
         if (version == 47 && current >= 50 && IsAcceptanceAssaultV47(db, tx)) version = 46;
         bool existingFatigue = version == 14 && HasPublishedFatigue(db, tx);
@@ -1683,6 +1686,48 @@ internal static class SqliteMigrations
         Execute(db, tx, $"PRAGMA user_version={CurrentVersion}");
     }
 
+    static bool IsPlayerInteractionPreview(SqliteConnection db, SqliteTransaction tx, long version)
+    {
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        string? Table(string name)
+        {
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+            query.Parameters.Clear(); query.Parameters.AddWithValue("$table", name);
+            return query.ExecuteScalar() as string;
+        }
+        if (Table("character_social_links") is null) return false;
+        string? settlement = Table(SettlementProficiencySchema.Settlement);
+        // 正式v78已经放宽经验下界；该结构不能冒充旧玩家交互库。
+        if (settlement is null || NormalizeTable(settlement, SettlementProficiencySchema.Settlement) !=
+            NormalizeTable(SettlementProficiencySchema.SettlementSql, SettlementProficiencySchema.Settlement)) return false;
+        // 社交批次不能解释助战回执；保持v80预览库原样，交由完整交互版本升级。
+        if (version == 80) throw new InvalidDataException("v80玩家交互预览库须使用完整交互版本升级");
+        foreach (var (table, currentSql) in SocialSchema.Tables.Append(("player_trade_receipts", LegacyPlayerTradeSql)))
+        {
+            string expected = table == "account_social_requests" && version == 78 ? SocialSchema.LegacyRequestSql : currentSql;
+            if (Table(table) is not { } actual || NormalizeTable(actual, table) != NormalizeTable(expected, table))
+                throw new InvalidDataException("玩家交互旧库存在未知结构：" + table);
+        }
+        if (Table("character_quest_daily_clear") is not null || Table("character_expert_job") is not { } expert ||
+            expert.Contains("learned_recipes", StringComparison.Ordinal))
+            throw new InvalidDataException("玩家交互旧库与正式迁移结构混用");
+        const string lifecycle = "character_quest_lifecycle_receipts";
+        string expectedLifecycle = QuestLifecycleSchema;
+        if (Table(lifecycle) is not { } actualLifecycle || NormalizeTable(actualLifecycle, lifecycle) != NormalizeTable(expectedLifecycle, lifecycle))
+            throw new InvalidDataException("玩家交互旧库任务回执结构不匹配");
+        return true;
+    }
+
+    // 仅用于识别旧预览库并原样保留历史；不创建或写入交易表。
+    const string LegacyPlayerTradeSql = """
+        CREATE TABLE player_trade_receipts(
+          trade_id TEXT NOT NULL PRIMARY KEY CHECK(length(trade_id)=32),
+          left_id INTEGER NOT NULL,right_id INTEGER NOT NULL CHECK(left_id<>right_id),
+          left_revision INTEGER NOT NULL,right_revision INTEGER NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) STRICT;
+        """;
+
     static bool IsAuraCooldownPreview(SqliteConnection db, SqliteTransaction tx, long version)
     {
         using var query = db.CreateCommand(); query.Transaction = tx;
@@ -1725,6 +1770,14 @@ internal static class SqliteMigrations
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
         GriefTowerSchema.Validate(db, tx);
         GriefTowerSchema.ValidateClear(db, tx);
+        foreach (var (table, expected) in SocialSchema.Tables)
+        {
+            using var query = db.CreateCommand(); query.Transaction = tx;
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+            query.Parameters.AddWithValue("$table", table);
+            if (query.ExecuteScalar() is not string actual || NormalizeTable(actual, table) != NormalizeTable(expected, table))
+                throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
+        }
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
@@ -1764,6 +1817,9 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT owner_id,target_id,kind,created,memo FROM character_social_links LIMIT 0",
+        "SELECT owner_account,target_account,created,memo,group_id FROM account_social_links LIMIT 0",
+        "SELECT source_account,target_account,message,created,memo,group_id FROM account_social_requests LIMIT 0",
         "SELECT character_id,account,source_acceptance_id,source_quest_id,source_revision,target_level,rule_version,status,proof FROM character_quest_stage_witnesses LIMIT 0",
         "SELECT character_id,account,source_acceptance_id,trigger_acceptance_id,target_level,before_experience,after_experience,amount,revision FROM character_quest_stage_claims LIMIT 0",
         "SELECT character_id,account,ground_key,instance_id,task_attempt,epoch,picked_core,gold_amount,destination_slot,item_uid,after_core,currency_kind,amount,after_balance,account_revision,revision FROM character_dungeon_passive_pickups LIMIT 0",

@@ -64,11 +64,12 @@ internal static class ChannelPackets
         return output.ToArray();
     }
 
-    public static byte[] Endpoint(string address, int port, uint association = 0)
+    public static byte[] Endpoint(string address, int port, int channelType, uint association = 0)
     {
         using var s = new MemoryStream();
         using var w = new BinaryWriter(s);
-        w.Write(new byte[] { 1, 1, 1, 0, 1 });
+        // 0233EBDA读取的频道模式由028FA920安装；社交冒险团页依此检查频道准入。
+        w.Write(new byte[] { 1, 1, 1, checked((byte)channelType), 1 });
         w.Write(association);
         byte[] ip = Encoding.ASCII.GetBytes(address);
         w.Write(ip.Length);

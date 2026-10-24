@@ -7,6 +7,23 @@ namespace DfoServer.Network.Projection;
 
 internal sealed class AdventureProjection(AdventureCatalog catalog)
 {
+    public async Task OtherInformationAsync(GameConnectionContext context, GameSession other, ushort target)
+    {
+        long epoch = context.Session.SelectionEpoch;
+        var captured = other.PublicAdventure(target, catalog);
+        if (captured is not { } identity) return;
+        var snapshot = identity.Snapshot;
+        // 他人资料只公开展示信息，不把商店余额、购买记录和可领取胶囊发给查询者。
+        snapshot = snapshot with { State = snapshot.State with
+        {
+            Points = [0, 0, 0, 0, 0], CapsuleExperience = 0, BraveExperience = 0,
+            Purchases = System.Collections.Immutable.ImmutableDictionary<int, uint>.Empty, Expeditions = []
+        } };
+        bool Guard() => context.Session.Ready && context.Session.SelectionEpoch == epoch && identity.IsCurrent();
+        var body = AdventurePackets.Information(target, snapshot, catalog, snapshot.Representatives(catalog), ack: true);
+        await context.Reply(CmdPacketType.REQUEST_ADVENTURE_INFO, body, "other_adventure_information", Guard);
+    }
+
     public void Prepare(GameConnectionContext context) => context.Session.InitializeAdventure(catalog, DateTimeOffset.UtcNow);
     public async Task InformationAsync(GameConnectionContext context, bool ack = false, bool initialization = false)
     {

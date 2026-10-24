@@ -1,0 +1,30 @@
+using DfoServer.Game.Social;
+using DfoServer.Network.Builders;
+using DfoServer.Network.Protocol;
+
+namespace DfoServer.Network.Projection;
+
+internal sealed class SocialProjection(SocialService service)
+{
+    public void Initialize(GameConnectionContext context)
+    {
+        // 12B6830会创建并加载隐藏好友面板，1702填充分组；否则右键5DB窗口读取空下拉项。
+        long epoch = context.Session.SelectionEpoch;
+        context.Sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_GROUP_INFO, SocialPackets.AccountGroups(),
+            "account_friend_groups", () => context.Session.Ready && context.Session.SelectionEpoch == epoch);
+        service.Refresh(context.Owner.Account);
+        if (context.Session.Selected is { } c) service.PresenceChanged(c.Id, context.Owner.Account);
+    }
+    public static void Notice(GameConnectionContext context, SocialView view)
+    {
+        context.Sender.Post(0, (ushort)NotiPacketType.UNITED_SERVER_FRIEND_INFO, SocialPackets.CharacterFriends(view.Characters),
+            "character_friends", view.IsCurrent);
+        foreach (var row in view.Characters)
+            context.Sender.Post(0, (ushort)NotiPacketType.INOUT_UNITED_SERVER_FRIEND, SocialPackets.CharacterPresence(row),
+                "character_friend_presence", view.IsCurrent);
+        context.Sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_INFO, SocialPackets.AccountFriends(view.Accounts),
+            "account_friends", view.IsCurrent);
+        context.Sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_REQUEST_INFO, SocialPackets.Requests(view.Requests),
+            "account_friend_requests", view.IsCurrent);
+    }
+}

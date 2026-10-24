@@ -71,6 +71,8 @@ internal static class ServerRuntime
         var gameCache = new GameCache();
         var owners = new AccountOwners(gameCache);
         var online = new OnlineSessionDirectory(gameCache);
+        var social = new Game.Social.SocialService(repository, online);
+        var socialProjection = new SocialProjection(social);
         // GM notice 的公告出口：与 GM 聊天帧注入共用在线连接目录，帧内编码由 ServerNoticePackets 负责。
         var noticeSender = new GmNoticeSender(online);
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
@@ -293,8 +295,10 @@ internal static class ServerRuntime
             new KeepaliveHandler(log),
             new SoloPartyHandler(log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
-                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService),
-            new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock),
+                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection),
+            new SocialHandler(repository, social, online, log),
+            new PlayerInteractionHandler(online),
+            new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),
                 adventureProjection, inventoryProjection, projection, clock),
@@ -410,7 +414,8 @@ internal static class ServerRuntime
             // 聊天：0x0011 入站按 CP936 解析；普通/公会/悄悄话投 0x0C（正文带 CP936 文本，客户端按长度读取），
             // 两种喇叭投已实测可见的 0x76 喇叭页签（见 Docs/模块/聊天.md）。
             // 成员/目标查询走只读存储合同（repository），在线定位与投递走 OnlineSessionDirectory，不另建在线状态。
-            new ChatHandler(new Game.Chat.ChatService(repository, new Game.Chat.ChatDelivery(online)), inventoryProjection, log)
+            new ChatHandler(new Game.Chat.ChatService(repository, new Game.Chat.ChatDelivery(online), repository), inventoryProjection, log,
+                new Game.Chat.NamedWhisperService(online, repository))
         ];
         foreach (var module in modules)
             module.Register(commands);
@@ -420,7 +425,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,levelProjection);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,levelProjection,social);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;
