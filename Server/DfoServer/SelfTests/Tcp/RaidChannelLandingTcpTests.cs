@@ -55,7 +55,7 @@ internal static class RaidChannelLandingTcpTests
         {
             using var peer = Open(fixture, gamePort: endpoints[channel], channelNumber: channel);
             peer.ExpectedOpenEvents = [282, 2449, 414, 181];
-            peer.Select(character.Slot, prepared: true, room: channel == 19);
+            peer.Select(character.Slot, prepared: true, room: channel != 19);
             peer.Barrier();
             That(peer.EventInfoPayload.Length == 68 + 15 * 4, $"频道 {channel} EVENT_INFO 含 2037 + 卢克282/超时空2449/普雷414/安徒恩181");
             That(peer.CompletedQuestHistory.Length > 0, $"频道 {channel} 下发已完成任务表");
