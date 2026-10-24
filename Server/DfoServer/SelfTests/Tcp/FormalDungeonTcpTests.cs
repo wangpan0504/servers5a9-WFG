@@ -272,7 +272,7 @@ internal static partial class FormalDungeonTcpTests
             That(peer.Expect(0, 24).Body[11] == 3, "正式副本结果页回城保留转职特效显示位");
             That(QuestLifecycleTcpTests.List(peer.Expect(0, 21).Body, projectedLevel).Contains(3145),
                 "结果页72回城在绑定场景后刷新当前任务，未领奖的任务仍保留");
-            peer.Barrier();
+            peer.Expect(0,356); peer.Barrier();
             That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == assetsBeforeClear &&
                 Experience(fixture, peer.Id) == experience, "免费翻牌展示及回城保留已提交资产，不再发物品或经验");
             var fatigueBeforeBlack = fixture.Query("SELECT f.used,f.maximum,f.remaining,c.revision FROM character_fatigue f JOIN characters c ON c.id=f.character_id WHERE c.id=$p0",peer.Id).Single();
@@ -647,8 +647,9 @@ internal static partial class FormalDungeonTcpTests
         {
             That(QuestLifecycleTcpTests.List(peer.Expect(0, 21).Body, level).Contains(3145) != completedMainline,
                 "副本和结算升级后按等级及实际完成位刷新任务，不省略通知或重显已完成任务");
-            if (completedMainline)
-                That(peer.Expect(0,356).Body[4+3145] == 1, "副本升级任务列表刷新后保留已完成主线历史");
+            var history = peer.Expect(0,356).Body;
+            That(history[4+3145] == (completedMainline ? 1 : 0) && history[4+13700] == 1,
+                "副本升级任务列表刷新后保留实际主线历史及地图显示位");
         }
         return skills;
     }
@@ -764,8 +765,8 @@ internal static partial class FormalDungeonTcpTests
             peer.Select(slot, prepared: true);
             var history = peer.CompletedQuestHistory;
             That(history.Length == 30004 && U32(history) == 30000 &&
-                Enumerable.Range(0, 30000).All(id => history[4 + id] == (completed.Contains(id) ? 1 : 0)),
-                "GM转职后选角严格恢复持久完成历史，逐项核对全部30000位");
+                Enumerable.Range(0, 30000).All(id => history[4 + id] == (id == 13700 || completed.Contains(id) ? 1 : 0)),
+                "GM转职后选角逐项恢复真实历史及月轮山显示位，严格核对全部30000位");
             EntryTown(peer);
             Enter(peer);
             Load(peer);

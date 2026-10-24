@@ -274,6 +274,11 @@ internal static class TownPackets
             body[4+id] = checked((byte)(answer+1));
         }
 
+        // S5A9 的 shonan.mm 地图30仍引用已无任务定义的13700。028CBE70要求状态3，
+        // 否则028D7D12/028D8B76同时跳过图标、等级及悬浮；356在查定义前安装完成位。
+        // 真实记录及回答校验后才补显示标记，不写存档、不授予奖励或入场资格。
+        if (body[4 + 13700] == 0)
+            body[4 + 13700] = 1;
         return body;
     }
 

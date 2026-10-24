@@ -79,12 +79,10 @@ internal sealed class QuestLifecycleHandler(QuestCatalog quests, ItemCatalog ite
         if (action == QuestLifecycleAction.Giveup && plan.Expected.ActiveMainQuests.Length - plan.ActiveAfter.Length > 1 ||
             plan.ActiveAfter.Any(row => plan.Expected.ActiveMainQuests.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "quest_giveup_children", Guard);
-        bool historyChanged = !plan.Expected.CompletedQuests.SequenceEqual(plan.CompletedAfter) ||
-            !plan.Expected.AccountCompletedQuests.SequenceEqual(plan.AccountCompletedAfter);
         if (projection is not null)
             await projection.RefreshAsync(context, receipt.Character, Guard, restoreCompleted: false);
-        if (historyChanged || receipt.Character.CompletedQuests.Length != 0 || receipt.Character.AccountCompletedQuests.Length != 0)
-            await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(receipt.Character), "quest_lifecycle_history", Guard);
+        // 放弃父子任务产生空574时同样会清客户端完成集合，空存档也须恢复显示标记。
+        await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(receipt.Character), "quest_lifecycle_history", Guard);
         return CommandResult.Handled;
     }
 }

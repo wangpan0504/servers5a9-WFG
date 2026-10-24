@@ -55,7 +55,7 @@ internal static partial class ConsumableUseTcpTests
             peer.Send(40,[0x74,0,4,1,0,0]);
             peer.Expect(0,32,[(byte)peer.Id,(byte)(peer.Id>>8),0,0]); peer.Barrier();
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
-            peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
+            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             That(fixture.Query("SELECT stamina_until FROM characters WHERE id=$p0",peer.Id) is [[0L]],
                 "实际死亡回城后有效防虚弱药剂立即恢复，第二次死亡不会重复复活");
             FormalDungeonTcpTests.Enter(peer); FormalDungeonTcpTests.Load(peer);
@@ -70,7 +70,7 @@ internal static partial class ConsumableUseTcpTests
             peer.Send(40,[0x74,0,4,1,0,0]);
             peer.Expect(0,32,[(byte)peer.Id,(byte)(peer.Id>>8),0,0]); peer.Barrier();
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
-            peer.Expect(0,24); peer.Expect(0,21); peer.Barrier();
+            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             That(Convert.ToInt64(fixture.Query("SELECT revive_coins FROM characters WHERE id=$p0",peer.Id)[0][0]) == coins,
                 "祝福恰到期后死亡回到普通流程，不误用过期药效或扣复活币");
         }

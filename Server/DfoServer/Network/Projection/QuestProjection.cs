@@ -47,8 +47,7 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
     public async Task InitializeAsync(GameConnectionContext context, Character character)
     {
         await context.Notify(NotiPacketType.ACCEPTABLE_QUEST_LIST, Prepare(character), "quest_list_initialize");
-        if (character.CompletedQuests.Length != 0 || character.AccountCompletedQuests.Length != 0)
-            await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character), "quest_history_initialize");
+        await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character), "quest_history_initialize");
     }
 
     public async Task RefreshAsync(GameConnectionContext context, Character character, Func<bool> canSend, bool restoreCompleted = true)
@@ -58,7 +57,7 @@ internal sealed class QuestProjection(QuestCatalog quests, QuestRewardParameterC
         byte[] body = Prepare(character);
         await context.Notify(NotiPacketType.ACCEPTABLE_QUEST_LIST, body, "quest_list_refresh", canSend);
         // 21会重建任务界面列表；先保留场景所需的完成位，再在列表刷新后恢复完成历史。
-        if (restoreCompleted && (character.CompletedQuests.Length != 0 || character.AccountCompletedQuests.Length != 0))
+        if (restoreCompleted)
             await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character), "quest_history_refresh", canSend);
     }
 

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text.RegularExpressions;
+using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
 using PvfLib;
@@ -28,6 +29,32 @@ internal static class WorldMapHoverTests
             });
         That(WorldMapHoverDungeons.DungeonIds(synthetic).SequenceEqual([8523]),
             "合成目录只收集魔界三块地图的地下城编号，不含哈林无条件入口");
+        var character = new Character(1, 0, "地图标记", 0, new(38, 1, 450, 234), null);
+        byte[] history = new byte[30004];
+        BinaryPrimitives.WriteUInt32LittleEndian(history, 30000);
+        history[4 + 13700] = 1;
+        Bytes(TownPackets.CompletedQuests(character), history, "空历史只增加月轮山显示标记，不解锁其他节点");
+        var progressed = character with
+        {
+            CompletedQuests = [3616, 3622], AccountCompletedQuests = [100],
+            QuestAnswers = character.QuestAnswers.Add(3616, 2),
+            AccountQuestAnswers = character.AccountQuestAnswers.Add(100, 1)
+        };
+        history[4 + 3616] = 3;
+        history[4 + 3622] = 1;
+        history[4 + 100] = 2;
+        Bytes(TownPackets.CompletedQuests(progressed), history, "显示标记保留真实角色/账号完成记录及回答+1");
+        That(character.CompletedQuests.Length == 0 && character.AccountCompletedQuests.Length == 0 &&
+            progressed.CompletedQuests.SequenceEqual([3616, 3622]) && progressed.AccountCompletedQuests.SequenceEqual([100]),
+            "显示投影不修改任何角色或账号完成集合");
+        Reject<InvalidDataException>(() => TownPackets.CompletedQuests(character with
+        {
+            QuestAnswers = character.QuestAnswers.Add(13700, 1)
+        }), "显示标记不能让缺少真实完成记录的回答通过校验");
+        That(TownPackets.CompletedQuests(character with
+        {
+            CompletedQuests = [13700], QuestAnswers = character.QuestAnswers.Add(13700, 4)
+        })[4 + 13700] == 5, "兼容标记不覆盖已有真实回答");
         Console.WriteLine($"PASS {Count - checks} world-map hover permission layout assertions");
     }
 
@@ -37,6 +64,19 @@ internal static class WorldMapHoverTests
         var worlds = List(pvf.ReadText("worldmap/worldmap.lst"));
         var dungeonList = List(pvf.ReadText("dungeon/dungeon.lst"));
         var dungeonIds = dungeonList.Keys.ToHashSet();
+        var questIds = List(pvf.ReadText("n_quest/quest.lst"));
+        string shonan = pvf.ReadText("region/minimap/shonan.mm");
+        foreach (var (mapId, questId) in new[] { (16, 3616), (17, 3622), (30, 13700) })
+        {
+            string node = Regex.Matches(shonan, @"\[world\](.*?)\[/world\]", RegexOptions.Singleline)
+                .Select(match => match.Groups[1].Value)
+                .Single(block => Number(block, "index", -1) == mapId);
+            That(Number(Block(node, "grid map"), "quest", -1) == questId &&
+                questIds.ContainsKey(questId) == (mapId != 30),
+                "素喃节点任务绑定匹配构建，只有月轮山引用缺失定义 " + mapId);
+        }
+        That(towns.Areas[(18, 0)].DungeonWorldMap == 30 && !towns.AccessQuestIds.Contains(13700),
+            "月轮山已注册且13700不是服务端入场前置，只补客户端显示");
         string mm = pvf.ReadText("region/minimap/ashy_graveyard.mm");
         var mmWorlds = Regex.Matches(mm, @"\[world\](.*?)\[/world\]",
             RegexOptions.Singleline | RegexOptions.IgnoreCase)
