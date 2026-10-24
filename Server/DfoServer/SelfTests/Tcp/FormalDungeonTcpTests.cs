@@ -784,11 +784,11 @@ internal static partial class FormalDungeonTcpTests
     {
         string reply = "";
         bool delivered = false;
-        // 客户端Dispose不等于服务端已释放owner；退出也可能发生在GM锁外规划期间，只重试提交前的明确拒绝。
+        // 客户端Dispose不等于服务端已释放owner；仅重试世代或锁外规划快照校验在提交前的明确拒绝。
         bool settled = SpinWait.SpinUntil(() =>
         {
             delivered = DevelopmentGmClient.TryExecute(fixture.Options.GmPort, command, out reply);
-            return !delivered || reply is not ("ERR 账号正在使用，请重试" or "ERR 在线角色快照已变化，请重试");
+            return !delivered || reply is not ("ERR 账号正在使用，请重试" or "ERR 账号世代已变化，请重试" or "ERR 在线角色快照已变化，请重试");
         }, TimeSpan.FromSeconds(2));
         response = reply;
         return settled && delivered;
@@ -1502,6 +1502,21 @@ internal static partial class FormalDungeonTcpTests
             }
             return parents;
         }
+    }
+
+    // 亡者峡谷共用世界地图同时下发悲叹状态，即使随后选择的是祭坛或绝望之塔。
+    // 精确消费固定包序及新角色悲叹首层，不全局忽略1303，也不放宽普通选图合同。
+    static void SelectTowerMap(TcpPeer peer,ushort despairLayer=0,ushort griefLayer=1)
+    {
+        peer.Send(15,new byte[4]);
+        peer.Expect(1,15,[1]);
+        peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]);
+        peer.Expect(0,1536);
+        peer.Expect(0,1303,[0x34,0]);
+        byte[] expected=new byte[42];
+        BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(20),despairLayer);
+        BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(39),griefLayer);
+        peer.Expect(0,27,expected);
     }
 
     // 亡者峡谷世界地图同时含悲叹之塔入口：选图空列表末尾u16带当前悲叹楼层，且前面必须先发0x34通关状态。

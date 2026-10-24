@@ -226,7 +226,8 @@ internal static class ServerRuntime
                 hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.WeaponList, itemResources.Items.Get),
                 hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.TayberrsList, itemResources.Items.Get),
                 hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.CosmoList, itemResources.Items.Get),
-                epicRules, cosmoRewards);
+                epicRules, cosmoRewards,
+                hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.SuperList, itemResources.Items.Get));
             var materialDrops = new HarlemMaterialDropPolicy(materialRules, harlemDungeons, itemResources.Items.Get, harlemEpics);
             string? configuredBonuses = Environment.GetEnvironmentVariable("DFO_HARLEM_ABYSS_BONUS_RULES");
             var bonusRules = HarlemAbyssBonusRules.Parse(configuredBonuses ?? "{}");
@@ -259,7 +260,7 @@ internal static class ServerRuntime
                 EpicBranches = epicRules, EpicBranchesConfigured = configuredEpics is not null,
                 AbyssBonusRule = HarlemAbyssBonusDropPolicy.Rule, AbyssBonusRules = bonusRules, AbyssBonusConfigured = configuredBonuses is not null,
                 WeaponCandidates = harlemEpics.Weapons!.Entries.Length, TayberrsCandidates = harlemEpics.Tayberrs!.Entries.Length,
-                CosmoCandidates = harlemEpics.Cosmo!.Entries.Length, CosmoRewardRolls = cosmoRewards.RewardRolls,
+                SuperCandidates = harlemEpics.Super!.Entries.Length, CosmoCandidates = harlemEpics.Cosmo!.Entries.Length, CosmoRewardRolls = cosmoRewards.RewardRolls,
                 NormalEpicCandidates = harlemEpics.Normal.Entries.Length, LegendEpicCandidates = harlemEpics.Normal.Entries.Length,
                 specialDrops.Compatibility });
             var crackRewards = new CrackDimensionRewardServices(

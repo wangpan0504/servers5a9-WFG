@@ -55,8 +55,9 @@ internal sealed class QuestQuickClearPlan
             .Except(expected.AccountCompletedQuests).ToImmutableArray();
         AccountCompletedAfter = expected.AccountCompletedQuests.Concat(SyncedQuestIds).Distinct().Order().ToImmutableArray();
         AccountAnswersAfter = expected.AccountQuestAnswers;
-        RemovedActive = expected.ActiveMainQuests.Where(row => scope.Contains(row.QuestId)).ToImmutableArray();
-        var remaining = QuestRelationProgress.Refresh(expected.ActiveMainQuests.Where(row => !scope.Contains(row.QuestId)).ToArray(),
+        var removal = RemovalScope(expected,scope,quests);
+        RemovedActive = expected.ActiveMainQuests.Where(row => removal.Contains(row.QuestId)).ToImmutableArray();
+        var remaining = QuestRelationProgress.Refresh(expected.ActiveMainQuests.Where(row => !removal.Contains(row.QuestId)).ToArray(),
             CompletedAfter.Concat(AccountCompletedAfter).ToArray(),quests);
         ActiveAfter = QuestStateProgress.Refresh(remaining,expected with
         {
@@ -89,8 +90,9 @@ internal sealed class QuestQuickClearPlan
     QuestQuickClearPlan(Character expected, Guid operationId, int cutoff, ImmutableArray<StoryQuest> scope,
         ImmutableDictionary<int,byte> answers, ImmutableArray<int> questions, QuestCatalog quests,QuestTicketSource? ticket = null,
         byte? equipmentSlots = null,byte? profession = null,CharacterLearningState? learning = null,
-        LevelUpTicketSource? levelUpTicket = null)
+        LevelUpTicketSource? levelUpTicket = null,bool orphanRepair = false)
     {
+        IsOrphanRepair = orphanRepair;
         Expected = expected; OperationId = operationId; IsManual = ticket is null && levelUpTicket is null;
         Ticket = ticket; LevelUpTicket = levelUpTicket; CutoffLevel = cutoff;
         Inventory=ticket?.Inventory ?? levelUpTicket?.Inventory ?? new(expected.Inventory,expected.Inventory,"quest_skip");
@@ -107,8 +109,9 @@ internal sealed class QuestQuickClearPlan
             .Except(expected.AccountCompletedQuests).ToImmutableArray();
         AccountCompletedAfter = expected.AccountCompletedQuests.Concat(SyncedQuestIds).Distinct().Order().ToImmutableArray();
         AccountAnswersAfter = expected.AccountQuestAnswers;
-        RemovedActive = expected.ActiveMainQuests.Where(row => ScopeQuestIds.Contains(row.QuestId)).ToImmutableArray();
-        var retained = expected.ActiveMainQuests.Where(row => !ScopeQuestIds.Contains(row.QuestId)).ToArray();
+        var removal = RemovalScope(expected,ScopeQuestIds.ToHashSet(),quests);
+        RemovedActive = expected.ActiveMainQuests.Where(row => removal.Contains(row.QuestId)).ToImmutableArray();
+        var retained = expected.ActiveMainQuests.Where(row => !removal.Contains(row.QuestId)).ToArray();
         if (ticket is not null) retained = QuestInventoryProgress.Refresh(retained,ticket.Inventory.After,quests,ticket.UtcSeconds).ToArray();
         if (levelUpTicket is not null) retained = QuestInventoryProgress.Refresh(retained,Inventory.After,quests,levelUpTicket.UtcSeconds).ToArray();
         var remaining = QuestRelationProgress.Refresh(retained,
@@ -120,7 +123,7 @@ internal sealed class QuestQuickClearPlan
         },quests);
         Snapshot = JsonSerializer.Serialize(new
         {
-            OperationId, Kind = ticket is null ? "Manual" : "Ticket", CutoffLevel, ScopeQuestIds,
+            OperationId, Kind = orphanRepair ? "OrphanCleanup" : ticket is null ? "Manual" : "Ticket", CutoffLevel, ScopeQuestIds,
             Answers = answers.OrderBy(row => row.Key).ToArray(),
             BeforeCharacter = new
             {
@@ -165,6 +168,7 @@ internal sealed class QuestQuickClearPlan
     public StoryQuest MarkerDefinition => marker ?? throw new InvalidOperationException("手册或任务券没有单一旅程标记");
     public int MarkerQuestId => MarkerDefinition.Id;
     public bool IsManual { get; }
+    public bool IsOrphanRepair { get; }
     public QuestTicketSource? Ticket { get; }
     public LevelUpTicketSource? LevelUpTicket { get; }
     public byte TargetLevel => LevelUpTicket?.Growth.TargetLevel ?? Expected.Level;
@@ -172,6 +176,36 @@ internal sealed class QuestQuickClearPlan
     public bool IsTicket => Ticket is not null;
     public bool IsPreparedSkip => IsManual || IsTicket || IsLevelUpTicket;
     public string OperationKind => IsTicket || IsLevelUpTicket ? "Ticket" : IsManual ? "Manual" : "QuickClear";
+    // 清理范围与完成/奖励范围分开：合法父链已结束的活动子槽不能继续弹出，也不能借修复补领奖。
+    internal static HashSet<int> RemovalScope(Character expected,IReadOnlySet<int> scope,QuestCatalog? quests)
+    {
+        var removal=scope.ToHashSet();
+        if(quests is null) return removal;
+        var done=expected.CompletedQuests.ToHashSet();
+        var active=expected.ActiveMainQuests.Select(row=>(int)row.QuestId).ToHashSet();
+        foreach(var row in expected.ActiveMainQuests)
+        {
+            if(row.AcceptanceId==Guid.Empty || !quests.TryGet(row.QuestId,out var child) || child.Grade!="[sub]" ||
+                child.MainQuest is not { } parentId || QuestRelationProgress.ZeroRewardChild(child) || !child.Attributes.Contains("not give exp quest") ||
+                !quests.TryGet(parentId,out var parent) || parent.Grade!="[epic]" || !QuestRelationProgress.SequentialParent(parent,quests) ||
+                !parent.IntData.Contains(child.Id) || !scope.Contains(parentId) && (!done.Contains(parentId) || active.Contains(parentId)) ||
+                child.Definition is not {AccountQuest:false,JobChange:0,SelectRewards.Length:0,AcceptanceRewards.Length:0,RequiredAnswers.Length:0} definition ||
+                definition.Has("casecade clear") || QuestCycle.Daily(child) || QuestCycle.Repeat(child) ||
+                child.DeclaredGoldMultiple is not (null or 0) || child.Condition=="[question]" || child.RewardType is not (null or "[item]") ||
+                !QuestCoverage.HasOrdinaryDeclarations(child)) continue;
+            removal.Add(child.Id);
+        }
+        return removal;
+    }
+
+    internal static bool TryCreateOrphanRepair(Character expected,QuestCatalog quests,out QuestQuickClearPlan? plan)
+    {
+        plan=null;
+        if(expected.Id==0 || expected.Level is <1 or >95 || RemovalScope(expected,new HashSet<int>(),quests).Count==0) return false;
+        plan=new(expected,Guid.NewGuid(),ManualCutoff(expected.Level),[],ImmutableDictionary<int,byte>.Empty,[],quests,orphanRepair:true);
+        return true;
+    }
+
     public Guid OperationId { get; }
     public int? ParentKey => unit?.ParentKey;
     public int? QuestionQuestId => question?.Id;

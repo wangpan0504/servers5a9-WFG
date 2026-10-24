@@ -372,6 +372,33 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(pcroom + 1 < body.Length && body[pcroom] == (pcRoom ? 1 : 0) && body[pcroom + 1] == (active ? 1 : 0),
             "全局网吧身份与账号黑钻外观各自发送，不互相开启或清除");
     }
+    public void ExpectUnusedDailyBoosterReset()
+    {
+        // 调钟可能被上一请求尾部或本次屏障观察；精确收齐一次ACK和完整零次数日界视图。
+        TestCheck.That(InitialDailyBoosterPackets.Length > 0, "日界同步已有完整初始化名册");
+        SendBarrier();
+        bool acknowledged = false;
+        int resetChunks = 0;
+        while (!acknowledged || resetChunks < InitialDailyBoosterPackets.Length)
+        {
+            var packet = Read();
+            if (packet is { Kind: 1, Opcode: 1347 } && !acknowledged)
+            {
+                TestCheck.Bytes(packet.Body, [1], "跨日日界同步屏障ACK");
+                acknowledged = true;
+            }
+            else
+            {
+                TestCheck.That(packet is { Kind: 0, Opcode: 541 } && resetChunks < InitialDailyBoosterPackets.Length,
+                    $"跨日只允许一次屏障ACK与完整541分片，实际{packet.Kind}/{packet.Opcode}");
+                var expected = InitialDailyBoosterPackets[resetChunks++];
+                TestCheck.That(Inventory.DailyBoosterProjectionTests.Decode(expected).Values.All(used => used == 0),
+                    "本用例没有消费每日礼盒，跨日完整恢复零次数");
+                TestCheck.Bytes(packet.Body, expected, "跨日541名册、分片顺序及零次数与初始化一致");
+            }
+        }
+    }
+
     public void CheckBlackDiamondRefresh(bool active, bool dungeon = false, bool appearanceChanged = true, bool pcRoom = false,
         bool allowDailyReset = false)
     {

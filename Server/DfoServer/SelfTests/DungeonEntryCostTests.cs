@@ -1,3 +1,4 @@
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Services;
@@ -20,6 +21,20 @@ internal static class DungeonEntryCostTests
 {
     const int Tayberrs = 291100320, TayberrsSecond = 291100322, RefinedStone = 10158964;
 
+    internal static void RunCore()
+    {
+        int checks = Count;
+        System.Collections.Immutable.ImmutableArray<CosmoPassCost> Parse(params int[] values) => CosmoPassCost.Parse(
+            [new(3,1),.. values.Select(v=>new PvfToken(0,v)),new(3,2)],
+            id=>id==1?"[hell cosmo freepass item]":"[/hell cosmo freepass item]");
+        That(Parse(100,1,-1,0,200,1,-1,2).SequenceEqual([new CosmoPassCost(100,1,0),new(200,1,2)]),
+            "超星空通行证四元组保留券数量和额外灵石，不把星空券当全免票");
+        foreach(var malformed in new[] {new[]{100,1,-1},new[]{100,0,-1,0},new[]{100,1,0,0},
+            new[]{100,1,-1,-1},new[]{100,1,-1,0,100,1,-1,2}})
+            Reject<InvalidDataException>(()=>Parse(malformed),"通行证残缺、零数量、未确认附加条件及重复条目拒绝");
+        Console.WriteLine($"PASS {Count-checks} 超星空通行证声明边界断言");
+    }
+
     internal static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills)
     {
@@ -27,6 +42,36 @@ internal static class DungeonEntryCostTests
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+
+        var passIds = items.Items.CosmoPasses();
+        That(passIds.Length == 48 && passIds.Count(row=>row.AdditionalStones==0)==36 && passIds.Count(row=>row.AdditionalStones==2)==12 &&
+            passIds.All(row=>row.Count==1) && !passIds.Any(row=>row.ItemId is 490703708 or 490703706),
+            "按freepassitem匹配48种声明：36种完整券和12种需额外2石的星空券，不按名称扩大旧券或礼盒");
+        var passNow = DateTimeOffset.Parse("2026-10-23T00:00:00Z");
+        InventoryItem Pass(long uid, short slot, int id = 490705255) =>
+            new(uid, new(InventoryListType.Main, slot), new(id, ItemKind.Material, 1));
+        var lockedPass = Pass(1, 121) with { Core = Pass(1, 121).Core with { EquipmentLockId = 1 } };
+        var expiredPass = Pass(2, 122) with { Core = Pass(2, 122).Core with { ExpireTime = (int)passNow.ToUnixTimeSeconds() } };
+        var cargoPass = Pass(3, 123) with { Position = new(InventoryListType.PersonalCargo, 0) };
+        InventorySnapshot unavailablePasses = new([lockedPass, expiredPass, cargoPass]);
+        That(HellPartyEntryCost.CosmoPass(unavailablePasses, passIds, items.EpicPieces, passNow).Plan is null,
+            "锁定、恰好到期及仓库通行证不能抵扣入场");
+        var validPasses = unavailablePasses with { Items = unavailablePasses.Items.Add(Pass(4, 125)).Add(Pass(5, 124, 490013690)) };
+        That(HellPartyEntryCost.CosmoPass(validPasses, passIds, items.EpicPieces, passNow).Ticket is { ItemId: 490013690, Count: 1 },
+            "通行证按有效背包槽位顺序选择，一次只消耗一张");
+
+        var starOnly = new InventorySnapshot([Pass(1,121,490703917)]);
+        That(HellPartyEntryCost.CosmoPass(starOnly,passIds,items.EpicPieces,passNow).Plan is null,
+            "星空券用于超星空必须有额外2灵石，不能按同为通行证免费放行");
+        var starPaid = starOnly with {Items=starOnly.Items.Add(new(2,new(InventoryListType.Main,122),new(10305821,ItemKind.Material,2)))};
+        That(HellPartyEntryCost.CosmoPass(starPaid,passIds,items.EpicPieces,passNow) is
+            {Ticket:{ItemId:490703917,Count:1},Stone:{ItemId:10305821,Count:2},Plan.After.Items.Length:0},
+            "资源声明的星空券与额外2灵石作为完整组合规划");
+        var fullFallback=starOnly with {Items=starOnly.Items.Add(Pass(3,122,490705255))};
+        That(HellPartyEntryCost.CosmoPass(fullFallback,passIds,items.EpicPieces,passNow).Ticket is {ItemId:490705255},
+            "前方星空券缺灵石时仍可使用后方完整超星空券");
+        That(HellPartyEntryCost.CosmoPass(new([Pass(1,121,10161613)]),passIds,items.EpicPieces,passNow).Ticket is null,
+            "普通深渊券不混入超星空资源范围");
 
         // 资源形状：只有唯一一行「物品 1 1」才是入场票；入场疲劳只认唯一一个正整数。
         var tayberrs = dungeons.Get(Tayberrs);
@@ -62,13 +107,13 @@ internal static class DungeonEntryCostTests
         cosmoDone.UnionWith(towns.DungeonMaps[AreaDungeonWorldMap(towns)].HellQuests);
         using (var cosmoLocked = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,
             [.. cosmoDone.Where(id => id != cosmo.CosmoQuestId).Order()],position:cosmoPosition,
-            items:[(3330,40),(10305821,4)],fatigueRemaining:100))
+            items:[(3330,40),(10305821,4),(490705255,1)],fatigueRemaining:100))
         {
             var before = cosmoLocked.Read();
-            That(cosmoLocked.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,pieces:items.EpicPieces,hellParty:true) is null &&
+            That(cosmoLocked.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,items:items.Items,pieces:items.EpicPieces,hellParty:true) is null &&
                 cosmoLocked.Session.LastFormalDungeonRejection is "hell-party-quest-required:10112" or "selection-quest-required:10112" &&
                 QuestCompletionRepositoryTests.Same(before, cosmoLocked.Read()),
-                "材料齐全也不能绕过超星空任务，缺少10112时保持全部资产与入场状态：" + cosmoLocked.Session.LastFormalDungeonRejection);
+                "材料与通行证齐全也不能绕过超星空任务，缺少10112时保持全部资产与入场状态：" + cosmoLocked.Session.LastFormalDungeonRejection);
         }
         cosmoDone.Add(cosmo.CosmoQuestId);
         using (var cosmoPoor = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,[.. cosmoDone.Order()],position:cosmoPosition,
@@ -82,14 +127,14 @@ internal static class DungeonEntryCostTests
                 "超星空缺4个探测石时拒绝，先规划的40张邀请函与疲劳均不提交");
         }
         using (var cosmoTired = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,[.. cosmoDone.Order()],position:cosmoPosition,
-            items:[(3330,40),(10305821,4)],fatigueRemaining:7))
+            items:[(3330,40),(10305821,4),(490705255,1)],fatigueRemaining:7))
         {
             var before = cosmoTired.Read();
-            That(cosmoTired.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,pieces:items.EpicPieces,hellParty:true) is null &&
+            That(cosmoTired.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,items:items.Items,pieces:items.EpicPieces,hellParty:true) is null &&
                 cosmoTired.Session.LastFormalDungeonRejection == "start-fatigue-insufficient:8" && cosmoTired.Read().Revision == before.Revision &&
                 cosmoTired.Read().Fatigue == before.Fatigue && cosmoTired.Read().DungeonState == before.DungeonState &&
-                ItemCount(cosmoTired.Read(),3330) == 40 && ItemCount(cosmoTired.Read(),10305821) == 4,
-                "超星空疲劳不足8点时拒绝，40张邀请函、4探测石与副本尝试状态不变");
+                ItemCount(cosmoTired.Read(),3330) == 40 && ItemCount(cosmoTired.Read(),10305821) == 4 && ItemCount(cosmoTired.Read(),490705255) == 1,
+                "超星空有通行证但疲劳不足8点时拒绝，材料与副本尝试状态不变");
         }
         using (var cosmoRich = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,[.. cosmoDone.Order()],position:cosmoPosition,
             items:[(3330,40),(10305821,4)],fatigueRemaining:100))
@@ -116,6 +161,30 @@ internal static class DungeonEntryCostTests
             var loaded = cosmoRich.Session.CompleteFormalDungeonLoading();
             That(loaded is { Entry.IsCosmo: true } && loaded.Snapshot.ConsumedFatigue == 8 && cosmoRich.Read().Fatigue == after.Fatigue,
                 "超星空加载不重复扣疲劳，消耗计数仍为8");
+        }
+
+        foreach (bool partialPass in new[] {false,true})
+        {
+            int passId=partialPass?490703917:490705255;
+            using (var passOnly = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,95,
+                [.. cosmoDone.Order()],position:cosmoPosition,items:partialPass?[(490703917,2),(10305821,4)]:[(490705255,2)],fatigueRemaining:16))
+            {
+                var before = passOnly.Read();
+                passOnly.Sql("CREATE TRIGGER cosmo_pass_fail BEFORE UPDATE ON character_dungeon_state WHEN NEW.last_attempt>OLD.last_attempt BEGIN SELECT RAISE(ABORT,'cosmo pass rollback'); END");
+                Reject<Microsoft.Data.Sqlite.SqliteException>(() => passOnly.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,
+                    drops:Testing.SelfTestCatalogs.MonsterDrops(pvf),items:items.Items,pieces:items.EpicPieces,hellParty:true), "通行证入场提交故障");
+                That(QuestCompletionRepositoryTests.Same(before,passOnly.Read()) && passOnly.Session.DungeonSnapshot is null,
+                    "通行证、疲劳和尝试号在同一入场事务回滚，失败不能安装实例");
+                passOnly.Sql("DROP TRIGGER cosmo_pass_fail");
+                var receipt = passOnly.Session.EnterFormalDungeon(7191,0,4,dungeons,rooms,
+                    drops:Testing.SelfTestCatalogs.MonsterDrops(pvf),items:items.Items,pieces:items.EpicPieces,hellParty:true);
+                That(receipt is { HellTicket.Count: 1, EntryFatigueCharged: 8 } && receipt.HellTicket.ItemId==passId &&
+                    (partialPass?receipt.LegendTicket is {Count:2,ItemId:10305821}:receipt.LegendTicket is null) &&
+                    receipt.HellConsumedSlots.Length == (partialPass?2:1) && ItemCount(passOnly.Read(),passId) == 1 &&
+                    ItemCount(passOnly.Read(),10305821)==(partialPass?2:0),
+                    "入场重试按资源准确消耗一张券，星空券额外2石，超星空券无需灵石");
+            }
+
         }
 
         var (done, position) = Selection(towns, Tayberrs);

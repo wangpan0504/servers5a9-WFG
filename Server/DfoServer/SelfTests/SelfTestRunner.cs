@@ -70,6 +70,7 @@ internal static class SelfTestRunner
         AuctionNoticeTests.Run();
         AuctionReplyTests.Run();
         DungeonRequestTests.Run();
+        DungeonEntryCostTests.RunCore();
         AssaultModePacketTests.Run();
         RiftDailyPacketTests.Run();
         ParticularHellPartyTests.Run();

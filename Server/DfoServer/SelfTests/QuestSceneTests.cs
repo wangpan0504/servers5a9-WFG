@@ -952,7 +952,7 @@ internal static class QuestSceneTests
             using var reader = command.ExecuteReader(); reader.Read();
             return (reader.GetInt64(0),reader.GetInt64(1));
         }
-        public Dictionary<(byte,byte),(byte,byte)> TravelPaths(TownCatalog towns)
+        public Dictionary<(byte,byte),(byte,byte)> TravelPaths(TownCatalog towns, bool includeTransport = false)
         {
             if (towns.IsRoom(Session.Selected!.Position)) That(Session.LeaveRoom(),"选角后从真实房间返回城镇");
             var start = (Session.Selected!.Position.Town,Session.Selected.Position.Area);
@@ -960,6 +960,23 @@ internal static class QuestSceneTests
             var previous = new Dictionary<(byte,byte),(byte,byte)> { [start] = start };
             var done = QuestEligibility.Completed(Session.Selected);
             while (pending.TryDequeue(out var next))
+            {
+                if (includeTransport && towns.IsRoom(new(next.Item1,next.Item2,0,0),done))
+                    foreach(var portal in towns.RoomPortals)
+                    {
+                        var destination=(portal.Town,portal.Area);
+                        if (!previous.ContainsKey(destination) && towns.Admission(new(next.Item1,next.Item2,0,0),
+                            new(portal.Town,portal.Area,0,0),Session.Selected.Level,done,roomPortal:true)=="ready")
+                        { previous.Add(destination,next); pending.Enqueue(destination); }
+                    }
+                // 跨大陆任务须走当前阶段真实码头，不能把仅步行不可达误判为任务断路。
+                foreach (var stop in includeTransport ? towns.Dock.Active(done) : [])
+                {
+                    var destination=(stop.Point.Town,stop.Point.Area);
+                    if (!previous.ContainsKey(destination) && towns.Dock.Admission(new(next.Item1,next.Item2,0,0),stop.Point,Session.Selected.Level,done)=="ready" &&
+                        towns.Admission(new(next.Item1,next.Item2,0,0),stop.Point,Session.Selected.Level,done)=="ready")
+                    { previous.Add(destination,next); pending.Enqueue(destination); }
+                }
                 foreach (var link in towns.Areas[next].Map(done).Links.Where(link => link.Gate.Door && link.Town != 255))
                 {
                     var destination = (link.Town,link.Area);
@@ -967,11 +984,12 @@ internal static class QuestSceneTests
                         new(link.Town,link.Area,0,0),Session.Selected.Level,done) == "ready")
                     { previous.Add(destination,next); pending.Enqueue(destination); }
                 }
+            }
             return previous;
         }
-        public void TravelTo(TownCatalog towns,Location position)
+        public void TravelTo(TownCatalog towns,Location position, bool includeTransport = false)
         {
-            var previous = TravelPaths(towns);
+            var previous = TravelPaths(towns,includeTransport);
             var start = (Session.Selected!.Position.Town,Session.Selected.Position.Area); var target = (position.Town,position.Area);
             var done = QuestEligibility.Completed(Session.Selected);
             That(previous.ContainsKey(target),"实际PVF城镇连接可达任务场景");
@@ -983,7 +1001,8 @@ internal static class QuestSceneTests
                 var bounds = towns.Areas[next].Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
                 var source = Session.Selected.Position;
                 That(Session.Travel(new(next.Item1,next.Item2,checked((ushort)(bounds.X + bounds.Width / 2)),
-                    checked((ushort)(bounds.Y + bounds.Height / 2)),0,source.Town,source.Area,0)),"按真实连接到达下一城镇区域");
+                    checked((ushort)(bounds.Y + bounds.Height / 2)),0,source.Town,source.Area,
+                    towns.IsRoom(source,done) && towns.RoomPortals.Any(p=>p.Town==next.Item1 && p.Area==next.Item2)?(byte)5:(byte)0)),"按真实连接到达下一城镇区域");
             }
             That(Session.Move(new(position.X,position.Y,0,0,0,0)),"任务测试落点符合城镇可行走资源");
         }

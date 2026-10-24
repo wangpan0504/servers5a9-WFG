@@ -7,7 +7,7 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-internal static class QuestHellChallengeTcpTests
+internal static partial class QuestHellChallengeTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
@@ -115,6 +115,8 @@ internal static class QuestHellChallengeTcpTests
             void SendFinish(TcpPeer peer) => peer.Send(34,Build(writer => { writer.Write((ushort)34); writer.Write(scenario.Quest);
                 writer.Write(ushort.MaxValue); writer.Write((ushort)1); writer.Write(ushort.MaxValue); }));
         }
+        VerifyHarlemContinuation(fixture,resources);
+        VerifyAlbertOrphan(fixture,resources);
     }
 
     static List<WirePacket> Drain(TcpPeer peer)

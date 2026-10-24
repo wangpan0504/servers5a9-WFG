@@ -30,6 +30,7 @@ internal static class QuestOrdinaryCompletionTests
         int checks = Count;
         var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf); var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
         var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        QuestHarlemContinuationTests.Run(towns,pvf,characters,items,quests);
         QuestGoldMailTests.Run(towns, characters, items, learning, growth, parameters);
         QuestInventoryPendingTests.Run(towns, characters, items, learning, growth, parameters);
         QuestTownMutationPendingTests.Run(towns, characters, items, learning, growth, parameters);

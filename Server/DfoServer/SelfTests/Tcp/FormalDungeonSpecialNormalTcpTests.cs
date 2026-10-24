@@ -32,6 +32,7 @@ internal static partial class FormalDungeonTcpTests
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == sample.Id));
             var done = new HashSet<int>(area.Quests);
             done.UnionWith([3778,4872,8682]);
+            if (sample.Id == 400000016) done.Add(8672); // 超时空频道准入任务，不能仅预置最后防线坐标绕过真实出门条件。
             if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
             var options = resources.Towns.DungeonMaps[area.DungeonWorldMap!.Value].Options.Where(option => option.DungeonId == sample.Id).ToArray();
             if (!options.Any(option => option.QuestId == -1)) done.Add(options.First(option => !option.InProgress).QuestId);
@@ -56,9 +57,19 @@ internal static partial class FormalDungeonTcpTests
             }
             int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : 100;
             fixture.Sql("UPDATE character_fatigue SET remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
-            // 最后防线 115 只经超时空漩涡频道 39 进入：普通频道选角不保留 115 快照（ClientKeepsTownSnapshot）而回共享房间，因此 400000016 在 39 号入口上验收。
+            // 最后防线只经频道39进入；普通选角先到共享房间，再出门到115/0，不能把上一角色的普通频道历史当作团本快照。
             using var peer = sample.Id == 400000016 ? Open(fixture,gamePort:ChannelTcpTests.Endpoints(fixture)[39],channelNumber:39) : Open(fixture);
-            peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
+            if (sample.Id == 400000016)
+            {
+                var entry = peer.Select(created.Slot,prepared:done.Count != 0);
+                That(entry.Single(packet => packet is { Kind:0,Opcode:24 }).Body.AsSpan(0,2).SequenceEqual(new byte[] { 38,1 }) &&
+                    U32(entry.Single(packet => packet is { Kind:0,Opcode:1379 }).Body) == 115,
+                    "超时空普通选角绑定共享房间，并以1379指定最后防线出门城镇");
+                peer.Travel(115,0,1301,428,38,1,bottom:true);
+                peer.Travel(position.Town,position.Area,position.X,position.Y,115,0);
+            }
+            else
+                peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
             ushort questId = sample.Id == 9595 ? (ushort)2683 : sample.Id == 5101 ? (ushort)2902 : (ushort)8683;
             peer.Send(31,[(byte)31,0,(byte)questId,(byte)(questId >> 8)]);
             var accepted = peer.Expect(1,31).Body;

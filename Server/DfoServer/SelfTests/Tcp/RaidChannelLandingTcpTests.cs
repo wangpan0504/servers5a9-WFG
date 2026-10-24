@@ -51,11 +51,17 @@ internal static class RaidChannelLandingTcpTests
         That(endpoints.ContainsKey(19) && endpoints.ContainsKey(20) && endpoints.ContainsKey(39) && endpoints.ContainsKey(41) && endpoints.ContainsKey(42),
             "频道目录列出安徒恩 19、卢克 20、超时空之战 39、魔界大战 41、普雷 42");
         var character = CreateRaider(fixture, resources, "RaidEvt");
+        That(resources.Towns.IsRoom(new(19, 0, 0, 0), character.CompletedQuests.ToHashSet()),
+            "安徒恩战舰入口19/0是房间图，普通选角也必须下发1379");
         foreach (byte channel in new byte[] { endpoints.Keys.Min(), 19 })
         {
             using var peer = Open(fixture, gamePort: endpoints[channel], channelNumber: channel);
             peer.ExpectedOpenEvents = [282, 2449, 414, 181];
-            peer.Select(character.Slot, prepared: true, room: channel == 19);
+            // 共享房间38/1与安徒恩战舰入口19/0均为房间图，严格保留两边的1379→事件初始化包序。
+            var entry = peer.Select(character.Slot, prepared: true);
+            var location = entry.Single(packet => packet is { Kind: 0, Opcode: 24 }).Body;
+            That(location[0] == (channel == 19 ? 19 : 38) && location[1] == (channel == 19 ? 0 : 1),
+                $"频道 {channel} 普通选角绑定真实初始地区，事件初始化不改变落点");
             peer.Barrier();
             That(peer.EventInfoPayload.Length == 68 + 15 * 4, $"频道 {channel} EVENT_INFO 含 2037 + 卢克282/超时空2449/普雷414/安徒恩181");
             That(peer.CompletedQuestHistory.Length > 0, $"频道 {channel} 下发已完成任务表");

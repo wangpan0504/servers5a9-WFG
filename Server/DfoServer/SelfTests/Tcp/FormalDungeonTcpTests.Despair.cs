@@ -123,6 +123,7 @@ internal static partial class FormalDungeonTcpTests
             That(EntryCount() == layer + 1, "当天通关后拒绝继续入场，次数不增加");
             if (layer == 100) break;
             clock.AdvanceDay();
+            peer.ExpectUnusedDailyBoosterReset();
             // 交替使用入口号和服务器已持久批准的当前层号，两者都不能授权下一层。
             map = EnterTower(layer % 2 == 0 ? 11008u : checked((uint)(11008 + layer)));
         }
@@ -140,9 +141,8 @@ internal static partial class FormalDungeonTcpTests
         using (var resumed = Open(fixture))
         {
             resumed.Select(created.Slot, prepared: true, resumeTown: true, room: false);
-            resumed.Send(15, new byte[4]); resumed.Expect(1, 15, [1]); resumed.Expect(0, 3);
-            That(U16(resumed.Expect(0, 27).Body, 20) == 1 &&
-                fixture.Snapshot("SELECT * FROM dungeon_despair_progress WHERE character_id=$p0", resumed.Id) == progressBeforeRestart &&
+            SelectTowerMap(resumed,1);
+            That(fixture.Snapshot("SELECT * FROM dungeon_despair_progress WHERE character_id=$p0", resumed.Id) == progressBeforeRestart &&
                 fixture.Snapshot("SELECT * FROM dungeon_despair_clear_receipts WHERE character_id=$p0", resumed.Id) == receiptsBeforeRestart &&
                 fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", resumed.Id) == inventoryBeforeRestart,
                 "真实子进程冷启动恢复100层后的下一层、唯一通关回执、物品UID与完整资产");
@@ -165,7 +165,7 @@ internal static partial class FormalDungeonTcpTests
                     "每十层先发完整347空名合同，启用客户端已有本机角色回退而不遗留上一场APC");
                 packet = peer.Read();
             }
-            That(packet is { Kind: 0, Opcode: 28 }, "正式绝望按347(若需要)→28→29发布");
+            That(packet is { Kind: 0, Opcode: 28 }, $"正式绝望按347(若需要)→28→29发布，实际{packet.Kind}/{packet.Opcode}");
             var info = packet.Body;
             That(U32(info, 0) is >= 11008 and <= 11107, "28发布服务器批准的实际层号");
             var loaded = peer.Expect(0, 29).Body;
@@ -174,9 +174,7 @@ internal static partial class FormalDungeonTcpTests
         }
         void OpenSelection(ushort floor)
         {
-            peer.Send(15, new byte[4]); peer.Expect(1, 15, [1]); peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
-            var notice = peer.Expect(0, 27).Body;
-            That(notice.Length == 42 && U16(notice, 20) == floor, "27显示持久批准层号，不以通知授权通关");
+            SelectTowerMap(peer,floor);
         }
         void ReturnTown()
         {

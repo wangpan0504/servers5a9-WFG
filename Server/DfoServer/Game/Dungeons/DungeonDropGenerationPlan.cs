@@ -5,7 +5,11 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Dungeons;
 
 internal sealed record DungeonDropRarityPool(int Threshold, DungeonItemDropPool Items,
-    DungeonItemDropPool? AlternateItems = null, int AlternatePermille = 0);
+    DungeonItemDropPool? AlternateItems = null, int AlternatePermille = 0,
+    DungeonItemDropPool? SecondaryItems = null, int SecondaryPermille = 0)
+{
+    public IEnumerable<DungeonItemDropPool> CandidatePools => new[] { Items, AlternateItems, SecondaryItems }.OfType<DungeonItemDropPool>();
+}
 internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Items,
     int MinimumCount, int MaximumCount, DungeonDropGoldReference? Gold = null, decimal GoldMultiplier = 1m,
     int ProbabilityDenominator = DungeonDropRatePlan.ProbabilityDenominator,
@@ -47,11 +51,12 @@ internal sealed class DungeonDropGenerationPlan
                 sources != 1 || trial.GoldMultiplier <= 0 || trial.ReferenceGold && trial.Gold is null || trial.Attempts is < 1 or > ushort.MaxValue)
                 throw new InvalidDataException("掉落生成计划的概率、数量或物品/金币来源不完整");
             var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty ?
-                Array.Empty<DungeonItemDropPool>() : trial.RarityPools.SelectMany(row => row.AlternateItems is { } alternate ?
-                    new[] { row.Items, alternate } : new[] { row.Items }).ToArray();
+                Array.Empty<DungeonItemDropPool>() : trial.RarityPools.SelectMany(row => row.CandidatePools).ToArray();
             if (!trial.RarityPools.IsDefaultOrEmpty && trial.RarityPools.Any(row => row.AlternatePermille is < 0 or > 1000 ||
                 row.AlternateItems is null && row.AlternatePermille != 0 ||
-                row.AlternateItems is { TotalWeight: <= 0 }))
+                row.AlternateItems is { TotalWeight: <= 0 } || row.SecondaryPermille is < 0 or > 1000 ||
+                row.SecondaryItems is null && row.SecondaryPermille != 0 || row.SecondaryItems is { TotalWeight: <= 0 } ||
+                row.AlternatePermille + row.SecondaryPermille > 1000))
                 throw new InvalidDataException("稀有度条件分支须提供非空候选及0至1000的明确概率");
             // 同一次互斥抽样可以为不同物品声明不同数量，不拆成两个独立概率导致同时掉落。
             if (trial.ItemCounts is { } counts && (trial.Items is null || trial.MinimumCount != 1 || trial.MaximumCount != 1 ||
@@ -112,8 +117,10 @@ internal sealed class DungeonDropGenerationPlan
             {
                 int rarityRoll = Sample(DungeonDropRatePlan.RarityDenominator) + 1;
                 var rarity = trial.RarityPools.First(row => rarityRoll <= row.Threshold);
-                pool = rarity.AlternateItems is { } alternate && rarity.AlternatePermille > 0 &&
-                    Sample(1000) < rarity.AlternatePermille ? alternate : rarity.Items;
+                // 三个互斥分支共用一次抽样，不新增装备骰，也不改变各池内部权重。
+                int branch = rarity.AlternatePermille + rarity.SecondaryPermille > 0 ? Sample(1000) : 1000;
+                pool = branch < rarity.AlternatePermille ? rarity.AlternateItems :
+                    branch < rarity.AlternatePermille + rarity.SecondaryPermille ? rarity.SecondaryItems : rarity.Items;
             }
             // 明确空候选池不会制造另一类别；参考回退已在资源准备阶段处理。
             if (pool!.TotalWeight == 0)

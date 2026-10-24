@@ -471,7 +471,7 @@ internal sealed partial class GameSession
     public bool CanRetryCosmoDungeon(FormalDungeonReceipt expected) => owner.Execute(() =>
     {
         if (!Ready || !expected.Entry.IsCosmo || !CanEnterFormalDungeon(expected) ||
-            formalDungeon is not { HellTicket: { } ticket, LegendTicket: { } stone, HellPieces: { } pieces } dungeon ||
+            formalDungeon is not { HellTicket: not null, HellPieces: { } pieces } dungeon ||
             Selected is not { } character) return false;
         if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||
             debugSettings?.InfiniteFatigue != true && dungeon.Entry.StartFatigue > 0 &&
@@ -480,9 +480,10 @@ internal sealed partial class GameSession
         if (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) ||
             area.DungeonWorldMap is not { } world || !towns.DungeonMaps.TryGetValue(world, out var map)) return false;
         // 只规划，不扣票；实际再挑战仍复验任务、资源，并在原入场事务内扣票与疲劳。
-        var now = DateTimeOffset.UtcNow;
-        var invitations = HellPartyEntryCost.Plan(character.Inventory, map.HellItemConditions, ticket.Count, pieces, now);
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        if (HellPartyEntryCost.CosmoPass(character.Inventory, dungeon.CosmoPasses, pieces, now).Ticket is not null) return true;
+        var invitations = HellPartyEntryCost.Plan(character.Inventory, map.HellItemConditions, dungeon.CosmoInvitationCount, pieces, now);
         return invitations.Plan is { } plan &&
-            HellPartyEntryCost.Plan(plan.After, [stone.ItemId], stone.Count, pieces, now).Ticket is not null;
+            HellPartyEntryCost.Plan(plan.After, [HellPartyEntryCost.LegendStone], dungeon.CosmoStoneCount, pieces, now).Ticket is not null;
     });
 }
