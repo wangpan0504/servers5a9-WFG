@@ -232,6 +232,12 @@ python3 Tools/GmWeb/gm_web.py --self-check
 - 任务页：状态筛选、按 PVF `[grade]` 分类（无法归类为“其他”）、勾选批量完成、“全部完成”二次确认并审计。
 - 顶部全局角色选择器与整页角色工作台；只有危险操作二次确认。详见 `GM迁移对照.md`。
 
+## 团本入场时段（团队频道卡）
+
+- `GET /api/raid-windows` 读表；`POST /api/raid-windows`（需请求头 `X-GM-Request: 1`，JSON 正文里带 `"confirm": true`）整表替换，写入存档目录 `gm-raid-windows.json` 并审计。键为 `luke` / `hyperspace` / `prey`，每行 `{"weekday":1..7,"start":"HH:mm","end":"HH:mm"}`，UTC+8，结束时刻不含，`24:00` 表示到当天结束；空表全关。
+- 时段内的卡在入城/换频道时通过 `NOTI EVENT_INFO` 下发事件 282 / 2449 / 414，去掉「非可入场时间」。已在城镇的角色要换一次频道或重新选角才刷新。
+- 例：全天开放超时空漩涡（每天 00:00–24:00）：`{"luke":[],"hyperspace":[{"weekday":1,"start":"00:00","end":"24:00"},…,{"weekday":7,"start":"00:00","end":"24:00"}],"prey":[]}`。协议细节见[帧与频道](../协议/帧与频道.md#团队频道三张卡卢克--超时空漩涡--普雷伊希斯)。
+
 ## 纸娃娃（只读，GM 网页接口）
 
 按角色**当前已保存**的外观合成站立帧 PNG，供 WPF 等前端显示。只读：不改库、不写审计；试穿只在内存里替换部位。需要客户端 `ImagePacks2`（`DFO_IMAGEPACKS2` 或自动搜索，同物品图标）。

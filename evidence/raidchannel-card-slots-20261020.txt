@@ -1,0 +1,5 @@
+特殊区域卡片的格子在 ui/channel/channelsver2.xui。每个页签有 CNCheckBox，编号从 0 起，三列。亡者峡谷、异界地下城、远古地下城、异次元裂缝是运行时填进这些格子的。
+
+这版 ARAD.exe 中没有 channelsver2、deathtower、impossible、channelselect 的 ASCII 或 UTF-16 明文。RaidChannel 因此不猜测填卡函数入口，加载后不挂钩。魔界大战卡片还不会出现。团本「非可入场时间」若只认本地钟，也还不能改读服务端每周表。分道扬镳仍由客户端在进入时拦截。
+
+服务端每周时段仍是 GET/POST /api/raid-windows。没有重启正在运行的服务。

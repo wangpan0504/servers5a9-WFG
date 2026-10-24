@@ -25,7 +25,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.Game.Quests.QuestSkipEffects? questEffects = null, PremiumContractCatalog? contracts = null, TimeProvider? timeProvider = null,
     DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null,
     Game.Creatures.CreatureService? creatures = null, GameWorld.Quests.QuestStageGraph? stageGraph = null,
-    ItemCatalog? items = null, ExperienceBonusService? experienceBonuses = null)
+    ItemCatalog? items = null, ExperienceBonusService? experienceBonuses = null, GameWorld.Dungeons.DungeonIncountCatalog? incounts = null,
+    ChannelHistory? channelHistory = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 
@@ -133,6 +134,9 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public bool MatchesSelection(long epoch, ushort characterId) =>
         Phase == SessionPhase.Town && SelectionEpoch == epoch && Selected?.Id == characterId;
 
+    // 本次选角是否按原生换频道快照恢复城镇（决定入城包序）；由 SelectCharacter 设置。
+    public bool TownSnapshotResumed { get; private set; }
+
     public void Select(ushort slot, GoldLimitCatalog? goldLimits = null, bool resumeTown = false) => SelectCharacter(slot, goldLimits, null, resumeTown);
 
     void SelectCharacter(ushort slot, GoldLimitCatalog? goldLimits, CharacterRosterEntry? expected, bool resumeTown = false)
@@ -152,7 +156,16 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
                     DfoServer.Game.Quests.QuestAutoDailyPlan.Prepare(character,questCatalog,day,allowAssignment: true));
             }
             var quests = DfoServer.Game.Quests.QuestEligibility.Completed(character);
-            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumeTown, items, timeProvider);
+            // 客户端没有保留换频道快照时（普通频道与团队页签频道互换、进出魔界大战等类型谓词不一致的换频道），按普通选角落点和包序。
+            // 旧频道类型已知（同一服务端进程内的上一次选角）时直接比较谓词；否则按存档城镇推断。
+            int? previousType = ChannelEntry is null ? null : channelHistory?.Previous(owner.Account);
+            bool resumed = resumeTown && (ChannelEntry is not null && previousType is int previous
+                ? ChannelAreaLanding.SameSnapshotPredicates(previous, ChannelEntry.Type)
+                : ChannelAreaLanding.ClientKeepsTownSnapshot(towns, ChannelEntry, character.Position));
+            character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items, timeProvider, ChannelEntry);
+            TownSnapshotResumed = resumed;
+            if (ChannelEntry is not null)
+                channelHistory?.Record(owner.Account, ChannelEntry.Type);
             character = ReconcileSkillSwitchInventory(character);
             Selected = character;
             completed = quests;

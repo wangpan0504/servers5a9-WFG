@@ -106,7 +106,12 @@ internal static class BoosterGrowTypeTests
             "字符串中的资格伪标签不改变正常礼包");
         foreach (int id in new[] { 490005505, 490005504, 490006667, 490006668, 490006882, 490011456, 490703963, 490703964 })
             That(resources.Boosters.Get(id) is { Available: true, FirstGrowTypes.IsEmpty: false }, "实际首转普通或组合礼包完整解析 " + id);
-        That(!resources.Boosters.Get(10308496).Available, "首转修复不放行另有史诗实例规则的礼包");
+        var epic = BoosterCatalog.Parse("[set epic exchange instance type]\n[stackable type]\n`[booster selection]` 0\n" +
+            "[booster category num]\n2 4 9\n[booster selection num]\n1\n[booster select category]\n0 0\n" +
+            "[equipment]\n101000783 1\n[/equipment]\n[/booster select category]\n" + gate);
+        That(epic.Available && epic.SetsEpicExchangeInstanceType && epic.FirstGrowTypes.SequenceEqual(new byte[] { 3, 4 }) &&
+            epic.AllowsFirstGrowType(3) && epic.AllowsFirstGrowType(0x24) && !epic.AllowsFirstGrowType(0) && !epic.AllowsFirstGrowType(2),
+            "合法史诗选择盒同时保留来源声明与首转门禁，不能按旧未实现状态一律拒绝");
 
         var now = DateTimeOffset.UtcNow;
         var random = new BoosterTestsRandom();

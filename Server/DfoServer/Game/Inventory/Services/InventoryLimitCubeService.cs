@@ -133,7 +133,8 @@ internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCata
             {
                 EnchantCardId = target.Core.EnchantCardId,
                 EnchantUpgrade = target.Core.EnchantUpgrade,
-                SealFlag = target.Core.SealFlag
+                SealFlag = target.Core.SealFlag,
+                EpicExchangeOrigin = target.Core.EpicExchangeOrigin
             };
         var grant = InventoryRewardGrantService.TryGrantCore(character with { Inventory = paid },
             outputCore, selected.Template, pieces, now);

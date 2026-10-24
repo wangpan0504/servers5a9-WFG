@@ -10,8 +10,8 @@ internal static class PlayerInteractionTests
     public static void RunCore()
     {
         int before = Count;
-        That(ChannelPackets.Endpoint("127.0.0.1", 12345, 22)[3] == 22 &&
-            ChannelPackets.Endpoint("127.0.0.1", 12345, 59)[3] == 59,
+        That(ChannelPackets.Endpoint("127.0.0.1", 12345, channelType: 22)[3] == 22 &&
+            ChannelPackets.Endpoint("127.0.0.1", 12345, channelType: 59)[3] == 59,
             "LOGIN模式跟随实际频道类型，普通与特殊入口不能固定为0或22");
         byte[] menu = Convert.FromHexString("34120F00000000000000000000");
         That(CharacterRequests.TryPeerMenu(menu, out ushort target) && target == 0x1234, "实测13B右键请求识别目标");

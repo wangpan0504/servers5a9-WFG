@@ -56,7 +56,8 @@ internal static partial class FormalDungeonTcpTests
             }
             int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : 100;
             fixture.Sql("UPDATE character_fatigue SET remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
-            using var peer = Open(fixture);
+            // 最后防线 115 只经超时空漩涡频道 39 进入：普通频道选角不保留 115 快照（ClientKeepsTownSnapshot）而回共享房间，因此 400000016 在 39 号入口上验收。
+            using var peer = sample.Id == 400000016 ? Open(fixture,gamePort:ChannelTcpTests.Endpoints(fixture)[39],channelNumber:39) : Open(fixture);
             peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
             ushort questId = sample.Id == 9595 ? (ushort)2683 : sample.Id == 5101 ? (ushort)2902 : (ushort)8683;
             peer.Send(31,[(byte)31,0,(byte)questId,(byte)(questId >> 8)]);
@@ -88,6 +89,12 @@ internal static partial class FormalDungeonTcpTests
                 That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1",
                     peer.Id,paidTicket.ItemId) is [[long remainingTicket]] && remainingTicket == paidTicket.Count,
                     "持有两次所需材料，入场完整扣一次并持久化剩余数量");
+            }
+            if (sample.Id == 400000016)
+            {
+                // DungeonIncountInfo 限次：入场提交后按副本下发一条 NOTI 550（u32 副本 + u8 日剩余 + u8 周剩余），在加载应答前。
+                var count = peer.Expect(0,550).Body;
+                That(count.Length == 6 && U32(count,0) == 400000016,"超时空之战入场后同步本副本剩余进入次数");
             }
             Load(peer); peer.Expect(0,36); peer.Barrier();
             That(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[long remaining]] &&

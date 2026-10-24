@@ -37,6 +37,9 @@ internal interface IGmWebData
     // 快捷物品清单（存档目录 gm-quick-items.json，JSON 数组）。
     string ReadQuickItems();
     void WriteQuickItems(string json);
+    // 三张团本卡的每周时段（数据目录 gm-raid-windows.json，不进角色库）。
+    string ReadRaidWindows();
+    void WriteRaidWindows(string json);
     byte[]? ItemIcon(int id);
     object? ItemPreview(int id);
     // 纸娃娃（只读）：按角色当前外观合成站立帧；tryOn 为只在内存中替换的物品编号。
@@ -330,7 +333,7 @@ internal static partial class GmWebServer
             if (b.Confirm != true) return Bad("需要二次确认");
             if (b.Value is not ("on" or "off")) return Bad("开关须为 on 或 off");
             if (b.Key is not ("infinite-fatigue" or "cash-shop-expiration" or "cash-shop-usable-period" or "pc-room" or
-                "summon-wangfugui")) return Bad("未知调试开关");
+                "summon-wangfugui" or "summon-guangbing")) return Bad("未知调试开关");
             return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
         });
     }
@@ -355,7 +358,8 @@ internal static partial class GmWebServer
             ["ignoreAbsoluteExpiration"] = Flag("cash-shop-expiration", "ignoreAbsoluteExpiration"),
             ["ignoreUsablePeriod"] = Flag("cash-shop-usable-period", "ignoreUsablePeriod"),
             ["premiumPcRoom"] = Flag("pc-room", "premiumPcRoom"),
-            ["summonWangFugui"] = Flag("summon-wangfugui", "summonWangFugui")
+            ["summonWangFugui"] = Flag("summon-wangfugui", "summonWangFugui"),
+            ["summonGuangbing"] = Flag("summon-guangbing", "summonGuangbing")
         };
     }
 

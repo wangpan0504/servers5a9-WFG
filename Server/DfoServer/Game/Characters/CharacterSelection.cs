@@ -1,6 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 
@@ -10,7 +11,7 @@ internal static class CharacterSelection
 {
     public static Character Prepare(ICharacterRepository repository, AccountOwners.Lease owner, Character character,
         TownCatalog towns, IReadOnlySet<int> completed, GoldLimitCatalog? goldLimits, bool resumeTown = false,
-        ItemCatalog? items = null, TimeProvider? clock = null) => owner.Execute(() =>
+        ItemCatalog? items = null, TimeProvider? clock = null, ChannelEntry? channel = null) => owner.Execute(() =>
     {
         if (resumeTown)
         {
@@ -18,6 +19,17 @@ internal static class CharacterSelection
             if (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area)
                 || area.Map(completed).Error is not null)
                 throw new InvalidDataException("频道重连的城镇地图不可用");
+        }
+        // 只有安徒恩（客户端 03B87FE0 起始地点 19/0）直接落频道地区；其余频道出生赛丽亚房间，出门由 TownTravel.LeaveRoom 按频道落点。
+        else if (channel is not null && ChannelAreaLanding.LandsInChannelTown(channel) &&
+                 ChannelAreaLanding.Place(towns, channel, character.Level, completed) is { } landing)
+        {
+            // 频道专属城镇没有通往共享房间的门口，返回地区沿用进入前的普通地区。
+            var back = ChannelAreaLanding.IsChannelBoundTown(towns, landing.Town)
+                ? towns.ResolveRoomReturn(character.Position, character.Return, character.Level, completed)
+                : towns.ResolveRoomReturn(landing, landing, character.Level, completed);
+            if (character.Position != landing || character.Return != back)
+                character = repository.Save(owner, character, landing, back);
         }
         else
         {

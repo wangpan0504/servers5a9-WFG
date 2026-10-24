@@ -129,7 +129,7 @@ internal static class ChannelEntryTcpTests
         takeover.Select(settings: settings); takeover.Barrier();
         That(takeover.Id == id, "跨入口接管沿用唯一账号generation，旧连接清理不删除新owner");
         That(fixture.Snapshot("SELECT town,area,x,y FROM characters WHERE id=$p0", id) == "[[38,1,450,234]]",
-            "普通名册选角与换频道分开，冷登录仍回map gate");
+            "主入口格兰之森普通名册选角与换频道分开，冷登录仍回共享房间");
         takeover.Send(35, Move(451, 235)); takeover.Barrier();
         string gateLocation = fixture.Snapshot("SELECT town,area,x,y,revision FROM characters WHERE id=$p0", id);
         takeover.Send(3, [1]); takeover.Expect(1, 3, [1]); takeover.Closed();

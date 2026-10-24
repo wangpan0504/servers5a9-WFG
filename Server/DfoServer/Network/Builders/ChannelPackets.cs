@@ -64,12 +64,36 @@ internal static class ChannelPackets
         return output.ToArray();
     }
 
-    public static byte[] Endpoint(string address, int port, int channelType, uint association = 0)
+    // CHANNEL_EVILDOM_WAR：ARAD 频道类型名表 03EFBF1D 写入 0x36。
+    const int EvildomWarType = 0x36;
+    // CHANNEL_FIEND_WAR：超时空之战频道 39 [fiendwar]。
+    const int FiendWarType = 0x2D;
+    // CHANNEL_PREY_RAID：普雷频道 42 [prey]。选角前 03B55580 经 02330DF0 读 +0x1010，cmp 0x32 → 名册 +0x494（tail[41]），为 0 弹 1099 / dstr 32116；
+    // RaidModeSelectWindow 014C0D40 按 +0x1010-0x20 跳表，0x32 → 信息框下标 2；ACK LOGIN 处理器的 03EF95B0 改写列表不含 0x32，原样写入。
+    const int PreyRaidType = 0x32;
+    const int AntonRaidType = 0x17;
+    const int LukeRaidType = 0x20;
+
+    // ACK LOGIN 正文第 0 字节是结果，之后 ARAD 0233EA10 依次读 u8 年龄 [ebp-0x34b]、u8 网吧 [ebp-0x347]、u8 频道类型 [ebp-0x336]；
+    // 频道类型经 0233EF02 → 028FA920 写入频道对象 +0x1010（02330DF0 读出），RaidModeSelectWindow 打开时 014C0D40 按它选信息框下标：
+    // 0x36 → 3（Lv95、4 人、+12 史诗武器、抗魔 5382、疲劳 30，表 0530C088..0530C0D8），其余未列类型 → 4，填字函数 014BF460 遇 4 直接跳过，
+    // 信息框只剩 xui 占位字“Lv.00 ~ 00 / 0人以上 / +00”，创建按钮也从“创建队伍”(21252) 变成“确定”(300000975)。
+    // 0x2D（超时空之战 CHANNEL_FIEND_WAR）同样发真实类型：+0x1010 在客户端有 221 处读点（02330DF0 调用点），紧接着与频道类型枚举常量比较
+    // （0x32×28、0x13×23、0x2D×18、0x20×17、0x17×14、0x36×5 …），014C0D40/02378D97 都按 0x20/0x2D/0x32 成组分支，03EF9610 判 {0x17,0x20,0x2D,0x32}；
+    // ACK LOGIN 处理器只把 03EF95B0 列表内的 5 改 4、0x24 另调 010686E0，0x2D 原样写入。证据：evidence/ack-login-channel-type-readers-20261021.txt。
+    // CHANNEL_ANTON_RAID 0x17（频道 19）/ CHANNEL_LUKE_RAID 0x20（频道 20）同样发真实类型：选角前 03B55580 按 0x17 → 名册 +0x491（tail[37]）、
+    // 0x20 → +0x492（tail[38]）判资格，发 0 时资格位不生效。逐个核对 43 处 0x17/0x20 读点：团本创建框/团本管理器类型表、频道类型 → 城镇
+    // （03B876C0：0x17→19、0x20→32，与服务端落点一致）、团队频道内跳过若干普通频道 UI/提示、卢克频道快捷窗 0x5C9 与物品频道限制谓词 022C4430；
+    // 页签与换频道快照谓词读脚本类型（+8），不读 +0x1010。证据：evidence/anton-luke-channel-type-audit-20261021.txt。
+    // 普通type22用于冒险团页准入（012AE420→028FB170）；其他未确认入口继续发0，避免扩大客户端模式变化。
+    public static byte LoginChannelType(ChannelEntry channel) =>
+        channel.Type is 22 or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType ? (byte)channel.Type : (byte)0;
+
+    public static byte[] Endpoint(string address, int port, uint association = 0, byte channelType = 0)
     {
         using var s = new MemoryStream();
         using var w = new BinaryWriter(s);
-        // 0233EBDA读取的频道模式由028FA920安装；社交冒险团页依此检查频道准入。
-        w.Write(new byte[] { 1, 1, 1, checked((byte)channelType), 1 });
+        w.Write(new byte[] { 1, 1, 1, channelType, 1 });
         w.Write(association);
         byte[] ip = Encoding.ASCII.GetBytes(address);
         w.Write(ip.Length);

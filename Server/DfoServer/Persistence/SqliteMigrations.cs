@@ -195,8 +195,12 @@ internal static class SqliteMigrations
         // 预设按槽位存JSON，槽位是身份且允许空洞，不另建平行在线状态。
         new(86, "装扮预设容量与预设", AddAvatarPresetStateColumn),
         new(87, "副本地面对象及拾取账本按实例隔离", DungeonObjectKeySchema.Upgrade),
-        new(88, "玩家社交关系", SocialSchema.Upgrade),
-        new(89, "冒险团好友申请者分组与备注", SocialSchema.UpgradeRequests),
+        // 副本次数两表曾有六种非主线编号：合并前本地构建的 v62/v63，主线 v67 之前合并分支的 v67/v68，主线 v68（永久属性）之前本分支的 v68/v69，
+        // 主线 v69–v73（冒险团）之前本分支的 v69/v70，主线 v74–v82 之前本分支的 v74/v75，以及主线 v83–v87（悲叹、塔与祭坛、装扮预设、对象key）之前本分支的 v83/v84；见 Apply。
+        new(88, "副本日周进入次数", static (db, tx) => Execute(db, tx, DungeonIncountSchema)),
+        new(89, "副本账号进入次数", static (db, tx) => Execute(db, tx, AccountDungeonIncountSchema)),
+        new(90, "玩家社交关系", SocialSchema.Upgrade),
+        new(91, "冒险团好友申请者分组与备注", SocialSchema.UpgradeRequests),
     ];
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
@@ -754,6 +758,31 @@ internal static class SqliteMigrations
           account TEXT NOT NULL,
           change_count INTEGER NOT NULL CHECK(change_count BETWEEN 1 AND 127),
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
+
+    internal const string DungeonIncountSchema = """
+        CREATE TABLE IF NOT EXISTS character_dungeon_incount(
+          character_id INTEGER NOT NULL,
+          account TEXT NOT NULL,
+          dungeon INTEGER NOT NULL,
+          day INTEGER NOT NULL,
+          daily_used INTEGER NOT NULL CHECK(daily_used BETWEEN 0 AND 1000000),
+          week INTEGER NOT NULL,
+          weekly_used INTEGER NOT NULL CHECK(weekly_used BETWEEN 0 AND 1000000),
+          PRIMARY KEY(character_id,dungeon),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
+
+    // DungeonIncountInfo [account dungeon incount info]：每账号每副本一行，period 为当前周期键（日键或周起始日键），跨周期即视为 0。
+    internal const string AccountDungeonIncountSchema = """
+        CREATE TABLE IF NOT EXISTS account_dungeon_incount(
+          account TEXT NOT NULL,
+          dungeon INTEGER NOT NULL,
+          period INTEGER NOT NULL,
+          used INTEGER NOT NULL CHECK(used BETWEEN 0 AND 1000000),
+          PRIMARY KEY(account,dungeon)
         );
         """;
 
@@ -1638,7 +1667,8 @@ internal static class SqliteMigrations
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
         // 两类预览库按互斥结构识别，不以同号版本替代已发布迁移。
         if (version is 78 or 79 && current >= 81 && IsAuraCooldownPreview(db, tx, version)) version = 77;
-        if (version is >= 78 and <= 80 && current >= 89 && IsPlayerInteractionPreview(db, tx, version)) version = 77;
+        if (version is >= 78 and <= 80 && current >= 91 && IsPlayerInteractionPreview(db, tx, version)) version = 77;
+        if (current >= 91 && IsSocialNumberingPreview(db, tx, version)) version = 87;
         // #233 验收构建曾把强袭表作为v47发布：该库v47有强袭表却缺master的角色栏扩展，视为v46，重跑v47起（v50强袭建表幂等）。
         if (version == 47 && current >= 50 && IsAcceptanceAssaultV47(db, tx)) version = 46;
         bool existingFatigue = version == 14 && HasPublishedFatigue(db, tx);
@@ -1654,6 +1684,26 @@ internal static class SqliteMigrations
             query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage'";
             if (query.ExecuteScalar() is 0L) version = 55;
         }
+        // 合并前 fix/channel-town-entry 的本地构建把副本次数两表记成 v62/v63，而 master 的 v62–v64 是眩惑领奖约束、职业变更次数、消耗品状态。
+        // 这类库版本号是 62/63、已有 character_dungeon_incount 却没有 master v63 的 character_growup_change：按 61 重跑 master v62 起；
+        // 主线 v67 是角色武器幻化列；在它之前合并分支把副本次数两表记成 v67/v68。这类库版本号是 67/68、已有 character_dungeon_incount
+        // 却没有 characters.weapon_skin_state：按 66 重跑主线 v67 起（该步按列存在性补列）。
+        // 次数两表（现 v88/v89）建表使用 IF NOT EXISTS，已有次数行原样保留。按表判定，不只看版本号。
+        // 主线 v68 是道具永久属性来源表；在它之前本分支把副本次数两表记成 v68/v69。这类库版本号是 68/69、已有 character_dungeon_incount
+        // 却没有 character_permanent_stats：按 67 重跑主线 v68 起（该步 IF NOT EXISTS 建表、经验列按结构补齐）。
+        // 主线 v69–v73 是冒险团胶囊周期、结算分项、登录与推荐计数、每周配置、经验账本；在它之前本分支把次数两表记成 v69/v70。这类库版本号是 69/70、
+        // 已有 character_dungeon_incount 却没有 account_adventures.capsule_week：按 68 重跑主线 v69 起（各步按列/表结构判定，可重复执行）。
+        // 主线 v74–v82 是熟练度到账、商城积分、每周入场计数、制作熟练度、零经验回执、任务每日通关、副职业设计图、光环冷却、快捷聊天；在它之前本分支把次数两表记成 v74/v75。
+        // 这类库版本号是 74/75、已有 character_dungeon_incount 却没有 character_dungeon_settlement_receipts.proficiency_gain：按 73 重跑主线 v74 起（各步按列/表结构判定）。
+        // 主线 v83–v87 是悲叹账号日次数、悲叹通关回执、塔与祭坛入场结算、装扮预设、对象key按实例隔离；在它之前本分支把次数两表记成 v83/v84。
+        // 这类库版本号是 83/84、已有 character_dungeon_incount 却没有 account_grief_tower：按 82 重跑主线 v83 起（五步均按表/列结构判定，可重复执行），
+        // 次数两表现为 v88/v89，建表使用 IF NOT EXISTS，已有次数行原样保留，最终与新库 v89 结构一致。
+        if (version is 62 or 63 && current >= 84 && IsLocalIncountNumbering(db, tx)) version = 61;
+        else if (version is 67 or 68 && current >= 84 && IsPreSkinIncountNumbering(db, tx)) version = 66;
+        else if (version is 68 or 69 && current >= 84 && IsPrePermanentStatIncountNumbering(db, tx)) version = 67;
+        else if (version is 69 or 70 && current >= 84 && IsPreAdventureIncountNumbering(db, tx)) version = 68;
+        else if (version is 74 or 75 && current >= 84 && IsPreProficiencyIncountNumbering(db, tx)) version = 73;
+        else if (version is 83 or 84 && current >= 89 && IsPreGriefIncountNumbering(db, tx)) version = 82;
         // 本地整合构建曾把冒险团四项记成v64–v67，上游随后把v64/v65用于消耗品与拉黑计分。
         // 临时编号库有胶囊周期列却缺blacklist_count时按v63重跑；v64–v69的升级均可重复执行。
         if (version is >= 64 and <= 70 && current >= 73)
@@ -1676,6 +1726,60 @@ internal static class SqliteMigrations
         tx.Commit();
     }
 
+    internal static bool IsLocalIncountNumbering(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_dungeon_incount'";
+        if (query.ExecuteScalar() is not 1L) return false;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_growup_change'";
+        return query.ExecuteScalar() is 0L;
+    }
+    internal static bool IsPrePermanentStatIncountNumbering(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_dungeon_incount'";
+        if (query.ExecuteScalar() is not 1L) return false;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_permanent_stats'";
+        return query.ExecuteScalar() is 0L;
+    }
+    internal static bool IsPreAdventureIncountNumbering(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_dungeon_incount'";
+        if (query.ExecuteScalar() is not 1L) return false;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('account_adventures') WHERE name='capsule_week'";
+        return query.ExecuteScalar() is 0L;
+    }
+    internal static bool IsPreProficiencyIncountNumbering(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_dungeon_incount'";
+        if (query.ExecuteScalar() is not 1L) return false;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') WHERE name='proficiency_gain'";
+        return query.ExecuteScalar() is 0L;
+    }
+    internal static bool IsPreGriefIncountNumbering(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_dungeon_incount'";
+        if (query.ExecuteScalar() is not 1L) return false;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='account_grief_tower'";
+        return query.ExecuteScalar() is 0L;
+    }
+    internal static bool IsPreSkinIncountNumbering(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_dungeon_incount'";
+        if (query.ExecuteScalar() is not 1L) return false;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='weapon_skin_state'";
+        return query.ExecuteScalar() is 0L;
+    }
     internal static void MarkCurrent(SqliteConnection db, SqliteTransaction tx)
     {
         using var command = db.CreateCommand();
@@ -1684,6 +1788,28 @@ internal static class SqliteMigrations
         command.Parameters.AddWithValue("$baseline", BaselineId);
         command.ExecuteNonQuery();
         Execute(db, tx, $"PRAGMA user_version={CurrentVersion}");
+    }
+
+    static bool IsSocialNumberingPreview(SqliteConnection db, SqliteTransaction tx, long version)
+    {
+        if (version is < 88 or > 90) return false;
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE name IN('character_dungeon_incount','account_dungeon_incount')";
+        long counts = (long)query.ExecuteScalar()!;
+        if (counts != 0) return false;
+        // 完整交互v90使用不同的组队回执合同，不能冒充顺延后的社交v90。
+        if (version == 90) throw new InvalidDataException("本地完整交互v90库须使用完整交互版本升级");
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE name='character_social_links'";
+        if (query.ExecuteScalar() is 0L) return false;
+        foreach (var (table, sql) in SocialSchema.Tables)
+        {
+            query.Parameters.Clear(); query.Parameters.AddWithValue("$table", table);
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+            string expected = table == "account_social_requests" && version == 88 ? SocialSchema.LegacyRequestSql : sql;
+            if (query.ExecuteScalar() is not string actual || NormalizeTable(actual, table) != NormalizeTable(expected, table))
+                throw new InvalidDataException("社交旧编号库存在未知结构：" + table);
+        }
+        return true;
     }
 
     static bool IsPlayerInteractionPreview(SqliteConnection db, SqliteTransaction tx, long version)
@@ -1881,6 +2007,8 @@ internal static class SqliteMigrations
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",
         "SELECT character_id,account,day,clear_count,daily_reward FROM character_crack_daily LIMIT 0",
         "SELECT character_id,account,change_count FROM character_growup_change LIMIT 0",
+        "SELECT character_id,account,dungeon,day,daily_used,week,weekly_used FROM character_dungeon_incount LIMIT 0",
+        "SELECT account,dungeon,period,used FROM account_dungeon_incount LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision,potion_experience,adventure_experience,other_bonus_experience,bonus_json,proficiency_gain FROM character_dungeon_settlement_receipts LIMIT 0",
         "SELECT character_id,account,event_id,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot FROM character_dungeon_loot_receipts LIMIT 0",
         "SELECT character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision FROM character_dungeon_pickup_receipts LIMIT 0",

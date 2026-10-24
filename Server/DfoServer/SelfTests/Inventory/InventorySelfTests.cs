@@ -70,6 +70,7 @@ internal static class InventorySelfTests
             That(repo.List(owner).SelectMany(character => character.Inventory.Items).Select(item => item.Uid).Distinct().Count() == 80, "central unique UID allocation");
             RentalTests.RunResources(repo.List(owner)[14], itemResources);
             var current = repo.List(owner)[0];
+            BoosterEpicExchangeMovePropagationTests.Run(current, itemResources);
             InventoryBehaviorTests.Run(current, pvf, characters, itemResources, That);
             InventoryStackLimitTests.Run(current, catalog, itemResources, That);
             var captured = InventoryRequests.Move(Convert.FromHexString("00090000000000010000000310007030000000000000FFFFFFFF0000"));

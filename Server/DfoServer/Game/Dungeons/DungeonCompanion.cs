@@ -8,10 +8,19 @@ internal static class DungeonCompanion
 {
     // 王富贵：priest/heal_soldier/heal_soldier.aic，20900 行写在每张可解析的副本地图里。
     public const int WangFuguiId = 20900;
+    // 光兵：沿用28号本体 fighter/28/28.aic（人偶 2600261 用的同一编号），5409 行写在每张可解析的副本地图里。
+    // 20903/20904 在 aicharacter.lst 里没有注册，客户端建不出来会闪退，不能再用那两个编号。
+    public const int GuangbingId = 5409;
 
-    // 开关关闭时一行都不发；开启只放 20900。
-    public static ImmutableArray<int> WangFuguiRows(bool summonWangFugui) =>
-        summonWangFugui ? [WangFuguiId] : [];
+    // 两个开关各自独立、可同时开启；关闭的开关一行都不发，行序仍按地图 [ai character] 原顺序。
+    public static ImmutableArray<int> EnabledRows(bool summonWangFugui, bool summonGuangbing)
+    {
+        var rows = ImmutableArray.CreateBuilder<int>(2);
+        if (summonWangFugui) rows.Add(WangFuguiId);
+        if (summonGuangbing) rows.Add(GuangbingId);
+        return rows.ToImmutable();
+    }
 
-    public static bool IsCompanionRow(int id) => id == WangFuguiId;
+    // 两行都算伴侣：未放行时在房间计划里丢弃，放行后按资源行原样发送。
+    public static bool IsCompanionRow(int id) => id is WangFuguiId or GuangbingId;
 }

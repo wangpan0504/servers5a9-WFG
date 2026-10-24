@@ -1,0 +1,43 @@
+频道进入对应城镇。快照是等级 95、完成任务为空。玩法未接。没有客户端实机验收。进程 41144 仍是旧内存脚本。
+
+落点规则：非 resumeTown 的新选角调用 ChannelAreaLanding.Place。目标区域要在 TownCatalog 里，DestinationAdmission 必须是 ready。坐标只用该区域已有 [gate]、从共享房间反推的 Entrance，或已核对的 InitialReturn。三者都没有可站立点，或等级、任务不够，或分组没有证明的城镇，位置保持共享房间 38/1。resumeTown 不搬区。
+
+等级 95、无任务时的落点：
+1 类型 22 [elven_guard] 38/0 622,196
+10 类型 22 [granfloris] 38/1 没有可站立门口
+11 类型 22 [sky_catle] 38/1 任务不足或没有可站立门口
+12 类型 22 [behemoth] 38/1
+13 类型 22 [Alfhlyra] 38/1
+14 类型 22 [Noirpera] 38/1
+15 类型 22 [Charnak] 38/1
+16 类型 22 [Abnoba] 38/1
+17 类型 22 [Meltdown] 38/1
+18 类型 22 [FallsToTheSky] 38/1
+19 类型 23 [raid] 19/0 474,234
+20 类型 32 [luke_raid] 38/1
+21 类型 22 [metro] 38/1
+22 类型 22 [north_myre] 38/1
+23 类型 11 [deathtower] 38/1
+24 类型 22 [ancient] 38/1 没有证明城镇
+25 类型 22 [Antwer] 38/1 没有证明城镇
+26 类型 22 [impossible] 38/1 没有证明城镇
+27 类型 22 [seatrain] 38/1 没有证明城镇
+28 类型 22 [stormpass] 38/1 没有证明城镇
+29 类型 22 [timedoor] 38/1
+30 类型 22 [powerstation] 38/1
+31 类型 18 [attackzone] 15/0 594,234
+32 类型 30 [goldenroad] 38/1 没有证明城镇，类型保持 30
+33 类型 22 [noblsky] 38/1 没有证明城镇
+34 类型 22 [CastleofDead] 38/1 没有证明城镇
+35 类型 22 [crack] 38/1 没有证明城镇，类型保持 22
+36 类型 26 [sainthorn] 17/0 474,234
+37 类型 22 [harlem] 38/1 任务不足
+38 类型 22 [east harlem] 38/1 任务不足
+39 类型 45 [fiendwar] 38/1 没有可站立门口，名称 `<chn_channel_info_048>`
+40 类型 24 [pvp] 等级 1 为 38/1；等级 95 为 10/0 474,234。名称 `<chn_channel_info_039>`
+
+名称键：go-server testdata channel_info.etc 把 `<chn_channel_info_039>` 到 `<chn_channel_info_045>` 配在类型 24、分组 [pvp]。本服只加了 039 这一条。魔兽类型 40、普雷类型 50 没有证明到客户端名称键，未加行。
+
+未加类型：25、27、36、42、46、48、52、53、54、55、62、63、64。黄金之路没有改成类型 36。异次元裂缝没有改成类型 40。魔界大战没有改回类型 42。
+
+分组到区域的来源是服务端 Script.pvf 的 town 脚本和 worldmap 文件名，以及 channeluiinfo 里已经能在 TownCatalog 找到的城镇号 19、10、15。城镇 1、6、16 没有用作落点：1 是 SilverCrown，6 是根特，16 不在 town.lst。

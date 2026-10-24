@@ -1,0 +1,45 @@
+using System.Buffers.Binary;
+using System.Text;
+using DfoServer.Game.Characters;
+
+namespace DfoServer.Network.Parsers;
+
+// C2S664 CREATE_RAID（客户端 7560188d，发送点 0216E156..0216E1E8，经 03BDF610 起包、03BE0FF0 发出）：
+// u8  团本类型：01DC69B0 取当前频道类型减 0x17 查 01DC6A18 表（0x17/0x19→0，0x20→1，0x2D→2，0x32→3，0x3E→4，0x3F→5，其余→6）；
+//     魔界大战频道 0x36 落默认值 6，与实机 06 一致。
+// u32 字节数 + 队名（03BDF8E0）；随后依次 u8 窗口[+0x210]、u8 [+0x211]、u8 [+0x214]、u8 标志（局部 bl，0216E0BD 可清 bit2）。
+// 三个窗口字段与标志的业务含义未恢复，只原样保留。
+internal readonly record struct CreateRaidRequest(byte RaidType, string Name, byte Field210, byte Field211, byte Field214, byte Flags);
+
+// C2S670 MODIFY_RAID_INFO（发送点 0216F165..0216F1B7）：u8 团本类型（01DC69B0）、u32 字节数 + 队名（03BDF8E0）、u8 [ebp-0x34]（含义未恢复，原样保留）。
+internal readonly record struct ModifyRaidRequest(byte RaidType, string Name, byte Field);
+
+internal static class RaidRequests
+{
+    public const int MaxNameBytes = 64;
+
+    public static ModifyRaidRequest ModifyRaid(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 5) throw new InvalidDataException("MODIFY_RAID_INFO 缺少类型或队名长度");
+        int count = BinaryPrimitives.ReadInt32LittleEndian(body[1..]);
+        if (count is < 0 or > MaxNameBytes || body.Length != 5 + count + 1)
+            throw new InvalidDataException("MODIFY_RAID_INFO 队名长度或尾字段非法");
+        string name;
+        try { name = CharacterName.Encoding.GetString(body.Slice(5, count)); }
+        catch (DecoderFallbackException error) { throw new InvalidDataException("MODIFY_RAID_INFO 队名不是CP936", error); }
+        return new(body[0], name, body[5 + count]);
+    }
+
+    public static CreateRaidRequest CreateRaid(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 5) throw new InvalidDataException("CREATE_RAID 缺少类型或队名长度");
+        int count = BinaryPrimitives.ReadInt32LittleEndian(body[1..]);
+        if (count is < 0 or > MaxNameBytes || body.Length != 5 + count + 4)
+            throw new InvalidDataException("CREATE_RAID 队名长度或尾字段非法");
+        string name;
+        try { name = CharacterName.Encoding.GetString(body.Slice(5, count)); }
+        catch (DecoderFallbackException error) { throw new InvalidDataException("CREATE_RAID 队名不是CP936", error); }
+        var tail = body[(5 + count)..];
+        return new(body[0], name, tail[0], tail[1], tail[2], tail[3]);
+    }
+}

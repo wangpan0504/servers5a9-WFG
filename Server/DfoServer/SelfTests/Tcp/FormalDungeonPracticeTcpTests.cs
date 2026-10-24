@@ -173,6 +173,7 @@ internal static partial class FormalDungeonTcpTests
                 peer.Expect(0, 3, [1, key[0], key[1], 1]);
                 peer.Expect(0, 27, new byte[42]);
                 peer.Barrier();
+                // 退场后迟到的1/3不能再回ACK72{1,3}改写已离开的结算页。
                 peer.Send(72, [1, 3]);
                 peer.Barrier();
                 That(EmptyLedgers(), "练习选择其他地下城直接完整选图，不跟随活动任务自动继续主线，旧尾包静默忽略");

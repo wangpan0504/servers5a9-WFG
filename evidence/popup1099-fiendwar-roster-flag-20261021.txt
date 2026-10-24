@@ -1,0 +1,310 @@
+# popup 1099 on entering channel 39 (type 0x2D CHANNEL_FIEND_WAR) — static evidence
+baseline: client SHA256 7560188D4BAC4A33690FE3B37069F365885F7F57E14CEE868B64103852F28471 (V31.0.24.0, 32-bit, file offset = VA-0x400000), disassembled read-only with capstone 5.0.7
+server: rift-daily bf00ccd, Server/DfoServer/Network/Builders/CharacterPackets.cs Roster()
+author: Grok Bot executor, 2026-10-21 (UTC+8)
+
+## 1. runtime trigger (ARAD.client.log 2026-10-21, UTC+8; call-site address prefix is logged)
+[0x028FA967][09:45:36.714] CNGameCore::setChannelType:8880 set Channel Type : [ CHANNEL_FIEND_WAR ]
+[0x0233F4E1][09:45:36.715] CMDFUNC_ENUM_CMDPACKET_LOGIN:3078 채널변경 자동접속 0
+[0x036DB84D][09:45:36.716] CNRDInterfaceManager::openPopupWindow:6977 Open IRDPopupWindow Type : 1099
+[0x0233F5B0][09:45:36.716] CMDFUNC_ENUM_CMDPACKET_LOGIN:3197 ...
+server.jsonl: conn 8 connected to 127.0.0.1:58275 (channel 39 type 45) 09:45:36.68, LOGIN + USERINFO roster sent, no SELECT_CHARACTER received, client closed 09:45:45.77.
+
+## 2. call chain
+- ACK LOGIN handler: 0233F4E1 logs line 3078, then 0233F4E9..0233F4FC: push 0; push 1; push ebx; core=02330FF0(); ecx=[core+0xB4] (03E45AE0); call 03B55580  (character-select module 'start with slot' path, auto re-select on channel change).
+- openPopupWindow = 036DB2F0 (log site 036DB84D inside). 0x44B (1099) is the generic message-box popup type: >100 'push 0x44b; call 036DB2F0' sites exist in .text.
+- 03B55580: roster entry = 03B428D0(module+0xB4, slot). Channel-type branches (02330DF0 = [chan+0x1010]):03B558FF  e8ecb67dfe           call 0x2330ff0
+03B55904  8bc8                 mov ecx, eax
+03B55906  e8e5b47dfe           call 0x2330df0
+03B5590B  83f80d               cmp eax, 0xd
+03B5590E  0f84460f0000         je 0x3b5685a
+03B55914  e8d7b67dfe           call 0x2330ff0
+03B55919  8bc8                 mov ecx, eax
+03B5591B  e8d0b47dfe           call 0x2330df0
+03B55FC0  c645cb01             mov byte ptr [ebp - 0x35], 1
+03B55FC4  e9f40a0000           jmp 0x3b56abd
+03B55FC9  e822b07dfe           call 0x2330ff0
+03B55FCE  8bc8                 mov ecx, eax
+03B55FD0  e81bae7dfe           call 0x2330df0
+03B55FD5  83f82d               cmp eax, 0x2d
+03B55FD8  752d                 jne 0x3b56007
+03B55FDA  84db                 test bl, bl
+03B55FDC  0f84db0a0000         je 0x3b56abd
+03B55FE2  56                   push esi
+03B55FE3  8bcf                 mov ecx, edi
+03B55FE5  e8e6c8feff           call 0x3b428d0
+03B55FEA  80b89904000000       cmp byte ptr [eax + 0x499], 0
+03B55FF1  0f85c60a0000         jne 0x3b56abd
+03B55FF7  c745c028270100       mov dword ptr [ebp - 0x40], 0x12728
+03B55FFE  c645cb01             mov byte ptr [ebp - 0x35], 1
+03B56002  e9b60a0000           jmp 0x3b56abd
+03B56007  e8e4af7dfe           call 0x2330ff0
+03B5600C  8bc8                 mov ecx, eax
+03B5600E  e88d44dafe           call 0x28fa4a0
+03B56013  84c0                 test al, al
+03B56015  742d                 je 0x3b56044
+03B56017  84db                 test bl, bl
+03B56019  0f849e0a0000         je 0x3b56abd
+03B5601F  56                   push esi
+03B56020  8bcf                 mov ecx, edi
+03B56022  e8a9c8feff           call 0x3b428d0
+03B56027  80b89304000000       cmp byte ptr [eax + 0x493], 0
+03B5602E  0f85890a0000         jne 0x3b56abd
+03B56034  c745c029020100       mov dword ptr [ebp - 0x40], 0x10229
+03B5603B  c645cb01             mov byte ptr [ebp - 0x35], 1
+03B5603F  e9790a0000           jmp 0x3b56abd
+03B56044  e8a7af7dfe           call 0x2330ff0
+03B56049  8bc8                 mov ecx, eax
+03B5604B  e8a0ad7dfe           call 0x2330df0
+03B56050  83f832               cmp eax, 0x32
+03B56CF6  0f85b5040000         jne 0x3b571b1
+03B56CFC  807dcb00             cmp byte ptr [ebp - 0x35], 0
+03B56D00  0f85ab040000         jne 0x3b571b1
+03B56D06  807daf00             cmp byte ptr [ebp - 0x51], 0
+03B56D0A  7468                 je 0x3b56d74
+03B571A7  e8e4afcefd           call 0x1842190
+03B571AC  e9e3000000           jmp 0x3b57294
+03B571B1  6aff                 push -1
+03B571B3  6a01                 push 1
+03B571B5  e8469e7dfe           call 0x2331000
+03B571BA  83c408               add esp, 8
+03B571BD  56                   push esi
+03B571BE  e82d9e7dfe           call 0x2330ff0
+03B571C3  8bc8                 mov ecx, eax
+03B571C5  e8f6997dfe           call 0x2330bc0
+03B571CA  8b55c0               mov edx, dword ptr [ebp - 0x40]
+03B571CD  52                   push edx
+03B571CE  e81d572800           call 0x3ddc8f0
+03B571D3  83c404               add esp, 4
+03B571D6  50                   push eax
+03B571D7  6804980c05           push 0x50c9804
+03B571DC  e88fe91100           call 0x3c75b70
+03B571E1  83c404               add esp, 4
+03B571E4  50                   push eax
+03B571E5  8d45b8               lea eax, [ebp - 0x48]
+03B571E8  50                   push eax
+03B571E9  e8924a1200           call 0x3c7bc80
+03B571EE  83c40c               add esp, 0xc
+03B571F1  c745fc0e000000       mov dword ptr [ebp - 4], 0xe
+03B571F8  8bc8                 mov ecx, eax
+03B571FA  e8318f8ffe           call 0x2450130
+03B571FF  50                   push eax
+03B57200  8d4dd0               lea ecx, [ebp - 0x30]
+03B57203  e868c68bfc           call 0x413870
+03B57208  b310                 mov bl, 0x10
+03B5720A  885dfc               mov byte ptr [ebp - 4], bl
+03B5720D  8d4db8               lea ecx, [ebp - 0x48]
+03B57210  e8fb451200           call 0x3c7b810
+03B57215  6a38                 push 0x38
+03B57217  e8b4ef8afc           call 0x4061d0
+03B5721C  83c404               add esp, 4
+03B5721F  8945bc               mov dword ptr [ebp - 0x44], eax
+03B57222  c645fc12             mov byte ptr [ebp - 4], 0x12
+03B57226  85c0                 test eax, eax
+03B57228  7415                 je 0x3b5723f
+03B5722A  8b4da8               mov ecx, dword ptr [ebp - 0x58]
+03B5722D  8b55c4               mov edx, dword ptr [ebp - 0x3c]
+03B57230  6a01                 push 1
+03B57232  51                   push ecx
+03B57233  52                   push edx
+03B57234  6a00                 push 0
+03B57236  56                   push esi
+03B57237  50                   push eax
+03B57238  e84303ffff           call 0x3b47580
+03B5723D  eb02                 jmp 0x3b57241
+03B5723F  33c0                 xor eax, eax
+03B57241  885dfc               mov byte ptr [ebp - 4], bl
+03B57244  837de808             cmp dword ptr [ebp - 0x18], 8
+03B57248  8b4dd4               mov ecx, dword ptr [ebp - 0x2c]
+03B5724B  7303                 jae 0x3b57250
+03B5724D  8d4dd4               lea ecx, [ebp - 0x2c]
+03B57250  6a00                 push 0
+03B57252  68f8861c06           push 0x61c86f8
+03B57257  682c741c06           push 0x61c742c
+03B5725C  6a00                 push 0
+03B5725E  50                   push eax
+03B5725F  51                   push ecx
+03B57260  8b0d3cf52e06         mov ecx, dword ptr [0x62ef53c]
+03B57266  684b040000           push 0x44b
+03B5726B  e88040b8ff           call 0x36db2f0
+03B57270  50                   push eax
+03B57271  e83e38d700           call 0x48caab4
+03B57276  8b10                 mov edx, dword ptr [eax]
+03B57278  8bc8                 mov ecx, eax
+03B5727A  8b82b4000000         mov eax, dword ptr [edx + 0xb4]
+03B57280  83c414               add esp, 0x14
+  => type 0x17: entry+0x491==0 -> msg 0x10227(66087 Anton); 0x20: +0x492 -> 0x10228(66088 Luke); 028FA4A0 group: +0x493 -> 0x10229(66089); 0x2D: +0x499 -> 0x12728(75560); 0x32: +0x494 -> 0x7D74(32116 Prey).
+  Each sets [ebp-0x35]=1 and [ebp-0x40]=msg id only when bl (=0176AE60(4)) is true. 03B56CFC: [ebp-0x35]!=0 -> 03B571B1: text=03DDC8F0([ebp-0x40]) -> 03B57266 push 0x44B; call 036DB2F0 (popup 1099).
+  No guild or quest lookup happens on this path: the only per-character input is the roster entry byte.
+
+## 3. dstr text (dstr-plain.txt, decoded from client dstr.dat by dstr.py)
+75560>未满足以下条件， 无法进入超时空漩涡频道。\n1. 完成“[超时空漩涡] 奔赴前线”任务。\n2. 加入公会。\n确定要用所选角色进入城镇吗？
+66087/66088/66089/32116 = Anton / Luke / 魔兽 / Prey channel equivalents (same '确定要用所选角色进入城镇吗？' form).
+
+## 4. where entry+0x499 comes from: roster row reader 02680B80 (only caller of 02676A00 is 0268101E)
+02676A00 reads 5 u8; each ==1 sets: +0x491, +0x492, +0x493, +0x499, +0x494 (in that order):02676A00  55                   push ebp
+02676A01  8bec                 mov ebp, esp
+02676A03  83ec08               sub esp, 8
+02676A06  53                   push ebx
+02676A07  56                   push esi
+02676A08  bb01000000           mov ebx, 1
+02676A0D  8d45ff               lea eax, [ebp - 1]
+02676A10  53                   push ebx
+02676A11  50                   push eax
+02676A12  c645ff00             mov byte ptr [ebp - 1], 0
+02676A16  e895e76001           call 0x3c851b0
+02676A1B  385dff               cmp byte ptr [ebp - 1], bl
+02676A1E  8b7508               mov esi, dword ptr [ebp + 8]
+02676A21  8d55fe               lea edx, [ebp - 2]
+02676A24  0f94c1               sete cl
+02676A27  53                   push ebx
+02676A28  52                   push edx
+02676A29  888e91040000         mov byte ptr [esi + 0x491], cl
+02676A2F  c645fe00             mov byte ptr [ebp - 2], 0
+02676A33  e878e76001           call 0x3c851b0
+02676A38  385dfe               cmp byte ptr [ebp - 2], bl
+02676A3B  8d4dfd               lea ecx, [ebp - 3]
+02676A3E  0f94c0               sete al
+02676A41  53                   push ebx
+02676A42  51                   push ecx
+02676A43  888692040000         mov byte ptr [esi + 0x492], al
+02676A49  c645fd00             mov byte ptr [ebp - 3], 0
+02676A4D  e85ee76001           call 0x3c851b0
+02676A52  385dfd               cmp byte ptr [ebp - 3], bl
+02676A55  8d45fc               lea eax, [ebp - 4]
+02676A58  0f94c2               sete dl
+02676A5B  53                   push ebx
+02676A5C  50                   push eax
+02676A5D  889693040000         mov byte ptr [esi + 0x493], dl
+02676A63  c645fc00             mov byte ptr [ebp - 4], 0
+02676A67  e844e76001           call 0x3c851b0
+02676A6C  385dfc               cmp byte ptr [ebp - 4], bl
+02676A6F  8d55fb               lea edx, [ebp - 5]
+02676A72  0f94c1               sete cl
+02676A75  53                   push ebx
+02676A76  52                   push edx
+02676A77  888e99040000         mov byte ptr [esi + 0x499], cl
+02676A7D  c645fb00             mov byte ptr [ebp - 5], 0
+02676A81  e82ae76001           call 0x3c851b0
+02676A86  83c428               add esp, 0x28
+02676A89  385dfb               cmp byte ptr [ebp - 5], bl
+02676A8C  0f94c0               sete al
+02676A8F  888694040000         mov byte ptr [esi + 0x494], al
+02676A95  5e                   pop esi
+02676A96  5b                   pop ebx
+02676A97  8be5                 mov esp, ebp
+02676A99  5d                   pop ebp
+02676A9A  c3                   ret 
+02676A9B  cc                   int3 
+02676A9C  cc                   int3 
+02676A9D  cc                   int3 
+02676A9E  cc                   int3 
+02676A9F  cc                   int3 
+02676AA0  55                   push ebp
+02676AA1  8bec                 mov ebp, esp
+02676AA3  6aff                 push -1
+02676AA5  689875d304           push 0x4d37598
+02676AAA  64a100000000         mov eax, dword ptr fs:[0]
+02676AB0  50                   push eax
+02676AB1  83ec18               sub esp, 0x18
+Row reader read sequence (READ=03C851B0(ptr,n), R290=u32, R220=u16, R300(ptr,8)):02680B85  68197cd304           push 0x4d37c19
+02680BB5  e866466001           call 0x3c85220
+02680BD3  e81804cbff           call 0x2330ff0
+02680BDA  e8014f7c01           call 0x3e45ae0
+02680BE1  e8ba204c01           call 0x3b42ca0
+02680BEB  e80004cbff           call 0x2330ff0
+02680BF2  e8e94e7c01           call 0x3e45ae0
+02680BF9  e802204c01           call 0x3b42c00
+02680C01  e8ea03cbff           call 0x2330ff0
+02680C08  e8d34e7c01           call 0x3e45ae0
+02680C0F  e83c204c01           call 0x3b42c50
+02680C2C  689c170000           push 0x179c
+02680C31  e82adf5f01           call 0x3c7eb60
+02680C48  e8d3e44200           call 0x2aaf120
+02680C60  e8cbd4b401           call 0x41ce130
+02680C72  e8b9c9b401           call 0x41cd630
+02680C77  686f020000           push 0x26f
+02680C7C  e86fbc7501           call 0x3ddc8f0
+02680C85  6a1f                 push 0x1f
+02680C88  e8331a5601           call 0x3be26c0
+02680C9A  e8016d5f01           call 0x3c779a0
+02680C9F  e88c8cffff           call 0x2679930
+02680CAA  6a01                 push 1
+02680CB9  e8f2446001           call 0x3c851b0
+02680CCB  6a01                 push 1
+02680CD4  e8d7446001           call 0x3c851b0
+02680CEA  e8511e7000           call 0x2d82b40
+02680D14  e89762ffff           call 0x2676fb0
+02680D20  e83b63ffff           call 0x2677060
+02680D2B  6a01                 push 1
+02680D34  e877446001           call 0x3c851b0
+02680D4D  e83e456001           call 0x3c85290
+02680D62  e809e61700           call 0x27ff370
+02680D69  e83248c0fe           call 0x12855a0
+02680D75  e816456001           call 0x3c85290
+02680D8A  e8e1e51700           call 0x27ff370
+02680D91  e84adf1700           call 0x27fece0
+02680D9D  e83e50ffff           call 0x2675de0
+02680DAF  e8dc446001           call 0x3c85290
+02680DC0  6a01                 push 1
+02680DCF  e8dc436001           call 0x3c851b0
+02680DE1  6a01                 push 1
+02680DF0  e8bb436001           call 0x3c851b0
+02680E02  6a01                 push 1
+02680E11  e89a436001           call 0x3c851b0
+02680E1C  6a01                 push 1
+02680E25  e886436001           call 0x3c851b0
+02680E32  e8f9c7ffff           call 0x267d630
+02680E3E  e87d63ffff           call 0x26771c0
+02680E4A  e82164ffff           call 0x2677270
+02680E55  6a01                 push 1
+02680E5E  e84d436001           call 0x3c851b0
+02680E7D  e89e64ffff           call 0x2677320
+02680E89  e8a265ffff           call 0x2677430
+02680E8E  e8fd56ffff           call 0x2676590
+02680EA1  e8ca6cffff           call 0x2677b70
+02680EB2  6a01                 push 1
+02680EB5  e8969a7401           call 0x3dca950
+02680ECD  e8def24000           call 0x2a901b0
+02680ED8  6a01                 push 1
+02680EE1  e8ca426001           call 0x3c851b0
+02680EEC  e82fc44000           call 0x2a8d320
+02680EF7  6a01                 push 1
+02680F00  e8ab426001           call 0x3c851b0
+02680F0B  6a01                 push 1
+02680F0E  e89d426001           call 0x3c851b0
+02680F1F  6a01                 push 1
+02680F2E  e87d426001           call 0x3c851b0
+02680F49  e86278ffff           call 0x26787b0
+02680F54  6a01                 push 1
+02680F5D  e84e426001           call 0x3c851b0
+02680F71  6a01                 push 1
+02680F80  e82b426001           call 0x3c851b0
+02680F94  6a01                 push 1
+02680FA3  e808426001           call 0x3c851b0
+02680FCE  e83d885f01           call 0x3c79810
+02680FD9  6a01                 push 1
+02680FE2  e8c9416001           call 0x3c851b0
+02680FF6  6a01                 push 1
+02681005  e8a6416001           call 0x3c851b0
+0268101E  e8dd59ffff           call 0x2676a00
+02681030  e85b426001           call 0x3c85290
+0268104E  e8cd416001           call 0x3c85220
+0268106A  e881cc4000           call 0x2a8dcf0
+02681086  ffd0                 call eax
+0268109B  e850ffcaff           call 0x2330ff0
+026810A2  e8394a7c01           call 0x3e45ae0
+026810A9  e862794d01           call 0x3b58a10
+026810B6  e835ffcaff           call 0x2330ff0
+026810BD  e81e4a7c01           call 0x3e45ae0
+026810C4  e847464f01           call 0x3b75710
+026810CB  e88082ffff           call 0x2679350
+026810E0  e8db7ee7fd           call 0x4f8fc0
+026810F8  e85f802402           call 0x48c915c
+Mapping after appearance (02675DE0) against server Roster() 48-byte tail:
+ [0..3] R290 | [4..7] 4xu8 | [8..15] 0267D630 (R300 8B) | [16] 026771C0 u8 | [17..20] 02677270 u32 | [21] u8 | [22] 02677320 u8 | [23] 02677430 u8 | [24] 02677B70 u8 bitfield (server writes 3) | [25..28] 4xu8 (server [27]=4) | [29..31] 026787B0 3xu8 | [32..34] 3xu8 | [35..36] 2xu8 | [37..41] 02676A00 5xu8 | [42..45] u32 | [46..47] u16  = 48 bytes, exactly the server tail length.
+=> tail[37]=Anton(+0x491) tail[38]=Luke(+0x492) tail[39]=+0x493 tail[40]=超时空漩涡(+0x499) tail[41]=Prey(+0x494). Server currently writes 0 in all five -> popup 75560 for every character on type 0x2D.
+
+## 5. other writers of +0x499 (not analysed): 004FC1A8 / 015048CA (entry copy), 020388B4 / 020388E0, 0267F87A (from global 0x6204C8D), 041CDEB2.
+
+## 6. ACK LOGIN disassembly excerpt 0233F2C0..0233F480 in dis-acklogin-0233F2C0.txt; full 03B55580 in dis-03B55580-full.txt; roster reader in dis-roster-row-02680B80.txt.

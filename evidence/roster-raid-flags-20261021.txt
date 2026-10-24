@@ -1,0 +1,75 @@
+# Roster raid eligibility flags tail[37..41] — static + PVF evidence
+baseline: client ARAD.exe SHA256 7560188D4BAC4A33690FE3B37069F365885F7F57E14CEE868B64103852F28471 (V31.0.24.0, 32-bit, file offset = VA-0x400000), capstone read-only
+PVF: Script.pvf SHA256 01C9970F9AE0D5FDBD08AC20B7B0BB61FEA451505ACFEF2569A56390B42B38B8
+server: rift-daily 438b7e8 + this change
+author: Grok Bot executor, 2026-10-21 (UTC+8)
+
+## 1. Client gate in 03B55580 (character select 'start' path; bl = 0176AE60(4))
+03B558DE  e87d55c1fd           call 0x176ae60
+03B55EDB  83f817               cmp eax, 0x17
+03B55EF0  80b89104000000       cmp byte ptr [eax + 0x491], 0
+03B55EF9  c745c027020100       mov dword ptr [ebp - 0x40], 0x10227
+03B55F97  83f820               cmp eax, 0x20
+03B55FAC  80b89204000000       cmp byte ptr [eax + 0x492], 0
+03B55FB9  c745c028020100       mov dword ptr [ebp - 0x40], 0x10228
+03B55FD5  83f82d               cmp eax, 0x2d
+03B55FEA  80b89904000000       cmp byte ptr [eax + 0x499], 0
+03B55FF7  c745c028270100       mov dword ptr [ebp - 0x40], 0x12728
+03B5600E  e88d44dafe           call 0x28fa4a0
+03B56027  80b89304000000       cmp byte ptr [eax + 0x493], 0
+03B56034  c745c029020100       mov dword ptr [ebp - 0x40], 0x10229
+03B56050  83f832               cmp eax, 0x32
+03B56065  80b89404000000       cmp byte ptr [eax + 0x494], 0
+03B560D8  c745c0747d0000       mov dword ptr [ebp - 0x40], 0x7d74
+
+028FA4A0 (group predicate used for +0x493):
+028FA4A0  33c0                 xor eax, eax
+028FA4A2  83b91010000028       cmp dword ptr [ecx + 0x1010], 0x28
+028FA4A9  0f94c0               sete al
+028FA4AC  c3                   ret 
+=> type 0x17 (23) +0x491 msg 0x10227=66087 | type 0x20 (32) +0x492 msg 0x10228=66088 | type 0x28 (40) +0x493 msg 0x10229=66089
+   | type 0x2D (45) +0x499 msg 0x12728=75560 | type 0x32 (50) +0x494 msg 0x7D74=32116. Each: byte==0 -> popup 1099 with that text.
+Roster reader 02676A00 reads tail[37..41] (==1) into +0x491,+0x492,+0x493,+0x499,+0x494 (see popup1099-fiendwar-roster-flag-20261021.txt sec.4).
+Server channel.txt: 19 type 23 [raid] (Anton), 20 type 32 [luke_raid]; no type 40 or type 50 channel.
+
+## 2. dstr texts (decoded from client dstr.dat)
+32116>若想切换到普雷·伊希斯攻坚战频道， 须达到Lv95以上， 且完成[前往夜之摩天楼]任务。\n\n确定要用所选角色进入城镇吗？
+66087>若想进入安徒恩攻坚战频道， 需要先完成安徒恩主线任务，\n然后完成“异次元的安徒恩”任务。\n确定要用所选角色进入城镇吗？
+66088>若想进入卢克攻坚战频道， 需要先完成卢克的实验室主线任务，\n然后完成“制造者卢克 (1/2)”任务。\n确定要用所选角色进入城镇吗？
+66089>完成[魔兽研究者凯特丽娜]即可进入[魔兽地下城]频道。\n确定要用所选角色进入城镇吗？
+75560>未满足以下条件， 无法进入超时空漩涡频道。\n1. 完成“[超时空漩涡] 奔赴前线”任务。\n2. 加入公会。\n确定要用所选角色进入城镇吗？
+## 3. PVF etc/enterablespecialchannel.etc
+===== etc/enterablespecialchannel.etc
+
+[entarable quest by channel]
+
+[anton]
+12829 
+[luke]
+2903 
+[beast]
+5927 
+[fiendwar]
+8672 
+[prey]
+8935 
+[/entarable quest by channel]
+
+
+## 4. quest.lst registration (n_quest/quest.lst)
+8672 -> Quest_Renewal\Epic_Quest\Cosmofiend\Fiendwar_enter.qst
+2903 -> LukeRaid/Luke_enter_01.qst
+12829 -> Anton/Anton_dimension_enter.qst
+8935 -> GContents/190606_Isys_normal/Isys_normal_clear_03.qst
+(5927 has no quest.lst entry; n_quest/new_quest/metrocenter/open_beast.qst '魔兽研究者凯特丽娜' exists but is unregistered)
+
+## 5. quest files
+n_quest/anton/anton_dimension_enter.qst : name=[安徒恩团队模式]异次元的安徒恩 level=85 99 pre=3779 condition=为了帮助奈恩进行调查， 请收集材料。 (完成该任务后， 可以进入安徒恩团队模式频道)
+n_quest/lukeraid/luke_enter_01.qst : name=[卢克团队模式]制造者卢克 (1/2) level=90 99 pre=4872 condition=收集以下材料， 交给梅丽。
+n_quest/gcontents/190606_isys_normal/isys_normal_clear_03.qst : name=[伊希斯攻坚战]前往夜之摩天楼  level=95 100 pre=8925 condition=找亚瑟谈谈。 (完成任务后， 可以通过团队频道进入普雷·伊希斯攻坚战)
+## 6. Conditions implemented
+tail[37] Anton  = completed 12829 ([安徒恩团队模式]异次元的安徒恩; its [pre required quest] 3779 covers 'complete Anton main line first')
+tail[38] Luke   = completed 2903 ([卢克团队模式]制造者卢克 (1/2); pre 4872 covers 'complete Luke lab main line first')
+tail[40] Fiendwar = completed 8672 AND guild member (438b7e8)
+tail[41] Prey   = completed 8935 ([伊希斯攻坚战]前往夜之摩天楼) AND level >= 95 (dstr 32116; quest [level] 95 100)
+tail[39] Beast  = NOT implemented (0): PVF key beast=5927 is not a registered quest and the server has no type 0x28 channel.

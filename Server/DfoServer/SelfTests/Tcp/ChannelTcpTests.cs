@@ -38,11 +38,11 @@ internal static class ChannelTcpTests
                 ("elven_guard", 22), ("granfloris", 22), ("sky_catle", 22), ("behemoth", 22),
                 ("Alfhlyra", 22), ("Noirpera", 22), ("Charnak", 22), ("Abnoba", 22),
                 ("Meltdown", 22), ("FallsToTheSky", 22), ("raid", 23), ("luke_raid", 32),
-                ("metro", 22), ("north_myre", 22), ("deathtower", 11), ("ancient", 22),
-                ("Antwer", 22), ("impossible", 22), ("seatrain", 22), ("stormpass", 22),
-                ("timedoor", 22), ("powerstation", 22), ("attackzone", 18), ("goldenroad", 30),
-                ("noblsky", 22), ("CastleofDead", 22), ("crack", 22), ("sainthorn", 26),
-                ("harlem", 22), ("east harlem", 22)
+                ("metro", 22), ("north_myre", 22), ("deathtower", 11), ("ancient", 11),
+                ("Antwer", 22), ("impossible", 11), ("seatrain", 22), ("stormpass", 22),
+                ("timedoor", 22), ("powerstation", 22), ("attackzone", 18), ("trade", 3),
+                ("noblsky", 22), ("CastleofDead", 22), ("crack", 11), ("sainthorn", 26),
+                ("harlem", 22), ("east harlem", 22), ("fiendwar", 45), ("pvp", 24), ("evildom_war", 54), ("prey", 50), ("xian_village", 56), ("dnfaos_free", 63), ("dnfaos_rank", 62)
             ];
             foreach (var (group, type) in groups)
                 That(Regex.IsMatch(decoded, @"(?m)^\d+ `<(?:\d+::)?[A-Za-z0-9_]+>` " + type + @" `\[" + Regex.Escape(group) + @"\]` "),
@@ -51,8 +51,8 @@ internal static class ChannelTcpTests
             byte[] directory = Decode(Read(stream, 18));
             That(BinaryPrimitives.ReadInt32LittleEndian(directory) == 1 &&
                 BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(4)) == 2 &&
-                BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(8)) == 30, "目录声明服务器2和全部30个入口");
-            for (int i = 0; i < 30; i++)
+                BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(8)) == 37, "目录声明服务器2和全部37个入口");
+            for (int i = 0; i < 37; i++)
             {
                 int at = 12 + i * 64;
                 int number = i == 0 ? 1 : i + 9;
@@ -69,7 +69,7 @@ internal static class ChannelTcpTests
             Write(stream, 11, new byte[32]); Read(stream, 12);
             Write(stream, 17, new byte[24]);
             var directory = Decode(Read(stream, 18));
-            That(BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(8)) == 30 && stream.ReadByte() == -1,
+            That(BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(8)) == 37 && stream.ReadByte() == -1,
                 "已缓存脚本的11/17自动重连只收到目录并结束，不等待9或补发未请求脚本");
         }
 
@@ -109,9 +109,9 @@ internal static class ChannelTcpTests
         var entries = ready.RootElement.GetProperty("ChannelEntries").EnumerateArray().ToDictionary(
             row => row.GetProperty("Entry").GetProperty("Identity").GetProperty("Number").GetByte(),
             row => row.GetProperty("Port").GetInt32());
-        That(entries.Count == 30 && entries.Values.Distinct().Count() == 30 && entries[10] == fixture.Options.GamePort &&
+        That(entries.Count == 37 && entries.Values.Distinct().Count() == 37 && entries[10] == fixture.Options.GamePort &&
             entries.Values.All(port => port is > 0 and <= 65535 && port != fixture.Options.ChannelPort && port != fixture.Options.GmPort),
-            "一个服务实例提供30个不同入口，不占用频道或GM端口");
+            "一个服务实例提供37个不同入口，不占用频道或GM端口");
         return entries;
     }
 

@@ -54,6 +54,34 @@ internal static class DungeonEntryPlanTests
             "没有真实普通maze时仍保留任务路线，不伪造房间");
     }
 
+    static void DeathTowerCompanionPolicy(PvfArchive pvf, DungeonCatalog catalog)
+    {
+        var paths = DungeonCatalog.ParseDirectory(pvf.ReadTokens("dungeon/dungeon.lst"), pvf.ResolveString, "dungeon");
+        That(paths.TryGetValue(11000, out var path) && path == "dungeon/towers/towerofdeath.dgn",
+            "Death tower 11000 retains its real resource registration");
+        string text = pvf.ReadText(path!);
+        string type = PvfScript.Section(text, "dungeon type").Trim().Trim('`');
+        int[] floors = PvfScript.Integers(PvfScript.Block(text, "death tower map indexes"));
+        That(type == "tower of death" && !pvf.ReadTokens(path!).Any(token =>
+                token.Type == 3 && pvf.ResolveString(token.Value) == "[maze info]"),
+            "Real death tower declares its special type without an ordinary maze");
+        That(floors.Length == 91 && floors[0] == 45 && Enumerable.Range(1, 45).All(floor =>
+                floors[2 * floor - 1] == floor && floors[2 * floor] == 30000 + floor),
+            "Real death tower preserves all 45 floor/map pairs");
+
+        var ordinary = new DungeonDefinition(11000, "dungeon/ordinary.dgn", null, null, [], []);
+        That(ordinary.AllowsCompanionAi && !(ordinary with { DungeonType = type }).AllowsCompanionAi &&
+            !(ordinary with { Path = path! }).AllowsCompanionAi,
+            "Death tower type and tower resource path independently block companions");
+        bool unsupported = false;
+        try { catalog.Get(11000); }
+        catch (NotSupportedException error)
+        {
+            unsupported = error.Message == "unsupported: 未发现 maze info 资源结构";
+        }
+        That(unsupported, "Ordinary dungeon parser explicitly rejects the real maze-less death tower");
+    }
+
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
@@ -61,11 +89,12 @@ internal static class DungeonEntryPlanTests
         SpecialNormalDungeonEntryTests.Run(pvf);
 
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
-        // GM伴侣只在普通副本注入：祭坛/塔/BossRush/亡者峡谷按资源标记整类排除，普通副本保持放行。
-        // 337 BossRush、7601 迷惘之塔、11000 死亡之塔、11006/11007 两座祭坛、11008 绝望之塔首层。
-        That(new[] { 337, 7601, 11000, 11006, 11007, 11008 }.All(id => !catalog.Get(id).AllowsCompanionAi) &&
-            catalog.Get(3).AllowsCompanionAi && catalog.Get(5097).AllowsCompanionAi,
-            "祭坛、塔、亡者峡谷与Boss Rush 不注入伴侣AIC，普通副本保持放行");
+        // GM伴侣只在普通副本注入：祭坛/塔/亡者峡谷按资源标记整类排除，普通副本与Boss Rush保持放行。
+        // 7601 眩惑之塔、11006/11007 两座祭坛、11008 绝望之塔首层。
+        DeathTowerCompanionPolicy(pvf, catalog);
+        That(new[] { 7601, 11006, 11007, 11008 }.All(id => !catalog.Get(id).AllowsCompanionAi) &&
+            catalog.Get(337).AllowsCompanionAi && catalog.Get(3).AllowsCompanionAi && catalog.Get(5097).AllowsCompanionAi,
+            "祭坛、塔与亡者峡谷不注入伴侣AIC，普通副本与Boss Rush保持放行");
         var ekern = new Character(17, 0, "Ekern", 1, new Location(35, 1, 0, 0, 0), null) { Level = 90 };
         var noQuests = new QuestCatalog(new());
         var cosmoCharacter = new Character(18, 0, "CosmoMode", 0, new Location(54, 2, 0, 0), null) { Level = 95 };

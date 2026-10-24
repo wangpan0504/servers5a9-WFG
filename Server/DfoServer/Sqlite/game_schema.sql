@@ -61,6 +61,24 @@ CREATE TABLE character_growup_change(
   change_count INTEGER NOT NULL CHECK(change_count BETWEEN 1 AND 127),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE character_dungeon_incount(
+  character_id INTEGER NOT NULL,
+  account TEXT NOT NULL,
+  dungeon INTEGER NOT NULL,
+  day INTEGER NOT NULL,
+  daily_used INTEGER NOT NULL CHECK(daily_used BETWEEN 0 AND 1000000),
+  week INTEGER NOT NULL,
+  weekly_used INTEGER NOT NULL CHECK(weekly_used BETWEEN 0 AND 1000000),
+  PRIMARY KEY(character_id,dungeon),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
+CREATE TABLE account_dungeon_incount(
+  account TEXT NOT NULL,
+  dungeon INTEGER NOT NULL,
+  period INTEGER NOT NULL,
+  used INTEGER NOT NULL CHECK(used BETWEEN 0 AND 1000000),
+  PRIMARY KEY(account,dungeon)
+);
 CREATE TABLE character_exp_bonus(
   character_id INTEGER PRIMARY KEY,
   account TEXT NOT NULL,
