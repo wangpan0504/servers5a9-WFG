@@ -63,10 +63,14 @@ internal static class TownPresenceTcpTests
             That(fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account") == beforeInteraction,
                 "菜单、公开查询、离线目标与其他未实现peer模式均不修改双方资产或假回成功");
             beta.Send(12, Convert.FromHexString("000304000000000500000000000007"));
-            beta.Expect(1, 12, [1]); beta.Expect(0, 9); beta.Barrier();
+            var party = beta.Batch((0, 2), (0, 153), (0, 11), (0, 9), (0, 11), (0, 153), (0, 26))[3].Body;
+            ushort partyId = U16(party, 4);
+            beta.Barrier();
+            Bytes(alpha.Expect(0, 9).Body, party, "同屏观察者收到新建队伍的相同设置与名册");
             alpha.Send(10, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(new byte[10]); }));
-            alpha.Expect(0, 7, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(0u); w.Write(beta.Id); }));
-            beta.Send(13); beta.Expect(0, 9); beta.Barrier();
+            alpha.Expect(0, 7, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(0u); w.Write(partyId); }));
+            beta.Send(13); beta.Expect(1, 13, [1]); beta.Expect(0, 9); beta.Barrier();
+            alpha.Expect(0, 9);
             alpha.Send(10, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(new byte[10]); }));
             alpha.Expect(0, 7, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(0u); w.Write(ushort.MaxValue); }));
             alpha.Barrier();
