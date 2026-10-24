@@ -108,6 +108,22 @@ internal static class BlackDiamondTests
                 "非法网吧开关不改变当前状态");
             That(DevelopmentGm.Answer("pc-room on", "black", repo, owners, _ => null).StartsWith("ERR ", StringComparison.Ordinal) &&
                 !new GameDebugSettings().PremiumPcRoom, "离线入口拒绝网吧设置，新实例恢复关闭，不写入账号期限");
+            // GM伴侣开关默认关闭；只读查询不写任何角色状态。
+            That(!settings.SummonWangFugui &&
+                Switch("summon-wangfugui") == "OK {\"summonWangFugui\":false}" &&
+                !DevelopmentRequest.Parse("summon-wangfugui", "black").Writes, "伴侣开关默认关闭，只读查询不写玩家状态");
+            That(Switch("summon-wangfugui on") == "OK {\"summonWangFugui\":true}" && settings.SummonWangFugui &&
+                Switch("summon-wangfugui off") == "OK {\"summonWangFugui\":false}" && !settings.SummonWangFugui &&
+                DevelopmentRequest.Parse("summon-wangfugui on", "black").Writes,
+                "伴侣开关 on/off 幂等切换");
+            That(Switch("summon-wangfugui auto").StartsWith("ERR ", StringComparison.Ordinal) &&
+                Switch("summon-wangfugui 20900").StartsWith("ERR ", StringComparison.Ordinal) &&
+                Switch("summon-wangfugui on extra").StartsWith("ERR ", StringComparison.Ordinal) &&
+                !settings.SummonWangFugui,
+                "非法伴侣开关不改变当前状态");
+            That(DevelopmentGm.Answer("summon-wangfugui on", "black", repo, owners, _ => null).StartsWith("ERR ", StringComparison.Ordinal) &&
+                !new GameDebugSettings().SummonWangFugui,
+                "离线入口拒绝伴侣设置，新实例恢复关闭");
             Character Create(AccountOwners.Lease lease, string name) => repo.Create(lease,
                 new(name, new(1, 0, 1, 1), null) { DungeonState = CharacterDungeonState.NewOrdinary });
             var first = Create(owner, "BlackFirst");

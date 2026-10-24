@@ -13,11 +13,12 @@ export function render(root, ctx) {
     ['ignoreAbsoluteExpiration', 'cash-shop-expiration', '忽略商城绝对日期', '开启后忽略物品的固定到期日。重启恢复为开。'],
     ['ignoreUsablePeriod', 'cash-shop-usable-period', '忽略商城相对期限', '开启后忽略使用后天数。重启恢复为关。'],
     ['premiumPcRoom', 'pc-room', '网吧身份', '开启后本进程按网吧身份。不改黑钻期限，重启恢复为关。'],
+    ['summonWangFugui', 'summon-wangfugui', '召唤奶爸支援兵（王富贵，实验性）', '实验性功能，需要配套PVF支持（地图 [ai character] 含 20900 行）。开启后每次进图在起始房间放出奶爸支援兵王富贵；进图有问题先关掉开关再重新进图。只对当前进程有效，重启恢复为关。'],
   ];
   const loadDebug = async () => {
     try {
       const d = await api.debug();
-      debugBox.replaceChildren(note('这些开关不写角色存档，只改当前服务进程。切换前会确认。'),
+      debugBox.replaceChildren(note('这些开关不写角色存档，只改当前服务进程。切换前会确认。伴侣开关为实验性功能，需要配套PVF支持；进图有问题先关掉再重新进图。'),
         ...switches.map(([field, key, label, detail]) => {
           const on = d[field] === true;
           return h('div', { class: 'toolbar' },

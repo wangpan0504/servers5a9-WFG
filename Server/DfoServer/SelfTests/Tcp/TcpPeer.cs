@@ -41,6 +41,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[][] Mailbox { get; private set; } = [];
     public byte[] TitleProgress { get; private set; } = [];
     public byte[] AssaultDailyInfo { get; private set; } = [];
+    public byte[] GriefTowerClearInfo { get; private set; } = [];
     public byte[] ItemMakingSkills { get; private set; } = [];
     public WirePacket[] CollectBoxes { get; private set; } = [];
     public WirePacket[] TitleBooks { get; private set; } = [];
@@ -180,10 +181,12 @@ internal sealed class TcpPeer : IDisposable
     public WirePacket Expect(byte kind, ushort opcode, byte[]? body = null)
     {
         var packet = Read();
-        // #233 打开选图时 NOTI1536(5B) 紧挨 NOTI27 之前下发；未显式期待它的旧用例在等待27时记录并跳过。
-        if (kind == 0 && opcode == 27 && packet.Kind == 0 && packet.Opcode == 1536 && packet.Body.Length == 5)
+        // #233/#699 打开选图时 NOTI1536(5B)、NOTI1303(2B) 紧挨 NOTI27 之前下发；未显式期待它们的旧用例在等待27时记录并跳过。
+        while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
+               (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2))
         {
-            AssaultDailyInfo = packet.Body;
+            if (packet.Opcode == 1536) AssaultDailyInfo = packet.Body;
+            else GriefTowerClearInfo = packet.Body;
             packet = Read();
         }
         TestCheck.That(packet.Kind == kind && packet.Opcode == opcode, $"packet order: expected ({kind},{opcode}), got ({packet.Kind},{packet.Opcode})");

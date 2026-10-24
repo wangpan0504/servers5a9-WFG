@@ -1511,7 +1511,7 @@ internal static class MetroQuestEntryTcpTests
                     That(plan.Room.Map.Path == "map/cataclysm/act13/517_lawlessdistrict/" + ids[index] + ".map" &&
                         plan.Monsters.Select(actor => actor.MonsterId).SequenceEqual(monsterIds[index]) &&
                         plan.Room.PassiveObjects.Count == passives[index] && plan.SpecialObjects.Count == 0 &&
-                        plan.Room.AiCharacters.Count == 0 && plan.Monsters.All(actor => actor.CandidateLevel == 73 &&
+                        plan.Room.AiCharacters.All(row => DungeonCompanion.IsCompanionRow(row.Id)) && plan.Monsters.All(actor => actor.CandidateLevel == 73 &&
                             actor.Team == 100 && !actor.IsFriendly && actor.CanReportDeath && actor.Source is
                                 { PlacementKind: "[fixed]", NpcParameter: null }) &&
                         (index == 4 ? plan.Monsters.Single() is { SpawnType: 3, IsBoss: true, IsScriptedBoss: true } :
@@ -1688,7 +1688,8 @@ internal static class MetroQuestEntryTcpTests
                 uint next = checked((uint)Convert.ToInt64(fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0",peer.Id).Single()[0]));
                 var plans = Plans(maze,peer.Id,next,definition.BasisLevel);
                 That(plans.Length == 9 && plans.Sum(plan => plan.Room.Monsters.Count) == 67 &&
-                    plans.Sum(plan => plan.Room.PassiveObjects.Count) == 197 && plans.Sum(plan => plan.Room.AiCharacters.Count) == 1,
+                    plans.Sum(plan => plan.Room.PassiveObjects.Count) == 197 &&
+                    plans.Sum(plan => plan.Room.AiCharacters.Count(row => !DungeonCompanion.IsCompanionRow(row.Id))) == 1,
                     "3557准备全部67普通怪、197装饰物和唯一敌方Boss APC，不只验证起点");
                 for (int index = 0; index < plans.Length; index++)
                 {
@@ -1699,7 +1700,7 @@ internal static class MetroQuestEntryTcpTests
                         plan.Room.Monsters.All(actor => actor.RawValues[1] == 1 && actor.RawValues[2] == 0 &&
                             actor.PlacementKind == "[fixed]" && actor.RankKind == "[normal]" && actor.Modifiers.Count == 0) &&
                         plan.Room.PassiveObjects.Count == passives[index] && plan.SpecialObjects.Count == 0 &&
-                        plan.Room.AiCharacters.Count == (index == 8 ? 1 : 0) &&
+                        plan.Room.AiCharacters.Count(row => !DungeonCompanion.IsCompanionRow(row.Id)) == (index == 8 ? 1 : 0) &&
                         plan.Monsters.Count == monsters[index].Length+(index == 8 ? 1 : 0) &&
                         plan.Monsters.Where(actor => actor.AiCharacter is null).All(actor => actor is
                             { CandidateLevel:67, SpawnType:0, Team:100, IsFriendly:false, IsBlocking:true, IsBoss:false }),
@@ -1752,7 +1753,8 @@ internal static class MetroQuestEntryTcpTests
                     var plan = plans.Single(plan => plan.Room.Map.Position == positions[index]);
                     That(plan.Room.Map.Id == firstMap + index && plan.Room.Monsters.Select(actor => actor.MonsterId).SequenceEqual(monsters[index]) &&
                         plan.Room.PassiveObjects.Count == passives[index] && plan.SpecialObjects.Count == 0 &&
-                        plan.Room.AiCharacters.Count == (index == apcRoom ? 1 : 0) && plan.Monsters.Count == monsters[index].Length + (index == apcRoom ? 1 : 0) &&
+                        plan.Room.AiCharacters.Count(row => !DungeonCompanion.IsCompanionRow(row.Id)) == (index == apcRoom ? 1 : 0) &&
+                        plan.Monsters.Count == monsters[index].Length + (index == apcRoom ? 1 : 0) &&
                         plan.Monsters.Where(actor => actor.AiCharacter is null).All(actor => actor.CandidateLevel == basis &&
                             actor.Source is { RawValues: var raw } && raw[1] == 1 && raw[2] == 0),
                         "逐房保留真实普通怪、APC、装饰物及完整演员计划：" + plan.Room.Map.Id);

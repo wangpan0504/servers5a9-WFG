@@ -87,6 +87,16 @@ internal static class DungeonAltarTests
         var map = new DungeonMap("boss", new(0, 0), 17030, "map/altar-test.map");
         var room = new DungeonRoomDefinition(map, [], [], []) { AltarWaves = resource };
         var actors = DungeonMonsterPlan.FromAltarRoom(room, 12, 10, 60, _ => 0);
+        // 部署侧伴侣补丁会把20900行写进祭坛图：祭坛不放行AI，伴侣行必须丢弃，不能因此挡住祭坛准入。
+        var companion = new DungeonRoomAiCharacter(DungeonCompanion.WangFuguiId,
+            [DungeonCompanion.WangFuguiId, 58, 208, 0, 0, 0], "[character]", "[normal]",
+            "aicharacter/priest/heal_soldier/heal_soldier.aic", 95);
+        var withCompanion = DungeonMonsterPlan.FromAltarRoom(room with { AiCharacters = [companion] }, 12, 10, 60, _ => 0);
+        That(withCompanion.Monsters.Count == actors.Monsters.Count && withCompanion.Monsters.All(row => row.AiCharacter is null),
+            "祭坛丢弃部署侧伴侣行，不放行AI也不影响波次演员");
+        var alien = companion with { Id = 55430 };
+        Reject<InvalidDataException>(() => DungeonMonsterPlan.FromAltarRoom(room with { AiCharacters = [alien] }, 12, 10, 60, _ => 0),
+            "祭坛仍拒绝非伴侣AI演员");
         var maze = new DungeonMaze(0, 1, 1, "BB", [map.Position], [map.Position], [map], []);
         var entry = new DungeonEntryPlan(12, 0, 11006, 0, byte.MaxValue, 0, maze, map, map) { BasisLevel = 60 };
         var authority = new NativeDungeonCombatAuthority();

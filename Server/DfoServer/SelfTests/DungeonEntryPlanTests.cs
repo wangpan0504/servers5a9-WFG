@@ -61,6 +61,11 @@ internal static class DungeonEntryPlanTests
         SpecialNormalDungeonEntryTests.Run(pvf);
 
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        // GM伴侣只在普通副本注入：祭坛/塔/BossRush/亡者峡谷按资源标记整类排除，普通副本保持放行。
+        // 337 BossRush、7601 迷惘之塔、11000 死亡之塔、11006/11007 两座祭坛、11008 绝望之塔首层。
+        That(new[] { 337, 7601, 11000, 11006, 11007, 11008 }.All(id => !catalog.Get(id).AllowsCompanionAi) &&
+            catalog.Get(3).AllowsCompanionAi && catalog.Get(5097).AllowsCompanionAi,
+            "祭坛、塔、亡者峡谷与Boss Rush 不注入伴侣AIC，普通副本保持放行");
         var ekern = new Character(17, 0, "Ekern", 1, new Location(35, 1, 0, 0, 0), null) { Level = 90 };
         var noQuests = new QuestCatalog(new());
         var cosmoCharacter = new Character(18, 0, "CosmoMode", 0, new Location(54, 2, 0, 0), null) { Level = 95 };
@@ -261,7 +266,8 @@ internal static class DungeonEntryPlanTests
             }
             That(planned.Count == declared.Maze.MapSpecification.Count && planned.All(room =>
                 room.Room.Monsters.All(monster => room.Monsters.Any(actor => actor.Source == monster)) &&
-                room.Room.AiCharacters.All(actor => room.Monsters.Any(monster => monster.AiCharacter == actor)) &&
+                room.Room.AiCharacters.Where(actor => !DungeonCompanion.IsCompanionRow(actor.Id))
+                    .All(actor => room.Monsters.Any(monster => monster.AiCharacter == actor)) &&
                 room.Room.SpecialObjects.All(sourceObject => room.SpecialObjects.Any(actor => actor.Source == sourceObject))),
                 "真实整条路线保留普通、dummy及友方APC演员：" + scenario.Quest);
             var route = new DungeonFixedRoute(planned,declared.Maze.StaticTopology.Links!
@@ -942,14 +948,14 @@ internal static class DungeonEntryPlanTests
                 "#447 父/0 请求选择 3425 的 D61 路线 76330→76331：" + request + "/" + reason);
             var start = rooms.Get(plan!.StartMap,requirePassiveDefinitions: false);
             var boss = rooms.Get(plan.BossMap,requirePassiveDefinitions: false);
-            That(start.Monsters.Count == 0 && start.AiCharacters.Count == 0,
-                "#447 起点 76330 无怪物也无 APC，不因缺演员拒绝");
+            That(start.Monsters.Count == 0 && start.AiCharacters.All(row => DungeonCompanion.IsCompanionRow(row.Id)),
+                "#447 起点 76330 除GM伴侣行外无怪物也无 APC，不因缺演员拒绝");
             That(boss.Monsters.Count == 3 &&
                 boss.Monsters[0] is { MonsterId: 75067, PlacementKind: "[fixed]", RankKind: "[normal]", Modifiers.Count: 0 } &&
                 boss.Monsters[1] is { MonsterId: 75072, PlacementKind: "[fixed]", RankKind: "[normal]", Modifiers.Count: 0 } &&
                 boss.Monsters[2] is { MonsterId: 75099, PlacementKind: "[fixed]", RankKind: "[boss]", Modifiers: ["[dummy]"] } &&
                 boss.Monsters[2].RawValues.SequenceEqual([75099,1,0,-81,-239,0,1,1]) &&
-                boss.AiCharacters.Count == 0 &&
+                boss.AiCharacters.All(row => DungeonCompanion.IsCompanionRow(row.Id)) &&
                 boss.PassiveObjects.Any(row => row.ObjectId == 109001851 && row.RawValues.Count == 4) &&
                 boss.Npcs.Select(npc => npc.Id).SequenceEqual([1000]),
                 "#447 76331 保留两只普通怪、dummy Boss 75099 与物件 109001851，缺目录 APC6001 不进入演员表");

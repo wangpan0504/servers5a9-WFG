@@ -27,6 +27,12 @@ internal sealed record DungeonEntryPlan(
     public bool IsCosmo { get; init; }
     public int? BasisLevel { get; init; }
     public int? PlayerTeam { get; init; }
+    // GM伴侣：本次入场放行的地图 [ai character] 行编号。空表示未开启或该副本类型不注入；
+    // 只在起始房间发送，非起始房间的行由 DungeonMonsterPlan.FromRoom 丢弃。
+    public ImmutableArray<int> CompanionMapRows { get; init; } = [];
+    // 资源侧准入：祭坛、塔、Boss Rush 与亡者峡谷不注入伴侣（DungeonDefinition.AllowsCompanionAi）；
+    // 地图自带原生 [ai character] 行时由 DungeonMonsterPlan.FromRoom 再丢弃伴侣行。
+    public bool AllowsCompanionAi { get; init; } = true;
     public bool IsTutorial { get; init; }
     public bool DisableClearReward { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
@@ -490,6 +496,7 @@ internal sealed record DungeonEntryPlan(
             HellParty = hellParty && !cosmo ? activeHell : null,
             IsHellLegend = hellParty && !cosmo && hellLegend,
             IsCosmo = cosmo,
+            AllowsCompanionAi = definition.AllowsCompanionAi,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
             StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : (ushort)0,
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
