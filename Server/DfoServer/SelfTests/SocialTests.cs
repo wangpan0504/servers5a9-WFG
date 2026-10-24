@@ -19,21 +19,30 @@ internal static class SocialTests
     {
         int before = Count;
         var friend = new SocialRow(new(new("b", 42, "RoleB", 75, 1, 2, "TeamB", 8), DateTimeOffset.UnixEpoch, "memo", 3),
-            42, 2, 10, true);
+            2, 10, true);
         Bytes(SocialPackets.AccountFriends([friend]),
-            Convert.FromHexString("012A000205000000526F6C65424B01020A00050000005465616D42040000006D656D6F00000000000300"),
-            "1376角色名在前、冒险团唯一键在后，不能把角色等级或当前Actor当成冒险团身份");
+            Convert.FromHexString("0102000205000000526F6C65424B01020A00050000005465616D42040000006D656D6F00000000000300"),
+            "1376行首大区2不能写角色42，角色名在前、冒险团唯一键在后");
+        Bytes(SocialPackets.AccountFriends([friend with { Online = false, Channel = 0 }]).AsSpan(1, 3).ToArray(),
+            [2, 0, 2], "离线行保留本服大区和频道服务器，不使用角色ID或离线哨兵覆盖大区");
+        Bytes(ChatPackets.NamedMessage(new(36, 0, "A", 2, "hi", "B") { AdventureName = "TeamA" }),
+            Convert.FromHexString("2400010000004102020000006869050000005465616D410100000042"),
+            "1对1正文后先读附加名字串，再读接收者，不能让窗口把接收者当附加串吞掉");
         var captured = SocialRequests.Account(Convert.FromHexString("0400000031323371030000003132330103000000313233"), 1439);
         That(captured is { Name: "123q", Message: "123", Group: 1, Memo: "123", Server: 0 },
             "真实1439按冒险团、留言、分组、备注解析，不把分组当服务器或留言当角色");
         foreach (var (hex, type) in new[] { ("24010000000000030000003132330400000059616E6700", (byte)36),
-            ("01010000000000030000003132330400000059616E6702", (byte)1) })
+            ("01010000000000030000003132330400000059616E6702", (byte)1),
+            ("29FFFF00000000040000003131313105000000636573686902", (byte)41) })
         {
             byte[] body = Convert.FromHexString(hex);
-            That(ChatRequests.TryParse(body, out var request) && request.Type == type && request.TargetName == "Yang" && request.Text == "123",
+            That(ChatRequests.TryParse(body, out var request) && request.Type == type &&
+                request.TargetName == (type == 41 ? "ceshi" : "Yang") && request.Text == (type == 41 ? "1111" : "123"),
                 "真实右键私聊/1对1请求按名字严格寻址");
             That(!ChatRequests.TryParse(body[..^1], out _) && !ChatRequests.TryParse([..body, 0], out _), "名字和服务器尾不能截断或增加未知字段");
         }
+        That(!ChatRequests.TryParse(Convert.FromHexString("24000000000000030000003131310000000002"), out _),
+            "旧下行错位产生的空目标仍拒绝，不猜测或复用上一次聊天对象");
         string root = Path.Combine(Path.GetTempPath(), "s5a9-social-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try

@@ -8,7 +8,7 @@ internal sealed record SocialPerson(string Account, ushort Id, string Name, byte
     string Adventure, int AdventureLevel);
 internal sealed record SocialLink(SocialPerson Person, DateTimeOffset Created, string Memo = "", byte Group = 0);
 internal sealed record AccountFriendRequest(SocialPerson Person, bool Outgoing, string Message, long Created);
-internal sealed record SocialRow(SocialLink Link, ushort Actor, byte Server, ushort Channel, bool Online);
+internal sealed record SocialRow(SocialLink Link, byte Server, ushort Channel, bool Online);
 internal sealed record SocialView(SocialRow[] Characters, SocialRow[] Accounts, AccountFriendRequest[] Requests,
     Func<bool> IsCurrent);
 internal sealed record SocialResult(ushort Error, SocialPerson? Person = null)
