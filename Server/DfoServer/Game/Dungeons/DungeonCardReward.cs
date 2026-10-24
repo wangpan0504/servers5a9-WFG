@@ -60,7 +60,12 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         long amount = checked((long)decimal.Floor(basis * DifficultyRates[difficulty] * confirmedKills));
         amount += (Next(gold.VariancePercent * 2 + 1) - gold.VariancePercent) * amount / 100;
         var now = utcNow ?? DateTimeOffset.UtcNow;
-        if (dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsOrdinaryAnton || dungeon.IsNormalFiendwar)
+        // 专表只属于资源里写了行的团本。安徒恩故事副本（227/233–238）同样带 anton dungeon 与
+        // raid normal dungeon，但没有入场券，也不在类型 45 专表里。缺行时继续走下面的普通基准等级翻牌，
+        // 不借用团本魔能石，也不把 NotSupportedException 抛出连接循环。
+        if (dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsNormalFiendwar ||
+            dungeon.IsOrdinaryAnton && (prices is null || dungeon.OrdinaryEntryTicket is not null ||
+                prices.SpecificRewards.ContainsKey(dungeon.Id)))
         {
             if (prices is null || !prices.SpecificRewards.TryGetValue(dungeon.Id, out var specific))
                 throw new NotSupportedException("副本缺少已解释的专用翻牌行，不能退回普通装备池");

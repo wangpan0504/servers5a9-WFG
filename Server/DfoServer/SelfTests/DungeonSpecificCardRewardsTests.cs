@@ -29,6 +29,16 @@ internal static partial class DungeonSpecificCardRewardsTests
         That(rows.Select(row => row.Count).SequenceEqual([50, 55, 60, 65, 70, 75, 100]) &&
             rows.Take(6).All(row => row.ItemId == 10305892) && rows[^1].ItemId == 10309039,
             "实际黎明裂缝翻牌表保留全部七行，不将最后一行相邻物品改写成结晶");
+        foreach (int storyId in new[] { 227, 233, 234, 235, 236, 237, 238 })
+        {
+            var story = dungeons.Get(storyId);
+            That(story.IsOrdinaryAnton && story.OrdinaryEntryTicket is null && !prices.SpecificRewards.ContainsKey(storyId),
+                "安徒恩故事副本有团本标记，但没有入场券和专表行：" + storyId);
+            var card = policy.Prepare(story, 0, 1, draw: _ => 0);
+            That(card.Gold >= 1 && card.ResourceSource.StartsWith(DungeonDropRuleCatalog.CommonPath, StringComparison.Ordinal) &&
+                card.ResourceSource.Contains(story.Path, StringComparison.Ordinal),
+                "安徒恩故事副本按普通翻牌结算，不因缺专表断开：" + storyId);
+        }
         int offset = 0;
         foreach (var row in rows)
         {
