@@ -9,6 +9,7 @@ internal sealed record ExpertJobRecipe(int RecipeId, int ProductId, int Required
     int ExperienceMin, int ExperienceMax);
 internal readonly record struct ExpertJobScriptResult(int KeyA, int KeyB, int KeyC, int ItemId, double Multiplier);
 internal readonly record struct ExpertJobMonsterCardExp(int Level, int Min, int Max);
+internal readonly record struct ExpertJobSkill(ushort Id, byte Level);
 
 internal sealed record ExpertJobCardRecipe(int CardId, int BeadId, int RecipeId, int RequiredLevel, byte Rarity, (int ItemId, int Count)[] Materials);
 
@@ -26,11 +27,13 @@ internal sealed class ExpertJobScriptCatalog
     public static ExpertJobScriptCatalog Load(PvfArchive pvf, ItemCatalog items, IReadOnlyDictionary<int, string> stackable)
     {
         var jobs = new Dictionary<byte, JobScript>();
+        string ownDisjoint = pvf.Contains("character/expertjob.etc")
+            ? PvfScript.Section(pvf.ReadText("character/expertjob.etc"), "disjointer big win rate") : "";
         foreach (var (id, path) in PvfScript.List(pvf.ReadText("character/expertjob.lst")))
         {
             if (id is < 1 or > 4) continue;
             string text = pvf.ReadText("character/" + path);
-            jobs[(byte)id] = JobScript.Parse(text, items);
+            jobs[(byte)id] = JobScript.Parse(text, items, ownDisjoint);
         }
         var result = new ExpertJobScriptCatalog(jobs);
         if (jobs.TryGetValue(1, out var enchanter))
@@ -74,6 +77,9 @@ internal sealed class ExpertJobScriptCatalog
 
     public int Level(byte job, int experience) => jobs.TryGetValue(job, out var script) ? script.Level(experience) : 1;
 
+    public IReadOnlyList<ExpertJobSkill> Skills(byte job) => jobs.TryGetValue(job, out var script)
+        ? script.Skills : throw new NotSupportedException("副职业资源未装配");
+
     public (int Min, int Max) DisjointGain(byte job) =>
         jobs.TryGetValue(job, out var script) ? script.Gain : (0, 0);
 
@@ -81,8 +87,6 @@ internal sealed class ExpertJobScriptCatalog
         ? script.GiveUpCosts : [1000, 10000, 100000, 1000000];
 
     public int EnduranceInitial(byte job) => jobs.TryGetValue(job, out var script) ? script.EnduranceInitial : 300;
-
-    public int BaseConst(byte job) => jobs.TryGetValue(job, out var script) && script.BaseConst > 0 ? script.BaseConst : 150;
 
     public bool TryUpgradeCost(byte job, int grade, out int gold)
     {
@@ -122,18 +126,7 @@ internal sealed class ExpertJobScriptCatalog
         return false;
     }
 
-    public bool TryDisjointResult(byte job, int gradeKey, int rarity, int state, out ExpertJobScriptResult result)
-    {
-        result = default;
-        if (!jobs.TryGetValue(job, out var script)) return false;
-        foreach (var row in script.DisjointResults)
-            if (row.KeyA == gradeKey && row.KeyB == rarity && row.KeyC == state)
-            {
-                result = row;
-                return true;
-            }
-        return false;
-    }
+    public ExpertJobDisjointRules DisjointRules => jobs.GetValueOrDefault((byte)3)?.DisjointRules ?? ExpertJobDisjointRules.Empty;
 
     public bool IsKnownCard(byte job, int itemId) =>
         jobs.TryGetValue(job, out var script) && script.KnownCards.Contains(itemId);
@@ -179,6 +172,7 @@ internal sealed class ExpertJobScriptCatalog
 
     sealed class JobScript
     {
+        public IReadOnlyList<ExpertJobSkill> Skills { get; init; } = [];
         public Dictionary<int, ExpertJobLearnableRecipe> LearningRecipes { get; init; } = [];
         public ExpertJobRate[] Rates { get; init; } = [];
         public Dictionary<int, ExpertJobRecipe> Recipes { get; init; } = [];
@@ -188,10 +182,9 @@ internal sealed class ExpertJobScriptCatalog
         public Dictionary<int, int> UpgradeCosts { get; init; } = [];
         public (int Gold, int MaxEndurance)[] RepairCosts { get; init; } = [];
         public int EnduranceInitial { get; init; } = 300;
-        public int BaseConst { get; init; }
         public Dictionary<int, (int Min, int Max)> ExtractExp { get; init; } = [];
         public ExpertJobScriptResult[] ExtractionResults { get; init; } = [];
-        public ExpertJobScriptResult[] DisjointResults { get; init; } = [];
+        public ExpertJobDisjointRules DisjointRules { get; init; } = ExpertJobDisjointRules.Empty;
         public HashSet<int> KnownCards { get; init; } = [];
         public ExpertJobMonsterCardExp[] MonsterCard { get; init; } = [];
         public Dictionary<int, (int RecipeId, int BeadId)> CardProducts { get; init; } = new();
@@ -209,8 +202,13 @@ internal sealed class ExpertJobScriptCatalog
             return Math.Min(level, Math.Max(Thresholds.Length, 1));
         }
 
-        public static JobScript Parse(string text, ItemCatalog items)
+        public static JobScript Parse(string text, ItemCatalog items, string ownDisjoint)
         {
+            int[] skills = PvfScript.Integers(Field(text, "skill"));
+            if (skills.Length % 2 != 0 || Enumerable.Range(0, skills.Length / 2).Any(i =>
+                    skills[2 * i] is <= 0 or > ushort.MaxValue || skills[2 * i + 1] is <= 0 or > byte.MaxValue) ||
+                Enumerable.Range(0, skills.Length / 2).Select(i => skills[2 * i]).Distinct().Count() != skills.Length / 2)
+                throw new InvalidDataException("副职业赠技必须为不重复的技能/等级对");
             int[] thresholds = Pairs(PvfScript.Integers(Field(text, "expertness exp"))).Select(pair => pair.ItemId).ToArray();
             int[] gain = PvfScript.Integers(Field(text, "gain exp"));
             int[] rates = PvfScript.Integers(Field(text, "compound rate"));
@@ -300,6 +298,8 @@ internal sealed class ExpertJobScriptCatalog
                     if (shop[index + 1] > 0) shopItems.Add(shop[index + 1]);
             return new()
             {
+                Skills = Array.AsReadOnly(Enumerable.Range(0, skills.Length / 2)
+                    .Select(i => new ExpertJobSkill((ushort)skills[2 * i], (byte)skills[2 * i + 1])).ToArray()),
                 LearningRecipes = learning,
                 CardProducts = cardProducts,
                 CardSuccess = cardSuccess,
@@ -311,10 +311,10 @@ internal sealed class ExpertJobScriptCatalog
                 UpgradeCosts = upgradeCosts,
                 RepairCosts = repairCosts.ToArray(),
                 EnduranceInitial = enduranceInitial <= 0 ? 300 : enduranceInitial,
-                BaseConst = baseConst,
                 ExtractExp = extract,
                 ExtractionResults = Results(Field(text, "extraction result")),
-                DisjointResults = Results(Field(text, "disjoint result")),
+                DisjointRules = string.IsNullOrWhiteSpace(Field(text, "disjoint result")) ? ExpertJobDisjointRules.Empty :
+                    new(Field(text, "disjoint result"), Field(text, "additional result"), Field(text, "big win result"), baseConst, ownDisjoint),
                 KnownCards = cards,
                 MonsterCard = monsterRows.ToArray(),
                 ShopItems = shopItems.ToArray()

@@ -30,7 +30,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
         var previous = context.Owner.Execute(() => context.Session.Selected);
-        var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier);
+        var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier, expertJobs);
         log.Write("quest_completion", new { Connection = context.Id, Quest = request.QuestId, result.Outcome,
             Accepted = result.Outcome == QuestFinishOutcome.Committed, Failure = result.Failure.ToString(), RejectReason = result.Reason,
             result.Receipt?.Commit.AcceptanceId, result.Receipt?.Commit.Clear?.InstanceId,
@@ -58,11 +58,18 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
                 commit.ProfessionGrowType,commit.Currencies.Select(row => new QuestCurrencyRewardProjection(
                     ItemSlotBoundService.CurrencySlot(row.Kind) ?? throw new InvalidOperationException("钱包奖励缺少已确认持有域"),
                     row.Kind == DfoServer.Game.Currency.CurrencyKind.ReviveCoin ? 1 : row.ItemId,row.Count)).ToArray(),commit.TpAmount,commit.HellChallenge,
-                creatureEvolution: QuestCreatureReward.Evolution(quests.Get(commit.QuestId)));
+                creatureEvolution: QuestCreatureReward.Evolution(quests.Get(commit.QuestId)), expertJobType: commit.ExpertJobType);
         // 转职/觉醒先装载已提交技能快照，ACK34会据此重建本地技能；沿S4A21的前置通知顺序。
         bool profession = commit.ProfessionGrowType is not null;
+        bool expertJob = commit.ExpertJobType is not null;
+        if (expertJob)
+            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel,
+                adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
+                "quest_expert_job_actor", Guard);
         if (profession)
             await SkillProjection.PublishAsync(context, character, "quest_profession_skills", "quest_profession_combo", Guard);
+        else if (expertJob)
+            await SkillProjection.PublishAsync(context, character, "quest_expert_job_skills", "quest_expert_job_combo", Guard);
         await context.Reply(CmdPacketType.FINISH_QUEST, acknowledgement, "quest_completion_committed", Guard);
         if (creatures is not null && previous is not null && commit.ChangedSlots.Contains(Game.Creatures.CreatureRules.EquippedSlot))
             await creatures.ChangedAsync(context, previous.Inventory, character, receipt.Phase, Guard);
@@ -94,7 +101,7 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         if (commit.PreviousQuests.Count - character.ActiveMainQuests.Length > 1 ||
             character.ActiveMainQuests.Any(row => commit.PreviousQuests.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests), "quest_reward_conditions", Guard);
-        if (!profession && character.Level == commit.PreviousLevel && character.GrowType == commit.PreviousGrowType &&
+        if (!profession && !expertJob && character.Level == commit.PreviousLevel && character.GrowType == commit.PreviousGrowType &&
             (commit.TpAmount != 0 || commit.PreviousLearning is { } previousLearning &&
             SkillPackets.BindingsChanged(previousLearning, character.Learning)))
             await SkillProjection.PublishAsync(context, character, "quest_growth_skills", "quest_growth_combo", Guard);

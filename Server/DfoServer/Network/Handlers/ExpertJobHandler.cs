@@ -61,6 +61,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         if (stores is not null && stores.TryClose(character.Id, out _))
             presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.CLOSE_EXPERT_JOB_STORE,
                 ExpertJobPackets.CloseStoreNotice(character.Id), "expert_job_store_closed");
+        await SkillProjection.PublishAsync(context, character, "expert_job_giveup_skills", "expert_job_giveup_combo", Guard);
         await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_giveup_actor", Guard);
@@ -298,7 +299,9 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         if (observed is { Commit: not null })
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(observed.Character.ActiveMainQuests),
                 "expert_job_disjoint_quest", () => context.Session.CanPublishQuestLifecycle(observed));
-        log.Write("expert_job_disjoint", new { Character = current.Id, Accepted = true, Rule = "compatibility", receipt.Character.ExpertMachineEndurance });
+        log.Write("expert_job_disjoint", new { Connection = context.Id, Character = current.Id, Accepted = true,
+            Rule = "pvf-disjointer-v1", request.SourceSlot, SourceItem = current.Inventory.Find(new(InventoryListType.Main, (short)request.SourceSlot))?.Core.ItemId,
+            current.ExpertMachineGrade, Rewards = products.Rewards, receipt.Character.ExpertMachineEndurance });
         return CommandResult.Handled;
     }
 

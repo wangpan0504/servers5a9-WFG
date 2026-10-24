@@ -427,6 +427,7 @@ internal sealed class ItemCatalog
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
             CreationRate = CreationRate(text),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
+            BossDrop = isEquipment && text.ContainsString("item category", "boss drop"),
             AmplifyPollutionForbidden = isEquipment && text.ContainsString("impossible contents", "pollution"),
             UseForbidden = ForbidsUse(impossible),
             // 分解采用模板价值及基础出售倍率，不使用NPC售出时的耐久和90%折价。

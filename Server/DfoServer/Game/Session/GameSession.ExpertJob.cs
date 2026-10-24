@@ -75,11 +75,12 @@ internal sealed partial class GameSession
         if (before.ExpertJobType is < 1 or > 4) return Rejected(10, "no-expert-job");
         if (!DfoServer.Game.ExpertJob.ExpertJobCraft.TryPlanGiveUp(before, scripts, out var wallet, out int giveUpState, out ushort error))
             return Rejected(error, error == 10 ? "no-expert-job" : "short-gold");
+        var learning = ExpertJobSkills.Remove(before.Learning, scripts.Skills(before.ExpertJobType));
         return owner.Execute(() =>
         {
             if (!CanUseExpertJob() || SelectionEpoch != capture.SelectionEpoch || !ReferenceEquals(Selected, before))
                 return Rejected(19, "stale-expert-job");
-            var committed = repository.CommitExpertJobGiveUp(owner, before, wallet, giveUpState);
+            var committed = repository.CommitExpertJobGiveUp(owner, before, wallet, giveUpState, learning);
             Selected = committed;
             expertJobStoreOpen = false;
             return new ExpertJobGiveUpResult(0, "committed", committed, owner.Generation, SelectionEpoch, Phase,

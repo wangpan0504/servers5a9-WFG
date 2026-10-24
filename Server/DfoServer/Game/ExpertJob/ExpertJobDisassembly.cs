@@ -22,21 +22,20 @@ internal sealed class ExpertJobDisassembly(InventoryDisjointService disjoint, Ex
         if (source is null || source.Uid <= 0 || !ItemSlotBoundService.Allows(character.Inventory, slot, source.Core.Kind)) return null;
         var now = time.GetUtcNow();
         var request = new DisjointRequest(slot, -1, 0);
-        var validation = disjoint.Disjoint(character, request, out var baseReceipt, now);
+        var validation = disjoint.Disjoint(character, request, out var baseReceipt, now,
+            ownMachine ? DisjointMode.OwnMachine : DisjointMode.OtherMachine);
         if (!validation.Accepted || baseReceipt is null) return null;
         try
         {
             var rewards = baseReceipt.Rewards.Select(row => new InventoryReward(row.ItemId,
                 checked((int)Math.Max(1, (long)row.Count * rules.DisjointRewardPermille / 1000)))).ToList();
-            if (ownMachine && next(100) < rules.SelfServiceRewardPercent)
+            if (ownMachine && items.Get(source.Core.ItemId).Rarity > 1 && next(100) < rules.SelfServiceRewardPercent)
             {
                 if (!InventoryRewardGrantService.Create(items.Get(rules.SelfServiceRewardItem)).IsStackable) return null;
                 rewards.Add(new(rules.SelfServiceRewardItem, rules.SelfServiceRewardCount));
             }
             var merged = rewards.GroupBy(row => row.ItemId).Select(group => new InventoryReward(group.Key,
                 checked(group.Sum(row => row.Count)))).ToArray();
-            // 235的已闭合条目只表示Main物品，图鉴碎片须有独立协议，不能静默提交不通知。
-            if (merged.Any(row => pieces.ByPiece.ContainsKey(row.ItemId))) return null;
             var paid = InventoryDeleteService.Plan(character.Inventory, slot, source.Core.ItemId, 1).Plan!.After;
             paid = paid with { Gold = checked(paid.Gold - (uint)rules.DisjointGoldCost) };
             foreach (var reward in merged)
@@ -47,7 +46,9 @@ internal sealed class ExpertJobDisassembly(InventoryDisjointService disjoint, Ex
             var products = new List<DisjointReward>();
             foreach (var reward in merged)
             {
-                if (CurrencyWallet.RewardKind(reward.ItemId) is { } kind)
+                if (pieces.ByPiece.ContainsKey(reward.ItemId))
+                    products.Add(new(-1, reward.ItemId, reward.Count));
+                else if (CurrencyWallet.RewardKind(reward.ItemId) is { } kind)
                     products.Add(new(ItemSlotBoundService.CurrencySlot(kind) ?? throw new InvalidDataException("机器产物不是Main货币"), reward.ItemId, reward.Count));
                 else foreach (var item in grant.Plan.After.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == reward.ItemId))
                 {
@@ -55,7 +56,7 @@ internal sealed class ExpertJobDisassembly(InventoryDisjointService disjoint, Ex
                     if (count > 0) products.Add(new(item.Position.Index, reward.ItemId, count));
                 }
             }
-            if (products.Count > byte.MaxValue || products.Any(row => row.Slot < 0)) return null;
+            if (products.Count > byte.MaxValue) return null;
             var gain = scripts.DisjointGain(3);
             int experience = checked(character.ExpertJobExperience + gain.Min + (gain.Max > gain.Min ? next(gain.Max - gain.Min + 1) : 0));
             var inventory = new InventoryPlan(character.Inventory, grant.Plan.After, "expert_job_machine_disjoint",

@@ -46,7 +46,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         resumeTown = context.Session.TownSnapshotResumed;
         if (learning is not null)
         {
-            var initialization = context.Session.InitializeLearning(learning);
+            var initialization = context.Session.InitializeLearning(learning, expertJobs);
             if (initialization != DfoServer.Game.Skills.SkillLearningFailure.None)
                 log.Write("skill_info_unavailable", new { Connection = context.Id, Reason = initialization.ToString() });
         }

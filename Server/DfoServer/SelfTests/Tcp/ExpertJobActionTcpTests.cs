@@ -19,20 +19,26 @@ internal static class ExpertJobActionTcpTests
         var items = resources.ItemResources.Items;
         var scripts = resources.ItemResources.ExpertJobs;
         var targetTemplate = items.Get(10400);
+        var machineTemplate = items.Get(10114);
+        var epicPiece = resources.ItemResources.EpicPieces.Entries.First();
+        That(machineTemplate.Rarity > 1, "自用零件回归使用真实稀有度大于1的装备");
         var recipe = scripts.KnownCards(1).Order().Select(id => scripts.TryCardRecipe(id, out var row) ? row : null)
             .First(row => row is { Rarity: 1 } && items.Get(row.CardId).MinimumLevel <= 50 && resources.ItemResources.Enchantments.Get(row.BeadId) is { } definition &&
                 definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)))!;
         int startingExperience = Enumerable.Range(0, 2000).First(xp => scripts.Level(1, xp) == 5) - 1;
         short cardSlot = ItemSlotBoundService.Range(items.Get(recipe.CardId).Kind, InventorySnapshot.Empty).Start;
         ushort machineId, enchanterId;
+        uint fragmentCount = 0;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var machine = repository.Create(owner, new("MachineTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Level = 50, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
-                Inventory = new([new(0, Bag(3), InventoryRewardGrantService.Create(targetTemplate)),
-                    new(0, Bag(4), InventoryRewardGrantService.Create(targetTemplate)),
-                    new(0, Bag(5), InventoryRewardGrantService.Create(targetTemplate))], Gold: 999)
+                Inventory = new([new(0, Bag(3), InventoryRewardGrantService.Create(machineTemplate)),
+                    new(0, Bag(4), InventoryRewardGrantService.Create(machineTemplate)),
+                    new(0, Bag(5), InventoryRewardGrantService.Create(machineTemplate)),
+                    new(0, Bag(6), InventoryRewardGrantService.Create(items.Get(epicPiece.EquipmentId))),
+                    new(0, Bag(7), InventoryRewardGrantService.Create(items.Get(epicPiece.EquipmentId)))], Gold: 999)
             });
             machineId = machine.Id;
             var enchanter = repository.Create(owner, new("EnchantTcp", resources.Towns.Room, resources.Towns.InitialReturn)
@@ -74,20 +80,32 @@ internal static class ExpertJobActionTcpTests
             UseMachine(peer, 4, machineId); ReadMachine(peer, 4, 298, tutorial: true);
             That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={machineId}") is [[0L]],
                 "进行中10021教学经开店、进入本人分解机、真实分解后归零");
+            UseMachine(peer, 6, machineId);
+            var fragmentAck = peer.Expect(1, 235).Body;
+            int fragmentAt = Enumerable.Range(0, fragmentAck[6]).Select(index => 7 + index * 10)
+                .Single(at => U32(fragmentAck, at + 2) == epicPiece.PieceId);
+            fragmentCount = U32(fragmentAck, fragmentAt + 6);
+            That(U16(fragmentAck, fragmentAt) == ushort.MaxValue && fragmentCount is >= 90 and <= 110 &&
+                U32(fragmentAck, fragmentAck.Length - 4) == 297, "玩家机器235保留碎片FFFF展示和金币耐久尾部");
+            var fragmentBalance = peer.Expect(0, 1152).Body;
+            That(fragmentBalance.Length == 13 && fragmentBalance[0] == 1 && U32(fragmentBalance, 5) == epicPiece.PieceId &&
+                U32(fragmentBalance, 9) == fragmentCount, "机器碎片只入图鉴，1152同步真实绝对余额而非Main实体");
+            peer.Expect(0, 2); peer.Expect(0, 205, MachineInfo(297)); peer.Barrier();
             before = Snapshot();
             fixture.Sql("CREATE TRIGGER fail_action_tcp BEFORE INSERT ON character_expert_meta BEGIN SELECT RAISE(ABORT,'machine tcp failure'); END");
-            UseMachine(peer, 5, machineId); peer.Closed();
+            UseMachine(peer, 7, machineId); peer.Closed();
             That(Snapshot() == before, "机器TCP末段失败保持装备、产物、金币、经验和耐久，不发成功");
             fixture.Sql("DROP TRIGGER fail_action_tcp");
         }
         using (var peer = Open(fixture))
         {
-            peer.Select(expertJobInfo: MachineInfo(298)); peer.Barrier();
+            peer.Select(expertJobInfo: MachineInfo(297)); peer.Barrier();
             using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
             var restored = repository.LoadCharacter(owner, 0);
             That(restored.Inventory.Find(Bag(3)) is null && restored.Inventory.Find(Bag(4)) is null &&
-                restored.Inventory.Find(Bag(5)) is not null && restored.ExpertMachineEndurance == 298,
-                "机器重连恢复两次真实消费与剩余耐久");
+                restored.Inventory.Find(Bag(5)) is not null && restored.Inventory.Find(Bag(7)) is not null && restored.Inventory.Find(Bag(6)) is null &&
+                restored.ExpertMachineEndurance == 297 && restored.Inventory.EpicPieces.Get(epicPiece.Index) == fragmentCount,
+                "机器重连恢复真实消费、图鉴碎片与剩余耐久");
         }
         using (var peer = Open(fixture))
         {
@@ -128,7 +146,8 @@ internal static class ExpertJobActionTcpTests
         { writer.Write((byte)0); writer.Write((byte)1); writer.Write((byte)1); writer.Write(recipe.RecipeId); writer.Write((byte)(qualifications ? 1 : 0)); if (qualifications) writer.Write(recipe.Rarity); writer.Write(endurance == 300 ? 4u : 5u); writer.Write(endurance); });
         string Snapshot() => JsonSerializer.Serialize(new[] { fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid"),
             fixture.Query("SELECT * FROM character_expert_job ORDER BY character_id"), fixture.Query("SELECT * FROM character_expert_meta ORDER BY character_id"),
-            fixture.Query("SELECT id,revision,gold FROM characters ORDER BY id"), fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind") });
+            fixture.Query("SELECT id,revision,gold FROM characters ORDER BY id"), fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind"),
+            fixture.Query("SELECT * FROM account_epic_books ORDER BY account"), fixture.Query("SELECT count(*) FROM epic_piece_audit_log") });
         void ReadMachine(TcpPeer peer, ushort slot, uint endurance, bool tutorial = false)
         {
             byte[] ack = peer.Expect(1, 235).Body;

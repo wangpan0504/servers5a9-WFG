@@ -134,11 +134,27 @@ internal static class DisjointTcpTests
         }
         fixture.Sql("INSERT INTO character_expert_job(character_id,account,job_type,expertness) " +
             "SELECT id,account,3,51 FROM characters");
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var current = repo.List(owner).Single();
+            var after = current.Inventory with { Items = current.Inventory.Items
+                .Add(new(0, Bag(21), coat))
+                .Add(new(0, Bag(22), InventoryRewardGrantService.Create(itemResources.Items.Get(10114)))) };
+            repo.CommitInventory(owner, current, new(current.Inventory, after, "disjoint_profession_fixture"));
+        }
         fixture.Sql("INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) " +
             "SELECT id,0,10021,1,'11223344556677889900112233445566' FROM characters");
         using (var peer = Open(fixture))
         {
             peer.Select(inventoryNotices: [(1, 713), (0, 251)], expertJobInfo: [0, 3, 1, 0, 0, 0, 44, 1, 0, 0]);
+            string career = fixture.Snapshot("SELECT * FROM character_expert_job") + fixture.Snapshot("SELECT * FROM character_expert_meta");
+            Send(peer, 21, -1);
+            Receive(peer, 21, -1, 0, [3037, 10100115]);
+            Send(peer, 22, 4);
+            Receive(peer, 22, 4, 0, [3037, 10158124]);
+            peer.Barrier();
+            That(fixture.Snapshot("SELECT * FROM character_expert_job") + fixture.Snapshot("SELECT * FROM character_expert_meta") == career,
+                "已授分解师后NPC与便携仍有完整灵魂产物，且不增长机器熟练度或改变机器耐久");
             peer.Send(598, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
             peer.Expect(1, 598, [1]);
             string before = ProfessionSnapshot();

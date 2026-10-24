@@ -30,6 +30,7 @@ internal static class SkillPointLedger
             int baseline = free.GetValueOrDefault(skill.Id);
             if (skill.Level <= baseline) continue;
             var resource = definition(skill.Id);
+            if (resource.IsExpertSkill) continue;
             if (resource.IsFeatureSkill != tp) continue;
             if (!resource.SupportsPointLearning || resource.FixedLevel is not null)
                 throw new NotSupportedException("已学技能费用不在普通SP范围");
@@ -83,6 +84,7 @@ internal static class SkillPointLedger
             foreach (var skill in skills.Values.ToArray())
             {
                 var resource = catalog.Get(job, skill.Id);
+                if (resource.IsExpertSkill) continue;
                 int target = skill.Level;
                 if (resource.FixedLevel is not null)
                     target = Math.Max(resource.GetFixedLevel(level, growth, contractLevels),
@@ -127,8 +129,9 @@ internal static class SkillPointLedger
             Sp = checked((ushort)(catalog.TotalSp(level) + bonus)),
             Tp = checked((ushort)(catalog.TotalTp(level) + tpBonus)),
             Combos = Array.AsReadOnly(tree.Combos.Select(combo => combo with { Children = Array.AsReadOnly(combo.Children.Where(free.ContainsKey).ToArray()) }).ToArray()),
-            Skills = Array.AsReadOnly(tree.Skills.Where(skill => free.ContainsKey(skill.Id))
-                .Select(skill => skill with { Level = free[skill.Id] }).OrderBy(skill => skill.Slot).ToArray())
+            Skills = Array.AsReadOnly(tree.Skills.Where(skill => free.ContainsKey(skill.Id) || catalog.Get(job, skill.Id).IsExpertSkill)
+                .Select(skill => catalog.Get(job, skill.Id).IsExpertSkill ? skill : skill with { Level = free[skill.Id] })
+                .OrderBy(skill => skill.Slot).ToArray())
         }).ToArray();
         bool same = ReferenceEquals(synchronized, state) && trees.Zip(state.Trees).All(pair =>
             pair.First.Context == pair.Second.Context && pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&

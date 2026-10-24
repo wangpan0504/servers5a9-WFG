@@ -79,6 +79,13 @@ internal static class DisjointSpecialTests
             [9000] = material with { Id = 9000 }, [7000] = material with { Id = 7000, PortableDisjointLevel = 95 }
         });
         var request = new DisjointRequest(new(InventoryListType.Main, 3), -1, 0);
+        var shared = new DisjointCatalog(Text, PieceText);
+        var machineExtra = DisjointResultCalculator.Calculate(shared, equipment with { Id = 2001 }, new EndpointRandom(false), [new(3037, 2)]);
+        That(machineExtra.SequenceEqual(new InventoryReward[] { new(3037, 2), new(8000, 10) }) &&
+            DisjointResultCalculator.Calculate(shared, equipment with { Id = 2003 }, new EndpointRandom(false), [new(3037, 2)]).Length == 0,
+            "玩家机器替换基础公式仍保留独立奖励与活动拒绝，不重复叠加NPC基础量");
+        That(DisjointResultCalculator.Calculate(shared, equipment, new EndpointRandom(false), [new(3037, 2)])
+            .Any(row => row.ItemId == 9000 && row.Count == 90), "玩家机器规划不丢弃新版公共碎片规则");
         Character Source(int id) => new(1, 0, "Special", 0, new(0, 0, 0, 0), null)
         {
             Inventory = new([new(1, request.Position, InventoryRewardGrantService.Create(items.Get(id))),
