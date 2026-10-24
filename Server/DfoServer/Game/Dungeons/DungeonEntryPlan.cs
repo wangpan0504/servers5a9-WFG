@@ -217,20 +217,21 @@ internal sealed record DungeonEntryPlan(
         uint routeQuest = !isReplay && quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
         bool ordinaryHunt = false;
         StoryQuest? layoutQuest = quest;
-        // 已达成但未交付的寻物任务保留接取身份，再次选图使用真实普通路线。
-        // 同时复核实际库存，不能让裸条件值0或已过期材料绕过剧情路线。
-        var completedSeeking = new HashSet<int>();
+        // 已达成但未交付的寻物、清图或猎杀保留接取身份，再次选图使用真实普通路线。
+        // 寻物复核未过期材料；清图要有持久凭据。裸条件0不能绕过剧情路线。
+        var finishedObjective = new HashSet<int>();
         if (!isReplay && !practice && !hellParty)
             foreach (var accepted in character.ActiveMainQuests)
             {
                 var acceptedDefinition = quest?.Id == accepted.QuestId ? quest :
                     quests is not null && quests.TryGet(accepted.QuestId,out var found) ? found : null;
-                if (acceptedDefinition is not null && CanLeaveSeekingRoute(definition,character,acceptedDefinition,accepted))
-                    completedSeeking.Add(accepted.QuestId);
+                if (acceptedDefinition is not null && (CanLeaveSeekingRoute(definition,character,acceptedDefinition,accepted) ||
+                    CanLeaveClearedStoryRoute(definition,character,acceptedDefinition,accepted,questId,allowClearedQuest,allowClearedTerminalQuest)))
+                    finishedObjective.Add(accepted.QuestId);
             }
         var candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)));
-        bool completedSeekingRequest = questId != 0 && completedSeeking.Contains((int)questId);
-        if (practice || completedSeekingRequest)
+        bool finishedObjectiveRequest = questId != 0 && finishedObjective.Contains((int)questId);
+        if (practice || finishedObjectiveRequest)
         {
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
             if (candidates.Length > 1)
@@ -239,7 +240,7 @@ internal sealed record DungeonEntryPlan(
                 if (index < 0 || index >= candidates.Length) throw new InvalidDataException("练习迷宫随机索引越界");
                 candidates = [candidates[index]];
             }
-            if (completedSeekingRequest)
+            if (finishedObjectiveRequest)
             {
                 ordinaryHunt = true;
                 routeQuest = 0;
@@ -249,7 +250,7 @@ internal sealed record DungeonEntryPlan(
         else if (questId == 0 && quests is not null)
         {
             candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => character.ActiveMainQuests.Any(active =>
-                !completedSeeking.Contains(active.QuestId) && maze.ConnectsQuest(active.QuestId,difficulty))));
+                !finishedObjective.Contains(active.QuestId) && maze.ConnectsQuest(active.QuestId,difficulty))));
             var sequences = new List<(StoryQuest Parent, StoryQuest Child)>();
             if (candidates.Length == 0)
             {
@@ -582,6 +583,27 @@ internal sealed record DungeonEntryPlan(
             character.ActiveMainQuests.Count(row => row.AcceptanceId == active.AcceptanceId) != 1)
             return false;
         return QuestLifecyclePlan.HasMaterials(character,quest,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+    }
+
+    // 剧情迷宫只覆盖普通难度时，目标已经做成但任务还没交，再进应使用循环用的普通迷宫。
+    static bool CanLeaveClearedStoryRoute(DungeonDefinition definition, Character character, StoryQuest quest,
+        ActiveMainQuest active, uint questId, bool allowClearedQuest, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest)
+    {
+        if (definition.IsTutorial || definition.IsClassExperience || definition.Id == 5000 ||
+            definition.MinimumLevel is not int minimum || character.Level < minimum || quest.MainQuest is not null ||
+            quest.Definition is not { Diagnostics.Length: 0 } ||
+            !definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count == 0) ||
+            !definition.Mazes.Any(maze => maze.HasActiveQuestConnection(quest.Id)) ||
+            active.ConditionState != 0 || active.Slot > 29 || active.AcceptanceId == Guid.Empty ||
+            QuestEligibility.Completed(character).Contains(quest.Id) ||
+            character.ActiveMainQuests.Count(row => row.QuestId == active.QuestId) != 1 ||
+            character.ActiveMainQuests.Count(row => row.Slot == active.Slot) != 1 ||
+            character.ActiveMainQuests.Count(row => row.AcceptanceId == active.AcceptanceId) != 1)
+            return false;
+        bool receipt = quest.Id == questId && allowClearedQuest || allowClearedTerminalQuest?.Invoke(active) == true;
+        if (QuestClearEligibility.IsSingleMap(quest) || quest.Condition is "[condition under clear]" or "[clear a dungeon]")
+            return receipt;
+        return quest.Condition is "[hunt enemy]" or "[hunt monster]" && QuestHuntProgress.ValidScalar(quest,0);
     }
 
     static StoryQuest? CurrentSequentialChild(Character character, StoryQuest parent, QuestCatalog quests, uint dungeonId, byte difficulty)
