@@ -333,7 +333,7 @@ internal static partial class GmWebServer
             if (b.Confirm != true) return Bad("需要二次确认");
             if (b.Value is not ("on" or "off")) return Bad("开关须为 on 或 off");
             if (b.Key is not ("infinite-fatigue" or "cash-shop-expiration" or "cash-shop-usable-period" or "pc-room" or
-                "summon-wangfugui")) return Bad("未知调试开关");
+                "summon-wangfugui" or "summon-guangbing")) return Bad("未知调试开关");
             return Run(http, data, "debug", "-", b.Key, $"{b.Key} {b.Value}", b.Key);
         });
     }
@@ -358,7 +358,8 @@ internal static partial class GmWebServer
             ["ignoreAbsoluteExpiration"] = Flag("cash-shop-expiration", "ignoreAbsoluteExpiration"),
             ["ignoreUsablePeriod"] = Flag("cash-shop-usable-period", "ignoreUsablePeriod"),
             ["premiumPcRoom"] = Flag("pc-room", "premiumPcRoom"),
-            ["summonWangFugui"] = Flag("summon-wangfugui", "summonWangFugui")
+            ["summonWangFugui"] = Flag("summon-wangfugui", "summonWangFugui"),
+            ["summonGuangbing"] = Flag("summon-guangbing", "summonGuangbing")
         };
     }
 

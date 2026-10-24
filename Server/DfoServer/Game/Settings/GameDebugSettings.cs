@@ -9,7 +9,8 @@ internal sealed class GameDebugSettings
     public volatile bool InfiniteFatigue = true;
     // 网吧身份独立于账号黑钻；默认关闭，重启不沿用上次的调试资格。
     public volatile bool PremiumPcRoom;
-    // 进图伴侣开关。默认关闭，只改当前进程，重启恢复关闭。
-    // 真值来自地图 [ai character] 里的20900行（王富贵）。
+    // 进图伴侣开关。默认关闭，只改当前进程，重启恢复关闭；塔与祭坛等类型仍由资源标记排除。
+    // 真值来自地图 [ai character] 里的20900行（王富贵）与5409行（28号光兵），两个开关各自独立、可同时开。
     public volatile bool SummonWangFugui;
+    public volatile bool SummonGuangbing;
 }

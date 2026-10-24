@@ -181,15 +181,14 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             nextKey++;
         }
 
-        // 地图自带原生 [ai character] 行（如 91548 的 55430）时不再叠加伴侣：该图的AI演员集合与资源一致
-        // 是客户端与自测断言的前提，伴侣只用于资源原本没有AI演员的普通房间。
-        bool companionsAllowed = companionRows is not null &&
-            !room.AiCharacters.Any(row => !DungeonCompanion.IsCompanionRow(row.Id));
+        // Map 91548 excludes companions; other maps may retain both native and companion actors.
+        // 伴侣行只在放行集合内发送，其余原生演员保持原合同。
+        bool companionsAllowed = companionRows is not null && room.Map.Id != 91548;
         for (int index = 0; index < room.AiCharacters.Count; index++)
         {
             var source = room.AiCharacters[index];
-            // 伴侣行（20900）只在当前放行集合内发送：默认集合为空，起始房间由入场计划给出。
-            // 客户端会让该AIC跨房间存活，逐房重发会每房多出一名并卡清房。丢弃时不占用对象key，其余行号保持原索引。
+            // 伴侣行（20900/5409）只在当前放行集合内发送；集合由入场计划冻结，只有起始房间传入集合。
+            // 丢弃时不占用对象key，其余行号保持原索引。
             // 未放行的行不参与资源校验：部署侧地图补丁写坏的行不能影响开关关闭时的正常入场。
             if (DungeonCompanion.IsCompanionRow(source.Id) && !(companionsAllowed && companionRows!.Contains(source.Id))) continue;
             if (source.RawValues.Count != 6 || source.RawValues[0] != source.Id || source.Id <= 0 ||

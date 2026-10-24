@@ -399,14 +399,14 @@ internal sealed partial class GameSession
         if (firstObjectKey > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("对象key尾部已耗尽");
         var topology = entry!.Maze.StaticTopology;
         if (!topology.Supported) return RejectFormal("maze-topology-unsupported");
-        // GM伴侣：王富贵开关默认关闭，开启只放20900。
-        // 只作用于正式副本流程，训练/职业体验/练习/比赛不注入；
-        // 深渊波次模板与宇宙裂缝的槽位行也不叠加；祭坛、绝望之塔、Boss Rush 与眩惑之塔按资源标记 AllowsCompanionAi 整类排除。
-        // 放行集合冻结进入场计划，起始房间之外的房间一律丢弃。
+        // GM伴侣：王富贵（20900）与光兵28号（5409）两个开关默认关闭（可各自临时开启）。
+        // 只作用于正式副本流程，训练/职业体验/练习/比赛不注入；祭坛、绝望之塔与眩惑之塔按资源标记 AllowsCompanionAi 整类排除。
+        // 深渊派对与宇宙裂缝也放行；地图自带原生 AI 演员的房间同样叠加。
+        // 放行集合冻结进入场计划，只在起始房间发送：客户端会让该AIC跨房间跟随，逐房重发会每房多出一名并卡清房。
         if (!entry.IsTutorial && !entry.IsTrainingRoom && !entry.IsClassExperience && !entry.IsPractice &&
-            !entry.IsTournament && entry.HellParty is null && !entry.IsCosmo && entry.AllowsCompanionAi)
+            !entry.IsTournament && entry.AllowsCompanionAi)
         {
-            var companionRows = DungeonCompanion.WangFuguiRows(debugSettings?.SummonWangFugui == true);
+            var companionRows = DungeonCompanion.EnabledRows(debugSettings?.SummonWangFugui == true, debugSettings?.SummonGuangbing == true);
             if (!companionRows.IsEmpty) entry = entry with { CompanionMapRows = companionRows };
         }
         var plans = new List<DungeonMonsterPlan>();
