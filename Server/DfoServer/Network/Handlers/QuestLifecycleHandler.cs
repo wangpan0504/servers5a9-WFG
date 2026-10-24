@@ -44,14 +44,13 @@ internal sealed class QuestLifecycleHandler(QuestCatalog quests, ItemCatalog ite
             }
             // Full03 ACK31/32的error18均跳过文案与正文；本服用它作中立业务拒绝。
             await context.Reply(opcode, QuestPackets.Rejected(18), "quest_lifecycle_rejected", Guard);
-            // 顺序父任务可能重接已完成子或当前寻物末子；error18不恢复活动状态。
-            // 按真实库存回放父与末子条件，再补356；重接请求本身不扣料或发奖。
+            // 只回放已完成的顺序子。NOTI356 末尾会调用顺序聚合，对第一个未完成子再发 C2S31。
+            // 已接取的寻物末子若每次拒绝都补 356，客户端会立刻重发同一个 31，并把 30000 字节完成表打满主线程。
             if (action == QuestLifecycleAction.Accept && receipt.Outcome == QuestLifecycleOutcome.Rejected &&
-                (receipt.Character.CompletedQuests.Contains(questId) || receipt.Character.ActiveMainQuests.Any(row => row.QuestId == questId)) &&
+                receipt.Character.CompletedQuests.Contains(questId) &&
                 quests.TryGet(questId, out var rejected) && rejected.MainQuest is int parentId &&
                 receipt.Character.ActiveMainQuests.Any(row => row.QuestId == parentId) &&
                 quests.TryGet(parentId, out var parent) && parent.Condition == "[quest clear]" && parent.SubType == 2 &&
-                (receipt.Character.CompletedQuests.Contains(questId) || QuestRelationProgress.TerminalSeeking(parent,quests)?.Id == questId) &&
                 parent.IntData.Contains(questId) && receipt.Character.ActiveMainQuests.Length != 0)
             {
                 var refreshed = QuestInventoryProgress.Refresh(receipt.Character.ActiveMainQuests,receipt.Character.Inventory,quests,
@@ -79,12 +78,10 @@ internal sealed class QuestLifecycleHandler(QuestCatalog quests, ItemCatalog ite
         if (action == QuestLifecycleAction.Giveup && plan.Expected.ActiveMainQuests.Length - plan.ActiveAfter.Length > 1 ||
             plan.ActiveAfter.Any(row => plan.Expected.ActiveMainQuests.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "quest_giveup_children", Guard);
-        bool historyChanged = !plan.Expected.CompletedQuests.SequenceEqual(plan.CompletedAfter) ||
-            !plan.Expected.AccountCompletedQuests.SequenceEqual(plan.AccountCompletedAfter);
         if (projection is not null)
             await projection.RefreshAsync(context, receipt.Character, Guard, restoreCompleted: false);
-        if (historyChanged || receipt.Character.CompletedQuests.Length != 0 || receipt.Character.AccountCompletedQuests.Length != 0)
-            await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(receipt.Character), "quest_lifecycle_history", Guard);
+        // 放弃父子任务产生空574时同样会清客户端完成集合，空存档也须恢复显示标记。
+        await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(receipt.Character), "quest_lifecycle_history", Guard);
         return CommandResult.Handled;
     }
 }

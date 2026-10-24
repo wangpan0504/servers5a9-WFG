@@ -151,6 +151,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             character = repository.GrantBlackDiamondFatigue(owner, character, DateTimeOffset.UtcNow);
             if (questCatalog is not null)
             {
+                if(DfoServer.Game.Quests.QuestQuickClearPlan.TryCreateOrphanRepair(character,questCatalog,out var repair))
+                    character=repository.CommitQuestQuickClear(owner,repair!).Character;
                 int day = DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow);
                 character = repository.AdvanceQuestCycle(owner, character, day,
                     DfoServer.Game.Quests.QuestAutoDailyPlan.Prepare(character,questCatalog,day,allowAssignment: true));

@@ -8,19 +8,23 @@ namespace DfoServer.Game.Inventory.Services;
 internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCatalog disjoint, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Random? random = null,
     ExpertJobScriptCatalog? expertJobs = null)
 {
-    public InventoryResult Disjoint(Character character, DisjointRequest request, out DisjointReceipt? receipt, DateTimeOffset? utcNow = null)
+    public InventoryResult Disjoint(Character character, DisjointRequest request, out DisjointReceipt? receipt,
+        DateTimeOffset? utcNow = null, DisjointMode mode = DisjointMode.Ordinary)
     {
         receipt = null;
         var before = character.Inventory;
         var now = utcNow ?? DateTimeOffset.UtcNow;
         var source = before.Find(request.Position);
+        if (!Enum.IsDefined(mode)) return InventoryResult.Reject(19);
+        bool playerMachine = mode != DisjointMode.Ordinary;
         if (request.Position.List != InventoryListType.Main || request.ToolSlot < -1 || source is null)
             return InventoryResult.Reject(17);
         if (source.Core.Kind != ItemKind.Equipment || source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
         var template = catalog.Get(source.Core.ItemId);
         if (template.DisjointForbidden || template.AttachType.Contains("[trade delete]", StringComparison.OrdinalIgnoreCase) ||
-            (source.Core.AmplifyType & 0x80) != 0)
+            !playerMachine && (source.Core.AmplifyType & 0x80) != 0 ||
+            playerMachine && (character.ExpertJobType != 3 || expertJobs is null || request.ToolSlot != -1))
             return InventoryResult.Reject(19);
         if (disjoint.PieceResults.TryGetValue(template.Id, out int pieceId) &&
             (!pieces.ByPiece.TryGetValue(pieceId, out var piece) || piece.EquipmentId != template.Id))
@@ -36,9 +40,10 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
         InventoryReward[] rewards;
         try
         {
-            rewards = character.ExpertJobType == 3 && expertJobs is not null
-                ? DfoServer.Game.ExpertJob.ExpertJobCraft.DisjointProducts(character, expertJobs, template, source.Core)
-                : DisjointResultCalculator.Calculate(disjoint, template, random ?? Random.Shared);
+            var rng = random ?? Random.Shared;
+            var machine = playerMachine ? DfoServer.Game.ExpertJob.ExpertJobCraft.DisjointProducts(character.ExpertMachineGrade,
+                expertJobs!.DisjointRules, template, source.Core, rng.Next, mode == DisjointMode.OwnMachine) : null;
+            rewards = DisjointResultCalculator.Calculate(disjoint, template, rng, machine);
         }
         catch (OverflowException) { return InventoryResult.Reject(4); }
         if (rewards.Length == 0)

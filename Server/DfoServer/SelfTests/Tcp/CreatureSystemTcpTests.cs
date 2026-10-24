@@ -79,7 +79,7 @@ internal static class CreatureSystemTcpTests
             }
             That(Count(191) == 0 && ReadPet() is { Creature: { Level: 2, Experience: 2, Name: "小伙伴", Satiety: 10 } } capsulePet &&
                 capsulePet.Uid == uid, "实收44校验值原样返回；先消费ACK再102，同UID经验跨级，最后一件不重复发送14扣源");
-            peer.Send(479); peer.Expect(0, 21); peer.Barrier();
+            peer.Send(479); peer.Expect(0, 21); peer.Expect(0, 356); peer.Barrier();
             byte[] use = Build(writer => { writer.Write((ushort)189); writer.Write((byte)7); writer.Write(0u); writer.Write(24); writer.Write(0); });
             peer.Send(44, use);
             peer.Expect(1, 44, [1, 189, 0, 7, 0, 0, 0, 0, 24, 0, 0, 0]);

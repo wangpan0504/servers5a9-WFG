@@ -35,7 +35,8 @@ internal sealed partial class GameSession
         => FinishQuest(questId, ushort.MaxValue, quests, parameters, items, goldLimits, pieces, growth);
 
     public QuestFinishResult FinishQuest(ushort questId, ushort selector, QuestCatalog quests, QuestRewardParameterCatalog parameters,
-        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth, ushort multiplier = 1)
+        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth, ushort multiplier = 1,
+        ExpertJobScriptCatalog? expertJobs = null)
     {
         var captured = owner.Execute(() =>
         {
@@ -83,7 +84,7 @@ internal sealed partial class GameSession
         else
             preparation = QuestCompletionPlan.Prepare(expected, quest, selector, quests, parameters, items, goldLimits, pieces,
                 growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth, stageGraph,
-                stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom);
+                stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom, expertJobs);
         return owner.Execute(() =>
         {
             if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } ||

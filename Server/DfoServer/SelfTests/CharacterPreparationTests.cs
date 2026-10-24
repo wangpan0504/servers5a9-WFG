@@ -175,7 +175,9 @@ internal static class CharacterPreparationTests
         byte[] player = TownPackets.Player(role, new CharacterStatComputer(characters).Compute(role), 1);
         That(player.Length == 257 && player[143] == 0 && player[144] == 15 && player[190] == 15, "both native skill lists retain tail alignment");
         byte[] complete = TownPackets.CompletedQuests(role);
-        That(complete.Length == 30004 && BinaryPrimitives.ReadInt32LittleEndian(complete) == 30000 && complete.Skip(4).Count(x => x == 1) == definition.CompletedQuests.Length && definition.CompletedQuests.All(q => complete[4 + q] == 1), "bounded complete quest table");
+        That(complete.Length == 30004 && BinaryPrimitives.ReadInt32LittleEndian(complete) == 30000 &&
+            complete[4 + 13700] == 1 && complete.Skip(4).Count(x => x == 1) == definition.CompletedQuests.Append(13700).Distinct().Count() &&
+            definition.CompletedQuests.All(q => complete[4 + q] == 1), "有界完成表保留真实进度并投影独立月轮山显示标记");
         That(TownPackets.StoryLevel(role).SequenceEqual(new byte[] { 95, 0, 0, 0 }), "accepted StoryDigest level 95");
         var moved = repo.Save(owner, saved, saved.Position with { X = 460 }, saved.Return);
         var afterMove = repo.List(owner).Single(c => c.Id == role.Id);

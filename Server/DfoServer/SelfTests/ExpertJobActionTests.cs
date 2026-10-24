@@ -17,7 +17,13 @@ internal static class ExpertJobActionTests
     {
         int checks = Count;
         var scripts = resources.ExpertJobs;
+        That(scripts.DisjointRules.TryGet(0, 1, 0, out var ordinary) && ordinary.AdditionalTable == 1 &&
+            ordinary.BigWinTable == 1 && ordinary.BigWinPercent == 9 && scripts.DisjointRules.Pool(1, false).Count == 4 &&
+            scripts.DisjointRules.OwnMachineBigWinPercent(9) == 5,
+            "当前PVF分解师完整八列、四色池和9级自用5个百分点加成已装配");
         var items = resources.Items;
+        That(items.Get(20238) is { Rarity: 3, BossDrop: true } && items.Get(10114).BossDrop == false,
+            "当前PVF牛头兵项链的boss drop分类与普通装备区分");
         var policy = new ExpertJobCompatibility();
         foreach (var invalid in new[] { policy with { DisjointEnduranceCost = 0 }, policy with { EnchantSuccessPercent = 101 },
             policy with { SelfServiceRewardPercent = -1 }, policy with { DisjointRewardPermille = 10001 } })
@@ -36,10 +42,14 @@ internal static class ExpertJobActionTests
             var gearSlot = new InventorySlot(InventoryListType.Main, 3);
             var created = repository.Create(owner, new("MachineTest", towns.Room, towns.InitialReturn)
             {
-                Level = 50, Inventory = new([new(0, gearSlot, InventoryRewardGrantService.Create(items.Get(10400)))], Gold: 999)
+                Level = 50, Inventory = new([new(0, gearSlot, InventoryRewardGrantService.Create(items.Get(10114)))], Gold: 999)
             });
             Sql($"INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES({created.Id},'profession-action',3,51)");
             var current = repository.LoadCharacter(owner, 0);
+            var white = current with { Inventory = current.Inventory with { Items =
+                [current.Inventory.Find(gearSlot)! with { Core = InventoryRewardGrantService.Create(items.Get(10400)) }] } };
+            That(disjoint.Plan(white, gearSlot)!.Disjoint!.Rewards.All(row => row.ItemId != 2610045),
+                "白装在本人机器中也不触发仅限稀有度大于1的自用零件");
             var plan = disjoint.Plan(current, gearSlot)!;
             That(plan is not null && plan.Disjoint!.Rewards.Any(row => row.ItemId == 2610045 && row.Count == 1) &&
                 plan.Inventory.After.Find(gearSlot) is null && plan.Endurance == 299 && plan.Experience > 51,

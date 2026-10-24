@@ -77,7 +77,8 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                     ? items.Entries.ToImmutableDictionary(row => row.Template.Id, row => counts[row.Template.Id]) : trial.ItemCounts,
                 RarityPools = trial.RarityPools.IsDefault ? default : trial.RarityPools.Select((row, rarity) =>
                     row with { Items = Restrict(row.Items, rarity == 4),
-                        AlternateItems = row.AlternateItems is { } alternate ? Restrict(alternate, rarity == 4) : null }).ToImmutableArray()
+                        AlternateItems = row.AlternateItems is { } alternate ? Restrict(alternate, rarity == 4) : null,
+                        SecondaryItems = row.SecondaryItems is { } secondary ? Restrict(secondary, rarity == 4) : null }).ToImmutableArray()
             };
         }), plan.ReferenceQuality, plan.Amplification);
     }

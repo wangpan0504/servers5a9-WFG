@@ -1,5 +1,6 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Characters;
 using DfoServer.Game.Inventory.Models;
 using Microsoft.Data.Sqlite;
 
@@ -62,10 +63,11 @@ internal sealed partial class CharacterRepository
         });
     }
 
-    public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState)
+    public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState, CharacterLearningState learning)
     {
         if (expected.ExpertJobType is < 1 or > 4 || giveUpState is < 0 or > 3)
             throw new InvalidDataException("没有可放弃的副职业资格");
+        learning.Validate();
         return owner.Execute(() =>
         {
             using var db = database.Open();
@@ -80,10 +82,18 @@ internal sealed partial class CharacterRepository
             command.CommandText = "DELETE FROM character_expert_job WHERE character_id=$id AND account=$account AND job_type=$type";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副职业资格行已变化");
             UpsertExpertMeta(command, owner.Account, expected.Id, giveUpState, 1, 300);
+            if (!SameLearning(expected.Learning, learning))
+            {
+                WriteLearning(db, transaction, expected.Id, learning);
+                WriteCanonicalSkills(db, transaction, expected.Id, learning);
+            }
             transaction.Commit();
             return committed with
             {
                 ExpertJobType = 0,
+                Learning = learning,
+                Skills = learning.Initialized ? learning.Trees.Single(tree => tree.Context == 0).Skills
+                    .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id).ToArray() : committed.Skills,
                 ExpertJobExperience = 0,
                 ExpertJobRecipes = System.Collections.Immutable.ImmutableHashSet<int>.Empty,
                 ExpertGiveUpState = giveUpState,

@@ -123,7 +123,7 @@ internal static class QuestAutoMeetTests
                     "未接取不能用sub1或客户端完成包签发奖励");
                 output.Frames.Clear();
                 That(await commands.DispatchAsync(context,Identity(31)) == CommandResult.Handled &&
-                    output.Opcodes.SequenceEqual(new ushort[] {31,21}),"真实31接取自动会面，不等待目标NPC点击");
+                    output.Opcodes.SequenceEqual(new ushort[] {31,21,356}),"真实31接取自动会面，不等待目标NPC点击");
                 var first = f.Read(); var firstActive = first.ActiveMainQuests.Single();
                 That(firstActive is { ConditionState: 0 } && firstActive.AcceptanceId != Guid.Empty &&
                     first.Revision == original.Revision+1 && first.CompletedQuests.Length == 0 && f.Receipts == 0,
@@ -134,7 +134,7 @@ internal static class QuestAutoMeetTests
                     "未回声33也能重登恢复，不能因丢接取ACK滞留scalar1");
                 output.Frames.Clear();
                 That(await commands.DispatchAsync(context,Identity(32)) == CommandResult.Handled &&
-                    output.Opcodes.SequenceEqual(new ushort[] {32,21}) && f.Read().ActiveMainQuests.Length == 0,
+                    output.Opcodes.SequenceEqual(new ushort[] {32,21,356}) && f.Read().ActiveMainQuests.Length == 0,
                     "可放弃侧边任务按既有32清槽");
                 output.Frames.Clear(); await commands.DispatchAsync(context,Identity(31));
                 var accepted = f.Read();

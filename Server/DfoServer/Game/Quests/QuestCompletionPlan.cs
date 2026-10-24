@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
+using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
@@ -210,7 +211,8 @@ internal sealed class QuestCompletionPlan
     public static QuestCompletionPreparation Prepare(Character expected, StoryQuest quest, ushort selector,
         QuestCatalog quests, QuestRewardParameterCatalog parameters, ItemCatalog items, GoldLimitCatalog goldLimits,
         EpicPieceCatalog pieces, CharacterGrowthCatalog growthCatalog, DateTimeOffset now, QuestClearReceipt? clear = null, ushort multiplier = 1,
-        GrowthContractBenefits? growthContract = null, QuestStageGraph? stageGraph = null, QuestStageState? stageState = null, ExperienceBonusService? experienceBonuses = null, bool premiumPcRoom = false)
+        GrowthContractBenefits? growthContract = null, QuestStageGraph? stageGraph = null, QuestStageState? stageState = null, ExperienceBonusService? experienceBonuses = null, bool premiumPcRoom = false,
+        ExpertJobScriptCatalog? expertJobs = null)
     {
         try
         {
@@ -479,6 +481,10 @@ internal sealed class QuestCompletionPlan
             var rewardLearning = profession is { } target ? QuestProfessionReward.Prepare(expected,target,
                 growth?.TargetLevel ?? expected.Level, growth?.Learning ?? expected.Learning, growthCatalog.Learning!, now) : null;
             if (tpAmount != 0) rewardLearning = QuestCharacterReward.AddTp(growth?.Learning ?? expected.Learning,tpAmount);
+            if (expertJob is { } grantedJob)
+                rewardLearning = ExpertJobSkills.Grant(expected.Job, growth?.Learning ?? expected.Learning,
+                    (expertJobs ?? throw new NotSupportedException("副职业赠技资源未装配")).Skills(grantedJob),
+                    growthCatalog.Learning ?? throw new NotSupportedException("副职业技能资源未装配"));
             InventoryCharacterPrecondition? creaturePrecondition = null;
             if (creatureReward)
             {
@@ -526,6 +532,8 @@ internal sealed class QuestCompletionPlan
                 rewardLearning = profession is { } finalProfession ? QuestProfessionReward.Prepare(expected, finalProfession,
                     growth.TargetLevel, growth.Learning, growthCatalog.Learning!, now) : null;
                 if (tpAmount != 0) rewardLearning = QuestCharacterReward.AddTp(growth.Learning, tpAmount);
+                if (expertJob is { } stageJob)
+                    rewardLearning = ExpertJobSkills.Grant(expected.Job, growth.Learning, expertJobs!.Skills(stageJob), growthCatalog.Learning!);
             }
             return new(QuestCompletionOutcome.Accepted, Create(growth, rewardLearning, stage), "通用及阶段领奖计划已冻结");
         }

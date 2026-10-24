@@ -52,7 +52,7 @@ internal static partial class HarlemMaterialDropTests
         {
             bool cosmo = dungeonId == 7191;
             var epics = rareExtra ? new HarlemHellEpicDropPolicy(harlem, epicCandidates.Normal, epicCandidates.Weapons,
-                epicCandidates.Tayberrs, epicCandidates.Cosmo, epicCandidates.Rules with { LegendRareEpicPermille = 1000 }) : epicCandidates;
+                epicCandidates.Tayberrs, epicCandidates.Cosmo, epicCandidates.Rules with { LegendRareEpicPermille = 1000 }, superPool: epicCandidates.Super) : epicCandidates;
             var area = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
                 towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeonId));
             var done = new HashSet<int>(area.Quests) { 6030, 6080, 6081, 6082, 10112 };

@@ -110,16 +110,18 @@ internal static class QuestPackets
     public static byte[] Finish(ushort questId, byte conditionType, uint experience,
         IReadOnlyList<QuestConsumedItemProjection> consumed, uint gold, IReadOnlyList<QuestRewardItemProjection> rewards, byte? growType = null,
         IReadOnlyList<QuestCurrencyRewardProjection>? currencies = null, ushort tpAmount = 0, bool hellChallenge = false,
-        bool creatureEvolution = false)
+        bool creatureEvolution = false, byte? expertJobType = null)
     {
-        if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 60 or 64 or 65 or 70) || experience > int.MaxValue || gold > int.MaxValue ||
+        if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 60 or 64 or 65 or 70) || experience > int.MaxValue || gold > int.MaxValue ||
             consumed.Count > byte.MaxValue || conditionType is not (0 or 25) && consumed.Count != 0 ||
             rewards.Count + (currencies?.Count ?? 0) + (gold == 0 ? 0 : 1) > byte.MaxValue ||
             growType is { } growth && (growth == 0 || (growth & 15) > 5 || growth >> 4 > 2) ||
             growType is not null && (rewards.Count != 0 || currencies?.Count > 0) ||
             tpAmount is not (0 or 2) || tpAmount != 0 && (growType is not null || rewards.Count != 0 || currencies?.Count > 0) ||
             (hellChallenge || creatureEvolution) && (growType is not null || tpAmount != 0 || rewards.Count != 0 || currencies?.Count > 0) ||
-            hellChallenge && creatureEvolution)
+            hellChallenge && creatureEvolution ||
+            expertJobType is { } expert && (expert is < 1 or > 4 || growType is not null || tpAmount != 0 ||
+                hellChallenge || creatureEvolution || rewards.Count != 0 || currencies?.Count > 0))
             throw new InvalidDataException("普通任务交付投影超出已确认合同");
         byte[] rows = FixedRewardRows(rewards,currencies);
         using var bytes = new MemoryStream(); using var writer = new BinaryWriter(bytes);
@@ -139,6 +141,12 @@ internal static class QuestPackets
             // Full03 02377DD5读branch/stage，02377E16..02377FF7固定读取两页count；技能完整状态另由19发布。
             writer.Write((byte)(target >> 4 == 0 ? 1 : 2)); writer.Write((byte)(target >> 4 == 0 ? target : target >> 4));
             writer.Write((byte)0); writer.Write((byte)0);
+            return bytes.ToArray();
+        }
+        if (expertJobType is { } job)
+        {
+            // 02377B66/02377DD5：mode20读取副职业类型及两页技能count，完整双树先由19装载。
+            writer.Write((byte)20); writer.Write(job); writer.Write((byte)0); writer.Write((byte)0);
             return bytes.ToArray();
         }
         if (tpAmount != 0)

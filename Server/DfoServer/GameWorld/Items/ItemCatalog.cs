@@ -65,6 +65,7 @@ internal sealed class ItemCatalog
     };
 
     readonly int equipmentSellRate;
+    readonly Lazy<ImmutableArray<CosmoPassCost>> cosmoPasses;
 
     public ItemCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment,
         IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
@@ -77,6 +78,7 @@ internal sealed class ItemCatalog
         this.acquisitionContracts = acquisitionContracts ?? new Dictionary<int, PremiumContract>();
         this.equipmentSellRate = equipmentSellRate;
         this.creatures = creatures;
+        cosmoPasses = new(() => CosmoPassCost.Load(archive));
     }
 
     public ItemTemplate Get(int id)
@@ -156,6 +158,9 @@ internal sealed class ItemCatalog
             throw new InvalidDataException("物品creation rate必须是单个非负整数");
         return rate;
     }
+
+    public ImmutableArray<CosmoPassCost> CosmoPasses() => cosmoPasses.Value
+        .Where(row => stackable.ContainsKey(row.ItemId) && Get(row.ItemId).Kind == ItemKind.Material).ToImmutableArray();
 
     public IReadOnlyList<(int ItemId, int Count)>? NeededMaterials(int id)
     {
@@ -422,6 +427,7 @@ internal sealed class ItemCatalog
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
             CreationRate = CreationRate(text),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
+            BossDrop = isEquipment && text.ContainsString("item category", "boss drop"),
             AmplifyPollutionForbidden = isEquipment && text.ContainsString("impossible contents", "pollution"),
             UseForbidden = ForbidsUse(impossible),
             // 分解采用模板价值及基础出售倍率，不使用NPC售出时的耐久和90%折价。

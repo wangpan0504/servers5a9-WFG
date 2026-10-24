@@ -11,6 +11,7 @@ internal sealed record HarlemHellEpicRules
     public int NormalWeaponPermille { get; init; } = 10;
     public int LegendRareEpicPermille { get; init; } = 0;
     public int CosmoTayberrsPermille { get; init; } = 100;
+    public int CosmoSuperPermille { get; init; } = 100;
 
     public static HarlemHellEpicRules Parse(string json)
     {
@@ -24,43 +25,52 @@ internal sealed record HarlemHellEpicRules
     public void Validate()
     {
         if (NormalWeaponPermille is < 0 or > 1000 || LegendRareEpicPermille is < 0 or > 1000 ||
-            CosmoTayberrsPermille is < 0 or > 1000)
-            throw new InvalidDataException("哈林史诗分支概率须为0至1000的千分比");
+            CosmoTayberrsPermille is < 0 or > 1000 || CosmoSuperPermille is < 0 or > 1000 ||
+            CosmoTayberrsPermille + CosmoSuperPermille > 1000)
+            throw new InvalidDataException("哈林史诗分支概率须为0至1000的千分比，超星空两分支之和不得超过1000");
     }
 }
 
 internal sealed class HarlemHellEpicDropPolicy
 {
-    public const string Rule = "harlem-hell-epic-local-v3";
+    public const string Rule = "harlem-hell-epic-local-v4";
     public const string RareRule = "harlem-starry-rare-extra-local-v1";
     public const int Area = 54;
     public const int NormalList = 1;
     public const int CosmoList = 2;
     public const int WeaponList = 3;
     public const int TayberrsList = 4;
+    public const int SuperList = 5;
     readonly ImmutableHashSet<uint> hellDungeons;
     public DungeonItemDropPool Normal { get; }
     public DungeonItemDropPool? Weapons { get; }
     public DungeonItemDropPool? Tayberrs { get; }
     public DungeonItemDropPool? Cosmo { get; }
+    public DungeonItemDropPool? Super { get; }
     public HarlemHellEpicRules Rules { get; }
     readonly DungeonCosmoRewardCatalog? cosmo;
 
     public HarlemHellEpicDropPolicy(IEnumerable<uint> hellDungeons, DungeonItemDropPool normal,
         DungeonItemDropPool? weapons = null, DungeonItemDropPool? tayberrs = null,
-        DungeonItemDropPool? cosmoPool = null, HarlemHellEpicRules? rules = null, DungeonCosmoRewardCatalog? cosmo = null)
+        DungeonItemDropPool? cosmoPool = null, HarlemHellEpicRules? rules = null, DungeonCosmoRewardCatalog? cosmo = null,
+        DungeonItemDropPool? superPool = null)
     {
         this.hellDungeons = hellDungeons.ToImmutableHashSet();
         Validate(normal, false);
         if (weapons is not null) Validate(weapons, true);
         if (tayberrs is not null) Validate(tayberrs, true);
         if (cosmoPool is not null) Validate(cosmoPool, true);
+        if (superPool is not null) Validate(superPool, true);
         Normal = normal;
         Weapons = weapons;
         Tayberrs = tayberrs;
         Cosmo = cosmoPool;
+        Super = superPool;
         Rules = rules ?? new();
         Rules.Validate();
+        if (Cosmo is not null && ((Rules.CosmoSuperPermille > 0 && Super is null) ||
+            (Rules.CosmoTayberrsPermille > 0 && Tayberrs is null)))
+            throw new InvalidDataException("启用超星空条件分支须完整装配对应候选池");
         this.cosmo = cosmo;
     }
 
@@ -102,7 +112,7 @@ internal sealed class HarlemHellEpicDropPolicy
 
         var alternate = ultra ? Tayberrs : Weapons;
         int permille = ultra ? Rules.CosmoTayberrsPermille : Rules.NormalWeaponPermille;
-        if (alternate is null) return plan;
+        if (alternate is null && (!ultra || Super is null)) return plan;
         // 仅修改末波/最终领主追加的最后一组装备骰；普通怪及PVF独立奖励不借此增加触发率。
         int last = plan.Trials.Length - 1;
         var expected = ultra ? Cosmo : Pool(entry);
@@ -112,7 +122,8 @@ internal sealed class HarlemHellEpicDropPolicy
         return new(plan.ResourceSource, plan.Trials.Select((trial, index) => index != last || trial.RarityPools.IsDefaultOrEmpty ? trial : trial with
         {
             RarityPools = trial.RarityPools.Select((row, rarity) => rarity == 4 ?
-                row with { AlternateItems = alternate, AlternatePermille = permille } : row).ToImmutableArray()
+                row with { AlternateItems = alternate, AlternatePermille = alternate is null ? 0 : permille,
+                    SecondaryItems = ultra ? Super : null, SecondaryPermille = ultra ? Rules.CosmoSuperPermille : 0 } : row).ToImmutableArray()
         }), plan.ReferenceQuality, plan.Amplification);
     }
 

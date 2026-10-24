@@ -28,14 +28,14 @@ internal static class ExpertJobPackets
     // ACK235 必须带金币和耐久尾部；所有产物都来自已提交的实际回执。
     public static byte[] DisjointResult(ushort owner, DfoServer.Game.Inventory.Models.DisjointReceipt receipt, uint gold, uint endurance)
     {
-        if (receipt.Rewards.Length > byte.MaxValue || receipt.Rewards.Any(row => row.Slot < 0 || row.ItemId <= 0 || row.Count <= 0))
+        if (receipt.Rewards.Length > byte.MaxValue || receipt.Rewards.Any(row => row.Slot < -1 || row.ItemId <= 0 || row.Count <= 0))
             throw new InvalidDataException("机器分解回执超出已确认包体");
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write((byte)1); writer.Write((ushort)receipt.Request.Position.Index);
         writer.Write((byte)receipt.Request.Position.List); writer.Write(owner); writer.Write((byte)receipt.Rewards.Length);
         foreach (var row in receipt.Rewards)
-        { writer.Write((ushort)row.Slot); writer.Write(row.ItemId); writer.Write(row.Count); }
+        { writer.Write(row.Slot); writer.Write(row.ItemId); writer.Write(row.Count); }
         writer.Write(gold); writer.Write(endurance);
         return stream.ToArray();
     }

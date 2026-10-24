@@ -118,26 +118,32 @@ internal static class HarlemHellEpicDropTests
     static void VerifyBranches(DungeonDropRuleCatalog dropRules, DungeonEntryPlan basis, ItemTemplate old, ItemTemplate harlem, ItemTemplate tayberrs)
     {
         var rules = HarlemHellEpicRules.Parse("{}");
-        That(rules.NormalWeaponPermille == 10 && rules.LegendRareEpicPermille == 0 && rules.CosmoTayberrsPermille == 100,
-            "普通及星空共用1%苍穹条件分支；星空稀有额外奖励默认关闭，超星空保留10%条件分支");
+        That(rules.NormalWeaponPermille == 10 && rules.LegendRareEpicPermille == 0 && rules.CosmoTayberrsPermille == 100 && rules.CosmoSuperPermille == 100,
+            "普通及星空共用1%苍穹条件分支；星空稀有额外奖励默认关闭，超星空使用80/10/10条件分支");
         Reject<InvalidDataException>(() => HarlemHellEpicRules.Parse("null"), "史诗规则不接受空配置");
         Reject<InvalidDataException>(() => HarlemHellEpicRules.Parse("{\"NormalWeaponPermille\":1001}"), "分支概率不截断");
         Reject<JsonException>(() => HarlemHellEpicRules.Parse("{\"LegendTayberrsPercent\":5}"), "配置字段拼错明确拒绝");
         Reject<JsonException>(() => HarlemHellEpicRules.Parse("{\"LegendTayberrsPermille\":50}"), "旧星空条件概率字段明确拒绝，不能默认为每只稀有怪的绝对概率");
         Reject<InvalidDataException>(() => HarlemHellEpicRules.Parse("{\"LegendRareEpicPermille\":-1}"), "稀有怪额外奖励不接受负概率");
         Reject<InvalidDataException>(() => HarlemHellEpicRules.Parse("{\"LegendRareEpicPermille\":1001}"), "稀有怪额外奖励不接受越界概率");
+        Reject<InvalidDataException>(() => HarlemHellEpicRules.Parse("{\"CosmoSuperPermille\":-1}"), "超界分支拒绝负概率");
+        Reject<InvalidDataException>(() => HarlemHellEpicRules.Parse("{\"CosmoSuperPermille\":901}"), "超界与泰波尔斯条件分支之和不得超过1000");
         var normal = new DungeonItemDropPool(new[] { new DungeonWeightedDropItem(old, 2), new(harlem, 3) });
         var level95 = new DungeonItemDropPool(new[] { new DungeonWeightedDropItem(harlem, 7) });
         var alternate = new DungeonItemDropPool(new[] { new DungeonWeightedDropItem(tayberrs, 11) });
         foreach (var invalid in new[] { new DungeonDropRarityPool(1000000, level95, AlternatePermille: 1),
             new DungeonDropRarityPool(1000000, level95, alternate, 1001),
+            new DungeonDropRarityPool(1000000, level95, SecondaryPermille: 1),
+            new DungeonDropRarityPool(1000000, level95, alternate, 600, alternate, 401),
             new DungeonDropRarityPool(1000000, level95, new DungeonItemDropPool(Array.Empty<ItemTemplate>()), 50) })
             Reject<InvalidDataException>(() => new DungeonDropGenerationPlan("合成非法条件分支",
                 [new(1000, null, 1, 1, RarityPools: [invalid])]), "条件分支拒绝缺候选、空候选或范围外概率");
+        var superItem = tayberrs with { Id = 8201 };
+        var superPool = new DungeonItemDropPool(new[] { new DungeonWeightedDropItem(superItem, 13) });
         var map = basis.BossMap with { Id = 92690, Path = "map/合成超星空终点.map", Position = new(2, 0) };
         var source = new DungeonRoomMonster(42, [42, 1, 0, 100, 100, 0, 1, 1], "[fixed]", "[boss]", "monster/合成超星空领主.mob");
         var cosmo = new DungeonCosmoRewardCatalog(2, 4, [new(map, [source], [], [])]);
-        var local = new HarlemHellEpicDropPolicy([1], normal, alternate, alternate, level95, rules, cosmo);
+        var local = new HarlemHellEpicDropPolicy([1], normal, alternate, alternate, level95, rules, cosmo, superPool);
         var candidates = DungeonItemDropCatalog.Create([old with { CreationRate = 1 }]);
         var resource = new DungeonResourceDropPolicy(dropRules, candidates, id => new(id, "monster/合成.mob", null, null),
             id => id == harlem.Id ? harlem : tayberrs, harlemEpics: local);
@@ -158,7 +164,7 @@ internal static class HarlemHellEpicDropTests
             !local.ExtendLegendRare(new("合成空计划", []), starEntry, rare).Trials.Any(),
             "稀有怪来源可识别，但默认关闭时不追加奖励或消耗额外随机数");
         var extraPolicy = new HarlemHellEpicDropPolicy([1], normal, alternate, alternate, level95,
-            rules with { LegendRareEpicPermille = 50 }, cosmo);
+            rules with { LegendRareEpicPermille = 50 }, cosmo, superPool);
         var extraResource = new DungeonResourceDropPolicy(dropRules, candidates, id => new(id, "monster/合成.mob", null, null),
             id => tayberrs, harlemEpics: extraPolicy);
         var cachedRare = extraResource.PrepareEntry(starEntry, hell);
@@ -205,12 +211,29 @@ internal static class HarlemHellEpicDropTests
             {
                 var results = isolated.Generate(bound => bound == 1000 ? draw : 0, DateTimeOffset.UnixEpoch);
                 That(results.Length == 2 && results.All(row => row.Item!.ItemId ==
-                    (draw < threshold ? tayberrs.Id : entry.DungeonId == 7191 ? harlem.Id : old.Id)),
-                    "普通及星空1%、超星空10%条件分支每个边界精确覆盖，超星空不出90史诗");
+                    (draw < threshold ? tayberrs.Id : entry.DungeonId == 7191 ? (draw < 200 ? superItem.Id : harlem.Id) : old.Id)),
+                    "普通及星空1%、超星空80/10/10条件分支每个边界精确覆盖，超星空不出90史诗");
             }
         }
         var ordinary = Enumerable.Range(0, 7).Where(rarity => rarity != 4)
             .Select(rarity => old with { Id = 8000 + rarity, Rarity = rarity, Grade = 1, CreationRate = 1 }).ToArray();
+        var superRules = rules with { CosmoSuperPermille = 200 };
+        Reject<InvalidDataException>(() => new HarlemHellEpicDropPolicy([1], normal, alternate, alternate, level95,
+            superRules, cosmo), "非零超界概率不能静默忽略缺失候选池");
+        Reject<InvalidDataException>(() => new HarlemHellEpicDropPolicy([1], normal, alternate, null, level95,
+            rules, cosmo, superPool), "非零泰波尔斯概率不能静默忽略缺失候选池");
+        var superPolicy = new HarlemHellEpicDropPolicy([1], normal, alternate, alternate, level95, superRules, cosmo, superPool);
+        var superPlan = superPolicy.Extend(new("合成超界条件分支", []), ultraEntry, boss, hell);
+        var superTrial = superPlan.Trials.Last();
+        That(superTrial.Attempts == 2 && superTrial.Threshold == 200 && superTrial.ProbabilityDenominator == 1001,
+            "启用超界不增加装备骰数或修改装备命中概率");
+        var superIsolated = new DungeonDropGenerationPlan(superPlan.ResourceSource, [superTrial with { Attempts = 1 }]);
+        for (int draw = 0; draw < 1000; draw++)
+        {
+            var result = superIsolated.Generate(bound => bound == 1000 ? draw : 0, DateTimeOffset.UnixEpoch);
+            That(result is [{ Item: { } item }] && item.ItemId == (draw < 100 ? tayberrs.Id : draw < 300 ? superItem.Id : harlem.Id),
+                "三分支同一千分比抽样互斥选择，超界占比从哈林划出且各池权重不拼接");
+        }
         var materialItem = harlem with { Id = 8100, Kind = ItemKind.Material, Rarity = 0, Grade = 1, CreationRate = 1 };
         var mixedItems = ordinary.Concat([old with { Grade = 1, CreationRate = 1 }, harlem with { Grade = 1, CreationRate = 1 }, materialItem])
             .ToDictionary(item => item.Id);
@@ -239,7 +262,7 @@ internal static class HarlemHellEpicDropTests
         foreach (int permille in new[] { 0, 1000 })
         {
             var configured = new HarlemHellEpicDropPolicy([1], normal, alternate, alternate, level95,
-                rules with { NormalWeaponPermille = permille }, cosmo);
+                rules with { NormalWeaponPermille = permille }, cosmo, superPool);
             var plan = configured.Extend(hell.Extend(new("合成装备", []), 1, 1, 1, suppressEpicFragments: true, epicEquipment: normal),
                 normalEntry, wave, hell);
             var result = plan.Generate(_ => 0, DateTimeOffset.UnixEpoch);
@@ -294,7 +317,7 @@ internal static class HarlemHellEpicDropTests
         }
         var cosmo = DungeonCosmoRewardCatalog.Load(pvf, dungeons, rooms);
         var local = new HarlemHellEpicDropPolicy(harlem, normal, catalog.Pool(54, 3, items.Items.Get),
-            catalog.Pool(54, 4, items.Items.Get), legend, cosmo: cosmo);
+            catalog.Pool(54, 4, items.Items.Get), legend, cosmo: cosmo, superPool: catalog.Pool(54, 5, items.Items.Get));
         uint[] targets = [291100268, 291100293, 291100308, 291100309, 291100317, 291100319];
         That(targets.All(harlem.Contains), "6080区域候选包含全部六张哈林深渊，实际范围还须核对深渊房间");
         var resource = new DungeonResourceDropPolicy(Testing.SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
@@ -331,8 +354,34 @@ internal static class HarlemHellEpicDropTests
             var trial = plan.Trials.Last();
             That(trial.Attempts == 8 && trial.RarityPools[4].AlternatePermille == 100 &&
                 trial.RarityPools[4].Items.Entries.Length == 91 && trial.RarityPools[4].AlternateItems!.Entries.Length == 74 &&
+                trial.RarityPools[4].SecondaryPermille == 100 && trial.RarityPools[4].SecondaryItems!.Entries.Length == 25 &&
                 plan.ResourceSource.Contains(HarlemHellEpicDropPolicy.Rule),
-                "三个真实超星空终点均准备95哈林与74泰波尔斯条件分支；这是奖励层验证，不代表准入已支持");
+                "三个真实超星空终点均准备80/10/10哈林、泰波尔斯、超界条件分支");
+            var superOnly = new HarlemHellEpicDropPolicy(harlem, normal, local.Weapons, local.Tayberrs, legend,
+                new() { CosmoTayberrsPermille = 0, CosmoSuperPermille = 1000 }, cosmo, local.Super);
+            var superPlan = superOnly.Extend(new("真实超界候选配置", []), entry, boss, hell);
+            var superTrial = superPlan.Trials.Last() with { Attempts = 1 };
+            That(superTrial.RarityPools[4].SecondaryItems!.Entries.Length == 25,
+                "三个实际领主均能装配匹配PVF的25件超界防具");
+            int cursor = 0;
+            foreach (var candidate in local.Super!.Entries)
+            {
+                var isolated = new DungeonDropGenerationPlan(superPlan.ResourceSource, [superTrial]);
+                var draws = new Queue<(int Bound,int Value)>([(superTrial.ProbabilityDenominator,0),
+                    (DungeonDropRatePlan.RarityDenominator,superTrial.RarityPools[3].Threshold),
+                    (1000,0),(local.Super.TotalWeight,cursor)]);
+                var generated = isolated.Generate(bound =>
+                {
+                    if(draws.Count==0) return 0;
+                    var next=draws.Dequeue();
+                    That(bound==next.Bound,"史诗稀有度与百万池权重抽样按顺序区分，不能按相同上界混用");
+                    return next.Value;
+                },DateTimeOffset.Parse("2026-10-23T00:00:00Z"));
+                That(draws.Count==0,"实际生成消费全部确定性奖励抽样");
+                That(generated is [{ Item: { } item }] && item.ItemId == candidate.Template.Id,
+                    "超界配置经实际领主奖励生成器逐件验证，不仅检查池中存在：" + candidate.Template.Id);
+                cursor = candidate.CumulativeWeight;
+            }
         }
         foreach (uint id in new uint[] { 530, 7191 })
         {

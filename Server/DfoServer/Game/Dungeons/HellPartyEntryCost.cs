@@ -8,7 +8,7 @@ namespace DfoServer.Game.Dungeons;
 // 实验性（未在95客户端实证）：深渊派对入场票消耗。依据参考项目 90 轻装上阵 dungeon_hell_party_entry.go：
 // - 票数 = dgn 里 [hell party required item count]（95 PVF 显式声明，黑暗都市=30）；缺失时回退 (40*minLevel-1800)/100+10（91 级=28）。
 // - 候选 = 区域 [item condition] 里每个物品 id（哈林为 3330 深渊派对邀请函），逐个尝试，第一个数量够的整笔扣除，不拆分混扣。
-// - 95 PVF 没有 [hell freepass item]，所以没有免票路径。
+// - 普通深渊无已确认免票路径；超星空通行证沿匹配物品身份单独替代邀请函及灵石。
 internal sealed record HellPartyTicket(int ItemId, int Count);
 
 internal static class HellPartyEntryCost
@@ -19,6 +19,25 @@ internal static class HellPartyEntryCost
     {
         if (room.RequiredItemCount > 0) return room.RequiredItemCount;
         return minimumLevel is { } level and > 0 ? Math.Max(0, (40 * level - 1800) / 100 + 10) : 0;
+    }
+
+    public static (HellPartyTicket? Ticket, HellPartyTicket? Stone, InventoryPlan? Plan) CosmoPass(InventorySnapshot inventory,
+        IReadOnlyList<CosmoPassCost> passes, EpicPieceCatalog pieces, DateTimeOffset utcNow)
+    {
+        // 按有效背包槽位选择完整可支付的费用组合；星空券还须同时具备资源声明的额外灵石。
+        var candidates = inventory.Items.Where(item => item.Position.List == InventoryListType.Main &&
+            item.Core.EquipmentLockId == 0 && !item.Core.IsExpired(utcNow.ToUnixTimeSeconds()))
+            .OrderBy(item => item.Position.Index).Select(item => passes.FirstOrDefault(row => row.ItemId == item.Core.ItemId))
+            .OfType<CosmoPassCost>().Distinct();
+        foreach (var candidate in candidates)
+        {
+            var pass = Plan(inventory,[candidate.ItemId],candidate.Count,pieces,utcNow);
+            if (pass.Plan is null) continue;
+            if (candidate.AdditionalStones == 0) return (pass.Ticket,null,pass.Plan);
+            var stones = Plan(pass.Plan.After,[LegendStone],candidate.AdditionalStones,pieces,utcNow);
+            if (stones.Plan is not null) return (pass.Ticket,stones.Ticket,stones.Plan);
+        }
+        return (null,null,null);
     }
 
     // 选第一个背包里数量够的候选并给出提交用的物品计划；全不够 / 票数无依据（<=0） / 无候选 都视为不能入场。

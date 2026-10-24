@@ -57,7 +57,8 @@ internal static partial class DungeonSpecificCardRewardsTests
             checked((ushort)(bounds.Y + bounds.Height / 2)));
         var now = DateTimeOffset.Parse("2026-10-23T00:00:00Z");
         using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
-            done.ToArray(), position: position, items: [(3330, bossRoll == 0 ? 40 : 80), (10305821, bossRoll == 0 ? 4 : 8)],
+            done.ToArray(), position: position, items: bossRoll == 90 ? [(490705255, 1), (3330, 40), (10305821, 4)] :
+                bossRoll == 45 ? [(490705255, 2)] : [(3330, 40), (10305821, 4)],
             fatigueRemaining: bossRoll == 0 ? (ushort)8 : (ushort)16,
             timeProvider: new Testing.Inventory.DailyBoosterTestClock(now));
         // 使用生产装配的完整奖励，覆盖三种领主与再挑战后的真实地面对象容量。
@@ -66,7 +67,7 @@ internal static partial class DungeonSpecificCardRewardsTests
             .SelectMany(map => map.Options).Select(option => checked((uint)option.DungeonId)).ToArray();
         var epics = new HarlemHellEpicDropPolicy(harlem, epicTable.Pool(54, 1, resolveDropItem),
             epicTable.Pool(54, 3, resolveDropItem), epicTable.Pool(54, 4, resolveDropItem),
-            epicTable.Pool(54, 2, resolveDropItem), cosmo: DungeonCosmoRewardCatalog.Load(pvf, dungeons, rooms));
+            epicTable.Pool(54, 2, resolveDropItem), cosmo: DungeonCosmoRewardCatalog.Load(pvf, dungeons, rooms), superPool: epicTable.Pool(54, 5, resolveDropItem));
         var resourceDrops = new DungeonResourceDropPolicy(Testing.SelfTestCatalogs.DropRules(pvf), candidates,
             drops.Get, resolveDropItem, items.DungeonSpecialDrops, new EquipmentAmplificationDropPolicy(items.Amplifications.Rules),
             new HarlemMaterialDropPolicy(new(), harlem, resolveDropItem, epics), epics,
@@ -84,8 +85,7 @@ internal static partial class DungeonSpecificCardRewardsTests
                 foreach (var trial in plan.Trials)
                 {
                     var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty
-                        ? Array.Empty<DungeonItemDropPool>() : trial.RarityPools.SelectMany(row =>
-                            row.AlternateItems is { } alternate ? new[] { row.Items, alternate } : new[] { row.Items });
+                        ? Array.Empty<DungeonItemDropPool>() : trial.RarityPools.SelectMany(row => row.CandidatePools);
                     foreach (var candidate in pools.SelectMany(pool => pool.Entries).Where(row => row.Template.Id == 490014159))
                     {
                         That(candidate.Template.Expiration.Resolve(now) == 1582149600,
@@ -98,12 +98,19 @@ internal static partial class DungeonSpecificCardRewardsTests
         }
         // 终点仍受控选择；其余抽样固定种子，保留历史过期活动候选参与抽样。
         var random = new Random(653 + bossRoll);
+        bool forceEpic=false;
+        int Draw(int bound)=>forceEpic ? bound==1000000 ? 993000 : bound==1000 ?
+            (bossRoll==0 ? 200 : bossRoll==45 ? 0 : 100) : 0 : bound==100 ? bossRoll : random.Next(bound);
         var receipt = fixture.Session.EnterFormalDungeon(7191, 0, 4, dungeons, rooms, drops, items.Items,
-            draw: bound => bound == 100 ? bossRoll : random.Next(bound), pieces: items.EpicPieces, hellParty: true,
+            draw: Draw, pieces: items.EpicPieces, hellParty: true,
             prepareDrops: PrepareDrops)!;
         That(receipt is { Entry.IsCosmo: true }, "超星空结算回归沿真实准入：" + fixture.Session.LastFormalDungeonRejection);
         That(receipt.Entry.BossMap.Id == (bossRoll == 0 ? 92689 : bossRoll == 45 ? 92690 : 92697),
             "结算回归分别覆盖三个带权重终点");
+        That(bossRoll == 0 || ItemCount(fixture.Read(), 490705255) == (bossRoll == 45 ? 1 : 0) &&
+            ItemCount(fixture.Read(), 3330) == (bossRoll == 45 ? 0 : 40) &&
+            ItemCount(fixture.Read(), 10305821) == (bossRoll == 45 ? 0 : 4),
+            "仅有通行证也能入场，通行证优先且不混扣邀请函及灵石");
         string directory = Path.Combine(Path.GetTempPath(), "S5A9-cosmo-exit-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -139,13 +146,30 @@ internal static partial class DungeonSpecificCardRewardsTests
                     receipt = fixture.Session.CompleteFormalDungeonLoading()!;
                     foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking).ToArray())
                     {
+                        forceEpic=monster.IsBoss;
                         var death = fixture.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth);
+                        forceEpic=false;
                         That(death is { Outcome: DungeonRunOutcome.Accepted, Receipt: not null }, "超星空真实路线逐怪提交");
                         receipt = death.Receipt!;
                         That(death.Drops.All(row => row.Content.Item is not { } item || !item.IsExpired(now.ToUnixTimeSeconds())),
                             "死亡提交只冻结有效资产，历史过期候选不进入地面账本");
                         if (monster.IsBoss)
                         {
+                            var expectedPool=bossRoll==0 ? epics.Cosmo! : bossRoll==45 ? epics.Tayberrs! : epics.Super!;
+                            var epic=death.Drops.FirstOrDefault(row=>row.Content.Item is { } item &&
+                                expectedPool.Entries.Any(candidate=>candidate.Template.Id==item.ItemId));
+                            That(epic is not null,"真实终点死亡经默认三分池生成实际地面奖励");
+                            var beforePickup=fixture.Read();
+                            // 运行态拾取回执已归缓存；在真实库存审计写入处注入晚期SQL失败，保留资产与地面回滚、原对象重试断言。
+                            fixture.Sql("CREATE TRIGGER cosmo_epic_pickup_fail AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'cosmo epic pickup rollback'); END");
+                            Reject<Microsoft.Data.Sqlite.SqliteException>(()=>fixture.Session.PickFormalDungeonItem(epic!.Reservation.GroundKey,
+                                items.Items,items.EpicPieces,items.GoldLimits),"三分池史诗拾取SQL故障不提前移除地面对象");
+                            That(QuestCompletionRepositoryTests.Same(beforePickup,fixture.Read()),"失败拾取整批资产保持不变");
+                            fixture.Sql("DROP TRIGGER cosmo_epic_pickup_fail");
+                            var picked=fixture.Session.PickFormalDungeonItem(epic!.Reservation.GroundKey,items.Items,items.EpicPieces,items.GoldLimits);
+                            That(picked is {Outcome:DungeonRunOutcome.Accepted,Commit.Duplicate:false} &&
+                                fixture.Read().Inventory.Items.Any(row=>row.Core.ItemId==epic.Content.Item!.ItemId),
+                                "哈林、泰波尔斯、超界地面对象重试拾取实际入库");
                             var saved = fixture.Read();
                             var duplicate = fixture.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth);
                             That(duplicate.Outcome == DungeonRunOutcome.Duplicate && duplicate.Drops.IsEmpty &&
@@ -207,6 +231,9 @@ internal static partial class DungeonSpecificCardRewardsTests
                 "超星空通关不发布普通结果页34或翻牌奖励35");
             That(groundKey != 0 && fixture.Session.PickFormalDungeonItem(groundKey, items.Items, items.EpicPieces, items.GoldLimits)
                 is { Outcome: DungeonRunOutcome.Accepted, Commit.Duplicate: false }, "超星空通关后仍能拾取领主地面奖励");
+            if (bossRoll == 45)
+                That(fixture.Session.CanRetryCosmoDungeon(fixture.Session.FormalDungeonResultFocus()!),
+                    "没有邀请函及灵石时，剩余通行证仍提供再挑战资格");
             if (bossRoll == 90)
             {
                 var original = fixture.Session.FormalDungeonResultFocus()!;

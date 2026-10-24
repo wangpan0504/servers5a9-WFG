@@ -272,7 +272,7 @@ internal static partial class FormalDungeonTcpTests
             That(peer.Expect(0, 24).Body[11] == 3, "正式副本结果页回城保留转职特效显示位");
             That(QuestLifecycleTcpTests.List(peer.Expect(0, 21).Body, projectedLevel).Contains(3145),
                 "结果页72回城在绑定场景后刷新当前任务，未领奖的任务仍保留");
-            peer.Barrier();
+            peer.Expect(0,356); peer.Barrier();
             That(fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") == assetsBeforeClear &&
                 Experience(fixture, peer.Id) == experience, "免费翻牌展示及回城保留已提交资产，不再发物品或经验");
             var fatigueBeforeBlack = fixture.Query("SELECT f.used,f.maximum,f.remaining,c.revision FROM character_fatigue f JOIN characters c ON c.id=f.character_id WHERE c.id=$p0",peer.Id).Single();
@@ -647,8 +647,9 @@ internal static partial class FormalDungeonTcpTests
         {
             That(QuestLifecycleTcpTests.List(peer.Expect(0, 21).Body, level).Contains(3145) != completedMainline,
                 "副本和结算升级后按等级及实际完成位刷新任务，不省略通知或重显已完成任务");
-            if (completedMainline)
-                That(peer.Expect(0,356).Body[4+3145] == 1, "副本升级任务列表刷新后保留已完成主线历史");
+            var history = peer.Expect(0,356).Body;
+            That(history[4+3145] == (completedMainline ? 1 : 0) && history[4+13700] == 1,
+                "副本升级任务列表刷新后保留实际主线历史及地图显示位");
         }
         return skills;
     }
@@ -764,8 +765,8 @@ internal static partial class FormalDungeonTcpTests
             peer.Select(slot, prepared: true);
             var history = peer.CompletedQuestHistory;
             That(history.Length == 30004 && U32(history) == 30000 &&
-                Enumerable.Range(0, 30000).All(id => history[4 + id] == (completed.Contains(id) ? 1 : 0)),
-                "GM转职后选角严格恢复持久完成历史，逐项核对全部30000位");
+                Enumerable.Range(0, 30000).All(id => history[4 + id] == (id == 13700 || completed.Contains(id) ? 1 : 0)),
+                "GM转职后选角逐项恢复真实历史及月轮山显示位，严格核对全部30000位");
             EntryTown(peer);
             Enter(peer);
             Load(peer);
@@ -783,11 +784,11 @@ internal static partial class FormalDungeonTcpTests
     {
         string reply = "";
         bool delivered = false;
-        // 客户端Dispose不等于服务端已释放owner；退出也可能发生在GM锁外规划期间，只重试提交前的明确拒绝。
+        // 客户端Dispose不等于服务端已释放owner；仅重试世代或锁外规划快照校验在提交前的明确拒绝。
         bool settled = SpinWait.SpinUntil(() =>
         {
             delivered = DevelopmentGmClient.TryExecute(fixture.Options.GmPort, command, out reply);
-            return !delivered || reply is not ("ERR 账号正在使用，请重试" or "ERR 在线角色快照已变化，请重试");
+            return !delivered || reply is not ("ERR 账号正在使用，请重试" or "ERR 账号世代已变化，请重试" or "ERR 在线角色快照已变化，请重试");
         }, TimeSpan.FromSeconds(2));
         response = reply;
         return settled && delivered;
@@ -1501,6 +1502,21 @@ internal static partial class FormalDungeonTcpTests
             }
             return parents;
         }
+    }
+
+    // 亡者峡谷共用世界地图同时下发悲叹状态，即使随后选择的是祭坛或绝望之塔。
+    // 精确消费固定包序及新角色悲叹首层，不全局忽略1303，也不放宽普通选图合同。
+    static void SelectTowerMap(TcpPeer peer,ushort despairLayer=0,ushort griefLayer=1)
+    {
+        peer.Send(15,new byte[4]);
+        peer.Expect(1,15,[1]);
+        peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]);
+        peer.Expect(0,1536);
+        peer.Expect(0,1303,[0x34,0]);
+        byte[] expected=new byte[42];
+        BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(20),despairLayer);
+        BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(39),griefLayer);
+        peer.Expect(0,27,expected);
     }
 
     // 亡者峡谷世界地图同时含悲叹之塔入口：选图空列表末尾u16带当前悲叹楼层，且前面必须先发0x34通关状态。
