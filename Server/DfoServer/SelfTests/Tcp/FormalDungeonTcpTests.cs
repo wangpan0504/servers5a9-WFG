@@ -317,12 +317,12 @@ internal static partial class FormalDungeonTcpTests
                 "SELECT options_json FROM character_dungeon_card_options WHERE character_id=$p0 ORDER BY rowid DESC LIMIT 1",peer.Id).Single()[0])!;
             That(singleGold is { UseGoldCard:true, Price:0, DoublePaidItems:false, LegacyReturningPlayer:false } && peer.DevilService0[13] == 1,
                 "关闭活动后的新副本走单倍免费黄金牌，未领取不提前消耗第二次资格");
-            peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 2]);
-            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            peer.Send(72, [1, 1]); peer.Expect(1, 72, [1, 1, 1]);
+            peer.Expect(1,15,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]);
+            peer.Expect(0,27,new byte[42]); peer.Barrier();
             peer.Send(72, [1, 3]); peer.Barrier();
             That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[3L]],
-                "剧情没有已接取且合法的后继任务时明确回城，不等待15或生成新副本");
-            SelectMap(peer);
+                "普通循环重选回到真实15选图页，旧72后继请求不生成新副本");
             peer.Send(132); peer.Expect(1, 132, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]); peer.Expect(0, 23); peer.Expect(0, 24);
             peer.Barrier();
