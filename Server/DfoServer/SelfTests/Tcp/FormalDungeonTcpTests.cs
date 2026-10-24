@@ -1086,6 +1086,8 @@ internal static partial class FormalDungeonTcpTests
         long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)[0][0]);
         ulong experience = Experience(fixture, peer.Id);
         byte currentLevel = Convert.ToByte(fixture.Query("SELECT level FROM characters WHERE id=$p0", peer.Id)[0][0]);
+        int usedBefore = Convert.ToInt32(fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0",peer.Id)[0][0]);
+        That(usedBefore == 13,"领奖后普通挑战保留此前两轮循环及重启重入的13点实际费用");
         var clearReward = SelfTestCatalogs.ClearExperience(resources.Archive).Calculate(SelfTestCatalogs.Dungeons(resources.Archive).Get(3), 0, 90);
         byte[] selection = Selection();
         BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16), 0);
@@ -1211,7 +1213,8 @@ internal static partial class FormalDungeonTcpTests
                 currentLevel = notice[0];
             }
         }
-        void ExpectFatigue(int used) => peer.Expect(0, 36, [checked((byte)used), 0, 156, 0, 0, 0, checked((byte)(156 - used)), 0, 0, 0]);
+        void ExpectFatigue(int used) => peer.Expect(0, 36,
+            [checked((byte)(usedBefore + used)), 0, 156, 0, 0, 0, checked((byte)(156 - usedBefore - used)), 0, 0, 0]);
     }
 
     static string OrdinaryPersistentState(TcpTestFixture fixture, ushort id) =>
