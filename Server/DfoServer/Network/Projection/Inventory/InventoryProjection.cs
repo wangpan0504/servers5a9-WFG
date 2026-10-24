@@ -23,6 +23,9 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         if (!CanSend())
             return;
         var current = receipt.Character;
+        bool mainExpansionChanged = plan.Before.Expansion != current.Inventory.Expansion;
+        if (mainExpansionChanged)
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_capacity_committed", CanSend);
         if (plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion)
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Avatar), "avatar_capacity_committed", CanSend);
         var creatureSlot = DfoServer.Game.Creatures.CreatureRules.EquippedSlot;
@@ -66,7 +69,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Pet), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.GuildMedal), "inventory_committed_full_list", CanSend);
         }
-        else foreach (var list in slots.Select(slot => slot.List).Distinct().Order())
+        else foreach (var list in slots.Select(slot => slot.List).Where(list => !mainExpansionChanged || list != InventoryListType.Main).Distinct().Order())
         {
             if (silentMainMove && list == InventoryListType.Main)
             {

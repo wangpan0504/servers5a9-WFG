@@ -84,18 +84,25 @@ internal sealed partial class RandomOptionCatalog
         changeRules = readTokens is not null ? ReadChangeRules(readTokens, resolve!) : null;
     }
 
-    public RandomOptionDefinition? Resolve(ItemTemplate template)
+    public RandomOptionDefinition? Resolve(ItemTemplate template) => Resolve(template, standardReward: false);
+
+    // 礼盒仅接普通稀有度、自由交易且显式标记1的标准装备；不推断特殊词条池。
+    public RandomOptionDefinition? ResolveBoosterReward(ItemTemplate template) => Resolve(template, standardReward: true);
+
+    RandomOptionDefinition? Resolve(ItemTemplate template, bool standardReward)
     {
+        if (standardReward && (template.Rarity != 2 || template.AttachType.Trim() is not ("[free]" or "`[free]`"))) return null;
         if (template.Kind != ItemKind.Equipment || template.Rarity is not (2 or 3) ||
             !equipment.TryGetValue(template.Id, out var path))
             return null;
         var document = EquipmentFile.ReadScript(read, "equipment/" + path);
+        if (standardReward && document.ReadRootInt32("random option") != 1) return null;
         var flag = PvfScript.Integers(document.Section("random option"));
         if (flag.Length == 0)
             return null;
         if (flag.Length != 1 || flag[0] < 0)
             throw new InvalidDataException("无效魔法封印声明");
-        if (flag[0] == 0)
+        if (flag[0] == 0 || standardReward && flag[0] != 1)
             return null;
         string type = Regex.Match(document.Section("equipment type"), @"\[([^\]]+)\]").Groups[1].Value;
         var keys = EquipmentKeys(path, type).Distinct().ToArray();

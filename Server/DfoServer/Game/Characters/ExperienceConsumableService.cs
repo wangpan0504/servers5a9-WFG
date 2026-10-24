@@ -22,7 +22,7 @@ internal sealed class ExperienceConsumableService(ItemCatalog items, CharacterGr
             !ItemSlotBoundService.Allows(expected.Inventory, slot, ItemKind.Consumable) || expected.DungeonState is null)
             throw new InvalidDataException("经验物品源实例无效");
         var definition = items.ExperienceConsumable(source.Core.ItemId);
-        if (definition is null || !definition.Allows(expected.Level, expected.Job))
+        if (definition is null || !definition.Allows(expected.Level, expected.Job, expected.GrowType))
             throw new InvalidDataException("经验物品资源、职业或等级资格不符");
         ulong amount = Calculate(definition.Percent, definition.Amount, growth.GetLevelExperienceSpan(expected.Level));
         var result = CharacterGrowthPlan.AddExperience(expected, amount, growth);

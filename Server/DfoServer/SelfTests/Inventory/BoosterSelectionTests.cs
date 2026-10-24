@@ -62,12 +62,38 @@ internal static class BoosterSelectionTests
             Text(empty, empty, dimensions: "[booster category num]\n2 2 0\n"),
             Text(empty, empty, dimensions: "[booster category num]\n3 2 2 2\n"),
             Text(empty, empty, dimensions: "[booster category num]\n2 2 x\n"),
-            Text(empty, empty, dimensions: "[booster category num]\n2 2 2\n[booster category num]\n2 2 2\n"),
             Text(empty, empty, type: "[stackable type]\n`[booster selection]` 0\n[stackable type]\n`[booster selection]` 0\n"),
             Text(empty, empty, extra: "[booster select category]\n1 1\n[unknown]\n[/booster select category]"),
             Text(empty, empty).Replace("1 0\n[etc]", "2 0\n[etc]")
         })
             That(!BoosterCatalog.Parse(text).Available, "冲突、未知、残缺或根资格不完整的重复分类仍整盒拒绝");
+        const string equipment = "[equipment]\n16400 1 16401 2\n[/equipment]";
+        const string growing = "[booster category num]\n2 2 2\n[booster category num]\n2 3 2\n";
+        var updated = BoosterCatalog.Parse(Text("", equipment, growing));
+        That(updated.Available && updated.Selection is { Categories.Length: 3 } changed &&
+            changed.Categories[0].Rewards.IsEmpty && changed.Categories[1].Rewards.SequenceEqual(new BoosterChoice[] { new(16400, 1), new(16401, 2) }),
+            "完整范围扩展及空分类补装备保留原块、奖励顺序与数量");
+        That(BoosterCatalog.Parse(Text(reward, reward, growing)).Available &&
+            BoosterCatalog.Parse(Text("", equipment)).Available &&
+            BoosterCatalog.Parse(Text(reward, reward, "[booster category num]\n2 2 2\n[booster category num]\n2 2 2\n")).Available,
+            "同维范围逐项不减，不要求等价分类必须变更奖励");
+        That(BoosterCatalog.Parse(Text("", equipment, growing).Replace("1 0\n[etc]", "2 0\n[etc]")).Available,
+            "最终完整维数决定坐标界限，不沿用先前较小维数");
+        foreach (string text in new[]
+        {
+            Text(equipment, "", growing), Text(equipment, equipment.Replace("16400 1", "16400 2"), growing),
+            Text("", reward, growing), Text(empty, equipment, growing), Text("[unknown]\n1", equipment, growing),
+            Text("", "[equipment]\n16400 1", growing),
+            Text("", equipment, "[booster category num]\n2 3 2\n[booster category num]\n2 2 2\n"),
+            Text("", equipment, "[booster category num]\n1 2\n[booster category num]\n2 3 2\n"),
+            Text("", equipment, "[booster category num]\n2 2 2\n[booster category num]\n2 3\n"),
+            Text("", equipment, "[booster category num]\n2 2 2\n[booster category num]\n2 129 2\n"),
+            Text("", equipment, growing).Replace("1 0\n[etc]", "3 0\n[etc]"),
+            Text("", equipment, growing, count: 0), Text("", equipment, ""),
+            Text("", equipment, growing, extra: "[booster select category]\n0 0\n[/booster select category]"),
+            Text("", equipment, growing, extra: "[booster select category]\n0 0\n" + equipment.Replace("16401", "16402") + "\n[/booster select category]")
+        })
+            That(!BoosterCatalog.Parse(text).Available, "更新声明不允许非空覆盖、缩小异维、残缺、未知、超界或全领重复");
         Console.WriteLine($"PASS {Count - checks} equivalent duplicate selection parser assertions");
     }
 
@@ -391,12 +417,14 @@ internal static class BoosterSelectionTests
     static void RunEquivalentDuplicateResources(TownCatalog towns, ItemResources resources)
     {
         var failures = new List<string>();
-        var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        // 本场景验证分类与完整奖励，不依赖资源是否已移除历史活动截止；仍验证实际实例过期拒绝。
+        var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits, resources.EpicPieces,
+            debugSettings: new() { IgnoreCashShopAbsoluteExpiration = true });
         var now = DateTimeOffset.UtcNow;
         foreach (var (id, categories, empty, rows) in new[]
         {
             (2749832, 36, 8, 93), (10007852, 56, 15, 658),
-            (10008885, 56, 14, 675), (490700910, 61, 17, 718), (2749978, 9, 0, 70)
+            (10008885, 56, 14, 675), (490700910, 61, 17, 718), (2749978, 9, 0, 70), (490001689, 65, 9, 513)
         })
         {
             var definition = resources.Boosters.Get(id);
@@ -407,7 +435,7 @@ internal static class BoosterSelectionTests
                 failures.Add(id + ":" + (definition.PendingRule ?? "分类或奖励声明被删改"));
             if (definition.Selection is not { } parsed)
                 continue;
-            var source = new InventoryItem(1, Bag(65), InventoryRewardGrantService.Create(resources.Items.Get(id), utcNow: now));
+            var source = new InventoryItem(1, Bag(65), InventoryRewardGrantService.Create(resources.Items.Get(id), utcNow: now, shopExpiration: true));
             Character role = new(1, 0, "EmptyCategory", 0, towns.Room, towns.InitialReturn)
             {
                 Job = 0, Level = 95, Inventory = new([source], Gold: 12345)
@@ -415,17 +443,28 @@ internal static class BoosterSelectionTests
             That(!source.Core.IsExpired(now.ToUnixTimeSeconds()) &&
                 InventoryAvatarPackageService.SourceEligible(role, source, resources.Items.Get(id)),
                 "空分类拒绝用例使用真实未过期且满足资源资格的源 " + id);
+            var firstValid = parsed.Categories.First(group => !group.Rewards.IsEmpty);
+            var expired = source with { Core = source.Core with { ExpireTime = checked((int)now.ToUnixTimeSeconds()) } };
+            var expiredRole = role with { Inventory = role.Inventory with { Items = [expired] } };
+            var denied = service.Open(expiredRole, Select(65, [firstValid.Rewards[0].ItemId], firstValid.Category, firstValid.Subcategory),
+                out var deniedReceipt, now);
+            That(!denied.Accepted && denied.Plan is null && deniedReceipt is null &&
+                expiredRole.Inventory.Items.Single() == expired && expiredRole.Inventory.Gold == role.Inventory.Gold,
+                "分类fixture的历史截止调试不忽略真实实例到期，等于截止即拒绝 " + id);
             int accepted = 0, attempted = 0;
             foreach (var group in parsed.Categories)
                 for (int row = 0; row < group.Rewards.Length; row++)
                 {
                     var choice = group.Rewards[row]; attempted++;
+                    var effective = parsed.Categories.Last(candidate => candidate.Category == group.Category && candidate.Subcategory == group.Subcategory);
+                    That(effective.Rewards.Count(candidate => JsonSerializer.Serialize(candidate) == JsonSerializer.Serialize(choice)) == 1,
+                        "每条原始奖励行映射至同坐标后定义的唯一同内容行，不丢失或拼接 " + id + ":" + attempted);
                     var template = resources.Items.Get(choice.ItemId);
                     var opened = service.Open(role, Select(65, [choice.ItemId], group.Category, group.Subcategory), out var receipt, now);
                     That(opened.Accepted && role.Inventory.Items.Single() == source && role.Inventory.Gold == 12345,
                         "每条真实单选成功规划且不改输入源和钱包 " + id + ":" + choice.ItemId);
                     That(template.Kind is not (ItemKind.Avatar or ItemKind.Creature) && choice.UpgradeChances.IsEmpty,
-                        "此真实四源矩阵成功项是确定的普通实体 " + choice.ItemId);
+                        "真实重复分类矩阵成功项是确定的普通实体 " + choice.ItemId);
                     var expected = ExpectedItems(role, [choice]);
                     That(receipt!.ItemId == id && receipt.Slot == 65 && receipt.Rewards is [{ } reward] &&
                         reward.ItemId == choice.ItemId && reward.Count == choice.Count &&
@@ -435,6 +474,15 @@ internal static class BoosterSelectionTests
                     accepted++;
                 }
             That(attempted == rows && accepted > 0, "每源全部原奖励行实际Open且至少一项合法非空成功 " + id);
+            if (id == 490001689)
+            {
+                var effective = parsed.Categories.GroupBy(group => (group.Category, group.Subcategory)).Select(groups => groups.Last()).ToArray();
+                var added = effective.Single(group => group.Category == 6 && group.Subcategory == 0);
+                That(parsed.SelectionCount == 1 && effective.Length == 40 && effective.Sum(group => group.Rewards.Length) == 312 &&
+                    parsed.Categories.First(group => group.Category == 6 && group.Subcategory == 0).Rewards.IsEmpty &&
+                    added.Rewards.Select(choice => (choice.ItemId, choice.Count)).SequenceEqual(new[] { 405044, 405042, 405043, 425044, 425042, 425043, 415044, 415042, 415043 }.Select(item => (item, 1))),
+                    "逐项扩展真实源保留65原块/513原行，40坐标后定义312行；裸空(6,0)补入九件各1且不拼接");
+            }
             if (id == 2749978)
             {
                 That(parsed.SelectionCount == 4 && parsed.Categories.Select(group => (group.Category, group.Subcategory)).Distinct().Count() == 7,
@@ -455,8 +503,8 @@ internal static class BoosterSelectionTests
                 }
             }
             Console.WriteLine("Equivalent duplicate selection coverage: " + JsonSerializer.Serialize(new { Source = id, Attempted = attempted, Accepted = accepted, Rejected = attempted - accepted }));
-            foreach (var group in parsed.Categories.Where(group => group.Rewards.IsEmpty)
-                .DistinctBy(group => (group.Category, group.Subcategory)))
+            foreach (var group in parsed.Categories.GroupBy(group => (group.Category, group.Subcategory)).Select(groups => groups.Last())
+                .Where(group => group.Rewards.IsEmpty))
                 foreach (int[] choice in new[] { Array.Empty<int>(), new[] { 1106 } })
                 {
                     var result = service.Open(role, Select(65, choice, group.Category, group.Subcategory), out var receipt, now);
@@ -464,8 +512,7 @@ internal static class BoosterSelectionTests
                         role.Inventory.Gold == 12345, "空分类不因兼容重复而发奖、扣源或改钱包 " + id);
                 }
         }
-        That(failures.Count == 0, "五个真实等价重复分类源保留全部原块、空分类和奖励行：" + string.Join("; ", failures));
-        That(!resources.Boosters.Get(490001689).Available, "冲突维数真实源保持根拒绝");
+        That(failures.Count == 0, "六个真实兼容重复分类源保留全部原块、有效空分类和奖励行：" + string.Join("; ", failures));
 
         ImmutableArray<InventoryItem> ExpectedItems(Character role, IEnumerable<BoosterChoice> choices)
         {
@@ -479,7 +526,7 @@ internal static class BoosterSelectionTests
                 {
                     Attr = choice.Upgrade, GenuineUpgrade = choice.Refinement, Durability = template.Durability,
                     SealFlag = template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0,
-                    ExpireTime = template.Expiration.Resolve(now)
+                    ExpireTime = template.Expiration.Resolve(now, ignoreAbsoluteExpiration: true)
                 };
                 var range = ItemSlotBoundService.Range(template.Kind, role.Inventory);
                 var list = ItemSlotBoundService.List(template.Kind);

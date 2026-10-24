@@ -39,7 +39,11 @@ internal static class QuestCorePublicationTests
             await TpSendFailureAsync();
             await ThresholdAsync();
             await DeliveryAfterSceneAsync();
-            foreach (ulong remaining in new ulong[] { 5, 0 }) await CappedAwardAsync(remaining);
+            ulong entry = growth.GetLevelStartExperience(95);
+            await CappedAwardAsync(94, entry - 5, entry, 5);
+            await CappedAwardAsync(95, entry, entry, 0);
+            ulong historical = growth.GetCumulativeExperienceBoundary(95) - 1;
+            await CappedAwardAsync(95, historical, historical, 0);
 
             StoryQuest TpQuest(bool gold = false) => QuestEligibilityTests.Quest(100) with
             {
@@ -61,21 +65,20 @@ internal static class QuestCorePublicationTests
                 commands.Seal(); return commands;
             }
 
-            async Task CappedAwardAsync(ulong remaining)
+            async Task CappedAwardAsync(byte initialLevel, ulong initialExperience, ulong finalExperience, uint gained)
             {
-                ulong cap = growth.GetCumulativeExperienceBoundary(95) - 1;
                 var quest = QuestEligibilityTests.Quest(100) with { DeclaredIgnoreLevelForExperience = 1,
                     IntData = [2], Npc = 2, CompleteNpc = 2, Rewards = [new(0,0,null),new(0,0,null)] };
                 using var fixture = new QuestOrdinaryCompletionTests.Fixture(towns,characters,learning,growth,
-                    parameters,items,quest,materialCount: 0,configure: candidate => candidate with { Level = 95,
-                        InitialLearning = candidate.InitialLearning with { Experience = cap-remaining,
+                    parameters,items,quest,materialCount: 0,configure: candidate => candidate with { Level = initialLevel,
+                        InitialLearning = candidate.InitialLearning with { Experience = initialExperience,
                             Trees = candidate.InitialLearning.Trees.Select(tree => tree with {
-                                Sp = checked((ushort)(tree.Sp+growth.GetSpDelta(1,95))),
-                                Tp = checked((ushort)(tree.Tp+growth.GetTpDelta(1,95))) }).ToArray() } });
+                                Sp = checked((ushort)(tree.Sp+growth.GetSpDelta(1,initialLevel))),
+                                Tp = checked((ushort)(tree.Tp+growth.GetTpDelta(1,initialLevel))) }).ToArray() } });
                 fixture.Change(100,QuestLifecycleAction.Condition,new(null,0,0));
                 var expected = fixture.Read();
                 var prepared = fixture.Prepare(ushort.MaxValue);
-                That(prepared.Plan is { } planned && planned.ExperienceReward.Amount > remaining,
+                That(prepared.Plan is { } planned && planned.ExperienceReward.Amount > gained,
                     "封顶发布用例保留正额度任务奖励："+prepared.Outcome);
                 var commands = Registry(fixture);
                 using var stop = new CancellationTokenSource();
@@ -84,18 +87,26 @@ internal static class QuestCorePublicationTests
                 var context = Context(fixture,stream,sender,stop);
                 var request = Finish(100);
                 That(await commands.DispatchAsync(context,request) == CommandResult.Handled && fixture.Receipts == 1 &&
-                    fixture.Read().Learning.Experience == cap,
+                    fixture.Read().Level == 95 && fixture.Read().Learning.Experience == finalExperience,
                     "部分或零到账仍经真实Handler完成任务事务");
                 var ack = stream.Frames.Single(frame => frame[0] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 34);
-                var experience = stream.Frames.Single(frame => frame[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 37);
-                That(BinaryPrimitives.ReadUInt32LittleEndian(ack.AsSpan(20)) == remaining && experience.Length == 107 &&
-                    BinaryPrimitives.ReadUInt64LittleEndian(experience.AsSpan(17)) == cap &&
-                    BinaryPrimitives.ReadUInt32LittleEndian(experience.AsSpan(25)) == 0 &&
+                var notices = stream.Frames.Where(frame => frame[0] == 0 &&
+                    BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)) == 37).ToArray();
+                That(notices.Length == (initialLevel == 94 ? 1 : 0),
+                    "跨入95仍通知，原本已满级的正额度任务不再发送NOTI37");
+                if (initialLevel == 94)
+                    That(notices[0].Length == 107 &&
+                        BinaryPrimitives.ReadUInt64LittleEndian(notices[0].AsSpan(17)) == finalExperience &&
+                        BinaryPrimitives.ReadUInt32LittleEndian(notices[0].AsSpan(25)) == 0,
+                        "跨入满级NOTI37完整绝对经验与零队伍分量");
+                That(BinaryPrimitives.ReadUInt32LittleEndian(ack.AsSpan(20)) == gained &&
                     fixture.Read().Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp)).SequenceEqual(
-                        expected.Learning.Trees.Select(tree => (tree.Context,tree.Sp,tree.Tp))),
-                    "ACK34弹窗显示实际到账，NOTI37完整绝对经验及零队伍分量保持两树点数");
+                        expected.Learning.Trees.Select(tree => (tree.Context,
+                            Sp: checked((ushort)(tree.Sp + growth.GetSpDelta(initialLevel,95))),
+                            Tp: checked((ushort)(tree.Tp + growth.GetTpDelta(initialLevel,95)))))),
+                    "ACK34显示实际到账，两树仅增加实际跨级贡献");
                 That(await commands.DispatchAsync(context,request) == CommandResult.Handled && fixture.Receipts == 1 &&
-                    fixture.Read().Learning.Experience == cap,"满级重复请求不多发经验或任务奖励");
+                    fixture.Read().Level == 95 && fixture.Read().Learning.Experience == finalExperience,"满级重复请求不多发经验或任务奖励");
             }
 
             async Task DeliveryAfterSceneAsync()

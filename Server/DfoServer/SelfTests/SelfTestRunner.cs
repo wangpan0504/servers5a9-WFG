@@ -36,6 +36,7 @@ internal static class SelfTestRunner
         AmplifyUpgradeTests.RunCore();
         MedalUpgradeTests.RunCore();
         CreatureSkinTests.RunCore();
+        InventoryExpansionTests.RunCore();
         CreatureEggTests.RunCore();
         BoosterCreatureTests.RunCore();
         BoosterNativeSelectionTests.RunCore();
@@ -258,6 +259,7 @@ internal static class SelfTestRunner
         EquipmentAmplificationDropTests.RunResources(itemResources);
         CreatureEggTests.RunResources(itemResources.CreatureEggs, itemResources.Items);
         CreatureSkinMoveTests.RunResources(itemResources.Items);
+        InventoryExpansionTests.RunResources(itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         EmblemCompoundTests.RunResources(itemResources);
         AvatarCompoundTests.RunResources(itemResources);

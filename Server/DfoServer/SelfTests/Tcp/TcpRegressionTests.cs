@@ -228,6 +228,7 @@ internal static class TcpRegressionTests
         }),
         ("skills", async (options, root, resources) =>
         {
+            SkillPointLedgerTests.Run(resources.Towns, resources.Archive, resources.Characters);
             await SkillProtocolTcpTests.RunAsync(options, root, resources);
             await SkillExtendedTcpTests.RunAsync(options, root, resources);
         }),
@@ -273,9 +274,12 @@ internal static class TcpRegressionTests
         ("creature-egg", CreatureEggTcpTests.RunAsync),
         ("creature-skin", CreatureSkinTcpTests.RunAsync),
         ("aura-skin", AuraSkinTcpTests.RunAsync),
+        ("inventory-expansion", InventoryExpansionTcpTests.RunAsync),
         ("aura-action", AuraActionTcpTests.RunAsync),
         ("avatar-capacity", AvatarCapacityTcpTests.RunAsync),
-        ("gift-selection-tcp", AvatarPackageTcpTests.RunObservedSelectionsAsync),
+        // 此专项也由avatar-package调用；独立工作目录避免同次全组选中时重用角色/数据库。
+        ("gift-selection-tcp", (options, root, resources) =>
+            AvatarPackageTcpTests.RunObservedSelectionsAsync(options, Path.Combine(root, "gift-selection-tcp"), resources)),
         ("gift-selection-resources", (options, root, resources) =>
         {
             Inventory.AvatarPackageTests.RunResources(resources.Towns, resources.ItemResources, resources.ItemResources.AvatarPackages);

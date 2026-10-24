@@ -45,14 +45,34 @@ internal static class ExperienceConsumableTests
         That(ExperienceConsumableDefinition.Parse(file, template) is { Percent: true, Amount: 10 }, "百分比和数值型声明按标签区分");
         That(ExperienceConsumableDefinition.Parse(file with { Stackable = raw with { DeclaredNeededMaterials = [1000,6] } }, template)
             is { Percent: true, Amount: 10 }, "商店兑换材料不影响经验胶囊的使用解析");
+        foreach (var (places, roomOnly) in new (string[], bool)[]
+            { (["[village]"], false), (["[village]", "[seria room]"], false),
+              (["[seria room]", "[village]"], false), (["[seria room]"], true) })
+            That(ExperienceConsumableDefinition.Parse(file with { Stackable = raw with
+                { HasActionUsablePlace = true, DeclaredActionUsablePlaces = places } }, template) is { VillageOnly: true } location &&
+                location.SeriaRoomOnly == roomOnly, "经验物品地点按并集解释，单独赛丽亚房间仍保留限制");
+        foreach (string[]? places in new string[]?[] { null, [], ["[village]", "[unknown]"], ["[dungeon]"] })
+            That(ExperienceConsumableDefinition.Parse(file with { Stackable = raw with
+                { HasActionUsablePlace = true, DeclaredActionUsablePlaces = places } }, template) is null,
+                "地点声明缺失、空白或含未支持条件不能静默放行");
+        var restricted = file with { Stackable = raw with { DeclaredUsableFirstGrowTypes = [3, 4, 5] },
+            DeclaredFields = ["increase status type", "usable first growtype"] };
+        That(ExperienceConsumableDefinition.Parse(restricted, template) is { } branches &&
+            branches.Allows(10, 3, 3) && branches.Allows(10, 3, 0x24) && branches.Allows(10, 3, 0x25) &&
+            !branches.Allows(10, 3, 0) && !branches.Allows(10, 3, 2),
+            "经验胶囊转职限制读取低四位，觉醒不取消资格，其他转职与未转职均拒绝");
+        foreach (int[]? growValues in new int[]?[] { null, [], [-1], [6], [3, 256] })
+            That(ExperienceConsumableDefinition.Parse(restricted with { Stackable = raw with
+                { DeclaredUsableFirstGrowTypes = growValues } }, template) is null,
+                "非法转职声明不忽略、不截断字节、不放宽为所有职业");
         foreach (var bad in new[] { file with { Effect = new("[expUpByPercent]", [10]) }, file with { Effect = new("[expUp]", [0]) },
             file with { Effect = new("[expUp]", [1, 2]) }, file with { Diagnostics = ["duplicate"] },
             file with { DeclaredFields = ["increase status type", "action type"] } })
             That(ExperienceConsumableDefinition.Parse(bad, template) is null, "不把其他动作、畸形或复合经验效果伪装成已支持胶囊");
         That(ExperienceConsumableDefinition.Parse(file with { ExcludedJobs = ["[mage]"] }, template) is { } excluded &&
-            !excluded.Allows(10, 3) && excluded.Allows(10, 2), "排除职业不是可用职业的并集");
+            !excluded.Allows(10, 3, 0) && excluded.Allows(10, 2, 0), "排除职业不是可用职业的并集");
         That(ExperienceConsumableDefinition.Parse(file with { ExcludedJobs = ["mage"] }, template) is { } bare &&
-            !bare.Allows(10, 3) && bare.Allows(10, 2) &&
+            !bare.Allows(10, 3, 0) && bare.Allows(10, 2, 0) &&
             ExperienceConsumableDefinition.Parse(file with { ExcludedJobs = ["[mage"] }, template) is null,
             "排除职业接受资源中的裸名称，不把残缺括号修补成合法声明");
         foreach (var (id, amount) in new[] { (1034, 100), (1035, 1000), (1036, 10000), (1037, 100000), (1231, 1000000), (1232, 10000000) })
@@ -112,7 +132,54 @@ internal static class ExperienceConsumableTests
             items.Items.ExperienceConsumable(LevelUpTicketTests.TicketId) is null,
             "真实LST覆盖固定、百分比和商店兑换胶囊并与升级券分开");
         That(items.Items.ExperienceConsumable(10092765) is { Percent: false, Amount: 1000000 } bareJob &&
-            bareJob.Allows(17, 3) && !bareJob.Allows(17, 12), "真实经验胶囊的裸knight排除只限制守护者，不误拒绝其他职业");
+            bareJob.Allows(17, 3, 0) && !bareJob.Allows(17, 12, 0), "真实经验胶囊的裸knight排除只限制守护者，不误拒绝其他职业");
+        foreach (int id in new[] { 490002047, 490002048, 490003457, 490003458, 490004851, 490004852,
+            490005337, 490006778, 490006779, 490008997, 490009024, 490009515, 490009516, 490009955,
+            490009956, 490009957, 490010167, 490010192, 490010377, 490010752,
+            10005340, 10005341, 10006651, 10006652 })
+            That(items.Items.ExperienceConsumable(id) is { VillageOnly: true, SeriaRoomOnly: false },
+                "真实城镇与赛丽亚并集胶囊不因两个合法地点被整体拒绝 " + id);
+        foreach (int id in new[] { 490012478, 490012481 })
+            That(items.Items.ExperienceConsumable(id) is null, "地点修复不放行重复限制字段的月饼 " + id);
+        That(items.Items.ExperienceConsumable(490003969) is { } maleMage &&
+            maleMage.Allows(60, 8, 0x23) && !maleMage.Allows(60, 8, 2) && !maleMage.Allows(60, 3, 3) &&
+            items.Items.ExperienceConsumable(490005503) is { } knight &&
+            knight.Allows(60, 12, 0x24) && !knight.Allows(60, 12, 1) && !knight.Allows(87, 12, 4),
+            "实际男法三分支与守护者两分支胶囊同时保留职业、转职与最高等级限制");
+        foreach (byte branch in new byte[] { 2, 0x23 })
+        {
+            using var f = Make(60, 490003969, job: 8, growType: branch);
+            var before = f.Read();
+            var result = f.Session.UseExperienceConsumable(Slot, service);
+            if (branch == 2)
+                That(result.Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()),
+                    "不符合首转分支的真实男法胶囊拒绝且库存与成长不变");
+            else
+            {
+                That(result.Outcome == ConsumableUseOutcome.Committed &&
+                    f.Read().Learning.Experience == before.Learning.Experience + growth.GetLevelExperienceSpan(60) / 10 &&
+                    f.Read().Inventory.Find(Slot)!.Core.Count == 1 && f.Read().GrowType == branch,
+                    "觉醒后的合法首转分支消费真实胶囊，不改变转职并只扣一件");
+                var prepared = service.Prepare(f.Read(), Slot);
+                TestCheck.Reject<InvalidDataException>(() => f.Repository.CommitExperienceConsumable(f.Owner,
+                    prepared with { Definition = prepared.Definition with { FirstGrowTypes = [2] } }, clock.GetUtcNow()),
+                    "事务入口独立复验首转分支，不只依赖服务预检");
+                f.Sql("UPDATE characters SET grow_type=2");
+                var changed = f.Read();
+                TestCheck.Reject<InvalidOperationException>(() => f.Repository.CommitExperienceConsumable(f.Owner,
+                    prepared, clock.GetUtcNow()), "首转变更后的旧经验计划不得提交");
+                That(Same(changed, f.Read()), "持久化首转变化导致拒绝，未扣剩余源或追加经验");
+            }
+        }
+        using (var f = Make(60, 10005340))
+        {
+            var before = f.Read();
+            var result = f.Session.UseExperienceConsumable(Slot, service);
+            That(result.Outcome == ConsumableUseOutcome.Committed &&
+                f.Read().Learning.Experience == before.Learning.Experience + 100000 &&
+                f.Read().Inventory.Find(Slot)!.Core.Count == 1,
+                "合法地点并集的真实胶囊沿原事务发经验并只消费一件");
+        }
         using (var f = Make(49, PercentItem, nearLevel: true))
         {
             var before = f.Read();
@@ -207,10 +274,12 @@ internal static class ExperienceConsumableTests
         }
         Console.WriteLine($"PASS {Count - checks} 经验物品实际资源、成长、事务和会话断言");
 
-        QuestOrdinaryCompletionTests.Fixture Make(byte level, int id, bool nearLevel = false, bool lost = false, int materialCount = 0) =>
+        QuestOrdinaryCompletionTests.Fixture Make(byte level, int id, bool nearLevel = false, bool lost = false, int materialCount = 0, byte job = 0, byte growType = 0) =>
             new(towns, characters, skills, growth, parameters, items, QuestEligibilityTests.Quest(100), materialCount: 0, loseResult: lost,
                 active: [], configure: candidate =>
                 {
+                    if (job != 0)
+                        candidate = CharacterCreation.Prepare(candidate.Name, characters.Get(job), towns.Room, towns.InitialReturn, skills.Get);
                     var inventory = candidate.Inventory.Items.Add(new(0, Slot, new(id, ItemKind.Consumable, 2)));
                     if (materialCount > 0)
                     {
@@ -220,7 +289,7 @@ internal static class ExperienceConsumableTests
                     }
                     return candidate with
                     {
-                        Level = level, InitialLearning = SkillPointLedger.Synchronize(0, 0, level, candidate.InitialLearning with
+                        Level = level, GrowType = growType, InitialLearning = SkillPointLedger.Synchronize(job, growType, level, candidate.InitialLearning with
                         { Experience = (nearLevel ? growth.GetCumulativeExperienceBoundary(level) - 1 : growth.GetLevelStartExperience(level) + 1), BonusSp = 17, BonusTp = 5 }, skills),
                         Inventory = candidate.Inventory with { Items = inventory }
                     };

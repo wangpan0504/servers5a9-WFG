@@ -35,6 +35,7 @@ internal static class BoosterTests
         var catalog = itemResources.Items;
         BoosterBatchRandomTests.Run(That);
         BoosterGrowTypeTests.Run(towns, itemResources);
+        BoosterRandomOptionTests.Run(towns, itemResources);
         BoosterCreatureTests.RunResources(towns, itemResources);
         var random = new EdgeRandom();
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces, random);
@@ -383,6 +384,12 @@ internal static class BoosterTests
             Query("DROP TRIGGER fail_box");
             var stale = session.Selected!;
             var stalePlan = service.Open(stale, new(65, 2), out _).Plan!;
+            Reject(() => repo.CommitInventory(owner, stale with { GrowType = 5 }, stalePlan), "旧开箱计划不能重绑到新首转分支");
+            Query($"UPDATE characters SET grow_type=5 WHERE id={stale.Id}");
+            string changedBranch = Snapshot();
+            Reject(() => repo.CommitInventory(owner, stale, stalePlan), "持久化首转变化由SQL提交前资格复验拒绝");
+            That(Snapshot() == changedBranch, "分支变更拒绝不消耗源或发放随机奖励");
+            Query($"UPDATE characters SET grow_type={stale.GrowType} WHERE id={stale.Id}");
             That(session.PlanAndCommitInventory(role => service.Open(role, new(3, 1), out _)).Accepted, "retry after explicit reconnectable failure consumes only one coin box");
             Reject(() => repo.CommitInventory(owner, stale, stalePlan), "old revision cannot commit a second random result");
             That(session.PlanAndCommitInventory(role => service.Open(role, new(65, 2), out _)).Accepted, "complete physical reward batch commits");

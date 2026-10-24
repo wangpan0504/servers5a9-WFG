@@ -13,6 +13,8 @@ internal sealed record AvatarPackageCategory(byte Category, byte Subcategory, Im
 internal sealed record AvatarPackageDefinition(int SelectionCount, ImmutableArray<int> Dimensions,
     ImmutableArray<AvatarPackageCategory> Categories, string? PendingRule = null)
 {
+    public ImmutableArray<byte> FirstGrowTypes { get; init; } = [];
+    public bool AllowsFirstGrowType(byte growType) => FirstGrowTypes.IsEmpty || FirstGrowTypes.Contains((byte)(growType & 15));
     public bool Recognized { get; init; }
     public bool Available => Recognized && PendingRule is null && !Categories.IsDefaultOrEmpty;
 }
@@ -78,6 +80,14 @@ internal sealed class AvatarPackageCatalog
 
     internal static AvatarPackageDefinition Parse(string text)
     {
+        var definition = ParseContents(text);
+        return BoosterFirstGrowTypes.TryParse(text, out var branches)
+            ? definition with { FirstGrowTypes = branches }
+            : definition with { PendingRule = "礼包首转资格声明无效" };
+    }
+
+    static AvatarPackageDefinition ParseContents(string text)
+    {
         bool recognized = false;
         AvatarPackageDefinition Reject(string reason) => new(0, [], [], reason) { Recognized = recognized };
         if (!Regex.IsMatch(Scalar(text, "stackable type"), @"^\s*`\[booster selection\]`\s+0\s*$"))
@@ -94,7 +104,7 @@ internal sealed class AvatarPackageCatalog
         });
         foreach (string tag in new[] { "booster info", "package data", "cooltime maintenance", "effect maintenance",
             "total usable count", "total weekly usable count", "total accumulated usable count", "use count limit all server item",
-            "usable datetime", "usable first growtype", "random box", "random box removal items", "raid booster item",
+            "usable datetime", "random box", "random box removal items", "raid booster item",
             "convert boost item", "check usable itemlevel", "set disjoint instance type", "set epic exchange instance type",
             "random option unseal", "custom ability grade", "daybreak drop item", "battle royal", "action usable server type",
             "usable game server type", "usable server type", "booster select custom ability info" })
@@ -201,8 +211,12 @@ internal sealed class AvatarPackageCatalog
         {
             string masked = MaskStrings(text);
             var blocks = Regex.Matches(masked, @"\[avatar select ability\](.*?)\[/avatar select ability\]", RegexOptions.Singleline);
+            int closes = Fields(text, "/avatar select ability").Count;
+            // 仅兼容单个完整合法块后的唯一同名EOF尾闭；使用原文保证中间及尾部确实只有空白。
+            bool redundantEofClose = blocks.Count == 1 && closes == 2 && Regex.IsMatch(
+                text[(blocks[0].Index + blocks[0].Length)..], @"^\s*\[/avatar select ability\]\s*$", RegexOptions.CultureInvariant);
             if (blocks.Count != Fields(text, "avatar select ability").Count ||
-                blocks.Count != Fields(text, "/avatar select ability").Count) return Reject("装扮属性选项无效");
+                blocks.Count != closes && !redundantEofClose) return Reject("装扮属性选项无效");
             abilities = [];
             string[]? firstTokens = null;
             foreach (Match block in blocks)

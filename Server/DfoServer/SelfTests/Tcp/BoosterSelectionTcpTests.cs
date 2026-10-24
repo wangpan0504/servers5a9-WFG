@@ -241,6 +241,7 @@ internal static class BoosterSelectionTcpTests
             That(EquipmentEntry(full, 9, true).SequenceEqual(savedEntry), "重连恢复新兼容盒完整123B装备且不重建期限或核心");
             peer.Barrier();
         }
+        RunProgressiveCategories(fixture, resources, 2);
         await fixture.StopAsync();
         That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
         {
@@ -249,7 +250,14 @@ internal static class BoosterSelectionTcpTests
                 data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
                 data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'empty duplicate late rollback'.";
         }) == 1, "新兼容盒断线精确来自所注入的晚SQL故障一次");
-        That(fixture.Query("SELECT gold FROM characters ORDER BY slot") is [[12345L], [12345L]], "selection does not add a gold or purchase-material fee");
+        That(fixture.Query("SELECT gold FROM characters ORDER BY slot") is [[12345L], [12345L], [12345L], [12345L]], "selection does not add a gold or purchase-material fee");
+        That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
+        {
+            using var entry = JsonDocument.Parse(line); var data = entry.RootElement;
+            return data.GetProperty("Kind").GetString() == "closed" &&
+                data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
+                data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'progressive category late rollback'.";
+        }) == 1, "逐项扩展盒断线精确来自晚SQL故障一次");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "selection database integrity");
         await RunRealTemplateSelectionsAsync(source, root, resources);
         await RunOrdinaryNativeSelectionsAsync(source, root, resources);
@@ -260,6 +268,130 @@ internal static class BoosterSelectionTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT list_type,slot_index,item_uid FROM character_inventory_slots ORDER BY slot_index")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
+    }
+    static void RunProgressiveCategories(TcpTestFixture fixture, TcpTestResources resources, ushort selectedSlot)
+    {
+        const int sourceId = 490001689;
+        ushort guardSlot = checked((ushort)(selectedSlot + 1));
+        var items = resources.ItemResources.Items; var repo = new CharacterRepository(fixture.Database); var owners = new AccountOwners();
+        var now = DateTimeOffset.UtcNow;
+        That(items.Get(sourceId).StackLimit == 1 && items.Get(sourceId).Expiration.Resolve(now) == 0 && items.Get(3242).StackLimit >= 37,
+            "逐项扩展礼盒真实堆叠上限为1，哨兵数量37在真实模板上限内");
+        InventoryItem Seed(short slot, int id, int count = 1) => new(0, Bag(slot), InventoryRewardGrantService.Create(items.Get(id), count, now));
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            repo.Create(owner, new("ProgSelTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([Seed(65, sourceId), Seed(66, sourceId), Seed(121, 3242, 37)], Gold: 12345)
+            });
+            repo.Create(owner, new("ProgFullTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new(Enumerable.Range(9, 56).Select(slot => Seed((short)slot, 405044)).Append(Seed(65, sourceId)).ToImmutableArray(), Gold: 12345)
+            });
+        }
+        DfoServer.Game.Characters.Character Read(ushort slot)
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }); return repo.LoadCharacter(owner, slot);
+        }
+        SortedDictionary<string, string[]> SqlState()
+        {
+            var state = new SortedDictionary<string, string[]>();
+            foreach (var row in fixture.Query("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name"))
+            {
+                string name = (string)row[0]!;
+                state[name] = fixture.Query("SELECT * FROM \"" + name.Replace("\"", "\"\"") + "\"")
+                    .Select(values => JsonSerializer.Serialize(values)).Order(StringComparer.Ordinal).ToArray();
+            }
+            return state;
+        }
+        string Snapshot() => JsonSerializer.Serialize(SqlState());
+        string OtherAssets(ushort id) => JsonSerializer.Serialize(fixture.Query("SELECT * FROM characters WHERE id<>$p0 ORDER BY id", id)) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items WHERE character_id<>$p0 ORDER BY item_uid", id)) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_slots WHERE character_id<>$p0 ORDER BY character_id,list_type,slot_index", id));
+        ItemCore ExpectedCore(int id)
+        {
+            var template = items.Get(id);
+            That(template.Kind == ItemKind.Equipment && template.Expiration.Resolve(now) == 0, "(6,0)代表奖励是真实永久普通装备");
+            return new(id, ItemKind.Equipment, 999_999_998)
+            {
+                Durability = template.Durability,
+                SealFlag = template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0
+            };
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(guardSlot); string before = Snapshot();
+            SendSelect(peer, 65, [405044], 6); peer.Expect(1, 160, [0, 4, 0]); peer.Barrier();
+            That(Snapshot() == before, "真实满装备页拒绝后定义分类，不扣盒且所有SQL表与序列不变");
+        }
+        Dictionary<short, long> sourceUids;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(selectedSlot); var beforeCharacter = Read(selectedSlot);
+            sourceUids = new short[] { 65, 66 }.ToDictionary(slot => slot, slot => beforeCharacter.Inventory.Find(Bag(slot))!.Uid);
+            That(sourceUids.Values.All(uid => uid > 0) && sourceUids.Values.Distinct().Count() == 2 && sourceUids.Keys.All(slot =>
+                beforeCharacter.Inventory.Find(Bag(slot))!.Core is { ItemId: sourceId, Value: 1, ExpireTime: 0 }),
+                "逐项扩展TCP源为两份不同正UID、各一只的真实未过期礼盒");
+            string before = Snapshot();
+            foreach (var (category, subcategory, ids) in new (byte, byte, int[])[] {
+                (10, 0, [405044]), (6, 4, [405044]), (6, 0, [405002]), (6, 0, [1106]),
+                (6, 0, []), (6, 0, [405044, 405044]), (6, 0, [405044, 405042]) })
+            {
+                SendSelect(peer, 65, ids, category, subcategory); peer.Expect(1, 160, [0, 19, 0]);
+            }
+            peer.Barrier(); That(Snapshot() == before, "非法坐标、非本分类ID、重复和超额选择不改变任何SQL资产");
+            fixture.Sql("CREATE TRIGGER fail_progressive_category BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'progressive category late rollback'); END");
+            SendSelect(peer, 65, [405044], 6); peer.Closed();
+            That(Snapshot() == before && JsonSerializer.Serialize(Read(selectedSlot)) == JsonSerializer.Serialize(beforeCharacter),
+                "后定义分类在源与奖励已写入后的晚审计失败无ACK，整批回滚完整SQL/UID/钱包/revision");
+            fixture.Sql("DROP TRIGGER fail_progressive_category");
+        }
+        var entries = new Dictionary<short, byte[]>();
+        foreach (var (sourceSlot, rewardId, slot) in new[] { ((short)65, 405044, (short)9), ((short)66, 415043, (short)10) })
+        {
+            using var peer = Open(fixture); var full = peer.Select(selectedSlot)[4].Body;
+            foreach (var saved in entries) That(EquipmentEntry(full, saved.Key, true).SequenceEqual(saved.Value), "再次连接恢复先前装备完整123B");
+            var before = Read(selectedSlot); var guard = Read(guardSlot); var sqlBefore = SqlState();
+            string otherAssets = OtherAssets(before.Id);
+            var sequences = fixture.Query("SELECT name,seq FROM sqlite_sequence").ToDictionary(row => (string)row[0]!, row => Convert.ToInt64(row[1]));
+            var source = before.Inventory.Find(Bag(sourceSlot))!;
+            That(source.Uid == sourceUids[sourceSlot] && source.Core.Value == 1, "成功请求仅消费对应槽位的一只原始正UID礼盒");
+            long nextUid = Convert.ToInt64(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'")[0][0]) + 1;
+            var expectedItems = before.Inventory.Items.Where(item => item.Uid != source.Uid).ToList();
+            var expectedCore = ExpectedCore(rewardId); expectedItems.Add(new(nextUid, Bag(slot), expectedCore));
+            var expected = before with { Revision = before.Revision + 1, Inventory = before.Inventory with {
+                Items = expectedItems.OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray() } };
+            SendSelect(peer, sourceSlot, [rewardId], 6); ExpectAck(peer, sourceId, sourceSlot, [(rewardId, 1)]);
+            var delta = peer.Expect(0, 14).Body; That(U16(delta, 1) == 2, "后定义成功只投影源与一件真实装备");
+            Entry(delta, sourceSlot, -1, 0); Entry(delta, slot, rewardId, 999_999_998);
+            entries.Add(slot, EquipmentEntry(delta, slot)); peer.Barrier();
+            That(JsonSerializer.Serialize(Read(selectedSlot)) == JsonSerializer.Serialize(expected) && JsonSerializer.Serialize(Read(guardSlot)) == JsonSerializer.Serialize(guard),
+                "真实后定义发奖完整角色/Core/UID/源数量/钱包与满包观察角色符合独立预期");
+            var sqlAfter = SqlState(); string[] changed = ["characters", "character_inventory_items", "character_inventory_slots", "inventory_audit_log", "sqlite_sequence"];
+            That(sqlBefore.Keys.SequenceEqual(sqlAfter.Keys) && sqlBefore.Where(table => !changed.Contains(table.Key)).All(table => table.Value.SequenceEqual(sqlAfter[table.Key])),
+                "成功只改变既有背包事务表，其他钱包、邮件、技能及全部SQL表不变");
+            That(OtherAssets(before.Id) == otherAssets && fixture.Query("SELECT name,seq FROM sqlite_sequence").All(row =>
+                Convert.ToInt64(row[1]) == sequences.GetValueOrDefault((string)row[0]!) + ((string)row[0]! == "character_inventory_items" ? 1 : (string)row[0]! == "inventory_audit_log" ? 2 : 0)),
+                "成功保留所有旁观角色完整SQL/实例，序列只增加一件装备和两条审计");
+            That(sqlAfter["inventory_audit_log"].Length == sqlBefore["inventory_audit_log"].Length + 2 &&
+                sqlBefore["inventory_audit_log"].All(row => sqlAfter["inventory_audit_log"].Contains(row)) &&
+                fixture.Query("SELECT item_uid FROM character_inventory_items WHERE item_uid=$p0", source.Uid).Length == 0 &&
+                fixture.Query("SELECT item_uid FROM character_inventory_items WHERE item_uid=$p0", nextUid).Length == 1 &&
+                fixture.Query("SELECT count(*)-count(DISTINCT item_uid) FROM character_inventory_items") is [[0L]], "每次原源UID注销、源和奖励各一条审计，新UID只持久化一次");
+        }
+        using (var peer = Open(fixture))
+        {
+            var full = peer.Select(selectedSlot)[4].Body;
+            foreach (var saved in entries) That(EquipmentEntry(full, saved.Key, true).SequenceEqual(saved.Value), "保存重连恢复两件后定义装备完整123B");
+            string before = Snapshot();
+            foreach (short sourceSlot in sourceUids.Keys) { SendSelect(peer, sourceSlot, [405044], 6); peer.Expect(1, 160, [0, 19, 0]); }
+            peer.Barrier();
+            That(Snapshot() == before && sourceUids.All(source => Read(selectedSlot).Inventory.Find(Bag(source.Key)) is null &&
+                fixture.Query("SELECT item_uid FROM character_inventory_items WHERE item_uid=$p0", source.Value).Length == 0),
+                "两份耗尽源UID均注销，两源槽重复请求不重复发奖或改变全部SQL");
+        }
     }
     static async Task RunRealTemplateSelectionsAsync(ServerOptions source, string root, TcpTestResources resources)
     {

@@ -35,7 +35,7 @@ internal static partial class StackableActionCatalog
             {
                 "[quest clear]" or "[any quest clear]" or "[first awaken clear]" or "[second awaken clear]" or
                 "[level up ticket]" or "[jumping lv]" or "[class change]" or "[represent account name change]" or
-                "[open aura skin slot]" or "[open creature skin slot]" or "[add skin storage]" or "[add fatigue]" or
+                "[upgrade inventory]" or "[open aura skin slot]" or "[open creature skin slot]" or "[add skin storage]" or "[add fatigue]" or
                 "[change creature]" or "[creature growth]" or "[kaleido]" or "[gold kaleido box]" or
                 "[fixed probability kaleido]" or "[portable genuine damage upgrade upgrede]" or
                 "[emancipate growth item upgrade]" or "[portable amplify]" or "[new portable amplify]" or

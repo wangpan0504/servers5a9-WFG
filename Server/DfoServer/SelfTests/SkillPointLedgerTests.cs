@@ -72,25 +72,32 @@ internal static class SkillPointLedgerTests
         // 契约只放宽资格；到期后 TP 与 SP 一样回退超门槛等级并返还点数。
         var tpGateCandidates = PvfScript.List(pvf.ReadText("skill/swordmanskill.lst")).Keys
             .Select(id => catalog.Get(0, checked((ushort)id)))
-            .Where(skill => skill.SupportsTpLearning && skill.Prerequisites!.Count == 0)
+            .Where(skill => skill.SupportsTpLearning && skill.Prerequisites!.Count == 0 && skill.GetMaximum(0) > 0 && skill.GetPointCost(0, 0) > 0)
             .Select(skill => (Skill: skill, Gate: skill.GetOrdinaryNextRequiredCharacterLevel(0) - catalog.ExpertContractLevels))
-            .Where(candidate => candidate.Gate >= 1 && catalog.TotalTp(checked((byte)candidate.Gate)) >= candidate.Skill.GetPointCost(0, 0))
+            .Where(candidate => candidate.Gate is >= 1 and <= 95)
             .ToArray();
         Check(catalog.ExpertContractLevels > 0 && tpGateCandidates.Length > 0, "匹配PVF存在契约门槛附近的TP样本");
         var (tpContract, tpGateValue) = tpGateCandidates[0];
         byte tpGate = checked((byte)tpGateValue);
-        var tpSource = SkillPointLedger.Synchronize(0, 0, tpGate, initial with { BonusSp = 0, BonusTp = 0 }, catalog) with
+        // 当前PVF样例161首级需Lv50，达人提前到45时尚无等级TP；明确提供额外来源，不假定契约赠送TP。
+        int tpBonus = tpContract.GetPointCost(0, 0) + 6;
+        int tpTotal = catalog.TotalTp(tpGate) + tpBonus;
+        var tpSource = SkillPointLedger.Synchronize(0, 0, tpGate, initial with { BonusSp = 0, BonusTp = tpBonus }, catalog) with
         {
             ExpertContractExpiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60
         };
+        Check(SkillLearning.Plan(0, 0, tpGate, tpSource with { ExpertContractExpiresAt = 0 },
+            new(0, 0, [new(tpContract.SkillId, false, 1)]), catalog).Failure == SkillLearningFailure.RequiredLevel,
+            "有足够额外TP但无达人仍须拒绝未达普通等级门槛");
         var tpLearned = SkillLearning.Plan(0, 0, tpGate, tpSource, new(0, 0, [new(tpContract.SkillId, false, 1)]), catalog);
-        Check(tpLearned.Success && tpLearned.State!.Trees[0].Tp == catalog.TotalTp(tpGate) - tpContract.GetPointCost(0, 0),
+        Check(tpLearned.Success && tpLearned.State!.Trees[0].Tp == tpTotal - tpContract.GetPointCost(0, 0) &&
+            tpLearned.State.BonusTp == tpBonus && tpLearned.State.Trees[1].Tp == tpTotal,
             "TP学习同一达人声明加成，正常扣TP");
         var tpExpired = SkillPointLedger.Synchronize(0, 0, tpGate,
             tpLearned.State! with { ExpertContractExpiresAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 1 }, catalog);
         Check(tpExpired.Trees[0].Skills.All(skill => skill.Id != tpContract.SkillId) &&
-            tpExpired.Trees[0].Tp == catalog.TotalTp(tpGate),
-            "契约到期回退TP超门槛等级并返还TP");
+            tpExpired.Trees.All(tree => tree.Tp == tpTotal) && tpExpired.BonusTp == tpBonus,
+            "契约到期删除首级超门槛TP技能并全额退款，额外来源和另一树保持");
         foreach (byte job in Enumerable.Range(0, 16).Where(job => job is not (9 or 10)).Select(job => (byte)job))
         {
             var start = SkillLearning.Initialize(job, characters.Get(job).Skills, catalog).State!;

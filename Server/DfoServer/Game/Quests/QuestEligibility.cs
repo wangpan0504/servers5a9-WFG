@@ -166,7 +166,7 @@ internal static class QuestEligibility
             return Reject("角色符合任务排除职业条件");
         bool selfAwakening = character.Job is 9 or 10 && quest.Grade == "[realization]";
         if (definition.JobChange == 1 && (quest.RewardType == "[grow type]" && grow != 0 ||
-                quest.RewardType != "[grow type]" && (TransferredStoryAlternative(quest,catalog,character.Job) ? grow == 0 : grow != 0)) ||
+                quest.RewardType != "[grow type]" && ((TransferredStoryAlternative(quest,catalog,character.Job) || TransferredAutoMeet(quest)) ? grow == 0 : grow != 0)) ||
             definition.JobChange == 2 && ((!selfAwakening && grow == 0) || awakening != 0) ||
             definition.JobChange == 3 && ((!selfAwakening && grow == 0) || awakening != 1) ||
             definition.GrowType != -1 && definition.JobChange is not (1 or 10 or 20) &&
@@ -174,6 +174,13 @@ internal static class QuestEligibility
             return Reject("转职阶段不符");
         return new(true, false, "角色条件满足");
     }
+
+    // 明确只面向已转职角色的接取型祝贺会面不执行转职；不扩展到普通会面或混合目标。
+    internal static bool TransferredAutoMeet(StoryQuest quest)
+        => quest is { Grade: "[common unique]", Condition: "[meet npc]", SubType: 1,
+            RewardType: "[item]", IntData: [> 0], Definition: { JobChange: 1 } definition } &&
+            !definition.TargetCharacters.IsEmpty && definition.TargetCharacters.All(target =>
+                target.GrowType is >= 1 and <= 5 && target.Awakening == -1 && Jobs.Contains(target.Job));
 
     // 50级主线以互斥分支区分觉醒任务和已觉醒角色的普通衔接任务；二觉仍满足后者的一觉资格。
     // 只接受同职业/分支、同前置的零奖励普通替代，不放宽其他精确觉醒条件，也不完成觉醒任务。

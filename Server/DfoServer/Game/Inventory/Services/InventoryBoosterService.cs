@@ -8,7 +8,7 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalog boosters, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
     Random? random = null, GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null,
-    AvatarPackageCatalog? avatars = null, TimeProvider? clock = null)
+    AvatarPackageCatalog? avatars = null, TimeProvider? clock = null, RandomOptionCatalog? randomOptions = null)
 {
     public BoosterUsePlacesDefinition UsePlaces(int itemId) => boosters.UsePlaces(itemId);
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
@@ -82,7 +82,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (!InventoryAvatarPackageService.SourceEligible(character, source, sourceTemplate))
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_source_ineligible" };
         var definition = boosters.Get(source.Core.ItemId);
-        if (!definition.Available || definition.PackageRewards.IsDefaultOrEmpty || avatars is null)
+        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || definition.PackageRewards.IsDefaultOrEmpty || avatars is null)
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_unconfigured" };
         HashSet<int> avatarIds;
         try
@@ -189,7 +189,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (!InventoryAvatarPackageService.SourceEligible(character, source, catalog.Get(source.Core.ItemId)))
             return InventoryResult.Reject(19) with { RejectReason = "booster_source_ineligible" };
         var definition = boosters.Get(source.Core.ItemId);
-        if (!definition.Available || ceraPackage != !definition.PackageRewards.IsDefaultOrEmpty || lottery != definition.Lottery)
+        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) ||
+            ceraPackage != !definition.PackageRewards.IsDefaultOrEmpty || lottery != definition.Lottery)
             return InventoryResult.Reject(19);
         var dailyUses = before.DailyBoosterUses;
         long? dailyDeadline = null;
@@ -219,6 +220,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (pools.Length == 0 && definition.Pools.Length != 0)
             return InventoryResult.Reject(19) with { RejectReason = "unmatched_grow_type_pool" };
 
+        var unsealDefinitions = new Dictionary<int, RandomOptionDefinition>();
         // 随机池预检匹配池的有权候选，选择型仅预检实际所选奖励；转职池不预检其他职业行。
         try
         {
@@ -238,6 +240,19 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             var ids = choices is not null ? choices.Select(row => row.ItemId) : ceraPackage
                 ? definition.PackageRewards.Select(row => row.ItemId)
                 : pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
+            if (definition.UnsealsRandomOptions)
+            {
+                // 先核对整份声明，不能因本次恰好选中普通奖励而吞掉混合盒的未知解封语义。
+                var allIds = definition.Selection is { } selectionDefinition
+                    ? selectionDefinition.Categories.SelectMany(group => group.Rewards).Select(row => row.ItemId)
+                    : definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId);
+                foreach (int id in allIds.Distinct())
+                {
+                    var rule = randomOptions?.ResolveBoosterReward(catalog.Get(id));
+                    if (rule is null) return InventoryResult.Reject(19);
+                    unsealDefinitions.Add(id, rule);
+                }
+            }
             foreach (int id in ids.Distinct())
             {
                 if (choices?.Any(row => row.ItemId == id && row.NativeCreatureSelectionRow) == true)
@@ -406,9 +421,37 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         }
         else
             grants.AddRange(totals.Select(pair => new InventoryReward(pair.Key, pair.Value)));
-        var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, grants, catalog, goldLimits, pieces, now,
-            shopExpiration: shopExpiration, contracts: contracts, allowOverflowMail: !definition.PackageRewards.IsDefaultOrEmpty,
-            ignoreUsablePeriod: ignoreUsablePeriod);
+        InventoryResult grant;
+        if (definition.UnsealsRandomOptions)
+        {
+            var range = ItemSlotBoundService.Range(ItemKind.Equipment, paid.Expansion);
+            int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Main &&
+                item.Position.Index >= range.Start && item.Position.Index <= range.End);
+            if (grants.Sum(row => (long)row.Count) > range.End - range.Start + 1 - occupied)
+                return InventoryResult.Reject(4);
+            var instances = new List<InventoryItem>();
+            try
+            {
+                foreach (var reward in grants)
+                    for (int index = 0; index < reward.Count; index++)
+                    {
+                        var core = InventoryRewardGrantService.Create(catalog.Get(reward.ItemId), utcNow: now,
+                            upgrade: reward.Upgrade, refinement: reward.Refinement, shopExpiration: shopExpiration,
+                            ignoreUsablePeriod: ignoreUsablePeriod);
+                        // 同ID多件也逐件抽取，保留创建时的强化、锻造、封装、耐久及期限。
+                        core = InventoryRandomOptionService.Initialize(core, unsealDefinitions[reward.ItemId],
+                            (random ?? Random.Shared).NextInt64);
+                        instances.Add(new(0, default, core));
+                    }
+            }
+            catch (InvalidDataException) { return InventoryResult.Reject(19); }
+            grant = InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid }, instances,
+                catalog, goldLimits, pieces, now);
+        }
+        else
+            grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, grants, catalog, goldLimits, pieces, now,
+                shopExpiration: shopExpiration, contracts: contracts, allowOverflowMail: !definition.PackageRewards.IsDefaultOrEmpty,
+                ignoreUsablePeriod: ignoreUsablePeriod);
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         var after = grant.Plan!.After;
@@ -431,7 +474,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     static bool TrySelect(BoosterSelectionDefinition definition, BoosterSelectionRequest request, out BoosterChoice[] rewards)
     {
         rewards = [];
-        var category = definition.Categories.FirstOrDefault(row => row.Category == request.Category && row.Subcategory == request.Subcategory);
+        var category = definition.Categories.LastOrDefault(row => row.Category == request.Category && row.Subcategory == request.Subcategory);
         if (category is null || category.PendingRule is not null || category.Rewards.IsEmpty)
             return false;
         if (definition.SelectionCount == 0)

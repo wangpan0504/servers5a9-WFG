@@ -79,12 +79,35 @@ internal static class QuestAutoMeetTests
                     QuestAnswers = definition.RequiredAnswers.ToImmutableDictionary(answer => answer.QuestId,answer => (byte)answer.Answer)
                 };
                 var candidates = Enumerable.Range(0,16).SelectMany(job => Enumerable.Range(0,3).SelectMany(stage =>
-                    Enumerable.Range(0,5).Select(grow => character with { Job = (byte)job,GrowType = (byte)(stage*16+grow) })));
+                    Enumerable.Range(0,6).Select(grow => character with { Job = (byte)job,GrowType = (byte)(stage*16+grow) })));
                 That(candidates.Any(candidate => QuestEligibility.Evaluate(candidate,quest,actual).Eligible),
                     "按自身最低等级、原前置与职业阶段查资格；不推进任何真实主线："+quest.Id);
+                if (QuestEligibility.TransferredAutoMeet(quest))
+                {
+                    foreach (var target in definition.TargetCharacters)
+                    {
+                        byte job = (byte)Enumerable.Range(0,16).Single(value => QuestEligibility.MatchesJob((byte)value,target.Job));
+                        var transferred = character with { Job = job,GrowType = (byte)target.GrowType };
+                        That(QuestEligibility.Evaluate(transferred,quest,actual).Eligible,
+                            "资源声明的每个首转分支都可接祝贺任务："+quest.Id+"/"+target.GrowType);
+                        That(!QuestEligibility.Evaluate(transferred with { GrowType = 0 },quest,actual).Eligible &&
+                            !QuestEligibility.Evaluate(transferred with { Job = (byte)((job+1)%16) },quest,actual).Eligible &&
+                            !QuestEligibility.Evaluate(transferred with { CompletedQuests = [] },quest,actual).Eligible,
+                            "祝贺任务不跳过未转职、错误职业或真实前置："+quest.Id);
+                        That(!QuestEligibility.CharacterRequirements(transferred,quest with { RewardType = "[grow type]" },actual).Eligible &&
+                            !QuestEligibility.CharacterRequirements(transferred,quest with { SubType = -1 },actual).Eligible &&
+                            !QuestEligibility.CharacterRequirements(transferred,quest with { Definition = definition with
+                                { TargetCharacters = definition.TargetCharacters.Add(new(target.Job,0,-1)) } },actual).Eligible,
+                            "真实转职奖励、普通会面与混合目标不借用祝贺例外："+quest.Id);
+                    }
+                }
                 That(quest.MinimumLevel == 1 || !QuestEligibility.Evaluate(character with { Level = (byte)(quest.MinimumLevel-1) },quest,actual).Eligible,
                     "接取型会面仍遵守资源原最低等级："+quest.Id);
             }
+
+            That(ordinary.Where(QuestEligibility.TransferredAutoMeet).Select(q => q.Id).Order().SequenceEqual(
+                new[] {2637,2912,4427,4428,4429,4430,4431,4432,4433,4434,4435,4728,6927}),
+                "新版资源13条明确首转后的接取型祝贺会面，普通sub-1不扩展");
 
             using (var f = Fixture())
             {

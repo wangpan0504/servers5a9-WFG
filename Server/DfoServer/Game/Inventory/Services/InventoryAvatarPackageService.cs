@@ -21,7 +21,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         if (source is null) return InventoryResult.Reject(19);
         var definition = packages.Get(source.Core.ItemId);
         var category = definition.Categories.FirstOrDefault(row => row.Category == request.Category && row.Subcategory == request.Subcategory);
-        if (!definition.Available || category is null || !TrySelect(definition, category, request.ItemIds, out var rows))
+        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || category is null || !TrySelect(definition, category, request.ItemIds, out var rows))
             return InventoryResult.Reject(19);
         return Grant(character, source, request.Count, rows, request.Choices, false, shopExpiration, ignoreUsablePeriod, out receipt, now);
     }
@@ -38,7 +38,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         var source = Source(character, request.Slot, 1, now);
         if (source is null) return InventoryResult.Reject(19);
         var definition = packages.Get(source.Core.ItemId);
-        if (!definition.Available) return InventoryResult.Reject(19);
+        if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType)) return InventoryResult.Reject(19);
         int[] ids = request.Choices.Select(choice => choice.ItemId).ToArray();
         AvatarPackageRow[]? selected = null;
         foreach (var category in definition.Categories)

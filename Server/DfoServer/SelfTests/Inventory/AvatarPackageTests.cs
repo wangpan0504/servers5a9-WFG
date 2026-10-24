@@ -17,6 +17,17 @@ internal static class AvatarPackageTests
     {
         var full = Package("101 1 3 0 102 2 4 37", 0);
         That(full.Recognized, "装扮族身份与当前可用性分别保留");
+        string firstGrow = "[usable first growtype]\n5\n[/usable first growtype]\n";
+        var gated = AvatarPackageCatalog.Parse(PackageText("101 1 3 0", 1) + firstGrow);
+        That(gated.Recognized && gated.Available && gated.FirstGrowTypes.SequenceEqual(new byte[] { 5 }) &&
+            gated.AllowsFirstGrowType(0x25) && !gated.AllowsFirstGrowType(4), "装扮选择包保留同一首转根资格");
+        foreach (string malformed in new[] { firstGrow + firstGrow, "[usable first growtype]\n[/usable first growtype]",
+            "[usable first growtype]\n6\n[/usable first growtype]", "[usable first growtype]\n5" })
+        {
+            var rejected = AvatarPackageCatalog.Parse(PackageText("101 1 3 0", 1) + malformed);
+            That(rejected.Recognized && !rejected.Available, "非法首转声明仍保留装扮族身份，不能回落普通开箱");
+        }
+
         foreach (string kind in new[] { "equipment", "stackable" })
         {
             string normal = PackageText("101 1", 1).Replace("[avatar]", "[" + kind + "]").Replace("[/avatar]", "[/" + kind + "]") +
@@ -96,6 +107,7 @@ internal static class AvatarPackageTests
             AvatarPackageCatalog.ParseAvatar(shared, cases).Abilities.SetEquals([1, 140]), "case50不补不存在的0，完整保留大于31和127的选项");
         DuplicateAbilityDeclarations();
         DuplicateAbilityCaseIndices();
+        RedundantAbilityCloseAtEof();
         byte[] body = Body([101, 102], [new(101, 0), new(102, 37)]);
         var request = AvatarPackageRequests.Read(body, 2, 2);
         That(request is { Slot: 73, Count: 1, Category: 1, Subcategory: 3 } && request.ItemIds.SequenceEqual([101, 102]) &&
@@ -160,6 +172,35 @@ internal static class AvatarPackageTests
             "字符串伪标签仍不构成能力声明，无声明保留属性0");
     }
 
+    static void RedundantAbilityCloseAtEof()
+    {
+        const string stats = "0 `[HP MAX]` `+` 280 1 `[MP MAX]` `+` 280 2 `[EQUIPMENT_PHYSICAL_DEFENSE]` `+` 660";
+        const string close = "[/avatar select ability]";
+        string complete = AvatarText(stats);
+        foreach (string whitespace in new[] { "\n", " \t\r\n\r\n" })
+        {
+            var actual = AvatarPackageCatalog.ParseAvatar(complete + whitespace + close + whitespace);
+            That(actual is { PendingRule: null, RequiresAbilityChoice: true } &&
+                actual.Abilities.SetEquals([0, 1, 2]) && actual.Types.SequenceEqual(AvatarPackageCatalog.ParseAvatar(complete).Types),
+                "单个完整合法属性块后的唯一同名EOF尾闭保留全部能力、期限与孔位");
+        }
+        foreach (string text in new[] {
+            complete + "\n1\n" + close,
+            complete + "\n[name]\n`tail`\n" + close,
+            complete + "\n` `\n" + close,
+            complete + "\n" + close + "\n1",
+            complete + "\n" + close + "\n[name]\n`tail`",
+            complete + "\n" + close + "\n" + close,
+            complete + "\n[avatar select ability]\n" + close + "\n" + close,
+            AvatarText(stats + "\n0 `[HP MAX]` `+` 280") + "\n" + close,
+            AvatarText("0 `[HP MAX]` `+`") + "\n" + close,
+            "[avatar select ability]\n" + complete + "\n" + close,
+            complete + "\n[import script]\n`other.equ`\n" + close,
+            complete + "\n" + close + "\n[import script]\n`other.equ`" })
+            That(AvatarPackageCatalog.ParseAvatar(text).PendingRule is not null,
+                "尾闭兼容不接受块内坏声明、嵌套、多开始、多尾闭、其他尾token或import");
+    }
+
     static void DuplicateAbilityCaseIndices()
     {
         const string types = "[avatar type select]\n0 0 0 6000 0 0 0\n[/avatar type select]\n";
@@ -192,6 +233,7 @@ internal static class AvatarPackageTests
 
     public static void RunResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
     {
+        FirstGrowResources(towns, resources, packages);
         RankZeroResources(towns, resources, packages);
         var items = resources.Items;
         var service = new InventoryAvatarPackageService(items, packages, resources.GoldLimits, resources.EpicPieces);
@@ -316,6 +358,33 @@ internal static class AvatarPackageTests
             foreach (var bad in new[] { request with { Choices = [new(request.ItemIds[0], 1)] },
                 request with { Choices = [new(1, 0)] }, request with { Category = 255 } })
                 That(!service.Open(character, bad, out _, now).Accepted, "省略属性兼容不放行伪造属性、外来编号或非法分类");
+        }
+    }
+
+    static void FirstGrowResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
+    {
+        var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces,
+            new() { IgnoreCashShopAbsoluteExpiration = true });
+        var now = DateTimeOffset.UtcNow;
+        foreach (int id in new[] { 490703950, 490703951 })
+        {
+            var definition = packages.Get(id);
+            That(definition.Available && definition.FirstGrowTypes.SequenceEqual(new byte[] { 5 }), "两种像素帽真实第五分支资格 " + id);
+            var category = definition.Categories.Single();
+            var row = category.Rows.Single();
+            var avatar = packages.GetAvatar(row.ItemId);
+            var source = new InventoryItem(1000, Bag(), InventoryRewardGrantService.Create(resources.Items.Get(id), utcNow: now, shopExpiration: true));
+            var role = new Character(1, 0, "BranchHat", 0, towns.Room, towns.InitialReturn)
+                { Job = id == 490703950 ? (byte)0 : (byte)3, GrowType = 0x25, Level = 95, Inventory = new([source]) };
+            var request = new AvatarPackageOpenRequest(73, 1, category.Category, category.Subcategory, [row.ItemId],
+                avatar.RequiresAbilityChoice ? [new(row.ItemId, row.DefaultAbility)] : []);
+            That(!service.Open(role with { GrowType = 4 }, request, out _, now).Accepted,
+                "错误分支不能通过选择装扮入口绕过资格 " + id);
+            var opened = service.Open(role, request, out var receipt, now);
+            That(opened.Accepted && receipt is { Rewards.Length: 1 } && receipt.Rewards[0].ItemId == row.ItemId &&
+                opened.Plan!.After.Find(Bag()) is null && opened.Plan.After.Items.Single() is { Avatar: not null } &&
+                !opened.Plan.CharacterPrecondition!.MatchesIdentity(role with { GrowType = 4 }),
+                "合法第五分支获得完整装扮并绑定提交资格 " + id);
         }
     }
 

@@ -23,6 +23,7 @@ internal sealed class ItemCatalog
     readonly ConcurrentDictionary<int, Lazy<LegacyStatusConsumableDefinition?>> legacyStatusConsumables = new();
     readonly ConcurrentDictionary<int, Lazy<FatigueConsumableDefinition?>> fatigueConsumables = new();
     readonly ConcurrentDictionary<int, Lazy<ActionConsumableDefinition?>> actionConsumables = new();
+    readonly ConcurrentDictionary<int, Lazy<InventoryExpansionDefinition?>> inventoryExpansions = new();
     readonly ConcurrentDictionary<int, Lazy<EquipmentPeriodChangeDefinition?>> periodChanges = new();
     readonly ConcurrentDictionary<int, Lazy<StackableFile>> stackableDefinitions = new();
     readonly ConcurrentDictionary<int, Lazy<LevelUpByTableDefinition?>> levelUpTables = new();
@@ -221,6 +222,13 @@ internal sealed class ItemCatalog
     {
         if (!stackable.TryGetValue(id, out var path)) return null;
         return fatigueConsumables.GetOrAdd(id, key => new(() => FatigueConsumableDefinition.Parse(
+            RecoveryConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
+    }
+
+    public InventoryExpansionDefinition? InventoryExpansion(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return inventoryExpansions.GetOrAdd(id, key => new(() => InventoryExpansionDefinition.Parse(
             RecoveryConsumableFile.Parse(key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString), Get(key)))).Value;
     }
 

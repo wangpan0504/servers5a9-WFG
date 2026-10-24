@@ -34,6 +34,7 @@ internal static class FormalDungeonSessionTests
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        VerifyLoginWearWindow(towns, pvf, characters);
         OrdinaryHuntLifecycle();
         Lifecycle(0);
         Lifecycle(14);
@@ -1323,6 +1324,34 @@ internal static class FormalDungeonSessionTests
             "重新选角后经合法出房旅行到左入口");
     }
 
+    internal static void VerifyLoginWearWindow(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)
+    {
+        var clock = new Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-23T00:00:00Z"));
+        using var f = new Fixture("LoginWindow", towns, characters, SelfTestCatalogs.SkillLearning(pvf),
+            SelfTestCatalogs.Quests(pvf), timeProvider: clock);
+        Check(!f.Session.LoginWearRestatementWindowOpen, "未选角不能吸收登录穿戴复述");
+        f.SelectEntry();
+        Check(f.Session.LoginWearRestatementWindowOpen, "首次入城保留五秒登录穿戴复述兼容");
+        Check(f.Session.BeginDungeonSelection() is not null && !f.Session.LoginWearRestatementWindowOpen,
+            "时间未推进，进入选图立即结束登录复述窗口");
+        Check(f.Session.ReturnFromDungeonSelection(restorePosition: false) is not null &&
+            !f.Session.LoginWearRestatementWindowOpen, "快速取消选图返回城镇不能复活旧登录窗口");
+        Check(f.Session.BeginDungeonSelection() is not null &&
+            f.Session.EnterFormalDungeon(3, 3145, 0, SelfTestCatalogs.Dungeons(pvf), SelfTestCatalogs.Rooms(pvf)) is not null &&
+            f.Session.Phase == SessionPhase.Loading && !f.Session.LoginWearRestatementWindowOpen,
+            "同一时刻快速进图加载不吸收真实卸装");
+        Check(f.Session.CompleteFormalDungeonLoading() is not null && f.Session.Phase == SessionPhase.Dungeon &&
+            !f.Session.LoginWearRestatementWindowOpen, "副本阶段不吸收真实卸装");
+        Check(f.Session.ReturnFromFormalDungeon() is not null && f.Session.Phase == SessionPhase.Town &&
+            !f.Session.LoginWearRestatementWindowOpen, "副本返回城镇不重开旧登录窗口");
+        f.Session.ReturnToRoster(); f.Session.Select(f.Created.Slot); f.Session.MarkReady();
+        Check(f.Session.LoginWearRestatementWindowOpen, "真正重选角色重新开启登录复述兼容");
+        clock.Advance(TimeSpan.FromMilliseconds(4999));
+        Check(f.Session.LoginWearRestatementWindowOpen, "入城4999毫秒仍保留兼容窗口");
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        Check(!f.Session.LoginWearRestatementWindowOpen, "入城五秒边界不再吸收真实卸装");
+    }
+
     internal static NativeDungeonDeathObservation Observation(FormalDungeonReceipt receipt, DungeonPlannedMonster monster) =>
         new(monster.ObjectKey, receipt.Character.Id, 0x0111, receipt.Character.Id, 600, 3, 0,
             checked((uint)monster.CandidateLevel), 504, 620, 3, true, new string('A', 64));
@@ -1339,12 +1368,13 @@ internal static class FormalDungeonSessionTests
         public GameSession Session { get; }
         public Character Created { get; }
         public Fixture(string name, TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog learning, DfoServer.GameWorld.Quests.QuestCatalog quests, bool secondCharacter = false, byte job = 0,
-            DfoServer.Game.Settings.GameDebugSettings? debugSettings = null, NewCharacter? prepared = null)
+            DfoServer.Game.Settings.GameDebugSettings? debugSettings = null, NewCharacter? prepared = null,
+            TimeProvider? timeProvider = null)
         {
             Path = System.IO.Path.Combine(root, "game.db");
             Repository = new(Path, quests);
             Owner = Owners.Acquire("formal-session", () => { });
-            Session = new(Repository, towns, Owner, questCatalog:prepared is null ? null : quests, debugSettings: debugSettings);
+            Session = new(Repository, towns, Owner, questCatalog:prepared is null ? null : quests, debugSettings: debugSettings, timeProvider: timeProvider);
             if (secondCharacter) Session.CreateCharacter("RecordDummy", characters.Get(0), learning);
             Created = Repository.Create(Owner, prepared ?? CharacterCreation.Prepare(name, characters.Get(job), towns.Room, towns.InitialReturn, learning.Get)
                 with { ActiveMainQuests = [new(0,3145,1)] });

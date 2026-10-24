@@ -60,6 +60,18 @@ internal static class RandomOptionTests
             "巨剑路径别名匹配稀有度分组");
         That(catalog.Resolve(template with { Rarity = 0 }) is null && catalog.Resolve(template with { Kind = ItemKind.Material }) is null,
             "普通装备和堆叠物没有魔法封印资格");
+        var freeTemplate = template with { AttachType = "`[free]`" };
+        That(catalog.ResolveBoosterReward(freeTemplate) is not null && catalog.ResolveBoosterReward(template) is null,
+            "礼盒标准池严格限定free，不解除普通封装");
+        string equipmentText = texts["equipment/common/shoes/leather/test.equ"];
+        foreach (string bad in new[] { "`1`", "junk1", "1 1", "1\n[random option]\n1", "1\n[/random option]" })
+        {
+            texts["equipment/common/shoes/leather/test.equ"] = "[random option]\n" + bad + "\n[equipment type]\n`[shoes]` 0";
+            Reject<InvalidDataException>(() => catalog.ResolveBoosterReward(freeTemplate), "礼盒不以正则提取数字吞掉畸形或重复根声明");
+        }
+        texts["equipment/common/shoes/leather/test.equ"] = "[pvp]\n[random option]\n1\n[/pvp]";
+        Reject<InvalidDataException>(() => catalog.ResolveBoosterReward(freeTemplate), "嵌套random option不作为普通礼盒根资格");
+        texts["equipment/common/shoes/leather/test.equ"] = equipmentText;
         EquipmentRandomOptionChangeTests.RunCatalog((readTokens, resolve) => new RandomOptionCatalog(path => texts[path],
             new Dictionary<int, string> { [1] = "common/shoes/leather/test.equ" }, readTokens, resolve), template);
         texts["equipment/common/shoes/leather/test.equ"] = "[random option]\n0";

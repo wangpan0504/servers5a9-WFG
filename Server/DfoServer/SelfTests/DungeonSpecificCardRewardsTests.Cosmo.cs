@@ -4,6 +4,7 @@ using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
@@ -23,14 +24,23 @@ internal static partial class DungeonSpecificCardRewardsTests
     public static void RunCosmoResources(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills)
     {
-        var cards = new DungeonCardRewardPolicy(Testing.SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
+        // 显式复现旧活动期限；新版PVF已删除该日期，不修改共享目录或生产期限规则。
+        var original = items.Items.Get(490014159);
+        var expired = original with { Expiration = ItemExpiration.Parse(new(
+            "[expiration date]\n`2020-02-20 06:00:00`\n")) };
+        ItemTemplate ResolveDropItem(int id) => id == expired.Id ? expired : items.Items.Get(id);
+        var candidates = DungeonItemDropCatalog.Create(items.Items.DropCandidates().Select(
+            item => item.Id == expired.Id ? expired : item));
+        var cards = new DungeonCardRewardPolicy(Testing.SelfTestCatalogs.DropRules(pvf), candidates,
             items.Items, items.GoldLimits, items.EpicPieces, prices: Testing.SelfTestCatalogs.CardPrices(pvf));
         foreach (int bossRoll in new[] { 0, 45, 90 })
-            VerifyCosmoExit(towns, pvf, characters, items, quests, skills, cards, bossRoll);
+            VerifyCosmoExit(towns, pvf, characters, items, quests, skills, cards, bossRoll, candidates, ResolveDropItem);
+        That(ReferenceEquals(items.Items.Get(original.Id), original), "历史期限fixture不污染共享物品目录");
     }
 
     static void VerifyCosmoExit(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
-        QuestCatalog quests, SkillLearningCatalog skills, DungeonCardRewardPolicy cards, int bossRoll)
+        QuestCatalog quests, SkillLearningCatalog skills, DungeonCardRewardPolicy cards, int bossRoll,
+        DungeonItemDropCatalog candidates, Func<int, ItemTemplate> resolveDropItem)
     {
         var dungeons = Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = Testing.SelfTestCatalogs.Rooms(pvf);
@@ -54,26 +64,52 @@ internal static partial class DungeonSpecificCardRewardsTests
         var epicTable = DungeonHellEpicCatalog.Load(pvf);
         var harlem = towns.DungeonMaps.Values.Where(map => map.HellDungeon && map.HellQuests.Contains(6080))
             .SelectMany(map => map.Options).Select(option => checked((uint)option.DungeonId)).ToArray();
-        var epics = new HarlemHellEpicDropPolicy(harlem, epicTable.Pool(54, 1, items.Items.Get),
-            epicTable.Pool(54, 3, items.Items.Get), epicTable.Pool(54, 4, items.Items.Get),
-            epicTable.Pool(54, 2, items.Items.Get), cosmo: DungeonCosmoRewardCatalog.Load(pvf, dungeons, rooms));
-        var resourceDrops = new DungeonResourceDropPolicy(Testing.SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
-            drops.Get, items.Items.Get, items.DungeonSpecialDrops, new EquipmentAmplificationDropPolicy(items.Amplifications.Rules),
-            new HarlemMaterialDropPolicy(new(), harlem, items.Items.Get, epics), epics,
-            new HarlemAbyssBonusDropPolicy(new(), epics, items.Items.Get));
-        var hell = new DungeonHellRewardPolicy(DungeonHellDropRules.TryLoad(pvf)!, items.DungeonDropItems);
-        That(items.Items.Get(490014159).Expiration.Resolve(now) == 1582149600,
-            "真实过期活动候选保留原2020年截止，不以商城期限开关改写");
-        // 终点仍受控选择；其余抽样固定种子，复现历史过期活动候选命中。
+        var epics = new HarlemHellEpicDropPolicy(harlem, epicTable.Pool(54, 1, resolveDropItem),
+            epicTable.Pool(54, 3, resolveDropItem), epicTable.Pool(54, 4, resolveDropItem),
+            epicTable.Pool(54, 2, resolveDropItem), cosmo: DungeonCosmoRewardCatalog.Load(pvf, dungeons, rooms));
+        var resourceDrops = new DungeonResourceDropPolicy(Testing.SelfTestCatalogs.DropRules(pvf), candidates,
+            drops.Get, resolveDropItem, items.DungeonSpecialDrops, new EquipmentAmplificationDropPolicy(items.Amplifications.Rules),
+            new HarlemMaterialDropPolicy(new(), harlem, resolveDropItem, epics), epics,
+            new HarlemAbyssBonusDropPolicy(new(), epics, resolveDropItem));
+        var hell = new DungeonHellRewardPolicy(DungeonHellDropRules.TryLoad(pvf)!, candidates);
+        That(resolveDropItem(490014159).Expiration.Resolve(now) == 1582149600,
+            "显式历史活动fixture保留原2020年截止，不以商城期限开关改写");
+        int historicalCandidates = 0;
+        Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareDrops(DungeonEntryPlan entry)
+        {
+            var prepare = resourceDrops.PrepareEntry(entry, hell);
+            return monster =>
+            {
+                var plan = prepare(monster);
+                foreach (var trial in plan.Trials)
+                {
+                    var pools = trial.Items is { } direct ? new[] { direct } : trial.RarityPools.IsDefaultOrEmpty
+                        ? Array.Empty<DungeonItemDropPool>() : trial.RarityPools.SelectMany(row =>
+                            row.AlternateItems is { } alternate ? new[] { row.Items, alternate } : new[] { row.Items });
+                    foreach (var candidate in pools.SelectMany(pool => pool.Entries).Where(row => row.Template.Id == 490014159))
+                    {
+                        That(candidate.Template.Expiration.Resolve(now) == 1582149600,
+                            "实际掉落准备计划包含历史到期候选，而非仅检查未使用的模板");
+                        historicalCandidates++;
+                    }
+                }
+                return plan;
+            };
+        }
+        // 终点仍受控选择；其余抽样固定种子，保留历史过期活动候选参与抽样。
         var random = new Random(653 + bossRoll);
         var receipt = fixture.Session.EnterFormalDungeon(7191, 0, 4, dungeons, rooms, drops, items.Items,
             draw: bound => bound == 100 ? bossRoll : random.Next(bound), pieces: items.EpicPieces, hellParty: true,
-            prepareDrops: entry => resourceDrops.PrepareEntry(entry, hell))!;
+            prepareDrops: PrepareDrops)!;
         That(receipt is { Entry.IsCosmo: true }, "超星空结算回归沿真实准入：" + fixture.Session.LastFormalDungeonRejection);
         That(receipt.Entry.BossMap.Id == (bossRoll == 0 ? 92689 : bossRoll == 45 ? 92690 : 92697),
             "结算回归分别覆盖三个带权重终点");
         string directory = Path.Combine(Path.GetTempPath(), "S5A9-cosmo-exit-" + Guid.NewGuid().ToString("N"));
-        try { Run().GetAwaiter().GetResult(); }
+        try
+        {
+            Run().GetAwaiter().GetResult();
+            That(historicalCandidates > 0, "三个领主路线各自实际准备历史到期候选，避免空测");
+        }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
 
         async Task Run()

@@ -24,14 +24,21 @@ internal static class ExperienceConsumableTcpTests
             foreach (var (name, level, item) in new (string, byte, int)[]
                 { ("Capsule", 49, ExperienceConsumableTests.PercentItem), ("CapsuleRoll", 60, ExperienceConsumableTests.FixedItem),
                   ("CapsuleMap", 16, ExperienceConsumableTests.PercentItem), ("OldBook", 1, 1034),
-                  ("MillionBook", 60, 1231), ("TenMilBook", 60, 1232), ("CappedBook", 94, 1232) })
+                  ("MillionBook", 60, 1231), ("TenMilBook", 60, 1232), ("CappedBook", 94, 1232),
+                  ("TownCapsule", 60, 10005340) })
+            {
+                var inventory = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65),
+                    new(item, GameWorld.Items.ItemKind.Consumable, 2)));
+                if (name == "CapsuleMap")
+                    inventory = inventory.Add(new(0, new(InventoryListType.Main, 66),
+                        new(490010192, GameWorld.Items.ItemKind.Consumable, 1)));
                 created.Add(repository.Create(owner, candidate with
                 {
                     Name = name, Level = level, InitialLearning = SkillPointLedger.Synchronize(0, 0, level, candidate.InitialLearning with
                     { Experience = growth.GetCumulativeExperienceBoundary(level) - 1, BonusSp = 17, BonusTp = 5 }, resources.Learning),
-                    Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65),
-                        new(item, GameWorld.Items.ItemKind.Consumable, 2))) }
+                    Inventory = candidate.Inventory with { Items = inventory }
                 }));
+            }
         }
         await fixture.StartAsync();
         using (var peer = Open(fixture))
@@ -71,6 +78,9 @@ internal static class ExperienceConsumableTcpTests
             string before = fixture.Snapshot(); peer.Send(30, [65, 0]); peer.Expect(1, 30, [0, 19, 0]); peer.Barrier();
             That(fixture.Snapshot() == before, "副本Loading阶段不能消费胶囊");
             FormalDungeonTcpTests.Load(peer);
+            before = fixture.Snapshot();
+            peer.Send(30, [66, 0]); peer.Expect(1, 30, [0, 19, 0]); peer.Barrier();
+            That(fixture.Snapshot() == before, "城镇与赛丽亚并集胶囊在已加载副本拒绝，不借保存的房间坐标放行");
             var packets = Use(peer, created[2], growth.GetLevelExperienceSpan(16) * 10 / 100, 17);
             That(packets.Count(packet => packet.Opcode == 2) == 1 && packets.Single(packet => packet.Opcode == 2).Body[0] == 1,
                 "副本升级只刷新Player，不重建Actor或城镇上下文");
@@ -81,7 +91,7 @@ internal static class ExperienceConsumableTcpTests
             var packets = Use(peer, created[3], 100, 2);
             That(packets.All(packet => packet.Opcode != 14), "旧经验书同样由ACK30扣源，不重复发送源删除");
         }
-        for (int index = 4; index < created.Count; index++)
+        for (int index = 4; index < 7; index++)
         {
             using var peer = Open(fixture);
             var before = created[index];
@@ -102,6 +112,18 @@ internal static class ExperienceConsumableTcpTests
                 peer.Send(30, [65, 0]); peer.Expect(1, 30, [0, 19, 0]); peer.Barrier();
                 That(fixture.Snapshot() == full, "满级零到账拒绝且不吞剩余经验书，连接继续");
             }
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created[7].Slot);
+            Use(peer, created[7], 100000, 61);
+            FormalDungeonTcpTests.EntryTown(peer);
+            using var readOwner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var after = repository.LoadCharacter(readOwner, created[7].Slot);
+            Use(peer, after, 100000, 61);
+            That(repository.LoadCharacter(readOwner, created[7].Slot).Inventory.Find(new(InventoryListType.Main, 65)) is null,
+                "城镇与赛丽亚并集胶囊在房间和公开城镇均可经CMD30消费，不重复扣源");
+
         }
         await fixture.StopAsync(); await fixture.StartAsync();
         using (var peer = Open(fixture))

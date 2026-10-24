@@ -18,6 +18,8 @@ internal sealed partial class GameSession
         _ = ReadState(next);
         if (Phase == SessionPhase.Town && next != SessionPhase.Town)
         {
+            // 离开首次入城场景即结束登录复述窗口；快速取消选图也不能重新吸收真实卸装。
+            loginWearRestatementUntil = 0;
             InvalidateImageCommunication();
             InvalidateExpertJobStore();
         }

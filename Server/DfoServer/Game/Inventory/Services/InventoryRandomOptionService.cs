@@ -20,28 +20,34 @@ internal sealed partial class InventoryRandomOptionService(ItemCatalog items, Ra
         var definition = options.Resolve(items.Get(target.Core.ItemId));
         if (definition is null || before.Gold < definition.GoldCost)
             return InventoryResult.Reject();
-        int poolIndex = Choose(definition.Pools.Select((row, index) => (Value: index, row.Weight)).ToArray(), roll);
+        var core = Initialize(target.Core, definition, roll);
+        return new(true, 0, new(before, before with
+        {
+            Gold = before.Gold - definition.GoldCost,
+            Items = before.Items.Replace(target, target with { Core = core })
+        }, "random_option_unseal", new(character)));
+    }
+
+    // 纯实例初始化：费用由调用入口决定，奖励不能调用扣金币的背包解封事务。
+    internal static ItemCore Initialize(ItemCore core, RandomOptionDefinition definition, Func<long, long> random)
+    {
+        int poolIndex = Choose(definition.Pools.Select((row, index) => (Value: index, row.Weight)).ToArray(), random);
         var pool = definition.Pools[poolIndex];
         var selected = new RandomOption[3];
         var used = new HashSet<byte>();
         for (int i = 0; i < pool.Count; i++)
         {
             var candidates = pool.Groups[i].Where(row => !used.Contains(row.Type)).ToArray();
-            int index = Choose(candidates.Select((row, at) => (Value: at, row.Weight)).ToArray(), roll);
+            int index = Choose(candidates.Select((row, at) => (Value: at, row.Weight)).ToArray(), random);
             var value = candidates[index];
             selected[i] = new(value.Type, value.Value1, value.Value2);
             used.Add(value.Type);
         }
-        var core = target.Core with
+        return core with
         {
             Random0 = selected[0], Random1 = selected[1], Random2 = selected[2], RandomState = 0,
             RandomChangedIndex = byte.MaxValue, RandomChangeState = 0, RandomChange = default
         };
-        return new(true, 0, new(before, before with
-        {
-            Gold = before.Gold - definition.GoldCost,
-            Items = before.Items.Replace(target, target with { Core = core })
-        }, "random_option_unseal", new(character)));
     }
 
     static int Choose((int Value, long Weight)[] entries, Func<long, long> random)

@@ -13,7 +13,7 @@ internal sealed partial class CharacterRepository
         var growth = plan.Growth;
         if (expected.DungeonState is null || expected.Inventory.Find(plan.Source.Position) != plan.Source ||
             plan.Source.Uid <= 0 || plan.Source.Core.Count <= 0 || plan.Source.Core.EquipmentLockId != 0 ||
-            !plan.Definition.Allows(expected.Level, expected.Job) || plan.Source.Core.ItemId != plan.Definition.Item.Id ||
+            !plan.Definition.Allows(expected.Level, expected.Job, expected.GrowType) || plan.Source.Core.ItemId != plan.Definition.Item.Id ||
             !ReferenceEquals(plan.Inventory.Before, expected.Inventory) || plan.Inventory.Reason != "use_experience_consumable" ||
             growth.CharacterId != expected.Id || growth.Revision != expected.Revision || growth.Job != expected.Job ||
             growth.GrowType != expected.GrowType || growth.PreviousLevel != expected.Level || growth.TargetLevel < expected.Level ||

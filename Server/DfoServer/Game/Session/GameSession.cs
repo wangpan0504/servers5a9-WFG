@@ -164,7 +164,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     // 该形状与真实卸装相同，只在入城窗口内吸收；窗口外仍按原顺序校验，不吞掉玩家主动卸装。
     const long LoginWearRestatementWindowMillis = 5000;
     long loginWearRestatementUntil;
-    public bool LoginWearRestatementWindowOpen => loginWearRestatementUntil >
+    public bool LoginWearRestatementWindowOpen => Ready && Phase == SessionPhase.Town && loginWearRestatementUntil >
         (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
 
     public void MarkReady()

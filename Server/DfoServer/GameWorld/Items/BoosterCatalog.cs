@@ -25,6 +25,9 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     BoosterSelectionDefinition? Selection = null, ImmutableArray<BoosterReward> PackageRewards = default, bool Lottery = false,
     bool NpcPocketPot = false)
 {
+    public ImmutableArray<byte> FirstGrowTypes { get; init; } = [];
+    public bool AllowsFirstGrowType(byte growType) => FirstGrowTypes.IsEmpty || FirstGrowTypes.Contains((byte)(growType & 15));
+    public bool UnsealsRandomOptions { get; init; }
     public bool SetsDisjointInstanceType { get; init; }
     public byte? DailyRetainedLimit { get; init; }
     public bool Available => PendingRule is null && (Pools.Length != 0 || Selection is not null || !PackageRewards.IsDefaultOrEmpty);
@@ -57,6 +60,29 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
 
     internal static BoosterDefinition Parse(string text)
     {
+        if (!BoosterFirstGrowTypes.TryParse(text, out var branches)) return new([], "礼包首转资格声明无效");
+        string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
+        var declarations = Regex.Matches(tags, @"\[\s*/?\s*random\s+option\s+unseal[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        bool unseal = false;
+        if (declarations.Count != 0)
+        {
+            var declaration = declarations[0];
+            int end = declaration.Index + declaration.Length;
+            int next = tags.IndexOf('[', end);
+            string type = PvfScript.Section(text, "stackable type").Trim();
+            if (declarations.Count != 1 || text.Count(value => value == '`') % 2 != 0 ||
+                declaration.Value != "[random option unseal]" || !IsRootDeclaration(tags, declaration.Index) ||
+                !Regex.IsMatch(type, @"^`\[(?:booster|booster selection)\]`\s+\d+$") ||
+                !int.TryParse(text[end..(next < 0 ? text.Length : next)].Trim(), NumberStyles.None,
+                    CultureInfo.InvariantCulture, out int flag) || flag is not (0 or 1))
+                return new([], "礼包魔法词条解封声明无效");
+            unseal = flag == 1;
+        }
+        return ParseContents(text) with { FirstGrowTypes = branches, UnsealsRandomOptions = unseal };
+    }
+
+    static BoosterDefinition ParseContents(string text)
+    {
         if (ParseUsePlaces(text).PendingRule is { } placeError) return new([], placeError);
         string type = Regex.Match(PvfScript.Section(text, "stackable type"), @"`\[([^\]]+)\]`").Groups[1].Value;
         if (type is not ("usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection" or "upgradable legacy"))
@@ -86,9 +112,9 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 return new([], "set disjoint instance type");
         }
         foreach (string tag in new[] { "cooltime maintenance", "effect maintenance", "total weekly usable count",
-            "total accumulated usable count", "use count limit all server item", "usable datetime", "usable first growtype",
+            "total accumulated usable count", "use count limit all server item", "usable datetime",
             "random box", "random box removal items", "raid booster item", "convert boost item", "check usable itemlevel",
-            "set epic exchange instance type", "random option unseal",
+            "set epic exchange instance type",
             "daybreak drop item", "battle royal", "action usable server type", "usable game server type", "usable server type" })
             if (tags.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase))
                 return new([], tag);

@@ -1,5 +1,6 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Quests;
 
 namespace DfoServer.Game.Session;
 
@@ -24,6 +25,8 @@ internal sealed partial class GameSession
             if (!CanUseConsumable() || !CanPublishConsumable(capture.Guard))
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed", Guard: capture.Guard);
             if (plan.Definition.VillageOnly && Phase != SessionPhase.Town) return Reject("village-only");
+            if (plan.Definition.SeriaRoomOnly && !towns.IsRoom(expected.Position, QuestEligibility.Completed(expected)))
+                return Reject("seria-room-only");
             if (usedConsumables.TryGetValue(plan.Definition.CoolGroup, out var previous) && previous.EnforceCooldown &&
                 previous.Clock.GetElapsedTime(previous.Timestamp).TotalMilliseconds < plan.Definition.CoolTime)
                 return Reject("cooldown");

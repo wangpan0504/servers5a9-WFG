@@ -29,7 +29,7 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
         if (matches.Count == 0 || matches.Count != Regex.Matches(text, @"\[booster select category\]").Count)
             return new([], "选择分类缺失或嵌套无效");
         var categories = ImmutableArray.CreateBuilder<BoosterSelectionCategory>();
-        var firstByKey = new Dictionary<(byte, byte), (BoosterSelectionCategory Parsed, string Body)>();
+        var lastByKey = new Dictionary<(byte, byte), (BoosterSelectionCategory Parsed, string Body, bool Empty)>();
         bool duplicated = false;
         foreach (Match match in matches)
         {
@@ -38,17 +38,19 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
             if (!header.Success || !byte.TryParse(header.Groups[1].Value, out byte category) ||
                 !byte.TryParse(header.Groups[2].Value, out byte subcategory))
                 return new([], "选择分类索引无效或重复");
-            var parsed = ParseCategory(category, subcategory, body[header.Length..]);
-            if (firstByKey.TryGetValue((category, subcategory), out var first))
+            string content = body[header.Length..];
+            var parsed = ParseCategory(category, subcategory, content);
+            if (lastByKey.TryGetValue((category, subcategory), out var previous))
             {
                 duplicated = true;
-                // 只兼容完整token等价的重复；保留原块，按原单份分类选择，不能拼接奖励或绕过语法校验。
-                if (parsed.PendingRule is not null || first.Parsed.PendingRule is not null ||
-                    !CategoryTokens(first.Body).SequenceEqual(CategoryTokens(body), StringComparer.Ordinal))
+                // 原生同键覆盖；仅接受等价重述或裸空项补成完整装备块，逐次校验，不能拼接或撤回已声明奖励。
+                bool equivalent = CategoryTokens(previous.Body).SequenceEqual(CategoryTokens(body), StringComparer.Ordinal);
+                bool fillsEmpty = previous.Empty && !parsed.Rewards.IsEmpty &&
+                    Regex.IsMatch(content, @"^\s*\[equipment\][^\[]*\[/equipment\]\s*$");
+                if (parsed.PendingRule is not null || previous.Parsed.PendingRule is not null || !equivalent && !fillsEmpty)
                     return new([], "选择分类索引无效或重复");
             }
-            else
-                firstByKey.Add((category, subcategory), (parsed, body));
+            lastByKey[(category, subcategory)] = (parsed, body, string.IsNullOrWhiteSpace(content));
             categories.Add(parsed);
         }
         if (duplicated && (count == 0 || Regex.Matches(text, @"\[/booster select category\]").Count != matches.Count ||
@@ -65,14 +67,18 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
         IEnumerable<BoosterSelectionCategory> categories)
     {
         string masked = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
+        string FieldBody(Match field)
+        {
+            int start = field.Index + field.Length;
+            int end = masked.IndexOf('[', start);
+            return text[start..(end < 0 ? text.Length : end)].Trim();
+        }
         string? RootField(string name)
         {
             var fields = Regex.Matches(masked, @"\[" + Regex.Escape(name) + @"\]");
             if (fields.Count != 1 || !BoosterCatalog.IsRootDeclaration(masked, fields[0].Index))
                 return null;
-            int start = fields[0].Index + fields[0].Length;
-            int end = masked.IndexOf('[', start);
-            return text[start..(end < 0 ? text.Length : end)].Trim();
+            return FieldBody(fields[0]);
         }
         if (blocks.Any(block => !BoosterCatalog.IsRootDeclaration(masked, block.Index)))
             return false;
@@ -81,14 +87,25 @@ internal sealed record BoosterSelectionDefinition(int SelectionCount, ImmutableA
             return false;
         if (!int.TryParse(RootField("booster selection num"), out int rootCount) || rootCount != count)
             return false;
-        string[]? dimensions = RootField("booster category num")?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        if (dimensions is null || dimensions.Length is not (2 or 3) ||
-            !int.TryParse(dimensions[0], out int rank) || rank != dimensions.Length - 1 ||
-            !int.TryParse(dimensions[1], out int size) || size is < 1 or > 256)
+        var dimensionFields = Regex.Matches(masked, @"\[booster category num\]");
+        if (dimensionFields.Count == 0)
             return false;
-        int subsize = 1;
-        if (rank == 2 && (!int.TryParse(dimensions[2], out subsize) || subsize is < 1 or > 256))
-            return false;
+        int rank = 0, size = 0, subsize = 0;
+        foreach (Match field in dimensionFields)
+        {
+            string[] dimensions = FieldBody(field).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            int limit = dimensionFields.Count == 1 ? 256 : 128;
+            int nextSubsize = 1;
+            if (!BoosterCatalog.IsRootDeclaration(masked, field.Index) || dimensions.Length is not (2 or 3) ||
+                !int.TryParse(dimensions[0], out int nextRank) || nextRank != dimensions.Length - 1 ||
+                !int.TryParse(dimensions[1], out int nextSize) || nextSize < 1 || nextSize > limit ||
+                nextRank == 2 && (!int.TryParse(dimensions[2], out nextSubsize) || nextSubsize < 1 || nextSubsize > limit) ||
+                rank != 0 && (nextRank != rank || nextSize < size || nextSubsize < subsize))
+                return false;
+            rank = nextRank;
+            size = nextSize;
+            subsize = nextSubsize;
+        }
         return categories.All(category => category.Category <= 127 && category.Subcategory <= 127 &&
             category.Category < size && category.Subcategory < subsize);
     }

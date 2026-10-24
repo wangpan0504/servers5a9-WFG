@@ -14,6 +14,7 @@ internal static class BoosterTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        Inventory.BoosterTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
         var itemResources = resources.ItemResources;
         var resourceWalletBox = itemResources.Boosters.Get(2683799);
         That(resourceWalletBox.Available && resourceWalletBox.Selection is null && resourceWalletBox.PackageRewards.IsDefaultOrEmpty &&
@@ -38,6 +39,19 @@ internal static class BoosterTcpTests
             {
                 Job = 0, GrowType = 1, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
                 Inventory = new([new(0, Bag(65), Core(490704570))], Gold: 12345)
+            });
+            foreach (byte branch in new byte[] { 4, 0x25 })
+                repo.Create(owner, new(branch == 4 ? "OtherBranch" : "FifthBranch", towns.Room, towns.InitialReturn)
+                {
+                    Job = 0, GrowType = branch, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                    Inventory = new([new(0, Bag(65), InventoryRewardGrantService.Create(itemResources.Items.Get(490011456), shopExpiration: true))])
+                });
+            var unsealSource = itemResources.Items.Get(10012169);
+            byte unsealJob = (byte)Enumerable.Range(0, 16).First(job => (unsealSource.Jobs & (1 << job)) != 0);
+            repo.Create(owner, new("UnsealBox", towns.Room, towns.InitialReturn)
+            {
+                Job = unsealJob, Level = Math.Max((byte)1, unsealSource.MinimumLevel), AcceptedStoryLevel = 1, Skills = characters.Get(unsealJob).Skills,
+                Inventory = new([new(0, Bag(65), InventoryRewardGrantService.Create(unsealSource, 2))], Gold: 12345)
             });
         }
         await fixture.StartAsync();
@@ -100,9 +114,9 @@ internal static class BoosterTcpTests
             Entry(emblemDelta, 289, first, 1);
             Entry(emblemDelta, 290, second, 1);
             peer.Barrier();
-            That(fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[8L, 8L]] &&
+            That(fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[11L, 11L]] &&
                 fixture.Query("SELECT count(DISTINCT character_id) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=490704570") is [[2L]],
-                "药剂、徽章和保留的源礼盒共有八个唯一实例，两个角色的转职礼盒仍在");
+                "原有八个实例加两件首转资格礼盒共有十个唯一实例，原有两个转职奖池礼盒仍在");
             var timer = System.Diagnostics.Stopwatch.StartNew();
             SendOpen(peer, 7, int.MaxValue);
             byte[] bulkAck = peer.Expect(1, 160).Body;
@@ -190,6 +204,62 @@ internal static class BoosterTcpTests
                 "重登恢复灵魂武器装备");
             peer.Barrier();
         }
+        SetExpirationDebug(fixture, true);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2);
+            string unchanged = Snapshot();
+            SendOpen(peer, 65, 1);
+            peer.Expect(1, 160, [0, 19, 0]);
+            peer.Barrier();
+            That(Snapshot() == unchanged, "错误首转分支的真实CMD160拒绝且资产不变");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(3);
+            SendOpen(peer, 65, 1);
+            ExpectAck(peer, 490011456, 65, [(10305616, 200)]);
+            byte[] delta = peer.Expect(0, 14).Body;
+            Entry(delta, 65, -1, 0);
+            That(Enumerable.Range(0, U16(delta, 1)).Select(index => 3 + index * 123)
+                .Any(at => U32(delta, at + 2) == 10305616 && U32(delta, at + 6) == 200),
+                "第五分支觉醒角色获得真实200碎片完整差量");
+            peer.Barrier();
+            string consumed = Snapshot();
+            SendOpen(peer, 65, 1);
+            peer.Expect(1, 160, [0, 19, 0]);
+            peer.Barrier();
+            That(Snapshot() == consumed, "重放已消费的首转礼盒不发第二份奖励");
+        }
+        byte[][] unsealedRows;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(4);
+            SendOpen(peer, 65, 2);
+            var ack = peer.Expect(1, 160).Body;
+            That(ack.Length == 90 && ack[0] == 1 && U32(ack, 2) == 10012169 && U16(ack, 16) == 9,
+                "真实CMD160九件套两盒显示九种各两件奖励");
+            var delta = peer.Expect(0, 14).Body;
+            unsealedRows = Enumerable.Range(0, U16(delta, 1)).Select(index => 3 + index * 123)
+                .Where(at => U16(delta, at) is >= 9 and <= 56).Select(at => delta[at..(at + 123)]).ToArray();
+            That(unsealedRows.Length == 18 && unsealedRows.All(row => row[71] is >= 1 and <= 3 && row[72] != 0 && row[82] == 255),
+                "18件完整装备差量分别携带已解封词条");
+            peer.Barrier();
+            string saved = Snapshot();
+            SendOpen(peer, 65, 2); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == saved, "解封盒源耗尽重放不重复发奖或重抽");
+        }
+        using (var peer = Open(fixture))
+        {
+            var full = peer.Select(4)[4].Body;
+            foreach (var row in unsealedRows)
+            {
+                int at = Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Single(at => U16(full, at) == U16(row, 0));
+                That(full[at..(at + 123)].SequenceEqual(row), "重登全量逐字节保留各件已冻结随机核心");
+            }
+            peer.Barrier();
+        }
+        That(fixture.Query("SELECT gold FROM characters WHERE slot=4") is [[12345L]], "免费礼盒解封不扣普通解封金币");
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "booster database integrity");

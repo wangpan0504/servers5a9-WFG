@@ -20,7 +20,8 @@ internal static partial class InventoryTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "inventory"), resources: resources);
+        var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "inventory"), resources: resources, clock: clock);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var owners = new AccountOwners();
@@ -153,7 +154,7 @@ internal static partial class InventoryTcpTests
             peer.Expect(1, 7, [1]);
             peer.Expect(0, 2);
             peer.Create("BagGearTest");
-            long staminaUntil = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 600;
+            long staminaUntil = fixture.UtcNow.ToUnixTimeSeconds() + 600;
             fixture.Sql("UPDATE characters SET stamina_until=$p0 WHERE name=$p1", staminaUntil, "BagGearTest");
             var selected = peer.Select(1);
             That(selected[3].Body[36 + 84] == 10, "已持久化虚弱的选角Player直接携带10%，不先重装100%");
@@ -163,6 +164,13 @@ internal static partial class InventoryTcpTests
             int weaponId = characters.Get(0).Equipment.Single(item => item.Slot == 12).Template.Id;
             int pantsId = characters.Get(0).Equipment.Single(item => item.Slot == 17).Template.Id;
             var quickUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3 AND slot_index=17", characterId)[0][0];
+            string loginSnapshot = Snapshot(fixture);
+            peer.Send(19, MoveItem(0, 21, 0, 1, 3, 17, pantsId));
+            peer.Expect(1, 19, MoveAck(0, 21, 0, 3, 17));
+            peer.Barrier();
+            That(Snapshot(fixture) == loginSnapshot, "首次入城同形穿戴复述仅ACK零移动，不改持久装备");
+            clock.Advance(TimeSpan.FromSeconds(5));
+            peer.Barrier();
             peer.Send(19, MoveItem(0, 21, 0, 1, 3, 17, pantsId));
             peer.Expect(1, 19, MoveAck(0, 21, 1, 3, 17));
             var weakRefresh = DeltaAndAppearance(peer, 4, reloadMain: true);
@@ -187,6 +195,8 @@ internal static partial class InventoryTcpTests
             peer.Expect(1, 7, [1]);
             peer.Expect(0, 2);
             var reselected = peer.Select(1);
+            clock.Advance(TimeSpan.FromSeconds(5));
+            peer.Barrier();
             That(reselected[3].Body[126] == 4 && reselected[4].Body.Length == 1973 && U16(reselected[4].Body, 374) == 3 &&
                 U32(reselected[4].Body, 376) == 18400, "reselect restores equipment in quick slot through full inventory");
             peer.Send(19, MoveItem(0, 3, pantsId, 1, 3, 17, 0));
