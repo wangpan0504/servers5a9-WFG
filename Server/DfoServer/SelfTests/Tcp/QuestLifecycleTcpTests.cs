@@ -1036,13 +1036,15 @@ internal static class QuestLifecycleTcpTests
                 That(State(native.Id) == before && Materials(native.Id) == 4,
                     "真实3473足额时即使客户端报告缺料仍回权威0，不重复写库、扣料、发奖或全量刷新");
             }
-            // 重放报告中的31顺序，恢复父显示，不把重接请求当作扣料或领奖。
-            foreach (byte child in new byte[] {144,145})
+            // 已完成3472仍回放574/356。已接取3473只回error18，重复请求也不能再引出356。
+            peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[0,18,0]);
+            peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
+            History(peer.Expect(0,356).Body,3472); peer.Barrier();
+            That(State(native.Id) == before,"重接已完成3472只回放父0/末子0，不写库、不扣料或发奖");
+            for (int repeat = 0; repeat < 2; repeat++)
             {
-                peer.Send(31,[31,0,child,13]); peer.Expect(1,31,[0,18,0]);
-                peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
-                History(peer.Expect(0,356).Body,3472); peer.Barrier();
-                That(State(native.Id) == before,"报告中的重接只恢复实际足额父0/末子0，不写库、不扣料或发奖");
+                peer.Send(31,[31,0,145,13]); peer.Expect(1,31,[0,18,0]); peer.Barrier();
+                That(State(native.Id) == before,"重接已接取3473不回放574/356，也不写库、扣料或发奖");
             }
             peer.Send(34,[34,0,130,13,255,255,1,0,255,255]);
             var ack = Finished(peer).Body;
