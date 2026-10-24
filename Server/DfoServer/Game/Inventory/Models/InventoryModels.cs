@@ -56,6 +56,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public AccountWallet AccountWallet { get; init; } = AccountWallet.Empty;
     public CubeContractState CubeContract { get; init; } = CubeContractState.Empty;
     public SkinStorageState Skins { get; init; } = SkinStorageState.Empty;
+    public AvatarPresetState AvatarPresets { get; init; } = AvatarPresetState.Empty;
     public ItemMakingSkillState ItemMakingSkills { get; init; } = ItemMakingSkillState.Empty;
     public ushort AvatarExpansion { get; init; } = 105;
     public ImmutableArray<DevilServiceUsage> DevilUses { get; init; } = [];
@@ -73,6 +74,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
         AccountWallet.Validate();
         CubeContract.Validate();
         Skins.Validate();
+        AvatarPresets.Validate();
         ItemMakingSkills.Validate();
         DailyBoosterUsage.Validate(DailyBoosterUses);
         ConsumableState.Validate(ConsumableStates);
@@ -131,6 +133,8 @@ internal sealed class InventoryCharacterPrecondition(Character character, long? 
         skills.SequenceEqual(value.Skills.OrderBy(skill => skill.Id)) && (position is null || value.Position == position);
     public bool IsExpired(long? utcSeconds = null) => qualificationExpiresAt is not null &&
         (utcSeconds ?? (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) >= qualificationExpiresAt.Value;
+    // 组合多个移动步骤时取最早到期；只供同一程序集内的业务规划读取。
+    internal long? QualificationExpiresAt => qualificationExpiresAt;
     public bool Matches(Character value, long? utcSeconds = null) => MatchesIdentity(value) && !IsExpired(utcSeconds);
 }
 

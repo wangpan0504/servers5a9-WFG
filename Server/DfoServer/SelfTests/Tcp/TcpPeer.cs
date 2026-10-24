@@ -58,6 +58,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] PlayerBody { get; private set; } = [];
     public byte[] AdventureRefresh { get; private set; } = [];
     public byte[] WeeklyDungeonConfig { get; private set; } = [];
+    public byte[] AvatarPresetList { get; private set; } = [];
     public byte[] CardMembershipInformation { get; private set; } = [];
     public byte[] DevilService0 { get; private set; } = [];
     public Dictionary<byte, long> PremiumServices { get; private set; } = [];
@@ -469,10 +470,13 @@ internal sealed class TcpPeer : IDisposable
         }
     });
 
-    // 每周地下城：就绪后先下发720空正文清列表，再按账号配置回放721的5个槽位。
-    // 自定义入城读取器读到124后须调用本方法，避免把720/721留给后续断言。
+    // 选角就绪后的固定包序：先0x063D装扮预设容量与列表，再720空正文与721五槽。
+    // 自定义入城读取器读到124后须调用本方法，避免把这三包留给后续断言。
     public void ReadWeeklyDungeon()
     {
+        AvatarPresetList = Expect(0, 1597).Body;
+        TestCheck.That(AvatarPresetList.Length >= 2 && AvatarPresetList[1] <= AvatarPresetList[0],
+            "装扮预设容量与列表先于每周地下城下发，条目数不超过容量");
         Expect(0, 720, []);
         WeeklyDungeonConfig = Expect(0, 721).Body;
         TestCheck.That(WeeklyDungeonConfig.Length == 5, "每周地下城721固定回放5个槽位");

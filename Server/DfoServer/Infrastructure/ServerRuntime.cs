@@ -134,6 +134,10 @@ internal static class ServerRuntime
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
+        // 装扮预设：容量/列表在选角就绪后下发；扩展券走CMD515 action216。
+        var avatarPresetService = new Game.Inventory.Services.AvatarPresetService(itemResources.Items, itemResources.Contracts, towns, clock);
+        var avatarPresetProjection = new Network.Projection.Inventory.AvatarPresetProjection();
+        var avatarPresetHandler = new Network.Handlers.AvatarPresetHandler(avatarPresetService, avatarPresetProjection, inventoryProjection, log);
         var weaponSkinHandler = new SkinStorageHandler(weaponSkinService, inventoryProjection, weaponSkinProjection, log);
         var rentalHandler = new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items, towns, clock), inventoryProjection, log);
         var creatureHandler = new CreatureHandler(creatures, creatureProjection, log, inventoryProjection);
@@ -287,7 +291,7 @@ internal static class ServerRuntime
             new KeepaliveHandler(log),
             new SoloPartyHandler(log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
-                adventureWeeklyProjection),
+                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),
@@ -303,6 +307,7 @@ internal static class ServerRuntime
             new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
                 options.TeleportPotionGates), projection, inventoryProjection, presence, log),
             new SettingsHandler(settings, log, projection),
+            avatarPresetHandler,
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
             new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, online),
             new CollectBoxHandler(new Game.CollectBox.CollectBoxService(itemResources.CollectBoxes, itemResources.Items,
@@ -383,7 +388,7 @@ internal static class ServerRuntime
                     growthItems: itemResources.Items.CreatureGrowthItem, actionItems: itemResources.Items.ActionConsumable),levelUpItems,weaponSkinHandler,
                 new FatigueConsumableHandler(new Game.Characters.FatigueConsumableService(itemResources.Items, towns, clock), inventoryProjection, log), rentalHandler, creatureHandler,
                 new InventoryPeriodExtensionService(itemResources.Items, towns, clock), new InventoryMileageService(itemResources.Items, towns, clock),
-                new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock)),
+                new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, itemResources.Creatures, repository, clock), inventoryProjection, log),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),

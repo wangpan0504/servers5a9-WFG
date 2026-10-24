@@ -24,7 +24,9 @@ internal sealed class AvatarDyeHandler(InventoryAvatarDyeService dyes, Inventory
         }
         string? rejection = null;
         var result = context.BlocksTownActions ? InventoryResult.Reject(19) :
-            context.Session.PlanAndCommitInventory(character => dyes.Apply(character, request, out rejection), 19);
+            // 漂染改写着装颜色：当前橱窗已选中时同一事务回写，避免预设保留旧颜色。
+            context.Session.PlanAndCommitInventory(character =>
+                AvatarPresetService.SyncActive(dyes.Apply(character, request, out rejection)), 19);
         var committed = result.Receipt;
         var target = committed?.Index.Find(request.Target);
         log.Write("avatar_dye", new { Connection = context.Id, request.SourceSlot, request.AvatarSlot, result.Accepted,

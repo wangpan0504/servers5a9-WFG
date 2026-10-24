@@ -53,21 +53,41 @@ internal static class ClearAvatarTests
             result = Move(role, next.Position, original.Position);
             worn = result.Plan!.After.Find(original.Position)!;
             That(worn.Avatar!.ClearAvatarId == original.Core.ItemId && worn.Avatar.ClearAvatarSourceUid == original.Uid && worn.Avatar.Color1 == 12 &&
-                result.Plan.After.Find(next.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0 },
-                "连续克隆继承原始外观和染色，被退回包裹的克隆清除借用关系");
+                result.Plan.After.Find(next.Position)!.Avatar is { ClearAvatarId: var keptId, ClearAvatarSourceUid: var keptSource, Color1: 12 } &&
+                keptId == original.Core.ItemId && keptSource == original.Uid,
+                "连续克隆继承原始外观和染色，被退回包裹的克隆保留已复制的外观与来源");
             role = role with { Inventory = result.Plan.After };
             result = Move(role, original.Position, new(InventoryListType.Avatar, 2));
-            That(result.Plan!.After.Find(new(InventoryListType.Avatar, 2)) is { Avatar.ClearAvatarId: 0, Avatar.ClearAvatarSourceUid: 0, Avatar.Color1: 0 } &&
-                result.Plan.After.Find(original.Position) is null, "卸装清理所属关联，不留下假穿戴物品");
+            That(result.Plan!.After.Find(new(InventoryListType.Avatar, 2)) is { } unequipped &&
+                unequipped.Avatar is { ClearAvatarId: var unequippedId, ClearAvatarSourceUid: var unequippedSource, Color1: 12 } &&
+                unequippedId == original.Core.ItemId && unequippedSource == original.Uid &&
+                result.Plan.After.Find(original.Position) is null,
+                "卸装保留物品已复制的外观、来源与染色，不留下假穿戴物品");
+            role = role with { Inventory = result.Plan.After };
+            result = Move(role, new(InventoryListType.Avatar, 2), original.Position);
+            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: var reusedId, ClearAvatarSourceUid: var reusedSource, Color1: 12 } &&
+                reusedId == original.Core.ItemId && reusedSource == original.Uid,
+                "卸下再穿回空槽仍保留已复制的外观与来源，国服外观记在克隆物品本身");
             role = Role([bag with { Avatar = details with { ClearAvatarId = 300, ClearAvatarSourceUid = 99, Color1 = 12 } }]);
             result = Move(role, bag.Position, original.Position);
-            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0, Color2: 0 },
-                "全部装扮空槽包括武器均清除旧关联及借用染色，不借用职业默认EQU");
+            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: 300, ClearAvatarSourceUid: 99, Color1: 12, Color2: 8 },
+                "空槽穿戴保留物品自身已复制的外观、来源与染色，不借用职业默认EQU");
             role = role with { Inventory = result.Plan.After with { Items = result.Plan.After.Items.Add(next) } };
             result = Move(role, next.Position, original.Position);
-            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0 } &&
-                result.Plan.After.Find(next.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0 },
-                "用另一件克隆替换无来源克隆仍保持空关联，不制造默认物品来源");
+            That(result.Plan!.After.Find(original.Position)!.Avatar is { ClearAvatarId: 300, ClearAvatarSourceUid: 99 } &&
+                result.Plan.After.Find(next.Position)!.Avatar is { ClearAvatarId: 300, ClearAvatarSourceUid: 99 },
+                "无外观克隆替换有外观克隆时继承其关联，被替换的克隆保留自身外观");
+            var emptyWorn = Avatar(14, new(InventoryListType.Equipment, 3), Template(3, true).Id, details with { ClearAvatarId = 0 });
+            var emptyBag = Avatar(15, new(InventoryListType.Avatar, 0), Template(3, true).Id, details with { ClearAvatarId = 0 });
+            result = Move(Role([emptyBag, emptyWorn]), emptyBag.Position, emptyWorn.Position);
+            That(result.Plan!.After.Find(emptyWorn.Position)!.Avatar is { ClearAvatarId: 0, ClearAvatarSourceUid: 0 },
+                "无来源克隆替换无来源克隆仍保持空关联，不制造默认物品来源");
+            var lookBuyer = Avatar(16, new(InventoryListType.Avatar, 5), Template(3, true).Id,
+                details with { ClearAvatarId = 777, ClearAvatarSourceUid = 88 });
+            var realAvatar = Avatar(17, new(InventoryListType.Equipment, 3), Template(3).Id, details with { Color1 = 3 });
+            result = Move(Role([lookBuyer, realAvatar]), lookBuyer.Position, realAvatar.Position);
+            That(result.Plan!.After.Find(realAvatar.Position)!.Avatar is { ClearAvatarId: 777, ClearAvatarSourceUid: 88, Color1: 7 },
+                "已复制外观的克隆覆盖原装扮时保留自己的外观和染色，不重新借用");
             foreach (byte growth in new byte[] { 1, 0x11, 0x21 })
             {
                 role = Role([bag]) with { GrowType = growth };

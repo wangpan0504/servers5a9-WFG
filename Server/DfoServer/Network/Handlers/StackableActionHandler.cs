@@ -22,7 +22,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     CreatureChangeService? creatureChanges=null,LevelUpTicketHandler? levelUpTickets=null,
     Inventory.SkinStorageHandler? skinStorage=null,FatigueConsumableHandler? fatigueConsumables=null,
     RentalHandler? rental=null,CreatureHandler? creatures=null,InventoryPeriodExtensionService? periodExtensions=null,
-    InventoryMileageService? mileage=null,InventoryEquipmentPeriodChangeService? periodChanges=null) : IGameCommandModule
+    InventoryMileageService? mileage=null,InventoryEquipmentPeriodChangeService? periodChanges=null,
+    AvatarPresetHandler? avatarPresets=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     const uint PeriodExtensionAction = 69;
@@ -74,6 +75,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             return periodChanges is not null ? await ChangeEquipmentAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == CreatureSkinAction)
             return await UseCreatureSkinAsync(context, request);
+        if (request.Action == AvatarPresetService.AddCapacityAction)
+            return avatarPresets is not null ? await avatarPresets.UseCapacityAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == InventoryCreatureSkinService.AuraAction)
         {
             var sameSelection = CaptureAuraRejectionGuard(context);

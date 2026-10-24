@@ -114,6 +114,13 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             if (!ClearAvatarPackets.Sources(plan.Before, plan.BeforeIndex).AsSpan().SequenceEqual(sources))
                 await context.Notify(NotiPacketType.SRC_AVATAR_INFO_OF_CLONE, sources, "clear_avatar_sources_committed", CanSend);
         }
+        // 预设内容会因选择时重采样（PlanSelect）与当前橱窗的实时回写（SyncActive）而变化，客户端却只按
+        // 缓存的 0x063D/0x063F 记录重建装扮栏预览：缺少这条单条更新，切换橱窗时纸娃娃停在旧内容。
+        // 0x063F 只覆盖缓存、不重绘，也不会像整表那样把客户端当前行重置成槽0，可在任意提交后补发。
+        foreach (var presetSlot in plan.Before.AvatarPresets.ContentChangedSlots(current.Inventory.AvatarPresets))
+            if (current.Inventory.AvatarPresets.Find(presetSlot) is { } committedPreset)
+                await context.Notify(NotiPacketType.UPDATE_AVATAR_PRESET, AvatarPresetPackets.Update(committedPreset),
+                    "avatar_preset_content_committed", CanSend);
         bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
         bool weaponSkinChanged = plan.Before.Skins.Selected != current.Inventory.Skins.Selected;
         if (refreshEquipment && (equipmentChanged || weaponSkinChanged || plan.EquipmentSlotFlagsAfter is not null))

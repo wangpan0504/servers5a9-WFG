@@ -26,6 +26,23 @@ internal sealed partial class GameSession
         });
     }
 
+    // 选角时补建1号橱窗：仅当槽0不存在才写库，用当前穿戴作为基础预设；已有存档不做迁移。
+    public bool InitializeAvatarPresets(AvatarPresetService presets)
+    {
+        var captured = owner.Execute(() => (Character: Selected, SelectionEpoch, Ready, Phase));
+        if (captured.Character is not { } character) return false;
+        var result = presets.PlanEnsureBase(character);
+        if (!result.Accepted || result.Plan is not { Changed: true }) return false;
+        return owner.Execute(() =>
+        {
+            // 规划在锁外完成；回锁后重新核对选角快照，避免把结果提交给已被替换的角色。
+            if (Ready != captured.Ready || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch ||
+                !ReferenceEquals(Selected, character)) return false;
+            CommitInventory(character, result);
+            return true;
+        });
+    }
+
     public DfoServer.Game.Currency.AccountWallet AccountWallet() => owner.Execute(() =>
         Selected?.Inventory.AccountWallet ?? repository.LoadAccountWallet(owner));
     public InventoryResult DeleteInventory(InventoryDeleteRequest request, InventoryService inventory) => MutateInventory(

@@ -9,7 +9,9 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
     public int EffectMilliseconds { get; init; }
     public byte EffectMaintenance { get; init; }
     public ImmutableHashSet<int> AllowedTargets { get; init; } = [];
-    public bool AllowsPlace(string place) => Places.IsEmpty || Places.Contains("[all]") || Places.Contains(place);
+    // [village] 覆盖整座城镇（含赛丽亚房间），与强化/宠物地点判定同一口径；[seria room] 仍只限房间。
+    public bool AllowsPlace(string place) => Places.IsEmpty || Places.Contains("[all]") || Places.Contains(place) ||
+        place == "[seria room]" && Places.Contains("[village]");
 
     public static ActionConsumableDefinition? Parse(RecoveryConsumableFile file, ItemTemplate item)
     {
@@ -19,6 +21,8 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
             file.StructureDiagnostics.Length != 0 || raw.TypeDeclaration is null ||
             action is not ({ Label: "[rent point]" or "[add mileage]", Parameters: [> 0] } or
                 { Label: "[repair coupon]" or "[repair equipment]", Parameters.Count: 0 } or
+                // 装扮预设扩展券（CMD515 action216）：无参数，容量由所属玩法落库。
+                { Label: "[add avatar preset]", Parameters.Count: 0 } or
                 { Label: "[extend item period]", Parameters: [0, > 0] } or
                 { Label: "[creature transport stone]", Parameters: [>= 0] } or
                 { Label: "[change creature random]", Parameters.Count: >= 5 } or

@@ -50,6 +50,7 @@ internal static class SelfTestRunner
         AvatarCompoundTests.RunCore();
         AvatarDyeTests.RunCore();
         AvatarDisjointTests.RunCore();
+        AvatarPresetTests.RunCore();
         DisjointSpecialTests.RunCore();
         SkillSwitchInventoryTests.RunCore();
         FrameCrcTests.Run();

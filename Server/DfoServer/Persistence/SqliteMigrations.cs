@@ -191,6 +191,9 @@ internal static class SqliteMigrations
         new(83, "悲叹账号日次数与角色挑战账本", GriefTowerSchema.Upgrade),
         new(84, "悲叹冻结奖励与通关回执", GriefTowerSchema.UpgradeClear),
         new(85, "塔与祭坛原子入场与结算账本", DungeonSpecialEntrySchema.Upgrade),
+        // 装扮预设：默认容量1、上限6（客户端槽数组6项），扩展券CMD515 action216累加；
+        // 预设按槽位存JSON，槽位是身份且允许空洞，不另建平行在线状态。
+        new(86, "装扮预设容量与预设", AddAvatarPresetStateColumn),
     ];
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
@@ -395,6 +398,20 @@ internal static class SqliteMigrations
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='characters'";
         if (query.ExecuteScalar() is not string sql || !sql.Contains(SkinStorageStateColumn, StringComparison.Ordinal))
             throw new InvalidDataException("角色武器幻化列结构不兼容");
+    }
+
+    const string AvatarPresetStateColumn = "avatar_preset_state TEXT NOT NULL DEFAULT '{\"Capacity\":1,\"Presets\":[]}' CHECK(json_valid(avatar_preset_state) AND json_type(avatar_preset_state)='object')";
+
+    static void AddAvatarPresetStateColumn(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='avatar_preset_state'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE characters ADD COLUMN " + AvatarPresetStateColumn);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='characters'";
+        if (query.ExecuteScalar() is not string sql || !sql.Contains(AvatarPresetStateColumn, StringComparison.Ordinal))
+            throw new InvalidDataException("角色装扮预设列结构不兼容");
     }
 
     static void AddBlacklistCountColumn(SqliteConnection db, SqliteTransaction tx)
@@ -1832,6 +1849,7 @@ internal static class SqliteMigrations
         "SELECT devil_usage,stamina_until FROM characters LIMIT 0",
         "SELECT daily_booster_usage FROM characters LIMIT 0",
         "SELECT weapon_skin_state FROM characters LIMIT 0",
+        "SELECT avatar_preset_state FROM characters LIMIT 0",
         "SELECT [account],[currency_kind],[balance] FROM [account_currency_balances] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[currency_kind],[account_scope],[balance_before],[balance_after] FROM [currency_audit_log] LIMIT 0",
         "SELECT [account],[revision],[capacity],[gold] FROM [account_cargo] LIMIT 0",

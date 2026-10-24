@@ -10,7 +10,9 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
     PremiumContractCatalog? contracts = null)
 {
     public InventoryResult Move(Character character, InventoryMoveRequest request, bool loginWearRestatement = false) =>
-        InventoryMoveService.Plan(character, request, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts, loginWearRestatement);
+        // 已选中装扮预设时，穿戴/卸下在同一事务内实时回写该预设。
+        AvatarPresetService.SyncActive(InventoryMoveService.Plan(character, request, catalog,
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts, loginWearRestatement));
     public InventoryResult Sort(Character character, ItemKind kind, byte condition) => InventorySortService.Plan(character.Inventory, kind, condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     public InventoryResult Sort(Character character, InventorySortRequest request) => InventorySortService.Plan(character.Inventory,
         request.Kind, request.Condition, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), request.List);

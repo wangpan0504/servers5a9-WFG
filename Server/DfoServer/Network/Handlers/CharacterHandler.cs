@@ -1,8 +1,10 @@
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Projection;
+using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 using DfoServer.GameWorld.Items;
 
@@ -10,7 +12,8 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed class CharacterHandler(CharacterCatalog characters, TownProjection projection, ServerLog log, GoldLimitCatalog goldLimits,
     SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null, AdventureProjection? adventure = null,
-    ExpertJobScriptCatalog? expertJobs = null, AdventureWeeklyProjection? weekly = null) : IGameCommandModule
+    ExpertJobScriptCatalog? expertJobs = null, AdventureWeeklyProjection? weekly = null,
+    AvatarPresetProjection? avatarPresets = null, AvatarPresetService? avatarPresetService = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -45,14 +48,22 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
             if (initialization != DfoServer.Game.Skills.SkillLearningFailure.None)
                 log.Write("skill_info_unavailable", new { Connection = context.Id, Reason = initialization.ToString() });
         }
+        // 1号橱窗是基础预设：槽0缺失或从未选中过橱窗时按当前穿戴落库并记为当前橱窗。
+        bool createdBase = avatarPresetService is not null && context.Session.InitializeAvatarPresets(avatarPresetService);
         // 进入场景后不再保留返回选角阶段的重复 C2S8 标记。
         context.SelectionRosterPushed = false;
         var c = context.Session.Selected!;
         log.Write("selected", new { Connection = context.Id, Character = c.Id, c.Position, c.Return, c.Revision, ResumeTown = resumeTown });
+        if (createdBase)
+            log.Write("avatar_preset_base", new { Connection = context.Id, Character = c.Id,
+                Capacity = c.Inventory.AvatarPresets.Capacity, Presets = c.Inventory.AvatarPresets.Presets.Length,
+                Revision = c.Revision });
         await projection.EnterAsync(context, resumeTown);
         if (expertJobs is not null && context.Session.Selected is { ExpertJobType: >= 1 and <= 4 } selected)
             await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(selected, expertJobs, includeQualifications: true), "expert_job_info");
         context.Session.MarkReady();
+        // 预设容量与列表必须早于窗口打开；与每周配置同属就绪后、任务核对前的固定包序。
+        if (avatarPresets is not null) await avatarPresets.DeliverAsync(context);
         // 每周地下城固定在入城完成包之后、任务核对与同屏加入之前下发，包序稳定且不依赖其他投影结果。
         if (weekly is not null) await weekly.DeliverAsync(context, includeReset: true);
         await projection.ReconcileQuestsAsync(context);

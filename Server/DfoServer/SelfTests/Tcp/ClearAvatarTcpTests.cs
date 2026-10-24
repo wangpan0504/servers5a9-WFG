@@ -64,6 +64,8 @@ internal static class ClearAvatarTcpTests
                         "被覆盖时装退回原包裹格，先清旧克隆图标再完整回填，不能丢失原物品");
                     peer.Expect(0, 1449, Sources(row.Slot, 0));
                 }
+                // 换装改变1号橱窗内容：投影在Actor前按槽补发0x063F，客户端装扮栏缓存跟随新穿戴。
+                That(peer.Expect(0, 0x063F).Body[0] == 0, "换装后补发1号橱窗单条，记录槽位不变");
                 var actor = peer.Expect(0, 2).Body;
                 var player = peer.Expect(0, 2).Body;
                 Verify(actor, player, row.Name, row.Slot, row.Clone, appearance, color);
@@ -124,6 +126,7 @@ internal static class ClearAvatarTcpTests
             That(U32(peer.Expect(0, 1681).Body, 5) == uint.MaxValue && U32(peer.Expect(0, 1681).Body, 5) == cases[0].Clone,
                 "脱下装扮先清ACK图标再完整回填，保留图标effect但不发送获得播报14");
             peer.Expect(0, 1449, Sources(3, -1));
+            That(peer.Expect(0, 0x063F).Body[0] == 0, "脱下装扮同样补发1号橱窗单条");
             peer.Expect(0, 2); peer.Expect(0, 2);
             peer.Barrier();
         }

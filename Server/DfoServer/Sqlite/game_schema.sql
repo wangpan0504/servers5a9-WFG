@@ -237,6 +237,7 @@ CREATE TABLE characters(
     devil_usage TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(devil_usage) AND json_type(devil_usage)='array'),
     daily_booster_usage TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(daily_booster_usage) AND json_type(daily_booster_usage)='array'),
     weapon_skin_state TEXT NOT NULL DEFAULT '{"Owned":[],"Selected":0}' CHECK(json_valid(weapon_skin_state) AND json_type(weapon_skin_state)='object'),
+    avatar_preset_state TEXT NOT NULL DEFAULT '{"Capacity":1,"Presets":[]}' CHECK(json_valid(avatar_preset_state) AND json_type(avatar_preset_state)='object'),
     stamina_until INTEGER NOT NULL DEFAULT 0 CHECK(stamina_until>=0),
     UNIQUE(account,slot)
 );

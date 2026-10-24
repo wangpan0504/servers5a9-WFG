@@ -189,6 +189,9 @@ internal static partial class FormalDungeonTcpTests
                                 U32(delta, 5) == (toId == 0 ? uint.MaxValue : (uint)toId),
                                 "副本普通穿脱保留图标装载和完整返回装备，关闭获得通知但不重置房间");
                     }
+                    // 装扮与光环都在装备栏0..11内，换装改变当前橱窗内容：投影在Actor前按槽补发0x063F。
+                    if (family.Worn is 0 or 9 or 11)
+                        That(peer.Expect(0, 0x063F).Body[0] == 0, "副本装扮/光环变化补发1号橱窗单条");
                     byte[] player = peer.Expect(0, 2).Body;
                     if (family.Worn is 9 or 11 or 13 or 26 or 33)
                     {
@@ -294,6 +297,7 @@ internal static partial class FormalDungeonTcpTests
                     That(U32(avatarDelta, 5) == uint.MaxValue, "结算卸下光环先静默清除ACK包裹图标");
                     peer.Expect(0, 1681);
                 }
+                That(peer.Expect(0, 0x063F).Body[0] == 0, "结算光环穿脱补发1号橱窗单条");
                 byte[] actor = peer.Expect(0, 2).Body;
                 int nameWidth = checked((int)U32(actor, 123));
                 int count = actor[133 + nameWidth];

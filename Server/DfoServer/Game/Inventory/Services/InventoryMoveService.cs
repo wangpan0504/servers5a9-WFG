@@ -284,28 +284,27 @@ internal static class InventoryMoveService
             core.SealFlag != 0 && catalog.Get(core.ItemId).AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase))
             core = core with { SealFlag = 0 };
         var avatar = item.Avatar;
-        if (avatar is not null)
+        // 克隆外观（含转职光环装扮、梦幻克隆武器）记在物品自己身上：已经复制过外观的实例在卸下、
+        // 背包内换格或穿回空槽时保持原值，国服语义是卸下再穿不丢外观，装扮预设也依赖物品自身保留。
+        // 只有还没有外观的克隆穿到装备栏、且该位置原有装扮时，才复制原装扮的外观、来源与染色；
+        // 未复制过外观的克隆不携带借用染色，移动到任何位置都按无外观处理。
+        if (avatar is { ClearAvatarId: 0 })
         {
             var template = catalog.Get(core.ItemId);
-            bool borrow = template.CloneAvatar && template.BorrowAvatarAppearance && destination.List == InventoryListType.Equipment;
-            int appearance = 0;
-            long sourceUid = 0;
-            AvatarDetail? previousAppearance = null;
-            // 空槽无原件，所有部位都保持零来源，由客户端沿原有外观路径显示。
-            if (borrow && previous?.Avatar is { } prior)
+            if (template.CloneAvatar && template.BorrowAvatarAppearance &&
+                destination.List == InventoryListType.Equipment && previous?.Avatar is { } prior)
             {
                 bool previousClone = catalog.Get(previous.Core.ItemId).CloneAvatar;
-                appearance = previousClone ? prior.ClearAvatarId : previous.Core.ItemId;
-                sourceUid = previousClone ? prior.ClearAvatarSourceUid : previous.Uid;
-                previousAppearance = prior;
+                avatar = avatar with
+                {
+                    ClearAvatarId = previousClone ? prior.ClearAvatarId : previous.Core.ItemId,
+                    ClearAvatarSourceUid = previousClone ? prior.ClearAvatarSourceUid : previous.Uid,
+                    Color1 = prior.Color1,
+                    Color2 = prior.Color2
+                };
             }
-            avatar = avatar with
-            {
-                ClearAvatarId = appearance,
-                ClearAvatarSourceUid = sourceUid,
-                Color1 = template.CloneAvatar ? previousAppearance?.Color1 ?? 0 : avatar.Color1,
-                Color2 = template.CloneAvatar ? previousAppearance?.Color2 ?? 0 : avatar.Color2
-            };
+            else if (template.CloneAvatar)
+                avatar = avatar with { ClearAvatarSourceUid = 0, Color1 = 0, Color2 = 0 };
         }
         return item with { Position = destination, Core = core, Avatar = avatar };
     }

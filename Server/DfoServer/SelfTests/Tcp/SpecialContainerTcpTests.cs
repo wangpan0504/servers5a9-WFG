@@ -40,6 +40,9 @@ internal static class SpecialContainerTcpTests
             peer.Expect(1, 19, Ack(1, 0, 3, 0));
             var clear = peer.Expect(0, 1681).Body;
             That(clear.Length == 168 && clear[0] == 1 && U32(clear, 5) == uint.MaxValue && U32(clear, 126) == 30, "avatar unequipped-list clear keeps RAW suffix");
+            var presetSync = peer.Expect(0, 1599).Body;
+            That(presetSync.Length == 49 && presetSync[0] == 0 && presetSync[5] == 1,
+                "穿戴变化实时回写1号橱窗：0x063F单条在Actor之前补发且部位数为1");
             peer.Expect(0, 2);
             That(peer.Expect(0, 2).Body[126] == 1, "avatar ACK followed by Player carries worn avatar without generic Equipment delta");
             peer.Send(19, Move(7, 0, 63000, 3, 26, 0));
@@ -70,6 +73,8 @@ internal static class SpecialContainerTcpTests
             That(U32(peer.Expect(0, 1681).Body, 5) == uint.MaxValue, "时装卸下先无播报清除ACK图标，随后重新装载图标effect");
             var avatar = peer.Expect(0, 1681).Body;
             Bytes(avatar.AsSpan(5), wornAvatar!.AsSpan(2), "reverse unequip keeps avatar extra data");
+            var presetCleared = peer.Expect(0, 1599).Body;
+            That(presetCleared is [0, 0, 0, 0, 0, 0], "卸下全部时装后1号橱窗同步为空部位");
             CreatureActor(peer.Expect(0, 2).Body, 63000, "时装脱下不会清空仍穿戴的宠物");
             peer.Expect(0, 2);
             peer.Send(19, Move(7, 5, 0, 3, 26, 63000));

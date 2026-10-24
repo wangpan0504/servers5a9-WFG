@@ -171,6 +171,8 @@ internal static class AuraSkinTcpTests
             delta = peer.Expect(0, 1681).Body;
         }
         That(delta[0] == 1, "装扮穿脱保留完整差量和图标effect，不走获得播报");
+        // 光环在装备栏0..11内，换装改变当前橱窗内容，投影在Actor前补发0x063F。
+        That(peer.Expect(0, 0x063F).Body[0] == 0, "城镇光环装卸后补发1号橱窗单条，装扮栏缓存跟随穿戴");
         That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1,
             "城镇光环装卸按Actor再Player刷新外观和真实槽");
         peer.Barrier();
