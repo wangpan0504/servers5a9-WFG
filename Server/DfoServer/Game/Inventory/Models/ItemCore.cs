@@ -7,6 +7,7 @@ internal readonly record struct ChronicleOption(int Id, byte Job, byte GrowType,
 internal readonly record struct RandomOption(byte Type, byte Value1, byte Value2);
 // 尚未恢复效果语义的字段保留独立类型；普通创建置零，移动和保存必须完整保留。
 internal readonly record struct ItemExtension(byte Flag, uint Value);
+internal sealed record EpicExchangeOrigin(int Version, int SourceItemId);
 
 internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
 {
@@ -56,6 +57,8 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
     // 租赁实例复用普通 Equipment 的持久化与穿脱链路；该标记只用于
     // S2C988 面板筛选和物品行期限投影，不占用客户端物品核心字段。
     public bool IsRental { get; init; }
+    // 服务端装备实例来源；旧 JSON 为 null，不从模板或未知 wire 位推断。
+    public EpicExchangeOrigin? EpicExchangeOrigin { get; init; }
     [JsonIgnore] public byte Upgrade => (byte)(Attr & 0x1F);
     [JsonIgnore] public bool IsStackable => Kind is ItemKind.Consumable or ItemKind.Material or ItemKind.Quest or
         ItemKind.CreatureConsumable or ItemKind.Emblem or ItemKind.Profession or ItemKind.GuardianGem;
@@ -66,7 +69,8 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
         // 宠物复用 SealFlag 保存类型，不套用普通封装的布尔约束。
         if (ItemId <= 0 || !Enum.IsDefined(Kind) || Value < 0 || IsStackable && Value == 0 || EmblemSocketCount > 2 || SortLockFlag > 1 ||
             Kind != ItemKind.Creature && SealFlag > 1 || Chronicle0.Id == 0 && Chronicle1.Id != 0 ||
-            Random0.Type == 0 && (Random1.Type != 0 || Random2.Type != 0) || Random1.Type == 0 && Random2.Type != 0)
+            Random0.Type == 0 && (Random1.Type != 0 || Random2.Type != 0) || Random1.Type == 0 && Random2.Type != 0 ||
+            EpicExchangeOrigin is { } origin && (Kind != ItemKind.Equipment || origin.Version != 1 || origin.SourceItemId <= 0))
             throw new InvalidDataException("无效物品核心");
     }
 }

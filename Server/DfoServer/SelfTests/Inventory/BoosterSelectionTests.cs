@@ -23,6 +23,7 @@ internal static class BoosterSelectionTests
 {
     public static void RunCore()
     {
+        BoosterEpicExchangeTests.RunCore();
         int checks = Count;
         RunCustomAbilityGradeDeclarations();
         const string empty = "[default select]\n0\n[booster equipment upgrade]\n10\n[stackable]\n[/stackable]";
@@ -155,6 +156,8 @@ internal static class BoosterSelectionTests
         RunRealTemplateSelection(towns, itemResources, now);
         BoosterNativeSelectionTests.RunResources(towns, characters, itemResources, now);
         RunDisjointInstanceSelection(towns, itemResources, now);
+        BoosterEpicExchangeSkinPropagationTests.RunResources(towns, characters, itemResources);
+        BoosterEpicExchangeTests.RunResources(towns, itemResources, now);
         var creatureCategory = Parse("0 0\n[creature]\n400990444 1 400990445 1\n[/creature]").Selection!.Categories.Single();
         That(creatureCategory.PendingRule is null && creatureCategory.Rewards.All(row =>
                 row.NativeCreatureSelectionRow && row.RequiredKind is null),

@@ -23,6 +23,7 @@ internal static class MailboxTests
     {
         int before = TestCheck.Count;
         var material = TradableMaterial(pvf, resources);
+        RunEpicExchangeOriginPropagation(towns, characters, resources, material);
         using var f = new Fixture(towns, characters, resources, material);
         var original = f.Sender.Selected!;
         var source = original.Inventory.Find(new(InventoryListType.Main, 9))!;
@@ -168,6 +169,34 @@ internal static class MailboxTests
         Console.WriteLine($"PASS {TestCheck.Count - before} 实际资源邮件用例、grant、容量与会话规划断言");
     }
 
+    public static void RunEpicExchangeOriginPropagation(TownCatalog towns, CharacterCatalog characters,
+        ItemResources resources, ItemTemplate material)
+    {
+        using var fixture = new Fixture(towns, characters, resources, material, withEpicOrigin: true);
+        var sender = fixture.Sender.Selected!;
+        var source = sender.Inventory.Find(new(InventoryListType.Main, 9))!;
+        TestCheck.That(source.Core.ItemId == 18400 && source.Core.EpicExchangeOrigin is { Version: 1, SourceItemId: 490705251 },
+            "来源邮件前置复用现有实际可邮寄装备18400与持久UID，不修改模板交易资格");
+        var request = new MailboxSendRequest("MailRecv", 0,
+            [new(0, source.Position.Index, source.Core.ItemId, 1)], "装备来源传播");
+        var sent = fixture.Sender.SendMail(fixture.Service, request);
+        TestCheck.That(sent.Accepted && fixture.Sender.Selected!.Inventory.Items.All(item => item.Uid != source.Uid),
+            "合法来源装备真实寄送成功且原库存移除，不能新增禁邮寄");
+        var message = fixture.Receiver.OpenMailbox(fixture.Service).Page.Entries.Single();
+        var attachment = message.Attachments.Single();
+        TestCheck.That(attachment.Item.Uid == source.Uid && attachment.Item.Core == source.Core,
+            "邮箱持久附件保持整件UID、完整Core与装备来源");
+        var claimed = fixture.Receiver.ClaimMail(fixture.Service, [attachment.ClaimId]);
+        TestCheck.That(claimed.Accepted, "来源装备经真实邮箱领取提交成功");
+        var received = fixture.Receiver.Selected!.Inventory.Items.Single(item => item.Uid == source.Uid);
+        var persisted = fixture.Repository.LoadCharacter(fixture.ReceiverOwner, 0).Inventory.Items.Single(item => item.Uid == source.Uid);
+        TestCheck.That(received.Core == source.Core && persisted.Core == source.Core &&
+            received.Core.EpicExchangeOrigin == source.Core.EpicExchangeOrigin,
+            "收件人在线及Repository实际重读均保留同UID来源与全部核心字段");
+        TestCheck.That(fixture.Receiver.ClaimMail(fixture.Service, [attachment.ClaimId]).Error == MailboxError.MailMissing,
+            "来源邮件已领取重放不得复制实例");
+    }
+
     sealed class Fixture : IDisposable
     {
         readonly string root = Path.Combine(Path.GetTempPath(), "S5A9-mail-resource-" + Guid.NewGuid().ToString("N"));
@@ -178,13 +207,14 @@ internal static class MailboxTests
         public GameSession Sender { get; }
         public GameSession Receiver { get; }
         public MailboxService Service { get; }
-        public Fixture(TownCatalog towns, CharacterCatalog characters, ItemResources resources, ItemTemplate material)
+        public Fixture(TownCatalog towns, CharacterCatalog characters, ItemResources resources, ItemTemplate material, bool withEpicOrigin = false)
         {
             SenderOwner = Owners.Acquire("mail_sender", () => { });
             ReceiverOwner = Owners.Acquire("mail_receiver", () => { });
             Repository = new(Path.Combine(root, "game.db"));
             var equipment = InventoryRewardGrantService.Create(resources.Items.Get(18400)) with { Attr = 7, EnchantCardId = 123,
-                EnchantUpgrade = 1, AmplifyType = 1, AmplifyValue = 25, Rune = 3, Random0 = new(1, 2, 3), RandomChangedIndex = 255 };
+                EnchantUpgrade = 1, AmplifyType = 1, AmplifyValue = 25, Rune = 3, Random0 = new(1, 2, 3), RandomChangedIndex = 255,
+                EpicExchangeOrigin = withEpicOrigin ? new EpicExchangeOrigin(1, 490705251) : null };
             Repository.Create(SenderOwner, new("MailSender", towns.Room, towns.InitialReturn) { Level = 60,
                 Inventory = new([new(0, new(InventoryListType.Main, 9), equipment),
                     new(0, new(InventoryListType.Main, 121), InventoryRewardGrantService.Create(material, 10))], Gold: 1_000_000) });
