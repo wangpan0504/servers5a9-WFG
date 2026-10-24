@@ -65,7 +65,7 @@ internal static class ChatRequests
         if (textLength > (uint)(body.Length - HeaderLength))
             return false;
         send = new(type, layer, arg, textLength, ChatText.Encoding.GetString(body.Slice(HeaderLength, (int)textLength)));
-        if (type is 1 or 36)
+        if (type is 1 or 36 or 41)
         {
             int at = HeaderLength + (int)textLength;
             if (body.Length < at + 5) return false;

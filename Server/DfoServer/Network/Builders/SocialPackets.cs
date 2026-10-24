@@ -33,7 +33,8 @@ internal static class SocialPackets
         {
             var p = row.Link.Person;
             // 023B4E48写角色名到行+0C，023B4ECE写冒险团昵称到+54；00AEB590按+54覆盖同一好友。
-            w.Write(row.Actor); w.Write(row.Server); PacketEncoding.WriteString(w, p.Name);
+            // 012B4CA5把行首u16用于大区名称查询，不是角色Actor；本服大区与频道服务器来自同一身份。
+            w.Write((ushort)row.Server); w.Write(row.Server); PacketEncoding.WriteString(w, p.Name);
             w.Write(p.Level); w.Write(p.Job); w.Write(p.Grow); w.Write(row.Channel);
             PacketEncoding.WriteString(w, p.Adventure); PacketEncoding.WriteString(w, row.Link.Memo);
             // 023B4F39写行+CC；012B2045/2058要求频道非零且此标记为0才绘制在线角色。

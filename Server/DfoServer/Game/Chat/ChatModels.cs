@@ -113,7 +113,10 @@ internal sealed record ChatRecipient(string Account, ushort CharacterId, long? G
 internal sealed record MegaphoneText(string Speaker, string Text);
 
 /// <summary>按角色名投递的悄悄话或1vs1消息，接收方身份在发送前复验。</summary>
-internal sealed record NamedChatMessage(byte Mode, byte Status, string Name, byte Server, string Text, string Recipient);
+internal sealed record NamedChatMessage(byte Mode, byte Status, string Name, byte Server, string Text, string Recipient)
+{
+    public string AdventureName { get; init; } = "";
+}
 
 /// <summary>
 /// 一次聊天投递的领域描述，不含 opcode 与字节布局（Game 层不引用 Network，由 Network/Projection 翻译）：

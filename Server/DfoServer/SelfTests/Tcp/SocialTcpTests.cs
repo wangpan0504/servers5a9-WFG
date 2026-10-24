@@ -37,15 +37,25 @@ internal static class SocialTcpTests
             That(U32(friends, 4) == 1 && fixture.Query("SELECT owner_id,target_id,kind FROM character_social_links") is [[long, long, 0L]],
                 "290提交后回真实全量好友且只建立单向边");
             beta.Barrier();
-            byte[] Named(byte mode, string value) => Build(w =>
+            Execute("UPDATE account_adventures SET name=CASE account WHEN 'sociala' THEN 'TeamA' ELSE 'TeamB' END,name_initialized=1");
+            byte[] Named(byte mode, string value, string target = "SocialB", byte server = 2) => Build(w =>
             {
-                w.Write(mode); w.Write((ushort)1); w.Write(0u); WriteName(w, value); WriteName(w, "SocialB"); w.Write((byte)2);
+                w.Write(mode); w.Write((ushort)1); w.Write(0u); WriteName(w, value); WriteName(w, target); w.Write(server);
             });
             alpha.Send(17, Named(36, "一对一"));
             beta.Expect(0, 65, Build(w => { w.Write((byte)36); w.Write((byte)0); WriteName(w, "SocialA"); w.Write((byte)2);
-                WriteName(w, "一对一"); WriteName(w, "SocialB"); }));
+                WriteName(w, "一对一"); WriteName(w, "TeamA"); WriteName(w, "SocialB"); }));
+            beta.Send(17, Named(36, "一对一回复", "SocialA"));
+            alpha.Expect(0, 65, Build(w => { w.Write((byte)36); w.Write((byte)0); WriteName(w, "SocialB"); w.Write((byte)2);
+                WriteName(w, "一对一回复"); WriteName(w, "TeamB"); WriteName(w, "SocialA"); }));
             alpha.Send(17, Named(1, "悄悄话"));
-            beta.Expect(0, 65, Build(w => { w.Write((byte)1); w.Write((byte)0); WriteName(w, "SocialA"); w.Write((byte)2); WriteName(w, "悄悄话"); }));
+            beta.Expect(0, 65, Build(w => { w.Write((byte)1); w.Write((byte)0); WriteName(w, "SocialA"); w.Write((byte)2);
+                WriteName(w, "悄悄话"); WriteName(w, "TeamA"); }));
+            beta.Send(17, Named(41, "悄悄话回复", "SocialA"));
+            alpha.Expect(0, 65, Build(w => { w.Write((byte)41); w.Write((byte)0); WriteName(w, "SocialB"); w.Write((byte)2);
+                WriteName(w, "悄悄话回复"); WriteName(w, "TeamB"); }));
+            beta.Send(17, Named(41, "异服拒绝", "SocialA", 5)); beta.Barrier();
+            alpha.NoFrame(150, "名字回复仍拒绝其他服务器，不能按同名角色误投", (0, 65));
             beta.Send(118, BlockBody("SocialA", "勿扰"));
             var added = beta.Expect(1, 118).Body;
             That(added[0] == 1 && U32(added, 1) == 7 && DecodeName(added, 5, 7) == "SocialA", "黑名单新增按当前客户端独立ACK布局回真实对象");
@@ -60,7 +70,6 @@ internal static class SocialTcpTests
             beta.NoFrame(150, "被拉黑者的1对1消息不投递", (0, 65));
             beta.Send(119, BlockBody("SocialA", ""));
             beta.Expect(1, 119, Build(w => { w.Write((byte)1); w.Write(1u); WriteName(w, "SocialA"); })); Refresh(beta, 0);
-            Execute("UPDATE account_adventures SET name=CASE account WHEN 'sociala' THEN 'TeamA' ELSE 'TeamB' END,name_initialized=1");
             alpha.Send(1439, Build(w => { WriteName(w, "TeamB"); WriteName(w, "这是申请留言不是角色名"); w.Write((byte)1); WriteName(w, "发起方备注"); }));
             alpha.Expect(1, 1439, Build(w => { w.Write((byte)1); WriteName(w, "TeamB"); w.Write((byte)1); WriteName(w, "发起方备注"); }));
             byte[] Request(bool outgoing, string name) => Build(w =>
@@ -161,7 +170,8 @@ internal static class SocialTcpTests
             That(count == 1, "同一账号换角、离线及重登始终只有一条冒险团好友");
         for (int i = 0; i < count; i++)
         {
-            reader.ReadUInt16(); reader.ReadByte();
+            ushort homeServer = reader.ReadUInt16(); byte channelServer = reader.ReadByte();
+            That(homeServer == 2 && channelServer == 2, "不同角色、换角和离线均使用相同真实大区，不能写ActorID");
             string character = Name(); reader.ReadBytes(3);
             ushort channel = reader.ReadUInt16(); string adventure = Name(); Name();
             reader.ReadUInt32(); byte unavailable = reader.ReadByte(); reader.ReadBytes(2);

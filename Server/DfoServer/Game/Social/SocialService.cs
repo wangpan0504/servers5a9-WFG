@@ -17,11 +17,11 @@ internal sealed class SocialService(ISocialStore store, OnlineSessionDirectory o
         {
             var found = current.FirstOrDefault(row => account ? row.Account == link.Person.Account : row.CharacterId == link.Person.Id);
             var peer = found is null ? null : online.Find(found.Account)?.PublicCharacter(found.CharacterId);
-            if (peer is null) return new(link, 0, identity.Channel.ServerIndex, 0, false);
+            if (peer is null) return new(link, identity.Channel.ServerIndex, 0, false);
             var c = peer.Character;
             var person = link.Person with { Id = c.Id, Name = c.Name, Level = c.Level, Job = c.Job, Grow = c.GrowType,
                 Adventure = peer.AdventureName, AdventureLevel = peer.AdventureLevel };
-            return new(link with { Person = person }, c.Id, peer.Channel.ServerIndex, peer.Channel.Number, true);
+            return new(link with { Person = person }, peer.Channel.ServerIndex, peer.Channel.Number, true);
         }
         return new(characters.Select(link => Row(link, false)).ToArray(), accounts.Select(link => Row(link, true)).ToArray(),
             store.AccountRequests(actor.Owner.Account), actor.IsCurrent);
