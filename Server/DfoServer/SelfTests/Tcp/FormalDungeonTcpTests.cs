@@ -389,6 +389,7 @@ internal static partial class FormalDungeonTcpTests
                     (1,1,58549),(2,1,58551),(2,0,58552),(3,0,58553) };
                 var visited = new HashSet<uint>();
                 int deaths = 0;
+                int usedBefore = Convert.ToInt32(fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0",peer.Id)[0][0]);
                 for (int room = 0; room < route.Length; room++)
                 {
                     if (room != 0)
@@ -401,6 +402,12 @@ internal static partial class FormalDungeonTcpTests
                         (revisit ? startMap.Length == 16 && startMap[13] == 0 : U32(startMap,14) == route[room].Map),
                         "达成未交的重入及再挑战均沿真实普通地图，回访不重建演员");
                     Load(peer);
+                    byte[] fatigue = peer.Expect(0,36).Body;
+                    var storedFatigue = fixture.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary FROM character_fatigue WHERE character_id=$p0",peer.Id).Single();
+                    Bytes(fatigue,Build(writer => { foreach (object value in storedFatigue) writer.Write(Convert.ToUInt16(value)); }),
+                        "普通循环逐房疲劳通知对应已提交完整五字段");
+                    That(Convert.ToInt32(storedFatigue[0]) == usedBefore + visited.Count,
+                        "普通循环每张新图扣一点，回访不重复扣除");
                     var rows = Enumerable.Range(0,revisit ? 0 : startMap[18]).Select(index => 19 + index * 22)
                         .Where(offset => startMap[offset + 13] != 9 && startMap[offset + 14] == 0)
                         .OrderBy(offset => startMap[offset + 13] == 3);
@@ -468,6 +475,9 @@ internal static partial class FormalDungeonTcpTests
             var map = Enter(peer);
             That(U16(map, 25) >= nextKey, "重登及服务重启不复用旧实例怪key");
             Load(peer);
+            That(U16(peer.Expect(0,36).Body,0) == 13 &&
+                fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[13L]],
+                "真实重启保留两轮普通六房费用，重入新起点只再扣一点");
             peer.Send(39, oldReport!);
             peer.Barrier();
             That(Experience(fixture, peer.Id) == experience, "新实例上轮死亡key只审计忽略，不增加资产经验");
