@@ -215,6 +215,8 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             if (parent.SourceOrdinal is < 0 or > sbyte.MaxValue || parent.RawValues.Count != 5 || parent.RawValues[0] != parent.ObjectId ||
                 parent.RawValues[4] != parent.Children.Count)
                 throw new NotSupportedException("特殊父对象身份或关联范围未支持");
+            // 02A216D7..02A216E4在父对象加载为空时返回；目录确认的空行不生成type9，也不占用key。
+            if (parent.IsEmptyPlaceholder) continue;
             // 带 [hellparty] 的柱子由地图文件在客户端本地生成。再发一条 type9 会叠出第二根柱子，打到的也不是地图脚本那根。
             if (!parent.Children.Any(child => child.Kind == "[hellparty]"))
                 objects.Add(new(Allocate(), parent));
