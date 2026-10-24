@@ -1,5 +1,6 @@
 using System.Net;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Caching;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.Game.Town;
@@ -71,11 +72,12 @@ internal static class UserStateTests
             var towns = new TownCatalog(new() { [(1, 0)] = new(1, 0, 1, [], [], [], point, map, [], []) },
                 point, point, new(0, [], []), [], new Dictionary<uint, uint[]>());
             var repository = new CharacterRepository(Path.Combine(root, "game.db"));
-            var owners = new AccountOwners();
+            using var memory = new GameCache();
+            var owners = new AccountOwners(memory);
             using var owner = owners.Acquire("states", () => { });
             repository.Create(owner, new("StateRole", point, point));
             var session = new GameSession(repository, towns, owner, entry: new(new(2, 19), 23, "[raid]"));
-            var online = new OnlineSessionDirectory();
+            var online = new OnlineSessionDirectory(memory);
             online.Register(owner, session);
             That(online.Snapshot().Length == 0, "诊断查询不把未选角连接伪装成在线角色");
             That(session.ChannelEntry is { Identity.Number: 19, Type: 23, Group: "[raid]" } && session.GetState() == UserState.CharacterSelect,

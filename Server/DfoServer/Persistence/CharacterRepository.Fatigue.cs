@@ -98,28 +98,16 @@ internal sealed partial class CharacterRepository
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id);
         command.Parameters.AddWithValue("$account", owner.Account);
-        command.Parameters.AddWithValue("$instance", identity.InstanceId.ToString("N"));
-        command.Parameters.AddWithValue("$map", snapshot.CurrentMap.Id);
-        command.CommandText = """
-            SELECT task_attempt,rule_id,before_revision,revision,before_state,after_state FROM character_dungeon_fatigue_receipts
-            WHERE character_id=$id AND account=$account AND instance_id=$instance AND map_id=$map
-            """;
-        using (var reader = command.ExecuteReader())
+        var receipts = DungeonTransientReceipts.Get(owner, identity);
+        if (receipts.Fatigue.TryGetValue(snapshot.CurrentMap.Id, out var saved) && saved.Committed)
         {
-            if (reader.Read())
-            {
-                var before = JsonSerializer.Deserialize<CharacterFatigueState>(reader.GetString(4));
-                var after = JsonSerializer.Deserialize<CharacterFatigueState>(reader.GetString(5));
-                if (reader.GetInt64(0) != identity.TaskAttempt || reader.GetString(1) != rule ||
-                    before is null || after != before.ConsumeOrdinaryRoom() || reader.GetInt64(3) != reader.GetInt64(2) + 1)
-                    throw new InvalidDataException("房间扣点账本的规则、身份或原序owner损坏");
-                if (current.Revision == expected.Revision && current.Fatigue == state)
-                    return expected; // 同一实例再次经过已付费房间，不推进revision。
-                if (expected.Revision != reader.GetInt64(2) || current.Revision != reader.GetInt64(3) ||
-                    before != state || current.Fatigue != after)
-                    throw new InvalidOperationException("已提交扣点的原快照精确恢复失效");
-                return current;
-            }
+            if (saved.Rule != rule || saved.After != saved.Before.ConsumeOrdinaryRoom())
+                throw new InvalidDataException("房间扣点缓存的原始规则或余额变化");
+            if (current.Revision == expected.Revision && current.Fatigue == state) return expected;
+            if (expected.Revision != saved.BeforeRevision || current.Revision != saved.Revision ||
+                saved.Before != state || current.Fatigue != saved.After)
+                throw new InvalidOperationException("已提交扣点的原快照精确恢复失效");
+            return current;
         }
         if (current.Revision != expected.Revision || current.Fatigue != state)
             throw new InvalidOperationException("扣点的原revision或疲劳owner已变化");
@@ -133,20 +121,11 @@ internal sealed partial class CharacterRepository
         command.CommandText = "UPDATE character_fatigue SET used=$used,remaining=$remaining WHERE character_id=$id AND account=$account";
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("首次房间扣点缺少原疲劳owner");
-        command.Parameters.AddWithValue("$attempt", identity.TaskAttempt);
-        command.Parameters.AddWithValue("$epoch", identity.Epoch);
-        command.Parameters.AddWithValue("$generation", owner.Generation);
-        command.Parameters.AddWithValue("$rule", rule);
-        command.Parameters.AddWithValue("$before", JsonSerializer.Serialize(state));
-        command.Parameters.AddWithValue("$after", JsonSerializer.Serialize(target));
-        command.CommandText = """
-            INSERT INTO character_dungeon_fatigue_receipts(character_id,account,instance_id,task_attempt,map_id,epoch,generation,
-              rule_id,before_revision,revision,before_state,after_state)
-            VALUES($id,$account,$instance,$attempt,$map,$epoch,$generation,$rule,$revision,$revision+1,$before,$after)
-            """;
-        command.ExecuteNonQuery();
         var committed = Require(db, tx, owner.Account, expected.Name);
+        var cached = new DungeonTransientFatigue(rule, expected.Revision, state, target);
+        receipts.Fatigue[snapshot.CurrentMap.Id] = cached;
         tx.Commit();
+        cached.Committed = true;
         return committed;
     });
 }

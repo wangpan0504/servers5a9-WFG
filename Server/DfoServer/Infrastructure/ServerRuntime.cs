@@ -1,6 +1,7 @@
 using DfoServer.Development.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Caching;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Development;
@@ -67,8 +68,9 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Daily retained boosters", State = "complete",
             SupportedTemplates = dailyBoosterTemplates, ScannedTemplates = itemResources.Boosters.DailyRetainedScannedTemplates,
             ElapsedMs = Math.Round(boosterTimer.Elapsed.TotalMilliseconds, 3) });
-        var owners = new AccountOwners();
-        var online = new OnlineSessionDirectory();
+        var gameCache = new GameCache();
+        var owners = new AccountOwners(gameCache);
+        var online = new OnlineSessionDirectory(gameCache);
         // GM notice 的公告出口：与 GM 聊天帧注入共用在线连接目录，帧内编码由 ServerNoticePackets 负责。
         var noticeSender = new GmNoticeSender(online);
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
@@ -428,7 +430,7 @@ internal static class ServerRuntime
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
         Func<CancellationToken, Task>? management = gmCommands is null && gmWeb is null ? null : RunManagement;
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
-        return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native);
+        return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache);
 
         async Task RunManagement(CancellationToken stop)
         {

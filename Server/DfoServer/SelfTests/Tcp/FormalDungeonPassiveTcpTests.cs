@@ -61,8 +61,8 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(43, pickup);
             peer.Expect(1, 43, [0, 19, 0]);
             peer.Barrier();
-            That(Convert.ToInt32(fixture.Query("SELECT count(*) FROM character_dungeon_passive_pickups WHERE character_id=$p0 AND ground_key=$p1", peer.Id, key)[0][0]) == 1,
-                "真实TCP同key重复拾取仅保留一次已提交回执");
+            That(Convert.ToInt32(fixture.Query("SELECT count(*) FROM character_dungeon_passive_pickups WHERE character_id=$p0", peer.Id)[0][0]) == 0,
+                "真实TCP同key重复拾取由当前实例缓存拒绝，不新增SQL临时回执");
             picked++;
         }
         That(Convert.ToInt32(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0", peer.Id)[0][0]) == 0,

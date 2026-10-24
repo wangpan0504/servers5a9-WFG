@@ -106,7 +106,7 @@ internal sealed partial class CharacterRepository
                     reader.GetInt64(7) != plan.Experience || reader.GetInt64(8) != expected.Revision || reader.GetString(9) != snapshot)
                     throw new InvalidDataException("同一训练事件的来源或奖励发生变化");
                 reader.Close();
-                if (plan.Death is { } original) VerifyDungeonLoot(db, tx, owner.Account, expected.Id, original.Death.EventId, plan.Loot);
+                if (plan.Death is { } original) VerifyCachedDungeonLoot(owner, expected.Id, original.Death.EventId, plan.Loot);
                 tx.Commit();
                 return new TutorialCheckpointResult(current, true);
             }
@@ -157,7 +157,7 @@ internal sealed partial class CharacterRepository
         if (plan.Death is { } death)
         {
             WriteDungeonGrowthReceipt(db, tx, owner, expected, death, plan.DeathReward!, plan.Growth!, proficiencyGained);
-            SaveDungeonLoot(db, tx, owner.Account, expected, death, plan.Loot);
+            CacheDungeonLoot(owner, expected, death, plan.Loot);
         }
         command.Parameters["$revision"].Value = checked(expected.Revision + 1);
         command.CommandText = """

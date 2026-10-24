@@ -11,6 +11,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Inventory.Models;
 using System.Security.Cryptography;
 using System.Collections.Immutable;
+using DfoServer.Game.Caching;
 
 namespace DfoServer.Game.Session;
 
@@ -22,6 +23,7 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? PrepareDrops,
         ImmutableDictionary<ushort, DungeonDropGenerationPlan> DropPlans)
     {
+        public uint NextObjectKey { get; set; }
         public bool HasPendingFatigue { get; set; }
         public DungeonInventoryDiscardPreparation? PendingInventoryDiscard { get; set; }
         public bool CharacterDead { get; set; }
@@ -65,7 +67,20 @@ internal sealed partial class GameSession
         // 实验性：波次怪"带奖励"的掉落计划；死亡时若它是本波次最后一只存活者则用它替换 DropPlans 里的普通计划。
         public ImmutableDictionary<ushort, DungeonDropGenerationPlan> HellRewardPlans { get; init; } = ImmutableDictionary<ushort, DungeonDropGenerationPlan>.Empty;
     }
-    FormalDungeon? formalDungeon;
+    static readonly GameCacheSlot<FormalDungeon> dungeonCacheSlot = new();
+    FormalDungeon? formalDungeon
+    {
+        get => gameCache.Get(dungeonCacheSlot);
+        set
+        {
+            var previous = gameCache.Get(dungeonCacheSlot);
+            if (previous is not null && (value is null || previous.Run.Snapshot.Identity.InstanceId != value.Run.Snapshot.Identity.InstanceId))
+                DungeonTransientReceipts.Forget(owner, previous.Run.Snapshot.Identity);
+            if (value is null) gameCache.Remove(dungeonCacheSlot);
+            else gameCache.Set(dungeonCacheSlot, value);
+        }
+    }
+    internal int CachedGameContexts => gameCache.Count;
     internal int? FormalEnteredDungeonId => formalDungeon is null ? null : checked((int)formalDungeon.Entry.DungeonId);
     bool PreservesDungeonConsumables => Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon?.Entry.HasFreeCombatConsumption == true;
@@ -314,8 +329,8 @@ internal sealed partial class GameSession
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
-        // 延续游标可避免相邻普通挑战立即复用编号；只有新实例的完整准备超界时重试。
-        // 重试不写库、不安装Run、不发送包；历史账本按实例隔离，原尝试号仍单调递增。
+        // 保留 #693 的兼容游标和溢出重试；这个数值只选择新实例编号范围，不恢复旧房间或地面对象。
+        // 只有完整准备超界才重试，沿用实例隔离的历史账本和单调尝试号。
         uint first = state.NextObjectKey;
         for (int attempt = 0; attempt < 2; attempt++)
         {
@@ -508,7 +523,7 @@ internal sealed partial class GameSession
         var ground = new DungeonGroundState(run!, route.Rooms, groundReservations, drops is null ? "" : "monster/monster.lst", passiveGrounds);
         var dungeon = new FormalDungeon(run!.Entry, route, run, authority, mapSeed,
             ground, pools, draw ?? RandomNumberGenerator.GetInt32, prepareDrops, dropPlans.ToImmutable())
-            { QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, HellRewardPlans = hellRewardPlans.ToImmutable(),
+            { NextObjectKey = next, QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, HellRewardPlans = hellRewardPlans.ToImmutable(),
                 CrackRewards = crackRewards, AltarStartedTimestamp = (timeProvider ?? TimeProvider.System).GetTimestamp() };
         return new(expected,epoch,dungeon,next);
     }

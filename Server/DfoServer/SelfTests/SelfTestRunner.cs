@@ -155,6 +155,7 @@ internal static class SelfTestRunner
         ChannelCatalogTests.Run();
         await AccountConcurrencyTests.RunAsync();
         await UserStateTests.RunCoreAsync();
+        GameCacheTests.RunCore();
         await AccountDatabaseConcurrencyTests.RunAsync();
         await SqliteBusyRetryTests.RunAsync();
         await SqliteWriteGateTests.RunAsync();

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
@@ -10,13 +9,13 @@ namespace DfoServer.Persistence;
 
 internal sealed partial class CharacterRepository
 {
-    static void SaveDungeonLoot(SqliteConnection db, SqliteTransaction tx, string account, Character expected,
+    static void CacheDungeonLoot(AccountOwners.Lease owner, Character expected,
         PreparedDungeonDeath prepared, FrozenDungeonGroundDeath? loot)
     {
         if (loot is null) return;
         if (loot.UsesCollectionLedger)
         {
-            SaveDropCollection(db, tx, account, expected, prepared, loot);
+            CacheDropCollection(owner, expected, prepared, loot);
             return;
         }
         if (!ReferenceEquals(loot.Death, prepared.Death) || loot.Identity.CharacterId != expected.Id ||
@@ -33,76 +32,21 @@ internal sealed partial class CharacterRepository
                 ground.Reservation.GroundKey >= state.NextObjectKey)
                 throw new InvalidDataException("地面key或完整核心不在已预留身份内");
         }
-        using var command = db.CreateCommand();
-        command.Transaction = tx;
-        BindLoot(command, account, expected.Id, prepared.Death.EventId, loot);
-        command.CommandText = """
-            INSERT INTO character_dungeon_loot_receipts(character_id,account,event_id,instance_id,task_attempt,epoch,map_id,
-              monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot)
-            VALUES($id,$account,$event,$instance,$attempt,$epoch,$map,$monster,$rule,$hash,$key,$core,$x,$y,$slot)
-            """;
-        command.ExecuteNonQuery();
+        DungeonTransientReceipts.Get(owner, loot.Identity).StoreLoot(loot);
     }
 
-    static void VerifyDungeonLoot(SqliteConnection db, SqliteTransaction tx, string account, ushort characterId,
+    static void VerifyCachedDungeonLoot(AccountOwners.Lease owner, ushort characterId,
         Guid eventId, FrozenDungeonGroundDeath? loot)
     {
-        if (loot?.UsesCollectionLedger == true)
-        {
-            VerifyDropCollection(db, tx, account, characterId, eventId, loot);
-            return;
-        }
-        if (HasDropCollection(db, tx, characterId, eventId))
-            throw new InvalidDataException("完整集合的死亡重放不能省略或改成旧单件合同");
-        using var command = db.CreateCommand();
-        command.Transaction = tx;
-        command.Parameters.AddWithValue("$id", characterId);
-        command.Parameters.AddWithValue("$event", eventId.ToString("N"));
-        command.CommandText = """
-            SELECT account,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot
-            FROM character_dungeon_loot_receipts WHERE character_id=$id AND event_id=$event
-            """;
-        using var reader = command.ExecuteReader();
-        bool found = reader.Read();
+        var original = DungeonTransientReceipts.FindLoot(owner, characterId, eventId);
         if (loot is null)
         {
-            if (found) throw new InvalidDataException("已有冻结结果不能在成长重放时省略");
+            if (original is not null) throw new InvalidDataException("已有冻结结果不能在成长重放时省略");
             return;
         }
-        if (!found || reader.GetString(0) != account || reader.GetString(1) != loot.Identity.InstanceId.ToString("N") ||
-            reader.GetInt64(2) != loot.Identity.TaskAttempt || reader.GetInt64(3) != loot.Identity.Epoch ||
-            reader.GetInt64(4) != loot.Map.Id || reader.GetInt64(5) != loot.Death.MonsterKey ||
-            reader.GetString(7) != loot.ResourceIdentity)
-            throw new InvalidDataException("冻结掉落的事件、规则或归属变化");
-        if (loot.Ground is not { } ground)
-        {
-            if (!reader.IsDBNull(8) || !reader.IsDBNull(9)) throw new InvalidDataException("未命中结果不能改为物品");
-            return;
-        }
-        if (reader.IsDBNull(8) || reader.GetInt64(8) != ground.Reservation.GroundKey ||
-            reader.GetString(9) != JsonSerializer.Serialize(ground.Core) || reader.GetInt64(10) != ground.Reservation.X ||
-            reader.GetInt64(11) != ground.Reservation.Y || reader.GetInt64(12) != ground.Reservation.RecordSlot)
-            throw new InvalidDataException("同事件冻结的地面身份或完整核心被改变");
-    }
-
-    static void BindLoot(SqliteCommand command, string account, ushort id, Guid eventId, FrozenDungeonGroundDeath loot)
-    {
-        var ground = loot.Ground;
-        command.Parameters.AddWithValue("$id", id);
-        command.Parameters.AddWithValue("$account", account);
-        command.Parameters.AddWithValue("$event", eventId.ToString("N"));
-        command.Parameters.AddWithValue("$instance", loot.Identity.InstanceId.ToString("N"));
-        command.Parameters.AddWithValue("$attempt", loot.Identity.TaskAttempt);
-        command.Parameters.AddWithValue("$epoch", loot.Identity.Epoch);
-        command.Parameters.AddWithValue("$map", loot.Map.Id);
-        command.Parameters.AddWithValue("$monster", loot.Death.MonsterKey);
-        command.Parameters.AddWithValue("$rule", "");
-        command.Parameters.AddWithValue("$hash", loot.ResourceIdentity);
-        command.Parameters.AddWithValue("$key", (object?)ground?.Reservation.GroundKey ?? DBNull.Value);
-        command.Parameters.AddWithValue("$core", ground is null ? DBNull.Value : JsonSerializer.Serialize(ground.Core));
-        command.Parameters.AddWithValue("$x", (object?)ground?.Reservation.X ?? DBNull.Value);
-        command.Parameters.AddWithValue("$y", (object?)ground?.Reservation.Y ?? DBNull.Value);
-        command.Parameters.AddWithValue("$slot", (object?)ground?.Reservation.RecordSlot ?? DBNull.Value);
+        if (original is null || loot.Identity.CharacterId != characterId || loot.Death.EventId != eventId)
+            throw new InvalidDataException("本实例的临时冻结掉落缺失，不能恢复旧副本");
+        DungeonTransientReceipts.VerifyLoot(original, loot);
     }
 
     static void ValidateLootCore(ItemCore core)
@@ -130,32 +74,17 @@ internal sealed partial class CharacterRepository
         var current = Require(db, tx, owner.Account, expected.Name);
         if (current.Id != expected.Id) throw new InvalidOperationException("拾取角色归属变化");
         // 存储的原掉落是资格来源，网络坐标/token不在资产判断中。
-        VerifyStoredGround(db, tx, owner.Account, current.Id, ground);
+        VerifyStoredGround(db, tx, owner, current.Id, ground);
+        var receipts = DungeonTransientReceipts.Find(owner, prepared.Identity)
+            ?? throw new InvalidDataException("拾取需要当前实例的原临时数据");
+        if (receipts.Pickups.TryGetValue(ground.Reservation.GroundKey, out var previous))
+        {
+            previous.Verify(prepared);
+            if (previous.Committed) return previous.Replay(current, prepared);
+        }
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", current.Id);
-        command.Parameters.AddWithValue("$event", ground.DeathEventId.ToString("N"));
-        command.CommandText = """
-            SELECT account,ground_key,instance_id,task_attempt,epoch,destination_list,destination_slot,item_uid,after_core,revision
-            FROM character_dungeon_pickup_receipts WHERE character_id=$id AND event_id=$event
-            """;
-        using (var reader = command.ExecuteReader())
-        {
-            if (reader.Read())
-            {
-                if (reader.GetString(0) != owner.Account || reader.GetInt64(1) != ground.Reservation.GroundKey ||
-                    reader.GetString(2) != prepared.Identity.InstanceId.ToString("N") || reader.GetInt64(3) != prepared.Identity.TaskAttempt ||
-                    reader.GetInt64(4) != prepared.Identity.Epoch)
-                    throw new InvalidDataException("重复拾取的来源变化");
-                var destination = new InventorySlot((InventoryListType)reader.GetInt32(5), checked((short)reader.GetInt32(6)));
-                long uid = reader.GetInt64(7);
-                var savedCore = JsonSerializer.Deserialize<ItemCore>(reader.GetString(8)) ?? throw new InvalidDataException("拾取结果核心损坏");
-                bool projectionCurrent = current.Revision == reader.GetInt64(9) && current.Inventory.Find(destination) is { } item &&
-                    item.Uid == uid && item.Core == savedCore;
-                // 只读精确重放，调用方不再加物品；晚于原receipt的库存变化须重登恢复。
-                return new DungeonPickupCommit(current, true, destination, uid, projectionCurrent);
-            }
-        }
         if (current.Revision != expected.Revision || !SameInventory(current.Inventory, plan) ||
             plan.CharacterPrecondition?.Matches(current) == false || plan.CharacterPrecondition?.Matches(expected) == false ||
             !SameInventory(plan.After with { Items = plan.Before.Items }, new InventoryPlan(plan.Before, plan.Before, "comparison")) ||
@@ -179,45 +108,31 @@ internal sealed partial class CharacterRepository
             current.ActiveMainQuests, inventory, quests, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),DfoServer.Game.Quests.QuestEligibility.Completed(current)).ToArray();
         WriteQuestConditions(db, tx, current.Id, current.ActiveMainQuests, active);
         var actual = inventory.Find(slot) ?? throw new InvalidOperationException("已提交拾取缺目标槽");
-        command.Parameters.AddWithValue("$key", ground.Reservation.GroundKey);
-        command.Parameters.AddWithValue("$instance", prepared.Identity.InstanceId.ToString("N"));
-        command.Parameters.AddWithValue("$attempt", prepared.Identity.TaskAttempt);
-        command.Parameters.AddWithValue("$epoch", prepared.Identity.Epoch);
-        command.Parameters.AddWithValue("$list", (int)slot.List);
-        command.Parameters.AddWithValue("$slot", slot.Index);
-        command.Parameters.AddWithValue("$uid", actual.Uid);
-        command.Parameters.AddWithValue("$core", JsonSerializer.Serialize(actual.Core));
-        command.Parameters.AddWithValue("$afterRevision", checked(current.Revision + 1));
-        command.CommandText = """
-            INSERT INTO character_dungeon_pickup_receipts(character_id,account,event_id,ground_key,instance_id,task_attempt,epoch,
-              destination_list,destination_slot,item_uid,after_core,revision)
-            VALUES($id,$account,$event,$key,$instance,$attempt,$epoch,$list,$slot,$uid,$core,$afterRevision)
-            """;
-        command.ExecuteNonQuery();
         var character = current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active };
+        var cached = new DungeonTransientPickup(prepared, character.Revision, slot, actual.Uid, actual.Core, null, 0, 0, 0);
+        receipts.Pickups[ground.Reservation.GroundKey] = cached;
         tx.Commit();
+        cached.Committed = true;
         return new DungeonPickupCommit(character, false, slot, actual.Uid, true);
     });
 
-    static void VerifyStoredGround(SqliteConnection db, SqliteTransaction tx, string account, ushort id,
+    static void VerifyStoredGround(SqliteConnection db, SqliteTransaction tx, AccountOwners.Lease owner, ushort id,
         DungeonGroundObject ground)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", id);
+        var original = DungeonTransientReceipts.Find(owner, ground.DeathIdentity)?.Grounds.GetValueOrDefault(ground.Reservation.GroundKey);
+        if (original != ground || ground.DeathIdentity.CharacterId != id)
+            throw new InvalidDataException("拾取来源不是当前实例缓存中的完整地面对象");
+        command.Parameters.AddWithValue("$account", owner.Account);
         command.Parameters.AddWithValue("$event", ground.DeathEventId.ToString("N"));
+        command.Parameters.AddWithValue("$instance", ground.DeathIdentity.InstanceId.ToString("N"));
+        command.Parameters.AddWithValue("$attempt", ground.DeathIdentity.TaskAttempt);
         command.CommandText = """
-            SELECT account,instance_id,task_attempt,epoch,map_id,monster_key,rule_id,resource_source,ground_key,core,x,y,record_slot
-            FROM character_dungeon_loot_receipts WHERE character_id=$id AND event_id=$event
+            SELECT 1 FROM character_dungeon_growth_receipts
+            WHERE character_id=$id AND account=$account AND event_id=$event AND instance_id=$instance AND task_attempt=$attempt
             """;
-        using var reader = command.ExecuteReader();
-        if (!reader.Read() || reader.GetString(0) != account || reader.GetString(1) != ground.DeathIdentity.InstanceId.ToString("N") ||
-            reader.GetInt64(2) != ground.DeathIdentity.TaskAttempt || reader.GetInt64(3) != ground.DeathIdentity.Epoch ||
-            reader.GetInt64(4) != ground.Reservation.Map.Id || reader.GetInt64(5) != ground.Reservation.MonsterKey ||
-            reader.GetString(7) != ground.ResourceIdentity ||
-            reader.IsDBNull(8) || reader.GetInt64(8) != ground.Reservation.GroundKey || reader.GetString(9) != JsonSerializer.Serialize(ground.Core) ||
-            reader.GetInt64(10) != ground.Reservation.X || reader.GetInt64(11) != ground.Reservation.Y ||
-            reader.GetInt64(12) != ground.Reservation.RecordSlot)
-            throw new InvalidDataException("拾取来源不是原已提交的完整地面物品");
+        if (command.ExecuteScalar() is null) throw new InvalidDataException("掉落的原死亡资产事务尚未提交");
     }
 }

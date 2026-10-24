@@ -10,13 +10,14 @@ namespace DfoServer.Network;
 
 internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol,
     Func<CancellationToken, Task>? runManagement, Func<OnlineCharacterView[]> onlineCharacters, Action onStarted, ServerLog log, GameChannelListeners gameChannels,
-    Protocol.NativeChannel? native = null)
+    Protocol.NativeChannel? native = null, IDisposable? runtimeMemory = null)
 {
     readonly ConcurrentDictionary<int, Task> active = new();
     int counter;
     readonly SemaphoreSlim connections = new(64, 64);
     public async Task RunAsync(CancellationToken stop)
     {
+        using var ownedRuntimeMemory = runtimeMemory;
         Directory.CreateDirectory(options.LogDirectory);
         using var packetCapture = options.PacketCaptureDirectory is not null || options.PacketHttpPort != 0
             ? new PacketCapture(options.PacketCaptureDirectory, retainRecent: options.PacketHttpPort != 0) : null;
