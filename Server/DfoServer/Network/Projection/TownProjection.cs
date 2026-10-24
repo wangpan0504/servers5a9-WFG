@@ -188,8 +188,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         {
             if (!CanSend())
                 return null;
-            presence?.Remove(context.Sender, departure, prepare);
-            return context.Sender.ClearScene();
+            // 旧区域仅移除地图实体，保留Actor及队伍引用；真正离线/换角仍使用完整清理。
+            presence?.Remove(context.Sender, departure, prepare, TownPackets.Position(receipt.Character, true));
+            return context.Sender.ClearScene(preserveActors: true);
         });
         if (detached is null)
             return;

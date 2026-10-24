@@ -15,8 +15,8 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     internal const long MaxPendingBytes = 2 * 1024 * 1024;
     sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false);
     sealed record Message(long Epoch, Output? Own = null, RemoteTownActor? Enter = null, (ushort, long)? Move = null,
-        (ushort Id, long Membership, byte[]? Effect, Func<bool>? Current, byte[]? Prepare)? Leave = null,
-        TaskCompletionSource? Clear = null, RemoteTownActor? Refresh = null, long Bytes = 0);
+        (ushort Id, long Membership, byte[]? Effect, Func<bool>? Current, byte[]? Prepare, byte[]? DestinationArea)? Leave = null,
+        TaskCompletionSource? Clear = null, RemoteTownActor? Refresh = null, bool PreserveActors = false, long Bytes = 0);
     readonly AccountOwners.Lease owner;
     readonly Stream stream;
     readonly CancellationTokenSource connection;
@@ -75,11 +75,11 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     public void Post(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null) =>
         Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: canSend)));
 
-    public Task ClearScene()
+    public Task ClearScene(bool preserveActors = false)
     {
         long next = Interlocked.Increment(ref epoch);
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!Enqueue(new(next, Clear: done)))
+        if (!Enqueue(new(next, Clear: done, PreserveActors: preserveActors)))
             done.TrySetException(new IOException("Game scene clear queue unavailable"));
         return done.Task;
     }
@@ -87,8 +87,9 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     public void InvalidateScene() => Interlocked.Increment(ref epoch);
     public void Enter(RemoteTownActor actor) => Enqueue(new(Epoch, Enter: actor));
     public void Refresh(RemoteTownActor actor) => Enqueue(new(Epoch, Refresh: actor));
-    public void Leave(ushort id, long membership, byte[]? departureEffect = null, Func<bool>? current = null, byte[]? prepareEffect = null) =>
-        Enqueue(new(Epoch, Leave: (id, membership, departureEffect, current, prepareEffect)));
+    public void Leave(ushort id, long membership, byte[]? departureEffect = null, Func<bool>? current = null,
+        byte[]? prepareEffect = null, byte[]? destinationArea = null) =>
+        Enqueue(new(Epoch, Leave: (id, membership, departureEffect, current, prepareEffect, destinationArea)));
     public void Move(RemoteTownActor actor)
     {
         var key = (actor.Id, actor.Membership);
@@ -126,7 +127,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         long bytes = message.Own is { } own ? own.Body.Length + 16L :
             message.Enter is { } enter ? ActorBytes(enter) :
             message.Refresh is { } refresh ? ActorBytes(refresh) :
-            message.Leave is { } left ? 18L + (left.Effect is { } effect ? 16L + effect.Length : 0) +
+            message.Leave is { } left ? 16L + (left.DestinationArea?.Length ?? 2) + (left.Effect is { } effect ? 16L + effect.Length : 0) +
                 (left.Prepare is { } prepare ? 16L + prepare.Length : 0) : 18;
         bool accepted;
         lock (queueGate)
@@ -220,8 +221,10 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                     }
                     else if (message.Clear is { } clear)
                     {
-                        foreach (ushort id in known.Keys.ToArray())
-                            await Write(0, (ushort)NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(id), "town_peer_clear");
+                        // 普通切区由本人AREA_USERS重置地图；USER_LEAVE还会清掉客户端队伍槽，不能用于切区。
+                        if (!message.PreserveActors)
+                            foreach (ushort id in known.Keys.ToArray())
+                                await Write(0, (ushort)NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(id), "town_peer_clear");
                         known.Clear();
                     }
                     else if (message.Enter is { } enter)
@@ -256,7 +259,10 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                             await Write(0, (ushort)NotiPacketType.SHOW_EFFECT, effect, "teleport_aura_departure_peer");
                         if (Epoch == message.Epoch)
                         {
-                            await Write(0, (ushort)NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(left.Id), "town_peer_leave");
+                            if (left.DestinationArea is { } area)
+                                await Write(0, (ushort)NotiPacketType.USER_AREA, area, "town_peer_depart_area");
+                            else
+                                await Write(0, (ushort)NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(left.Id), "town_peer_leave");
                             known.Remove(left.Id);
                         }
                     }

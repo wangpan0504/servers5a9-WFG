@@ -431,6 +431,7 @@ internal static class TownPresenceTests
             That(presence.Count == 0, "phase fixture cleans up both memberships");
             foreach (string scenario in new[] { "current", "stale-source", "stale-view" })
             foreach (bool partyPreparation in new[] { false, true })
+            foreach (bool sceneTravel in new[] { false, true })
             {
                 using var targetCancel = new CancellationTokenSource();
                 using var effectSourceCancel = new CancellationTokenSource();
@@ -445,8 +446,10 @@ internal static class TownPresenceTests
                 await targetSender.Send(1, 65000, [], "effect-before-hold");
                 Task heldEffect = targetSender.Send(1, 1347, [1], "effect-held-receiver");
                 await targetStream.WriteStarted.WaitAsync(TimeSpan.FromSeconds(2));
-                presence.Remove(effectSender, [1, 1, 232, 253], partyPreparation ? new byte[] { 3, 1, 232, 253 } : null);
-                That(targetSender.PendingBytes == 17 + 20 + 18 + (partyPreparation ? 20 : 0), "准备、出发与离场帧完整计入慢接收者字节预算");
+                byte[]? destination = sceneTravel ? new byte[] { 232, 253, 38, 2, 61, 4, 249, 0, 0, 1 } : null;
+                presence.Remove(effectSender, [1, 1, 232, 253], partyPreparation ? new byte[] { 3, 1, 232, 253 } : null, destination);
+                That(targetSender.PendingBytes == 17 + 20 + (sceneTravel ? 26 : 18) + (partyPreparation ? 20 : 0),
+                    "准备、出发与普通切区/真正离场帧完整计入慢接收者字节预算");
                 using var replacementOwner = scenario == "stale-source" ? owners.Acquire(effectOwner.Account, () => { }) : null;
                 Task clearEffect = Task.CompletedTask;
                 if (scenario == "current")
@@ -464,10 +467,13 @@ internal static class TownPresenceTests
                 await clearEffect.WaitAsync(TimeSpan.FromSeconds(2));
                 await targetSender.Send(1, 65000, [], "effect-after-hold");
                 var effectFrames = Frames(targetStream).SkipWhile(frame => frame.Opcode != 1347).Skip(1).ToArray();
+                ushort departureOpcode = sceneTravel ? (ushort)23 : (ushort)6;
                 That(effectFrames.Select(frame => frame.Opcode).SequenceEqual(scenario == "current"
-                    ? (partyPreparation ? new ushort[] { 379, 379, 6, 2, 3, 23, 22, 379, 65000 } : new ushort[] { 379, 6, 2, 3, 23, 22, 379, 65000 })
-                    : new ushort[] { 6, 65000 }),
+                    ? (partyPreparation ? new ushort[] { 379, 379, departureOpcode, 2, 3, 23, 22, 379, 65000 } : new ushort[] { 379, departureOpcode, 2, 3, 23, 22, 379, 65000 })
+                    : new ushort[] { scenario == "stale-view" ? (ushort)6 : departureOpcode, 65000 }),
                     "慢接收者保留旧Actor的出发→离场→新入场→到达顺序；过期源或目标视图不播放特效：" + scenario);
+                if (sceneTravel && scenario != "stale-view")
+                    Bytes(effectFrames.First(frame => frame.Opcode == 23).Body, destination!, "切区离场沿用已提交目标，不读取重入后的源位置");
                 That(!targetCancel.IsCancellationRequested && targetSender.PendingBytes == 0,
                     "特效投递及失效跳过释放全部队列预算，不因目标慢写阻塞源成员迁移");
                 presence.Remove(effectSender);

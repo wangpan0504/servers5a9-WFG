@@ -244,9 +244,20 @@ internal static class SocialTcpTests
         beta.Send(1426); beta.SendBarrier(); beta.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
         SceneInfo(beta); beta.Expect(1, 1347, [1]);
         alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22)); alpha.Barrier();
+        // 对应实机现场：两人先后走门进入同一区域，期间不能发会清队伍槽的NOTI6或重发端点。
+        foreach (var step in new[] { (Area: (byte)2, Previous: (byte)0, X: (ushort)1085, Y: (ushort)249),
+            (Area: (byte)0, Previous: (byte)2, X: (ushort)629, Y: (ushort)196) })
+        {
+            alpha.Send(36, Area(38, step.Area, step.X, step.Y, 38, step.Previous, kind: 5));
+            alpha.Batch((0, 23), (0, 24)); SceneInfo(alpha); alpha.Barrier();
+            beta.Expect(0, 23, AreaNotice(alpha.Id, 38, step.Area, step.X, step.Y)); beta.Barrier();
+            beta.Send(36, Area(38, step.Area, step.X, step.Y, 38, step.Previous, kind: 5));
+            beta.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22)); SceneInfo(beta); beta.Barrier();
+            alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22)); alpha.Barrier();
+        }
         alpha.Send(36, Area(38, 1, 450, 234, 38, 0)); alpha.SendBarrier();
-        alpha.Batch((0, 6), (0, 23), (0, 24), (0, 1379)); SceneInfo(alpha); alpha.Expect(1, 1347, [1]);
-        beta.Expect(0, 6); beta.Barrier();
+        alpha.Batch((0, 23), (0, 24), (0, 1379)); SceneInfo(alpha); alpha.Expect(1, 1347, [1]);
+        beta.Expect(0, 23, AreaNotice(alpha.Id, 38, 1, 450, 234)); beta.Barrier();
         alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
         SceneInfo(alpha); alpha.Expect(1, 1347, [1]);
         beta.Batch((0, 2), (0, 3), (0, 23), (0, 22)); beta.Barrier();
@@ -268,7 +279,8 @@ internal static class SocialTcpTests
         leader.Send(1426); leader.Batch((0, 23), (0, 24)); leader.Barrier();
         observer.Send(1426); observer.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
         leader.Batch((0, 2), (0, 3), (0, 23), (0, 22)); leader.Barrier(); observer.Barrier();
-        leader.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5)); leader.Batch((0, 6), (0, 23), (0, 24)); observer.Expect(0, 6);
+        leader.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5)); leader.Batch((0, 23), (0, 24));
+        observer.Expect(0, 23, AreaNotice(leader.Id, 38, 2, 1085, 249));
         observer.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5));
         observer.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22));
         leader.Batch((0, 2), (0, 3), (0, 23), (0, 22)); leader.Barrier(); observer.Barrier();
@@ -357,7 +369,7 @@ internal static class SocialTcpTests
         observer.NoFrame(100, "查询不能借路由头查询其他角色", (0, 9));
         observer.Send(1404, Query(observer.Id, "PanelA")); observer.Expect(0, 9, queryResult);
         observer.Send(36, Area(38, 0, 629, 196, 38, 2));
-        observer.Batch((0, 6), (0, 23), (0, 24)); leader.Expect(0, 6);
+        observer.Batch((0, 23), (0, 24)); leader.Expect(0, 23, AreaNotice(observer.Id, 38, 0, 629, 196));
         RemoteDirectory();
         observer.Barrier();
         observer.NoFrame(100, "异区队伍资料不能生成城镇实体、位置或移动", (0, 3), (0, 22), (0, 23), (0, 24));
@@ -381,7 +393,8 @@ internal static class SocialTcpTests
         leader.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22)); OwnSceneInformation();
         observer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); observer.Expect(0, 9, queryResult);
         leader.Send(36, Area(38, 1, 450, 234, 38, 0));
-        leader.Batch((0, 6), (0, 23), (0, 24), (0, 1379)); OwnSceneInformation(); observer.Expect(0, 6);
+        leader.Batch((0, 23), (0, 24), (0, 1379)); OwnSceneInformation();
+        observer.Expect(0, 23, AreaNotice(leader.Id, 38, 1, 450, 234));
         RemoteDirectory();
         leader.Send(1404, Query(leader.Id, kind: 6)); leader.Expect(0, 9, queryResult);
         leader.Send(13); leader.Expect(1, 13, [1]);
@@ -461,6 +474,10 @@ internal static class SocialTcpTests
         }
         That(stream.Position == stream.Length, "冒险团好友行完整消费，不以仅验证数量掩盖尾字段错误");
     }
+    static byte[] AreaNotice(ushort id, byte town, byte area, ushort x, ushort y) => Build(w =>
+    {
+        w.Write(id); w.Write(town); w.Write(area); w.Write(x); w.Write(y); w.Write((byte)0); w.Write((byte)3);
+    });
     static byte[] BlockBody(string name, string memo) => Build(w => { WriteName(w, name); w.Write((byte)2); WriteName(w, memo); });
     static void WriteName(BinaryWriter writer, string value)
     {

@@ -62,10 +62,11 @@ internal static class TeleportTcpTests
                 observer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); observer.Barrier();
                 peer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); peer.Barrier();
                 peer.Send(470, Solo(-1, 7, 39, 3, 783, 205)); peer.Expect(1, 470, [1]);
-                peer.Expect(0, 379, Effect(1, peer.Id)); peer.Expect(0, 6, Build(w => w.Write(observer.Id)));
+                peer.Expect(0, 379, Effect(1, peer.Id));
                 peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 379, Effect(2, peer.Id));
                 peer.Expect(0, 378, [1, 2, 164, 1, 0, 0]); peer.Barrier();
-                observer.Expect(0, 379, Effect(1, peer.Id)); observer.Expect(0, 6, Build(w => w.Write(peer.Id))); observer.Barrier();
+                observer.Expect(0, 379, Effect(1, peer.Id));
+                observer.Expect(0, 23, Build(w => { w.Write(peer.Id); w.Write(new byte[] { 39, 3, 15, 3, 205, 0, 5, 3 }); })); observer.Barrier();
                 observer.Send(7); observer.Expect(1, 7, [1]); observer.Expect(0, 2);
             }
             That(fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) is [[39L, 3L, 783L, 205L]], "真实NPC身份与任务准入后光环跨图落库");
@@ -182,11 +183,11 @@ internal static class TeleportTcpTests
                     U16(status, 5) == peer.Id && status[7] == 1 && status[29] == 0 &&
                     Enumerable.Range(1, 7).All(index => U16(status, 5 + index * 3) == ushort.MaxValue && status[7 + index * 3] == 0),
                     "单成员按本版377的队长槽0及八行格式声明已同意，不等待不存在的队员或错用角色ID当槽");
-                peer.Expect(0, 379, Effect(1, peer.Id)); peer.Expect(0, 6, Build(w => w.Write(observer.Id)));
+                peer.Expect(0, 379, Effect(1, peer.Id));
                 peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 379, Effect(2, peer.Id));
                 SceneInformation(); peer.Expect(0, 378, Cooldown(0, 600)); peer.Barrier();
                 observer.Expect(0, 379, Effect(3, peer.Id)); observer.Expect(0, 379, Effect(1, peer.Id));
-                observer.Expect(0, 6, Build(w => w.Write(peer.Id)));
+                observer.Expect(0, 23, Build(w => { w.Write(peer.Id); w.Write(new byte[] { 39, 3, 15, 3, 205, 0, 5, 3 }); }));
                 var hidden = observer.Expect(0, 9).Body;
                 That(hidden.Length == 11 && hidden[9] == 3 && U16(hidden, 4) == U16(listed, 4),
                     "未查询J面板的观察者在队伍跨区后移除原同屏目录"); observer.Barrier();

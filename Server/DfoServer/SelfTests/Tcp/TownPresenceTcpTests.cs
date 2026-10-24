@@ -115,9 +115,9 @@ internal static class TownPresenceTcpTests
             beta.Barrier();
             alpha.Send(36, Area(38, 1, 450, 234, 38, 0));
             alpha.SendBarrier();
-            alpha.Batch((0, 6), (0, 23), (0, 24), (0, 1379), (1, 1347));
+            alpha.Batch((0, 23), (0, 24), (0, 1379), (1, 1347));
             beta.SendBarrier();
-            beta.Expect(0, 6, Build(w => w.Write(alpha.Id)));
+            beta.Expect(0, 23, Build(w => { w.Write(alpha.Id); w.Write(new byte[] { 38, 1, 194, 1, 234, 0, 0, 3 }); }));
             beta.Expect(1, 1347, [1]);
             alpha.Send(1426);
             alpha.SendBarrier();
