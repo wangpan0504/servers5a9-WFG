@@ -38,8 +38,10 @@ internal static partial class FormalDungeonTcpTests
             done.UnionWith(area.Map(done).DungeonGates.First(gate => gate.Conditions.Length == 0).Quests);
             var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
             var position = new Location(area.Town,area.Area,(ushort)(walk.X+walk.Width/2),(ushort)(walk.Y+walk.Height/2));
+            // 最后防线独立账号不继承普通频道历史，避免把副本准入用例变成跨类型换频道测试。
+            string account = sample.Id == 400000016 ? "entry608fiendwar" : fixture.Options.DevelopmentAccount;
             Character created;
-            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+            using (var owner = new AccountOwners().Acquire(account,() => { }))
             {
                 var candidate = CharacterCreation.Prepare("Entry608"+(++sequence),
                     resources.Characters.Get(0),position,position,resources.Learning.Get);
@@ -57,7 +59,7 @@ internal static partial class FormalDungeonTcpTests
             int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : 100;
             fixture.Sql("UPDATE character_fatigue SET remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
             // 最后防线 115 只经超时空漩涡频道 39 进入：普通频道选角不保留 115 快照（ClientKeepsTownSnapshot）而回共享房间，因此 400000016 在 39 号入口上验收。
-            using var peer = sample.Id == 400000016 ? Open(fixture,gamePort:ChannelTcpTests.Endpoints(fixture)[39],channelNumber:39) : Open(fixture);
+            using var peer = sample.Id == 400000016 ? Open(fixture,account,gamePort:ChannelTcpTests.Endpoints(fixture)[39],channelNumber:39) : Open(fixture);
             peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
             ushort questId = sample.Id == 9595 ? (ushort)2683 : sample.Id == 5101 ? (ushort)2902 : (ushort)8683;
             peer.Send(31,[(byte)31,0,(byte)questId,(byte)(questId >> 8)]);
@@ -163,7 +165,7 @@ internal static partial class FormalDungeonTcpTests
                     {
                         That(packet.Body.Length == 8 && U32(packet.Body,4) == 0 &&
                             U32(packet.Body,0) == Convert.ToInt64(fixture.Query(
-                                "SELECT rental_points FROM account_wallets WHERE account=$p0",fixture.Options.DevelopmentAccount).Single()[0]),
+                                "SELECT rental_points FROM account_wallets WHERE account=$p0",account).Single()[0]),
                             "结算幸运星通知对应实际账号余额");
                         continue;
                     }
