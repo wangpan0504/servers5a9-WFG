@@ -23,7 +23,8 @@ internal static class ExperienceConsumableTcpTests
                 resources.Towns.InitialReturn, resources.Learning.Get);
             foreach (var (name, level, item) in new (string, byte, int)[]
                 { ("Capsule", 49, ExperienceConsumableTests.PercentItem), ("CapsuleRoll", 60, ExperienceConsumableTests.FixedItem),
-                  ("CapsuleMap", 16, ExperienceConsumableTests.PercentItem), ("OldBook", 1, 1034) })
+                  ("CapsuleMap", 16, ExperienceConsumableTests.PercentItem), ("OldBook", 1, 1034),
+                  ("MillionBook", 60, 1231), ("TenMilBook", 60, 1232), ("CappedBook", 94, 1232) })
                 created.Add(repository.Create(owner, candidate with
                 {
                     Name = name, Level = level, InitialLearning = SkillPointLedger.Synchronize(0, 0, level, candidate.InitialLearning with
@@ -79,6 +80,28 @@ internal static class ExperienceConsumableTcpTests
             peer.Select(created[3].Slot);
             var packets = Use(peer, created[3], 100, 2);
             That(packets.All(packet => packet.Opcode != 14), "旧经验书同样由ACK30扣源，不重复发送源删除");
+        }
+        for (int index = 4; index < created.Count; index++)
+        {
+            using var peer = Open(fixture);
+            var before = created[index];
+            peer.Select(before.Slot);
+            ulong gain = index == 4 ? 1000000UL : index == 5 ? 10000000UL : 1UL;
+            byte target = before.Level;
+            while (before.Learning.Experience + gain >= growth.GetCumulativeExperienceBoundary(target)) target++;
+            var packets = Use(peer, before, gain, target);
+            That(packets.All(packet => packet.Opcode != 14), "大额经验书由ACK30扣源，不重复删除或截断增量");
+            using var readOwner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var after = repository.LoadCharacter(readOwner, before.Slot);
+            That(after.Inventory.Find(new(InventoryListType.Main, 65))!.Core.Count == 1 &&
+                after.Learning.Experience == before.Learning.Experience + gain,
+                "百万和千万经验书的源数量及累计经验持久化");
+            if (index == 6)
+            {
+                string full = fixture.Snapshot();
+                peer.Send(30, [65, 0]); peer.Expect(1, 30, [0, 19, 0]); peer.Barrier();
+                That(fixture.Snapshot() == full, "满级零到账拒绝且不吞剩余经验书，连接继续");
+            }
         }
         await fixture.StopAsync(); await fixture.StartAsync();
         using (var peer = Open(fixture))

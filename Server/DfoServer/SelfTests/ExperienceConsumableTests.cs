@@ -55,10 +55,10 @@ internal static class ExperienceConsumableTests
             !bare.Allows(10, 3) && bare.Allows(10, 2) &&
             ExperienceConsumableDefinition.Parse(file with { ExcludedJobs = ["[mage"] }, template) is null,
             "排除职业接受资源中的裸名称，不把残缺括号修补成合法声明");
-        foreach (var (id, amount) in new[] { (1034, 100), (1035, 1000), (1036, 10000), (1037, 100000) })
+        foreach (var (id, amount) in new[] { (1034, 100), (1035, 1000), (1036, 10000), (1037, 100000), (1231, 1000000), (1232, 10000000) })
         {
             var nativeTemplate = template with { Id = id };
-            var native = file with { Stackable = raw with { TemplateId = id, ScriptPath = "stackable/book_exp" + (id - 1033) + ".stk" },
+            var native = file with { Stackable = raw with { TemplateId = id, ScriptPath = "stackable/book_exp" + (id < 1200 ? id - 1033 : id - 1226) + ".stk" },
                 Effect = null, DeclaredFields = [] };
             That(ExperienceConsumableDefinition.Parse(native, nativeTemplate) is { Percent: false } book && book.Amount == amount,
                 "旧经验书ID与规范路径同时命中时补原生固定经验 " + id);
@@ -79,18 +79,32 @@ internal static class ExperienceConsumableTests
         var parameters = SelfTestCatalogs.QuestRewardParameters(pvf);
         var clock = new ConsumableUseSessionTests.FakeClock();
         var service = new ExperienceConsumableService(items.Items, growth, clock);
-        foreach (var (id, amount) in new[] { (1034, 100), (1035, 1000), (1036, 10000), (1037, 100000) })
+        foreach (var (id, amount) in new[] { (1034, 100), (1035, 1000), (1036, 10000), (1037, 100000), (1231, 1000000), (1232, 10000000) })
         {
             That(items.Items.ExperienceConsumable(id) is { Percent: false } book && book.Amount == amount,
                 "当前PVF的旧经验书无需效果标签即可查询 " + id);
             using var bookFixture = Make(60, id, nearLevel: true);
             var previous = bookFixture.Read();
+            byte target = 60;
+            while (previous.Learning.Experience + (uint)amount >= growth.GetCumulativeExperienceBoundary(target)) target++;
             var used = bookFixture.Session.UseExperienceConsumable(Slot, service);
-            That(used.Outcome == ConsumableUseOutcome.Committed && bookFixture.Read().Level == 61 &&
+            That(used.Outcome == ConsumableUseOutcome.Committed && bookFixture.Read().Level == target &&
                 bookFixture.Read().Learning.Experience == previous.Learning.Experience + (uint)amount &&
                 bookFixture.Read().Inventory.Find(Slot)!.Core.Count == 1 &&
                 bookFixture.Read().Learning.BonusSp == previous.Learning.BonusSp && bookFixture.Read().Learning.BonusTp == previous.Learning.BonusTp,
                 "旧书沿已有成长事务升级、扣一件并保留额外来源 " + id);
+        }
+        foreach (int id in new[] { 1231, 1232 })
+        {
+            using var capped = Make(94, id, nearLevel: true);
+            var used = capped.Session.UseExperienceConsumable(Slot, service);
+            That(used.Outcome == ConsumableUseOutcome.Committed && used.Experience!.Growth.GainedExperience == 1 &&
+                capped.Read().Level == 95 && capped.Read().Learning.Experience == growth.GetLevelStartExperience(95) &&
+                capped.Read().Inventory.Find(Slot)!.Core.Count == 1,
+                "大额经验书跨满级只到账剩余额度并扣一件 " + id);
+            var full = capped.Read();
+            That(capped.Session.UseExperienceConsumable(Slot, service).Outcome == ConsumableUseOutcome.Rejected && Same(full, capped.Read()),
+                "满级零到账不继续消耗经验书 " + id);
         }
         That(items.Items.ExperienceConsumable(PercentItem) is { Percent: true, Amount: 10 } &&
             items.Items.ExperienceConsumable(FixedItem) is { Percent: false, Amount: 500000 } &&
@@ -120,7 +134,7 @@ internal static class ExperienceConsumableTests
             That(f.Session.UseExperienceConsumable(Slot, service).Outcome == ConsumableUseOutcome.Rejected && Same(empty, f.Read()),
                 "已耗尽源不会因重复请求再加经验");
         }
-        using (var f = Make(60, FixedItem))
+        using (var f = Make(60, 1232))
         {
             var before = f.Read(); var plan = service.Prepare(before, Slot);
             f.Sql("CREATE TRIGGER experience_abort AFTER UPDATE OF level ON characters BEGIN SELECT RAISE(ABORT,'experience rollback'); END");
@@ -128,16 +142,16 @@ internal static class ExperienceConsumableTests
             That(Same(before, f.Read()) && Same(before, f.Session.Selected!), "SQL回滚保留源、金币、经验、两树和revision");
             f.Sql("DROP TRIGGER experience_abort");
             var committed = f.Repository.CommitExperienceConsumable(f.Owner, plan, clock.GetUtcNow());
-            That(committed.Learning.Experience == before.Learning.Experience + 500000 && committed.Inventory.Find(Slot)!.Core.Count == 1,
+            That(committed.Learning.Experience == before.Learning.Experience + 10000000 && committed.Inventory.Find(Slot)!.Core.Count == 1,
                 "固定值不乘经验奖励倍率，明确回滚后原计划可提交");
             TestCheck.Reject<InvalidOperationException>(() => f.Repository.CommitExperienceConsumable(f.Owner, plan, clock.GetUtcNow()), "旧revision不重扣或重加经验");
         }
-        using (var f = Make(60, FixedItem, lost: true))
+        using (var f = Make(60, 1231, lost: true))
         {
             f.Lost!.LoseExperienceResult = true;
             var before = f.Read();
             TestCheck.Reject<IOException>(() => f.Session.UseExperienceConsumable(Slot, service), "已提交但返回结果丢失");
-            That(f.Read().Learning.Experience == before.Learning.Experience + 500000 && Same(before, f.Session.Selected!),
+            That(f.Read().Learning.Experience == before.Learning.Experience + 1000000 && Same(before, f.Session.Selected!),
                 "未知结果不安装旧内存或假报失败回滚");
             That(f.Session.UseExperienceConsumable(Slot, service).Outcome == ConsumableUseOutcome.CloseConnection,
                 "未知结果保留未决状态，不能重发增量ACK");
