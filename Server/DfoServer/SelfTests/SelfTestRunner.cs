@@ -168,6 +168,8 @@ internal static class SelfTestRunner
         EmotionTests.RunCore();
         RepositoryBoundaryTests.Run();
         CharacterReadTests.Run();
+        FiendWarRosterTests.Run();
+        RaidRosterFlagTests.Run();
         await SessionPlanningTests.RunAsync();
         TownSelectionTests.Run();
         TeleportTests.RunCore();
@@ -236,6 +238,9 @@ internal static class SelfTestRunner
         ExpertJobProtocolTests.Run();
         SkillPacketsTests.Run();
         SkillExtendedTests.RunCore();
+        RaidEntryScheduleTests.Run();
+        RaidEntryEventsTests.Run();
+        RaidCreateFlowTests.RunCore();
     }
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
@@ -250,6 +255,11 @@ internal static class SelfTestRunner
         SelfTests.Run(towns);
         TeleportTests.RunResources(towns, itemResources);
         CharacterPreparationTests.Run(towns, pvf, characters);
+        ChannelAreaLandingTests.Run(towns);
+        EvildomWarChannelTests.Run(towns, pvf, characters, itemResources);
+        RaidCreateFlowTests.RunResources(pvf);
+        PreyChannelTests.Run(towns, pvf, characters, itemResources);
+        SpecialAreaChannelTests.Run(towns, pvf);
         CharacterCreationTests.Run(towns, characters);
         ClearAvatarTests.RunResources(characters, itemResources.Items);
         CharacterAttributeResourceTests.RunResources(characters);
@@ -393,6 +403,9 @@ internal static class SelfTestRunner
         DungeonGrowthRepositoryTests.Run(towns, pvf, characters);
         DungeonDropCollectionRepositoryTests.Run(towns, pvf, characters, itemResources);
         await FormalDungeonSessionTests.RunAsync(towns, pvf, characters, itemResources);
+        FiendwarChannelTests.Run(towns, pvf, characters, itemResources);
+        RaidRosterFlagTests.RunResources(towns, pvf);
+        RequiredItemConsumeTests.Run(towns, pvf, characters, itemResources);
         await FormalDungeonPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         SkillLearningCatalogTests.Run(pvf);
         SkillLearningTests.Run(pvf, characters);

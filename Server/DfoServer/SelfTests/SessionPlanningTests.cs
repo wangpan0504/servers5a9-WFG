@@ -836,6 +836,7 @@ internal static class SessionPlanningTests
                 INSERT INTO character_collectbox_state VALUES({{id}},'planning',2);
                 INSERT INTO character_collectbox_slots VALUES({{id}},'planning',2,3,104);
                 INSERT INTO character_collectbox_expirations VALUES({{id}},'planning',2,2000000000);
+                INSERT INTO character_dungeon_incount VALUES({{id}},'planning',400000016,20261020,1,20261015,1);
                 """);
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
         }

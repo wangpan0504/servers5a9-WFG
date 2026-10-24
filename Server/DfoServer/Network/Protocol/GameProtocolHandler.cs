@@ -24,8 +24,12 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     NativeChannel? native = null, DfoServer.GameWorld.Items.ItemCatalog? items = null,
     ExperienceBonusService? experienceBonuses = null,
     DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null, DfoServer.Game.ExpertJob.ExpertJobStoreBoard? expertStores = null,
-    TownPresence? presence = null, CharacterLevelProjection? levels = null) : IConnectionProtocol
+    TownPresence? presence = null,
+    DfoServer.GameWorld.Dungeons.DungeonIncountCatalog? incounts = null, CharacterLevelProjection? levels = null) : IConnectionProtocol
 {
+    // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
+    readonly ChannelHistory channelHistory = new();
+
     public async Task RunAsync(ConnectionContext connection)
     {
         using var login = await loginHandler.AuthenticateAsync(connection);
@@ -39,7 +43,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = kind == 1 && PacketCapture.IsAuthentication(opcode) ? "[login-redacted]" : Convert.ToHexString(body.Span) });
         }, connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
-            timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items, experienceBonuses: experienceBonuses);
+            timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items, experienceBonuses: experienceBonuses, incounts: incounts,
+            channelHistory: channelHistory);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
@@ -107,7 +112,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             nativeRegistration = native?.Register(context);
             adventure?.Prepare(context);
             await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(connection.ServerAddress(options),
-                native?.Port ?? login.Channel.Port, nativeRegistration?.Token ?? 0), "endpoint");
+                native?.Port ?? login.Channel.Port, nativeRegistration?.Token ?? 0, ChannelPackets.LoginChannelType(login.Channel.Entry)), "endpoint");
             var roster = session.PrepareRoster();
             await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "roster",
                 () => session.CanPublishRoster(roster));

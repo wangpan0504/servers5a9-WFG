@@ -109,6 +109,14 @@ internal interface ICharacterRepository
     InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId);
     DfoServer.Game.Dungeons.AssaultDailyCounts LoadAssaultDaily(DfoServer.Game.Accounts.AccountOwners.Lease owner, ushort characterId, int day);
     DfoServer.Game.Dungeons.AssaultDailyCommit CommitAssaultClear(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, int day, bool hidden, DfoServer.Game.Inventory.Models.InventoryPlan? reward);
+    // DungeonIncountInfo 角色日/周与账号进入次数；只有 SQLite 仓库实现，测试包装默认不支持。
+    DungeonIncountUsage LoadDungeonIncount(AccountOwners.Lease owner, ushort characterId, int dungeon, DungeonIncountPeriod now) =>
+        throw new NotSupportedException("仓库不支持副本进入次数");
+    DungeonIncountCommit? CommitDungeonIncountEntry(AccountOwners.Lease owner, Character expected, int dungeon, DungeonIncountPeriod now,
+        DfoServer.GameWorld.Dungeons.DungeonIncountRow? row, InventoryPlan? consumption,
+        System.Collections.Immutable.ImmutableArray<AccountIncountCharge> account = default, bool increment = true, bool check = true) =>
+        throw new NotSupportedException("仓库不支持副本进入次数");
+    int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) => throw new NotSupportedException("仓库不支持账号副本进入次数");
     DfoServer.Game.Dungeons.CrackDailyState LoadCrackDaily(DfoServer.Game.Accounts.AccountOwners.Lease owner, ushort characterId, int day);
     DfoServer.Game.Dungeons.CrackDailyCommit CommitCrackClear(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.CrackDailyState state, DfoServer.Game.Inventory.Models.InventoryPlan? reward);
 }

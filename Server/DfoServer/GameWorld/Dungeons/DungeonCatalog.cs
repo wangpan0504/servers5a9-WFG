@@ -119,6 +119,8 @@ internal sealed record DungeonMaze(
     public DungeonStaticTopology StaticTopology => DungeonStaticTopology.Read(this);
 }
 
+internal sealed record DungeonRequiredItem(int ItemId, int Count, int Flag);
+
 internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
 {
     public int? CoinLimit => RawSections.Where(row => row.Tag == "coin limit").ToArray() is
@@ -203,6 +205,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         Path.StartsWith("dungeon/towers/grief/", StringComparison.OrdinalIgnoreCase) ||
         Id == 5115 && Path.Equals("dungeon/towers/grief/5115_001.dgn", StringComparison.OrdinalIgnoreCase)) &&
         RawSections.Where(row => row.Tag == "tower of grief").ToArray() is [{ Tokens.Count: 0 }];
+    // [required item] 物品 数量 第三列：只识别三个整数且前两项为正的单行声明；第三列含义未确认，原样保留。
+    public DungeonRequiredItem? RequiredItem => RawSections.Where(row => row.Tag == "required item").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 } item, { Type: 0, Value: > 0 } count, { Type: 0 } flag] }] ? new(item.Value, count.Value, flag.Value) : null;
     public bool DisableClearReward => RawSections.Any(row => row.Tag == "disable clear reward" && row.Tokens.Count == 0);
     public bool AllowsPractice => !IsTutorial && !IsClassExperience && !IsTournament && Id != 5000 &&
         RawSections.Where(row => row.Tag == "prohibit practice").All(row => row.Tokens is [{ Type: 0, Value: 0 }]);

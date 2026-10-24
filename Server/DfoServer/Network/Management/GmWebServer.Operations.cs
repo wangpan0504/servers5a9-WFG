@@ -159,6 +159,26 @@ internal static partial class GmWebServer
             data.Audit.Append(new(DateTimeOffset.Now, Operator(http), "quick-items", "-", "保存 " + items.Length + " 个快捷物品", true, "", "", "OK"));
             return Results.Json(new { ok = true, data = items.Length });
         });
+        app.MapGet("/api/raid-windows", () => Results.Json(JsonSerializer.Deserialize<JsonElement>(data.ReadRaidWindows())));
+        app.MapPost("/api/raid-windows", (HttpContext http, JsonElement body) =>
+        {
+            if (!body.TryGetProperty("confirm", out var confirm) || confirm.ValueKind != JsonValueKind.True) return Bad("需要二次确认");
+            try
+            {
+                string json = body.GetRawText();
+                using var document = JsonDocument.Parse(json);
+                var kept = new Dictionary<string, JsonElement>();
+                foreach (var raid in DfoServer.Game.Raids.RaidEntrySchedule.Names)
+                    kept[raid] = document.RootElement.TryGetProperty(raid, out var rows) ? rows.Clone() : JsonDocument.Parse("[]").RootElement.Clone();
+                string stored = JsonSerializer.Serialize(kept);
+                DfoServer.Game.Raids.RaidEntryStore.Parse(stored);
+                data.WriteRaidWindows(stored);
+                data.Audit.Append(new(DateTimeOffset.Now, Operator(http), "raid-windows", "-", "更新团本每周入场时段", true, "", "", "OK"));
+                return Results.Json(JsonSerializer.Deserialize<JsonElement>(data.ReadRaidWindows()));
+            }
+            catch (InvalidDataException ex) { return Bad(ex.Message); }
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException) { return Bad("时段表无效"); }
+        });
         app.MapGet("/api/events", () => Reply(data.Command("event status 64")));
         app.MapPost("/api/events", (HttpContext http, EventBody b) =>
         {

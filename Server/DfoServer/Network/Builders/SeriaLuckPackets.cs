@@ -14,17 +14,32 @@ internal static class SeriaLuckPackets
         return [(byte)(before * 5), (byte)(after * 5)];
     }
 
-    public static byte[] EventInfoCompressed()
+    // NOTI EVENT_INFO(108)，ARAD 026C1580 → 026C0EC0 整表替换事件集合 [026C1B00()+0x2c]：
+    //   u16 n；n × { u16 事件号, u32, u32 长度+串, u32 长度+串, u8 扩展标志(0 不读扩展) }；
+    //   随后 026BE900 读 u8 m；m × { u16 事件号, 12 × u32 }（旧集合含事件 9 时先多读 u8+u16 表，因此不下发事件 9）。
+    // 额外事件沿用 2037 的已验证记录形状（u32 1、两空串、标志 0），只放进集合，不带数值块。
+    public static byte[] EventInfoCompressed(IReadOnlyList<ushort>? extraEvents = null)
     {
+        extraEvents ??= [];
+        if (extraEvents.Any(id => id is 0 or 9 or SeriaLuckEventId) || extraEvents.Distinct().Count() != extraEvents.Count)
+            throw new InvalidDataException("EVENT_INFO 附加事件无效");
         using var plain = new MemoryStream();
         using (var writer = new BinaryWriter(plain, System.Text.Encoding.UTF8, leaveOpen: true))
         {
-            writer.Write((ushort)1);
+            writer.Write(checked((ushort)(1 + extraEvents.Count)));
             writer.Write(SeriaLuckEventId);
             writer.Write(1u);
             writer.Write(0);
             writer.Write(0);
             writer.Write((byte)0);
+            foreach (ushort id in extraEvents)
+            {
+                writer.Write(id);
+                writer.Write(1u);
+                writer.Write(0);
+                writer.Write(0);
+                writer.Write((byte)0);
+            }
             writer.Write((byte)1);
             writer.Write(SeriaLuckEventId);
             writer.Write((uint)SeriaLuckValueMax);

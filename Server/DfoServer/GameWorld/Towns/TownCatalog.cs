@@ -50,6 +50,8 @@ internal sealed class TownCatalog
     public RoomPortal[] RoomPortals { get; }
     public IReadOnlyDictionary<uint, uint[]> NpcMoves { get; }
     public IReadOnlyDictionary<int, TownDungeonMap> DungeonMaps { get; }
+    // etc/enterablespecialchannel.etc [entarable quest by channel]：频道键 -> 入场前须完成的任务（如 fiendwar 8672 Fiendwar_enter.qst）。
+    public IReadOnlyDictionary<string, int> SpecialChannelQuests { get; init; } = new Dictionary<string, int>();
 
     // 只收集完成后开放区域的条件；except quest和进行中任务不能当作解锁任务。
     public IEnumerable<int> AccessQuestIds => Areas.Values.SelectMany(area =>
@@ -287,7 +289,7 @@ internal sealed class TownCatalog
             return "ready";
         }
 
-        if (IsRoom(current, completed))
+        if (IsRoom(current, completed) && !RegionalRoomDoor(current, target, completed))
         {
             var saved = roomReturn ?? DefaultReturn(current, completed);
             return saved is not null && target.Town == saved.Town && target.Area == saved.Area ? "ready" : "room-return-mismatch";
@@ -316,6 +318,14 @@ internal sealed class TownCatalog
             return "target-quest-required";
         return area.ExceptQuests.Any(completed.Contains) ? "target-excluded-by-quest" : "ready";
     }
+
+    // 非共享房间城镇里的房间式区域（导入 gate_seria.map，如艾尔丁纪念馆 67/0）自己的地图写了通往非房间区域的门时，
+    // 这扇门按普通门口判断，不要求目标等于房间返回地区；共享房间所在城镇仍只走返回地区。
+    // 门的目标按地图原样取，不限本城：五陵 117/0 chn_Gate_xian.map 的下方门 `330 324 289 24 1 1` 通往银色村庄大街 1/1（#613）。
+    bool RegionalRoomDoor(Location current, Location target, IReadOnlySet<int> completed) =>
+        current.Town != Room.Town && !IsRoom(target, completed) &&
+        Areas.TryGetValue((current.Town, current.Area), out var area) &&
+        area.Map(completed).Links.Any(l => l.Gate.Door && l.Town == target.Town && l.Area == target.Area);
 
     public bool CanTravel(Location current, Location target, int level, IReadOnlySet<int>? completed = null, Location? roomReturn = null) => Admission(current, target, level, completed, roomReturn) == "ready";
     public static TownCatalog Load(PvfArchive pvf)
@@ -380,7 +390,8 @@ internal sealed class TownCatalog
             catch (Exception error) when (error is FileNotFoundException or InvalidDataException or NotSupportedException)
             { dungeonMaps.Add(id,new(id,path,[],error.Message)); }
         }
-        var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps);
+        var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps)
+            { SpecialChannelQuests = LoadSpecialChannelQuests(pvf) };
         if (!catalog.IsPosition(room) || !catalog.IsPosition(catalog.InitialReturn))
             throw new InvalidDataException("PVF initial position outside native movable regions");
         return catalog;
@@ -433,6 +444,22 @@ internal sealed class TownCatalog
             maps.Add(path, map);
             return map;
         }
+    }
+
+    static Dictionary<string, int> LoadSpecialChannelQuests(PvfArchive pvf)
+    {
+        var quests = new Dictionary<string, int>(StringComparer.Ordinal);
+        const string path = "etc/enterablespecialchannel.etc";
+        if (!pvf.Contains(path))
+            return quests;
+        var section = Regex.Match(pvf.ReadText(path), @"\[entarable quest by channel\](.*?)\[/entarable quest by channel\]", RegexOptions.Singleline);
+        if (!section.Success)
+            throw new InvalidDataException("Special channel quest list missing: " + path);
+        string block = section.Groups[1].Value;
+        foreach (Match row in Regex.Matches(block, @"\[([^\]/]+)\]\s+(\d+)"))
+            if (!quests.TryAdd(row.Groups[1].Value.Trim(), int.Parse(row.Groups[2].Value)))
+                throw new InvalidDataException("Duplicate special channel quest: " + row.Groups[1].Value);
+        return quests;
     }
 
     static Rectangle Rect(int[] v)

@@ -30,6 +30,9 @@ namespace DfoServer.Infrastructure;
 // 唯一装配入口：按领域增加模块及依赖，不在协议循环中维护业务分支。
 internal static class ServerRuntime
 {
+    // 超时空之战的世界地图次数显示用；PVF 缺这份表时不下发，解析失败照常报错。
+    static DungeonIncountCatalog? LoadIncounts(PvfArchive pvf) => pvf.Contains(DungeonIncountCatalog.Path) ? DungeonIncountCatalog.Load(pvf) : null;
+
     internal static ChannelCatalog LoadChannels(string path)
     {
         // 单文件发行包只携带内置脚本；目录部署仍优先使用外置配置。
@@ -125,6 +128,7 @@ internal static class ServerRuntime
         var guildPermitDelivery = new GuildPermitDelivery(guildPermits);
         var devil = new DevilContractService(itemResources.DevilContracts, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var collectBoxProjection = new CollectBoxProjection(itemResources.CollectBoxes, clock);
+        var incounts = LoadIncounts(pvf);
         var weaponSkinService = new InventorySkinStorageService(itemResources.Items, itemResources.Skins,
             itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, clock);
         log.Write("weapon_skin_catalog", new { Recipes = itemResources.Skins.Recipes.Count,
@@ -141,6 +145,9 @@ internal static class ServerRuntime
         var avatarPresetProjection = new Network.Projection.Inventory.AvatarPresetProjection();
         var avatarPresetHandler = new Network.Handlers.AvatarPresetHandler(avatarPresetService, avatarPresetProjection, inventoryProjection, log);
         var weaponSkinHandler = new SkinStorageHandler(weaponSkinService, inventoryProjection, weaponSkinProjection, log);
+        // GM 团本时段：入城投影与 GM 网页共用同一实例，网页写入后下一次入城/换频道即按新表下发 EVENT_INFO。
+        var raidWindows = new Game.Raids.RaidEntryStore(options.DataDirectory);
+        projection.RaidWindows = raidWindows;
         var rentalHandler = new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items, towns, clock), inventoryProjection, log);
         var creatureHandler = new CreatureHandler(creatures, creatureProjection, log, inventoryProjection);
         // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
@@ -401,6 +408,7 @@ internal static class ServerRuntime
                 levelProjection, inventoryProjection, questProjection, projection, log, clock),
             dungeon,
             new AgitWarHandler(),
+            new RaidHandler(log, GameWorld.Raids.RaidCatalog.Load(pvf), new Game.Raids.RaidRegistry()),
             // 公会：创建窗口的两次查重（CMD 0x9C / 0x9D）、介绍校验（0x2E3）与建会认证链路（0x2E5 / 0x2E6 / 0x2E7）。
             // 顺序模式下创建者可能已经下线：接受认证时用离线账号租约提交，因此这里显式注入账号 owner 表。
             new GuildHandler(new Game.Guild.GuildDirectory(repository, guildParameters), guildPermits, online, owners, log, guildProjection),
@@ -420,13 +428,13 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,levelProjection);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;
         Func<CancellationToken, Task>? gmWeb = options.GmWebPort == 0 ? null : stop => GmWebServer.RunAsync(options.GmWebPort,
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
-                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl"))), stop);
+                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows), stop);
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
         Func<CancellationToken, Task>? management = gmCommands is null && gmWeb is null ? null : RunManagement;
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });

@@ -61,6 +61,8 @@ internal sealed partial class GameSession
         public EpicPieceCatalog? HellPieces { get; init; }
         // #510/#511 普通入场票（[required item]「物品 1 1」）的规划目录；入场提交时按最新背包重算。
         public EpicPieceCatalog? EntryPieces { get; init; }
+        // 入场代价：DungeonIncountInfo 角色/账号次数与频道专属城镇 [required item] 消耗，入场提交时同一事务扣除。
+        public DungeonEntryCost? ChannelCost { get; init; }
         public DungeonSpecialEntry? SpecialEntry { get; init; }
         public AltarSettlementState? AltarSettlement { get; set; }
         public DespairSettlementState? DespairSettlement { get; set; }
@@ -204,6 +206,23 @@ internal sealed partial class GameSession
             return RejectFormal("practice-selection-missing");
         if (!training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon) is { } selectionReason)
             return RejectFormal(selectionReason);
+        // 频道专属城镇（最后防线）的选图副本要求持有 dgn [required item]；次数与第三列消耗见 EntryCost。
+        bool channelTown = !training && !trainingRoom && !classExperience && assault is null && !hellParty &&
+            ChannelAreaLanding.IsChannelBoundTown(towns, expected.Position.Town);
+        // 悲叹/绝望之塔与祭坛的入场券、邀请函由各自准入策略规划，不再按频道城镇 [required item] 先行拒绝。
+        bool specialAdmission = grief is not null || despair is not null || dungeonId is 11006 or 11007;
+        if (channelTown && !specialAdmission &&
+            ChannelTownDungeonRequirement.Check(catalog.Get(checked((int)dungeonId)), expected.Inventory, pieces, DateTimeOffset.UtcNow) is { } missingItem)
+            return RejectFormal(missingItem);
+        // DungeonIncountInfo 次数：任意城镇、非练习的普通入场（含任务与结算再挑战）；新手训练、训练室、职业体验、强袭、深渊派对不计。
+        // 悲叹之塔、绝望之塔与血之/究极祭坛已由各自专表（账号日额度、特殊入场账本）计次扣费，这里不再叠加一次。
+        DungeonEntryCost? channelCost = null;
+        if (!practice && !training && !trainingRoom && !classExperience && assault is null && !hellParty &&
+            !specialAdmission)
+        {
+            channelCost = EntryCost(expected, dungeonId, catalog.Get(checked((int)dungeonId)), pieces, channelTown, out string? costRejection);
+            if (costRejection is not null) return RejectFormal(costRejection);
+        }
         // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_party_entry.go）：深渊派对入场条件 = 所在选图区域 [hell dungeon] 为真
         // 且该区域 [hell quest] 列表全部已完成（列表为空视为满足）。拒绝原因以 "hell-party-" 前缀写入 LastFormalDungeonRejection，由 handler 回拒绝包。
         // 票据在下面统一规划并随实例安装原子提交；组队规则未接入。
@@ -243,7 +262,9 @@ internal sealed partial class GameSession
             repository.LoadQuestClear(owner, expected, (ushort)questId) is not null;
         if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out var entryReason, allowClearedQuest, quest,draw,questCatalog,
             allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null,
-            hellParty: hellParty,hellLegend: hellLegend,practice: practice,grief:grief))
+            hellParty: hellParty,hellLegend: hellLegend,practice: practice,
+            // 频道专属城镇的选图副本（超时空之战 400000016 的 [boss map] 6 0 只写 `map`）按客户端规则把 Boss 坐标格当 Boss 图；其他副本不变。
+            bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         if (hellParty && entry!.HellParty is null && !entry.IsCosmo) return RejectFormal("hell-party-room-unavailable");
         HellPartyTicket? hellTicket = null;
@@ -311,7 +332,9 @@ internal sealed partial class GameSession
             WeeklyDungeonPolicy.SlotOf(catalog.Get(checked((int)dungeonId))) is { } weeklySlot)
             weekly = new(WeeklyDungeonPolicy.WeekKey((timeProvider ?? TimeProvider.System).GetUtcNow()), weeklySlot);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
-            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, EntryPieces = pieces, SpecialEntry = specialEntry } };
+            // #510/#511 普通入场票已覆盖同一 [required item] 时，频道专属城镇不再重复扣这件物品，只保留次数。
+            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, EntryPieces = pieces, SpecialEntry = specialEntry,
+                ChannelCost = channelCost is { Consume: not null } && entry.EntryItem is not null ? channelCost with { Consume = null } : channelCost } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
         bool HasOriginalTerminalClear(ActiveMainQuest original) =>
@@ -590,6 +613,42 @@ internal sealed partial class GameSession
             entryItems = hellPlan;
             hellSlots = hellPlan.ChangedSlots;
         }
+        if (installing.Entry.EntryItem is { } pendingEntryItem && entryItems is null)
+        {
+            // 次数落库前先按当前背包核对普通入场票，避免票已不足却先记了次数。
+            if (installing.EntryPieces is not { } checkPieces) return null;
+            var check = InventoryMaterialConsumptionService.Plan(character.Inventory,
+                [new ItemMaterialCost(pendingEntryItem.ItemId, pendingEntryItem.Count)], checkPieces, DateTimeOffset.UtcNow);
+            if (!check.Accepted || check.Plan is null) return null;
+        }
+        System.Collections.Immutable.ImmutableArray<InventorySlot> channelSlots = [];
+        System.Collections.Immutable.ImmutableArray<DungeonEnterCount> enterCounts = [];
+        if (installing.ChannelCost is { } cost)
+        {
+            // 入场提交时按当前背包重算材料；次数已满或材料不足则整个入场作废。
+            InventoryPlan? consumption = null;
+            if (cost.Consume is { } consume)
+            {
+                if (cost.Pieces is null) return null;
+                var spent = InventoryMaterialConsumptionService.Plan(character.Inventory,
+                    [new ItemMaterialCost(consume.ItemId, consume.Count)], cost.Pieces, DateTimeOffset.UtcNow);
+                if (!spent.Accepted || spent.Plan is not { } plan) return null;
+                consumption = plan;
+            }
+            // [sub incount on clear dungeon] 的副本这里只核对不记次，通关结算时记（ChargeIncountOnClear）。
+            if (repository.CommitDungeonIncountEntry(owner, character, cost.Incount?.CountKey ?? cost.DungeonId, cost.Period, cost.Incount, consumption,
+                cost.Account, increment: !cost.ChargeOnClear) is not { } counted)
+                return null;
+            character = counted.Character;
+            if (cost.Incount is { } row && !cost.ChargeOnClear) enterCounts = [.. DungeonIncountPolicy.Views(row, counted.Usage)];
+            if (consumption is not null)
+            {
+                channelSlots = consumption.ChangedSlots;
+                var rebased = installing.Entry with { CharacterRevision = checked(character.Revision + 1) };
+                installing.Run.RebasePreparedRevision(rebased.CharacterRevision);
+                installing = installing with { Entry = rebased };
+            }
+        }
         System.Collections.Immutable.ImmutableArray<InventorySlot> entrySlots = [];
         if (installing.GriefAdmission is { Decision.UsesInvitation: true })
         {
@@ -653,7 +712,8 @@ internal sealed partial class GameSession
         CurrentDungeonSelection = null;
         SetState(SessionPhase.Loading);
         return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
-            EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue, GriefAdmission = installing.GriefAdmission, SpecialEntry = installing.SpecialEntry };
+            EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue, ChannelConsumedSlots = channelSlots, EnterCounts = enterCounts,
+            GriefAdmission = installing.GriefAdmission, SpecialEntry = installing.SpecialEntry };
     }
 
     bool CanReplaceSettledDungeon(FormalDungeon? dungeon, FormalDungeonReceipt receipt) =>

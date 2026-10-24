@@ -41,6 +41,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[][] Mailbox { get; private set; } = [];
     public byte[] TitleProgress { get; private set; } = [];
     public byte[] AssaultDailyInfo { get; private set; } = [];
+    public byte[][] EnterCounts { get; private set; } = [];
     public byte[] GriefTowerClearInfo { get; private set; } = [];
     public byte[] ItemMakingSkills { get; private set; } = [];
     public WirePacket[] CollectBoxes { get; private set; } = [];
@@ -48,6 +49,9 @@ internal sealed class TcpPeer : IDisposable
     public byte[] ExpertContract { get; private set; } = [];
     public byte[] PremiumInfo { get; private set; } = [];
     public byte[] SeriaLuckInfo { get; private set; } = [];
+    // 团本时段开放时 EVENT_INFO 在 2037 之后追加的开放事件（按 RaidEntryEvents.OpenEvents 顺序）；默认无开放时段。
+    public ushort[] ExpectedOpenEvents { get; set; } = [];
+    public byte[] EventInfoPayload { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
     public Dictionary<int, byte> DailyBoosterUsed { get; } = [];
@@ -490,9 +494,10 @@ internal sealed class TcpPeer : IDisposable
         byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false, ushort avatarExpansion = 105,
         (int[] Owned, int Selected)? weaponSkins = null,
         (SkinOwnership[] Owned, int Selected)? damageFonts = null,
-        (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null)
+        (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool nativeSwitch = false)
     {
-        if (!resumeTown && !requestedRoster)
+        // nativeSwitch：原生换频道新连接直接发选角4，不先请求名册；服务端按换频道判定是否保留客户端城镇快照。
+        if (!resumeTown && !requestedRoster && !nativeSwitch)
             Send(8, [255, 255, 2]);
         long selectionStarted = UnixTime;
         Send(4, Build(w => w.Write(slot)));
@@ -500,6 +505,8 @@ internal sealed class TcpPeer : IDisposable
         if (resumeTown)
             expected = [.. expected.Where(p => p != ((byte)0, (ushort)24) && p != ((byte)0, (ushort)1379) && p != ((byte)0, (ushort)124)),
                 .. (room ? new (byte Kind, ushort Opcode)[] { (0, 1379) } : []), (0, 124), (0, 24)];
+        else if (!room)
+            expected = [.. expected.Where(p => p != ((byte)0, (ushort)1379))];
         int afterCargo = prepared ? 9 : 8;
         // 保留普通入城断言的返回索引，特殊容器单独暴露；线上顺序仍逐包严格验证。
         var ack = Expect(expected[0].Kind, expected[0].Opcode);
@@ -628,6 +635,17 @@ internal sealed class TcpPeer : IDisposable
                 TestCheck.That(packet.Kind == 0 && packet.Opcode == 1536 && packet.Body.Length == 5, "强袭每日信息在邮件前初始化");
                 AssaultDailyInfo = packet.Body;
                 packet = Read();
+                // DungeonIncountInfo 全部限次副本：强袭每日信息后逐个下发 NOTI 550（u32 副本 + u8 日剩余 + u8 周剩余）。
+                var enterCounts = new List<byte[]>();
+                while (packet.Kind == 0 && packet.Opcode == 550)
+                {
+                    TestCheck.That(packet.Body.Length == 6, "NOTI 550 固定 6 字节");
+                    enterCounts.Add(packet.Body);
+                    packet = Read();
+                }
+                TestCheck.That(enterCounts.Count is 0 or 18 && enterCounts.Select(body => U32(body, 0)).Distinct().Count() == enterCounts.Count,
+                    "入城下发 18 个限次副本各一条 550: " + enterCounts.Count);
+                EnterCounts = enterCounts.ToArray();
                 while (packet.Kind == 0 && packet.Opcode == 97)
                 {
                     mails.Add(packet.Body);
@@ -704,17 +722,21 @@ internal sealed class TcpPeer : IDisposable
             using (var compressed = new MemoryStream(events.Body, writable: false))
             using (var zlib = new ZLibStream(compressed, CompressionMode.Decompress))
             {
-                byte[] payload = new byte[68];
+                byte[] payload = new byte[68 + 15 * ExpectedOpenEvents.Length];
                 zlib.ReadExactly(payload);
-                TestCheck.That(zlib.ReadByte() == -1, "事件正文必须恰好68B，解压不产生无界输出");
+                TestCheck.That(zlib.ReadByte() == -1, $"事件正文必须恰好{payload.Length}B，解压不产生无界输出");
+                EventInfoPayload = payload;
                 TestCheck.Bytes(payload, Build(writer =>
                 {
-                    writer.Write((ushort)1);
-                    writer.Write((ushort)2037);
-                    writer.Write(1u);
-                    writer.Write(0u);
-                    writer.Write(0u);
-                    writer.Write((byte)0);
+                    writer.Write((ushort)(1 + ExpectedOpenEvents.Length));
+                    foreach (ushort id in (ushort[])[2037, .. ExpectedOpenEvents])
+                    {
+                        writer.Write(id);
+                        writer.Write(1u);
+                        writer.Write(0u);
+                        writer.Write(0u);
+                        writer.Write((byte)0);
+                    }
                     writer.Write((byte)1);
                     writer.Write((ushort)2037);
                     writer.Write(8u);
@@ -725,6 +747,8 @@ internal sealed class TcpPeer : IDisposable
             SeriaLuckInfo = gauge.Body;
             TestCheck.That(!gauge.Protected && gauge.Body.Length == 2 && gauge.Body[0] == gauge.Body[1] &&
                 gauge.Body[0] <= 40 && gauge.Body[0] % 5 == 0, "幸运值初始通知使用普通CRC/序号，两端阶段一致且不超8");
+            // 团队频道卡次数：卢克/超时空漩涡/普雷三种团本按已用 0 下发（01DD61C0 读 u8 n + n×{u8 类型,u32,u32,u8 子表数}）。
+            Expect(0, 1446, [3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         }
 
         void ReadSceneInitialization()

@@ -1,0 +1,2573 @@
+# 普雷·伊希斯攻坚战 (type 0x32 CHANNEL_PREY_RAID) 频道静态取证。ARAD SHA256 7560188D4BAC4A33690FE3B37069F365885F7F57E14CEE868B64103852F28471；文件偏移=VA-0x400000；capstone 只读。PVF Script.pvf SHA256 01C9970F9AE0D5FDBD08AC20B7B0BB61FEA451505ACFEF2569A56390B42B38B8。
+## 结论
+- 页签：01EC58C6 vt+0x18(01EB55F0→028FB090 白名单含0x32) 真 → vt+0xFC(01EB5620→028FA390 type==0x13) 假 → vt+0x74(01EB5820 type∈{0x3E,0x3F}) 假 → vt+0x28(01EB5720→028FA400 含0x32) 真 → push 2 → 01EC4BB0 页签2（团队），与0x17/0x20/0x2D同路径。
+- 团队列表 017128D0 0x32 分支(01712E1F)：保留条件 = (事件0x19E=414在EVENT_INFO集合 或 当前频道type∈{0x11 DEBUGGING,0x15 TEST}) 且 任务0x22E7=8935完成 且 角色等级≥0x5F=95（角色信息缺失时跳过等级比较）。
+- 分组：01EBDxxx..01EC1xxx 频道脚本分类引用的分组串仅 [granfloris]/[raid]/[luke_raid]/[evildom_war]；[prey] 只出现在 02E0D60F/03DB041E/03EC8633/04172FEE 等非频道脚本解析器(GM列表/模块标签/事件频道/raid奖励)。[fiendwar] 亦无引用但频道39可用 → 分组串对 type0x32 的页签不起作用，服务端 [prey] 用于 enterablespecialchannel 的 prey=8935 匹配。
+- 名称键：hardcodetexttag chn_channel_info_054 = 伊希斯攻坚战（客户端同表取证 fiendwar/evidence/client-hardcodetexttag-20261020.txt 亦为此值）。
+- 频道号：客户端按下发脚本建表(01EC7E30)、按(服务器分组,频道号)查表；静态未找到任何对 0x32 频道号的固定要求；PVF 无官方频道列表。频道号不可证明，只能是服务端配置选择。
+- 落点：Prey.etc [WAITING ROOM] 59 2；town 59 Prey_raid.twn(灰色墓地)，区域0..5 均 [need level] 95，区域0=Gate_Prey.map [gate] 474 234。
+- 旧 RaidChannel 插件：ini/log 只处理 fiendwar 特殊页，无 prey。
+
+## da 01EC5880 01EC59A0
+01EC5880  0483                 add al, 0x83
+01EC5882  c3                   ret 
+01EC5883  6453                 push ebx
+01EC5885  e8564454fe           call 0x409ce0
+01EC588A  c745fcffffffff       mov dword ptr [ebp - 4], 0xffffffff
+01EC5891  8d4dd0               lea ecx, [ebp - 0x30]
+01EC5894  e8871554fe           call 0x406e20
+01EC5899  8b16                 mov edx, dword ptr [esi]
+01EC589B  8b4254               mov eax, dword ptr [edx + 0x54]
+01EC589E  8bce                 mov ecx, esi
+01EC58A0  ffd0                 call eax
+01EC58A2  84c0                 test al, al
+01EC58A4  740f                 je 0x1ec58b5
+01EC58A6  e825eedf01           call 0x3cc46d0
+01EC58AB  80780400             cmp byte ptr [eax + 4], 0
+01EC58AF  0f8433010000         je 0x1ec59e8
+01EC58B5  8d4dc4               lea ecx, [ebp - 0x3c]
+01EC58B8  51                   push ecx
+01EC58B9  b9ace22c06           mov ecx, 0x62ce2ac
+01EC58BE  8975c4               mov dword ptr [ebp - 0x3c], esi
+01EC58C1  e8da3f80ff           call 0x16c98a0
+01EC58C6  8b16                 mov edx, dword ptr [esi]
+01EC58C8  8b4218               mov eax, dword ptr [edx + 0x18]
+01EC58CB  8bce                 mov ecx, esi
+01EC58CD  ffd0                 call eax
+01EC58CF  84c0                 test al, al
+01EC58D1  7521                 jne 0x1ec58f4
+01EC58D3  8b16                 mov edx, dword ptr [esi]
+01EC58D5  8b4228               mov eax, dword ptr [edx + 0x28]
+01EC58D8  8bce                 mov ecx, esi
+01EC58DA  ffd0                 call eax
+01EC58DC  84c0                 test al, al
+01EC58DE  7514                 jne 0x1ec58f4
+01EC58E0  8b16                 mov edx, dword ptr [esi]
+01EC58E2  8b8200010000         mov eax, dword ptr [edx + 0x100]
+01EC58E8  8bce                 mov ecx, esi
+01EC58EA  ffd0                 call eax
+01EC58EC  84c0                 test al, al
+01EC58EE  0f8495000000         je 0x1ec5989
+01EC58F4  8b16                 mov edx, dword ptr [esi]
+01EC58F6  8b82fc000000         mov eax, dword ptr [edx + 0xfc]
+01EC58FC  8bce                 mov ecx, esi
+01EC58FE  ffd0                 call eax
+01EC5900  84c0                 test al, al
+01EC5902  0f8581000000         jne 0x1ec5989
+01EC5908  8b16                 mov edx, dword ptr [esi]
+01EC590A  8b4274               mov eax, dword ptr [edx + 0x74]
+01EC590D  8bce                 mov ecx, esi
+01EC590F  ffd0                 call eax
+01EC5911  3c01                 cmp al, 1
+01EC5913  7508                 jne 0x1ec591d
+01EC5915  8b4db8               mov ecx, dword ptr [ebp - 0x48]
+01EC5918  56                   push esi
+01EC5919  6a01                 push 1
+01EC591B  eb67                 jmp 0x1ec5984
+01EC591D  8b16                 mov edx, dword ptr [esi]
+01EC591F  8b4228               mov eax, dword ptr [edx + 0x28]
+01EC5922  8bce                 mov ecx, esi
+01EC5924  ffd0                 call eax
+01EC5926  3c01                 cmp al, 1
+01EC5928  7508                 jne 0x1ec5932
+01EC592A  8b4db8               mov ecx, dword ptr [ebp - 0x48]
+01EC592D  56                   push esi
+01EC592E  6a02                 push 2
+01EC5930  eb52                 jmp 0x1ec5984
+01EC5932  8b16                 mov edx, dword ptr [esi]
+01EC5934  8b8214010000         mov eax, dword ptr [edx + 0x114]
+01EC593A  8bce                 mov ecx, esi
+01EC593C  ffd0                 call eax
+01EC593E  3c01                 cmp al, 1
+01EC5940  7508                 jne 0x1ec594a
+01EC5942  8b4db8               mov ecx, dword ptr [ebp - 0x48]
+01EC5945  56                   push esi
+01EC5946  6a01                 push 1
+01EC5948  eb3a                 jmp 0x1ec5984
+01EC594A  8b16                 mov edx, dword ptr [esi]
+01EC594C  8b426c               mov eax, dword ptr [edx + 0x6c]
+01EC594F  8bce                 mov ecx, esi
+01EC5951  ffd0                 call eax
+01EC5953  56                   push esi
+01EC5954  3c01                 cmp al, 1
+01EC5956  7507                 jne 0x1ec595f
+01EC5958  8b4db8               mov ecx, dword ptr [ebp - 0x48]
+01EC595B  6a01                 push 1
+01EC595D  eb25                 jmp 0x1ec5984
+01EC595F  8b7db8               mov edi, dword ptr [ebp - 0x48]
+01EC5962  8bcf                 mov ecx, edi
+01EC5964  e8b792ffff           call 0x1ebec20
+01EC5969  3c01                 cmp al, 1
+01EC596B  7505                 jne 0x1ec5972
+01EC596D  56                   push esi
+01EC596E  6a01                 push 1
+01EC5970  eb10                 jmp 0x1ec5982
+01EC5972  8b16                 mov edx, dword ptr [esi]
+01EC5974  8b4210               mov eax, dword ptr [edx + 0x10]
+01EC5977  8bce                 mov ecx, esi
+01EC5979  ffd0                 call eax
+01EC597B  3c01                 cmp al, 1
+01EC597D  750a                 jne 0x1ec5989
+01EC597F  56                   push esi
+01EC5980  6a00                 push 0
+01EC5982  8bcf                 mov ecx, edi
+01EC5984  e827f2ffff           call 0x1ec4bb0
+01EC5989  803d7ce22c0600       cmp byte ptr [0x62ce27c], 0
+01EC5990  7456                 je 0x1ec59e8
+01EC5992  8b16                 mov edx, dword ptr [esi]
+01EC5994  8b427c               mov eax, dword ptr [edx + 0x7c]
+01EC5997  8bce                 mov ecx, esi
+01EC5999  ffd0                 call eax
+01EC599B  50                   push eax
+01EC599C  8b45bc               mov eax, dword ptr [ebp - 0x44]
+
+## da 01EB55F0 01EB5601
+01EB55F0  8b4108               mov eax, dword ptr [ecx + 8]
+01EB55F3  50                   push eax
+01EB55F4  e8f7b94700           call 0x2330ff0
+01EB55F9  8bc8                 mov ecx, eax
+01EB55FB  e8905aa400           call 0x28fb090
+01EB5600  c3                   ret 
+
+## da 01EB5620 01EB5631
+01EB5620  8b4108               mov eax, dword ptr [ecx + 8]
+01EB5623  50                   push eax
+01EB5624  e8c7b94700           call 0x2330ff0
+01EB5629  8bc8                 mov ecx, eax
+01EB562B  e8604da400           call 0x28fa390
+01EB5630  c3                   ret 
+
+## da 01EB5820 01EB5836
+01EB5820  8b4108               mov eax, dword ptr [ecx + 8]
+01EB5823  83f83e               cmp eax, 0x3e
+01EB5826  7408                 je 0x1eb5830
+01EB5828  83f83f               cmp eax, 0x3f
+01EB582B  7403                 je 0x1eb5830
+01EB582D  33c0                 xor eax, eax
+01EB582F  c3                   ret 
+01EB5830  b801000000           mov eax, 1
+01EB5835  c3                   ret 
+
+## da 028FA390 028FA3A0
+028FA390  55                   push ebp
+028FA391  8bec                 mov ebp, esp
+028FA393  837d0813             cmp dword ptr [ebp + 8], 0x13
+028FA397  0f94c0               sete al
+028FA39A  5d                   pop ebp
+028FA39B  c20400               ret 4
+028FA39E  cc                   int3 
+028FA39F  cc                   int3 
+
+## da 028FA400 028FA435
+028FA400  55                   push ebp
+028FA401  8bec                 mov ebp, esp
+028FA403  8b4508               mov eax, dword ptr [ebp + 8]
+028FA406  83f817               cmp eax, 0x17
+028FA409  7424                 je 0x28fa42f
+028FA40B  83f820               cmp eax, 0x20
+028FA40E  741f                 je 0x28fa42f
+028FA410  83f819               cmp eax, 0x19
+028FA413  741a                 je 0x28fa42f
+028FA415  83f82d               cmp eax, 0x2d
+028FA418  7415                 je 0x28fa42f
+028FA41A  83f832               cmp eax, 0x32
+028FA41D  7410                 je 0x28fa42f
+028FA41F  83f83e               cmp eax, 0x3e
+028FA422  740b                 je 0x28fa42f
+028FA424  83f83f               cmp eax, 0x3f
+028FA427  7406                 je 0x28fa42f
+028FA429  32c0                 xor al, al
+028FA42B  5d                   pop ebp
+028FA42C  c20400               ret 4
+028FA42F  b001                 mov al, 1
+028FA431  5d                   pop ebp
+028FA432  c20400               ret 4
+
+## da 01712D9E 01712F50
+01712D9E  ffd2                 call edx
+01712DA0  83f82d               cmp eax, 0x2d
+01712DA3  7571                 jne 0x1712e16
+01712DA5  6891090000           push 0x991
+01712DAA  e851edfa00           call 0x26c1b00
+01712DAF  8bc8                 mov ecx, eax
+01712DB1  e80aa9fa00           call 0x26bd6c0
+01712DB6  84c0                 test al, al
+01712DB8  7510                 jne 0x1712dca
+01712DBA  e831e2c100           call 0x2330ff0
+01712DBF  8bc8                 mov ecx, eax
+01712DC1  e8ba761e01           call 0x28fa480
+01712DC6  84c0                 test al, al
+01712DC8  7418                 je 0x1712de2
+01712DCA  8b0d7cf52e06         mov ecx, dword ptr [0x62ef57c]
+01712DD0  68e0210000           push 0x21e0
+01712DD5  e886b89000           call 0x201e660
+01712DDA  84c0                 test al, al
+01712DDC  0f85cf070000         jne 0x17135b1
+01712DE2  83ec0c               sub esp, 0xc
+01712DE5  8bc4                 mov eax, esp
+01712DE7  c70000000000         mov dword ptr [eax], 0
+01712DED  c7400400000000       mov dword ptr [eax + 4], 0
+01712DF4  8b0f                 mov ecx, dword ptr [edi]
+01712DF6  8965b8               mov dword ptr [ebp - 0x48], esp
+01712DF9  85c9                 test ecx, ecx
+01712DFB  7404                 je 0x1712e01
+01712DFD  8b09                 mov ecx, dword ptr [ecx]
+01712DFF  8908                 mov dword ptr [eax], ecx
+01712E01  8b55b4               mov edx, dword ptr [ebp - 0x4c]
+01712E04  895008               mov dword ptr [eax + 8], edx
+01712E07  c645fc0d             mov byte ptr [ebp - 4], 0xd
+01712E0B  8d8508feffff         lea eax, [ebp - 0x1f8]
+01712E11  e929010000           jmp 0x1712f3f
+01712E16  8b16                 mov edx, dword ptr [esi]
+01712E18  8b427c               mov eax, dword ptr [edx + 0x7c]
+01712E1B  8bce                 mov ecx, esi
+01712E1D  ffd0                 call eax
+01712E1F  83f832               cmp eax, 0x32
+01712E22  0f8548010000         jne 0x1712f70
+01712E28  689e010000           push 0x19e
+01712E2D  e8ceecfa00           call 0x26c1b00
+01712E32  8bc8                 mov ecx, eax
+01712E34  e887a8fa00           call 0x26bd6c0
+01712E39  84c0                 test al, al
+01712E3B  7510                 jne 0x1712e4d
+01712E3D  e8aee1c100           call 0x2330ff0
+01712E42  8bc8                 mov ecx, eax
+01712E44  e837761e01           call 0x28fa480
+01712E49  84c0                 test al, al
+01712E4B  7418                 je 0x1712e65
+01712E4D  8b0d7cf52e06         mov ecx, dword ptr [0x62ef57c]
+01712E53  68e7220000           push 0x22e7
+01712E58  e803b89000           call 0x201e660
+01712E5D  84c0                 test al, al
+01712E5F  7404                 je 0x1712e65
+01712E61  b301                 mov bl, 1
+01712E63  eb02                 jmp 0x1712e67
+01712E65  32db                 xor bl, bl
+01712E67  8b0df8f42e06         mov ecx, dword ptr [0x62ef4f8]
+01712E6D  85c9                 test ecx, ecx
+01712E6F  0f8493000000         je 0x1712f08
+01712E75  e806e06701           call 0x2d90e80
+01712E7A  85c0                 test eax, eax
+01712E7C  0f8486000000         je 0x1712f08
+01712E82  8b0df8f42e06         mov ecx, dword ptr [0x62ef4f8]
+01712E88  e8f3df6701           call 0x2d90e80
+01712E8D  8bc8                 mov ecx, eax
+01712E8F  e89cb99700           call 0x208e830
+01712E94  85c0                 test eax, eax
+01712E96  7470                 je 0x1712f08
+01712E98  8b0df8f42e06         mov ecx, dword ptr [0x62ef4f8]
+01712E9E  e8dddf6701           call 0x2d90e80
+01712EA3  8bc8                 mov ecx, eax
+01712EA5  e886b99700           call 0x208e830
+01712EAA  8d4814               lea ecx, [eax + 0x14]
+01712EAD  8bc1                 mov eax, ecx
+01712EAF  83e00f               and eax, 0xf
+01712EB2  8d5104               lea edx, [ecx + 4]
+01712EB5  83f80c               cmp eax, 0xc
+01712EB8  773e                 ja 0x1712ef8
+01712EBA  0fb680ec3c7101       movzx eax, byte ptr [eax + 0x1713cec]
+01712EC1  ff2485d83c7101       jmp dword ptr [eax*4 + 0x1713cd8]
+01712EC8  8d459c               lea eax, [ebp - 0x64]
+01712ECB  50                   push eax
+01712ECC  52                   push edx
+01712ECD  e84e6f5602           call 0x3c79e20
+01712ED2  eb2e                 jmp 0x1712f02
+01712ED4  8d459c               lea eax, [ebp - 0x64]
+01712ED7  50                   push eax
+01712ED8  52                   push edx
+01712ED9  e8b26f5602           call 0x3c79e90
+01712EDE  eb22                 jmp 0x1712f02
+01712EE0  8d459c               lea eax, [ebp - 0x64]
+01712EE3  50                   push eax
+01712EE4  52                   push edx
+01712EE5  e816705602           call 0x3c79f00
+01712EEA  eb16                 jmp 0x1712f02
+01712EEC  8d459c               lea eax, [ebp - 0x64]
+01712EEF  50                   push eax
+01712EF0  52                   push edx
+01712EF1  e87a705602           call 0x3c79f70
+01712EF6  eb0a                 jmp 0x1712f02
+01712EF8  8d459c               lea eax, [ebp - 0x64]
+01712EFB  50                   push eax
+01712EFC  52                   push edx
+01712EFD  e8be715602           call 0x3c7a0c0
+01712F02  837d9c5f             cmp dword ptr [ebp - 0x64], 0x5f
+01712F06  7c08                 jl 0x1712f10
+01712F08  84db                 test bl, bl
+01712F0A  0f85a1060000         jne 0x17135b1
+01712F10  83ec0c               sub esp, 0xc
+01712F13  8bc4                 mov eax, esp
+01712F15  c70000000000         mov dword ptr [eax], 0
+01712F1B  c7400400000000       mov dword ptr [eax + 4], 0
+01712F22  8b0f                 mov ecx, dword ptr [edi]
+01712F24  8965b8               mov dword ptr [ebp - 0x48], esp
+01712F27  85c9                 test ecx, ecx
+01712F29  7404                 je 0x1712f2f
+01712F2B  8b09                 mov ecx, dword ptr [ecx]
+01712F2D  8908                 mov dword ptr [eax], ecx
+01712F2F  8b55b4               mov edx, dword ptr [ebp - 0x4c]
+01712F32  895008               mov dword ptr [eax + 8], edx
+01712F35  c645fc0e             mov byte ptr [ebp - 4], 0xe
+01712F39  8d85b0feffff         lea eax, [ebp - 0x150]
+01712F3F  50                   push eax
+01712F40  c645fc02             mov byte ptr [ebp - 4], 2
+01712F44  8d4ddc               lea ecx, [ebp - 0x24]
+01712F47  e864488d01           call 0x2fe77b0
+01712F4C  8b08                 mov ecx, dword ptr [eax]
+01712F4E  3bf9                 cmp edi, ecx
+
+## strpush 分组串
+01EBDCB7 05494BD4 [granfloris]
+01EBDED3 05494ABC [raid]
+01EBDF14 05494A9C [luke_raid]
+01EBEA95 05494BD4 [granfloris]
+01EBEAF9 05494ABC [raid]
+01EBEB00 05494A9C [luke_raid]
+01EBEDF4 05494ABC [raid]
+01EBF09D 05494CBC [evildom_war]
+01EBF4A2 05494ABC [raid]
+01EBF94A 05494BD4 [granfloris]
+01EC00BA 05494CBC [evildom_war]
+01EC0F83 05494BD4 [granfloris]
+01EC119F 05494ABC [raid]
+01EC11E0 05494A9C [luke_raid]
+02E0D60F 055FCD9C [prey]
+03DB041E 055FCD9C [prey]
+03EA025C 05494ABC [raid]
+03EC8633 055FCD9C [prey]
+0406870C 05494ABC [raid]
+040FAB49 05494ABC [raid]
+04172FEE 055FCD9C [prey]
+042AE764 05A37B44 [RAID]
+
+## PVF
+===== etc/raid/prey/prey.etc
+
+[PHASE MAX]
+2 
+[RAID MEMBER MAX]
+12 
+[RAID START MINIMUM MEMBER]
+1 
+[WAITING ROOM]
+59 2 
+[WAITING ROOM NPC]
+20478 20479 
+[DAILY ACCOUNT ENTER LIMIT]
+10 
+[DISCONN MEMBER WAIT TIME]
+300 
+[START DELAY TIME]
+15 
+[PHASE TIME OVER]
+3600 3600 
+[PHASE TOTAL TIME OVER]
+3600 
+[PHASE BREAK TIME]
+0 
+[MOVIE END TIME]
+0 0 24 24 
+[ENTRY COST]
+10308560 1 
+[/ENTRY COST]
+
+[GARDEN CLEAR ATTACK BONUS BUFF RATE]
+25 25 30 
+[SLENIKON]
+
+[MAX HP]
+10000 
+[HP DECREASE]
+2 17 
+[DEFENCE FAIL]
+1300 
+[SINGLE DEFENCE FAIL]
+2000 
+[ISYS FAIL]
+0 
+[ARMOR LEVEL HP BOUNDARY]
+6000 2000 
+[CHANGE ACTION LIST]
+
+[PHASE]
+2 400020021 0 1 
+[/PHASE]
+
+[ARMOR]
+3 2094280 0 4 6 2094281 0 3 4 2094282 0 3 4 2094283 0 3 4 2094284 0 3 4 2094285 0 3 4 400020011 0 1 2 400020012 0 1 2 400020013 0 1 2 2094547 0 1 2 2094548 0 1 2 2094549 0 1 2 
+[/ARMOR]
+
+[/CHANGE ACTION LIST]
+
+[/SLENIKON]
+
+[ISYS DEBUFF]
+
+[VALUE OF PATTERN SUCCESS]
+30 
+[VALUE OF CLEAR DEBUFF DUNGEON]
+180 
+[LIMIT TIME OF CLEAR DEBUFF DUNGEON]
+30000 
+[/ISYS DEBUFF]
+
+[MAGIC TOWER 1]
+4993 
+[MAGIC TOWER 2]
+4994 
+[DIE IMPRISON TIME]
+20 20 20 20 20 
+[/DIE IMPRISON TIME]
+
+[RETRY]
+1 
+[RETRY ITEM]
+10308560 1 
+[WEEKLY CLEAR COUNT]
+2 
+[PHASE]
+
+[PHASE NAME]
+`围攻伊希斯` 
+[TITLE IMG]
+`Interface2/GContents/190307_PreyRaid/Raid/MemberWindow.img` 0 
+[CONDITION FOR RANK]
+
+[DEAD COUNT]
+0 1 0 
+[DEAD COUNT]
+2 5 1 
+[DEAD COUNT]
+6 9 2 
+[DEAD COUNT]
+10 14 3 
+[/CONDITION FOR RANK]
+
+[CLEAR REWARD ITEM]
+
+[STATE REWARD]
+`party_card` -1 100 490011514 0 0 
+[STATE REWARD]
+`pcroom_card` -1 100 10309048 0 0 
+[STATE REWARD]
+`squad_item` -1 4500 490011515 0 1 
+[STATE REWARD]
+`squad_item` -1 4000 490011516 0 2 
+[STATE REWARD]
+`squad_item` -1 1500 490011517 1 3 
+[/CLEAR REWARD ITEM]
+
+[MINIMAL DUNGEON CLEAR COUNT]
+2 
+[DUNGEON INFO]
+
+[INDEX]
+4988 
+[TYPE]
+`slenikon defence` 
+[HP INFO]
+
+[4988 DGN HP]
+9999 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[RATE]
+200 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4989 
+[TYPE]
+`slenikon defence` 
+[HP INFO]
+
+[4989 DGN HP]
+9999 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[RATE]
+200 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4990 
+[TYPE]
+`slenikon defence` 
+[HP INFO]
+
+[4990 DGN HP]
+9999 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[RATE]
+100 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4991 
+[TYPE]
+`garden` 
+[HP INFO]
+
+[4991 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4992 
+[TYPE]
+`garden` 
+[HP INFO]
+
+[4992 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4993 
+[TYPE]
+`magic tower` 
+[HP INFO]
+
+[4993 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4994 
+[TYPE]
+`magic tower` 
+[HP INFO]
+
+[4994 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4995 
+[TYPE]
+`sanctuary` 
+[HP INFO]
+
+[4995 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4996 
+[TYPE]
+`sanctuary` 
+[HP INFO]
+
+[4996 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4997 
+[TYPE]
+`sanctuary` 
+[HP INFO]
+
+[4997 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+4998 
+[TYPE]
+`sanctuary` 
+[HP INFO]
+
+[4998 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[TRIGGER]
+
+[IF]
+
+[1PHASE INIT]
+0 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[1PHASE INIT]
+1 
+[SET]
+
+[SLENIKON SPEED]
+15 
+[SET]
+
+[SLENIKON FROM AREA]
+0 
+[SET]
+
+[SLENIKON TO AREA]
+301 
+[SET]
+
+[SLENIKON ARRIVAL TIME]
+0 
+[SET]
+
+[ISYS HP]
+10000 
+[SET]
+
+[ISYS HP IN DUNGEON]
+10000 
+[SET]
+
+[PREPARE RAID]
+0 
+[SET]
+
+[SLENIKON INVINCIBILITY]
+0 
+[SET]
+
+[MERCHANT]
+0 
+[SET]
+
+[HP ALARM]
+-1 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[PREPARE RAID]
+1 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET TIMER]
+1 1000 15 
+[RESERVE SPAWN]
+4993 180 
+[RESERVE SPAWN]
+4994 180 
+[SET TIMER]
+500 4993 180 
+[SET TIMER]
+500 4994 180 
+[SLENIKON]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+1 1000 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET TIMER]
+1 1000 15 
+[SLENIKON]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4993 
+[CHECK DUNGEON STATE]
+4993 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET DUNGEON STATE]
+4993 `close` 
+[SET TIMER]
+1 4993 360 
+[RESET TIMER]
+500 4993 
+[SET]
+
+[4993 MAGIC TOWER SPAWN POSITION]
+0 
+[SET]
+
+[4993 MAGIC TOWER SPAWN TIME]
+0 
+[RESERVE SPAWN]
+4993 360 
+[SET TIMER]
+500 4993 360 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+1 4993 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET DUNGEON STATE]
+4993 `open` 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+500 4993 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SPAWN]
+4993 
+[SET]
+
+[4993 MAGIC TOWER SPAWN POSITION]
+0 
+[SET]
+
+[4993 MAGIC TOWER SPAWN TIME]
+0 
+[RESERVE SPAWN]
+4993 180 
+[SET TIMER]
+500 4993 180 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4994 
+[CHECK DUNGEON STATE]
+4994 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET DUNGEON STATE]
+4994 `close` 
+[SET TIMER]
+1 4994 360 
+[RESET TIMER]
+500 4994 
+[SET]
+
+[4994 MAGIC TOWER SPAWN POSITION]
+0 
+[SET]
+
+[4994 MAGIC TOWER SPAWN TIME]
+0 
+[RESERVE SPAWN]
+4994 360 
+[SET TIMER]
+500 4994 360 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+1 4994 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET DUNGEON STATE]
+4994 `open` 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+500 4994 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SPAWN]
+4994 
+[SET]
+
+[4994 MAGIC TOWER SPAWN POSITION]
+0 
+[SET]
+
+[4994 MAGIC TOWER SPAWN TIME]
+0 
+[RESERVE SPAWN]
+4994 180 
+[SET TIMER]
+500 4994 180 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK RAID TIMER END]
+1 150 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[MERCHANT]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4995 
+[CHECK DUNGEON STATE]
+4995 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET RAID TIMER]
+1 150 
+[SET]
+
+[MERCHANT]
+1 
+[RAID TIMER]
+1 150 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4996 
+[CHECK DUNGEON STATE]
+4996 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET RAID TIMER]
+1 150 
+[SET]
+
+[MERCHANT]
+1 
+[RAID TIMER]
+1 150 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4997 
+[CHECK DUNGEON STATE]
+4997 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET RAID TIMER]
+1 150 
+[SET]
+
+[MERCHANT]
+1 
+[RAID TIMER]
+1 150 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4998 
+[CHECK DUNGEON STATE]
+4998 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET RAID TIMER]
+1 150 
+[SET]
+
+[MERCHANT]
+1 
+[RAID TIMER]
+1 150 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4995 
+[CHECK DUNGEON STATE]
+4995 `clear` 
+[CHECK DUNGEON STATE]
+4996 `clear` 
+[CHECK DUNGEON STATE]
+4997 `clear` 
+[CHECK DUNGEON STATE]
+4998 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[ASSIGN]
+
+[SLENIKON HP PHASE_1]
+
+[SLENIKON HP]
+
+[SET]
+
+[1PHASE SUCCESS]
+1 
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4996 
+[CHECK DUNGEON STATE]
+4995 `clear` 
+[CHECK DUNGEON STATE]
+4996 `clear` 
+[CHECK DUNGEON STATE]
+4997 `clear` 
+[CHECK DUNGEON STATE]
+4998 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[ASSIGN]
+
+[SLENIKON HP PHASE_1]
+
+[SLENIKON HP]
+
+[SET]
+
+[1PHASE SUCCESS]
+1 
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4997 
+[CHECK DUNGEON STATE]
+4995 `clear` 
+[CHECK DUNGEON STATE]
+4996 `clear` 
+[CHECK DUNGEON STATE]
+4997 `clear` 
+[CHECK DUNGEON STATE]
+4998 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[ASSIGN]
+
+[SLENIKON HP PHASE_1]
+
+[SLENIKON HP]
+
+[SET]
+
+[1PHASE SUCCESS]
+1 
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+4998 
+[CHECK DUNGEON STATE]
+4995 `clear` 
+[CHECK DUNGEON STATE]
+4996 `clear` 
+[CHECK DUNGEON STATE]
+4997 `clear` 
+[CHECK DUNGEON STATE]
+4998 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[ASSIGN]
+
+[SLENIKON HP PHASE_1]
+
+[SLENIKON HP]
+
+[SET]
+
+[1PHASE SUCCESS]
+1 
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[/PHASE]
+
+[PHASE]
+
+[PHASE NAME]
+`讨伐伊希斯` 
+[TITLE IMG]
+`Interface2/GContents/190307_PreyRaid/Raid/MemberWindow.img` 0 
+[CONDITION FOR RANK]
+
+[DEAD COUNT]
+0 1 0 
+[DEAD COUNT]
+2 5 1 
+[DEAD COUNT]
+6 9 2 
+[DEAD COUNT]
+10 14 3 
+[/CONDITION FOR RANK]
+
+[CLEAR REWARD ITEM]
+
+[STATE REWARD]
+`party_card` -1 100 10308785 0 0 
+[STATE REWARD]
+`pcroom_card` -1 100 10309048 0 0 
+[STATE REWARD]
+`privilege_card` -1 100 490705074 0 
+[STATE REWARD]
+`squad_item` -1 3765 10308706 0 1 
+[STATE REWARD]
+`squad_item` -1 2000 10308707 0 2 
+[STATE REWARD]
+`squad_item` -1 2000 10308708 0 3 
+[STATE REWARD]
+`squad_item` -1 1000 10308709 0 4 
+[STATE REWARD]
+`squad_item` -1 500 10308710 1 1 
+[STATE REWARD]
+`squad_item` -1 167 10308711 1 2 
+[STATE REWARD]
+`squad_item` -1 333 10308712 1 3 
+[STATE REWARD]
+`squad_item` -1 200 10308714 2 1 
+[STATE REWARD]
+`squad_item` -1 35 10308713 2 2 
+[/CLEAR REWARD ITEM]
+
+[MINIMAL DUNGEON CLEAR COUNT]
+1 
+[DUNGEON INFO]
+
+[INDEX]
+4999 
+[HP INFO]
+
+[4999 DGN HP]
+9999 
+[INIT STATE]
+`close` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+5001 
+[HP INFO]
+
+[5001 DGN HP]
+9999 
+[INIT STATE]
+`close` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+5002 
+[TYPE]
+`big garden` 
+[HP INFO]
+
+[5002 DGN HP]
+9999 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+5003 
+[TYPE]
+`boss` 
+[HP INFO]
+
+[5003 DGN HP]
+9999 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[MEMBER RETRY TIME]
+90 
+[/DUNGEON INFO]
+
+[TRIGGER]
+
+[IF]
+
+[2PHASE INIT]
+0 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[2PHASE INIT]
+1 
+[SET]
+
+[SLENIKON SPEED]
+10 
+[SET]
+
+[SLENIKON FROM AREA]
+0 
+[SET]
+
+[SLENIKON TO AREA]
+317 
+[SET]
+
+[SLENIKON ARRIVAL TIME]
+0 
+[SET]
+
+[AREA_17]
+5002 
+[SET]
+
+[AREA_18]
+4999 
+[SET]
+
+[AREA_19]
+5001 
+[SET]
+
+[AREA_20]
+5003 
+[SET]
+
+[SLENIKON INVINCIBILITY]
+1 
+[SET TIMER]
+2 1001 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK RAID TIMER END]
+1 150 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[MERCHANT]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+2 1001 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[SLENIKON INVINCIBILITY]
+0 
+[SLENIKON]
+
+[SET TIMER]
+2 1000 10 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+2 1000 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SLENIKON]
+
+[SET TIMER]
+2 1000 10 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CLEAR DUNGEON]
+4999 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET TIMER]
+2 211 30 
+[SET]
+
+[ISYS GROGGY]
+1 
+[SET DUNGEON STATE]
+4999 `close` 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+2 211 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[ASSIGN]
+
+[ISYS HP]
+
+[ISYS HP IN DUNGEON]
+
+[SET]
+
+[ISYS GROGGY]
+0 
+[KICK OUT DUNGEON]
+5003 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CLEAR DUNGEON]
+5001 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[DEBUF DUNGEON]
+1 
+[SET DUNGEON STATE]
+5001 `close` 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CLEAR DUNGEON]
+5002 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET DUNGEON STATE]
+5002 `close` 
+[SET]
+
+[SLENIKON INVINCIBILITY]
+1 
+[SET TIMER]
+2 5002 330 
+[RESET TIMER]
+2 206 
+[SET TIMER]
+2 206 360 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+2 5002 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET DUNGEON STATE]
+5002 `open` 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+2 206 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[SLENIKON INVINCIBILITY]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON ENTER DUNGEON]
+5003 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET DUNGEON STATE]
+4999 `open` 
+[SET DUNGEON STATE]
+5001 `open` 
+[SET]
+
+[DEBUF DUNGEON]
+0 
+[SET]
+
+[ENTER ISYS MAP]
+0 
+[SET]
+
+[ISYS GROGGY]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON ENTER MAP]
+306001666 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[ENTER ISYS MAP]
+1 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CLEAR DUNGEON]
+5003 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[KICK OUT DUNGEON]
+4999 
+[KICK OUT DUNGEON]
+5001 
+[SET DUNGEON STATE]
+4999 `close` 
+[SET DUNGEON STATE]
+5001 `close` 
+[SET]
+
+[ISYS HP]
+0 
+[SET]
+
+[ENTER ISYS MAP]
+0 
+[RESET TIMER]
+2 211 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON GIVEUP DUNGEON]
+5003 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[KICK OUT DUNGEON]
+4999 
+[KICK OUT DUNGEON]
+5001 
+[SET DUNGEON STATE]
+4999 `close` 
+[SET DUNGEON STATE]
+5001 `close` 
+[SET]
+
+[ENTER ISYS MAP]
+0 
+[RESET TIMER]
+2 211 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON KICK OUT DUNGEON]
+5003 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[KICK OUT DUNGEON]
+4999 
+[KICK OUT DUNGEON]
+5001 
+[SET DUNGEON STATE]
+4999 `close` 
+[SET DUNGEON STATE]
+5001 `close` 
+[SET]
+
+[ENTER ISYS MAP]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[ISYS HP]
+0 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[/PHASE]
+
+[SINGLE ENTRY COST]
+10309342 1 
+[/SINGLE ENTRY COST]
+
+[SINGLE RETRY ITEM]
+10309342 1 
+[SINGLE LIMIT DUNGEON INDEX]
+291100397 
+[SINGLE MAGIC TOWER 1]
+291100388 
+[SINGLE MAGIC TOWER 2]
+291100389 
+[SINGLE START DELAY TIME]
+25 
+[SINGLE RAID PHASE]
+
+[PHASE NAME]
+`围攻伊希斯` 
+[TITLE IMG]
+`Interface2/GContents/190307_PreyRaid/Raid/MemberWindow.img` 0 
+[CONDITION FOR RANK]
+
+[DEAD COUNT]
+0 1 0 
+[DEAD COUNT]
+2 5 1 
+[DEAD COUNT]
+6 9 2 
+[DEAD COUNT]
+10 14 3 
+[/CONDITION FOR RANK]
+
+[CLEAR REWARD ITEM]
+
+[STATE REWARD]
+`party_card` -1 1000 490013560 0 0 
+[STATE REWARD]
+`squad_item` -1 4500 490013557 0 1 
+[STATE REWARD]
+`squad_item` -1 4000 490013558 0 2 
+[STATE REWARD]
+`squad_item` -1 1500 490013559 1 3 
+[/CLEAR REWARD ITEM]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100382 
+[TYPE]
+`slenikon defence` 
+[HP INFO]
+
+[4988 DGN HP]
+9999 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[RATE]
+200 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100384 
+[TYPE]
+`slenikon defence` 
+[HP INFO]
+
+[4989 DGN HP]
+9999 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[RATE]
+200 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100385 
+[TYPE]
+`slenikon defence` 
+[HP INFO]
+
+[4990 DGN HP]
+9999 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[RATE]
+100 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100386 
+[TYPE]
+`garden` 
+[HP INFO]
+
+[4991 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[SINGLE TYPE]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100387 
+[TYPE]
+`garden` 
+[HP INFO]
+
+[4992 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[SINGLE TYPE]
+0 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100388 
+[TYPE]
+`magic tower` 
+[HP INFO]
+
+[4993 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[SINGLE TYPE]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100389 
+[TYPE]
+`magic tower` 
+[HP INFO]
+
+[4994 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[SINGLE TYPE]
+0 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100390 
+[TYPE]
+`sanctuary` 
+[HP INFO]
+
+[4995 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[SINGLE TYPE]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100391 
+[TYPE]
+`sanctuary` 
+[HP INFO]
+
+[4996 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[SINGLE TYPE]
+0 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100392 
+[TYPE]
+`sanctuary` 
+[HP INFO]
+
+[4997 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[SINGLE TYPE]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100393 
+[TYPE]
+`sanctuary` 
+[HP INFO]
+
+[4998 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[SINGLE TYPE]
+0 
+[/DUNGEON INFO]
+
+[TRIGGER]
+
+[IF]
+
+[1PHASE INIT]
+0 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[1PHASE INIT]
+1 
+[SET]
+
+[SLENIKON SPEED]
+5 
+[SET]
+
+[SLENIKON FROM AREA]
+0 
+[SET]
+
+[SLENIKON TO AREA]
+301 
+[SET]
+
+[SLENIKON ARRIVAL TIME]
+0 
+[SET]
+
+[ISYS HP]
+10000 
+[SET]
+
+[PREPARE RAID]
+0 
+[SET]
+
+[SLENIKON INVINCIBILITY]
+0 
+[SET]
+
+[MERCHANT]
+0 
+[SET]
+
+[HP ALARM]
+-1 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[PREPARE RAID]
+1 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET TIMER]
+1 1000 5 
+[SLENIKON]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+1 1000 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET TIMER]
+1 1000 5 
+[SLENIKON]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+291100388 
+[CHECK DUNGEON STATE]
+291100388 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET TIMER]
+500 291100388 
+[SET]
+
+[4993 MAGIC TOWER SPAWN POSITION]
+0 
+[SET]
+
+[4993 MAGIC TOWER SPAWN TIME]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+500 291100388 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SPAWN]
+291100388 
+[SET]
+
+[4993 MAGIC TOWER SPAWN POSITION]
+0 
+[SET]
+
+[4993 MAGIC TOWER SPAWN TIME]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+291100389 
+[CHECK DUNGEON STATE]
+291100389 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET TIMER]
+500 291100389 
+[SET]
+
+[4994 MAGIC TOWER SPAWN POSITION]
+0 
+[SET]
+
+[4994 MAGIC TOWER SPAWN TIME]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+500 291100389 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SPAWN]
+291100389 
+[SET]
+
+[4994 MAGIC TOWER SPAWN POSITION]
+0 
+[SET]
+
+[4994 MAGIC TOWER SPAWN TIME]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+1 
+[ON CLEAR DUNGEON]
+291100382 
+[CHECK DUNGEON STATE]
+291100388 `open` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESERVE SPAWN]
+291100388 180 
+[SET TIMER]
+500 291100388 180 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+1 
+[ON CLEAR DUNGEON]
+291100384 
+[CHECK DUNGEON STATE]
+291100388 `open` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESERVE SPAWN]
+291100388 180 
+[SET TIMER]
+500 291100388 180 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+1 
+[ON CLEAR DUNGEON]
+291100385 
+[CHECK DUNGEON STATE]
+291100388 `open` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESERVE SPAWN]
+291100388 180 
+[SET TIMER]
+500 291100388 180 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+0 
+[ON CLEAR DUNGEON]
+291100382 
+[CHECK DUNGEON STATE]
+291100389 `open` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESERVE SPAWN]
+291100389 180 
+[SET TIMER]
+500 291100389 180 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+0 
+[ON CLEAR DUNGEON]
+291100384 
+[CHECK DUNGEON STATE]
+291100389 `open` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESERVE SPAWN]
+291100389 180 
+[SET TIMER]
+500 291100389 180 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+0 
+[ON CLEAR DUNGEON]
+291100385 
+[CHECK DUNGEON STATE]
+291100389 `open` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESERVE SPAWN]
+291100389 180 
+[SET TIMER]
+500 291100389 180 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK RAID TIMER END]
+1 150 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[MERCHANT]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+291100390 
+[CHECK DUNGEON STATE]
+291100390 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET RAID TIMER]
+1 150 
+[SET]
+
+[MERCHANT]
+1 
+[RAID TIMER]
+1 150 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+291100391 
+[CHECK DUNGEON STATE]
+291100391 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET RAID TIMER]
+1 150 
+[SET]
+
+[MERCHANT]
+1 
+[RAID TIMER]
+1 150 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+291100392 
+[CHECK DUNGEON STATE]
+291100392 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET RAID TIMER]
+1 150 
+[SET]
+
+[MERCHANT]
+1 
+[RAID TIMER]
+1 150 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CHANGE DUNGEON STATE]
+291100393 
+[CHECK DUNGEON STATE]
+291100393 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[RESET RAID TIMER]
+1 150 
+[SET]
+
+[MERCHANT]
+1 
+[RAID TIMER]
+1 150 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+0 
+[ON CHANGE DUNGEON STATE]
+291100391 
+[CHECK DUNGEON STATE]
+291100391 `clear` 
+[CHECK DUNGEON STATE]
+291100393 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[ASSIGN]
+
+[SLENIKON HP PHASE_1]
+
+[SLENIKON HP]
+
+[SET]
+
+[1PHASE SUCCESS]
+1 
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+0 
+[ON CHANGE DUNGEON STATE]
+291100393 
+[CHECK DUNGEON STATE]
+291100391 `clear` 
+[CHECK DUNGEON STATE]
+291100393 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[ASSIGN]
+
+[SLENIKON HP PHASE_1]
+
+[SLENIKON HP]
+
+[SET]
+
+[1PHASE SUCCESS]
+1 
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+1 
+[ON CHANGE DUNGEON STATE]
+291100390 
+[CHECK DUNGEON STATE]
+291100390 `clear` 
+[CHECK DUNGEON STATE]
+291100392 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[ASSIGN]
+
+[SLENIKON HP PHASE_1]
+
+[SLENIKON HP]
+
+[SET]
+
+[1PHASE SUCCESS]
+1 
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[SINGLE RAID TYPE]
+1 
+[ON CHANGE DUNGEON STATE]
+291100392 
+[CHECK DUNGEON STATE]
+291100390 `clear` 
+[CHECK DUNGEON STATE]
+291100392 `clear` 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[ASSIGN]
+
+[SLENIKON HP PHASE_1]
+
+[SLENIKON HP]
+
+[SET]
+
+[1PHASE SUCCESS]
+1 
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[/SINGLE RAID PHASE]
+
+[SINGLE RAID PHASE]
+
+[PHASE NAME]
+`讨伐伊希斯` 
+[TITLE IMG]
+`Interface2/GContents/190307_PreyRaid/Raid/MemberWindow.img` 0 
+[CONDITION FOR RANK]
+
+[DEAD COUNT]
+0 1 0 
+[DEAD COUNT]
+2 5 1 
+[DEAD COUNT]
+6 9 2 
+[DEAD COUNT]
+10 14 3 
+[/CONDITION FOR RANK]
+
+[CLEAR REWARD ITEM]
+
+[STATE REWARD]
+`party_card` -1 100 10309353 0 0 
+[STATE REWARD]
+`pcroom_card` -1 100 10309354 0 0 
+[STATE REWARD]
+`privilege_card` -1 100 490705075 0 
+[STATE REWARD]
+`squad_item` -1 4000 10309344 0 1 
+[STATE REWARD]
+`squad_item` -1 2100 10309345 0 2 
+[STATE REWARD]
+`squad_item` -1 2100 10309346 0 3 
+[STATE REWARD]
+`squad_item` -1 1149 10309347 0 4 
+[STATE REWARD]
+`squad_item` -1 300 10309348 1 1 
+[STATE REWARD]
+`squad_item` -1 100 10309349 1 2 
+[STATE REWARD]
+`squad_item` -1 200 10309350 1 3 
+[STATE REWARD]
+`squad_item` -1 50 10309352 2 1 
+[STATE REWARD]
+`squad_item` -1 1 10309351 2 2 
+[/CLEAR REWARD ITEM]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100394 
+[HP INFO]
+
+[4999 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100395 
+[HP INFO]
+
+[5001 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100396 
+[TYPE]
+`big garden` 
+[HP INFO]
+
+[5002 DGN HP]
+1 
+[INIT STATE]
+`open` 
+[PARTY MAX]
+1 
+[/DUNGEON INFO]
+
+[DUNGEON INFO]
+
+[INDEX]
+291100397 
+[TYPE]
+`boss` 
+[HP INFO]
+
+[5003 DGN HP]
+9999 
+[INIT STATE]
+`close` 
+[PARTY MAX]
+1 
+[MEMBER RETRY TIME]
+30 
+[/DUNGEON INFO]
+
+[TRIGGER]
+
+[IF]
+
+[2PHASE INIT]
+0 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[2PHASE INIT]
+1 
+[SET]
+
+[SLENIKON SPEED]
+10 
+[SET]
+
+[SLENIKON FROM AREA]
+0 
+[SET]
+
+[SLENIKON TO AREA]
+317 
+[SET]
+
+[SLENIKON ARRIVAL TIME]
+0 
+[SET]
+
+[AREA_17]
+291100396 
+[SET]
+
+[AREA_18]
+291100394 
+[SET]
+
+[AREA_19]
+291100395 
+[SET]
+
+[AREA_20]
+291100397 
+[SET]
+
+[SLENIKON INVINCIBILITY]
+1 
+[SET]
+
+[DEBUF DUNGEON]
+0 
+[SET TIMER]
+2 1001 30 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK RAID TIMER END]
+1 150 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[MERCHANT]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+2 1001 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[SLENIKON INVINCIBILITY]
+0 
+[SLENIKON]
+
+[SET TIMER]
+2 1000 10 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[CHECK TIMER END]
+2 1000 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SLENIKON]
+
+[SET TIMER]
+2 1000 10 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CLEAR DUNGEON]
+291100394 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET DUNGEON STATE]
+291100397 `open` 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CLEAR DUNGEON]
+291100395 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[DEBUF DUNGEON]
+1 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CLEAR DUNGEON]
+291100396 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[SLENIKON INVINCIBILITY]
+1 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[ON CLEAR DUNGEON]
+291100397 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[SET]
+
+[ISYS HP]
+0 
+[/BEHAVIOR]
+
+[TRIGGER]
+
+[IF]
+
+[ISYS HP]
+0 
+[/TRIGGER]
+
+[BEHAVIOR]
+
+[CLEAR PHASE]
+
+[/BEHAVIOR]
+
+[/SINGLE RAID PHASE]
+
+[LIMIT ANTI EVIL]
+5300 
+===== etc/enterablespecialchannel.etc
+
+[entarable quest by channel]
+
+[anton]
+12829 
+[luke]
+2903 
+[beast]
+5927 
+[fiendwar]
+8672 
+[prey]
+8935 
+[/entarable quest by channel]
+

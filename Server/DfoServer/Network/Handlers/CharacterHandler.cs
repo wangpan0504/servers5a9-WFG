@@ -42,6 +42,8 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         // 原生换频道直接发C2S4；普通选角先请求C2S8，返回选角也有已推送名册。
         bool resumeTown = !context.RosterRequested && !context.SelectionRosterPushed;
         context.Session.SelectFromRosterIndex(CharacterRequests.Select(request.Body), goldLimits, resumeTown);
+        bool nativeSwitch = resumeTown;
+        resumeTown = context.Session.TownSnapshotResumed;
         if (learning is not null)
         {
             var initialization = context.Session.InitializeLearning(learning);
@@ -53,7 +55,7 @@ internal sealed class CharacterHandler(CharacterCatalog characters, TownProjecti
         // 进入场景后不再保留返回选角阶段的重复 C2S8 标记。
         context.SelectionRosterPushed = false;
         var c = context.Session.Selected!;
-        log.Write("selected", new { Connection = context.Id, Character = c.Id, c.Position, c.Return, c.Revision, ResumeTown = resumeTown });
+        log.Write("selected", new { Connection = context.Id, Character = c.Id, c.Position, c.Return, c.Revision, ResumeTown = resumeTown, NativeSwitch = nativeSwitch });
         if (createdBase)
             log.Write("avatar_preset_base", new { Connection = context.Id, Character = c.Id,
                 Capacity = c.Inventory.AvatarPresets.Capacity, Presets = c.Inventory.AvatarPresets.Presets.Length,

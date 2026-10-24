@@ -1,0 +1,39 @@
+频道分组、落点规则和未证明类型。快照是等级 95、完成任务为空，除非另行写明。没有客户端实机验收。玩法未接。进程 41144 仍是旧内存脚本。源 channel.txt 与 Release 外置 channel.txt 字节相同，SHA256 23F9E336F3FB2478E65B7E72B9F307B1010E2A572CD7BDE79EB0B841BD0C456F。
+
+规则：非 resumeTown 的新选角调用 ChannelAreaLanding.Place。目标区域必须在 TownCatalog 中，DestinationAdmission 必须是 ready。坐标只用该区域 [gate]、从共享房间或相邻地区反推的 Entrance，或已核对的 InitialReturn。等级或任务不够、没有可站立门口、或分组没有证明的城镇时，位置保持共享房间 38/1。resumeTown 不搬区。
+
+等级 95、无任务时的落点：
+1 类型 22 [elven_guard] `<channel_info_dname_0>` 38/0 622,196
+10 类型 22 [granfloris] `<chn_channel_info_028>` 38/2 1085,249。门口是 new_D_Elvengard_L.map 的 1040 157 90 185，通向 38/0
+11 类型 22 [sky_catle] `<chn_channel_info_029>` 38/1 任务不足或没有可站立门口
+12 类型 22 [behemoth] `<chn_channel_info_030>` 38/1
+13 类型 22 [Alfhlyra] `<chn_channel_info_031>` 38/1
+14 类型 22 [Noirpera] `<chn_channel_info_032>` 38/1
+15 类型 22 [Charnak] `<chn_channel_info_005>` 38/1
+16 类型 22 [Abnoba] `<chn_channel_info_003>` 38/1
+17 类型 22 [Meltdown] `<chn_channel_info_004>` 38/1
+18 类型 22 [FallsToTheSky] `<chn_channel_info_006>` 38/1
+19 类型 23 [raid] `<chn_channel_info_036>` 19/0 474,234
+20 类型 32 [luke_raid] `<chn_channel_info_037>` 32/0 474,234。Jelva_raid.twn 区域 0 的 [need level] 是 86。等级 85 为 38/1
+21 类型 22 [metro] `<chn_channel_info_024>` 38/1
+22 类型 22 [north_myre] `<chn_channel_info_034>` 38/1
+23 类型 11 [deathtower] `<chn_channel_info_001>` 38/1
+24 类型 22 [ancient] `<chn_channel_info_014>` 38/1 没有证明城镇
+25 类型 22 [Antwer] `<chn_channel_info_008>` 38/1 没有证明城镇
+26 类型 22 [impossible] `<chn_channel_info_013>` 38/1 没有证明城镇
+27 类型 22 [seatrain] `<chn_channel_info_009>` 38/1 没有证明城镇
+28 类型 22 [stormpass] `<chn_channel_info_033>` 38/1 没有证明城镇
+29 类型 22 [timedoor] `<chn_channel_info_011>` 38/1
+30 类型 22 [powerstation] `<chn_channel_info_010>` 38/1
+31 类型 18 [attackzone] `<chn_channel_info_019>` 15/0 594,234
+32 类型 30 [goldenroad] `<chn_channel_info_002>` 38/1 没有证明城镇，类型保持 30
+33 类型 22 [noblsky] `<chn_channel_info_015>` 38/1 没有证明城镇
+34 类型 22 [CastleofDead] `<chn_channel_info_020>` 38/1 没有证明城镇
+35 类型 22 [crack] `<chn_channel_info_046>` 38/1 没有证明城镇，类型保持 22
+36 类型 26 [sainthorn] `<chn_channel_info_017>` 17/0 474,234
+37 类型 22 [harlem] `<chn_channel_info_050>` 38/1 任务不足
+38 类型 22 [east harlem] `<chn_channel_info_050>` 38/1 任务不足
+39 类型 45 [fiendwar] `<chn_channel_info_048>` 38/1 没有可站立门口
+40 类型 24 [pvp] `<chn_channel_info_039>` 等级 1 为 38/1；等级 95 为 10/0 474,234
+
+未加类型：25、27、36、42、46、48、52、53、54、55、62、63、64。魔兽类型 40 与普雷类型 50 没有证明到客户端名称键，未加行。城镇 1 是 SilverCrown，6 是根特，16 不在 town.lst，都没有用作落点。

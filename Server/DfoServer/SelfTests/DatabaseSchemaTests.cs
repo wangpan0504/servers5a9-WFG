@@ -165,6 +165,7 @@ internal static partial class DatabaseSchemaTests
             PickupUidUpgrade(root);
             ConsumableStatesUpgrade(root);
             BlacklistCountUpgrade(root);
+            IncountNumberingUpgrade(root);
             string path = Path.Combine(root, "game.db");
             var characters = new CharacterRepository(path);
             var accounts = new AuthenticationService(new AuthenticationRepository(path));
@@ -2333,6 +2334,8 @@ internal static partial class DatabaseSchemaTests
                 if (oldVersion < 50) Execute(db, "DROP TABLE IF EXISTS character_assault_daily");
                 if (oldVersion < 61) Execute(db, "DROP TABLE IF EXISTS character_crack_daily");
                 if (oldVersion < 63) Execute(db, "DROP TABLE IF EXISTS character_growup_change");
+                if (oldVersion < 88) Execute(db, "DROP TABLE IF EXISTS character_dungeon_incount");
+                if (oldVersion < 89) Execute(db, "DROP TABLE IF EXISTS account_dungeon_incount");
                 if (oldVersion < 41) Execute(db, "DROP TABLE IF EXISTS cube_premium");
                 if (oldVersion < 38) RemoveAdventureNames(db);
                 if (oldVersion < 3)

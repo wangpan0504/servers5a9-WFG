@@ -37,6 +37,9 @@ internal interface IGmWebData
     // 快捷物品清单（存档目录 gm-quick-items.json，JSON 数组）。
     string ReadQuickItems();
     void WriteQuickItems(string json);
+    // 三张团本卡的每周时段（数据目录 gm-raid-windows.json，不进角色库）。
+    string ReadRaidWindows();
+    void WriteRaidWindows(string json);
     byte[]? ItemIcon(int id);
     object? ItemPreview(int id);
     // 纸娃娃（只读）：按角色当前外观合成站立帧；tryOn 为只在内存中替换的物品编号。

@@ -17,12 +17,32 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$account", owner.Account);
-        command.CommandText = "SELECT id,slot,name,job,grow_type,level FROM characters WHERE account=$account ORDER BY slot";
+        command.Parameters.AddWithValue("$fiendwar_quest", CharacterRosterEntry.FiendWarEntryQuest);
+        command.Parameters.AddWithValue("$anton_quest", CharacterRosterEntry.AntonEntryQuest);
+        command.Parameters.AddWithValue("$luke_quest", CharacterRosterEntry.LukeEntryQuest);
+        command.Parameters.AddWithValue("$prey_quest", CharacterRosterEntry.PreyEntryQuest);
+        // 选角前资格与完整角色同源：任务完成读 character_completed_quests（ReadProgress 的 CompletedQuests），公会读 guild_members。
+        command.CommandText = """
+            SELECT c.id,c.slot,c.name,c.job,c.grow_type,c.level,
+                EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$fiendwar_quest),
+                EXISTS(SELECT 1 FROM guild_members m WHERE m.character_id=c.id),
+                EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$anton_quest),
+                EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$luke_quest),
+                EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$prey_quest)
+            FROM characters c WHERE c.account=$account ORDER BY c.slot
+            """;
         var rows = new List<CharacterRosterEntry>();
         using (var reader = command.ExecuteReader())
             while (reader.Read())
+            {
+                byte level = checked((byte)reader.GetInt32(5));
                 rows.Add(new(checked((ushort)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)), reader.GetString(2),
-                    checked((byte)reader.GetInt32(3)), checked((byte)reader.GetInt32(4)), checked((byte)reader.GetInt32(5)), []));
+                    checked((byte)reader.GetInt32(3)), checked((byte)reader.GetInt32(4)), level, [],
+                    FiendWarEligible: CharacterRosterEntry.IsFiendWarEligible(reader.GetInt64(6) != 0, reader.GetInt64(7) != 0),
+                    AntonEligible: reader.GetInt64(8) != 0,
+                    LukeEligible: reader.GetInt64(9) != 0,
+                    PreyEligible: CharacterRosterEntry.IsPreyEligible(reader.GetInt64(10) != 0, level)));
+            }
         if (rows.Count == 0)
             return [];
         command.CommandText = """
