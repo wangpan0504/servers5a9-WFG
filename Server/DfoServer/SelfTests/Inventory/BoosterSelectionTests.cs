@@ -156,6 +156,7 @@ internal static class BoosterSelectionTests
         RunRealTemplateSelection(towns, itemResources, now);
         BoosterNativeSelectionTests.RunResources(towns, characters, itemResources, now);
         RunDisjointInstanceSelection(towns, itemResources, now);
+        RunHarlemAccessorySelection(towns, itemResources, now);
         BoosterEpicExchangeSkinPropagationTests.RunResources(towns, characters, itemResources);
         BoosterEpicExchangeTests.RunResources(towns, itemResources, now);
         var creatureCategory = Parse("0 0\n[creature]\n400990444 1 400990445 1\n[/creature]").Selection!.Categories.Single();
@@ -836,6 +837,158 @@ internal static class BoosterSelectionTests
                 JsonSerializer.Serialize(syntheticRole) == beforeCrossedDeclaration,
                 "畸形品级声明经真实开箱整盒拒绝，无计划、无回执且全部输入资产不变");
         }
+    }
+
+    // 使用真实资源验证哈林首饰自选盒的奖励、领取资格、原子提交与持久化。
+    internal static void RunHarlemAccessorySelection(TownCatalog towns, ItemResources resources, DateTimeOffset now)
+    {
+        const int sourceId = 490013750;
+        int[][] expectedIds =
+        [
+            [100322540, 100300953, 100312647], [100322541, 100300954, 100312648],
+            [100322542, 100300955, 100312649], [400310135, 400300134, 400320139]
+        ];
+        var catalog = resources.Items;
+        var sourceTemplate = catalog.Get(sourceId);
+        That(sourceTemplate is { Kind: ItemKind.Consumable, StackLimit: >= 2 },
+            "564 source is a real consumable supporting the two-item source fixture");
+        var service = new InventoryBoosterService(catalog, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        var definition = resources.Boosters.Get(sourceId);
+        That(definition.Available && definition.SetsDisjointInstanceType &&
+            definition.Selection is { SelectionCount: 1, Categories.Length: 4 }, "564 real source shape");
+        for (byte category = 0; category < 4; category++)
+        {
+            var group = definition.Selection!.Categories.Single(row => row.Category == category && row.Subcategory == 0);
+            That(group.Rewards.Select(row => row.ItemId).SequenceEqual(expectedIds[category]) &&
+                group.Rewards.All(row => row.Count == 1 && row.Upgrade == 0 && row.Refinement == 0),
+                "564 exact saved 4x3 IDs, original order and one-item quantities " + category);
+        }
+        ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(catalog.Get(id), count, now);
+        Character Role() => new(1, 0, "Harlem", 0, towns.Room, towns.InitialReturn)
+        {
+            Inventory = new([new(1, Bag(3), Core(sourceId, 2)), new(2, Bag(65), Core(sourceId))], Gold: 12345)
+        };
+        var sourceRange = ItemSlotBoundService.Range(sourceTemplate.Kind, Role().Inventory);
+        That(sourceRange.Start <= 65 && sourceRange.End >= 65,
+            "564 independent source-ID sentinel fits the actual consumable page at slot 65");
+        for (byte category = 0; category < 4; category++)
+            foreach (int id in expectedIds[category])
+            {
+                var template = catalog.Get(id);
+                That(template.Kind == ItemKind.Equipment, "564 selected real template is equipment " + id);
+                for (byte job = 0; job < 16; job++)
+                    foreach (byte level in new byte[] { 1, 95 })
+                    {
+                        var role = Role() with { Job = job, Level = level };
+                        string before = JsonSerializer.Serialize(role);
+                        var opened = service.Open(role, Select(3, [id], category), out var receipt, now);
+                        That(opened.Accepted && opened.Plan is not null && receipt is not null,
+                            "564 real candidate must succeed, no wear-job/level grant gate " + id + ":" + job + ":" + level);
+                        var after = opened.Plan!.After;
+                        var reward = after.Items.Single(item => item.Core.ItemId == id);
+                        var expected = InventoryRewardGrantService.CreateItem(template, reward.Position, Core(id));
+                        That(reward == expected && reward.Uid == 0 && reward.Core.Value == InventoryRewardGrantService.InitialQuality &&
+                            reward.Core.Durability == template.Durability && reward.Avatar is null && reward.Creature is null &&
+                            after.Find(Bag(3)) is { Uid: 1, Core.Count: 1 } && after.Find(Bag(65)) == role.Inventory.Find(Bag(65)) &&
+                            after.Items.Length == 3 && after.Gold == 12345 &&
+                            receipt!.Rewards.SequenceEqual(new[] { new BoosterGrantedItem(id, 1) }) &&
+                            JsonSerializer.Serialize(role) == before,
+                            "564 one selected complete core only; source decremented in plan, sentinel/input unchanged " + id);
+                    }
+                var unchanged = Role();
+                string snapshot = JsonSerializer.Serialize(unchanged);
+                foreach (var bad in new[] { Select(3, []), Select(3, [id, id]), Select(3, [1106]),
+                    Select(3, [id], (byte)((category + 1) % 4)), Select(3, [id], category, 1) })
+                {
+                    var rejected = service.Open(unchanged, bad, out var receipt, now);
+                    That(!rejected.Accepted && rejected.Plan is null && receipt is null &&
+                        JsonSerializer.Serialize(unchanged) == snapshot, "564 bad choice retains all assets " + id);
+                }
+            }
+        var first = Role();
+        foreach (var core in new[] { Core(sourceId, 2) with { EquipmentLockId = 1 },
+            Core(sourceId, 2) with { ExpireTime = checked((int)now.ToUnixTimeSeconds()) } })
+        {
+            var role = first with { Inventory = first.Inventory with { Items = first.Inventory.Items.SetItem(0, new(1, Bag(3), core)) } };
+            string snapshot = JsonSerializer.Serialize(role);
+            var rejected = service.Open(role, Select(3, [expectedIds[0][0]]), out var receipt, now);
+            That(!rejected.Accepted && rejected.Plan is null && receipt is null && JsonSerializer.Serialize(role) == snapshot,
+                "564 source safety lock / instance expiration rejects without consumption");
+        }
+        var range = ItemSlotBoundService.Range(ItemKind.Equipment, first.Inventory);
+        var full = first with { Inventory = first.Inventory with { Items = first.Inventory.Items.AddRange(
+            Enumerable.Range(range.Start, range.End - range.Start + 1).Select(slot =>
+                InventoryRewardGrantService.CreateItem(catalog.Get(16400), Bag((short)slot), Core(16400)))) } };
+        string fullBefore = JsonSerializer.Serialize(full);
+        That(!service.Open(full, Select(3, [expectedIds[0][0]]), out var fullReceipt, now).Accepted && fullReceipt is null &&
+            JsonSerializer.Serialize(full) == fullBefore, "564 equipment page full retains source and all existing instances");
+        var oneFree = full with { Inventory = full.Inventory with { Items = full.Inventory.Items.RemoveAt(full.Inventory.Items.Length - 1) } };
+        That(service.Open(oneFree, Select(3, [expectedIds[0][0]]), out _, now).Accepted, "564 one free equipment slot is sufficient");
+
+        // 同既有BoosterSelectionTests使用临时SQLite，不连接玩家库。
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-harlem-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var repo = new CharacterRepository(path);
+            var owners = new AccountOwners();
+            int ordinal = 0;
+            for (byte category = 0; category < 4; category++)
+                foreach (int id in expectedIds[category])
+                {
+                    using var owner = owners.Acquire("harlem-" + ordinal++, () => { });
+                    repo.Create(owner, new("Harlem" + ordinal, towns.Room, towns.InitialReturn)
+                    {
+                        Job = 15, Inventory = new([new(0, Bag(3), Core(sourceId)), new(0, Bag(65), Core(sourceId))], Gold: 12345)
+                    });
+                    var session = new GameSession(repo, towns, owner);
+                    session.Select(0);
+                    session.MarkReady();
+                    var saved = session.Selected!;
+                    var sentinel = saved.Inventory.Find(Bag(65));
+                    string before = Snapshot();
+                    // Repository先写Core、槽与适用详情，再对变化槽写审计。
+                    Query("CREATE TRIGGER fail_harlem BEFORE INSERT ON inventory_audit_log WHEN NEW.item_id_after=" + id +
+                        " BEGIN SELECT RAISE(ABORT,'harlem late audit rollback'); END");
+                    bool failed = false;
+                    try { Open(); }
+                    catch (SqliteException) { failed = true; }
+                    That(failed && ReferenceEquals(session.Selected, saved) && Snapshot() == before,
+                        "564 late SQL abort rolls back source, reward, revision, audit and UID allocation " + id);
+                    Query("DROP TRIGGER fail_harlem");
+                    var committed = Open();
+                    That(committed.Accepted && committed.Receipt is not null &&
+                        ReferenceEquals(committed.Receipt.Character, session.Selected), "564 real Session committed receipt " + id);
+                    var current = session.Selected!;
+                    var reward = current.Inventory.Items.Single(item => item.Core.ItemId == id);
+                    var expected = InventoryRewardGrantService.CreateItem(catalog.Get(id), reward.Position, Core(id));
+                    That(reward.Uid > 0 && reward == (expected with { Uid = reward.Uid }) &&
+                        current.Inventory.Find(Bag(3)) is null && current.Inventory.Find(Bag(65)) == sentinel &&
+                        current.Inventory.Items.Length == 2 && current.Inventory.Items.Select(item => item.Uid).Distinct().Count() == 2 &&
+                        JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(current),
+                        "564 cold repository reopen keeps complete core, committed unique UID and sentinel " + id);
+                    before = Snapshot();
+                    var replay = Open();
+                    That(!replay.Accepted && replay.Receipt is null && Snapshot() == before, "564 exhausted source cannot replay " + id);
+                    That(Query("PRAGMA integrity_check") is "ok", "564 temporary DB integrity " + id);
+
+                    InventoryResult Open() => session.PlanAndCommitBooster(role => service.Open(role,
+                        Select(3, [id], category), out _, now), service.UsePlaces(sourceId), sourceId);
+                    string Snapshot() => JsonSerializer.Serialize(new CharacterRepository(path).List(owner)) + ":" +
+                        Query("SELECT count(*) FROM inventory_audit_log") + ":" +
+                        Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'");
+                }
+            object? Query(string sql)
+            {
+                using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False");
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = sql;
+                return command.ExecuteScalar();
+            }
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     static BoosterDefinition Parse(string category, int count = 1) => BoosterCatalog.Parse("[stackable type]\n`[booster selection]` 0\n" +
