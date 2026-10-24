@@ -1,0 +1,146 @@
+400000016 settlement idle gap (23:18:48 -> 23:22:26, ~218 s) vs earlier run on the same connection
+Date: 2026-10-20 (UTC+8). Runtime log: <workspace>/.tmp-build/fiendwar-deploy/Logs/server.jsonl (filtered by win.py: opcodes except 1278/1723 and formal_player_state)
+Observations:
+1. Run1 (46 at 23:17:56): client sent 69, 70, player-picked 71(0000), 1434, then 72{2,2}/72{1,2} at 23:18:04 -> ACK72 010102 + 3 + 24 left the result page (return-town path works).
+2. Run2 (46 at 23:18:48): client sent 69, 70; no client 71, server auto-revealed (S71 formal_free_card_auto_reveal) at 23:18:57;
+   then the client sent NO 72 at all (not even 72{2,x} focus) until CHARACTER_STATISTIC + GIVEUP 42 at 23:22:26, then 3(00) exit at 23:22:29.
+3. Same auto-reveal-without-pick also happened in assault 7323 (combined-deploy log, 00:57:36) and the client still produced 72{2,x}/72{1,1} 24 s later, so auto-reveal alone does not block the menu.
+Conclusion: run2 is NOT the 72{1,1} lock (no 72 was ever sent). With no client packet there is no evidence the menu was unclickable; cause unproven (idle player or card UI state after server auto-reveal).
+=== run1
+23:17:56.417 formal_dungeon_death {"Connection": 5, "Outcome": 0, "ObjectKey": 10971, "Report": {"MonsterKey": 10971, "ReporterKey": 1, "ParticipantKind": 273, "ParticipantKey": 1, "CumulativeHpDecrease": 57646891008, "PositiveHpDecre
+23:17:56.461 send 38 DIE_MONSTER formal_monster_death DB2A0200EB2A0000000000000000250C0000000000000000000000000000
+23:17:56.461 send 37 EXP formal_kill_experience 5F9B4C2CC80000000000000000546F48D06107FE07000000000000000000
+23:17:56.489 send 574 ACCEPTED_QUEST formal_hunt_conditions 0E000000BA1401000000E022010000004918010000007727010000007927
+23:17:56.531 send 115 BOSS_DIE_CHECK formal_boss_confirmed 0101DB2A
+23:17:56.533 send 31 ENABLE_CLEAR_DUNGEON formal_clear_enabled 
+23:17:56.534 recv 117 BOSS_DIE_CHECK  0100DB2A0000000000000000007800000000C0056C0D000000D202770100
+23:17:56.554 recv 46 SET_PLAY_RESULT  000000010100000000003232000000000000000000000000DC7E00005855
+23:17:56.924 formal_dungeon_settlement {"Connection": 5, "Outcome": 0, "RankPoint": 50, "Reward": {"BaseExperience": 9158750, "RankExperience": 457937, "TotalExperience": 9616687, "RankBonusIndex": 0, "RuleId": "dungeon-clear-base-rank-v1"
+23:17:56.959 send 34 PLAY_RESULT formal_play_result 32BA4A0000003201010100BA4A000000
+23:17:56.965 send 37 EXP formal_clear_experience 5FCA09BFC80000000000000000546F48D06107FE07000000000000000000
+23:17:56.993 send 1760 PREMIUM_INFO_LIST premium_info_committed 041624A30C00000000001B24A30C00000000003800000000000000003A00
+23:17:56.994 send 905 PREMIUM_SERVICE card_devil_service0_state 010100000000000000000000000000000000000000000000000000000000
+23:17:57.021 send 35 CLEAR_DUNGEON_REWARD formal_clear_reward 5EC08B00D1FC060000000000000000000000000000000000000000000000
+23:17:57.021 send 988 EQUIPMENT_RENTAL_LIST formal_clear_lucky_star 0C00000000000000
+23:17:57.021 recv 123 CHARACTER_STATISTIC  000000000000000000000000000000000000000000000000
+23:17:57.021 unimplemented {"Connection": 5, "Phase": "Settlement", "Kind": 1, "Opcode": 123, "Name": "CHARACTER_STATISTIC", "Length": 24, "Body": "000000000000000000000000000000000000000000000000"}
+23:17:57.022 recv 593 SECURITY_STATUS  0600000000000000
+23:17:57.022 client_notice {"Connection": 5, "Opcode": 593, "Action": "security_status", "Detail": "type=6 value=0"}
+23:17:57.026 recv 33 SET_QUEST_TRIGGER  2100EB210000
+23:17:57.084 quest_condition {"Connection": 5, "QuestId": 8683, "Outcome": 2, "Reason": "褰撳墠鏉′欢宸茬敱瀹為檯鍦烘櫙鎴栧簱瀛樻弧瓒筹紝鏃犻渶鍐嶆淇濆瓨"}
+23:17:57.123 send 33 SET_QUEST_TRIGGER quest_condition_result 01EB2104000000
+23:17:58.052 unimplemented {"Connection": 5, "Phase": "Settlement", "Kind": 1, "Opcode": 1278, "Name": "CHECK_USER_CONNECTION", "Length": 0, "Body": ""}
+23:17:58.053 unimplemented {"Connection": 5, "Phase": "Settlement", "Kind": 1, "Opcode": 1723, "Name": "PING", "Length": 17, "Body": "BA7C70890AD7233C60671215A264671215"}
+23:18:00.259 recv 69 SCORE_SCROLL_STATE  
+23:18:00.262 send 69 SCORE_SCROLL_STATE formal_score_scroll 01
+23:18:00.276 recv 43 GET_ITEM  EB2A00000001570386017C35810387010E461878
+23:18:00.403 send 39 GET_ITEM formal_pickup_notice EB2A0000010001250C000001000000000000000000000000000000000000
+23:18:00.411 send 14 UPDATE_ITEM_LIST formal_pickup_inventory 000100000000000000DEE513000000000000000000000000000000000000
+23:18:00.411 send 43 GET_ITEM formal_pickup_ack 01
+23:18:00.412 recv 43 GET_ITEM  EC2A000000046903860141656B0389019948F43F
+23:18:00.490 send 39 GET_ITEM formal_pickup_notice EC2A0000010000000000000000000100190000
+23:18:00.492 send 14 UPDATE_ITEM_LIST formal_pickup_inventory 0001001900298D14189B7A1138002D000000000000000000000000000000
+23:18:00.492 send 43 GET_ITEM formal_pickup_ack 01
+23:18:01.001 recv 38 USE_SKILL  00A90000001F50000100A8B698B4
+23:18:01.002 client_notice {"Connection": 5, "Opcode": 38, "Action": "use_skill", "Detail": "bytes=00A90000001F50000100A8B698B4 checksum=matched"}
+23:18:01.515 recv 70 CARD_SELECT_RIGHT_STATE  
+23:18:01.520 send 70 CARD_SELECT_RIGHT_STATE formal_card_rights 018B00FFFFFFFFFFFFFFFFFFFFFFFFFFFF
+23:18:01.536 recv 38 USE_SKILL  00A9000000586E0001009D8E18D7
+23:18:01.536 client_notice {"Connection": 5, "Opcode": 38, "Action": "use_skill", "Detail": "bytes=00A9000000586E0001009D8E18D7 checksum=matched"}
+23:18:02.457 recv 71 SELECT_CARD  0000
+23:18:02.590 send 71 SELECT_CARD formal_free_card_selected 0100FF0000FFFF0000FFFF0000FFFF0000FFFF0000FFFF0000FFFF0000FF
+23:18:02.663 send 14 UPDATE_ITEM_LIST inventory_committed_delta 00020000000000000003F413000000000000000000000000000000000000
+23:18:02.695 formal_free_card_claimed {"Connection": 5, "Identity": {"CharacterId": 1, "QuestId": 0, "TaskAttempt": 38, "InstanceId": "76af3352-213d-4d60-aeeb-1bffbad1174d", "Epoch": 15}, "Duplicate": false, "MailId": null, "Revision": 28
+23:18:03.106 recv 1434 SELECT_CARD_SKIP  
+23:18:03.106 unimplemented {"Connection": 5, "Phase": "Settlement", "Kind": 1, "Opcode": 1434, "Name": "SELECT_CARD_SKIP", "Length": 0, "Body": ""}
+23:18:04.509 recv 72 EPLP_COMMAND  0202
+23:18:04.536 send 72 EPLP_COMMAND formal_result_focus 010202
+23:18:04.682 recv 72 EPLP_COMMAND  0102
+23:18:04.744 send 72 EPLP_COMMAND formal_result_return 010102
+23:18:04.760 send 3 USER_STATE formal_return_town_state 01010000
+23:18:04.760 send 24 AREA_USERS formal_result_town 730101000100E404FF00000301
+23:18:04.779 send 21 ACCEPTABLE_QUEST_LIST quest_list_refresh F700000008151000185F22EE013EAB39F1168032DD02A205A305CB14A82E
+23:18:04.787 send 356 CLEAR_QUEST_LIST quest_history_refresh 307500000000000000000000000000000000000000000000000000000000
+23:18:04.813 formal_dungeon_return {"Connection": 5, "Reason": "settlement", "Id": 1, "Position": {"Town": 115, "Area": 1, "X": 1252, "Y": 255, "Direction": 0}}
+=== run2
+23:18:48.354 recv 45 MOVE_MAP  060046000000DD000000006F720000000000000000000000000000000000
+23:18:48.354 formal_dungeon_move {"Connection": 5, "Accepted": true, "X": 6, "Y": 0, "Kind": 0, "CurrentMap": {"Kind": "boss", "Position": {"X": 6, "Y": 0}, "Id": 400000015, "Path": "map/legend/chn_fiendwar_normal/dungeon/chn_fiendwa
+23:18:48.354 send 45 MOVE_MAP formal_move_ack 01
+23:18:48.355 send 29 START_MAP formal_next_map 0600008F927F03000001000000010F84D71701000000000000F52A92B101
+23:18:48.662 recv 37 FINISH_LOADING  0000000000000000
+23:18:48.663 send 37 FINISH_LOADING formal_loading_ack 01
+23:18:48.663 send 30 FINISH_LOADING formal_loading_notice 0000000000
+23:18:48.663 send 36 FATIGUE formal_room_fatigue 00009C0000009C000000
+23:18:48.664 recv 593 SECURITY_STATUS  3100000001000000
+23:18:48.664 client_notice {"Connection": 5, "Opcode": 593, "Action": "security_status", "Detail": "type=49 value=1"}
+23:18:48.693 recv 39 DIE_MONSTER  F52A0000010000000000000000000000000043D0056C0D0000009D12740B
+23:18:48.716 formal_dungeon_death {"Connection": 5, "Outcome": 0, "ObjectKey": 10997, "Report": {"MonsterKey": 10997, "ReporterKey": 1, "ParticipantKind": 273, "ParticipantKey": 1, "CumulativeHpDecrease": 57646891008, "PositiveHpDecre
+23:18:48.717 send 38 DIE_MONSTER formal_monster_death F52A00000000FF0000
+23:18:48.717 send 37 EXP formal_kill_experience 5F874CBFC80000000000000000546F48D06107FE07000000000000000000
+23:18:48.717 send 574 ACCEPTED_QUEST formal_hunt_conditions 0E000000BA1401000000E022010000004918010000007727010000007927
+23:18:48.717 send 115 BOSS_DIE_CHECK formal_boss_confirmed 0101F52A
+23:18:48.717 send 31 ENABLE_CLEAR_DUNGEON formal_clear_enabled 
+23:18:48.718 recv 117 BOSS_DIE_CHECK  0100F52A0000000000000000007800000000C0056C0D000000D202770100
+23:18:48.729 recv 46 SET_PLAY_RESULT  000000010100000000003232000000000000000000000000DC7E00005855
+23:18:48.756 formal_dungeon_settlement {"Connection": 5, "Outcome": 0, "RankPoint": 50, "Reward": {"BaseExperience": 9158750, "RankExperience": 457937, "TotalExperience": 9616687, "RankBonusIndex": 0, "RuleId": "dungeon-clear-base-rank-v1"
+23:18:48.758 send 34 PLAY_RESULT formal_play_result 32F64A0000003201010100F64A000000
+23:18:48.758 send 37 EXP formal_clear_experience 5FB60952C90000000000000000546F48D06107FE07000000000000000000
+23:18:48.764 send 1760 PREMIUM_INFO_LIST premium_info_committed 0416F0A20C00000000001BF0A20C00000000003800000000000000003A00
+23:18:48.764 send 905 PREMIUM_SERVICE card_devil_service0_state 010100000000000000000000000000000000000000000000000000000000
+23:18:48.764 send 35 CLEAR_DUNGEON_REWARD formal_clear_reward 5EC08B00D1FC060000000000000000000000000000000000000000000000
+23:18:48.764 send 988 EQUIPMENT_RENTAL_LIST formal_clear_lucky_star 0D00000000000000
+23:18:48.764 recv 123 CHARACTER_STATISTIC  000000000000000000000000000000000000000000000000
+23:18:48.764 unimplemented {"Connection": 5, "Phase": "Settlement", "Kind": 1, "Opcode": 123, "Name": "CHARACTER_STATISTIC", "Length": 24, "Body": "000000000000000000000000000000000000000000000000"}
+23:18:48.908 recv 593 SECURITY_STATUS  0600000000000000
+23:18:48.908 client_notice {"Connection": 5, "Opcode": 593, "Action": "security_status", "Detail": "type=6 value=0"}
+23:18:48.911 recv 33 SET_QUEST_TRIGGER  2100EB210000
+23:18:48.911 quest_condition {"Connection": 5, "QuestId": 8683, "Outcome": 2, "Reason": "褰撳墠鏉′欢宸茬敱瀹為檯鍦烘櫙鎴栧簱瀛樻弧瓒筹紝鏃犻渶鍐嶆淇濆瓨"}
+23:18:48.911 send 33 SET_QUEST_TRIGGER quest_condition_result 01EB2103000000
+23:18:52.150 recv 69 SCORE_SCROLL_STATE  
+23:18:52.150 send 69 SCORE_SCROLL_STATE formal_score_scroll 01
+23:18:53.409 recv 70 CARD_SELECT_RIGHT_STATE  
+23:18:53.409 send 70 CARD_SELECT_RIGHT_STATE formal_card_rights 018B00FFFFFFFFFFFFFFFFFFFFFFFFFFFF
+23:18:57.426 send 71 SELECT_CARD formal_free_card_auto_reveal 0100FF0000FFFF0000FFFF0000FFFF0000FFFF0000FFFF0000FFFF0000FF
+23:18:57.427 send 14 UPDATE_ITEM_LIST inventory_committed_delta 00020000000000000072FF13000000000000000000000000000000000000
+23:18:57.427 formal_free_card_revealed {"Connection": 5, "Identity": {"CharacterId": 1, "QuestId": 0, "TaskAttempt": 39, "InstanceId": "b928d045-c851-41a1-bfa5-6f4905b5c41c", "Epoch": 15}}
+23:22:26.920 recv 123 CHARACTER_STATISTIC  000000000000000000000000000000000000000000000000
+23:22:26.920 unimplemented {"Connection": 5, "Phase": "Settlement", "Kind": 1, "Opcode": 123, "Name": "CHARACTER_STATISTIC", "Length": 24, "Body": "000000000000000000000000000000000000000000000000"}
+23:22:26.920 recv 42 GIVEUP_GAME  
+23:22:26.928 send 42 GIVEUP_GAME formal_giveup_ack 01
+23:22:26.929 send 3 USER_STATE formal_return_town_state 01010000
+23:22:26.929 send 24 AREA_USERS formal_return_town 730101000100E404FF00000301
+23:22:26.931 send 21 ACCEPTABLE_QUEST_LIST quest_list_refresh F700000008151000185F22EE013EAB39F1168032DD02A205A305CB14A82E
+23:22:26.931 send 356 CLEAR_QUEST_LIST quest_history_refresh 307500000000000000000000000000000000000000000000000000000000
+23:22:26.936 formal_dungeon_return {"Connection": 5, "Reason": "giveup", "Id": 1, "Position": {"Town": 115, "Area": 1, "X": 1252, "Y": 255, "Direction": 0}}
+23:22:27.796 recv 35 SET_USER_POSITION  E404FF00057D00
+23:22:27.796 position {"Connection": 5, "Accepted": true, "Character": 1, "Position": {"Town": 115, "Area": 1, "X": 1252, "Y": 255, "Direction": 0}, "Revision": 2865}
+23:22:27.797 recv 631 USER_STATE_MOTION  E404FF00057D00000000000000
+23:22:27.797 position {"Connection": 5, "Accepted": true, "Character": 1, "Position": {"Town": 115, "Area": 1, "X": 1252, "Y": 255, "Direction": 0}, "Revision": 2865}
+23:22:28.701 recv 1310 USER_CHECKSTAT_DISTRIBUTION  0F039F047F034A031E0A0000670D00005000500050005000
+23:22:28.701 unimplemented {"Connection": 5, "Phase": "Town", "Kind": 1, "Opcode": 1310, "Name": "USER_CHECKSTAT_DISTRIBUTION", "Length": 24, "Body": "0F039F047F034A031E0A0000670D00005000500050005000"}
+23:22:28.767 recv 35 SET_USER_POSITION  E404FF00057D00
+23:22:28.767 position {"Connection": 5, "Accepted": true, "Character": 1, "Position": {"Town": 115, "Area": 1, "X": 1252, "Y": 255, "Direction": 0}, "Revision": 2865}
+23:22:29.422 recv 1574 SOUND_MEMORY_USAGE  08000000
+23:22:29.422 unimplemented {"Connection": 5, "Phase": "Town", "Kind": 1, "Opcode": 1574, "Name": "SOUND_MEMORY_USAGE", "Length": 4, "Body": "08000000"}
+23:22:29.422 recv 752 FPS_PERFORMANCE_STATISTIC  0000000000000000030000000A0000009D070000AA0700000A0000000E01
+23:22:29.422 client_notice {"Connection": 5, "Opcode": 752, "Action": "fps_statistic", "Detail": "bytes=664"}
+23:22:29.422 recv 1427 FPS_DEVIDE_COLLECT  000000000500050000000000070000000000000000000A00000000000000
+23:22:29.422 unimplemented {"Connection": 5, "Phase": "Town", "Kind": 1, "Opcode": 1427, "Name": "FPS_DEVIDE_COLLECT", "Length": 216, "Body": "000000000500050000000000070000000000000000000A00000000000000000000000000000000000000
+23:22:29.426 recv 194 FRAME_LAG_STATISTICS  660E000010000210DF73001000200E010000090008FFFF00000000000000
+23:22:29.426 unimplemented {"Connection": 5, "Phase": "Town", "Kind": 1, "Opcode": 194, "Name": "FRAME_LAG_STATISTICS", "Length": 362, "Body": "660E000010000210DF73001000200E010000090008FFFF000000000000000000008E1200006D97814A8
+23:22:29.427 recv 1288 TEXTURE_MEMORY_STATISTICS  A076A809
+23:22:29.427 unimplemented {"Connection": 5, "Phase": "Town", "Kind": 1, "Opcode": 1288, "Name": "TEXTURE_MEMORY_STATISTICS", "Length": 4, "Body": "A076A809"}
+23:22:29.427 recv 1289 DUNGEON_TEXTURE_MEMORY_STATISTICS  0000
+23:22:29.427 unimplemented {"Connection": 5, "Phase": "Town", "Kind": 1, "Opcode": 1289, "Name": "DUNGEON_TEXTURE_MEMORY_STATISTICS", "Length": 2, "Body": "0000"}
+23:22:29.427 recv 1142 FRAMELAG_PER_DUNGEON  010000001084D7171900000000320000004C000000
+23:22:29.427 unimplemented {"Connection": 5, "Phase": "Town", "Kind": 1, "Opcode": 1142, "Name": "FRAMELAG_PER_DUNGEON", "Length": 21, "Body": "010000001084D7171900000000320000004C000000"}
+23:22:29.427 recv 250 LODING_TIME_REPORT  0100001F01000001003C1000000200000000000300000000000400F80000
+23:22:29.427 unimplemented {"Connection": 5, "Phase": "Town", "Kind": 1, "Opcode": 250, "Name": "LODING_TIME_REPORT", "Length": 57, "Body": "0100001F01000001003C1000000200000000000300000000000400F8000000050000000000060000000000
+23:22:29.427 recv 279 LAG_STATISTICS  030046E77645F070B6450B000101341047470D91470700021084D7170001
+23:22:29.427 unimplemented {"Connection": 5, "Phase": "Town", "Kind": 1, "Opcode": 279, "Name": "LAG_STATISTICS", "Length": 87, "Body": "030046E77645F070B6450B000101341047470D91470700021084D7170001D0A64501806945020001809DD54781
+23:22:29.427 recv 593 SECURITY_STATUS  3900000000000000
+23:22:29.427 client_notice {"Connection": 5, "Opcode": 593, "Action": "security_status", "Detail": "type=57 value=0"}
+23:22:29.427 recv 3 EXIT  00
+23:22:29.428 exit {"Connection": 5, "Mode": 0}
+23:22:29.428 send 3 EXIT exit_ack 01
+23:22:29.429 disconnected {"Connection": 5, "Protocol": "GAME"}

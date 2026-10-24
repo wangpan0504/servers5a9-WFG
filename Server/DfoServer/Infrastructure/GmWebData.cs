@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Mailbox;
+using DfoServer.Game.Raids;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Session;
 using DfoServer.Network.Management;
@@ -11,7 +12,8 @@ namespace DfoServer.Infrastructure;
 // GM 站点的数据实现：在线信息取自协议层共用的 OnlineSessionDirectory，账号与角色经 game.db 只读查询；
 // 写命令经服务进程内的开发 GM 执行器（command），小退走在线目录，金币邮件走 MailboxService.Deliver。
 internal sealed class GmWebData(ServerOptions options, DateTimeOffset startedAt, OnlineSessionDirectory online, GmAccountDirectory accounts,
-    Func<string, string> command, MailboxService mailbox, GoldLimitCatalog goldLimits, GmItemExtras items, GmAudit audit) : IGmWebData
+    Func<string, string> command, MailboxService mailbox, GoldLimitCatalog goldLimits, GmItemExtras items, GmAudit audit,
+    RaidEntryStore? sharedRaidWindows = null) : IGmWebData
 {
     public GmAudit Audit => audit;
 
@@ -60,6 +62,11 @@ internal sealed class GmWebData(ServerOptions options, DateTimeOffset startedAt,
             File.Move(temp, QuickPath, true);
         }
     }
+
+    // 与入城投影共用同一实例：GM 写入后，下一次入城/换频道的 EVENT_INFO 即按新表下发。
+    readonly RaidEntryStore raidWindows = sharedRaidWindows ?? new(options.DataDirectory);
+    public string ReadRaidWindows() => raidWindows.ReadJson();
+    public void WriteRaidWindows(string json) => raidWindows.Replace(json);
 
     public byte[]? ItemIcon(int id) => items.Icon(id);
     public object? ItemPreview(int id) => items.Preview(id);

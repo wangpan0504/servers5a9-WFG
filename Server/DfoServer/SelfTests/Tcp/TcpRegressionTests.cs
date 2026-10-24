@@ -177,6 +177,7 @@ internal static class TcpRegressionTests
         ("dungeon-altars", FormalDungeonTcpTests.RunAltarsAsync),
         ("dungeon-despair", FormalDungeonTcpTests.RunDespairAsync),
         ("hero-tomb-entry", FormalDungeonTcpTests.RunHeroTombAsync),
+        ("assault-result-menu", FormalDungeonTcpTests.RunAssaultResultMenuAsync),
         ("special-normal-entry", FormalDungeonTcpTests.RunSpecialNormalAsync),
         ("dungeon-entry-plan", (_, _, resources) =>
         {
@@ -344,6 +345,12 @@ internal static class TcpRegressionTests
         ("keepalive", KeepaliveTcpTests.RunAsync),
         ("emotion", EmotionTcpTests.RunAsync),
         ("chat", ChatTcpTests.RunAsync),
+        ("raid-create", RaidCreateTcpTests.RunAsync),
+        ("raid-channel-type", RaidChannelTypeTcpTests.RunAsync),
+        ("raid-channel-landing", RaidChannelLandingTcpTests.RunAsync),
+        ("raid-channel-events", RaidChannelLandingTcpTests.RunEventsAsync),
+        ("special-channel-landing", RaidChannelLandingTcpTests.RunSpecialAsync),
+        ("xian-village-door", RaidChannelLandingTcpTests.RunXianDoorAsync),
         ("presence", TownPresenceTcpTests.RunAsync),
         ("gm-web-accept", GmWebAcceptTcpTests.RunAsync)
     ];

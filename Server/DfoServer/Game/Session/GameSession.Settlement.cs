@@ -23,6 +23,7 @@ internal sealed partial class GameSession
         public bool Committed { get; set; }
         public bool AssaultSettled { get; set; }
         public bool CrackSettled { get; set; }
+        public bool IncountSettled { get; set; }
         public bool ScoreScrolled { get; set; }
         public bool CardsShown { get; set; }
         public byte? SelectedCard { get; set; }
@@ -262,6 +263,12 @@ internal sealed partial class GameSession
         {
             settlement.CrackSettled = true;
             crackClear = CommitCrackClear(crackRewards);
+        }
+        // [sub incount on clear dungeon]：入场只核对，通关结算提交后记次（95 PVF 仅 7184，且不在 dungeon.lst）。
+        if (settlement.Committed && !settlement.IncountSettled && dungeon.ChannelCost is { ChargeOnClear: true } clearCost)
+        {
+            settlement.IncountSettled = true;
+            ChargeIncountOnClear(clearCost);
         }
         return new FormalDungeonSettlementResult(prepared.Outcome, FormalReceipt(), settlement.Pending.Reward,
             settlement.Presentation, previous) { Card = settlement.Card, Inventory = inventory, MailId = settlement.MailId,

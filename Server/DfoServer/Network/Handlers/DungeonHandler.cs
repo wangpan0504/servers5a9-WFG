@@ -239,6 +239,16 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main, [.. receipt.EntryItemConsumedSlots]), "dungeon_entry_items", Guard);
         }
+        if (!receipt.ChannelConsumedSlots.IsDefaultOrEmpty)
+        {
+            log.Write("channel_town_entry_items_consumed", new { Connection = context.Id, receipt.Entry.DungeonId,
+                Slots = receipt.ChannelConsumedSlots.Select(slot => slot.Index).ToArray(), CharacterId = character.Id });
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main, [.. receipt.ChannelConsumedSlots]), "channel_town_entry_items", Guard);
+        }
+        foreach (var enterCount in receipt.EnterCounts.IsDefault ? [] : receipt.EnterCounts)
+            await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(enterCount.Dungeon, enterCount.Daily, enterCount.Weekly),
+                "dungeon_enter_count_after_entry", Guard);
         if (!receipt.AssaultConsumedSlots.IsDefaultOrEmpty)
         {
             log.Write("assault_mode_entry_committed", new { Connection = context.Id, receipt.Entry.DungeonId,

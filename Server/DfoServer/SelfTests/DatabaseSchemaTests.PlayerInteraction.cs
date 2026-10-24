@@ -10,6 +10,7 @@ internal static partial class DatabaseSchemaTests
 {
     static void PlayerInteractionPreviewUpgrade(string root)
     {
+        SocialNumberingUpgrade(root);
         foreach (int version in new[] { 78, 79, 80 })
         {
             string path = Path.Combine(root, "player-preview-" + version, "game.db");
@@ -40,6 +41,7 @@ internal static partial class DatabaseSchemaTests
                     DROP TABLE dungeon_despair_clear_receipts; DROP TABLE dungeon_despair_progress;
                     DROP TABLE dungeon_special_entry_receipts;
                     ALTER TABLE characters DROP COLUMN avatar_preset_state;
+                    DROP TABLE character_dungeon_incount; DROP TABLE account_dungeon_incount;
                     """);
                 Execute(db, """
                     CREATE TABLE player_trade_receipts(
@@ -111,6 +113,66 @@ internal static partial class DatabaseSchemaTests
             string current = Snapshot(path);
             _ = new CharacterRepository(path);
             Check(Snapshot(path) == current, "兼容升级后重开不重复修改资产和回执");
+        }
+    }
+
+    static void SocialNumberingUpgrade(string root)
+    {
+        foreach (var (version, social) in new[] { (87, false), (88, false), (89, false), (88, true), (89, true), (90, true) })
+        {
+            string path = Path.Combine(root, $"social-numbering-{version}-{social}", "game.db");
+            var repository = new CharacterRepository(path);
+            var auth = new Game.Auth.AuthenticationService(new AuthenticationRepository(path));
+            auth.Create("numbering-a", "fixture-password"); auth.Create("numbering-b", "fixture-password");
+            using var owner = new AccountOwners().Acquire("numbering-a", () => { });
+            var role = repository.Create(owner, new NewCharacter("Numbering", new(38, 1, 450, 234), null));
+            using (var db = Open(path))
+            {
+                if (social)
+                {
+                    Execute(db, "INSERT INTO account_social_links VALUES('numbering-a','numbering-b',123,'备注',2);");
+                    if (version == 88) Execute(db, "DROP TABLE account_social_requests;" + SocialSchema.LegacyRequestSql);
+                    Execute(db, "INSERT INTO account_social_requests(source_account,target_account,message,created) VALUES('numbering-b','numbering-a','申请',456)");
+                }
+                else Execute(db, "DROP TABLE character_social_links; DROP TABLE account_social_links; DROP TABLE account_social_requests");
+                if (social || version < 88) Execute(db, "DROP TABLE character_dungeon_incount");
+                else Execute(db, $"INSERT INTO character_dungeon_incount VALUES({role.Id},'numbering-a',400000016,20261024,2,20261022,3)");
+                if (social || version < 89) Execute(db, "DROP TABLE account_dungeon_incount");
+                else Execute(db, "INSERT INTO account_dungeon_incount VALUES('numbering-a',400000016,20261024,4)");
+                Execute(db, $"PRAGMA user_version={version}");
+            }
+            if (version == 90)
+            {
+                string original = Snapshot(path);
+                Reject<InvalidDataException>(() => _ = new CharacterRepository(path), "完整交互旧v90不能按新社交v90打开");
+                Check(Snapshot(path) == original, "拒绝同号完整交互库后结构、关系、资产和版本均不变");
+                continue;
+            }
+            if (social)
+            {
+                using (var db = Open(path)) Execute(db, "ALTER TABLE account_social_links ADD COLUMN unexpected INTEGER");
+                string invalid = Snapshot(path);
+                Reject<InvalidDataException>(() => _ = new CharacterRepository(path), "旧社交同号库拒绝未知结构");
+                Check(Snapshot(path) == invalid, "拒绝前不写新次数表或改版本");
+                using var restoredDb = Open(path); Execute(restoredDb, "ALTER TABLE account_social_links DROP COLUMN unexpected");
+            }
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Check(Query(db, "PRAGMA user_version") is long actual && actual == SqliteMigrations.CurrentVersion &&
+                    Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN('character_dungeon_incount','account_dungeon_incount')") is 2L,
+                    "主线或社交同号旧库补齐次数与社交迁移");
+                Check(Query(db, "SELECT count(*) FROM account_social_links") is long rows && rows == (social ? 1 : 0) &&
+                    Query(db, "SELECT count(*) FROM account_social_requests WHERE created=456 AND message='申请'") is long requests && requests == (social ? 1 : 0),
+                    "社交关系与申请原样保留，主线升级不造好友");
+                if (!social && version >= 88) Check(Query(db, "SELECT daily_used FROM character_dungeon_incount") is 2L, "保留主线角色次数");
+                if (!social && version >= 89) Check(Query(db, "SELECT used FROM account_dungeon_incount") is 4L, "保留主线账号次数");
+                Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                    "顺延迁移后完整性和外键正确");
+            }
+            string upgraded = Snapshot(path);
+            _ = new CharacterRepository(path);
+            Check(Snapshot(path) == upgraded, "顺延迁移重开不重复修改");
         }
     }
 }

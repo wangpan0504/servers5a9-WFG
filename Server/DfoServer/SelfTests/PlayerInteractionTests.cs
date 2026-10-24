@@ -10,8 +10,8 @@ internal static class PlayerInteractionTests
     public static void RunCore()
     {
         int before = Count;
-        That(ChannelPackets.Endpoint("127.0.0.1", 12345, 22)[3] == 22 &&
-            ChannelPackets.Endpoint("127.0.0.1", 12345, 59)[3] == 59,
+        That(ChannelPackets.Endpoint("127.0.0.1", 12345, channelType: 22)[3] == 22 &&
+            ChannelPackets.Endpoint("127.0.0.1", 12345, channelType: 59)[3] == 59,
             "LOGIN模式跟随实际频道类型，普通与特殊入口不能固定为0或22");
         var create = PartyRequests.Information(Convert.FromHexString("000404000000000500000000000007"));
         That(create.Operation == 0 && create.Settings is { TitleCode: 4, Capacity: 4, Dungeon: 0, Difficulty: 5, Option: 7 },

@@ -46,6 +46,9 @@ internal static class GmWebServerTests
         public string Quick = "[]";
         public string ReadQuickItems() => Quick;
         public void WriteQuickItems(string json) => Quick = json;
+        public string Raid = """{"luke":[],"hyperspace":[],"prey":[]}""";
+        public string ReadRaidWindows() => Raid;
+        public void WriteRaidWindows(string json) => Raid = json;
         public byte[]? ItemIcon(int id) => id == 7 ? [137, 80, 78, 71] : null;
         public object? ItemPreview(int id) => id == 7 ? new { id, name = "测试", stats = new[] { "力量 +3" } } : null;
         public List<string> Portraits { get; } = [];
@@ -340,6 +343,16 @@ internal static class GmWebServerTests
         TestCheck.That(csv.IsSuccessStatusCode && csv.Content.Headers.ContentType?.MediaType == "text/csv" && csv.Content.Headers.ContentDisposition?.FileName == "gm-audit.csv"
             && csvText.Contains("\"'=cmd|") && !csvText.Contains(",\"=cmd") && csvText.Contains("\"line1\nline2, \"\"q\"\"\""), "审计 CSV 导出：防公式注入并正确转义");
         TestCheck.That(!GmAudit.ToCsv([new(DateTimeOffset.Now, "gm", "x", " =1", "@a", true, "", "", "")]).Contains("\" =1"), "CSV 前导空白后的公式也被中和");
+
+        var closed = await http.GetFromJsonAsync<JsonElement>("/api/raid-windows");
+        TestCheck.That(closed.GetProperty("luke").GetArrayLength() == 0 && closed.GetProperty("hyperspace").GetArrayLength() == 0 && closed.GetProperty("prey").GetArrayLength() == 0,
+            "团本每周时段默认三张都是空表");
+        TestCheck.That((await Post("/api/raid-windows", new { luke = new[] { new { weekday = 2, start = "18:00", end = "22:00" } } })).StatusCode == HttpStatusCode.BadRequest,
+            "团本时段缺少确认被拒绝");
+        var saved = await Post("/api/raid-windows", new { confirm = true, luke = new[] { new { weekday = 2, start = "18:00", end = "22:00" } }, hyperspace = Array.Empty<object>(), prey = Array.Empty<object>() });
+        string savedText = await saved.Content.ReadAsStringAsync();
+        TestCheck.That(saved.IsSuccessStatusCode && savedText.Contains("\"weekday\":2") && data.Raid.Contains("18:00"),
+            "GM 整表替换只写入已确认的每周时段");
 
         // 纸娃娃：只读 GET，PNG 与逐层诊断；试穿编号严格校验，不写审计。
         int audited = data.Audit.Query(5000, null, null, null, null, null).Length;

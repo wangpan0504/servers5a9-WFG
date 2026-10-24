@@ -1,0 +1,36 @@
+等级 95、完成任务为空时，每条频道留在 38/1 的原因来自 ChannelAreaLanding.Decide。474,234 的落点都等于该区域 TownCatalog 的 [gate]。
+
+1 elven_guard 38/0 622,196 room-entrance
+10 granfloris 38/2 1085,249 neighbor-door
+11 sky_catle 38/1 admission-target-quest-required
+12 behemoth 38/1 admission-target-quest-required
+13 Alfhlyra 38/1 admission-target-quest-required
+14 Noirpera 38/1 admission-target-quest-required
+15 Charnak 38/1 admission-target-quest-required
+16 Abnoba 38/1 admission-target-quest-required
+17 Meltdown 38/1 admission-target-quest-required
+18 FallsToTheSky 38/1 admission-target-quest-required
+19 raid 19/0 474,234 area-gate
+20 luke_raid 32/0 474,234 area-gate。等级 85 为 admission-target-level-required，留在 38/1
+21 metro 38/1 admission-target-quest-required
+22 north_myre 38/1 admission-target-quest-required
+23 deathtower 38/1 admission-target-quest-required
+24 ancient 38/1 no-proven-town
+25 Antwer 38/1 no-proven-town
+26 impossible 38/1 no-proven-town
+27 seatrain 38/1 no-proven-town
+28 stormpass 38/1 no-proven-town
+29 timedoor 38/1 admission-target-quest-required
+30 powerstation 38/1 admission-target-quest-required
+31 attackzone 15/0 594,234 area-gate
+32 goldenroad 38/1 no-proven-town
+33 noblsky 38/1 no-proven-town
+34 CastleofDead 38/1 no-proven-town
+35 crack 38/1 no-proven-town
+36 sainthorn 17/0 474,234 area-gate
+37 harlem 38/1 admission-target-quest-required
+38 east harlem 38/1 admission-target-quest-required
+39 fiendwar 38/1 no-proven-town
+40 pvp 10/0 474,234 area-gate。等级 1 为 admission-target-level-required，留在 38/1
+
+正式选角已覆盖：格兰之森空任务落到 38/2 1085,249；天空之城任务不足留在 38/1；魔界大战没有证明城镇留在 38/1；resumeTown 保留 38/0。没有客户端实机验收。玩法未接。进程 41144 仍是旧内存脚本。

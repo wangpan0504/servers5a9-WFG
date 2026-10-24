@@ -22,6 +22,9 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     // #510/#511 普通入场票在入场提交时扣掉的背包格，与实际扣掉的入场一次性疲劳（无限疲劳时为 0）。
     public ImmutableArray<InventorySlot> EntryItemConsumedSlots { get; init; } = [];
     public ushort EntryFatigueCharged { get; init; }
+    // 频道专属城镇入场扣除的 [required item] 背包格；扣次后该行全部副本的日/周剩余（NOTI 550），仅入场回执携带。
+    public ImmutableArray<InventorySlot> ChannelConsumedSlots { get; init; } = [];
+    public ImmutableArray<DungeonEnterCount> EnterCounts { get; init; } = [];
     public GriefTowerAdmission? GriefAdmission { get; init; }
     public DungeonSpecialEntry? SpecialEntry { get; init; }
     // 演出返回只确认缓存呈现，不重新执行业务装载或授权基础图演员。

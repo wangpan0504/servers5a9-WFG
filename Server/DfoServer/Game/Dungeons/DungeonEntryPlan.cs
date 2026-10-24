@@ -30,8 +30,8 @@ internal sealed record DungeonEntryPlan(
     // GM伴侣：本次入场放行的地图 [ai character] 行编号。空表示未开启或该副本类型不注入；
     // 只在起始房间发送，非起始房间的行由 DungeonMonsterPlan.FromRoom 丢弃。
     public ImmutableArray<int> CompanionMapRows { get; init; } = [];
-    // 资源侧准入：祭坛、塔、Boss Rush 与亡者峡谷不注入伴侣（DungeonDefinition.AllowsCompanionAi）；
-    // 地图自带原生 [ai character] 行时由 DungeonMonsterPlan.FromRoom 再丢弃伴侣行。
+    // 资源侧准入：祭坛、塔与亡者峡谷不注入伴侣（DungeonDefinition.AllowsCompanionAi）；
+    // 地图自带原生 [ai character] 行的房间照常叠加伴侣行。
     public bool AllowsCompanionAi { get; init; } = true;
     public bool IsTutorial { get; init; }
     public bool DisableClearReward { get; init; }
@@ -106,7 +106,7 @@ internal sealed record DungeonEntryPlan(
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
-        bool hellParty = false, bool hellLegend = false, bool practice = false, GriefTowerAdmission? grief = null)
+        bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -125,14 +125,14 @@ internal sealed record DungeonEntryPlan(
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
             maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty),allowClearedTerminalQuest:allowClearedTerminalQuest,
-            hellParty:hellParty,hellLegend:hellLegend,practice:practice,grief:grief);
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        GriefTowerAdmission? grief = null)
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -366,13 +366,17 @@ internal sealed record DungeonEntryPlan(
         if (maze.StoryStages.Count > 0 && starts.Length > 1)
             starts = [starts.FirstOrDefault(map => map.StoryStageIndex < 0) ?? starts[0]];
         var bosses = maze.StoryStages.Count > 0 ? new[] { maze.StoryStages[^1] } : maps.Where(map => map.Position == boss).ToArray();
+        // 显式清图目标等于 Boss 坐标的基础图或叠层时，基础格可以只声明为 map；仅在本次计划中投影为 Boss，保留原资源身份。
+        // 客户端 02A17ABB：02A16B60 判定 (x,y) 在当前迷宫 Boss 坐标（实例 +0x6F4 记录）时取格子 boss 列表(+0x18)，
+        // 该列表为空才退回 map 列表(+4)。bossCellFromBossMap 只由调用方在已证明的范围内打开（见 PrepareFormalDungeon）。
+        bool bossMapCell = bossCellFromBossMap && layoutQuest is null && questId == 0 && !hellParty && !maps.Any(map => map.Kind == "boss");
         // 02A17ABB..02A17AE4：Boss坐标的boss候选为空时使用该格map候选。普通路线按资源声明的坐标投影，
         // 不能要求DGN重复写boss种类；只改本次计划，地图与怪物身份仍由原资源及Run复验。
         // 任务路线继续要求明确的清图目标，叠层、条件和多阶段路线保留原合同。
         bool ordinaryBossCell = !definition.IsTutorial && !definition.IsClassExperience && !definition.IsTournament && dungeonId != 5000 &&
             routeQuest == 0 && (questId == 0 || ordinaryHunt) && layoutQuest is null &&
             maze.QuestConnectionTokens.Count == 0 && maze.LayeredMaps.Count == 0 && maze.ConditionalMaps.Count == 0 && maze.DummyStages.Count == 0;
-        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && (ordinaryBossCell || layoutQuest is not null &&
+        if (maze.StoryStages.Count == 0 && bosses.Length == 1 && bosses[0].Kind == "map" && (bossMapCell || ordinaryBossCell || layoutQuest is not null &&
             QuestClearEligibility.IsSingleMap(layoutQuest) && (bosses[0].Id == layoutQuest.IntData[0] ||
                 maze.LayeredMaps.Any(map => map.Position == boss && map.Id == layoutQuest.IntData[0]))))
         {

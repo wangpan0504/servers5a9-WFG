@@ -839,6 +839,7 @@ internal static class SessionPlanningTests
                 INSERT INTO character_collectbox_expirations VALUES({{id}},'planning',2,2000000000);
                 INSERT INTO character_social_links(owner_id,target_id,kind,created,memo)
                   SELECT {{id}},id,0,0,'' FROM characters WHERE id<>{{id}} ORDER BY id LIMIT 1;
+                INSERT INTO character_dungeon_incount VALUES({{id}},'planning',400000016,20261020,1,20261015,1);
                 """);
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
         }

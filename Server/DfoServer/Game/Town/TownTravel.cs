@@ -1,4 +1,5 @@
 using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.Town;
@@ -19,10 +20,14 @@ internal static class TownTravel
         return towns.IsPosition(target, completed) ? target : null;
     }
 
-    public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed)
+    public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null)
     {
         if (request.PreviousTown != character.Position.Town || request.PreviousArea != character.Position.Area)
             return TownTravelPlan.Reject("source-area-mismatch");
+        // 赛丽亚房间按频道出门：客户端若以区域请求代替 PREV_VILLAGE 指向频道落点区域，按同一出口处理。
+        if (request.TargetNpc == 0 && ChannelAreaLanding.RoomExit(towns, channel, character.Position, character.Level, completed) is { } exit &&
+            exit.Town == request.Town && exit.Area == request.Area)
+            return ChannelExit(character, towns, completed, exit);
         var target = new Location(request.Town, request.Area, request.X, request.Y, character.Position.Direction);
         // 房间返回 0 仍绑定存档返回点；地图传送门对象（实测 PathKind 6）按 PVF warpgate 目标放行，
         // 等级与前置任务由 Admission 的 portal 分支继续校验；菜单 5 同样按传送目标处理。
@@ -32,22 +37,45 @@ internal static class TownTravel
         string reason = towns.Admission(character.Position, target, character.Level, completed, character.Return, portal, request.TargetNpc);
         if (reason != "ready")
             return TownTravelPlan.Reject(reason);
+        // 目标地图没有回连来源的门时客户端发 0,0（实测五陵 117/0 → 1/1）；0,0 不可站时按 PVF 入口解析落点。
+        if (request.X == 0 && request.Y == 0 && !towns.IsPosition(target, completed))
+        {
+            if (towns.Entrance(character.Position, target, completed) is not { } arrival)
+                return TownTravelPlan.Reject("arrival-unavailable");
+            target = arrival with { Direction = character.Position.Direction };
+        }
         // 有坐标切图保留请求落点；返回地区单独解析，不能用门口覆盖客户端坐标。
-        var back = towns.IsRoom(target, completed)
+        // 频道专属城镇（如艾尔丁纪念馆 67）内走动不改返回地区，离开频道后仍回进入前的普通地区。
+        var back = ChannelAreaLanding.IsChannelBoundTown(towns, target.Town) && character.Return is { } kept
+            ? kept
+            : towns.IsRoom(target, completed)
             ? towns.Entrance(target, character.Position, completed)
             : towns.ResolveRoomReturn(target, character.Return, character.Level, completed);
         return back is null ? TownTravelPlan.Reject("return-gate-unavailable") : new(target, back, "ready");
     }
 
-    public static TownTravelPlan LeaveRoom(Character character, TownCatalog towns, IReadOnlySet<int> completed)
+    public static TownTravelPlan LeaveRoom(Character character, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null)
     {
         if (!towns.IsRoom(character.Position, completed))
             return TownTravelPlan.Reject("not-in-ready-room");
+        if (ChannelAreaLanding.RoomExit(towns, channel, character.Position, character.Level, completed) is { } exit)
+            return ChannelExit(character, towns, completed, exit);
         var back = character.Return ?? towns.DefaultReturn(character.Position, completed);
         var target = back is null ? null : towns.Entrance(character.Position, back, completed);
         if (target is null)
             return TownTravelPlan.Reject("return-gate-unavailable");
         string reason = towns.Admission(character.Position, target, character.Level, completed, back);
         return reason == "ready" ? new(target, target, reason) : TownTravelPlan.Reject(reason);
+    }
+
+    // 频道落点已由 ChannelAreaLanding.Decide 校验目录、等级/任务准入与门口可站。频道专属城镇（115/59/67 等）不覆盖原返回地区，
+    // 离开频道后赛丽亚房间仍回进入前的普通地区。
+    static TownTravelPlan ChannelExit(Character character, TownCatalog towns, IReadOnlySet<int> completed, Location exit)
+    {
+        // 返回地区规则与原 CharacterSelection 频道落点一致：专属城镇保留进入前地区，其余按落点解析房间返回地区。
+        var back = ChannelAreaLanding.IsChannelBoundTown(towns, exit.Town)
+            ? towns.ResolveRoomReturn(character.Position, character.Return, character.Level, completed)
+            : towns.ResolveRoomReturn(exit, exit, character.Level, completed);
+        return new(exit, back, "ready");
     }
 }

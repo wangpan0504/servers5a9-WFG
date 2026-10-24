@@ -124,6 +124,23 @@ internal static class BlackDiamondTests
             That(DevelopmentGm.Answer("summon-wangfugui on", "black", repo, owners, _ => null).StartsWith("ERR ", StringComparison.Ordinal) &&
                 !new GameDebugSettings().SummonWangFugui,
                 "离线入口拒绝伴侣设置，新实例恢复关闭");
+            // 光兵（28号，5409）与王富贵各自独立、可同时开启；只读查询同样不写角色状态。
+            That(!settings.SummonGuangbing &&
+                Switch("summon-guangbing") == "OK {\"summonGuangbing\":false}" &&
+                !DevelopmentRequest.Parse("summon-guangbing", "black").Writes, "光兵开关默认关闭，只读查询不写玩家状态");
+            That(Switch("summon-guangbing on") == "OK {\"summonGuangbing\":true}" && settings.SummonGuangbing &&
+                Switch("summon-guangbing off") == "OK {\"summonGuangbing\":false}" && !settings.SummonGuangbing &&
+                !settings.SummonWangFugui &&
+                DevelopmentRequest.Parse("summon-guangbing on", "black").Writes,
+                "光兵开关 on/off 幂等切换，且不影响王富贵开关");
+            That(Switch("summon-guangbing auto").StartsWith("ERR ", StringComparison.Ordinal) &&
+                Switch("summon-guangbing 5409").StartsWith("ERR ", StringComparison.Ordinal) &&
+                Switch("summon-guangbing on extra").StartsWith("ERR ", StringComparison.Ordinal) &&
+                !settings.SummonGuangbing,
+                "非法光兵开关不改变当前状态");
+            That(DevelopmentGm.Answer("summon-guangbing on", "black", repo, owners, _ => null).StartsWith("ERR ", StringComparison.Ordinal) &&
+                !new GameDebugSettings().SummonGuangbing,
+                "离线入口拒绝光兵设置，新实例恢复关闭");
             Character Create(AccountOwners.Lease lease, string name) => repo.Create(lease,
                 new(name, new(1, 0, 1, 1), null) { DungeonState = CharacterDungeonState.NewOrdinary });
             var first = Create(owner, "BlackFirst");

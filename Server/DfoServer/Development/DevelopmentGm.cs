@@ -81,6 +81,12 @@ internal static partial class DevelopmentGm
                 if (request.Primary >= 0) debugSettings.SummonWangFugui = request.Primary == 1;
                 return "OK " + JsonSerializer.Serialize(new { summonWangFugui = debugSettings.SummonWangFugui });
             }
+            if (request.Action == DevelopmentAction.SummonGuangbing)
+            {
+                if (debugSettings is null) throw new InvalidOperationException("光兵开关仅支持在线服务");
+                if (request.Primary >= 0) debugSettings.SummonGuangbing = request.Primary == 1;
+                return "OK " + JsonSerializer.Serialize(new { summonGuangbing = debugSettings.SummonGuangbing });
+            }
             if (request.Action == DevelopmentAction.CashShopExpiration)
             {
                 if (cashShop is null) throw new InvalidOperationException("商城期限调试开关仅支持在线服务");

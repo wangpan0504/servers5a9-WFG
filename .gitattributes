@@ -9,3 +9,6 @@ Server/DfoServer/Resources/channel.txt -text whitespace=-blank-at-eol
 
 # 第三方原始声明保留上游空白格式。
 LICENSES/*-THIRD-PARTY-NOTICES.txt -whitespace
+
+# 取证原件按入库字节原样检出，不做换行转换；知识库按这些字节记录 SHA256。
+evidence/** -text

@@ -25,7 +25,7 @@ internal sealed partial class GameSession
     public bool Travel(AreaRequest request, out TownTravelReceipt? receipt)
     {
         receipt = owner.Execute(() => CommitTravel(Phase == SessionPhase.Town && Selected is not null
-            ? TownTravel.Plan(Selected, request, towns, completed)
+            ? TownTravel.Plan(Selected, request, towns, completed, ChannelEntry)
             : TownTravelPlan.Reject("not-ready")));
         return receipt is not null;
     }
@@ -35,7 +35,7 @@ internal sealed partial class GameSession
     public bool LeaveRoom(out TownTravelReceipt? receipt)
     {
         receipt = owner.Execute(() => CommitTravel(Phase == SessionPhase.Town && Selected is not null
-            ? TownTravel.LeaveRoom(Selected, towns, completed)
+            ? TownTravel.LeaveRoom(Selected, towns, completed, ChannelEntry)
             : TownTravelPlan.Reject("not-in-ready-room")));
         return receipt is not null;
     }

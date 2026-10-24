@@ -95,6 +95,10 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await collectBoxes.InitializeAsync(context);
         // #233 实验：下发今日强袭模式索引，避免客户端以默认0xFF判定“今天无法入场”。
         await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(timer, context.Session.AssaultDailyCounts(timer.GetLocalNow())), "assault_mode_daily_info");
+        // DungeonIncountInfo 表内全部限次副本：入城时按已持久的日/周使用量逐个下发 NOTI 550（日剩余→+0x6C68，周剩余→+0x6C7C）。
+        foreach (var count in context.Session.EnterCounts())
+            await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, count.Weekly),
+                "dungeon_enter_count_initialize");
         if (mailbox is not null)
             await mailbox.InitializeAsync(context);
         if (titles is not null)
@@ -109,10 +113,15 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.CHARACTER_MANAGE_INFO,
             GrowUpChangePackets.ManageInfo(context.Session.GrowUpChangeCount(), c.Level), "growup_change_info");
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
-        await context.NotifyProtected(NotiPacketType.EVENT_INFO, SeriaLuckPackets.EventInfoCompressed(), "seria_luck_event_initialize");
+        // EVENT_INFO 整表替换客户端事件集合：赛丽亚 2037 之外，加入当前处于 GM 团本时段的卡事件（282/2449/414），去掉团队频道卡的「非可入场时间」。
+        await context.NotifyProtected(NotiPacketType.EVENT_INFO,
+            SeriaLuckPackets.EventInfoCompressed(DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow())), "seria_luck_event_initialize");
         await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(c)), "fatigue_after_town_hud");
         await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(c.Inventory.AccountWallet.SeriaLuck,
             c.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_initialize");
+        // 团队频道卡次数：本服不记录团本通关次数，三种团本按已用 0 下发（显示 1/1 与 WEEKLY CLEAR COUNT 上限），替代缺项的 -1（2/1、3/2）。
+        await context.Notify(NotiPacketType.RAID_WEEKLY_CLEAR_INFO, RaidPackets.WeeklyClearInfo(
+            DfoServer.Game.Raids.RaidEntryEvents.Cards.Select(card => new RaidPackets.WeeklyClear(card.RaidType, 0, 0)).ToArray()), "raid_weekly_clear_initialize");
         if (resumeTown)
         {
             // 124会恢复换频道前的地图；最终24必须在它之后绑定本人，不能在恢复前宣布场景完成。
@@ -138,6 +147,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await guildPermits.DeliverPendingAsync(context);
     }
 
+    // GM 团本入场时段（与 GmWebData 共用同一实例）；为空时三张团队频道卡都按关闭下发。
+    internal DfoServer.Game.Raids.RaidEntryStore? RaidWindows { get; set; }
+
     public Task ReconcileQuestsAsync(GameConnectionContext context) => quests?.CloseReadyChildrenAsync(context,refreshList: true) ?? Task.CompletedTask;
 
     async Task LocationAsync(GameConnectionContext context, Character c, bool initial = false, Func<bool>? canSend = null, bool transition = true)
@@ -150,7 +162,9 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c), "transition", canSend);
         if (context.Premiums is { } premiums) await premiums.StaminaAsync(c, canSend);
         var completed = DfoServer.Game.Quests.QuestEligibility.Completed(c);
-        if (towns.IsRoom(c.Position, completed) && (c.Return ?? towns.DefaultReturn(c.Position, completed)) is { } back)
+        // 赛丽亚房间的出门城镇按当前频道落点（与 TownTravel.LeaveRoom 同一规则），否则为存档返回地区。
+        if (towns.IsRoom(c.Position, completed) &&
+            (ChannelAreaLanding.RoomExit(towns, context.Session.ChannelEntry, c.Position, c.Level, completed) ?? c.Return ?? towns.DefaultReturn(c.Position, completed)) is { } back)
             await context.Notify(NotiPacketType.PREV_VILLAGE, TownPackets.RoomReturnTown(back), "room_return_town", canSend);
     }
 
