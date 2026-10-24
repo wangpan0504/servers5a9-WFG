@@ -1,0 +1,569 @@
+[
+  {
+    "Family": "golden-pet-bead",
+    "PolicyIdentity": "golden-pet-bead.11x11.v1",
+    "Enabled": true,
+    "Sources": [
+      {
+        "ItemId": 490705394,
+        "Entry": "Booster"
+      },
+      {
+        "ItemId": 490705395,
+        "Entry": "LimitCube"
+      }
+    ],
+    "Bases": [
+      {
+        "Key": "attribute-0",
+        "Tag": "[physical attack]",
+        "Values": [
+          25
+        ]
+      },
+      {
+        "Key": "attribute-1",
+        "Tag": "[magical attack]",
+        "Values": [
+          25
+        ]
+      },
+      {
+        "Key": "attribute-2",
+        "Tag": "[physical defense]",
+        "Values": [
+          25
+        ]
+      },
+      {
+        "Key": "attribute-3",
+        "Tag": "[magical defense]",
+        "Values": [
+          25
+        ]
+      },
+      {
+        "Key": "attribute-4",
+        "Tag": "[equipment physical attack]",
+        "Values": [
+          30,
+          30
+        ]
+      },
+      {
+        "Key": "attribute-5",
+        "Tag": "[equipment magical attack]",
+        "Values": [
+          30,
+          30
+        ]
+      },
+      {
+        "Key": "attribute-6",
+        "Tag": "[separate attack]",
+        "Values": [
+          30,
+          30
+        ]
+      },
+      {
+        "Key": "attribute-7",
+        "Tag": "[fire attack]",
+        "Values": [
+          8
+        ]
+      },
+      {
+        "Key": "attribute-8",
+        "Tag": "[water attack]",
+        "Values": [
+          8
+        ]
+      },
+      {
+        "Key": "attribute-9",
+        "Tag": "[dark attack]",
+        "Values": [
+          8
+        ]
+      },
+      {
+        "Key": "attribute-10",
+        "Tag": "[light attack]",
+        "Values": [
+          8
+        ]
+      }
+    ],
+    "Pairs": [
+      {
+        "First": 0,
+        "Second": 0,
+        "BeadId": 490705315,
+        "CardId": 490703546,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 1,
+        "BeadId": 490705316,
+        "CardId": 490703547,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 2,
+        "BeadId": 490705317,
+        "CardId": 490703548,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 3,
+        "BeadId": 490705318,
+        "CardId": 490703549,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 4,
+        "BeadId": 490705319,
+        "CardId": 490705457,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 5,
+        "BeadId": 490705320,
+        "CardId": 490705458,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 6,
+        "BeadId": 490705321,
+        "CardId": 490703552,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 7,
+        "BeadId": 490705322,
+        "CardId": 490703555,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 8,
+        "BeadId": 490705323,
+        "CardId": 490703556,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 9,
+        "BeadId": 490705324,
+        "CardId": 490703557,
+        "Index": 0
+      },
+      {
+        "First": 0,
+        "Second": 10,
+        "BeadId": 490705325,
+        "CardId": 490703558,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 1,
+        "BeadId": 490705326,
+        "CardId": 490703559,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 2,
+        "BeadId": 490705327,
+        "CardId": 490703560,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 3,
+        "BeadId": 490705328,
+        "CardId": 490703561,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 4,
+        "BeadId": 490705329,
+        "CardId": 490705459,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 5,
+        "BeadId": 490705330,
+        "CardId": 490705460,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 6,
+        "BeadId": 490705331,
+        "CardId": 490703564,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 7,
+        "BeadId": 490705332,
+        "CardId": 490703567,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 8,
+        "BeadId": 490705333,
+        "CardId": 490703568,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 9,
+        "BeadId": 490705334,
+        "CardId": 490703569,
+        "Index": 0
+      },
+      {
+        "First": 1,
+        "Second": 10,
+        "BeadId": 490705335,
+        "CardId": 490703570,
+        "Index": 0
+      },
+      {
+        "First": 2,
+        "Second": 2,
+        "BeadId": 490705336,
+        "CardId": 490703571,
+        "Index": 0
+      },
+      {
+        "First": 2,
+        "Second": 3,
+        "BeadId": 490705337,
+        "CardId": 490703572,
+        "Index": 0
+      },
+      {
+        "First": 2,
+        "Second": 4,
+        "BeadId": 490705338,
+        "CardId": 490705461,
+        "Index": 0
+      },
+      {
+        "First": 2,
+        "Second": 5,
+        "BeadId": 490705339,
+        "CardId": 490705462,
+        "Index": 0
+      },
+      {
+        "First": 2,
+        "Second": 6,
+        "BeadId": 490705340,
+        "CardId": 490703575,
+        "Index": 0
+      },
+      {
+        "First": 2,
+        "Second": 7,
+        "BeadId": 490705341,
+        "CardId": 490703578,
+        "Index": 0
+      },
+      {
+        "First": 2,
+        "Second": 8,
+        "BeadId": 490705342,
+        "CardId": 490703579,
+        "Index": 0
+      },
+      {
+        "First": 2,
+        "Second": 9,
+        "BeadId": 490705343,
+        "CardId": 490703580,
+        "Index": 0
+      },
+      {
+        "First": 2,
+        "Second": 10,
+        "BeadId": 490705344,
+        "CardId": 490703581,
+        "Index": 0
+      },
+      {
+        "First": 3,
+        "Second": 3,
+        "BeadId": 490705345,
+        "CardId": 490703582,
+        "Index": 0
+      },
+      {
+        "First": 3,
+        "Second": 4,
+        "BeadId": 490705346,
+        "CardId": 490705463,
+        "Index": 0
+      },
+      {
+        "First": 3,
+        "Second": 5,
+        "BeadId": 490705347,
+        "CardId": 490705464,
+        "Index": 0
+      },
+      {
+        "First": 3,
+        "Second": 6,
+        "BeadId": 490705348,
+        "CardId": 490703585,
+        "Index": 0
+      },
+      {
+        "First": 3,
+        "Second": 7,
+        "BeadId": 490705349,
+        "CardId": 490703588,
+        "Index": 0
+      },
+      {
+        "First": 3,
+        "Second": 8,
+        "BeadId": 490705350,
+        "CardId": 490703589,
+        "Index": 0
+      },
+      {
+        "First": 3,
+        "Second": 9,
+        "BeadId": 490705351,
+        "CardId": 490703590,
+        "Index": 0
+      },
+      {
+        "First": 3,
+        "Second": 10,
+        "BeadId": 490705352,
+        "CardId": 490703591,
+        "Index": 0
+      },
+      {
+        "First": 4,
+        "Second": 4,
+        "BeadId": 490705353,
+        "CardId": 490705465,
+        "Index": 0
+      },
+      {
+        "First": 4,
+        "Second": 5,
+        "BeadId": 490705354,
+        "CardId": 490705466,
+        "Index": 0
+      },
+      {
+        "First": 4,
+        "Second": 6,
+        "BeadId": 490705355,
+        "CardId": 490705467,
+        "Index": 0
+      },
+      {
+        "First": 4,
+        "Second": 7,
+        "BeadId": 490705356,
+        "CardId": 490705468,
+        "Index": 0
+      },
+      {
+        "First": 4,
+        "Second": 8,
+        "BeadId": 490705357,
+        "CardId": 490705469,
+        "Index": 0
+      },
+      {
+        "First": 4,
+        "Second": 9,
+        "BeadId": 490705358,
+        "CardId": 490705470,
+        "Index": 0
+      },
+      {
+        "First": 4,
+        "Second": 10,
+        "BeadId": 490705359,
+        "CardId": 490705471,
+        "Index": 0
+      },
+      {
+        "First": 5,
+        "Second": 5,
+        "BeadId": 490705360,
+        "CardId": 490705472,
+        "Index": 0
+      },
+      {
+        "First": 5,
+        "Second": 6,
+        "BeadId": 490705361,
+        "CardId": 490705473,
+        "Index": 0
+      },
+      {
+        "First": 5,
+        "Second": 7,
+        "BeadId": 490705362,
+        "CardId": 490705474,
+        "Index": 0
+      },
+      {
+        "First": 5,
+        "Second": 8,
+        "BeadId": 490705363,
+        "CardId": 490705475,
+        "Index": 0
+      },
+      {
+        "First": 5,
+        "Second": 9,
+        "BeadId": 490705364,
+        "CardId": 490705476,
+        "Index": 0
+      },
+      {
+        "First": 5,
+        "Second": 10,
+        "BeadId": 490705365,
+        "CardId": 490705477,
+        "Index": 0
+      },
+      {
+        "First": 6,
+        "Second": 6,
+        "BeadId": 490705366,
+        "CardId": 490703609,
+        "Index": 0
+      },
+      {
+        "First": 6,
+        "Second": 7,
+        "BeadId": 490705367,
+        "CardId": 490703612,
+        "Index": 0
+      },
+      {
+        "First": 6,
+        "Second": 8,
+        "BeadId": 490705368,
+        "CardId": 490703613,
+        "Index": 0
+      },
+      {
+        "First": 6,
+        "Second": 9,
+        "BeadId": 490705369,
+        "CardId": 490703614,
+        "Index": 0
+      },
+      {
+        "First": 6,
+        "Second": 10,
+        "BeadId": 490705370,
+        "CardId": 490703615,
+        "Index": 0
+      },
+      {
+        "First": 7,
+        "Second": 7,
+        "BeadId": 490705371,
+        "CardId": 490703627,
+        "Index": 0
+      },
+      {
+        "First": 7,
+        "Second": 8,
+        "BeadId": 490705372,
+        "CardId": 490703628,
+        "Index": 0
+      },
+      {
+        "First": 7,
+        "Second": 9,
+        "BeadId": 490705373,
+        "CardId": 490703629,
+        "Index": 0
+      },
+      {
+        "First": 7,
+        "Second": 10,
+        "BeadId": 490705374,
+        "CardId": 490703630,
+        "Index": 0
+      },
+      {
+        "First": 8,
+        "Second": 8,
+        "BeadId": 490705375,
+        "CardId": 490703631,
+        "Index": 0
+      },
+      {
+        "First": 8,
+        "Second": 9,
+        "BeadId": 490705376,
+        "CardId": 490703632,
+        "Index": 0
+      },
+      {
+        "First": 8,
+        "Second": 10,
+        "BeadId": 490705377,
+        "CardId": 490703633,
+        "Index": 0
+      },
+      {
+        "First": 9,
+        "Second": 9,
+        "BeadId": 490705378,
+        "CardId": 490703634,
+        "Index": 0
+      },
+      {
+        "First": 9,
+        "Second": 10,
+        "BeadId": 490705379,
+        "CardId": 490703635,
+        "Index": 0
+      },
+      {
+        "First": 10,
+        "Second": 10,
+        "BeadId": 490705380,
+        "CardId": 490703636,
+        "Index": 0
+      }
+    ],
+    "LimitedPetIds": [
+      400990444,
+      400990445,
+      400990446,
+      400990447
+    ]
+  }
+]

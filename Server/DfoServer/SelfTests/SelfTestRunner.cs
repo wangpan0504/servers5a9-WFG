@@ -30,6 +30,7 @@ internal static class SelfTestRunner
         PremiumContractTests.RunCore();
         GrowthCubeContractTests.RunCore();
         LimitCubeTests.RunCore();
+        IndependentAttributePairTests.RunCore();
         EnchantmentTests.RunCore();
         EnhancementTests.RunCore();
         AmplificationTests.RunCore();

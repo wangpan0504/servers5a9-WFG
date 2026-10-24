@@ -8,7 +8,8 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalog boosters, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
     Random? random = null, GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null,
-    AvatarPackageCatalog? avatars = null, TimeProvider? clock = null, RandomOptionCatalog? randomOptions = null)
+    AvatarPackageCatalog? avatars = null, TimeProvider? clock = null, RandomOptionCatalog? randomOptions = null,
+    IndependentAttributePairCatalog? attributePairs = null)
 {
     public BoosterUsePlacesDefinition UsePlaces(int itemId) => boosters.UsePlaces(itemId);
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
@@ -192,6 +193,12 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) ||
             ceraPackage != !definition.PackageRewards.IsDefaultOrEmpty || lottery != definition.Lottery)
             return InventoryResult.Reject(19);
+        var selectionPolicy = (attributePairs ?? IndependentAttributePairCatalog.RequiredOnly)
+            .Resolve(source.Core.ItemId, AttributePairEntryKind.Booster);
+        if (selectionPolicy.Kind == AttributePairResolutionKind.RequiredUnavailable)
+            return InventoryResult.Reject(19) with { RejectReason = "attribute_pair_policy_unavailable" };
+        if (selectionPolicy.Policy is { } boundedPolicy && request.Count > boundedPolicy.MaximumBeads)
+            return InventoryResult.Reject(4);
         var dailyUses = before.DailyBoosterUses;
         long? dailyDeadline = null;
         if (definition.DailyRetainedLimit is { } dailyLimit)
@@ -305,59 +312,77 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         }
 
         var totals = new Dictionary<int, int>();
+        byte[]? trace = null;
         try
         {
-            if (choices is not null)
-                foreach (var choice in choices)
-                    Add(choice.ItemId, choice.Count, request.Count);
-            foreach (var pool in pools)
+            if (selectionPolicy.Policy is { } policy)
             {
-                var candidates = pool.Rewards.Where(row => row.Weight > 0).ToArray();
-                long draws = (long)pool.Draws * request.Count;
-                if (candidates.Length == 1)
+                trace = new byte[request.Count];
+                for (int i = 0; i < request.Count; i++)
                 {
-                    Add(candidates[0].ItemId, candidates[0].Count, draws);
-                    continue;
-                }
-                long weight = candidates.Sum(row => row.Weight);
-                // 每次至少产出一件；超过回执行数与每行数量的共同上限时，不存在可提交结果。
-                if (draws > (long)BoosterReceipt.MaximumItems * int.MaxValue)
-                    return InventoryResult.Reject(4);
-                if (draws > 64)
-                {
-                    // 独立加权抽取的次数向量服从多项分布；按条件二项分布聚合，避免按开箱数量循环。
-                    // 保留每一资源行（含同编号不同数量）、原权重与奖池，不过滤或重抽不合适的结果。
-                    foreach (var row in candidates)
-                    {
-                        long hits = BoosterBatchRandom.Next(draws, row.Weight, weight, random ?? Random.Shared);
-                        if (hits != 0)
-                            Add(row.ItemId, row.Count, hits);
-                        draws -= hits;
-                        weight -= row.Weight;
-                    }
-                    continue;
-                }
-                for (long draw = 0; draw < draws; draw++)
-                {
-                    long value = (random ?? Random.Shared).NextInt64(weight);
-                    foreach (var row in candidates)
-                    {
-                        if (value < row.Weight)
-                        {
-                            Add(row.ItemId, row.Count, 1);
-                            break;
-                        }
-                        value -= row.Weight;
-                    }
+                    var sample = IndependentAttributePairSampler.Next(policy, (random ?? Random.Shared).NextInt64);
+                    trace[i] = sample.Ordinal;
+                    Add(sample.ItemId, 1, 1);
                 }
             }
-            if (!definition.PackageRewards.IsDefaultOrEmpty)
-                foreach (var row in definition.PackageRewards)
-                    Add(row.ItemId, row.Count, request.Count);
+            else
+            {
+                if (choices is not null)
+                    foreach (var choice in choices)
+                        Add(choice.ItemId, choice.Count, request.Count);
+                foreach (var pool in pools)
+                {
+                    var candidates = pool.Rewards.Where(row => row.Weight > 0).ToArray();
+                    long draws = (long)pool.Draws * request.Count;
+                    if (candidates.Length == 1)
+                    {
+                        Add(candidates[0].ItemId, candidates[0].Count, draws);
+                        continue;
+                    }
+                    long weight = candidates.Sum(row => row.Weight);
+                    // 每次至少产出一件；超过回执行数与每行数量的共同上限时，不存在可提交结果。
+                    if (draws > (long)BoosterReceipt.MaximumItems * int.MaxValue)
+                        return InventoryResult.Reject(4);
+                    if (draws > 64)
+                    {
+                        // 独立加权抽取的次数向量服从多项分布；按条件二项分布聚合，避免按开箱数量循环。
+                        // 保留每一资源行（含同编号不同数量）、原权重与奖池，不过滤或重抽不合适的结果。
+                        foreach (var row in candidates)
+                        {
+                            long hits = BoosterBatchRandom.Next(draws, row.Weight, weight, random ?? Random.Shared);
+                            if (hits != 0)
+                                Add(row.ItemId, row.Count, hits);
+                            draws -= hits;
+                            weight -= row.Weight;
+                        }
+                        continue;
+                    }
+                    for (long draw = 0; draw < draws; draw++)
+                    {
+                        long value = (random ?? Random.Shared).NextInt64(weight);
+                        foreach (var row in candidates)
+                        {
+                            if (value < row.Weight)
+                            {
+                                Add(row.ItemId, row.Count, 1);
+                                break;
+                            }
+                            value -= row.Weight;
+                        }
+                    }
+                }
+                if (!definition.PackageRewards.IsDefaultOrEmpty)
+                    foreach (var row in definition.PackageRewards)
+                        Add(row.ItemId, row.Count, request.Count);
+            }
         }
         catch (OverflowException)
         {
             return InventoryResult.Reject(4);
+        }
+        catch (InvalidDataException) when (selectionPolicy.Policy is not null)
+        {
+            return InventoryResult.Reject(19) with { RejectReason = "attribute_pair_random_invalid" };
         }
         if (totals.Count is 0 or > BoosterReceipt.MaximumItems)
             return InventoryResult.Reject(4);
@@ -465,7 +490,11 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             after = after with { DailyBoosterUses = dailyUses };
         }
         var precondition = new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true);
-        receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
+        receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray())
+        {
+            SelectionTrace = trace,
+            SelectionSummary = trace is null ? null : IndependentAttributePairSampler.Describe(selectionPolicy.Policy!, trace)
+        };
         return new(true, 0, new(before, after, "booster_open", precondition, overflowItems: grant.Plan.OverflowItems));
 
         void Add(int id, int count, long draws) => totals[id] = checked(totals.GetValueOrDefault(id) + checked((int)(count * draws)));

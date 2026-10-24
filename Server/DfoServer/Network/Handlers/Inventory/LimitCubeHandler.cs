@@ -73,6 +73,7 @@ internal sealed class LimitCubeHandler(InventoryLimitCubeService cubes, Inventor
             Count = receipt?.ResultCount,
             receipt?.Roll,
             receipt?.TotalWeight,
+            SelectionSummary = receipt?.SelectionSummary,
             Revision = result.Receipt?.Character.Revision
         });
         if (!result.Accepted)
