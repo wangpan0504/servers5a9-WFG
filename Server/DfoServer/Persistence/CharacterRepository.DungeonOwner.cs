@@ -113,24 +113,21 @@ internal sealed partial class CharacterRepository
             command.Parameters.AddWithValue("$remaining", fatigueAfter.Remaining);
             command.CommandText = "UPDATE character_fatigue SET used=$used,remaining=$remaining WHERE character_id=$id AND account=$account";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("入场疲劳缺少原疲劳owner");
-            command.Parameters.AddWithValue("$instance", identity.InstanceId.ToString("N"));
-            command.Parameters.AddWithValue("$attempt", identity.TaskAttempt);
-            command.Parameters.AddWithValue("$map", charge.MapId);
-            command.Parameters.AddWithValue("$epoch", identity.Epoch);
-            command.Parameters.AddWithValue("$generation", owner.Generation);
-            command.Parameters.AddWithValue("$rule", CharacterFatigueState.StartDungeonRuleId);
-            command.Parameters.AddWithValue("$revision", revision);
-            command.Parameters.AddWithValue("$before", JsonSerializer.Serialize(fatigueBefore));
-            command.Parameters.AddWithValue("$after", JsonSerializer.Serialize(fatigueAfter));
-            command.CommandText = """
-                INSERT INTO character_dungeon_fatigue_receipts(character_id,account,instance_id,task_attempt,map_id,epoch,generation,
-                  rule_id,before_revision,revision,before_state,after_state)
-                VALUES($id,$account,$instance,$attempt,$map,$epoch,$generation,$rule,$revision,$revision+1,$before,$after)
-                """;
-            command.ExecuteNonQuery();
         }
         var committed = Require(db, tx, owner.Account, expected.Name);
-        tx.Commit();
+        DungeonTransientFatigue? cachedFatigue = null;
+        if (fatigueBefore is not null && fatigueAfter is not null)
+        {
+            cachedFatigue = new(CharacterFatigueState.StartDungeonRuleId, revision, fatigueBefore, fatigueAfter);
+            DungeonTransientReceipts.Get(owner, identity).Fatigue[charge.MapId] = cachedFatigue;
+        }
+        try { tx.Commit(); }
+        catch
+        {
+            DungeonTransientReceipts.Forget(owner, identity);
+            throw;
+        }
+        if (cachedFatigue is not null) cachedFatigue.Committed = true;
         return committed;
     });
 

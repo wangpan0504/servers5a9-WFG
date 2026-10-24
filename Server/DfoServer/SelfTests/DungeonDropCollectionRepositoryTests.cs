@@ -66,16 +66,17 @@ internal static class DungeonDropCollectionRepositoryTests
             int draws = 0;
             var loot = ground.GetOrFreezeAssets(pending, () => { draws++; return contents; });
             var reward = new DungeonExperienceReward("fixture-only", DungeonKillExperienceCatalog.ResourcePath, 1, 3, 1);
-            Sql("CREATE TRIGGER collection_fail AFTER INSERT ON character_dungeon_drop_objects WHEN NEW.ordinal=2 BEGIN SELECT RAISE(ABORT,'late collection failure'); END");
+            Sql("CREATE TRIGGER collection_fail AFTER INSERT ON character_dungeon_growth_receipts BEGIN SELECT RAISE(ABORT,'late collection failure'); END");
             Reject<SqliteException>(() => repository.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth, loot),
-                "集合第三件写入失败回滚成长、父账本和前两件资产");
+                "死亡资产事务失败回滚成长，冻结集合不提前发布");
             That(Query("SELECT count(*) FROM character_dungeon_drop_batches") == 0 &&
                 Query("SELECT count(*) FROM character_dungeon_drop_objects") == 0 &&
                 SkillRepositoryTests.Equal(repository.LoadCharacter(owner, reserved.Slot), reserved),
                 "集合冻结没有提前入包或保留半份SQL结果");
             Sql("DROP TRIGGER collection_fail");
             var committed = repository.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth, loot);
-            That(committed.Character.Revision == reserved.Revision + 1 && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 4 &&
+            That(committed.Character.Revision == reserved.Revision + 1 && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 0 &&
+                DungeonTransientReceipts.Find(owner, run.Snapshot.Identity)!.Grounds.Count == 4 &&
                 ground.GetOrFreezeAssets(pending, () => { draws++; return []; }) == loot && draws == 1,
                 "原事件精确重试保留四件数量、完整Core和金币，不重抽");
             var replay = repository.CommitDungeonGrowth(owner, reserved, run, pending, reward, growth, loot);
@@ -105,7 +106,8 @@ internal static class DungeonDropCollectionRepositoryTests
                         "金币拾取规划不能修改原冻结增量");
                 }
                 var before = current;
-                Sql("CREATE TRIGGER pickup_collection_fail AFTER INSERT ON character_dungeon_drop_pickups BEGIN SELECT RAISE(ABORT,'late pickup failure'); END");
+                string audit = item.IsGold || CurrencyWallet.RewardKind(item.Core.ItemId) is not null ? "currency_audit_log" : "inventory_audit_log";
+                Sql($"CREATE TRIGGER pickup_collection_fail AFTER INSERT ON {audit} BEGIN SELECT RAISE(ABORT,'late pickup failure'); END");
                 Reject<SqliteException>(() => repository.CommitDungeonPickup(owner, current, pickup, inventoryPlan.Plan!),
                     "逐件receipt晚期失败回滚UID、钱包或金币和revision");
                 That(SkillRepositoryTests.Equal(repository.LoadCharacter(owner, current.Slot), before), "逐件失败保留完整旧资产");
@@ -118,8 +120,8 @@ internal static class DungeonDropCollectionRepositoryTests
                     That(result.Destination == new InventorySlot(InventoryListType.Main, 3) &&
                         lostResult.Destination == result.Destination && lostResult.ItemUid == result.ItemUid && result.ItemUid > 0 &&
                         result.Character.Inventory.Find(result.Destination) is { } stored && stored.Uid == result.ItemUid && stored.Core == item.Core &&
-                        Query("SELECT destination_slot FROM character_dungeon_drop_pickups WHERE ground_key=400") == 3,
-                        "集合消耗品实际写入快捷槽3，SQL回执及结果丢失恢复保持同槽、真实UID和完整核心");
+                        Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 0,
+                        "集合消耗品实际写入快捷槽3，缓存回放保持同槽、真实UID和完整核心，不写旧SQL明细");
                 if (result.Currency == CurrencyKind.ClearCube)
                     That(result.Amount == 7 && result.ItemUid == 0 && result.Character.Inventory.AccountWallet.Revision == current.Inventory.AccountWallet.Revision + 1,
                         "账号材料提交返回实际余额版本，不用临时实体UID伪造入账");
@@ -134,7 +136,9 @@ internal static class DungeonDropCollectionRepositoryTests
                 That(ground.ConfirmPickup(pickup), "逐件提交后确认原准备，其他物品仍可拾取");
                 current = result.Character;
             }
-            That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 4 && current.Inventory.Gold == reserved.Inventory.Gold + 25 &&
+            That(Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 0 &&
+                DungeonTransientReceipts.Find(owner, run.Snapshot.Identity)!.Pickups.Values.Count(value => value.Committed) == 4 &&
+                current.Inventory.Gold == reserved.Inventory.Gold + 25 &&
                 current.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 7 &&
                 current.Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 3 &&
                 current.Inventory.Items.Single(item => item.Core.ItemId == contents[3].Item!.ItemId && item.Position.List == InventoryListType.Main).Core == contents[3].Item &&
@@ -156,8 +160,8 @@ internal static class DungeonDropCollectionRepositoryTests
                 }
                 Sql($"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE character_dungeon_card_rewards; PRAGMA user_version={sourceVersion}");
                 var upgraded = new CharacterRepository(path).LoadCharacter(owner, current.Slot);
-                That(Query("PRAGMA user_version") == SqliteMigrations.CurrentVersion && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 4 &&
-                    Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 4 && SkillRepositoryTests.Equal(upgraded, current),
+                That(Query("PRAGMA user_version") == SqliteMigrations.CurrentVersion && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 0 &&
+                    Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 0 && SkillRepositoryTests.Equal(upgraded, current),
                     $"真实已到账v{sourceVersion}集合升级保留四件完整Core、UID、金币与账号钱包，不重建或重复授予");
             }
             var highPreparation = run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity, 21));
@@ -178,7 +182,7 @@ internal static class DungeonDropCollectionRepositoryTests
             var highReplay = repository.CommitDungeonPickup(owner, highGrowth.Character, highPickup, highPlan.Plan!);
             That(highResult.ItemUid > int.MaxValue && highReplay.Duplicate && highReplay.ItemUid == highResult.ItemUid &&
                 highResult.Character.Inventory.Find(highResult.Destination)?.Core == highGround.Core &&
-                Query("SELECT item_uid FROM character_dungeon_drop_pickups WHERE ground_key=404") == highResult.ItemUid,
+                Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 0,
                 "怪物掉落的64位内部UID原样入库和重放，不写入客户端装备品级或改变完整Core");
             That(ground.ConfirmPickup(highPickup) && SkillRepositoryTests.Equal(new CharacterRepository(path)
                 .LoadCharacter(owner, highResult.Character.Slot), highResult.Character), "高UID怪物拾取重开恢复完整资产");

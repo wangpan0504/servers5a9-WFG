@@ -111,7 +111,7 @@ internal static partial class HarlemMaterialDropTests
                         dungeonId == 530 && purgedPermille == 1000 && monster.IsBoss || lastHell))
                     {
                         var saved = fixture.Read();
-                        fixture.Sql("CREATE TRIGGER fail_harlem_material AFTER INSERT ON character_dungeon_drop_objects BEGIN SELECT RAISE(ABORT,'material death retry'); END");
+                        fixture.Sql("CREATE TRIGGER fail_harlem_material AFTER INSERT ON character_dungeon_growth_receipts BEGIN SELECT RAISE(ABORT,'material death retry'); END");
                         Reject<SqliteException>(() => fixture.Session.ObserveFormalDungeonDeath(observation, kills, growth),
                             "末杀地面写入故障不能部分提交死亡、经验、装备或材料");
                         That(QuestCompletionRepositoryTests.Same(saved, fixture.Read()), "材料死亡事务失败保留完整原角色快照");
@@ -199,7 +199,7 @@ internal static partial class HarlemMaterialDropTests
                     if (bonusCollected.Values.All(count => count == 0))
                     {
                         var saved = fixture.Read();
-                        fixture.Sql("CREATE TRIGGER fail_bonus_pickup AFTER INSERT ON character_dungeon_drop_pickups BEGIN SELECT RAISE(ABORT,'bonus pickup retry'); END");
+                        fixture.Sql("CREATE TRIGGER fail_bonus_pickup AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'bonus pickup retry'); END");
                         Reject<SqliteException>(() => fixture.Session.PickFormalDungeonItem(oldBonusKey, items.Items, items.EpicPieces, items.GoldLimits),
                             "补全奖励拾取故障回滚");
                         That(QuestCompletionRepositoryTests.Same(saved, fixture.Read()), "补全拾取故障不能部分写入背包");
@@ -243,7 +243,7 @@ internal static partial class HarlemMaterialDropTests
                         if (epicCollected == 0)
                         {
                             var saved = fixture.Read();
-                            fixture.Sql("CREATE TRIGGER fail_harlem_epic_pickup AFTER INSERT ON character_dungeon_drop_pickups BEGIN SELECT RAISE(ABORT,'epic pickup retry'); END");
+                            fixture.Sql("CREATE TRIGGER fail_harlem_epic_pickup AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'epic pickup retry'); END");
                             Reject<SqliteException>(() => fixture.Session.PickFormalDungeonItem(ground.Reservation.GroundKey,
                                 items.Items, items.EpicPieces, items.GoldLimits), "史诗拾取写入故障回滚");
                             That(QuestCompletionRepositoryTests.Same(saved, fixture.Read()), "史诗拾取故障保留完整原角色快照");
@@ -270,7 +270,7 @@ internal static partial class HarlemMaterialDropTests
                     if (dungeonId == 530 && purgedPermille == 1000 && !faulted)
                     {
                         var saved = fixture.Read();
-                        fixture.Sql("CREATE TRIGGER fail_harlem_pickup AFTER INSERT ON character_dungeon_drop_pickups BEGIN SELECT RAISE(ABORT,'material pickup retry'); END");
+                        fixture.Sql("CREATE TRIGGER fail_harlem_pickup AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'material pickup retry'); END");
                         FormalDungeonPickupResult? attempt = null;
                         bool failed = false;
                         try { attempt = fixture.Session.PickFormalDungeonItem(oldGroundKey, items.Items, items.EpicPieces, items.GoldLimits); }

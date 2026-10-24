@@ -5,6 +5,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Auth;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Settings;
+using DfoServer.Game.Caching;
 
 namespace DfoServer.Game.Session;
 
@@ -26,6 +27,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     Game.Creatures.CreatureService? creatures = null, GameWorld.Quests.QuestStageGraph? stageGraph = null,
     ItemCatalog? items = null, ExperienceBonusService? experienceBonuses = null)
 {
+    readonly GameCacheScope gameCache = owner.CreateCacheScope();
+
     public AuthenticatedIdentity? Identity { get; } = identity;
     public GameWorld.Channels.ChannelEntry? ChannelEntry { get; } = entry;
     public Character? Selected { get; private set; }
@@ -120,6 +123,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         catch (InvalidOperationException ex) when (ex.Message == "Stale account generation")
         {
             Invalidate("session-ended", publishExpertJob: false);
+        }
+        finally
+        {
+            gameCache.Dispose();
         }
     }
 
@@ -246,6 +253,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         InvalidateExpertJobStore(publishExpertJob);
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
         formalDungeon = null;
+        gameCache.Clear();
         ClearConsumableUse();
         publishedRoster = null;
         pendingDungeonContinuation = null;

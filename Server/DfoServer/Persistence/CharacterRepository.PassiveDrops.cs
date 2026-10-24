@@ -24,9 +24,4 @@ internal sealed partial class CharacterRepository
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
         """;
 
-    const string PassivePickupSelect = """
-        SELECT account,NULL,instance_id,task_attempt,epoch,destination_slot,item_uid,after_core,currency_kind,
-          amount,after_balance,account_revision,revision,picked_core,gold_amount
-        FROM character_dungeon_passive_pickups WHERE character_id=$id AND instance_id=$instance AND ground_key=$key
-        """;
 }

@@ -185,6 +185,12 @@ internal static class TcpRegressionTests
                 resources.Quests, resources.Learning);
             return Task.CompletedTask;
         }),
+        ("dungeon-entry-cost", (_, _, resources) =>
+        {
+            DungeonEntryCostTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources,
+                resources.Quests, resources.Learning);
+            return Task.CompletedTask;
+        }),
         ("dungeon-settlement", async (_, _, resources) =>
         {
             DungeonItemDropCatalogTests.RunCore();
@@ -361,7 +367,7 @@ internal static class TcpRegressionTests
         "gift-selection-tcp", "gift-selection-resources", "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
-        "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules"
+        "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost"
     };
     static IEnumerable<string> DefaultGroupNames => Groups.Select(group => group.Name).Where(name => !TargetedOnly.Contains(name));
     public static bool IsValidSelection(string selection)

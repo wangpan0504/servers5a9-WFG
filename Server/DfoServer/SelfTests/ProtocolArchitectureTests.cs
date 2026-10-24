@@ -1,5 +1,6 @@
 using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Caching;
 using DfoServer.GameWorld.Towns;
 using System.Net;
 using DfoServer.Game.Auth;
@@ -34,7 +35,8 @@ internal static class ProtocolArchitectureTests
     static async Task RegistryAsync(TownCatalog towns, string root)
     {
         var repository = new CharacterRepository(Path.Combine(root, "game.db"));
-        var owners = new AccountOwners();
+        using var memory = new GameCache();
+        var owners = new AccountOwners(memory);
         using var owner = owners.Acquire("registry", () =>
         {
         });
@@ -89,9 +91,12 @@ internal static class ProtocolArchitectureTests
         })
             TestCheck.That(await commands.DispatchAsync(context, new(1, opcode, [])) == CommandResult.Unhandled, "unknown command remains unhandled");
         TestCheck.That(bytes.Length == 0, "registry does not fabricate protocol responses");
-        var directory = new OnlineSessionDirectory();
+        var directory = new OnlineSessionDirectory(memory);
         directory.Register(owner, session);
+        directory.RegisterConnection(1, session, (_, _, _) => { });
         TestCheck.That(ReferenceEquals(directory.Find("registry"), session), "directory retains the actual session");
+        TestCheck.That(ReferenceEquals(directory.FindConnection(1)?.Session, session) && memory.Count == 3,
+            "共享缓存只保存账号、会话及连接索引的原对象，不复制在线角色");
         var pending = commands.DispatchAsync(context, new(1, 1723, []));
         await started.Task;
         using var replacement = owners.Acquire("registry", () =>
@@ -99,10 +104,14 @@ internal static class ProtocolArchitectureTests
         });
         var next = new GameSession(repository, towns, replacement);
         directory.Register(replacement, next);
+        directory.RegisterConnection(1, next, (_, _, _) => { });
         release.SetResult();
         await RejectAsync<InvalidOperationException>(() => pending, "generation rechecked after asynchronous handler");
         directory.Remove("registry", session);
+        directory.RemoveConnection(1, session);
         TestCheck.That(ReferenceEquals(directory.Find("registry"), next), "late old cleanup cannot remove replacement");
+        TestCheck.That(ReferenceEquals(directory.FindConnection(1)?.Session, next) && memory.Count == 3,
+            "旧连接收尾不删除共享底座中的新连接或账号owner");
         await RejectAsync<InvalidOperationException>(() =>
         {
             directory.Register(owner, session);
@@ -111,7 +120,11 @@ internal static class ProtocolArchitectureTests
         await RejectAsync<InvalidOperationException>(() => commands.DispatchAsync(context, new(1, 35, [])), "generation checked before handler");
         directory.Remove("registry", next);
         directory.Remove("registry", next);
+        directory.RemoveConnection(1, next);
+        directory.RemoveConnection(1, next);
         TestCheck.That(directory.Find("registry") is null && replacement.Execute(() => true), "exact cleanup is repeatable and does not dispose owner");
+        TestCheck.That(directory.FindConnection(1) is null && memory.Count == 1,
+            "在线目录精确清理释放会话及连接槽，不释放仍有效的账号租约");
     }
 
     static async Task RejectAsync<T>(Func<Task> action, string name)

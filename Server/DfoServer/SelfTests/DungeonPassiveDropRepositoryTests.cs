@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -63,17 +64,20 @@ internal static partial class DungeonPassiveDropTests
                         resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces, Now);
                 That(plan.Accepted, "原冻结内容复用正式拾取规划，装备种子与完整数量不重建");
                 var old = current;
-                Sql("CREATE TRIGGER passive_pickup_fail AFTER INSERT ON character_dungeon_passive_pickups BEGIN SELECT RAISE(ABORT,'late passive pickup failure'); END");
+                string audit = ground.IsGold || CurrencyWallet.RewardKind(ground.Core.ItemId) is not null ? "currency_audit_log" : "inventory_audit_log";
+                Sql($"CREATE TRIGGER passive_pickup_fail AFTER INSERT ON {audit} BEGIN SELECT RAISE(ABORT,'late passive pickup failure'); END");
                 Reject<SqliteException>(() => repository.CommitDungeonPickup(owner, current, prepared, plan.Plan!),
                     "拾取回执末步失败完整回滚库存、UID、钱包与金币");
                 That(JsonSerializer.Serialize(repository.LoadCharacter(owner, current.Slot)) == JsonSerializer.Serialize(current) &&
-                    state.HasPendingPickup && Scalar("SELECT count(*) FROM character_dungeon_passive_pickups") == picked,
+                    state.HasPendingPickup && Scalar("SELECT count(*) FROM character_dungeon_passive_pickups") == 0 &&
+                    (DungeonTransientReceipts.Find(owner, f.Run.Snapshot.Identity)?.Pickups.Values.Count(value => value.Committed) ?? 0) == picked,
                     "SQL失败不留下拾取行，保留同一地面准备，不假报成功或自动重抽");
                 Sql("DROP TRIGGER passive_pickup_fail");
                 var committed = repository.CommitDungeonPickup(owner, current, prepared, plan.Plan!);
                 var replay = repository.CommitDungeonPickup(owner, current, prepared, plan.Plan!);
-                That(Scalar("SELECT count(*) FROM character_dungeon_passive_pickups") == ++picked,
-                    "只在实际成功拾取后新增一条回执，重复拾取不增行");
+                That(Scalar("SELECT count(*) FROM character_dungeon_passive_pickups") == 0 &&
+                    DungeonTransientReceipts.Find(owner, f.Run.Snapshot.Identity)!.Pickups.Values.Count(value => value.Committed) == ++picked,
+                    "成功拾取只确认当前实例缓存，重复不增加资产或旧SQL明细");
                 That(!committed.Duplicate && replay.Duplicate && replay.ProjectionCurrent &&
                     replay.ItemUid == committed.ItemUid && replay.Character.Revision == committed.Character.Revision &&
                     replay.Character.Revision == old.Revision + 1, "结果丢失只读原回执恢复，每个地面key仅授予一次资产");
@@ -99,7 +103,8 @@ internal static partial class DungeonPassiveDropTests
                 }
                 current = committed.Character;
             }
-            That(Scalar("SELECT count(*) FROM character_dungeon_passive_pickups") == contents.Length &&
+            That(Scalar("SELECT count(*) FROM character_dungeon_passive_pickups") == 0 &&
+                DungeonTransientReceipts.Find(owner, f.Run.Snapshot.Identity)!.Pickups.Values.Count(value => value.Committed) == contents.Length &&
                 Scalar("SELECT count(*) FROM character_dungeon_drop_batches") == 0 &&
                 Scalar("SELECT count(*) FROM character_dungeon_growth_receipts") == 0,
                 "特殊来源拾取共享资产事务，但不污染怪物集合或击杀来源");

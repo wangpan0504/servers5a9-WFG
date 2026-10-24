@@ -70,7 +70,7 @@ internal sealed partial class CharacterRepository
         // 同ID重读返回当前持久角色；不根据旧expected再次加经验，也不重发清图事实。
         if (duplicate)
         {
-            VerifyDungeonLoot(db, tx, owner.Account, expected.Id, prepared.Death.EventId, loot);
+            VerifyCachedDungeonLoot(owner, expected.Id, prepared.Death.EventId, loot);
             VerifyQuestDrops(db,tx,owner.Account,expected.Id,prepared.Death.EventId,questDrops);
             SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: true);
             tx.Commit();
@@ -127,7 +127,7 @@ internal sealed partial class CharacterRepository
         }
         WriteDungeonGrowthReceipt(db, tx, owner, expected, prepared, reward, plan, proficiencyGained);
         if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
-        SaveDungeonLoot(db, tx, owner.Account, expected, prepared, loot);
+        CacheDungeonLoot(owner, expected, prepared, loot);
         SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: false);
         if (quests is not null)
         {

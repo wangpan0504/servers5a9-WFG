@@ -9,6 +9,7 @@ using DfoServer.Game.Quests;
 using DfoServer.Development.Dungeons;
 using DfoServer.Network.Management;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Currency;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -605,8 +606,8 @@ internal static partial class FormalDungeonTcpTests
             Load(peer); peer.Expect(0,36,[1,0,156,0,0,0,155,0,0,0]);
             peer.Send(37,new byte[8]); peer.Barrier();
             That(fixture.Query("SELECT used,remaining FROM character_fatigue WHERE character_id=$p0",peer.Id) is [[1L,155L]] &&
-                fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
-                "关闭开关恢复真实一次扣点及原去重账本");
+                fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                "关闭开关真实扣点一次，重复加载不重复扣费且不写旧房间明细");
         }
         await fixture.StopAsync();
         await fixture.StartAsync("restart");
@@ -782,11 +783,11 @@ internal static partial class FormalDungeonTcpTests
     {
         string reply = "";
         bool delivered = false;
-        // 客户端Dispose不等于服务端已释放owner；仅等待已确认未执行命令的在线保护拒绝。
+        // 客户端Dispose不等于服务端已释放owner；退出也可能发生在GM锁外规划期间，只重试提交前的明确拒绝。
         bool settled = SpinWait.SpinUntil(() =>
         {
             delivered = DevelopmentGmClient.TryExecute(fixture.Options.GmPort, command, out reply);
-            return !delivered || reply != "ERR 账号正在使用，请重试";
+            return !delivered || reply is not ("ERR 账号正在使用，请重试" or "ERR 在线角色快照已变化，请重试");
         }, TimeSpan.FromSeconds(2));
         response = reply;
         return settled && delivered;
@@ -1274,6 +1275,7 @@ internal static partial class FormalDungeonTcpTests
             uint ground = U32(death, offset), itemId = U32(death, offset + 6), value = U32(death, offset + 10);
             That(keys.Add(ground) && ground != peer.Id && (itemId != 0 || value > 0), "各物品/金币保留独立key与合法核心");
             byte[] pickup = new byte[20]; BinaryPrimitives.WriteUInt32LittleEndian(pickup, ground);
+            long beforeGold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]);
             peer.Send(43, pickup);
             byte[] got = peer.Expect(0, 39).Body;
             That(U32(got, 0) == ground && U16(got, 4) == peer.Id, "逐件拾取回报本次实际地面与本人身份");
@@ -1295,23 +1297,29 @@ internal static partial class FormalDungeonTcpTests
             }
             else That(got.Length == 19 && U16(got, 14) == peer.Id, "普通物品与账号材料保留完整19B格式");
             peer.Expect(0, 14); peer.Expect(1, 43, [1]);
-            var row = fixture.Query("""
-                SELECT p.currency_kind,p.amount,p.destination_slot,p.item_uid,o.core,o.gold_amount,b.quest_id
-                FROM character_dungeon_drop_pickups p JOIN character_dungeon_drop_objects o
-                  ON o.character_id=p.character_id AND o.ground_key=p.ground_key
-                JOIN character_dungeon_drop_batches b ON b.character_id=o.character_id AND b.event_id=o.event_id
-                WHERE p.character_id=$p0 AND p.ground_key=$p1
-                """, peer.Id, ground).Single();
-            That(Convert.ToUInt32(row[6]) == questId, "集合拾取沿本次真实任务/普通死亡来源提交，不借旧实例身份");
-            if (itemId == 0) That(row[4] is null or DBNull && Convert.ToUInt32(row[5]) == value && Convert.ToUInt32(row[1]) == value,
-                "金币地面与真实到账金额一致，不制造背包UID");
+            That(Convert.ToUInt32(fixture.Query("SELECT quest_id FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY revision DESC LIMIT 1", peer.Id)[0][0]) == questId,
+                "集合拾取保留本次真实任务/普通死亡的持久成长来源，不借旧实例身份");
+            That(fixture.Query("SELECT count(*) FROM character_dungeon_drop_pickups WHERE character_id=$p0", peer.Id) is [[0L]],
+                "拾取不再写旧副本临时SQL明细");
+            if (itemId == 0) That(Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]) - beforeGold == value,
+                "金币地面与实际余额增量一致，不制造背包UID");
+            else if (CurrencyWallet.RewardKind(checked((int)itemId)) is { } currency)
+            {
+                var audit = fixture.Query("SELECT balance_after-balance_before FROM currency_audit_log WHERE character_id=$p0 AND currency_kind=$p1 ORDER BY audit_id DESC LIMIT 1",
+                    peer.Id, (int)currency).Single();
+                That(Convert.ToInt64(audit[0]) == value, "账号材料实际资产审计增量与地面数量一致");
+            }
             else
             {
-                var core = JsonSerializer.Deserialize<ItemCore>((string)row[4]!)!;
-                That(core.ItemId == itemId && core.Value == value && core.Count == Convert.ToInt32(row[1]),
-                    "物品模板、冻结属性种子和数量沿同一集合持久化");
-                if (row[0] is null or DBNull) That(Convert.ToInt64(row[3]) > 0 && Convert.ToUInt16(row[2]) == U16(got, 16),
-                    "实体拾取使用已提交UID及目的槽");
+                var stored = fixture.Query("""
+                    SELECT i.item_uid,i.item_core,s.slot_index FROM character_inventory_slots s
+                    JOIN character_inventory_items i ON i.item_uid=s.item_uid
+                    WHERE s.character_id=$p0 AND s.slot_index=$p1 AND json_extract(i.item_core,'$.ItemId')=$p2
+                    """, peer.Id, U16(got, 16), itemId).Single();
+                var core = JsonSerializer.Deserialize<ItemCore>((string)stored[1]!)!;
+                That(core.ItemId == itemId && (core.IsStackable ? core.Count >= value : core.Value == value) &&
+                    Convert.ToInt64(stored[0]) > 0 && Convert.ToUInt16(stored[2]) == U16(got, 16),
+                    "实体实际入库保留模板、数量或种子、真实UID及目的槽；完整Core另由仓储事务回归核对");
             }
             string beforeDuplicate = fixture.Snapshot();
             peer.Send(43, pickup); peer.Expect(1, 43, [0, 19, 0]); peer.Barrier();

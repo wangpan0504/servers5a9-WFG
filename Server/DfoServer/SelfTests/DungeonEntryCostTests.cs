@@ -229,6 +229,6 @@ internal static class DungeonEntryCostTests
     static int AreaDungeonWorldMap(TownCatalog towns, int dungeonId = 7191) => towns.Areas.Values.Single(row => row.DungeonWorldMap is { } world &&
         towns.DungeonMaps.TryGetValue(world,out var map) && map.Options.Any(option => option.DungeonId == dungeonId)).DungeonWorldMap!.Value;
 
-    static long Receipts(QuestSceneTests.Fixture fixture, string rule) =>
-        (long)fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE rule_id='" + rule + "'")!;
+    static long Receipts(QuestSceneTests.Fixture fixture, string rule) => fixture.Session.DungeonSnapshot is { } snapshot
+        ? DungeonTransientReceipts.Find(fixture.Owner, snapshot.Identity)?.Fatigue.Values.Count(value => value.Committed && value.Rule == rule) ?? 0 : 0;
 }

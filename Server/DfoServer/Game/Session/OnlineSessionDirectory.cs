@@ -1,7 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Chat;
 using DfoServer.Game.Inventory.Models;
-using System.Collections.Concurrent;
+using DfoServer.Game.Caching;
 
 namespace DfoServer.Game.Session;
 
@@ -21,19 +21,26 @@ internal sealed record ChatProbeConnection(int ConnectionId, GameSession Session
 // GM、在线协议与聊天共用同一会话索引，不复制角色或就绪状态。
 internal sealed class OnlineSessionDirectory
 {
-    readonly ConcurrentDictionary<string, GameSession> sessions = new(StringComparer.Ordinal);
+    readonly GameCacheIndex<string, GameSession> sessions;
     // 连接号 → 本连接会话与投递入口；断开时按会话身份精确移除，旧连接不能删掉接管后的新连接。
-    readonly ConcurrentDictionary<int, ChatProbeConnection> connections = new();
+    readonly GameCacheIndex<int, ChatProbeConnection> connections;
+
+    public OnlineSessionDirectory(GameCache? memory = null)
+    {
+        memory ??= new GameCache();
+        sessions = memory.CreateIndex<string, GameSession>();
+        connections = memory.CreateIndex<int, ChatProbeConnection>();
+    }
     public void Register(AccountOwners.Lease owner, GameSession session) => owner.Execute(() =>
     {
-        sessions[owner.Account] = session;
+        sessions.Set(owner.Account, session);
         return true;
     });
     public GameSession? Find(string account) => sessions.TryGetValue(account, out var session) ? session : null;
 
     /// <summary>登记一条已认证连接；<paramref name="probe"/> 只负责把 opcode 与正文入本连接发送队列。</summary>
     public void RegisterConnection(int connectionId, GameSession session, Action<ushort, byte[], string> probe, OnlineExpertJobConnection? expertJob = null) =>
-        connections[connectionId] = new(connectionId, session, probe, expertJob);
+        connections.Set(connectionId, new(connectionId, session, probe, expertJob));
 
     /// <summary>按连接号查找在线会话；找不到返回 <c>null</c>（GM 据此回 ERR，不抛异常）。</summary>
     public ChatProbeConnection? FindConnection(int connectionId) =>
@@ -44,10 +51,10 @@ internal sealed class OnlineSessionDirectory
     /// 只比较已选角会话的角色名；角色不在线返回 <c>null</c>，由调用方回 ERR。
     /// </summary>
     public ChatProbeConnection? FindConnectionByCharacterId(ushort id) =>
-        connections.Values.FirstOrDefault(connection => connection.Session.OnlineCharacter()?.CharacterId == id);
+        connections.SnapshotValues().FirstOrDefault(connection => connection.Session.OnlineCharacter()?.CharacterId == id);
 
     public ChatProbeConnection? FindConnectionByCharacterName(string name) =>
-        connections.Values.FirstOrDefault(connection =>
+        connections.SnapshotValues().FirstOrDefault(connection =>
             string.Equals(connection.Session.OnlineCharacter()?.Name, name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
@@ -58,7 +65,7 @@ internal sealed class OnlineSessionDirectory
     public int ProbeAll(ushort opcode, byte[] body, string action)
     {
         int delivered = 0;
-        foreach (var connection in connections.Values.ToArray())
+        foreach (var connection in connections.SnapshotValues())
         {
             if (!connection.Session.Ready || connection.Session.Selected is null)
                 continue;
@@ -72,9 +79,9 @@ internal sealed class OnlineSessionDirectory
     public void RemoveConnection(int connectionId, GameSession session)
     {
         if (connections.TryGetValue(connectionId, out var current) && ReferenceEquals(current.Session, session))
-            ((ICollection<KeyValuePair<int, ChatProbeConnection>>)connections).Remove(new(connectionId, current));
+            connections.Remove(connectionId, current);
     }
-    public OnlineCharacterSnapshot[] Snapshot() => sessions.Values.Select(session => session.OnlineCharacter())
+    public OnlineCharacterSnapshot[] Snapshot() => sessions.SnapshotValues().Select(session => session.OnlineCharacter())
         .OfType<OnlineCharacterSnapshot>().OrderBy(character => character.Account, StringComparer.Ordinal).ToArray();
 
     /// <summary>
@@ -89,7 +96,7 @@ internal sealed class OnlineSessionDirectory
     public int DeliverAll(Func<ChatRecipient, bool> filter, ChatNotice notice)
     {
         int delivered = 0;
-        foreach (var session in sessions.Values.ToArray())
+        foreach (var session in sessions.SnapshotValues())
             if (session.TryDeliverChat(filter, notice))
                 delivered++;
         return delivered;
@@ -99,7 +106,7 @@ internal sealed class OnlineSessionDirectory
     public Task<bool> ForceReturnToSelectionAsync(string account, string? characterName = null) =>
         Find(account) is { } session ? session.ForceReturnToSelectionAsync(characterName) : Task.FromResult(false);
     public bool Disconnect(string account) => Find(account)?.Disconnect() == true;
-    public bool HasReadyCharacter(ushort characterId) => sessions.Values.Any(session => session.IsReadyCharacter(characterId));
+    public bool HasReadyCharacter(ushort characterId) => sessions.SnapshotValues().Any(session => session.IsReadyCharacter(characterId));
     // 比较与移除必须原子完成，旧连接的 finally 不能删掉已接管的新会话。
-    public void Remove(string account, GameSession session) => ((ICollection<KeyValuePair<string, GameSession>>)sessions).Remove(new(account, session));
+    public void Remove(string account, GameSession session) => sessions.Remove(account, session);
 }

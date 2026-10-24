@@ -36,7 +36,7 @@ internal sealed partial class GameSession
             var prepared = dungeon.PendingInventoryDiscard;
             if (prepared is null)
             {
-                uint key = expected.DungeonState?.NextObjectKey ?? 0;
+                uint key = dungeon.NextObjectKey;
                 if (key == expected.Id) key++;
                 if (key is 0 or > ushort.MaxValue) return new DungeonInventoryDiscardResult(19);
                 var ground = new DungeonGroundObject(Guid.NewGuid(), identity,
@@ -50,6 +50,7 @@ internal sealed partial class GameSession
                 dungeon.PendingInventoryDiscard = prepared;
             }
             Selected = repository.CommitDungeonDiscard(owner, prepared);
+            dungeon.NextObjectKey = Selected.DungeonState!.NextObjectKey;
             if (!dungeon.Ground.ConfirmInventoryDrop(prepared.Ground))
                 throw new InvalidOperationException("已提交地面丢弃不能确认原准备");
             dungeon.PendingInventoryDiscard = null;

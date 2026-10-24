@@ -1,3 +1,5 @@
+using DfoServer.Game.Caching;
+
 namespace DfoServer.Game.Accounts;
 
 internal enum OwnerRejectReason
@@ -9,11 +11,18 @@ internal enum OwnerRejectReason
 internal sealed class AccountOwners
 {
     readonly object registryGate = new();
-    readonly Dictionary<string, AccountState> accounts = new(StringComparer.Ordinal);
+    readonly GameCache memory;
+    readonly GameCacheIndex<string, AccountState> accounts;
     long generation;
     [ThreadStatic] static AccountState? executing;
     [ThreadStatic] static AccountState? pairFirst;
     [ThreadStatic] static AccountState? pairSecond;
+
+    public AccountOwners(GameCache? memory = null)
+    {
+        this.memory = memory ?? new GameCache();
+        accounts = this.memory.CreateIndex<string, AccountState>();
+    }
 
     internal sealed class AccountState
     {
@@ -106,10 +115,12 @@ internal sealed class AccountOwners
 
     internal sealed class Lease(AccountOwners owner, AccountState state, string account, long generation, Action disconnect) : IDisposable
     {
+        internal GameCacheScope RuntimeCache { get; } = owner.memory.CreateScope();
         public string Account => account;
         public long Generation => generation;
+        internal GameCacheScope CreateCacheScope() => owner.memory.CreateScope();
         // 仅供发布可见性查询；业务写入仍必须使用 Execute，不可用此快照代替锁。
-        public bool IsCurrent => ReferenceEquals(Volatile.Read(ref state.Current), this);
+        public bool IsCurrent => !owner.memory.IsDisposed && ReferenceEquals(Volatile.Read(ref state.Current), this);
 
         AccountState State => state;
         AccountOwners Registry => owner;
@@ -166,9 +177,10 @@ internal sealed class AccountOwners
             CheckLockOrder(state);
             lock (state.Gate)
             {
-                if (IsCurrent)
+                if (ReferenceEquals(Volatile.Read(ref state.Current), this))
                     Volatile.Write(ref state.Current, null);
                 owner.RemoveIdle(account, state);
+                RuntimeCache.Dispose();
             }
         }
     }
