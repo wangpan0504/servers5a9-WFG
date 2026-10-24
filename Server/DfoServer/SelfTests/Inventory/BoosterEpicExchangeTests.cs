@@ -212,6 +212,28 @@ internal static class BoosterEpicExchangeTests
         That(ordinary.Accepted && ordinaryReceipt is not null &&
             !HasOrigin(ordinary.Plan!.After.Items.Single(item => item.Core.ItemId == SampleId).Core) && JsonSerializer.Serialize(role) == before,
             "字符串内标签不是实际声明，经真实Open发普通实例且不补来源");
+        definitions[SourceId] = BoosterCatalog.Parse(MarkerBox(Marker + "[usable first growtype]\n3 4\n[/usable first growtype]\n"));
+        foreach (byte branch in new byte[] { 0, 2 })
+        {
+            var ineligible = role with { GrowType = branch };
+            var denied = service.Open(ineligible, Select([SampleId]), out var deniedReceipt, now);
+            That(!denied.Accepted && denied.Plan is null && deniedReceipt is null && JsonSerializer.Serialize(role) == before,
+                "史诗声明不绕过首转门禁，错误分支不扣源或发奖 " + branch);
+        }
+        foreach (byte branch in new byte[] { 3, 0x24 })
+        {
+            var eligible = role with { GrowType = branch };
+            var opened = service.Open(eligible, Select([SampleId]), out var receipt, now);
+            var expected = InventoryRewardGrantService.Create(resources.Items.Get(SampleId), utcNow: now) with
+                { EpicExchangeOrigin = new(1, SourceId) };
+            That(opened.Accepted && receipt is { Rewards: [{ ItemId: SampleId, Count: 1 }] } &&
+                opened.Plan!.After.Find(Bag(3)) is null &&
+                opened.Plan.After.Items.Single(item => item.Core.ItemId == SampleId).Core == expected &&
+                opened.Plan.CharacterPrecondition!.MatchesIdentity(eligible) &&
+                !opened.Plan.CharacterPrecondition.MatchesIdentity(eligible with { GrowType = 2 }) &&
+                JsonSerializer.Serialize(role) == before,
+                "合法首转与觉醒分支领取完整来源装备，旧计划不绑定转职后的角色 " + branch);
+        }
     }
 
     static void RunPersistence(TownCatalog towns, ItemResources resources, InventoryBoosterService service, DateTimeOffset now)
