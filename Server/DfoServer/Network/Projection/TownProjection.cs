@@ -190,7 +190,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
                 return null;
             // 旧区域仅移除地图实体，保留Actor及队伍引用；真正离线/换角仍使用完整清理。
             presence?.Remove(context.Sender, departure, prepare, TownPackets.Position(receipt.Character, true));
-            return context.Sender.ClearScene(preserveActors: true);
+            return context.Sender.ClearScene(SceneActorClear.Preserve);
         });
         if (detached is null)
             return;

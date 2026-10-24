@@ -17,7 +17,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     {
         public AccountOwners.Lease Owner { get; } = owner;
         public GameConnectionSender Sender { get; } = sender;
-        public Scene Scene { get; } = scene;
+        public Scene Scene { get; set; } = scene;
         public Character Character { get; set; } = character;
         public string AdventureName { get; set; } = adventureName;
         public long Serial { get; } = serial;
@@ -122,8 +122,10 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     {
         lock (gate)
         {
-            if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id || source.Scene != SceneOf(owner, character, source.Channel))
+            if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id)
                 throw new InvalidOperationException("Town move without current membership");
+            if (AlignPhase(source, character, "Town move without current membership"))
+                return true;
             source.Character = character;
             var peers = Peers(source);
             if (peers.Length == 0)
@@ -134,16 +136,18 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             return true;
         }
     });
-    // 当前场景换装更新快照并投递Actor，不通过离场/重入改变成员身份。
+    // 同一场景换装只更新快照。完成任务换成新的 PVF 阶段时先迁场景，再按入场投递。
     public void Refresh(AccountOwners.Lease owner, GameConnectionSender sender, Character character, string? adventureName = null,
         bool broadcast = true) => owner.Execute(() =>
     {
         lock (gate)
         {
-            if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id || source.Scene != SceneOf(owner, character, source.Channel))
+            if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id)
                 throw new InvalidOperationException("外观刷新缺少当前场景成员");
-            source.Character = character;
             if (adventureName is not null) source.AdventureName = adventureName;
+            if (AlignPhase(source, character, "外观刷新缺少当前场景成员"))
+                return true;
+            source.Character = character;
             if (!broadcast) return true;
             var peers = Peers(source);
             if (peers.Length == 0)
@@ -154,6 +158,47 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             return true;
         }
     });
+    // 完成任务会换掉同一城镇区域的 PVF 阶段。人还在，只是地图路径变了。
+    // 旧阶段同屏离场，新阶段入场；城镇或区域变了仍视为没有当前成员。
+    bool AlignPhase(Member source, Character character, string mismatch)
+    {
+        var next = SceneOf(source.Owner, character, source.Channel);
+        if (source.Scene == next)
+            return false;
+        if (next.Channel != source.Channel || next.Town != source.Scene.Town || next.Area != source.Scene.Area)
+            throw new InvalidOperationException(mismatch);
+        var previous = scenes[source.Scene];
+        previous.Remove(source);
+        if (previous.Count == 0)
+            scenes.Remove(source.Scene);
+        else
+            foreach (var target in previous.ToArray())
+                target.Sender.Leave(source.Character.Id, source.Serial, hideActor: true);
+        // 同town/area不能借异区23隐藏实体；阶段隔离只隐藏地图实体，不销毁队伍引用。
+        var cleared = source.Sender.ClearScene(SceneActorClear.Hide);
+        cleared.ContinueWith(static task => { _ = task.Exception; }, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        source.Scene = next;
+        source.Character = character;
+        if (!scenes.TryGetValue(next, out var scene))
+            scenes.Add(next, scene = []);
+        scene.Add(source);
+        var peers = Peers(source);
+        if (peers.Length == 0)
+            return true;
+        var bodies = Capture(source);
+        foreach (var peer in peers)
+        {
+            source.Sender.Enter(Projection(peer, source, Capture(peer)));
+            peer.Sender.Enter(Projection(source, peer, bodies));
+            if (expertStores?.TryGet(peer.Character.Id, out var store) == true)
+                source.Sender.Post(0, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE,
+                    ExpertJobPackets.CreateStoreNotice(store), "expert_job_existing_store",
+                    () => Visible(peer, source) && expertStores.TryGet(store.OwnerId, out var live) && live.Instance == store.Instance);
+        }
+        return true;
+    }
+
     // 精确清理仅持成员锁，不获取任何账号锁。
     public void Remove(GameConnectionSender sender, byte[]? departureEffect = null, byte[]? prepareEffect = null, byte[]? destinationArea = null)
     {

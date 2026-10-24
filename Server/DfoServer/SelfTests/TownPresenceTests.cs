@@ -429,6 +429,52 @@ internal static class TownPresenceTests
             await qSend.Send(1, 1347, [1], "phase-effect-barrier");
             That(Frames(qStream).All(f => f.Opcode == 1347), "不同PVF阶段不接收传送到达或出发特效");
             That(presence.Count == 0, "phase fixture cleans up both memberships");
+            await pSend.ClearScene();
+            await qSend.ClearScene();
+            using var rCancel = new CancellationTokenSource();
+            using var r = owners.Acquire("phase-three", rCancel.Cancel);
+            using var rStream = new HeldStream();
+            await using var rSend = new GameConnectionSender(r, rStream, rCancel, 0, (_, _, _, _, _) => { });
+            var cr = cp with { Id = 65000 };
+            presence.Join(p, pSend, cp);
+            presence.Join(q, qSend, cq);
+            presence.Join(r, rSend, cr);
+            await pSend.Send(1, 1347, [1], "phase-rejoin-barrier");
+            await qSend.Send(1, 1347, [1], "phase-rejoin-barrier");
+            await rSend.Send(1, 1347, [1], "phase-rejoin-barrier");
+            int pAt = Frames(pStream).Length, qAt = Frames(qStream).Length, rAt = Frames(rStream).Length;
+            cp = cp with { CompletedQuests = [phase.Quest], Position = cp.Position with { X = 451 } };
+            presence.Move(p, pSend, cp);
+            await pSend.Send(1, 1347, [1], "phase-shift-barrier");
+            await qSend.Send(1, 1347, [1], "phase-shift-barrier");
+            await rSend.Send(1, 1347, [1], "phase-shift-barrier");
+            var pAdded = Frames(pStream).Skip(pAt).ToArray();
+            var qAdded = Frames(qStream).Skip(qAt).ToArray();
+            var rAdded = Frames(rStream).Skip(rAt).ToArray();
+            That(pAdded.Any(frame => frame.Opcode == 2) && qAdded.Any(frame => frame.Opcode == 2) && presence.Count == 3,
+                "同区阶段任务完成后移动改入新PVF场景，双方同屏且不断线");
+            That(pAdded.Where(frame => frame.Opcode == 3).Any(frame => frame.Body.SequenceEqual(TownPackets.HideTownEntity(cr.Id))) &&
+                rAdded.Where(frame => frame.Opcode == 3).Single().Body.SequenceEqual(TownPackets.HideTownEntity(cp.Id)) &&
+                pAdded.Concat(qAdded).Concat(rAdded).All(frame => frame.Opcode != 6) && rAdded.All(frame => frame.Opcode != 2),
+                "迁场双方隐藏旧阶段实体且不销毁Actor或队伍引用，旧阶段没有新入场");
+            That(presence.CanInteract(p,cp.Id,q,cq.Id) && !presence.CanInteract(p,cp.Id,r,cr.Id),
+                "迁场只切换PVF阶段关系，不把同town/area不同阶段的角色视为同屏");
+            pAt = Frames(pStream).Length;
+            qAt = Frames(qStream).Length;
+            rAt = Frames(rStream).Length;
+            presence.Refresh(q,qSend,cq with { CompletedQuests = [] },broadcast: false);
+            await pSend.Send(1,1347,[1],"phase-refresh-barrier");
+            await qSend.Send(1,1347,[1],"phase-refresh-barrier");
+            await rSend.Send(1,1347,[1],"phase-refresh-barrier");
+            That(Frames(pStream).Skip(pAt).Any(frame => frame.Opcode == 3 && frame.Body.SequenceEqual(TownPackets.HideTownEntity(cq.Id))) &&
+                Frames(qStream).Skip(qAt).Any(frame => frame.Opcode == 2) && Frames(rStream).Skip(rAt).Any(frame => frame.Opcode == 2) &&
+                Frames(pStream).Skip(pAt).Concat(Frames(qStream).Skip(qAt)).Concat(Frames(rStream).Skip(rAt)).All(frame => frame.Opcode != 6) &&
+                presence.CanInteract(q,cq.Id,r,cr.Id) && !presence.CanInteract(p,cp.Id,q,cq.Id),
+                "静默外观刷新也先迁场，旧阶段双向隐藏，新阶段正常重逢且保留Actor");
+            presence.Remove(pSend);
+            presence.Remove(qSend);
+            presence.Remove(rSend);
+            That(presence.Count == 0, "阶段迁移夹具释放双方成员");
             foreach (string scenario in new[] { "current", "stale-source", "stale-view" })
             foreach (bool partyPreparation in new[] { false, true })
             foreach (bool sceneTravel in new[] { false, true })

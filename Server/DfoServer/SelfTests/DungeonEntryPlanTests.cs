@@ -54,6 +54,50 @@ internal static class DungeonEntryPlanTests
             "没有真实普通maze时仍保留任务路线，不伪造房间");
     }
 
+    static void ClearedStoryUsesOrdinaryRoute(DungeonCatalog catalog, QuestCatalog quests, Character basis)
+    {
+        var quest = quests.Get(3344);
+        var dungeon = catalog.Get(51);
+        That(QuestClearEligibility.IsSingleMap(quest) && quest.DungeonIndex == 51 && quest.IntData[0] == 76329 &&
+            dungeon.Mazes.Any(row => row.QuestConnectionTokens.Count == 0) &&
+            dungeon.Mazes.Any(row => row.HasActiveQuestConnection(3344)) &&
+            Enumerable.Range(0,5).All(value => dungeon.AllowsDifficulty((byte)value,false) == (value < 3)) &&
+            !dungeon.AllowsDifficulty(1,true,3344),
+            "3344是哈穆林单图清图；循环图开放冒险和勇士，剧情块只有普通");
+        var active = new ActiveMainQuest(0,3344,0) { AcceptanceId = Guid.NewGuid() };
+        var ready = basis with { Level = 95, ActiveMainQuests = [active], CompletedQuests = [3343] };
+        foreach (uint request in new uint[] { 3344, 0 })
+        {
+            for (byte difficulty = 0; difficulty <= 2; difficulty++)
+                That(DungeonEntryPlan.TryCreate(catalog,ready,51,request,difficulty,out var plan,out var reason,
+                        allowClearedQuest: request == 3344,
+                        allowClearedTerminalQuest: request == 0 ? row => row.QuestId == 3344 && row.AcceptanceId == active.AcceptanceId : null,
+                        quest: request == 0 ? null : quest,quests: quests,draw: _ => 0) &&
+                    plan is { RouteQuestId: 0, IsOrdinary: true } && plan.QuestId == request &&
+                    plan.Maze.QuestConnectionTokens.Count == 0 &&
+                    plan.QuestAcceptanceId == (request == 0 ? Guid.Empty : active.AcceptanceId),
+                    "3344达成未交使用循环普通迷宫：" + difficulty + "/" + reason + "/" + plan?.StartMap.Id + "/" + plan?.BossMap.Id);
+            foreach (byte blocked in new byte[] { 3, 4 })
+                That(!DungeonEntryPlan.TryCreate(catalog,ready,51,request,blocked,out _,out var blockedReason,
+                        allowClearedQuest: request == 3344,
+                        allowClearedTerminalQuest: request == 0 ? _ => true : null,
+                        quest: request == 0 ? null : quest,quests: quests,draw: _ => 0) &&
+                    blockedReason == "difficulty-unsupported",
+                    "循环图不开放难度表以外的难度：" + blocked + "/" + blockedReason);
+        }
+        var pending = ready with { ActiveMainQuests = [active with { ConditionState = 1 }] };
+        That(DungeonEntryPlan.TryCreate(catalog,pending,51,3344,0,out var story,out var storyReason,quest: quest,quests: quests) &&
+            story is { RouteQuestId: 3344, IsOrdinary: false, Maze.ConnectionQuestId: 3344 } && story.BossMap.Id == 76329,
+            "未达成仍走剧情迷宫：" + storyReason + "/" + story?.BossMap.Id);
+        That(!DungeonEntryPlan.TryCreate(catalog,pending,51,3344,1,out _,out var storyRejected,quest: quest,quests: quests) &&
+            storyRejected == "difficulty-unsupported","未达成的剧情难度仍只有普通");
+        That(!DungeonEntryPlan.TryCreate(catalog,ready,51,3344,0,out _,out var bare,quest: quest,quests: quests) &&
+            bare == "quest-condition-not-pending","没有清图凭据的条件0不能进入");
+        That(DungeonEntryPlan.TryCreate(catalog,ready,51,0,0,out var locked,out _,quests: quests) &&
+            locked is { RouteQuestId: 3344, IsOrdinary: false },
+            "普通0在没有清图凭据时仍被未交付剧情锁住");
+    }
+
     static void DeathTowerCompanionPolicy(PvfArchive pvf, DungeonCatalog catalog)
     {
         var paths = DungeonCatalog.ParseDirectory(pvf.ReadTokens("dungeon/dungeon.lst"), pvf.ResolveString, "dungeon");
@@ -209,6 +253,7 @@ internal static class DungeonEntryPlanTests
         TournamentEntry(catalog,character,rooms);
         HarlemSeekingRoutes(catalog,quests,character);
         CompletedSeekingRoutes(catalog,quests,character);
+        ClearedStoryUsesOrdinaryRoute(catalog,quests,character);
         GentSouthGateQuestLevel(catalog,quests,character);
         NonoraGroznyEntry(catalog,quests,rooms,character,pvf);
         RecoverAt5tWalkerEntry(catalog,quests,rooms,character);
