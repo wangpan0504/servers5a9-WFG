@@ -321,6 +321,8 @@ internal static class QuestSceneTests
             }
             var opening = f.Session.EnterFormalDungeon(25, 3205, 0, dungeons, rooms);
             That(opening is not null, "3205场景事务fixture已恢复实际入口区域并正常准入：" + mode);
+            That(opening!.Entry is { RouteQuestId: 3205, IsOrdinary: false, BossMap.Id: 53493 },
+                "3205即使原活动条件为0也保留本实例被动物件路线：" + mode);
             var path = QuestStoryRouteTests.Path(opening!.Entry.Maze.StaticTopology, opening.Entry.StartMap.Position, opening.Entry.BossMap.Position);
             FormalDungeonReceipt receipt = opening!;
             foreach (var point in path)

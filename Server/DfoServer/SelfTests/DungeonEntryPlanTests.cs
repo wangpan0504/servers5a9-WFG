@@ -254,6 +254,17 @@ internal static class DungeonEntryPlanTests
         HarlemSeekingRoutes(catalog,quests,character);
         CompletedSeekingRoutes(catalog,quests,character);
         ClearedStoryUsesOrdinaryRoute(catalog,quests,character);
+        var passiveQuest = quests.Get(3205);
+        var passiveCharacter = character with { Level = 95, CompletedQuests = [3204],
+            ActiveMainQuests = [new(0,3205,0) { AcceptanceId = Guid.NewGuid() }] };
+        That(QuestHuntProgress.TryTargets(passiveQuest,out var passiveTargets) && passiveTargets.Any(target => target.EnemyType == 3),
+            "3205真实目标含被动物件，条件0不能当成普通怪物猎杀完成");
+        foreach (uint request in new uint[] { 3205, 0 })
+            That(DungeonEntryPlan.TryCreate(catalog,passiveCharacter,25,request,0,out var passivePlan,out var passiveReason,
+                    quest: request == 0 ? null : passiveQuest,quests: quests) &&
+                passivePlan is { RouteQuestId: 3205, IsOrdinary: false, BossMap.Id: 53493 } &&
+                passivePlan.QuestAcceptances.Single() == passiveCharacter.ActiveMainQuests.Single(),
+                "被动物件裸条件0仍冻结原接取和任务终点，显式与普通入口一致：" + passiveReason);
         GentSouthGateQuestLevel(catalog,quests,character);
         NonoraGroznyEntry(catalog,quests,rooms,character,pvf);
         RecoverAt5tWalkerEntry(catalog,quests,rooms,character);

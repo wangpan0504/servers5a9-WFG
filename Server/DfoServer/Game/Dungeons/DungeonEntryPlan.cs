@@ -603,7 +603,9 @@ internal sealed record DungeonEntryPlan(
         bool receipt = quest.Id == questId && allowClearedQuest || allowClearedTerminalQuest?.Invoke(active) == true;
         if (QuestClearEligibility.IsSingleMap(quest) || quest.Condition is "[condition under clear]" or "[clear a dungeon]")
             return receipt;
-        return quest.Condition is "[hunt enemy]" or "[hunt monster]" && QuestHuntProgress.ValidScalar(quest,0);
+        // 被动物件的条件0不代替本实例场景事实，必须保留原任务地图和终点。
+        return quest.Condition is "[hunt enemy]" or "[hunt monster]" &&
+            QuestHuntProgress.TryTargets(quest,out var targets) && targets.All(target => target.EnemyType != 3);
     }
 
     static StoryQuest? CurrentSequentialChild(Character character, StoryQuest parent, QuestCatalog quests, uint dungeonId, byte difficulty)
