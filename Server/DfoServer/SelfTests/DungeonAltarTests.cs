@@ -100,6 +100,23 @@ internal static class DungeonAltarTests
             "祭坛仍拒绝非伴侣AI演员");
         var maze = new DungeonMaze(0, 1, 1, "BB", [map.Position], [map.Position], [map], []);
         var entry = new DungeonEntryPlan(12, 0, 11006, 0, byte.MaxValue, 0, maze, map, map) { BasisLevel = 60 };
+        foreach (var (id, mapId) in new[] { (11006u, 16348), (11007u, 17030) })
+        {
+            var actual = entry with { DungeonId = id, StartMap = map with { Id = mapId } };
+            foreach (var payload in new[] { DungeonMapPayload.Build, DungeonMapPayload.Refresh })
+            {
+                var built = DungeonAltarPackets.StartMap(actual, payload);
+                That(built.Length == 15 && built[7] == (byte)payload &&
+                    BinaryPrimitives.ReadInt32LittleEndian(built.AsSpan(2)) == mapId &&
+                    BinaryPrimitives.ReadInt32LittleEndian(built.AsSpan(8)) == mapId &&
+                    built.AsSpan(12).SequenceEqual(new byte[3]),
+                    "两祭坛211的创建/刷新字段写实际mapId，不能写随机种子");
+            }
+            var cached = DungeonAltarPackets.StartMap(actual, DungeonMapPayload.Cached);
+            That(cached.Length == 8 && cached[7] == 0 &&
+                BinaryPrimitives.ReadInt32LittleEndian(cached.AsSpan(2)) == mapId,
+                "祭坛缓存回访不追加新建地图字段或演员");
+        }
         var authority = new NativeDungeonCombatAuthority();
         That(SinglePlayerDungeonRun.TryCreate(entry, 1, 1, new([actors], []), authority, out var run, out _) && authority.BindTo(run!),
             "祭坛计划经过资源复验绑定正式实例");

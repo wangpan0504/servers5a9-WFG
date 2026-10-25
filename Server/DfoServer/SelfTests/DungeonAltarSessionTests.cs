@@ -35,6 +35,22 @@ internal static class DungeonAltarSessionTests
             var clock = new Clock();
             using var fixture = New(clock);
             var session = fixture.Session;
+            if (dungeonId == 11006)
+            {
+                int fee = dungeons.AltarAdmission.BloodFee(session.Selected!.Level, 0);
+                That(session.MutateInventory(c => CurrencyService.SetGold(c, checked((uint)(fee - 1)))).Accepted,
+                    "准备有次数但少一金币的无尽角色");
+                var unpaid = session.Selected!;
+                That(session.BeginDungeonSelection() is not null &&
+                    session.EnterFormalDungeon(11006, 0, 0, dungeons, rooms, pieces: items.EpicPieces) is null &&
+                    session.LastFormalDungeonRejection == "altar-entry-count-or-cost-rejected" &&
+                    ReferenceEquals(session.Selected, unpaid) && fixture.Read().Inventory.Gold == fee - 1 &&
+                    session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!.Counts.Single(row => row.Dungeon == 11006).Daily == 3,
+                    "无尽次数不是免费资格，费用不足保留选图及全部次数，不安装Run");
+                That(session.DungeonSnapshot is null && session.ReturnFromDungeonSelection() is not null &&
+                    session.MutateInventory(c => CurrencyService.SetGold(c, 500000)).Accepted,
+                    "失败后可退出选图补足费用，不残留半个实例");
+            }
             var paid = session.Selected!;
             var countsBefore = session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!;
             That(countsBefore.Counts.All(row => row.Daily == 3 && row.Weekly == 0) &&
@@ -105,6 +121,17 @@ internal static class DungeonAltarSessionTests
             clock.AdvanceTo(result.Due!.Value);
             That(session.TickDungeonAltar(result)?.Returned is not null && session.Phase == SessionPhase.Town &&
                 fixture.Read().Revision >= revision, "专用结算结束后回原城镇并保留已到账资产");
+            Enter(session, dungeonId);
+            var reloaded = session.CompleteFormalDungeonLoading()!;
+            That(session.PrepareDungeonAltarUi(reloaded), "再次挑战使用新实例的UI准备身份");
+            var abandoned = session.StartDungeonAltar(reloaded)!;
+            That(session.ReturnFromFormalDungeon() is not null && !session.CanPublishDungeonAltar(abandoned) &&
+                session.TickDungeonAltar(abandoned) is null && session.DungeonSnapshot is null &&
+                session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!.Counts.Single(row => row.Dungeon == dungeonId).Daily == 1,
+                "祭坛已启动波次退出后旧计时不能发布或复活实例，已提交的两次入场不退款");
+            session.End();
+            That(!session.CanPublishDungeonAltar(abandoned) && session.TickDungeonAltar(abandoned) is null,
+                "会话结束后原祭坛回调继续失效");
         }
         {
             var clock = new Clock();
