@@ -357,6 +357,7 @@ internal static class ServerRuntime
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
             new EnchantmentHandler(enchantmentService, inventoryProjection, log),
             new EquipmentEmblemHandler(new InventoryEquipmentEmblemService(itemResources.Items, clock), inventoryProjection, log),
+            new TalismanHandler(new InventoryTalismanService(itemResources.Items), itemResources.Items, inventoryProjection, log, clock),
             new EnhancementHandler(new InventoryEnhancementService(itemResources.Items, itemResources.Enhancements,
                 itemResources.MedalUpgrades, clock: clock,
                 amplification: new InventoryAmplifyUpgradeService(itemResources.Items, itemResources.AmplifyUpgrades, itemResources.Enhancements,

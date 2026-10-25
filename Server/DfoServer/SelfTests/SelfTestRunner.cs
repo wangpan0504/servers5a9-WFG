@@ -38,6 +38,9 @@ internal static class SelfTestRunner
         AmplificationTests.RunCore();
         AmplifyUpgradeTests.RunCore();
         MedalUpgradeTests.RunCore();
+        TalismanTests.RunCore();
+        TalismanProtocolTests.RunCore();
+        TalismanInventoryTests.RunCore();
         CreatureSkinTests.RunCore();
         InventoryExpansionTests.RunCore();
         CreatureEggTests.RunCore();
@@ -272,6 +275,7 @@ internal static class SelfTestRunner
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         CashShopTests.Run(towns, characters, itemResources);
         DfoServer.Testing.Inventory.PvfItemCompatTests.Run(pvf, itemResources);
+        TalismanResourceTests.Run(pvf, itemResources.Items);
         PremiumContractTests.RunResources(itemResources, pvf);
         GrowthCubeContractTests.RunResources(itemResources,towns,characters);
         LimitCubeTests.RunResources(itemResources);

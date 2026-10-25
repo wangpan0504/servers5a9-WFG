@@ -10,7 +10,7 @@ internal sealed record InventoryDiscardPlan(InventoryDiscardRequest Request, Inv
     public static (InventoryDiscardPlan? Plan, ushort Error) Prepare(Character character, InventoryDiscardRequest request,
         ItemTemplate template, long now)
     {
-        if (request.List is not (0 or 3) || request.Slot > short.MaxValue)
+        if (request.List is not (0 or 3 or 46) || request.Slot > short.MaxValue || request.List == 46 && request.Slot >= 210)
             return (null, 19);
         var source = character.Inventory.Find(new((InventoryListType)request.List, (short)request.Slot));
         if (source is null || request.Count == 0 || request.Count > source.Core.Count ||

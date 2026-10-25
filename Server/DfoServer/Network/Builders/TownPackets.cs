@@ -217,7 +217,7 @@ internal static partial class TownPackets
             writer.Write(character.EquipmentSlotFlags); // Full03 0267D0A9/0267D0CB：装备槽标志写本人容器+1AC。
             EquipmentProtocolWriter.Player(writer, character.Inventory);
             writer.Write(0u);
-            writer.Write((byte)0); // 023C3A90: equipment count, scalar, extra list count.
+            EquipmentProtocolWriter.Runes(writer, character.Inventory); // 023C3A90：六个符文按槽210–215排列。
             // 0267BFA0：指定技能及登记项；每项的完整物品块由同一背包条目编码器生成。
             SkillSwitchInventoryPackets.WriteUserInfo(
                 writer,

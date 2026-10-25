@@ -5,6 +5,19 @@ namespace DfoServer.Network.Builders.Inventory;
 
 internal static class EquipmentProtocolWriter
 {
+    public static void Runes(BinaryWriter writer, InventorySnapshot inventory)
+    {
+        var ids = new int[6];
+        foreach (var item in inventory.Items.Where(item => item.Position.List == InventoryListType.Talisman &&
+                     item.Position.Index is >= 210 and <= 215))
+            ids[item.Position.Index - 210] = item.Core.ItemId;
+        bool populated = ids.Any(id => id != 0);
+        writer.Write(populated ? (byte)6 : (byte)0);
+        if (populated)
+            foreach (int id in ids)
+                writer.Write(id);
+    }
+
     static InventoryItem[] Worn(InventorySnapshot inventory) => inventory.Items
         .Where(item => item.Position.List == InventoryListType.Equipment && item.Position.Index != 30).OrderBy(item => item.Position.Index).ToArray();
 

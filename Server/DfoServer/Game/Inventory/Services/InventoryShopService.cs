@@ -27,9 +27,9 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         // ACK21必需实体核心并会解引用购入对象；服务商品不能伪造空槽或临时库存回执。
         if (template.IsPremiumService) return InventoryResult.Reject(17);
         // Client 普通装备购买实收 count=0，仍按一件购买；其他商品数量须为正。
-        if (request.Count == 0 && template.Kind != ItemKind.Equipment)
+        if (request.Count == 0 && template.Kind is not (ItemKind.Equipment or ItemKind.Talisman))
             return InventoryResult.Reject(0x85);
-        int count = template.Kind is ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal ? 1 : request.Count;
+        int count = template.Kind is ItemKind.Equipment or ItemKind.Talisman or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal ? 1 : request.Count;
         var price = template.ShopPrice;
         var before = character.Inventory;
         var after = before;
@@ -126,7 +126,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
     public InventoryResult Sell(Character character, SellItemRequest request)
     {
         var before = character.Inventory;
-        if (request.Position.List is not (InventoryListType.Main or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.PersonalCargo or InventoryListType.Equipment))
+        if (request.Position.List is not (InventoryListType.Main or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.PersonalCargo or InventoryListType.Equipment))
             return InventoryResult.Reject();
         // 晶块槽是账号钱包的投影，没有可供删除或解锁的实体 UID。
         if (request.Position.List == InventoryListType.Main)

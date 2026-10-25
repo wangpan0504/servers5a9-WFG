@@ -221,6 +221,7 @@ internal static class TcpRegressionTests
         ("dungeon-pickup-slots", FormalDungeonTcpTests.RunPickupSlotsAsync),
         ("jobs", TownProtocolTcpTests.JobsAsync),
         ("inventory", InventoryTcpTests.RunAsync),
+        ("talisman", TalismanTcpTests.RunAsync),
         ("consumable-use", ConsumableUseTcpTests.RunAsync),
         ("consumable-effects", ConsumableUseTcpTests.RunEffectsAsync),
         ("teleport", TeleportTcpTests.RunAsync),

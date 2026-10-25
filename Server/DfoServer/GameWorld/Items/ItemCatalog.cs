@@ -30,6 +30,8 @@ internal sealed class ItemCatalog
     readonly ConcurrentDictionary<int, Lazy<ClassChangeTicketDefinition?>> classChangeTickets = new();
     readonly ConcurrentDictionary<int, Lazy<GameWorld.Creatures.CreatureChangeDefinition?>> creatureChanges = new();
     readonly ConcurrentDictionary<int, Lazy<GameWorld.Creatures.CreatureGrowthItemDefinition?>> creatureGrowthItems = new();
+    readonly ConcurrentDictionary<int, Lazy<TalismanDefinition>> talismans = new();
+    readonly ConcurrentDictionary<int, Lazy<RuneDefinition>> runes = new();
     static readonly string[] JobNames = ["swordman", "fighter", "gunner", "mage", "priest", "at gunner", "thief", "at fighter", "at mage", "demonic swordman", "creator mage", "at swordman", "knight", "demonic lancer", "at priest", "gun blader"];
     static readonly Dictionary<string, byte> EquipmentSlots = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -58,14 +60,14 @@ internal sealed class ItemCatalog
         ["magic stone"] = 23,
         ["support weapon"] = 24,
         ["earring"] = 25,
-        // 新 PVF 的 [talisman]/[charm] 后整数是子类型（护石恒为 16，符咒恒为 1），不是穿戴槽。
-        // 当前 ARAD 没有这两个槽位的字符串。34/35 落在已占用的 0–32 之外，避免被当成裤子或武器。
+        // 声明后的整数是资源子类型；护石模板共用34，实际两个穿戴槽为34/35。
         ["talisman"] = 34,
         ["charm"] = 35
     };
 
     readonly int equipmentSellRate;
     readonly Lazy<ImmutableArray<CosmoPassCost>> cosmoPasses;
+    readonly Lazy<TalismanRefineCost> talismanRefineCost;
 
     public ItemCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment,
         IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
@@ -79,6 +81,8 @@ internal sealed class ItemCatalog
         this.equipmentSellRate = equipmentSellRate;
         this.creatures = creatures;
         cosmoPasses = new(() => CosmoPassCost.Load(archive));
+        talismanRefineCost = new(() => TalismanRefineCost.Parse(RuneSystemFile.Parse(
+            archive.ReadTokens("etc/runesystem.etc"), archive.ResolveString)));
     }
 
     public ItemTemplate Get(int id)
@@ -110,6 +114,42 @@ internal sealed class ItemCatalog
     public bool ContainsEquipment(int id) => equipment.ContainsKey(id);
 
     public bool Contains(int id) => equipment.ContainsKey(id) || stackable.ContainsKey(id);
+
+    public TalismanDefinition? Talisman(int id)
+    {
+        if (talismans.TryGetValue(id, out var cached))
+            return cached.Value;
+        if (!equipment.TryGetValue(id, out var path) || Get(id).EquipmentSlot != EquipmentSlots["talisman"])
+            return null;
+        return talismans.GetOrAdd(id, key => new(() => TalismanDefinition.Parse(
+            TalismanFile.Parse(key, "equipment/" + path, pvf.ReadTokens("equipment/" + path), pvf.ResolveString), Get(key)))).Value;
+    }
+
+    public RuneDefinition? Rune(int id)
+    {
+        if (runes.TryGetValue(id, out var cached))
+            return cached.Value;
+        if (StackableDefinition(id)?.TypeDeclaration?.Label != "[rune]")
+            return null;
+        return runes.GetOrAdd(id, key => new(() => RuneDefinition.Parse(
+            RuneFile.Parse(key, "stackable/" + stackable[key], pvf.ReadTokens("stackable/" + stackable[key]),
+                pvf.ResolveString), Get(key)))).Value;
+    }
+
+    public TalismanRefineCost TalismanRefineCosts() => talismanRefineCost.Value;
+
+    // 无PVF核心自测预置不可变定义；正式路径仍由对应资源名册解析。
+    internal void PrefillTalismans(IEnumerable<TalismanDefinition> definitions)
+    {
+        foreach (var definition in definitions)
+            talismans[definition.Item.Id] = new(() => definition);
+    }
+
+    internal void PrefillRunes(IEnumerable<RuneDefinition> definitions)
+    {
+        foreach (var definition in definitions)
+            runes[definition.Item.Id] = new(() => definition);
+    }
 
     // 公会合成产物池：只按两族在 PVF 里的固定目录取候选，顺序沿用 .lst 首次出现顺序。
     // 不能按路径包含 "flag" 粗筛——武器、时装里也有同名字段，会把非勋章物品带进随机池。
@@ -162,7 +202,7 @@ internal sealed class ItemCatalog
         if (rate == 0)
             return null;
         var template = Get(id);
-        return template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession ||
+        return template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession or ItemKind.Talisman or ItemKind.Rune ||
             includeSpecialEquipment && isEquipment && template.Kind is ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment
             ? template : null;
     }
@@ -344,7 +384,7 @@ internal sealed class ItemCatalog
             slot = Slot(type);
             kind = type.Contains("avatar", StringComparison.OrdinalIgnoreCase) ? ItemKind.Avatar :
                 slot == 26 ? ItemKind.Creature : slot is >= 27 and <= 29 ? ItemKind.CreatureEquipment :
-                slot == 32 ? ItemKind.GuildMedal : ItemKind.Equipment;
+                slot == 32 ? ItemKind.GuildMedal : type == "talisman" ? ItemKind.Talisman : ItemKind.Equipment;
         }
         else
         {
@@ -358,7 +398,7 @@ internal sealed class ItemCatalog
             }
             else
             {
-                kind = type == "flag gem" ? ItemKind.GuardianGem :
+                kind = type == "rune" ? ItemKind.Rune : type == "flag gem" ? ItemKind.GuardianGem :
                     type is "creature" or "feed" ? ItemKind.CreatureConsumable : type == "avatar emblem" ? ItemKind.Emblem :
                     type == "material expert job" ? ItemKind.Profession :
                     type == "quest" || type.StartsWith("quest ", StringComparison.Ordinal) ? ItemKind.Quest :
@@ -391,6 +431,8 @@ internal sealed class ItemCatalog
         int stackLimit = isEquipment ? 1 : Int("stack limit", 0);
         if (stackLimit <= 0)
             stackLimit = int.MaxValue;
+        if (kind == ItemKind.Rune)
+            stackLimit = RuneDefinition.StackLimit;
         // 0 是 stackable.lst 里的金币占位，不是空槽。空槽不调用 Get。
         if (id < 0 || minimum is < 0 or > 255 || durability is < 0 or > ushort.MaxValue)
             throw new InvalidDataException("无效 PVF 物品定义: " + id);

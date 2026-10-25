@@ -201,6 +201,9 @@ internal static class SqliteMigrations
         new(89, "副本账号进入次数", static (db, tx) => Execute(db, tx, AccountDungeonIncountSchema)),
         new(90, "玩家社交关系", SocialSchema.Upgrade),
         new(91, "冒险团好友申请者分组与备注", SocialSchema.UpgradeRequests),
+        // 护石与符文使用独立容器46（护石0–69、符文70–209、已装210–215），只放开既有槽位表的分类约束。
+        new(92, "护石与符文库存容器", static (db, tx) => ReplaceTableConstraint(db, tx, "character_inventory_slots",
+            "CHECK(list_type IN (0,1,2,3,7,12,38))", "CHECK(list_type IN (0,1,2,3,7,12,38,46))")),
     ];
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)

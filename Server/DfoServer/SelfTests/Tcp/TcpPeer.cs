@@ -690,9 +690,12 @@ internal sealed class TcpPeer : IDisposable
             "装扮包裹初始化后完整恢复十一槽来源表，清除上一角色的关联状态");
         var pets = Expect(0, 13);
         var medals = Expect(0, 13);
+        var talismans = Expect(0, 13);
         TestCheck.That(avatars.Body[0] == 1 && U16(avatars.Body, 1) == avatarExpansion && pets.Body[0] == 7, "special container initialization and avatar capacity");
         TestCheck.That(medals.Body[0] == 38, "medal container initialization");
-        SpecialContainers = [creatures, avatars, pets, medals];
+        TestCheck.That(talismans.Body[0] == 46 && talismans.Body.Length == 3 + U16(talismans.Body, 1) * 123,
+            "护石符文容器按普通123B物品行初始化");
+        SpecialContainers = [creatures, avatars, pets, medals, talismans];
         var tail = new List<WirePacket>();
         var mails = new List<byte[]>();
         ClientSettings = [];

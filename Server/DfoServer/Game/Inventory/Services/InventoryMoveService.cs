@@ -21,6 +21,9 @@ internal static class InventoryMoveService
         if (request.Source == new InventorySlot(InventoryListType.Equipment, 30) ||
             request.Destination == new InventorySlot(InventoryListType.Equipment, 30))
             return InventoryResult.Reject(CannotMoveItem);
+        // 装载符文只能走有目标身份校验的装卸用例，普通移格不能把整堆放进一个孔。
+        if (IsEquippedRune(request.Source) || IsEquippedRune(request.Destination))
+            return InventoryResult.Reject(CannotMoveItem);
         if (request.Source.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent ||
             request.Destination.List is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent)
             return InventoryResult.Reject(CannotMoveItem);
@@ -190,6 +193,9 @@ internal static class InventoryMoveService
 
     static bool IsCargo(InventoryListType list) => list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo;
 
+    static bool IsEquippedRune(InventorySlot slot) => slot.List == InventoryListType.Talisman &&
+        slot.Index is >= ItemSlotBoundService.EquippedRuneStart and <= ItemSlotBoundService.EquippedRuneEnd;
+
     // 复述包固定为：Main空源格(编号0) 数量1 → 已穿装备槽12–25，保留字段为 -1/0/0；目标必须与当前实例一致。
     static bool IsLoginWearRestatement(InventoryMoveRequest request, InventoryItem? destination) =>
         request.SourceItemId == 0 && request.Count == 1 && request.DestinationCount == 0 &&
@@ -227,6 +233,9 @@ internal static class InventoryMoveService
         if (position.List != InventoryListType.Equipment)
             return true;
         var template = catalog.Get(core.ItemId);
+        if (core.Kind == ItemKind.Talisman)
+            return position.Index is ItemSlotBoundService.TalismanEquipmentStart or ItemSlotBoundService.TalismanEquipmentEnd &&
+                catalog.Talisman(core.ItemId)?.AllowsUse(character.Level, character.Job, character.GrowType) == true;
         if (IsCreatureSkin(position))
             return (character.EquipmentSlotFlags & InventoryCreatureSkinService.UnlockFlag) != 0 && CreatureSkinTemplate(core, template);
         if (position.Index == InventoryCreatureSkinService.AuraTargetSlot)
@@ -280,7 +289,7 @@ internal static class InventoryMoveService
             (source.List != destination.List || source.List == InventoryListType.Main &&
             (source.Index is >= 3 and <= 8 || destination.Index is >= 3 and <= 8)))
             core = core with { SortLockFlag = 0 };
-        if (destination.List == InventoryListType.Equipment && core.Kind is (ItemKind.Equipment or ItemKind.CreatureEquipment or ItemKind.GuildMedal) &&
+        if (destination.List == InventoryListType.Equipment && core.Kind is (ItemKind.Equipment or ItemKind.CreatureEquipment or ItemKind.GuildMedal or ItemKind.Talisman) &&
             core.SealFlag != 0 && catalog.Get(core.ItemId).AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase))
             core = core with { SealFlag = 0 };
         var avatar = item.Avatar;

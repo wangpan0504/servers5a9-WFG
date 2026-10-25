@@ -583,7 +583,7 @@ CREATE TABLE inventory_creature_details(
 CREATE TABLE "character_inventory_slots"(
     character_id INTEGER,
     account TEXT NOT NULL,
-    list_type INTEGER NOT NULL CHECK(list_type IN (0,1,2,3,7,12,38)),
+    list_type INTEGER NOT NULL CHECK(list_type IN (0,1,2,3,7,12,38,46)),
     owner_character_id INTEGER GENERATED ALWAYS AS (COALESCE(character_id,0)) STORED,
     slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419)),
     item_uid INTEGER NOT NULL UNIQUE,

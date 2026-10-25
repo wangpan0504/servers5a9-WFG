@@ -27,5 +27,6 @@ RecoveryConsumableTests.Run();
 RecipeFileTests.Run();
 ExpertRecipeFileTests.Run();
 CreatureFileTests.Run();
+TalismanFileTests.Run();
 Console.WriteLine($"PASS {TestCheck.Count} PvfLib assertions");
 return 0;

@@ -13,16 +13,16 @@ internal static class InventoryRewardGrantService
     // 普通创建策略：满耐久、100%品级种子；强化/锻造默认零，显式奖励可指定，期限与部位来自 CHR/PVF。
     public const int InitialQuality = 999_999_998;
     public static ItemCore Create(ItemTemplate template, int count = 1, DateTimeOffset? utcNow = null, byte upgrade = 0, byte refinement = 0,
-        bool shopExpiration = false, bool ignoreUsablePeriod = false)
+        bool shopExpiration = false, bool ignoreUsablePeriod = false, Func<int, int>? talismanColorDraw = null)
     {
-        if (count <= 0 || count > template.StackLimit || template.Kind is (ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal) && count != 1)
+        if (count <= 0 || count > template.StackLimit || template.Kind is (ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal or ItemKind.Talisman) && count != 1)
             throw new InvalidDataException("无效发放数量");
         if (upgrade > 31 || refinement > 127 || template.Kind != ItemKind.Equipment && (upgrade != 0 || refinement != 0))
             throw new InvalidDataException("无效装备创建属性");
-        return new(template.Id, template.Kind, template.Kind switch
+        var core = new ItemCore(template.Id, template.Kind, template.Kind switch
         {
             ItemKind.Avatar or ItemKind.Creature => 0,
-            ItemKind.Equipment or ItemKind.CreatureEquipment => InitialQuality,
+            ItemKind.Equipment or ItemKind.CreatureEquipment or ItemKind.Talisman => InitialQuality,
             _ => count
         })
         {
@@ -33,6 +33,8 @@ internal static class InventoryRewardGrantService
             SealFlag = template.Kind != ItemKind.Creature && template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0,
             ExpireTime = template.Expiration.Resolve(utcNow ?? DateTimeOffset.UtcNow, shopExpiration, ignoreUsablePeriod)
         };
+        return template.Kind == ItemKind.Talisman && template.Rarity > 0
+            ? TalismanSocketPolicy.Generate(talismanColorDraw).Apply(core) : core;
     }
 
     public static InventorySnapshot CreateStarter(CharacterProfile profile) => new(
@@ -113,13 +115,21 @@ internal static class InventoryRewardGrantService
                 return InventoryResult.Reject(19);
             if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0))
                 return InventoryResult.Reject();
-            var prototype = instances is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement,
-                shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod) : instances[rewardIndex].Core;
+            InventoryItem? incomingInstance = instances?[rewardIndex];
+            bool legacyRune = incomingInstance?.Core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
+            if (incomingInstance is not null)
+            {
+                if (!InventoryTalismanCompatibility.AcceptsKind(incomingInstance.Core.Kind, template.Kind))
+                    return InventoryResult.Reject(19);
+                incomingInstance = incomingInstance with { Core = InventoryTalismanCompatibility.Normalize(incomingInstance.Core, template) };
+            }
+            var prototype = incomingInstance is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement,
+                shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod) : incomingInstance.Core;
             if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || instances?[rewardIndex].IsExpired(now.ToUnixTimeSeconds()) == true)
                 return InventoryResult.Reject(19);
             if (prototype.IsExpired(now.ToUnixTimeSeconds()))
                 return InventoryResult.Reject(19);
-            if (!placement.TryAdd(template, prototype, reward.Count, instances?[rewardIndex]))
+            if (!placement.TryAdd(template, prototype, reward.Count, incomingInstance, splitLegacyRune: legacyRune))
                 return InventoryResult.Reject(17);
         }
 
@@ -136,8 +146,12 @@ internal static class InventoryRewardGrantService
         ArgumentNullException.ThrowIfNull(core);
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(pieces);
-        if (core.ItemId != template.Id || core.Kind != template.Kind ||
-            core.Kind != ItemKind.Equipment && !core.IsStackable ||
+        bool legacyRune = core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
+        if (core.ItemId != template.Id || !InventoryTalismanCompatibility.AcceptsKind(core.Kind, template.Kind))
+            return InventoryResult.Reject();
+        core = InventoryTalismanCompatibility.Normalize(core, template);
+        if (
+            core.Kind is not (ItemKind.Equipment or ItemKind.Talisman) && !core.IsStackable ||
             CurrencyWallet.RewardKind(core.ItemId) is not null || pieces.ByPiece.ContainsKey(core.ItemId))
             return InventoryResult.Reject();
         try
@@ -150,7 +164,7 @@ internal static class InventoryRewardGrantService
         }
         if (core.IsExpired((utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
-        if (core.Count > template.StackLimit)
+        if (!legacyRune && core.Count > template.StackLimit)
             return InventoryResult.Reject(17);
         if (template.AcquisitionContract is { } acquired)
         {
@@ -168,7 +182,7 @@ internal static class InventoryRewardGrantService
         // ItemCore及其附属值均不可变，直接共享完整核心；不重新Create或计算期限。
         var inventory = character.Inventory;
         var placement = new RewardPlacement(inventory, [core.ItemId]);
-        if (!placement.TryAdd(template, core, core.Count, usePickupSlotPolicy: usePickupSlotPolicy))
+        if (!placement.TryAdd(template, core, core.Count, usePickupSlotPolicy: usePickupSlotPolicy, splitLegacyRune: legacyRune))
             return InventoryResult.Reject(17);
         var after = inventory with { Items = placement.Items() };
         after.Validate(allocating: true);
@@ -200,7 +214,7 @@ internal static class InventoryRewardGrantService
             .ThenBy(item => item.Position.Index).ToImmutableArray();
 
         public bool TryAdd(ItemTemplate template, ItemCore prototype, int remaining, InventoryItem? instance = null,
-            bool usePickupSlotPolicy = false)
+            bool usePickupSlotPolicy = false, bool splitLegacyRune = false)
         {
             var range = ItemSlotBoundService.Range(template.Kind, inventory);
             var list = ItemSlotBoundService.List(template.Kind);
@@ -209,7 +223,7 @@ internal static class InventoryRewardGrantService
             if (prototype.IsStackable)
             {
                 // 自动发放只向首个兼容堆叠完整入库，不能靠拆成新格绕过该次入库上限。
-                if (!allowOverflowMail && remaining > template.StackLimit)
+                if (!allowOverflowMail && !splitLegacyRune && remaining > template.StackLimit)
                     return false;
                 // 索引只缩小候选范围，完整属性兼容仍由同一个堆叠规则决定。
                 if (stacks is null)
@@ -237,6 +251,9 @@ internal static class InventoryRewardGrantService
                         foreach (short candidate in candidates)
                         {
                             var current = planned[new(stackList, candidate)];
+                            // 装载槽也是list46真实资产，但不属于自动入包可合堆的背包分页。
+                            if (current.Position.List == InventoryListType.Talisman && current.Position.Index >= 210)
+                                continue;
                             if (InventoryStackRuleService.CanShareStack(prototype, current.Core))
                             {
                                 item = current;
@@ -251,7 +268,7 @@ internal static class InventoryRewardGrantService
                         planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + remaining) } };
                         remaining = 0;
                     }
-                    else if (allowOverflowMail)
+                    else if (allowOverflowMail || splitLegacyRune)
                     {
                         int moved = Math.Min(Math.Max(0, template.StackLimit - item.Core.Count), remaining);
                         planned[item.Position] = item with { Core = item.Core with { Value = checked(item.Core.Value + moved) } };
@@ -278,6 +295,9 @@ internal static class InventoryRewardGrantService
                     int count = Math.Min(remaining, template.StackLimit);
                     var core = prototype.IsStackable ? prototype with { Value = count } : prototype;
                     planned.Add(position, instance is null ? CreateItem(template, position, core) : instance with { Position = position, Core = core });
+                    // 同一外部实例拆为多个堆叠时，只能第一份继续使用其持久UID。
+                    if (instance is not null)
+                        instance = instance with { Uid = 0 };
                     if (prototype.IsStackable)
                     {
                         var key = (targetList, prototype.ItemId);

@@ -167,6 +167,7 @@ internal static partial class DatabaseSchemaTests
             ConsumableStatesUpgrade(root);
             BlacklistCountUpgrade(root);
             IncountNumberingUpgrade(root);
+            TalismanUpgrade(root);
             string path = Path.Combine(root, "game.db");
             var characters = new CharacterRepository(path);
             var accounts = new AuthenticationService(new AuthenticationRepository(path));

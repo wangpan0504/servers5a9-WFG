@@ -15,7 +15,9 @@ internal enum ItemKind : byte
     Profession = 10,
     Emblem = 9,
     GuildMedal = 12,
-    GuardianGem = 13
+    GuardianGem = 13,
+    Rune = 14,
+    Talisman = 11
 }
 
 internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, byte MinimumLevel,
