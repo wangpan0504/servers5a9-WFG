@@ -11,11 +11,16 @@ namespace DfoServer.Game.Pvp;
 
 internal static class PvpPrivateCharacterPlan
 {
+    // 本服已确认的兼容规则仅补守护者两份原CHR缺失字段；显式值及其它定义均不覆盖。
+    internal static int? RecreateDays(PvpPrivateCharacterDefinition definition) => definition.RecreatePenalty ??
+        (definition.Job == 12 && definition.GrowType is 3 or 4 &&
+         string.Equals(definition.Path,"character/knight/knight.chr",StringComparison.OrdinalIgnoreCase) ? 30 : null);
+
     public static NewCharacter Prepare(string name,CharacterProfile profile,PvpPrivateCharacterDefinition definition,
         int accountLevel,Location location,SkillLearningCatalog skills,CharacterGrowthCatalog growth,ItemCatalog items,DateTimeOffset now)
     {
         if(profile.Job!=definition.Job || !profile.GrowthOptions.GrowTypes.Any(row=>row.Value==definition.GrowType) ||
-            definition.RecreatePenalty is not int days || definition.Equipment.IsEmpty)
+            RecreateDays(definition) is not int days || definition.Equipment.IsEmpty)
             throw new NotSupportedException("专用建角分支或原重建惩罚声明不完整");
         var creation=CharacterCreation.Prepare(name,profile,location,location,skills.Get);
         var learning=SkillPointLedger.Synchronize(profile.Job,definition.GrowType,85,creation.InitialLearning with {Experience=growth.GetLevelStartExperience(85)},skills);

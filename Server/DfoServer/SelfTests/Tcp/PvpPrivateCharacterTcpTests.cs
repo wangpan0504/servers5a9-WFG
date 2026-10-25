@@ -30,6 +30,16 @@ internal static class PvpPrivateCharacterTcpTests
             peer.Send(872,Build(w=>{w.Write(0u);w.Write(1u);}));peer.Expect(1,872,[0,19,0]);
             peer.Send(872,Build(w=>{w.Write(15u);w.Write(1u);}));peer.Expect(1,872,[0,19,0]);
             That(f.Query("SELECT count(*) FROM characters WHERE account=$p0",account) is [[2L]],"重复分支及错配职业资源不半建角色或发装备");
+            foreach(byte grow in new byte[]{3,4})
+            {
+                peer.Send(872,Build(w=>{w.Write(12u);w.Write((uint)grow);}));peer.Expect(1,872,[1,0]);
+                peer.Send(5,Create("Guardian"+grow,12,grow));var guardian=peer.Expect(1,5).Body;peer.Expect(0,2);
+                That(guardian[0]==1 && f.Query("SELECT c.job,c.grow_type,p.recreate_days FROM characters c JOIN account_pvp_private_characters p ON p.character_id=c.id WHERE c.id=$p0",U16(guardian,1))
+                    is [[12L,var actualGrow,30L]] && (long)actualGrow==grow,"守护者两缺配置分支通过872/5创建并持久化30天冷却");
+                peer.Send(5,Create("ReplayG"+grow,12,grow));peer.Expect(1,5,[0,19,0]);
+                peer.Send(872,Build(w=>{w.Write(12u);w.Write((uint)grow);}));peer.Expect(1,872,[0,19,0]);
+            }
+            That(f.Query("SELECT count(*) FROM characters WHERE account=$p0",account) is [[4L]],"两守护者分支各创建一次，重复请求不多发初装");
             peer.Send(4,[1,0]);peer.Expect(1,4,[0,96,0]);
             peer.Send(3,[0]);peer.Expect(1,3,[1]);peer.Closed();
         }
@@ -99,6 +109,9 @@ internal static class PvpPrivateCharacterTcpTests
 
         }
         await f.StopAsync();
+        var privateCatalog=DfoServer.GameWorld.Characters.PvpPrivateCharacterCatalog.Load(resources.Archive);
+        PvpPrivateCharacterTests.VerifyGuardianRecreation(resources.Towns,new(resources.Characters,privateCatalog,
+            resources.Learning,resources.Growth,resources.ItemResources.Items,resources.Towns));
         string AdventureState()=>System.Text.Json.JsonSerializer.Serialize(f.Query(
             "SELECT level,experience,remainder,capsule_experience,brave_experience,opening_experience,excluded_experience FROM account_adventures WHERE account=$p0",account));
     }

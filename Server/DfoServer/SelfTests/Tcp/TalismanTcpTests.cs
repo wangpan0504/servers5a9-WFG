@@ -47,6 +47,9 @@ internal static class TalismanTcpTests
         fixture.Sql("UPDATE character_inventory_slots SET slot_index=160 WHERE item_uid=$p0 AND list_type=46", Uid(campRunes[0]));
         long stoneUid = Uid(stone);
         long materialUid = Uid(costs.MaterialId);
+        // 非零扩展高字节必须在真实随机重锻后保留。
+        fixture.Sql("UPDATE character_inventory_items SET item_core=json_set(item_core,'$.Extension114.Value',$p0) WHERE item_uid=$p1",
+            SocketColors() | 0xFE000000L, stoneUid);
         await fixture.StartAsync();
         long materialBefore = MaterialCount();
         long colorsBefore = SocketColors();
@@ -85,6 +88,8 @@ internal static class TalismanTcpTests
                 "重锻按品级扣料并生成三种不重复的孔色，扩展高字节保留");
             // 重锻孔色随机；五种阵营符文都在背包，挑与 210 孔同色的那枚验证装载，211 必然错色。
             var rune = campRunes.First(id => catalog.Rune(id)!.SocketColor == (byte)colors);
+            That(catalog.Rune(rune)!.SkillIndex != catalog.Talisman(stone)!.SkillIndex,
+                "同孔色异技能符文沿真实装载成功链验证，不恢复旧技能限制");
             (short List, short Slot) runeSlot = SlotOf(rune);
             That(runeSlot.List == 46, "符文槽落在护石页");
 
@@ -111,6 +116,8 @@ internal static class TalismanTcpTests
             That(loaded[0] == 46 && U16(loaded, 1) == 2 && U16(loaded, 3) == (ushort)runeSlot.Slot && U32(loaded, 9) == 2 &&
                 U16(loaded, 3 + 123) == 210 && U32(loaded, 3 + 123 + 2) == (uint)rune && U32(loaded, 3 + 123 + 6) == 1,
                 "装载后同页差量同步源堆剩余两枚与210单枚实例");
+            That(loaded.AsSpan(3 + 123, 123).SequenceEqual(socketPreload.AsSpan(3)),
+                "装载预载与回执后孔位差量是同一已提交条目");
             // 符文只改容器 46 的 210–215：不改变外观、不进属性，装载后不得补发本人 USERINFO。补发的
             // USERINFO 会走 0267C4F0→023C3A90 重灌六符文向量并触发护石面板刷新（00698B70），是图鉴
             // 符文页在按技能筛选时退回「所有技能」的唯一未排除触发路径（#747）。这里断言差量之后直接
@@ -123,6 +130,25 @@ internal static class TalismanTcpTests
                 "装载成功后以覆盖全部216格的容器46差量重发：210与源堆取提交结果，空槽为清空条目，中间不插USERINFO");
             peer.Barrier();
             That(Rows("list_type=46 AND slot_index=210") == 1 && StackCount(rune) == 2, "装载符文从堆叠分出一枚落到210");
+
+            // 重放相同装载是原规则允许的替换：旧枚归还、再装一枚，总量不能减少。
+            peer.Send(1659, Equip(210, (ushort)runeSlot.Slot, rune));
+            var replayPreload = peer.Expect(0, 14).Body;
+            That(replayPreload[0] == 46 && U16(replayPreload, 1) == 1 &&
+                U16(replayPreload, 3) == 210 && U32(replayPreload, 5) == (uint)rune,
+                "重放装载仍先投影提交后的210实例");
+            peer.Expect(1, 1659, Equipped(210, rune));
+            var replayDelta = peer.Expect(0, 14).Body;
+            That(replayDelta.AsSpan().SequenceEqual(replayPreload),
+                "相同装载重放只更换孔位实例，源堆数量不变且差量等于预载");
+            var replayResync = peer.Expect(0, 14).Body;
+            That(replayResync[0] == 46 && U16(replayResync, 1) == 216 &&
+                replayResync.AsSpan(3 + 210 * 123, 123).SequenceEqual(replayPreload.AsSpan(3)) &&
+                U32(replayResync, 3 + runeSlot.Slot * 123 + 6) == 2,
+                "重放后直接216格同步且源堆仍两枚，不插USERINFO");
+            peer.Barrier();
+            That(Rows("list_type=46 AND slot_index=210") == 1 && StackCount(rune) == 2,
+                "重放装载不重复扣除符文");
 
             peer.Send(19, Move(3, (short)ItemSlotBoundService.TalismanEquipmentStart, stone, 1, 46, stoneSlot.Slot, 0));
             peer.Expect(1, 19, Rejected(3, 46));
@@ -148,6 +174,8 @@ internal static class TalismanTcpTests
             That(returned[0] == 46 && U16(returned, 1) == 2 && U16(returned, 3) == (ushort)runeSlot.Slot &&
                 U32(returned, 9) == 3 && U16(returned, 3 + 123) == 210 && U32(returned, 3 + 123 + 2) == uint.MaxValue,
                 "卸除后同页差量合回三枚并清空210");
+            That(returned.AsSpan(3 + 123, 123).SequenceEqual(clearedPreload.AsSpan(3)),
+                "卸除预载与回执后孔位差量是同一清空条目");
             // 卸除同样只发容器差量：210 清空后直接是 216 格重发，不得插入本人 USERINFO。
             var removedResync = peer.Expect(0, 14).Body;
             That(removedResync[0] == 46 && U16(removedResync, 1) == 216 && removedResync.Length == 3 + 216 * 123 &&
@@ -156,6 +184,15 @@ internal static class TalismanTcpTests
                 "卸除成功后同样以216格差量重发：210清空、源堆合回三枚，中间不插USERINFO");
             peer.Barrier();
             That(Rows("list_type=46 AND slot_index=210") == 0 && StackCount(rune) == 3, "卸除符文合回背包并清空装载位");
+
+            peer.Send(1660, Remove(210));
+            peer.Expect(1, 1660, Failure(23));
+            var emptyReplay = peer.Expect(0, 14).Body;
+            That(emptyReplay.AsSpan().SequenceEqual(removedResync),
+                "空孔重复卸除只拒绝并恢复同一216格状态，不重复归还符文");
+            peer.Barrier();
+            That(StackCount(rune) == 3 && Rows("list_type=46 AND slot_index=210") == 0,
+                "空孔卸除重放保持三枚源堆与空孔");
 
             peer.Send(1659, new byte[7]);
             peer.Expect(1, 1659, Failure(23));
@@ -323,8 +360,9 @@ internal static class TalismanTcpTests
             .Where(definition => definition is not null && definition.AllowsUse(level, job, grow))
             .Select(definition => definition!.Item.Id).Distinct().ToArray();
         // 重锻后孔色随机，只有背包里备齐五色符文才能稳定挑出与目标孔同色的一枚。
-        var campRunes = runes.GroupBy(id => catalog.Rune(id)!.Camp).Select(group => group.First()).ToArray();
-        That(campRunes.Length == 5, "匹配资源提供五种阵营各一枚可用符文");
+        var campRunes = runes.Where(id => catalog.Rune(id)!.SkillIndex != catalog.Talisman(stones[0])!.SkillIndex)
+            .GroupBy(id => catalog.Rune(id)!.Camp).Select(group => group.First()).ToArray();
+        That(campRunes.Length == 5, "匹配资源提供五种阵营各一枚与护石不同技能的可用符文");
         return (stones[0], stones[1], campRunes, runes.First(id => !campRunes.Contains(id)));
     }
 
