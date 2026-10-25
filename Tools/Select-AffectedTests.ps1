@@ -74,6 +74,7 @@ $schemaGroups = @('database-schema','settings-storage','inventory-persistence','
 $keywordGroups = [ordered]@{
     'Quest'      = 'quest-lifecycle','quest-extras','quest-chains','quest-chain-settlement','quest-metro','quest-auto-daily','quest-gold-mail','quest-question-state','quest-continuation','quest-core-rewards','quest-initialization','story-digest'
     'Social|PlayerInteraction|PublicCharacter|NamedWhisper' = 'social','presence','chat','channel-entry'
+    'Party'     = 'solo-party','social','presence','teleport','formal-dungeon'
     'Story'      = 'story-digest','story-cinematic','story-scenes','story-quest-entry','story-publication'
     'Dungeon|GriefTower' = 'formal-dungeon','dungeon-growth','grief-tower','dungeon-training','class-experience','dungeon-revive','dungeon-altars','dungeon-despair','hero-tomb-entry','dungeon-probe','dungeon-settlement','dungeon-entry-plan'
     'Booster'    = 'booster','booster-selection','booster-equipment','daily-retained-booster'

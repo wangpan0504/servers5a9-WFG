@@ -129,6 +129,21 @@ internal static class GmWebAcceptTcpTests
         await Read("账号", "/api/accounts", d => d.EnumerateArray().Any(a => a.GetProperty("account").GetString() == Account && a.GetProperty("characters").GetInt32() == 4));
         await Read("账号", $"/api/accounts/{Account}/characters", d => d.GetArrayLength() == 4);
         await Read("总览", "/api/online", d => d.GetArrayLength() == 0);
+        await Read("收发包", "/api/packets/status", d => d.GetProperty("gmWebPort").GetInt32() == port &&
+            d.GetProperty("packetHttpPort").GetInt32() == 0);
+        using (var packetPeer = TcpPeer.Open(fixture))
+        {
+            var packets = Json((await Get("/api/packets")).Body);
+            int connection = packets.EnumerateArray().First(row => row.GetProperty("protocol").GetString() == "GAME")
+                .GetProperty("connectionId").GetInt32();
+            await Read("收发包", "/api/packets?connectionId=" + connection, d => d.GetArrayLength() > 0 &&
+                d.EnumerateArray().All(row => row.GetProperty("connectionId").GetInt32() == connection));
+            await Read("收发包", "/api/packets/sessions", d => d.EnumerateArray().Any(row =>
+                row.GetProperty("connectionId").GetInt32() == connection));
+            Check("收发包", "认证正文脱敏", packets.EnumerateArray().Any(row => row.GetProperty("opcode").GetInt32() == 1 &&
+                row.GetProperty("redacted").GetBoolean() && row.GetProperty("bodyHex").GetString() == ""));
+        }
+        Check("收发包", "网页查询不启用文件抓包", !File.Exists(Path.Combine(fixture.Options.LogDirectory, "packet_log.txt")));
         foreach (string section in new[] { "summary", "inventory", "mails", "wallet", "quests", "skills", "points", "stats", "titles", "quest-search" })
             await Read("角色详情", $"/api/characters/{Account}/AccA/{section}");
         await Read("角色详情", $"/api/characters/{Account}/AccA/growth");

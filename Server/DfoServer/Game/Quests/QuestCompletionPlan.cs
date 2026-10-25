@@ -271,10 +271,15 @@ internal sealed class QuestCompletionPlan
             bool dungeonClear = QuestDungeonClearProgress.Supports(quest);
             bool rental = QuestRentalProgress.Supports(quest);
             bool expertTutorial = QuestExpertJobProgress.Tutorial(quest);
-            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && !expertTutorial && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) && !QuestCycle.NormalDungeonMission(quest) && !QuestDazzlementStorage.Matches(quest) || quest.RewardType != "[item]" && profession is null && expertJob is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) && !QuestCoverage.GoldOnlyReward(quest) ||
-                !QuestCoverage.HasOrdinaryAttributes(quest) ||
-                quest.Definition!.Has("send postal"))
-                throw new NotSupportedException("任务需要尚未具备的周期、特殊奖励或附属交付规则");
+            // 同一拒绝不能掩盖资源差异；保留原门禁，仅报告实际未支持的声明。
+            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && !expertTutorial && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) && !QuestCycle.NormalDungeonMission(quest) && !QuestDazzlementStorage.Matches(quest))
+                throw new NotSupportedException($"任务交付子类型未支持: condition={quest.Condition}, sub_type={quest.SubType}");
+            if (quest.RewardType != "[item]" && profession is null && expertJob is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) && !QuestCoverage.GoldOnlyReward(quest))
+                throw new NotSupportedException($"任务交付奖励声明未支持: reward_type={quest.RewardType ?? "<absent>"}, gold_multiple={quest.DeclaredGoldMultiple}, reward_tokens={quest.Rewards.Count}");
+            if (!QuestCoverage.HasOrdinaryAttributes(quest))
+                throw new NotSupportedException("任务交付属性未支持: attribute=" + string.Join(",",quest.Attributes));
+            if (quest.Definition!.Has("send postal"))
+                throw new NotSupportedException("任务交付附属声明未支持: send postal");
             if (QuestCycle.Daily(quest) && expected.QuestCycleDay != QuestCycle.Day(now))
                 throw new InvalidDataException("每日任务交付需要当前游戏日快照");
             if (quest.Condition == "[clear map]")

@@ -26,7 +26,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null, DfoServer.Game.ExpertJob.ExpertJobStoreBoard? expertStores = null,
     TownPresence? presence = null,
     DfoServer.GameWorld.Dungeons.DungeonIncountCatalog? incounts = null, CharacterLevelProjection? levels = null,
-    DfoServer.Game.Social.SocialService? social = null, DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null) : IConnectionProtocol
+    DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null,
+    DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null) : IConnectionProtocol
 {
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
@@ -90,6 +91,14 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         session.SocialAccountDeleted = (name, guard) => sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_DELETE,
             SocialPackets.Name(name), "account_friend_deleted", guard);
         ushort socialCharacter = 0;
+        session.PartyNoticeArrived = notice => PartyProjection.Notice(context, notice);
+        session.HasMultiplePartyMembers = () => parties?.HasMultipleMembers(session) == true;
+        session.CurrentParty = () => parties?.Current(session);
+        long partyEpoch = session.SelectionEpoch;
+        await using var partyDirectory = parties is null ? null : new PartyDirectoryProjection(context, parties, towns, log);
+        context.PartyDirectory = partyDirectory;
+        long directoryEpoch = sender.Epoch;
+        var directoryPhase = session.Phase;
         NativeChannel.Registration? nativeRegistration = null;
         try
         {
@@ -115,6 +124,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         projection.Refresh(context);
                     }));
             nativeRegistration = native?.Register(context);
+            session.SetPeerAccount(nativeRegistration?.Token ?? 0);
             adventure?.Prepare(context);
             await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(connection.ServerAddress(options),
                 native?.Port ?? login.Channel.Port, nativeRegistration?.Token ?? 0, ChannelPackets.LoginChannelType(login.Channel.Entry)), "endpoint");
@@ -165,11 +175,24 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     continue;
                 if (result == CommandResult.CloseConnection)
                     return;
+                if (!session.Ready || session.SelectionEpoch != partyEpoch)
+                {
+                    parties?.Detach(session);
+                }
+                partyEpoch = session.SelectionEpoch;
                 ushort currentSocial = session.Ready ? session.Selected?.Id ?? (ushort)0 : (ushort)0;
+                bool directoryChanged = socialCharacter != currentSocial || directoryEpoch != sender.Epoch || directoryPhase != session.Phase;
                 if (socialCharacter != currentSocial)
                 {
                     if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account);
                     socialCharacter = currentSocial;
+                }
+                if (directoryChanged)
+                {
+                    directoryEpoch = sender.Epoch;
+                    directoryPhase = session.Phase;
+                    // 选图会移除城镇实体，也必须让其他观察者移除招募行；不能只刷新本人列表。
+                    parties?.PresenceChanged();
                 }
                 // 提交后的自动刷新单独重试，不与已完成的命令一起重放。
                 var (refreshed, _) = await SqliteBusyRetry.TryExecuteAsync(async () =>
@@ -211,6 +234,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await elevator.DisposeAsync();
             await altar.DisposeAsync();
             online.RemoveConnection(connection.Id, session);
+            parties?.Detach(session);
             online.Remove(login.Owner.Account, session);
             if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account);
             projection.Remove(context);

@@ -179,14 +179,16 @@ internal static class TeleportTests
         That(!session.TeleportSingleMemberParty(request, fixture.Service).Accepted, "未选角不接受组队光环传送");
         session.Select(0); session.MarkReady();
         That(session.TeleportSingleMemberParty(request, fixture.Service).Reason == "party-context-unavailable", "无队伍不能把自己当成整队");
-        var settings = new DfoServer.Game.Parties.SoloPartyRequest(0, new(3, null, 4, 0, 5, 0, 0, 0, 0, 7));
-        session.SetSoloParty(settings);
+        var parties = new DfoServer.Game.Party.PartyService(fixture.Repository);
+        session.CurrentParty = () => parties.Current(session);
+        var settings = new DfoServer.Game.Party.PartySettings(3, "", 4, 0, 5, 0, 0, 0, 0, 7);
+        parties.SetInformation(session, 0, settings);
         That(session.TeleportSingleMemberParty(request, fixture.Service).Reason == "party-aura-unavailable", "已建队仍须穿戴实际组队光环");
         var original = session.Selected!;
         var equipped = original.Inventory with { Items = original.Inventory.Items.Select(item => item.Position == new InventorySlot(InventoryListType.Equipment, 9)
             ? item with { Core = item.Core with { ItemId = 65052 } } : item).ToImmutableArray() };
         fixture.Repository.CommitInventory(fixture.Owner, original, new(original.Inventory, equipped, "party_aura_fixture"));
-        session.ReturnToRoster(); session.Select(0); session.MarkReady(); session.SetSoloParty(settings);
+        parties.Detach(session); session.ReturnToRoster(); session.Select(0); session.MarkReady(); parties.SetInformation(session, 0, settings);
         var before = session.Selected!;
         foreach (var invalid in new[] { request with { Source = 0 }, request with { Target = new(1, 0, 20, 20, 5) },
             request with { Target = new(3, 0, 20, 20, 5) }, request with { Target = new(2, 0, 200, 200, 5) } })
@@ -196,7 +198,7 @@ internal static class TeleportTests
         fixture.OnAuraRead = () =>
         {
             fixture.OnAuraRead = null;
-            session.LeaveSoloParty(); session.SetSoloParty(settings);
+            parties.Leave(session); parties.SetInformation(session, 0, settings);
         };
         That(session.TeleportSingleMemberParty(request, fixture.Service).Reason == "party-context-changed" && ReferenceEquals(before, session.Selected),
             "锁外资源规划期间退队重建，旧队伍授权不能移动新队伍");
@@ -205,12 +207,12 @@ internal static class TeleportTests
         That(ReferenceEquals(before, session.Selected) && fixture.Read().Position == before.Position && fixture.Read().Revision == before.Revision &&
             fixture.Read().TeleportCooldowns == before.TeleportCooldowns, "组队传送SQL失败时位置、冷却和在线角色一起回滚");
         fixture.Sql("DROP TRIGGER party_teleport_fail");
-        var party = session.ReadSoloParty();
+        var party = parties.Current(session);
         var result = session.TeleportSingleMemberParty(request, fixture.Service);
         var actual = fixture.Read();
         That(result.Accepted && result.Receipt!.AuraKind == AuraAbilityKind.PartyTeleport && actual.Position == request.Target &&
             actual.Revision == before.Revision + 1 && actual.TeleportCooldowns == new TeleportCooldowns(0, 0, 0, fixture.Clock.Now + 600000) &&
-            ReferenceEquals(party, session.ReadSoloParty()) && session.GetState() == UserState.Town,
+            ReferenceEquals(party, parties.Current(session)) && session.GetState() == UserState.Town,
             "唯一队长已同意后整队移动，队伍不解散，Town状态不变，独立600秒冷却与位置同事务");
         That(Convert.ToHexString(TeleportPackets.PartyReady(actual with { Id = 65000 })) ==
             "0201010000E8FD01FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF0000" &&
@@ -218,9 +220,9 @@ internal static class TeleportTests
             Convert.ToHexString(TeleportPackets.Cooldown(actual, fixture.Clock.Now)) == "010058020000" &&
             Convert.ToHexString(TeleportPackets.PartyRejected(request, 600, 22)) == "001600025802000001",
             "原生377固定八行且队长槽0，379准备阶段3，378独立type0，434冷却失败保留实际剩余秒");
-        session.LeaveSoloParty(); session.SetSoloParty(settings);
+        parties.Leave(session); parties.SetInformation(session, 0, settings);
         That(session.TeleportSingleMemberParty(request, fixture.Service).Reason == "aura-cooldown", "退队重建不能重置角色组队光环冷却");
-        session.ReturnToRoster(); session.Select(0); session.MarkReady(); session.SetSoloParty(settings);
+        parties.Detach(session); session.ReturnToRoster(); session.Select(0); session.MarkReady(); parties.SetInformation(session, 0, settings);
         That(session.Selected!.TeleportCooldowns == actual.TeleportCooldowns &&
             session.TeleportSingleMemberParty(request, fixture.Service).Reason == "aura-cooldown", "重选恢复组队冷却，不因队伍上下文重建而清零");
         fixture.Clock.Now += 600000;

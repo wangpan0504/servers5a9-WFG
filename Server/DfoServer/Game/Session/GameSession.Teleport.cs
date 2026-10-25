@@ -19,12 +19,13 @@ internal sealed partial class GameSession
 
     public TeleportResult TeleportSingleMemberParty(PartyTeleportRequest request, TeleportService service, bool blocked = false)
     {
-        var captured = owner.Execute(() => (Party: singleParty, Version: singlePartyVersion));
-        if (captured.Party is null) return new("party-context-unavailable");
+        var captured = CurrentParty?.Invoke();
+        if (captured is not { Members.Length: 1 } ||
+            !ReferenceEquals(captured.Members[0].Actor.Session, this) || captured.Leader != captured.Members[0].Slot) return new("party-context-unavailable");
         // 原生流程将队长视为已同意；当前队伍确实只有本人，不创建虚假的待确认成员。
         return PlanTeleport(character => service.Party(character, request, service.Clock.GetUtcNow().ToUnixTimeMilliseconds()),
-            service.Clock, blocked, contextCurrent: () => ReferenceEquals(singleParty, captured.Party) &&
-                singlePartyVersion == captured.Version && Selected?.Id == captured.Party.LeaderId);
+            service.Clock, blocked, contextCurrent: () => ReferenceEquals(CurrentParty?.Invoke(), captured) &&
+                captured.Members[0].IsCurrent());
     }
 
     TeleportResult PlanTeleport(Func<Character, (string Reason, TeleportPlan? Plan)> prepare, TimeProvider clock, bool blocked,

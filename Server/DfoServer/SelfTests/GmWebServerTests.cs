@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using DfoServer.Network.Management;
 using DfoServer.Testing;
@@ -81,7 +82,8 @@ internal static class GmWebServerTests
             TestCheck.That(rejected, "GM网页启动前取消后释放应用，不占用后续启动端口");
         }
         using var stop = new CancellationTokenSource();
-        var server = GmWebServer.RunAsync(port, data, stop.Token);
+        using var capture = new Network.PacketCapture(null, retainRecent: true);
+        var server = GmWebServer.RunAsync(port, data, stop.Token, capture, new ServerOptions { GmWebPort = port });
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}"), Timeout = TimeSpan.FromSeconds(10) };
         HttpResponseMessage page = null!;
         for (int attempt = 0; attempt < 50; attempt++)
@@ -103,6 +105,48 @@ internal static class GmWebServerTests
         TestCheck.That((await http.GetAsync("/assets/..%2Findex.html")).StatusCode == HttpStatusCode.NotFound, "资源名白名单拒绝路径穿越");
         var status = await http.GetFromJsonAsync<JsonElement>("/api/status");
         TestCheck.That(status.GetProperty("pid").GetInt32() == 1 && status.GetProperty("gmWebPort").GetInt32() == 4, "状态接口返回进程与端口信息");
+        int beforeQueries = data.Commands.Count;
+        capture.Register(21, false, new(IPAddress.Loopback, 12021));
+        capture.Register(22, true, new(IPAddress.Loopback, 12022));
+        capture.Write(21, false, true, Network.GameFrame.Build(0, 2, 0, [0xab, 0xcd]));
+        capture.Write(21, false, false, Network.GameFrame.Build(1, 1, 0, "private-credential"u8));
+        var packets = await http.GetFromJsonAsync<JsonElement>("/api/packets?connectionId=21");
+        TestCheck.That(packets.GetArrayLength() == 2 && packets[0].GetProperty("bodyHex").GetString() == "ABCD" &&
+            packets[1].GetProperty("redacted").GetBoolean() && packets[1].GetProperty("bodyHex").GetString() == "",
+            "GM同一HTTP端口读取共享抓包缓存，过滤保留原序与认证脱敏");
+        TestCheck.That((await http.GetFromJsonAsync<JsonElement>("/api/packets/sessions")).GetArrayLength() == 2 &&
+            (await http.GetFromJsonAsync<JsonElement>("/api/packets/status")).GetProperty("sentPackets").GetInt64() == 1,
+            "GM包查询状态和客户端摘要不覆盖原GM状态接口");
+        foreach (string query in new[] { "connectionId=", "connectionId=0", "connectionId=21&connectionId=22", "other=21" })
+            TestCheck.That((await http.GetAsync("/api/packets?" + query)).StatusCode == HttpStatusCode.BadRequest,
+                "GM包查询沿用客户端过滤参数边界：" + query);
+        TestCheck.That((await http.GetAsync("/api/packets/status?connectionId=21")).StatusCode == HttpStatusCode.BadRequest,
+            "客户端条件不被状态查询静默忽略");
+        foreach (string origin in new[] { "http://evil.invalid", $"http://127.0.0.1:{port + 1}" })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/api/packets");
+            request.Headers.Add("Origin", origin);
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.StatusCode == HttpStatusCode.Forbidden, "GM包查询拒绝跨站及错误端口Origin");
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Get, "/api/packets"))
+        {
+            request.Headers.Host = $"127.0.0.1:{port + 1}";
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.StatusCode == HttpStatusCode.Forbidden, "本机Host也必须对应实际监听端口");
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Post, "/api/packets"))
+        {
+            request.Headers.Add("X-GM-Request", "1");
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.StatusCode == HttpStatusCode.MethodNotAllowed, "带GM请求头也不能向只读包查询写入");
+        }
+        using (var request = new HttpRequestMessage(HttpMethod.Get, "/api/packets") { Content = new StringContent("x") })
+        {
+            using var response = await http.SendAsync(request);
+            TestCheck.That(response.StatusCode == HttpStatusCode.BadRequest, "GM抓包查询不接受GET正文");
+        }
+        TestCheck.That(data.Commands.Count == beforeQueries, "抓包查询不调用GM写命令或读取玩家库");
         var accounts = await http.GetFromJsonAsync<JsonElement>("/api/accounts");
         TestCheck.That(accounts.GetArrayLength() == 1 && accounts[0].GetProperty("account").GetString() == "acct" && !accounts[0].TryGetProperty("passwordHash", out _), "账号列表只含摘要字段");
         var online = await http.GetFromJsonAsync<JsonElement>("/api/online");
@@ -393,8 +437,37 @@ internal static class GmWebServerTests
             "非法参数不进入合成");
         TestCheck.That(data.Audit.Query(5000, null, null, null, null, null).Length == audited, "纸娃娃只读，不写审计");
 
-        stop.Cancel();
-        await server.WaitAsync(TimeSpan.FromSeconds(10));
+        var slowReaders = new List<TcpClient>();
+        try
+        {
+            for (int index = 0; index < 400; index++)
+                capture.Write(21, false, true, Network.GameFrame.Build(0, 2, 0, new byte[4096]));
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            for (int index = 0; index < 8; index++)
+            {
+                var client = new TcpClient { ReceiveBufferSize = 512 };
+                slowReaders.Add(client);
+                await client.ConnectAsync(IPAddress.Loopback, port, deadline.Token);
+                await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(
+                    $"GET /api/packets HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"), deadline.Token);
+                using var reader = new StreamReader(client.GetStream(), Encoding.ASCII, false, 1024, leaveOpen: true);
+                TestCheck.That((await reader.ReadLineAsync(deadline.Token))?.Contains("200") == true,
+                    "慢读者已开始获取有界抓包响应");
+            }
+            TestCheck.That((await http.GetAsync("/api/packets")).StatusCode == HttpStatusCode.ServiceUnavailable,
+                "八个慢读者占满后不排无界查询队列，明确返回503");
+            TestCheck.That((await http.GetAsync("/api/status")).IsSuccessStatusCode,
+                "抓包响应慢读不占用其他GM查询入口");
+            stop.Cancel();
+            await server.WaitAsync(TimeSpan.FromSeconds(3));
+            TestCheck.That(server.IsCompletedSuccessfully, "服务取消立即结束抓包写入并排空请求，不等待十秒超时");
+        }
+        finally
+        {
+            stop.Cancel();
+            foreach (var client in slowReaders) client.Dispose();
+            await server.WaitAsync(TimeSpan.FromSeconds(10));
+        }
         Directory.Delete(directory, true);
         Console.WriteLine($"PASS {TestCheck.Count - before} GM 网页站点接口、写操作校验与审计断言");
     }

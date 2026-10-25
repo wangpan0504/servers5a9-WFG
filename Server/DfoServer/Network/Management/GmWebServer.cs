@@ -51,7 +51,8 @@ internal interface IGmWebData
 // 写接口须带 X-GM-Request 头和 confirm=true，Origin 若存在必须同源，每次写操作写审计。
 internal static partial class GmWebServer
 {
-    public static async Task RunAsync(int port, IGmWebData data, CancellationToken stop)
+    public static async Task RunAsync(int port, IGmWebData data, CancellationToken stop,
+        PacketCapture? capture = null, ServerOptions? options = null)
     {
         if (port is < 1 or > 65535)
             throw new InvalidDataException("Invalid GM web port");
@@ -65,7 +66,10 @@ internal static partial class GmWebServer
             kestrel.Listen(IPAddress.Loopback, port, listen => listen.Protocols = HttpProtocols.Http1);
         });
         await using var app = builder.Build();
+        using var packetRequests = new SemaphoreSlim(8, 8);
         Map(app, data);
+        if (capture is not null && options is not null)
+            MapPacketQueries(app, capture, options, data.Status().StartedAt, packetRequests, stop);
         await app.StartAsync(stop);
         try { await Task.Delay(Timeout.Infinite, stop); }
         catch (OperationCanceledException) { }

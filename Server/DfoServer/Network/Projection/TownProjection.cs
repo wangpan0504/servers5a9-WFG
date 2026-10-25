@@ -15,7 +15,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
     SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
-    CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null,
+    CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null,
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
@@ -194,27 +194,28 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         {
             if (!CanSend())
                 return null;
-            presence?.Remove(context.Sender, departure, prepare);
-            return context.Sender.ClearScene();
+            // 旧区域仅移除地图实体，保留Actor及队伍引用；真正离线/换角仍使用完整清理。
+            presence?.Remove(context.Sender, departure, prepare, TownPackets.Position(receipt.Character, true));
+            return context.Sender.ClearScene(SceneActorClear.Preserve);
         });
         if (detached is null)
             return;
         await detached;
         await TrainingSkillsAsync(context, canSend: CanSend);
         await LocationAsync(context, receipt.Character, canSend: CanSend);
-        context.Owner.Execute(() =>
+        bool joined = context.Owner.Execute(() =>
         {
-            if (CanSend())
-            {
-                presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel, context.Session.ReadAdventureName());
-                if (arrival is not null)
-                    presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.SHOW_EFFECT, arrival, "teleport_aura_arrival_peer");
-            }
+            if (!CanSend()) return false;
+            presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel, context.Session.ReadAdventureName());
+            if (arrival is not null)
+                presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.SHOW_EFFECT, arrival, "teleport_aura_arrival_peer");
             return true;
         });
         // Join已排入远端Actor/区域入场；本人和同屏接收者都在目标角色建立后才收到到达特效。
         if (arrival is not null)
             await context.Notify(NotiPacketType.SHOW_EFFECT, arrival, "teleport_aura_arrival", CanSend);
+        if (joined && CanSend() && parties is not null)
+            parties.Publish(parties.SceneChanged(context.Session));
     }
 
     // 在地区切换触发客户端训练对象绑定前，先给出独立技能快照；不覆盖普通 NOTI19 双树。
@@ -234,22 +235,24 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
 
     public async Task ReturnToSelectionAsync(GameConnectionContext context, Func<bool>? canReturn = null)
     {
-        Game.Parties.SingleMemberParty? departedParty = null;
+        DfoServer.Game.Party.PartySnapshot? departedParty = null;
         long returnedEpoch = 0;
         bool returning = context.Owner.Execute(() =>
         {
             if (canReturn?.Invoke() == false) return false;
-            departedParty = context.Session.ReadSoloParty();
+            departedParty = parties?.Current(context.Session);
             context.Session.ReturnToRoster();
             returnedEpoch = context.Session.SelectionEpoch;
             context.Activity?.Reset();
             return true;
         });
         if (!returning) return;
+        parties?.Detach(context.Session);
         await DetachAsync(context);
         if (departedParty is not null)
-            await context.Notify(NotiPacketType.PARTY_INFO, PartyPackets.Cleared(departedParty.Id, context.Channel), "solo_party_return_selection",
-                () => context.Session.Selected is null && context.Session.SelectionEpoch == returnedEpoch);
+            await context.Notify(NotiPacketType.PARTY_INFO, PartyPackets.Information(departedParty.Id,
+                context.Channel.ServerIndex, checked((byte)context.Channel.Number), [], departedParty.Leader, true),
+                "party_return_selection", () => context.Session.Selected is null && context.Session.SelectionEpoch == returnedEpoch);
         context.RosterRequested = true;
         context.SelectionRosterPushed = true;
         await context.Reply(CmdPacketType.RETURN_SELECT_CHARACTER, SessionPackets.ReturnToSelection(), "return_selection_ack");
