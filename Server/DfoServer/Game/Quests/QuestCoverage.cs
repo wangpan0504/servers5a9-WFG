@@ -333,7 +333,7 @@ internal static class QuestCoverage
                     {
                         if (CurrencyWallet.RewardKind(id) is { } kind)
                         {
-                            if (gift || ItemSlotBoundService.CurrencySlot(kind) is null)
+                            if (gift || (consume ? ItemSlotBoundService.CurrencySlot(kind) is null : !QuestCurrencyReward.CanProject(kind)))
                                 reasons.Add(gift ? "钱包接取赠品投影尚未接入" : "此钱包没有已确认的普通背包持有域");
                             return;
                         }

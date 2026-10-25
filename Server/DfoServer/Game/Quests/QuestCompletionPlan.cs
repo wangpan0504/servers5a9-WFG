@@ -19,7 +19,12 @@ internal sealed record QuestCompletionPreparation(QuestCompletionOutcome Outcome
 }
 internal sealed record QuestPlannedItemReward(InventorySlot Position, ItemCore Core, int GrantedCount, long ExpectedDestinationUid);
 internal sealed record QuestConsumedItem(InventorySlot Position, long Uid, int ItemId, int Count);
-internal sealed record QuestCurrencyReward(CurrencyKind Kind,int ItemId,int Count);
+internal sealed record QuestCurrencyReward(CurrencyKind Kind,int ItemId,int Count)
+{
+    // 现金没有Main槽；已提交的三个余额由原生53统一投影，不伪造奖励物品实例。
+    public static bool HasBalanceNotice(CurrencyKind kind) => kind is CurrencyKind.Cera or CurrencyKind.TokenCera or CurrencyKind.HappyTokenCera;
+    public static bool CanProject(CurrencyKind kind) => ItemSlotBoundService.CurrencySlot(kind) is not null || HasBalanceNotice(kind);
+}
 
 // 没有在线状态或提交能力；原角色、稳定clear和全部奖励候选由同一Session/Repository事务接管。
 internal sealed class QuestCompletionPlan
@@ -465,7 +470,7 @@ internal sealed class QuestCompletionPlan
                 return new(QuestCompletionOutcome.InsufficientSpace, null, "奖励无法整批进入持有域")
                     { Failure = grant.Error == 17 ? QuestCompletionFailure.InventoryCapacity : QuestCompletionFailure.InventoryUnsupported };
             var after = grant.Plan.After;
-            if (grant.Plan.ChangedCurrencies.Any(kind => ItemSlotBoundService.CurrencySlot(kind) is null) || grant.Plan.ChangedEpicPieces.Length != 0 ||
+            if (grant.Plan.ChangedCurrencies.Any(kind => !QuestCurrencyReward.CanProject(kind)) || grant.Plan.ChangedEpicPieces.Length != 0 ||
                 grant.Plan.ChangedSlots.Any(slot => slot.List != InventoryListType.Main &&
                     !(slot.List == InventoryListType.Pet && after.Find(slot) is { Core.Kind: ItemKind.Creature, Creature: not null })))
                 throw new NotSupportedException("任务特殊持有域奖励尚未确认");
@@ -489,7 +494,7 @@ internal sealed class QuestCompletionPlan
                 {
                     if (currencies.Any(row => row.Kind == currency)) continue;
                     int amount = requested.Where(row => CurrencyWallet.RewardKind(row.ItemId) == currency).Sum(row => row.Count);
-                    if (ItemSlotBoundService.CurrencySlot(currency) is null || CurrencyWallet.Get(after,currency)-CurrencyWallet.Get(paid,currency) != amount)
+                    if (!QuestCurrencyReward.CanProject(currency) || CurrencyWallet.Get(after,currency)-CurrencyWallet.Get(paid,currency) != amount)
                         throw new InvalidDataException("任务钱包奖励无法完整接纳");
                     currencies.Add(new(currency,currency == CurrencyKind.ReviveCoin ? 1 : id,amount));
                     continue;
@@ -505,7 +510,7 @@ internal sealed class QuestCompletionPlan
                 if (total != requested.Where(row => row.ItemId == id).Sum(row => row.Count))
                     throw new InvalidDataException("奖励增量与资源整批数量不同");
             }
-            if (rewards.Count + currencies.Count + (gold == 0 ? 0 : 1) > byte.MaxValue)
+            if (rewards.Count + currencies.Count(row => !QuestCurrencyReward.HasBalanceNotice(row.Kind)) + (gold == 0 ? 0 : 1) > byte.MaxValue)
                 throw new NotSupportedException("任务奖励投影超过本版容量");
             CharacterGrowthPlan? growth = null;
             if (experience.Amount != 0)
