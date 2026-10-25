@@ -77,7 +77,7 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
         if (definition.Type == Type)
         {
             var weapon = Weapon(token.Core.EnchantCardId);
-            if (weapon is null || !CanWear(character, weapon, now.ToUnixTimeSeconds()) ||
+            if (weapon is null || !SupportsCharacter(character, weapon) ||
                 state.Owned.Length == ushort.MaxValue || state.Owned.Contains(weapon.Id))
                 return InventoryResult.Reject(3) with { RejectReason = "weapon_skin_unavailable_or_owned" };
             state = state with { Owned = state.Owned.Add(weapon.Id) };
@@ -147,14 +147,14 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
                 new(character, font is { ExpiresAt: > 0 } ? font.ExpiresAt : null, Clock)));
         }
         if (request.Type != Type || request.SkinId != 0 && (!state.Owned.Contains(request.SkinId) ||
-            Weapon(request.SkinId) is not { } weapon || !CanWear(character, weapon, Clock.GetUtcNow().ToUnixTimeSeconds())))
+            Weapon(request.SkinId) is not { } weapon || !SupportsCharacter(character, weapon)))
             return InventoryResult.Reject(19);
         return new(true, 0, new(character.Inventory, character.Inventory with
             { Skins = state with { Selected = request.SkinId } }, "weapon_skin_select", new(character, null, Clock)));
     }
 
     public int EffectiveSelection(Character character) => character.Inventory.Skins.Selected is var id && id != 0 &&
-        Weapon(id) is { } weapon && CanWear(character, weapon, Clock.GetUtcNow().ToUnixTimeSeconds()) ? id : 0;
+        Weapon(id) is { } weapon && SupportsCharacter(character, weapon) ? id : 0;
 
     public SkinStorageState View(Character character)
     {
@@ -196,12 +196,16 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
 
     ItemTemplate? Weapon(int id)
     {
-        if (!skins.Weapons.ContainsKey(id) || !items.Contains(id)) return null;
+        if (!items.Contains(id)) return null;
         try { return items.Get(id) is { Kind: ItemKind.Equipment, EquipmentSlot: 12 } weapon ? weapon : null; }
         catch (InvalidDataException) { return null; }
     }
 
-    bool CanWear(Character character, ItemTemplate weapon, long now) => weapon is { Kind: ItemKind.Equipment, EquipmentSlot: 12 } &&
-        (weapon.Jobs & (1 << character.Job)) != 0 && InventoryMoveService.WearLevelSatisfied(character, weapon, now, contracts) &&
+    // 外观按职业匹配，不继承原武器的佩戴等级和技能门槛。
+    internal static bool SupportsCharacter(Character character, ItemTemplate weapon) => weapon is { Kind: ItemKind.Equipment, EquipmentSlot: 12 } &&
+        character.Job < 16 && (weapon.Jobs & (1 << character.Job)) != 0;
+
+    bool CanWear(Character character, ItemTemplate weapon, long now) => SupportsCharacter(character, weapon) &&
+        InventoryMoveService.WearLevelSatisfied(character, weapon, now, contracts) &&
         InventoryMoveService.RequiredSkillSatisfied(character, weapon);
 }

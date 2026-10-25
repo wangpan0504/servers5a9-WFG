@@ -47,6 +47,12 @@ internal static class WeaponSkinTcpTests
                 Level = 75, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
                 Inventory = new([Weapon(9), Material(121, 490704411, 1), Material(122, 490704427, 1)])
             });
+            repo.Create(owner, new("SkinNovice", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0, Level = 1, AcceptedStoryLevel = 1,
+                Inventory = new([new(0, new(InventoryListType.Main, 65),
+                    InventoryRewardGrantService.Create(assets.Items.Get(490012391)) with { EnchantCardId = 101040572 })])
+            });
         }
         string beforeUpgrade = fixture.Snapshot("SELECT id,revision,job,level,gold FROM characters ORDER BY id") + Assets();
         fixture.Sql("ALTER TABLE characters DROP COLUMN weapon_skin_state; PRAGMA user_version=66;");
@@ -158,7 +164,20 @@ internal static class WeaponSkinTcpTests
             peer.Expect(1, 515, [0, 3, 0, 65, 0, 0, 199]);
             peer.Barrier();
             That(JsonSerializer.Deserialize<SkinStorageState>((string)fixture.Query("SELECT weapon_skin_state FROM characters WHERE id=2")[0][0])!.Owned.IsEmpty,
-                "秘传模具可制作其他职业的账号绑定券，使用入库仍核对接收角色可佩戴资格");
+                "秘传模具可制作其他职业的账号绑定券，使用入库仍核对接收角色的职业");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2);
+            Use(peer, 65);
+            peer.Expect(1, 515, [1, 65, 0, 0, 199, 0, 0, 0]);
+            peer.Expect(0, 1557, Build(w => { w.Write((byte)4); w.Write((ushort)1); w.Write(101040572); }));
+            peer.Expect(0, 1559, Build(w => { w.Write((byte)1); w.Write((byte)4); w.Write(101040572); }));
+            Select(peer, 101040572);
+            peer.Expect(1, 1573, SelectionAck(101040572));
+            That(U32(peer.Expect(0, 2).Body, 115) == 101040572, "1级剑士入库及选择65级光剑外观，ACK后立即投影Actor");
+            peer.Barrier();
+            That(State(3).Selected == 101040572, "低等级外观取得与选择沿原库存事务持久化");
         }
         using (var peer = Open(fixture))
         {
@@ -257,6 +276,12 @@ internal static class WeaponSkinTcpTests
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
+            peer.Select(2, weaponSkins: ([101040572], 101040572));
+            peer.Barrier();
+            That(State(3).Selected == 101040572, "服务重建与重选角色不因原武器等级或技能门槛清空已选外观");
+        }
+        using (var peer = Open(fixture))
+        {
             peer.Select(weaponSkins: ([32000],0),damageFonts:([savedFonts.Single(row=>row.SkinId==8)],1),
                 cutscenes:([savedCutscenes.Single(row=>row.SkinId==30069)],[30000,30069]));
             peer.Expect(0,1557,Build(w=>
@@ -288,7 +313,8 @@ internal static class WeaponSkinTcpTests
         long Uid(short slot) => Convert.ToInt64(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=1 AND list_type=0 AND slot_index=$p0", slot)[0][0]);
         ItemCore Core(short slot) => JsonSerializer.Deserialize<ItemCore>((string)fixture.Query(
             "SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", Uid(slot))[0][0])!;
-        SkinStorageState State() => JsonSerializer.Deserialize<SkinStorageState>((string)fixture.Query("SELECT weapon_skin_state FROM characters WHERE id=1")[0][0])!;
+        SkinStorageState State(int characterId = 1) => JsonSerializer.Deserialize<SkinStorageState>((string)fixture.Query(
+            "SELECT weapon_skin_state FROM characters WHERE id=$p0", characterId)[0][0])!;
         string Snapshot() => fixture.Snapshot("SELECT revision,gold,weapon_skin_state FROM characters ORDER BY id") + Assets();
         string Assets() => fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") +
             fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY item_uid") +

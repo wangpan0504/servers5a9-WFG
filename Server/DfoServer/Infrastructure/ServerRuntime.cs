@@ -468,15 +468,15 @@ internal static class ServerRuntime
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;
-        Func<CancellationToken, Task>? gmWeb = options.GmWebPort == 0 ? null : stop => GmWebServer.RunAsync(options.GmWebPort,
+        Func<PacketCapture?, CancellationToken, Task>? gmWeb = options.GmWebPort == 0 ? null : (capture, stop) => GmWebServer.RunAsync(options.GmWebPort,
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
-                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows), stop);
+                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows), stop, capture, options);
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
-        Func<CancellationToken, Task>? management = gmCommands is null && gmWeb is null ? null : RunManagement;
+        Func<PacketCapture?, CancellationToken, Task>? management = gmCommands is null && gmWeb is null ? null : RunManagement;
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
         return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache);
 
-        async Task RunManagement(CancellationToken stop)
+        async Task RunManagement(PacketCapture? capture, CancellationToken stop)
         {
             using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
             var running = new List<Task>();
@@ -487,7 +487,7 @@ internal static class ServerRuntime
                 // 仅在管理入口真正启动时预热；装配或前置监听失败不留下后台资源读取。
                 developmentCatalog.StartWarmup();
                 if (gmCommands is not null) running.Add(gmCommands(lifetime.Token));
-                if (gmWeb is not null) running.Add(gmWeb(lifetime.Token));
+                if (gmWeb is not null) running.Add(gmWeb(capture, lifetime.Token));
                 await await Task.WhenAny(running);
             }
             catch (Exception error)

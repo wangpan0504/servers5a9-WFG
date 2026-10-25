@@ -47,6 +47,17 @@ internal static class WeaponSkinTests
         That(core.Length == 123 && BinaryPrimitives.ReadInt32LittleEndian(core.AsSpan(14)) == 32000 &&
             BinaryPrimitives.ReadInt32LittleEndian(core.AsSpan(6)) == 1, "外观券来源复用STK的14偏移，数量仍为1，不套用装备品级");
 
+        var appearanceWeapon = new ItemTemplate(1, ItemKind.Equipment, 12, 95, 0, 1, 0, 3, 95, "[trade]", 1 << 2, 65535, "Test gun");
+        var novice = new Character(1, 0, "SkinLow", 0, new(1, 0, 1, 1), null) { Job = 2, Level = 1, Skills = [] };
+        That(!InventoryMoveService.WearLevelSatisfied(novice, appearanceWeapon, 1800000000) &&
+            !InventoryMoveService.RequiredSkillSatisfied(novice, appearanceWeapon) &&
+            InventorySkinStorageService.SupportsCharacter(novice, appearanceWeapon),
+            "外观仅匹配职业，等级与技能不满足普通武器佩戴时仍有外观资格");
+        That(!InventorySkinStorageService.SupportsCharacter(novice with { Job = 0 }, appearanceWeapon) &&
+            !InventorySkinStorageService.SupportsCharacter(novice, appearanceWeapon with { EquipmentSlot = 14 }) &&
+            !InventorySkinStorageService.SupportsCharacter(novice, appearanceWeapon with { Kind = ItemKind.Avatar }),
+            "职业不符、非武器和武器装扮不能借普通武器外观资格放行");
+
         string[] strings = ["[make enchanted skin]", "[recipe]", "[enchanted result]", "[material]", "fixed",
             "[/material]", "[/recipe]", "[/make enchanted skin]", "LV.1 Test"];
         PvfToken[] tokens = [new(3, 0), new(3, 1), new(0, 7), new(3, 2), new(0, 7001), new(3, 3),

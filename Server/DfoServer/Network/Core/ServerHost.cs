@@ -9,7 +9,7 @@ using DfoServer.Network.Management;
 namespace DfoServer.Network;
 
 internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol,
-    Func<CancellationToken, Task>? runManagement, Func<OnlineCharacterView[]> onlineCharacters, Action onStarted, ServerLog log, GameChannelListeners gameChannels,
+    Func<PacketCapture?, CancellationToken, Task>? runManagement, Func<OnlineCharacterView[]> onlineCharacters, Action onStarted, ServerLog log, GameChannelListeners gameChannels,
     Protocol.NativeChannel? native = null, IDisposable? runtimeMemory = null)
 {
     readonly ConcurrentDictionary<int, Task> active = new();
@@ -19,8 +19,9 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
     {
         using var ownedRuntimeMemory = runtimeMemory;
         Directory.CreateDirectory(options.LogDirectory);
-        using var packetCapture = options.PacketCaptureDirectory is not null || options.PacketHttpPort != 0
-            ? new PacketCapture(options.PacketCaptureDirectory, retainRecent: options.PacketHttpPort != 0) : null;
+        bool retainPackets = options.PacketHttpPort != 0 || options.GmWebPort != 0;
+        using var packetCapture = options.PacketCaptureDirectory is not null || retainPackets
+            ? new PacketCapture(options.PacketCaptureDirectory, retainRecent: retainPackets) : null;
         capture = packetCapture;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop);
         var channel = new TcpListener(IPAddress.Parse(options.ListenAddress), options.ChannelPort);
@@ -33,7 +34,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             channel.Start();
             starting = "GM listener";
             if (runManagement is not null)
-                gm = runManagement(lifetime.Token);
+                gm = runManagement(packetCapture, lifetime.Token);
             if (gm.IsFaulted) await gm;
             starting = "Packet HTTP listener";
             if (options.PacketHttpPort != 0)
@@ -50,6 +51,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
                 Native = native is null ? "disabled" : native.Listener.LocalEndpoint.ToString(),
                 Gm = options.GmPort == 0 ? "disabled" : $"127.0.0.1:{options.GmPort}",
                 GmWeb = options.GmWebPort == 0 ? "disabled" : $"127.0.0.1:{options.GmWebPort}",
+                GmPacketQueries = options.GmWebPort == 0 ? "disabled" : $"http://127.0.0.1:{options.GmWebPort}/api/packets",
                 PacketHttp = options.PacketHttpPort == 0 ? "disabled" : $"127.0.0.1:{options.PacketHttpPort}",
                 PacketCapture = packetCapture?.IsEnabled == true ? options.PacketCaptureDirectory : "disabled",
                 ServiceLog = Path.Combine(options.LogDirectory, "server.jsonl") });
