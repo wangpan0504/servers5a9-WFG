@@ -30,11 +30,16 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     public bool UnsealsRandomOptions { get; init; }
     public bool SetsDisjointInstanceType { get; init; }
     public bool SetsEpicExchangeInstanceType { get; init; }
+    // 休亚商店在售的选组礼盒：PVF 没写交换声明，但产物同样是在休亚处兑换来的。
+    public bool FromExchangeShop { get; init; }
+    // 产物装备一律带交换资格位；随机奖池与固定礼包不在支持范围内。
+    public bool GrantsEpicExchangeOrigin => SetsEpicExchangeInstanceType || (FromExchangeShop && Selection is not null);
     public byte? DailyRetainedLimit { get; init; }
     public bool Available => PendingRule is null && (Pools.Length != 0 || Selection is not null || !PackageRewards.IsDefaultOrEmpty);
 }
 
-internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
+internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable,
+    FrozenSet<int>? exchangeShopStock = null)
 {
     readonly ConcurrentDictionary<int, BoosterDefinition> definitions = new();
     readonly ConcurrentDictionary<int, BoosterUsePlacesDefinition> usePlaces = new();
@@ -56,8 +61,10 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         !path.StartsWith("ect/event", StringComparison.OrdinalIgnoreCase) &&
         !path.StartsWith("ect/quest", StringComparison.OrdinalIgnoreCase) && Get(itemId) is { Lottery: true, NpcPocketPot: true };
 
+    // 商店来源只在运行时按在售编号补上：同款礼盒在 PVF 内不带交换声明，判定只依赖商人库存。
     public BoosterDefinition Get(int itemId) => definitions.GetOrAdd(itemId, id => stackable.TryGetValue(id, out string? path)
-        ? Parse(archive.ReadText("stackable/" + path)) : new([], "非礼包物品"));
+        ? Parse(archive.ReadText("stackable/" + path)) with { FromExchangeShop = exchangeShopStock?.Contains(id) == true }
+        : new([], "非礼包物品"));
 
     internal static BoosterDefinition Parse(string text)
     {

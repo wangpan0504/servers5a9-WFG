@@ -35,6 +35,7 @@ internal static class BoosterEpicExchangeTests
         That(JsonSerializer.Deserialize<ItemCore>(JsonSerializer.Serialize(special)) == special,
             "完整Core JSON重载保留版本化来源，旧JSON不反推来源");
         That(!HasOrigin(ordinary), "未记录来源的旧实例保持未知，不按泰波尔斯模板补标");
+        That(special.Extension119 == 0, "旧来源记录不自动回填交换实例位");
         foreach (var (version, source) in new[] { (0, SourceId), (2, SourceId), (1, 0), (1, -1) })
             Reject<InvalidDataException>(() => WithOrigin(ordinary, version, source).Validate(),
                 "来源未知版本或非正源编号不能进入合法Core");
@@ -52,6 +53,15 @@ internal static class BoosterEpicExchangeTests
         That(AuctionPackets.ItemBlock(saved, (int)ItemKind.Equipment).SequenceEqual(
             AuctionPackets.ItemBlock(legacy, (int)ItemKind.Equipment)) && Wire(special).SequenceEqual(Wire(ordinary)),
             "拍卖物品块与背包wire均不泄漏服务端来源trailer");
+        var stamped = ordinary with { Extension119 = 0x01 };
+        byte[] instanceEntry = AuctionPackets.ItemEntrySnapshot(stamped);
+        byte[] stampedWire = Wire(stamped);
+        byte[] plainWire = Wire(ordinary);
+        That(instanceEntry.Length == 123 && AuctionPackets.ItemCoreFromEntry(instanceEntry, ItemKind.Equipment) == stamped,
+            "交换实例位随123B拍卖快照往返");
+        That(stampedWire.Length == plainWire.Length && stampedWire.Zip(plainWire).Count(pair => pair.First != pair.Second) == 1 &&
+            stampedWire.Where((value, index) => plainWire[index] != value).Single() == 0x01,
+            "交换实例位在背包wire上只改一字节，不移动其他字段");
         foreach (byte[] broken in new[] { legacy.Concat(new byte[1]).ToArray(), saved[..^1], saved.Concat(new byte[1]).ToArray() })
             Reject<InvalidDataException>(() => AuctionPackets.ItemCoreFromEntry(broken, ItemKind.Equipment),
                 "非旧123B或完整135B快照拒绝，不截断丢来源");
@@ -83,6 +93,7 @@ internal static class BoosterEpicExchangeTests
             ItemSlotBoundService.Allows(InventorySnapshot.Empty, Bag(65), sourceTemplate.Kind),
             "源盒真实类型、堆叠上限与快捷/消耗品哨兵槽合法");
         RunMarkerRewardBoundary(towns, resources, now);
+        RunShopSelection(towns, resources, now);
         var expected = Expected();
         var seen = new HashSet<int>();
         int rows = 0, empty = 0;
@@ -115,7 +126,8 @@ internal static class BoosterEpicExchangeTests
                         var after = opened.Plan!.After;
                         var reward = after.Items.Single(item => item.Core.ItemId == id);
                         AssertOrigin(reward.Core, "每个真实奖励保留飞跃来源 " + id);
-                        That(JsonWithoutOrigin(reward.Core) == JsonWithoutOrigin(Core(id)) && reward.Uid == 0 &&
+                        That(reward.Core.Extension119 == 0x01, "每个真实奖励投影交换资格位且次数为0 " + id);
+                        That(JsonWithoutInstance(reward.Core) == JsonWithoutInstance(Core(id)) && reward.Uid == 0 &&
                             reward.Avatar is null && reward.Creature is null &&
                             after.Find(Bag(3)) is { Uid: 1, Core.Count: 1 } &&
                             after.Find(Bag(65)) == role.Inventory.Find(Bag(65)) && after.Items.Length == 3 && after.Gold == 12345 &&
@@ -210,8 +222,10 @@ internal static class BoosterEpicExchangeTests
         definitions[SourceId] = BoosterCatalog.Parse(MarkerBox("[name]\n`[set epic exchange instance type]`\n"));
         var ordinary = service.Open(role, Select([SampleId]), out var ordinaryReceipt, now);
         That(ordinary.Accepted && ordinaryReceipt is not null &&
-            !HasOrigin(ordinary.Plan!.After.Items.Single(item => item.Core.ItemId == SampleId).Core) && JsonSerializer.Serialize(role) == before,
-            "字符串内标签不是实际声明，经真实Open发普通实例且不补来源");
+            !HasOrigin(ordinary.Plan!.After.Items.Single(item => item.Core.ItemId == SampleId).Core) &&
+            ordinary.Plan.After.Items.Single(item => item.Core.ItemId == SampleId).Core.Extension119 == 0 &&
+            JsonSerializer.Serialize(role) == before,
+            "字符串内标签不是实际声明，经真实Open发普通实例且不补来源或资格位");
         definitions[SourceId] = BoosterCatalog.Parse(MarkerBox(Marker + "[usable first growtype]\n3 4\n[/usable first growtype]\n"));
         foreach (byte branch in new byte[] { 0, 2 })
         {
@@ -225,7 +239,7 @@ internal static class BoosterEpicExchangeTests
             var eligible = role with { GrowType = branch };
             var opened = service.Open(eligible, Select([SampleId]), out var receipt, now);
             var expected = InventoryRewardGrantService.Create(resources.Items.Get(SampleId), utcNow: now) with
-                { EpicExchangeOrigin = new(1, SourceId) };
+                { EpicExchangeOrigin = new(1, SourceId), Extension119 = 0x01 };
             That(opened.Accepted && receipt is { Rewards: [{ ItemId: SampleId, Count: 1 }] } &&
                 opened.Plan!.After.Find(Bag(3)) is null &&
                 opened.Plan.After.Items.Single(item => item.Core.ItemId == SampleId).Core == expected &&
@@ -234,6 +248,36 @@ internal static class BoosterEpicExchangeTests
                 JsonSerializer.Serialize(role) == before,
                 "合法首转与觉醒分支领取完整来源装备，旧计划不绑定转职后的角色 " + branch);
         }
+    }
+
+    // 休亚在售的套装礼盒在 PVF 里没有交换声明，产物同样按“休亚处兑换”记资格。
+    static void RunShopSelection(TownCatalog towns, ItemResources resources, DateTimeOffset now)
+    {
+        const int BoxId = 10305621;
+        const int ProductId = 100200637;
+        var items = resources.Items;
+        var service = new InventoryBoosterService(items, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        That(resources.Shops.Stock(EpicExchangeCatalog.MerchantNpcId).Contains(BoxId) &&
+            resources.Shops.Allows(EpicExchangeCatalog.MerchantNpcId, 247, BoxId) &&
+            resources.Items.Get(BoxId).ShopPrice.Materials.Length == 2,
+            "Shua stock sells the set selection box for two materials");
+        var definition = resources.Boosters.Get(BoxId);
+        That(!definition.SetsEpicExchangeInstanceType && definition.FromExchangeShop && definition.GrantsEpicExchangeOrigin &&
+            definition.Available && definition.Selection is { SelectionCount: 1 } selection &&
+            selection.Categories.Single() is { Category: 0, Subcategory: 0 } category &&
+            category.Rewards.Select(row => row.ItemId).SequenceEqual(new[] { 100150662, 100050792, 100100693, 100200637, 100250656 }),
+            "unmarked shop box grants exchange origin from merchant stock alone");
+        That(!resources.Boosters.Get(SourceId).FromExchangeShop, "event growth box is not a shop-sold box");
+        var box = new InventoryItem(1, Bag(3), InventoryRewardGrantService.Create(items.Get(BoxId), utcNow: now));
+        // 真实礼盒模板 [minimum level] 95，角色等级不足会在开箱前被正常拒绝。
+        var role = new Character(1, 0, "ShopBox", 0, towns.Room, towns.InitialReturn) { Level = 95, Inventory = new([box]) };
+        var opened = service.Open(role, new BoosterOpenRequest(3, 1, new(0, 0, [ProductId])), out var receipt, now);
+        var expected = InventoryRewardGrantService.Create(items.Get(ProductId), utcNow: now) with
+            { EpicExchangeOrigin = new(1, BoxId), Extension119 = 0x01 };
+        That(opened.Accepted && opened.Plan!.After.Find(Bag(3)) is null &&
+            opened.Plan.After.Items.Single(item => item.Core.ItemId == ProductId).Core == expected &&
+            receipt is { Rewards: [{ ItemId: ProductId, Count: 1 }] },
+            "opening the shop box stamps the product with the exchange bit and the box as origin");
     }
 
     static void RunPersistence(TownCatalog towns, ItemResources resources, InventoryBoosterService service, DateTimeOffset now)
@@ -266,7 +310,8 @@ internal static class BoosterEpicExchangeTests
             var current = session.Selected!;
             var reward = current.Inventory.Items.Single();
             AssertOrigin(reward.Core, "真实落库奖励保留来源");
-            That(reward.Uid > 0 && reward.Core.ItemId == SampleId && current.Inventory.Find(Bag(3)) is null && current.Inventory.Gold == 12345 &&
+            That(reward.Uid > 0 && reward.Core.ItemId == SampleId && reward.Core.Extension119 == 0x01 &&
+                current.Inventory.Find(Bag(3)) is null && current.Inventory.Gold == 12345 &&
                 JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single()) == JsonSerializer.Serialize(current),
                 "完整来源重开Repository恢复且源只消费一次");
             Reject<InvalidOperationException>(() => repo.CommitInventory(owner, saved, stale), "旧revision来源计划不能二次发奖");
@@ -330,6 +375,14 @@ internal static class BoosterEpicExchangeTests
     {
         var json = JsonNode.Parse(JsonSerializer.Serialize(core))!.AsObject();
         json.Remove(OriginProperty);
+        return json.ToJsonString();
+    }
+    // 来源与实例位是本次新增的两项差异，其余完整核心必须与普通创建逐字段相同。
+    static string JsonWithoutInstance(ItemCore core)
+    {
+        var json = JsonNode.Parse(JsonSerializer.Serialize(core))!.AsObject();
+        json.Remove(OriginProperty);
+        json.Remove(nameof(ItemCore.Extension119));
         return json.ToJsonString();
     }
     static byte[] Wire(ItemCore core)

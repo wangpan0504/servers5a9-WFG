@@ -309,6 +309,7 @@ internal static class SelfTestRunner
         DisjointTests.Run(towns, characters, itemResources);
         AvatarDisjointTests.RunResources(towns, itemResources);
         EpicPieceTests.Run(towns, characters, itemResources);
+        EpicExchangeTests.Run(towns, characters, itemResources);
         MaterialExchangeTests.Run(towns, characters, itemResources);
         BoosterTests.Run(towns, characters, itemResources);
         BoosterSelectionTests.Run(towns, characters, itemResources);

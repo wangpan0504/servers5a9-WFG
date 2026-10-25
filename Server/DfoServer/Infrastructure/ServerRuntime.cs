@@ -373,6 +373,9 @@ internal static class ServerRuntime
             new AvatarDisjointHandler(new InventoryAvatarDisjointService(itemResources.Items, itemResources.AvatarDisjoint,
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
+            // 原生史诗交换：CMD1569，配置 etc/epicitemexchange.etc，回执同 opcode 0x621。
+            new EpicExchangeHandler(new EpicExchangeService(itemResources.EpicExchanges, itemResources.Items,
+                itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             // 设计图升级：CMD271，材料与产物来自设计图自身的 [emancipate group]。
             new UpgradeChronicleHandler(new InventoryUpgradeChronicleService(itemResources.UpgradeChronicles, itemResources.Items,
                 itemResources.EpicPieces, clock), inventoryProjection),
