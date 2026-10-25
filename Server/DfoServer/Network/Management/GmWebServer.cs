@@ -134,6 +134,7 @@ internal static partial class GmWebServer
                 "stats" => $"account {account} stats {name}",
                 "skill-list" => $"account {account} skill-list {name}",
                 "equip-slots" => $"account {account} equip-slots {name}",
+                "expert-job" => $"account {account} expert-job {name}",
                 "titles" when q is null || Keyword(q) => $"account {account} title-list {name} {q}".TrimEnd(),
                 "quest-search" when (q is null || Keyword(q) && !Regex.IsMatch(q, "(^| )(cat|st|job|page|size):")) && (category is null || category == "*" || Regex.IsMatch(category, "^[a-z]{1,16}$"))
                     && (status is null || status is "*" or "todo" or "active" or "done") && (job is null || job is "mine" or "any") =>
@@ -321,6 +322,22 @@ internal static partial class GmWebServer
             if (b.Branch is < 0 or > 5 || b.Awakening is < 0 or > 2) return Bad("分支或觉醒无效");
             return Run(http, data, "job", b.Account, b.Name, $"account {b.Account} grow {b.Name} {b.Branch} {b.Awakening}", $"account {b.Account} show {b.Name}");
         });
+        // 黑钻会员（契约类型 56）：账号级资格，与命令行 black-diamond 同一提交入口；天数 0 清空到期时间。
+        app.MapPost("/api/black-diamond", (HttpContext http, BlackDiamondBody b) =>
+        {
+            if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
+            if (b.Days is < 0 or > 3650) return Bad("黑钻天数须在 0–3650");
+            return Run(http, data, "black-diamond", b.Account, b.Name, $"account {b.Account} black-diamond {b.Name} {b.Days}", $"account {b.Account} wallet {b.Name}");
+        });
+        // 副职业类型与等级：等级按 PVF [expertness exp] 阈值换算成累计熟练度写入（1–11 级）。
+        app.MapPost("/api/expert-job", (HttpContext http, ExpertJobBody b) =>
+        {
+            if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
+            if (b.Type is < 1 or > 4) return Bad("副职业类型须为 1–4");
+            if (b.Level is < 1 or > 11) return Bad("副职业等级须在 1–11");
+            return Run(http, data, "expert-job", b.Account, b.Name,
+                $"account {b.Account} expert-job {b.Name} {b.Type} {b.Level}", $"account {b.Account} expert-job {b.Name}");
+        });
         app.MapGet("/api/characters/{account}/{name}/set/{index:int}", (string account, string name, int index) =>
         {
             if (!Token.IsMatch(account) || !Token.IsMatch(name) || index <= 0) return Bad("账号、角色或套装编号无效");
@@ -371,6 +388,8 @@ internal static partial class GmWebServer
     internal sealed record CurrencyBody(string Account, string Name, string Key, string Op, long Amount, bool? Confirm);
     internal sealed record LevelBody(string Account, string Name, int Level, bool? Confirm);
     internal sealed record JobBody(string Account, string Name, int Branch, int Awakening, bool? Confirm);
+    internal sealed record BlackDiamondBody(string Account, string Name, int Days, bool? Confirm);
+    internal sealed record ExpertJobBody(string Account, string Name, int Type, int Level, bool? Confirm);
     internal sealed record DebugBody(string Key, string Value, bool? Confirm);
 
     // 物品分页：page/pageSize（pageSize 1–200，默认 50）；兼容旧的 offset。命令偏移参数写成 "偏移/每页条数"。

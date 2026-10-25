@@ -163,7 +163,7 @@ python3 Tools/GmWeb/gm_web.py --self-check
 
 | 命令 | 说明 |
 | --- | --- |
-| `wallet <角色>` | 读取金币、复活币、胜点与账号级货币（点券、代币券、晶块、灵魂等） |
+| `wallet <角色>` | 读取金币、复活币、胜点、账号级货币（点券、代币券、晶块、灵魂等）及黑钻到期时间与是否有效 |
 | `currency <角色> <键> <set\|add\|sub> <数量>` | 修改单项货币；结果越出 0–2147483647 时整笔拒绝 |
 | `item-categories` / `item-search <偏移> <最低> <最高> <稀有度\|*> <分类\|*> [关键字]` | 按名称/ID、分类、等级、稀有度检索，每页 50 条 |
 | `grant <角色> <ID> <数量> <强化> <锻造> <mail\|direct>` | 邮件或直接入包；锻造只允许普通武器且不超过资源上限 |
@@ -224,6 +224,17 @@ python3 Tools/GmWeb/gm_web.py --self-check
 
 - `GET /api/characters/{account}/{name}/equip-slots`：只读，返回 `{ok, data:{name, rev, flags, added:0, changed:false, slots:{support, magicStone, earring, aura, creatureSkin}}}`。
 - `POST /api/equip-slots`，请求头 `X-GM-Request: 1`，JSON `{account, name, flags, returnFirst?, confirm:true}`。`flags` 只能是 1、2、3、16、17、18、19 之一（1/2/16 的组合），其他值返回 400。角色在游戏中时默认返回 400「角色正在游戏中」；`returnFirst=true` 先强制小退再执行，响应带 `returned:true`。成功 `data` 同上，`added` 为本次新开的位，`changed=false` 表示所选位早已开启。小退与开栏各写一条审计（动作 `force-return`、`equip-slots`）。
+
+## 黑钻会员（GM 网页接口）
+
+- `POST /api/black-diamond`，请求头 `X-GM-Request: 1`，JSON `{account, name, days, confirm:true}`；`days` 0–3650，0 表示清空该账号黑钻到期时间。与命令行 `black-diamond <角色> <天数>` 同一提交入口，写入账号钱包契约类型 56，账号下所有角色共享；天数按「现在 + 天数」覆盖到期时间，不是叠加。审计动作 `black-diamond`，前后摘要取 `wallet`。
+- `wallet <角色>` 的 JSON 增加 `blackDiamondExpiresAt`（Unix 秒）与 `blackDiamond`（当前是否有效）；网页“基础”钱包区与“快捷操作 → 黑钻会员”据此显示状态。
+
+## 副职业类型与等级（GM 网页接口）
+
+- 命令：`expert-job <角色>` 只读，返回 `{name, rev, type, typeLabel, expertness, level, maxLevel}`；`expert-job <角色> <类型1-4> <等级1-11>` 写入。类型编号取自 `character/expertjob.lst`：1 附魔师、2 炼金术师、3 分解师、4 控偶师。
+- 服务端只持久化累计熟练度（`character_expert_job.expertness`），客户端按 PVF `[expertness exp]` 阈值换算显示等级。写入 N 级时落该等级的最低阈值；本版四职业阈值相同：Lv1=0、Lv2=20、Lv3=133、Lv4=246、Lv5=359、Lv6=472、Lv7=585、Lv8=698、Lv9=811、Lv10=939、Lv11=1067。没有资格时新建行，已有资格时改类型与熟练度，同一事务校验 revision；改类型保留已学附魔设计图。
+- `POST /api/expert-job`，请求头 `X-GM-Request: 1`，JSON `{account, name, type, level, confirm:true}`；`type` 1–4，`level` 1–11。审计动作 `expert-job`，前后摘要取只读命令 `expert-job <角色>`。在线角色经会话 owner 提交并同步在线快照，客户端回到选角并再次进入后刷新等级显示。
 
 ## GM 网页：索引预热、分页与 UX（摘要）
 - 启动即后台预热物品/任务/词条索引并缓存到存档目录（`gm-index-*.json`，按 PVF 大小+修改时间校验），前端只在真正构建时提示。

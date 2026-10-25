@@ -167,6 +167,25 @@ internal static class GmWebServerTests
         TestCheck.That(failed.StatusCode == HttpStatusCode.BadRequest && (await failed.Content.ReadAsStringAsync()).Contains("金币失败"), "命令失败原样返回错误");
         TestCheck.That((await Post("/api/job", new { account = "acct", name = "Hero", branch = 1, awakening = 0, confirm = true })).IsSuccessStatusCode
             && data.Commands.Contains("account acct grow Hero 1 0"), "转职走 grow 命令");
+        TestCheck.That((await Post("/api/black-diamond", new { account = "acct", name = "Hero", days = 30, confirm = true })).IsSuccessStatusCode
+            && data.Commands.Contains("account acct black-diamond Hero 30"), "黑钻开通走 black-diamond 命令");
+        TestCheck.That((await Post("/api/black-diamond", new { account = "acct", name = "Hero", days = 0, confirm = true })).IsSuccessStatusCode
+            && data.Commands.Contains("account acct black-diamond Hero 0")
+            && (await Post("/api/black-diamond", new { account = "acct", name = "Hero", days = -1, confirm = true })).StatusCode == HttpStatusCode.BadRequest
+            && (await Post("/api/black-diamond", new { account = "acct", name = "Hero", days = 3651, confirm = true })).StatusCode == HttpStatusCode.BadRequest
+            && (await Post("/api/black-diamond", new { account = "acct", name = "Hero", days = 30 })).StatusCode == HttpStatusCode.BadRequest
+            && (await Post("/api/black-diamond", new { account = "acct", name = "Hero", days = 30, confirm = true }, header: false)).StatusCode == HttpStatusCode.Forbidden, "黑钻天数范围、确认与请求头校验");
+        TestCheck.That((await http.GetAsync("/api/characters/acct/Hero/expert-job")).IsSuccessStatusCode
+            && data.Commands.Contains("account acct expert-job Hero"), "副职业只读接口");
+        TestCheck.That((await Post("/api/expert-job", new { account = "acct", name = "Hero", type = 1, level = 5, confirm = true })).IsSuccessStatusCode
+            && data.Commands.Contains("account acct expert-job Hero 1 5"), "副职业写入走 expert-job 命令");
+        TestCheck.That((await Post("/api/expert-job", new { account = "acct", name = "Hero", type = 0, level = 1, confirm = true })).StatusCode == HttpStatusCode.BadRequest
+            && (await Post("/api/expert-job", new { account = "acct", name = "Hero", type = 5, level = 1, confirm = true })).StatusCode == HttpStatusCode.BadRequest
+            && (await Post("/api/expert-job", new { account = "acct", name = "Hero", type = 1, level = 0, confirm = true })).StatusCode == HttpStatusCode.BadRequest
+            && (await Post("/api/expert-job", new { account = "acct", name = "Hero", type = 1, level = 12, confirm = true })).StatusCode == HttpStatusCode.BadRequest
+            && (await Post("/api/expert-job", new { account = "acct", name = "Hero", type = 1, level = 5 })).StatusCode == HttpStatusCode.BadRequest
+            && (await Post("/api/expert-job", new { account = "acct", name = "Hero", type = 1, level = 5, confirm = true }, header: false)).StatusCode == HttpStatusCode.Forbidden,
+            "副职业类型/等级范围、确认与请求头校验");
         TestCheck.That((await Post("/api/currency", new { account = "acct", name = "Hero", key = "cera", op = "add", amount = 10, confirm = true })).IsSuccessStatusCode
             && (await Post("/api/currency", new { account = "acct", name = "Hero", key = "cera", op = "mul", amount = 10, confirm = true })).StatusCode == HttpStatusCode.BadRequest, "货币操作校验");
         TestCheck.That((await http.PostAsync("/api/accounts", null)).StatusCode == HttpStatusCode.Forbidden, "未知写路径同样需要自定义头");
@@ -269,7 +288,7 @@ internal static class GmWebServerTests
         await Post("/api/mail/gold", new { account = "acct", name = "Hero", gold = 0, confirm = true });
         TestCheck.That(data.Notified.Count == notified, "校验失败的邮件不提醒");
         var trail = (await http.GetFromJsonAsync<JsonElement>("/api/audit?limit=200")).EnumerateArray().Select(r => r.GetProperty("action").GetString()).ToArray();
-        TestCheck.That(trail.Contains("item-delete") && trail.Contains("mail-delete") && trail.Contains("extra-tp") && trail.Contains("quest-batch") && trail.Contains("direct-item"), "新增写操作都写审计");
+        TestCheck.That(trail.Contains("item-delete") && trail.Contains("mail-delete") && trail.Contains("extra-tp") && trail.Contains("quest-batch") && trail.Contains("direct-item") && trail.Contains("black-diamond") && trail.Contains("expert-job"), "新增写操作都写审计");
 
         TestCheck.That((await Post("/api/characters/rename", new { account = "acct", name = "Hero", newName = "Hero2", confirm = true })).IsSuccessStatusCode
             && data.Commands.Contains("account acct rename Hero Hero2")

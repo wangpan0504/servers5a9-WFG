@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
 
-internal sealed partial class CharacterRepository
+internal sealed partial class CharacterRepository : IExpertJobSetter
 {
     public Character CommitExpertJobClear(AccountOwners.Lease owner, Character expected) => owner.Execute(() =>
     {
@@ -34,6 +34,38 @@ internal sealed partial class CharacterRepository
         transaction.Commit();
         return updated;
     });
+
+    // 开发GM：直接设置副职业类型与累计熟练度。没有资格时插入，已有资格时改类型与熟练度；
+    // 已学附魔图沿用任务授职的语义保留在原行，不清空。
+    public Character SetExpertJob(AccountOwners.Lease owner, Character expected, byte type, int experience)
+    {
+        if (type is < 1 or > 4 || experience < 0)
+            throw new InvalidDataException("副职业类型或累计熟练度超出已确认范围");
+        return owner.Execute(() =>
+        {
+            using var db = database.Open();
+            using var write = db.BeginWrite("CharacterRepository.SetExpertJob");
+            using var transaction = write.Transaction;
+            using var command = db.CreateCommand();
+            command.Transaction = transaction;
+            command.Parameters.AddWithValue("$id", expected.Id);
+            command.Parameters.AddWithValue("$account", owner.Account);
+            command.Parameters.AddWithValue("$type", type);
+            command.Parameters.AddWithValue("$exp", experience);
+            command.CommandText = """
+                INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES($id,$account,$type,$exp)
+                ON CONFLICT(character_id) DO UPDATE SET
+                  account=excluded.account,job_type=excluded.job_type,expertness=excluded.expertness
+                WHERE character_expert_job.account=$account
+                """;
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副职业资格没有写入当前角色");
+            command.Parameters.AddWithValue("$revision", expected.Revision);
+            command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副职业资格的角色快照已变化");
+            transaction.Commit();
+            return expected with { ExpertJobType = type, ExpertJobExperience = experience, Revision = checked(expected.Revision + 1) };
+        });
+    }
 
     public Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience)
     {

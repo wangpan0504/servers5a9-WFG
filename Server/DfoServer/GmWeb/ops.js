@@ -9,6 +9,8 @@ export async function isOnline(account, name) {
 const DANGER = new Set(['items/delete', 'items/clear', 'mails/delete', 'characters/delete', 'kick', 'disconnect', 'quests/clear']);
 const UNDO = {
   'gold': '如需还原，再次设置为原金币即可（原值见审计日志）',
+  'black-diamond': '原到期时间见审计日志，可再次设置',
+  'expert-job': '原副职业类型与熟练度见审计日志，可再次设置',
   'level': '等级可再次设置回原值（原值见审计日志）', 'exp': '等级可再次设置回原值（原值见审计日志）', 'job': '可再次转职回原分支（原值见审计日志）',
   'sp': '原值见审计日志，可再次设置', 'tp': '原值见审计日志，可再次设置', 'currency': '原值见审计日志，可再次设置', 'account-currency': '原值见审计日志，可再次设置', 'vault-gold': '原值见审计日志，可再次设置',
   'quests/add': '可用“取消完成”还原', 'quests/batch': '可在任务页勾选后“取消完成”还原', 'quests/chain': '可在任务页勾选后“取消完成”还原', 'quests/remove': '可再次标记完成',
