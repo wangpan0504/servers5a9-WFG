@@ -54,8 +54,9 @@ internal static class DungeonAltarPackets
         return body;
     }
 
-    // V31 02390810的首次地图通知；波次演员走210，211保留空特殊演员/掉落及fog。
-    public static byte[] StartMap(DungeonEntryPlan entry, uint seed, DungeonMapPayload payload = DungeonMapPayload.Build)
+    // 02390AFB读取offset8并在02390B34写入房间地图编号；不能用普通29的随机种子替代。
+    // 波次演员走210，211保留空特殊演员/掉落及fog。
+    public static byte[] StartMap(DungeonEntryPlan entry, DungeonMapPayload payload = DungeonMapPayload.Build)
     {
         byte[] body = new byte[payload == DungeonMapPayload.Cached ? 8 : 15];
         body[0] = checked((byte)entry.StartMap.Position.X);
@@ -63,7 +64,7 @@ internal static class DungeonAltarPackets
         BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2), entry.StartMap.Id);
         if (payload == DungeonMapPayload.Cached) return body;
         body[7] = (byte)payload;
-        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8), seed);
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(8), entry.StartMap.Id);
         return body;
     }
     // V31 0237E530读count:u16和17字节记录；旧端08305992确认rank在level之前。

@@ -232,7 +232,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry, receipt.Snapshot.BossPosition), "formal_dungeon_information", Guard);
         // 实验性（#259）：比赛副本先发 NOTI386 对阵/对手，再以 NOTI387 替代 NOTI29（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
         if (receipt.Monsters.Altar is not null)
-            await context.Notify(NotiPacketType.START_BLOOD_MAP, DungeonAltarPackets.StartMap(receipt.Entry, receipt.MapSeed), "formal_altar_map", Guard);
+            await context.Notify(NotiPacketType.START_BLOOD_MAP, DungeonAltarPackets.StartMap(receipt.Entry), "formal_altar_map", Guard);
         else if (receipt.Entry.IsTournament && receipt.Monsters.Tournament is { } tournament)
         {
             await context.Notify(NotiPacketType.TOURNAMENT_INFO, DungeonPackets.TournamentInfo(receipt.Entry, tournament),
@@ -554,7 +554,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         {
             if (context.Altar is not null) await context.Altar.StopAsync();
             await context.Notify(NotiPacketType.START_BLOOD_MAP,
-                DungeonAltarPackets.StartMap(receipt.Entry, receipt.MapSeed, receipt.Snapshot.MapPayload), "formal_altar_next_map", Guard);
+                DungeonAltarPackets.StartMap(receipt.Entry, receipt.Snapshot.MapPayload), "formal_altar_next_map", Guard);
             return CommandResult.Handled;
         }
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,

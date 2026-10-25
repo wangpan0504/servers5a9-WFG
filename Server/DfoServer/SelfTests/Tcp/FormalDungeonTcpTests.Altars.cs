@@ -55,6 +55,8 @@ internal static partial class FormalDungeonTcpTests
             That(info.Length==12 && U32(info,0)==id && map.Length==15 && map[7]==1 &&
                 fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id) is [[long gold]] && gold==500000-fee,
                 "实际CMD16按212→211接入祭坛，金币只扣本次资源费用");
+            That(U32(map,8) == U32(map,2) && (id != 11007 || U32(map,8) == 17030),
+                "实际211创建字段为资源地图编号，极限使用17030而非随机种子");
             peer.Barrier();
             Load(peer);
             // 未准备UI前无波次；伪造普通255对象和空报文均不能越过此门禁。
@@ -91,6 +93,35 @@ internal static partial class FormalDungeonTcpTests
             That(fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0",peer.Id) is [[1L]] &&
                 fixture.Query("SELECT count(*) FROM dungeon_altar_clear_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
                 "一次准入和一次失败持久事实保持独立，计时不重复收费或发奖");
+
+            // 同一角色剩余两次分别覆盖加载前和加载后放弃，不另起资源或服务夹具。
+            foreach (bool loaded in new[] { false, true })
+            {
+                SelectTowerMap(peer,griefLayer:1);
+                peer.Send(16,request);
+                peer.Expect(0,212);
+                var returningMap = peer.Expect(0,211).Body;
+                That(U32(returningMap,8) == U32(returningMap,2), "再入场仍使用真实地图编号");
+                if (fee > 0) peer.Expect(0,14);
+                peer.Barrier();
+                if (loaded)
+                {
+                    Load(peer);
+                    peer.Send(258);
+                    peer.Expect(0,215);
+                    var spawned = ReadUntil(210);
+                    That(U16(spawned.Body,0) > 0, "已启动波次的祭坛仍可主动退出");
+                }
+                peer.Send(42);
+                peer.Expect(1,42,[1]);
+                peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
+                peer.Expect(0,24); RefreshedQuests(peer);
+                // 已退场的加载/UI尾包不能再次创建角色或启动波次。
+                peer.Send(37,new byte[8]); peer.Send(258); peer.Barrier();
+            }
+            That(fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0",peer.Id) is [[3L]] &&
+                fixture.Query("SELECT count(*) FROM dungeon_altar_clear_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
+                "加载前后放弃各保留一次准入，不由迟到加载/UI请求重复扣次或结算");
 
             WirePacket ReadUntil(ushort opcode)
             {

@@ -79,6 +79,42 @@ internal static partial class FormalDungeonTcpTests
             That(peer.DungeonEnterCounts[11007] == (2, 0) && peer.DungeonEnterCounts[11006] == (3, 0),
                 "换回原角色恢复本日2次，另一祭坛仍为3次");
         }
+        // 无尽与免费极限共享次数通知，但费用只能取真实价格表，不能因显示3次跳过扣费。
+        Character blood = Create("BloodFee");
+        byte[] bloodRequest = Request();
+        BinaryPrimitives.WriteUInt32LittleEndian(bloodRequest, 11006);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(blood.Slot, prepared: true, resumeTown: true, room: false);
+            Select(peer, 3);
+            for (int repeat = 0; repeat < 2; repeat++)
+            {
+                peer.Send(16, bloodRequest); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
+            }
+            That(Entries(blood.Id) == 0 && peer.DungeonEnterCounts[11006] == (3, 0),
+                "无尽有3次但金币不足明确回复拒绝，重复请求不扣次数");
+        }
+        int fee = SelfTestCatalogs.Dungeons(resources.Archive).AltarAdmission.BloodFee(blood.Level, 0);
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            blood = repository.LoadCharacter(owner, blood.Slot);
+            blood = repository.CommitInventory(owner, blood, new(blood.Inventory, blood.Inventory with { Gold = checked((uint)fee) }, "blood_entry_fee"));
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(blood.Slot, prepared: true, resumeTown: true, room: false);
+            Select(peer, 3);
+            peer.Send(16, bloodRequest); peer.Expect(0, 212); peer.Expect(0, 211); peer.Expect(0, 14);
+            Counts(peer, 3, blood: 2); peer.Barrier();
+            peer.Send(16, bloodRequest); peer.Barrier();
+            That(Entries(blood.Id) == 1 && fixture.Query("SELECT gold FROM characters WHERE id=$p0", blood.Id) is [[0L]],
+                "补足真实费用后无尽入场，金币与次数只提交一次，加载重复不再扣款");
+            Load(peer); Return(peer);
+            Select(peer, 3, blood: 2);
+            peer.Send(16, bloodRequest); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
+            That(Entries(blood.Id) == 1 && fixture.Query("SELECT gold FROM characters WHERE id=$p0", blood.Id) is [[0L]],
+                "选图550已确认剩余2次，费用不足继续拒绝且次数金币不变");
+        }
         Console.WriteLine($"PASS {Count - before} 550真实TCP初始化、扣次、拒绝、重连、角色隔离与06:00重置断言（未启动客户端）");
 
         Character Create(string name)
@@ -94,18 +130,18 @@ internal static partial class FormalDungeonTcpTests
         }
         long Entries(ushort id) => Convert.ToInt64(fixture.Query(
             "SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0", id).Single().Single());
-        void Select(TcpPeer peer, byte ultimate)
+        void Select(TcpPeer peer, byte ultimate, byte blood = 3)
         {
             peer.Send(15, new byte[4]); peer.Expect(1, 15, [1]); peer.Expect(0, 3);
             peer.Expect(0, 1536);
             peer.Expect(0, 1303, [0x34, 0]);
-            Counts(peer, ultimate);
+            Counts(peer, ultimate, blood);
             var notice = peer.Expect(0, 27).Body;
             That(notice.Length == 42, "550在27之前送达，原选图列表合同不变");
         }
-        void Counts(TcpPeer peer, byte ultimate)
+        void Counts(TcpPeer peer, byte ultimate, byte blood = 3)
         {
-            peer.Expect(0, 550, [0xFE, 0x2A, 0, 0, 3, 0]);
+            peer.Expect(0, 550, [0xFE, 0x2A, 0, 0, blood, 0]);
             peer.Expect(0, 550, [0xFF, 0x2A, 0, 0, ultimate, 0]);
         }
         byte[] Request()
