@@ -282,6 +282,9 @@ internal sealed class TownCatalog
         {
             foreach (var area in Areas.Values.Where(a => a.Town == p.Town).OrderBy(a => a.Area == p.Area ? 0 : 1).ThenBy(a => a.Area))
             {
+                // 黑市54/0是旧频道使用的固定Before地图；正式街道与小地图登记在54/1，旧返回点不能继续选中0区。
+                if (area.Town == 54 && area.Area == 0)
+                    continue;
                 var map = area.Map(completed);
                 if (map.IsRoom || map.Error is not null || !map.Links.Any(l => l.Gate.Door && Allowed(l.Quests, l.Conditions, completed) && IsRoom(new(l.Town, l.Area, 0, 0), completed)))
                     continue;
