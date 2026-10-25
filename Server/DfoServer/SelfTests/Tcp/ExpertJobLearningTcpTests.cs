@@ -21,9 +21,10 @@ internal static class ExpertJobLearningTcpTests
         var items = resources.ItemResources.Items;
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         short start = ItemSlotBoundService.Range(items.Get(10015129).Kind, InventorySnapshot.Empty).Start;
+        ushort cardSlot = 0;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
-            repository.Create(owner, new("LearnTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+            var crafter = repository.Create(owner, new("LearnTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Level = 50, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
                 Inventory = new([new(0, Slot(0), InventoryRewardGrantService.Create(items.Get(10015129))),
@@ -31,6 +32,11 @@ internal static class ExpertJobLearningTcpTests
                     new(0, Slot(2), InventoryRewardGrantService.Create(items.Get(2600141))),
                     new(0, Slot(3), InventoryRewardGrantService.Create(items.Get(10015130)))], Gold: 999)
             });
+            var supplies = InventoryRewardGrantService.TryGrantBatch(crafter, [new(3033, 30), new(2610030, 3), new(3619, 2), new(3227, 10), new(3166, 40), new(2610039, 6)], items,
+                resources.ItemResources.GoldLimits, resources.ItemResources.EpicPieces);
+            That(supplies.Accepted, "制作TCP准备真实钱包黑色晶体和实体魔力结晶");
+            var supplied = repository.CommitInventory(owner, crafter, supplies.Plan!);
+            cardSlot = (ushort)supplied.Inventory.Items.Single(item => item.Core.ItemId == 3619).Position.Index;
             var learning = SkillLearning.Initialize(0, resources.Characters.Get(0).Skills, resources.Learning).State!;
             var candidate = repository.Create(owner, new("GrantTcp", resources.Towns.Room, resources.Towns.InitialReturn)
             {
@@ -53,6 +59,8 @@ internal static class ExpertJobLearningTcpTests
             That(Snapshot() == before, "未选角完整拒绝学习且不扣图");
             peer.Select(expertJobInfo: Info([], []));
             before = Snapshot();
+            Craft(peer); peer.Expect(1, 238, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == before, "材料齐备但未学习制作图不能伪造238合成");
             Use(peer, 3, 10015130); Ack(peer, 3, 10015130, false); peer.Barrier();
             That(Snapshot() == before, "真实TCP拒绝未达到副职业等级的设计图");
             fixture.Sql("CREATE TRIGGER fail_learning BEFORE UPDATE OF learned_recipes ON character_expert_job BEGIN SELECT RAISE(ABORT,'learning failure'); END");
@@ -70,6 +78,26 @@ internal static class ExpertJobLearningTcpTests
             That(Snapshot() == before, "重复学习不消费第二张图、不追加资格或再次增版本");
             Use(peer, 2, 2600141); Ack(peer, 2, 2600141, true);
             peer.Expect(0, 205, Info([2600141, 10015129], [])); peer.Barrier();
+            before = Snapshot();
+            fixture.Sql("CREATE TRIGGER fail_craft_tcp BEFORE UPDATE OF expertness ON character_expert_job BEGIN SELECT RAISE(ABORT,'craft tcp failure'); END");
+            Craft(peer); peer.Closed();
+            That(Snapshot() == before, "真实238经验写入失败时钱包、材料、产物和版本一起回滚");
+            fixture.Sql("DROP TRIGGER fail_craft_tcp");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(expertJobInfo: Info([2600141, 10015129], [0])); peer.Barrier();
+            long revision = (long)fixture.Query("SELECT revision FROM characters WHERE name='LearnTcp'")[0][0]!;
+            Craft(peer);
+            peer.Expect(0, 14); peer.Expect(0, 2); peer.Expect(0, 205, Info([2600141, 10015129], []));
+            peer.Expect(1, 238, Build(writer =>
+            { writer.Write((byte)1); writer.Write((byte)1); writer.Write(2610034); writer.Write(2); writer.Write(2u); writer.Write(0u); writer.Write((byte)0); }));
+            peer.Barrier();
+            That(fixture.Query("SELECT revision FROM characters WHERE name='LearnTcp'") is [[long after]] && after == revision + 1,
+                "真实合成只推进一次revision，不拆分材料与经验事务");
+            string before = Snapshot();
+            Craft(peer); peer.Expect(1, 238, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == before, "同数量重发因剩余材料不足拒绝，不重复发两件产物");
         }
         using (var peer = Open(fixture))
         {
@@ -78,8 +106,43 @@ internal static class ExpertJobLearningTcpTests
             var restored = repository.LoadCharacter(owner, 0);
             That(restored.ExpertJobRecipes.SetEquals([2600141, 10015129]) && restored.Inventory.Find(Slot(0)) is null &&
                 restored.Inventory.Find(Slot(2)) is null && restored.Inventory.Find(Slot(1)) is not null &&
-                restored.Inventory.Gold == 999 && restored.ExpertJobExperience == 0,
+                restored.Inventory.Gold == 999 && restored.ExpertJobExperience is >= 0 and <= 2 &&
+                restored.Inventory.Items.Single(item => item.Core.ItemId == 2610034).Core.Count == 2 &&
+                restored.Inventory.Items.Single(item => item.Core.ItemId == 2610030).Core.Count == 1 &&
+                CurrencyWallet.Get(restored.Inventory, CurrencyKind.BlackCube) == 10,
                 "重连投影完整资格，普通后续205不重复追加稀有度，图和资格同事务持久化");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(expertJobInfo: Info([2600141, 10015129], [0])); peer.Barrier();
+            string before = Snapshot();
+            Bead(peer, 0); peer.Expect(1, 238, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == before, "238卡片槽配方0不再扣卡伪造无产物成功");
+            fixture.Sql("CREATE TRIGGER fail_bead_tcp BEFORE UPDATE OF expertness ON character_expert_job BEGIN SELECT RAISE(ABORT,'bead tcp failure'); END");
+            Bead(peer, 10015129); peer.Closed();
+            That(Snapshot() == before, "宝珠TCP事务尾失败完整回滚卡、两组材料、成品与经验");
+            fixture.Sql("DROP TRIGGER fail_bead_tcp");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(expertJobInfo: Info([2600141, 10015129], [0])); peer.Barrier();
+            Bead(peer, 10015129);
+            peer.Expect(0, 14); peer.Expect(0, 2); peer.Expect(0, 205, Info([2600141, 10015129], []));
+            peer.Expect(1, 238, Build(writer =>
+            { writer.Write((byte)1); writer.Write((byte)1); writer.Write(2600313); writer.Write(2); writer.Write(2u); writer.Write(0u); writer.Write((byte)0); }));
+            peer.Barrier();
+            string before = Snapshot();
+            Bead(peer, 10015129); peer.Expect(1, 238, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == before, "卡片与材料耗尽后重发不重复创建宝珠");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(expertJobInfo: Info([2600141, 10015129], [0])); peer.Barrier();
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var restored = repository.LoadCharacter(owner, 0);
+            That(restored.Inventory.Items.Single(item => item.Core.ItemId == 2600313).Core.Count == 2 &&
+                restored.Inventory.Items.All(item => item.Core.ItemId is not (3619 or 3227 or 3166 or 2610039)) &&
+                restored.ExpertJobExperience is >= 6 and <= 14, "真实宝珠成品与完整材料扣除、经验重连一致");
         }
         using (var peer = Open(fixture))
         {
@@ -135,12 +198,16 @@ internal static class ExpertJobLearningTcpTests
             "学习TCP数据库结构和外键完整");
 
         InventorySlot Slot(int offset) => new(InventoryListType.Main, (short)(start + offset));
+        void Bead(TcpPeer peer, int recipe) => peer.Send(238, Build(writer =>
+        { writer.Write(recipe); writer.Write((ushort)2); writer.Write(cardSlot); }));
+        void Craft(TcpPeer peer) => peer.Send(238, Build(writer =>
+        { writer.Write(2600141); writer.Write((ushort)2); writer.Write(ushort.MaxValue); }));
         void Use(TcpPeer peer, int offset, int id) => peer.Send(44, Build(writer =>
         { writer.Write((ushort)(start + offset)); writer.Write((byte)0); writer.Write(uint.MaxValue); writer.Write(id); writer.Write(0u); }));
         void Ack(TcpPeer peer, int offset, int id, bool accepted) => peer.Expect(1, 44, Build(writer =>
         { writer.Write((byte)(accepted ? 1 : 0)); writer.Write((ushort)(accepted ? start + offset : 123)); writer.Write((byte)0); writer.Write(uint.MaxValue); writer.Write(id); }));
         string Snapshot() => JsonSerializer.Serialize(new[] { fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid"),
-            fixture.Query("SELECT * FROM character_expert_job"), fixture.Query("SELECT id,revision FROM characters") });
+            fixture.Query("SELECT * FROM character_expert_job"), fixture.Query("SELECT id,revision FROM characters"), fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind") });
     }
 
     // 独立按已核实的客户端读序编码，不调用被测生产builder。

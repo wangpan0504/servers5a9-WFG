@@ -26,7 +26,12 @@ internal sealed record RoomPortal(byte Town, byte Area, Rectangle Bounds, int Le
 /// 城镇场景定位结果：<paramref name="Map"/> 是按已完成任务解析出的当前 PVF 地图路径，
 /// <paramref name="IsRoom"/> 是房间判定。频道与房间账号由调用方补齐（同屏与聊天共用这套定位，不各算一份）。
 /// </summary>
-internal readonly record struct TownScene(byte Town, byte Area, string Map, bool IsRoom);
+internal readonly record struct TownScene(byte Town, byte Area, string Map, bool IsRoom)
+{
+    public bool IsEpisode { get; init; }
+    // 剧情城镇不变成赛丽亚房间；仅同屏、交互与普通聊天使用角色级隔离身份。
+    public string? OwnerKey(string account, ushort characterId) => IsEpisode ? $"episode:{account}:{characterId}" : IsRoom ? account : null;
+}
 internal sealed record TownArea(byte Town, byte Area, int Level, int[] Quests, int[] AnyQuests, int[] ExceptQuests, Location? Gate, TownMap Default, TownMap[] Phases, TownPhase[] Shifts)
 {
     public int? DungeonWorldMap { get; init; }
@@ -44,11 +49,16 @@ internal sealed class TownCatalog
 {
     static readonly IReadOnlySet<int> NoQuests = new HashSet<int>();
     public IReadOnlyDictionary<(byte, byte), TownArea> Areas { get; }
+    public IReadOnlySet<byte> EpisodeTowns { get; init; } = new HashSet<byte>();
     public Location Room { get; }
     public Location InitialReturn { get; }
     public TownDock Dock { get; }
     public RoomPortal[] RoomPortals { get; }
     public IReadOnlyDictionary<uint, uint[]> NpcMoves { get; }
+    public IReadOnlySet<uint> NpcExits { get; init; } = new HashSet<uint>();
+    public bool HasNpcExit(Location position, IReadOnlySet<int> completed) =>
+        Areas.TryGetValue((position.Town, position.Area), out var area) &&
+        area.Map(completed).Npcs.Any(npc => NpcExits.Contains(npc.Id));
     public IReadOnlyDictionary<int, TownDungeonMap> DungeonMaps { get; }
     // [golden commerce] 的菜单0x61打开遗忘之地选图；角色参数非零或声明不完整时不取得此入口。
     public IReadOnlySet<uint> LostLandEntryNpcs { get; init; } = new HashSet<uint>();
@@ -91,7 +101,7 @@ internal sealed class TownCatalog
         if (!Areas.TryGetValue((position.Town, position.Area), out var area))
             return new(position.Town, position.Area, "", false);
         var map = area.Map(completed);
-        return new(position.Town, position.Area, map.Path, map.IsRoom);
+        return new(position.Town, position.Area, map.Path, map.IsRoom) { IsEpisode = EpisodeTowns.Contains(position.Town) };
     }
     public bool IsPosition(Location p, IReadOnlySet<int>? completed = null)
     {
@@ -358,10 +368,12 @@ internal sealed class TownCatalog
         var areas = new Dictionary<(byte, byte), TownArea>();
         var maps = new Dictionary<string, TownMap>();
         var texts = new Dictionary<string, MapText>();
+        var episodes = new HashSet<byte>();
         foreach (var entry in List(pvf.ReadText("town/town.lst")))
         {
             byte town = checked((byte)entry.Key);
             string text = pvf.ReadText("town/" + entry.Value);
+            if (TownEpisodeFile.Parse(pvf.ReadTokens("town/" + entry.Value),pvf.ResolveString) is not null) episodes.Add(town);
             var shifts = Regex.Matches(text, @"\[phase shift\](.*?)\[/phase shift\]", RegexOptions.Singleline).Select(m =>
             {
                 var quest = Regex.Match(Section(m.Groups[1].Value, "condition"), @"`\[completed quest\]`\s*(\d+)");
@@ -391,6 +403,7 @@ internal sealed class TownCatalog
         var room = areas[(38, 1)].Gate ?? throw new InvalidDataException("Client room gate missing");
         var origin = areas[(38, 0)].Default.Links.Single(l => l.Town == room.Town && l.Area == room.Area && l.Gate.Marker);
         var npcMoves = new Dictionary<uint, uint[]>();
+        var npcExits = new HashSet<uint>();
         var lostLandNpcs = new HashSet<uint>();
         var npcList = List(pvf.ReadText("npc/npc.lst"));
         foreach (uint id in maps.Values.SelectMany(m => m.Npcs).Select(n => n.Id).Distinct())
@@ -398,9 +411,12 @@ internal sealed class TownCatalog
             if (!npcList.TryGetValue(checked((int)id), out var npcPath))
                 continue;
             string text = pvf.ReadText("npc/" + npcPath);
+            if (Regex.Matches(text, @"\[role\](.*?)\[/role\]", RegexOptions.Singleline | RegexOptions.IgnoreCase)
+                .Any(role => Regex.IsMatch(role.Groups[1].Value, @"`\[exit town\]`\s+0(?=\s|$)")))
+                npcExits.Add(id);
             if (HasLostLandEntryRole(text)) lostLandNpcs.Add(id);
             var targets = Regex.Matches(text, @"\[role\](.*?)\[/role\]", RegexOptions.Singleline | RegexOptions.IgnoreCase)
-                .SelectMany(m => Regex.Matches(m.Groups[1].Value, @"`\[move town\]`\s+(\d+)")
+                .SelectMany(m => Regex.Matches(m.Groups[1].Value, @"`\[(?:move town|enter town|enter town2)\]`\s+(\d+)")
                     .Select(t => uint.Parse(t.Groups[1].Value)))
                 .Distinct()
                 .ToArray();
@@ -418,7 +434,7 @@ internal sealed class TownCatalog
             { dungeonMaps.Add(id,new(id,path,[],error.Message)); }
         }
         var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps)
-            { SpecialChannelQuests = LoadSpecialChannelQuests(pvf), LostLandEntryNpcs = lostLandNpcs };
+            { SpecialChannelQuests = LoadSpecialChannelQuests(pvf), NpcExits = npcExits, EpisodeTowns = episodes, LostLandEntryNpcs = lostLandNpcs };
         if (!catalog.IsPosition(room) || !catalog.IsPosition(catalog.InitialReturn))
             throw new InvalidDataException("PVF initial position outside native movable regions");
         return catalog;

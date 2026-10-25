@@ -48,6 +48,7 @@ internal static class TcpRegressionTests
         ("stadium-quest", MetroQuestEntryTcpTests.RunStadiumAsync),
         ("titles", TitleTcpTests.RunAsync),
         ("collectbox", CollectBoxTcpTests.RunAsync),
+        ("epic-production", EpicProductionTcpTests.RunAsync),
         ("clear-avatar", ClearAvatarTcpTests.RunAsync),
         ("adventure", AdventureCoreTcpTests.RunAsync),
         ("adventure-names", AdventureNameTcpTests.RunAsync),
@@ -57,6 +58,9 @@ internal static class TcpRegressionTests
         ("adventure-capsules", AdventureCapsuleTcpTests.RunAsync),
         ("adventure-weekly", AdventureWeeklyTcpTests.RunAsync),
         ("quest-gold-mail", QuestGoldMailTcpTests.RunAsync),
+        ("quest-pet-reward", QuestPetRewardTcpTests.RunAsync),
+        ("quest-eligibility-mail", QuestEligibilityMailTcpTests.RunAsync),
+        ("quest-account-sync", QuestAccountSynchronizationTcpTests.RunAsync),
         ("quest-hell-challenge", QuestHellChallengeTcpTests.RunAsync),
         ("quest-continuation", QuestLifecycleTcpTests.RunContinuationAsync),
         ("story-digest", StoryDigestTcpTests.RunAsync),
@@ -179,6 +183,7 @@ internal static class TcpRegressionTests
         ("dungeon-despair", FormalDungeonTcpTests.RunDespairAsync),
         ("hero-tomb-entry", FormalDungeonTcpTests.RunHeroTombAsync),
         ("assault-result-menu", FormalDungeonTcpTests.RunAssaultResultMenuAsync),
+        ("operation-hope", FormalDungeonTcpTests.RunOperationHopeAsync),
         ("special-normal-entry", FormalDungeonTcpTests.RunSpecialNormalAsync),
         ("dungeon-entry-plan", (_, _, resources) =>
         {
@@ -221,10 +226,13 @@ internal static class TcpRegressionTests
         ("dungeon-pickup-slots", FormalDungeonTcpTests.RunPickupSlotsAsync),
         ("jobs", TownProtocolTcpTests.JobsAsync),
         ("inventory", InventoryTcpTests.RunAsync),
+        ("talisman", TalismanTcpTests.RunAsync),
         ("consumable-use", ConsumableUseTcpTests.RunAsync),
         ("consumable-effects", ConsumableUseTcpTests.RunEffectsAsync),
         ("teleport", TeleportTcpTests.RunAsync),
         ("solo-party", SoloPartyTcpTests.RunAsync),
+        ("pvp-training", PvpTrainingTcpTests.RunAsync),
+        ("pvp-private-character", PvpPrivateCharacterTcpTests.RunAsync),
         ("consumable-use-rules", (_, _, resources) =>
         {
             ConsumableUseTests.RunResources(resources.ItemResources);

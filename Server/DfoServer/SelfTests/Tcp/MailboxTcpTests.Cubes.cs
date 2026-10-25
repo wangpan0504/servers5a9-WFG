@@ -19,10 +19,10 @@ internal static partial class MailboxTcpTests
             [Cube(3037, 100), Cube(3033, 50)], DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         That(seeded.Accepted, "系统邮件允许明确支持的小晶块托管");
         using var receiver = Open(fixture, "20001");
-        receiver.Select();
+        receiver.Select(prepared: true);
         using (var sender = Open(fixture))
         {
-            sender.Select();
+            sender.Select(prepared: true);
             var source = ReadList(sender.Mailbox.Single()).Summaries.Where(row => row.MailId == seeded.MailId).ToArray();
             Extract(sender, [seeded.MailId]); ExpectClaim(sender, source);
             var delta = sender.Expect(0, 14).Body;
@@ -72,7 +72,7 @@ internal static partial class MailboxTcpTests
         }
         using (var sender = Open(fixture))
         {
-            sender.Select(); sender.Barrier();
+            sender.Select(prepared: true); sender.Barrier();
             That(fixture.Query("SELECT currency_kind,balance FROM account_currency_balances WHERE account='10000' AND currency_kind IN(3,7) ORDER BY currency_kind")
                 is [[3L, 45L], [7L, 70L]], "重连恢复寄送及失败后的精确钱包余额");
         }

@@ -4,8 +4,10 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
+    private (NpcTownVisit Visit, long Epoch)? npcTownVisit;
+
     // 已进入提交的任务依赖原角色快照恢复；未提交手册与已提交的券回执不排斥城镇操作，按普通操作自然失效。
-    bool HasPendingTownQuestCommit => pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null ||
+    bool HasPendingTownQuestCommit => formalDungeon is { PendingHopeReward: not null, HopeRewardConfirmed: false } || pendingPvpSkills is not null || pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null ||
         pendingQuestQuickClear is { CommitStarted: true } or { Committed: null, Plan.IsPreparedSkip: false } || HasPendingQuestScene;
 
     public bool Move(PositionRequest request) => owner.Execute(() =>
@@ -25,7 +27,8 @@ internal sealed partial class GameSession
     public bool Travel(AreaRequest request, out TownTravelReceipt? receipt)
     {
         receipt = owner.Execute(() => CommitTravel(Phase == SessionPhase.Town && Selected is not null
-            ? TownTravel.Plan(Selected, request, towns, completed, ChannelEntry)
+            ? TownTravel.Plan(Selected, request, towns, completed, ChannelEntry,
+                npcTownVisit is { } visit && visit.Epoch == SelectionEpoch ? visit.Visit : null)
             : TownTravelPlan.Reject("not-ready")));
         return receipt is not null;
     }
@@ -46,6 +49,8 @@ internal sealed partial class GameSession
         if (pendingRental is not null || HasPendingTownQuestCommit || !plan.Accepted)
             return null;
         Selected = repository.Save(owner, Selected!, plan.Position!, plan.Return);
+        // 保存成功后才替换来源；失败重试保留原票据，不提前消耗也不制造成功入场。
+        npcTownVisit = plan.NpcVisit is { } visit ? (visit, SelectionEpoch) : null;
         InvalidateImageCommunication();
         InvalidateExpertJobStore();
         return new(Selected, owner.Generation, SelectionEpoch);

@@ -42,7 +42,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         // 与聊天共用 TownCatalog.Scene 的场景定位（PVF 地图阶段 + 房间判定），避免两处各算一份；
         // 频道与房间账号在这里补齐。
         var town = towns.Scene(character.Position, character.CompletedQuests.ToHashSet());
-        return new(identity, town.Town, town.Area, town.Map, town.IsRoom ? owner.Account : null);
+        return new(identity, town.Town, town.Area, town.Map, town.OwnerKey(owner.Account,character.Id));
     }
 
     bool Visible(Member source, Member target, Func<Character, Character, bool>? recipient = null)

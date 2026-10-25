@@ -15,7 +15,7 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardParameterCatalog parameters,
+internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestRewardParameterCatalog parameters,
     ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CharacterGrowthCatalog growth,
     ServerLog log, CharacterLevelProjection levelProjection, QuestProjection? projection = null, CreatureProjection? creatures = null,
     ExpertJobScriptCatalog? expertJobs = null) : IGameCommandModule
@@ -29,13 +29,15 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             request is not { Reserved: ushort.MaxValue } ||
             context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
+        if (context.Session.IsOperationHopeQuest(request.QuestId))
+            return await FinishHopeAsync(context,request);
         var previous = context.Owner.Execute(() => context.Session.Selected);
         var result = context.Session.FinishQuest(request.QuestId, request.RewardSelector, quests, parameters, items, goldLimits, pieces, growth, request.Multiplier, expertJobs);
         log.Write("quest_completion", new { Connection = context.Id, Quest = request.QuestId, result.Outcome,
             Accepted = result.Outcome == QuestFinishOutcome.Committed, Failure = result.Failure.ToString(), RejectReason = result.Reason,
             result.Receipt?.Commit.AcceptanceId, result.Receipt?.Commit.Clear?.InstanceId,
             result.Receipt?.Commit.ExperienceReward, result.Receipt?.Commit.GainedExperience, result.Receipt?.Commit.Duplicate,
-            result.Receipt?.Commit.DirectGoldAmount, result.Receipt?.Commit.MailedGoldAmount, result.Receipt?.Commit.GoldMailId });
+            result.Receipt?.Commit.DirectGoldAmount, result.Receipt?.Commit.MailedGoldAmount, result.Receipt?.Commit.GoldMailId, result.Receipt?.Commit.ResourceMailId });
         if (result.Outcome != QuestFinishOutcome.Committed || result.Receipt is not { } receipt)
         {
             if (result.RejectionReceipt is not { } rejection)
@@ -53,7 +55,8 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
         var character = commit.Character;
         var rewards = commit.Rewards.Select(row => new QuestRewardItemProjection(row.Item, row.GrantedCount)).ToArray();
         byte[] acknowledgement = QuestPackets.Finish(request.QuestId, commit.ConditionType, commit.GainedExperience,
-                commit.ConditionType == 44 ? [] : commit.Consumed.Select(row => new QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(),
+                commit.ConditionType == 44 || request.QuestId==2674 && commit.ConditionType==60 && commit.TpAmount==2 &&
+                    commit.Consumed is [{ItemId:10158452,Count:1}] ? [] : commit.Consumed.Select(row => new QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(),
                 commit.DirectGoldAmount, rewards,
                 commit.ProfessionGrowType,commit.Currencies.Select(row => new QuestCurrencyRewardProjection(
                     ItemSlotBoundService.CurrencySlot(row.Kind) ?? throw new InvalidOperationException("钱包奖励缺少已确认持有域"),
@@ -70,14 +73,19 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             await SkillProjection.PublishAsync(context, character, "quest_profession_skills", "quest_profession_combo", Guard);
         else if (expertJob)
             await SkillProjection.PublishAsync(context, character, "quest_expert_job_skills", "quest_expert_job_combo", Guard);
+        // ACK34按itemId选择Pet owner，并以真实UID创建宠物；先安装提交后的详情表，不将宠物伪装Main物品。
+        if (commit.Rewards.Any(row => row.Item.Creature is not null))
+            await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(character.Inventory),
+                "quest_reward_creature_details", Guard);
         await context.Reply(CmdPacketType.FINISH_QUEST, acknowledgement, "quest_completion_committed", Guard);
         if (creatures is not null && previous is not null && commit.ChangedSlots.Contains(Game.Creatures.CreatureRules.EquippedSlot))
             await creatures.ChangedAsync(context, previous.Inventory, character, receipt.Phase, Guard);
         // ACK34先消费真实增量，再投影完整Core及绝对成长；不在最终库存之后重放增量奖励。
-        if (commit.ChangedSlots.Length != 0 || commit.DirectGoldAmount != 0)
-            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(character.Inventory, InventoryListType.Main,
-                commit.ChangedSlots.Concat(commit.DirectGoldAmount == 0 ? [] : new[] { new InventorySlot(InventoryListType.Main, 0) }).ToArray()),
-                "quest_reward_inventory", Guard);
+        var inventorySlots = commit.ChangedSlots.Concat(commit.DirectGoldAmount == 0 ? [] :
+            new[] { new InventorySlot(InventoryListType.Main, 0) }).ToArray();
+        foreach (var list in inventorySlots.Select(slot => slot.List).Distinct())
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(character.Inventory, list,
+                inventorySlots.Where(slot => slot.List == list).ToArray()), "quest_reward_inventory", Guard);
         if (previous is not null)
             await SkillSwitchInventoryProjection.RefreshStateAsync(
                 context,
@@ -113,8 +121,8 @@ internal sealed class QuestCompletionHandler(QuestCatalog quests, QuestRewardPar
             await projection.RefreshAsync(context, character, Guard, restoreCompleted: false);
         // 匹配客户端空574会清完成集合；完整任务投影最后以356恢复真实完成记录。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character),"quest_completed_list",Guard);
-        if (commit.GoldMailId is not null && receipt.Phase == DfoServer.Game.Session.SessionPhase.Town)
-            await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "quest_gold_mail_arrived", Guard);
+        if ((commit.GoldMailId is not null || commit.ResourceMailId is not null) && receipt.Phase == DfoServer.Game.Session.SessionPhase.Town)
+            await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "quest_mail_arrived", Guard);
         if (expertJobs is not null && character.ExpertJobType is >= 1 and <= 4 && commit.ExpertJobType is >= 1 and <= 4)
             await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(character, expertJobs),
                 "quest_expert_job_info", Guard);

@@ -351,6 +351,7 @@ internal sealed class DungeonCatalog
         enterCounts = new(() => DungeonEnterCountCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
     }
     public int DungeonCount => dungeons.Count;
+    public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);
     public GriefTowerCatalog GriefTower => griefTower.Value;
 
     public static DungeonCatalog Load(PvfArchive pvf)

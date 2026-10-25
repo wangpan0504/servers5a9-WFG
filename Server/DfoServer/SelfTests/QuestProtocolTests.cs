@@ -174,6 +174,16 @@ internal static class QuestProtocolTests
             }
         Reject(() => QuestPackets.Finish(3145,3,1780,[],0,
             [fixedRewards[0] with { Item = fixedRewards[0].Item with { Uid = 0 } }, .. fixedRewards.Skip(1)]), "临时UID不能领成功");
+        var pet = new InventoryItem(0x11223344,new(InventoryListType.Pet,7),new(63493,ItemKind.Creature,0x11223344))
+            { Creature=new() };
+        Check(QuestPackets.FixedRewardRows([new(pet,1)]).SequenceEqual(
+            Convert.FromHexString("01070005F8000044332211000000000000000000")),
+            "ACK34宠物仍为19B项，模板决定Pet持有域，value写提交后UID而非数量1");
+        Reject(() => QuestPackets.FixedRewardRows([new(pet with { Position=new(InventoryListType.Main,7) },1)]),
+            "宠物奖励不能伪装普通背包槽");
+        Reject(() => QuestPackets.FixedRewardRows([new(pet with { Creature=null },1)]),"宠物缺详情拒绝");
+        Reject(() => QuestPackets.FixedRewardRows([new(pet with { Core=pet.Core with { Value=1 } },1)]),"宠物UID与核心必须一致");
+        Reject(() => QuestPackets.FixedRewardRows([new(pet,2)]),"同一宠物实例不能投影数量2");
         Console.WriteLine($"PASS {checks} 任务与结算独立协议断言");
 
         void Check(bool value, string name)

@@ -127,6 +127,24 @@ internal static class ShopTests
                 "zero stackable purchase remains rejected without a plan or receipt");
             That(shop.Buy(current with { Job = 15, Level = 1 }, new(10402, 99, 2, 1), out receipt).Accepted && receipt!.Count == 1,
                 "equipment buys one without inventing profession or wear-level purchase constraints");
+            var talismanTemplate = catalog.Get(10402) with
+            {
+                Kind = ItemKind.Talisman, EquipmentSlot = 34,
+                ShopPrice = new(100, 0, [], new(false, 10, false))
+            };
+            var talismanCatalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+            talismanCatalog.PrefillTemplates(new Dictionary<int, ItemTemplate> { [10402] = talismanTemplate });
+            talismanCatalog.PrefillTalismans([new(talismanTemplate, [1], 9)]);
+            var talismanShop = new InventoryShopService(talismanCatalog, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
+            foreach (int count in new[] { 0, 1, 2 })
+            {
+                var talismanBuyer = current with { Inventory = new([], Gold: 1000) };
+                var purchase = talismanShop.Buy(talismanBuyer, new(10402, count, 2, 1), out var talismanReceipt);
+                That(purchase.Accepted && talismanReceipt is { Count: 1, Position.List: InventoryListType.Talisman } &&
+                    purchase.Plan!.After.Gold == 900 && purchase.Plan.After.Items is [{ Core.Kind: ItemKind.Talisman }] &&
+                    purchase.Plan.After.ShopPurchases is [{ Count: 1 }],
+                    "护石购买保留装备单件合同，零数量与复数输入均只收费、发放、累计限购一次 " + count);
+            }
             bought = shop.Buy(current, new(27800, 0, 2, 1), out receipt);
             That(bought.Accepted && receipt is { Count: 1, Core.ItemId: 27800 } && receipt.Paid.Gold == current.Inventory.Gold - 3500 &&
                 bought.Plan!.After.Items.Length == current.Inventory.Items.Length + 1,

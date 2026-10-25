@@ -71,11 +71,15 @@ internal static class AlbertHuntTcpTests
                         new(InventoryListType.Main,checked((short)rewardSlot)),
                         InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(10164800),2))) } });
         }
+        QuestDailyCoexistence? daily = null;
         using (var peer = Open(fixture,account))
         {
             Roster(peer.Roster,true,created);
             peer.Select(0,prepared:true,resumeTown:true,room:false);
             That(peer.Id == created.Id && Materials() == 2,"独立账号唯一名册行0对应自建角色，初始已有2个任务碎片");
+            daily = new(fixture,created.Id,13040,1636);
+            That(fixture.Query("SELECT slot FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=13040",created.Id) is [[0L]],
+                "58级每日占原始0槽，后续父子只能使用1及2槽");
             peer.Send(31,[31,0,130,13]); peer.Expect(1,31,[1,130,13,2,0,0,0,0]); drain(peer,null);
             peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[1,144,13,25,2,0,0,0]); drain(peer,null);
             string identities = Identities();
@@ -128,7 +132,7 @@ internal static class AlbertHuntTcpTests
                     drain(peer,packet =>
                     {
                         if (packet.Kind != 0 || packet.Opcode != 574) return;
-                        Bytes(packet.Body,Build(writer => { writer.Write(2u); writer.Write((ushort)3458); writer.Write(2u);
+                        Bytes(packet.Body,Build(writer => { writer.Write(3u); writer.Write((ushort)13040); writer.Write(1636u); writer.Write((ushort)3458); writer.Write(2u);
                             writer.Write((ushort)3472); writer.Write(scalar); }),"每次实际目标死亡574只推进原子任务通道，父仍等待正式交付");
                         notified = true;
                     });
@@ -159,14 +163,14 @@ internal static class AlbertHuntTcpTests
             var balance = peer.Expect(0,14).Body;
             That(balance.Length == 126 && balance[0] == 0 && U16(balance,1) == 1 && U16(balance,3) == rewardSlot &&
                 U32(balance,5) == 10164800 && U32(balance,9) == 4,"猎杀子34之后以完整Main行投影已有2加奖励2的真实碎片4");
-            peer.Expect(0,574,Convert.FromHexString("01000000820D01000000")); peer.Expect(0,21);
+            peer.Expect(0,574,Convert.FromHexString("02000000F03264060000820D01000000")); peer.Expect(0,21);
             That(peer.Expect(0,356).Body[4+3472] == 1,"正式交付后才发布3472完成位"); peer.Barrier();
             Delivered();
             string delivered = State();
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); peer.Barrier();
             That(State() == delivered,"重复猎杀子34不重复发碎片或关闭父任务");
             peer.Send(31,[31,0,145,13]); peer.Expect(1,31,[1,145,13,0,0,0,0,0]);
-            peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
+            peer.Expect(0,574,Convert.FromHexString("03000000F03264060000820D00000000910D00000000"));
             peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             That(Materials() == 4 && Completions() is [[1L]],"Boss及猎杀奖励后立即接真实末子，4/3只归零父子条件、不自动消费或领奖");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
@@ -177,8 +181,9 @@ internal static class AlbertHuntTcpTests
         {
             Roster(peer.Roster,true,created);
             var selected = peer.Select(0,prepared:true,resumeTown:true,room:false);
-            That(peer.Id == created.Id && U16(selected[0].Body,22) == 3458 && U32(selected[0].Body,24) == 0 &&
-                U16(selected[0].Body,28) == 3473 && U32(selected[0].Body,30) == 0 &&
+            That(peer.Id == created.Id && U16(selected[0].Body,22) == 13040 && U32(selected[0].Body,24) == 1636 &&
+                U16(selected[0].Body,28) == 3458 && U32(selected[0].Body,30) == 0 &&
+                U16(selected[0].Body,34) == 3473 && U32(selected[0].Body,36) == 0 &&
                 peer.CompletedQuestHistory[4+3472] == 1 && Materials() == 4 && Completions() is [[1L]],
                 "自然接取后重连选角回放父0末子0和真实猎杀完成，不预置重连结果或重发奖励");
             Duplicate(peer,lastDeath,"重连后的旧实例Boss迟到死亡");
@@ -198,8 +203,7 @@ internal static class AlbertHuntTcpTests
             peer.Send(3,[0]); peer.Expect(1,3,[1]); peer.Closed();
         }
 
-        void Progress(uint expected) => That(fixture.Query(
-            "SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)
+        void Progress(uint expected) => That(daily!.OtherRows("quest_id,condition_state","ORDER BY slot")
             is [[3458L,2L],[3472L,long actual]] && actual == expected,"实际持久父子条件与本次完整死亡顺序一致");
         string Identities() => fixture.Snapshot("SELECT slot,quest_id,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id);
         long Materials() => (long)fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10164800",created.Id)[0][0];
@@ -208,7 +212,7 @@ internal static class AlbertHuntTcpTests
             fixture.Query("SELECT quest_id,condition_type,experience_amount,acceptance_id FROM character_quest_completion_receipts WHERE character_id=$p0",created.Id)
                 is [[3472L,2L,0L,string saved]] && saved == huntAcceptance &&
             fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0",created.Id) is [[56L]] &&
-            fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[3458L,1L]] &&
+            daily!.OtherRows("quest_id,condition_state") is [[3458L,1L]] &&
             fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3458",created.Id) == parentAcceptance &&
             fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id IN(3458,3472,3473)",created.Id) is [[3472L]],
             "真实猎杀34仅父2→1、子完成和碎片4，原父接取不变，不自动接3473或交父奖励");

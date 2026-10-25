@@ -98,7 +98,8 @@ internal static class DungeonEntryCostTests
             "重复的入场疲劳段或数量不是 1 的 [required item] 不被猜测成入场费用");
 
         // #510 代号希望 8523：未完成 6170 时给出 selection-quest-required:6170。
-        GateRejected(towns, characters, skills, growth, quests, dungeons, rooms, 8523, 6170);
+        GateRejected(towns, characters, skills, growth, quests, dungeons, rooms, 8523, 6170,
+            OperationHopeCatalog.Load(pvf,dungeons,quests,rooms));
         // #511 泰波尔斯：未完成 6116 时两个副本都给出 selection-quest-required:6116。
         GateRejected(towns, characters, skills, growth, quests, dungeons, rooms, Tayberrs, 6116);
         GateRejected(towns, characters, skills, growth, quests, dungeons, rooms, TayberrsSecond, 6116);
@@ -263,20 +264,26 @@ internal static class DungeonEntryCostTests
     }
 
     static void GateRejected(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog skills, CharacterGrowthCatalog growth,
-        QuestCatalog quests, DungeonCatalog dungeons, DungeonRoomCatalog rooms, int dungeonId, int questId)
+        QuestCatalog quests, DungeonCatalog dungeons, DungeonRoomCatalog rooms, int dungeonId, int questId, OperationHopeCatalog? hope = null)
     {
         var (done, position) = Selection(towns, dungeonId);
         done.Remove(questId);
         using (var blocked = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, [.. done.Order()], position: position))
         {
             var before = blocked.Read();
-            That(blocked.Session.EnterFormalDungeon(checked((uint)dungeonId), 0, 0, dungeons, rooms) is null &&
+            if (hope is not null)
+                That(blocked.Session.BeginOperationHope(hope,dungeons,_ => 0),"希望先固定1598选择，仍须原16选图前置校验");
+            That(blocked.Session.EnterFormalDungeon(checked((uint)dungeonId), 0, hope?.Difficulty ?? 0, dungeons, rooms) is null &&
                 blocked.Session.LastFormalDungeonRejection == "selection-quest-required:" + questId && blocked.Read().Revision == before.Revision,
                 dungeonId + " 未完成 " + questId + "：拒绝原因 selection-quest-required:" + questId + "（实际 " + blocked.Session.LastFormalDungeonRejection + "）");
         }
         done.Add(questId);
         using var open = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, [.. done.Order()], position: position);
-        open.Session.EnterFormalDungeon(checked((uint)dungeonId), 0, 0, dungeons, rooms);
+        if (hope is not null)
+            That(open.Session.BeginOperationHope(hope,dungeons,_ => 0),"已完成前置后可固定同资源的希望选择");
+        var entered = open.Session.EnterFormalDungeon(checked((uint)dungeonId), 0, hope?.Difficulty ?? 0, dungeons, rooms);
+        if (hope is not null)
+            That(entered?.Entry.Hope is not null,"完成6170后通过真实希望准入，不用其它专用门禁拒绝冒充选图检查通过");
         That(open.Session.LastFormalDungeonRejection?.StartsWith("selection-", StringComparison.Ordinal) != true,
             dungeonId + " 完成 " + questId + " 后不再被选图准入拒绝（实际 " + open.Session.LastFormalDungeonRejection + "）");
     }

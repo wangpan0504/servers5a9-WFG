@@ -6,6 +6,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using DfoServer.Network.Builders.Inventory;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Management;
 using static DfoServer.Testing.BoosterTcpTests;
 using static DfoServer.Testing.TcpPeer;
@@ -17,6 +18,7 @@ internal static class BoosterSelectionTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        CheckMailRefreshOrdering();
         var itemResources = resources.ItemResources;
         LegacyExpiryFixture.Restore(itemResources.Items, (10002064, "2013-09-24 06:00:00"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "booster-selection"), gm: true, resources: resources);
@@ -129,6 +131,25 @@ internal static class BoosterSelectionTcpTests
             peer.Expect(1, 160, [0, 19, 0]);
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "level SelectTcp 75", out var levelReply) &&
                 levelReply.StartsWith("OK "), "通过原GM入口满足觉醒之息源盒真实最低75级，Lv1完整选择仍拒绝");
+            peer.SendBarrier();
+            // GM可落在上一请求ACK后的自动刷新前，邮件因此只允许先于每日序列或后于本次屏障。
+            var (dailyNotice, earlyMail) = ReadDailyNotice(peer.Read);
+            using (var readOwner=owners.Acquire(fixture.Options.DevelopmentAccount,()=>{}))
+            {
+                var role=repo.LoadCharacter(readOwner,0);
+                That(role.ActiveMainQuests is [{QuestId:13047,ConditionState:1656}],"GM升75级按原资格分配唯一地区每日");
+                Bytes(dailyNotice,QuestPackets.ActiveList(role.ActiveMainQuests),"升级后每日通知精确匹配已提交状态");
+                peer.Expect(0,356,TownPackets.CompletedQuests(role));
+                peer.Expect(0,21,QuestPackets.AvailableList(role.Level,DfoServer.Game.Quests.QuestEligibility.Candidates(role,resources.Quests)));
+                // 空历史也须在列表刷新后恢复独立地图显示位。
+                peer.Expect(0,356,TownPackets.CompletedQuests(role));
+            }
+            peer.Expect(1,1347,[1]);
+            // GM跨过首次邀请等级后，命令提交后的刷新发送真实2670邮件，不把它当礼盒回包吞掉。
+            if (!earlyMail) peer.Expect(0, 99, [1, 0]);
+            That(fixture.Query("SELECT quest_id,scope_character_id,mail_id FROM quest_eligibility_mail_dispatches WHERE account=$p0 AND scope_character_id=$p1",
+                fixture.Options.DevelopmentAccount,peer.Id) is [[2670L,long mailOwner,long mailId]] && mailOwner==peer.Id && mailId>0,
+                "升级后唯一邮件提醒对应当前角色真实2670首次资格账本");
             SendSelect(peer, 67, [3290, 3311]);
             ExpectAck(peer, 10002056, 67, [(3290, 88), (3311, 88)]);
             byte[] defaultMaterials = peer.Expect(0, 14).Body;
@@ -269,6 +290,37 @@ internal static class BoosterSelectionTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
     }
+    static (byte[] Body, bool EarlyMail) ReadDailyNotice(Func<WirePacket> read)
+    {
+        var first = read();
+        bool earlyMail = first is { Kind: 0, Opcode: 99 };
+        if (earlyMail) Bytes(first.Body, [1, 0], "上一请求刷新先发送唯一邀请邮件提醒");
+        var daily = earlyMail ? read() : first;
+        That(daily is { Kind: 0, Opcode: 574 }, "邮件之外仍严格要求每日任务通知在固定刷新序列首位");
+        return (daily.Body, earlyMail);
+    }
+
+    static void CheckMailRefreshOrdering()
+    {
+        var mail = new WirePacket(0, 99, [1, 0]);
+        var daily = new WirePacket(0, 574, [7, 8]);
+        foreach (bool early in new[] { false, true })
+        {
+            var queue = new Queue<WirePacket>(early ? [mail, daily] : [daily]);
+            var result = ReadDailyNotice(queue.Dequeue);
+            That(result.EarlyMail == early && result.Body.SequenceEqual(daily.Body) && queue.Count == 0,
+                "合成序列确定验证早到与晚到邮件前缀，不依赖线程调度命中竞态");
+        }
+        WirePacket[][] invalid = [[mail, mail, daily], [new(0, 99, [0, 0]), daily],
+            [new(1, 99, [1, 0]), daily], [new(0, 356, []), daily], [mail]];
+        foreach (var packets in invalid)
+        {
+            var queue = new Queue<WirePacket>(packets);
+            Reject<InvalidOperationException>(() => ReadDailyNotice(queue.Dequeue),
+                "重复邮件、错误正文/类型、错误顺序及缺少每日包均拒绝");
+        }
+    }
+
     static void RunProgressiveCategories(TcpTestFixture fixture, TcpTestResources resources, ushort selectedSlot)
     {
         const int sourceId = 490001689;

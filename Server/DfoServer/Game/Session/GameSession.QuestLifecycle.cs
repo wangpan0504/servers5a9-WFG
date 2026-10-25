@@ -58,6 +58,8 @@ internal sealed partial class GameSession
             unfinished.Phase != capture.Phase || unfinished.Identity != capture.Identity || unfinished.Condition != condition))
             return refusal with { Reason = "前一任务事务尚待原请求恢复" };
         if (!quests.TryGet(questId, out var quest)) return refusal;
+        if (action == QuestLifecycleAction.Accept && !CanAcceptHiddenQuest(expected,quest,quests,capture.SelectionEpoch,capture.Phase))
+            return refusal with {Reason="隐藏对话任务缺少当前场景开启许可"};
         // 觉醒券本地消费者补发关联活动任务32；只确认本次已提交券事务实际关闭的接取槽。
         if (action == QuestLifecycleAction.Giveup && expected.ActiveMainQuests.All(row => row.QuestId != questId) &&
             capture.Skip is { Plan.IsTicket: true,Plan.ProfessionGrowType: not null,Committed: not null } ticket &&

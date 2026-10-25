@@ -61,13 +61,16 @@ internal static class QuestMutationClearTcpTests
                 created = new CharacterRepository(fixture.Database).Create(owner,candidate with
                     { Level = 48,AcceptedStoryLevel = 48,CompletedQuests = entrance.Completed,InitialLearning = learning });
             }
-            string acceptance = "";
+            string acceptance = "", dailyAcceptance = "";
             long questSlot = -1;
             byte[] firstDeath = [], lastDeath = [];
             using (var peer = Open(fixture,account))
             {
                 peer.Select(0,prepared:true,resumeTown:true,room:false);
                 That(peer.Id == created.Id,"变异生物完整通关使用独立账号及实际角色身份");
+                var daily = fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id);
+                That(daily is [[13033L,1636L,string]],"48级保留原等级地区每日，与3348独立共存");
+                dailyAcceptance = (string)daily[0][2];
                 peer.Send(31,Request(31,[])); peer.Expect(1,31,[1,20,13,1,0,0,0,0]); drain(peer,null);
                 acceptance = (string)fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3348",peer.Id)[0][0];
                 questSlot = (long)fixture.Query("SELECT slot FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3348",peer.Id)[0][0];
@@ -80,7 +83,7 @@ internal static class QuestMutationClearTcpTests
                 var allKeys = new HashSet<ushort>();
                 var dead = new HashSet<ushort>();
                 VerifyMap(0); FormalDungeonTcpTests.Load(peer); Drain();
-                That(fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
+                That(fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3348",peer.Id)
                     is [[3348L,1L,string original]] && original == acceptance,
                     "完整入场及加载不改变原3348接取或提前归零");
                 int friendly = Enumerable.Range(0,map[18]).Select(at => 19+22*at).Single(at => U32(map,at+8) == 75067);
@@ -202,6 +205,9 @@ internal static class QuestMutationClearTcpTests
             using (var peer = Open(fixture,account))
             {
                 peer.Select(0,prepared:true,resumeTown:true,room:false); peer.Barrier();
+                That(fixture.Query("SELECT quest_id,acceptance_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
+                    is [[13033L,string retainedDaily]] && retainedDaily == dailyAcceptance,
+                    "完成与重连仅清理3348，不移除或重建并存地区每日");
                 That(peer.Id == created.Id && Progress().Length == 0 && peer.CompletedQuestHistory[4+3348] == 1 &&
                     fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3348",peer.Id) is [[1L]] &&
                     fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0 AND quest_id=3348",peer.Id) is [[1L]] &&
@@ -214,7 +220,7 @@ internal static class QuestMutationClearTcpTests
                 That(State() == before,"重连后的旧Run首末39与迟到34不能复活原实例或重复交付");
             }
 
-            object[][] Progress() => fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id);
+            object[][] Progress() => fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3348 ORDER BY slot",created.Id);
             string State() => fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",created.Id)+
                 fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)+
                 fixture.Snapshot("SELECT * FROM character_quest_clear_receipts WHERE character_id=$p0",created.Id)+

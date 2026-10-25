@@ -54,10 +54,14 @@ internal static class ForestChildAcceptanceTcpTests
             That(fixture.Query("SELECT slot FROM character_active_main_quests WHERE character_id=$p0", created.Id).Length == 0,
                 "首次登录前没有预填活动槽或接取身份");
             string acceptance = "";
+            string dailyIdentity = "";
             using (var peer = Open(fixture, account))
             {
                 Roster(peer.Roster, true);
                 Selected(peer.Select(0, prepared: true, resumeTown: true, room: false)[0].Body, false);
+                var daily = fixture.Query("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0", created.Id);
+                That(daily is [[0L,13031L,1636L,string]], "41级原地区每日独立占槽0，计数来自100普通与3首领");
+                dailyIdentity = (string)daily[0][3];
                 That(QuestLifecycleTcpTests.List(peer.AvailableQuests, level).Contains(3292) == eligible,
                     "初始21按实际前置决定3292候选，不用视频金币替代资格");
                 string before = State();
@@ -69,10 +73,10 @@ internal static class ForestChildAcceptanceTcpTests
                         "成功ACK31后21保留原任务定义，活动身份由真实接取建立");
                     Bytes(peer.Expect(0, 356).Body, peer.CompletedQuestHistory, "接取后前置历史完整且不完成3292");
                     drain(peer, null);
-                    var rows = fixture.Query("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0", created.Id);
-                    That(rows is [[0L, 3292L, 1L, string accepted]] && Guid.TryParseExact(accepted, "N", out var identity) &&
-                        identity != Guid.Empty, "真实31落库唯一活动槽0、剩余1和非空接取UUID");
-                    acceptance = (string)rows.Single()[3];
+                    var rows = fixture.Query("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", created.Id);
+                    That(rows is [[0L,13031L,1636L,string prior],[1L, 3292L, 1L, string accepted]] && prior == dailyIdentity && Guid.TryParseExact(accepted, "N", out var identity) &&
+                        identity != Guid.Empty, "真实31落库目标槽1、剩余1和非空接取UUID，不重建原每日");
+                    acceptance = (string)rows[1][3];
                     That(fixture.Query("SELECT action,quest_id,acceptance_id FROM character_quest_lifecycle_receipts WHERE character_id=$p0", created.Id)
                         is [["Accept", 3292L, string saved]] && saved == acceptance &&
                         fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3292", created.Id).Length == 0,
@@ -94,10 +98,11 @@ internal static class ForestChildAcceptanceTcpTests
                 Selected(peer.Select(0, prepared: true, resumeTown: true, room: false)[0].Body, eligible);
                 That(QuestLifecycleTcpTests.List(peer.AvailableQuests, level).Contains(3292) == eligible &&
                     peer.CompletedQuestHistory[4 + 3292] == 0, "重连21与完成历史保持实际接取资格，不把重连视为通关");
-                That(eligible ? fixture.Query("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0", created.Id)
-                    is [[0L, 3292L, 1L, string restored]] && restored == acceptance :
-                    fixture.Query("SELECT slot FROM character_active_main_quests WHERE character_id=$p0", created.Id).Length == 0,
-                    "重连回放原活动槽、UUID与状态；拒绝场景仍为空");
+                var restoredRows = fixture.Query("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", created.Id);
+                That(restoredRows.Length == (eligible ? 2 : 1) &&
+                    restoredRows[0] is [0L,13031L,1636L,string oldDaily] && oldDaily == dailyIdentity &&
+                    (!eligible || restoredRows[1] is [1L,3292L,1L,string restored] && restored == acceptance),
+                    "重连精确保留地区每日和目标的独立原槽、UUID与状态；拒绝场景仅保留每日");
                 // 本条全部断言成功后才清理自己的角色；失败自然保留独立账号现场。
                 peer.Send(7); peer.Expect(1, 7, [1]); Roster(peer.Expect(0, 2).Body, true);
                 peer.Send(6, Build(writer => { writer.Write((ushort)0); writer.Write(Name(name)); }));
@@ -119,8 +124,8 @@ internal static class ForestChildAcceptanceTcpTests
             {
                 That(body.Length == 235 && body[0] == 1 && U16(body, 9) == created.Id, "完整ACK4绑定隔离账号唯一角色");
                 for (int slot = 0; slot < 30; slot++)
-                    That(U16(body, 22 + 6 * slot) == (active && slot == 0 ? 3292 : ushort.MaxValue) &&
-                        U32(body, 24 + 6 * slot) == (active && slot == 0 ? 1u : 0u), "ACK4完整三十槽只回放真实接取");
+                    That(U16(body, 22 + 6 * slot) == (slot == 0 ? 13031 : active && slot == 1 ? 3292 : ushort.MaxValue) &&
+                        U32(body, 24 + 6 * slot) == (slot == 0 ? 1636u : active && slot == 1 ? 1u : 0u), "ACK4完整三十槽只回放真实接取");
             }
             void Roster(byte[] body, bool present)
             {

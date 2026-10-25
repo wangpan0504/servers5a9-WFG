@@ -15,7 +15,9 @@ internal enum ItemKind : byte
     Profession = 10,
     Emblem = 9,
     GuildMedal = 12,
-    GuardianGem = 13
+    GuardianGem = 13,
+    Rune = 14,
+    Talisman = 11
 }
 
 internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, byte MinimumLevel,
@@ -30,6 +32,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public byte CreatureInitialMode { get; init; }
     public bool IsPremiumService { get; init; }
     public PremiumContract? AcquisitionContract { get; init; }
+    public bool PvpFreeEquipment { get; init; }
     public bool PersonalCargoForbidden { get; init; }
     public bool AccountCargoForbidden { get; init; }
     public ushort PersonalCargoUpgradeTarget { get; init; }

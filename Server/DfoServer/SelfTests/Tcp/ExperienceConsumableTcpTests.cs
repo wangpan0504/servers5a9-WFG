@@ -53,9 +53,14 @@ internal static class ExperienceConsumableTcpTests
             }
             var first = Use(peer, created[0], growth.GetLevelExperienceSpan(49) * 10 / 100, 50);
             That(first.All(packet => packet.Opcode != 14) && first.Single(packet => packet.Opcode == 37).Body.Length == 91 &&
-                first.Count(packet => packet.Opcode == 21) == 1, "先增量ACK再完整成长和升级投影，不重复删除源");
+                first.Count(packet => packet.Opcode == 21) == 2 && first.Count(packet => packet.Opcode == 574) == 1,
+                "先增量ACK及升级候选，再由下一请求分配新等级每日并刷新候选，不重复删除源");
             using var readOwner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
             var after = repository.LoadCharacter(readOwner, created[0].Slot);
+            That(after.ActiveMainQuests.Select(row => (int)row.QuestId).Order().SequenceEqual(new[] {13033,13036}),
+                "49升50保留旧等级每日并新增当前等级每日，不提前删除尚未完成任务");
+            Bytes(first.Single(packet => packet.Opcode == 574).Body,
+                DfoServer.Network.Builders.QuestPackets.ActiveList(after.ActiveMainQuests),"每日分配通知精确对应已提交两项任务");
             Use(peer, after, growth.GetLevelExperienceSpan(50) * 10 / 100, 50);
             before = fixture.Snapshot(); peer.Send(30, [65, 0]); peer.Expect(1, 30, [0, 19, 0]); peer.Barrier();
             That(fixture.Snapshot() == before, "同槽连续消费到空后，不重用上次增量响应");

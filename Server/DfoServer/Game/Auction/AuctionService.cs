@@ -510,13 +510,13 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         }
         // 挂牌表把物品种类单独存了一列（条目字节里没有它）：与模板对不上说明这行是坏的，
         // 此时不能动状态（道具会真的消失），明确按「数据不可用」拒绝。
-        if ((byte)template.Kind != listing.ItemKind)
+        if (!InventoryTalismanCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template.Kind))
             return AuctionCancelDecision.Reject(AuctionCancelError.Unavailable,
                 $"挂牌记录的物品种类 {listing.ItemKind} 与模板 {listing.ItemTemplateId} 的 {template.Kind} 不符");
         ItemCore core;
         try
         {
-            core = itemCoreSnapshot(listing.ItemEntry, template.Kind);
+            core = itemCoreSnapshot(listing.ItemEntry, (ItemKind)listing.ItemKind);
         }
         catch (Exception error) when (error is InvalidDataException or ArgumentException or IndexOutOfRangeException or EndOfStreamException)
         {
@@ -617,21 +617,22 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         {
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, $"模板解析失败（{error.GetType().Name}）：{error.Message}");
         }
-        if ((byte)template.Kind != listing.ItemKind)
+        if (!InventoryTalismanCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template.Kind))
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable,
                 $"挂牌记录的物品种类 {listing.ItemKind} 与模板 {listing.ItemTemplateId} 的 {template.Kind} 不符");
         ItemCore core;
         try
         {
-            core = itemCoreSnapshot(listing.ItemEntry, template.Kind);
+            core = itemCoreSnapshot(listing.ItemEntry, (ItemKind)listing.ItemKind);
         }
         catch (Exception error) when (error is InvalidDataException or ArgumentException or IndexOutOfRangeException or EndOfStreamException)
         {
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, "挂牌物品快照不可用：" + error.Message);
         }
         // 托管邮件只能装普通实体：钱包货币与史诗碎片走账号钱包，不能借邮件托管（与邮箱投递同一口径）。
-        if (core.ItemId != listing.ItemTemplateId || core.Kind != template.Kind || core.Count <= 0 ||
-            core.Count != listing.ItemCount || core.Count > template.StackLimit || core.IsExpired(now) ||
+        bool legacyRune = core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
+        if (core.ItemId != listing.ItemTemplateId || !InventoryTalismanCompatibility.AcceptsKind(core.Kind, template.Kind) || core.Count <= 0 ||
+            core.Count != listing.ItemCount || !legacyRune && core.Count > template.StackLimit || core.IsExpired(now) ||
             CurrencyWallet.RewardKind(core.ItemId) is not null || pieces.ByPiece.ContainsKey(core.ItemId))
         {
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable,
@@ -765,7 +766,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
                 skipped.Add($"挂牌 {listing.ListingId}：模板解析失败（{error.GetType().Name}）");
                 continue;
             }
-            if ((byte)template.Kind != listing.ItemKind)
+            if (!InventoryTalismanCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template.Kind))
             {
                 skipped.Add($"挂牌 {listing.ListingId}：物品种类 {listing.ItemKind} 与模板 {listing.ItemTemplateId} 的 {template.Kind} 不符");
                 continue;
@@ -773,7 +774,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
             ItemCore core;
             try
             {
-                core = itemCoreSnapshot(listing.ItemEntry, template.Kind);
+                core = itemCoreSnapshot(listing.ItemEntry, (ItemKind)listing.ItemKind);
             }
             catch (Exception error) when (error is InvalidDataException or ArgumentException or IndexOutOfRangeException or EndOfStreamException)
             {
@@ -812,9 +813,10 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     (InventoryItem Item, bool Fallback)? Locate(InventorySnapshot inventory, AuctionRegisterRequest request, out string? fallbackReason)
     {
         fallbackReason = null;
-        if (request.SourceList == (byte)InventoryListType.Main)
+        if (request.SourceList is (byte)InventoryListType.Main or (byte)InventoryListType.Talisman &&
+            (request.SourceList != (byte)InventoryListType.Talisman || request.SourceSlot < 210))
         {
-            var slot = new InventorySlot(InventoryListType.Main, unchecked((short)request.SourceSlot));
+            var slot = new InventorySlot((InventoryListType)request.SourceList, unchecked((short)request.SourceSlot));
             if (inventory.Find(slot) is { } direct && direct.Core.ItemId == request.ItemTemplateId)
                 return (direct, false);
             // 推断的槽位不可信：不按它扣道具，落到下面的扫描路径并说明原因。
@@ -831,7 +833,8 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         int matches = 0;
         foreach (var candidate in inventory.Items)
         {
-            if (candidate.Position.List != InventoryListType.Main || candidate.Core.ItemId != request.ItemTemplateId)
+            if (candidate.Core.ItemId != request.ItemTemplateId || candidate.Position.List != InventoryListType.Main &&
+                (candidate.Position.List != InventoryListType.Talisman || candidate.Position.Index >= 210))
                 continue;
             matches++;
             found ??= candidate;
@@ -903,6 +906,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     /// </summary>
     public static string? TransferBlocked(ItemCore core, ItemTemplate template)
     {
+        if (template.PvpFreeEquipment) return "决斗专用初始装备不可转移";
         string attach = NormalizeAttachType(template.AttachType);
         return attach switch
         {

@@ -51,7 +51,7 @@ internal static class MagicBoxTcpTests
             // 成功应答前事务已提交；空宠物夹具的实际奖励决定是否先发布105，不能跳过未知通知。
             if (committed.Items.Any(item => item.Creature is not null))
                 CreatureDetails(peer.Expect(0, 105).Body, committed);
-            foreach (byte list in new byte[] { 0, 2, 12, 1, 7, 38 })
+            foreach (byte list in new byte[] { 0, 2, 12, 1, 7, 38, 46 })
                 That(peer.Expect(0, 13).Body[0] == list, "提交后重建实际物品容器：" + list);
             ReadEffects(peer);
         }

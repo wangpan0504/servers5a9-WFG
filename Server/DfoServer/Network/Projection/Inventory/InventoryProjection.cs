@@ -45,7 +45,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             // 与登录全量同一套编码：清空条目为目标 slot + itemId=-1，因此解引用走既有 Delta 语义，不手搓包体。
             changedSlots = changedSlots
                 .Concat(current.Inventory.Items.Where(item => item.Position.List is InventoryListType.Main or InventoryListType.Avatar or
-                    InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.PersonalCargo).Select(item => item.Position))
+                    InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.PersonalCargo).Select(item => item.Position))
                 .Concat(CurrencyPackets.VirtualSlots.Select(slot => new InventorySlot(InventoryListType.Main, slot)))
                 .Distinct().ToArray();
         }
@@ -68,6 +68,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Avatar), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Pet), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.GuildMedal), "inventory_committed_full_list", CanSend);
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
         }
         else foreach (var list in slots.Select(slot => slot.List).Where(list => !mainExpansionChanged || list != InventoryListType.Main).Distinct().Order())
         {
@@ -121,7 +122,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             if (current.Inventory.AvatarPresets.Find(presetSlot) is { } committedPreset)
                 await context.Notify(NotiPacketType.UPDATE_AVATAR_PRESET, AvatarPresetPackets.Update(committedPreset),
                     "avatar_preset_content_committed", CanSend);
-        bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
+        bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot) ||
+            slot.List == InventoryListType.Talisman && slot.Index is >= ItemSlotBoundService.EquippedRuneStart and <= ItemSlotBoundService.EquippedRuneEnd);
         bool weaponSkinChanged = plan.Before.Skins.Selected != current.Inventory.Skins.Selected;
         if (refreshEquipment && (equipmentChanged || weaponSkinChanged || plan.EquipmentSlotFlagsAfter is not null))
         {

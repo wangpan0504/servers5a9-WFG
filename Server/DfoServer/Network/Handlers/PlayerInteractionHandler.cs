@@ -110,6 +110,15 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
     {
         bool kick = request.Opcode == (ushort)CmdPacketType.WALKOUT_PARTY_MEMBER;
         if (request.Body.Length != (kick ? 1 : 0)) throw new InvalidDataException("离队请求长度错误");
+        if (!kick && context.Session.ReadPvpTraining() is { } training)
+        {
+            var left = context.Session.EndPvpTraining(training.InstanceId);
+            if (left is not null)
+                await context.Notify(NotiPacketType.PVP_ROOM_INFO, PvpTrainingHandler.Room(left.Run, true), "pvp_training_left",
+                    () => context.Session.CanPublishPvpTraining(left));
+            else await context.Reply(CmdPacketType.LEAVE_PARTY, SocialPackets.Ack(19), "pvp_training_leave_rejected");
+            return CommandResult.Handled;
+        }
         var result = parties.Leave(context.Session, kick ? request.Body[0] : null, context.BlocksTownActions);
         log.Write(result.Accepted ? "party_left" : "party_rejected", new { Connection = context.Id, request.Opcode, result.Error });
         var replied = context.Reply((CmdPacketType)request.Opcode, SocialPackets.Ack(result.Error), "party_leave_result");

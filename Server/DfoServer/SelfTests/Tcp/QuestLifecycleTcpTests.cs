@@ -25,6 +25,10 @@ internal static class QuestLifecycleTcpTests
         var b=a with {Id=29963};
         var m=n with {Id=29964,Definition=n.Definition! with {PrerequisiteGroups=[[29963]]}};
         var catalog=new QuestCatalog(new[] {a,c,n,b,m}.ToDictionary(row=>row.Id));
+        Reject<InvalidDataException>(() => TcpSyntheticQuestCatalog.WithHopeMissions(
+            new QuestCatalog(new[] {r.Quests.Get(6171)}.ToDictionary(row=>row.Id)),r.Quests),
+            "合成编号与希望依赖重叠时拒绝，不能悄悄覆盖真实定义");
+        catalog=TcpSyntheticQuestCatalog.WithHopeMissions(catalog,r.Quests);
         await using var f=new TcpTestFixture(options,Path.Combine(root,"quest-stage-wire"),resources:r,questCatalog:catalog);
         var repository=new CharacterRepository(f.Database,catalog);
         var created=new List<Character>();
@@ -889,6 +893,7 @@ internal static class QuestLifecycleTcpTests
     {
         // 只准备已达成的3472持久接取；实际34和奖励链走TCP，不冒充158副本完整猎杀。
         var (created,materialSlot) = Prepare("AlbertTCP",2,[new(0,3458,2),new(1,3472,0)],[3457]);
+        var dailyIdentities = new Dictionary<(ushort,int),(long Slot,string Identity)>();
         string acceptance = fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3458",created.Id);
         using (var peer = Open(fixture))
         {
@@ -903,10 +908,20 @@ internal static class QuestLifecycleTcpTests
                 That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
                     "account "+fixture.Options.DevelopmentAccount+" level AlbertTCP "+level,out string reply) && reply.StartsWith("OK ",StringComparison.Ordinal),
                     "阿尔伯特GM连接当前extra端口并实际提交等级："+level);
-                peer.Barrier();
+                int cycleNotices=0;
+                peer.Barrier(packet =>
+                {
+                    That(level==58 && packet.Kind==0 && cycleNotices<4 && packet.Opcode==new ushort[]{574,356,21,356}[cycleNotices],
+                        "跨地区升级依次发布每日槽、切日历史、候选和刷新历史");
+                    if(packet.Opcode==574) CheckActive(packet.Body,created.Id,Convert.FromHexString("02000000820D02000000900D00000000"));
+                    else if(packet.Opcode==356) History(packet.Body);
+                    else { That(packet.Opcode==21,"GM跨地区只接受574、356、21完整通知");_=List(packet.Body,level); }
+                    cycleNotices++;
+                });
+                That(cycleNotices==(level==58?4:0),"跨地区等级变更只分配一次新每日并完整刷新历史与候选");
                 That(fixture.Query("SELECT level,accepted_story_level,experience,revision FROM characters WHERE id=$p0",created.Id)
                     is [[long actual,1L,long experience,long next]] && actual == level &&
-                    experience == checked((long)growth.GetLevelStartExperience(level)) && next == revision+1 && Assets(created.Id) == before,
+                    experience == checked((long)growth.GetLevelStartExperience(level)) && next == revision+(level==58?2:1) && Assets(created.Id) == before,
                     "GM"+level+"只更新等级/经验/技能，保留story1、库存、父子完成位与全部AcceptanceId，不伪造游戏ACK");
                 var points = fixture.Query("SELECT context,sp,tp FROM character_skill_points WHERE character_id=$p0 ORDER BY context",created.Id);
                 That(points.Length == 2 && points.All(row => (long)row[1] == resources.Learning.TotalSp(level) &&
@@ -918,31 +933,31 @@ internal static class QuestLifecycleTcpTests
             That(State(created.Id) == blocked,"58级与持有碎片都不能跳过3472正式交付、提前接3473或领取父奖励");
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); Finished(peer,Reward(3472,2,0,2));
             Balance(peer,4);
-            peer.Expect(0,574,Convert.FromHexString("01000000820D01000000")); peer.Expect(0,21);
+            CheckActive(peer.Expect(0,574).Body,peer.Id,Convert.FromHexString("01000000820D01000000")); peer.Expect(0,21);
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
-            That(Materials(created.Id) == 4 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id)
+            That(Materials(created.Id) == 4 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040)",created.Id)
                 is [[3458L,1L]],"真实3472 ACK34只发碎片2、父2→1，未自动接或交付3473");
             string held = State(created.Id);
             peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[0,18,0]);
-            peer.Expect(0,574,Convert.FromHexString("01000000820D01000000"));
+            CheckActive(peer.Expect(0,574).Body,peer.Id,Convert.FromHexString("01000000820D01000000"));
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
             That(State(created.Id) == held,"重接已完成3472只回放父活动槽和356，不接3473、不改碎片");
             string once = State(created.Id);
             peer.Send(34,[34,0,144,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
             That(State(created.Id) == once,"3472重复34拒绝且不重复奖励");
             peer.Send(31,[31,0,145,13]); peer.Expect(1,31,Convert.FromHexString("01910D0000000000"));
-            peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000")); peer.Expect(0,21);
+            CheckActive(peer.Expect(0,574).Body,peer.Id,Convert.FromHexString("02000000820D00000000910D00000000")); peer.Expect(0,21);
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
             held = State(created.Id);
             peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[0,18,0]);
-            peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
+            CheckActive(peer.Expect(0,574).Body,peer.Id,Convert.FromHexString("02000000820D00000000910D00000000"));
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
             That(State(created.Id) == held,"3473条件0且碎片4时重接3472只回放父子活动槽和356，不扣3也不交付");
             peer.Send(34,[34,0,145,13,255,255,1,0,255,255]); Finished(peer,Reward(3473,0,3,4));
             Balance(peer,5);
             peer.Expect(0,21);
             History(peer.Expect(0,356).Body,3472,3473); peer.Barrier();
-            That(Materials(created.Id) == 5 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id)
+            That(Materials(created.Id) == 5 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040)",created.Id)
                 is [[3458L,0L]],"真实3473完整37B ACK34扣3发4，实际库存4→5，父1→0并保留未领奖父接取");
             once = State(created.Id);
             peer.Send(34,[34,0,145,13,255,255,1,0,255,255]); Finished(peer,[0,19,0]); peer.Barrier();
@@ -972,7 +987,7 @@ internal static class QuestLifecycleTcpTests
                 U32(goldUpdate,5) == 0 && U32(goldUpdate,9) == 3996,
                 "父ACK34后先以完整Main金币行同步绝对3996，再发布EXP37与任务历史");
             peer.Expect(0,37); DrainNotifications(peer);
-            That(Materials(created.Id) == 5 && fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]] &&
+            That(Materials(created.Id) == 5 && fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040)",created.Id) is [[0L]] &&
                 fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id)
                     is [[3458L],[3472L],[3473L]],"父34正式完成后资产保留、三项真实回执各一次");
             string once = State(created.Id);
@@ -1001,14 +1016,14 @@ internal static class QuestLifecycleTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(poor.Slot,prepared:true);
-            string identity = fixture.Snapshot("SELECT quest_id,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",poor.Id);
+            string identity = fixture.Snapshot("SELECT quest_id,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040) ORDER BY slot",poor.Id);
             That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3473",poor.Id)
                 is [[0L]],"旧子0在选角后仍保留，后续必须由真实33按缺料事实修正");
             peer.Send(33,[33,0,145,13,1,0]); peer.Expect(1,33,[1,145,13,1,0,0,0]); peer.Barrier();
             That(Materials(poor.Id) == 2 && fixture.Query(
-                "SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",poor.Id)
+                "SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040) ORDER BY slot",poor.Id)
                     is [[3458L,1L],[3473L,1L]] && identity == fixture.Snapshot(
-                "SELECT quest_id,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",poor.Id),
+                "SELECT quest_id,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040) ORDER BY slot",poor.Id),
                 "真实3473重登后缺料33修正旧子0，保留父剩余1、实际库存与原父子接取身份");
         }
 
@@ -1023,7 +1038,7 @@ internal static class QuestLifecycleTcpTests
             peer.Select(native.Slot,prepared:true);
             peer.Send(33,[33,0,145,13,1,0]); peer.Expect(1,33,[1,145,13,0,0,0,0]); peer.Barrier();
             That(Materials(native.Id) == 4 && fixture.Query(
-                "SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",native.Id)
+                "SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040) ORDER BY slot",native.Id)
                     is [[3458L,0L],[3473L,0L]] &&
                 fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3473",native.Id)
                     is [[string retained]] && retained == nativeAcceptance &&
@@ -1038,7 +1053,7 @@ internal static class QuestLifecycleTcpTests
             }
             // 已完成3472仍回放574/356。已接取3473只回error18，重复请求也不能再引出356。
             peer.Send(31,[31,0,144,13]); peer.Expect(1,31,[0,18,0]);
-            peer.Expect(0,574,Convert.FromHexString("02000000820D00000000910D00000000"));
+            CheckActive(peer.Expect(0,574).Body,peer.Id,Convert.FromHexString("02000000820D00000000910D00000000"));
             History(peer.Expect(0,356).Body,3472); peer.Barrier();
             That(State(native.Id) == before,"重接已完成3472只回放父0/末子0，不写库、不扣料或发奖");
             for (int repeat = 0; repeat < 2; repeat++)
@@ -1064,11 +1079,11 @@ internal static class QuestLifecycleTcpTests
             bool activeCleared = false, historyRestored = false;
             DrainNotifications(peer,packet =>
             {
-                if (packet.Kind == 0 && packet.Opcode == 574) { Bytes(packet.Body,new byte[4],"父末子同事务清两槽"); activeCleared = true; }
+                if (packet.Kind == 0 && packet.Opcode == 574) { CheckActive(packet.Body,peer.Id,new byte[4]); activeCleared = true; }
                 if (packet.Kind == 0 && packet.Opcode == 356) { History(packet.Body,3458,3472,3473); historyRestored = true; }
             });
             That(activeCleared && historyRestored && Materials(native.Id) == 5 &&
-                fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",native.Id) is [[0L]],
+                fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040)",native.Id) is [[0L]],
                 "正式父34后才归档父与末子，两槽删除及余额一致");
             before = State(native.Id);
             foreach (byte quest in new byte[] {130,145})
@@ -1118,12 +1133,45 @@ internal static class QuestLifecycleTcpTests
             body[4+3457] == 1 && ids.All(id => body[4+id] == 1),"356完成历史在21之后恢复实际阿尔伯特子完成位");
         long Materials(ushort id) => (long)fixture.Query("SELECT coalesce(sum(json_extract(i.item_core,'$.Value')),0) FROM character_inventory_items i " +
             "JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND json_extract(i.item_core,'$.ItemId')=10164800",id)[0][0];
-        string Assets(ushort id) => fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",id) +
+        string Assets(ushort id) { CheckDailies(id); return fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN(13037,13040) ORDER BY slot",id) +
             fixture.Snapshot("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id",id) +
             fixture.Snapshot("SELECT s.slot_index,i.* FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) " +
-                "WHERE s.character_id=$p0 ORDER BY s.slot_index",id);
-        string State(ushort id) => Assets(id)+fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",id) +
+                "WHERE s.character_id=$p0 ORDER BY s.slot_index",id); }
+        string State(ushort id) => Assets(id)+fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",id)+fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",id) +
             fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY revision",id);
+        void CheckDailies(ushort id)
+        {
+            long level=(long)fixture.Query("SELECT level FROM characters WHERE id=$p0",id)[0][0];
+            var rows=fixture.Query("SELECT quest_id,condition_state,slot,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id IN(13037,13040) ORDER BY quest_id",id);
+            That(rows.Length==(level>=58?2:1) && rows[0] is [13037L,1636L,long,string] &&
+                (level<58 || rows[1] is [13040L,1636L,long,string]),"阿尔伯特夹具保留56级每日，58级只新增对应地区每日");
+            foreach(var row in rows)
+            {
+                var key=(id,checked((int)(long)row[0]));var value=((long)row[2],(string)row[3]);
+                That(Guid.TryParseExact(value.Item2,"N",out var accepted) && accepted!=Guid.Empty,"每日原接取UUID有效");
+                if(dailyIdentities.TryGetValue(key,out var original))That(original==value,"每日独立原槽和接取身份不因父子推进或重连重建");
+                else dailyIdentities.Add(key,value);
+            }
+        }
+        void CheckActive(byte[] body,ushort id,byte[] targets)
+        {
+            CheckDailies(id);
+            var rows=fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",id);
+            int at=0;
+            byte[] expected=Build(writer=>
+            {
+                writer.Write(checked((uint)rows.Length));
+                foreach(var row in rows)
+                {
+                    long quest=(long)row[0],state=(long)row[1];
+                    if(quest is 13037 or 13040){writer.Write(checked((ushort)quest));writer.Write(1636u);continue;}
+                    That(at<U32(targets) && U16(targets,4+6*at)==quest && U32(targets,6+6*at)==state,
+                        "574中的原目标集合和条件仍精确匹配独立常量，不忽略额外任务");
+                    writer.Write(U16(targets,4+6*at));writer.Write(U32(targets,6+6*at));at++;
+                }
+            });
+            That(at==U32(targets),"没有遗漏原父子活动槽");Bytes(body,expected,"574完整回放父子与独立每日，不改变原计数");
+        }
     }
 
     static void VerifyLargeResearchMaterials(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
@@ -1148,9 +1196,11 @@ internal static class QuestLifecycleTcpTests
         foreach (var (kind,balance) in new[] { (3,200),(4,200),(5,199),(6,200) })
             fixture.Sql("INSERT INTO account_currency_balances(account,currency_kind,balance) VALUES($p0,$p1,$p2) " +
                 "ON CONFLICT(account,currency_kind) DO UPDATE SET balance=excluded.balance",fixture.Options.DevelopmentAccount,kind,balance);
+        QuestDailyCoexistence? daily = null;
         using (var peer = Open(fixture))
         {
             peer.Select(created.Slot,prepared: true,resumeTown: true,room: false);
+            daily = new(fixture,created.Id,13050,1666);
             peer.Send(31,[31,0,179,14]); peer.Expect(1,31,[1,179,14,1,2,0,0,0]);
             peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             string before = fixture.Snapshot();
@@ -1173,7 +1223,7 @@ internal static class QuestLifecycleTcpTests
                 receipt is [[25L,string]] && consumed.RootElement.GetArrayLength() == 4 &&
                 consumed.RootElement.EnumerateArray().All(row => row.GetProperty("Count").GetInt32() == 200),
                 "原生父33沿完整材料事务消费四个200，NOTI14同步四钱包归零，回执保留四项消耗");
-            That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[3729L,0L]] &&
+            That(daily!.OtherRows("quest_id,condition_state") is [[3729L,0L]] &&
                 fixture.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3763",created.Id) is [[1L]],
                 "终末子归档才推进父归零，父未自动发奖或标完成");
         }
@@ -1195,22 +1245,24 @@ internal static class QuestLifecycleTcpTests
             map.Npcs.Any(npc => npc.Id == 78) && map.Npcs.All(npc => npc.Id != 2000),
             "475 TCP使用真实3734、源装置78和不存在于静态地图的虚拟NPC2000");
         var created = Prepare("QuestComm",50000,position,active:false);
+        QuestDailyCoexistence? daily = null;
         using (var peer = Open(fixture))
         {
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            daily = new(fixture,created.Id,13050,1666);
             Accept(peer,3734);
-            string original = fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id);
+            string original = fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3734",created.Id);
             RefuseMeeting(peer);
             peer.Send(475); peer.Expect(1,475,Convert.FromHexString("0100000000409C0000")); peer.Barrier();
             That(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id) is [[40000L]] &&
-                fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id) is [[1L]],
+                daily!.OtherRows("condition_state") is [[1L]],
                 "空正文475完整9B确认实际绝对40000金币，付款不提前达成会面");
             string paid = State(created.Id);
             peer.Send(475); peer.Expect(1,475,Convert.FromHexString("0100000000409C0000")); peer.Barrier();
             That(State(created.Id) == paid,"同场景475重放不再次扣费、不新建receipt或revision");
             peer.Send(32,[32,0,150,14]); peer.Expect(1,32,[1,150,14]); DrainNotifications(peer);
             Accept(peer,3734);
-            That(fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0",created.Id) != original,
+            That(fixture.Snapshot("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3734",created.Id) != original,
                 "真实32/31重接得到新接取身份，旧付款不能复活虚拟NPC");
             RefuseMeeting(peer);
             peer.Send(475); peer.Expect(1,475,Convert.FromHexString("010000000030750000")); peer.Barrier();
@@ -1222,7 +1274,7 @@ internal static class QuestLifecycleTcpTests
             That(State(created.Id) == inherited,"账号接管回放已扣金币及活动任务，但不继承旧generation通讯来源");
             replacement.Send(475); replacement.Expect(1,475,Convert.FromHexString("0100000000204E0000")); replacement.Barrier();
             replacement.Send(33,[33,0,150,14,0,0]); replacement.Expect(1,33,[1,150,14,0,0,0,0]); replacement.Barrier();
-            That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]],
+            That(daily!.OtherRows("condition_state") is [[0L]],
                 "新owner本次付款后公共33保存3734虚拟NPC会面");
             string met = State(created.Id);
             replacement.Send(33,[33,0,150,14,0,0]); replacement.Expect(1,33,[1,150,14,0,0,0,0]); replacement.Barrier();
@@ -1233,7 +1285,7 @@ internal static class QuestLifecycleTcpTests
                 "真实34沿普通会面奖励合同交付3734");
             DrainNotifications(replacement);
             Accept(replacement,3735);
-            That(fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[3735L]] &&
+            That(daily!.OtherRows("quest_id") is [[3735L]] &&
                 fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3734",created.Id) is [[1L]],
                 "3734完成一次后真实31接取3735，不伪造后继物件进度");
         }

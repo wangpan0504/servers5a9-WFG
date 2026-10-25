@@ -9,9 +9,23 @@ namespace DfoServer.Game.Quests;
 
 internal sealed record QuestCoverageRow(int Id, string Path, string? Grade, string Condition, int SubType,
     QuestResourceEntry Entry, bool ImplementedPath, ImmutableArray<string> Restrictions,
-    ImmutableArray<string> UnconfirmedDeclarations, ImmutableArray<int> MissingReferences);
+    ImmutableArray<string> UnconfirmedDeclarations, ImmutableArray<int> MissingReferences)
+{
+    public string? Name { get; init; }
+    public int MinimumLevel { get; init; }
+    public int MaximumLevel { get; init; }
+    public bool RegionalAutoDaily { get; init; }
+    public ImmutableArray<string> SupportedDedicatedPaths { get; init; } = [];
+    public ImmutableArray<int> MissingDungeonReferences { get; init; } = [];
+}
 internal sealed record QuestCoverageReport(int Definitions, int ImplementedPaths, ImmutableArray<QuestCoverageRow> Quests,
-    ImmutableArray<ImmutableArray<int>> PrerequisiteCycles, ImmutableArray<ImmutableArray<int>> ParentCycles);
+    ImmutableArray<ImmutableArray<int>> PrerequisiteCycles, ImmutableArray<ImmutableArray<int>> ParentCycles)
+{
+    public bool DungeonReferencesChecked { get; init; }
+    public bool DedicatedPathsChecked { get; init; }
+    public bool HopePathsChecked { get; init; }
+    public ImmutableArray<int> RegionalAutoDailyIds { get; init; } = [];
+}
 
 // 覆盖状态是当前可用合同，不是“脚本存在即支持”，也不把专用入口分类命名为废弃。
 internal static class QuestCoverage
@@ -35,6 +49,13 @@ internal static class QuestCoverage
 
     public static ImmutableArray<string> Unconfirmed(StoryQuest quest) => quest.Definition?.Fields
         .Where(field => !KnownFields.Contains(field.Name) &&
+            !(field.Name is "episode town use" or "npc visivility not revert" && QuestEpisodeEntry.Supports(quest)) &&
+            !(field.Name == "npc dialog" && QuestHiddenEntry.NpcDialogueShape(quest)) &&
+            !(field.Name == "cleared quest" && QuestHiddenEntry.ClearedNpcDialogueShape(quest)) &&
+            !(field.Name == "pvp private expose" && DfoServer.Game.Pvp.PvpTrainingExposure.TryRead(quest,out _)) &&
+            !(field.Name == "sub reward" && DfoServer.Game.Pvp.PvpTrainingProgress.Manual(quest)) &&
+            !(field.Name == "synchronization account quest" && QuestAccountPolicy.PaidSynchronization(quest)) &&
+            !(QuestMailPlan.IsField(field.Name) && (QuestMailPlan.CompletionDeclaration(quest) || QuestEligibilityMailPlan.Declaration(quest))) &&
             !(field.Name == "searching information" && ExplicitMeetWithoutAutoCheck(quest)) &&
             !(field.Name is "daily random set" or "next relation quest" && HarlemExpRelationGroup(quest)))
         .Select(field => field.Name).Distinct().Order().ToImmutableArray() ?? [];
@@ -99,7 +120,18 @@ internal static class QuestCoverage
         quest.RewardType is null && quest.DeclaredGoldMultiple is > 0 &&
         quest.Rewards.Count > 0 && quest.Rewards.All(row => row.Type == 0 && row.Value == 0);
 
+    public static bool HasFirstNpcExposureDeclaration(StoryQuest quest) => quest.Definition is { } definition &&
+        (definition.Fields.Where(field => field.Name == "first exposed by npc").ToArray() switch
+        {
+            [] => definition.FirstExposedByNpc is null,
+            [{ Children.Length: 0, Values: [{ Type: 0, Value: 0 or 1, Text: null }] } field] =>
+                definition.FirstExposedByNpc == field.Values[0].Value,
+            _ => false
+        });
+
     public static bool HasOrdinaryDisplay(StoryQuest quest) => quest.Definition is { } definition &&
+        // 匹配版04199563只写解析局部标志，未复制至QST或签发进度；严格保留原0/1声明。
+        HasFirstNpcExposureDeclaration(quest) &&
         // Full03 04195F2F读取可见性；clear/delete同样由真实完成投影触发客户端显示，不签发额外进度或奖励。
         definition.NpcVisibility.All(row => row.Condition is "[accept]" or "[clear]" && row.Visibility is "[show]" or "[hide]" ||
             row.Condition == "[clear]" && row.Visibility == "[delete]") &&
@@ -158,7 +190,7 @@ internal static class QuestCoverage
 
     public static bool HasOrdinaryDeclarations(StoryQuest quest) => Unconfirmed(quest).Length == 0 &&
         quest.Grade != "[daily random]" &&
-        quest.Definition is { Diagnostics.Length: 0, GradeModifiers.Length: 0, FirstExposedByNpc: null } definition &&
+        quest.Definition is { Diagnostics.Length: 0, GradeModifiers.Length: 0 } definition &&
         (definition.MinimumClearCount is null || QuestRelationProgress.ThresholdShape(quest)) &&
         (!quest.Definition.Has("auto accept") || QuestClientSceneProgress.Cinematic(quest,out _,out _)) &&
         HasOrdinaryFilter(quest) && HasOrdinaryExceptions(quest) && HasOrdinaryAttributes(quest) &&
@@ -187,6 +219,7 @@ internal static class QuestCoverage
     internal static bool HasSupportedTarget(StoryQuest quest, QuestCatalog catalog) => quest.Condition switch
     {
         "[custom quest]" => QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest),
+        "[epic production]" => QuestEpicProductionProgress.Supports(quest),
         "[self disjoint item]" => QuestExpertJobProgress.SelfDisjoint(quest),
         "[meet npc]" => QuestStateProgress.Type(quest) is not null || quest.SubType == -1 && quest.IntData is [> 0],
         "[seeking]" or "[seek n meet npc]" => QuestLifecyclePlan.SeekingSubtype(quest) && QuestLifecyclePlan.ValidSeeking(quest),
@@ -197,13 +230,15 @@ internal static class QuestCoverage
         "[condition under clear]" or "[clear a dungeon]" => QuestDungeonClearProgress.Supports(quest),
         "[reach the range]" => QuestClientSceneProgress.TownRange(quest),
         "[look cinematic]" => QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest),
-        "[custom multi condition]" => QuestDazzlementStorage.Matches(quest),
+        "[custom multi condition]" => QuestDazzlementStorage.Matches(quest) || DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest),
         "[question]" => QuestQuestionProgress.TryCount(quest,out _),
         _ => QuestStateProgress.Type(quest) is not null
     };
 
-    public static QuestCoverageReport Scan(QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces, QuestRewardParameterCatalog parameters)
+    public static QuestCoverageReport Scan(QuestCatalog catalog, ItemCatalog items, EpicPieceCatalog pieces, QuestRewardParameterCatalog parameters, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
+        QuestConnectionCatalog? connections = null, DfoServer.GameWorld.Dungeons.OperationHopeCatalog? hope = null)
     {
+        var dedicated = QuestDedicatedCoverage.Inspect(catalog,connections,hope);
         var prerequisite = catalog.All.ToDictionary(quest => quest.Id, quest => (quest.Definition?.PrerequisiteGroups.SelectMany(group => group) ?? [])
             .Concat(quest.Definition?.RequiredAnswers.Select(answer => answer.QuestId) ?? []).Where(id => id > 0).Distinct().ToArray());
         var parents = catalog.All.ToDictionary(quest => quest.Id, quest => quest.MainQuest is { } id ? new[] { id } : []);
@@ -221,6 +256,18 @@ internal static class QuestCoverage
                 .Concat(definition?.Values("casecade clear").Where(value => value.Type == 0).Select(value => value.Value) ?? []);
             if (quest.Condition is "[quest clear]" or "[clear quest]" or "[clear multi quest]") references = references.Concat(quest.IntData);
             var missing = references.Where(id => id > 0 && !catalog.TryGet(id, out _)).Distinct().Order().ToImmutableArray();
+            var special = dedicated.GetValueOrDefault(quest.Id);
+            // 账号标记和希望实例任务走已核验专用事务，不开放普通接取或套用普通永久完成。
+            if (special?.AccountMarker == true || special?.InstanceMission == true)
+            {
+                rows.Add(new(quest.Id,quest.Path,quest.Grade,quest.Condition,quest.SubType,access.Entry,true,[],[],missing)
+                {
+                    Name = definition?.Values("name").FirstOrDefault().Text,
+                    MinimumLevel = quest.MinimumLevel, MaximumLevel = quest.MaximumLevel,
+                    SupportedDedicatedPaths = special.Paths
+                });
+                continue;
+            }
             if (access.Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !(access.Entry == QuestResourceEntry.Dialogue && QuestRelationProgress.DialogueChild(quest,catalog)) &&
                 !(access.Entry == QuestResourceEntry.Hidden && QuestHiddenEntry.Direct(quest,catalog)) &&
                 !(access.Entry == QuestResourceEntry.Profession && QuestExpertJobProgress.Tutorial(quest)) && !QuestAutoDailyPlan.Supports(quest))
@@ -231,9 +278,9 @@ internal static class QuestCoverage
             try { _ = QuestRelationProgress.CascadeMarker(quest,catalog); }
             catch (InvalidDataException error) { reasons.Add(error.Message); }
             if (quest.Grade is "[daily random]" or "[training]") reasons.Add("对应每日专用列表未接入");
-            if (definition?.GradeModifiers.Length > 0 || definition?.FirstExposedByNpc is not null ||
+            if (definition?.GradeModifiers.Length > 0 ||
                 definition?.MinimumClearCount is not null && !QuestRelationProgress.ThresholdShape(quest))
-                reasons.Add("分类修饰、例外、首次NPC或多条件阈值尚未接入");
+                reasons.Add("分类修饰、例外或多条件阈值尚未接入");
             if (!HasOrdinaryFilter(quest)) reasons.Add("exception filter需要已确认的单字符串character声明");
             if (!HasOrdinaryExceptions(quest)) reasons.Add("exception quest需要已确认的单字符串[urgent]声明");
             if (!HasOrdinaryDisplay(quest)) reasons.Add("NPC可见性、标题、视频或男性对话文本的显示声明形状尚未确认");
@@ -253,12 +300,9 @@ internal static class QuestCoverage
                 bool target = HasSupportedTarget(quest,catalog);
                 if (!target) reasons.Add(TargetRestriction(quest));
                 if (QuestQuestionProgress.TryCount(quest,out int options) && Enumerable.Range(0,options)
-                    .Any(answer => !QuestQuestionProgress.OrdinaryChoice(quest,checked((uint)answer),catalog)))
-                    reasons.Add("部分回答需要专用旅程跳过或回放入口，普通回答分支可用");
-                bool profession = quest.RewardType == "[grow type]" && definition?.JobChange == 1 &&
-                    quest.Rewards is [{ Type: 0, Value: >= 1 and <= 5 }] ||
-                    quest.RewardType == "[awakening type]" && quest.Rewards is [{ Type: 0, Value: >= 1 and <= 2 }] &&
-                    definition?.JobChange == quest.Rewards[0].Value + 1;
+                    .Any(answer => !QuestQuestionProgress.OrdinaryChoice(quest,checked((uint)answer),catalog) && special?.Answers.Contains(answer) != true))
+                    reasons.Add("部分回答缺少已核验的专用旅程跳过入口，普通回答分支可用");
+                bool profession = QuestProfessionReward.SupportedDeclaration(quest);
                 bool characterReward = QuestCharacterReward.TryScalar(quest,out _) || QuestCharacterReward.TryTp(quest,out _) ||
                     QuestCharacterReward.TryHellChallenge(quest);
                 bool creatureReward = QuestCreatureReward.Evolution(quest);
@@ -267,13 +311,14 @@ internal static class QuestCoverage
                 if (access.Entry == QuestResourceEntry.Creature && catalog.Creatures is null) reasons.Add("宠物目录未装配");
                 if (quest.RewardType != "[item]" && !profession && !characterReward && !creatureReward && !expertJob && !QuestRelationProgress.ZeroRewardChild(quest) && !goldOnly)
                     reasons.Add(RewardRestriction(quest));
-                if (!quest.Attributes.Contains("not give exp quest") && !(creatureReward && quest.Difficulty is null) &&
-                    !(QuestExpertJobReward.Chain(quest) && quest.Difficulty is null) && !(goldOnly && quest.Difficulty is null) &&
+                if (!quest.Attributes.Contains("not give exp quest") && !(QuestExperiencePolicy.AllowsOmittedDifficulty(quest) && quest.Difficulty is null) &&
                     (quest.Difficulty is null || !parameters.Difficulty.ContainsKey(quest.Difficulty)))
                     reasons.Add("奖励缺少合法difficulty键");
                 if (!HasOrdinaryAttributes(quest)) reasons.Add("attribute包含未确认的值或声明形状");
                 try
                 {
+                    if ((QuestMailPlan.CompletionDeclaration(quest) || QuestEligibilityMailPlan.Declaration(quest)))
+                        _ = QuestMailPlan.Prepare(quest,items,pieces,DateTimeOffset.UnixEpoch);
                     var rewards = QuestFixedRewardDefinition.Parse(profession || characterReward || creatureReward || expertJob ? quest with { Rewards = [] } : quest, allowGold: true);
                     var selection = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition?.SelectRewards ?? [] });
                     var gifts = QuestFixedRewardDefinition.Parse(quest with { Rewards = definition?.AcceptanceRewards ?? [] });
@@ -294,17 +339,32 @@ internal static class QuestCoverage
                         }
                         if (pieces.ByPiece.ContainsKey(id))
                         { reasons.Add(consume ? "碎片材料的交付消费尚未确认" : "特殊持有域奖励投影尚未接入"); return; }
-                        if (ItemSlotBoundService.List(items.Get(id).Kind) != InventoryListType.Main)
+                        if (ItemSlotBoundService.List(items.Get(id).Kind) != InventoryListType.Main &&
+                            (consume || gift || items.Get(id).Kind != ItemKind.Creature))
                             reasons.Add(consume ? "材料不属于普通背包持有域" : "特殊持有域奖励投影尚未接入");
                     }
                 }
                 catch (Exception error) when (error is InvalidDataException or OverflowException or NotSupportedException or FileNotFoundException) { reasons.Add(error.Message); }
             }
             rows.Add(new(quest.Id, quest.Path, quest.Grade, quest.Condition, quest.SubType, access.Entry,
-                reasons.Count == 0, reasons.Distinct().ToImmutableArray(), pending, missing));
+                reasons.Count == 0, reasons.Distinct().ToImmutableArray(), pending, missing)
+            {
+                Name = quest.Definition?.Values("name").FirstOrDefault().Text,
+                MinimumLevel = quest.MinimumLevel, MaximumLevel = quest.MaximumLevel,
+                RegionalAutoDaily = QuestAutoDailyPlan.Hunt(quest),
+                SupportedDedicatedPaths = special?.Paths ?? [],
+                MissingDungeonReferences = dungeons is null ? [] : (quest.Definition?.Dungeons ?? [])
+                    .Select(row => row.DungeonId).Where(id => id > 0 && !dungeons.ContainsDungeon(id)).Distinct().Order().ToImmutableArray()
+            });
         }
         var result = rows.ToImmutable();
-        return new(result.Length, result.Count(row => row.ImplementedPath), result, Cycles(prerequisite), Cycles(parents));
+        return new(result.Length, result.Count(row => row.ImplementedPath), result, Cycles(prerequisite), Cycles(parents))
+        {
+            DungeonReferencesChecked = dungeons is not null,
+            DedicatedPathsChecked = connections is not null,
+            HopePathsChecked = hope is not null,
+            RegionalAutoDailyIds = result.Where(row => row.RegionalAutoDaily).Select(row => row.Id).Order().ToImmutableArray()
+        };
     }
 
     // 说明实际依赖；报告不解锁入口，也不把普通客户端通知充当这些玩法的完成事实。

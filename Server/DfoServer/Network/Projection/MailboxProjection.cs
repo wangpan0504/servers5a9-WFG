@@ -11,6 +11,7 @@ internal sealed class MailboxProjection(MailboxService service, OnlineSessionDir
 {
     public async Task InitializeAsync(GameConnectionContext context)
     {
+        _ = context.Session.EnsureQuestEligibilityMail(initializing: true);
         var page = context.Session.OpenMailbox(service, initializing: true);
         await ListAsync(context, page.Page, page.Receipt, initializing: true);
     }
@@ -40,6 +41,7 @@ internal sealed class MailboxProjection(MailboxService service, OnlineSessionDir
             0 or 2 => new InventorySlot(InventoryListType.Main, item.Slot),
             1 => new InventorySlot(InventoryListType.Avatar, item.Slot),
             3 or 7 => new InventorySlot(InventoryListType.Pet, item.Slot),
+            46 => new InventorySlot(InventoryListType.Talisman, item.Slot),
             _ => new InventorySlot(InventoryListType.Main, -1)
         }).Where(slot => slot.Index >= 0 && (slot.List == InventoryListType.Main && CurrencyPackets.VirtualSlots.Contains(slot.Index) ||
             Enum.GetValues<DfoServer.GameWorld.Items.ItemKind>().Any(kind =>

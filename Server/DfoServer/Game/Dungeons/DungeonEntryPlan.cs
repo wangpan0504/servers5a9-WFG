@@ -26,6 +26,8 @@ internal sealed record DungeonEntryPlan(
     public bool IsHellLegend { get; init; }
     public bool IsCosmo { get; init; }
     public int? BasisLevel { get; init; }
+    // 入场冻结的推荐资格不是完成事实；任务仍等待本Run终末与原接取身份。
+    public bool RecommendedQuestClear { get; init; }
     public int? PlayerTeam { get; init; }
     // GM伴侣：本次入场放行的地图 [ai character] 行编号。空表示未开启或该副本类型不注入；
     // 只在起始房间发送，非起始房间的行由 DungeonMonsterPlan.FromRoom 丢弃。
@@ -56,7 +58,8 @@ internal sealed record DungeonEntryPlan(
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
-    public bool UsesRoomFatigue => UsesFatigue && StartFatigue == 0;
+    public OperationHopeAdmission? Hope { get; init; }
+    public bool UsesRoomFatigue => UsesFatigue && StartFatigue == 0 && Hope is null;
     // #510/#511 普通入场的 [required item]「物品 1 1」：入场提交时与疲劳、尝试号同事务扣除。
     public DungeonRequiredItemRow? EntryItem { get; init; }
     // 资源声明了入场票或入场疲劳但形状未确认时的诊断，只写日志，不改变行为。
@@ -85,7 +88,7 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
-    public bool IsTerminalMap(DungeonMap map) => Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
+    public bool IsTerminalMap(DungeonMap map) => Hope is { } hope ? OperationHopePlan.IsDeclaredTerminal(hope.Catalog,hope.MazeOrdinal,map.Id) : Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
         PassiveClearTerminalMap is { } passive ? map == passive :
         CinematicClearTerminalMap is { } cinematic ? map == cinematic :
         TerminalLayerMap is { } layer ? map == layer :
@@ -106,7 +109,7 @@ internal sealed record DungeonEntryPlan(
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
-        bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null)
+        bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -125,14 +128,14 @@ internal sealed record DungeonEntryPlan(
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
             maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty),allowClearedTerminalQuest:allowClearedTerminalQuest,
-            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief);
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null)
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -333,6 +336,14 @@ internal sealed record DungeonEntryPlan(
                 candidates = [candidates[hellIndex]];
             }
         }
+        if (hope is not null)
+        {
+            if (dungeonId != 8523 || questId != 0 || difficulty != hope.Catalog.Difficulty || isReplay || practice || hellParty ||
+                hope.SourceRevision != character.Revision || !hope.Catalog.Mazes.ContainsKey(hope.MazeOrdinal))
+            { reason = "operation-hope-admission-mismatch"; return false; }
+            candidates = definition.Mazes.Where(row => row.SourceOrdinal == hope.MazeOrdinal && row.QuestConnectionTokens.Count == 0).ToArray();
+            routeQuest = 0; layoutQuest = null;
+        }
         if (candidates.Length != 1)
         {
             reason = candidates.Length == 0 ? "route-maze-unavailable" : "route-maze-ambiguous";
@@ -468,6 +479,8 @@ internal sealed record DungeonEntryPlan(
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
             BasisLevel = definition.BasisLevel,
+            RecommendedQuestClear = !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
+                DungeonLuckyStarPolicy.IsRecommendedClear(definition, questId, routeQuest, character.Level),
             // 本入口只规划原生普通单人PVE；构造初始team0，START_MAP普通分支保持该值。
             // 未实现的组队/对抗模式须提供自身阵营来源，不能沿用这个入口的单人合同。
             PlayerTeam = 0,
@@ -510,6 +523,9 @@ internal sealed record DungeonEntryPlan(
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
         plan = WithEntryCost(plan, definition, hellParty || isReplay || grief is not null);
+        if (hope is not null)
+            plan = plan with { Hope = hope, StartFatigue = checked((ushort)hope.Catalog.FatigueValue),
+                QuestAcceptances = plan.QuestAcceptances.Add(hope.Acceptance) };
         reason = "resource-plan-ready";
         return true;
     }
@@ -537,8 +553,14 @@ internal sealed record DungeonEntryPlan(
         bool listClear = quest.Grade == "[side]" && QuestDungeonClearProgress.MatchesAlternative(quest,dungeonId,difficulty);
         bool autoDaily = QuestAutoDailyPlan.MatchesDungeon(quest,dungeonId,difficulty);
         // 已支持的材料每日与每日累计通关任务保留接取身份，但不要求原资源不存在的任务迷宫。
-        bool normalMission = QuestCycle.NormalDungeonMission(quest) && quest.Definition!.Dungeons.Any(row =>
-            row.DungeonId == dungeonId && (row.Parameter == -1 || row.Parameter is >= 0 and <= 4 && row.Parameter <= difficulty));
+        bool normalMission = QuestCycle.NormalDungeonMission(quest) &&
+            (quest.Definition!.Dungeons.Any(row => row.DungeonId == dungeonId &&
+                (row.Parameter == -1 || row.Parameter is >= 0 and <= 4 && row.Parameter <= difficulty)) ||
+             quest.Definition.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty)) ||
+             QuestHuntProgress.TryTargets(quest,out var missionTargets) && missionTargets.Any(target =>
+                target.DungeonId == dungeonId && target.MinimumDifficulty <= difficulty) ||
+             QuestDungeonClearProgress.TryTarget(quest,out var missionClear) && missionClear.DungeonId == dungeonId &&
+                missionClear.MinimumDifficulty <= difficulty);
         bool dailyClear = QuestDungeonClearProgress.CountOncePerDay(quest) &&
             quest.Grade is "[side]" or "[mission]" && QuestDungeonClearProgress.TryTarget(quest,out var target) &&
             target.DungeonId == dungeonId && (target.MinimumDifficulty == -1 || target.MinimumDifficulty <= difficulty);
@@ -554,17 +576,20 @@ internal sealed record DungeonEntryPlan(
             quest.Grade is not ("[side]" or "[achievement]") && !autoDaily && !normalMission && !dailyClear ||
             definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count != 0 &&
                 (maze.ConnectionQuestId is not { } connected || connected == questId))) return false;
-        if (quest.Condition == "[hunt monster]")
+        if (quest.Condition == "[hunt monster]" || normalMission && quest.Condition == "[hunt enemy]")
         {
-            if (!QuestHuntProgress.TryTargets(quest,out var targets) ||
-                targets.Any(target => target.MonsterId <= 0 && target.MonsterId != QuestHuntProgress.EliteMonsterSelector && target.MonsterId != -3 && !(autoDaily && target.MonsterId == -1) || target.DungeonId != -1 && target.DungeonId != dungeonId ||
-                    target.MinimumDifficulty > difficulty)) return false;
+            if (!QuestHuntProgress.TryTargets(quest,out var targets)) return false;
+            if (normalMission && !targets.Any(target => target.DungeonId == dungeonId)) return false;
+            if (targets.Where(target => !normalMission || target.DungeonId == dungeonId).Any(target =>
+                target.MonsterId <= 0 && target.MonsterId != QuestHuntProgress.EliteMonsterSelector && target.MonsterId != -3 && !(autoDaily && target.MonsterId == -1) ||
+                target.DungeonId != -1 && target.DungeonId != dungeonId || target.MinimumDifficulty > difficulty)) return false;
         }
         // 觉醒收集阶段只借用普通路线；材料由任务声明的本图怪物掉落规则产生，不改变掉落或进度合同。
         // #256黑市EXP的6053/6056/6059（seeking sub type 0）同样只借用普通路线，材料来自任务声明的本图怪物掉落。
-        else if (!listClear && !dailyClear && (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
+        else if (!(normalMission && QuestDungeonClearProgress.Supports(quest)) && !listClear && !dailyClear && (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
                 QuestLifecyclePlan.HarlemSeeking(quest) || normalMission) ||
-            !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty)))) return false;
+            !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty)) &&
+                !(normalMission && quest.Condition == "[seeking]" && declared.Drops.Length == 0 && QuestLifecyclePlan.ValidSeeking(quest)))) return false;
         var active = character.ActiveMainQuests.Single(row => row.QuestId == questId);
         return active.AcceptanceId != Guid.Empty &&
             character.ActiveMainQuests.Count(row => row.AcceptanceId == active.AcceptanceId) == 1;
@@ -661,6 +686,7 @@ internal sealed record DungeonEntryPlan(
 
     private static string ValidateRequest(Character character, uint dungeonId, uint questId, byte difficulty, bool allowClearedQuest, StoryQuest? quest,bool isReplay = false)
     {
+        if (character.IsPvpPrivate) return "pvp-private-character";
         if (dungeonId is 0 or > int.MaxValue)
             return "dungeon-unsupported";
         if (questId >= 30000)

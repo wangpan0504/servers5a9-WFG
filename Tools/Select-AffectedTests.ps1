@@ -196,54 +196,54 @@ if ($coreOnly.Count) { Write-Output ('仅自测覆盖（--selftest-core / 完整
 
 if (-not $Run -or (-not $codeChanged -and -not $Full)) { return }
 
-# 工作树内容指纹：HEAD + 未提交差异 + 未跟踪文件内容 + 配置；不写 git 对象库或索引。
-function Get-SourceKey {
-    $sha = [Security.Cryptography.SHA256]::Create()
-    $text = New-Object System.Text.StringBuilder
-    [void]$text.AppendLine((& git -C $root rev-parse HEAD))
-    [void]$text.AppendLine($Configuration)
-    [void]$text.AppendLine(((& git -C $root diff HEAD --binary --no-ext-diff --no-color) -join "`n"))
-    foreach ($file in @(& git -C $root ls-files --others --exclude-standard | Sort-Object)) {
-        $item = Join-Path $root $file
-        if (Test-Path -LiteralPath $item -PathType Leaf) { [void]$text.AppendLine($file + ' ' + (Get-FileHash -LiteralPath $item -Algorithm SHA256).Hash) }
-    }
-    -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text.ToString())) | ForEach-Object { $_.ToString('x2') })
-}
-$variant = $Configuration.ToLowerInvariant()
-$dll = Join-Path $ArtifactsPath ("bin/DfoServer/{0}/DfoServer.dll" -f $variant)
-$buildStamp = Join-Path $ArtifactsPath "affected-build-$variant.key"
-$coreStamp = Join-Path $ArtifactsPath "affected-core-$variant.key"
-$key = Get-SourceKey
-function Test-Stamp([string]$path) { -not $NoCache -and (Test-Path -LiteralPath $path) -and (Get-Content -LiteralPath $path -Raw).Trim() -eq $key }
-
-$watch = [Diagnostics.Stopwatch]::StartNew()
-if ((Test-Stamp $buildStamp) -and (Test-Path -LiteralPath $dll)) {
-    Write-Output "源码未变（$($key.Substring(0,12))），跳过构建"
-} else {
-    Remove-Item -LiteralPath $buildStamp, $coreStamp -ErrorAction SilentlyContinue
-    & dotnet build (Join-Path $root 'ServerS5A9.sln') -c $Configuration --nologo --artifacts-path $ArtifactsPath -nr:false
+# 构建始终交给 MSBuild 增量判定，避免忽略 SDK、包依赖或外部导入变化。
+# 只有开发期 core 可复用本地成功记录；-Full / -NoCache 必须实跑。
+. (Join-Path $PSScriptRoot 'DevelopmentCheckCache.ps1')
+$ArtifactsPath = [IO.Path]::GetFullPath($ArtifactsPath)
+New-Item -ItemType Directory -Path $ArtifactsPath -Force | Out-Null
+$lock = $null
+try {
+    try { $lock = [IO.File]::Open((Join-Path $ArtifactsPath 'development-check.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
+    catch { throw '同一产物目录正在执行检查；请等待结束，不能并发改写程序集。' }
+    $variant = $Configuration.ToLowerInvariant()
+    $artifactDirectory = Join-Path $ArtifactsPath "bin/DfoServer/$variant"
+    $dll = Join-Path $artifactDirectory 'DfoServer.dll'
+    $coreStamp = Join-Path $ArtifactsPath "affected-core-$variant.json"
+    $key = Get-CheckSourceKey $root $Configuration
+    $environment = Get-CheckEnvironmentKey
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    & dotnet build (Join-Path $root 'ServerS5A9.sln') -c $Configuration --nologo --artifacts-path $ArtifactsPath -m:1 -nr:false
     if ($LASTEXITCODE -ne 0) { throw "构建失败（$LASTEXITCODE）" }
-    Set-Content -LiteralPath $buildStamp -Value $key -Encoding ascii
-    Write-Output ('构建 {0:F1}s' -f $watch.Elapsed.TotalSeconds)
-}
-$watch.Restart()
-if (Test-Stamp $coreStamp) {
-    Write-Output '同一源码已通过 --selftest-core，跳过'
-} else {
-    & dotnet $dll --selftest-core
-    if ($LASTEXITCODE -ne 0) { throw "--selftest-core 失败（$LASTEXITCODE）" }
-    Set-Content -LiteralPath $coreStamp -Value $key -Encoding ascii
-    Write-Output ('--selftest-core {0:F1}s' -f $watch.Elapsed.TotalSeconds)
-}
-if (-not $full -and -not $selection) { Write-Output '没有受影响的 TCP 组。'; return }
-$runArgs = @()
-if ($PvfPath) { $runArgs += @('--pvf-path', $PvfPath) }
-$runArgs += '--selftest-tcp'
-if (-not $full) { $runArgs += $selection }
-$env:DFO_TCP_TIMINGS = $TimingsPath
-$watch.Restart()
-& dotnet $dll @runArgs
-if ($LASTEXITCODE -ne 0) { throw "TCP 回归失败（$LASTEXITCODE）" }
-Write-Output ('TCP {0:F1}s' -f $watch.Elapsed.TotalSeconds)
-if ($full) { Write-Output '全量 TCP 已通过；合并前还须运行一次完整 --selftest（Tools/Check-Development.ps1 -PvfPath <PVF>）。' }
-elseif ($harness -or $schema) { Write-Output '开发期定向检查已通过；合并前仍须 -Full 全量 TCP 与完整 --selftest。' }
+    Write-Output ('EXECUTED build {0:F1}s' -f $watch.Elapsed.TotalSeconds)
+    $artifact = Get-CheckArtifactKey $artifactDirectory
+    Assert-CheckInputsUnchanged $root $Configuration $key $artifactDirectory $artifact
+    $watch.Restart()
+    if (-not $full -and -not $NoCache -and (Test-CheckCache $coreStamp $key $environment $artifact)) {
+        Write-Output 'CACHED --selftest-core：源码、SDK/环境与程序集内容完全匹配；不是本轮重新执行。'
+    } else {
+        # 失败或中断前先撤销旧通过记录，不能保留旧绿灯。
+        Remove-Item -LiteralPath $coreStamp -ErrorAction SilentlyContinue
+        & dotnet $dll --selftest-core
+        if ($LASTEXITCODE -ne 0) { throw "--selftest-core 失败（$LASTEXITCODE）" }
+        Assert-CheckInputsUnchanged $root $Configuration $key $artifactDirectory $artifact
+        Save-CheckCache $coreStamp $key $environment $artifact
+        Write-Output ('EXECUTED --selftest-core {0:F1}s' -f $watch.Elapsed.TotalSeconds)
+    }
+    if (-not $full -and -not $selection) { Write-Output '没有受影响的 TCP 组。'; return }
+    $runArgs = @()
+    if ($PvfPath) { $runArgs += @('--pvf-path', $PvfPath) }
+    $runArgs += '--selftest-tcp'
+    if (-not $full) { $runArgs += $selection }
+    $env:DFO_TCP_TIMINGS = $TimingsPath
+    $watch.Restart()
+    & dotnet $dll @runArgs
+    if ($LASTEXITCODE -ne 0) { throw "TCP 回归失败（$LASTEXITCODE）" }
+    Write-Output ('TCP {0:F1}s' -f $watch.Elapsed.TotalSeconds)
+    if ($full) { Write-Output '全量 TCP 已通过；合并前还须运行一次完整 --selftest（Tools/Check-Development.ps1 -PvfPath <PVF>）。' }
+    elseif ($harness -or $schema) { Write-Output '开发期定向检查已通过；合并前仍须 -Full 全量 TCP 与完整 --selftest。' }
+
+    Assert-CheckInputsUnchanged $root $Configuration $key $artifactDirectory $artifact
+} catch {
+    if ($lock -and $coreStamp) { Remove-Item -LiteralPath $coreStamp -ErrorAction SilentlyContinue }
+    throw
+} finally { if ($lock) { $lock.Dispose() } }

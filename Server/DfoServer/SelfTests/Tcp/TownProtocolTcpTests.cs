@@ -394,6 +394,47 @@ internal static partial class TownProtocolTcpTests
             }
         }
 
+        // 预制角色本已完成8709；先仅移除此项验证拒绝，再恢复测试往返，不假称账号领奖已实现。
+        fixture.Sql("DELETE FROM character_completed_quests WHERE character_id=$p0 AND quest_id=8709", id);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(slot, prepared: true);
+            string before = fixture.Snapshot();
+            peer.Send(36, Area(107, 0, 400, 250, 38, 1, npc: 400001081));
+            peer.Barrier();
+            That(fixture.Snapshot() == before, "猫咪入口不绕过8709完成前置");
+        }
+        fixture.Sql("INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id) VALUES($p0,8709)", id);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(slot, prepared: true);
+            string progression = fixture.Snapshot("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id", id);
+            peer.Travel(107, 0, 400, 250, 38, 1, npc: 400001081);
+            string before = fixture.Snapshot();
+            peer.Send(36, Area(38, 1, 451, 234, 107, 0));
+            peer.Send(36, Area(60, 1, 450, 234, 107, 0));
+            peer.Barrier();
+            That(fixture.Snapshot() == before, "exit town不能更改缓存来源坐标或地区");
+            peer.Travel(38, 1, 450, 234, 107, 0, returnTown: 60);
+            That(fixture.Snapshot("SELECT town,area,x,y,return_town FROM characters WHERE id=$p0", id) == "[[38,1,450,234,60]]" &&
+                fixture.Snapshot("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id", id) == progression,
+                "猫咪往返23/24/1379与实际存档一致，不改地区返回或任务进度");
+            before = fixture.Snapshot();
+            peer.Send(36, Area(38, 1, 450, 234, 107, 0));
+            peer.Barrier();
+            That(fixture.Snapshot() == before, "退出后的旧来源请求不能重放");
+            peer.Travel(107, 0, 400, 250, 38, 1, npc: 400001081);
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(slot, prepared: true);
+            string before = fixture.Snapshot();
+            peer.Send(36, Area(38, 1, 450, 234, 107, 0));
+            peer.Barrier();
+            That(fixture.Snapshot() == before && fixture.Snapshot("SELECT town,area,x,y FROM characters WHERE id=$p0", id) == "[[38,1,450,234]]",
+                "NPC地区断线重登回出生点，旧来源票据不可恢复或重放");
+        }
+
         await fixture.StopAsync();
     }
 

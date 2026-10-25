@@ -1,3 +1,4 @@
+using DfoServer.Game.Quests;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Characters;
@@ -66,6 +67,42 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
             return expected with { ExpertJobType = type, ExpertJobExperience = experience, Revision = checked(expected.Revision + 1) };
         });
     }
+    public Character CommitExpertJobCraft(AccountOwners.Lease owner, Character expected, InventoryPlan inventory, int experience, QuestLifecyclePlan? tutorial = null) =>
+        owner.Execute(() =>
+        {
+            if (expected.ExpertJobType is not (1 or 2 or 4) || experience < expected.ExpertJobExperience || !inventory.Changed)
+                throw new InvalidDataException("副职业制作计划非法");
+            using var db = database.Open();
+            using var write = db.BeginWrite("CharacterRepository.CommitExpertJobCraft");
+            using var transaction = write.Transaction;
+            var current = CommitInventoryInTransaction(db, transaction, owner, expected, inventory);
+            if (tutorial is not null)
+            {
+                if (!ReferenceEquals(tutorial.Expected, expected) || tutorial.Action != QuestLifecycleAction.Condition ||
+                    expected.ExpertJobType is not (2 or 4) || tutorial.QuestId != QuestExpertJobProgress.TutorialQuest(expected.ExpertJobType) ||
+                    tutorial.AcceptanceId == Guid.Empty || tutorial.ActiveAfter.Single(row => row.AcceptanceId == tutorial.AcceptanceId).ConditionState != 0)
+                    throw new InvalidDataException("副职业制作教程计划非法");
+                var target = current.ActiveMainQuests.Single(row => row.AcceptanceId == tutorial.AcceptanceId && row.QuestId == tutorial.QuestId);
+                if (target.ConditionState != 1) throw new InvalidOperationException("副职业制作教程接取身份已变化");
+                var active = current.ActiveMainQuests.Select(row => row == target ? row with { ConditionState = 0 } : row).ToArray();
+                WriteQuestConditions(db, transaction, current.Id, current.ActiveMainQuests, active);
+                current = current with { ActiveMainQuests = active };
+            }
+
+            if (current.ExpertJobType != expected.ExpertJobType || current.ExpertJobExperience != expected.ExpertJobExperience ||
+                !current.ExpertJobRecipes.SetEquals(expected.ExpertJobRecipes))
+                throw new InvalidOperationException("副职业制作资格已经变化");
+            using var command = db.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "UPDATE character_expert_job SET expertness=$exp WHERE character_id=$id AND account=$account AND job_type=$type";
+            command.Parameters.AddWithValue("$exp", experience);
+            command.Parameters.AddWithValue("$id", current.Id);
+            command.Parameters.AddWithValue("$account", owner.Account);
+            command.Parameters.AddWithValue("$type", current.ExpertJobType);
+            if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副职业制作熟练度未写入");
+            transaction.Commit();
+            return current with { ExpertJobExperience = experience };
+        });
 
     public Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience)
     {

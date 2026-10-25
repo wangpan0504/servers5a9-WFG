@@ -60,14 +60,16 @@ internal static class ExpertJobActionTcpTests
         Directory.CreateDirectory(fixture.Options.DataDirectory);
         File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "expert-job-compatibility.json"),
             "{\"SelfServiceRewardPercent\":100,\"EnchantSuccessPercent\":100}");
+        string machineDaily = "", enchanterDaily = "";
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
             peer.Select(expertJobInfo: MachineInfo(300));
+            machineDaily = Daily(machineId);
             peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)1); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); }));
             peer.Expect(1, 598, [0, 19, 0]);
             UseMachine(peer, 3, machineId); ReadMachine(peer, 3, 299);
-            That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={machineId}") is [[1L]],
+            That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={machineId} AND quest_id=10021") is [[1L]],
                 "错类型开店被拒绝且不残留open，个人分解仍可用但不冒充店铺教学操作");
             string before = Snapshot();
             UseMachine(peer, 3, machineId); peer.Expect(1, 235, [0, 19, 0]); peer.Barrier();
@@ -78,7 +80,7 @@ internal static class ExpertJobActionTcpTests
             peer.Send(599, Build(w => w.Write(machineId)));
             peer.Expect(1, 599, [1, 0, 1, 0, 0, 0, 0, 43, 1, 0, 0]);
             UseMachine(peer, 4, machineId); ReadMachine(peer, 4, 298, tutorial: true);
-            That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={machineId}") is [[0L]],
+            That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={machineId} AND quest_id=10021") is [[0L]],
                 "进行中10021教学经开店、进入本人分解机、真实分解后归零");
             UseMachine(peer, 6, machineId);
             var fragmentAck = peer.Expect(1, 235).Body;
@@ -110,6 +112,7 @@ internal static class ExpertJobActionTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(1, expertJobInfo: EnchantInfo(300));
+            enchanterDaily = Daily(enchanterId);
             peer.Send(598, Build(w => { w.Write((byte)3); w.Write(1); w.Write((byte)4); w.Write(0u); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); })); peer.Expect(1, 598, [1]);
             string before = Snapshot();
             SendEnchant(peer, machineId); peer.Expect(1, 601, [0, 19, 0]); peer.Barrier();
@@ -127,7 +130,7 @@ internal static class ExpertJobActionTcpTests
             peer.Expect(0, 14); peer.Expect(0, 2); peer.Expect(0, 205, EnchantInfo(299, false));
             peer.Expect(1, 601, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write(0u); w.Write((byte)0); w.Write(299u); w.Write(5u); w.Write((uint)recipe.Rarity); }));
             peer.Expect(0, 574); peer.Barrier();
-            That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={enchanterId}") is [[0L]],
+            That(fixture.Query($"SELECT condition_state FROM character_active_main_quests WHERE character_id={enchanterId} AND quest_id=11009") is [[0L]],
                 "真实附魔成功且教程状态改变时仍送完整ACK，不被旧回执守卫吞掉");
         }
         using (var peer = Open(fixture))
@@ -138,7 +141,17 @@ internal static class ExpertJobActionTcpTests
             That(restored.Inventory.Find(Bag(cardSlot)) is null && restored.Inventory.Find(Bag(3))!.Core.EnchantCardId == recipe.CardId &&
                 restored.ExpertMachineEndurance == 299, "卡片附魔重连保留真实效果、扣卡与耐久");
         }
+        That(Daily(machineId)==machineDaily && Daily(enchanterId)==enchanterDaily,
+            "分解和附魔操作只推进各自教程，并存每日身份和计数不受影响");
         await fixture.StopAsync();
+        await ExpertJobCompoundTutorialTcpTests.RunAsync(options, root, resources);
+
+        string Daily(ushort id)
+        {
+            var rows=fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id<>10021 AND quest_id<>11009 ORDER BY slot",id);
+            That(rows is [[13036L,1636L,string]],"50级副职业教程与真实地区每日独立共存");
+            return System.Text.Json.JsonSerializer.Serialize(rows);
+        }
 
         void SendEnchant(TcpPeer peer, ushort actor) => peer.Send(601, Build(writer =>
         { writer.Write(actor); writer.Write(recipe.RecipeId); writer.Write((byte)2); writer.Write((byte)0); writer.Write((ushort)3); writer.Write((byte)0); writer.Write((ushort)cardSlot); }));

@@ -88,6 +88,8 @@ internal static partial class TownPackets
             // 0267DA80读取116B状态；偏移51为17B CP936冒险团昵称，最后一字节保留NUL。
             byte[] state = new byte[116];
             state[7] = 1;
+            // 0267F6FB只接受1；与名册tail34同源，不在ACK4或Player追加未证字段。
+            state[43] = character.IsPvpPrivate ? (byte)1 : (byte)0;
             // 0267B42E/0267B43F将头部+59h转为独立外观实体；真实宠物仍由尾部声明。
             System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(state.AsSpan(89),
                 InventoryCreatureSkinService.AppearanceTemplateId(character, utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
@@ -217,7 +219,7 @@ internal static partial class TownPackets
             writer.Write(character.EquipmentSlotFlags); // Full03 0267D0A9/0267D0CB：装备槽标志写本人容器+1AC。
             EquipmentProtocolWriter.Player(writer, character.Inventory);
             writer.Write(0u);
-            writer.Write((byte)0); // 023C3A90: equipment count, scalar, extra list count.
+            EquipmentProtocolWriter.Runes(writer, character.Inventory); // 023C3A90：六个符文按槽210–215排列。
             // 0267BFA0：指定技能及登记项；每项的完整物品块由同一背包条目编码器生成。
             SkillSwitchInventoryPackets.WriteUserInfo(
                 writer,

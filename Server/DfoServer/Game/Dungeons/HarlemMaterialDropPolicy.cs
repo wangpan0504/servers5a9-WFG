@@ -41,15 +41,17 @@ internal sealed record HarlemMaterialDropRules
 
 internal sealed class HarlemMaterialDropPolicy
 {
-    public const string Rule = "harlem-material-local-v2";
+    public const string Rule = "harlem-material-local-v3";
     public const int FragmentId = 10305893;
     public const int PurgedId = 10309039;
     public const int SkyWishId = 10305617;
+    public const int AntimatterId = 10306750;
     readonly HarlemMaterialDropRules rules;
     readonly ImmutableHashSet<uint> hellDungeons;
     readonly DungeonItemDropPool fragments;
     readonly DungeonDropTrial dawn;
     readonly DungeonItemDropPool skyWishes;
+    readonly DungeonItemDropPool antimatter;
     readonly HarlemHellEpicDropPolicy? hellEpics;
 
     public HarlemMaterialDropPolicy(HarlemMaterialDropRules rules, IEnumerable<uint> hellDungeons, Func<int, ItemTemplate> resolveItem,
@@ -59,6 +61,7 @@ internal sealed class HarlemMaterialDropPolicy
         this.rules = rules;
         this.hellDungeons = hellDungeons.ToImmutableHashSet();
         this.hellEpics = hellEpics;
+        antimatter = new(new DungeonWeightedDropItem[] { new(Item(AntimatterId), 1) });
         var fragment = Item(FragmentId);
         var purged = Item(PurgedId);
         fragments = new(new DungeonWeightedDropItem[] { new(fragment, 1) });
@@ -114,6 +117,9 @@ internal sealed class HarlemMaterialDropPolicy
             int wishes = checked(rules.SkyWishes[entry.Difficulty] * rules.CosmoMaterialMultiplier);
             rewards.Add(new(1000, fragments, 1, 1, ProbabilityDenominator: 1000, Attempts: count));
             rewards.Add(new(1000, skyWishes, 1, 1, ProbabilityDenominator: 1000, Attempts: wishes));
+            // 白斯固定追加两个普通反物质，不替换账号绑定材料，不乘装备骰数或材料倍数。
+            if (hellEpics.IsWhiteBoss(entry, monster))
+                rewards.Add(new(1000, antimatter, 1, 1, ProbabilityDenominator: 1000, Attempts: 2));
         }
         // 当前530的真实Boss为41207中的Molech；不把绿名、dummy或其它副本的同模板怪当作奖励源。
         else if (entry.DungeonId == 530 && entry.BossMap.Id == 41207 && monster.MonsterId == 71030 && monster.IsBoss)

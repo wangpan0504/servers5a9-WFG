@@ -5,6 +5,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Titles;
+using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Quests;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
@@ -249,9 +250,14 @@ internal static class TitleTcpTests
             That(fixture.Query("SELECT quest_id FROM character_title_progress WHERE character_id=$p0 AND remaining1+remaining2+remaining3=0 ORDER BY quest_id", awakeningId)
                 is [[6761L], [6762L]] && fixture.Query("SELECT section_key FROM character_title_sections WHERE character_id=$p0", awakeningId) is [[268L]],
                 "二觉角色真实选角只补齐觉醒章节");
-            That(fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0", awakeningId) is [[0L]] &&
+            var invitation = resources.Quests.Get(2670);
+            var mail = QuestMailPlan.Read(invitation);
+            That(mail.Time == 0 && mail.Enclosures.IsEmpty &&
+                fixture.Query("SELECT d.quest_id,d.resource_path,m.body,m.gold,m.system_mail FROM mailbox_messages m LEFT JOIN quest_eligibility_mail_dispatches d ON d.mail_id=m.mail_id AND d.recipient_id=m.recipient_id WHERE m.recipient_id=$p0", awakeningId)
+                    is [[2670L, var resourcePath, var body, 0L, 1L]] && Equals(resourcePath,invitation.Path) && Equals(body,mail.Body) &&
+                fixture.Query("SELECT count(*) FROM mailbox_attachments a JOIN mailbox_messages m ON m.mail_id=a.mail_id WHERE m.recipient_id=$p0", awakeningId) is [[0L]] &&
                 fixture.Query("SELECT json_extract(item_core,'$.ItemId') FROM character_inventory_items WHERE character_id=$p0 ORDER BY json_extract(item_core,'$.ItemId')", awakeningId)
-                    is [[100331607L], [100331608L]], "二觉选角只授力量苏醒、无上传奇，不寄超时空或其他章节称号");
+                    is [[100331607L], [100331608L]], "二觉选角仅两件原觉醒称号；邮箱仅原2670无附件邀请，不寄超时空或其他章节称号");
         }
         using (var peer = Open(fixture))
         {

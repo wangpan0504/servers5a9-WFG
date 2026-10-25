@@ -20,6 +20,7 @@ internal static class LevelUpTicketTcpTests
                 {RequiredAnswers=[new(500,row.Id==101 ? 0 : 1)]}}).ToArray();
         var marker=QuestEligibilityTests.Quest(900) with {Grade="[invisible]",IntData=[-1]};
         var catalog=new QuestCatalog(LevelUpTicketTests.PlainQuests().Concat(branch).Append(marker).ToDictionary(row=>row.Id));
+        catalog=TcpSyntheticQuestCatalog.WithHopeMissions(catalog,resources.Quests);
         var clock=new ConsumableUseSessionTests.FakeClock();
         await using var fixture=new TcpTestFixture(options,Path.Combine(root,"levelup-ticket"),resources:resources,questCatalog:catalog,clock:clock);
         var repository=new CharacterRepository(fixture.Database,catalog);

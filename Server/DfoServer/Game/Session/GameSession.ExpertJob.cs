@@ -100,16 +100,23 @@ internal sealed partial class GameSession
         };
     });
 
-    public InventoryResult CommitExpertJobCraft(InventoryPlan inventory, int experience) => owner.Execute(() =>
+    public InventoryResult CommitExpertJobCraft(InventoryPlan inventory, int experience, QuestCatalog? tutorialQuests = null) => owner.Execute(() =>
     {
         if (!CanUseExpertJob() || Selected is not { } current || current.ExpertJobType is < 1 or > 4)
             return InventoryResult.Reject(19);
-        var result = CommitInventory(current, new(true, 0, inventory));
-        if (!result.Accepted || Selected is not { } committed) return result;
-        var final = committed.ExpertJobExperience == experience ? committed
-            : repository.CommitExpertJobExperience(owner, committed, experience);
-        Selected = final;
-        return result with { Receipt = new(final, owner.Generation, SelectionEpoch) { Phase = Phase } };
+        Character committed;
+        QuestLifecyclePlan? tutorial = null;
+        if (tutorialQuests is not null && expertJobStoreOpen && current.ExpertJobType is 2 or 4 &&
+            QuestExpertJobProgress.TutorialQuest(current.ExpertJobType) is { } questId)
+            tutorial = QuestLifecyclePlan.ObserveExpertJobTutorial(current, tutorialQuests, questId);
+        try { committed = repository.CommitExpertJobCraft(owner, current, inventory, experience, tutorial); }
+        catch (InventoryQualificationExpiredException) { return InventoryResult.Reject(19); }
+        Selected = committed;
+        return new InventoryResult(true, 0, inventory)
+        {
+            Receipt = new(committed, owner.Generation, SelectionEpoch)
+            { Phase = Phase, PreviousQuests = current.ActiveMainQuests, PreviousSkillSwitchInventory = current.SkillSwitchInventory }
+        };
     });
 
     public Character? CommitExpertJobExperience(int experience) => owner.Execute(() =>

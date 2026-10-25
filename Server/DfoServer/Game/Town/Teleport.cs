@@ -130,6 +130,7 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
 
     string Destination(Character character, Location target, bool npcTarget = false)
     {
+        if (character.IsPvpPrivate && target.Town != 10) return "pvp-private-town-only";
         if (target.Direction > 9) return "target-direction-unavailable";
         var completed = DfoServer.Game.Quests.QuestEligibility.Completed(character);
         string admission = towns.DestinationAdmission(target, character.Level, completed);

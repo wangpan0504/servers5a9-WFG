@@ -198,9 +198,21 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 Directory.CreateDirectory(options.DataDirectory);
                 using var databaseLock = new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
                 using var log = new ServerLog(options.LogDirectory);
-                await ServerRuntime.Create(options, resources.Archive, new CharacterRepository(Database, quests), resources.Towns,
+                // 与正式启动装配相同的成长及冒险团目录，不能把TCP中的账号经验默默禁用。
+                var repository=new CharacterRepository(Database,quests,resources.Adventure,resources.Growth);
+                // 旧测试允许先种角色再由原生登录自动注册；正式账本要求账号先存在。
+                // 只补孤立的合成角色账号，不覆盖已有密码、禁用状态或 revision。
+                var authentication = new AuthenticationService(new AuthenticationRepository(Database));
+                foreach (var row in Query("SELECT DISTINCT c.account FROM characters c WHERE NOT EXISTS(SELECT 1 FROM accounts a WHERE a.account_id=c.account)"))
+                {
+                    string account = (string)row[0];
+                    authentication.Create(account, account == LoginCredentials.DevelopmentAccount
+                        ? LoginCredentials.DevelopmentDigest : NativeLoginWire.Digest);
+                }
+                repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
+                await ServerRuntime.Create(options, resources.Archive, repository, resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock).RunAsync(hostStop.Token);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth).RunAsync(hostStop.Token);
             });
         }
         else

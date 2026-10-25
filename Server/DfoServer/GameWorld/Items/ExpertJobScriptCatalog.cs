@@ -6,12 +6,12 @@ namespace DfoServer.GameWorld.Items;
 
 internal readonly record struct ExpertJobRate(int MaximumLevelDifference, int SuccessPercent, int ExperienceMin, int ExperienceMax);
 internal sealed record ExpertJobRecipe(int RecipeId, int ProductId, int RequiredLevel, (int ItemId, int Count)[] Materials,
-    int ExperienceMin, int ExperienceMax);
+    int ExperienceMin, int ExperienceMax, int ProductCount = 1);
 internal readonly record struct ExpertJobScriptResult(int KeyA, int KeyB, int KeyC, int ItemId, double Multiplier);
 internal readonly record struct ExpertJobMonsterCardExp(int Level, int Min, int Max);
 internal readonly record struct ExpertJobSkill(ushort Id, byte Level);
 
-internal sealed record ExpertJobCardRecipe(int CardId, int BeadId, int RecipeId, int RequiredLevel, byte Rarity, (int ItemId, int Count)[] Materials);
+internal sealed record ExpertJobCardRecipe(int CardId, int BeadId, int RecipeId, int RequiredLevel, byte Rarity, (int ItemId, int Count)[] Materials, (int ItemId, int Count)[] BeadMaterials);
 
 internal sealed record ExpertJobLearnableRecipe(int ItemId, byte Job, int RequiredLevel, byte? Rarity);
 
@@ -33,7 +33,9 @@ internal sealed class ExpertJobScriptCatalog
         {
             if (id is < 1 or > 4) continue;
             string text = pvf.ReadText("character/" + path);
-            jobs[(byte)id] = JobScript.Parse(text, items, ownDisjoint);
+            jobs[(byte)id] = JobScript.Parse(text, items, ownDisjoint, recipeId =>
+                stackable.TryGetValue(recipeId, out var recipePath)
+                    ? ItemRecipeFile.Parse(recipeId, recipePath, pvf.ReadTokens("stackable/" + recipePath), pvf.ResolveString) : null);
         }
         var result = new ExpertJobScriptCatalog(jobs);
         if (jobs.TryGetValue(1, out var enchanter))
@@ -52,7 +54,8 @@ internal sealed class ExpertJobScriptCatalog
                     if (!recipe.Diagnostics.IsEmpty || recipe.Inputs.IsEmpty || recipe.Inputs.Any(row => row.ItemId < 0 || row.Count <= 0)) continue;
                     foreach (var pair in enchanter.CardProducts.Where(row => row.Value.RecipeId == candidate.ItemId))
                         result.cardRecipes.Add(pair.Key, new(pair.Key, pair.Value.BeadId, candidate.ItemId, candidate.RequiredLevel, rarity,
-                            recipe.Inputs.Select(row => (row.ItemId, row.Count)).ToArray()));
+                            recipe.Inputs.Select(row => (row.ItemId, row.Count)).ToArray(),
+                            recipe.BeadInputs.Select(row => (row.ItemId, row.Count)).ToArray()));
                 }
 
             }
@@ -214,7 +217,7 @@ internal sealed class ExpertJobScriptCatalog
             return Math.Min(level, Math.Max(Thresholds.Length, 1));
         }
 
-        public static JobScript Parse(string text, ItemCatalog items, string ownDisjoint)
+        public static JobScript Parse(string text, ItemCatalog items, string ownDisjoint, Func<int, ItemRecipeFile?> readRecipe)
         {
             int[] skills = PvfScript.Integers(Field(text, "skill"));
             if (skills.Length % 2 != 0 || Enumerable.Range(0, skills.Length / 2).Any(i =>
@@ -268,12 +271,15 @@ internal sealed class ExpertJobScriptCatalog
                 for (int index = 0; index < rows.Length; index += 4)
                 {
                     int recipeId = rows[index + 1], productId = rows[index + 2], required = rows[index + 3];
-                    IReadOnlyList<(int ItemId, int Count)>? materials = null;
-                    try { materials = items.NeededMaterials(recipeId); }
-                    catch (InvalidDataException) { materials = null; }
-                    if (recipeId <= 0 || productId <= 0 || required <= 0 || materials is not { Count: > 0 }) continue;
+                    // EXJ 只给配方、产物与等级；制作消耗来自 STK input item，不是商店 need material。
+                    var declaration = readRecipe(recipeId);
+                    if (recipeId <= 0 || productId <= 0 || required <= 0 || declaration is null ||
+                        !declaration.Diagnostics.IsEmpty || declaration.SourceType != 0 || declaration.Inputs.IsEmpty ||
+                        declaration.Outputs is not [{ } output] || output.ItemId != productId || output.Count <= 0 ||
+                        declaration.MaintainAbility is not null || declaration.MaintainSocketStat) continue;
                     exp.TryGetValue(recipeId, out var range);
-                    recipes[recipeId] = new(recipeId, productId, required, materials.ToArray(), range.Min, range.Max);
+                    recipes[recipeId] = new(recipeId, productId, required,
+                        declaration.Inputs.Select(row => (row.ItemId, row.Count)).ToArray(), range.Min, range.Max, output.Count);
                 }
             }
             var parsedRates = new List<ExpertJobRate>();

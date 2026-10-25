@@ -20,7 +20,8 @@ internal enum InventoryListType : byte
     TitlePvp = 20,
     TitleDespair = 21,
     TitleEvent = 22,
-    GuildMedal = 38
+    GuildMedal = 38,
+    Talisman = 46
 }
 
 internal sealed record AccountCargoState(long Revision = 0, ushort Capacity = 0, int Gold = 0);
@@ -98,6 +99,9 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
             item.ValidateDetails(allocating);
             if (!ItemSlotBoundService.Allows(this, item.Position, item.Core.Kind))
                 throw new InvalidDataException("物品容器或槽位不合法");
+            if (item.Position.List == InventoryListType.Talisman && item.Position.Index >= ItemSlotBoundService.EquippedRuneStart &&
+                (item.Core.Kind != ItemKind.Rune || item.Core.Count != 1))
+                throw new InvalidDataException("装载符文槽必须持有一枚真实符文");
         }
     }
 }

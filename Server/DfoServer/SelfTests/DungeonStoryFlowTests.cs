@@ -26,7 +26,7 @@ internal static class DungeonStoryFlowTests
         }
         foreach (byte[] invalid in new byte[][] { [],[0],[0,0,0],[2,0],[0,3] })
             That(!DungeonRequests.TryParseStoryPause(invalid,out _),"无效暂停正文不转成成功应答");
-        Layers(); LayerBaseRestore(); DungeonCinematicLayerReturnTests.Run(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects(); DummyBosses(); DummyLinearRoute();
+        Layers(); LayerBaseRestore(); DungeonCinematicLayerReturnTests.Run(); RepeatedLayers(); Stages(); StageBaseFallback(); Entrances(); QuestObjects(); DummyBosses(); DummyLinearRoute(); StoryDummyBosses();
         Console.WriteLine($"PASS {Count-before} 剧情暂停、层叠、重复坐标阶段和动态任务物件断言（合成）");
     }
 
@@ -173,6 +173,9 @@ internal static class DungeonStoryFlowTests
         var authority = new Authority();
         That(SinglePlayerDungeonRun.TryCreate(entry!,1,100,new(plans,[new(new(0,0),new(1,0)),new(new(1,0),new(2,0))]),authority,out var run,out _),"阶段复用正式Run与完整独立对象身份");
         run!.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        var info = DungeonPackets.Information(entry!,run.Snapshot.BossPosition);
+        That(run.Snapshot.BossPosition == entry!.BossMap.Position && info[8] == 2 && info[9] == 0,
+            "非dummy剧情阶段保持实际终点标记，不能误指向第一剧情房");
         run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,9,1));
         That(run.ConfirmBossEntranceOpen(),"来源实际击杀按通用目标计数开放条件传送");
         That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),new(1,0)).Outcome == DungeonRunOutcome.Accepted,"普通起点进入首个剧情阶段");
@@ -183,6 +186,8 @@ internal static class DungeonStoryFlowTests
                 "重访同坐标装载对应阶段，先前死亡不继承");
             var death = run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,(ushort)(10+index),index+2));
             That((death.ClearFact is not null) == (index == 3),"只有资源最终阶段可以签发通关");
+            That(run.Snapshot.BossPosition == entry!.BossMap.Position && death.BossPositionUpdate is null,
+                "非dummy剧情的中间/最终死亡均不套用动态标记协议");
             if (index == 3) continue;
             That(run.Move(run.Snapshot.Identity,Guid.NewGuid(),new((index+1)%2+1,0)).Outcome == DungeonRunOutcome.Accepted &&
                 run.Phase == SinglePlayerDungeonPhase.Loading,"阶段切换经过正常加载状态");
@@ -382,6 +387,113 @@ internal static class DungeonStoryFlowTests
             new DungeonRawSection("dest grid pos",[new(0,0),new(0,0)]),new DungeonRawSection("/warp map condition",[]) };
         Reject<InvalidDataException>(() => DungeonMazeConditions.Warps(raw.Concat(raw).ToArray()),"重复传送起点不能随机选择目标");
         Reject<InvalidDataException>(() => DungeonMazeConditions.Warps(raw[..2]),"不完整传送声明保留资源错误");
+    }
+
+    public static void RunStoryResources(PvfArchive pvf)
+    {
+        var dungeons = Testing.SelfTestCatalogs.Dungeons(pvf);
+        var rooms = Testing.SelfTestCatalogs.Rooms(pvf);
+        var quests = Testing.SelfTestCatalogs.Quests(pvf);
+        var character = new Character(99,0,"StoryBoss",0,new(39,5,159,275),null)
+        { Level = 53, ActiveMainQuests = [new(0,3344,1) { AcceptanceId = Guid.NewGuid() }], CompletedQuests = [3343] };
+        That(DungeonEntryPlan.TryCreate(dungeons,character,51,3344,0,out var entry,out var reason,quest: quests.Get(3344),quests: quests),
+            "真实3344剧情路线可规划：" + reason);
+        That(entry!.Maze.StoryStages.Select(map => map.Id).SequenceEqual([76327,76328,76329]),"哈穆林剧情冻结两次假Boss和最终真Boss");
+        var plans = new List<DungeonMonsterPlan>();
+        ushort key = 100;
+        foreach (var map in entry.Maze.MapSpecification!)
+        {
+            var plan = DungeonMonsterPlan.Create(rooms,map,99,key,entry.BasisLevel,0);
+            plans.Add(plan);
+            key = checked((ushort)plan.NextObjectKey);
+        }
+        var topology = entry.Maze.StaticTopology;
+        var route = new DungeonFixedRoute(plans,topology.Links!.Select(link => new DungeonRouteConnection(link.First,link.Second)).ToArray());
+        var authority = new Authority();
+        That(SinglePlayerDungeonRun.TryCreate(entry,1,100,route,authority,out var run,out var runReason),"实际地图构建完整Run：" + runReason);
+        DungeonPoint[] path = [new(0,0),new(1,0),new(1,1),new(2,1),new(3,1),new(4,1),new(4,0),new(3,0),new(4,0),new(3,0)];
+        long sequence = 0;
+        int updates = 0;
+        foreach (var point in path)
+        {
+            if (point != path[0])
+                That(run!.Move(run.Snapshot.Identity,Guid.NewGuid(),point).Outcome == DungeonRunOutcome.Accepted,"真实3344逐房推进");
+            var snapshot = run!.Snapshot;
+            if (snapshot.CurrentMap.StoryStageIndex > 0)
+                That(snapshot.MapPayload == DungeonMapPayload.Refresh,"真实76328/76329替换旧格须刷新缓存");
+            run.CompleteLoading(snapshot.Identity,Guid.NewGuid());
+            var plan = plans.Single(row => row.Room.Map == run.Snapshot.CurrentMap);
+            foreach (var monster in plan.Monsters.Where(row => row.IsBlocking).OrderBy(row => row.IsBoss))
+            {
+                if (!run.Snapshot.LivingMonsters.Contains(monster.ObjectKey)) continue;
+                var result = run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,monster.ObjectKey,++sequence));
+                That(result.Outcome == DungeonRunOutcome.Accepted,"真实剧情当前敌人死亡被接受");
+                if (monster.IsDummyMapBoss)
+                {
+                    var expected = entry.Maze.StoryStages[snapshot.CurrentMap.StoryStageIndex + 1].Position;
+                    That(result.BossPositionUpdate == expected && run.Snapshot.BossPosition == expected && result.ClearFact is null,
+                        "真实哈穆林假Boss死亡沿PVF目标更新小地图");
+                    byte[] wire = DungeonPackets.MonsterDeath(monster.ObjectKey,[],result.BossPositionUpdate);
+                    That(wire.Length == 11 && wire[^3] == expected.X && wire[^2] == expected.Y,"真实标记更新经NOTI38尾部发布");
+                    updates++;
+                }
+            }
+        }
+        That(updates == 2 && run!.ClearFact?.ClearMap?.Id == 76329,"真实3344两次移动标记后只在76329结算");
+    }
+
+    static void StoryDummyBosses()
+    {
+        var start = new DungeonMap("map",new(0,0),100,"map/start.map");
+        var first = new DungeonMap("map",new(1,0),101,"map/first.map") { StoryStageIndex = 0 };
+        var second = new DungeonMap("map",new(1,1),102,"map/second.map") { StoryStageIndex = 1 };
+        var terminal = first with { Kind = "boss",Id = 103,Path = "map/terminal.map",StoryStageIndex = 2 };
+        var normal = second with { Id = 104,Path = "map/normal.map",StoryStageIndex = -1 };
+        var firstBase = first with { StoryStageIndex = -1 };
+        var side = start with { Position = new(0,1),Id = 105,Path = "map/side.map" };
+        var maze = new DungeonMaze(0,2,2,"JJMMDDGG",[start.Position],
+            [first.Position,second.Position,terminal.Position],[start,firstBase,normal,side,first,second,terminal],[])
+            { StoryStages = [first,second,terminal] };
+        var entry = new DungeonEntryPlan(99,0,51,3344,0,0,maze,start,terminal);
+        var authority = new Authority();
+        var route = new DungeonFixedRoute([Empty(start),Monster(firstBase,19,"[dummy]"),Empty(normal),Empty(side),
+            Monster(first,20,"[dummy]"),Monster(second,21,"[dummy]"),Monster(terminal,22)],
+            [new(start.Position,first.Position),new(start.Position,side.Position),new(side.Position,second.Position),new(first.Position,second.Position)]);
+        That(SinglePlayerDungeonRun.TryCreate(entry,1,100,route,authority,out var run,out _),"剧情dummy路线使用原Run，不另建假Boss实例");
+        void Load(DungeonPoint target)
+        {
+            That(run!.Move(run.Snapshot.Identity,Guid.NewGuid(),target).Outcome == DungeonRunOutcome.Accepted,"剧情dummy沿已清邻房移动");
+            run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        }
+        run!.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
+        var info = DungeonPackets.Information(entry,run.Snapshot.BossPosition);
+        That(info[8] == first.Position.X && info[9] == first.Position.Y && run.Snapshot.BossPosition == first.Position,
+            "入场标记指向首个剧情Boss，而终末资格仍为最终地图");
+        Load(side.Position); Load(second.Position); Load(side.Position); Load(start.Position); Load(first.Position);
+        var death = authority.Death(run.Snapshot.Identity,20,1);
+        var pending = run.PrepareConfirmedDeath(death).Pending!;
+        That(pending.Result.BossPositionUpdate == second.Position && run.Snapshot.BossPosition == first.Position,
+            "剧情假Boss死亡仅规划下一标记，提交前不改变现有目标");
+        That(run.CancelUncommittedDeath(pending) && run.Snapshot.BossPosition == first.Position,"剧情死亡回滚不推进小地图");
+        var result = run.AcceptConfirmedDeath(death);
+        That(result.ClearFact is null && result.BossPositionUpdate == second.Position && run.Snapshot.BossPosition == second.Position,
+            "剧情假Boss提交后移动标记，不提前发奖通关");
+        That(run.AcceptConfirmedDeath(death).BossPositionUpdate is null,"重放死亡不重复发布目标");
+        Load(start.Position); Load(first.Position);
+        That(run.Snapshot.MapPayload == DungeonMapPayload.Cached && run.Snapshot.LivingMonsters.Count == 0 &&
+            run.Snapshot.BossPosition == second.Position,"剧情阶段回访仍沿已清缓存，不重生演员或退回目标");
+        Load(second.Position);
+        That(run.Snapshot.MapPayload == DungeonMapPayload.Refresh && run.Snapshot.CurrentMap == second,
+            "剧情替换已访问普通格显式Refresh，避免旧场景门叠加");
+        result = run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,21,2));
+        That(result.BossPositionUpdate == terminal.Position && run.Snapshot.BossPosition == terminal.Position,"第二剧情假Boss发布终点标记");
+        Load(first.Position);
+        That(run.Snapshot.MapPayload == DungeonMapPayload.Refresh && run.Snapshot.CurrentMap == terminal,
+            "再次访问旧阶段格时刷新为最终场景，不复用旧演员缓存");
+        That(run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,20,3)).Outcome == DungeonRunOutcome.Rejected,
+            "旧剧情假Boss key不能重复推进或击杀终点");
+        That(run.AcceptConfirmedDeath(authority.Death(run.Snapshot.Identity,22,4)).ClearFact?.ClearMap == terminal,
+            "只有真正终点死亡产生剧情通关");
     }
 
     static void DummyBosses()

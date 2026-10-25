@@ -14,7 +14,8 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
     int MinimumCount, int MaximumCount, DungeonDropGoldReference? Gold = null, decimal GoldMultiplier = 1m,
     int ProbabilityDenominator = DungeonDropRatePlan.ProbabilityDenominator,
     ImmutableArray<DungeonDropRarityPool> RarityPools = default, bool ReferenceGold = false, int Attempts = 1,
-    bool GrowthContractEligible = false, ImmutableDictionary<int, int>? ItemCounts = null, bool IndividualObjects = false);
+    bool GrowthContractEligible = false, ImmutableDictionary<int, int>? ItemCounts = null, bool IndividualObjects = false,
+    DungeonItemDropPool? EpicReplacementItems = null);
 
 // 上游必须提供已解释的概率、数量与池；这里只按完整声明执行，不为未知资源列补类别。
 // 准备计划是不可变规则输入，不持有在线角色；原Run负责冻结实际随机结果。
@@ -63,6 +64,14 @@ internal sealed class DungeonDropGenerationPlan
                 counts.Values.Any(count => count <= 0) ||
                 !counts.Keys.Order().SequenceEqual(trial.Items.Entries.Select(entry => entry.Template.Id).Distinct().Order())))
                 throw new InvalidDataException("物品分支数量须完整匹配直接候选池，并使用固定单次选择");
+            var sourcePools = pools;
+            if (trial.EpicReplacementItems is { } replacement)
+            {
+                if (replacement.TotalWeight <= 0 || replacement.Entries.Any(row =>
+                    row.Template.Kind != GameWorld.Items.ItemKind.Equipment || row.Template.Rarity != 4))
+                    throw new InvalidDataException("史诗替换池须为非空史诗装备候选");
+                pools = pools.Append(replacement).ToArray();
+            }
             // 任一候选未支持新建时拒绝整份计划；不删候选、更改概率或延后至死亡中断。
             if (pools.Any(pool => pool.Entries.Any(entry => !entry.Template.Expiration.SupportsCreation)))
                 throw new NotSupportedException("掉落候选包含尚未支持的新实例期限声明");
@@ -75,12 +84,20 @@ internal sealed class DungeonDropGenerationPlan
                 throw new InvalidDataException("稀有度选择须完整覆盖原抽样并保留阈值顺序");
             if (trial.Gold is { } gold && (gold.BaseAmount <= 0 || gold.VariancePercent is < 0 or > 100))
                 throw new InvalidDataException("金币生成计划的基值或波动范围无效");
-            long objects = trial.Gold is not null ? trial.MaximumCount : pools.SelectMany(pool => pool.Entries).Select(entry =>
+            long objects = trial.Gold is not null ? trial.MaximumCount : sourcePools.SelectMany(pool => pool.Entries).Select(entry =>
             {
                 int count = trial.ItemCounts?.GetValueOrDefault(entry.Template.Id) ?? trial.MaximumCount;
                 return entry.Template.Kind == ItemKind.Equipment || trial.IndividualObjects ? count :
                     ((long)count + entry.Template.StackLimit - 1) / entry.Template.StackLimit;
             }).DefaultIfEmpty(0).Max();
+            if (trial.EpicReplacementItems is not null)
+            {
+                long replacementObjects = sourcePools.SelectMany(pool => pool.Entries)
+                    .Where(row => row.Template is { Kind: GameWorld.Items.ItemKind.Equipment, Rarity: 4 })
+                    .Select(row => (long)(trial.ItemCounts?.GetValueOrDefault(row.Template.Id) ?? trial.MaximumCount))
+                    .DefaultIfEmpty(0).Max();
+                objects = Math.Max(objects, replacementObjects);
+            }
             objects *= trial.Attempts;
             if (objects > 500 - maximum)
                 throw new InvalidDataException("完整掉落生成计划超过本版通知容量，不能截断来源");
@@ -131,6 +148,14 @@ internal sealed class DungeonDropGenerationPlan
             if (expiresAt > 0 && expiresAt <= now.ToUnixTimeSeconds())
                 continue;
             if (trial.ItemCounts is { } counts) count = counts[template.Id];
+            // 保留原概率、品质、混合池分支及数量；只有未过期的史诗装备命中才进入专属替换池。
+            if (template is { Kind: GameWorld.Items.ItemKind.Equipment, Rarity: 4 } && trial.EpicReplacementItems is { } replacement)
+            {
+                template = replacement.Select(Sample(replacement.TotalWeight));
+                expiresAt = template.Expiration.Resolve(now);
+                if (expiresAt > 0 && expiresAt <= now.ToUnixTimeSeconds())
+                    continue;
+            }
             if (template.Kind == ItemKind.Equipment)
             {
                 for (int index = 0; index < count; index++)

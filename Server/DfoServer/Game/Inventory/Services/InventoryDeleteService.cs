@@ -57,7 +57,7 @@ internal static class InventoryDeleteService
         remaining = null;
         // 不同丢弃入口在 value 字段分别发送核心数量或物品 ID；槽位与
         // 当前快照才是实例身份。时装则发送递减的剩余秒数。
-        if (item is null || !Allows(item.Position.List) || value < 0 ||
+        if (item is null || ItemSlotBoundService.IsEquippedRune(item.Position) || !Allows(item.Position.List) || value < 0 ||
             item.Avatar is null && value != item.Core.Value && value != item.Core.ItemId ||
             item.Core.EquipmentLockId != 0)
             return false;
@@ -68,5 +68,5 @@ internal static class InventoryDeleteService
         return true;
     }
     static bool Allows(InventoryListType list) => list is InventoryListType.Main or InventoryListType.Avatar or
-        InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Equipment or InventoryListType.PersonalCargo;
+        InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.Equipment or InventoryListType.PersonalCargo;
 }

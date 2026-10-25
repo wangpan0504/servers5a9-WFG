@@ -9,7 +9,12 @@ internal readonly record struct QuestDungeonClearTarget(int DungeonId, int Minim
 // 类型1/sub6是剩余次数；类型45/sub6是列表任一通关，sub11核对本实例的初始化统计。
 internal static class QuestDungeonClearProgress
 {
-    public static bool Supports(StoryQuest quest) => TryTarget(quest,out _) || HasDungeonAlternatives(quest);
+    // 推荐地下城沿本服已有95版推荐资格，计数仍只由原接取绑定的真实清图推进。
+    // 自动每日仍由周期入口分配，不改为手工可接，也不将任意sub17参数解释为推荐通关。
+    internal static bool Recommended(StoryQuest quest) => quest is
+        { Grade: "[mission]" or "[auto daily mission]", Condition: "[condition under clear]", SubType: 17, IntData: [-1,-1,> 0] };
+
+    public static bool Supports(StoryQuest quest) => Recommended(quest) || TryTarget(quest,out _) || HasDungeonAlternatives(quest);
 
     // 两份原任务文本明确每天只累计一次；不把这个限制推广到其它sub6任务。
     public static bool CountOncePerDay(StoryQuest quest) => quest.SubType == 6 && TryTarget(quest,out var target) &&
@@ -42,16 +47,17 @@ internal static class QuestDungeonClearProgress
         return true;
     }
 
-    public static uint Initial(StoryQuest quest) => TryTarget(quest,out var target) ? target.Count :
+    public static uint Initial(StoryQuest quest) => Recommended(quest) ? checked((uint)quest.IntData[2]) : TryTarget(quest,out var target) ? target.Count :
         HasDungeonAlternatives(quest) ? 1u :
         throw new NotSupportedException("通关需要已确认的sub6/sub11、正地下城、最低难度及目标声明");
 
-    public static bool ValidScalar(StoryQuest quest, uint scalar) => TryTarget(quest,out var target) ? scalar <= target.Count :
+    public static bool ValidScalar(StoryQuest quest, uint scalar) => Recommended(quest) ? scalar <= quest.IntData[2] : TryTarget(quest,out var target) ? scalar <= target.Count :
         HasDungeonAlternatives(quest) && scalar <= 1;
 
     // 难度在真实ClearFact产生时核对；领奖凭据复核同一接取及原目标地下城。
     public static bool ContainsDungeon(StoryQuest quest, int dungeonId)
     {
+        if (Recommended(quest)) return dungeonId > 0;
         if (TryTarget(quest,out var target)) return target.DungeonId == dungeonId;
         if (!HasDungeonAlternatives(quest)) return false;
         for (int at = 0; at < quest.IntData.Count; at += 2)
@@ -64,6 +70,7 @@ internal static class QuestDungeonClearProgress
 
     public static bool Matches(StoryQuest quest, DungeonEntryPlan entry, SinglePlayerDungeonRun? run = null)
     {
+        if (Recommended(quest)) return entry.RecommendedQuestClear;
         if (HasDungeonAlternatives(quest))
             return MatchesAlternative(quest,entry.DungeonId,entry.Difficulty);
         if (!TryTarget(quest,out var target) || !MatchesDungeon(target,entry)) return false;

@@ -1,0 +1,101 @@
+using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
+using DfoServer.GameWorld.Dungeons;
+
+namespace DfoServer.Game.Session;
+
+internal sealed partial class GameSession
+{
+    sealed record HopeSelection(ushort CharacterId, long SelectionEpoch, OperationHopeAdmission Admission);
+    HopeSelection? hopeSelection;
+
+    // 1598 只固定本次合法入场选择；任务和首区疲劳在16的原入场事务中一起提交。
+    public bool BeginOperationHope(OperationHopeCatalog catalog, DungeonCatalog dungeons, Func<int,int>? draw = null)
+    {
+        var capture = owner.Execute(() => (Character: Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect &&
+            formalDungeon is null && !HasPendingTownQuestCommit ? Selected : null, Epoch: SelectionEpoch, Previous: hopeSelection));
+        if (capture.Character is not { IsPvpPrivate: false } character || character.Level is < 95 or > 99 ||
+            character.DungeonState is null || character.ActiveMainQuests.Length >= 30 ||
+            character.ActiveMainQuests.Any(row => catalog.Missions.ContainsKey(row.QuestId)) ||
+            debugSettings?.InfiniteFatigue != true && (character.Fatigue is null || character.Fatigue.Remaining < catalog.NeedFatigue)) return false;
+        HopeSelection selection;
+        if (capture.Previous is { } previous && previous.CharacterId == character.Id && previous.SelectionEpoch == capture.Epoch)
+        {
+            // 位置或背包修改不能把已抽取任务永久锁死，也不能借刷新角色版本重新抽签。
+            var admission = previous.Admission with { SourceRevision = character.Revision };
+            if (!ReferenceEquals(admission.Catalog,catalog) || character.ActiveMainQuests.Any(row =>
+                row.Slot == admission.Acceptance.Slot || row.AcceptanceId == admission.Acceptance.AcceptanceId) ||
+                !DungeonEntryPlan.TryCreate(dungeons,character,8523,0,catalog.Difficulty,out _,out _,
+                    draw:_ => 0,quests:questCatalog,hope:admission)) return false;
+            selection = previous with { Admission = admission };
+        }
+        else
+        {
+            if (!DungeonEntryPlan.TryCreate(dungeons,character,8523,0,catalog.Difficulty,out var entry,out _,draw:draw,quests:questCatalog) ||
+                entry is null || OperationHopePlan.ChooseMission(catalog,entry.Maze.SourceOrdinal,draw) is not { } questId) return false;
+            byte slot = Enumerable.Range(0,30).Select(value => (byte)value).First(value => character.ActiveMainQuests.All(row => row.Slot != value));
+            var active = new ActiveMainQuest(slot,checked((ushort)questId),1) { AcceptanceId = Guid.NewGuid() };
+            selection = new(character.Id,capture.Epoch,new(catalog,entry.Maze.SourceOrdinal,active,character.Revision));
+        }
+        return owner.Execute(() =>
+        {
+            if (!Ready || !ReferenceEquals(Selected,character) || SelectionEpoch != capture.Epoch || formalDungeon is not null ||
+                Phase is not (SessionPhase.Town or SessionPhase.MapSelect) || HasPendingTownQuestCommit ||
+                !ReferenceEquals(hopeSelection,capture.Previous)) return false;
+            hopeSelection = selection;
+            return true;
+        });
+    }
+
+    OperationHopeAdmission? CurrentHopeAdmission(Character expected, long epoch) => owner.Execute(() =>
+        hopeSelection is { } value && value.CharacterId == expected.Id && value.SelectionEpoch == epoch &&
+        value.Admission.SourceRevision == expected.Revision ? value.Admission : null);
+    public bool IsOperationHopeQuest(ushort questId) => owner.Execute(() => formalDungeon?.Run.HopeBinding?.Acceptance.QuestId == questId);
+
+    public OperationHopeFinishReceipt? FinishOperationHope(ushort questId, int selector, int multiplier,
+        GameWorld.Quests.QuestCatalog quests, GameWorld.Quests.QuestRewardParameterCatalog parameters,
+        GameWorld.Items.ItemCatalog itemCatalog, GameWorld.Items.GoldLimitCatalog goldLimits,
+        GameWorld.Items.EpicPieceCatalog pieces, GameWorld.Characters.CharacterGrowthCatalog growth)
+    {
+        var capture = owner.Execute(() => (Character: pendingRental is null && pendingCommunication is null &&
+            pendingQuestLifecycle is null && pendingQuestCompletion is null && pendingQuestQuickClear is not { CommitStarted: true } &&
+            !HasPendingFormalCard && !HasPendingQuestScene && formalDungeon?.Ground.HasPendingOperation != true
+            ? Selected : null, Dungeon: formalDungeon, Epoch: SelectionEpoch, Pending: formalDungeon?.PendingHopeReward));
+        if (!Ready || capture.Character is not { } expected || capture.Dungeon is not { } dungeon ||
+            selector != ushort.MaxValue || multiplier != 1 || dungeon.Run.HopeCatalog is not { } catalog ||
+            dungeon.Run.HopeBinding is not { } binding || binding.Acceptance.QuestId != questId) return null;
+        var plan = capture.Pending ?? OperationHopeRewardPlan.Prepare(expected,catalog,binding,dungeon.Run,
+            quests,parameters,itemCatalog,goldLimits,pieces,growth,(timeProvider ?? TimeProvider.System).GetUtcNow()).Plan;
+        if (plan is null) return null;
+        return owner.Execute(() =>
+        {
+            if (!Ready || SelectionEpoch != capture.Epoch || !ReferenceEquals(Selected,expected) ||
+                !ReferenceEquals(formalDungeon,dungeon) || Phase != SessionPhase.Settlement ||
+                dungeon.Run.Snapshot.Identity != plan.Identity || dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement ||
+                pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null ||
+                pendingQuestCompletion is not null || pendingQuestQuickClear is { CommitStarted: true } ||
+                HasPendingFormalCard || HasPendingQuestScene || dungeon.Ground.HasPendingOperation ||
+                dungeon.PendingHopeReward is not null && !ReferenceEquals(dungeon.PendingHopeReward,plan))
+                return null;
+            if (dungeon.PendingHopeReward is null)
+            {
+                var active = expected.ActiveMainQuests.SingleOrDefault(row => row.AcceptanceId == binding.Acceptance.AcceptanceId);
+                if (active is null || !OperationHopePlan.CanClaim(catalog,binding,dungeon.Run,active)) return null;
+                dungeon.PendingHopeReward = plan;
+            }
+            var committed = repository.CommitOperationHopeReward(owner,plan);
+            if (!committed.ProjectionCurrent) return new OperationHopeFinishReceipt(capture.Epoch,plan.Identity,questId,committed);
+            dungeon.HopeRewardConfirmed = true;
+            Selected = committed.Character;
+            return new OperationHopeFinishReceipt(capture.Epoch,plan.Identity,questId,committed);
+        });
+    }
+
+    public bool CanPublishOperationHope(OperationHopeFinishReceipt receipt) => owner.Execute(() => Ready &&
+        SelectionEpoch == receipt.SelectionEpoch && ReferenceEquals(Selected,receipt.Commit.Character) &&
+        formalDungeon?.Run.Snapshot.Identity == receipt.Identity && Phase == SessionPhase.Settlement);
+
+}
+
+internal sealed record OperationHopeFinishReceipt(long SelectionEpoch, DungeonRunIdentity Identity,
+    ushort QuestId, OperationHopeRewardCommit Commit);

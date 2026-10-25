@@ -20,6 +20,7 @@ internal static class LevelUpByTableTcpTests
                 row.Definition! with { RequiredAnswers=[new(500,row.Id==101 ? 0 : 1)] } }).ToArray();
         var quests = new QuestCatalog(LevelUpTicketTests.PlainQuests().Concat(branch)
             .Append(QuestEligibilityTests.Quest(900) with { Grade="[invisible]",IntData=[-1] }).ToDictionary(row=>row.Id));
+        quests=TcpSyntheticQuestCatalog.WithHopeMissions(quests,resources.Quests);
         await using var fixture = new TcpTestFixture(options,Path.Combine(root,"levelup-by-table"),resources:resources,questCatalog:quests);
         var repository = new CharacterRepository(fixture.Database,quests);
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);

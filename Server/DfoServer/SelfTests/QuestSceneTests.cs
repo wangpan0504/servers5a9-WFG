@@ -315,7 +315,7 @@ internal static class QuestSceneTests
                 "隔离真实入口正常接取3205");
             if (mode == "independent")
             {
-                // 活动任务已有进度时，新的实例仍须提交本次迷宫物件事实，不能借scalar0提前结算。
+                // 被动物件路线不因旧scalar0跳过本实例场景；仍需当前物件事件生成结算事实。
                 f.Sql("UPDATE character_active_main_quests SET condition_state=0 WHERE quest_id=3205");
                 f.Session.ReturnToRoster(); f.Session.Select(0, resumeTown: true); f.Session.MarkReady();
             }
@@ -329,8 +329,13 @@ internal static class QuestSceneTests
             {
                 receipt = f.Session.CompleteFormalDungeonLoading()!;
                 foreach (var monster in receipt.Monsters.Monsters.Where(monster => monster.IsBlocking))
-                    That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth).Outcome == DungeonRunOutcome.Accepted,
-                        "实际3205路线由合成权威死亡通过原提交链清房");
+                {
+                    var wasLiving = f.Session.DungeonSnapshot!.LivingMonsters.Contains(monster.ObjectKey);
+                    var death = f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth);
+                    That(death.Outcome == DungeonRunOutcome.Accepted,
+                        death.Outcome == DungeonRunOutcome.Accepted ? "实际3205路线由合成权威死亡通过原提交链清房" :
+                        $"实际3205路线由合成权威死亡通过原提交链清房：mode={mode},map={receipt.Snapshot.CurrentMap.Id},key={monster.ObjectKey},template={monster.MonsterId},boss={monster.IsBoss},reportable={monster.CanReportDeath},wasLiving={wasLiving},phase={f.Session.Phase},result={System.Text.Json.JsonSerializer.Serialize(death)}");
+                }
                 if (point == opening.Entry.BossMap.Position) break;
                 var next = path[Array.IndexOf(path, point) + 1];
                 That(f.Session.MoveFormalDungeon(checked((byte)next.X), checked((byte)next.Y)) is not null, "按实际门墙路线移动至3205终点");
@@ -346,8 +351,7 @@ internal static class QuestSceneTests
                 That(Same(before, f.Read()), "回滚保留完整角色资产和任务状态");
             }
             if (mode is "lost" or "stale") TestCheck.Reject<IOException>(() => Observe(), "终点物件提交返回丢失");
-            if (mode != "independent")
-                That(ReferenceEquals(f.Session.Selected, online) && f.Session.DungeonSnapshot!.Identity == identity &&
+            That(ReferenceEquals(f.Session.Selected, online) && f.Session.DungeonSnapshot!.Identity == identity &&
                     f.Session.Phase == SessionPhase.Dungeon && f.Session.EnableFormalDungeonSettlement() is null,
                     "未取得明确提交结果时不改变Run或提前许可结算");
             if (mode == "stale") f.Sql("UPDATE characters SET revision=revision+1");
@@ -429,7 +433,11 @@ internal static class QuestSceneTests
                 position: position,growthLossCondition: prepared => prepared.Result.RoomClearFact is not null,
                 contracts: lost ? items.Contracts : null,timeProvider: clock,growthContractExpiresAt: contractExpiry);
             int expiredKills = 0;
-            That(Change(3525)?.Commit is not null && f.Read().ActiveMainQuests.Single().ConditionState == 1,
+            var coexisting=f.Read().ActiveMainQuests;
+            That(coexisting.Length>0 && coexisting.All(row=>quests.TryGet(row.QuestId,out var daily) && QuestAutoDailyPlan.Supports(daily)),
+                "真实地区入口已有独立自动每日，不假设角色只有一个活动任务");
+            That(Change(3525)?.Commit is not null && f.Read().ActiveMainQuests.Single(row=>row.QuestId==3525).ConditionState == 1 &&
+                coexisting.All(row=>f.Read().ActiveMainQuests.Contains(row)),
                 "真实父任务按已完成两个会面子任务进入最后清图阶段");
             var opening = f.Session.EnterFormalDungeon(82,3525,0,dungeons,rooms)!;
             That(opening is not null && opening.Entry.QuestClearMap is { Id: 92247,Position.X: 2,Position.Y: 1 } &&

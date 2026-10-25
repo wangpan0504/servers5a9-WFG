@@ -75,9 +75,9 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(prepared: true);
-            That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests ORDER BY slot") is [[13056L,1686L],[3240L,1L]] &&
+            That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests ORDER BY slot") is [[6115L,1686L],[13056L,1686L],[3240L,1L]] &&
                 fixture.Snapshot("SELECT * FROM character_active_main_quests")==active,
-                "重连完整保留地轨每日及尚未通关的向暗黑城任务，身份与进度不重建");
+                "重连完整保留两项地区每日及尚未通关的向暗黑城任务，身份与进度不重建");
             peer.Barrier();
         }
         await fixture.StopAsync();

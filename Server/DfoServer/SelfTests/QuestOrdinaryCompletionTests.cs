@@ -30,6 +30,37 @@ internal static class QuestOrdinaryCompletionTests
         int checks = Count;
         var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf); var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
         var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        QuestMailDeclarationTests.RunResources(quests);
+        QuestEligibilityTests.RunFirstNpcResources(quests);
+        PvpTrainingProgressTests.RunResources(quests);
+        PvpTrainingManualTests.Run(towns,characters,items,learning,growth,parameters,quests);
+        QuestAccountSynchronizationTests.Run(towns,characters,items,learning,growth,parameters,quests);
+        QuestLegacyAwakeningTests.Run(towns,pvf,characters,items,quests,learning,growth,parameters);
+        var marriage = quests.Get(20743);
+        That(marriage is { Condition: "[meet npc]", SubType: -1, Difficulty: null, IntData: [20013] },
+            "704爱情的升华保留真实会面及缺省difficulty声明");
+        using (var missingDifficulty = new Fixture(towns, characters, learning, growth, parameters, items, marriage,
+            materialCount: 0, active: [new(0, 20743, 0)], configure: source => source with
+            { Level = 29, InitialLearning = SkillPointLedger.Synchronize(source.Job, source.GrowType, 29,
+                source.InitialLearning with { Experience = growth.GetLevelStartExperience(29) }, learning) }))
+        {
+            var before = missingDifficulty.Read();
+            var invalid = QuestCompletionPlan.Prepare(before, marriage with { Difficulty = "unknown" }, ushort.MaxValue,
+                missingDifficulty.Catalog, parameters, items.Items, items.GoldLimits, items.EpicPieces, growth, DateTimeOffset.UtcNow);
+            That(invalid.Outcome == QuestCompletionOutcome.Rejected && missingDifficulty.Receipts == 0,
+                "显式未知difficulty仍拒绝且不发婚礼奖励");
+            var result = missingDifficulty.Finish(ushort.MaxValue, 20743);
+            That(result.Outcome == QuestFinishOutcome.Committed && result.Receipt!.Commit.ExperienceReward is
+                { DifficultyKey: "", DifficultyWeight: 100 } && result.Receipt.Commit.Rewards.Single() is
+                { GrantedCount: 1, Item.Core.ItemId: 10003038 } && missingDifficulty.Read().CompletedQuests.Contains(20743),
+                "爱情的升华真实已完成会面可交付且原奖励只发一次：" + result.Reason);
+            var saved = missingDifficulty.Read();
+            _ = missingDifficulty.Finish(ushort.MaxValue, 20743);
+            That(Same(saved, missingDifficulty.Read()) && missingDifficulty.Receipts == 1, "重复交付不重发奖励");
+        }
+        foreach (int id in new[] { 2109, 2110, 20743 })
+            That(QuestExperiencePolicy.AllowsOmittedDifficulty(quests.Get(id)), id + "普通会面缺省经验共享同一规则");
+        QuestPetRewardTests.Run(towns, characters, items, learning, growth, parameters);
         QuestHarlemContinuationTests.Run(towns,pvf,characters,items,quests);
         QuestGoldMailTests.Run(towns, characters, items, learning, growth, parameters);
         QuestInventoryPendingTests.Run(towns, characters, items, learning, growth, parameters);
@@ -1119,10 +1150,10 @@ internal static class QuestOrdinaryCompletionTests
             }
             That(cardId != 0, "附魔师 [base result] 有可发放卡片");
             var card = f.Read().Inventory.Items.Single(item => item.Core.ItemId == cardId);
-            That(ExpertJobCraft.TryPlan(f.Read(), scripts, items.Items, items.GoldLimits, items.EpicPieces, 0, 1,
-                (ushort)card.Position.Index, _ => 0, DateTimeOffset.UtcNow, out var plan, out _) &&
-                plan.Inventory.After.Find(card.Position) is null,
-                "C2S 238 卡片槽不是 0/65535 时不因槽位本身 Fail(19)");
+            That(!ExpertJobCraft.TryPlan(f.Read(), scripts, items.Items, items.GoldLimits, items.EpicPieces, 0, 1,
+                (ushort)card.Position.Index, _ => 0, DateTimeOffset.UtcNow, out _, out _) &&
+                f.Read().Inventory.Find(card.Position) == card,
+                "C2S 238 无映射配方不得扣卡伪造成功");
         }
         using (var f = new Fixture(towns, characters, learning, growth, parameters, items, dummy, materialCount: 0, configure: Level20))
         {
@@ -1197,7 +1228,7 @@ internal static class QuestOrdinaryCompletionTests
             this.items = items; this.growth = growth; this.parameters = parameters;
             Catalog = new((definitions ?? [quest]).ToDictionary(row => row.Id));
             Repository = new(Path.Combine(root, "game.db"), Catalog); Owner = owners.Acquire("ordinary-quest", () => { });
-            if (Catalog.All.Any(row => row.Definition?.AccountQuest == true || QuestRelationProgress.IsAccountSyncMarker(row)))
+            if (Catalog.All.Any(row => QuestAccountPolicy.SharedCompletion(row) || QuestRelationProgress.IsAccountSyncMarker(row)))
                 new AuthenticationService(new AuthenticationRepository(Path.Combine(root,"game.db"))).Create("ordinary-quest","fixture-password");
             var candidate = CharacterCreation.Prepare("Ordinary", characters.Get(0), towns.Room, towns.InitialReturn, learning.Get);
             if (configure is not null) candidate = configure(candidate);

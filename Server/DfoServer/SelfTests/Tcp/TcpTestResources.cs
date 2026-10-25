@@ -13,6 +13,7 @@ internal sealed class TcpTestResources : IDisposable
     readonly Lazy<ItemResources> items;
     readonly Lazy<TownCatalog> towns;
     readonly Lazy<SkillLearningCatalog> learning;
+    readonly Lazy<CharacterGrowthCatalog> growth;
     readonly Lazy<DfoServer.GameWorld.Quests.QuestCatalog> quests;
     readonly Lazy<DfoServer.GameWorld.Adventure.AdventureCatalog> adventure;
     readonly Lazy<DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog> expeditions;
@@ -23,6 +24,7 @@ internal sealed class TcpTestResources : IDisposable
     public CharacterCatalog Characters => characters.Value;
     public TownCatalog Towns => towns.Value;
     public SkillLearningCatalog Learning => learning.Value;
+    public CharacterGrowthCatalog Growth => growth.Value;
     public DfoServer.GameWorld.Quests.QuestCatalog Quests => quests.Value;
     public DfoServer.GameWorld.Adventure.AdventureCatalog Adventure => adventure.Value;
     public DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog Expeditions => expeditions.Value;
@@ -46,6 +48,7 @@ internal sealed class TcpTestResources : IDisposable
         characters = new(() => Timed(() => CharacterCatalog.Load(Archive, ItemResources.Items)));
         towns = new(() => Timed(() => TownCatalog.Load(Archive)));
         learning = new(() => Timed(() => SkillLearningCatalog.Load(Archive, ItemResources.Contracts.ExpertSkillLevels)));
+        growth = new(() => Timed(() => CharacterGrowthCatalog.Load(Archive,Learning)));
         quests = new(() => Timed(() => SelfTestCatalogs.Quests(Archive).WithCreatures(ItemResources.Creatures)));
         adventure = new(() => Timed(() => new DfoServer.GameWorld.Adventure.AdventureCatalog(Archive)));
         expeditions = new(() => Timed(() => new DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog(Archive)));

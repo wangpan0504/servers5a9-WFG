@@ -121,6 +121,32 @@ internal static class QuestGoldMailTests
                 "物品仍满包时整笔任务按原容量拒绝，不因金币可邮寄而部分完成");
         }
 
+        var resourceQuest = quest with { Definition = quest.Definition! with { Fields = [
+            new("mail time",[new(0,1,null)],[]), new("mail title",[new(6,0,"任务声明标题")],[]),
+            new("mail contents",[new(6,0,"系统奖励正文")],[]), new("mail enclose",[new(0,2058,null),new(0,2,null)],[])] } };
+        using (var f = Make(resourceQuest,0))
+        {
+            var plan = f.Prepare(ushort.MaxValue).Plan!;
+            That(plan.ResourceMail is { Attachments.Length:1 } && plan.ResourceMail.Attachments[0].Core.Count == 2,
+                "声明附件独立冻结，不能复制普通任务奖励或乘领奖倍数");
+            f.Sql("CREATE TRIGGER quest_resource_mail_abort AFTER INSERT ON mailbox_audit_log BEGIN SELECT RAISE(ABORT,'resource mail rollback'); END");
+            string before = Snapshot(f);
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => f.Repository.CommitQuestCompletion(f.Owner,plan),"邮件末段失败回滚整笔任务");
+            That(Snapshot(f)==before,"邮件、附件UID、经验金币、任务完成与回执均未部分提交");
+            f.Sql("DROP TRIGGER quest_resource_mail_abort");
+            var committed=f.Repository.CommitQuestCompletion(f.Owner,plan);
+            var mailbox=f.Repository.LoadMailbox(f.Owner,committed.Character.Id,DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            That(mailbox.Entries is [var mail] && mail.Id==committed.ResourceMailId && mail.System && mail.SenderId==0 &&
+                mail.SenderName=="系统任务" && mail.Text=="任务声明标题\n系统奖励正文" && mail.Expires is null && mail.Gold==0 &&
+                mail.Attachments is [var attachment] && attachment.Item.Core.ItemId==2058 && attachment.Item.Core.Count==2 &&
+                committed.Rewards.Single().GrantedCount==1,
+                "标题保留正文且来源明确为系统，声明附件与普通奖励各发原数量一次");
+            string saved=Snapshot(f);
+            var replay=f.Repository.CommitQuestCompletion(f.Owner,plan);
+            That(replay.Duplicate && replay.ResourceMailId==committed.ResourceMailId && Snapshot(f)==saved,
+                "冻结任务重放恢复原邮件，不重建附件或再发奖励");
+        }
+
         QuestOrdinaryCompletionTests.Fixture Make(StoryQuest definition, uint balance, bool lost = false) =>
             new(towns, characters, learning, growth, parameters, items, definition, materialCount: 0, loseResult: lost,
                 active: [new(0, 100, 0)], configure: candidate => candidate with { Inventory = candidate.Inventory with { Gold = balance } });
