@@ -210,6 +210,7 @@ internal static class SqliteMigrations
         new(96, "决斗专用角色身份与账号重建冷却", static (db,tx) => Execute(db,tx,PvpPrivateCharacterSchema.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
         new(97, "代号希望按实例与接取去重领奖", static (db,tx) => Execute(db,tx,OperationHopeRewardSchema.Definition.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
         new(98, "组队任务物件助战场景回执", UpgradePartyQuestLifecycle),
+        new(99, "角色称号替换动画", AddCloneTitleColumn),
     ];
 
     internal const string PvpPrivateCharacterSchema = """
@@ -495,6 +496,21 @@ internal static class SqliteMigrations
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='characters'";
         if (query.ExecuteScalar() is not string sql || !sql.Contains(AvatarPresetStateColumn, StringComparison.Ordinal))
             throw new InvalidDataException("角色装扮预设列结构不兼容");
+    }
+
+    const string CloneTitleColumn = "clone_title_item_id INTEGER NOT NULL DEFAULT 0 CHECK(typeof(clone_title_item_id)='integer' AND clone_title_item_id BETWEEN 0 AND 4294967295)";
+
+    static void AddCloneTitleColumn(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='clone_title_item_id'";
+        if (query.ExecuteScalar() is 0L)
+            Execute(db, tx, "ALTER TABLE characters ADD COLUMN " + CloneTitleColumn);
+        // 已有同名列只接受完整正式定义，保留回退迁移夹具的原值，不吞掉未知结构。
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='characters'";
+        if (query.ExecuteScalar() is not string sql || !sql.Contains(CloneTitleColumn, StringComparison.Ordinal))
+            throw new InvalidDataException("角色称号动画列结构不兼容");
     }
 
     static void AddBlacklistCountColumn(SqliteConnection db, SqliteTransaction tx)
@@ -2123,6 +2139,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,baseline_experience,position_experience FROM character_adventure_credits LIMIT 0",
         "SELECT key,value FROM adventure_ledger_meta LIMIT 0",
         "SELECT emotion FROM characters LIMIT 0",
+        "SELECT clone_title_item_id FROM characters LIMIT 0",
         "SELECT blacklist_count FROM characters LIMIT 0",
         "SELECT charac_no,selected,cube_type FROM cube_premium LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",

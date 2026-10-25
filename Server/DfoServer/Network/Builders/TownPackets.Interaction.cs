@@ -43,7 +43,7 @@ internal static partial class TownPackets
         writer.Write(stats);
         writer.Write(character.EquipmentSlotFlags);
         EquipmentProtocolWriter.Player(writer, character.Inventory, utcNow.ToUnixTimeSeconds());
-        writer.Write(0u);
+        writer.Write(character.CloneTitleItemId);
         writer.Write((byte)0); // 023C3A90装备尾部，与本人相同。
         // 公开资料不调用0267BFA0，不能插入本人的BUFF换装登记块。
         EquipmentProtocolWriter.NameTag(writer, character.Inventory, utcNow.ToUnixTimeSeconds());

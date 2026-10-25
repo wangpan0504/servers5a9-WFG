@@ -9,7 +9,8 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class TitleHandler(TitleAchievementService achievements, TitleBookService books, TitleProjection titles,
-    InventoryProjection inventory, DfoServer.Game.Session.OnlineSessionDirectory online) : IGameCommandModule
+    InventoryProjection inventory, DfoServer.Game.Session.OnlineSessionDirectory online,
+    DfoServer.Game.Settings.ClientSettingsService settings, DfoServer.Infrastructure.ServerLog log) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -17,6 +18,26 @@ internal sealed class TitleHandler(TitleAchievementService achievements, TitleBo
         commands.Register(CmdPacketType.TITLE_BOOK_PUT, Put, nameof(TitleHandler));
         commands.Register(CmdPacketType.TITLE_BOOK_GET, Get, nameof(TitleHandler));
         commands.Register(CmdPacketType.OTHER_USER_TITLE_BOOK_LIST, Other, nameof(TitleHandler));
+        commands.Register(CmdPacketType.SET_CLONE_TITLE, CloneTitle, nameof(TitleHandler));
+    }
+    async Task<CommandResult> CloneTitle(GameConnectionContext context, Packet packet)
+    {
+        uint itemId = TitleRequests.CloneTitle(packet.Body);
+        long epoch = context.Session.SelectionEpoch;
+        var phase = context.Session.Phase;
+        var result = context.Session.SelectCloneTitle(books, settings, itemId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        if (result.Character is not { } character)
+        {
+            log.Write("clone_title_rejected", new { Connection = context.Id, ItemId = itemId, result.Error });
+            await context.Reply(CmdPacketType.SET_CLONE_TITLE, TitlePackets.CloneTitleFailure(result.Error), "clone_title_rejected");
+            return CommandResult.Handled;
+        }
+        bool Guard() => context.Session.Ready && context.Session.SelectionEpoch == epoch && context.Session.Phase == phase &&
+            ReferenceEquals(context.Session.Selected, character);
+        log.Write("clone_title_saved", new { Connection = context.Id, Character = character.Id, ItemId = character.CloneTitleItemId, result.Changed });
+        await context.Reply(CmdPacketType.SET_CLONE_TITLE, TitlePackets.CloneTitle(character.CloneTitleItemId), "clone_title_saved", Guard);
+        if (result.Changed) await inventory.RefreshTitleAppearanceAsync(context, character, Guard);
+        return CommandResult.Handled;
     }
     async Task<CommandResult> Other(GameConnectionContext context, Packet packet)
     {

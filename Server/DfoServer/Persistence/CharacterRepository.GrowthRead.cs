@@ -53,7 +53,7 @@ internal sealed partial class CharacterRepository
             Slot = stored.Slot, Name = stored.Name, Position = stored.Position, Return = stored.Return,
             Job = stored.Job, GrowType = stored.GrowType, Level = stored.Level,
             AcceptedStoryLevel = stored.AcceptedStoryLevel, QuestCycleDay = stored.QuestCycleDay,
-            Emotion = stored.Emotion, BlacklistCount = stored.BlacklistCount,
+            Emotion = stored.Emotion, CloneTitleItemId = stored.CloneTitleItemId, BlacklistCount = stored.BlacklistCount,
             Learning = ReadLearning(db, expected.Id, tx), Skills = ReadCharacterSkills(db, expected.Id, tx),
             ActiveMainQuests = ReadActiveMainQuests(db, expected.Id, tx), DungeonState = ReadDungeonState(db, expected.Id, tx),
             // 公会可由其他成员改变，不能用本角色revision证明其未变；此处保留单成员查询。

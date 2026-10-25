@@ -198,6 +198,7 @@ internal static class SettingsProtocolTests
 
     sealed class SettingsStore : IClientSettingsStore
     {
+        public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort id, uint itemId, long? expiresAt = null) => throw new NotSupportedException("此夹具只验证原有设置正文");
         public bool SaveEmotion(AccountOwners.Lease owner, ushort id, ushort emotion) => throw new NotSupportedException("此夹具只验证原有设置正文");
         ImmutableArray<byte> main;
         readonly Dictionary<ushort, ImmutableArray<byte>> characters = [];

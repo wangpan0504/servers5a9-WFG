@@ -109,7 +109,8 @@ internal static partial class TownPackets
             // 0267DF0B读入成员DTO+1C；原生45发送门禁要求副本成员状态非零。
             writer.Write((byte)sceneState);
             EquipmentProtocolWriter.Appearance(writer, character.Inventory);
-            writer.Write(0u);
+            // 0267DF38读取外观表后的u32并存入角色DTO+260h，独立于真实称号13槽。
+            writer.Write(character.CloneTitleItemId);
             writer.Write(new byte[4]);
             EquipmentProtocolWriter.NameTag(writer, character.Inventory, utcSeconds);
             writer.Write((byte)0);
@@ -218,7 +219,7 @@ internal static partial class TownPackets
             writer.Write(stats); // 03BE25C0: u32 length followed by raw bytes.
             writer.Write(character.EquipmentSlotFlags); // Full03 0267D0A9/0267D0CB：装备槽标志写本人容器+1AC。
             EquipmentProtocolWriter.Player(writer, character.Inventory);
-            writer.Write(0u);
+            writer.Write(character.CloneTitleItemId);
             EquipmentProtocolWriter.Runes(writer, character.Inventory); // 023C3A90：六个符文按槽210–215排列。
             // 0267BFA0：指定技能及登记项；每项的完整物品块由同一背包条目编码器生成。
             SkillSwitchInventoryPackets.WriteUserInfo(

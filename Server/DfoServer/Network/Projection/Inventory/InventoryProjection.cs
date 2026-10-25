@@ -12,6 +12,23 @@ namespace DfoServer.Network.Projection.Inventory;
 internal sealed class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces,
     CreatureProjection? creatures = null)
 {
+    public async Task RefreshTitleAppearanceAsync(GameConnectionContext context, Character character, Func<bool> canSend)
+    {
+        bool inDungeon = context.Session.Phase is SessionPhase.Dungeon or SessionPhase.Settlement;
+        await context.Notify(NotiPacketType.USERINFO,
+            TownPackets.Actor(character, context.Channel, adventureName: context.Session.ReadAdventureName(),
+                sceneState: inDungeon ? ActorSceneState.Dungeon : ActorSceneState.Town,
+                premiumPcRoom: context.Session.PremiumPcRoom), "clone_title_actor", canSend);
+        await context.Notify(NotiPacketType.USERINFO,
+            TownPackets.Player(character, stats.Compute(character), context.Session.ReadAdventureLevel(), context.Channel),
+            "clone_title_player", canSend);
+        context.Owner.Execute(() =>
+        {
+            if (canSend() && context.Session.Phase == SessionPhase.Town && !context.BlocksTownActions) town.Refresh(context);
+            return true;
+        });
+    }
+
     public async Task RefreshAsync(GameConnectionContext context, InventoryResult result,
         IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true, bool silentMainMove = false,
         bool suppressMainNotice = false, bool suppressAvatarNotice = false)

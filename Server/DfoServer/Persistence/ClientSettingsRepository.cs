@@ -8,6 +8,24 @@ namespace DfoServer.Persistence;
 internal sealed class ClientSettingsRepository(string path) : IClientSettingsStore
 {
     readonly SqliteGameDatabase database = new(path);
+    public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort characterId, uint itemId, long? expiresAt = null) => owner.Execute<bool?>(() =>
+    {
+        using var db = database.Open(); using var command = db.CreateCommand();
+        command.CommandText = "SELECT clone_title_item_id FROM characters WHERE id=$id AND account=$account";
+        command.Parameters.AddWithValue("$id", characterId); command.Parameters.AddWithValue("$account", owner.Account);
+        if (command.ExecuteScalar() is not long previous) throw new InvalidDataException("称号动画角色不属于当前账号");
+        if (expiresAt <= DateTimeOffset.UtcNow.ToUnixTimeSeconds()) return null;
+        if (previous == itemId) return false;
+        using var write = db.BeginWrite("ClientSettingsRepository.SaveCloneTitle");
+        using var tx = write.Transaction; command.Transaction = tx;
+        // 写者排队可能跨过限时称号到期边界，取得实际事务后必须复核。
+        if (expiresAt <= DateTimeOffset.UtcNow.ToUnixTimeSeconds()) return null;
+        command.CommandText = "UPDATE characters SET clone_title_item_id=$item WHERE id=$id AND account=$account AND clone_title_item_id=$previous";
+        command.Parameters.AddWithValue("$item", (long)itemId); command.Parameters.AddWithValue("$previous", previous);
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("称号动画保存快照已变化");
+        tx.Commit(); return true;
+    });
+
     public bool SaveEmotion(AccountOwners.Lease owner, ushort characterId, ushort emotion) => owner.Execute(() =>
     {
         if (emotion > short.MaxValue) throw new InvalidDataException("心情编号越界");

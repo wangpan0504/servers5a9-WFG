@@ -14,6 +14,7 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
     byte Level, ImmutableArray<InventoryItem> Equipment, bool FiendWarEligible = false,
     bool AntonEligible = false, bool LukeEligible = false, bool PreyEligible = false, bool IsPvpPrivate = false)
 {
+    public uint CloneTitleItemId { get; init; }
     // etc/enterablespecialchannel.etc fiendwar=8672（Fiendwar_enter.qst「[超时空漩涡]奔赴前线」）。
     public const int FiendWarEntryQuest = 8672;
     // anton=12829（Anton/Anton_dimension_enter.qst「[安徒恩团队模式]异次元的安徒恩」，前置主线 3779）。
@@ -36,5 +37,6 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
         FiendWarEligible: IsFiendWarEligible(character.CompletedQuests.Contains(FiendWarEntryQuest), character.Guild is not null),
         AntonEligible: character.CompletedQuests.Contains(AntonEntryQuest),
         LukeEligible: character.CompletedQuests.Contains(LukeEntryQuest),
-        PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level), IsPvpPrivate: character.IsPvpPrivate);
+        PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level), IsPvpPrivate: character.IsPvpPrivate)
+        { CloneTitleItemId = character.CloneTitleItemId };
 }
