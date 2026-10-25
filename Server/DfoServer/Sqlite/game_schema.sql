@@ -1116,3 +1116,23 @@ CREATE TABLE character_grief_tower_entries(
   account_limit INTEGER NOT NULL CHECK(account_limit>0),revision INTEGER NOT NULL CHECK(revision>0),
   PRIMARY KEY(character_id,instance_id),UNIQUE(character_id,task_attempt),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
+CREATE TABLE character_social_links(
+          owner_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+          target_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+          kind INTEGER NOT NULL CHECK(kind IN(0,1)),created INTEGER NOT NULL CHECK(created>=0),memo TEXT NOT NULL DEFAULT '',
+          PRIMARY KEY(owner_id,target_id,kind),CHECK(owner_id<>target_id)
+        ) STRICT;
+        CREATE INDEX character_social_target ON character_social_links(target_id,kind);
+        CREATE TABLE account_social_links(
+          owner_account TEXT NOT NULL REFERENCES accounts(account_id),
+          target_account TEXT NOT NULL REFERENCES accounts(account_id),
+          created INTEGER NOT NULL CHECK(created>=0),memo TEXT NOT NULL DEFAULT '',group_id INTEGER NOT NULL DEFAULT 0 CHECK(group_id BETWEEN 0 AND 255),
+          PRIMARY KEY(owner_account,target_account),CHECK(owner_account<>target_account)
+        ) STRICT;
+        CREATE TABLE account_social_requests(
+          source_account TEXT NOT NULL REFERENCES accounts(account_id),
+          target_account TEXT NOT NULL REFERENCES accounts(account_id),
+          message TEXT NOT NULL,created INTEGER NOT NULL CHECK(created>=0),
+          memo TEXT NOT NULL DEFAULT '',group_id INTEGER NOT NULL DEFAULT 0 CHECK(group_id BETWEEN 0 AND 4),
+          PRIMARY KEY(source_account,target_account),CHECK(source_account<>target_account)
+        ) STRICT;

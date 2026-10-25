@@ -55,11 +55,11 @@ internal static class EvildomWarChannelTests
         byte[] typed = DfoServer.Network.Builders.ChannelPackets.Endpoint("127.0.0.1", 10011, 7,
             DfoServer.Network.Builders.ChannelPackets.LoginChannelType(evildom));
         That(DfoServer.Network.Builders.ChannelPackets.LoginChannelType(evildom) == 0x36 &&
-            DfoServer.Network.Builders.ChannelPackets.LoginChannelType(elven) == 0 &&
-            DfoServer.Network.Builders.ChannelPackets.LoginChannelType(sky) == 0 &&
+            DfoServer.Network.Builders.ChannelPackets.LoginChannelType(elven) == 22 &&
+            DfoServer.Network.Builders.ChannelPackets.LoginChannelType(sky) == 22 &&
             plain[3] == 0 && typed[3] == 0x36 && typed.Length == plain.Length &&
             typed.Where((b, i) => i != 3).SequenceEqual(plain.Where((b, i) => i != 3)),
-            "魔界大战频道 ACK LOGIN 第 3 字节发频道类型 0x36（RaidModeSelectWindow 下标 3），其他频道与原字节一致");
+            "魔界大战频道 ACK LOGIN 第 3 字节发频道类型 0x36（RaidModeSelectWindow 下标 3），普通频道发 22，关联令牌及其余字节不变");
 
         That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, evildom, new(38, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, gate) &&

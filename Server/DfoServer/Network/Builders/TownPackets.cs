@@ -12,7 +12,7 @@ namespace DfoServer.Network.Builders;
 internal enum ActorSceneState : byte { Town = 0, Dungeon = 1 }
 
 // Client 包体构造。只读取角色快照，不修改会话或访问数据库。
-internal static class TownPackets
+internal static partial class TownPackets
 {
     public static byte[] Select(Character character, CharacterFatigueState? displayedFatigue = null)
     {

@@ -63,8 +63,8 @@ internal static class FiendwarChannelTests
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, new(38, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, null, spot),
             "进出 type 0x2D 不保留客户端城镇快照，同类频道互换保留");
-        // ACK LOGIN 第 3 字节（ARAD 0233EBEA → 028FA920 → 频道对象 +0x1010）发真实频道类型 0x2D，与 0x36 魔界大战同规则；普通频道仍为 0。
-        That(DfoServer.Network.Builders.ChannelPackets.LoginChannelType(fiend) == 0x2D && DfoServer.Network.Builders.ChannelPackets.LoginChannelType(elven) == 0 &&
+        // ACK LOGIN 第 3 字节（ARAD 0233EBEA → 028FA920 → 频道对象 +0x1010）发真实频道类型 0x2D，与 0x36 魔界大战同规则；普通频道为 22 以启用冒险团页。
+        That(DfoServer.Network.Builders.ChannelPackets.LoginChannelType(fiend) == 0x2D && DfoServer.Network.Builders.ChannelPackets.LoginChannelType(elven) == 22 &&
             DfoServer.Network.Builders.ChannelPackets.Endpoint("127.0.0.1", 10011, 7, DfoServer.Network.Builders.ChannelPackets.LoginChannelType(fiend))[3] == 0x2D,
             "超时空之战频道 ACK LOGIN 第 3 字节 0x2D");
 

@@ -3,7 +3,7 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-// ACK LOGIN 第 3 字节（频道类型 → 客户端 +0x1010）：团队频道发真实类型，普通频道发 0。
+// ACK LOGIN第3字节安装已确认的频道类型：团本准入与普通频道冒险团标签共用该上下文。
 internal static class RaidChannelTypeTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
@@ -13,7 +13,7 @@ internal static class RaidChannelTypeTcpTests
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         byte normal = endpoints.Keys.Min();
         foreach (var (channel, type) in new[] { ((byte)19, (byte)0x17), ((byte)20, (byte)0x20), ((byte)39, (byte)0x2D),
-            ((byte)41, (byte)0x36), ((byte)42, (byte)0x32), (normal, (byte)0) })
+            ((byte)41, (byte)0x36), ((byte)42, (byte)0x32), (normal, (byte)22), ((byte)32, (byte)0), ((byte)43, (byte)0) })
         {
             using var peer = Open(fixture, "chtype" + channel, gamePort: endpoints[channel], channelNumber: channel);
             That(peer.LoginEndpoint.Length > 3 && peer.LoginEndpoint[3] == type,

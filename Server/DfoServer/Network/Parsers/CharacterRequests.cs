@@ -16,6 +16,26 @@ internal static class CharacterRequests
         if (!body.IsEmpty) throw new InvalidDataException("隐藏角色查询正文必须为空");
     }
     public static bool IsRoster(ReadOnlySpan<byte> body) => body.SequenceEqual<byte>([255, 255, 2]);
+    public static bool TryPeerMenu(ReadOnlySpan<byte> body, out ushort target)
+    {
+        target = 0;
+        // 0399EE90：actor:u16、mode:u8、u32、u16、u32；其他mode有不同长度，不按菜单解读。
+        if (body.Length < 3 || body[2] != 15) return false;
+        if (body.Length != 13) throw new InvalidDataException("玩家菜单请求长度错误");
+        if (BinaryPrimitives.ReadUInt32LittleEndian(body[3..]) != 0 ||
+            BinaryPrimitives.ReadUInt16LittleEndian(body[7..]) != 0 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(body[9..]) != 0) return false;
+        target = BinaryPrimitives.ReadUInt16LittleEndian(body);
+        return true;
+    }
+    public static bool TryOtherPlayer(ReadOnlySpan<byte> body, out ushort target)
+    {
+        target = 0;
+        if (body.Length < 3 || body[2] != 3) return false;
+        if (body.Length != 3) throw new InvalidDataException("玩家资料请求长度错误");
+        target = BinaryPrimitives.ReadUInt16LittleEndian(body);
+        return true;
+    }
     public static ushort Select(ReadOnlySpan<byte> body)
     {
         if (body.Length != 2)

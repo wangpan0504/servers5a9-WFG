@@ -40,10 +40,10 @@ internal static class RaidRosterFlagTests
         byte[] antonBody = ChannelPackets.Endpoint("127.0.0.1", 10011, 7, ChannelPackets.LoginChannelType(anton));
         byte[] lukeBody = ChannelPackets.Endpoint("127.0.0.1", 10011, 7, ChannelPackets.LoginChannelType(luke));
         TestCheck.That(ChannelPackets.LoginChannelType(anton) == 0x17 && ChannelPackets.LoginChannelType(luke) == 0x20 &&
-            ChannelPackets.LoginChannelType(normal) == 0 && antonBody[3] == 0x17 && lukeBody[3] == 0x20 &&
+            ChannelPackets.LoginChannelType(normal) == 22 && antonBody[3] == 0x17 && lukeBody[3] == 0x20 &&
             antonBody.Where((b, i) => i != 3).SequenceEqual(plain.Where((b, i) => i != 3)) &&
             lukeBody.Where((b, i) => i != 3).SequenceEqual(plain.Where((b, i) => i != 3)),
-            "安徒恩/卢克频道 ACK LOGIN 第 3 字节发 0x17/0x20，普通频道仍发 0，其余字节不变");
+            "安徒恩/卢克频道 ACK LOGIN 第 3 字节发 0x17/0x20，普通频道发 22 以启用冒险团页，其余字节不变");
     }
 
     static void RunPacket()

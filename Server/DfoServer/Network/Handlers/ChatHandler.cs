@@ -32,7 +32,8 @@ namespace DfoServer.Network.Handlers;
 /// GM <c>chat-inject</c> 是独立的诊断入口，只向指定在线连接注入测试帧，不经过这里。
 /// </para>
 /// </summary>
-internal sealed class ChatHandler(ChatService chat, InventoryProjection? inventory, ServerLog log) : IGameCommandModule
+internal sealed class ChatHandler(ChatService chat, InventoryProjection? inventory, ServerLog log,
+    NamedWhisperService? named = null) : IGameCommandModule
 {
     // 日志里的文本上限：单条聊天不能把热点日志撑大。
     const int LogTextLimit = 64;
@@ -58,6 +59,17 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
         if (!context.Session.AllowChatSend())
         {
             log.Write("chat_throttled", new { Connection = context.Id, send.Type });
+            return CommandResult.Handled;
+        }
+
+        if (send.TargetName is not null && named is not null)
+        {
+            var result = named.Send(context.Session, send);
+            log.Write(result.Accepted ? "chat_delivered" : "chat_rejected", new
+            {
+                Connection = context.Id, Kind = send.Type == 36 ? "OneToOne" : "Whisper",
+                result.Recipients, Reason = result.TargetOffline ? "target-offline" : result.Rejection
+            });
             return CommandResult.Handled;
         }
 

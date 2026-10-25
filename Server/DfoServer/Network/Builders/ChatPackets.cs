@@ -22,6 +22,22 @@ namespace DfoServer.Network.Builders;
 /// </summary>
 internal static class ChatPackets
 {
+    // 023B0210：正文后必读附加名字串（023B0365），type36再读接收端的会话对象（023B0386）。
+    public static byte[] NamedMessage(NamedChatMessage message)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(message.Mode);
+        writer.Write(message.Status);
+        PacketEncoding.WriteString(writer, message.Name);
+        writer.Write(message.Server);
+        PacketEncoding.WriteString(writer, message.Text);
+        PacketEncoding.WriteString(writer, message.AdventureName);
+        // 02E2FF44把末串作为1vs1窗口键；接收端的聊天对象是发送者，不能填接收者自己。
+        if (message.Mode == 36) PacketEncoding.WriteString(writer, message.Name);
+        return stream.ToArray();
+    }
+
     /// <summary><c>0x000C</c> 正文头长度：<c>[u8 type][u16 层 id][u8 v][u32 字节长度]</c>。</summary>
     public const int HeaderLength = 8;
 

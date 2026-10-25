@@ -18,6 +18,20 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
+    public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
+        Func<bool> canSend)
+    {
+        var character = snapshot.Character;
+        var now = timer.GetUtcNow();
+        var actor = TownPackets.Actor(character, snapshot.Channel, now.ToUnixTimeSeconds(), snapshot.AdventureName,
+            snapshot.Phase == DfoServer.Game.Session.SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
+            snapshot.PremiumPcRoom);
+        var player = TownPackets.OtherPlayer(character, stats.Compute(character), snapshot.AdventureLevel,
+            snapshot.Channel, now);
+        // 公开属性依赖同一目标的Actor身份，不能复用本人Player或接收者的资产。
+        await context.Notify(NotiPacketType.USERINFO, actor, "other_player_actor", canSend);
+        await context.Notify(NotiPacketType.USERINFO, player, "other_player_info", canSend);
+    }
     public async Task EnterAsync(GameConnectionContext context, bool resumeTown = false)
     {
         if (devil is not null) context.Session.InitializeDevilContract(devil, timer.GetUtcNow());

@@ -24,6 +24,7 @@ internal static class TcpRegressionTests
         }),
         ("packet-http", (options, root, _) => PacketCaptureTcpTests.RunHttpAsync(options, root)),
         ("town", TownProtocolTcpTests.RunAsync),
+        ("social", SocialTcpTests.RunAsync),
         ("tutorial", TutorialTcpTests.RunAsync),
         ("channel-entry", ChannelEntryTcpTests.RunAsync),
         ("quest-lifecycle", QuestLifecycleTcpTests.RunAsync),

@@ -107,6 +107,16 @@ internal sealed class OnlineSessionDirectory
         Find(account) is { } session ? session.ForceReturnToSelectionAsync(characterName) : Task.FromResult(false);
     public bool Disconnect(string account) => Find(account)?.Disconnect() == true;
     public bool HasReadyCharacter(ushort characterId) => sessions.SnapshotValues().Any(session => session.IsReadyCharacter(characterId));
+    public GameSession? FindReadyCharacter(ushort characterId) =>
+        sessions.SnapshotValues().FirstOrDefault(session => session.IsReadyCharacter(characterId));
+    // 先核对轻量身份，再只捕获命中角色；不枚举或加载其他账号的资产。
+    public PublicCharacterSnapshot? PublicCharacter(ushort characterId)
+    {
+        foreach (var session in sessions.SnapshotValues())
+            if (session.IsReadyCharacter(characterId))
+                return session.PublicCharacter(characterId);
+        return null;
+    }
     // 比较与移除必须原子完成，旧连接的 finally 不能删掉已接管的新会话。
     public void Remove(string account, GameSession session) => sessions.Remove(account, session);
 }

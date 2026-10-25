@@ -33,7 +33,7 @@ internal static partial class DatabaseSchemaTests
         string fresh = Path.Combine(root, "fresh.db");
         _ = new CharacterRepository(fresh);
         using (var db = Open(fresh))
-            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion && version == 89 &&
+            Check(Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
                 Query(db, IncountTablesSql) is 2L && Query(db, MainlineV62To66Sql) is 5L && Query(db, SkinColumnSql) is 1L && Query(db, PermanentStatSql) is 1L &&
                 Query(db, MainlineAdventureSql) is 9L,
                 "新库直接建出主线 v62–v87 与副本次数 v88/v89");
@@ -54,13 +54,13 @@ internal static partial class DatabaseSchemaTests
             }
             _ = new CharacterRepository(master);
             using (var db = Open(master))
-                Check(Query(db, "PRAGMA user_version") is 89L && Query(db, IncountTablesSql) is 2L && Query(db, MainlineV62To66Sql) is 5L &&
+                Check(Equals(Query(db, "PRAGMA user_version"), (long)SqliteMigrations.CurrentVersion) && Query(db, IncountTablesSql) is 2L && Query(db, MainlineV62To66Sql) is 5L &&
                     Query(db, SkinColumnSql) is 1L && Query(db, PermanentStatSql) is 1L && Query(db, MainlineAdventureSql) is 9L &&
                     Query(db, "SELECT count(*) FROM character_dungeon_incount") is 0L &&
                     Query(db, "SELECT name||':'||revision||':'||gold FROM characters") is "MasterOld:7:123" &&
                     Query(db, "SELECT weapon_skin_state FROM characters") is string skin &&
                     skin == (mainline >= 67 ? "{\"Owned\":[5],\"Selected\":5}" : "{\"Owned\":[],\"Selected\":0}"),
-                    $"主线 v{mainline} 旧库只增量补到 v89，不改角色与已有幻化状态");
+                    $"主线 v{mainline} 旧库只增量补到当前版本，不改角色与已有幻化状态");
             string masterCurrent = Snapshot(master);
             _ = new CharacterRepository(master);
             Check(Snapshot(master) == masterCurrent, $"主线 v{mainline} 旧库升级后重开不重复迁移");
@@ -86,9 +86,9 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                Check(Query(db, "PRAGMA user_version") is 89L && Query(db, SkinColumnSql) is 1L && Query(db, MainlineV62To66Sql) is 5L && Query(db, IncountTablesSql) is 2L &&
+                Check(Equals(Query(db, "PRAGMA user_version"), (long)SqliteMigrations.CurrentVersion) && Query(db, SkinColumnSql) is 1L && Query(db, MainlineV62To66Sql) is 5L && Query(db, IncountTablesSql) is 2L &&
                     Query(db, PermanentStatSql) is 1L && Query(db, MainlineAdventureSql) is 9L && Query(db, "SELECT weapon_skin_state FROM characters") is "{\"Owned\":[],\"Selected\":0}",
-                    $"合并分支旧编号 v{branch} 库按列判定后补跑主线 v67–v73，并到 v89");
+                    $"合并分支旧编号 v{branch} 库按列判定后补跑主线 v67–v73，并到当前版本");
                 Check(Query(db, "SELECT character_id||':'||dungeon||':'||day||':'||daily_used||':'||week||':'||weekly_used FROM character_dungeon_incount") is "1:7323:20261021:1:20261015:2" &&
                     Query(db, "SELECT name||':'||revision||':'||gold FROM characters") is "BranchOld:7:123" &&
                     (branch == 68
@@ -118,9 +118,9 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                Check(Query(db, "PRAGMA user_version") is 89L && Query(db, MainlineV62To66Sql) is 5L && Query(db, IncountTablesSql) is 2L && Query(db, SkinColumnSql) is 1L &&
+                Check(Equals(Query(db, "PRAGMA user_version"), (long)SqliteMigrations.CurrentVersion) && Query(db, MainlineV62To66Sql) is 5L && Query(db, IncountTablesSql) is 2L && Query(db, SkinColumnSql) is 1L &&
                     Query(db, PermanentStatSql) is 1L && Query(db, MainlineAdventureSql) is 9L,
-                    $"本地旧编号 v{local} 库按表判定后补跑主线 v62–v73，并到 v89");
+                    $"本地旧编号 v{local} 库按表判定后补跑主线 v62–v73，并到当前版本");
                 Check(Query(db, "SELECT character_id||':'||dungeon||':'||day||':'||daily_used||':'||week||':'||weekly_used FROM character_dungeon_incount") is "1:7323:20261021:1:20261015:2" &&
                     Query(db, "SELECT name||':'||revision||':'||gold FROM characters") is "LocalOld:7:123",
                     $"本地旧编号 v{local} 库升级保留原有副本次数行和角色");
@@ -155,10 +155,10 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                Check(Query(db, "PRAGMA user_version") is 89L && Query(db, PermanentStatSql) is 1L && Query(db, SkinColumnSql) is 1L &&
+                Check(Equals(Query(db, "PRAGMA user_version"), (long)SqliteMigrations.CurrentVersion) && Query(db, PermanentStatSql) is 1L && Query(db, SkinColumnSql) is 1L &&
                     Query(db, MainlineV62To66Sql) is 5L && Query(db, IncountTablesSql) is 2L && Query(db, MainlineAdventureSql) is 9L &&
                     Query(db, "SELECT count(*) FROM character_permanent_stats") is 0L,
-                    $"永久属性前旧编号 v{branch} 库按表判定后补跑主线 v68–v73，并到 v89");
+                    $"永久属性前旧编号 v{branch} 库按表判定后补跑主线 v68–v73，并到当前版本");
                 Check(Query(db, "SELECT character_id||':'||dungeon||':'||day||':'||daily_used||':'||week||':'||weekly_used FROM character_dungeon_incount") is "1:7323:20261021:1:20261015:2" &&
                     Query(db, "SELECT name||':'||revision||':'||gold||':'||weapon_skin_state FROM characters") is "PermOld:7:123:{\"Owned\":[5],\"Selected\":5}" &&
                     (branch == 69
@@ -191,9 +191,9 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                Check(Query(db, "PRAGMA user_version") is 89L && Query(db, PermanentStatSql) is 1L && Query(db, SkinColumnSql) is 1L &&
+                Check(Equals(Query(db, "PRAGMA user_version"), (long)SqliteMigrations.CurrentVersion) && Query(db, PermanentStatSql) is 1L && Query(db, SkinColumnSql) is 1L &&
                     Query(db, MainlineV62To66Sql) is 5L && Query(db, IncountTablesSql) is 2L && Query(db, MainlineAdventureSql) is 9L,
-                    $"冒险团前旧编号 v{branch} 库按列判定后补跑主线 v69–v73，并到 v89");
+                    $"冒险团前旧编号 v{branch} 库按列判定后补跑主线 v69–v73，并到当前版本");
                 Check(Query(db, "SELECT character_id||':'||dungeon||':'||day||':'||daily_used||':'||week||':'||weekly_used FROM character_dungeon_incount") is "1:7323:20261021:1:20261015:2" &&
                     Query(db, "SELECT name||':'||revision||':'||gold||':'||weapon_skin_state FROM characters") is "AdvOld:7:123:{\"Owned\":[5],\"Selected\":5}" &&
                     (branch == 70
@@ -226,9 +226,9 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                Check(Query(db, "PRAGMA user_version") is 89L && Query(db, ProficiencyGainSql) is 2L && Query(db, PermanentStatSql) is 1L && Query(db, SkinColumnSql) is 1L &&
+                Check(Equals(Query(db, "PRAGMA user_version"), (long)SqliteMigrations.CurrentVersion) && Query(db, ProficiencyGainSql) is 2L && Query(db, PermanentStatSql) is 1L && Query(db, SkinColumnSql) is 1L &&
                     Query(db, MainlineV62To66Sql) is 5L && Query(db, IncountTablesSql) is 2L && Query(db, MainlineAdventureSql) is 9L,
-                    $"熟练度前旧编号 v{branch} 库按列判定后补跑主线 v74–v82，并到 v89");
+                    $"熟练度前旧编号 v{branch} 库按列判定后补跑主线 v74–v82，并到当前版本");
                 Check(Query(db, "SELECT character_id||':'||dungeon||':'||day||':'||daily_used||':'||week||':'||weekly_used FROM character_dungeon_incount") is "1:7323:20261021:1:20261015:2" &&
                     Query(db, "SELECT name||':'||revision||':'||gold||':'||weapon_skin_state FROM characters") is "ProfOld:7:123:{\"Owned\":[5],\"Selected\":5}" &&
                     (branch == 75
@@ -262,10 +262,10 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
-                Check(Query(db, "PRAGMA user_version") is 89L && Query(db, MainlineV83To87Sql) is 11L && Query(db, ProficiencyGainSql) is 2L &&
+                Check(Equals(Query(db, "PRAGMA user_version"), (long)SqliteMigrations.CurrentVersion) && Query(db, MainlineV83To87Sql) is 11L && Query(db, ProficiencyGainSql) is 2L &&
                     Query(db, PermanentStatSql) is 1L && Query(db, SkinColumnSql) is 1L && Query(db, MainlineV62To66Sql) is 5L &&
                     Query(db, IncountTablesSql) is 2L && Query(db, MainlineAdventureSql) is 9L,
-                    $"悲叹前旧编号 v{branch} 库按表判定后补跑主线 v83–v87，并到 v89");
+                    $"悲叹前旧编号 v{branch} 库按表判定后补跑主线 v83–v87，并到当前版本");
                 Check(Query(db, "SELECT character_id||':'||dungeon||':'||day||':'||daily_used||':'||week||':'||weekly_used FROM character_dungeon_incount") is "1:7323:20261021:1:20261015:2" &&
                     Query(db, "SELECT name||':'||revision||':'||gold||':'||weapon_skin_state FROM characters") is "GriefOld:7:123:{\"Owned\":[5],\"Selected\":5}" &&
                     (branch == 84
@@ -273,7 +273,7 @@ internal static partial class DatabaseSchemaTests
                         : Query(db, "SELECT count(*) FROM account_dungeon_incount") is 0L),
                     $"悲叹前旧编号 v{branch} 库升级保留原有次数行、角色与幻化");
             }
-            Check(ColumnSignature(path) == freshColumns, $"悲叹前旧编号 v{branch} 库升级后表与列集合同新建 v89 库");
+            Check(ColumnSignature(path) == freshColumns, $"悲叹前旧编号 v{branch} 库升级后表与列集合同当前新建库");
             string current = Snapshot(path);
             _ = new CharacterRepository(path);
             Check(Snapshot(path) == current, $"悲叹前旧编号 v{branch} 升级后重开不重复迁移");
@@ -296,11 +296,11 @@ internal static partial class DatabaseSchemaTests
         _ = new CharacterRepository(copy);
         string afterCounts = counts(copy);
         Console.WriteLine($"[incount-numbering] sample v{sampleVersion} -> v{QueryOn(copy, "PRAGMA user_version")}; {beforeCounts} => {afterCounts}");
-        Check(QueryOn(copy, "PRAGMA user_version") is 89L && QueryOn(copy, MainlineV62To66Sql) is 5L && QueryOn(copy, IncountTablesSql) is 2L && QueryOn(copy, SkinColumnSql) is 1L &&
+        Check(Equals(QueryOn(copy, "PRAGMA user_version"), (long)SqliteMigrations.CurrentVersion) && QueryOn(copy, MainlineV62To66Sql) is 5L && QueryOn(copy, IncountTablesSql) is 2L && QueryOn(copy, SkinColumnSql) is 1L &&
             QueryOn(copy, PermanentStatSql) is 1L && QueryOn(copy, MainlineAdventureSql) is 9L &&
             beforeCounts.Replace("account_dungeon_incount=absent", "account_dungeon_incount=0", StringComparison.Ordinal)
                 .Replace("character_dungeon_incount=absent", "character_dungeon_incount=0", StringComparison.Ordinal) == afterCounts,
-            "真实旧库副本升级到 v89，主线结构齐全，角色、库存、账号、公会与次数行数不变");
+            "真实旧库副本升级到当前版本，主线结构齐全，角色、库存、账号、公会与次数行数不变");
     }
 
     // 主线 v69/v71/v72/v73 只追加列或表：旧编号夹具真的移除，确保升级走真实 ALTER/CREATE。v70 结算分项按表结构判定，夹具保留目标结构即跳过。

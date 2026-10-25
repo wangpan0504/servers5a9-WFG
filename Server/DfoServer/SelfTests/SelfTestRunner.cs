@@ -14,6 +14,8 @@ internal static class SelfTestRunner
     public static async Task RunCoreAsync()
     {
         CharacterPreparationTests.RunCore();
+        PlayerInteractionTests.RunCore();
+        SocialTests.RunCore();
         ExperienceBonusTests.RunCore();
         WorldMapHoverTests.Run();
         DailyBoosterProjectionTests.RunCore();

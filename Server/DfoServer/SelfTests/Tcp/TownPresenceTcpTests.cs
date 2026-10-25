@@ -15,7 +15,7 @@ internal static class TownPresenceTcpTests
         using (var beta = Open(fixture, "beta"))
         {
             alpha.Create("PresenceA");
-            beta.Create("PresenceB");
+            beta.Create("PresenceB", job: 1);
             AssertBlackDiamondActor(alpha.Select()[2].Body, active: false, pcRoom: true);
             AssertBlackDiamondActor(beta.Select()[2].Body, active: false, pcRoom: true);
             alpha.Barrier();
@@ -40,6 +40,36 @@ internal static class TownPresenceTcpTests
                 w.Write((ushort)622); w.Write((ushort)196); w.Write((byte)0); w.Write((byte)3); }),
                 "远端23携带同一地图与显示位，创建实体而不切换接收者地图");
             Bytes(aEntry[3].Body, Position(beta.Id, 622, 196), "peer entrance position");
+            string beforeInteraction = fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account");
+            alpha.Send(10, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(0u); w.Write((ushort)0); w.Write(0u); }));
+            alpha.Expect(0, 7, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(0u); w.Write(ushort.MaxValue); }));
+            alpha.Barrier();
+            beta.Barrier();
+            alpha.Send(8, Build(w => { w.Write(beta.Id); w.Write((byte)3); }));
+            var publicActor = alpha.Expect(0, 2).Body;
+            var publicInfo = alpha.Expect(0, 2).Body;
+            That(publicActor[0] == 0 && U16(publicActor, 121) == beta.Id &&
+                publicInfo[0] == 3 && U16(publicInfo, 1) == 1 && U16(publicInfo, 14) == beta.Id,
+                "查看资料先安装目标身份再发subtype3，不把目标覆盖到本人subtype1");
+            That(U32(publicInfo, 24) == 89 && publicInfo.AsSpan(28, 89).SequenceEqual(beta.PlayerBody.AsSpan(36, 89)) &&
+                !publicInfo.AsSpan(28, 89).SequenceEqual(alpha.PlayerBody.AsSpan(36, 89)),
+                "不同职业的双方查询使用目标属性，不泄漏或误用请求者资产");
+            alpha.Barrier();
+            beta.Barrier();
+            alpha.Send(10, Build(w => { w.Write(ushort.MaxValue); w.Write((byte)15); w.Write(new byte[10]); }));
+            alpha.Send(8, [255, 255, 3]);
+            alpha.Send(10, Build(w => { w.Write(beta.Id); w.Write((byte)2); w.Write(new byte[8]); }));
+            alpha.Barrier();
+            That(fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account") == beforeInteraction,
+                "菜单、公开查询、离线目标与其他未实现peer模式均不修改双方资产或假回成功");
+            beta.Send(12, Convert.FromHexString("000304000000000500000000000007"));
+            beta.Expect(1, 12, [1]); beta.Expect(0, 9); beta.Barrier();
+            alpha.Send(10, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(new byte[10]); }));
+            alpha.Expect(0, 7, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(0u); w.Write(beta.Id); }));
+            beta.Send(13); beta.Expect(0, 9); beta.Barrier();
+            alpha.Send(10, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(new byte[10]); }));
+            alpha.Expect(0, 7, Build(w => { w.Write(beta.Id); w.Write((byte)15); w.Write(0u); w.Write(ushort.MaxValue); }));
+            alpha.Barrier();
             string otherBefore = fixture.Snapshot("SELECT * FROM account_wallets WHERE account='beta'") +
                 fixture.Snapshot("SELECT * FROM characters WHERE account='beta'");
             foreach (bool active in new[] { true, false })

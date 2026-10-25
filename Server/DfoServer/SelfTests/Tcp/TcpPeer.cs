@@ -146,7 +146,18 @@ internal sealed class TcpPeer : IDisposable
         if (opcode == 7 && body.Length == 0) requestedRoster = false;
     }
 
-    public WirePacket Read()
+    public WirePacket Read() => ReadCore(channelNumber);
+
+    // 仅显式的跨频道公开查询允许安装目标频道Actor；普通同屏及本人通知仍须匹配本连接频道。
+    public WirePacket ExpectOtherPlayerActor(ushort target, byte targetChannel)
+    {
+        var packet = ReadCore(targetChannel);
+        TestCheck.That(packet is { Kind: 0, Opcode: 2, Body.Length: > 122 } && packet.Body[0] == 0 &&
+            U16(packet.Body, 1) == 1 && U16(packet.Body, 121) == target, "跨频道公开查询必须只安装指定目标Actor");
+        return packet;
+    }
+
+    WirePacket ReadCore(byte actorChannel)
     {
         byte[] header = new byte[16];
         stream.ReadExactly(header);
@@ -176,7 +187,7 @@ internal sealed class TcpPeer : IDisposable
         if (header[0] == 1 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 6 && frame.Length > 16 && frame[16] == 1)
             requestedRoster = true;
         if (header[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 2 && frame.Length >= 21 && frame[16] is 0 or 1)
-            TestCheck.Bytes(frame.AsSpan(19, 2), [2, channelNumber], "本人、同屏和刷新USERINFO均进入接收者当前频道的本地Actor表");
+            TestCheck.Bytes(frame.AsSpan(19, 2), [2, actorChannel], "USERINFO进入本次期待的频道Actor表，普通读取保持接收者频道");
         var packet = new WirePacket(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..], protectedFrame);
         if (packet is { Kind: 0, Opcode: 4, Body.Length: 1 }) staminaPercent = packet.Body[0];
         return packet;
@@ -514,7 +525,18 @@ internal sealed class TcpPeer : IDisposable
         Expect(0, 720, []);
         WeeklyDungeonConfig = Expect(0, 721).Body;
         TestCheck.That(WeeklyDungeonConfig.Length == 5, "每周地下城721固定回放5个槽位");
+        AccountFriendGroups = Expect(0, 1702).Body;
+        CharacterFriends = Expect(0, 273).Body;
+        uint friends = U32(CharacterFriends, 4);
+        for (uint i = 0; i < friends; i++) Expect(0, 274);
+        AccountFriends = Expect(0, 1376).Body;
+        AccountFriendRequests = Expect(0, 1377).Body;
     }
+
+    public byte[] CharacterFriends { get; private set; } = [];
+    public byte[] AccountFriends { get; private set; } = [];
+    public byte[] AccountFriendGroups { get; private set; } = [];
+    public byte[] AccountFriendRequests { get; private set; } = [];
 
     public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
         (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null, bool expertContract = false,

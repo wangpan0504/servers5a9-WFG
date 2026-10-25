@@ -8,7 +8,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 internal sealed partial class AdventureHandler(AdventureProjection projection, AdventureRepresentativeService representatives,
-    AdventureExpeditionProjection expeditions, TimeProvider? clock = null) : IGameCommandModule
+    AdventureExpeditionProjection expeditions, TimeProvider? clock = null, OnlineSessionDirectory? online = null) : IGameCommandModule
 {
     DateTimeOffset Now => (clock ?? TimeProvider.System).GetUtcNow();
     public void Register(GameCommandRegistry commands)
@@ -24,6 +24,11 @@ internal sealed partial class AdventureHandler(AdventureProjection projection, A
         ushort target = AdventureRequests.Target(packet.Body);
         bool selection = context.Session.CheckState(UserState.CharacterSelect);
         bool ownActor = context.Session.Ready && context.Session.Selected is { } selected && (target == 0 || target == selected.Id);
+        if (!selection && !ownActor && context.Session.Ready && online?.FindReadyCharacter(target) is { } other)
+        {
+            await projection.OtherInformationAsync(context, other, target);
+            return CommandResult.Handled;
+        }
         if (!(selection && target == 0 || ownActor))
             await context.Reply(CmdPacketType.REQUEST_ADVENTURE_INFO, AdventurePackets.Ack(3), "adventure_information_rejected");
         else await projection.InformationAsync(context, ack: true);
