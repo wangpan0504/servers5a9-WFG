@@ -139,7 +139,7 @@ internal static class SkillPublicationTests
         var reopened = new CharacterRepository(path);
         TestCheck.That(SkillRepositoryTests.Equal(reopened.List(fresh).Single(), committed), "freshowner重读相同SP等级槽位不重扣费");
 
-        // 已知失败保持连接可继续；未知状态只请求关闭，不制造失败码。
+        // 已知失败保持连接可继续；未知模式不制造失败码。
         NewCharacter fixture = SkillRepositoryTests.Fixture("SkillZero", towns, characters, catalog);
         fixture = fixture with { InitialLearning = fixture.InitialLearning with
         {
@@ -176,11 +176,20 @@ internal static class SkillPublicationTests
         TestCheck.That(packets.Count == 2 && packets.All(packet => packet.Kind == 1 && packet.Opcode == (ushort)CmdPacketType.BUY_SKILL) &&
             packets[0].Body.SequenceEqual(new byte[] { 0, 0x15, 0 }) && packets[1].Body.SequenceEqual(new byte[] { 0, 0x16, 0 }),
             "两次拒绝均仅完整3字节ACK29，没有伪成功或额外刷新");
-        TestCheck.That(await commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1, 3])) == CommandResult.Handled,
-            "未支持mode3不关闭正常连接且不猜失败码");
+        TestCheck.That(await commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1, 3])) == CommandResult.Handled &&
+            !freshStop.IsCancellationRequested, "非训练地区mode3返回已知拒绝且连接可继续");
+        TestCheck.That(packets.Count == 3 && packets[2].Kind == 1 && packets[2].Opcode == (ushort)CmdPacketType.BUY_SKILL &&
+            packets[2].Body.SequenceEqual(new byte[] { 0, 0xD9, 0 }), "非训练地区mode3仅完整3字节ACK29，不伪造训练成功");
+        Character afterTraining = reopened.LoadCharacter(fresh, zero.Slot);
+        TestCheck.That(SkillRepositoryTests.Equal(afterTraining, before) && afterTraining.PvpTrainingSkills is null &&
+            ReferenceEquals(freshSession.Selected, before), "非训练地区mode3不改普通技能或创建训练快照");
+        TestCheck.That(await commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1, 0xFF])) == CommandResult.Handled &&
+            packets.Count == 3 && !freshStop.IsCancellationRequested, "未知mode不关闭正常连接且不猜失败码");
         await RejectAsync<InvalidDataException>(() => commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1])), "真实Handler短包抛出协议拒绝");
         await RejectAsync<InvalidDataException>(() => commands.DispatchAsync(context, Request([0, 1, 5, 0, 0, 1, 0, 0])), "真实Handler长包抛出协议拒绝");
-        TestCheck.That(packets.Count == 2 && SkillRepositoryTests.Equal(reopened.List(fresh).Single(character => character.Id == zero.Id), before),
+        Character afterFailures = reopened.LoadCharacter(fresh, zero.Slot);
+        TestCheck.That(packets.Count == 3 && SkillRepositoryTests.Equal(afterFailures, before) &&
+            afterFailures.PvpTrainingSkills is null && ReferenceEquals(freshSession.Selected, before),
             "失败和非法包不改SQLite事实且不发布未知ACK");
     }
 

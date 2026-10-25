@@ -27,6 +27,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         receipt = null;
         if (request.Mode != 0 || request.Slot < 0)
             return InventoryResult.Reject(19);
+        var source = character.Inventory.Find(new(InventoryListType.Main, request.Slot));
+        if (source is not null && boosters.Get(source.Core.ItemId).RuneBox is not null)
+            return OpenRuneBox(character, request, source, utcNow ?? (clock ?? TimeProvider.System).GetUtcNow(), out receipt);
         var result = OpenCore(character, new(request.Slot, 1), out var opened, utcNow, ceraPackage: false, lottery: true);
         if (!result.Accepted)
             return result;
@@ -48,6 +51,71 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             return count - (item.Position == new InventorySlot(InventoryListType.Main, request.Slot) &&
                 prior?.Core.ItemId == reward.ItemId ? 1 : 0);
         }
+    }
+
+    // [rune random box] 与袖珍罐共用 CMD27：源物品在普通背包，产物按符文/护石分类进入容器46。
+    // 概率取 etc/runesystem.etc 的 [random choose info]：先按本职业权重决定本次是否只在本职业可用产物里抽，
+    // 再按品级权重抽档、在对应品级池里等概率取一件；本职业在该品级没有产物时退回全体池，不制造固定失败。
+    InventoryResult OpenRuneBox(Character character, LotteryOpenRequest request, InventoryItem source,
+        DateTimeOffset now, out LotteryReceipt? receipt)
+    {
+        receipt = null;
+        var definition = boosters.Get(source.Core.ItemId);
+        if (!definition.Available || definition.RuneBox is not { } box || !source.Core.IsStackable ||
+            source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()) ||
+            !definition.AllowsFirstGrowType(character.GrowType))
+            return RejectRuneBox("rune_box_source");
+        var draw = random ?? Random.Shared;
+        RuneRandomChooseRow choose;
+        try
+        {
+            if (!catalog.RuneRandomChoices().TryGet(box.Family, box.Tier, out choose))
+                return RejectRuneBox("rune_box_table");
+        }
+        catch (Exception error) when (error is InvalidDataException or KeyNotFoundException)
+        {
+            return RejectRuneBox("rune_box_resource");
+        }
+        int productId;
+        try
+        {
+            if (RuneBoxSelection.Select(choose,
+                    grade => box.Family == 0 ? catalog.RuneCandidates((byte)grade) : catalog.TalismanCandidates(grade),
+                    id => box.Family == 0
+                        ? catalog.Rune(id)?.AllowsUse(character.Level, character.Job, character.GrowType) == true
+                        : catalog.Talisman(id)?.AllowsUse(character.Level, character.Job, character.GrowType) == true,
+                    draw.NextInt64, out _, out productId) is { } reason)
+                return RejectRuneBox(reason);
+        }
+        catch (Exception error) when (error is InvalidDataException or KeyNotFoundException)
+        {
+            return RejectRuneBox("rune_box_resource");
+        }
+
+        var before = character.Inventory;
+        var deleted = InventoryDeleteService.Plan(before, source.Position, source.Core.Value, 1);
+        if (!deleted.Accepted)
+            return RejectRuneBox("rune_box_source");
+        var paid = deleted.Plan!.After;
+        var granted = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid },
+            [new InventoryReward(productId, 1)], catalog, goldLimits, pieces, now);
+        if (!granted.Accepted)
+            return InventoryResult.Reject(granted.Error == 19 ? (ushort)19 : (ushort)4) with { RejectReason = "rune_box_capacity" };
+        var after = granted.Plan!.After;
+        // 产物可能并入容器46已有堆叠，按合并前后数量差定位，不能只找新出现的实例。
+        var prior = paid.Items.Where(item => item.Core.ItemId == productId)
+            .ToDictionary(item => item.Position, item => item.Core.Count);
+        var destinations = after.Items.Where(item => item.Core.ItemId == productId &&
+            item.Core.Count - (prior.TryGetValue(item.Position, out int old) ? old : 0) > 0).ToArray();
+        if (destinations.Length != 1 || destinations[0].Position.List != InventoryListType.Talisman)
+            return RejectRuneBox("rune_box_product");
+        var destination = destinations[0];
+        receipt = new(request.Slot, destination.Position, productId,
+            destination.Core.Count - (prior.TryGetValue(destination.Position, out int priorCount) ? priorCount : 0));
+        return new(true, 0, new InventoryPlan(before, after, "rune_box_open",
+            new InventoryCharacterPrecondition(character, source.ExpireTime > 0 ? source.ExpireTime : null, clock, requirePosition: true)));
+
+        static InventoryResult RejectRuneBox(string reason) => InventoryResult.Reject(19) with { RejectReason = reason };
     }
 
     public InventoryResult OpenCeraPackage(Character character, CeraPackageOpenRequest request, out BoosterReceipt? receipt,
@@ -448,7 +516,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         else
             grants.AddRange(totals.Select(pair => new InventoryReward(pair.Key, pair.Value)));
         InventoryResult grant;
-        if (definition.UnsealsRandomOptions || definition.SetsEpicExchangeInstanceType)
+        if (definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin)
         {
             var range = ItemSlotBoundService.Range(ItemKind.Equipment, paid.Expansion);
             int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Main &&
@@ -468,8 +536,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         if (definition.UnsealsRandomOptions)
                             core = InventoryRandomOptionService.Initialize(core, unsealDefinitions[reward.ItemId],
                                 (random ?? Random.Shared).NextInt64);
-                        if (definition.SetsEpicExchangeInstanceType)
-                            core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId) };
+                        if (definition.GrantsEpicExchangeOrigin && core.Kind == ItemKind.Equipment)
+                            // 客户端物品核心 +0xC1（123B 偏移 119）的 bit0 才是交换资格位；只记服务端来源不够。
+                            core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId), Extension119 = 0x01 };
                         instances.Add(new(0, default, core));
                     }
             }

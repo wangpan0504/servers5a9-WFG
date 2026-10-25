@@ -34,7 +34,11 @@ internal static class PacketCompatibilityTests
         // 空历史的固定样本仅增加flags[13700]=1，月轮山显示位不写入角色存档。
         Match(TownPackets.CompletedQuests(character), "5508BAA1DB2D574236E6E16313C71431E90DC61F47152F90FDA3FCCC69AC2F68", "completed quests");
         Match(TownPackets.StoryLevel(character), "5E0A69CDB91F050197DF9D0847F27C208C308526A65A5D035DAA88B209077F26", "story");
-        Match(CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(character)]), "30F5769ED7013CE29FB5FBD5ABA8C882F211FFE63C94719451B7ADB5B145A5DF", "roster");
+        byte[] roster = CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(character)]);
+        That(roster.AsSpan(roster.Length - 12, 2).SequenceEqual(new byte[] { 1, 0 }), "名册末尾u16启用光环");
+        // 旧样本只修正行尾光环使能；归一这2B后，其余完整字节仍须匹配原合同。
+        Array.Clear(roster, roster.Length - 12, 2);
+        Match(roster, "30F5769ED7013CE29FB5FBD5ABA8C882F211FFE63C94719451B7ADB5B145A5DF", "roster excluding corrected aura visibility");
         Console.WriteLine($"PASS {Count - checks} packet compatibility assertions");
         void Match(byte[] body, string expected, string name) => That(Convert.ToHexString(SHA256.HashData(body)) == expected, name);
     }

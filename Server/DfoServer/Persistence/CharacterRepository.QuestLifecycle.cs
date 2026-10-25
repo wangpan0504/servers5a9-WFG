@@ -166,14 +166,25 @@ internal sealed partial class CharacterRepository
         command.ExecuteNonQuery();
         if (daily is not null)
         {
-            command.Parameters.AddWithValue("$quest", QuestAutoDailyPlan.QuestId);
-            command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND quest_id=$quest";
-            command.ExecuteNonQuery();
-            if (daily.ActiveAfter.SingleOrDefault(row => row.QuestId == QuestAutoDailyPlan.QuestId) is { } assigned)
+            // 只替换本次规划改变的自动每日槽；其它活动任务的接取身份和中间进度保持。
+            var changed = current.ActiveMainQuests.Except(daily.ActiveAfter).Select(row => row.QuestId)
+                .Concat(daily.ActiveAfter.Except(current.ActiveMainQuests).Select(row => row.QuestId)).Distinct().ToHashSet();
+            command.Parameters.AddWithValue("$quest", 0);
+            foreach (ushort questId in changed)
             {
-                command.Parameters.AddWithValue("$slot",assigned.Slot);
-                command.Parameters.AddWithValue("$scalar",assigned.ConditionState);
-                command.Parameters.AddWithValue("$acceptance",assigned.AcceptanceId.ToString("N"));
+                command.Parameters["$quest"].Value = questId;
+                command.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND quest_id=$quest";
+                command.ExecuteNonQuery();
+            }
+            command.Parameters.AddWithValue("$slot", 0);
+            command.Parameters.AddWithValue("$scalar", 0);
+            command.Parameters.AddWithValue("$acceptance", "");
+            foreach (var assigned in daily.ActiveAfter.Where(row => changed.Contains(row.QuestId)))
+            {
+                command.Parameters["$quest"].Value = assigned.QuestId;
+                command.Parameters["$slot"].Value = assigned.Slot;
+                command.Parameters["$scalar"].Value = assigned.ConditionState;
+                command.Parameters["$acceptance"].Value = assigned.AcceptanceId.ToString("N");
                 command.CommandText = "INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) VALUES($id,$slot,$quest,$scalar,$acceptance)";
                 command.ExecuteNonQuery();
             }

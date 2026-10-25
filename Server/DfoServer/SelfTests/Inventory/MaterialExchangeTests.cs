@@ -44,7 +44,10 @@ internal static class MaterialExchangeTests
         That(result.Accepted && receipt!.Count == 1 && receipt.Paid.Gold == 12345, "equipment exchange uses one recipe without extra job/level limits or inferred gold");
         That(result.Plan!.After.Find(Bag(3)) is null && result.Plan.After.Find(Bag(121)) is { Uid: 2, Core.Value: 100, Core.SortLockFlag: 1 } &&
             result.Plan.After.Find(Bag(122)) is { Uid: 3, Core.Value: 5 }, "first material spans quickbar and page, preserving surviving UIDs and locks");
-        That(result.Plan.After.Find(Bag(9))!.Core == InventoryRewardGrantService.Create(catalog.Get(weapon.ItemId)), "exchange creates complete equipment core");
+        // 休亚处用材料兑换的装备带交换资格位；其余字段仍与统一创建入口逐字段相同。
+        That(result.Plan.After.Find(Bag(9))!.Core ==
+            (InventoryRewardGrantService.Create(catalog.Get(weapon.ItemId)) with { Extension119 = 0x01 }),
+            "exchange creates complete equipment core with the exchange instance bit");
         That(receipt!.Materials.SequenceEqual(new ShopMaterialBalance[] { new(10305616, 0), new(10158964, 5) }), "ACK uses each first old slot balance, not cross-stack sum");
         byte[] ack = ShopPackets.Bought(result, receipt);
         That(ack.Length == 157 && ack[140] == 2 && I32(ack, 141) == 10305616 && I32(ack, 145) == 0 && I32(ack, 149) == 10158964 && I32(ack, 153) == 5,

@@ -311,7 +311,9 @@ internal static class FormalDungeonSessionTests
             Check(f.Session.ChangeQuest(2948,DfoServer.Game.Quests.QuestLifecycleAction.Accept,quests,itemResources.Items,
                 itemResources.GoldLimits,itemResources.EpicPieces)?.Commit is not null,"代表性真实匿名信保留完整生产接取事务");
             var before = f.Session.Selected!;
-            Guid acceptance = before.ActiveMainQuests.Single().AcceptanceId;
+            Guid acceptance = before.ActiveMainQuests.Single(row => row.QuestId == 2948).AcceptanceId;
+            var daily = before.ActiveMainQuests.Single(row => row.QuestId == 13031);
+            Check(before.ActiveMainQuests.Length == 2,"45级普通猎杀与地区每日各有独立活动槽");
             Check(before.Position.Town == area.Town && before.Position.Area == area.Area &&
                 towns.SelectionReturn(before.Position,before.CompletedQuests.ToHashSet()) is not null && before.Fatigue is { Remaining:>0 },
                 "匿名信测试使用实际入口城镇及可返回位置，原疲劳余额有效");
@@ -344,12 +346,12 @@ internal static class FormalDungeonSessionTests
                         f.Transient?.Fatigue.Values.Count(value => value.Committed),"普通猎杀首次加载实际扣点，重复加载不重复扣点");
                     foreach (var monster in current.Monsters.Monsters.Where(row => row.IsBlocking).OrderBy(row => row.SpawnType == 3).ToArray())
                     {
-                        uint scalar = f.Session.Selected!.ActiveMainQuests.Single().ConditionState;
+                        uint scalar = f.Session.Selected!.ActiveMainQuests.Single(row => row.QuestId == 2948).ConditionState;
                         var observation = Observation(current,monster);
                         if (monster.SpawnType == 3) observation = observation with { RewriteFlag=1,Unknown18=9000,Unknown26=30 };
                         var death = f.Session.ObserveFormalDungeonDeath(observation,kills,growth);
                         Check(death.Outcome == DungeonRunOutcome.Accepted && death.Receipt is not null &&
-                            f.Session.Selected!.ActiveMainQuests.Single().ConditionState == scalar-(monster.MonsterId == 1014 ? 1u : 0u),
+                            f.Session.Selected!.ActiveMainQuests.Single(row => row.QuestId == 2948).ConditionState == scalar-(monster.MonsterId == 1014 ? 1u : 0u),
                             "真实死亡只按目标模板推进原猎杀计数，非目标不以清房代替");
                         current = death.Receipt!;
                         Check(f.Session.ObserveFormalDungeonDeath(observation,kills,growth).Outcome == DungeonRunOutcome.Duplicate,
@@ -380,6 +382,9 @@ internal static class FormalDungeonSessionTests
                 Check(current.Snapshot.Identity.InstanceId != initialIdentity.InstanceId && !f.Session.CanPublishFormalDungeon(settled.Receipt!),
                     "成功重试建立独立实例并使旧结算回执失效");
             }
+            Check(f.Read().ActiveMainQuests.Single().QuestId == 13031 &&
+                f.Read().ActiveMainQuests.Single().AcceptanceId == daily.AcceptanceId,
+                "猎杀领奖仅清原目标，地区每日保留原接取身份");
             Check(current.Entry is { QuestId:0,IsOrdinary:true,IsOrdinaryHunt:false } &&
                 f.Session.CompleteFormalDungeonLoading() is not null && f.Session.ReturnFromFormalDungeon() is not null &&
                 f.Read().Position == towns.SelectionReturn(before.Position,before.CompletedQuests.ToHashSet()),

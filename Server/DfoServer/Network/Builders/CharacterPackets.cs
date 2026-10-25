@@ -5,6 +5,8 @@ namespace DfoServer.Network.Builders;
 
 internal static class CharacterPackets
 {
+    // 0233CDB0成功额外u8为可选提示；0继续命名。失败非150/151仅静默结束，沿既有拒绝码19不猜提示语义。
+    public static byte[] PvpPrivateChecked(bool allowed) => allowed ? [1,0] : [0,19,0];
     public static byte[] HiddenRoster() => [1, 0];
     // Client ACK692 错误码为 u16；20/24 都弹“名称重复”，当前采用24。
     // 错误码2只记录致命错误日志，不显示重名弹窗。
@@ -52,12 +54,16 @@ internal static class CharacterPackets
             EquipmentProtocolWriter.Appearance(writer, character.Equipment);
             byte[] tail = new byte[48];
             tail[24] = 3;
+            // 02680FA3读取非零为真，02680FCE安装到Data+420，再投影展示角色+149C。
+            tail[34] = character.IsPvpPrivate ? (byte)1 : (byte)0;
             tail[27] = 4;
             // 选角前资格位：为 0 时进入对应类型频道弹 1099。tail[39]（魔兽）条件未证，保持 0。
             tail[AntonEligibleTailOffset] = character.AntonEligible ? (byte)1 : (byte)0;
             tail[LukeEligibleTailOffset] = character.LukeEligible ? (byte)1 : (byte)0;
             tail[FiendWarEligibleTailOffset] = character.FiendWarEligible ? (byte)1 : (byte)0;
             tail[PreyEligibleTailOffset] = character.PreyEligible ? (byte)1 : (byte)0;
+            // 0268104E读取末尾u16，只有1才经02A8DCF0启用预览光环；高字节由零初始化保留。
+            tail[46] = 1;
             writer.Write(tail);
         }
 

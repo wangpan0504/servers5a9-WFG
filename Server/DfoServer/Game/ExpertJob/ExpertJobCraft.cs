@@ -27,7 +27,7 @@ internal static class ExpertJobCraft
         if (!scripts.TryRecipe(character.ExpertJobType, (int)recipeId, out var recipe))
             return false;
         int level = scripts.Level(character.ExpertJobType, character.ExpertJobExperience);
-        if (level < recipe.RequiredLevel) return false;
+        if (level < recipe.RequiredLevel || character.ExpertJobType == 1 && !character.ExpertJobRecipes.Contains(recipe.RecipeId)) return false;
         var (successPercent, experienceMin, experienceMax) = scripts.Outcome(character.ExpertJobType, recipe, level);
         var inventory = character.Inventory;
         foreach (var material in recipe.Materials)
@@ -36,6 +36,8 @@ internal static class ExpertJobCraft
             if (need > int.MaxValue) return false;
             if (!Spend(inventory, material.ItemId, (int)need, now, out inventory)) return false;
         }
+        long? deadline = character.Inventory.Items.Where(item => item.ExpireTime > 0 &&
+            inventory.Find(item.Position) != item).Select(item => (long?)item.ExpireTime).Min();
         int success = 0, gained = 0;
         for (int attempt = 0; attempt < count; attempt++)
         {
@@ -45,17 +47,17 @@ internal static class ExpertJobCraft
             if (experienceMax > experienceMin) gain += next(experienceMax - experienceMin + 1);
             gained = checked(gained + gain);
         }
-        ExpertJobProduct[] products = success == 0 ? [] : [new(recipe.ProductId, success)];
+        ExpertJobProduct[] products = success == 0 ? [] : [new(recipe.ProductId, checked(success * recipe.ProductCount))];
         if (success > 0)
         {
             var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = inventory },
-                [new InventoryReward(recipe.ProductId, success)], items, goldLimits, pieces, now);
+                [new InventoryReward(recipe.ProductId, checked(success * recipe.ProductCount))], items, goldLimits, pieces, now);
             if (!grant.Accepted || grant.Plan is null) { error = grant.Error == 0 ? (ushort)4 : grant.Error; return false; }
             inventory = grant.Plan.After;
         }
         int experience = character.ExpertJobExperience;
         if (gained > 0 && experience <= int.MaxValue - gained) experience += gained;
-        plan = new(new(character.Inventory, inventory, "expert_job_compound"), experience, products, success, count - success);
+        plan = new(new(character.Inventory, inventory, "expert_job_compound", new(character, deadline)), experience, products, success, count - success);
         return true;
     }
 
@@ -67,50 +69,47 @@ internal static class ExpertJobCraft
         error = 19;
         if (character.ExpertJobType != 1 || cardSlot > short.MaxValue) return false;
         var card = character.Inventory.Find(new(InventoryListType.Main, (short)cardSlot));
-        if (card is null || card.Uid <= 0 || card.Core.Count <= 0 || card.Core.EquipmentLockId != 0 ||
-            card.IsExpired(now.ToUnixTimeSeconds()) || !scripts.IsKnownCard(1, card.Core.ItemId))
-            return false;
-        var consumed = InventoryDeleteService.Plan(character.Inventory, card.Position, card.Core.ItemId, 1);
+        int level = scripts.Level(1, character.ExpertJobExperience);
+        if (card is null || card.Uid <= 0 || !card.Core.IsStackable || card.Core.Count < count || card.Core.EquipmentLockId != 0 ||
+            card.IsExpired(now.ToUnixTimeSeconds()) || card.Core.Upgrade != 0 || card.Core.EnchantUpgrade != 0 || !scripts.TryCardRecipe(card.Core.ItemId, out var recipe) ||
+            recipe.RecipeId != recipeId || !character.ExpertJobRecipes.Contains(recipeId) || level < recipe.RequiredLevel ||
+            !ItemSlotBoundService.Allows(character.Inventory, card.Position, card.Core.Kind)) return false;
+        var template = items.Get(card.Core.ItemId);
+        if (template.Kind != card.Core.Kind || template.UseForbidden || character.Level < template.MinimumLevel ||
+            (template.Jobs & (1 << character.Job)) == 0) return false;
+        // 客户端238的宝珠模式按EXJ卡片映射出成品，成本包含input item和独立bead item，不接受无映射扣卡假成功。
+        var consumed = InventoryDeleteService.Plan(character.Inventory, card.Position, card.Core.ItemId, count);
         if (!consumed.Accepted || consumed.Plan is null) return false;
         var inventory = consumed.Plan.After;
-        var cardExp = scripts.MonsterCardExp(1, scripts.Level(1, character.ExpertJobExperience));
-        int gained = cardExp.Min;
-        if (cardExp.Max > cardExp.Min) gained += next(cardExp.Max - cardExp.Min + 1);
-        var products = Array.Empty<ExpertJobProduct>();
-        int success = 1, failure = 0;
-        if (recipeId > 0 && scripts.TryRecipe(1, recipeId, out var recipe))
+        foreach (var material in recipe.Materials.Concat(recipe.BeadMaterials))
         {
-            int level = scripts.Level(1, character.ExpertJobExperience);
-            if (level < recipe.RequiredLevel) return false;
-            foreach (var material in recipe.Materials)
-            {
-                long need = (long)material.Count * count;
-                if (need > int.MaxValue || !Spend(inventory, material.ItemId, (int)need, now, out inventory)) return false;
-            }
-            var (successPercent, experienceMin, experienceMax) = scripts.Outcome(1, recipe, level);
-            success = 0;
-            failure = count;
-            for (int attempt = 0; attempt < count; attempt++)
-            {
-                if (next(100) >= successPercent) continue;
-                success++;
-                int gain = experienceMin;
-                if (experienceMax > experienceMin) gain += next(experienceMax - experienceMin + 1);
-                gained = checked(gained + gain);
-            }
-            failure = count - success;
-            if (success > 0)
-            {
-                var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = inventory },
-                    [new InventoryReward(recipe.ProductId, success)], items, goldLimits, pieces, now);
-                if (!grant.Accepted || grant.Plan is null) { error = grant.Error == 0 ? (ushort)4 : grant.Error; return false; }
-                inventory = grant.Plan.After;
-                products = [new(recipe.ProductId, success)];
-            }
+            long need = (long)material.Count * count;
+            if (need > int.MaxValue || !Spend(inventory, material.ItemId, (int)need, now, out inventory)) return false;
+        }
+        long? deadline = character.Inventory.Items.Where(item => item.ExpireTime > 0 &&
+            inventory.Find(item.Position) != item).Select(item => (long?)item.ExpireTime).Min();
+        int success = 0, gained = 0;
+        int chance = scripts.CardSuccessPercent(level, recipe.Rarity);
+        var cardExp = scripts.MonsterCardExp(1, level);
+        for (int attempt = 0; attempt < count; attempt++)
+        {
+            if (next(100) >= chance) continue;
+            success++;
+            gained = checked(gained + cardExp.Min + (cardExp.Max > cardExp.Min ? next(cardExp.Max - cardExp.Min + 1) : 0));
+        }
+        ExpertJobProduct[] products = [];
+        if (success > 0)
+        {
+            var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = inventory },
+                [new InventoryReward(recipe.BeadId, success)], items, goldLimits, pieces, now);
+            if (!grant.Accepted || grant.Plan is null) { error = grant.Error == 0 ? (ushort)4 : grant.Error; return false; }
+            inventory = grant.Plan.After;
+            products = [new(recipe.BeadId, success)];
         }
         int experience = character.ExpertJobExperience;
         if (gained > 0 && experience <= int.MaxValue - gained) experience += gained;
-        plan = new(new(character.Inventory, inventory, "expert_job_card"), experience, products, success, failure);
+        plan = new(new(character.Inventory, inventory, "expert_job_card", new(character, deadline)),
+            experience, products, success, count - success);
         return true;
     }
 
@@ -302,9 +301,17 @@ internal static class ExpertJobCraft
     static bool Spend(InventorySnapshot inventory, int itemId, int count, DateTimeOffset now, out InventorySnapshot after)
     {
         after = inventory;
+        if (count <= 0) return false;
+        if (itemId == 0 || CurrencyWallet.RewardKind(itemId) is not null)
+        {
+            var paid = CurrencyService.Spend(inventory, itemId == 0 ? CurrencyKind.Gold : CurrencyWallet.RewardKind(itemId)!.Value, count);
+            if (!paid.Accepted || paid.Plan is null) return false;
+            after = paid.Plan.After;
+            return true;
+        }
         int left = count;
         foreach (var item in inventory.Items.Where(row => row.Position.List == InventoryListType.Main && row.Core.ItemId == itemId &&
-            row.Core.EquipmentLockId == 0 && !row.Core.IsExpired(now.ToUnixTimeSeconds())).OrderBy(row => row.Position.Index))
+            row.Core.IsStackable && row.Core.EquipmentLockId == 0 && !row.IsExpired(now.ToUnixTimeSeconds())).OrderBy(row => row.Position.Index))
         {
             int take = Math.Min(left, item.Core.Count);
             var spent = InventoryDeleteService.Plan(after, item.Position, item.Core.ItemId, take);

@@ -29,6 +29,9 @@ internal sealed partial class GameSession
     CharacterRosterEntry? PublishedRosterEntry(ushort index) => publishedRoster is { } roster && MatchesRoster(roster) &&
         index < roster.Entries.Length ? roster.Entries[index] : null;
 
+    public bool PvpPrivateSelectionBlocked(ushort index) => owner.Execute(() =>
+        PublishedRosterEntry(index)?.IsPvpPrivate == true && ChannelEntry?.Type != 24);
+
     public void SelectFromRosterIndex(ushort index, GoldLimitCatalog? goldLimits = null, bool resumeTown = false) => owner.Execute(() =>
     {
         if (Selected is not null) throw new InvalidDataException("Invalid selection state");

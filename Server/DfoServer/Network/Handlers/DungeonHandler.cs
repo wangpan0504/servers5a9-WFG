@@ -216,6 +216,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+        if (receipt.Entry.Hope is { } hope)
+            await context.Reply(CmdPacketType.ACCEPT_QUEST, QuestPackets.Accepted(hope.Acceptance.QuestId,1,[]),
+                "operation_hope_quest_assigned",Guard);
         // 指定直入的15没有打开选图场景；先建立27上下文，28/29进入主游戏后由客户端安装临时体验技能。
         if (direct)
             await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(0, despairLayer: context.Session.DespairSelectionLayer()),
@@ -226,7 +229,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt.Monsters.Altar is not null)
             await context.Notify(NotiPacketType.BLOOD_INFO, DungeonAltarPackets.Information(receipt.Entry), "formal_altar_information", Guard);
         else
-            await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry), "formal_dungeon_information", Guard);
+            await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry, receipt.Snapshot.BossPosition), "formal_dungeon_information", Guard);
         // 实验性（#259）：比赛副本先发 NOTI386 对阵/对手，再以 NOTI387 替代 NOTI29（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
         if (receipt.Monsters.Altar is not null)
             await context.Notify(NotiPacketType.START_BLOOD_MAP, DungeonAltarPackets.StartMap(receipt.Entry, receipt.MapSeed), "formal_altar_map", Guard);
@@ -285,6 +288,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main, [.. receipt.AssaultConsumedSlots]), "assault_mode_entry_items", Guard);
         }
+        if (receipt.SpecialEntry?.Kind is DungeonSpecialEntryKind.Blood or DungeonSpecialEntryKind.Ultimate)
+            await DungeonEnterCountProjection.RefreshAsync(context, dungeons, Guard);
         return CommandResult.Handled;
 
         async Task<CommandResult> RejectAsync()

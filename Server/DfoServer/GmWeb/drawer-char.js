@@ -57,7 +57,7 @@ export function buildCharacter(d, account, name, ctx, initial = 'summary') {
           p && h('h2', { style: 'margin-top:18px' }, '额外 SP / TP'),
           p && kv({ 额外SP: p.bonusSp ?? '未接管', 额外TP: p.bonusTp ?? '未接管', 当前SP: p.sp ?? '-', 当前TP: p.tp ?? '-' }),
           w && h('h2', { style: 'margin-top:18px' }, '钱包'),
-          w && kv({ 金币: num(w.gold), 版本: w.rev }),
+          w && kv({ 金币: num(w.gold), 版本: w.rev, 黑钻: w.blackDiamond ? fmtTime(w.blackDiamondExpiresAt) : '未开通' }),
           w && table([{ key: 'label', label: '货币' }, { key: 'amount', label: '数量', num: true, render: r => num(r.amount) }, { label: '范围', render: r => r.account ? '账号' : '角色' },
             { label: '', render: r => h('button', { class: 'btn sm', onclick: () => editCurrency(r) }, '修改') }], walletRows),
           w?.vault && h('p', null, `账号金库：容量 ${w.vault.capacity}，金币 ${num(w.vault.gold)} `, w.vault.capacity ? h('button', { class: 'btn sm', onclick: () => editCurrency({ key: 'vault', label: '账号金库金币', amount: w.vault.gold, vault: true, account: true }) }, '修改金库金币') : '（未开通）'));
@@ -186,6 +186,25 @@ async function opsView(account, name, act) {
   const setIdx = h('input', { type: 'number', min: 0, placeholder: '套装序号' });
   const expInput = h('input', { type: 'number', min: 0, max: 6000000000, placeholder: '累计经验' });
   const expHint = h('p', { class: 'lead', id: 'exp-hint' }, '');
+  const bdDays = h('input', { type: 'number', min: 0, max: 3650, value: 30 });
+  const bdHint = h('p', { class: 'lead' }, '黑钻状态读取中…');
+  api.section(account, name, 'wallet').then(w => {
+    bdHint.textContent = w?.blackDiamond
+      ? `当前黑钻：有效，到期 ${fmtTime(w.blackDiamondExpiresAt)}（账号 ${account} 共享）`
+      : '当前黑钻：未开通或已过期。';
+  }).catch(() => { bdHint.textContent = ''; });
+  const ejType = h('select', { 'aria-label': '副职业类型' },
+    h('option', { value: '1' }, '1 · 附魔师'), h('option', { value: '2' }, '2 · 炼金术师'),
+    h('option', { value: '3' }, '3 · 分解师'), h('option', { value: '4' }, '4 · 控偶师'));
+  const ejLevel = h('input', { type: 'number', min: 1, max: 11, value: 11 });
+  const ejHint = h('p', { class: 'lead' }, '副职业状态读取中…');
+  api.section(account, name, 'expert-job').then(e => {
+    ejHint.textContent = e?.type
+      ? `当前副职业：${e.typeLabel} Lv.${e.level}（累计熟练度 ${num(e.expertness)}，上限 Lv.${e.maxLevel}）`
+      : '当前副职业：未开通。';
+    if (e?.type) ejType.value = String(e.type);
+    if (e?.maxLevel) ejLevel.max = e.maxLevel;
+  }).catch(() => { ejHint.textContent = ''; });
   api.expTable().then(t => {
     const update = () => {
       const lv = Math.min(95, Math.max(1, +level.value || 0)); const row = t.levels[lv - 1];
@@ -228,6 +247,12 @@ async function opsView(account, name, act) {
       h('button', { class: 'btn danger', id: 'exp-go', onclick: () => { const n = need(expInput, '累计经验'); if (n == null) return; act('按累计经验设等级', 'exp', { exp: n }, { danger: 'force', detail: `按累计经验 ${num(n)} 换算等级并调整 ${name}（等级内经验归零，已学技能保留）。` }); } }, '按经验设等级')),
     panel('转职', note('选项来自该职业的实际分支。转职会重建技能树并恢复点数，执行前会再确认。'), field('分支', branch), field('觉醒', awake),
       h('button', { class: 'btn danger', id: 'job-go', onclick: () => { if (branch.value === '') return toast('转职选项还没加载完', true); act('转职', 'job', { branch: +branch.value, awakening: +awake.value }, { danger: 'force', detail: `把 ${name} 转为「${branch.selectedOptions[0]?.textContent} / ${awake.selectedOptions[0]?.textContent}」。这会重建技能树，已学的付费加点会被清掉，并补上这个分支当前阶段的转职和觉醒任务。` }); } }, '执行')),
+    panel('黑钻会员（账号级）', note('黑钻按账号共享：写入的是该角色所属账号的会员资格，账号下所有角色一起生效（疲劳上限 +32、经验加成）。到期时间设为现在 + 天数，会覆盖原到期时间，不是叠加；天数 0 = 清除到期时间（已增加的疲劳上限不会回退）。', 'warn'),
+      bdHint, field('开通天数（0–3650）', bdDays),
+      h('button', { class: 'btn danger', onclick: () => { const n = need(bdDays, '天数'); if (n == null) return; act('开通黑钻', 'black-diamond', { days: n }, { danger: true, detail: n === 0 ? `清除账号 ${account} 的黑钻到期时间。` : `把账号 ${account} 的黑钻到期时间设为现在 + ${n} 天（覆盖原到期时间，不是叠加）。账号下所有角色共享。` }); } }, '开通 / 续期')),
+    panel('副职业（类型与等级）', note('写入该角色的副职业资格与累计熟练度。等级由客户端按 PVF [expertness exp] 阈值换算：设为 N 级时写入 N 级的最低熟练度，覆盖当前熟练度；切换类型会保留已学附魔图。在线角色可直接修改，客户端回到选角并再次进入后刷新显示。', 'warn'),
+      ejHint, field('副职业类型', ejType), field('等级（1–11）', ejLevel),
+      h('button', { class: 'btn danger', onclick: () => { const n = need(ejLevel, '等级'); if (n == null) return; act('修改副职业', 'expert-job', { type: +ejType.value, level: n }, { danger: true, detail: `把 ${name} 的副职业设为「${ejType.selectedOptions[0].textContent}」Lv.${n}（写入该等级的最低熟练度，覆盖当前熟练度）。` }); } }, '写入副职业')),
     panel('角色改名', field('新角色名', newName),
       h('button', { class: 'btn danger', onclick: () => act('角色改名', 'characters/rename', { newName: newName.value.trim() }, { danger: true, needReturn: true, detail: `把 ${name} 改名为「${newName.value.trim()}」（名字不能与其他角色重复；邮件里已发出的历史发件人名不变）。` }) }, '改名')),
     panel('删除角色（永久）', note('95 服务端没有软删除：删除会永久清除角色及其背包、邮件、任务等全部数据，且不可恢复。审计日志会保存删除前快照。', 'warn'),

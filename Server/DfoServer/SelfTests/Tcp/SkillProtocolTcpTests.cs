@@ -128,6 +128,7 @@ internal static class SkillProtocolTcpTests
             That(trees.All(tree => tree.Skills.Single(skill => skill.Id == 5) == new LearnedSkill(6, 5, 2)),
                 "重启恢复换槽后的两树绑定，随后学习沿新槽位升级");
             peer.Send(29, [0, 1, 5, 0, 0, 1, 3]);
+            peer.Expect(1,29,[0,0xD9,0]);
             peer.Barrier();
         }
         foreach (byte[] invalid in new byte[][] { [0, 1, 5, 0, 0, 1], [0, 1, 5, 0, 0, 1, 0, 0] })

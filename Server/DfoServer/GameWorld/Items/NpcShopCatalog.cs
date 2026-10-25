@@ -52,6 +52,10 @@ internal sealed class NpcShopCatalog
         shop.Items.Contains(itemId) &&
         (shop.Raid || shop.NpcId == npcId);
 
+    // 某个商人在全部商店页上的在售物品并集；职业分页只是展示，库存按商人整体计算。
+    public FrozenSet<int> Stock(int npcId) => Shops.Values.Where(shop => shop.NpcId == npcId)
+        .SelectMany(shop => shop.Items).ToFrozenSet();
+
     // 攻坚商店不校验商人：实机同一家店的不同入口 NPC 声明并不统一——
     // 卢克的艾丽卡(460)有 [raid shop]，超时空漩涡的假面骑士(619)只有 [move town]，
     // 而客户端照样能开出该店。入口由客户端 UI 决定，服务端只核对商品是否属于该店。

@@ -22,6 +22,8 @@ internal static partial class PartyDungeonTcpTests
             var quest = resources.Quests.Get(questId);
             var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,quest,dungeonId);
             using var group = new Coop(fixture,resources,"q"+questId,entrance.Position,entrance.Completed,95,4);
+            // 95级选角会真实分配6115；独立核对初值、原槽与接取身份，不把每日视作队长任务。
+            var dailies = group.Peers.Select(peer => new QuestDailyCoexistence(fixture,peer.Id,6115,1686,progress:true)).ToArray();
             foreach (var peer in group.Peers.Take(3))
             {
                 peer.Send(31,[31,0,(byte)questId,(byte)(questId>>8)]);
@@ -89,7 +91,8 @@ internal static partial class PartyDungeonTcpTests
             }
             That((questId==3842 || fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE quest_id=$p0",questId) is [[3L]]) &&
                 fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE quest_id=$p0 AND condition_state=0",questId) is [[3L]] &&
-                fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",group.Peers[3].Id) is [[0L]],
+                dailies.Take(3).All(daily => daily.OtherRows("quest_id,condition_state") is [[long id,0L]] && id == questId) &&
+                dailies[3].OtherRows("quest_id") is [],
                 "只有各自原接取的三人提交清图；助战者不新增任务或完成位");
             group.Settle();
             group.Peers[0].Send(72,[1,0]);

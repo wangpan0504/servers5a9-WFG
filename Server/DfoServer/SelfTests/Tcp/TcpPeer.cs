@@ -44,6 +44,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[][] EnterCounts { get; private set; } = [];
     public byte[] GriefTowerClearInfo { get; private set; } = [];
     public byte[] ItemMakingSkills { get; private set; } = [];
+    public byte[] EpicProductionState { get; private set; } = [];
     public WirePacket[] CollectBoxes { get; private set; } = [];
     public WirePacket[] TitleBooks { get; private set; } = [];
     public byte[] ExpertContract { get; private set; } = [];
@@ -68,6 +69,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] DevilService0 { get; private set; } = [];
     public Dictionary<byte, long> PremiumServices { get; private set; } = [];
     public byte[] DungeonPermission { get; private set; } = [];
+    public Dictionary<int, (byte Daily, byte Weekly)> DungeonEnterCounts { get; private set; } = [];
 
     static readonly Encoding names;
     static TcpPeer()
@@ -196,18 +198,53 @@ internal sealed class TcpPeer : IDisposable
     public WirePacket Expect(byte kind, ushort opcode, byte[]? body = null)
     {
         var packet = Read();
-        // #233/#699 打开选图时 NOTI1536(5B)、NOTI1303(2B) 紧挨 NOTI27 之前下发；未显式期待它们的旧用例在等待27时记录并跳过。
+        int countUpdates = 0;
+        bool griefAnnounced = false;
+        // 选图附带的状态通知逐项校验后记录，550须成对且与本人真实账本一致；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
-               (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2))
+               (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
+                packet.Opcode == 550))
         {
             if (packet.Opcode == 1536) AssaultDailyInfo = packet.Body;
-            else GriefTowerClearInfo = packet.Body;
+            else if (packet.Opcode == 1303)
+            {
+                GriefTowerClearInfo = packet.Body;
+                griefAnnounced = true;
+            }
+            else
+            {
+                TestCheck.That(griefAnnounced && ++countUpdates == 1,
+                    "亡者峡谷状态之后只允许一组两祭坛次数通知，不扩展普通选图包序");
+                ReadDungeonEnterCounts(packet);
+            }
             packet = Read();
         }
         TestCheck.That(packet.Kind == kind && packet.Opcode == opcode, $"packet order: expected ({kind},{opcode}), got ({packet.Kind},{packet.Opcode})");
         if (body is not null)
             TestCheck.Bytes(packet.Body, body, $"body ({kind},{opcode})");
         return packet;
+    }
+
+    // 已显式校验悲叹状态的选图用例使用同一真实账本断言，不交给27的兼容读取再次猜测前置包。
+    public void ExpectAltarEnterCounts() => ReadDungeonEnterCounts(Read());
+
+    void ReadDungeonEnterCounts(WirePacket first)
+    {
+        TestCheck.That(fixture is not null && Id != 0, "550必须绑定已选角的本人隔离账本");
+        var local = fixture!.UtcNow.ToOffset(TimeSpan.FromHours(8)).AddHours(-6);
+        int day = DateOnly.FromDateTime(local.DateTime).DayNumber;
+        foreach (int dungeonId in new[] { 11006, 11007 })
+        {
+            var packet = dungeonId == 11006 ? first : Read();
+            TestCheck.That(packet is { Kind: 0, Opcode: 550, Body.Length: 6 } && U32(packet.Body, 0) == dungeonId,
+                "550必须按11006、11007顺序各发一个完整6字节通知");
+            long used = Convert.ToInt64(fixture.Query(
+                "SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0 AND dungeon_id=$p1 AND service_day=$p2",
+                Id, dungeonId, day)[0][0]);
+            TestCheck.That(packet.Body[4] == Math.Max(0, 3 - used) && packet.Body[5] == 0,
+                "550日剩余等于本游戏日已提交账本，周剩余为零");
+            DungeonEnterCounts[dungeonId] = (packet.Body[4], packet.Body[5]);
+        }
     }
 
     public WirePacket[] Batch(params (byte Kind, ushort Opcode)[] expected) => expected.Select(p => Expect(p.Kind, p.Opcode)).ToArray();
@@ -270,19 +307,29 @@ internal sealed class TcpPeer : IDisposable
             Enumerable.Range(0, 8).Any(slot => U32(DevilService0, 9 + slot * 9) > 0) == (PremiumServices[58] > 0),
             "魔王八项期限独立投影，58概览与至少一项有效服务一致，黄金牌次数不超过10");
     }
-    public void Barrier()
+    public void Barrier(Action<WirePacket>? validateNotification = null)
     {
         SendBarrier();
         var packet = Read();
-        int staminaUpdates = 0;
-        // 撤退及自然恢复会在命令尾部发布虚弱状态；只接收与本人持久期限吻合的通知。
-        while (packet is { Kind: 0, Opcode: 4 })
+        int staminaUpdates = 0, notifications = 0;
+        // 撤退虚弱仍独立核验；额外业务通知必须由调用方逐包断言，默认屏障不跳包。
+        while (packet.Kind == 0 && (packet.Opcode == 4 || validateNotification is not null))
         {
-            TestCheck.That(++staminaUpdates <= 2, "屏障前虚弱通知数量有界");
-            ValidateStamina(packet, Id, lastBarrierCompleted);
+            TestCheck.That(++notifications <= 8, "屏障前业务通知数量有界");
+            if (packet.Opcode == 4)
+            {
+                TestCheck.That(++staminaUpdates <= 2, "屏障前虚弱通知数量有界");
+                ValidateStamina(packet, Id, lastBarrierCompleted);
+            }
+            else validateNotification!(packet);
             packet = Read();
         }
-        TestCheck.That(packet.Kind == 1 && packet.Opcode == 1347, "屏障仅允许已校验虚弱通知，不跳过其他包");
+        if (packet is { Kind: 0, Opcode: 550 })
+        {
+            ReadDungeonEnterCounts(packet);
+            packet = Read();
+        }
+        TestCheck.That(packet.Kind == 1 && packet.Opcode == 1347, "屏障仅允许已校验虚弱与两祭坛次数通知，不跳过其他包");
         TestCheck.Bytes(packet.Body, [1], "body (1,1347)");
         lastBarrierCompleted = UnixTime;
     }
@@ -589,6 +636,7 @@ internal sealed class TcpPeer : IDisposable
         SceneSkillInfo = [];
         CompletedQuestHistory = [];
         CollectBoxes = [];
+        DungeonEnterCounts = [];
         for (int index = 2; index < afterCargo; index++)
         {
             var packet = Read();
@@ -631,7 +679,17 @@ internal sealed class TcpPeer : IDisposable
             }
             TestCheck.That(packet.Kind == expected[index].Kind && packet.Opcode == expected[index].Opcode,
                 $"entry packet order at {index}");
-            if (packet is { Kind: 0, Opcode: 2 } && packet.Body is [1, ..]) PlayerBody = packet.Body;
+            if (packet is { Kind: 0, Opcode: 2 } && packet.Body is [1, ..])
+            {
+                PlayerBody = packet.Body;
+                foreach (int dungeonId in new[] { 11006, 11007 })
+                {
+                    var count = Expect(0, 550).Body;
+                    TestCheck.That(count.Length == 6 && U32(count, 0) == dungeonId && count[4] <= 3 && count[5] == 0,
+                        "本人Player模型后逐包初始化两祭坛真实日剩余，周字段为零");
+                    DungeonEnterCounts.Add(dungeonId, (count[4], count[5]));
+                }
+            }
             middle.Add(packet);
         }
         var avatars = Expect(0, 13);
@@ -641,9 +699,12 @@ internal sealed class TcpPeer : IDisposable
             "装扮包裹初始化后完整恢复十一槽来源表，清除上一角色的关联状态");
         var pets = Expect(0, 13);
         var medals = Expect(0, 13);
+        var talismans = Expect(0, 13);
         TestCheck.That(avatars.Body[0] == 1 && U16(avatars.Body, 1) == avatarExpansion && pets.Body[0] == 7, "special container initialization and avatar capacity");
         TestCheck.That(medals.Body[0] == 38, "medal container initialization");
-        SpecialContainers = [creatures, avatars, pets, medals];
+        TestCheck.That(talismans.Body[0] == 46 && talismans.Body.Length == 3 + U16(talismans.Body, 1) * 123,
+            "护石符文容器按普通123B物品行初始化");
+        SpecialContainers = [creatures, avatars, pets, medals, talismans];
         var tail = new List<WirePacket>();
         var mails = new List<byte[]>();
         ClientSettings = [];
@@ -665,6 +726,11 @@ internal sealed class TcpPeer : IDisposable
             if (notice == ((byte)0, (ushort)3))
             {
                 var packet = Read();
+                TestCheck.That(packet.Kind==0 && packet.Opcode==1358 && packet.Body.Length==32 && U32(packet.Body,0)==U16(prefix[0].Body,9) &&
+                    packet.Body[16]==0 && packet.Body[18]==0 && packet.Body[19]==0,
+                    "史诗制作32字节初始化保留独立周计数及默认保留字节");
+                EpicProductionState=packet.Body;
+                packet=Read();
                 var collectBoxes = new List<WirePacket>();
                 while (packet.Kind == 0 && packet.Opcode == 1030)
                 {
@@ -692,8 +758,8 @@ internal sealed class TcpPeer : IDisposable
                     enterCounts.Add(packet.Body);
                     packet = Read();
                 }
-                TestCheck.That(enterCounts.Count is 0 or 18 && enterCounts.Select(body => U32(body, 0)).Distinct().Count() == enterCounts.Count,
-                    "入城下发 18 个限次副本各一条 550: " + enterCounts.Count);
+                TestCheck.That(enterCounts.Count is 0 or 16 && enterCounts.All(body => U32(body, 0) is not (11006 or 11007)) && enterCounts.Select(body => U32(body, 0)).Distinct().Count() == enterCounts.Count,
+                    "入城下发16个通用限次副本各一条550，不覆盖两祭坛专用次数: " + enterCounts.Count);
                 EnterCounts = enterCounts.ToArray();
                 while (packet.Kind == 0 && packet.Opcode == 97)
                 {
@@ -884,10 +950,11 @@ internal sealed class TcpPeer : IDisposable
         w.Write(npc);
         w.Write(kind);
     });
-    public void Travel(byte town, byte area, ushort x, ushort y, ushort previousTown, ushort previousArea, bool bottom = false, uint? returnTown = null, byte kind = 0, uint npc = 0)
+    public void Travel(byte town, byte area, ushort x, ushort y, ushort previousTown, ushort previousArea, bool bottom = false, uint? returnTown = null, byte kind = 0, uint npc = 0, Action<TcpPeer>? beforeLocation = null)
     {
         Send(bottom ? (ushort)1426 : (ushort)36, bottom ? [] : Area(town, area, x, y, previousTown, previousArea, kind, npc));
         SendBarrier();
+        beforeLocation?.Invoke(this);
         var location = Expect(0, 23).Body;
         TestCheck.Bytes(location.AsSpan(0, 8), Build(w =>
         {

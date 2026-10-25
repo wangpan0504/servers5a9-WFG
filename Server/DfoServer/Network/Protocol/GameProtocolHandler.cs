@@ -26,7 +26,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null, DfoServer.Game.ExpertJob.ExpertJobStoreBoard? expertStores = null,
     TownPresence? presence = null,
     DfoServer.GameWorld.Dungeons.DungeonIncountCatalog? incounts = null, CharacterLevelProjection? levels = null,
-    DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null, Action<GameConnectionContext>? prepareDungeon = null) : IConnectionProtocol
+    DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null,
+    DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null, Action<GameConnectionContext>? prepareDungeon = null) : IConnectionProtocol
 {
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
@@ -45,7 +46,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }, connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items, experienceBonuses: experienceBonuses, incounts: incounts,
-            channelHistory: channelHistory);
+            channelHistory: channelHistory, operationHope: operationHope);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
@@ -201,6 +202,11 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     await context.CommandGate.WaitAsync(connection.Stop);
                     try
                     {
+                        if (session.EnsureQuestEligibilityMail() is { } invitation)
+                        {
+                            log.Write("quest_mail_arrived",new {Connection=context.Id,Character=invitation.Character.Id,Timing="first-eligible"});
+                            mailbox?.Alarm(context,invitation);
+                        }
                         await revival.RefreshAsync();
                         if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
                         if (context.Premiums is { } premiums) await premiums.RefreshAsync();

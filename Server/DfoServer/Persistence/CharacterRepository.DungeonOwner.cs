@@ -82,7 +82,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
     });
 
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务：任一步失败整笔回滚，重复请求或提交失败都不会只扣一半。
-    public Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge) => owner.Execute(() =>
+    public DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge) => owner.Execute(() =>
     {
         if (charge.IsEmpty) throw new InvalidDataException("单人无费用入场使用原对象预留合同");
         using var db = database.Open();
@@ -94,7 +94,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         return committed;
     });
 
-    Character CommitDungeonEntryInTransaction(SqliteConnection db, SqliteTransaction tx,
+    DungeonEntryCommit CommitDungeonEntryInTransaction(SqliteConnection db, SqliteTransaction tx,
         AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge, out DungeonTransientFatigue? cachedFatigue)
     {
         var state = ReservationState(expected, nextObjectKey);
@@ -108,8 +108,14 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             fatigueBefore = expected.Fatigue ?? throw new InvalidOperationException("入场疲劳需要已初始化的疲劳owner");
             fatigueAfter = fatigueBefore.ConsumeAtEntry(charge.Fatigue);
         }
+        DungeonIncountCommit? counted = null;
+        if (charge.Incount is { } incount)
+            counted = CommitDungeonIncountInTransaction(db, tx, owner, expected,
+                incount.Dungeon, incount.Period, incount.Row, null, incount.Account, incount.Increment) ??
+                throw new InvalidOperationException("入场次数在提交前已用尽");
         long revision = charge.Items is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
         ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore, charge.Weekly);
+        CommitHopeAdmission(db, tx, owner, expected, charge);
         CommitGriefEntry(db, tx, owner, expected, charge, checked(revision + 1));
         WriteSpecialEntry(db, tx, owner, expected, charge, checked(revision + 1));
         if (fatigueBefore is not null && fatigueAfter is not null)
@@ -125,8 +131,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         }
         var committed = Require(db, tx, owner.Account, expected.Name);
         cachedFatigue = fatigueBefore is not null && fatigueAfter is not null
-            ? new(CharacterFatigueState.StartDungeonRuleId, revision, fatigueBefore, fatigueAfter) : null;
-        return committed;
+            ? new(charge.Hope is null ? CharacterFatigueState.StartDungeonRuleId : "operation-hope-first-area-v1", revision, fatigueBefore, fatigueAfter) : null;
+        return new DungeonEntryCommit(committed, charge.Incount?.Row is not null ? counted?.Usage : null);
     }
 
     public PartyDungeonEntryCommit[] CommitPartyDungeonEntry(IReadOnlyList<PartyDungeonReservation> reservations)
@@ -148,7 +154,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
                     count.Dungeon, count.Period, count.Row, null, count.Account, count.Increment, check: true);
                 if (count is not null && counted is null) throw new InvalidOperationException("组队成员入场次数已变化");
                 var character = CommitDungeonEntryInTransaction(db, tx, r.Owner, r.Expected, r.NextObjectKey, r.Charge, out fatigue[i]);
-                result[i] = new(character, counted is not null && count is { Increment: true, Row: { } row }
+                result[i] = new(character.Character, counted is not null && count is { Increment: true, Row: { } row }
                     ? [.. DungeonIncountPolicy.Views(row, counted.Usage)] : []);
             }
             tx.Commit();
@@ -191,7 +197,10 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
     {
         if (fatigue is null) return;
         fatigue.Committed = true;
-        DungeonTransientReceipts.Get(owner, charge.Identity).Fatigue[charge.MapId] = fatigue;
+        var receipts = DungeonTransientReceipts.Get(owner, charge.Identity);
+        if (charge.Hope is { } hope)
+            receipts.HopeAreaFatigue[hope.Catalog.Maps[charge.MapId].AreaId] = fatigue;
+        else receipts.Fatigue[charge.MapId] = fatigue;
     }
 
     static CharacterDungeonState ReservationState(Character expected, uint nextObjectKey)

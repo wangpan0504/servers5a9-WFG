@@ -42,7 +42,7 @@ internal sealed partial class CharacterRepository
         }
         using var roster = db.CreateCommand();
         roster.Parameters.AddWithValue("$account", owner.Account);
-        roster.CommandText = "SELECT id,name,level,job,grow_type FROM characters WHERE account=$account ORDER BY slot,id";
+        roster.CommandText = "SELECT id,name,level,job,grow_type FROM characters c WHERE account=$account AND NOT EXISTS(SELECT 1 FROM account_pvp_private_characters p WHERE p.character_id=c.id) ORDER BY slot,id";
         var rows = ImmutableArray.CreateBuilder<AdventureWeeklyCharacter>();
         using var reader2 = roster.ExecuteReader();
         while (reader2.Read())
@@ -207,7 +207,7 @@ internal sealed partial class CharacterRepository
         query.CommandText = """
             SELECT c.id,c.slot,c.name,c.job,c.grow_type,c.level,coalesce(d.proficiency_level,0),c.revision
             FROM characters c LEFT JOIN character_dungeon_state d ON d.character_id=c.id AND d.account=c.account
-            WHERE c.account=$account ORDER BY c.slot,c.id
+            WHERE c.account=$account AND NOT EXISTS(SELECT 1 FROM account_pvp_private_characters p WHERE p.character_id=c.id) ORDER BY c.slot,c.id
             """;
         var roster = ImmutableArray.CreateBuilder<AdventureMember>();
         using (var reader = query.ExecuteReader()) while (reader.Read()) roster.Add(new(checked((ushort)reader.GetInt32(0)),

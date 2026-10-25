@@ -100,7 +100,7 @@ internal static partial class DungeonSpecificCardRewardsTests
         var random = new Random(653 + bossRoll);
         bool forceEpic=false;
         int Draw(int bound)=>forceEpic ? bound==1000000 ? 993000 : bound==1000 ?
-            (bossRoll==0 ? 200 : bossRoll==45 ? 0 : 100) : 0 : bound==100 ? bossRoll : random.Next(bound);
+            (bossRoll==0 ? 200 : 100) : 0 : bound==100 ? bossRoll : random.Next(bound);
         var receipt = fixture.Session.EnterFormalDungeon(7191, 0, 4, dungeons, rooms, drops, items.Items,
             draw: Draw, pieces: items.EpicPieces, hellParty: true,
             prepareDrops: PrepareDrops)!;
@@ -112,12 +112,22 @@ internal static partial class DungeonSpecificCardRewardsTests
             ItemCount(fixture.Read(), 10305821) == (bossRoll == 45 ? 0 : 4),
             "仅有通行证也能入场，通行证优先且不混扣邀请函及灵石");
         string directory = Path.Combine(Path.GetTempPath(), "S5A9-cosmo-exit-" + Guid.NewGuid().ToString("N"));
+        bool passed = false;
         try
         {
             Run().GetAwaiter().GetResult();
             That(historicalCandidates > 0, "三个领主路线各自实际准备历史到期候选，避免空测");
+            passed = true;
         }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+        catch
+        {
+            Directory.CreateDirectory(directory);
+            try { fixture.Sql("VACUUM INTO '" + Path.Combine(directory, "failure.db").Replace("'", "''", StringComparison.Ordinal) + "'"); }
+            catch (Exception backupError) { Console.WriteLine("Cosmo failure backup unavailable: " + backupError.GetType().Name); }
+            throw;
+        }
+        finally { if (passed && Directory.Exists(directory)) Directory.Delete(directory, true);
+            else if (!passed) Console.WriteLine("FAILED cosmo fixture retained: " + directory); }
 
         async Task Run()
         {
@@ -155,10 +165,47 @@ internal static partial class DungeonSpecificCardRewardsTests
                             "死亡提交只冻结有效资产，历史过期候选不进入地面账本");
                         if (monster.IsBoss)
                         {
-                            var expectedPool=bossRoll==0 ? epics.Cosmo! : bossRoll==45 ? epics.Tayberrs! : epics.Super!;
+                            var expectedPool=bossRoll==0 ? epics.Cosmo! : bossRoll==45 ? epics.Super! : epics.Tayberrs!;
                             var epic=death.Drops.FirstOrDefault(row=>row.Content.Item is { } item &&
                                 expectedPool.Entries.Any(candidate=>candidate.Template.Id==item.ItemId));
-                            That(epic is not null,"真实终点死亡经默认三分池生成实际地面奖励");
+                            That(epic is not null,"真实终点死亡：普通领主保留三分池，白斯命中史诗固定进入泰波尔斯池");
+                            if (bossRoll == 90)
+                            {
+                                var allEpics = death.Drops.Where(row => row.Content.Item is { Kind: ItemKind.Equipment } core &&
+                                    items.Items.Get(core.ItemId).Rarity == 4).ToArray();
+                                That(allEpics.Length > 0 && allEpics.All(row => epics.Tayberrs!.Entries.Any(candidate =>
+                                    candidate.Template.Id == row.Content.Item!.ItemId)),
+                                    "白斯所有实际史诗掉落均来自泰波尔斯池，包括原通用骰，不能只替换追加的八骰");
+                            }
+                            That(death.Drops.All(row => row.DeathIdentity.CharacterId == receipt.Character.Id &&
+                                row.DeathIdentity.InstanceId == receipt.Snapshot.Identity.InstanceId && row.Reservation.MonsterKey == monster.ObjectKey),
+                                "超星空全部掉落绑定实际领主、角色和当前副本实例，不能借旧来源领取");
+                            That(death.Drops.Count(row => row.Content.Item?.ItemId == HarlemMaterialDropPolicy.FragmentId) >= 30 &&
+                                death.Drops.Count(row => row.Content.Item?.ItemId == HarlemMaterialDropPolicy.SkyWishId) >= 10,
+                                "新增白斯奖励保留原30碎片及10天空之愿，不被装备骰数覆盖");
+                            var antimatter = death.Drops.Where(row => row.Content.Item?.ItemId == 10306750).ToArray();
+                            That(antimatter.Length == (bossRoll == 90 ? 2 : 0) &&
+                                antimatter.All(row => row.Content.Item is { Count: 1, Kind: ItemKind.Material }) &&
+                                death.Drops.All(row => row.Content.Item?.ItemId != 10309041),
+                                "白斯固定两份普通反物质10306750，其他领主不额外发放，不混入账号绑定10309041");
+                            int antimatterBefore = ItemCount(fixture.Read(), 10306750);
+                            foreach (var particle in antimatter)
+                            {
+                                var unchanged = fixture.Read();
+                                fixture.Sql("CREATE TRIGGER cosmo_particle_pickup_fail AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'cosmo particle rollback'); END");
+                                Reject<Microsoft.Data.Sqlite.SqliteException>(() => fixture.Session.PickFormalDungeonItem(particle.Reservation.GroundKey,
+                                    items.Items, items.EpicPieces, items.GoldLimits), "反物质拾取末段SQL失败完整回滚");
+                                That(QuestCompletionRepositoryTests.Same(unchanged, fixture.Read()), "反物质拾取失败不增材料和revision，也不提前移除地面对象");
+                                fixture.Sql("DROP TRIGGER cosmo_particle_pickup_fail");
+                                That(fixture.Session.PickFormalDungeonItem(particle.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits)
+                                    is { Outcome: DungeonRunOutcome.Accepted, Commit.Duplicate: false }, "同一个反物质地面对象失败后可重试入库");
+                                var stored = fixture.Read();
+                                That(fixture.Session.PickFormalDungeonItem(particle.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits)
+                                    .Outcome != DungeonRunOutcome.Accepted && QuestCompletionRepositoryTests.Same(stored, fixture.Read()),
+                                    "已领取反物质对象不得再次增加资产");
+                            }
+                            That(ItemCount(fixture.Read(), 10306750) == antimatterBefore + antimatter.Length,
+                                "反物质精确到账两份且不会随史诗骰数或重放翻倍");
                             var beforePickup=fixture.Read();
                             // 运行态拾取回执已归缓存；在真实库存审计写入处注入晚期SQL失败，保留资产与地面回滚、原对象重试断言。
                             fixture.Sql("CREATE TRIGGER cosmo_epic_pickup_fail AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'cosmo epic pickup rollback'); END");
@@ -169,7 +216,7 @@ internal static partial class DungeonSpecificCardRewardsTests
                             var picked=fixture.Session.PickFormalDungeonItem(epic!.Reservation.GroundKey,items.Items,items.EpicPieces,items.GoldLimits);
                             That(picked is {Outcome:DungeonRunOutcome.Accepted,Commit.Duplicate:false} &&
                                 fixture.Read().Inventory.Items.Any(row=>row.Core.ItemId==epic.Content.Item!.ItemId),
-                                "哈林、泰波尔斯、超界地面对象重试拾取实际入库");
+                                "原有普通领主分池与白斯泰波尔斯地面对象重试拾取实际入库");
                             var saved = fixture.Read();
                             var duplicate = fixture.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt, monster), kills, growth);
                             That(duplicate.Outcome == DungeonRunOutcome.Duplicate && duplicate.Drops.IsEmpty &&

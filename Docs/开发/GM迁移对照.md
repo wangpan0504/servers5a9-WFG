@@ -54,7 +54,7 @@
 | --- | --- | --- |
 | 角色改名 | 已完成 | `rename` 命令 + `/api/characters/rename`：复用 `CharacterName.IsValid`，`characters.name` NOCASE 唯一，同事务校验 revision，同步拍卖行卖家名；邮件历史发件人名保持快照。在线角色先小退（`returnFirst`），改名后推进选角纪元让旧名册作废。新增 `ICharacterRenamer`，不改现有仓库包装类 |
 | 删除角色 | 已完成（注意不是软删） | 95 的 `CharacterRepository.Delete` 就是永久删除（没有软删字段），GM 复用它：`char-delete <角色> <确认名>` + `/api/characters/delete`，必须输入一致的角色名，审计保存删除前快照；冒险团远征中拒绝；在线先小退 |
-| 副职业类型/等级/经验/一键满级 | 部分 | 四条资格任务把类型 1–4 写入 `character_expert_job`，ACK34 按寻物 mode0 完成，不再发 mode20。熟练度、放弃档、分解机在 v59/v60 表里，Actor 和 NOTI 205 会投影；合成/萃取/附魔/分解机/开店已按 95 包体落地。没有 GM 一键满级。专家契约剩余天数仍是另一条 `contract` 命令 |
+| 副职业类型/等级/经验/一键满级 | 部分 | 四条资格任务把类型 1–4 写入 `character_expert_job`，ACK34 按寻物 mode0 完成，不再发 mode20。熟练度、放弃档、分解机在 v59/v60 表里，Actor 和 NOTI 205 会投影；合成/萃取/附魔/分解机/开店已按 95 包体落地。GM 可用 `expert-job <角色> <类型1-4> <等级1-11>`（网页 `/api/expert-job`）按 PVF 阈值写入该等级的最低累计熟练度，不提供任意熟练度/经验值输入。专家契约剩余天数仍是另一条 `contract` 命令 |
 | 称号簿与成就（一键称号簿/成就完成） | 已完成 | `title-list`/`title-complete` + `/api/titles/complete`、角色抽屉「称号」页。复用 `TitleAchievementService`（新增 `Complete`，不检查玩法条件，奖励/称号/章节/邮件沿用同一规划）与 `CommitTitleAchievement`；范围 all/book/book:分类/ID 列表；整批被拒时逐个试探并回报跳过数；仅选角界面可写，在线走 returnFirst 小退；二次确认并审计。不做“自动入簿”：称号由成就奖励直接入簿 |
 | 角色属性块只读 | 部分 | `stats` + `/api/characters/{账号}/{角色}/stats` + 「属性」页，调用服务端 `CharacterStatComputer`。服务端本身只计算等级/转职的 CHR 基础属性；装备、技能、称号、套装等修正由客户端派生，95 服务端没有对应计算，所以不显示（页面明确标注） |
 | 活动开关读写 | 已完成 | `/api/events`、活动页：服务端目前只注册 64 号（金币卡双倍）活动，支持强制开/关/自动与起止时间 |

@@ -34,7 +34,7 @@ internal static class QuestTownSceneTests
                 "实际可行走的右边界按PtInRect排除，边界内一像素接受");
             That(f.Session.Move(new(600,250,0,0,0,0)),"真实合法城镇坐标进入范围");
             var terminal = Change(f,3156,QuestLifecycleAction.Condition)!;
-            That(terminal.Commit is not null && terminal.Character.ActiveMainQuests.Single().ConditionState == 0,
+            That(terminal.Commit is not null && terminal.Character.ActiveMainQuests.SequenceEqual(before.ActiveMainQuests.Select(row => row.QuestId == 3156 ? row with { ConditionState = 0 } : row)),
                 $"3156范围Boolean只在声明城镇、区域与矩形内接受：{terminal.Reason}，{terminal.Character.Position}");
             That(Change(f,3156,QuestLifecycleAction.Condition)!.Outcome == QuestLifecycleOutcome.Unchanged,
                 "重复范围事件不产生第二笔revision");
@@ -87,7 +87,8 @@ internal static class QuestTownSceneTests
             That(Change(f,3162,QuestLifecycleAction.Condition)?.Commit is null && QuestCompletionRepositoryTests.Same(before,f.Read()),
                 "与目标NPC相隔超过width+40时拒绝客户端终末事件");
             That(f.Session.Move(new(690,250,0,0,0,0)) &&
-                Change(f,3162,QuestLifecycleAction.Condition)?.Character.ActiveMainQuests.Single().ConditionState == 0,
+                Change(f,3162,QuestLifecycleAction.Condition)?.Character.ActiveMainQuests.SequenceEqual(
+                    before.ActiveMainQuests.Select(row => row.QuestId == 3162 ? row with { ConditionState = 0 } : row)) == true,
                 "匹配客户端 NPC范围在width+40边界可达成，服务端校验真实当前坐标");
             That(Finish(f,3162).Receipt?.Commit.ConditionType == 64 && f.Read().CompletedQuests.Contains(3162),
                 "3162在目标范围内由剧情临时莱诺NPC444交付，无需前往另一张常驻NPC地图");
@@ -96,14 +97,17 @@ internal static class QuestTownSceneTests
         using (var f = Make([3155,3156,3172],new(40,0,1214,250),20))
         {
             var target = quests.Get(3173);
+            var beforeAcceptance = f.Read();
             That(Change(f,3173,QuestLifecycleAction.Accept)?.Commit is not null &&
-                f.Read().ActiveMainQuests.Single().ConditionState == 513 &&
+                f.Read().ActiveMainQuests.Single(row => row.QuestId == 3173).ConditionState == 513 &&
+                f.Read().ActiveMainQuests.Where(row => row.QuestId != 3173).SequenceEqual(beforeAcceptance.ActiveMainQuests) &&
                 QuestLifecyclePlan.MissingMaterials(f.Read().Inventory,target,DateTimeOffset.UtcNow.ToUnixTimeSeconds()) == 2,
                 "实际Lv20任务3173保留完整两件材料缺额，初值分别标记材料不足与尚未会面");
             That(target.IntData.SequenceEqual([10164787,1,10164789,1,29]),"3173按匹配PVF保留物品对与末尾罗杰NPC29");
+            var beforeMaterials = f.Read();
             That(f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
                 [new(10164787,1),new(10164789,1)],items.Items,items.GoldLimits,items.EpicPieces)).Accepted &&
-                f.Read().ActiveMainQuests.Single().ConditionState == 512,"真实前置任务物品到齐后只清材料通道");
+                f.Read().ActiveMainQuests.SequenceEqual(beforeMaterials.ActiveMainQuests.Select(row => row.QuestId == 3173 ? row with { ConditionState = 512 } : row)),"真实前置任务物品到齐后只清材料通道");
             That(f.Session.ChangeQuest(3173,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(0x20,0,0))?.Commit is not null,
                 "实际罗杰场景满足3173独立NPC通道");
             var before = f.Read();
@@ -128,7 +132,7 @@ internal static class QuestTownSceneTests
                 "无交付NPC的任务仍拒绝库存不足，不由客户端终末位代替材料");
             That(f.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
                 [new(3037,30),new(10165043,1)],items.Items,items.GoldLimits,items.EpicPieces)).Accepted &&
-                f.Read().ActiveMainQuests.Single().ConditionState == 0,"3182钱包晶块与实际任务物品到齐后重算进度");
+                f.Read().ActiveMainQuests.SequenceEqual(before.ActiveMainQuests.Select(row => row.QuestId == 3182 ? row with { ConditionState = 0 } : row)),"3182钱包晶块与实际任务物品到齐后重算进度");
             long cubes = CurrencyWallet.Get(f.Read().Inventory,CurrencyKind.ClearCube);
             That(Finish(f,3182).Outcome == QuestFinishOutcome.Committed && f.Read().CompletedQuests.Contains(3182) &&
                 CurrencyWallet.Get(f.Read().Inventory,CurrencyKind.ClearCube) == cubes-30 &&
@@ -171,12 +175,18 @@ internal static class QuestTownSceneTests
             That(QuestCompletionRepositoryTests.Same(before,f.Read()),"信函、子完成位和父条件整笔回滚，保留原归零接取");
             f.Sql("DROP TRIGGER maya_abort");
             var closed = Close();
+            var after = f.Read();
+            // 重选可合法补入地区每日；只移除本子任务并归零父任务，其余接取逐字段保持。
+            var expectedActive = before.ActiveMainQuests.Where(row => row.QuestId != 3610)
+                .Select(row => row.QuestId == 3249 ? row with { ConditionState = 0 } : row).ToArray();
             That(closed?.Commit is { ExperienceReward.Amount: 0, Rewards.Length: 0, Consumed.Length: 1, GoldAmount: 0 } &&
-                f.Read().Inventory.Gold == before.Inventory.Gold &&
-                f.Read().ActiveMainQuests is [{ QuestId: 3249, ConditionState: 0 }] &&
-                f.Read().CompletedQuests.Contains(3610) && !f.Read().CompletedQuests.Contains(3249) &&
-                f.Read().Inventory.Items.All(item => item.Core.ItemId != 10164786),
-                "重选恢复已归零子任务，真实消费一次信函并更新父条件，不自动发父奖励");
+                after.Inventory.Gold == before.Inventory.Gold &&
+                after.ActiveMainQuests.SequenceEqual(expectedActive) &&
+                after.ActiveMainQuests.Any(row => row.QuestId == 3249 && row.ConditionState == 0) &&
+                after.CompletedQuests.Contains(3610) && !after.CompletedQuests.Contains(3249) &&
+                after.Inventory.Items.All(item => item.Core.ItemId != 10164786),
+                "重选恢复已归零子任务，真实消费一次信函并更新父条件，不自动发父奖励；活动任务="+
+                string.Join(",",after.ActiveMainQuests.Select(row => $"{row.QuestId}:{row.ConditionState}")));
             var saved = f.Read();
             That(Close() is null && QuestCompletionRepositoryTests.Same(saved,f.Read()),"重复恢复不再扣信函或保存完成回执");
             That(Finish(f,3249).Outcome == QuestFinishOutcome.Committed && f.Read().CompletedQuests.Contains(3249),
@@ -200,7 +210,8 @@ internal static class QuestTownSceneTests
             var closed = Close();
             var saved = f.Read();
             That(closed?.Commit is { ExperienceReward.Amount: 0, Rewards.Length: 0, Consumed.Length: 0, GoldAmount: 0 } &&
-                saved.ActiveMainQuests.Length == 0 && saved.CompletedQuests.SequenceEqual(before.CompletedQuests.Append(3610).Order()) &&
+                saved.ActiveMainQuests.SequenceEqual(before.ActiveMainQuests.Where(row => row.QuestId != 3610)) &&
+                saved.CompletedQuests.SequenceEqual(before.CompletedQuests.Append(3610).Order()) &&
                 saved.Revision == before.Revision+1 && QuestCompletionRepositoryTests.Same(before with
                     { ActiveMainQuests = saved.ActiveMainQuests, CompletedQuests = saved.CompletedQuests, Revision = saved.Revision },saved),
                 "复现111父3249已完成、子3610归零：只补子归档一次，不重新扣信函或发父子奖励");

@@ -54,7 +54,14 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
         var seen = new HashSet<InventorySlot>();
         foreach (var input in request.Items)
         {
-            InventoryListType? list = input.Type switch { 0 or 2 => InventoryListType.Main, 1 => InventoryListType.Avatar, 3 or 7 => InventoryListType.Pet, _ => null };
+            // 原生02DFF2C0把来源容器号直接保存到附件Type，02DFFC20原样发送。
+            InventoryListType? list = input.Type switch
+            {
+                0 or 2 => InventoryListType.Main, 1 => InventoryListType.Avatar,
+                3 or 7 => InventoryListType.Pet, 46 => InventoryListType.Talisman, _ => null
+            };
+            if (list == InventoryListType.Talisman && input.Slot is < 0 or >= 210)
+                return MailboxError.InvalidAttachment;
             if (list is null || input.Count <= 0)
                 return MailboxError.InvalidAttachment;
             var slot = new InventorySlot(list.Value, input.Slot);
@@ -120,7 +127,7 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             return MailboxError.LimitedPeriod;
         if (template.Id != item.Core.ItemId || template.Kind != item.Core.Kind)
             return MailboxError.InvalidAttachment;
-        if (item.Core.TradeRestriction != 0)
+        if (template.PvpFreeEquipment || item.Core.TradeRestriction != 0)
             return MailboxError.NotTradable;
         string attach = Normalize(template.AttachType);
         return attach switch
@@ -247,7 +254,8 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             if (CurrencyWallet.RewardKind(item.Core.ItemId) is not null && !walletMaterial || pieces.ByPiece.ContainsKey(item.Core.ItemId))
                 return MailboxResult.Reject(MailboxError.InvalidAttachment);
             var template = items.Get(item.Core.ItemId);
-            if (template.Kind != item.Core.Kind || !walletMaterial && item.Core.Count > template.StackLimit ||
+            bool legacyRune = item.Core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
+            if (!InventoryTalismanCompatibility.AcceptsKind(item.Core.Kind, template.Kind) || !walletMaterial && !legacyRune && item.Core.Count > template.StackLimit ||
                 walletMaterial && (template.Kind != ItemKind.Material || item.ExpireTime != 0))
                 return MailboxResult.Reject(MailboxError.InvalidAttachment);
         }

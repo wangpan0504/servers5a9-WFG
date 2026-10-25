@@ -1,6 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Session;
+using DfoServer.Game.Quests;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Persistence;
@@ -16,6 +17,8 @@ internal static class DefaultSideQuestTcpTests
         Action<TcpPeer, Action<WirePacket>?> drain)
     {
         int checks = Count;
+        string autoIds = string.Join(",",resources.Quests.All.Where(QuestAutoDailyPlan.Supports).Select(q => q.Id));
+        var expectedDaily = new Dictionary<ushort,ActiveMainQuest[]>();
         var dailyStates = new Dictionary<ushort,string>();
         var diagnostics = new List<(ushort Character, ushort Quest, long Revision, byte Level, byte Job, int Active, string Reason, bool Accepted)>();
         (ushort Id, byte Level, byte Job, uint Scalar, string Suffix, bool Allowed)[] cases =
@@ -63,6 +66,7 @@ internal static class DefaultSideQuestTcpTests
             }
             That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0", created.Id) is [[0L]],
                 "隔离角色没有预填活动槽或接取身份：" + scenario.Id);
+            expectedDaily[created.Id] = QuestAutoDailyPlan.Prepare(created,resources.Quests,QuestCycle.Day(DateTimeOffset.UtcNow),true)?.ActiveAfter.ToArray() ?? [];
             string identity = "", persisted = "", nextIdentity = "", nextPersisted = "";
             using (var peer = Open(fixture, account))
             {
@@ -70,10 +74,11 @@ internal static class DefaultSideQuestTcpTests
                 That(QuestLifecycleTcpTests.List(peer.AvailableQuests, scenario.Level).Contains(scenario.Id) == scenario.Allowed,
                     "实际登录21按原等级、职业与前置筛选真实外传：" + scenario.Id + scenario.Suffix);
                 var daily = fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id);
-                bool hasDaily = scenario.Level is >=87 and <=90;
-                That(hasDaily ? daily is [[13056L,1686L,string]] : daily.Length==0,"选角按等级精确分配地轨每日，未接外传");
+                That(daily.Select(row => (Convert.ToInt32(row[0]),Convert.ToUInt32(row[1])))
+                    .SequenceEqual(expectedDaily[created.Id].Select(row => ((int)row.QuestId,row.ConditionState))),
+                    "选角按原等级与声明精确分配地区每日，不接外传");
                 dailyStates[created.Id]=Daily(created.Id);
-                ActiveProjection(packets, scenario.Id, null, hasDaily);
+                ActiveProjection(packets, scenario.Id, null, expectedDaily[created.Id]);
                 string before = State(created.Id);
                 peer.Send(31, [31, 0, (byte)scenario.Id, (byte)(scenario.Id >> 8)]);
                 if (!scenario.Allowed)
@@ -97,7 +102,7 @@ internal static class DefaultSideQuestTcpTests
                             "接取后21保留活动任务：" + scenario.Id);
                     });
                     That(refreshed, "实际31成功后刷新21");
-                    var active = fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id<>13056", created.Id);
+                    var active = fixture.Query($"SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN({autoIds})", created.Id);
                     That(active.Length == 1 && Convert.ToInt32(active[0][0]) == scenario.Id &&
                         Convert.ToUInt32(active[0][1]) == scenario.Scalar, "31真实提交唯一任务槽及原类型初值：" + scenario.Id);
                     identity = (string)active[0][2];
@@ -135,7 +140,7 @@ internal static class DefaultSideQuestTcpTests
                 var packets = Select(peer, created);
                 That(QuestLifecycleTcpTests.List(peer.AvailableQuests, scenario.Level).Contains(scenario.Id) == scenario.Allowed,
                     "实际重连21恢复本角色外传候选：" + scenario.Id + scenario.Suffix);
-                ActiveProjection(packets, scenario.Id, scenario.Allowed ? scenario.Scalar : null, scenario.Level is >=87 and <=90);
+                ActiveProjection(packets, scenario.Id, scenario.Allowed ? scenario.Scalar : null, expectedDaily[created.Id]);
                 That(Progress(created.Id) == persisted, "重连不新增接取回执、条件或完成位：" + scenario.Id + scenario.Suffix);
                 if (scenario.Allowed)
                     That(fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", created.Id, scenario.Id)
@@ -150,7 +155,7 @@ internal static class DefaultSideQuestTcpTests
                         "真实8682要求8681已完成，目标仍为400000040");
                     peer.Send(31,[31,0,234,33]); peer.Expect(1,31,[1,234,33,1,0,0,0,0]);
                     drain(peer,null);
-                    var active = fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id<>13056",created.Id);
+                    var active = fixture.Query($"SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN({autoIds})",created.Id);
                     That(active is [[8682L,1L,string]],"8681真实交付后实际31只提交8682的pending1");
                     nextIdentity = (string)active[0][2];
                     That(Guid.TryParseExact(nextIdentity,"N",out var nextAcceptance) && nextAcceptance != Guid.Empty && nextIdentity != identity &&
@@ -169,9 +174,9 @@ internal static class DefaultSideQuestTcpTests
             if (nextIdentity.Length > 0)
             {
                 using var peer = Open(fixture,account);
-                ActiveProjection(peer.Select(RoleIndex(peer.Roster,created),prepared: true,resumeTown: true,room: true),8682,1,true);
+                ActiveProjection(peer.Select(RoleIndex(peer.Roster,created),prepared: true,resumeTown: true,room: true),8682,1,expectedDaily[created.Id]);
                 That(Progress(created.Id) == nextPersisted &&
-                    fixture.Query("SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id<>13056",created.Id)
+                    fixture.Query($"SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN({autoIds})",created.Id)
                         is [[string restored]] && restored == nextIdentity,"8682真正断线后完整ACK4恢复原身份和pending1");
                 CompleteExplicitMeet(peer,created,nextIdentity,doneFor(created.Id),8682);
                 Cleanup(peer,created,account);
@@ -212,15 +217,15 @@ internal static class DefaultSideQuestTcpTests
             resumeTown: true, room: resources.Towns.IsRoom(role.Position, doneFor(role.Id)));
         HashSet<int> doneFor(ushort id) => fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0", id)
             .Select(row => checked((int)(long)row[0])).ToHashSet();
-        void ActiveProjection(WirePacket[] packets, ushort id, uint? scalar, bool daily)
+        void ActiveProjection(WirePacket[] packets, ushort id, uint? scalar, ActiveMainQuest[] daily)
         {
             byte[] body = packets.Single(packet => packet.Kind == 1 && packet.Opcode == 4).Body;
             That(body.Length == 235 && body[0] == 1 && Enumerable.Range(0,30).All(slot =>
-                U16(body,22+6*slot) == (daily && slot==0 ? 13056 : scalar.HasValue && slot == (daily?1:0) ? id : ushort.MaxValue) &&
-                U32(body,24+6*slot) == (daily && slot==0 ? 1686u : scalar.HasValue && slot == (daily?1:0) ? scalar.Value : 0u)),
+                U16(body,22+6*slot) == (slot < daily.Length ? daily[slot].QuestId : scalar.HasValue && slot == daily.Length ? id : ushort.MaxValue) &&
+                U32(body,24+6*slot) == (slot < daily.Length ? daily[slot].ConditionState : scalar.HasValue && slot == daily.Length ? scalar.Value : 0u)),
                 "实际ACK4完整三十槽独立核对QID与scalar、空槽FFFF/0：" + id);
         }
-        string Daily(ushort id) => fixture.Snapshot("SELECT slot,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=13056",id);
+        string Daily(ushort id) => fixture.Snapshot($"SELECT slot,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id IN({autoIds})",id);
         void NoCompletion(ushort id, ushort quest)
         {
             That(Daily(id)==dailyStates[id],"外传操作完整保留原每日任务槽、进度和身份");
@@ -251,7 +256,7 @@ internal static class DefaultSideQuestTcpTests
             peer.Travel(arrival!.Town,arrival.Area,arrival.X,arrival.Y,from.Town,from.Area,
                 returnTown: questId == 8681 ? from.Town : null);
             peer.Send(33,[33,0,low,high,0,0]); peer.Expect(1,33,[1,low,high,0,0,0,0]); peer.Barrier();
-            That(fixture.Query("SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id<>13056",role.Id)
+            That(fixture.Query($"SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN({autoIds})",role.Id)
                 is [[0L,string identity]] && identity == acceptance,"真实NPC会面沿恢复的原AcceptanceId归零");
             NoCompletion(role.Id,questId);
             string met = State(role.Id);
@@ -268,7 +273,7 @@ internal static class DefaultSideQuestTcpTests
             That(fixture.Query("SELECT q.acceptance_id,q.condition_type,q.event_id IS NULL,q.instance_id IS NULL,q.revision=c.revision,q.after_experience=c.experience,q.after_level=c.level,q.gold_amount=c.gold-$p1,q.rewards,q.consumed FROM character_quest_completion_receipts q JOIN characters c ON c.id=q.character_id WHERE q.character_id=$p0 AND q.quest_id=$p2",role.Id,gold,questId)
                 is [[string receipt,4L,1L,1L,1L,1L,1L,1L,"[]","[]"]] && receipt == acceptance,
                 "实际完成回执、成长与金币原子提交，无伪造清图或额外物品");
-            That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id<>13056",role.Id) is [[0L]] && Daily(role.Id)==dailyStates[role.Id] &&
+            That(fixture.Query($"SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN({autoIds})",role.Id) is [[0L]] && Daily(role.Id)==dailyStates[role.Id] &&
                 fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id IN(8681,8682) ORDER BY quest_id",role.Id)
                     .Select(row => (long)row[0]).SequenceEqual(questId == 8681 ? [8681L] : [8681L,8682L]),
                 "每次只关闭和完成实际交付任务，不自动完成relation");

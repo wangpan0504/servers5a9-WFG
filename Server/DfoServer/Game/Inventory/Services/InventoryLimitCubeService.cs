@@ -134,7 +134,9 @@ internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCata
                 EnchantCardId = target.Core.EnchantCardId,
                 EnchantUpgrade = target.Core.EnchantUpgrade,
                 SealFlag = target.Core.SealFlag,
-                EpicExchangeOrigin = target.Core.EpicExchangeOrigin
+                EpicExchangeOrigin = target.Core.EpicExchangeOrigin,
+                // 实例位随转换保留：交换资格与已交换次数属于实例，不属于模板。
+                Extension119 = target.Core.Extension119
             };
         var grant = InventoryRewardGrantService.TryGrantCore(character with { Inventory = paid },
             outputCore, selected.Template, pieces, now);

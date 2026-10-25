@@ -72,7 +72,7 @@ internal sealed partial class GameSession
     {
         // 返回选角后的迟到自动组合请求沿已有拒绝路径处理，不创建排列窗口或关闭连接。
         var captured = owner.Execute(() => (Character: Selected,
-            SelectionEpoch, Phase, Allowed: pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
+            SelectionEpoch, Phase, Allowed: pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext && Selected?.Position is not {Town:10,Area:4}));
         if (!captured.Allowed || captured.Character is not { } character ||
             character.Job != 9 || !character.Learning.Initialized || context > 1)
             return new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>()));
@@ -117,7 +117,7 @@ internal sealed partial class GameSession
         var captured = owner.Execute(() =>
         {
             var character = Selected;
-            bool allowed = character is not null && pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext;
+            bool allowed = character is not null && pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext && Selected?.Position is not {Town:10,Area:4};
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             bool autoCombo = false;
             if (allowed && comboContext is byte expected && autoComboPending is { } pending)
@@ -180,7 +180,7 @@ internal sealed partial class GameSession
     {
         // 与连招保存同因：返回选角后的迟到 C2S28 属于可拒绝请求，不能抛出关闭连接。
         var captured = owner.Execute(() => (Character: Selected, SelectionEpoch, Phase,
-            Allowed: Selected is not null && pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext));
+            Allowed: Selected is not null && pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext && Selected?.Position is not {Town:10,Area:4}));
         if (!captured.Allowed || captured.Character is not { } character)
             return new(SkillLearningFailure.Unsupported, null);
         var result = SkillLayout.Move(character.Job, character.Learning, command, definition);

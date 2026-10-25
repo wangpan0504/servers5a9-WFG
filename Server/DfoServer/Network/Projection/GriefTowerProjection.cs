@@ -13,6 +13,7 @@ internal static class GriefTowerProjection
         if (grief is { } state)
             await context.Notify(NotiPacketType.TOWER_DUNGEON_CLEAR_INFO,GriefTowerPackets.ClearState(state.ClearedToday),
                 "grief_tower_clear_state",guard);
+        await DungeonEnterCountProjection.RefreshAsync(context, catalog, guard, onlyForSelection: true);
         await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
             DungeonPackets.EmptySelectNotice(legendDungeon,grief?.Layer ?? 0,context.Session.DespairSelectionLayer()),eventName,guard);
     }

@@ -38,6 +38,9 @@ internal static class SelfTestRunner
         AmplificationTests.RunCore();
         AmplifyUpgradeTests.RunCore();
         MedalUpgradeTests.RunCore();
+        TalismanTests.RunCore();
+        TalismanProtocolTests.RunCore();
+        TalismanInventoryTests.RunCore();
         CreatureSkinTests.RunCore();
         InventoryExpansionTests.RunCore();
         CreatureEggTests.RunCore();
@@ -46,6 +49,7 @@ internal static class SelfTestRunner
         BoosterSelectionTests.RunCore();
         AvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
+        GuildCompoundTests.RunCore();
         EquipmentEmblemTests.RunCore();
         TextureChangeTests.RunCore();
         WeaponSkinTests.RunCore();
@@ -96,6 +100,8 @@ internal static class SelfTestRunner
         GuildPermitHandlerTests.Run();
         GuildCommitTests.Run();
         QuestFixedRewardTests.Run();
+        QuestMailDeclarationTests.Run();
+        QuestEligibilityMailTests.Run();
         QuestProtocolTests.Run();
         CollectBoxTests.RunCore();
         ClearAvatarTests.RunCore();
@@ -113,6 +119,7 @@ internal static class SelfTestRunner
         QuestCatalogTests.RunCore();
         QuestHuntProgressTests.Run();
         QuestAutoDailyTests.RunCore();
+        EpicProductionTests.RunCore();
         QuestHarlemExpTests.RunCore();
         QuestStateProgressTests.RunCore();
         QuestDungeonClearProgressTests.RunCore();
@@ -149,6 +156,15 @@ internal static class SelfTestRunner
         QuestDropTests.RunCore();
         QuestClearEligibilityTests.Run();
         QuestRewardParameterTests.Run();
+        PvpTrainingProgressTests.Run();
+        PvpPrivateCharacterTests.Run();
+        QuestDailyMissionTests.RunCore();
+        PvpTrainingWireTests.Run();
+        PvpTrainingSkillsTests.Run();
+        PvpArcadeRoundTests.Run();
+        PvpTrainingSessionTests.Run();
+        PvpArcadeCatalogTests.Run();
+        PvpPracticeComboCatalogTests.Run();
         QuestCompletionPlanTests.Run();
         CharacterAttributeResourceTests.RunCore();
         AuthenticationTests.Run();
@@ -265,12 +281,14 @@ internal static class SelfTestRunner
         PreyChannelTests.Run(towns, pvf, characters, itemResources);
         SpecialAreaChannelTests.Run(towns, pvf);
         CharacterCreationTests.Run(towns, characters);
+        PvpPrivateCharacterTests.RunResources(towns,pvf,characters,itemResources,sharedSkills);
         ClearAvatarTests.RunResources(characters, itemResources.Items);
         CharacterAttributeResourceTests.RunResources(characters);
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         CashShopTests.Run(towns, characters, itemResources);
         DfoServer.Testing.Inventory.PvfItemCompatTests.Run(pvf, itemResources);
+        TalismanResourceTests.Run(pvf, itemResources.Items);
         PremiumContractTests.RunResources(itemResources, pvf);
         GrowthCubeContractTests.RunResources(itemResources,towns,characters);
         LimitCubeTests.RunResources(itemResources);
@@ -283,6 +301,7 @@ internal static class SelfTestRunner
         InventoryExpansionTests.RunResources(itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         EmblemCompoundTests.RunResources(itemResources);
+        GuildCompoundTests.RunResources(itemResources);
         AvatarCompoundTests.RunResources(itemResources);
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
         MagicBoxTests.Run(towns, itemResources);
@@ -307,6 +326,8 @@ internal static class SelfTestRunner
         DisjointTests.Run(towns, characters, itemResources);
         AvatarDisjointTests.RunResources(towns, itemResources);
         EpicPieceTests.Run(towns, characters, itemResources);
+        EpicExchangeTests.Run(towns, characters, itemResources);
+        EpicProductionTests.RunResources(pvf,itemResources);
         MaterialExchangeTests.Run(towns, characters, itemResources);
         BoosterTests.Run(towns, characters, itemResources);
         BoosterSelectionTests.Run(towns, characters, itemResources);
@@ -338,6 +359,8 @@ internal static class SelfTestRunner
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
         await DungeonSelectionReturnTests.RunAsync(towns, characters, itemResources);
         QuestCatalogTests.Run(pvf);
+        PvpArcadeCatalogTests.RunResources(pvf);
+        PvpPracticeComboCatalogTests.RunResources(pvf);
         QuestHarlemExpTests.Run(pvf);
         QuestHarlemExpTests.RunSeeking(pvf, itemResources);
         QuestHarlemExpTests.RunElite(pvf, itemResources);
@@ -349,6 +372,13 @@ internal static class SelfTestRunner
         QuestConnectionCatalogTests.Run(pvf);
         QuestCharacterRewardTests.Run(towns,pvf,characters,itemResources);
         QuestSceneTests.Run(towns, pvf, characters, itemResources,sharedQuests,sharedSkills);
+        QuestDailyMissionTests.Run(towns,pvf,characters,itemResources);
+        QuestDedicatedCoverageTests.Run(pvf,itemResources);
+        QuestHiddenNpcDialogueTests.Run(towns,pvf,characters,itemResources);
+        await QuestEpisodeChainTests.RunAsync(towns,pvf,characters,itemResources);
+        OperationHopeTests.Run(pvf);
+        OperationHopeRewardTests.Run(pvf,itemResources);
+        OperationHopeSessionTests.Run(pvf,itemResources);
         MiddleQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         MetroQuestEntryCoverageTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);

@@ -4,6 +4,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Mailbox;
 using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
@@ -18,6 +19,7 @@ internal static class MailboxPersistenceTests
     {
         int before = TestCheck.Count;
         Transfer();
+        TalismanTransfer();
         Rollback();
         ClaimDeadline();
         ExpirationAndStorage();
@@ -83,6 +85,64 @@ internal static class MailboxPersistenceTests
         TestCheck.That(f.Query("SELECT count(*) FROM mailbox_attachments WHERE claimed=0") is 0L &&
             f.Query("SELECT count(*) FROM character_inventory_items i WHERE NOT EXISTS(SELECT 1 FROM character_inventory_slots s WHERE s.item_uid=i.item_uid) AND NOT EXISTS(SELECT 1 FROM mailbox_attachments m WHERE m.item_uid=i.item_uid)") is 0L,
             "领取结束无孤立或重复资产 owner");
+        f.Integrity();
+    }
+
+    static void TalismanTransfer()
+    {
+        using var f = new Fixture();
+        const int stoneId = 100400002, runeId = 10605203;
+        var stoneTemplate = new ItemTemplate(stoneId, ItemKind.Talisman, 34, 95, 0, 1, 0, 3, 97, "[free]", 1, 0, "stone");
+        var runeTemplate = new ItemTemplate(runeId, ItemKind.Rune, 0, 95, 0, 999, 0, 2, 1, "[free]", 1, 0, "rune");
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate> { [stoneId] = stoneTemplate, [runeId] = runeTemplate });
+        catalog.PrefillTalismans([new(stoneTemplate, [1], 9)]);
+        catalog.PrefillRunes([new(runeTemplate, [1], 9, RuneCamp.Terracotta, 2)]);
+        var limits = new GoldLimitCatalog("[gold limit from level]\n0 1000000000\n[/gold limit from level]");
+        var pieces = new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]");
+        var service = new MailboxService(f.Repository, catalog, limits, pieces);
+        var stoneCore = new TalismanSocketColors(1, 2, 3).Apply(new(stoneId, ItemKind.Talisman, 999999998)) with
+        { Extension97 = 123, Rune = 0x4321, Extension119 = 7 };
+        var runeCore = new ItemCore(runeId, ItemKind.Rune, 5) { Extension97 = 456 };
+        var inventory = new InventorySnapshot([
+            new(0, new(InventoryListType.Talisman, 0), stoneCore),
+            new(0, new(InventoryListType.Talisman, 70), runeCore)], Gold: 500_000);
+        f.Sender = f.Repository.CommitInventory(f.SenderOwner, f.Sender, new(f.Sender.Inventory, inventory, "fixture_talisman"));
+        var stone = f.Sender.Inventory.Find(new(InventoryListType.Talisman, 0))!;
+        var rune = f.Sender.Inventory.Find(new(InventoryListType.Talisman, 70))!;
+        var request = new MailboxSendRequest("Receiver", 0,
+            [new(46, 0, stoneId, 1), new(46, 70, runeId, 2)], "talisman");
+        var now = DateTimeOffset.FromUnixTimeSeconds(f.Now);
+        That(service.PlanSend(f.Sender, f.SenderOwner.Account, request, now, out var sendPlan) == MailboxError.None &&
+            sendPlan!.Attachments[0].Uid == stone.Uid && sendPlan.Attachments[1].Uid == 0 &&
+            sendPlan.Inventory.After.Find(rune.Position)?.Core.Count == 3,
+            "容器46寄送规划保留护石完整实例，符文分堆不重复原UID");
+        var loadedRequest = request with { Items = [new(46, 210, runeId, 1)] };
+        That(service.PlanSend(f.Sender, f.SenderOwner.Account, loadedRequest, now, out var rejected) == MailboxError.InvalidAttachment &&
+            rejected is null, "邮件不能绕过专用卸载直接寄走已装符文");
+        string before = f.Snapshot();
+        f.Execute("CREATE TRIGGER reject_talisman_mail BEFORE INSERT ON mailbox_attachments BEGIN SELECT RAISE(ABORT,'fixture'); END");
+        Reject<SqliteException>(() => service.Send(f.SenderOwner, f.Sender, sendPlan!), "护石邮件附件写入失败必须回滚");
+        f.Execute("DROP TRIGGER reject_talisman_mail");
+        That(f.Snapshot() == before, "护石邮件SQL失败不扣资产、金币或revision，不留邮件及审计");
+        var sent = service.Send(f.SenderOwner, f.Sender, sendPlan!);
+        That(sent.Accepted && sent.Character!.Inventory.Items is [{ Core.Count: 3 }] &&
+            sent.Character.Inventory.Gold == 497_900, "护石与符文寄送同事务扣除实物和一次邮费");
+        f.Sender = sent.Character!;
+        var mail = f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, f.Now).Entries.Single();
+        var ids = mail.Attachments.Select(item => item.ClaimId).ToImmutableArray();
+        That(service.PlanClaim(f.ReceiverOwner, f.Receiver, ids, now, out var claimPlan) == MailboxError.None,
+            "护石符文邮件通过正式领取规划");
+        var claimed = service.Claim(f.ReceiverOwner, f.Receiver, claimPlan!);
+        That(claimed.Accepted && claimed.Character!.Inventory.Find(stone.Position) is { } receivedStone &&
+            receivedStone.Uid == stone.Uid && receivedStone.Core == stoneCore &&
+            claimed.Character.Inventory.Find(rune.Position) is { } receivedRune &&
+            receivedRune.Uid != rune.Uid && receivedRune.Core == runeCore with { Value = 2 } &&
+            claimed.Character.Inventory.Items.All(item => item.Position.List == InventoryListType.Talisman),
+            "邮件领取自动进入两种专用分页，完整核心与资产身份守恒");
+        f.Receiver = claimed.Character!;
+        That(JsonSerializer.Serialize(new CharacterRepository(f.Path).LoadCharacter(f.ReceiverOwner, 0)) == JsonSerializer.Serialize(f.Receiver),
+            "容器46邮件领取重开库完整恢复，不回普通背包");
         f.Integrity();
     }
 

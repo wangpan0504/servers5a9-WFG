@@ -8,7 +8,7 @@ internal static class InventoryLockService
     public static InventoryResult Plan(InventorySnapshot before, InventorySlot slot, InventoryLockOperation operation,
         ItemCatalog catalog, long utcSeconds)
     {
-        if (slot.List is not (InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Equipment or InventoryListType.PersonalCargo or InventoryListType.AccountCargo) ||
+        if (slot.List is not (InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.Equipment or InventoryListType.PersonalCargo or InventoryListType.AccountCargo) ||
             slot.Index < 0 || !Enum.IsDefined(operation))
             return InventoryResult.Reject(19);
         if (slot.List == InventoryListType.PersonalCargo && slot.Index >= before.CargoCapacity ||

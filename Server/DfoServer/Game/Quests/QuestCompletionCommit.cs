@@ -18,6 +18,7 @@ internal sealed record QuestCompletionCommit(Character Character, QuestClearRece
     public uint MailedGoldAmount { get; init; }
     public uint DirectGoldAmount => GoldAmount - MailedGoldAmount;
     public uint? GoldMailId { get; init; }
+    public uint? ResourceMailId { get; init; }
     public uint GainedExperience { get; init; }
     public QuestStagePlan? StagePlan { get; init; }
     public uint OrdinaryExperience { get; init; }

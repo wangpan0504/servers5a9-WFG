@@ -15,7 +15,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
     SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
-    CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null)
+    CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null,
+    EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
@@ -57,6 +58,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Player(c, stats.Compute(c), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
+        await DungeonEnterCountProjection.RefreshAsync(context, dungeons);
         if (c.Guild is { } membership)
             await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
@@ -81,6 +83,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.SRC_AVATAR_INFO_OF_CLONE, ClearAvatarPackets.Sources(c.Inventory), "clear_avatar_sources_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Pet), "pet_inventory_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.GuildMedal), "medal_inventory_initialize");
+        await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(c.Inventory, DfoServer.Game.Inventory.Models.InventoryListType.Talisman), "talisman_inventory_initialize");
         if (Math.Max(c.TeleportCooldowns.PartyAuraUntil, Math.Max(c.TeleportCooldowns.AuraUntil, c.TeleportCooldowns.UpgradeAuraUntil)) >
             timer.GetUtcNow().ToUnixTimeMilliseconds())
             await context.Notify(NotiPacketType.AURA_TYPE_COOLTIME, TeleportPackets.Cooldown(c, timer.GetUtcNow().ToUnixTimeMilliseconds()),
@@ -91,6 +94,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await DungeonCardMembershipProjection.RefreshAsync(context, frozenAt: appearanceTime);
         await context.Notify(NotiPacketType.MILEAGE_DATA, MileagePackets.State(c.Inventory.AccountWallet), "account_mileage_initialize");
         await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(c.Inventory.EpicPieces, pieces), "epic_book_initialize");
+        if (epicProduction is not null)
+            await epicProduction.InitializeAsync(context);
         if (collectBoxes is not null)
             await collectBoxes.InitializeAsync(context);
         // #233 实验：下发今日强袭模式索引，避免客户端以默认0xFF判定“今天无法入场”。
@@ -112,6 +117,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // NOTI1153：技能窗职业变更菜单的已变更次数(报价索引)与等级(012A6DAA 等级>=50拒绝)。
         await context.Notify(NotiPacketType.CHARACTER_MANAGE_INFO,
             GrowUpChangePackets.ManageInfo(context.Session.GrowUpChangeCount(), c.Level), "growup_change_info");
+        await TrainingSkillsAsync(context, initializing: true);
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
         // EVENT_INFO 整表替换客户端事件集合：赛丽亚 2037 之外，加入当前处于 GM 团本时段的卡事件（282/2449/414），去掉团队频道卡的「非可入场时间」。
         await context.NotifyProtected(NotiPacketType.EVENT_INFO,
@@ -195,6 +201,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (detached is null)
             return;
         await detached;
+        await TrainingSkillsAsync(context, canSend: CanSend);
         await LocationAsync(context, receipt.Character, canSend: CanSend);
         bool joined = context.Owner.Execute(() =>
         {
@@ -209,6 +216,15 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await context.Notify(NotiPacketType.SHOW_EFFECT, arrival, "teleport_aura_arrival", CanSend);
         if (joined && CanSend() && parties is not null)
             parties.Publish(parties.SceneChanged(context.Session));
+    }
+
+    // 在地区切换触发客户端训练对象绑定前，先给出独立技能快照；不覆盖普通 NOTI19 双树。
+    internal static async Task TrainingSkillsAsync(GameConnectionContext context, bool initializing = false, Func<bool>? canSend = null)
+    {
+        if (context.Session.ReadPvpTrainingSkills(initializing) is not {State: { } state, Receipt: { } receipt}) return;
+        bool Guard() => (canSend?.Invoke() ?? true) && context.Session.CanPublishPvpTrainingSkills(receipt, initializing);
+        await context.Notify(NotiPacketType.ARCADE_MODE_SKILL_USE_STATUS, [0], "pvp_training_skill_status", Guard);
+        await context.Notify(NotiPacketType.ARCADE_MODE_SKILL_DATA, PvpTrainingPackets.Skills(state), "pvp_training_skill_snapshot", Guard);
     }
 
     public void Join(GameConnectionContext context)

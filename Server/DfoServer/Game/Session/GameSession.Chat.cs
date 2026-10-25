@@ -60,7 +60,7 @@ internal sealed partial class GameSession
         Guid instance = Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement
             ? formalDungeon?.Run.Snapshot.Identity.InstanceId ?? Guid.Empty
             : Guid.Empty;
-        return new(ChannelEntry?.Identity ?? default, town.Town, town.Area, town.Map, town.IsRoom ? owner.Account : null, instance);
+        return new(ChannelEntry?.Identity ?? default, town.Town, town.Area, town.Map, town.OwnerKey(owner.Account,character.Id), instance);
     }
 
     /// <summary>

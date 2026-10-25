@@ -72,8 +72,74 @@ internal static class QuestAutoDailyTests
             var claimed=selected with { ActiveMainQuests=[],CompletedQuests=[13056],QuestDailyClaims=selected.QuestDailyClaims.SetItem(13056,day) };
             That(QuestAutoDailyPlan.Prepare(claimed,catalog,day,true) is null && QuestAutoDailyPlan.Prepare(claimed,catalog,tomorrow,true) is not null,
                 "已领奖当天不再分配，下一周期恢复资格");
-            foreach(var unsupported in new[]{quest with { Id=13057 },quest with { IntData=[-4,38,-1,-1,150,-4,39,-1,-3,3] },quest with { IntData=[-4,39,-1,-1,512,-4,39,-1,-3,3] }})
-                That(!QuestAutoDailyPlan.Supports(unsupported),"不扩大到其它任务、区域或越界数量");
+            foreach(var unsupported in new[]{quest with { IntData=[-4,0,-1,-1,150,-4,0,-1,-3,3] },quest with { IntData=[-4,38,-1,-1,150,-4,39,-1,-3,3] },quest with { IntData=[-4,39,-1,-1,512,-4,39,-1,-3,3] }})
+                That(!QuestAutoDailyPlan.Supports(unsupported),"拒绝未知区域、互相矛盾的区域或越界数量");
+            var regional = quest with { Id = 13031, IntData = [-4,6,-1,-1,100,-4,6,-1,-3,3],
+                Definition = quest.Definition! with { Dungeons = [new(40,-1)] } };
+            That(QuestAutoDailyPlan.Hunt(regional) && QuestHuntProgress.Initial(regional) == 1636 &&
+                QuestAutoDailyPlan.MatchesDungeon(regional,40,0) && !QuestAutoDailyPlan.MatchesDungeon(regional,310,0),
+                "同形地区每日按自身数量初始化，仅认自身地下城，不借地轨范围");
+            That(!QuestAutoDailyPlan.Hunt(regional with { Definition = regional.Definition! with { Dungeons = [] } }) &&
+                !QuestAutoDailyPlan.Hunt(regional with { CompleteNpc = 1 }) &&
+                !QuestAutoDailyPlan.Hunt(regional with { RewardType = "[unknown]" }),
+                "无明确地下城或专用领奖合同不同的每日保持拒绝");
+            // 独立列举PVF数量及wire常量，不用生产编码结果构造预期。
+            foreach (var (ordinary, encoded) in new[] {(100,1636),(110,1646),(120,1656),(130,1666),(140,1676),(150,1686)})
+            {
+                var counted = regional with { IntData = [-4,6,-1,-1,ordinary,-4,6,-1,-3,3] };
+                var countedCatalog = new QuestCatalog(new() { [counted.Id] = counted });
+                var countedActive = new ActiveMainQuest(0,checked((ushort)counted.Id),checked((uint)encoded)) { AcceptanceId = Guid.NewGuid() };
+                var countedEntry = entry with { DungeonId = 40, QuestAcceptances = [countedActive] };
+                That(QuestHuntProgress.Initial(counted) == encoded && (encoded & 511) == ordinary && (encoded >> 9) == 3,
+                    "各地区原数量独立常量与双计数逆解一致："+ordinary);
+                var remaining = countedActive;
+                // 首领先减一次，再逐个普通，最后剩余首领，验证双通道互不借位。
+                remaining = QuestHuntProgress.MonsterDeath([remaining],countedEntry,countedCatalog,monster with {SpawnType=3}).Single();
+                That(remaining.ConditionState == ordinary+1024 && (remaining.ConditionState & 511) == ordinary &&
+                    (remaining.ConditionState >> 9) == 2,"首领单步只递减高位计数");
+                for (int n=1;n<=ordinary;n++)
+                {
+                    remaining = QuestHuntProgress.MonsterDeath([remaining],countedEntry,countedCatalog,monster).Single();
+                    That(remaining.ConditionState == ordinary-n+1024 && (remaining.ConditionState >> 9) == 2,
+                        "普通计数逐个下降且保留两次首领");
+                }
+                for (int n=1;n<=2;n++)
+                {
+                    remaining = QuestHuntProgress.MonsterDeath([remaining],countedEntry,countedCatalog,monster with {SpawnType=3}).Single();
+                    That(remaining.ConditionState == (2-n)*512 && (remaining.ConditionState & 511) == 0,
+                        "普通归零后首领计数独立归零");
+                }
+            }
+            var regionalCatalog = new QuestCatalog(new() { [regional.Id] = regional });
+            var regionalActive = new ActiveMainQuest(2,13031,1600) { AcceptanceId = Guid.NewGuid() };
+            var regionalCharacter = selected with { ActiveMainQuests = [regionalActive] };
+            That(QuestAutoDailyPlan.Prepare(regionalCharacter,regionalCatalog,day,true) is null,
+                "地区每日同日重连保留已有数量和接取身份");
+            var regionalReset = QuestAutoDailyPlan.Prepare(regionalCharacter,regionalCatalog,tomorrow,true)!;
+            That(regionalReset.ActiveAfter is [{ QuestId:13031,ConditionState:1636 }] &&
+                regionalReset.ActiveAfter[0].AcceptanceId != regionalActive.AcceptanceId &&
+                QuestHuntProgress.MonsterDeath(regionalReset.ActiveAfter,entry with { DungeonId = 40,
+                    QuestAcceptances = [regionalActive] },regionalCatalog,monster).Single() == regionalReset.ActiveAfter[0],
+                "地区每日跨日重建自身计数且拒绝旧Run身份推进");
+            var recommended = QuestEligibilityTests.Quest(8691) with { Grade = "[auto daily mission]",
+                Condition = "[condition under clear]", SubType = 17, IntData = [-1,-1,3], CompleteNpc = -1,
+                MinimumLevel = 1, MaximumLevel = 99 };
+            var mixedCatalog = new QuestCatalog(new() { [quest.Id] = quest, [recommended.Id] = recommended });
+            var addition = QuestAutoDailyPlan.Prepare(renewed,mixedCatalog,tomorrow,true)!;
+            var combined = repository.AdvanceQuestCycle(owner,renewed,tomorrow,addition);
+            That(combined.ActiveMainQuests.Length == 2 && combined.ActiveMainQuests.Single(row => row.QuestId == 13056) ==
+                renewed.ActiveMainQuests.Single() && combined.ActiveMainQuests.Select(row => row.Slot).Distinct().Count() == 2,
+                "新增推荐每日与已有地轨每日独立占槽，不重置旧任务身份或进度");
+            int nextDay = QuestCycle.Day(DateTimeOffset.UtcNow.AddDays(2));
+            var combinedReset = QuestAutoDailyPlan.Prepare(combined,mixedCatalog,nextDay,true)!;
+            Sql("CREATE TRIGGER daily_second_abort AFTER INSERT ON character_active_main_quests WHEN NEW.quest_id=13056 BEGIN SELECT RAISE(ABORT,'second daily rollback'); END");
+            Reject<SqliteException>(() => repository.AdvanceQuestCycle(owner,combined,nextDay,combinedReset), "多个每日第二槽插入失败");
+            That(QuestCompletionRepositoryTests.Same(combined,repository.LoadCharacter(owner,0)), "跨日多个每日删除和重建一起回滚");
+            Sql("DROP TRIGGER daily_second_abort");
+            var bothRenewed = repository.AdvanceQuestCycle(owner,combined,nextDay,combinedReset);
+            That(bothRenewed.ActiveMainQuests.Length == 2 && bothRenewed.ActiveMainQuests.All(row =>
+                row.AcceptanceId != combined.ActiveMainQuests.Single(old => old.QuestId == row.QuestId).AcceptanceId),
+                "多个每日同事务跨日换接取身份");
             Console.WriteLine($"PASS {Count-checks} 地轨自动每日兼容规则、真实周期事务和旧副本隔离断言");
             void Sql(string sql) { using var db=new SqliteConnection("Data Source="+Path.Combine(root,"game.db")+";Pooling=False"); db.Open(); using var c=db.CreateCommand();c.CommandText=sql;c.ExecuteNonQuery(); }
         }

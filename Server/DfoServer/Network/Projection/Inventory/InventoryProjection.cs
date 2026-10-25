@@ -45,7 +45,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             // 与登录全量同一套编码：清空条目为目标 slot + itemId=-1，因此解引用走既有 Delta 语义，不手搓包体。
             changedSlots = changedSlots
                 .Concat(current.Inventory.Items.Where(item => item.Position.List is InventoryListType.Main or InventoryListType.Avatar or
-                    InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.PersonalCargo).Select(item => item.Position))
+                    InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.PersonalCargo).Select(item => item.Position))
                 .Concat(CurrencyPackets.VirtualSlots.Select(slot => new InventorySlot(InventoryListType.Main, slot)))
                 .Distinct().ToArray();
         }
@@ -68,6 +68,14 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Avatar), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Pet), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.GuildMedal), "inventory_committed_full_list", CanSend);
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
+        }
+        else if (plan.Reason == "rune_box_open")
+        {
+            // CMD27确认后客户端立即读取奖励容器：主背包补权威全量，容器46按整表重载，
+            // 只发差量会留下客户端预置的奖励槽。
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_committed_full_list", CanSend);
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
         }
         else foreach (var list in slots.Select(slot => slot.List).Where(list => !mainExpansionChanged || list != InventoryListType.Main).Distinct().Order())
         {
@@ -121,6 +129,10 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             if (current.Inventory.AvatarPresets.Find(presetSlot) is { } committedPreset)
                 await context.Notify(NotiPacketType.UPDATE_AVATAR_PRESET, AvatarPresetPackets.Update(committedPreset),
                     "avatar_preset_content_committed", CanSend);
+        // 护石孔里的符文（容器 46 的 210–215）不改变角色外观，也不进属性计算：客户端 0x067B/0x067C/0x06CE
+        // 回执自己完成 210–212→装备键 34、213–215→装备键 35 的联动（0069A170/0069A4A0），服务端不需要补发本人
+        // USERINFO。补发的 USERINFO 会走 0267C4F0→023C3A90 重灌六符文向量并触发护石面板刷新（00698B70），
+        // 是图鉴符文页在按技能筛选时退回「所有技能」的唯一未排除触发路径（#747）；符文变化只发容器 46 差量。
         bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
         bool weaponSkinChanged = plan.Before.Skins.Selected != current.Inventory.Skins.Selected;
         if (refreshEquipment && (equipmentChanged || weaponSkinChanged || plan.EquipmentSlotFlagsAfter is not null))
@@ -196,6 +208,21 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         await SkillSwitchInventoryProjection.RefreshInventoryAsync(context, receipt, plan.Before);
         if (creatures is not null && !inPlaceCreature && receipt.Phase == SessionPhase.Town && changedSlots.Contains(creatureSlot))
             await creatures.QuestsChangedAsync(context, plan.Before, current, CanSend);
+    }
+
+    // 拒绝路径没有提交计划，客户端却已先移除所选材料；按当前已提交快照整列重发该容器。
+    // 守卫与提交刷新同一套：选角代数、阶段或角色实例变化后，迟到请求不再发布。
+    public async Task RefreshListAsync(GameConnectionContext context, InventoryListType list, string action)
+    {
+        var (character, epoch, phase) = context.Owner.Execute(() =>
+            (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        if (character is null)
+            return;
+        bool CanSend() => context.Owner.Execute(() => context.Session.SelectionEpoch == epoch &&
+            context.Session.Phase == phase && ReferenceEquals(context.Session.Selected, character));
+        if (!CanSend())
+            return;
+        await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(character.Inventory, list), action, CanSend);
     }
 
     public static async Task RestoreLocksAsync(GameConnectionContext context, InventorySnapshot inventory,

@@ -59,7 +59,7 @@ internal static class GriefTowerClearTests
                 var before=repository.ReadGriefTower(owner,character.Id);
                 var admission=new GriefTowerAdmission(before,new(true,"fixture",20261023,1),5115);
                 character=repository.CommitDungeonEntry(owner,character,monsters.NextObjectKey,
-                    new(null,0,run!.Snapshot.Identity,map.Id,Grief:admission));
+                    new(null,0,run!.Snapshot.Identity,map.Id,Grief:admission)).Character;
                 var progress=repository.ReadGriefTower(owner,character.Id);
                 run.CompleteLoading(run.Snapshot.Identity,Guid.NewGuid());
                 foreach (var monster in monsters.Monsters.Where(row=>row.CanReportDeath))

@@ -13,7 +13,18 @@ internal static class CharacterSelection
         TownCatalog towns, IReadOnlySet<int> completed, GoldLimitCatalog? goldLimits, bool resumeTown = false,
         ItemCatalog? items = null, TimeProvider? clock = null, ChannelEntry? channel = null) => owner.Execute(() =>
     {
-        if (resumeTown)
+        if (character.IsPvpPrivate)
+        {
+            // 专用角色没有普通城镇入口；重登仍使用决斗地区，不能先落共享赛丽亚房间。
+            if (channel?.Type != 24) throw new InvalidDataException("专用角色不能在非决斗频道选角");
+            var decision=ChannelAreaLanding.DecideArea(towns,10,0,character.Level,completed);
+            var landing=decision.Spot ?? throw new InvalidDataException("专用角色决斗落点不可用");
+            if (resumeTown && character.Position.Town==10 && towns.Areas.TryGetValue((10,character.Position.Area),out var pvpArea) &&
+                pvpArea.Map(completed).Error is null) landing=character.Position;
+            if(character.Position!=landing || character.Return!=landing)
+                character=repository.Save(owner,character,landing,landing);
+        }
+        else if (resumeTown)
         {
             // 换频道保留已经提交的城镇快照，不借重连传送到新区域，也不覆盖原返回地区。
             if (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area)
@@ -38,6 +49,10 @@ internal static class CharacterSelection
                 character = repository.Save(owner, character, towns.Room, back);
         }
         // 每一步使用上一笔实际提交的快照；无变化不写库，后续失败不重放已提交的清理。
+        var talismanCompatibility = InventoryTalismanCompatibility.Plan(character, items);
+        // 空间不足只延后迁移，旧分类与原位置都不改；不能为新增玩法阻止已有角色登录。
+        if (talismanCompatibility.Accepted)
+            character = InventoryService.Commit(repository, owner, character, talismanCompatibility);
         character = InventoryService.Commit(repository, owner, character,
             InventoryExpiryService.RepairZeroPeriod(character.Inventory, items));
         character = InventoryService.Commit(repository, owner, character,

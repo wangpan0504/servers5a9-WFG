@@ -33,8 +33,9 @@ internal sealed record HarlemHellEpicRules
 
 internal sealed class HarlemHellEpicDropPolicy
 {
-    public const string Rule = "harlem-hell-epic-local-v4";
+    public const string Rule = "harlem-hell-epic-local-v5";
     public const string RareRule = "harlem-starry-rare-extra-local-v1";
+    public const int WhiteBossId = 109007097;
     public const int Area = 54;
     public const int NormalList = 1;
     public const int CosmoList = 2;
@@ -71,6 +72,9 @@ internal sealed class HarlemHellEpicDropPolicy
         if (Cosmo is not null && ((Rules.CosmoSuperPermille > 0 && Super is null) ||
             (Rules.CosmoTayberrsPermille > 0 && Tayberrs is null)))
             throw new InvalidDataException("启用超星空条件分支须完整装配对应候选池");
+        if (Cosmo is not null && Tayberrs is null && cosmo?.BossRooms.Values.Any(room =>
+            room.Monsters.Any(monster => monster.MonsterId == WhiteBossId)) == true)
+            throw new InvalidDataException("白斯史诗奖励须装配泰波尔斯候选池");
         this.cosmo = cosmo;
     }
 
@@ -101,17 +105,27 @@ internal sealed class HarlemHellEpicDropPolicy
         monster.MonsterId == monster.Source?.MonsterId && cosmo!.Matches(entry.DungeonId, entry.BossMap, monster.Source) &&
         monster.IsBoss && !monster.IsFriendly && !monster.IsScriptedBoss && monster.HellWave is null;
 
+    public bool IsWhiteBoss(DungeonEntryPlan entry, DungeonPlannedMonster monster) =>
+        monster.MonsterId == WhiteBossId && IsCosmoBoss(entry, monster);
+
     public DungeonDropGenerationPlan Extend(DungeonDropGenerationPlan plan, DungeonEntryPlan entry, DungeonPlannedMonster monster,
         DungeonHellRewardPolicy? hellRewards)
     {
         bool ultra = IsCosmoBoss(entry, monster);
+        bool white = ultra && IsWhiteBoss(entry, monster);
+        // 原通用装备骰及直接混合池同样受白斯约束；材料、空抽和过期结果不转换。
+        // 先标记原试验，再追加专属装备骰，避免后者重复抽取泰波尔斯。
+        if (white && Tayberrs is not null)
+            plan = new(plan.ResourceSource, plan.Trials.Select(trial => trial.Gold is null
+                ? trial with { EpicReplacementItems = Tayberrs } : trial), plan.ReferenceQuality, plan.Amplification);
         if (ultra && Cosmo is not null && hellRewards is not null)
             plan = hellRewards.Extend(plan, entry.BasisLevel ?? monster.CandidateLevel, 1, cosmo!.RewardRolls,
                 entry.Difficulty, suppressEpicFragments: true, epicEquipment: Cosmo);
         else if (Pool(entry) is null || monster.HellRewardRolls <= 0) return plan;
 
         var alternate = ultra ? Tayberrs : Weapons;
-        int permille = ultra ? Rules.CosmoTayberrsPermille : Rules.NormalWeaponPermille;
+        // 白斯采用本服明确规则：只替换已经命中的史诗候选，不提高装备或史诗触发率。
+        int permille = white ? 1000 : ultra ? Rules.CosmoTayberrsPermille : Rules.NormalWeaponPermille;
         if (alternate is null && (!ultra || Super is null)) return plan;
         // 仅修改末波/最终领主追加的最后一组装备骰；普通怪及PVF独立奖励不借此增加触发率。
         int last = plan.Trials.Length - 1;
@@ -123,7 +137,7 @@ internal sealed class HarlemHellEpicDropPolicy
         {
             RarityPools = trial.RarityPools.Select((row, rarity) => rarity == 4 ?
                 row with { AlternateItems = alternate, AlternatePermille = alternate is null ? 0 : permille,
-                    SecondaryItems = ultra ? Super : null, SecondaryPermille = ultra ? Rules.CosmoSuperPermille : 0 } : row).ToImmutableArray()
+                    SecondaryItems = ultra && !white ? Super : null, SecondaryPermille = ultra && !white ? Rules.CosmoSuperPermille : 0 } : row).ToImmutableArray()
         }), plan.ReferenceQuality, plan.Amplification);
     }
 

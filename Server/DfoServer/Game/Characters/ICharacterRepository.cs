@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Inventory.Models;
@@ -11,6 +12,12 @@ namespace DfoServer.Game.Characters;
 internal interface ICharacterRenamer
 {
     Character Rename(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, string newName);
+}
+
+// 副职业类型与累计熟练度：只由开发 GM 使用，避免所有仓库包装类都要实现。
+internal interface IExpertJobSetter
+{
+    Character SetExpertJob(AccountOwners.Lease owner, Character expected, byte type, int experience);
 }
 
 internal interface ICharacterRepository
@@ -39,6 +46,10 @@ internal interface ICharacterRepository
     void InitializeAdventure(AccountOwners.Lease owner, DfoServer.GameWorld.Adventure.AdventureCatalog catalog, DateTimeOffset now);
     DfoServer.Game.Tutorials.TutorialCheckpointResult CommitTutorialCheckpoint(AccountOwners.Lease owner,
         DfoServer.Game.Tutorials.TutorialCheckpointPlan plan);
+    OperationHopeRewardCommit CommitOperationHopeReward(AccountOwners.Lease owner, OperationHopeRewardPlan plan);
+    Character ClearOperationHopeAcceptances(AccountOwners.Lease owner, Character expected,
+        DfoServer.GameWorld.Dungeons.OperationHopeCatalog catalog, IReadOnlyList<ActiveMainQuest> removals);
+    Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run);
     Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run);
     Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now);
     CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort characterId,DateTimeOffset now);
@@ -53,6 +64,7 @@ internal interface ICharacterRepository
     Character[] List(AccountOwners.Lease owner);
     bool NameExists(string name);
     Character Create(AccountOwners.Lease owner, NewCharacter character);
+    bool CanCreatePvpPrivate(AccountOwners.Lease owner, byte job, byte grow, DfoServer.Game.Pvp.PvpPrivateCharacterCreation creation);
     CharacterDeletion LoadDeletionTarget(AccountOwners.Lease owner, ushort slot);
     CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected);
     void SwapSlots(AccountOwners.Lease owner, ushort slotA, ushort slotB);
@@ -70,6 +82,7 @@ internal interface ICharacterRepository
     Character CommitExpertJobAction(AccountOwners.Lease owner, DfoServer.Game.ExpertJob.ExpertJobActionPlan plan);
     Character CommitExpertJobLearning(AccountOwners.Lease owner, DfoServer.Game.ExpertJob.ExpertJobLearningPlan plan);
     Character CommitExpertJobClear(AccountOwners.Lease owner, Character expected);
+    Character CommitExpertJobCraft(AccountOwners.Lease owner, Character expected, InventoryPlan inventory, int experience, QuestLifecyclePlan? tutorial = null);
     Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience);
     Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState, CharacterLearningState learning);
     Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance);
@@ -80,7 +93,7 @@ internal interface ICharacterRepository
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
         WeeklyDungeonEntry? weekly = null);
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务提交。
-    Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge);
+    DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge);
     GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId);
     DungeonSpecialEntryUsage LoadSpecialEntryUsage(AccountOwners.Lease owner, Character expected, int day, DungeonSpecialEntryKind kind);
     DungeonDespairProgress LoadDespairProgress(AccountOwners.Lease owner, Character expected);
@@ -92,6 +105,7 @@ internal interface ICharacterRepository
     QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan);
     QuestLifecycleCommit CommitQuestLifecycle(AccountOwners.Lease owner, QuestLifecyclePlan plan);
     QuestQuickClearCommit CommitQuestQuickClear(AccountOwners.Lease owner, QuestQuickClearPlan plan);
+    ImmutableArray<uint> CommitQuestEligibilityMail(AccountOwners.Lease owner, QuestEligibilityMailPlan plan);
     Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day, QuestAutoDailyPlan? daily = null);
     DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
         PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null);
@@ -104,6 +118,8 @@ internal interface ICharacterRepository
     Character CommitDungeonDiscard(AccountOwners.Lease owner, DungeonInventoryDiscardPreparation prepared);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
     Character CommitSkillSwitchInventory(AccountOwners.Lease owner, SkillSwitchInventoryPlan plan);
+    Character CommitPvpTrainingSkills(AccountOwners.Lease owner,DfoServer.Game.Pvp.PvpTrainingSkillPlan plan);
+    Character CommitEpicProduction(AccountOwners.Lease owner,DfoServer.Game.EpicProduction.EpicProductionPlan plan);
     Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan);
     Character CommitTitleAchievement(AccountOwners.Lease owner, DfoServer.Game.Titles.TitleAchievementPlan plan);
     InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId);

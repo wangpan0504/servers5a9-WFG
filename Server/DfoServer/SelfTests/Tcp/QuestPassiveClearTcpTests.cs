@@ -411,17 +411,19 @@ internal static class QuestPassiveClearTcpTests
             peer.Send(46,report); Drain(); peer.Send(39,passive); Drain();
             peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
             That(State() == saved && enabled == 1,"3858已交付的46、39和34重放不重复任何资产或凭据");
+            var originalDaily = fixture.Query("SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=13053",peer.Id);
+            That(originalDaily is [[long,string]],"86级原地区每日仍在，升级不能撤销原接取");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
             peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356);
             int dailyNotices=0;
             drain(peer,packet =>
             {
                 if(packet.Opcode!=574) return;
-                Bytes(packet.Body,Build(writer=> { writer.Write(1u); writer.Write((ushort)13056); writer.Write(1686u); }),
-                    "升到87级回城后完整574分配每日任务，不伪造31接取成功");
+                Bytes(packet.Body,Build(writer=> { writer.Write(2u); writer.Write((ushort)13053); writer.Write(checked((uint)(long)originalDaily[0][0])); writer.Write((ushort)13056); writer.Write(1686u); }),
+                    "升到87级回城后完整574保留原地区每日并分配新每日，不伪造31接取成功");
                 dailyNotices++;
             });
-            That(dailyNotices==1 && fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id) is [[13056L,1686L]],
+            That(dailyNotices==1 && fixture.Query("SELECT quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",peer.Id) is [[13053L,long oldState,string oldId],[13056L,1686L,string]] && oldState == (long)originalDaily[0][0] && oldId == (string)originalDaily[0][1],
                 "3858奖励升级后仅分配一次真实每日，原剧情任务已经交付");
 
             void Move(DungeonPoint point,byte kind)
@@ -639,9 +641,12 @@ internal static class QuestPassiveClearTcpTests
         byte[] passive = PassiveDeath(69292,74);
         int enabled=0,bossChecks=0;
         byte[]? clearReward=null;
+        QuestDailyCoexistence? daily=null;
         using (var peer = Open(fixture))
         {
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            daily=new(fixture,created.Id,13037,1636);
+            That(fixture.Query("SELECT slot FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=13037",created.Id) is [[0L]],"54级地区每日保留原0槽");
             var map = FormalDungeonTcpTests.Enter(peer,3447,7156);
             That(U32(map,14)==70184 && map[18]==1 && U32(map,27)==60409 && map[40]==1,
                 "3447真实70184保留唯一友方APC60409，不造敌怪");
@@ -657,7 +662,7 @@ internal static class QuestPassiveClearTcpTests
             var corrupted = passive.ToArray(); corrupted[^1]^=1;
             peer.Send(39,corrupted); Drain();
             That(State()==before && enabled==0,"终点错误摘要不能保存空死亡scene或发布31");
-            peer.Send(39,passive); peer.Expect(0,574,[1,0,0,0,119,13,0,0,0,0]); peer.Expect(0,31,[]); enabled++;
+            peer.Send(39,passive); peer.Expect(0,574,Convert.FromHexString("02000000ED3264060000770D00000000")); peer.Expect(0,31,[]); enabled++;
             Drain();
             That(enabled==1 && bossChecks==0 && fixture.Query(
                 "SELECT source_type,dungeon_id,map_id,template_id,length(death_events),typeof(death_events) FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
@@ -708,7 +713,7 @@ internal static class QuestPassiveClearTcpTests
             string before=State(); peer.Send(39,passive); drain(peer,null);
             That(State()==before,"重连后迟到74B物件报告不能复活旧零击杀实例");
         }
-        string State()=>CharacterState(fixture,created.Id);
+        string State() { daily?.Check(); return CharacterState(fixture,created.Id); }
     }
 
     static string CharacterState(TcpTestFixture fixture,ushort id)=>fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",id)+

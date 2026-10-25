@@ -146,7 +146,7 @@ internal static class LimitCubeTests
         var target = ordinary.Inventory.Find(new(InventoryListType.Main, 9))!;
         var marked = ordinary with { Inventory = ordinary.Inventory with
         {
-            Items = ordinary.Inventory.Items.Replace(target, target with { Core = target.Core with { EpicExchangeOrigin = origin } })
+            Items = ordinary.Inventory.Items.Replace(target, target with { Core = target.Core with { EpicExchangeOrigin = origin, Extension119 = 0x05 } })
         } };
         string before = System.Text.Json.JsonSerializer.Serialize(marked);
         var baseline = fixture.Service(_ => 0).Apply(ordinary, new(9, Fixture.EquipmentTarget, 86),
@@ -159,11 +159,11 @@ internal static class LimitCubeTests
             "带来源的合法装备变更不能新增拒绝");
         var result = converted.Plan!.After.Find(receipt!.ResultSlot)!;
         var ordinaryResult = baseline.Plan!.After.Find(baselineReceipt!.ResultSlot)!;
-        That(result.Core.EpicExchangeOrigin == origin &&
-            result.Core with { EpicExchangeOrigin = null } == ordinaryResult.Core && result.Uid == ordinaryResult.Uid &&
+        That(result.Core.EpicExchangeOrigin == origin && result.Core.Extension119 == 0x05 &&
+            result.Core with { EpicExchangeOrigin = null, Extension119 = 0 } == ordinaryResult.Core && result.Uid == ordinaryResult.Uid &&
             converted.Plan.After.Find(new(InventoryListType.Main, 86)) == baseline.Plan.After.Find(new(InventoryListType.Main, 86)) &&
             System.Text.Json.JsonSerializer.Serialize(marked) == before,
-            "Equipment→Equipment仅额外继承来源，原附魔/封装/模板重建/券消费/输入快照规则不变");
+            "Equipment→Equipment仅额外继承来源与交换实例位，原附魔/封装/模板重建/券消费/输入快照规则不变");
 
         // 复用原Fixture的真实Apply路径，只将合成券的结果行改为该Fixture已有Consumable模板。
         var crossFixture = new Fixture(equipmentToStackable: true);
@@ -172,7 +172,7 @@ internal static class LimitCubeTests
         var crossMarked = crossOrdinary with { Inventory = crossOrdinary.Inventory with
         {
             Items = crossOrdinary.Inventory.Items.Replace(crossTarget,
-                crossTarget with { Core = crossTarget.Core with { EpicExchangeOrigin = origin } })
+                crossTarget with { Core = crossTarget.Core with { EpicExchangeOrigin = origin, Extension119 = 0x05 } })
         } };
         before = System.Text.Json.JsonSerializer.Serialize(crossMarked);
         var plainCross = crossFixture.Service(_ => 0).Apply(crossOrdinary, new(9, Fixture.EquipmentTarget, 86),
@@ -184,10 +184,10 @@ internal static class LimitCubeTests
             "Equipment→Consumable原有合法域转换保留，不能为来源加新禁转换");
         var crossResult = markedCross.Plan!.After.Find(markedCrossReceipt!.ResultSlot)!;
         That(crossResult.Core.ItemId == Fixture.ResultA && crossResult.Core.Kind == ItemKind.Consumable &&
-            crossResult.Core.EpicExchangeOrigin is null && crossResult.Core.Count == 1 &&
+            crossResult.Core.EpicExchangeOrigin is null && crossResult.Core.Extension119 == 0 && crossResult.Core.Count == 1 &&
             System.Text.Json.JsonSerializer.Serialize(markedCross.Plan.After) == System.Text.Json.JsonSerializer.Serialize(plainCross.Plan!.After) &&
             System.Text.Json.JsonSerializer.Serialize(crossMarked) == before,
-            "旧装备消费终结来源，新非装备资产与普通转换完全相同且不额外分堆");
+            "旧装备消费终结来源与交换实例位，新非装备资产与普通转换完全相同且不额外分堆");
     }
 
     public static void RunIndependentAttributePairCore()

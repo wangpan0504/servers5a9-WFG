@@ -54,6 +54,34 @@ internal static class DungeonEntryPlanTests
             "没有真实普通maze时仍保留任务路线，不伪造房间");
     }
 
+    static void Issue704Routes(PvfArchive pvf)
+    {
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var quest = quests.Get(7917);
+        That(quest.IntData.SequenceEqual([154,-1,-1,20]) && QuestHuntProgress.Initial(quest) == 20,
+            "704真实暗精灵名誉市民绑定远古墓穴20只普通怪");
+        var active = new ActiveMainQuest(0,7917,20) { AcceptanceId = Guid.NewGuid() };
+        var character = new Character(1,0,"Mission",0,new(38,1,1,1),null)
+            { Level = 95, CompletedQuests = [7916], ActiveMainQuests = [active] };
+        That(DungeonEntryPlan.TryCreate(dungeons,character,154,7917,0,out var entry,out var reason,quest:quest,quests:quests) &&
+            entry is { RouteQuestId: 7917 } && QuestHuntProgress.Bound(active,entry),
+            "704使用PVF真实7917关联迷宫并保留接取身份：" + reason);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var monsters = entry!.Maze.MapSpecification!.SelectMany(map => DungeonMonsterPlan.FromRoom(
+            rooms.Get(map,requirePassiveDefinitions:false),entry.CharacterId,1,entry.BasisLevel,playerTeam:entry.PlayerTeam).Monsters).ToArray();
+        var progress = active;
+        foreach (var monster in monsters)
+            progress = QuestHuntProgress.MonsterDeath([progress],entry,quests,monster).Single();
+        That(progress.ConditionState == 0 && progress.AcceptanceId == active.AcceptanceId,
+            "7917实际四房资源提供足够普通怪物完成20只目标，不用Boss或客户端33补数");
+        var recommended = quests.Get(8690);
+        That(QuestDungeonClearProgress.Supports(recommended) && QuestDungeonClearProgress.Initial(recommended) == 10,
+            "704真实推荐地下城任务十次初值");
+        That(QuestAutoDailyPlan.Supports(quests.Get(8691)) && QuestCycle.Daily(quests.Get(8691)),
+            "后继按自动每日分配，而不是普通一次性手工接取");
+    }
+
     static void ClearedStoryUsesOrdinaryRoute(DungeonCatalog catalog, QuestCatalog quests, Character basis)
     {
         var quest = quests.Get(3344);
@@ -98,6 +126,34 @@ internal static class DungeonEntryPlanTests
             "普通0在没有清图凭据时仍被未交付剧情锁住");
     }
 
+    static void ClearedSequentialChildUsesOrdinaryRoute(DungeonCatalog catalog, QuestCatalog quests, Character basis)
+    {
+        var clear = quests.Get(3560);
+        var clearActive = new ActiveMainQuest(1,3560,0) { AcceptanceId = Guid.NewGuid() };
+        var cleared = basis with { Level = 95, CompletedQuests = [3525], ActiveMainQuests = [clearActive] };
+        That(clear.MainQuest == 3525 && QuestClearEligibility.IsSingleMap(clear), "3560是根特南门的顺序清图子任务");
+        That(DungeonEntryPlan.TryCreate(catalog,cleared,82,3560,1,out var cycle,out var cycleReason,
+                allowClearedQuest: true,quest: clear,quests: quests,draw: _ => 0) &&
+            cycle is { RouteQuestId: 0, IsOrdinary: true, QuestId: 3560 } && cycle.Maze.QuestConnectionTokens.Count == 0,
+            "顺序清图子任务达成未交后进入循环图冒险难度：" + cycleReason);
+        var pendingClear = cleared with { ActiveMainQuests = [clearActive with { ConditionState = 1 }] };
+        That(!DungeonEntryPlan.TryCreate(catalog,pendingClear,82,3560,1,out _,out var pendingReason,quest: clear,quests: quests) &&
+            pendingReason == "difficulty-unsupported","未达成的顺序清图子任务仍锁剧情普通难度");
+
+        var hunt = quests.Get(3472);
+        var huntActive = new ActiveMainQuest(2,3472,0) { AcceptanceId = Guid.NewGuid() };
+        var hunted = basis with { Level = 95, CompletedQuests = [3457], ActiveMainQuests = [huntActive] };
+        That(hunt.MainQuest == 3458 && hunt.Condition == "[hunt monster]", "3472是腐烂之地的顺序猎杀子任务");
+        That(DungeonEntryPlan.TryCreate(catalog,hunted,158,3472,1,out var huntCycle,out var huntReason,
+                quest: hunt,quests: quests,draw: _ => 0) &&
+            huntCycle is { RouteQuestId: 0, IsOrdinary: true, QuestId: 3472 } && huntCycle.Maze.QuestConnectionTokens.Count == 0,
+            "顺序猎杀子任务计数归零后进入循环图冒险难度：" + huntReason);
+        uint pendingScalar = QuestHuntProgress.Initial(hunt);
+        var pendingHunt = hunted with { ActiveMainQuests = [huntActive with { ConditionState = pendingScalar }] };
+        That(pendingScalar != 0 && !DungeonEntryPlan.TryCreate(catalog,pendingHunt,158,3472,1,out _,out var huntPending,quest: hunt,quests: quests) &&
+            huntPending == "difficulty-unsupported","猎杀尚未归零时仍锁剧情普通难度");
+    }
+
     static void DeathTowerCompanionPolicy(PvfArchive pvf, DungeonCatalog catalog)
     {
         var paths = DungeonCatalog.ParseDirectory(pvf.ReadTokens("dungeon/dungeon.lst"), pvf.ResolveString, "dungeon");
@@ -130,7 +186,9 @@ internal static class DungeonEntryPlanTests
     {
         int checks = Count;
         GriefTowerResourceTests.Run(pvf);
+        Issue704Routes(pvf);
         SpecialNormalDungeonEntryTests.Run(pvf);
+        DungeonStoryFlowTests.RunStoryResources(pvf);
 
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         // GM伴侣只在普通副本注入：祭坛/塔/亡者峡谷按资源标记整类排除，普通副本与Boss Rush保持放行。
@@ -254,6 +312,7 @@ internal static class DungeonEntryPlanTests
         HarlemSeekingRoutes(catalog,quests,character);
         CompletedSeekingRoutes(catalog,quests,character);
         ClearedStoryUsesOrdinaryRoute(catalog,quests,character);
+        ClearedSequentialChildUsesOrdinaryRoute(catalog,quests,character);
         var passiveQuest = quests.Get(3205);
         var passiveCharacter = character with { Level = 95, CompletedQuests = [3204],
             ActiveMainQuests = [new(0,3205,0) { AcceptanceId = Guid.NewGuid() }] };

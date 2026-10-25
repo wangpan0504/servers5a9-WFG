@@ -94,6 +94,12 @@ internal sealed partial class CharacterRepository
         AdventureCreditSource source, ulong amount, ulong effectivePosition, int levelBefore, int levelAfter, DateTimeOffset now)
     {
         if (adventureCatalog is not { } catalog || growthCatalog is null) return null;
+        // 专用角色原经验照常提交，但不计入账号冒险团；复用当前事务，不另开写锁。
+        using(var identity=db.CreateCommand())
+        {
+            identity.Transaction=tx;identity.CommandText="SELECT EXISTS(SELECT 1 FROM account_pvp_private_characters WHERE character_id=$id)";
+            identity.Parameters.AddWithValue("$id",characterId);if(identity.ExecuteScalar() is 1L) return null;
+        }
         EnsureAdventureRow(db, tx, account, now);
         var before = ReadAdventureState(db, tx, account, catalog, now) ??
             throw new InvalidOperationException("冒险团账号行缺失");
@@ -200,7 +206,7 @@ internal sealed partial class CharacterRepository
             command.Parameters.AddWithValue("$account", account);
             command.Parameters.AddWithValue("$cap", checked((long)cap));
             // 官方规则：只有40级以上的角色提供冒险团经验。
-            command.CommandText = "SELECT coalesce(sum(min(experience,$cap)),0) FROM characters WHERE account=$account AND level>=$level";
+            command.CommandText = "SELECT coalesce(sum(min(experience,$cap)),0) FROM characters c WHERE account=$account AND level>=$level AND NOT EXISTS(SELECT 1 FROM account_pvp_private_characters p WHERE p.character_id=c.id)";
             command.Parameters.AddWithValue("$level", AdventureCredit.CountingLevel);
             decimal roster = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
             command.Parameters.Clear();
@@ -208,7 +214,7 @@ internal sealed partial class CharacterRepository
             command.CommandText = """
                 SELECT c.id,c.level,c.experience,coalesce(d.proficiency_level,0),coalesce(d.proficiency_experience,0)
                 FROM characters c LEFT JOIN character_dungeon_state d ON d.character_id=c.id AND d.account=c.account
-                WHERE c.account=$account ORDER BY c.id
+                WHERE c.account=$account AND NOT EXISTS(SELECT 1 FROM account_pvp_private_characters p WHERE p.character_id=c.id) ORDER BY c.id
                 """;
             var rows = new List<(uint Id, int Level, ulong Experience, uint ProficiencyLevel, ulong ProficiencyExperience)>();
             using (var reader = command.ExecuteReader()) while (reader.Read())

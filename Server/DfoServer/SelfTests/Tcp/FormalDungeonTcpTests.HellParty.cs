@@ -1,3 +1,5 @@
+using DfoServer.Game.Dungeons;
+using DfoServer.GameWorld.Dungeons;
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -141,7 +143,77 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(37, new byte[8]);
                 peer.Barrier();
                 That(fixture.Snapshot() == loaded, "超星空重复入场及加载不重复扣除或预留实例");
+                VerifyCosmoActualRoute(fixture, peer, resources, information, map);
             }
         }
     }
+    // 真实socket沿本次随机终点验收，不通过反复抽取或替换正式资源伪造白斯命中。
+    // 三种指定领主和拾取SQL回滚另由受控Session/Handler资源用例完整覆盖。
+    static void VerifyCosmoActualRoute(TcpTestFixture fixture, TcpPeer peer, TcpTestResources resources, byte[] information, byte[] map)
+    {
+        var definition = SelfTestCatalogs.Dungeons(resources.Archive).Get(7191);
+        var maze = definition.Mazes.Single(row => row.SourceOrdinal == information[7]);
+        var route = QuestStoryRouteTests.Path(maze.StaticTopology, new(map[0], map[1]), new(information[8], information[9]));
+        int bossId = 0, picked = 0;
+        for (int room = 0; room < route.Length; room++)
+        {
+            if (room != 0)
+            {
+                byte[] move = new byte[100]; move[0] = (byte)route[room].X; move[1] = (byte)route[room].Y;
+                peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
+                Load(peer); peer.Expect(0, 36);
+            }
+            That(map[0] == route[room].X && map[1] == route[room].Y, "超星空TCP沿真实四房拓扑前进");
+            foreach (int offset in Enumerable.Range(0, map[18]).Select(index => 19 + index * 22)
+                .Where(offset => map[offset + 13] != 9 && map[offset + 14] == 0).OrderBy(offset => map[offset + 13] == 3))
+            {
+                ushort key = U16(map, offset + 6);
+                bool boss = map[offset + 13] == 3;
+                byte[] report = Death(key, peer.Id, map[offset + 12]);
+                ulong previousExperience = Experience(fixture, peer.Id);
+                string previousProficiency = fixture.Snapshot("SELECT proficiency_level,proficiency_experience FROM character_dungeon_state WHERE character_id=$p0", peer.Id);
+                peer.Send(39, report);
+                byte[] death = peer.Expect(0, 38).Body;
+                That(U16(death, 0) == key, "超星空TCP死亡通知绑定实际场景key");
+                // 满级入口沿现有合同不发布NOTI37；奖励转入真实熟练度账本，而非等待不存在的经验包。
+                That(Experience(fixture, peer.Id) == previousExperience &&
+                    fixture.Snapshot("SELECT proficiency_level,proficiency_experience FROM character_dungeon_state WHERE character_id=$p0", peer.Id) != previousProficiency &&
+                    fixture.Query("SELECT amount,monster_level FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND monster_key=$p1", peer.Id, key)
+                        is [[long amount, long monsterLevel]] && amount > 0 && monsterLevel == map[offset + 12],
+                    "超星空满级死亡不增加角色XP但真实熟练度与死亡来源正确落库");
+                if (boss)
+                {
+                    bossId = checked((int)U32(map, offset + 8));
+                    peer.Expect(0, 115, [1, 1, (byte)key, (byte)(key >> 8)]); peer.Expect(0, 31, []);
+                    peer.Expect(0, 261, [0]);
+                    var ids = Enumerable.Range(0, U16(death, 2)).Select(index => checked((int)U32(death, 4 + index * 131 + 6))).ToArray();
+                    That(ids.Count(id => id == HarlemMaterialDropPolicy.FragmentId) >= 30 &&
+                        ids.Count(id => id == HarlemMaterialDropPolicy.SkyWishId) >= 10,
+                        "白斯增量不能覆盖超星空原有30碎片与10天空之愿");
+                    VerifyWhiteBossMaterials(ids, bossId);
+                    if (bossId == 109007097)
+                    {
+                        var tayberrs = DungeonHellEpicCatalog.Load(resources.Archive).Pool(54, 4, resources.ItemResources.Items.Get)
+                            .Entries.Select(row => row.Template.Id).ToHashSet();
+                        var epicIds = ids.Where(id => id != 0 && resources.ItemResources.Items.Get(id) is { Kind: ItemKind.Equipment, Rarity: 4 }).ToArray();
+                        That(epicIds.All(tayberrs.Contains), "白斯socket所有已触发的史诗属于泰波尔斯池，不仅检查追加掉落");
+                        Console.WriteLine($"Cosmo white boss socket epic hits: {epicIds.Length}");
+                    }
+                }
+                picked += PickupResourceDrops(fixture, peer, death, 0);
+                string saved = fixture.Snapshot();
+                peer.Send(39, report); peer.Barrier();
+                That(fixture.Snapshot() == saved, "超星空TCP重复死亡不重抽装备或材料、不给重复经验");
+            }
+        }
+        That(bossId is 65587 or 107013805 or 109007097 && picked >= 40, "超星空TCP实际击杀三候选之一并完成地面拾取");
+        Console.WriteLine($"PASS 超星空真实socket终点{bossId}：{picked}项掉落与拾取；指定白斯覆盖见受控资源用例");
+    }
+
+    static void VerifyWhiteBossMaterials(int[] ids, int bossId)
+    {
+        That(ids.Count(id => id == 10306750) == (bossId == 109007097 ? 2 : 0) && !ids.Contains(10309041),
+            "白斯固定掉落2个普通反物质粒子，其他Boss不额外掉落且不误发账号绑定版本");
+    }
+
 }

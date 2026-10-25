@@ -57,6 +57,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.Create");
         using var transaction = write.Transaction;
+        CheckPvpPrivateCreation(db,transaction,owner.Account,character);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "SELECT slot FROM characters WHERE account=$account ORDER BY slot";
@@ -155,10 +156,12 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         WriteItemMakingSkills(db, transaction, id, owner.Account, plan);
         inventory = WriteWallet(db, transaction, owner, id, plan, inventory);
         inventory = WriteCargo(db, transaction, owner, id, plan, inventory);
+        WritePvpPrivateCreation(db,transaction,owner.Account,id,character);
         var accountQuests = ReadAccountQuests(db, id, transaction);
         transaction.Commit();
         return new Character(id, checked((ushort)slot), character.Name, 0, character.Position, character.Return)
         {
+            PvpPrivate = character.PvpPrivateCreation is {} privateCreation ? new(privateCreation.RecreateDays) : null,
             Job = character.Job,
             GrowType = character.GrowType,
             Level = character.Level,
@@ -289,7 +292,10 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             ExpertMachineEndurance = expertMeta.Endurance,
             TitleProgress = ReadTitleProgress(db, character.Id, transaction),
             TitleSections = ReadTitleSections(db, character.Id, transaction),
-            CollectBox = ReadCollectBox(db, character.Id, transaction)
+            CollectBox = ReadCollectBox(db, character.Id, transaction),
+            EpicProduction = ReadEpicProduction(db, character.Id, transaction),
+            PvpTrainingSkills = ReadPvpTrainingSkills(db,character.Id,transaction),
+            PvpPrivate = ReadPvpPrivate(db,character.Id,transaction)
         };
     }
 

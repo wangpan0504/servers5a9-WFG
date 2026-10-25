@@ -201,8 +201,65 @@ internal static class SqliteMigrations
         new(89, "副本账号进入次数", static (db, tx) => Execute(db, tx, AccountDungeonIncountSchema)),
         new(90, "玩家社交关系", SocialSchema.Upgrade),
         new(91, "冒险团好友申请者分组与备注", SocialSchema.UpgradeRequests),
-        new(92, "组队任务物件助战场景回执", UpgradePartyQuestLifecycle),
+        // 护石与符文使用独立容器46（护石0–69、符文70–209、已装210–215），只放开既有槽位表的分类约束。
+        new(92, "护石与符文库存容器", static (db, tx) => ReplaceTableConstraint(db, tx, "character_inventory_slots",
+            "CHECK(list_type IN (0,1,2,3,7,12,38))", "CHECK(list_type IN (0,1,2,3,7,12,38,46))")),
+        new(93, "角色史诗制作进度与周次数", static (db,tx) => Execute(db,tx,EpicProductionSchema.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
+        new(94, "首次任务资格邮件投递账本", static (db,tx) => Execute(db,tx,QuestEligibilityMailSchema.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
+        new(95, "独立训练技能快照与事务身份", static (db,tx) => Execute(db,tx,PvpTrainingSkillsSchema.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
+        new(96, "决斗专用角色身份与账号重建冷却", static (db,tx) => Execute(db,tx,PvpPrivateCharacterSchema.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
+        new(97, "代号希望按实例与接取去重领奖", static (db,tx) => Execute(db,tx,OperationHopeRewardSchema.Definition.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
+        new(98, "组队任务物件助战场景回执", UpgradePartyQuestLifecycle),
     ];
+
+    internal const string PvpPrivateCharacterSchema = """
+        CREATE TABLE account_pvp_private_characters(
+            account TEXT NOT NULL,
+            job INTEGER NOT NULL CHECK(job BETWEEN 0 AND 15),
+            grow_type INTEGER NOT NULL CHECK(grow_type BETWEEN 0 AND 5),
+            character_id INTEGER UNIQUE REFERENCES characters(id) ON DELETE SET NULL,
+            blocked_until INTEGER NOT NULL CHECK(blocked_until>=0),
+            recreate_days INTEGER NOT NULL CHECK(recreate_days BETWEEN 0 AND 36500),
+            PRIMARY KEY(account,job,grow_type)
+        );
+        """;
+
+    internal const string PvpTrainingSkillsSchema = """
+        CREATE TABLE character_pvp_training_skills(
+            character_id INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+            state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='object'),
+            operation_id TEXT NOT NULL CHECK(length(operation_id)=32),
+            before_revision INTEGER NOT NULL CHECK(before_revision>=0)
+        );
+        """;
+
+    internal const string QuestEligibilityMailSchema = """
+        CREATE TABLE quest_eligibility_mail_dispatches(
+            account TEXT NOT NULL,
+            scope_character_id INTEGER NOT NULL CHECK(scope_character_id>=0),
+            quest_id INTEGER NOT NULL CHECK(quest_id>0),
+            recipient_id INTEGER NOT NULL CHECK(recipient_id>0),
+            mail_id INTEGER NOT NULL CHECK(mail_id>0),
+            resource_path TEXT NOT NULL,
+            dispatched_at INTEGER NOT NULL CHECK(dispatched_at>=0),
+            PRIMARY KEY(account,scope_character_id,quest_id)
+        );
+        """;
+
+    internal const string EpicProductionSchema = """
+        CREATE TABLE character_epic_production(
+            character_id INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+            weapon_id INTEGER NOT NULL CHECK(weapon_id>=0),
+            charge INTEGER NOT NULL CHECK(charge>=0 AND (weapon_id<>0 OR charge=0)),
+            service_week INTEGER NOT NULL CHECK(service_week>=-1),
+            weekly_uses INTEGER NOT NULL CHECK(weekly_uses BETWEEN 0 AND 255),
+            since_big_chance INTEGER NOT NULL CHECK(since_big_chance>=0),
+            special_uses INTEGER NOT NULL CHECK(special_uses>=0),
+            additional_weekly_uses INTEGER NOT NULL CHECK(additional_weekly_uses>=0),
+            intermediate_material_remainder INTEGER NOT NULL CHECK(intermediate_material_remainder>=0),
+            ordinary_material_remainder INTEGER NOT NULL CHECK(ordinary_material_remainder>=0)
+        );
+        """;
 
     internal static string PartyQuestLifecycleSql => QuestLifecycleSchema
         .Replace("CHECK(quest_id BETWEEN 1 AND 29999)", "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))", StringComparison.Ordinal)
@@ -1684,7 +1741,12 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        // 第三批验收曾用v92保存助战回执，正式v92已用于护石；只识别完整旧组合再补跑。
+        if (version == 92 && current >= 98 && IsPartyDungeonPreview(db, tx)) version = 91;
         // 两类预览库按互斥结构识别，不以同号版本替代已发布迁移。
+        // 本地任务预览曾占用88/89；只有两张副本次数表均缺失且任务表精确匹配才回到87补齐。
+        if (current >= 97 && Quest704PreviewBaseline(db, tx, version) is { } previewBaseline) version = previewBaseline;
+        // 仅精确匹配已知预览结构时补齐正式迁移，保留原冷却与资产。
         if (version is 78 or 79 && current >= 81 && IsAuraCooldownPreview(db, tx, version)) version = 77;
         if (version is >= 78 and <= 80 && current >= 91 && IsPlayerInteractionPreview(db, tx, version)) version = 77;
         if (current >= 91 && IsSocialNumberingPreview(db, tx, version)) version = 87;
@@ -1809,6 +1871,25 @@ internal static class SqliteMigrations
         Execute(db, tx, $"PRAGMA user_version={CurrentVersion}");
     }
 
+    static bool IsPartyDungeonPreview(SqliteConnection db, SqliteTransaction tx)
+    {
+        if (!KnownTable(db, tx, "character_quest_lifecycle_receipts", PartyQuestLifecycleSql) ||
+            SocialSchema.Tables.Any(row => !KnownTable(db, tx, row.Table, row.Sql)) ||
+            !KnownTable(db, tx, "character_dungeon_incount", DungeonIncountSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) ||
+            !KnownTable(db, tx, "account_dungeon_incount", AccountDungeonIncountSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal))) return false;
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = """
+            SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN
+              ('character_epic_production','quest_eligibility_mail_dispatches','character_pvp_training_skills',
+               'account_pvp_private_characters','character_operation_hope_reward_receipts')
+            """;
+        if (query.ExecuteScalar() is not 0L) return false;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_inventory_slots'";
+        return query.ExecuteScalar() is string slots &&
+            slots.Contains("CHECK(list_type IN (0,1,2,3,7,12,38))", StringComparison.Ordinal);
+    }
+
     static bool IsSocialNumberingPreview(SqliteConnection db, SqliteTransaction tx, long version)
     {
         if (version is < 88 or > 90) return false;
@@ -1870,6 +1951,58 @@ internal static class SqliteMigrations
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         ) STRICT;
         """;
+
+    // 旧任务包与主线曾复用版本号；仅精确识别当时完整表组合，不能修补未知混合库。
+    static long? Quest704PreviewBaseline(SqliteConnection db, SqliteTransaction tx, long version)
+    {
+        if (version is < 88 or > 97) return null;
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        bool Exists(string name)
+        {
+            query.Parameters.Clear(); query.Parameters.AddWithValue("$name", name);
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name=$name";
+            return query.ExecuteScalar() is 1L;
+        }
+        (string Table, string Sql, int FirstVersion)[] tables =
+        [
+            ("character_epic_production", EpicProductionSchema, 90),
+            ("quest_eligibility_mail_dispatches", QuestEligibilityMailSchema, 91),
+            ("character_pvp_training_skills", PvpTrainingSkillsSchema, 92),
+            ("account_pvp_private_characters", PvpPrivateCharacterSchema, 93),
+            ("character_operation_hope_reward_receipts", OperationHopeRewardSchema.Definition, 94)
+        ];
+        if (!tables.Any(row => Exists(row.Table))) return null;
+        bool social = SocialSchema.Tables.Any(row => Exists(row.Table));
+        bool characterIncount = Exists("character_dungeon_incount");
+        bool accountIncount = Exists("account_dungeon_incount");
+        query.Parameters.Clear();
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_inventory_slots'";
+        bool talisman = query.ExecuteScalar() is string slots &&
+            slots.Contains("CHECK(list_type IN (0,1,2,3,7,12,38,46))", StringComparison.Ordinal);
+        // 社交后的任务预览用92–96；正式护石占用92后，任务使用93–97。
+        // 同时核对容器约束和完整任务表组合，不能仅凭版本号重放迁移。
+        bool currentNumbering = social && talisman && version >= 93;
+        bool combinedPreview = social && !talisman && version is >= 92 and <= 96;
+        if (social && ((!currentNumbering && !combinedPreview) ||
+            SocialSchema.Tables.Any(row => !KnownTable(db, tx, row.Table, row.Sql))))
+            throw new InvalidDataException("任务旧编号库混用了社交结构");
+        if (!social && (version > 94 || talisman))
+            throw new InvalidDataException("任务旧编号库缺少正式社交结构");
+        if (version <= 89 ? characterIncount || accountIncount : !characterIncount || !accountIncount)
+            throw new InvalidDataException("任务旧编号库混用了副本次数结构");
+        if (version >= 90 && (!KnownTable(db, tx, "character_dungeon_incount", DungeonIncountSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) ||
+            !KnownTable(db, tx, "account_dungeon_incount", AccountDungeonIncountSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal))))
+            throw new InvalidDataException("任务旧编号库副本次数结构不匹配");
+        foreach (var (table, sql, firstVersion) in tables)
+        {
+            bool expected = currentNumbering ? firstVersion + 3 <= version : combinedPreview ? firstVersion + 2 <= version :
+                version <= 89 ? firstVersion <= version + 2 : firstVersion <= version;
+            if (expected ? !KnownTable(db, tx, table, sql) : Exists(table))
+                throw new InvalidDataException("任务旧编号库存在未知结构：" + table);
+        }
+        return currentNumbering ? null : combinedPreview ? 91 : version <= 89 ? 87 : 89;
+    }
 
     static bool IsAuraCooldownPreview(SqliteConnection db, SqliteTransaction tx, long version)
     {
@@ -1933,6 +2066,11 @@ internal static class SqliteMigrations
             ("character_dungeon_drop_objects",DungeonDropCollectionSchema.Definition.Split(';').Single(sql => sql.Contains("CREATE TABLE character_dungeon_drop_objects(", StringComparison.Ordinal))),
             ("character_dungeon_drop_pickups",DungeonDropCollectionSchema.PickupDefinition),
             ("character_dungeon_passive_pickups",CharacterRepository.PassiveDropSchema),
+            ("character_epic_production",EpicProductionSchema),
+            ("character_pvp_training_skills",PvpTrainingSkillsSchema),
+            ("account_pvp_private_characters",PvpPrivateCharacterSchema),
+            ("character_operation_hope_reward_receipts",OperationHopeRewardSchema.Definition),
+            ("quest_eligibility_mail_dispatches",QuestEligibilityMailSchema),
             ("character_collectbox_state",CollectBoxStateTableSchema),
             ("character_collectbox_slots",CollectBoxSlotsTableSchema),
             ("character_collectbox_expirations",CollectBoxExpirationSchema),

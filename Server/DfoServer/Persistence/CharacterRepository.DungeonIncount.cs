@@ -66,7 +66,8 @@ internal sealed partial class CharacterRepository
 
     DungeonIncountCommit? CommitDungeonIncountInTransaction(SqliteConnection db, SqliteTransaction tx,
         AccountOwners.Lease owner, Character expected, int dungeon, DungeonIncountPeriod now,
-        DungeonIncountRow? row, InventoryPlan? consumption, ImmutableArray<AccountIncountCharge> account, bool increment, bool check)
+        DungeonIncountRow? row, InventoryPlan? consumption, ImmutableArray<AccountIncountCharge> account,
+        bool increment, bool check = true)
     {
         var charges = account.IsDefault ? [] : account;
         var usage = ReadDungeonIncount(db, tx, expected.Id, owner.Account, dungeon, now);

@@ -17,6 +17,7 @@ internal static class ExpertJobLearningTests
 {
     public static void Run(TownCatalog towns, ItemResources items, ExpertJobScriptCatalog scripts)
     {
+        ExpertJobCraftTests.Run(towns, items);
         int checks = Count;
         foreach (var (id, level, rarity) in new[] { (10015129, 1, 0), (10015130, 4, 1), (10015131, 7, 2),
             (10015132, 9, 3), (10159564, 10, 6), (10015151, 11, 4) })

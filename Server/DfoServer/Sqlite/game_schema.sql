@@ -583,7 +583,7 @@ CREATE TABLE inventory_creature_details(
 CREATE TABLE "character_inventory_slots"(
     character_id INTEGER,
     account TEXT NOT NULL,
-    list_type INTEGER NOT NULL CHECK(list_type IN (0,1,2,3,7,12,38)),
+    list_type INTEGER NOT NULL CHECK(list_type IN (0,1,2,3,7,12,38,46)),
     owner_character_id INTEGER GENERATED ALWAYS AS (COALESCE(character_id,0)) STORED,
     slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419)),
     item_uid INTEGER NOT NULL UNIQUE,
@@ -1136,3 +1136,69 @@ CREATE TABLE character_social_links(
           memo TEXT NOT NULL DEFAULT '',group_id INTEGER NOT NULL DEFAULT 0 CHECK(group_id BETWEEN 0 AND 4),
           PRIMARY KEY(source_account,target_account),CHECK(source_account<>target_account)
         ) STRICT;
+
+CREATE TABLE character_epic_production(
+    character_id INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+    weapon_id INTEGER NOT NULL CHECK(weapon_id>=0),
+    charge INTEGER NOT NULL CHECK(charge>=0 AND (weapon_id<>0 OR charge=0)),
+    service_week INTEGER NOT NULL CHECK(service_week>=-1),
+    weekly_uses INTEGER NOT NULL CHECK(weekly_uses BETWEEN 0 AND 255),
+    since_big_chance INTEGER NOT NULL CHECK(since_big_chance>=0),
+    special_uses INTEGER NOT NULL CHECK(special_uses>=0),
+    additional_weekly_uses INTEGER NOT NULL CHECK(additional_weekly_uses>=0),
+            intermediate_material_remainder INTEGER NOT NULL CHECK(intermediate_material_remainder>=0),
+            ordinary_material_remainder INTEGER NOT NULL CHECK(ordinary_material_remainder>=0)
+);
+
+CREATE TABLE quest_eligibility_mail_dispatches(
+    account TEXT NOT NULL,
+    scope_character_id INTEGER NOT NULL CHECK(scope_character_id>=0),
+    quest_id INTEGER NOT NULL CHECK(quest_id>0),
+    recipient_id INTEGER NOT NULL CHECK(recipient_id>0),
+    mail_id INTEGER NOT NULL CHECK(mail_id>0),
+    resource_path TEXT NOT NULL,
+    dispatched_at INTEGER NOT NULL CHECK(dispatched_at>=0),
+    PRIMARY KEY(account,scope_character_id,quest_id)
+);
+
+CREATE TABLE character_pvp_training_skills(
+    character_id INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+    state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='object'),
+    operation_id TEXT NOT NULL CHECK(length(operation_id)=32),
+    before_revision INTEGER NOT NULL CHECK(before_revision>=0)
+);
+
+CREATE TABLE account_pvp_private_characters(
+    account TEXT NOT NULL,
+    job INTEGER NOT NULL CHECK(job BETWEEN 0 AND 15),
+    grow_type INTEGER NOT NULL CHECK(grow_type BETWEEN 0 AND 5),
+    character_id INTEGER UNIQUE REFERENCES characters(id) ON DELETE SET NULL,
+    blocked_until INTEGER NOT NULL CHECK(blocked_until>=0),
+    recreate_days INTEGER NOT NULL CHECK(recreate_days BETWEEN 0 AND 36500),
+    PRIMARY KEY(account,job,grow_type)
+);
+
+CREATE TABLE character_operation_hope_reward_receipts(
+    character_id INTEGER NOT NULL,account TEXT NOT NULL,
+    instance_id TEXT NOT NULL CHECK(length(instance_id)=32 AND instance_id NOT GLOB '*[^0-9a-f]*' AND instance_id<>'00000000000000000000000000000000'),
+    acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+    task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
+    maze_ordinal INTEGER NOT NULL CHECK(maze_ordinal>=0),
+    quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
+    clear_epoch INTEGER NOT NULL CHECK(clear_epoch>0),
+    generation INTEGER NOT NULL CHECK(generation>0),
+    before_revision INTEGER NOT NULL CHECK(before_revision>=0),
+    revision INTEGER NOT NULL CHECK(revision=before_revision+1),
+    before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 95),
+    after_level INTEGER NOT NULL CHECK(after_level BETWEEN before_level AND 95),
+    before_experience INTEGER NOT NULL CHECK(before_experience>=0),
+    requested_experience INTEGER NOT NULL CHECK(requested_experience BETWEEN 0 AND 2147483647),
+    after_experience INTEGER NOT NULL CHECK(after_experience>=before_experience AND after_experience<=before_experience+requested_experience),
+    plan_snapshot TEXT NOT NULL CHECK(json_valid(plan_snapshot) AND json_type(plan_snapshot)='object'),
+    rewards TEXT NOT NULL CHECK(json_valid(rewards) AND json_type(rewards)='array'),
+    changed_items TEXT NOT NULL CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
+    created_at INTEGER NOT NULL CHECK(created_at>=0),
+    PRIMARY KEY(character_id,instance_id),
+    UNIQUE(character_id,acceptance_id),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);

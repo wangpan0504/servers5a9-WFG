@@ -9,6 +9,21 @@ namespace DfoServer.Game.Quests;
 // 第一转职分支变化重建双树；同分支逐级觉醒叠加赠技，均保留已核算的额外点数来源。
 internal static class QuestProfessionReward
 {
+    public static bool SupportedDeclaration(StoryQuest quest) =>
+        quest.RewardType == "[grow type]" && quest.Definition?.JobChange == 1 &&
+            quest.Rewards is [{ Type:0,Text:null,Value:>=1 and <=5 }] ||
+        quest.RewardType == "[awakening type]" && quest.Rewards is [{ Type:0,Text:null,Value:>=1 and <=2 }] &&
+            (quest.Definition?.JobChange == quest.Rewards[0].Value+1 || LegacySelfAwakening(quest));
+
+    // 旧Lv50主线的外传职业觉醒以目标角色和奖励声明阶段，没有普通转职任务的job change标记。
+    // 保留真实副本、前置与碰撞约束；不把缺少标记的任意职业奖励视为合法。
+    public static bool LegacySelfAwakening(StoryQuest quest) => quest is
+        { Grade:"[epic]",Condition:"[clear map]",SubType:-1,MinimumLevel:50,IntData:[>0],
+          RewardType:"[awakening type]",Rewards:[{Type:0,Text:null,Value:1}],
+          Definition:{JobChange:0,SelectRewards.Length:0,PrerequisiteGroups.Length:>0,Dungeons.Length:>0,
+            TargetCharacters:[{Job:"[demonic swordman]" or "[creator mage]",GrowType:0,Awakening:-1}]} definition } &&
+        !definition.Has("job change quest");
+
     public static byte Target(Character expected, StoryQuest quest, SkillLearningCatalog skills)
     {
         if (quest.Definition is not { } definition ||
@@ -27,7 +42,9 @@ internal static class QuestProfessionReward
         else if (quest.RewardType == "[awakening type]")
         {
             int first = expected.GrowType & 15, stage = expected.GrowType >> 4;
-            if (target > 2 || definition.JobChange != target + 1 || target != stage + 1 ||
+            if (target > 2 || definition.JobChange != target + 1 && !LegacySelfAwakening(quest) ||
+                LegacySelfAwakening(quest) && (expected.Job is not (9 or 10) ||
+                    definition.TargetCharacters[0].Job != (expected.Job==9?"[demonic swordman]":"[creator mage]")) || target != stage + 1 ||
                 first == 0 && expected.Job is not (9 or 10))
                 throw new NotSupportedException("觉醒必须按当前合法职业逐级推进");
             target = checked((byte)(first | target << 4));

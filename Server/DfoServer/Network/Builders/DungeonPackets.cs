@@ -96,15 +96,15 @@ internal static class DungeonPackets
     // 实验性（未在95客户端实证）：深渊派对拒绝包，code 0xAD=缺前置任务、0x01=区域/房间不可用（参考项目 A21 DungeonAdmissionRejectBuilder）。
     public static byte[] HellPartyRejected(byte code) => [0, code, 0, 0];
     // NOTI28的匹配36B布局；调用方提供已审核的准入计划，构包不建立实例或确认加载。
-    public static byte[] Information(DungeonEntryPlan plan)
+    public static byte[] Information(DungeonEntryPlan plan, DungeonPoint? bossPosition = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         byte[] body = new byte[36];
         BinaryPrimitives.WriteUInt32LittleEndian(body, checked((uint)plan.DungeonId));
         body[4] = plan.Difficulty;
         body[7] = checked((byte)plan.Maze.SourceOrdinal);
-        body[8] = checked((byte)plan.BossMap.Position.X);
-        body[9] = checked((byte)plan.BossMap.Position.Y);
+        body[8] = checked((byte)(bossPosition ?? plan.BossMap.Position).X);
+        body[9] = checked((byte)(bossPosition ?? plan.BossMap.Position).Y);
         body[10] = byte.MaxValue;
         body[11] = byte.MaxValue;
         // 0238ABCC读取并经03BB1510安装练习模式；不可只改变服务端奖励策略。

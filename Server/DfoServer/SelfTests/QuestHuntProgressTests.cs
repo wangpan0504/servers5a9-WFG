@@ -139,6 +139,23 @@ internal static class QuestHuntProgressTests
         That(QuestHuntProgress.MonsterDeath([mixedActive],mixedEntry,mixedCatalog,Monster(400))[0].ConditionState == 1 &&
             QuestHuntProgress.MonsterDeath([mixedActive],mixedEntry,mixedCatalog,bossMonster)[0].ConditionState == 0,
             "Boss与-5混合目标独立匹配，一次真实Boss死亡推进全部命中通道");
+        var mission = monsterQuest with { Grade = "[mission]", DungeonIndex = 3, IntData = [3,-1,-1,20] };
+        var missionCatalog = new QuestCatalog(new() { [100] = mission });
+        var missionActive = active with { ConditionState = QuestHuntProgress.Initial(mission) };
+        var missionEntry = entry with { QuestAcceptances = [missionActive] };
+        That(QuestHuntProgress.MonsterDeath([missionActive],missionEntry,missionCatalog,Monster(400))[0].ConditionState == 19,
+            "明确地下城的冒险普通怪物目标按真实非Boss死亡减一");
+        foreach (var excluded in new[] { Monster(400,3), Monster(50001), Monster(56001),
+            Monster(400) with { IsFriendly = true }, Monster(400) with { IsBlocking = false },
+            Monster(400) with { IsDummyMapBoss = true } })
+            That(QuestHuntProgress.MonsterDeath([missionActive],missionEntry,missionCatalog,excluded)[0] == missionActive,
+                "冒险-1不混入Boss、特殊模板、友军或演出对象");
+        That(QuestHuntProgress.MonsterDeath([missionActive],missionEntry with { DungeonId = 4 },missionCatalog,Monster(400))[0] == missionActive &&
+            QuestHuntProgress.AiCharacterDeath([missionActive],missionEntry,missionCatalog,400)[0] == missionActive &&
+            QuestHuntProgress.PassiveDeath([missionActive],missionEntry,missionCatalog,400)[0] == missionActive,
+            "冒险-1保持副本、APC与物件隔离");
+        That(!QuestHuntProgress.TryTargets(mission with { DungeonIndex = 4 },out _) &&
+            !QuestHuntProgress.TryTargets(mission with { Grade = "[side]" },out _), "不推广未确认的负选择符形状");
         foreach (int selector in new[] {-1,-2,-4,-11})
             That(!QuestHuntProgress.TryTargets(monsterQuest with { IntData = [3,-1,selector,1] },out _),
                 "未闭合的怪物对象谓词不只按rank启用："+selector);

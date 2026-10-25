@@ -215,7 +215,44 @@ internal static class QuestEligibilityTests
         That(!QuestEligibility.Evaluate(qualified with { CompletedQuests = [2702] }, alchemist, expertCatalog).Eligible &&
             !QuestEligibility.Evaluate(qualified with { ActiveMainQuests = [new(0, 2702, 1)] }, alchemist, expertCatalog).Eligible,
             "已接或已完成的副职业链挡住其他副职业第一步");
+        foreach (int flag in new[] { 0, 1 })
+        {
+            var display = first with { Definition = first.Definition! with
+                { FirstExposedByNpc = flag, Fields = [new("first exposed by npc", [new(0, flag, null)], [])] } };
+            That(QuestCoverage.HasOrdinaryDeclarations(display), "首次NPC显示布尔不再误拒绝已有普通目标");
+            That(!QuestEligibility.Evaluate(origin with { CompletedQuests = [100] }, display, catalog).Eligible &&
+                !QuestEligibility.Evaluate(origin, display with { MinimumLevel = 50 }, catalog).Eligible,
+                "显示声明不跳过已完成或等级资格");
+            foreach (var invalid in new[]
+            {
+                display with { Definition = display.Definition! with { FirstExposedByNpc = 2,
+                    Fields = [new("first exposed by npc", [new(0, 2, null)], [])] } },
+                display with { Definition = display.Definition! with { Fields = [new("first exposed by npc", [new(6, 0, "1")], [])] } },
+                display with { Definition = display.Definition! with { Fields = [.. display.Definition!.Fields, .. display.Definition.Fields] } }
+            })
+                That(!QuestCoverage.HasOrdinaryDeclarations(invalid), "首次NPC非法、文字和重复字段仍拒绝");
+        }
         Console.WriteLine($"PASS {Count - checks} 任务资源入口、等级/职业及前置/子任务资格断言");
+    }
+
+    public static void RunFirstNpcResources(QuestCatalog catalog)
+    {
+        int checks = Count;
+        var declared = catalog.All.Where(quest => quest.Definition?.Has("first exposed by npc") == true).OrderBy(quest => quest.Id).ToArray();
+        That(declared.Select(quest => quest.Id).SequenceEqual(new[] { 8529, 8530, 8531, 8700, 8709, 8710, 8916, 8917, 8936, 20850 }),
+            "新版PVF十条首次NPC显示声明完整盘点，不把其余活动或账号链误当已实现");
+        foreach (var quest in declared)
+        {
+            That(QuestCoverage.HasFirstNpcExposureDeclaration(quest), "真实首次NPC显示布尔形状：" + quest.Id);
+            if (quest.Id is 8709 or 8710)
+                That(QuestEligibility.InspectResource(quest).Entry == QuestResourceEntry.Ordinary &&
+                    QuestAccountPolicy.PaidSynchronization(quest) && !QuestCoverage.Unconfirmed(quest).Contains("synchronization account quest"),
+                    "每周会面保持原账号声明并采用一次领奖事务：" + quest.Id);
+            else
+                That(QuestEligibility.InspectResource(quest).Entry == QuestResourceEntry.Event,
+                    "首次NPC显示字段不移除原活动启用限制：" + quest.Id);
+        }
+        Console.WriteLine($"PASS {Count - checks} 真实PVF首次NPC显示声明及活动、账号边界断言");
     }
 
     internal static StoryQuest Quest(int id) => new(id, "fixture/" + id + ".qst", "[meet npc]", -1, [1], 1, 1,

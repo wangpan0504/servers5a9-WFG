@@ -48,7 +48,7 @@ internal static class DungeonDespairEntryTests
                 "失败不留尝试号、次数或半行初始进度");
         }
         finally {fixture.Sql("DROP TRIGGER fail_despair_entry");}
-        character=repo.CommitDungeonEntry(fixture.Owner,character,500,charge);
+        character=repo.CommitDungeonEntry(fixture.Owner,character,500,charge).Character;
         That(repo.LoadDespairProgress(fixture.Owner,character)==progress &&
             repo.LoadSpecialEntryUsage(fixture.Owner,character,day,DungeonSpecialEntryKind.Despair)==new DungeonSpecialEntryUsage(1,1),
             "首进尝试号、角色名额与初始楼层在同一事务持久化");

@@ -8,6 +8,8 @@ public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, int Sourc
     string? MaintainAbility, bool MaintainSocketStat, int SuccessPercent, string? MakingType, int MakingLevel,
     ImmutableArray<ItemRecipeEntry> Skills, ImmutableArray<string> Diagnostics)
 {
+    public ImmutableArray<ItemRecipeEntry> BeadInputs { get; init; } = [];
+
     public static ItemRecipeFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
         var document = new PvfTokenDocument(tokens, resolve);
@@ -68,6 +70,7 @@ public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, int Sourc
         var inputs = Pairs("input item", true);
         var outputs = Pairs("output item", false);
         var skills = Pairs("need skill", true);
-        return new(id, path, sourceType, inputs, outputs, maintain, sockets, chance, makingType, makingLevel, skills, errors.ToImmutable());
+        var beadInputs = Pairs("bead item", false);
+        return new(id, path, sourceType, inputs, outputs, maintain, sockets, chance, makingType, makingLevel, skills, errors.ToImmutable()) { BeadInputs = beadInputs };
     }
 }

@@ -27,6 +27,14 @@ internal static class DungeonMazeConditions
             }
             else if (inside)
             {
+                // 040805DB..040806A5的非list分支依次保留两个原始整数；此处不推断计时政策。
+                if (section.Tag == "limit time")
+                {
+                    if (section.Tokens is not [{ Type: 0, Value: >= 0 } first, { Type: 0, Value: > 0 } second])
+                        throw new InvalidDataException("限时条件标量声明无效");
+                    result.Add(new(section.Tag, first.Value, second.Value));
+                    continue;
+                }
                 if (section.Tag is not ("hunt monster" or "hunt boss" or "destroy object" or "hunt apc" or "seeking"))
                 {
                     // 未确认的声明保留占位，不能将混合条件误认为单目标猎杀。

@@ -12,7 +12,7 @@ namespace DfoServer.Game.Characters;
 // 魔兽（+0x493）未实现：表内 beast=5927 不在 n_quest/quest.lst，服务端也没有 type 0x28 频道，条件无法证明。
 internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name, byte Job, byte GrowType,
     byte Level, ImmutableArray<InventoryItem> Equipment, bool FiendWarEligible = false,
-    bool AntonEligible = false, bool LukeEligible = false, bool PreyEligible = false)
+    bool AntonEligible = false, bool LukeEligible = false, bool PreyEligible = false, bool IsPvpPrivate = false)
 {
     // etc/enterablespecialchannel.etc fiendwar=8672（Fiendwar_enter.qst「[超时空漩涡]奔赴前线」）。
     public const int FiendWarEntryQuest = 8672;
@@ -36,5 +36,5 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
         FiendWarEligible: IsFiendWarEligible(character.CompletedQuests.Contains(FiendWarEntryQuest), character.Guild is not null),
         AntonEligible: character.CompletedQuests.Contains(AntonEntryQuest),
         LukeEligible: character.CompletedQuests.Contains(LukeEntryQuest),
-        PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level));
+        PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level), IsPvpPrivate: character.IsPvpPrivate);
 }

@@ -18,6 +18,7 @@ internal static class CharacterReadTests
     public static void Run()
     {
         int checks = TestCheck.Count;
+        RosterAuraVisibility();
         string root = Path.Combine(Path.GetTempPath(), "s5a9-character-read-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -105,6 +106,54 @@ internal static class CharacterReadTests
         }
         finally { Directory.Delete(root, recursive: true); }
         Console.WriteLine($"PASS {TestCheck.Count - checks} 名册、按需角色与账号共享读取断言");
+    }
+
+    static void RosterAuraVisibility()
+    {
+        InventoryItem Aura(int uid, short slot, int template, int source = 0) =>
+            new(uid, new(InventoryListType.Equipment, slot), new(template, ItemKind.Avatar, uid))
+            {
+                Avatar = new() { ClearAvatarId = source, Color1 = 0x1234, Color2 = 0x5678, Socket0 = new(0xFFEF, 3001) }
+            };
+        var point = new Location(1, 0, 10, 10);
+        var bare = new Character(1, 0, "BareAura", 0, point, point);
+        Character[] roles =
+        [
+            bare,
+            bare with { Id = 2, Slot = 2, Name = "NormalAura", Inventory = new([Aura(11, 9, 1001)]) },
+            bare with { Id = 3, Slot = 5, Name = "CloneAura", Inventory = new([Aura(12, 9, 1002, 1001)]) },
+            bare with { Id = 4, Slot = 8, Name = "EmptyClone", Inventory = new([Aura(13, 9, 1002)]) },
+            bare with { Id = 5, Slot = 10, Name = "SkinAura", Inventory = new([Aura(14, 9, 1001), Aura(15, 11, 1003)]) }
+        ];
+        byte[] body = CharacterPackets.Roster(roles.Select(CharacterRosterEntry.FromCharacter).ToArray());
+        using var reader = new BinaryReader(new MemoryStream(body));
+        That(reader.ReadBytes(15).Length == 15 && body[1] == roles.Length, "光环名册保持原头部与角色数");
+        foreach (var role in roles)
+        {
+            That(reader.ReadUInt16() == role.Slot, "多角色光环名册保留持久槽位");
+            That(CharacterName.Encoding.GetString(reader.ReadBytes(reader.ReadInt32())) == role.Name, "光环行后续角色名称不偏移");
+            reader.ReadBytes(15); // 两个保留字节、职业/转职/等级及10B辅助字段。
+            That(reader.ReadByte() == role.Inventory.Items.Length, "无光环不造装备，普通、克隆及幻化槽保留真实条目数");
+            foreach (var item in role.Inventory.Items)
+            {
+                That(reader.ReadByte() == item.Position.Index && reader.ReadInt32() == item.Core.ItemId, "光环槽和模板不由使能位替代");
+                That(reader.ReadInt32() == 4 && reader.ReadUInt16() == 0x1234 && reader.ReadUInt16() == 0x5678,
+                    "名册保留光环的原生染色扩展");
+                reader.ReadBytes(3);
+                That(reader.ReadInt32() == item.Avatar!.ClearAvatarId, "普通及空克隆来源保持0，已有克隆保持来源编号");
+                if (item.Position.Index == 9 && item.Avatar.ClearAvatarId > 0)
+                {
+                    That(reader.ReadInt32() == 30 && reader.ReadUInt16() == 0xFFEF && reader.ReadInt32() == 3001,
+                        "克隆光环来源后保留完整孔位扩展");
+                    reader.ReadBytes(24);
+                }
+                That(reader.ReadInt32() == 0 && reader.ReadByte() == 0, "光环条目附魔字段后准确进入行尾");
+            }
+            byte[] tail = reader.ReadBytes(48);
+            That(tail.Length == 48 && tail[46] == 1 && tail[47] == 0, "每行末尾光环使能为原生u16值1，不扩宽或借用其他标志");
+        }
+        Bytes(reader.ReadBytes(10), [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], "最后一行光环后名册公共尾部不变");
+        That(reader.BaseStream.Position == body.Length, "多角色及可变长克隆光环名册完整消费");
     }
 
 }

@@ -105,6 +105,33 @@ internal static class DevelopmentGmExtendedTests
         Answer("currency Other revive set 3");
         TestCheck.That(Load().Revision == revision, "同额设置不推进revision");
 
+        // 黑钻：wallet 只读结果带账号级到期时间与开通标志；0 天清除。
+        TestCheck.That(Json(Answer("wallet Other")).GetProperty("blackDiamond").GetBoolean() == false, "默认未开通黑钻");
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        string bdGrant = Answer("black-diamond Other 30");
+        JsonElement afterOpen = Json(Answer("wallet Other"));
+        long bdExpiry = afterOpen.GetProperty("blackDiamondExpiresAt").GetInt64();
+        TestCheck.That(bdGrant.StartsWith("OK ", StringComparison.Ordinal) && afterOpen.GetProperty("blackDiamond").GetBoolean()
+            && bdExpiry >= now + 29 * 86400 && bdExpiry <= now + 31 * 86400, "黑钻按现在+30天写入并在 wallet 暴露到期时间");
+        TestCheck.That(Answer("black-diamond Other 0").StartsWith("OK ", StringComparison.Ordinal)
+            && Json(Answer("wallet Other")).GetProperty("blackDiamond").GetBoolean() == false, "黑钻 0 天清除到期时间");
+
+        // 副职业：只读给出当前类型/熟练度/等级；写入按 PVF [expertness exp] 阈值落该等级的最低熟练度。
+        var noJob = Json(Answer("expert-job Other"));
+        TestCheck.That(noJob.GetProperty("type").GetInt32() == 0 && noJob.GetProperty("level").GetInt32() == 0, "默认没有副职业");
+        long jobRevision = Load().Revision;
+        var jobFive = Json(Answer("expert-job Other 1 5"));
+        var jobFiveRow = Load();
+        TestCheck.That(jobFive.GetProperty("expertness").GetInt32() == 359 && jobFive.GetProperty("level").GetInt32() == 5
+            && jobFiveRow.ExpertJobType == 1 && jobFiveRow.ExpertJobExperience == 359 && jobFiveRow.Revision == jobRevision + 1,
+            "副职业 Lv5 按阈值写入 359 熟练度并推进 revision");
+        var jobEleven = Json(Answer("expert-job Other 2 11"));
+        TestCheck.That(jobEleven.GetProperty("expertness").GetInt32() == 1067 && jobEleven.GetProperty("level").GetInt32() == 11
+            && Json(Answer("expert-job Other")).GetProperty("typeLabel").GetString() == "炼金术师" && Load().ExpertJobType == 2,
+            "副职业可改类型并写到 11 级上限");
+        foreach (string bad in new[] { "expert-job Other 0 1", "expert-job Other 5 1", "expert-job Other 1 0", "expert-job Other 1 12", "expert-job Other 1" })
+            TestCheck.That(Answer(bad).StartsWith("ERR "), "副职业参数严格拒绝: " + bad);
+
         // 账号金库：未开通（容量0）拒绝；已开通后按容量档位上限校验，同账号共享。
         TestCheck.That(Answer("currency Other vault-gold set 1").StartsWith("ERR ") && Answer("currency Other vault-gold mul 1").StartsWith("ERR "), "金库未开通或操作非法时拒绝");
         int tierLimit;

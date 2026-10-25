@@ -27,9 +27,9 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         // ACK21必需实体核心并会解引用购入对象；服务商品不能伪造空槽或临时库存回执。
         if (template.IsPremiumService) return InventoryResult.Reject(17);
         // Client 普通装备购买实收 count=0，仍按一件购买；其他商品数量须为正。
-        if (request.Count == 0 && template.Kind != ItemKind.Equipment)
+        if (request.Count == 0 && template.Kind is not (ItemKind.Equipment or ItemKind.Talisman))
             return InventoryResult.Reject(0x85);
-        int count = template.Kind is ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal ? 1 : request.Count;
+        int count = template.Kind is ItemKind.Equipment or ItemKind.Talisman or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal ? 1 : request.Count;
         var price = template.ShopPrice;
         var before = character.Inventory;
         var after = before;
@@ -85,7 +85,16 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             if (target > maximum)
                 return InventoryResult.Reject(0x85);
         }
-        var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, [new(request.ItemId, count)], catalog, goldLimits, pieces, now);
+        // 休亚（NPC 486）用材料兑换的装备带交换资格位：客户端据此显示绿字并允许拖入交换窗口。
+        // 其他商人、金币商品与非装备保持模板默认核心。
+        bool exchangeOrigin = price.Materials.Length != 0 && template.Kind == ItemKind.Equipment &&
+            shops.Shops.TryGetValue(request.ShopId, out var boughtShop) && boughtShop.NpcId == EpicExchangeCatalog.MerchantNpcId;
+        var grant = exchangeOrigin
+            ? InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid },
+                [new(0, new(InventoryListType.Main, 0),
+                    InventoryRewardGrantService.Create(template, utcNow: now) with { Extension119 = 0x01 })],
+                catalog, goldLimits, pieces, now)
+            : InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, [new(request.ItemId, count)], catalog, goldLimits, pieces, now);
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)17 : (ushort)4);
         after = grant.Plan!.After;
@@ -117,7 +126,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
     public InventoryResult Sell(Character character, SellItemRequest request)
     {
         var before = character.Inventory;
-        if (request.Position.List is not (InventoryListType.Main or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.PersonalCargo or InventoryListType.Equipment))
+        if (request.Position.List is not (InventoryListType.Main or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman or InventoryListType.PersonalCargo or InventoryListType.Equipment))
             return InventoryResult.Reject();
         // 晶块槽是账号钱包的投影，没有可供删除或解锁的实体 UID。
         if (request.Position.List == InventoryListType.Main)
@@ -134,7 +143,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
         var template = catalog.Get(source.Core.ItemId);
         // 时装穿戴后位于 Equipment，不能只靠容器排除；宠物蛋和成宠仍按原事务出售。
-        if (template.Kind == ItemKind.Avatar)
+        if (template.Kind == ItemKind.Avatar || template.PvpFreeEquipment)
             return InventoryResult.Reject();
         int price = template.ShopPrice.GetSellGold(source.Core.Durability, template.Durability);
         long gold = (long)before.Gold + (long)price * count;

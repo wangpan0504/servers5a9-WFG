@@ -10,14 +10,14 @@ internal sealed record InventoryDiscardPlan(InventoryDiscardRequest Request, Inv
     public static (InventoryDiscardPlan? Plan, ushort Error) Prepare(Character character, InventoryDiscardRequest request,
         ItemTemplate template, long now)
     {
-        if (request.List is not (0 or 3) || request.Slot > short.MaxValue)
+        if (request.List is not (0 or 3 or 46) || request.Slot > short.MaxValue || request.List == 46 && request.Slot >= 210)
             return (null, 19);
         var source = character.Inventory.Find(new((InventoryListType)request.List, (short)request.Slot));
         if (source is null || request.Count == 0 || request.Count > source.Core.Count ||
             !source.Core.IsStackable && request.Count != 1)
             return (null, 17);
         if (source.IsExpired(now)) return (null, 104);
-        if (source.Avatar is not null || source.Creature is not null || source.Core.Kind is ItemKind.Avatar or ItemKind.Creature || source.Core.IsRental ||
+        if (template.PvpFreeEquipment || source.Avatar is not null || source.Creature is not null || source.Core.Kind is ItemKind.Avatar or ItemKind.Creature || source.Core.IsRental ||
             source.Core.EquipmentLockId != 0 || source.Core.TradeRestriction != 0 ||
             template.Id != source.Core.ItemId || template.Kind != source.Core.Kind)
             return (null, 19);

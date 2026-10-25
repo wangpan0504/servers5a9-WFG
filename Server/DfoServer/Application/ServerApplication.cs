@@ -131,8 +131,13 @@ public static class ServerApplication
             {
                 using var output = Console.OpenStandardOutput();
                 var scanItems = new ItemResources(pvf);
-                JsonSerializer.Serialize(output, DfoServer.Game.Quests.QuestCoverage.Scan(DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(scanItems.Creatures),
-                    scanItems.Items, scanItems.EpicPieces, DfoServer.GameWorld.Quests.QuestRewardParameterCatalog.Load(pvf)));
+                var scanQuests = DfoServer.GameWorld.Quests.QuestCatalog.Load(pvf).WithCreatures(scanItems.Creatures);
+                var scanDungeons = DungeonCatalog.Load(pvf);
+                var scanRooms = DungeonRoomCatalog.Load(pvf);
+                var scanHope = OperationHopeCatalog.Load(pvf,scanDungeons,scanQuests,scanRooms);
+                JsonSerializer.Serialize(output, DfoServer.Game.Quests.QuestCoverage.Scan(scanQuests,
+                    scanItems.Items, scanItems.EpicPieces, DfoServer.GameWorld.Quests.QuestRewardParameterCatalog.Load(pvf), scanDungeons,
+                    DfoServer.GameWorld.Quests.QuestConnectionCatalog.Load(pvf),scanHope));
                 output.WriteByte((byte)'\n');
                 return 0;
             }

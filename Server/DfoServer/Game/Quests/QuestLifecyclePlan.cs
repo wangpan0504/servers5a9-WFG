@@ -83,7 +83,8 @@ internal sealed class QuestLifecyclePlan
                 (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 &&
                     QuestClearEligibility.MatchesClearMap(quest, entry, clear) &&
                     (quest.DungeonIndex is null or < 0 || quest.DungeonIndex == entry.DungeonId) ||
-                 QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Creature &&
+                 (QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Creature ||
+                    QuestAutoDailyPlan.Supports(quest)) &&
                     QuestDungeonClearProgress.Matches(quest,entry,run) && QuestDungeonClearProgress.ValidScalar(quest,row.ConditionState))
                 ? row with { ConditionState = row.ConditionState - 1 } : row).ToImmutableArray();
         }
@@ -118,6 +119,8 @@ internal sealed class QuestLifecyclePlan
             !QuestRelationProgress.ThresholdParent(quest,catalog) && !QuestHiddenEntry.Direct(quest,catalog))
             throw new InvalidDataException(eligibility.Reason);
         QuestCoverage.RequireOrdinaryDeclarations(quest);
+        if (QuestMailPlan.CompletionDeclaration(quest))
+            _ = QuestMailPlan.Prepare(quest,items,pieces,now);
         if (QuestCycle.Daily(quest) && expected.QuestCycleDay != QuestCycle.Day(now))
             throw new InvalidDataException("每日任务需要当前游戏日快照");
         if (expected.ActiveMainQuests.Length >= 30)
@@ -126,6 +129,7 @@ internal sealed class QuestLifecyclePlan
         {
             // 租赁成功事务才归零；这是本窄用例的未达成模型，不是任意custom的初值。
             "[custom quest]" when QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest) => 1,
+            "[epic production]" when QuestEpicProductionProgress.Supports(quest) => 1,
             "[self disjoint item]" when QuestExpertJobProgress.SelfDisjoint(quest) => 1,
             "[meet npc]" when quest.SubType == -1 && quest.IntData.Count == 1 && quest.IntData[0] > 0 => 1,
             // Full03成功ACK31的type4/sub1立即触发event4归零，不读取实际点击NPC。
@@ -133,6 +137,7 @@ internal sealed class QuestLifecyclePlan
             "[reach the range]" when QuestClientSceneProgress.TownRange(quest) => 1,
             "[look cinematic]" when QuestClientSceneProgress.Cinematic(quest,out _,out _) || QuestClientSceneProgress.DungeonCinematic(quest) => 1,
             "[custom multi condition]" when QuestDazzlementStorage.Matches(quest) => 1,
+            "[custom multi condition]" when DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest) => DfoServer.Game.Pvp.PvpTrainingProgress.Initial(quest),
             "[question]" when QuestQuestionProgress.TryCount(quest,out _) => QuestQuestionProgress.Unanswered,
             "[seeking]" when SeekingSubtype(quest) && ValidSeeking(quest) => HasMaterials(expected, quest, now.ToUnixTimeSeconds()) ? 0u : 1u,
             "[seek n meet npc]" when quest.SubType == -1 && ValidSeeking(quest) => 512u | MaterialState(expected.Inventory, quest, now.ToUnixTimeSeconds()),
@@ -280,13 +285,54 @@ internal sealed class QuestLifecyclePlan
         bool state = QuestStateProgress.Type(quest) is not null && scalar == QuestStateProgress.Scalar(expected,quest);
         bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;
         bool observedRental = QuestRentalProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
+        bool observedEpic = QuestEpicProductionProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
         bool observedExpert = QuestExpertJobProgress.Tutorial(quest) && scalar == 0 && active.ConditionState == 0;
-        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !storage && !question && !state && !observedClear && !observedRental && !observedExpert && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
+        if (active.AcceptanceId == Guid.Empty || !observedHunt && !seekMeet && !parent && !scene && !storage && !question && !state && !observedClear && !observedRental && !observedExpert && !observedEpic && (scalar > 1 || quest.Condition is not ("[meet npc]" or "[seeking]")))
             throw new InvalidDataException("条件类型或接取身份不符");
         var after = expected.ActiveMainQuests.Select(value => value.AcceptanceId == active.AcceptanceId ? value with { ConditionState = scalar } : value).ToImmutableArray();
         return new(expected, QuestLifecycleAction.Condition, active.QuestId, active.AcceptanceId,
             catalog is null ? after : QuestRelationProgress.Refresh(after,QuestEligibility.Completed(expected),catalog),
             new(expected.Inventory, expected.Inventory, "quest_condition"));
+    }
+
+    // 调用者必须持有当前训练实例的完整轮次胜利；不向普通33或SetCondition提供绕过入口。
+    internal static QuestLifecyclePlan? ObservePvpTrainingWin(Character expected, StoryQuest quest,
+        DfoServer.Game.Pvp.PvpTrainingRun run)
+    {
+        if (!ReferenceEquals(run.Entry.Expected,expected) || run.Entry.IsCombo || !run.Round.Complete || run.InstanceId==Guid.Empty ||
+            !expected.ActiveMainQuests.Any(row=>ReferenceEquals(row,run.Entry.Quest)) ||
+            run.Entry.Quest.QuestId!=quest.Id || run.Entry.Quest.AcceptanceId==Guid.Empty ||
+            !DfoServer.Game.Pvp.PvpTrainingProgress.TryApply(quest,run.Entry.Quest.ConditionState,
+                DfoServer.Game.Pvp.PvpTrainingFact.OpponentsDefeated,run.Entry.Mode!.Difficulty,out uint scalar)) return null;
+        var after=expected.ActiveMainQuests.Select(row=>ReferenceEquals(row,run.Entry.Quest) ? row with {ConditionState=scalar} : row).ToImmutableArray();
+        return new(expected,QuestLifecycleAction.Condition,run.Entry.Quest.QuestId,run.Entry.Quest.AcceptanceId,
+            after,new(expected.Inventory,expected.Inventory,"quest_pvp_training_win"));
+    }
+
+    internal static QuestLifecyclePlan? ObtainPvpTrainingManual(Character expected,StoryQuest quest,
+        DfoServer.Game.Pvp.PvpTrainingRun run,ItemCatalog items,GoldLimitCatalog goldLimits,EpicPieceCatalog pieces)
+    {
+        if(!DfoServer.Game.Pvp.PvpTrainingProgress.Manual(quest) || ObservePvpTrainingWin(expected,quest,run) is not { } progress)
+            return null;
+        var grant=InventoryRewardGrantService.TryGrantBatch(expected,
+            [new(DfoServer.Game.Pvp.PvpTrainingProgress.ManualItemId,1)],items,goldLimits,pieces,DateTimeOffset.UtcNow);
+        if(!grant.Accepted || grant.Plan is null || grant.Plan.ChangedSlots.Any(slot=>slot.List!=InventoryListType.Main)) return null;
+        // 物品与已取得的原胜利通道一起保存；重发1269不能用同一胜利再次领书。
+        return new(expected,QuestLifecycleAction.Condition,checked((ushort)quest.Id),run.Entry.Quest.AcceptanceId,progress.ActiveAfter,grant.Plan);
+    }
+
+    // 039C7488→015C2240的成功报告不含技能命中明细；只承认原正式连招实例和接取身份。
+    internal static QuestLifecyclePlan? ObservePvpTrainingCombo(Character expected,StoryQuest quest,
+        DfoServer.Game.Pvp.PvpTrainingRun run)
+    {
+        if(!run.Entry.IsCombo || run.Entry.Combos.IsDefaultOrEmpty || run.InstanceId==Guid.Empty ||
+            !ReferenceEquals(run.Entry.Expected,expected) || !expected.ActiveMainQuests.Any(row=>ReferenceEquals(row,run.Entry.Quest)) ||
+            run.Entry.Quest.QuestId!=quest.Id || run.Entry.Quest.AcceptanceId==Guid.Empty ||
+            !DfoServer.Game.Pvp.PvpTrainingProgress.TryApply(quest,run.Entry.Quest.ConditionState,
+                DfoServer.Game.Pvp.PvpTrainingFact.ComboCompleted,0,out uint scalar)) return null;
+        var after=expected.ActiveMainQuests.Select(row=>ReferenceEquals(row,run.Entry.Quest) ? row with {ConditionState=scalar} : row).ToImmutableArray();
+        return new(expected,QuestLifecycleAction.Condition,run.Entry.Quest.QuestId,run.Entry.Quest.AcceptanceId,
+            after,new(expected.Inventory,expected.Inventory,"quest_pvp_training_combo"));
     }
 
     internal static QuestLifecyclePlan? ObserveExpertJobTutorial(Character expected, QuestCatalog quests, ushort questId)

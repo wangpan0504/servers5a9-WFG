@@ -5,6 +5,9 @@ $prefix=$root.TrimEnd([IO.Path]::DirectorySeparatorChar)+[IO.Path]::DirectorySep
 $issues=[Collections.Generic.List[string]]::new()
 $excludedDirectories=@('.git','.vs','.venv','__pycache__','build','bin','obj','artifacts','dist','runtime','node_modules')
 $files=[Collections.Generic.List[string]]::new()
+# 本轮索引只保存实际遍历到的文件和含文件目录；不缓存文件内容或链接检查结果。
+$fileIndex=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$directoryIndex=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $directories=[Collections.Generic.Queue[string]]::new()
 $directories.Enqueue($root)
 while($directories.Count){
@@ -16,6 +19,14 @@ while($directories.Count){
             }
             $directories.Enqueue($item.FullName)
         }else{$files.Add($item.FullName.Substring($prefix.Length).Replace('\','/'))}
+    }
+}
+foreach($file in $files){
+    [void]$fileIndex.Add($file)
+    $parent=$file.LastIndexOf('/')
+    while($parent -ge 0){
+        [void]$directoryIndex.Add($file.Substring(0,$parent))
+        $parent=$file.LastIndexOf('/',$parent-1)
     }
 }
 $textExtensions=@('.md','.cs','.csproj','.sln','.ps1','.py','.cpp','.h','.asm','.def','.cmd','.bat','.sh','.json','.ini','.yml','.yaml','.txt','.sql')
@@ -38,10 +49,10 @@ function Check-Link([string]$Source,[int]$Line,[string]$Link){
     }
     if($path -eq $root){return}
     $relative=$path.Substring($prefix.Length).Replace('\','/')
-    if((Test-Path -LiteralPath $path -PathType Container) -and -not @($files|Where-Object {$_.StartsWith($relative+'/',[StringComparison]::OrdinalIgnoreCase)}).Count){
+    if((Test-Path -LiteralPath $path -PathType Container) -and -not $directoryIndex.Contains($relative.TrimEnd('/'))){
         $issues.Add("${Source}:${Line}: document link targets an excluded/generated directory: $target")
     }
-    if($relative -notin $files -and (Test-Path -LiteralPath $path -PathType Leaf)){
+    if(-not $fileIndex.Contains($relative) -and (Test-Path -LiteralPath $path -PathType Leaf)){
         $issues.Add("${Source}:${Line}: document link targets an excluded/generated file: $target")
     }
 }

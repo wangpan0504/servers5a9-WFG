@@ -61,7 +61,7 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
     public EpicExchangeOrigin? EpicExchangeOrigin { get; init; }
     [JsonIgnore] public byte Upgrade => (byte)(Attr & 0x1F);
     [JsonIgnore] public bool IsStackable => Kind is ItemKind.Consumable or ItemKind.Material or ItemKind.Quest or
-        ItemKind.CreatureConsumable or ItemKind.Emblem or ItemKind.Profession or ItemKind.GuardianGem;
+        ItemKind.CreatureConsumable or ItemKind.Emblem or ItemKind.Profession or ItemKind.GuardianGem or ItemKind.Rune;
     [JsonIgnore] public int Count => IsStackable ? Value : 1;
     public bool IsExpired(long utcSeconds) => ExpireTime > 0 && ExpireTime <= utcSeconds;
     public void Validate()
@@ -72,5 +72,7 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
             Random0.Type == 0 && (Random1.Type != 0 || Random2.Type != 0) || Random1.Type == 0 && Random2.Type != 0 ||
             EpicExchangeOrigin is { } origin && (Kind != ItemKind.Equipment || origin.Version != 1 || origin.SourceItemId <= 0))
             throw new InvalidDataException("无效物品核心");
+        if (Kind == ItemKind.Talisman)
+            TalismanSocketColors.Read(this).Validate();
     }
 }

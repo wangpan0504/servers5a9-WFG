@@ -27,6 +27,7 @@ internal static class TownSelectionTests
         ChannelSelection();
         SelectionFailures();
         TravelCommits();
+        NpcReturnCommits();
         Console.WriteLine($"PASS {TestCheck.Count - before} town rules/selection/receipt assertions");
     }
 
@@ -46,7 +47,7 @@ internal static class TownSelectionTests
             [(3, 0)] = Area(3, portal) with { Level = 10, Quests = [10], AnyQuests = [11, 12], ExceptQuests = [13],
                 Phases = [portal with { Error = "stage-unavailable" }], Shifts = [new(0, 99)] },
             [(4, 0)] = Area(4, Map("npc.map", false, [], [new(200, 1, 1)]))
-        }, room, street, new(0, [], []), [new(3, 0, new(0, 0, 10, 10), 10, 10)], new Dictionary<uint, uint[]> { [100] = [200] });
+        }, room, street, new(0, [], []), [new(3, 0, new(0, 0, 10, 10), 10, 10)], new Dictionary<uint, uint[]> { [100] = [200] }) { NpcExits = new HashSet<uint> { 200 } };
     }
 
     static void Rules()
@@ -203,6 +204,48 @@ internal static class TownSelectionTests
         TestCheck.That(!f.Session.CanPublishTravel(receipt), "另一选角epoch跳过旧旅行发布");
         using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
         Reject<InvalidOperationException>(() => f.Session.CanPublishTravel(receipt), "旧owner不得发布旅行");
+    }
+
+    static void NpcReturnCommits()
+    {
+        using var f = new Fixture();
+        f.Session.Select(0, Limits);
+        f.Session.MarkReady();
+        var origin = f.Session.Selected!.Position;
+        var enter = new AreaRequest(4, 0, 30, 40, 5, origin.Town, origin.Area, 0, 200);
+        var leave = new AreaRequest(origin.Town, origin.Area, origin.X, origin.Y, 5, 4, 0, 0);
+        f.Execute("CREATE TRIGGER fail_npc_enter BEFORE UPDATE ON characters BEGIN SELECT RAISE(ABORT,'npc entry'); END");
+        Reject<SqliteException>(() => f.Session.Travel(enter), "NPC入场保存失败不能安装返回来源");
+        That(f.Session.Selected!.Position == origin && !f.Session.Travel(leave), "未入场的退出请求不能写库");
+        f.Execute("DROP TRIGGER fail_npc_enter");
+        That(f.Session.Travel(enter) && f.Session.Selected!.Position == new Location(4, 0, 30, 40, origin.Direction), "NPC入场成功后安装本选角来源");
+        var arrived = f.Session.Selected!;
+        That(!f.Session.Travel(leave with { X = (ushort)(origin.X + 1) }) &&
+            !f.Session.Travel(leave with { Town = 2 }) && !f.Session.Travel(leave with { Movement = 1 }) &&
+            !f.Session.Travel(leave with { PathKind = 5 }) && !f.Session.Travel(leave with { TargetNpc = 999 }),
+            "退出必须绑定原坐标、来源地区及原码请求，不作任意传送");
+        That(Equal(arrived, f.Read()) && ReferenceEquals(arrived, f.Session.Selected), "错误退出请求不改变存档或来源票据");
+        f.Execute("CREATE TRIGGER fail_npc_exit BEFORE UPDATE ON characters BEGIN SELECT RAISE(ABORT,'npc exit'); END");
+        Reject<SqliteException>(() => f.Session.Travel(leave), "NPC退出保存失败无成功回执");
+        That(Equal(arrived, f.Read()) && ReferenceEquals(arrived, f.Session.Selected), "退出回滚保留位置与可重试来源");
+        f.Execute("DROP TRIGGER fail_npc_exit");
+        That(f.Session.Move(new(32, 42, 0, 0, 0, 0)) && f.Session.Travel(leave, out var receipt) &&
+            receipt is not null && f.Session.Selected!.Position == origin && Equal(f.Session.Selected, f.Read()),
+            "入场后步行不丢来源，回滚后重试退出只提交一次");
+        That(!f.Session.Travel(leave), "返回票据不能在已退出场景重放");
+        That(f.Session.Travel(enter), "再次合法入场建立新来源");
+        f.Session.ReturnToRoster();
+        f.Session.Select(0, Limits, resumeTown: true);
+        f.Session.MarkReady();
+        That(!f.Session.Travel(leave) && f.Session.Selected!.Position.Town == 4,
+            "换选角或重连不能沿用上个客户端缓存的NPC返回来源");
+        var noExit = f.Towns.Areas[(4, 0)].Default with { Npcs = [] };
+        var areas = f.Towns.Areas.ToDictionary(pair => pair.Key, pair => pair.Value);
+        areas[(4, 0)] = areas[(4, 0)] with { Default = noExit };
+        var unavailable = new TownCatalog(areas, f.Towns.Room, f.Towns.InitialReturn, f.Towns.Dock,
+            f.Towns.RoomPortals, f.Towns.NpcMoves) { NpcExits = f.Towns.NpcExits };
+        That(!TownTravel.Plan(f.Session.Selected!, leave, unavailable, Quests, npcVisit: new(origin, 4, 0)).Accepted,
+            "当前阶段无exit NPC不能借历史来源开门");
     }
 
     static bool Equal(Character left, Character right) => JsonSerializer.Serialize(left) == JsonSerializer.Serialize(right);

@@ -117,6 +117,8 @@ internal static class ServerRuntime
         var expeditionService = new Game.Adventure.AdventureExpeditionService(adventureCatalog, expeditionCatalog);
         var expeditionProjection = new AdventureExpeditionProjection(expeditionService, clock);
         var growth = growthCatalog ?? CharacterGrowthCatalog.Load(pvf, learning);
+        var privateCharacters = new Game.Pvp.PvpPrivateCharacterService(characters,PvpPrivateCharacterCatalog.Load(pvf),
+            learning,growth,itemResources.Items,towns);
         var experienceBonuses = new Game.Characters.ExperienceBonusService(itemResources.Items, itemResources.RecoveryConsumables,
             GameWorld.Characters.ExperienceBonusCatalog.Load(pvf));
         tutorials ??= new TutorialCatalog(pvf);
@@ -130,6 +132,18 @@ internal static class ServerRuntime
         var guildPermits = new Game.Guild.GuildPermitRegistry();
         var guildPermitDelivery = new GuildPermitDelivery(guildPermits);
         var devil = new DevilContractService(itemResources.DevilContracts, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        var epicProduction = new EpicProductionCatalog(pvf);
+        var epicAbilities = new EpicProductionAbilityCatalog(pvf);
+        string epicPolicyPath=Path.Combine(options.DataDirectory,"epic-production-compatibility.json");
+        var epicPolicy=File.Exists(epicPolicyPath)
+            ? System.Text.Json.JsonSerializer.Deserialize<Game.EpicProduction.EpicProductionCompatibility>(File.ReadAllText(epicPolicyPath),
+                new System.Text.Json.JsonSerializerOptions { UnmappedMemberHandling=System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow })
+                ?? throw new InvalidDataException("史诗加工兼容配置为空")
+            : new Game.EpicProduction.EpicProductionCompatibility();
+        epicPolicy.Validate();
+        log.Write("startup",new { Stage="Epic production compatibility",State="complete",epicPolicy.GreatSuccessPercent,
+            Policy="Independent per processing operation; not original min/max scheduling" });
+        var epicProductionProjection=new EpicProductionProjection(clock);
         var collectBoxProjection = new CollectBoxProjection(itemResources.CollectBoxes, clock);
         var incounts = LoadIncounts(pvf);
         var weaponSkinService = new InventorySkinStorageService(itemResources.Items, itemResources.Skins,
@@ -139,7 +153,8 @@ internal static class ServerRuntime
             Cutscenes = itemResources.Skins.Cutscenes.Count,
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties);
+        var dungeonCatalog = DungeonCatalog.Load(pvf);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
@@ -204,12 +219,13 @@ internal static class ServerRuntime
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
         DungeonPassiveDropPolicy? passiveDrops = null;
         AssaultModeCatalog? assaultMode = null;
+        OperationHopeCatalog? operationHope = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
-            var dungeonCatalog = DungeonCatalog.Load(pvf);
             selectionDungeons = dungeonCatalog;
             assaultMode = AssaultModeCatalog.Load(pvf, dungeonCatalog);
             var rooms = DungeonRoomCatalog.Load(pvf);
+            operationHope = OperationHopeCatalog.Load(pvf,dungeonCatalog,quests,rooms);
             tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
             questRooms = rooms;
             var drops = DungeonMonsterDropCatalog.Load(pvf);
@@ -288,7 +304,7 @@ internal static class ServerRuntime
         }
         else
         {
-            var catalog = DungeonCatalog.Load(pvf);
+            var catalog = dungeonCatalog;
             var rooms = options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.FinishLoadingMonsters
                 ? DungeonRoomCatalog.Load(pvf) : null;
             dungeon = new DungeonProbeModule(log, catalog, options.DevelopmentDungeonEntryProbe, rooms, projection);
@@ -304,9 +320,9 @@ internal static class ServerRuntime
             new SessionHandler(projection, log),
             // 客户端保活：0x04FE/0x06BB 每 10 秒一次，服务端必须回同 opcode 帧（见 KeepaliveHandler）。
             new KeepaliveHandler(log),
-
+            new PvpTrainingHandler(new GameWorld.Pvp.PvpArcadeCatalog(pvf),new GameWorld.Pvp.PvpPracticeComboCatalog(pvf),quests,log,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
-                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection),
+                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters),
             new SocialHandler(repository, social, online, log),
             new PlayerInteractionHandler(parties, online, log, partyDungeons),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
@@ -329,7 +345,9 @@ internal static class ServerRuntime
             new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, online),
             new CollectBoxHandler(new Game.CollectBox.CollectBoxService(itemResources.CollectBoxes, itemResources.Items,
                 itemResources.EpicPieces), collectBoxProjection, inventoryProjection, clock),
-            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts), inventoryProjection),
+            new EpicProductionHandler(epicProduction,epicAbilities,epicPolicy,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,
+                epicProductionProjection,inventoryProjection,clock),
+            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts), inventoryProjection, log),
             new CubeContractHandler(new CubeContractService(itemResources.Contracts), inventoryProjection, log, clock),
             new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables, clock), log, tutorials, itemResources.Items, inventoryProjection,
                 new InventoryPremiumContractUseService(itemResources.Items, itemResources.Contracts, clock), creatures, creatureProjection, projection,
@@ -352,12 +370,17 @@ internal static class ServerRuntime
                 debugSettings: debugSettings, attributePairs: attributePairs), inventoryProjection, log),
             new EmblemCompoundHandler(new InventoryEmblemCompoundService(itemResources.Items,
                 itemResources.EmblemCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
+            new GuildCompoundHandler(new InventoryGuildCompoundService(itemResources.Items,
+                itemResources.GuildCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,
                 itemResources.AvatarCompounds, itemResources.AvatarPackages), inventoryProjection, log),
             new AvatarDyeHandler(new InventoryAvatarDyeService(itemResources.Items, itemResources.AvatarDyes), inventoryProjection, log),
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
             new EnchantmentHandler(enchantmentService, inventoryProjection, log),
             new EquipmentEmblemHandler(new InventoryEquipmentEmblemService(itemResources.Items, clock), inventoryProjection, log),
+            new TalismanHandler(new InventoryTalismanService(itemResources.Items),
+                new InventoryTalismanCompoundService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces),
+                itemResources.Items, inventoryProjection, log, clock),
             new EnhancementHandler(new InventoryEnhancementService(itemResources.Items, itemResources.Enhancements,
                 itemResources.MedalUpgrades, clock: clock,
                 amplification: new InventoryAmplifyUpgradeService(itemResources.Items, itemResources.AmplifyUpgrades, itemResources.Enhancements,
@@ -374,6 +397,9 @@ internal static class ServerRuntime
             new AvatarDisjointHandler(new InventoryAvatarDisjointService(itemResources.Items, itemResources.AvatarDisjoint,
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
+            // 原生史诗交换：CMD1569，配置 etc/epicitemexchange.etc，回执同 opcode 0x621。
+            new EpicExchangeHandler(new EpicExchangeService(itemResources.EpicExchanges, itemResources.Items,
+                itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             // 设计图升级：CMD271，材料与产物来自设计图自身的 [emancipate group]。
             new UpgradeChronicleHandler(new InventoryUpgradeChronicleService(itemResources.UpgradeChronicles, itemResources.Items,
                 itemResources.EpicPieces, clock), inventoryProjection),
@@ -387,6 +413,7 @@ internal static class ServerRuntime
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings), inventoryProjection),
             new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons),
+            new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new ImageCommunicationHandler(imageCommunication, quests, log),
@@ -437,7 +464,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;
