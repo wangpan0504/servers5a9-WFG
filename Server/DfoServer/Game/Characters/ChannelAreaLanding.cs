@@ -3,7 +3,8 @@ using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.Characters;
 
-// 新选角按频道分组落到 TownCatalog 里已有的门口。坐标来自区域 [gate]、共享房间或相邻地区反推的 Entrance，以及已核对的初始返回点。
+// 特殊区域与团队频道的落点按频道分组找 TownCatalog 里已有的门口；普通频道的房间出口按角色记住的返回地区（#740）。
+// 坐标来自区域 [gate]、共享房间或相邻地区反推的 Entrance，以及已核对的初始返回点。
 internal static class ChannelAreaLanding
 {
     internal readonly record struct Decision(Location? Spot, string Reason);
@@ -37,11 +38,20 @@ internal static class ChannelAreaLanding
     // 进入频道（选角或不保留快照的换频道）时是否直接落到频道地区；其余频道出生赛丽亚房间。
     internal static bool LandsInChannelTown(ChannelEntry channel) => channel.Type == AntonRaidType;
 
+    // 普通区域频道类型：channel.txt 的 21 个普通区域入口。选角出生共享房间，房间出口只认角色记住的返回地区（#740）；
+    // 频道分组只决定特殊区域与团队频道的落点。与 Docs/模块/城镇.md 第 4 条“普通房间出口必须匹配持久返回地区”一致。
+    internal const int OrdinaryType = 22;
+
+    // 普通频道的赛丽亚房间出口是否只按角色记住的返回地区：在哪个城镇下线就回哪个城镇，不被频道分组改写成主题城（#740）。
+    internal static bool RoomExitUsesRememberedDistrict(ChannelEntry channel) => channel.Type == OrdinaryType;
+
     // 赛丽亚房间出门的频道地区：用户确认“频道切换应该是到赛利亚房间，然后再出门才是对应的地区”。
+    // 只对特殊区域与团队频道生效；普通频道与无频道按角色记住的返回地区出门（RoomExitUsesRememberedDistrict）。
     // 只对共享房间 towns.Room 生效（区域房间仍走自身门），频道无已证落点或条件不足时返回 null，按存档返回地区出门。
     internal static Location? RoomExit(TownCatalog towns, ChannelEntry? channel, Location position, int level, IReadOnlySet<int> completed)
     {
-        if (channel is null || LandsInChannelTown(channel) || position.Town != towns.Room.Town || position.Area != towns.Room.Area)
+        if (channel is null || RoomExitUsesRememberedDistrict(channel) || LandsInChannelTown(channel) ||
+            position.Town != towns.Room.Town || position.Area != towns.Room.Area)
             return null;
         return Place(towns, channel, level, completed);
     }
@@ -55,7 +65,6 @@ internal static class ChannelAreaLanding
     // 因此 普通(22)↔安徒恩 0x17/卢克 0x20/超时空之战 0x2D/普雷 0x32 互换不记快照，团队页签类型之间（如 0x20↔0x2D、0x20↔0x32）互换保留快照，
     // 魔界大战 0x36 与其余任何类型互换都不记快照。
     static readonly int[] RaidTabTypes = [0x17, 0x19, 0x20, FiendwarType, PreyRaidType, 0x3E, 0x3F];
-    const int OrdinaryType = 22;
 
     // 有落点城镇的谓词频道；服务端不保存旧频道，按存档城镇推断旧频道类型。
     static readonly (int Type, string Group)[] PredicateChannels =

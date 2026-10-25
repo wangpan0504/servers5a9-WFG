@@ -168,7 +168,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(c), "transition", canSend);
         if (context.Premiums is { } premiums) await premiums.StaminaAsync(c, canSend);
         var completed = DfoServer.Game.Quests.QuestEligibility.Completed(c);
-        // 赛丽亚房间的出门城镇按当前频道落点（与 TownTravel.LeaveRoom 同一规则），否则为存档返回地区。
+        // 赛丽亚房间的出门城镇：特殊区域与团队频道按频道落点，普通频道与无频道按存档返回地区（与 TownTravel.LeaveRoom 同一规则，#740）。
         if (towns.IsRoom(c.Position, completed) &&
             (ChannelAreaLanding.RoomExit(towns, context.Session.ChannelEntry, c.Position, c.Level, completed) ?? c.Return ?? towns.DefaultReturn(c.Position, completed)) is { } back)
             await context.Notify(NotiPacketType.PREV_VILLAGE, TownPackets.RoomReturnTown(back), "room_return_town", canSend);

@@ -71,6 +71,37 @@ internal static class ChannelAreaLandingTests
         var lukeStayed = CharacterSelection.Prepare(repo, owner, lukeLow, towns, none, null, false, null, channel: luke);
         That(lukeStayed.Position == towns.Room, "正式选角在卢克等级不足时保持共享房间");
 
+        // #740：普通频道的赛丽亚房间出口只认角色记住的返回地区。天空之城频道原先把房间门改到 40/3 西海岸，
+        // 与 Docs/模块/城镇.md 第 4 条“普通房间出口必须匹配持久返回地区”冲突。
+        var skyArea = towns.Areas[(40, 3)];
+        var skyDone = new HashSet<int>(skyArea.Quests);
+        if (skyArea.AnyQuests.Length > 0) skyDone.Add(skyArea.AnyQuests[0]);
+        That(ChannelAreaLanding.Place(towns, sky, 95, skyDone) is { Town: 40, Area: 3 }, "天空之城频道在等级与任务满足时确有 40/3 落点（夹具有效）");
+        // 用户场景是“在诺斯玛尔下线”：真实 95 级存档的 Return 是走进该地区时解析出的持久点（线上库为 39/0 596,144），不是 null。
+        // 39/0 的准入要求任务 3156（LV17），空任务集会在 DestinationAdmission 处被挡、退回初始艾尔文，夹具必须带上该地区自身要求。
+        // 39/2 子区域没有回连房间的门，只靠这个持久点回退到 39/0 的门口。
+        var northArea = towns.Areas[(39, 0)];
+        var northDone = new HashSet<int>(skyDone);
+        northDone.UnionWith(northArea.Quests);
+        if (northArea.AnyQuests.Length > 0) northDone.Add(northArea.AnyQuests[0]);
+        var northSaved = towns.ResolveRoomReturn(new(39, 0, 0, 0), null, 95, northDone);
+        That(northSaved is { Town: 39 } northStreet && towns.IsPosition(northStreet, northDone),
+            "诺斯玛尔 39/0 街道可解析为房间返回地区，实际=" + northSaved);
+        var northRole = repo.Create(owner, new("North", new(39, 2, 552, 218), northSaved) { Level = 95 });
+        var northPlaced = CharacterSelection.Prepare(repo, owner, northRole, towns, northDone, null, false, null, channel: sky);
+        That(northPlaced.Position == towns.Room, "天空之城频道选角进共享房间");
+        That(northPlaced.Return is { Town: 39 } northReturn && towns.IsPosition(northReturn, northDone),
+            "天空之城频道选角记住诺斯玛尔的返回地区，实际=" + northPlaced.Return);
+        var northExit = northPlaced.Return is { } keptReturn ? towns.Entrance(towns.Room, keptReturn, northDone) : null;
+        var skyLeave = TownTravel.LeaveRoom(northPlaced, towns, northDone, sky);
+        That(skyLeave is { Reason: "ready", Position: var skyDoor } && skyDoor == northExit,
+            "天空之城频道出门按记住的诺斯玛尔地区，而不是频道落点 40/3，实际=" + skyLeave.Position);
+        var elvenLeave = TownTravel.LeaveRoom(northPlaced, towns, northDone, elven);
+        That(elvenLeave is { Reason: "ready", Position: var elvenDoor } && elvenDoor == northExit,
+            "艾尔文频道出门同样按记住的诺斯玛尔地区，实际=" + elvenLeave.Position);
+        // 1379 房间返回城镇投影与 1426 出房共用 RoomExit，普通频道不再取频道落点。
+        That(ChannelAreaLanding.RoomExit(towns, sky, towns.Room, 95, northDone) is null, "普通频道的房间返回地区投影不再取频道落点");
+
         var skyRole = repo.Create(owner, new("Sky", towns.Room, towns.InitialReturn));
         var stayed = CharacterSelection.Prepare(repo, owner, skyRole, towns, none, null, false, null, channel: sky);
         That(stayed.Position == towns.Room, "正式选角在条件不足时保持共享房间");
@@ -134,6 +165,11 @@ internal static class ChannelAreaLandingTests
             ?? throw new InvalidDataException("缺少内置频道脚本");
         using var reader = new StreamReader(stream);
         var script = ChannelCatalog.Parse(reader.ReadToEnd());
+        // #740 房间出口分档：16 个特殊区域/团队入口仍按频道落点，其余 21 个普通入口按角色记住的返回地区。
+        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 40, 41, 42, 43, 44, 45 };
+        foreach (var row in script.Channels)
+            That(ChannelAreaLanding.RoomExitUsesRememberedDistrict(new ChannelEntry(new(2, checked((byte)row.Number)), row.Type, row.Group)) ==
+                !specialChannels.Contains(row.Number), "房间出口分档 " + row.Number + " type " + row.Type + " " + row.Group);
         foreach (var row in script.Channels)
         {
             var entry = new ChannelEntry(new(2, checked((byte)row.Number)), row.Type, row.Group);
