@@ -134,7 +134,7 @@ internal static class EquipmentUpgradeTcpTests
                 "真实普通夜语与界夜语融合使用独立配方，源打造覆盖目标并原子扣费");
             byte[] upgradeBody = UpgradeRequest(30, 100070604, 100070629, 11);
             peer.Send(1564, upgradeBody); peer.Expect(0, 14); peer.Expect(0, 14);
-            peer.Expect(1, 1564, UpgradeAck(30, 100070604)); peer.Barrier();
+            peer.Expect(1, 1564, UpgradeAck(30, 100070629)); peer.Barrier();
             var upgraded = Reload();
             That(upgraded.Inventory.Find(Bag(30)) is { Core.ItemId: 100070629, Core.Upgrade: 11 } &&
                 upgraded.Inventory.Gold == 12600000 && upgraded.Inventory.Find(Bag(124)) is null &&
@@ -146,7 +146,7 @@ internal static class EquipmentUpgradeTcpTests
             var conversionSource = upgraded.Inventory.Find(Bag(31))!;
             peer.Send(1564, UpgradeRequest(31, 100301034, 100301035, 0));
             peer.Expect(0, 14); peer.Expect(0, 14);
-            peer.Expect(1, 1564, UpgradeAck(31, 100301034)); peer.Barrier();
+            peer.Expect(1, 1564, UpgradeAck(31, 100301035)); peer.Barrier();
             var converted = Reload();
             That(converted.Inventory.Find(Bag(31)) is { } conversionTarget &&
                 conversionTarget.Uid == conversionSource.Uid &&
@@ -158,7 +158,7 @@ internal static class EquipmentUpgradeTcpTests
             {
                 peer.Send(1564, UpgradeRequest(slot, id, target, 11));
                 peer.Expect(0, 14); peer.Expect(0, 14);
-                peer.Expect(1, 1564, UpgradeAck(slot, id)); peer.Barrier();
+                peer.Expect(1, 1564, UpgradeAck(slot, target)); peer.Barrier();
                 That(Reload().Inventory.Find(Bag(slot))?.Core.ItemId == target,
                     "普雷首饰与武器黑暗低语分别使用对应升级组");
             }
@@ -218,11 +218,12 @@ internal static class EquipmentUpgradeTcpTests
             writer.Write((byte)0); writer.Write((byte)0); writer.Write(target); writer.Write((byte)0);
             return stream.ToArray();
         }
-        byte[] UpgradeAck(short slot, int sourceId)
+        // 回执第3字段是提交后的装备编号：客户端 0234C290→0402D110 靠它回查升级/刻印结果窗。
+        byte[] UpgradeAck(short slot, int resultId)
         {
             using var stream = new MemoryStream();
             using var writer = new BinaryWriter(stream);
-            writer.Write((byte)1); writer.Write(slot); writer.Write(sourceId); writer.Write((byte)0);
+            writer.Write((byte)1); writer.Write(slot); writer.Write(resultId); writer.Write((byte)0);
             return stream.ToArray();
         }
     }
