@@ -84,7 +84,6 @@ internal sealed class SkillSwitchInventoryService(
         {
             0 => InventoryListType.Main,
             1 => InventoryListType.Avatar,
-            2 => InventoryListType.PersonalCargo,
             3 => InventoryListType.Equipment,
             7 => InventoryListType.Pet,
             38 => InventoryListType.GuildMedal,
@@ -102,7 +101,7 @@ internal sealed class SkillSwitchInventoryService(
             return false;
         return position.List switch
         {
-            InventoryListType.Main or InventoryListType.PersonalCargo => true,
+            InventoryListType.Main => true,
             InventoryListType.Avatar => part <= 11,
             InventoryListType.Equipment => position.Index == part,
             InventoryListType.Pet => part is >= 26 and <= 29,

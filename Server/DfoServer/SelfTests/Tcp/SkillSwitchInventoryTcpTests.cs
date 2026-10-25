@@ -113,6 +113,30 @@ internal static class SkillSwitchInventoryTcpTests
                 moved.StartsWith(movedSlot + ":", StringComparison.Ordinal),
                 "普通背包移动保留UID绑定并发布登记新位置");
 
+            peer.Send(19, MoveItem(movedSlot, template.Id, 0, targetList: 2));
+            peer.Expect(1, 19, MoveAck(movedSlot, 0, targetList: 2));
+            That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 2,
+                "存仓先发布携带源清除和仓库真实物品");
+            Delta(peer.Expect(0, DeltaNotice).Body, part, 47, ushort.MaxValue, present: false);
+            peer.Barrier();
+            That(fixture.Query("SELECT item_uid FROM character_skill_switch_inventory_items WHERE character_id=$p0",
+                created.Id) is [[long storedUid]] && storedUid == sourceItem.Uid,
+                "存仓即时停止有效登记投影，但保留同角色原UID配置");
+            string beforeCargoRequest = Snapshot();
+            peer.Send(Command, Request(profile.Skill, part, 2, 0));
+            peer.Expect(1, Command, []);
+            Delta(peer.Expect(0, DeltaNotice).Body, part, 47, ushort.MaxValue, present: false);
+            peer.Send(Command, Request(profile.Skill, 36, 47, ushort.MaxValue));
+            peer.Expect(1, Command, []);
+            peer.Expect(0, AllDataNotice, Build(writer =>
+            {
+                writer.Write(profile.Skill);
+                writer.Write((byte)0);
+            }));
+            peer.Barrier();
+            That(Snapshot() == beforeCargoRequest,
+                "仓库新登记拒绝及重复指定技能不写库，全量也不公布仓库绑定");
+
             peer.Send(7);
             peer.Expect(1, 7, [1]);
             peer.Expect(0, 2);
@@ -122,10 +146,8 @@ internal static class SkillSwitchInventoryTcpTests
             That(Snapshot() == beforeLateRequest,
                 "返回选角后的迟到登记不清除原绑定、不增加revision且不发1372/1373");
             var reselected = ReadUserInfoSection(peer.Select()[3].Body);
-            That(reselected.SkillId == profile.Skill && reselected.Items is
-                [{ List: 0, Slot: var reselectedSlot, ItemId: var reselectedId }] &&
-                reselectedSlot == movedSlot && reselectedId == template.Id,
-                "迟到登记拒绝后同连接重新选角回放原技能与物品绑定");
+            That(reselected.SkillId == profile.Skill && reselected.Items.Length == 0,
+                "迟到登记拒绝后重新选角保留技能，但不回放仓库绑定为有效装备");
             peer.Barrier();
         }
 
@@ -134,10 +156,28 @@ internal static class SkillSwitchInventoryTcpTests
         using (var peer = Open(fixture))
         {
             var restored = ReadUserInfoSection(peer.Select()[3].Body);
-            That(restored.SkillId == profile.Skill && restored.Items is
-                [{ List: 0, Slot: var slot, ItemId: var itemId }] &&
-                slot == movedSlot && itemId == template.Id,
-                "重启后USERINFO从已提交状态与当前UID位置恢复完整登记项");
+            That(restored.SkillId == profile.Skill && restored.Items.Length == 0,
+                "重启后USERINFO仍不把仓库中的登记项投影为有效装备");
+
+            peer.Send(19, MoveItem(0, template.Id, movedSlot, sourceList: 2));
+            peer.Expect(1, 19, MoveAck(0, movedSlot, sourceList: 2));
+            That(peer.Expect(0, 14).Body[0] == 0 && peer.Expect(0, 14).Body[0] == 2,
+                "取回发布真实库存差量，不复制登记物品");
+            Delta(peer.Expect(0, DeltaNotice).Body, part, 0, checked((ushort)movedSlot), present: true);
+            peer.Barrier();
+            That(fixture.Query("SELECT item_uid FROM character_skill_switch_inventory_items WHERE character_id=$p0",
+                created.Id) is [[long returnedUid]] && returnedUid == sourceItem.Uid,
+                "取回同一UID即时恢复有效登记，重启未丢失配置");
+
+            peer.Send(7);
+            peer.Expect(1, 7, [1]);
+            peer.Expect(0, 2);
+            var carried = ReadUserInfoSection(peer.Select()[3].Body);
+            That(carried.SkillId == profile.Skill && carried.Items is
+                [{ List: 0, Slot: var carriedSlot, ItemId: var carriedId }] &&
+                carriedSlot == movedSlot && carriedId == template.Id,
+                "取回后重新选角完整回放原技能及携带登记项，保留正向USERINFO覆盖");
+            peer.Barrier();
 
             peer.Send(18, DeleteItem(movedSlot, quality));
             peer.Expect(1, 18);
@@ -193,8 +233,8 @@ internal static class SkillSwitchInventoryTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] &&
             fixture.Query("PRAGMA foreign_key_check").Length == 0 &&
             Convert.ToInt64(fixture.Query(
-                "SELECT revision FROM characters WHERE id=$p0", created.Id)[0][0]) == selectedRevision + 5,
-            "登记、移动、删除和清除各提交一次，零变化与失败不写库且外键完整");
+                "SELECT revision FROM characters WHERE id=$p0", created.Id)[0][0]) == selectedRevision + 7,
+            "登记、移动、存取仓库、删除和清除各提交一次，零变化与失败不写库且外键完整");
 
         string Snapshot() =>
             fixture.Snapshot("SELECT id,revision FROM characters WHERE id=$p0", created.Id) +
@@ -236,13 +276,13 @@ internal static class SkillSwitchInventoryTcpTests
         writer.Write(slot);
     });
 
-    static byte[] MoveItem(short source, int itemId, short destination) => Build(writer =>
+    static byte[] MoveItem(short source, int itemId, short destination, byte sourceList = 0, byte targetList = 0) => Build(writer =>
     {
-        writer.Write((byte)0);
+        writer.Write(sourceList);
         writer.Write(source);
         writer.Write(itemId);
         writer.Write(1);
-        writer.Write((byte)0);
+        writer.Write(targetList);
         writer.Write(destination);
         writer.Write(0);
         writer.Write(0);
@@ -250,13 +290,13 @@ internal static class SkillSwitchInventoryTcpTests
         writer.Write((ushort)0);
     });
 
-    static byte[] MoveAck(short source, short destination) => Build(writer =>
+    static byte[] MoveAck(short source, short destination, byte sourceList = 0, byte targetList = 0) => Build(writer =>
     {
         writer.Write((byte)1);
-        writer.Write((byte)0);
+        writer.Write(sourceList);
         writer.Write(source);
         writer.Write(1);
-        writer.Write((byte)0);
+        writer.Write(targetList);
         writer.Write(destination);
     });
 

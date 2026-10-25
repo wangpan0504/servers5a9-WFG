@@ -116,13 +116,32 @@ internal static class SkillSwitchInventoryTests
             registered.Plan.After.Items.Single() == new SkillSwitchItemBinding(4, 501, itemId),
             "登记物品保存稳定UID、模板与部位而非临时槽位");
         SkillSwitchInventoryState state = registered.Plan!.After;
-        var moved = character.Inventory with
+        foreach (var position in new InventorySlot[]
         {
-            Items = [equipment with { Position = new(InventoryListType.PersonalCargo, 9) }]
-        };
-        That(state.Reconcile(moved, character.Skills).Same(state) &&
-            state.Locate(moved).Single() is { ListType: 2, Slot: 9 },
-            "同角色容器移动保留绑定并按UID解析当前位置");
+            new(InventoryListType.Main, 21), new(InventoryListType.Equipment, 4)
+        })
+        {
+            var moved = new InventorySnapshot([equipment with { Position = position }]);
+            That(state.Reconcile(moved, character.Skills).Same(state) &&
+                state.Locate(moved).Single().Item.Position == position,
+                "携带或穿戴移动保留稳定UID登记并解析当前位置");
+        }
+        var stored = new InventorySnapshot([equipment with { Position = new(InventoryListType.PersonalCargo, 0) }]);
+        That(state.Reconcile(stored, character.Skills).Same(state) && state.Locate(stored).IsEmpty,
+            "个人仓库保留同角色UID登记配置，但不能投影为有效装备");
+        That(state.Reconcile(stored, character.Skills).Locate(character.Inventory).Single().Item.Uid == equipment.Uid,
+            "取回同一UID后恢复携带登记，不重新绑定同模板其他实例");
+        var accountStored = new InventorySnapshot([equipment with { Position = new(InventoryListType.AccountCargo, 0) }]);
+        That(state.Reconcile(accountStored, character.Skills).Items.IsEmpty && state.Locate(accountStored).IsEmpty,
+            "账号仓库不保留角色登记，其他角色不能继承绑定");
+        That(service.Plan(character with { Inventory = stored },
+            new(SkillSwitchInventoryRequestKind.SetItem, 77, 4, 2, 0)).Failure ==
+            SkillSwitchInventoryFailure.ItemLocationInvalid,
+            "仓库请求保持合法协议，但不能登记未携带装备");
+        That(state.Reconcile(new([equipment with { Uid = equipment.Uid + 1 }]), character.Skills).Items.IsEmpty,
+            "同槽同模板的新实例不能继承售出或销毁物品的登记");
+        That(state.Reconcile(InventorySnapshot.Empty, character.Skills).Items.IsEmpty,
+            "售出或销毁后没有原实例即清除登记");
         That(state.Reconcile(new([equipment with { Core = equipment.Core with { ItemId = itemId + 1 } }]),
             character.Skills).Items.IsEmpty,
             "实例模板变化清除原登记绑定");
@@ -183,6 +202,18 @@ internal static class SkillSwitchInventoryTests
         That(Convert.ToHexString(SkillSwitchInventoryPackets.AllData(state, inventory)) ==
             "4D00010104001400",
             "ALLDATA携带指定技能及排序后的全部位置");
+
+        var stored = new InventorySnapshot([item with { Position = new(InventoryListType.PersonalCargo, 0) }]);
+        That(Convert.ToHexString(SkillSwitchInventoryPackets.Delta(state, stored, [4])) == "0100042FFFFF" &&
+            Convert.ToHexString(SkillSwitchInventoryPackets.AllData(state, stored)) == "4D0000",
+            "旧仓库绑定的差量与全量均投影为空，不泄漏可生效位置");
+        using (var storedStream = new MemoryStream())
+        using (var storedWriter = new BinaryWriter(storedStream))
+        {
+            SkillSwitchInventoryPackets.WriteUserInfo(storedWriter, state, stored, 2_000_000_000);
+            That(Convert.ToHexString(storedStream.ToArray()) == "4D0000",
+                "重登本人资料不回放仓库中的旧登记实例");
+        }
 
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
