@@ -9,6 +9,7 @@ using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
+using DfoServer.Network.Management;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -19,7 +20,7 @@ internal static class MetroQuestEntryTcpTests
 {
     internal static async Task RunAutoDailyAsync(ServerOptions options,string root,TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(options,Path.Combine(root,"metro-auto-daily"),resources:resources);
+        await using var fixture = new TcpTestFixture(options,Path.Combine(root,"metro-auto-daily"),gm:true,resources:resources);
         await fixture.StartAsync();
         Verify(fixture,resources,SelfTestCatalogs.Growth(resources.Archive,resources.Learning),QuestLifecycleTcpTests.DrainNotifications,dailyOnly:true);
     }
@@ -119,28 +120,36 @@ internal static class MetroQuestEntryTcpTests
                     "同日重连保留地区每日原接取身份和进度：" + regionalId);
                 Cleanup(regionalPeer,role,regionalAccount);
             }
-            const ushort id=13056;
-            const string account="metro-auto-daily";
+            VerifyCountedDaily(13041,80,70);
+            VerifyCountedDaily(13056,310,88);
+            QuestAutoDailyTests.RunCompletionResources(resources.Archive,resources.ItemResources);
+        }
+
+        void VerifyCountedDaily(ushort id,uint dungeonId,byte level)
+        {
+            int caseChecks = Count;
+            string account="metro-auto-daily-"+id;
+            string name="Daily"+id;
             var quest=resources.Quests.Get(id);
             That(QuestAutoDailyPlan.Supports(quest) && quest.Rewards.Select(row=>row.Value).SequenceEqual([10163959,15]),
-                "真实Q13056资源仍为两个目标及15份奖励，不替换PVF");
-            var done=new HashSet<int>(); var entrance=Entrance(id,310,done);
-            var created=Create(account,"MetroDaily",0,88,done,entrance);
+                "真实地区每日资源仍为两个目标及15份奖励，不替换PVF："+id);
+            var done=new HashSet<int>(); var entrance=Entrance(id,dungeonId,done);
+            var created=Create(account,name,0,level,done,entrance);
             using var peer=Open(fixture,account);
             Select(peer,created);
             string acceptance=Identity(peer.Id,id);
-            That(Scalar(peer.Id,id)==1686,"真实选角自动创建每日任务，无测试预填目标进度");
+            That(Scalar(peer.Id,id)==((uint)quest.IntData[4]|(uint)quest.IntData[9]<<9),"真实选角自动创建每日任务，无测试预填目标进度");
             RejectAccept(peer,id);
-            peer.Send(34,[34,0,0,51,255,255,1,0,255,255]);
+            peer.Send(34,[34,0,(byte)id,(byte)(id>>8),255,255,1,0,255,255]);
             var denied=peer.Expect(1,34).Body;
             That(denied[0]==0,"未击杀不能提前手动领奖"); drain(peer,null);
             int normal=0,boss=0;
             for(int attempt=0;attempt<12 && Scalar(peer.Id,id)!=0;attempt++)
             {
-                SelectMap(peer); peer.Send(16,Selection(310,attempt==0?id:(ushort)0));
+                SelectMap(peer); peer.Send(16,Selection(dungeonId,attempt==0?id:(ushort)0));
                 var information=peer.Expect(0,28).Body;
                 var map=peer.Expect(0,29).Body;
-                var definition=dungeons.Get(310);
+                var definition=dungeons.Get(checked((int)dungeonId));
                 var maze=dungeons.ResolveOrdinaryMaze(definition,definition.Mazes.Single(row=>row.SourceOrdinal==information[7]));
                 That(maze.QuestConnectionTokens.Count==0,"每日任务显式和普通0入场均使用真实普通迷宫");
                 FormalDungeonTcpTests.Load(peer); drain(peer,null);
@@ -178,18 +187,29 @@ internal static class MetroQuestEntryTcpTests
                     }
                 }
             }
-            That(Scalar(peer.Id,id)==0 && normal==150 && boss==3,"真实多实例合成死亡累计准确150普通与3Boss，未预填完成状态");
+            That(Scalar(peer.Id,id)==0 && normal==quest.IntData[4] && boss==quest.IntData[9],"真实多实例合成死亡累计原PVF普通与Boss数量，未预填完成状态："+id);
+            if (id==13041)
+            {
+                That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"account "+account+" level "+name+" 71",out string reply) &&
+                    reply.StartsWith("OK ",StringComparison.Ordinal),"完成安特贝鲁每日后经真实GM等级事务升至71级");
+                drain(peer,null);
+                peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2);
+                peer.Select(RoleIndex(peer.Roster,created),prepared:true);
+                That(Identity(peer.Id,id)==acceptance && Scalar(peer.Id,id)==0 &&
+                    fixture.Query("SELECT level FROM characters WHERE id=$p0",peer.Id) is [[71L]],
+                    "跨地区升级及重连保留旧每日完成进度与原接取，不用SQL预填完成");
+            }
             long rewardBefore=Reward();
             Finish(peer,id,2);
             That(Reward()==rewardBefore+15 && fixture.Query("SELECT daily_period FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,id) is [[long day]] && day==QuestCycle.Day(DateTimeOffset.UtcNow),
                 "手动34原子发放PVF15份奖励并保存游戏日");
-            peer.Send(34,[34,0,0,51,255,255,1,0,255,255]); peer.Expect(1,34); drain(peer,null);
+            peer.Send(34,[34,0,(byte)id,(byte)(id>>8),255,255,1,0,255,255]); peer.Expect(1,34); drain(peer,null);
             That(Reward()==rewardBefore+15,"重复领取不重复发奖");
             peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2);
             peer.Select(RoleIndex(peer.Roster,created),prepared:true);
             That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,id) is [[0L]],"同日重新选角不再次分配已领奖任务");
             Cleanup(peer,created,account);
-            Console.WriteLine($"PASS {Count-checks} Q13056真实PVF自动接取、150+3死亡、手动领奖和同日隔离TCP断言（死亡是合成请求）");
+            Console.WriteLine($"PASS {Count-caseChecks} Q{id}真实PVF自动接取、目标死亡、手动领奖和同日隔离TCP断言（死亡是合成请求）");
             long Reward()=>Convert.ToInt64(fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10163959",peer.Id).Single()[0]);
         }
 

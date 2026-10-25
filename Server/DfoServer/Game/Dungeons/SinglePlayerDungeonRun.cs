@@ -251,6 +251,8 @@ internal sealed partial class SinglePlayerDungeonRun
             this.entry = entry with { CinematicClearTerminalMap = cinematicTerminal.Plan.Room.Map };
         else if (ResolveLayeredBossTerminal() is { } terminal)
             this.entry = entry with { BossMap = terminal.Plan.Room.Map };
+        else if (ResolveCinematicBossTerminal() is { } cinematicBoss)
+            this.entry = entry with { BossMap = cinematicBoss.Plan.Room.Map };
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
         current = baseRooms.Single(room => room.Plan.Room.Map == entry.StartMap);
         storyStageIndex = entry.StartMap.StoryStageIndex;

@@ -134,11 +134,11 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         // 原 dungeon-story-events 拆为互不共享状态的四段，可并行；旧名保留为别名。
-        ("story-cinematic", (_, _, resources) =>
+        ("story-cinematic", async (options, root, resources) =>
         {
             QuestCinematicSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
             QuestAdventureSettlementTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Quests,resources.Learning);
-            return Task.CompletedTask;
+            await FormalDungeonTcpTests.RunTrainQuestAsync(options,root,resources);
         }),
         ("story-scenes", (_, _, resources) =>
         {

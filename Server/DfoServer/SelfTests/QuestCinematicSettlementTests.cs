@@ -24,6 +24,7 @@ internal static class QuestCinematicSettlementTests
         QuestCatalog quests, SkillLearningCatalog skills)
     {
         int checks = Count;
+        TrainQuestSettlementTests.Run(towns,pvf,characters,items,quests,skills);
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
         var kills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
         var clears = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);

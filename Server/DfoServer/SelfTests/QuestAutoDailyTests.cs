@@ -145,4 +145,68 @@ internal static class QuestAutoDailyTests
         }
         finally { if(Directory.Exists(root)) Directory.Delete(root,true); }
     }
+
+    // 资源层只验证接取后升级的领奖边界；真实死亡、提交与重放由所属TCP组验证。
+    internal static void RunCompletionResources(PvfLib.PvfArchive archive, DfoServer.Infrastructure.ItemResources items)
+    {
+        int checks = Count;
+        var quests = DfoServer.Testing.SelfTestCatalogs.Quests(archive);
+        var parameters = DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(archive);
+        var growth = DfoServer.Testing.SelfTestCatalogs.Growth(archive);
+        var now = DateTimeOffset.UtcNow;
+        foreach (var quest in quests.All.Where(quest => QuestAutoDailyPlan.Hunt(quest) && quest.MaximumLevel < 95))
+        {
+            var eligible = new Character(774,0,"DailyLevel",1,new Location(1,0,100,100),null)
+            {
+                Level = checked((byte)quest.MaximumLevel), QuestCycleDay = QuestCycle.Day(now),
+                DungeonState = CharacterDungeonState.NewOrdinary,
+                CompletedQuests = quest.Prerequisites.ToArray()
+            };
+            var assigned = QuestAutoDailyPlan.Prepare(eligible,quests,eligible.QuestCycleDay,true)!;
+            var active = assigned.ActiveAfter.Single(row => row.QuestId == quest.Id);
+            byte level = checked((byte)(quest.MaximumLevel+1));
+            var completed = eligible with
+            {
+                Level = level, ActiveMainQuests = [active with { ConditionState = 0 }],
+                Learning = new(growth.GetLevelStartExperience(level),[new(0,0,0,[]),new(1,0,0,[])])
+            };
+            QuestCompletionPreparation Prepare(Character character) => QuestCompletionPlan.Prepare(character,quest,
+                ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,now);
+            var result = Prepare(completed);
+            That(result.Outcome == QuestCompletionOutcome.Accepted,
+                $"{quest.Id}当日原接取完成后升过分配上限仍可领奖：{result.Reason}");
+            That(!QuestEligibility.Evaluate(completed with { ActiveMainQuests = [] },quest,quests).Eligible &&
+                !(QuestAutoDailyPlan.Prepare(completed with { ActiveMainQuests = [] },quests,eligible.QuestCycleDay,true)?
+                    .ActiveAfter.Any(row => row.QuestId == quest.Id) ?? false),
+                $"{quest.Id}超等级不能新分配，交付例外不放宽接取");
+            foreach (var invalid in new[]
+            {
+                completed with { ActiveMainQuests = [] },
+                completed with { ActiveMainQuests = [active with { ConditionState = 1 }] },
+                completed with { ActiveMainQuests = [active with { ConditionState = 0, AcceptanceId = Guid.Empty }] },
+                completed with { QuestCycleDay = QuestCycle.Day(now.AddDays(-1)) },
+                completed with { CompletedQuests = [..completed.CompletedQuests,quest.Id] },
+                completed with { Level = checked((byte)(quest.MinimumLevel-1)) }
+            }) That(Prepare(invalid).Outcome != QuestCompletionOutcome.Accepted,
+                $"{quest.Id}缺接取、未完成、空身份、过日、重复或低等级仍拒绝");
+        }
+        // 仅地区猎杀自动每日使用例外，普通任务和推荐地下城每日保留自己的接取上限检查。
+        foreach (int id in new[] {3145,8691})
+        {
+            var original = quests.Get(id);
+            var quest = original with { MinimumLevel = 1, MaximumLevel = 1 };
+            byte level = checked((byte)(quest.MinimumLevel+1));
+            var character = new Character(774,0,"OtherDaily",1,new Location(1,0,100,100),null)
+            {
+                Level = level, QuestCycleDay = QuestCycle.Day(now), CompletedQuests = quest.Prerequisites.ToArray(),
+                ActiveMainQuests = [new(0,checked((ushort)id),0) { AcceptanceId = Guid.NewGuid() }]
+            };
+            var result = QuestCompletionPlan.Prepare(character,quest,ushort.MaxValue,quests,parameters,
+                items.Items,items.GoldLimits,items.EpicPieces,growth,now);
+            That(result.Outcome == QuestCompletionOutcome.Rejected && result.Reason == "任务接取身份、完成位或当前资格不符",
+                $"{id}非地区每日不能借用超上限领奖例外");
+        }
+        Console.WriteLine($"PASS {Count-checks} 真实地区每日接取后升级领奖与资格拒绝断言");
+    }
+
 }

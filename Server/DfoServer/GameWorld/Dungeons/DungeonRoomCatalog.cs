@@ -52,6 +52,8 @@ internal sealed record DungeonRoomDefinition(
     public IReadOnlyList<DfoServer.GameWorld.Characters.TutorialCinematicEvidence> TutorialCinematics { get; init; } = [];
     public DungeonCinematicLayerReturn? CinematicLayerReturn { get; init; }
     public DungeonScriptedLayerReturn? ScriptedLayerReturn { get; init; }
+    public DungeonCinematicBossEvidence? BossDeathLayerChange { get; init; }
+    public DungeonCinematicBossEvidence? StartCinematicBossDestroy { get; init; }
 }
 
 internal sealed class DungeonRoomCatalog
@@ -120,8 +122,36 @@ internal sealed class DungeonRoomCatalog
         return room with
         {
             CinematicLayerReturn = ReadCinematicLayerReturn(room,tokens),
-            ScriptedLayerReturn = room.Map.Kind == "layered" ? ReadScriptedLayerReturn(room) : null
+            ScriptedLayerReturn = room.Map.Kind == "layered" ? ReadScriptedLayerReturn(room) : null,
+            BossDeathLayerChange = room.Map.Kind == "boss" ? ReadBossCinematic(room,tokens,false) : null,
+            StartCinematicBossDestroy = room.Map.Kind == "layered" ? ReadBossCinematic(room,tokens,true) : null
         };
+    }
+
+    DungeonCinematicBossEvidence? ReadBossCinematic(DungeonRoomDefinition room,IReadOnlyList<PvfToken> tokens,bool destroy)
+    {
+        try
+        {
+            var bosses = room.Monsters.Select((monster,index) => (monster,index)).Where(row => row.monster.RankKind == "[boss]").ToArray();
+            if (bosses is not [var boss] || boss.monster.Modifiers.Count != 0 || boss.monster.PlacementKind != "[fixed]") return null;
+            int? id;
+            if (destroy)
+            {
+                string? action = DungeonCinematicLayerReturnRules.BasicAction(tokens,archive.ResolveString);
+                if (string.IsNullOrEmpty(action)) return null;
+                string path = PvfArchive.NormalizePath(room.Map.Path[..(room.Map.Path.LastIndexOf('/')+1)] + action);
+                if (!path.StartsWith("map/",StringComparison.Ordinal) || !archive.Contains(path)) return null;
+                id = DungeonCinematicBossTerminalRules.StartCinematic(archive.ReadTokens(path),archive.ResolveString);
+            }
+            else id = DungeonCinematicBossTerminalRules.DieCinematic(archive.ReadTokens(boss.monster.Path),archive.ResolveString);
+            if (id is not { } movie || !cinematics.Value.TryGetValue(movie,out string? file) || !archive.Contains(file)) return null;
+            var body = archive.ReadTokens(file);
+            bool valid = destroy ? DungeonCinematicBossTerminalRules.RewardedDestroy(room.Map.Id,boss.index,body,archive.ResolveString) :
+                DungeonCinematicBossTerminalRules.DeathChangesLayer(room.Map.Id,body,archive.ResolveString);
+            return valid ? new(room.Map.Id,room.Map.Path,boss.index,boss.monster.MonsterId,boss.monster.Path,movie,file) : null;
+        }
+        // 可选声明不完整时不扩张终点范围；原地图及死亡事务仍按原规则处理。
+        catch (InvalidDataException) { return null; }
     }
 
     DungeonScriptedLayerReturn? ReadScriptedLayerReturn(DungeonRoomDefinition room)

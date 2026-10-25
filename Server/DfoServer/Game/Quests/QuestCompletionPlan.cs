@@ -232,11 +232,13 @@ internal sealed class QuestCompletionPlan
                 throw new InvalidDataException("交付倍数只适用于具有实际材料的普通重复寻物任务");
             var active = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id);
             var completedParent = QuestRelationProgress.CompletedParentChild(expected,quest,quests);
+            // 地区每日上限只约束分配；同日原接取不因后续升级失去领奖资格，其余资格与目标仍逐项复验。
             if (!DfoServer.Game.Pvp.PvpTrainingExposure.Allows(expected,quest) || active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
                 QuestEligibility.Completed(expected).Contains(quest.Id) || expected.CompletedQuests.Distinct().Count() != expected.CompletedQuests.Length ||
                 QuestEligibility.InspectResource(quest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestRelationProgress.ThresholdParent(quest,quests) && !QuestHiddenEntry.Direct(quest,quests) && !QuestAutoDailyPlan.Supports(quest) ||
-                completedParent is null && !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests).Eligible)
+                completedParent is null && !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row != active).ToArray() }, quest, quests,
+                    allowAboveMaximum: QuestAutoDailyPlan.Hunt(quest)).Eligible)
                 throw new InvalidDataException("任务接取身份、完成位或当前资格不符");
             if (completedParent is not null)
             {
