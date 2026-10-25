@@ -21,7 +21,7 @@ internal static class SkillSwitchInventoryTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var support = SwitchingSupportSkillCatalog.Load(resources.Archive);
-        var profile = FindProfile(support, resources.Learning);
+        var profile = FindProfile(support);
         ItemTemplate template = resources.Characters.Get(profile.Job).Equipment
             .Select(row => row.Template)
             .First(row => row.EquipmentSlot is >= 12 and <= 25);
@@ -42,7 +42,8 @@ internal static class SkillSwitchInventoryTcpTests
                 GrowType = profile.Grow,
                 Level = 95,
                 AcceptedStoryLevel = 1,
-                Skills = [new CharacterSkill(profile.Skill, 1)],
+                Skills = resources.Characters.Get(profile.Job).Skills
+                    .Where(skill => skill.Id != profile.Skill && skill.Id != profile.Second).ToArray(),
                 Inventory = new([item])
             });
         InventoryItem sourceItem = created.Inventory.Items.Single();
@@ -74,6 +75,20 @@ internal static class SkillSwitchInventoryTcpTests
                 writer.Write(profile.Skill);
                 writer.Write((byte)0);
             }));
+
+            string learnedBefore = fixture.Snapshot(
+                "SELECT * FROM character_skills WHERE character_id=$p0 ORDER BY skill_id", created.Id);
+            That(fixture.Query("SELECT count(*) FROM character_skills WHERE character_id=$p0 AND skill_id IN ($p1,$p2)",
+                created.Id, profile.Skill, profile.Second) is [[0L]], "多候选TCP角色尚未学习两个目标Buff");
+            foreach (ushort chosen in new[] { profile.Second, profile.Skill, (ushort)0, profile.Skill })
+            {
+                peer.Send(Command, Request(chosen, 36, 47, ushort.MaxValue));
+                peer.Expect(1, Command, []);
+                peer.Expect(0, AllDataNotice, Build(writer => { writer.Write(chosen); writer.Write((byte)0); }));
+            }
+            peer.Barrier();
+            That(fixture.Snapshot("SELECT * FROM character_skills WHERE character_id=$p0 ORDER BY skill_id", created.Id) == learnedBefore,
+                "未学候选选择、切换及取消只更新偏好，不新增或提高实际技能");
 
             peer.Send(Command, Request(profile.Skill, part, 0, checked((ushort)sourceSlot)));
             peer.Expect(1, Command, []);
@@ -233,7 +248,7 @@ internal static class SkillSwitchInventoryTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] &&
             fixture.Query("PRAGMA foreign_key_check").Length == 0 &&
             Convert.ToInt64(fixture.Query(
-                "SELECT revision FROM characters WHERE id=$p0", created.Id)[0][0]) == selectedRevision + 7,
+                "SELECT revision FROM characters WHERE id=$p0", created.Id)[0][0]) == selectedRevision + 11,
             "登记、移动、存取仓库、删除和清除各提交一次，零变化与失败不写库且外键完整");
 
         string Snapshot() =>
@@ -244,28 +259,16 @@ internal static class SkillSwitchInventoryTcpTests
             fixture.Snapshot("SELECT list_type,slot_index,item_uid FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index", created.Id);
     }
 
-    static (byte Job, byte Grow, ushort Skill) FindProfile(
-        SwitchingSupportSkillCatalog support,
-        SkillLearningCatalog learning)
+    static (byte Job, byte Grow, ushort Skill, ushort Second) FindProfile(SwitchingSupportSkillCatalog support)
     {
         for (byte job = 0; job < 16; job++)
         for (byte grow = 0; grow <= 5; grow++)
-        foreach (ushort skill in support.Skills(job, grow).Order())
         {
-            SkillLearningDefinition definition;
-            try
-            {
-                definition = learning.Get(job, skill);
-            }
-            catch (KeyNotFoundException)
-            {
-                continue;
-            }
-            if (definition.Type is SkillType.Active or SkillType.Passive &&
-                SkillPointLedger.SupportsGrowth(grow, job))
-                return (job, grow, skill);
+            ushort[] skills = support.Skills(job, grow).Order().ToArray();
+            if (skills.Length > 1 && SkillPointLedger.SupportsGrowth(grow, job))
+                return (job, grow, skills[0], skills[1]);
         }
-        throw new InvalidDataException("当前PVF没有可执行Buff强化登记TCP回归的技能");
+        throw new InvalidDataException("当前PVF没有可执行未学多候选Buff预设TCP回归的职业");
     }
 
     static byte[] Request(ushort skill, byte part, byte list, ushort slot) => Build(writer =>

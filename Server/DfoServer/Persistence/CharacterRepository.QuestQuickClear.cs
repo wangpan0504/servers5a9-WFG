@@ -150,6 +150,7 @@ internal sealed partial class CharacterRepository
             command.CommandText="UPDATE characters SET grow_type=$growAfter WHERE id=$id AND account=$account AND revision=$before+1 AND grow_type=$growBefore";
             if (command.ExecuteNonQuery()!=1) throw new InvalidOperationException("觉醒券职业状态已变化");
             command.Parameters.RemoveAt("$growBefore"); command.Parameters.RemoveAt("$growAfter");
+            ResetSkillSwitchProfession(db, tx, expected.Id, expected.GrowType, grow);
             WriteLearning(db,tx,expected.Id,plan.TargetLearning); WriteCanonicalSkills(db,tx,expected.Id,plan.TargetLearning);
         }
         else if(!SameLearning(plan.TargetLearning,expected.Learning))

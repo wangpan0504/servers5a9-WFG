@@ -172,6 +172,7 @@ internal sealed partial class CharacterRepository
                 """;
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("副职业类型没有写入当前角色");
         }
+        ResetSkillSwitchProfession(db, tx, current.Id, current.GrowType, plan.TargetGrowType);
         if (plan.UpdatesLearning) { WriteLearning(db, tx, current.Id, plan.TargetLearning); WriteCanonicalSkills(db, tx, current.Id, plan.TargetLearning); }
         if (plan.Proficiency is { } proficiency) WriteProficiency(db, tx, owner.Account, expected.Id, proficiency.Before, proficiency.After);
         // 任务经验计入冒险团；同一接取的回执在上方提前返回，不会重复计入。

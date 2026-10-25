@@ -102,7 +102,6 @@ internal sealed partial class CharacterRepository
             command.Parameters["$level"].Value = skill.Level;
             command.ExecuteNonQuery();
         }
-        ReconcileSkillSwitchSkill(db, transaction, id);
         return skills;
     }
 

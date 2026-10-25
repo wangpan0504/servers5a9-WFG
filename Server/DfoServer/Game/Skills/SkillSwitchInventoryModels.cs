@@ -84,11 +84,9 @@ internal sealed record SkillSwitchInventoryState(ushort SkillId, ImmutableArray<
         return items.Length == Items.Length ? this : this with { Items = items };
     }
 
-    public SkillSwitchInventoryState Reconcile(InventorySnapshot inventory, IReadOnlyList<CharacterSkill> skills)
+    public SkillSwitchInventoryState Reconcile(InventorySnapshot inventory)
     {
         Validate();
-        if (SkillId != 0 && !skills.Any(skill => skill.Id == SkillId && skill.Level != 0))
-            return Empty;
         var byUid = inventory.Items.Where(item => item.Uid > 0 && (IsCarriedContainer(item.Position.List) || item.Position.List == InventoryListType.PersonalCargo))
             .GroupBy(item => item.Uid).ToDictionary(group => group.Key, group => group.ToArray());
         var retained = Items.Where(binding => byUid.TryGetValue(binding.ItemUid, out InventoryItem[]? matches) &&
@@ -123,7 +121,6 @@ internal enum SkillSwitchInventoryFailure : byte
 {
     None,
     UnsupportedState,
-    SkillNotLearned,
     SkillNotSupported,
     ItemMissing,
     ItemStacked,
