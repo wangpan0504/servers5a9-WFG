@@ -4,14 +4,15 @@ namespace DfoServer.Network.Builders.Inventory;
 
 internal static class EquipmentUpgradePackets
 {
-    public static byte[] Upgrade(InventoryResult result, short slot, int sourceId, byte additional)
+    public static byte[] Upgrade(InventoryResult result, short slot, int resultId, byte additional)
     {
         if (!result.Accepted) return CargoPackets.Ack(result);
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write((byte)1);
         writer.Write(slot);
-        writer.Write(sourceId);
+        // 0234C290 把该编号交给0402D110判定结果窗（升级367/刻印284）；提交后的装备编号才算命中，源编号不能命中。
+        writer.Write(resultId);
         writer.Write(additional);
         return stream.ToArray();
     }

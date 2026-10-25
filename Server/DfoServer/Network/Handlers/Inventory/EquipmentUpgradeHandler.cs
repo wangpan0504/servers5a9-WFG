@@ -45,7 +45,7 @@ internal sealed class EquipmentUpgradeHandler(InventoryEquipmentUpgradeService s
         });
         await projection.RefreshAsync(context, result);
         await context.Reply(CmdPacketType.REQUEST_EQUIPMENT_UPGRADE,
-            EquipmentUpgradePackets.Upgrade(result, request.Slot, request.ItemId, 0),
+            EquipmentUpgradePackets.Upgrade(result, request.Slot, request.TargetId, 0),
             result.Accepted ? "equipment_upgrade_committed" : "equipment_upgrade_rejected",
             receipt is not null ? () => context.Session.CanPublishInventory(receipt) : null);
         return CommandResult.Handled;
