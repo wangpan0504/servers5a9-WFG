@@ -279,10 +279,11 @@ internal static class InventoryRewardGrantService
                 }
             }
 
-            // 先合堆；拾取消耗品先找快捷栏，其他合法类别只在所属分页满后回退快捷栏。
-            for (int pass = 0; remaining > 0 && pass < (pickupQuickSlots ? 2 : 1); pass++)
+            // 先合已有兼容堆；消耗品新堆只进所属分页，不能借空快捷槽绕过背包容量。
+            bool allowQuickSlotFallback = pickupQuickSlots && template.Kind != ItemKind.Consumable;
+            for (int pass = 0; remaining > 0 && pass < (allowQuickSlotFallback ? 2 : 1); pass++)
             {
-                bool quick = pickupQuickSlots && (template.Kind == ItemKind.Consumable ? pass == 0 : pass == 1);
+                bool quick = allowQuickSlotFallback && pass == 1;
                 var targetList = quick ? InventoryListType.Main : list;
                 (short Start, short End) targetRange = quick ? (ItemSlotBoundService.QuickSlotStart, ItemSlotBoundService.QuickSlotEnd) : range;
                 var page = (targetList, targetRange.Start, targetRange.End);

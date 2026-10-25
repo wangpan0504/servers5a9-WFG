@@ -23,7 +23,7 @@ internal static partial class FormalDungeonTcpTests
         var gear = InventoryRewardGrantService.Create(items.Get(101010912)) with { Value = 0 };
         var gem = InventoryRewardGrantService.Create(items.Get(90000), 2);
         var filler = InventoryRewardGrantService.Create(items.Get(90032));
-        var consumable = InventoryRewardGrantService.Create(items.Get(1000), 3);
+        var consumable = InventoryRewardGrantService.Create(items.Get(1013), 3);
         ushort id = 0;
         string saved;
         using (var peer = Open(fixture))
@@ -36,9 +36,10 @@ internal static partial class FormalDungeonTcpTests
                 var contents = role.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment && item.Position.Index != 12)
                     .Concat(Enumerable.Range(9, 56).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot), gear)))
                     .Concat(Enumerable.Range(49, 49).Select(slot => new InventoryItem(0, new(InventoryListType.GuildMedal, (short)slot), filler)))
-                    .Concat(Enumerable.Range(3, 6).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot), slot == 4 ? gem : gear)))
+                    .Concat(Enumerable.Range(3, 6).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot), slot == 4 ? gem : slot == 5 ? consumable : gear)))
                     .Append(new(0, new(InventoryListType.Equipment, 12), gear))
-                    .Append(new(0, new(InventoryListType.Main, 65), consumable)).ToImmutableArray();
+                    .Concat(Enumerable.Range(65, 56).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot),
+                        InventoryRewardGrantService.Create(items.Get(1000), 1)))).ToImmutableArray();
                 InventoryService.Commit(repository, owner, role,
                     new(true, 0, new(role.Inventory, role.Inventory with { Items = contents }, "pickup-slot-fixture", new(role))));
             }
@@ -60,8 +61,15 @@ internal static partial class FormalDungeonTcpTests
             Discard(peer, InventoryListType.Main, 3, 1);
             Pickup(peer, ground, 3, gear);
             Pickup(peer, Discard(peer, InventoryListType.Main, 4, 2), 4, gem);
-            Discard(peer, InventoryListType.Main, 5, 1);
-            Pickup(peer, Discard(peer, InventoryListType.Main, 65, 3), 5, consumable);
+            uint food = Discard(peer, InventoryListType.Main, 5, 3);
+            string fullBag = Assets() + fixture.Snapshot("SELECT revision FROM characters WHERE id=$p0", id);
+            peer.Send(43, PickupRequest(food));
+            peer.Expect(1, 43, [0, 22, 0]);
+            peer.Barrier();
+            That(Assets() + fixture.Snapshot("SELECT revision FROM characters WHERE id=$p0", id) == fullBag,
+                "肉干1013没有兼容堆且消耗品页满，空快捷槽也不能绕容量或消费地面");
+            Discard(peer, InventoryListType.Main, 65, 1);
+            Pickup(peer, food, 65, consumable);
             saved = Assets();
         }
         using (var peer = Open(fixture))
@@ -70,16 +78,16 @@ internal static partial class FormalDungeonTcpTests
             byte[] inventory = entry.Single(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body;
             int count = U16(inventory, 3);
             That(inventory.Length == 5 + count * 123, "重登Main完整物品行保持独立123B合同");
-            foreach (var (slot, core) in new (short Slot, ItemCore Core)[] { (3, gear), (4, gem), (5, consumable) })
+            foreach (var (slot, core) in new (short Slot, ItemCore Core)[] { (3, gear), (4, gem), (65, consumable) })
             {
                 int offset = Enumerable.Range(0, count).Select(index => 5 + index * 123).Single(at => U16(inventory, at) == slot);
                 That(U32(inventory, offset + 2) == core.ItemId && U32(inventory, offset + 6) == core.Value,
-                    "重登仍投影本次实际快捷槽及原装备品级或STK数量: " + slot);
+                    "重登仍投影本次实际目标槽及原装备品级或STK数量: " + slot);
             }
             peer.Barrier();
             That(Assets() == saved, "重连重读文件库后全部实际UID、槽位与完整Core保持，不重复拾取或重建物品");
         }
-        Console.WriteLine($"PASS {Count - before} 拾取满页回退、消耗品优先、专用STK、拒绝后重试及重登TCP断言（未操作客户端）");
+        Console.WriteLine($"PASS {Count - before} 拾取满页回退、消耗品入背包、专用STK、拒绝后重试及重登TCP断言（未操作客户端）");
 
         uint Discard(TcpPeer peer, InventoryListType list, short slot, uint count)
         {
@@ -105,7 +113,7 @@ internal static partial class FormalDungeonTcpTests
             byte[] request = PickupRequest(ground);
             peer.Send(43, request);
             byte[] notice = peer.Expect(0, 39).Body;
-            That(notice.Length == 19 && U32(notice, 0) == ground && U16(notice, 16) == slot, "拾取通知使用实际快捷目标槽");
+            That(notice.Length == 19 && U32(notice, 0) == ground && U16(notice, 16) == slot, "拾取通知使用实际目标槽");
             byte[] delta = peer.Expect(0, 14).Body;
             That(delta.Length == 126 && delta[0] == 0 && U16(delta, 1) == 1 && U16(delta, 3) == slot &&
                 U32(delta, 5) == core.ItemId && U32(delta, 9) == core.Value, "库存差量仍保留完整行、原品级或完整数量");

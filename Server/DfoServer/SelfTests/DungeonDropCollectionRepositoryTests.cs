@@ -117,11 +117,11 @@ internal static class DungeonDropCollectionRepositoryTests
                 That(lostResult.Duplicate && lostResult.ProjectionCurrent && SkillRepositoryTests.Equal(result.Character, lostResult.Character),
                     "本key提交结果丢失仅安装实际持久结果，不重发同一数量");
                 if (item.Reservation.Ordinal == 0)
-                    That(result.Destination == new InventorySlot(InventoryListType.Main, 3) &&
+                    That(result.Destination == new InventorySlot(InventoryListType.Main, 65) &&
                         lostResult.Destination == result.Destination && lostResult.ItemUid == result.ItemUid && result.ItemUid > 0 &&
                         result.Character.Inventory.Find(result.Destination) is { } stored && stored.Uid == result.ItemUid && stored.Core == item.Core &&
                         Query("SELECT count(*) FROM character_dungeon_drop_pickups") == 0,
-                        "集合消耗品实际写入快捷槽3，缓存回放保持同槽、真实UID和完整核心，不写旧SQL明细");
+                        "集合消耗品实际写入背包槽65，缓存回放保持同槽、真实UID和完整核心，不写旧SQL明细");
                 if (result.Currency == CurrencyKind.ClearCube)
                     That(result.Amount == 7 && result.ItemUid == 0 && result.Character.Inventory.AccountWallet.Revision == current.Inventory.AccountWallet.Revision + 1,
                         "账号材料提交返回实际余额版本，不用临时实体UID伪造入账");

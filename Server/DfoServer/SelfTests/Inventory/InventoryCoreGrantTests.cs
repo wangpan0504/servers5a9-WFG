@@ -114,11 +114,33 @@ internal static class InventoryCoreGrantTests
             var quickItems = Enumerable.Range(3, occupied).Select(slot => new InventoryItem(slot,
                 new(InventoryListType.Main, (short)slot), equipment)).ToImmutableArray();
             var pickup = Pickup(CharacterWith(quickItems), core, stackTemplate);
-            short expectedSlot = (short)(occupied < 6 ? 3 + occupied : 65);
+            short expectedSlot = 65;
             That(pickup.Accepted && pickup.Plan!.ChangedSlots.SequenceEqual(new[] { new InventorySlot(InventoryListType.Main, expectedSlot) }) &&
                 pickup.Plan.After.Find(new(InventoryListType.Main, expectedSlot)) is { Uid: 0 } added && added.Core == core &&
                 quickItems.All(item => pickup.Plan.After.Find(item.Position) == item),
-                "空快捷栏按3–8升序放置，全部占满回退普通页并保留已有物品: " + occupied);
+                "快捷栏空闲数不影响消耗品新堆落背包，保留已有物品: " + occupied);
+        }
+        foreach (ushort expansion in new ushort[] { 0, 8, 16, 24 })
+        {
+            var range = ItemSlotBoundService.Range(ItemKind.Consumable, expansion);
+            var occupiedPage = Enumerable.Range(range.Start, range.End - range.Start + 1).Select(slot => new InventoryItem(slot,
+                new(InventoryListType.Main, (short)slot), core with { ItemId = 10000 + slot })).ToImmutableArray();
+            var fullPage = CharacterWith(occupiedPage);
+            fullPage = fullPage with { Inventory = fullPage.Inventory with { Expansion = expansion } };
+            string before = JsonSerializer.Serialize(fullPage);
+            var denied = Pickup(fullPage, core, stackTemplate);
+            That(!denied.Accepted && denied.Error == 17 && denied.Plan is null && JsonSerializer.Serialize(fullPage) == before,
+                "各扩展档消耗品满页拒绝新堆，空快捷槽和未开放分页不能充当容量: " + expansion);
+            var oneHole = fullPage with { Inventory = fullPage.Inventory with
+                { Items = occupiedPage.Where(item => item.Position.Index != range.End).ToImmutableArray() } };
+            var filled = Pickup(oneHole, core, stackTemplate);
+            That(filled.Accepted && filled.Plan!.ChangedSlots.SequenceEqual(new[] { new InventorySlot(InventoryListType.Main, range.End) }) &&
+                filled.Plan.After.Find(new(InventoryListType.Main, range.End)) is { Uid: 0 } added && added.Core == core,
+                "各扩展档只使用已开放分页的最后空槽，保留完整冻结核心: " + expansion);
+            var replenished = Pickup(fullPage with { Inventory = fullPage.Inventory with { Items = occupiedPage.Add(target) } }, core, stackTemplate);
+            That(replenished.Accepted && replenished.Plan!.ChangedSlots.SequenceEqual(new[] { target.Position }) &&
+                replenished.Plan.After.Find(target.Position) is { Uid: 10 } kept && kept.Core == (target.Core with { Value = 8 }),
+                "满消耗品页仍可补已有快捷兼容堆，不创建新快捷实例: " + expansion);
         }
         var pageMerge = Pickup(CharacterWith([later]), core, stackTemplate);
         That(pageMerge.Accepted && pageMerge.Plan!.ChangedSlots.SequenceEqual(new[] { later.Position }) &&
@@ -135,15 +157,15 @@ internal static class InventoryCoreGrantTests
                 "已有堆不足整条或满栈时不借空快捷栏溢出、拆堆: " + count);
         }
         var fullPagePickup = Pickup(CharacterWith(fullStacks), core, stackTemplate);
-        That(fullPagePickup.Accepted && fullPagePickup.Plan!.After.Find(new(InventoryListType.Main, 3))!.Core == core,
-            "普通消耗品页已满仍可使用空快捷栏");
+        That(!fullPagePickup.Accepted && fullPagePickup.Error == 17 && fullPagePickup.Plan is null,
+            "普通消耗品页已满不能借空快捷栏绕过容量");
         var allFull = fullStacks.AddRange(Enumerable.Range(3, 6).Select(slot => new InventoryItem(slot,
             new(InventoryListType.Main, (short)slot), equipment)));
         That(!Pickup(CharacterWith(allFull), core, stackTemplate).Accepted, "快捷栏及普通页均满时整笔拒绝");
         var incompatible = Pickup(CharacterWith([target with { Core = target.Core with { ExpireTime = core.ExpireTime + 1 } }]),
             core, stackTemplate);
-        That(incompatible.Accepted && incompatible.Plan!.After.Find(new(InventoryListType.Main, 4))!.Core == core,
-            "不兼容期限不合堆，另选空快捷槽并保留完整核心");
+        That(incompatible.Accepted && incompatible.Plan!.After.Find(new(InventoryListType.Main, 65))!.Core == core,
+            "不兼容期限不合堆，另选背包空槽并保留完整核心");
         foreach (var template in new[] { equipmentTemplate, Template(2000, ItemKind.Material, 100),
             Template(2001, ItemKind.Quest, 100), Template(2002, ItemKind.CreatureConsumable, 100),
             Template(2003, ItemKind.Profession, 100), Template(2004, ItemKind.GuardianGem, 100) })
@@ -233,13 +255,22 @@ internal static class InventoryCoreGrantTests
     {
         int checks = Count;
         var empty = CharacterWith([]);
-        foreach (int itemId in new[] { 1000, 1047, 1004, 101010438 })
+        foreach (int itemId in new[] { 1000, 1013, 1047, 1004, 101010438 })
         {
             var template = resources.Items.Get(itemId);
             var core = FullCore(template, template.Kind == ItemKind.Equipment ? 0 : 3);
             var result = Grant(empty, core, template);
             That(result.Accepted && result.Plan!.After.Items.Single() is { Uid: 0 } item && item.Core == core,
                 "匹配PVF物品完整核心入包: " + itemId);
+            if (template.Kind == ItemKind.Consumable)
+            {
+                var pickup = InventoryRewardGrantService.TryGrantCore(empty, core, template, resources.EpicPieces, Now, usePickupSlotPolicy: true);
+                var ordinaryBatch = InventoryRewardGrantService.TryGrantBatch(empty, [new(itemId, 3)],
+                    resources.Items, resources.GoldLimits, resources.EpicPieces, Now);
+                That(pickup.Accepted && pickup.Plan!.After.Items.Single() is { Position.Index: 65 } picked && picked.Core == core &&
+                    ordinaryBatch.Accepted && ordinaryBatch.Plan!.After.Items.Single() is { Position.Index: 65 },
+                    "肉干及其他真实消耗品的新堆均进背包，默认批量发放不改变: " + itemId);
+            }
         }
         var stack = resources.Items.Get(1000);
         That(stack.Kind == ItemKind.Consumable && stack.StackLimit == 1000,
