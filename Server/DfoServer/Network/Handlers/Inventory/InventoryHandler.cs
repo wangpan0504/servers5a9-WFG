@@ -1,5 +1,6 @@
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Projection.Inventory;
@@ -7,7 +8,8 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
-internal sealed partial class InventoryHandler(InventoryService inventory, InventoryProjection projection) : IGameCommandModule
+internal sealed partial class InventoryHandler(InventoryService inventory, InventoryProjection projection,
+    ServerLog? log = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -56,8 +58,23 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
     {
         var request = InventoryRequests.Sort(packet.Body);
         var result = context.Session.MutateInventory(character => inventory.Sort(character, request), requireTown: IsCargo(request.List));
+        // 页面/条件取自客户端菜单，记录原值用于核对护石等特殊容器的分类语义。
+        log?.Write("sort_item", new
+        {
+            Connection = context.Id,
+            List = (byte)request.List,
+            Category = (byte)request.Kind,
+            request.Condition,
+            result.Accepted,
+            result.Error,
+            Slots = result.Plan?.ChangedSlots.Length ?? 0
+        });
         await context.Reply(CmdPacketType.SORT_ITEM, InventoryPackets.Sort(request, result), result.Accepted ? "sort_item_committed" : "sort_item_rejected");
         await projection.RefreshAsync(context, result);
+        // 护石窗口与符文页只在容器46全量到达时重新装载；只发1681差量时页面维持旧顺序。
+        // 零变化整理按协议只保留ACK，不额外补发全量。
+        if (result.Accepted && result.Plan is { Changed: true } && request.List == InventoryListType.Talisman)
+            await projection.RefreshListAsync(context, InventoryListType.Talisman, "talisman_list_sync");
         return CommandResult.Handled;
     }
 

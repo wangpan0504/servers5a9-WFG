@@ -7,7 +7,8 @@ namespace DfoServer.Game.Inventory.Services;
 
 // 护石/符文合成：材料按请求逐个引用扣减，同一格可重复引用，费用与产物同一事务提交。
 // 费用取 etc/runesystem.etc 的 [compound info]：族 0 符文、1 护石，模式 0 普通、1 当前转职。
-// 升档概率在资源里没有可复核证据，当前只产出同品级随机一件，回执的升档位恒为 0。
+// 每行末尾两列是升档/同档权重：模式 0 的普通/高级符文与稀有护石升档权重为正，
+// 末档与模式 1 恒为 0，所以只有普通合成可能产出高一档，当前转职合成保持同品级。
 internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLimitCatalog goldLimits,
     EpicPieceCatalog pieces, Func<long, long>? random = null)
 {
@@ -78,7 +79,7 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
             return Reject("compound-material");
 
         int family = materialKind == ItemKind.Rune ? 0 : 1;
-        if (!costs.TryGet(family, request.Mode, grade, out int count, out int gold) ||
+        if (!costs.TryGet(family, request.Mode, grade, out int count, out int gold, out int upgradeWeight, out int sameWeight) ||
             count != requirements.Sum(requirement => requirement.Quantity))
             return Reject("compound-cost");
 
@@ -95,8 +96,18 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
             return InventoryResult.Reject(NotEnoughGold) with { RejectReason = "compound-gold" };
         paid = CurrencyWallet.Set(paid, CurrencyKind.Gold, CurrencyWallet.Get(paid, CurrencyKind.Gold) - gold);
 
+        // 只有模式 0 的普通合成会升档；当前转职合成与末档按资源权重恒为同档。
+        bool upgraded = false;
+        if (request.Mode == 0 && upgradeWeight > 0)
+        {
+            long roll = draw(upgradeWeight + sameWeight);
+            if (roll < 0 || roll >= upgradeWeight + sameWeight)
+                return Reject("compound-roll");
+            upgraded = roll < upgradeWeight;
+        }
+        int productGrade = upgraded ? grade + 1 : grade;
         IReadOnlyList<int> candidates;
-        try { candidates = Candidates(character, materialKind, grade, request.Mode); }
+        try { candidates = Candidates(character, materialKind, (byte)productGrade, request.Mode); }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException)
         {
             return Reject("compound-resource");
@@ -128,7 +139,7 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
 
         var assets = requirements.Select(requirement => requirement.Item).ToList();
         assets.AddRange(after.Items.Where(item => item.Position == productSlot));
-        receipt = new(productSlot.Index, productId, false);
+        receipt = new(productSlot.Index, productId, upgraded);
         return new(true, 0, new InventoryPlan(before, after,
             materialKind == ItemKind.Rune ? "rune_compound" : "talisman_compound",
             new InventoryCharacterPrecondition(character, Deadline(assets))));

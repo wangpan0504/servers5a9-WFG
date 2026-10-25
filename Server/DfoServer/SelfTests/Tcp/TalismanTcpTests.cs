@@ -42,6 +42,8 @@ internal static class TalismanTcpTests
         fixture.Sql("UPDATE character_inventory_items SET item_core=json_set(item_core,'$.Kind',1) WHERE item_uid=$p0", legacyStoneUid);
         fixture.Sql("UPDATE character_inventory_slots SET list_type=0,slot_index=65 WHERE item_uid=$p0", legacyRuneUid);
         fixture.Sql("UPDATE character_inventory_items SET item_core=json_set(item_core,'$.Kind',2) WHERE item_uid=$p0", legacyRuneUid);
+        // 整理用例：把一枚符文预先放到符文页高位，登录后整理应把它回填到页首连续格。
+        fixture.Sql("UPDATE character_inventory_slots SET slot_index=160 WHERE item_uid=$p0 AND list_type=46", Uid(campRunes[0]));
         long stoneUid = Uid(stone);
         long materialUid = Uid(costs.MaterialId);
         await fixture.StartAsync();
@@ -155,6 +157,22 @@ internal static class TalismanTcpTests
             peer.Send(1659, new byte[7]);
             peer.Expect(1, 1659, Failure(23));
             peer.Barrier();
+
+            // 护石窗口整理：分类19=符文页。回执后先用1681清空重载槽再载入新顺序，最后补发容器46全量。
+            peer.Send(20, Convert.FromHexString("06000000102E18132000"));
+            peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 46, 16, 0]);
+            var sortClear = peer.Expect(0, 1681).Body;
+            That(sortClear[0] == 46 && U16(sortClear, 1) >= 1 && U32(sortClear, 5) == uint.MaxValue,
+                "护石窗口整理先用1681清空将重新载入的符文槽");
+            var sortDelta = peer.Expect(0, 1681).Body;
+            That(sortDelta[0] == 46 && U16(sortDelta, 1) >= 1 && sortDelta.Length == 3 + U16(sortDelta, 1) * 123,
+                "整理后以1681载入符文页新顺序");
+            var sortList = peer.Expect(0, 13).Body;
+            That(sortList[0] == 46 && U16(sortList, 1) == 7 && sortList.Length == 3 + 7 * 123,
+                "整理成功后补发容器46全量，客户端按新槽位重绘护石与符文");
+            peer.Barrier();
+            That(Rows("list_type=46 AND slot_index=160") == 0 && Rows("list_type=46 AND slot_index BETWEEN 70 AND 79") == 6,
+                "符文页整理把六枚符文连续回填到页首，高位空槽被收回");
         }
         using (var peer = Open(fixture))
         {
