@@ -133,10 +133,16 @@ internal static class SocialTests
                 "重开后接受仍保存双方独立备注和分组，留言不用于目标角色校验");
             That(new CharacterRepository(path).AccountFriends(a.Account).Length == 1, "重开恢复真实社交关系");
             var parties = new DfoServer.Game.Party.PartyService(repo);
+            var publicIdentity = sa.PublicCharacter(actor.Character.Id)!;
+            ushort noPartyId = parties.PartyId(actor.Character.Id);
+            That(noPartyId == ushort.MaxValue, "未组队目标的菜单状态为空队伍哨兵");
             var settings = DfoServer.Game.Party.PartySettings.Default with { TitleCode = 4, Title = "", Capacity = 1 };
             That(!parties.SetInformation(sa, 1, settings).Accepted && parties.SetInformation(sa, 0, settings).Accepted &&
                 parties.Current(sa) is { Members.Length: 1, Settings.Capacity: 1 } && !parties.Invite(sa, sb, 42).Accepted,
                 "修改不能凭空建队，显式创建单人队并实际限制邀请人数");
+            ushort createdPartyId = parties.PartyId(actor.Character.Id);
+            That(createdPartyId == parties.Current(sa)!.Id && createdPartyId != noPartyId && publicIdentity.IsUnchanged(),
+                "菜单从唯一队伍服务读取新ID，旧菜单队伍校验失效；纯组队变化不使公开资料快照失效");
             That(parties.SetInformation(sa, 0, settings) is { Accepted: true, Notices.Length: 0 } &&
                 !parties.SetInformation(sa, 1, settings with { Capacity = 0 }).Accepted,
                 "创建重发幂等，非法容量不得提交");
@@ -189,6 +195,8 @@ internal static class SocialTests
                 joined.Notices.Where(n => n.Kind == DfoServer.Game.Party.PartyNoticeKind.Updated).All(n => n.Guard?.Invoke() == false),
                 "离队更新名册并使在途旧队伍快照失效");
             parties.Detach(sa);
+            That(parties.PartyId(actor.Character.Id) == ushort.MaxValue && parties.PartyId(actor.Character.Id) != createdPartyId,
+                "退出后菜单恢复空队伍哨兵，在途旧菜单不能恢复已清除的队伍标记");
             That(sa.BeginClassExperienceSelection() is not null && sa.ReturnFromDungeonSelection(false) is not null,
                 "离队后恢复单人职业体验选图资格");
             invite = parties.Invite(sa, sb, 0);

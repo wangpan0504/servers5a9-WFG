@@ -14,6 +14,7 @@ internal static class DungeonAltarTests
     public static void Run()
     {
         int before = Count;
+        DungeonEnterCountTests.RunCore();
         That(DungeonAltarRewardPolicy.GoldAmount(new(70, 10000, 20), 7f, 1.02f, 0.1f, 0) == 26985 &&
             DungeonAltarRewardPolicy.GoldAmount(new(70, 10000, 20), 7f, 1.02f, 0.1f, -20) == 21588 &&
             DungeonAltarRewardPolicy.GoldAmount(new(70, 10000, 20), 7f, 1.02f, 0.1f, 20) == 32382,

@@ -85,6 +85,19 @@ internal sealed partial class GameSession
         return value;
     });
 
+    // 副职业类型与累计熟练度：GM 写入后同步在线快照；客户端等级按累计熟练度换算，需回到选角再进入才刷新显示。
+    public Character SetExpertJob(string name, byte type, int experience) => owner.Execute(() =>
+    {
+        var current = DevelopmentTarget(name, false);
+        bool selected = Selected?.Id == current.Id;
+        if (selected && (pendingRental is not null || HasPendingFormalCard || HasPendingTownQuestCommit))
+            throw new InvalidOperationException("当前角色有待确认的业务结果，请先完成或重新选角");
+        var setter = repository as IExpertJobSetter ?? throw new InvalidOperationException("当前存档不支持修改副职业");
+        var after = setter.SetExpertJob(owner, current, type, experience);
+        if (selected) Selected = after;
+        return after;
+    });
+
     Character DevelopmentTarget(string name, bool refuseSelected)
     {
         if (Selected is { } selected && string.Equals(selected.Name, name, StringComparison.OrdinalIgnoreCase))

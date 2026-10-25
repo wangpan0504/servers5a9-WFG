@@ -139,7 +139,8 @@ internal static class ServerRuntime
             Cutscenes = itemResources.Skins.Cutscenes.Count,
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties);
+        var dungeonCatalog = DungeonCatalog.Load(pvf);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, dungeons: dungeonCatalog);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
@@ -205,7 +206,6 @@ internal static class ServerRuntime
         AssaultModeCatalog? assaultMode = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
-            var dungeonCatalog = DungeonCatalog.Load(pvf);
             selectionDungeons = dungeonCatalog;
             assaultMode = AssaultModeCatalog.Load(pvf, dungeonCatalog);
             var rooms = DungeonRoomCatalog.Load(pvf);
@@ -286,7 +286,7 @@ internal static class ServerRuntime
         }
         else
         {
-            var catalog = DungeonCatalog.Load(pvf);
+            var catalog = dungeonCatalog;
             var rooms = options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.FinishLoadingMonsters
                 ? DungeonRoomCatalog.Load(pvf) : null;
             dungeon = new DungeonProbeModule(log, catalog, options.DevelopmentDungeonEntryProbe, rooms, projection);
@@ -350,6 +350,8 @@ internal static class ServerRuntime
                 debugSettings: debugSettings, attributePairs: attributePairs), inventoryProjection, log),
             new EmblemCompoundHandler(new InventoryEmblemCompoundService(itemResources.Items,
                 itemResources.EmblemCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
+            new GuildCompoundHandler(new InventoryGuildCompoundService(itemResources.Items,
+                itemResources.GuildCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,
                 itemResources.AvatarCompounds, itemResources.AvatarPackages), inventoryProjection, log),
             new AvatarDyeHandler(new InventoryAvatarDyeService(itemResources.Items, itemResources.AvatarDyes), inventoryProjection, log),
@@ -372,6 +374,9 @@ internal static class ServerRuntime
             new AvatarDisjointHandler(new InventoryAvatarDisjointService(itemResources.Items, itemResources.AvatarDisjoint,
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new EpicBookHandler(new EpicPieceCraftService(itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
+            // 原生史诗交换：CMD1569，配置 etc/epicitemexchange.etc，回执同 opcode 0x621。
+            new EpicExchangeHandler(new EpicExchangeService(itemResources.EpicExchanges, itemResources.Items,
+                itemResources.EpicPieces, itemResources.GoldLimits), inventoryProjection),
             // 设计图升级：CMD271，材料与产物来自设计图自身的 [emancipate group]。
             new UpgradeChronicleHandler(new InventoryUpgradeChronicleService(itemResources.UpgradeChronicles, itemResources.Items,
                 itemResources.EpicPieces, clock), inventoryProjection),

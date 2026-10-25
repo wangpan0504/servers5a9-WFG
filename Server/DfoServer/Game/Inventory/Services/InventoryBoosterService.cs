@@ -448,7 +448,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         else
             grants.AddRange(totals.Select(pair => new InventoryReward(pair.Key, pair.Value)));
         InventoryResult grant;
-        if (definition.UnsealsRandomOptions || definition.SetsEpicExchangeInstanceType)
+        if (definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin)
         {
             var range = ItemSlotBoundService.Range(ItemKind.Equipment, paid.Expansion);
             int occupied = paid.Items.Count(item => item.Position.List == InventoryListType.Main &&
@@ -468,8 +468,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                         if (definition.UnsealsRandomOptions)
                             core = InventoryRandomOptionService.Initialize(core, unsealDefinitions[reward.ItemId],
                                 (random ?? Random.Shared).NextInt64);
-                        if (definition.SetsEpicExchangeInstanceType)
-                            core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId) };
+                        if (definition.GrantsEpicExchangeOrigin && core.Kind == ItemKind.Equipment)
+                            // 客户端物品核心 +0xC1（123B 偏移 119）的 bit0 才是交换资格位；只记服务端来源不够。
+                            core = core with { EpicExchangeOrigin = new(1, source.Core.ItemId), Extension119 = 0x01 };
                         instances.Add(new(0, default, core));
                     }
             }

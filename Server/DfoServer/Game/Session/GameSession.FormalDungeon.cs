@@ -196,6 +196,11 @@ internal sealed partial class GameSession
         if ((dungeonId == 7142) != classExperience || classExperience && (questId != 0 || difficulty != 0 || retry is not null ||
             selection is not { IsClassExperience: true } || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
             selection.OriginPosition != expected.Position)) return RejectFormal("class-experience-selection-mismatch");
+        // 乔安菜单只建立本次普通选图身份；旧选择、直接16、任务/练习/深渊和重试不能借用NPC入口。
+        if (dungeonId == 4000 && (questId != 0 || difficulty != 0 || retry is not null || practice || classExperience ||
+            hellParty || hellLegend || sealDoor || assault is not null || selection is null || selection.IsTutorial ||
+            selection.IsClassExperience || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
+            selection.OriginPosition != expected.Position)) return RejectFormal("lost-land-selection-mismatch");
         var done = QuestEligibility.Completed(expected);
         var flow = tutorials?.Get(expected.Job);
         bool training = expected.Tutorial is { Completed: false } pending && pending.DungeonId == dungeonId &&
@@ -575,7 +580,7 @@ internal sealed partial class GameSession
         if (!options.Any(option => option.QuestId == -1 || (option.InProgress ?
                 expected.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) : done.Contains(option.QuestId))))
             return (options[0].InProgress ? "selection-quest-in-progress-required:" : "selection-quest-required:") + options[0].QuestId;
-        if (!area.Map(done).DungeonGates.Any(gate => gate.Quests.All(done.Contains) && gate.Conditions.Length == 0))
+        if (!towns.HasDungeonEntrance(area, done, optionDungeon))
             return "selection-gate-unavailable";
         return null;
     }

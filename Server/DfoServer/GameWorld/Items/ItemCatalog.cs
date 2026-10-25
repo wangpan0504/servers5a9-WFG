@@ -111,6 +111,25 @@ internal sealed class ItemCatalog
 
     public bool Contains(int id) => equipment.ContainsKey(id) || stackable.ContainsKey(id);
 
+    // 公会合成产物池：只按两族在 PVF 里的固定目录取候选，顺序沿用 .lst 首次出现顺序。
+    // 不能按路径包含 "flag" 粗筛——武器、时装里也有同名字段，会把非勋章物品带进随机池。
+    // 候选数量小（勋章 59、守护珠 52），逐项过模板缓存即可，不另建索引。
+    public IReadOnlyList<int> GuildCompoundCandidates(ItemKind kind, int rarity)
+    {
+        var source = kind == ItemKind.GuildMedal ? equipment : stackable;
+        string prefix = kind == ItemKind.GuildMedal ? "character/common/flag/" : "flaggem/";
+        var candidates = new List<int>();
+        foreach (var (id, path) in source)
+        {
+            if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var template = Get(id);
+            if (template.Kind == kind && template.Rarity == rarity)
+                candidates.Add(id);
+        }
+        return candidates;
+    }
+
     // 在资源装配阶段枚举；正creation rate的普通道具完整解析，失败不得静默删除候选。
     // 逐项解析互不依赖（PVF 按位置读取、缓存与模板表均线程安全），有序并行后结果与串行一致；
     // 原先串行约占服务启动 4 秒。任一项失败仍以原异常终止装配。

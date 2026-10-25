@@ -18,6 +18,7 @@ internal sealed class ItemResources
     public DisjointCatalog Disjoint { get; }
     public AvatarDisjointCatalog AvatarDisjoint { get; }
     public EpicPieceCatalog EpicPieces { get; }
+    public EpicExchangeCatalog EpicExchanges { get; }
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
     public CashShopCatalog CashShop { get; }
@@ -40,6 +41,7 @@ internal sealed class ItemResources
     public GameWorld.Creatures.CreatureGroupCatalog CreatureGroups { get; }
     public AvatarPackageCatalog AvatarPackages { get; }
     public EmblemCompoundCatalog EmblemCompounds { get; }
+    public GuildDungeonCompoundCatalog GuildCompounds { get; }
     public AvatarCompoundCatalog AvatarCompounds { get; }
     public AvatarDyeCatalog AvatarDyes { get; }
     public TeleportCatalog Teleports { get; }
@@ -63,12 +65,13 @@ internal sealed class ItemResources
         Disjoint = new(archive);
         AvatarDisjoint = new(archive);
         EpicPieces = new(archive);
+        EpicExchanges = new(archive);
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
         Creatures = new(archive, equipment, stackable);
         CreatureGroups = new(archive);
         Contracts = PremiumContractCatalog.Load(archive, equipment, stackable);
-        Boosters = new(archive, stackable);
+        Boosters = new(archive, stackable, Shops.Stock(EpicExchangeCatalog.MerchantNpcId));
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures);
@@ -89,6 +92,7 @@ internal sealed class ItemResources
         CreatureEggs = new(archive, equipment, Items);
         AvatarPackages = new(archive, equipment, stackable);
         EmblemCompounds = new(archive, stackable);
+        GuildCompounds = new(archive);
         AvatarCompounds = new(archive);
         AvatarDyes = new(archive, equipment, stackable);
         Teleports = new(archive.ReadText, equipment, stackable);

@@ -77,6 +77,18 @@ internal sealed class ExpertJobScriptCatalog
 
     public int Level(byte job, int experience) => jobs.TryGetValue(job, out var script) ? script.Level(experience) : 1;
 
+    // 等级 1 起按 [expertness exp] 阈值累计；达到第 N-1 个阈值时显示 N 级，与服务端 Level 一致。
+    public int MaxLevel(byte job) => jobs.TryGetValue(job, out var script) ? Math.Max(script.Thresholds.Length, 1) : 0;
+
+    // 写入某等级的最低累计熟练度：1 级为 0，其余取该等级的起始阈值。
+    public int ExperienceForLevel(byte job, int level)
+    {
+        if (!jobs.TryGetValue(job, out var script)) throw new InvalidDataException("PVF 没有该副职业的等级阈值");
+        int maximum = Math.Max(script.Thresholds.Length, 1);
+        if (level < 1 || level > maximum) throw new InvalidDataException($"副职业等级须在 1–{maximum}");
+        return level == 1 ? 0 : script.Thresholds[level - 2];
+    }
+
     public IReadOnlyList<ExpertJobSkill> Skills(byte job) => jobs.TryGetValue(job, out var script)
         ? script.Skills : throw new NotSupportedException("副职业资源未装配");
 

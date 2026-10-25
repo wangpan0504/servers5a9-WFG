@@ -122,6 +122,8 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3);
             peer.Expect(0,1536);
             peer.Expect(0,1303,[0x34,cleared ? (byte)1 : (byte)0]);
+            peer.Expect(0,550,[0xFE,0x2A,0,0,3,0]);
+            peer.Expect(0,550,[0xFF,0x2A,0,0,3,0]);
             byte[] notice=peer.Expect(0,27).Body;
             That(notice.Length==42 && U16(notice,39)==layer,"真实27下发持久悲叹楼层");
         }

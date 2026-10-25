@@ -198,6 +198,21 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await creatures.QuestsChangedAsync(context, plan.Before, current, CanSend);
     }
 
+    // 拒绝路径没有提交计划，客户端却已先移除所选材料；按当前已提交快照整列重发该容器。
+    // 守卫与提交刷新同一套：选角代数、阶段或角色实例变化后，迟到请求不再发布。
+    public async Task RefreshListAsync(GameConnectionContext context, InventoryListType list, string action)
+    {
+        var (character, epoch, phase) = context.Owner.Execute(() =>
+            (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        if (character is null)
+            return;
+        bool CanSend() => context.Owner.Execute(() => context.Session.SelectionEpoch == epoch &&
+            context.Session.Phase == phase && ReferenceEquals(context.Session.Selected, character));
+        if (!CanSend())
+            return;
+        await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(character.Inventory, list), action, CanSend);
+    }
+
     public static async Task RestoreLocksAsync(GameConnectionContext context, InventorySnapshot inventory,
         IEnumerable<InventorySlot> slots, InventorySnapshot? before = null, Func<bool>? canSend = null,
         InventoryIndex? currentIndex = null, InventoryIndex? beforeIndex = null)

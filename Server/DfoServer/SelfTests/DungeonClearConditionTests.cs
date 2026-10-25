@@ -17,6 +17,12 @@ internal static class DungeonClearConditionTests
             "未知混合声明不能丢弃后作为唯一猎杀条件");
         Reject<InvalidDataException>(() => DungeonMazeConditions.Clear([raw[0],new("hunt monster",[new(0,501)]),raw[2]],_ => "unused"),
             "残缺目标数量声明保留资源错误");
+        That(DungeonMazeConditions.Clear([raw[0],new("limit time",[new(0,600),new(0,1200)]),raw[2]],_ => "unused") is
+            [{ Type: "limit time", TargetId: 600, Count: 1200 }], "限时两个原始标量分别保留，不置零或解释成普通猎杀目标");
+        foreach (var invalid in new PvfLib.PvfToken[][] { [new(0,600)], [new(0,600),new(0,0)],
+            [new(0,-1),new(0,1200)], [new(0,600),new(7,1200)], [new(0,600),new(0,1200),new(0,1800)] })
+            Reject<InvalidDataException>(() => DungeonMazeConditions.Clear([raw[0],new("limit time",invalid),raw[2]],_ => "unused"),
+                "限时条件不接受缺项、额外项、错误类型或无效数值");
 
         var (run,authority,boss) = Create(conditions,false);
         var identity = run.Snapshot.Identity;

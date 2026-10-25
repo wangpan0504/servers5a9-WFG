@@ -68,6 +68,40 @@ internal static partial class DevelopmentGm
                 return SearchItems(catalog, args, true);
             case DevelopmentAction.Wallet:
                 return DescribeWallet(Target(live, owners, repository, request, false, (_, character) => character));
+            case DevelopmentAction.ExpertJob:
+            {
+                // 副职业等级由客户端按 PVF [expertness exp] 阈值与累计熟练度换算，服务端只存累计熟练度；
+                // 写入某等级时落该等级的最低阈值，读回时用同一 Level 算法给出当前等级供核对。
+                var scripts = resources.ExpertJobs;
+                if (args.Length == 1) throw new InvalidDataException("用法：expert-job <角色> [类型1-4 等级]");
+                if (args.Length == 0)
+                {
+                    var character = Target(live, owners, repository, request, false, (_, value) => value);
+                    int type = character.ExpertJobType;
+                    return Ok(new
+                    {
+                        name = character.Name, rev = character.Revision, type, typeLabel = ExpertJobTypeLabel(type),
+                        expertness = character.ExpertJobExperience, level = type == 0 ? 0 : scripts.Level((byte)type, character.ExpertJobExperience),
+                        maxLevel = scripts.MaxLevel((byte)type)
+                    });
+                }
+                byte job = (byte)Number(args[0], 4);
+                if (job == 0) throw new InvalidDataException("副职业类型须为 1–4");
+                int level = (int)Number(args[1], 100);
+                int experience = scripts.ExperienceForLevel(job, level);
+                Func<AccountOwners.Lease, Character, Character> write = (lease, character) =>
+                {
+                    var setter = repository as IExpertJobSetter ?? throw new InvalidOperationException("当前存档不支持修改副职业");
+                    return setter.SetExpertJob(lease, character, job, experience);
+                };
+                var updated = live is not null ? live.SetExpertJob(request.Name, job, experience) : Target(null, owners, repository, request, false, write);
+                return Ok(new
+                {
+                    name = updated.Name, rev = updated.Revision, type = (int)job, typeLabel = ExpertJobTypeLabel(job),
+                    expertness = experience, level, maxLevel = scripts.MaxLevel(job),
+                    message = "副职业已写入；客户端回到选角并再次进入后刷新等级显示。"
+                });
+            }
             case DevelopmentAction.Currency when args[0] == "vault-gold":
             {
                 // 账号金库金币：账号共享，走与普通货币相同的“在线 owner 内规划→原子提交→同步在线快照”路径；上限取当前金库容量档位。
@@ -513,6 +547,12 @@ internal static partial class DevelopmentGm
 
     static string Ok(object value) => "OK " + JsonSerializer.Serialize(value);
 
+    // 副职业类型编号取自 character/expertjob.lst：1 附魔师、2 炼金术师、3 分解师、4 控偶师。
+    static string ExpertJobTypeLabel(int type) => type switch
+    {
+        1 => "附魔师", 2 => "炼金术师", 3 => "分解师", 4 => "控偶师", _ => "未开通"
+    };
+
     static long Number(string text, long maximum) =>
         long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out long value) && value <= maximum ? value : throw new InvalidDataException("数值无效或超出范围：" + text);
 
@@ -645,6 +685,9 @@ internal static partial class DevelopmentGm
         return Ok(new
         {
             name = character.Name, rev = character.Revision, walletRevision = inventory.AccountWallet.Revision, gold = inventory.Gold, message,
+            // 黑钻到期时间取账号钱包契约 56；GM 网页据此显示开通状态。
+            blackDiamondExpiresAt = character.BlackDiamondExpiresAt,
+            blackDiamond = character.BlackDiamondExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             vault = new { capacity = (int)inventory.AccountCargo.Capacity, gold = inventory.AccountCargo.Gold },
             currencies = Currencies.Select(row => new
             {

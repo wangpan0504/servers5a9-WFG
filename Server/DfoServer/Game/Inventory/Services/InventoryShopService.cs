@@ -85,7 +85,16 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             if (target > maximum)
                 return InventoryResult.Reject(0x85);
         }
-        var grant = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, [new(request.ItemId, count)], catalog, goldLimits, pieces, now);
+        // 休亚（NPC 486）用材料兑换的装备带交换资格位：客户端据此显示绿字并允许拖入交换窗口。
+        // 其他商人、金币商品与非装备保持模板默认核心。
+        bool exchangeOrigin = price.Materials.Length != 0 && template.Kind == ItemKind.Equipment &&
+            shops.Shops.TryGetValue(request.ShopId, out var boughtShop) && boughtShop.NpcId == EpicExchangeCatalog.MerchantNpcId;
+        var grant = exchangeOrigin
+            ? InventoryRewardGrantService.TryGrantItems(character with { Inventory = paid },
+                [new(0, new(InventoryListType.Main, 0),
+                    InventoryRewardGrantService.Create(template, utcNow: now) with { Extension119 = 0x01 })],
+                catalog, goldLimits, pieces, now)
+            : InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, [new(request.ItemId, count)], catalog, goldLimits, pieces, now);
         if (!grant.Accepted)
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)17 : (ushort)4);
         after = grant.Plan!.After;

@@ -46,6 +46,7 @@ internal static class SelfTestRunner
         BoosterSelectionTests.RunCore();
         AvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
+        GuildCompoundTests.RunCore();
         EquipmentEmblemTests.RunCore();
         TextureChangeTests.RunCore();
         WeaponSkinTests.RunCore();
@@ -283,6 +284,7 @@ internal static class SelfTestRunner
         InventoryExpansionTests.RunResources(itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         EmblemCompoundTests.RunResources(itemResources);
+        GuildCompoundTests.RunResources(itemResources);
         AvatarCompoundTests.RunResources(itemResources);
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
         MagicBoxTests.Run(towns, itemResources);
@@ -307,6 +309,7 @@ internal static class SelfTestRunner
         DisjointTests.Run(towns, characters, itemResources);
         AvatarDisjointTests.RunResources(towns, itemResources);
         EpicPieceTests.Run(towns, characters, itemResources);
+        EpicExchangeTests.Run(towns, characters, itemResources);
         MaterialExchangeTests.Run(towns, characters, itemResources);
         BoosterTests.Run(towns, characters, itemResources);
         BoosterSelectionTests.Run(towns, characters, itemResources);

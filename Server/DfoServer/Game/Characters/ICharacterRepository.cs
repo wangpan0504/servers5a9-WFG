@@ -13,6 +13,12 @@ internal interface ICharacterRenamer
     Character Rename(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, string newName);
 }
 
+// 副职业类型与累计熟练度：只由开发 GM 使用，避免所有仓库包装类都要实现。
+internal interface IExpertJobSetter
+{
+    Character SetExpertJob(AccountOwners.Lease owner, Character expected, byte type, int experience);
+}
+
 internal interface ICharacterRepository
 {
     QuestStageState LoadQuestStageState(AccountOwners.Lease owner, Character expected);
