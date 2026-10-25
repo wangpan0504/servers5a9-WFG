@@ -25,8 +25,13 @@ internal sealed class InventoryTalismanService(ItemCatalog items, Func<int, int>
             previous is not null && !Usable(previous, ItemKind.Rune, utcSeconds))
             return InventoryResult.Reject(Rejection);
         var rune = items.Rune(source.Core.ItemId);
+        var talismanDefinition = items.Talisman(talisman!.Core.ItemId);
         if (rune?.AllowsUse(character.Level, character.Job, character.GrowType) != true ||
-            items.Talisman(talisman!.Core.ItemId)?.AllowsUse(character.Level, character.Job, character.GrowType) != true)
+            talismanDefinition?.AllowsUse(character.Level, character.Job, character.GrowType) != true)
+            return InventoryResult.Reject(Rejection);
+        // 护石只接受本护石技能的符文，且符文阵营必须与目标孔色一致；重锻改变的正是这三个孔色。
+        if (talismanDefinition.SkillIndex != rune.SkillIndex ||
+            TalismanSocketColors.Read(talisman.Core)[(target.Index - 210) % 3] != rune.SocketColor)
             return InventoryResult.Reject(Rejection);
         short start = (short)(210 + (target.Index - 210) / 3 * 3);
         for (short slot = start; slot < start + 3; slot++)
@@ -37,7 +42,6 @@ internal sealed class InventoryTalismanService(ItemCatalog items, Func<int, int>
             if (definition is null || definition.Camp == rune.Camp && definition.SkillIndex == rune.SkillIndex)
                 return InventoryResult.Reject(Rejection);
         }
-        // 孔色匹配控制效果激活，不限制合法装入；原生00698BE0也不按颜色拒绝。
         var planned = before.Items.ToDictionary(item => item.Position);
         planned.Remove(target);
         if (source.Core.Count == 1)

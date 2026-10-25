@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Frozen;
 using System.Collections.Immutable;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -75,7 +76,12 @@ internal static class TalismanInventoryTests
         var equipped = service.Equip(wearer, new(210, 70, RuneId), Now);
         That(equipped.Accepted && equipped.Plan!.After.Find(source.Position)?.Core.Count == 2 &&
             equipped.Plan.After.Find(new(InventoryListType.Talisman, 210)) is { Uid: 0, Core.Count: 1 } &&
-            TalismanSocketColors.Read(worn.Core).First != catalog.Rune(RuneId)!.SocketColor, "装载从堆叠分出一枚且不按孔色拒绝");
+            TalismanSocketColors.Read(worn.Core).First == catalog.Rune(RuneId)!.SocketColor,
+            "装载从堆叠分出一枚，且只接受与孔色一致的符文");
+        That(!service.Equip(wearer, new(212, 70, RuneId), Now).Accepted, "孔色与符文阵营不一致时拒绝装载");
+        var otherSource = new InventoryItem(5, new(InventoryListType.Talisman, 70), new(OtherRuneId, ItemKind.Rune, 3));
+        That(!service.Equip(Character(worn, otherSource), new(210, 70, OtherRuneId), Now).Accepted,
+            "护石只接受本护石技能的符文，孔色一致也拒绝");
         var actual = equipped.Plan!.After.Find(new(InventoryListType.Talisman, 210))! with { Uid = 3 };
         var afterEquip = wearer with { Inventory = equipped.Plan.After with { Items = equipped.Plan.After.Items.Replace(equipped.Plan.After.Find(actual.Position)!, actual) } };
         var removed = service.Remove(afterEquip, 210, Now);
@@ -114,6 +120,26 @@ internal static class TalismanInventoryTests
         That(!service.Refine(Character(target, material with { Core = material.Core with { Value = 1 } }), new(121, 0), costs, Now).Accepted,
             "重锻材料不足不返回扣料计划");
 
+        var compoundCosts = new TalismanCompoundCost(new Dictionary<(int, int, int), (int, int)>
+        {
+            [(0, 1, 2)] = (3, 64_000)
+        }.ToFrozenDictionary());
+        var compoundService = new InventoryTalismanCompoundService(catalog, Limits, Pieces, _ => 0);
+        var runeStack = new InventoryItem(30, new(InventoryListType.Talisman, 70), new(RuneId, ItemKind.Rune, 3));
+        var payer = Character(runeStack);
+        payer = payer with { Inventory = CurrencyWallet.Set(payer.Inventory, CurrencyKind.Gold, 100_000) };
+        var compounded = compoundService.Compound(payer, new TalismanCompoundRequest(0, 1, 2, [70, 70, 70]),
+            compoundCosts, Now, out var compoundReceipt);
+        That(compounded.Accepted && compoundReceipt is { ProductSlot: 70, ItemId: RuneId, Upgraded: false } &&
+            compounded.Plan!.After.Find(new(InventoryListType.Talisman, 70))?.Core.Count == 1 &&
+            CurrencyWallet.Get(compounded.Plan.After, CurrencyKind.Gold) == 36_000,
+            "符文合成按同一格三次引用扣三件、扣足金币并只产出同品级一件");
+        var broke = payer with { Inventory = CurrencyWallet.Set(payer.Inventory, CurrencyKind.Gold, 100) };
+        var unpaid = compoundService.Compound(broke, new TalismanCompoundRequest(0, 1, 2, [70, 70, 70]),
+            compoundCosts, Now, out var unpaidReceipt);
+        That(!unpaid.Accepted && unpaid.RejectReason == "compound-gold" && unpaidReceipt is null,
+            "金币不足时合成拒绝且不返回扣料计划");
+
         var list = InventoryPackets.SpecialFull(afterEquip.Inventory, InventoryListType.Talisman, Now);
         That(list[0] == 46 && BinaryPrimitives.ReadUInt16LittleEndian(list.AsSpan(1)) == 2 && list.Length == 3 + 2 * 123,
             "list46全量直接使用123B普通物品行，并包含装载符文真实槽");
@@ -137,7 +163,8 @@ internal static class TalismanInventoryTests
     }
 
     static InventoryItem StoneItem(long uid, short slot, InventoryListType list = InventoryListType.Talisman) =>
-        new(uid, new(list, slot), new TalismanSocketColors(1, 2, 3).Apply(new(StoneId, ItemKind.Talisman, 999999998)));
+        // 夹具孔色与 SecondPact 符文同色：装载用例只验证堆叠拆分，颜色规则由专门用例覆盖。
+        new(uid, new(list, slot), new TalismanSocketColors(5, 5, 3).Apply(new(StoneId, ItemKind.Talisman, 999999998)));
     static Character Character(params InventoryItem[] items) => new(1, 0, "Talisman", 0, new(1, 0, 10, 10), null)
     { Job = 0, GrowType = 1, Level = 95, Inventory = new(items.ToImmutableArray()) };
 }

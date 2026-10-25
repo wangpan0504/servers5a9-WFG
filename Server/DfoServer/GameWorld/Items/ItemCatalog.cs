@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 using PvfLib;
@@ -68,6 +69,9 @@ internal sealed class ItemCatalog
     readonly int equipmentSellRate;
     readonly Lazy<ImmutableArray<CosmoPassCost>> cosmoPasses;
     readonly Lazy<TalismanRefineCost> talismanRefineCost;
+    readonly Lazy<TalismanCompoundCost> talismanCompoundCost;
+    readonly Lazy<FrozenDictionary<byte, ImmutableArray<int>>> runePool;
+    readonly Lazy<FrozenDictionary<int, ImmutableArray<int>>> talismanPool;
 
     public ItemCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment,
         IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
@@ -83,6 +87,10 @@ internal sealed class ItemCatalog
         cosmoPasses = new(() => CosmoPassCost.Load(archive));
         talismanRefineCost = new(() => TalismanRefineCost.Parse(RuneSystemFile.Parse(
             archive.ReadTokens("etc/runesystem.etc"), archive.ResolveString)));
+        talismanCompoundCost = new(() => TalismanCompoundCost.Parse(RuneSystemFile.Parse(
+            archive.ReadTokens("etc/runesystem.etc"), archive.ResolveString)));
+        runePool = new(BuildRunePool);
+        talismanPool = new(BuildTalismanPool);
     }
 
     public ItemTemplate Get(int id)
@@ -150,6 +158,61 @@ internal sealed class ItemCatalog
         foreach (var definition in definitions)
             runes[definition.Item.Id] = new(() => definition);
     }
+
+    public TalismanCompoundCost TalismanCompoundCosts() => talismanCompoundCost.Value;
+
+    // 合成产物池按品级/稀有度预建，首次命中才扫描资源；规划阶段在账号锁外执行，
+    // 结果只读缓存，后续请求不再触碰 PVF。
+    public IReadOnlyList<int> RuneCandidates(byte grade) =>
+        runePool.Value.TryGetValue(grade, out var ids) ? ids : [];
+
+    public IReadOnlyList<int> TalismanCandidates(int rarity) =>
+        talismanPool.Value.TryGetValue(rarity, out var ids) ? ids : [];
+
+    FrozenDictionary<byte, ImmutableArray<int>> BuildRunePool()
+    {
+        var rows = stackable.Where(row => row.Value.StartsWith("rune/", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(row => row.Key).ToArray();
+        var found = new List<RuneDefinition>();
+        try
+        {
+            found.AddRange(rows.AsParallel().AsOrdered().WithDegreeOfParallelism(PoolParallelism)
+                .Select(row => Rune(row.Key)).Where(definition => definition is not null).Select(definition => definition!));
+        }
+        catch (AggregateException error) when (error.InnerExceptions.Count >= 1)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+            throw;
+        }
+        // 核心自测与预置定义不在路径册里，按已解析缓存补齐，避免正式路径与自测两套语义。
+        found.AddRange(runes.Values.Where(value => value.IsValueCreated).Select(value => value.Value));
+        return found.GroupBy(definition => definition.Grade)
+            .ToFrozenDictionary(group => group.Key, group => group.Select(definition => definition.Item.Id)
+                .Distinct().Order().ToImmutableArray());
+    }
+
+    FrozenDictionary<int, ImmutableArray<int>> BuildTalismanPool()
+    {
+        var rows = equipment.OrderBy(row => row.Key).ToArray();
+        var found = new List<TalismanDefinition>();
+        try
+        {
+            found.AddRange(rows.AsParallel().AsOrdered().WithDegreeOfParallelism(PoolParallelism)
+                .Select(row => Talisman(row.Key)).Where(definition => definition is not null).Select(definition => definition!));
+        }
+        catch (AggregateException error) when (error.InnerExceptions.Count >= 1)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+            throw;
+        }
+        found.AddRange(talismans.Values.Where(value => value.IsValueCreated).Select(value => value.Value));
+        return found.Where(definition => !definition.IsPlaceholder)
+            .GroupBy(definition => definition.Item.Rarity)
+            .ToFrozenDictionary(group => group.Key, group => group.Select(definition => definition.Item.Id)
+                .Distinct().Order().ToImmutableArray());
+    }
+
+    static int PoolParallelism => Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
 
     // 公会合成产物池：只按两族在 PVF 里的固定目录取候选，顺序沿用 .lst 首次出现顺序。
     // 不能按路径包含 "flag" 粗筛——武器、时装里也有同名字段，会把非勋章物品带进随机池。
