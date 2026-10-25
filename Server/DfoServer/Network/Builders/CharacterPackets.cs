@@ -62,6 +62,8 @@ internal static class CharacterPackets
             tail[LukeEligibleTailOffset] = character.LukeEligible ? (byte)1 : (byte)0;
             tail[FiendWarEligibleTailOffset] = character.FiendWarEligible ? (byte)1 : (byte)0;
             tail[PreyEligibleTailOffset] = character.PreyEligible ? (byte)1 : (byte)0;
+            // 0268104E读取末尾u16，只有1才经02A8DCF0启用预览光环；高字节由零初始化保留。
+            tail[46] = 1;
             writer.Write(tail);
         }
 

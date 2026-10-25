@@ -65,6 +65,12 @@ internal static class NativeLoginTcpTests
         using (var first = Open(fixture, "alice").Peer)
         {
             roster = first.Create("凭据测试");
+            TestCheck.Bytes(roster.AsSpan(roster.Length - 12, 2), [1, 0], "原生创建名册行末u16启用光环，不依赖先进入角色");
+            first.Select();
+            first.Barrier();
+            first.Send(7, []);
+            first.Expect(1, 7, [1]);
+            TestCheck.Bytes(first.Expect(0, 2).Body, roster, "同连接返回选角保留完整名册及光环使能");
             first.Select();
             first.Barrier();
             using (var wrong = Begin(fixture, "alice"))
