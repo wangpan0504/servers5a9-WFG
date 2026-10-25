@@ -111,16 +111,16 @@ internal static class TalismanTcpTests
             That(loaded[0] == 46 && U16(loaded, 1) == 2 && U16(loaded, 3) == (ushort)runeSlot.Slot && U32(loaded, 9) == 2 &&
                 U16(loaded, 3 + 123) == 210 && U32(loaded, 3 + 123 + 2) == (uint)rune && U32(loaded, 3 + 123 + 6) == 1,
                 "装载后同页差量同步源堆剩余两枚与210单枚实例");
-            var loadedActor = peer.Expect(0, 2).Body;
-            var loadedPlayer = peer.Expect(0, 2).Body;
-            var loadedList = peer.Expect(0, 13).Body;
-            That(loadedList[0] == 46 && U16(loadedList, 1) == 8 && loadedList.Length == 3 + 8 * 123,
-                "装载成功后补发容器46全量，图鉴符文页重新允许连续拖拽");
-            var vector = new byte[25];
-            vector[0] = 6;
-            BinaryPrimitives.WriteInt32LittleEndian(vector.AsSpan(1), rune);
-            That(loadedActor[133 + NameWidth("Talisman")] == 1 && loadedPlayer[126] == 1 &&
-                loadedPlayer.AsSpan().IndexOf(vector) >= 0, "装载后本人Player的六个符文槽位向量包含210实例，穿戴装备不变");
+            // 符文只改容器 46 的 210–215：不改变外观、不进属性，装载后不得补发本人 USERINFO。补发的
+            // USERINFO 会走 0267C4F0→023C3A90 重灌六符文向量并触发护石面板刷新（00698B70），是图鉴
+            // 符文页在按技能筛选时退回「所有技能」的唯一未排除触发路径（#747）。这里断言差量之后直接
+            // 就是 216 格重发，中间没有 USERINFO。
+            var loadedResync = peer.Expect(0, 14).Body;
+            That(loadedResync[0] == 46 && U16(loadedResync, 1) == 216 && loadedResync.Length == 3 + 216 * 123 &&
+                U16(loadedResync, 3 + 210 * 123) == 210 && U32(loadedResync, 3 + 210 * 123 + 2) == (uint)rune &&
+                U32(loadedResync, 3 + runeSlot.Slot * 123 + 6) == 2 &&
+                U32(loadedResync, 3 + 215 * 123 + 2) == uint.MaxValue,
+                "装载成功后以覆盖全部216格的容器46差量重发：210与源堆取提交结果，空槽为清空条目，中间不插USERINFO");
             peer.Barrier();
             That(Rows("list_type=46 AND slot_index=210") == 1 && StackCount(rune) == 2, "装载符文从堆叠分出一枚落到210");
 
@@ -131,8 +131,11 @@ internal static class TalismanTcpTests
 
             peer.Send(1659, Equip(211, (ushort)runeSlot.Slot, rune));
             peer.Expect(1, 1659, Failure(23));
-            var restore = peer.Expect(0, 13).Body;
-            That(restore[0] == 46 && U16(restore, 1) == 8, "拒绝装载后回发护石页全量，客户端状态与存档一致");
+            var restore = peer.Expect(0, 14).Body;
+            That(restore[0] == 46 && U16(restore, 1) == 216 && restore.Length == 3 + 216 * 123 &&
+                U16(restore, 3 + 210 * 123) == 210 && U32(restore, 3 + 210 * 123 + 2) == (uint)rune &&
+                U32(restore, 3 + 211 * 123 + 2) == uint.MaxValue,
+                "拒绝装载后同样以216格差量恢复：210保持已装实例、211仍为空槽，客户端状态与存档一致");
             peer.Barrier();
             That(Rows("list_type=46 AND slot_index=211") == 0 && StackCount(rune) == 2, "孔色不一致被拒绝且不扣材料");
 
@@ -145,13 +148,12 @@ internal static class TalismanTcpTests
             That(returned[0] == 46 && U16(returned, 1) == 2 && U16(returned, 3) == (ushort)runeSlot.Slot &&
                 U32(returned, 9) == 3 && U16(returned, 3 + 123) == 210 && U32(returned, 3 + 123 + 2) == uint.MaxValue,
                 "卸除后同页差量合回三枚并清空210");
-            var removedActor = peer.Expect(0, 2).Body;
-            var removedPlayer = peer.Expect(0, 2).Body;
-            var removedList = peer.Expect(0, 13).Body;
-            That(removedList[0] == 46 && U16(removedList, 1) == 7 && removedList.Length == 3 + 7 * 123,
-                "卸除成功后同样补发容器46全量，避免符文页失去响应");
-            That(removedActor[133 + NameWidth("Talisman")] == 1 && removedPlayer[126] == 1 &&
-                removedPlayer.AsSpan().IndexOf(vector) < 0, "卸除后本人Player不再携带装载符文向量");
+            // 卸除同样只发容器差量：210 清空后直接是 216 格重发，不得插入本人 USERINFO。
+            var removedResync = peer.Expect(0, 14).Body;
+            That(removedResync[0] == 46 && U16(removedResync, 1) == 216 && removedResync.Length == 3 + 216 * 123 &&
+                U32(removedResync, 3 + 210 * 123 + 2) == uint.MaxValue &&
+                U32(removedResync, 3 + runeSlot.Slot * 123 + 6) == 3,
+                "卸除成功后同样以216格差量重发：210清空、源堆合回三枚，中间不插USERINFO");
             peer.Barrier();
             That(Rows("list_type=46 AND slot_index=210") == 0 && StackCount(rune) == 3, "卸除符文合回背包并清空装载位");
 
