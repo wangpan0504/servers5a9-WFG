@@ -19,7 +19,109 @@ internal static class GameSenderBudgetTests
         await DepartureAreaAsync();
         await PhaseDepartureAsync();
         await WriteFailureAsync();
+        await QueuedPublicationAsync();
+        await QueuedPartyCommandAsync();
         Console.WriteLine($"PASS {TestCheck.Count - checks} game sender budget assertions");
+    }
+
+    static async Task QueuedPublicationAsync()
+    {
+        using var owner = new AccountOwners().Acquire("queued-publication", () => { });
+        using var stop = new CancellationTokenSource();
+        using var stream = new HeldStream();
+        await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
+        Task held = sender.Send(0, 2, [1], "held");
+        await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        bool generation = true, revision = true;
+        int verified = 0;
+        using (sender.QueuePublication(() => generation))
+        {
+            TestCheck.That(sender.Send(0, 37, [2], "old-scene").IsCompletedSuccessfully,
+                "共享结果入有界队列，不等待慢客户端写入");
+            TestCheck.That(sender.ClearScene().IsCompletedSuccessfully, "清场与后续帧在同一队列排队，不占队伍门禁等网络");
+            await sender.Send(0, 38, [3], "committed", () => { verified++; return revision; });
+            await sender.Send(0, 38, [9], "rejected", () => false);
+        }
+        revision = false;
+        Task barrier = sender.Send(1, 3, [4], "barrier");
+        TestCheck.That(!barrier.IsCompleted && verified == 1 && sender.PendingBytes <= GameConnectionSender.MaxPendingBytes,
+            "发布作用域退出后恢复可靠等待，守卫只在提交结果入队时检查revision");
+        using var healthyOwner = new AccountOwners().Acquire("queued-healthy", () => { });
+        using var healthyStop = new CancellationTokenSource();
+        using var healthyStream = new MemoryStream();
+        await using var healthy = new GameConnectionSender(healthyOwner, healthyStream, healthyStop, 0, (_, _, _, _, _) => { });
+        await healthy.Send(1, 3, [1], "healthy").WaitAsync(TimeSpan.FromSeconds(2));
+        TestCheck.That(healthyStream.Length > 0 && !barrier.IsCompleted, "另一连接发送不依赖慢连接完成");
+        stream.Release.TrySetResult();
+        await Task.WhenAll(held, barrier).WaitAsync(TimeSpan.FromSeconds(5));
+        TestCheck.That(stream.Frames.Count == 4 && verified == 1, "拒绝帧不发送，清场前已提交帧与后续结果保持FIFO，不被后续revision吞掉");
+        TestCheck.Bytes(stream.Frames[1], GameFrame.Build(0, 37, 1, [2]), "本人清场前的已提交消息必须先发出");
+        TestCheck.Bytes(stream.Frames[2], GameFrame.Build(0, 38, 2, [3]), "已提交结果保持包序、CRC及完整内容");
+        using (sender.QueuePublication(() => generation))
+        {
+            generation = false;
+            await sender.Send(0, 38, [5], "stale-generation");
+        }
+        await sender.Send(1, 3, [6], "final-barrier");
+        TestCheck.That(stream.Frames.Count == 5 && sender.PendingBytes == 0, "旧generation结果不入队，预算完整归还");
+    }
+
+    static async Task QueuedPartyCommandAsync()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-party-command-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var repository = new Persistence.CharacterRepository(Path.Combine(root, "game.db"));
+            var point = new GameWorld.Towns.Location(1, 0, 10, 10);
+            var towns = new GameWorld.Towns.TownCatalog([], point, point, new(0, [], []), [], new Dictionary<uint, uint[]>());
+            var owners = new AccountOwners();
+            using var slowOwner = owners.Acquire("command-slow", () => { });
+            using var fastOwner = owners.Acquire("command-fast", () => { });
+            using var slowStop = new CancellationTokenSource();
+            using var fastStop = new CancellationTokenSource();
+            using var slowStream = new HeldStream();
+            using var fastStream = new MemoryStream();
+            await using var slow = new GameConnectionSender(slowOwner, slowStream, slowStop, 0, (_, _, _, _, _) => { });
+            await using var fast = new GameConnectionSender(fastOwner, fastStream, fastStop, 0, (_, _, _, _, _) => { });
+            var party = new Game.Party.PartySnapshot(1, [], 0, 1);
+            var slowSession = new Game.Session.GameSession(repository, towns, slowOwner) { CurrentParty = () => party };
+            var fastSession = new Game.Session.GameSession(repository, towns, fastOwner) { CurrentParty = () => party };
+            var slowContext = new Network.Protocol.GameConnectionContext(new(1, System.Net.IPAddress.Loopback, slowStream, slowStop),
+                slowOwner, slowSession, slow);
+            var fastContext = new Network.Protocol.GameConnectionContext(new(2, System.Net.IPAddress.Loopback, fastStream, fastStop),
+                fastOwner, fastSession, fast);
+            var commands = new Network.Protocol.GameCommandRegistry();
+            commands.Register(CmdPacketType.SET_PARTY_INFO, async (context, _) =>
+            {
+                await context.Reply(CmdPacketType.SET_PARTY_INFO, [1], "party-local-reply");
+                return Network.Protocol.CommandResult.Handled;
+            }, nameof(GameSenderBudgetTests));
+            commands.Register(CmdPacketType.EXIT, async (context, _) =>
+            {
+                await context.Reply(CmdPacketType.EXIT, [1], "party-exit-reply");
+                return Network.Protocol.CommandResult.CloseConnection;
+            }, nameof(GameSenderBudgetTests));
+            commands.Seal();
+            Task held = slow.Send(0, 2, [1], "held");
+            await slowStream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var request = new Packet(1, (ushort)CmdPacketType.SET_PARTY_INFO, []);
+            await commands.DispatchAsync(slowContext, request).WaitAsync(TimeSpan.FromSeconds(2));
+            Task closing = commands.DispatchAsync(slowContext, new(1, (ushort)CmdPacketType.EXIT, []));
+            TestCheck.That(!closing.IsCompleted, "退出须在门禁外等待队列中的应答真正写出");
+            await commands.DispatchAsync(fastContext, request).WaitAsync(TimeSpan.FromSeconds(2));
+            await fast.Send(0, 2, [2], "fast-barrier");
+            TestCheck.That(!held.IsCompleted && fastStream.Length > 0 && party.Commands.CurrentCount == 1,
+                "成员本地应答不等待慢写入，释放队伍门禁后队友命令和响应继续");
+            slowStream.Release.TrySetResult();
+            await Task.WhenAll(held, closing).WaitAsync(TimeSpan.FromSeconds(5));
+            await slow.Send(0, 2, [3], "slow-barrier");
+            TestCheck.That(slowStream.Frames.Count == 4 && slow.PendingBytes == 0, "慢连接恢复后按原序写出完整应答并释放预算");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     static async Task OverflowAsync(bool byBytes)

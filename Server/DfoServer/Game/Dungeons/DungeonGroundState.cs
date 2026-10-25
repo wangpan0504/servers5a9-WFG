@@ -200,6 +200,10 @@ internal sealed class DungeonGroundState
     }
 
     public bool HasReservation(ushort monsterKey) => reservations.ContainsKey(monsterKey);
+    internal DungeonGroundState ForPartyParticipant(SinglePlayerDungeonRun participant, IReadOnlyList<DungeonMonsterPlan> route) =>
+        new(participant, route, reservations.Values.SelectMany(rows => rows).ToArray(), resourceIdentity,
+            PassiveGrounds.Select(ground => ground with { DeathIdentity = participant.Snapshot.Identity }).ToArray());
+
     public bool HasPendingPickup => pendingPickup is not null;
     public bool HasPendingOperation => HasPendingPickup || pendingInventoryDrop is not null;
 

@@ -12,6 +12,7 @@ internal sealed record PartyMember(SocialActor Actor, PublicCharacterSnapshot Id
 }
 internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Leader, long Revision)
 {
+    public SemaphoreSlim Commands { get; } = new(1, 1);
     public PartySettings Settings { get; init; } = PartySettings.Default;
 }
 internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged }
@@ -279,14 +280,17 @@ internal sealed class PartyService
         }
         return notices.ToArray();
     }
-    bool Latest(PartySnapshot party, PartyMember member)
+    bool Latest(PartySnapshot party, PartyMember member, SessionPhase phase = SessionPhase.Town)
     {
-        lock (gate) return member.IsCurrent() && member.Actor.Session.Phase == SessionPhase.Town &&
+        lock (gate) return member.IsCurrent() && member.Actor.Session.Phase == phase &&
             parties.TryGetValue(party.Id, out var current) && ReferenceEquals(current, party);
     }
     bool Absent(PartyMember member) { lock (gate) return Find(member) is null; }
-    PartyNotice Updated(PartySnapshot party, PartyMember member) => new(PartyNoticeKind.Updated, member, Party: party,
-        Guard: () => Latest(party, member));
+    PartyNotice Updated(PartySnapshot party, PartyMember member)
+    {
+        var phase = member.Actor.Session.Phase;
+        return new(PartyNoticeKind.Updated, member, Party: party, Guard: () => Latest(party, member, phase));
+    }
     public PartyNotice[] EndpointChanged(GameSession session)
     {
         lock (gate)

@@ -44,6 +44,8 @@ internal sealed record DungeonEntryPlan(
     public bool IsDespair => DungeonId is >= 11008 and <= 11107;
     public bool DisableFatigueConsumption { get; init; }
     public Guid QuestAcceptanceId { get; init; }
+    // 队长已批准的物理路线，只供分层、演出和物件终点核验；个人任务始终读取本人的 QuestAcceptances。
+    public DungeonEntryPlan? PartyRoute { get; init; }
     // 带原接取身份的普通路线，含猎杀、收集及列表通关；同样核对普通入场费用。
     public bool IsOrdinaryHunt { get; init; }
     public bool IsOrdinary => !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
@@ -109,7 +111,7 @@ internal sealed record DungeonEntryPlan(
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
-        bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null)
+        bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -128,14 +130,14 @@ internal sealed record DungeonEntryPlan(
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
             maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty),allowClearedTerminalQuest:allowClearedTerminalQuest,
-            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope);
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null)
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -216,6 +218,28 @@ internal sealed record DungeonEntryPlan(
             return false;
         }
 
+        if (partyRoute is { } shared)
+        {
+            if (shared.PartyRoute is not null || shared.DungeonId != dungeonId || shared.Difficulty != difficulty ||
+                shared.IsPractice || shared.IsTutorial || shared.IsClassExperience || shared.IsTrainingRoom || shared.IsTournament ||
+                shared.IsQuestReplay || shared.Hope is not null || (shared.HellParty is not null || shared.IsCosmo) != hellParty || shared.IsHellLegend != hellLegend)
+            { reason = "party-route-mismatch"; return false; }
+            var accepted = questId == 0 ? null : character.ActiveMainQuests.Single(row => row.QuestId == questId);
+            var participantTerminal = character.ActiveMainQuests.SingleOrDefault(row => row.QuestId == shared.TerminalLayerQuestId);
+            plan = shared with
+            {
+                CharacterId = character.Id, CharacterRevision = character.Revision,
+                QuestId = questId, ActiveQuestSlot = accepted?.Slot ?? byte.MaxValue,
+                QuestAcceptanceId = accepted?.AcceptanceId ?? Guid.Empty,
+                QuestAcceptances = character.ActiveMainQuests.ToImmutableArray(),
+                IsOrdinaryHunt = accepted is not null && shared.RouteQuestId == 0,
+                TerminalLayerQuestId = participantTerminal?.QuestId ?? 0, TerminalLayerQuestSlot = participantTerminal?.Slot ?? byte.MaxValue,
+                TerminalLayerAcceptanceId = participantTerminal?.AcceptanceId ?? Guid.Empty,
+                PassiveClearTerminalMap = null, CinematicClearTerminalMap = null, PartyRoute = shared
+            };
+            reason = "resource-plan-ready";
+            return true;
+        }
         // 仅识别匹配 PVF 已确认的三个整数；未知引用和其他条件形状不能变成默认迷宫。
         uint routeQuest = !isReplay && quest?.MainQuest is > 0 ? checked((uint)quest.MainQuest.Value) : questId;
         bool ordinaryHunt = false;

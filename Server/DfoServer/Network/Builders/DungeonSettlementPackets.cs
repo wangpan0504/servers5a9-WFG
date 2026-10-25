@@ -20,16 +20,20 @@ internal static class DungeonSettlementPackets
     // NOTI261读取u8写入结算页资格；9开放再挑战，0保留禁用状态，不负责切换场景。
     public static byte[] RetryEligibility(bool available) => [available ? (byte)9 : (byte)0];
 
-    public static byte[] PlayResult(ushort actorId, DungeonSettlementPresentation presentation)
+    public static byte[] PlayResult(ushort actorId, DungeonSettlementPresentation presentation, IReadOnlyList<ushort>? members = null)
     {
-        byte[] body = new byte[16];
+        if (members is null || members.Count == 0) members = [actorId];
+        byte[] body = new byte[9 + 7 * members.Count];
         body[0] = presentation.RankGrade;
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1), presentation.ClearTimeMilliseconds);
         body[6] = presentation.RankPoint;
         body[7] = 1; // 正式ClearFact仅在本次完整路线清完后成立。
-        body[8] = 1;
-        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(9), actorId);
-        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(11), presentation.ClearTimeMilliseconds);
+        body[8] = checked((byte)members.Count);
+        for (int index = 0; index < members.Count; index++)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(9 + 7 * index), members[index]);
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(11 + 7 * index), presentation.ClearTimeMilliseconds);
+        }
         return body;
     }
 
@@ -140,21 +144,22 @@ internal static class DungeonSettlementPackets
             (total, part) => part.Source == source ? total + part.Amount : total));
     }
 
-    public static byte[] CardRights(short fatigue = 1)
+    public static byte[] CardRights(short fatigue = 1, byte slot = 0)
     {
+        if (slot >= 8) throw new ArgumentOutOfRangeException(nameof(slot));
         byte[] body = new byte[17];
         body[0] = 1;
-        BinaryPrimitives.WriteInt16LittleEndian(body.AsSpan(1), fatigue);
-        for (int index = 1; index < 8; index++)
-            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1 + index * 2), ushort.MaxValue);
+        for (int index = 0; index < 8; index++)
+            BinaryPrimitives.WriteInt16LittleEndian(body.AsSpan(1 + index * 2), index == slot ? fatigue : (short)-1);
         return body;
     }
 
     public static byte[] CardReward(DungeonClearExperienceReward reward, uint monsterExperience, DungeonCardReward? card,
         DungeonCardOptions? options = null,DungeonCardReward? blackDiamond = null,
         uint monsterGrowthContractExperience = 0, uint monsterEquipmentExperience = 0,
-        IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0)
+        IReadOnlyList<DungeonObjectExperience>? objectExperience = null, uint monsterBossExperience = 0, byte slot = 0)
     {
+        if (slot >= 8) throw new ArgumentOutOfRangeException(nameof(slot));
         var empty = EmptyCardReward(reward, monsterExperience, monsterGrowthContractExperience, monsterEquipmentExperience,
             objectExperience, monsterBossExperience);
         if (card is null) return empty;
@@ -167,15 +172,16 @@ internal static class DungeonSettlementPackets
         int shift = checked((objectExperience?.Count ?? 0) * 8);
         byte[] body = new byte[empty.Length + (count+bonusCount) * 8];
         empty.AsSpan(0,156+shift).CopyTo(body);
-        int at = 156+shift;
+        int at = 156+shift+slot;
         body[at++] = checked((byte)count);
         foreach (var item in free) Pair(item.Id, item.Count);
-        at += 7; // 本人之外的七个免费席。
+        at += 7 - slot; // 本人之外的七个免费席，保留原始队伍位置。
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at),checked((uint)(options?.Price ?? 0)));
         at += 4 + 8; // 费用及未使用的额外组。
+        at += slot;
         body[at++] = checked((byte)bonusCount);
         foreach (var item in bonusItems) Pair(item.Id, item.Count);
-        at += 7;
+        at += 7 - slot;
         empty.AsSpan(184+shift).CopyTo(body.AsSpan(at));
         // 尾段先读全局u32和弃用u32，再读双倍位；它不是结果页显示开关。
         body[at + 8] = options?.DoublePaidItems == true ? (byte)1 : (byte)0;
@@ -190,8 +196,9 @@ internal static class DungeonSettlementPackets
         }
     }
 
-    public static byte[] FreeCardSelected()
+    public static byte[] FreeCardSelected(byte slot = 0)
     {
+        if (slot >= 8) throw new ArgumentOutOfRangeException(nameof(slot));
         byte[] body = new byte[33];
         body[0] = 1;
         for (int index = 0; index < 8; index++)
@@ -199,14 +206,15 @@ internal static class DungeonSettlementPackets
             body[1 + index * 4] = byte.MaxValue;
             body[2 + index * 4] = byte.MaxValue;
         }
-        body[1] = 0;
+        body[1 + slot * 4] = 0;
         // 免费牌从NOTI35预载，ACK71只揭示本人免费席；未开放的付费席保持FF。
         return body;
     }
 
     public static byte[] CardSelected(DungeonCardView view)
     {
-        if (view.Paid is null && view.FreeSelected) return FreeCardSelected();
+        if (view.Slot >= 8) throw new ArgumentOutOfRangeException(nameof(view));
+        if (view.Paid is null && view.FreeSelected) return FreeCardSelected(view.Slot);
         var paidItems = view.Paid is null ? [] : Display(view.Paid);
         int count = paidItems.Count;
         byte[] body = new byte[33+count*8];
@@ -214,10 +222,10 @@ internal static class DungeonSettlementPackets
         int at = 1;
         for (int slot = 0; slot < 8; slot++)
         {
-            body[at++] = slot == 0 && view.FreeSelected ? (byte)0 : byte.MaxValue;
-            body[at++] = slot == 0 && view.Paid is not null ? (byte)0 : byte.MaxValue;
-            body[at++] = slot == 0 ? checked((byte)count) : (byte)0;
-            if (slot == 0)
+            body[at++] = slot == view.Slot && view.FreeSelected ? (byte)0 : byte.MaxValue;
+            body[at++] = slot == view.Slot && view.Paid is not null ? (byte)0 : byte.MaxValue;
+            body[at++] = slot == view.Slot ? checked((byte)count) : (byte)0;
+            if (slot == view.Slot)
                 foreach (var item in paidItems) Pair(item.Id, item.Count);
             body[at++] = 0;
         }

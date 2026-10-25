@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
 
-internal sealed partial class CharacterRepository
+internal sealed partial class CharacterRepository : IPartyDungeonStore
 {
     static CharacterDungeonState? ReadDungeonState(SqliteConnection db, ushort id, SqliteTransaction? tx)
     {
@@ -84,7 +84,19 @@ internal sealed partial class CharacterRepository
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务：任一步失败整笔回滚，重复请求或提交失败都不会只扣一半。
     public DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge) => owner.Execute(() =>
     {
-        if (charge.IsEmpty) throw new InvalidOperationException("入场没有费用时使用普通尝试号预留");
+        if (charge.IsEmpty) throw new InvalidDataException("单人无费用入场使用原对象预留合同");
+        using var db = database.Open();
+        using var write = db.BeginWrite("CharacterRepository.CommitDungeonEntry");
+        using var tx = write.Transaction;
+        var committed = CommitDungeonEntryInTransaction(db, tx, owner, expected, nextObjectKey, charge, out var cachedFatigue);
+        tx.Commit();
+        InstallEntryFatigue(owner, charge, cachedFatigue);
+        return committed;
+    });
+
+    DungeonEntryCommit CommitDungeonEntryInTransaction(SqliteConnection db, SqliteTransaction tx,
+        AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge, out DungeonTransientFatigue? cachedFatigue)
+    {
         var state = ReservationState(expected, nextObjectKey);
         var identity = charge.Identity;
         if (identity.CharacterId != expected.Id || identity.InstanceId == Guid.Empty || identity.Epoch <= 0 ||
@@ -96,9 +108,6 @@ internal sealed partial class CharacterRepository
             fatigueBefore = expected.Fatigue ?? throw new InvalidOperationException("入场疲劳需要已初始化的疲劳owner");
             fatigueAfter = fatigueBefore.ConsumeAtEntry(charge.Fatigue);
         }
-        using var db = database.Open();
-        using var write = db.BeginWrite("CharacterRepository.CommitDungeonEntry");
-        using var tx = write.Transaction;
         DungeonIncountCommit? counted = null;
         if (charge.Incount is { } incount)
             counted = CommitDungeonIncountInTransaction(db, tx, owner, expected,
@@ -121,24 +130,78 @@ internal sealed partial class CharacterRepository
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("入场疲劳缺少原疲劳owner");
         }
         var committed = Require(db, tx, owner.Account, expected.Name);
-        DungeonTransientFatigue? cachedFatigue = null;
-        if (fatigueBefore is not null && fatigueAfter is not null)
-        {
-            cachedFatigue = new(charge.Hope is null ? CharacterFatigueState.StartDungeonRuleId : "operation-hope-first-area-v1", revision, fatigueBefore, fatigueAfter);
-            var receipts = DungeonTransientReceipts.Get(owner, identity);
-            if (charge.Hope is { } hope)
-                receipts.HopeAreaFatigue[hope.Catalog.Maps[charge.MapId].AreaId] = cachedFatigue;
-            else receipts.Fatigue[charge.MapId] = cachedFatigue;
-        }
-        try { tx.Commit(); }
-        catch
-        {
-            DungeonTransientReceipts.Forget(owner, identity);
-            throw;
-        }
-        if (cachedFatigue is not null) cachedFatigue.Committed = true;
+        cachedFatigue = fatigueBefore is not null && fatigueAfter is not null
+            ? new(charge.Hope is null ? CharacterFatigueState.StartDungeonRuleId : "operation-hope-first-area-v1", revision, fatigueBefore, fatigueAfter) : null;
         return new DungeonEntryCommit(committed, charge.Incount?.Row is not null ? counted?.Usage : null);
-    });
+    }
+
+    public PartyDungeonEntryCommit[] CommitPartyDungeonEntry(IReadOnlyList<PartyDungeonReservation> reservations)
+    {
+        if (reservations.Count is < 1 or > 4 || reservations.Select(r => r.Charge.Identity.InstanceId).Distinct().Count() != 1)
+            throw new InvalidDataException("组队入场需要同一实例的一至四个当前成员");
+        return AccountOwners.Lease.ExecuteGroup(reservations.Select(r => (r.Owner, r.Expected.Id)).ToArray(), () =>
+        {
+            using var db = database.Open();
+            using var write = db.BeginWrite("CharacterRepository.CommitPartyDungeonEntry");
+            using var tx = write.Transaction;
+            var result = new PartyDungeonEntryCommit[reservations.Count];
+            var fatigue = new DungeonTransientFatigue?[reservations.Count];
+            for (int i = 0; i < reservations.Count; i++)
+            {
+                var r = reservations[i];
+                var count = r.Incount;
+                var counted = count is null ? null : CommitDungeonIncountInTransaction(db, tx, r.Owner, r.Expected,
+                    count.Dungeon, count.Period, count.Row, null, count.Account, count.Increment, check: true);
+                if (count is not null && counted is null) throw new InvalidOperationException("组队成员入场次数已变化");
+                var character = CommitDungeonEntryInTransaction(db, tx, r.Owner, r.Expected, r.NextObjectKey, r.Charge, out fatigue[i]);
+                result[i] = new(character.Character, counted is not null && count is { Increment: true, Row: { } row }
+                    ? [.. DungeonIncountPolicy.Views(row, counted.Usage)] : []);
+            }
+            tx.Commit();
+            for (int i = 0; i < reservations.Count; i++)
+                InstallEntryFatigue(reservations[i].Owner, reservations[i].Charge, fatigue[i]);
+            return result;
+        });
+    }
+
+    public Character[] CommitPartyDungeonExit(IReadOnlyList<PartyDungeonExitReservation> reservations) =>
+        AccountOwners.Lease.ExecuteGroup(reservations.Select(r => (r.Owner, r.Expected.Id)).ToArray(), () =>
+        {
+            using var db = database.Open();
+            if (reservations.All(r => !r.Changed)) return Validate(null);
+            using var write = db.BeginWrite("CharacterRepository.CommitPartyDungeonExit");
+            using var tx = write.Transaction;
+            Validate(tx);
+            var result = reservations.Select(r => r.Changed
+                ? SaveInTransaction(db, tx, r.Owner, r.Expected, r.Position, r.Expected.Return, r.Inventory) : r.Expected).ToArray();
+            tx.Commit();
+            return result;
+
+            Character[] Validate(SqliteTransaction? tx)
+            {
+                foreach (var r in reservations)
+                {
+                    using var command = db.CreateCommand();
+                    command.Transaction = tx;
+                    command.CommandText = "SELECT revision FROM characters WHERE id=$id AND account=$account";
+                    command.Parameters.AddWithValue("$id", r.Expected.Id);
+                    command.Parameters.AddWithValue("$account", r.Owner.Account);
+                    if (command.ExecuteScalar() is not long revision || revision != r.Expected.Revision)
+                        throw new InvalidOperationException("组队退场前角色revision已变化");
+                }
+                return reservations.Select(r => r.Expected).ToArray();
+            }
+        });
+
+    static void InstallEntryFatigue(AccountOwners.Lease owner, DungeonEntryCharge charge, DungeonTransientFatigue? fatigue)
+    {
+        if (fatigue is null) return;
+        fatigue.Committed = true;
+        var receipts = DungeonTransientReceipts.Get(owner, charge.Identity);
+        if (charge.Hope is { } hope)
+            receipts.HopeAreaFatigue[hope.Catalog.Maps[charge.MapId].AreaId] = fatigue;
+        else receipts.Fatigue[charge.MapId] = fatigue;
+    }
 
     static CharacterDungeonState ReservationState(Character expected, uint nextObjectKey)
     {

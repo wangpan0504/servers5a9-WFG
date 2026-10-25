@@ -21,7 +21,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     CharacterLevelProjection levelProjection, EpicPieceCatalog? pieces = null,
     DungeonCardRewardPolicy? cards = null, InventoryProjection? inventoryProjection = null,
     RentalCatalog? rental = null, Game.Events.ServerEventService? events = null,
-    GameWorld.Adventure.AdventureCatalog? adventure = null) : IGameCommandModule
+    GameWorld.Adventure.AdventureCatalog? adventure = null, PartyDungeonService? partyDungeons = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -48,11 +48,15 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     async Task<CommandResult> ResultAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonSettlementRequests.TryParsePlayResult(request.Body, out var parsed)) return CommandResult.Unhandled;
+        var participant = parsed!.Participants.SingleOrDefault(member => member.ActorId == context.Session.Selected?.Id);
+        if (participant is null) return CommandResult.Unhandled;
         // 活动查询不占用账号锁；同一份结算准备冻结资格与倍率。
         var goldCardEvent = events?.Read(Game.Events.ServerEventService.DoubleGoldCardId);
-        var result = context.Session.SettleFormalDungeon(parsed!.ActorId, parsed.RankPoint, parsed.MaximumRankPoint,
-            request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent, adventure,items,pieces);
-        log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, parsed.RankPoint,
+        var result = context.Session.SettleFormalDungeon(participant.ActorId, participant.RankPoint, parsed.MaximumRankPoint,
+            request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent, adventure,items,pieces,
+            parsed.Participants.Select(member => member.ActorId).ToArray());
+        log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, participant.RankPoint,
+            parsed.MaximumRankPoint, Members = parsed.Participants.Count,
             result.Reward, result.GainedExperience, result.ProficiencyGained, result.Card, result.GriefReward, result.MailId, result.Receipt?.Snapshot.Identity,
             Adventure = result.Adventure is { } progression
                 ? new { progression.State.Level, progression.State.Experience, progression.MaximumLevelExperience,
@@ -78,7 +82,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         bool cosmo = receipt.Entry.IsCosmo;
         bool grief = receipt.Entry.Maze.IsGriefTower;
         if (!tournament && !cosmo && !grief)
-            await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!), "formal_play_result", Guard);
+            await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!, receipt.PartyActors), "formal_play_result", Guard);
         var previous = result.PreviousCharacter ?? throw new InvalidOperationException("通关结算缺少真实提交前角色");
         if (CharacterExperienceNotice.ShouldPublish(previous.Level))
             await context.Notify(NotiPacketType.EXP, GrowthPackets.Experience(receipt.Character.Level, receipt.Character.Learning, auxiliary, display), "formal_clear_experience", Guard);
@@ -113,7 +117,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(effective),
             result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
             result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
-            result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience), "formal_clear_reward", Guard);
+            result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience, receipt.PartySlot), "formal_clear_reward", Guard);
         if (result.LuckyStarGained)
             await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
                 RentalPackets.State(receipt.Character.Inventory, DateTimeOffset.UtcNow),
@@ -178,7 +182,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             return CommandResult.Unhandled;
         var view = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("翻牌展示失效");
         var fatigue = receipt.Character.Fatigue ?? throw new InvalidOperationException("翻牌角色缺少疲劳owner");
-        await context.Reply(CmdPacketType.CARD_SELECT_RIGHT_STATE, DungeonSettlementPackets.CardRights(checked((short)fatigue.Remaining)), "formal_card_rights", () => context.Session.CanPublishDungeonSettlement(receipt));
+        await context.Reply(CmdPacketType.CARD_SELECT_RIGHT_STATE, DungeonSettlementPackets.CardRights(checked((short)fatigue.Remaining), receipt.PartySlot), "formal_card_rights", () => context.Session.CanPublishDungeonSettlement(receipt));
         context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection);
         await context.Cards.StartAsync(receipt);
         return CommandResult.Handled;
@@ -242,6 +246,31 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (state == 2)
         {
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_focus", () => context.Session.CanPublishDungeonSettlement(current));
+            return CommandResult.Handled;
+        }
+        if (context.Session.PartyDungeon is { } party)
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+            PartyDungeonNotice[] notices = option switch
+            {
+                0 when partyDungeons is not null => partyDungeons.Enter(context.Session, current.Entry.DungeonId,
+                    current.Entry.Difficulty, dungeons, rooms, drops, items, pieces, null)
+                    .Select(n => n with { State = 1 }).ToArray(),
+                1 => party.ResultSelection(context.Session),
+                2 => party.ResultReturn(context.Session),
+                _ => []
+            };
+            if (option == 1 && notices.Length > 0)
+            {
+                int target = context.Session.PrepareLegendDungeonSelection(dungeons);
+                notices = notices.Select(n => n with { LegendDungeon = target }).ToArray();
+            }
+            if (option == 0 && notices.Length == 0 && current.Entry.IsCosmo)
+                await PartyDungeonProjection.PublishAsync(party.Members.Select(m =>
+                    new PartyDungeonNotice(PartyDungeonNoticeKind.RetryEligibility,m,party.Members,m.Actor.Session.CurrentFormalDungeonScene())));
+            log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "party-result-command", option,
+                Accepted = notices.Length > 0, Party = party.Id });
+            await PartyDungeonProjection.PublishAsync(notices);
             return CommandResult.Handled;
         }
         if (option == 0)

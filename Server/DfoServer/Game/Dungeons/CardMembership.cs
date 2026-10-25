@@ -65,4 +65,7 @@ internal sealed record FormalFreeCardResult(FormalDungeonReceipt Receipt, Invent
 internal sealed record DungeonCardClaimPreparation(Character Expected, byte Side, DungeonCardDelivery Delivery,
     DateTimeOffset Time);
 
-internal sealed record DungeonCardView(DungeonCardOptions? Options,bool FreeSelected,DungeonCardReward? Paid);
+internal sealed record DungeonCardView(DungeonCardOptions? Options,bool FreeSelected,DungeonCardReward? Paid)
+{
+    public byte Slot { get; init; }
+}

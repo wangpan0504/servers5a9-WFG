@@ -56,9 +56,11 @@ internal sealed partial class CharacterRepository
         owner.Execute(() =>
     {
         using var db = database.Open();
-        using var tx = db.BeginTransaction(deferred: false);
+        using var write = db.BeginWrite("CharacterRepository.CommitDungeonIncountEntry");
+        using var tx = write.Transaction;
         var result = CommitDungeonIncountInTransaction(db, tx, owner, expected, dungeon, now, row, consumption, account, increment, check);
-        if (result is not null) tx.Commit();
+        if (result is null) return null;
+        tx.Commit();
         return result;
     });
 

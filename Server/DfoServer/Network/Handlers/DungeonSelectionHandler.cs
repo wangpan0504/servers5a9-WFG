@@ -10,7 +10,8 @@ namespace DfoServer.Network.Handlers;
 // 正式与诊断实例共用已经确认的选图界面入口，不负责建立副本实例。
 internal sealed class DungeonSelectionHandler(TownProjection projection, ServerLog log,
     DfoServer.GameWorld.Characters.TutorialCatalog? tutorials = null,
-    DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null) : IGameCommandModule
+    DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
+    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -24,10 +25,43 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
-        if (context.Session.HasMultiplePartyMembers?.Invoke() == true)
+        if (context.Session.HasMultiplePartyMembers?.Invoke() == true && context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
         {
-            log.Write("party_selection_rejected", new { Connection = context.Id, Reason = "multiplayer-dungeon-pending" });
-            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "party_selection_unavailable");
+            if (partyDungeons is null) return CommandResult.Unhandled;
+            if (entry.DungeonIndex != 0)
+            {
+                var party = context.Session.CurrentParty?.Invoke();
+                if (party is null || context.Session.Phase != SessionPhase.MapSelect ||
+                    !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, context.Session)))
+                    return CommandResult.Unhandled;
+                var confirmation = context.Session.BeginDungeonSelection(partyAdmission: true);
+                if (confirmation is not null)
+                    await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "party_dungeon_chosen",
+                        () => context.Session.CanPublishDungeonSelection(confirmation));
+                return CommandResult.Handled;
+            }
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, context.Session.CurrentParty?.Invoke()?.Members ?? []);
+            var selected = partyDungeons.BeginSelection(context.Session);
+            if (selected.Length > 0 && dungeons is not null)
+            {
+                int target = context.Session.PrepareLegendDungeonSelection(dungeons);
+                selected = selected.Select(n => n with { LegendDungeon = target }).ToArray();
+            }
+            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length > 0, Party = true, Members = selected.Length });
+            if (selected.Length == 0)
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "party_selection_rejected");
+            else await PartyDungeonProjection.PublishAsync(selected);
+            return CommandResult.Handled;
+        }
+        if (context.Session.PartyDungeon is { } hellParty)
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context,hellParty.Members);
+            var selected = hellParty.ClearedHellSelection(context.Session,entry.DungeonIndex);
+            if (selected.Length == 0) return CommandResult.Unhandled;
+            int target = dungeons is null ? 0 : context.Session.PrepareLegendDungeonSelection(dungeons);
+            log.Write("formal_hell_selection",new { Connection=context.Id, Party=hellParty.Id,
+                entry.DungeonIndex, Members=selected.Length, LegendDungeon=target });
+            await PartyDungeonProjection.PublishAsync(selected.Select(n => n with { LegendDungeon=target }));
             return CommandResult.Handled;
         }
         if (context.Session.Phase == SessionPhase.Dungeon ||
@@ -146,6 +180,15 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
     {
         if (!DungeonRequests.IsSelectionReturn(request.Body) || context.BlocksTownActions)
             return CommandResult.Unhandled;
+        if (context.Session.CurrentParty?.Invoke() is { Members.Length: > 1 } party)
+        {
+            if (!party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, context.Session)))
+                return CommandResult.Handled;
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+            var returned = partyDungeons?.ReturnSelection(context.Session) ?? [];
+            await PartyDungeonProjection.PublishAsync(returned);
+            return CommandResult.Handled;
+        }
         var receipt = context.Session.ReturnFromDungeonSelection();
         log.Write("dungeon_selection_return", new { Connection = context.Id, Accepted = receipt is not null, receipt?.SelectionId });
         if (receipt is not null)

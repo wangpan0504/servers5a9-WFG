@@ -69,7 +69,7 @@ internal sealed partial class GameSession
     private QuestLifecycleReceipt? ObserveFormalPassiveEvent(uint templateId, string fingerprint,
         DungeonRoomCatalog resources, ushort? reportedQuest = null)
     {
-        if (questCatalog is null) return null;
+        if (!CanMutatePartyDungeon || questCatalog is null) return null;
         var capture = owner.Execute(() =>
         {
             var dungeon = formalDungeon;
@@ -133,7 +133,7 @@ internal sealed partial class GameSession
         bool reportsQuestDeath = resources.ReportsQuestDeath(chosen.source);
         bool recordsQuest = reportsQuestDeath || resources.ReportsQuestItemReward(chosen.source);
         bool mazeClear = current.Run.IsPassiveClearCondition(scene.Identity, (int)templateId, chosen.ordinal);
-        if (pending is null && mazeClear && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
+        if (pending is null && mazeClear && current.Entry.PartyRoute is null && !expected.ActiveMainQuests.Any(active => active.QuestId == current.Entry.RouteQuestId &&
             QuestHuntProgress.Bound(active,current.Entry))) return null;
         if (pending is null && reportedQuest is null && !recordsQuest &&
             (!mazeClear || current.Run.ClearFact is not null || !current.Entry.IsTerminalMap(scene.CurrentMap))) return null;

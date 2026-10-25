@@ -197,6 +197,12 @@ internal sealed partial class SinglePlayerDungeonRun
     }
     public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
     public DungeonClearFact? ClearFact { get; private set; }
+    internal void BindPartyInstance(Guid instance)
+    {
+        if (instance == Guid.Empty || Phase != SinglePlayerDungeonPhase.Loading || allRooms.Any(room => room.Loaded))
+            throw new InvalidOperationException("共享实例身份只能在入场准备阶段绑定");
+        identity = identity with { InstanceId = instance };
+    }
     public bool HasPendingSettlement => pendingSettlement is not null || pendingAltarSettlement is not null || pendingDespairClear is not null;
     // 剧情入场不扣持久疲劳；宠物仍按真实首次加载的房间成长，回访不重复计点。
     public int CreatureExperiencePoints => entry.IsTutorial || entry.IsTrainingRoom || entry.IsClassExperience || entry.IsQuestReplay || entry.IsPractice
@@ -222,7 +228,7 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private SinglePlayerDungeonRun(DungeonEntryPlan entry, long attempt, long epoch, DungeonFixedRoute route, DungeonCombatAuthority authority)
     {
-        scriptedTransitLayer = ResolveScriptedTransitLayer(entry, route);
+        scriptedTransitLayer = ResolveScriptedTransitLayer(entry.PartyRoute ?? entry, route);
         if (scriptedTransitLayer is not null)
             entry = entry with { TerminalLayerMap = null, TerminalLayerQuestId = 0,
                 TerminalLayerQuestSlot = byte.MaxValue, TerminalLayerAcceptanceId = Guid.Empty };
@@ -591,6 +597,7 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool CanReturnFromCinematic(DungeonPoint target)
     {
+        var entry = this.entry.PartyRoute ?? this.entry;
         if (entry.IsTutorial || entry.IsClassExperience || entry.RouteQuestId is 0 or >= 30000 ||
             entry.BossMap.Kind == "layered" || entry.BaseBossMap != entry.BossMap ||
             !layerSources.TryGetValue(target,out var source) || source.Plan.Room.Map != entry.BossMap ||
@@ -900,6 +907,7 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private Room? ResolveCinematicLayerTerminal()
     {
+        var entry = this.entry.PartyRoute ?? this.entry;
         if (entry.IsTutorial || entry.IsClassExperience || entry.IsPractice || entry.IsQuestReplay ||
             entry.HasExplicitClearMap || entry.QuestClearMap is not null || entry.TerminalLayerMap is not null ||
             entry.BossMap != entry.BaseBossMap || storyRooms.Length != 0 || conditionalRooms.Count != 0 ||
@@ -919,6 +927,7 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private Room? ResolvePassiveLayerTerminal()
     {
+        var entry = this.entry.PartyRoute ?? this.entry;
         if (entry.IsTutorial || entry.IsClassExperience || entry.IsQuestReplay ||
             entry.QuestClearMap is not null || entry.TerminalLayerMap is not null || entry.BossMap != entry.BaseBossMap ||
             storyRooms.Length != 0 || conditionalRooms.Count != 0 || passiveClearTarget is not { } target || target <= 0 ||
@@ -960,6 +969,7 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private static bool ValidExplicitTerminalLayer(DungeonEntryPlan entry, DungeonFixedRoute route)
     {
+        entry = entry.PartyRoute ?? entry;
         if (entry.TerminalLayerMap is not { } layer) return entry.TerminalLayerAcceptanceId == Guid.Empty &&
             entry.TerminalLayerQuestId == 0 && entry.TerminalLayerQuestSlot == byte.MaxValue;
         if (!entry.HasExplicitClearMap || entry.IsTutorial || entry.IsClassExperience || entry.IsQuestReplay ||

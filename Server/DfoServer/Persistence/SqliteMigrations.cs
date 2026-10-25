@@ -209,6 +209,7 @@ internal static class SqliteMigrations
         new(95, "独立训练技能快照与事务身份", static (db,tx) => Execute(db,tx,PvpTrainingSkillsSchema.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
         new(96, "决斗专用角色身份与账号重建冷却", static (db,tx) => Execute(db,tx,PvpPrivateCharacterSchema.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
         new(97, "代号希望按实例与接取去重领奖", static (db,tx) => Execute(db,tx,OperationHopeRewardSchema.Definition.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
+        new(98, "组队任务物件助战场景回执", UpgradePartyQuestLifecycle),
     ];
 
     internal const string PvpPrivateCharacterSchema = """
@@ -259,6 +260,24 @@ internal static class SqliteMigrations
             ordinary_material_remainder INTEGER NOT NULL CHECK(ordinary_material_remainder>=0)
         );
         """;
+
+    internal static string PartyQuestLifecycleSql => QuestLifecycleSchema
+        .Replace("CHECK(quest_id BETWEEN 1 AND 29999)", "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))", StringComparison.Ordinal)
+        .Replace("CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000')", "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000')))", StringComparison.Ordinal);
+
+    static void UpgradePartyQuestLifecycle(SqliteConnection db, SqliteTransaction tx)
+    {
+        const string table = "character_quest_lifecycle_receipts";
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+        query.Parameters.AddWithValue("$table", table);
+        if (query.ExecuteScalar() is not string actual) throw new InvalidDataException("缺少任务场景回执表");
+        if (NormalizeTable(actual, table) == NormalizeTable(PartyQuestLifecycleSql, table)) return;
+        if (NormalizeTable(actual, table) != NormalizeTable(QuestLifecycleSchema, table))
+            throw new InvalidDataException("组队任务回执迁移拒绝未知约束");
+        ReplaceTableConstraint(db, tx, table, "CHECK(quest_id BETWEEN 1 AND 29999)", "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))");
+        ReplaceTableConstraint(db, tx, table, "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000')", "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000')))");
+    }
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
     {
@@ -1722,6 +1741,8 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        // 第三批验收曾用v92保存助战回执，正式v92已用于护石；只识别完整旧组合再补跑。
+        if (version == 92 && current >= 98 && IsPartyDungeonPreview(db, tx)) version = 91;
         // 两类预览库按互斥结构识别，不以同号版本替代已发布迁移。
         // 本地任务预览曾占用88/89；只有两张副本次数表均缺失且任务表精确匹配才回到87补齐。
         if (current >= 97 && Quest704PreviewBaseline(db, tx, version) is { } previewBaseline) version = previewBaseline;
@@ -1850,6 +1871,25 @@ internal static class SqliteMigrations
         Execute(db, tx, $"PRAGMA user_version={CurrentVersion}");
     }
 
+    static bool IsPartyDungeonPreview(SqliteConnection db, SqliteTransaction tx)
+    {
+        if (!KnownTable(db, tx, "character_quest_lifecycle_receipts", PartyQuestLifecycleSql) ||
+            SocialSchema.Tables.Any(row => !KnownTable(db, tx, row.Table, row.Sql)) ||
+            !KnownTable(db, tx, "character_dungeon_incount", DungeonIncountSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) ||
+            !KnownTable(db, tx, "account_dungeon_incount", AccountDungeonIncountSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal))) return false;
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = """
+            SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN
+              ('character_epic_production','quest_eligibility_mail_dispatches','character_pvp_training_skills',
+               'account_pvp_private_characters','character_operation_hope_reward_receipts')
+            """;
+        if (query.ExecuteScalar() is not 0L) return false;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_inventory_slots'";
+        return query.ExecuteScalar() is string slots &&
+            slots.Contains("CHECK(list_type IN (0,1,2,3,7,12,38))", StringComparison.Ordinal);
+    }
+
     static bool IsSocialNumberingPreview(SqliteConnection db, SqliteTransaction tx, long version)
     {
         if (version is < 88 or > 90) return false;
@@ -1886,8 +1926,6 @@ internal static class SqliteMigrations
         // 正式v78已经放宽经验下界；该结构不能冒充旧玩家交互库。
         if (settlement is null || NormalizeTable(settlement, SettlementProficiencySchema.Settlement) !=
             NormalizeTable(SettlementProficiencySchema.SettlementSql, SettlementProficiencySchema.Settlement)) return false;
-        // 社交批次不能解释助战回执；保持v80预览库原样，交由完整交互版本升级。
-        if (version == 80) throw new InvalidDataException("v80玩家交互预览库须使用完整交互版本升级");
         foreach (var (table, currentSql) in SocialSchema.Tables.Append(("player_trade_receipts", LegacyPlayerTradeSql)))
         {
             string expected = table == "account_social_requests" && version == 78 ? SocialSchema.LegacyRequestSql : currentSql;
@@ -1898,7 +1936,7 @@ internal static class SqliteMigrations
             expert.Contains("learned_recipes", StringComparison.Ordinal))
             throw new InvalidDataException("玩家交互旧库与正式迁移结构混用");
         const string lifecycle = "character_quest_lifecycle_receipts";
-        string expectedLifecycle = QuestLifecycleSchema;
+        string expectedLifecycle = version == 80 ? PartyQuestLifecycleSql : QuestLifecycleSchema;
         if (Table(lifecycle) is not { } actualLifecycle || NormalizeTable(actualLifecycle, lifecycle) != NormalizeTable(expectedLifecycle, lifecycle))
             throw new InvalidDataException("玩家交互旧库任务回执结构不匹配");
         return true;
@@ -2018,6 +2056,7 @@ internal static class SqliteMigrations
         }
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
+            ("character_quest_lifecycle_receipts",PartyQuestLifecycleSql),
             ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
             ("character_dungeon_settlement_receipts",ZeroExperienceDungeonSchema.SettlementSql),

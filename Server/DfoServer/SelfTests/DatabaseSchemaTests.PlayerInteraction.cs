@@ -11,6 +11,7 @@ internal static partial class DatabaseSchemaTests
     static void PlayerInteractionPreviewUpgrade(string root)
     {
         SocialNumberingUpgrade(root);
+        PartyDungeonNumberingUpgrade(root);
         foreach (int version in new[] { 78, 79, 80 })
         {
             string path = Path.Combine(root, "player-preview-" + version, "game.db");
@@ -51,16 +52,14 @@ internal static partial class DatabaseSchemaTests
                       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                     ) STRICT;
                     """);
-                if (version == 80)
+                if (version != 80)
                 {
-                    using var tx = db.BeginTransaction();
-                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_quest_lifecycle_receipts",
-                        "CHECK(quest_id BETWEEN 1 AND 29999)",
-                        "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))");
-                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_quest_lifecycle_receipts",
-                        "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000')",
-                        "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000')))");
-                    tx.Commit();
+                    using var rewind = db.BeginTransaction();
+                    SqliteMigrations.ReplaceTableConstraint(db, rewind, "character_quest_lifecycle_receipts",
+                        "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))", "CHECK(quest_id BETWEEN 1 AND 29999)");
+                    SqliteMigrations.ReplaceTableConstraint(db, rewind, "character_quest_lifecycle_receipts",
+                        "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000')))", "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000')");
+                    rewind.Commit();
                 }
                 if (version == 78)
                     Execute(db, "DROP TABLE account_social_requests;" + SocialSchema.LegacyRequestSql);
@@ -76,13 +75,6 @@ internal static partial class DatabaseSchemaTests
                         INSERT INTO character_quest_lifecycle_receipts VALUES({role.Id},'key-schema','{new string('c', 32)}','Condition',0,
                         '{new string('0', 32)}',0,1,'[]','[]','[]','null',NULL,NULL);
                         """);
-            }
-            if (version == 80)
-            {
-                string preview = Snapshot(path);
-                Reject<InvalidDataException>(() => _ = new CharacterRepository(path), "社交批次拒绝需要组队回执迁移的v80预览库");
-                Check(Snapshot(path) == preview, "拒绝v80保持其助战回执、资产、好友、版本与结构原样");
-                continue;
             }
             if (version == 79)
             {
@@ -113,6 +105,60 @@ internal static partial class DatabaseSchemaTests
             string current = Snapshot(path);
             _ = new CharacterRepository(path);
             Check(Snapshot(path) == current, "兼容升级后重开不重复修改资产和回执");
+        }
+    }
+
+    static void PartyDungeonNumberingUpgrade(string root)
+    {
+        foreach (var (version, corrupt) in new[] { (92, false), (92, true), (97, false) })
+        {
+            string path = Path.Combine(root, $"party-numbering-{version}-{corrupt}", "game.db");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('party-preview',0,'PartyPreview',7,38,1,450,234,0,123)");
+                if (version == 92)
+                {
+                    Execute(db, "DROP TABLE character_epic_production; DROP TABLE quest_eligibility_mail_dispatches; DROP TABLE character_pvp_training_skills; DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts");
+                    RewindTalismanInventory(db);
+                    Execute(db, $"""
+                        INSERT INTO character_quest_lifecycle_receipts VALUES(1,'party-preview','{new string('c', 32)}','Condition',0,
+                        '{new string('0', 32)}',6,7,'[]','[]','[]','null',NULL,NULL);
+                        """);
+                }
+                else
+                {
+                    using var tx = db.BeginTransaction();
+                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_quest_lifecycle_receipts",
+                        "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))", "CHECK(quest_id BETWEEN 1 AND 29999)");
+                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_quest_lifecycle_receipts",
+                        "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000')))", "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000')");
+                    tx.Commit();
+                }
+                if (corrupt) Execute(db, "ALTER TABLE character_quest_lifecycle_receipts ADD COLUMN unexpected INTEGER");
+                Execute(db, $"PRAGMA user_version={version}");
+            }
+            if (corrupt)
+            {
+                string before = Snapshot(path);
+                Reject<InvalidDataException>(() => _ = new CharacterRepository(path), "旧组队v92拒绝未知回执结构");
+                Check(Snapshot(path) == before, "拒绝未知组队预览库时不修改资产、DDL或版本");
+                continue;
+            }
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Check(Query(db, "PRAGMA user_version") is long actual && actual == SqliteMigrations.CurrentVersion &&
+                    Query(db, "SELECT revision||':'||gold FROM characters") is "7:123" &&
+                    Query(db, "SELECT count(*) FROM character_quest_lifecycle_receipts") is long scenes && scenes == (version == 92 ? 1 : 0) &&
+                    Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN ('character_epic_production','quest_eligibility_mail_dispatches','character_pvp_training_skills','account_pvp_private_characters','character_operation_hope_reward_receipts')") is 5L,
+                    "主线v97与组队预览v92补齐正式迁移，保留原角色资产及助战回执");
+                Check(Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L,
+                    "组队迁移后结构完整且外键正确");
+            }
+            string once = Snapshot(path);
+            _ = new CharacterRepository(path);
+            Check(Snapshot(path) == once, "组队迁移后重开不重复改写");
         }
     }
 
