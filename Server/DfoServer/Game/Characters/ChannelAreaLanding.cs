@@ -38,6 +38,11 @@ internal static class ChannelAreaLanding
     // 进入频道（选角或不保留快照的换频道）时是否直接落到频道地区；其余频道出生赛丽亚房间。
     internal static bool LandsInChannelTown(ChannelEntry channel) => channel.Type == AntonRaidType;
 
+    // 安徒恩频道的起始城镇：客户端 03B87FE0 对 type 0x17 返回 (19, 0)，换频道直接落在战舰房间 19/0。
+    // 战舰城镇不是 IsChannelBoundTown（19/0 继承共享房间几何，19/1 另有通往 19/2 的门），但 19/0 是频道出生点，
+    // 城镇里的街区不能写成共享房间的返回地区，否则普通频道的 1379 与出门城镇会变成战舰（#740 回归）。
+    internal const byte AntonTown = 19;
+
     // 普通区域频道类型：channel.txt 的 21 个普通区域入口。选角出生共享房间，房间出口只认角色记住的返回地区（#740）；
     // 频道分组只决定特殊区域与团队频道的落点。与 Docs/模块/城镇.md 第 4 条“普通房间出口必须匹配持久返回地区”一致。
     internal const int OrdinaryType = 22;
@@ -137,6 +142,11 @@ internal static class ChannelAreaLanding
             towns.Areas.Values.Where(area => area.Town != town).All(area => Links(area).All(link => link.Town != town)) &&
             towns.RoomPortals.All(portal => portal.Town != town);
     }
+
+    // 共享房间的返回地区只能落在普通地区：频道起始城镇（只能经频道进入的城镇与安徒恩直达战舰）的街区不参与，
+    // 进入或城内切图一律沿用进入前的返回地区，避免战舰 19/1 被当成普通频道赛丽亚房间的出口（#740 回归）。
+    internal static bool PreservesRoomReturn(TownCatalog towns, byte town) =>
+        town == AntonTown || IsChannelBoundTown(towns, town);
 
     static string GroupName(string group) => group.Trim().TrimStart('[').TrimEnd(']');
 

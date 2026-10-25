@@ -142,6 +142,32 @@ internal static class ChannelAreaLandingTests
         var antonPlaced = CharacterSelection.Prepare(repo, owner, antonRole, towns, none, null, false, null, channel: anton);
         That(antonPlaced.Position is { Town: 19, Area: 0 }, "安徒恩频道选角直接落 19/0");
         That(ChannelAreaLanding.RoomExit(towns, anton, towns.Room, 95, none) is null, "安徒恩不改赛丽亚房间出门");
+        // #740 回归：战舰是频道起始城镇，不是普通城镇的一站。落点沿用进入前的返回地区，
+        // 不能把 19/1（819,172 战舰甲板门）记成共享房间的返回地区，否则普通频道房间的 1379 与出门都会落到战舰。
+        That(antonPlaced.Return == towns.InitialReturn,
+            "安徒恩落点保留普通返回地区，不记战舰街区，实际=" + antonPlaced.Return);
+        That(ChannelAreaLanding.PreservesRoomReturn(towns, ChannelAreaLanding.AntonTown) &&
+            ChannelAreaLanding.PreservesRoomReturn(towns, 67) && !ChannelAreaLanding.PreservesRoomReturn(towns, 38),
+            "频道起始城镇 19 与只能经频道进入的 67 保留返回地区，艾尔文 38 不保留");
+
+        // 旧存档可能把战舰街区记成返回地区（修复前 19/1 819,172）。普通频道选角与频道重连都要按共享房间初始地区修复，
+        // 否则房间 1379 与 1426 出门继续指向战舰。
+        var stale = repo.Create(owner, new("StaleShip", towns.Room, new Location(19, 1, 819, 172)) { Level = 95 });
+        var healed = CharacterSelection.Prepare(repo, owner, stale, towns, none, null, false, null, channel: elven);
+        That(healed.Position == towns.Room && healed.Return == towns.InitialReturn,
+            "旧存档的战舰返回地区在普通频道选角时按初始地区修复，实际=" + healed.Return);
+        var healedExit = TownTravel.LeaveRoom(healed, towns, none, elven);
+        That(healedExit is { Reason: "ready", Position.Town: 38 },
+            "战舰返回地区修复后普通房间出门回艾尔文 38，实际=" + healedExit.Position);
+        var staleSwap = repo.Create(owner, new("StaleSwap", towns.Room, new Location(19, 1, 819, 172)) { Level = 95 });
+        var resumed = CharacterSelection.Prepare(repo, owner, staleSwap, towns, none, null, true, null, channel: elven);
+        That(resumed.Position == towns.Room && resumed.Return == towns.InitialReturn,
+            "换频道保留快照时同样修复战舰返回地区，实际=" + resumed.Return);
+        // 战舰内走动（19/0 → 19/1 甲板门）不覆盖进入前的普通返回地区。
+        var aboard = repo.Save(owner, healed, new(19, 0, 474, 234), towns.InitialReturn);
+        var toDeck = TownTravel.Plan(aboard, new(19, 1, 819, 172, 5, 19, 0, 0), towns, none);
+        That(toDeck.Accepted && toDeck.Position is { Town: 19, Area: 1 } && toDeck.Return == towns.InitialReturn,
+            "战舰内走到 19/1 不覆盖普通返回地区，实际=" + toDeck.Return);
 
         // 换频道快照：按上一次选角的频道类型比较 01EB5AF0 谓词。
         var history = new ChannelHistory();
