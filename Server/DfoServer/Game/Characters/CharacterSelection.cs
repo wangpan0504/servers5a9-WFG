@@ -30,21 +30,28 @@ internal static class CharacterSelection
             if (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area)
                 || area.Map(completed).Error is not null)
                 throw new InvalidDataException("频道重连的城镇地图不可用");
+            // 旧存档可能把战舰街区记成返回地区；共享房间的 1379 与出门都取它，按初始地区修复，位置保持不变。
+            if (character.Return is { Town: ChannelAreaLanding.AntonTown })
+                character = repository.Save(owner, character, character.Position,
+                    towns.ResolveRoomReturn(towns.Room, null, character.Level, completed));
         }
         // 只有安徒恩（客户端 03B87FE0 起始地点 19/0）直接落频道地区；其余频道出生赛丽亚房间，出门由 TownTravel.LeaveRoom 按频道落点。
         else if (channel is not null && ChannelAreaLanding.LandsInChannelTown(channel) &&
                  ChannelAreaLanding.Place(towns, channel, character.Level, completed) is { } landing)
         {
-            // 频道专属城镇没有通往共享房间的门口，返回地区沿用进入前的普通地区。
-            var back = ChannelAreaLanding.IsChannelBoundTown(towns, landing.Town)
-                ? towns.ResolveRoomReturn(character.Position, character.Return, character.Level, completed)
-                : towns.ResolveRoomReturn(landing, landing, character.Level, completed);
+            // 战舰是频道起始城镇，不是普通城镇的一站：落点沿用进入前的返回地区，绝不把 19/1 记成房间返回地区，
+            // 否则普通频道房间的 1379 与出门会落到战舰（#740 回归）。旧存档里的战舰返回地区按共享房间初始地区修复。
+            var back = towns.ResolveRoomReturn(character.Position, OrdinaryDistrict(character.Return), character.Level, completed);
+            if (back.Town == ChannelAreaLanding.AntonTown)
+                back = towns.ResolveRoomReturn(towns.Room, null, character.Level, completed);
             if (character.Position != landing || character.Return != back)
                 character = repository.Save(owner, character, landing, back);
         }
         else
         {
-            var back = towns.ResolveRoomReturn(character.Position, character.Return, character.Level, completed);
+            var back = towns.ResolveRoomReturn(character.Position, OrdinaryDistrict(character.Return), character.Level, completed);
+            if (back.Town == ChannelAreaLanding.AntonTown)
+                back = towns.ResolveRoomReturn(towns.Room, null, character.Level, completed);
             if (character.Position != towns.Room || character.Return != back)
                 character = repository.Save(owner, character, towns.Room, back);
         }
@@ -68,5 +75,8 @@ internal static class CharacterSelection
         if (goldLimits is not null)
             character = InventoryService.Commit(repository, owner, character, new CurrencyService(goldLimits).Initialize(character));
         return character;
+
+        // 共享房间的返回地区只能是普通地区：频道起始城镇（安徒恩战舰 19）的街区不参与，旧存档按初始地区修复。
+        Location? OrdinaryDistrict(Location? saved) => saved is { Town: ChannelAreaLanding.AntonTown } ? null : saved;
     });
 }

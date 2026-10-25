@@ -59,12 +59,16 @@ internal static class TownTravel
             target = arrival with { Direction = character.Position.Direction };
         }
         // 有坐标切图保留请求落点；返回地区单独解析，不能用门口覆盖客户端坐标。
-        // 频道专属城镇（如艾尔丁纪念馆 67）内走动不改返回地区，离开频道后仍回进入前的普通地区。
-        var back = ChannelAreaLanding.IsChannelBoundTown(towns, target.Town) && character.Return is { } kept
+        // 频道起始城镇（安徒恩战舰 19、只能经频道进入的 67 等）内走动不改返回地区，离开频道后仍回进入前的普通地区。
+        var kept = OrdinaryDistrict(character.Return);
+        var back = ChannelAreaLanding.PreservesRoomReturn(towns, target.Town) && kept is not null
             ? kept
             : towns.IsRoom(target, completed)
             ? towns.Entrance(target, character.Position, completed)
-            : towns.ResolveRoomReturn(target, character.Return, character.Level, completed);
+            : towns.ResolveRoomReturn(target, kept, character.Level, completed);
+        // 战舰街区不充当共享房间的返回地区：旧存档的战舰返回点按共享房间初始地区修复。
+        if (back is not null && back.Town == ChannelAreaLanding.AntonTown)
+            back = kept ?? towns.ResolveRoomReturn(towns.Room, null, character.Level, completed);
         return back is null ? TownTravelPlan.Reject("return-gate-unavailable") : new(target, back, "ready")
         { NpcVisit = request.TargetNpc == 0 ? null : new(character.Position, target.Town, target.Area) };
     }
@@ -88,9 +92,12 @@ internal static class TownTravel
     static TownTravelPlan ChannelExit(Character character, TownCatalog towns, IReadOnlySet<int> completed, Location exit)
     {
         // 返回地区规则与原 CharacterSelection 频道落点一致：专属城镇保留进入前地区，其余按落点解析房间返回地区。
-        var back = ChannelAreaLanding.IsChannelBoundTown(towns, exit.Town)
-            ? towns.ResolveRoomReturn(character.Position, character.Return, character.Level, completed)
+        var back = ChannelAreaLanding.PreservesRoomReturn(towns, exit.Town)
+            ? towns.ResolveRoomReturn(character.Position, OrdinaryDistrict(character.Return), character.Level, completed)
             : towns.ResolveRoomReturn(exit, exit, character.Level, completed);
         return new(exit, back, "ready");
     }
+
+    // 共享房间的返回地区只能是普通地区：频道起始城镇（安徒恩战舰 19）的街区不参与，旧存档按初始地区修复。
+    static Location? OrdinaryDistrict(Location? saved) => saved is { Town: ChannelAreaLanding.AntonTown } ? null : saved;
 }
