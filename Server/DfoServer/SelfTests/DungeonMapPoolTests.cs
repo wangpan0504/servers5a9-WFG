@@ -63,6 +63,7 @@ internal static class DungeonMapPoolTests
         OrdinaryCandidates();
         MixedDummyCandidates();
         ExplicitCandidates();
+        LostLandResources();
         GriefResource();
         var trainingMaze = new DungeonMaze(0,1,1,"BB",[new(0,0)],[new(0,0)],null,[]);
         var trainingDefinition = new DungeonDefinition(5000,"dungeon/poongjintrainingroom/poongjintrainingroom.dgn",1,null,[trainingMaze],[]);
@@ -75,6 +76,41 @@ internal static class DungeonMapPoolTests
             ReferenceEquals(trainingPool.Resolve(trainingDefinition,invalidTrainingMaze,_ => 0),invalidTrainingMaze),
             "修炼场资源放行不扩大到别的副本或不匹配坐标");
         Console.WriteLine($"PASS {Count-checks} 普通地图池归属、方向、随机与剧情隔离断言");
+    }
+
+    static void LostLandResources()
+    {
+        var start = new DungeonPoint(0, 0); var boss = new DungeonPoint(1, 0); var zero = new DungeonPoint(0, 1);
+        var maze = new DungeonMaze(0, 2, 2, "BBIIAAAA", [start], [boss],
+            [new("map", start, 100, "map/start.map"), new("map", zero, 102, "map/hidden.map")], [])
+            { WarpMaps = [new(start, zero)] };
+        var definition = new DungeonDefinition(4000, "dungeon/lost.dgn", 25, 85, [maze], []) { DungeonType = "lost land" };
+        DungeonMapPoolEntry[] entries = [new(100, "map/start.map", [4000], "[normal]", 2),
+            new(102, "map/hidden.map", [4000], "[normal]", 1), new(201, "map/boss.map", [4000], "[boss]", 256)];
+        var pool = new DungeonMapPool([.. entries]);
+        var resolved = pool.Resolve(definition, maze, _ => throw new InvalidOperationException());
+        That(resolved.MapSpecification is { Count: 3 } && resolved.MapSpecification.Single(map => map.Position == boss) is { Id: 201, Kind: "boss" } &&
+            resolved.MapSpecification.Single(map => map.Position == zero) == maze.MapSpecification![1],
+            "遗忘之地保留显式AA房间，缺失Boss按真实归属、种类和II布局的唯一反向注册解析");
+        That(!resolved.StaticTopology.Supported && resolved.WarpMaps.SequenceEqual(maze.WarpMaps) && resolved.Greed == maze.Greed,
+            "资源补齐不放宽普通拓扑，不添加传送或改写出口");
+        var explicitOnly = new DungeonMapPool([entries[2]], entries.ToDictionary(row => row.Id, row => row.Path));
+        That(explicitOnly.Resolve(definition, maze, _ => 0).MapSpecification is { Count: 3 },
+            "DGN显式地图不依赖MAP反向随机池资格，路径仍来自正式目录");
+        foreach (var replacement in new[] { entries[2] with { Dungeons = [3] }, entries[2] with { Kind = "[normal]" }, entries[2] with { Layouts = 2 } })
+            That(ReferenceEquals(new DungeonMapPool([entries[0], entries[1], replacement]).Resolve(definition, maze, _ => 0), maze),
+                "Boss归属、种类或布局不符时不猜缺失地图");
+        That(ReferenceEquals(new DungeonMapPool([.. entries, entries[2] with { Id = 202, Path = "map/other.map" }]).Resolve(definition, maze, _ => 0), maze),
+            "多个反向Boss候选尚无专用抽签合同，不任取首项");
+        foreach (var invalid in new[] { maze with { WarpMaps = [] }, maze with { Greed = "BBIIAABB" },
+            maze with { MapSpecification = [maze.MapSpecification![0], maze.MapSpecification[1] with { Path = "map/forged.map" }] },
+            maze with { MapSpecification = [maze.MapSpecification![0], maze.MapSpecification[1] with { CandidateIds = [999] }] },
+            maze with { Starts = [boss] }, maze with { Bosses = [new(2, 0)] } })
+            That(ReferenceEquals(pool.Resolve(definition, invalid, _ => 0), invalid),
+                "零格无实际传送、缺普通格、伪造来源或坐标异常时拒绝补齐");
+        That(ReferenceEquals(pool.Resolve(definition with { Id = 3 }, maze, _ => 0), maze) &&
+            ReferenceEquals(pool.Resolve(definition with { DungeonType = "normal" }, maze, _ => 0), maze),
+            "遗忘之地解析不扩展到其它副本或资源类型");
     }
 
     static void OrdinaryCandidates()

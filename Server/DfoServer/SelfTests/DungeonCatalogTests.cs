@@ -145,6 +145,7 @@ internal static class DungeonCatalogTests
         Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze().Concat(fixture.Tag("unknown dungeon"))
             .Concat(fixture.Tag("size",fixture.Int(5),fixture.Int(3))).ToArray()),"未知标记不能用作放宽重复布局的边界");
         VerifyOrdinaryMapOverrides();
+        VerifyMapBlocks();
         VerifyGiveupPenaltyFlags();
         Console.WriteLine($"PASS {Count-checks} 无资源副本难度、作用域及退图豁免断言");
 
@@ -222,6 +223,28 @@ internal static class DungeonCatalogTests
             "末条类型非强袭时保持强袭准入拒绝");
     }
 
+    static void VerifyMapBlocks()
+    {
+        var fixture = new Fixture();
+        PvfToken[] Block(int x, int id) => [.. fixture.Tag("map specification", fixture.String("map"), fixture.Int(x), fixture.Int(0), fixture.Int(id)),
+            .. fixture.Tag("/map specification")];
+        var original = fixture.Maze(width: 3, greed: "BBFFEE");
+        var combined = fixture.Parse([.. original, .. Block(1, 2), .. Block(2, 3)]);
+        That(combined.Mazes.Single() is { ResourceError: null, MapSpecification.Count: 3 } &&
+            combined.Mazes[0].MapSpecification!.Select(map => map.Id).SequenceEqual([1, 2, 3]) &&
+            combined.RawSections.Count(section => section.Tag == "map specification") == 3,
+            "多个不重叠地图块按源顺序累积，原始块完整保留");
+        Reject<InvalidDataException>(() => fixture.Parse([.. original, .. Block(0, 2)]), "跨块同坐标不能任取或覆盖");
+        Reject<InvalidDataException>(() => fixture.Parse([.. original, .. Block(1, 2), .. Block(1, 3)]), "第三块也必须与全部已有块互斥");
+        Reject<InvalidDataException>(() => fixture.Parse([.. original, .. fixture.Tag("map specification"), .. fixture.Tag("/map specification")]),
+            "空块不能在拼接后被有效块掩盖");
+        Reject<InvalidDataException>(() => fixture.Parse([.. original, .. Block(1, 2)[..^1]]), "第二块缺少结束标记仍拒绝");
+        Reject<InvalidDataException>(() => fixture.Parse([.. original, .. fixture.Tag("start map", fixture.Int(1), fixture.Int(0)),
+            .. fixture.Tag("/start map")]), "重复起点字段仍拒绝");
+        That(fixture.Parse([.. original, .. Block(3, 2)]).Mazes[0].ResourceError is not null,
+            "分块合并不放宽坐标边界");
+    }
+
     static void VerifyOrdinaryMapOverrides()
     {
         var fixture = new Fixture();
@@ -266,6 +289,15 @@ internal static class DungeonCatalogTests
     public static void Run(PvfArchive pvf)
     {
         int checks = Count;
+        var countCatalog = DungeonEnterCountCatalog.Load(pvf);
+        That(countCatalog.Limits.Count == 18 && countCatalog.Limits[4000].Daily == 1 &&
+            countCatalog.Limits[11006] == new DungeonEnterCountLimit(0, 3, 1, -1, 1) &&
+            countCatalog.Limits[11007] == countCatalog.Limits[11006], "实际PVF角色次数表保留18图，外传三图上限1、3、3");
+        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var lostLand = catalog.Get(4000);
+        That(lostLand.Mazes[0] is { ResourceError: null, MapSpecification.Count: 86 } &&
+            lostLand.RawSections.Count(section => section.Tag == "map specification") == 2 &&
+            !lostLand.Mazes[0].StaticTopology.Supported, "遗忘之地两个原始块合计86格可解析，未证实拓扑仍不开放");
 
         void Reject(Action action, string name)
         {
@@ -282,7 +314,6 @@ internal static class DungeonCatalogTests
             That(rejected, name);
         }
 
-        var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         That(catalog.DungeonCount == 1372, "matching dungeon index contains 1372 entries");
         foreach (int rift in new[] { 316, 530 })
             That(catalog.Get(rift).AllowsDifficulty(3, false) && !catalog.Get(rift).AllowsDifficulty(0, false),

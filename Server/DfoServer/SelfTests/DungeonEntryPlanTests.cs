@@ -98,6 +98,34 @@ internal static class DungeonEntryPlanTests
             "普通0在没有清图凭据时仍被未交付剧情锁住");
     }
 
+    static void ClearedSequentialChildUsesOrdinaryRoute(DungeonCatalog catalog, QuestCatalog quests, Character basis)
+    {
+        var clear = quests.Get(3560);
+        var clearActive = new ActiveMainQuest(1,3560,0) { AcceptanceId = Guid.NewGuid() };
+        var cleared = basis with { Level = 95, CompletedQuests = [3525], ActiveMainQuests = [clearActive] };
+        That(clear.MainQuest == 3525 && QuestClearEligibility.IsSingleMap(clear), "3560是根特南门的顺序清图子任务");
+        That(DungeonEntryPlan.TryCreate(catalog,cleared,82,3560,1,out var cycle,out var cycleReason,
+                allowClearedQuest: true,quest: clear,quests: quests,draw: _ => 0) &&
+            cycle is { RouteQuestId: 0, IsOrdinary: true, QuestId: 3560 } && cycle.Maze.QuestConnectionTokens.Count == 0,
+            "顺序清图子任务达成未交后进入循环图冒险难度：" + cycleReason);
+        var pendingClear = cleared with { ActiveMainQuests = [clearActive with { ConditionState = 1 }] };
+        That(!DungeonEntryPlan.TryCreate(catalog,pendingClear,82,3560,1,out _,out var pendingReason,quest: clear,quests: quests) &&
+            pendingReason == "difficulty-unsupported","未达成的顺序清图子任务仍锁剧情普通难度");
+
+        var hunt = quests.Get(3472);
+        var huntActive = new ActiveMainQuest(2,3472,0) { AcceptanceId = Guid.NewGuid() };
+        var hunted = basis with { Level = 95, CompletedQuests = [3457], ActiveMainQuests = [huntActive] };
+        That(hunt.MainQuest == 3458 && hunt.Condition == "[hunt monster]", "3472是腐烂之地的顺序猎杀子任务");
+        That(DungeonEntryPlan.TryCreate(catalog,hunted,158,3472,1,out var huntCycle,out var huntReason,
+                quest: hunt,quests: quests,draw: _ => 0) &&
+            huntCycle is { RouteQuestId: 0, IsOrdinary: true, QuestId: 3472 } && huntCycle.Maze.QuestConnectionTokens.Count == 0,
+            "顺序猎杀子任务计数归零后进入循环图冒险难度：" + huntReason);
+        uint pendingScalar = QuestHuntProgress.Initial(hunt);
+        var pendingHunt = hunted with { ActiveMainQuests = [huntActive with { ConditionState = pendingScalar }] };
+        That(pendingScalar != 0 && !DungeonEntryPlan.TryCreate(catalog,pendingHunt,158,3472,1,out _,out var huntPending,quest: hunt,quests: quests) &&
+            huntPending == "difficulty-unsupported","猎杀尚未归零时仍锁剧情普通难度");
+    }
+
     static void DeathTowerCompanionPolicy(PvfArchive pvf, DungeonCatalog catalog)
     {
         var paths = DungeonCatalog.ParseDirectory(pvf.ReadTokens("dungeon/dungeon.lst"), pvf.ResolveString, "dungeon");
@@ -254,6 +282,7 @@ internal static class DungeonEntryPlanTests
         HarlemSeekingRoutes(catalog,quests,character);
         CompletedSeekingRoutes(catalog,quests,character);
         ClearedStoryUsesOrdinaryRoute(catalog,quests,character);
+        ClearedSequentialChildUsesOrdinaryRoute(catalog,quests,character);
         var passiveQuest = quests.Get(3205);
         var passiveCharacter = character with { Level = 95, CompletedQuests = [3204],
             ActiveMainQuests = [new(0,3205,0) { AcceptanceId = Guid.NewGuid() }] };

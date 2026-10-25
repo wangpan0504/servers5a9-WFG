@@ -138,7 +138,8 @@ internal static class ServerRuntime
             Cutscenes = itemResources.Skins.Cutscenes.Count,
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection);
+        var dungeonCatalog = DungeonCatalog.Load(pvf);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, dungeonCatalog);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
@@ -204,7 +205,6 @@ internal static class ServerRuntime
         AssaultModeCatalog? assaultMode = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
-            var dungeonCatalog = DungeonCatalog.Load(pvf);
             selectionDungeons = dungeonCatalog;
             assaultMode = AssaultModeCatalog.Load(pvf, dungeonCatalog);
             var rooms = DungeonRoomCatalog.Load(pvf);
@@ -285,7 +285,7 @@ internal static class ServerRuntime
         }
         else
         {
-            var catalog = DungeonCatalog.Load(pvf);
+            var catalog = dungeonCatalog;
             var rooms = options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.FinishLoadingMonsters
                 ? DungeonRoomCatalog.Load(pvf) : null;
             dungeon = new DungeonProbeModule(log, catalog, options.DevelopmentDungeonEntryProbe, rooms, projection);

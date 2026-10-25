@@ -255,7 +255,9 @@ internal sealed record DungeonEntryPlan(
             if (candidates.Length == 0)
             {
                 foreach (var acceptedQuest in character.ActiveMainQuests)
-                    if (quests.TryGet(acceptedQuest.QuestId,out var parent) && CurrentSequentialChild(character,parent,quests,dungeonId,difficulty) is { } child)
+                    if (!finishedObjective.Contains(acceptedQuest.QuestId) &&
+                        quests.TryGet(acceptedQuest.QuestId,out var parent) && CurrentSequentialChild(character,parent,quests,dungeonId,difficulty) is { } child &&
+                        !finishedObjective.Contains(child.Id))
                         sequences.Add((parent,child));
                 candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => sequences.Any(pair => maze.ConnectsQuest((uint)pair.Child.Id,difficulty))));
             }
@@ -590,7 +592,7 @@ internal sealed record DungeonEntryPlan(
         ActiveMainQuest active, uint questId, bool allowClearedQuest, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest)
     {
         if (definition.IsTutorial || definition.IsClassExperience || definition.Id == 5000 ||
-            definition.MinimumLevel is not int minimum || character.Level < minimum || quest.MainQuest is not null ||
+            definition.MinimumLevel is not int minimum || character.Level < minimum ||
             quest.Definition is not { Diagnostics.Length: 0 } ||
             !definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count == 0) ||
             !definition.Mazes.Any(maze => maze.HasActiveQuestConnection(quest.Id)) ||

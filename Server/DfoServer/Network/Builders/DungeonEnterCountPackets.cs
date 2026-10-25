@@ -1,13 +1,18 @@
 using System.Buffers.Binary;
+using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Network.Builders;
 
-// NOTI 550 DUNGEON_ENTER_COUNT_INFO（客户端 023CD590 注册 0x226 → 023A0200）：读 u32 副本、u8、u8。
-// 副本不等于 0xDC4 且已选角时，第一个 u8 写角色 +0x6C68[副本]（02BBD520），第二个 u8 写 +0x6C7C[副本]（02BBD560）。
-// 世界地图 018EC320 取 +0x6C68 作 48010“每日进入次数 %d/%d”的第一个数，上限取 DungeonIncountInfo（03FB9D50）；
-// 该行第二值大于 0 时再取 +0x6C7C（018EC378），两者取小。两表默认 0，所以不下发时显示 0/上限。
 internal static class DungeonEnterCountPackets
 {
+    // 023A0200逐次读取u32、u8、u8；一包只有一个地下城，没有条数或尾随字段。
+    public static byte[] Remaining(DungeonEnterCount count)
+    {
+        if (count.Dungeon == 0) throw new InvalidDataException("副本次数通知缺少地下城编号");
+        return Info(count.Dungeon, count.Daily, count.Weekly);
+    }
+
+    // 023CD590 注册 0x226 → 023A0200；两字节分别写角色 +0x6C68 / +0x6C7C。
     public static byte[] Info(uint dungeon, byte remaining, byte second)
     {
         var body = new byte[6];

@@ -50,6 +50,8 @@ internal sealed class TownCatalog
     public RoomPortal[] RoomPortals { get; }
     public IReadOnlyDictionary<uint, uint[]> NpcMoves { get; }
     public IReadOnlyDictionary<int, TownDungeonMap> DungeonMaps { get; }
+    // [golden commerce] 的菜单0x61打开遗忘之地选图；角色参数非零或声明不完整时不取得此入口。
+    public IReadOnlySet<uint> LostLandEntryNpcs { get; init; } = new HashSet<uint>();
     // etc/enterablespecialchannel.etc [entarable quest by channel]：频道键 -> 入场前须完成的任务（如 fiendwar 8672 Fiendwar_enter.qst）。
     public IReadOnlyDictionary<string, int> SpecialChannelQuests { get; init; } = new Dictionary<string, int>();
 
@@ -99,6 +101,29 @@ internal sealed class TownCatalog
         var map = area.Map(completed);
         // Native arrival can be inside the door but outside the walking rectangles.
         return map.Error is null && (map.Bounds.Any(r => Allowed(r.Quests, r.Conditions, completed) && r.Bounds.Contains(p.X, p.Y)) || map.Links.Any(l => l.Gate.Door && Allowed(l.Quests, l.Conditions, completed) && l.Gate.Contains(p.X, p.Y)));
+    }
+
+    public bool HasDungeonEntrance(TownArea area, IReadOnlySet<int> completed, uint dungeonId)
+    {
+        var map = area.Map(completed);
+        if (map.Error is not null) return false;
+        if (dungeonId != 4000)
+            return map.DungeonGates.Any(gate => Allowed(gate.Quests, gate.Conditions, completed));
+        // C2S15正文为0，不携带NPC编号。只在当前区域明确指向world101、该选图只列4000，
+        // 且当前阶段地图含真实入口NPC时认可菜单入口；不能给任意无门地图或其它NPC玩法共用。
+        return area.DungeonWorldMap == 101 && DungeonMaps.TryGetValue(101, out var selection) &&
+            selection.Error is null && selection.Options is [{ DungeonId: 4000, QuestId: -1, InProgress: false }] &&
+            map.Npcs.Any(npc => LostLandEntryNpcs.Contains(npc.Id));
+    }
+
+    internal static bool HasLostLandEntryRole(string text)
+    {
+        var blocks = Regex.Matches(text, @"\[role\](.*?)\[/role\]", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        if (blocks.Count != 1 || Regex.Matches(text, @"\[/?role\]", RegexOptions.IgnoreCase).Count != 2) return false;
+        string body = blocks[0].Groups[1].Value;
+        var roles = Regex.Matches(body, @"`\[golden commerce\]`", RegexOptions.IgnoreCase);
+        // 先数标签再读参数，重复但缺参数的标签同样拒绝；不能只数解析成功的声明。
+        return roles.Count == 1 && Regex.IsMatch(body[(roles[0].Index + roles[0].Length)..], @"^\s+0\s*(?=`|$)");
     }
 
     public Location? SelectionReturn(Location position, IReadOnlySet<int>? completed = null)
@@ -366,12 +391,14 @@ internal sealed class TownCatalog
         var room = areas[(38, 1)].Gate ?? throw new InvalidDataException("Client room gate missing");
         var origin = areas[(38, 0)].Default.Links.Single(l => l.Town == room.Town && l.Area == room.Area && l.Gate.Marker);
         var npcMoves = new Dictionary<uint, uint[]>();
+        var lostLandNpcs = new HashSet<uint>();
         var npcList = List(pvf.ReadText("npc/npc.lst"));
         foreach (uint id in maps.Values.SelectMany(m => m.Npcs).Select(n => n.Id).Distinct())
         {
             if (!npcList.TryGetValue(checked((int)id), out var npcPath))
                 continue;
             string text = pvf.ReadText("npc/" + npcPath);
+            if (HasLostLandEntryRole(text)) lostLandNpcs.Add(id);
             var targets = Regex.Matches(text, @"\[role\](.*?)\[/role\]", RegexOptions.Singleline | RegexOptions.IgnoreCase)
                 .SelectMany(m => Regex.Matches(m.Groups[1].Value, @"`\[move town\]`\s+(\d+)")
                     .Select(t => uint.Parse(t.Groups[1].Value)))
@@ -391,7 +418,7 @@ internal sealed class TownCatalog
             { dungeonMaps.Add(id,new(id,path,[],error.Message)); }
         }
         var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps)
-            { SpecialChannelQuests = LoadSpecialChannelQuests(pvf) };
+            { SpecialChannelQuests = LoadSpecialChannelQuests(pvf), LostLandEntryNpcs = lostLandNpcs };
         if (!catalog.IsPosition(room) || !catalog.IsPosition(catalog.InitialReturn))
             throw new InvalidDataException("PVF initial position outside native movable regions");
         return catalog;

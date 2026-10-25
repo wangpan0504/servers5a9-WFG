@@ -245,18 +245,19 @@ internal static class FiendwarChannelTests
         allCounts.Select(counted.Slot);
         allCounts.MarkReady();
         var listed = allCounts.EnterCounts();
-        That(listed.Count == 18 && listed.Where(c => c.Dungeon is 291100320 or 291100322 or 5349).All(c => c is { Daily: 4, Weekly: 9 }) &&
+        That(listed.Count == 16 && listed.All(c => c.Dungeon is not (11006 or 11007)) &&
+            listed.Where(c => c.Dungeon is 291100320 or 291100322 or 5349).All(c => c is { Daily: 4, Weekly: 9 }) &&
             listed.Single(c => c.Dungeon == Dungeon) == new DungeonEnterCount(Dungeon, 0, 1) &&
             listed.Single(c => c.Dungeon == 8523) == new DungeonEnterCount(8523, 3, 3),
-            "入城下发全部 18 个限次副本: " + string.Join(',', listed));
+            "通用投影下发16个副本，祭坛专用账本另行投影: " + string.Join(',', listed));
         allCounts.ReturnToRoster();
         // 非频道城镇：普通角色同样下发全部限次副本（次数不再限定最后防线）。
         var plain = repo.Create(owner, Role("Fiend90Pln", 90));
         var plainSession = new GameSession(repo, towns, owner, incounts: incounts);
         plainSession.Select(plain.Slot);
         plainSession.MarkReady();
-        That(!ChannelAreaLanding.IsChannelBoundTown(towns, plainSession.Selected!.Position.Town) && plainSession.EnterCounts().Count == 18 &&
-            plainSession.EnterCounts().All(c => c.Daily > 0), $"普通城镇 {plainSession.Selected!.Position.Town} 也下发 18 条满次数");
+        That(!ChannelAreaLanding.IsChannelBoundTown(towns, plainSession.Selected!.Position.Town) && plainSession.EnterCounts().Count == 16 &&
+            plainSession.EnterCounts().All(c => c.Daily > 0), $"普通城镇 {plainSession.Selected!.Position.Town} 也下发16条通用次数");
         plainSession.ReturnToRoster();
         // 账号次数：进入 400000017 记自身并连带 400000018..29；上限 20 用满后拒绝；同账号其它角色共用；跨日清零。
         var accountRow = incounts.FindAccount(400000017)!;
@@ -320,7 +321,7 @@ internal static class FiendwarChannelTests
             s.MarkReady();
             That(s.Selected!.Position == towns.Room && s.LeaveRoom(), "超时空之战频道选角在赛丽亚房间，出门: " + s.TravelReason);
             var door = towns.Entrance(spot, new(115, 1, 0, 0), cleared)!;
-            That(s.Selected!.Position == spot && s.EnterCounts().Single(c => c.Dungeon == Dungeon) == before && s.EnterCounts().Count == 18,
+            That(s.Selected!.Position == spot && s.EnterCounts().Single(c => c.Dungeon == Dungeon) == before && s.EnterCounts().Count == 16,
                 $"入城下发次数 {string.Join(',', s.EnterCounts())}");
             That(s.Travel(new(115, 1, door.X, door.Y, 5, 115, 0, 0)), "计数会话走到 115/1: " + s.TravelReason);
             int held() => s.Selected!.Inventory.Items.Where(row => row.Core.ItemId == RequiredItem).Sum(row => row.Core.Value);

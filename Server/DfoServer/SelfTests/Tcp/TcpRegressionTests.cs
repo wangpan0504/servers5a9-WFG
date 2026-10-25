@@ -175,6 +175,7 @@ internal static class TcpRegressionTests
         ("dungeon-practice", FormalDungeonTcpTests.RunPracticeAsync),
         ("dungeon-revive", FormalDungeonTcpTests.RunReviveAsync),
         ("dungeon-altars", FormalDungeonTcpTests.RunAltarsAsync),
+        ("dungeon-enter-count", FormalDungeonTcpTests.RunEnterCountsAsync),
         ("dungeon-despair", FormalDungeonTcpTests.RunDespairAsync),
         ("hero-tomb-entry", FormalDungeonTcpTests.RunHeroTombAsync),
         ("assault-result-menu", FormalDungeonTcpTests.RunAssaultResultMenuAsync),

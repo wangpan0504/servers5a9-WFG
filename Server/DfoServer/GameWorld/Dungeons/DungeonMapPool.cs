@@ -58,6 +58,10 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
         if (maze.QuestConnectionTokens.Count != 0 || maze.ResourceError is not null || !maze.GreedGrid.Supported ||
             maze.Starts.Count == 0 || maze.Bosses.Count == 0) return maze;
         if (maze.DummyStages.Count != 0) return maze;
+        // 遗忘之地包含显式AA传送房和非对称出口。先按原生Boss候选规则补齐资源，
+        // 不套普通网格重建（会丢掉AA房），也不以此宣告普通双向拓扑可用。
+        if (definition.Id == 4000 && definition.DungeonType == "lost land")
+            return ResolveLostLand(definition, maze);
         var maps = (maze.MapSpecification ?? []).ToDictionary(row => row.Position);
         // 原端按MAP自身归属注册；被任务maze引用不等于任务专用，不能从普通池排除共享模板。
         var pool = entries.Where(row => row.Dungeons.Contains(definition.Id)).ToArray();
@@ -218,5 +222,42 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             if (index < 0 || index >= rows.Count) throw new InvalidDataException("普通地图随机索引越界");
             return rows[index];
         }
+    }
+
+    DungeonMaze ResolveLostLand(DungeonDefinition definition, DungeonMaze maze)
+    {
+        if (maze.MapSpecification is not { Count: > 0 } declared || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
+            maze.MapAlternatives.Count != 0 || maze.LayeredMaps.Count != 0 || maze.ConditionalMaps.Count != 0 ||
+            maze.StoryStages.Count != 0 || maze.BossEntrance is not null || maze.HellParty is not null)
+            return maze;
+        var grid = maze.GreedGrid;
+        bool InBounds(DungeonPoint point) => point.X >= 0 && point.Y >= 0 && point.X < maze.Width && point.Y < maze.Height;
+        var boss = maze.Bosses[0];
+        if (!InBounds(boss) || !InBounds(maze.Starts[0]) || maze.Starts[0] == boss) return maze;
+        var maps = new Dictionary<DungeonPoint, DungeonMap>();
+        foreach (var map in declared)
+        {
+            if (map.Kind != "map" || !InBounds(map.Position) || !maps.TryAdd(map.Position, map)) return maze;
+            IReadOnlyList<int> ids = map.CandidateIds.Count == 0 ? [map.Id] : map.CandidateIds;
+            // 显式行由DGN直接声明，不要求MAP具备反向随机池资格；最终候选仍由Catalog复验文件存在。
+            string? PathOf(int id) => paths?.GetValueOrDefault(id) ?? byId.GetValueOrDefault(id)?.Path;
+            if (!ids.Contains(map.Id) || ids.Any(id => PathOf(id) is null) || PathOf(map.Id) != map.Path) return maze;
+            if (grid.Cells![map.Position.Y * maze.Width + map.Position.X].Index == 0 &&
+                !maze.WarpMaps.Any(warp => warp.Destination == map.Position && InBounds(warp.Source))) return maze;
+        }
+        if (maps.ContainsKey(boss) || !maps.ContainsKey(maze.Starts[0])) return maze;
+        for (int at = 0; at < grid.Cells!.Count; at++)
+        {
+            var point = new DungeonPoint(at % maze.Width, at / maze.Width);
+            if (grid.Cells[at].Index != 0 && point != boss && !maps.ContainsKey(point)) return maze;
+        }
+        int layout = grid.Cells[boss.Y * maze.Width + boss.X].Index;
+        if (layout == 0) return maze;
+        // 02A17ABB优先取Boss容器；这里只补唯一匹配的反向注册，不固定11208。
+        var candidates = entries.Where(row => row.Dungeons.Contains(definition.Id) && row.Kind == "[boss]" &&
+            (row.Layouts & (1 << layout)) != 0).ToArray();
+        if (candidates is not [var candidate]) return maze;
+        maps.Add(boss, new("boss", boss, candidate.Id, candidate.Path));
+        return maze with { MapSpecification = maps.Values.OrderBy(row => row.Position.Y).ThenBy(row => row.Position.X).ToImmutableArray() };
     }
 }

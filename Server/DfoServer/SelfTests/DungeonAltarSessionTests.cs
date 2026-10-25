@@ -36,7 +36,22 @@ internal static class DungeonAltarSessionTests
             using var fixture = New(clock);
             var session = fixture.Session;
             var paid = session.Selected!;
+            var countsBefore = session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!;
+            That(countsBefore.Counts.All(row => row.Daily == 3 && row.Weekly == 0) &&
+                session.CanPublishDungeonEnterCounts(countsBefore), "祭坛空账本投影两条3次，回执绑定当前选角");
+            fixture.Sql("CREATE TRIGGER fail_count_entry BEFORE INSERT ON dungeon_special_entry_receipts BEGIN SELECT RAISE(ABORT,'count rollback'); END");
+            try
+            {
+                Reject<Microsoft.Data.Sqlite.SqliteException>(() => Enter(session, dungeonId), "实际入场回执失败回滚计数和扣费");
+                That(session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!.Counts.All(row => row.Daily == 3) &&
+                    session.Selected!.Inventory.Gold == paid.Inventory.Gold && session.CanPublishDungeonEnterCounts(countsBefore),
+                    "SQL回滚后仍是原角色快照与3次，不投影未提交的扣次");
+            }
+            finally { fixture.Sql("DROP TRIGGER fail_count_entry"); }
             var entered = Enter(session, dungeonId);
+            That(!session.CanPublishDungeonEnterCounts(countsBefore) &&
+                session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!.Counts.Single(row => row.Dungeon == dungeonId).Daily == 2,
+                "原扣费事务提交后投影2次，旧角色快照不能再发布3次");
             That(entered.Monsters.Altar is not null && entered.SpecialEntry is not null &&
                 entered.Character.Inventory.Gold == paid.Inventory.Gold - entered.SpecialEntry.Gold &&
                 entered.Character.Fatigue == paid.Fatigue, "实际祭坛准入使用专用演员，扣费与次数共提交而不扣疲劳");

@@ -339,6 +339,8 @@ internal sealed class DungeonCatalog
     public DungeonAltarAdmissionCatalog AltarAdmission => altarAdmission.Value;
     private readonly Lazy<TowerOfDespairCatalog> despair;
     public TowerOfDespairCatalog Despair => despair.Value;
+    private readonly Lazy<DungeonEnterCountCatalog> enterCounts;
+    public DungeonEnterCountCatalog EnterCounts => enterCounts.Value;
     private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps)
     {
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
@@ -346,6 +348,7 @@ internal sealed class DungeonCatalog
         griefTower = new(() => new GriefTowerCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         altarAdmission = new(() => DungeonAltarAdmissionCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         despair = new(() => TowerOfDespairCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
+        enterCounts = new(() => DungeonEnterCountCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
     }
     public int DungeonCount => dungeons.Count;
     public GriefTowerCatalog GriefTower => griefTower.Value;
@@ -541,12 +544,21 @@ internal sealed class DungeonCatalog
                 continue;
             if (section.Tag is not ("size" or "greed" or "map specification" or "start map" or "boss map" or "quest connection"))
                 continue;
-            if (!current.TryAdd(section.Tag, section))
-                throw new InvalidDataException("重复 maze 字段: " + section.Tag);
             if (section.Tag is "map specification" or "start map" or "boss map")
             {
                 if (i + 1 >= sections.Count || sections[i + 1].Tag != "/" + section.Tag || sections[i + 1].Tokens.Count != 0)
                     throw new InvalidDataException("maze 块未正常结束: " + section.Tag);
+            }
+            if (!current.TryAdd(section.Tag, section))
+            {
+                if (section.Tag != "map specification")
+                    throw new InvalidDataException("重复 maze 字段: " + section.Tag);
+                var previous = current[section.Tag];
+                // 0409C8CE..0409CC6A逐格累积；仅接受不同块坐标互不重叠的已证实形式。
+                var occupied = MapBlockPositions(previous.Tokens);
+                if (MapBlockPositions(section.Tokens).Overlaps(occupied))
+                    throw new InvalidDataException("重复 map specification 块坐标");
+                current[section.Tag] = previous with { Tokens = Freeze(previous.Tokens.Concat(section.Tokens)) };
             }
         }
 
@@ -578,6 +590,21 @@ internal sealed class DungeonCatalog
         };
 
         bool Flag(string tag) => sections.LastOrDefault(section => section.Tag == tag)?.Tokens is [{ Type: 0, Value: 1 }];
+
+        HashSet<DungeonPoint> MapBlockPositions(IReadOnlyList<PvfToken> values)
+        {
+            if (values.Count == 0) throw new InvalidDataException("map specification 块不能为空");
+            var points = new HashSet<DungeonPoint>();
+            for (int at = 0; at < values.Count;)
+            {
+                if (values[at].Type != 6 || at + 3 >= values.Count || values[at + 1].Type != 0 || values[at + 2].Type != 0)
+                    throw new InvalidDataException("map specification 块记录不完整");
+                points.Add(new(values[at + 1].Value, values[at + 2].Value));
+                at += 3;
+                while (at < values.Count && values[at].Type == 0) at++;
+            }
+            return points;
+        }
 
         int? Scalar(string tag)
         {
