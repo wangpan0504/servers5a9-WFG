@@ -9,6 +9,8 @@ internal sealed record DungeonPlannedMonster(
     int CandidateLevel,
     DungeonRoomMonster? Source)
 {
+    // 当前生成房间的不可变来源；专项奖励不能仅凭同模板源行借用其它房间的终点资格。
+    public DungeonMap? SourceMap { get; init; }
     public DungeonRoomAiCharacter? AiCharacter { get; init; }
     public DungeonAltarActor? AltarActor { get; init; }
     public byte SpawnType { get; init; }
@@ -171,6 +173,7 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             // 02A15E46要求类型3，随后才由MAP类型2进入原生dummy Boss初始化。
             result.Add(new(index, (ushort)nextKey, source.MonsterId, level, source)
             {
+                SourceMap = room.Map,
                 SpawnType = (byte)(source.RankKind switch { "[named]" => 0, "[champion]" => 1, "[super champion]" => 2, "[boss]" => 3, _ => 0 }),
                 IsDummyMapBoss = dummyMapBoss,
                 // 02A15E31保留显式team；02C9F43C相对本人比较，不把0或非100统一当作友军。

@@ -201,6 +201,14 @@ internal static class TcpRegressionTests
                 resources.Quests, resources.Learning);
             return Task.CompletedTask;
         }),
+        ("sleepy-hollow-socket", FormalDungeonTcpTests.RunSleepyHollowAsync),
+        ("sleepy-hollow-materials", (_, _, resources) =>
+        {
+            SleepyHollowMaterialDropTests.RunCore();
+            SleepyHollowMaterialDropTests.RunResources(resources.Towns, resources.Archive, resources.Characters,
+                resources.ItemResources, resources.Quests, resources.Learning);
+            return Task.CompletedTask;
+        }),
         ("dungeon-settlement", async (_, _, resources) =>
         {
             DungeonItemDropCatalogTests.RunCore();

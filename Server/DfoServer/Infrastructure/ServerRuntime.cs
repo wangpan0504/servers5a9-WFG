@@ -255,7 +255,8 @@ internal static class ServerRuntime
             log.Write("startup", new { Stage = "Harlem material rewards", State = "complete", Rule = HarlemMaterialDropPolicy.Rule,
                 materialRules.Enabled, Configured = configuredMaterials is not null });
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
-                specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses);
+                specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
+                new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get));
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
             int epicPermille = int.TryParse(Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE"), out int configuredPermille) ? Math.Clamp(configuredPermille, 0, 1000) : 0;
             DungeonItemDropPool? epicPool = null;
@@ -273,6 +274,7 @@ internal static class ServerRuntime
             Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareDrops(DungeonEntryPlan entry) => resourceDrops.PrepareEntry(entry, hellRewards);
             log.Write("dungeon_drop_policy", new { Rule = DungeonResourceDropPolicy.Rule,
                 EquipmentWeights = "current_pvf_creation_rate", Retained = DungeonResourceDropPolicy.RetainedFields,
+                SleepyHollowMaterialRule = SleepyHollowMaterialDropPolicy.Rule,
                 FifthProbabilityRows = dropRules.ProbabilityRows.Count(row => row.Values[4] != 0),
                 HellEpicRule = HarlemHellEpicDropPolicy.Rule, HellEpicSource = DungeonHellEpicCatalog.Path,
                 HellEpicArea = HarlemHellEpicDropPolicy.Area, NormalEpicList = HarlemHellEpicDropPolicy.NormalList,
