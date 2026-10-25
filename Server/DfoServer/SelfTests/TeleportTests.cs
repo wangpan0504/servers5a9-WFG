@@ -49,8 +49,8 @@ internal static class TeleportTests
         Reject<InvalidDataException>(() => TeleportRequests.Solo(new byte[16]), "470未知追加字段拒绝");
         That(TeleportCatalog.ReadPotion(new(PotionText)) is { MinimumLevel: 60, CoolTime: 10000 } &&
             TeleportCatalog.ReadAura(new(AuraText)) == new AuraAbilityDefinition(AuraAbilityKind.SoloTeleport, 420), "资源药剂毫秒与光环秒分别保留");
-        That(TeleportCatalog.ReadAura(new(AuraText.Replace("[solo teleport]", "[none]"))) is null,
-            "无传送能力的光环不能获得传送资格");
+        That(TeleportCatalog.ReadAura(new(AuraText.Replace("[solo teleport]` 420", "[none]`"))) == new AuraAbilityDefinition(AuraAbilityKind.None, 0),
+            "`[none]`光环被识别为有光环但无传送能力，不等同于未知声明");
         That(TeleportRequests.Party(Convert.FromHexString("27030F03CD000501")) == new PartyTeleportRequest(new(39, 3, 783, 205, 5), 1) &&
             Convert.ToHexString(TeleportPackets.PartyRejected(new(new(39, 3, 783, 205, 5), 1))) == "001300270000000001",
             "本版434请求8B，失败正文保留公共u16错误、town、剩余秒和请求来源");
@@ -169,6 +169,23 @@ internal static class TeleportTests
         That(fixture.Service.Aura(expired, fixture.Clock.Now) is null, "已过期升级光环没有资格");
         fixture.Clock.Now += 300000;
         That(session.TeleportSolo(request, fixture.Service, null).Accepted, "升级个人300秒到期即可再次使用，不套用普通420秒");
+        var none = after with { Inventory = after.Inventory with { Items = after.Inventory.Items.Select(item => item.Position == new InventorySlot(InventoryListType.Equipment, 9)
+            ? item with { Core = item.Core with { ItemId = 65053 } } : item).ToImmutableArray() } };
+        var nonePlan = fixture.Service.Solo(none, request, null, fixture.Clock.Now);
+        That(fixture.Service.Aura(none, fixture.Clock.Now) == new AuraAbilityDefinition(AuraAbilityKind.None, 0) && nonePlan.Reason == "ready" &&
+            nonePlan.Plan is { AuraKind: null } noneSolo && noneSolo.Cooldowns == none.TeleportCooldowns &&
+            TeleportPackets.Cooldown(none with { TeleportCooldowns = new() }, fixture.Clock.Now, noneSolo.AuraKind).SequenceEqual(new byte[] { 0 }),
+            "`[none]`光环的470只切图：不写冷却、378不刷新也不伪造type行");
+        var noneOwner = session.Selected!;
+        var noneInventory = noneOwner.Inventory with { Items = noneOwner.Inventory.Items.Select(item => item.Position == new InventorySlot(InventoryListType.Equipment, 9)
+            ? item with { Core = item.Core with { ItemId = 65053 } } : item).ToImmutableArray() };
+        fixture.Repository.CommitInventory(fixture.Owner, noneOwner, new(noneOwner.Inventory, noneInventory, "aura_fixture_none"));
+        session.ReturnToRoster(); session.Select(0); session.MarkReady();
+        var noneSelected = session.Selected!;
+        var noneAura = session.TeleportSolo(request, fixture.Service, null);
+        That(noneSelected.TeleportCooldowns.UpgradeAuraUntil > fixture.Clock.Now && noneAura.Accepted && noneAura.Receipt!.AuraKind is null &&
+            session.Selected!.TeleportCooldowns == noneSelected.TeleportCooldowns && session.CanPrecheckTeleport(fixture.Service),
+            "穿戴`[none]`光环时469/470个人入口可用，只切图并保留原type3冷却");
     }
 
     static void SingleMemberParty()
@@ -403,8 +420,10 @@ internal static class TeleportTests
             Towns = towns;
             var definitions = new TeleportCatalog(path => path.StartsWith("stackable", StringComparison.Ordinal) ? PotionText :
                 path.EndsWith("upgrade.equ", StringComparison.Ordinal) ? AuraText.Replace("[solo teleport]` 420", "[upgrade solo teleport]` 300") :
-                path.EndsWith("party.equ", StringComparison.Ordinal) ? AuraText.Replace("[solo teleport]` 420", "[party teleport]` 600") : AuraText,
-                new Dictionary<int, string> { [101590011] = "aura.equ", [65051] = "upgrade.equ", [65052] = "party.equ" }, new Dictionary<int, string> { [2600014] = "potion.stk" });
+                path.EndsWith("party.equ", StringComparison.Ordinal) ? AuraText.Replace("[solo teleport]` 420", "[party teleport]` 600") :
+                path.EndsWith("none.equ", StringComparison.Ordinal) ? AuraText.Replace("[solo teleport]` 420", "[none]`") : AuraText,
+                new Dictionary<int, string> { [101590011] = "aura.equ", [65051] = "upgrade.equ", [65052] = "party.equ", [65053] = "none.equ" },
+                new Dictionary<int, string> { [2600014] = "potion.stk" });
             Service = new(towns, definitions, id =>
             {
                 OnAuraRead?.Invoke();

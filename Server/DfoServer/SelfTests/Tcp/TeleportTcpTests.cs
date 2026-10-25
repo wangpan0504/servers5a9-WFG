@@ -103,26 +103,47 @@ internal static class TeleportTcpTests
                 fixture.Query("SELECT count(*) FROM character_teleport_cooldowns WHERE character_id=$p0", peer.Id) is [[0L]],
                 "没有队伍上下文的434明确失败并解除原生等待，不移动队长、不写位置或冷却");
             peer.Send(470, Solo(-1, -1, 38, 0, 1327, 234));
-            if (row.Type is 0 or 1)
+            if (row.Type == 0)
             {
                 peer.Expect(1, 470, [0, 1, 0, 0, 0, 0, 0]); peer.Barrier();
                 That(fixture.Query("SELECT count(*) FROM character_teleport_cooldowns WHERE character_id=$p0", peer.Id) is [[0L]],
-                    "真实组队或无能力光环不能借470取得个人传送资格");
-                if (row.Type == 0) await SingleMemberPartyAsync(peer, row.Character.Slot);
+                    "真实组队光环只能走434，不能借470取得个人传送资格");
+                await SingleMemberPartyAsync(peer, row.Character.Slot);
                 continue;
             }
             peer.Expect(1, 470, [1]);
             peer.Expect(0, 379, Effect(1, peer.Id)); peer.Expect(0, 23); peer.Expect(0, 24);
-            peer.Expect(0, 379, Effect(2, peer.Id)); peer.Expect(0, 378, Cooldown(row.Type, row.Seconds)); peer.Barrier();
-            That(fixture.Query("SELECT potion_until,aura_until,upgrade_aura_until FROM character_teleport_cooldowns WHERE character_id=$p0", peer.Id)
-                is [[0L, 0L, long until]] && until == clock.GetUtcNow().ToUnixTimeMilliseconds() + row.Seconds * 1000L &&
-                fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) is [[38L, 0L, 1327L, 234L]],
-                "真实高级光环" + row.Aura + "沿470切图，按资源300或600秒写入type3而不覆盖普通type2");
-            peer.Send(470, Solo(-1, -1, 38, 0, 1327, 234)); peer.Expect(1, 470, [0, 1, 0, 0, 0, 0, 0]); peer.Barrier();
+            peer.Expect(0, 379, Effect(2, peer.Id)); peer.Expect(0, 378, row.Type == 1 ? [0] : Cooldown(row.Type, row.Seconds)); peer.Barrier();
+            That(fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) is [[38L, 0L, 1327L, 234L]],
+                "实收光环" + row.Aura + "沿470切图并落库请求坐标");
+            if (row.Type == 1)
+            {
+                That(fixture.Query("SELECT potion_until,aura_until,upgrade_aura_until,party_aura_until FROM character_teleport_cooldowns WHERE character_id=$p0", peer.Id)
+                        is [[0L, 0L, 0L, 0L]] &&
+                    fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id) is [[long committed]] && committed == (long)before[0] + 1,
+                    "真实`[none]`光环照常切图，但不写任何计时器且378为空行而不是伪造type1");
+                peer.Send(470, Solo(-1, -1, 38, 0, 1327, 234)); peer.Expect(1, 470, [1]);
+                peer.Expect(0, 379, Effect(1, peer.Id)); peer.Expect(0, 23); peer.Expect(0, 24);
+                peer.Expect(0, 379, Effect(2, peer.Id)); peer.Expect(0, 378, [0]); peer.Barrier();
+                That(fixture.Query("SELECT potion_until,aura_until,upgrade_aura_until,party_aura_until FROM character_teleport_cooldowns WHERE character_id=$p0", peer.Id)
+                        is [[0L, 0L, 0L, 0L]],
+                    "`[none]`光环没有冷却，重复470仍可切图且不产生计时器");
+            }
+            else
+            {
+                That(fixture.Query("SELECT potion_until,aura_until,upgrade_aura_until FROM character_teleport_cooldowns WHERE character_id=$p0", peer.Id)
+                    is [[0L, 0L, long until]] && until == clock.GetUtcNow().ToUnixTimeMilliseconds() + row.Seconds * 1000L,
+                    "真实高级光环" + row.Aura + "按资源300或600秒写入type3而不覆盖普通type2");
+                peer.Send(470, Solo(-1, -1, 38, 0, 1327, 234)); peer.Expect(1, 470, [0, 1, 0, 0, 0, 0, 0]); peer.Barrier();
+            }
             peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
-            var entry = peer.Select(row.Character.Slot, prepared: true, inventoryNotices: [(0, 378)]);
-            Bytes(entry.Single(packet => packet is { Kind: 0, Opcode: 378 }).Body, Cooldown(row.Type, row.Seconds),
-                "重选完整资产初始化后恢复type3和真实剩余秒，不把高级冷却误投影为type2");
+            var entry = row.Type == 1 ? peer.Select(row.Character.Slot, prepared: true)
+                : peer.Select(row.Character.Slot, prepared: true, inventoryNotices: [(0, 378)]);
+            if (row.Type == 1)
+                That(!entry.Any(packet => packet is { Kind: 0, Opcode: 378 }), "重选后`[none]`光环不恢复任何冷却提示");
+            else
+                Bytes(entry.Single(packet => packet is { Kind: 0, Opcode: 378 }).Body, Cooldown(row.Type, row.Seconds),
+                    "重选完整资产初始化后恢复type3和真实剩余秒，不把高级冷却误投影为type2");
             peer.Send(469, Name("Target")); peer.Expect(1, 469, [0, 1, 0]); peer.Barrier();
         }
         using (var peer = Open(fixture))
