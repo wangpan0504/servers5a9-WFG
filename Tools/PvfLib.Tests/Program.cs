@@ -25,6 +25,7 @@ AvatarTypeSelectionTests.Run();
 TutorialFileTests.Run();
 RecoveryConsumableTests.Run();
 RecipeFileTests.Run();
+EquipmentEmancipationTests.Run();
 ExpertRecipeFileTests.Run();
 CreatureFileTests.Run();
 PvpPrivateCharacterFileTests.Run();

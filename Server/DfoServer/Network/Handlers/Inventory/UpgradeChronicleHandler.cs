@@ -7,8 +7,7 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
-// CMD271 UPGRADE_CHRONICLE：NPC 出售的设计图把 95 传说装备升级为同部位史诗。
-// 无参考端，请求结构与成功应答都是实机抓包确认的；失败应答形态待核对。
+// CMD271：设计图组与装备自己的 ticket 转换共用事务和权威库存投影。
 internal sealed class UpgradeChronicleHandler(InventoryUpgradeChronicleService upgrades, InventoryProjection projection) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
@@ -16,12 +15,29 @@ internal sealed class UpgradeChronicleHandler(InventoryUpgradeChronicleService u
 
     async Task<CommandResult> Upgrade(GameConnectionContext context, Packet packet)
     {
-        var request = UpgradeChronicleRequests.Upgrade(packet.Body);
+        var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool SameSelection() => context.Owner.Execute(() => ReferenceEquals(capture.Selected, context.Session.Selected) &&
+            capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);
+        UpgradeChronicleRequest request;
+        try { request = UpgradeChronicleRequests.Upgrade(packet.Body); }
+        catch (InvalidDataException)
+        {
+            await context.Reply(CmdPacketType.UPGRADE_CHRONICLE,
+                UpgradeChroniclePackets.Result(InventoryResult.Reject(InventoryUpgradeChronicleService.Rejection)),
+                "upgrade_chronicle_malformed", SameSelection);
+            return CommandResult.Handled;
+        }
         var result = context.BlocksTownActions ? InventoryResult.Reject(InventoryUpgradeChronicleService.Rejection) :
-            context.Session.MutateInventory(character => upgrades.Upgrade(character, request.Blueprint, request.BlueprintItemId,
-                request.Target, request.TargetItemId), (ushort)InventoryUpgradeChronicleService.Rejection);
+            context.Session.PlanAndCommitInventory(character =>
+            {
+                try { return upgrades.Upgrade(character, request.Blueprint, request.BlueprintItemId, request.Target, request.TargetItemId); }
+                catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or OverflowException)
+                { return InventoryResult.Reject(InventoryUpgradeChronicleService.Rejection); }
+            }, InventoryUpgradeChronicleService.Rejection);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : SameSelection();
         await context.Reply(CmdPacketType.UPGRADE_CHRONICLE, UpgradeChroniclePackets.Result(result),
-            result.Accepted ? "upgrade_chronicle" : "upgrade_chronicle_rejected");
+            result.Accepted ? "upgrade_chronicle" : "upgrade_chronicle_rejected", Guard);
+        // ACK 零消费行；只由既有投影清旧模板、写新模板和材料最终数量，防止双扣。
         await projection.RefreshAsync(context, result);
         return CommandResult.Handled;
     }
