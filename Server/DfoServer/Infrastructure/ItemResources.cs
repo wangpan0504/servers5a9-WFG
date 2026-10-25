@@ -40,6 +40,7 @@ internal sealed class ItemResources
     public GameWorld.Creatures.CreatureGroupCatalog CreatureGroups { get; }
     public AvatarPackageCatalog AvatarPackages { get; }
     public EmblemCompoundCatalog EmblemCompounds { get; }
+    public GuildDungeonCompoundCatalog GuildCompounds { get; }
     public AvatarCompoundCatalog AvatarCompounds { get; }
     public AvatarDyeCatalog AvatarDyes { get; }
     public TeleportCatalog Teleports { get; }
@@ -89,6 +90,7 @@ internal sealed class ItemResources
         CreatureEggs = new(archive, equipment, Items);
         AvatarPackages = new(archive, equipment, stackable);
         EmblemCompounds = new(archive, stackable);
+        GuildCompounds = new(archive);
         AvatarCompounds = new(archive);
         AvatarDyes = new(archive, equipment, stackable);
         Teleports = new(archive.ReadText, equipment, stackable);
