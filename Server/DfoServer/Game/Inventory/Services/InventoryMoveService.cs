@@ -172,7 +172,8 @@ internal static class InventoryMoveService
 
         bool AllowsAt(InventorySlot position, ItemCore core)
         {
-            if (!Allows(character, position, core, catalog, utcSeconds, contracts))
+            // 源槽作为 ignore：护石在两槽之间互换时，另一槽的占用者就是本次被移走的物品。
+            if (!Allows(character, position, core, catalog, utcSeconds, contracts, sourceSlot))
                 return false;
             // 只有本次实际穿戴依赖霸王等级加成时冻结期限；卸装、普通移格和原等级合格不受其到期限制。
             if (position.List == InventoryListType.Equipment && position.Index != InventoryCreatureSkinService.AuraTargetSlot &&
@@ -226,7 +227,7 @@ internal static class InventoryMoveService
     }
 
     public static bool Allows(Character character, InventorySlot position, ItemCore core, ItemCatalog catalog, long? utcSeconds = null,
-        PremiumContractCatalog? contracts = null)
+        PremiumContractCatalog? contracts = null, InventorySlot? ignore = null)
     {
         if (!ItemSlotBoundService.Allows(character.Inventory, position, core.Kind))
             return false;
@@ -235,8 +236,19 @@ internal static class InventoryMoveService
         var template = catalog.Get(core.ItemId);
         if (template.PvpFreeEquipment && !character.IsPvpPrivate) return false;
         if (core.Kind == ItemKind.Talisman)
-            return position.Index is ItemSlotBoundService.TalismanEquipmentStart or ItemSlotBoundService.TalismanEquipmentEnd &&
-                catalog.Talisman(core.ItemId)?.AllowsUse(character.Level, character.Job, character.GrowType) == true;
+        {
+            if (position.Index is not (ItemSlotBoundService.TalismanEquipmentStart or ItemSlotBoundService.TalismanEquipmentEnd) ||
+                catalog.Talisman(core.ItemId)?.AllowsUse(character.Level, character.Job, character.GrowType) != true)
+                return false;
+            // 官方规则：两个护石槽不能同时装备同一技能的两个护石。两槽互换时另一槽的占用者
+            // 正是本次移动的源物品，由 ignore 排除，不算重复装备。
+            var other = new InventorySlot(InventoryListType.Equipment,
+                (short)(ItemSlotBoundService.TalismanEquipmentStart + ItemSlotBoundService.TalismanEquipmentEnd - position.Index));
+            return other == ignore || character.Inventory.Find(other) is not { } worn ||
+                catalog.Talisman(worn.Core.ItemId)?.SkillIndex is not { } wornSkill ||
+                catalog.Talisman(core.ItemId)?.SkillIndex is not { } movingSkill ||
+                wornSkill != movingSkill;
+        }
         if (IsCreatureSkin(position))
             return (character.EquipmentSlotFlags & InventoryCreatureSkinService.UnlockFlag) != 0 && CreatureSkinTemplate(core, template);
         if (position.Index == InventoryCreatureSkinService.AuraTargetSlot)

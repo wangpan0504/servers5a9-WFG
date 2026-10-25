@@ -49,6 +49,9 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
                 {
                     if (items.Rune(source.Core.ItemId) is not { } rune)
                         return Reject("compound-material");
+                    // 官方规则：当前转职合成要求材料本身也是本职业可用的符文。
+                    if (request.Mode == 1 && !rune.AllowsUse(character.Level, character.Job, character.GrowType))
+                        return Reject("compound-class");
                     itemGrade = rune.Grade;
                 }
                 else
@@ -56,6 +59,9 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
                     var template = items.Get(source.Core.ItemId);
                     if (template.Kind != ItemKind.Talisman || template.Rarity is < 0 or > byte.MaxValue)
                         return Reject("compound-material");
+                    if (request.Mode == 1 &&
+                        items.Talisman(source.Core.ItemId)?.AllowsUse(character.Level, character.Job, character.GrowType) != true)
+                        return Reject("compound-class");
                     itemGrade = (byte)template.Rarity;
                 }
             }

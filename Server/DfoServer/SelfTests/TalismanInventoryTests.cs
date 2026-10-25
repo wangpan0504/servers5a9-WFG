@@ -13,10 +13,14 @@ namespace DfoServer;
 
 internal static class TalismanInventoryTests
 {
-    const int StoneId = 100400002, RuneId = 10605203, OtherRuneId = 10605204, MaterialId = 490014022;
+    const int StoneId = 100400002, Stone2Id = 100400003, RuneId = 10605203, OtherRuneId = 10605204,
+        ForeignRuneId = 10605205, MaterialId = 490014022;
     const long Now = 1_900_000_000;
     static readonly ItemTemplate Stone = new(StoneId, ItemKind.Talisman, 34, 95, 0, 1, 0, 3, 97, "[trade]", 1, 0, "stone");
+    static readonly ItemTemplate Stone2 = new(Stone2Id, ItemKind.Talisman, 34, 95, 0, 1, 0, 3, 97, "[trade]", 1, 0, "stone2");
     static readonly ItemTemplate Rune = new(RuneId, ItemKind.Rune, 0, 95, 0, 999, 0, 2, 1, "[trade]", 1, 0, "rune");
+    // 与本角色首转(1)不符的符文，用于当前转职合成的材料资格用例。
+    static readonly ItemTemplate ForeignRune = new(ForeignRuneId, ItemKind.Rune, 0, 95, 0, 999, 0, 2, 1, "[trade]", 1, 0, "rune3");
     static readonly ItemTemplate Material = new(MaterialId, ItemKind.Material, 0, 0, 0, 9999, 0, 0, 0, "[trade]", ushort.MaxValue, 0, "material");
     static readonly GoldLimitCatalog Limits = new("[gold limit from level]\n0 1000000000\n[/gold limit from level]");
     static readonly EpicPieceCatalog Pieces = new("[piece list]\n50000 50001\n[/piece list]");
@@ -82,6 +86,12 @@ internal static class TalismanInventoryTests
         var otherSource = new InventoryItem(5, new(InventoryListType.Talisman, 70), new(OtherRuneId, ItemKind.Rune, 3));
         That(!service.Equip(Character(worn, otherSource), new(210, 70, OtherRuneId), Now).Accepted,
             "护石只接受本护石技能的符文，孔色一致也拒绝");
+        var twinStone = new InventoryItem(21, new(InventoryListType.Equipment, 35),
+            new TalismanSocketColors(5, 5, 3).Apply(new(Stone2Id, ItemKind.Talisman, 999999998)));
+        That(InventoryMoveService.Allows(Character(), new(InventoryListType.Equipment, 34), worn.Core, catalog),
+            "空护石槽允许装备本职业技能护石");
+        That(!InventoryMoveService.Allows(Character(worn, twinStone), new(InventoryListType.Equipment, 35), worn.Core, catalog),
+            "两个护石槽不能同时装备同一技能的两块护石");
         var actual = equipped.Plan!.After.Find(new(InventoryListType.Talisman, 210))! with { Uid = 3 };
         var afterEquip = wearer with { Inventory = equipped.Plan.After with { Items = equipped.Plan.After.Items.Replace(equipped.Plan.After.Find(actual.Position)!, actual) } };
         var removed = service.Remove(afterEquip, 210, Now);
@@ -139,6 +149,12 @@ internal static class TalismanInventoryTests
             compoundCosts, Now, out var unpaidReceipt);
         That(!unpaid.Accepted && unpaid.RejectReason == "compound-gold" && unpaidReceipt is null,
             "金币不足时合成拒绝且不返回扣料计划");
+        var foreignSource = new InventoryItem(31, new(InventoryListType.Talisman, 71), new(ForeignRuneId, ItemKind.Rune, 3));
+        var foreign = Character(foreignSource) with { Inventory = CurrencyWallet.Set(Character(foreignSource).Inventory, CurrencyKind.Gold, 100_000) };
+        var foreignResult = compoundService.Compound(foreign, new TalismanCompoundRequest(0, 1, 2, [71, 71, 71]),
+            compoundCosts, Now, out var foreignReceipt);
+        That(!foreignResult.Accepted && foreignResult.RejectReason == "compound-class" && foreignReceipt is null,
+            "当前转职合成拒绝其他转职的符文材料");
 
         var list = InventoryPackets.SpecialFull(afterEquip.Inventory, InventoryListType.Talisman, Now);
         That(list[0] == 46 && BinaryPrimitives.ReadUInt16LittleEndian(list.AsSpan(1)) == 2 && list.Length == 3 + 2 * 123,
@@ -156,9 +172,10 @@ internal static class TalismanInventoryTests
     {
         var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
         var other = Rune with { Id = OtherRuneId };
-        catalog.PrefillTemplates(new[] { Stone, Rune, other, Material }.ToDictionary(item => item.Id));
-        catalog.PrefillTalismans([new(Stone, [1], 9)]);
-        catalog.PrefillRunes([new(Rune, [1], 9, RuneCamp.SecondPact, 2), new(other, [1], 10, RuneCamp.SecondPact, 2)]);
+        catalog.PrefillTemplates(new[] { Stone, Stone2, Rune, other, ForeignRune, Material }.ToDictionary(item => item.Id));
+        catalog.PrefillTalismans([new(Stone, [1], 9), new(Stone2, [1], 9)]);
+        catalog.PrefillRunes([new(Rune, [1], 9, RuneCamp.SecondPact, 2), new(other, [1], 10, RuneCamp.SecondPact, 2),
+            new(ForeignRune, [2], 11, RuneCamp.SecondPact, 2)]);
         return catalog;
     }
 
