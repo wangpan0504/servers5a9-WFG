@@ -74,6 +74,51 @@ internal static class MetroQuestEntryTcpTests
 
         void VerifyAutoDaily()
         {
+            ushort[] regionalIds = [6115,13031,13033,13036,13037,13040,13041,13044,13047,13050,13053,13056];
+            That(resources.Quests.All.Where(QuestAutoDailyPlan.Hunt).Select(row => row.Id).Order()
+                .SequenceEqual(regionalIds.Select(id => (int)id)),"真实注册表12条同形地区每日，不按编号启用业务");
+            foreach (ushort regionalId in regionalIds)
+            {
+                var regional = resources.Quests.Get(regionalId);
+                foreach (var row in regional.Definition!.Dungeons)
+                {
+                    if (regionalId == 13053 && row.DungeonId == 8012)
+                    {
+                        Reject<InvalidDataException>(() => dungeons.Get(row.DungeonId),"新版资源缺少废弃附加副本8012，不伪造映射");
+                        continue;
+                    }
+                    That(dungeons.Get(row.DungeonId).Mazes.Any() &&
+                        QuestAutoDailyPlan.MatchesDungeon(regional,checked((uint)row.DungeonId),checked((byte)Math.Max(0,row.Parameter))),
+                        "各地区每日的声明副本存在迷宫资源且按原难度匹配：" + regionalId + "/" + row.DungeonId);
+                }
+            }
+            foreach (ushort regionalId in regionalIds.Where(id => id != 13056))
+            {
+                var regional = resources.Quests.Get(regionalId);
+                var doneRegional = new HashSet<int>();
+                uint dungeon = checked((uint)regional.Definition!.Dungeons[0].DungeonId);
+                var point = Entrance(regionalId,dungeon,doneRegional);
+                string regionalAccount = "daily-region-" + regionalId;
+                var role = Create(regionalAccount,"Day" + regionalId,0,checked((byte)regional.MinimumLevel),doneRegional,point);
+                int regionalDay = QuestCycle.Day(DateTimeOffset.UtcNow);
+                foreach (int level in new[] { regional.MinimumLevel-1,regional.MinimumLevel,regional.MaximumLevel,regional.MaximumLevel+1 })
+                {
+                    var assignment = QuestAutoDailyPlan.Prepare(role with { Level = checked((byte)level) },resources.Quests,regionalDay,true);
+                    That((assignment?.ActiveAfter.Any(row => row.QuestId == regionalId) ?? false) == (level >= regional.MinimumLevel && level <= regional.MaximumLevel),
+                        "每条地区每日保留原等级上下界：" + regionalId + "/" + level);
+                }
+                using var regionalPeer = Open(fixture,regionalAccount);
+                Select(regionalPeer,role);
+                uint initial = checked((uint)regional.IntData[4] | (uint)regional.IntData[9] << 9);
+                That(Scalar(role.Id,regionalId) == initial,"真实选角按本地区PVF数量自动接取：" + regionalId);
+                string original = Identity(role.Id,regionalId);
+                RejectAccept(regionalPeer,regionalId);
+                regionalPeer.Send(7); regionalPeer.Expect(1,7,[1]); regionalPeer.Expect(0,2);
+                regionalPeer.Select(RoleIndex(regionalPeer.Roster,role),prepared:true);
+                That(Identity(role.Id,regionalId) == original && Scalar(role.Id,regionalId) == initial,
+                    "同日重连保留地区每日原接取身份和进度：" + regionalId);
+                Cleanup(regionalPeer,role,regionalAccount);
+            }
             const ushort id=13056;
             const string account="metro-auto-daily";
             var quest=resources.Quests.Get(id);
@@ -1540,7 +1585,10 @@ internal static class MetroQuestEntryTcpTests
                 parentIdentity = Identity(peer.Id, 3640);
                 RejectAccept(peer, 3687); RejectAccept(peer, 3688);
                 EntryRound(peer, 3686, 517, [3640,0]);
-                That(fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0", peer.Id) is [[3640L]],
+                That(fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0 ORDER BY quest_id", peer.Id)
+                    .Select(row => Convert.ToInt32(row[0])).SequenceEqual(
+                        (QuestAutoDailyPlan.Prepare(created,resources.Quests,QuestCycle.Day(DateTimeOffset.UtcNow),true)?.ActiveAfter.Select(row => (int)row.QuestId) ?? [])
+                            .Append(3640).Order()),
                     "仅父活动时父/0请求只借首子布局，不替客户端接取3686");
                 Accept(peer, 3686, 1);
                 childIdentity = Identity(peer.Id, 3686);
@@ -1557,7 +1605,8 @@ internal static class MetroQuestEntryTcpTests
                 peer.Barrier();
                 var active = fixture.Query("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", peer.Id);
                 var ack = packets.Single(packet => packet.Kind == 1 && packet.Opcode == 4).Body;
-                That(peer.Id == created.Id && ack.Length == 235 && ack[0] == 1 && active.Length == 2 &&
+                That(peer.Id == created.Id && ack.Length == 235 && ack[0] == 1 && active.Length == 2 +
+                    (QuestAutoDailyPlan.Prepare(created,resources.Quests,QuestCycle.Day(DateTimeOffset.UtcNow),true)?.ActiveAfter.Length ?? 0) &&
                     QuestState(peer.Id) == accepted && Identity(peer.Id, 3640) == parentIdentity && Identity(peer.Id, 3686) == childIdentity &&
                     Enumerable.Range(0,30).All(slot =>
                     {
@@ -1643,7 +1692,7 @@ internal static class MetroQuestEntryTcpTests
                 var active = fixture.Query("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", peer.Id);
                 That(peer.Id == created.Id && QuestState(peer.Id) == accepted && Identity(peer.Id, parentId) == parentIdentity &&
                     Identity(peer.Id, childId) == childIdentity && entry[0] is { Kind: 1, Opcode: 4, Body.Length: 235 } &&
-                    active.Length == 2 && Enumerable.Range(0, 30).All(slot =>
+                    active.Length == 2 + (QuestAutoDailyPlan.Prepare(created,resources.Quests,QuestCycle.Day(DateTimeOffset.UtcNow),true)?.ActiveAfter.Length ?? 0) && Enumerable.Range(0, 30).All(slot =>
                     {
                         var row = active.SingleOrDefault(row => (long)row[0] == slot);
                         return U16(entry[0].Body, 22 + 6 * slot) == (row is null ? ushort.MaxValue : (long)row[1]) &&
@@ -1955,7 +2004,33 @@ internal static class MetroQuestEntryTcpTests
         {
             peer.Send(42); peer.Expect(1, 42, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]); peer.Expect(0, 24);
-            peer.Expect(0, 21); peer.Expect(0, 356); peer.Barrier();
+            peer.Expect(0, 21); var history = peer.Expect(0, 356).Body;
+            int dailyUpdates = 0, historyUpdates = 0, visibleUpdates = 0;
+            peer.Barrier(packet =>
+            {
+                if (packet.Opcode == 574)
+                {
+                    That(++dailyUpdates == 1,"升级后回城至多补一次合法每日投影");
+                    var rows = fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",peer.Id);
+                    That(packet.Body.Length == 4 + 6 * rows.Length && U32(packet.Body) == rows.Length &&
+                        rows.Select((row,index) => U16(packet.Body,4+6*index) == (long)row[0] &&
+                            U32(packet.Body,6+6*index) == (long)row[1]).All(equal => equal),
+                        "回城每日574完整匹配落库活动槽和原有任务进度");
+                }
+                else if (packet.Opcode == 356)
+                {
+                    That(dailyUpdates == 1 && ++historyUpdates <= 2 && visibleUpdates == historyUpdates - 1,"每日周期历史与可见投影历史按顺序各一次");
+                    Bytes(packet.Body,history,"补发每日不篡改已完成历史");
+                }
+                else if (packet.Opcode == 21)
+                {
+                    That(historyUpdates == 1 && ++visibleUpdates == 1,"每日历史后仅刷新一次可见列表");
+                    byte level = checked((byte)(long)fixture.Query("SELECT level FROM characters WHERE id=$p0",peer.Id)[0][0]);
+                    _ = QuestLifecycleTcpTests.List(packet.Body,level);
+                }
+                else That(false,"回城不得跳过未知通知：" + packet.Opcode);
+            });
+            That(historyUpdates == dailyUpdates * 2 && visibleUpdates == dailyUpdates,"每日补发的574、356、21、356链完整");
         }
 
         DungeonMonsterPlan[] Plans(DungeonMaze maze, ushort character, uint next, int? basis)
@@ -2054,8 +2129,8 @@ internal static class MetroQuestEntryTcpTests
             "SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", character, quest).Single()[0]);
         string Identity(ushort character, ushort quest) => (string)fixture.Query(
             "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", character, quest).Single()[0];
-        // 任务链断言只比较链本身；Q13056可随同一批合法战斗独立计数，由quest-auto-daily完整核验。
-        string MissionActive(ushort id) => fixture.Snapshot("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id<>13056 ORDER BY slot", id);
+        // 任务链断言只比较链本身；地区每日可随同一批合法战斗独立计数，另有每日回归核验。
+        string MissionActive(ushort id) => fixture.Snapshot($"SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id NOT IN({string.Join(",",resources.Quests.All.Where(QuestAutoDailyPlan.Supports).Select(q => q.Id))}) ORDER BY slot", id);
         string QuestState(ushort id) => MissionActive(id) + fixture.Snapshot("SELECT * FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id", id) +
             fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY revision", id);
         string State(ushort id) => QuestState(id) + fixture.Snapshot("SELECT * FROM characters WHERE id=$p0", id) +

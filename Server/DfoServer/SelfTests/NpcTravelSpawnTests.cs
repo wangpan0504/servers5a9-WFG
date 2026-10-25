@@ -32,6 +32,20 @@ internal static class NpcTravelSpawnTests
         That(towns.Admission(towns.InitialReturn, prey, 95, completed, targetNpc: 400000062) == "npc-route-not-in-pvf", "target NPC cannot authorize a route from unrelated source");
         That(towns.Admission(gray, new(54, 1, 201, 570), 95, completed, targetNpc: 400000062) == "npc-target-not-in-area", "target NPC must be in the requested map and phase");
         That(towns.Admission(gray, prey with { X = 380 }, 95, completed, targetNpc: 400000062) == "ready", "NPC travel is not restricted to inferred npc+30 coordinates");
+        var weekly = new Location(107, 0, 400, 250);
+        That(towns.NpcMoves[400001083].SequenceEqual(new uint[] { 400001081 }) &&
+            towns.NpcMoves[400001082].SequenceEqual(new uint[] { 400001081 }),
+            "每周猫咪与巴斯泰托的 enter town 读取原目标 NPC，不硬编码路线");
+        That(towns.Admission(towns.Room, weekly, 50, new HashSet<int> { 8709 }, targetNpc: 400001081) == "ready",
+            "已完成8709的50级角色可从实际猫咪地图进入遗迹");
+        That(towns.Admission(towns.Room, weekly, 49, new HashSet<int> { 8709 }, targetNpc: 400001081) == "target-level-required" &&
+            towns.Admission(towns.Room, weekly, 50, new HashSet<int>(), targetNpc: 400001081) == "target-quest-required",
+            "enter town 不跳过50级或8709前置");
+        That(towns.Admission(gray, weekly, 95, new HashSet<int> { 8709 }, targetNpc: 400001081) == "npc-route-not-in-pvf" &&
+            towns.Admission(towns.Room, prey, 95, completed, targetNpc: 400001081) == "npc-target-not-in-area",
+            "enter town 继续绑定来源NPC与目标实际区域，不能任意传送");
+        That(towns.NpcExits.Contains(400001081) && towns.HasNpcExit(weekly, new HashSet<int> { 8709 }),
+            "遗迹巴斯泰托 exit town 0 保留为返回入口，不伪造目标NPC 0");
         string path = Path.Combine(Path.GetTempPath(), "S5A9-npc-spawn-tests-" + Guid.NewGuid().ToString("N"), "game.db");
         var repo = new CharacterRepository(path);
         var owners = new AccountOwners();

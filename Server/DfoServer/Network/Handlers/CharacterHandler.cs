@@ -14,13 +14,14 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null, AdventureProjection? adventure = null,
     ExpertJobScriptCatalog? expertJobs = null, AdventureWeeklyProjection? weekly = null,
     AvatarPresetProjection? avatarPresets = null, AvatarPresetService? avatarPresetService = null,
-    DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null) : IGameCommandModule
+    DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null, DfoServer.Game.Pvp.PvpPrivateCharacterService? privateCharacters = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.SELECT_CHARACTER, SelectAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHECK_DOUBLE_CHARACTER_NAME, CheckNameAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CREATE_CHARACTER, CreateAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.CHECK_PVP_PRIVATE_CHARACTER, CheckPvpPrivateAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.DELETE_CHARACTER, DeleteAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHANGE_CHARAC_SLOT, ChangeSlotAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.GET_USERINFO, RosterAsync, nameof(CharacterHandler));
@@ -52,7 +53,14 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     {
         // 原生换频道直接发C2S4；普通选角先请求C2S8，返回选角也有已推送名册。
         bool resumeTown = !context.RosterRequested && !context.SelectionRosterPushed;
-        context.Session.SelectFromRosterIndex(CharacterRequests.Select(request.Body), goldLimits, resumeTown);
+        ushort selection=CharacterRequests.Select(request.Body);
+        if(context.Session.PvpPrivateSelectionBlocked(selection))
+        {
+            // 023428B1的96明确显示当前频道不允许此操作，失败无额外body且重置选角UI。
+            await context.Reply(CmdPacketType.SELECT_CHARACTER,[0,96,0],"pvp_private_channel_rejected");
+            return CommandResult.Handled;
+        }
+        context.Session.SelectFromRosterIndex(selection, goldLimits, resumeTown);
         bool nativeSwitch = resumeTown;
         resumeTown = context.Session.TownSnapshotResumed;
         if (learning is not null)
@@ -93,10 +101,35 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         return CommandResult.Handled;
     }
 
+    async Task<CommandResult> CheckPvpPrivateAsync(GameConnectionContext context,Packet request)
+    {
+        var parsed=CharacterRequests.PvpPrivateCheck(request.Body);
+        DfoServer.Game.Characters.NewCharacter? plan=null;
+        string reason="unavailable";
+        privateCharacters?.TryPrepare("PrivateCheck",parsed.Job,parsed.Grow,DateTimeOffset.UtcNow,out plan,out reason);
+        var receipt=context.Session.CheckPvpPrivateCreation(plan);
+        log.Write("pvp_private_create_check",new {Connection=context.Id,parsed.Job,parsed.Grow,receipt.Allowed,Reason=reason});
+        await context.Reply(CmdPacketType.CHECK_PVP_PRIVATE_CHARACTER,CharacterPackets.PvpPrivateChecked(receipt.Allowed),
+            "pvp_private_create_check",()=>context.Session.CanPublishPvpPrivateCreationCheck(receipt));
+        return CommandResult.Handled;
+    }
+
     async Task<CommandResult> CreateAsync(GameConnectionContext context, Packet request)
     {
         var parsed = CharacterRequests.ParseCreate(request.Body);
-        var receipt = context.Session.CreateCharacterForClient(parsed.Name, characters.Get(parsed.Job), learning, tutorials?.Get(parsed.Job));
+        DfoServer.Game.Characters.CharacterCreationReceipt receipt;
+        if(parsed.IsPvpPrivate)
+        {
+            if(privateCharacters is null || !privateCharacters.TryPrepare(parsed.Name,parsed.Job,parsed.PvpGrow,DateTimeOffset.UtcNow,out var plan,out _) ||
+                context.Session.CreatePvpPrivateCharacterForClient(plan!) is not {} committed)
+            {
+                // 023433F2失败仅消费统一error u16；19结束本次创建，不伪造任何角色或资格提示。
+                await context.Reply(CmdPacketType.CREATE_CHARACTER,[0,19,0],"pvp_private_create_rejected");
+                return CommandResult.Handled;
+            }
+            receipt=committed;
+        }
+        else receipt = context.Session.CreateCharacterForClient(parsed.Name, characters.Get(parsed.Job), learning, tutorials?.Get(parsed.Job));
         bool CanSend() => context.Session.CanPublishCreation(receipt);
         await context.Reply(CmdPacketType.CREATE_CHARACTER, CharacterPackets.Created(receipt.Created), "create_committed", CanSend);
         await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity), "created_roster", CanSend);

@@ -46,6 +46,8 @@ internal sealed partial class GameSession
         public uint ClearTimeMilliseconds { get; set; }
         public bool SettlementEnabled { get; set; }
         public FormalSettlement? Settlement { get; set; }
+        public OperationHopeRewardPlan? PendingHopeReward { get; set; }
+        public bool HopeRewardConfirmed { get; set; }
         public Dictionary<(DungeonMap Map, int Template, int Ordinal), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }
@@ -132,6 +134,9 @@ internal sealed partial class GameSession
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
         if (expected is null || expected.DungeonState is null)
             return RejectFormal("session-not-ready-or-no-dungeon-state");
+        var hope = dungeonId == 8523 ? CurrentHopeAdmission(expected,epoch) : null;
+        if (dungeonId == 8523 && (hope is null || questId != 0 || difficulty != hope.Catalog.Difficulty || retry is not null ||
+            classExperience || hellParty || hellLegend || sealDoor || practice)) return RejectFormal("operation-hope-admission-required");
         GriefTowerAdmission? grief = null;
         uint selectionDungeon = dungeonId;
         if (dungeonId <= int.MaxValue && catalog.GriefTower.FloorsByDungeon.TryGetValue((int)dungeonId, out var requestedGrief))
@@ -272,7 +277,7 @@ internal sealed partial class GameSession
             allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null,
             hellParty: hellParty,hellLegend: hellLegend,practice: practice,
             // 频道专属城镇的选图副本（超时空之战 400000016 的 [boss map] 6 0 只写 `map`）按客户端规则把 Boss 坐标格当 Boss 图；其他副本不变。
-            bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief))
+            bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         if (hellParty && entry!.HellParty is null && !entry.IsCosmo) return RejectFormal("hell-party-room-unavailable");
         HellPartyTicket? hellTicket = null;
@@ -529,6 +534,12 @@ internal sealed partial class GameSession
         var committedEntry = entry with { CharacterRevision = checked(expected.Revision + 1) };
         if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out var runReason))
             return RejectFormal("run-create:" + runReason);
+        if (entry.Hope is { } hope)
+        {
+            var binding = OperationHopePlan.TryBind(hope.Catalog,hope.Acceptance.QuestId,hope.MazeOrdinal,
+                expected.Level,run!.Snapshot.Identity,hope.Acceptance);
+            if (binding is null || !run.ConfigureHope(hope.Catalog,binding)) return RejectFormal("operation-hope-run-bind-failed");
+        }
         if (!authority.BindTo(run!)) return RejectFormal("run-authority-bind-failed");
         var passiveGrounds = new List<DungeonGroundObject>();
         if (passiveDrops is not null && !entry.IsAltar)
@@ -639,6 +650,7 @@ internal sealed partial class GameSession
         }
         System.Collections.Immutable.ImmutableArray<InventorySlot> channelSlots = [];
         System.Collections.Immutable.ImmutableArray<DungeonEnterCount> enterCounts = [];
+        DungeonEntryIncount? hopeIncount = null;
         if (installing.ChannelCost is { } cost)
         {
             // 入场提交时按当前背包重算材料；次数已满或材料不足则整个入场作废。
@@ -651,18 +663,30 @@ internal sealed partial class GameSession
                 if (!spent.Accepted || spent.Plan is not { } plan) return null;
                 consumption = plan;
             }
-            // [sub incount on clear dungeon] 的副本这里只核对不记次，通关结算时记（ChargeIncountOnClear）。
-            if (repository.CommitDungeonIncountEntry(owner, character, cost.Incount?.CountKey ?? cost.DungeonId, cost.Period, cost.Incount, consumption,
-                cost.Account, increment: !cost.ChargeOnClear) is not { } counted)
-                return null;
-            character = counted.Character;
-            if (cost.Incount is { } row && !cost.ChargeOnClear) enterCounts = [.. DungeonIncountPolicy.Views(row, counted.Usage)];
-            if (consumption is not null)
+            if (installing.Entry.Hope is not null)
             {
-                channelSlots = consumption.ChangedSlots;
-                var rebased = installing.Entry with { CharacterRevision = checked(character.Revision + 1) };
-                installing.Run.RebasePreparedRevision(rebased.CharacterRevision);
-                installing = installing with { Entry = rebased };
+                // 希望任务与首区疲劳可能在末段失败，次数和材料必须随原入场事务一起回滚。
+                if (consumption is not null && entryItems is not null) return null;
+                entryItems ??= consumption;
+                int countKey = cost.Incount?.CountKey ?? cost.DungeonId;
+                hopeIncount = new(countKey, IncountPeriod(countKey), cost.Incount,
+                    AccountCharges(cost.DungeonId), !cost.ChargeOnClear);
+            }
+            else
+            {
+                // [sub incount on clear dungeon] 的副本这里只核对不记次，通关结算时记（ChargeIncountOnClear）。
+                if (repository.CommitDungeonIncountEntry(owner, character, cost.Incount?.CountKey ?? cost.DungeonId, cost.Period, cost.Incount, consumption,
+                    cost.Account, increment: !cost.ChargeOnClear) is not { } counted)
+                    return null;
+                character = counted.Character;
+                if (cost.Incount is { } row && !cost.ChargeOnClear) enterCounts = [.. DungeonIncountPolicy.Views(row, counted.Usage)];
+                if (consumption is not null)
+                {
+                    channelSlots = consumption.ChangedSlots;
+                    var rebased = installing.Entry with { CharacterRevision = checked(character.Revision + 1) };
+                    installing.Run.RebasePreparedRevision(rebased.CharacterRevision);
+                    installing = installing with { Entry = rebased };
+                }
             }
         }
         System.Collections.Immutable.ImmutableArray<InventorySlot> entrySlots = [];
@@ -699,12 +723,15 @@ internal sealed partial class GameSession
         }
         ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : installing.Entry.StartFatigue;
         Character committed;
-        if (entryItems is not null || entryFatigue > 0 || installing.GriefAdmission is not null || installing.SpecialEntry is not null)
+        if (entryItems is not null || entryFatigue > 0 || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Entry.Hope is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
-            committed = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
+            var entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                 new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                    prepared.Weekly,installing.GriefAdmission) { Special = installing.SpecialEntry, DungeonId = checked((int)installing.Entry.DungeonId) });
+                    prepared.Weekly,installing.GriefAdmission) { Special = installing.SpecialEntry, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = hopeIncount });
+            committed = entryCommit.Character;
+            if (hopeIncount is { Row: { } hopeRow, Increment: true } && entryCommit.IncountUsage is { } actualUsage)
+                enterCounts = [.. DungeonIncountPolicy.Views(hopeRow, actualUsage)];
             if (installing.HellTicket is null) entrySlots = entryItems?.ChangedSlots ?? [];
             if (committed.Revision != installing.Entry.CharacterRevision)
             {
@@ -723,6 +750,7 @@ internal sealed partial class GameSession
         }
         Selected = committed;
         formalDungeon = installing;
+        if (installing.Entry.Hope is not null) hopeSelection = null;
         pendingDungeonContinuation = null;
         pendingQuestReplay = null;
         CurrentDungeonSelection = null;
@@ -771,6 +799,12 @@ internal sealed partial class GameSession
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
                 dungeon.Run.HasScriptedTransit && ScriptedNavigationBlocked(dungeon) ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
+            if (dungeon.Entry.Hope is not null && debugSettings?.InfiniteFatigue != true)
+            {
+                dungeon.HasPendingFatigue = true;
+                Selected = repository.ConsumeOperationHopeAreaFatigue(owner,expected,dungeon.Run);
+                dungeon.HasPendingFatigue = false;
+            }
             if (dungeon.Entry.UsesRoomFatigue && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
@@ -851,6 +885,10 @@ internal sealed partial class GameSession
         if (!Selected.ActiveMainQuests.Any(active => active.QuestId == dungeon.Entry.RouteQuestId && QuestHuntProgress.Bound(active,dungeon.Entry)))
             dungeon.Run.CancelRidable();
         var target = new DungeonPoint(x,y);
+        if (dungeon.Run.HopeCatalog is { } hope && debugSettings?.InfiniteFatigue != true &&
+            dungeon.Entry.Maze.MapSpecification?.SingleOrDefault(map => map.Position == target) is { } targetMap &&
+            hope.Maps.TryGetValue(targetMap.Id,out var area) && !dungeon.Run.HasLoadedHopeArea(area.AreaId) &&
+            (Selected.Fatigue is null || Selected.Fatigue.Remaining < hope.FatigueValue)) return null;
         if (dungeon.Run.HasScriptedReturn || dungeon.Run.CanPresentScriptedBase(target))
         {
             if (!CanUseScriptedReturn(dungeon) ||
@@ -1066,7 +1104,8 @@ internal sealed partial class GameSession
     TownTravelReceipt? ReturnFromFormalDungeonCore(bool clearedHell) => owner.Execute(() =>
     {
         if (!CheckState(UserStateRequirement.DungeonContext) || Selected is null || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || HasPendingFormalCard || pendingQuestCompletion is not null || dungeon.HasPendingFatigue || HasPendingQuestScene) return null;
-        if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement) return null;
+        if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement ||
+            dungeon.PendingHopeReward is not null && !dungeon.HopeRewardConfirmed) return null;
         if (dungeon.PendingTutorialClear is not null) return null;
         // 普通挑战沿本次入口安全点返回；先提交位置，失败时保留原实例与完整角色资产。
         if (dungeon.Entry.IsTutorial && Selected.Tutorial is { Completed: false })
@@ -1083,6 +1122,11 @@ internal sealed partial class GameSession
             if (Selected.Position != back || after != before)
                 Selected = repository.Save(owner, Selected, back, Selected.Return,
                     after == before ? null : new InventoryPlan(before, after, "dungeon_retreat_stamina", new(Selected)));
+        }
+        if (dungeon.Run.HopeCatalog is { } hope && dungeon.Run.HopeBinding is { } binding)
+        {
+            var active = Selected.ActiveMainQuests.Where(row => row.AcceptanceId == binding.Acceptance.AcceptanceId).ToArray();
+            if (active.Length > 0) Selected = repository.ClearOperationHopeAcceptances(owner,Selected,hope,active);
         }
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRun();

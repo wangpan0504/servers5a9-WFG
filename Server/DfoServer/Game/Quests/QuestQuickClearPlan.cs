@@ -340,7 +340,7 @@ internal sealed class QuestQuickClearPlan
     static void ValidateAwakening(StoryQuest quest,QuestCatalog quests)
     {
         QuestCoverage.RequireOrdinaryDeclarations(quest);
-        if (!QuestCoverage.HasRequiredReferences(quest,quests) || quest.Definition is not { AccountQuest:false } definition ||
+        if (!QuestCoverage.HasRequiredReferences(quest,quests) || QuestAccountPolicy.SharedCompletion(quest) || quest.Definition is not { AccountQuest:false } definition ||
             QuestCycle.Daily(quest) || QuestCycle.Repeat(quest) || definition.Has("casecade clear"))
             throw new NotSupportedException("觉醒券目标引用、账号、周期或级联不支持: "+quest.Id);
         if (quest.RewardType=="[awakening type]")
@@ -379,7 +379,7 @@ internal sealed class QuestQuickClearPlan
                 if (!quests.TryGet(id,out var quest)) throw new InvalidDataException("指定任务券引用缺失: "+id);
                 if (completed.Contains(id)) continue;
                 QuestCoverage.RequireOrdinaryDeclarations(quest);
-                if (!QuestCoverage.HasRequiredReferences(quest,quests) || quest.Definition is not { AccountQuest:false,JobChange:0 } ||
+                if (!QuestCoverage.HasRequiredReferences(quest,quests) || QuestAccountPolicy.SharedCompletion(quest) || quest.Definition is not { AccountQuest:false,JobChange:0 } ||
                     QuestCycle.Daily(quest) || QuestCycle.Repeat(quest) || quest.Condition=="[question]")
                     throw new NotSupportedException("指定券目标需要尚未接入的引用、账号、周期、职业或问题事务: "+id);
                 if (quest.RewardType is not (null or "[item]" or "[slot expansion]") || quest.Definition.Has("casecade clear"))
@@ -583,7 +583,7 @@ internal sealed class QuestQuickClearPlan
         QuestCoverage.RequireOrdinaryDeclarations(quest);
         var definition = quest.Definition!;
         if (!QuestCoverage.HasRequiredReferences(quest,quests)) throw new InvalidDataException("手册任务引用不完整: " + quest.Id);
-        if (definition.AccountQuest) throw new NotSupportedException("手册账号任务事务尚未接入: " + quest.Id);
+        if (QuestAccountPolicy.SharedCompletion(quest)) throw new NotSupportedException("手册账号任务事务尚未接入: " + quest.Id);
         if (definition.JobChange != 0) throw new NotSupportedException("手册不代替职业变化: " + quest.Id);
         if (quest.RewardType is not (null or "[item]")) throw new NotSupportedException("手册专用状态尚未接入: " + quest.Id + ": " + quest.RewardType);
         // 不发普通奖励或扣普通材料；特殊任务物品由冻结效果计划核算。
@@ -739,7 +739,7 @@ internal sealed class QuestQuickClearPlan
     {
         var definition = quest.Definition ?? throw new InvalidDataException("跳过任务没有完整定义: " + quest.Id);
         if (definition.Diagnostics.Length != 0) throw new InvalidDataException("跳过任务定义不可用: " + quest.Id + ": " + string.Join(",",definition.Diagnostics));
-        if (definition.AccountQuest) throw new NotSupportedException("跳过范围包含账号任务: " + quest.Id);
+        if (QuestAccountPolicy.SharedCompletion(quest)) throw new NotSupportedException("跳过范围包含账号任务: " + quest.Id);
         if (definition.JobChange != 0) throw new NotSupportedException("跳过范围包含职业变化: " + quest.Id);
         if (quest.Condition is "[seeking]" or "[seek n meet npc]" && !QuestLifecyclePlan.ValidSeeking(quest))
             throw new InvalidDataException("跳过寻物声明不完整: " + quest.Id);

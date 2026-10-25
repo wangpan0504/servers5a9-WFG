@@ -3,6 +3,8 @@ using System.Collections.Immutable;
 using System.Net;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Network.Builders.Inventory;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Quests;
 using DfoServer.GameWorld.Towns;
@@ -127,7 +129,87 @@ internal static class QuestHiddenEntryTests
                 "完成后884不重新开放任务或重复发奖");
         }
         finally { Directory.Delete(root,true); }
-        Console.WriteLine($"PASS {Count-checks} 隐藏884/822、公共接取交付与选角失效合成机制断言（不执行主线）");
+        await VerifyClearedDialoguePackets(towns,characters,items,actual,learning,growth,parameters);
+        Console.WriteLine($"PASS {Count-checks} 隐藏884/822、真实12071正式Handler包序及公共接取交付断言（内存发送器，非socket）");
+    }
+
+    static async Task VerifyClearedDialoguePackets(TownCatalog towns,CharacterCatalog characters,ItemResources items,
+        QuestCatalog quests,SkillLearningCatalog learning,CharacterGrowthCatalog growth,QuestRewardParameterCatalog parameters)
+    {
+        const ushort id = 12071;
+        var quest = quests.Get(id);
+        var done = towns.AccessQuestIds.Concat(quest.Prerequisites).Where(value => value!=id).Distinct().ToArray();
+        var bounds = towns.Areas[((byte)14,(byte)1)].Map(done.ToHashSet()).Bounds
+            .First(row => row.Conditions.Length==0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(14,1,checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
+        using var f = new QuestSceneTests.Fixture(towns,characters,learning,growth,quests,false,level:95,completed:done,position:position);
+        string root=Path.Combine(Path.GetTempPath(),"S5A9-cleared-hidden-wire-"+Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var log = new ServerLog(root);
+            var projection=new QuestProjection(quests); var commands=new GameCommandRegistry();
+            new QuestHiddenHandler(quests,log).Register(commands);
+            new QuestLifecycleHandler(quests,items.Items,items.GoldLimits,items.EpicPieces,log,projection).Register(commands);
+            new QuestConditionHandler(log,quests,items.Items,items.GoldLimits,items.EpicPieces,parameters:parameters,growth:growth).Register(commands);
+            new QuestCompletionHandler(quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth,log,
+                new CharacterLevelProjection(new CharacterStatComputer(characters),projection),projection).Register(commands);
+            commands.Seal(); using var stop=new CancellationTokenSource(); using var output=new Output();
+            await using var sender=new GameConnectionSender(f.Owner,output,stop,0,(_,_,_,_,_)=>{});
+            var context=new GameConnectionContext(new(92,IPAddress.Loopback,output,stop),f.Owner,f.Session,sender);
+            Packet Accept()=>new(1,31,[31,0,(byte)(id&255),(byte)(id>>8)]);
+            Packet Trigger()=>new(1,33,[33,0,(byte)(id&255),(byte)(id>>8),0,0]);
+            Packet Finish()=>new(1,34,[34,0,(byte)(id&255),(byte)(id>>8),255,255,1,0,255,255]);
+            var before=f.Read();
+            That(await commands.DispatchAsync(context,Accept())==CommandResult.Handled && f.Read().Revision==before.Revision &&
+                output.Opcodes.SequenceEqual(new ushort[]{31}),"12071正式31无884许可不得入库");
+            output.Frames.Clear();
+            That(await commands.DispatchAsync(context,Request(id,58))==CommandResult.Handled &&
+                output.Opcodes.SequenceEqual(new ushort[]{884}) && f.Read().Revision==before.Revision,
+                "12071错误对话NPC正式884只ACK不发送822");
+            output.Frames.Clear();
+            That(await commands.DispatchAsync(context,Request(id,76))==CommandResult.Handled &&
+                output.Opcodes.SequenceEqual(new ushort[]{884,822}) && f.Read().Revision==before.Revision,
+                "12071真实NPC76正式884/822只开放候选");
+            output.Frames.Clear();
+            That(await commands.DispatchAsync(context,Accept())==CommandResult.Handled &&
+                output.Opcodes.SequenceEqual(new ushort[]{31,21,356}) &&
+                f.Read().ActiveMainQuests.Single(row=>row.QuestId==id).ConditionState==1,
+                "12071真实31包序保持初值1及历史同步");
+            output.Frames.Clear();
+            That(await commands.DispatchAsync(context,Trigger())==CommandResult.Handled &&
+                output.Opcodes.SequenceEqual(new ushort[]{33}) && f.Read().ActiveMainQuests.Single(row=>row.QuestId==id).ConditionState==0,
+                "12071原客户端6B自动33通过当前NPC事实完成，不需要伪造255通道");
+            var revision=f.Read().Revision;
+            output.Frames.Clear();
+            That(await commands.DispatchAsync(context,Trigger())==CommandResult.Handled && f.Read().Revision==revision,
+                "12071重复正式33不重复提交");
+            output.Frames.Clear();
+            var beforeReward=f.Read();
+            That(quest.MinimumLevel==90 && beforeReward.Level==95 && quest.Grade=="[hidden]" &&
+                quest.DeclaredIgnoreLevelForExperience is null or 0 && quest.DeclaredGoldMultiple is null,
+                "12071原等级90、角色95、非史诗惩罚及缺省金币倍率资源合同");
+            var green=parameters.Penalty(false,false); var grey=parameters.Penalty(false,true);
+            int penalty=5>=grey.MinimumDifference ? grey.Percent :
+                5>=green.MinimumDifference && 5<=green.MaximumDifference ? green.Percent : parameters.BasicPenalty;
+            uint expectedGold=checked((uint)((ulong)parameters.Gold[90]*100/100*(ulong)penalty/100));
+            That(expectedGold>0,"12071原0/0金币marker按真实G参数产生正金币，不是零奖励占位");
+            That(await commands.DispatchAsync(context,Finish())==CommandResult.Handled && output.Opcodes.SequenceEqual(new ushort[]{34,14,21,356}) &&
+                f.Read().CompletedQuests.Contains(id) && f.Read().ActiveMainQuests.All(row=>row.QuestId!=id),
+                "12071正式34复用原奖励和完成历史：opcodes="+string.Join(',',output.Opcodes)+
+                $"; completed={f.Read().CompletedQuests.Contains(id)}; revision={f.Read().Revision}");
+            var rewarded=f.Read();
+            That(rewarded.Inventory.Gold==checked(beforeReward.Inventory.Gold+expectedGold) &&
+                rewarded.Inventory.Items.SequenceEqual(beforeReward.Inventory.Items),
+                "12071原参数金币完整入账，无额外物品");
+            Bytes(output.Frames[1].AsSpan(16),InventoryPackets.Delta(rewarded.Inventory,InventoryListType.Main,
+                [new InventorySlot(InventoryListType.Main,0)]),"12071的14严格携带真实提交后的金币槽绝对值");
+            revision=rewarded.Revision; output.Frames.Clear();
+            That(await commands.DispatchAsync(context,Finish())==CommandResult.Handled && f.Read().Revision==revision &&
+                f.Read().Inventory.Gold==rewarded.Inventory.Gold,
+                "12071重复正式34不再次发奖或增加金币");
+        }
+        finally { Directory.Delete(root,true); }
     }
 
     static StoryQuest Hidden() => QuestEligibilityTests.Quest(100) with
@@ -136,10 +218,10 @@ internal static class QuestHiddenEntryTests
         Rewards = [new(0,2058,null),new(0,2,null)],Definition = new QuestDefinition([]) { Job = "[all]",ExposedByNpc = false }
     };
     static QuestCatalog Catalog(StoryQuest quest) => new(new() { [quest.Id] = quest });
-    static Packet Request(uint questId)
+    static Packet Request(uint questId,uint npcDialog = uint.MaxValue)
     {
         byte[] body = new byte[28];
-        uint[] fields = [questId,uint.MaxValue,123,456,0x80000000,789,987];
+        uint[] fields = [questId,npcDialog,123,456,0x80000000,789,987];
         for (int at = 0; at < fields.Length; at++) BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at*4),fields[at]);
         return new(1,884,body);
     }

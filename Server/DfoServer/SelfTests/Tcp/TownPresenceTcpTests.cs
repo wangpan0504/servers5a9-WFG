@@ -1,3 +1,7 @@
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Quests;
+using DfoServer.Persistence;
+using DfoServer.Network.Builders;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -131,6 +135,17 @@ internal static class TownPresenceTcpTests
                 string gm = await fixture.CliAsync(null, "--gm", "account", "alpha", "level", "PresenceA", "40");
                 That(gm.StartsWith("OK ", StringComparison.Ordinal), "GM uses online replacement session");
                 replacement.Send(35, Move(461, 234));
+                var dailyNotice=replacement.Expect(0,574).Body;
+                using(var readOwner=new AccountOwners().Acquire("alpha",()=>{}))
+                {
+                    var role=new CharacterRepository(fixture.Database).LoadCharacter(readOwner,0);
+                    That(role.ActiveMainQuests is [{QuestId:13031,ConditionState:1636}],"接管后GM升40级只为新会话分配当前地区每日");
+                    Bytes(dailyNotice,QuestPackets.ActiveList(role.ActiveMainQuests),"新会话每日通知精确匹配持久身份");
+                    replacement.Expect(0,356,TownPackets.CompletedQuests(role));
+                    replacement.Expect(0,21,QuestPackets.AvailableList(role.Level,QuestEligibility.Candidates(role,resources.Quests)));
+                    // 即使历史为空也恢复世界地图显示标记，严格消费21后的完整356。
+                    replacement.Expect(0,356,TownPackets.CompletedQuests(role));
+                }
                 replacement.Barrier();
                 That(fixture.Snapshot("SELECT level,x FROM characters WHERE account='alpha'") == "[[40,461]]", "movement retains GM update after takeover");
                 replacement.Send(1426);

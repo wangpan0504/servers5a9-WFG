@@ -14,7 +14,7 @@ internal sealed class QuestHiddenHandler(QuestCatalog quests, ServerLog log) : I
     async Task<CommandResult> OpenAsync(GameConnectionContext context, Packet packet)
     {
         if (!QuestRequests.TryOpenHidden(packet.Body,out var request)) return CommandResult.Unhandled;
-        var receipt = context.Session.ReadHiddenQuest(request.QuestId,quests);
+        var receipt = context.Session.ReadHiddenQuest(request.QuestId,quests,request.NpcDialog);
         if (receipt is null) return CommandResult.Unhandled;
         bool Guard() => context.Session.CanPublishQuestHidden(receipt);
         // 请求携带的本地状态只用于审计；不能代替资源、等级、前置与实际选角资格。

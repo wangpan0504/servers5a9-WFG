@@ -152,6 +152,7 @@ internal static class HarlemHellEpicDropTests
             [basis of rarity dicision] 1 0 0 0 0 1000000 1000000 1000000
             [item drop ref table] 1 0 2
             """), candidates);
+        WhiteCosmoDropTests.RunCore(basis, hell, normal, alternate, level95, superPool);
         var wave = new DungeonPlannedMonster(0, 10, 42, 1, null) { SpawnType = 5, HellRewardRolls = 2 };
         var normalEntry = basis with { DungeonId = 1, BasisLevel = 1, HellParty = new(1, basis.StartMap.Position), HellPartyMode = 1 };
         var ultraEntry = normalEntry with { DungeonId = 7191, Difficulty = 4, BossMap = map, HellParty = null };
@@ -352,24 +353,29 @@ internal static class HarlemHellEpicDropTests
                 id => new(id, "monster/奖励边界.mob", null, null), items.Items.Get, harlemEpics: local);
             var plan = policy.PrepareEntry(entry, hell)(boss);
             var trial = plan.Trials.Last();
-            That(trial.Attempts == 8 && trial.RarityPools[4].AlternatePermille == 100 &&
+            bool white = boss.MonsterId == HarlemHellEpicDropPolicy.WhiteBossId;
+            That(trial.Attempts == 8 && trial.RarityPools[4].AlternatePermille == (white ? 1000 : 100) &&
                 trial.RarityPools[4].Items.Entries.Length == 91 && trial.RarityPools[4].AlternateItems!.Entries.Length == 74 &&
-                trial.RarityPools[4].SecondaryPermille == 100 && trial.RarityPools[4].SecondaryItems!.Entries.Length == 25 &&
+                trial.RarityPools[4].SecondaryPermille == (white ? 0 : 100) &&
+                (white ? trial.RarityPools[4].SecondaryItems is null : trial.RarityPools[4].SecondaryItems!.Entries.Length == 25) &&
                 plan.ResourceSource.Contains(HarlemHellEpicDropPolicy.Rule),
-                "三个真实超星空终点均准备80/10/10哈林、泰波尔斯、超界条件分支");
+                "真实白斯只取泰波尔斯，其余两终点保持80/10/10条件分支");
             var superOnly = new HarlemHellEpicDropPolicy(harlem, normal, local.Weapons, local.Tayberrs, legend,
                 new() { CosmoTayberrsPermille = 0, CosmoSuperPermille = 1000 }, cosmo, local.Super);
             var superPlan = superOnly.Extend(new("真实超界候选配置", []), entry, boss, hell);
             var superTrial = superPlan.Trials.Last() with { Attempts = 1 };
-            That(superTrial.RarityPools[4].SecondaryItems!.Entries.Length == 25,
-                "三个实际领主均能装配匹配PVF的25件超界防具");
+            var selectedPool = white ? local.Tayberrs! : local.Super!;
+            That(white ? superTrial.RarityPools[4].AlternatePermille == 1000 && superTrial.RarityPools[4].SecondaryItems is null :
+                superTrial.RarityPools[4].SecondaryItems!.Entries.Length == 25,
+                "白斯专属策略不被其它领主的超界配置覆盖");
+            WhiteCosmoDropTests.RunResources(items, local, entry, boss);
             int cursor = 0;
-            foreach (var candidate in local.Super!.Entries)
+            foreach (var candidate in selectedPool.Entries)
             {
                 var isolated = new DungeonDropGenerationPlan(superPlan.ResourceSource, [superTrial]);
                 var draws = new Queue<(int Bound,int Value)>([(superTrial.ProbabilityDenominator,0),
                     (DungeonDropRatePlan.RarityDenominator,superTrial.RarityPools[3].Threshold),
-                    (1000,0),(local.Super.TotalWeight,cursor)]);
+                    (1000,0),(selectedPool.TotalWeight,cursor)]);
                 var generated = isolated.Generate(bound =>
                 {
                     if(draws.Count==0) return 0;
@@ -379,7 +385,7 @@ internal static class HarlemHellEpicDropTests
                 },DateTimeOffset.Parse("2026-10-23T00:00:00Z"));
                 That(draws.Count==0,"实际生成消费全部确定性奖励抽样");
                 That(generated is [{ Item: { } item }] && item.ItemId == candidate.Template.Id,
-                    "超界配置经实际领主奖励生成器逐件验证，不仅检查池中存在：" + candidate.Template.Id);
+                    "真实领主策略逐件生成白斯泰波尔斯或其它领主超界，不仅检查池中存在：" + candidate.Template.Id);
                 cursor = candidate.CumulativeWeight;
             }
         }

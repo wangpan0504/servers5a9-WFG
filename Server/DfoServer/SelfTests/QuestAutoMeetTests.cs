@@ -64,7 +64,18 @@ internal static class QuestAutoMeetTests
             var computer = new CharacterStatComputer(characters);
             var ordinary = actual.All.Where(quest => quest.Condition == "[meet npc]" && quest.SubType == 1 &&
                 QuestEligibility.InspectResource(quest).Entry == QuestResourceEntry.Ordinary).ToArray();
-            That(ordinary.Length == 43,"当前43条正常普通会面sub1资源，不将专用入口或废弃定义计入");
+            int[] originalIds = [1683,2002,2637,2680,2888,2900,2912,4391,4427,4428,4429,4430,4431,4432,4433,4434,4435,
+                4539,4728,5783,5835,6050,6080,6170,6880,6924,6927,7905,7912,7925,7938,7957,7959,7961,7963,7968,7971,
+                8672,10104,10106,10108,10109,10110];
+            That(ordinary.Where(quest => originalIds.Contains(quest.Id)).Select(quest => quest.Id).Order().SequenceEqual(originalIds),
+                "原43条自动会面资源完整保留，不以总数掩盖遗漏或替换");
+            var additions = ordinary.Where(quest => !originalIds.Contains(quest.Id)).ToArray();
+            That(additions is [{ Id:8660, Grade:"[episode]", SubType:1, Npc:614, IntData:[469], MinimumLevel:94, MaximumLevel:99 } episode] &&
+                QuestEpisodeEntry.Supports(episode), "唯一新增普通自动会面为完整已支持超时空剧情首步8660");
+            var firstEpisode = actual.Get(8660);
+            That(QuestEligibility.InspectResource(firstEpisode with { Id=8672 }).Entry == QuestResourceEntry.Dedicated &&
+                QuestEligibility.InspectResource(firstEpisode with { Definition=firstEpisode.Definition! with { ExposedByNpc=false } }).Entry != QuestResourceEntry.Ordinary,
+                "episode首步白名单不泛开其它专用或隐藏定义");
             foreach (var quest in ordinary)
             {
                 That(quest.IntData is [> 0] && QuestStateProgress.Type(quest) == 4 &&
@@ -213,7 +224,7 @@ internal static class QuestAutoMeetTests
             }
         }
         finally { Directory.Delete(root,true); }
-        Console.WriteLine($"PASS {Count-checks} 43条自动会面资源与合成31/33/34、普通奖励/回滚/恢复断言（不执行主线）");
+        Console.WriteLine($"PASS {Count-checks} 原43条及新增8660自动会面资源与合成31/33/34、普通奖励/回滚/恢复断言（不执行主线）");
     }
 
     static StoryQuest AutoMeet() => QuestEligibilityTests.Quest(100) with

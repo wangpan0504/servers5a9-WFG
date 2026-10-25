@@ -69,17 +69,19 @@ internal static class QuestBilmarkEntryTcpTests
                         InventoryRewardGrantService.Create(template,1)))}
                 });
             }
+            QuestDailyCoexistence? daily = null;
             using (var peer = Open(fixture,account))
             {
                 peer.Select(0,prepared:true);
+                daily = new(fixture,created.Id,13047,1656);
                 peer.Send(31,Request(31,3693,[])); peer.Expect(1,31); drain(peer,null);
-                That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY quest_id",created.Id) is [[3656L,0L],[3693L,0L]],
+                That(daily!.OtherRows("quest_id,condition_state","ORDER BY quest_id") is [[3656L,0L],[3693L,0L]],
                     "真实31接取有小盒子的零奖励末子，父子归零但不提前归档");
                 peer.Send(34,Request(34,3656,[255,255,1,0,255,255]));
                 var ack = peer.Expect(1,34).Body; drain(peer,null);
                 That(ack.Length > 10 && ack[0] == 1 && U16(ack,1) == 3656 && ack[3] == 44 &&
                     fixture.Query("SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0",created.Id) is [[3656L]] &&
-                    fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]] &&
+                    daily!.OtherRows("count(*)") is [[0L]] &&
                     fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10164767",created.Id) is [[0L]],
                     "单个正式父34成功，原事务扣一个小盒子、清父子槽并只建立父领奖回执");
                 string state = fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",created.Id)+fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id);
@@ -116,9 +118,11 @@ internal static class QuestBilmarkEntryTcpTests
             string parentAcceptance = "", childAcceptance = "";
             long childSlot = -1, deathCount = 0;
             byte[] lastDeath = [];
+            QuestDailyCoexistence? daily = null;
             using (var peer = Open(fixture,account))
             {
                 peer.Select(0,prepared:true,resumeTown:true,room:false);
+                daily = new(fixture,created.Id,13047,1656,progress:true);
                 That(peer.Id == created.Id && Materials() == 0,"比尔马克独立账号选中唯一角色且未预置小盒子");
                 string before = State();
                 peer.Send(31,Request(31,3692,[])); peer.Expect(1,31,[0,18,0]); drain(peer,null);
@@ -149,7 +153,7 @@ internal static class QuestBilmarkEntryTcpTests
                     "未清返回后的重进入场分配新尝试，仍保留原接取");
                 if (requested != 3692)
                 {
-                    That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id)
+                    That(daily!.OtherRows("quest_id,condition_state")
                         is [[3656L,2L]] && Acceptance(3656) == parentAcceptance,
                         "父或普通0入场加载只借子布局，不创建子接取或更改父身份");
                     AcceptClearChild();
@@ -272,7 +276,7 @@ internal static class QuestBilmarkEntryTcpTests
 
             string Acceptance(ushort quest) => (string)fixture.Query(
                 "SELECT acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,quest)[0][0];
-            object[][] Progress() => fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY quest_id",created.Id);
+            object[][] Progress() => daily!.OtherRows("quest_id,condition_state","ORDER BY quest_id");
             long Materials() => (long)fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10164767",created.Id)[0][0];
             string State() => fixture.Snapshot("SELECT * FROM characters WHERE id=$p0",created.Id)+
                 fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)+

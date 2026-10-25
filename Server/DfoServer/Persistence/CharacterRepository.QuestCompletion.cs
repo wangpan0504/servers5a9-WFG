@@ -19,7 +19,7 @@ internal sealed partial class CharacterRepository
     public QuestCompletionCommit CommitQuestCompletion(AccountOwners.Lease owner, QuestCompletionPlan plan) => owner.Execute(() =>
     {
         var expected = plan.Expected; var clear = plan.AuthoritativeClear; var reward = plan.ExperienceReward;
-        uint? goldMailId = null;
+        uint? goldMailId = null, resourceMailId = null;
         var active = expected.ActiveMainQuests.SingleOrDefault(row => row.AcceptanceId == plan.AcceptanceId);
         var closed = plan.ClosedChildren.Select(row => row.AcceptanceId).ToHashSet();
         if (plan.CompletedChild is { } terminalChild) closed.Add(terminalChild.AcceptanceId);
@@ -45,7 +45,7 @@ internal sealed partial class CharacterRepository
             !plan.AccountCompletedAfter.SequenceEqual((plan.AccountQuest ? expected.AccountCompletedQuests.Append((int)plan.QuestId) : expected.AccountCompletedQuests)
                 .Concat(plan.SyncedQuestIds).Distinct().Order()))
             throw new InvalidDataException("领奖必须使用原接取、完整资产和成长规划");
-            if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 60 or 64 or 65 or 70) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
+            if (plan.ConditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 60 or 64 or 65 or 67 or 70) || reward.BaseExperience < 0 || reward.DifficultyWeight < 0 ||
             plan.Snapshot is null || plan.MailedGoldAmount != 0 && plan.MailedGoldAmount != plan.GoldAmount ||
             plan.ConditionType is not (0 or 42) && active.ConditionState != 0 && !(plan.CompletedChild is not null && active.ConditionState == 1) ||
             plan.TotalRequestedExperience == 0 && plan.GrowthPlan is not null || plan.TotalRequestedExperience != 0 && plan.GrowthPlan is null ||
@@ -102,7 +102,9 @@ internal sealed partial class CharacterRepository
                     throw new InvalidDataException("相同领奖身份的规则、请求或持久结果发生变化");
                 var granted = JsonSerializer.Deserialize<ImmutableArray<QuestGrantedItem>>(S("rewards")!);
                 if (plan.MailedGoldAmount != 0)
-                    goldMailId = ReadQuestGoldMail(db, tx, QuestGoldMail(owner, current, plan));
+                    goldMailId = ReadQuestDeliveryMail(db, tx, QuestGoldMail(owner, current, plan));
+                if (plan.ResourceMail is not null)
+                    resourceMailId = ReadQuestDeliveryMail(db, tx, QuestResourceMail(owner, current, plan));
                 VerifyQuestGrantedItems(plan, granted);
                 var changed = JsonSerializer.Deserialize<ImmutableArray<InventoryItem>>(S("changed_items")!);
                 // 已发布v13只改变七个奖励槽；保留旧回执，不补写新的来源。
@@ -266,13 +268,19 @@ internal sealed partial class CharacterRepository
             if (goldMailError != MailboxError.None) throw new InvalidOperationException("任务金币邮件提交失败：" + goldMailError);
             goldMailId = goldMail;
         }
+        if (plan.ResourceMail is not null)
+        {
+            var (error, mailId) = DeliverMailInTransaction(db, tx, QuestResourceMail(owner, committed, plan));
+            if (error != MailboxError.None) throw new InvalidOperationException("任务声明邮件提交失败：" + error);
+            resourceMailId = mailId;
+        }
         tx.Commit();
         return Result(committed, grantedItems, false, true, checked((uint)(plan.TargetLearning.Experience - expected.Learning.Experience)));
 
         QuestCompletionCommit Result(Character character, ImmutableArray<QuestGrantedItem> rows, bool duplicate, bool projection, uint gained) =>
             new(character, clear, reward, rows, duplicate, projection, expected.Level, expected.Learning) {
                 QuestId = plan.QuestId, AcceptanceId = plan.AcceptanceId, ConditionType = plan.ConditionType,
-                GoldAmount = plan.GoldAmount, MailedGoldAmount = plan.MailedGoldAmount, GoldMailId = goldMailId,
+                GoldAmount = plan.GoldAmount, MailedGoldAmount = plan.MailedGoldAmount, GoldMailId = goldMailId, ResourceMailId = resourceMailId,
                 GainedExperience = gained, StagePlan = plan.StagePlan, OrdinaryExperience = plan.OrdinaryExperience,
                 ContractExperience = plan.ContractExperience, TotalRequestedExperience = plan.TotalRequestedExperience, TpAmount = plan.TpAmount, HellChallenge = plan.HellChallenge, Consumed = plan.Consumed, Currencies = plan.Currencies,
                 ChangedSlots = plan.Inventory.ChangedSlots.Concat(plan.Inventory.ChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot)
@@ -283,13 +291,23 @@ internal sealed partial class CharacterRepository
             };
     });
 
+    static MailboxDelivery QuestResourceMail(AccountOwners.Lease owner, Character character, QuestCompletionPlan plan)
+    {
+        var mail = plan.ResourceMail!;
+        if (mail.QuestId != plan.QuestId || mail.Declaration.Time != 1 || mail.FrozenAt != plan.FrozenAt)
+            throw new InvalidDataException("任务声明邮件必须属于原任务完成规划");
+        return new("quest-resource:" + character.Id + ":" + plan.AcceptanceId.ToString("N"),
+            new(character.Id, owner.Account, character.Name, character.Job, character.GrowType, character.Level),
+            QuestMailPlan.Sender, mail.Declaration.Body, 0, mail.Attachments, mail.FrozenAt.ToUnixTimeSeconds());
+    }
+
     static MailboxDelivery QuestGoldMail(AccountOwners.Lease owner, Character character, QuestCompletionPlan plan) => new(
         "quest-gold:" + character.Id + ":" + plan.AcceptanceId.ToString("N"),
         new(character.Id, owner.Account, character.Name, character.Job, character.GrowType, character.Level),
         "任务奖励", "本次任务金币因携带空间不足已保存在永久邮件，可腾出空间后领取。",
         plan.MailedGoldAmount, [], plan.FrozenAt.ToUnixTimeSeconds());
 
-    static uint ReadQuestGoldMail(SqliteConnection db, SqliteTransaction tx, MailboxDelivery delivery)
+    static uint ReadQuestDeliveryMail(SqliteConnection db, SqliteTransaction tx, MailboxDelivery delivery)
     {
         using var query = db.CreateCommand();
         query.Transaction = tx;
@@ -297,7 +315,7 @@ internal sealed partial class CharacterRepository
         query.Parameters.AddWithValue("$key", delivery.Key);
         using var reader = query.ExecuteReader();
         if (!reader.Read() || reader.GetString(1) != MailDeliveryContent(delivery))
-            throw new InvalidDataException("领奖回执的原金币邮件缺失或冻结内容已变化");
+            throw new InvalidDataException("领奖回执的原邮件缺失或冻结内容已变化");
         // 重放只恢复既有结果；已领取或删除的邮件也不重建、不补发。
         return checked((uint)reader.GetInt64(0));
     }
@@ -308,7 +326,13 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("领奖账本奖励缺失或UID重复");
         for (int index = 0; index < rewards.Length; index++) {
             var actual = rewards[index]; var expected = plan.Rewards[index];
-            if (actual.Item.Uid <= 0 || actual.Item.Position != expected.Position || actual.Item.Core != expected.Core ||
+            var planned = plan.Inventory.After.Find(expected.Position) ?? throw new InvalidDataException("领奖计划缺少奖励目的槽");
+            // 宠物分配UID后只有Core.Value随真实实例更新；详情与其余核心必须逐项等于冻结计划。
+            var core = expected.Core.Kind == GameWorld.Items.ItemKind.Creature
+                ? expected.Core with { Value = checked((int)actual.Item.Uid) } : expected.Core;
+            actual.Item.ValidateDetails(allocating: false);
+            if (actual.Item.Uid <= 0 || actual.Item.Position != expected.Position || actual.Item.Core != core ||
+                actual.Item.Creature != planned.Creature || actual.Item.Avatar != planned.Avatar ||
                 actual.GrantedCount != expected.GrantedCount || expected.ExpectedDestinationUid != 0 && actual.Item.Uid != expected.ExpectedDestinationUid)
                 throw new InvalidDataException("实际领奖UID、完整Core、槽位或增量与规划不同");
         }

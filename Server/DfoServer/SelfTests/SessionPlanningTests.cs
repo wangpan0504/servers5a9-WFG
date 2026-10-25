@@ -744,6 +744,8 @@ internal static class SessionPlanningTests
         public void SeedDeletionGraph(ushort id)
         {
             new AuthenticationService(new AuthenticationRepository(Database)).Create(Owner.Account, "fixture-password");
+            string training=JsonSerializer.Serialize(new DfoServer.Game.Pvp.PvpTrainingSkills(
+                new(0,[new(0,0,0,[]),new(1,0,0,[])]),0,Guid.Empty));
             Sql($$"""
                 INSERT INTO account_client_settings VALUES('planning',zeroblob(204));
                 INSERT INTO account_card_memberships(account,black_diamond_expires,gold_card_expires,revision) VALUES('planning',9999999999,9999999999,7);
@@ -810,6 +812,11 @@ internal static class SessionPlanningTests
                   experience_amount,gold_amount,before_level,after_level,before_experience,after_experience,before_revision,revision,rewards,clear_acceptance_id)
                   VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',30,'1234567890abcdef1234567890abcdef','instance',1,1,
                     1,'test','test','test',0,1,0,'normal',1,1,0,1,1,0,1,0,1,'[]','1234567890abcdef1234567890abcdef');
+                INSERT INTO character_operation_hope_reward_receipts(character_id,account,instance_id,acceptance_id,task_attempt,
+                  maze_ordinal,quest_id,clear_epoch,generation,before_revision,revision,before_level,after_level,
+                  before_experience,requested_experience,after_experience,plan_snapshot,rewards,changed_items,created_at)
+                  VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','1234567890abcdef1234567890abcdef',1,
+                    0,6177,1,1,0,1,1,1,0,0,0,'{}','[]','[]',1);
                 INSERT INTO character_quest_stage_witnesses VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',30,1,13,1,'Granted','{}');
                 INSERT INTO character_quest_stage_claims VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','1234567890abcdef1234567890abcdef',13,1,2,1,1);
                 INSERT INTO character_dungeon_settlement_receipts(character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,
@@ -834,6 +841,8 @@ internal static class SessionPlanningTests
                   VALUES({{id}},4,95001,2001);
                 INSERT INTO character_title_progress VALUES({{id}},'planning',6501,1,2,3,0);
                 INSERT INTO character_title_sections VALUES({{id}},'planning',0,1);
+                INSERT INTO character_epic_production VALUES({{id}},101000747,1000,1,2,1,0,0,0,0);
+                INSERT INTO character_pvp_training_skills VALUES({{id}},'{{training}}','1234567890abcdef1234567890abcdef',0);
                 INSERT INTO character_collectbox_state VALUES({{id}},'planning',2);
                 INSERT INTO character_collectbox_slots VALUES({{id}},'planning',2,3,104);
                 INSERT INTO character_collectbox_expirations VALUES({{id}},'planning',2,2000000000);

@@ -906,6 +906,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
     /// </summary>
     public static string? TransferBlocked(ItemCore core, ItemTemplate template)
     {
+        if (template.PvpFreeEquipment) return "决斗专用初始装备不可转移";
         string attach = NormalizeAttachType(template.AttachType);
         return attach switch
         {

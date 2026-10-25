@@ -55,9 +55,19 @@ internal sealed partial class CharacterRepository
         DungeonIncountRow? row, InventoryPlan? consumption, ImmutableArray<AccountIncountCharge> account = default, bool increment = true, bool check = true) =>
         owner.Execute(() =>
     {
-        var charges = account.IsDefault ? [] : account;
         using var db = database.Open();
         using var tx = db.BeginTransaction(deferred: false);
+        var result = CommitDungeonIncountInTransaction(db, tx, owner, expected, dungeon, now, row, consumption, account, increment, check);
+        if (result is not null) tx.Commit();
+        return result;
+    });
+
+    DungeonIncountCommit? CommitDungeonIncountInTransaction(SqliteConnection db, SqliteTransaction tx,
+        AccountOwners.Lease owner, Character expected, int dungeon, DungeonIncountPeriod now,
+        DungeonIncountRow? row, InventoryPlan? consumption, ImmutableArray<AccountIncountCharge> account,
+        bool increment, bool check = true)
+    {
+        var charges = account.IsDefault ? [] : account;
         var usage = ReadDungeonIncount(db, tx, expected.Id, owner.Account, dungeon, now);
         if (check && row is not null && !DungeonIncountPolicy.CanEnter(row, usage)) return null;
         var used = charges.Select(charge => ReadAccountIncount(db, tx, owner.Account, charge.Dungeon, charge.Period)).ToArray();
@@ -98,7 +108,6 @@ internal sealed partial class CharacterRepository
                 command.Parameters.AddWithValue("$used", Math.Min(checked(used[index] + 1), 1000000));
                 command.ExecuteNonQuery();
             }
-        tx.Commit();
         return new DungeonIncountCommit(character, usage);
-    });
+    }
 }

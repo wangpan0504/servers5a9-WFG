@@ -54,6 +54,34 @@ internal static class DungeonEntryPlanTests
             "没有真实普通maze时仍保留任务路线，不伪造房间");
     }
 
+    static void Issue704Routes(PvfArchive pvf)
+    {
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var quest = quests.Get(7917);
+        That(quest.IntData.SequenceEqual([154,-1,-1,20]) && QuestHuntProgress.Initial(quest) == 20,
+            "704真实暗精灵名誉市民绑定远古墓穴20只普通怪");
+        var active = new ActiveMainQuest(0,7917,20) { AcceptanceId = Guid.NewGuid() };
+        var character = new Character(1,0,"Mission",0,new(38,1,1,1),null)
+            { Level = 95, CompletedQuests = [7916], ActiveMainQuests = [active] };
+        That(DungeonEntryPlan.TryCreate(dungeons,character,154,7917,0,out var entry,out var reason,quest:quest,quests:quests) &&
+            entry is { RouteQuestId: 7917 } && QuestHuntProgress.Bound(active,entry),
+            "704使用PVF真实7917关联迷宫并保留接取身份：" + reason);
+        var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
+        var monsters = entry!.Maze.MapSpecification!.SelectMany(map => DungeonMonsterPlan.FromRoom(
+            rooms.Get(map,requirePassiveDefinitions:false),entry.CharacterId,1,entry.BasisLevel,playerTeam:entry.PlayerTeam).Monsters).ToArray();
+        var progress = active;
+        foreach (var monster in monsters)
+            progress = QuestHuntProgress.MonsterDeath([progress],entry,quests,monster).Single();
+        That(progress.ConditionState == 0 && progress.AcceptanceId == active.AcceptanceId,
+            "7917实际四房资源提供足够普通怪物完成20只目标，不用Boss或客户端33补数");
+        var recommended = quests.Get(8690);
+        That(QuestDungeonClearProgress.Supports(recommended) && QuestDungeonClearProgress.Initial(recommended) == 10,
+            "704真实推荐地下城任务十次初值");
+        That(QuestAutoDailyPlan.Supports(quests.Get(8691)) && QuestCycle.Daily(quests.Get(8691)),
+            "后继按自动每日分配，而不是普通一次性手工接取");
+    }
+
     static void ClearedStoryUsesOrdinaryRoute(DungeonCatalog catalog, QuestCatalog quests, Character basis)
     {
         var quest = quests.Get(3344);
@@ -158,7 +186,9 @@ internal static class DungeonEntryPlanTests
     {
         int checks = Count;
         GriefTowerResourceTests.Run(pvf);
+        Issue704Routes(pvf);
         SpecialNormalDungeonEntryTests.Run(pvf);
+        DungeonStoryFlowTests.RunStoryResources(pvf);
 
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         // GM伴侣只在普通副本注入：祭坛/塔/亡者峡谷按资源标记整类排除，普通副本与Boss Rush保持放行。

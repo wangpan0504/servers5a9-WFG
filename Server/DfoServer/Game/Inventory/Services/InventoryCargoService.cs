@@ -13,7 +13,7 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
         return list switch
         {
             InventoryListType.PersonalCargo => !template.PersonalCargoForbidden && !attach.Equals("trade delete", StringComparison.OrdinalIgnoreCase),
-            InventoryListType.AccountCargo => !template.AccountCargoForbidden && core.EquipmentLockId == 0 && core.TradeRestriction != 1 &&
+            InventoryListType.AccountCargo => !template.PvpFreeEquipment && !template.AccountCargoForbidden && core.EquipmentLockId == 0 && core.TradeRestriction != 1 &&
                 (attach.Equals("free", StringComparison.OrdinalIgnoreCase) || attach.Equals("account", StringComparison.OrdinalIgnoreCase) ||
                  attach.Equals("sealing", StringComparison.OrdinalIgnoreCase)),
             _ => true

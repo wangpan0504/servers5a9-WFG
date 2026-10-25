@@ -158,6 +158,7 @@ internal static partial class DatabaseSchemaTests
         try
         {
             PlayerInteractionPreviewUpgrade(root);
+            VerifyReceiptDefinitionFixture(root);
             ObjectKeyUpgrade(root);
             AuraCooldownUpgrade(root);
             ZeroExperienceUpgrade(root);
@@ -167,6 +168,7 @@ internal static partial class DatabaseSchemaTests
             ConsumableStatesUpgrade(root);
             BlacklistCountUpgrade(root);
             IncountNumberingUpgrade(root);
+            Quest704NumberingUpgrade(root);
             TalismanUpgrade(root);
             string path = Path.Combine(root, "game.db");
             var characters = new CharacterRepository(path);
@@ -2188,16 +2190,50 @@ internal static partial class DatabaseSchemaTests
     static void DropGuildSchema(SqliteConnection db) =>
         Execute(db, "DROP INDEX IF EXISTS guild_members_grade; DROP TABLE IF EXISTS guild_members; DROP TABLE IF EXISTS guilds");
 
+    static void VerifyReceiptDefinitionFixture(string root)
+    {
+        string folder = Path.Combine(root, "definition-fixture");
+        Directory.CreateDirectory(folder);
+        string path = Path.Combine(folder, "game.db");
+        using var db = Open(path);
+        Execute(db, """
+            CREATE TABLE fixture_receipts(id INTEGER PRIMARY KEY,value TEXT,omitted TEXT DEFAULT 'fallback');
+            CREATE INDEX fixture_value ON fixture_receipts(value);
+            CREATE TABLE fixture_audit(id INTEGER);
+            CREATE TRIGGER fixture_insert AFTER INSERT ON fixture_receipts
+              BEGIN INSERT INTO fixture_audit VALUES(new.id); END;
+            INSERT INTO fixture_receipts VALUES(1,'keep','old');
+            """);
+        string before = Snapshot(path);
+        object? schemaVersion = Query(db, "PRAGMA schema_version");
+        int calls = 0;
+        ChangeReceiptDefinition(db, "fixture_receipts", ddl => { calls++; return ddl; });
+        Check(calls == 1, "无变化回退仍只计算一次目标声明");
+        Check(Snapshot(path) == before && Equals(Query(db, "PRAGMA schema_version"), schemaVersion),
+            "无变化且无列投影的回退不写schema、行、索引或触发器");
+        ChangeReceiptDefinition(db, "fixture_receipts", ddl => ddl, ["\"id\"", "\"value\""]);
+        Check(Query(db, "SELECT value||':'||omitted FROM fixture_receipts WHERE id=1") is "keep:fallback",
+            "显式列投影即使DDL相同也执行重建，不误判为空操作");
+        Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name IN('fixture_value','fixture_insert')") is 2L &&
+            Query(db, "SELECT count(*) FROM fixture_audit") is 1L, "投影重建保留索引和触发器，历史行不重放触发器");
+        Execute(db, "INSERT INTO fixture_receipts(id,value) VALUES(2,'next')");
+        Check(Query(db, "SELECT count(*) FROM fixture_audit") is 2L, "重建恢复的触发器仍观察新的写入");
+    }
+
     static void ChangeReceiptDefinition(SqliteConnection db, string table, Func<string,string> change, string[]? columns = null)
     {
         string ddl = (string)Query(db,"SELECT sql FROM sqlite_schema WHERE name='" + table + "'")!;
+        string updated = change(ddl);
+        // 嵌套旧版夹具可能重复回退同一声明；无列投影且声明未变时保留原表，不重复复制数据。
+        if (columns is null && string.Equals(updated, ddl, StringComparison.Ordinal))
+            return;
         var names = columns ?? ColumnNames(db,table);
         using var command = db.CreateCommand();
         command.CommandText = "SELECT sql FROM sqlite_schema WHERE tbl_name='" + table + "' AND type IN('index','trigger') AND sql IS NOT NULL";
         var dependencies = new List<string>();
         using (var reader = command.ExecuteReader()) while (reader.Read()) dependencies.Add(reader.GetString(0));
         Execute(db,"CREATE TEMP TABLE saved_receipt AS SELECT rowid AS old_rowid,* FROM " + table);
-        Execute(db,"DROP TABLE " + table); Execute(db,change(ddl));
+        Execute(db,"DROP TABLE " + table); Execute(db,updated);
         Execute(db,"INSERT INTO " + table + "(rowid," + string.Join(',',names) + ") SELECT old_rowid," + string.Join(',',names) + " FROM temp.saved_receipt");
         Execute(db,"DROP TABLE temp.saved_receipt");
         foreach (string dependency in dependencies) Execute(db,dependency);
@@ -2336,6 +2372,12 @@ internal static partial class DatabaseSchemaTests
                 if (oldVersion < 50) Execute(db, "DROP TABLE IF EXISTS character_assault_daily");
                 if (oldVersion < 61) Execute(db, "DROP TABLE IF EXISTS character_crack_daily");
                 if (oldVersion < 63) Execute(db, "DROP TABLE IF EXISTS character_growup_change");
+                if (oldVersion < 92) RewindTalismanInventory(db);
+                if (oldVersion < 93) Execute(db,"DROP TABLE IF EXISTS character_epic_production");
+                if (oldVersion < 94) Execute(db,"DROP TABLE IF EXISTS quest_eligibility_mail_dispatches");
+                if (oldVersion < 95) Execute(db,"DROP TABLE IF EXISTS character_pvp_training_skills");
+                if (oldVersion < 96) Execute(db,"DROP TABLE IF EXISTS account_pvp_private_characters");
+                if (oldVersion < 97) Execute(db,"DROP TABLE IF EXISTS character_operation_hope_reward_receipts");
                 if (oldVersion < 88) Execute(db, "DROP TABLE IF EXISTS character_dungeon_incount");
                 if (oldVersion < 89) Execute(db, "DROP TABLE IF EXISTS account_dungeon_incount");
                 if (oldVersion < 90) Execute(db, "DROP TABLE character_social_links; DROP TABLE account_social_links; DROP TABLE account_social_requests");

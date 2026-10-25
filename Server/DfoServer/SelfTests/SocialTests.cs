@@ -147,6 +147,7 @@ internal static class SocialTests
             That(repo.AccountFriends(a.Account) is [{ Person.Id: 0, Person.Adventure: "TeamB" }] &&
                 repo.ResolveAccountFriend(sa.CaptureSocialActor()!, "TeamB", false, true, false).Accepted && repo.AccountFriends(a.Account).Length == 0,
                 "对方删尽角色后冒险团好友仍可展示并删除");
+            Execute("DROP TABLE character_epic_production; DROP TABLE quest_eligibility_mail_dispatches; DROP TABLE character_pvp_training_skills; DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts");
             Execute("DROP TABLE account_social_requests");
             Execute(SocialSchema.LegacyRequestSql);
             Execute("INSERT INTO account_social_requests VALUES('sociala','socialb','旧申请',123); PRAGMA user_version=90; ALTER TABLE account_social_links ADD COLUMN unexpected INTEGER");
@@ -158,7 +159,7 @@ internal static class SocialTests
             That(Scalar("PRAGMA user_version") == SqliteMigrations.CurrentVersion && Scalar("SELECT group_id FROM account_social_requests") == 0 &&
                 Scalar("SELECT count(*) FROM account_social_requests WHERE message='旧申请' AND memo='' AND created=123") == 1,
                 "v90申请原样升级到当前版本，未知旧偏好默认无组和空备注");
-            Execute("DROP TABLE character_social_links; DROP TABLE account_social_requests; DROP TABLE account_social_links; PRAGMA user_version=87; CREATE VIEW account_social_requests AS SELECT 1 AS collision");
+            Execute("DROP TABLE character_epic_production; DROP TABLE quest_eligibility_mail_dispatches; DROP TABLE character_pvp_training_skills; DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE character_social_links; DROP TABLE account_social_requests; DROP TABLE account_social_links; PRAGMA user_version=87; CREATE VIEW account_social_requests AS SELECT 1 AS collision");
             Reject<InvalidDataException>(() => new CharacterRepository(path), "撞名视图拒绝升级");
             That(Scalar("PRAGMA user_version") == 87 && Scalar("SELECT count(*) FROM sqlite_schema WHERE name='character_social_links'") == 0,
                 "迁移失败回滚全部新表和版本");

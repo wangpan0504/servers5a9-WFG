@@ -38,7 +38,7 @@ internal static class GriefTowerPersistenceTests
             var basic = new GriefTowerAdmission(fresh,new(true,"test-basic",20261023,1),5115);
             var first = Charge(role,basic);
             var before = role;
-            role = repository.CommitDungeonEntry(owner,role,300,first);
+            role = repository.CommitDungeonEntry(owner,role,300,first).Character;
             var entered = repository.ReadGriefTower(owner,role.Id);
             That(entered.State == new GriefTowerEntryState(20261023,1,20261023,false,1) &&
                 entered.InstanceId == first.Identity.InstanceId && entered.TaskAttempt == 1 &&
@@ -59,7 +59,7 @@ internal static class GriefTowerPersistenceTests
             That(JsonSerializer.Serialize(repository.LoadCharacter(owner,role.Slot))==JsonSerializer.Serialize(role) &&
                 repository.ReadGriefTower(owner,role.Id)==entered,"账本失败完整回滚门票、角色revision及尝试号");
             Execute("DROP TRIGGER grief_late_failure");
-            role=repository.CommitDungeonEntry(owner,role,301,retryCharge);
+            role=repository.CommitDungeonEntry(owner,role,301,retryCharge).Character;
             That(role.Inventory.Items.Single().Core.Count==1 && repository.ReadGriefTower(owner,role.Id).State.AccountUsed==1,
                 "同角色重试恰扣一张邀请函，不再扣账号基础次数");
             repository=new(path);
@@ -75,7 +75,7 @@ internal static class GriefTowerPersistenceTests
             Execute("DROP TABLE character_grief_tower_clears; "+GriefTowerSchema.ClearSql);
             repository=new(path);
             var nextDay = new GriefTowerAdmission(repository.ReadGriefTower(owner,other.Id),new(true,"test-next-day",20261024,1),5115);
-            other=repository.CommitDungeonEntry(owner,other,300,Charge(other,nextDay));
+            other=repository.CommitDungeonEntry(owner,other,300,Charge(other,nextDay)).Character;
             That(repository.ReadGriefTower(owner,role.Id).State is { AccountDay:20261024,AccountUsed:1,CharacterDay:20261023 },
                 "新游戏日只重置账号日额度，不把其它角色旧挑战改成当天重试");
             repository.Delete(owner,repository.LoadDeletionTarget(owner,role.Slot));

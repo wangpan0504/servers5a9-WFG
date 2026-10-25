@@ -16,7 +16,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
     CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null,
-    DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null)
+    EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
@@ -94,6 +94,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await DungeonCardMembershipProjection.RefreshAsync(context, frozenAt: appearanceTime);
         await context.Notify(NotiPacketType.MILEAGE_DATA, MileagePackets.State(c.Inventory.AccountWallet), "account_mileage_initialize");
         await context.Notify(NotiPacketType.EPIC_BOOK_INFO, EpicBookPackets.Info(c.Inventory.EpicPieces, pieces), "epic_book_initialize");
+        if (epicProduction is not null)
+            await epicProduction.InitializeAsync(context);
         if (collectBoxes is not null)
             await collectBoxes.InitializeAsync(context);
         // #233 实验：下发今日强袭模式索引，避免客户端以默认0xFF判定“今天无法入场”。
@@ -115,6 +117,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // NOTI1153：技能窗职业变更菜单的已变更次数(报价索引)与等级(012A6DAA 等级>=50拒绝)。
         await context.Notify(NotiPacketType.CHARACTER_MANAGE_INFO,
             GrowUpChangePackets.ManageInfo(context.Session.GrowUpChangeCount(), c.Level), "growup_change_info");
+        await TrainingSkillsAsync(context, initializing: true);
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
         // EVENT_INFO 整表替换客户端事件集合：赛丽亚 2037 之外，加入当前处于 GM 团本时段的卡事件（282/2449/414），去掉团队频道卡的「非可入场时间」。
         await context.NotifyProtected(NotiPacketType.EVENT_INFO,
@@ -197,6 +200,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (detached is null)
             return;
         await detached;
+        await TrainingSkillsAsync(context, canSend: CanSend);
         await LocationAsync(context, receipt.Character, canSend: CanSend);
         context.Owner.Execute(() =>
         {
@@ -211,6 +215,15 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // Join已排入远端Actor/区域入场；本人和同屏接收者都在目标角色建立后才收到到达特效。
         if (arrival is not null)
             await context.Notify(NotiPacketType.SHOW_EFFECT, arrival, "teleport_aura_arrival", CanSend);
+    }
+
+    // 在地区切换触发客户端训练对象绑定前，先给出独立技能快照；不覆盖普通 NOTI19 双树。
+    internal static async Task TrainingSkillsAsync(GameConnectionContext context, bool initializing = false, Func<bool>? canSend = null)
+    {
+        if (context.Session.ReadPvpTrainingSkills(initializing) is not {State: { } state, Receipt: { } receipt}) return;
+        bool Guard() => (canSend?.Invoke() ?? true) && context.Session.CanPublishPvpTrainingSkills(receipt, initializing);
+        await context.Notify(NotiPacketType.ARCADE_MODE_SKILL_USE_STATUS, [0], "pvp_training_skill_status", Guard);
+        await context.Notify(NotiPacketType.ARCADE_MODE_SKILL_DATA, PvpTrainingPackets.Skills(state), "pvp_training_skill_snapshot", Guard);
     }
 
     public void Join(GameConnectionContext context)

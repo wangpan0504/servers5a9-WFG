@@ -79,6 +79,15 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
     private async Task<CommandResult> ResetAsync(GameConnectionContext context, Packet packet)
     {
         var parsed = SkillRequests.ParseReset(packet.Body);
+        if(context.Session.InPvpTrainingSkillArea)
+        {
+            var training=context.Session.ResetPvpTrainingSkills(parsed.Context,parsed.Mode,catalog);
+            if(!training.Success || training.Receipt is not { } committed) return CommandResult.Handled;
+            bool GuardTraining()=>context.Session.CanPublishLearning(committed);
+            await context.Reply(CmdPacketType.SKILL_INIT,SkillPackets.Reset(parsed.Context),"training_skill_reset",GuardTraining);
+            await context.Notify(NotiPacketType.ARCADE_MODE_SKILL_DATA,PvpTrainingPackets.Skills(training.State!),"training_skill_reset_snapshot",GuardTraining);
+            return CommandResult.Handled;
+        }
         var result = context.Session.ResetSkills(parsed.Context, parsed.Mode, catalog);
         if (!result.Success)
         {
@@ -101,6 +110,14 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
             Connection = context.Id, parsed.Context, parsed.From, parsed.To, parsed.ContextIndex, parsed.Mode,
             Length = packet.Body.Length, parsed.BodyChecksum, parsed.ChecksumMatches
         });
+        if(context.Session.InPvpTrainingSkillArea)
+        {
+            var training=context.Session.MovePvpTrainingSkills(new(parsed.Context,parsed.From,parsed.To,parsed.ContextIndex,parsed.Mode),catalog);
+            if(training.Success && training.Receipt is { } committed)
+                await context.Reply(CmdPacketType.CHANGE_SKILLSLOT,SkillPackets.SlotChanged(parsed.Context,parsed.From,parsed.To),
+                    "training_skill_slot_committed",()=>context.Session.CanPublishLearning(committed));
+            return CommandResult.Handled;
+        }
         var result = context.Session.MoveSkillSlot(new(parsed.Context, parsed.From, parsed.To, parsed.ContextIndex, parsed.Mode), catalog);
         if (!result.Success)
         {
@@ -126,6 +143,15 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) 
             return CommandResult.CloseConnection;
         var request = new SkillLearningCommand(parsed.Context, parsed.Mode, Array.AsReadOnly(parsed.Items
             .Select(item => new SkillLearningChangeRequest(item.SkillId, item.Decrease != 0, item.Magnitude)).ToArray()));
+        if(context.Session.InPvpTrainingSkillArea || parsed.Mode==3)
+        {
+            var training=context.Session.LearnPvpTrainingSkills(request,catalog);
+            if(!training.Success || training.Receipt is not { } committed)
+                await context.Reply(CmdPacketType.BUY_SKILL,SkillPackets.Failure(0xD9),"training_skill_rejected");
+            else await context.Reply(CmdPacketType.BUY_SKILL,SkillPackets.TrainingSuccess(parsed.Mode,training.State!,training.Changes),
+                "training_skill_committed",()=>context.Session.CanPublishLearning(committed));
+            return CommandResult.Handled;
+        }
         var result = context.Session.LearnSkills(request, catalog);
         if (result.Success)
         {

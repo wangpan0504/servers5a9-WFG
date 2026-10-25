@@ -46,7 +46,7 @@ internal static class DungeonDespairClearTests
             authority, out var run, out _), "绝望实际首层演员与路线建立原实例");
         var admission = DungeonDespairEntryPolicy.Prepare(11008, character, day, new(), new(0, 0), tower, definition, 0)!.Entry;
         character = repo.CommitDungeonEntry(fixture.Owner, character, key,
-            new(null, 0, run!.Snapshot.Identity, entry.StartMap.Id) { DungeonId = floor.DungeonId, Special = admission });
+            new(null, 0, run!.Snapshot.Identity, entry.StartMap.Id) { DungeonId = floor.DungeonId, Special = admission }).Character;
         var empty = new InventoryPlan(character.Inventory, character.Inventory, "despair_clear_reward");
         That(run.PrepareDespairClear(character, admission, day, 1000, empty) is null,
             "没有实际清图不能预先推进绝望楼层");

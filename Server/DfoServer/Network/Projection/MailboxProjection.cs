@@ -11,6 +11,7 @@ internal sealed class MailboxProjection(MailboxService service, OnlineSessionDir
 {
     public async Task InitializeAsync(GameConnectionContext context)
     {
+        _ = context.Session.EnsureQuestEligibilityMail(initializing: true);
         var page = context.Session.OpenMailbox(service, initializing: true);
         await ListAsync(context, page.Page, page.Receipt, initializing: true);
     }

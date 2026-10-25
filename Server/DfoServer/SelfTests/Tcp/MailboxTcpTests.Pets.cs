@@ -39,7 +39,7 @@ internal static partial class MailboxTcpTests
         Summary[] pending;
         using (var peer = Open(fixture, "20001"))
         {
-            peer.Select();
+            peer.Select(prepared: true);
             var page = ReadList(peer.Mailbox.Single(), creatureItems: new HashSet<int> { 63022 });
             var rows = page.Summaries.Where(row => row.MailId == normal.MailId).ToArray();
             That(rows.Length == 2 && rows.All(row => row.ItemId == 63022 && row.Extra is { Length: 5 }),

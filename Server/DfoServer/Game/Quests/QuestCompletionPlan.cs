@@ -31,17 +31,19 @@ internal sealed class QuestCompletionPlan
         byte? profession, CharacterLearningState? rewardLearning, ushort multiplier, ImmutableArray<QuestCurrencyReward> currencies,
         byte equipmentSlots, ushort tpAmount, ImmutableArray<ActiveMainQuest> closedChildren, InventoryPlan? reclaim, uint mailedGold,
         int? completedParentId = null, QuestStagePlan? stagePlan = null, byte? expertJob = null,
-        ProficiencyAdvance? proficiency = null, ActiveMainQuest? completedChild = null, StoryQuest? terminalSeeking = null)
+        ProficiencyAdvance? proficiency = null, ActiveMainQuest? completedChild = null, StoryQuest? terminalSeeking = null, QuestMailPlan? resourceMail = null)
     {
+        ResourceMail = resourceMail;
         Expected = expected; QuestId = active.QuestId; AcceptanceId = active.AcceptanceId; QuestSlot = active.Slot;
         CompletedParentId = completedParentId;
         StagePlan = stagePlan;
         AuthoritativeClear = clear;
         ConditionType = quest.Condition switch { "[clear map]" => 3, "[condition under clear]" => 1, "[clear a dungeon]" => 45, "[seeking]" => 0, "[seek n meet npc]" => 25, "[hunt enemy]" => 6, "[hunt monster]" => 2,
             "[custom quest]" when QuestRentalProgress.Supports(quest) || QuestExpertJobProgress.Craft(quest) => 19,
+            "[epic production]" when QuestEpicProductionProgress.Supports(quest) => 67,
             "[self disjoint item]" when QuestExpertJobProgress.SelfDisjoint(quest) => 17,
             "[quest clear]" => 44, "[clear multi quest]" => 70, "[question]" => 42, "[reach the range]" => 64, "[look cinematic]" => 65,
-            "[custom multi condition]" when QuestDazzlementStorage.Matches(quest) => 60,
+            "[custom multi condition]" when QuestDazzlementStorage.Matches(quest) || DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest) => 60,
             _ => QuestStateProgress.Type(quest) ?? (byte)4 };
         // 历史归档不是新的通关领奖，沿用已有无清图凭据的零奖励回执类型，不改库结构。
         if (completedParentId is not null && ConditionType is 1 or 3 or 45) ConditionType = 4;
@@ -52,7 +54,7 @@ internal sealed class QuestCompletionPlan
         Currencies = currencies;
         GoldAmount = gold; MailedGoldAmount = mailedGold; FrozenAt = now;
         DailyPeriod = QuestCycle.Daily(quest) ? QuestCycle.Day(now) : 0;
-        AccountQuest = quest.Definition!.AccountQuest;
+        AccountQuest = QuestAccountPolicy.SharedCompletion(quest);
         AccountDailyClaimsAfter = AccountQuest && DailyPeriod != 0 ? expected.AccountQuestDailyClaims.SetItem(quest.Id,DailyPeriod) : expected.AccountQuestDailyClaims;
         Answer = quest.Condition == "[question]" ? checked((byte)active.ConditionState) : null;
         AnswersAfter = Answer is { } answer ? expected.QuestAnswers.SetItem(quest.Id,answer) : expected.QuestAnswers;
@@ -82,6 +84,12 @@ internal sealed class QuestCompletionPlan
         Snapshot = JsonSerializer.Serialize(new { QuestId, AcceptanceId, QuestSlot, ConditionType, RewardSelector, Multiplier,
             ExperienceReward, GoldAmount, goldBase, goldMultiple, penalty, Consumed, Rewards, Currencies, FrozenAt, DailyPeriod, AccountQuest,
             AuthoritativeClear, Answer, Learning = TargetLearning, Level = TargetLevel, GrowType = TargetGrowType, EquipmentSlotFlags = TargetEquipmentSlotFlags });
+        if (ResourceMail is not null)
+        {
+            var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
+            snapshot["ResourceMail"] = JsonSerializer.SerializeToNode(ResourceMail);
+            Snapshot = snapshot.ToJsonString();
+        }
         if (completedChild is not null)
         {
             var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
@@ -133,7 +141,7 @@ internal sealed class QuestCompletionPlan
         {
             var snapshot = System.Text.Json.Nodes.JsonNode.Parse(Snapshot)!.AsObject();
             snapshot["Threshold"] = JsonSerializer.SerializeToNode(new {
-                RequiredChildren = quest.IntData, quest.Definition.MinimumClearCount, ClosedChildren,
+                RequiredChildren = quest.IntData, quest.Definition!.MinimumClearCount, ClosedChildren,
                 ReclaimedItems = reclaim!.ChangedSlots.Select(slot => new {
                     Slot = slot, Before = reclaim.Before.Find(slot), After = reclaim.After.Find(slot)
                 }).ToArray()
@@ -206,6 +214,7 @@ internal sealed class QuestCompletionPlan
     // 只在任务资源声明金币时计算。
     public uint GoldAmount { get; }
     public uint MailedGoldAmount { get; }
+    public QuestMailPlan? ResourceMail { get; }
     public uint DirectGoldAmount => GoldAmount - MailedGoldAmount;
 
     public static QuestCompletionPreparation Prepare(Character expected, StoryQuest quest, ushort selector,
@@ -223,7 +232,7 @@ internal sealed class QuestCompletionPlan
                 throw new InvalidDataException("交付倍数只适用于具有实际材料的普通重复寻物任务");
             var active = expected.ActiveMainQuests.SingleOrDefault(row => row.QuestId == quest.Id);
             var completedParent = QuestRelationProgress.CompletedParentChild(expected,quest,quests);
-            if (active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
+            if (!DfoServer.Game.Pvp.PvpTrainingExposure.Allows(expected,quest) || active is null || active.AcceptanceId == Guid.Empty || active.Slot >= 30 ||
                 QuestEligibility.Completed(expected).Contains(quest.Id) || expected.CompletedQuests.Distinct().Count() != expected.CompletedQuests.Length ||
                 QuestEligibility.InspectResource(quest).Entry is not (QuestResourceEntry.Ordinary or QuestResourceEntry.Creature) && !QuestRelationProgress.DialogueChild(quest, quests) &&
                     !QuestRelationProgress.ThresholdParent(quest,quests) && !QuestHiddenEntry.Direct(quest,quests) && !QuestAutoDailyPlan.Supports(quest) ||
@@ -313,6 +322,10 @@ internal sealed class QuestCompletionPlan
                     QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)) != 0)
                     throw new InvalidDataException("阈值父任务必须达到真实子任务完成数量");
             }
+            else if (DfoServer.Game.Pvp.PvpTrainingProgress.Matches(quest))
+            {
+                if (active.ConditionState != 0) throw new InvalidDataException("本次接取的训练通道尚未全部完成");
+            }
             else if (QuestDazzlementStorage.Matches(quest))
             {
                 if (active.ConditionState != 0) throw new InvalidDataException("贮藏箱尚未在任务NPC所在城镇开启");
@@ -321,6 +334,10 @@ internal sealed class QuestCompletionPlan
                 QuestClientSceneProgress.DungeonCinematic(quest))
             {
                 if (active.ConditionState != 0) throw new InvalidDataException("范围或演出的原生终末事件尚未达成");
+            }
+            else if (QuestEpicProductionProgress.Supports(quest))
+            {
+                if (active.ConditionState!=0) throw new InvalidDataException("史诗加工尚未由本次接取后的成功事务达成");
             }
             else if (rental)
             {
@@ -346,6 +363,18 @@ internal sealed class QuestCompletionPlan
             // 先关闭未选子任务并回收其任务物品，再规划父奖励，避免回收刚发的同ID奖励。
             var paid = reclaim?.After ?? expected.Inventory;
             var consumed = ImmutableArray.CreateBuilder<QuestConsumedItem>();
+            if(DfoServer.Game.Pvp.PvpTrainingProgress.Manual(quest))
+            {
+                var manual=paid.Items.Where(item=>item.Position.List==InventoryListType.Main &&
+                    item.Core.ItemId==DfoServer.Game.Pvp.PvpTrainingProgress.ManualItemId && item.Core.Count>0 &&
+                    item.Core.EquipmentLockId==0 && !item.Core.IsExpired(now.ToUnixTimeSeconds()))
+                    .OrderBy(item=>item.Position.Index).FirstOrDefault();
+                if(manual is null) throw new InvalidDataException("训练秘籍尚未实际取得或不能消耗");
+                var deletion=InventoryDeleteService.Plan(paid,manual.Position,manual.Core.Value,1);
+                if(!deletion.Accepted) throw new InvalidDataException("训练秘籍不能消耗");
+                paid=deletion.Plan!.After;
+                consumed.Add(new(manual.Position,manual.Uid,manual.Core.ItemId,1));
+            }
             var materialQuest = terminalSeeking ?? quest;
             if (materialQuest.Condition is "[seeking]" or "[seek n meet npc]")
             {
@@ -430,7 +459,8 @@ internal sealed class QuestCompletionPlan
                     { Failure = grant.Error == 17 ? QuestCompletionFailure.InventoryCapacity : QuestCompletionFailure.InventoryUnsupported };
             var after = grant.Plan.After;
             if (grant.Plan.ChangedCurrencies.Any(kind => ItemSlotBoundService.CurrencySlot(kind) is null) || grant.Plan.ChangedEpicPieces.Length != 0 ||
-                grant.Plan.ChangedSlots.Any(slot => slot.List != InventoryListType.Main))
+                grant.Plan.ChangedSlots.Any(slot => slot.List != InventoryListType.Main &&
+                    !(slot.List == InventoryListType.Pet && after.Find(slot) is { Core.Kind: ItemKind.Creature, Creature: not null })))
                 throw new NotSupportedException("任务特殊持有域奖励尚未确认");
             uint mailedGold = 0;
             if (gold != 0)
@@ -493,6 +523,10 @@ internal sealed class QuestCompletionPlan
                 int deadline = expected.Inventory.Find(DfoServer.Game.Creatures.CreatureRules.EquippedSlot)!.ExpireTime;
                 creaturePrecondition = new(expected, deadline == 0 ? null : deadline);
             }
+            var resourceMail = QuestMailPlan.HasMail(quest) && QuestMailPlan.Read(quest).Time == 1
+                ? QuestMailPlan.Prepare(quest, items, pieces, now) : null;
+            if (resourceMail is not null && multiplier != 1)
+                throw new NotSupportedException("任务声明邮件不与批量领奖倍数合并");
             QuestCompletionPlan Create(CharacterGrowthPlan? finalGrowth, CharacterLearningState? finalLearning, QuestStagePlan? stage = null)
             {
                 ProficiencyAdvance? proficiency = null;
@@ -504,7 +538,7 @@ internal sealed class QuestCompletionPlan
                     new(expected.Inventory, after, "quest_complete", creaturePrecondition), finalGrowth, rewards.ToImmutable(), consumed.ToImmutable(),
                     gold, goldBase, goldMultiple, penalty, now, quests, clear, profession, finalLearning, multiplier, currencies.ToImmutable(),
                     QuestCharacterReward.EquipmentSlots(expected,quest),tpAmount,closedChildren,reclaim,mailedGold, stagePlan: stage,
-                    expertJob: expertJob, proficiency: proficiency, completedChild: completedChild, terminalSeeking: terminalSeeking);
+                    expertJob: expertJob, proficiency: proficiency, completedChild: completedChild, terminalSeeking: terminalSeeking, resourceMail: resourceMail);
             }
             var normal = Create(growth, rewardLearning);
             if ((stageGraph is null) != (stageState is null)) throw new InvalidDataException("阶段图与持久状态必须同时提供");

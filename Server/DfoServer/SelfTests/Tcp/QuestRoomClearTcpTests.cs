@@ -45,10 +45,12 @@ internal static class QuestRoomClearTcpTests
                 { Level = 65,AcceptedStoryLevel = 65,CompletedQuests = done.ToArray(),InitialLearning = learning });
         }
         byte[] lastDeath = [];
+        QuestDailyCoexistence? daily = null;
         using (var peer = Open(fixture))
         {
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             That(peer.Id == created.Id,"中途清房选角绑定本条实际角色");
+            daily = new(fixture,created.Id,13041,1636,progress:true);
             byte[] information = [];
             var map = FormalDungeonTcpTests.Enter(peer,3525,82,row => information = row,
                 requestQuestId: ordinary ? (ushort)0 : (ushort)3525);
@@ -56,7 +58,7 @@ internal static class QuestRoomClearTcpTests
             var target = maze.MapSpecification!.Single(row => row.Id == 92247);
             var boss = maze.MapSpecification!.Single(row => row.Id == 92251);
             That(information[8] == boss.Position.X && information[9] == boss.Position.Y && target.Position != boss.Position &&
-                fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id) is [[3525L,1L]],
+                daily!.OtherRows("quest_id,condition_state") is [[3525L,1L]],
                 "3525及普通0保留真实92251终点，入场规划不造3560接取");
             FormalDungeonTcpTests.Load(peer);
             int enabled = 0,bossChecks = 0,deathCount = 0;
@@ -82,8 +84,7 @@ internal static class QuestRoomClearTcpTests
                 "目标房少一敌人仍不能清图、推进父任务或发送115/31");
             lastDeath = FormalDungeonTcpTests.Death(U16(map,enemies[^1]+6),peer.Id,map[enemies[^1]+12]);
             Kill(enemies[^1]);
-            That(enabled == 0 && bossChecks == 0 && parentZeroPublished && childCompletePublished && fixture.Query(
-                "SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id) is [[3525L,0L]] &&
+            That(enabled == 0 && bossChecks == 0 && parentZeroPublished && childCompletePublished && daily!.OtherRows("quest_id,condition_state") is [[3525L,0L]] &&
                 fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3560",peer.Id) is [[3560L]] &&
                 fixture.Query("SELECT quest_id,experience_amount FROM character_quest_completion_receipts WHERE character_id=$p0",peer.Id) is [[3560L,0L]],
                 "第六敌人死亡只清92247，生产39自动交付无奖励3560并推进真实父任务，不提前通关");
@@ -223,7 +224,7 @@ internal static class QuestRoomClearTcpTests
         {
             peer.Select(0,prepared:true,resumeTown:true,room:false);
             That(peer.Id == created.Id && fixture.Query(
-                "SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id).Length == 0,
+                "SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",peer.Id) is [[13050L,1666L]],
                 "3753独立账号未预写活动任务或完成状态");
             byte[] information = [];
             var map = FormalDungeonTcpTests.Enter(peer,3753,104,row => information = row,requestQuestId:requested);

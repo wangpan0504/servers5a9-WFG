@@ -128,6 +128,7 @@ internal static partial class DatabaseSchemaTests
             var role = repository.Create(owner, new NewCharacter("Numbering", new(38, 1, 450, 234), null));
             using (var db = Open(path))
             {
+                Execute(db,"DROP TABLE character_epic_production; DROP TABLE quest_eligibility_mail_dispatches; DROP TABLE character_pvp_training_skills; DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts");
                 if (social)
                 {
                     Execute(db, "INSERT INTO account_social_links VALUES('numbering-a','numbering-b',123,'备注',2);");

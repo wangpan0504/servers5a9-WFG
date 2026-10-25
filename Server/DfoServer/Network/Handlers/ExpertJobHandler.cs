@@ -95,7 +95,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         if (current is not null && ExpertJobCraft.TryPlan(current, scripts, items, goldLimits, pieces, parsed.First, parsed.Second,
             parsed.Third, Random.Shared.Next, DateTimeOffset.UtcNow, out var craft, out craftError))
         {
-            var crafted = context.Session.CommitExpertJobCraft(craft.Inventory, craft.Experience);
+            var crafted = context.Session.CommitExpertJobCraft(craft.Inventory, craft.Experience, craft.SuccessCount > 0 ? quests : null);
             if (!crafted.Accepted || crafted.Receipt is not { } craftedReceipt)
             {
                 await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB, ExpertJobPackets.Fail(19), "expert_job_compound_commit");
@@ -113,30 +113,8 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
                 "expert_job_compound_crafted", Crafted);
             return CommandResult.Handled;
         }
-        bool cardSlot = parsed.Third is not (0 or ushort.MaxValue);
-        if (current is not null && (scripts.TryRecipe(type, parsed.First > int.MaxValue ? 0 : (int)parsed.First, out _) ||
-            type == 1 && cardSlot))
-        {
-            await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB, ExpertJobPackets.Fail(craftError), "expert_job_compound_rejected");
-            return CommandResult.Handled;
-        }
-        if (type == 1 || QuestExpertJobProgress.TutorialQuest(type) is not { } questId)
-        {
-            await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB, ExpertJobPackets.Fail(19), "expert_job_compound_rejected");
-            return CommandResult.Handled;
-        }
-        var receipt = context.Session.ObserveExpertJobTutorial(questId, quests);
-        if (receipt is not { Outcome: QuestLifecycleOutcome.Committed or QuestLifecycleOutcome.Unchanged })
-        {
-            await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB, ExpertJobPackets.Fail(19), "expert_job_compound_rejected");
-            return CommandResult.Handled;
-        }
-        if (receipt.Commit is { ProjectionCurrent: false }) return CommandResult.CloseConnection;
-        bool Guard() => context.Session.CanPublishQuestLifecycle(receipt);
-        if (receipt.Commit is not null)
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests),
-                "expert_job_compound_quest", Guard);
-        await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB, ExpertJobPackets.CompoundEmpty(), "expert_job_compound_observed", Guard);
+        // 未知配方、材料不足与无效卡片槽都必须拒绝；教程只随真实产物的原子事务推进。
+        await context.Reply(CmdPacketType.COMPOUND_ITEM_BY_EXPERT_JOB, ExpertJobPackets.Fail(craftError), "expert_job_compound_rejected");
         return CommandResult.Handled;
     }
 

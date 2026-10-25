@@ -56,7 +56,7 @@ internal static class DungeonSpecialEntryTests
                 "账本失败不留下扣费、次数、key或尝试号的一半提交");
         }
         finally { fixture.Sql("DROP TRIGGER fail_special_entry"); }
-        var committed = repo.CommitDungeonEntry(owner, before, 500, charge);
+        var committed = repo.CommitDungeonEntry(owner, before, 500, charge).Character;
         That(committed.Inventory.Gold == 78000 && committed.DungeonState!.NextObjectKey == 500 &&
             committed.DungeonState.LastAttempt == identity.TaskAttempt &&
             repo.LoadSpecialEntryUsage(owner, committed, day, DungeonSpecialEntryKind.Blood) == new DungeonSpecialEntryUsage(1, 1),
@@ -72,7 +72,7 @@ internal static class DungeonSpecialEntryTests
         That(fixture.Read().Inventory.Gold == committed.Inventory.Gold && fixture.Read().DungeonState == committed.DungeonState,
             "计数冲突也回滚费用和key");
         next = next with { Special = charge.Special! with { Expected = new(1, 1) } };
-        committed = repo.CommitDungeonEntry(owner, committed, 501, next);
+        committed = repo.CommitDungeonEntry(owner, committed, 501, next).Character;
         That(repo.LoadSpecialEntryUsage(owner, committed, day, DungeonSpecialEntryKind.Blood) == new DungeonSpecialEntryUsage(2, 1) &&
             repo.LoadSpecialEntryUsage(owner, committed, day + 1, DungeonSpecialEntryKind.Blood) == new DungeonSpecialEntryUsage(0, 0) &&
             repo.LoadSpecialEntryUsage(owner, committed, day, DungeonSpecialEntryKind.Despair) == new DungeonSpecialEntryUsage(0, 0),
@@ -149,7 +149,7 @@ internal static class DungeonSpecialEntryTests
             authorities.Add(created!, authority);
             var currentUsage = repo.LoadSpecialEntryUsage(owner, committed, day, DungeonSpecialEntryKind.Ultimate);
             committed = repo.CommitDungeonEntry(owner, committed, actors.NextObjectKey, new(null,0,created!.Snapshot.Identity,map.Id)
-                { DungeonId = 11007, Special = new(day,DungeonSpecialEntryKind.Ultimate,0,0,currentUsage) });
+                { DungeonId = 11007, Special = new(day,DungeonSpecialEntryKind.Ultimate,0,0,currentUsage) }).Character;
             return created;
         }
     }

@@ -36,12 +36,16 @@ internal static class UserStateTests
             {
                 UserState.CharacterSelect => requirement == UserStateRequirement.Owner,
                 UserState.EnteringWorld => requirement is UserStateRequirement.Owner or UserStateRequirement.CharacterSelected,
-                UserState.Town or UserState.DungeonSelect => requirement != UserStateRequirement.DungeonContext,
+                UserState.Town or UserState.DungeonSelect or UserState.PvpRoom => requirement != UserStateRequirement.DungeonContext,
                 UserState.Dungeon or UserState.TutorialDungeon => true,
                 _ => false
             };
             That(UserStatePolicy.Meets(state, requirement) == expected, "最低生命周期门禁不以玩法枚举排序推断资格");
         }
+        That(UserStatePolicy.Read(SessionPhase.PvpRoom,true,true,false,null,false,true)==UserState.PvpRoom,
+            "训练房必须有独立实例，不借用普通城镇或副本状态");
+        Reject<InvalidOperationException>(()=>UserStatePolicy.Read(SessionPhase.PvpRoom,true,true,false,null,false),"无训练实例不能宣称训练房");
+        Reject<InvalidOperationException>(()=>UserStatePolicy.Read(SessionPhase.Town,true,true,false,null,false,true),"普通城镇不能同时残留训练实例");
         That(!UserStatePolicy.Meets((UserState)255, UserStateRequirement.Owner) &&
             !UserStatePolicy.Meets(UserState.Dungeon, (UserStateRequirement)255), "未定义状态和资格拒绝");
         Reject<InvalidOperationException>(() => UserStatePolicy.Read(SessionPhase.Town, true, false, false, null, false), "未就绪不能宣称城镇");
@@ -53,7 +57,9 @@ internal static class UserStateTests
             bool expected = to == SessionPhase.Unselected || from switch
             {
                 SessionPhase.Unselected => to == SessionPhase.Town,
-                SessionPhase.Town or SessionPhase.MapSelect => to is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Loading,
+                SessionPhase.Town => to is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Loading or SessionPhase.PvpRoom,
+                SessionPhase.MapSelect => to is SessionPhase.Town or SessionPhase.MapSelect or SessionPhase.Loading,
+                SessionPhase.PvpRoom => to == SessionPhase.Town,
                 SessionPhase.Loading => to is SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement,
                 SessionPhase.Dungeon => to is SessionPhase.Town or SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement,
                 SessionPhase.Settlement => to is SessionPhase.Town or SessionPhase.Loading or SessionPhase.Settlement,

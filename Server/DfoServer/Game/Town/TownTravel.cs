@@ -4,8 +4,11 @@ using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.Town;
 
+internal sealed record NpcTownVisit(Location Origin, byte Town, byte Area);
+
 internal sealed record TownTravelPlan(Location? Position, Location? Return, string Reason)
 {
+    public NpcTownVisit? NpcVisit { get; init; }
     public bool Accepted => Reason == "ready";
     public static TownTravelPlan Reject(string reason) => new(null, null, reason);
 }
@@ -20,10 +23,21 @@ internal static class TownTravel
         return towns.IsPosition(target, completed) ? target : null;
     }
 
-    public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null)
+    public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null, NpcTownVisit? npcVisit = null)
     {
+        if (character.IsPvpPrivate && request.Town != 10) return TownTravelPlan.Reject("pvp-private-town-only");
         if (request.PreviousTown != character.Position.Town || request.PreviousArea != character.Position.Area)
             return TownTravelPlan.Reject("source-area-mismatch");
+        // 原码 exit town 发送缓存来源的普通 C2S36；只允许本选角成功 NPC 入场留下的精确来源。
+        if (npcVisit is { } visit && request.TargetNpc == 0 && request.Movement == 5 && request.PathKind == 0 &&
+            character.Position.Town == visit.Town && character.Position.Area == visit.Area &&
+            request.Town == visit.Origin.Town && request.Area == visit.Origin.Area &&
+            request.X == visit.Origin.X && request.Y == visit.Origin.Y && towns.HasNpcExit(character.Position, completed))
+        {
+            string admission = towns.DestinationAdmission(visit.Origin, character.Level, completed);
+            return admission == "ready" ? new(visit.Origin with { Direction = character.Position.Direction }, character.Return, "ready")
+                : TownTravelPlan.Reject(admission);
+        }
         // 赛丽亚房间按频道出门：客户端若以区域请求代替 PREV_VILLAGE 指向频道落点区域，按同一出口处理。
         if (request.TargetNpc == 0 && ChannelAreaLanding.RoomExit(towns, channel, character.Position, character.Level, completed) is { } exit &&
             exit.Town == request.Town && exit.Area == request.Area)
@@ -51,7 +65,8 @@ internal static class TownTravel
             : towns.IsRoom(target, completed)
             ? towns.Entrance(target, character.Position, completed)
             : towns.ResolveRoomReturn(target, character.Return, character.Level, completed);
-        return back is null ? TownTravelPlan.Reject("return-gate-unavailable") : new(target, back, "ready");
+        return back is null ? TownTravelPlan.Reject("return-gate-unavailable") : new(target, back, "ready")
+        { NpcVisit = request.TargetNpc == 0 ? null : new(character.Position, target.Town, target.Area) };
     }
 
     public static TownTravelPlan LeaveRoom(Character character, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null)

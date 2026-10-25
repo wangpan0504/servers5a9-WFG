@@ -4,13 +4,24 @@ using System.Text;
 
 namespace DfoServer.Network.Parsers;
 
-internal sealed record CreateCharacterRequest(byte Job, string Name, byte[] Tail);
+internal sealed record CreateCharacterRequest(byte Job, string Name, byte[] Tail)
+{
+    public bool IsPvpPrivate => Tail[6] != 255;
+    public byte PvpGrow => Tail[6];
+}
 internal sealed record DeleteCharacterRequest(ushort RosterIndex, string ConfirmationName);
 // 重排正文为两个u32名册行索引（03B45760→03B42550，源0x8f8、目标edi均为绝对列表索引）。
 // 有槽位空洞时索引不等于持久槽位，必须按最近已发布名册行序映射。
 internal sealed record ChangeCharacterSlotRequest(uint IndexA, uint IndexB);
 internal static class CharacterRequests
 {
+    public static (byte Job,byte Grow) PvpPrivateCheck(ReadOnlySpan<byte> body)
+    {
+        if(body.Length!=8 || BinaryPrimitives.ReadUInt32LittleEndian(body)>15 || BinaryPrimitives.ReadUInt32LittleEndian(body[4..])>5)
+            throw new InvalidDataException("专用角色资格请求必须是合法职业与基础转职两个u32");
+        return ((byte)BinaryPrimitives.ReadUInt32LittleEndian(body),(byte)BinaryPrimitives.ReadUInt32LittleEndian(body[4..]));
+    }
+
     public static void HiddenRoster(ReadOnlySpan<byte> body)
     {
         if (!body.IsEmpty) throw new InvalidDataException("隐藏角色查询正文必须为空");
@@ -93,9 +104,10 @@ internal static class CharacterRequests
         string name = Name(body, 1);
         int width = CharacterName.Encoding.GetByteCount(name);
         ReadOnlySpan<byte> tail = body[(5 + width)..];
-        // tail[8] 是建角界面当前展示的分支索引；保留请求值，创建业务仍使用基础职业。
+        // tail6为FF是普通建角；专用建角tail6/tail8是已证相同基础转职，仍须872会话许可。
         if (body[0] > 15 || tail.Length != 12 || tail[8] > 5 ||
-            !tail[..8].SequenceEqual(new byte[] { 0, 0, 0, 0, 0, 0, 255, 0 }) ||
+            !tail[..6].SequenceEqual(new byte[6]) || tail[7]!=0 ||
+            tail[6]!=255 && (tail[6]>5 || tail[6]!=tail[8]) ||
             !tail[9..].SequenceEqual(new byte[] { 0, 0, 0 }))
             throw new InvalidDataException("Unsupported ordinary Client job or creation tail");
         return new(body[0], name, tail.ToArray());

@@ -71,7 +71,7 @@ internal static class ExpertJobActionTests
 
             var targetTemplate = items.Get(10400);
             var cardRecipe = scripts.KnownCards(1).Order().Select(id => scripts.TryCardRecipe(id, out var recipe) ? recipe : null)
-                .First(recipe => recipe is not null && resources.Enchantments.Get(recipe.BeadId) is { } definition &&
+                .First(recipe => recipe is { RequiredLevel: 9 } && items.Get(recipe.CardId).MinimumLevel <= 50 && resources.Enchantments.Get(recipe.BeadId) is { } definition &&
                     definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)))!;
             var cardCore = InventoryRewardGrantService.Create(items.Get(cardRecipe.CardId));
             var cardSlot = new InventorySlot(InventoryListType.Main, ItemSlotBoundService.Range(cardCore.Kind, InventorySnapshot.Empty).Start);
@@ -92,6 +92,8 @@ internal static class ExpertJobActionTests
             That(enchanting.Plan(enchanter with { ExpertJobRecipes = ImmutableHashSet<int>.Empty }, cardRecipe.RecipeId, gearSlot, cardSlot) is null &&
                 enchanting.Plan(enchanter, cardRecipe.RecipeId + 1, gearSlot, cardSlot) is null,
                 "未学或伪造配方不能附魔");
+            That(enchanting.Plan(enchanter with { ExpertJobExperience = 0 }, cardRecipe.RecipeId, gearSlot, cardSlot) is null,
+                "Lv1不能附魔要求Lv9的卡片，不为截图错误提示取消真实等级门禁");
             var enchanted = enchanting.Plan(enchanter, cardRecipe.RecipeId, gearSlot, cardSlot)!;
             That(enchanted is { Succeeded: true } && enchanted.Inventory.After.Find(cardSlot) is null &&
                 enchanted.Inventory.After.Find(gearSlot)!.Core.EnchantCardId == cardRecipe.CardId,

@@ -127,7 +127,7 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
             return MailboxError.LimitedPeriod;
         if (template.Id != item.Core.ItemId || template.Kind != item.Core.Kind)
             return MailboxError.InvalidAttachment;
-        if (item.Core.TradeRestriction != 0)
+        if (template.PvpFreeEquipment || item.Core.TradeRestriction != 0)
             return MailboxError.NotTradable;
         string attach = Normalize(template.AttachType);
         return attach switch

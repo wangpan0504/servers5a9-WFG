@@ -31,7 +31,8 @@ internal static partial class MailboxTcpTests
         {
             var sender = repository.Create(senderOwner, new("MailSender", resources.Towns.Room, resources.Towns.InitialReturn)
             {
-                Level = 60, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                // 本组专测空/预置邮箱；2670首次资格邮件由独立TCP组核验，明确已完成邀请而非关闭投递。
+                Level = 60, AcceptedStoryLevel = 1, CompletedQuests = [2670], Skills = resources.Characters.Get(0).Skills,
                 Inventory = InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0)) with { Gold = 1_000_000,
                     Items = [.. InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0)).Items,
                         new(0, new(InventoryListType.Main, 9), sourceCore),
@@ -40,7 +41,7 @@ internal static partial class MailboxTcpTests
             });
             equipmentUid = sender.Inventory.Find(new(InventoryListType.Main, 9))!.Uid;
             repository.Create(receiverOwner, new("MailRecv", resources.Towns.Room, resources.Towns.InitialReturn) { Level = 60,
-                AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                AcceptedStoryLevel = 1, CompletedQuests = [2670], Skills = resources.Characters.Get(0).Skills,
                 Inventory = InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0)) });
             PreparePetClaimRole(repository, receiverOwner, resources);
             var service = new MailboxService(repository, items.Items, items.GoldLimits, items.EpicPieces);
@@ -52,7 +53,7 @@ internal static partial class MailboxTcpTests
         using (var sender = Open(fixture))
         using (var receiver = Open(fixture, "20001"))
         {
-            sender.Select(); receiver.Select();
+            sender.Select(prepared: true); receiver.Select(prepared: true);
             That(sender.Mailbox is [var empty] && empty.SequenceEqual(new byte[6]), "空邮箱上线包完整");
             That(ReadList(receiver.Mailbox.Single()).Details.Single().Text == "上线正文", "非空邮箱在入城阶段直接恢复正文");
             sender.Send(324, Build(w => { WriteString(w, "MailRecv"); w.Write((byte)0); }));
@@ -141,14 +142,14 @@ internal static partial class MailboxTcpTests
         await fixture.StartAsync("restarted");
         using (var receiver = Open(fixture, "20001"))
         {
-            receiver.Select();
+            receiver.Select(prepared: true);
             var saved = ReadList(receiver.Mailbox.Single()).Details.Single(row => row.Id == savedText);
             That(saved.State == 3 && saved.Text == "保留正文", "服务重启和重登恢复保存邮件正文与状态");
             Extract(receiver, [0x40000001]); receiver.Expect(1, 95, [0, 21, 0]); receiver.Barrier();
         }
         using (var malformed = Open(fixture))
         {
-            malformed.Select();
+            malformed.Select(prepared: true);
             string unchanged = fixture.Snapshot();
             malformed.Send(315, Build(w => { WriteString(w, "MailRecv"); w.Write(0); w.Write((byte)11); }));
             malformed.Closed();

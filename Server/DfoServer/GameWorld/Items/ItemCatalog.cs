@@ -487,6 +487,7 @@ internal sealed class ItemCatalog
             CreatureEgg = kind == ItemKind.Creature && creatures?.Get(id)?.Egg == true,
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
             CreationRate = CreationRate(text),
+            PvpFreeEquipment = isEquipment && text.Has("pvp free equip"),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
             BossDrop = isEquipment && text.ContainsString("item category", "boss drop"),
             AmplifyPollutionForbidden = isEquipment && text.ContainsString("impossible contents", "pollution"),

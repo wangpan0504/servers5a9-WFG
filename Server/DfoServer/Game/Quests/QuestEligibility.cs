@@ -41,9 +41,9 @@ internal static class QuestEligibility
             return new(QuestResourceEntry.Dedicated, "exception filter需要已确认的单字符串character声明");
         if (quest.MainQuest is not null)
             return new(QuestResourceEntry.Dialogue, "子任务需要父任务及资源顺序的真实入口");
-        if (QuestHiddenEntry.ImmediateShape(quest))
+        if (QuestHiddenEntry.ImmediateShape(quest) || QuestHiddenEntry.NpcDialogueShape(quest))
             return new(QuestResourceEntry.Hidden, "隐藏任务通过合格21候选和884请求开启");
-        if (!definition.ExposedByNpc || !OrdinaryGrade(quest.Grade) && !QuestCycle.NormalDungeonMission(quest))
+        if (!definition.ExposedByNpc || !OrdinaryGrade(quest.Grade) && !QuestCycle.NormalDungeonMission(quest) && !QuestEpisodeEntry.Supports(quest))
             return new(QuestResourceEntry.Dedicated, "隐藏或专用分类任务需要对应入口");
         return new(QuestResourceEntry.Ordinary, "普通任务候选；仍须核对角色、前置及完成状态");
     }
@@ -102,6 +102,8 @@ internal static class QuestEligibility
             return Reject("未装备任务要求的宠物，或宠物种类、等级及进化产物不符");
         if (access.Entry == QuestResourceEntry.Hardcore) return Reject(access.Reason);
         var definition = quest.Definition!;
+        if (!DfoServer.Game.Pvp.PvpTrainingExposure.Allows(character,quest))
+            return Reject("普通与专用决斗角色任务身份不符");
         if (quest.Grade is "[training]" or "[daily random]")
             return Reject("任务需要对应每日专用列表");
         if (character.Job >= Jobs.Length || character.Level is < 1 or > 95)
@@ -164,6 +166,8 @@ internal static class QuestEligibility
         if (definition.NonTargetCharacters.Any(target => (target.Job == "[all]" || target.Job == Jobs[character.Job]) &&
             (target.GrowType == -1 || target.GrowType == grow) && (target.Awakening == -1 || target.Awakening == awakening)))
             return Reject("角色符合任务排除职业条件");
+        if (QuestProfessionReward.LegacySelfAwakening(quest) && awakening != 0)
+            return Reject("旧外传主线觉醒只面向尚未觉醒角色");
         bool selfAwakening = character.Job is 9 or 10 && quest.Grade == "[realization]";
         if (definition.JobChange == 1 && (quest.RewardType == "[grow type]" && grow != 0 ||
                 quest.RewardType != "[grow type]" && ((TransferredStoryAlternative(quest,catalog,character.Job) || TransferredAutoMeet(quest)) ? grow == 0 : grow != 0)) ||

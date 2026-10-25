@@ -8,6 +8,8 @@ namespace DfoServer.Game.Characters;
 internal sealed record Character(ushort Id, ushort Slot, string Name, long Revision, Location Position, Location? Return)
 {
     public byte Job { get; init; }
+    public DfoServer.Game.Pvp.PvpPrivateCharacterState? PvpPrivate { get; init; }
+    public bool IsPvpPrivate => PvpPrivate is not null;
     public byte GrowType { get; init; }
     public byte EquipmentSlotFlags { get; init; }
     // 来自角色设置的场景显示位，不改写位置、进度或资产revision。
@@ -33,10 +35,12 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     // 进行中的主要任务。槽位 0–29 对应 ACK4 的 30 组；空槽不入库。
     public ActiveMainQuest[] ActiveMainQuests { get; init; } = [];
     public CharacterLearningState Learning { get; init; } = CharacterLearningState.Uninitialized;
+    public DfoServer.Game.Pvp.PvpTrainingSkills? PvpTrainingSkills { get; init; }
     public PermanentStatBonuses PermanentStats { get; init; } = PermanentStatBonuses.Empty;
     public InventorySnapshot Inventory { get; init; } = InventorySnapshot.Empty;
     public SkillSwitchInventoryState SkillSwitchInventory { get; init; } = SkillSwitchInventoryState.Empty;
     public DfoServer.Game.CollectBox.CollectBoxState CollectBox { get; init; } = DfoServer.Game.CollectBox.CollectBoxState.Empty;
+    public DfoServer.Game.EpicProduction.EpicProductionState EpicProduction { get; init; } = DfoServer.Game.EpicProduction.EpicProductionState.Empty;
     public CharacterDungeonState? DungeonState { get; init; }
     public CharacterFatigueState? Fatigue { get; init; }
     public DfoServer.Game.Town.TeleportCooldowns TeleportCooldowns { get; init; } = new();
@@ -69,6 +73,7 @@ internal sealed record ActiveMainQuest(byte Slot, ushort QuestId, uint Condition
 // 创建所需的领域数据；数据库不决定出生点，也不区分普通角色和工具准备的角色。
 internal sealed record NewCharacter(string Name, Location Position, Location? Return)
 {
+    public DfoServer.Game.Pvp.PvpPrivateCharacterCreation? PvpPrivateCreation { get; init; }
     public byte Job { get; init; }
     public byte GrowType { get; init; }
     public byte EquipmentSlotFlags { get; init; }
@@ -97,6 +102,9 @@ internal sealed record NewCharacter(string Name, Location Position, Location? Re
             ActiveMainQuests.Where(quest => quest.AcceptanceId != Guid.Empty).Select(quest => quest.AcceptanceId).Distinct().Count() !=
                 ActiveMainQuests.Count(quest => quest.AcceptanceId != Guid.Empty))
             throw new InvalidDataException("Invalid active main quests");
+        PvpPrivateCreation?.Validate();
+        if(PvpPrivateCreation is not null && (Level!=85 || (GrowType&15)>5))
+            throw new InvalidDataException("专用决斗角色必须按85级与合法分支创建");
         InitialLearning.Validate();
         Tutorial?.Validate();
         DungeonState?.Validate();

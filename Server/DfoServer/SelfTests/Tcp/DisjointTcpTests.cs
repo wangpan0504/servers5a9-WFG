@@ -134,6 +134,8 @@ internal static class DisjointTcpTests
         }
         fixture.Sql("INSERT INTO character_expert_job(character_id,account,job_type,expertness) " +
             "SELECT id,account,3,51 FROM characters");
+        var occupied = fixture.Query("SELECT slot FROM character_active_main_quests").Select(row=>(long)row[0]).ToHashSet();
+        int tutorialSlot = Enumerable.Range(0,30).First(slot=>!occupied.Contains(slot));
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.List(owner).Single();
@@ -143,7 +145,7 @@ internal static class DisjointTcpTests
             repo.CommitInventory(owner, current, new(current.Inventory, after, "disjoint_profession_fixture"));
         }
         fixture.Sql("INSERT INTO character_active_main_quests(character_id,slot,quest_id,condition_state,acceptance_id) " +
-            "SELECT id,0,10021,1,'11223344556677889900112233445566' FROM characters");
+            "SELECT id,$p0,10021,1,'11223344556677889900112233445566' FROM characters",tutorialSlot);
         using (var peer = Open(fixture))
         {
             peer.Select(inventoryNotices: [(1, 713), (0, 251)], expertJobInfo: [0, 3, 1, 0, 0, 0, 44, 1, 0, 0]);

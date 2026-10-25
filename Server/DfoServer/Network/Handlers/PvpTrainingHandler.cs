@@ -1,0 +1,106 @@
+using System.Collections.Immutable;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Pvp;
+using DfoServer.GameWorld.Pvp;
+using DfoServer.GameWorld.Quests;
+using DfoServer.Infrastructure;
+using DfoServer.Network.Builders;
+using DfoServer.Network.Parsers;
+using DfoServer.Network.Protocol;
+using DfoServer.GameWorld.Items;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Network.Builders.Inventory;
+
+namespace DfoServer.Network.Handlers;
+
+// 只处理原训练链的私有连招及街机实例，不把普通玩家决斗或裸33进度当训练胜利。
+internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComboCatalog combos,QuestCatalog quests,ServerLog log,
+    ItemCatalog items,GoldLimitCatalog goldLimits,EpicPieceCatalog pieces) : IGameCommandModule
+{
+    public void Register(GameCommandRegistry commands)
+    {
+        commands.Register(CmdPacketType.MAKE_PVP_ROOM,CreateAsync,nameof(PvpTrainingHandler));
+        commands.Register(CmdPacketType.SET_PVP_SEAT_STATE,SeatAsync,nameof(PvpTrainingHandler));
+        commands.Register(CmdPacketType.ARCADEMODE_PVP_ROUND_INFO,RoundAsync,nameof(PvpTrainingHandler));
+        commands.Register(CmdPacketType.PONGUNTOOKUK_REWARD,ManualAsync,nameof(PvpTrainingHandler));
+    }
+
+    async Task<CommandResult> ManualAsync(GameConnectionContext context,Packet packet)
+    {
+        if(packet.Body.Length!=0) return CommandResult.Unhandled;
+        var receipt=context.Session.ObservePvpTrainingTrigger(2674,new(0x40,0,0),quests,true,items,goldLimits,pieces);
+        log.Write("pvp_training_manual",new {Connection=context.Id,Accepted=receipt?.Commit is not null});
+        if(receipt?.Commit is {ProjectionCurrent:false}) return CommandResult.CloseConnection;
+        if(receipt?.Commit is { } commit)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                InventoryPackets.Delta(commit.Character.Inventory,InventoryListType.Main,[..commit.Plan.Inventory.ChangedSlots]),
+                "pvp_training_manual",()=>context.Session.CanPublishQuestLifecycle(receipt));
+        // 015C1DFC只发空1269；物品变动后由0202C140调用015C23A0发33，不虚构独立成功ACK。
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> CreateAsync(GameConnectionContext context,Packet packet)
+    {
+        var request=PvpTrainingRequests.Create(packet.Body);
+        var receipt=request is {Kind:3,MapIndex:0,Setting:0,Mode:>0} or {Kind:1,MapIndex:0,Setting:0,Mode:0}
+            ? context.Session.BeginPvpTraining(Prepare,context.BlocksTownActions) : null;
+        log.Write("pvp_training",new {Connection=context.Id,packet.Opcode,Accepted=receipt is not null,
+            Mode=request.Mode,Instance=receipt?.Run.InstanceId});
+        if(receipt is null) await context.Reply(CmdPacketType.MAKE_PVP_ROOM,PvpTrainingPackets.Rejected(),"pvp_training_rejected");
+        else
+        {
+            bool Current()=>context.Session.CanPublishPvpTraining(receipt);
+            await context.Reply(CmdPacketType.MAKE_PVP_ROOM,PvpTrainingPackets.Created(),"pvp_training_created",Current);
+            await context.Notify(NotiPacketType.PVP_ROOM_INFO,Room(receipt.Run,false),"pvp_training_room",Current);
+        }
+        return CommandResult.Handled;
+
+        PvpTrainingEntry? Prepare(Character character)
+        {
+            var candidates=character.ActiveMainQuests.Where(row=>quests.TryGet(row.QuestId,out var q) &&
+                PvpTrainingProgress.Valid(q,row.ConditionState) && row.ConditionState!=0).ToArray();
+            if(candidates is not [var active] || !quests.TryGet(active.QuestId,out var quest)) return null;
+            if(request.Kind==1) return PvpTrainingEntry.PrepareCombo(character,quest,combos.Resolve(character.Job,character.GrowType));
+            var plan=arcade.Resolve(character.Job,character.GrowType,request.Mode-1);
+            if(plan is null) return null;
+            // 已解析模式池同时用于正式回合校验；不借其它角色或职业提供候选。
+            var source=arcade.Opponents.GetValueOrDefault((character.Job,character.GrowType,plan.Mode.Index));
+            source ??=new(System.Collections.Frozen.FrozenDictionary<int,ImmutableArray<int>>.Empty,plan.Mode.RandomOpponents);
+            return PvpTrainingEntry.Prepare(character,quest,plan.Mode,source) is { } entry ? entry with {Rounds=plan.Allowed,RandomRounds=plan.RandomRounds} : null;
+        }
+    }
+
+    async Task<CommandResult> SeatAsync(GameConnectionContext context,Packet packet)
+    {
+        var request=PvpTrainingRequests.Seat(packet.Body);
+        var run=context.Session.ReadPvpTraining();
+        // 原生公共退出发seat/FE；只结束本人私有训练，不泛化普通换座、观战或其它玩家房间。
+        var receipt=request is {Seat:0,State:254} && run is not null
+            ? context.Session.EndPvpTraining(run.InstanceId) : null;
+        log.Write("pvp_training",new {Connection=context.Id,packet.Opcode,Accepted=receipt is not null,request.Seat,request.State});
+        if(receipt is not null)
+            await context.Notify(NotiPacketType.PVP_SEAT_STATE,PvpTrainingPackets.LeaveSeat(receipt.Run.Entry.Expected.Id,receipt.Run.Entry.IsCombo ? (byte)6 : (byte)10),
+                "pvp_training_exit",()=>context.Session.CanPublishPvpTraining(receipt));
+        // 匹配CMD52没有独立成功ACK合同；由NOTI43清本人席位完成返回。
+        return CommandResult.Handled;
+    }
+
+    Task<CommandResult> RoundAsync(GameConnectionContext context,Packet packet)
+    {
+        var report=PvpTrainingRequests.Round(packet.Body);
+        var current=context.Session.ReadPvpTraining();
+        var receipt=current is null ? null : context.Session.ReportPvpTraining(current,report);
+        log.Write("pvp_training",new {Connection=context.Id,packet.Opcode,Accepted=receipt is not null,
+            report.Event,report.Round,report.Opponent,WonAllRounds=receipt?.WonAllRounds==true});
+        // 1287没有已证实的ACK消费者；不伪造成功包。任务事务另行消费正式事实。
+        return Task.FromResult(CommandResult.Handled);
+    }
+
+    internal static byte[] Room(PvpTrainingRun run,bool removed)
+    {
+        ushort id=run.Entry.Expected.Id;
+        var seats=Enumerable.Range(0,8).Select(index=>new PvpRoomSeat(0,!removed && index==0 ? id : ushort.MaxValue)).ToImmutableArray();
+        // MapIndex为客户端地图选择序号而非50000等MAP ID，保留原请求0；原连招room mode=6，街机为10。
+        return PvpTrainingPackets.Room(new(id,0,0,removed ? (sbyte)-1 : (sbyte)0,0,run.Entry.IsCombo ? (byte)6 : (byte)10,seats,0,0));
+    }
+}

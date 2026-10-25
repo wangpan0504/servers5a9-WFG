@@ -809,6 +809,7 @@ internal static class FormalDungeonPublicationTests
             DfoServer.Game.Tutorials.TutorialCheckpointPlan plan) => inner.CommitTutorialCheckpoint(owner, plan);
         public Character CommitTitleAchievement(AccountOwners.Lease owner, DfoServer.Game.Titles.TitleAchievementPlan plan) => inner.CommitTitleAchievement(owner, plan);
         public InventorySnapshot ReadPublicTitleBook(AccountOwners.Lease owner, ushort characterId) => inner.ReadPublicTitleBook(owner, characterId);
+        public System.Collections.Immutable.ImmutableArray<uint> CommitQuestEligibilityMail(AccountOwners.Lease owner, QuestEligibilityMailPlan plan) => inner.CommitQuestEligibilityMail(owner,plan);
         public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day, QuestAutoDailyPlan? daily = null) => inner.AdvanceQuestCycle(owner, expected, day, daily);
         public CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort id,DateTimeOffset now) => inner.LoadCardMembership(owner,id,now);
         public CardMembership SetCardMembership(AccountOwners.Lease owner,string name,CardMembershipKind kind,long expires) => inner.SetCardMembership(owner,name,kind,expires);
@@ -826,6 +827,10 @@ internal static class FormalDungeonPublicationTests
             if (++freeCalls == 1 && loseFree) throw new IOException("合成免费牌已提交但结果返回丢失");
             return result;
         }
+        public OperationHopeRewardCommit CommitOperationHopeReward(AccountOwners.Lease owner, OperationHopeRewardPlan plan) => inner.CommitOperationHopeReward(owner,plan);
+        public Character ClearOperationHopeAcceptances(AccountOwners.Lease owner, Character expected,
+            DfoServer.GameWorld.Dungeons.OperationHopeCatalog catalog, IReadOnlyList<ActiveMainQuest> removals) => inner.ClearOperationHopeAcceptances(owner,expected,catalog,removals);
+        public Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) => inner.ConsumeOperationHopeAreaFatigue(owner,expected,run);
         public Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run) =>
             inner.ConsumeDungeonRoomFatigue(owner, expected, run);
         PreparedDungeonDeath? first;
@@ -861,6 +866,7 @@ internal static class FormalDungeonPublicationTests
         public Character LoadCharacter(AccountOwners.Lease owner, ushort slot) => inner.LoadCharacter(owner, slot);
         public Character[] List(AccountOwners.Lease owner) => inner.List(owner);
         public bool NameExists(string name) => inner.NameExists(name);
+        public bool CanCreatePvpPrivate(AccountOwners.Lease owner, byte job, byte grow, DfoServer.Game.Pvp.PvpPrivateCharacterCreation creation) => inner.CanCreatePvpPrivate(owner,job,grow,creation);
         public Character Create(AccountOwners.Lease owner, NewCharacter character) => inner.Create(owner, character);
         public CharacterDeletion LoadDeletionTarget(AccountOwners.Lease owner, ushort slot) => inner.LoadDeletionTarget(owner, slot);
         public CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected) => inner.Delete(owner, expected);
@@ -883,12 +889,13 @@ internal static class FormalDungeonPublicationTests
         public DfoServer.Game.ExpertJob.ExpertJobTradeCommit CommitExpertJobTrade(AccountOwners.Lease customerLease, AccountOwners.Lease ownerLease, DfoServer.Game.ExpertJob.ExpertJobTradePlan plan) => inner.CommitExpertJobTrade(customerLease, ownerLease, plan);
         public Character CommitExpertJobAction(AccountOwners.Lease owner, DfoServer.Game.ExpertJob.ExpertJobActionPlan plan) => inner.CommitExpertJobAction(owner, plan);
         public Character CommitExpertJobClear(AccountOwners.Lease owner, Character expected) => inner.CommitExpertJobClear(owner, expected);
+        public Character CommitExpertJobCraft(AccountOwners.Lease owner, Character expected, InventoryPlan inventory, int experience, QuestLifecyclePlan? tutorial = null) => inner.CommitExpertJobCraft(owner, expected, inventory, experience, tutorial);
         public Character CommitExpertJobExperience(AccountOwners.Lease owner, Character expected, int experience) => inner.CommitExpertJobExperience(owner, expected, experience);
         public Character CommitExpertJobGiveUp(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int giveUpState, CharacterLearningState learning) => inner.CommitExpertJobGiveUp(owner, expected, wallet, giveUpState, learning);
         public Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance) => inner.CommitExpertJobMachine(owner, expected, wallet, grade, endurance);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey, weekly);
-        public Character CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
+        public DfoServer.Game.Dungeons.DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
         public DfoServer.Game.Dungeons.GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId) => inner.ReadGriefTower(owner, characterId);
         public DfoServer.Game.Dungeons.DungeonSpecialEntryUsage LoadSpecialEntryUsage(AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.DungeonSpecialEntryKind kind) => inner.LoadSpecialEntryUsage(owner, expected, day, kind);
         public DfoServer.Game.Dungeons.DungeonDespairProgress LoadDespairProgress(AccountOwners.Lease owner, Character expected) => inner.LoadDespairProgress(owner, expected);
@@ -912,6 +919,9 @@ internal static class FormalDungeonPublicationTests
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);
         public Character CommitSkillSwitchInventory(AccountOwners.Lease owner, SkillSwitchInventoryPlan plan) =>
             inner.CommitSkillSwitchInventory(owner, plan);
+        public Character CommitPvpTrainingSkills(AccountOwners.Lease owner,DfoServer.Game.Pvp.PvpTrainingSkillPlan plan) => inner.CommitPvpTrainingSkills(owner,plan);
+        public Character CommitEpicProduction(AccountOwners.Lease owner,DfoServer.Game.EpicProduction.EpicProductionPlan plan) =>
+            inner.CommitEpicProduction(owner,plan);
         public Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan) =>
             inner.CommitCollectBox(owner, plan);
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,

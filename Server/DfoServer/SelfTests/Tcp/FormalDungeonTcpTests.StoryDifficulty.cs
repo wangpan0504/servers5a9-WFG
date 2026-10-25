@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
@@ -102,5 +103,83 @@ internal static partial class FormalDungeonTcpTests
                 is [[1L]] && fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
                 "真实两个主线分支只入场加载，不伪造清图或奖励资格");
         }
+        VerifyHamelinStoryBosses(fixture,resources,growth);
     }
+    static void VerifyHamelinStoryBosses(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)
+    {
+        var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 51 && option.QuestId == -1));
+        var done = area.Quests.Concat(area.AnyQuests.Take(1)).Append(3343).ToHashSet();
+        done.UnionWith(area.Map(done).DungeonGates.Where(gate => gate.Conditions.Length == 0).SelectMany(gate => gate.Quests));
+        var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town,area.Area,checked((ushort)(walk.X+walk.Width/2)),checked((ushort)(walk.Y+walk.Height/2)));
+        Character created;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare("StoryHamelin",resources.Characters.Get(0),position,position,resources.Learning.Get);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with
+            {
+                Level = 53, AcceptedStoryLevel = 53, CompletedQuests = done.ToArray(),
+                InitialLearning = SkillPointLedger.Synchronize(0,0,53,candidate.InitialLearning with
+                    { Experience = growth.GetLevelStartExperience(53) },resources.Learning)
+            });
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            byte[] information = [];
+            var map = Enter(peer,3344,51,row => information = row);
+            That(information[8] == 3 && information[9] == 0 && U32(map,14) == 76320,"真实3344入场发布首个剧情Boss目标");
+            (byte X,byte Y,uint Id)[] path = [(0,0,76320),(1,0,76321),(1,1,76322),(2,1,76323),(3,1,76324),
+                (4,1,76325),(4,0,76326),(3,0,76327),(4,0,76328),(3,0,76329)];
+            int updates = 0;
+            var seen = new HashSet<ushort>();
+            foreach (var room in path)
+            {
+                if (room.Id != 76320)
+                {
+                    byte[] move = new byte[100]; move[0] = room.X; move[1] = room.Y;
+                    peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+                }
+                That(U32(map,14) == room.Id && (room.Id is not (76328 or 76329) || map[13] == 2),
+                    "真实任务重复坐标按PVF阶段换图，76328/76329使用Refresh");
+                Load(peer);
+                if (room.Id == 76329) { peer.Barrier(); break; }
+                foreach (int at in Enumerable.Range(0,map[18]).Select(index => 19+22*index)
+                    .Where(at => map[at+13] <= 3 && map[at+21] == 0).OrderBy(at => map[at+13] == 3))
+                {
+                    ushort key = U16(map,at+6);
+                    That(seen.Add(key),"真实剧情阶段独立key不复用旧死亡身份");
+                    peer.Send(39,Death(key,peer.Id,map[at+12]));
+                    byte[] death = peer.Expect(0,38).Body;
+                    int tail = 4+U16(death,2)*131;
+                    if (room.Id is 76327 or 76328 && map[at+13] == 3)
+                    {
+                        byte expectedX = room.Id == 76327 ? (byte)4 : (byte)3;
+                        Bytes(death.AsSpan(tail).ToArray(),[0,0,255,1,expectedX,0,0],"真实剧情假Boss提交后NOTI38发布下一目标");
+                        updates++;
+                    }
+                    else Bytes(death.AsSpan(tail).ToArray(),[0,0,255,0,0],"普通怪不改变剧情Boss标记");
+                    peer.Expect(0,37);
+                }
+                peer.Barrier();
+            }
+            That(updates == 2 && fixture.Query("SELECT count(*) FROM character_quest_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                "两次剧情假Boss死亡不提前产生最终清图资格");
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
+            peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            byte[] information = [];
+            var map = Enter(peer,3344,51,row => information = row);
+            That(information[8] == 3 && information[9] == 0 && U32(map,14) == 76320 && map[13] == 1,
+                "回城重连重进从新Run首房与初始目标开始，不继承旧阶段或门缓存");
+            Load(peer); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
+            peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+        }
+    }
+
 }

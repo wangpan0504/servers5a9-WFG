@@ -17,7 +17,7 @@ internal sealed record InventoryDiscardPlan(InventoryDiscardRequest Request, Inv
             !source.Core.IsStackable && request.Count != 1)
             return (null, 17);
         if (source.IsExpired(now)) return (null, 104);
-        if (source.Avatar is not null || source.Creature is not null || source.Core.Kind is ItemKind.Avatar or ItemKind.Creature || source.Core.IsRental ||
+        if (template.PvpFreeEquipment || source.Avatar is not null || source.Creature is not null || source.Core.Kind is ItemKind.Avatar or ItemKind.Creature || source.Core.IsRental ||
             source.Core.EquipmentLockId != 0 || source.Core.TradeRestriction != 0 ||
             template.Id != source.Core.ItemId || template.Kind != source.Core.Kind)
             return (null, 19);

@@ -104,6 +104,8 @@ internal sealed partial class SinglePlayerDungeonRun
     private readonly Room[] allRooms;
     private readonly Dictionary<DungeonPoint, Room> conditionalRooms;
     private int storyStageIndex;
+    private DungeonPoint storyBossPosition;
+    private readonly bool storyDummyBosses;
     private readonly HashSet<DungeonMap> enteredLayers = [];
     private readonly Dictionary<DungeonPoint, Room> layerSources = [];
     private DungeonPoint? pendingLayerBaseAck;
@@ -205,7 +207,7 @@ internal sealed partial class SinglePlayerDungeonRun
             .Select(monster => monster.ObjectKey).ToArray()))
         { MapOperation = mapOperation, MapPayload = mapPayload, ConsumedFatigue = consumedFatigue, BossPosition = BossPosition(activeDummyStage) };
 
-    private DungeonPoint BossPosition(int stage) => dummyRooms.Length > 0 ? dummyRooms[stage].Plan.Room.Map.Position : entry.BossMap.Position;
+    private DungeonPoint BossPosition(int stage) => dummyRooms.Length > 0 ? dummyRooms[stage].Plan.Room.Map.Position : storyDummyBosses ? storyBossPosition : entry.BossMap.Position;
 
     // 父脚本子actor的收尾不进入普通击杀集合，不能借此触发清图、经验或任务事实。
     public DungeonRunOutcome RetireSpecialChild(ConfirmedDungeonMonsterDeath death)
@@ -246,6 +248,11 @@ internal sealed partial class SinglePlayerDungeonRun
         connections = route.Connections.SelectMany(connection => new[] { (connection.First, connection.Second), (connection.Second, connection.First) }).ToHashSet();
         current = baseRooms.Single(room => room.Plan.Room.Map == entry.StartMap);
         storyStageIndex = entry.StartMap.StoryStageIndex;
+        // 只有完整MAP级dummy链拥有动态标记，普通剧情分段保留原终点坐标。
+        storyDummyBosses = storyRooms.Length >= 2 && storyRooms.SkipLast(1).All(room =>
+            room.Plan.Room.DeclaredType == "[dummy]" && room.Plan.Monsters.Count(monster => monster.IsDummyMapBoss && monster.IsBlocking) == 1) &&
+            storyRooms[^1].Plan.Monsters.Any(monster => monster.IsBoss);
+        storyBossPosition = storyDummyBosses ? storyRooms[0].Plan.Room.Map.Position : entry.BossMap.Position;
         identity = new(entry.CharacterId, entry.QuestId, attempt, Guid.NewGuid(), epoch);
         var grid = entry.Maze.GreedGrid;
         InitializationCounterSupported = entry.InitializationCounterSupported && entry.Maze.LayeredMaps.Count == 0 && storyRooms.Length == 0 && grid.Supported;
@@ -456,9 +463,15 @@ internal sealed partial class SinglePlayerDungeonRun
         bool initialized = InitializationCounterSupported && (!entry.IndividualMapMovement || !initializedMapSlots.Contains(slot));
         uint count = checked(ConfirmedInitializationCount + (!first && initialized && hasMatchingQuest ? 1u : 0u));
         // 逐房费用按实例/MapID去重；入场一次性疲劳只在首次加载计入N，不随dummy阶段刷新再计。
-        if (entry.UsesFatigue && (entry.StartFatigue > 0 ? first :
-            !allRooms.Any(room => room.Loaded && room.Plan.Room.Map.Id == current.Plan.Room.Map.Id)))
-            consumedFatigue = checked(consumedFatigue + (entry.StartFatigue == 0 ? 1u : entry.StartFatigue));
+        if (entry.UsesFatigue)
+        {
+            if (HopeCatalog is { } hope && HopeAreaId is int area)
+            {
+                if (!HasLoadedHopeArea(area)) consumedFatigue = checked(consumedFatigue + (uint)hope.FatigueValue);
+            }
+            else if (entry.StartFatigue > 0 ? first : !allRooms.Any(room => room.Loaded && room.Plan.Room.Map.Id == current.Plan.Room.Map.Id))
+                consumedFatigue = checked(consumedFatigue + (entry.StartFatigue == 0 ? 1u : entry.StartFatigue));
+        }
         acceptedActions.Add(actionId, new(expected, "loaded", null));
         current.Loaded = true;
         // NOTI28建立新Run并清统计；接取不重置。缓存安装与活跃任务计数分开，完成仍由真实清图判定。
@@ -481,7 +494,7 @@ internal sealed partial class SinglePlayerDungeonRun
             return Result(DungeonRunOutcome.Rejected);
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
             current.Elevator is { Completed: false } || !current.Cleared || HasPendingLayer() ||
-            !connections.Contains((current.Plan.Room.Map.Position, target)) && !CanRidableWarp(target) && !CanBorderTownWarp(target) ||
+            !CanMoveHopeOrOrdinary(target) ||
             !rooms.TryGetValue(target, out Room? next))
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "move", target));
@@ -495,7 +508,12 @@ internal sealed partial class SinglePlayerDungeonRun
         }
         if (storyRooms.Length > 0 && (storyStageIndex < 0 || current.Plan.Room.Map == storyRooms[storyStageIndex].Plan.Room.Map) &&
             storyStageIndex + 1 < storyRooms.Length && storyRooms[storyStageIndex+1].Plan.Room.Map.Position == target)
+        {
             next = storyRooms[++storyStageIndex];
+            // 同坐标旧地图已装载时显式刷新，不能叠加两套门及场景缓存。
+            replaceVisited = allRooms.Any(room => room.Loaded && room.Plan.Room.Map.Position == target && room != next);
+            rooms[target] = next;
+        }
         if (BossEntranceOpen && next.Plan.Room.Map.DummyStageIndex < 0 && next.Plan.Room.Map.StoryStageIndex < 0 && current.Plan.Room.Map.Kind != "layered" &&
             conditionalRooms.TryGetValue(target,out var replacement))
             next = replacement;
@@ -661,15 +679,18 @@ internal sealed partial class SinglePlayerDungeonRun
         bool advancesDummy = target.IsDummyMapBoss && current.Plan.Room.Map.DummyStageIndex == activeDummyStage &&
             activeDummyStage + 1 < dummyRooms.Length;
         int nextStage = activeDummyStage + (advancesDummy ? 1 : 0);
-        DungeonPoint? bossUpdate = target.IsDummyMapBoss ? BossPosition(nextStage) : null;
-        DungeonRunIdentity nextIdentity = settles || clearsQuestRoom || advancesDummy ? identity with { Epoch = checked(identity.Epoch + 1) } : identity;
+        bool advancesStoryBoss = storyDummyBosses && target.IsDummyMapBoss && current.Plan.Room.Map.StoryStageIndex == storyStageIndex &&
+            storyStageIndex >= 0 && storyStageIndex + 1 < storyRooms.Length;
+        DungeonPoint nextBossPosition = advancesStoryBoss ? storyRooms[storyStageIndex + 1].Plan.Room.Map.Position : BossPosition(nextStage);
+        DungeonPoint? bossUpdate = target.IsDummyMapBoss ? nextBossPosition : null;
+        DungeonRunIdentity nextIdentity = settles || clearsQuestRoom || advancesDummy || advancesStoryBoss ? identity with { Epoch = checked(identity.Epoch + 1) } : identity;
         var nextSnapshot = new DungeonRunSnapshot(nextIdentity,
             settles ? SinglePlayerDungeonPhase.Settlement : Phase, current.Plan.Room.Map,
             Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
                 !current.Culled.Contains(monster.ObjectKey) && !culled.Contains(monster.ObjectKey) &&
                 monster.ObjectKey != confirmed.MonsterKey && (current.Altar is null || current.Altar.WasPublished(monster.ObjectKey)))
                 .Select(monster => monster.ObjectKey).ToArray()))
-            { MapOperation = mapOperation,MapPayload = mapPayload, ConsumedFatigue = consumedFatigue, BossPosition = BossPosition(nextStage) };
+            { MapOperation = mapOperation,MapPayload = mapPayload, ConsumedFatigue = consumedFatigue, BossPosition = nextBossPosition };
         DungeonClearFact? clear = settles
             ? new(nextIdentity, entry.DungeonId, Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) { ClearMap = current.Plan.Room.Map } : null;
         pendingDeath = new(confirmed, target,
@@ -714,11 +735,13 @@ internal sealed partial class SinglePlayerDungeonRun
         deaths.Add(confirmed.EventId, confirmed);
         committedPreparations.Add(prepared);
         activeDummyStage = prepared.DummyStageIndex;
+        storyBossPosition = prepared.Result.Snapshot.BossPosition;
         identity = prepared.Result.Snapshot.Identity;
         Phase = prepared.Result.Snapshot.Phase;
         if (prepared.Result.ClearFact is { } clear)
             ClearFact = clear;
         pendingDeath = null;
+        RecordHopeTarget(prepared);
         return prepared.Result;
     }
 
@@ -956,8 +979,8 @@ internal sealed partial class SinglePlayerDungeonRun
             terminal.Monsters.Any(monster => monster.CanReportDeath && monster.IsBoss && monster.AiCharacter is null);
     }
 
-    private bool IsTerminalRoom() => entry.IsTerminalMap(current.Plan.Room.Map) &&
-        (storyRooms.Length == 0 || storyStageIndex == storyRooms.Length-1);
+    private bool IsTerminalRoom() => HopeCatalog is not null ? IsHopeTerminalRoom() :
+        entry.IsTerminalMap(current.Plan.Room.Map) && (storyRooms.Length == 0 || storyStageIndex == storyRooms.Length-1);
 
     private bool HasPendingBossDeaths(ushort? preparedMonsterKey)
     {

@@ -54,6 +54,16 @@ internal static class QuestDungeonClearProgressTests
             "任一pair匹配即可，分别核最低难度；原生45不继承类型1的初始化子型");
         That(QuestDungeonClearProgress.ContainsDungeon(alternatives,7322) && !QuestDungeonClearProgress.ContainsDungeon(alternatives,3),
             "领奖凭据允许列表后续目标，拒绝列表外地下城");
+        var recommended = quest with { Grade = "[mission]", SubType = 17, IntData = [-1,-1,10] };
+        That(QuestDungeonClearProgress.Supports(recommended) && QuestDungeonClearProgress.Initial(recommended) == 10 &&
+            QuestDungeonClearProgress.ValidScalar(recommended,10) && QuestDungeonClearProgress.ValidScalar(recommended,0) &&
+            !QuestDungeonClearProgress.ValidScalar(recommended,11), "推荐通关保留资源十次目标，不能提前归零或越界");
+        That(!QuestDungeonClearProgress.Matches(recommended,entry) &&
+            QuestDungeonClearProgress.Matches(recommended,entry with { RecommendedQuestClear = true }),
+            "推荐任务只消费正式入场冻结的本服推荐资格，不让所有普通图默认满足");
+        foreach (var unsupported in new[] { recommended with { IntData = [-1,-1,0] }, recommended with { IntData = [-1,0,10] },
+            recommended with { Grade = "[daily random]" }, recommended with { SubType = 18 } })
+            That(!QuestDungeonClearProgress.Supports(unsupported), "未知推荐形状与随机每日入口仍保持独立限制");
         Console.WriteLine($"PASS {Count-checks} 本版条件通关目标与次数断言");
     }
 
@@ -144,6 +154,7 @@ internal static class QuestDungeonClearProgressTests
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root,true); }
         Console.WriteLine($"PASS {Count-checks} 条件通关计数、原子回滚、重放、重接及领奖断言（合成战斗）");
+        RunRecommended(towns,pvf,characters,items);
         RunAlternatives(towns,pvf,characters,items);
         RunResourceAccept(towns,pvf,characters,items);
         Issue262OtherverseQuestTests.Run(towns,characters,items,
@@ -153,6 +164,87 @@ internal static class QuestDungeonClearProgressTests
             global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf),
             global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf),
             global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf),parameters);
+    }
+
+    static void RunRecommended(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
+    {
+        int checks = Count;
+        var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf,learning);
+        var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+        var quest = quests.Get(8690);
+        using var f = new QuestOrdinaryCompletionTests.Fixture(towns,characters,learning,growth,parameters,items,quest,
+            materialCount: 0, active: [], definitions: [quest, quests.Get(8691)], configure: source => source with
+            { Level = 95, InitialLearning = DfoServer.Game.Skills.SkillPointLedger.Synchronize(source.Job,source.GrowType,95,
+                source.InitialLearning with { Experience = growth.GetLevelStartExperience(95) },learning) });
+        That(f.Change(8690,QuestLifecycleAction.Accept) is { Outcome: QuestLifecycleOutcome.Committed },
+            "真实8690通过原接取事务建立十次推荐通关目标");
+        var current = f.Read();
+        var ordinary = Prepare(current);
+        var untouched = Commit(ordinary,current);
+        That(untouched.Character.ActiveMainQuests.Single().ConditionState == 10, "非推荐真实清图不累计8690");
+        current = untouched.Character;
+        for (uint remaining = 9; ; remaining--)
+        {
+            var clear = Prepare(current,recommended: true);
+            var before = current;
+            if (remaining == 9)
+            {
+                f.Sql("CREATE TRIGGER recommended_abort AFTER UPDATE ON character_active_main_quests BEGIN SELECT RAISE(ABORT,'recommended rollback'); END");
+                Reject<SqliteException>(() => Commit(clear,before), "推荐任务进度末段失败回滚");
+                That(QuestCompletionRepositoryTests.Same(before,f.Read()), "经验与推荐进度不产生半份提交");
+                f.Sql("DROP TRIGGER recommended_abort");
+            }
+            var committed = Commit(clear,before);
+            current = committed.Character;
+            var replay = Commit(clear,before);
+            That(current.ActiveMainQuests.Single().ConditionState == remaining && replay.Duplicate &&
+                QuestCompletionRepositoryTests.Same(current,replay.Character), "推荐通关每实例只计一次：" + remaining);
+            clear.Run.ConfirmCommittedDeath(clear.Pending);
+            if (remaining == 0) break;
+        }
+        f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+        var finished = f.Finish(ushort.MaxValue,8690);
+        That(finished.Outcome == QuestFinishOutcome.Committed && finished.Receipt!.Commit.ConditionType == 1 &&
+            finished.Receipt.Commit.Rewards.Single() is { GrantedCount: 50, Item.Core.ItemId: 10305821 } &&
+            f.Read().CompletedQuests.Contains(8690), "真实8690十次完成后只按原资源发50个材料：" + finished.Reason);
+        var saved = f.Read(); _ = f.Finish(ushort.MaxValue,8690);
+        That(QuestCompletionRepositoryTests.Same(saved,f.Read()) && f.Receipts == 1, "8690重复交付不重复奖励");
+        int day = QuestCycle.Day(DateTimeOffset.UtcNow);
+        var beforePrerequisite = saved with { CompletedQuests = [] };
+        That(QuestAutoDailyPlan.Prepare(beforePrerequisite,f.Catalog,day,true) is null,
+            "未完成8690不分配推荐每日8691");
+        var daily = QuestAutoDailyPlan.Prepare(saved,f.Catalog,day,true)!;
+        current = f.Repository.AdvanceQuestCycle(f.Owner,saved,day,daily);
+        var firstDaily = current.ActiveMainQuests.Single();
+        That(firstDaily.QuestId == 8691 && firstDaily.ConditionState == 3 && firstDaily.AcceptanceId != Guid.Empty &&
+            QuestAutoDailyPlan.Prepare(current,f.Catalog,day,true) is null, "完成8690后同日自动分配8691且重连不换身份");
+        for (int remaining = 2; remaining >= 0; remaining--)
+        {
+            var clear = Prepare(current,recommended: true);
+            current = Commit(clear,current).Character;
+            clear.Run.ConfirmCommittedDeath(clear.Pending);
+            That(current.ActiveMainQuests.Single().ConditionState == remaining, "推荐每日按三次真实清图推进");
+        }
+        f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
+        var dailyFinished = f.Finish(ushort.MaxValue,8691);
+        That(dailyFinished.Outcome == QuestFinishOutcome.Committed && dailyFinished.Receipt!.Commit.Rewards.Single() is
+            { GrantedCount: 6, Item.Core.ItemId: 10305821 } && f.Read().QuestDailyClaims[8691] == day,
+            "每日8691发原6材料并同事务保存游戏日：" + dailyFinished.Reason);
+        var claimed = f.Read();
+        That(QuestAutoDailyPlan.Prepare(claimed,f.Catalog,day,true) is null, "每日领取后当天不再分配");
+        int tomorrow = QuestCycle.Day(DateTimeOffset.UtcNow.AddDays(1));
+        var next = QuestAutoDailyPlan.Prepare(claimed,f.Catalog,tomorrow,true)!;
+        var renewed = f.Repository.AdvanceQuestCycle(f.Owner,claimed,tomorrow,next);
+        That(renewed.ActiveMainQuests.Single() is { QuestId: 8691, ConditionState: 3 } &&
+            renewed.ActiveMainQuests.Single().AcceptanceId != firstDaily.AcceptanceId &&
+            renewed.CompletedQuests.Contains(8690) && !renewed.CompletedQuests.Contains(8691),
+            "次日只重置每日身份和次数，保留一次性前置完成");
+        Console.WriteLine($"PASS {Count-checks} 704推荐通关十次、非推荐排除、回滚、重放和真实奖励断言（合成战斗）");
+        DungeonGrowthCommit Commit((SinglePlayerDungeonRun Run,PreparedDungeonDeath Pending) clear,Character expected) =>
+            f.Repository.CommitDungeonGrowth(f.Owner,expected,clear.Run,clear.Pending,new("fixture-only",DungeonKillExperienceCatalog.ResourcePath,
+                clear.Pending.Monster.MonsterId,clear.Pending.Monster.CandidateLevel,1),growth);
     }
 
     static void RunResourceAccept(TownCatalog towns,PvfArchive pvf,CharacterCatalog characters,ItemResources items)
@@ -486,12 +578,12 @@ internal static class QuestDungeonClearProgressTests
         return (run,run.PrepareConfirmedDeath(authority.Death(run.Snapshot.Identity,bossPlan.Monsters.Single().ObjectKey)).Pending!);
     }
 
-    static (SinglePlayerDungeonRun Run,PreparedDungeonDeath Pending) Prepare(Character character,uint dungeonId = 3,byte difficulty = 0)
+    static (SinglePlayerDungeonRun Run,PreparedDungeonDeath Pending) Prepare(Character character,uint dungeonId = 3,byte difficulty = 0,bool recommended = false)
     {
         var map = new DungeonMap("boss",new(0,0),76126,"map/clear-condition-fixture.map");
         var maze = new DungeonMaze(0,1,1,"fixture-only",[map.Position],[map.Position],[map],[]);
         var entry = new DungeonEntryPlan(character.Id,character.Revision,dungeonId,0,byte.MaxValue,difficulty,maze,map,map)
-        { QuestAcceptances = character.ActiveMainQuests.ToImmutableArray() };
+        { QuestAcceptances = character.ActiveMainQuests.ToImmutableArray(), RecommendedQuestClear = recommended };
         var source = new DungeonRoomMonster(1,[1,0,3,100,100,0,1,1],"[fixed]","[boss]","monster/clear-condition-fixture.mob");
         var room = new DungeonRoomDefinition(map,[source],[],[]);
         var monsters = DungeonMonsterPlan.FromRoom(room,character.Id,20);

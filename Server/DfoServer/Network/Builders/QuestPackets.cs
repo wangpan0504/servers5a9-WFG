@@ -112,7 +112,7 @@ internal static class QuestPackets
         IReadOnlyList<QuestCurrencyRewardProjection>? currencies = null, ushort tpAmount = 0, bool hellChallenge = false,
         bool creatureEvolution = false, byte? expertJobType = null)
     {
-        if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 60 or 64 or 65 or 70) || experience > int.MaxValue || gold > int.MaxValue ||
+        if (questId is 0 or >= 30000 || conditionType is not (0 or 1 or 2 or 3 or 4 or 6 or 12 or 17 or 19 or 25 or 31 or 39 or 40 or 42 or 44 or 45 or 49 or 60 or 64 or 65 or 67 or 70) || experience > int.MaxValue || gold > int.MaxValue ||
             consumed.Count > byte.MaxValue || conditionType is not (0 or 25) && consumed.Count != 0 ||
             rewards.Count + (currencies?.Count ?? 0) + (gold == 0 ? 0 : 1) > byte.MaxValue ||
             growType is { } growth && (growth == 0 || (growth & 15) > 5 || growth >> 4 > 2) ||
@@ -202,10 +202,13 @@ internal static class QuestPackets
         {
             var item = reward.Item;
             item.Core.Validate();
-            if (item.Uid <= 0 || item.Position.Index < 0 || item.Position.List != InventoryListType.Main ||
-                item.Core.Kind != ItemKind.Equipment && !item.Core.IsStackable || reward.GrantedCount <= 0 ||
+            item.ValidateDetails(allocating: false);
+            if (item.Uid <= 0 || item.Position.Index < 0 || (item.Core.Kind == ItemKind.Creature && item.Position.List != InventoryListType.Pet) ||
+                (item.Position.List != InventoryListType.Main &&
+                    !(item.Position.List == InventoryListType.Pet && item.Core.Kind == ItemKind.Creature && item.Creature is not null)) ||
+                item.Core.Kind is not (ItemKind.Equipment or ItemKind.Creature) && !item.Core.IsStackable || reward.GrantedCount <= 0 ||
                 !item.Core.IsStackable && reward.GrantedCount != 1 || item.Core.IsStackable && reward.GrantedCount > item.Core.Count)
-                throw new InvalidDataException("任务奖励投影必须来自实际提交的普通背包资产及本次增量");
+                throw new InvalidDataException("任务奖励投影必须来自实际提交的普通背包或宠物资产及本次增量");
             writer.Write(checked((ushort)item.Position.Index));
             writer.Write(checked((uint)item.Core.ItemId));
             writer.Write(checked((uint)(item.Core.IsStackable ? reward.GrantedCount : item.Core.Value)));

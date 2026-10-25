@@ -28,7 +28,8 @@ internal sealed partial class CharacterRepository
                 EXISTS(SELECT 1 FROM guild_members m WHERE m.character_id=c.id),
                 EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$anton_quest),
                 EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$luke_quest),
-                EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$prey_quest)
+                EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$prey_quest),
+                EXISTS(SELECT 1 FROM account_pvp_private_characters p WHERE p.character_id=c.id)
             FROM characters c WHERE c.account=$account ORDER BY c.slot
             """;
         var rows = new List<CharacterRosterEntry>();
@@ -41,7 +42,7 @@ internal sealed partial class CharacterRepository
                     FiendWarEligible: CharacterRosterEntry.IsFiendWarEligible(reader.GetInt64(6) != 0, reader.GetInt64(7) != 0),
                     AntonEligible: reader.GetInt64(8) != 0,
                     LukeEligible: reader.GetInt64(9) != 0,
-                    PreyEligible: CharacterRosterEntry.IsPreyEligible(reader.GetInt64(10) != 0, level)));
+                    PreyEligible: CharacterRosterEntry.IsPreyEligible(reader.GetInt64(10) != 0, level), IsPvpPrivate: reader.GetInt64(11)!=0));
             }
         if (rows.Count == 0)
             return [];

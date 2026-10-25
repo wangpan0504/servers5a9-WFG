@@ -43,9 +43,10 @@ internal static class QuestCounterattackEntryTcpTests
         peer.Select(RoleIndex(peer.Roster,created),prepared:true,resumeTown:true,room:false);
         That(peer.Id == created.Id && QuestLifecycleTcpTests.List(peer.AvailableQuests,70).Contains(3553),
             "真实登录下发合格大决战，绑定本次隔离角色");
+        var daily = new QuestDailyCoexistence(fixture,created.Id,13041,1636);
         peer.Send(31,[31,0,225,13]); peer.Expect(1,31,[1,225,13,1,0,0,0,0]); Drain();
         string accepted = Active();
-        That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0",created.Id)
+        That(daily.OtherRows("quest_id,condition_state")
                 is [[3553L,1L]] &&
             fixture.Query("SELECT count(*) FROM character_quest_lifecycle_receipts WHERE character_id=$p0",created.Id) is [[1L]],
             "唯一正式31建立未完成条件和原接取回执");

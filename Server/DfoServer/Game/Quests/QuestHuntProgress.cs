@@ -20,10 +20,16 @@ internal static class QuestHuntProgress
     internal static bool EliteSelectorAllowed(StoryQuest quest, int dungeon, int monster) =>
         monster == EliteMonsterSelector && quest is { Id: EliteQuestId, Condition: "[hunt monster]", Grade: "[side]" } && dungeon == 7322;
 
+    // 冒险任务普通怪物目标复用地轨每日的本服计数口径；不是-5任意怪物。
+    // 只有明确绑定单一地下城的mission四元组启用，保留其它负选择符的未知边界。
+    internal static bool OrdinaryMonsterSelectorAllowed(StoryQuest quest, int dungeon, int monster) =>
+        monster == -1 && quest is { Grade: "[mission]", Condition: "[hunt monster]", SubType: -1,
+            IntData.Count: 4, DungeonIndex: > 0 } && dungeon == quest.DungeonIndex;
+
     public static bool TryTargets(StoryQuest quest, out ImmutableArray<QuestHuntTarget> targets)
     {
         targets = [];
-        if (QuestAutoDailyPlan.Supports(quest))
+        if (QuestAutoDailyPlan.Hunt(quest))
         {
             targets = [new(-1,-1,-1,quest.IntData[4]), new(-1,-1,-3,quest.IntData[9])];
             return true;
@@ -39,7 +45,7 @@ internal static class QuestHuntProgress
         {
             int dungeon = quest.IntData[at], difficulty = quest.IntData[at + 1], monster = quest.IntData[at + 2], count = quest.IntData[at + stride - 1];
             int enemyType = monsterOnly ? 1 : quest.IntData[at + 3];
-            if (dungeon < -1 || difficulty is < -1 or > 3 || monster <= 0 && !(monsterOnly && (monster is -5 or -3 || EliteSelectorAllowed(quest,dungeon,monster))) ||
+            if (dungeon < -1 || difficulty is < -1 or > 3 || monster <= 0 && !(monsterOnly && (monster is -5 or -3 || EliteSelectorAllowed(quest,dungeon,monster) || OrdinaryMonsterSelectorAllowed(quest,dungeon,monster))) ||
                 enemyType is not (1 or 2 or 3) || count is < 1 or > 511)
                 return false;
             rows.Add(new(dungeon,difficulty,monster,count) { EnemyType = enemyType });
@@ -62,10 +68,18 @@ internal static class QuestHuntProgress
         entry.QuestAcceptances.Any(old => old.QuestId == active.QuestId && old.Slot == active.Slot && old.AcceptanceId == active.AcceptanceId);
 
     public static ImmutableArray<ActiveMainQuest> MonsterDeath(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
-        QuestCatalog quests, DungeonPlannedMonster monster) => monster.AiCharacter is null
-        ? Death(active,entry,quests,monster.MonsterId,1,monster.SpawnType == 3,monster.SpawnType is 1 or 2,
-            QuestAutoDailyPlan.CountableMonster(monster))
-        : active.ToImmutableArray();
+        QuestCatalog quests, DungeonPlannedMonster monster)
+    {
+        if (monster.AiCharacter is not null) return active.ToImmutableArray();
+        var result = Death(active,entry,quests,monster.MonsterId,1,monster.SpawnType == 3,monster.SpawnType is 1 or 2,
+            QuestAutoDailyPlan.CountableMonster(monster));
+        if (entry.Hope is not { } hope || !hope.Catalog.Missions.TryGetValue(hope.Acceptance.QuestId,out var mission) ||
+            monster.MonsterId != mission.MonsterId) return result;
+        // 只推进原实例事务接取的单一目标；普通31/33仍不能打开或伪造希望任务。
+        return result.Select(row => row.QuestId == hope.Acceptance.QuestId && row.AcceptanceId == hope.Acceptance.AcceptanceId &&
+            row.Slot == hope.Acceptance.Slot && row.ConditionState == 1 && Bound(row,entry)
+            ? row with { ConditionState = 0 } : row).ToImmutableArray();
+    }
 
     public static ImmutableArray<ActiveMainQuest> AiCharacterDeath(IReadOnlyList<ActiveMainQuest> active, DungeonEntryPlan entry,
         QuestCatalog quests, int templateId) => Death(active,entry,quests,templateId,2);
@@ -105,7 +119,7 @@ internal static class QuestHuntProgress
     {
         if (!Bound(row,entry) || !quests.TryGet(row.QuestId,out var quest) || !TryTargets(quest,out var targets) ||
             !ValidScalar(quest,row.ConditionState)) return row;
-        bool daily = QuestAutoDailyPlan.Supports(quest);
+        bool daily = QuestAutoDailyPlan.Hunt(quest);
         if (daily && (!dailyMonster || !QuestAutoDailyPlan.MatchesDungeon(quest,entry.DungeonId,entry.Difficulty))) return row;
         uint scalar = row.ConditionState;
         for (int at = 0; at < targets.Length; at++)
@@ -114,7 +128,7 @@ internal static class QuestHuntProgress
             // Full03 type2的-3只接已确认普通SpawnType3；APC的rank8来源未闭合，不能并入。
             if (count != 0 && target.EnemyType == enemyType && (target.MonsterId > 0 && target.MonsterId == templateId || target.MonsterId == -5 ||
                 target.MonsterId == -3 && ordinaryBoss || target.MonsterId == EliteMonsterSelector && elite ||
-                daily && target.MonsterId == -1 && !ordinaryBoss && templateId is not (>= 50000 and <= 51000) and not (>= 56000 and <= 60000)) &&
+                (daily || OrdinaryMonsterSelectorAllowed(quest,target.DungeonId,target.MonsterId)) && dailyMonster && target.MonsterId == -1 && !ordinaryBoss && templateId is not (>= 50000 and <= 51000) and not (>= 56000 and <= 60000)) &&
                 (target.DungeonId == -1 || target.DungeonId == entry.DungeonId) &&
                 (target.MinimumDifficulty == -1 || entry.Difficulty >= target.MinimumDifficulty)) scalar -= 1u << (at * 9);
         }

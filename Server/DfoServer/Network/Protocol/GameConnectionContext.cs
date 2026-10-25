@@ -34,7 +34,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     // 可选活动只暴露操作门禁与连接收尾；具体状态由对应模块拥有。
     public IGameConnectionActivity? Activity { get; } = activity;
     public bool BlocksTownActions => Activity?.BlocksTownActions == true ||
-        Session.Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement;
+        Session.Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement or SessionPhase.PvpRoom;
 
     public void Disconnect() => connection.Disconnect();
 

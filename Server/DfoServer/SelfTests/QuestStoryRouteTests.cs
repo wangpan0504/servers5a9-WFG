@@ -106,7 +106,7 @@ internal static class QuestStoryRouteTests
                 receipt = f.Session.CompleteFormalDungeonLoading()!;
             }
             That(f.Session.ReadClearedQuest(scenario.Id)?.Clear.MapId == quest.IntData[0],
-                $"任务{scenario.Id}清图凭据绑定实际末房与本次接取；阶段{f.Session.Phase}，条件{f.Read().ActiveMainQuests.Single().ConditionState}");
+                $"任务{scenario.Id}清图凭据绑定实际末房与本次接取；阶段{f.Session.Phase}，条件{f.Read().ActiveMainQuests.Single(row=>row.QuestId==scenario.Id).ConditionState}");
             var finish = f.Session.FinishQuest(scenario.Id,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth);
             That(finish.Outcome == QuestFinishOutcome.Committed && f.Read().CompletedQuests.Contains(scenario.Id), $"任务{scenario.Id}原子交付并保留完成记录");
             That(f.Session.ReturnFromFormalDungeon() is not null, "剧情完成正常回城");

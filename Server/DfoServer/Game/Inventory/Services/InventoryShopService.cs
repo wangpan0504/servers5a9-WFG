@@ -143,7 +143,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
         var template = catalog.Get(source.Core.ItemId);
         // 时装穿戴后位于 Equipment，不能只靠容器排除；宠物蛋和成宠仍按原事务出售。
-        if (template.Kind == ItemKind.Avatar)
+        if (template.Kind == ItemKind.Avatar || template.PvpFreeEquipment)
             return InventoryResult.Reject();
         int price = template.ShopPrice.GetSellGold(source.Core.Durability, template.Durability);
         long gold = (long)before.Gold + (long)price * count;

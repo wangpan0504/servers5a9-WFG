@@ -33,6 +33,15 @@ internal sealed class SoloPartyHandler(ServerLog log) : IGameCommandModule
     async Task<CommandResult> LeaveAsync(GameConnectionContext context, Packet packet)
     {
         PartyRequests.Leave(packet.Body);
+        if(context.Session.ReadPvpTraining() is { } training)
+        {
+            var left=context.Session.EndPvpTraining(training.InstanceId);
+            if(left is not null)
+                await context.Notify(NotiPacketType.PVP_ROOM_INFO,PvpTrainingHandler.Room(left.Run,true),"pvp_training_left",
+                    ()=>context.Session.CanPublishPvpTraining(left));
+            else await context.Reply(CmdPacketType.LEAVE_PARTY,PartyPackets.Rejected(),"pvp_training_leave_rejected");
+            return CommandResult.Handled;
+        }
         var receipt = context.Session.LeaveSoloParty(context.BlocksTownActions);
         log.Write("solo_party", new { Connection = context.Id, packet.Opcode, Accepted = receipt is not null, PartyId = receipt?.Party.Id });
         if (receipt is null)

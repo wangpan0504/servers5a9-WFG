@@ -18,6 +18,7 @@ internal sealed class DungeonTransientReceipts
     public Dictionary<uint, DungeonGroundObject> Grounds { get; } = [];
     public Dictionary<uint, DungeonTransientPickup> Pickups { get; } = [];
     public Dictionary<int, DungeonTransientFatigue> Fatigue { get; } = [];
+    public Dictionary<int, DungeonTransientFatigue> HopeAreaFatigue { get; } = [];
 
     public static DungeonTransientReceipts? Find(AccountOwners.Lease owner, DungeonRunIdentity identity) =>
         owner.RuntimeCache.Get(slot)?.Instances.GetValueOrDefault((identity.CharacterId, identity.InstanceId));

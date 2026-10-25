@@ -19,6 +19,7 @@ internal sealed partial class CharacterRepository
         "character_dungeon_passive_pickups",
         "character_dungeon_pickup_receipts", "character_dungeon_loot_receipts",
         "character_quest_stage_claims", "character_quest_stage_witnesses",
+        "character_operation_hope_reward_receipts",
         "character_quest_completion_receipts", "character_quest_clear_receipts", "character_quest_daily_clear", "character_quest_drop_receipts",
         "character_dungeon_settlement_receipts", "character_dungeon_scene_clear_receipts",
         "character_dungeon_growth_receipts", "character_adventure_credits",
@@ -29,7 +30,7 @@ internal sealed partial class CharacterRepository
         "character_skill_points", "character_skills", "character_skill_commands", "character_skill_combos",
         "character_skill_point_sources", "character_tp_sources", "character_permanent_stats", "character_client_settings", "character_game_settings",
         "character_fatigue", "character_dungeon_state", "mailbox_sent_gold", "character_teleport_cooldowns", "character_exp_bonus", "character_consumable_states", "character_expert_job", "character_expert_meta", "character_assault_daily", "character_crack_daily", "character_growup_change", "character_weekly_dungeon", "character_dungeon_incount",
-        "character_collectbox_slots", "character_collectbox_expirations", "character_collectbox_state",
+        "character_collectbox_slots", "character_collectbox_expirations", "character_collectbox_state", "character_epic_production", "character_pvp_training_skills",
         "character_skill_switch_inventory_items", "character_skill_switch_inventory",
         // 公会成员行随角色删除清理（guild_members.character_id 外键到 characters）。
         "guild_members"
@@ -143,6 +144,13 @@ internal sealed partial class CharacterRepository
         // 私人物品包含背包、穿戴、个人仓库与邮箱托管；账号仓库的NULL owner保持原样。
         command.CommandText = "DELETE FROM character_inventory_items WHERE account=$account AND character_id=$id";
         command.ExecuteNonQuery();
+        command.CommandText = "DELETE FROM quest_eligibility_mail_dispatches WHERE account=$account AND scope_character_id=$id";
+        command.ExecuteNonQuery();
+        // 冷却留在账号/转职账本，删角、改名和重登不能重置；与角色删除同事务。
+        command.CommandText="UPDATE account_pvp_private_characters SET blocked_until=$now+recreate_days*86400,character_id=NULL WHERE account=$account AND character_id=$id";
+        command.Parameters.AddWithValue("$now",DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        command.ExecuteNonQuery();
+        command.Parameters.RemoveAt("$now");
         command.CommandText = "DELETE FROM characters WHERE id=$id AND account=$account AND slot=$slot AND name=$name AND revision=$revision";
         command.Parameters.AddWithValue("$slot", expected.Slot);
         command.Parameters.AddWithValue("$name", expected.Name);
@@ -156,7 +164,7 @@ internal sealed partial class CharacterRepository
     {
         var affected = DeletionTables.Concat(["characters", "cube_premium", "item_making_skill_info", "character_inventory_items", "character_inventory_slots",
             "inventory_avatar_details", "inventory_creature_details", "mailbox_messages", "mailbox_attachments", "mailbox_audit_log",
-            "shop_purchase_counts", "account_completed_quests", "account_adventure_representatives",
+            "shop_purchase_counts", "account_completed_quests", "account_pvp_private_characters", "account_adventure_representatives",
             "account_adventure_receipts", "account_adventure_expedition_members", "account_adventure_expeditions",
             // 两端均以 ON DELETE CASCADE 清理，账号级冒险团好友不随单个角色删除。
             "character_social_links"])

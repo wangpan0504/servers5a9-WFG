@@ -233,6 +233,7 @@ internal static class InventoryMoveService
         if (position.List != InventoryListType.Equipment)
             return true;
         var template = catalog.Get(core.ItemId);
+        if (template.PvpFreeEquipment && !character.IsPvpPrivate) return false;
         if (core.Kind == ItemKind.Talisman)
             return position.Index is ItemSlotBoundService.TalismanEquipmentStart or ItemSlotBoundService.TalismanEquipmentEnd &&
                 catalog.Talisman(core.ItemId)?.AllowsUse(character.Level, character.Job, character.GrowType) == true;

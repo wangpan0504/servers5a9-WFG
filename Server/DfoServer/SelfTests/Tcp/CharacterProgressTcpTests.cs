@@ -60,7 +60,18 @@ internal static class CharacterProgressTcpTests
                     pair.Second.Skills.Where(skill => catalog.Get(0, skill.Id).FixedLevel is null).All(pair.First.Skills.Contains)) &&
                 role.Learning.Trees[0].Skills.Single(skill => skill.Id == 5) is { Level: 2 } ghost && ghost.Command != "" &&
                 role.Learning.Trees[0].Sp < role.Learning.Trees[1].Sp, "在线GM改等级保留已学技能与指令，SP/TP按新总额减已学费用重算");
-            peer.Barrier();
+            peer.SendBarrier();
+            var assigned = peer.Expect(0,574).Body;
+            var refreshed = Role(0);
+            That(refreshed.ActiveMainQuests.Select(row=>(int)row.QuestId).Order().SequenceEqual(new[]{13036,13040}) &&
+                learned.ActiveMainQuests.All(row=>refreshed.ActiveMainQuests.Contains(row)),
+                "GM50升60后保留原每日身份，下一请求只新增60级地区每日");
+            Bytes(assigned,QuestPackets.ActiveList(refreshed.ActiveMainQuests),"GM等级变化后的每日通知对应真实活动槽");
+            peer.Expect(0,356,TownPackets.CompletedQuests(refreshed));
+            peer.Expect(0,21,QuestPackets.AvailableList(refreshed.Level,DfoServer.Game.Quests.QuestEligibility.Candidates(refreshed,resources.Quests)));
+            // 21重建任务界面后按公共投影恢复同一完整完成历史，不吞掉额外通知。
+            peer.Expect(0,356,TownPackets.CompletedQuests(refreshed));
+            peer.Expect(1,1347,[1]);
         }
         using (var peer = Open(fixture))
         {
