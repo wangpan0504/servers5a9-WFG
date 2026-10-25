@@ -84,11 +84,20 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             {
                 var template = items.Get(row.ItemId);
                 var avatar = packages.GetAvatar(row.ItemId);
-                // 没有可选属性的光环、武器装扮不发送5B选项；有属性声明的部位仍须显式选择。
+                // 没有可选属性的光环、武器装扮由客户端带一项哨兵值；它不是玩家选择，统一落到0。
                 bool hasChoice = options.TryGetValue(row.ItemId, out byte ability);
                 if (template.Kind != ItemKind.Avatar || !template.Expiration.SupportsCreation || avatar.PendingRule is not null ||
-                    !avatar.Types.IsEmpty && row.Type >= avatar.Types.Length ||
-                    !hasChoice && avatar.RequiresAbilityChoice || !avatar.Abilities.Contains(ability)) return InventoryResult.Reject(19);
+                    !avatar.Types.IsEmpty && row.Type >= avatar.Types.Length) return InventoryResult.Reject(19);
+                if (avatar.RequiresAbilityChoice)
+                {
+                    if (!hasChoice || !avatar.Abilities.Contains(ability)) return InventoryResult.Reject(19);
+                }
+                else
+                {
+                    // 无常量属性声明的部位只接受"未选择"哨兵；其他数值说明客户端与资源不一致。
+                    if (hasChoice && ability is not (0 or byte.MaxValue)) return InventoryResult.Reject(19);
+                    ability = 0;
+                }
                 int amount = checked(row.Count * count);
                 totals[row.ItemId] = checked(totals.GetValueOrDefault(row.ItemId) + amount);
                 total = checked(total + amount);
