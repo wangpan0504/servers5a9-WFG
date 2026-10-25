@@ -276,7 +276,6 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         hopeSelection = null;
         pvpTraining = null;
         pendingPvpSkills = null;
-        singleParty = null;
         InvalidateExpertJobStore(publishExpertJob);
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
         formalDungeon = null;

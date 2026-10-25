@@ -69,7 +69,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     // 只枚举当前场景，固定接收者快照后入队。
     Member[] Peers(Member source) => scenes[source.Scene].Where(member => !ReferenceEquals(member, source)).ToArray();
 
-    void RemoveCore(GameConnectionSender sender, byte[]? departureEffect = null, byte[]? prepareEffect = null)
+    void RemoveCore(GameConnectionSender sender, byte[]? departureEffect = null, byte[]? prepareEffect = null, byte[]? destinationArea = null)
     {
         if (!members.Remove(sender, out var departed))
             return;
@@ -83,7 +83,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         // 取消回调在异步执行时也按精确成员身份清理。
         foreach (var target in scene.ToArray())
             target.Sender.Leave(departed.Character.Id, departed.Serial, departureEffect,
-                departureEffect is null ? null : () => departed.Owner.IsCurrent, prepareEffect);
+                departureEffect is null ? null : () => departed.Owner.IsCurrent, prepareEffect, destinationArea);
     }
 
     public void Join(AccountOwners.Lease owner, GameConnectionSender sender, Character character, ChannelIdentity? entry = null,
@@ -173,8 +173,9 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             scenes.Remove(source.Scene);
         else
             foreach (var target in previous.ToArray())
-                target.Sender.Leave(source.Character.Id, source.Serial, null, () => source.Owner.IsCurrent, null);
-        var cleared = source.Sender.ClearScene();
+                target.Sender.Leave(source.Character.Id, source.Serial, hideActor: true);
+        // 同town/area不能借异区23隐藏实体；阶段隔离只隐藏地图实体，不销毁队伍引用。
+        var cleared = source.Sender.ClearScene(SceneActorClear.Hide);
         cleared.ContinueWith(static task => { _ = task.Exception; }, CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         source.Scene = next;
@@ -199,10 +200,10 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     }
 
     // 精确清理仅持成员锁，不获取任何账号锁。
-    public void Remove(GameConnectionSender sender, byte[]? departureEffect = null, byte[]? prepareEffect = null)
+    public void Remove(GameConnectionSender sender, byte[]? departureEffect = null, byte[]? prepareEffect = null, byte[]? destinationArea = null)
     {
         lock (gate)
-            RemoveCore(sender, departureEffect, prepareEffect);
+            RemoveCore(sender, departureEffect, prepareEffect, destinationArea);
     }
     public int Count { get { lock (gate) return members.Count; } }
 

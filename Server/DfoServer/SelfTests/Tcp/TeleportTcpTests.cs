@@ -62,10 +62,11 @@ internal static class TeleportTcpTests
                 observer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); observer.Barrier();
                 peer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); peer.Barrier();
                 peer.Send(470, Solo(-1, 7, 39, 3, 783, 205)); peer.Expect(1, 470, [1]);
-                peer.Expect(0, 379, Effect(1, peer.Id)); peer.Expect(0, 6, Build(w => w.Write(observer.Id)));
+                peer.Expect(0, 379, Effect(1, peer.Id));
                 peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 379, Effect(2, peer.Id));
                 peer.Expect(0, 378, [1, 2, 164, 1, 0, 0]); peer.Barrier();
-                observer.Expect(0, 379, Effect(1, peer.Id)); observer.Expect(0, 6, Build(w => w.Write(peer.Id))); observer.Barrier();
+                observer.Expect(0, 379, Effect(1, peer.Id));
+                observer.Expect(0, 23, Build(w => { w.Write(peer.Id); w.Write(new byte[] { 39, 3, 15, 3, 205, 0, 5, 3 }); })); observer.Barrier();
                 observer.Send(7); observer.Expect(1, 7, [1]); observer.Expect(0, 2);
             }
             That(fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) is [[39L, 3L, 783L, 205L]], "真实NPC身份与任务准入后光环跨图落库");
@@ -161,6 +162,7 @@ internal static class TeleportTcpTests
 
         async Task SingleMemberPartyAsync(TcpPeer peer, ushort slot)
         {
+            byte[] information = [];
             peer.Send(1426); peer.Expect(0, 23); peer.Expect(0, 24); peer.Barrier();
             CreateParty();
             var before = fixture.Query("SELECT revision,town,area,x,y FROM characters WHERE id=$p0", peer.Id)[0];
@@ -170,7 +172,9 @@ internal static class TeleportTcpTests
             using (var observer = Open(fixture, "party-observer"))
             {
                 observer.Create("PartyWatch"); observer.Select(); observer.Send(1426); observer.Expect(0, 23); observer.Expect(0, 24);
-                observer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); observer.Barrier();
+                observer.Batch((0, 2), (0, 3), (0, 23), (0, 22));
+                var listed = observer.Expect(0, 9).Body;
+                That(listed.Length == 56 && listed[9] == 0, "同屏观察者收到统一队伍目录名册"); observer.Barrier();
                 peer.Batch((0, 2), (0, 3), (0, 23), (0, 22)); peer.Barrier();
                 peer.Send(434, Party(39, 3, 783, 205, 1)); peer.Expect(1, 434, [1]);
                 peer.Expect(0, 379, Effect(3, peer.Id));
@@ -179,11 +183,14 @@ internal static class TeleportTcpTests
                     U16(status, 5) == peer.Id && status[7] == 1 && status[29] == 0 &&
                     Enumerable.Range(1, 7).All(index => U16(status, 5 + index * 3) == ushort.MaxValue && status[7 + index * 3] == 0),
                     "单成员按本版377的队长槽0及八行格式声明已同意，不等待不存在的队员或错用角色ID当槽");
-                peer.Expect(0, 379, Effect(1, peer.Id)); peer.Expect(0, 6, Build(w => w.Write(observer.Id)));
+                peer.Expect(0, 379, Effect(1, peer.Id));
                 peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 379, Effect(2, peer.Id));
-                peer.Expect(0, 378, Cooldown(0, 600)); peer.Barrier();
+                SceneInformation(); peer.Expect(0, 378, Cooldown(0, 600)); peer.Barrier();
                 observer.Expect(0, 379, Effect(3, peer.Id)); observer.Expect(0, 379, Effect(1, peer.Id));
-                observer.Expect(0, 6, Build(w => w.Write(peer.Id))); observer.Barrier();
+                observer.Expect(0, 23, Build(w => { w.Write(peer.Id); w.Write(new byte[] { 39, 3, 15, 3, 205, 0, 5, 3 }); }));
+                var hidden = observer.Expect(0, 9).Body;
+                That(hidden.Length == 11 && hidden[9] == 3 && U16(hidden, 4) == U16(listed, 4),
+                    "未查询J面板的观察者在队伍跨区后移除原同屏目录"); observer.Barrier();
             }
             That(fixture.Query("SELECT potion_until,aura_until,upgrade_aura_until,party_aura_until FROM character_teleport_cooldowns WHERE character_id=$p0", peer.Id)
                 is [[0L, 0L, 0L, long until]] && until == clock.GetUtcNow().ToUnixTimeMilliseconds() + 600000 &&
@@ -191,7 +198,7 @@ internal static class TeleportTcpTests
                 revision == (long)before[0] + 1,
                 "组队光环只提交一次位置和PVF冷却，不增加成员、不占用个人两类计时器");
             RejectCooldown();
-            peer.Send(13); peer.Expect(0, 9); peer.Barrier(); CreateParty(); RejectCooldown();
+            peer.Send(13); peer.Expect(1, 13, [1]); peer.Expect(0, 9); peer.Barrier(); CreateParty(); RejectCooldown();
             peer.Send(7); peer.Expect(0, 9); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
             var entry = peer.Select(slot, prepared: true, inventoryNotices: [(0, 378)]); peer.Barrier();
             Bytes(entry.Single(packet => packet is { Kind: 0, Opcode: 378 }).Body, Cooldown(0, 600), "重选初始化恢复组队type0冷却");
@@ -199,11 +206,25 @@ internal static class TeleportTcpTests
             clock.Offset += TimeSpan.FromSeconds(600);
             peer.Send(434, Party(39, 3, 783, 205, 1)); peer.Expect(1, 434, [1]);
             peer.Expect(0, 379, Effect(3, peer.Id)); peer.Expect(0, 377); peer.Expect(0, 379, Effect(1, peer.Id));
-            peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 379, Effect(2, peer.Id)); peer.Expect(0, 378, Cooldown(0, 600)); peer.Barrier();
+            peer.Expect(0, 23); peer.Expect(0, 24); peer.Expect(0, 379, Effect(2, peer.Id));
+            SceneInformation(); peer.Expect(0, 378, Cooldown(0, 600)); peer.Barrier();
 
             void CreateParty()
             {
-                peer.Send(12, Convert.FromHexString("000304000000000500000000000007")); peer.Expect(1, 12, [1]); peer.Expect(0, 9); peer.Barrier();
+                peer.Send(12, Convert.FromHexString("000304000000000500000000000007")); PartyInformation(); peer.Barrier();
+            }
+            void PartyInformation()
+            {
+                peer.Batch((0, 2), (0, 153), (0, 11)); information = peer.Expect(0, 9).Body;
+                peer.Batch((0, 11), (0, 153), (0, 26));
+            }
+            void SceneInformation()
+            {
+                peer.Expect(0, 9, information);
+                peer.Expect(0, 153, Build(w =>
+                {
+                    w.Write((byte)1); w.Write(peer.Id); w.Write((byte)100); w.Write((byte)0); w.Write((byte)0);
+                }));
             }
             void RejectCooldown()
             {

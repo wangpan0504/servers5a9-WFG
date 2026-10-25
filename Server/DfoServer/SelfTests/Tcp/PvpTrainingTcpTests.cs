@@ -77,10 +77,13 @@ internal static class PvpTrainingTcpTests
             before=f.Snapshot();
             peer.Send(33,[33,0,0x70,0x0A,0x40,0,0]);peer.Expect(1,33,[1,0x70,0x0A,0,2,0,0]);peer.Barrier();
             That(before==f.Snapshot(),"重复消费同一正式事实不新增事务或revision");
-            peer.Send(12,Convert.FromHexString("000304000000000500000000000007"));peer.Expect(1,12,[0,19,0]);
+            peer.Send(12,Convert.FromHexString("000304000000000500000000000007"));peer.Expect(1,12,[0,21,0]);
             peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),10,1,0,0,255,255]);peer.Barrier();
             That(before==f.Snapshot(),"训练退出清房间且不改原位置、角色资产及接取UUID");
             Round(peer,1,1202,2,true);peer.Barrier();
+            peer.Send(50,request);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false);
+            // 共享离队入口仍支持主线训练房间退出，不能误走城镇队伍或重复注册CMD13。
+            peer.Send(13);CheckRoom(peer.Expect(0,41).Body,true);peer.Barrier();
             peer.Send(50,request);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false);
             peer.Send(7);peer.Expect(1,7,[1]);peer.Expect(0,2);
             peer.Select(prepared:true);peer.Barrier();

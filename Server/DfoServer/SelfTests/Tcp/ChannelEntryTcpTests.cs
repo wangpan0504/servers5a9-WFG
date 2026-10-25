@@ -71,8 +71,10 @@ internal static class ChannelEntryTcpTests
 
         ushort id = alpha.Id;
         alpha.Send(36, Area(38, 2, 1085, 249, 38, 0)); alpha.SendBarrier();
-        alpha.Batch((0, 6), (0, 23), (0, 24), (1, 1347));
-        beta.SendBarrier(); beta.Batch((0, 6), (1, 1347));
+        alpha.Batch((0, 23), (0, 24), (1, 1347));
+        beta.SendBarrier();
+        beta.Expect(0, 23, Build(w => { w.Write(alpha.Id); w.Write(new byte[] { 38, 2, 61, 4, 249, 0, 0, 3 }); }));
+        beta.Expect(1, 1347, [1]);
         byte[] keys = new byte[512];
         keys[0] = 7;
         byte[] keyRequest = Build(writer =>

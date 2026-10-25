@@ -320,6 +320,10 @@ internal static partial class TownPackets
         return body;
     }
 
+    public static byte[] HideTownEntity(ushort id) =>
+        // NOTI3逐行消费：1移除城镇实体，0恢复城镇状态但不重建实体；Actor及队伍引用均保留。
+        [2, (byte)id, (byte)(id >> 8), 1, (byte)id, (byte)(id >> 8), 0];
+
     public static byte[] Transition(Character character)
     {
         var position = character.Position;

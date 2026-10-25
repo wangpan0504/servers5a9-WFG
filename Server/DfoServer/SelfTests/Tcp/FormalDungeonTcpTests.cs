@@ -1555,7 +1555,7 @@ internal static partial class FormalDungeonTcpTests
     }
 
     // 亡者峡谷共用世界地图同时下发悲叹状态，即使随后选择的是祭坛或绝望之塔。
-    // 精确消费固定包序及新角色悲叹首层，不全局忽略1303，也不放宽普通选图合同。
+    // 精确消费状态、两祭坛真实剩余次数及新角色悲叹首层，不放宽普通选图合同。
     static void SelectTowerMap(TcpPeer peer,ushort despairLayer=0,ushort griefLayer=1)
     {
         peer.Send(15,new byte[4]);

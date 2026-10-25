@@ -62,15 +62,6 @@ internal static class SocialTests
             var sa = new GameSession(repo, towns, a); sa.Select(0); sa.MarkReady();
             var sb = new GameSession(repo, towns, b); sb.Select(0); sb.MarkReady();
             var actor = sa.CaptureSocialActor()!; var other = sb.CaptureSocialActor()!;
-            var noParty = sb.PublicCharacter(other.Character.Id)!;
-            That(noParty.PartyId == ushort.MaxValue, "未组队目标的菜单状态为空队伍哨兵");
-            var solo = sb.SetSoloParty(PartyRequests.Set(Convert.FromHexString("000304000000000500000000000007")))!;
-            var withParty = sb.PublicCharacter(other.Character.Id)!;
-            That(withParty.PartyId == solo.Party.Id && !noParty.IsUnchanged(),
-                "菜单使用Session唯一单人队伍状态，创建队伍使旧菜单快照失效");
-            sb.LeaveSoloParty();
-            That(!withParty.IsUnchanged() && sb.PublicCharacter(other.Character.Id)!.PartyId == ushort.MaxValue,
-                "离队后排队的旧菜单不能恢复已清除的队伍标记");
             var now = new DateTimeOffset(2026, 10, 23, 12, 0, 0, TimeSpan.Zero);
             using var db = new SqliteConnection("Data Source=" + path + ";Pooling=False;Foreign Keys=True"); db.Open();
             void Execute(string sql) { using var cmd = db.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
@@ -141,6 +132,89 @@ internal static class SocialTests
                 repo.AccountFriends(a.Account).Single() is { Memo: "发起方备注", Group: 1 },
                 "重开后接受仍保存双方独立备注和分组，留言不用于目标角色校验");
             That(new CharacterRepository(path).AccountFriends(a.Account).Length == 1, "重开恢复真实社交关系");
+            var parties = new DfoServer.Game.Party.PartyService(repo);
+            var publicIdentity = sa.PublicCharacter(actor.Character.Id)!;
+            ushort noPartyId = parties.PartyId(actor.Character.Id);
+            That(noPartyId == ushort.MaxValue, "未组队目标的菜单状态为空队伍哨兵");
+            var settings = DfoServer.Game.Party.PartySettings.Default with { TitleCode = 4, Title = "", Capacity = 1 };
+            That(!parties.SetInformation(sa, 1, settings).Accepted && parties.SetInformation(sa, 0, settings).Accepted &&
+                parties.Current(sa) is { Members.Length: 1, Settings.Capacity: 1 } && !parties.Invite(sa, sb, 42).Accepted,
+                "修改不能凭空建队，显式创建单人队并实际限制邀请人数");
+            ushort createdPartyId = parties.PartyId(actor.Character.Id);
+            That(createdPartyId == parties.Current(sa)!.Id && createdPartyId != noPartyId && publicIdentity.IsUnchanged(),
+                "菜单从唯一队伍服务读取新ID，旧菜单队伍校验失效；纯组队变化不使公开资料快照失效");
+            That(parties.SetInformation(sa, 0, settings) is { Accepted: true, Notices.Length: 0 } &&
+                !parties.SetInformation(sa, 1, settings with { Capacity = 0 }).Accepted,
+                "创建重发幂等，非法容量不得提交");
+            That(parties.SetInformation(sa, 1, settings with { Capacity = 2 }).Accepted, "队长可以扩大已有队伍容量");
+            That(parties.Invite(sa, sb, 42).Accepted && parties.SetInformation(sa, 1, settings).Accepted &&
+                !parties.Respond(sb, actor.Character.Id, 0, true).Accepted && parties.Current(sa)!.Members.Length == 1,
+                "邀请后队长收紧人数上限，迟到的接受不得超过最新容量");
+            parties.SetInformation(sa, 1, settings with { Capacity = 2 });
+            That(parties.SetInformation(sa, 1, settings with { Capacity = 2, Option = null }).Accepted &&
+                parties.Current(sa)!.Settings.Option == 7, "快捷修改省略招募选项时保留原设置");
+            That(!parties.Respond(sb, actor.Character.Id, 0, true).Accepted, "没有待处理邀请不能伪造组队接受");
+            var invite = parties.Invite(sa, sb, 42);
+            That(invite.Accepted && invite.Notices is [{ Kind: DfoServer.Game.Party.PartyNoticeKind.Invite }], "邀请绑定双方当前会话");
+            That(!parties.Respond(sa, actor.Character.Id, 0, true).Accepted, "发起者不能代替目标消费邀请");
+            var joined = parties.Respond(sb, actor.Character.Id, 0, true);
+            That(joined.Accepted && parties.HasMultipleMembers(sa) && parties.PartyId(actor.Character.Id) == parties.PartyId(other.Character.Id),
+                "接受后双方归同一真实队伍");
+            That(!parties.SetInformation(sb, 1, settings with { Capacity = 4 }).Accepted &&
+                !parties.SetInformation(sa, 1, settings).Accepted && parties.Current(sa)!.Settings.Capacity == 2,
+                "普通队员不能改队伍设置，队长不能把容量缩到现有人数以下");
+            sa.HasMultiplePartyMembers = () => parties.HasMultipleMembers(sa);
+            That(sa.BeginDungeonSelection() is null && sa.BeginClassExperienceSelection() is null && sa.Phase == SessionPhase.Town,
+                "多人队伍不能进入现有单人普通选图或职业体验");
+            That(parties.Respond(sb, actor.Character.Id, 0, true) is { Accepted: true, Notices.Length: 0 } && !parties.Leave(sb, 0).Accepted,
+                "同队接受重发幂等且普通队员不能踢队长");
+            var originalParty = parties.Current(sa)!;
+            var scene = parties.SceneChanged(sb);
+            That(scene is [{ Kind: DfoServer.Game.Party.PartyNoticeKind.SceneChanged }] &&
+                ReferenceEquals(scene[0].Recipient.Actor.Session, sb) && ReferenceEquals(scene[0].Party, originalParty),
+                "切区只恢复当前接收者，保留队伍对象、成员引用与连接，不向静止队友重发入队投影");
+            That(!parties.TransferLeader(sb, 0).Accepted && !parties.TransferLeader(sa, 0).Accepted &&
+                !parties.TransferLeader(sa, 4).Accepted && !parties.TransferLeader(sa, 3).Accepted &&
+                !parties.TransferLeader(sa, 1, true).Accepted && ReferenceEquals(parties.Current(sa), originalParty),
+                "普通队员、自身槽、越界、空槽及活动占用不能改变队长或队伍快照");
+            var transferred = parties.TransferLeader(sa, 1);
+            var nextParty = parties.Current(sb)!;
+            That(transferred.Accepted && transferred.Notices.Length == 2 &&
+                transferred.Notices.All(n => n.Kind == DfoServer.Game.Party.PartyNoticeKind.LeaderChanged && n.Guard?.Invoke() == true) &&
+                nextParty.Leader == 1 && nextParty.Id == originalParty.Id && nextParty.Revision > originalParty.Revision &&
+                ReferenceEquals(nextParty.Members, originalParty.Members) && nextParty.Settings == originalParty.Settings &&
+                scene[0].Guard?.Invoke() == false,
+                "委任仅提交队长和版本；不重建ID、成员槽位或设置，旧场景恢复不能覆盖新队长");
+            That(!parties.TransferLeader(sa, 1).Accepted && !parties.SetInformation(sa, 1, settings with { Capacity = 4 }).Accepted &&
+                !parties.Leave(sa, 1).Accepted && parties.SetInformation(sb, 1, nextParty.Settings).Accepted,
+                "委任后原队长立即失去委任、修改及踢人权限，新队长获得设置权限");
+            That(parties.TransferLeader(sb, 0).Accepted && transferred.Notices.All(n => n.Guard?.Invoke() == false),
+                "新队长可委任回来，迟到的旧队长投影失效");
+            var left = parties.Leave(sb);
+            That(left.Accepted && !parties.HasMultipleMembers(sa) && parties.PartyId(other.Character.Id) == ushort.MaxValue &&
+                joined.Notices.Where(n => n.Kind == DfoServer.Game.Party.PartyNoticeKind.Updated).All(n => n.Guard?.Invoke() == false),
+                "离队更新名册并使在途旧队伍快照失效");
+            parties.Detach(sa);
+            That(parties.PartyId(actor.Character.Id) == ushort.MaxValue && parties.PartyId(actor.Character.Id) != createdPartyId,
+                "退出后菜单恢复空队伍哨兵，在途旧菜单不能恢复已清除的队伍标记");
+            That(sa.BeginClassExperienceSelection() is not null && sa.ReturnFromDungeonSelection(false) is not null,
+                "离队后恢复单人职业体验选图资格");
+            invite = parties.Invite(sa, sb, 0);
+            sb.ReturnToRoster(); sb.Select(0); sb.MarkReady();
+            That(!parties.Respond(sb, actor.Character.Id, 0, true).Accepted && invite.Notices[0].Guard?.Invoke() == false,
+                "换角epoch失效后不能接受旧邀请或收到迟到邀请");
+            parties.Invite(sa, sb, 0);
+            That(parties.Respond(sb, actor.Character.Id, 0, true).Accepted, "当前会话仍可重新组队");
+            sb.ReturnToRoster(); sb.Select(0); sb.MarkReady();
+            That(!parties.TransferLeader(sa, 1).Accepted && parties.Current(sa)!.Leader == 0,
+                "目标换角后即使旧槽位尚未清理，也不能把队长委任给新epoch");
+            parties.Detach(sa);
+            parties.Detach(sb);
+            other = sb.CaptureSocialActor()!;
+            That(AccountOwners.Lease.ExecuteTogether(a, b, () => a.Execute(() => b.Execute(() => 7))) == 7,
+                "固定双角色入口允许已持两把锁的明确重入");
+            Reject<InvalidOperationException>(() => a.Execute(() => AccountOwners.Lease.ExecuteTogether(a, b, () => true)),
+                "不能在单账号锁内升级为双账号锁");
             repo.Delete(b, repo.LoadDeletionTarget(b, 0));
             That(repo.CharacterLinks(actor.Character.Id, false).Length == 0 && Scalar("SELECT count(*) FROM account_social_links") == 2,
                 "删角清理两端角色关系，同时保留账号好友");

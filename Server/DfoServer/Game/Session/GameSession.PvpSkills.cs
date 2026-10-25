@@ -56,7 +56,7 @@ internal sealed partial class GameSession
         bool SkillReady()=>Ready && Phase==SessionPhase.Town && Selected?.Position is {Town:10,Area:4} &&
             pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null &&
             pendingQuestLifecycle is null && pendingQuestQuickClear is null && !HasPendingQuestScene &&
-            singleParty is null && pvpTraining is null;
+            CurrentParty?.Invoke() is null && pvpTraining is null;
         static bool SameRequest(object left,object right) => left is SkillLearningCommand a && right is SkillLearningCommand b
             ? a.Context==b.Context && a.Mode==b.Mode && a.Entries.SequenceEqual(b.Entries) : Equals(left,right);
         static SkillLearningResult Refused()=>new(SkillLearningFailure.Unsupported,null,[]);

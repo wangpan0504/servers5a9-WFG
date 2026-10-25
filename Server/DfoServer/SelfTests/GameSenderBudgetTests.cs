@@ -16,6 +16,8 @@ internal static class GameSenderBudgetTests
         await ActiveMoveAsync();
         await ReplacementOverflowAsync();
         await ConcurrentMovesAsync();
+        await DepartureAreaAsync();
+        await PhaseDepartureAsync();
         await WriteFailureAsync();
         Console.WriteLine($"PASS {TestCheck.Count - checks} game sender budget assertions");
     }
@@ -156,6 +158,73 @@ internal static class GameSenderBudgetTests
         TestCheck.That(stop.IsCancellationRequested && sender.PendingBytes == 0, "write failure cancels connection and drains reliable waiters");
         await FailuresAsync([sender.Send(0, 2, [3], "closed")]);
         TestCheck.That(sender.PendingBytes == 0, "closed queue rejects without reserving bytes");
+    }
+
+    static async Task DepartureAreaAsync()
+    {
+        using var owner = new AccountOwners().Acquire("departure-area", () => { });
+        using var stop = new CancellationTokenSource();
+        using var stream = new HeldStream();
+        await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
+        Task held = sender.Send(1, 1347, [1], "held");
+        await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        byte[] area = [1, 0, 38, 2, 61, 4, 249, 0, 0, 1];
+        sender.Enter(Actor(1, 1, 1, 1, 1));
+        sender.Leave(1, 1, destinationArea: area);
+        sender.Leave(1, 2, destinationArea: area);
+        TestCheck.That(sender.PendingBytes == 17 + 51 + 2 * 26, "切区离场及过期成员消息均计入区域包体和帧头");
+        Task barrier = sender.Send(1, 1347, [1], "barrier");
+        stream.Release.TrySetResult();
+        await Task.WhenAll(held, barrier).WaitAsync(TimeSpan.FromSeconds(5));
+        TestCheck.That(stream.Frames.Count == 6 && sender.PendingBytes == 0, "精确成员仅离场一次并释放区域消息预算");
+        TestCheck.Bytes(stream.Frames[4], GameFrame.Build(0, 23, 4, area), "普通切区发送目标区域而非销毁队伍引用的NOTI6");
+        sender.Enter(Actor(1, 3, 1, 1, 1));
+        await sender.Send(1, 1347, [1], "reenter");
+        int before = stream.Frames.Count;
+        await sender.ClearScene(SceneActorClear.Preserve);
+        TestCheck.That(stream.Frames.Count == before, "本人普通切区只清服务器可见集合，不发NOTI6");
+        sender.Enter(Actor(1, 4, 1, 1, 1));
+        await sender.Send(1, 1347, [1], "new-scene");
+        await sender.ClearScene();
+        TestCheck.Bytes(stream.Frames[^1], GameFrame.Build(0, 6, (ushort)(stream.Frames.Count - 1), [1, 0]),
+            "重逢后真正清场仍删除当前Actor，普通切区没有遗留旧membership");
+    }
+
+    static async Task PhaseDepartureAsync()
+    {
+        foreach (bool staleView in new[] { false, true })
+        {
+            using var owner = new AccountOwners().Acquire("phase-budget", () => { });
+            using var stop = new CancellationTokenSource();
+            using var stream = new HeldStream();
+            await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
+            Task held = sender.Send(1, 1347, [1], "held");
+            await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            sender.Enter(Actor(1, 1, 1, 1, 1));
+            sender.Leave(1, 2, hideActor: true);
+            sender.Leave(1, 1, hideActor: true);
+            sender.Leave(2, 1, hideActor: true);
+            TestCheck.That(sender.PendingBytes == 17 + 51 + 3 * 23,
+                "阶段离场按两行状态包体7B及16B帧头计费，包括未知和旧membership");
+            Task cleared = staleView ? sender.ClearScene(SceneActorClear.Hide) : Task.CompletedTask;
+            if (staleView) TestCheck.That(sender.PendingBytes == 17 + 51 + 4 * 23, "阶段清场控制消息保留完整状态帧额度");
+            Task barrier = sender.Send(1,1347,[1],"barrier");
+            stream.Release.TrySetResult();
+            await Task.WhenAll(held,cleared,barrier).WaitAsync(TimeSpan.FromSeconds(5));
+            TestCheck.That(sender.PendingBytes == 0 && stream.Frames.Count == (staleView ? 2 : 6),
+                "旧视图不会产生幽灵实体或删除未见Actor，所有阶段消息释放原额度");
+            if (!staleView)
+                TestCheck.Bytes(stream.Frames[4],GameFrame.Build(0,3,4,[2,1,0,1,1,0,0]),
+                    "精确membership只隐藏一次且在同帧恢复城镇状态，没有NOTI6");
+            sender.Enter(Actor(1,3,1,1,1));
+            await sender.Send(1,1347,[1],"reenter");
+            int before = stream.Frames.Count;
+            await sender.ClearScene(SceneActorClear.Hide);
+            TestCheck.That(stream.Frames.Count == before + 1 && sender.PendingBytes == 0,
+                "新阶段清场隐藏已送达实体且完成后预算归零");
+            TestCheck.Bytes(stream.Frames[^1],GameFrame.Build(0,3,(ushort)before,[2,1,0,1,1,0,0]),
+                "本人阶段清场也保留Actor和队伍引用");
+        }
     }
 
     static RemoteTownActor Actor(ushort id, long membership, int actor, int state, int position) =>

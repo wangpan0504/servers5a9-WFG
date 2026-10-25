@@ -39,6 +39,12 @@ internal static class PvpTrainingSessionTests
                 ? entry with {Rounds=PvpArcadeCatalog.Resolve(mode,opponents,_=>true)!.Allowed} : null;
             That(session.BeginPvpTraining(_=>throw new Exception("不应规划")) is null,"未就绪不解析训练资源");
             session.MarkReady(); var original=session.Selected!;
+            var parties = new DfoServer.Game.Party.PartyService(repository);
+            session.CurrentParty = () => parties.Current(session);
+            That(parties.SetInformation(session, 0, DfoServer.Game.Party.PartySettings.Default).Accepted &&
+                session.BeginPvpTraining(_ => throw new Exception("组队中不应规划训练")) is null,
+                "统一队伍即使只有一人，也不能进入私有训练房间");
+            That(parties.Leave(session).Accepted, "统一队伍退出后恢复训练资格");
             That(session.BeginPvpTraining(Plan,true) is null && session.GetState()==UserState.Town,"活动门禁禁止重叠入场");
             That(Plan(original with {ActiveMainQuests=[]}) is null &&
                 Plan(original with {ActiveMainQuests=[active with {AcceptanceId=Guid.Empty}]}) is null,
