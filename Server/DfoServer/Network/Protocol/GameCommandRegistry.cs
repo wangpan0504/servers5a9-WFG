@@ -52,20 +52,38 @@ internal sealed class GameCommandRegistry
             throw new InvalidOperationException("Command registry is not sealed");
         // 保留旧owner拒绝的优先级；等待门禁期间可能接管，取得后仍须复验。
         context.Owner.Execute(() => true);
-        await context.CommandGate.WaitAsync(context.Stop);
-        try
+        CommandResult result = CommandResult.Unhandled;
+        while (true)
         {
-            context.Owner.Execute(() => true);
-            CommandResult result = CommandResult.Unhandled;
-            if (commands.TryGetValue(request.Opcode, out var command) && context.Session.CheckState(command.MinimumState))
+            var partyGate = context.Session.CurrentParty?.Invoke()?.Commands;
+            if (partyGate is not null) await partyGate.WaitAsync(context.Stop);
+            try
             {
-                if (context.Creatures is { } creatures) await creatures.BeforeCommandAsync(request);
-                result = await command.Handler(context, request);
+                await context.CommandGate.WaitAsync(context.Stop);
+                try
+                {
+                    context.Owner.Execute(() => true);
+                    if (!ReferenceEquals(partyGate, context.Session.CurrentParty?.Invoke()?.Commands)) continue;
+                    // 队伍门禁协调所有成员命令；本人应答也只能入队，不能等慢连接拖住整队。
+                    using var publication = partyGate is null ? null : context.Sender.QueuePublication(() =>
+                    {
+                        long epoch = context.Session.SelectionEpoch;
+                        return () => context.Owner.IsCurrent && context.Session.SelectionEpoch == epoch && !context.Stop.IsCancellationRequested;
+                    });
+                    if (commands.TryGetValue(request.Opcode, out var command) && context.Session.CheckState(command.MinimumState))
+                    {
+                        if (context.Creatures is { } creatures) await creatures.BeforeCommandAsync(request);
+                        result = await command.Handler(context, request);
+                    }
+                    // 异步处理结束后仍须属于当前账号；旧连接不能继续下一条业务。
+                    context.Owner.Execute(() => true);
+                    break;
+                }
+                finally { context.CommandGate.Release(); }
             }
-            // 异步处理结束后仍须属于当前账号；旧连接不能继续下一条业务。
-            context.Owner.Execute(() => true);
-            return result;
+            finally { partyGate?.Release(); }
         }
-        finally { context.CommandGate.Release(); }
+        if (result == CommandResult.CloseConnection) await context.Sender.DrainAsync();
+        return result;
     }
 }

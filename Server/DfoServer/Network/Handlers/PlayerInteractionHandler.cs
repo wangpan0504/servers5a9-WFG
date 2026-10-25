@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Party;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -9,7 +10,7 @@ using DfoServer.Network.Projection;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessionDirectory online, ServerLog log) : IGameCommandModule
+internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessionDirectory online, ServerLog log, PartyDungeonService? partyDungeons = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -110,6 +111,21 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
     {
         bool kick = request.Opcode == (ushort)CmdPacketType.WALKOUT_PARTY_MEMBER;
         if (request.Body.Length != (kick ? 1 : 0)) throw new InvalidDataException("离队请求长度错误");
+        if (context.Session.PartyDungeon is { } instance && partyDungeons is not null)
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, instance.Members);
+            var departure = partyDungeons.Depart(context.Session, kick ? request.Body[0] : null);
+            log.Write(departure.Error == 0 ? "party_left" : "party_rejected", new { Connection = context.Id,
+                request.Opcode, departure.Error, Instance = instance.Id, KickSlot = kick ? (byte?)request.Body[0] : null });
+            try { await context.Reply((CmdPacketType)request.Opcode, SocialPackets.Ack(departure.Error), "party_leave_result"); }
+            finally
+            {
+                await PartyDungeonProjection.PublishAsync(departure.DungeonNotices.Where(n => n.Kind != PartyDungeonNoticeKind.Departure));
+                parties.Publish(departure.PartyNotices);
+                await PartyDungeonProjection.PublishAsync(departure.DungeonNotices.Where(n => n.Kind == PartyDungeonNoticeKind.Departure));
+            }
+            return CommandResult.Handled;
+        }
         var result = parties.Leave(context.Session, kick ? request.Body[0] : null, context.BlocksTownActions);
         log.Write(result.Accepted ? "party_left" : "party_rejected", new { Connection = context.Id, request.Opcode, result.Error });
         var replied = context.Reply((CmdPacketType)request.Opcode, SocialPackets.Ack(result.Error), "party_leave_result");

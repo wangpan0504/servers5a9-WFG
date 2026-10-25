@@ -19,8 +19,8 @@ internal sealed partial class CharacterRepository
         var clear = prepared.Result.ClearFact!; var expected = plan.Expected; var entry = run.Entry;
         // 普通0保留原Run身份；路线和本次实际生命周期任务各自核对原接取三元组。
         if (expected.Id != entry.CharacterId ||
-            !expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(row,entry)) ||
-            !expected.ActiveMainQuests.Any(row => row.QuestId == plan.QuestId && row.AcceptanceId == plan.AcceptanceId &&
+            entry.PartyRoute is null && !expected.ActiveMainQuests.Any(row => row.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(row,entry)) ||
+            !plan.IsPartySceneOnly && !expected.ActiveMainQuests.Any(row => row.QuestId == plan.QuestId && row.AcceptanceId == plan.AcceptanceId &&
                 QuestHuntProgress.Bound(row,entry)))
             throw new InvalidDataException("场景清图的原路线或实际任务接取身份已变化");
         if (!verifyOnly && (!run.IsPendingPassiveClear(prepared) || expected.DungeonState?.LastAttempt != clear.Identity.TaskAttempt))

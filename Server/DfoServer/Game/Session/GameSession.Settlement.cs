@@ -57,8 +57,8 @@ internal sealed partial class GameSession
         var boss = terminal.FirstOrDefault(monster => monster.ObjectKey == reportedBossKey) ??
             terminal.FirstOrDefault(monster => monster.IsBoss) ?? terminal.FirstOrDefault();
         bool cinematic = NonCombatCinematicTerminal(dungeon) is { } movie &&
-            dungeon.Run.ClearFact.ConfirmedDeathEvents.Count > 0 && Selected!.ActiveMainQuests.Any(active =>
-                active.QuestId == movie.Id && active.ConditionState == 0 && QuestHuntProgress.Bound(active,dungeon.Entry));
+            dungeon.Run.ClearFact.ConfirmedDeathEvents.Count > 0 && (PartyDungeon?.HasCompletedCinematic((uint)movie.Id,snapshot.CurrentMap) == true ||
+                Selected!.ActiveMainQuests.Any(active => active.QuestId == movie.Id && active.ConditionState == 0 && QuestHuntProgress.Bound(active,dungeon.Entry)));
         if (boss is null) return dungeon.Run.HasCommittedPassiveClearCondition || cinematic
             ? (FormalReceipt(), (ushort?)null) : ((FormalDungeonReceipt, ushort?)?)null;
         return (FormalReceipt(), boss.ObjectKey);
@@ -113,15 +113,16 @@ internal sealed partial class GameSession
         byte[] reportBody, DungeonCatalog dungeons, DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth,
         DungeonCardRewardPolicy? cards = null, int luckyStarLimit = 0,
         Events.ServerEventState? goldCardEvent = null, AdventureCatalog? adventure = null,
-        ItemCatalog? griefItems = null, EpicPieceCatalog? griefPieces = null)
+        ItemCatalog? griefItems = null, EpicPieceCatalog? griefPieces = null, IReadOnlyList<ushort>? reportMembers = null)
     {
         var capture = owner.Execute(() => (Character: Ready && Phase == SessionPhase.Settlement ? Selected : null,
             Dungeon: formalDungeon, Points: formalDungeon?.Run.CreatureExperiencePoints ?? 0,
-            Prepared: formalDungeon?.Settlement is not null));
+            Prepared: formalDungeon?.Settlement is not null,
+            ValidReport: formalDungeon is { } current && ValidSettlementReport(current, actorId, rankPoint, maximumRankPoint, reportMembers)));
         // 宠物资源与纯成长规划在账号锁外完成；结算事务只保存冻结结果，不重新读CRE或抽取进化目标。
         InventoryPlan? creatureInventory = null;
         if (!capture.Prepared && capture.Character is { } character && capture.Points > 0 && creatures is not null &&
-            capture.Dungeon?.Entry.IsTutorial != true && maximumRankPoint == rankPoint)
+            capture.Dungeon?.Entry.IsTutorial != true && capture.ValidReport)
         {
             var grown = creatures.Experience(character, capture.Points, creatures.Clock.GetUtcNow().ToUnixTimeSeconds());
             if (grown.Plan is { Changed: true } changed) creatureInventory = changed;
@@ -140,7 +141,8 @@ internal sealed partial class GameSession
         return owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice ||
-            dungeon.Run.ClearFact is not { } fact || dungeon.Run.CurrentAltar is not null || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene || maximumRankPoint != rankPoint)
+            dungeon.Run.ClearFact is not { } fact || dungeon.Run.CurrentAltar is not null || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene ||
+            !ValidSettlementReport(dungeon, actorId, rankPoint, maximumRankPoint, reportMembers))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         if (!capture.Prepared && (!ReferenceEquals(Selected, capture.Character) || !ReferenceEquals(dungeon, capture.Dungeon)))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
@@ -282,6 +284,18 @@ internal sealed partial class GameSession
         });
     }
 
+    // 多人报告只能引用本次入场成员，且必须包含本人；只结算本人评分，不代提交队友账本。
+    // 允许省略已退场成员，也允许客户端仍保留其统计行；完整报告仍由Run冻结并检查幂等。
+    static bool ValidSettlementReport(FormalDungeon dungeon, ushort actorId, byte rankPoint, byte maximumRankPoint,
+        IReadOnlyList<ushort>? reportMembers)
+    {
+        if (dungeon.PartyActors.IsEmpty)
+            return maximumRankPoint == rankPoint && (reportMembers is null || reportMembers.Count == 1 && reportMembers[0] == actorId);
+        return rankPoint <= maximumRankPoint && reportMembers is { Count: > 0 } &&
+            reportMembers.Count <= dungeon.PartyActors.Length && reportMembers.Contains(actorId) &&
+            reportMembers.Distinct().Count() == reportMembers.Count && reportMembers.All(dungeon.PartyActors.Contains);
+    }
+
     public FormalDungeonReceipt? AdvanceFormalDungeonCards(bool showCards) => owner.Execute(() =>
     {
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
@@ -300,7 +314,7 @@ internal sealed partial class GameSession
     {
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
             formalDungeon?.Settlement is not { Committed: true, CardsShown: true } settlement ||
-            row != 0 || card != 0 || settlement.SelectedCard is { } old && old != card)
+            row != 0 || card != formalDungeon.PartySlot || settlement.SelectedCard is { } old && old != card)
             return null;
         if (settlement.SelectedCard is not null)
             return new(FormalReceipt(), null, settlement.MailId, true);
@@ -344,7 +358,7 @@ internal sealed partial class GameSession
 
     public FormalFreeCardResult? RevealFormalDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed: true, CardsShown: true, SelectedCard: null }
-            ? SelectFormalDungeonFreeCard(0, 0) : null);
+            ? SelectFormalDungeonFreeCard(0, formalDungeon.PartySlot) : null);
 
     bool MatchesCardInstance(FormalDungeonReceipt receipt) => Ready && Phase == SessionPhase.Settlement &&
         receipt.Generation == owner.Generation && receipt.SelectionEpoch == SelectionEpoch &&
@@ -353,22 +367,23 @@ internal sealed partial class GameSession
 
     // 牌面属于已提交实例，与之后德利拉物品服务产生的新库存revision无关。
     public bool CanPublishDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>
-        MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed: true, CardsShown: true, SelectedCard: 0 });
+        MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed: true, CardsShown: true, SelectedCard: not null });
 
     public DungeonCardView? FormalCardState(FormalDungeonReceipt receipt) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed:true } settlement
-            ? new DungeonCardView(settlement.Pending.Options,settlement.SelectedCard == 0,settlement.Paid) : null);
+            ? new DungeonCardView(settlement.Pending.Options,settlement.SelectedCard is not null,settlement.Paid)
+                { Slot = formalDungeon.PartySlot } : null);
 
     public bool CanPublishCardView(FormalDungeonReceipt receipt,DungeonCardView view) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed:true,CardsShown:true } settlement &&
-        (settlement.SelectedCard == 0) == view.FreeSelected && settlement.Paid == view.Paid);
+        (settlement.SelectedCard is not null) == view.FreeSelected && settlement.Paid == view.Paid && formalDungeon.PartySlot == view.Slot);
 
     public FormalPaidCardResult? SelectFormalDungeonPaidCard(byte row,byte member,DungeonCardRewardPolicy cards,
         DateTimeOffset? utcNow = null) => owner.Execute(() =>
     {
-        if (row is not (1 or 2) || member != 0 || !Ready || Phase != SessionPhase.Settlement || Selected is null ||
+        if (row is not (1 or 2) || !Ready || Phase != SessionPhase.Settlement || Selected is null ||
             formalDungeon?.Settlement is not { Committed:true,CardsShown:true } settlement || settlement.Pending.Options is not { } options ||
-            options.PaidDisabled || settlement.Claim is { Side: not 1 })
+            options.PaidDisabled || member != formalDungeon.PartySlot || settlement.Claim is { Side: not 1 })
             return null;
         var now = utcNow ?? DateTimeOffset.UtcNow;
         if (settlement.Paid is not null) return new FormalPaidCardResult(FormalReceipt(),settlement.Paid,null,null,true);
@@ -468,9 +483,9 @@ internal sealed partial class GameSession
             hellParty: expected.Entry.IsCosmo);
     }
 
-    public bool CanRetryCosmoDungeon(FormalDungeonReceipt expected) => owner.Execute(() =>
+    public bool CanRetryCosmoDungeon(FormalDungeonReceipt expected, bool partyAdmission = false) => owner.Execute(() =>
     {
-        if (!Ready || !expected.Entry.IsCosmo || !CanEnterFormalDungeon(expected) ||
+        if (!Ready || !CanMutatePartyDungeon && partyAdmission || !expected.Entry.IsCosmo || !CanEnterFormalDungeon(expected,partyAdmission) ||
             formalDungeon is not { HellTicket: not null, HellPieces: { } pieces } dungeon ||
             Selected is not { } character) return false;
         if (dungeon.Entry.UsesFatigue && FatigueForClient(character).Remaining == 0 ||

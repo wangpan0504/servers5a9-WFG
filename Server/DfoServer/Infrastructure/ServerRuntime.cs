@@ -198,6 +198,7 @@ internal static class ServerRuntime
         var progress = new Game.Characters.CharacterProgressReset(characters, learning, growth);
         var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory };
         IGameCommandModule dungeon;
+        Game.Dungeons.PartyDungeonService? partyDungeons = null;
         IGameCommandModule? settlement = null;
         IGameCommandModule? questReplay = null;
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
@@ -274,14 +275,15 @@ internal static class ServerRuntime
                 itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
             var despairRewards = new DungeonDespairRewardPolicy(DungeonAltarClearItemCatalog.Load(pvf),
                 itemResources.DungeonAltarItems, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+            partyDungeons = new(parties, repository);
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
-                despairRewards,titleService,titleProjection,inventoryProjection);
+                despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
-                prices: DungeonCardPriceCatalog.Load(pvf)), inventoryProjection, itemResources.Rental, events, adventureCatalog);
+                prices: DungeonCardPriceCatalog.Load(pvf)), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops,crackRewards);
         }
         else
@@ -306,7 +308,7 @@ internal static class ServerRuntime
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection),
             new SocialHandler(repository, social, online, log),
-            new PlayerInteractionHandler(parties, online, log),
+            new PlayerInteractionHandler(parties, online, log, partyDungeons),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),
@@ -384,7 +386,7 @@ internal static class ServerRuntime
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings), inventoryProjection),
-            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons),
+            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
             new ImageCommunicationHandler(imageCommunication, quests, log),
@@ -435,7 +437,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log);
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;

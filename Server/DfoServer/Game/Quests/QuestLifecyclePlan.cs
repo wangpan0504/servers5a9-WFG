@@ -41,6 +41,11 @@ internal sealed class QuestLifecyclePlan
     public QuestSceneEvent? SceneEvent { get; }
     internal PreparedDungeonPassiveClear? SceneClear { get; private init; }
     internal SinglePlayerDungeonRun? SceneClearRun { get; private init; }
+    internal bool IsPartySceneOnly => QuestId == 0 && AcceptanceId == Guid.Empty && Action == QuestLifecycleAction.Condition &&
+        SceneEvent is { } scene && SceneClearRun is { Entry.PartyRoute: not null } run &&
+        scene.Identity.CharacterId == Expected.Id && !Inventory.Changed && ActiveAfter.SequenceEqual(Expected.ActiveMainQuests) &&
+        (SceneClear is { } clear ? QuestClearEligibility.TryValidateScene(run, clear, scene) :
+            run.IsPassiveClearCondition(scene.Identity, scene.TemplateId, scene.SourceOrdinal));
     public ImmutableArray<int> CompletedAfter { get; private init; }
     public ImmutableArray<int> AccountCompletedAfter { get; private init; }
 
@@ -97,6 +102,10 @@ internal sealed class QuestLifecyclePlan
         if (changed is null && entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] &&
             condition.TargetId == sceneEvent.TemplateId)
             changed = after.SingleOrDefault(row => row.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(row, entry));
+        if (changed is null && entry.PartyRoute is not null && run is not null &&
+            (sceneClear is not null || run.IsPassiveClearCondition(sceneEvent.Identity,sceneEvent.TemplateId,sceneEvent.SourceOrdinal)))
+            return new(expected,QuestLifecycleAction.Condition,0,Guid.Empty,after,inventory,sceneEvent)
+                { SceneClear = sceneClear, SceneClearRun = run };
         return changed is null ? null : new(expected,QuestLifecycleAction.Condition,changed.QuestId,changed.AcceptanceId,
             after,inventory,sceneEvent) { SceneClear = sceneClear, SceneClearRun = run };
     }

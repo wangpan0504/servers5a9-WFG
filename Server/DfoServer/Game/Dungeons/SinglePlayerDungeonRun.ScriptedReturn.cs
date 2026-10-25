@@ -87,6 +87,9 @@ internal sealed partial class SinglePlayerDungeonRun
 
     internal bool CanPresentScriptedBase(DungeonPoint target)
     {
+        // 组队批准路线保留原接取信息；真实演出返回仍沿Run的基础房切换，不进入呈现缓存。
+        if (HasScriptedTransit) return false;
+        var entry = this.entry.PartyRoute ?? this.entry;
         var map = current.Plan.Room.Map;
         if (entry.IsTutorial || entry.IsClassExperience || entry.IsQuestReplay || !entry.HasExplicitClearMap ||
             entry.RouteQuestId is 0 or >= 30000 || entry.TerminalLayerMap != map || map.Kind != "layered" ||

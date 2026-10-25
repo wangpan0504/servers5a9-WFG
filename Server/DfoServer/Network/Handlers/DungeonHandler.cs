@@ -26,7 +26,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null,
     CrackDimensionRewardServices? crackRewards = null, DungeonAltarRewardPolicy? altarRewards = null,
     DungeonDespairRewardPolicy? despairRewards = null, DfoServer.Game.Titles.TitleAchievementService? titles = null,
-    TitleProjection? titleProjection = null, InventoryProjection? inventoryProjection = null) : IGameCommandModule
+    TitleProjection? titleProjection = null, InventoryProjection? inventoryProjection = null,
+    PartyDungeonService? partyDungeons = null, CharacterStatComputer? partyStats = null,
+    DfoServer.Game.Party.PartyService? parties = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -48,6 +50,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     async Task<CommandResult> CharacterDeathAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonRequests.TryParseCharacterDeath(request.Body, out var position)) return CommandResult.Unhandled;
+        using var peers = context.Session.PartyDungeon is { } party ?
+            await PartyDungeonProjection.AcquirePeersAsync(context, party.Members) : null;
         var receipt = context.Session.ReportFormalCharacterDeath();
         log.Write("formal_character_death", new { Connection = context.Id, Accepted = receipt is not null, position.X, position.Y, position.Context,
             Character = receipt?.Character.Id, receipt?.Snapshot.Identity, receipt?.AutomaticRevival });
@@ -56,15 +60,19 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             bool altar = !receipt.AutomaticRevival && receipt.Monsters.Altar is not null && altarRewards is not null;
             if (context.Death is not null)
             {
-                if (receipt.AutomaticRevival || altar) await context.Death.StopAsync();
+                if (receipt.AutomaticRevival || altar || context.Session.PartyDungeon is not null) await context.Death.StopAsync();
                 else await context.Death.StartAsync();
             }
             bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
             await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(receipt.Character.Id, (byte)0),
                 "formal_character_dead", Guard);
+            await PartyDungeonProjection.PublishEventAsync(context, PartyDungeonNoticeKind.Life, receipt.Character.Id, 0);
             if (receipt.AutomaticRevival)
+            {
                 await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(receipt.Character.Id, (byte)2),
                     "formal_character_blessing_revived", Guard);
+                await PartyDungeonProjection.PublishEventAsync(context, PartyDungeonNoticeKind.Life, receipt.Character.Id, 2);
+            }
             if (altar && context.Session.WaitDungeonAltarRevival() is { } waiting && context.Altar is not null)
                 await context.Altar.WakeAfterDeathAsync(waiting, () => context.Session.BeginDungeonAltarSettlement(altarRewards!, growth));
         }
@@ -74,6 +82,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     async Task<CommandResult> UseCoinAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonRequests.TryParseUseCoin(request.Body, out ushort targetKey)) return CommandResult.Unhandled;
+        using var peers = context.Session.PartyDungeon is { } party ?
+            await PartyDungeonProjection.AcquirePeersAsync(context, party.Members) : null;
         var scene = context.Session.CurrentFormalDungeonScene();
         var result = context.Session.ReviveFormalCharacter(targetKey);
         log.Write("formal_character_revive", new { Connection = context.Id, Target = targetKey, Accepted = result?.Accepted == true,
@@ -90,6 +100,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool Guard() => context.Session.CanPublishInventory(receipt);
         await context.Reply(CmdPacketType.USE_COIN, DungeonPackets.CoinUsed(targetKey), "formal_revive_ack", Guard);
         await context.Notify(NotiPacketType.DIE_STATE, DungeonPackets.CharacterLife(targetKey, true), "formal_character_revived", Guard);
+        await PartyDungeonProjection.PublishEventAsync(context, PartyDungeonNoticeKind.Life, targetKey, 1);
         await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
             InventoryPackets.Delta(receipt.Character.Inventory, InventoryListType.Main, [new(InventoryListType.Main, 1)]),
             "formal_revive_coin_balance", Guard);
@@ -104,11 +115,14 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     async Task<CommandResult> StoryPauseAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonRequests.TryParseStoryPause(request.Body,out var pause)) return CommandResult.Unhandled;
+        using var peers = context.Session.PartyDungeon is { } party ?
+            await PartyDungeonProjection.AcquirePeersAsync(context, party.Members) : null;
         var receipt = context.Session.CurrentFormalDungeonScene();
         if (receipt is null) return CommandResult.Unhandled;
         await context.Notify(NotiPacketType.DUNGEON_EVENT_STORY_PAUSE,
             DungeonPackets.StoryPause(receipt.Character.Id,pause.State,pause.Type),"formal_story_pause",
             () => context.Session.CanPublishFormalDungeon(receipt));
+        await PartyDungeonProjection.PublishEventAsync(context, PartyDungeonNoticeKind.Pause, receipt.Character.Id, pause.State, pause.Type);
         // 演出恢复后重新激活已加载角色；提前恢复仍由后续加载确认发布初始状态。
         if (pause.State == 1 && receipt.Snapshot.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement)
             await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id),
@@ -168,6 +182,21 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             (selection.Unknown7 != (hell ? 1 : 0) || selection.Unknown8 != (direct || practice ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
             selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0) || selection.Unknown21 != 0))
             return await RejectAsync();
+        if (context.Session.HasMultiplePartyMembers?.Invoke() == true)
+        {
+            if (partyDungeons is null || direct || replay || practice || continuation || sealDoor)
+                return await RejectAsync();
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, context.Session.CurrentParty?.Invoke()?.Members ?? []);
+            var entered = partyDungeons.Enter(context.Session, selection.DungeonIndex, selection.Parameter,
+                dungeons, rooms, drops, items, pieces, prepareDrops,
+                questId: hell ? 0u : selection.Unknown16, hellParty: hell, hellLegend: legend, crackRewards: crackRewards);
+            log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length > 0, Party = true,
+                Members = entered.Length, Dungeon = selection.DungeonIndex, Quest = selection.Unknown16, HellParty = hell, HellLegend = legend,
+                RejectReason = entered.Length == 0 ? context.Session.LastFormalDungeonRejection ?? "party-entry-unavailable" : null });
+            if (entered.Length == 0) return await RejectAsync();
+            await PartyDungeonProjection.PublishAsync(entered);
+            return CommandResult.Handled;
+        }
         var receipt = continuation ? context.Session.EnterFormalDungeonContinuation(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
             replay ? context.Session.EnterQuestReplay(selection.DungeonIndex,selection.Unknown16,selection.Parameter) :
             (sealDoor ? context.Session.EnterFormalDungeon(selection.DungeonIndex, 0, selection.Parameter, dungeons, rooms,
@@ -277,6 +306,14 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     async Task<CommandResult> LoadedAsync(GameConnectionContext context, Packet request)
     {
         if (request.Body.Length != 8 || request.Body.Any(value => value != 0)) return CommandResult.Unhandled;
+        if (context.Session.PartyDungeon is { } party)
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+            var completed = party.CompleteLoading(context.Session);
+            log.Write("formal_dungeon_move", new { Connection = context.Id, Party = party.Id, LoadingReady = true, Released = completed.Length });
+            await PartyDungeonProjection.PublishAsync(completed);
+            return CommandResult.Handled;
+        }
         var receipt = context.Session.CompleteFormalDungeonLoading();
         if (receipt is null) return CommandResult.Unhandled;
         if (receipt.NavigationReplay) return CommandResult.Handled;
@@ -304,6 +341,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
 
     async Task<CommandResult> DeathAsync(GameConnectionContext context, Packet request)
     {
+        if (context.Session.PartyDungeon is not null) return await PartyDeathAsync(context, request);
         if (DungeonRequests.TryParsePassiveDeath(request.Body, out var passive))
         {
             if (!context.Session.Ready || context.Session.DungeonSnapshot is not { Phase: SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement })
@@ -352,6 +390,12 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             audit = observation;
             result = context.Session.ObserveFormalDungeonDeath(observation,rewards,growth);
         }
+        return await PublishDeathAsync(context, result, previousCharacter, objectKey, audit);
+    }
+
+    async Task<CommandResult> PublishDeathAsync(GameConnectionContext context, FormalDungeonDeathResult result,
+        Character? previousCharacter, uint objectKey, object audit)
+    {
         var target = result.ReportedTarget;
         log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, ObjectKey = objectKey, Report = audit,
             Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.Team, target.IsFriendly, target.IsBlocking, target.CanReportDeath },
@@ -449,6 +493,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     {
         if (items is null || pieces is null || !DungeonPickupRequests.TryParseOrdinary(request.Body, out var parsed))
             return CommandResult.Unhandled;
+        if (context.Session.PartyDungeon is not null) return await PartyPickupAsync(context, parsed.GroundObjectKey);
         var previousQuests = context.Owner.Execute(() => context.Session.Selected?.ActiveMainQuests);
         var result = context.Session.PickFormalDungeonItem(parsed.GroundObjectKey, items, pieces, goldLimits);
         if (result.Outcome != DungeonRunOutcome.Accepted || result.Receipt is not { } receipt || result.Commit is not { } commit)
@@ -484,6 +529,14 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             log.Write("formal_layer_base_ack",new { Connection = context.Id, move.X, move.Y });
             return CommandResult.Handled;
         }
+        if (context.Session.PartyDungeon is { } party)
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+            var moved = party.Move(context.Session, move.X, move.Y, move.Unknown10);
+            log.Write("formal_dungeon_move", new { Connection = context.Id, Party = party.Id, Accepted = moved.Length > 0, move.X, move.Y });
+            await PartyDungeonProjection.PublishAsync(moved);
+            return CommandResult.Handled;
+        }
         var receipt = context.Session.MoveFormalDungeon(move.X, move.Y, move.Unknown10);
         log.Write("formal_dungeon_move",new { Connection = context.Id, Accepted = receipt is not null,
             move.X, move.Y, Kind = move.Unknown10, receipt?.Snapshot.CurrentMap, receipt?.Snapshot.MapOperation, receipt?.Snapshot.MapPayload });
@@ -507,21 +560,43 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         return CommandResult.Handled;
     }
 
-    Task<CommandResult> RidableOperationAsync(GameConnectionContext context, Packet request)
+    async Task<CommandResult> RidableOperationAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonRequests.TryParseRidableOperation(request.Body,out var operation))
-            return Task.FromResult(CommandResult.Unhandled);
+            return CommandResult.Unhandled;
+        if (context.Session.PartyDungeon is { } party)
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context,party.Members);
+            return party.OperateRidable(context.Session,operation.Operation,operation.ResourceId,operation.MapX,operation.MapY)
+                ? CommandResult.Handled : CommandResult.Unhandled;
+        }
         var result = context.Session.OperateFormalRidable(operation.Operation,operation.ResourceId,operation.MapX,operation.MapY);
         bool accepted = result?.Outcome is DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate;
         log.Write("formal_ridable_operation",new { Connection = context.Id, Accepted = accepted, operation.Operation,
             operation.ResourceId, operation.MapX, operation.MapY, result?.Outcome, result?.Snapshot.Identity });
         // 原生本地状态机已执行操作；不伪造ACK或重复创建MAP已有的骑乘演员。
-        return Task.FromResult(accepted ? CommandResult.Handled : CommandResult.Unhandled);
+        return accepted ? CommandResult.Handled : CommandResult.Unhandled;
     }
 
     async Task<CommandResult> ReturnAsync(GameConnectionContext context, Packet request)
     {
         if (request.Body.Length != 0) return CommandResult.Unhandled;
+        var party = context.Session.PartyDungeon;
+        using var peers = party is null ? null : await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+        if (party is not null)
+        {
+            var departure = partyDungeons?.Depart(context.Session, preserveSolo: true);
+            if (departure is null || departure.Error != 0) return CommandResult.Unhandled;
+            // 退场已提交；即使退出者收包失败，仍需向幸存者发布名册和主机变化。
+            try { await context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack"); }
+            finally
+            {
+                await PartyDungeonProjection.PublishAsync(departure.DungeonNotices.Where(n => n.Kind != PartyDungeonNoticeKind.Departure));
+                (parties ?? throw new InvalidOperationException("组队副本缺少队伍服务")).Publish(departure.PartyNotices);
+                await PartyDungeonProjection.PublishAsync(departure.DungeonNotices.Where(n => n.Kind == PartyDungeonNoticeKind.Departure));
+            }
+            return CommandResult.Handled;
+        }
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
         if (context.Altar is not null) await context.Altar.StopAsync();

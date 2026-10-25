@@ -17,6 +17,7 @@ internal sealed class AccountOwners
     [ThreadStatic] static AccountState? executing;
     [ThreadStatic] static AccountState? pairFirst;
     [ThreadStatic] static AccountState? pairSecond;
+    [ThreadStatic] static AccountState[]? executingGroup;
 
     public AccountOwners(GameCache? memory = null)
     {
@@ -44,6 +45,11 @@ internal sealed class AccountOwners
 
     static void CheckLockOrder(AccountState state)
     {
+        if (executingGroup is { } group)
+        {
+            if (!group.Contains(state)) throw new InvalidOperationException("组合锁不能引入外部账号");
+            return;
+        }
         if (executing is not null && !ReferenceEquals(executing, state) &&
             !ReferenceEquals(pairFirst, state) && !ReferenceEquals(pairSecond, state))
             throw new InvalidOperationException("Cannot nest different account locks");
@@ -62,7 +68,7 @@ internal sealed class AccountOwners
         ArgumentNullException.ThrowIfNull(disconnect);
         if (policy is not (DuplicateLoginPolicy.Reject or DuplicateLoginPolicy.ReplaceExisting))
             throw new ArgumentOutOfRangeException(nameof(policy));
-        if (executing is not null)
+        if (executing is not null || executingGroup is not null)
             throw new InvalidOperationException("Cannot acquire ownership inside Lease.Execute");
         AccountState state;
         lock (registryGate)
@@ -128,6 +134,7 @@ internal sealed class AccountOwners
         // 双账号交易唯一入口：锁按账号名排序，普通单锁不能升级，也不能引入第三账号。
         public static T ExecuteTogether<T>(Lease first, Lease second, Func<T> action)
         {
+            if (executingGroup is not null) throw new InvalidOperationException("组合锁不能嵌入双账号事务");
             if (ReferenceEquals(first.State, second.State) || first.Account == second.Account ||
                 !ReferenceEquals(first.Registry, second.Registry))
                 throw new InvalidOperationException("双账号事务必须属于同一目录中的两个不同账号");
@@ -154,6 +161,43 @@ internal sealed class AccountOwners
             void RequireCurrent()
             {
                 if (!first.IsCurrent || !second.IsCurrent) throw new InvalidOperationException("双账号事务租约已失效");
+            }
+        }
+
+        // 成员在锁外固定；重入只能复用原组合，禁止从单锁、双锁升级或临时扩充成员。
+        public static T ExecuteGroup<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, Func<T> action)
+        {
+            if (members.Count is < 1 or > 4 || members.Any(m => m.Character == 0) ||
+                members.Select(m => m.Character).Distinct().Count() != members.Count ||
+                members.Select(m => m.Owner.Account).Distinct(StringComparer.Ordinal).Count() != members.Count ||
+                members.Any(m => !ReferenceEquals(m.Owner.Registry, members[0].Owner.Registry)))
+                throw new InvalidOperationException("组合需要同一目录的一至四个不同账号和角色");
+            var ordered = members.OrderBy(m => m.Owner.Account, StringComparer.Ordinal).ToArray();
+            var states = ordered.Select(m => m.Owner.State).ToArray();
+            if (executingGroup is { } active)
+            {
+                if (!active.SequenceEqual(states)) throw new InvalidOperationException("不能更换已锁定的组合");
+                RequireCurrent();
+                return action();
+            }
+            if (executing is not null || pairFirst is not null)
+                throw new InvalidOperationException("不能从单账号或双账号锁升级到组合锁");
+            int held = 0;
+            try
+            {
+                foreach (var state in states) { Monitor.Enter(state.Gate); held++; }
+                RequireCurrent();
+                executingGroup = states;
+                return action();
+            }
+            finally
+            {
+                executingGroup = null;
+                for (int i = held - 1; i >= 0; i--) Monitor.Exit(states[i].Gate);
+            }
+            void RequireCurrent()
+            {
+                if (ordered.Any(m => !m.Owner.IsCurrent)) throw new InvalidOperationException("组合成员租约已失效");
             }
         }
 

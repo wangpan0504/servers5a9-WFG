@@ -32,7 +32,79 @@ internal static class DungeonEntryCostTests
         foreach(var malformed in new[] {new[]{100,1,-1},new[]{100,0,-1,0},new[]{100,1,0,0},
             new[]{100,1,-1,-1},new[]{100,1,-1,0,100,1,-1,2}})
             Reject<InvalidDataException>(()=>Parse(malformed),"通行证残缺、零数量、未确认附加条件及重复条目拒绝");
+        PartyEntryTransaction();
         Console.WriteLine($"PASS {Count-checks} 超星空通行证声明边界断言");
+    }
+
+    static void PartyEntryTransaction()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ServerS5A9-party-entry-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(root, "game.db");
+        try
+        {
+            var repository = new DfoServer.Persistence.CharacterRepository(path);
+            var auth = new DfoServer.Game.Auth.AuthenticationService(new DfoServer.Persistence.AuthenticationRepository(path));
+            auth.Create("entry-a", "fixture-password"); auth.Create("entry-b", "fixture-password");
+            var owners = new DfoServer.Game.Accounts.AccountOwners();
+            using var a = owners.Acquire("entry-a", () => { });
+            using var b = owners.Acquire("entry-b", () => { });
+            Character Create(DfoServer.Game.Accounts.AccountOwners.Lease owner, string name) => repository.Create(owner,
+                new NewCharacter(name, new(38, 1, 450, 234), null)
+                { DungeonState = CharacterDungeonState.NewOrdinary, Inventory = InventorySnapshot.Empty with { Gold = 100 } });
+            var first = Create(a, "EntryA"); var second = Create(b, "EntryB");
+            var period = new DungeonIncountPeriod(20261025, 20261022);
+            var row = new DungeonIncountRow(0, [3], 1, false, 2);
+            var instance = Guid.NewGuid();
+            PartyDungeonReservation Reserve(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character character) =>
+                new(owner, character, 20, new(new(character.Inventory, character.Inventory with { Gold = 90 }, "party_entry_test"),
+                    8, new(character.Id, 0, character.DungeonState!.LastAttempt + 1, instance, 1), 1),
+                    new(3, period, row, [new(3, period.Day, 1, true)], true));
+            var reservations = new[] { Reserve(a, first), Reserve(b, second) };
+            void Sql(string sql)
+            {
+                using var db = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + path);
+                db.Open(); using var command = db.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery();
+            }
+            Sql($"CREATE TRIGGER fail_party_entry BEFORE UPDATE ON character_dungeon_state WHEN NEW.character_id={second.Id} BEGIN SELECT RAISE(ABORT,'party-entry-failure'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => repository.CommitPartyDungeonEntry(reservations), "后续成员提交失败");
+            That(QuestCompletionRepositoryTests.Same(first, repository.LoadCharacter(a, 0)!) &&
+                QuestCompletionRepositoryTests.Same(second, repository.LoadCharacter(b, 0)!) &&
+                repository.LoadDungeonIncount(a, first.Id, 3, period) == default &&
+                repository.LoadAccountDungeonIncount(a, 3, period.Day) == 0,
+                "全员费用、疲劳、角色/账号次数、revision与尝试号同事务回滚");
+            Sql("DROP TRIGGER fail_party_entry");
+            var committed = repository.CommitPartyDungeonEntry(reservations);
+            That(committed.All(r => r.Character.Inventory.Gold == 90 && r.Character.Fatigue?.Remaining == 148 &&
+                r.Character.DungeonState?.LastAttempt == 1 && r.EnterCounts.Single().Daily == 0) &&
+                repository.LoadAccountDungeonIncount(a, 3, period.Day) == 1 && repository.LoadAccountDungeonIncount(b, 3, period.Day) == 1,
+                "失败后重试只扣一次，分别返回各成员的实际余额、次数与尝试号");
+            var exhausted = new[] { Reserve(a, committed[0].Character), Reserve(b, committed[1].Character) };
+            Reject<InvalidOperationException>(() => repository.CommitPartyDungeonEntry(exhausted), "次数耗尽时整队拒绝");
+            That(repository.LoadCharacter(a, 0)!.Revision == committed[0].Character.Revision &&
+                repository.LoadCharacter(b, 0)!.Revision == committed[1].Character.Revision,
+                "次数拒绝不再扣任何成员费用或推进尝试号");
+            var exits = committed.Select((r, i) => new PartyDungeonExitReservation(i == 0 ? a : b,
+                r.Character, r.Character.Position with { X = 500 }, null)).ToArray();
+            Sql($"CREATE TRIGGER fail_party_exit BEFORE UPDATE ON characters WHEN NEW.id={second.Id} BEGIN SELECT RAISE(ABORT,'party-exit-failure'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => repository.CommitPartyDungeonExit(exits), "后续成员退场保存失败");
+            That(QuestCompletionRepositoryTests.Same(committed[0].Character, repository.LoadCharacter(a, 0)!) &&
+                QuestCompletionRepositoryTests.Same(committed[1].Character, repository.LoadCharacter(b, 0)!),
+                "全员退场位置、资产与revision一起回滚，不能留下半队回城");
+            Sql("DROP TRIGGER fail_party_exit");
+            var returned = repository.CommitPartyDungeonExit(exits);
+            That(returned.All(r => r.Position.X == 500) && returned.Select((r, i) =>
+                r.Revision == committed[i].Character.Revision + 1).All(value => value),
+                "重试退场全员保存一次");
+            var unchanged = returned.Select((r, i) => new PartyDungeonExitReservation(i == 0 ? a : b, r, r.Position, null)).ToArray();
+            Sql("CREATE TRIGGER reject_unchanged_exit BEFORE UPDATE ON characters BEGIN SELECT RAISE(ABORT,'no-op-exit-write'); END");
+            That(repository.CommitPartyDungeonExit(unchanged).SequenceEqual(returned), "无持久变化的全员退场只核对身份，不执行写入");
+            Reject<InvalidOperationException>(() => repository.CommitPartyDungeonExit(exits), "旧revision不能重复退场");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
     }
 
     internal static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,

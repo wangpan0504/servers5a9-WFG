@@ -17,6 +17,8 @@ internal static class DungeonSettlementProtocolTests
         int before = Count;
         MembershipPackets();
         ExperiencePartOffsets();
+        PartyReports();
+        PartyCardSlots();
         byte[] boss = Convert.FromHexString("04001B0100000000000000000003000000B2080000000000003F03EF007400030106001E002000");
         That(DungeonSettlementRequests.TryParseBossCheck(boss, out var parsedBoss) && parsedBoss!.ActorId == 4 &&
             parsedBoss.BossKey == 283 && parsedBoss.SpawnLevel == 3 && parsedBoss.SpawnHp == 2226 && parsedBoss.RemainingFields.Count == 35,
@@ -33,7 +35,7 @@ internal static class DungeonSettlementProtocolTests
         foreach (int width in new[] { 0, 49, 52, 54, 57 })
             That(!DungeonSettlementRequests.TryParsePlayResult(new byte[width], out _), "46不套用残缺或特殊资源宽度");
         bad = (byte[])report.Clone(); bad[3] = 2;
-        That(!DungeonSettlementRequests.TryParsePlayResult(bad, out _), "当前普通单人结算不冒充组队报告");
+        That(!DungeonSettlementRequests.TryParsePlayResult(bad, out _), "成员数与完整正文长度必须匹配");
         Bytes(DungeonSettlementPackets.BossAccepted(283), [1, 1, 27, 1], "115成功包含允许位及Boss key");
         var presentation = new DungeonSettlementPresentation(12345, 90, 90, 1200);
         byte[] result = DungeonSettlementPackets.PlayResult(4, presentation);
@@ -177,14 +179,106 @@ internal static class DungeonSettlementProtocolTests
             "35杀怪明细与免费席同时存在时两段动态长度都按各自8N平移");
     }
 
-    internal static byte[] Report(ushort actorId, byte point)
+    static void PartyReports()
     {
-        byte[] body = new byte[53];
+        foreach (string hex in new[]
+        {
+            "000000020100010000006303000000000014630000000000000000FFFFFFFFA40100004C010000A40100004C0100000900000000000000006DB771BA",
+            "000000020100010000006303000000000032630100000001000000FFFFFFFF2D4C01006B6400002D4C0100E56D0000090000000000000000A11D5D9F"
+        })
+        {
+            That(DungeonSettlementRequests.TryParsePlayResult(Convert.FromHexString(hex), out var report) &&
+                report!.Participants.Count == 2 && report.Participants[0].ActorId == 1 && report.Participants[0].Value == 1 &&
+                report.Participants[1].ActorId == 3 && report.Participants[1].RankPoint < report.MaximumRankPoint &&
+                report.MaximumRankPoint == 99 && report.RemainingFields.Count == 37,
+                "实机60B两人报告按成员行解析，队员评分可以低于最高评分");
+        }
+        foreach (int count in new[] { 2, 4, 8 })
+        {
+            var body = Report(Enumerable.Range(1, count).Select(i => ((ushort)i, (byte)(100 - i))).ToArray());
+            That(body.Length == 46 + 7 * count && DungeonSettlementRequests.TryParsePlayResult(body, out var parsed) &&
+                parsed!.Participants.Count == count && parsed.Participants[^1].RankPoint == 100 - count,
+                "普通报告支持完整有界成员表，末行不会误读为最高评分或统计尾");
+            That(!DungeonSettlementRequests.TryParsePlayResult(body[..^1], out _) &&
+                !DungeonSettlementRequests.TryParsePlayResult([.. body, 0], out _), "多人报告拒绝截断和额外尾字节");
+        }
+        foreach (var body in new[] { Report((4, 90), (4, 20)), Report((4, 90), (8, 20)) })
+        {
+            if (U16(body, 4) != U16(body, 11)) body[18] = 20;
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(body.Length - 4), ClientBodyChecksum.Compute(body.AsSpan(0, body.Length - 4)));
+            That(!DungeonSettlementRequests.TryParsePlayResult(body, out _), "重复成员或不等于全表最高分的最大评分均拒绝");
+        }
+        foreach (byte count in new byte[] { 0, 9, 255 })
+        {
+            var body = Report(4, 90); body[3] = count;
+            That(!DungeonSettlementRequests.TryParsePlayResult(body, out _), "成员数只能为1至8");
+        }
+        var special = Report((4, 90), (8, 20)); special[0] = 1;
+        That(!DungeonSettlementRequests.TryParsePlayResult(special, out _), "特殊报告种类不能套用普通组队格式");
+        var presentation = new DungeonSettlementPresentation(12345, 20, 20, 1200);
+        byte[] result = DungeonSettlementPackets.PlayResult(8, presentation, [4, 8]);
+        That(result.Length == 23 && result[6] == 20 && result[8] == 2 && U16(result, 9) == 4 && U16(result, 16) == 8 &&
+            U32(result, 11) == 12345 && U32(result, 18) == 12345, "34包含完整入场成员且本人显示自己的评分");
+    }
+
+    static void PartyCardSlots()
+    {
+        var reward = new DungeonClearExperienceReward(130, 19, 149, 3, "fixture", "fixture");
+        var free = new DungeonCardReward(123, null, "fixture", "fixture", 1);
+        var bonus = new DungeonCardReward(456, null, "fixture", "fixture", 1);
+        foreach (byte slot in new byte[] { 0, 1, 3, 7 })
+        {
+            var rights = DungeonSettlementPackets.CardRights(87, slot);
+            That(Enumerable.Range(0, 8).All(i => U16(rights, 1 + i * 2) == (i == slot ? 87 : ushort.MaxValue)),
+                "70将本人疲劳写入原始队伍槽，其余席不开放");
+            var body = DungeonSettlementPackets.CardReward(reward, 1200, free, blackDiamond: bonus, slot: slot);
+            using var reader = new BinaryReader(new MemoryStream(body));
+            reader.ReadBytes(156);
+            for (int group = 0; group < 3; group++)
+            {
+                for (int member = 0; member < 8; member++)
+                {
+                    int count = reader.ReadByte();
+                    bool own = group != 1 && member == slot;
+                    That(count == (own ? 1 : 0), "35只有本人真实槽位含免费或黑钻候选，其他成员奖励不串用");
+                    if (own) That(reader.ReadUInt32() == 0 && reader.ReadUInt32() == (group == 0 ? 123 : 456),
+                        "免费与黑钻组的金币仍属于本人独立牌面");
+                }
+                if (group == 0) reader.ReadUInt32();
+            }
+            ReadCardTail(body);
+            var view = new DungeonCardView(null, true, bonus) { Slot = slot };
+            using var selected = new BinaryReader(new MemoryStream(DungeonSettlementPackets.CardSelected(view)));
+            That(selected.ReadByte() == 1, "71保留公共成功前缀");
+            for (int member = 0; member < 8; member++)
+            {
+                bool own = member == slot;
+                That(selected.ReadByte() == (own ? 0 : 255) && selected.ReadByte() == (own ? 0 : 255) &&
+                    selected.ReadByte() == (own ? 1 : 0), "71只揭示本人原始席位，不占用队长席");
+                if (own) That(selected.ReadUInt32() == 0 && selected.ReadUInt32() == 456, "付费候选携带本人完整金币");
+                That(selected.ReadByte() == 0, "71成员尾标志保留零");
+            }
+            That(selected.BaseStream.Position == selected.BaseStream.Length, "71完整消费八席动态正文");
+            var onlyFree = DungeonSettlementPackets.FreeCardSelected(slot);
+            That(Enumerable.Range(0, 8).All(i => onlyFree[1 + i * 4] == (i == slot ? 0 : 255) && onlyFree[2 + i * 4] == 255),
+                "仅免费翻牌同样按本人原始槽位确认");
+        }
+    }
+
+    internal static byte[] Report(ushort actorId, byte point) => Report([(actorId, point)]);
+
+    internal static byte[] Report(params (ushort ActorId, byte Point)[] participants)
+    {
+        byte[] body = new byte[46 + 7 * participants.Length];
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), 12);
-        body[3] = 1;
-        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(4), actorId);
-        body[10] = body[11] = point;
-        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(49), ClientBodyChecksum.Compute(body.AsSpan(0, 49)));
+        body[3] = checked((byte)participants.Length);
+        for (int index = 0; index < participants.Length; index++)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(4 + 7 * index), participants[index].ActorId);
+            body[10 + 7 * index] = participants[index].Point;
+        }
+        body[4 + 7 * participants.Length] = participants.Max(member => member.Point);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(body.Length - 4), ClientBodyChecksum.Compute(body.AsSpan(0, body.Length - 4)));
         return body;
     }
 

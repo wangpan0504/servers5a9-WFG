@@ -33,7 +33,22 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
         {
             if (quests is null || items is null || goldLimits is null || pieces is null) return CommandResult.Unhandled;
             var condition = new QuestClientCondition(request.Channel,request.Value,request.Reserved);
-            if (rooms is not null) changed = context.Session.ObserveFormalPassiveTrigger(request.QuestId,condition,
+            if (rooms is not null && context.Session.PartyDungeon is { } party &&
+                condition is { Channel: 0x10 or 0x20 or 0x40, Value: 0, Reserved: 0 } &&
+                quests.TryGet(request.QuestId,out var sharedQuest) && QuestHuntProgress.TryTargets(sharedQuest,out var sharedTargets) &&
+                (condition.Channel == 0x10 ? 0 : condition.Channel == 0x20 ? 1 : 2) is var targetIndex &&
+                targetIndex < sharedTargets.Length && sharedTargets[targetIndex].EnemyType == 3)
+            {
+                using var peers = await PartyDungeonProjection.AcquirePeersAsync(context,party.Members);
+                string fingerprint = Convert.ToHexString(SHA256.HashData(packet.Body));
+                uint template = checked((uint)sharedTargets[targetIndex].MonsterId);
+                var notices = party.ObservePassive(context.Session,template,fingerprint,
+                    session => session.ObserveFormalPassiveTrigger(request.QuestId,condition,fingerprint,rooms) ??
+                        session.ObserveFormalPassiveDeath(template,true,fingerprint,rooms),sequenced:true);
+                changed = notices.SingleOrDefault(n => ReferenceEquals(n.Recipient.Actor.Session,context.Session))?.QuestScene;
+                await PartyDungeonProjection.PublishAsync(notices.Where(n => !ReferenceEquals(n.Recipient.Actor.Session,context.Session)));
+            }
+            else if (rooms is not null) changed = context.Session.ObserveFormalPassiveTrigger(request.QuestId,condition,
                 Convert.ToHexString(SHA256.HashData(packet.Body)),rooms);
             if (changed is null && rooms is not null && quests.TryGet(request.QuestId,out var hunt) && QuestHuntProgress.TryTargets(hunt,out var huntTargets) &&
                 condition.Channel is 0x10 or 0x20 or 0x40 && (condition.Channel == 0x10 ? 0 : condition.Channel == 0x20 ? 1 : 2) is var slot && slot < huntTargets.Length && huntTargets[slot].EnemyType == 3)
@@ -45,6 +60,12 @@ internal sealed class QuestConditionHandler(ServerLog log, QuestCatalog? quests 
             log.Write("quest_condition", new { Connection = context.Id, request.QuestId, changed.Outcome, changed.Reason });
         }
         uint scalar = clear is not null ? 0 : changed!.Character.ActiveMainQuests.SingleOrDefault(active => active.QuestId == request.QuestId)?.ConditionState ?? 1;
+        if (changed is not null && scalar==0 && context.Session.PartyDungeon is { } cinematicParty &&
+            quests is not null && quests.TryGet(request.QuestId,out var cinematicQuest) && QuestClientSceneProgress.DungeonCinematic(cinematicQuest))
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context,cinematicParty.Members);
+            await PartyDungeonProjection.PublishAsync(cinematicParty.CompleteCinematic(context.Session,request.QuestId,changed));
+        }
         QuestCompletionReceipt? closed = null;
         bool parentCallback = false;
         if (changed?.Outcome != QuestLifecycleOutcome.Rejected && quests is not null && parameters is not null &&

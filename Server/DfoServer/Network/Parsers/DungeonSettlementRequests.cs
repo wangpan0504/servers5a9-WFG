@@ -4,8 +4,13 @@ namespace DfoServer.Network.Parsers;
 
 internal sealed record DungeonBossCheckRequest(ushort ActorId, ushort BossKey, uint SpawnLevel,
     ulong SpawnHp, IReadOnlyList<byte> RemainingFields);
-internal sealed record DungeonPlayResultRequest(ushort ActorId, ushort ClearTime, uint ParticipantValue,
-    byte RankPoint, byte MaximumRankPoint, IReadOnlyList<byte> RemainingFields);
+internal sealed record DungeonPlayResultParticipant(ushort ActorId, uint Value, byte RankPoint);
+internal sealed record DungeonPlayResultRequest(ushort ClearTime, IReadOnlyList<DungeonPlayResultParticipant> Participants,
+    byte MaximumRankPoint, IReadOnlyList<byte> RemainingFields)
+{
+    public ushort ActorId => Participants[0].ActorId;
+    public byte RankPoint => Participants[0].RankPoint;
+}
 
 internal static class DungeonSettlementRequests
 {
@@ -23,12 +28,24 @@ internal static class DungeonSettlementRequests
     public static bool TryParsePlayResult(ReadOnlySpan<byte> body, out DungeonPlayResultRequest? request)
     {
         request = null;
-        // 普通单人：49B原生报告及4B检查值。其他成员数和特殊副本扩展不套本合同。
-        if (body.Length != 53 || body[0] != 0 || body[3] != 1 ||
-            BinaryPrimitives.ReadUInt32LittleEndian(body[49..]) != ClientBodyChecksum.Compute(body[..49]))
+        // 普通报告：4B头、每名成员7B、最高评分1B、统计尾37B及检查值4B。
+        if (body.Length < 53 || body[0] != 0 || body[3] is < 1 or > 8 || body.Length != 46 + 7 * body[3])
             return false;
-        request = new(BinaryPrimitives.ReadUInt16LittleEndian(body[4..]), BinaryPrimitives.ReadUInt16LittleEndian(body[1..]),
-            BinaryPrimitives.ReadUInt32LittleEndian(body[6..]), body[10], body[11], Array.AsReadOnly(body[12..49].ToArray()));
+        int checksumAt = body.Length - 4, maximumAt = 4 + 7 * body[3];
+        if (BinaryPrimitives.ReadUInt32LittleEndian(body[checksumAt..]) != ClientBodyChecksum.Compute(body[..checksumAt]))
+            return false;
+        var members = new DungeonPlayResultParticipant[body[3]];
+        var actors = new HashSet<ushort>();
+        for (int index = 0; index < members.Length; index++)
+        {
+            int at = 4 + index * 7;
+            ushort actor = BinaryPrimitives.ReadUInt16LittleEndian(body[at..]);
+            if (!actors.Add(actor)) return false;
+            members[index] = new(actor, BinaryPrimitives.ReadUInt32LittleEndian(body[(at + 2)..]), body[at + 6]);
+        }
+        if (body[maximumAt] != members.Max(member => member.RankPoint)) return false;
+        request = new(BinaryPrimitives.ReadUInt16LittleEndian(body[1..]), Array.AsReadOnly(members), body[maximumAt],
+            Array.AsReadOnly(body[(maximumAt + 1)..checksumAt].ToArray()));
         return true;
     }
 }

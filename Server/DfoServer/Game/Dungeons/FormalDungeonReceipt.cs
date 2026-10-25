@@ -8,6 +8,8 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record FormalDungeonReceipt(Character Character, long Generation, long SelectionEpoch,
     DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed)
 {
+    public ImmutableArray<ushort> PartyActors { get; init; } = [];
+    public byte PartySlot { get; init; }
     public bool HellPartyRoomCleared => Snapshot.Phase == SinglePlayerDungeonPhase.Dungeon &&
         Entry.HellParty is { } hell && Snapshot.CurrentMap.Id == hell.MapId && Monsters.HellWaves.Count > 0 &&
         Monsters.Monsters.Where(monster => monster.IsBlocking).All(monster => !Snapshot.LivingMonsters.Contains(monster.ObjectKey));

@@ -201,7 +201,26 @@ internal static class SqliteMigrations
         new(89, "副本账号进入次数", static (db, tx) => Execute(db, tx, AccountDungeonIncountSchema)),
         new(90, "玩家社交关系", SocialSchema.Upgrade),
         new(91, "冒险团好友申请者分组与备注", SocialSchema.UpgradeRequests),
+        new(92, "组队任务物件助战场景回执", UpgradePartyQuestLifecycle),
     ];
+
+    internal static string PartyQuestLifecycleSql => QuestLifecycleSchema
+        .Replace("CHECK(quest_id BETWEEN 1 AND 29999)", "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))", StringComparison.Ordinal)
+        .Replace("CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000')", "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000')))", StringComparison.Ordinal);
+
+    static void UpgradePartyQuestLifecycle(SqliteConnection db, SqliteTransaction tx)
+    {
+        const string table = "character_quest_lifecycle_receipts";
+        using var query = db.CreateCommand(); query.Transaction = tx;
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
+        query.Parameters.AddWithValue("$table", table);
+        if (query.ExecuteScalar() is not string actual) throw new InvalidDataException("缺少任务场景回执表");
+        if (NormalizeTable(actual, table) == NormalizeTable(PartyQuestLifecycleSql, table)) return;
+        if (NormalizeTable(actual, table) != NormalizeTable(QuestLifecycleSchema, table))
+            throw new InvalidDataException("组队任务回执迁移拒绝未知约束");
+        ReplaceTableConstraint(db, tx, table, "CHECK(quest_id BETWEEN 1 AND 29999)", "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))");
+        ReplaceTableConstraint(db, tx, table, "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000')", "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000')))");
+    }
 
     static void AddAuraCooldowns(SqliteConnection db, SqliteTransaction tx)
     {
@@ -1826,8 +1845,6 @@ internal static class SqliteMigrations
         // 正式v78已经放宽经验下界；该结构不能冒充旧玩家交互库。
         if (settlement is null || NormalizeTable(settlement, SettlementProficiencySchema.Settlement) !=
             NormalizeTable(SettlementProficiencySchema.SettlementSql, SettlementProficiencySchema.Settlement)) return false;
-        // 社交批次不能解释助战回执；保持v80预览库原样，交由完整交互版本升级。
-        if (version == 80) throw new InvalidDataException("v80玩家交互预览库须使用完整交互版本升级");
         foreach (var (table, currentSql) in SocialSchema.Tables.Append(("player_trade_receipts", LegacyPlayerTradeSql)))
         {
             string expected = table == "account_social_requests" && version == 78 ? SocialSchema.LegacyRequestSql : currentSql;
@@ -1838,7 +1855,7 @@ internal static class SqliteMigrations
             expert.Contains("learned_recipes", StringComparison.Ordinal))
             throw new InvalidDataException("玩家交互旧库与正式迁移结构混用");
         const string lifecycle = "character_quest_lifecycle_receipts";
-        string expectedLifecycle = QuestLifecycleSchema;
+        string expectedLifecycle = version == 80 ? PartyQuestLifecycleSql : QuestLifecycleSchema;
         if (Table(lifecycle) is not { } actualLifecycle || NormalizeTable(actualLifecycle, lifecycle) != NormalizeTable(expectedLifecycle, lifecycle))
             throw new InvalidDataException("玩家交互旧库任务回执结构不匹配");
         return true;
@@ -1906,6 +1923,7 @@ internal static class SqliteMigrations
         }
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
+            ("character_quest_lifecycle_receipts",PartyQuestLifecycleSql),
             ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_dungeon_scene_clear_receipts",DungeonSceneSettlementSchema.SceneSql),
             ("character_dungeon_settlement_receipts",ZeroExperienceDungeonSchema.SettlementSql),

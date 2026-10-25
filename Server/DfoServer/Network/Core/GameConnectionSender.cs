@@ -17,7 +17,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false);
     sealed record Message(long Epoch, Output? Own = null, RemoteTownActor? Enter = null, (ushort, long)? Move = null,
         (ushort Id, long Membership, byte[]? Effect, Func<bool>? Current, byte[]? Prepare, byte[]? DestinationArea, bool HideActor)? Leave = null,
-        TaskCompletionSource? Clear = null, RemoteTownActor? Refresh = null, SceneActorClear Actors = SceneActorClear.Delete, long Bytes = 0);
+        TaskCompletionSource? Barrier = null, RemoteTownActor? Refresh = null, SceneActorClear Actors = SceneActorClear.Delete, long Bytes = 0, bool IsClear = false);
     readonly AccountOwners.Lease owner;
     readonly Stream stream;
     readonly CancellationTokenSource connection;
@@ -29,6 +29,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     readonly Dictionary<ushort, long> known = [];
     readonly Task pump;
     readonly Lazy<Task> cancellation;
+    readonly AsyncLocal<Func<Func<bool>>?> queuedPublication = new();
     ushort sequence;
     long epoch;
     long pendingBytes;
@@ -59,6 +60,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
 
     public Task Send(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null)
     {
+        if (queuedPublication.Value is { } current) return QueuePublished(kind, opcode, body, action, canSend, current());
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!Enqueue(new(Epoch, new(kind, opcode, body, action, done, canSend))))
             done.TrySetException(new IOException("Game send queue unavailable"));
@@ -67,6 +69,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
 
     public Task SendProtected(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null)
     {
+        if (queuedPublication.Value is { } current) return QueuePublished(kind, opcode, body, action, canSend, current(), true);
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!Enqueue(new(Epoch, new(kind, opcode, body, action, done, canSend, Protected: true))))
             done.TrySetException(new IOException("Game send queue unavailable"));
@@ -76,12 +79,50 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     public void Post(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null) =>
         Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: canSend)));
 
+    // 共享副本先完整规划并提交；发布只入原有有界发送队列，不持队伍/连接门禁等待慢客户端。
+    // 原回执守卫在入队时复核；泵复核原会话，后续合法revision不能吞掉已提交的奖励帧。
+    public IDisposable QueuePublication(Func<bool> current) => QueuePublication(() => current);
+
+    public IDisposable QueuePublication(Func<Func<bool>> captureCurrent)
+    {
+        var previous = queuedPublication.Value;
+        queuedPublication.Value = captureCurrent;
+        return new PublicationScope(() => queuedPublication.Value = previous);
+    }
+
+    sealed class PublicationScope(Action restore) : IDisposable
+    {
+        public void Dispose() => restore();
+    }
+
+    Task QueuePublished(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend, Func<bool> current, bool protectedFrame = false)
+    {
+        if (!owner.Execute(() => current() && (canSend?.Invoke() ?? true))) return Task.CompletedTask;
+        // 本人已提交消息必须在FIFO中的后续清场前写出；不能因同一命令推进场景就丢掉传送效果或奖励。
+        return Enqueue(new(Epoch, new(kind, opcode, body, action,
+            CanSend: current, Protected: protectedFrame)))
+            ? Task.CompletedTask : Task.FromException(new IOException("Game send queue unavailable"));
+    }
+
     public Task ClearScene(SceneActorClear actors = SceneActorClear.Delete)
     {
         long next = Interlocked.Increment(ref epoch);
+        var done = queuedPublication.Value is null ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
+        if (!Enqueue(new(next, Barrier: done, Actors: actors, IsClear: true)))
+        {
+            var failure = new IOException("Game scene clear queue unavailable");
+            if (done is null) return Task.FromException(failure);
+            done.TrySetException(failure);
+        }
+        return done?.Task ?? Task.CompletedTask;
+    }
+
+    // 退出应答必须实际写出；调用方释放共享门禁后等待，不额外发送网络帧或清场。
+    public Task DrainAsync()
+    {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!Enqueue(new(next, Clear: done, Actors: actors)))
-            done.TrySetException(new IOException("Game scene clear queue unavailable"));
+        if (!Enqueue(new(Epoch, Barrier: done)))
+            done.TrySetException(new IOException("Game send queue unavailable"));
         return done.Task;
     }
 
@@ -220,7 +261,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                         if (owner.Execute(() => own.CanSend?.Invoke() ?? true))
                             await Write(own.Kind, own.Opcode, own.Body, own.Action, own.Protected);
                     }
-                    else if (message.Clear is { } clear)
+                    else if (message.IsClear)
                     {
                         // 普通切区由本人AREA_USERS重置地图；USER_LEAVE还会清掉客户端队伍槽，不能用于切区。
                         if (message.Actors != SceneActorClear.Preserve)
@@ -282,7 +323,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                 }
 
                 message.Own?.Done?.TrySetResult();
-                message.Clear?.TrySetResult();
+                message.Barrier?.TrySetResult();
                 active = null;
             }
         }
@@ -296,7 +337,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         {
             failure ??= new IOException("Game sender closed");
             active?.Own?.Done?.TrySetException(failure);
-            active?.Clear?.TrySetException(failure);
+            active?.Barrier?.TrySetException(failure);
             lock (queueGate)
             {
                 closed = true;
@@ -305,7 +346,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
             while (queue.Reader.TryRead(out var message))
             {
                 message.Own?.Done?.TrySetException(failure);
-                message.Clear?.TrySetException(failure);
+                message.Barrier?.TrySetException(failure);
             }
 
             lock (queueGate)

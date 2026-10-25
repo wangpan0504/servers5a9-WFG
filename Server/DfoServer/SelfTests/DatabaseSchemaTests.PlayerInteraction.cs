@@ -51,16 +51,14 @@ internal static partial class DatabaseSchemaTests
                       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                     ) STRICT;
                     """);
-                if (version == 80)
+                if (version != 80)
                 {
-                    using var tx = db.BeginTransaction();
-                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_quest_lifecycle_receipts",
-                        "CHECK(quest_id BETWEEN 1 AND 29999)",
-                        "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))");
-                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_quest_lifecycle_receipts",
-                        "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000')",
-                        "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000')))");
-                    tx.Commit();
+                    using var rewind = db.BeginTransaction();
+                    SqliteMigrations.ReplaceTableConstraint(db, rewind, "character_quest_lifecycle_receipts",
+                        "CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]')))", "CHECK(quest_id BETWEEN 1 AND 29999)");
+                    SqliteMigrations.ReplaceTableConstraint(db, rewind, "character_quest_lifecycle_receipts",
+                        "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000')))", "CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000')");
+                    rewind.Commit();
                 }
                 if (version == 78)
                     Execute(db, "DROP TABLE account_social_requests;" + SocialSchema.LegacyRequestSql);
@@ -76,13 +74,6 @@ internal static partial class DatabaseSchemaTests
                         INSERT INTO character_quest_lifecycle_receipts VALUES({role.Id},'key-schema','{new string('c', 32)}','Condition',0,
                         '{new string('0', 32)}',0,1,'[]','[]','[]','null',NULL,NULL);
                         """);
-            }
-            if (version == 80)
-            {
-                string preview = Snapshot(path);
-                Reject<InvalidDataException>(() => _ = new CharacterRepository(path), "社交批次拒绝需要组队回执迁移的v80预览库");
-                Check(Snapshot(path) == preview, "拒绝v80保持其助战回执、资产、好友、版本与结构原样");
-                continue;
             }
             if (version == 79)
             {

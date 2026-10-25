@@ -490,8 +490,8 @@ CREATE TABLE character_quest_skip_receipts(
 CREATE TABLE character_quest_lifecycle_receipts(
     character_id INTEGER NOT NULL, account TEXT NOT NULL, operation_id TEXT NOT NULL CHECK(length(operation_id)=32 AND operation_id NOT GLOB '*[^0-9a-f]*' AND operation_id<>'00000000000000000000000000000000'),
     action TEXT NOT NULL CHECK(action IN ('Accept','Giveup','Condition')),
-    quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 1 AND 29999),
-    acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND acceptance_id<>'00000000000000000000000000000000'),
+    quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 0 AND 29999 AND (quest_id<>0 OR (action='Condition' AND scene_event IS NOT NULL AND before_active=after_active AND changed_items='[]'))),
+    acceptance_id TEXT NOT NULL CHECK(length(acceptance_id)=32 AND acceptance_id NOT GLOB '*[^0-9a-f]*' AND ((quest_id=0 AND acceptance_id='00000000000000000000000000000000') OR (quest_id<>0 AND acceptance_id<>'00000000000000000000000000000000'))),
     before_revision INTEGER NOT NULL CHECK(before_revision>=0), revision INTEGER NOT NULL CHECK(revision=before_revision+1),
     before_active TEXT NOT NULL CHECK(json_valid(before_active) AND json_type(before_active)='array'),
     after_active TEXT NOT NULL CHECK(json_valid(after_active) AND json_type(after_active)='array'),

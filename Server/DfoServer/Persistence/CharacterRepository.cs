@@ -180,6 +180,14 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.Save");
         using var transaction = write.Transaction;
+        var result = SaveInTransaction(db, transaction, owner, expected, position, returnPoint, inventory);
+        transaction.Commit();
+        return result;
+    });
+
+    Character SaveInTransaction(SqliteConnection db, SqliteTransaction transaction, AccountOwners.Lease owner,
+        Character expected, Location position, Location? returnPoint, InventoryPlan? inventory)
+    {
         if (inventory is not null) expected = CommitInventoryInTransaction(db, transaction, owner, expected, inventory);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
@@ -195,14 +203,13 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         Bind(command, "r", returnPoint);
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("Character revision or owner changed");
-        transaction.Commit();
         return expected with
         {
             Revision = expected.Revision + 1,
             Position = position,
             Return = returnPoint
         };
-    });
+    }
     static void Bind(SqliteCommand command, string prefix, Location? position)
     {
         void Add(string key, object? value) => command.Parameters.AddWithValue("$" + prefix + key, value ?? DBNull.Value);

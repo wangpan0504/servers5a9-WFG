@@ -68,16 +68,19 @@ internal sealed partial class GameSession
         });
     }
 
+    internal bool CanBeginClearedHellSelection(uint dungeonIndex) => owner.Execute(() =>
+        Ready && formalDungeon is { } dungeon && Selected is not null &&
+        (dungeonIndex == 0 || dungeonIndex == dungeon.Entry.DungeonId) &&
+        !dungeon.Ground.HasPendingOperation && !HasPendingFormalCard && pendingQuestCompletion is null &&
+        !dungeon.HasPendingFatigue && !HasPendingQuestScene && !dungeon.Run.HasPendingDeath &&
+        !dungeon.Run.HasPendingSettlement && dungeon.PendingTutorialClear is null &&
+        (Phase == SessionPhase.Dungeon && FormalReceipt().HellPartyRoomCleared ||
+            Phase == SessionPhase.Settlement && dungeon.Entry.IsCosmo && HasFinishedDungeon(dungeon)));
+
     public DungeonSelectionReceipt? BeginClearedHellSelection(uint dungeonIndex = 0) => owner.Execute<DungeonSelectionReceipt?>(() =>
     {
         // 时空祭坛回传当前副本编号；0兼容原选图入口，其他副本编号不能消费本次深渊出口。
-        if (!Ready || formalDungeon is not { } dungeon ||
-            (dungeonIndex != 0 && dungeonIndex != dungeon.Entry.DungeonId))
-            return null;
-        bool clearedHell = Phase == SessionPhase.Dungeon && FormalReceipt().HellPartyRoomCleared;
-        bool clearedCosmo = Phase == SessionPhase.Settlement && dungeon.Entry.IsCosmo && HasFinishedDungeon(dungeon);
-        if (!clearedHell && !clearedCosmo)
-            return null;
+        if (!CanBeginClearedHellSelection(dungeonIndex)) return null;
         if (ReturnFromFormalDungeonCore(true) is null) return null;
         // 原入口安全点已保存，直接建立选图上下文；不把深渊房间伪造成Boss结算。
         CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, Selected.Position);
@@ -85,9 +88,9 @@ internal sealed partial class GameSession
         return new(Selected, owner.Generation, SelectionEpoch, dungeonSelectionId);
     });
 
-    public DungeonSelectionReceipt? BeginDungeonSelection() => owner.Execute<DungeonSelectionReceipt?>(() =>
+    public DungeonSelectionReceipt? BeginDungeonSelection(bool partyAdmission = false) => owner.Execute<DungeonSelectionReceipt?>(() =>
     {
-        if (HasMultiplePartyMembers?.Invoke() == true) return null;
+        if (!partyAdmission && HasMultiplePartyMembers?.Invoke() == true) return null;
         if (pendingRental is not null || HasPendingTownQuestCommit) return null;
         if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.MapSelect))
             throw new InvalidDataException("Invalid dungeon-selection state");

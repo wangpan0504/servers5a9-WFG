@@ -12,7 +12,7 @@ internal sealed partial class CharacterRepository
     public QuestLifecycleCommit CommitQuestLifecycle(AccountOwners.Lease owner, QuestLifecyclePlan plan) => owner.Execute(() =>
     {
         var expected = plan.Expected;
-        if (expected.Id == 0 || plan.OperationId == Guid.Empty || plan.AcceptanceId == Guid.Empty ||
+        if (expected.Id == 0 || plan.OperationId == Guid.Empty || plan.AcceptanceId == Guid.Empty && !plan.IsPartySceneOnly ||
             plan.ActiveAfter.Length > 30 || plan.ActiveAfter.Any(active => active.Slot >= 30 || active.QuestId is 0 or >= 30000 || active.AcceptanceId == Guid.Empty) ||
             plan.ActiveAfter.Select(active => active.Slot).Distinct().Count() != plan.ActiveAfter.Length ||
             plan.ActiveAfter.Select(active => active.QuestId).Distinct().Count() != plan.ActiveAfter.Length ||

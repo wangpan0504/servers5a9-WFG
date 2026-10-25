@@ -26,7 +26,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null, DfoServer.Game.ExpertJob.ExpertJobStoreBoard? expertStores = null,
     TownPresence? presence = null,
     DfoServer.GameWorld.Dungeons.DungeonIncountCatalog? incounts = null, CharacterLevelProjection? levels = null,
-    DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null) : IConnectionProtocol
+    DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null, Action<GameConnectionContext>? prepareDungeon = null) : IConnectionProtocol
 {
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
@@ -93,6 +93,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         session.PartyNoticeArrived = notice => PartyProjection.Notice(context, notice);
         session.HasMultiplePartyMembers = () => parties?.HasMultipleMembers(session) == true;
         session.CurrentParty = () => parties?.Current(session);
+        prepareDungeon?.Invoke(context);
         long partyEpoch = session.SelectionEpoch;
         await using var partyDirectory = parties is null ? null : new PartyDirectoryProjection(context, parties, towns, log);
         context.PartyDirectory = partyDirectory;
@@ -176,6 +177,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     return;
                 if (!session.Ready || session.SelectionEpoch != partyEpoch)
                 {
+                    await PartyDungeonProjection.DetachAsync(context);
                     parties?.Detach(session);
                 }
                 partyEpoch = session.SelectionEpoch;
@@ -228,6 +230,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await elevator.DisposeAsync();
             await altar.DisposeAsync();
             online.RemoveConnection(connection.Id, session);
+            await PartyDungeonProjection.DetachAsync(context);
             parties?.Detach(session);
             online.Remove(login.Owner.Account, session);
             if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account);

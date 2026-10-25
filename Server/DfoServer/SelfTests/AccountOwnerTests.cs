@@ -85,6 +85,49 @@ internal static class AccountOwnerTests
             () => { ownerPublications++; throw new Microsoft.Data.Sqlite.SqliteException("busy after commit", 5); }).GetAwaiter().GetResult();
         That(failure is Microsoft.Data.Sqlite.SqliteException && customerPublications == 2 && ownerPublications == 2,
             "发布BUSY被隔离为发布故障不进入整请求重试");
+        VerifyGroup();
         Console.WriteLine($"PASS {Count - checks} account owner assertions");
+    }
+
+    static void VerifyGroup()
+    {
+        var owners = new AccountOwners();
+        var members = Enumerable.Range(0, 4).Select(i => (Owner: owners.Acquire("group-" + i, () => { }), Character: (ushort)(40 - i))).ToArray();
+        using var outside = owners.Acquire("outside", () => { });
+        try
+        {
+            bool Reject(Action action)
+            {
+                try { action(); return false; }
+                catch (InvalidOperationException) { return true; }
+            }
+            That(AccountOwners.Lease.ExecuteGroup(members, () => members.All(m => m.Owner.Execute(() => true))),
+                "四人组合按固定锁序进入，并允许组内账号重入");
+            That(AccountOwners.Lease.ExecuteGroup(members, () => Reject(() => outside.Execute(() => true)) &&
+                AccountOwners.Lease.ExecuteGroup(members.Reverse().ToArray(), () => true) &&
+                Reject(() => AccountOwners.Lease.ExecuteGroup(members.Take(2).ToArray(), () => true)) &&
+                Reject(() => owners.Acquire("nested", () => { }))), "组合仅允许同组重入，拒绝外部账号、改变成员及新owner");
+            That(Reject(() => AccountOwners.Lease.ExecuteGroup(members, (Func<bool>)(() => throw new InvalidOperationException("planned")))) &&
+                outside.Execute(() => true), "组合异常释放全部线程上下文和账号锁");
+            int completed = 0;
+            var workers = Enumerable.Range(0, 3).Select(i => Task.Run(() =>
+            {
+                var order = i == 0 ? members : members.Reverse().ToArray();
+                for (int run = 0; run < 100; run++)
+                {
+                    if (i == 0) AccountOwners.Lease.ExecuteGroup(order, () => ++completed);
+                    else if (i == 1) AccountOwners.Lease.ExecuteGroup(order, () => ++completed);
+                    else AccountOwners.Lease.ExecuteTogether(members[1].Owner, members[0].Owner, () => ++completed);
+                }
+            })).ToArray();
+            That(Task.WaitAll(workers, TimeSpan.FromSeconds(5)) && completed == 300,
+                "账号名与角色ID顺序相反时，组合、组队双锁与副职业双锁并发不会死锁或丢失更新");
+            using var replacement = owners.Acquire(members[2].Owner.Account, () => { });
+            bool invoked = false;
+            That(Reject(() => AccountOwners.Lease.ExecuteGroup(members, () => invoked = true)) && !invoked,
+                "任一成员generation失效时不执行全队写入");
+            That(Reject(() => AccountOwners.Lease.ExecuteGroup([members[0], members[0]], () => true)), "重复账号或角色不能组成组合锁");
+        }
+        finally { foreach (var member in members) member.Owner.Dispose(); }
     }
 }
