@@ -84,7 +84,7 @@ internal static partial class DungeonPassiveDropTests
                 if (ground.Content.Item?.Kind == ItemKind.GuardianGem)
                 {
                     var destination = ground.Core.ItemId == 90000
-                        ? new InventorySlot(InventoryListType.GuildMedal, 97) : new(InventoryListType.Main, 4);
+                        ? new InventorySlot(InventoryListType.GuildMedal, 97) : new(InventoryListType.Main, 3);
                     That(committed.Destination == destination && replay.Destination == destination &&
                         committed.Character.Inventory.Find(destination) is { } actual && actual.Uid == committed.ItemUid && actual.Core == ground.Core,
                         "专用页和满页回退快捷栏使用实际列表、槽号及真实UID，原回执恢复不能强当Main");

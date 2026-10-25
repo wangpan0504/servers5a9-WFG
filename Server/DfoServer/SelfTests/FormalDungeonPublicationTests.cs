@@ -500,10 +500,10 @@ internal static class FormalDungeonPublicationTests
             Check(f.Read().Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 3 &&
                 f.Read().Inventory.Gold == 17 && f.Session.Selected!.Inventory.Gold == 17,
                 "同死亡第二个key独立拾取三件原物品，不重复授予已取金币");
-            Check(f.Read().Inventory.Find(new(InventoryListType.Main, 3))?.Core.ItemId == 1000 &&
-                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[^3].AsSpan(32)) == 3 &&
-                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[^2].AsSpan(19)) == 3,
-                "集合拾取的NOTI39和库存差量均使用已提交快捷槽3");
+            Check(f.Read().Inventory.Find(new(InventoryListType.Main, 65))?.Core.ItemId == 1000 &&
+                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[^3].AsSpan(32)) == 65 &&
+                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[^2].AsSpan(19)) == 65,
+                "集合拾取的NOTI39和库存差量均使用已提交背包槽65");
             var actual = f.Read();
             int sent = stream.Frames.Count;
             await commands.DispatchAsync(context, new(1, 43, get));
@@ -625,9 +625,9 @@ internal static class FormalDungeonPublicationTests
             BinaryPrimitives.WriteUInt32LittleEndian(get, wholeKey);
             await commands.DispatchAsync(context, new(1, 43, get));
             var restored = f.Read().Inventory.Items.Single(item => item.Core.ItemId == 1000);
-            Check(restored.Uid != source.Uid && restored.Core == source.Core && restored.Position == new InventorySlot(InventoryListType.Main, 3) &&
-                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[^3].AsSpan(32)) == 3 &&
-                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[^2].AsSpan(19)) == 3 && f.Count("inventory_audit_log") == beforePickupAudits + 3,
+            Check(restored.Uid != source.Uid && restored.Core == source.Core && restored.Position == new InventorySlot(InventoryListType.Main, 65) &&
+                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[^3].AsSpan(32)) == 65 &&
+                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[^2].AsSpan(19)) == 65 && f.Count("inventory_audit_log") == beforePickupAudits + 3,
                 "源整堆已删除时，拾取分配新持久UID但完整核心、期限、属性与数量不重生成");
             f.Session.ReturnToRoster();
             f.Session.Select(f.Created.Slot);
@@ -662,10 +662,10 @@ internal static class FormalDungeonPublicationTests
             Check(await commands.DispatchAsync(context, new(1, 43, get)) == CommandResult.Handled && f.LostResult!.PickupCalls == 2 && f.LostResult.PickupDuplicate &&
                 Same(f.Read(), f.Session.Selected!) && f.Read().Inventory.Items.Single(item => item.Core.ItemId == 1000).Core.Count == 1,
                 "原key恢复命中持久receipt，只安装实际角色，不加第二件");
-            Check(f.Read().Inventory.Find(new(InventoryListType.Main, 3)) is { Uid: > 0, Core.ItemId: 1000, Core.Count: 1 } &&
-                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[sentBefore].AsSpan(32)) == 3 &&
-                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[sentBefore + 1].AsSpan(19)) == 3,
-                "普通单件拾取丢失结果恢复后，真实快捷槽与两种通知目标一致");
+            Check(f.Read().Inventory.Find(new(InventoryListType.Main, 65)) is { Uid: > 0, Core.ItemId: 1000, Core.Count: 1 } &&
+                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[sentBefore].AsSpan(32)) == 65 &&
+                BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[sentBefore + 1].AsSpan(19)) == 65,
+                "普通单件拾取丢失结果恢复后，真实背包槽与两种通知目标一致");
             Check(stream.Opcodes.Skip(sentBefore).SequenceEqual(new ushort[] { 39, 14, 43 }),
                 "原地面转移通知先于最终库存快照，成功ACK只收尾一次");
         }

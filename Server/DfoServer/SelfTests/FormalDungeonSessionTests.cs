@@ -1290,7 +1290,7 @@ internal static class FormalDungeonSessionTests
                 "存储异常保留拾取准备并拒绝新死亡或过房退出，不丢原地面");
             f.Sql("DROP TRIGGER pickup_fail");
             var pickup = f.Session.PickFormalDungeonItem(key, itemResources.Items, itemResources.EpicPieces);
-            Check(pickup.Outcome == DungeonRunOutcome.Accepted && pickup.Commit is { Duplicate: false, ItemUid: > 0, ProjectionCurrent: true } &&
+            Check(pickup.Outcome == DungeonRunOutcome.Accepted && pickup.Commit is { Duplicate: false, ItemUid: > 0, ProjectionCurrent: true, Destination.Index: 65 } &&
                 f.Read().Inventory.Items.Single(item => item.Core.ItemId == 1000).Core == ground.Core && Same(f.Read(), f.Session.Selected!),
                 "重试提交实际UID/槽和完整原核心，再确认地面消费");
             long uid = pickup.Commit!.ItemUid;
@@ -1348,8 +1348,8 @@ internal static class FormalDungeonSessionTests
             var empty = full.Read();
             var range = ItemSlotBoundService.Range(DfoServer.GameWorld.Items.ItemKind.Consumable, empty.Inventory.Expansion);
             var fullCore = InventoryRewardGrantService.Create(itemResources.Items.Get(1047), 1000);
-            // 地面消耗品也能进入快捷栏，满包场景须同时占满3–8，保留原拒绝/恢复边界。
-            var occupied = Enumerable.Range(3, 6).Concat(Enumerable.Range(range.Start, range.End - range.Start + 1))
+            // 快捷栏全部空闲，消耗品满页仍必须拒绝新堆。
+            var occupied = Enumerable.Range(range.Start, range.End - range.Start + 1)
                 .Select(slot => new InventoryItem(0, new(InventoryListType.Main, checked((short)slot)), fullCore)).ToImmutableArray();
             full.Repository.CommitInventory(full.Owner, empty, new(empty.Inventory,
                 empty.Inventory with { Items = empty.Inventory.Items.AddRange(occupied) }, "explicit-full-bag-fixture"));
@@ -1361,7 +1361,7 @@ internal static class FormalDungeonSessionTests
             var fullBefore = full.Session.Selected!;
             Check(full.Session.PickFormalDungeonItem(fullGround.Reservation.GroundKey, itemResources.Items, itemResources.EpicPieces).Outcome == DungeonRunOutcome.Rejected &&
                 Same(fullBefore, full.Read()) && Convert.ToInt64(full.Query("SELECT count(*) FROM character_dungeon_pickup_receipts")) == 0,
-                "满包合法拒绝不提交UID/资产/revision，不消耗冻结地面");
+                "快捷栏全空但消耗品满页仍拒绝，不提交UID/资产/revision或消耗冻结地面");
             var stored = full.Read();
             var freed = stored.Inventory with { Items = stored.Inventory.Items.Where(item => item.Position.Index != range.Start || item.Position.List != InventoryListType.Main).ToImmutableArray() };
             full.Repository.CommitInventory(full.Owner, stored, new(stored.Inventory, freed, "explicit-free-slot-fixture"));

@@ -117,6 +117,7 @@ internal static partial class PartyDungeonTcpTests
             "加载前不提前扣逐房疲劳");
         var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(3).Mazes[enteredA.Single(p => p.Opcode == 28).Body[7]];
         var visited = new HashSet<DungeonPoint>();
+        int consumablePickups = 0;
         for (int room = 0; room < 30; room++)
         {
             foreach (var peer in participants.Take(count - 1)) { peer.Send(37, new byte[8]); Drain(peer); }
@@ -185,6 +186,17 @@ internal static partial class PartyDungeonTcpTests
                             cursor += own ? 13 : 4;
                         }
                         That(cursor == goldNotice.Length, "完整消费金币通知而不遗漏扩展成员字段");
+                    }
+                    int itemId = checked((int)U32(loot.Body, at + 6));
+                    if (itemId != 0 && resources.ItemResources.Items.Get(itemId).Kind == DfoServer.GameWorld.Items.ItemKind.Consumable)
+                    {
+                        consumablePickups++;
+                        ushort destination = U16(received.Single(p => p is { Kind: 0, Opcode: 39 }).Body, 16);
+                        That(destination is >= 65 and <= 120 && fixture.Query("""
+                            SELECT s.slot_index FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                            WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=$p1
+                            """, peer.Id, itemId).Any(row => Convert.ToInt64(row[0]) == destination),
+                            "组队真实消耗品地面拾取进入本人背包，通知槽与独立文件库一致，不自动占空快捷栏");
                     }
                     peer.Send(43, pickup);
                     That(Drain(peer).Any(p => p is { Kind: 1, Opcode: 43, Body: [0, 19, 0] }),
@@ -273,6 +285,7 @@ internal static partial class PartyDungeonTcpTests
                     alpha.Send(132);
                     That(All(alpha).Values.All(rows => rows.Any(p => p is { Kind: 0, Opcode: 24 })), "队长取消选图，全员返回城镇");
                 }
+                Console.WriteLine($"INFO 组队{count}人真实消耗品拾取槽断言命中 {consumablePickups} 次（随机掉落；0次不代表覆盖）");
                 return;
             }
             var next = maze.StaticTopology.Links!.SelectMany(link => new[] { (link.First, link.Second), (link.Second, link.First) })
