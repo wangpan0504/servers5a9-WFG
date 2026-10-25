@@ -149,10 +149,11 @@ internal static class TalismanInventoryTests
         payer = payer with { Inventory = CurrencyWallet.Set(payer.Inventory, CurrencyKind.Gold, 100_000) };
         var compounded = compoundService.Compound(payer, new TalismanCompoundRequest(0, 1, 2, [70, 70, 70]),
             compoundCosts, Now, out var compoundReceipt);
-        That(compounded.Accepted && compoundReceipt is { ProductSlot: 70, ItemId: RuneId, Upgraded: false } &&
+        // 回执必须回报被扣减的材料格：回执前的预载只发产物槽时，客户端重画会把材料画回背包再删除。
+        That(compounded.Accepted && compoundReceipt is { ProductSlot: 70, ItemId: RuneId, Upgraded: false, SourceSlots: [70] } &&
             compounded.Plan!.After.Find(new(InventoryListType.Talisman, 70))?.Core.Count == 1 &&
             CurrencyWallet.Get(compounded.Plan.After, CurrencyKind.Gold) == 36_000,
-            "符文合成按同一格三次引用扣三件、扣足金币并只产出同品级一件");
+            "符文合成按同一格三次引用扣三件、扣足金币并只产出同品级一件，回执按格合并材料引用");
         var broke = payer with { Inventory = CurrencyWallet.Set(payer.Inventory, CurrencyKind.Gold, 100) };
         var unpaid = compoundService.Compound(broke, new TalismanCompoundRequest(0, 1, 2, [70, 70, 70]),
             compoundCosts, Now, out var unpaidReceipt);
@@ -225,12 +226,12 @@ internal static class TalismanInventoryTests
         var stoneService = new InventoryTalismanCompoundService(upgradeCatalog, Limits, Pieces, Rolls(0, 0));
         var upgradedStone = stoneService.Compound(rareRole, new TalismanCompoundRequest(1, 0, 2, [0, 1, 2]),
             upgradeCosts, Now, out var upgradedStoneReceipt);
-        That(upgradedStone.Accepted && upgradedStoneReceipt is { Upgraded: true, ItemId: 100400022 } &&
+        That(upgradedStone.Accepted && upgradedStoneReceipt is { Upgraded: true, ItemId: 100400022, SourceSlots: [0, 1, 2] } &&
             upgradedStone.Plan!.After.Items.Any(item => item.Core.ItemId == 100400022) &&
             CurrencyWallet.Get(upgradedStone.Plan.After, CurrencyKind.Gold) == 62_000,
-            "稀有护石普通合成抽中升档后产出神器护石");
+            "稀有护石普通合成抽中升档后产出神器护石，回执列出三个被扣减的材料格");
 
-        // 护石窗口整理：请求里的分类是客户端页面号 18=护石页、19=符文页，不是物品类别；
+        // 护石窗口整理：请求里的分类是客户端页面号 18=符文页、19=护石页，不是物品类别；
         // 已装符文 210–215 绑定装备槽，任何一页整理都不得移动。
         var sortCatalog = SortCatalog();
         var sortStones = new[]
@@ -249,7 +250,7 @@ internal static class TalismanInventoryTests
         var equippedRune = new InventoryItem(115, new(InventoryListType.Talisman, 210), new(10605301, ItemKind.Rune, 1));
         var wornStone = new InventoryItem(116, new(InventoryListType.Equipment, 34), new(100400011, ItemKind.Talisman, 1));
         var sortable = Character([.. sortStones, .. sortRunes, equippedRune, wornStone]);
-        var byLevel = InventorySortService.Plan(sortable.Inventory, (ItemKind)18, 0, sortCatalog, Now, InventoryListType.Talisman);
+        var byLevel = InventorySortService.Plan(sortable.Inventory, (ItemKind)19, 0, sortCatalog, Now, InventoryListType.Talisman);
         That(byLevel.Accepted && byLevel.Plan!.Before == sortable.Inventory &&
             byLevel.Plan.After.Find(new(InventoryListType.Talisman, 0))?.Uid == 101 &&
             byLevel.Plan.After.Find(new(InventoryListType.Talisman, 1))?.Uid == 103 &&
@@ -261,14 +262,14 @@ internal static class TalismanInventoryTests
             levelPlan.After.Find(new(InventoryListType.Talisman, 210))?.Uid == 115 &&
             levelPlan.After.Find(new(InventoryListType.Equipment, 34))?.Uid == 116,
             "护石页整理不移动符文页、整理锁、已装符文与穿戴槽");
-        var byGrade = InventorySortService.Plan(sortable.Inventory, (ItemKind)18, 1, sortCatalog, Now, InventoryListType.Talisman);
+        var byGrade = InventorySortService.Plan(sortable.Inventory, (ItemKind)19, 1, sortCatalog, Now, InventoryListType.Talisman);
         That(byGrade.Accepted && byGrade.Plan!.After.Find(new(InventoryListType.Talisman, 0))?.Uid == 102 &&
             byGrade.Plan.After.Find(new(InventoryListType.Talisman, 1))?.Uid == 101 &&
             byGrade.Plan.After.Find(new(InventoryListType.Talisman, 2))?.Uid == 103, "按品级整理把高品质护石排前");
-        var byOrganization = InventorySortService.Plan(sortable.Inventory, (ItemKind)18, 2, sortCatalog, Now, InventoryListType.Talisman);
+        var byOrganization = InventorySortService.Plan(sortable.Inventory, (ItemKind)19, 2, sortCatalog, Now, InventoryListType.Talisman);
         That(byOrganization.Accepted && byOrganization.Plan!.After.Items.SequenceEqual(levelPlan.After.Items),
             "护石页按组织整理没有阵营可依，回退页面默认的等级顺序");
-        var runePage = InventorySortService.Plan(sortable.Inventory, (ItemKind)19, 0, sortCatalog, Now, InventoryListType.Talisman);
+        var runePage = InventorySortService.Plan(sortable.Inventory, (ItemKind)18, 0, sortCatalog, Now, InventoryListType.Talisman);
         That(runePage.Accepted && runePage.Plan!.After.Find(new(InventoryListType.Talisman, 70))?.Uid == 114 &&
             runePage.Plan.After.Find(new(InventoryListType.Talisman, 71))?.Uid == 111 &&
             runePage.Plan.After.Find(new(InventoryListType.Talisman, 72))?.Uid == 112 &&
@@ -278,10 +279,10 @@ internal static class TalismanInventoryTests
             runePage.Plan.After.Find(new(InventoryListType.Talisman, 210))?.Uid == 115,
             "符文页按阵营归组并保留整理锁原位，护石页与已装符文不受影响");
         var runePagePlan = runePage.Plan!;
-        var runeByOrganization = InventorySortService.Plan(sortable.Inventory, (ItemKind)19, 2, sortCatalog, Now, InventoryListType.Talisman);
+        var runeByOrganization = InventorySortService.Plan(sortable.Inventory, (ItemKind)18, 2, sortCatalog, Now, InventoryListType.Talisman);
         That(runeByOrganization.Accepted && runeByOrganization.Plan!.After.Items.SequenceEqual(runePagePlan.After.Items),
             "符文页按组织整理与页面默认同为阵营归组");
-        var runeByGrade = InventorySortService.Plan(sortable.Inventory, (ItemKind)19, 1, sortCatalog, Now, InventoryListType.Talisman);
+        var runeByGrade = InventorySortService.Plan(sortable.Inventory, (ItemKind)18, 1, sortCatalog, Now, InventoryListType.Talisman);
         That(runeByGrade.Accepted && runeByGrade.Plan!.After.Find(new(InventoryListType.Talisman, 70))?.Uid == 112 &&
             runeByGrade.Plan.After.Find(new(InventoryListType.Talisman, 71))?.Uid == 111 &&
             runeByGrade.Plan.After.Find(new(InventoryListType.Talisman, 72))?.Uid == 114 &&
@@ -290,7 +291,10 @@ internal static class TalismanInventoryTests
         var legacyPage = InventorySortService.Plan(sortable.Inventory, ItemKind.Talisman, 0, sortCatalog, Now, InventoryListType.Talisman);
         That(legacyPage.Accepted && legacyPage.Plan!.After.Items.SequenceEqual(levelPlan.After.Items),
             "护石页保留物品类别11入口相同行为");
-        var repeatedRune = InventorySortService.Plan(runePagePlan.After, (ItemKind)19, 0, sortCatalog, Now, InventoryListType.Talisman);
+        var legacyRuneKind = InventorySortService.Plan(sortable.Inventory, ItemKind.Rune, 0, sortCatalog, Now, InventoryListType.Talisman);
+        That(legacyRuneKind.Accepted && legacyRuneKind.Plan!.After.Items.SequenceEqual(runePagePlan.After.Items),
+            "符文页保留物品类别14入口相同行为");
+        var repeatedRune = InventorySortService.Plan(runePagePlan.After, (ItemKind)18, 0, sortCatalog, Now, InventoryListType.Talisman);
         That(repeatedRune.Accepted && repeatedRune.Plan!.After.Items.SequenceEqual(runePagePlan.After.Items),
             "重复整理符文页不改变已排好顺序");
         That(!InventorySortService.Plan(sortable.Inventory, (ItemKind)17, 0, sortCatalog, Now, InventoryListType.Talisman).Accepted &&

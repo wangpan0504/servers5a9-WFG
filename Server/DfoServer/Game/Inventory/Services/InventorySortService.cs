@@ -10,14 +10,16 @@ internal static class InventorySortService
         InventoryListType list = InventoryListType.Main)
     {
         bool cargo = list is InventoryListType.PersonalCargo or InventoryListType.AccountCargo;
-        // 护石窗口的整理分类是客户端页面号而不是物品类别：18=护石页0–69，19=符文页70–209。
+        // 护石窗口的整理分类是客户端页面号而不是物品类别：18=符文页70–209，19=护石页0–69
+        // （实机 2026-10-25 校正：护石页发19、符文页发18，此前按物品类别错配成反向）。
         // 已装符文210–215绑定装备槽，不属于任何背包页，整理不参与。
         (short Start, short End)? page = list != InventoryListType.Talisman ? null : (byte)kind switch
         {
-            18 or 11 => ((short)0, (short)69),
-            19 or 14 => ((short)70, (short)209),
+            18 or 14 => ((short)70, (short)209),
+            19 or 11 => ((short)0, (short)69),
             _ => null
         };
+        bool runePage = page?.Start == 70;
         if (list == InventoryListType.Talisman ? page is null :
             !cargo && (!Enum.IsDefined(kind) || ItemSlotBoundService.List(kind) != list) ||
             list == InventoryListType.PersonalCargo && (byte)kind is not (11 or 20))
@@ -47,13 +49,13 @@ internal static class InventorySortService
         var sorted = algorithm switch
         {
             // 符文品级来自资源 `[rune option]` 而不是模板稀有度，按品级整理必须读符文定义。
-            1 when (byte)kind is 19 or 14 => ordered.OrderByDescending(item => catalog.Rune(item.Core.ItemId)?.Grade ?? 0),
+            1 when runePage => ordered.OrderByDescending(item => catalog.Rune(item.Core.ItemId)?.Grade ?? 0),
             1 => ordered.OrderByDescending(item => RarityRank(catalog.Get(item.Core.ItemId).Rarity)),
             2 => ordered.OrderByDescending(item => catalog.Get(item.Core.ItemId).MinimumLevel),
             3 when kind is ItemKind.Equipment or ItemKind.Avatar => ordered.OrderBy(item => catalog.Get(item.Core.ItemId).EquipmentSlot),
             3 => ordered.OrderBy(item => catalog.Get(item.Core.ItemId).StackableType, StringComparer.OrdinalIgnoreCase),
             4 => ordered.OrderBy(item => item.ExpireTime <= 0 ? int.MaxValue : item.ExpireTime),
-            7 when (byte)kind is 19 or 14 => ordered.OrderBy(item => catalog.Rune(item.Core.ItemId) is { } rune ? (int)rune.Camp : 0)
+            7 when runePage => ordered.OrderBy(item => catalog.Rune(item.Core.ItemId) is { } rune ? (int)rune.Camp : 0)
                 .ThenByDescending(item => catalog.Rune(item.Core.ItemId)?.Grade ?? 0),
             7 => ordered.OrderByDescending(item => catalog.Get(item.Core.ItemId).MinimumLevel),
             _ => ordered.OrderBy(item => item.Core.Kind)

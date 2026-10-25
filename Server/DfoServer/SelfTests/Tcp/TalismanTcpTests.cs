@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -158,8 +159,8 @@ internal static class TalismanTcpTests
             peer.Expect(1, 1659, Failure(23));
             peer.Barrier();
 
-            // 护石窗口整理：分类19=符文页。回执后先用1681清空重载槽再载入新顺序，最后补发容器46全量。
-            peer.Send(20, Convert.FromHexString("06000000102E18132000"));
+            // 护石窗口整理：分类18=符文页。回执后先用1681清空重载槽再载入新顺序，最后补发容器46全量。
+            peer.Send(20, Convert.FromHexString("06000000102E18122000"));
             peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 46, 16, 0]);
             var sortClear = peer.Expect(0, 1681).Body;
             That(sortClear[0] == 46 && U16(sortClear, 1) >= 1 && U32(sortClear, 5) == uint.MaxValue,
@@ -186,6 +187,96 @@ internal static class TalismanTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "护石 TCP 夹具无外键或完整性异常");
+
+        // 合成预载：三个互不相同的同品级符文格，前两格各一枚（引用一次即扣空），第三格三枚（引用一次留两枚）。
+        // 客户端 0x067A 回执只清空合成窗格并重画、不写物品容器，所以回执前的差量必须把三个材料格与产物槽
+        // 一起送到，否则材料会先画回背包再消失；扣空的格必须是清空条目，没扣完的格必须带提交后的剩余数量。
+        var compoundCosts = catalog.TalismanCompoundCosts();
+        var compoundMaterials = PvfScript.List(resources.Archive.ReadText("stackable/stackable.lst"))
+            .Where(row => row.Value.StartsWith("rune/", StringComparison.OrdinalIgnoreCase))
+            .Select(row => catalog.Rune(row.Key))
+            .Where(definition => definition is not null && definition.AllowsUse(95, 0, 1) &&
+                compoundCosts.TryGet(0, 0, definition.Grade, out _, out _, out _, out _))
+            .GroupBy(definition => definition!.Grade)
+            .Select(group => group.Select(definition => definition!.Item.Id).Distinct().Take(3).ToArray())
+            .FirstOrDefault(ids => ids.Length == 3);
+        That(compoundMaterials is not null, "匹配资源提供三种同品级可按普通规则合成的符文");
+        var materials = compoundMaterials!;
+        That(compoundCosts.TryGet(0, 0, catalog.Rune(materials[0])!.Grade,
+                out int compoundCount, out int compoundGold, out _, out _) && compoundCount == 3,
+            "匹配资源普通合成按三件结算材料与金币");
+        await using (var compoundFixture = new TcpTestFixture(source, Path.Combine(root, "talisman-compound"), resources: resources))
+        {
+            var compoundRepo = new CharacterRepository(compoundFixture.Database);
+            var compoundOwners = new AccountOwners();
+            using var owner = compoundOwners.Acquire(compoundFixture.Options.DevelopmentAccount, () => { });
+            var compoundService = new InventoryService(resources.ItemResources.Items, resources.ItemResources.GoldLimits,
+                resources.ItemResources.EpicPieces);
+            var role = compoundRepo.Create(owner, new("Compound", resources.Towns.Room, resources.Towns.InitialReturn)
+                { Job = 0, Level = 95, GrowType = 1, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills });
+            role = InventoryService.Commit(compoundRepo, owner, role,
+                compoundService.Grant(role,
+                    [.. materials.Select((id, index) => new InventoryReward(id, index == 2 ? compoundCount : 1))]));
+            role = InventoryService.Commit(compoundRepo, owner, role,
+                new CurrencyService(resources.ItemResources.GoldLimits).Grant(role, CurrencyKind.Gold, compoundGold));
+            var compoundCharacter = role.Id;
+            await compoundFixture.StartAsync();
+            using var peer = Open(compoundFixture);
+            peer.Select();
+            var page = peer.SpecialContainers[4].Body;
+            That(page[0] == 46 && U16(page, 1) == 3, "合成夹具的三枚符文登录后全部落在护石页");
+            var materialSlots = new short[3];
+            for (int index = 0; index < 3; index++)
+            {
+                short slot = BinaryPrimitives.ReadInt16LittleEndian(page.AsSpan(3 + index * 123));
+                That(slot is >= 70 and < 210 && materials.Contains((int)U32(page, 3 + index * 123 + 2)),
+                    "三枚符文材料落在符文页");
+                materialSlots[index] = slot;
+            }
+            peer.Send(1658, Compound(0, 0, 0, materialSlots));
+            var compoundPreload = peer.Expect(0, 14).Body;
+            var compoundAck = peer.Expect(1, 1658);
+            That(compoundAck.Body is [1, _, _, _, _, _, _, _], "合成成功回执带成功标志");
+            var productSlot = U16(compoundAck.Body, 1);
+            uint product = U32(compoundAck.Body, 3);
+            var preloaded = Enumerable.Range(0, U16(compoundPreload, 1))
+                .Select(index => (Slot: (int)U16(compoundPreload, 3 + index * 123),
+                    Id: U32(compoundPreload, 3 + index * 123 + 2), Count: U32(compoundPreload, 3 + index * 123 + 6)))
+                .ToDictionary(entry => entry.Slot);
+            That(compoundPreload[0] == 46 && materialSlots.All(slot => preloaded.ContainsKey(slot)),
+                "合成回执前的预载覆盖全部材料格，客户端重画时不再把材料画回背包");
+            // 扣空的两格必须是清空条目；第三格留两枚。产物并入材料格时按回执槽位与合并后数量断言。
+            That(materialSlots.Take(2).All(slot => slot == productSlot
+                    ? preloaded[slot].Id == product && preloaded[slot].Count == 1
+                    : preloaded[slot].Id == uint.MaxValue) &&
+                (materialSlots[2] == productSlot
+                    ? preloaded[materialSlots[2]].Id == product && preloaded[materialSlots[2]].Count == compoundCount
+                    : preloaded[materialSlots[2]].Id == (uint)materials[2] &&
+                        preloaded[materialSlots[2]].Count == compoundCount - 1) &&
+                preloaded.Values.All(entry => materialSlots.Any(slot => entry.Slot == slot) ||
+                    entry.Slot == productSlot && entry.Id == product),
+                "预载材料格按提交后状态下发：扣空为清空条目、未扣完保留剩余数量，产物槽携带回执同一实例");
+            peer.SendBarrier();
+            var tail = new List<WirePacket>();
+            WirePacket packet;
+            while ((packet = peer.Read()) is not { Kind: 1, Opcode: 1347 }) tail.Add(packet);
+            That(tail.Count > 0 && tail.All(item => item is { Kind: 0, Opcode: 14 }) &&
+                tail.Any(item => item.Body[0] == 46),
+                "合成回执后只补发金币与护石页差量，材料格由预载先行清空");
+            peer.Barrier();
+            // 前两格扣空后不再有行；第三格留两枚，产物并入时合并为三枚，否则另占一行。
+            That(compoundFixture.Query("PRAGMA integrity_check") is [["ok"]] &&
+                Convert.ToInt64(compoundFixture.Query(
+                    "SELECT COUNT(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=46 AND slot_index<210",
+                    compoundCharacter)[0][0]) == (materialSlots[2] == productSlot ? 1 : 2) &&
+                Convert.ToInt64(compoundFixture.Query(
+                    "SELECT json_extract(i.item_core,'$.Value') FROM character_inventory_slots s " +
+                    "JOIN character_inventory_items i ON i.item_uid=s.item_uid " +
+                    "WHERE s.character_id=$p0 AND s.list_type=46 AND s.slot_index=$p1",
+                    compoundCharacter, materialSlots[2])[0][0]) ==
+                    (materialSlots[2] == productSlot ? compoundCount : compoundCount - 1),
+                "合成夹具只留下产物与第三格的两枚余量，前两枚材料格释放");
+        }
 
         long Uid(int itemId) => Convert.ToInt64(fixture.Query(
             "SELECT s.item_uid FROM character_inventory_slots s JOIN character_inventory_items i ON i.item_uid=s.item_uid " +
@@ -242,6 +333,16 @@ internal static class TalismanTcpTests
         writer.Write(itemId);
     });
     static byte[] Remove(ushort target) => Build(writer => writer.Write(target));
+    // 13B 表单前缀、族、模式、u32 件数、u32 规则、五个 i16 源引用（空位为 0xFFFF）。
+    static byte[] Compound(byte family, byte mode, int rule, short[] slots) => Build(writer =>
+    {
+        writer.Write(new byte[13]);
+        writer.Write(family);
+        writer.Write(mode);
+        writer.Write((uint)slots.Length);
+        writer.Write(rule);
+        for (int index = 0; index < 5; index++) writer.Write(index < slots.Length ? slots[index] : (short)-1);
+    });
     static byte[] Refine(short materialSlot, short stoneSlot) => Build(writer =>
     {
         writer.Write(new byte[13]);

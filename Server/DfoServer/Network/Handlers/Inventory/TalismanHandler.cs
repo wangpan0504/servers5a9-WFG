@@ -51,7 +51,12 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
                 _ => receipt is { } product
                     ? TalismanPackets.Compounded((ushort)product.ProductSlot, product.ItemId, product.Upgraded)
                     : TalismanPackets.Failure(InventoryTalismanService.Rejection),
-                () => receipt is { } product ? [new InventorySlot(InventoryListType.Talisman, product.ProductSlot)] : [],
+                // 合成回执只清空合成窗格并重画、不写物品容器：材料槽必须与产物槽一起先于回执送达，
+                // 否则回执重画会按旧容器把材料画回背包，直到绝对差量到达才消失（表现为材料「回背包再消失」）。
+                () => receipt is { } product
+                    ? [.. product.SourceSlots.Select(slot => new InventorySlot(InventoryListType.Talisman, slot)),
+                        new InventorySlot(InventoryListType.Talisman, product.ProductSlot)]
+                    : [],
                 // 族/模式/品级是资源表索引，实测字节尚未全部落实，先在日志里留原值便于比对。
                 $"family={request.Family} mode={request.Mode} rule={request.Rule} slots={string.Join(',', request.SourceSlots)}");
         });
@@ -106,7 +111,8 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
         var committed = result.Receipt ?? throw new InvalidOperationException("护石操作成功缺少实际提交回执");
         // 客户端 0x067B/0x067C/0x06CE 回执只重画护石窗口与列表，**不写物品容器**（0069A170/0069A4A0 全路径无容器写入）。
         // 图标完全靠回执那一刻的重画读取，因此提交后的孔位行必须先于回执到达；否则第一次操作看不到变化，
-        // 要等下一次回执重画才补显。源槽不在预载内：客户端在 ACK 清理时才归还拖拽预留数量，绝对差量随后补发。
+        // 要等下一次回执重画才补显。装载/卸除的源槽不在预载内：客户端在 ACK 清理时才归还拖拽预留数量，
+        // 绝对差量随后补发；合成没有拖拽移动，材料格由请求体给出，必须一并预载（见 Compound）。
         if (action.Preload() is { Length: > 0 } preload)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
                 InventoryPackets.Delta(committed.Character.Inventory, InventoryListType.Talisman, preload, index: committed.Index),

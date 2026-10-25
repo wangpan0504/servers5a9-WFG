@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
@@ -139,7 +140,8 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
 
         var assets = requirements.Select(requirement => requirement.Item).ToList();
         assets.AddRange(after.Items.Where(item => item.Position == productSlot));
-        receipt = new(productSlot.Index, productId, upgraded);
+        receipt = new(productSlot.Index, productId, upgraded,
+            [.. requirements.Select(requirement => requirement.Item.Position.Index)]);
         return new(true, 0, new InventoryPlan(before, after,
             materialKind == ItemKind.Rune ? "rune_compound" : "talisman_compound",
             new InventoryCharacterPrecondition(character, Deadline(assets))));
@@ -169,4 +171,6 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
         InventoryResult.Reject(Rejection) with { RejectReason = reason };
 }
 
-internal sealed record TalismanCompoundReceipt(short ProductSlot, int ItemId, bool Upgraded);
+// SourceSlots 是本次实际扣减的材料格（同格重复引用已按格合并）：回执前的预载必须连同产物槽一起覆盖，
+// 客户端合成回执只重画合成窗格、不写物品容器，缺了材料格就会把材料画回背包再等差量删掉。
+internal sealed record TalismanCompoundReceipt(short ProductSlot, int ItemId, bool Upgraded, ImmutableArray<short> SourceSlots);
