@@ -235,6 +235,7 @@ internal static class AvatarPackageTests
     {
         FirstGrowResources(towns, resources, packages);
         RankZeroResources(towns, resources, packages);
+        AbilitySentinelResources(towns, resources, packages);
         var items = resources.Items;
         var service = new InventoryAvatarPackageService(items, packages, resources.GoldLimits, resources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
@@ -456,8 +457,55 @@ internal static class AvatarPackageTests
             "源先到期时仍绑定源期限；源和全部奖励永久时不制造截止时间");
     }
 
-    static void PeriodDeadlinePlans(TownCatalog towns, ItemResources resources)
+    // 使徒降临至尊装扮套装礼盒：分类内九件含无属性声明的武器装扮，客户端对它发255哨兵，
+    // 不能把哨兵当成非法属性而整箱拒绝，也不能把它写进奖励核心。
+    static void AbilitySentinelResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
     {
+        const int packageId = 490705439, weaponId = 401600014;
+        var now = DateTimeOffset.FromUnixTimeSeconds(2_000_000_000);
+        var definition = packages.Get(packageId);
+        That(definition.Available, "使徒降临礼盒按真实资源进入装扮入口，而不是回落普通开箱");
+        var category = definition.Categories.Single(row => row.Category == 0 && row.Subcategory == 0);
+        That(category.Rows.Length == 9 && category.Rows.Any(row => row.ItemId == weaponId), "零选择要求发放分类内全部九件");
+        // 实际490705439请求：源槽67、九项ID清单、九项5B选项，武器装扮的选项为255。
+        var captured = Convert.FromHexString("4300010000000000642BEF173552EF172179EF17E5B5EE17F767EE17EFDCEE17ED8EEE17" +
+            "1A04EF170EEEEF1709642BEF17043552EF17042179EF1702E5B5EE1702F767EE170FEFDCEE1704ED8EEE17001A04EF17000EEEEF17FF00");
+        var parsed = AvatarPackageRequests.Read(captured, 9, 9);
+        That(captured.Length == 91 && parsed.Slot == 67 && parsed.Category == 0 && parsed.Subcategory == 0 &&
+            parsed.Count == 1 && parsed.ItemIds.SequenceEqual(category.Rows.Select(row => row.ItemId)) &&
+            parsed.Choices.Length == 9 && parsed.Choices[^1] == new AvatarPackageChoice(weaponId, byte.MaxValue),
+            "★ 真实91B装扮选择正文完整解析出九项并原样保留武器哨兵");
+        var weapon = packages.GetAvatar(weaponId);
+        That(!weapon.RequiresAbilityChoice && weapon.Abilities.SequenceEqual(new byte[] { 0 }) && weapon.PendingRule is null,
+            "★ 武器装扮没有可选属性声明");
+        var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces);
+        var source = new InventoryItem(1000, Bag(), InventoryRewardGrantService.Create(resources.Items.Get(packageId), 1,
+            shopExpiration: true));
+        var character = new Character(1, 0, "Sentinel", 0, towns.Room, towns.InitialReturn) { Job = 0, Inventory = new([source]) };
+        var chosen = category.Rows.ToArray();
+        AvatarPackageChoice[] Choices(byte weaponAbility) => chosen.Select(row => new AvatarPackageChoice(row.ItemId,
+            row.ItemId == weaponId ? weaponAbility : packages.GetAvatar(row.ItemId).Abilities.Min())).ToArray();
+        var request = new AvatarPackageOpenRequest(73, 1, 0, 0, chosen.Select(row => row.ItemId).ToArray(), Choices(byte.MaxValue));
+        var result = service.Open(character, request, out var receipt, now);
+        That(result.Accepted && result.Plan!.After.Items.Count(item => item.Core.Kind == ItemKind.Avatar) == 9 &&
+            result.Plan.After.Items.Where(item => item.Core.ItemId == weaponId).All(item => item.Core.Durability == 0),
+            "★ 武器装扮的255哨兵按未选择处理，九件完整发放且奖励核心不写入255");
+        That(receipt!.Rewards.Sum(row => row.Count) == 9 &&
+            result.Plan!.Before.Find(Bag()) is { Core.Count: 1 } && character.Inventory.Find(Bag()) is { Core.Count: 1 },
+            "整箱九件只扣一个源，规划前后源数量一致");
+        var zero = service.Open(character, request with { Choices = Choices(0) }, out _, now);
+        That(zero.Accepted, "哨兵位置写0同样表示未选择，不因来源不同拒绝");
+        var bogus = service.Open(character, request with { Choices = Choices(7) }, out _, now);
+        That(!bogus.Accepted, "无属性部位收到其他数值仍拒绝，不能借哨兵放宽到任意字节");
+        // 有属性声明的部位不受影响，255仍然非法。
+        var hat = category.Rows.First(row => packages.GetAvatar(row.ItemId).RequiresAbilityChoice);
+        var strict = Choices(byte.MaxValue).Select(choice => choice.ItemId == hat.ItemId
+            ? new AvatarPackageChoice(hat.ItemId, byte.MaxValue) : choice).ToArray();
+        That(!service.Open(character, request with { Choices = strict }, out _, now).Accepted,
+            "有属性声明的部位发送255仍被拒绝");
+    }
+
+    static void PeriodDeadlinePlans(TownCatalog towns, ItemResources resources)    {
         const int packageId = 490705387, hatId = 401550176, skinId = 401580026;
         var now = DateTimeOffset.FromUnixTimeSeconds(2_000_000_000);
         string package = "[stackable type]\n`[booster selection]` 0\n[booster category num]\n1 1\n[booster selection num]\n0\n" +
