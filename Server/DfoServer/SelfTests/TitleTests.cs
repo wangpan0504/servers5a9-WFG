@@ -74,6 +74,7 @@ internal static class TitleTests
         int start = Count;
         CheckHatchedCreature();
         CheckAppearance();
+        TitleCloneTests.RunCore();
         var characterLevel = new Character(1, 0, "TitleLevel", 0, new(1, 0, 10, 10), null) { Level = 4 };
         var titleLevel = QuestEligibilityTests.Quest(6501) with { Grade = "[title]", MaximumLevel = 3 };
         var levelCatalog = new QuestCatalog(new[] { titleLevel }.ToDictionary(quest => quest.Id));

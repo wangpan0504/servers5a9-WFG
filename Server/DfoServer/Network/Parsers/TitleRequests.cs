@@ -5,6 +5,12 @@ namespace DfoServer.Network.Parsers;
 
 internal static class TitleRequests
 {
+    public static uint CloneTitle(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4) throw new InvalidDataException("称号动画请求必须为完整u32模板ID");
+        return BinaryPrimitives.ReadUInt32LittleEndian(body);
+    }
+
     public static ushort Other(ReadOnlySpan<byte> body)
     {
         if (body.Length != 2 || BinaryPrimitives.ReadUInt16LittleEndian(body) == 0) throw new InvalidDataException("他人称号簿请求必须为非零角色u16");

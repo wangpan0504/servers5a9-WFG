@@ -12,6 +12,22 @@ internal sealed class TitleBookService(TitleCatalog titles, ItemCatalog items, P
     public static bool IsBook(InventoryListType list) => list is >= InventoryListType.TitleGeneral and <= InventoryListType.TitleEvent;
     public static InventorySlot Slot(int category, int index) => new((InventoryListType)(18 + category), checked((short)index));
 
+    public ushort CloneTitleError(Character character, uint itemId, long utcSeconds)
+        => CloneTitleQualification(character, itemId, utcSeconds).Error;
+
+    public (ushort Error, long? ExpiresAt) CloneTitleQualification(Character character, uint itemId, long utcSeconds)
+    {
+        if (itemId == 0) return (0, null);
+        if (itemId > int.MaxValue) return (2, null);
+        // 动画只借用当前角色真实持有的称号，不能凭客户端模板ID解锁未持有外观。
+        var sources = character.Inventory.Items.Where(item => item.Core.ItemId == (int)itemId &&
+            (IsBook(item.Position.List) || item.Position.List == InventoryListType.Main ||
+                item.Position is { List: InventoryListType.Equipment, Index: 13 }) &&
+            Valid(item, (int)itemId, utcSeconds)).ToArray();
+        if (sources.Length == 0) return (2, null);
+        return (0, sources.Any(item => item.ExpireTime <= 0) ? null : sources.Max(item => (long)item.ExpireTime));
+    }
+
     public InventoryResult Put(Character character, TitleBookRequest request, long utcSeconds)
     {
         if (request.List is not (0 or 3) || request.Slot is < 0 or > short.MaxValue ||

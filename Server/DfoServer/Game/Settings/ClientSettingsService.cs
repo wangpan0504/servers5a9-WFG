@@ -8,6 +8,8 @@ internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServe
     public const int GameOptionLength = 204;
     public const int CharacterOptionLength = 512;
     public const int QuickChatLength = 300;
+    public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort characterId, uint itemId, long? expiresAt = null) =>
+        store.SaveCloneTitle(owner, characterId, itemId, expiresAt);
     public bool? SaveEmotion(AccountOwners.Lease owner, ushort characterId, ushort emotion) =>
         emotions?.CanSelect(emotion) == true ? store.SaveEmotion(owner, characterId, emotion) : null;
 

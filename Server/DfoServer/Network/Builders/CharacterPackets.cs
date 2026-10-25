@@ -53,6 +53,7 @@ internal static class CharacterPackets
             writer.Write(new byte[10]);
             EquipmentProtocolWriter.Appearance(writer, character.Equipment);
             byte[] tail = new byte[48];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(tail, character.CloneTitleItemId);
             tail[24] = 3;
             // 02680FA3读取非零为真，02680FCE安装到Data+420，再投影展示角色+149C。
             tail[34] = character.IsPvpPrivate ? (byte)1 : (byte)0;

@@ -20,6 +20,7 @@ internal static class ClientSettingsStoreTests
     public static void Run()
     {
         int before = TestCheck.Count;
+        CloneTitleStorage();
         SaveAndIsolation();
         CharacterGameSnapshots();
         RawAccountAndCanonicalCharacter();
@@ -28,6 +29,62 @@ internal static class ClientSettingsStoreTests
         ReadOnlyAndRollback();
         Migration();
         Console.WriteLine($"PASS {TestCheck.Count - before} 客户端设置规则、归属、持久化与迁移断言");
+    }
+
+    static void CloneTitleStorage()
+    {
+        using var f = new Fixture();
+        var repo = new CharacterRepository(f.Path);
+        string assets = f.Assets();
+        Check(f.First.CloneTitleItemId == 0 && f.Service.SaveCloneTitle(f.Owner, f.First.Id, 0) == false,
+            "新角色称号动画缺省0，同值不写库");
+        Check(f.Service.SaveCloneTitle(f.Owner, f.First.Id, uint.MaxValue) == true, "称号动画按完整u32保存");
+        Check(JsonSerializer.Serialize(repo.LoadCharacter(f.Owner, f.First.Slot)) ==
+            JsonSerializer.Serialize(f.First with { CloneTitleItemId = uint.MaxValue }) &&
+            repo.LoadCharacter(f.Owner, f.Second.Slot).CloneTitleItemId == 0 &&
+            repo.ListRoster(f.Owner).Single(row => row.Id == f.First.Id).CloneTitleItemId == uint.MaxValue &&
+            CharacterRosterEntry.FromCharacter(f.First with { CloneTitleItemId = uint.MaxValue }).CloneTitleItemId == uint.MaxValue,
+            "称号动画仅属当前角色，完整读取与名册保留同一u32且不推进资产revision");
+        Reject<InvalidDataException>(() => f.Service.SaveCloneTitle(f.OtherOwner, f.First.Id, 1), "其他账号不能保存称号动画");
+        using (var db = Open(f.Path))
+        using (var writer = db.BeginTransaction(deferred: false))
+            Check(f.Service.SaveCloneTitle(f.Owner, f.First.Id, uint.MaxValue) == false, "外部writer占用时重复动画只读，不申请写锁");
+        Check(f.Service.SaveCloneTitle(f.Owner, f.First.Id, 0, DateTimeOffset.UtcNow.ToUnixTimeSeconds()) is null &&
+            repo.LoadCharacter(f.Owner, f.First.Slot).CloneTitleItemId == uint.MaxValue,
+            "规划后已到期的来源拒绝保存，保留原动画");
+        var oldSink = SqliteDbDiagnostics.Sink;
+        bool waited = false;
+        Task<bool?> pending;
+        try
+        {
+            SqliteDbDiagnostics.Sink = (_, data) =>
+            {
+                var entry = JsonSerializer.SerializeToElement(data);
+                if (entry.GetProperty("Action").GetString() == "ClientSettingsRepository.SaveCloneTitle" &&
+                    entry.GetProperty("Stage").GetString() == "gate_wait") waited = true;
+            };
+            using (var db = Open(f.Path))
+            using (var writer = db.BeginWrite("ClientSettingsStoreTests.CloneTitleExpiry"))
+            {
+                long deadline = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3;
+                pending = Task.Run(() => f.Service.SaveCloneTitle(f.Owner, f.First.Id, 0, deadline));
+                while (DateTimeOffset.UtcNow.ToUnixTimeSeconds() < deadline) Thread.Sleep(10);
+            }
+            Check(pending.Wait(TimeSpan.FromSeconds(10)) && waited && pending.Result is null &&
+                repo.LoadCharacter(f.Owner, f.First.Slot).CloneTitleItemId == uint.MaxValue,
+                "真实writer排队跨过到期边界后拒绝选择，事务释放且原动画保持");
+        }
+        finally { SqliteDbDiagnostics.Sink = oldSink; }
+        f.Execute("CREATE TRIGGER clone_title_fail BEFORE UPDATE OF clone_title_item_id ON characters BEGIN SELECT RAISE(ABORT,'clone title rollback'); END");
+        Reject<SqliteException>(() => f.Service.SaveCloneTitle(f.Owner, f.First.Id, 0), "动画保存SQL失败传播，不伪造成功");
+        Check(new CharacterRepository(f.Path).LoadCharacter(f.Owner, f.First.Slot).CloneTitleItemId == uint.MaxValue,
+            "失败回滚与重开仓储均保留原称号动画");
+        f.Execute("DROP TRIGGER clone_title_fail");
+        Check(f.Service.SaveCloneTitle(f.Owner, f.First.Id, 0) == true && f.Assets() == assets,
+            "清除动画只恢复展示字段，不改变角色、资产或其他设置");
+        using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
+        Reject<InvalidOperationException>(() => f.Service.SaveCloneTitle(f.Owner, f.First.Id, 1), "过期owner不能保存称号动画");
+        f.Integrity();
     }
 
     static void HotkeyStorage()

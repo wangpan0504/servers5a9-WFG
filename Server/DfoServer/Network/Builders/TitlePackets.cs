@@ -8,6 +8,16 @@ namespace DfoServer.Network.Builders;
 
 internal static class TitlePackets
 {
+    public static byte[] CloneTitle(uint itemId)
+    {
+        byte[] body = new byte[5];
+        body[0] = 1;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1), itemId);
+        return body;
+    }
+
+    public static byte[] CloneTitleFailure(ushort error) => [0, (byte)error, (byte)(error >> 8)];
+
     public static byte[] Book(InventorySnapshot inventory, int category, ushort owner = 0, bool show = false)
     {
         if (category is < 0 or > 4) throw new InvalidDataException("称号分类不在客户端五种范围");

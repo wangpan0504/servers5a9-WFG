@@ -344,7 +344,7 @@ internal static class ServerRuntime
             new SettingsHandler(settings, log, projection),
             avatarPresetHandler,
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
-            new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, online),
+            new TitleHandler(titleService, new Game.Titles.TitleBookService(titleCatalog, itemResources.Items, itemResources.Contracts), titleProjection, inventoryProjection, online, settings, log),
             new CollectBoxHandler(new Game.CollectBox.CollectBoxService(itemResources.CollectBoxes, itemResources.Items,
                 itemResources.EpicPieces), collectBoxProjection, inventoryProjection, clock),
             new EpicProductionHandler(epicProduction,epicAbilities,epicPolicy,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,

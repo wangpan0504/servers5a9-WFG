@@ -157,6 +157,7 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            CloneTitleUpgrade(root);
             PlayerInteractionPreviewUpgrade(root);
             VerifyReceiptDefinitionFixture(root);
             ObjectKeyUpgrade(root);
@@ -212,6 +213,7 @@ internal static partial class DatabaseSchemaTests
                 "DROP TABLE schema_metadata", "UPDATE schema_metadata SET value='another-database'",
                 "PRAGMA user_version=0", $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}", "ALTER TABLE accounts DROP COLUMN disabled",
                 "ALTER TABLE characters DROP COLUMN blacklist_count",
+                "ALTER TABLE characters DROP COLUMN clone_title_item_id",
                 "ALTER TABLE character_teleport_cooldowns DROP COLUMN upgrade_aura_until",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail", "DROP TABLE account_client_settings", "DROP TABLE character_client_settings",
                 "DROP TABLE character_game_settings",
