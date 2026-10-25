@@ -38,7 +38,7 @@ internal static class TownTravel
             return admission == "ready" ? new(visit.Origin with { Direction = character.Position.Direction }, character.Return, "ready")
                 : TownTravelPlan.Reject(admission);
         }
-        // 赛丽亚房间按频道出门：客户端若以区域请求代替 PREV_VILLAGE 指向频道落点区域，按同一出口处理。
+        // 特殊区域与团队频道的赛丽亚房间按频道落点出门：客户端若以区域请求代替 PREV_VILLAGE 指向频道落点区域，按同一出口处理。
         if (request.TargetNpc == 0 && ChannelAreaLanding.RoomExit(towns, channel, character.Position, character.Level, completed) is { } exit &&
             exit.Town == request.Town && exit.Area == request.Area)
             return ChannelExit(character, towns, completed, exit);
