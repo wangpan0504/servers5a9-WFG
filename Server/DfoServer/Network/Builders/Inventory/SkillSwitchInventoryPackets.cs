@@ -105,7 +105,7 @@ internal static class SkillSwitchInventoryPackets
         byte part = item.Binding.EquipmentPart;
         return item.ListType switch
         {
-            0 or 2 => true,
+            0 => true,
             1 => part <= 11 && item.Item.Avatar is not null,
             3 => item.Slot == part && (part > 11 || item.Item.Avatar is not null),
             7 => part is >= 26 and <= 29,
