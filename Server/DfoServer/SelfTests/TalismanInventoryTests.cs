@@ -84,8 +84,8 @@ internal static class TalismanInventoryTests
             "装载从堆叠分出一枚，且只接受与孔色一致的符文");
         That(!service.Equip(wearer, new(212, 70, RuneId), Now).Accepted, "孔色与符文阵营不一致时拒绝装载");
         var otherSource = new InventoryItem(5, new(InventoryListType.Talisman, 70), new(OtherRuneId, ItemKind.Rune, 3));
-        That(!service.Equip(Character(worn, otherSource), new(210, 70, OtherRuneId), Now).Accepted,
-            "护石只接受本护石技能的符文，孔色一致也拒绝");
+        That(service.Equip(Character(worn, otherSource), new(210, 70, OtherRuneId), Now).Accepted,
+            "孔色一致即可装入，符文技能与护石技能不同也接受");
         var twinStone = new InventoryItem(21, new(InventoryListType.Equipment, 35),
             new TalismanSocketColors(5, 5, 3).Apply(new(Stone2Id, ItemKind.Talisman, 999999998)));
         That(InventoryMoveService.Allows(Character(), new(InventoryListType.Equipment, 34), worn.Core, catalog),
@@ -103,12 +103,21 @@ internal static class TalismanInventoryTests
         That(whileLoaded.Accepted && whileLoaded.Plan!.After.Find(actual.Position)?.Core.Count == 1 &&
             whileLoaded.Plan.After.Find(source.Position)?.Core.Count == 2,
             "发放同名符文只能合入背包，不能把装载槽增加为多枚");
-        That(!service.Equip(afterEquip, new(211, 70, RuneId), Now).Accepted, "同一护石三孔拒绝同阵营同技能重复");
+        That(service.Equip(afterEquip, new(211, 70, RuneId), Now).Accepted, "同一护石孔色相同的两孔可重复装入同阵营同技能符文");
         var secondStone = StoneItem(4, 35, InventoryListType.Equipment);
         That(service.Equip(afterEquip with { Inventory = afterEquip.Inventory with { Items = afterEquip.Inventory.Items.Add(secondStone) } },
-            new(213, 70, RuneId), Now).Accepted, "两个护石分别校验三孔，可各装相同阵营同技能符文");
+            new(213, 70, RuneId), Now).Accepted, "两块护石各自独立，可各装同色符文");
         That(!service.Equip(wearer with { Inventory = new([worn with { Core = worn.Core with { EquipmentLockId = 1 } }, source]) },
             new(210, 70, RuneId), Now).Accepted, "锁定护石拒绝装载，材料不变");
+        // 孔位绑定装备槽，护石离开 34 会把符文留给下一枚护石；卸石前必须先卸符文。
+        var unequip = new InventoryMoveRequest(new(InventoryListType.Equipment, 34), StoneId, 1,
+            new(InventoryListType.Talisman, 0), 0, 0, 0, 0, 0);
+        That(!InventoryMoveService.Plan(afterEquip, unequip, catalog, Now).Accepted, "带已装符文的护石拒绝卸下");
+        That(!InventoryMoveService.Plan(Character(worn, actual, StoneItem(6, 0)),
+            new(new(InventoryListType.Talisman, 0), StoneId, 1, new(InventoryListType.Equipment, 34), StoneId, 0, 0, 0, 0),
+            catalog, Now).Accepted, "带已装符文的护石不能与背包护石互换，符文不会错挂到另一枚");
+        That(InventoryMoveService.Plan(afterEquip with { Inventory = removed.Plan!.After }, unequip, catalog, Now).Accepted,
+            "符文全部卸除后护石可以正常卸下");
         var allSlots = Enumerable.Range(70, 140).Select(slot => new InventoryItem(slot + 100,
             new(InventoryListType.Talisman, (short)slot), new(OtherRuneId, ItemKind.Rune, 999))).Append(actual).ToArray();
         var refused = service.Remove(Character(allSlots), 210, Now);

@@ -113,6 +113,12 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
                 "talisman_result_preload", Guard);
         await context.Reply((CmdPacketType)packet.Opcode, action.Reply(committed), "talisman_committed", Guard);
         await projection.RefreshAsync(context, result);
+        // 护石图鉴的符文页只在容器 46 全量到达后重新允许拖拽：只发差量时首次装载/卸除后该页锁死，
+        // 必须切页触发全量才恢复；与拒绝路径的恢复包同一形态，成功后再补一次全量刷新。
+        if ((CmdPacketType)packet.Opcode is CmdPacketType.EQUIP_RUNE or CmdPacketType.REMOVE_RUNE)
+            await context.Notify(NotiPacketType.ITEM_LIST,
+                InventoryPackets.SpecialFull(committed.Character.Inventory, InventoryListType.Talisman),
+                "talisman_list_sync", Guard);
         return CommandResult.Handled;
     }
 

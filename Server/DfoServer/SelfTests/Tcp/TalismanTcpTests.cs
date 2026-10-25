@@ -16,7 +16,7 @@ internal static class TalismanTcpTests
     {
         var catalog = resources.ItemResources.Items;
         var costs = catalog.TalismanRefineCosts();
-        var (stone, legacyStone, rune, legacyRune) = Pick(catalog, resources.Archive, costs);
+        var (stone, legacyStone, campRunes, legacyRune) = Pick(catalog, resources.Archive, costs);
         int perRefine = costs.CountsByRarity[catalog.Get(stone).Rarity];
 
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "talisman"), resources: resources);
@@ -30,7 +30,8 @@ internal static class TalismanTcpTests
             character = role.Id;
             var service = new InventoryService(resources.ItemResources.Items, resources.ItemResources.GoldLimits,
                 resources.ItemResources.EpicPieces);
-            var granted = service.Grant(role, [new(stone, 1), new(legacyStone, 1), new(rune, 3), new(legacyRune, 2),
+            var granted = service.Grant(role, [new(stone, 1), new(legacyStone, 1),
+                ..campRunes.Select(id => new InventoryReward(id, 3)), new(legacyRune, 2),
                 new(costs.MaterialId, checked(perRefine * 3))]);
             That(granted.Accepted, "护石 TCP 夹具奖励全部进入库存");
             InventoryService.Commit(repo, owner, role, granted);
@@ -51,16 +52,16 @@ internal static class TalismanTcpTests
         {
             peer.Select();
             var body = peer.SpecialContainers[4].Body;
-            That(body[0] == 46 && U16(body, 1) == 4 && body.Length == 3 + 4 * 123,
-                "登录后护石符文容器含迁移后的四条记录");
-            var slots = Enumerable.Range(0, 4).Select(index => BinaryPrimitives.ReadInt16LittleEndian(body.AsSpan(3 + index * 123))).ToArray();
-            That(slots.Count(slot => slot is >= 0 and < 70) == 2 && slots.Count(slot => slot is >= 70 and < 210) == 2,
+            That(body[0] == 46 && U16(body, 1) == 8 && body.Length == 3 + 8 * 123,
+                "登录后护石符文容器含迁移后的八条记录");
+            var slots = Enumerable.Range(0, 8).Select(index => BinaryPrimitives.ReadInt16LittleEndian(body.AsSpan(3 + index * 123))).ToArray();
+            That(slots.Count(slot => slot is >= 0 and < 70) == 2 && slots.Count(slot => slot is >= 70 and < 210) == 6,
                 "旧护石与旧符文按真实模板迁入专用分页");
-            That(Rows("list_type=0 AND slot_index IN (9,65)") == 0 && Kinds() == "11,11,14,14",
+            That(Rows("list_type=0 AND slot_index IN (9,65)") == 0 && Kinds() == "11,11,14,14,14,14,14,14",
                 "登录迁移提交后普通格清空且旧分类改写为护石/符文");
 
-            (short List, short Slot) stoneSlot = SlotOf(stone), runeSlot = SlotOf(rune), materialSlot = SlotOf(costs.MaterialId);
-            That(stoneSlot.List == 46 && runeSlot.List == 46 && materialSlot.List == 0, "夹具槽位分布在护石页与普通背包");
+            (short List, short Slot) stoneSlot = SlotOf(stone), materialSlot = SlotOf(costs.MaterialId);
+            That(stoneSlot.List == 46 && materialSlot.List == 0, "夹具槽位分布在护石页与普通背包");
 
             peer.Send(1742, Refine(materialSlot.Slot, stoneSlot.Slot));
             var preload = peer.Expect(0, 14).Body;
@@ -79,6 +80,10 @@ internal static class TalismanTcpTests
             That(MaterialCount() == materialBefore - perRefine && (colors >> 24) == (colorsBefore >> 24) &&
                 face.All(color => color is >= 1 and <= 5) && face.Distinct().Count() == 3,
                 "重锻按品级扣料并生成三种不重复的孔色，扩展高字节保留");
+            // 重锻孔色随机；五种阵营符文都在背包，挑与 210 孔同色的那枚验证装载，211 必然错色。
+            var rune = campRunes.First(id => catalog.Rune(id)!.SocketColor == (byte)colors);
+            (short List, short Slot) runeSlot = SlotOf(rune);
+            That(runeSlot.List == 46, "符文槽落在护石页");
 
             peer.Send(19, Move(46, stoneSlot.Slot, stone, 1, 3, 34, 0));
             peer.Expect(1, 19, Ack(46, stoneSlot.Slot, 1, 3, 34));
@@ -95,6 +100,9 @@ internal static class TalismanTcpTests
             That(Rows("list_type=3 AND slot_index=34") == 1, "护石穿戴到装备槽34并提交");
 
             peer.Send(1659, Equip(210, (ushort)runeSlot.Slot, rune));
+            var socketPreload = peer.Expect(0, 14).Body;
+            That(socketPreload[0] == 46 && U16(socketPreload, 1) == 1 && U16(socketPreload, 3) == 210 &&
+                U32(socketPreload, 5) == (uint)rune, "装载回执前先投影210单枚已提交实例");
             peer.Expect(1, 1659, Equipped(210, rune));
             var loaded = peer.Expect(0, 14).Body;
             That(loaded[0] == 46 && U16(loaded, 1) == 2 && U16(loaded, 3) == (ushort)runeSlot.Slot && U32(loaded, 9) == 2 &&
@@ -102,6 +110,9 @@ internal static class TalismanTcpTests
                 "装载后同页差量同步源堆剩余两枚与210单枚实例");
             var loadedActor = peer.Expect(0, 2).Body;
             var loadedPlayer = peer.Expect(0, 2).Body;
+            var loadedList = peer.Expect(0, 13).Body;
+            That(loadedList[0] == 46 && U16(loadedList, 1) == 8 && loadedList.Length == 3 + 8 * 123,
+                "装载成功后补发容器46全量，图鉴符文页重新允许连续拖拽");
             var vector = new byte[25];
             vector[0] = 6;
             BinaryPrimitives.WriteInt32LittleEndian(vector.AsSpan(1), rune);
@@ -110,14 +121,22 @@ internal static class TalismanTcpTests
             peer.Barrier();
             That(Rows("list_type=46 AND slot_index=210") == 1 && StackCount(rune) == 2, "装载符文从堆叠分出一枚落到210");
 
+            peer.Send(19, Move(3, (short)ItemSlotBoundService.TalismanEquipmentStart, stone, 1, 46, stoneSlot.Slot, 0));
+            peer.Expect(1, 19, Rejected(3, 46));
+            peer.Barrier();
+            That(Rows("list_type=3 AND slot_index=34") == 1, "带已装符文的护石卸下被拒绝，穿戴槽保持不变");
+
             peer.Send(1659, Equip(211, (ushort)runeSlot.Slot, rune));
             peer.Expect(1, 1659, Failure(23));
             var restore = peer.Expect(0, 13).Body;
-            That(restore[0] == 46 && U16(restore, 1) == 4, "拒绝装载后回发护石页全量，客户端状态与存档一致");
+            That(restore[0] == 46 && U16(restore, 1) == 8, "拒绝装载后回发护石页全量，客户端状态与存档一致");
             peer.Barrier();
-            That(Rows("list_type=46 AND slot_index=211") == 0 && StackCount(rune) == 2, "同护石重复阵营技能被拒绝且不扣材料");
+            That(Rows("list_type=46 AND slot_index=211") == 0 && StackCount(rune) == 2, "孔色不一致被拒绝且不扣材料");
 
             peer.Send(1660, Remove(210));
+            var clearedPreload = peer.Expect(0, 14).Body;
+            That(clearedPreload[0] == 46 && U16(clearedPreload, 1) == 1 && U16(clearedPreload, 3) == 210 &&
+                U32(clearedPreload, 5) == uint.MaxValue, "卸除回执前先投影210清空条目");
             peer.Expect(1, 1660, Removed(210));
             var returned = peer.Expect(0, 14).Body;
             That(returned[0] == 46 && U16(returned, 1) == 2 && U16(returned, 3) == (ushort)runeSlot.Slot &&
@@ -125,6 +144,9 @@ internal static class TalismanTcpTests
                 "卸除后同页差量合回三枚并清空210");
             var removedActor = peer.Expect(0, 2).Body;
             var removedPlayer = peer.Expect(0, 2).Body;
+            var removedList = peer.Expect(0, 13).Body;
+            That(removedList[0] == 46 && U16(removedList, 1) == 7 && removedList.Length == 3 + 7 * 123,
+                "卸除成功后同样补发容器46全量，避免符文页失去响应");
             That(removedActor[133 + NameWidth("Talisman")] == 1 && removedPlayer[126] == 1 &&
                 removedPlayer.AsSpan().IndexOf(vector) < 0, "卸除后本人Player不再携带装载符文向量");
             peer.Barrier();
@@ -138,8 +160,8 @@ internal static class TalismanTcpTests
         {
             peer.Select();
             var body = peer.SpecialContainers[4].Body;
-            That(body[0] == 46 && U16(body, 1) == 3 && body.Length == 3 + 3 * 123,
-                "重连后护石页恢复背包内三件，穿戴护石不再重复下发");
+            That(body[0] == 46 && U16(body, 1) == 7 && body.Length == 3 + 7 * 123,
+                "重连后护石页恢复背包内七件，穿戴护石不再重复下发");
             That(Rows("list_type=3 AND slot_index=34") == 1 && Rows("list_type=46 AND slot_index=210") == 0 &&
                 SocketColors() == colors, "重连保持穿戴、卸除结果与重锻孔色");
             peer.Barrier();
@@ -174,7 +196,7 @@ internal static class TalismanTcpTests
             "SELECT json_extract(item_core,'$.Extension114.Value') FROM character_inventory_items WHERE item_uid=$p0", stoneUid)[0][0]);
     }
 
-    static (int Stone, int LegacyStone, int Rune, int LegacyRune) Pick(ItemCatalog catalog, PvfArchive pvf, TalismanRefineCost costs)
+    static (int Stone, int LegacyStone, int[] CampRunes, int LegacyRune) Pick(ItemCatalog catalog, PvfArchive pvf, TalismanRefineCost costs)
     {
         const byte level = 95, job = 0, grow = 1;
         var stones = PvfScript.List(pvf.ReadText("equipment/equipment.lst"))
@@ -189,8 +211,10 @@ internal static class TalismanTcpTests
             .Select(row => catalog.Rune(row.Key))
             .Where(definition => definition is not null && definition.AllowsUse(level, job, grow))
             .Select(definition => definition!.Item.Id).Distinct().ToArray();
-        That(runes.Length >= 2, "匹配资源提供至少两枚可用符文");
-        return (stones[0], stones[1], runes[0], runes.First(id => id != runes[0]));
+        // 重锻后孔色随机，只有背包里备齐五色符文才能稳定挑出与目标孔同色的一枚。
+        var campRunes = runes.GroupBy(id => catalog.Rune(id)!.Camp).Select(group => group.First()).ToArray();
+        That(campRunes.Length == 5, "匹配资源提供五种阵营各一枚可用符文");
+        return (stones[0], stones[1], campRunes, runes.First(id => !campRunes.Contains(id)));
     }
 
     static byte[] Equip(ushort target, ushort source, int itemId) => Build(writer =>
@@ -228,6 +252,14 @@ internal static class TalismanTcpTests
     {
         writer.Write((byte)0);
         writer.Write(error);
+    });
+    // ACK19 拒绝：成功标志0、错误码、源容器、目标容器。
+    static byte[] Rejected(byte sourceList, byte destinationList) => Build(writer =>
+    {
+        writer.Write((byte)0);
+        writer.Write((ushort)23);
+        writer.Write(sourceList);
+        writer.Write(destinationList);
     });
     static byte[] Move(byte fromList, short fromSlot, int fromId, int count, byte toList, short toSlot, int toId) => Build(writer =>
     {

@@ -116,6 +116,10 @@ internal static class InventoryMoveService
                 destination = null;
             }
         }
+        // 孔位绑定装备槽而不跟随护石实例：带已装符文的护石离开 34/35 会把符文留在原槽错挂到别的护石上。
+        // 因此必须先卸符文再卸护石，两槽互换同样按卸下处理。
+        if (VacatesOccupiedSockets(sourceSlot, destinationSlot) || VacatesOccupiedSockets(destinationSlot, sourceSlot))
+            return InventoryResult.Reject(CannotMoveItem);
         var planned = before.Items.ToDictionary(item => item.Position);
         var moving = PrepareForDestination(source, destinationSlot, destination, catalog);
         if (destination is not null && source.Core.IsStackable && destination.Core.IsStackable && source.Core.ItemId == destination.Core.ItemId)
@@ -182,6 +186,14 @@ internal static class InventoryMoveService
                 qualificationExpiresAt = character.Inventory.AccountWallet.ContractExpiry(22);
             return true;
         }
+
+        // 护石槽 vacated 时仍留有任一枚已装符文：三孔按装备槽连续编号，符文本体留在原槽。
+        bool VacatesOccupiedSockets(InventorySlot from, InventorySlot to) =>
+            from != to && from.List == InventoryListType.Equipment &&
+            from.Index is ItemSlotBoundService.TalismanEquipmentStart or ItemSlotBoundService.TalismanEquipmentEnd &&
+            Enumerable.Range(0, 3).Any(offset => before.Find(new(InventoryListType.Talisman,
+                (short)(ItemSlotBoundService.EquippedRuneStart +
+                    (from.Index - ItemSlotBoundService.TalismanEquipmentStart) * 3 + offset))) is not null);
 
         void DecreaseSource()
         {
