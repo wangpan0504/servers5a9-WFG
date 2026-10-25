@@ -356,7 +356,7 @@ internal sealed partial class CharacterRepository
         WriteItemMakingSkills(db, transaction, expected.Id, owner.Account, plan);
         inventory = WriteEpicPieces(db, transaction, owner, expected.Id, plan.Before, inventory, plan.Reason);
         WriteOverflowMail(db, transaction, owner, current, plan);
-        SkillSwitchInventoryState skillSwitch = current.SkillSwitchInventory.Reconcile(inventory, current.Skills);
+        SkillSwitchInventoryState skillSwitch = current.SkillSwitchInventory.Reconcile(inventory);
         if (!skillSwitch.Same(current.SkillSwitchInventory))
             WriteSkillSwitchInventory(db, transaction, current.Id, owner.Account, skillSwitch);
         var active = current.ActiveMainQuests;

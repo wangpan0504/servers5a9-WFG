@@ -45,7 +45,7 @@ internal sealed partial class GameSession
     Character ReconcileSkillSwitchInventory(Character character)
     {
         SkillSwitchInventoryState state =
-            character.SkillSwitchInventory.Reconcile(character.Inventory, character.Skills);
+            character.SkillSwitchInventory.Reconcile(character.Inventory);
         if (state.Same(character.SkillSwitchInventory))
             return character;
         return repository.CommitSkillSwitchInventory(owner,

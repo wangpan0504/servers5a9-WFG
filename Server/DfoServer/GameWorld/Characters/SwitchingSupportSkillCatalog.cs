@@ -46,11 +46,19 @@ internal sealed class SwitchingSupportSkillCatalog(
             }
             if (section.Name != "skill" || pending is not { } profile)
                 continue;
-            var skills = section.Values.Where(token => token.Type == 0)
-                .Select(token => token.Value)
-                .Where(value => value is > 0 and < ushort.MaxValue)
-                .Select(value => checked((ushort)value))
-                .ToImmutableHashSet();
+            if (section.Values.Length == 0 || section.Values.Length % 2 != 0 ||
+                section.Values.Any(token => token.Type != 0))
+                throw new InvalidDataException("Buff强化技能声明必须为技能ID与链接编号成对整数");
+            var skillIds = ImmutableHashSet.CreateBuilder<ushort>();
+            for (int index = 0; index < section.Values.Length; index += 2)
+            {
+                int skillId = section.Values[index].Value;
+                if (skillId is <= 0 or >= ushort.MaxValue)
+                    throw new InvalidDataException("Buff强化候选技能ID无效");
+                // 第二列是客户端帮助链接编号，不是技能ID。
+                skillIds.Add(checked((ushort)skillId));
+            }
+            var skills = skillIds.ToImmutable();
             if (skills.Count == 0 || result.ContainsKey(profile))
                 throw new InvalidDataException("Buff强化技能白名单为空或职业配置重复");
             result.Add(profile, skills);

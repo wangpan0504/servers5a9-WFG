@@ -20,6 +20,7 @@ internal sealed partial class CharacterRepository
         using var tx = write.Transaction;
         var current = Require(db, tx, owner.Account, plan.Before.Name);
         if (current.Id != plan.Before.Id || current.Revision != plan.Before.Revision ||
+            current.Job != plan.Before.Job || current.GrowType != plan.Before.GrowType ||
             !current.SkillSwitchInventory.Same(plan.Before.SkillSwitchInventory))
             throw new InvalidOperationException("Buff强化登记角色版本或状态已变化");
         if (plan.ExpectedItem is { } expected &&
@@ -122,17 +123,14 @@ internal sealed partial class CharacterRepository
         }
     }
 
-    static void ReconcileSkillSwitchSkill(SqliteConnection db, SqliteTransaction tx, ushort characterId)
+    static void ResetSkillSwitchProfession(
+        SqliteConnection db, SqliteTransaction tx, ushort characterId, byte previousGrow, byte currentGrow)
     {
+        if ((previousGrow & 15) == (currentGrow & 15))
+            return;
         using var command = db.CreateCommand();
         command.Transaction = tx;
-        command.CommandText = """
-            DELETE FROM character_skill_switch_inventory
-            WHERE character_id=$id AND skill_id<>0 AND NOT EXISTS(
-                SELECT 1 FROM character_skills
-                WHERE character_id=$id AND skill_id=character_skill_switch_inventory.skill_id AND level>0
-            )
-            """;
+        command.CommandText = "DELETE FROM character_skill_switch_inventory WHERE character_id=$id";
         command.Parameters.AddWithValue("$id", characterId);
         command.ExecuteNonQuery();
     }

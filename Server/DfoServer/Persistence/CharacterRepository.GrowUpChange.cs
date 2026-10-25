@@ -71,6 +71,7 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("职业变更的提交版本已变化");
         WriteLearning(db, tx, expected.Id, plan.Learning);
         WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);
+        ResetSkillSwitchProfession(db, tx, expected.Id, expected.GrowType, plan.GrowType);
         foreach (int id in plan.Completed)
         {
             command.Parameters.AddWithValue("$quest", id);

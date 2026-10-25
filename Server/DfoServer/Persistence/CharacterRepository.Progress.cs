@@ -138,7 +138,8 @@ internal sealed partial class CharacterRepository
                 throw new InvalidDataException("不是写入命令");
         }
 
-        ReconcileSkillSwitchSkill(db, tx, current.Id);
+        if (request.Field == CharacterProgressField.Grow)
+            ResetSkillSwitchProfession(db, tx, current.Id, current.GrowType, checked((byte)request.Primary));
         var updated = Require(db, tx, owner.Account, request.Name);
         if (updated.Level != current.Level || updated.GrowType != current.GrowType ||
             updated.AcceptedStoryLevel != current.AcceptedStoryLevel || !updated.CompletedQuests.SequenceEqual(current.CompletedQuests))
@@ -174,6 +175,7 @@ internal sealed partial class CharacterRepository
         if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException("角色revision或所有者已变化");
         WriteLearning(db, tx, current.Id, plan.Learning);
         WriteCanonicalSkills(db, tx, current.Id, plan.Learning);
+        ResetSkillSwitchProfession(db, tx, current.Id, current.GrowType, plan.GrowType);
         // GM等级/转职重置属于排除来源：改写里程但不改变账号冒险团总量。
         CreditExcludedState(db, tx, owner.Account, current, plan.Level, EffectivePosition(plan.Level, plan.Learning.Experience));
         var updated = Require(db, tx, owner.Account, current.Name);

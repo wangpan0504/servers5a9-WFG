@@ -28,8 +28,6 @@ internal sealed class SkillSwitchInventoryService(
     {
         if (request.SkillId != 0)
         {
-            if (!character.Skills.Any(skill => skill.Id == request.SkillId && skill.Level != 0))
-                return new(SkillSwitchInventoryFailure.SkillNotLearned);
             if (!supportSkills.Supports(character.Job, character.GrowType, request.SkillId))
                 return new(SkillSwitchInventoryFailure.SkillNotSupported);
         }
