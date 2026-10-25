@@ -35,7 +35,8 @@ internal static class ServerLogTests
                 log.Write("startup", new { Stage = "PVF archive", State = "starting" });
                 log.Write("startup", new { Stage = "PVF archive", State = "complete", ElapsedMs = 12.5 });
                 log.Write("listening", new { ChannelName = "#ch.10", Channel = "127.0.0.1:23100", Game = "127.0.0.1:23101",
-                    AdvertisedGame = "127.0.0.1:23101", Gm = "disabled", PacketHttp = "disabled", PacketCapture = "disabled", ServiceLog = "Logs/with spaces/server.jsonl" });
+                    AdvertisedGame = "127.0.0.1:23101", Gm = "disabled", GmWeb = "127.0.0.1:23132",
+                    GmPacketQueries = "http://127.0.0.1:23132/api/packets", PacketHttp = "disabled", PacketCapture = "disabled", ServiceLog = "Logs/with spaces/server.jsonl" });
                 log.Write("travel", new { Connection = 1, Accepted = true, Position = new { Town = 2, X = 10 }, Tags = new[] { "first", "second" } });
                 log.Write("character_deleted", new { Connection = 1, RosterIndex = 1, Character = 7, Slot = 2, Revision = 3, SelectionEpoch = 4 });
                 log.Write("character_delete_rejected", new { Connection = 1, RosterIndex = 31, Reason = "index-absent" });
@@ -227,7 +228,7 @@ internal static class ServerLogTests
             var protocol = new EmptyProtocol();
             var options = ports with { LogDirectory = directory };
             Task running = new ServerHost(options, protocol, protocol,
-                _ => management.Task, static () => [], () => { }, log, new GameChannelListeners(options, catalog)).RunAsync(stop.Token);
+                (_, _) => management.Task, static () => [], () => { }, log, new GameChannelListeners(options, catalog)).RunAsync(stop.Token);
             bool propagated = false;
             try
             {

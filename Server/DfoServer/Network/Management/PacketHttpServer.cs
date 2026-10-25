@@ -3,7 +3,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
-using System.Web;
 using DfoServer.Infrastructure;
 
 namespace DfoServer.Network.Management;
@@ -125,13 +124,13 @@ internal static class PacketHttpServer
                 {
                     if (!Uri.TryCreate("http://" + authority + request.Target, UriKind.Absolute, out var url))
                         throw new InvalidDataException("Invalid request target");
-                    int? connectionId = ConnectionFilter(url.Query);
+                    int? connectionId = PacketQueries.ConnectionFilter(url.Query);
                     if (connectionId is not null && url.AbsolutePath != "/api/packets")
                         throw new InvalidDataException("Connection filter requires /api/packets");
                     object? result = url.AbsolutePath switch
                     {
                         "/health" => new { Status = "ok", Service = "ServerS5A9" },
-                        "/api/status" => Status(capture, options, startedAt),
+                        "/api/status" => PacketQueries.Status(capture, options, startedAt),
                         "/api/sessions" => capture.Sessions(),
                         "/api/packets" => capture.Recent(connectionId),
                         "/api/characters/online" => onlineCharacters(),
@@ -157,36 +156,6 @@ internal static class PacketHttpServer
                 catch (Exception error) when (error is IOException or SocketException or OperationCanceledException) { }
             }
         }
-    }
-
-    static int? ConnectionFilter(string query)
-    {
-        if (query.Length == 0) return null;
-        var parameters = HttpUtility.ParseQueryString(query);
-        if (parameters.Count != 1 || parameters.AllKeys[0] != "connectionId" ||
-            parameters.GetValues("connectionId") is not { Length: 1 } values ||
-            !int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out int id) || id <= 0)
-            throw new InvalidDataException("Invalid connectionId");
-        return id;
-    }
-
-    static object Status(PacketCapture capture, ServerOptions options, DateTimeOffset startedAt)
-    {
-        var sessions = capture.Sessions();
-        return new
-        {
-            StartedAt = startedAt,
-            Pid = Environment.ProcessId,
-            Channel = new { Address = options.ListenAddress, Port = options.ChannelPort },
-            Game = new { Address = options.ListenAddress, Port = options.GamePort },
-            options.GmPort,
-            options.PacketHttpPort,
-            TotalConnections = capture.TotalConnections,
-            ActiveSessions = sessions.Length,
-            ActiveGameSessions = sessions.Count(session => session.Protocol == "GAME"),
-            ReceivedPackets = capture.TotalReceived,
-            SentPackets = capture.TotalSent
-        };
     }
 
     static async Task Reply(NetworkStream stream, int status, object result, CancellationToken stop)
