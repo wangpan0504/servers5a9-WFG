@@ -76,6 +76,9 @@ internal sealed partial class GameSession
         QuestLifecyclePlan plan;
         try
         {
+            if (action == QuestLifecycleAction.Accept && QuestAntonUnlockEntry.Supports(quest) &&
+                (capture.Phase != SessionPhase.Town || !QuestAntonUnlockEntry.AtNpc(expected, towns)))
+                return refusal with { Reason = "安徒恩解锁任务须在奈恩所在的真实城镇地图接取" };
             if (capture.Pending is { } pending && pending.Plan.QuestId == questId && pending.Plan.Action == action &&
                 ReferenceEquals(pending.Plan.Expected, expected) && pending.SelectionEpoch == capture.SelectionEpoch &&
                 pending.Phase == capture.Phase && pending.Identity == capture.Identity && pending.Condition == condition)
