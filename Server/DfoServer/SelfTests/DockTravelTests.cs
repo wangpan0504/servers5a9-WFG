@@ -74,6 +74,27 @@ internal static class DockTravelTests
         That(reopened.LeaveRoom() && reopened.Selected!.Position is { Town: 54, Area: 1 }, "Harlem room exits to its street before selecting another dock");
         That(reopened.Travel(new(40, 1, 1672, 200, 5, 54, 1, 255)) && reopened.Selected!.Position == new Location(40, 1, 1672, 200), "dock accepts full kind byte and keeps Client West Coast1672,200 rather than old-version point");
         That(reopened.Travel(request with { X = 65000, Y = 0 }) && reopened.Selected!.Position == new Location(54, 1, 65000, 0), "dock retains request coordinates outside offline walking bounds");
+        // 旧频道落点曾把黑市存为54/0；重新选角必须恢复正式街道，而不是重复保存旧房间门口。
+        foreach (var stage in new[] { new HashSet<int> { 5936 }, new HashSet<int> { 5936, 6045 } })
+        {
+            var expected = towns.Entrance(towns.Room, new(54, 1, 0, 0), stage);
+            That(expected is { Town: 54, Area: 1 } && towns.IsPosition(expected, stage), "黑市两个阶段都有正式54/1房间门口");
+            That(towns.ResolveRoomReturn(new(54, 0, 1102, 515), new(54, 0, 1050, 462), 95, stage) == expected &&
+                towns.ResolveRoomReturn(towns.Room, new(54, 0, 1050, 462), 95, stage) == expected,
+                "旧黑市街道位置与已在房间的旧返回点都解析为54/1");
+        }
+        var legacy = repo.Create(owner, preparation.ToCharacter("LegacyHarlem", towns));
+        legacy = repo.Save(owner, legacy, new(54, 0, 1102, 515), new(54, 0, 1050, 462));
+        var recovered = new GameSession(new CharacterRepository(path), towns, owner);
+        recovered.Select(legacy.Slot);
+        recovered.MarkReady();
+        That(recovered.Selected!.Position == towns.Room && recovered.Selected.Return is { Town: 54, Area: 1 } &&
+            recovered.Selected.CompletedQuests.SequenceEqual(legacy.CompletedQuests) && recovered.Selected.Level == legacy.Level,
+            "重开旧黑市存档只修正正常选角的返回地区，不更改任务与等级");
+        That(recovered.LeaveRoom() && recovered.Selected!.Position is { Town: 54, Area: 1 }, "旧黑市存档出房进入54/1");
+        That(recovered.Travel(new(54, 2, 941, 85, 5, 54, 1, 0)) &&
+            recovered.Travel(new(54, 1, 2256, 576, 5, 54, 2, 0)), "修正后可进入哈林副本入口并返回黑市");
+        That(recovered.Travel(new(40, 1, 1672, 200, 5, 54, 1, 255)), "修正后黑市码头可离开哈林");
         Console.WriteLine($"PASS {Count - checks} dock assertions; active=7, directed routes=42");
         void Execute(string sql)
         {
