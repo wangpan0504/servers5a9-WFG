@@ -36,6 +36,44 @@ internal static class QuestOrdinaryCompletionTests
         PvpTrainingManualTests.Run(towns,characters,items,learning,growth,parameters,quests);
         QuestAccountSynchronizationTests.Run(towns,characters,items,learning,growth,parameters,quests);
         QuestLegacyAwakeningTests.Run(towns,pvf,characters,items,quests,learning,growth,parameters);
+        var bloodAwakening = quests.Get(990);
+        using (var legacy = new Fixture(towns,characters,learning,growth,parameters,items,bloodAwakening,
+            materialCount: 0,active: [new(0,990,0)],definitions: quests.All.ToArray(),configure: source => source with
+            {
+                Level = 50, GrowType = 3, CompletedQuests = [989],
+                InitialLearning = SkillPointLedger.Synchronize(source.Job,3,50,source.InitialLearning with
+                    { Experience = growth.GetLevelStartExperience(50) },learning),
+                Inventory = source.Inventory with { Items = source.Inventory.Items.Add(new(0,new(InventoryListType.Main,177),
+                    InventoryRewardGrantService.Create(items.Items.Get(10089420),1))) }
+            }))
+        {
+            var before = legacy.Read();
+            foreach (var invalid in new[] { bloodAwakening with { RewardType = "[unknown]" },
+                bloodAwakening with { SubType = 999 }, bloodAwakening with { Attributes = ["unknown"] },
+                bloodAwakening with { Definition = bloodAwakening.Definition! with
+                    { Fields = bloodAwakening.Definition.Fields.Add(new("send postal",[],[])) } } })
+            {
+                var rejected = QuestCompletionPlan.Prepare(before,invalid,ushort.MaxValue,legacy.Catalog,parameters,
+                    items.Items,items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow);
+                That(rejected.Outcome == QuestCompletionOutcome.Rejected && rejected.Reason.Length > 0 &&
+                    rejected.Reason != "任务需要尚未具备的周期、特殊奖励或附属交付规则" &&
+                    Same(before,legacy.Read()) && legacy.Receipts == 0,"未知交付声明保持拒绝并提供具体原因");
+            }
+            legacy.Sql("CREATE TRIGGER awakening_receipt_abort AFTER INSERT ON character_quest_completion_receipts BEGIN SELECT RAISE(ABORT,'awakening rollback'); END");
+            TestCheck.Reject<SqliteException>(() => legacy.Finish(ushort.MaxValue,990),"觉醒寻物交付末段失败");
+            That(Same(before,legacy.Read()) && legacy.Receipts == 0,"失败不吞精气、不发金币或写完成位");
+            legacy.Sql("DROP TRIGGER awakening_receipt_abort");
+            var result = legacy.Finish(ushort.MaxValue,990);
+            That(result.Outcome == QuestFinishOutcome.Committed && legacy.Read().CompletedQuests.Contains(990) &&
+                result.Receipt!.Commit.Consumed is [{ ItemId: 10089420, Count: 1 }] &&
+                result.Receipt.Commit.DirectGoldAmount > 0 && legacy.Read().GrowType == 3,
+                "767真实非剧情狱血魔神第三步寻物交付：" + result.Reason);
+            var saved = legacy.Read();
+            That(legacy.Finish(ushort.MaxValue,990).Outcome == QuestFinishOutcome.AlreadyCompleted &&
+                Same(saved,legacy.Read()) && legacy.Receipts == 1,"重复点击不重复扣精气或发金币");
+            legacy.Session.ReturnToRoster(); legacy.Session.Select(0); legacy.Session.MarkReady();
+            That(Same(saved,legacy.Read()) && legacy.Read().CompletedQuests.Contains(990),"重选保留完成与奖励事实");
+        }
         var marriage = quests.Get(20743);
         That(marriage is { Condition: "[meet npc]", SubType: -1, Difficulty: null, IntData: [20013] },
             "704爱情的升华保留真实会面及缺省difficulty声明");

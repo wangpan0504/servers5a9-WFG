@@ -588,8 +588,11 @@ internal sealed record DungeonEntryPlan(
         bool dailyClear = QuestDungeonClearProgress.CountOncePerDay(quest) &&
             quest.Grade is "[side]" or "[mission]" && QuestDungeonClearProgress.TryTarget(quest,out var target) &&
             target.DungeonId == dungeonId && (target.MinimumDifficulty == -1 || target.MinimumDifficulty <= difficulty);
+        // 已核对的普通普雷考验仅要求本图通关一次；不旁路其它使命或每日累计的专属合同。
+        bool preyNormalClear = quest is { Id:8925, Grade:"[mission]", Condition:"[condition under clear]",
+            SubType:6, IntData:[400000046,-1] } && dungeonId == 400000046;
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
-            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear && !normalMission && !dailyClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
+            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear && !normalMission && !dailyClear && !preyNormalClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
             // 悲叹列表通关的目标由int data给出；已核对专用准入后不强求不存在的dungeon info。
             // 其它支线仍须命中dungeon info，杀怪保留0..3，列表通关沿正式0..4难度域。
             quest.Grade == "[side]" && !dailyClear && !(definition.IsGriefTower && listClear) && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
@@ -597,7 +600,7 @@ internal sealed record DungeonEntryPlan(
                     listClear && row.Parameter is >= 0 and <= 4) && row.Parameter <= difficulty)) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
                 !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
-            quest.Grade is not ("[side]" or "[achievement]") && !autoDaily && !normalMission && !dailyClear ||
+            quest.Grade is not ("[side]" or "[achievement]") && !autoDaily && !normalMission && !dailyClear && !preyNormalClear ||
             definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count != 0 &&
                 (maze.ConnectionQuestId is not { } connected || connected == questId))) return false;
         if (quest.Condition == "[hunt monster]" || normalMission && quest.Condition == "[hunt enemy]")
@@ -610,7 +613,7 @@ internal sealed record DungeonEntryPlan(
         }
         // 觉醒收集阶段只借用普通路线；材料由任务声明的本图怪物掉落规则产生，不改变掉落或进度合同。
         // #256黑市EXP的6053/6056/6059（seeking sub type 0）同样只借用普通路线，材料来自任务声明的本图怪物掉落。
-        else if (!(normalMission && QuestDungeonClearProgress.Supports(quest)) && !listClear && !dailyClear && (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
+        else if (!(normalMission && QuestDungeonClearProgress.Supports(quest)) && !listClear && !dailyClear && !preyNormalClear && (!(quest.Grade == "[achievement]" && quest.Condition == "[seeking]" && QuestLifecyclePlan.ValidSeeking(quest) ||
                 QuestLifecyclePlan.HarlemSeeking(quest) || normalMission) ||
             !declared.Drops.Any(row => row.MatchesEntry(dungeonId,difficulty)) &&
                 !(normalMission && quest.Condition == "[seeking]" && declared.Drops.Length == 0 && QuestLifecyclePlan.ValidSeeking(quest)))) return false;

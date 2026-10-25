@@ -56,6 +56,12 @@ internal static partial class FormalDungeonTcpTests
                     var inventory = new InventoryService(items.Items,items.GoldLimits,items.EpicPieces);
                     created = InventoryService.Commit(repository,owner,created,inventory.Grant(created,[new(ticket.ItemId,ticket.Count * 2)]));
                 }
+                if (sample.Id == 9595 && sample.Ticket)
+                {
+                    var items = resources.ItemResources;
+                    var inventory = new InventoryService(items.Items,items.GoldLimits,items.EpicPieces);
+                    created = InventoryService.Commit(repository,owner,created,inventory.Grant(created,[new(1,2)]));
+                }
             }
             int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : 100;
             fixture.Sql("UPDATE character_fatigue SET remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
@@ -141,6 +147,7 @@ internal static partial class FormalDungeonTcpTests
                 peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
                 Load(peer); Drain();
             }
+            if (sample.Id == 9595) ReviveAfterClear(1);
             peer.Send(46,DungeonSettlementProtocolTests.Report(peer.Id,99));
             That(Drain().Any(packet => packet.Kind == 0 && packet.Opcode == 35),"普通副本完整TCP通关返回奖励牌面");
             peer.Send(69); peer.Expect(1,69,[1]);
@@ -149,11 +156,36 @@ internal static partial class FormalDungeonTcpTests
             var claimed = fixture.Snapshot();
             peer.Send(71,[0,0]); peer.Expect(1,71); Drain();
             That(fixture.Snapshot() == claimed,"普通副本TCP重复翻牌不增发奖励");
+            if (sample.Id == 9595)
+            {
+                string settled = fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) +
+                    fixture.Snapshot("SELECT * FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id);
+                ReviveAfterClear(0);
+                That(settled == fixture.Snapshot("SELECT * FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) +
+                    fixture.Snapshot("SELECT * FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id),
+                    "结算菜单死亡复活不重开通关回执、不改牌面或领取状态");
+            }
             That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)
                 is [[long scalar]] && scalar == (sample.Id == 400000016 ? 4 : 1),"真实通关减少一次计数，跨图收集任务保留未齐状态");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0",peer.Id) is [[long town,long zone]] &&
                 town == area.Town && zone == area.Area,"放弃普通副本返回实际入口地区");
+
+            void ReviveAfterClear(int remaining)
+            {
+                byte[] key = [(byte)peer.Id,(byte)(peer.Id >> 8)];
+                peer.Send(40,[0x74,0,4,1,0,0]);
+                peer.Expect(0,32,[key[0],key[1],0,0]);
+                peer.Send(41,key);
+                peer.Expect(1,41,[1,key[0],key[1],0]);
+                peer.Expect(0,32,[key[0],key[1],1,0]);
+                peer.Expect(0,14,CoinBalance(remaining));
+                Drain();
+                string saved = fixture.Snapshot();
+                peer.Send(41,key); peer.Barrier();
+                That(fixture.Snapshot() == saved && fixture.Query("SELECT revive_coins FROM characters WHERE id=$p0",peer.Id)
+                    is [[long coins]] && coins == remaining,"770安徒恩清图后复活仍扣一币，重复请求不扣币");
+            }
 
             List<WirePacket> Drain()
             {

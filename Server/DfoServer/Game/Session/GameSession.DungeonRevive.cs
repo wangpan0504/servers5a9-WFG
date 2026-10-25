@@ -78,8 +78,12 @@ internal sealed partial class GameSession
         return result;
     });
 
-    bool CanChangeDungeonLife() => Ready && Selected is not null && Phase == SessionPhase.Dungeon &&
-        formalDungeon is { } dungeon && dungeon.Run.Phase == SinglePlayerDungeonPhase.Dungeon &&
+    // 清图后角色仍留在原房间，残留攻击可能致死；结算菜单不结束死亡与扣币资格。
+    bool CanChangeDungeonLife() => pendingRental is null && pendingConsumableUse is null &&
+        !HasPendingTownQuestCommit && !HasPendingFormalCard &&
+        Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
+        formalDungeon is { } dungeon && dungeon.Run.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue &&
-        !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null && !HasPendingQuestScene;
+        !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null &&
+        dungeon.PendingInventoryDiscard is null && dungeon.AltarSettlement is not { Stage: < 2 } && !HasPendingQuestScene;
 }

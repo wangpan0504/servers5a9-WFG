@@ -392,11 +392,17 @@ internal static class DungeonSettlementSessionTests
                 f.Session.Selected!.Inventory.Find(new(InventoryListType.Equipment,12)) is null && Same(f.Session.Selected,f.Read()) &&
                 !f.Session.CanPublishInventory(quotaSnapshot!),
                 "德利拉1000/1000结算窗口实际扣除物品并同事务增加金币");
+            if (full) Check(f.Session.ReportFormalCharacterDeath() is not null,"结算残留攻击仍可建立死亡资格");
             var beforeFlip = f.Session.Selected!;
+            var deathBeforeFlip = f.Session.CurrentDungeonDeathReturn();
             f.Sql("CREATE TRIGGER free_claim_fail BEFORE UPDATE OF claimed ON character_dungeon_card_rewards BEGIN SELECT RAISE(ABORT,'claim rollback'); END");
             Reject<SqliteException>(() => f.Session.RevealFormalDungeonCard(cards),"领取末段失败回滚金币、装备、邮件和领取位");
             Check(Same(beforeFlip,f.Read()) && f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 0L,
                 "领取失败保留原库存和同一份随机计划");
+            Check(f.Session.ReportFormalCharacterDeath() is null && f.Session.ReviveFormalCharacter(f.Created.Id) is null &&
+                ReferenceEquals(beforeFlip,f.Session.Selected) && Same(beforeFlip,f.Read()) &&
+                f.Session.CurrentDungeonDeathReturn() == deathBeforeFlip,
+                "未决翻牌期间死亡和扣币不改变冻结快照或死亡身份，恢复后仍可重试原领取");
             f.Sql("DROP TRIGGER free_claim_fail");
             var flipped = f.Session.RevealFormalDungeonCard(cards);
             Check(flipped?.Inventory?.Receipt is { } flipReceipt && f.Session.CanPublishInventory(flipReceipt) &&

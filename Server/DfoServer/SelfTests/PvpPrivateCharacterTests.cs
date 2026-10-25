@@ -42,6 +42,7 @@ internal static class PvpPrivateCharacterTests
             "入城116字节块的43号字节只用0/1，同普通角色其他字段不变");
         EquipmentTransfers(ordinary);
         CreationWire();
+        GuardianRecreatePolicy();
         string root=Path.Combine(Path.GetTempPath(),"S5A9-private-character-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
         try
         {
@@ -100,11 +101,14 @@ internal static class PvpPrivateCharacterTests
         foreach(var definition in catalog.Definitions)
         {
             bool ready=service.TryPrepare("Private",definition.Job,definition.GrowType,DateTimeOffset.UtcNow,out var plan,out var reason);
-            bool broken=definition.Job==15 || definition.Job==12 && definition.GrowType is 3 or 4;
-            That(ready!=broken,"逐职业核验专用资源，不把枪剑士错配或守护者缺冷却声明静默补全："+definition.Job+"/"+definition.GrowType+" "+reason);
+            bool broken=definition.Job==15;
+            That(ready!=broken,"逐职业核验专用资源，守护者仅补已确认冷却，枪剑士错配仍拒绝："+definition.Job+"/"+definition.GrowType+" "+reason);
             if(!ready) {That(plan is null,"坏定义不返回半份角色规划");continue;}
             supported++;
-            That(plan!.Level==85 && plan.GrowType==definition.GrowType && plan.PvpPrivateCreation!.RecreateDays==definition.RecreatePenalty &&
+            if(definition.Job==12 && definition.GrowType is 3 or 4)
+                That(definition.RecreatePenalty is null && plan!.PvpPrivateCreation!.RecreateDays==30,
+                    "真实守护者资源仍缺字段，30天仅来自已批准领域兼容规则");
+            That(plan!.Level==85 && plan.GrowType==definition.GrowType && plan.PvpPrivateCreation!.RecreateDays==PvpPrivateCharacterPlan.RecreateDays(definition) &&
                 plan.Inventory.Items.Length==definition.Equipment.Length && plan.Inventory.Items.All(item=>item.Uid==0),
                 "创建保留原基础分支/数量/冷却，真实UID只由数据库事务分配");
             foreach(var row in definition.Equipment)
@@ -120,9 +124,57 @@ internal static class PvpPrivateCharacterTests
                     "普通角色不能穿戴专用初始装备");
             }
         }
-        That(supported==52,"只计52份完整兼容规划，不宣称坏资源六分支已支持");
+        That(supported==54,"原52份与两份已确认守护者冷却兼容规划通过，四份枪剑士错配仍拒绝");
         VerifyCreationSession(towns,service);
         Console.WriteLine($"PASS {Count-before} 58分支专用建角资源及装备保护断言");
+    }
+
+    static void GuardianRecreatePolicy()
+    {
+        var definition=new DfoServer.GameWorld.Characters.PvpPrivateCharacterDefinition(12,3,"character/Knight/Knight.chr",[],null);
+        foreach(byte grow in new byte[]{3,4})
+        {
+            var guardian=definition with {GrowType=grow};
+            That(PvpPrivateCharacterPlan.RecreateDays(guardian)==30 && guardian.RecreatePenalty is null,
+                "仅守护者两分支缺字段采用本服30天，资源原始值仍保留缺失");
+            foreach(int explicitDays in new[]{0,7,30,36500,-1,36501})
+                That(PvpPrivateCharacterPlan.RecreateDays(guardian with {RecreatePenalty=explicitDays})==explicitDays,
+                    "明确配置包括非法值不被30天掩盖，非法值仍交原验证拒绝");
+        }
+        foreach(byte grow in new byte[]{0,1,2,5})
+            That(PvpPrivateCharacterPlan.RecreateDays(definition with {GrowType=grow}) is null,"其它守护者分支缺值不继承");
+        foreach(byte job in new byte[]{0,11,13,15})
+            That(PvpPrivateCharacterPlan.RecreateDays(definition with {Job=job}) is null,"其它职业缺值不继承");
+        That(PvpPrivateCharacterPlan.RecreateDays(definition with {Path="character/knight/other.chr"}) is null,
+            "未知替代CHR不套用原文件兼容规则");
+    }
+
+    internal static void VerifyGuardianRecreation(TownCatalog towns,PvpPrivateCharacterService service)
+    {
+        string root=Path.Combine(Path.GetTempPath(),"S5A9-guardian-recreate-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
+        try
+        {
+            string path=Path.Combine(root,"game.db");var repo=new CharacterRepository(path);
+            using var owner=new AccountOwners().Acquire("guardian-recreate",()=>{});
+            repo.Create(owner,new("Qualifier",towns.Room,towns.InitialReturn){Level=85});
+            foreach(byte grow in new byte[]{3,4})
+            {
+                That(service.TryPrepare("Guardian"+grow,12,grow,DateTimeOffset.UtcNow,out var plan,out _),"两守护者分支使用真实资源完成规划");
+                var created=repo.Create(owner,plan!);
+                That(new CharacterRepository(path).LoadCharacter(owner,created.Slot).PvpPrivate?.RecreateDays==30,
+                    "兼容冷却随真实身份持久化，重开仓储不丢失");
+                Reject<InvalidOperationException>(()=>repo.Create(owner,plan! with {Name="Repeat"+grow}),"同分支重放不能重复创建");
+                repo.Delete(owner,new(created.Id,created.Slot,created.Name,created.Revision));
+                using var db=new SqliteConnection("Data Source="+path+";Pooling=False");db.Open();using var command=db.CreateCommand();
+                command.CommandText="SELECT blocked_until FROM account_pvp_private_characters WHERE account='guardian-recreate' AND job=12 AND grow_type=$grow";
+                command.Parameters.AddWithValue("$grow",grow);long until=(long)command.ExecuteScalar()!;
+                var before=plan! with {Name="Before"+grow,PvpPrivateCreation=plan!.PvpPrivateCreation! with {CreatedAtUnix=until-1}};
+                Reject<InvalidOperationException>(()=>new CharacterRepository(path).Create(owner,before),"删角重登后冷却截止前一秒仍拒绝");
+                var after=before with {Name="After"+grow,PvpPrivateCreation=before.PvpPrivateCreation! with {CreatedAtUnix=until}};
+                That(new CharacterRepository(path).Create(owner,after).PvpPrivate?.RecreateDays==30,"精确到期可重新创建且冷却策略仍为30天");
+            }
+        }
+        finally {Directory.Delete(root,true);}
     }
 
     static void CreationWire()
