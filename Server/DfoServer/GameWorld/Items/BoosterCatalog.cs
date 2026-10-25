@@ -141,9 +141,26 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         foreach (string tag in new[] { "cooltime maintenance", "effect maintenance", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime",
             "random box", "random box removal items", "raid booster item", "convert boost item", "check usable itemlevel",
-            "daybreak drop item", "battle royal", "action usable server type", "usable game server type", "usable server type" })
+            "daybreak drop item", "battle royal", "usable game server type", "usable server type" })
             if (tags.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase))
                 return new([], tag);
+        var serverDeclarations = Regex.Matches(tags,
+            @"\[\s*/?\s*action\s+usable\s+server\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        if (serverDeclarations.Count != 0)
+        {
+            if (text.Count(value => value == '`') % 2 != 0 || serverDeclarations.Count != 2 ||
+                serverDeclarations[0].Value != "[action usable server type]" ||
+                serverDeclarations[1].Value != "[/action usable server type]" ||
+                !IsRootDeclaration(tags, serverDeclarations[0].Index))
+                return new([], "action usable server type");
+            int start = serverDeclarations[0].Index + serverDeclarations[0].Length;
+            string serverBody = text[start..serverDeclarations[1].Index];
+            if (!Regex.IsMatch(serverBody, @"^\s*(?:`\[(?:general|event) server\]`\s*)+$"))
+                return new([], "action usable server type");
+            var servers = Regex.Matches(serverBody, "`([^`]*)`").Select(match => match.Groups[1].Value).ToArray();
+            if (!servers.Contains("[general server]") || servers.Length != servers.Distinct().Count())
+                return new([], "action usable server type");
+        }
         // [custom ability grade] 规定发放装备的品级。本服没有实例级品级字段，只校验声明形态，
         // 数值不写入实例，也不据此收窄可领取范围；形态不合法仍整包拒绝。
         var gradeDeclarations = Regex.Matches(tags,

@@ -26,6 +26,7 @@ internal static class BoosterSelectionTests
         BoosterEpicExchangeTests.RunCore();
         int checks = Count;
         RunCustomAbilityGradeDeclarations();
+        RunServerTypeDeclarations();
         const string empty = "[default select]\n0\n[booster equipment upgrade]\n10\n[stackable]\n[/stackable]";
         const string reward = "[etc]\n1106 1\n[/etc]";
         string Text(string first, string second, string dimensions = "[booster category num]\n2 2 2\n", int count = 1,
@@ -98,6 +99,57 @@ internal static class BoosterSelectionTests
         Console.WriteLine($"PASS {Count - checks} equivalent duplicate selection parser assertions");
     }
 
+    internal static void RunServerTypeDeclarations()
+    {
+        const string source = "\n[name]\n`name_10305490` \n[explain]\n`explain_10305490` \n[grade]\n1 \n[rarity]\n3 \n" +
+            "[usable job]\n`[all]` \n[/usable job]\n\n[attach type]\n`[account]` \n[minimum level]\n1 \n" +
+            "[cool time]\n1000 \n[icon]\n`Item/stackable/consumption.img` 1695 \n[icon mark]\n" +
+            "`item/IconMark.img` 150 \n[stackable type]\n`[booster selection]` 0 \n[move wav]\n" +
+            "`BONE_TOUCH` \n[booster category num]\n0 \n[booster selection num]\n1 \n" +
+            "[booster select category]\n0 0 \n[etc]\n10305489 20 10305487 20 \n[/etc]\n\n" +
+            "[/booster select category]\n\n[booster category name]\n`请选择奖励` \n[/booster category name]\n" +
+            "\n[item category]\n`event` \n[/item category]\n\n[action usable server type]\n" +
+            "`[general server]` \n[/action usable server type]\n";
+        const string general = "[action usable server type]\n`[general server]`\n[/action usable server type]\n";
+        void Accept(string text, string message)
+        {
+            var definition = BoosterCatalog.Parse(text);
+            That(definition.Available && definition.Selection is { SelectionCount: 1, Categories.Length: 1 } selection &&
+                selection.Categories[0] is { Category: 0, Subcategory: 0, PendingRule: null } category &&
+                category.Rewards.SequenceEqual(new BoosterChoice[] { new(10305489, 20), new(10305487, 20) }), message);
+        }
+        Accept(source, "普通服服务器声明允许真实选择礼盒，保留单选、两个奖励及各20数量");
+        string box = source[..source.IndexOf("[action usable server type]", StringComparison.Ordinal)];
+        foreach (string text in new[]
+        {
+            box, general + box,
+            box + "[action usable server type]\n`[general server]` `[event server]`\n[/action usable server type]\n",
+            box + "[action usable server type]\n`[event server]` `[general server]`\n[/action usable server type]\n",
+            box.Replace("`name_10305490`", "`[action usable server type] [/action usable server type]`") + general
+        }) Accept(text, "无服务器声明沿原规则，含普通服的已知组合及引号内标签文字不改变奖励");
+        foreach (string declaration in new[]
+        {
+            "[action usable server type]\n`[event server]`\n[/action usable server type]\n",
+            "[action usable server type]\n`[general server]` `[unknown server]`\n[/action usable server type]\n",
+            "[action usable server type]\n[/action usable server type]\n",
+            "[action usable server type]\n`[general server]` `[general server]`\n[/action usable server type]\n",
+            general + general,
+            "[action usable server type]\n`[general server]`\n",
+            "[/action usable server type]\n", general + "[/action usable server type]\n",
+            "[action usable server type]\n`[general server]`\n[/other]\n",
+            "[action usable server type]\n[general server]\n[/action usable server type]\n",
+            "[action usable server type]\n`[general server]` 1\n[/action usable server type]\n",
+            "[action usable server type]\n`[general server]\n[/action usable server type]\n",
+            "[action usable server type\n`[general server]`\n[/action usable server type]\n"
+        }) That(!BoosterCatalog.Parse(box + declaration).Available,
+            "服务器资格及形态必须完整，专用服、未知、空、重复、残缺或额外值仍整盒拒绝: " + declaration);
+        That(!BoosterCatalog.Parse(box.Replace("[etc]", general + "[etc]")).Available,
+            "选择分类中的服务器限制不能冒充根级声明");
+        foreach (string other in new[] { "usable server type", "usable game server type" })
+            That(!BoosterCatalog.Parse(source + "[" + other + "]\n`[general server]`\n[/" + other + "]\n").Available,
+                "普通服声明不旁路其他尚未支持的服务器限制: " + other);
+    }
+
     static void RunCustomAbilityGradeDeclarations()
     {
         const string box = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n1\n" +
@@ -153,6 +205,44 @@ internal static class BoosterSelectionTests
         LegacyExpiryFixture.Restore(catalog, (10002064, "2013-09-24 06:00:00"));
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
+        var serverDefinition = itemResources.Boosters.Get(10305490);
+        That(serverDefinition.Available && serverDefinition.Selection is { SelectionCount: 1, Categories.Length: 1 } serverSelection &&
+            serverSelection.Categories[0] is { Category: 0, Subcategory: 0, PendingRule: null } serverCategory &&
+            serverCategory.Rewards.SequenceEqual(new BoosterChoice[] { new(10305489, 20), new(10305487, 20) }),
+            "真实普通服礼盒保留单选及两个各20数量的原始候选");
+        var serverRole = BoosterNativeSelectionTests.ResourceRoles(towns, characters, catalog.Get(10305490), now).First();
+        var serverSource = new InventoryItem(1000, Bag(3), Core(10305490, 2));
+        serverRole = serverRole with { Inventory = new([serverSource]) };
+        string serverBefore = JsonSerializer.Serialize(serverRole);
+        foreach (var bad in new[] { Select(3, []), Select(3, [1106]), Select(3, [10305489, 10305489]),
+            Select(3, [10305489, 10305487]), Select(3, [10305489], 1), Select(3, [10305489], 0, 1) })
+        {
+            var rejected = service.Open(serverRole, bad, out var rejectedReceipt, now);
+            That(!rejected.Accepted && rejected.Plan is null && rejectedReceipt is null &&
+                JsonSerializer.Serialize(serverRole) == serverBefore,
+                "普通服礼盒仍拒绝空、外来、重复、超额及错误分类选择且不扣源");
+        }
+        foreach (int rewardId in new[] { 10305489, 10305487 })
+        {
+            var opened = service.Open(serverRole, Select(3, [rewardId]), out var serverReceipt, now);
+            That(opened.Accepted && opened.Plan!.After.Items.Length == 2 &&
+                opened.Plan.After.Find(Bag(3)) is { Uid: 1000, Core.Count: 1 } &&
+                opened.Plan.After.Items.Single(item => item.Core.ItemId == rewardId).Core.Count == 20 &&
+                serverReceipt!.Rewards.SequenceEqual(new BoosterGrantedItem[] { new(rewardId, 20) }) &&
+                JsonSerializer.Serialize(serverRole) == serverBefore,
+                "普通服礼盒两项分别按资源发20份，规划保留原角色且仅预扣一只源 " + rewardId);
+            var template = catalog.Get(rewardId);
+            var range = ItemSlotBoundService.Range(template.Kind, serverRole.Inventory);
+            var occupied = Enumerable.Range(range.Start, range.End - range.Start + 1).Select(slot =>
+                InventoryRewardGrantService.CreateItem(template, new(ItemSlotBoundService.List(template.Kind), (short)slot),
+                    Core(rewardId) with { EquipmentLockId = 1 }) with { Uid = 20000 + slot });
+            var fullRole = serverRole with { Inventory = new([serverSource, .. occupied]) };
+            string fullBefore = JsonSerializer.Serialize(fullRole);
+            var rejected = service.Open(fullRole, Select(3, [rewardId]), out var rejectedReceipt, now);
+            That(!rejected.Accepted && rejected.Error == 4 && rejected.Plan is null && rejectedReceipt is null &&
+                JsonSerializer.Serialize(fullRole) == fullBefore,
+                "普通服礼盒奖励实际所属页满且没有可合堆位置时拒绝，保留两只源与全部实例 " + rewardId);
+        }
         RunRealTemplateSelection(towns, itemResources, now);
         BoosterNativeSelectionTests.RunResources(towns, characters, itemResources, now);
         RunDisjointInstanceSelection(towns, itemResources, now);
@@ -396,6 +486,46 @@ internal static class BoosterSelectionTests
             snapshot = Snapshot();
             Reject(() => repo.CommitInventory(owner, auraSaved, auraPlan), "已提交的旧光环计划不可再次提交");
             That(Snapshot() == snapshot, "光环旧revision拒绝不修改详情、UID或资产");
+            var serverCreated = repo.Create(owner, new("ServerType", towns.Room, towns.InitialReturn)
+            {
+                Job = serverRole.Job, Level = serverRole.Level, Skills = serverRole.Skills,
+                Inventory = new([serverSource with { Uid = 0 }])
+            });
+            var serverSession = new GameSession(repo, towns, owner);
+            serverSession.Select(serverCreated.Slot);
+            serverSession.MarkReady();
+            var serverSaved = serverSession.Selected!;
+            long serverSourceUid = serverSaved.Inventory.Find(Bag(3))!.Uid;
+            snapshot = Snapshot();
+            Query("CREATE TRIGGER fail_server_selection BEFORE INSERT ON inventory_audit_log WHEN NEW.item_id_after=10305489 BEGIN SELECT RAISE(ABORT,'server selection rollback'); END");
+            Reject(() => serverSession.PlanAndCommitBooster(role => service.Open(role, Select(3, [10305489]), out _, now),
+                service.UsePlaces(10305490), 10305490), "普通服礼盒源及奖励已写入后的晚审计故障传播失败");
+            That(serverSession.Selected == serverSaved && Snapshot() == snapshot,
+                "普通服礼盒晚故障完整回滚源、奖励、revision、审计与UID序列");
+            Query("DROP TRIGGER fail_server_selection");
+            var serverRewardIds = new List<int>();
+            foreach (int rewardId in new[] { 10305489, 10305487 })
+            {
+                BoosterReceipt? serverReceipt = null;
+                var committed = serverSession.PlanAndCommitBooster(role => service.Open(role, Select(3, [rewardId]), out serverReceipt, now),
+                    service.UsePlaces(10305490), 10305490);
+                serverRewardIds.Add(rewardId);
+                var inventory = serverSession.Selected!.Inventory;
+                That(committed.Accepted && serverReceipt!.Rewards.SequenceEqual(new BoosterGrantedItem[] { new(rewardId, 20) }) &&
+                    (serverRewardIds.Count == 1 ? inventory.Find(Bag(3)) is { Core.Count: 1 } source && source.Uid == serverSourceUid :
+                        inventory.Find(Bag(3)) is null) &&
+                    inventory.Items.Where(item => item.Core.ItemId != 10305490).Select(item => item.Core.ItemId).Order().SequenceEqual(serverRewardIds.Order()) &&
+                    inventory.Items.Where(item => item.Core.ItemId != 10305490).All(item => item.Core.Count == 20 && item.Uid > 0) &&
+                    inventory.Items.Select(item => item.Uid).Distinct().Count() == inventory.Items.Length &&
+                    serverSession.Selected.Revision == serverSaved.Revision + serverRewardIds.Count,
+                    "普通服礼盒经真实Session每次只扣一只源并持久化所选20份，不提前发未选奖励 " + rewardId);
+            }
+            That(JsonSerializer.Serialize(new CharacterRepository(path).List(owner).Single(role => role.Name == "ServerType")) ==
+                JsonSerializer.Serialize(serverSession.Selected), "重开库保留普通服礼盒两项各20份、完整实例及耗尽源状态");
+            snapshot = Snapshot();
+            That(!serverSession.PlanAndCommitBooster(role => service.Open(role, Select(3, [10305489]), out _, now),
+                service.UsePlaces(10305490), 10305490).Accepted && Snapshot() == snapshot,
+                "普通服礼盒耗尽后重放不重复发奖、分配UID或推进revision与审计");
             var nextAuraPlan = nativeService.Open(auraCommitted, Select(70, [101590028]), out _, now).Plan!;
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject(() => session.MutateInventory(role => service.Open(role, Select(4, [10000871]), out _)), "old generation cannot open or replay a selection");
