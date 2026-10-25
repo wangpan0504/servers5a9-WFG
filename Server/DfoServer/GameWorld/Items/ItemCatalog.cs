@@ -68,8 +68,10 @@ internal sealed class ItemCatalog
 
     readonly int equipmentSellRate;
     readonly Lazy<ImmutableArray<CosmoPassCost>> cosmoPasses;
+    readonly Lazy<RuneSystemFile> runeSystem;
     readonly Lazy<TalismanRefineCost> talismanRefineCost;
     readonly Lazy<TalismanCompoundCost> talismanCompoundCost;
+    readonly Lazy<RuneRandomChooseTable> runeRandomChoices;
     readonly Lazy<FrozenDictionary<byte, ImmutableArray<int>>> runePool;
     readonly Lazy<FrozenDictionary<int, ImmutableArray<int>>> talismanPool;
 
@@ -85,10 +87,11 @@ internal sealed class ItemCatalog
         this.equipmentSellRate = equipmentSellRate;
         this.creatures = creatures;
         cosmoPasses = new(() => CosmoPassCost.Load(archive));
-        talismanRefineCost = new(() => TalismanRefineCost.Parse(RuneSystemFile.Parse(
-            archive.ReadTokens("etc/runesystem.etc"), archive.ResolveString)));
-        talismanCompoundCost = new(() => TalismanCompoundCost.Parse(RuneSystemFile.Parse(
-            archive.ReadTokens("etc/runesystem.etc"), archive.ResolveString)));
+        runeSystem = new(() => RuneSystemFile.Parse(
+            archive.ReadTokens("etc/runesystem.etc"), archive.ResolveString));
+        talismanRefineCost = new(() => TalismanRefineCost.Parse(runeSystem.Value));
+        talismanCompoundCost = new(() => TalismanCompoundCost.Parse(runeSystem.Value));
+        runeRandomChoices = new(() => RuneRandomChooseTable.Parse(runeSystem.Value));
         runePool = new(BuildRunePool);
         talismanPool = new(BuildTalismanPool);
     }
@@ -160,6 +163,8 @@ internal sealed class ItemCatalog
     }
 
     public TalismanCompoundCost TalismanCompoundCosts() => talismanCompoundCost.Value;
+
+    public RuneRandomChooseTable RuneRandomChoices() => runeRandomChoices.Value;
 
     // 合成产物池按品级/稀有度预建，首次命中才扫描资源；规划阶段在账号锁外执行，
     // 结果只读缓存，后续请求不再触碰 PVF。

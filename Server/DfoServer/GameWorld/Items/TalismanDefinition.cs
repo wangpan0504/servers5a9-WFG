@@ -122,6 +122,43 @@ internal sealed record TalismanCompoundCost(
     }
 }
 
+// [random choose info] 每行：族 档 本职业权重 (品级 权重)*。族 0 符文、1 护石，品级即符文 Grade / 护石 Rarity；
+// 权重与合成费同一万分比单位，本职业权重是本次只在本职业可用产物里抽取的概率。
+internal sealed record RuneRandomChooseRow(int OwnWeight, ImmutableArray<(byte Grade, int Weight)> Grades)
+{
+    public long TotalWeight => Grades.Sum(row => (long)row.Weight);
+}
+
+internal sealed record RuneRandomChooseTable(FrozenDictionary<(int Family, int Tier), RuneRandomChooseRow> Rows)
+{
+    public bool TryGet(int family, int tier, out RuneRandomChooseRow row) => Rows.TryGetValue((family, tier), out row!);
+
+    public static RuneRandomChooseTable Parse(RuneSystemFile file)
+    {
+        if (file.RandomChooseInfo.IsDefaultOrEmpty)
+            throw new InvalidDataException("符文系统缺少随机抽取表");
+        var rows = new Dictionary<(int, int), RuneRandomChooseRow>();
+        foreach (var row in file.RandomChooseInfo)
+        {
+            // 行长 = 族 档 本职业权重 + 至少一组「品级 权重」；族只有符文/护石两族。
+            if (row.Length < 5 || (row.Length - 3) % 2 != 0 || row[0] is < 0 or > 1 || row[1] < 0 ||
+                row[2] is < 0 or > 10000)
+                throw new InvalidDataException("符文随机抽取表的族、档或本职业权重无效");
+            var grades = ImmutableArray.CreateBuilder<(byte Grade, int Weight)>();
+            for (int i = 3; i < row.Length; i += 2)
+            {
+                if (row[i] is < 0 or > 6 || row[i + 1] < 0 || grades.Any(entry => entry.Grade == row[i]))
+                    throw new InvalidDataException("符文随机抽取表的品级或权重无效");
+                grades.Add(((byte)row[i], row[i + 1]));
+            }
+            if (grades.Sum(entry => (long)entry.Weight) <= 0 ||
+                !rows.TryAdd((row[0], row[1]), new(row[2], grades.ToImmutable())))
+                throw new InvalidDataException("符文随机抽取表的档重复或总权重为零");
+        }
+        return new(rows.ToFrozenDictionary());
+    }
+}
+
 internal sealed record TalismanRefineCost(int MaterialId, FrozenDictionary<int, int> CountsByRarity)
 {
     public static TalismanRefineCost Parse(RuneSystemFile file)

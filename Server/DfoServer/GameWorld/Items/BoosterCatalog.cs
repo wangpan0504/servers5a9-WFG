@@ -35,7 +35,10 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     // 产物装备一律带交换资格位；随机奖池与固定礼包不在支持范围内。
     public bool GrantsEpicExchangeOrigin => SetsEpicExchangeInstanceType || (FromExchangeShop && Selection is not null);
     public byte? DailyRetainedLimit { get; init; }
-    public bool Available => PendingRule is null && (Pools.Length != 0 || Selection is not null || !PackageRewards.IsDefaultOrEmpty);
+    // [legacy] 的随机礼盒只带族/档，产物池由 etc/runesystem.etc 的 [random choose info] 决定。
+    public (int Family, int Tier)? RuneBox { get; init; }
+    public bool Available => PendingRule is null &&
+        (Pools.Length != 0 || Selection is not null || !PackageRewards.IsDefaultOrEmpty || RuneBox is not null);
 }
 
 internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable,
@@ -93,7 +96,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
     {
         if (ParseUsePlaces(text).PendingRule is { } placeError) return new([], placeError);
         string type = Regex.Match(PvfScript.Section(text, "stackable type"), @"`\[([^\]]+)\]`").Groups[1].Value;
-        if (type is not ("usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection" or "upgradable legacy"))
+        if (type is not ("usable cera package" or "booster" or "cera booster" or "booster random" or "booster selection" or
+            "upgradable legacy" or "legacy"))
             return new([], "其他开箱入口");
         // 固定商城礼包同样不能跳过资格、账本或实例属性字段。
         // 保留原文偏移，空声明仍须检查原文中的字符串值，不能被字符串掩码吞掉。
@@ -156,6 +160,15 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 !int.TryParse(text[end..(next < 0 ? text.Length : next)].Trim(), NumberStyles.Integer,
                     CultureInfo.InvariantCulture, out int abilityGrade) || abilityGrade < 0)
                 return new([], "custom ability grade");
+        }
+        if (type == "legacy")
+        {
+            // [legacy] 的开箱语义只认 [action type] `[rune random box]` 族 档；其他动作与参数保持未实现。
+            if (!Regex.IsMatch(PvfScript.Section(text, "stackable type").Trim(), @"^`\[legacy\]`\s+0$"))
+                return new([], "其他开箱入口");
+            if (!TryParseRuneRandomBox(text, tags, out int family, out int tier, out string? pending))
+                return new([], pending!);
+            return new([], null) { RuneBox = (family, tier), Lottery = true };
         }
         if (type == "upgradable legacy")
         {
@@ -316,6 +329,40 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         catch (OverflowException)
         {
             pending = "装扮奖池权重溢出";
+            return false;
+        }
+        return true;
+    }
+
+    static bool TryParseRuneRandomBox(string text, string tags, out int family, out int tier, out string? pending)
+    {
+        family = 0;
+        tier = 0;
+        pending = null;
+        var actions = Regex.Matches(tags, @"\[\s*/?\s*action\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        if (actions.Count == 0)
+        {
+            pending = "其他开箱入口";
+            return false;
+        }
+        if (actions.Count != 2 || actions[0].Value != "[action type]" || actions[1].Value != "[/action type]" ||
+            text.Count(value => value == '`') % 2 != 0 || !IsRootDeclaration(tags, actions[0].Index))
+        {
+            pending = "开箱动作声明未闭合或不唯一";
+            return false;
+        }
+        string body = text[(actions[0].Index + actions[0].Length)..actions[1].Index];
+        var match = Regex.Match(body, @"^\s*`\[([^\]]+)\]`\s+(\d+)\s+(\d+)\s*$");
+        if (!match.Success || match.Groups[1].Value != "rune random box" ||
+            !int.TryParse(match.Groups[2].Value, NumberStyles.None, CultureInfo.InvariantCulture, out family) ||
+            !int.TryParse(match.Groups[3].Value, NumberStyles.None, CultureInfo.InvariantCulture, out tier))
+        {
+            pending = "未实现的开箱动作声明";
+            return false;
+        }
+        if (family is not (0 or 1) || tier is < 0 or > byte.MaxValue)
+        {
+            pending = "开箱动作参数越界";
             return false;
         }
         return true;
