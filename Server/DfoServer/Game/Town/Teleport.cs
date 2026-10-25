@@ -43,13 +43,13 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
     TeleportPotionGateMode potionGates = TeleportPotionGateMode.Open)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+    // 返回实际穿戴光环声明的能力；`[none]` 以 Kind.None 表示“有光环但不提供传送”，与“没有光环”的null区分。
     public AuraAbilityDefinition? Aura(Character character, long now)
     {
         var aura = character.Inventory.Find(new(InventoryListType.Equipment, 9));
         if (aura is not { Avatar: not null, Core.Kind: ItemKind.Avatar } || aura.IsExpired(now / 1000)) return null;
         var template = item(aura.Core.ItemId);
-        var ability = template.EquipmentSlot == 9 && character.Level >= template.MinimumLevel ? definitions.Aura(aura.Core.ItemId) : null;
-        return ability is { Kind: not AuraAbilityKind.None } ? ability : null;
+        return template.EquipmentSlot == 9 && character.Level >= template.MinimumLevel ? definitions.Aura(aura.Core.ItemId) : null;
     }
 
     public (string Reason, TeleportPlan? Plan) Potion(Character character, PotionTeleportRequest request, long now)
@@ -78,8 +78,11 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
     public (string Reason, TeleportPlan? Plan) Solo(Character character, SoloTeleportRequest request, TeleportTarget? player, long now)
     {
         var definition = Aura(character, now);
-        if (definition?.Personal != true) return ("personal-aura-unavailable", null);
-        if (character.TeleportCooldowns.Until(definition.Kind) > now) return ("aura-cooldown", null);
+        // 个人传送入口由客户端城镇地图决定（实机 `[none]` 光环同样发送470）；能力只决定冷却与特效，不作为切图门禁。
+        // 组队光环的地图入口已分流到434，不能借470绕过队伍上下文。
+        if (definition is { Kind: AuraAbilityKind.PartyTeleport }) return ("personal-aura-unavailable", null);
+        if (definition is { Kind: AuraAbilityKind.SoloTeleport or AuraAbilityKind.UpgradeSoloTeleport } personal &&
+            character.TeleportCooldowns.Until(personal.Kind) > now) return ("aura-cooldown", null);
         bool npcTarget = request.CharacterId == -1 && request.NpcId > 0;
         Location target;
         // 实机个人传送点选城镇时两个 i32 都是 -1，目的地在随后的 town/area/坐标。不是玩家目标。
@@ -112,20 +115,27 @@ internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definit
         return access == "ready" ? ("ready", AuraPlan(character, request.Target, definition, now)) : (access, null);
     }
 
-    TeleportPlan AuraPlan(Character character, Location target, AuraAbilityDefinition definition, long now)
+    TeleportPlan AuraPlan(Character character, Location target, AuraAbilityDefinition? definition, long now)
     {
-        var equipped = character.Inventory.Find(new(InventoryListType.Equipment, 9))!;
-        long until = checked(now + definition.CoolSeconds * 1000L);
-        var cooldowns = definition.Kind switch
+        var equipped = character.Inventory.Find(new(InventoryListType.Equipment, 9));
+        var cooldowns = character.TeleportCooldowns;
+        AuraAbilityKind? kind = null;
+        if (definition is { Kind: not AuraAbilityKind.None } declared)
         {
-            AuraAbilityKind.PartyTeleport => character.TeleportCooldowns with { PartyAuraUntil = until },
-            AuraAbilityKind.SoloTeleport => character.TeleportCooldowns with { AuraUntil = until },
-            AuraAbilityKind.UpgradeSoloTeleport => character.TeleportCooldowns with { UpgradeAuraUntil = until },
-            _ => throw new InvalidOperationException("光环没有传送能力")
-        };
+            long until = checked(now + declared.CoolSeconds * 1000L);
+            cooldowns = declared.Kind switch
+            {
+                AuraAbilityKind.PartyTeleport => cooldowns with { PartyAuraUntil = until },
+                AuraAbilityKind.SoloTeleport => cooldowns with { AuraUntil = until },
+                AuraAbilityKind.UpgradeSoloTeleport => cooldowns with { UpgradeAuraUntil = until },
+                _ => throw new InvalidOperationException("光环没有传送能力")
+            };
+            kind = declared.Kind;
+        }
+        // `[none]`或未穿戴光环只切图：不写冷却，也不把该次请求当作378的刷新项。
         return Plan(character, target, new(character.Inventory, character.Inventory, "teleport_aura",
-            new(character, equipped.ExpireTime == 0 ? null : equipped.ExpireTime)),
-            cooldowns, now) with { AuraKind = definition.Kind };
+            equipped is null ? null : new(character, equipped.ExpireTime == 0 ? null : equipped.ExpireTime)),
+            cooldowns, now) with { AuraKind = kind };
     }
 
     string Destination(Character character, Location target, bool npcTarget = false)

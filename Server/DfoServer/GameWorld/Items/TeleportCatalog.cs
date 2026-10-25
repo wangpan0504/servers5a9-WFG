@@ -6,10 +6,7 @@ namespace DfoServer.GameWorld.Items;
 
 internal sealed record TeleportPotionDefinition(int MinimumLevel, int CoolTime, ImmutableHashSet<int> DungeonMaps);
 internal enum AuraAbilityKind { None, PartyTeleport, SoloTeleport, UpgradeSoloTeleport }
-internal sealed record AuraAbilityDefinition(AuraAbilityKind Kind, int CoolSeconds)
-{
-    public bool Personal => Kind is AuraAbilityKind.SoloTeleport or AuraAbilityKind.UpgradeSoloTeleport;
-}
+internal sealed record AuraAbilityDefinition(AuraAbilityKind Kind, int CoolSeconds);
 
 // 与物品目录共享LST及归档；只解析本次实际请求涉及的脚本。
 internal sealed class TeleportCatalog(Func<string, string> read, IReadOnlyDictionary<int, string> equipment,

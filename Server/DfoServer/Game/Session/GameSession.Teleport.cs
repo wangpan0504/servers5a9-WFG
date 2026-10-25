@@ -1,6 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Town;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Session;
 
@@ -68,8 +69,11 @@ internal sealed partial class GameSession
         var captured = owner.Execute(() => CanTeleport() && !blocked ? Selected : null);
         if (captured is null) return false;
         long now = service.Clock.GetUtcNow().ToUnixTimeMilliseconds();
+        // 与470一致：个人传送资格由客户端地图决定，这里只拦组队光环与已生效的个人冷却。
         var ability = service.Aura(captured, now);
-        bool qualified = ability?.Personal == true && captured.TeleportCooldowns.Until(ability.Kind) <= now;
+        bool qualified = ability is not { Kind: AuraAbilityKind.PartyTeleport } &&
+            (ability is not { Kind: AuraAbilityKind.SoloTeleport or AuraAbilityKind.UpgradeSoloTeleport } personal ||
+                captured.TeleportCooldowns.Until(personal.Kind) <= now);
         return owner.Execute(() => qualified && CanTeleport() && ReferenceEquals(Selected, captured));
     }
 }
