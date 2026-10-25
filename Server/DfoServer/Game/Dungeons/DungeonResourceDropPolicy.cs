@@ -8,7 +8,7 @@ namespace DfoServer.Game.Dungeons;
 internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, DungeonItemDropCatalog candidates,
     Func<int, DungeonMonsterDropDeclaration> resolveMonster, Func<int, ItemTemplate> resolveItem, DungeonSpecialDropCatalog? special = null,
     EquipmentAmplificationDropPolicy? amplification = null, HarlemMaterialDropPolicy? materials = null,
-    HarlemHellEpicDropPolicy? harlemEpics = null, HarlemAbyssBonusDropPolicy? abyssBonuses = null)
+    HarlemHellEpicDropPolicy? harlemEpics = null, HarlemAbyssBonusDropPolicy? abyssBonuses = null, SleepyHollowMaterialDropPolicy? sleepyHollow = null)
 {
     public const string Rule = "pvf-monster-reference-v1";
     public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity rows[1..3]", "party member drop bonusrate",
@@ -19,13 +19,14 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     // 只在一次入图准备中复用不可变规则；对象编号、位置和实际随机结果仍归各只怪物。
     public Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareEntry(DungeonEntryPlan entry, DungeonHellRewardPolicy? hellRewards = null)
     {
-        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare), DungeonDropGenerationPlan>();
+        var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss), DungeonDropGenerationPlan>();
         var epicEquipment = harlemEpics?.Pool(entry);
         return monster =>
         {
             var key = (monster.MonsterId, monster.CandidateLevel, monster.RewardType, monster.SpawnType, monster.HellRewardRolls,
                 monster.IsBoss, monster.HellWave is not null, monster.CanReportDeath && !monster.IsFriendly && !monster.IsScriptedBoss,
-                harlemEpics?.IsCosmoBoss(entry, monster) == true, harlemEpics?.IsLegendRare(entry, monster) == true);
+                harlemEpics?.IsCosmoBoss(entry, monster) == true, harlemEpics?.IsLegendRare(entry, monster) == true,
+                sleepyHollow?.IsRewardBoss(entry, monster) == true);
             if (plans.TryGetValue(key, out var existing)) return existing;
             // APC 不套普通怪概率；深渊奖励与不带奖励的普通计划分别保存。
             var plan = monster.SpawnType > 3
@@ -43,6 +44,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                     epicOnly: epicEquipment is not null || cosmo);
             if (materials is not null) plan = materials.Extend(plan, entry, monster);
             if (abyssBonuses is not null) plan = abyssBonuses.Extend(plan, entry, monster);
+            if (sleepyHollow is not null) plan = sleepyHollow.Extend(plan, entry, monster);
             plans.Add(key, plan);
             return plan;
         };
