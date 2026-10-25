@@ -70,6 +70,13 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.GuildMedal), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
         }
+        else if (plan.Reason == "rune_box_open")
+        {
+            // CMD27确认后客户端立即读取奖励容器：主背包补权威全量，容器46按整表重载，
+            // 只发差量会留下客户端预置的奖励槽。
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_committed_full_list", CanSend);
+            await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
+        }
         else foreach (var list in slots.Select(slot => slot.List).Where(list => !mainExpansionChanged || list != InventoryListType.Main).Distinct().Order())
         {
             if (silentMainMove && list == InventoryListType.Main)
@@ -122,8 +129,11 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             if (current.Inventory.AvatarPresets.Find(presetSlot) is { } committedPreset)
                 await context.Notify(NotiPacketType.UPDATE_AVATAR_PRESET, AvatarPresetPackets.Update(committedPreset),
                     "avatar_preset_content_committed", CanSend);
-        bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot) ||
-            slot.List == InventoryListType.Talisman && slot.Index is >= ItemSlotBoundService.EquippedRuneStart and <= ItemSlotBoundService.EquippedRuneEnd);
+        // 护石孔里的符文（容器 46 的 210–215）不改变角色外观，也不进属性计算：客户端 0x067B/0x067C/0x06CE
+        // 回执自己完成 210–212→装备键 34、213–215→装备键 35 的联动（0069A170/0069A4A0），服务端不需要补发本人
+        // USERINFO。补发的 USERINFO 会走 0267C4F0→023C3A90 重灌六符文向量并触发护石面板刷新（00698B70），
+        // 是图鉴符文页在按技能筛选时退回「所有技能」的唯一未排除触发路径（#747）；符文变化只发容器 46 差量。
+        bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
         bool weaponSkinChanged = plan.Before.Skins.Selected != current.Inventory.Skins.Selected;
         if (refreshEquipment && (equipmentChanged || weaponSkinChanged || plan.EquipmentSlotFlagsAfter is not null))
         {

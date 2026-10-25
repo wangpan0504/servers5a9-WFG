@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
@@ -7,7 +8,8 @@ namespace DfoServer.Game.Inventory.Services;
 
 // 护石/符文合成：材料按请求逐个引用扣减，同一格可重复引用，费用与产物同一事务提交。
 // 费用取 etc/runesystem.etc 的 [compound info]：族 0 符文、1 护石，模式 0 普通、1 当前转职。
-// 升档概率在资源里没有可复核证据，当前只产出同品级随机一件，回执的升档位恒为 0。
+// 每行末尾两列是升档/同档权重：模式 0 的普通/高级符文与稀有护石升档权重为正，
+// 末档与模式 1 恒为 0，所以只有普通合成可能产出高一档，当前转职合成保持同品级。
 internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLimitCatalog goldLimits,
     EpicPieceCatalog pieces, Func<long, long>? random = null)
 {
@@ -49,6 +51,9 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
                 {
                     if (items.Rune(source.Core.ItemId) is not { } rune)
                         return Reject("compound-material");
+                    // 官方规则：当前转职合成要求材料本身也是本职业可用的符文。
+                    if (request.Mode == 1 && !rune.AllowsUse(character.Level, character.Job, character.GrowType))
+                        return Reject("compound-class");
                     itemGrade = rune.Grade;
                 }
                 else
@@ -56,6 +61,9 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
                     var template = items.Get(source.Core.ItemId);
                     if (template.Kind != ItemKind.Talisman || template.Rarity is < 0 or > byte.MaxValue)
                         return Reject("compound-material");
+                    if (request.Mode == 1 &&
+                        items.Talisman(source.Core.ItemId)?.AllowsUse(character.Level, character.Job, character.GrowType) != true)
+                        return Reject("compound-class");
                     itemGrade = (byte)template.Rarity;
                 }
             }
@@ -72,7 +80,7 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
             return Reject("compound-material");
 
         int family = materialKind == ItemKind.Rune ? 0 : 1;
-        if (!costs.TryGet(family, request.Mode, grade, out int count, out int gold) ||
+        if (!costs.TryGet(family, request.Mode, grade, out int count, out int gold, out int upgradeWeight, out int sameWeight) ||
             count != requirements.Sum(requirement => requirement.Quantity))
             return Reject("compound-cost");
 
@@ -89,8 +97,18 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
             return InventoryResult.Reject(NotEnoughGold) with { RejectReason = "compound-gold" };
         paid = CurrencyWallet.Set(paid, CurrencyKind.Gold, CurrencyWallet.Get(paid, CurrencyKind.Gold) - gold);
 
+        // 只有模式 0 的普通合成会升档；当前转职合成与末档按资源权重恒为同档。
+        bool upgraded = false;
+        if (request.Mode == 0 && upgradeWeight > 0)
+        {
+            long roll = draw(upgradeWeight + sameWeight);
+            if (roll < 0 || roll >= upgradeWeight + sameWeight)
+                return Reject("compound-roll");
+            upgraded = roll < upgradeWeight;
+        }
+        int productGrade = upgraded ? grade + 1 : grade;
         IReadOnlyList<int> candidates;
-        try { candidates = Candidates(character, materialKind, grade, request.Mode); }
+        try { candidates = Candidates(character, materialKind, (byte)productGrade, request.Mode); }
         catch (Exception error) when (error is InvalidDataException or KeyNotFoundException)
         {
             return Reject("compound-resource");
@@ -122,7 +140,8 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
 
         var assets = requirements.Select(requirement => requirement.Item).ToList();
         assets.AddRange(after.Items.Where(item => item.Position == productSlot));
-        receipt = new(productSlot.Index, productId, false);
+        receipt = new(productSlot.Index, productId, upgraded,
+            [.. requirements.Select(requirement => requirement.Item.Position.Index)]);
         return new(true, 0, new InventoryPlan(before, after,
             materialKind == ItemKind.Rune ? "rune_compound" : "talisman_compound",
             new InventoryCharacterPrecondition(character, Deadline(assets))));
@@ -152,4 +171,6 @@ internal sealed class InventoryTalismanCompoundService(ItemCatalog items, GoldLi
         InventoryResult.Reject(Rejection) with { RejectReason = reason };
 }
 
-internal sealed record TalismanCompoundReceipt(short ProductSlot, int ItemId, bool Upgraded);
+// SourceSlots 是本次实际扣减的材料格（同格重复引用已按格合并）：回执前的预载必须连同产物槽一起覆盖，
+// 客户端合成回执只重画合成窗格、不写物品容器，缺了材料格就会把材料画回背包再等差量删掉。
+internal sealed record TalismanCompoundReceipt(short ProductSlot, int ItemId, bool Upgraded, ImmutableArray<short> SourceSlots);

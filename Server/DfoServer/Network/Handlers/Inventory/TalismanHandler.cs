@@ -51,7 +51,12 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
                 _ => receipt is { } product
                     ? TalismanPackets.Compounded((ushort)product.ProductSlot, product.ItemId, product.Upgraded)
                     : TalismanPackets.Failure(InventoryTalismanService.Rejection),
-                () => receipt is { } product ? [new InventorySlot(InventoryListType.Talisman, product.ProductSlot)] : [],
+                // 合成回执只清空合成窗格并重画、不写物品容器：材料槽必须与产物槽一起先于回执送达，
+                // 否则回执重画会按旧容器把材料画回背包，直到绝对差量到达才消失（表现为材料「回背包再消失」）。
+                () => receipt is { } product
+                    ? [.. product.SourceSlots.Select(slot => new InventorySlot(InventoryListType.Talisman, slot)),
+                        new InventorySlot(InventoryListType.Talisman, product.ProductSlot)]
+                    : [],
                 // 族/模式/品级是资源表索引，实测字节尚未全部落实，先在日志里留原值便于比对。
                 $"family={request.Family} mode={request.Mode} rule={request.Rule} slots={string.Join(',', request.SourceSlots)}");
         });
@@ -99,22 +104,35 @@ internal sealed class TalismanHandler(InventoryTalismanService service, Inventor
         {
             await context.Reply((CmdPacketType)packet.Opcode, TalismanPackets.Failure(result.Error), "talisman_rejected", Guard);
             if (capture.Selected is { } rejected)
-                await context.Notify(NotiPacketType.ITEM_LIST,
-                    InventoryPackets.SpecialFull(rejected.Inventory, InventoryListType.Talisman), "talisman_rejected_restore", Guard);
+                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                    InventoryPackets.Delta(rejected.Inventory, InventoryListType.Talisman, TalismanSlots()), "talisman_rejected_restore", Guard);
             return CommandResult.Handled;
         }
         var committed = result.Receipt ?? throw new InvalidOperationException("护石操作成功缺少实际提交回执");
         // 客户端 0x067B/0x067C/0x06CE 回执只重画护石窗口与列表，**不写物品容器**（0069A170/0069A4A0 全路径无容器写入）。
         // 图标完全靠回执那一刻的重画读取，因此提交后的孔位行必须先于回执到达；否则第一次操作看不到变化，
-        // 要等下一次回执重画才补显。源槽不在预载内：客户端在 ACK 清理时才归还拖拽预留数量，绝对差量随后补发。
+        // 要等下一次回执重画才补显。装载/卸除的源槽不在预载内：客户端在 ACK 清理时才归还拖拽预留数量，
+        // 绝对差量随后补发；合成没有拖拽移动，材料格由请求体给出，必须一并预载（见 Compound）。
         if (action.Preload() is { Length: > 0 } preload)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
                 InventoryPackets.Delta(committed.Character.Inventory, InventoryListType.Talisman, preload, index: committed.Index),
                 "talisman_result_preload", Guard);
         await context.Reply((CmdPacketType)packet.Opcode, action.Reply(committed), "talisman_committed", Guard);
         await projection.RefreshAsync(context, result);
+        // 护石图鉴的符文页收到容器 46 全量（NOTI13）会重建整页：按技能筛选瞬间退回「所有技能」，
+        // 页面随后失去响应。装载/卸除成功后因此改发覆盖全部 216 格的差量（NOTI14，空槽即清空条目），
+        // 与拍卖行上架后的整列重发同一机制——就地冲刷客户端在拖拽期间残留的槽位状态，页面保留筛选。
+        if ((CmdPacketType)packet.Opcode is CmdPacketType.EQUIP_RUNE or CmdPacketType.REMOVE_RUNE)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,
+                InventoryPackets.Delta(committed.Character.Inventory, InventoryListType.Talisman, TalismanSlots(),
+                    index: committed.Index),
+                "talisman_list_sync", Guard);
         return CommandResult.Handled;
     }
+
+    // 容器 46 固定 216 格：护石 0–69、符文 70–209、已装符文 210–215。
+    static InventorySlot[] TalismanSlots() => Enumerable.Range(0, ItemSlotBoundService.EquippedRuneEnd + 1)
+        .Select(index => new InventorySlot(InventoryListType.Talisman, (short)index)).ToArray();
 
     long Now() => timer.GetUtcNow().ToUnixTimeSeconds();
 }
