@@ -52,6 +52,8 @@ internal static class SelfTestRunner
         GuildCompoundTests.RunCore();
         EquipmentEmblemTests.RunCore();
         TextureChangeTests.RunCore();
+        EquipmentUpgradeTests.RunCore();
+        DarkRevelationTests.RunCore();
         WeaponSkinTests.RunCore();
         AvatarCompoundTests.RunCore();
         AvatarDyeTests.RunCore();

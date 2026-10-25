@@ -15,6 +15,8 @@ internal sealed class ItemResources
     public EquipmentRefinementCatalog Refinement { get; }
     public RandomOptionCatalog RandomOptions { get; }
     public EquipmentTextureChangeCatalog TextureChanges { get; }
+    public EquipmentUpgradeCatalog EquipmentUpgrades { get; }
+    public DarkRevelationCatalog DarkRevelations { get; }
     public DisjointCatalog Disjoint { get; }
     public AvatarDisjointCatalog AvatarDisjoint { get; }
     public EpicPieceCatalog EpicPieces { get; }
@@ -99,6 +101,8 @@ internal sealed class ItemResources
         Skins = new(archive, stackable);
         RandomOptions = new(archive, equipment);
         TextureChanges = new(archive, equipment);
+        EquipmentUpgrades = new(archive);
+        DarkRevelations = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
         dungeonAltarItems = new(() => DungeonItemDropCatalog.LoadAltar(Items));
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
