@@ -31,6 +31,7 @@ internal static class QuestOrdinaryCompletionTests
         var learning = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf); var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, learning);
         var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
         QuestAntonUnlockTests.RunResources(towns, characters, items, learning, growth, parameters, quests);
+        QuestCashRewardTests.Run(towns,characters,items,learning,growth,parameters,quests);
         QuestMailDeclarationTests.RunResources(quests);
         QuestAutoDailyTests.RunCompletionResources(pvf,items);
         QuestEligibilityTests.RunFirstNpcResources(quests);

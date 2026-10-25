@@ -58,7 +58,7 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
                 commit.ConditionType == 44 || request.QuestId==2674 && commit.ConditionType==60 && commit.TpAmount==2 &&
                     commit.Consumed is [{ItemId:10158452,Count:1}] ? [] : commit.Consumed.Select(row => new QuestConsumedItemProjection(row.Position.Index, row.Count)).ToArray(),
                 commit.DirectGoldAmount, rewards,
-                commit.ProfessionGrowType,commit.Currencies.Select(row => new QuestCurrencyRewardProjection(
+                commit.ProfessionGrowType,commit.Currencies.Where(row => !QuestCurrencyReward.HasBalanceNotice(row.Kind)).Select(row => new QuestCurrencyRewardProjection(
                     ItemSlotBoundService.CurrencySlot(row.Kind) ?? throw new InvalidOperationException("钱包奖励缺少已确认持有域"),
                     row.Kind == DfoServer.Game.Currency.CurrencyKind.ReviveCoin ? 1 : row.ItemId,row.Count)).ToArray(),commit.TpAmount,commit.HellChallenge,
                 creatureEvolution: QuestCreatureReward.Evolution(quests.Get(commit.QuestId)), expertJobType: commit.ExpertJobType);
@@ -86,6 +86,9 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
         foreach (var list in inventorySlots.Select(slot => slot.List).Distinct())
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(character.Inventory, list,
                 inventorySlots.Where(slot => slot.List == list).ToArray()), "quest_reward_inventory", Guard);
+        if (commit.Currencies.Any(row => QuestCurrencyReward.HasBalanceNotice(row.Kind)))
+            await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(character.Inventory.AccountWallet),
+                "quest_reward_cera", Guard);
         if (previous is not null)
             await SkillSwitchInventoryProjection.RefreshStateAsync(
                 context,
