@@ -354,6 +354,7 @@ internal static class TcpRegressionTests
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
         ("recipe-craft", RecipeCraftTcpTests.RunAsync),
+        ("upgrade-chronicle", UpgradeChronicleTcpTests.RunAsync),
         ("daily-retained-booster", DailyRetainedBoosterTcpTests.RunAsync),
         ("booster", BoosterTcpTests.RunAsync),
         ("magic-box", MagicBoxTcpTests.RunAsync),

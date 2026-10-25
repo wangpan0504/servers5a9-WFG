@@ -82,7 +82,7 @@ internal sealed class ItemResources
         CashShop = CashShopCatalog.Load(archive);
         DevilContracts = new(archive, stackable, CashShop);
         RecoveryConsumables = new(archive, stackable, Items);
-        UpgradeChronicles = new(archive, stackable);
+        UpgradeChronicles = new(archive, stackable, equipment);
         ItemRecipes = new(archive, stackable);
         ItemMakingSkills = new(archive);
         LimitCubes = new(archive, stackable, equipment);
