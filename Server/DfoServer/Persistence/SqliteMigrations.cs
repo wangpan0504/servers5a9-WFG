@@ -216,7 +216,17 @@ internal static class SqliteMigrations
         new(101, "再战魔界账号编队配置", TagEvildomConfigurationSchema.Upgrade),
         new(102, "角色NPC好感度", AddNpcFavorColumn),
         new(103, "再战魔界固定准入与原子领奖回执", TagEvildomRunSchema.Upgrade),
+        new(104, "白斯追击药水次数效果", static (db, tx) => Execute(db, tx, BossSelectionBuffSchema)),
     ];
+
+    internal const string BossSelectionBuffSchema = """
+        CREATE TABLE IF NOT EXISTS character_boss_selection_buff(
+            character_id INTEGER PRIMARY KEY,
+            account TEXT NOT NULL,
+            state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='object'),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
 
     internal const string PvpPrivateCharacterSchema = """
         CREATE TABLE account_pvp_private_characters(
@@ -2089,6 +2099,7 @@ internal static class SqliteMigrations
                 throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
         }
         foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
+            ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_quest_lifecycle_receipts",PartyQuestLifecycleSql),
             ("character_quest_daily_clear",QuestDailyClearSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
@@ -2197,6 +2208,7 @@ internal static class SqliteMigrations
         "SELECT character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",
         "SELECT character_id,account,kind,item_id,until_ms,maintenance,cool_group FROM character_consumable_states LIMIT 0",
+        "SELECT character_id,account,state_json FROM character_boss_selection_buff LIMIT 0",
         "SELECT character_id,account,job_type,expertness,learned_recipes FROM character_expert_job LIMIT 0",
         "SELECT character_id,account,giveup_state,machine_grade,machine_endurance FROM character_expert_meta LIMIT 0",
         "SELECT character_id,account,day,clear_count,hidden_count FROM character_assault_daily LIMIT 0",

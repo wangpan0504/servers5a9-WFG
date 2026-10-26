@@ -340,6 +340,16 @@ internal static class DungeonMapPoolTests
                 "超星空正式入口随机抽六个可选迷宫并按45/45/10冻结终点 " + result.Boss + "/" + cosmoReason);
         }
         var actual = definition.Mazes.Single(maze => maze.QuestConnectionTokens.Count == 0);
+        foreach (var result in new[] { (Roll: 0, Boss: 92689), (Roll: 39, Boss: 92689), (Roll: 40, Boss: 92690),
+            (Roll: 79, Boss: 92690), (Roll: 80, Boss: 92697), (Roll: 99, Boss: 92697) })
+        {
+            var boosted = catalog.ResolveOrdinaryMaze(cosmoDefinition, cosmoMaze, _ => result.Roll, true,
+                new Dictionary<int,int> { [92689] = 40, [92690] = 40, [92697] = 20 });
+            That(boosted.MapSpecification!.Single(map => map.Kind == "boss").Id == result.Boss,
+                "白斯追击按40/40/20完整边界冻结终点，不改变原PVF候选或其它房间");
+        }
+        That(cosmoMaze.MapSpecification!.Single(map => map.Kind == "boss").CandidateWeights.SequenceEqual([45,45,10]),
+            "角色药效不能污染共享迷宫或其他玩家的原权重");
         That(ReferenceEquals(catalog.ResolveOrdinaryMaze(definition,actual,_ => throw new InvalidOperationException()),actual),
             "实际龙人之塔完整显式普通路线不进入地图池或重新抽图");
         // 仅将布局改为合成二房fixture，MAP归属、greed和type仍取实际PVF。

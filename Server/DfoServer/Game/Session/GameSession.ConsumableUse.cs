@@ -41,6 +41,8 @@ internal sealed partial class GameSession
         ConsumableUseResult Reject(string reason) => new(ConsumableUseOutcome.Rejected, reason, Guard: captured.Guard);
         if (activityBlocked || captured.Character is not { } character) return Reject("invalid-state");
         if (!service.TryDefinition(request.ItemId, out var definition)) return Reject("unsupported-template");
+        if (definition.BossSelectionBuff is not null && captured.Guard.Phase != SessionPhase.Town)
+            return Reject("boss-potion-requires-town");
         if (definition.TownGiftItem != 0 && captured.Guard.Phase != SessionPhase.Town) return Reject("gift_requires_town");
         if (definition.SummonsApc && captured.Guard.Phase != SessionPhase.Dungeon) return Reject("summon_requires_dungeon");
         if (definition.RequiresDungeon && captured.Guard.Phase != SessionPhase.Dungeon) return Reject("projectile_requires_dungeon");
@@ -81,6 +83,13 @@ internal sealed partial class GameSession
             }
             var actual = preserve ? new InventoryResult(true,0,new(character.Inventory,character.Inventory,
                 "free_dungeon_use_consumable",new(character, source.ExpireTime > 0 ? source.ExpireTime : null, service.Clock))) : preliminary;
+            if (definition.BossSelectionBuff is { } bossBuff)
+            {
+                var now = service.Clock.GetUtcNow();
+                var after = actual.Plan!.After with { BossSelectionBuff = new(request.ItemId, bossBuff.Entries,
+                    DailyBoosterUsage.NextReset(now).ToUnixTimeMilliseconds(), bossBuff) };
+                actual = actual with { Plan = actual.Plan.WithAfter(after) };
+            }
             if (!preserve && (definition.EffectMilliseconds > 0 || definition.CooltimeMaintenance != 0))
             {
                 var original = actual.Plan!;

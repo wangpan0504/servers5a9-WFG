@@ -21,6 +21,7 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public bool Unlimited { get; init; }
     public int TownGiftItem { get; init; }
     public bool RevivalBlessing { get; init; }
+    public BossSelectionBuffDefinition? BossSelectionBuff { get; init; }
     public ImmutableHashSet<uint> ExcludedDungeons { get; init; } = ImmutableHashSet<uint>.Empty;
     public bool Allows(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
         job < 16 && (Jobs & (1 << job)) != 0;
@@ -32,25 +33,29 @@ internal sealed class RecoveryConsumableCatalog
     readonly IReadOnlyDictionary<int, string>? stackable;
     readonly ItemCatalog? items;
     readonly ConcurrentDictionary<int, Lazy<RecoveryConsumableDefinition?>> definitions = new();
+    readonly Lazy<(BossSelectionBuffDefinition? Definition, ImmutableHashSet<int> Items)> bossSelection;
 
     public RecoveryConsumableCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable, ItemCatalog items)
     {
         this.archive = archive;
         this.stackable = stackable;
         this.items = items;
+        bossSelection = new(() => BossSelectionBuffDefinition.Load(archive));
     }
 
     internal RecoveryConsumableCatalog(IEnumerable<RecoveryConsumableDefinition> source)
     {
+        bossSelection = new(() => (null, ImmutableHashSet<int>.Empty));
         foreach (var definition in source)
             definitions.TryAdd(definition.ItemId, new(() => definition));
     }
 
-    internal static RecoveryConsumableDefinition? Read(RecoveryConsumableFile file)
+    internal static RecoveryConsumableDefinition? Read(RecoveryConsumableFile file, BossSelectionBuffDefinition? bossBuff = null)
     {
         var raw = file.Stackable;
         if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId || LegacyStatusConsumableDefinition.IsNativeItem(file.TemplateId) ||
-            raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[throw]" or "[set]" } ||
+            (raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[throw]" or "[set]" } &&
+                !(raw.TypeDeclaration is { Label: "[expert town potion]", Parameters: [0] } && bossBuff is not null)) ||
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.DeclaredMinimumLevel is < 0 or > 255 ||
             raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null || raw.DeclaredMaximumLevel < (raw.DeclaredMinimumLevel ?? 0) ||
             file.DeclaredFields.Contains("cool time") && file.CoolTime is null || file.CoolTime < 0 ||
@@ -60,6 +65,9 @@ internal sealed class RecoveryConsumableCatalog
             raw.HasUsableJobs && raw.DeclaredUsableJobs is null ||
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 || file.DeclaredFields.Contains("action type") || raw.HasBoosterInfo)
             return null;
+        if (bossBuff is not null && (file.StructureDiagnostics.Length != 0 ||
+            raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
+            !places.Contains("[village]") || places.Any(place => place is not ("[village]" or "[seria room]")))) return null;
         ushort jobs = ushort.MaxValue;
         if (raw.DeclaredUsableJobs is { Count: > 0 } tags && !tags.Contains("[all]"))
         {
@@ -80,6 +88,7 @@ internal sealed class RecoveryConsumableCatalog
         return new(file.TemplateId, raw.DeclaredMinimumLevel ?? 0, file.CoolTime ?? 0, file.CoolGroup ?? -file.TemplateId,
             SummonsApc: file.DeclaredFields.Contains("summon apc"))
         { MaximumLevel = raw.DeclaredMaximumLevel ?? int.MaxValue, Jobs = jobs,
+            BossSelectionBuff = bossBuff,
             RequiresDungeon = revival || file.DeclaredFields.Contains("summon npc") || raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
             ExpBonusPermille = expBonus ? file.ExpBonusPermille!.Value : 0,
             QuestExpBonusPermille = file.QuestExpBonusPermille is > 0 && file.ExpBonusMilliseconds is > 0 ? file.QuestExpBonusPermille.Value : 0,
@@ -111,7 +120,9 @@ internal sealed class RecoveryConsumableCatalog
     {
         if (!archive!.Contains("stackable/" + path))
             return null;
-        var definition = Read(RecoveryConsumableFile.Parse(id, "stackable/" + path, archive.ReadTokens("stackable/" + path), archive.ResolveString));
+        var file = RecoveryConsumableFile.Parse(id, "stackable/" + path, archive.ReadTokens("stackable/" + path), archive.ResolveString);
+        var buff = file.Stackable.TypeDeclaration?.Label == "[expert town potion]" ? bossSelection.Value : default;
+        var definition = Read(file, buff.Items?.Contains(id) == true ? buff.Definition : null);
         if (definition is null)
             return null;
         var template = items!.Get(id);

@@ -172,6 +172,7 @@ internal static partial class DatabaseSchemaTests
             PassiveItemsUpgrade(root);
             PickupUidUpgrade(root);
             ConsumableStatesUpgrade(root);
+            BossSelectionBuffUpgrade(root);
             BlacklistCountUpgrade(root);
             IncountNumberingUpgrade(root);
             Quest704NumberingUpgrade(root);
@@ -367,6 +368,39 @@ internal static partial class DatabaseSchemaTests
             string current = Snapshot(path);
             _ = new CharacterRepository(path);
             Check(Snapshot(path) == current, "迁移重开不清零既有计分或重复改变结构");
+        }
+    }
+
+    static void BossSelectionBuffUpgrade(string root)
+    {
+        root = Path.Combine(root, "boss-buff-upgrade");
+        Directory.CreateDirectory(root);
+        foreach (bool conflict in new[] { false, true })
+        {
+            string path = Path.Combine(root, "boss-buff-upgrade-" + conflict + ".db");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Execute(db, "DROP TABLE character_boss_selection_buff; PRAGMA user_version=103");
+                if (conflict) Execute(db, "CREATE TABLE character_boss_selection_buff(character_id INTEGER,account TEXT,state_json TEXT)");
+            }
+            if (conflict)
+            {
+                string before = Snapshot(path);
+                Reject<InvalidDataException>(() => new CharacterRepository(path), "同名药效表缺少主键和owner外键不能接受为正式结构");
+                Check(Snapshot(path) == before, "药效迁移结构冲突整体回滚，不推进版本");
+            }
+            else
+            {
+                _ = new CharacterRepository(path);
+                using var db = Open(path);
+                Check(Query(db, "SELECT count(*) FROM character_boss_selection_buff") is 0L &&
+                    Query(db, "PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion,
+                    "v103升级只建空药效表，不补造已使用药剂");
+                string before = Snapshot(path);
+                _ = new CharacterRepository(path);
+                Check(before == Snapshot(path), "升级后重开不重复建表或改写数据");
+            }
         }
     }
 

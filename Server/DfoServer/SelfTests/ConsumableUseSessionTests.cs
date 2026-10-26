@@ -21,6 +21,26 @@ internal static class ConsumableUseSessionTests
     {
         RunTimedStates(towns, characters, archive);
         RunRevivalTimeouts(towns, characters, archive);
+        var bossDefinition = ConsumableUseTests.Hp with { ItemId = 490705256,
+            BossSelectionBuff = new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]) };
+        using (var boss = new Fixture(towns, characters, hp: bossDefinition))
+        {
+            boss.Select();
+            boss.Sql("CREATE TRIGGER fail_boss_potion BEFORE INSERT ON character_boss_selection_buff BEGIN SELECT RAISE(ABORT,'boss potion rollback'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => boss.Use(), "药效写入失败不先扣药或发布成功");
+            That(boss.Count == 3 && boss.Read().Inventory.BossSelectionBuff is null, "药效和源消耗同事务回滚");
+        }
+        using (var boss = new Fixture(towns, characters, hp: bossDefinition))
+        {
+            boss.Select();
+            That(boss.Use().Outcome == ConsumableUseOutcome.Committed && boss.Count == 2 &&
+                boss.Read().Inventory.BossSelectionBuff is { Remaining: 5 }, "城镇使用后源与五次效果一起落库");
+            var saved = boss.Read().Inventory.BossSelectionBuff;
+            boss.Session.ReturnToRoster(); boss.Select();
+            That(BossSelectionBuff.Same(saved, boss.Session.Selected!.Inventory.BossSelectionBuff), "重选只重读原次数与日截止，不补造药水");
+            boss.Clock.Advance(TimeSpan.FromMilliseconds(saved!.UntilMilliseconds - boss.Clock.GetUtcNow().ToUnixTimeMilliseconds()));
+            That(!boss.Read().Inventory.BossSelectionBuff!.Active(boss.Clock.GetUtcNow().ToUnixTimeMilliseconds()), "每日06:00等号使旧药效失效");
+        }
         using (var f = new Fixture(towns, characters))
         {
             That(f.Use().Outcome == ConsumableUseOutcome.Rejected, "未选角不消费药剂且返回原状态拒绝");
@@ -325,7 +345,7 @@ internal static class ConsumableUseSessionTests
                 .Add(new(0, new(InventoryListType.Main, 65), new(hp.ItemId, ItemKind.Consumable, 3) { Marker16 = 44, SortLockFlag = 1 }))
                 .Add(new(0, new(InventoryListType.Main, 66), new(1114, ItemKind.Consumable, 2))) } });
             var store = lost ? new QuestCompletionRepositoryTests.LostResultRepository(Repository) { LoseInventoryResult = true } : null;
-            Session = new(store is null ? Repository : store, towns, Owner, timeProvider: hp.EffectMilliseconds > 0 ? Clock : null);
+            Session = new(store is null ? Repository : store, towns, Owner, timeProvider: hp.EffectMilliseconds > 0 || hp.BossSelectionBuff is not null ? Clock : null);
             Service = new(new([hp, ConsumableUseTests.Mp]), Clock);
         }
         public void Select() { Session.Select(0); Session.MarkReady(); }

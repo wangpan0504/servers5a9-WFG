@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
@@ -61,6 +62,15 @@ internal static partial class DungeonSpecificCardRewardsTests
                 bossRoll == 45 ? [(490705255, 2)] : [(3330, 40), (10305821, 4)],
             fatigueRemaining: bossRoll == 0 ? (ushort)8 : (ushort)16,
             timeProvider: new Testing.Inventory.DailyBoosterTestClock(now));
+        if (bossRoll == 90)
+        {
+            var before = fixture.Read();
+            That(items.RecoveryConsumables.TryGet(490705256, out var potion) && potion.BossSelectionBuff is not null,
+                "超星空入场回归使用真实追击药效果定义");
+            fixture.Repository.CommitInventory(fixture.Owner, before, new(before.Inventory, before.Inventory with
+            { BossSelectionBuff = new(490705256, 1, DailyBoosterUsage.NextReset(now).ToUnixTimeMilliseconds(), potion.BossSelectionBuff!) }, "test_boss_buff"));
+            fixture.Session.ReturnToRoster(); fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
+        }
         // 使用生产装配的完整奖励，覆盖三种领主与再挑战后的真实地面对象容量。
         var epicTable = DungeonHellEpicCatalog.Load(pvf);
         var harlem = towns.DungeonMaps.Values.Where(map => map.HellDungeon && map.HellQuests.Contains(6080))
@@ -99,12 +109,26 @@ internal static partial class DungeonSpecificCardRewardsTests
         // 终点仍受控选择；其余抽样固定种子，保留历史过期活动候选参与抽样。
         var random = new Random(653 + bossRoll);
         bool forceEpic=false;
+        bool boostedPreparation = bossRoll == 90;
         int Draw(int bound)=>forceEpic ? bound==1000000 ? 993000 : bound==1000 ?
-            (bossRoll==0 ? 200 : 100) : 0 : bound==100 ? bossRoll : random.Next(bound);
-        var receipt = fixture.Session.EnterFormalDungeon(7191, 0, 4, dungeons, rooms, drops, items.Items,
+            (bossRoll==0 ? 200 : 100) : 0 : bound==100 ? boostedPreparation ? 80 : bossRoll : random.Next(bound);
+        FormalDungeonReceipt? Enter() => fixture.Session.EnterFormalDungeon(7191, 0, 4, dungeons, rooms, drops, items.Items,
             draw: Draw, pieces: items.EpicPieces, hellParty: true,
-            prepareDrops: PrepareDrops)!;
+            prepareDrops: PrepareDrops);
+        if (bossRoll == 90)
+        {
+            var before = fixture.Read();
+            fixture.Sql("CREATE TRIGGER fail_boss_entry BEFORE UPDATE ON character_dungeon_state BEGIN SELECT RAISE(ABORT,'boss entry rollback'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => Enter(), "入场尝试号失败同时回滚药效扣次与票据");
+            That(QuestCompletionRepositoryTests.Same(before, fixture.Read()) && fixture.Session.DungeonSnapshot is null,
+                "入场失败保留最后一次追击效果且不安装实例");
+            fixture.Sql("DROP TRIGGER fail_boss_entry");
+        }
+        var receipt = Enter()!;
+        boostedPreparation = false;
         That(receipt is { Entry.IsCosmo: true }, "超星空结算回归沿真实准入：" + fixture.Session.LastFormalDungeonRejection);
+        if (bossRoll == 90) That(fixture.Read().Inventory.BossSelectionBuff is null,
+            "真实入场以80命中白斯并与票据原子消费最后一次效果；原45/45/10在80不会命中白斯");
         That(receipt.Entry.BossMap.Id == (bossRoll == 0 ? 92689 : bossRoll == 45 ? 92690 : 92697),
             "结算回归分别覆盖三个带权重终点");
         That(bossRoll == 0 || ItemCount(fixture.Read(), 490705255) == (bossRoll == 45 ? 1 : 0) &&
