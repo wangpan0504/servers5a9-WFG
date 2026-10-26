@@ -63,7 +63,7 @@ internal static class CharacterSelection
         character = InventoryService.Commit(repository, owner, character,
             InventoryExpiryService.RepairZeroPeriod(character.Inventory, items));
         character = InventoryService.Commit(repository, owner, character,
-            InventoryExpiryService.Plan(character.Inventory, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            InventoryExpiryService.Plan(character.Inventory, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()));
         if (!character.Inventory.ConsumableStates.IsEmpty)
         {
             var restored = ConsumableStatePolicy.CrossBoundary(character.Inventory,

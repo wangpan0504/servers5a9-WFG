@@ -9,6 +9,6 @@ internal sealed record RaidStartCheck(ushort Error, string Reason)
         if (definition is null) return new(19, "no-raid-definition");
         if (!isLeader) return new(8, "not-leader");
         if (currentMembers < definition.StartMinimum) return new(22, "too-few-members");
-        return new(19, definition.Anton?.StartBlocker ?? "formal-raid-resources-unprepared");
+        return new(19, definition.Resources?.StartBlocker ?? "formal-raid-resources-unprepared");
     }
 }

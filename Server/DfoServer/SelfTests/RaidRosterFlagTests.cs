@@ -44,6 +44,15 @@ internal static class RaidRosterFlagTests
         TestCheck.That(Check(role with { CompletedQuests = [3779] }) == "anton-entry-quest-required" &&
             Check(role with { CompletedQuests = [12829] }) == "anton-prerequisite-required",
             "名册任务完成不替代前置完成，接受态不等于完成态");
+        channel = channel with { Type = 0x20, Group = "[luke_raid]" };
+        role = role with { Level = 90, CompletedQuests = [2903, 4872] };
+        TestCheck.That(Check(role) is null && Check(role with { Level = 99 }) is null,
+            "卢克按入场任务资源接受90至99级，不以城镇86级门槛代替");
+        TestCheck.That(Check(role with { Level = 89 }) == "luke-level-required" &&
+            Check(role with { Level = 100 }) == "luke-level-required", "卢克等级上下界");
+        TestCheck.That(Check(role with { CompletedQuests = [4872] }) == "luke-entry-quest-required" &&
+            Check(role with { CompletedQuests = [2903] }) == "luke-prerequisite-required",
+            "卢克完成2903及4872分别复核，不以名册资格位代替前置");
         TestCheck.That(DfoServer.Game.Raids.RaidAdmissionPlan.Rejection(channel with { Type = 22 },
             role with { Level = 1, CompletedQuests = [] }) is null, "安徒恩门禁不污染普通频道");
     }
@@ -139,6 +148,9 @@ internal static class RaidRosterFlagTests
         string antonQuest = pvf.ReadText("n_quest/" + File(12829)!.Replace('\\', '/'));
         TestCheck.That(Regex.IsMatch(antonQuest, @"\[level\]\s+85\s+99") &&
             Regex.IsMatch(antonQuest, @"\[pre required quest\]\s+3779"), "安徒恩权威准入常量匹配PVF等级及前置");
+        string lukeQuest = pvf.ReadText("n_quest/" + File(2903)!.Replace('\\', '/'));
+        TestCheck.That(Regex.IsMatch(lukeQuest, @"\[level\]\s+90\s+99") &&
+            Regex.IsMatch(lukeQuest, @"\[pre required quest\]\s+4872"), "卢克权威准入常量匹配PVF等级及前置");
         string preyQuest = pvf.ReadText("n_quest/" + File(8935)!.Replace('\\', '/'));
         TestCheck.That(Regex.IsMatch(preyQuest, @"\[level\]\s+95\s+100"), "前往夜之摩天楼 [level] 95 100，与 dstr 32116 的 Lv95 一致");
         Console.WriteLine($"PASS {TestCheck.Count - checks} 团本入场资格 PVF 核对断言");

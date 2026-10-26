@@ -1,4 +1,7 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.Accounts;
+using DfoServer.Persistence;
+using System.Text.Json;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -83,6 +86,28 @@ internal static class AvatarSocketTests
             !InventoryAvatarSocketService.Plan(character, request, opener, template, avatar with
             { Types = [new(0, default), new(0, new(1, 1, 0, 0, 0)), new(0, new(2, 2, 0, 0, 0))] }, out _, 1000).Accepted,
             "错误模板、非开孔源、无孔声明及冲突孔型均拒绝");
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-avatar-socket-clock-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var repository = new CharacterRepository(Path.Combine(root, "game.db"));
+            using var owner = new AccountOwners().Acquire("socket-clock", () => { });
+            var persisted = repository.Create(owner, new("ClockSocket", character.Position, character.Return)
+                { Level = character.Level, Inventory = character.Inventory with { Items = [source with { Uid = 0 }, target with { Uid = 0, Core = target.Core with { Value = 0 } }] } });
+            var clock = new ConsumableUseSessionTests.FakeClock();
+            clock.Advance(DateTimeOffset.FromUnixTimeSeconds(1000) - clock.GetUtcNow());
+            var pending = InventoryAvatarSocketService.Plan(persisted, request, opener, template, avatar, out _, clock: clock);
+            That(pending.Accepted && pending.Plan!.CharacterPrecondition!.Matches(persisted),
+                "历史有效时钟同时用于开孔规划和提交前置，不混用实际系统日期");
+            string unchanged = JsonSerializer.Serialize(repository.LoadCharacter(owner, persisted.Slot));
+            clock.Advance(TimeSpan.FromSeconds(100));
+            Reject<InventoryQualificationExpiredException>(() => InventoryService.Commit(repository, owner, persisted, pending),
+                "到期前规划在恰到期提交时拒绝，不沿用旧时间快照");
+            That(JsonSerializer.Serialize(repository.LoadCharacter(owner, persisted.Slot)) == unchanged,
+                "恰到期提交拒绝保持真实仓储源数量、全部孔位、核心、金币及revision不变");
+            That(!InventoryAvatarSocketService.Plan(persisted, request, opener, template, avatar, out _, clock: clock).Accepted,
+                "相同时钟到期后重新规划也拒绝");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
         Console.WriteLine($"PASS {Count - checks} 时装开孔解析、资格及完整实例断言");
 
         Character Role(InventoryItem from, InventoryItem to) => character with { Inventory = character.Inventory with { Items = [from, to] } };

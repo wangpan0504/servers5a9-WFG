@@ -1,3 +1,8 @@
+using DfoServer.Game.Accounts;
+using DfoServer.Persistence;
+using DfoServer.Testing;
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Characters;
@@ -131,6 +136,37 @@ internal static class EnchantmentTests
         var timed = Plan(timedRole, request);
         That(timed.Accepted && timed.Plan!.CharacterPrecondition!.Matches(timedRole, now + 9) &&
             !timed.Plan.CharacterPrecondition.Matches(timedRole, now + 10), "源或目标的有限期限在真实提交前再次核对");
+
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-enchant-clock-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string database = Path.Combine(root, "game.db");
+            var repository = new CharacterRepository(database);
+            using var owner = new AccountOwners().Acquire("enchant-clock", () => { });
+            var persisted = repository.Create(owner, new("ClockEnchant", role.Position, role.Return)
+            { Level = role.Level, Inventory = new([
+                source with { Uid = 0, Core = source.Core with { ExpireTime = (int)now + 10 } },
+                target with { Uid = 0 }], Gold: role.Inventory.Gold) });
+            var clock = new ConsumableUseSessionTests.FakeClock();
+            clock.Advance(DateTimeOffset.FromUnixTimeSeconds(now) - clock.GetUtcNow());
+            var pending = InventoryEnchantmentService.Plan(persisted, request, now, definition, beadTemplate, gearTemplate, clock: clock);
+            That(pending.Accepted && pending.Plan!.CharacterPrecondition!.Matches(persisted),
+                "附魔规划与真实提交前置共用注入时钟");
+            string unchanged = Snapshot();
+            clock.Advance(TimeSpan.FromSeconds(10));
+            Reject<InventoryQualificationExpiredException>(() => InventoryService.Commit(repository, owner, persisted, pending),
+                "附魔规划有效但提交恰到期时拒绝，不复用规划时间");
+            That(Snapshot() == unchanged, "附魔到期提交保持源、目标完整核心、UID、金币、revision与审计序列不变");
+            string Snapshot()
+            {
+                using var connection = new SqliteConnection("Data Source=" + database + ";Pooling=False");
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT (SELECT count(*) FROM inventory_audit_log)||':'||(SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items')";
+                return JsonSerializer.Serialize(repository.LoadCharacter(owner, persisted.Slot)) + ":" + command.ExecuteScalar();
+            }
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
 
         PvfTokenDocument Pool(params object[] values)
         {

@@ -2,6 +2,7 @@ using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Session;
+using DfoServer.Game.Raids;
 using DfoServer.Game.Town;
 using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Towns;
@@ -76,7 +77,7 @@ internal static class ChannelAreaLandingTests
         var granRole = repo.Create(owner, new("Gran", towns.Room, towns.InitialReturn));
         var granPlaced = CharacterSelection.Prepare(repo, owner, granRole, towns, none, null, false, null, channel: granfloris);
         That(granPlaced.Position == towns.Room, "主入口格兰之森正式选角保持共享房间");
-        var lukeHigh = repo.Create(owner, new("Luke95", towns.Room, towns.InitialReturn) { Level = 95 });
+        var lukeHigh = repo.Create(owner, new("Luke95", towns.Room, towns.InitialReturn) { Level = 95, CompletedQuests = [2903, 4872] });
         var lukePlaced = CharacterSelection.Prepare(repo, owner, lukeHigh, towns, none, null, false, null, channel: luke);
         That(lukePlaced.Position == towns.Room, "卢克频道选角先进赛丽亚房间");
         var lukeExit = TownTravel.LeaveRoom(lukePlaced, towns, none, luke);
@@ -147,8 +148,12 @@ internal static class ChannelAreaLandingTests
         That(session.Selected!.Position == towns.Room, "选角进入卢克频道先到赛丽亚房间");
         session.ReturnToRoster();
         session = new GameSession(repo, towns, owner, entry: luke);
-        session.Select(lukeStayed.Slot);
-        That(session.Selected!.Position == towns.Room, "选角进入卢克频道时等级不足留在共享房间");
+        bool lukeRejected = false;
+        try { session.Select(lukeStayed.Slot); }
+        catch (RaidAdmissionException ex) when (ex.Message == "luke-level-required") { lukeRejected = true; }
+        var lukeUnchanged = repo.LoadCharacter(owner, lukeStayed.Slot);
+        That(lukeRejected && session.Selected is null && lukeUnchanged.Position == lukeStayed.Position &&
+            lukeUnchanged.Return == lukeStayed.Return, "卢克等级不足在正式选角前拒绝，不能靠共享房间落点绕过准入或改写位置");
 
         session.ReturnToRoster();
 

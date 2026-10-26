@@ -325,10 +325,10 @@ internal static class AntonRaidTcpTests
             "真实START日志区分主表缺项与备用脚本存在，诊断只输出有界样本");
     }
 
-    static byte[] Peer(ushort character, uint peer, bool invite) => Build(w =>
+    internal static byte[] Peer(ushort character, uint peer, bool invite) => Build(w =>
     { w.Write(character); w.Write((byte)10); w.Write(peer); if (invite) w.Write(new byte[6]); });
 
-    static WirePacket Until(TcpPeer peer, byte kind, ushort opcode)
+    internal static WirePacket Until(TcpPeer peer, byte kind, ushort opcode)
     {
         for (int at = 0; at < 256; at++)
         {
@@ -338,7 +338,7 @@ internal static class AntonRaidTcpTests
         }
         throw new InvalidOperationException("团本通知超过有界读取预算");
     }
-    static void Drain(TcpPeer peer, Action<WirePacket>? inspect = null)
+    internal static void Drain(TcpPeer peer, Action<WirePacket>? inspect = null)
     {
         peer.Send(1278);
         for (int at = 0; at < 256; at++)
@@ -357,7 +357,7 @@ internal static class AntonRaidTcpTests
         if (packet.Opcode == 592) That(packet.Body.Length == 2 + 3 * U16(packet.Body), "候战列表完整u16数量及条目");
         if (packet.Opcode == 593) That(packet.Body.Length == (packet.Body[0] == 0 ? 4 : 3), "候战增删字段完整");
     }
-    static (ushort Leader, (ushort Character, byte Squad)[] Members) Information(TcpPeer peer, uint key, byte mode)
+    internal static (ushort Leader, (ushort Character, byte Squad)[] Members) Information(TcpPeer peer, uint key, byte mode)
     {
         peer.Send(1361, Build(w => { w.Write(mode); w.Write(key); }));
         byte[] body = Until(peer, 1, 1361).Body;
