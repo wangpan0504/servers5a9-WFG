@@ -71,6 +71,7 @@ internal sealed partial class CharacterRepository
         if (duplicate)
         {
             VerifyCachedDungeonLoot(owner, expected.Id, prepared.Death.EventId, loot);
+            CommitOrdinaryLukeDrop(db, tx, owner, run, prepared, loot, verifyOnly: true);
             VerifyQuestDrops(db,tx,owner.Account,expected.Id,prepared.Death.EventId,questDrops);
             SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: true);
             tx.Commit();
@@ -127,6 +128,7 @@ internal sealed partial class CharacterRepository
         }
         WriteDungeonGrowthReceipt(db, tx, owner, expected, prepared, reward, plan, proficiencyGained);
         if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
+        CommitOrdinaryLukeDrop(db, tx, owner, run, prepared, loot);
         CacheDungeonLoot(owner, expected, prepared, loot);
         SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: false);
         if (quests is not null)

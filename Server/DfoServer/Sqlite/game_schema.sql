@@ -1,3 +1,21 @@
+CREATE TABLE character_luke_normal_drop_claims(
+          character_id INTEGER NOT NULL,
+          account TEXT NOT NULL,
+          day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day BETWEEN 10000101 AND 99991231),
+          source_monster_id INTEGER NOT NULL CHECK(typeof(source_monster_id)='integer' AND source_monster_id>0),
+          first_event_id TEXT NOT NULL CHECK(length(first_event_id)=32),
+          first_instance_id TEXT NOT NULL CHECK(length(first_instance_id)=32),
+          PRIMARY KEY(character_id,day,source_monster_id),
+          UNIQUE(character_id,first_event_id),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+CREATE TABLE character_luke_normal_progress(
+          character_id INTEGER PRIMARY KEY,
+          account TEXT NOT NULL,
+          day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day BETWEEN 10000101 AND 99991231),
+          progress INTEGER NOT NULL CHECK(typeof(progress)='integer' AND progress BETWEEN 0 AND 6),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
 CREATE TABLE account_tag_evildom_runs(
   account TEXT NOT NULL,
   instance_id TEXT NOT NULL CHECK(length(instance_id)=32),

@@ -217,6 +217,8 @@ internal static class SqliteMigrations
         new(102, "角色NPC好感度", AddNpcFavorColumn),
         new(103, "再战魔界固定准入与原子领奖回执", TagEvildomRunSchema.Upgrade),
         new(104, "白斯追击药水次数效果", static (db, tx) => Execute(db, tx, BossSelectionBuffSchema)),
+        new(105, "普通卢克单人每日顺序进度", OrdinaryLukeProgressSchema.Upgrade),
+        new(106, "普通卢克单人首击掉落日资格", OrdinaryLukeDropSchema.Upgrade),
     ];
 
     internal const string BossSelectionBuffSchema = """
@@ -2118,6 +2120,8 @@ internal static class SqliteMigrations
             (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
             (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),
             (TagEvildomRunSchema.Table,TagEvildomRunSchema.Definition),
+            (OrdinaryLukeProgressSchema.Table,OrdinaryLukeProgressSchema.Definition),
+            (OrdinaryLukeDropSchema.Table,OrdinaryLukeDropSchema.Definition),
             ("quest_eligibility_mail_dispatches",QuestEligibilityMailSchema),
             ("character_collectbox_state",CollectBoxStateTableSchema),
             ("character_collectbox_slots",CollectBoxSlotsTableSchema),

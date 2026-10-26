@@ -163,6 +163,8 @@ internal static partial class DatabaseSchemaTests
             SkillTreeUpgrade(root);
             CloneTitleUpgrade(root);
             TagEvildomUpgrade(root);
+            OrdinaryLukeUpgrade(root);
+            OrdinaryLukeDropUpgrade(root);
             PlayerInteractionPreviewUpgrade(root);
             VerifyReceiptDefinitionFixture(root);
             ObjectKeyUpgrade(root);

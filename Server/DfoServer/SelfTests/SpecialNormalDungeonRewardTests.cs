@@ -63,6 +63,10 @@ internal static class SpecialNormalDungeonRewardTests
             try { VerifyQuest(scenario.Quest, scenario.Route); }
             catch (Exception error) { errors.Add($"quest {scenario.Quest}: {error}"); }
         }
+        try { VerifyLukeDailyDrops(false); VerifyLukeDailyDrops(true); }
+        catch (Exception error) { errors.Add($"Luke daily drops: {error}"); }
+        try { VerifyLukeDayBoundary(); }
+        catch (Exception error) { errors.Add($"Luke day: {error}"); }
         try { VerifyPreyPrerequisite(); }
         catch (Exception error) { errors.Add($"quest 8925: {error}"); }
         foreach (ushort id in new ushort[] { 2903,8672 })
@@ -70,7 +74,7 @@ internal static class SpecialNormalDungeonRewardTests
             try { VerifyOtherRaidPrerequisite(id); }
             catch (Exception error) { errors.Add($"quest {id}: {error}"); }
         }
-        That(checkedCards.Count == 24 && cardFullBagChecked, "六图实际路线覆盖全部24种卡片源怪");
+        That(checkedCards.Count == 24 && cardFullBagChecked, "六图实际路线覆盖全部24种卡片源怪：" + string.Join("\n", errors));
         That(errors.Count == 0, "普通特殊副本完整奖励链：" + string.Join("\n", errors));
         Console.WriteLine($"PASS {Count - before} 普通安徒恩、卢克和超时空正式死亡、拾取、通关与翻牌断言");
 
@@ -110,13 +114,16 @@ internal static class SpecialNormalDungeonRewardTests
             {
                 fixture.Session.ReturnToRoster();
                 fixture.Sql("UPDATE characters SET revive_coins=14");
+                // 独立奖励/限币用例明确准备前序；完整真实顺序另由2902六图链验证。
+                fixture.Sql("INSERT INTO character_luke_normal_progress(character_id,account,day,progress) SELECT id,account,$p0,$p1 FROM characters",
+                    QuestCycle.Day(DateTimeOffset.UtcNow), id - 5101);
                 fixture.Session.Select(0,resumeTown:true);
                 fixture.Session.MarkReady();
             }
             Play(fixture, id);
         }
 
-        void Play(QuestSceneTests.Fixture fixture, int id, uint questId = 0, byte difficulty = 2)
+        void Play(QuestSceneTests.Fixture fixture, int id, uint questId = 0, byte difficulty = 2, Action? beforeSettlement = null)
         {
             var definition = dungeons.Get(id);
             var fee = definition.OrdinaryEntryTicket;
@@ -149,7 +156,7 @@ internal static class SpecialNormalDungeonRewardTests
                 if (lukeRevival && (point == route[0] || point == route[^1]))
                     for (int count = 0; count < 6; count++) ReviveOnce();
                 foreach (var monster in loaded!.Monsters.Monsters.Where(row => row.IsBlocking && row.CanReportDeath && !row.IsFriendly)
-                    .OrderBy(row => row.IsBoss).ToArray())
+                    .OrderBy(row => row.IsBoss).ThenBy(row => row.MonsterId == 66184).ToArray())
                 {
                     if (definition.IsOrdinaryLuke && lukeCards.TryGetValue(monster.MonsterId, out var cardRow))
                     {
@@ -176,6 +183,15 @@ internal static class SpecialNormalDungeonRewardTests
                         checkedCards.Add(cardRow.ItemId);
                     }
                     var observation = FormalDungeonSessionTests.Observation(loaded, monster);
+                    if (id == 5106 && monster.MonsterId == 66468)
+                    {
+                        string beforeUnknown = JsonSerializer.Serialize(fixture.Read());
+                        int beforeDraws = draws;
+                        var unknown = fixture.Session.ObserveFormalDungeonDeath(observation with { MonsterKey = 65534 }, kills, growth);
+                        That(unknown.Receipt is null && unknown.ClearFact is null && unknown.Drops.Length == 0 && unknown.GainedExperience == 0 &&
+                            JsonSerializer.Serialize(fixture.Read()) == beforeUnknown && draws == beforeDraws,
+                            "未知召唤对象键不凭静态SUMMON制造正式死亡、掉落或进度");
+                    }
                     if (point == entry.Entry.BossMap.Position && monster.IsBoss &&
                         monster.ObjectKey == loaded.Monsters.Monsters.Where(row => row.IsBlocking && row.CanReportDeath && !row.IsFriendly)
                             .OrderBy(row => row.IsBoss).Last().ObjectKey &&
@@ -214,6 +230,12 @@ internal static class SpecialNormalDungeonRewardTests
                     if (definition.IsOrdinaryLuke && lukeCards.TryGetValue(monster.MonsterId, out var declaredCard))
                         That(death.Drops.Count(row => !row.IsGold && row.Core.ItemId == declaredCard.ItemId && row.Core.Count == 1) == 1,
                             "命中的专属卡片进入原正式死亡地面账本，恰好一张");
+                    if (id == 5106 && monster.MonsterId == 66468)
+                        That(death.ClearFact is null && fixture.Session.Phase == SessionPhase.Dungeon,
+                            "模拟小卢克死亡不越过仍存活的66184控制对象提前终点；不代表自然退场wire已验收");
+                    if (id == 5106 && monster.MonsterId == 66184)
+                        That(death.ClearFact is not null && death.Drops.Any(row => !row.IsGold && row.Core.ItemId == 10159168),
+                            "控制对象真实正式报告形成最终通关，保留其原卡片奖励载体");
                     last = death;
                     var after = JsonSerializer.Serialize(fixture.Read());
                     int beforeDuplicateDraws = draws;
@@ -261,6 +283,18 @@ internal static class SpecialNormalDungeonRewardTests
                 That(fixture.Session.MoveFormalDungeon((byte)next.X, (byte)next.Y) is not null, $"{id}实际清房后过图");
             }
             That(last?.ClearFact is not null && fixture.Session.Phase == SessionPhase.Settlement, $"{id}真实终点生成通关事实");
+            beforeSettlement?.Invoke();
+            var progressBefore = fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id);
+            if (definition.IsOrdinaryLuke)
+            {
+                fixture.Sql("CREATE TRIGGER luke_progress_fail BEFORE INSERT ON character_dungeon_card_rewards BEGIN SELECT RAISE(ABORT,'luke progress rollback'); END");
+                string before = JsonSerializer.Serialize(fixture.Read());
+                Reject<SqliteException>(() => fixture.Session.SettleFormalDungeon(fixture.Read().Id, 99, 99, [6, 0, 8], dungeons, clears, growth, cards),
+                    "进度已规划但末段卡牌账本SQL失败");
+                That(fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id) == progressBefore &&
+                    JsonSerializer.Serialize(fixture.Read()) == before, "晚失败回滚经验、进度与冻结牌，不提前安装内存");
+                fixture.Sql("DROP TRIGGER luke_progress_fail");
+            }
             var result = fixture.Session.SettleFormalDungeon(fixture.Read().Id, 99, 99, [6, 0, 8], dungeons, clears, growth, cards);
             That(result is { Outcome: DungeonRunOutcome.Accepted, Card: not null }, $"{id}通关冻结奖励");
             if (definition.IsOrdinaryAnton)
@@ -268,9 +302,13 @@ internal static class SpecialNormalDungeonRewardTests
             if (definition.IsNormalFiendwar)
                 That(result.Card!.Item is { ItemId: 490007849, Value: 180 } && result.GainedExperience == 0 && result.ProficiencyGained == 0 &&
                     result.Options is { PaidDisabled: true, BlackDiamond: null }, "普通超时空180个材料、禁经验、无黄金牌和黑钻加牌");
+            var progressAfter = fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id);
+            if (definition.IsOrdinaryLuke)
+                That(progressAfter == progressBefore.Clear(entry!.Entry.OrdinaryLukeDay!.Value, (uint)id), "进度与实际清图结算同事务提交");
             var settled = JsonSerializer.Serialize(fixture.Read());
             fixture.Session.SettleFormalDungeon(fixture.Read().Id, 99, 99, [6, 0, 8], dungeons, clears, growth, cards);
-            That(JsonSerializer.Serialize(fixture.Read()) == settled, "重复结算不增加经验和资产");
+            That(JsonSerializer.Serialize(fixture.Read()) == settled &&
+                fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id) == progressAfter, "重复结算不增加经验、资产和进度");
             fixture.Session.AdvanceFormalDungeonCards(false);
             fixture.Session.AdvanceFormalDungeonCards(true);
             That(fixture.Session.SelectFormalDungeonFreeCard(0, 0) is not null, $"{id}免费牌实际领取");
@@ -425,6 +463,182 @@ internal static class SpecialNormalDungeonRewardTests
             That(fixture.Read().CompletedQuests.Contains(id),"入场任务完成记录重选后仍在");
         }
 
+        void VerifyLukeDailyDrops(bool firstEmpty)
+        {
+            var quest = resources.Quests.Get(2902);
+            var (position, done) = Entrance(5101);
+            done.UnionWith(quest.Prerequisites);
+            var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
+            using var fixture = new QuestSceneTests.Fixture(resources.Towns, resources.Characters, resources.Learning,
+                growth, resources.Quests, false, 95, done.ToArray(), position: position, timeProvider: clock);
+            int firstDay = QuestCycle.Day(clock.GetUtcNow());
+            var first = KillTarget(firstEmpty, rollback: true);
+            int source = first.Monster.MonsterId;
+            int cardId = lukeCards[source].ItemId;
+            int questItem = quest.Definition!.Drops.First(row => row.DungeonId == 5101 && row.TemplateId == source).ItemId;
+            var firstEvent = fixture.Repository.LoadOrdinaryLukeDropEvent(fixture.Owner, fixture.Read().Id, firstDay, source);
+            That(firstEvent is not null && (firstEmpty ? first.Death.Drops.IsEmpty :
+                first.Death.Drops.Any(row => !row.IsGold && row.Core.ItemId == cardId)),
+                "首次合法击杀不论是否抽中都消费源怪日资格，命中时保留原卡片/正常地面计划");
+            That(fixture.Session.ReturnFromFormalDungeon() is not null, "未拾取离场使用原Run地面过期路径，不补发");
+            long CardCount() => fixture.Read().Inventory.Items.Where(row => row.Core.ItemId == cardId).Sum(row => (long)row.Core.Count);
+            That(CardCount() == 0, "离场未拾取卡片没有暗中入包或补发");
+            fixture.Session.ReturnToRoster(); fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
+            That(fixture.Session.ChangeQuest(2902, QuestLifecycleAction.Accept, resources.Quests,
+                items.Items, items.GoldLimits, items.EpicPieces)?.Commit is not null, "消耗普通首掉资格后仍可独立接取2902");
+            long QuestCount() => fixture.Read().Inventory.Items.Where(row => row.Core.ItemId == questItem).Sum(row => (long)row.Core.Count);
+            long beforeQuest = QuestCount();
+            var repeated = KillTarget(false, rollback: false);
+            That(repeated.Monster.MonsterId == source && repeated.Death.Drops.IsEmpty && repeated.MillionDraws == 0 &&
+                fixture.Repository.LoadOrdinaryLukeDropEvent(fixture.Owner, fixture.Read().Id, firstDay, source) == firstEvent,
+                "重登/新Run同源怪不重抽卡片根源等正常掉落，不改首次资格事实");
+            That(QuestCount() > beforeQuest && repeated.Death.Reward is not null,
+                "已用普通首掉资格仍独立推进2902材料及原击杀经验合同");
+            That(fixture.Session.ReturnFromFormalDungeon() is not null, "重复击杀仍可正常离场");
+            clock.Advance(TimeSpan.FromDays(1));
+            int nextDay = QuestCycle.Day(clock.GetUtcNow());
+            var next = KillTarget(false, rollback: false, crossDay: true);
+            That(next.Death.Drops.Any(row => !row.IsGold && row.Core.ItemId == cardId) && next.MillionDraws > 0 &&
+                fixture.Repository.LoadOrdinaryLukeDropEvent(fixture.Owner, fixture.Read().Id, nextDay, source) is not null &&
+                fixture.Repository.LoadOrdinaryLukeDropEvent(fixture.Owner, fixture.Read().Id, firstDay, source) == firstEvent &&
+                fixture.Repository.LoadOrdinaryLukeDropEvent(fixture.Owner, fixture.Read().Id, QuestCycle.Day(clock.GetUtcNow()), source) is null,
+                "新入场日恢复资格；运行中再次跨日仍记入场日，不污染新日或覆盖旧日");
+            var cardGround = next.Death.Drops.Single(row => !row.IsGold && row.Core.ItemId == cardId);
+            That(fixture.Session.PickFormalDungeonItem(cardGround.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits)
+                is { Outcome: DungeonRunOutcome.Accepted } && CardCount() == 1, "次日真实卡片仍沿原地面拾取到账");
+            fixture.Session.PickFormalDungeonItem(cardGround.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits);
+            That(CardCount() == 1, "日资格不破坏原拾取幂等");
+            That(fixture.Session.ReturnFromFormalDungeon() is not null, "次日副本正常收尾");
+
+            (DungeonPlannedMonster Monster, FormalDungeonDeathResult Death, int MillionDraws) KillTarget(bool empty, bool rollback, bool crossDay = false)
+            {
+                int draws = 0, million = 0;
+                var entered = fixture.Session.EnterFormalDungeon(5101, 0, 2, dungeons, rooms, monsters, items.Items,
+                    draw: bound => { draws++; if (bound == 1000000) million++; return 0; }, pieces: items.EpicPieces,
+                    prepareDrops: entry =>
+                    {
+                        var prepare = drops.PrepareEntry(entry);
+                        return monster =>
+                        {
+                            var plan = prepare(monster);
+                            if (plan.OrdinaryLukeDailySource is { } dailySource)
+                                That(plan.WithGrowthContract(10).OrdinaryLukeDailySource == dailySource,
+                                    "成长契约计划复制保留日资格源怪，不放大抽样次数");
+                            // 合成零阈值只验证未命中也占资格，不改变生产资源概率；仍预留真实对象容量。
+                            return empty && plan.OrdinaryLukeDailySource is not null
+                                ? new DungeonDropGenerationPlan(plan.ResourceSource, plan.Trials.Select(trial => trial with { Threshold = 0 }),
+                                    plan.ReferenceQuality, plan.Amplification) { OrdinaryLukeDailySource = plan.OrdinaryLukeDailySource }
+                                : plan;
+                        };
+                    });
+                That(entered is not null, "首掉回归沿正式首图入口：" + fixture.Session.LastFormalDungeonRejection);
+                var route = QuestStoryRouteTests.Path(entered!.Entry.Maze.StaticTopology, entered.Entry.StartMap.Position, entered.Entry.BossMap.Position);
+                foreach (var point in route)
+                {
+                    var loaded = fixture.Session.CompleteFormalDungeonLoading()!;
+                    foreach (var monster in loaded.Monsters.Monsters.Where(row => row.IsBlocking && row.CanReportDeath && !row.IsFriendly)
+                        .OrderBy(row => row.IsBoss))
+                    {
+                        bool target = lukeCards.ContainsKey(monster.MonsterId) && quest.Definition!.Drops.Any(row =>
+                            row.DungeonId == 5101 && row.TemplateId == monster.MonsterId);
+                        var observation = FormalDungeonSessionTests.Observation(loaded, monster);
+                        if (target && crossDay) clock.Advance(TimeSpan.FromDays(1));
+                        int millionBefore = million;
+                        if (target && rollback)
+                        {
+                            string before = JsonSerializer.Serialize(fixture.Read());
+                            fixture.Sql($"CREATE TRIGGER luke_daily_claim_fail AFTER INSERT ON character_luke_normal_drop_claims WHEN NEW.source_monster_id={monster.MonsterId} BEGIN SELECT RAISE(ABORT,'luke daily claim rollback'); END");
+                            Reject<SqliteException>(() => fixture.Session.ObserveFormalDungeonDeath(observation, kills, growth), "首击资格写入后晚SQL失败");
+                            int frozenDraws = draws;
+                            That(JsonSerializer.Serialize(fixture.Read()) == before &&
+                                fixture.Repository.LoadOrdinaryLukeDropEvent(fixture.Owner, fixture.Read().Id, entered.Entry.OrdinaryLukeDay!.Value, monster.MonsterId) is null,
+                                "失败不扣首掉资格、不发布资产，保留原pending随机结果");
+                            fixture.Sql("DROP TRIGGER luke_daily_claim_fail");
+                            var retry = fixture.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+                            That(draws == frozenDraws && retry.Outcome == DungeonRunOutcome.Accepted, "SQL失败重试不重新抽样");
+                            VerifyDuplicate(retry);
+                            return (monster, retry, million - millionBefore);
+                        }
+                        var death = fixture.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+                        That(death.Outcome == DungeonRunOutcome.Accepted, "日资格不阻止合法死亡/经验/通关事实");
+                        if (target)
+                        {
+                            VerifyDuplicate(death);
+                            return (monster, death, million - millionBefore);
+                        }
+
+                        void VerifyDuplicate(FormalDungeonDeathResult original)
+                        {
+                            string after = JsonSerializer.Serialize(fixture.Read());
+                            int afterDraws = draws;
+                            fixture.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+                            That(JsonSerializer.Serialize(fixture.Read()) == after && draws == afterDraws,
+                                "重复死亡通知不重抽、不发放或改写日资格");
+                        }
+                    }
+                    if (point == route[^1]) break;
+                    var next = route[Array.IndexOf(route, point) + 1];
+                    That(fixture.Session.MoveFormalDungeon((byte)next.X, (byte)next.Y) is not null, "首掉回归正常清房过图");
+                }
+                throw new InvalidOperationException("资源首图没有找到同时属于24卡及2902的源怪");
+            }
+        }
+
+        void VerifyLukeDayBoundary()
+        {
+            var (position, done) = Entrance(5101);
+            var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(
+                new DateTimeOffset(2026, 10, 26, 5, 59, 59, TimeSpan.FromHours(8)));
+            using var fixture = new QuestSceneTests.Fixture(resources.Towns, resources.Characters, resources.Learning,
+                growth, resources.Quests, false, 95, done.ToArray(), position: position, timeProvider: clock);
+            // questId=0的Play含限币回归；本例仍给足真实复活币，不跳过其检查。
+            fixture.Session.ReturnToRoster(); fixture.Sql("UPDATE characters SET revive_coins=14");
+            fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
+            string initial = JsonSerializer.Serialize(fixture.Read());
+            DungeonEntryPlan? preparedAtBoundary = null;
+            That(fixture.Session.EnterFormalDungeon(5101, 0, 2, dungeons, rooms, monsters, items.Items,
+                pieces: items.EpicPieces, prepareDrops: value =>
+                {
+                    preparedAtBoundary = value;
+                    clock.Advance(TimeSpan.FromSeconds(1));
+                    return drops.PrepareEntry(value);
+                }) is null && JsonSerializer.Serialize(fixture.Read()) == initial &&
+                fixture.Query("SELECT count(*) FROM character_luke_normal_progress") is 0L,
+                "准备完成到安装之间跨06:00，原准备拒绝且不扣疲劳/费用或占attempt");
+            clock.Advance(TimeSpan.FromSeconds(-1));
+            var role = fixture.Read();
+            var forged = preparedAtBoundary! with { IsOrdinaryLuke = false, CharacterRevision = checked(role.Revision + 1) };
+            var identity = new DungeonRunIdentity(role.Id, 0, role.DungeonState!.LastAttempt + 1, Guid.NewGuid(), 1);
+            Reject<InvalidDataException>(() => fixture.Repository.CommitDungeonEntry(fixture.Owner, role,
+                role.DungeonState.NextObjectKey + 1, new(null, 0, identity, forged.StartMap.Id)
+                    { DungeonId = 5101, OrdinaryLukeEntry = forged }), "内部charge也不能用day借非卢克资源身份通过");
+            That(JsonSerializer.Serialize(fixture.Read()) == initial && fixture.Query("SELECT count(*) FROM character_luke_normal_progress") is 0L,
+                "内部错资源准入拒绝不占日、不改角色");
+            fixture.Sql("CREATE TRIGGER luke_entry_fail BEFORE UPDATE OF revision ON characters BEGIN SELECT RAISE(ABORT,'luke admission rollback'); END");
+            Reject<SqliteException>(() => fixture.Session.EnterFormalDungeon(5101, 0, 2, dungeons, rooms, monsters, items.Items,
+                pieces: items.EpicPieces, prepareDrops: value => drops.PrepareEntry(value)), "准入日写入后原费用事务晚失败");
+            That(JsonSerializer.Serialize(fixture.Read()) == initial && fixture.Query("SELECT count(*) FROM character_luke_normal_progress") is 0L,
+                "首次准入失败不留下进度日、不扣费");
+            fixture.Sql("DROP TRIGGER luke_entry_fail");
+            Play(fixture, 5101, beforeSettlement: () =>
+            {
+                clock.Advance(TimeSpan.FromSeconds(1));
+                // 防御性构造已存在更新日行，验证迟到旧Run仍可结算但不得覆盖它；不冒充自然双Run并发。
+                fixture.Sql("UPDATE character_luke_normal_progress SET day=20261026,progress=0");
+            });
+            // Play末尾再次入场验证复活次数重置；跨日该新Run已写新日progress0，但失败退出不完成首图。
+            var progress = fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id);
+            That(progress == new OrdinaryLukeProgress(20261026, 0), "跨日旧Run结算归旧日，新Run从首图零进度开始且退出不推进");
+            string after = JsonSerializer.Serialize(fixture.Read());
+            That(fixture.Session.EnterFormalDungeon(5102, 0, 2, dungeons, rooms, monsters, items.Items,
+                pieces: items.EpicPieces, prepareDrops: value => drops.PrepareEntry(value)) is null &&
+                JsonSerializer.Serialize(fixture.Read()) == after, "06:00新日不能继承旧首图解锁");
+            clock.Advance(TimeSpan.FromSeconds(-1));
+            That(fixture.Session.EnterFormalDungeon(5101, 0, 2, dungeons, rooms, monsters, items.Items,
+                pieces: items.EpicPieces, prepareDrops: value => drops.PrepareEntry(value)) is null &&
+                JsonSerializer.Serialize(fixture.Read()) == after, "墙钟回拨拒绝入场，不恢复旧日额度/进度");
+        }
+
         void VerifyQuest(int questId, int[] route)
         {
             var quest = resources.Quests.Get(questId);
@@ -433,8 +647,9 @@ internal static class SpecialNormalDungeonRewardTests
             done.UnionWith(quest.Prerequisites);
             foreach (int id in route) done.UnionWith(Entrance(id).Completed);
             That(!done.Contains(questId), "夹具不预先完成被测任务");
+            var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
             using var fixture = new QuestSceneTests.Fixture(resources.Towns, resources.Characters, resources.Learning,
-                growth, resources.Quests, false, 95, done.ToArray(), position: position,
+                growth, resources.Quests, false, 95, done.ToArray(), position: position, timeProvider: clock,
                 items: (dailyClear ? route.Append(route[0]) : route).Select(dungeons.Get).Where(row => row.OrdinaryEntryTicket is not null)
                     .Select(row => row.OrdinaryEntryTicket!.Value).GroupBy(row => row.ItemId)
                     .Select(group => (group.Key, group.Sum(row => row.Count))).ToArray());
@@ -460,7 +675,28 @@ internal static class SpecialNormalDungeonRewardTests
                     fixture.Sql($"UPDATE character_quest_daily_clear SET day={QuestCycle.Day(DateTimeOffset.UtcNow.AddDays(-1))} WHERE quest_id={questId}; UPDATE character_fatigue SET used=0,remaining=maximum");
                     fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
                 }
+                if (questId == 2902)
+                {
+                    var progress = fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id);
+                    That(progress.Completed == index, "同一角色真实六图链按前序解锁，不预置进度");
+                    if (index < 5)
+                    {
+                        string before = JsonSerializer.Serialize(fixture.Read());
+                        That(fixture.Session.EnterFormalDungeon((uint)route[index + 1], 0, 2, dungeons, rooms, monsters, items.Items,
+                            pieces: items.EpicPieces, prepareDrops: value => drops.PrepareEntry(value)) is null &&
+                            fixture.Session.LastFormalDungeonRejection == "luke-normal-progress-locked" && JsonSerializer.Serialize(fixture.Read()) == before,
+                            "跳图拒绝且不扣费/疲劳、不改尝试号");
+                    }
+                }
                 Play(fixture, route[index], (uint)questId);
+                if (questId == 2902)
+                {
+                    That(fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id).Completed == index + 1,
+                        "每个实际终点仅推进一图");
+                    fixture.Session.ReturnToRoster(); fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
+                    That(fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id).Completed == index + 1,
+                        "重登保留已提交每日进度");
+                }
                 var active = fixture.Read().ActiveMainQuests.Single(row => row.QuestId == questId);
                 That(active.AcceptanceId == original.AcceptanceId, "多次入场保留同一真实接取身份");
                 if (!daily) That(active.ConditionState == 4 - index, "每次真实通关只减一次，重放不额外计数");

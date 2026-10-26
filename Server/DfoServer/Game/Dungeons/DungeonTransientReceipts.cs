@@ -62,7 +62,7 @@ internal sealed class DungeonTransientReceipts
         if (original.Identity != value.Identity || original.CommittedIdentity != value.CommittedIdentity || original.Map != value.Map ||
             original.Death.EventId != value.Death.EventId || original.Death.MonsterKey != value.Death.MonsterKey ||
             original.Death.CombatSequence != value.Death.CombatSequence || original.ResourceIdentity != value.ResourceIdentity ||
-            original.UsesCollectionLedger != value.UsesCollectionLedger || !original.Grounds.SequenceEqual(value.Grounds))
+            original.UsesCollectionLedger != value.UsesCollectionLedger || original.OrdinaryLukeDaily != value.OrdinaryLukeDaily || !original.Grounds.SequenceEqual(value.Grounds))
             throw new InvalidDataException("同事件的临时掉落来源、集合或完整核心变化");
     }
 }

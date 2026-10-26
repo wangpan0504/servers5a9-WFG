@@ -102,6 +102,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         if (identity.CharacterId != expected.Id || identity.InstanceId == Guid.Empty || identity.Epoch <= 0 ||
             identity.TaskAttempt != state.LastAttempt + 1 || charge.MapId <= 0)
             throw new InvalidDataException("入场费用需要本次待安装实例的身份");
+        AdmitOrdinaryLuke(db, tx, owner, expected, charge);
         CharacterFatigueState? fatigueBefore = null, fatigueAfter = null;
         if (charge.Fatigue > 0)
         {

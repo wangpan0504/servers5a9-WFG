@@ -775,6 +775,8 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_expert_job(character_id,account,job_type,expertness) VALUES({{id}},'planning',1,0);
                 INSERT INTO character_expert_meta VALUES({{id}},'planning',0,1,300);
                 INSERT INTO character_assault_daily VALUES({{id}},'planning',740000,2,1);
+                INSERT INTO character_luke_normal_drop_claims VALUES({{id}},'planning',20261026,56063,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+                INSERT INTO character_luke_normal_progress VALUES({{id}},'planning',20261026,3);
                 INSERT INTO character_crack_daily(character_id,account,day,clear_count,daily_reward) VALUES({{id}},'planning',740000,1,0);
                 INSERT INTO character_growup_change(character_id,account,change_count) VALUES({{id}},'planning',2);
                 INSERT INTO character_weekly_dungeon(character_id,account,week,slot,used) VALUES({{id}},'planning',20261022,0,3);

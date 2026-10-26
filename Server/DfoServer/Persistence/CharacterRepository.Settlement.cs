@@ -202,6 +202,7 @@ internal sealed partial class CharacterRepository
               $base,$rank,$total,$bonus,$rule,$resource,$beforeLevel,$afterLevel,$beforeExperience,$afterExperience,$revision,$sceneOperation,$growthContract,$potion,$adventure,$otherBonus,$bonusJson,$proficiencyGained)
             """;
         command.ExecuteNonQuery();
+        ClearOrdinaryLuke(db, tx, owner, run);
         uint? griefMail = CommitGriefClear(db,tx,owner,expected,prepared);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))

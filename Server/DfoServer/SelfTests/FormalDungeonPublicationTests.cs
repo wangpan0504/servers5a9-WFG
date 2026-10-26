@@ -904,6 +904,8 @@ internal static class FormalDungeonPublicationTests
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey, weekly);
         public DfoServer.Game.Dungeons.DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
+        public Guid? LoadOrdinaryLukeDropEvent(AccountOwners.Lease owner, ushort characterId, int day, int sourceMonsterId) => inner.LoadOrdinaryLukeDropEvent(owner, characterId, day, sourceMonsterId);
+        public DfoServer.Game.Dungeons.OrdinaryLukeProgress LoadOrdinaryLukeProgress(AccountOwners.Lease owner, ushort characterId) => inner.LoadOrdinaryLukeProgress(owner, characterId);
         public DfoServer.Game.Dungeons.GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId) => inner.ReadGriefTower(owner, characterId);
         public DfoServer.Game.Dungeons.DungeonSpecialEntryUsage LoadSpecialEntryUsage(AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.DungeonSpecialEntryKind kind) => inner.LoadSpecialEntryUsage(owner, expected, day, kind);
         public DfoServer.Game.Dungeons.DungeonDespairProgress LoadDespairProgress(AccountOwners.Lease owner, Character expected) => inner.LoadDespairProgress(owner, expected);

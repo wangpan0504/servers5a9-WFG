@@ -305,6 +305,13 @@ internal sealed partial class GameSession
         // 祭坛、绝望之塔等原有限额仍由EntryPlan设置，不受这项窄范围投影影响。
         if (!partyAdmission && entry!.IsOrdinary && catalog.Get(checked((int)dungeonId)) is { IsOrdinaryLuke:true } luke)
             entry = entry with { CoinLimit = luke.CoinLimit };
+        if (!partyAdmission && OrdinaryLukeProgress.Applies(entry!))
+        {
+            int day = QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow());
+            if (!repository.LoadOrdinaryLukeProgress(owner, expected.Id).Allows(day, dungeonId))
+                return RejectFormal("luke-normal-progress-locked");
+            entry = entry! with { OrdinaryLukeDay = day };
+        }
         if (partyAdmission && (entry!.Maze.IsGriefTower || entry.IsAltar || entry.IsDespair || entry.IsTournament))
             return RejectFormal("party-special-dungeon-unsupported");
         if (hellParty && entry!.HellParty is null && !entry.IsCosmo) return RejectFormal("hell-party-room-unavailable");
@@ -667,6 +674,9 @@ internal sealed partial class GameSession
         var installing = prepared.Dungeon;
         if (installing.TagEvildomEntry is { } tagEntry &&
             !ReferenceEquals(CurrentTagEvildomSelection(character, prepared.SelectionEpoch, installing.Entry.DungeonId), tagEntry)) return null;
+        if (installing.Entry.OrdinaryLukeDay is { } lukeDay &&
+            (lukeDay != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow()) ||
+             !repository.LoadOrdinaryLukeProgress(owner, character.Id).Allows(lukeDay, installing.Entry.DungeonId))) return null;
         if (installing.GriefAdmission is { } grief &&
             grief.Decision.Day != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow())) return null;
         if (installing.Entry.IsPractice && (installing.Entry.HellParty is not null || installing.Entry.IsHellLegend ||
@@ -790,12 +800,12 @@ internal sealed partial class GameSession
         }
         ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : installing.Entry.StartFatigue;
         Character committed;
-        if (entryItems is not null || entryFatigue > 0 || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null)
+        if (entryItems is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             var entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                 new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                    prepared.Weekly,installing.GriefAdmission) { Special = installing.SpecialEntry, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = hopeIncount, TagEvildom = installing.TagEvildomEntry?.Admission });
+                    prepared.Weekly,installing.GriefAdmission) { OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = hopeIncount, TagEvildom = installing.TagEvildomEntry?.Admission });
             committed = entryCommit.Character;
             if (hopeIncount is { Row: { } hopeRow, Increment: true } && entryCommit.IncountUsage is { } actualUsage)
                 enterCounts = [.. DungeonIncountPolicy.Views(hopeRow, actualUsage)];
@@ -1081,23 +1091,36 @@ internal sealed partial class GameSession
         var reward = frozen.Reward;
         FrozenDungeonGroundDeath? loot = null;
         if (dungeon.Ground.HasReservation(pending.Death.MonsterKey))
-            loot = dungeon.DropPlans.TryGetValue(pending.Death.MonsterKey, out var generation0) &&
-                (generation0 = dungeon.HellRewardPlans.TryGetValue(pending.Death.MonsterKey, out var rewardPlan) &&
-                    dungeon.Run.IsLastLivingHellWaveMember(pending.Death.MonsterKey) ? rewardPlan : generation0) is { } generation
-                ? dungeon.Ground.GetOrFreezeAssets(pending, () =>
+        {
+            if (dungeon.DropPlans.TryGetValue(pending.Death.MonsterKey, out var generation))
+            {
+                if (dungeon.HellRewardPlans.TryGetValue(pending.Death.MonsterKey, out var rewardPlan) &&
+                    dungeon.Run.IsLastLivingHellWaveMember(pending.Death.MonsterKey)) generation = rewardPlan;
+                OrdinaryLukeDropClaim? daily = null;
+                if (generation.OrdinaryLukeDailySource is { } source && dungeon.Entry.OrdinaryLukeDay is { } day)
+                {
+                    if (!OrdinaryLukeProgress.Applies(dungeon.Entry) || source != pending.Monster.MonsterId)
+                        throw new InvalidDataException("普通卢克每日源怪与原计划不一致");
+                    var first = repository.LoadOrdinaryLukeDropEvent(owner, Selected.Id, day, source);
+                    // SQL提交返回丢失时，同一event仍恢复原冻结候选；其它Run/房间同源怪不再抽样。
+                    daily = new(day, source, first is null || first == pending.Death.EventId);
+                }
+                loot = dungeon.Ground.GetOrFreezeAssets(pending, () =>
                 {
                     var now = frozen.At;
                     // 个人掉落沿用第一档；队内有效成长契约人数对应的其余档位尚未接入。
                     int bonus = GrowthContractPolicy.Active(Selected, contracts?.Growth, now.ToUnixTimeSeconds()) &&
                         !dungeon.Entry.IsTutorial && !dungeon.Entry.IsTrainingRoom ? contracts!.Growth!.IndependentDropPercent[0] : 0;
                     return generation.WithGrowthContract(bonus).Generate(dungeon.Draw, now);
-                }, generation.ResourceSource)
-                : dungeon.Ground.GetOrFreeze(pending, () =>
+                }, generation.ResourceSource, daily);
+            }
+            else loot = dungeon.Ground.GetOrFreeze(pending, () =>
             {
                 var choice = DungeonExplicitDropPolicy.Select(dungeon.Pools[pending.Monster.MonsterId],
                     dungeon.Draw(DungeonExplicitDropPolicy.TriggerDenominator), dungeon.Draw(DungeonExplicitDropPolicy.SelectionDenominator));
                 return choice is null ? null : InventoryRewardGrantService.Create(choice.Template, choice.Count);
             });
+        }
         byte previousLevel = Selected.Level;
         var previousQuests = Selected.ActiveMainQuests;
         if (dungeon.QuestDrops is { } resources)

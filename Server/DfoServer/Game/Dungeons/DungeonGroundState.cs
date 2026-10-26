@@ -55,6 +55,7 @@ internal sealed class FrozenDungeonGroundDeath
         ? throw new InvalidOperationException("多件冻结掉落必须使用完整集合提交") : Grounds.FirstOrDefault();
     public string ResourceIdentity { get; }
     public bool UsesCollectionLedger { get; }
+    public OrdinaryLukeDropClaim? OrdinaryLukeDaily { get; init; }
 
     public FrozenDungeonGroundDeath(ConfirmedDungeonMonsterDeath death, DungeonRunIdentity committedIdentity,
         DungeonMap map, DungeonGroundObject? ground, string resourceIdentity = "")
@@ -266,10 +267,11 @@ internal sealed class DungeonGroundState
     }
 
     public FrozenDungeonGroundDeath GetOrFreezeAssets(PreparedDungeonDeath prepared, Func<IReadOnlyList<DungeonGroundContent>> factory,
-        string? resourceSource = null) => Freeze(prepared, factory, true, resourceSource);
+        string? resourceSource = null, OrdinaryLukeDropClaim? ordinaryLukeDaily = null)
+        => Freeze(prepared, factory, true, resourceSource, ordinaryLukeDaily);
 
     FrozenDungeonGroundDeath Freeze(PreparedDungeonDeath prepared, Func<IReadOnlyList<DungeonGroundContent>> factory,
-        bool usesCollectionLedger, string? resourceSource = null)
+        bool usesCollectionLedger, string? resourceSource = null, OrdinaryLukeDropClaim? ordinaryLukeDaily = null)
     {
         ArgumentNullException.ThrowIfNull(prepared);
         ArgumentNullException.ThrowIfNull(factory);
@@ -283,13 +285,14 @@ internal sealed class DungeonGroundState
         if (frozen.TryGetValue(key, out var existing))
         {
             if (!ReferenceEquals(existing.Frozen.Death, prepared.Death) || current.Phase == SinglePlayerDungeonPhase.Returned ||
-                existing.Frozen.UsesCollectionLedger != usesCollectionLedger || existing.Frozen.ResourceIdentity != source)
+                existing.Frozen.UsesCollectionLedger != usesCollectionLedger || existing.Frozen.ResourceIdentity != source || existing.Frozen.OrdinaryLukeDaily != ordinaryLukeDaily)
                 throw new InvalidOperationException("同一怪物不能改换死亡事实或复活过期掉落");
             return existing.Frozen;
         }
         if (!failedOrCreating.Add(key))
             throw new InvalidOperationException("地面冻结曾失败或仍在生成，不能重抽");
-        var contents = factory()?.ToArray() ?? throw new InvalidDataException("冻结掉落集合为空引用");
+        var contents = ordinaryLukeDaily is { Eligible: false } ? [] :
+            factory()?.ToArray() ?? throw new InvalidDataException("冻结掉落集合为空引用");
         if (contents.Length > reserved.Length)
             throw new InvalidDataException("冻结掉落超出本怪物已持久预留容量，不能截断");
         foreach (var content in contents)
@@ -302,7 +305,7 @@ internal sealed class DungeonGroundState
         var grounds = contents.Select((content, index) => new DungeonGroundObject(prepared.Death.EventId, prepared.Death.Identity,
             reserved[index], content) { ResourceIdentity = source, UsesCollectionLedger = usesCollectionLedger }).ToImmutableArray();
         var result = new FrozenDungeonGroundDeath(prepared.Death, prepared.Result.Snapshot.Identity, current.CurrentMap, grounds,
-            source, usesCollectionLedger);
+            source, usesCollectionLedger) { OrdinaryLukeDaily = ordinaryLukeDaily };
         var state = new DeathState(result);
         frozen.Add(key, state);
         foreach (var ground in grounds)

@@ -66,6 +66,10 @@ internal static partial class FormalDungeonTcpTests
                     created = InventoryService.Commit(repository,owner,created,inventory.Grant(created,[new(1,luke ? 14 : 2)]));
                 }
             }
+            // 此组独立验证各图wire/奖励，显式已有前序；完整顺序由共享资源Session链验证。
+            if (luke)
+                fixture.Sql("INSERT INTO character_luke_normal_progress(character_id,account,day,progress) VALUES($p0,$p1,$p2,$p3)",
+                    created.Id, account, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow), sample.Id - 5101);
             int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : luke && !sample.Explicit ? 8 : 100;
             fixture.Sql("UPDATE character_fatigue SET remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
             // 最后防线只经频道39进入；普通选角先到共享房间，再出门到115/0，不能把上一角色的普通频道历史当作团本快照。
@@ -137,6 +141,14 @@ internal static partial class FormalDungeonTcpTests
                 request[8] = 0;
             }
             request[4] = 2;
+            if (luke && sample.Id > 5101)
+            {
+                fixture.Sql("UPDATE character_luke_normal_progress SET progress=0 WHERE character_id=$p0", created.Id);
+                string locked = fixture.Snapshot();
+                peer.Send(16,request); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+                That(fixture.Snapshot() == locked, "真实TCP未完成前序拒绝，无扣费/疲劳/尝试号变化");
+                fixture.Sql("UPDATE character_luke_normal_progress SET progress=$p0 WHERE character_id=$p1", sample.Id - 5101, created.Id);
+            }
             peer.Send(16,request);
             if (sample.Tired || !sample.Ticket)
             {

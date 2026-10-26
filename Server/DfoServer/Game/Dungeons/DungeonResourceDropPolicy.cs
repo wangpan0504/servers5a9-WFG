@@ -60,7 +60,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                     new DungeonItemDropPool([new DungeonWeightedDropItem(template, 1)]), 1, 1,
                     ProbabilityDenominator: 1000000);
                 plan = new(plan.ResourceSource + ";luke-normal-card-compat-v1;" + DungeonSpecialDropCatalog.CardPath, plan.Trials.Add(trial),
-                    plan.ReferenceQuality, plan.Amplification);
+                    plan.ReferenceQuality, plan.Amplification) { OrdinaryLukeDailySource = monster.MonsterId };
             }
             plans.Add(key, plan);
             return plan;
