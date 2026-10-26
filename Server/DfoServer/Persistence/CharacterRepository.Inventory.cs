@@ -257,6 +257,9 @@ internal sealed partial class CharacterRepository
         if (!SameInventory(expected.Inventory, plan) || plan.CharacterPrecondition?.MatchesIdentity(expected) == false)
             throw new InvalidOperationException("背包规划不是当前快照");
         plan.After.Validate(allocating: true);
+        if (plan.UnlockSkillTree && (plan.Reason != "cash_shop_buy" || plan.CharacterPrecondition is null ||
+            !expected.Learning.Initialized || expected.Learning.SelectedTree != -1))
+            throw new InvalidOperationException("技能方案只能由商城对未开通角色开通");
         if (plan.EquipmentSlotFlagsAfter is not null && plan.Reason == "gm_equipment_slot_flags")
         {
             // 开发GM开扩展装备栏：只在原标志上追加辅助装备/魔法石/耳环位，背包不变，不清除也不开放幻化位。
@@ -285,7 +288,8 @@ internal sealed partial class CharacterRepository
     static void ValidateCurrentInventoryPlan(Character current, Character expected, InventoryPlan plan)
     {
         if (current.Id != expected.Id || current.Revision != expected.Revision ||
-            !SameInventory(current.Inventory, plan) || plan.CharacterPrecondition?.MatchesIdentity(current) == false)
+            !SameInventory(current.Inventory, plan) || plan.CharacterPrecondition?.MatchesIdentity(current) == false ||
+            plan.UnlockSkillTree && !SameLearning(current.Learning, expected.Learning))
             throw new InvalidOperationException("角色库存、规划资格或owner/revision已变化");
     }
 
@@ -351,6 +355,11 @@ internal sealed partial class CharacterRepository
         var learning = current.Learning;
         if (plan.Before.AccountWallet.ContractExpiry(27) != inventory.AccountWallet.ContractExpiry(27))
             learning = learning with { ExpertContractExpiresAt = ReadEffectiveExpertContractExpiry(db, expected.Id, transaction) };
+        if (plan.UnlockSkillTree)
+        {
+            learning = learning with { SelectedTree = 0 };
+            WriteLearning(db, transaction, current.Id, learning);
+        }
         inventory = WriteCargo(db, transaction, owner, expected.Id, plan, inventory);
         WriteShopPurchases(db, transaction, owner.Account, expected.Id, plan.Before, inventory);
         WriteItemMakingSkills(db, transaction, expected.Id, owner.Account, plan);

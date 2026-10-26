@@ -76,11 +76,11 @@ internal static class PvpPrivateCharacterTests
             That(repo.Create(owner,future).IsPvpPrivate,"冷却到期可复用相同转职账本而不清其他分支");
             // 独立空v95库真正缺少表；不通过降版本但留表伪装升级。
             string migration=Path.Combine(root,"migration.db");new CharacterRepository(migration);
-            Sql("DROP TABLE character_operation_hope_reward_receipts; DROP TABLE account_pvp_private_characters; PRAGMA user_version=95",migration);
+            Sql("DROP TABLE character_operation_hope_reward_receipts; DROP TABLE account_pvp_private_characters; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=95",migration);
             var upgraded=new CharacterRepository(migration);
             using(var upgradedOwner=owners.Acquire("migrated",()=>{}))
                 That(!upgraded.Create(upgradedOwner,new("Migrated",location,location)).IsPvpPrivate,"v95升级后普通角色保持普通，未凭等级补造专用身份");
-            Sql("DROP TABLE character_operation_hope_reward_receipts; DROP TABLE account_pvp_private_characters; CREATE TABLE account_pvp_private_characters(account TEXT,job INTEGER,grow_type INTEGER,character_id INTEGER,blocked_until INTEGER,recreate_days INTEGER); PRAGMA user_version=95",migration);
+            Sql("DROP TABLE character_operation_hope_reward_receipts; DROP TABLE account_pvp_private_characters; CREATE TABLE account_pvp_private_characters(account TEXT,job INTEGER,grow_type INTEGER,character_id INTEGER,blocked_until INTEGER,recreate_days INTEGER); ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=95",migration);
             Reject<InvalidDataException>(()=>new CharacterRepository(migration),"同名缺约束表不能蒙混schema96校验");
             void Sql(string sql,string? target=null)
             {using var db=new SqliteConnection("Data Source="+(target??path)+";Pooling=False");db.Open();using var command=db.CreateCommand();command.CommandText=sql;command.ExecuteNonQuery();}

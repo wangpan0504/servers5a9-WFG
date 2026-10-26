@@ -7,13 +7,13 @@ internal readonly record struct SkillCommandChange(ushort Id, string Command);
 
 internal static class SkillCustomization
 {
-    // 尚未开放切树；当前客户端无context字段的编辑作用于主树。
+    // 无context字段的指令编辑作用于角色当前方案。
     public static SkillLearningResult Commands(byte job, CharacterLearningState state,
         IReadOnlyList<SkillCommandChange> changes, bool reset, SkillLearningCatalog catalog)
     {
         if (!state.Initialized || changes.Select(change => change.Id).Distinct().Count() != changes.Count)
             return Fail();
-        var tree = state.Trees.Single(tree => tree.Context == 0);
+        var tree = state.Trees.Single(tree => tree.Context == state.ActiveContext);
         foreach (var change in changes)
         {
             var resource = catalog.Get(job, change.Id);
@@ -23,7 +23,7 @@ internal static class SkillCustomization
         var commands = changes.ToDictionary(change => change.Id, change => change.Command);
         var skills = tree.Skills.Select(skill => skill with { Command = reset ? "" : commands.GetValueOrDefault(skill.Id, skill.Command) }).ToArray();
         if (skills.SequenceEqual(tree.Skills)) return Success(state);
-        var next = state with { Trees = Array.AsReadOnly(state.Trees.Select(value => value.Context == 0
+        var next = state with { Trees = Array.AsReadOnly(state.Trees.Select(value => value.Context == state.ActiveContext
             ? value with { Skills = Array.AsReadOnly(skills) } : value).ToArray()) };
         next.Validate();
         return Success(next);

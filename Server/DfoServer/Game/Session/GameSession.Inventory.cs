@@ -152,6 +152,8 @@ internal sealed partial class GameSession
                 !ReferenceEquals(formalDungeon, capture.Dungeon) || formalDungeon?.Run.Snapshot.Identity != capture.Identity ||
                 !ReferenceEquals(Selected, character))
                 return InventoryResult.Reject(invalidStateError);
+            if (result.Plan?.UnlockSkillTree == true && (HasClassExperienceContext || Selected?.Position is { Town: 10, Area: 4 }))
+                return InventoryResult.Reject(invalidStateError);
             var committed = CommitInventory(character, result, invalidStateError);
             if (committed.Accepted && UsedItemId(character) is { } itemId) CommitDungeonItemUse(itemId);
             return committed;

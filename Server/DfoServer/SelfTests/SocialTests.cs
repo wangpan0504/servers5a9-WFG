@@ -224,7 +224,7 @@ internal static class SocialTests
             Execute("DROP TABLE character_epic_production; DROP TABLE quest_eligibility_mail_dispatches; DROP TABLE character_pvp_training_skills; DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts");
             Execute("DROP TABLE account_social_requests");
             Execute(SocialSchema.LegacyRequestSql);
-            Execute("INSERT INTO account_social_requests VALUES('sociala','socialb','旧申请',123); PRAGMA user_version=90; ALTER TABLE account_social_links ADD COLUMN unexpected INTEGER");
+            Execute("INSERT INTO account_social_requests VALUES('sociala','socialb','旧申请',123); ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=90; ALTER TABLE account_social_links ADD COLUMN unexpected INTEGER");
             Reject<InvalidDataException>(() => new CharacterRepository(path), "v91晚期结构验证失败回滚新增列与版本");
             That(Scalar("PRAGMA user_version") == 90 && Scalar("SELECT count(*) FROM pragma_table_info('account_social_requests')") == 4 &&
                 Scalar("SELECT created FROM account_social_requests") == 123, "升级失败保留v90完整申请");
@@ -233,7 +233,7 @@ internal static class SocialTests
             That(Scalar("PRAGMA user_version") == SqliteMigrations.CurrentVersion && Scalar("SELECT group_id FROM account_social_requests") == 0 &&
                 Scalar("SELECT count(*) FROM account_social_requests WHERE message='旧申请' AND memo='' AND created=123") == 1,
                 "v90申请原样升级到当前版本，未知旧偏好默认无组和空备注");
-            Execute("DROP TABLE character_epic_production; DROP TABLE quest_eligibility_mail_dispatches; DROP TABLE character_pvp_training_skills; DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE character_social_links; DROP TABLE account_social_requests; DROP TABLE account_social_links; PRAGMA user_version=87; CREATE VIEW account_social_requests AS SELECT 1 AS collision");
+            Execute("DROP TABLE character_epic_production; DROP TABLE quest_eligibility_mail_dispatches; DROP TABLE character_pvp_training_skills; DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE character_social_links; DROP TABLE account_social_requests; DROP TABLE account_social_links; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=87; CREATE VIEW account_social_requests AS SELECT 1 AS collision");
             Reject<InvalidDataException>(() => new CharacterRepository(path), "撞名视图拒绝升级");
             That(Scalar("PRAGMA user_version") == 87 && Scalar("SELECT count(*) FROM sqlite_schema WHERE name='character_social_links'") == 0,
                 "迁移失败回滚全部新表和版本");

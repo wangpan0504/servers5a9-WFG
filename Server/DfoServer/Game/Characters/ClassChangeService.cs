@@ -66,7 +66,7 @@ internal sealed class ClassChangeService(ItemCatalog items, CharacterCatalog cha
         byte target = checked((byte)(requestedTarget | stage << 4));
         var learning = QuestProfessionReward.Prepare(before, target, before.Level, before.Learning, skills, now);
         var candidate = before with { GrowType = target, Learning = learning,
-            Skills = learning.Trees.Single(tree => tree.Context == 0).Skills.Select(value => new CharacterSkill(value.Id, value.Level)).ToArray() };
+            Skills = learning.Trees.Single(tree => tree.Context == learning.ActiveContext).Skills.Select(value => new CharacterSkill(value.Id, value.Level)).ToArray() };
         // 副手武器必须先卸下；只核验转职相关的技能穿戴资格，不借此追查历史等级或契约穿戴。
         foreach (var equipped in before.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment &&
             item.Position.Index != InventoryCreatureSkinService.AuraTargetSlot))

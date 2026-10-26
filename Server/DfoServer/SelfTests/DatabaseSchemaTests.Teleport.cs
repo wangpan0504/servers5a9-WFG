@@ -22,6 +22,7 @@ internal static partial class DatabaseSchemaTests
             { Inventory = InventorySnapshot.Empty with { Gold = 9876 } });
         using (var db = Open(path))
         {
+            RemoveSkillTreeExpansionSchema(db);
             Execute(db, """
                 ALTER TABLE character_teleport_cooldowns DROP COLUMN upgrade_aura_until;
                 ALTER TABLE character_teleport_cooldowns DROP COLUMN party_aura_until;
@@ -71,11 +72,14 @@ internal static partial class DatabaseSchemaTests
         using var partyOwner = new AccountOwners().Acquire("party-test", () => { });
         var partyRole = repository.Create(partyOwner, new NewCharacter("PartyCD", new(38, 1, 450, 234), null));
         using (var db = Open(partyPath))
+        {
+            RemoveSkillTreeExpansionSchema(db);
             Execute(db, """
                 ALTER TABLE character_teleport_cooldowns DROP COLUMN party_aura_until;
                 INSERT INTO character_teleport_cooldowns VALUES(1,'party-test',1000,2000,3000);
                 PRAGMA user_version=80;
                 """);
+        }
         foreach (string scenario in new[] { "wrong-type", "missing-check", "late-failure" })
         {
             string damaged = Path.Combine(root, "party-" + scenario + ".db");

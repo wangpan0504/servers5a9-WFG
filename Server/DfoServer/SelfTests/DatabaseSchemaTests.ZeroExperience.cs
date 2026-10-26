@@ -65,6 +65,7 @@ internal static partial class DatabaseSchemaTests
 
     static void RewindZeroExperience(SqliteConnection db)
     {
+        RemoveSkillTreeExpansionSchema(db);
         using var tx = db.BeginTransaction();
         using var query = db.CreateCommand(); query.Transaction = tx;
         foreach (var row in new[] { (Table: SettlementProficiencySchema.Growth, Current: ZeroExperienceDungeonSchema.NewGrowth, Previous: ZeroExperienceDungeonSchema.OldGrowth),

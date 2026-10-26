@@ -49,6 +49,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         ushort cargoCapacity = before.CargoCapacity;
         var serviceWallet = before.AccountWallet;
         var serviceInventory = before;
+        bool unlockSkillTree = false;
         foreach (var requested in request.Items)
         {
             var product = shop.Product(requested.CommodityId);
@@ -95,7 +96,27 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 total += product.CeraPrice;
                 var template = !devilProduct && CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
                     contracts?.Recognizes(product.ItemId) != true ? catalog.Get(product.ItemId) : null;
-                if (cargo.AccountTiers.Any(tier => tier.ProductId == product.CommodityId))
+                if (catalog.IsSkillTreeExpansion(product.ItemId))
+                {
+                    if (unlockSkillTree || product.Count != 1 || !character.Learning.Initialized ||
+                        character.Learning.SelectedTree >= 0 || template is null || !template.AllowsUse(character.Level, character.Job) ||
+                        !InventoryMoveService.RequiredSkillSatisfied(character, template)) return InventoryResult.Reject(17);
+                    unlockSkillTree = true;
+                    // 历史误发的有效背包券优先兑换一张；仓库物品不由商城跨容器消费。
+                    var tool = paid.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == product.ItemId &&
+                        item.Core.Kind == template.Kind && item.Core.IsStackable && item.Core.EquipmentLockId == 0 && !item.Core.IsRental &&
+                        !item.IsExpired(now.ToUnixTimeSeconds())).OrderBy(item => item.Position.Index).FirstOrDefault();
+                    if (tool is not null)
+                    {
+                        var consumed = InventoryDeleteService.Plan(paid, tool.Position, tool.Core.Value, 1);
+                        if (!consumed.Accepted) return InventoryResult.Reject(17);
+                        paid = consumed.Plan!.After;
+                        total -= product.CeraPrice;
+                        product = product with { CeraPrice = 0 };
+                        Deadline(tool.ExpireTime);
+                    }
+                }
+                else if (cargo.AccountTiers.Any(tier => tier.ProductId == product.CommodityId))
                 {
                     var tier = cargo.Next(paid.AccountCargo.Capacity);
                     if (tier is null || tier.ProductId != product.CommodityId || product.ItemId != tier.ToolItemId ||
@@ -219,7 +240,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             after = after with { Items = after.Items.Where(item => item.Position != nameTag.Position).Append(nameTag).ToImmutableArray() };
         after = after with { AccountWallet = after.AccountWallet with { CharacterSlotCapacity = characterSlots } };
         receipt = new(products.ToImmutableArray(), bonuses);
-        return new(true, 0, new(before, after with { CargoCapacity = cargoCapacity }, "cash_shop_buy", new(character, deadline), overflow));
+        return new(true, 0, new(before, after with { CargoCapacity = cargoCapacity }, "cash_shop_buy", new(character, deadline), overflow)
+        { UnlockSkillTree = unlockSkillTree });
 
         void Deadline(long? value)
         {

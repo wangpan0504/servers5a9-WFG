@@ -16,6 +16,10 @@ internal sealed record CharacterSkillTree(byte Context, ushort Sp, ushort Tp, IR
 }
 internal sealed record CharacterLearningState(ulong Experience, IReadOnlyList<CharacterSkillTree> Trees)
 {
+    // -1为未开通；0/1同时表示已开通和持久化当前方案。未开通仍使用第一树。
+    public int SelectedTree { get; init; } = -1;
+    public byte ActiveContext => SelectedTree == 1 ? (byte)1 : (byte)0;
+    public byte TreeWireValue => SelectedTree < 0 ? byte.MaxValue : checked((byte)SelectedTree);
     // null 表示存量角色的额外来源尚未确认；不能把历史余额推断成赠点。
     public int? BonusSp { get; init; }
     public int? BonusTp { get; init; }
@@ -26,7 +30,7 @@ internal sealed record CharacterLearningState(ulong Experience, IReadOnlyList<Ch
 
     public void Validate()
     {
-        if (Experience > long.MaxValue || Trees.Count is not (0 or 2) || BonusSp is < 0 or > 65535 || BonusTp is < 0 or > 65535 || ExpertContractExpiresAt < 0)
+        if (SelectedTree is < -1 or > 1 || SelectedTree >= 0 && Trees.Count != 2 || Experience > long.MaxValue || Trees.Count is not (0 or 2) || BonusSp is < 0 or > 65535 || BonusTp is < 0 or > 65535 || ExpertContractExpiresAt < 0)
             throw new InvalidDataException("经验或技能树状态非法");
         if (Trees.Count == 0)
             return;

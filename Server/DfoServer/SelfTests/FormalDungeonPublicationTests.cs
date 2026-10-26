@@ -139,6 +139,13 @@ internal static class FormalDungeonPublicationTests
             await SkillProjection.PublishGrowthAsync(context, baseline, committed with { Learning = baseline }, "same", "combos", () => true);
             await SkillProjection.PublishGrowthAsync(context, baseline, updated, "stale", "combos", () => false);
             Check(stream.Frames.Count == 9, "绑定未变及过期成长差量不发送技能包");
+            var selectedSecond = baseline with { SelectedTree = 1 };
+            var firstOnly = committed with { Learning = selectedSecond with { Trees = [updated.Learning.Trees[0], baseline.Trees[1]] } };
+            await SkillProjection.PublishGrowthAsync(context, selectedSecond, firstOnly, "second_page", "combos", () => true);
+            var secondDeltas = stream.Frames.Skip(9).Select(frame => SkillPacketsTests.DecodeSuccess(frame.AsSpan(16), allowEmpty: true)).ToArray();
+            Check(secondDeltas.Length == 2 && secondDeltas[0].Context == 0 && secondDeltas[1].Context == 1 &&
+                secondDeltas[1].Skills.Length == 0 && secondDeltas[1].Sp == baseline.Trees[1].Sp,
+                "当前第二树时备用树成长差量最后恢复第二方案，不强制回第一页");
         }
         async Task EntryRejectionAsync()
         {

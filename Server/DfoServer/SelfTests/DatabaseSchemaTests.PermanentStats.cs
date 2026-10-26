@@ -19,7 +19,10 @@ internal static partial class DatabaseSchemaTests
             using var owner = new AccountOwners().Acquire("permanent-schema", () => { });
             var role = repository.Create(owner, new NewCharacter("PermOld", new(38, 1, 450, 234), null));
             using (var db = Open(path))
+            {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "DROP TABLE character_permanent_stats; PRAGMA user_version=67");
+            }
             string previous = Snapshot(path);
             using (var db = Open(path))
             {

@@ -161,7 +161,7 @@ internal sealed partial class CharacterRepository : IExpertJobSetter
             {
                 ExpertJobType = 0,
                 Learning = learning,
-                Skills = learning.Initialized ? learning.Trees.Single(tree => tree.Context == 0).Skills
+                Skills = learning.Initialized ? learning.Trees.Single(tree => tree.Context == learning.ActiveContext).Skills
                     .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id).ToArray() : committed.Skills,
                 ExpertJobExperience = 0,
                 ExpertJobRecipes = System.Collections.Immutable.ImmutableHashSet<int>.Empty,

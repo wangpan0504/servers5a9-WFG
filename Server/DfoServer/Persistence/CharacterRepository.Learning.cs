@@ -10,7 +10,7 @@ internal sealed partial class CharacterRepository
     public Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning)
     {
         learning.Validate();
-        if (!expected.Learning.Initialized || !learning.Initialized || learning.Experience != expected.Learning.Experience ||
+        if (!expected.Learning.Initialized || !learning.Initialized || learning.Experience != expected.Learning.Experience || learning.SelectedTree != expected.Learning.SelectedTree ||
             learning.BonusSp != expected.Learning.BonusSp || learning.BonusTp != expected.Learning.BonusTp || learning.ExpertContractExpiresAt != expected.Learning.ExpertContractExpiresAt ||
             learning.Trees.Any(tree =>
             {
@@ -27,7 +27,9 @@ internal sealed partial class CharacterRepository
     public Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null) => owner.Execute(() =>
     {
         learning.Validate();
-        if (!learning.Initialized || learning.Experience != expected.Learning.Experience)
+        if (!learning.Initialized || learning.Experience != expected.Learning.Experience ||
+            learning.SelectedTree != expected.Learning.SelectedTree &&
+            (expected.Learning.SelectedTree < 0 || learning.SelectedTree < 0 || !SameLearningSkills(learning with { SelectedTree = expected.Learning.SelectedTree }, expected.Learning)))
             throw new InvalidDataException("学习事务必须包含两树且不能修改经验");
         if (totalSp is < 0 or > 65535 || totalSp.HasValue && (!learning.BonusSp.HasValue || learning.Trees.Any(tree => tree.Sp > totalSp.Value)))
             throw new InvalidDataException("技能余额超出规划的总来源");
@@ -69,7 +71,7 @@ internal sealed partial class CharacterRepository
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException("Character revision or owner changed");
         WriteLearning(db, transaction, expected.Id, learning);
-        // context0为既有角色技能投影及工具读取的主树；费用与全部绑定同事务写入。
+        // 当前方案镜像供装备资格及工具读取；费用与全部绑定同事务写入。
         CharacterSkill[] skills = WriteCanonicalSkills(db, transaction, expected.Id, learning);
         CharacterLearningState committed = ReadLearning(db, expected.Id, transaction);
         var skillSwitch = ReadSkillSwitchInventory(db, expected.Id, transaction);
@@ -85,7 +87,7 @@ internal sealed partial class CharacterRepository
 
     private static CharacterSkill[] WriteCanonicalSkills(SqliteConnection db, SqliteTransaction transaction, ushort id, CharacterLearningState learning)
     {
-        CharacterSkill[] skills = learning.Trees.Single(tree => tree.Context == 0).Skills
+        CharacterSkill[] skills = learning.Trees.Single(tree => tree.Context == learning.ActiveContext).Skills
             .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id).ToArray();
         using var command = db.CreateCommand();
         command.Transaction = transaction;
@@ -110,7 +112,7 @@ internal sealed partial class CharacterRepository
 
     // 经验存于characters；只有学习内容变化才需要写两树及主树投影。
     private static bool SameLearningSkills(CharacterLearningState current, CharacterLearningState expected) =>
-        current.BonusSp == expected.BonusSp && current.BonusTp == expected.BonusTp &&
+        current.SelectedTree == expected.SelectedTree && current.BonusSp == expected.BonusSp && current.BonusTp == expected.BonusTp &&
         current.ExpertContractExpiresAt == expected.ExpertContractExpiresAt && current.Trees.Count == expected.Trees.Count &&
         current.Trees.OrderBy(tree => tree.Context).Zip(expected.Trees.OrderBy(tree => tree.Context)).All(pair =>
             pair.First.SameCombos(pair.Second) && pair.First.Context == pair.Second.Context && pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&
@@ -124,6 +126,10 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$id", id);
+        command.CommandText = "UPDATE characters SET selected_skill_tree=$tree WHERE id=$id";
+        command.Parameters.AddWithValue("$tree", learning.SelectedTree);
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("Missing skill tree owner");
+        command.Parameters.RemoveAt("$tree");
         if (learning.BonusSp is int bonus)
         {
             command.CommandText = "INSERT INTO character_skill_point_sources(character_id,bonus_sp) VALUES($id,$bonus) ON CONFLICT(character_id) DO UPDATE SET bonus_sp=$bonus";
@@ -198,6 +204,8 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$id", id);
         command.CommandText = "SELECT experience FROM characters WHERE id=$id";
         ulong experience = checked((ulong)(long)command.ExecuteScalar()!);
+        command.CommandText = "SELECT selected_skill_tree FROM characters WHERE id=$id";
+        int selectedTree = checked((int)(long)command.ExecuteScalar()!);
         command.CommandText = "SELECT bonus_sp FROM character_skill_point_sources WHERE character_id=$id";
         int? bonus = command.ExecuteScalar() is long value ? checked((int)value) : null;
         command.CommandText = "SELECT bonus_tp FROM character_tp_sources WHERE character_id=$id";
@@ -237,7 +245,7 @@ internal sealed partial class CharacterRepository
                 if (!combos.TryGetValue(context, out var list)) combos[context] = list = [];
                 list.Add(new(checked((ushort)comboReader.GetInt32(1)), Array.AsReadOnly(children)));
             }
-        if (balances.Count == 0 && experience == 0 && !bonus.HasValue && !tpBonus.HasValue && expires == 0)
+        if (balances.Count == 0 && experience == 0 && !bonus.HasValue && !tpBonus.HasValue && expires == 0 && selectedTree == -1)
             return CharacterLearningState.Uninitialized;
         var state = new CharacterLearningState(experience, Array.AsReadOnly(balances.OrderBy(pair => pair.Key)
             .Select(pair => new CharacterSkillTree(pair.Key, pair.Value.Sp, pair.Value.Tp, pair.Value.Skills.AsReadOnly())
@@ -247,7 +255,7 @@ internal sealed partial class CharacterRepository
                     .OrderBy(combo => pair.Value.Skills.Where(skill => skill.Id == combo.Root).Select(skill => (int)skill.Slot)
                         .DefaultIfEmpty(int.MaxValue).First()).ToArray()) : Array.Empty<SkillCombo>()
             }).ToArray()))
-        { BonusSp = bonus, BonusTp = tpBonus, ExpertContractExpiresAt = expires };
+        { BonusSp = bonus, BonusTp = tpBonus, ExpertContractExpiresAt = expires, SelectedTree = selectedTree };
         state.Validate();
         return state;
     }

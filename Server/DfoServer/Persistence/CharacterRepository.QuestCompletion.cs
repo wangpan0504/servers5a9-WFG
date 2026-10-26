@@ -121,7 +121,7 @@ internal sealed partial class CharacterRepository
                     current.AccountCompletedQuests.SequenceEqual(plan.AccountCompletedAfter) && QuestCycle.SameClaims(current.AccountQuestDailyClaims,plan.AccountDailyClaimsAfter) &&
                     QuestCycle.SameAnswers(current.QuestAnswers,plan.AnswersAfter) && QuestCycle.SameAnswers(current.AccountQuestAnswers,plan.AccountAnswersAfter) &&
                     SameLearning(current.Learning, plan.TargetLearning) &&
-                    current.Skills.SequenceEqual(!plan.UpdatesLearning ? expected.Skills : plan.TargetLearning.Trees.Single(tree => tree.Context == 0).Skills
+                    current.Skills.SequenceEqual(!plan.UpdatesLearning ? expected.Skills : plan.TargetLearning.Trees.Single(tree => tree.Context == plan.TargetLearning.ActiveContext).Skills
                         .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id)) &&
                     SameInventory(current.Inventory, new(after, after, "quest_receipt_projection"));
                 return Result(current, granted, true, projection, checked((uint)(I("after_experience") - I("before_experience"))));

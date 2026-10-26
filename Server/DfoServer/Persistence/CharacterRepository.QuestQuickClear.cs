@@ -208,7 +208,7 @@ internal sealed partial class CharacterRepository
             CompletedQuests = plan.CompletedAfter.ToArray(), AccountCompletedQuests = plan.AccountCompletedAfter.ToArray(), QuestAnswers = plan.AnswersAfter, Inventory = persistedInventory,
             EquipmentSlotFlags=plan.EquipmentSlotFlagsAfter,GrowType=plan.ProfessionGrowType ?? expected.GrowType,
             Level=plan.TargetLevel,Learning=plan.TargetLearning,Skills=SameLearning(plan.TargetLearning,expected.Learning) ? expected.Skills :
-                plan.TargetLearning.Trees.Single(row=>row.Context==0).Skills.Select(row=>new CharacterSkill(row.Id,row.Level)).OrderBy(row=>row.Id).ToArray() };
+                plan.TargetLearning.Trees.Single(row=>row.Context==plan.TargetLearning.ActiveContext).Skills.Select(row=>new CharacterSkill(row.Id,row.Level)).OrderBy(row=>row.Id).ToArray() };
 
         bool Matches(Character actual,Character target) => actual.Id == target.Id && actual.Slot == target.Slot &&
             actual.Name == target.Name && actual.Revision == target.Revision && actual.Job == target.Job && actual.GrowType == target.GrowType &&

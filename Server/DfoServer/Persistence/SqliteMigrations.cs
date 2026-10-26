@@ -211,6 +211,8 @@ internal static class SqliteMigrations
         new(97, "代号希望按实例与接取去重领奖", static (db,tx) => Execute(db,tx,OperationHopeRewardSchema.Definition.Replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ",StringComparison.Ordinal))),
         new(98, "组队任务物件助战场景回执", UpgradePartyQuestLifecycle),
         new(99, "角色称号替换动画", AddCloneTitleColumn),
+        new(100, "角色技能方案开通及当前方案", static (db, tx) => Execute(db, tx,
+            "ALTER TABLE characters ADD COLUMN selected_skill_tree INTEGER NOT NULL DEFAULT -1 CHECK(typeof(selected_skill_tree)='integer' AND selected_skill_tree BETWEEN -1 AND 1)")),
     ];
 
     internal const string PvpPrivateCharacterSchema = """
@@ -2140,6 +2142,7 @@ internal static class SqliteMigrations
         "SELECT key,value FROM adventure_ledger_meta LIMIT 0",
         "SELECT emotion FROM characters LIMIT 0",
         "SELECT clone_title_item_id FROM characters LIMIT 0",
+        "SELECT selected_skill_tree FROM characters LIMIT 0",
         "SELECT blacklist_count FROM characters LIMIT 0",
         "SELECT charac_no,selected,cube_type FROM cube_premium LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",

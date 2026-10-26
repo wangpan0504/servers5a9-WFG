@@ -44,6 +44,7 @@ internal static class SkillLearning
         var result = Initialize(character.Job, character.Skills, definition);
         return result.Success ? result with { State = result.State! with
         {
+            SelectedTree = character.Learning.SelectedTree,
             Experience = character.Learning.Experience,
             BonusSp = character.Level == 1 ? 0 : null,
             BonusTp = character.Level == 1 ? 0 : null,

@@ -18,8 +18,8 @@ internal static class SkillProjection
         if (!before.Initialized || !character.Learning.Initialized)
             throw new InvalidDataException("成长差量缺少提交前后技能树");
         bool restoreContext = false;
-        // ACK29会切换当前树；先更新备用树，最后恢复本服当前使用的主树0。
-        foreach (var tree in character.Learning.Trees.OrderByDescending(tree => tree.Context))
+        // ACK29会切换当前树；先更新备用树，最后恢复角色持久化的当前方案。
+        foreach (var tree in character.Learning.Trees.OrderBy(tree => tree.Context == character.Learning.ActiveContext))
         {
             var old = before.Trees.Single(value => value.Context == tree.Context).Skills.ToDictionary(skill => skill.Id);
             var current = tree.Skills.ToDictionary(skill => skill.Id);
@@ -31,10 +31,10 @@ internal static class SkillProjection
             if (removed.Length > 0)
                 await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Growth(tree.Context, character.Learning, removed),
                     skillAction + "_removed_" + tree.Context, canSend);
-            if (changed.Length > 0 || tree.Context == 0 && restoreContext)
+            if (changed.Length > 0 || tree.Context == character.Learning.ActiveContext && restoreContext)
                 await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Growth(tree.Context, character.Learning, changed),
                     skillAction + "_changed_" + tree.Context, canSend);
-            restoreContext |= tree.Context == 1 && (removed.Length > 0 || changed.Length > 0);
+            restoreContext |= tree.Context != character.Learning.ActiveContext && (removed.Length > 0 || changed.Length > 0);
         }
         await PublishCombosAsync(context, character, comboAction, canSend);
     }

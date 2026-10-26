@@ -51,6 +51,11 @@ internal sealed partial class GameSession
     public SkillLearningResult CustomizeSkills(IReadOnlyList<SkillCommandChange> changes, bool reset, SkillLearningCatalog catalog) =>
         ApplySkillLearning(character => SkillCustomization.Commands(character.Job, character.Learning, changes, reset, catalog));
 
+    public SkillLearningResult ChangeSkillTree(byte current) => ApplySkillLearning(character =>
+        !character.Learning.Initialized || current > 1 || character.Learning.SelectedTree != current
+            ? new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>())
+            : new(SkillLearningFailure.None, character.Learning with { SelectedTree = 1 - current }, Array.Empty<LearnedSkill>()));
+
     // 自动组合排列由客户端本地生成：510只确认开始，随后的第一次508才是客户端提交的排列。
     // 窗口绑定选择代次，避免之后的手工保存被误判为自动组合。
     private (byte Context, long ExpiresAt, long SelectionEpoch)? autoComboPending;
@@ -157,6 +162,12 @@ internal sealed partial class GameSession
                 return result;
             if (!ReferenceEquals(result.State, character.Learning))
                 Selected = repository.CommitLearning(owner, character, result.State!, result.TotalSp, result.TotalTp);
+            if (Selected!.Learning.SelectedTree != character.Learning.SelectedTree)
+            {
+                // 切页后旧页的自动排列及重建回传窗口失效，不能误处理新页编辑。
+                autoComboPending = null;
+                comboRebuildPending = null;
+            }
             return result with
             {
                 State = Selected!.Learning,

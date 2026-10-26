@@ -61,16 +61,16 @@ internal static class PvpTrainingSkillsTests
             var manual=PvpTrainingSkillPlan.Prepare(reloaded,request with {Mode=0},quests,Learn)!;
             repo.CommitPvpTrainingSkills(owner,manual);
             Reject<InvalidOperationException>(()=>repo.CommitPvpTrainingSkills(owner,plan),"后续训练改变后不能用旧计划恢复旧投影");
-            Sql("DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; PRAGMA user_version=95");
+            Sql("DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=95");
             var existing=new CharacterRepository(path).LoadCharacter(owner,original.Slot);
             That(existing.PvpTrainingSkills is not null && existing.Revision==reloaded.Revision+1,
                 "升级遇到已存在的同合同训练表保留既有快照，不重复发点或清数据");
             // 精确v94升级：旧库没有训练表，不伪造历史训练或改普通双树。
-            Sql("DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE character_pvp_training_skills; PRAGMA user_version=94");
+            Sql("DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE character_pvp_training_skills; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=94");
             var upgraded=new CharacterRepository(path).LoadCharacter(owner,original.Slot);
             That(upgraded.PvpTrainingSkills is null && JsonSerializer.Serialize(upgraded.Learning)==normal,
                 "v94迁移新增空训练域，保留普通技能与已有任务事实");
-            Sql("DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE character_pvp_training_skills; CREATE TABLE character_pvp_training_skills(character_id INTEGER PRIMARY KEY,state_json TEXT,operation_id TEXT,before_revision INTEGER); PRAGMA user_version=94");
+            Sql("DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE character_pvp_training_skills; CREATE TABLE character_pvp_training_skills(character_id INTEGER PRIMARY KEY,state_json TEXT,operation_id TEXT,before_revision INTEGER); ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=94");
             Reject<InvalidDataException>(()=>new CharacterRepository(path),"已存在但缺约束的训练表不能靠IF NOT EXISTS混过升级校验");
             void Sql(string sql)
             {

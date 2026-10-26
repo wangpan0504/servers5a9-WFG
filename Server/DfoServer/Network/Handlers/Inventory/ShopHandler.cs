@@ -51,6 +51,8 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
                 CashShopPackets.Success(product, receipt.Bonuses.GetValueOrDefault(product.CommodityId)),
                 "cash_shop_buy_success", () => context.Session.CanPublishInventory(committed));
         await projection.RefreshAsync(context, result);
+        if (result.Plan?.UnlockSkillTree == true)
+            await projection.RefreshSkillTreeAsync(context, committed.Character, () => context.Session.CanPublishInventory(committed));
         return CommandResult.Handled;
     }
 

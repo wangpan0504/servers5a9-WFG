@@ -104,7 +104,7 @@ internal sealed partial class CharacterRepository
         bool learningChanged = !SameLearningSkills(current.Learning, plan.Learning);
         if (learningChanged)
             WriteLearning(db, tx, expected.Id, plan.Learning);
-        bool skillsChanged = !current.Skills.SequenceEqual(plan.Learning.Trees.Single(tree => tree.Context == 0).Skills
+        bool skillsChanged = !current.Skills.SequenceEqual(plan.Learning.Trees.Single(tree => tree.Context == plan.Learning.ActiveContext).Skills
             .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id));
         if (skillsChanged)
             WriteCanonicalSkills(db, tx, expected.Id, plan.Learning);

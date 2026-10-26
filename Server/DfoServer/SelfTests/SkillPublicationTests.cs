@@ -68,7 +68,7 @@ internal static class SkillPublicationTests
         session.MarkReady();
         using var log = new ServerLog(root);
         var commands = new GameCommandRegistry();
-        new SkillHandler(catalog, log).Register(commands);
+        new SkillHandler(catalog, log, null!).Register(commands);
         commands.Seal();
         using var stop = new CancellationTokenSource();
         using var stream = new FailedOutput(() =>
@@ -101,7 +101,7 @@ internal static class SkillPublicationTests
         Character original = repository.Create(owner, SkillRepositoryTests.Fixture("SkillSend", towns, characters, catalog));
         var commands = new GameCommandRegistry();
         using var log = new ServerLog(root);
-        new SkillHandler(catalog, log).Register(commands);
+        new SkillHandler(catalog, log, null!).Register(commands);
         commands.Seal();
         var session = new GameSession(repository, towns, owner);
         session.Select(original.Slot);
@@ -204,7 +204,7 @@ internal static class SkillPublicationTests
         session.MarkReady();
         using var log = new ServerLog(root);
         var commands = new GameCommandRegistry();
-        new SkillHandler(catalog, log).Register(commands);
+        new SkillHandler(catalog, log, null!).Register(commands);
         commands.Seal();
         using var stop = new CancellationTokenSource();
         using var stream = new HeldOutput();

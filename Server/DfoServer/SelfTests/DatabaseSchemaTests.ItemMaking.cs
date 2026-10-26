@@ -22,6 +22,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(path))
         {
             Check(Query(db, "SELECT count(*) FROM item_making_skill_info") is 0L, "新角色默认零熟练度，不额外写空行");
+            RemoveSkillTreeExpansionSchema(db);
             Execute(db, "DROP TABLE item_making_skill_info; DROP TABLE character_weekly_dungeon; PRAGMA user_version=75");
             using var tx = db.BeginTransaction();
             ItemMakingSkillSchema.Upgrade(db, tx);
@@ -77,7 +78,11 @@ internal static partial class DatabaseSchemaTests
         var oldRepository = new CharacterRepository(preview);
         var oldRole = oldRepository.Create(owner, new NewCharacter("MakingOld", new(38, 1, 450, 234), null)
             { Inventory = InventorySnapshot.Empty with { Gold = 700, ItemMakingSkills = ItemMakingSkillState.Empty.Set(2, 3) } });
-        using (var db = Open(preview)) Execute(db, "DROP TABLE character_weekly_dungeon; PRAGMA user_version=76");
+        using (var db = Open(preview))
+        {
+            RemoveSkillTreeExpansionSchema(db);
+            Execute(db, "DROP TABLE character_weekly_dungeon; PRAGMA user_version=76");
+        }
         oldRepository = new(preview);
         Check(JsonSerializer.Serialize(oldRepository.LoadCharacter(owner, oldRole.Slot)) == JsonSerializer.Serialize(oldRole) &&
             QueryOn(preview, "SELECT count(*) FROM character_weekly_dungeon") is 0L &&

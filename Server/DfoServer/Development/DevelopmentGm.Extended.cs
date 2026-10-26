@@ -409,7 +409,7 @@ internal static partial class DevelopmentGm
             {
                 var character = Target(live, owners, repository, request, false, (_, value) => value);
                 var learning = character.Learning;
-                var tree = learning.Initialized ? learning.Trees.FirstOrDefault(value => value.Context == 0) : null;
+                var tree = learning.Initialized ? learning.Trees.FirstOrDefault(value => value.Context == learning.ActiveContext) : null;
                 return Ok(new { name = character.Name, rev = character.Revision, level = character.Level, initialized = learning.Initialized,
                     bonusSp = learning.BonusSp, bonusTp = learning.BonusTp, sp = tree?.Sp, tp = tree?.Tp });
             }
@@ -428,7 +428,7 @@ internal static partial class DevelopmentGm
             {
                 var character = Target(live, owners, repository, request, false, (_, value) => value);
                 var learning = character.Learning;
-                var tree = learning.Initialized ? learning.Trees.FirstOrDefault(value => value.Context == 0) : null;
+                var tree = learning.Initialized ? learning.Trees.FirstOrDefault(value => value.Context == learning.ActiveContext) : null;
                 var rows = tree is null
                     ? character.Skills.Select(skill => new { id = (int)skill.Id, name = catalog.SkillName(character.Job, skill.Id), level = (int)skill.Level })
                     : tree.Skills.Select(skill => new { id = (int)skill.Id, name = catalog.SkillName(character.Job, skill.Id), level = (int)skill.Level });

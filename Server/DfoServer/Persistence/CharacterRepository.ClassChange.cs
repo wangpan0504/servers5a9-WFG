@@ -12,6 +12,7 @@ internal sealed partial class CharacterRepository
         plan.Learning.Validate();
         if (plan.Request.Target is < 1 or > 5 || (expected.GrowType & 15) == plan.Request.Target ||
             (plan.GrowType & 15) != plan.Request.Target || (plan.GrowType & 240) != (expected.GrowType & 240) ||
+            plan.Learning.SelectedTree != expected.Learning.SelectedTree ||
             plan.Learning.Experience != expected.Learning.Experience || plan.Learning.BonusSp != expected.Learning.BonusSp ||
             plan.Learning.BonusTp != expected.Learning.BonusTp || plan.Learning.ExpertContractExpiresAt != expected.Learning.ExpertContractExpiresAt ||
             !plan.Inventory.Changed || plan.Inventory.Reason != "class_change" ||

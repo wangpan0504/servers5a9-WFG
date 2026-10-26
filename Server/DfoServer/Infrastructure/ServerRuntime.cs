@@ -336,7 +336,7 @@ internal static class ServerRuntime
                 itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, clock),
             new AdventureCapsuleHandler(new Game.Adventure.AdventureCapsuleService(adventureCatalog, growth), levelProjection, clock),
             new AdventureWeeklyHandler(adventureWeeklyProjection),
-            new SkillHandler(learning, log),
+            new SkillHandler(learning, log, inventoryProjection),
             new SkillSwitchInventoryHandler(skillSwitchInventory, log),
             new TownHandler(projection, log),
             new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
