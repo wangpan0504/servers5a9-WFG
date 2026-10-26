@@ -395,6 +395,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 Convert.ToHexString(SHA256.HashData(request.Body)))
             { Participants = statistics.Participants.Select(value => new NativeDungeonDeathParticipant(value.Kind,value.ObjectKey,
                 value.CumulativeHpDecrease,value.PositiveHpDecreaseCount)).ToImmutableArray() };
+            if (context.Session.FormalEnteredDungeonId is 11006 or 11007)
+                return await AltarMonsterDeathAsync(context, observation);
             audit = observation;
             result = context.Session.ObserveFormalDungeonDeath(observation,rewards,growth);
         }

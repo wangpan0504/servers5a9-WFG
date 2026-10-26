@@ -1,4 +1,7 @@
 using System.Security.Cryptography;
+using DfoServer.Game.Dungeons;
+using DfoServer.Game.Session;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Protocol;
 
@@ -10,7 +13,23 @@ internal sealed partial class DungeonHandler
     {
         if (!DungeonAltarRequests.TryParseDeaths(request.Body, out var keys)) return CommandResult.Unhandled;
         var receipt = context.Session.ObserveDungeonAltarDeaths(keys, Convert.ToHexString(SHA256.HashData(request.Body)));
-        // 重发255时也尝试恢复原SQL结果；已经冻结的奖励不会再次抽取。
+        return await PublishAltarDeathsAsync(context, receipt, keys.Length, CmdPacketType.DIE_BLOOD_MONSTER);
+    }
+
+    async Task<CommandResult> AltarMonsterDeathAsync(GameConnectionContext context, NativeDungeonDeathObservation observation)
+    {
+        var receipt = context.Session.ObserveDungeonAltarDeath(observation);
+        if (receipt is not null)
+            await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(checked((ushort)observation.MonsterKey), [],
+                context.Session.FormalEnteredDungeonId),
+                "formal_altar_monster_death", () => context.Session.CanPublishDungeonAltar(receipt));
+        return await PublishAltarDeathsAsync(context, receipt, 1, CmdPacketType.DIE_MONSTER, observation.MonsterKey);
+    }
+
+    async Task<CommandResult> PublishAltarDeathsAsync(GameConnectionContext context, DungeonAltarReceipt? receipt,
+        int count, CmdPacketType opcode, uint? objectKey = null)
+    {
+        // 重发39/255时也尝试恢复原SQL结果；已经冻结的奖励不会再次抽取。
         if (altarRewards is not null && context.Session.BeginDungeonAltarSettlement(altarRewards, growth) is { } settlement)
             receipt = settlement;
         else if (altarRewards is not null && context.Altar is not null && context.Session.WaitDungeonAltarRevival() is { } waiting)
@@ -20,7 +39,7 @@ internal sealed partial class DungeonHandler
             return CommandResult.Handled;
         }
         log.Write("formal_altar_deaths", new { Connection = context.Id, Accepted = receipt is not null,
-            Count = keys.Length, receipt?.InstanceId, receipt?.DisplayRound, receipt?.Completed });
+            Count = count, Opcode = (ushort)opcode, ObjectKey = objectKey, receipt?.InstanceId, receipt?.DisplayRound, receipt?.Completed });
         if (receipt is not null && context.Altar is not null) await context.Altar.WakeAsync(receipt);
         return CommandResult.Handled;
     }
