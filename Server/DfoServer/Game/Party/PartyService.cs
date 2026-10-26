@@ -23,7 +23,7 @@ internal sealed record PartyResult(ushort Error, PartyNotice[] Notices)
     public bool Accepted => Error == 0;
 }
 
-internal sealed class PartyService
+internal sealed partial class PartyService
 {
     sealed class Invitation(PartyMember source, PartyMember target, uint peer, DateTimeOffset expires)
     {
