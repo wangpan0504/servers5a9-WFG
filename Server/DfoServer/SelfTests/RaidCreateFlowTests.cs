@@ -45,6 +45,7 @@ internal static class RaidCreateFlowTests
         RaidMemberTests.RunCore();
         AntonRaidStartTests.RunCore();
         AntonRaidResourceTests.RunCore();
+        AntonRaidBattleTests.RunCore();
         LukeRaidResourceTests.RunCore();
 
         var tokens = new List<PvfToken>();

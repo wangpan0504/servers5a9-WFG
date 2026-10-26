@@ -7,6 +7,12 @@ internal static class DungeonSettlementProjection
 {
     internal static async Task EnableAsync(GameConnectionContext context, ushort? reportedBossKey = null)
     {
+        if (context.Session.RaidCombatView() is not null)
+        {
+            if (context.Session.CompleteCurrentRaidCombatDungeon() is not null)
+                context.Session.PublishRaidCombat();
+            return;
+        }
         if (context.Session.EnableFormalDungeonSettlement(reportedBossKey) is not { } completion) return;
         bool Guard() => context.Session.CanPublishDungeonSettlement(completion.Receipt);
         if (completion.Receipt.Entry.IsPractice)
