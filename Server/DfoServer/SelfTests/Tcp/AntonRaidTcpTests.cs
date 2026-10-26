@@ -10,7 +10,7 @@ using static DfoServer.Testing.TcpPeer;
 namespace DfoServer.Testing;
 
 // 独立按客户端读宽解码；覆盖最低十人与满团五个分队，未闭合成功链时仍不得假开战。
-internal static class AntonRaidTcpTests
+internal static partial class AntonRaidTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -151,10 +151,16 @@ internal static class AntonRaidTcpTests
             That(beforeCost.Leader == afterCost.Leader && beforeCost.Members.SequenceEqual(afterCost.Members) &&
                 fixture.Snapshot() == saved && Assets() == assets,
                 "有票成员及无票团外者的658两种已证值、未知值及畸形666不改变团长、完整名册、门票、位置、疲劳或回执");
+            // 保留满团重复拒绝覆盖；开战成功链已接入，改用实际未编队门禁。
+            leader.Send(669, Build(w => { w.Write(0u); w.Write((uint)peers[19].Id); w.Write(0u); }));
+            Bytes(Until(leader, 1, 669).Body, [1], "满团成员暂时取消分队");
+            foreach (var peer in peers) Drain(peer);
             for (int attempt = 0; attempt < 2; attempt++)
             {
-                leader.Send(666); Bytes(Until(leader, 1, 666).Body, [0, 19, 0], "二十人五个满分队仍不能绕过未闭合的开战成功链");
+                leader.Send(666); Bytes(Until(leader, 1, 666).Body, [0, 19, 0], "二十人满团仍不能绕过未编队门禁，重复请求保持拒绝");
             }
+            leader.Send(669, Build(w => { w.Write(0u); w.Write((uint)peers[19].Id); w.Write(5u); }));
+            Bytes(Until(leader, 1, 669).Body, [1], "恢复原第五分队");
             // 后续请求的应答是排空屏障；所有成员都检查，不能只观察队长或靠等待无包证明无副作用。
             foreach (var peer in peers) Drain(peer);
             That(fixture.Snapshot() == saved && Assets() == assets, "满团重复拒绝不扣任何成员门票、不迁移或建立副本/奖励回执");
@@ -203,7 +209,12 @@ internal static class AntonRaidTcpTests
             That(afterAppointment.Members.SequenceEqual(beforeAppointment.Members), "委任保留二十人槽序及五个满分队");
             leader.Send(669, Build(w => { w.Write(1u); w.Write((uint)peers[7].Id); w.Write(0u); })); Drain(leader);
             leader.Send(666); Bytes(Until(leader, 1, 666).Body, [0, 8, 0], "旧团长重复委任无效且开战权限立即失效");
-            peers[7].Send(666); Bytes(Until(peers[7], 1, 666).Body, [0, 19, 0], "新团长也不能绕过未闭合成功链");
+            peers[7].Send(669, Build(w => { w.Write(0u); w.Write((uint)peers[19].Id); w.Write(0u); }));
+            Bytes(Until(peers[7], 1, 669).Body, [1], "新团长取消末成员分队");
+            foreach (var peer in peers) Drain(peer);
+            peers[7].Send(666); Bytes(Until(peers[7], 1, 666).Body, [0, 19, 0], "新团长也不能绕过未编队门禁");
+            peers[7].Send(669, Build(w => { w.Write(0u); w.Write((uint)peers[19].Id); w.Write(5u); }));
+            Bytes(Until(peers[7], 1, 669).Body, [1], "新团长恢复原第五分队");
             peers[7].Send(669, Build(w => { w.Write(1u); w.Write((uint)leader.Id); w.Write(0u); }));
             Bytes(Until(peers[7], 1, 669).Body, [1], "新团长可以交回权限");
             foreach (var peer in peers) Drain(peer);
@@ -312,17 +323,19 @@ internal static class AntonRaidTcpTests
                     "再次登录不复活旧攻坚队成员，角色持久状态保持一致");
             }
             That(Assets() == assets, "退队、重选、断线及跨频道重登保留完整物品UID/核心、疲劳和副本账本");
+            foreach (var peer in peers.Take(20)) peer.Dispose();
+            await VerifyStartSuccessAsync(fixture, endpoints[19], observer, peers);
         }
         finally { foreach (var peer in peers) peer.Dispose(); }
         await fixture.StopAsync();
         var starts = fixture.Events().Where(e => e.GetProperty("Kind").GetString() == "raid_start_request")
-            .Select(e => e.GetProperty("Detail")).Where(e => e.GetProperty("Reason").GetString() == "formal-raid-dungeon-index-missing").ToArray();
+            .Select(e => e.GetProperty("Detail")).Where(e => e.GetProperty("Reason").GetString() == "squads-unassigned").ToArray();
         That(starts.Length == 5 && starts.Count(e => e.GetProperty("Members").GetInt32() == 10) == 2 &&
             starts.Count(e => e.GetProperty("Members").GetInt32() == 20) == 3 && starts.All(e => e.GetProperty("Error").GetInt32() == 19 &&
             e.GetProperty("MissingDungeons").GetInt32() == 14 && e.GetProperty("MissingMaps").GetInt32() == 72 &&
             e.GetProperty("TutorialScripts").GetInt32() == 14 && e.GetProperty("MissingItems").GetInt32() == 0 &&
             e.GetProperty("DefinitionIssues").GetInt32() == 0 && e.GetProperty("DungeonSample").GetString()!.Split(',').Length <= 8),
-            "真实START日志区分主表缺项与备用脚本存在，诊断只输出有界样本");
+            "未编队拒绝保留有界资源诊断，但主地图缺项不再阻塞已闭合的开战候战室路径");
     }
 
     internal static byte[] Peer(ushort character, uint peer, bool invite) => Build(w =>
@@ -351,11 +364,12 @@ internal static class AntonRaidTcpTests
     }
     static void Validate(WirePacket packet)
     {
-        That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 7 or 8 or 590 or 591 or 592 or 593,
+        That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 7 or 8 or 590 or 591 or 592 or 593 or 598,
             $"只允许已知旁路通知，实际{packet.Kind}/{packet.Opcode}");
         if (packet.Opcode == 591 && U32(packet.Body, 4) == 3) ReadMembers(packet.Body, 8);
         if (packet.Opcode == 592) That(packet.Body.Length == 2 + 3 * U16(packet.Body), "候战列表完整u16数量及条目");
         if (packet.Opcode == 593) That(packet.Body.Length == (packet.Body[0] == 0 ? 4 : 3), "候战增删字段完整");
+        if (packet.Opcode == 598) That(packet.Body.Length == 4 + 5 * U32(packet.Body), "598完整费用状态快照读宽");
     }
     internal static (ushort Leader, (ushort Character, byte Squad)[] Members) Information(TcpPeer peer, uint key, byte mode)
     {
