@@ -31,6 +31,7 @@ internal static class DailyRetainedBoosterTests
         That(createdReward.ExpireTime == DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds(),
             "真实522每日奖励不永久化，统一Create写入下一服务日截止");
         DailyItemExpirationTests.RunResources(towns, resources);
+        WeeklyItemExpirationTests.RunResources(towns, resources);
         var first = service.Open(character, new(65, 1), out var receipt, now);
         That(first.Accepted && first.Plan!.After.Find(source.Position) == source && receipt!.Rewards is [{ ItemId: Reward, Count: 10 }] &&
             first.Plan.After.Items.Where(item => item.Core.ItemId == Reward).Sum(item => item.Core.Count) == 10 &&

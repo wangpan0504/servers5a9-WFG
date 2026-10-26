@@ -58,8 +58,9 @@ internal sealed partial class GameSession
 
     void InvalidateRaids()
     {
+        if (raidCombat is { Battle.Kind: RaidKind.Luke } previous) previous.Battle.DetachStart(previous.Actor);
         raidCombat = null;
-        antonDungeonAdmission = null;
+        raidDungeonAdmission = null;
         var registry = raidRegistry;
         raidRegistry = null;
         registry?.RemoveSession(this, SelectionEpoch);

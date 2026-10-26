@@ -93,6 +93,54 @@ internal static partial class FormalDungeonTcpTests
                 "入场提交时扣掉 30 张 3330（NOTI 14 删除第 121 格、库内数量归零、入场状态落库）");
             Load(peer); peer.Expect(0,36); peer.Barrier();
         }
+        // 时空裂缝（[inferno dungeon]）：地轨中心 7539，op16 [4]=2、[7]=1。整条路线是深渊场地，没有密门房间：
+        // DUNGEON_INFO 的 [10,11] 保持 FF，入场一次扣 30 张 3330 与 6 点疲劳。
+        var riftArea = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 7539));
+        var riftDone = new HashSet<int>(riftArea.Quests) { 2900, 10110 };
+        var riftWalk = riftArea.Map(riftDone).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(riftDone.Contains)).Bounds;
+        var riftPosition = new Location(riftArea.Town, riftArea.Area,
+            checked((ushort)(riftWalk.X + riftWalk.Width / 2)), checked((ushort)(riftWalk.Y + riftWalk.Height / 2)));
+        Character riftCharacter;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var candidate = CharacterCreation.Prepare("RiftTcp", resources.Characters.Get(0), riftPosition, riftPosition, resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0, 0, 95, candidate.InitialLearning with
+                { Experience = growth.GetLevelStartExperience(95) }, resources.Learning);
+            var repository = new CharacterRepository(fixture.Database);
+            riftCharacter = repository.Create(owner, candidate with { Level = 95, AcceptedStoryLevel = 95,
+                CompletedQuests = riftDone.ToArray(), InitialLearning = learning });
+            var riftItems = resources.ItemResources;
+            var riftInventory = new InventoryService(riftItems.Items, riftItems.GoldLimits, riftItems.EpicPieces);
+            riftCharacter = InventoryService.Commit(repository, owner, riftCharacter, riftInventory.Grant(riftCharacter, [new(3330, 30)]));
+        }
+        fixture.Sql("UPDATE character_fatigue SET remaining=8,used=maximum-8 WHERE character_id=$p0", riftCharacter.Id);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(riftCharacter.Slot, prepared: true, resumeTown: true, room: false);
+            SelectMap(peer);
+            byte[] riftRequest = new byte[25];
+            BinaryPrimitives.WriteUInt32LittleEndian(riftRequest, 7539);
+            riftRequest[4] = 2;
+            riftRequest[7] = 1;
+            riftRequest[9] = riftRequest[10] = byte.MaxValue;
+            peer.Send(16, riftRequest);
+            var information = peer.Expect(0, 28).Body;
+            var map = peer.Expect(0, 29).Body;
+            That(information.Length == 36 && U32(information, 0) == 7539 && information[4] == 2 &&
+                information[10] == 255 && information[11] == 255 && U16(information, 14) == 1 &&
+                information[18] == 0x0B && map[7] == 1,
+                "时空裂缝TCP：7539 放行，DUNGEON_INFO 带深渊标志但没有密门坐标，START_MAP 模式字节=1");
+            peer.Expect(0, 14);
+            peer.Barrier();
+            That(Tickets(peer.Id) == 0 &&
+                fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[2L]] &&
+                fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
+                "时空裂缝TCP：入场一次扣 30 张 3330 与 6 点疲劳，只建立一个尝试");
+            Load(peer);
+            peer.Expect(0, 36);
+            peer.Barrier();
+        }
         // #616：同一连接先拒绝省略模式的请求，再验证合法超星空完整入场和两种材料落库。
         var cosmoArea = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
             resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 7191));

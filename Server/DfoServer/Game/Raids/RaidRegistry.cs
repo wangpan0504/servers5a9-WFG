@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Party;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Channels;
 
@@ -40,6 +41,20 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
     readonly Dictionary<GameSession, RaidActor> observers = [];
     long revision;
     DateTimeOffset Now => (clock ?? TimeProvider.System).GetUtcNow();
+
+    internal RaidPreparationResult CommitPreparation(RaidPreparationPlan plan, PartyService ordinary,
+        RaidPartyBatch batch, CancellationToken cancellation)
+    {
+        lock (gate)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(batch.Raid, plan) || !plan.IsCurrent(this))
+                return RaidPreparationResult.Reject("raid-preparation-stale");
+        }
+        // 全团current owner阻止成员、编队、委任、离队、开战与当前会话失效；旧generation收尾只匹配旧Session/epoch。
+        // 复验至安装没有await、SQL或外部回调。不持目录gate等待Party gate，兼容普通队伍中的StartedRaid查询。
+        return ordinary.CommitRaidPreparation(batch, cancellation);
+    }
 
     public int Count { get { lock (gate) return parties.Count; } }
     public RaidParty? Find(RaidActor actor) { lock (gate) return FindCore(actor); }

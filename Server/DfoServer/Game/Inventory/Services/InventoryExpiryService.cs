@@ -30,7 +30,9 @@ internal static class InventoryExpiryService
         ItemTemplate template;
         try { template = catalog.Get(item.Core.ItemId); }
         catch (InvalidDataException) { return item; }
-        if (template.Expiration.Days <= 0 && template.Expiration.AbsoluteTime <= 0)
+        // 周删除旧实例没有已冻结截止，不能借历史修复写成永久或重算下一周。
+        if (template.Expiration.WeeklyDeleteDay is not null ||
+            template.Expiration.Days <= 0 && template.Expiration.AbsoluteTime <= 0)
             return item;
         return item with { Core = item.Core with { ExpireTime = int.MaxValue } };
     }

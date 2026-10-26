@@ -7,12 +7,12 @@ internal sealed partial class GameSession
     public bool CanPublishNativeScene(FormalDungeonReceipt capture) => owner.Execute(() =>
         Ready && owner.Generation == capture.Generation && SelectionEpoch == capture.SelectionEpoch &&
         Selected?.Id == capture.Character.Id && Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement &&
-        formalDungeon is { } dungeon && IsCurrentAntonDungeon(dungeon.Entry) && dungeon.Run.Snapshot.Identity == capture.Snapshot.Identity &&
+        formalDungeon is { } dungeon && IsCurrentRaidDungeon(dungeon.Entry) && dungeon.Run.Snapshot.Identity == capture.Snapshot.Identity &&
         dungeon.Run.Snapshot.CurrentMap == capture.Snapshot.CurrentMap);
 
     public NpcFavorDungeonCapture? CaptureNpcFavorDungeon() => owner.Execute(() =>
         Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement && formalDungeon is { } dungeon &&
-        IsCurrentAntonDungeon(dungeon.Entry) &&
+        IsCurrentRaidDungeon(dungeon.Entry) &&
         dungeon.Run.ClearFact is { } clear && clear.ClearMap == dungeon.Run.Snapshot.CurrentMap &&
         !dungeon.CharacterDead && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement &&
         !HasActiveDungeonContinuation && !HasPendingQuestReplay && dungeon.PendingTutorialClear is null

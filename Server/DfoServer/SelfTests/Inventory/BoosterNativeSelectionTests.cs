@@ -143,10 +143,10 @@ internal static class BoosterNativeSelectionTests
             That(result.Accepted && result.Plan!.After.Find(new(InventoryListType.Main, 65))!.Core ==
                 new ItemCore(10007742, ItemKind.Consumable, 1) { ExpireTime = expected }, "普通期限完整保留 " + expiration);
         }
-        foreach (var expiration in new[] { new ItemExpiration(AbsoluteTime: 2_000_000_000), new ItemExpiration(DailyDelete: 2) })
+        foreach (var expiration in new[] { new ItemExpiration(AbsoluteTime: 2_000_000_000), new ItemExpiration(DailyDelete: 2), new ItemExpiration(WeeklyDeleteDay: 7) })
         {
             fixture.Put(Template(10007742) with { Expiration = expiration });
-            Reject(fixture, fixture.Role(), "奖励已过期或每日删除语义未支持时整次拒绝");
+            Reject(fixture, fixture.Role(), "奖励已过期或周期删除语义未支持时整次拒绝");
         }
     }
 
@@ -342,6 +342,14 @@ internal static class BoosterNativeSelectionTests
             if (reset <= now) reset = reset.AddDays(1);
             long daily = Math.Min(reset.ToUnixTimeSeconds(), 2_145_823_200);
             deadline = deadline > 0 ? Math.Min(deadline, daily) : daily;
+        }
+        if (expiry.WeeklyDeleteDay is { } weekday)
+        {
+            var local = now.ToOffset(TimeSpan.FromHours(8));
+            var reset = new DateTimeOffset(local.Year, local.Month, local.Day, 6, 0, 0, local.Offset);
+            while (reset <= now || (int)reset.DayOfWeek != weekday) reset = reset.AddDays(1);
+            long weekly = Math.Min(reset.ToUnixTimeSeconds(), 2_145_823_200);
+            deadline = deadline > 0 ? Math.Min(deadline, weekly) : weekly;
         }
         return checked((int)deadline);
     }

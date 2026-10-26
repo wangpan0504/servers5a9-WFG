@@ -14,14 +14,18 @@ internal sealed record RaidStarted(Guid InstanceId, DateTimeOffset StartedAt,
     ImmutableArray<(ushort Character, byte Slot, byte Squad)> Participants, byte Phase = 0);
 internal sealed record RaidStartReservation(RaidActor Actor, Character Expected, Location Position, InventoryPlan Inventory);
 internal sealed record RaidStartReceipt(RaidParty Party, ImmutableArray<RaidStartReservation> Reservations,
-    ImmutableArray<Character> Characters, PartyNotice[] Squads, RaidCost Cost);
+    ImmutableArray<Character> Characters, PartyNotice[] Squads, RaidCost Cost)
+{
+    public bool Resync { get; init; }
+    public AntonRaidBattleView? Battle { get; init; }
+}
 internal sealed record RaidStartResult(ushort Error, string Reason, RaidStartReceipt? Receipt = null, bool Replay = false);
 internal sealed record RaidCostStatus(ushort Character, byte State, short Count);
 
 // 全团费用与位置沿同一外层事务提交；回执只用于本次发布，不存另一份在线资产。
 internal interface IRaidStartStore
 {
-    ImmutableArray<Character> CommitRaidStart(Guid instance, IReadOnlyList<RaidStartReservation> reservations);
+    ImmutableArray<Character> CommitRaidStart(RaidKind kind, RaidDefinition definition, Guid instance, IReadOnlyList<RaidStartReservation> reservations);
 }
 
 // 发起连接已持自己的门禁；其余门禁只尝试获取，忙时立即拒绝，避免与既有组队命令相互等待。
@@ -50,12 +54,17 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
     {
         var result = actor.Owner.Execute(() =>
         {
+            var departingBattle = actor.Session.CurrentRaidBattle(actor);
+            var beforeBattle = departingBattle?.View;
             var change = registry.Leave(actor, target);
+            if (change is { Before.Type: 1, Before.Started: { } started, Removed: { } departed })
+                departed.Session.DetachRaidCombatStart(departed, started.InstanceId);
             PartyNotice[] notices = change?.Before.Started is not null && change.Removed is { } removed
                 ? parties.DetachNotices(removed.Session) : [];
-            return (Change: change, Notices: notices);
+            return (Change: change, Notices: notices, Battle: departingBattle, BeforeBattle: beforeBattle);
         });
         if (result.Notices.Length != 0) parties.Publish(result.Notices);
+        if (result.Battle is { Kind: RaidKind.Luke } battle && !ReferenceEquals(battle.View, result.BeforeBattle)) battle.Publish(battle.View);
         return result.Change;
     }
 
@@ -70,37 +79,16 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         if (expected.Members.Length > definition.MemberMax || expected.Members.Length is < 10 or > 20 ||
             expected.Members.Any(m => m.Squad is < 1 or > 5) || expected.Members.GroupBy(m => m.Squad).Any(g => g.Count() > 4))
             return new(19, "squads-unassigned");
-        if (room.Town is < 0 or > 255 || room.Area is < 0 or > 255 ||
-            !towns.Areas.TryGetValue(((byte)room.Town, (byte)room.Area), out var area))
-            return new(19, "waiting-room-landing-unavailable");
-
         var now = (clock ?? TimeProvider.System).GetUtcNow();
-        var plans = ImmutableArray.CreateBuilder<RaidStartReservation>(expected.Members.Length);
-        foreach (var member in expected.Members.OrderBy(m => m.Slot))
-        {
-            var captured = member.Actor.Session.CaptureRaidStart(member.Actor);
-            if (captured is null) return new(19, "member-state-changed");
-            var completed = QuestCompletion(captured);
-            var target = new Location(area.Town, area.Area, 0, 0);
-            if (towns.DestinationAdmission(target, captured.Level, completed) != "ready") return new(19, "waiting-room-access-denied");
-            // 候战室19/2没有[gate]；按现有城镇入口算法读取当前任务阶段地图的真实门或到达标记。
-            var landing = towns.Entrance(captured.Position, target, completed) ?? area.Map(completed).Links
-                .Where(l => l.Gate.Door).OrderBy(l => l.Town).ThenBy(l => l.Area)
-                .Select(l => towns.Entrance(new(l.Town, l.Area, 0, 0), target, completed)).FirstOrDefault(p => p is not null);
-            if (landing is null) return new(19, "waiting-room-landing-unavailable");
-            // 数量取匹配 PVF 的 ENTRY COST，集中在资源声明；不解释658的0/1为扣费命令。
-            var payment = InventoryMaterialConsumptionService.Plan(captured.Inventory, [new(cost.ItemId, cost.Count)], pieces, now);
-            if (!payment.Accepted || payment.Plan is null) return new(19, "entry-cost-insufficient");
-            plans.Add(new(member.Actor, captured, landing, payment.Plan));
-        }
-        var reservations = plans.ToImmutable();
+        var reservations = PlanReservations(expected, cost, room, towns, pieces, now, out var rejection);
+        if (rejection is not null) return new(19, rejection);
         try
         {
             return AccountOwners.Lease.ExecuteRaid(reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
                 registry.CommitStart(actor, expected, reservations, cost, () => parties.CreateRaidSquads(expected, () =>
                 {
                     var instance = Guid.NewGuid();
-                    var committed = store.CommitRaidStart(instance, reservations);
+                    var committed = store.CommitRaidStart(RaidKind.Anton, definition, instance, reservations);
                     for (int i = 0; i < reservations.Length; i++)
                         reservations[i].Actor.Session.InstallRaidStart(reservations[i], committed[i]);
                     return (new RaidStarted(instance, now, expected.Members.OrderBy(m => m.Slot)
@@ -109,6 +97,34 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         }
         catch (InvalidOperationException) when (reservations.Any(r => !r.Actor.IsCurrent))
         { return new(19, "member-owner-changed"); }
+    }
+
+    internal static ImmutableArray<RaidStartReservation> PlanReservations(RaidParty expected, RaidCost cost, RaidWaitingRoom room,
+        TownCatalog towns, EpicPieceCatalog pieces, DateTimeOffset now, out string? rejection)
+    {
+        if (room.Town is < 0 or > 255 || room.Area is < 0 or > 255 ||
+            !towns.Areas.TryGetValue(((byte)room.Town, (byte)room.Area), out var area))
+        { rejection = "waiting-room-landing-unavailable"; return []; }
+        var plans = ImmutableArray.CreateBuilder<RaidStartReservation>(expected.Members.Length);
+        foreach (var member in expected.Members.OrderBy(m => m.Slot))
+        {
+            var captured = member.Actor.Session.CaptureRaidStart(member.Actor);
+            if (captured is null) { rejection = "member-state-changed"; return []; }
+            var completed = QuestCompletion(captured);
+            var target = new Location(area.Town, area.Area, 0, 0);
+            if (towns.DestinationAdmission(target, captured.Level, completed) != "ready") { rejection = "waiting-room-access-denied"; return []; }
+            // 复用城镇入口算法读取真实门或到达标记，不猜候战室坐标。
+            var landing = towns.Entrance(captured.Position, target, completed) ?? area.Map(completed).Links
+                .Where(l => l.Gate.Door).OrderBy(l => l.Town).ThenBy(l => l.Area)
+                .Select(l => towns.Entrance(new(l.Town, l.Area, 0, 0), target, completed)).FirstOrDefault(p => p is not null);
+            if (landing is null) { rejection = "waiting-room-landing-unavailable"; return []; }
+            // 数量取匹配 PVF 的 ENTRY COST，集中在资源声明；不解释658的0/1为扣费命令。
+            var payment = InventoryMaterialConsumptionService.Plan(captured.Inventory, [new(cost.ItemId, cost.Count)], pieces, now);
+            if (!payment.Accepted || payment.Plan is null) { rejection = "entry-cost-insufficient"; return []; }
+            plans.Add(new(member.Actor, captured, landing, payment.Plan));
+        }
+        rejection = null;
+        return plans.ToImmutable();
     }
 
     static IReadOnlySet<int> QuestCompletion(Character character) => DfoServer.Game.Quests.QuestEligibility.Completed(character);

@@ -17,6 +17,8 @@ internal static class ClientSettingsTcpTests
         const string account = "settingsalice", otherAccount = "settingsbob";
         byte[] initial = Payload(204, 7), shared = Payload(204, 31), first = Payload(512, 63), second = Payload(512, 127);
         byte[] otherGame = Payload(204, 193), otherCharacter = Payload(512, 251);
+        Write(first, 48, 0);
+        Write(second, 48, ushort.MaxValue);
         Write(initial, 90, 0);
         Write(shared, 90, 75);
         ushort firstId, secondId, otherId;
@@ -74,7 +76,7 @@ internal static class ClientSettingsTcpTests
             peer.Create("SettingOther");
             otherId = peer.Id;
             peer.Select();
-            That(peer.ClientSettings.Length == 0, "未保存的另一账号只在实体前初始化，后段不重复重置");
+            That(peer.ClientSettings is [{ Opcode: 390 }], "未保存账号后段仅初始化角色光环选项，不重复重置主区");
             Save(peer, 447, otherCharacter);
             peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM account_client_settings WHERE account=$p0", otherAccount) is [[0L]],
@@ -190,11 +192,25 @@ internal static class ClientSettingsTcpTests
             byte[]? combos = job == 9 ? StoredCombos(fixture, peer.Id) : null;
             peer.Select(combos: combos);
             peer.Barrier();
-            That(peer.ClientSettings.Length == 0, "新账号所有职业只在实体前初始化，后段不重复重置");
+            That(peer.ClientSettings is [{ Opcode: 390 }], "新账号所有职业补角色光环初始化，不重复重置主区");
             That(fixture.Query("SELECT count(*) FROM account_client_settings WHERE account=$p0", account) is [[0L]] &&
                 fixture.Query("SELECT count(*) FROM character_game_settings WHERE character_id=$p0", peer.Id) is [[0L]],
                 "尚未回送197时，预载不主动将合成标记写入存档");
             string assets = Assets(fixture);
+            if (job == 0)
+            {
+                byte[] marker = new byte[204];
+                for (int slot = 0; slot < 102; slot++) Write(marker, slot, 0x7fff);
+                Save(peer, 197, marker);
+                peer.Barrier();
+                ReturnSelection(peer);
+                Select(peer, 0, marker);
+                CheckGame(fixture, account, marker);
+                That(fixture.Query("SELECT hex(game_options) FROM character_game_settings WHERE character_id=$p0", peer.Id)
+                    is [[string storedMarker]] && storedMarker == Convert.ToHexString(marker) &&
+                    fixture.Query("SELECT count(*) FROM character_client_settings WHERE character_id=$p0", peer.Id) is [[0L]],
+                    "原生主区标记完整保留，补发角色选项不写库；前后390独立验证100/1及光环开启");
+            }
             byte[] main = TypedMain(15, 100, 100, 100, 100);
             foreach (ushort scale in new ushort[] { 0, 25, 50, 75, 100 })
             {
@@ -213,7 +229,7 @@ internal static class ClientSettingsTcpTests
     static void SelectHotkeys(TcpPeer peer, ushort slot, byte profile, byte[] text)
     {
         peer.Select(slot, settings: [(454, [profile, .. Blob(text)])]);
-        That(peer.ClientSettings is [{ Opcode: 454 }], "没有主区存档时后段只回放454，不重复发送主区初始化");
+        That(peer.ClientSettings is [{ Opcode: 390 }, { Opcode: 454 }], "无主区存档时角色初始化先于键位，不重复发送主区初始化");
         peer.Barrier();
     }
 
@@ -247,7 +263,7 @@ internal static class ClientSettingsTcpTests
         {
             peer.Create("OtherKeys");
             peer.Select();
-            That(peer.ClientSettings.Length == 0, "其他账号不接收已保存账号键位");
+            That(peer.ClientSettings is [{ Opcode: 390 }], "其他账号只初始化自身角色选项，不接收已保存账号键位");
             Exit(peer);
         }
         using (var peer = Open(fixture, HotkeyAccount))
@@ -344,7 +360,7 @@ internal static class ClientSettingsTcpTests
         byte[] body = [.. Blob(main), .. Blob(bank0), .. Blob(bank1)];
         peer.Select(slot, settings: [(173, body)], appearanceFlags: Flags(main));
         That(peer.InitialGameOptions.SequenceEqual(body), "本人实体前173在已存主设置后回放两个银行，长度头与顺序精确");
-        That(peer.ClientSettings is [{ Opcode: 173 }], "后段仅回放173，不重复初始化客户端模型");
+        That(peer.ClientSettings is [{ Opcode: 173 }, { Opcode: 390 }], "主区及银行后初始化角色选项，不重复初始化主区模型");
         peer.Barrier();
     }
     static byte[] Blob(byte[] payload) => Build(w =>
@@ -360,7 +376,10 @@ internal static class ClientSettingsTcpTests
         (ushort Opcode, byte[] Body)[] settings = character is null ? [(173, gameBody)] : [(173, gameBody), (390, Blob(Character(character, projected)))];
         peer.Select(slot, settings: settings, appearanceFlags: Flags(projected), combos: combos);
         That(peer.InitialGameOptions.SequenceEqual(gameBody), "本人Actor/Player之前预载完整主设置，UI大小和当前角色字段与后段回放一致");
-        That(peer.ClientSettings.Length == settings.Length, "完整设置按173、390顺序位于地区绑定之后及124之前");
+        That(peer.ClientSettings.Length == (character is null ? settings.Length + 1 : settings.Length), "完整设置按173、390顺序位于地区绑定之后及124之前");
+        That(U16(peer.ClientSettings.Single(packet => packet.Opcode == 390).Body, 100) ==
+            (character is null || Read(character, 48) == ushort.MaxValue ? 1 : Read(character, 48)),
+            "角色光环缺省显示，已存关闭保留，换角和服务重建不串用另一角色开关");
         peer.Barrier();
     }
 
@@ -536,6 +555,7 @@ internal static class ClientSettingsTcpTests
     {
         byte[] projected = (byte[])character.Clone();
         Write(projected, 46, Read(main, 68));
+        if (Read(projected, 48) == ushort.MaxValue) Write(projected, 48, 1);
         Write(projected, 49, Read(main, 13));
         return projected;
     }

@@ -48,7 +48,7 @@ internal static class ServerRuntime
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null,
         GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
         GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null,
-        CharacterGrowthCatalog? growthCatalog = null)
+        CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures);
         var questStages = QuestStageGraph.Build(quests);
@@ -189,8 +189,22 @@ internal static class ServerRuntime
             itemResources.Items, repository, tagEvildomProjection, log);
         var raidCatalog = GameWorld.Raids.RaidCatalog.Load(pvf).PrepareResources(pvf, dungeonCatalog, itemResources.Items);
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
+        var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock);
+        if (lukeStart?.UnavailableReason(raidCatalog.Find(1)) is { } unavailable)
+        {
+            log.Write("resource_warning", new { Source = "Luke raid start policy", Reason = unavailable });
+            lukeStart = null;
+        }
+        var lukeRun = lukeStart is not null && lukeStartPolicy?.Run is { } runPolicy &&
+            raidCatalog.Find(1)?.Resources?.EntryCatalog is { } runCatalog
+            ? new Game.Raids.LukeRaidDungeonService(raidRegistry, parties, runCatalog, runPolicy) : null;
+        if (lukeRun?.UnavailableReason is { } runUnavailable)
+        {
+            log.Write("resource_warning", new { Source = "Luke raid run policy", Reason = runUnavailable });
+            lukeRun = null;
+        }
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
-            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock));
+            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock), lukeStart);
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
         new DevilContractHandler(log, clock).Register(commands);
         var auctionProbe = Development.Auction.AuctionProbe.Parse(options.DevelopmentAuctionProbe);
@@ -318,7 +332,7 @@ internal static class ServerRuntime
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
-                despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun);
+                despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun,lukeRun);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -443,7 +457,7 @@ internal static class ServerRuntime
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock), inventoryProjection),
-            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun),
+            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
@@ -498,7 +512,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null, enableLukeRaidStart: lukeStart is not null);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;

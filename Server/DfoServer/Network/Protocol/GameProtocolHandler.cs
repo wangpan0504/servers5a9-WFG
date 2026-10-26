@@ -27,7 +27,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     TownPresence? presence = null,
     DfoServer.GameWorld.Dungeons.DungeonIncountCatalog? incounts = null, CharacterLevelProjection? levels = null,
     DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null,
-    DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null, Action<GameConnectionContext>? prepareDungeon = null) : IConnectionProtocol
+    DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null, Action<GameConnectionContext>? prepareDungeon = null, bool enableLukeRaidStart = false) : IConnectionProtocol
 {
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
@@ -93,14 +93,14 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             SocialPackets.Name(name), "account_friend_deleted", guard);
         ushort socialCharacter = 0;
         session.PartyNoticeArrived = notice => PartyProjection.Notice(context, notice);
-        session.RaidNoticeArrived = (change, actor) => RaidProjection.Notice(context, change, actor);
+        session.RaidNoticeArrived = (change, actor) => RaidProjection.Notice(context, change, actor, enableLukeRaidStart);
         session.RaidBattleNoticeArrived = (view, actor) => RaidCombatProjection.Notice(context, view, actor);
         session.RaidStartArrived = (receipt, actor) => RaidProjection.Started(context, projection, receipt, actor);
         session.RaidCostArrived = (rows, actor) => RaidProjection.Cost(context, rows, actor);
         session.RaidRecordNoticeArrived = (party, actor) => sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
-            RaidProjection.Record(party), "raid_record_updated", () => session.CanPublishRaid(actor, party));
+            RaidProjection.Record(party, enableLukeRaidStart), "raid_record_updated", () => session.CanPublishRaid(actor, party));
         session.RaidPeerNoticeArrived = (recipient, peer, peerId, invite) => RaidProjection.Peer(context, recipient, peer, peerId, invite);
-        session.RaidDirectoryNoticeArrived = (change, actor) => RaidProjection.Directory(context, change, actor);
+        session.RaidDirectoryNoticeArrived = (change, actor) => RaidProjection.Directory(context, change, actor, enableLukeRaidStart);
         session.RaidPeerRefused = actor => sender.Post(1, (ushort)CmdPacketType.RESPONSE_PEER,
             PartyPackets.Failure(133, 10), "raid_peer_refused", () => actor.IsCurrent);
         session.HasMultiplePartyMembers = () => parties?.HasMultipleMembers(session) == true;

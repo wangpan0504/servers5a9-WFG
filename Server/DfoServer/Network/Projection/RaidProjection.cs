@@ -7,7 +7,7 @@ namespace DfoServer.Network.Projection;
 
 internal static class RaidProjection
 {
-    public static void Directory(GameConnectionContext context, RaidDirectoryChange change, RaidActor recipient)
+    public static void Directory(GameConnectionContext context, RaidDirectoryChange change, RaidActor recipient, bool enableLuke = false)
     {
         bool Guard() => recipient.Session.CanPublishRaidDirectory(recipient, change);
         if (change.Party is { } party)
@@ -16,8 +16,8 @@ internal static class RaidProjection
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, RaidPackets.RemoveRecord(party.Key), "raid_record_removed", Guard);
             else
             {
-                context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, List(party), "raid_recruiting_record", Guard);
-                context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, Record(party), "raid_recruiting_updated", Guard);
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, List(party, enableLuke), "raid_recruiting_record", Guard);
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, Record(party, enableLuke), "raid_recruiting_updated", Guard);
             }
         }
         else if (change.Waiting is { } row)
@@ -33,26 +33,29 @@ internal static class RaidProjection
     }
     public static (ushort Character, byte[] Name, byte Squad)[] Members(RaidParty party) =>
         party.Members.OrderBy(m => m.Slot).Select(m => (m.Actor.Character, CharacterName.Encoding.GetBytes(m.Actor.Name), m.Squad)).ToArray();
-    public static byte[] Record(RaidParty party) => RaidPackets.UpdateRecord(party.Key, party.TitleBytes, party.Type,
+    public static byte[] Record(RaidParty party, bool enableLuke = false) => RaidPackets.UpdateRecord(party.Key, party.TitleBytes, party.Type,
         party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
-        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party));
-    public static byte[] List(RaidParty party) => RaidPackets.RaidList(party.Key, party.TitleBytes, party.Type,
+        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party, enableLuke));
+    public static byte[] List(RaidParty party, bool enableLuke = false) => RaidPackets.RaidList(party.Key, party.TitleBytes, party.Type,
         party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
-        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party));
+        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party, enableLuke));
 
-    internal static bool CanStart(RaidParty party) => party.Type == 0 && party.Started is null &&
+    internal static bool CanStart(RaidParty party, bool enableLuke = false) => (party.Type == 0 || party.Type == 1 && enableLuke) && party.Started is null &&
         party.Members.Length >= party.StartMinimum && party.Members.All(m => m.Squad != 0 && m.Actor.IsCurrent);
 
-    public static void Cost(GameConnectionContext context, RaidCostStatus[] rows, RaidActor recipient) =>
+    public static void Cost(GameConnectionContext context, RaidCostStatus[] rows, RaidActor recipient, Func<bool>? current = null) =>
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_ENTRY_COST_INFO, RaidPackets.EntryCosts(rows), "raid_entry_cost_snapshot",
-            () => recipient.IsCurrent);
+            () => recipient.IsCurrent && (current?.Invoke() ?? true));
 
     public static void Started(GameConnectionContext context, TownProjection town, RaidStartReceipt receipt, RaidActor recipient)
     {
         var party = receipt.Party;
         int index = Enumerable.Range(0, receipt.Reservations.Length).Single(i => receipt.Reservations[i].Actor.Character == recipient.Character);
         var character = receipt.Characters[index];
-        bool Guard() => recipient.IsCurrent && recipient.Session.StartedRaid?.InstanceId == party.Started!.InstanceId;
+        bool Guard() => recipient.IsCurrent && recipient.Session.StartedRaid?.InstanceId == party.Started!.InstanceId &&
+            (party.Type != (byte)RaidKind.Luke || recipient.Session.CanChangeTownParty &&
+                recipient.Session.CanPublishRaid(recipient, party) && ReferenceEquals(recipient.Session.Selected, character) &&
+                receipt.Battle is { } battle && recipient.Session.CanPublishRaidBattle(recipient, battle));
         bool ready = recipient.Owner.Execute(() =>
         {
             if (!Guard()) return false;
@@ -62,25 +65,31 @@ internal static class RaidProjection
         });
         if (!ready) return;
         var plan = receipt.Reservations[index].Inventory;
-        context.Sender.Post(0, (ushort)NotiPacketType.UPDATE_ITEM_LIST,
-            Builders.Inventory.InventoryPackets.Delta(character.Inventory, Game.Inventory.Models.InventoryListType.Main, plan.ChangedSlots.ToArray()),
-            "raid_start_cost_committed", Guard);
+        context.Sender.Post(0, (ushort)(receipt.Resync ? NotiPacketType.ITEM_LIST : NotiPacketType.UPDATE_ITEM_LIST),
+            receipt.Resync ? Builders.Inventory.InventoryPackets.Full(character.Inventory) :
+                Builders.Inventory.InventoryPackets.Delta(character.Inventory, Game.Inventory.Models.InventoryListType.Main, plan.ChangedSlots.ToArray()),
+            receipt.Resync ? "raid_start_inventory_resync" : "raid_start_cost_committed", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
             RaidPackets.UpdateRecord(party.Key, party.TitleBytes, party.Type, party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName),
                 party.Members.Single(m => m.Actor.Character == party.Leader).Squad), "raid_start_record", Guard);
         foreach (var notice in receipt.Squads.Where(n => ReferenceEquals(n.Recipient.Actor.Session, recipient.Session)))
-            PartyProjection.Notice(context, notice);
+        {
+            var original = notice.Guard;
+            PartyProjection.Notice(context, party.Type == (byte)RaidKind.Luke
+                ? notice with { Guard = () => Guard() && (original?.Invoke() ?? true) } : notice);
+        }
         var rows = receipt.Characters.Select(c => new RaidCostStatus(c.Id, 2, (short)Math.Min(short.MaxValue,
             c.Inventory.Items.Where(i => i.Position.List == Game.Inventory.Models.InventoryListType.Main &&
                 i.Core.ItemId == receipt.Cost.ItemId).Sum(i => (long)i.Core.Count)))).ToArray();
-        Cost(context, rows, recipient);
+        Cost(context, rows, recipient, party.Type == (byte)RaidKind.Luke ? Guard : null);
         // 594无载荷，先安装同分队普通Party；其后11/12按同一普通接收器幂等确认。
         context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "raid_prepare", Guard);
         recipient.Owner.Execute(() => { if (Guard()) town.QueueRaidArrival(context, character, Guard); return true; });
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE, RaidPackets.Started(party.Started!.Phase), "raid_started_state", Guard);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE,
+            receipt.Battle is { } battle ? RaidCombatPackets.State(battle) : RaidPackets.Started(party.Started!.Phase), "raid_started_state", Guard);
     }
 
-    public static void Notice(GameConnectionContext context, RaidChange change, RaidActor recipient)
+    public static void Notice(GameConnectionContext context, RaidChange change, RaidActor recipient, bool enableLuke = false)
     {
         if (change.Removed is { } removed && ReferenceEquals(removed.Session, recipient.Session) && removed.Epoch == recipient.Epoch)
         {
@@ -107,8 +116,8 @@ internal static class RaidProjection
                             member.Actor.Session.HasRaidKey(member.Actor, after.Key) && identity.IsCurrent());
         }
         // 只入原连接的有界发送队列，慢接收者不阻塞提交者或其它成员。
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, List(after), "raid_member_record", Guard);
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, Record(after), "raid_member_record_updated", Guard);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, List(after, enableLuke), "raid_member_record", Guard);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, Record(after, enableLuke), "raid_member_record_updated", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
             RaidPackets.OpenWithSquads(after.Key, Members(after)), "raid_members_updated", Guard);
     }

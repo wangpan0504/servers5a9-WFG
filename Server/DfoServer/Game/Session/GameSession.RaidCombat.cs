@@ -29,10 +29,49 @@ internal sealed partial class GameSession
         raidCombat = new(actor, battle); return true;
     });
 
+    // SQL前分配绑定并登记到尚未发布的新Battle；失败时整个对象丢弃，无Session状态写入。
+    bool MatchesRaidCombatActor(RaidActor actor) => ReferenceEquals(actor.Owner, owner) && ReferenceEquals(actor.Session, this) && actor.IsCurrent;
+
+    internal RaidCombatStartBinding? PrepareRaidCombatStart(RaidActor actor, AntonRaidBattle battle) =>
+        RaidCombatStartBinding.Prepare(this, actor, battle);
+
+    internal sealed class RaidCombatStartBinding
+    {
+        readonly GameSession session;
+        readonly RaidCombatBinding binding;
+        private RaidCombatStartBinding(GameSession session, RaidCombatBinding binding)
+        { this.session = session; this.binding = binding; }
+        internal static RaidCombatStartBinding? Prepare(GameSession session, RaidActor actor, AntonRaidBattle battle)
+        {
+            if (!session.Ready || session.raidCombat is not null || !ReferenceEquals(actor.Session, session) ||
+                !session.MatchesRaidCombatActor(actor) || !battle.JoinStart(actor)) return null;
+            return new(session, new(actor, battle));
+        }
+        public void Install() => binding.Actor.Owner.Execute(() =>
+        {
+            if (!session.Ready || !session.MatchesRaidCombatActor(binding.Actor) || session.raidCombat is not null)
+                throw new InvalidOperationException("攻坚开战绑定不再属于当前会话");
+            session.raidCombat = binding;
+            return true;
+        });
+    }
+
+    internal bool DetachRaidCombatStart(RaidActor actor, Guid instance) => owner.Execute(() =>
+    {
+        if (raidCombat is not { Battle.Kind: RaidKind.Luke } current || current.Actor != actor ||
+            current.Battle.Instance != instance || !MatchesRaidCombatActor(actor)) return false;
+        current.Battle.DetachStart(actor);
+        raidCombat = null;
+        return true;
+    });
+
     public bool BindRaidCombatDungeon(Guid instance, int phase) => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent && formalDungeon is { Run.ClearFact: null } dungeon &&
         raid.Battle.Instance == instance && raid.Battle.View.Phase == phase &&
         raid.Battle.BindDungeon(dungeon.Run.Snapshot.Identity, dungeon.Run.DungeonId));
+
+    internal AntonRaidBattle? CurrentRaidBattle(RaidActor actor) => owner.Execute(() =>
+        raidCombat is { } raid && raid.Actor == actor && actor.IsCurrent ? raid.Battle : null);
 
     public AntonRaidBattleView? RaidCombatView() => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent ? raid.Battle.View : null);
@@ -47,7 +86,7 @@ internal sealed partial class GameSession
     // 117协调已提交死亡，不能由695、客户端symbol或复制的ClearFact创建阶段胜利。
     public AntonRaidBattleChange? CompleteRaidCombatDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>
     {
-        if (raidCombat is not { } raid || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
+        if (raidCombat is not { } raid || raid.Battle.Kind == RaidKind.Luke || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
             receipt.Generation != owner.Generation || receipt.SelectionEpoch != SelectionEpoch ||
             receipt.Snapshot.Identity != dungeon.Run.Snapshot.Identity || dungeon.Run.ClearFact is not { } fact ||
             fact.Identity != receipt.Snapshot.Identity || !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap)) return null;
@@ -71,7 +110,8 @@ internal sealed partial class GameSession
     {
         var capture = owner.Execute(() =>
         {
-            if (!Ready || Selected is not { } character || raidCombat is not { } raid || !raid.Actor.IsCurrent) return null;
+            if (!Ready || Selected is not { } character || raidCombat is not { } raid || !raid.Actor.IsCurrent ||
+                raid.Battle.Kind != RaidKind.Anton) return null;
             var view = raid.Battle.View;
             int phase = view.Phase;
             if (view.State != AntonRaidBattleState.Reward)

@@ -106,6 +106,18 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
     }
     public int? BasisLevel { get; init; }
     public int? PlayerTeam { get; init; }
+    // 时空裂缝：没有密门柱子波次，深渊装备骰直接绑在终点 Boss 上，死亡时与"末波末杀"走同一条地面奖励事务。
+    public DungeonMonsterPlan WithHellRewardRolls(int rolls)
+    {
+        if (rolls <= 0) return this;
+        int index = -1;
+        for (int i = 0; i < Monsters.Count; i++)
+            if (Monsters[i].IsBoss && Monsters[i].CanReportDeath && !Monsters[i].IsFriendly) index = i;
+        if (index < 0) return this;
+        var monsters = Monsters.ToArray();
+        monsters[index] = monsters[index] with { HellRewardRolls = rolls };
+        return this with { Monsters = Array.AsReadOnly(monsters) };
+    }
     // 实验性（#259）：比赛副本的对阵表与对手；非比赛房间为 null。
     public DungeonTournamentPlan? Tournament { get; init; }
 

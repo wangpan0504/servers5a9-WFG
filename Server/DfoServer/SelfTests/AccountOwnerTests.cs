@@ -86,6 +86,7 @@ internal static class AccountOwnerTests
         That(failure is Microsoft.Data.Sqlite.SqliteException && customerPublications == 2 && ownerPublications == 2,
             "发布BUSY被隔离为发布故障不进入整请求重试");
         VerifyGroup();
+        VerifyRaidGroup();
         Console.WriteLine($"PASS {Count - checks} account owner assertions");
     }
 
@@ -130,4 +131,51 @@ internal static class AccountOwnerTests
         }
         finally { foreach (var member in members) member.Owner.Dispose(); }
     }
+
+    static void VerifyRaidGroup()
+    {
+        var owners = new AccountOwners();
+        var members = Enumerable.Range(0, 8).Select(i => (Owner: owners.Acquire("raid-lock-" + i, () => { }), Character: (ushort)(80 - i))).ToArray();
+        using var foreign = new AccountOwners().Acquire("foreign-raid-lock", () => { });
+        try
+        {
+            bool Rejected(Action action)
+            {
+                try { action(); return false; }
+                catch (InvalidOperationException) { return true; }
+            }
+            That(Rejected(() => AccountOwners.Lease.ExecuteGroup(members, () => true)), "普通ExecuteGroup上限仍为四人");
+            That(AccountOwners.Lease.ExecuteRaidGroup(members, 8, () => members.All(m => m.Owner.Execute(() => true))),
+                "独立八人Raid锁复用原owner目录并允许组内单账号重入");
+            That(Rejected(() => AccountOwners.Lease.ExecuteRaidGroup(members, 7, () => true)) &&
+                Rejected(() => AccountOwners.Lease.ExecuteRaidGroup(members, 9, () => true)), "成员数不能超过资源容量，资源也不能放大硬上限八人");
+            That(Rejected(() => AccountOwners.Lease.ExecuteRaidGroup([members[0], members[0]], 8, () => true)) &&
+                Rejected(() => AccountOwners.Lease.ExecuteRaidGroup([members[0], (members[1].Owner, members[0].Character)], 8, () => true)) &&
+                Rejected(() => AccountOwners.Lease.ExecuteRaidGroup([members[0], (foreign, (ushort)99)], 8, () => true)),
+                "Raid锁拒重复账号/角色及跨owner目录");
+            That(members[0].Owner.Execute(() => Rejected(() => AccountOwners.Lease.ExecuteRaidGroup(members, 8, () => true))) &&
+                AccountOwners.Lease.ExecuteGroup(members.Take(4).ToArray(), () => Rejected(() => AccountOwners.Lease.ExecuteRaidGroup(members, 8, () => true))),
+                "单账号或普通四人组不能升级为八人Raid锁");
+            That(AccountOwners.Lease.ExecuteRaidGroup(members, 8, () =>
+                AccountOwners.Lease.ExecuteRaidGroup(members.Reverse().ToArray(), 8, () => true) &&
+                Rejected(() => AccountOwners.Lease.ExecuteGroup(members.Take(4).ToArray(), () => true)) &&
+                Rejected(() => foreign.Execute(() => true))), "只允许同一固定Raid组重入，不换组或引入组外owner");
+            That(Rejected(() => AccountOwners.Lease.ExecuteRaidGroup(members, 8, (Func<bool>)(() => throw new InvalidOperationException("planned")))) &&
+                members.All(m => m.Owner.Execute(() => true)), "Raid动作异常清除线程上下文并归还全部owner锁");
+            int completed = 0;
+            var tasks = new[]
+            {
+                Task.Run(() => { for (int i = 0; i < 50; i++) AccountOwners.Lease.ExecuteRaidGroup(members.Reverse().ToArray(), 8, () => ++completed); }),
+                Task.Run(() => { for (int i = 0; i < 50; i++) AccountOwners.Lease.ExecuteGroup(members.Take(4).ToArray(), () => ++completed); }),
+                Task.Run(() => { for (int i = 0; i < 50; i++) AccountOwners.Lease.ExecuteTogether(members[1].Owner, members[0].Owner, () => ++completed); })
+            };
+            That(Task.WaitAll(tasks, TimeSpan.FromSeconds(5)) && completed == 150, "Raid八人、普通四人与双owner并发共用Ordinal锁序");
+            using var replacement = owners.Acquire(members[7].Owner.Account, () => { });
+            bool invoked = false;
+            That(Rejected(() => AccountOwners.Lease.ExecuteRaidGroup(members, 8, () => invoked = true)) && !invoked,
+                "组内任一旧generation禁止执行批量提交");
+        }
+        finally { foreach (var member in members) member.Owner.Dispose(); }
+    }
+
 }

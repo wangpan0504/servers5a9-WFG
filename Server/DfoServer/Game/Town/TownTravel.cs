@@ -13,7 +13,10 @@ internal sealed record TownTravelPlan(Location? Position, Location? Return, stri
     public static TownTravelPlan Reject(string reason) => new(null, null, reason);
 }
 
-internal sealed record TownTravelReceipt(Character Character, long Generation, long SelectionEpoch);
+internal sealed record TownTravelReceipt(Character Character, long Generation, long SelectionEpoch)
+{
+    public DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange { get; init; }
+}
 
 internal static class TownTravel
 {

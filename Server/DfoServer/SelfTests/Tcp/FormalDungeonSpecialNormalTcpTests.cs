@@ -20,7 +20,7 @@ internal static partial class FormalDungeonTcpTests
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"special-normal-entry"),gm:true,resources:resources);
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out _),"普通副本回归关闭无限疲劳");
-        VerifyBossRushRejection(fixture,resources);
+        VerifyBossRushTopologyRejection(fixture,resources);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         int sequence = 0;
@@ -299,11 +299,11 @@ internal static partial class FormalDungeonTcpTests
             .Select(row => row.GetProperty("Detail")).Where(row => row.GetProperty("Request").GetProperty("DungeonIndex").GetUInt32() == 337).ToArray();
         That(soulRejections.Length == 2 && soulRejections.All(row => !row.GetProperty("Accepted").GetBoolean() &&
             row.GetProperty("Identity").ValueKind == System.Text.Json.JsonValueKind.Null &&
-            row.GetProperty("RejectReason").GetString() == "entry-plan:boss-rush-room-contract-unproven"),
-            "337经真实选图到达EntryPlan，重复拒绝记录准确原因且不发布实例身份");
+            row.GetProperty("RejectReason").GetString() == "maze-topology-unsupported"),
+            "337通过入场规划后由正式拓扑检查重复拒绝，记录准确原因且不发布实例身份");
     }
 
-    static void VerifyBossRushRejection(TcpTestFixture fixture,TcpTestResources resources)
+    static void VerifyBossRushTopologyRejection(TcpTestFixture fixture,TcpTestResources resources)
     {
         var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
             resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 337));

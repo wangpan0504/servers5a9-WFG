@@ -8,6 +8,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Settings;
 using System.Text.Json;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Quests;
 using DfoServer.Infrastructure;
 
 namespace DfoServer.Development;
@@ -165,7 +166,11 @@ internal static partial class DevelopmentGm
                     ? " 已写入。保留已学技能、快捷栏、指令与连招，SP/TP按新等级总额（含额外点数）减已学费用重算。客户端回到选角并再次进入后刷新。"
                     : " 已写入。双技能树已重建，SP/TP恢复为当前等级的完整额度，保留已登记的额外点数。客户端回到选角并再次进入后刷新。") + note;
             }
-            var updated = live is null ? WithLease(owners, request.Account, lease => repository.UpdateProgress(lease, request.ToProgressEdit())) : live.UpdateProgress(request.ToProgressEdit());
+            var progressEdit = request.ToProgressEdit();
+            if (request.Action == DevelopmentAction.QuestAdd && catalog is not null &&
+                catalog.Quests.TryGet((int)request.Primary, out var quest) && CyclicQuestGrade(quest.Grade))
+                progressEdit = progressEdit with { DailyPeriod = QuestCycle.Day(DateTimeOffset.UtcNow) };
+            var updated = live is null ? WithLease(owners, request.Account, lease => repository.UpdateProgress(lease, progressEdit)) : live.UpdateProgress(progressEdit);
             return "OK " + Summary(updated) + Written;
         }
         catch (InvalidOperationException ex) when (ex.Message == "Stale account generation")

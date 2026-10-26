@@ -14,16 +14,18 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
 internal sealed record AntonRaidBattleChange(AntonRaidBattleView Before, AntonRaidBattleView After);
 
 // 正式实例的阶段聚合。输入只有已绑定副本的清图事实、服务端计时器和服务端机制结果；不执行客户端 SET。
-internal sealed class AntonRaidBattle
+internal sealed partial class AntonRaidBattle
 {
     readonly object gate = new();
     readonly RaidScript script;
-    readonly Dictionary<Guid, (DungeonRunIdentity Identity, int Phase, uint Dungeon)> entries = [];
+    sealed record DungeonBinding(DungeonRunIdentity Identity, int Phase, uint Dungeon, LukeDungeonRun? Luke = null);
+    readonly Dictionary<(Guid Run, ushort Character), DungeonBinding> entries = [];
     readonly Dictionary<RaidActor, ImmutableArray<RaidPhaseRewardPolicy>> members = [];
     readonly HashSet<(ushort Character, int Phase, byte Kind)> rewards = [];
     AntonRaidBattleView current;
     int? rewardWeek;
     public Guid Instance { get; }
+    public RaidKind Kind { get; }
     public int PhaseCount => script.Phases.Length;
     public int? RewardWeek { get { lock (gate) return rewardWeek; } }
     public AntonRaidBattleView View { get { lock (gate) return current; } }
@@ -32,7 +34,7 @@ internal sealed class AntonRaidBattle
     {
         lock (gate)
         {
-            if (!actor.IsCurrent || current.Revision != 0 || members.Count >= 20 || policy.Length != PhaseCount ||
+            if (!actor.IsCurrent || current.Revision != 0 || members.Count >= (Kind == RaidKind.Luke ? 8 : 20) || policy.Length != PhaseCount ||
                 policy.Any(p => string.IsNullOrWhiteSpace(p.Source) || p.Offers.IsEmpty ||
                     p.Offers.Any(o => o.Kind is not (0 or 1) || o.Grants.IsEmpty) ||
                     p.Offers.Select(o => (o.Kind, o.Card)).Distinct().Count() != p.Offers.Length ||
@@ -44,6 +46,30 @@ internal sealed class AntonRaidBattle
         }
     }
 
+    internal bool JoinStart(RaidActor actor)
+    {
+        lock (gate)
+        {
+            if (Kind != RaidKind.Luke || !actor.IsCurrent || current.Revision != 0 || members.Count >= 8 ||
+                members.Keys.Any(m => m.Character == actor.Character)) return false;
+            members.Add(actor, []);
+            return true;
+        }
+    }
+
+    // 精确移除Luke旧actor及其Run占用；不清新会话、不改变Anton领奖语义。
+    internal bool DetachStart(RaidActor actor)
+    {
+        lock (gate)
+        {
+            if (Kind != RaidKind.Luke || !members.Remove(actor)) return false;
+            ReleaseLukeActor(actor, null);
+            foreach (var key in entries.Where(row => row.Value.Identity.CharacterId == actor.Character).Select(row => row.Key).ToArray())
+                entries.Remove(key);
+            return true;
+        }
+    }
+
     public RaidPhaseRewardPolicy? RewardPolicy(RaidActor actor, int phase)
     { lock (gate) return actor.IsCurrent && members.TryGetValue(actor, out var policy) && phase >= 0 && phase < policy.Length ? policy[phase] : null; }
 
@@ -52,7 +78,7 @@ internal sealed class AntonRaidBattle
         lock (gate)
         {
             if (!actor.IsCurrent || prepared.Instance != Instance || prepared.Character != actor.Character ||
-                prepared.Phase != current.Phase || current.State != AntonRaidBattleState.Reward || !members.ContainsKey(actor)) return false;
+                prepared.Phase != current.Phase || current.State != AntonRaidBattleState.Reward || !members.TryGetValue(actor, out var policy) || policy.IsEmpty) return false;
             rewards.Add((actor.Character, current.Phase, prepared.Kind));
             return members.All(m => m.Value[current.Phase].Offers.Select(o => o.Kind).Distinct()
                 .All(kind => rewards.Contains((m.Key.Character, current.Phase, kind))));
@@ -73,11 +99,13 @@ internal sealed class AntonRaidBattle
 
     public bool IsCurrent(AntonRaidBattleView view) { lock (gate) return ReferenceEquals(current, view); }
 
-    public AntonRaidBattle(RaidScript script, Guid? instance = null)
+    public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
             throw new InvalidDataException("攻坚阶段资源不完整或超出已证协议范围");
+        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        Kind = kind;
         this.script = script;
         Instance = instance ?? Guid.NewGuid();
         if (Instance == Guid.Empty) throw new InvalidDataException("攻坚实例身份不能为空");
@@ -101,11 +129,14 @@ internal sealed class AntonRaidBattle
         {
             if (current.State != AntonRaidBattleState.Fighting || !current.Dungeons.TryGetValue(checked((int)dungeon), out var state) ||
                 state != RaidDungeonState.Open || identity.InstanceId == Guid.Empty) return false;
-            var entry = (identity, current.Phase, dungeon);
-            if (entries.TryGetValue(identity.InstanceId, out var previous)) return previous == entry;
+            if (Kind != RaidKind.Anton) return false;
+            var key = (identity.InstanceId, identity.CharacterId);
+            var entry = new DungeonBinding(identity, current.Phase, dungeon);
+            if (entries.TryGetValue(key, out var previous)) return previous == entry;
+            if (entries.Keys.Any(old => old.Run == identity.InstanceId)) return false;
             foreach (var old in entries.Where(e => e.Value.Identity.CharacterId == identity.CharacterId).Select(e => e.Key).ToArray())
                 entries.Remove(old);
-            entries.Add(identity.InstanceId, entry);
+            entries.Add(key, entry);
             return true;
         }
     }
@@ -114,9 +145,9 @@ internal sealed class AntonRaidBattle
     {
         lock (gate)
         {
-            if (current.State != AntonRaidBattleState.Fighting ||
+            if (Kind != RaidKind.Anton || current.State != AntonRaidBattleState.Fighting ||
                 fact.ConfirmedDeathEvents.Count == 0 || fact.ClearMap is null ||
-                !entries.TryGetValue(fact.Identity.InstanceId, out var entry) ||
+                !entries.TryGetValue((fact.Identity.InstanceId, fact.Identity.CharacterId), out var entry) ||
                 entry.Identity.CharacterId != fact.Identity.CharacterId || entry.Identity.QuestId != fact.Identity.QuestId ||
                 entry.Identity.TaskAttempt != fact.Identity.TaskAttempt || fact.Identity.Epoch < entry.Identity.Epoch ||
                 entry.Phase != current.Phase || entry.Dungeon != fact.DungeonId) return null;
@@ -126,7 +157,7 @@ internal sealed class AntonRaidBattle
             // 清图只改变本次正式副本状态；HpRaw 的单位未闭合，不从胜利擅自扣除符号值。
             var after = Evaluate(before with { Dungeons = before.Dungeons.SetItem(dungeon, RaidDungeonState.Clear) }, dungeon, null, null);
             if (after.State == AntonRaidBattleState.Reward) rewardWeek ??= week;
-            entries.Remove(fact.Identity.InstanceId);
+            entries.Remove((fact.Identity.InstanceId, fact.Identity.CharacterId));
             current = after with { Revision = before.Revision + 1 };
             return new(before, current);
         }
@@ -137,11 +168,10 @@ internal sealed class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || current.State != AntonRaidBattleState.Fighting ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.State != AntonRaidBattleState.Fighting ||
                 !current.Symbols.TryGetValue(symbol, out int previous) || previous == value) return null;
             var before = current;
-            current = Evaluate(before with { Symbols = before.Symbols.SetItem(symbol, value) }, null, symbol, null)
-                with { Revision = before.Revision + 1 };
+            CommitBattleCandidate(before, Evaluate(before with { Symbols = before.Symbols.SetItem(symbol, value) }, null, symbol, null));
             return new(before, current);
         }
     }
@@ -151,11 +181,10 @@ internal sealed class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || current.State != AntonRaidBattleState.Fighting ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.State != AntonRaidBattleState.Fighting ||
                 !current.Timers.ContainsKey(timer)) return null;
             var before = current;
-            current = Evaluate(before with { Timers = before.Timers.Remove(timer) }, null, null, timer)
-                with { Revision = before.Revision + 1 };
+            CommitBattleCandidate(before, Evaluate(before with { Timers = before.Timers.Remove(timer) }, null, null, timer));
             return new(before, current);
         }
     }
@@ -165,6 +194,7 @@ internal sealed class AntonRaidBattle
         lock (gate)
         {
             if (instance != Instance || revision != current.Revision || current.State != AntonRaidBattleState.Reward ||
+                Kind == RaidKind.Luke && (lukeRuns.Count != 0 || members.Any(member => member.Value.Length != PhaseCount)) ||
                 members.Any(m => m.Value[current.Phase].Offers.Select(o => o.Kind).Distinct()
                     .Any(kind => !rewards.Contains((m.Key.Character, current.Phase, kind))))) return null;
             var before = current;
@@ -181,7 +211,7 @@ internal sealed class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || current.State != AntonRaidBattleState.Fighting ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.State != AntonRaidBattleState.Fighting ||
                 !current.Deferred.TryGetValue(token, out var action)) return null;
             int id;
             RaidDungeonState next;
@@ -194,8 +224,7 @@ internal sealed class AntonRaidBattle
                 id = selected; next = RaidDungeonState.Open;
             }
             var before = current;
-            current = Evaluate(before with { Deferred = before.Deferred.Remove(token), Dungeons = before.Dungeons.SetItem(id, next) }, id, null, null)
-                with { Revision = before.Revision + 1 };
+            CommitBattleCandidate(before, Evaluate(before with { Deferred = before.Deferred.Remove(token), Dungeons = before.Dungeons.SetItem(id, next) }, id, null, null));
             return new(before, current);
         }
     }

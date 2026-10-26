@@ -11,7 +11,7 @@ namespace DfoServer.Network.Handlers;
 internal sealed class DungeonSelectionHandler(TownProjection projection, ServerLog log,
     DfoServer.GameWorld.Characters.TutorialCatalog? tutorials = null,
     DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
-    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null, TagEvildomProjection? tagEvildom = null, TagEvildomRunProjection? tagRun = null) : IGameCommandModule
+    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null, TagEvildomProjection? tagEvildom = null, TagEvildomRunProjection? tagRun = null, DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -58,6 +58,28 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
+        if (entry.DungeonIndex != 0 && context.Session.ChannelEntry?.Type == 32 &&
+            context.Session.StartedRaid is not null && context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
+        {
+            var selectedParty = context.Session.CurrentParty?.Invoke();
+            if (selectedParty is null || context.DispatchGates?.Holds(context, selectedParty.Commands) != true)
+            {
+                log.Write("dungeon_entry", new { Connection = context.Id, Accepted = false, Party = true,
+                    RaidType = 1, Dungeon = entry.DungeonIndex, RejectReason = "luke-party-dispatch-gate-mismatch" });
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "luke_selection_rejected");
+                return CommandResult.Handled;
+            }
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, selectedParty.Members);
+            lukeRaid?.CancelSelection(context.Session, selectedParty);
+            var selected = entry.DungeonIndex <= int.MaxValue && !context.BlocksTownActions
+                ? lukeRaid?.Select(context.Session, (int)entry.DungeonIndex, selectedParty) ?? [] : [];
+            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length > 0, Party = true,
+                RaidType = 1, Dungeon = entry.DungeonIndex, Members = selected.Length });
+            if (selected.Length == 0)
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "luke_selection_rejected");
+            else await PartyDungeonProjection.PublishAsync(selected);
+            return CommandResult.Handled;
+        }
         if (context.Session.HasMultiplePartyMembers?.Invoke() == true && context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
         {
             if (partyDungeons is null) return CommandResult.Unhandled;

@@ -172,6 +172,13 @@ internal sealed class AccountOwners
         internal static T ExecuteRaid<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, Func<T> action)
             => ExecuteFixedGroup(members, action, 10, 20);
 
+        // 卢克准备使用同一账号锁目录；上限来自已核资源且硬限八人，不放宽普通四人或安徒恩十至二十人。
+        internal static T ExecuteRaidGroup<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, int maximum, Func<T> action)
+        {
+            if (maximum is < 1 or > 8) throw new InvalidOperationException("卢克准备人数上限必须为一至八人");
+            return ExecuteFixedGroup(members, action, 1, maximum);
+        }
+
         static T ExecuteFixedGroup<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, Func<T> action, int minimum, int maximum)
         {
             if (members.Count < minimum || members.Count > maximum || members.Any(m => m.Character == 0) ||
