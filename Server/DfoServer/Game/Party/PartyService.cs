@@ -54,41 +54,60 @@ internal sealed partial class PartyService
 
     public PartySnapshot[] Snapshot() { lock (gate) return parties.SnapshotValues(); }
 
-    // 普通Party仍是每分队一至四人；全团由开战用例固定owner后一次安装，不复用招募mode10邀请。
+    // 普通Party仍是每分队一至四人；预留与SQL之间不持Party gate，提交后仅安装已规划的新队。
     internal (DfoServer.Game.Raids.RaidStarted Start, System.Collections.Immutable.ImmutableArray<DfoServer.Game.Characters.Character> Characters, PartyNotice[] Notices)?
         CreateRaidSquads(DfoServer.Game.Raids.RaidParty raid,
-            Func<(DfoServer.Game.Raids.RaidStarted Start, System.Collections.Immutable.ImmutableArray<DfoServer.Game.Characters.Character> Characters)> commit)
+            Func<(DfoServer.Game.Raids.RaidStarted Start, System.Collections.Immutable.ImmutableArray<DfoServer.Game.Characters.Character> Characters)> commit,
+            RaidPartyBatch? prepared = null)
     {
-        var captured = raid.Members.OrderBy(m => m.Slot).Select(m => (Raid: m, Member: Capture(m.Actor.Session))).ToArray();
+        var captured = prepared is null
+            ? raid.Members.OrderBy(m => m.Slot).Select(m => (Raid: m, Member: Capture(m.Actor.Session))).ToArray() : [];
         var squads = new List<PartySnapshot>();
+        var created = new List<PartySnapshot>();
+        PartyNotice[] notices;
         lock (gate)
         {
-            if (captured.Any(m => m.Member is null || Find(m.Member) is not null)) return null;
-            foreach (var group in captured.GroupBy(m => m.Raid.Squad).OrderBy(g => g.Key))
+            if (prepared is not null && (raid.Type != 1 || !ReferenceEquals(prepared.Raid.Source, raid) ||
+                !RaidBatchMatches(prepared) || !RaidBindingsCurrent(prepared.Raid, prepared.Bindings) ||
+                prepared.Groups.Any(g => g.Members.Any(m => !m.IsCurrent() || !m.Actor.Session.CanChangeTownParty ||
+                    m.Actor.Session.StartedRaid is not null)))) return null;
+            if (prepared is null && captured.Any(m => m.Member is null || Find(m.Member) is not null)) return null;
+            var groups = prepared?.Groups.ToArray() ?? captured.GroupBy(m => m.Raid.Squad).OrderBy(g => g.Key)
+                .Select(group => new RaidPartyGroup([..group.Select((m, slot) => m.Member! with { Slot = (byte)slot })],
+                    PartySettings.Default with { TitleCode = 0, Title = $"Party : {group.Key}", Capacity = 4,
+                        Dungeon = uint.MaxValue, Difficulty = 5 }, null)).ToArray();
+            if (groups.Any(g => g.Members.Length is < 1 or > 4) ||
+                prepared is null && captured.Any(m => m.Raid.Squad == 0)) return null;
+            try
             {
-                if (group.Key == 0 || group.Count() > 4) return null;
-                if (AllocateId() == ushort.MaxValue)
-                { foreach (var reserved in squads) reservedRaidSquads.Remove(reserved.Id); return null; }
-                reservedRaidSquads.Add(nextId);
-                var members = group.Select((m, slot) => m.Member! with { Slot = (byte)slot }).ToArray();
-                squads.Add(new(nextId, members, 0, ++revision) { Settings = PartySettings.Default with
-                    { TitleCode = 0, Title = $"Party : {group.Key}", Capacity = 4, Dungeon = uint.MaxValue, Difficulty = 5 } });
+                foreach (var group in groups)
+                {
+                    if (group.Existing is { } existing) { squads.Add(existing); continue; }
+                    if (AllocateId() == ushort.MaxValue)
+                    { foreach (var reserved in created) reservedRaidSquads.Remove(reserved.Id); return null; }
+                    reservedRaidSquads.Add(nextId);
+                    var squad = new PartySnapshot(nextId, [..group.Members], 0, ++revision) { Settings = group.Settings };
+                    squads.Add(squad); created.Add(squad);
+                }
+                // 复用队也发送完整名单用于594收敛；通知全部在SQL前构造，不在付费后进行业务规划。
+                notices = squads.SelectMany(p => p.Members.Select(m => Updated(p, m))).ToArray();
             }
+            catch { foreach (var reserved in created) reservedRaidSquads.Remove(reserved.Id); throw; }
         }
         try
         {
             var committed = commit();
             lock (gate)
             {
-                foreach (var squad in squads)
+                foreach (var squad in created)
                 {
                     foreach (var member in squad.Members) member.Actor.Session.AdvancePartyMembership();
                     parties.Set(squad.Id, squad);
                 }
             }
-            return (committed.Start, committed.Characters, squads.SelectMany(p => p.Members.Select(m => Updated(p, m))).ToArray());
+            return (committed.Start, committed.Characters, notices);
         }
-        finally { lock (gate) foreach (var squad in squads) reservedRaidSquads.Remove(squad.Id); }
+        finally { lock (gate) foreach (var squad in created) reservedRaidSquads.Remove(squad.Id); }
     }
 
     ushort AllocateId()

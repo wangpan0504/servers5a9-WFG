@@ -50,6 +50,25 @@ internal sealed partial class PartyService
         return (new(plan, bindings, groups.ToImmutable()), null);
     }
 
+    internal PartyNotice[]? RaidStartNotices(RaidParty raid, ImmutableArray<PartySnapshot> bindings)
+    {
+        lock (gate)
+        {
+            if (bindings.Length != raid.Members.Select(m => m.Squad).Distinct().Count() ||
+                bindings.Any(p => !IsCurrent(p))) return null;
+            foreach (var squad in raid.Members.GroupBy(m => m.Squad))
+            {
+                var anchor = squad.MinBy(m => m.Slot)!;
+                var matching = bindings.Where(p => p.Members.Any(m => ReferenceEquals(m.Actor.Session, anchor.Actor.Session))).ToArray();
+                if (matching is not [var party] || party.Settings != RaidPreparationPlan.NativePartySettings(squad.Key) ||
+                    party.Members.Length != squad.Count() || party.Members.Any(m => !squad.Any(r =>
+                        ReferenceEquals(r.Actor.Session, m.Actor.Session) && r.Actor.Epoch == m.Actor.Epoch)) ||
+                    !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, anchor.Actor.Session))) return null;
+            }
+            return bindings.SelectMany(p => p.Members.Select(m => Updated(p, m))).ToArray();
+        }
+    }
+
     bool RaidBindingsCurrent(RaidPreparationPlan plan, ImmutableArray<PartySnapshot> expected)
     {
         var current = parties.SnapshotValues().Where(p => p.Members.Any(m => plan.Source.Members.Any(r =>

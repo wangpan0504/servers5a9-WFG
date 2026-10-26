@@ -42,16 +42,18 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly TcpTestResources? resources;
     readonly DfoServer.GameWorld.Quests.QuestCatalog? questCatalog;
     readonly TimeProvider? clock;
+    readonly DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy;
     int cliSequence;
     readonly string pvfSource;
     string? previousPhase;
     public TcpTestFixture(ServerOptions source, string root, bool gm = false, TcpTestResources? resources = null,
         DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null, bool packetHttp = false,
-        bool connectionAddress = false)
+        bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null)
     {
         this.resources = resources;
         this.questCatalog = questCatalog;
         this.clock = clock;
+        this.lukeStartPolicy = lukeStartPolicy;
         Root = Path.GetFullPath(root);
         Directory.CreateDirectory(Root);
         pvfSource = source.PvfPath;
@@ -226,11 +228,12 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 await ServerRuntime.Create(options, resources.Archive, repository, resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth).RunAsync(hostStop.Token);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy).RunAsync(hostStop.Token);
             });
         }
         else
         {
+            if (lukeStartPolicy is not null) throw new InvalidOperationException("显式Luke执行策略需要真实同进程Runtime装配");
             if (questCatalog is not null) throw new InvalidOperationException("合成任务目录不能由真实子进程悄然替换");
             process = Process.Start(StartInfo(packetCapture ? ["--packet-capture"] : [])) ?? throw new IOException("Server process did not start");
             output = CopyOutputAsync(process.StandardOutput, Path.Combine(Options.LogDirectory, "stdout.txt"));
