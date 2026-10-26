@@ -46,18 +46,39 @@ internal static partial class FormalDungeonTcpTests
             created = repo.CommitInventory(owner, created, new(created.Inventory, created.Inventory with { Gold = 1 }, "despair_tcp_potion")
                 { ExpBonus = (clock.GetUtcNow().ToUnixTimeSeconds() + 3600, 1000) });
         }
+        using (var abandoned = Open(fixture))
+        {
+            abandoned.Select(created.Slot, prepared: true, resumeTown: true, room: false);
+            That(abandoned.DungeonEnterCounts[11008] == (1, 0), "绝望首次选角发布1次基础挑战");
+            SelectTowerMap(abandoned, 0);
+            abandoned.Send(16, Request(11008));
+            abandoned.Expect(0, 28); abandoned.Expect(0, 29);
+            abandoned.ExpectDespairTowerEnterCounts();
+            That(abandoned.DungeonEnterCounts[11008] == (0, 0), "绝望成功入场即发布0次，不等待战斗或通关");
+            Load(abandoned);
+            abandoned.Send(42); abandoned.Expect(1, 42, [1]); abandoned.Expect(0, 3);
+            abandoned.Expect(0, 24); RefreshedQuests(abandoned); abandoned.Barrier();
+            SelectTowerMap(abandoned, 0);
+            That(abandoned.DungeonEnterCounts[11008] == (0, 0) && abandoned.DungeonEnterCounts[5115] == (1, 0) &&
+                abandoned.DungeonEnterCounts[11006] == (3, 0) && abandoned.DungeonEnterCounts[11007] == (3, 0),
+                "绝望进入后退出保持已用，悲叹与两祭坛额度独立");
+        }
         using var peer = Open(fixture);
         peer.Select(created.Slot, prepared: true, resumeTown: true, room: false);
-        OpenSelection(0);
+        That(peer.DungeonEnterCounts[11008] == (0, 0), "绝望未通关退本后重登仍从持久入场回执恢复已用");
+        clock.AdvanceSeconds(2);
+        peer.ExpectUnusedDailyBoosterReset();
+        OpenSelection(0, 1);
+        That(peer.DungeonEnterCounts[11008] == (1, 0), "绝望跨游戏日重新选图恢复一次，历史回执不混入本日");
         var first = EnterTower(11008);
         Load(peer);
         That(Amount(4473) == 2 && U32(first, 14) == 15130, "正式绝望首进加载真实首层且不扣失败邀请函");
         ReturnTown();
         OpenSelection(0);
         peer.Send(16, Request(11009)); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
-        That(EntryCount() == 1 && Amount(4473) == 2, "伪造未来层既不创建实例也不扣票");
+        That(EntryCount() == 2 && Amount(4473) == 2, "伪造未来层既不创建实例也不扣票");
         var map = EnterTower(11008);
-        That(Amount(4473) == 1 && EntryCount() == 2, "失败重试与新尝试原子扣一张4473");
+        That(Amount(4473) == 1 && EntryCount() == 3, "失败重试与新尝试原子扣一张4473");
         byte[]? oldDeath = null;
         int overflowNotices = 0;
         for (int layer = 1; layer <= 100; layer++)
@@ -120,7 +141,7 @@ internal static partial class FormalDungeonTcpTests
             ReturnTown();
             OpenSelection(checked((ushort)(layer == 100 ? 1 : layer + 1)));
             peer.Send(16, Request(11008)); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
-            That(EntryCount() == layer + 1, "当天通关后拒绝继续入场，次数不增加");
+            That(EntryCount() == layer + 2, "当天通关后拒绝继续入场，次数不增加");
             if (layer == 100) break;
             clock.AdvanceDay();
             peer.ExpectUnusedDailyBoosterReset();
@@ -137,6 +158,8 @@ internal static partial class FormalDungeonTcpTests
         string inventoryBeforeRestart = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id);
         peer.Dispose();
         await fixture.StopAsync();
+        // 独立进程使用系统时钟，次数读取器也切回同一时钟，不沿用推进100层后的模拟日期。
+        clock.UseSystemTime();
         await fixture.StartAsync("despair-actual-restart", isolatedProcess: true);
         using (var resumed = Open(fixture))
         {
@@ -169,12 +192,17 @@ internal static partial class FormalDungeonTcpTests
             var info = packet.Body;
             That(U32(info, 0) is >= 11008 and <= 11107, "28发布服务器批准的实际层号");
             var loaded = peer.Expect(0, 29).Body;
-            _ = Drain(); // 扣票背包及跨日维护通知在入图后完整收取。
+            var notifications = Drain(); // 扣票背包及跨日维护通知在入图后完整收取。
+            foreach (uint dungeon in new[] { 11008u, U32(info, 0) }.Distinct())
+                That(notifications.Any(row => row is { Kind: 0, Opcode: 550, Body.Length: 6 } &&
+                    U32(row.Body, 0) == dungeon && row.Body[4] == 0 && row.Body[5] == 0),
+                    "绝望每层与入口均发布已用，邀请函重试不增加基础日额度");
             return loaded;
         }
-        void OpenSelection(ushort floor)
+        void OpenSelection(ushort floor, int remaining = 0)
         {
             SelectTowerMap(peer,floor);
+            That(peer.DungeonEnterCounts[11008] == (remaining, 0), "绝望选图剩余对应当前游戏日，退出及通关不退款");
         }
         void ReturnTown()
         {
@@ -198,8 +226,12 @@ internal static partial class FormalDungeonTcpTests
 
     sealed class DespairDays : TimeProvider
     {
-        long milliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref milliseconds));
+        long milliseconds = new DateTimeOffset(2026, 10, 26, 5, 59, 59, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
+        int systemTime;
+        public override DateTimeOffset GetUtcNow() => Volatile.Read(ref systemTime) == 1 ? DateTimeOffset.UtcNow :
+            DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref milliseconds));
+        public void UseSystemTime() => Volatile.Write(ref systemTime, 1);
+        public void AdvanceSeconds(int seconds) => Interlocked.Add(ref milliseconds, seconds * 1000L);
         public void AdvanceDay() => Interlocked.Add(ref milliseconds, 86400000);
     }
 }

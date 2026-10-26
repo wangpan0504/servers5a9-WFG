@@ -22,7 +22,7 @@ internal static partial class FormalDungeonTcpTests
     public static async Task RunGriefAsync(ServerOptions source,string root,TcpTestResources resources)
     {
         int checks = Count;
-        var clock = new GriefClock();
+        var clock = new GriefClock { Now = new(2026, 10, 26, 6, 0, 0, TimeSpan.FromHours(8)) };
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"grief-tower"),resources:resources,clock:clock);
         await fixture.StartAsync();
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
@@ -53,19 +53,26 @@ internal static partial class FormalDungeonTcpTests
             var grants = new InventoryService(items.Items,items.GoldLimits,items.EpicPieces);
             created = InventoryService.Commit(repository,owner,created,grants.Grant(created,[new(10161065,2)]));
         }
+        long tickets = Tickets();
         using (var peer = Open(fixture))
         {
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:resources.Towns.IsRoom(position,done));
+            That(peer.DungeonEnterCounts[5115] == (1, 0), "首次选角初始化悲叹基础日剩余1次");
             peer.Send(31,[31,0,0x71,0x0B]);
             That(peer.Expect(1,31).Body is [1,0x71,0x0B,1,0,0,0,..],"2929经真实31接取pending1");
             QuestLifecycleTcpTests.DrainNotifications(peer);
-            long tickets = Tickets();
             var first = EnterGrief(peer,1,questId:2929);
             That(Tickets()==tickets && fixture.Query("SELECT used FROM account_grief_tower") is [[1L]],
                 "正式基础入场与尝试号提交同一事务，不消耗重试票或疲劳");
             ReturnGrief(peer);
             That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=2929",created.Id) is [[1L]] &&
                 fixture.Query("SELECT count(*) FROM character_grief_tower_clears") is [[0L]],"未死亡清图的退出不生成任务或塔通关回执");
+            OpenGriefSelection(peer,1);
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:resources.Towns.IsRoom(position,done));
+            That(peer.DungeonEnterCounts[5115] == (0, 0), "未通关即退本后重登仍恢复已用状态");
             var retry = EnterGrief(peer,1,invitation:true);
             That(Tickets()==tickets-1 && fixture.Query("SELECT used FROM account_grief_tower") is [[1L]] &&
                 fixture.Query("SELECT invitation FROM character_grief_tower_entries ORDER BY task_attempt") is [[0L],[1L]],
@@ -88,10 +95,20 @@ internal static partial class FormalDungeonTcpTests
             That(Tickets()==tickets-1 && fixture.Query("SELECT count(*) FROM character_grief_tower_entries") is [[2L]],
                 "当天已通关再入拒绝，不扣票或创建尝试");
         }
-        clock.Now=clock.Now.AddDays(1);
+        clock.Now = new(2026, 10, 27, 5, 59, 59, TimeSpan.FromHours(8));
         using (var peer = Open(fixture))
         {
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:resources.Towns.IsRoom(position,done));
+            That(peer.DungeonEnterCounts[5115] == (0, 0) && peer.DungeonEnterCounts[5116] == (0, 0),
+                "次日05:59:59仍使用前一游戏日，首层入口和下一层详情均显示已用");
+            OpenGriefSelection(peer,2,true);
+        }
+        clock.Now = clock.Now.AddSeconds(1);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:resources.Towns.IsRoom(position,done));
+            That(peer.DungeonEnterCounts[5115] == (1, 0) && peer.DungeonEnterCounts[5116] == (1, 0),
+                "06:00精确重置首层入口与当前第二层的基础剩余，未把楼层当作独立日额度");
             var second = EnterGrief(peer,2);
             That(U32(second,14)==dungeons.ResolveOrdinaryMaze(dungeons.Get(5116),dungeons.Get(5116).Mazes.Single()).GriefRoom!.Id &&
                 fixture.Query("SELECT used FROM account_grief_tower") is [[1L]],"跨游戏日重置账号额度，首层入口映射持久第二层及真实MAP");
@@ -117,19 +134,20 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(42,[]); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
             peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
         }
-        void OpenGriefSelection(TcpPeer peer,int layer,bool cleared=false)
+        void OpenGriefSelection(TcpPeer peer,int layer,bool cleared=false,byte remaining=0)
         {
             peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3);
             peer.Expect(0,1536);
             peer.Expect(0,1303,[0x34,cleared ? (byte)1 : (byte)0]);
-            peer.Expect(0,550,[0xFE,0x2A,0,0,3,0]);
-            peer.Expect(0,550,[0xFF,0x2A,0,0,3,0]);
+            peer.ExpectAltarEnterCounts();
+            That(peer.DungeonEnterCounts[5115] == (remaining, 0) && peer.DungeonEnterCounts[5114 + layer] == (remaining, 0),
+                "选图前悲叹入口和实际楼层的550剩余与挑战日一致，两祭坛仍各3次");
             byte[] notice=peer.Expect(0,27).Body;
             That(notice.Length==42 && U16(notice,39)==layer,"真实27下发持久悲叹楼层");
         }
         byte[] EnterGrief(TcpPeer peer,int layer,bool invitation=false,ushort questId=0)
         {
-            OpenGriefSelection(peer,layer);
+            OpenGriefSelection(peer,layer,remaining:invitation ? (byte)0 : (byte)1);
             var wrong=Request(questId);
             BinaryPrimitives.WriteUInt32LittleEndian(wrong,checked((uint)dungeons.GriefTower.FloorsByDungeon.Values.Single(row=>row.Layer==layer+1).DungeonId));
             peer.Send(16,wrong); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
@@ -138,12 +156,20 @@ internal static partial class FormalDungeonTcpTests
             var map=peer.Expect(0,29).Body;
             That(U32(info,0)==dungeons.GriefTower.FloorsByDungeon.Values.Single(row=>row.Layer==layer).DungeonId && map[18]>0,
                 "正式28/29携带专表对应副本与原生演员，不走诊断实例");
-            int itemNotices=0;
+            int itemNotices=0, countNotices=0;
             QuestLifecycleTcpTests.DrainNotifications(peer,packet =>
             {
-                That(packet.Opcode==14,"入场提交后仅补投实际扣票库存差量"); itemNotices++;
+                if (packet.Opcode == 550)
+                {
+                    That(packet.Body.Length == 6 && packet.Body[4] == 0 && packet.Body[5] == 0 &&
+                        U32(packet.Body,0) == (countNotices == 0 ? 5115 : 5114 + layer),
+                        "成功入场事务后立即同步入口及当前层零剩余，不冒充通关或扣减其它副本");
+                    countNotices++;
+                }
+                else { That(packet.Opcode==14,"入场提交后仅补投实际扣票库存差量"); itemNotices++; }
             });
-            That(itemNotices==(invitation ? 1 : 0),"基础不发扣票差量，重试按提交结果发一次");
+            That(itemNotices==(invitation ? 1 : 0) && countNotices==(layer == 1 ? 1 : 2),
+                "基础与邀请函重试均同步已用状态，重试按提交结果发一次扣票差量");
             Load(peer); peer.Barrier();
             string before=fixture.Snapshot("SELECT * FROM character_grief_tower_entries ORDER BY task_attempt");
             peer.Send(16,Request(questId)); peer.Barrier();

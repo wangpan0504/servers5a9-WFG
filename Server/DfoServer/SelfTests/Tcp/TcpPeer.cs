@@ -217,7 +217,7 @@ internal sealed class TcpPeer : IDisposable
         var packet = Read();
         int countUpdates = 0;
         bool griefAnnounced = false;
-        // 选图附带的状态通知逐项校验后记录，550须成对且与本人真实账本一致；保留原27及正文断言。
+        // 选图附带的状态通知逐项校验后记录，550须按两祭坛及悲叹当前楼层逐项匹配真实账本；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
                 packet.Opcode is 550 or 1608))
@@ -232,7 +232,7 @@ internal sealed class TcpPeer : IDisposable
             else
             {
                 TestCheck.That(griefAnnounced && ++countUpdates == 1,
-                    "亡者峡谷状态之后只允许一组两祭坛次数通知，不扩展普通选图包序");
+                    "亡者峡谷状态之后只允许一组两祭坛与悲叹次数通知，不扩展普通选图包序");
                 ReadDungeonEnterCounts(packet);
             }
             packet = Read();
@@ -285,6 +285,63 @@ internal sealed class TcpPeer : IDisposable
             TestCheck.That(packet.Body[4] == Math.Max(0, 3 - used) && packet.Body[5] == 0,
                 "550日剩余等于本游戏日已提交账本，周剩余为零");
             DungeonEnterCounts[dungeonId] = (packet.Body[4], packet.Body[5]);
+        }
+        ExpectGriefTowerEnterCounts();
+        ExpectDespairTowerEnterCounts();
+    }
+
+    public void ExpectGriefTowerEnterCounts()
+    {
+        // 手工原生登录组不注入fixture，角色始终未挑战悲叹；独立核对首层满额的完整字节。
+        if (fixture is null)
+        {
+            Expect(0, 550, [0xFB, 0x13, 0, 0, 1, 0]);
+            DungeonEnterCounts[5115] = (1, 0);
+            return;
+        }
+        TestCheck.That(Id != 0, "悲叹550必须绑定当前角色");
+        var state = fixture!.Query("""
+            SELECT COALESCE(g.layer,1),COALESCE(g.game_day,0) FROM characters c
+            LEFT JOIN character_grief_tower g ON g.character_id=c.id WHERE c.id=$p0
+            """, Id).Single();
+        int layer = Convert.ToInt32(state[0]);
+        int day = int.Parse(fixture.UtcNow.UtcDateTime.AddHours(2).ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture));
+        byte remaining = Convert.ToInt32(state[1]) < day && layer <= 100 ? (byte)1 : (byte)0;
+        foreach (int dungeonId in new[] { 5115, 5114 + Math.Min(layer, 100) }.Distinct())
+        {
+            byte[] expected = new byte[6];
+            BinaryPrimitives.WriteUInt32LittleEndian(expected, checked((uint)dungeonId));
+            expected[4] = remaining;
+            Expect(0, 550, expected);
+            DungeonEnterCounts[dungeonId] = (remaining, 0);
+        }
+    }
+
+    public void ExpectDespairTowerEnterCounts()
+    {
+        // 原生登录组没有fixture且不挑战塔，仍严格核对完整首层初始化包。
+        if (fixture is null)
+        {
+            Expect(0, 550, [0, 0x2B, 0, 0, 1, 0]);
+            DungeonEnterCounts[11008] = (1, 0);
+            return;
+        }
+        TestCheck.That(Id != 0, "绝望550必须绑定当前角色");
+        var local = fixture.UtcNow.ToOffset(TimeSpan.FromHours(8)).AddHours(-6);
+        int day = DateOnly.FromDateTime(local.DateTime).DayNumber;
+        var state = fixture.Query("""
+            SELECT COALESCE(p.next_layer,1),COALESCE(p.last_clear_day,0),
+                (SELECT count(*) FROM dungeon_special_entry_receipts e WHERE e.character_id=c.id AND e.kind=3 AND e.service_day=$p1)
+            FROM characters c LEFT JOIN dungeon_despair_progress p ON p.character_id=c.id WHERE c.id=$p0
+            """, Id, day).Single();
+        byte remaining = Convert.ToInt64(state[2]) == 0 && Convert.ToInt32(state[1]) != day ? (byte)1 : (byte)0;
+        foreach (int dungeonId in new[] { 11008, 11007 + Convert.ToInt32(state[0]) }.Distinct())
+        {
+            byte[] expected = new byte[6];
+            BinaryPrimitives.WriteUInt32LittleEndian(expected, checked((uint)dungeonId));
+            expected[4] = remaining;
+            Expect(0, 550, expected);
+            DungeonEnterCounts[dungeonId] = (remaining, 0);
         }
     }
 
@@ -673,6 +730,7 @@ internal sealed class TcpPeer : IDisposable
         int afterCargo = 9;
         // 保留普通入城断言的返回索引，特殊容器单独暴露；线上顺序仍逐包严格验证。
         var ack = Expect(expected[0].Kind, expected[0].Opcode);
+        Id = U16(ack.Body, 9);
         var permission = Expect(0, 5);
         DungeonPermission = permission.Body;
         TestCheck.That(permission.Body.Length >= 2 &&
@@ -769,6 +827,8 @@ internal sealed class TcpPeer : IDisposable
                         "本人Player模型后逐包初始化两祭坛真实日剩余，周字段为零");
                     DungeonEnterCounts.Add(dungeonId, (count[4], count[5]));
                 }
+                ExpectGriefTowerEnterCounts();
+                ExpectDespairTowerEnterCounts();
             }
             middle.Add(packet);
         }
@@ -887,7 +947,6 @@ internal sealed class TcpPeer : IDisposable
             ReadSceneInitialization();
         Mailbox = mails.ToArray();
         WirePacket[] packets = [.. prefix, .. middle, .. tail];
-        Id = U16(packets[0].Body, 9);
         TestCheck.That(U32(packets[2].Body, 115) == (weaponSkins?.Selected ?? 0),
             "首次入城及重连Actor恢复独立武器幻化，不以Player的仓库选择组代替场景字段");
         ActorAdventureName = DecodeActorAdventureName(packets[2].Body);
