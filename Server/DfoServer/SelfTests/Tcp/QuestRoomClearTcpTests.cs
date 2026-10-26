@@ -20,6 +20,7 @@ internal static class QuestRoomClearTcpTests
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         foreach (bool ordinary in new[] { false,true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
         foreach (bool ordinary in new[] { false,true }) VerifyGrandine(fixture,resources,growth,drain,dungeons,ordinary);
+        foreach (bool ordinary in new[] { false,true }) VerifySeaTrain(fixture,resources,growth,drain,dungeons,ordinary);
         QuestDarkElfGuardTcpTests.Verify(fixture,resources,growth,drain,dungeons);
         QuestHarlemRidingTcpTests.Verify(fixture,resources,growth,drain);
     }
@@ -350,6 +351,93 @@ internal static class QuestRoomClearTcpTests
             fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id)+
             fixture.Snapshot("SELECT * FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index",created.Id)+
             fixture.Snapshot("SELECT * FROM account_currency_balances WHERE account=$p0 ORDER BY currency_kind",account);
+    }
+
+    static void VerifySeaTrain(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
+        Action<TcpPeer,Action<WirePacket>?> drain,DungeonCatalog dungeons,bool ordinary)
+    {
+        var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,resources.Quests.Get(3578),87);
+        string account = ordinary ? "seatrain-zero" : "seatrain-parent";
+        byte job = ordinary ? (byte)6 : (byte)15, grow = ordinary ? (byte)18 : (byte)20;
+        Character created;
+        using (var owner = new AccountOwners().Acquire(account,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare(ordinary ? "TrainZero" : "TrainQuest",resources.Characters.Get(job),
+                entrance.Position,entrance.Position,resources.Learning.Get);
+            var free = resources.Learning.FreeSkills(job,grow);
+            var learning = SkillLearning.Initialize(job,free,resources.Learning).State!;
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with
+            {
+                Level = 73, GrowType = grow, AcceptedStoryLevel = 73, Skills = free.ToArray(),
+                CompletedQuests = entrance.Completed,
+                InitialLearning = SkillPointLedger.Synchronize(job,grow,73,
+                    learning with { Experience = growth.GetLevelStartExperience(73) },resources.Learning)
+            });
+        }
+        byte[] lastDeath = [];
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            byte[] information = [];
+            var map = FormalDungeonTcpTests.Enter(peer,3578,87,row => information = row,
+                requestQuestId: ordinary ? (ushort)0 : (ushort)3578);
+            FormalDungeonTcpTests.Load(peer); Drain();
+            That(U32(map,14) == 57858,"死灵破坏武器从真实57858起始房进入");
+            peer.Send(31,QuestRequest(31,3607,[])); peer.Expect(1,31,[1,23,14,1,0,0,0,0]); Drain();
+            string before = State();
+            peer.Send(31,QuestRequest(31,3607,[])); peer.Expect(1,31,[0,18,0]); Drain();
+            peer.Send(33,QuestRequest(33,3607,[0,0])); peer.Expect(1,33,[0,19,0]); Drain();
+            That(State() == before,"已接取拒绝仍保留，未清房的33不能凭客户端值推进");
+            var enemies = Enumerable.Range(0,map[18]).Select(at => 19+22*at).Where(at => map[at+21] == 0).ToArray();
+            That(enemies.Length == 3 && map[18] == 4,"首房保留三只敌人与一个非阻挡友方演员");
+            foreach (int offset in enemies[..^1]) Kill(offset);
+            That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3607",created.Id) is [[1L]],
+                "首房少一敌人仍不能清3607");
+            lastDeath = FormalDungeonTcpTests.Death(U16(map,enemies[^1]+6),peer.Id,map[enemies[^1]+12]);
+            Kill(enemies[^1]);
+            That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id IN (3578,3607) ORDER BY quest_id",created.Id) is [[3578L,1L]] &&
+                fixture.Query("SELECT quest_id,map_id FROM character_quest_clear_receipts WHERE character_id=$p0",created.Id) is [[3607L,57858L]],
+                "最后敌人死亡自动归档3607，父任务仅剩第二阶段，保存真实清房凭据");
+            before = State();
+            peer.Send(39,lastDeath); Drain();
+            peer.Send(33,QuestRequest(33,3607,[0,0])); peer.Expect(1,33,[0,19,0]); Drain();
+            That(State() == before,"自动归档后的重复死亡及迟到33不重复推进或发奖");
+            peer.Send(31,QuestRequest(31,3608,[])); peer.Expect(1,31,[1,24,14,1,0,0,0,0]); Drain();
+            var maze = dungeons.Get(87).Mazes.Single(row => row.SourceOrdinal == information[7]);
+            var path = QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),new(information[8],information[9]));
+            foreach (var next in path.Skip(1))
+            {
+                var move = new byte[100]; move[0] = checked((byte)next.X); move[1] = checked((byte)next.Y);
+                peer.Send(45,move); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+                FormalDungeonTcpTests.Load(peer); Drain();
+                foreach (int offset in Enumerable.Range(0,map[18]).Select(at => 19+22*at).Where(at => map[at+21] == 0)) Kill(offset);
+            }
+            That(U32(map,14) == 57866,"首房完成后仍沿原路线到57866终点");
+            peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); Drain();
+            peer.Send(34,QuestRequest(34,3578,[255,255,1,0,255,255]));
+            var finished = peer.Expect(1,34).Body;
+            That(finished[0] == 1 && U16(finished,1) == 3578,"死灵在第二子任务真实完成后交付破坏武器父任务");
+            Drain(); before = State();
+            peer.Send(34,QuestRequest(34,3578,[255,255,1,0,255,255])); peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == before,"父任务重复交付不重复发奖");
+
+            void Drain() => drain(peer,null);
+            void Kill(int offset)
+            {
+                peer.Send(39,FormalDungeonTcpTests.Death(U16(map,offset+6),peer.Id,map[offset+12])); Drain();
+            }
+        }
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(created.Slot,prepared:true); peer.Barrier();
+            That(new[] {3578,3607,3608}.All(id => peer.CompletedQuestHistory[4+id] == 1) && fixture.Query(
+                "SELECT quest_id FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id) is [[3578L],[3607L],[3608L]],
+                "重连恢复父子三个实际完成及各自唯一交付回执");
+        }
+        string State() => fixture.Snapshot("SELECT revision,experience,gold FROM characters WHERE id=$p0",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY combat_sequence",created.Id);
     }
 
     static byte[] GrandineRetirement(ushort key,ushort reporter)

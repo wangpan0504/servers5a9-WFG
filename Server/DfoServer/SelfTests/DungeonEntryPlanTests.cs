@@ -14,6 +14,28 @@ namespace DfoServer;
 
 internal static class DungeonEntryPlanTests
 {
+    static void SeaTrainParentClearMap(DungeonCatalog catalog, QuestCatalog quests, Character basis)
+    {
+        var parent = quests.Get(3578);
+        That(parent.IntData.SequenceEqual([3607,3608]) && quests.Get(3607).IntData.SequenceEqual([57858]),
+            "破坏武器真实父子顺序与首房清图目标");
+        foreach (byte job in new byte[] { 0,6,15 })
+        foreach (bool acceptedChild in new[] { false,true })
+        foreach (uint request in new uint[] { 3578,0 })
+        {
+            var active = new ActiveMainQuest(0,3578,2) { AcceptanceId = Guid.NewGuid() };
+            var character = basis with { Job = job, GrowType = job == 15 ? (byte)20 : job == 6 ? (byte)18 : (byte)0,
+                Level = 73, CompletedQuests = [3577], ActiveMainQuests = acceptedChild
+                    ? [active,new(1,3607,1) { AcceptanceId = Guid.NewGuid() }] : [active] };
+            That(DungeonEntryPlan.TryCreate(catalog,character,87,request,0,out var plan,out var reason,
+                    quest: request == 0 ? null : parent,quests: quests) &&
+                plan is { RouteQuestId: 3578, HasExplicitClearMap: true, StartMap.Id: 57858 } &&
+                plan.QuestClearMap == plan.StartMap && plan.BossMap != plan.StartMap &&
+                plan.QuestAcceptances.SequenceEqual(character.ActiveMainQuests),
+                "父连接及普通0均借当前子目标，保留原Boss和真实接取；覆盖死灵6/18及日志15/20：" + reason);
+        }
+    }
+
     static void CompletedSeekingRoutes(DungeonCatalog catalog, QuestCatalog quests, Character basis)
     {
         var quest = quests.Get(3735);
@@ -310,6 +332,7 @@ internal static class DungeonEntryPlanTests
         AwakeningDungeonRoutes(catalog,quests,rooms,character);
         TournamentEntry(catalog,character,rooms);
         HarlemSeekingRoutes(catalog,quests,character);
+        SeaTrainParentClearMap(catalog,quests,character);
         CompletedSeekingRoutes(catalog,quests,character);
         ClearedStoryUsesOrdinaryRoute(catalog,quests,character);
         ClearedSequentialChildUsesOrdinaryRoute(catalog,quests,character);
