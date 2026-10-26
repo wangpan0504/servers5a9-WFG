@@ -70,13 +70,13 @@ public sealed class PvfDocument
         return true;
     }
 
-    /// <summary>读取最近声明层的根级整数；缺席返回null，显式坏值或结构错误拒绝而不继承父值。</summary>
-    public int? ReadRootInt32(string tag)
+    /// <summary>读取最近声明层的根级整数；默认严格唯一，明确开启时只兼容完整同值重复。缺席继承父层，坏值不继承。</summary>
+    public int? ReadRootInt32(string tag, bool allowIdenticalDuplicates = false)
     {
         // 仅候选字段需要结构扫描；普通模板不为这一严格读取重复解析全部脚本。
         if (text.IndexOf("[" + tag, StringComparison.OrdinalIgnoreCase) < 0 &&
             text.IndexOf("[/" + tag, StringComparison.OrdinalIgnoreCase) < 0)
-            return parent?.ReadRootInt32(tag);
+            return parent?.ReadRootInt32(tag, allowIdenticalDuplicates);
         if (text.Count(value => value == '`') % 2 != 0)
             throw new InvalidDataException("PVF根整数声明的字符串未闭合");
         string masked = System.Text.RegularExpressions.Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
@@ -92,7 +92,7 @@ public sealed class PvfDocument
             if (masked.IndexOf("[" + tag + "]", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 masked.IndexOf("[/" + tag + "]", StringComparison.OrdinalIgnoreCase) >= 0)
                 throw new InvalidDataException("PVF根整数声明的标签结构无效");
-            return parent?.ReadRootInt32(tag);
+            return parent?.ReadRootInt32(tag, allowIdenticalDuplicates);
         }
         if (System.Text.RegularExpressions.Regex.Replace(masked, pattern, "").IndexOfAny(['[', ']']) >= 0)
             throw new InvalidDataException("PVF根整数声明包含残缺标签");
@@ -114,10 +114,12 @@ public sealed class PvfDocument
                 if (string.Equals(name, tag, StringComparison.OrdinalIgnoreCase))
                 {
                     int end = index + 1 < tokens.Count ? tokens[index + 1].Index : text.Length;
-                    if (stack.Count != 0 || result.HasValue || closed.Contains(name) ||
+                    if (stack.Count != 0 || closed.Contains(name) ||
                         !int.TryParse(text.AsSpan(token.Index + token.Length, end - token.Index - token.Length).Trim(),
                             System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int value))
                         throw new InvalidDataException("PVF根整数声明必须唯一且完整");
+                    if (result.HasValue && (!allowIdenticalDuplicates || result.Value != value))
+                        throw new InvalidDataException("PVF根整数声明重复或冲突");
                     result = value;
                 }
                 if (closed.Contains(name)) stack.Push(name);
