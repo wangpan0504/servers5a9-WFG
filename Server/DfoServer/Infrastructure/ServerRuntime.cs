@@ -62,7 +62,8 @@ internal static class ServerRuntime
         var attributePairs = IndependentAttributePairCatalog.Load(
             Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
             itemResources.Items, itemResources.Boosters, itemResources.LimitCubes, itemResources.Enchantments,
-            itemResources.EpicPieces, itemResources.Contracts, id => Game.Currency.CurrencyWallet.RewardKind(id) is not null);
+            itemResources.EpicPieces, itemResources.Contracts, id => Game.Currency.CurrencyWallet.RewardKind(id) is not null,
+            useBundledDefault: true);
         log.Write("startup", new { Stage = "Independent attribute pairs", State = "complete",
             attributePairs.Revision, attributePairs.ValidatedFamilies, Reason = attributePairs.UnavailableReason });
         // 支持模板全集在监听就绪前准备，首位玩家选角不承担STK扫描。

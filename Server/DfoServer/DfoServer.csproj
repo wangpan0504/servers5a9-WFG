@@ -15,6 +15,7 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <EmbeddedResource Include="GmWeb/*.html;GmWeb/*.css;GmWeb/*.js" LogicalName="DfoServer.GmWeb.%(Filename)%(Extension)" />
     <EmbeddedResource Include="Resources/channel.txt" LogicalName="DfoServer.Resources.channel.txt" />
+    <EmbeddedResource Include="Resources/independent-attribute-pairs.json" LogicalName="DfoServer.Resources.independent-attribute-pairs.json" />
     <EmbeddedResource Include="Sqlite/game_schema.sql" LogicalName="DfoServer.Sqlite.game_schema.sql" />
     <None Update="Resources/**" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Sqlite/*.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

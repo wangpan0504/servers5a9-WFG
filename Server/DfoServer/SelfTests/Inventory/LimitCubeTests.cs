@@ -23,6 +23,8 @@ internal static class LimitCubeTests
         byte[] observed = Convert.FromHexString("5F00CE913F1D5500");
         That(LimitCubeRequests.Read(observed) == new LimitCubeRequest(95, TargetId, 85),
             "CMD338按实收8B解析目标槽、目标模板和变更券槽");
+        That(LimitCubeRequests.Read(Convert.FromHexString("5200A7913F1D5400")) == new LimitCubeRequest(82, 490705319, 84),
+            "现场暴戾搜捕团请求未颠倒宝珠目标与券槽");
         foreach (byte[] malformed in new byte[][]
         {
             [], new byte[7], new byte[9], Convert.FromHexString("5F00CE913F1D5F00"),
