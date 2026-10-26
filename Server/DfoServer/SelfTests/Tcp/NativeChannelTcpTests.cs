@@ -129,7 +129,7 @@ internal static class NativeChannelTcpTests
             SocketError.ConnectionReset or SocketError.ConnectionAborted })
         { That(true, "Native拒绝后关闭连接"); }
     }
-    static async Task Seen(TcpTestFixture fixture, string kind, int count)
+    internal static async Task Seen(TcpTestFixture fixture, string kind, int count)
     {
         var elapsed = Stopwatch.StartNew();
         while (elapsed.Elapsed < TimeSpan.FromSeconds(5))

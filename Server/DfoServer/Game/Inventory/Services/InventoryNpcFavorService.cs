@@ -10,6 +10,7 @@ namespace DfoServer.Game.Inventory.Services;
 internal sealed class InventoryNpcFavorService(Func<int, NpcFavorItemDefinition?> definitions, NpcFavorCatalog npcs, TownCatalog? towns = null, TimeProvider? time = null)
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
+    public TimeProvider Clock => clock;
 
     public InventoryResult Plan(Character character, InventorySlot slot, int npcId, bool inTown)
     {

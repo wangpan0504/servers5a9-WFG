@@ -611,7 +611,22 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(AvatarPresetList.Length >= 2 && AvatarPresetList[1] <= AvatarPresetList[0],
             "装扮预设容量与列表先于每周地下城下发，条目数不超过容量");
         NpcFavor = Expect(0, 746).Body;
-        TestCheck.That(NpcFavor.Length >= 1 && NpcFavor.Length == 1 + NpcFavor[0] * 10, "好感度按完整绝对快照恢复");
+        TestCheck.That(NpcFavor.Length >= 1, "好感度快照有u8行数");
+        int favorOffset = 1;
+        var favorIds = new HashSet<int>();
+        for (int row = 0; row < NpcFavor[0]; row++)
+        {
+            TestCheck.That(favorOffset + 10 <= NpcFavor.Length && BitConverter.ToInt32(NpcFavor, favorOffset) > 0 &&
+                BitConverter.ToInt32(NpcFavor, favorOffset + 4) > 0 && favorIds.Add(BitConverter.ToInt32(NpcFavor, favorOffset)),
+                "好感度行完整、正数且owner不重复");
+            int colors = NpcFavor[favorOffset + 9];
+            favorOffset += 10;
+            TestCheck.That(colors <= 4 && favorOffset + colors * 2 <= NpcFavor.Length, "NPC颜色列表宽度和数量有界");
+            var channels = new HashSet<byte>();
+            for (int color = 0; color < colors; color++, favorOffset += 2)
+                TestCheck.That(NpcFavor[favorOffset] < 4 && channels.Add(NpcFavor[favorOffset]), "NPC颜色通道不越界、不重复");
+        }
+        TestCheck.That(favorOffset == NpcFavor.Length, "好感度按完整绝对快照恢复，无尾随字节");
         Expect(0, 720, []);
         WeeklyDungeonConfig = Expect(0, 721).Body;
         TestCheck.That(WeeklyDungeonConfig.Length == 5, "每周地下城721固定回放5个槽位");

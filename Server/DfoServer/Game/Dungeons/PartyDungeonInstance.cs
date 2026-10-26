@@ -40,6 +40,22 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
     readonly Dictionary<(ushort, DungeonMap, uint, string), int> sceneReports = [];
     PendingScene? pendingScene;
     bool? epicPieceShopAvailable;
+    NpcFavorAppearance? favorNpc;
+    public NpcFavorAppearance? ReadNpcFavorAppearance() => Execute(_ => favorNpc);
+    public bool ConfirmNpcFavorAppearance(GameSession source, GameSession target, NpcFavorDungeonCapture capture,
+        NpcFavorAppearance appearance) => Execute(current =>
+    {
+        if (current.SingleOrDefault(member => member.Slot == Leader)?.Actor.Session != source ||
+            !current.Any(member => ReferenceEquals(member.Actor.Session, target)) ||
+            favorNpc is { } prior && prior != appearance || target.CaptureNpcFavorDungeon() is not { } destination ||
+            destination.Snapshot.Identity.InstanceId != capture.Snapshot.Identity.InstanceId ||
+            destination.Snapshot.CurrentMap != capture.Snapshot.CurrentMap ||
+            !source.CanConfirmNpcFavorAppearance(capture, appearance) || !target.CanConfirmNpcFavorAppearance(destination, appearance)) return false;
+        if (!source.ConfirmNpcFavorAppearance(capture, appearance) || !target.ConfirmNpcFavorAppearance(destination, appearance))
+            throw new InvalidOperationException("共享副本好感NPC已核验的快照发生变化");
+        favorNpc = appearance;
+        return true;
+    });
     internal bool ResolveEpicPieceShop(Func<bool> roll)
     {
         if (!IsExecuting) throw new InvalidOperationException("碎片商人出场必须由当前共享副本owner冻结");

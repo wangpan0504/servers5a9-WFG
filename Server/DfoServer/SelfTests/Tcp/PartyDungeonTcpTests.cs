@@ -208,6 +208,7 @@ internal static partial class PartyDungeonTcpTests
             }
             if (boss)
             {
+                if (count == 2 && !rollback) await VerifyFavorNpcNativeAsync(alpha, beta, fixture);
                 string unsettled = fixture.Snapshot();
                 beta.Send(46, DungeonSettlementProtocolTests.Report(alpha.Id, 99));
                 That(!Drain(beta).Any(p => p is { Kind: 0, Opcode: 34 or 35 }) && fixture.Snapshot() == unsettled,

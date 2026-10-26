@@ -338,14 +338,16 @@ internal static class ServerRuntime
             new Game.Characters.LevelUpTicketService(itemResources.Items,growth,clock,characters,learning),
             quests,levelUpProjection,log);
         var classChange = new Game.Characters.ClassChangeService(itemResources.Items, characters, learning, quests);
+        var npcFavor = new NpcFavorCatalog(pvf);
         IGameCommandModule[] modules =
         [
             new SessionHandler(projection, log),
+            new NpcFavorHandler(new NpcFavorService(npcFavor, towns, clock), inventoryProjection, log),
             // 客户端保活：0x04FE/0x06BB 每 10 秒一次，服务端必须回同 opcode 帧（见 KeepaliveHandler）。
             new KeepaliveHandler(log),
             new PvpTrainingHandler(new GameWorld.Pvp.PvpArcadeCatalog(pvf),new GameWorld.Pvp.PvpPracticeComboCatalog(pvf),quests,log,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
-                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters, tagEvildomProjection),
+                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters, tagEvildomProjection, clock),
             new SocialHandler(repository, social, online, log),
             new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
@@ -461,7 +463,7 @@ internal static class ServerRuntime
                 new FatigueConsumableHandler(new Game.Characters.FatigueConsumableService(itemResources.Items, towns, clock), inventoryProjection, log), rentalHandler, creatureHandler,
                 new InventoryPeriodExtensionService(itemResources.Items, towns, clock), new InventoryMileageService(itemResources.Items, towns, clock),
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler,
-                new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, new NpcFavorCatalog(pvf), towns, clock)),
+                new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock)),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, itemResources.Creatures, repository, clock), inventoryProjection, log),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
@@ -493,7 +495,7 @@ internal static class ServerRuntime
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
-        var native = new NativeChannel(options, online, log);
+        var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
         var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);

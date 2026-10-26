@@ -140,15 +140,16 @@ internal sealed class PacketCapture : IDisposable
     }
 
     // Native 每帧携带连接关联材料。尚未解释的内部载荷也只记录长度，不输出 raw 或关联值。
-    public void WriteNative(int connection, int wireLength, int bodyLength)
+    public void WriteNative(int connection, int wireLength, int bodyLength, bool sending = false)
     {
         if (Volatile.Read(ref disposed) != 0) return;
         var timestamp = DateTimeOffset.Now;
-        Interlocked.Increment(ref totalReceived);
-        if (sessions?.TryGetValue(connection, out var session) == true) session.Count(false, 0);
+        if (sending) Interlocked.Increment(ref totalSent);
+        else Interlocked.Increment(ref totalReceived);
+        if (sessions?.TryGetValue(connection, out var session) == true) session.Count(sending, 0);
         if (recent is not null)
         {
-            var snapshot = new PacketTraceSnapshot(timestamp, connection, "NATIVE", "RECV", 1, 0,
+            var snapshot = new PacketTraceSnapshot(timestamp, connection, "NATIVE", sending ? "SEND" : "RECV", 1, 0,
                 "NATIVE", wireLength, bodyLength, "", false, true);
             lock (recentGate)
             {
@@ -157,7 +158,7 @@ internal sealed class PacketCapture : IDisposable
                 recent.Enqueue(snapshot);
             }
         }
-        Append($"{timestamp:O} connection={connection} protocol=NATIVE RECV len={wireLength} body=({bodyLength}B) [native association and payload redacted]\n");
+        Append($"{timestamp:O} connection={connection} protocol=NATIVE {(sending ? "SEND" : "RECV")} len={wireLength} body=({bodyLength}B) [native association and payload redacted]\n");
     }
 
     internal static bool IsAuthentication(ushort opcode) => opcode is
