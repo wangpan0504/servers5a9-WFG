@@ -188,7 +188,9 @@ internal static class ServerRuntime
         var tagEvildomRun = new TagEvildomRunProjection(new TagEvildomRewardCatalog(pvf, itemResources.Boosters),
             itemResources.Items, repository, tagEvildomProjection, log);
         var raidCatalog = GameWorld.Raids.RaidCatalog.Load(pvf).PrepareResources(pvf, dungeonCatalog, itemResources.Items);
-        var raidHandler = new RaidHandler(log, raidCatalog, new Game.Raids.RaidRegistry(clock), online);
+        var raidRegistry = new Game.Raids.RaidRegistry(clock);
+        var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
+            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock));
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
         new DevilContractHandler(log, clock).Register(commands);
         var auctionProbe = Development.Auction.AuctionProbe.Parse(options.DevelopmentAuctionProbe);

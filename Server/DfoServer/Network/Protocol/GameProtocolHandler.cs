@@ -94,6 +94,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         ushort socialCharacter = 0;
         session.PartyNoticeArrived = notice => PartyProjection.Notice(context, notice);
         session.RaidNoticeArrived = (change, actor) => RaidProjection.Notice(context, change, actor);
+        session.RaidStartArrived = (receipt, actor) => RaidProjection.Started(context, projection, receipt, actor);
+        session.RaidCostArrived = (rows, actor) => RaidProjection.Cost(context, rows, actor);
         session.RaidRecordNoticeArrived = (party, actor) => sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
             RaidProjection.Record(party), "raid_record_updated", () => session.CanPublishRaid(actor, party));
         session.RaidPeerNoticeArrived = (recipient, peer, peerId, invite) => RaidProjection.Peer(context, recipient, peer, peerId, invite);

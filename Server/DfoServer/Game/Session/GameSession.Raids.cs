@@ -10,6 +10,24 @@ internal sealed partial class GameSession
     public Action<RaidActor, RaidActor, uint, bool>? RaidPeerNoticeArrived { get; set; }
     public Action<RaidDirectoryChange, RaidActor>? RaidDirectoryNoticeArrived { get; set; }
     public Action<RaidActor>? RaidPeerRefused { get; set; }
+    public Action<RaidStartReceipt, RaidActor>? RaidStartArrived { get; set; }
+    public Action<RaidCostStatus[], RaidActor>? RaidCostArrived { get; set; }
+
+    // 正式开战身份归原Raid聚合，供进图轨读取；不以诊断对象代替实例。
+    public RaidStarted? StartedRaid => raidRegistry?.FindCurrent(this, SelectionEpoch)?.Started;
+
+    internal Characters.Character? CaptureRaidStart(RaidActor actor)
+    {
+        try { return owner.Execute(() => actor.IsCurrent && CanChangeTownParty ? Selected : null); }
+        catch (InvalidOperationException) when (!owner.IsCurrent) { return null; }
+    }
+    internal bool MatchesRaidStart(RaidStartReservation reservation) => reservation.Actor.IsCurrent && CanChangeTownParty &&
+        ReferenceEquals(Selected, reservation.Expected);
+    internal void InstallRaidStart(RaidStartReservation reservation, Characters.Character committed)
+    {
+        if (!MatchesRaidStart(reservation)) throw new InvalidOperationException("攻坚开战提交后原会话已变化");
+        Selected = committed;
+    }
 
     public RaidActor? CaptureRaidActor(RaidRegistry registry)
     {

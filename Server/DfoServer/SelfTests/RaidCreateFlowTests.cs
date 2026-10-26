@@ -43,6 +43,7 @@ internal static class RaidCreateFlowTests
 
         // 多人聚合保留key/槽位及精确Session清理；重复创建不再替换已有成员。
         RaidMemberTests.RunCore();
+        AntonRaidStartTests.RunCore();
         AntonRaidResourceTests.RunCore();
         LukeRaidResourceTests.RunCore();
 
