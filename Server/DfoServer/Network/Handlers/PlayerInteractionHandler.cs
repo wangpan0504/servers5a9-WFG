@@ -11,7 +11,7 @@ using DfoServer.Network.Projection;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessionDirectory online, ServerLog log, PartyDungeonService? partyDungeons = null,
-    RaidHandler? raids = null) : IGameCommandModule
+    RaidHandler? raids = null, TownProjection? town = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -116,6 +116,9 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
     {
         bool kick = request.Opcode == (ushort)CmdPacketType.WALKOUT_PARTY_MEMBER;
         if (request.Body.Length != (kick ? 1 : 0)) throw new InvalidDataException("离队请求长度错误");
+        // 普通频道取消快速组队发空13；仅无真实队伍的选图上下文按取消恢复，不能伪造实际离队成功。
+        if (!kick && town is not null && await town.RestoreDungeonSelectionAsync(context, CmdPacketType.LEAVE_PARTY))
+            return CommandResult.Handled;
         if (!kick && context.Session.ReadPvpTraining() is { } training)
         {
             var left = context.Session.EndPvpTraining(training.InstanceId);

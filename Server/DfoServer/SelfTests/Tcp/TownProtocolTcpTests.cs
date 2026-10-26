@@ -183,6 +183,23 @@ internal static partial class TownProtocolTcpTests
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
             peer.Expect(0, 27, new byte[42]);
             That(fixture.Snapshot() == before, "入口重复请求冻结返回点，不提前写库");
+            foreach (ushort cancelOpcode in new ushort[] { 13, 444 })
+            {
+                if (cancelOpcode == 444)
+                {
+                    peer.Send(444, [0]);
+                    peer.Barrier();
+                }
+                // 取消只结束客户端握手；仍由后续132消费选图身份并提交安全落点。
+                for (int cancel = 0; cancel < 2; cancel++)
+                {
+                    peer.Send(cancelOpcode);
+                    peer.Expect(1, cancelOpcode, [1]);
+                    peer.Expect(0, 27, new byte[42]);
+                }
+                peer.Barrier();
+                That(fixture.Snapshot() == before, "快速组队重复取消不改写城镇返回点、revision或资产");
+            }
             peer.Send(132);
             peer.Expect(1, 132, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
@@ -193,6 +210,8 @@ internal static partial class TownProtocolTcpTests
             before = fixture.Snapshot();
             peer.Send(132);
             peer.Barrier();
+            peer.Send(13); peer.Expect(1, 13, [0, 19, 0]);
+            peer.Send(444); peer.Barrier();
             That(fixture.Snapshot() == before, "重复132无额外包和位置提交");
             That(fixture.Snapshot($"SELECT {columns} FROM characters WHERE id=$p0", peer.Id) == character &&
                 JsonSerializer.Serialize(tables.Select(table => fixture.Query($"SELECT * FROM \"{table}\" ORDER BY rowid"))) == assets,

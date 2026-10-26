@@ -332,7 +332,7 @@ internal static class ServerRuntime
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters, tagEvildomProjection),
             new SocialHandler(repository, social, online, log),
-            new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler),
+            new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),

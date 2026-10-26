@@ -91,7 +91,7 @@ internal static class DungeonSelectionReturnTests
         try
         {
             await UnavailableEntryAsync(towns,characters,items,root);
-            foreach (string scenario in new[] { "normal", "failed-write", "owner", "reselect", "reopen", "gm" })
+            foreach (string scenario in new[] { "normal", "quick-party", "failed-write", "owner", "reselect", "reopen", "gm" })
             {
                 var repository = new CharacterRepository(Path.Combine(root, scenario + ".db"));
                 var owners = new AccountOwners();
@@ -114,17 +114,37 @@ internal static class DungeonSelectionReturnTests
                 commands.Seal();
                 projection.Join(context);
                 var back = new Packet(1, 132, []);
+                var cancel = new Packet(1, 444, []);
+                That(await commands.DispatchAsync(context, cancel) == CommandResult.Unhandled && sent.Count == 0,
+                    "城镇内迟到的快速组队取消不确认选图操作");
                 await commands.DispatchAsync(context, new(1, 15, new byte[4]));
                 That(sent.Select(frame => (frame.Kind, frame.Opcode)).SequenceEqual(new (byte, ushort)[] { (1, 15), (0, 3), (0, 1536), (0, 27) }) && presence.Count == 0,
                     "ACK15→本人State1→NOTI27同步选图，离开同屏");
                 That(sent[1].Body.SequenceEqual(new byte[] { 1, (byte)session.Selected!.Id, (byte)(session.Selected.Id >> 8), 1 }), "开选图发送实际角色State1");
                 That(await commands.DispatchAsync(context, back with { Body = [0] }) == CommandResult.Unhandled && sent.Count == 4, "非空132不消费当前选择");
                 var before = repository.LoadCharacter(owner, 0);
+                if (scenario == "quick-party")
+                {
+                    var selection = session.CurrentDungeonSelection;
+                    var character = session.Selected;
+                    That(await commands.DispatchAsync(context, cancel with { Body = [0] }) == CommandResult.Unhandled && sent.Count == 4,
+                        "非空444不应答也不消费选图身份");
+                    for (int repeat = 0; repeat < 2; repeat++)
+                        That(await commands.DispatchAsync(context, cancel) == CommandResult.Handled &&
+                            sent[^2] is { Kind: 1, Opcode: 444 } && sent[^2].Body.SequenceEqual(new byte[] { 1 }) &&
+                            sent[^1] is { Kind: 0, Opcode: 27 } && sent[^1].Body.SequenceEqual(new byte[42]),
+                            "快速组队取消及重试均回复ACK444并发布完整普通选图刷新");
+                    That(sent.Count == 8 && presence.Count == 0 && session.Phase == SessionPhase.MapSelect &&
+                        ReferenceEquals(session.CurrentDungeonSelection, selection) && ReferenceEquals(session.Selected, character) &&
+                        JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)) == JsonSerializer.Serialize(before),
+                        "快速组队取消只完成握手，保留原选图、安全落点及完整持久资产");
+                    sent.RemoveRange(4, 4);
+                }
                 AccountOwners.Lease? replacement = null;
                 Task? queued = null;
                 try
                 {
-                    if (scenario is not ("normal" or "failed-write"))
+                    if (scenario is not ("normal" or "quick-party" or "failed-write"))
                     {
                         stream.Hold = true;
                         queued = sender.Send(1, 1347, [1], "queue_barrier");
@@ -154,7 +174,7 @@ internal static class DungeonSelectionReturnTests
                         catch (Exception e) when (e is IOException or InvalidOperationException or OperationCanceledException) { }
                     }
                     That(failed == (scenario is "owner" or "gm" or "failed-write"), "失败/接管/同revision快照更新正确收尾：" + scenario);
-                    if (scenario == "normal")
+                    if (scenario is "normal" or "quick-party")
                     {
                         That(sent.Skip(4).Select(frame => (frame.Kind, frame.Opcode)).SequenceEqual(new (byte, ushort)[] { (1, 132), (0, 3), (0, 23), (0, 24) }),
                             "返回ACK132→State3→Area23→Transition24，不追加124");
@@ -165,6 +185,8 @@ internal static class DungeonSelectionReturnTests
                             "恢复同屏与安全位置，仅提交位置和revision");
                         await commands.DispatchAsync(context, back);
                         That(sent.Count == 8 && session.Move(new(1084, 249, 5, 0, 0, 0)), "重复返回不重发场景，回城后移动恢复");
+                        That(await commands.DispatchAsync(context, cancel) == CommandResult.Unhandled && sent.Count == 8,
+                            "回城后迟到444不重开选图或发布取消成功");
                     }
                     else
                         That(presence.Count == 0 && sent.Skip(4).All(frame => frame.Opcode is not (132 or 3 or 23 or 24)), "过期/失败出队不发旧回城也不加入场景：" + scenario);
