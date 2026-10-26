@@ -140,6 +140,29 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
         }
     });
 
+    public RaidChange? TransferLeadership(RaidActor actor, ushort target)
+    {
+        if (target == actor.Character) return null;
+        RaidActor? recipient;
+        lock (gate) recipient = FindCore(actor)?.Members.FirstOrDefault(m => m.Actor.Character == target)?.Actor;
+        if (recipient is null) return null;
+        // 固定双方再按账号锁序复验；接管、重选或退出后的旧成员不能接任。
+        return Pair<RaidChange>(actor, recipient, () =>
+        {
+            lock (gate)
+            {
+                var old = FindCore(actor);
+                if (!actor.CanManage || !recipient.CanManage || old is null || old.Leader != actor.Character ||
+                    !old.Members.Any(m => Same(m.Actor, recipient))) return null;
+                var updated = old with { Leader = target, Revision = ++revision };
+                parties[old.Key] = updated;
+                foreach (var key in invitations.Where(p => p.Value.Raid == old.Key).Select(p => p.Key).ToArray())
+                    invitations.Remove(key);
+                return new(old, updated);
+            }
+        });
+    }
+
     public RaidChange? Leave(RaidActor actor, ushort target) => actor.Owner.Execute(() =>
     {
         lock (gate)

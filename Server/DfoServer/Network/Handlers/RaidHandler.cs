@@ -164,14 +164,21 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         RaidManagerRequest parsed;
         try { parsed = RaidRequests.Manager(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
-        if (Actor(context) is not { } actor || parsed.Operation != 0 || parsed.Argument > byte.MaxValue || parsed.Character > ushort.MaxValue)
+        if (Actor(context) is not { } actor || parsed.Character > ushort.MaxValue ||
+            parsed.Operation == 0 && parsed.Argument > byte.MaxValue ||
+            parsed.Operation == 1 && parsed.Argument != 0 || parsed.Operation > 1)
             return CommandResult.Unhandled;
-        var change = registry.Assign(actor, (ushort)parsed.Character, (byte)parsed.Argument);
+        // 菜单145「委任团长」在03990155写operation=1、目标u32和argument=0；不猜其它管理操作。
+        var change = parsed.Operation == 0
+            ? registry.Assign(actor, (ushort)parsed.Character, (byte)parsed.Argument)
+            : registry.TransferLeadership(actor, (ushort)parsed.Character);
         log.Write("raid_modify_request", new { Connection = context.Id, parsed.Operation, parsed.Character, Squad = parsed.Argument,
-            Accepted = change is not null, Reason = change is null ? "member-squad-or-leader-mismatch" : null, Revision = change?.After?.Revision });
+            Accepted = change is not null, Reason = change is null ? "member-squad-or-leader-mismatch" : null,
+            Leader = change?.After?.Leader, Revision = change?.After?.Revision });
         if (change is null) return CommandResult.Handled;
         registry.Publish(change);
-        await context.Reply(CmdPacketType.RAID_MANAGER_WORK, [1], "raid_squad_changed", () => actor.IsCurrent);
+        await context.Reply(CmdPacketType.RAID_MANAGER_WORK, [1],
+            parsed.Operation == 0 ? "raid_squad_changed" : "raid_leader_changed", () => actor.IsCurrent);
         return CommandResult.Handled;
     }
 

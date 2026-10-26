@@ -28,7 +28,7 @@ internal static class RaidRequests
         return BinaryPrimitives.ReadUInt32LittleEndian(body);
     }
 
-    // 02174823/0216CCC2：三个u32；目标虽取自成员u16，发送函数03BDF780仍写四字节。
+    // 02174823/0216CCC2编队、03990155委任团长：三个u32；目标虽取自成员u16，03BDF780仍写四字节。
     public static RaidManagerRequest Manager(ReadOnlySpan<byte> body)
     {
         if (body.Length != 12) throw new InvalidDataException("RAID_MANAGER_WORK 需要三个u32");
