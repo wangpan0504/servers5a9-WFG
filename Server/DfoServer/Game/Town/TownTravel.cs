@@ -19,7 +19,12 @@ internal static class TownTravel
 {
     public static Location? Walk(Character character, PositionRequest request, TownCatalog towns, IReadOnlySet<int> completed)
     {
-        var target = character.Position with { X = request.X, Y = request.Y };
+        var target = character.Position with
+        {
+            X = request.X,
+            Y = request.Y,
+            Direction = request.Movement == 0 ? character.Position.Direction : request.Movement
+        };
         return towns.IsPosition(target, completed) ? target : null;
     }
 

@@ -23,10 +23,12 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log) : IG
         if (BlockTownAction(context, request))
             return Task.FromResult(CommandResult.Handled);
         var before = session.Selected?.Position;
-        bool moved = session.Move(movement);
+        bool position = request.Opcode == (ushort)CmdPacketType.SET_USER_POSITION;
+        // 631 继续只处理原有坐标同步，不改变攻击/技能的朝向与广播合同。
+        bool moved = session.Move(position ? movement : movement with { Movement = 0 });
         log.Write("position", new { Connection = context.Id, Accepted = moved, Character = session.Selected?.Id, session.Selected?.Position, session.Selected?.Revision });
-        if (moved && session.Selected!.Position != before)
-            projection.Move(context);
+        if (moved && (position || session.Selected!.Position != before))
+            projection.Move(context, position ? movement.ScaledSpeed : (ushort)100);
         return Task.FromResult(CommandResult.Handled);
     }
 

@@ -70,9 +70,9 @@ internal static class SelfTests
             That(!session.Travel(enter with { PreviousArea = 1 }), "stale source area rejected");
             That(session.Travel(enter with { X = 450, Y = 234 }), "valid route not rejected due to sampled coordinate distance");
             That(session.Selected!.Position.X == 450 && session.Selected.Position.Y == 234, "normal door preserves requested coordinates");
-            That(repository.List(owner)[0].Return == towns.InitialReturn, "room return uses PVF door instead of last standing point");
+            That(repository.List(owner)[0].Return == (towns.InitialReturn with { Direction = 5 }), "房间返回坐标取PVF门口，并保留本次步行朝向");
             That(session.Travel(area with { X = ushort.MaxValue }) && session.Selected!.Position.X == ushort.MaxValue, "ordinary travel preserves full u16 outside offline geometry");
-            That(session.Travel(enter) && session.Travel(area) && session.Selected!.Position == new Location(38, 0, 645, 251), "ordinary room exit uses raw sampled request coordinates");
+            That(session.Travel(enter) && session.Travel(area) && session.Selected!.Position == new Location(38, 0, 645, 251, 5), "普通房间出口保持原始上报坐标和已保存朝向");
             var back = towns.InitialReturn;
             That(session.Travel(enter), "reenter before bottom exit recovery");
             var old = repository.List(owner)[0];

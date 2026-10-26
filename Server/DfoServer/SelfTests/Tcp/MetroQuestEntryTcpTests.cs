@@ -2124,7 +2124,7 @@ internal static class MetroQuestEntryTcpTests
                 source = Position(peer.Id);
             }
             peer.Send(35, Move(target.X, target.Y)); peer.Barrier();
-            That(Position(peer.Id) == target, "真实35落点符合任务NPC/入口可行走区域");
+            That(Position(peer.Id) == (target with { Direction = 5 }), "真实35落点符合任务NPC/入口可行走区域并保留上报朝向");
         }
 
         void Cleanup(TcpPeer peer, Character created, string account)

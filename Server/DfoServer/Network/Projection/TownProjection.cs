@@ -348,10 +348,10 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (guard()) presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.ITEM_EFFECT, visual, "town_gift_visual");
     }
 
-    public void Move(GameConnectionContext context)
+    public void Move(GameConnectionContext context, ushort scaledSpeed = 100)
     {
         if (context.Session.Selected is { } c)
-            presence?.Move(context.Owner, context.Sender, c);
+            presence?.Move(context.Owner, context.Sender, c, scaledSpeed);
     }
 
     public void Remove(GameConnectionContext context) => presence?.Remove(context.Sender);

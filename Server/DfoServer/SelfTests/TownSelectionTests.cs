@@ -88,6 +88,9 @@ internal static class TownSelectionTests
         TestCheck.That(enter.Accepted && enter.Position == new Location(1, 0, 99, 98, 3) && enter.Return == new Location(2, 0, 10, 10, 3),
             "入房保留请求落点并保存来源地区门口");
         TestCheck.That(TownTravel.Walk(character, new(100, 100, 0, 0, 0, 0), towns, Quests) == new Location(1, 0, 100, 100, 7), "步行接受矩形边界并保留方向");
+        foreach (byte direction in new byte[] { 1, 3, 5, 9 })
+            TestCheck.That(TownTravel.Walk(character, new(100, 100, direction, 513, 0, 0), towns, Quests) ==
+                new Location(1, 0, 100, 100, direction), "步行原样保留上报方向，速度不参与位置值");
         TestCheck.That(TownTravel.Walk(character, new(101, 100, 0, 0, 0, 0), towns, Quests) is null, "步行不借切图规则绕过几何");
         TestCheck.That(JsonSerializer.Serialize(character) == original, "全部领域规划保持输入角色不变");
     }

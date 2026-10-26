@@ -169,7 +169,7 @@ internal static partial class TownPackets
         }
     }
 
-    public static byte[] Position(Character character, bool area)
+    public static byte[] Position(Character character, bool area, ushort scaledSpeed = 100)
     {
         var position = character.Position;
         using (var stream = new MemoryStream())
@@ -189,7 +189,7 @@ internal static partial class TownPackets
                 // 02A90970将状态bit1写入转职特效显示记录，切图不能固定清零。
                 writer.Write((byte)(1 | (character.VisibilityFlags & 2)));
             else
-                writer.Write((ushort)100);
+                writer.Write(scaledSpeed);
             return stream.ToArray();
         }
     }
