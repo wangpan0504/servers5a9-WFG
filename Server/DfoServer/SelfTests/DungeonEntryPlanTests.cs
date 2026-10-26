@@ -213,6 +213,16 @@ internal static class DungeonEntryPlanTests
         DungeonStoryFlowTests.RunStoryResources(pvf);
 
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        var soul = catalog.Get(337);
+        That(soul.Path == "dungeon/boss_rush/boss_rush.dgn" && soul.MinimumLevel == 95 && soul.BasisLevel == 130 &&
+            soul.IsBossRushDungeon && soul.TryGetDesignatedDifficulty(out byte soulDifficulty) && soulDifficulty == 0 &&
+            soul.DisableFatigueConsumption && soul.EnterWithoutFatigue && !soul.DeclaresRequiredItem &&
+            soul.RawSections.Any(row => row.Tag == "dungeon timeout" && row.Tokens is [{ Type:0,Value:120 },{ Type:0,Value:1 }]),
+            "337确为95级、难度0、无资源门票及疲劳消耗的120秒BossRush，不能按缺票或疲劳不足诊断");
+        var soulCharacter = new Character(99,0,"SoulEntry337",0,new(38,2,1085,249),null) { Level = 95 };
+        That(!DungeonEntryPlan.TryCreate(catalog,soulCharacter,337,0,0,out var soulPlan,out string soulReason) &&
+            soulPlan is null && soulReason == "boss-rush-room-contract-unproven",
+            "真实337满足等级与难度后仍因专用合同缺失拒绝，不把伴侣开关允许当作正式准入");
         // GM伴侣只在普通副本注入：祭坛/塔/亡者峡谷按资源标记整类排除，普通副本与Boss Rush保持放行。
         // 7601 眩惑之塔、11006/11007 两座祭坛、11008 绝望之塔首层。
         DeathTowerCompanionPolicy(pvf, catalog);

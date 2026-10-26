@@ -20,6 +20,7 @@ internal static partial class FormalDungeonTcpTests
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"special-normal-entry"),gm:true,resources:resources);
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out _),"普通副本回归关闭无限疲劳");
+        VerifyBossRushRejection(fixture,resources);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         int sequence = 0;
@@ -294,5 +295,48 @@ internal static partial class FormalDungeonTcpTests
             }
         }
         await fixture.StopAsync();
+        var soulRejections = fixture.Events().Where(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry")
+            .Select(row => row.GetProperty("Detail")).Where(row => row.GetProperty("Request").GetProperty("DungeonIndex").GetUInt32() == 337).ToArray();
+        That(soulRejections.Length == 2 && soulRejections.All(row => !row.GetProperty("Accepted").GetBoolean() &&
+            row.GetProperty("Identity").ValueKind == System.Text.Json.JsonValueKind.Null &&
+            row.GetProperty("RejectReason").GetString() == "entry-plan:boss-rush-room-contract-unproven"),
+            "337经真实选图到达EntryPlan，重复拒绝记录准确原因且不发布实例身份");
+    }
+
+    static void VerifyBossRushRejection(TcpTestFixture fixture,TcpTestResources resources)
+    {
+        var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 337));
+        var done = area.Quests.Concat(area.AnyQuests.Take(1)).ToHashSet();
+        var option = resources.Towns.DungeonMaps[area.DungeonWorldMap!.Value].Options.First(row => row.DungeonId == 337);
+        if (option.QuestId > 0 && !option.InProgress) done.Add(option.QuestId);
+        done.UnionWith(area.Map(done).DungeonGates.Where(gate => gate.Conditions.Length == 0).SelectMany(gate => gate.Quests));
+        var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        using var peer = Open(fixture);
+        peer.Create("Soul337");
+        fixture.Sql("UPDATE characters SET level=95,experience=$p0,town=$p1,area=$p2,x=$p3,y=$p4 WHERE id=$p5",
+            SelfTestCatalogs.Growth(resources.Archive).GetLevelStartExperience(95),area.Town,area.Area,
+            bounds.X+bounds.Width/2,bounds.Y+bounds.Height/2,peer.Id);
+        foreach (int quest in done)
+            fixture.Sql("INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id) VALUES($p0,$p1)",peer.Id,quest);
+        peer.Select(prepared:true,resumeTown:true,room:false);
+        SelectMap(peer,griefLayer:1);
+        string EntryState() => string.Join("\n",new[] { "characters","character_inventory_items","character_fatigue",
+            "character_dungeon_state","character_dungeon_growth_receipts","character_dungeon_loot_receipts",
+            "character_dungeon_card_rewards","character_dungeon_settlement_receipts","character_active_main_quests" }
+            .Select(table => fixture.Snapshot($"SELECT * FROM {table} ORDER BY 1,2")));
+        string before = EntryState();
+        byte[] request = Selection();
+        BinaryPrimitives.WriteUInt32LittleEndian(request,337);
+        BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),0);
+        for (int repeat = 0; repeat < 2; repeat++)
+        {
+            peer.Send(16,request);
+            peer.Expect(1,16,[0,9,0,0]);
+            peer.Barrier();
+        }
+        peer.Send(37,new byte[8]);
+        peer.Barrier();
+        That(EntryState() == before,"337拒绝及重放加载不扣费、不预留尝试号、不产生奖励或任务进度，连接保持可用");
     }
 }

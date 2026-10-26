@@ -199,6 +199,7 @@ internal sealed record DungeonEntryPlan(
         }
         else if (grief is not null) { reason = "grief-tower-resource-mismatch"; return false; }
         // 02A00360 只识别类型码 0x54。5×5 网格和把 6,6 搬进格子都不是这条房间合同。
+        // 客户端另消费1487/1488/1489并发送1527；普通Boss死亡、换房及翻牌不能代替专用流程。
         if (definition.IsBossRushDungeon)
         {
             reason = "boss-rush-room-contract-unproven";
