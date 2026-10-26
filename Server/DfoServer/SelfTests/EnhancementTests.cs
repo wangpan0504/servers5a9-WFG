@@ -136,6 +136,12 @@ internal static class EnhancementTests
             !Plan(role, use, out _, template: gearTemplate with { MinimumLevel = 96 }).Accepted &&
             !Plan(role, use, out _, template: gearTemplate with { EquipmentSlot = 13 }).Accepted && calls == rolled,
             "追加券相等门槛、目标清单、等级及称号资格失败均在随机与消费前拒绝");
+        That(InventoryEnhancementService.Plan(role, use, now, fixedRule,
+            couponTemplate with { MaximumLevel = 15 }, gearTemplate, () => 0, out _).Accepted &&
+            !InventoryEnhancementService.Plan(role with { Level = 16 }, use, now, fixedRule,
+                couponTemplate with { MaximumLevel = 15 }, gearTemplate,
+                () => throw new InvalidOperationException("越级拒绝不得随机"), out _).Accepted,
+            "强化券最高等级包含上限并在随机前拒绝超出合法使用区间的角色");
         var timedRole = role with { Inventory = new([source with { Core = source.Core with { ExpireTime = (int)now + 10 } }, target]) };
         var timed = Plan(timedRole, use, out _);
         That(timed.Accepted && timed.Plan!.CharacterPrecondition!.Matches(timedRole, now + 9) &&

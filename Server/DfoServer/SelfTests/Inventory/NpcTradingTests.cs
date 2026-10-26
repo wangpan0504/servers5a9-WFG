@@ -213,6 +213,9 @@ internal static class NpcTradingTests
             });
             var bulk = shop.Sell(seller, new(Bag(121), 80, Pumpkin, 2, 0));
             That(bulk.Accepted && bulk.Plan!.After.Gold == 80 * 6666, "eighty stones sell for the full roster price");
+            long reset = clock.GetUtcNow().AddSeconds(1).ToUnixTimeSeconds();
+            That(bulk.Plan!.CharacterPrecondition is { } daily && daily.Matches(seller, reset - 1) && !daily.Matches(seller, reset),
+                "每日收购资格在重置等号拒绝上一日的旧计划");
             var committed = InventoryService.Commit(repo, owner, seller, bulk);
             That(committed.Inventory.ShopPurchases is [{ NpcId: 0, ItemId: Stone, Count: 80 }] && committed.Inventory.Items.IsEmpty,
                 "sale limit counter commits together with the sale");

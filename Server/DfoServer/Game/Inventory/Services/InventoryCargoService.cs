@@ -5,8 +5,10 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog cargo, GoldLimitCatalog goldLimits)
+internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog cargo, GoldLimitCatalog goldLimits, TimeProvider? clock = null)
 {
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+
     public static bool AllowsInsert(ItemCore core, InventoryListType list, ItemTemplate template)
     {
         string attach = template.AttachType.Replace("`", "").Trim().Trim('[', ']').Trim();
@@ -32,12 +34,13 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
             return InventoryResult.Reject(19);
         // 空306没有商品或付款凭据；付费档只接受当前下一档的历史预付工具。
         if (tier.ProductId > 0)
-            return PaidUpgrade(character, catalog, tier, DateTimeOffset.UtcNow, true, out _);
+            return PaidUpgrade(character, catalog, tier, Clock.GetUtcNow(), true, out _, Clock);
         if (before.Gold < tier.GoldCost)
             return InventoryResult.Reject(20);
         var after = before with { Gold = checked(before.Gold - (uint)tier.GoldCost) };
         int remaining = tier.MaterialCount;
-        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long now = Clock.GetUtcNow().ToUnixTimeSeconds();
+        long? deadline = null;
         foreach (var item in before.Items.Where(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == tier.MaterialId &&
                      item.Core.IsStackable && item.Core.EquipmentLockId == 0 && !item.Core.IsExpired(now)).OrderBy(item => item.Position.Index))
         {
@@ -49,16 +52,17 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
                 return InventoryResult.Reject(20);
             after = deletion.Plan!.After;
             remaining -= consumed;
+            if (item.ExpireTime > 0 && (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
         }
         if (remaining != 0)
             return InventoryResult.Reject(20);
         after = after with { AccountCargo = before.AccountCargo with { Capacity = tier.Capacity } };
-        return new(true, 0, new(before, after, create ? "account_cargo_create" : "account_cargo_upgrade"));
+        return new(true, 0, new(before, after, create ? "account_cargo_create" : "account_cargo_upgrade", new(character, deadline, Clock)));
     }
 
     // 只规划容量与可选预付凭据；新购买的点券由商城整单统一扣除。
     internal static InventoryResult PaidUpgrade(Character character, ItemCatalog catalog, AccountCargoTier tier,
-        DateTimeOffset now, bool requireTool, out InventoryItem? tool)
+        DateTimeOffset now, bool requireTool, out InventoryItem? tool, TimeProvider? clock = null)
     {
         tool = null;
         var before = character.Inventory;
@@ -81,7 +85,7 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
             after = consumed.Plan!.After;
         }
         after = after with { AccountCargo = before.AccountCargo with { Capacity = tier.Capacity } };
-        return new(true, 0, new(before, after, "account_cargo_upgrade", new(character, tool?.ExpireTime > 0 ? tool.ExpireTime : null)));
+        return new(true, 0, new(before, after, "account_cargo_upgrade", new(character, tool?.ExpireTime > 0 ? tool.ExpireTime : null, clock)));
     }
 
     public InventoryResult Gold(Character character, int amount, bool deposit)
@@ -103,7 +107,7 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
     {
         var before = character.Inventory;
         var item = before.Find(new(InventoryListType.Main, slot));
-        if (item is null || !item.Core.IsStackable || item.Core.EquipmentLockId != 0 || item.Core.IsExpired(DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
+        if (item is null || !item.Core.IsStackable || item.Core.EquipmentLockId != 0 || item.Core.IsExpired(Clock.GetUtcNow().ToUnixTimeSeconds()))
             return InventoryResult.Reject(17);
         var template = catalog.Get(item.Core.ItemId);
         if (!template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
@@ -116,6 +120,6 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
             return InventoryResult.Reject(17);
         var after = consumed.Plan!.After with { CargoCapacity = target };
         return new(true, 0, new(before, after, "personal_cargo_upgrade",
-            new(character, item.ExpireTime > 0 ? item.ExpireTime : null)));
+            new(character, item.ExpireTime > 0 ? item.ExpireTime : null, Clock)));
     }
 }

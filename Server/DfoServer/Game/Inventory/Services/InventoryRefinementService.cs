@@ -4,15 +4,17 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentRefinementCatalog refinement, Random? random = null)
+internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentRefinementCatalog refinement, Random? random = null, TimeProvider? clock = null)
 {
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+
     public InventoryResult Refine(Character character, RefinementRequest request, out RefinementReceipt? receipt, DateTimeOffset? utcNow = null)
     {
         receipt = null;
         var before = character.Inventory;
         var target = before.Find(request.Position);
         var materialSlot = new InventorySlot(InventoryListType.Main, request.MaterialSlot);
-        long now = (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
+        long now = (utcNow ?? Clock.GetUtcNow()).ToUnixTimeSeconds();
         if (request.Position.List is not (InventoryListType.Main or InventoryListType.Equipment) || request.Position == materialSlot ||
             target is null || target.Core.Kind != ItemKind.Equipment || target.Core.ItemId != request.ItemId ||
             target.Core.EquipmentLockId != 0 || target.Core.IsExpired(now))
@@ -79,6 +81,8 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
         {
             Target = after.Find(request.Position)!, SourceItemId = material.Core.ItemId, UsedTicket = ticket is not null
         };
-        return new(true, 0, new(before, after, "equipment_refinement"));
+        long? deadline = InventoryAvatarPackageService.EarliestDeadline(target, [material]);
+        // 失败抽签及同级券也消费材料；目标未产生差量时仍复验原实例的期限。
+        return new(true, 0, new(before, after, "equipment_refinement", new(character, deadline, Clock, requirePosition: true)));
     }
 }

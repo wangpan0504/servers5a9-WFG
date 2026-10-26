@@ -16,7 +16,7 @@ internal sealed partial class InventoryRandomOptionService
         if (target.Core.EquipmentLockId != 0) return InventoryResult.Reject(0xD5);
         var core = target.Core;
         var original = new[] { core.Random0, core.Random1, core.Random2 };
-        if (target.IsExpired((utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds()) || core.IsRental ||
+        if (target.IsExpired((utcNow ?? Clock.GetUtcNow()).ToUnixTimeSeconds()) || core.IsRental ||
             core.Random0.Type == 0 || original[request.OptionIndex].Type == 0) return InventoryResult.Reject(19);
         if (core.RandomChange.Type != 0 && core.RandomChangedIndex != request.OptionIndex) return InventoryResult.Reject(4);
         var definition = options.ResolveChange(items.Get(core.ItemId));
@@ -28,7 +28,7 @@ internal sealed partial class InventoryRandomOptionService
         {
             Gold = before.Gold - definition.GoldCost,
             Items = before.Items.Replace(target, target with { Core = changed })
-        }, "equipment_random_option_change", new(character)));
+        }, "equipment_random_option_change", new(character, target.ExpireTime > 0 ? target.ExpireTime : null, Clock)));
     }
 
     internal static ItemCore? GenerateChange(ItemCore core, byte index, EquipmentRandomOptionChangeDefinition definition,

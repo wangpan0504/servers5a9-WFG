@@ -118,8 +118,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         after = cooled;
         receipt = new(request.Slot, destination.Position, productId,
             destination.Core.Count - (prior.TryGetValue(destination.Position, out int priorCount) ? priorCount : 0));
+        long? deadline = InventoryAvatarPackageService.EarliestDeadline(source, [destination]);
         return new(true, 0, new InventoryPlan(before, after, "rune_box_open",
-            new InventoryCharacterPrecondition(character, source.ExpireTime > 0 ? source.ExpireTime : null, clock, requirePosition: true)));
+            new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true)));
 
         static InventoryResult RejectRuneBox(string reason) => InventoryResult.Reject(19) with { RejectReason = reason };
     }

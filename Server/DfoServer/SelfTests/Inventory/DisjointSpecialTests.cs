@@ -145,6 +145,9 @@ internal static class DisjointSpecialTests
         var freed = Service(Text, new EndpointRandom(false)).Disjoint(crowded, request with { Position = movedSource.Position }, out _);
         That(freed.Accepted && freed.Plan!.After.Find(movedSource.Position)!.Core.ItemId == 8000,
             "特殊奖励容量规划复用将释放的源槽");
+        InventoryQualificationTests.CheckInputs(Source(2000),
+            role => Service(Text, new EndpointRandom(false)).Disjoint(role, request with { ToolSlot = 4 }, out _),
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(), request.Position, new(InventoryListType.Main, 4));
         RunSessionChecks(items, limits, pieces, Source(2000), request);
         RunRejectionChecksAsync(items, limits, pieces, Source(2003), request).GetAwaiter().GetResult();
         Console.WriteLine($"PASS {Count - checks} special equipment disjoint core assertions");

@@ -94,7 +94,7 @@ internal static class ServerRuntime
             : new Game.ExpertJob.ExpertJobCompatibility();
         expertPolicy.Validate();
         var machineDisassembly = new Game.ExpertJob.ExpertJobDisassembly(
-            new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, expertJobs: expertJobs),
+            new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, expertJobs: expertJobs, clock: clock),
             expertJobs, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, expertPolicy, clock);
 
         var enchantmentService = new InventoryEnchantmentService(itemResources.Items, itemResources.Enchantments, clock);
@@ -372,7 +372,7 @@ internal static class ServerRuntime
                 itemResources.EpicPieces), collectBoxProjection, inventoryProjection, clock),
             new EpicProductionHandler(epicProduction,epicAbilities,epicPolicy,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,
                 epicProductionProjection,inventoryProjection,clock),
-            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts), inventoryProjection, log),
+            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log),
             new CubeContractHandler(new CubeContractService(itemResources.Contracts), inventoryProjection, log, clock),
             new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables, clock), log, tutorials, itemResources.Items, inventoryProjection,
                 new InventoryPremiumContractUseService(itemResources.Items, itemResources.Contracts, clock), creatures, creatureProjection, projection,
@@ -381,13 +381,13 @@ internal static class ServerRuntime
             rentalHandler,
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),
             new InventoryExpansionHandler(new InventoryExpansionService(itemResources.Items, clock), inventoryProjection, log),
-            new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits), inventoryProjection),
+            new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits, clock), inventoryProjection),
             new ShopHandler(
                 new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock),
                 cashShop,
                 inventoryProjection, log),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
-            new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions), inventoryProjection, log),
+            new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions, clock: clock), inventoryProjection, log),
             new TextureChangeHandler(new InventoryTextureChangeService(itemResources.Items, itemResources.TextureChanges,
                 itemResources.EpicPieces, clock), inventoryProjection, log),
             new DarkRevelationHandler(new InventoryDarkRevelationService(itemResources.DarkRevelations,
@@ -406,7 +406,7 @@ internal static class ServerRuntime
             new AvatarDyeHandler(new InventoryAvatarDyeService(itemResources.Items, itemResources.AvatarDyes), inventoryProjection, log),
             new AvatarAbilityChangeHandler(new InventoryAvatarAbilityChangeService(itemResources.Items, itemResources.AvatarPackages, clock), inventoryProjection, log),
             new AvatarSocketHandler(new InventoryAvatarSocketService(itemResources.Items, itemResources.AvatarPackages, clock), inventoryProjection, log),
-            new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
+            new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement, clock: clock), inventoryProjection),
             new EnchantmentHandler(enchantmentService, inventoryProjection, log),
             new EquipmentEmblemHandler(new InventoryEquipmentEmblemService(itemResources.Items, clock), inventoryProjection, log),
             new TalismanHandler(new InventoryTalismanService(itemResources.Items),
@@ -421,7 +421,7 @@ internal static class ServerRuntime
             new CreatureSkinHandler(skinService, inventoryProjection, log),
             new CreatureEggHandler(new InventoryCreatureEggService(itemResources.CreatureEggs, itemResources.Items, clock), inventoryProjection, log),
             creatureHandler,
-            new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, expertJobs: expertJobs), inventoryProjection),
+            new DisjointHandler(new InventoryDisjointService(itemResources.Items, itemResources.Disjoint, itemResources.GoldLimits, itemResources.EpicPieces, expertJobs: expertJobs, clock: clock), inventoryProjection),
             new ExpertJobHandler(quests, expertJobs, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, presence, expertStores, enchantmentService, machineDisassembly,
                 new Game.ExpertJob.ExpertJobEnchanting(expertJobs, itemResources.Items, itemResources.Enchantments, expertPolicy, clock), online),
@@ -442,7 +442,7 @@ internal static class ServerRuntime
                 attributePairs: attributePairs), inventoryProjection,
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
-                contracts: itemResources.Contracts, debugSettings: debugSettings), inventoryProjection),
+                contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock), inventoryProjection),
             new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),

@@ -266,6 +266,13 @@ internal static class CargoTests
             foreach (var tier in itemResources.Cargo.AccountTiers.Where(tier => tier.Capacity > 8))
             {
                 var before = current.Inventory;
+                if (tier.ProductId == 0 && tier.MaterialCount > 0)
+                {
+                    var firstInput = current.Inventory.Items.Where(item => item.Position.List == InventoryListType.Main &&
+                        item.Core.ItemId == tier.MaterialId).OrderBy(item => item.Position.Index).First();
+                    InventoryQualificationTests.CheckInputs(current, role => cargo.AccountUpgrade(role, false),
+                        DateTimeOffset.UtcNow.ToUnixTimeSeconds(), firstInput.Position);
+                }
                 current = Commit(tier.ProductId > 0 ? cashShop.Buy(current, new(0, [new(tier.ProductId, 0)]), out _) : cargo.AccountUpgrade(current, false));
                 That(current.Inventory.AccountCargo.Capacity == tier.Capacity && current.Inventory.Gold == before.Gold - tier.GoldCost &&
                     current.Inventory.AccountWallet.Get(CurrencyKind.Cera) == before.AccountWallet.Get(CurrencyKind.Cera) - tier.CeraCost,

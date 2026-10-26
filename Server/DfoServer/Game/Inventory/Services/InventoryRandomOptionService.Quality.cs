@@ -12,7 +12,7 @@ internal sealed partial class InventoryRandomOptionService
         var materialSlot = new InventorySlot(InventoryListType.Main, request.MaterialSlot);
         var target = before.Find(targetSlot);
         var material = before.Find(materialSlot);
-        long now = (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
+        long now = (utcNow ?? Clock.GetUtcNow()).ToUnixTimeSeconds();
         if (target is null || targetSlot == materialSlot || request.TargetSlot < 0 || request.MaterialSlot < 0 ||
             target.Core.Kind != DfoServer.GameWorld.Items.ItemKind.Equipment ||
             !request.RandomOptions && target.Core.ItemId != request.ItemId || target.IsExpired(now) || target.Core.IsRental)
@@ -39,7 +39,7 @@ internal sealed partial class InventoryRandomOptionService
             core = core with { Random0 = Adjust(core.Random0), Random1 = Adjust(core.Random1), Random2 = Adjust(core.Random2) };
         var after = paid.Plan!.After;
         after = after with { Items = after.Items.Replace(target, target with { Core = core }) };
-        return new(true, 0, new(before, after, "equipment_quality_reset", new(character)));
+        return new(true, 0, new(before, after, "equipment_quality_reset", new(character, InventoryAvatarPackageService.EarliestDeadline(target, [material]), Clock)));
 
         RandomOption Adjust(RandomOption option)
         {

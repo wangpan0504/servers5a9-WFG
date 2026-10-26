@@ -122,10 +122,10 @@ internal static class GuildMedalTests
             That(!service.UseGuardianGem(current, new(medal.Id, 52, 90042, 3)).Accepted, "security lock protects embedded target");
             Apply(service.Lock(current, worn.Position, InventoryLockOperation.EquipmentUnlock));
             var expiring = current.Inventory with { Items = current.Inventory.Items.Replace(worn, worn with { Core = worn.Core with { ExpireTime = 1 } }) };
-            That(!InventoryGuardianGemService.Plan(expiring, new(medal.Id, 52, 90042, 3), catalog, 2).Accepted, "expired target cannot be modified");
+            That(!InventoryGuardianGemService.Plan(current with { Inventory = expiring }, new(medal.Id, 52, 90042, 3), catalog, 2).Accepted, "expired target cannot be modified");
             var expiringGem = Find(InventoryListType.GuildMedal, 52);
             expiring = current.Inventory with { Items = current.Inventory.Items.Replace(expiringGem, expiringGem with { Core = expiringGem.Core with { ExpireTime = 1 } }) };
-            That(!InventoryGuardianGemService.Plan(expiring, new(medal.Id, 52, 90042, 3), catalog, 2).Accepted, "expired material is not consumed");
+            That(!InventoryGuardianGemService.Plan(current with { Inventory = expiring }, new(medal.Id, 52, 90042, 3), catalog, 2).Accepted, "expired material is not consumed");
             var oldPlan = service.UseGuardianGem(current, new(medal.Id, 52, 90042, 3));
             before = Snapshot();
             Sql("CREATE TRIGGER fail_gem BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'test gem rollback'); END");

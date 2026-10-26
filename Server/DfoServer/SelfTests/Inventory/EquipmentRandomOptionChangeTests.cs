@@ -86,6 +86,15 @@ internal static class EquipmentRandomOptionChangeTests
         That(rule.GoldCost == 300 && rule.Types[0].Weight == 1 && rule.Types[1].Weight == 0 &&
             rule.Types[0].Groups.Single().Options.Single().Type == 1 && catalog.Resolve(template)!.GoldCost == 100,
             "变换独立选表、精确需求等级、通用itemType优先；费用取首个上界且不改变原解封");
+        var items = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        items.PrefillTemplates([new(template.Id, template)]);
+        var source = new InventoryItem(1, new(InventoryListType.Main, 9), new(template.Id, ItemKind.Equipment, 123)
+            { Random0 = new(1, 10, 10), RandomChangedIndex = 255 });
+        var role = new DfoServer.Game.Characters.Character(1, 0, "Option", 0, new(1, 0, 10, 10), null)
+            { Level = 95, Inventory = new([source], Gold: 1000) };
+        var service = new InventoryRandomOptionService(items, catalog, _ => 0);
+        InventoryQualificationTests.CheckInputs(role, value => service.Change(value, new(9, 0, 0)),
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(), source.Position);
         That(catalog.ResolveChange(template with { MinimumLevel = 18 }) is null &&
             catalog.ResolveChange(template with { Kind = ItemKind.Material }) is null &&
             catalog.ResolveChange(template with { Rarity = 0 }) is null,

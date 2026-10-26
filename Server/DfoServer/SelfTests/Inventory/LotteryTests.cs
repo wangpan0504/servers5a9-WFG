@@ -227,6 +227,11 @@ internal static class LotteryTests
         That(random.Bounds.SequenceEqual((long[])[10000, 10000, ownRunes.Length]),
             "符文箱抽取上界依次为本职业万分比、档权重与池大小");
 
+        InventoryQualificationTests.CheckInputs(runeSource, value =>
+        {
+            random.Values = new([0, 0, 0]);
+            return service.OpenLottery(value, new(0, 117), out _, now);
+        }, now.ToUnixTimeSeconds(), Bag(117));
         var ownTalismans = catalog.TalismanCandidates(2).Where(id => catalog.Talisman(id)!.AllowsUse(95, 0, 1)).ToArray();
         That(ownTalismans.Length >= 2, "匹配资源提供至少两枚本职业可用的2级护石");
         random.Values = new([0, 0, 0]);

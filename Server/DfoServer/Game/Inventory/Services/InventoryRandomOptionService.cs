@@ -5,8 +5,9 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed partial class InventoryRandomOptionService(ItemCatalog items, RandomOptionCatalog options,
-    Func<long, long>? random = null)
+    Func<long, long>? random = null, TimeProvider? clock = null)
 {
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
     readonly Func<long, long> roll = random ?? Random.Shared.NextInt64;
 
     public InventoryResult Unseal(Character character, UnsealRandomOptionRequest request, DateTimeOffset? utcNow = null)
@@ -14,7 +15,7 @@ internal sealed partial class InventoryRandomOptionService(ItemCatalog items, Ra
         var before = character.Inventory;
         var target = before.Find(new(InventoryListType.Main, request.Slot));
         if (target is null || target.Core.Kind != ItemKind.Equipment || target.Core.EquipmentLockId != 0 ||
-            target.IsExpired((utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds()) ||
+            target.IsExpired((utcNow ?? Clock.GetUtcNow()).ToUnixTimeSeconds()) ||
             target.Core.Random0.Type != 0 || target.Core.Random1.Type != 0 || target.Core.Random2.Type != 0)
             return InventoryResult.Reject();
         var definition = options.Resolve(items.Get(target.Core.ItemId));
@@ -25,7 +26,7 @@ internal sealed partial class InventoryRandomOptionService(ItemCatalog items, Ra
         {
             Gold = before.Gold - definition.GoldCost,
             Items = before.Items.Replace(target, target with { Core = core })
-        }, "random_option_unseal", new(character)));
+        }, "random_option_unseal", new(character, target.ExpireTime > 0 ? target.ExpireTime : null, Clock)));
     }
 
     // 纯实例初始化：费用由调用入口决定，奖励不能调用扣金币的背包解封事务。
