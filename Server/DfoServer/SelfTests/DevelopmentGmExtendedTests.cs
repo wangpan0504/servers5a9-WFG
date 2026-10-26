@@ -240,6 +240,21 @@ internal static class DevelopmentGmExtendedTests
             "整链按职业前置原子完成");
         TestCheck.That(Answer("quest-batch Other 10100,10101", session).StartsWith("OK ") &&
             session.QueryCharacters().Single().CompletedQuests.Intersect([10100, 10101]).Count() == 2, "批量完成同事务写入");
+        var dailySample = quests.All.First(quest => DevelopmentGm.QuestCategory(quest.Grade) == "daily");
+        var repeatSample = quests.All.First(quest => DevelopmentGm.QuestCategory(quest.Grade) == "repeat");
+        var dailySearch = Json(Answer("quest-search Other cat:daily size:5", session));
+        TestCheck.That(dailySearch.GetProperty("ids").GetArrayLength() == 0 && dailySearch.GetProperty("total").GetInt32() > 0,
+            "每日分类仍可检索，但不进入全部完成编号");
+        var mixedBatch = Json(Answer($"quest-batch Other {dailySample.Id},{repeatSample.Id},10102", session));
+        var completedAfter = session.QueryCharacters().Single().CompletedQuests;
+        TestCheck.That(mixedBatch.GetProperty("skipped").GetInt32() == 2 && completedAfter.Contains(10102) &&
+            !completedAfter.Contains(dailySample.Id) && !completedAfter.Contains(repeatSample.Id),
+            "批量完成跳过每日和重复，只永久写入其它任务");
+        TestCheck.That(Answer("quest-batch Other " + dailySample.Id, session).StartsWith("ERR "), "纯每日批量完成拒绝永久写入");
+        TestCheck.That(Answer("quest-add Other " + dailySample.Id, session).StartsWith("OK "), "单独完成每日仍允许");
+        var afterDailyAdd = session.QueryCharacters().Single();
+        TestCheck.That(afterDailyAdd.CompletedQuests.Contains(dailySample.Id) && afterDailyAdd.QuestDailyClaims.ContainsKey(dailySample.Id),
+            "单独 quest-add 每日写入当天周期而不是永久完成");
         var points = Json(Answer("points Other", session));
         if (points.GetProperty("bonusSp").ValueKind == JsonValueKind.Number && points.GetProperty("bonusTp").ValueKind == JsonValueKind.Number)
         {

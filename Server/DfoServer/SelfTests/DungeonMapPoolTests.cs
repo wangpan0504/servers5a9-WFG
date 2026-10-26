@@ -324,6 +324,30 @@ internal static class DungeonMapPoolTests
         That(DungeonCatalog.ParseResource(777,"dungeon/hell-pool.dgn",hellTokens,id => strings[id],paths,_ => true).Mazes.Single() is
             { ResourceError: null,MapSpecification: null,HellParty.MapId: 200 },
             "深渊密门声明不依赖DGN显式地图表，后续仍可通过反向池组格");
+        var rushPaths = new Dictionary<int,string> { [100]="map/r00.map",[101]="map/r10.map",[102]="map/r01.map",[103]="map/r11.map" };
+        PvfToken[] rushTokens = [Tag("minimum required level"),new(0,1),Tag("dungeon type"),Text("boss rush dungeon"),
+            Tag("maze info"),Tag("size"),new(0,2),new(0,2),Tag("greed"),Text("BBBBEEEE"),
+            Tag("map specification"),Text("map"),new(0,0),new(0,0),new(0,100),Text("map"),new(0,1),new(0,0),new(0,101),
+            Text("map"),new(0,0),new(0,1),new(0,102),Text("map"),new(0,1),new(0,1),new(0,103),Tag("/map specification"),
+            Tag("start map"),new(0,0),new(0,0),Tag("/start map"),Tag("boss map"),new(0,3),new(0,3),Tag("/boss map")];
+        var rush = DungeonCatalog.ParseResource(778,"dungeon/boss-rush.dgn",rushTokens,id => strings[id],rushPaths,_ => true);
+        var rushMaze = rush.Mazes.Single();
+        var rushCharacter = new Character(99,0,"BossRush",0,new(38,2,1085,249),null) { Level = 95 };
+        That(rush.IsBossRushDungeon && rushMaze is { Width: 2, Height: 2, ResourceError: null } &&
+            rushMaze.Starts.SequenceEqual([new DungeonPoint(0,0)]) && rushMaze.Bosses.SequenceEqual([new DungeonPoint(3,3)]) &&
+            DungeonEntryPlan.TryCreate(rush,rushCharacter,778,0,0,out var rushEntry,out string rushReason) &&
+            rushReason == "resource-plan-ready" && rushEntry is { StartMap.Id: 100, BossMap.Id: 103, BossMap.Kind: "boss" } &&
+            rushEntry.BossMap.Position == new DungeonPoint(1,1) && rushMaze.Bosses.SequenceEqual([new DungeonPoint(3,3)]),
+            "BossRush 保留格子外 Boss，入场用最远格作结算房，不把 Boss 坐标搬进网格");
+        var noType = DungeonCatalog.ParseResource(778,"dungeon/off-grid.dgn",
+            [..rushTokens.Where((_,index) => index is not (2 or 3))],id => strings[id],rushPaths,_ => true).Mazes.Single();
+        That(noType is { Width: 0, Height: 0, ResourceError: not null } &&
+            noType.ResourceError!.Contains("maze 坐标超出 size", StringComparison.Ordinal),
+            "非 BossRush 的格子外 Boss 仍按解析失败处理");
+        var fakeRush = rushMaze with { Width = 0, Height = 0, ResourceError = "maze 坐标超出 size",
+            MapSpecification = [new("boss", new(0,0), 1, "map/fake.map")] };
+        That(!DungeonEntryPlan.TryCreate(rush with { Mazes = [fakeRush] }, rushCharacter, 778, 0, 0, out _, out string fakeRushReason) &&
+            fakeRushReason == "boss-rush-room-contract-unproven","宽高为 0 时补一张假地图也不能进 BossRush");
     }
 
     public static void Run(PvfArchive pvf)
@@ -389,12 +413,15 @@ internal static class DungeonMapPoolTests
             fatigueReason == "grief-tower-fatigue-mismatch","无疲劳标记未成立时不能再走零疲劳准入");
         var soul = catalog.Get(337);
         var soulMaze = soul.Mazes.Single();
-        That(soul.IsBossRushDungeon && soulMaze is { Width: 0, Height: 0, ResourceError: not null } &&
-            soulMaze.ResourceError!.Contains("maze 坐标超出 size", StringComparison.Ordinal) &&
-            !DungeonEntryPlan.TryCreate(catalog,eligible with { Level = 95 },337,0,0,out var soulEntry,out string soulReason) &&
-            soulEntry is null && soulReason == "boss-rush-room-contract-unproven",
-            "337 保持解析失败后的 0×0，不改成 5×5，也不把 Boss 6,6 搬进格子");
-        var fake = soulMaze with { MapSpecification = [new("boss", new(0,0), 1, "map/fake.map")] };
+        That(soul.IsBossRushDungeon && soulMaze is { Width: 5, Height: 5, ResourceError: null } &&
+            soulMaze.Starts.SequenceEqual([new DungeonPoint(2,2)]) && soulMaze.Bosses.SequenceEqual([new DungeonPoint(6,6)]) &&
+            soulMaze.MapSpecification is { Count: 25 } &&
+            DungeonEntryPlan.TryCreate(catalog,eligible with { Level = 95 },337,0,0,out var soulEntry,out string soulReason) &&
+            soulReason == "resource-plan-ready" && soulEntry is { StartMap.Position: { X: 2, Y: 2 }, BossMap.Position: { X: 4, Y: 4 }, BossMap.Kind: "boss" } &&
+            soulMaze.Bosses.SequenceEqual([new DungeonPoint(6,6)]),
+            "337 保留 5×5 与格子外 Boss 6,6；入场用最远格作结算房，不把 6,6 搬进网格");
+        var fake = soulMaze with { Width = 0, Height = 0, ResourceError = "maze 坐标超出 size",
+            MapSpecification = [new("boss", new(0,0), 1, "map/fake.map")] };
         That(!DungeonEntryPlan.TryCreate(soul with { Mazes = [fake] }, eligible with { Level = 95 }, 337, 0, 0, out _, out string fakeReason) &&
             fakeReason == "boss-rush-room-contract-unproven","宽高为 0 时补一张假地图也不能进灵魂之冢");
         var dazzlement = catalog.Get(7601);

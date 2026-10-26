@@ -172,7 +172,7 @@ python3 Tools/GmWeb/gm_web.py --self-check
 | `set-grant <角色> <套装> <强化> <锻造> <mail\|direct>` | 按当前职业每部位一件；邮件方式超过 10 件时拆成多封（单封邮件原子投递） |
 | `item-delete <角色> <容器:位置:UID,…>` / `item-clear <角色> <容器>` | 按现有删除规划整批删除；UID 不符或锁定时整批保留，锁定物品保留 |
 | `mails <角色>` / `mail-delete <角色> <ID,…\|all>` | 只读查看邮箱；删除走 `MailboxService.ChangeState`，有未领取资产的邮件拒绝删除 |
-| `quest-search` / `quest-chain` / `quest-batch` | 任务名称检索；整链按职业前置组展开；批量最多 2000 个，同一事务完成 |
+| `quest-search` / `quest-chain` / `quest-batch` | 任务名称检索；整链按职业前置组展开；批量最多 3000 个，同一事务完成。`quest-batch`/`quest-chain`跳过每日和`[normaly repeat]`，避免写成 `daily_period=0` 的永久完成导致当天无法再接。单独 `quest-add` 对这类任务写入当天游戏日周期。网页“全部完成”的 `ids` 同样不含每日/重复。 |
 
 ### 在线路由规则
 
@@ -242,7 +242,7 @@ python3 Tools/GmWeb/gm_web.py --self-check
 - 启动即后台预热物品/任务/词条索引并缓存到存档目录（`gm-index-*.json`，按 PVF 大小+修改时间校验），前端只在真正构建时提示。
 - 物品、审计、账号、任务均为服务端分页（`page`/`pageSize`，审计用 `X-Total-Count`）。
 - 稀有度显示为 普通/高级/稀有/神器/史诗/勇者/传说；零命中词条置灰。
-- 任务页：状态筛选、按 PVF `[grade]` 分类（无法归类为“其他”）、勾选批量完成、“全部完成”二次确认并审计。
+- 任务页：状态筛选、按 PVF `[grade]` 分类（无法归类为“其他”）、勾选批量完成、“全部完成”二次确认并审计。全部完成与跨页全选不含每日/重复；这两类请单独 `quest-add`（当天周期）或不要永久完成。
 - 顶部全局角色选择器与整页角色工作台；只有危险操作二次确认。详见 `GM迁移对照.md`。
 
 ## 团本入场时段（团队频道卡）

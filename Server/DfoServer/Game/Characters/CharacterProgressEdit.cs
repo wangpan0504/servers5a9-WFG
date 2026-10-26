@@ -21,11 +21,15 @@ internal sealed record CharacterProgressEdit(CharacterProgressField Field, strin
     // 仅 QuestAdd：同一事务写入的完成标记集合（整链或批量）；为空时使用 Primary。
     public ImmutableArray<int> Quests { get; init; } = [];
     public IEnumerable<int> QuestIds => Quests.IsDefaultOrEmpty ? [Primary] : Quests;
+    // 仅 QuestAdd：0=永久完成；>0 为 UTC+8 06:00 游戏日，供每日/重复在跨日后被 AdvanceQuestCycle 清掉。
+    public int DailyPeriod { get; init; }
     public void Validate()
     {
         if (!Quests.IsDefaultOrEmpty && (Field != CharacterProgressField.QuestAdd || Quests.Length > 3000 ||
             Quests.Any(id => id is < 1 or > 29999) || Quests.Distinct().Count() != Quests.Length))
             throw new InvalidDataException("批量任务编号无效，范围1-29999且不能重复，最多3000个");
+        if (DailyPeriod != 0 && (Field != CharacterProgressField.QuestAdd || DailyPeriod < 19000101 || DailyPeriod > 99991231))
+            throw new InvalidDataException("每日周期须为0或合法游戏日");
         if (Account.Length is < 1 or > 64 || Account.Any(c => !(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_' or '-')))
             throw new InvalidDataException("账号无效");
         if (!CharacterName.IsValid(Name))
