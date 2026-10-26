@@ -97,6 +97,10 @@ internal static class DungeonAltarSessionTests
                 That(session.StartDungeonAltar(loaded) is null && session.PrepareDungeonAltarUi(loaded),
                     "实际房间必须完成UI准备才能启动波次");
                 var current = session.StartDungeonAltar(loaded)!;
+                var nextRooms = entered.Entry.Maze.StaticTopology.Links!.SelectMany(link =>
+                    new[] { (From:link.First,To:link.Second), (From:link.Second,To:link.First) })
+                    .Where(edge => edge.From == loaded.Snapshot.CurrentMap.Position && edge.To.X > edge.From.X)
+                    .Select(edge => edge.To).ToArray();
                 var firstActor = loaded.Monsters.Altar!.Actors[0];
                 That(session.ObserveDungeonAltarDeath(Observation(firstActor.ObjectKey)) is null,
                     "两祭坛39不能确认已分配但尚未计时发布的对象");
@@ -112,6 +116,9 @@ internal static class DungeonAltarSessionTests
                         var keys = batch.Actors.Select(row => row.ObjectKey).ToImmutableArray();
                         if (dungeonId == 11007 || current.State.Round == current.State.Plan.Definition.RoundCount - 1 && current.State.NextDue is null)
                         {
+                            if (nextRooms is [var pendingRoom])
+                                That(session.MoveFormalDungeon(checked((byte)pendingRoom.X), checked((byte)pendingRoom.Y)) is null,
+                                    "无尽末批已经发布但尾怪尚未确认死亡时仍不能提前换房");
                             foreach (var actor in batch.Actors)
                             {
                                 var observation = Observation(actor.ObjectKey);
@@ -140,12 +147,12 @@ internal static class DungeonAltarSessionTests
                 }
                 roomsCleared++;
                 if (session.Phase == SessionPhase.Settlement) break;
-                var next = entered.Entry.Maze.StaticTopology.Links!.SelectMany(link =>
-                    new[] { (From:link.First,To:link.Second), (From:link.Second,To:link.First) })
-                    .Where(edge => edge.From == loaded.Snapshot.CurrentMap.Position && edge.To.X > edge.From.X)
-                    .Select(edge => edge.To).Single();
+                var next = nextRooms.Single();
                 That(session.MoveFormalDungeon(checked((byte)next.X),checked((byte)next.Y)) is not null,
                     "无尽必须清完本房五回合才能沿实际地图连接换房");
+                That(!session.CanPublishDungeonAltar(current) && session.TickDungeonAltar(current) is null &&
+                    session.ObserveDungeonAltarDeath(Observation(current.State.Plan.Actors[^1].ObjectKey)) is null,
+                    "换房后旧房间的计时、尾怪重报及发布资格全部失效，不阻断新房加载");
             }
             var result = session.BeginDungeonAltarSettlement(policy,growth)!;
             That(result.Result is { Stage: 0 } && result.Result.Pending.Fact.CompletedRounds == (dungeonId == 11006 ? 15 : 7) &&
