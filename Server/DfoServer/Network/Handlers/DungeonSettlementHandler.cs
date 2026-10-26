@@ -41,6 +41,12 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var receipt = context.Session.ConfirmFormalDungeonBoss(parsed!.ActorId, parsed.BossKey, parsed.SpawnLevel, parsed.SpawnHp)
             ?? context.Session.ConfirmTutorialCinematic(parsed.ActorId, parsed.BossKey);
         if (receipt is null) return CommandResult.Unhandled;
+        if (context.Session.RaidCombatView() is not null)
+        {
+            if (context.Session.CompleteRaidCombatDungeon(receipt) is not null) context.Session.PublishRaidCombat();
+            await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(parsed.BossKey), "raid_boss_confirmed");
+            return CommandResult.Handled;
+        }
         await DungeonSettlementProjection.EnableAsync(context, parsed.BossKey);
         return CommandResult.Handled;
     }

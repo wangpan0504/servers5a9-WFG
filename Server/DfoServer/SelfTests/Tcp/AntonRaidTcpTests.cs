@@ -14,6 +14,7 @@ internal static partial class AntonRaidTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        await AntonRaidCombatTcpTests.RunAsync(root, resources);
         await AntonRaidMapEntryTcpTests.RunAsync(source, root, resources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "anton-raid"), resources: resources);
         await fixture.StartAsync();

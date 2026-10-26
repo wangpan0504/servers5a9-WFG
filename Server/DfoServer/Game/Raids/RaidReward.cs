@@ -1,0 +1,32 @@
+using System.Collections.Immutable;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
+
+namespace DfoServer.Game.Raids;
+
+internal static class RaidRewardRules
+{
+    // 产品规格hypothesis：终章安徒恩每角色每周2次，周期沿既有周四06:00业务周。
+    public const int WeeklyClearLimit = 2;
+}
+
+// 展示列只保存已证读宽，不以UI显示数量替代实际发放计划。所有列均由明确配置提供，无推测默认值。
+internal sealed record RaidRewardDisplayItem(byte RawCode, uint ItemId, ushort DisplayValue, byte RawFlag);
+internal sealed record RaidRewardDisplayRow(ushort RawOwner, byte Card, ImmutableArray<RaidRewardDisplayItem> Items);
+internal sealed record RaidResultDisplay(byte Result, byte Phase, uint Seconds, ushort RawValue, byte Rank, byte RawFlag);
+internal sealed record RaidRewardOffer(byte Kind, byte Card, ImmutableArray<InventoryReward> Grants,
+    ImmutableArray<RaidRewardDisplayRow> Display);
+internal sealed record RaidPhaseRewardPolicy(string Source, ImmutableArray<RaidRewardOffer> Offers, RaidResultDisplay Result);
+internal sealed record PreparedRaidReward(Guid Instance, int Phase, byte Kind, byte Card, ushort Character,
+    string Source, ImmutableArray<InventoryReward> Grants, bool FinalPhase, int Week);
+internal sealed record RaidRewardCommit(Character Character, bool Duplicate, ImmutableArray<uint> MailIds);
+internal sealed record RaidRewardReceipt(PreparedRaidReward Prepared, RaidRewardOffer Offer, RaidRewardCommit Commit,
+    InventoryResult Inventory, long Generation, long Epoch);
+
+internal interface IRaidRewardStore
+{
+    RaidRewardCommit? CommitRaidReward(AccountOwners.Lease owner, Character expected, PreparedRaidReward prepared,
+        InventoryPlan inventory, DateTimeOffset now);
+}

@@ -133,6 +133,7 @@ internal static class AntonRaidResourceTests
         var definition = catalog.PrepareResources(pvf, dungeons, items).Find(0)!;
         var resources = definition.Resources!;
         var script = resources.Script;
+        AntonRaidBattleTests.RunResources(script);
         That(resources.Issues.IsEmpty, "真实安徒恩资源语法完整支持：" + string.Join(';', resources.Issues.Select(i => $"{i.Code}@{i.TokenIndex}:{i.Detail}")));
         That(script.WaitingRoom == new RaidWaitingRoom(19, 2) && script.EntryCost == new RaidCost(10096296, 1) &&
             script.RetryItem == script.EntryCost, "真实候战室与费用/重试声明，不表示已扣票");

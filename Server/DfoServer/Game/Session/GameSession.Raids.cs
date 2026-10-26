@@ -58,6 +58,7 @@ internal sealed partial class GameSession
 
     void InvalidateRaids()
     {
+        raidCombat = null;
         antonDungeonAdmission = null;
         var registry = raidRegistry;
         raidRegistry = null;
