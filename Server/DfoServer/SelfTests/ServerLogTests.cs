@@ -53,6 +53,10 @@ internal static class ServerLogTests
                 log.Write("cash_shop_buy", new { Connection = 1, Count = 1, Commodities = "270623", Accepted = false, Error = 17 });
                 log.Write("avatar_dye", new { Connection = 1, SourceSlot = 74, AvatarSlot = 0, Accepted = true, Reason = "committed", Revision = 4, Color1 = 1, Color2 = 0 });
                 log.Write("avatar_dye", new { Connection = 1, SourceSlot = 74, AvatarSlot = 0, Accepted = false, Reason = "source-qualification" });
+                log.Write("avatar_socket", new { Connection = 1, TargetSlot = 0, TargetItemId = 101550535, MaterialSlot = 74,
+                    Accepted = true, Reason = "committed", Revision = 5 });
+                log.Write("avatar_socket", new { Connection = 1, TargetSlot = 0, TargetItemId = 101550535, MaterialSlot = 74,
+                    Accepted = false, Reason = "already-open" });
                 log.Write("resource_warning", new { MissingMaps = new[] { new { Path = "maps/with spaces/map.map", Error = "missing" } } });
                 log.Write("db_busy", new { Connection = 1, Phase = "Town", Kind = 1, Opcode = 0, Name = "0", Stage = "dispatch", Attempts = 5,
                     Message = "SQLite Error 5: 'database is locked'." });
@@ -96,6 +100,9 @@ internal static class ServerLogTests
                 TestCheck.That(text.Contains("[INFO] [avatar_dye] Avatar dye") && text.Contains("[WARN] [avatar_dye]") &&
                     text.Contains("SourceSlot=74 AvatarSlot=0 Accepted=True Reason=committed Revision=4 Color1=1 Color2=0"),
                     "漂染日志保留两个槽位、拒绝原因与实际提交颜色");
+                TestCheck.That(text.Contains("[INFO] [avatar_socket] Avatar socket opening") && text.Contains("[WARN] [avatar_socket]") &&
+                    text.Contains("TargetSlot=0 TargetItemId=101550535 MaterialSlot=74 Accepted=True Reason=committed Revision=5") &&
+                    text.Contains("Reason=already-open"), "开孔日志保留目标、材料、实际提交版本及拒绝原因");
                 TestCheck.That(text.Contains("Loading Script.pvf...") && text.Contains("Script.pvf: OK (12.5 ms).") &&
                     text.Contains("Channel #ch.10 listening on TCP 127.0.0.1:23100") && text.Contains("GM control: disabled"),
                     "startup uses S4A21-style English text instead of serialized fields");
@@ -121,7 +128,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 96,
+            TestCheck.That(fileLines.Length == 98,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&
