@@ -23,7 +23,8 @@ internal sealed class InventoryPeriodExtensionService(ItemCatalog catalog, TownC
             !definition.AllowedTargets.Contains(target.Core.ItemId) || target.ExpireTime <= 0 || target.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
         var template = catalog.Get(target.Core.ItemId);
-        if (template.Kind != ItemKind.Equipment || template.Expiration.Days <= 0 || template.Expiration.DailyDelete != 0)
+        if (template.Kind != ItemKind.Equipment || template.Expiration.Days <= 0 || template.Expiration.DailyDelete != 0 ||
+            template.Expiration.WeeklyDeleteDay is not null)
             return InventoryResult.Reject(19);
         int expires = (int)Math.Min(ItemExpiration.MaximumUnixTime, target.ExpireTime + (long)definition.Parameters[1] * 86400);
         if (expires <= target.ExpireTime) return InventoryResult.Reject(19);
