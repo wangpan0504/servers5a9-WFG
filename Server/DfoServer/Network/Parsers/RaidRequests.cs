@@ -22,6 +22,8 @@ internal static class RaidRequests
 {
     public const int MaxNameBytes = 64;
 
+    // KB-20261026T063752-c3b822a45d：0130F140/0130F5F9写低u8计数，但遍历完整列表。
+    // 只解析计数一致且L≤255的保守结构；更长列表的可达上界未证，不注册Handler或赋予死亡语义。
     public static RaidMonsterHpRequest MonsterHp(ReadOnlySpan<byte> body)
     {
         if (body.Length < 5 || body.Length != 5 + 4 * body[4])
