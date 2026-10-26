@@ -7,12 +7,12 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
-internal enum PartyDungeonNoticeKind { Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure }
+internal enum PartyDungeonNoticeKind { RaidBattleSync, RaidSelection, Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure }
 internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMember Recipient,
     PartyMember[] Members, FormalDungeonReceipt? Scene = null, DungeonSelectionReceipt? Selection = null,
     FormalDungeonDeathResult? Death = null, Character? Previous = null, FormalDungeonPickupResult? Pickup = null,
     ushort Peer = 0, DfoServer.Game.Town.TownTravelReceipt? Travel = null,
-    byte State = 0, byte Option = 0, QuestLifecycleReceipt? QuestScene = null, int LegendDungeon = 0);
+    byte State = 0, byte Option = 0, QuestLifecycleReceipt? QuestScene = null, int LegendDungeon = 0, DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange = null);
 
 // 共享实例拥有全员加载屏障、路线推进与击杀事实；掉落随机、地面物品及拾取归各角色账本。
 // 各Session的Run仅作为同一实例的角色账本投影，不能绕过此owner单独过图或发奖。
@@ -188,11 +188,23 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
             pendingScene is not null || current.Any(m => m.Actor.Session.Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement))) return [];
         var notices = new List<PartyDungeonNotice>();
         if (pendingDeath is not null) FinishPendingDeath(current, notices);
-        if (deaths.Contains(key)) return notices.ToArray();
+        if (deaths.Contains(key))
+        {
+            AppendRaidBattleNotice(current, notices);
+            return notices.ToArray();
+        }
         pendingDeath = new(key, observe);
         FinishPendingDeath(current, notices);
+        AppendRaidBattleNotice(current, notices);
         return notices.ToArray();
     });
+
+    void AppendRaidBattleNotice(PartyMember[] current, List<PartyDungeonNotice> notices)
+    {
+        if (GameSession.CompleteRaidPartyDungeon(current, Id, out var change))
+            // 仅传播已提交事实；重复死亡可重同步当前view，但绝不再次推进阶段。
+            notices.Add(new(PartyDungeonNoticeKind.RaidBattleSync, current[0], current, current[0].Actor.Session.CurrentFormalDungeonScene(), RaidBattleChange: change));
+    }
 
     void FinishPendingDeath(PartyMember[] current, List<PartyDungeonNotice> notices)
     {
