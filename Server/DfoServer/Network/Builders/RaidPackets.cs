@@ -105,7 +105,7 @@ internal static class RaidPackets
         writer.Write(state);                 // +0x28
         writer.Write(phase);                 // +0x30
         writer.Write(0u);                    // +0x34
-        writer.Write(canStart ? (byte)1 : (byte)0); // +DC：01DC74C5为安徒恩开战按钮读取该旗标。
+        writer.Write(canStart ? (byte)1 : (byte)0); // +DC：01DC7480频道跳表包含23与32，01DC7D1C/35在发送666前读取该旗标。
         writer.Write(new byte[8]);           // +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4
         WriteMember(writer, leader, leaderName, leaderSquad);
     }
@@ -137,12 +137,12 @@ internal static class RaidPackets
         WriteMembers(writer, members);
     });
 
-    public static byte[] RaidListBatch(IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad)> rows) => Build(writer =>
+    public static byte[] RaidListBatch(IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart)> rows) => Build(writer =>
     {
         writer.Write((uint)rows.Count);
         foreach (var row in rows)
         {
-            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad);
+            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad, canStart: row.CanStart);
             writer.Write((byte)0);
         }
     });
