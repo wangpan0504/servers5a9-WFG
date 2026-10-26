@@ -24,6 +24,7 @@ internal sealed class AntonRaidBattle
     AntonRaidBattleView current;
     int? rewardWeek;
     public Guid Instance { get; }
+    public RaidKind Kind { get; }
     public int PhaseCount => script.Phases.Length;
     public int? RewardWeek { get { lock (gate) return rewardWeek; } }
     public AntonRaidBattleView View { get { lock (gate) return current; } }
@@ -32,7 +33,7 @@ internal sealed class AntonRaidBattle
     {
         lock (gate)
         {
-            if (!actor.IsCurrent || current.Revision != 0 || members.Count >= 20 || policy.Length != PhaseCount ||
+            if (!actor.IsCurrent || current.Revision != 0 || members.Count >= (Kind == RaidKind.Luke ? 8 : 20) || policy.Length != PhaseCount ||
                 policy.Any(p => string.IsNullOrWhiteSpace(p.Source) || p.Offers.IsEmpty ||
                     p.Offers.Any(o => o.Kind is not (0 or 1) || o.Grants.IsEmpty) ||
                     p.Offers.Select(o => (o.Kind, o.Card)).Distinct().Count() != p.Offers.Length ||
@@ -44,6 +45,29 @@ internal sealed class AntonRaidBattle
         }
     }
 
+    internal bool JoinStart(RaidActor actor)
+    {
+        lock (gate)
+        {
+            if (Kind != RaidKind.Luke || !actor.IsCurrent || current.Revision != 0 || members.Count >= 8 ||
+                members.Keys.Any(m => m.Character == actor.Character)) return false;
+            members.Add(actor, []);
+            return true;
+        }
+    }
+
+    // 本批Luke只绑定启动；精确移除旧actor，不替其它成员推进阶段或改变Anton领奖语义。
+    internal bool DetachStart(RaidActor actor)
+    {
+        lock (gate)
+        {
+            if (Kind != RaidKind.Luke || !members.Remove(actor)) return false;
+            foreach (var key in entries.Where(row => row.Value.Identity.CharacterId == actor.Character).Select(row => row.Key).ToArray())
+                entries.Remove(key);
+            return true;
+        }
+    }
+
     public RaidPhaseRewardPolicy? RewardPolicy(RaidActor actor, int phase)
     { lock (gate) return actor.IsCurrent && members.TryGetValue(actor, out var policy) && phase >= 0 && phase < policy.Length ? policy[phase] : null; }
 
@@ -52,7 +76,7 @@ internal sealed class AntonRaidBattle
         lock (gate)
         {
             if (!actor.IsCurrent || prepared.Instance != Instance || prepared.Character != actor.Character ||
-                prepared.Phase != current.Phase || current.State != AntonRaidBattleState.Reward || !members.ContainsKey(actor)) return false;
+                prepared.Phase != current.Phase || current.State != AntonRaidBattleState.Reward || !members.TryGetValue(actor, out var policy) || policy.IsEmpty) return false;
             rewards.Add((actor.Character, current.Phase, prepared.Kind));
             return members.All(m => m.Value[current.Phase].Offers.Select(o => o.Kind).Distinct()
                 .All(kind => rewards.Contains((m.Key.Character, current.Phase, kind))));
@@ -73,11 +97,13 @@ internal sealed class AntonRaidBattle
 
     public bool IsCurrent(AntonRaidBattleView view) { lock (gate) return ReferenceEquals(current, view); }
 
-    public AntonRaidBattle(RaidScript script, Guid? instance = null)
+    public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
             throw new InvalidDataException("攻坚阶段资源不完整或超出已证协议范围");
+        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        Kind = kind;
         this.script = script;
         Instance = instance ?? Guid.NewGuid();
         if (Instance == Guid.Empty) throw new InvalidDataException("攻坚实例身份不能为空");
