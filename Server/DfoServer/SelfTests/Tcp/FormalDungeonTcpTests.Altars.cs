@@ -90,9 +90,17 @@ internal static partial class FormalDungeonTcpTests
             byte[] normalDeath = Death(key,peer.Id,next.Body[10]);
             byte[] corrupt = (byte[])normalDeath.Clone();
             corrupt[^1] ^= 1;
+            var invalidDeathSpawnKeys = new HashSet<ushort>();
+            ValidateTimedSpawn(next);
             peer.Send(39,corrupt);
             peer.Send(39,Death(ushort.MaxValue,peer.Id,next.Body[10]));
-            peer.Barrier(validateSpawn);
+            // 无效死亡不能推进回合；合法计时刷怪同时核对完整资源批次与对象键，不吞死亡或奖励通知。
+            peer.Barrier(packet =>
+            {
+                That(packet is { Kind: 0, Opcode: 210 or 213 }, "无效39屏障不能出现死亡确认、回合推进或奖励通知");
+                validateSpawn!(packet);
+                if (packet.Opcode == 210) ValidateTimedSpawn(packet);
+            });
             foreach (bool replay in new[] { false, true })
             {
                 peer.Send(39,normalDeath);
@@ -401,6 +409,17 @@ internal static partial class FormalDungeonTcpTests
                         $"祭坛计时只允许专用波次、到账与成长投影，不混入普通结算；收到{packet.Kind}/{packet.Opcode}");
                 }
                 throw new InvalidOperationException("祭坛预期通知没有到达："+opcode);
+            }
+
+            void ValidateTimedSpawn(WirePacket packet)
+            {
+                That(packet is { Kind: 0, Opcode: 210 } && packet.Body.Length >= 4 && U16(packet.Body,0) > 0 &&
+                    packet.Body.Length == 4 + U16(packet.Body,0) * 17,
+                    "无效39屏障只允许完整祭坛刷怪通知，不能用死亡确认、奖励或推进通知替代");
+                for (int at = 2; at < packet.Body.Length - 2; at += 17)
+                    That(packet.Body[at] <= 19 && U32(packet.Body,at+3) > 0 && packet.Body[at+7] is 0 or 3 &&
+                        packet.Body[at+8] == next.Body[10] && U16(packet.Body,at+1) != peer.Id && invalidDeathSpawnKeys.Add(U16(packet.Body,at+1)),
+                        "定时刷怪记录保留合法类型、怪物、等级和互不重复的对象键");
             }
         }
         Console.WriteLine("PASS 两祭坛实际TCP准入、UI门禁、清首房换房、计时刷怪、255、复活与失败专用结算（非客户端验收）");

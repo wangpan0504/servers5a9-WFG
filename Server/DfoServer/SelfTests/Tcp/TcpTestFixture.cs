@@ -451,10 +451,19 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         command.ExecuteNonQuery();
     }
     public string Snapshot(string sql = "SELECT * FROM characters ORDER BY id", params object[] parameters) => JsonSerializer.Serialize(Query(sql, parameters));
-    public JsonElement[] Events() => File.ReadLines(Path.Combine(Options.LogDirectory, "server.jsonl")).Select(line =>
+    public JsonElement[] Events()
     {
-        using var doc = JsonDocument.Parse(line);
-        return doc.RootElement.Clone();
-    }).ToArray();
+        // Windows 的共享许可是双向的；读取活动日志时也须允许原写入器继续持有写句柄。
+        using var stream = new FileStream(Path.Combine(Options.LogDirectory, "server.jsonl"),
+            FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        var events = new List<JsonElement>();
+        while (reader.ReadLine() is { } line)
+        {
+            using var doc = JsonDocument.Parse(line);
+            events.Add(doc.RootElement.Clone());
+        }
+        return events.ToArray();
+    }
     public ValueTask DisposeAsync() => new(StopAsync());
 }
