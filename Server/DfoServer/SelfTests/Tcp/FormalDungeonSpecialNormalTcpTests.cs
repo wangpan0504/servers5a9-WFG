@@ -84,6 +84,30 @@ internal static partial class FormalDungeonTcpTests
             That(accepted[0] == 1 && U16(accepted,1) == questId, "普通材料或累计通关任务经真实31接取");
             Drain();
             SelectMap(peer);
+            if (sample.Id == 9595 && sample.Ticket)
+            {
+                // tutorial表中的正式团本索引不能借普通选图进入；拒绝后仍须能进入原普通副本。
+                string EntryState() => string.Join("\n", new[] { "characters", "character_inventory_items", "character_fatigue",
+                    "character_dungeon_state", "character_dungeon_growth_receipts", "character_dungeon_loot_receipts",
+                    "character_dungeon_card_rewards" }.Select(table => fixture.Snapshot($"SELECT * FROM {table} ORDER BY 1,2")));
+                string originalEntry = EntryState();
+                foreach (uint raidDungeon in new uint[] { 210,218,224 })
+                {
+                    byte[] raidRequest = Selection(2);
+                    BinaryPrimitives.WriteUInt32LittleEndian(raidRequest,raidDungeon);
+                    raidRequest.AsSpan(16,4).Clear();
+                    for (int repeat = 0; repeat < 2; repeat++)
+                    {
+                        peer.Send(16,raidRequest);
+                        peer.Expect(1,16,[0,9,0,0]);
+                        peer.Barrier();
+                    }
+                    peer.Send(37,new byte[8]);
+                    peer.Barrier();
+                    That(EntryState() == originalEntry,
+                        $"团本{raidDungeon}不能从普通选图或重放加载建立实例、扣材料疲劳或写奖励回执");
+                }
+            }
             byte[] request = Selection(0);
             BinaryPrimitives.WriteUInt32LittleEndian(request,(uint)sample.Id);
             BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),questId);
