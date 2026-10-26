@@ -77,14 +77,34 @@ internal static class RaidMemberTests
             var current = registry.Find(leader)!;
             var same = registry.Assign(leader,leader.Character,1)!;
             That(ReferenceEquals(same.After,current) && !registry.IsCurrent(first), "重复编队不推进版本，旧快照失效");
+            That(registry.TransferLeadership(actors[1], actors[2].Character) is null &&
+                registry.TransferLeadership(leader, actors[20].Character) is null &&
+                registry.TransferLeadership(leader, leader.Character) is null && registry.IsCurrent(current),
+                "非队长、团外目标和本人委任不改变聚合");
+            var appointed = registry.TransferLeadership(leader, actors[4].Character)!;
+            That(appointed.After!.Leader == actors[4].Character && appointed.After.Key == current.Key &&
+                appointed.After.Members == current.Members && appointed.After.Revision > current.Revision && !registry.IsCurrent(current),
+                "委任只更换实际团长及版本，保留成员、槽位、分队和团key");
+            That(registry.Rename(leader,0,"bad",[]) is null && registry.Assign(leader,actors[1].Character,2) is null &&
+                registry.TransferLeadership(leader, actors[1].Character) is null && registry.Leave(leader,actors[1].Character) is null,
+                "委任后原团长立即失去管理权限，重复旧请求不得再次移交");
+            That(registry.TransferLeadership(actors[4], leader.Character)?.After?.Leader == leader.Character,
+                "新团长可将权限交回，后续自动继任仍走原合同");
             var exit = registry.Leave(leader,leader.Character)!;
             That(exit.After!.Leader == actors[1].Character && exit.After.Key == first.Key && exit.After.Members.Length == 19 &&
                 exit.After.Members[0].Slot == 1, "队长离开由最小幸存槽继任，保留key和成员槽");
+            That(registry.Invite(actors[1], actors[20], 42) is not null &&
+                registry.TransferLeadership(actors[1], actors[4].Character) is not null &&
+                !registry.Respond(actors[20], actors[1].Character, true, 42).Accepted,
+                "委任撤销原团长尚未回应的邀请，不能借旧请求加入");
+            That(registry.TransferLeadership(actors[4], actors[1].Character) is not null, "交回继任团长权限");
             sessions[2].ReturnToRoster();
             That(registry.Find(actors[1])!.Members.Length == 18 && registry.Find(actors[2]) is null, "重选时精确移除原选角登记");
             var stale = actors[3];
             var replacement = Make(3);
             var replacementParty = registry.Create(replacement,0,"new","new"u8.ToArray(),20)!;
+            That(registry.TransferLeadership(actors[1], stale.Character) is null,
+                "接管后旧成员登记尚未清理，也不能成为新团长");
             stale.Session.End();
             That(!stale.IsCurrent && registry.Find(replacement)?.Key == replacementParty.Key && registry.IsCurrent(replacementParty),
                 "接管后旧End不删除新会话的攻坚队");

@@ -123,6 +123,42 @@ internal static class AntonRaidTcpTests
             That(Information(observer, key, 1).Members.Count(m => m.Squad == 1) == 4, "越权编队不改变状态");
             leader.Send(669, Build(w => { w.Write(0u); w.Write((uint)peers[4].Id); w.Write(1u); })); Drain(leader);
             That(Information(observer, key, 1).Members.Count(m => m.Squad == 1) == 4, "同分队第五人拒绝");
+            var beforeAppointment = Information(observer, key, 2);
+            foreach (var (sender, operation, target, argument) in new (TcpPeer, uint, uint, uint)[]
+            {
+                (peers[1], 1, peers[7].Id, 0), (leader, 1, observer.Id, 0), (leader, 1, leader.Id, 0),
+                (leader, 1, peers[7].Id, 1), (leader, 1, 0x10000u + peers[7].Id, 0), (leader, 2, peers[7].Id, 0)
+            })
+            {
+                sender.Send(669, Build(w => { w.Write(operation); w.Write(target); w.Write(argument); }));
+                Drain(sender);
+            }
+            That(Information(observer, key, 2).Leader == leader.Id, "越权、团外、自身、非法参数、角色溢出及未知操作不委任或伪造成功");
+            leader.Send(669, Build(w => { w.Write(1u); w.Write((uint)peers[7].Id); w.Write(0u); }));
+            Bytes(Until(leader, 1, 669).Body, [1], "委任团长ACK只含公共成功标志");
+            foreach (var peer in peers)
+            {
+                bool updated = false;
+                Drain(peer, packet =>
+                {
+                    if (packet.Opcode != 591 || U32(packet.Body, 4) != 2) return;
+                    int at = 8;
+                    updated |= ReadRecord(packet.Body, ref at, key) == peers[7].Id;
+                    That(at == packet.Body.Length, "委任记录通知完整消费，不另造团长通知载荷");
+                });
+                That(ReferenceEquals(peer, leader) || updated, "新团长、其余团员及候战观察者收到实际新团长记录");
+                That(Information(peer, key, 0).Leader == peers[7].Id, "团员和候战观察者均可读取新团长");
+            }
+            var afterAppointment = Information(observer, key, 2);
+            That(afterAppointment.Members.SequenceEqual(beforeAppointment.Members), "委任保留二十人槽序及五个满分队");
+            leader.Send(669, Build(w => { w.Write(1u); w.Write((uint)peers[7].Id); w.Write(0u); })); Drain(leader);
+            leader.Send(666); Bytes(Until(leader, 1, 666).Body, [0, 8, 0], "旧团长重复委任无效且开战权限立即失效");
+            peers[7].Send(666); Bytes(Until(peers[7], 1, 666).Body, [0, 19, 0], "新团长也不能绕过未闭合成功链");
+            peers[7].Send(669, Build(w => { w.Write(1u); w.Write((uint)leader.Id); w.Write(0u); }));
+            Bytes(Until(peers[7], 1, 669).Body, [1], "新团长可以交回权限");
+            foreach (var peer in peers) Drain(peer);
+            That(Information(observer, key, 2).Leader == leader.Id && fixture.Snapshot() == saved && Assets() == assets,
+                "委任与交回权限无迁移/阶段通知，不扣门票、不改位置资产或副本回执");
             leader.Send(665, Build(w => w.Write(peers[9].Id)));
             Bytes(Until(peers[9], 1, 665).Body, [1, 1], "踢人回执投给被踢者");
             foreach (var peer in peers) Drain(peer);
@@ -205,8 +241,8 @@ internal static class AntonRaidTcpTests
         await fixture.StopAsync();
         var starts = fixture.Events().Where(e => e.GetProperty("Kind").GetString() == "raid_start_request")
             .Select(e => e.GetProperty("Detail")).Where(e => e.GetProperty("Reason").GetString() == "formal-raid-dungeon-index-missing").ToArray();
-        That(starts.Length == 4 && starts.Count(e => e.GetProperty("Members").GetInt32() == 10) == 2 &&
-            starts.Count(e => e.GetProperty("Members").GetInt32() == 20) == 2 && starts.All(e => e.GetProperty("Error").GetInt32() == 19 &&
+        That(starts.Length == 5 && starts.Count(e => e.GetProperty("Members").GetInt32() == 10) == 2 &&
+            starts.Count(e => e.GetProperty("Members").GetInt32() == 20) == 3 && starts.All(e => e.GetProperty("Error").GetInt32() == 19 &&
             e.GetProperty("MissingDungeons").GetInt32() == 14 && e.GetProperty("MissingMaps").GetInt32() == 72 &&
             e.GetProperty("TutorialScripts").GetInt32() == 14 && e.GetProperty("MissingItems").GetInt32() == 0 &&
             e.GetProperty("DefinitionIssues").GetInt32() == 0 && e.GetProperty("DungeonSample").GetString()!.Split(',').Length <= 8),
@@ -252,14 +288,17 @@ internal static class AntonRaidTcpTests
         That(body[0] == 1 && body[1] == mode && U32(body, 2) == key, "1361成功前缀完整");
         int at = 6; ushort leader = 0;
         if (mode is 0 or 2)
-        {
-            That(U32(body, at) == key, "1361嵌套记录key一致"); at += 4;
-            at += 4 + checked((int)U32(body, at)); at += 16;
-            leader = U16(body, at); Member(body, ref at);
-        }
+            leader = ReadRecord(body, ref at, key);
         (ushort Character, byte Squad)[] members = mode == 0 ? [] : ReadMembers(body, at);
         if (mode == 0) That(at == body.Length, "1361 mode0没有多余成员尾部");
         return (leader, members);
+    }
+    static ushort ReadRecord(byte[] body, ref int at, uint key)
+    {
+        That(U32(body, at) == key, "嵌套记录key一致"); at += 4;
+        at += 4 + checked((int)U32(body, at)); at += 16;
+        ushort leader = U16(body, at); Member(body, ref at);
+        return leader;
     }
     static (ushort Character, byte Squad)[] ReadMembers(byte[] body, int at)
     {
