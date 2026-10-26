@@ -100,7 +100,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             {
                 if (!parties.IsCurrent(party)) return [];
                 var reservations = prepared.Select(p => p.Member.Actor.Session.ReservePartyDungeon(p.Preparation)).ToArray();
-                if (reservations.Any(r => r is null)) return [];
+                if (reservations.Any(r => r is null) || !leader.IsPartyAdmissionDayCurrent(prepared[0].Preparation)) return [];
                 var committed = store.CommitPartyDungeonEntry(reservations.Select(r => r!).ToArray());
                 return prepared.Select((p, index) => new PartyDungeonNotice(PartyDungeonNoticeKind.Entry, p.Member, party.Members,
                     p.Member.Actor.Session.InstallPartyDungeon(p.Preparation, committed[index], reservations[index]!, instance))).ToArray();

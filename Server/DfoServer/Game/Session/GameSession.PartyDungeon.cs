@@ -78,6 +78,11 @@ internal sealed partial class GameSession
         });
     }
 
+    // 组队原子提交前只由队长时钟复核共同业务日；各成员不分别采样now，避免跨06:00裂成两天。
+    internal bool IsPartyAdmissionDayCurrent(PartyDungeonPreparation token) =>
+        PreparedParty(token).Dungeon.Entry.OrdinaryLukeDay is not { } day ||
+        day == QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow());
+
     public PartyDungeonReservation? ReservePartyDungeon(PartyDungeonPreparation token) => owner.Execute(() =>
     {
         var plan = PreparedParty(token);
@@ -85,6 +90,8 @@ internal sealed partial class GameSession
             !(Phase == SessionPhase.MapSelect && formalDungeon is null ||
                 Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null) || HasPendingTownQuestCommit) return null;
         var dungeon = plan.Dungeon;
+        if (dungeon.Entry.OrdinaryLukeDay is { } day &&
+            !repository.LoadOrdinaryLukeProgress(owner, Selected.Id).Allows(day, dungeon.Entry.DungeonId)) return null;
         var costs = new List<ItemMaterialCost>();
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         EpicPieceCatalog? costPieces = dungeon.HellPieces ?? dungeon.EntryPieces ?? dungeon.ChannelCost?.Pieces;
@@ -113,7 +120,9 @@ internal sealed partial class GameSession
 
         ushort fatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : dungeon.Entry.StartFatigue;
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
-            new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly), incount);
+            new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
+            { OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
+                DungeonId = dungeon.Entry.OrdinaryLukeDay is null ? 0 : checked((int)dungeon.Entry.DungeonId) }, incount);
     });
 
     public FormalDungeonReceipt InstallPartyDungeon(PartyDungeonPreparation token, PartyDungeonEntryCommit result,

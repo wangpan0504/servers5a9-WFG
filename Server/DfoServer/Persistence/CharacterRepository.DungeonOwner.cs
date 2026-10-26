@@ -146,6 +146,9 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             using var db = database.Open();
             using var write = db.BeginWrite("CharacterRepository.CommitPartyDungeonEntry");
             using var tx = write.Transaction;
+            int? lukeDay = reservations[0].Charge.OrdinaryLukeEntry?.OrdinaryLukeDay;
+            if (reservations.Any(r => r.Charge.OrdinaryLukeEntry?.OrdinaryLukeDay != lukeDay))
+                throw new InvalidDataException("组队普通卢克成员必须冻结同一入场业务日");
             var result = new PartyDungeonEntryCommit[reservations.Count];
             var fatigue = new DungeonTransientFatigue?[reservations.Count];
             for (int i = 0; i < reservations.Count; i++)

@@ -1,6 +1,6 @@
 namespace DfoServer.Game.Dungeons;
 
-// 六图顺序采用2017国服规则；跨日归属是本服兼容选择，不扩作奖励日资格。
+// 六图顺序采用2017国服规则；组队共同入场日、个人进度与首击资格采用批准的本服兼容规则。
 internal readonly record struct OrdinaryLukeProgress(int Day, int Completed)
 {
     public bool Allows(int day, uint dungeonId) => day >= Day && dungeonId is >= 5101 and <= 5106 &&
