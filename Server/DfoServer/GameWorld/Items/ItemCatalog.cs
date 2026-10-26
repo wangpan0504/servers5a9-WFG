@@ -561,6 +561,7 @@ internal sealed partial class ItemCatalog
             PvpFreeEquipment = isEquipment && text.Has("pvp free equip"),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
             BossDrop = isEquipment && text.ContainsString("item category", "boss drop"),
+            IsMonsterCard = !isEquipment && text.ContainsString("item category", "monster card"),
             AmplifyPollutionForbidden = isEquipment && text.ContainsString("impossible contents", "pollution"),
             UseForbidden = ForbidsUse(impossible),
             // 分解采用模板价值及基础出售倍率，不使用NPC售出时的耐久和90%折价。

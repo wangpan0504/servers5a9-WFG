@@ -39,6 +39,30 @@ internal static class DungeonSpecialDropCatalogTests
         var catalog = DungeonSpecialDropCatalog.Create([parsed, opaque, parsed with { EnemyType = 1 }], [worldRow]);
         That(catalog.Compatibility.IndependentListReferences == 1 && catalog.Compatibility.OtherEnemyTypes == 1 &&
             catalog.Compatibility.WorldReservedValues == 1, "兼容保留的分支可统计，不能被所有规则成功消费的结论掩盖");
+        var cardTokens = new List<PvfToken> { Tag("[independent drop]") };
+        for (int index = 0; index < 24; index++)
+            cardTokens.AddRange(new[] { 0, 100 + index, 10159145 + index, 100, 100, 100, 100, 100,
+                1, 1, 1, 1, 1, 0, 0, -1, 3 }.Select(value => new PvfToken(0, value)));
+        cardTokens.Add(Tag("[/independent drop]"));
+        var withOtherCards = cardTokens.Take(cardTokens.Count - 1).ToList();
+        withOtherCards.AddRange(new[] { 0, 999, 0, 1000000, 1000000, 1000000, 1000000, 1000000,
+            1, 1, 1, 1, 1, 0, 0, -1, 4 }.Select(value => new PvfToken(0, value)));
+        withOtherCards.Add(Tag("[list]"));
+        withOtherCards.AddRange(new[] { 10159169, 100 }.Select(value => new PvfToken(0, value)));
+        withOtherCards.Add(Tag("[/list]")); withOtherCards.Add(Tag("[/independent drop]"));
+        That(DungeonSpecialDropCatalog.ParseOrdinaryLukeCards(withOtherCards, Resolve).Count == 24,
+            "其它卡片随机列表只按边界读取，不开启flag4或额外卡池");
+        var lukeCards = DungeonSpecialDropCatalog.ParseOrdinaryLukeCards(cardTokens, Resolve);
+        That(lukeCards.Count == 24 && lukeCards[100].ListFlag == 3 && lukeCards[100].ItemId == 10159145,
+            "普通卢克24张卡保留资源字段，标志3只按批准的单物品兼容合同消费");
+        Reject<InvalidDataException>(() => DungeonSpecialDropCatalog.ParseIndependent(cardTokens, Resolve),
+            "卡片标志3不扩展原独立掉落表的合法范围");
+        foreach (var invalid in new[] { (At: 3, Value: 10159146), (At: 4, Value: 1000001), (At: 9, Value: 2), (At: 17, Value: 0) })
+        {
+            var changed = cardTokens.ToArray(); changed[invalid.At] = new(0, invalid.Value);
+            Reject<InvalidDataException>(() => DungeonSpecialDropCatalog.ParseOrdinaryLukeCards(changed, Resolve),
+                "卡片重复、未批准概率、重复抽取及错误标志不静默泛化");
+        }
         Console.WriteLine($"PASS {Count - checks} 独立/世界掉落资源保真与兼容分支断言");
     }
 

@@ -516,7 +516,9 @@ internal sealed partial class GameSession
         // 比赛副本 [disable drop item]，不准备掉落。
         if (drops is not null && items is not null && !entry.IsTagEvildom && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
         {
-            var prepareMonsterDrops = prepareDrops?.Invoke(entry);
+            Func<DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareMonsterDrops;
+            try { prepareMonsterDrops = prepareDrops?.Invoke(entry); }
+            catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
             foreach (var plan in plans)
             foreach (var monster in plan.Monsters.Where(monster =>
                 monster.HellWave is not null && monster.HellRewardRolls > 0 && monster.Source is null ||

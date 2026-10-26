@@ -19,6 +19,9 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     // 只在一次入图准备中复用不可变规则；对象编号、位置和实际随机结果仍归各只怪物。
     public Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareEntry(DungeonEntryPlan entry, DungeonHellRewardPolicy? hellRewards = null)
     {
+        bool ordinaryLuke = entry.IsOrdinaryLuke && entry.DungeonId is >= 5101 and <= 5106 && entry.IsOrdinary && !entry.IsPractice;
+        if (ordinaryLuke && special?.OrdinaryLukeCards.Count != 24)
+            throw new NotSupportedException("普通卢克缺少已批准的24张专属卡片资源合同");
         var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss), DungeonDropGenerationPlan>();
         var epicEquipment = harlemEpics?.Pool(entry);
         return monster =>
@@ -45,6 +48,20 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             if (materials is not null) plan = materials.Extend(plan, entry, monster);
             if (abyssBonuses is not null) plan = abyssBonuses.Extend(plan, entry, monster);
             if (sleepyHollow is not null) plan = sleepyHollow.Extend(plan, entry, monster);
+            if (ordinaryLuke && monster.CanReportDeath && !monster.IsFriendly && !monster.IsScriptedBoss &&
+                monster.SpawnType <= 3 && special?.OrdinaryLukeCards.TryGetValue(monster.MonsterId, out var card) == true)
+            {
+                var template = resolveItem(card.ItemId);
+                if (!template.IsMonsterCard || template.Kind != ItemKind.Profession || !template.StackableType.StartsWith("[material expert job]", StringComparison.Ordinal) ||
+                    template.CreationRate != 0 || template.Grade != 1)
+                    throw new InvalidDataException("普通卢克专属卡片模板不是已核对的副职业卡片");
+                // 用户批准的本服兼容：保留原概率，百万分母，每次合法死亡一次，不叠加成长契约。
+                var trial = new DungeonDropTrial(card.Probabilities[entry.Difficulty],
+                    new DungeonItemDropPool([new DungeonWeightedDropItem(template, 1)]), 1, 1,
+                    ProbabilityDenominator: 1000000);
+                plan = new(plan.ResourceSource + ";luke-normal-card-compat-v1;" + DungeonSpecialDropCatalog.CardPath, plan.Trials.Add(trial),
+                    plan.ReferenceQuality, plan.Amplification);
+            }
             plans.Add(key, plan);
             return plan;
         };

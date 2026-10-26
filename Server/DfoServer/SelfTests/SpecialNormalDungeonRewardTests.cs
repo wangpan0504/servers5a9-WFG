@@ -1,7 +1,10 @@
 using System.Text.Json;
+using System.Collections.Immutable;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Towns;
@@ -27,6 +30,16 @@ internal static class SpecialNormalDungeonRewardTests
             monsters.Get, items.Items.Get, items.DungeonSpecialDrops);
         var cards = new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
             items.Items, items.GoldLimits, items.EpicPieces, random: _ => 0, prices: SelfTestCatalogs.CardPrices(pvf));
+        var withoutCards = DfoServer.GameWorld.Dungeons.DungeonSpecialDropCatalog.Create(
+            items.DungeonSpecialDrops.IndependentByMonster.Values.SelectMany(rows => rows), items.DungeonSpecialDrops.WorldByLevel.Values);
+        var noCardDrops = new DungeonResourceDropPolicy(SelfTestCatalogs.DropRules(pvf), items.DungeonDropItems,
+            monsters.Get, items.Items.Get, withoutCards);
+        var lukeCards = items.DungeonSpecialDrops.OrdinaryLukeCards;
+        That(lukeCards.Count == 24 && lukeCards.Values.Count(row => row.Probabilities[2] == 1000) == 5 &&
+            lukeCards[66184].ItemId == 10159168 && !lukeCards.ContainsKey(66468) && !lukeCards.ContainsKey(66467) && !lukeCards.ContainsKey(66473),
+            "24卡原映射含最终控制对象，不给小/光/暗变身阶段重复造奖励");
+        var checkedCards = new HashSet<int>();
+        bool cardFullBagChecked = false;
         var fiendBoss = items.DungeonSpecialDrops.IndependentByMonster[110994].Single(row => row.ListFlag == 1);
         That(fiendBoss.Probabilities.SequenceEqual([40000,40000,40000,40000,40000]) &&
             fiendBoss.Attempts.SequenceEqual([1,2,3,4,1]) && fiendBoss.Items.Any(row => row.ItemId == 401000048 && row.Weight == 900),
@@ -57,6 +70,7 @@ internal static class SpecialNormalDungeonRewardTests
             try { VerifyOtherRaidPrerequisite(id); }
             catch (Exception error) { errors.Add($"quest {id}: {error}"); }
         }
+        That(checkedCards.Count == 24 && cardFullBagChecked, "六图实际路线覆盖全部24种卡片源怪");
         That(errors.Count == 0, "普通特殊副本完整奖励链：" + string.Join("\n", errors));
         Console.WriteLine($"PASS {Count - before} 普通安徒恩、卢克和超时空正式死亡、拾取、通关与翻牌断言");
 
@@ -109,11 +123,20 @@ internal static class SpecialNormalDungeonRewardTests
             long CountItem(int itemId) => fixture.Read().Inventory.Items.Where(row => row.Core.ItemId == itemId).Sum(row => (long)row.Core.Count);
             long beforeFee = fee is { } cost ? CountItem(cost.ItemId) : 0;
             var random = new Random(id);
+            int draws = 0;
             bool rollbackChecked = false;
             bool lukeRevival = id is >= 5101 and <= 5106 && questId == 0;
             int revivals = 0;
+            if (definition.IsOrdinaryLuke)
+            {
+                string noCardBefore = JsonSerializer.Serialize(fixture.Read());
+                That(fixture.Session.EnterFormalDungeon((uint)id, questId, difficulty, dungeons, rooms, monsters, items.Items,
+                    pieces: items.EpicPieces, prepareDrops: value => noCardDrops.PrepareEntry(value)) is null &&
+                    fixture.Session.LastFormalDungeonRejection == "drop-plan-unsupported" && JsonSerializer.Serialize(fixture.Read()) == noCardBefore,
+                    "缺卡片合同只拒绝普通卢克且不扣费，包括首房无怪的机械王座");
+            }
             var entry = fixture.Session.EnterFormalDungeon((uint)id, questId, difficulty, dungeons, rooms, monsters, items.Items,
-                draw: bound => id == 400000016 && bound == 1000000 ? 0 : random.Next(bound),
+                draw: bound => { draws++; return (id == 400000016 || definition.IsOrdinaryLuke) && bound == 1000000 ? 0 : random.Next(bound); },
                 pieces: items.EpicPieces, prepareDrops: value => drops.PrepareEntry(value));
             That(entry is not null, $"{id}真实掉落准备后入场：{fixture.Session.LastFormalDungeonRejection}");
             if (fee is { } paid) That(CountItem(paid.ItemId) == beforeFee - paid.Count, "按资源完整数量扣入场材料");
@@ -128,6 +151,30 @@ internal static class SpecialNormalDungeonRewardTests
                 foreach (var monster in loaded!.Monsters.Monsters.Where(row => row.IsBlocking && row.CanReportDeath && !row.IsFriendly)
                     .OrderBy(row => row.IsBoss).ToArray())
                 {
+                    if (definition.IsOrdinaryLuke && lukeCards.TryGetValue(monster.MonsterId, out var cardRow))
+                    {
+                        var plan = drops.PrepareEntry(entry.Entry)(monster);
+                        var trial = plan.Trials.Single(row => row.Items?.Entries.Any(item => item.Template.Id == cardRow.ItemId) == true);
+                        That(trial.Threshold == cardRow.Probabilities[2] && trial.ProbabilityDenominator == 1000000 && trial.Attempts == 1 &&
+                            !trial.GrowthContractEligible, "普通卢克单卡按批准的百万分母单次抽取，不受成长契约放大");
+                        var onlyCard = new DungeonDropGenerationPlan("普通卢克卡片边界测试", [trial]);
+                        foreach (int roll in new[] { 0, trial.Threshold - 1, trial.Threshold, 999999 })
+                        {
+                            var generated = onlyCard.Generate(bound => bound == 1000000 ? roll : 0, DateTimeOffset.UtcNow);
+                            That(generated.Length == (roll < trial.Threshold ? 1 : 0) &&
+                                generated.All(row => row.Item?.ItemId == cardRow.ItemId && row.Item.Count == 1),
+                                "卡片阈值两侧命中/未命中，不改概率制造通过");
+                        }
+                        foreach (var outside in new[] { entry.Entry with { IsOrdinaryLuke = false },
+                            entry.Entry with { DungeonId = 9595 }, entry.Entry with { IsPractice = true }, entry.Entry with { IsTutorial = true } })
+                            That(drops.PrepareEntry(outside)(monster).Trials.All(row =>
+                                row.Items?.Entries.All(item => item.Template.Id != cardRow.ItemId) != false),
+                                "同怪物在非卢克/练习/教学身份不新增卡片奖励");
+                        That(noCardDrops.PrepareEntry(entry.Entry with { IsOrdinaryLuke = false })(monster).Trials.Length == plan.Trials.Length - 1,
+                            "缺卡片表不改变非卢克原掉落准备");
+                        That(items.Items.Get(cardRow.ItemId).IsMonsterCard, "真实item category明确标记monster card，不以副职业分类代替卡片类型");
+                        checkedCards.Add(cardRow.ItemId);
+                    }
                     var observation = FormalDungeonSessionTests.Observation(loaded, monster);
                     if (point == entry.Entry.BossMap.Position && monster.IsBoss &&
                         monster.ObjectKey == loaded.Monsters.Monsters.Where(row => row.IsBlocking && row.CanReportDeath && !row.IsFriendly)
@@ -144,7 +191,8 @@ internal static class SpecialNormalDungeonRewardTests
                             "失败不占用当天资格或留下部分任务进度，原冻结死亡可重试");
                         fixture.Sql("DROP TRIGGER daily608_fail");
                     }
-                    if (!rollbackChecked && id == 400000016)
+                    int? frozenDraws = null;
+                    if (!rollbackChecked && (id == 400000016 || definition.IsOrdinaryLuke && lukeCards.ContainsKey(monster.MonsterId)))
                     {
                         var beforeFailure = JsonSerializer.Serialize(fixture.Read());
                         fixture.Sql("CREATE TRIGGER reward608_fail AFTER INSERT ON character_dungeon_growth_receipts BEGIN SELECT RAISE(ABORT,'zero reward rollback'); END");
@@ -152,21 +200,55 @@ internal static class SpecialNormalDungeonRewardTests
                             "零经验死亡写入失败回滚掉落与任务进度");
                         That(JsonSerializer.Serialize(fixture.Read()) == beforeFailure,"失败不能保留半份资产或任务计数");
                         fixture.Sql("DROP TRIGGER reward608_fail");
+                        frozenDraws = draws;
                         rollbackChecked = true;
                     }
                     var death = fixture.Session.ObserveFormalDungeonDeath(observation, kills, growth);
+                    if (frozenDraws is { } originalDraws) That(draws == originalDraws, "死亡事务失败重试复用原冻结掉落，不重新抽卡");
                     That(death is { Outcome: DungeonRunOutcome.Accepted, Receipt: not null }, $"{id}/{point}/{monster.MonsterId}首次死亡");
                     if (definition.DisableMonsterAndClearExperience)
                         That(death.GainedExperience == 0 && death.ProficiencyGained == 0, "禁经验副本仍提交死亡与掉落但不增加经验或熟练度");
                     if (id == 400000016 && monster.MonsterId == 110994)
                         That(death.Drops.Count(row => !row.IsGold && fiendBoss.Items.Any(item => item.ItemId == row.Core.ItemId)) >= 3,
                             "边界抽样命中的三件Boss独立掉落全部进入真实地面账本");
+                    if (definition.IsOrdinaryLuke && lukeCards.TryGetValue(monster.MonsterId, out var declaredCard))
+                        That(death.Drops.Count(row => !row.IsGold && row.Core.ItemId == declaredCard.ItemId && row.Core.Count == 1) == 1,
+                            "命中的专属卡片进入原正式死亡地面账本，恰好一张");
                     last = death;
                     var after = JsonSerializer.Serialize(fixture.Read());
+                    int beforeDuplicateDraws = draws;
                     fixture.Session.ObserveFormalDungeonDeath(observation, kills, growth);
-                    That(JsonSerializer.Serialize(fixture.Read()) == after, "重复死亡不增加资产和任务进度");
+                    That(JsonSerializer.Serialize(fixture.Read()) == after && draws == beforeDuplicateDraws, "重复死亡不增加资产和任务进度，也不重新抽卡");
                     foreach (var ground in death.Drops)
                     {
+                        if (!cardFullBagChecked && !ground.IsGold && ground.Core.ItemId is >= 10159145 and <= 10159168)
+                        {
+                            var template = items.Items.Get(ground.Core.ItemId);
+                            var inventory = fixture.Read().Inventory;
+                            var range = ItemSlotBoundService.Range(ItemKind.Profession, inventory.Expansion);
+                            var slots = Enumerable.Range(range.Start, range.End - range.Start + 1)
+                                .Concat(Enumerable.Range(ItemSlotBoundService.QuickSlotStart, ItemSlotBoundService.QuickSlotEnd - ItemSlotBoundService.QuickSlotStart + 1))
+                                .Select(index => new InventorySlot(InventoryListType.Main, checked((short)index)))
+                                .Where(slot => inventory.Find(slot) is null).ToHashSet();
+                            That(fixture.Session.MutateInventory(current => new(true, 0, new(current.Inventory,
+                                current.Inventory with { Items = current.Inventory.Items.AddRange(slots.Select(slot =>
+                                    new InventoryItem(0, slot, ground.Core with { Value = template.StackLimit }))) }, "luke_card_full_fixture")),
+                                requireTown: false).Accepted, "通过原库存事务建立满副职业背包与快捷栏夹具");
+                            string fullBefore = JsonSerializer.Serialize(fixture.Read());
+                            var denied = fixture.Session.PickFormalDungeonItem(ground.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits);
+                            That(denied.Outcome != DungeonRunOutcome.Accepted && JsonSerializer.Serialize(fixture.Read()) == fullBefore,
+                                "卡片满包拾取失败不消费地面物或修改资产");
+                            That(fixture.Session.MutateInventory(current => new(true, 0, new(current.Inventory,
+                                current.Inventory with { Items = current.Inventory.Items.Where(item => !slots.Contains(item.Position)).ToImmutableArray() },
+                                "luke_card_free_fixture")), requireTown: false).Accepted, "原库存事务释放夹具占位后可重试同一张卡");
+                            var pickupBefore = JsonSerializer.Serialize(fixture.Read());
+                            fixture.Sql("CREATE TRIGGER luke_card_pickup_fail AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'card pickup rollback'); END");
+                            Reject<SqliteException>(() => fixture.Session.PickFormalDungeonItem(ground.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits),
+                                "卡片拾取晚期SQL失败回滚实际资产");
+                            That(JsonSerializer.Serialize(fixture.Read()) == pickupBefore, "拾取SQL失败保留原卡与原库存");
+                            fixture.Sql("DROP TRIGGER luke_card_pickup_fail");
+                            cardFullBagChecked = true;
+                        }
                         var pickup = fixture.Session.PickFormalDungeonItem(ground.Reservation.GroundKey, items.Items, items.EpicPieces, items.GoldLimits);
                         That(pickup is { Outcome: DungeonRunOutcome.Accepted, Commit: not null }, "实际地面对象拾取入库");
                         after = JsonSerializer.Serialize(fixture.Read());
