@@ -52,7 +52,7 @@ internal static class EquipmentPeriodChangeTests
         catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
         {
             [Design] = DesignTemplate,
-            [SourceWeapon] = new(SourceWeapon, ItemKind.Equipment, 12, 95, 20, 1, 0, 2, 60, "[trade]", ushort.MaxValue, 0, "weapon"),
+            [SourceWeapon] = new(SourceWeapon, ItemKind.Equipment, 12, 95, 40, 1, 0, 2, 60, "[trade]", ushort.MaxValue, 0, "weapon"),
             [ProductWeapon] = new(ProductWeapon, ItemKind.Equipment, 12, 95, 20, 1, 0, 2, 60, "[trade]", ushort.MaxValue, 0, "weapon")
         });
         catalog.PrefillPeriodChanges(new Dictionary<int, EquipmentPeriodChangeDefinition>
@@ -101,6 +101,14 @@ internal static class EquipmentPeriodChangeTests
         var noMaterial = character with { Inventory = new([design, weapon]) };
         That(service.Plan(noMaterial, designSlot, weaponSlot, inTown: true).Accepted,
             "★ 没有任何商店材料时仍可制作，证明不把[need material]当作使用成本");
+        foreach (ushort durability in new ushort[] { 0, 10, 40 })
+        {
+            var old = weapon with { Core = weapon.Core with { Durability = durability } };
+            var converted = service.Plan(character with { Inventory = new([design, old]) }, designSlot, weaponSlot, true);
+            That(converted.Accepted && converted.Plan!.After.Find(weaponSlot) == old with
+                { Core = old.Core with { ItemId = ProductWeapon, Durability = Math.Min(durability, (ushort)20) } },
+                "换模板将超上限耐久钳制到新上限，已损坏和零耐久不补满，其余核心及UID保留");
+        }
         int expires = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 10);
         foreach (var (sourceExpiry, targetExpiry, expectedExpiry) in new[]
         {

@@ -110,6 +110,17 @@ internal static class TextureChangeTests
                 fixture.Stack(2, 30, 3150, 80)), new(26, 4), 19),
             "目标材质映射到不同部位的物品时拒绝，不生成半成品装备");
 
+        fixture.Items.PrefillTemplates(new Dictionary<int, ItemTemplate>
+            { [103] = fixture.Items.Get(103) with { Durability = 18 } });
+        foreach (ushort durability in new ushort[] { 0, 10, 44 })
+        {
+            var input = original with { Core = original.Core with { Durability = durability } };
+            var reduced = fixture.Service.Apply(fixture.Character(600_000, 1, input,
+                fixture.Stack(2, 30, 3146, 80)), new(26, 2), Now);
+            That(reduced.Accepted && reduced.Plan!.After.Find(input.Position) == input with
+                { Core = input.Core with { ItemId = 103, Durability = Math.Min(durability, (ushort)18) } },
+                "转到较低耐久上限材质时只钳制超限部分，不修理或改写其它打造及UID");
+        }
         Console.WriteLine($"PASS {Count - checks} 材质转换协议、映射表、费用与字段保留断言");
     }
 

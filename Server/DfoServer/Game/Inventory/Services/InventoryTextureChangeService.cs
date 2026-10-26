@@ -6,7 +6,7 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 // 1546 装备材质转换：目标材质特殊材料 80 个 + 500,000 金币 + 传说灵魂 1 个，费用与物品替换同一事务提交。
-// 只替换物品编号；强化、增幅、附魔、徽章、随机词条、锁、耐久与原核心的品级 Value 都原样保留。
+// 替换物品编号时耐久不超过新模板上限；强化、增幅、附魔、徽章、词条、锁与品级 Value 保留。
 internal sealed class InventoryTextureChangeService(ItemCatalog items, EquipmentTextureChangeCatalog textures,
     EpicPieceCatalog pieces)
 {
@@ -56,7 +56,8 @@ internal sealed class InventoryTextureChangeService(ItemCatalog items, Equipment
         // 品级（Value）原样保留：官方没有公开转换后的品级算法，本仓库按可逐字段复核的方式实现。
         after = after with
         {
-            Items = after.Items.Replace(target, target with { Core = target.Core with { ItemId = replacementId } })
+            Items = after.Items.Replace(target, target with { Core = target.Core with
+                { ItemId = replacementId, Durability = Math.Min(target.Core.Durability, replacement.Durability) } })
         };
         return new(true, 0, new InventoryPlan(before, after, "equipment_texture_change"));
     }

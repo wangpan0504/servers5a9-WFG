@@ -136,11 +136,13 @@ internal static class ActionConsumableTcpTests
     static void PeriodChange(TcpTestFixture fixture, TcpTestResources resources,
         ConsumableUseSessionTests.FakeClock clock, CharacterRepository repo, AccountOwners owners)
     {
-        const int designId = 490014171;
+        const int designId = 490010790;
         var items = resources.ItemResources.Items;
         var definition = items.EquipmentPeriodChange(designId)!;
         That(definition is not null, "真实制作图沿已注册action136解析成对升级表");
-        var route = definition!.Upgrades.First(row => items.Get(row.Key).AllowsUse(95, 0) && items.Get(row.Value).AllowsUse(95, 0));
+        var route = definition!.Upgrades.Single(row => row.Key == 100060659);
+        That(route.Value == 100050802 && items.Get(route.Key).Durability == 33 && items.Get(route.Value).Durability == 28,
+            "真实action136存在33到28的耐久上限下降，不把仅保留旧耐久视为合法换模板");
         var source = InventoryRewardGrantService.Create(items.Get(designId), utcNow: clock.GetUtcNow(), shopExpiration: true)
             with { ExpireTime = 0 };
         var weapon = InventoryRewardGrantService.Create(items.Get(route.Key), utcNow: clock.GetUtcNow(), shopExpiration: true)
@@ -164,7 +166,8 @@ internal static class ActionConsumableTcpTests
         {
             var current = repo.LoadCharacter(owner, role.Slot);
             That(current.Inventory.Find(new(InventoryListType.Main, 9)) ==
-                role.Inventory.Find(new(InventoryListType.Main, 9))! with { Core = weapon with { ItemId = route.Value } } &&
+                role.Inventory.Find(new(InventoryListType.Main, 9))! with
+                    { Core = weapon with { ItemId = route.Value, Durability = 28 } } &&
                 current.Inventory.Find(new(InventoryListType.Main, 65)) is null &&
                 current.Inventory.Find(new(InventoryListType.Main, 66))!.Core.Count == 1,
                 "真实515制作图消费一件，产物沿用UID、位置与全部打造，不扣商店材料");
