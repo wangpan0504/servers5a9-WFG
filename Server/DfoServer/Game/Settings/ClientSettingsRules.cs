@@ -24,23 +24,43 @@ internal static class ClientSettingsRules
     public static ClientSettingsSnapshot Project(ClientSettingsSnapshot saved)
     {
         var source = saved.GameOptions.IsDefault ? saved.CharacterGameOptions : saved.GameOptions;
-        if (source.IsDefault)
-            return saved;
-        byte[] main = source.ToArray();
-        if (!saved.CharacterGameOptions.IsDefault)
+        if (!source.IsDefault && !saved.CharacterGameOptions.IsDefault)
+        {
+            byte[] main = source.ToArray();
             foreach (int slot in CharacterSlots)
                 Write(main, slot, Read(saved.CharacterGameOptions, slot));
-        var effective = ForCharacterSave([.. main], saved.CharacterOptions);
+            source = [.. main];
+        }
         var character = saved.CharacterOptions;
-        if (!character.IsDefault)
+        bool initializeCharacter = character.IsDefault;
+        if (initializeCharacter)
         {
+            // 原生角色选项初始化为未设置值，43槽另置零；光环48槽没有客户端缺省回退。
+            bool nativeDefaults = source.IsDefault || Enumerable.Range(0, ClientSettingsService.GameOptionLength / 2)
+                .All(slot => Read(source, slot) == 0x7fff);
+            byte[] initial = Enumerable.Repeat((byte)255, ClientSettingsService.CharacterOptionLength).ToArray();
+            Write(initial, 43, 0);
+            Write(initial, 46, nativeDefaults ? (ushort)100 : Read(source, 68));
+            Write(initial, 49, nativeDefaults ? (ushort)1 : Read(source, 13));
+            character = [.. initial];
+        }
+        if (Read(character, 48) == ushort.MaxValue)
+        {
+            // 02614ACC直接安装此值，02607970仅接受1；未设置时默认显示，显式关闭0原样保留。
             byte[] copy = character.ToArray();
-            // 390会再写这两项，必须与本次173使用相同的角色值。
-            Write(copy, 46, Read(effective, 68));
-            Write(copy, 49, Read(effective, 13));
+            Write(copy, 48, 1);
             character = [.. copy];
         }
-        return saved with { GameOptions = effective, CharacterOptions = character };
+        saved = saved with { CharacterOptions = character };
+        // 合成角色选项不能反向改造主区，尤其不能破坏全7FFF的原生初始化标记。
+        if (source.IsDefault || initializeCharacter)
+            return saved with { GameOptions = source };
+        var effective = ForCharacterSave(source, character);
+        byte[] coordinated = character.ToArray();
+        // 390会再写这两项，必须与本次173使用相同的角色值。
+        Write(coordinated, 46, Read(effective, 68));
+        Write(coordinated, 49, Read(effective, 13));
+        return saved with { GameOptions = effective, CharacterOptions = [.. coordinated] };
     }
 
     public static byte VisibilityFlags(ImmutableArray<byte> main)

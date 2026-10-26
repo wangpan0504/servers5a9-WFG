@@ -697,6 +697,19 @@ internal sealed class TcpPeer : IDisposable
             w.Write(0u);
         });
         InitialGameOptions = Expect(0, 173, initialGameOptions).Body;
+        byte[]? characterOptions = (settings ?? []).FirstOrDefault(option => option.Opcode == 390).Body;
+        if (characterOptions is null)
+        {
+            // 独立编码无角色存档的512B初始化，不调用生产规则或Builder生成预期。
+            byte[] options = Enumerable.Repeat((byte)255, 512).ToArray();
+            bool unsetMain = Enumerable.Range(0, 102).All(index => U16(InitialGameOptions, 4 + index * 2) == 0x7fff);
+            BinaryPrimitives.WriteUInt16LittleEndian(options.AsSpan(86), 0);
+            BinaryPrimitives.WriteUInt16LittleEndian(options.AsSpan(92), unsetMain ? (ushort)100 : U16(InitialGameOptions, 140));
+            BinaryPrimitives.WriteUInt16LittleEndian(options.AsSpan(96), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(options.AsSpan(98), unsetMain ? (ushort)1 : U16(InitialGameOptions, 30));
+            characterOptions = Build(writer => { writer.Write(512u); writer.Write(options); });
+        }
+        Expect(0, 390, characterOptions);
         var middle = new List<WirePacket>();
         RestoredConsumableStates.Clear();
         SkillInfo = [];
@@ -951,7 +964,13 @@ internal sealed class TcpPeer : IDisposable
                     "场景后仅可补默认指令，完整两树余额、绑定、等级与已保存指令保持");
             }
             if (combos is not null) Expect(0, 447, combos);
-            ClientSettings = (settings ?? []).Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
+            var expectedSettings = (settings ?? []).ToList();
+            if (!expectedSettings.Any(option => option.Opcode == 390))
+            {
+                int next = expectedSettings.FindIndex(option => option.Opcode != 173);
+                expectedSettings.Insert(next >= 0 ? next : expectedSettings.Count, (390, characterOptions));
+            }
+            ClientSettings = expectedSettings.Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
             if (appearanceFlags.HasValue)
                 Expect(0, 357, Build(w =>
                 {
