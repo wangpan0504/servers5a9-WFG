@@ -147,6 +147,11 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (Selected is not null)
                 throw new InvalidDataException("Invalid selection state");
             var character = repository.LoadCharacter(owner, slot);
+            if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
+                throw new InvalidOperationException("Selection published roster identity changed");
+            // 普通选角与原生换频道共用此门禁；拒绝发生在修复、扣费和位置保存之前。
+            if (DfoServer.Game.Raids.RaidAdmissionPlan.Rejection(ChannelEntry, character) is { } raidRejection)
+                throw new DfoServer.Game.Raids.RaidAdmissionException(raidRejection);
             if (operationHope is not null)
             {
                 var orphaned = character.ActiveMainQuests.Where(row => operationHope.Missions.ContainsKey(row.QuestId)).ToArray();
@@ -154,8 +159,6 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             }
             if (character.IsPvpPrivate && ChannelEntry?.Type != 24)
                 throw new InvalidDataException("专用决斗角色只允许进入已实现的决斗频道");
-            if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
-                throw new InvalidOperationException("Selection published roster identity changed");
             character = repository.GrantBlackDiamondFatigue(owner, character, DateTimeOffset.UtcNow);
             if (questCatalog is not null)
             {
@@ -272,6 +275,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     void Invalidate(string reason, bool publishExpertJob = true)
     {
+        InvalidateRaids();
         npcTownVisit = null;
         hopeSelection = null;
         pvpTraining = null;

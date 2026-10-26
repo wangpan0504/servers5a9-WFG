@@ -1,66 +1,293 @@
+using System.Collections.Immutable;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Session;
 using DfoServer.GameWorld.Channels;
 
 namespace DfoServer.Game.Raids;
 
-// 进程内攻坚队表，不写库。每个角色最多是一支攻坚队的队长；重复创建替换旧队，退出删除。
-// key = (服务器序号 << 24) | (频道号 << 16) | low16：客户端 023C8260 只要求高两字节等于 CHANNELINFO field 7/8，
-// low16 在 0x24E/0x24F/ACK664 路径中只参与整 key 查表比较（KB-20261021T063522-c523cdf490、raid-static-deep S3）。
-internal sealed record RaidParty(uint Key, byte Type, string Title, byte[] TitleBytes, ChannelIdentity Channel, ushort Leader, string LeaderName);
+// 只引用原会话和登记身份，不保存第二份在线角色或资产快照。
+internal sealed record RaidActor(GameSession Session, AccountOwners.Lease Owner, long Epoch,
+    ushort Character, string Name, ChannelIdentity Channel)
+{
+    public bool IsCurrent => Owner.IsCurrent && Session.SelectionEpoch == Epoch && Session.Selected?.Id == Character;
+    public bool CanManage => IsCurrent && Session.CanChangeTownParty &&
+        RaidAdmissionPlan.Rejection(Session.ChannelEntry, Session.Selected!) is null;
+}
+internal sealed record RaidMember(RaidActor Actor, byte Slot, byte Squad = 0);
+internal sealed record RaidParty(uint Key, byte Type, string Title, byte[] TitleBytes, ChannelIdentity Channel,
+    ushort Leader, ImmutableArray<RaidMember> Members, int Capacity, long Revision)
+{
+    public string LeaderName => Members.Single(m => m.Actor.Character == Leader).Actor.Name;
+}
+internal sealed record RaidChange(RaidParty Before, RaidParty? After, RaidActor? Removed = null, bool Kicked = false);
+internal sealed record RaidWaiting(RaidActor Actor, byte Type);
+internal sealed record RaidInvitation(RaidActor Source, RaidActor Target, uint Raid, uint Peer, DateTimeOffset Expires);
+internal sealed record RaidJoinResult(bool Accepted, RaidInvitation? Invitation = null, RaidChange? Change = null);
+internal sealed record RaidDirectoryChange(RaidParty? Party = null, RaidWaiting? Waiting = null, bool Removed = false);
 
-internal sealed class RaidRegistry
+// 进程内招募聚合；锁内不访问数据库、不取得账号锁、不等待网络。业务先持原owner，双人操作按既有锁序。
+internal sealed class RaidRegistry(TimeProvider? clock = null)
 {
     readonly object gate = new();
-    readonly Dictionary<ushort, RaidParty> byLeader = [];
+    readonly Dictionary<uint, RaidParty> parties = [];
+    readonly Dictionary<ushort, RaidWaiting> waiting = [];
+    readonly Dictionary<(ushort Source, ushort Target), RaidInvitation> invitations = [];
     readonly Dictionary<ChannelIdentity, ushort> next = [];
+    // 招募窗口订阅只保留原会话身份，随选角失效清理；不是在线角色或资产目录。
+    readonly Dictionary<GameSession, RaidActor> observers = [];
+    long revision;
+    DateTimeOffset Now => (clock ?? TimeProvider.System).GetUtcNow();
 
-    public int Count { get { lock (gate) return byLeader.Count; } }
-
-    public RaidParty Create(ChannelIdentity channel, byte type, string title, byte[] titleBytes, ushort leader, string leaderName)
+    public int Count { get { lock (gate) return parties.Count; } }
+    public RaidParty? Find(RaidActor actor) { lock (gate) return FindCore(actor); }
+    public RaidParty? Find(uint key, ChannelIdentity channel)
+    { lock (gate) return parties.TryGetValue(key, out var party) && party.Channel == channel ? party : null; }
+    public RaidParty[] List(ChannelIdentity channel, byte type)
+    { lock (gate) return parties.Values.Where(p => p.Channel == channel && p.Type == type).OrderBy(p => p.Key).ToArray(); }
+    public bool IsCurrent(RaidParty party)
+    { lock (gate) return parties.TryGetValue(party.Key, out var current) && ReferenceEquals(current, party); }
+    public void Observe(RaidActor actor) { lock (gate) if (actor.IsCurrent) observers[actor.Session] = actor; }
+    public bool CanPublishDirectory(RaidActor recipient, RaidDirectoryChange change)
     {
         lock (gate)
         {
-            byLeader.Remove(leader);
-            ushort low = Allocate(channel);
-            var party = new RaidParty(((uint)channel.ServerIndex << 24) | ((uint)channel.Number << 16) | low,
-                type, title, titleBytes, channel, leader, leaderName);
-            byLeader[leader] = party;
+            if (!recipient.IsCurrent || !observers.TryGetValue(recipient.Session, out var current) || !Same(current, recipient)) return false;
+            if (change.Party is { } party)
+                return change.Removed ? !parties.ContainsKey(party.Key) : parties.TryGetValue(party.Key, out var p) && ReferenceEquals(p, party);
+            if (change.Waiting is { } row)
+                return change.Removed ? !waiting.ContainsKey(row.Actor.Character) :
+                    waiting.TryGetValue(row.Actor.Character, out var w) && ReferenceEquals(w, row);
+            return false;
+        }
+    }
+    public RaidWaiting[] Waiting(ChannelIdentity channel, byte type)
+    { lock (gate) return waiting.Values.Where(w => w.Actor.IsCurrent && w.Actor.Channel == channel && w.Type == type).OrderBy(w => w.Actor.Character).ToArray(); }
+    // 创建前捕获将被移除的候战项；它可能属于接管前尚未完成收尾的旧会话。
+    public RaidWaiting? Waiting(RaidActor actor)
+    { lock (gate) return actor.IsCurrent ? waiting.GetValueOrDefault(actor.Character) : null; }
+    public bool IsWaitingSnapshot(ChannelIdentity channel, byte type, RaidWaiting[] rows)
+    {
+        lock (gate)
+        {
+            var current = waiting.Values.Where(w => w.Actor.IsCurrent && w.Actor.Channel == channel && w.Type == type).ToArray();
+            return current.Length == rows.Length && rows.All(row => current.Contains(row));
+        }
+    }
+    public bool IsListSnapshot(ChannelIdentity channel, byte type, RaidParty[] rows)
+    {
+        lock (gate) return parties.Values.Count(p => p.Channel == channel && p.Type == type) == rows.Length &&
+            rows.All(row => parties.TryGetValue(row.Key, out var current) && ReferenceEquals(current, row));
+    }
+    RaidParty? FindCore(RaidActor actor) => parties.Values.FirstOrDefault(p => p.Members.Any(m => Same(m.Actor, actor)));
+    static bool Same(RaidActor a, RaidActor b) => ReferenceEquals(a.Session, b.Session) && a.Epoch == b.Epoch &&
+        ReferenceEquals(a.Owner, b.Owner) && a.Character == b.Character;
+
+    public RaidParty? Create(RaidActor actor, byte type, string title, byte[] titleBytes, int capacity) => actor.Owner.Execute(() =>
+    {
+        lock (gate)
+        {
+            if (!actor.CanManage || capacity is < 1 or > 255 || FindCore(actor) is not null ||
+                parties.Values.Any(p => p.Members.Any(m => m.Actor.Character == actor.Character && m.Actor.IsCurrent))) return null;
+            uint key = Allocate(actor.Channel);
+            var party = new RaidParty(key, type, title, titleBytes, actor.Channel, actor.Character,
+                [new(actor, 0)], capacity, ++revision);
+            parties.Add(key, party);
+            waiting.Remove(actor.Character);
             return party;
         }
-    }
+    });
 
-    public RaidParty? Find(ushort leader) { lock (gate) return byLeader.GetValueOrDefault(leader); }
-
-    // MODIFY_RAID_INFO：只改标题，key/类型/队长不变。
-    public RaidParty? Rename(ushort leader, string title, byte[] titleBytes)
+    // 返回值对应ACK667已证的两种拒绝；其它非法身份由调用方保持未处理。
+    public ushort? AddWaiting(RaidActor actor, byte type) => actor.Owner.Execute<ushort?>(() =>
     {
         lock (gate)
         {
-            if (!byLeader.TryGetValue(leader, out var party)) return null;
-            return byLeader[leader] = party with { Title = title, TitleBytes = titleBytes };
+            if (!actor.CanManage) return 0x13;
+            if (FindCore(actor) is not null) return 0x13;
+            if (waiting.TryGetValue(actor.Character, out var current) && Same(current.Actor, actor)) return 0x12;
+            waiting[actor.Character] = new(actor, type);
+            return null;
+        }
+    });
+
+    public RaidChange? Rename(RaidActor actor, byte type, string title, byte[] titleBytes) => actor.Owner.Execute(() =>
+    {
+        lock (gate)
+        {
+            var old = FindCore(actor);
+            if (!actor.CanManage || old is null || old.Leader != actor.Character || old.Type != type) return null;
+            var updated = old with { Title = title, TitleBytes = titleBytes, Revision = ++revision };
+            parties[old.Key] = updated;
+            return new RaidChange(old, updated);
+        }
+    });
+
+    public RaidChange? Assign(RaidActor actor, ushort target, byte squad) => actor.Owner.Execute(() =>
+    {
+        lock (gate)
+        {
+            var old = FindCore(actor);
+            if (!actor.CanManage || old is null || old.Leader != actor.Character || squad > (old.Capacity + 3) / 4) return null;
+            int index = -1;
+            for (int at = 0; at < old.Members.Length; at++)
+                if (old.Members[at].Actor.Character == target && old.Members[at].Actor.IsCurrent) { index = at; break; }
+            if (index < 0 || squad != 0 && old.Members.Count(m => m.Squad == squad && m.Actor.Character != target) >= 4) return null;
+            if (old.Members[index].Squad == squad) return new(old, old);
+            var updated = old with { Members = old.Members.SetItem(index, old.Members[index] with { Squad = squad }), Revision = ++revision };
+            parties[old.Key] = updated;
+            return new RaidChange(old, updated);
+        }
+    });
+
+    public RaidChange? Leave(RaidActor actor, ushort target) => actor.Owner.Execute(() =>
+    {
+        lock (gate)
+        {
+            var party = FindCore(actor);
+            if (!actor.CanManage || party is null || target != actor.Character && party.Leader != actor.Character) return null;
+            var removed = party.Members.FirstOrDefault(m => m.Actor.Character == target);
+            return removed is null ? null : RemoveCore(party, removed.Actor, target != actor.Character);
+        }
+    });
+
+    RaidChange RemoveCore(RaidParty old, RaidActor actor, bool kicked = false)
+    {
+        var members = old.Members.Where(m => !Same(m.Actor, actor)).ToImmutableArray();
+        RaidParty? updated = members.IsEmpty ? null : old with
+        {
+            Members = members,
+            Leader = old.Leader == actor.Character ? members.MinBy(m => m.Slot)!.Actor.Character : old.Leader,
+            Revision = ++revision
+        };
+        if (updated is null) parties.Remove(old.Key); else parties[old.Key] = updated;
+        foreach (var key in invitations.Where(p => p.Value.Raid == old.Key ||
+            Same(p.Value.Source, actor) || Same(p.Value.Target, actor)).Select(p => p.Key).ToArray()) invitations.Remove(key);
+        return new(old, updated, actor, kicked);
+    }
+
+    // 可在旧generation收尾调用，只按原Session/epoch移除，绝不按角色号删除接管者。
+    public void RemoveSession(GameSession session, long epoch)
+    {
+        List<RaidChange> changes = [];
+        List<RaidWaiting> removedWaiting = [];
+        lock (gate)
+        {
+            if (observers.TryGetValue(session, out var observer) && observer.Epoch == epoch) observers.Remove(session);
+            foreach (var row in waiting.Where(p => ReferenceEquals(p.Value.Actor.Session, session) && p.Value.Actor.Epoch == epoch).ToArray())
+            { waiting.Remove(row.Key); removedWaiting.Add(row.Value); }
+            foreach (var party in parties.Values.ToArray())
+                if (party.Members.FirstOrDefault(m => ReferenceEquals(m.Actor.Session, session) && m.Actor.Epoch == epoch) is { } member)
+                    changes.Add(RemoveCore(party, member.Actor));
+            foreach (var key in invitations.Where(p =>
+                ReferenceEquals(p.Value.Source.Session, session) && p.Value.Source.Epoch == epoch ||
+                ReferenceEquals(p.Value.Target.Session, session) && p.Value.Target.Epoch == epoch).Select(p => p.Key).ToArray()) invitations.Remove(key);
+        }
+        foreach (var row in removedWaiting) PublishDirectory(new(Waiting: row, Removed: true));
+        foreach (var change in changes) Publish(change);
+    }
+
+    public RaidInvitation? Invite(RaidActor source, RaidActor target, uint peer)
+    {
+        if (source.Owner.Account == target.Owner.Account || source.Channel != target.Channel) return null;
+        return Pair<RaidInvitation>(source, target, () =>
+        {
+            lock (gate)
+            {
+                if (!source.CanManage || !target.CanManage) return null;
+                var a = FindCore(source); var b = FindCore(target);
+                var party = a ?? b;
+                if (party is null || a is not null && b is not null ||
+                    party.Leader != (a is null ? target.Character : source.Character) || party.Members.Length >= party.Capacity ||
+                    source.Session.ChannelEntry is not { } channel || party.Type != RaidTypes.FromChannelType(channel.Type)) return null;
+                foreach (var key in invitations.Where(p => p.Value.Expires <= Now || !p.Value.Source.IsCurrent || !p.Value.Target.IsCurrent)
+                    .Select(p => p.Key).ToArray()) invitations.Remove(key);
+                // 每个接收者最多保留该团容量个请求；重发同一对只续用原请求，不增加队列。
+                var pair = (source.Character, target.Character);
+                if (invitations.TryGetValue(pair, out var existing)) return existing;
+                if (invitations.Count(p => Same(p.Value.Target, target)) >= party.Capacity) return null;
+                var invitation = new RaidInvitation(source, target, party.Key, peer, Now.AddSeconds(30));
+                invitations[pair] = invitation;
+                return invitation;
+            }
+        });
+    }
+
+    public RaidJoinResult Respond(RaidActor recipient, ushort sourceCharacter, bool accept, uint peer = 0)
+    {
+        RaidInvitation? captured;
+        lock (gate) invitations.TryGetValue((sourceCharacter, recipient.Character), out captured);
+        if (captured is null || !Same(captured.Target, recipient)) return new(false);
+        return Pair<RaidJoinResult>(captured.Source, recipient, () =>
+        {
+            lock (gate)
+            {
+                var key = (sourceCharacter, recipient.Character);
+                if (!invitations.TryGetValue(key, out var current) || !ReferenceEquals(current, captured) ||
+                    current.Expires <= Now || current.Peer != peer || !current.Source.CanManage || !recipient.CanManage) return new(false);
+                invitations.Remove(key);
+                if (!accept) return new(true, current);
+                if (!parties.TryGetValue(current.Raid, out var old)) return new(false);
+                var leader = old.Members.FirstOrDefault(m => m.Actor.Character == old.Leader);
+                if (leader is null || !(Same(leader.Actor, current.Source) || Same(leader.Actor, recipient))) return new(false);
+                var entrant = Same(leader.Actor, recipient) ? current.Source : recipient;
+                if (FindCore(entrant) is not null || old.Members.Length >= old.Capacity) return new(false);
+                byte slot = (byte)Enumerable.Range(0, old.Capacity).First(n => old.Members.All(m => m.Slot != n));
+                var updated = old with { Members = old.Members.Add(new(entrant, slot)), Revision = ++revision };
+                parties[old.Key] = updated;
+                if (waiting.TryGetValue(entrant.Character, out var wait) && Same(wait.Actor, entrant)) waiting.Remove(entrant.Character);
+                return new(true, current, new(old, updated));
+            }
+        }) ?? new(false);
+    }
+
+    static T? Pair<T>(RaidActor a, RaidActor b, Func<T?> operation) where T : class
+    {
+        try { return AccountOwners.Lease.ExecuteTogether(a.Owner, b.Owner, operation); }
+        catch (InvalidOperationException) when (!a.Owner.IsCurrent || !b.Owner.IsCurrent) { return null; }
+    }
+
+    public void Publish(RaidChange change)
+    {
+        PublishDirectory(new(Party: change.After ?? change.Before, Removed: change.After is null));
+        if (change.After is { } joined)
+            foreach (var member in joined.Members.Where(m => !change.Before.Members.Any(old => Same(old.Actor, m.Actor))))
+                PublishDirectory(new(Waiting: new(member.Actor, joined.Type), Removed: true));
+        foreach (var member in change.Before.Members)
+            member.Actor.Session.RaidNoticeArrived?.Invoke(change, member.Actor);
+        if (change.After is { } after)
+            foreach (var member in after.Members.Where(m => !change.Before.Members.Any(old => Same(old.Actor, m.Actor))))
+                member.Actor.Session.RaidNoticeArrived?.Invoke(change, member.Actor);
+    }
+
+    public void PublishDirectory(RaidDirectoryChange change)
+    {
+        var channel = change.Party?.Channel ?? change.Waiting!.Actor.Channel;
+        RaidActor[] recipients;
+        lock (gate) recipients = observers.Values.Where(a => a.IsCurrent && a.Channel == channel).ToArray();
+        foreach (var actor in recipients)
+        {
+            // 团员由成员投影发送完整状态；招募列表的订阅者只更新记录，不打开别人的窗口。
+            if (change.Party is { } party && party.Members.Any(m => Same(m.Actor, actor))) continue;
+            actor.Session.RaidDirectoryNoticeArrived?.Invoke(change, actor);
         }
     }
 
-    // SET_RAID_WAITING：进程内待机名单，只用于拒绝重复登记（ACK667 0x12）；待机列表的下发包未恢复，名单不对外显示。
-    readonly HashSet<ushort> waiting = [];
-
-    public bool AddWaiting(ushort character) { lock (gate) return waiting.Add(character); }
-
-    public void RemoveWaiting(ushort character) { lock (gate) waiting.Remove(character); }
-
-    public RaidParty? Leave(ushort character)
+    public void PublishWaiting(RaidActor actor)
     {
-        lock (gate) return byLeader.Remove(character, out var party) ? party : null;
+        RaidWaiting? row;
+        lock (gate) waiting.TryGetValue(actor.Character, out row);
+        if (row is not null && Same(row.Actor, actor)) PublishDirectory(new(Waiting: row));
     }
 
-    // low16 从 1 开始，跳过同频道仍在用的值；0 不用。
-    ushort Allocate(ChannelIdentity channel)
+    uint Allocate(ChannelIdentity channel)
     {
         ushort low = next.GetValueOrDefault(channel);
+        uint high = ((uint)channel.ServerIndex << 24) | ((uint)channel.Number << 16);
         for (int attempt = 0; attempt < ushort.MaxValue; attempt++)
         {
             low = (ushort)(low == ushort.MaxValue ? 1 : low + 1);
-            uint high = ((uint)channel.ServerIndex << 24) | ((uint)channel.Number << 16);
-            if (!byLeader.Values.Any(party => party.Key == (high | low))) { next[channel] = low; return low; }
+            if (!parties.ContainsKey(high | low)) { next[channel] = low; return high | low; }
         }
         throw new InvalidOperationException("频道攻坚队编号已用尽");
     }

@@ -41,14 +41,9 @@ internal static class RaidCreateFlowTests
             RaidTypes.FromChannelType(0x3F) == 5 && RaidTypes.FromChannelType(0x36) == 6 && RaidTypes.FromChannelType(0x18) == 6,
             "01DC69B0 频道类型表");
 
-        var registry = new RaidRegistry();
-        var luke = new ChannelIdentity(2, 20);
-        var first = registry.Create(luke, 1, "a", "a"u8.ToArray(), 1, "x");
-        var second = registry.Create(luke, 1, "b", "b"u8.ToArray(), 2, "y");
-        var again = registry.Create(luke, 1, "c", "c"u8.ToArray(), 1, "x");
-        That(first.Key == 0x02140001 && second.Key == 0x02140002 && again.Key == 0x02140003 && registry.Count == 2,
-            "key = 服务器<<24 | 频道<<16 | low16；同队长再建替换旧队");
-        That(registry.Leave(2)?.Key == 0x02140002 && registry.Leave(2) is null && registry.Find(1)?.Title == "c", "退出删队且幂等");
+        // 多人聚合保留key/槽位及精确Session清理；重复创建不再替换已有成员。
+        RaidMemberTests.RunCore();
+        AntonRaidResourceTests.RunCore();
 
         var tokens = new List<PvfToken>();
         var strings = new Dictionary<int, string>();
@@ -65,7 +60,7 @@ internal static class RaidCreateFlowTests
     }
 
     // 真实 PVF：etc/raid/raid.lst 0 Anton(20/10)、1 Luke(8/1)、2 Fiendwar_KR(8/1)、3 Prey(12/1)。
-    public static void RunResources(PvfArchive pvf)
+    public static void RunResources(PvfArchive pvf, DfoServer.GameWorld.Items.ItemCatalog items)
     {
         int before = Count;
         var catalog = RaidCatalog.Load(pvf);
@@ -75,6 +70,7 @@ internal static class RaidCreateFlowTests
         That(catalog.Find(2) is { MemberMax: 8, StartMinimum: 1 } fiend && fiend.Path.Contains("fiendwar_kr"), "超时空之战(raid.lst 2 = Fiendwar_KR) 8 人");
         That(catalog.Find(3) is { MemberMax: 12, StartMinimum: 1, PhaseMax: 2 }, "普雷 12 人");
         That(catalog.Find(6) is null, "类型 6（魔界大战频道 0x36 默认值）无脚本");
+        AntonRaidResourceTests.RunResources(pvf, catalog, items);
         Console.WriteLine($"PASS {Count - before} 团本 raid.lst 人数上限断言（真实 PVF）");
     }
 }

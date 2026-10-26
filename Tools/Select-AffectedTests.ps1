@@ -72,6 +72,7 @@ $schemaGroups = @('database-schema','settings-storage','inventory-persistence','
 
 # 路径关键词到测试组；同时补充对应的资源定向组（这些组按需运行，不在默认全量 TCP 中）。
 $keywordGroups = [ordered]@{
+    'Raid'      = 'raid-create','anton-raid','raid-channel-type','raid-channel-landing','raid-channel-events','special-normal-entry'
     'Quest'      = 'quest-lifecycle','quest-extras','quest-chains','quest-chain-settlement','quest-metro','quest-auto-daily','quest-gold-mail','quest-question-state','quest-continuation','quest-core-rewards','quest-initialization','story-digest'
     'Social|PlayerInteraction|PublicCharacter|NamedWhisper' = 'social','presence','chat','channel-entry'
     'PartyDungeon' = 'party-dungeon','party-dungeon-modes'

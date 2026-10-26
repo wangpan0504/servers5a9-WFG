@@ -10,7 +10,8 @@ using DfoServer.Network.Projection;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessionDirectory online, ServerLog log, PartyDungeonService? partyDungeons = null) : IGameCommandModule
+internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessionDirectory online, ServerLog log, PartyDungeonService? partyDungeons = null,
+    RaidHandler? raids = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -55,6 +56,8 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
     }
     async Task<CommandResult> RequestAsync(GameConnectionContext context, Packet request)
     {
+        if (request.Body.Length >= 3 && request.Body[2] == 10 && raids is not null)
+            return await raids.RequestPeerAsync(context, request);
         if (CharacterRequests.TryPeerMenu(request.Body, out ushort target))
         {
             var identity = online.PublicCharacter(target);
@@ -79,6 +82,8 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
     }
     async Task<CommandResult> ResponseAsync(GameConnectionContext context, Packet request)
     {
+        if (request.Body.Length >= 3 && request.Body[2] == 10 && raids is not null)
+            return await raids.ResponsePeerAsync(context, request);
         var body = request.Body;
         if (body.Length < 3 || body[2] != 0) return CommandResult.Unhandled;
         if (body.Length != 7 && (body.Length != 9 || BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(7)) != 0x85))

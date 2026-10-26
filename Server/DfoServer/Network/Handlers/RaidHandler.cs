@@ -5,23 +5,13 @@ using DfoServer.GameWorld.Raids;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
 
-// 攻坚队创建/退出（单人队长队；入队、编队、开打之后的包序未恢复）。
-// C2S664 CREATE_RAID：请求类型必须等于 01DC69B0(当前频道类型) 且 raid.lst 有该类型脚本，否则回 ACK664 失败 0x13（dstr 32060）。
-//   成功顺序：NOTI 0x24E 记录 → NOTI 0x24F op3（u8 M=1 + 队长成员块，开窗）→ ACK664 成功 u32 key（01DDC920 对已设的同一 key 无副作用）。
-//   魔界大战频道 0x36 → 类型 6：raid.lst 无 6，01DDADC0 对 >5 返回空，窗口刷新 021752C5 直接放弃，保持失败。
-// C2S665 LEAVE_RAID：u16 角色号（01DC6D60 写 0643A52C）。本角色是队长时删队并回 ACK665 成功 [1, 0]。
-// C2S658 RAID_ENTRY_COST_INFO：u8 标志（01DC65B0，客户端置 [mgr+0x1C4]=1 防重发）；ACK658 成功不读字段，回 [1]。入场材料数据包未恢复。
-// C2S666 START_RAID：空包体（01DC7D52）。没有队伍回 0x13；单人队低于脚本 [RAID START MINIMUM MEMBER] 回 0x16；
-//   人数足够也回 0x13（开战后入场包序未恢复，不回成功）。
-// C2S667 SET_RAID_WAITING：u8 0 + u8 团本类型（02172BBF）。已是队长回 0x13，已登记回 0x12，否则登记并回成功 [1]（待机列表下发未恢复）。
-// C2S670 MODIFY_RAID_INFO：u8 类型 + 队名 + u8。本角色是该类型队长时改标题，先发 NOTI 0x24F op2 整条记录再回 [1]；否则回 0x13。
-// 踢人：LEAVE_RAID 第二发送点 0398B9DC 写 [obj+0x2C] 的 u16，单人队没有可踢成员，非本人仍不回包。加入/C2S669 RAID_MANAGER_WORK 未恢复。
-// C2S1361 REQUEST_RAID_INFO 客户端没有 ACK 处理器（0x551 只注册了 NOTI），不在这里回包。
-internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegistry registry) : IGameCommandModule
+// 招募、成员和分队使用正式会话身份；开战资源/阶段/奖励未闭合时保持明确拒绝，不收费。
+internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegistry registry, OnlineSessionDirectory? online = null) : IGameCommandModule
 {
     public RaidHandler(ServerLog log) : this(log, RaidCatalog.Empty, new RaidRegistry()) { }
 
@@ -33,34 +23,73 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         commands.Register(CmdPacketType.START_RAID, StartAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.SET_RAID_WAITING, WaitingAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.MODIFY_RAID_INFO, ModifyAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.RAID_MANAGER_WORK, ManagerAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.REQUEST_RAID_INFO, InformationAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.REJOIN_RAID, RejoinAsync, nameof(RaidHandler));
+    }
+
+    RaidActor? Actor(GameConnectionContext context) => context.BlocksTownActions ? null : context.Session.CaptureRaidActor(registry);
+    bool MatchesType(RaidActor actor, byte type) => actor.Session.ChannelEntry is { } channel &&
+        RaidTypes.FromChannelType(channel.Type) == type && catalog.Find(type) is not null;
+
+    async Task<CommandResult> RejoinAsync(GameConnectionContext context, Packet request)
+    {
+        uint key;
+        try { key = RaidRequests.Rejoin(request.Body); }
+        catch (InvalidDataException) { return CommandResult.Unhandled; }
+        if (Actor(context) is not { } actor) return CommandResult.Unhandled;
+        // ACK668成功会调用0055D870继续恢复正式界面；招募记录不能充当可重入的攻坚实例。
+        log.Write("raid_start_request", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
+            Error = RaidPackets.CreateUnavailable, Reason = "formal-raid-rejoin-unavailable" });
+        await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "raid_rejoin_rejected", () => actor.IsCurrent);
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> StartAsync(GameConnectionContext context, Packet request)
     {
-        var character = context.Session.Selected;
-        if (request.Body.Length != 0 || character is null) return CommandResult.Unhandled;
-        var party = registry.Find(character.Id);
+        if (request.Body.Length != 0 || Actor(context) is not { } actor) return CommandResult.Unhandled;
+        var party = registry.Find(actor);
         var definition = party is null ? null : catalog.Find(party.Type);
-        const int members = 1;
-        ushort error = party is null || definition is null ? RaidPackets.StartUnavailable :
-            members < definition.StartMinimum ? RaidPackets.StartTooFewMembers : RaidPackets.StartUnavailable;
-        log.Write("raid_start_request", new { Connection = context.Id, Self = character.Id, Key = party?.Key.ToString("X8"), Members = members,
-            definition?.StartMinimum, Error = error, Reason = party is null ? "no-raid" : error == RaidPackets.StartTooFewMembers ? "too-few-members" : "start-flow-unrecovered" });
-        await context.Reply(CmdPacketType.START_RAID, RaidPackets.StartFailure(error), "raid_start_rejected");
+        int members = party?.Members.Count(m => m.Actor.IsCurrent) ?? 0;
+        var check = party is null ? new RaidStartCheck(RaidPackets.StartUnavailable, "no-raid") :
+            RaidStartCheck.Evaluate(party.Leader == actor.Character, members, definition);
+        var resources = definition?.Anton;
+        log.Write("raid_start_request", new { Connection = context.Id, Self = actor.Character, Key = party?.Key.ToString("X8"), Members = members,
+            definition?.StartMinimum, Accepted = false, check.Error, check.Reason,
+            MissingDungeons = resources?.MissingFormalDungeons.Length, MissingMaps = resources?.MissingFormalMaps.Length,
+            MissingItems = resources?.MissingItems.Length, DefinitionIssues = resources?.Issues.Length,
+            TutorialScripts = resources?.Dungeons.Count(d => d.TutorialFileExists),
+            DungeonSample = resources is null ? "" : string.Join(',', resources.MissingFormalDungeons.Take(8)),
+            MapSample = resources is null ? "" : string.Join(',', resources.MissingFormalMaps.Take(8)),
+            ItemSample = resources is null ? "" : string.Join(',', resources.MissingItems.Take(8)),
+            IssueSample = resources is null ? "" : string.Join(';', resources.Issues.Take(4).Select(i => $"{i.Code}:{i.Path}@{i.TokenIndex}")) });
+        await context.Reply(CmdPacketType.START_RAID, RaidPackets.StartFailure(check.Error), "raid_start_rejected", () => actor.IsCurrent);
         return CommandResult.Handled;
     }
 
     async Task<CommandResult> WaitingAsync(GameConnectionContext context, Packet request)
     {
-        var character = context.Session.Selected;
-        if (request.Body.Length != 2 || character is null) return CommandResult.Unhandled;
-        byte raidType = request.Body[1];
-        ushort? error = registry.Find(character.Id) is not null ? RaidPackets.WaitingInRaid :
-            !registry.AddWaiting(character.Id) ? RaidPackets.WaitingAlready : null;
-        log.Write("raid_waiting_request", new { Connection = context.Id, Self = character.Id, Head = request.Body[0], RaidType = raidType,
-            Accepted = error is null, Error = error });
-        await context.Reply(CmdPacketType.SET_RAID_WAITING, error is { } code ? RaidPackets.CreateFailure(code) : RaidPackets.WaitingSuccess,
-            error is null ? "raid_waiting" : "raid_waiting_rejected");
+        if (request.Body.Length != 2 || request.Body[0] != 0 || Actor(context) is not { } actor || !MatchesType(actor, request.Body[1]))
+            return CommandResult.Unhandled;
+        byte type = request.Body[1];
+        ushort? error = registry.AddWaiting(actor, type);
+        log.Write("raid_waiting_request", new { Connection = context.Id, Self = actor.Character, RaidType = type, Accepted = error is null, Error = error });
+        var replied = context.Reply(CmdPacketType.SET_RAID_WAITING, error is { } code ? RaidPackets.CreateFailure(code) : RaidPackets.WaitingSuccess,
+            error is null ? "raid_waiting" : "raid_waiting_rejected", () => actor.IsCurrent);
+        if (error is null)
+        {
+            var rows = registry.List(actor.Channel, type);
+            context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, RaidPackets.RaidListBatch(rows.Select(p =>
+                (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
+                    p.Members.Single(m => m.Actor.Character == p.Leader).Squad)).ToArray()), "raid_recruiting_list",
+                () => actor.IsCurrent && registry.IsListSnapshot(actor.Channel, type, rows));
+            var waitRows = registry.Waiting(actor.Channel, type);
+            context.Sender.Post(0, (ushort)NotiPacketType.RAID_WAITING_LIST, RaidPackets.WaitingList(waitRows
+                .Select(w => (w.Actor.Character, w.Type)).ToArray()), "raid_waiting_list",
+                () => actor.Session.CanPublishRaidWaiting(actor, type, waitRows));
+            registry.PublishWaiting(actor);
+        }
+        await replied;
         return CommandResult.Handled;
     }
 
@@ -68,28 +97,22 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
     {
         ModifyRaidRequest parsed;
         try { parsed = RaidRequests.ModifyRaid(request.Body); }
-        catch (InvalidDataException error)
+        catch (InvalidDataException) { return CommandResult.Unhandled; }
+        if (Actor(context) is not { } actor) return CommandResult.Unhandled;
+        var current = registry.Find(actor);
+        var change = registry.Rename(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name));
+        if (change?.After is not { } party)
         {
-            log.Write("raid_modify_request", new { Connection = context.Id, Body = Convert.ToHexString(request.Body), Accepted = false,
-                Reason = "body-layout-mismatch", Detail = error.Message });
-            return CommandResult.Unhandled;
-        }
-        var character = context.Session.Selected;
-        if (character is null) return CommandResult.Unhandled;
-        var current = registry.Find(character.Id);
-        if (current is null || current.Type != parsed.RaidType)
-        {
-            log.Write("raid_modify_request", new { Connection = context.Id, parsed.RaidType, parsed.Name, parsed.Field, Accepted = false,
-                Reason = current is null ? "no-raid" : "raid-type-mismatch" });
-            await context.Reply(CmdPacketType.MODIFY_RAID_INFO, RaidPackets.CreateFailure(RaidPackets.ModifyNoRaid), "raid_modify_rejected");
+            ushort error = current is not null && current.Leader != actor.Character ? RaidPackets.ModifyNotLeader : RaidPackets.ModifyNoRaid;
+            log.Write("raid_modify_request", new { Connection = context.Id, parsed.RaidType, Accepted = false, Reason = "raid-or-leader-mismatch" });
+            await context.Reply(CmdPacketType.MODIFY_RAID_INFO, RaidPackets.CreateFailure(error), "raid_modify_rejected", () => actor.IsCurrent);
             return CommandResult.Handled;
         }
-        byte[] title = CharacterName.Encoding.GetBytes(parsed.Name);
-        var party = registry.Rename(character.Id, parsed.Name, title)!;
-        log.Write("raid_modify_request", new { Connection = context.Id, parsed.RaidType, parsed.Name, parsed.Field, Accepted = true, Key = party.Key.ToString("X8") });
-        await context.Notify(NotiPacketType.RAID_MODIFY, RaidPackets.UpdateRecord(party.Key, title, party.Type, character.Id,
-            CharacterName.Encoding.GetBytes(character.Name)), "raid_modified_record");
-        await context.Reply(CmdPacketType.MODIFY_RAID_INFO, RaidPackets.ModifySuccess, "raid_modified");
+        log.Write("raid_modify_request", new { Connection = context.Id, parsed.RaidType, Accepted = true, Key = party.Key.ToString("X8"), party.Revision });
+        foreach (var member in party.Members)
+            member.Actor.Session.RaidRecordNoticeArrived?.Invoke(party, member.Actor);
+        registry.PublishDirectory(new(Party: party));
+        await context.Reply(CmdPacketType.MODIFY_RAID_INFO, RaidPackets.ModifySuccess, "raid_modified", () => actor.IsCurrent);
         return CommandResult.Handled;
     }
 
@@ -97,55 +120,113 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
     {
         CreateRaidRequest parsed;
         try { parsed = RaidRequests.CreateRaid(request.Body); }
-        catch (InvalidDataException error)
-        {
-            log.Write("raid_create_request", new { Connection = context.Id, Length = request.Body.Length,
-                Body = Convert.ToHexString(request.Body), Accepted = false, Reason = "body-layout-mismatch", Detail = error.Message });
-            return CommandResult.Unhandled;
-        }
-        var character = context.Session.Selected;
-        var entry = context.Session.ChannelEntry;
-        byte expected = entry is null ? RaidTypes.Default : RaidTypes.FromChannelType(entry.Type);
+        catch (InvalidDataException) { return CommandResult.Unhandled; }
+        var actor = Actor(context);
         var definition = catalog.Find(parsed.RaidType);
-        string? reason = character is null ? "no-character" :
-            context.Session.Phase != SessionPhase.Town || context.BlocksTownActions ? "not-in-town" :
-            parsed.RaidType != expected ? "raid-type-channel-mismatch" :
-            definition is null ? "raid-type-without-script" : null;
-        if (reason is not null)
+        var previousWaiting = actor is null ? null : registry.Waiting(actor);
+        var party = actor is null || definition is null || !MatchesType(actor, parsed.RaidType) ? null :
+            registry.Create(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name), definition.MemberMax);
+        log.Write("raid_create_request", new { Connection = context.Id, parsed.RaidType, parsed.Name, Accepted = party is not null,
+            Reason = party is null ? "raid-admission-or-membership" : null, Key = party?.Key.ToString("X8"), definition?.MemberMax, definition?.StartMinimum });
+        if (party is null)
         {
-            log.Write("raid_create_request", new { Connection = context.Id, parsed.RaidType, Expected = expected, ChannelType = entry?.Type,
-                parsed.Name, parsed.Field210, parsed.Field211, parsed.Field214, parsed.Flags, Accepted = false, Reason = reason,
-                Error = RaidPackets.CreateUnavailable });
             await context.Reply(CmdPacketType.CREATE_RAID, RaidPackets.CreateFailure(), "raid_create_rejected");
             return CommandResult.Handled;
         }
-        byte[] title = CharacterName.Encoding.GetBytes(parsed.Name);
-        byte[] leaderName = CharacterName.Encoding.GetBytes(character!.Name);
-        var party = registry.Create(context.Channel, parsed.RaidType, parsed.Name, title, character.Id, character.Name);
-        registry.RemoveWaiting(character.Id);
-        log.Write("raid_create_request", new { Connection = context.Id, parsed.RaidType, parsed.Name, parsed.Field210, parsed.Field211,
-            parsed.Field214, parsed.Flags, Accepted = true, Key = party.Key.ToString("X8"), Leader = character.Id,
-            definition!.Path, definition.MemberMax, definition.StartMinimum });
-        await context.Notify(NotiPacketType.RAID_LIST, RaidPackets.RaidList(party.Key, title, party.Type, character.Id, leaderName), "raid_created_record");
-        await context.Notify(NotiPacketType.RAID_MODIFY, RaidPackets.OpenWithMembers(party.Key, [(character.Id, leaderName)]), "raid_created_open");
-        await context.Reply(CmdPacketType.CREATE_RAID, RaidPackets.CreateSuccess(party.Key), "raid_created");
+        bool Guard() => context.Session.CanPublishRaid(actor!, party);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, RaidProjection.List(party), "raid_created_record", Guard);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY, RaidPackets.OpenWithSquads(party.Key, RaidProjection.Members(party)), "raid_created_open", Guard);
+        var replied = context.Reply(CmdPacketType.CREATE_RAID, RaidPackets.CreateSuccess(party.Key), "raid_created",
+            () => context.Session.HasRaidKey(actor!, party.Key));
+        registry.PublishDirectory(new(Party: party));
+        if (previousWaiting is not null) registry.PublishDirectory(new(Waiting: previousWaiting, Removed: true));
+        await replied;
         return CommandResult.Handled;
     }
 
     async Task<CommandResult> LeaveAsync(GameConnectionContext context, Packet request)
     {
-        var character = context.Session.Selected;
-        if (request.Body.Length != 2 || character is null)
-        {
-            log.Write("raid_leave_request", new { Connection = context.Id, Body = Convert.ToHexString(request.Body), Accepted = false, Reason = "body-or-character" });
+        if (request.Body.Length != 2 || Actor(context) is not { } actor) return CommandResult.Unhandled;
+        ushort target = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(request.Body);
+        var change = registry.Leave(actor, target);
+        log.Write("raid_leave_request", new { Connection = context.Id, Target = target, Self = actor.Character, Accepted = change is not null,
+            Key = change?.Before.Key.ToString("X8"), Leader = change?.After?.Leader, Revision = change?.After?.Revision });
+        if (change is null) return CommandResult.Unhandled;
+        registry.Publish(change);
+        // 踢人成功由被踢者消费ACK665，不能让队长的ACK关掉队长自己的团本窗口。
+        if (target == actor.Character)
+            await context.Reply(CmdPacketType.LEAVE_RAID, RaidPackets.LeaveSuccess, "raid_left", () => actor.IsCurrent && !context.Session.HasCurrentRaid(actor));
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> ManagerAsync(GameConnectionContext context, Packet request)
+    {
+        RaidManagerRequest parsed;
+        try { parsed = RaidRequests.Manager(request.Body); }
+        catch (InvalidDataException) { return CommandResult.Unhandled; }
+        if (Actor(context) is not { } actor || parsed.Operation != 0 || parsed.Argument > byte.MaxValue || parsed.Character > ushort.MaxValue)
             return CommandResult.Unhandled;
+        var change = registry.Assign(actor, (ushort)parsed.Character, (byte)parsed.Argument);
+        log.Write("raid_modify_request", new { Connection = context.Id, parsed.Operation, parsed.Character, Squad = parsed.Argument,
+            Accepted = change is not null, Reason = change is null ? "member-squad-or-leader-mismatch" : null, Revision = change?.After?.Revision });
+        if (change is null) return CommandResult.Handled;
+        registry.Publish(change);
+        await context.Reply(CmdPacketType.RAID_MANAGER_WORK, [1], "raid_squad_changed", () => actor.IsCurrent);
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> InformationAsync(GameConnectionContext context, Packet request)
+    {
+        RaidInfoRequest parsed;
+        try { parsed = RaidRequests.Information(request.Body); }
+        catch (InvalidDataException) { return CommandResult.Unhandled; }
+        if (Actor(context) is not { } actor) return CommandResult.Unhandled;
+        var party = registry.Find(parsed.Key, actor.Channel);
+        bool accepted = party is not null && MatchesType(actor, party.Type);
+        byte[] body = accepted ? RaidPackets.Information(parsed.Mode, party!.Key, party.TitleBytes, party.Type, party.Leader,
+            CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party)) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
+        await context.Reply(CmdPacketType.REQUEST_RAID_INFO, body, "raid_information", () => actor.IsCurrent && (!accepted || registry.IsCurrent(party!)));
+        return CommandResult.Handled;
+    }
+
+    public async Task<CommandResult> RequestPeerAsync(GameConnectionContext context, Packet request)
+    {
+        var parsed = RaidRequests.Peer(request.Body, response: false);
+        var actor = Actor(context);
+        var other = online?.FindReadyCharacter(parsed.Character)?.CaptureRaidActor(registry);
+        var invitation = actor is null || other is null ? null : registry.Invite(actor, other, parsed.Peer);
+        log.Write("raid_waiting_request", new { Connection = context.Id, Self = actor?.Character, Target = parsed.Character,
+            Accepted = invitation is not null, Reason = invitation is null ? "raid-invitation-unavailable" : null });
+        var replied = context.Reply(CmdPacketType.REQUEST_PEER, invitation is null ? PartyPackets.Failure(3, 10) : [1], "raid_peer_request",
+            () => actor?.IsCurrent == true);
+        if (invitation is not null)
+            invitation.Target.Session.RaidPeerNoticeArrived?.Invoke(invitation.Target, invitation.Source, invitation.Peer, true);
+        await replied;
+        return CommandResult.Handled;
+    }
+
+    public async Task<CommandResult> ResponsePeerAsync(GameConnectionContext context, Packet request)
+    {
+        var parsed = RaidRequests.Peer(request.Body, response: true);
+        var actor = Actor(context);
+        var result = actor is null ? new RaidJoinResult(false) : registry.Respond(actor, parsed.Character, request.Body.Length == 7, parsed.Peer);
+        if (!result.Accepted)
+        {
+            await context.Reply(CmdPacketType.RESPONSE_PEER, PartyPackets.Failure(3, 10), "raid_peer_response_rejected");
+            return CommandResult.Handled;
         }
-        ushort target = (ushort)(request.Body[0] | request.Body[1] << 8);
-        var party = target == character.Id ? registry.Leave(target) : null;
-        log.Write("raid_leave_request", new { Connection = context.Id, Target = target, Self = character.Id, Accepted = party is not null,
-            Key = party?.Key.ToString("X8"), Reason = party is null ? (target == character.Id ? "no-raid" : "kick-unsupported") : null });
-        if (party is null) return CommandResult.Unhandled;
-        await context.Reply(CmdPacketType.LEAVE_RAID, RaidPackets.LeaveSuccess, "raid_left");
+        var replied = request.Body.Length == 7
+            ? context.Reply(CmdPacketType.RESPONSE_PEER, PartyPackets.Response(parsed.Character, 10), "raid_peer_accepted", () => actor!.IsCurrent)
+            : Task.CompletedTask;
+        if (result.Change is { } change)
+        {
+            var invitation = result.Invitation!;
+            invitation.Source.Session.RaidPeerNoticeArrived?.Invoke(invitation.Source, invitation.Target, parsed.Peer, false);
+            registry.Publish(change);
+        }
+        else if (result.Invitation is { } declined)
+            declined.Source.Session.RaidPeerRefused?.Invoke(declined.Source);
+        await replied;
         return CommandResult.Handled;
     }
 

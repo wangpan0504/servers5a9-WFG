@@ -67,6 +67,8 @@ internal static class RaidCreateTcpTests
             peer.Expect(1, 670, [0, 0x13, 0]);
             peer.Send(667, [0, 3]);
             peer.Expect(1, 667, [1]);
+            peer.Barrier(packet => That(packet.Kind == 0 && packet.Opcode is 590 or 592 or 593,
+                "待机成功发布已证招募和候战列表，不冒充正式开战"));
             peer.Send(667, [0, 3]);
             peer.Expect(1, 667, [0, 0x12, 0]);
             peer.Barrier();
