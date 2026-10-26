@@ -136,6 +136,7 @@ internal static partial class DatabaseSchemaTests
                     tx.Commit();
                 }
                 if (corrupt) Execute(db, "ALTER TABLE character_quest_lifecycle_receipts ADD COLUMN unexpected INTEGER");
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, $"PRAGMA user_version={version}");
             }
             if (corrupt)
@@ -186,6 +187,7 @@ internal static partial class DatabaseSchemaTests
                 else Execute(db, $"INSERT INTO character_dungeon_incount VALUES({role.Id},'numbering-a',400000016,20261024,2,20261022,3)");
                 if (social || version < 89) Execute(db, "DROP TABLE account_dungeon_incount");
                 else Execute(db, "INSERT INTO account_dungeon_incount VALUES('numbering-a',400000016,20261024,4)");
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, $"PRAGMA user_version={version}");
             }
             if (version == 90)

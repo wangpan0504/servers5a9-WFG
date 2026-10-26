@@ -17,6 +17,7 @@ internal sealed class InventoryPlan
     // 同一次扣药事务写入的限时经验加成。Until 为 Unix 秒，Permille 1000 表示在原经验上加 100%。
     public (long Until, int Permille)? ExpBonus { get; set; }
     public byte? EquipmentSlotFlagsAfter { get; init; }
+    public bool UnlockSkillTree { get; init; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;
     readonly Lazy<ImmutableArray<CurrencyKind>> currencies;
@@ -46,6 +47,7 @@ internal sealed class InventoryPlan
     {
         PreserveMaterials = PreserveMaterials,
         EquipmentSlotFlagsAfter = EquipmentSlotFlagsAfter,
+        UnlockSkillTree = UnlockSkillTree,
         ExpBonus = ExpBonus
     };
     public InventoryIndex BeforeIndex => beforeIndex.Value;
@@ -53,7 +55,7 @@ internal sealed class InventoryPlan
     public ImmutableArray<InventorySlot> ChangedSlots => slots.Value;
     public ImmutableArray<CurrencyKind> ChangedCurrencies => currencies.Value;
     public ImmutableArray<int> ChangedEpicPieces => pieces.Value;
-    public bool Changed => !Before.ItemMakingSkills.Same(After.ItemMakingSkills) || !Before.Skins.Same(After.Skins) || !Before.AvatarPresets.Same(After.AvatarPresets) || !Before.ConsumableStates.SequenceEqual(After.ConsumableStates) || EquipmentSlotFlagsAfter is not null || Before.StaminaUntil != After.StaminaUntil || !Before.DevilUses.SequenceEqual(After.DevilUses) || Before.AvatarExpansion != After.AvatarExpansion || Before.AccountWallet.CharacterSlotCapacity != After.AccountWallet.CharacterSlotCapacity || OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.CubeContract != After.CubeContract || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
+    public bool Changed => UnlockSkillTree || !Before.ItemMakingSkills.Same(After.ItemMakingSkills) || !Before.Skins.Same(After.Skins) || !Before.AvatarPresets.Same(After.AvatarPresets) || !Before.ConsumableStates.SequenceEqual(After.ConsumableStates) || EquipmentSlotFlagsAfter is not null || Before.StaminaUntil != After.StaminaUntil || !Before.DevilUses.SequenceEqual(After.DevilUses) || Before.AvatarExpansion != After.AvatarExpansion || Before.AccountWallet.CharacterSlotCapacity != After.AccountWallet.CharacterSlotCapacity || OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.CubeContract != After.CubeContract || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
         Before.GoldCarryLimit != After.GoldCarryLimit || Before.AuctionGoldLimit != After.AuctionGoldLimit ||
         Before.CargoCapacity != After.CargoCapacity || Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
         Before.AccountCargo.Gold != After.AccountCargo.Gold || !ShopPurchaseCount.Same(Before.ShopPurchases, After.ShopPurchases) ||

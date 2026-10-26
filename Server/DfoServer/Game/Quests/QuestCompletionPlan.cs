@@ -167,7 +167,7 @@ internal sealed class QuestCompletionPlan
         EquipmentSlotFlags = TargetEquipmentSlotFlags, CompletedQuests = CompletedAfter.ToArray(),
         AccountCompletedQuests = AccountCompletedAfter.ToArray(), ActiveMainQuests = ActiveAfter.ToArray(),
         QuestAnswers = AnswersAfter, AccountQuestAnswers = AccountAnswersAfter, AccountQuestDailyClaims = AccountDailyClaimsAfter,
-        Skills = !UpdatesLearning ? Expected.Skills : TargetLearning.Trees.Single(tree => tree.Context == 0).Skills
+        Skills = !UpdatesLearning ? Expected.Skills : TargetLearning.Trees.Single(tree => tree.Context == TargetLearning.ActiveContext).Skills
             .Select(skill => new CharacterSkill(skill.Id, skill.Level)).OrderBy(skill => skill.Id).ToArray() };
 
     public Character Expected { get; }

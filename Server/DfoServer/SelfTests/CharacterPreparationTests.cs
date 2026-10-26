@@ -173,7 +173,17 @@ internal static class CharacterPreparationTests
         int afterName = 121 + 2 + 4 + name.Length;
         That(actor.AsSpan(afterName, 3).SequenceEqual(new byte[] { 0, 0x25, 95 }), "actor matches roster identity");
         byte[] player = TownPackets.Player(role, new CharacterStatComputer(characters).Compute(role), 1);
-        That(player.Length == 257 && player[143] == 0 && player[144] == 15 && player[190] == 15, "both native skill lists retain tail alignment");
+        That(player.Length == 257 && player[143] == 255 && player[144] == 15 && player[190] == 15,
+            "未开通方案前缀为FF，两组技能仍完整保留原尾部对齐");
+        foreach (int tree in new[] { 0, 1 })
+        {
+            var expanded = role with { Learning = role.Learning with { SelectedTree = tree } };
+            byte[] expandedPlayer = TownPackets.Player(expanded, new CharacterStatComputer(characters).Compute(expanded), 1);
+            byte[] expected = player.ToArray();
+            expected[143] = (byte)tree;
+            That(expandedPlayer.SequenceEqual(expected) && TownPackets.Actor(expanded)[^9] == tree,
+                "已开通Actor资格与Player当前方案一致，两组技能正文保持 " + tree);
+        }
         byte[] complete = TownPackets.CompletedQuests(role);
         That(complete.Length == 30004 && BinaryPrimitives.ReadInt32LittleEndian(complete) == 30000 &&
             complete[4 + 13700] == 1 && complete.Skip(4).Count(x => x == 1) == definition.CompletedQuests.Append(13700).Distinct().Count() &&

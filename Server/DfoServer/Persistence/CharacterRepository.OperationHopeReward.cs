@@ -127,7 +127,7 @@ internal sealed partial class CharacterRepository
         current.ActiveMainQuests.SequenceEqual(afterCommit ? plan.ActiveAfter : expected.ActiveMainQuests) &&
         current.CompletedQuests.SequenceEqual(expected.CompletedQuests) && current.AccountCompletedQuests.SequenceEqual(expected.AccountCompletedQuests) &&
         QuestCycle.Same(current,expected) && SameInventory(current.Inventory,new(inventory,inventory,"hope_receipt_projection")) &&
-        current.Skills.SequenceEqual(afterCommit && plan.GrowthPlan is not null ? plan.TargetLearning.Trees.Single(tree => tree.Context == 0).Skills
+        current.Skills.SequenceEqual(afterCommit && plan.GrowthPlan is not null ? plan.TargetLearning.Trees.Single(tree => tree.Context == plan.TargetLearning.ActiveContext).Skills
             .Select(skill => new CharacterSkill(skill.Id,skill.Level)).OrderBy(skill => skill.Id) : expected.Skills);
 
     private static void VerifyHopeRewards(OperationHopeRewardPlan plan,ImmutableArray<QuestGrantedItem> rewards)

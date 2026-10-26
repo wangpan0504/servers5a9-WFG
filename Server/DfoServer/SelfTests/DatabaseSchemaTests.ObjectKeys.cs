@@ -91,6 +91,7 @@ internal static partial class DatabaseSchemaTests
 
     static void RewindObjectKeys(SqliteConnection db)
     {
+        RemoveSkillTreeExpansionSchema(db);
         bool foreignKeys = Query(db, "PRAGMA foreign_keys") is 1L;
         Execute(db, "PRAGMA foreign_keys=OFF");
         try

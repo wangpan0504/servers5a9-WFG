@@ -68,6 +68,7 @@ internal static class QuestProfessionReward
                 throw new NotSupportedException("转职分支赠技无法初始化: " + initialized.Failure);
             learning = ExpertJobSkills.Preserve(expected.Job, initialized.State!, learning, skills) with
             {
+                SelectedTree = learning.SelectedTree,
                 Experience = learning.Experience,
                 BonusSp = learning.BonusSp,
                 BonusTp = learning.BonusTp,

@@ -251,6 +251,7 @@ CREATE TABLE characters(
     equipment_slot_flags INTEGER NOT NULL DEFAULT 0 CHECK(equipment_slot_flags BETWEEN 0 AND 255),
     emotion INTEGER NOT NULL DEFAULT 0 CHECK(emotion BETWEEN 0 AND 32767),
     clone_title_item_id INTEGER NOT NULL DEFAULT 0 CHECK(typeof(clone_title_item_id)='integer' AND clone_title_item_id BETWEEN 0 AND 4294967295),
+    selected_skill_tree INTEGER NOT NULL DEFAULT -1 CHECK(typeof(selected_skill_tree)='integer' AND selected_skill_tree BETWEEN -1 AND 1),
     blacklist_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(blacklist_count)='integer' AND blacklist_count BETWEEN 0 AND 2147483647),
     avatar_expansion INTEGER NOT NULL DEFAULT 105 CHECK(avatar_expansion BETWEEN 0 AND 315 AND avatar_expansion%7=0),
     devil_usage TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(devil_usage) AND json_type(devil_usage)='array'),

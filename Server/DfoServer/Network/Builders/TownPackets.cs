@@ -160,7 +160,8 @@ internal static partial class TownPackets
             writer.Write((ushort)0);
             writer.Write((byte)0);
             writer.Write((ushort)0);
-            writer.Write((byte)0xff);
+            // 02677E60→026780B6：FF为未开通；0/1安装当前方案并设置双树资格。
+            writer.Write(character.Learning.TreeWireValue);
             writer.Write(new byte[2]);
             writer.Write(0u);
             writer.Write(new byte[2]); // 0267F273..0267FED3.
@@ -231,7 +232,7 @@ internal static partial class TownPackets
                 (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds());
             EquipmentProtocolWriter.NameTag(writer, character.Inventory);
             // 02676C60 -> 02676660: active set, two (u8 count; u16 id/u8 level) skill lists.
-            writer.Write(character.Skills.Length == 0 ? (byte)0xff : (byte)0);
+            writer.Write(character.Learning.TreeWireValue);
             for (int tree = 0; tree < 2; tree++)
             {
                 CharacterSkill[] skills = character.Learning.Initialized

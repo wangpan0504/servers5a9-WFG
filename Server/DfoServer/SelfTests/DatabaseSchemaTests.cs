@@ -66,8 +66,11 @@ internal static partial class DatabaseSchemaTests
 
     // v72 只追加每周地下城配置表、v76 追加角色每周计数表；回退到更早的夹具应真的移除，
     // 确保重放时走真实建表而不是按已有结构跳过。
-    internal static void RemoveAdventureWeekly(SqliteConnection db) =>
+    internal static void RemoveAdventureWeekly(SqliteConnection db)
+    {
+        RemoveSkillTreeExpansionSchema(db);
         Execute(db, "DROP TABLE IF EXISTS character_weekly_dungeon; DROP TABLE IF EXISTS account_adventure_weekly_config");
+    }
 
     // v73 追加开启/排除额两列与角色里程、开启标记两张表；回退到 v72 及更早的夹具必须真的移除，
     // 否则真实 ALTER/CREATE 会被按已有结构跳过，旧版模拟失去意义。
@@ -157,6 +160,7 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            SkillTreeUpgrade(root);
             CloneTitleUpgrade(root);
             PlayerInteractionPreviewUpgrade(root);
             VerifyReceiptDefinitionFixture(root);
@@ -214,6 +218,7 @@ internal static partial class DatabaseSchemaTests
                 "PRAGMA user_version=0", $"PRAGMA user_version={SqliteMigrations.CurrentVersion + 1}", "ALTER TABLE accounts DROP COLUMN disabled",
                 "ALTER TABLE characters DROP COLUMN blacklist_count",
                 "ALTER TABLE characters DROP COLUMN clone_title_item_id",
+                "ALTER TABLE characters DROP COLUMN selected_skill_tree",
                 "ALTER TABLE character_teleport_cooldowns DROP COLUMN upgrade_aura_until",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail", "DROP TABLE account_client_settings", "DROP TABLE character_client_settings",
                 "DROP TABLE character_game_settings",
@@ -332,6 +337,7 @@ internal static partial class DatabaseSchemaTests
             {
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('blacklist',0,'BlacklistOld',7,38,1,450,234,0,123)");
                 Check(Query(db, "SELECT blacklist_count FROM characters") is 0L, "完整建库为角色建立零计分列");
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "ALTER TABLE characters DROP COLUMN blacklist_count; PRAGMA user_version=64");
                 if (scenario == "conflict")
                     Execute(db, "ALTER TABLE characters ADD COLUMN blacklist_count TEXT NOT NULL DEFAULT '0'");
@@ -373,6 +379,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "DROP TABLE character_consumable_states; PRAGMA user_version=63");
                 if (conflict) Execute(db, "CREATE VIEW character_consumable_states AS SELECT 1 AS character_id");
             }
@@ -910,6 +917,7 @@ internal static partial class DatabaseSchemaTests
             Execute(db, """
                 INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
                   VALUES('weekly-usage',0,'Usage',0,38,1,450,234,0,0);
+                ALTER TABLE characters DROP COLUMN selected_skill_tree;
                 DROP TABLE character_weekly_dungeon;
                 PRAGMA user_version=75;
                 """);
@@ -942,6 +950,7 @@ internal static partial class DatabaseSchemaTests
         {
             Execute(db, "DROP TABLE character_weekly_dungeon");
             Execute(db, "CREATE VIEW character_weekly_dungeon AS SELECT 1 AS character_id,'x' AS account,0 AS week,0 AS slot,0 AS used");
+            RemoveSkillTreeExpansionSchema(db);
             Execute(db, "PRAGMA user_version=75");
         }
         string before = Snapshot(collision);
@@ -965,6 +974,7 @@ internal static partial class DatabaseSchemaTests
                   brave_experience,points,month,name_initialized,capsule_week,login_streak_days,last_login_day)
                   VALUES('temp-numbering',5,'TempNumbering',20261020,1,0,'0',0,0,zeroblob(20),202610,1,7,3,20261020);
                 INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('temp-numbering',0,'Temp',9,38,1,450,234,0,456);
+                ALTER TABLE characters DROP COLUMN selected_skill_tree;
                 DROP TABLE character_consumable_states;
                 ALTER TABLE characters DROP COLUMN blacklist_count;
                 PRAGMA user_version=67;
@@ -2162,6 +2172,7 @@ internal static partial class DatabaseSchemaTests
     // 旧库夹具同时移除后续拍卖、公会、收集箱和Buff强化结构；子表先于所属表删除。
     static void DropLaterTables(SqliteConnection db)
     {
+        RemoveSkillTreeExpansionSchema(db);
         DropSkillSwitchInventorySchema(db);
         DropCollectBoxSchema(db);
         DropAuctionSchema(db);
@@ -2182,6 +2193,7 @@ internal static partial class DatabaseSchemaTests
 
     static void RewindDailyBoosterUsage(SqliteConnection db)
     {
+        RemoveSkillTreeExpansionSchema(db);
         if (Query(db, "SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage'") is 1L)
             Execute(db, "ALTER TABLE characters DROP COLUMN daily_booster_usage");
     }

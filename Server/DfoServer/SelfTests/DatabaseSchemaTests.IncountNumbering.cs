@@ -44,6 +44,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(master);
             using (var db = Open(master))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('incount',0,'MasterOld',7,38,1,450,234,0,123)");
                 if (mainline >= 67) Execute(db, "UPDATE characters SET weapon_skin_state='{\"Owned\":[5],\"Selected\":5}'");
                 if (mainline < 68) Execute(db, "DROP TABLE character_permanent_stats");
@@ -72,6 +73,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('incount',0,'BranchOld',7,38,1,450,234,0,123)");
                 Execute(db, "INSERT INTO character_dungeon_incount VALUES(1,'incount',7323,20261021,1,20261015,2)");
                 Execute(db, "INSERT INTO account_dungeon_incount VALUES('incount',7184,20261015,3)");
@@ -107,6 +109,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('incount',0,'LocalOld',7,38,1,450,234,0,123)");
                 Execute(db, "INSERT INTO character_dungeon_incount VALUES(1,'incount',7323,20261021,1,20261015,2)");
                 Execute(db, "INSERT INTO account_dungeon_incount VALUES('incount',7184,20261015,3)");
@@ -140,6 +143,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('incount',0,'PermOld',7,38,1,450,234,0,123)");
                 Execute(db, "UPDATE characters SET weapon_skin_state='{\"Owned\":[5],\"Selected\":5}'");
                 Execute(db, "INSERT INTO character_dungeon_incount VALUES(1,'incount',7323,20261021,1,20261015,2)");
@@ -177,6 +181,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('incount',0,'AdvOld',7,38,1,450,234,0,123)");
                 Execute(db, "UPDATE characters SET weapon_skin_state='{\"Owned\":[5],\"Selected\":5}'");
                 Execute(db, "INSERT INTO character_dungeon_incount VALUES(1,'incount',7323,20261021,1,20261015,2)");
@@ -212,6 +217,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('incount',0,'ProfOld',7,38,1,450,234,0,123)");
                 Execute(db, "UPDATE characters SET weapon_skin_state='{\"Owned\":[5],\"Selected\":5}'");
                 Execute(db, "INSERT INTO character_dungeon_incount VALUES(1,'incount',7323,20261021,1,20261015,2)");
@@ -248,6 +254,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('incount',0,'GriefOld',7,38,1,450,234,0,123)");
                 Execute(db, "UPDATE characters SET weapon_skin_state='{\"Owned\":[5],\"Selected\":5}'");
                 Execute(db, "INSERT INTO character_dungeon_incount VALUES(1,'incount',7323,20261021,1,20261015,2)");

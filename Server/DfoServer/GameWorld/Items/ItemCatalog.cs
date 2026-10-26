@@ -126,6 +126,9 @@ internal sealed class ItemCatalog
 
     public bool Contains(int id) => equipment.ContainsKey(id) || stackable.ContainsKey(id);
 
+    public bool IsSkillTreeExpansion(int id) => id == 821 && stackable.TryGetValue(id, out var path) &&
+        string.Equals(path, "cash/skilltree_plusitem.stk", StringComparison.OrdinalIgnoreCase);
+
     public TalismanDefinition? Talisman(int id)
     {
         if (talismans.TryGetValue(id, out var cached))

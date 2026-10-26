@@ -13,7 +13,7 @@ internal static class ExperienceConsumablePackets
         body[3] = 1;
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), checked((uint)plan.Growth.GainedExperience));
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(8), checked((ushort)plan.Growth.LevelSpDelta));
-        int tp = plan.Growth.Learning.Trees.Single(tree => tree.Context == 0).Tp - plan.Growth.Before.Trees.Single(tree => tree.Context == 0).Tp;
+        int tp = plan.Growth.Learning.Trees.Single(tree => tree.Context == plan.Growth.Learning.ActiveContext).Tp - plan.Growth.Before.Trees.Single(tree => tree.Context == plan.Growth.Before.ActiveContext).Tp;
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(10), checked((ushort)tp));
         return body;
     }

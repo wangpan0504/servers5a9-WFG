@@ -88,6 +88,7 @@ internal sealed class CharacterProgressReset(CharacterCatalog characters, SkillL
         var learning = initial.State! with
         {
             Experience = request.Field == CharacterProgressField.Level ? growth.GetLevelStartExperience(level) : before.Learning.Experience,
+            SelectedTree = before.Learning.SelectedTree,
             BonusSp = bonusSp,
             BonusTp = bonusTp,
             ExpertContractExpiresAt = before.Learning.ExpertContractExpiresAt,

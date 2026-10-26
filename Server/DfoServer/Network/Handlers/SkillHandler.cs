@@ -9,17 +9,48 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log) : IGameCommandModule
+internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, InventoryProjection projection) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.BUY_SKILL, PurchaseAsync, nameof(SkillHandler));
+        commands.Register(CmdPacketType.CHANGE_ANOTHER_SKILL_TREE, ChangeTreeAsync, nameof(SkillHandler));
         commands.Register(CmdPacketType.CHANGE_SKILLSLOT, MoveSlotAsync, nameof(SkillHandler));
         commands.Register(CmdPacketType.SKILL_INIT, ResetAsync, nameof(SkillHandler));
         commands.Register(CmdPacketType.SKILL_COMMAND_CUSTOMIZING, CommandsAsync, nameof(SkillHandler));
         commands.Register(CmdPacketType.SKILL_COMMAND_ALL_DEFAULT, DefaultCommandsAsync, nameof(SkillHandler));
         commands.Register(CmdPacketType.COMBO_SKILL_INFO, ComboAsync, nameof(SkillHandler));
         commands.Register(CmdPacketType.COMBO_SKILL_EXTENSION_QUICK_SLOT_RESET, ComboSlotsAsync, nameof(SkillHandler));
+    }
+
+    async Task<CommandResult> ChangeTreeAsync(GameConnectionContext context, Packet packet)
+    {
+        byte current;
+        try { current = SkillRequests.ParseTreeChange(packet.Body); }
+        catch (InvalidDataException)
+        {
+            log.Write("skill_tree_change", new { context.Id, Accepted = false, Result = "malformed", Length = packet.Body.Length });
+            await context.Reply(CmdPacketType.CHANGE_ANOTHER_SKILL_TREE, [0, 1, 0], "skill_tree_change_malformed");
+            return CommandResult.Handled;
+        }
+        var result = context.Activity?.BlocksTownActions == true
+            ? new SkillLearningResult(SkillLearningFailure.Unsupported, null, Array.Empty<DfoServer.Game.Characters.LearnedSkill>())
+            : context.Session.ChangeSkillTree(current);
+        log.Write("skill_tree_change", new { context.Id, Current = current, Accepted = result.Success,
+            Selected = result.State?.SelectedTree, Revision = result.Receipt?.Character.Revision });
+        if (!result.Success)
+        {
+            // 0234E170已确认00+u16及1分支；不为错误码补写未经确认的业务名称。
+            await context.Reply(CmdPacketType.CHANGE_ANOTHER_SKILL_TREE, [0, 1, 0], "skill_tree_change_rejected");
+            return CommandResult.Handled;
+        }
+        var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill tree receipt");
+        bool Guard() => context.Session.CanPublishLearning(receipt);
+        await context.Reply(CmdPacketType.CHANGE_ANOTHER_SKILL_TREE, SkillPackets.TreeChanged(receipt.Character.Learning), "skill_tree_change_committed", Guard);
+        await SkillProjection.PublishCombosAsync(context, receipt.Character, "skill_tree_change_combos", Guard);
+        await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
+        await projection.RefreshSkillTreeAsync(context, receipt.Character, Guard);
+        return CommandResult.Handled;
     }
 
     private Task<CommandResult> CommandsAsync(GameConnectionContext context, Packet packet) =>

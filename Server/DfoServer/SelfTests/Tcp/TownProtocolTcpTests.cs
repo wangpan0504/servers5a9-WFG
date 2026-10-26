@@ -260,7 +260,8 @@ internal static partial class TownProtocolTcpTests
             That(DecodeName(packets[2].Body, 127, 4) == "剑影", "Chinese actor name");
             Bytes(packets[2].Body.AsSpan(131, 3), [0, 0x25, 95], "prepared actor identity");
             var player = packets[3].Body;
-            That(player.Length == 257 && player[143] == 0 && player[144] == 15 && player[190] == 15, "prepared skill trees");
+            That(player.Length == 257 && player[143] == 255 && player[144] == 15 && player[190] == 15,
+                "未开通的准备角色保留FF方案前缀及完整双树正文");
             completed = packets[6].Body;
             That(completed.Length == 30004 && U32(completed) == 30000 && quests.Count == 943 &&
                 completed.AsSpan(4).ToArray().Select((b, i) => (b, i)).Where(p => p.b != 0).Select(p => p.i)
@@ -482,7 +483,8 @@ internal static partial class TownProtocolTcpTests
                 That(actorEquipment.Entries.Length == 5 && actorEquipment.ConsumedBytes == 126, "town Actor consumes five complete entries");
                 CheckAssetRows(fixture, job, actorEquipment, false);
                 player = packets[3].Body;
-                That(U32(player, 32) == 89 && player.Length == 607 + 6 * counts[job] && player[583] == (counts[job] == 0 ? 255 : 0), "player stat/skill width");
+                That(U32(player, 32) == 89 && player.Length == 607 + 6 * counts[job] && player[583] == 255,
+                    "未开通各职业的Player前缀为FF，属性与双树宽度保持");
                 at = 584;
                 for (int tree = 0; tree < 2; tree++)
                 {

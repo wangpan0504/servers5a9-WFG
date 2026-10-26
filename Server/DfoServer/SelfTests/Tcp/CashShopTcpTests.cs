@@ -123,6 +123,7 @@ internal static partial class CashShopTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "商城 TCP 事务保持 SQLite 完整性");
         await AvatarAsync(source, root, resources);
+        await SkillTreeAsync(source, root, resources);
 
         string Snapshot() => PurchaseSnapshot(fixture);
     }

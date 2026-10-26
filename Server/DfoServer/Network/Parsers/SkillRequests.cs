@@ -28,6 +28,13 @@ internal sealed record SkillUseRequest(byte Unknown0, ushort Unknown1, ushort Un
 
 internal static class SkillRequests
 {
+    public static byte ParseTreeChange(ReadOnlySpan<byte> body)
+    {
+        // 02B69610写入当前方案u8；通用发送前处理可追加4B检查值。
+        if (body.Length is not (1 or 5)) throw new InvalidDataException("切换技能方案正文必须为1字节或带4字节检查尾");
+        return body[0];
+    }
+
     public static IReadOnlyList<SkillCommandChange> ParseCommands(ReadOnlySpan<byte> body)
     {
         if (body.IsEmpty) throw new InvalidDataException("技能指令缺少记录数");

@@ -101,7 +101,7 @@ internal static class PlayerInteractionTests
         reader.ReadBytes(81);
         That(reader.ReadByte() == 56 && reader.ReadByte() == 0 && reader.ReadUInt32() == 0 && reader.ReadByte() == 0,
             "装备标志、空装备列表及装备尾部");
-        That(reader.ReadUInt64() == 0 && reader.ReadByte() == 0, "装备后直接读8B名称装饰和技能树，不插入本人BUFF登记块");
+        That(reader.ReadUInt64() == 0 && reader.ReadByte() == 255, "装备后直接读8B名称装饰和未开通技能树，不插入本人BUFF登记块");
         for (int tree = 0; tree < 2; tree++)
             That(reader.ReadByte() == 2 && reader.ReadUInt16() == 5 && reader.ReadByte() == 2 &&
                 reader.ReadUInt16() == 46 && reader.ReadByte() == 3, "公开技能树完整消费：" + tree);

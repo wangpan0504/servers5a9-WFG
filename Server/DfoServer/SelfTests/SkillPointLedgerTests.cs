@@ -118,11 +118,17 @@ internal static class SkillPointLedgerTests
             }
         }
         var character = new Character(1, 0, "GrowSource", 1, towns.Room, towns.InitialReturn)
-        { Job = 0, GrowType = 1, Level = level, Learning = state };
+        { Job = 0, GrowType = 1, Level = level, Learning = add.State! with { SelectedTree = 1 } };
         var next = CharacterGrowthPlan.AddExperience(character, growth.GetLevelExperienceSpan(level), growth);
         Check(next.Success && next.Plan!.Learning.BonusSp == bonus &&
-            next.Plan.Learning.Trees.All(tree => tree.Sp == catalog.TotalSp(level + 1) + bonus),
-            "转职升级同样派生累计SP，保留额外来源");
+            next.Plan.Learning.SelectedTree == 1 &&
+            next.Plan.Learning.Trees.Single(tree => tree.Context == 1).Sp == catalog.TotalSp(level + 1) + bonus &&
+            next.Plan.Learning.Trees.Single(tree => tree.Context == 0).Skills.Single(skill => skill.Id == 5).Level == 3,
+            "转职升级同样派生累计SP，保留额外来源、当前第二树与备用树加点");
+        var progressReset = new CharacterProgressReset(characters, catalog, growth);
+        Check(progressReset.Prepare(character, new(CharacterProgressField.Grow, "ledger", character.Name, 1, 0)).Learning.SelectedTree == 1 &&
+            progressReset.Prepare(character, new(CharacterProgressField.Level, "ledger", character.Name, 50, 0)).Learning.SelectedTree == 1,
+            "职业重建和等级重算保留已开通权益及当前第二方案");
         Persist(towns, characters, catalog, growth, state, add.State!);
         Console.WriteLine($"PASS {TestCheck.Count - before} SP扣除、退款、固有成长、契约和来源存档断言");
     }

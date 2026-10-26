@@ -98,6 +98,7 @@ internal static class ClassChangeTests
         var items = resources.ItemResources;
         var service = new ClassChangeService(items.Items, resources.Characters, resources.Learning, resources.Quests);
         var fixture = CharacterFixture(resources);
+        fixture = fixture with { InitialLearning = fixture.InitialLearning with { SelectedTree = 1 } };
         var path = Path.Combine(Path.GetTempPath(), "class-change-" + Guid.NewGuid().ToString("N"), "game.db");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         try
@@ -153,7 +154,7 @@ internal static class ClassChangeTests
                 new(new[] { endpoint, shared, unrelated }.ToDictionary(quest => quest.Id)));
             That(scopedService.Prepare(before, new(65, 2, false), now).Plan!.Completed.SequenceEqual([21000,21001]),
                 "职业完成位按本版target character匹配基础职业，不替其他职业清任务");
-            That(plan.GrowType == 0x12 && plan.Learning.Experience == before.Learning.Experience &&
+            That(plan.GrowType == 0x12 && plan.Learning.SelectedTree == 1 && plan.Learning.Experience == before.Learning.Experience &&
                 plan.Learning.ExpertContractExpiresAt == before.Learning.ExpertContractExpiresAt,
                 "保留觉醒高位、实际经验和账号契约镜像");
             VerifyFree(before with { GrowType = plan.GrowType, Learning = plan.Learning }, resources.Learning);

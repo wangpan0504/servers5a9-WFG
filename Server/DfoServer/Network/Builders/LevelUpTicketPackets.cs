@@ -21,8 +21,8 @@ internal static class LevelUpTicketPackets
         body[3] = source.Kind == LevelUpConsumableKind.StatusTable ? (byte)1 : (byte)source.Item.Position.List;
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), checked((uint)source.Growth.GainedExperience));
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(8), checked((ushort)source.Growth.LevelSpDelta));
-        int tp = source.Growth.Learning.Trees.Single(tree=>tree.Context==0).Tp -
-            source.Growth.Before.Trees.Single(tree=>tree.Context==0).Tp;
+        int tp = source.Growth.Learning.Trees.Single(tree=>tree.Context==source.Growth.Learning.ActiveContext).Tp -
+            source.Growth.Before.Trees.Single(tree=>tree.Context==source.Growth.Before.ActiveContext).Tp;
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(10), checked((ushort)tp));
         return body;
     }

@@ -152,6 +152,7 @@ internal sealed partial class CharacterRepository
     {
         plan.Learning.Validate();
         if (!plan.Learning.Initialized || plan.Level is < 1 or > 95 || plan.GrowType > 127 ||
+            plan.Learning.SelectedTree != plan.Before.Learning.SelectedTree ||
             plan.Learning.BonusSp != (plan.Before.Learning.BonusSp ?? 0) || plan.Learning.BonusTp != (plan.Before.Learning.BonusTp ?? 0) ||
             plan.Learning.ExpertContractExpiresAt != plan.Before.Learning.ExpertContractExpiresAt)
             throw new InvalidDataException("技能重置规划或额外来源无效");

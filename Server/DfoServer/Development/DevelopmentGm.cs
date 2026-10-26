@@ -221,6 +221,6 @@ internal static partial class DevelopmentGm
             " story=" + character.AcceptedStoryLevel + " rev=" + character.Revision +
             " pos=" + character.Position.Town + "/" + character.Position.Area + "/" + character.Position.X + "/" + character.Position.Y +
             " ret=" + returnPoint + " quests=" + character.CompletedQuests.Length + " skills=" + character.Skills.Length + " gold=" + character.Inventory.Gold +
-            (character.Learning.Initialized ? " sp=" + character.Learning.Trees.Single(tree => tree.Context == 0).Sp + " tp=" + character.Learning.Trees.Single(tree => tree.Context == 0).Tp : "");
+            (character.Learning.Initialized ? " sp=" + character.Learning.Trees.Single(tree => tree.Context == character.Learning.ActiveContext).Sp + " tp=" + character.Learning.Trees.Single(tree => tree.Context == character.Learning.ActiveContext).Tp : "");
     }
 }

@@ -4,6 +4,13 @@ namespace DfoServer.Network.Builders;
 
 internal static class SkillPackets
 {
+    public static byte[] TreeChanged(CharacterLearningState state)
+    {
+        state.Validate();
+        if (!state.Initialized || state.SelectedTree < 0) throw new InvalidDataException("未开通技能方案不能回复切换成功");
+        return [1, state.TreeWireValue];
+    }
+
     public static byte[] Combos(CharacterLearningState state, bool refresh = false)
     {
         state.Validate();

@@ -28,6 +28,7 @@ internal static partial class DatabaseSchemaTests
             var preserved = new Dictionary<string, string>();
             using(var db=Open(path))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 Execute(db,"INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('preview',0,'Preview',7,1,0,100,100,0)");
                 if(preview)
                 {
@@ -86,6 +87,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveSkillTreeExpansionSchema(db);
                 if (fault != "mixed-talisman") RewindTalismanInventory(db);
                 Execute(db,"DROP TABLE character_social_links; DROP TABLE account_social_links; DROP TABLE account_social_requests; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE account_pvp_private_characters; DROP TABLE character_pvp_training_skills; DROP TABLE quest_eligibility_mail_dispatches; PRAGMA user_version=90");
                 Execute(db,"INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('preview',0,'Preview',7,1,0,100,100,0); INSERT INTO character_epic_production VALUES(1,5000,123,20261024,2,3,4,5,6,7)");
