@@ -35,7 +35,7 @@ internal static partial class FormalDungeonTcpTests
         }
         using var peer = Open(fixture);
         peer.Select(character.Slot, prepared: true, resumeTown: true, room: false);
-        SelectMap(peer);
+        SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, character));
         var request = new byte[25];
         BinaryPrimitives.WriteUInt32LittleEndian(request, 7322);
         request[9] = request[10] = byte.MaxValue;

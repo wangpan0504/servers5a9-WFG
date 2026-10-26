@@ -58,6 +58,9 @@ internal sealed partial class GameSession
         public bool TagEvildomResultPublished { get; set; }
         public OperationHopeRewardPlan? PendingHopeReward { get; set; }
         public bool HopeRewardConfirmed { get; set; }
+        public EpicPieceShopState? EpicPieceShop { get; set; }
+        public PendingEpicPieceShop? PendingEpicPieceShop { get; set; }
+        public DungeonRunIdentity? EpicPieceShopPresentation { get; set; }
         public Dictionary<(DungeonMap Map, int Template, int Ordinal), PendingQuestScene> QuestSceneEvents { get; } = [];
         public QuestDropResources? QuestDrops { get; init; }
         public QuestDropPlan? PendingQuestDrop { get; set; }
@@ -1157,7 +1160,7 @@ internal sealed partial class GameSession
         if (original.InventoryOrigin is not null && goldLimits is not null && original.Core.Kind is ItemKind.CreatureEquipment or ItemKind.GuildMedal)
             plan = InventoryRewardGrantService.TryGrantItems(Selected, [new(0, new(InventoryListType.Main, 0), original.Core)],
                 items, goldLimits, pieces, now);
-        else if (original.UsesCollectionLedger && goldLimits is not null)
+        else if (goldLimits is not null && (original.UsesCollectionLedger || !original.IsGold && pieces.ByPiece.ContainsKey(original.Core.ItemId)))
             plan = original.IsGold ? DungeonPickupPlanning.Gold(Selected, original.Content, goldLimits) :
                 DungeonPickupPlanning.Item(Selected, original.Content, items.Get(original.Core.ItemId), goldLimits, pieces, now);
         else
@@ -1169,7 +1172,13 @@ internal sealed partial class GameSession
             return new FormalDungeonPickupResult(DungeonRunOutcome.Rejected) { CapacityRejected = plan.Error == 17 };
         }
         // 存储异常/结果不明保留同一准备；原key重试只读已提交receipt，不重发资产。
-        var commit = repository.CommitDungeonPickup(owner, Selected, prepared, plan.Plan!);
+        DungeonPickupCommit commit;
+        try { commit = repository.CommitDungeonPickup(owner, Selected, prepared, plan.Plan!, pieces); }
+        catch (InventoryQualificationExpiredException)
+        {
+            dungeon.Ground.CancelPickup(prepared);
+            return new FormalDungeonPickupResult(DungeonRunOutcome.Rejected);
+        }
         if (!dungeon.Ground.ConfirmPickup(prepared)) throw new InvalidOperationException("已提交拾取不能确认原准备");
         Selected = commit.Character;
         return new FormalDungeonPickupResult(DungeonRunOutcome.Accepted, FormalReceipt(), original, commit);

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using PvfLib;
 using static PvfLib.PvfScript;
@@ -107,6 +108,17 @@ internal sealed partial class ItemCatalog
             // 并发首次请求共用解析；完成后只保留业务模板，失败不占缓存。
             pendingTemplates.TryRemove(new KeyValuePair<int, Lazy<ItemTemplate>>(id, pending));
         }
+    }
+
+    // 可选权益查询允许资源名册或主文件缺失；已存在模板的解析错误仍沿Get抛出。
+    public bool TryGet(int id, [NotNullWhen(true)] out ItemTemplate? template)
+    {
+        if (templates.TryGetValue(id, out template)) return true;
+        bool isEquipment = equipment.TryGetValue(id, out string? path);
+        if (!isEquipment && !stackable.TryGetValue(id, out path)) return false;
+        if (!pvf.Contains((isEquipment ? "equipment/" : "stackable/") + path)) return false;
+        template = Get(id);
+        return true;
     }
 
     /// <summary>

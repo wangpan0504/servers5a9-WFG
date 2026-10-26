@@ -20,6 +20,7 @@ internal sealed class ItemResources
     public DisjointCatalog Disjoint { get; }
     public AvatarDisjointCatalog AvatarDisjoint { get; }
     public EpicPieceCatalog EpicPieces { get; }
+    public EpicPieceShopCatalog? EpicPieceShop { get; }
     public EpicExchangeCatalog EpicExchanges { get; }
     public BoosterCatalog Boosters { get; }
     public RentalCatalog Rental { get; }
@@ -53,9 +54,11 @@ internal sealed class ItemResources
     readonly Lazy<DungeonItemDropCatalog> dungeonDropItems;
     readonly Lazy<DungeonItemDropCatalog> dungeonAltarItems;
     readonly Lazy<DungeonSpecialDropCatalog> dungeonSpecialDrops;
+    readonly Lazy<EpicPieceDropCatalog> epicPieceDrops;
     public DungeonItemDropCatalog DungeonDropItems => dungeonDropItems.Value;
     public DungeonItemDropCatalog DungeonAltarItems => dungeonAltarItems.Value;
     public DungeonSpecialDropCatalog DungeonSpecialDrops => dungeonSpecialDrops.Value;
+    public EpicPieceDropCatalog EpicPieceDrops => epicPieceDrops.Value;
 
     public ItemResources(PvfArchive archive)
     {
@@ -67,6 +70,7 @@ internal sealed class ItemResources
         Disjoint = new(archive);
         AvatarDisjoint = new(archive);
         EpicPieces = new(archive);
+        EpicPieceShop = archive.Contains(EpicPieceShopCatalog.Path) ? EpicPieceShopCatalog.Load(archive) : null;
         EpicExchanges = new(archive);
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
@@ -77,6 +81,7 @@ internal sealed class ItemResources
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures);
+        epicPieceDrops = new(() => new(EpicPieces, Items.Get));
         expertJobs = new(() => ExpertJobScriptCatalog.Load(archive, Items, stackable));
         CollectBoxes = new(archive, Items);
         CashShop = CashShopCatalog.Load(archive);

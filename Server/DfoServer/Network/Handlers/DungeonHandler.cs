@@ -13,6 +13,7 @@ using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Currency;
 using DfoServer.Network.Builders.Inventory;
 
@@ -28,7 +29,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     DungeonDespairRewardPolicy? despairRewards = null, DfoServer.Game.Titles.TitleAchievementService? titles = null,
     TitleProjection? titleProjection = null, InventoryProjection? inventoryProjection = null,
     PartyDungeonService? partyDungeons = null, CharacterStatComputer? partyStats = null,
-    DfoServer.Game.Party.PartyService? parties = null, TagEvildomRunProjection? tagEvildomRun = null) : IGameCommandModule
+    DfoServer.Game.Party.PartyService? parties = null, EpicPieceShopService? epicPieceShop = null,
+    TagEvildomRunProjection? tagEvildomRun = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -221,7 +223,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 "operation_hope_quest_assigned",Guard);
         // 指定直入的15没有打开选图场景；先建立27上下文，28/29进入主游戏后由客户端安装临时体验技能。
         if (direct)
-            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(0, despairLayer: context.Session.DespairSelectionLayer()),
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(0, despairLayer: context.Session.DespairSelectionLayer()),
                 experience ? "formal_class_experience_scene_transition" : "formal_training_scene_transition", Guard);
         if (receipt.SpecialEntry is { Kind: DungeonSpecialEntryKind.Despair, Layer: >= 10 and <= 90 } despair && despair.Layer % 10 == 0)
             await context.Notify(NotiPacketType.USER_APC_INFO_TOD, DungeonDespairPackets.LocalPlayerOpponent(despair.Layer),
@@ -297,10 +299,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             bool CanSend() => context.Session.CanPublishFormalDungeonRejection(character, before.SelectionEpoch,
                 before.Phase, before.CurrentDungeonSelection);
             // 只结束本次入场等待，保留原选图和回城锚点；不发送成功、弹窗或自动回城通知。
-            // 实验性：深渊派对拒绝包（参考项目：缺任务 MissingPermission=0xAD，区域/房间不可用 DungeonUnavailable=0x01；保持本服既有 4 字节拒绝包形状 [0,code,0,0]）。
+            // 区域任务提示由NOTI27的未完成队员名单驱动；强制入场只恢复等待，不误用次数上限0xAD。
             string? hellReason = hell || legend ? context.Session.LastFormalDungeonRejection : null;
             byte[] rejection = hellReason is { } why && why.StartsWith("hell-party-", StringComparison.Ordinal)
-                ? DungeonPackets.HellPartyRejected(why.StartsWith("hell-party-quest-required", StringComparison.Ordinal) ? (byte)0xAD :
+                ? DungeonPackets.HellPartyRejected(why.StartsWith("hell-party-quest-required:", StringComparison.Ordinal) ? (byte)0x09 :
                     why == "hell-party-item-required" ? (byte)0x11 : (byte)0x01)
                 : DungeonPackets.SelectionRejected();
             await context.Reply(CmdPacketType.SELECT_DUNGEON, rejection, hell ? "formal_hell_party_rejected" : "formal_dungeon_rejected", CanSend);
@@ -341,6 +343,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.HELL_PARTY_CLEAR, DungeonPackets.HellPartyCleared(), "formal_hell_party_clear", Guard);
         if (receipt.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
             await EnableSettlementAsync(context);
+        await PublishEpicPieceShopAsync(context, prepare: false);
         return CommandResult.Handled;
     }
 
@@ -461,6 +464,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             }
             else if (result.ClearFact is not null)
                 await EnableSettlementAsync(context, result.MonsterKey);
+            await PublishEpicPieceShopAsync(context, prepare: true);
             return CommandResult.Handled;
         }
         var state = receipt.Character.DungeonState ?? throw new InvalidOperationException("已提交角色缺成长附属owner");
@@ -505,6 +509,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);
         if (result.ClearFact is not null && !potionClear)
             await EnableSettlementAsync(context, result.MonsterKey);
+        await PublishEpicPieceShopAsync(context, prepare: true);
         return CommandResult.Handled;
     }
 
@@ -530,10 +535,19 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         var notice = commit.Currency == CurrencyKind.Gold
             ? DungeonPickupPackets.SinglePlayerGoldNotification(parsed.GroundObjectKey, receipt.Character.Id, checked((uint)commit.Amount))
             : DungeonPickupPackets.OrdinaryNotification(parsed.GroundObjectKey,
-                receipt.Character.Id, new byte[8], receipt.Character.Id, checked((ushort)destination.Index), 0);
+                receipt.Character.Id, new byte[8], receipt.Character.Id,
+                commit.EpicPiece is not null ? DungeonPickupPackets.NoInventorySlot : checked((ushort)destination.Index), 0);
         await context.Notify(NotiPacketType.GET_ITEM, notice, "formal_pickup_notice", Guard);
-        await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
-            destination.List, [destination]), "formal_pickup_inventory", Guard);
+        if (commit.EpicPiece is { } fragment)
+        {
+            await context.Notify(NotiPacketType.EPIC_BOOK_INFO,
+                EpicBookPackets.Info(receipt.Character.Inventory.EpicPieces, pieces, [fragment.Index]), "formal_pickup_epic_piece", Guard);
+            log.Write("epic_piece_pickup", new { Connection = context.Id, Character = receipt.Character.Id,
+                Ground = parsed.GroundObjectKey, fragment.PieceId, fragment.Amount, fragment.Balance, fragment.BookRevision, commit.Duplicate });
+        }
+        else
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                destination.List, [destination]), "formal_pickup_inventory", Guard);
         await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "formal_pickup_ack", Guard);
         if (previousQuests is not null && !previousQuests.SequenceEqual(receipt.Character.ActiveMainQuests))
             await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_pickup_quest_conditions", Guard);

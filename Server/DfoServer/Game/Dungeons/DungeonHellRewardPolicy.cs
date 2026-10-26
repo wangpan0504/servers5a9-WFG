@@ -6,8 +6,9 @@ namespace DfoServer.Game.Dungeons;
 // 深渊派对最后一波末位怪的 hellparty 装备奖励。前面的恶魔波次不带这组骰。按 [difficulty] 档位的 RewardRollCount
 // （A=8/B=6/C=4/D=0）投骰，每骰命中概率 (rate+1)/1001，稀有度按档位行、装备等级区间按 item drop ref table。
 // 这里把它作为额外的掉落试验（Trial）追加到该怪的普通掉落计划上，经现有掉落/地面流水线发放。
-// 旧史诗碎片仍为默认关闭的实验开关；哈林材料由独立本服规则准备，沿同一地面流水线提交。
-internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, DungeonItemDropCatalog candidates, DungeonItemDropPool? epicFragments = null, int epicFragmentPermille = 0)
+// 碎片按配表关联装备的等级筛选；数量沿用本服难度规则，哈林材料保持独立入口。
+internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, DungeonItemDropCatalog candidates,
+    EpicPieceDropCatalog? epicFragments = null, int epicFragmentPermille = 1000)
 {
     public const int Denominator = 1001;
 
@@ -25,12 +26,15 @@ internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, Dungeo
         var trial = new DungeonDropTrial(Math.Clamp(rate + 1, 0, Denominator), null, 1, 1, ProbabilityDenominator: Denominator,
             RarityPools: pools, Attempts: rolls);
         var trials = plan.Trials.Append(trial);
-        // 实验性/默认关闭：史诗碎片。90 参考的概率来自环境变量（PVF 与 95 都没有概率表），这里用同样思路做成可配置（DFO_HELL_EPIC_FRAGMENT_PERMILLE，千分比/每骰，默认 0=关）。
-        // 骰数 = (A 档 ? 1 : 0) + {0:5,1:6,2:8,3:9,4:10}[副本难度]（90 参考 EpicPieceDropService.ResolveRollCount）；候选 = etc/epicpieceinfo.etc [piece list] 的碎片 id。
-        // 星空及启用哈林材料规则的普通深渊不叠加旧史诗碎片实验奖励。
-        if (!suppressEpicFragments && epicFragments is { TotalWeight: > 0 } && epicFragmentPermille > 0)
-            trials = trials.Append(new DungeonDropTrial(Math.Min(epicFragmentPermille, 1000), epicFragments, 1, 1, ProbabilityDenominator: 1000,
-                Attempts: EpicFragmentRolls(mode, dungeonDifficulty)));
+        // PVF没有逐骰概率；本服默认每骰产一片，保留显式0关闭及千分比调试，不把creation rate当掉率。
+        // 候选权重来自碎片模板，等级区间来自本次深渊资源引用；数量不冒充原服服务端公式。
+        if (!suppressEpicFragments && epicFragments is not null && epicFragmentPermille > 0)
+        {
+            var fragments = epicFragments.Pool(range.Minimum, range.Maximum);
+            if (fragments.TotalWeight > 0)
+                trials = trials.Append(new DungeonDropTrial(epicFragmentPermille, fragments, 1, 1, ProbabilityDenominator: 1000,
+                    Attempts: EpicFragmentRolls(mode, dungeonDifficulty)));
+        }
         return new(epicEquipment is null ? plan.ResourceSource : plan.ResourceSource + ";" + HarlemHellEpicDropPolicy.Rule,
             trials, plan.ReferenceQuality, plan.Amplification);
     }

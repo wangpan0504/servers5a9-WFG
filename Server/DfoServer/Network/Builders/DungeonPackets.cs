@@ -64,17 +64,27 @@ internal static class DungeonPackets
 
     // NOTI27 在 023D8AC0 的空列表足迹：计数字段为 0 时不读列表项，共 42 字节。
     // 顺序是 u32、u32、u8、u32、u8、u8、u8、u32、u16、u16、u32、u8、u8、u32、u32、u8、u16、u8。
-    public static byte[] EmptySelectNotice(int hellLegendDungeon = 0, int griefLayer = 0, ushort despairLayer = 0)
+    public static byte[] SelectionNotice(int hellLegendDungeon = 0, int griefLayer = 0, ushort despairLayer = 0,
+        IReadOnlyList<ushort>? incompleteHellQuestMemberSlots = null)
     {
         if (hellLegendDungeon < 0) throw new ArgumentOutOfRangeException(nameof(hellLegendDungeon));
         if (griefLayer is < 0 or > 100) throw new ArgumentOutOfRangeException(nameof(griefLayer));
-        byte[] body = new byte[42];
-        // 空countA后u32经03B99380写+57EBD0，客户端按世界地图传奇深渊资格匹配目标。
-        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), checked((uint)hellLegendDungeon));
+        int count = incompleteHellQuestMemberSlots?.Count ?? 0;
+        if (count > 8 || incompleteHellQuestMemberSlots is { } slots &&
+            (slots.Any(slot => slot > 7) || slots.Distinct().Count() != count))
+            throw new ArgumentOutOfRangeException(nameof(incompleteHellQuestMemberSlots));
+        int tailOffset = count * 2;
+        byte[] body = new byte[42 + tailOffset];
+        // 023D8EF7读取countA；非空名单清除深渊按钮资格，并在条件成立时显示原生dstr 5431。
+        body[8] = (byte)count;
+        for (int i = 0; i < count; i++)
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(9 + i * 2), incompleteHellQuestMemberSlots![i]);
+        // countA后的u32经03B99380写+57EBD0；所有后续字段跟随列表平移，空名单仍为原42B。
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9 + tailOffset), checked((uint)hellLegendDungeon));
         // 023D9B20读取末尾u16，经01E0DD30写入root+E8的悲叹楼层。
-        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(39),checked((ushort)griefLayer));
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(39 + tailOffset),checked((ushort)griefLayer));
         if (despairLayer > 100) throw new ArgumentOutOfRangeException(nameof(despairLayer));
-        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(20), despairLayer);
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(20 + tailOffset), despairLayer);
         return body;
     }
 
@@ -104,7 +114,7 @@ internal static class DungeonPackets
 
     // ACK16 失败读取 success:u8、error:u16 和 memberSlot:u8；错误9静默恢复选图等待。
     public static byte[] SelectionRejected() => [0, 9, 0, 0];
-    // 实验性（未在95客户端实证）：深渊派对拒绝包，code 0xAD=缺前置任务、0x01=区域/房间不可用（参考项目 A21 DungeonAdmissionRejectBuilder）。
+    // 本版0xAD显示次数/权限上限，不用于缺区域任务；缺任务沿错误9恢复，门票不足保留0x11。
     public static byte[] HellPartyRejected(byte code) => [0, code, 0, 0];
     // NOTI28的匹配36B布局；调用方提供已审核的准入计划，构包不建立实例或确认加载。
     public static byte[] Information(DungeonEntryPlan plan, DungeonPoint? bossPosition = null)

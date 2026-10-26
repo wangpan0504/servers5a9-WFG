@@ -36,7 +36,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
         EnterAndReturn(3778,1);
         var original = fixture.Query("SELECT acceptance_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3778",peer.Id).Single();
-        SelectMap(peer);
+        SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, created));
         string before = fixture.Snapshot();
         var wrong = Selection(2);
         BinaryPrimitives.WriteUInt32LittleEndian(wrong,233);
@@ -55,7 +55,8 @@ internal static partial class FormalDungeonTcpTests
         void EnterAndReturn(ushort request,long attempt)
         {
             byte[] information=[];
-            var map=Enter(peer,3778,233,row=>information=row,requestQuestId:request);
+            var map=Enter(peer,3778,233,row=>information=row,requestQuestId:request,
+                incompleteHellQuest:HasIncompleteHellQuest(resources,created));
             That(U32(map,14) == 310064 && information[4] == 0 &&
                 fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[long actual]] && actual==attempt,
                 "真实3778沿零难度原地图完成正式入场，失败请求不增加尝试");
@@ -92,7 +93,8 @@ internal static partial class FormalDungeonTcpTests
             foreach (ushort requested in new ushort[] { sample.Quest,0 })
             {
                 byte[] information=[];
-                var map = Enter(peer,sample.Quest,291100373,row => information=row,requestQuestId:requested);
+                var map = Enter(peer,sample.Quest,291100373,row => information=row,requestQuestId:requested,
+                    incompleteHellQuest:HasIncompleteHellQuest(resources,created));
                 That(U32(map,14) == 292106186 && information[4] == 0,
                     "真实互斥故事任务由生产接取和Session预热进入原首房，显式及零请求一致");
                 Load(peer); peer.Barrier();
@@ -128,7 +130,7 @@ internal static partial class FormalDungeonTcpTests
         {
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             byte[] information = [];
-            var map = Enter(peer,3344,51,row => information = row);
+            var map = Enter(peer,3344,51,row => information = row,incompleteHellQuest:HasIncompleteHellQuest(resources,created));
             That(information[8] == 3 && information[9] == 0 && U32(map,14) == 76320,"真实3344入场发布首个剧情Boss目标");
             (byte X,byte Y,uint Id)[] path = [(0,0,76320),(1,0,76321),(1,1,76322),(2,1,76323),(3,1,76324),
                 (4,1,76325),(4,0,76326),(3,0,76327),(4,0,76328),(3,0,76329)];
@@ -173,7 +175,7 @@ internal static partial class FormalDungeonTcpTests
         {
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
             byte[] information = [];
-            var map = Enter(peer,3344,51,row => information = row);
+            var map = Enter(peer,3344,51,row => information = row,incompleteHellQuest:HasIncompleteHellQuest(resources,created));
             That(information[8] == 3 && information[9] == 0 && U32(map,14) == 76320 && map[13] == 1,
                 "回城重连重进从新Run首房与初始目标开始，不继承旧阶段或门缓存");
             Load(peer); peer.Barrier();

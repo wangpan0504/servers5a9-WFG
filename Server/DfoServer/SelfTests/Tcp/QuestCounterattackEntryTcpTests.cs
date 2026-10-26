@@ -70,7 +70,7 @@ internal static class QuestCounterattackEntryTcpTests
                 replacement.Monsters.Count(actor => actor.MonsterId == 61495) == 4 && replacement.SpecialObjects.Count == 0 &&
                 plans.All(plan => plan.Room.Map.Id != 92467),"替换格保留92470的七个真实普通怪，不准备被覆盖92467的怪物及10137父对象");
             peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
-            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,new byte[42]);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,peer.SelectionNoticeBody());
             var selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
             BinaryPrimitives.WriteUInt32LittleEndian(selection,85);
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),request);

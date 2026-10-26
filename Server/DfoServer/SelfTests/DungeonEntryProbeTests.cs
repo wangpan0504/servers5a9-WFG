@@ -184,7 +184,7 @@ internal static class DungeonEntryProbeTests
             session.Select(created.Slot);
             MoveToEntry();
             var resumed = session.Selected!;
-            var resumedTarget = MovementTarget(towns, resumed);
+            var resumedTarget = MovementTarget(towns, resumed) with { Direction = 5 };
             That(!context.BlocksTownActions && await town.DispatchAsync(context, new(1, 35, MovementBody(resumedTarget, false))) == CommandResult.Handled
                 && session.Selected!.Position == resumedTarget && session.Selected.Revision == resumed.Revision + 1 && bytes.Length == 52,
                 "town movement resumes and persists after a fresh selection epoch");

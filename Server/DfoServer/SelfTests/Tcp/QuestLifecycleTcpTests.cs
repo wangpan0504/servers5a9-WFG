@@ -1787,7 +1787,7 @@ internal static class QuestLifecycleTcpTests
             peer.Select(created.Slot,prepared: true,resumeTown: true,room: false);
             foreach (ushort requestQuest in new ushort[] { 3273,0,5150 })
             {
-                peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27,new byte[42]);
+                peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27,peer.SelectionNoticeBody());
                 byte[] request = new byte[25]; BinaryPrimitives.WriteUInt32LittleEndian(request,239);
                 BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(9),ushort.MaxValue);
                 BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),requestQuest);
@@ -1857,7 +1857,7 @@ internal static class QuestLifecycleTcpTests
                 acceptance = Accepted();
                 foreach (ushort requestQuest in new ushort[] { sample.Quest,0 })
                 {
-                    peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27,new byte[42]);
+                    peer.Send(15,new byte[4]); peer.Expect(1,15,[1]); peer.Expect(0,3); peer.Expect(0,27,peer.SelectionNoticeBody());
                     byte[] request = new byte[25]; BinaryPrimitives.WriteUInt32LittleEndian(request,sample.Dungeon);
                     BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(9),ushort.MaxValue);
                     BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),requestQuest);
@@ -1955,7 +1955,7 @@ internal static class QuestLifecycleTcpTests
             That(fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0",peer.Id).Length == 0 &&
                 !List(peer.AvailableQuests,1).Contains(3146),"已完成救出赛丽亚及对话，等级不足时没有活动主线或可接3146");
             peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
-            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,new byte[42]);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,peer.SelectionNoticeBody());
             peer.Send(16,Convert.FromHexString("030000000000000000FFFF0000000000000000000000000000"));
             That(peer.Expect(0,28).Body[7] == 0,"没有任务身份的普通maze不能依靠活动剧情连接决定回城");
             var map = peer.Expect(0,29).Body;
@@ -1985,7 +1985,7 @@ internal static class QuestLifecycleTcpTests
             long attempt = Convert.ToInt64(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)[0][0]);
             peer.Send(72,[2,1]); peer.Expect(1,72,[1,2,1]);
             peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,1]); peer.Expect(1,15,[1]);
-            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,new byte[42]); peer.Barrier();
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,peer.SelectionNoticeBody()); peer.Barrier();
             string returned = fixture.Snapshot();
             peer.Send(72,[1,3]); peer.Barrier();
             That(fixture.Snapshot() == returned && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id)
@@ -2029,7 +2029,7 @@ internal static class QuestLifecycleTcpTests
         }
         peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
         peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]);
-        peer.Expect(0,27,new byte[42]);
+        peer.Expect(0,27,peer.SelectionNoticeBody());
         peer.Barrier();
         That(Attempt() == attempt,"连图真实15只打开选择阶段，16前不预留attempt或发送28/29");
         // 连图中错误目标必须明确回失败ACK15；静默Handled会让客户端停在旧副本选图前。

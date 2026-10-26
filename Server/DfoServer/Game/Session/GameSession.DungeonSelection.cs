@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Accounts;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Game.Quests;
 
@@ -8,6 +9,32 @@ internal sealed partial class GameSession
 {
     long dungeonSelectionId;
     public DungeonSelectionContext? CurrentDungeonSelection { get; private set; }
+
+    public ushort[] IncompleteHellQuestMemberSlots()
+    {
+        var party = CurrentParty?.Invoke();
+        if (party is null)
+            return owner.Execute<ushort[]>(() => HasIncompleteHellSelectionQuest() ? [0] : []);
+        return AccountOwners.Lease.ExecuteGroup(party.Members.Select(m => (m.Actor.Owner, m.Actor.Character.Id)).ToArray(), () =>
+        {
+            if (!ReferenceEquals(CurrentParty?.Invoke(), party) || party.Members.Any(m => !m.IsCurrent()))
+                throw new InvalidOperationException("选图深渊资格查询时队伍身份变化");
+            // 原服名单按队伍槽位逐人记录，一名队员缺多项前置也只占一项；不使用角色ID或任务ID。
+            return party.Members.OrderBy(m => m.Slot).Where(m => m.Actor.Session.HasIncompleteHellSelectionQuest())
+                .Select(m => (ushort)m.Slot).ToArray();
+        });
+    }
+
+    bool HasIncompleteHellSelectionQuest()
+    {
+        if (!Ready || Selected is not { } character || Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
+            CurrentDungeonSelection is { IsTutorial: true } or { IsClassExperience: true } ||
+            !towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) ||
+            area.DungeonWorldMap is not { } world || !towns.DungeonMaps.TryGetValue(world, out var map) ||
+            map.Error is not null || !map.HellDungeon) return false;
+        var done = QuestEligibility.Completed(character);
+        return map.HellQuests.Any(id => !done.Contains(id));
+    }
 
     public (int Layer, bool ClearedToday)? GriefTowerSelection(DungeonCatalog catalog)
     {

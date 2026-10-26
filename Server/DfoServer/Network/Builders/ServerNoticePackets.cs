@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using DfoServer.Game.Chat;
+using DfoServer.Game.Characters;
 
 namespace DfoServer.Network.Builders;
 
@@ -17,9 +18,25 @@ namespace DfoServer.Network.Builders;
 /// 是「喇叭」页签的一行，二者都由客户端按已有界面渲染；<c>0x06AD</c> 弹出独立对话框
 /// （标题 + 正文 + 「确认」按钮），适合需要强提示的公告（字节合同见 <c>Docs/协议/聊天.md</c>）。
 /// </para>
+/// <para>普通业务提示另用 <see cref="Information"/>：NOTI502 的 CP936 文本信息框，不混用公告的 UTF-8 格式。</para>
 /// </summary>
 internal static class ServerNoticePackets
 {
+    public const int InformationMaxBytes = 0x3FF;
+
+    // 023C65D0的type0经03BE26C0读取文本，随后打开普通信息窗1006；不是业务成功或强制开兑换结果窗。
+    public static byte[] Information(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        int length = CharacterName.Encoding.GetByteCount(text);
+        if (length is < 1 or > InformationMaxBytes) throw new ArgumentOutOfRangeException(nameof(text));
+        byte[] packet = new byte[5 + length];
+        packet[0] = 0;
+        BinaryPrimitives.WriteInt32LittleEndian(packet.AsSpan(1), length);
+        CharacterName.Encoding.GetBytes(text, packet.AsSpan(5));
+        return packet;
+    }
+
     /// <summary>标题为空时使用的默认标题。</summary>
     public const string DefaultTitle = "系统公告";
 

@@ -2,12 +2,17 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Items;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 
 namespace DfoServer.Game.Characters;
 
 internal sealed class ExperienceBonusService(ItemCatalog items, RecoveryConsumableCatalog consumables,
-    ExperienceBonusCatalog rules, IExperienceBonusProvider? provider = null)
+    ExperienceBonusCatalog rules, IExperienceBonusProvider? provider = null,
+    Action<ExperienceBonusRequest, InventoryItem>? missingTemplate = null, TimeProvider? clock = null)
 {
+    readonly TimeProvider timer = clock ?? TimeProvider.System;
+    long nextMissingTemplateWarning;
+
     public ExperienceBonuses Plan(ExperienceBonusRequest request, uint basis, uint rank, GrowthContractBenefits? growth)
     {
         var context = provider?.Capture(request) ?? ExperienceBonusContext.Empty;
@@ -29,7 +34,7 @@ internal sealed class ExperienceBonusService(ItemCatalog items, RecoveryConsumab
             decimal percent = 0;
             foreach (var item in equipped)
             {
-                var template = items.Get(item.Core.ItemId);
+                if (!TryTemplate(request, item, out var template)) continue;
                 if (character.Level >= template.MinimumLevel && character.Level <= template.MaximumLevel &&
                     (template.Jobs & (1 << character.Job)) != 0 &&
                     !template.ExperienceForbiddenModules.Contains(request.EquipmentModule) &&
@@ -47,7 +52,7 @@ internal sealed class ExperienceBonusService(ItemCatalog items, RecoveryConsumab
             if (equipped.Any(item => item.Core.Kind == ItemKind.Avatar) || context.PartyHasAvatar)
                 rates.Add(new(ExperienceBonusSource.Avatar, context.PartyMembers == 1 ? 2 : 5));
             if (equipped.Any(item => item.Position.Index == 26 && item.Core.Kind == ItemKind.Creature &&
-                item.Creature is not null && !items.Get(item.Core.ItemId).CreatureEgg))
+                item.Creature is not null && TryTemplate(request, item, out var template) && !template.CreatureEgg))
                 rates.Add(new(ExperienceBonusSource.Creature, 5));
         }
         if (request.Event == ExperienceEvent.Quest)
@@ -71,5 +76,19 @@ internal sealed class ExperienceBonusService(ItemCatalog items, RecoveryConsumab
             _ = result.Total;
         }
         return result;
+    }
+
+    bool TryTemplate(ExperienceBonusRequest request, InventoryItem item, [NotNullWhen(true)] out ItemTemplate? template)
+    {
+        if (items.TryGet(item.Core.ItemId, out template)) return true;
+        // 保留原实例与穿戴状态，只不授予无法核实的模板权益；共享服务每分钟最多报告一次，避免逐怪刷日志。
+        if (missingTemplate is not null)
+        {
+            long now = timer.GetTimestamp(), next = Volatile.Read(ref nextMissingTemplateWarning);
+            if (now >= next && Interlocked.CompareExchange(ref nextMissingTemplateWarning,
+                checked(now + timer.TimestampFrequency * 60), next) == next)
+                missingTemplate(request, item);
+        }
+        return false;
     }
 }

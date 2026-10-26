@@ -438,8 +438,8 @@ internal static class QuestCompletionRepositoryTests
                 throw new IOException("合成死亡事务已提交但返回值丢失");
             return result;
         }
-        public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected, DungeonGroundPickupPreparation prepared, InventoryPlan plan) =>
-            inner.CommitDungeonPickup(owner, expected, prepared, plan);
+        public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected, DungeonGroundPickupPreparation prepared, InventoryPlan plan,
+            DfoServer.GameWorld.Items.EpicPieceCatalog? pieces = null) => inner.CommitDungeonPickup(owner, expected, prepared, plan, pieces);
         public Character CommitDungeonDiscard(AccountOwners.Lease owner, DungeonInventoryDiscardPreparation prepared) =>
             inner.CommitDungeonDiscard(owner, prepared);
         public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan)

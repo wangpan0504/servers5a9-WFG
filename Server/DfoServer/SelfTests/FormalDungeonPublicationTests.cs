@@ -13,6 +13,7 @@ using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
@@ -932,9 +933,9 @@ internal static class FormalDungeonPublicationTests
         public Character CommitCollectBox(AccountOwners.Lease owner, DfoServer.Game.CollectBox.CollectBoxPlan plan) =>
             inner.CommitCollectBox(owner, plan);
         public DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
-            DungeonGroundPickupPreparation prepared, InventoryPlan plan)
+            DungeonGroundPickupPreparation prepared, InventoryPlan plan, EpicPieceCatalog? pieces = null)
         {
-            var result = inner.CommitDungeonPickup(owner, expected, prepared, plan);
+            var result = inner.CommitDungeonPickup(owner, expected, prepared, plan, pieces);
             PickupCalls++;
             PickupDuplicate = result.Duplicate;
             if (PickupCalls == 1 && losePickup) throw new IOException("合成拾取已提交但返回结果丢失");

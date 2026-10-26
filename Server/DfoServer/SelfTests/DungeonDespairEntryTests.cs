@@ -12,9 +12,9 @@ internal static class DungeonDespairEntryTests
         byte[] selection = new byte[42];
         selection[9] = 0x34; selection[10] = 0x12;
         selection[20] = 39; selection[39] = 72;
-        Bytes(DfoServer.Network.Builders.DungeonPackets.EmptySelectNotice(0x1234,72,39),selection,
+        Bytes(DfoServer.Network.Builders.DungeonPackets.SelectionNotice(0x1234,72,39),selection,
             "选图通知同时保留传奇深渊、绝望与悲叹的独立字段，不能将第二个参数复用于绝望楼层");
-        Reject<ArgumentOutOfRangeException>(() => DfoServer.Network.Builders.DungeonPackets.EmptySelectNotice(despairLayer:101),
+        Reject<ArgumentOutOfRangeException>(() => DfoServer.Network.Builders.DungeonPackets.SelectionNotice(despairLayer:101),
             "绝望选图楼层拒绝超出100层");
         var dungeons=SelfTestCatalogs.Dungeons(resources.Archive);
         var tower=DfoServer.GameWorld.Dungeons.TowerOfDespairCatalog.Load(resources.Archive);

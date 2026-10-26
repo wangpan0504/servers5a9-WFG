@@ -39,6 +39,13 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
     readonly HashSet<(DungeonMap, uint, string, int)> scenes = [];
     readonly Dictionary<(ushort, DungeonMap, uint, string), int> sceneReports = [];
     PendingScene? pendingScene;
+    bool? epicPieceShopAvailable;
+    internal bool ResolveEpicPieceShop(Func<bool> roll)
+    {
+        if (!IsExecuting) throw new InvalidOperationException("碎片商人出场必须由当前共享副本owner冻结");
+        epicPieceShopAvailable ??= roll();
+        return epicPieceShopAvailable.Value;
+    }
     sealed record CinematicCompletion(uint Quest, DungeonMap Map);
     CinematicCompletion? cinematicCompletion;
     public bool HasCompletedCinematic(uint quest, DungeonMap map) => Volatile.Read(ref cinematicCompletion) is { } completed &&

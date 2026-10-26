@@ -86,7 +86,7 @@ internal static partial class FormalDungeonTcpTests
             var accepted = peer.Expect(1,31).Body;
             That(accepted[0] == 1 && U16(accepted,1) == questId, "普通材料或累计通关任务经真实31接取");
             Drain();
-            SelectMap(peer);
+            SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, created));
             if (sample.Id == 9595 && sample.Ticket)
             {
                 // tutorial表中的正式团本索引不能借普通选图进入；拒绝后仍须能进入原普通副本。

@@ -175,7 +175,7 @@ internal static partial class DungeonSpecificCardRewardsTests
         }
         That(DfoServer.Network.Builders.DungeonPackets.HellPartyCleared().Length == 0,
             "匹配客户端NOTI789无正文，不夹带猜测字段");
-        var notice = DfoServer.Network.Builders.DungeonPackets.EmptySelectNotice(291100308);
+        var notice = DfoServer.Network.Builders.DungeonPackets.SelectionNotice(291100308);
         That(notice.Length == 42 && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(notice.AsSpan(9)) == 291100308 &&
             notice.Where((_, at) => at < 9 || at >= 13).All(value => value == 0),
             "星空目标只写空列表后的u32，其余已确认的空列表字段不变");

@@ -42,7 +42,7 @@ internal static partial class FormalDungeonTcpTests
             plans.Add(plan);
             if (plan.Monsters.Count != 0 || plan.SpecialObjects.Count != 0) next = plan.NextObjectKey;
         }
-        byte[] current = Enter(peer,3581,91);
+        byte[] current = Enter(peer,3581,91,incompleteHellQuest:HasIncompleteHellQuest(resources,created));
         int enabled=0,checks=0;
         var path = QuestStoryRouteTests.Path(maze.StaticTopology,maze.Starts.Single(),maze.Bosses.Single());
         foreach (var point in path)

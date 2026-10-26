@@ -21,6 +21,20 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     public ServerOptions Options { get; private set; }
     public DateTimeOffset UtcNow => (clock ?? TimeProvider.System).GetUtcNow();
 
+    internal bool HasIncompleteHellQuest(ushort characterId)
+    {
+        var towns = resources?.Towns ?? throw new InvalidOperationException("选图预期需要本轮共享城镇资源");
+        var position = Query("SELECT town,area FROM characters WHERE id=$p0", characterId).Single();
+        if (towns.Areas[(Convert.ToByte(position[0]), Convert.ToByte(position[1]))].DungeonWorldMap is not { } world ||
+            towns.DungeonMaps[world] is not { Error: null, HellDungeon: true } map || map.HellQuests.IsEmpty) return false;
+        var completed = Query("""
+            SELECT quest_id FROM character_completed_quests WHERE character_id=$p0
+            UNION SELECT q.quest_id FROM account_completed_quests q
+              JOIN characters c ON c.account=q.account WHERE c.id=$p0
+            """, characterId).Select(row => Convert.ToInt32(row[0])).ToHashSet();
+        return map.HellQuests.Any(quest => !completed.Contains(quest));
+    }
+
     Process? process;
     Task? output, errors;
     Task? hosted;

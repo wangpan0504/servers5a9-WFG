@@ -19,6 +19,7 @@ internal static class SelfTestRunner
         SocialTests.RunCore();
         ExperienceBonusTests.RunCore();
         WorldMapHoverTests.Run();
+        HellPartyEntryTests.RunCore();
         DailyBoosterProjectionTests.RunCore();
         DailyBoosterUsageTests.RunCore();
         CreatureSystemTests.RunCore();
@@ -97,6 +98,7 @@ internal static class SelfTestRunner
         DungeonSelectionReturnTests.RunCore();
         DungeonPickupProtocolTests.Run();
         DungeonPickupPlanningTests.RunCore();
+        EpicPieceShopTests.RunCore();
         DungeonPassiveDropTests.RunCore();
         SkillLearningDisconnectTests.Run();
         GuildParameterTests.RunCore();

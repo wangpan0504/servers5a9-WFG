@@ -77,6 +77,32 @@ internal static class ExperienceBonusTests
         var noAvatarPet = character with { Inventory = character.Inventory with { Items = [] } };
         That(service.Plan(Request(ExperienceEvent.Clear) with { Character = noAvatarPet },100,0,null)
             .Amount(ExperienceBonusSource.Creature) == 0, "没有真实穿戴宠物不因模板或账号拥有而赠奖励");
+        var timer = new Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.UnixEpoch);
+        var warnings = new List<(ushort Character, int Item, long Uid)>();
+        var tolerant = new ExperienceBonusService(items,recovery,rules,clock:timer,
+            missingTemplate:(request,item) => warnings.Add((request.Character.Id,item.Core.ItemId,item.Uid)));
+        var unknown = new InventoryItem(99,new(InventoryListType.Equipment,10),new(int.MaxValue,ItemKind.Avatar,0)) { Avatar = new() };
+        var retained = character with { Inventory = character.Inventory with { Items = character.Inventory.Items.Add(unknown) } };
+        var missingRequest = Request(ExperienceEvent.Kill) with { Character = retained };
+        That(!items.TryGet(int.MaxValue,out var absent) && absent is null && items.TryGet(1,out var known) && known.Id == 1,
+            "可选模板查询区分缺失与真实缓存模板，不改变严格Get合同");
+        Throws(() => items.Get(int.MaxValue));
+        for (int i = 0; i < 3; i++)
+        {
+            var continued = tolerant.Plan(missingRequest,100,0,growth);
+            That(continued.Total == kill.Total && continued.Parts.SequenceEqual(kill.Parts) && retained.Inventory.Items.Contains(unknown),
+                "未知穿戴时装不阻断击杀或改变原道具、UID和其他经验来源");
+        }
+        That(warnings.SequenceEqual(new[] { ((ushort)1,int.MaxValue,99L) }), "共享经验服务诊断每分钟限一次，不逐怪输出");
+        timer.Advance(TimeSpan.FromMinutes(1));
+        tolerant.Plan(missingRequest,100,0,growth);
+        That(warnings.Count == 2, "诊断窗口结束后仍可报告缺失资源，不建立无界物品或角色缓存");
+        var unknownPet = character with { Inventory = character.Inventory with
+            { Items = character.Inventory.Items.Select(item => item.Position.List == InventoryListType.Equipment && item.Position.Index == 26
+                ? item with { Core = item.Core with { ItemId = int.MaxValue } } : item).ToImmutableArray() } };
+        That(tolerant.Plan(Request(ExperienceEvent.Clear) with { Character = unknownPet },100,20,growth).Total == clear.Total - 5 &&
+            unknownPet.Inventory.Items.Single(item => item.Position.List == InventoryListType.Equipment && item.Position.Index == 26).Uid == 3,
+            "未知宠物模板不虚构非蛋资格、不踢线或删除宠物，其他通关加成不变");
         var external = new Provider { Context = new() { PartyMembers = 4, PartyHasAvatar = true,
             Rates = [new(ExperienceBonusSource.Party,25),new(ExperienceBonusSource.Guild,10),new(ExperienceBonusSource.Adventure,10),
                 new(ExperienceBonusSource.FatigueBurning,100),new(ExperienceBonusSource.FatigueBuff,5),

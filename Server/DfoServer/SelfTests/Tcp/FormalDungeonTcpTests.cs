@@ -1419,13 +1419,13 @@ internal static partial class FormalDungeonTcpTests
         peer.Travel(38, 2, 1085, 249, 38, 0, kind: 5);
     }
     internal static byte[] Enter(TcpPeer peer, ushort questId = 3145, uint dungeonId = 3, Action<byte[]>? information = null,
-        ushort? requestQuestId = null)
+        ushort? requestQuestId = null, bool? incompleteHellQuest = null)
     {
         peer.Send(31,[31,0,(byte)questId,(byte)(questId >> 8)]);
         byte[] accepted = peer.Expect(1,31).Body;
         if (accepted[0] == 1) RefreshedQuests(peer);
         else Bytes(accepted,[0,18,0],"重复接取通过通用错误响应，不改变已有副本fixture");
-        SelectMap(peer);
+        SelectMap(peer, incompleteHellQuest: incompleteHellQuest);
         var selection = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(selection,dungeonId);
         BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),requestQuestId ?? questId);
         peer.Send(16, selection);
@@ -1455,7 +1455,7 @@ internal static partial class FormalDungeonTcpTests
         }
         using var peer = Open(fixture);
         peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
-        SelectMap(peer);
+        SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, created));
         byte[] request = Selection();
         BinaryPrimitives.WriteUInt32LittleEndian(request,51);
         BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),0);
@@ -1570,14 +1570,18 @@ internal static partial class FormalDungeonTcpTests
         peer.Expect(0,27,expected);
     }
 
-    // 亡者峡谷世界地图同时含悲叹之塔入口：选图空列表末尾u16带当前悲叹楼层，且前面必须先发0x34通关状态。
-    static void SelectMap(TcpPeer peer, ushort griefLayer = 0)
+    internal static bool HasIncompleteHellQuest(TcpTestResources resources, DfoServer.Game.Characters.Character character) =>
+        resources.Towns.Areas[(character.Position.Town, character.Position.Area)].DungeonWorldMap is { } world &&
+        resources.Towns.DungeonMaps[world] is { HellDungeon: true } map &&
+        map.HellQuests.Any(quest => !character.CompletedQuests.Contains(quest) && !character.AccountCompletedQuests.Contains(quest));
+
+    // 亡者峡谷世界地图同时含悲叹之塔入口；楼层字段随未完成深渊任务名单平移。
+    static void SelectMap(TcpPeer peer, ushort griefLayer = 0, bool? incompleteHellQuest = null)
     {
         peer.Send(15, new byte[4]);
         peer.Expect(1, 15, [1]);
         peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
-        byte[] notice = new byte[42];
-        BinaryPrimitives.WriteUInt16LittleEndian(notice.AsSpan(39), griefLayer);
+        byte[] notice = peer.SelectionNoticeBody(griefLayer: griefLayer, incompleteHellQuest: incompleteHellQuest);
         peer.Expect(0, 27, notice);
         That(griefLayer == 0 ? peer.GriefTowerClearInfo.Length == 0 : peer.GriefTowerClearInfo is [0x34, _],
             "悲叹入口世界地图的选图通知与0x34通关状态成对，空列表只带当前楼层");

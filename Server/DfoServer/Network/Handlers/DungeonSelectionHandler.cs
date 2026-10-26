@@ -50,7 +50,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "tag_evildom_selection_opened", Guard);
                 await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(selected.Character.Id), "tag_evildom_selection_state", Guard);
                 // solo TAG没有705入队旁路；先27建立scene2，随后28/29才能进入原生scene23。
-                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(0), "tag_evildom_selection_scene", Guard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(0), "tag_evildom_selection_scene", Guard);
             }
             return CommandResult.Handled;
         }
@@ -124,7 +124,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             if (continuation.Opened)
             {
                 await context.Notify(NotiPacketType.USER_STATE,DungeonPackets.DungeonPlayerState(continuationSelection.Character.Id),"formal_next_quest_entry_state",Guard);
-                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.EmptySelectNotice(0, despairLayer: context.Session.DespairSelectionLayer()),"formal_next_quest_scene_transition",Guard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,DungeonPackets.SelectionNotice(0, despairLayer: context.Session.DespairSelectionLayer()),"formal_next_quest_scene_transition",Guard);
             }
             return CommandResult.Handled;
         }

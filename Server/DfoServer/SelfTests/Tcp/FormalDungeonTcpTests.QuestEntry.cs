@@ -50,6 +50,7 @@ internal static partial class FormalDungeonTcpTests
             }
             using var peer = Open(fixture);
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            bool incompleteHellQuest = HasIncompleteHellQuest(resources, created);
             string? acceptance = null;
             long attempt = 0;
             bool auxiliary = scenario.Quest is 674 or 675;
@@ -62,7 +63,7 @@ internal static partial class FormalDungeonTcpTests
                 {
                     peer.Send(31,[31,0,(byte)scenario.Quest,(byte)(scenario.Quest >> 8)]);
                     That(peer.Expect(1,31).Body[0] == 1,"装备槽资格任务由生产31合法接取"); RefreshedQuests(peer);
-                    SelectMap(peer);
+                    SelectMap(peer, incompleteHellQuest: incompleteHellQuest);
                     var selection = Selection(1);
                     BinaryPrimitives.WriteUInt32LittleEndian(selection,checked((uint)scenario.Dungeon));
                     BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),request);
@@ -73,7 +74,8 @@ internal static partial class FormalDungeonTcpTests
                     peer.Send(16,selection); information=peer.Expect(0,28).Body; map=peer.Expect(0,29).Body;
                     That(information[4] == 2,"原显式任务请求在拒绝后仍可按合法难度入场");
                 }
-                else map = Enter(peer,checked((ushort)scenario.Quest),checked((uint)scenario.Dungeon),row => information=row,requestQuestId:request);
+                else map = Enter(peer,checked((ushort)scenario.Quest),checked((uint)scenario.Dungeon),row => information=row,
+                    requestQuestId:request,incompleteHellQuest:incompleteHellQuest);
                 var maze = dungeons.Get(scenario.Dungeon).Mazes.Single(row => row.SourceOrdinal == information[7]);
                 var start = maze.MapSpecification!.Single(row => row.Position == maze.Starts.Single());
                 That(U32(map,14) == start.Id && information[8] == maze.Bosses.Single().X && information[9] == maze.Bosses.Single().Y,

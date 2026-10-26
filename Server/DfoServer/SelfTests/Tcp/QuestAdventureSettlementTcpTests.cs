@@ -38,7 +38,7 @@ internal static class QuestAdventureSettlementTcpTests
                 peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
                 peer.Send(31,[31,0,250,30]); peer.Expect(1,31); Drain();
                 peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
-                peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]); peer.Expect(0,27,new byte[42]);
+                peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]); peer.Expect(0,27,peer.SelectionNoticeBody());
                 byte[] selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
                 BinaryPrimitives.WriteUInt32LittleEndian(selection,152); selection[4] = scenario.Difficulty;
                 BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),scenario.Request);
@@ -125,7 +125,7 @@ internal static class QuestAdventureSettlementTcpTests
             peer.Send(16,selection); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
             peer.Send(31,[31,0,39,31]); That(peer.Expect(1,31).Body[0] == 1,"7975 TCP真实接取成功"); drain(peer,null);
             peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
-            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]); peer.Expect(0,27,new byte[42]);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]); peer.Expect(0,27,peer.SelectionNoticeBody());
             peer.Send(16,selection); var info = peer.Expect(0,28).Body;
             That(U32(info,0) == 9618 && info[4] == scenario.Difficulty,"山巅两入口保留副本与所选难度");
             var map = peer.Expect(0,29).Body;

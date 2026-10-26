@@ -15,6 +15,7 @@ internal static class GriefTowerProjection
                 "grief_tower_clear_state",guard);
         await DungeonEnterCountProjection.RefreshAsync(context, catalog, guard, onlyForSelection: true);
         await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
-            DungeonPackets.EmptySelectNotice(legendDungeon,grief?.Layer ?? 0,context.Session.DespairSelectionLayer()),eventName,guard);
+            DungeonPackets.SelectionNotice(legendDungeon,grief?.Layer ?? 0,context.Session.DespairSelectionLayer(),
+                context.Session.IncompleteHellQuestMemberSlots()),eventName,guard);
     }
 }

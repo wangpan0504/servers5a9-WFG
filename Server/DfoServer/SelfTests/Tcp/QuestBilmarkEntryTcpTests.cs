@@ -228,7 +228,7 @@ internal static class QuestBilmarkEntryTcpTests
                 byte[] Enter()
                 {
                     peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
-                    peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,new byte[42]);
+                    peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,peer.SelectionNoticeBody());
                     var selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
                     BinaryPrimitives.WriteUInt32LittleEndian(selection,240);
                     BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),requested);

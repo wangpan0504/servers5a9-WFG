@@ -355,6 +355,7 @@ internal static class TcpRegressionTests
         ("avatar-preset", AvatarPresetTcpTests.RunAsync),
         ("npc-favor", NpcFavorTcpTests.RunAsync),
         ("epic-book", EpicBookTcpTests.RunAsync),
+        ("epic-piece-drops", FormalDungeonTcpTests.RunEpicPiecesAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
         ("recipe-craft", RecipeCraftTcpTests.RunAsync),
         ("upgrade-chronicle", UpgradeChronicleTcpTests.RunAsync),

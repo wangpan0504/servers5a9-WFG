@@ -126,6 +126,29 @@ internal static class DungeonDropRuleCatalogTests
             apc.ResourceSource == "hell-party-apc" && apc.Trials.Length == 1 &&
             prepare(monster with { SpawnType = 5 }).Trials.IsEmpty && ReferenceEquals(cached, prepare(monster)),
             "深渊额外骰与普通计划分离，APC不套普通概率，去掉奖励骰仍恢复原普通计划");
+        var pieceList = new EpicPieceCatalog("[piece list]\n8000 8001 9000 9001\n[/piece list]\n[equipment recipe info]\n[/equipment recipe info]");
+        var pieceItems = new Dictionary<int, ItemTemplate>
+        {
+            [8000] = Template(8000, ItemKind.Equipment, 1) with { MinimumLevel = 80, Rarity = 4 },
+            [9000] = Template(9000, ItemKind.Equipment, 1) with { MinimumLevel = 90, Rarity = 4 },
+            [8001] = Template(8001, ItemKind.Material, 30), [9001] = Template(9001, ItemKind.Material, 70)
+        };
+        var fragmentCatalog = new EpicPieceDropCatalog(pieceList, id => pieceItems[id]);
+        That(fragmentCatalog.Pool(84, 92).Entries.Select(row => row.Template.Id).SequenceEqual(new[] { 9001 }) &&
+            fragmentCatalog.Pool(84, 92).TotalWeight == 70 && fragmentCatalog.Pool(1, 2).Entries.IsEmpty,
+            "STK同为1级时按映射装备等级选碎片，不把材料等级或creation rate当掉率");
+        var fragmentHell = new DungeonHellRewardPolicy(DungeonHellDropRules.Parse("""
+            [dungeon difficulty drop prob] 90 90 1000 1000 1000 1000 1000
+            [basis of rarity dicision] 1 200000 400000 600000 800000 900000 990000 1000000
+            [item drop ref table] 90 6 3
+            """), candidates, fragmentCatalog);
+        var emptyPlan = new DungeonDropGenerationPlan("碎片合成夹具", []);
+        var fragmentPlan = fragmentHell.Extend(emptyPlan, 90, 1, 8, 0);
+        That(fragmentPlan.Trials.Length == 2 && fragmentPlan.Trials[^1].Threshold == 1000 &&
+            fragmentPlan.Trials[^1].Attempts == 6 && fragmentPlan.Trials[^1].Items!.Entries.Single().Template.Id == 9001 &&
+            fragmentHell.Extend(emptyPlan, 90, 1, 8, 4, suppressEpicFragments: true).Trials.Length == 1 &&
+            fragmentHell.Extend(emptyPlan, 90, 1, 0).Trials.IsEmpty,
+            "默认开启本服碎片骰，只在深渊末波奖励点生成；哈林抑制和零奖励不混入碎片");
         int firstSamples = 0, secondSamples = 0;
         var firstAssets = cached.Generate(_ => { firstSamples++; return 0; }, DateTimeOffset.FromUnixTimeSeconds(1800000000));
         var secondAssets = cached.Generate(bound => { secondSamples++; return bound - 1; }, DateTimeOffset.FromUnixTimeSeconds(1800000000));
@@ -178,7 +201,9 @@ internal static class DungeonDropRuleCatalogTests
             [dungeon difficulty drop prob] 1 2 1000 1000 1000 1000 1000
             [basis of rarity dicision] 1 200000 400000 600000 800000 900000 990000 1000000
             [item drop ref table] 1 0 2
-            """), candidates, new DungeonItemDropPool(new[] { material }), 1000);
+            """), candidates, new EpicPieceDropCatalog(new EpicPieceCatalog(
+                "[piece list]\n9000 3000\n[/piece list]\n[equipment recipe info]\n[/equipment recipe info]"),
+                id => id == old.Id ? old with { MinimumLevel = 1 } : templates[id]), 1000);
         var monster = new DungeonPlannedMonster(0, 10, 42, 1, null) { SpawnType = 3, HellRewardRolls = 2 };
         var normal = policy.PrepareEntry(entry, hell)(monster);
         var prepareLegend = policy.PrepareEntry(entry with { IsHellLegend = true }, hell);
