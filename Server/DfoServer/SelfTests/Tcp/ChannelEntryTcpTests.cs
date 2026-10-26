@@ -39,7 +39,15 @@ internal static class ChannelEntryTcpTests
             !endpoints.Values.Contains(nativePort) && U32(alpha.LoginEndpoint, 5) != 0 && U32(isolated.LoginEndpoint, 5) != 0,
             "LOGIN返回独立Native端口及关联值，NOTI1和后续Actor仍使用所选频道身份");
         alpha.Create("EntryA"); isolated.Create("EntryB");
-        alpha.Select(); isolated.Select(); alpha.Barrier(); isolated.Barrier();
+        var alphaEntry = alpha.Select();
+        var isolatedEntry = isolated.Select();
+        foreach (var frames in new[] { alphaEntry, isolatedEntry })
+        {
+            var ownActor = frames.Single(frame => frame is { Kind: 0, Opcode: 2 } && frame.Body[0] == 0).Body;
+            That(ownActor[^15] == 2 && ownActor[^15] == ownActor[3] && ownActor[^9] == 0xFF,
+                "实际TCP本人Actor携带非空本区身份供TAG候选使用，不把频道11/12或FF当大区");
+        }
+        alpha.Barrier(); isolated.Barrier();
         alpha.Send(1426); alpha.SendBarrier(); alpha.Batch((0, 23), (0, 24), (1, 1347));
         isolated.Send(1426); isolated.SendBarrier(); isolated.Batch((0, 23), (0, 24), (1, 1347));
         alpha.Barrier();
@@ -51,7 +59,7 @@ internal static class ChannelEntryTcpTests
         alpha.Send(8, Build(w => { w.Write(isolated.Id); w.Write((byte)3); }));
         var remoteActor = alpha.ExpectOtherPlayerActor(isolated.Id, 12).Body;
         var remoteInfo = alpha.Expect(0, 2).Body;
-        That(remoteActor[0] == 0 && remoteActor[4] == 12 && U16(remoteActor, 121) == isolated.Id &&
+        That(remoteActor[0] == 0 && remoteActor[4] == 12 && remoteActor[^15] == 2 && U16(remoteActor, 121) == isolated.Id &&
             remoteInfo[0] == 3 && remoteInfo[4] == 12 && U16(remoteInfo, 14) == isolated.Id,
             "跨频道资料使用目标频道缓存，右键peer请求不假装同频道目标");
         alpha.Barrier();
@@ -62,7 +70,7 @@ internal static class ChannelEntryTcpTests
         beta.SendBarrier(); var toBeta = beta.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
         alpha.SendBarrier(); var toAlpha = alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
         That(U16(toAlpha[0].Body, 121) == beta.Id && U16(toBeta[0].Body, 121) == alpha.Id &&
-            toAlpha[0].Body[4] == 11 && toBeta[0].Body[4] == 11,
+            toAlpha[0].Body[4] == 11 && toBeta[0].Body[4] == 11 && toAlpha[0].Body[^15] == 2 && toBeta[0].Body[^15] == 2,
             "换入相同频道后双方收到完整同屏入场，Actor归当前频道上下文");
         alpha.Send(35, Move(634, 196)); alpha.Barrier();
         beta.SendBarrier(); beta.Batch((0, 22), (1, 1347));

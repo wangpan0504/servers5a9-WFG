@@ -154,7 +154,9 @@ internal static partial class TownPackets
             writer.Write(0u);
             writer.Write((byte)0);
             writer.Write((ushort)0);
-            writer.Write((byte)0);
+            // 0267F091 读取原属大区，经 03CECD60 写 player+3FC；TAG 候选将0当作空槽。
+            // 此字段独立于头部频道身份，取实际角色所在大区，不改后面的列表哨兵FF。
+            writer.Write(channel.ServerIndex);
             writer.Write((ushort)0);
             writer.Write((byte)0);
             writer.Write((ushort)0);
