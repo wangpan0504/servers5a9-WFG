@@ -36,6 +36,7 @@ internal sealed record DungeonEntryPlan(
     // 地图自带原生 [ai character] 行的房间照常叠加伴侣行。
     public bool AllowsCompanionAi { get; init; } = true;
     public bool IsTutorial { get; init; }
+    public bool IsOrdinaryLuke { get; init; }
     public bool DisableClearReward { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
     public bool DisableGiveupPenalty { get; init; }
@@ -520,6 +521,7 @@ internal sealed record DungeonEntryPlan(
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
             BasisLevel = definition.BasisLevel,
+            IsOrdinaryLuke = definition.IsOrdinaryLuke,
             RecommendedQuestClear = !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
                 DungeonLuckyStarPolicy.IsRecommendedClear(definition, questId, routeQuest, character.Level),
             // 本入口只规划原生普通单人PVE；构造初始team0，START_MAP普通分支保持该值。
