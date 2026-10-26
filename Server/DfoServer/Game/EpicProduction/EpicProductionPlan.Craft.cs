@@ -1,4 +1,5 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -24,7 +25,14 @@ internal sealed partial record EpicProductionPlan
         foreach (var input in materials)
         {
             var item=inventory.Find(new(InventoryListType.Main,input.Slot));
-            if (item is null || item.Core.ItemId!=input.ItemId || input.Count<=0 || input.Count>item.Core.Count ||
+            var currency=CurrencyWallet.RewardKind(input.ItemId);
+            if (input.Count<=0) return null;
+            // 配方中的晶体/灵魂属于账号钱包，客户端仍发送各自的Main虚拟槽。
+            if (currency is { } kind)
+            {
+                if (ItemSlotBoundService.CurrencySlot(kind)!=input.Slot || CurrencyWallet.Get(inventory,kind)<input.Count) return null;
+            }
+            else if (item is null || item.Core.ItemId!=input.ItemId || input.Count>item.Core.Count ||
                 item.Core.IsRental || item.Core.EquipmentLockId!=0 || item.IsExpired(now.ToUnixTimeSeconds())) return null;
             var template=items.Get(input.ItemId);
             if (liquid.AllowedItems.Length>0 && !liquid.AllowedItems.Contains(input.ItemId) ||
@@ -39,7 +47,7 @@ internal sealed partial record EpicProductionPlan
             units+=(long)input.Count*value;
             if (template.Kind==ItemKind.Equipment)
             {
-                if (input.Count!=1) return null;
+                if (input.Count!=1 || item is null) return null;
                 // CB80AE–CB8252 将强化/增幅与锻造的资源区间附加数量相加，而非取最大值。
                 bonus+=production.UpgradeOutput.FirstOrDefault(row=>item.Core.Upgrade>=row.Minimum && item.Core.Upgrade<=row.Maximum)?.Value??0;
                 bonus+=production.GenuineUpgradeOutput.FirstOrDefault(row=>item.Core.GenuineUpgrade>=row.Minimum && item.Core.GenuineUpgrade<=row.Maximum)?.Value??0;
@@ -49,8 +57,17 @@ internal sealed partial record EpicProductionPlan
                     if (outputRolls[randomIndex++]<liquid.MaximumOutputRate) bonus+=liquid.MaximumOutput-liquid.MinimumOutput;
                 }
             }
-            if (!InventoryDeleteService.TryDelete(item,item.Core.Value,input.Count,out var replacement)) return null;
-            inventory=inventory with { Items=replacement is null?inventory.Items.Remove(item):inventory.Items.Replace(item,replacement) };
+            if (currency is { } consumed)
+            {
+                var spent=CurrencyService.Spend(inventory,consumed,input.Count);
+                if (!spent.Accepted) return null;
+                inventory=spent.Plan!.After;
+            }
+            else
+            {
+                if (!InventoryDeleteService.TryDelete(item,item!.Core.Value,input.Count,out var replacement)) return null;
+                inventory=inventory with { Items=replacement is null?inventory.Items.Remove(item):inventory.Items.Replace(item,replacement) };
+            }
         }
         if (randomIndex!=outputRolls.Count) return null;
         long recipes=units/liquid.NeededCount,remainder=units%liquid.NeededCount;

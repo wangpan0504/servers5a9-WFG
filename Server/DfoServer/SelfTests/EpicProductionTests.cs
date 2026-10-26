@@ -1,5 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
@@ -63,6 +65,7 @@ internal static class EpicProductionTests
             "完整职业武器与五级催化剂目录，不用史诗图鉴配方替代");
         That(catalog.RequiredItems.SequenceEqual([new ItemMaterialCost(10163135,1)]) && catalog.Liquids[10163134].Charge == 20000,
             "根材料与催化剂嵌套材料各自解析，不混为同一费用");
+        RunCatalystRules(catalog,items);
         int weapon = catalog.Weapons["[swordman]"][0];
         string root = Path.Combine(Path.GetTempPath(),"s5a9-production-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -133,7 +136,7 @@ internal static class EpicProductionTests
                 "领取通过统一库存提交使用真实持久UID");
             Reject<InvalidOperationException>(()=>repo.CommitEpicProduction(owner,claim),"重复旧领取不再发成品");
             Query("UPDATE characters SET level=86 WHERE id="+current.Id);current=repo.List(owner).Single();
-            var craftFunding=InventoryRewardGrantService.TryGrantBatch(current,[new(3137,26),new(3141,25)],
+            var craftFunding=InventoryRewardGrantService.TryGrantBatch(current,[new(3137,26),new(3141,25),new(10099774,500)],
                 items.Items,items.GoldLimits,items.EpicPieces,DateTimeOffset.UtcNow);
             That(craftFunding.Accepted,"混合中级催化剂夹具材料可正常发放");
             current=repo.CommitInventory(owner,current,craftFunding.Plan!);
@@ -149,6 +152,17 @@ internal static class EpicProductionTests
             That(new CharacterRepository(path).List(owner).Single().EpicProduction.IntermediateMaterialRemainder==1 &&
                 current.EpicProduction.InWeek(8).IntermediateMaterialRemainder==1,"材料余量重连及换周均保持");
             Reject<InvalidOperationException>(()=>repo.CommitEpicProduction(owner,crafting),"催化剂制作旧事务不可重放");
+            var walletCraft=EpicProductionPlan.Craft(current,10163130,[(10099774,363,500)],[],catalog,
+                items.Items,items.GoldLimits,items.EpicPieces,DateTimeOffset.UtcNow)!;
+            string walletBefore=System.Text.Json.JsonSerializer.Serialize(current);
+            Query("CREATE TRIGGER reject_wallet_catalyst BEFORE UPDATE ON character_epic_production BEGIN SELECT RAISE(ABORT,'rollback'); END");
+            Reject<SqliteException>(()=>repo.CommitEpicProduction(owner,walletCraft),"钱包制作后段失败整笔回滚");
+            That(System.Text.Json.JsonSerializer.Serialize(repo.List(owner).Single())==walletBefore,
+                "失败保留账号钱包、产物、制作余量及所有revision");
+            Query("DROP TRIGGER reject_wallet_catalyst");current=repo.CommitEpicProduction(owner,walletCraft);
+            That(CurrencyWallet.Get(repo.List(owner).Single().Inventory,CurrencyKind.UniqueSoul)==0,
+                "普通制作钱包费用同事务持久化，重读不能恢复材料");
+            Reject<InvalidOperationException>(()=>repo.CommitEpicProduction(owner,walletCraft),"旧钱包制作计划不能重复发产物");
             var session=new GameSession(repo,towns,owner);session.Select(0);
             That(session.PlanAndCommitEpicProduction(c=>Select(c,weapon)) is null,"未准备会话不能开始加工");
             session.MarkReady();
@@ -173,5 +187,59 @@ internal static class EpicProductionTests
         }
         finally { Directory.Delete(root,true); }
         Console.WriteLine($"PASS {Count-checks} 史诗制作资源、选择及加工及成品结算事务断言；网络和客户端尚另验");
+    }
+
+    static void RunCatalystRules(EpicProductionCatalog catalog,ItemResources items)
+    {
+        var now=DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+        var source=new Character(1,0,"Catalyst",0,new(1,0,0,0),null) { Level=75 };
+        var funding=InventoryRewardGrantService.TryGrantBatch(source,
+            [new(3012,751),new(3168,626),new(10099774,501),new(3137,51),new(3141,25)],
+            items.Items,items.GoldLimits,items.EpicPieces,now);
+        That(funding.Accepted,"催化剂规则夹具包含普通、稀有实体材料及神器灵魂钱包");
+        source=source with { Inventory=funding.Plan!.After };
+        That(items.Items.Get(3012).Rarity==0 && items.Items.Get(3168).Rarity==2 && items.Items.Get(10099774).Rarity==3,
+            "750/625/500消耗边界对应匹配PVF的三种稀有度");
+        var white=source.Inventory.Items.Single(item=>item.Core.ItemId==3012);
+        var rare=source.Inventory.Items.Single(item=>item.Core.ItemId==3168);
+        var cloth=source.Inventory.Items.Single(item=>item.Core.ItemId==3137);
+        var leather=source.Inventory.Items.Single(item=>item.Core.ItemId==3141);
+        EpicProductionPlan? Craft(Character c,int id,params (int,short,int)[] rows)=>
+            EpicProductionPlan.Craft(c,id,rows,[],catalog,items.Items,items.GoldLimits,items.EpicPieces,now);
+        foreach(var (id,slot,count) in new (int,short,int)[]{(3012,white.Position.Index,750),(3168,rare.Position.Index,625),(10099774,363,500)})
+        {
+            var plan=Craft(source with { Level=55 },10163130,(id,slot,count));
+            That(plan is { CraftedCount:1,After.OrdinaryMaterialRemainder:0 },"普通催化剂按稀有度积分恰好制作一份");
+            That(plan!.Inventory.After.Items.Single(item=>item.Core.ItemId==10163130).Core.Count==1,
+                "产物由库存发放入口生成真实计划");
+            long remaining=id==10099774?CurrencyWallet.Get(plan.Inventory.After,CurrencyKind.UniqueSoul):
+                plan.Inventory.After.Items.Single(item=>item.Core.ItemId==id).Core.Count;
+            That(remaining==1,"实体或钱包材料只扣所需数量，保留余一件");
+        }
+        var mixed=Craft(source,10163130,(3012,white.Position.Index,300),(10099774,363,300));
+        That(mixed is { CraftedCount:1,After.OrdinaryMaterialRemainder:0 } &&
+            CurrencyWallet.Get(mixed.Inventory.After,CurrencyKind.UniqueSoul)==201 &&
+            mixed.Inventory.After.Find(white.Position)!.Core.Count==451,"不同稀有度实体和钱包材料允许混合使用");
+        var partial=Craft(source,10163130,(3012,white.Position.Index,749))!;
+        That(partial.CraftedCount==0 && partial.After.OrdinaryMaterialRemainder==74900,"不足一份的积分保存且不造产物");
+        var continued=Craft(source with { Inventory=partial.Inventory.After,EpicProduction=partial.After },10163130,(10099774,363,1));
+        That(continued is { CraftedCount:1,After.OrdinaryMaterialRemainder:50 },"累计积分与钱包材料相加后保留准确余量");
+        That(Craft(source with { Level=54 },10163130,(3012,white.Position.Index,750)) is null &&
+            Craft(source with { Level=74 },10163131,(3137,cloth.Position.Index,50)) is null,"55和75级制作门槛不放宽");
+        That(Craft(source,10163131,(3137,cloth.Position.Index,26),(3141,leather.Position.Index,25)) is
+            { CraftedCount:1,After.IntermediateMaterialRemainder:1 },"中级催化剂按总数50混合制作并保留数量余量");
+        That(Craft(source,10163131,(3012,white.Position.Index,50)) is null &&
+            Craft(source,10163130,(10099774,362,500)) is null &&
+            Craft(source,10163130,(10099774,363,502)) is null &&
+            Craft(source,10163130,(3012,white.Position.Index,752)) is null &&
+            Craft(source,10163130,(3015,white.Position.Index,750)) is null &&
+            Craft(source,10163130,(10099774,363,250),(10099774,363,250)) is null,
+            "表外材料、错钱包槽、余额不足、实体不足、错ID及重复槽均整笔拒绝");
+        foreach(var core in new[]{white.Core with { EquipmentLockId=1 },white.Core with { IsRental=true },
+            white.Core with { ExpireTime=checked((int)now.ToUnixTimeSeconds()) }})
+            That(Craft(source with { Inventory=source.Inventory with { Items=source.Inventory.Items.Replace(white,white with { Core=core }) } },
+                10163130,(3012,white.Position.Index,750)) is null,"实体锁、租赁和到期边界仍拒绝");
+        That(CurrencyWallet.Get(source.Inventory,CurrencyKind.UniqueSoul)==501 && source.Inventory.Find(white.Position)!.Core.Count==751,
+            "成功或失败规划均不修改原角色资产");
     }
 }

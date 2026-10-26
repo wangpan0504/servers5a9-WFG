@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Items;
@@ -28,7 +29,7 @@ internal static class EpicProductionTcpTests
             var learning=SkillPointLedger.Synchronize(0,0,86,candidate.InitialLearning with
                 { Experience=growth.GetLevelStartExperience(86) },resources.Learning);
             created=repo.Create(owner,candidate with { Level=86,InitialLearning=learning,AcceptedStoryLevel=1 });
-            var grant=InventoryRewardGrantService.TryGrantBatch(created,[new(3137,51),new(10163130,3),new(10163135,253),new(10158124,30),new(10163199,1),new(3168,150),new(10099774,70)],
+            var grant=InventoryRewardGrantService.TryGrantBatch(created,[new(3137,51),new(3141,25),new(3012,751),new(10163130,3),new(10163135,253),new(10158124,30),new(10163199,1),new(3168,150),new(10099774,570)],
                 items.Items,items.GoldLimits,items.EpicPieces,DateTimeOffset.UtcNow);
             That(grant.Accepted,"制作TCP材料夹具合法");created=repo.CommitInventory(owner,created,grant.Plan!);
         }
@@ -38,6 +39,20 @@ internal static class EpicProductionTcpTests
         using(var peer=Open(f))
         {
             peer.Select(prepared:true);That(BinaryPrimitives.ReadInt32LittleEndian(peer.EpicProductionState.AsSpan(8))==-1,"初始无制作目标使用客户端-1哨兵");
+            // 本版普通配方允许神器灵魂；它位于账号钱包虚拟槽363，不是实体背包行。
+            peer.Send(1420,Build(w=>{w.Write(10163130);w.Write((ushort)1);w.Write(10099774);w.Write(363u);w.Write(500);}));
+            Mutation(peer,1420,body=>Bytes(body,[1,1,0,0,0,2,0,0,0,0],"500个神器灵魂按稀有度积分制作普通催化剂"));
+            State(peer,-1,0,0,0);
+            using(var verify=owners.Acquire(f.Options.DevelopmentAccount,()=>{}))
+                That(CurrencyWallet.Get(repo.List(verify).Single().Inventory,CurrencyKind.UniqueSoul)==70,
+                    "普通制作真实扣除账号钱包500个灵魂");
+            short ordinary=Slot(3012);
+            peer.Send(1420,Build(w=>{w.Write(10163130);w.Write((ushort)1);w.Write(3012);w.Write((uint)ordinary);w.Write(750);}));
+            Mutation(peer,1420,body=>Bytes(body,[1,1,0,0,0,2,0,0,0,0],"750个普通材料制作一份且不多扣整堆"));
+            State(peer,-1,0,0,0);
+            using(var verify=owners.Acquire(f.Options.DevelopmentAccount,()=>{}))
+                That(repo.List(verify).Single().Inventory.Items.Single(item=>item.Core.ItemId==3012).Core.Count==1,
+                    "普通制作实体材料落库剩余一件");
             peer.Send(1417,Build(w=>w.Write(weapon)));
             peer.Expect(1,1417,Build(w=>{w.Write((byte)1);w.Write(weapon);w.Write(0);}));
             State(peer,weapon,0,0,0);
@@ -54,9 +69,13 @@ internal static class EpicProductionTcpTests
                 "拒绝客户端归零且保留未完成加工目标");
             QuestLifecycleTcpTests.DrainNotifications(peer);
             short slot=Slot(3137);
-            peer.Send(1420,Build(w=>{w.Write(10163131);w.Write((ushort)1);w.Write(3137);w.Write((uint)slot);w.Write(51);}));
+            short leather=Slot(3141);
+            peer.Send(1420,Build(w=>{w.Write(10163131);w.Write((ushort)2);w.Write(3137);w.Write((uint)slot);w.Write(26);w.Write(3141);w.Write((uint)leather);w.Write(25);}));
             Mutation(peer,1420,body=>Bytes(body,[1,1,0,0,0,1,1,0,0,0],"催化剂回包一份产量和一份材料余量"));
             State(peer,weapon,0,0,1);
+            using(var verify=owners.Acquire(f.Options.DevelopmentAccount,()=>{}))
+                That(repo.List(verify).Single().Inventory.Items.Single(item=>item.Core.ItemId==3137).Core.Count==25 &&
+                    repo.List(verify).Single().Inventory.Items.All(item=>item.Core.ItemId!=3141),"中级制作混合两种材料按请求数量落库扣除");
             var rows=new[]{10163130,10163131}.Select(id=>(id,Slot(id))).ToArray();
             peer.Send(1419,Build(w=>{w.Write((ushort)rows.Length);foreach(var (id,index) in rows){w.Write(id);w.Write((uint)index);}}));
             Mutation(peer,1419,body=>Bytes(body,[1,0xb8,0x0b,0,0,1,0],"关闭兼容大成功后加工精确增加3000点"));
