@@ -53,7 +53,16 @@ internal sealed class InventoryUpgradeChronicleService(UpgradeChronicleCatalog r
         if (index < 0)
             return InventoryResult.Reject(Rejection);
         var instance = after.Items[index];
-        var upgraded = instance with { Core = instance.Core with { ItemId = recipe.OutputItemId } };
+        // 新模板耐久上限可能低于原耐久（英雄之证明一类部位）；原样保留会得到40/18这种超上限实例，
+        // 客户端据此把装备判为未修理并拒绝再次进化，所以按新上限钳制，不主动补满未损坏的装备。
+        var upgraded = instance with
+        {
+            Core = instance.Core with
+            {
+                ItemId = recipe.OutputItemId,
+                Durability = Math.Min(instance.Core.Durability, output.Durability)
+            }
+        };
         after = after with { Items = after.Items.SetItem(index, upgraded) };
         // 提交时复验角色/位置与本次实际用到的最早期限；不把未消耗材料纳入资格。
         var remaining = after.Items.ToDictionary(item => item.Uid);
