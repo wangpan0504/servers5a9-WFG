@@ -84,6 +84,16 @@ internal sealed class DailyRetainedBoosterProjection(GameConnectionContext conte
                         ? context.Session.Selected : null);
                     if (selected is null) return;
                     await PublishAsync(selected, true);
+                    // 复用连接已有的服务日计时任务；好感度日次数仍从当前角色快照投影，不建平行账本。
+                    if (!selected.Inventory.NpcFavor.IsEmpty)
+                    {
+                        int day = ShopPurchaseCount.Today(clock.GetUtcNow());
+                        await context.Notify(NotiPacketType.NPC_FAVOR_POINT_INFO,
+                            NpcFavorPackets.Snapshot(selected.Inventory.NpcFavor, clock.GetUtcNow()), "npc_favor_daily_reset",
+                            () => !stop.IsCancellationRequested && context.Owner.Execute(() => context.Session.Ready &&
+                                context.Session.SelectionEpoch == epoch && ReferenceEquals(context.Session.Selected, selected) &&
+                                ShopPurchaseCount.Today(clock.GetUtcNow()) == day));
+                    }
                 }
                 finally { context.CommandGate.Release(); }
             }

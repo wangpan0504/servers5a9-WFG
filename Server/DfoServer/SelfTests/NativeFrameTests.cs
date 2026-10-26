@@ -42,6 +42,7 @@ internal static class NativeFrameTests
         using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
         using var cancelledStream = new MemoryStream(plain);
         await RejectAsync<OperationCanceledException>(() => NativeFrame.ReadAsync(cancelledStream, cancelled.Token), "取消停止收帧");
+        await NativeGameplayRecordsTests.RunAsync();
         Console.WriteLine($"PASS {Count - before} native frame assertions");
     }
 

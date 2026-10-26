@@ -29,6 +29,7 @@ internal sealed partial class GameSession
         public bool HasPendingFatigue { get; set; }
         public DungeonInventoryDiscardPreparation? PendingInventoryDiscard { get; set; }
         public bool CharacterDead { get; set; }
+        public NpcFavorAppearance? FavorNpc { get; set; }
         public GriefTowerItemUse? GriefItems { get; init; }
         public GriefTowerAdmission? GriefAdmission { get; init; }
         public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];

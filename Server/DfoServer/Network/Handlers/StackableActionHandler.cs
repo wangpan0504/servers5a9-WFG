@@ -143,7 +143,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             result.Accepted ? "npc_favor_committed" : "npc_favor_rejected", Guard);
         // 015AADBD提交NPC编号，ACK515已自行扣一封；仅回放绝对好感度，不再用NOTI14重复扣源。
         if (result.Receipt is { } committed)
-            await context.Notify(NotiPacketType.NPC_FAVOR_POINT_INFO, NpcFavorPackets.Snapshot(committed.Character.Inventory.NpcFavor),
+            await context.Notify(NotiPacketType.NPC_FAVOR_POINT_INFO, NpcFavorPackets.Snapshot(committed.Character.Inventory.NpcFavor, npcFavor!.Clock.GetUtcNow()),
                 "npc_favor_updated", Guard);
         return CommandResult.Handled;
     }

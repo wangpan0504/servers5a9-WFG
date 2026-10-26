@@ -27,8 +27,11 @@ internal static class DailyRetainedBoosterTcpTests
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var candidate = CharacterCreation.Prepare("DailyBox", resources.Characters.Get(0), resources.Towns.Room, resources.Towns.InitialReturn, null);
-            repository.Create(owner, candidate with { Inventory = candidate.Inventory with
+            var role = repository.Create(owner, candidate with { Inventory = candidate.Inventory with
             { Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), InventoryRewardGrantService.Create(template))) } });
+            var inventory = role.Inventory with { NpcFavor = [new(17, 30000)
+                { GiftDay = ShopPurchaseCount.Today(clock.GetUtcNow()), GiftCount = 5, Colors = 47 }] };
+            InventoryService.Commit(repository, owner, role, new(true, 0, new(role.Inventory, inventory, "test_favor_daily_seed")));
             repository.Create(owner, candidate with { Name = "DailyPeer" });
         }
         await fixture.StartAsync();
@@ -39,6 +42,8 @@ internal static class DailyRetainedBoosterTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
+            Bytes(peer.NpcFavor, [1, 17, 0, 0, 0, 48, 117, 0, 0, 5, 4, 0, 47, 1, 0, 2, 0, 3, 0],
+                "登录以服务时钟恢复赠礼次数，不混用机器当前日期");
             That(peer.DailyBoosterUsed.TryGetValue(Source, out byte initial) && initial == 0 &&
                 resources.ItemResources.Boosters.DailyRetainedTemplateIds.All(peer.DailyBoosterUsed.ContainsKey),
                 "首次选角对Catalog所有支持模板显式恢复零次数");
@@ -65,6 +70,9 @@ internal static class DailyRetainedBoosterTcpTests
             clock.Advance(TimeSpan.FromSeconds(1));
             // 没有发送请求，必须由连接独立时钟下发跨日显式zero。
             ExpectUsed(peer, resources, 0);
+            peer.Expect(0, 746, [1, 17, 0, 0, 0, 48, 117, 0, 0, 0, 4, 0, 47, 1, 0, 2, 0, 3, 0]);
+            That(fixture.Query("SELECT json_extract(npc_favor,'$[0].GiftCount') FROM characters WHERE name='DailyBox'") is [[long count]] && count == 5,
+                "跨日只从持久日戳投影零次数，保留好感与颜色，不额外写库");
             await clock.WaitForTimersAsync(1);
             OpenBox(peer);
             BoosterTcpTests.ExpectAck(peer, Source, 65, [(Reward, 10)]);

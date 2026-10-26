@@ -5,11 +5,15 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
+using DfoServer.Game.Dungeons;
+using DfoServer.Network.Parsers;
+using DfoServer.Network.Projection;
 
 namespace DfoServer.Network.Protocol;
 
 // 只索引原游戏连接的传输引用；owner、角色和副本状态仍归原 GameSession。
-internal sealed class NativeChannel(ServerOptions options, OnlineSessionDirectory online, ServerLog log) : IConnectionProtocol
+internal sealed partial class NativeChannel(ServerOptions options, OnlineSessionDirectory online, ServerLog log,
+    NpcFavorAppearanceService? favorNpcs = null) : IConnectionProtocol
 {
     readonly ConcurrentDictionary<uint, Registration> registrations = new();
     TcpListener? listener;
@@ -59,7 +63,7 @@ internal sealed class NativeChannel(ServerOptions options, OnlineSessionDirector
         var next = entry.Context.Owner.Execute(() =>
         {
             if (!IsRegistered(entry)) throw new InvalidDataException("Expired native association");
-            var value = new NativeLease(entry, () => Disconnect(connection));
+            var value = new NativeLease(entry, connection, () => Disconnect(connection));
             previous = Interlocked.Exchange(ref entry.Current, value);
             return value;
         });
@@ -82,7 +86,7 @@ internal sealed class NativeChannel(ServerOptions options, OnlineSessionDirector
     public async Task RunAsync(ConnectionContext connection)
     {
         var packet = await NativeFrame.ReadAsync(connection.Stream, connection.Stop);
-        using var lease = Bind(packet.Association, connection);
+        await using var lease = Bind(packet.Association, connection);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(connection.Stop, lease.Context.Stop);
         log.Write("native_associated", new { Connection = connection.Id, GameConnection = lease.Context.Id,
             lease.Context.Owner.Generation });
@@ -91,6 +95,12 @@ internal sealed class NativeChannel(ServerOptions options, OnlineSessionDirector
         {
             if (packet.Association != lease.Entry.Token)
                 throw new InvalidDataException("Native association changed");
+            connection.CaptureNative(packet.WireLength, packet.Body.Length);
+            if (favorNpcs is not null && await RelayAsync(packet, lease))
+            {
+                packet = await NativeFrame.ReadAsync(connection.Stream, lifetime.Token);
+                continue;
+            }
             await lease.Context.CommandGate.WaitAsync(lifetime.Token);
             try
             {
@@ -100,7 +110,6 @@ internal sealed class NativeChannel(ServerOptions options, OnlineSessionDirector
                         throw new InvalidDataException("Expired native connection");
                     return true;
                 });
-                connection.CaptureNative(packet.WireLength, packet.Body.Length);
                 // 未接入真实实例来源的载荷只记录边界，不向任务领域伪造观察或成功应答。
                 if (!unimplementedLogged)
                 {
@@ -135,11 +144,25 @@ internal sealed class NativeChannel(ServerOptions options, OnlineSessionDirector
         }
     }
 
-    internal sealed class NativeLease(Registration entry, Action disconnect) : IDisposable
+    internal sealed class NativeLease : IDisposable, IAsyncDisposable
     {
-        public Registration Entry { get; } = entry;
+        readonly Action disconnect;
+        readonly NativeConnectionSender sender;
+        public Registration Entry { get; }
+        public NativeLease(Registration entry, ConnectionContext connection, Action disconnect)
+        {
+            Entry = entry;
+            this.disconnect = disconnect;
+            sender = new(connection, entry.Context.Stop, disconnect);
+        }
         public GameConnectionContext Context => Entry.Context;
         public void Disconnect() => disconnect();
         public void Dispose() => Interlocked.CompareExchange(ref Entry.Current, null, this);
+        public bool Post(byte[] frame, Func<bool> current) => sender.Post(frame, current);
+        public async ValueTask DisposeAsync()
+        {
+            Dispose();
+            await sender.DisposeAsync();
+        }
     }
 }
