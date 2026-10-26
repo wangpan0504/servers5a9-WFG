@@ -65,6 +65,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()) ||
             !definition.AllowsFirstGrowType(character.GrowType))
             return RejectRuneBox("rune_box_source");
+        if (HasCooldown(character.Inventory, source.Core.ItemId, definition, now))
+            return InventoryResult.Reject(19);
         var draw = random ?? Random.Shared;
         RuneRandomChooseRow choose;
         try
@@ -110,6 +112,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (destinations.Length != 1 || destinations[0].Position.List != InventoryListType.Talisman)
             return RejectRuneBox("rune_box_product");
         var destination = destinations[0];
+        var cooled = ActivateCooldown(after, catalog.Get(source.Core.ItemId), definition, now);
+        if (cooled is null) return InventoryResult.Reject(19);
+        after = cooled;
         receipt = new(request.Slot, destination.Position, productId,
             destination.Core.Count - (prior.TryGetValue(destination.Position, out int priorCount) ? priorCount : 0));
         return new(true, 0, new InventoryPlan(before, after, "rune_box_open",
@@ -153,6 +158,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         var definition = boosters.Get(source.Core.ItemId);
         if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) || definition.PackageRewards.IsDefaultOrEmpty || avatars is null)
             return InventoryResult.Reject(19) with { RejectReason = "cera_package_avatar_unconfigured" };
+        if (HasCooldown(before, source.Core.ItemId, definition, now))
+            return InventoryResult.Reject(19);
         HashSet<int> avatarIds;
         try
         {
@@ -238,6 +245,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             after = restGrant.Plan!.After;
             overflow = [.. overflow, .. restGrant.Plan.OverflowItems];
         }
+        var cooled = ActivateCooldown(after, sourceTemplate, definition, now);
+        if (cooled is null) return InventoryResult.Reject(19);
+        after = cooled;
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
         return new(true, 0, new(before, after, "booster_open",
             new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true), overflow));
@@ -255,11 +265,14 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (source is null || !source.Core.IsStackable || request.Count <= 0 || request.Count > source.Core.Count ||
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject(19);
-        if (!InventoryAvatarPackageService.SourceEligible(character, source, catalog.Get(source.Core.ItemId)))
+        var sourceTemplate = catalog.Get(source.Core.ItemId);
+        if (!InventoryAvatarPackageService.SourceEligible(character, source, sourceTemplate))
             return InventoryResult.Reject(19) with { RejectReason = "booster_source_ineligible" };
         var definition = boosters.Get(source.Core.ItemId);
         if (!definition.Available || !definition.AllowsFirstGrowType(character.GrowType) ||
             ceraPackage != !definition.PackageRewards.IsDefaultOrEmpty || lottery != definition.Lottery)
+            return InventoryResult.Reject(19);
+        if (HasCooldown(before, source.Core.ItemId, definition, now))
             return InventoryResult.Reject(19);
         var selectionPolicy = (attributePairs ?? IndependentAttributePairCatalog.RequiredOnly)
             .Resolve(source.Core.ItemId, AttributePairEntryKind.Booster);
@@ -271,7 +284,6 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         long? dailyDeadline = null;
         if (definition.DailyRetainedLimit is { } dailyLimit)
         {
-            var sourceTemplate = catalog.Get(source.Core.ItemId);
             if (sourceTemplate.Id != source.Core.ItemId || sourceTemplate.Kind != source.Core.Kind ||
                 !sourceTemplate.AllowsUse(character.Level, character.Job) ||
                 !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate) ||
@@ -562,6 +574,9 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         {
             after = after with { DailyBoosterUses = dailyUses };
         }
+        var cooled = ActivateCooldown(after, sourceTemplate, definition, now);
+        if (cooled is null) return InventoryResult.Reject(19);
+        after = cooled;
         var precondition = new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true);
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray())
         {
@@ -572,6 +587,18 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
 
         void Add(int id, int count, long draws) => totals[id] = checked(totals.GetValueOrDefault(id) + checked((int)(count * draws)));
     }
+
+    static bool HasCooldown(InventorySnapshot inventory, int itemId, BoosterDefinition definition, DateTimeOffset now) =>
+        definition.CooltimeMaintenance is not null && inventory.ConsumableStates.Any(row =>
+            row.Kind == ConsumableStateKind.Cooldown && row.CoolGroup == (definition.CoolGroup ?? -itemId) &&
+            row.Active(now.ToUnixTimeMilliseconds()));
+
+    static InventorySnapshot? ActivateCooldown(InventorySnapshot inventory, ItemTemplate source, BoosterDefinition definition, DateTimeOffset now) =>
+        definition.CooltimeMaintenance is { } maintenance
+            ? ConsumableStatePolicy.Activate(inventory,
+                new(source.Id, source.MinimumLevel, definition.CoolTime, definition.CoolGroup ?? -source.Id)
+                    { CooltimeMaintenance = maintenance }, now.ToUnixTimeMilliseconds(), sessionCooldown: true)
+            : inventory;
 
     static bool TrySelect(BoosterSelectionDefinition definition, BoosterSelectionRequest request, out BoosterChoice[] rewards)
     {
