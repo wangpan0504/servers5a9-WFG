@@ -77,6 +77,8 @@ internal static class LukeRaidTcpTests
                 leader.Send(669, Build(w => { w.Write(0u); w.Write((uint)peers[index].Id); w.Write((uint)(index / 4 + 1)); }));
                 Bytes(Until(leader, 1, 669).Body, [1], "卢克按两支四人分队编组");
             }
+            leader.Send(1361, Build(w => { w.Write((byte)0); w.Write(key); }));
+            LukeRaidStartTcpTests.AssertStartFlag(Until(leader, 1, 1361).Body, key, 0);
             var members = Information(observer, key, 1).Members;
             That(members.Count(m => m.Squad == 1) == 4 && members.Count(m => m.Squad == 2) == 4, "分队上限来自8人容量");
             foreach (var peer in new[] { leader, peers[1], observer })
