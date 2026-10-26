@@ -141,8 +141,18 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool RequiresCosmoEntryContract => Id == DungeonCosmoRewardCatalog.DungeonId || RawSections.Any(row => row.Tag == "cosmo dungeon");
     public bool IsCosmoDungeon => Id == DungeonCosmoRewardCatalog.DungeonId &&
         RawSections.Where(row => row.Tag == "cosmo dungeon").ToArray() is [{ Tokens.Count: 0 }];
-    public int CosmoInvitationCount => RawSections.Where(row => row.Tag == "hell party required item count").ToArray() is
+    // 时空裂缝（[inferno dungeon]）：整条路线本身就是深渊场地，没有 [seal door] 密门，只能按深渊派对模式进入。
+    // 与超星空共用副本头的 [hell dungeon] 1 与 [hell party required item count]，用 [inferno dungeon] 区分。
+    public bool IsInfernoDungeon => !RequiresCosmoEntryContract &&
+        RawSections.Any(row => row.Tag == "inferno dungeon" && row.Tokens.Count == 0) &&
+        RawSections.Any(row => row.Tag == "hell dungeon" && row.Tokens is [{ Type: 0, Value: 1 }]);
+    // 时空裂缝的前置任务（副本头 [inferno quest]）：与世界地图同一副本的 [is clear quest] 是同一条。
+    public int InfernoQuestId => RawSections.Where(row => row.Tag == "inferno quest").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } quest] }] ? quest.Value : 0;
+    // 副本头的邀请函数量：超星空 40、地轨中心时空裂缝 30、列车 22。缺失为 0，不能退化成免费入场。
+    public int HellPartyItemCount => RawSections.Where(row => row.Tag == "hell party required item count").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } count] }] ? count.Value : 0;
+    public int CosmoInvitationCount => HellPartyItemCount;
     public int CosmoStoneCount => RawSections.Where(row => row.Tag == "hell party required item count add").ToArray() is
         [{ Tokens: [{ Type: 0, Value: -1 }, { Type: 0, Value: > 0 and <= ushort.MaxValue } count] }] ? count.Value : 0;
     public int CosmoQuestId => RawSections.Where(row => row.Tag == "cosmo quest").ToArray() is
@@ -528,6 +538,9 @@ internal sealed class DungeonCatalog
             if (section.Tag == "hell dungeon" && section.Tokens is [{ Type: 0, Value: 1 }]) dungeonHell = true;
         }
         int? minimum = Scalar("minimum required level"), basis = Scalar("basis level");
+        string? dungeonType = sections.LastOrDefault(section => section.Tag == "dungeon type")?.Tokens is [{ Type: 6 } type]
+            ? resolve(type.Value) : null;
+        bool allowOffGridBoss = string.Equals(dungeonType?.Trim(), "boss rush dungeon", StringComparison.OrdinalIgnoreCase);
         var mazes = new List<DungeonMaze>();
         Dictionary<string, DungeonRawSection>? current = null;
         var mazeSections = new List<DungeonRawSection>();
@@ -589,8 +602,6 @@ internal sealed class DungeonCatalog
         Finish();
         if (mazes.Count == 0)
             throw new NotSupportedException("unsupported: 未发现 maze info 资源结构");
-        string? dungeonType = sections.LastOrDefault(section => section.Tag == "dungeon type")?.Tokens is [{ Type: 6 } type]
-            ? resolve(type.Value) : null;
         return new(id, path, minimum, basis, Freeze(mazes), Freeze(sections))
         {
             DungeonType = dungeonType,
@@ -644,7 +655,7 @@ internal sealed class DungeonCatalog
         {
             if (current is null)
                 return;
-            try { mazes.Add(ParseMaze(mazes.Count, current, mazeSections, resolve, mapPaths, exists, dungeonHell)); }
+            try { mazes.Add(ParseMaze(mazes.Count, current, mazeSections, resolve, mapPaths, exists, dungeonHell, allowOffGridBoss)); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException)
             {
                 // 每条路线独立装载；未使用的旧路线不能阻断同副本的有效剧情路线。
@@ -656,7 +667,7 @@ internal sealed class DungeonCatalog
     }
 
     private static DungeonMaze ParseMaze(int ordinal, IReadOnlyDictionary<string, DungeonRawSection> sections, IReadOnlyList<DungeonRawSection> mazeSections,
-        Func<int, string> resolve, IReadOnlyDictionary<int, string> mapPaths, Func<string, bool> exists, bool dungeonHell)
+        Func<int, string> resolve, IReadOnlyDictionary<int, string> mapPaths, Func<string, bool> exists, bool dungeonHell, bool allowOffGridBoss)
     {
         var size = Integers(Required("size"));
         if (size.Length != 2 || size[0] <= 0 || size[1] <= 0)
@@ -668,7 +679,7 @@ internal sealed class DungeonCatalog
         string greed = resolve(greedTokens[0].Value);
         // 保留原文；类型化GreedGrid独立返回不支持原因，未知编码不使整个副本定义失败。
         var starts = Points(Required("start map"));
-        var bosses = Points(Required("boss map"),allowRepeated: true);
+        var bosses = Points(Required("boss map"), allowRepeated: true, allowOffGrid: allowOffGridBoss);
         IReadOnlyList<DungeonMap>? specification = null;
         var layered = new List<DungeonMap>();
         if (sections.TryGetValue("map specification", out var mapSection))
@@ -824,7 +835,7 @@ internal sealed class DungeonCatalog
                 LegendRequiredCount = Single("hell legend party required item count") };
         }
         IReadOnlyList<PvfToken> Required(string tag) => sections.TryGetValue(tag, out var value) ? value.Tokens : throw new InvalidDataException("maze 缺少字段: " + tag);
-        IReadOnlyList<DungeonPoint> Points(IReadOnlyList<PvfToken> values, bool allowRepeated = false)
+        IReadOnlyList<DungeonPoint> Points(IReadOnlyList<PvfToken> values, bool allowRepeated = false, bool allowOffGrid = false)
         {
             int[] numbers = Integers(values);
             if (numbers.Length == 0 || numbers.Length % 2 != 0)
@@ -834,7 +845,7 @@ internal sealed class DungeonCatalog
             for (int i = 0; i < numbers.Length; i += 2)
             {
                 var point = new DungeonPoint(numbers[i], numbers[i + 1]);
-                ValidatePoint(point);
+                ValidatePoint(point, allowOffGrid);
                 if (!seen.Add(point) && !allowRepeated)
                     throw new InvalidDataException("重复 start/boss map 坐标");
                 result.Add(point);
@@ -843,10 +854,15 @@ internal sealed class DungeonCatalog
             return Freeze(result);
         }
 
-        void ValidatePoint(DungeonPoint point)
+        void ValidatePoint(DungeonPoint point, bool allowOffGrid = false)
         {
-            if (point.X < 0 || point.Y < 0 || point.X >= width || point.Y >= height)
+            if (point.X < 0 || point.Y < 0)
                 throw new InvalidDataException("maze 坐标超出 size");
+            if (point.X >= width || point.Y >= height)
+            {
+                if (!allowOffGrid)
+                    throw new InvalidDataException("maze 坐标超出 size");
+            }
         }
     }
 

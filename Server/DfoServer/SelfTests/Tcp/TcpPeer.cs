@@ -57,6 +57,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] AssaultDailyInfo { get; private set; } = [];
     public byte[][] EnterCounts { get; private set; } = [];
     public byte[] GriefTowerClearInfo { get; private set; } = [];
+    public byte[] DazzlementBindings { get; private set; } = [];
     public byte[] ItemMakingSkills { get; private set; } = [];
     public byte[] EpicProductionState { get; private set; } = [];
     public WirePacket[] CollectBoxes { get; private set; } = [];
@@ -219,9 +220,10 @@ internal sealed class TcpPeer : IDisposable
         // 选图附带的状态通知逐项校验后记录，550须按两祭坛及悲叹当前楼层逐项匹配真实账本；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
-                packet.Opcode == 550))
+                packet.Opcode is 550 or 1608))
         {
             if (packet.Opcode == 1536) AssaultDailyInfo = packet.Body;
+            else if (packet.Opcode == 1608) ExpectDazzlementBindings(packet);
             else if (packet.Opcode == 1303)
             {
                 GriefTowerClearInfo = packet.Body;
@@ -239,6 +241,29 @@ internal sealed class TcpPeer : IDisposable
         if (body is not null)
             TestCheck.Bytes(packet.Body, body, $"body ({kind},{opcode})");
         return packet;
+    }
+
+    internal void ExpectDazzlementBindings(WirePacket? information = null)
+    {
+        var packet = information ?? Expect(0, 1608);
+        var f = fixture ?? throw new InvalidOperationException("眩惑通知核验需要真实账本");
+        int week = DfoServer.Game.Dungeons.WeeklyDungeonPolicy.WeekKey(f.UtcNow);
+        var rows = f.Query("""
+            SELECT c.name,c.job FROM account_dazzlement_tower_bindings b
+            JOIN characters c ON c.id=b.character_id AND c.account=b.account
+            WHERE b.account=$p0 AND b.week=$p1 ORDER BY b.slot
+            """, f.Options.DevelopmentAccount, week);
+        TestCheck.That(rows.Length <= 5, "眩惑账号本周绑定名单最多五名");
+        TestCheck.Bytes(packet.Body, Build(w =>
+        {
+            w.Write((byte)rows.Length);
+            foreach (var row in rows)
+            {
+                byte[] name = names.GetBytes((string)row[0]);
+                w.Write(name.Length); w.Write(name); w.Write(Convert.ToByte(row[1]));
+            }
+        }), "1608完整名称/职业名单等于当前账号本周持久绑定");
+        DazzlementBindings = packet.Body;
     }
 
     // 已显式校验悲叹状态的选图用例使用同一真实账本断言，不交给27的兼容读取再次猜测前置包。
@@ -466,6 +491,14 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(true, note);
     }
 
+    // NetworkStream未包装缓冲读器，ReadExactly只取当前帧；Poll保留下一帧在socket中，不消费或忽略它。
+    public void WaitForPendingData(int milliseconds, string note)
+    {
+        TestCheck.That(milliseconds is > 0 and <= 10000, "等待积压帧必须有界");
+        TestCheck.That(client.Client.Poll(TimeSpan.FromMilliseconds(milliseconds), SelectMode.SelectRead) &&
+            client.Client.Available > 0, note + ": 未收到数据或对端已经关闭");
+    }
+
     public void Closed()
     {
         try
@@ -643,7 +676,22 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(AvatarPresetList.Length >= 2 && AvatarPresetList[1] <= AvatarPresetList[0],
             "装扮预设容量与列表先于每周地下城下发，条目数不超过容量");
         NpcFavor = Expect(0, 746).Body;
-        TestCheck.That(NpcFavor.Length >= 1 && NpcFavor.Length == 1 + NpcFavor[0] * 10, "好感度按完整绝对快照恢复");
+        TestCheck.That(NpcFavor.Length >= 1, "好感度快照有u8行数");
+        int favorOffset = 1;
+        var favorIds = new HashSet<int>();
+        for (int row = 0; row < NpcFavor[0]; row++)
+        {
+            TestCheck.That(favorOffset + 10 <= NpcFavor.Length && BitConverter.ToInt32(NpcFavor, favorOffset) > 0 &&
+                BitConverter.ToInt32(NpcFavor, favorOffset + 4) > 0 && favorIds.Add(BitConverter.ToInt32(NpcFavor, favorOffset)),
+                "好感度行完整、正数且owner不重复");
+            int colors = NpcFavor[favorOffset + 9];
+            favorOffset += 10;
+            TestCheck.That(colors <= 4 && favorOffset + colors * 2 <= NpcFavor.Length, "NPC颜色列表宽度和数量有界");
+            var channels = new HashSet<byte>();
+            for (int color = 0; color < colors; color++, favorOffset += 2)
+                TestCheck.That(NpcFavor[favorOffset] < 4 && channels.Add(NpcFavor[favorOffset]), "NPC颜色通道不越界、不重复");
+        }
+        TestCheck.That(favorOffset == NpcFavor.Length, "好感度按完整绝对快照恢复，无尾随字节");
         Expect(0, 720, []);
         WeeklyDungeonConfig = Expect(0, 721).Body;
         TestCheck.That(WeeklyDungeonConfig.Length == 5, "每周地下城721固定回放5个槽位");
@@ -707,6 +755,19 @@ internal sealed class TcpPeer : IDisposable
             w.Write(0u);
         });
         InitialGameOptions = Expect(0, 173, initialGameOptions).Body;
+        byte[]? characterOptions = (settings ?? []).FirstOrDefault(option => option.Opcode == 390).Body;
+        if (characterOptions is null)
+        {
+            // 独立编码无角色存档的512B初始化，不调用生产规则或Builder生成预期。
+            byte[] options = Enumerable.Repeat((byte)255, 512).ToArray();
+            bool unsetMain = Enumerable.Range(0, 102).All(index => U16(InitialGameOptions, 4 + index * 2) == 0x7fff);
+            BinaryPrimitives.WriteUInt16LittleEndian(options.AsSpan(86), 0);
+            BinaryPrimitives.WriteUInt16LittleEndian(options.AsSpan(92), unsetMain ? (ushort)100 : U16(InitialGameOptions, 140));
+            BinaryPrimitives.WriteUInt16LittleEndian(options.AsSpan(96), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(options.AsSpan(98), unsetMain ? (ushort)1 : U16(InitialGameOptions, 30));
+            characterOptions = Build(writer => { writer.Write(512u); writer.Write(options); });
+        }
+        Expect(0, 390, characterOptions);
         var middle = new List<WirePacket>();
         RestoredConsumableStates.Clear();
         SkillInfo = [];
@@ -962,7 +1023,13 @@ internal sealed class TcpPeer : IDisposable
                     "场景后仅可补默认指令，完整两树余额、绑定、等级与已保存指令保持");
             }
             if (combos is not null) Expect(0, 447, combos);
-            ClientSettings = (settings ?? []).Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
+            var expectedSettings = (settings ?? []).ToList();
+            if (!expectedSettings.Any(option => option.Opcode == 390))
+            {
+                int next = expectedSettings.FindIndex(option => option.Opcode != 173);
+                expectedSettings.Insert(next >= 0 ? next : expectedSettings.Count, (390, characterOptions));
+            }
+            ClientSettings = expectedSettings.Select(option => Expect(0, option.Opcode, option.Body)).ToArray();
             if (appearanceFlags.HasValue)
                 Expect(0, 357, Build(w =>
                 {

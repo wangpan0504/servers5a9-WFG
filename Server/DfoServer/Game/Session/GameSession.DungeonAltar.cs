@@ -91,25 +91,39 @@ internal sealed partial class GameSession
         return AltarReceipt(state, now) with { RoundStarted = true, DifficultySelected = true };
     });
 
-    public DungeonAltarReceipt? ObserveDungeonAltarDeaths(ImmutableArray<ushort> keys, string fingerprint) => owner.Execute(() =>
+    public DungeonAltarReceipt? ObserveDungeonAltarDeath(NativeDungeonDeathObservation observation) => owner.Execute(() =>
+    {
+        // 极限及无尽房间尾怪实机以完整CMD39上报；仍只授权已发布对象，不接入普通经验/掉落事务。
+        if (formalDungeon?.Entry.DungeonId is not (11006 or 11007) || !observation.ChecksumMatches || observation.MonsterKey > ushort.MaxValue)
+            return null;
+        return ObserveAltarDeaths([checked((ushort)observation.MonsterKey)], observation.BodySha256, acknowledgeDuplicate: true);
+    });
+
+    public DungeonAltarReceipt? ObserveDungeonAltarDeaths(ImmutableArray<ushort> keys, string fingerprint) =>
+        owner.Execute(() => ObserveAltarDeaths(keys, fingerprint));
+
+    DungeonAltarReceipt? ObserveAltarDeaths(ImmutableArray<ushort> keys, string fingerprint, bool acknowledgeDuplicate = false)
     {
         if (!Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) ||
             formalDungeon is not { } dungeon || dungeon.Run.HasPendingDeath || dungeon.Run.CurrentAltar is not { Started: true } state ||
             keys.IsDefaultOrEmpty || keys.Length > byte.MaxValue || keys.Distinct().Count() != keys.Length ||
             keys.Any(key => !state.WasPublished(key))) return null;
         bool changed = false;
+        bool duplicate = false;
         foreach (ushort key in keys)
         {
             var issued = dungeon.Authority.ValidateAndIssueAltar(dungeon.Run, dungeon.Run.Snapshot.Identity, new(key, fingerprint));
             if (issued.Death is null) continue;
             var preparation = dungeon.Run.PrepareConfirmedDeath(issued.Death);
+            if (preparation.Outcome == DungeonRunOutcome.Duplicate) { duplicate = true; continue; }
             if (preparation.Outcome != DungeonRunOutcome.Accepted || preparation.Pending is not { } pending) continue;
             // 旧端kill_blood_monster只移除已生成对象；祭坛奖励归专用结算，不伪造普通怪物经验/掉落。
             if (dungeon.Run.ConfirmCommittedDeath(pending).Outcome != DungeonRunOutcome.Accepted)
                 throw new InvalidOperationException("祭坛死亡不能确认原实例候选");
             changed = true;
         }
-        if (!changed) return null;
+        if (!changed)
+            return acknowledgeDuplicate && duplicate ? AltarReceipt(state, AltarClock()) with { Completed = state.Completed } : null;
         long now = AltarClock();
         bool advanced = dungeon.Run.AdvanceAltar(now);
         SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
@@ -117,7 +131,7 @@ internal sealed partial class GameSession
             dungeon.ClearTimeMilliseconds = checked((uint)now);
         return AltarReceipt(state, now) with { RoundAdvanced = advanced, Completed = state.Completed,
             RoundStarted = advanced && !state.Completed && !state.Plan.Definition.Ultimate };
-    });
+    }
 
     public bool CanPublishDungeonAltar(DungeonAltarReceipt receipt) => owner.Execute(() =>
         IsCurrentAltar(receipt) && receipt.State.Round == receipt.Round && receipt.State.Difficulty == receipt.Difficulty &&

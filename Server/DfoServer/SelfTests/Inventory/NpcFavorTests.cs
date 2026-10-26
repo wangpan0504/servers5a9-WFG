@@ -49,6 +49,10 @@ internal static class NpcFavorTests
             "共享NPC写原owner，扣一封并保留源UID、排序锁，规划不修改输入");
         var near = role with { Inventory = role.Inventory with { NpcFavor=[new(17,39500)] } };
         That(service.Plan(near,Slot,17,true).Plan!.After.NpcFavor[0].Points==40000,"临界按NPC最大点数封顶");
+        var gifted = near with { Inventory = near.Inventory with { NpcFavor = [new(17,39500)
+            { GiftDay=ShopPurchaseCount.Today(Clock.GetUtcNow()),GiftCount=5,Colors=47 }] } };
+        That(service.Plan(gifted,Slot,17,true).Plan!.After.NpcFavor[0] is { Points:40000,GiftCount:5,Colors:47 },
+            "信件不占普通赠礼次数，且保留已有NPC染色");
         foreach (var bad in new[] { role with { Level=19 }, role with { Job=16 },
             role with { Inventory=role.Inventory with { NpcFavor=[new(17,40000)] } },
             role with { Inventory=role.Inventory with { Items=[item with { Core=item.Core with { EquipmentLockId=1 } }] } },
@@ -61,6 +65,7 @@ internal static class NpcFavorTests
         Bytes(NpcFavorPackets.Snapshot([]),[0],"空表显式清除旧角色缓存");
         Reject<InvalidDataException>(()=>NpcFavorPackets.Snapshot([new(17,1),new(17,2)]),"重复NPC存档拒绝");
         Repository(service,item);
+        NpcFavorOperationTests.RunCore();
         Console.WriteLine($"PASS {Count-before} NPC好感度资源、规划、协议与事务断言");
     }
 

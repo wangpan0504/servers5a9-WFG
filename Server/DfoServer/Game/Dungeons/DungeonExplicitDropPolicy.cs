@@ -47,6 +47,7 @@ internal sealed class DungeonExplicitDropPool
             if (template is null || template.Id != row.ItemId || template.Kind != ItemKind.Consumable ||
                 template.EquipmentSlot != 0 || template.Durability != 0 || template.StackLimit != 1000 ||
                 template.Expiration.AbsoluteTime != 0 || template.Expiration.Days != 0 ||
+                template.Expiration.DailyDelete != 0 || template.Expiration.WeeklyDeleteDay is not null ||
                 template.AttachType.Trim().Trim('`').Trim() != "[free]" ||
                 type.Length != 2 || type[0] != "[waste]" || type[1] != expectedParameter)
                 throw new InvalidDataException("本服显式掉落规则要求匹配的普通永久消耗品模板: " + row.ItemId);

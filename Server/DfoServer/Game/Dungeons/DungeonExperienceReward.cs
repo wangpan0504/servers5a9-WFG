@@ -29,7 +29,7 @@ internal static class DungeonKillExperiencePolicy
         if (!run.IsPendingDeath(prepared))
             throw new InvalidOperationException("击杀经验只能规划当前待提交死亡");
         var monster = prepared.Monster;
-        uint amount = Calculate(catalog.GetExperience(monster.CandidateLevel), run.Entry.ExperienceWeight,
+        uint amount = run.Entry.DisableMonsterAndClearExperience ? 0 : Calculate(catalog.GetExperience(monster.CandidateLevel), run.Entry.ExperienceWeight,
             catalog.GetDifficultyRate(run.Entry.Difficulty),
             // 参考S4A21以APC自身等级和对应品级计算；怪物named目录不套到同号APC。
             catalog.GetMonsterRate(monster.RewardType, monster.AiCharacter is null && run.Entry.NamedMonsters.Contains(monster.MonsterId)),

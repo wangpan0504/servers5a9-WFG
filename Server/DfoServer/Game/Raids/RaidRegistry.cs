@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Party;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Channels;
 
@@ -19,6 +20,8 @@ internal sealed record RaidParty(uint Key, byte Type, string Title, byte[] Title
     ushort Leader, ImmutableArray<RaidMember> Members, int Capacity, long Revision)
 {
     public string LeaderName => Members.Single(m => m.Actor.Character == Leader).Actor.Name;
+    public RaidStarted? Started { get; init; }
+    public int StartMinimum { get; init; } = 1;
 }
 internal sealed record RaidChange(RaidParty Before, RaidParty? After, RaidActor? Removed = null, bool Kicked = false);
 internal sealed record RaidWaiting(RaidActor Actor, byte Type);
@@ -39,12 +42,50 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
     long revision;
     DateTimeOffset Now => (clock ?? TimeProvider.System).GetUtcNow();
 
+    internal RaidPreparationResult CommitPreparation(RaidPreparationPlan plan, PartyService ordinary,
+        RaidPartyBatch batch, CancellationToken cancellation)
+    {
+        lock (gate)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(batch.Raid, plan) || !plan.IsCurrent(this))
+                return RaidPreparationResult.Reject("raid-preparation-stale");
+        }
+        // 全团current owner阻止成员、编队、委任、离队、开战与当前会话失效；旧generation收尾只匹配旧Session/epoch。
+        // 复验至安装没有await、SQL或外部回调。不持目录gate等待Party gate，兼容普通队伍中的StartedRaid查询。
+        return ordinary.CommitRaidPreparation(batch, cancellation);
+    }
+
     public int Count { get { lock (gate) return parties.Count; } }
     public RaidParty? Find(RaidActor actor) { lock (gate) return FindCore(actor); }
+    public RaidParty? FindCurrent(GameSession session, long epoch)
+    { lock (gate) return parties.Values.FirstOrDefault(p => p.Members.Any(m => ReferenceEquals(m.Actor.Session, session) && m.Actor.Epoch == epoch && m.Actor.IsCurrent)); }
+
+    // 调用方已按固定全团账号顺序取锁；聚合gate内只复验与提交，不等待网络。
+    internal RaidStartResult CommitStart(RaidActor actor, RaidParty expected, System.Collections.Immutable.ImmutableArray<RaidStartReservation> reservations, GameWorld.Raids.RaidCost cost,
+        Func<(RaidStarted Start, System.Collections.Immutable.ImmutableArray<Characters.Character> Characters, Game.Party.PartyNotice[] Notices)?> commit)
+    {
+        lock (gate)
+        {
+            var current = FindCore(actor);
+            if (current?.Started is not null) return new(0, "already-started", Replay: true);
+            if (!ReferenceEquals(current, expected) || expected.Leader != actor.Character ||
+                reservations.Any(r => !r.Actor.Session.MatchesRaidStart(r))) return new(19, "raid-members-changed");
+        }
+        // 全团owner阻止本团变更；数据库等待不占用其它攻坚队共用的目录gate。
+        if (commit() is not { } result) return new(19, "member-party-conflict");
+        lock (gate)
+        {
+            var started = expected with { Started = result.Start, Revision = ++revision };
+            parties[expected.Key] = started;
+            foreach (var key in invitations.Where(i => i.Value.Raid == expected.Key).Select(i => i.Key).ToArray()) invitations.Remove(key);
+            return new(0, "started", new(started, reservations, result.Characters, result.Notices, cost));
+        }
+    }
     public RaidParty? Find(uint key, ChannelIdentity channel)
     { lock (gate) return parties.TryGetValue(key, out var party) && party.Channel == channel ? party : null; }
     public RaidParty[] List(ChannelIdentity channel, byte type)
-    { lock (gate) return parties.Values.Where(p => p.Channel == channel && p.Type == type).OrderBy(p => p.Key).ToArray(); }
+    { lock (gate) return parties.Values.Where(p => p.Channel == channel && p.Type == type && p.Started is null).OrderBy(p => p.Key).ToArray(); }
     public bool IsCurrent(RaidParty party)
     { lock (gate) return parties.TryGetValue(party.Key, out var current) && ReferenceEquals(current, party); }
     public void Observe(RaidActor actor) { lock (gate) if (actor.IsCurrent) observers[actor.Session] = actor; }
@@ -76,14 +117,14 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
     }
     public bool IsListSnapshot(ChannelIdentity channel, byte type, RaidParty[] rows)
     {
-        lock (gate) return parties.Values.Count(p => p.Channel == channel && p.Type == type) == rows.Length &&
+        lock (gate) return parties.Values.Count(p => p.Channel == channel && p.Type == type && p.Started is null) == rows.Length &&
             rows.All(row => parties.TryGetValue(row.Key, out var current) && ReferenceEquals(current, row));
     }
     RaidParty? FindCore(RaidActor actor) => parties.Values.FirstOrDefault(p => p.Members.Any(m => Same(m.Actor, actor)));
     static bool Same(RaidActor a, RaidActor b) => ReferenceEquals(a.Session, b.Session) && a.Epoch == b.Epoch &&
         ReferenceEquals(a.Owner, b.Owner) && a.Character == b.Character;
 
-    public RaidParty? Create(RaidActor actor, byte type, string title, byte[] titleBytes, int capacity) => actor.Owner.Execute(() =>
+    public RaidParty? Create(RaidActor actor, byte type, string title, byte[] titleBytes, int capacity, int startMinimum = 1) => actor.Owner.Execute(() =>
     {
         lock (gate)
         {
@@ -91,7 +132,7 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
                 parties.Values.Any(p => p.Members.Any(m => m.Actor.Character == actor.Character && m.Actor.IsCurrent))) return null;
             uint key = Allocate(actor.Channel);
             var party = new RaidParty(key, type, title, titleBytes, actor.Channel, actor.Character,
-                [new(actor, 0)], capacity, ++revision);
+                [new(actor, 0)], capacity, ++revision) { StartMinimum = startMinimum };
             parties.Add(key, party);
             waiting.Remove(actor.Character);
             return party;
@@ -116,7 +157,7 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
         lock (gate)
         {
             var old = FindCore(actor);
-            if (!actor.CanManage || old is null || old.Leader != actor.Character || old.Type != type) return null;
+            if (!actor.CanManage || old is null || old.Started is not null || old.Leader != actor.Character || old.Type != type) return null;
             var updated = old with { Title = title, TitleBytes = titleBytes, Revision = ++revision };
             parties[old.Key] = updated;
             return new RaidChange(old, updated);
@@ -128,7 +169,7 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
         lock (gate)
         {
             var old = FindCore(actor);
-            if (!actor.CanManage || old is null || old.Leader != actor.Character || squad > (old.Capacity + 3) / 4) return null;
+            if (!actor.CanManage || old is null || old.Started is not null || old.Leader != actor.Character || squad > (old.Capacity + 3) / 4) return null;
             int index = -1;
             for (int at = 0; at < old.Members.Length; at++)
                 if (old.Members[at].Actor.Character == target && old.Members[at].Actor.IsCurrent) { index = at; break; }
@@ -152,7 +193,7 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
             lock (gate)
             {
                 var old = FindCore(actor);
-                if (!actor.CanManage || !recipient.CanManage || old is null || old.Leader != actor.Character ||
+                if (!actor.CanManage || !recipient.CanManage || old is null || old.Started is not null || old.Leader != actor.Character ||
                     !old.Members.Any(m => Same(m.Actor, recipient))) return null;
                 var updated = old with { Leader = target, Revision = ++revision };
                 parties[old.Key] = updated;
@@ -168,7 +209,7 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
         lock (gate)
         {
             var party = FindCore(actor);
-            if (!actor.CanManage || party is null || target != actor.Character && party.Leader != actor.Character) return null;
+            if (!actor.CanManage || party is null || target != actor.Character && (party.Leader != actor.Character || party.Started is not null)) return null;
             var removed = party.Members.FirstOrDefault(m => m.Actor.Character == target);
             return removed is null ? null : RemoveCore(party, removed.Actor, target != actor.Character);
         }
@@ -220,7 +261,7 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
                 if (!source.CanManage || !target.CanManage) return null;
                 var a = FindCore(source); var b = FindCore(target);
                 var party = a ?? b;
-                if (party is null || a is not null && b is not null ||
+                if (party is null || party.Started is not null || a is not null && b is not null ||
                     party.Leader != (a is null ? target.Character : source.Character) || party.Members.Length >= party.Capacity ||
                     source.Session.ChannelEntry is not { } channel || party.Type != RaidTypes.FromChannelType(channel.Type)) return null;
                 foreach (var key in invitations.Where(p => p.Value.Expires <= Now || !p.Value.Source.IsCurrent || !p.Value.Target.IsCurrent)
@@ -250,7 +291,7 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
                     current.Expires <= Now || current.Peer != peer || !current.Source.CanManage || !recipient.CanManage) return new(false);
                 invitations.Remove(key);
                 if (!accept) return new(true, current);
-                if (!parties.TryGetValue(current.Raid, out var old)) return new(false);
+                if (!parties.TryGetValue(current.Raid, out var old) || old.Started is not null) return new(false);
                 var leader = old.Members.FirstOrDefault(m => m.Actor.Character == old.Leader);
                 if (leader is null || !(Same(leader.Actor, current.Source) || Same(leader.Actor, recipient))) return new(false);
                 var entrant = Same(leader.Actor, recipient) ? current.Source : recipient;

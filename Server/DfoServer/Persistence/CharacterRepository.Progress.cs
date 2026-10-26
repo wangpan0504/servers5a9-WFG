@@ -68,14 +68,21 @@ internal sealed partial class CharacterRepository
                 break;
             case CharacterProgressField.QuestAdd:
                 // 完成标记与进行中槽同一事务：只写 completed 会让手册同时显示进行中和已完成，交付再被 AlreadyCompleted 拒绝。
+                // daily_period=0 是永久完成，跨日 AdvanceQuestCycle 不会清掉；每日/重复必须由调用方写入当天周期。
                 var quest = cmd.Parameters.Add("$quest", SqliteType.Integer);
+                cmd.Parameters.AddWithValue("$period", request.DailyPeriod);
                 foreach (int id in request.QuestIds)
                 {
                     quest.Value = id;
                     cmd.CommandText = "DELETE FROM character_active_main_quests WHERE character_id=$id AND quest_id=$quest";
                     cmd.ExecuteNonQuery();
-                    cmd.CommandText = "INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id) VALUES($id,$quest)";
+                    cmd.CommandText = "INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id,daily_period) VALUES($id,$quest,$period)";
                     cmd.ExecuteNonQuery();
+                    if (request.DailyPeriod > 0)
+                    {
+                        cmd.CommandText = "UPDATE character_completed_quests SET daily_period=$period WHERE character_id=$id AND quest_id=$quest AND daily_period=0";
+                        cmd.ExecuteNonQuery();
+                    }
                 }
                 break;
             case CharacterProgressField.QuestRemove:

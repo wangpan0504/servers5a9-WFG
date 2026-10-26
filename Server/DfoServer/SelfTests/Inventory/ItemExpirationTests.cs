@@ -11,6 +11,7 @@ internal static class ItemExpirationTests
 {
     public static void RunCore()
     {
+        WeeklyItemExpirationTests.RunCore();
         int checks = Count;
         var maximum = new DateTimeOffset(2037, 12, 31, 6, 0, 0, TimeSpan.FromHours(8));
         int limit = checked((int)maximum.ToUnixTimeSeconds());

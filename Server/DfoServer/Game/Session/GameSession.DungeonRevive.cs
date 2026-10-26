@@ -28,7 +28,7 @@ internal sealed partial class GameSession
         if (formalDungeon!.CharacterDead) return null;
         var character = Selected!;
         long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
-        bool blessing = !formalDungeon!.Entry.Maze.IsGriefTower && character.Inventory.ConsumableStates.Concat(formalDungeon.FreeConsumableEffects).Any(row => row.Kind == ConsumableStateKind.Effect &&
+        bool blessing = formalDungeon!.Entry.RaidEntry?.Kind != Raids.RaidKind.Luke && !formalDungeon.Entry.Maze.IsGriefTower && character.Inventory.ConsumableStates.Concat(formalDungeon.FreeConsumableEffects).Any(row => row.Kind == ConsumableStateKind.Effect &&
             GameWorld.Items.ConsumableSpecialItems.IsRevivalBlessing(row.ItemId) && row.Active(now));
         var after = ConsumableStatePolicy.CrossBoundary(character.Inventory, ConsumableMaintenance.Death,
             now);

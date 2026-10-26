@@ -166,12 +166,26 @@ internal sealed class AccountOwners
 
         // 成员在锁外固定；重入只能复用原组合，禁止从单锁、双锁升级或临时扩充成员。
         public static T ExecuteGroup<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, Func<T> action)
+            => ExecuteFixedGroup(members, action, 1, 4);
+
+        // 攻坚开战固定全团；普通副本的 ExecuteGroup 仍只接受一至四人，不能循环分队提交。
+        internal static T ExecuteRaid<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, Func<T> action)
+            => ExecuteFixedGroup(members, action, 10, 20);
+
+        // 卢克准备使用同一账号锁目录；上限来自已核资源且硬限八人，不放宽普通四人或安徒恩十至二十人。
+        internal static T ExecuteRaidGroup<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, int maximum, Func<T> action)
         {
-            if (members.Count is < 1 or > 4 || members.Any(m => m.Character == 0) ||
+            if (maximum is < 1 or > 8) throw new InvalidOperationException("卢克准备人数上限必须为一至八人");
+            return ExecuteFixedGroup(members, action, 1, maximum);
+        }
+
+        static T ExecuteFixedGroup<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, Func<T> action, int minimum, int maximum)
+        {
+            if (members.Count < minimum || members.Count > maximum || members.Any(m => m.Character == 0) ||
                 members.Select(m => m.Character).Distinct().Count() != members.Count ||
                 members.Select(m => m.Owner.Account).Distinct(StringComparer.Ordinal).Count() != members.Count ||
                 members.Any(m => !ReferenceEquals(m.Owner.Registry, members[0].Owner.Registry)))
-                throw new InvalidOperationException("组合需要同一目录的一至四个不同账号和角色");
+                throw new InvalidOperationException($"组合需要同一目录的{minimum}至{maximum}个不同账号和角色");
             var ordered = members.OrderBy(m => m.Owner.Account, StringComparer.Ordinal).ToArray();
             var states = ordered.Select(m => m.Owner.State).ToArray();
             if (executingGroup is { } active)

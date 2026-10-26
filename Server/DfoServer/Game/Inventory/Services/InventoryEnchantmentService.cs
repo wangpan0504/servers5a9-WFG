@@ -24,11 +24,11 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
             return InventoryResult.Reject(Rejection);
         var definition = enchantments.Get(source.Core.ItemId);
         if (definition is null) return InventoryResult.Reject(Rejection);
-        return Plan(character, request, utcSeconds, definition, items.Get(source.Core.ItemId), items.Get(target.Core.ItemId), random);
+        return Plan(character, request, utcSeconds, definition, items.Get(source.Core.ItemId), items.Get(target.Core.ItemId), random, Clock);
     }
 
     internal static InventoryResult Plan(Character character, EnchantmentRequest request, long now,
-        EnchantmentDefinition definition, ItemTemplate beadTemplate, ItemTemplate targetTemplate, Func<int, int>? random = null)
+        EnchantmentDefinition definition, ItemTemplate beadTemplate, ItemTemplate targetTemplate, Func<int, int>? random = null, TimeProvider? clock = null)
     {
         var before = character.Inventory;
         var source = before.Find(request.Source);
@@ -56,6 +56,6 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
         after.Validate();
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (target.ExpireTime > 0) deadline = deadline is null ? target.ExpireTime : Math.Min(deadline.Value, target.ExpireTime);
-        return new(true, 0, new(before, after, "enchant_by_bead", new(character, deadline)));
+        return new(true, 0, new(before, after, "enchant_by_bead", new(character, deadline, clock: clock)));
     }
 }

@@ -30,7 +30,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     TitleProjection? titleProjection = null, InventoryProjection? inventoryProjection = null,
     PartyDungeonService? partyDungeons = null, CharacterStatComputer? partyStats = null,
     DfoServer.Game.Party.PartyService? parties = null, EpicPieceShopService? epicPieceShop = null,
-    TagEvildomRunProjection? tagEvildomRun = null) : IGameCommandModule
+    TagEvildomRunProjection? tagEvildomRun = null, DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -150,6 +150,47 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (character is null || !before.Ready || before.Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
             context.BlocksTownActions)
             return CommandResult.Unhandled;
+        if (context.Session.ChannelEntry?.Type == 32 && context.Session.StartedRaid is not null)
+        {
+            var selectedParty = context.Session.CurrentParty?.Invoke();
+            if (selectedParty is null || context.DispatchGates?.Holds(context, selectedParty.Commands) != true)
+            {
+                log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = false, Party = true,
+                    RaidType = 1, Dungeon = selection.DungeonIndex, RejectReason = "luke-party-dispatch-gate-mismatch" });
+                await context.Reply(CmdPacketType.SELECT_DUNGEON, DungeonPackets.SelectionRejected(), "luke_entry_rejected");
+                return CommandResult.Handled;
+            }
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, selectedParty.Members);
+            bool valid = lukeRaid is not null && partyDungeons is not null && context.Session.HasLukeRaidSelection &&
+                selection.Parameter == 2 && selection.Unknown5 == 0 && selection.Unknown7 == 0 && selection.Unknown8 == 0 &&
+                selection.Unknown9 == ushort.MaxValue && selection.Unknown11 == 0 && selection.Unknown15 == 0 &&
+                selection.Unknown16 == 0 && selection.Unknown20 == 0 && selection.Unknown21 == 0;
+            PartyDungeonNotice[] entered = [];
+            try
+            {
+                if (valid) entered = partyDungeons!.Enter(context.Session, selection.DungeonIndex, selection.Parameter,
+                    dungeons, rooms, null, null, null, null);
+            }
+            finally
+            {
+                // SQL失败也仅撤销本次选择；已安装Run的选择清理是空操作，不能释放成功的占用。
+                if (entered.Length == 0) lukeRaid?.CancelSelection(context.Session, selectedParty);
+            }
+            log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length > 0, Party = true,
+                RaidType = 1, Dungeon = selection.DungeonIndex, Members = entered.Length,
+                RaidInstance = context.Session.StartedRaid?.InstanceId,
+                Runs = entered.Select(notice => notice.Scene?.Snapshot.Identity.InstanceId).Distinct().ToArray(),
+                RejectReason = entered.Length == 0 ? context.Session.LastFormalDungeonRejection ?? "luke-entry-unavailable" : null });
+            if (entered.Length == 0)
+            {
+                var rejected = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+                await context.Reply(CmdPacketType.SELECT_DUNGEON, DungeonPackets.SelectionRejected(), "luke_entry_rejected", () =>
+                    context.Owner.Execute(() => context.Session.Ready && ReferenceEquals(context.Session.Selected, rejected.Selected) &&
+                        context.Session.SelectionEpoch == rejected.SelectionEpoch && context.Session.Phase == rejected.Phase));
+            }
+            else await PartyDungeonProjection.PublishAsync(entered);
+            return CommandResult.Handled;
+        }
         bool training = selection.DungeonIndex == 5000 && selection.Unknown8 == 1 && selection.Unknown16 == 0;
         bool experience = selection.DungeonIndex == 7142 && selection.Unknown8 == 1 && selection.Unknown16 == 0;
         bool direct = training || experience;
@@ -214,10 +255,13 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             HellTicket = receipt?.HellTicket, EntryItem = receipt?.Entry.EntryItem, StartFatigue = receipt?.Entry.StartFatigue,
             EntryFatigueCharged = receipt?.EntryFatigueCharged, EntryCostNote = receipt?.Entry.EntryCostNote,
             GriefLayer = receipt?.Entry.GriefLayer, Grief = receipt?.GriefAdmission?.Decision,
+            Dazzlement = receipt?.Dazzlement,
             CharacterId = character.Id, CharacterName = character.Name });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+        if (receipt.Dazzlement is not null)
+            await DazzlementTowerProjection.BindingsAsync(context, Guard);
         if (receipt.Entry.Hope is { } hope)
             await context.Reply(CmdPacketType.ACCEPT_QUEST, QuestPackets.Accepted(hope.Acceptance.QuestId,1,[]),
                 "operation_hope_quest_assigned",Guard);
@@ -399,6 +443,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 Convert.ToHexString(SHA256.HashData(request.Body)))
             { Participants = statistics.Participants.Select(value => new NativeDungeonDeathParticipant(value.Kind,value.ObjectKey,
                 value.CumulativeHpDecrease,value.PositiveHpDecreaseCount)).ToImmutableArray() };
+            if (context.Session.FormalEnteredDungeonId is 11006 or 11007)
+                return await AltarMonsterDeathAsync(context, observation);
             audit = observation;
             result = context.Session.ObserveFormalDungeonDeath(observation,rewards,growth);
         }

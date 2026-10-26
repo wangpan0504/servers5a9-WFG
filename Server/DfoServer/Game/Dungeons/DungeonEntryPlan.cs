@@ -22,6 +22,9 @@ internal sealed record DungeonEntryPlan(
     // 实验性（未在95客户端实证）：深渊派对入场（op16 请求 [7]=1）。非空表示本次入场走 maze 的 [hell dungeon] 深渊房间，
     // 并在 DUNGEON_INFO/START_MAP 里带深渊标志；HellPartyMode 取请求标志（参考项目 ResolveHellPartyMode：requestFlag != 0 ? requestFlag : 按难度权重）。
     public DungeonHellPartyRoom? HellParty { get; init; }
+    // 时空裂缝（[inferno dungeon]）：按深渊派对模式进入，但整条路线本身就是深渊场地，没有密门房间可换图。
+    // 与密门深渊共用 HellPartyMode/深渊标志，区别只在 HellParty 为空、不抽柱子波次。
+    public bool IsInfernoParty { get; init; }
     public byte HellPartyMode { get; init; }
     public bool IsHellLegend { get; init; }
     public bool IsCosmo { get; init; }
@@ -40,6 +43,7 @@ internal sealed record DungeonEntryPlan(
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
     public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }
+    public DfoServer.Game.Raids.RaidDungeonIdentity? RaidEntry { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
     public bool DisableGiveupPenalty { get; init; }
     public int? CoinLimit { get; init; }
@@ -143,7 +147,7 @@ internal sealed record DungeonEntryPlan(
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null)
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -176,6 +180,8 @@ internal sealed record DungeonEntryPlan(
                 definition.StartFatigue != 8)
             { reason = "cosmo-entry-contract-unsupported"; return false; }
         }
+        // 时空裂缝只能按深渊派对模式进入（PVF 副本头 [select dungeon normal disable] 1），普通请求不能落回普通路线白进。
+        if (definition.IsInfernoDungeon && !hellParty) { reason = "inferno-mode-required"; return false; }
         // 悲叹只能由已核对账号额度和当前楼层的专用准入进入，不能借普通入口跳层或叠加两张票。
         if (definition.RequiresGriefEntryContract)
         {
@@ -198,12 +204,8 @@ internal sealed record DungeonEntryPlan(
             }
         }
         else if (grief is not null) { reason = "grief-tower-resource-mismatch"; return false; }
-        // 02A00360 只识别类型码 0x54。5×5 网格和把 6,6 搬进格子都不是这条房间合同。
-        if (definition.IsBossRushDungeon)
-        {
-            reason = "boss-rush-room-contract-unproven";
-            return false;
-        }
+        // 02A00360 只识别类型码 0x54。格子外 Boss（337 的 6,6）不是 5×5 里的房间，解析保留该坐标。
+        // 入场在显式地图齐全时用最远格作结算房；0×0、解析失败或没有格子内地图仍拒绝。不把 6,6 搬进网格。
         // 实例 +0x7BC 与 0x4A 的唯一比较在 029FFAA0：该类型返回不要求疲劳。
         // 定义 +0x760 只在解析时写成 0x4A，没有第二道类型准入。有票据或疲劳声明对不上时仍拒绝。
         if (definition.IsDazzlementTower &&
@@ -372,10 +374,18 @@ internal sealed record DungeonEntryPlan(
             }
         }
         // 实验性：深渊派对只走普通（无任务连接）且声明了 [hell dungeon] 深渊房间的 maze；不沿用任务/顺序任务/普通狩猎的路线推断。
+        // 时空裂缝（[inferno dungeon]）没有密门，整条路线就是深渊场地：候选是该副本全部无任务连接 maze，不换图、不加房间。
+        bool infernoParty = hellParty && definition.IsInfernoDungeon;
+        if (infernoParty && (cosmo || hellLegend)) { reason = "hell-party-mode-unsupported"; return false; }
         if (hellParty)
         {
-            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && (cosmo || maze.HellParty is not null) &&
-                (cosmo || !hellLegend || maze.HellParty!.LegendMapId > 0 && maze.HellLegendPath is not null)).ToArray();
+            candidates = definition.Mazes.Where(maze =>
+            {
+                if (maze.QuestConnectionTokens.Count != 0) return false;
+                if (cosmo || infernoParty) return true;
+                return maze.HellParty is not null &&
+                    (!hellLegend || maze.HellParty.LegendMapId > 0 && maze.HellLegendPath is not null);
+            }).ToArray();
             ordinaryHunt = false; routeQuest = 0; quest = null; layoutQuest = null;
             if (candidates.Length == 0) { reason = "hell-party-maze-unavailable"; return false; }
             // 同一副本声明了多个带深渊房间的普通 maze（如 291100319 的 313166/313173）：与普通入场一样随机选一个。
@@ -392,6 +402,14 @@ internal sealed record DungeonEntryPlan(
                 hope.SourceRevision != character.Revision || !hope.Catalog.Mazes.ContainsKey(hope.MazeOrdinal))
             { reason = "operation-hope-admission-mismatch"; return false; }
             candidates = definition.Mazes.Where(row => row.SourceOrdinal == hope.MazeOrdinal && row.QuestConnectionTokens.Count == 0).ToArray();
+            routeQuest = 0; layoutQuest = null;
+        }
+        if (raid is not null)
+        {
+            if (raid.Kind != DfoServer.Game.Raids.RaidKind.Luke || raid.InstanceId == Guid.Empty || raid.Squad is not (1 or 2) ||
+                questId != 0 || difficulty != 2 || isReplay || practice || hellParty || tagEvildom is not null || hope is not null)
+            { reason = "raid-maze-admission-mismatch"; return false; }
+            candidates = definition.Mazes.Where(row => row.SourceOrdinal == raidMaze && row.QuestConnectionTokens.Count == 0).ToArray();
             routeQuest = 0; layoutQuest = null;
         }
         if (candidates.Length != 1)
@@ -414,15 +432,16 @@ internal sealed record DungeonEntryPlan(
                 : maze.StoryStages.Count != maze.Bosses.Count)
             || maze.MapSpecification is not { Count: > 0 } maps)
         {
-            reason = "quest-maze-layout-unsupported";
+            reason = definition.IsBossRushDungeon ? "boss-rush-room-contract-unproven" : "quest-maze-layout-unsupported";
             return false;
         }
 
         var start = maze.Starts[0];
         var boss = maze.StoryStages.Count > 0 ? maze.StoryStages[^1].Position : maze.Bosses[0];
-        if (!InBounds(start, maze) || !InBounds(boss, maze))
+        bool bossRushOffGrid = definition.IsBossRushDungeon && maze.StoryStages.Count == 0 && !InBounds(boss, maze);
+        if (!InBounds(start, maze) || !bossRushOffGrid && !InBounds(boss, maze))
         {
-            reason = "quest-maze-layout-unsupported";
+            reason = definition.IsBossRushDungeon ? "boss-rush-room-contract-unproven" : "quest-maze-layout-unsupported";
             return false;
         }
 
@@ -430,6 +449,22 @@ internal sealed record DungeonEntryPlan(
         if (maze.StoryStages.Count > 0 && starts.Length > 1)
             starts = [starts.FirstOrDefault(map => map.StoryStageIndex < 0) ?? starts[0]];
         var bosses = maze.StoryStages.Count > 0 ? new[] { maze.StoryStages[^1] } : maps.Where(map => map.Position == boss).ToArray();
+        if (bossRushOffGrid)
+        {
+            var rushTerminal = BossRushGridTerminal(maze, maps, start);
+            if (rushTerminal is null)
+            {
+                reason = "boss-rush-room-contract-unproven";
+                return false;
+            }
+            var rushPromoted = rushTerminal.Kind == "boss" ? rushTerminal : rushTerminal with { Kind = "boss" };
+            maze = maze with
+            {
+                MapSpecification = maps.Select(map => ReferenceEquals(map, rushTerminal) ? rushPromoted : map).ToArray()
+            };
+            starts = starts.Select(map => ReferenceEquals(map, rushTerminal) ? rushPromoted : map).ToArray();
+            bosses = [rushPromoted];
+        }
         // 显式清图目标等于 Boss 坐标的基础图或叠层时，基础格可以只声明为 map；仅在本次计划中投影为 Boss，保留原资源身份。
         // 客户端 02A17ABB：02A16B60 判定 (x,y) 在当前迷宫 Boss 坐标（实例 +0x6F4 记录）时取格子 boss 列表(+0x18)，
         // 该列表为空才退回 map 列表(+4)。bossCellFromBossMap 只由调用方在已证明的范围内打开（见 PrepareFormalDungeon）。
@@ -565,12 +600,14 @@ internal sealed record DungeonEntryPlan(
             IsQuestReplay = isReplay,
             IsPractice = practice,
             GriefLayer = grief?.Before.State.Layer,
-            HellParty = hellParty && !cosmo ? activeHell : null,
+            HellParty = hellParty && !cosmo && !infernoParty ? activeHell : null,
+            IsInfernoParty = infernoParty,
             IsHellLegend = hellParty && !cosmo && hellLegend,
             IsCosmo = cosmo,
             AllowsCompanionAi = definition.AllowsCompanionAi && tagEvildom is null,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
-            StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : (ushort)0,
+            // 时空裂缝入场一次扣 6 点疲劳（用户指定的本服规则）；PVF 没有声明分段数，不能沿用逐房间一点。
+            StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : infernoParty ? (ushort)6 : (ushort)0,
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
@@ -778,4 +815,24 @@ internal sealed record DungeonEntryPlan(
 
     private static bool InBounds(DungeonPoint point, DungeonMaze maze) =>
         point.X >= 0 && point.Y >= 0 && point.X < maze.Width && point.Y < maze.Height;
+
+    // 格子外 Boss 没有对应地图；结算房取曼哈顿最远的格子内地图，并列时先比 Y 再比 X。不改 maze.Bosses。
+    static DungeonMap? BossRushGridTerminal(DungeonMaze maze, IReadOnlyList<DungeonMap> maps, DungeonPoint start)
+    {
+        DungeonMap? best = null;
+        int bestDist = int.MinValue, bestY = int.MinValue, bestX = int.MinValue;
+        foreach (var map in maps)
+        {
+            if (!InBounds(map.Position, maze)) continue;
+            int dist = Math.Abs(map.Position.X - start.X) + Math.Abs(map.Position.Y - start.Y);
+            if (dist > bestDist || dist == bestDist && (map.Position.Y > bestY || map.Position.Y == bestY && map.Position.X > bestX))
+            {
+                best = map;
+                bestDist = dist;
+                bestY = map.Position.Y;
+                bestX = map.Position.X;
+            }
+        }
+        return best;
+    }
 }

@@ -71,6 +71,15 @@ internal static class ActionConsumableTests
             target with { Core=target.Core with { ItemId=9101 } }, target with { Core=target.Core with { EquipmentLockId=1 } } })
             That(!service.Plan(role with { Inventory=new([source,rejected]) },slot,target.Position,extension,true).Accepted,
                 "永久、已到期、非白名单或安全锁目标不消费延期券");
+        foreach (var periodic in new[] { equipment.Expiration with { DailyDelete = 1 },
+            equipment.Expiration with { WeeklyDeleteDay = 0 }, equipment.Expiration with { WeeklyDeleteDay = 6 } })
+        {
+            catalog.PrefillTemplates(new Dictionary<int,ItemTemplate> { [9100] = equipment with { Expiration = periodic } });
+            That(!service.Plan(role,slot,target.Position,extension,true).Accepted &&
+                role.Inventory.Find(slot) == source && role.Inventory.Find(target.Position) == target,
+                "延期不能越过每日或每周删除，周日0同样拒绝且不扣源/改目标");
+        }
+        catalog.PrefillTemplates(new Dictionary<int,ItemTemplate> { [9100] = equipment });
         var nearLimit = target with { Core=target.Core with { ExpireTime=ItemExpiration.MaximumUnixTime-10 } };
         That(service.Plan(role with { Inventory=new([source,nearLimit]) },slot,target.Position,
                 extension with { Parameters=[0,int.MaxValue] },true).Plan!.After.Find(target.Position)!.ExpireTime==ItemExpiration.MaximumUnixTime,

@@ -20,7 +20,7 @@ internal static class RaidPackets
 
     // ACK666 START_RAID（023441F0，0234A0B3 注册）：结果≠0 不读字段；结果 0 读 u16 码：0x13→65066「当前状态下， 无法开始攻坚战。」、
     // 8→49075「只有攻坚队长才能开始。」、0x16→49077「攻坚队要求的最低人数不足， 无法开始。」（0x11/0xD9 另带 u32 n + n×u32，不用）。
-    // 开战成功后的入场包序未恢复，所以人数足够时也回 0x13，不回成功。
+    // 安徒恩提交后的成功只写公共01；其余未接入类型仍使用本版中立拒绝。
     internal const ushort StartUnavailable = 0x13, StartNotLeader = 8, StartTooFewMembers = 0x16;
 
     public static byte[] StartFailure(ushort error) => CreateFailure(error);
@@ -39,15 +39,26 @@ internal static class RaidPackets
     public static byte[] RemoveRecord(uint key) => Build(writer => { writer.Write(key); writer.Write(1u); });
 
     // NOTI 0x24F RAID_MODIFY op2（023C8937）：u32 key, u32 2, 整条记录（01DD08E0，与 0x24E 记录同形、无尾 u8）；只更新已有记录，不存在即丢弃。
-    public static byte[] UpdateRecord(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0) => Build(writer =>
+    public static byte[] UpdateRecord(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0,
+        byte state = 0, byte phase = 0, bool canStart = false) => Build(writer =>
     {
         writer.Write(key);
         writer.Write(2u);
-        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad);
+        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart);
     });
 
     // ACK658 RAID_ENTRY_COST_INFO（0233C3E0，0234A067 注册）：成功直接返回，不读字段；失败才走 01DC6600。
     public static readonly byte[] EntryCostSuccess = [1];
+
+    // 0239B460：i32行数，u16角色、u8状态、i16库存数量；01DDB5ED的状态2停止库存变化探测。
+    public static byte[] EntryCosts(IReadOnlyList<DfoServer.Game.Raids.RaidCostStatus> rows) => Build(writer =>
+    {
+        writer.Write(rows.Count);
+        foreach (var row in rows) { writer.Write(row.Character); writer.Write(row.State); writer.Write(row.Count); }
+    });
+
+    // 02396E08..02396E59：两个u8，分别安装记录+28/+30；phase0的state2进入安徒恩首阶段启动演出。
+    public static byte[] Started(byte phase) => [2, phase];
 
     // 字符串线格式（03BE25F0）：u32 字节长 + L 字节；L==0 或 >= 上限时客户端不消费字节并用缺省文本（dstr 669「没有名字」）。
     public const int TextLimit = 0x100;
@@ -85,24 +96,27 @@ internal static class RaidPackets
     // 记录（01DD08E0）：u32 key；str(0x100) 标题 +0x04；u8 +0x24 团本类型（01DDADC0 按 raid.lst 下标取脚本与 PHASE NAME）；
     // u8 +0x28；u8 +0x30 阶段下标（-1 当 0）；u32 +0x34；u8 +0xDC +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4；队长成员块 +0x38。
     // +0x28/+0x34/+0xDC.. 语义未证明，写 0（实机 2026-10-21 23:07 同形记录未崩溃）。
-    public static void WriteRecord(BinaryWriter writer, uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0)
+    public static void WriteRecord(BinaryWriter writer, uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0,
+        byte state = 0, byte phase = 0, bool canStart = false)
     {
         writer.Write(key);
         WriteText(writer, title, TextLimit);
         writer.Write(raidType);
-        writer.Write((byte)0);               // +0x28
-        writer.Write((byte)0);               // +0x30 阶段 0
+        writer.Write(state);                 // +0x28
+        writer.Write(phase);                 // +0x30
         writer.Write(0u);                    // +0x34
-        writer.Write(new byte[9]);           // +0xDC +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4
+        writer.Write(canStart ? (byte)1 : (byte)0); // +DC：01DC7480频道跳表包含23与32，01DC7D1C/35在发送666前读取该旗标。
+        writer.Write(new byte[8]);           // +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4
         WriteMember(writer, leader, leaderName, leaderSquad);
     }
 
     // NOTI 0x24E RAID_LIST（023CAE20）：u32 n；n × { 记录 ; u8 → 记录+0xC4 }；重复 key 不覆盖旧记录。
     // +0xC4 > 1 时 START_RAID 跳过客户端人数检查，语义未证明，写 0。
-    public static byte[] RaidList(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0) => Build(writer =>
+    public static byte[] RaidList(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0,
+        byte state = 0, byte phase = 0, bool canStart = false) => Build(writer =>
     {
         writer.Write(1u);
-        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad);
+        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad, state, phase, canStart);
         writer.Write((byte)0);
     });
 
@@ -123,23 +137,23 @@ internal static class RaidPackets
         WriteMembers(writer, members);
     });
 
-    public static byte[] RaidListBatch(IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad)> rows) => Build(writer =>
+    public static byte[] RaidListBatch(IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart)> rows) => Build(writer =>
     {
         writer.Write((uint)rows.Count);
         foreach (var row in rows)
         {
-            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad);
+            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad, canStart: row.CanStart);
             writer.Write((byte)0);
         }
     });
 
     // 02349A20成功：mode0读记录，mode1读成员，mode2两者；21失败仍读mode/key。
     public static byte[] Information(byte mode, uint key, byte[] title, byte type, ushort leader, byte[] name,
-        IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members) => Build(writer =>
+        IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members, byte state = 0, byte phase = 0, bool canStart = false) => Build(writer =>
     {
         if (mode > 2) throw new InvalidDataException("团本查询mode错误");
         writer.Write((byte)1); writer.Write(mode); writer.Write(key);
-        if (mode is 0 or 2) WriteRecord(writer, key, title, type, leader, name, members.Single(m => m.Character == leader).Squad);
+        if (mode is 0 or 2) WriteRecord(writer, key, title, type, leader, name, members.Single(m => m.Character == leader).Squad, state, phase, canStart);
         if (mode is 1 or 2) WriteMembers(writer, members);
     });
 

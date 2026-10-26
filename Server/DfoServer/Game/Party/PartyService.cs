@@ -23,7 +23,7 @@ internal sealed record PartyResult(ushort Error, PartyNotice[] Notices)
     public bool Accepted => Error == 0;
 }
 
-internal sealed class PartyService
+internal sealed partial class PartyService
 {
     sealed class Invitation(PartyMember source, PartyMember target, uint peer, DateTimeOffset expires)
     {
@@ -40,6 +40,7 @@ internal sealed class PartyService
     readonly GameCacheIndex<ushort, Invitation> invitations;
     ushort nextId;
     long revision;
+    readonly HashSet<ushort> reservedRaidSquads = [];
     public PartyService(ISocialStore social, TimeProvider? clock = null, GameCache? memory = null)
     {
         this.social = social;
@@ -53,12 +54,68 @@ internal sealed class PartyService
 
     public PartySnapshot[] Snapshot() { lock (gate) return parties.SnapshotValues(); }
 
+    // 普通Party仍是每分队一至四人；预留与SQL之间不持Party gate，提交后仅安装已规划的新队。
+    internal (DfoServer.Game.Raids.RaidStarted Start, System.Collections.Immutable.ImmutableArray<DfoServer.Game.Characters.Character> Characters, PartyNotice[] Notices)?
+        CreateRaidSquads(DfoServer.Game.Raids.RaidParty raid,
+            Func<(DfoServer.Game.Raids.RaidStarted Start, System.Collections.Immutable.ImmutableArray<DfoServer.Game.Characters.Character> Characters)> commit,
+            RaidPartyBatch? prepared = null)
+    {
+        var captured = prepared is null
+            ? raid.Members.OrderBy(m => m.Slot).Select(m => (Raid: m, Member: Capture(m.Actor.Session))).ToArray() : [];
+        var squads = new List<PartySnapshot>();
+        var created = new List<PartySnapshot>();
+        PartyNotice[] notices;
+        lock (gate)
+        {
+            if (prepared is not null && (raid.Type != 1 || !ReferenceEquals(prepared.Raid.Source, raid) ||
+                !RaidBatchMatches(prepared) || !RaidBindingsCurrent(prepared.Raid, prepared.Bindings) ||
+                prepared.Groups.Any(g => g.Members.Any(m => !m.IsCurrent() || !m.Actor.Session.CanChangeTownParty ||
+                    m.Actor.Session.StartedRaid is not null)))) return null;
+            if (prepared is null && captured.Any(m => m.Member is null || Find(m.Member) is not null)) return null;
+            var groups = prepared?.Groups.ToArray() ?? captured.GroupBy(m => m.Raid.Squad).OrderBy(g => g.Key)
+                .Select(group => new RaidPartyGroup([..group.Select((m, slot) => m.Member! with { Slot = (byte)slot })],
+                    PartySettings.Default with { TitleCode = 0, Title = $"Party : {group.Key}", Capacity = 4,
+                        Dungeon = uint.MaxValue, Difficulty = 5 }, null)).ToArray();
+            if (groups.Any(g => g.Members.Length is < 1 or > 4) ||
+                prepared is null && captured.Any(m => m.Raid.Squad == 0)) return null;
+            try
+            {
+                foreach (var group in groups)
+                {
+                    if (group.Existing is { } existing) { squads.Add(existing); continue; }
+                    if (AllocateId() == ushort.MaxValue)
+                    { foreach (var reserved in created) reservedRaidSquads.Remove(reserved.Id); return null; }
+                    reservedRaidSquads.Add(nextId);
+                    var squad = new PartySnapshot(nextId, [..group.Members], 0, ++revision) { Settings = group.Settings };
+                    squads.Add(squad); created.Add(squad);
+                }
+                // 复用队也发送完整名单用于594收敛；通知全部在SQL前构造，不在付费后进行业务规划。
+                notices = squads.SelectMany(p => p.Members.Select(m => Updated(p, m))).ToArray();
+            }
+            catch { foreach (var reserved in created) reservedRaidSquads.Remove(reserved.Id); throw; }
+        }
+        try
+        {
+            var committed = commit();
+            lock (gate)
+            {
+                foreach (var squad in created)
+                {
+                    foreach (var member in squad.Members) member.Actor.Session.AdvancePartyMembership();
+                    parties.Set(squad.Id, squad);
+                }
+            }
+            return (committed.Start, committed.Characters, notices);
+        }
+        finally { lock (gate) foreach (var squad in created) reservedRaidSquads.Remove(squad.Id); }
+    }
+
     ushort AllocateId()
     {
         for (int i = 0; i < ushort.MaxValue; i++)
         {
             nextId = (ushort)((nextId + 1) % ushort.MaxValue);
-            if (!parties.TryGetValue(nextId, out _)) return nextId;
+            if (!parties.TryGetValue(nextId, out _) && !reservedRaidSquads.Contains(nextId)) return nextId;
         }
         return ushort.MaxValue;
     }
@@ -136,7 +193,8 @@ internal sealed class PartyService
     public PartyResult Invite(GameSession source, GameSession target, uint peer, bool blocked = false)
     {
         var a = Capture(source); var b = Capture(target);
-        if (blocked || a is null || b is null || a.Actor.Owner.Account == b.Actor.Owner.Account || a.Identity.Channel != b.Identity.Channel || Blocked(a, b))
+        if (blocked || a is null || b is null || source.StartedRaid is not null || target.StartedRaid is not null ||
+            a.Actor.Owner.Account == b.Actor.Owner.Account || a.Identity.Channel != b.Identity.Channel || Blocked(a, b))
             return Reject();
         return Pair(a, b, () =>
         {
@@ -183,7 +241,8 @@ internal sealed class PartyService
             lock (gate)
             {
                 if (!invite.Current(timer.GetUtcNow()) || !a.Actor.Session.CanChangeTownParty ||
-                    !b.Actor.Session.CanChangeTownParty || !invitations.TryGetValue(b.Actor.Character.Id, out var current) || !ReferenceEquals(current, invite))
+                    !b.Actor.Session.CanChangeTownParty || a.Actor.Session.StartedRaid is not null || b.Actor.Session.StartedRaid is not null ||
+                    !invitations.TryGetValue(b.Actor.Character.Id, out var current) || !ReferenceEquals(current, invite))
                     return Reject();
                 invite.Active = false; invitations.Remove(b.Actor.Character.Id);
                 if (!accept) return new PartyResult(0, [new(PartyNoticeKind.Refused, a, b,
@@ -250,7 +309,7 @@ internal sealed class PartyService
         {
             lock (gate)
             {
-                if (!member.IsCurrent() || !session.CanChangeTownParty) return Reject(19);
+                if (!member.IsCurrent() || !session.CanChangeTownParty || session.StartedRaid is not null) return Reject(19);
                 var party = Find(member);
                 if (party is null) return Reject(19);
                 var own = party.Members.Single(m => ReferenceEquals(m.Actor.Session, session));
@@ -310,7 +369,10 @@ internal sealed class PartyService
                 Guard: () => Latest(party, member))];
         }
     }
-    public void Detach(GameSession session)
+    public void Detach(GameSession session) => Publish(DetachNotices(session));
+
+    // 生命周期用例在原owner内提交多个聚合，通知必须等owner释放后发布。
+    internal PartyNotice[] DetachNotices(GameSession session)
     {
         List<PartyNotice> notices = [];
         lock (gate)
@@ -326,7 +388,7 @@ internal sealed class PartyService
                 if (removed.Length != 0) notices.AddRange(Remove(party, removed));
             }
         }
-        Publish(notices);
+        return notices.ToArray();
     }
     public void Publish(IEnumerable<PartyNotice> notices)
     {

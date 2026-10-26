@@ -7,12 +7,12 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
-internal enum PartyDungeonNoticeKind { Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure }
+internal enum PartyDungeonNoticeKind { RaidBattleSync, RaidSelection, Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure }
 internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMember Recipient,
     PartyMember[] Members, FormalDungeonReceipt? Scene = null, DungeonSelectionReceipt? Selection = null,
     FormalDungeonDeathResult? Death = null, Character? Previous = null, FormalDungeonPickupResult? Pickup = null,
     ushort Peer = 0, DfoServer.Game.Town.TownTravelReceipt? Travel = null,
-    byte State = 0, byte Option = 0, QuestLifecycleReceipt? QuestScene = null, int LegendDungeon = 0);
+    byte State = 0, byte Option = 0, QuestLifecycleReceipt? QuestScene = null, int LegendDungeon = 0, DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange = null);
 
 // 共享实例拥有全员加载屏障、路线推进与击杀事实；掉落随机、地面物品及拾取归各角色账本。
 // 各Session的Run仅作为同一实例的角色账本投影，不能绕过此owner单独过图或发奖。
@@ -40,6 +40,22 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
     readonly Dictionary<(ushort, DungeonMap, uint, string), int> sceneReports = [];
     PendingScene? pendingScene;
     bool? epicPieceShopAvailable;
+    NpcFavorAppearance? favorNpc;
+    public NpcFavorAppearance? ReadNpcFavorAppearance() => Execute(_ => favorNpc);
+    public bool ConfirmNpcFavorAppearance(GameSession source, GameSession target, NpcFavorDungeonCapture capture,
+        NpcFavorAppearance appearance) => Execute(current =>
+    {
+        if (current.SingleOrDefault(member => member.Slot == Leader)?.Actor.Session != source ||
+            !current.Any(member => ReferenceEquals(member.Actor.Session, target)) ||
+            favorNpc is { } prior && prior != appearance || target.CaptureNpcFavorDungeon() is not { } destination ||
+            destination.Snapshot.Identity.InstanceId != capture.Snapshot.Identity.InstanceId ||
+            destination.Snapshot.CurrentMap != capture.Snapshot.CurrentMap ||
+            !source.CanConfirmNpcFavorAppearance(capture, appearance) || !target.CanConfirmNpcFavorAppearance(destination, appearance)) return false;
+        if (!source.ConfirmNpcFavorAppearance(capture, appearance) || !target.ConfirmNpcFavorAppearance(destination, appearance))
+            throw new InvalidOperationException("共享副本好感NPC已核验的快照发生变化");
+        favorNpc = appearance;
+        return true;
+    });
     internal bool ResolveEpicPieceShop(Func<bool> roll)
     {
         if (!IsExecuting) throw new InvalidOperationException("碎片商人出场必须由当前共享副本owner冻结");
@@ -172,11 +188,23 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
             pendingScene is not null || current.Any(m => m.Actor.Session.Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement))) return [];
         var notices = new List<PartyDungeonNotice>();
         if (pendingDeath is not null) FinishPendingDeath(current, notices);
-        if (deaths.Contains(key)) return notices.ToArray();
+        if (deaths.Contains(key))
+        {
+            AppendRaidBattleNotice(current, notices);
+            return notices.ToArray();
+        }
         pendingDeath = new(key, observe);
         FinishPendingDeath(current, notices);
+        AppendRaidBattleNotice(current, notices);
         return notices.ToArray();
     });
+
+    void AppendRaidBattleNotice(PartyMember[] current, List<PartyDungeonNotice> notices)
+    {
+        if (GameSession.CompleteRaidPartyDungeon(current, Id, out var change))
+            // 仅传播已提交事实；重复死亡可重同步当前view，但绝不再次推进阶段。
+            notices.Add(new(PartyDungeonNoticeKind.RaidBattleSync, current[0], current, current[0].Actor.Session.CurrentFormalDungeonScene(), RaidBattleChange: change));
+    }
 
     void FinishPendingDeath(PartyMember[] current, List<PartyDungeonNotice> notices)
     {

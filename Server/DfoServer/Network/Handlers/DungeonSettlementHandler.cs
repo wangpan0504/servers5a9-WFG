@@ -41,6 +41,12 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var receipt = context.Session.ConfirmFormalDungeonBoss(parsed!.ActorId, parsed.BossKey, parsed.SpawnLevel, parsed.SpawnHp)
             ?? context.Session.ConfirmTutorialCinematic(parsed.ActorId, parsed.BossKey);
         if (receipt is null) return CommandResult.Unhandled;
+        if (context.Session.RaidCombatView() is not null)
+        {
+            if (context.Session.CompleteRaidCombatDungeon(receipt) is not null) context.Session.PublishRaidCombat();
+            await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(parsed.BossKey), "raid_boss_confirmed");
+            return CommandResult.Handled;
+        }
         await DungeonSettlementProjection.EnableAsync(context, parsed.BossKey);
         return CommandResult.Handled;
     }
@@ -293,10 +299,24 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             var retry = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items,pieces);
             if (retry is null)
             {
-                if (!current.Entry.IsCosmo) return CommandResult.Unhandled;
-                log.Write("formal_cosmo_retry_rejected", new { Connection = context.Id, current.Snapshot.Identity,
+                if (!current.Entry.IsCosmo && !current.Entry.IsInfernoParty) return CommandResult.Unhandled;
+                if (current.Entry.IsCosmo)
+                {
+                    log.Write("formal_cosmo_retry_rejected", new { Connection = context.Id, current.Snapshot.Identity,
+                        Reason = context.Session.LastFormalDungeonRejection });
+                    await DungeonSettlementProjection.RefreshCosmoRetryAsync(context);
+                    return CommandResult.Handled;
+                }
+                // 时空裂缝：票或疲劳不够时不能像密门深渊那样不回包，否则结算页停在等ACK、后面的选图和回城也不再发送。
+                // 按强袭同一做法回ACK option 2 并回城，结算事实已提交，不退还也不重扣。
+                log.Write("formal_inferno_retry_rejected", new { Connection = context.Id, current.Snapshot.Identity,
                     Reason = context.Session.LastFormalDungeonRejection });
-                await DungeonSettlementProjection.RefreshCosmoRetryAsync(context);
+                var infernoReturn = context.Session.ReturnFromFormalDungeon();
+                if (infernoReturn is null) return CommandResult.Unhandled;
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, 2), "formal_result_inferno_retry_return",
+                    () => context.Session.CanPublishTravel(infernoReturn));
+                await town.ReturnFromFormalDungeonAsync(context, infernoReturn, "formal_result_town");
+                log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "inferno-retry", infernoReturn.Character.Id, infernoReturn.Character.Position });
                 return CommandResult.Handled;
             }
             bool RetryGuard() => context.Session.CanPublishDungeonSettlement(retry);

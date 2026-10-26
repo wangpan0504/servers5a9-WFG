@@ -5,12 +5,13 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Raids;
 
-internal sealed record AntonRaidDungeonResource(int Id, string? FormalPath, string? TutorialPath,
+internal sealed record RaidDungeonResource(int Id, string? FormalPath, string? TutorialPath,
     bool FormalFileExists, bool TutorialFileExists, string? ReferencePath, ImmutableArray<int> MapIds);
-internal sealed record AntonRaidResources(AntonRaidScript Script, ImmutableArray<AntonRaidDungeonResource> Dungeons,
+internal sealed record RaidResources(RaidScript Script, ImmutableArray<RaidDungeonResource> Dungeons,
     ImmutableArray<int> MissingFormalDungeons, ImmutableArray<int> MissingFormalMaps, ImmutableArray<int> MissingItems,
-    ImmutableArray<AntonRaidIssue> Issues)
+    ImmutableArray<RaidIssue> Issues)
 {
+    public RaidDungeonCatalog? EntryCatalog { get; init; }
     public bool ResourcesReady => Issues.IsEmpty && MissingFormalDungeons.IsEmpty && MissingFormalMaps.IsEmpty && MissingItems.IsEmpty;
     // 即使资源完整，计费、候战室迁移及阶段权威输入仍未闭合，不能把此结果当作开战许可。
     public string StartBlocker => !Issues.IsEmpty ? "formal-raid-definition-unsupported" :
@@ -19,26 +20,29 @@ internal sealed record AntonRaidResources(AntonRaidScript Script, ImmutableArray
         !MissingItems.IsEmpty ? "formal-raid-item-resource-missing" : "formal-raid-flow-unavailable";
 }
 
-internal static class AntonRaidResourceLoader
+internal static class RaidResourceLoader
 {
     internal const string TutorialListPath = "dungeon/tutorial/dungeon.lst";
 
-    public static AntonRaidResources Load(PvfArchive pvf, RaidDefinition raid, DungeonCatalog dungeons, ItemCatalog items)
+    public static RaidResources Load(PvfArchive pvf, RaidDefinition raid, DungeonCatalog dungeons, ItemCatalog items)
     {
-        var script = AntonRaidScriptParser.Parse(raid.Path, pvf.ReadTokens(raid.Path),
-            pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString);
+        var script = RaidScriptParser.Parse(raid.Path, pvf.ReadTokens(raid.Path),
+            pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString,
+            raid.Type == 1 ? RaidScriptKind.Luke : RaidScriptKind.Anton);
         IReadOnlyDictionary<int, string> tutorial = ImmutableDictionary<int, string>.Empty;
-        List<AntonRaidIssue> issues = [];
+        List<RaidIssue> issues = [];
         try
         {
-            if (pvf.Contains(TutorialListPath))
+            // 卢克只核对正式目录，不能因安徒恩备用表缺失而拒绝其资源。
+            if (raid.Type == 0 && pvf.Contains(TutorialListPath))
                 tutorial = DungeonCatalog.ParseDirectory(pvf.ReadTokens(TutorialListPath), pvf.ResolveString, "dungeon");
-            else issues.Add(new("tutorial-list-missing", TutorialListPath, 0, "candidate list unavailable"));
+            else if (raid.Type == 0) issues.Add(new("tutorial-list-missing", TutorialListPath, 0, "candidate list unavailable"));
         }
         catch (InvalidDataException error) { issues.Add(new("tutorial-list-invalid", TutorialListPath, 0, error.Message)); }
         var result = Check(script, tutorial, dungeons.DungeonPath, dungeons.MapPath, pvf.Contains,
             pvf.ReadTokens, pvf.ResolveString, ItemExists);
-        return result with { Issues = result.Issues.AddRange(issues) };
+        result = result with { Issues = result.Issues.AddRange(issues) };
+        return raid.Type is 0 or 1 ? result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, dungeons, raid.Type) } : result;
 
         bool ItemExists(int id)
         {
@@ -49,12 +53,12 @@ internal static class AntonRaidResourceLoader
     }
 
     // 所有查询在装配阶段完成；回调只借用共享目录，不合并或补写正式索引。
-    internal static AntonRaidResources Check(AntonRaidScript script, IReadOnlyDictionary<int, string> tutorial,
+    internal static RaidResources Check(RaidScript script, IReadOnlyDictionary<int, string> tutorial,
         Func<int, string?> formalDungeon, Func<int, string?> formalMap, Func<string, bool> exists,
         Func<string, IReadOnlyList<PvfToken>> read, Func<int, string> resolve, Func<int, bool> itemExists)
     {
-        List<AntonRaidIssue> issues = [.. script.Issues];
-        List<AntonRaidDungeonResource> resources = [];
+        List<RaidIssue> issues = [.. script.Issues];
+        List<RaidDungeonResource> resources = [];
         List<int> missingDungeons = [];
         var missingMaps = new SortedSet<int>();
         foreach (int id in script.Phases.SelectMany(p => p.Dungeons).Select(d => d.Id).Distinct())
@@ -80,6 +84,13 @@ internal static class AntonRaidResourceLoader
             }
             resources.Add(new(id, formal, candidate, formalExists, candidateExists, source, mapIds));
         }
+        foreach (int mapId in script.Phases.SelectMany(p => p.Rules).SelectMany(r => r.Trigger.Concat(r.Behavior))
+            .Select(c => c.MapId).OfType<int>().Distinct())
+        {
+            string? path = formalMap(mapId);
+            if (path is null) missingMaps.Add(mapId);
+            else if (!exists(path)) issues.Add(new("formal-map-file-missing", path, 0, mapId.ToString()));
+        }
         var itemIds = script.Phases.SelectMany(p => p.Rewards).Select(r => r.ItemId)
             .Concat(new[] { script.EntryCost?.ItemId, script.RetryItem?.ItemId }.OfType<int>()).Distinct();
         return new(script, resources.ToImmutableArray(), missingDungeons.ToImmutableArray(), missingMaps.ToImmutableArray(),
@@ -87,13 +98,13 @@ internal static class AntonRaidResourceLoader
     }
 
     internal static ImmutableArray<int> MapReferences(string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve,
-        List<AntonRaidIssue> issues)
+        List<RaidIssue> issues)
     {
         var result = ImmutableArray.CreateBuilder<int>();
         int blocks = 0;
         for (int i = 0; i < tokens.Count; i++)
         {
-            if (tokens[i].Type != 3 || AntonRaidScriptParser.Tag(resolve(tokens[i].Value)) != "[map specification]") continue;
+            if (tokens[i].Type != 3 || RaidScriptParser.Tag(resolve(tokens[i].Value)) != "[map specification]") continue;
             int start = i++;
             int countBefore = result.Count;
             blocks++;
@@ -108,7 +119,7 @@ internal static class AntonRaidResourceLoader
                 i += 4;
             }
             if (result.Count == countBefore) issues.Add(new("map-reference-block-empty", path, start, "[map specification]"));
-            if (i >= tokens.Count || tokens[i].Type != 3 || AntonRaidScriptParser.Tag(resolve(tokens[i].Value)) != "[/map specification]")
+            if (i >= tokens.Count || tokens[i].Type != 3 || RaidScriptParser.Tag(resolve(tokens[i].Value)) != "[/map specification]")
                 issues.Add(new("map-reference-block-incomplete", path, start, "[/map specification]"));
         }
         if (blocks == 0 || result.Count == 0) issues.Add(new("map-references-missing", path, 0, "[map specification]"));

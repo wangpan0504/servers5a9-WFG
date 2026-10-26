@@ -27,7 +27,7 @@ internal static class UpgradeChronicleServiceTests
         {
             [Blueprint] = new(Blueprint, ItemKind.Consumable, 0, 95, 0, 0, 10, 4, 95, "[trade]", 255, 0, "设计图"),
             [Target] = new(Target, ItemKind.Equipment, 14, 95, 0, 0, 10, 6, 95, "[trade]", 255, 0, "传说上衣"),
-            [Output] = new(Output, ItemKind.Equipment, 14, 95, 0, 0, 10, 4, 95, "[trade]", 255, 0, "史诗上衣"),
+            [Output] = new(Output, ItemKind.Equipment, 14, 95, 18, 0, 10, 4, 95, "[trade]", 255, 0, "史诗上衣"),
             [Cube] = new(Cube, ItemKind.Material, 0, 1, 0, 999, 0, 3, 1, "[trade]", 255, 0, "晶块"),
             [Cloth] = new(Cloth, ItemKind.Material, 0, 1, 0, 999, 0, 3, 1, "[trade]", 255, 0, "布片"),
             [Other] = new(Other, ItemKind.Equipment, 14, 95, 0, 0, 10, 6, 95, "[trade]", 255, 0, "别的传说")
@@ -36,12 +36,14 @@ internal static class UpgradeChronicleServiceTests
             [new UpgradeChronicleRecipe(0, [Target], [new ItemMaterialCost(Cube, 100), new ItemMaterialCost(Cloth, 20)], Output, 1)])]);
         var service = new InventoryUpgradeChronicleService(recipes, catalog, new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"));
 
-        Character Fixture(int cubes = 250, int cloth = 60, byte targetLock = 0, int targetItemId = Target)
+        Character Fixture(int cubes = 250, int cloth = 60, byte targetLock = 0, int targetItemId = Target,
+            ushort durability = 0)
         {
             var blueprint = new InventoryItem(11, BlueprintSlot, new(Blueprint, ItemKind.Consumable, 1));
             var target = new InventoryItem(12, TargetSlot, new(targetItemId, ItemKind.Equipment, 1)
             {
-                Attr = 7, EnchantCardId = 900, EmblemSocketCount = 1, Emblem1 = 42, Random0 = new(1, 2, 3), EquipmentLockId = targetLock
+                Attr = 7, EnchantCardId = 900, EmblemSocketCount = 1, Emblem1 = 42, Random0 = new(1, 2, 3), EquipmentLockId = targetLock,
+                Durability = durability
             });
             var cube = new InventoryItem(13, CubeSlot, new(Cube, ItemKind.Material, cubes));
             var clothItem = new InventoryItem(14, ClothSlot, new(Cloth, ItemKind.Material, cloth));
@@ -62,6 +64,13 @@ internal static class UpgradeChronicleServiceTests
             after.Items.Single(item => item.Uid == 14).Core.Count == 40, "只按配方数量扣材料");
         That(before.Items.Length == 4 && before.Find(TargetSlot)!.Core.ItemId == Target &&
             before.Find(BlueprintSlot) is not null, "规划不修改原快照");
+        // 产物耐久上限(18)低于原实例(40)时必须钳制：超上限实例会被客户端判为未修理，挡住后续进化。
+        var clamped = service.Upgrade(Fixture(durability: 40), BlueprintSlot, Blueprint, TargetSlot, Target);
+        That(clamped.Accepted && clamped.Plan!.After.Items.Single(item => item.Uid == 12).Core.Durability == 18,
+            "产物耐久上限低于原耐久时按新上限钳制");
+        var kept = service.Upgrade(Fixture(durability: 10), BlueprintSlot, Blueprint, TargetSlot, Target);
+        That(kept.Accepted && kept.Plan!.After.Items.Single(item => item.Uid == 12).Core.Durability == 10,
+            "未超出新上限的耐久原样保留，不借升级补满");
 
         That(!service.Upgrade(Fixture(cubes: 99), BlueprintSlot, Blueprint, TargetSlot, Target).Accepted, "材料不足整单拒绝");
         That(!service.Upgrade(Fixture(cloth: 19), BlueprintSlot, Blueprint, TargetSlot, Target).Accepted, "第二种材料不足同样拒绝");

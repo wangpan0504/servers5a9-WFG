@@ -184,6 +184,9 @@ internal sealed partial class SinglePlayerDungeonRun
     internal bool IsLastLivingHellWaveMember(ushort key)
     {
         var waves = current.Plan.Monsters.Where(monster => monster.HellWave is not null).ToArray();
+        // 时空裂缝没有柱子波次：奖励骰只绑在终点 Boss 这一只身上，不做波次存活比较。
+        if (waves.Length == 0)
+            return current.Plan.Monsters.Any(monster => monster.ObjectKey == key && monster.HellWave is null && monster.HellRewardRolls > 0);
         var target = waves.SingleOrDefault(monster => monster.ObjectKey == key);
         if (target?.HellWave is not { } wave || waves.Max(monster => monster.HellWave!.Order) != wave.Order) return false;
         return waves.Where(monster => monster.HellWave!.Order == wave.Order).All(monster =>

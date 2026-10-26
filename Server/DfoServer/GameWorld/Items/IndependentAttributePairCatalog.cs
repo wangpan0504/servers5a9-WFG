@@ -83,9 +83,18 @@ internal sealed class IndependentAttributePairCatalog
 
     public static IndependentAttributePairCatalog Load(string path, ItemCatalog items, BoosterCatalog boosters,
         LimitCubeCatalog cubes, EnchantmentCatalog enchantments, EpicPieceCatalog pieces,
-        PremiumContractCatalog contracts, Func<int, bool> isCurrencyReward)
+        PremiumContractCatalog contracts, Func<int, bool> isCurrencyReward, bool useBundledDefault = false)
     {
         try { return Parse(File.ReadAllText(path), items, boosters, cubes, enchantments, pieces, contracts, isCurrencyReward); }
+        catch (Exception error) when (useBundledDefault && error is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // 单文件分发不携带Resources目录；仅外部文件缺失时使用同版本内嵌规则，坏配置仍拒绝。
+            using var stream = typeof(IndependentAttributePairCatalog).Assembly
+                .GetManifestResourceStream("DfoServer.Resources.independent-attribute-pairs.json");
+            if (stream is null) return Unavailable("bundled_configuration_missing");
+            using var reader = new StreamReader(stream);
+            return Parse(reader.ReadToEnd(), items, boosters, cubes, enchantments, pieces, contracts, isCurrencyReward);
+        }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         { return Unavailable("configuration_unreadable"); }
     }

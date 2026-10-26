@@ -9,7 +9,7 @@ namespace DfoServer.GameWorld.Raids;
 // 人数上限与开打最低人数只取脚本 [RAID MEMBER MAX]/[RAID START MINIMUM MEMBER]（超时空之战为 [FIENDWAR ...]），缺任一项的类型不可创建。
 internal sealed record RaidDefinition(byte Type, string Path, int MemberMax, int StartMinimum, int PhaseMax)
 {
-    public AntonRaidResources? Anton { get; init; }
+    public RaidResources? Resources { get; init; }
 }
 
 internal sealed class RaidCatalog(ImmutableDictionary<byte, RaidDefinition> definitions)
@@ -20,10 +20,13 @@ internal sealed class RaidCatalog(ImmutableDictionary<byte, RaidDefinition> defi
 
     public RaidDefinition? Find(byte type) => Definitions.GetValueOrDefault(type);
 
-    public RaidCatalog PrepareAnton(PvfArchive pvf, Dungeons.DungeonCatalog dungeons, Items.ItemCatalog items)
+    public RaidCatalog PrepareResources(PvfArchive pvf, Dungeons.DungeonCatalog dungeons, Items.ItemCatalog items)
     {
-        if (Find(0) is not { } anton) return this;
-        return new(Definitions.SetItem(0, anton with { Anton = AntonRaidResourceLoader.Load(pvf, anton, dungeons, items) }));
+        var prepared = Definitions;
+        foreach (byte type in new byte[] { 0, 1 })
+            if (Find(type) is { } raid)
+                prepared = prepared.SetItem(type, raid with { Resources = RaidResourceLoader.Load(pvf, raid, dungeons, items) });
+        return new(prepared);
     }
 
     public static RaidCatalog Load(PvfArchive pvf)

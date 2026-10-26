@@ -43,7 +43,12 @@ internal static class RaidCreateFlowTests
 
         // 多人聚合保留key/槽位及精确Session清理；重复创建不再替换已有成员。
         RaidMemberTests.RunCore();
+        AntonRaidStartTests.RunCore();
+        RaidPreparationTests.RunCore();
+        LukeRaidStartTests.RunCoreAsync().GetAwaiter().GetResult();
         AntonRaidResourceTests.RunCore();
+        AntonRaidBattleTests.RunCore();
+        LukeRaidResourceTests.RunCore();
 
         var tokens = new List<PvfToken>();
         var strings = new Dictionary<int, string>();
@@ -71,6 +76,7 @@ internal static class RaidCreateFlowTests
         That(catalog.Find(3) is { MemberMax: 12, StartMinimum: 1, PhaseMax: 2 }, "普雷 12 人");
         That(catalog.Find(6) is null, "类型 6（魔界大战频道 0x36 默认值）无脚本");
         AntonRaidResourceTests.RunResources(pvf, catalog, items);
+        LukeRaidResourceTests.RunResources(pvf, catalog, items);
         Console.WriteLine($"PASS {Count - before} 团本 raid.lst 人数上限断言（真实 PVF）");
     }
 }

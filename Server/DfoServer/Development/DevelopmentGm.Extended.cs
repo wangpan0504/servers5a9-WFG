@@ -491,13 +491,13 @@ internal static partial class DevelopmentGm
                     if (closure.Add(current) && catalog.Quests.TryGet(current, out var quest))
                         foreach (int pre in PrerequisiteGroup(catalog, quest, character.Job))
                             if (pre is >= 1 and <= 29999 && catalog.Quests.TryGet(pre, out _)) queue.Enqueue(pre);
-                return CompleteQuests(repository, owners, live, request, [.. closure], character.CompletedQuests);
+                return CompleteQuests(repository, owners, live, request, [.. closure], character.CompletedQuests, catalog);
             }
             case DevelopmentAction.QuestBatch:
             {
                 var ids = args[0].Split(',').Select(text => (int)Number(text, 29999)).ToImmutableArray();
                 var before = Target(live, owners, repository, request, false, (_, value) => value.CompletedQuests);
-                return CompleteQuests(repository, owners, live, request, ids, before);
+                return CompleteQuests(repository, owners, live, request, ids, before, catalog);
             }
             default:
                 throw new InvalidDataException(DevelopmentRequest.Usage);
@@ -994,6 +994,8 @@ internal static partial class DevelopmentGm
         "title" => "title",
         _ => "other"
     };
+    // 每日与 [normaly repeat] 完成后会挡住再接；全部完成不能把它们写成 daily_period=0 的永久完成。
+    internal static bool CyclicQuestGrade(string? grade) => QuestCategory(grade) is "daily" or "repeat";
 
     static string SearchQuests(DevelopmentCatalog catalog, Character character, ImmutableArray<string> args)
     {
@@ -1029,8 +1031,8 @@ internal static partial class DevelopmentGm
         return Ok(new
         {
             total = rows.Length, matched = matched.Length, page, size, pages, categories = byCategory, statusCounts,
-            // 当前筛选范围内可由任务写入的编号（不含成就/称号），供前端“全选当前筛选/全部完成”跨页使用。
-            ids = rows.Where(quest => QuestCategory(quest.Grade) is not ("achievement" or "title")).Select(quest => quest.Id).Take(5000),
+            // 当前筛选范围内可由任务写入的编号（不含成就/称号/每日/重复），供前端“全选当前筛选/全部完成”跨页使用。
+            ids = rows.Where(quest => QuestCategory(quest.Grade) is not ("achievement" or "title" or "daily" or "repeat")).Select(quest => quest.Id).Take(5000),
             quests = rows.Skip((page - 1) * size).Take(size).Select(quest => new
             {
                 id = quest.Id, name = catalog.DisplayQuestName(quest.Id), grade = quest.Grade?.Trim('[', ']') ?? "",
@@ -1120,11 +1122,16 @@ internal static partial class DevelopmentGm
     }
 
     static string CompleteQuests(ICharacterRepository repository, AccountOwners owners, GameSession? live, DevelopmentRequest request,
-        ImmutableArray<int> ids, int[] before)
+        ImmutableArray<int> ids, int[] before, DevelopmentCatalog catalog)
     {
-        var edit = new CharacterProgressEdit(CharacterProgressField.QuestAdd, request.Account, request.Name, ids[0], 0) { Quests = ids };
+        var kept = ids.Where(id => !catalog.Quests.TryGet(id, out var quest) || !CyclicQuestGrade(quest.Grade)).ToImmutableArray();
+        int skipped = ids.Length - kept.Length;
+        if (kept.Length == 0)
+            throw new InvalidDataException("这批任务都是每日或重复任务，批量完成不会永久标记它们");
+        var edit = new CharacterProgressEdit(CharacterProgressField.QuestAdd, request.Account, request.Name, kept[0], 0) { Quests = kept };
         edit.Validate();
         var updated = live is not null ? live.UpdateProgress(edit) : WithLease(owners, request.Account, lease => repository.UpdateProgress(lease, edit));
-        return Ok(new { name = updated.Name, rev = updated.Revision, chain = ids.Length, added = ids.Except(before).Count(), completed = updated.CompletedQuests.Length });
+        return Ok(new { name = updated.Name, rev = updated.Revision, chain = kept.Length, added = kept.Except(before).Count(),
+            completed = updated.CompletedQuests.Length, skipped });
     }
 }

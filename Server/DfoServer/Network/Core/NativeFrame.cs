@@ -4,7 +4,10 @@ using System.IO.Compression;
 namespace DfoServer.Network;
 
 // Native 独立连接的外层；两个关联字段保持原始数值，不解释成角色或物件编号。
-internal sealed record NativePacket(uint Association, uint Route, byte[] Body, int WireLength);
+internal sealed record NativePacket(uint Association, uint Route, byte[] Body, int WireLength)
+{
+    public ushort Kind { get; init; } = 1;
+}
 
 internal static class NativeFrame
 {
@@ -14,7 +17,7 @@ internal static class NativeFrame
     public static NativePacket Parse(ReadOnlySpan<byte> frame)
     {
         if (frame.Length < HeaderLength || frame.Length > ushort.MaxValue ||
-            BinaryPrimitives.ReadUInt16LittleEndian(frame) != 1 ||
+            BinaryPrimitives.ReadUInt16LittleEndian(frame) > 1 ||
             BinaryPrimitives.ReadUInt16LittleEndian(frame[2..]) != frame.Length || frame[12] > 1)
             throw new InvalidDataException("Invalid native frame bounds");
         byte[] body;
@@ -44,7 +47,20 @@ internal static class NativeFrame
                 throw new InvalidDataException("Invalid native zlib checksum");
         }
         return new(BinaryPrimitives.ReadUInt32LittleEndian(frame[4..]),
-            BinaryPrimitives.ReadUInt32LittleEndian(frame[8..]), body, frame.Length);
+            BinaryPrimitives.ReadUInt32LittleEndian(frame[8..]), body, frame.Length) { Kind = BinaryPrimitives.ReadUInt16LittleEndian(frame) };
+    }
+
+    public static byte[] Build(uint source, uint destination, ReadOnlySpan<byte> body)
+    {
+        if (source == 0 || destination == 0 || body.Length > ushort.MaxValue - HeaderLength)
+            throw new InvalidDataException("Native reply bounds");
+        var frame = new byte[HeaderLength + body.Length];
+        BinaryPrimitives.WriteUInt16LittleEndian(frame, 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2), checked((ushort)frame.Length));
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(4), source);
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(8), destination);
+        body.CopyTo(frame.AsSpan(HeaderLength));
+        return frame;
     }
 
     public static async Task<NativePacket> ReadAsync(Stream stream, CancellationToken stop)
@@ -54,7 +70,7 @@ internal static class NativeFrame
         byte[] head = new byte[HeaderLength];
         await stream.ReadExactlyAsync(head, timeout.Token);
         int length = BinaryPrimitives.ReadUInt16LittleEndian(head.AsSpan(2));
-        if (length < HeaderLength || BinaryPrimitives.ReadUInt16LittleEndian(head) != 1 || head[12] > 1)
+        if (length < HeaderLength || BinaryPrimitives.ReadUInt16LittleEndian(head) > 1 || head[12] > 1)
             throw new InvalidDataException("Invalid native frame bounds");
         byte[] frame = new byte[length];
         head.CopyTo(frame, 0);

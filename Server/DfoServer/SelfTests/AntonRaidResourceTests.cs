@@ -37,14 +37,14 @@ internal static class AntonRaidResourceTests
             "[WAITING ROOM]", 19, 2, "[ENTRY COST]", 100, 1, "[/ENTRY COST]", "[RETRY ITEM]", 100, 1,
             "[HATCHERY INFO]", 4, 3, 210, 210, 218, 218, "[/HATCHERY INFO]", "[EXCEPT CHEAT DUNGEON]", 218, "[/EXCEPT CHEAT DUNGEON]",
             .. Phase(210, "[HP A]"), .. Phase(218, "[HP B]")];
-        AntonRaidScript Parse(object[] values, object[]? names = null) =>
-            AntonRaidScriptParser.Parse("Etc/Raid/Anton.etc", Tokens(values), Tokens(names ?? symbols), Resolve);
+        RaidScript Parse(object[] values, object[]? names = null) =>
+            RaidScriptParser.Parse("Etc/Raid/Anton.etc", Tokens(values), Tokens(names ?? symbols), Resolve);
         var script = Parse(input);
-        That(script.Issues.IsEmpty && script.WaitingRoom == new AntonRaidWaitingRoom(19, 2) && script.EntryCost == new AntonRaidCost(100, 1),
+        That(script.Issues.IsEmpty && script.WaitingRoom == new RaidWaitingRoom(19, 2) && script.EntryCost == new RaidCost(100, 1),
             "最小两阶段只读定义及候战室/费用声明完整解析");
         That(script.Phases.Select(p => p.Dungeons.Single().Id).SequenceEqual(new[] { 210, 218 }) &&
-            script.Phases[0].Rewards.Single() == new AntonRaidReward("squad_item", -1, 665, 100, 1), "阶段隔离及奖励未知整数原序保留");
-        That(new[] { AntonDungeonState.Open, AntonDungeonState.Close, AntonDungeonState.Hide, AntonDungeonState.Clear }
+            script.Phases[0].Rewards.Single() == new RaidReward("squad_item", -1, 665, 100, 1), "阶段隔离及奖励未知整数原序保留");
+        That(new[] { RaidDungeonState.Open, RaidDungeonState.Close, RaidDungeonState.Hide, RaidDungeonState.Clear }
             .Select(s => (byte)s).SequenceEqual(new byte[] { 0, 1, 2, 3 }), "有证地下城状态0/1/2/3，不借用团状态");
 
         object[] Change(string tag, int offset, object value)
@@ -53,8 +53,8 @@ internal static class AntonRaidResourceTests
             changed[Array.IndexOf(changed, tag) + offset] = value;
             return changed;
         }
-        foreach (var (value, state) in new[] { ("open", AntonDungeonState.Open), ("close", AntonDungeonState.Close),
-            ("hide", AntonDungeonState.Hide), ("clear", AntonDungeonState.Clear) })
+        foreach (var (value, state) in new[] { ("open", RaidDungeonState.Open), ("close", RaidDungeonState.Close),
+            ("hide", RaidDungeonState.Hide), ("clear", RaidDungeonState.Clear) })
             That(Parse(Change("[INIT STATE]", 1, value)).Phases[0].Dungeons[0].InitialState == state, "四种有证状态按字符串解析：" + value);
         int triggerAt = Array.IndexOf(input, "[TRIGGER]"), triggerEnd = Array.IndexOf(input, "[/TRIGGER]");
         int dungeonAt = Array.IndexOf(input, "[DUNGEON INFO]"), dungeonEnd = Array.IndexOf(input, "[/DUNGEON INFO]");
@@ -99,7 +99,7 @@ internal static class AntonRaidResourceTests
             "STATE REWARD额外数值拒绝整行，不忽略未知列或污染下一阶段");
         var repeatedReward = Parse([.. input[..rewardAt], .. input[rewardAt..(rewardAt + 6)], .. input[rewardAt..]]);
         That(repeatedReward.Issues.IsEmpty && repeatedReward.Phases[0].Rewards.SequenceEqual(new[]
-            { new AntonRaidReward("squad_item", -1, 665, 100, 1), new AntonRaidReward("squad_item", -1, 665, 100, 1) }) &&
+            { new RaidReward("squad_item", -1, 665, 100, 1), new RaidReward("squad_item", -1, 665, 100, 1) }) &&
             repeatedReward.Phases[1].Rewards.SequenceEqual(script.Phases[1].Rewards),
             "重复STATE REWARD声明仍按阶段保序保留，不擅自去重或推断发放次数");
 
@@ -108,18 +108,18 @@ internal static class AntonRaidResourceTests
         Reject<InvalidDataException>(() => DungeonCatalog.ParseDirectory(Tokens([210, "a.dgn", 210, "b.dgn"]), Resolve, "dungeon"), "目录冲突键拒绝");
         Reject<InvalidDataException>(() => DungeonCatalog.ParseDirectory(Tokens([210, "a.dgn", 210, "A.DGN"]), Resolve, "dungeon"), "相同重复键也不覆盖");
         PvfToken[] mapTokens = Tokens(["[map specification]", "map", 0, 0, 32200, "boss", 1, 0, 32202, "[/map specification]"]);
-        var resources = AntonRaidResourceLoader.Check(script, directory, _ => null, _ => null, _ => true, _ => mapTokens, Resolve, _ => true);
+        var resources = RaidResourceLoader.Check(script, directory, _ => null, _ => null, _ => true, _ => mapTokens, Resolve, _ => true);
         That(resources.MissingFormalDungeons.SequenceEqual(new[] { 210, 218 }) && resources.MissingFormalMaps.SequenceEqual(new[] { 32200, 32202 }) &&
             resources.Dungeons.All(d => d.TutorialFileExists && d.FormalPath is null && d.ReferencePath == d.TutorialPath) &&
             resources.StartBlocker == "formal-raid-dungeon-index-missing", "备用脚本及显式MAP引用存在仍不充当主表登记");
-        var complete = AntonRaidResourceLoader.Check(script, directory, id => directory[id], _ => "map/test.map", _ => true, _ => mapTokens, Resolve, _ => true);
+        var complete = RaidResourceLoader.Check(script, directory, id => directory[id], _ => "map/test.map", _ => true, _ => mapTokens, Resolve, _ => true);
         That(complete.ResourcesReady && complete.StartBlocker == "formal-raid-flow-unavailable", "资源齐全也不能授权开战成功");
-        var missing = AntonRaidResourceLoader.Check(script, directory, _ => null, _ => null, _ => false, _ => throw new Exception("不应读取缺文件"), Resolve, _ => false);
+        var missing = RaidResourceLoader.Check(script, directory, _ => null, _ => null, _ => false, _ => throw new Exception("不应读取缺文件"), Resolve, _ => false);
         That(missing.Issues.Any(i => i.Code == "tutorial-dungeon-file-missing") && missing.MissingItems.SequenceEqual(new[] { 100 }), "缺文件与费用/奖励物品缺项有独立诊断");
-        List<AntonRaidIssue> mapIssues = [];
-        AntonRaidResourceLoader.MapReferences("dungeon/a.dgn", Tokens(["[map specification]", "random", 0, 0, 32200, "[/map specification]"]), Resolve, mapIssues);
+        List<RaidIssue> mapIssues = [];
+        RaidResourceLoader.MapReferences("dungeon/a.dgn", Tokens(["[map specification]", "random", 0, 0, 32200, "[/map specification]"]), Resolve, mapIssues);
         That(mapIssues.Any(i => i.Code == "unsupported-map-reference"), "未知地图语法不从数字或文件名猜测登记");
-        var definition = new RaidDefinition(0, script.Path, 20, 10, 2) { Anton = resources };
+        var definition = new RaidDefinition(0, script.Path, 20, 10, 2) { Resources = resources };
         That(RaidStartCheck.Evaluate(false, 9, definition) is { Error: 8, Reason: "not-leader" } &&
             RaidStartCheck.Evaluate(true, 9, definition) is { Error: 22, Reason: "too-few-members" } &&
             RaidStartCheck.Evaluate(true, 10, definition) is { Error: 19, Reason: "formal-raid-dungeon-index-missing" }, "8→22→19优先级不被资源检查覆盖");
@@ -130,29 +130,30 @@ internal static class AntonRaidResourceTests
     {
         int before = Count;
         var dungeons = SelfTestCatalogs.Dungeons(pvf);
-        var definition = catalog.PrepareAnton(pvf, dungeons, items).Find(0)!;
-        var resources = definition.Anton!;
+        var definition = catalog.PrepareResources(pvf, dungeons, items).Find(0)!;
+        var resources = definition.Resources!;
         var script = resources.Script;
+        AntonRaidBattleTests.RunResources(script);
         That(resources.Issues.IsEmpty, "真实安徒恩资源语法完整支持：" + string.Join(';', resources.Issues.Select(i => $"{i.Code}@{i.TokenIndex}:{i.Detail}")));
-        That(script.WaitingRoom == new AntonRaidWaitingRoom(19, 2) && script.EntryCost == new AntonRaidCost(10096296, 1) &&
+        That(script.WaitingRoom == new RaidWaitingRoom(19, 2) && script.EntryCost == new RaidCost(10096296, 1) &&
             script.RetryItem == script.EntryCost, "真实候战室与费用/重试声明，不表示已扣票");
         That(script.Phases.Length == 2 && script.Symbols.Count == 41 && script.Phases.Select(p => p.Dungeons.Length).SequenceEqual(new[] { 7, 7 }) &&
             script.Phases.Select(p => p.Rules.Length).SequenceEqual(new[] { 28, 23 }), "真实两阶段14地下城51规则及41符号完整保序");
         That(script.Phases.Select(p => p.Rewards.Length).SequenceEqual(new[] { 6, 8 }) &&
-            script.Phases[0].Rewards[0] == new AntonRaidReward("party_card", -1, 100, 10304474, 0) &&
-            script.Phases[1].Rewards[2] == new AntonRaidReward("squad_item", -1, 665, 10304480, 0) && resources.MissingItems.IsEmpty,
+            script.Phases[0].Rewards[0] == new RaidReward("party_card", -1, 100, 10304474, 0) &&
+            script.Phases[1].Rewards[2] == new RaidReward("squad_item", -1, 665, 10304480, 0) && resources.MissingItems.IsEmpty,
             "真实14奖励声明的kind和整数原序及物品引用，不解释抽样和发放");
         That(resources.MissingFormalDungeons.SequenceEqual(new[] { 210, 211, 212, 213, 214, 215, 216, 218, 219, 220, 221, 222, 223, 224 }) &&
             resources.MissingFormalMaps.Length == 72 && resources.Dungeons.All(d => d.TutorialFileExists && !d.FormalFileExists) &&
             resources.Dungeons[0].MapIds.SequenceEqual(new[] { 32200, 32202, 32201, 32204 }) && !dungeons.ContainsDungeon(210),
             "真实主表缺14DGN/72MAP、备用脚本存在，检查不污染正式目录");
-        var legs = script.Phases[0].Rules.Where(r => r.Trigger.Count(c => c.State == AntonDungeonState.Clear && c.DungeonId is 213 or 215) == 2).ToArray();
+        var legs = script.Phases[0].Rules.Where(r => r.Trigger.Count(c => c.State == RaidDungeonState.Clear && c.DungeonId is 213 or 215) == 2).ToArray();
         That(legs.Length == 2 && legs.All(r => r.Behavior.Any(c => c.Symbol == "[1phase success]" && c.RawIntegers.SequenceEqual(new[] { 1 }))) &&
             script.Phases[0].Rules.Any(r => r.Trigger.Any(c => c.Symbol == "[1phase success]") && r.Behavior.Any(c => c.Tag == "[clear phase]")),
             "双腿clear经成功符号结束阶段的声明，不声称已运行");
-        That(script.Phases[1].Rules.Any(r => r.Trigger.Any(c => c.DungeonId == 220 && c.State == AntonDungeonState.Clear) &&
+        That(script.Phases[1].Rules.Any(r => r.Trigger.Any(c => c.DungeonId == 220 && c.State == RaidDungeonState.Clear) &&
             r.Behavior.Any(c => c.Tag == "[clear phase]")) &&
-            script.Phases[1].Rules.Any(r => r.Behavior.Any(c => c.Timer == new AntonRaidTimer(3, 219) && c.RawIntegers.SequenceEqual(new[] { 3, 219, 180 }))),
+            script.Phases[1].Rules.Any(r => r.Behavior.Any(c => c.Timer == new RaidTimer(3, 219) && c.RawIntegers.SequenceEqual(new[] { 3, 219, 180 }))),
             "心脏clear及屏障定时器原始声明，不推断时间单位");
         Console.WriteLine($"PASS {Count - before} 安徒恩真实资源就绪与阶段声明断言");
     }

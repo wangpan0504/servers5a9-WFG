@@ -131,6 +131,7 @@ internal static class SettingsProtocolTests
         BinaryPrimitives.WriteUInt16LittleEndian(game.AsSpan(68 * 2), 100);
         BinaryPrimitives.WriteUInt16LittleEndian(game.AsSpan(13 * 2), 1);
         BinaryPrimitives.WriteUInt16LittleEndian(character.AsSpan(46 * 2), 100);
+        BinaryPrimitives.WriteUInt16LittleEndian(character.AsSpan(48 * 2), 0);
         BinaryPrimitives.WriteUInt16LittleEndian(character.AsSpan(49 * 2), 1);
         string root = Path.Combine(Path.GetTempPath(), "S5A9-settings-session-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -242,20 +243,44 @@ internal static class SettingsProtocolTests
             Bytes(projected.GameOptions.AsSpan(), expectedMain, "角色八项独立，其他所有账号槽不变");
             byte[] expectedCharacter = raw.ToArray();
             BinaryPrimitives.WriteUInt16LittleEndian(expectedCharacter.AsSpan(92), (ushort)(bits * 4 + 5));
+            BinaryPrimitives.WriteUInt16LittleEndian(expectedCharacter.AsSpan(96), 1);
             BinaryPrimitives.WriteUInt16LittleEndian(expectedCharacter.AsSpan(98), (ushort)((bits >> 1) & 1));
-            Bytes(projected.CharacterOptions.AsSpan(), expectedCharacter, "只修改已确认槽，不改变其余508字节及未知角色槽43/48");
+            Bytes(projected.CharacterOptions.AsSpan(), expectedCharacter, "只协调46/49与未设置光环48，不改变其余506字节及未知槽");
             byte expectedFlags = (byte)(4 | ((bits & 1) != 0 ? 2 : 0) | ((bits & 4) == 0 ? 8 : 0) | ((bits & 8) == 0 ? 16 : 0));
             That(ClientSettingsRules.VisibilityFlags(projected.GameOptions) == expectedFlags, "三项外观及无关bits匹配16种开关组合");
             That(account.AsSpan().SequenceEqual(Enumerable.Range(0, 204).Select(index => (byte)index).ToArray()), "回放不就地修改账号存档");
         }
         var missing = ClientSettingsRules.Project(new(default, default));
-        That(missing.GameOptions.IsDefault && missing.CharacterOptions.IsDefault, "不合成未经确认的完整默认通知");
+        That(missing.GameOptions.IsDefault && missing.CharacterOptions.Length == 512 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(missing.CharacterOptions.AsSpan().Slice(96, 2)) == 1 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(missing.CharacterOptions.AsSpan().Slice(86, 2)) == 0 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(missing.CharacterOptions.AsSpan().Slice(92, 2)) == 100 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(missing.CharacterOptions.AsSpan().Slice(98, 2)) == 1,
+            "无存档不合成主区，仅初始化原生角色选项及光环默认显示，保留透明度和插图缺省");
+        byte[] nativeMain = new byte[204];
+        for (int slot = 0; slot < 102; slot++)
+            BinaryPrimitives.WriteUInt16LittleEndian(nativeMain.AsSpan(slot * 2), 0x7fff);
+        var initialized = ClientSettingsRules.Project(new([.. nativeMain], default));
+        Bytes(initialized.GameOptions.AsSpan(), nativeMain, "合成角色选项不破坏已保存主区的完整原生未设置标记");
+        That(BinaryPrimitives.ReadUInt16LittleEndian(initialized.CharacterOptions.AsSpan().Slice(92, 2)) == 100 &&
+            BinaryPrimitives.ReadUInt16LittleEndian(initialized.CharacterOptions.AsSpan().Slice(98, 2)) == 1,
+            "全7FFF主区由客户端初始化，角色选项沿原生100/1而不是32767");
         byte[] legacy = Enumerable.Repeat((byte)255, 512).ToArray();
         BinaryPrimitives.WriteUInt16LittleEndian(legacy.AsSpan(46 * 2), 37);
         BinaryPrimitives.WriteUInt16LittleEndian(legacy.AsSpan(49 * 2), 0);
         var migrated = ClientSettingsRules.Project(new(account.ToImmutableArray(), legacy.ToImmutableArray()));
         That(BinaryPrimitives.ReadUInt16LittleEndian(migrated.GameOptions.AsSpan().Slice(68 * 2, 2)) == 37 &&
             BinaryPrimitives.ReadUInt16LittleEndian(migrated.GameOptions.AsSpan().Slice(13 * 2, 2)) == 0, "旧角色已保存两项不被账号数据覆盖");
+        foreach (ushort aura in new ushort[] { 0, 1, ushort.MaxValue, 2 })
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(legacy.AsSpan(96, 2), aura);
+            var restored = ClientSettingsRules.Project(new(default, [.. legacy]));
+            byte[] expected = legacy.ToArray();
+            BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(96, 2), aura == ushort.MaxValue ? (ushort)1 : aura);
+            Bytes(restored.CharacterOptions.AsSpan(), expected, "光环只补未设置槽48，显式开关及其余510字节保持");
+            That(BinaryPrimitives.ReadUInt16LittleEndian(legacy.AsSpan(96, 2)) == aura && restored.GameOptions.IsDefault,
+                "回放不修改存档输入，也不生成账号主设置");
+        }
     }
 
 }

@@ -237,6 +237,21 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             presence?.Join(context.Owner, context.Sender, c, context.Channel, context.Session.ReadAdventureName());
     }
 
+    internal void QueueRaidDeparture(GameConnectionContext context, Character character, Func<bool> current)
+    {
+        using var publication = context.Sender.QueuePublication(current);
+        presence?.Remove(context.Sender, destinationArea: TownPackets.Position(character, true));
+        // QueuePublication使该有界队列标记不创建需要后台等待的Task。
+        context.Sender.ClearScene(SceneActorClear.Preserve).GetAwaiter().GetResult();
+    }
+
+    internal void QueueRaidArrival(GameConnectionContext context, Character character, Func<bool> current)
+    {
+        context.Sender.Post(0, (ushort)NotiPacketType.USER_AREA, TownPackets.Position(character, true), "raid_waiting_area", current);
+        context.Sender.Post(0, (ushort)NotiPacketType.AREA_USERS, TownPackets.Transition(character), "raid_waiting_transition", current);
+        presence?.Join(context.Owner, context.Sender, character, context.Channel, context.Session.ReadAdventureName());
+    }
+
     public async Task ReturnToSelectionAsync(GameConnectionContext context, Func<bool>? canReturn = null)
     {
         DfoServer.Game.Party.PartySnapshot? departedParty = null;
@@ -316,6 +331,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
 
     public async Task ReturnFromFormalDungeonAsync(GameConnectionContext context, TownTravelReceipt receipt, string action)
     {
+        if (receipt.RaidBattleChange is not null) context.Session.PublishRaidCombat();
         bool CanSend() => context.Session.CanPublishTravel(receipt);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "formal_return_town_state", CanSend);
         await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);

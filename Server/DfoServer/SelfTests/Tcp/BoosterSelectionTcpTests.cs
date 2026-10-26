@@ -263,6 +263,7 @@ internal static class BoosterSelectionTcpTests
             peer.Barrier();
         }
         RunProgressiveCategories(fixture, resources, 2);
+        RunRookieBoxes();
         await fixture.StopAsync();
         That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
         {
@@ -271,7 +272,7 @@ internal static class BoosterSelectionTcpTests
                 data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
                 data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'empty duplicate late rollback'.";
         }) == 1, "新兼容盒断线精确来自所注入的晚SQL故障一次");
-        That(fixture.Query("SELECT gold FROM characters ORDER BY slot") is [[12345L], [12345L], [12345L], [12345L]], "selection does not add a gold or purchase-material fee");
+        That(fixture.Query("SELECT gold FROM characters ORDER BY slot") is [[12345L], [12345L], [12345L], [12345L], [12345L]], "selection does not add a gold or purchase-material fee");
         That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
         {
             using var entry = JsonDocument.Parse(line); var data = entry.RootElement;
@@ -284,6 +285,74 @@ internal static class BoosterSelectionTcpTests
         await RunOrdinaryNativeSelectionsAsync(source, root, resources);
 
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(itemResources.Items.Get(id), count);
+        void RunRookieBoxes()
+        {
+            DfoServer.Game.Characters.Character rookie;
+            using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                rookie = repo.Create(owner, new("RookieBoxes", towns.Room, towns.InitialReturn)
+                {
+                    Job = 0, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                    Inventory = new([new(0, Bag(65), Core(490704509))], Gold: 12345)
+                });
+            var entries = new Dictionary<short, byte[]>();
+            using (var peer = Open(fixture))
+            {
+                peer.Select(rookie.Slot); peer.Barrier();
+                peer.Send(160, Build(w => { w.Write((short)65); w.Write(1); }));
+                ExpectAck(peer, 490704509, 65, [(490704518,1),(490704519,1),(490704520,1),(490704521,1)]);
+                // 父盒源槽被首个子盒复用，投影先清旧模板再写真实四盒。
+                Entry(peer.Expect(0,14).Body,65,-1,0);
+                var delta = peer.Expect(0,14).Body;
+                for (short slot = 65; slot <= 68; slot++) Entry(delta,slot,490704518+slot-65,1);
+                peer.Barrier();
+                int[] armor = [400100084,400150076,400200076,400250082,400050092];
+                string before = Snapshot();
+                SendSelect(peer,66,armor[..4]); peer.Expect(1,160,[0,19,0]); peer.Barrier();
+                That(Snapshot()==before,"新秀防具必须完整回显五件，缺件请求保留全部子盒及资产");
+                fixture.Sql($"CREATE TRIGGER rookie_box_abort BEFORE INSERT ON inventory_audit_log WHEN NEW.character_id={rookie.Id} BEGIN SELECT RAISE(ABORT,'rookie box rollback'); END");
+                SendSelect(peer,66,armor); peer.Closed();
+                That(Snapshot()==before,"新秀防具末段审计失败回滚源、五件奖励、UID及revision，无成功ACK");
+                fixture.Sql("DROP TRIGGER rookie_box_abort");
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select(rookie.Slot); peer.Barrier();
+                foreach (var (slot,id,rewards) in new (short,int,int[])[]
+                {
+                    (65,490704518,[401030066]),
+                    (66,490704519,[400100084,400150076,400200076,400250082,400050092]),
+                    (67,490704520,[400300126,400320131,400310127]),
+                    (68,490704521,[400350143,400340224])
+                })
+                {
+                    long earliest = DateTimeOffset.UtcNow.ToUnixTimeSeconds()+30*86400;
+                    SendSelect(peer,slot,rewards); ExpectAck(peer,id,slot,rewards.Select(reward => (reward,1)).ToArray());
+                    var delta = peer.Expect(0,14).Body; Entry(delta,slot,-1,0);
+                    That(U16(delta,1)==rewards.Length+1,"新秀选择盒一次下发完整选组及清源差量");
+                    foreach (int reward in rewards)
+                    {
+                        int at = Enumerable.Range(0,U16(delta,1)).Select(index => 3+index*123).Single(at => U32(delta,at+2)==reward);
+                        var entry = delta.AsSpan(at,123).ToArray();
+                        That(U32(entry,56)>=earliest && U32(entry,56)<=DateTimeOffset.UtcNow.ToUnixTimeSeconds()+30*86400 &&
+                            U16(entry,11)==itemResources.Items.Get(reward).Durability &&
+                            entry[10]==(id==490704518 ? 10 : 0) && entry[87]==(id==490704518 ? 5 : 0),
+                            "新秀装备完整核心保留30天期限、耐久及武器强化锻造");
+                        entries.Add(checked((short)U16(entry,0)),entry);
+                    }
+                    peer.Barrier(); string before = Snapshot();
+                    SendSelect(peer,slot,rewards); peer.Expect(1,160,[0,19,0]); peer.Barrier();
+                    That(Snapshot()==before,"新秀各盒耗尽重放不额外发奖或写审计");
+                }
+            }
+            using (var peer = Open(fixture))
+            {
+                var full = peer.Select(rookie.Slot)[4].Body;
+                foreach (var entry in entries) Bytes(EquipmentEntry(full,entry.Key,true),entry.Value,"重连逐字节恢复新秀装备完整核心与原期限");
+                peer.Barrier();
+                That(entries.Count==11 && fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_slots WHERE character_id=$p0",rookie.Id) is [[11L,11L]],
+                    "新秀父盒及四个子盒消耗后仅持久化完整十一件独立装备");
+            }
+        }
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters")) +
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT list_type,slot_index,item_uid FROM character_inventory_slots ORDER BY slot_index")) +

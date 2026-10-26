@@ -4,7 +4,7 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryAvatarSocketService(ItemCatalog items, AvatarPackageCatalog avatars)
+internal sealed class InventoryAvatarSocketService(ItemCatalog items, AvatarPackageCatalog avatars, TimeProvider? clock = null)
 {
     internal const ushort Rejection = 4;
 
@@ -17,7 +17,7 @@ internal sealed class InventoryAvatarSocketService(ItemCatalog items, AvatarPack
         try
         {
             return Plan(character, request, items.AvatarSocketOpener(source.Core.ItemId),
-                items.Get(target.Core.ItemId), avatars.GetAvatar(target.Core.ItemId), out rejection);
+                items.Get(target.Core.ItemId), avatars.GetAvatar(target.Core.ItemId), out rejection, clock: clock);
         }
         catch (InvalidDataException)
         {
@@ -28,10 +28,10 @@ internal sealed class InventoryAvatarSocketService(ItemCatalog items, AvatarPack
 
     internal static InventoryResult Plan(Character character, AvatarSocketRequest request,
         AvatarSocketOpenerDefinition? opener, ItemTemplate template, AvatarPackageItemDefinition avatar,
-        out string? rejection, long? utcSeconds = null)
+        out string? rejection, long? utcSeconds = null, TimeProvider? clock = null)
     {
         rejection = "slot-or-instance";
-        long now = utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long now = utcSeconds ?? (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
         var before = character.Inventory;
         var source = before.Find(request.Material);
         var target = before.Find(request.Target);
@@ -75,6 +75,6 @@ internal sealed class InventoryAvatarSocketService(ItemCatalog items, AvatarPack
         long? expiry = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (target.ExpireTime > 0 && (expiry is null || target.ExpireTime < expiry)) expiry = target.ExpireTime;
         rejection = null;
-        return new(true, 0, new(before, after, "avatar_socket_open", new(character, expiry)));
+        return new(true, 0, new(before, after, "avatar_socket_open", new(character, expiry, clock)));
     }
 }

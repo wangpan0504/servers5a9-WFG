@@ -31,7 +31,8 @@ internal static class LevelUpByTableTcpTests
                 resources.Towns.InitialReturn,resources.Learning.Get);
             foreach (var (name,level,id,completed) in new (string,byte,int,int[])[]
                 { ("TableJump",27,LevelUpByTableTests.Segmented,[]),("TablePlain",29,LevelUpByTableTests.Plain,[]),
-                  ("TableRoll",10,LevelUpByTableTests.Segmented,[]),("TableBranch",10,LevelUpByTableTests.Segmented,[900]) })
+                  ("TableRoll",10,LevelUpByTableTests.Segmented,[]),("TableBranch",10,LevelUpByTableTests.Segmented,[900]),
+                  ("RookieCap",17,LevelUpByTableTests.RookieCapsule,[]) })
                 created.Add(repository.Create(owner,candidate with
                 {
                     Name=name,Level=level,CompletedQuests=completed,
@@ -96,6 +97,26 @@ internal static class LevelUpByTableTcpTests
             Verify(created[3],80,1,ReadCompleted(peer));
             peer.Send(1431,answer);peer.Expect(1,1431,[1]);
             That(ReadCompleted(peer).All(packet=>packet.Kind!=1 || packet.Opcode!=515),"重复最终回答只恢复绝对投影，不重复发消费515");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created[4].Slot); peer.Barrier();
+            string before = fixture.Snapshot();
+            peer.Send(515,Jump(0)); peer.Expect(1,515,[0,19,0,65,0,0,193]); peer.Barrier();
+            That(fixture.Snapshot()==before,"新秀胶囊取消转职不消费、不升等级");
+            fixture.Sql($"CREATE TRIGGER rookie_capsule_abort AFTER INSERT ON character_quest_skip_receipts WHEN NEW.character_id={created[4].Id} BEGIN SELECT RAISE(ABORT,'rookie capsule rollback'); END");
+            peer.Send(515,Jump(1)); peer.Closed();
+            That(fixture.Snapshot()==before && fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE character_id=$p0 AND slot_index=65",created[4].Id) is [[1L]],
+                "真实新秀胶囊末段SQL失败仍保留源与全部角色成长，不发成功");
+            fixture.Sql("DROP TRIGGER rookie_capsule_abort");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created[4].Slot); peer.Send(515,Jump(1)); peer.Expect(1,515,[1,65,0,0,193,0,0,0]);
+            Verify(created[4],85,1,ReadCompleted(peer));
+            string before = fixture.Snapshot();
+            peer.Send(515,Jump(0)); peer.Expect(1,515,[0,19,0,65,0,0,193]); peer.Barrier();
+            That(fixture.Snapshot()==before,"新秀胶囊成功后耗尽重放不再次升级");
         }
         await fixture.StopAsync(); await fixture.StartAsync();
         using (var peer = Open(fixture))
