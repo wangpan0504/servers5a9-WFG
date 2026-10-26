@@ -53,7 +53,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         int members = party?.Members.Count(m => m.Actor.IsCurrent) ?? 0;
         var check = party is null ? new RaidStartCheck(RaidPackets.StartUnavailable, "no-raid") :
             RaidStartCheck.Evaluate(party.Leader == actor.Character, members, definition);
-        var resources = definition?.Anton;
+        var resources = definition?.Resources;
         log.Write("raid_start_request", new { Connection = context.Id, Self = actor.Character, Key = party?.Key.ToString("X8"), Members = members,
             definition?.StartMinimum, Accepted = false, check.Error, check.Reason,
             MissingDungeons = resources?.MissingFormalDungeons.Length, MissingMaps = resources?.MissingFormalMaps.Length,
