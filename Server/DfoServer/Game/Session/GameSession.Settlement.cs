@@ -44,7 +44,7 @@ internal sealed partial class GameSession
     public (FormalDungeonReceipt Receipt, ushort? BossKey)? EnableFormalDungeonSettlement(ushort? reportedBossKey = null) => owner.Execute(() =>
     {
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
-            dungeon.SettlementEnabled || dungeon.Run.ClearFact is null || dungeon.Run.CurrentAltar is not null || dungeon.Entry.IsDespair)
+            dungeon.SettlementEnabled || dungeon.Run.ClearFact is null || dungeon.Run.CurrentAltar is not null || dungeon.Entry.IsDespair || dungeon.Entry.AntonRaid is not null)
             return ((FormalDungeonReceipt, ushort?)?)null;
         var snapshot = dungeon.Run.Snapshot;
         if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort?)?)null;
@@ -140,7 +140,7 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
     {
-        if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice ||
+        if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice || dungeon.Entry.AntonRaid is not null ||
             dungeon.Run.ClearFact is not { } fact || dungeon.Run.CurrentAltar is not null || dungeon.Ground.HasPendingOperation || pendingQuestCompletion is not null || HasPendingQuestScene ||
             !ValidSettlementReport(dungeon, actorId, rankPoint, maximumRankPoint, reportMembers))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);

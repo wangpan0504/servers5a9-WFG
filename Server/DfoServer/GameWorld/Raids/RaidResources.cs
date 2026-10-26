@@ -11,6 +11,7 @@ internal sealed record RaidResources(RaidScript Script, ImmutableArray<RaidDunge
     ImmutableArray<int> MissingFormalDungeons, ImmutableArray<int> MissingFormalMaps, ImmutableArray<int> MissingItems,
     ImmutableArray<RaidIssue> Issues)
 {
+    public AntonRaidDungeonCatalog? EntryCatalog { get; init; }
     public bool ResourcesReady => Issues.IsEmpty && MissingFormalDungeons.IsEmpty && MissingFormalMaps.IsEmpty && MissingItems.IsEmpty;
     // 即使资源完整，计费、候战室迁移及阶段权威输入仍未闭合，不能把此结果当作开战许可。
     public string StartBlocker => !Issues.IsEmpty ? "formal-raid-definition-unsupported" :
@@ -40,7 +41,8 @@ internal static class RaidResourceLoader
         catch (InvalidDataException error) { issues.Add(new("tutorial-list-invalid", TutorialListPath, 0, error.Message)); }
         var result = Check(script, tutorial, dungeons.DungeonPath, dungeons.MapPath, pvf.Contains,
             pvf.ReadTokens, pvf.ResolveString, ItemExists);
-        return result with { Issues = result.Issues.AddRange(issues) };
+        result = result with { Issues = result.Issues.AddRange(issues) };
+        return raid.Type == 0 ? result with { EntryCatalog = AntonRaidDungeonCatalog.Load(pvf, result, dungeons) } : result;
 
         bool ItemExists(int id)
         {
