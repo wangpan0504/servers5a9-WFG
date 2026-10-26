@@ -110,10 +110,14 @@ internal static class AntonRaidTcpTests
                         Drain(requester); // 只接受既有旁路通知；任何领奖ACK或阶段/奖励通知均失败。
                     }
                 }
+                requester.Send(695, new byte[5]);
+                requester.Send(695, Build(w => { w.Write(0x12345678u); w.Write((byte)1); w.Write(uint.MaxValue); }));
+                requester.Send(695, new byte[5]);
+                Drain(requester);
                 var unchanged = Information(observer, key, 1);
                 That(unchanged.Members.SequenceEqual(beforeReward) &&
                     fixture.Snapshot() == saved && Assets() == assets,
-                    "未开战选牌及重复请求不改变成员、分队、位置、门票、资产、疲劳或副本回执");
+                    "未开战选牌及695合成上报、重复或全零输入不改变成员、分队、位置、门票、资产、疲劳或副本回执");
             }
             for (int index = 0; index < 20; index++)
             {
@@ -236,6 +240,26 @@ internal static class AntonRaidTcpTests
             }
             That(disconnected && Information(observer, key, 1).Members.All(m => m.Character != peers[5].Id),
                 "异常断线释放原成员并向幸存者发布完整名单");
+
+            using (var reconnected = Open(fixture, "antonmember5", gamePort: endpoints[19], channelNumber: 19))
+            {
+                reconnected.Select(); Drain(reconnected);
+                var membersBeforeReconnectReward = Information(observer, key, 1).Members;
+                string beforeReconnectReward = fixture.Snapshot();
+                for (int repeat = 0; repeat < 2; repeat++)
+                {
+                    reconnected.Send(668, Build(w => w.Write(key)));
+                    Bytes(Until(reconnected, 1, 668).Body, [0, 19, 0], "真实重连后旧团key不恢复正式实例");
+                    reconnected.Send(660, [0, 0]);
+                    reconnected.Send(660, [2, 0]);
+                    reconnected.Send(695, new byte[5]);
+                    Drain(reconnected);
+                }
+                That(reconnected.Id == peers[5].Id && fixture.Snapshot() == beforeReconnectReward && Assets() == assets &&
+                    Information(observer, key, 1).Members.SequenceEqual(membersBeforeReconnectReward),
+                    "同角色新连接重复重入、选牌及全零695不恢复旧成员或奖励资格、不写资产与回执");
+                reconnected.Send(3, [1]); Bytes(Until(reconnected, 1, 3).Body, [1], "重连回归正常退出"); reconnected.Closed();
+            }
 
             Drain(peers[6]);
             string ordinaryReturn = fixture.Snapshot("SELECT gold,level,return_town,return_area FROM characters WHERE id=$p0", peers[6].Id);
