@@ -436,6 +436,22 @@ internal static partial class TownProtocolTcpTests
                 "NPC地区断线重登回出生点，旧来源票据不可恢复或重放");
         }
 
+        // #615：旧黑市0区没有乔斯拉的变身身份；重选及出房必须绑定正式1区。
+        fixture.Sql("INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id) VALUES($p0,6356)", id);
+        fixture.Sql("UPDATE characters SET town=54,area=0,x=1102,y=515,return_town=54,return_area=0,return_x=1050,return_y=462,revision=revision+1 WHERE id=$p0", id);
+        string blackMarketHistory = fixture.Snapshot("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id", id);
+        using (var peer = Open(fixture))
+        {
+            var packets = peer.Select(slot, prepared: true);
+            Bytes(packets.Single(packet => packet.Kind == 0 && packet.Opcode == 1379).Body, [54, 0, 0, 0], "旧黑市重选通知正确返回城镇");
+            That(peer.CompletedQuestHistory[4 + 6356] == 1, "重选完成表保留乔斯拉变身条件");
+            var back = towns.Entrance(towns.Room, new(54, 1, 0, 0), quests)!;
+            peer.Travel(54, 1, back.X, back.Y, 38, 1, bottom: true);
+            That(fixture.Snapshot("SELECT town,area,return_town,return_area FROM characters WHERE id=$p0", id) == "[[54,1,54,1]]" &&
+                fixture.Snapshot("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id", id) == blackMarketHistory,
+                "1426以23/24绑定正式黑市街道并保存1区返回点，不改任务进度");
+        }
+
         await fixture.StopAsync();
     }
 

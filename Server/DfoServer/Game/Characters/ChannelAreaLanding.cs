@@ -185,7 +185,8 @@ internal static class ChannelAreaLanding
             "Abnoba" => (46, 6),
             "Meltdown" => (46, 5),
             "FallsToTheSky" => (46, 4),
-            "harlem" or "east harlem" => (54, 0),
+            // 0区固定为Before图；正式街道1区按任务切换地图，才能保留6356完成后的乔斯拉。
+            "harlem" or "east harlem" => (54, 1),
             "luke_raid" => (32, 0),
             "sainthorn" => (17, 0),
             // 任务 8672「[超时空漩涡]奔赴前线」写明完成后“可以通过团队频道的超时空漩涡进入最后防线”；最后防线是 town 115
