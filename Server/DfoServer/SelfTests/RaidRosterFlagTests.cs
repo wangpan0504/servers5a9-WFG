@@ -27,7 +27,25 @@ internal static class RaidRosterFlagTests
         RunPacket();
         RunLoginType();
         RunRepository();
+        RunAdmission();
         Console.WriteLine($"PASS {TestCheck.Count - checks} 安徒恩/卢克/普雷名册资格位断言");
+    }
+
+    static void RunAdmission()
+    {
+        var channel = new DfoServer.GameWorld.Channels.ChannelEntry(new(2, 19), 23, "[raid]");
+        var point = new Location(1, 0, 10, 10);
+        var role = new Character(1, 0, "Admission", 0, point, point) { Level = 85, CompletedQuests = [12829, 3779] };
+        string? Check(Character value) => DfoServer.Game.Raids.RaidAdmissionPlan.Rejection(channel, value);
+        TestCheck.That(Check(role) is null && Check(role with { Level = 99 }) is null,
+            "安徒恩按PVF接受85至99级，不采用未证90级比较");
+        TestCheck.That(Check(role with { Level = 84 }) == "anton-level-required" &&
+            Check(role with { Level = 100 }) == "anton-level-required", "安徒恩等级上下界");
+        TestCheck.That(Check(role with { CompletedQuests = [3779] }) == "anton-entry-quest-required" &&
+            Check(role with { CompletedQuests = [12829] }) == "anton-prerequisite-required",
+            "名册任务完成不替代前置完成，接受态不等于完成态");
+        TestCheck.That(DfoServer.Game.Raids.RaidAdmissionPlan.Rejection(channel with { Type = 22 },
+            role with { Level = 1, CompletedQuests = [] }) is null, "安徒恩门禁不污染普通频道");
     }
 
     // 03B55580 只在 +0x1010 == 0x17 / 0x20 时读 tail[37] / tail[38]，ACK LOGIN 第 3 字节必须发安徒恩/卢克频道真实类型。
@@ -118,6 +136,9 @@ internal static class RaidRosterFlagTests
             File(2903) is { } l && l.Contains("Luke_enter_01", StringComparison.OrdinalIgnoreCase) &&
             File(8935) is { } p && p.Contains("Isys_normal_clear_03", StringComparison.OrdinalIgnoreCase), "入场任务均在 quest.lst 注册");
         TestCheck.That(File(5927) is null, "魔兽入场任务 5927 不在 quest.lst，tail[39] 条件无法证明");
+        string antonQuest = pvf.ReadText("n_quest/" + File(12829)!.Replace('\\', '/'));
+        TestCheck.That(Regex.IsMatch(antonQuest, @"\[level\]\s+85\s+99") &&
+            Regex.IsMatch(antonQuest, @"\[pre required quest\]\s+3779"), "安徒恩权威准入常量匹配PVF等级及前置");
         string preyQuest = pvf.ReadText("n_quest/" + File(8935)!.Replace('\\', '/'));
         TestCheck.That(Regex.IsMatch(preyQuest, @"\[level\]\s+95\s+100"), "前往夜之摩天楼 [level] 95 100，与 dstr 32116 的 Lv95 一致");
         Console.WriteLine($"PASS {TestCheck.Count - checks} 团本入场资格 PVF 核对断言");

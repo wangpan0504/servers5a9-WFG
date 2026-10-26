@@ -352,6 +352,8 @@ internal sealed class DungeonCatalog
     }
     public int DungeonCount => dungeons.Count;
     public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);
+    internal string? DungeonPath(int id) => dungeons.GetValueOrDefault(id);
+    internal string? MapPath(int id) => maps.GetValueOrDefault(id);
     public GriefTowerCatalog GriefTower => griefTower.Value;
 
     public static DungeonCatalog Load(PvfArchive pvf)

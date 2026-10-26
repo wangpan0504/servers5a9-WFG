@@ -81,7 +81,7 @@ internal static class UserStateTests
             using var memory = new GameCache();
             var owners = new AccountOwners(memory);
             using var owner = owners.Acquire("states", () => { });
-            repository.Create(owner, new("StateRole", point, point));
+            repository.Create(owner, new("StateRole", point, point) { Level = 85, CompletedQuests = [12829, 3779] });
             var session = new GameSession(repository, towns, owner, entry: new(new(2, 19), 23, "[raid]"));
             var online = new OnlineSessionDirectory(memory);
             online.Register(owner, session);

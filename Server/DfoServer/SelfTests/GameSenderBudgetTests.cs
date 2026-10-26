@@ -343,7 +343,7 @@ internal static class GameSenderBudgetTests
         }
     }
 
-    sealed class HeldStream : MemoryStream
+    internal sealed class HeldStream : MemoryStream
     {
         public bool FailWrite { get; init; }
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

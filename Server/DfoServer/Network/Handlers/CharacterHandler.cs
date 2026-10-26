@@ -60,7 +60,14 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
             await context.Reply(CmdPacketType.SELECT_CHARACTER,[0,96,0],"pvp_private_channel_rejected");
             return CommandResult.Handled;
         }
-        context.Session.SelectFromRosterIndex(selection, goldLimits, resumeTown);
+        try { context.Session.SelectFromRosterIndex(selection, goldLimits, resumeTown); }
+        catch (DfoServer.Game.Raids.RaidAdmissionException error)
+        {
+            log.Write("select_failed", new { Connection = context.Id, Reason = error.Message, Channel = context.Channel.Number });
+            // ACK4 023428B1：96 为已证的当前频道拒绝，消费者复位选角界面，不追加业务字段。
+            await context.Reply(CmdPacketType.SELECT_CHARACTER, [0, 96, 0], "raid_channel_rejected");
+            return CommandResult.Handled;
+        }
         bool nativeSwitch = resumeTown;
         resumeTown = context.Session.TownSnapshotResumed;
         if (learning is not null)

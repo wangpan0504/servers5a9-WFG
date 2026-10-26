@@ -13,10 +13,43 @@ internal readonly record struct CreateRaidRequest(byte RaidType, string Name, by
 
 // C2S670 MODIFY_RAID_INFO（发送点 0216F165..0216F1B7）：u8 团本类型（01DC69B0）、u32 字节数 + 队名（03BDF8E0）、u8 [ebp-0x34]（含义未恢复，原样保留）。
 internal readonly record struct ModifyRaidRequest(byte RaidType, string Name, byte Field);
+internal readonly record struct RaidManagerRequest(uint Operation, uint Character, uint Argument);
+internal readonly record struct RaidInfoRequest(byte Mode, uint Key);
+internal readonly record struct RaidPeerRequest(ushort Character, uint Peer);
 
 internal static class RaidRequests
 {
     public const int MaxNameBytes = 64;
+
+    // NOTI835的023AB9FA..023ABA1B发送REJOIN_RAID：唯一正文为原通知的u32团key。
+    public static uint Rejoin(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4) throw new InvalidDataException("REJOIN_RAID 需要u32团key");
+        return BinaryPrimitives.ReadUInt32LittleEndian(body);
+    }
+
+    // 02174823/0216CCC2：三个u32；目标虽取自成员u16，发送函数03BDF780仍写四字节。
+    public static RaidManagerRequest Manager(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 12) throw new InvalidDataException("RAID_MANAGER_WORK 需要三个u32");
+        return new(BinaryPrimitives.ReadUInt32LittleEndian(body), BinaryPrimitives.ReadUInt32LittleEndian(body[4..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(body[8..]));
+    }
+
+    // 01DC6660/01DC7410；失败ACK也必须回传mode/key，不是裸公共失败前缀。
+    public static RaidInfoRequest Information(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 5 || body[0] > 2) throw new InvalidDataException("REQUEST_RAID_INFO 长度或mode错误");
+        return new(body[0], BinaryPrimitives.ReadUInt32LittleEndian(body[1..]));
+    }
+
+    // 首次招募走REQUEST/RESPONSE_PEER的mode10（01DC6CBE），不把REJOIN_RAID当首次加入。
+    public static RaidPeerRequest Peer(ReadOnlySpan<byte> body, bool response)
+    {
+        bool length = response ? body.Length == 7 || body.Length == 9 && BinaryPrimitives.ReadUInt16LittleEndian(body[7..]) == 0x85 : body.Length == 13;
+        if (!length || body[2] != 10) throw new InvalidDataException("团本申请/回应长度或子型错误");
+        return new(BinaryPrimitives.ReadUInt16LittleEndian(body), BinaryPrimitives.ReadUInt32LittleEndian(body[3..]));
+    }
 
     public static ModifyRaidRequest ModifyRaid(ReadOnlySpan<byte> body)
     {

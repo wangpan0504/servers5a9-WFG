@@ -35,12 +35,15 @@ internal static class RaidPackets
     internal const ushort ModifyNotLeader = 8, ModifyNoRaid = 0x13;
     public static readonly byte[] ModifySuccess = [1];
 
+    // NOTI591 op1（023C88F0）：只读key/op，删除招募记录。
+    public static byte[] RemoveRecord(uint key) => Build(writer => { writer.Write(key); writer.Write(1u); });
+
     // NOTI 0x24F RAID_MODIFY op2（023C8937）：u32 key, u32 2, 整条记录（01DD08E0，与 0x24E 记录同形、无尾 u8）；只更新已有记录，不存在即丢弃。
-    public static byte[] UpdateRecord(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName) => Build(writer =>
+    public static byte[] UpdateRecord(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0) => Build(writer =>
     {
         writer.Write(key);
         writer.Write(2u);
-        WriteRecord(writer, key, title, raidType, leader, leaderName);
+        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad);
     });
 
     // ACK658 RAID_ENTRY_COST_INFO（0233C3E0，0234A067 注册）：成功直接返回，不读字段；失败才走 01DC6600。
@@ -54,13 +57,13 @@ internal static class RaidPackets
     //   服务端 TownPackets.Select 写的是 Character.Id）；成员窗口 02177872/0217788A 也只按这个 u16 找角色对象取等级/名字/职业。
     // u8 +0x04；str(0x100) +0x08（缺省 dstr 669「没有名字」，写角色名）；u8 +0x28；u8 +0x2C；u8 +0x2D；u8 +0x2E；u32 +0x30；u8 +0x34；u8 +0x35；
     // u8 +0x38；u32 +0x3C；u16 +0x40；u32 X；u8 丢弃；str(0x11) +0x44；u8 +0x64；u16 +0x66；u32 +0x68；u32 m + m×(u32,u32)；
-    // u8 +0x80；u32 +0x84；u8 +0x81；u16 +0x88；u8 +0x8A。除角色号与名字外语义未证明，全部写 0（空串 L=0、m=0）。
-    public static void WriteMember(BinaryWriter writer, ushort character, byte[] name)
+    // u8 +0x80；u32 +0x84；u8 +0x81；u16 +0x88；u8 +0x8A。除角色号、名字、+0x2D分队外语义未证明，写0（空串L=0、m=0）。
+    public static void WriteMember(BinaryWriter writer, ushort character, byte[] name, byte squad = 0)
     {
         writer.Write(character);
         writer.Write((byte)0);
         WriteText(writer, name, TextLimit);
-        writer.Write(new byte[4]);           // +0x28 +0x2C +0x2D +0x2E
+        writer.Write(new byte[] { 0, 0, squad, 0 }); // +0x2D由0216CCBD/021747xx按界面分队比较，其余保持未知零值。
         writer.Write(0u);                    // +0x30
         writer.Write(new byte[3]);           // +0x34 +0x35 +0x38
         writer.Write(0u);                    // +0x3C
@@ -82,7 +85,7 @@ internal static class RaidPackets
     // 记录（01DD08E0）：u32 key；str(0x100) 标题 +0x04；u8 +0x24 团本类型（01DDADC0 按 raid.lst 下标取脚本与 PHASE NAME）；
     // u8 +0x28；u8 +0x30 阶段下标（-1 当 0）；u32 +0x34；u8 +0xDC +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4；队长成员块 +0x38。
     // +0x28/+0x34/+0xDC.. 语义未证明，写 0（实机 2026-10-21 23:07 同形记录未崩溃）。
-    public static void WriteRecord(BinaryWriter writer, uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName)
+    public static void WriteRecord(BinaryWriter writer, uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0)
     {
         writer.Write(key);
         WriteText(writer, title, TextLimit);
@@ -91,15 +94,15 @@ internal static class RaidPackets
         writer.Write((byte)0);               // +0x30 阶段 0
         writer.Write(0u);                    // +0x34
         writer.Write(new byte[9]);           // +0xDC +0xDE +0xDF +0xE0 +0xE1 +0xE2 +0xE3 +0xE5 +0xE4
-        WriteMember(writer, leader, leaderName);
+        WriteMember(writer, leader, leaderName, leaderSquad);
     }
 
     // NOTI 0x24E RAID_LIST（023CAE20）：u32 n；n × { 记录 ; u8 → 记录+0xC4 }；重复 key 不覆盖旧记录。
     // +0xC4 > 1 时 START_RAID 跳过客户端人数检查，语义未证明，写 0。
-    public static byte[] RaidList(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName) => Build(writer =>
+    public static byte[] RaidList(uint key, byte[] title, byte raidType, ushort leader, byte[] leaderName, byte leaderSquad = 0) => Build(writer =>
     {
         writer.Write(1u);
-        WriteRecord(writer, key, title, raidType, leader, leaderName);
+        WriteRecord(writer, key, title, raidType, leader, leaderName, leaderSquad);
         writer.Write((byte)0);
     });
 
@@ -112,6 +115,63 @@ internal static class RaidPackets
         writer.Write(3u);
         writer.Write((byte)members.Count);
         foreach (var (character, name) in members) WriteMember(writer, character, name);
+    });
+
+    public static byte[] OpenWithSquads(uint key, IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members) => Build(writer =>
+    {
+        writer.Write(key); writer.Write(3u);
+        WriteMembers(writer, members);
+    });
+
+    public static byte[] RaidListBatch(IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad)> rows) => Build(writer =>
+    {
+        writer.Write((uint)rows.Count);
+        foreach (var row in rows)
+        {
+            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad);
+            writer.Write((byte)0);
+        }
+    });
+
+    // 02349A20成功：mode0读记录，mode1读成员，mode2两者；21失败仍读mode/key。
+    public static byte[] Information(byte mode, uint key, byte[] title, byte type, ushort leader, byte[] name,
+        IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members) => Build(writer =>
+    {
+        if (mode > 2) throw new InvalidDataException("团本查询mode错误");
+        writer.Write((byte)1); writer.Write(mode); writer.Write(key);
+        if (mode is 0 or 2) WriteRecord(writer, key, title, type, leader, name, members.Single(m => m.Character == leader).Squad);
+        if (mode is 1 or 2) WriteMembers(writer, members);
+    });
+
+    public static byte[] InformationFailure(byte mode, uint key) => Build(writer =>
+    {
+        writer.Write((byte)0); writer.Write((ushort)21); writer.Write(mode); writer.Write(key);
+    });
+
+    static void WriteMembers(BinaryWriter writer, IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members)
+    {
+        writer.Write(checked((byte)members.Count));
+        foreach (var member in members) WriteMember(writer, member.Character, member.Name, member.Squad);
+    }
+
+    // 023A1070/023A12D0：服务器和频道取本地全局，不在本消息中重复写入。
+    public static byte[] WaitingList(IReadOnlyList<(ushort Character, byte Type)> members) => Build(writer =>
+    {
+        writer.Write(checked((ushort)members.Count));
+        foreach (var member in members) { writer.Write(member.Character); writer.Write(member.Type); }
+    });
+
+    public static byte[] WaitingChanged(ushort character, byte type, bool added) => Build(writer =>
+    {
+        writer.Write(added ? (byte)0 : (byte)1); writer.Write(character);
+        if (added) writer.Write(type);
+    });
+
+    // 非PVP场景的mode10：023D1B03读三个u16；NOTI8只消费共同7B前缀。
+    public static byte[] Peer(ushort character, uint peer, bool invite) => Build(writer =>
+    {
+        writer.Write(character); writer.Write((byte)10); writer.Write(peer);
+        if (invite) { writer.Write((ushort)0); writer.Write((ushort)0); writer.Write((ushort)0); }
     });
 
     static void WriteText(BinaryWriter writer, byte[] text, int limit)

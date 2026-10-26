@@ -177,6 +177,8 @@ internal static class ServerRuntime
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
+        var raidCatalog = GameWorld.Raids.RaidCatalog.Load(pvf).PrepareAnton(pvf, dungeonCatalog, itemResources.Items);
+        var raidHandler = new RaidHandler(log, raidCatalog, new Game.Raids.RaidRegistry(clock), online);
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
         new DevilContractHandler(log, clock).Register(commands);
         var auctionProbe = Development.Auction.AuctionProbe.Parse(options.DevelopmentAuctionProbe);
@@ -326,7 +328,7 @@ internal static class ServerRuntime
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters),
             new SocialHandler(repository, social, online, log),
-            new PlayerInteractionHandler(parties, online, log, partyDungeons),
+            new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),
@@ -449,7 +451,7 @@ internal static class ServerRuntime
                 levelProjection, inventoryProjection, questProjection, projection, log, clock),
             dungeon,
             new AgitWarHandler(),
-            new RaidHandler(log, GameWorld.Raids.RaidCatalog.Load(pvf), new Game.Raids.RaidRegistry()),
+            raidHandler,
             // 公会：创建窗口的两次查重（CMD 0x9C / 0x9D）、介绍校验（0x2E3）与建会认证链路（0x2E5 / 0x2E6 / 0x2E7）。
             // 顺序模式下创建者可能已经下线：接受认证时用离线账号租约提交，因此这里显式注入账号 owner 表。
             new GuildHandler(new Game.Guild.GuildDirectory(repository, guildParameters), guildPermits, online, owners, log, guildProjection),

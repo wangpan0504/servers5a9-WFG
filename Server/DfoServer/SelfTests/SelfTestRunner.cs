@@ -283,7 +283,7 @@ internal static class SelfTestRunner
         CharacterPreparationTests.Run(towns, pvf, characters);
         ChannelAreaLandingTests.Run(towns);
         EvildomWarChannelTests.Run(towns, pvf, characters, itemResources);
-        RaidCreateFlowTests.RunResources(pvf);
+        RaidCreateFlowTests.RunResources(pvf, itemResources.Items);
         PreyChannelTests.Run(towns, pvf, characters, itemResources);
         SpecialAreaChannelTests.Run(towns, pvf);
         CharacterCreationTests.Run(towns, characters);
