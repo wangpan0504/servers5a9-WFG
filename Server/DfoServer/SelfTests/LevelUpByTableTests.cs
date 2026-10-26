@@ -23,6 +23,7 @@ internal static class LevelUpByTableTests
     internal const int Segmented = 10303200;
     internal const int Plain = 10158963;
     internal const int WithMaterials = 490704662;
+    internal const int RookieCapsule = 490704508;
     static readonly InventorySlot Slot = new(InventoryListType.Main,65);
 
     public static void RunCore()
@@ -67,6 +68,23 @@ internal static class LevelUpByTableTests
         foreach (int id in new[] { Segmented,Plain,WithMaterials,490704541,490704508,490703949,490703678,490703677,490702738 })
             That(items.Items.LevelUpByTable(id) is not null && items.Items.LevelUpTicket(id) is null &&
                 items.Items.ExperienceConsumable(id) is null,"真实名册按表升级不会误入418或普通经验增量: "+id);
+        That(items.Items.LevelUpByTable(RookieCapsule) is { Jumping:true,SeriaRoomOnly:true,Ranges:[{ Minimum:1,Maximum:17,Target:85 }] },
+            "新秀胶囊使用真实Lv1至17升85表及赛丽亚房间限制，不借其他分段胶囊替代");
+        foreach (byte level in new byte[] {1,17})
+        using (var f = Make(level,RookieCapsule))
+        {
+            var used = f.Session.UseLevelUpTicket(Slot,service,f.Catalog,LevelUpConsumableKind.JumpingTable,1)!;
+            That(used.Commit is not null && used.Character.Level==85 && used.Character.GrowType==1 &&
+                used.Character.Learning.Experience==growth.GetLevelStartExperience(85) && used.Character.Inventory.Find(Slot) is null &&
+                Same(used.Character,f.Read()),"新秀胶囊两端等级均同事务转职、到85级0%并消费唯一源");
+        }
+        foreach (var (level,street,selection) in new (byte,bool,uint)[] { (18,false,1),(17,true,1),(17,false,0) })
+        using (var f = Make(level,RookieCapsule,street:street))
+        {
+            var before = f.Read();
+            That(f.Session.UseLevelUpTicket(Slot,service,f.Catalog,LevelUpConsumableKind.JumpingTable,selection)!.Commit is null &&
+                Same(before,f.Read()),"新秀胶囊超等级、房间外及取消转职均不吞物品或改变成长");
+        }
         using (var f = Make(27,Segmented,count:2))
         {
             var before = f.Read();
