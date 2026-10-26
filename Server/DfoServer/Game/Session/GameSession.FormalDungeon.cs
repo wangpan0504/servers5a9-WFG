@@ -305,9 +305,12 @@ internal sealed partial class GameSession
         // 祭坛、绝望之塔等原有限额仍由EntryPlan设置，不受这项窄范围投影影响。
         if (!partyAdmission && entry!.IsOrdinary && catalog.Get(checked((int)dungeonId)) is { IsOrdinaryLuke:true } luke)
             entry = entry with { CoinLimit = luke.CoinLimit };
-        if (!partyAdmission && OrdinaryLukeProgress.Applies(entry!))
+        if (OrdinaryLukeProgress.Applies(entry!))
         {
-            int day = QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow());
+            // 队长只采样一次入场日；队员共用该日，但逐人核验自己的进度，不借用队长资格。
+            int? sharedDay = shared?.Session.PreparedParty(shared).Dungeon.Entry.OrdinaryLukeDay;
+            if (shared is not null && sharedDay is null) return RejectFormal("party-luke-day-missing");
+            int day = sharedDay ?? QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow());
             if (!repository.LoadOrdinaryLukeProgress(owner, expected.Id).Allows(day, dungeonId))
                 return RejectFormal("luke-normal-progress-locked");
             entry = entry! with { OrdinaryLukeDay = day };

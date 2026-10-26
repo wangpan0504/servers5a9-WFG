@@ -37,7 +37,7 @@ internal sealed partial class CharacterRepository
         if (!OrdinaryLukeProgress.Applies(run.Entry) || run.Entry.OrdinaryLukeDay != claim.Day ||
             claim.SourceMonsterId != prepared.Monster.MonsterId || !loot.UsesCollectionLedger ||
             !ReferenceEquals(loot.Death, prepared.Death) || !claim.Eligible && !loot.Grounds.IsEmpty)
-            throw new InvalidDataException("普通卢克每日掉落不属于原单人Run与冻结死亡");
+            throw new InvalidDataException("普通卢克每日掉落不属于原角色Run与冻结死亡");
         var previous = ReadOrdinaryLukeDrop(db, tx, owner.Account, identity.CharacterId, claim.Day, claim.SourceMonsterId);
         if (previous is { } found)
         {

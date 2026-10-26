@@ -10,6 +10,8 @@ internal static partial class PartyDungeonTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        OrdinaryLukePartyTests.Run(resources);
+        await RunLukeAsync(source, root, resources);
         await RunPartyAsync(source, root, resources, 2);
         await RunPartyAsync(source, root, resources, 4);
         await RunPartyAsync(source, root, resources, 2, rollback: true);

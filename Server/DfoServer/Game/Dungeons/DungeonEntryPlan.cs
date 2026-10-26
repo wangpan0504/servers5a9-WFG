@@ -37,7 +37,7 @@ internal sealed record DungeonEntryPlan(
     public bool AllowsCompanionAi { get; init; } = true;
     public bool IsTutorial { get; init; }
     public bool IsOrdinaryLuke { get; init; }
-    // 只由单人正式准入冻结；组队、练习和奖励日限额不消费此字段。
+    // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
     public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
