@@ -150,6 +150,13 @@ internal sealed record DungeonEntryPlan(
             reason = "dungeon-resource-mismatch";
             return false;
         }
+        // 当前PVF这两图为tag tournament 3/4、tagsystem ruleset2，不能由普通单角色Run消费或结算。
+        // 9609/9610是中央竞技场剧情图，继续走已有剧情路线。
+        if (dungeonId is 9608 or 400000095)
+        {
+            reason = "tag-evildom-runtime-required";
+            return false;
+        }
         bool cosmo = definition.RequiresCosmoEntryContract;
         if (cosmo)
         {

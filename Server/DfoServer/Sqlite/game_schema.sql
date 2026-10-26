@@ -1,4 +1,27 @@
 -- S5A9 当前完整数据库结构；账号与游戏数据统一保存。
+CREATE TABLE account_tag_evildom_clearances(
+  receipt TEXT NOT NULL CHECK(length(receipt)>0),
+  account TEXT NOT NULL,
+  day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day>0),
+  week INTEGER NOT NULL CHECK(typeof(week)='integer' AND week>0),
+  first INTEGER NOT NULL CHECK(typeof(first)='integer' AND first BETWEEN 1 AND 65535),
+  second INTEGER NOT NULL CHECK(typeof(second)='integer' AND second BETWEEN 1 AND 65535 AND second<>first),
+  PRIMARY KEY(account,receipt)
+);
+CREATE TABLE account_tag_evildom_configuration(
+  account TEXT PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0),
+  selected_team INTEGER NOT NULL CHECK(typeof(selected_team)='integer' AND selected_team BETWEEN 0 AND 2),
+  first0 INTEGER NOT NULL CHECK(typeof(first0)='integer' AND first0 BETWEEN 0 AND 65535),
+  second0 INTEGER NOT NULL CHECK(typeof(second0)='integer' AND second0 BETWEEN 0 AND 65535),
+  first1 INTEGER NOT NULL CHECK(typeof(first1)='integer' AND first1 BETWEEN 0 AND 65535),
+  second1 INTEGER NOT NULL CHECK(typeof(second1)='integer' AND second1 BETWEEN 0 AND 65535),
+  first2 INTEGER NOT NULL CHECK(typeof(first2)='integer' AND first2 BETWEEN 0 AND 65535),
+  second2 INTEGER NOT NULL CHECK(typeof(second2)='integer' AND second2 BETWEEN 0 AND 65535),
+  CHECK((first0=0 AND second0=0) OR (first0>0 AND second0>0 AND first0<>second0)),
+  CHECK((first1=0 AND second1=0) OR (first1>0 AND second1>0 AND first1<>second1)),
+  CHECK((first2=0 AND second2=0) OR (first2>0 AND second2>0 AND first2<>second2))
+);
 CREATE TABLE item_making_skill_info(
   charac_no INTEGER PRIMARY KEY,
   account TEXT NOT NULL,

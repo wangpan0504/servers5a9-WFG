@@ -61,12 +61,12 @@ internal static class ChannelAreaLanding
         return Place(towns, channel, level, completed);
     }
 
-    // 已知旧频道类型时直接按 01EB5AF0 已证的两项谓词比较。
+    // 已知旧频道类型时直接按01EB5AF0已证的团队页、魔界大战与再战魔界谓词比较。
     internal static bool SameSnapshotPredicates(int previousType, int nextType) => SnapshotPredicates(previousType) == SnapshotPredicates(nextType);
 
-    // ARAD 01EB5AF0 逐项比较新旧频道的类型谓词（读频道脚本类型 +8，不读 ACK LOGIN 写入的 +0x1010）。区分这里各频道的是两项：
-    // vt+0x28（01EB5720 → 028FA400，type ∈ {0x17,0x19,0x20,0x2D,0x32,0x3E,0x3F}，即团队页签类型）与 vt+0x4C（01EB57D0，type==0x36）。
-    // 两项都一致时客户端记录换频道快照并按快照留在原城镇；任一项不同则不记快照，ACK4 按服务端城镇入城。
+    // ARAD 01EB5AF0 逐项比较新旧频道的类型谓词（读频道脚本类型 +8，不读 ACK LOGIN 写入的 +0x1010）。区分这里各频道的是三项：
+    // vt+0x28（01EB5720 → 028FA400，type ∈ {0x17,0x19,0x20,0x2D,0x32,0x3E,0x3F}，即团队页签类型）、vt+0x4C（type==0x36）及vt+0x38（type==0x35）。
+    // 三项都一致时客户端记录换频道快照并按快照留在原城镇；任一项不同则不记快照，ACK4 按服务端城镇入城。
     // 因此 普通(22)↔安徒恩 0x17/卢克 0x20/超时空之战 0x2D/普雷 0x32 互换不记快照，团队页签类型之间（如 0x20↔0x2D、0x20↔0x32）互换保留快照，
     // 魔界大战 0x36 与其余任何类型互换都不记快照。
     static readonly int[] RaidTabTypes = [0x17, 0x19, 0x20, FiendwarType, PreyRaidType, 0x3E, 0x3F];
@@ -74,9 +74,10 @@ internal static class ChannelAreaLanding
     // 有落点城镇的谓词频道；服务端不保存旧频道，按存档城镇推断旧频道类型。
     static readonly (int Type, string Group)[] PredicateChannels =
         [(0x17, "[raid]"), (0x20, "[luke_raid]"), (FiendwarType, "[fiendwar]"), (EvildomWarType, "[evildom_war]"), (PreyRaidType, "[prey]"),
-         (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]")];
+         (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]"), (53, "[evildom_gathering]")];
 
-    static (bool RaidTab, bool Evildom) SnapshotPredicates(int type) => (RaidTabTypes.Contains(type), type == EvildomWarType);
+    // 01EB5BCD..5C0B另比较vt+38，01EB5780正是type53；跨入/离开再战不能复用旧城镇快照。
+    static (bool RaidTab, bool Evildom, bool TagEvildom) SnapshotPredicates(int type) => (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53);
 
     public static Location? Place(TownCatalog towns, ChannelEntry channel, int level, IReadOnlySet<int> completed) =>
         Decide(towns, channel, level, completed).Spot;
@@ -116,7 +117,7 @@ internal static class ChannelAreaLanding
     }
 
     // 原生换频道是否保留本地城镇快照。ARAD 01714512/01715512 只在 01EB5AF0(新频道) 为真时调用 02906330 记录快照，
-    // 01EB5AF0 要求新旧频道在 vt+0x14/0x28/0x30/0x34/0x38/0x3C/0x40/0x44/0x48/0x4C/0x60/0x64/0x6C/0x78 上逐项一致（这里只建模已证的 +0x28/+0x4C）；
+    // 01EB5AF0 要求新旧频道在 vt+0x14/0x28/0x30/0x34/0x38/0x3C/0x40/0x44/0x48/0x4C/0x60/0x64/0x6C/0x78 上逐项一致（这里只建模已证的 +0x28/+0x38/+0x4C）；
     // 不记快照时 023E11AF 的 124 恢复也因 028FB500 为假而跳过，ACK4 直接按服务端城镇入城，应走普通选角落点和包序。
     // 服务端不保存旧频道：存档位于某谓词频道的落点城镇即视为旧频道可能是该类型；落点城镇不是频道专属城镇时（安徒恩 19 等）
     // 旧频道也可能是普通频道。只要任一候选旧类型与新频道谓词一致就按保留快照处理——服务端保留原位置而客户端实际入服务端城镇只是
@@ -165,6 +166,10 @@ internal static class ChannelAreaLanding
             return (17, 0);
         if (type == 11)
             return (38, 5);
+        // 再战频道仍按原生38/1入城；此为本服RoomExit业务落点，非客户端03B876C0的默认映射。
+        // 当前PVF town62 Stadium.twn 区域0及map的enter tagdungeon入口；等级/任务继续由Decide校验。
+        if (type == 53)
+            return (62, 0);
         return name switch
         {
             "elven_guard" => (38, 0),

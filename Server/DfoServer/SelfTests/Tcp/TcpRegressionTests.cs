@@ -29,6 +29,7 @@ internal static class TcpRegressionTests
         ("social", SocialTcpTests.RunAsync),
         ("tutorial", TutorialTcpTests.RunAsync),
         ("channel-entry", ChannelEntryTcpTests.RunAsync),
+        ("tag-evildom", TagEvildomTcpTests.RunAsync),
         ("quest-lifecycle", QuestLifecycleTcpTests.RunAsync),
         ("quest-extras", QuestLifecycleTcpTests.RunExtrasAsync),
         ("quest-chains", QuestLifecycleTcpTests.RunChainsAsync),

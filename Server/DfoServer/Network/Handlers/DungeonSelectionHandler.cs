@@ -11,7 +11,7 @@ namespace DfoServer.Network.Handlers;
 internal sealed class DungeonSelectionHandler(TownProjection projection, ServerLog log,
     DfoServer.GameWorld.Characters.TutorialCatalog? tutorials = null,
     DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
-    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null) : IGameCommandModule
+    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null, TagEvildomProjection? tagEvildom = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -21,6 +21,19 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
 
     async Task<CommandResult> EnterAsync(GameConnectionContext context, Packet request)
     {
+        if (request.Body.Length == 6 && context.Session.ChannelEntry?.Type == 53 && tagEvildom is not null &&
+            context.Session.ReadTagEvildom(tagEvildom.Store, tagEvildom.Now) is { } tag &&
+            context.Session.Selected?.Position is { Town: 62, Area: 0 })
+        {
+            uint tagDungeon = TagEvildomRequests.Entry(request.Body);
+            // 结构与资格分开：重置ACK后等待原生7时可能仍到达旧6B15；合法53/Stadium正文明确拒绝，不落普通4B断线。
+            // 正式Run未开放，空队/未就绪或真实双队均不能假建普通单角色实例。
+            log.Write("tag_evildom_entry_unavailable", new { Connection = context.Id, Dungeon = tagDungeon, Reason = "tag-runtime-not-implemented" });
+            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "tag_evildom_entry_unavailable");
+            await context.Notify(NotiPacketType.AAS_TIPS, ServerNoticePackets.Build("再战魔界", "编队资料已同步，双角色战斗流程尚未开放；当前没有扣除次数、疲劳或道具。"),
+                "tag_evildom_entry_notice");
+            return CommandResult.Handled;
+        }
         var entry = DungeonRequests.ParseEntry(request.Body);
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)

@@ -64,6 +64,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] PlayerBody { get; private set; } = [];
     public byte[] AdventureRefresh { get; private set; } = [];
     public byte[] WeeklyDungeonConfig { get; private set; } = [];
+    public WirePacket[] TagEvildomInfo { get; private set; } = [];
     public byte[] AvatarPresetList { get; private set; } = [];
     public byte[] CardMembershipInformation { get; private set; } = [];
     public byte[] DevilService0 { get; private set; } = [];
@@ -590,7 +591,8 @@ internal sealed class TcpPeer : IDisposable
         byte[]? sceneSkills = null, byte[]? combos = null, bool resumeTown = false, bool room = true, bool premiumContracts = false, ushort avatarExpansion = 105,
         (int[] Owned, int Selected)? weaponSkins = null,
         (SkinOwnership[] Owned, int Selected)? damageFonts = null,
-        (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool nativeSwitch = false)
+        (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool nativeSwitch = false,
+        ushort[]? tagEvildom = null)
     {
         // nativeSwitch：原生换频道新连接直接发选角4，不先请求名册；服务端按换频道判定是否保留客户端城镇快照。
         if (!resumeTown && !requestedRoster && !nativeSwitch)
@@ -825,6 +827,7 @@ internal sealed class TcpPeer : IDisposable
             "client expansion reader stays within its three-stage table");
         TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
         if (expertJobInfo is not null) Expect(0, 205, expertJobInfo);
+        TagEvildomInfo = (tagEvildom ?? []).Select(opcode => Expect(0, opcode)).ToArray();
         ReadWeeklyDungeon();
         // 新增的空历史356已逐包校验，并由CompletedQuestHistory暴露；
         // 普通角色的返回数组保留既有仓库等索引，避免无关业务用例随初始化包插入而迁移。

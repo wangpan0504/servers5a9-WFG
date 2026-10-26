@@ -11,6 +11,8 @@ using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Network.Projection;
 
+internal sealed record TownCharacterProjection(Character Character, DateTimeOffset AppearanceTime);
+
 internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer stats, TownPresence? presence, EpicPieceCatalog pieces,
     MailboxProjection? mailbox = null, SettingsProjection? settings = null, QuestProjection? quests = null,
     SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
@@ -33,7 +35,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.USERINFO, actor, "other_player_actor", canSend);
         await context.Notify(NotiPacketType.USERINFO, player, "other_player_info", canSend);
     }
-    public async Task EnterAsync(GameConnectionContext context, bool resumeTown = false)
+    public async Task<TownCharacterProjection> EnterAsync(GameConnectionContext context, bool resumeTown = false)
     {
         if (devil is not null) context.Session.InitializeDevilContract(devil, timer.GetUtcNow());
         titles?.PrepareInitialization(context);
@@ -151,6 +153,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // 本人的未过期申请就推 NOTI 0x2AD。公会规则归 GuildPermitDelivery，这里只调用可选投递器。
         if (guildPermits is not null)
             await guildPermits.DeliverPendingAsync(context);
+        // 返回实际用于普通Actor/Player/技能投影的快照，不能拿随后变化的Selected冒充客户端已安装资料。
+        return new(c, appearanceTime);
     }
 
     // GM 团本入场时段（与 GmWebData 共用同一实例）；为空时三张团队频道卡都按关闭下发。

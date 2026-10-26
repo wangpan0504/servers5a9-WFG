@@ -230,6 +230,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             string.Equals(Selected?.Name, request.Name, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("任务结果待确认，不能覆盖当前角色进度");
         var updated = repository.UpdateProgress(owner, request);
+        // 旧GM单字段合同可能不推进revision；即使目标是备用角色，也必须使已捕获TAG双角色资料失效。
+        tagEvildomCharacterVersion++;
         // 提交成功后才替换内存。任务集合立即参与城镇准入；客户端画面仍等下次选角。
         if (Selected?.Id == updated.Id)
         {
@@ -264,6 +266,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
                 (HasPendingFormalCard || HasPendingTownQuestCommit) && Selected?.Id == captured.Character.Id)
                 throw new InvalidOperationException("在线角色快照已变化，请重试");
             var updated = repository.ResetProgress(owner, plan);
+            tagEvildomCharacterVersion++;
             if (Selected?.Id == updated.Id)
             {
                 InvalidateImageCommunication();
@@ -286,6 +289,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         gameCache.Clear();
         ClearConsumableUse();
         publishedRoster = null;
+        tagEvildomRoster = null;
         pendingDungeonContinuation = null;
         pendingQuestReplay = null;
         pendingQuestCompletion = null;

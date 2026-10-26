@@ -193,6 +193,7 @@ internal static class SelfTestRunner
         EmotionTests.RunCore();
         RepositoryBoundaryTests.Run();
         CharacterReadTests.Run();
+        TagEvildomConfigurationTests.Run();
         FiendWarRosterTests.Run();
         RaidRosterFlagTests.Run();
         await SessionPlanningTests.RunAsync();
