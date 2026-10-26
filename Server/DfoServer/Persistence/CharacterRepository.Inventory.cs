@@ -321,7 +321,7 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,daily_booster_usage=$dailyBooster,weapon_skin_state=$weaponSkin,avatar_preset_state=$avatarPreset,stamina_until=$stamina,equipment_slot_flags=$equipmentSlots
+            UPDATE characters SET revision=revision+1,gold=$gold,inventory_expansion=$expansion,avatar_expansion=$avatarExpansion,devil_usage=$devil,daily_booster_usage=$dailyBooster,weapon_skin_state=$weaponSkin,avatar_preset_state=$avatarPreset,npc_favor=$npcFavor,stamina_until=$stamina,equipment_slot_flags=$equipmentSlots
             WHERE id=$id AND account=$account AND revision=$revision AND equipment_slot_flags=$equipmentSlotsBefore;
             """;
         command.Parameters.AddWithValue("$id", expected.Id);
@@ -334,6 +334,7 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$dailyBooster", JsonSerializer.Serialize(plan.After.DailyBoosterUses));
         command.Parameters.AddWithValue("$weaponSkin", JsonSerializer.Serialize(plan.After.Skins));
         command.Parameters.AddWithValue("$avatarPreset", JsonSerializer.Serialize(plan.After.AvatarPresets));
+        command.Parameters.AddWithValue("$npcFavor", JsonSerializer.Serialize(plan.After.NpcFavor));
         command.Parameters.AddWithValue("$stamina", plan.After.StaminaUntil);
         command.Parameters.AddWithValue("$equipmentSlots", plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags);
         command.Parameters.AddWithValue("$equipmentSlotsBefore", current.EquipmentSlotFlags);
@@ -424,7 +425,7 @@ internal sealed partial class CharacterRepository
         var right = plan.Before;
         if (ReferenceEquals(left, right))
             return true;
-        if (!left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
+        if (!left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
             left.WinPoints != right.WinPoints || left.GoldCarryLimit != right.GoldCarryLimit || left.AuctionGoldLimit != right.AuctionGoldLimit ||
             !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || !DailyBoosterUsage.Same(left.DailyBoosterUses, right.DailyBoosterUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
             !ShopPurchaseCount.Same(left.ShopPurchases, right.ShopPurchases) || !left.EpicPieces.Same(right.EpicPieces) ||
@@ -443,7 +444,7 @@ internal sealed partial class CharacterRepository
         command.Transaction = transaction;
         command.Parameters.AddWithValue("$id", characterId);
         command.CommandText = "SELECT c.inventory_expansion,c.gold,c.revive_coins,c.win_points,c.gold_carry_limit,c.auction_gold_limit,c.account,c.cargo_capacity," +
-            "coalesce(p.selected,0),coalesce(p.cube_type,-1),c.avatar_expansion,c.devil_usage,c.stamina_until,c.daily_booster_usage,c.weapon_skin_state,c.avatar_preset_state FROM characters c LEFT JOIN cube_premium p ON p.charac_no=c.id WHERE c.id=$id";
+            "coalesce(p.selected,0),coalesce(p.cube_type,-1),c.avatar_expansion,c.devil_usage,c.stamina_until,c.daily_booster_usage,c.weapon_skin_state,c.avatar_preset_state,c.npc_favor FROM characters c LEFT JOIN cube_premium p ON p.charac_no=c.id WHERE c.id=$id";
         ushort expansion, capacity;
         uint gold;
         int coins, wins, carry, auction;
@@ -454,6 +455,7 @@ internal sealed partial class CharacterRepository
         ushort avatarExpansion;
         ImmutableArray<DevilServiceUsage> devilUses;
         ImmutableArray<DailyBoosterUsage> dailyBoosterUses;
+        ImmutableArray<NpcFavorPoint> npcFavor;
         long staminaUntil;
         using (var reader = command.ExecuteReader())
         {
@@ -474,6 +476,7 @@ internal sealed partial class CharacterRepository
             dailyBoosterUses = JsonSerializer.Deserialize<ImmutableArray<DailyBoosterUsage>>(reader.GetString(13));
             weaponSkins = JsonSerializer.Deserialize<SkinStorageState>(reader.GetString(14)) ?? throw new InvalidDataException("角色武器幻化状态缺失");
             avatarPresets = JsonSerializer.Deserialize<AvatarPresetState>(reader.GetString(15)) ?? throw new InvalidDataException("角色装扮预设状态缺失");
+            npcFavor = JsonSerializer.Deserialize<ImmutableArray<NpcFavorPoint>>(reader.GetString(16));
         }
 
         shared ??= ReadAccountInventory(db, account, transaction);
@@ -486,7 +489,7 @@ internal sealed partial class CharacterRepository
         {
             ReviveCoins = coins, WinPoints = wins, GoldCarryLimit = carry, AuctionGoldLimit = auction,
             AccountWallet = shared.Wallet, CubeContract = cubeContract, AvatarExpansion = avatarExpansion, DevilUses = devilUses, StaminaUntil = staminaUntil, CargoCapacity = capacity, AccountCargo = shared.Cargo,
-            Skins = weaponSkins, AvatarPresets = avatarPresets, ItemMakingSkills = ReadItemMakingSkills(db, transaction, characterId, account),
+            NpcFavor = npcFavor, Skins = weaponSkins, AvatarPresets = avatarPresets, ItemMakingSkills = ReadItemMakingSkills(db, transaction, characterId, account),
             ShopPurchases = purchases, EpicPieces = shared.Pieces, DailyBoosterUses = dailyBoosterUses,
             ConsumableStates = ReadConsumableStates(db, transaction, characterId, account)
         };

@@ -60,6 +60,7 @@ internal static class SelfTestRunner
         AvatarDyeTests.RunCore();
         AvatarDisjointTests.RunCore();
         AvatarPresetTests.RunCore();
+        NpcFavorTests.RunCore();
         DisjointSpecialTests.RunCore();
         PlayerDisjointTests.RunCore();
         SkillSwitchInventoryTests.RunCore();

@@ -7,7 +7,7 @@ using static PvfLib.PvfScript;
 
 namespace DfoServer.GameWorld.Items;
 
-internal sealed class ItemCatalog
+internal sealed partial class ItemCatalog
 {
     readonly PvfArchive pvf;
     readonly IReadOnlyDictionary<int, string> equipment;

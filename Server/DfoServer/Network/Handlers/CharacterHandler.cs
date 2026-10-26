@@ -94,6 +94,10 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         if (tagEvildom is not null && !await tagEvildom.InitializeAsync(context, projectedCharacter)) return CommandResult.Handled;
         // 预设容量与列表必须早于窗口打开；与每周配置同属就绪后、任务核对前的固定包序。
         if (avatarPresets is not null) await avatarPresets.DeliverAsync(context);
+        await context.Notify(NotiPacketType.NPC_FAVOR_POINT_INFO,
+            DfoServer.Network.Builders.Inventory.NpcFavorPackets.Snapshot(projectedCharacter.Character.Inventory.NpcFavor),
+            "npc_favor_initialize", () => context.Owner.Execute(() => context.Session.Ready &&
+                ReferenceEquals(context.Session.Selected, projectedCharacter.Character)));
         // 每周地下城固定在入城完成包之后、任务核对与同屏加入之前下发，包序稳定且不依赖其他投影结果。
         if (weekly is not null) await weekly.DeliverAsync(context, includeReset: true);
         social?.Initialize(context);

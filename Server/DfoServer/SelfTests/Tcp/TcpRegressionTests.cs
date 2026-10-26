@@ -352,6 +352,7 @@ internal static class TcpRegressionTests
         ("expert-job-trade", ExpertJobTradeTcpTests.RunAsync),
         ("avatar-disjoint", AvatarDisjointTcpTests.RunAsync),
         ("avatar-preset", AvatarPresetTcpTests.RunAsync),
+        ("npc-favor", NpcFavorTcpTests.RunAsync),
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
         ("recipe-craft", RecipeCraftTcpTests.RunAsync),

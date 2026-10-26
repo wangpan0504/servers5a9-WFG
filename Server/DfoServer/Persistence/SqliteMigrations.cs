@@ -214,6 +214,7 @@ internal static class SqliteMigrations
         new(100, "角色技能方案开通及当前方案", static (db, tx) => Execute(db, tx,
             "ALTER TABLE characters ADD COLUMN selected_skill_tree INTEGER NOT NULL DEFAULT -1 CHECK(typeof(selected_skill_tree)='integer' AND selected_skill_tree BETWEEN -1 AND 1)")),
         new(101, "再战魔界账号编队配置", TagEvildomConfigurationSchema.Upgrade),
+        new(102, "角色NPC好感度", AddNpcFavorColumn),
     ];
 
     internal const string PvpPrivateCharacterSchema = """
@@ -488,6 +489,19 @@ internal static class SqliteMigrations
     }
 
     const string AvatarPresetStateColumn = "avatar_preset_state TEXT NOT NULL DEFAULT '{\"Capacity\":1,\"Presets\":[]}' CHECK(json_valid(avatar_preset_state) AND json_type(avatar_preset_state)='object')";
+
+    const string NpcFavorColumn = "npc_favor TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(npc_favor) AND json_type(npc_favor)='array')";
+
+    static void AddNpcFavorColumn(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='npc_favor'";
+        if (query.ExecuteScalar() is 0L) Execute(db, tx, "ALTER TABLE characters ADD COLUMN " + NpcFavorColumn);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='characters'";
+        if (query.ExecuteScalar() is not string sql || !sql.Contains(NpcFavorColumn, StringComparison.Ordinal))
+            throw new InvalidDataException("角色NPC好感度列结构不兼容");
+    }
 
     static void AddAvatarPresetStateColumn(SqliteConnection db, SqliteTransaction tx)
     {

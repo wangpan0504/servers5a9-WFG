@@ -23,7 +23,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     Inventory.SkinStorageHandler? skinStorage=null,FatigueConsumableHandler? fatigueConsumables=null,
     RentalHandler? rental=null,CreatureHandler? creatures=null,InventoryPeriodExtensionService? periodExtensions=null,
     InventoryMileageService? mileage=null,InventoryEquipmentPeriodChangeService? periodChanges=null,
-    AvatarPresetHandler? avatarPresets=null) : IGameCommandModule
+    AvatarPresetHandler? avatarPresets=null, InventoryNpcFavorService? npcFavor=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     const uint PeriodExtensionAction = 69;
@@ -63,6 +63,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             return fatigueConsumables is not null ? await fatigueConsumables.UseAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == 106)
             return rental is not null ? await rental.UsePointsAsync(context, request) : CommandResult.Unhandled;
+        if (request.Action == NpcFavorItemDefinition.Action)
+            return await UseNpcFavorAsync(context, request);
         if (request.Action == 72)
             return await UseMileageAsync(context, request);
         if (request.Action == 151)
@@ -119,6 +121,30 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
         await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, StackableActionPackets.Rejected(request), "stackable_action_unsupported",
             () => context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, captured.Selected) &&
                 context.Session.SelectionEpoch == captured.SelectionEpoch && context.Session.Phase == captured.Phase));
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> UseNpcFavorAsync(GameConnectionContext context, StackableActionUseRequest request)
+    {
+        var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool valid = npcFavor is not null && request.List == 0 && request.Slot <= short.MaxValue && request.Reserved == 0 &&
+            request.FirstArgument is > 0 and <= int.MaxValue && request.SecondArgument == 0 && context.Activity?.BlocksTownActions != true;
+        var result = valid ? context.Session.PlanAndCommitInventory(character => npcFavor!.Plan(character,
+            new(InventoryListType.Main, (short)request.Slot), (int)request.FirstArgument,
+            captured.Phase == Game.Session.SessionPhase.Town), 19, requireTown: false,
+            requiredPhase: captured.Phase, usedItem: new(InventoryListType.Main, (short)request.Slot)) : InventoryResult.Reject(19);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            ReferenceEquals(context.Session.Selected, captured.Selected) && context.Session.SelectionEpoch == captured.SelectionEpoch &&
+            context.Session.Phase == captured.Phase);
+        log.Write("npc_favor_item", new { Connection = context.Id, request.Slot, Npc = request.FirstArgument,
+            result.Accepted, result.Error, Revision = result.Receipt?.Character.Revision });
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION,
+            result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request),
+            result.Accepted ? "npc_favor_committed" : "npc_favor_rejected", Guard);
+        // 015AADBD提交NPC编号，ACK515已自行扣一封；仅回放绝对好感度，不再用NOTI14重复扣源。
+        if (result.Receipt is { } committed)
+            await context.Notify(NotiPacketType.NPC_FAVOR_POINT_INFO, NpcFavorPackets.Snapshot(committed.Character.Inventory.NpcFavor),
+                "npc_favor_updated", Guard);
         return CommandResult.Handled;
     }
 

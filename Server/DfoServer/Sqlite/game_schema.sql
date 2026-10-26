@@ -278,6 +278,7 @@ CREATE TABLE characters(
     blacklist_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(blacklist_count)='integer' AND blacklist_count BETWEEN 0 AND 2147483647),
     avatar_expansion INTEGER NOT NULL DEFAULT 105 CHECK(avatar_expansion BETWEEN 0 AND 315 AND avatar_expansion%7=0),
     devil_usage TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(devil_usage) AND json_type(devil_usage)='array'),
+    npc_favor TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(npc_favor) AND json_type(npc_favor)='array'),
     daily_booster_usage TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(daily_booster_usage) AND json_type(daily_booster_usage)='array'),
     weapon_skin_state TEXT NOT NULL DEFAULT '{"Owned":[],"Selected":0}' CHECK(json_valid(weapon_skin_state) AND json_type(weapon_skin_state)='object'),
     avatar_preset_state TEXT NOT NULL DEFAULT '{"Capacity":1,"Presets":[]}' CHECK(json_valid(avatar_preset_state) AND json_type(avatar_preset_state)='object'),
