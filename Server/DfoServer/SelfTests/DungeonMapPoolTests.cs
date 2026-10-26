@@ -65,6 +65,16 @@ internal static class DungeonMapPoolTests
         ExplicitCandidates();
         LostLandResources();
         GriefResource();
+        // 即使几何完整，普通Boss死亡合同也不能代替BossRush的专用房间、计时及结果流程。
+        var ordinary = definition with { Mazes = [result] };
+        var ready = new Character(99,0,"BossRushBoundary",0,new(38,2,1085,249),null) { Level = 95 };
+        That(DungeonEntryPlan.TryCreate(ordinary,ready,10,0,0,out _,out _),"BossRush隔离用例的对照路线可正式规划");
+        foreach (string type in new[] { "boss rush dungeon", " BOSS RUSH DUNGEON " })
+        foreach (bool bossCell in new[] { false,true })
+            That(!DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type },ready,10,0,0,out var rejected,out string reason,
+                    resolveMaze: _ => throw new InvalidOperationException("BossRush不能进入普通地图解析"),bossCellFromBossMap:bossCell) &&
+                rejected is null && reason == "boss-rush-room-contract-unproven",
+                "合法几何、大小写或Boss格投影均不能绕过BossRush专用合同，拒绝前不消费地图随机数");
         var trainingMaze = new DungeonMaze(0,1,1,"BB",[new(0,0)],[new(0,0)],null,[]);
         var trainingDefinition = new DungeonDefinition(5000,"dungeon/poongjintrainingroom/poongjintrainingroom.dgn",1,null,[trainingMaze],[]);
         var trainingPool = new DungeonMapPool([new(36250,"map/poongjintrainingroom/11100(0,0)start.map",[5000],"[normal]",2)]);
