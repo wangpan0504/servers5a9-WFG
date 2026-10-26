@@ -336,6 +336,11 @@ internal sealed record DungeonEntryPlan(
             candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(routeQuest,difficulty)));
         else if (questId == 0) candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
         else routeQuest = questId;
+        // 迷宫直接关联父任务时也要冻结当前清图子目标；路线仍使用父连接，不补造子接取。
+        if (!isReplay && candidates.Length != 0 && quest is not null && quests is not null &&
+            CurrentSequentialChild(character,quest,quests,dungeonId,difficulty) is { } currentChild &&
+            QuestClearEligibility.IsSingleMap(currentChild))
+            layoutQuest = currentChild;
         // 父请求保留自己的接取身份；布局和终点只借用真实顺序中的当前子任务。
         if (!isReplay && candidates.Length == 0 && questId != 0 && quest is not null && quests is not null &&
             QuestRelationProgress.SequentialParent(quest,quests))
