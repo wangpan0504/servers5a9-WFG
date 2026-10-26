@@ -18,7 +18,7 @@ internal sealed partial class GameSession
 
     internal bool CanBeginPartySelection() => owner.Execute(() => Ready && Selected is not null &&
         Phase is SessionPhase.Town or SessionPhase.MapSelect && pendingRental is null && !HasPendingTownQuestCommit &&
-        formalDungeon is null && (HasAntonDungeonAdmission || CurrentDungeonSelection is { IsClassExperience: false } ||
+        formalDungeon is null && (HasRaidDungeonAdmission || CurrentDungeonSelection is { IsClassExperience: false } ||
             towns.SelectionReturn(Selected.Position, completed) is not null));
 
     internal bool CanMoveWithParty() => owner.Execute(() => Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
@@ -90,7 +90,7 @@ internal sealed partial class GameSession
             !(Phase == SessionPhase.MapSelect && formalDungeon is null ||
                 Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null) || HasPendingTownQuestCommit) return null;
         var dungeon = plan.Dungeon;
-        if (!CanInstallAntonDungeon(dungeon.Entry)) return null;
+        if (!CanInstallRaidDungeon(dungeon.Entry)) return null;
         if (dungeon.Entry.OrdinaryLukeDay is { } day &&
             !repository.LoadOrdinaryLukeProgress(owner, Selected.Id).Allows(day, dungeon.Entry.DungeonId)) return null;
         var costs = new List<ItemMaterialCost>();
@@ -209,11 +209,13 @@ internal sealed partial class GameSession
             committed.Id != Selected.Id || committed.Revision < Selected.Revision)
             throw new InvalidOperationException("组队退场提交后身份变化");
         Selected = committed;
+        DfoServer.Game.Raids.AntonRaidBattleChange? raidChange = null;
         if (formalDungeon is { } dungeon)
         {
             if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted)
                 throw new InvalidOperationException("组队退场不能结束已复核的实例");
             dungeon.Ground.ExpireRun();
+            raidChange = ReleaseCurrentRaidDungeon();
             formalDungeon = null;
             CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
         }
@@ -229,10 +231,10 @@ internal sealed partial class GameSession
         return prepared.Kind switch
         {
             PartyDungeonExitKind.ResultReturn => new PartyDungeonNotice(PartyDungeonNoticeKind.ResultReturn, member, members,
-                Travel: new(committed, owner.Generation, SelectionEpoch)),
+                Travel: new(committed, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange }),
             _ => new PartyDungeonNotice(prepared.Kind == PartyDungeonExitKind.SelectionReturn ? PartyDungeonNoticeKind.SelectionReturn :
                 prepared.Kind == PartyDungeonExitKind.ResultSelection ? PartyDungeonNoticeKind.ResultSelection : PartyDungeonNoticeKind.Selection,
-                member, members, Selection: new(committed, owner.Generation, SelectionEpoch, dungeonSelectionId))
+                member, members, Selection: new(committed, owner.Generation, SelectionEpoch, dungeonSelectionId), RaidBattleChange: raidChange)
         };
     });
 
