@@ -11,6 +11,7 @@ internal sealed partial class CharacterRepository
     // 子账本先于父账本删除；未知的新外键依赖会使整笔事务失败，而不是留下半份存档。
     static readonly string[] DeletionTables =
     [
+        "character_luke_normal_drop_claims", "character_luke_normal_progress",
         "character_boss_selection_buff",
         "character_tutorial_receipts", "character_tutorial_state",
         "character_grief_tower_clears", "character_grief_tower_entries", "character_grief_tower",

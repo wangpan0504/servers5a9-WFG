@@ -220,6 +220,61 @@ internal static class DungeonDropCollectionRepositoryTests
                 "满级击杀不涨经验条，熟练度按同额经验写入");
             That(new CharacterRepository(path).LoadCharacter(owner, maxReserved.Slot).DungeonState is
                 { ProficiencyLevel: 0, ProficiencyExperience: 1 }, "重开库保留已提交的熟练度进度");
+            // 明确合成两张不同副本/房间的同模板演员，验证稳定资格键；不宣称PVF自然路线会重复该怪。
+            var dailyCharacter = repository.Create(owner, SkillRepositoryTests.Fixture("LukeCross", towns, characters, learning) with
+                { DungeonState = CharacterDungeonState.NewOrdinary });
+            int originalPieces = dailyCharacter.Inventory.EpicPieces.Get(0);
+            Guid? firstDailyEvent = null;
+            for (int index = 0; index < 2; index++)
+            {
+                var dailyReserved = repository.ReserveDungeonAttempt(owner, dailyCharacter, checked((uint)(700 + index * 10)));
+                var dailyMap = new DungeonMap("boss", new(0, 0), 55900 + index, "map/luke-daily-cross-fixture.map");
+                var dailyMaze = new DungeonMaze(0, 1, 1, "合成跨图日资格", [dailyMap.Position], [dailyMap.Position], [dailyMap], []);
+                var dailyEntry = new DungeonEntryPlan(dailyReserved.Id, dailyReserved.Revision, checked((uint)(5101 + index)), 0, byte.MaxValue, 0,
+                    dailyMaze, dailyMap, dailyMap) { IsOrdinaryLuke = true, OrdinaryLukeDay = 20261026 };
+                var dailySource = source with { MonsterId = 56063, RawValues = [56063, 0, 3, 100, 100, 0, 1, 1] };
+                var dailyPlan = new DungeonMonsterPlan(new(dailyMap, [dailySource], [], []), [new(0, 20, 56063, 3, dailySource)]);
+                That(SinglePlayerDungeonRun.TryCreate(dailyEntry, dailyReserved.DungeonState!.LastAttempt, index + 1, new([dailyPlan], []), authority, out var dailyRun, out var dailyReason),
+                    "合成跨图回归仍建立原Run与不同instance：" + dailyReason);
+                dailyRun!.CompleteLoading(dailyRun.Snapshot.Identity, Guid.NewGuid());
+                var dailyPending = dailyRun.PrepareConfirmedDeath(authority.Death(dailyRun.Snapshot.Identity, 20)).Pending!;
+                var previous = repository.LoadOrdinaryLukeDropEvent(owner, dailyReserved.Id, 20261026, 56063);
+                That((previous is null) == (index == 0), "资格查询不使用副本、房间或对象key作为去重键");
+                var dailyGround = new DungeonGroundState(dailyRun, [dailyPlan],
+                    [new(20, dailyReserved.DungeonState.NextObjectKey - 1, dailyMap, 100, 100, 0)], "合成跨图日资格");
+                int dailyDraws = 0;
+                var dailyLoot = dailyGround.GetOrFreezeAssets(dailyPending, () => { dailyDraws++; return [new(InventoryRewardGrantService.Create(resources.Items.Get(10300000), 1, now))]; },
+                    ordinaryLukeDaily: new(20261026, 56063, previous is null));
+                var dailyReward = new DungeonExperienceReward("fixture-only", DungeonKillExperienceCatalog.ResourcePath, 56063, 3, 1);
+                var dailyCommit = repository.CommitDungeonGrowth(owner, dailyReserved, dailyRun, dailyPending, dailyReward, growth, dailyLoot);
+                dailyCharacter = dailyCommit.Character;
+                firstDailyEvent ??= dailyPending.Death.EventId;
+                That(dailyDraws == (index == 0 ? 1 : 0) && dailyLoot.Grounds.Length == (index == 0 ? 1 : 0) &&
+                    repository.LoadOrdinaryLukeDropEvent(owner, dailyReserved.Id, 20261026, 56063) == firstDailyEvent,
+                    "换副本与房间后同源怪不重抽/不增发，仍保留原首击事实");
+                dailyRun.ConfirmCommittedDeath(dailyPending);
+                That(dailyGround.PublishCommitted(dailyPending, dailyLoot), "跨图空地面结果也在原事务提交后发布");
+                if (index == 0)
+                {
+                    var pieceGround = dailyLoot.Grounds.Single();
+                    var piecePickup = dailyGround.PreparePickup(dailyRun.Snapshot.Identity, pieceGround)!;
+                    var piecePlan = DungeonPickupPlanning.Item(dailyCharacter, pieceGround.Content, resources.Items.Get(10300000),
+                        resources.GoldLimits, resources.EpicPieces, now);
+                    That(piecePlan.Accepted, "日资格冻结集合保留原碎片拾取规划");
+                    var pieceCommit = repository.CommitDungeonPickup(owner, dailyCharacter, piecePickup, piecePlan.Plan!, resources.EpicPieces);
+                    var pieceReplay = repository.CommitDungeonPickup(owner, dailyCharacter, piecePickup, piecePlan.Plan!, resources.EpicPieces);
+                    That(pieceCommit.EpicPiece is { PieceId: 10300000, Amount: 1 } metadata && metadata.Balance == originalPieces + 1 &&
+                        metadata.BookRevision == dailyCharacter.Inventory.EpicPieces.Revision + 1 && pieceReplay.EpicPiece == metadata &&
+                        pieceReplay.Duplicate && pieceCommit.Character.Inventory.Items.SequenceEqual(dailyCharacter.Inventory.Items) &&
+                        repository.LoadOrdinaryLukeDropEvent(owner, dailyCharacter.Id, 20261026, 56063) == firstDailyEvent,
+                        "日首击资格与碎片book余额/revision共存，回放保留metadata且不伪造物理槽");
+                    That(dailyGround.ConfirmPickup(piecePickup), "碎片实际入book后原地面拾取确认");
+                    dailyCharacter = pieceCommit.Character;
+                }
+                That(dailyCharacter.Inventory.EpicPieces.Get(0) == originalPieces + 1,
+                    "跨图重复死亡不生成第二份碎片或覆盖账号book余额");
+            }
+
         }
         finally
         {

@@ -155,7 +155,7 @@ internal static partial class TownProtocolTcpTests
             That(!sent.Any(p => p.GetProperty("Kind").GetInt32() == 1 && p.GetProperty("Opcode").GetInt32() == opcode), "unimplemented has no fabricated ACK");
         }
 
-        await PreparedAsync(fixture, towns);
+        await PreparedAsync(fixture, towns, resources);
         Console.WriteLine("PASS C# TCP town: entry, exit, raw travel, quests, docks, portals, NPC, dungeon select notice and reconnect");
     }
 
@@ -237,7 +237,7 @@ internal static partial class TownProtocolTcpTests
         return JsonSerializer.Serialize(rows);
     }
 
-    static async Task PreparedAsync(TcpTestFixture fixture, TownCatalog towns)
+    static async Task PreparedAsync(TcpTestFixture fixture, TownCatalog towns, TcpTestResources resources)
     {
         string original = fixture.Snapshot();
         string audit = Path.Combine(fixture.Root, "preparation");
@@ -250,6 +250,11 @@ internal static partial class TownProtocolTcpTests
         That(fixture.Snapshot("SELECT * FROM characters WHERE slot=0") == original, "preparation preserves existing role");
         ushort id = prepared.GetProperty("Id").GetUInt16(), slot = prepared.GetProperty("Slot").GetUInt16();
         var quests = fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0", id).Select(r => Convert.ToInt32(r[0])).ToHashSet();
+        using var intent = JsonDocument.Parse(File.ReadAllText(Path.Combine(audit, "intent.json")));
+        var definition = intent.RootElement.GetProperty("Preparation").Deserialize<DfoServer.Development.CharacterPreparation>()
+            ?? throw new InvalidDataException("准备意图缺少资源任务合同");
+        CharacterPreparationTests.VerifyQuestCoverage(definition, resources.Quests);
+        CharacterPreparationTests.RequireQuestSet(quests, definition.CompletedQuests.ToHashSet(), "意图到真实数据库");
         byte[] completed;
         await fixture.StartAsync("prepared");
         using (var peer = Open(fixture))
@@ -282,7 +287,7 @@ internal static partial class TownProtocolTcpTests
             That(player.Length == 257 && player[143] == 255 && player[144] == 15 && player[190] == 15,
                 "未开通的准备角色保留FF方案前缀及完整双树正文");
             completed = packets[6].Body;
-            That(completed.Length == 30004 && U32(completed) == 30000 && quests.Count == 943 &&
+            That(completed.Length == 30004 && U32(completed) == 30000 &&
                 completed.AsSpan(4).ToArray().Select((b, i) => (b, i)).Where(p => p.b != 0).Select(p => p.i)
                     .ToHashSet().SetEquals(quests.Append(13700)), "完整任务位图逐位等于真实进度及独立月轮山显示标记");
             Bytes(packets[^2].Body, [38, 0, 0, 0], "initial return town");

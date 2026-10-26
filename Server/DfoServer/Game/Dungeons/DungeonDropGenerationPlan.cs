@@ -25,13 +25,14 @@ internal sealed class DungeonDropGenerationPlan
     public ImmutableArray<DungeonDropTrial> Trials { get; }
     public int MaximumObjects { get; }
     public bool ReferenceQuality { get; }
+    public int? OrdinaryLukeDailySource { get; init; }
     public EquipmentAmplificationDropPolicy? Amplification { get; }
     public DungeonDropGenerationPlan WithGrowthContract(int percent)
     {
         if (percent < 0) throw new InvalidDataException("成长契约掉落加成不能为负");
         if (percent == 0 || !Trials.Any(trial => trial.GrowthContractEligible)) return this;
         return new(ResourceSource, Trials.Select(trial => !trial.GrowthContractEligible ? trial : trial with
-        { Threshold = (int)Math.Min(trial.ProbabilityDenominator, (long)trial.Threshold * (100L + percent) / 100) }), ReferenceQuality, Amplification);
+        { Threshold = (int)Math.Min(trial.ProbabilityDenominator, (long)trial.Threshold * (100L + percent) / 100) }), ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource };
     }
 
     public DungeonDropGenerationPlan(string resourceSource, IEnumerable<DungeonDropTrial> trials, bool referenceQuality = false,

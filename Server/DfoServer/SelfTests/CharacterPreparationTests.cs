@@ -2,6 +2,7 @@ using static DfoServer.Testing.TestCheck;
 using DfoServer.Game.Accounts;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
+using DfoServer.GameWorld.Quests;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Characters;
 using DfoServer.Development;
@@ -15,6 +16,47 @@ namespace DfoServer;
 
 internal static class CharacterPreparationTests
 {
+    // 生产准备器读取文本；此处用独立token任务目录核对史诗集合与前置闭包，不锁死资源版本的总数。
+    // 地图引用起点仍来自准备意图，保留固定地图/职业样本护栏，不能将此检查宣称独立重解析全部城镇。
+    internal static void VerifyQuestCoverage(CharacterPreparation definition, QuestCatalog catalog)
+    {
+        var main = catalog.All.Where(row => row.Grade == "[epic]").Select(row => row.Id).ToHashSet();
+        RequireQuestSet(definition.MainQuests, main, "史诗任务");
+        That(main.Count != 0 && definition.JobQuests.SequenceEqual(new[] { 5151, 5153, 5154, 5155, 5156, 5161, 5162, 5163, 5164, 5165, 5166 }),
+            "独立任务目录非空且保留剑影职业/两次觉醒链");
+        That(new[] { 10100, 2670, 6928, 8664, 8665, 8672, 6170, 8703, 8709, 2941 }.All(definition.MapQuests.Contains),
+            "地图准入固定样本不因总数变化被省略");
+        var expected = main.Concat(definition.MapQuests).Concat(definition.JobQuests).ToHashSet();
+        var pending = new Queue<int>(expected);
+        var absentReferences = new SortedSet<int>();
+        while (pending.TryDequeue(out int id))
+            foreach (int prerequisite in catalog.Get(id).Prerequisites)
+            {
+                // 旧脚本含已不在quest.lst的前置；与准备合同一样只纳入当前存在的正ID，不伪造完成任务。
+                if (prerequisite <= 0 || !catalog.TryGet(prerequisite, out _)) { absentReferences.Add(prerequisite); continue; }
+                if (expected.Add(prerequisite)) pending.Enqueue(prerequisite);
+            }
+        RequireQuestSet(definition.CompletedQuests, expected, "准备完成任务闭包");
+        That(expected.Contains(8663) && expected.Contains(8702) && !expected.Contains(6766) && !expected.Contains(13700),
+            "准入前置保留，其他职业与纯显示标记不能混入真实完成记录");
+        Reject<InvalidDataException>(() => RequireQuestSet(definition.CompletedQuests.Skip(1), expected, "漏项负例"),
+            "集合校验拒绝少一项，不只验证数量");
+        Reject<InvalidDataException>(() => RequireQuestSet(definition.CompletedQuests.Append(13700), expected, "多项负例"),
+            "集合校验拒绝伪造显示任务为真实完成");
+        Reject<InvalidDataException>(() => RequireQuestSet(definition.CompletedQuests.Skip(1).Append(13700), expected, "同数替换负例"),
+            "总数相同也不能用显示标记替换真实任务");
+        Console.WriteLine($"准备任务集合核对：史诗{main.Count}，完成闭包{expected.Count}，缺失/多余均为空；资源外前置[{string.Join(',', absentReferences)}]");
+    }
+
+    internal static void RequireQuestSet(IEnumerable<int> actual, IReadOnlySet<int> expected, string label)
+    {
+        int[] values = actual.ToArray();
+        var missing = expected.Except(values).Order().ToArray();
+        var extra = values.Except(expected).Order().ToArray();
+        if (missing.Length != 0 || extra.Length != 0 || values.Distinct().Count() != values.Length)
+            throw new InvalidDataException($"{label}不一致：缺失[{string.Join(',', missing)}]，多余[{string.Join(',', extra)}]或重复ID");
+    }
+
     public static void RunCore()
     {
         int checks = Count;
@@ -82,7 +124,7 @@ internal static class CharacterPreparationTests
         }
 
         var definition = CharacterPreparation.Load(pvf);
-        That(definition.MainQuests.Length == 916, "matching Client main quest catalog");
+        VerifyQuestCoverage(definition, global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf));
         That(definition.JobQuests.SequenceEqual(new[] { 5151, 5153, 5154, 5155, 5156, 5161, 5162, 5163, 5164, 5165, 5166 }), "Ghostblade job and both awakening chains");
         That(new[] { 10100, 2670, 6928, 8664, 8665, 8672, 6170, 8703, 8709, 2941 }.All(definition.MapQuests.Contains), "map access includes non-epic unlock quests");
         That(definition.CompletedQuests.Contains(8663) && definition.CompletedQuests.Contains(8702), "map unlock prerequisite chains");
