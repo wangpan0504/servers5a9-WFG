@@ -324,6 +324,7 @@ internal static class SelfTestRunner
         CurrencyTests.Run(towns, characters, itemResources);
         CargoTests.Run(towns, characters, itemResources);
         ShopTests.Run(towns, characters, itemResources);
+        NpcTradingTests.Run(towns, itemResources);
         RepairTests.Run(towns, characters, itemResources);
         RandomOptionTests.Run(towns, itemResources);
         RefinementTests.Run(towns, characters, itemResources);

@@ -30,7 +30,9 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         if (request.Count == 0 && template.Kind is not (ItemKind.Equipment or ItemKind.Talisman))
             return InventoryResult.Reject(0x85);
         int count = template.Kind is ItemKind.Equipment or ItemKind.Talisman or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal ? 1 : request.Count;
-        var price = template.ShopPrice;
+        // 交易窗口(ShopId<0)按名册买价结算；名册内没有金币买价也没有兑换材料的商品必须拒绝。
+        if (shops.PurchasePrice(request.NpcId, request.ShopId, request.ItemId, template.ShopPrice) is not { } price)
+            return InventoryResult.Reject(17);
         var before = character.Inventory;
         var after = before;
         var now = utcNow ?? DateTimeOffset.UtcNow;
@@ -115,7 +117,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
 
     public ShopPurchaseCount[]? PurchaseCounts(Character character, int npcId, DateTimeOffset? utcNow = null)
     {
-        if (!shops.Shops.Values.Any(shop => shop.NpcId == npcId))
+        if (!shops.Shops.Values.Any(shop => shop.NpcId == npcId) && !shops.IsTradingNpc(npcId))
             return null;
         int today = ShopPurchaseCount.Today(utcNow ?? DateTimeOffset.UtcNow);
         return character.Inventory.ShopPurchases.Where(row => row.NpcId == npcId && row.Effective(today) > 0 &&
@@ -138,18 +140,33 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             return InventoryResult.Reject(0xd6);
         if (!shops.CanSell(source.Core.ItemId))
             return InventoryResult.Reject();
-        if (source.IsExpired(Clock.GetUtcNow().ToUnixTimeSeconds()))
+        var now = Clock.GetUtcNow();
+        if (source.IsExpired(now.ToUnixTimeSeconds()))
             return InventoryResult.Reject();
         int count = InventoryStackRuleService.NormalizeMoveCount(source.Core, request.Count);
         var template = catalog.Get(source.Core.ItemId);
         // 时装穿戴后位于 Equipment，不能只靠容器排除；宠物蛋和成宠仍按原事务出售。
         if (template.Kind == ItemKind.Avatar || template.PvpFreeEquipment)
             return InventoryResult.Reject();
-        int price = template.ShopPrice.GetSellGold(source.Core.Durability, template.Durability);
+        // 交易商人按名册收购价结算；名册只列兑换/特殊交易或不在名册内的商品沿用模板价。
+        int price = shops.TradingSellGold(request.NpcContext, source.Core.ItemId)
+            ?? template.ShopPrice.GetSellGold(source.Core.Durability, template.Durability);
         long gold = (long)before.Gold + (long)price * count;
         if (gold > int.MaxValue || gold > new CurrencyService(goldLimits).CarryLimit(character))
             return InventoryResult.Reject(22);
-        var deletion = InventoryDeleteService.Plan(before, request.Position, source.Core.Value, count);
+        var planned = before;
+        if (template.ShopPrice.SaleLimit is { } saleLimit)
+        {
+            // [sale limit] 是物品级账号每日收购上限；用 npc_id=0 与各商人的购买计数分开存放。
+            var key = new ShopPurchaseCount(0, source.Core.ItemId, saleLimit.AccountWide, true, ShopPurchaseCount.Today(now), count);
+            var previous = before.ShopPurchases.SingleOrDefault(key.SameKey);
+            int used = previous?.Effective(key.Day) ?? 0;
+            if ((long)used + count > saleLimit.Count)
+                return InventoryResult.Reject(0x85);
+            key = key with { Count = used + count };
+            planned = before with { ShopPurchases = previous is null ? before.ShopPurchases.Add(key) : before.ShopPurchases.Replace(previous, key) };
+        }
+        var deletion = InventoryDeleteService.Plan(planned, request.Position, source.Core.Value, count);
         if (!deletion.Accepted)
             return deletion;
         return new(true, 0, new(before, deletion.Plan!.After with { Gold = checked((uint)gold) }, "npc_shop_sell", new(character, source.ExpireTime > 0 ? source.ExpireTime : null, Clock)), count);

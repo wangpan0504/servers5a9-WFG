@@ -11,16 +11,22 @@ internal sealed record NpcShop(int NpcId, FrozenSet<int> Items)
     // 攻坚商店(.shp)不写[NPC]段，按文件类型识别；购买时不再校验商人，见 Allows 的说明。
     public bool Raid { get; init; }
 }
+// 交易窗口的商品：BuyGold 是[item list]基准价×倍率后的金币买价，SellGold 是收购价；只列材料兑换的商品为 0/null。
+internal sealed record NpcTradingProduct(int BuyGold, int? SellGold);
 internal sealed class NpcShopCatalog
 {
     readonly FrozenSet<int> saleRestrictions;
     public FrozenDictionary<int, NpcShop> Shops { get; }
+    public FrozenDictionary<int, FrozenDictionary<int, NpcTradingProduct>> Trading { get; }
     public int EquipmentSellRate { get; }
 
     public NpcShopCatalog(PvfArchive pvf)
     {
         const string restrictionsPath = "etc/chn_undeletable_item.etc";
         saleRestrictions = ParseSaleRestrictions(pvf.Contains(restrictionsPath) ? pvf.ReadText(restrictionsPath) : null);
+        // 交易商人不在 itemshop/*.shp 内，名册只存在于 etc/tradingsystem.etc；文件缺失按无交易商人处理。
+        const string tradingPath = "etc/tradingsystem.etc";
+        Trading = ParseTrading(pvf.Contains(tradingPath) ? pvf.ReadText(tradingPath) : null);
         EquipmentSellRate = Integers(Section(pvf.ReadText("equipment/pricetable.tbl"), "rate")).First();
         var shops = new Dictionary<int, NpcShop>();
         foreach (var (id, path) in List(pvf.ReadText("itemshop/itemshop.lst")))
@@ -48,9 +54,26 @@ internal sealed class NpcShopCatalog
         Shops = shops.ToFrozenDictionary();
     }
 
-    public bool Allows(int npcId, int shopId, int itemId) => Shops.TryGetValue(shopId, out var shop) &&
-        shop.Items.Contains(itemId) &&
-        (shop.Raid || shop.NpcId == npcId);
+    // 交易窗口客户端固定发 ShopId=-1，此时只核对交易名册内的商人-商品对；普通商店仍校验 .shp。
+    public bool Allows(int npcId, int shopId, int itemId) => shopId < 0
+        ? Trading.TryGetValue(npcId, out var trading) && trading.ContainsKey(itemId)
+        : Shops.TryGetValue(shopId, out var shop) && shop.Items.Contains(itemId) && (shop.Raid || shop.NpcId == npcId);
+
+    // 交易名册覆盖买价，普通商店沿用模板价。名册只列材料兑换的商品没有金币买价，
+    // 模板也没有[need material]时无价可付，必须拒绝，不能退化成免费购买。
+    public ItemShopPrice? PurchasePrice(int npcId, int shopId, int itemId, ItemShopPrice template)
+    {
+        if (shopId >= 0) return template;
+        if (!Trading.TryGetValue(npcId, out var trading) || !trading.TryGetValue(itemId, out var product)) return null;
+        if (product.BuyGold > 0) return template with { Gold = product.BuyGold };
+        return template.Materials.Length != 0 ? template : null;
+    }
+
+    // 只有[item list]明确标价的商品才有名册收购价；只列兑换/特殊交易的商品沿用模板价。
+    public int? TradingSellGold(int npcId, int itemId) =>
+        Trading.TryGetValue(npcId, out var trading) && trading.TryGetValue(itemId, out var product) ? product.SellGold : null;
+
+    public bool IsTradingNpc(int npcId) => Trading.ContainsKey(npcId);
 
     // 某个商人在全部商店页上的在售物品并集；职业分页只是展示，库存按商人整体计算。
     public FrozenSet<int> Stock(int npcId) => Shops.Values.Where(shop => shop.NpcId == npcId)
@@ -78,13 +101,69 @@ internal sealed class NpcShopCatalog
         }
         return items.ToFrozenSet();
     }
+
+    internal static FrozenDictionary<int, FrozenDictionary<int, NpcTradingProduct>> ParseTrading(string? text)
+    {
+        // 缺失文件表示本版没有交易商人；块结构或价格非法时装配失败，不能静默放行。
+        var trading = new Dictionary<int, Dictionary<int, NpcTradingProduct>>();
+        if (string.IsNullOrWhiteSpace(text))
+            return FrozenDictionary<int, FrozenDictionary<int, NpcTradingProduct>>.Empty;
+        foreach (Match block in Regex.Matches(text, @"\[trade item list\](.*?)\[/trade item list\]",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase))
+        {
+            string body = block.Groups[1].Value;
+            int[] who = Integers(Regex.Match(body, @"\A[^\[]*").Value);
+            if (who.Length != 1 || who[0] <= 0)
+                throw new InvalidDataException("PVF 交易商人缺少有效商人编号");
+            if (!trading.TryGetValue(who[0], out var products))
+                trading.Add(who[0], products = new Dictionary<int, NpcTradingProduct>());
+            foreach (Match row in Regex.Matches(Section(body, "item list"), @"[^\r\n]+"))
+            {
+                string[] parts = row.Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 3 ||
+                    !int.TryParse(parts[0], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int itemId) || itemId <= 0 ||
+                    !int.TryParse(parts[1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int baseGold) || baseGold < 0 ||
+                    !double.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double multiplier) || !(multiplier > 0))
+                    throw new InvalidDataException("PVF 交易商品价格无效");
+                // 买价按远离零取整：6666×1.25=8332.5 应记 8333，与客户端显示的整数价一致。
+                int buy = (int)Math.Clamp(Math.Round(baseGold * multiplier, MidpointRounding.AwayFromZero), 0, int.MaxValue);
+                products[itemId] = new(buy, baseGold);
+            }
+            // [shop item] 只列可用材料兑换的商品，没有独立金币买价。
+            foreach (int itemId in Integers(Section(body, "shop item")).Where(id => id > 0))
+                products.TryAdd(itemId, new(0, null));
+        }
+        foreach (Match block in Regex.Matches(text, @"\[particular trade item list\](.*?)\[/particular trade item list\]",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase))
+        {
+            int[] values = Integers(block.Groups[1].Value);
+            if (values.Length < 2 || values[0] <= 0 || (values.Length - 2) % 2 != 0)
+                throw new InvalidDataException("PVF 特殊交易商品定义无效");
+            if (!trading.TryGetValue(values[0], out var products))
+                trading.Add(values[0], products = new Dictionary<int, NpcTradingProduct>());
+            // 行首数字含义未确认，只按 (物品, 标记) 对取成员资格；标记不是 -1 时拒绝，避免把未知语义当成可兑换。
+            for (int index = 2; index < values.Length; index += 2)
+            {
+                if (values[index] <= 0 || values[index + 1] != -1)
+                    throw new InvalidDataException("PVF 特殊交易商品定义无效");
+                products.TryAdd(values[index], new(0, null));
+            }
+        }
+        var result = new Dictionary<int, FrozenDictionary<int, NpcTradingProduct>>(trading.Count);
+        foreach (var (npc, products) in trading)
+            result.Add(npc, products.ToFrozenDictionary());
+        return result.ToFrozenDictionary();
+    }
 }
 
 internal sealed record ItemPurchaseLimit(bool AccountWide, int Count, bool ResetDaily);
+// [sale limit] 是物品级收购上限：账号内各角色共享，每日 UTC+8 06:00 重置。
+internal sealed record ItemSaleLimit(bool AccountWide, int Count);
 internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<ItemMaterialCost> Materials, ItemPurchaseLimit? Limit)
 {
     int? EquipmentValue { get; init; }
     int EquipmentSellRate { get; init; }
+    public ItemSaleLimit? SaleLimit { get; init; }
 
     public int GetSellGold(ushort durability, ushort maximumDurability)
     {
@@ -120,11 +199,23 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
                 throw new InvalidDataException("NPC 限购定义无效");
             limit = new(account, count, text.Has("reset daily purchase item"));
         }
+        string saleLimited = text.Section("sale limit");
+        ItemSaleLimit? saleLimit = null;
+        if (saleLimited.Length != 0)
+        {
+            string[] scope = Regex.Matches(saleLimited, "`([^`]+)`").Select(match => match.Groups[1].Value.ToLowerInvariant()).ToArray();
+            int count = Integers(saleLimited).Single();
+            // 本版资源只出现过 `account` `daily`；未确认的范围或周期不能放宽成更宽的收购规则。
+            if (scope.Length != 2 || scope[0] != "account" || scope[1] != "daily" || count <= 0)
+                throw new InvalidDataException("NPC 收购上限定义无效");
+            saleLimit = new(true, count);
+        }
         var materials = Enumerable.Range(0, material.Length / 2).Select(index => new ItemMaterialCost(material[index * 2], material[index * 2 + 1])).ToImmutableArray();
         var result = new ItemShopPrice((int)gold, sell, materials, limit)
         {
             EquipmentValue = equipment ? value >= 0 ? value : (int)gold : null,
-            EquipmentSellRate = equipmentSellRate
+            EquipmentSellRate = equipmentSellRate,
+            SaleLimit = saleLimit
         };
         return equipment ? result with { SellGold = result.GetSellGold(0, 0) } : result;
     }
