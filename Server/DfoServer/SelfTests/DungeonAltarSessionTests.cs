@@ -97,6 +97,9 @@ internal static class DungeonAltarSessionTests
                 That(session.StartDungeonAltar(loaded) is null && session.PrepareDungeonAltarUi(loaded),
                     "实际房间必须完成UI准备才能启动波次");
                 var current = session.StartDungeonAltar(loaded)!;
+                var firstActor = loaded.Monsters.Altar!.Actors[0];
+                That(session.ObserveDungeonAltarDeath(Observation(firstActor.ObjectKey)) is null,
+                    "两祭坛39不能确认已分配但尚未计时发布的对象");
                 while (!current.State.Completed)
                 {
                     if (current.State.WaitingForDifficulty)
@@ -106,8 +109,33 @@ internal static class DungeonAltarSessionTests
                     if (current.Batch is { } batch)
                     {
                         actorsKilled += batch.Actors.Length;
-                        current = session.ObserveDungeonAltarDeaths(batch.Actors.Select(row => row.ObjectKey).ToImmutableArray(),
-                            new string('A',64)) ?? throw new InvalidOperationException("实际祭坛对象死亡未推进");
+                        var keys = batch.Actors.Select(row => row.ObjectKey).ToImmutableArray();
+                        if (dungeonId == 11007 || current.State.Round == current.State.Plan.Definition.RoundCount - 1 && current.State.NextDue is null)
+                        {
+                            foreach (var actor in batch.Actors)
+                            {
+                                var observation = Observation(actor.ObjectKey);
+                                That(session.ObserveDungeonAltarDeath(observation with { ChecksumMatches = false }) is null &&
+                                    session.ObserveDungeonAltarDeath(observation with { MonsterKey = uint.MaxValue }) is null &&
+                                    session.ObserveDungeonAltarDeath(observation with { MonsterKey = ushort.MaxValue }) is null,
+                                    "祭坛39拒绝错误校验和、溢出键与未知对象，仍可处理后续合法击杀");
+                                current = session.ObserveDungeonAltarDeath(observation)
+                                    ?? throw new InvalidOperationException("祭坛实际39死亡未推进");
+                                var deathReplay = session.ObserveDungeonAltarDeath(observation);
+                                That(deathReplay is { RoundAdvanced: false } && deathReplay.Round == current.Round &&
+                                    ReferenceEquals(session.Selected, entered.Character),
+                                    "祭坛重复39只补发退场资格，不重复推进或写普通成长/掉落");
+                            }
+                            That(session.ObserveDungeonAltarDeaths(keys, new string('B',64)) is null,
+                                "39之后重复255共用原死亡表，不推进另一回合");
+                        }
+                        else
+                        {
+                            current = session.ObserveDungeonAltarDeaths(keys, new string('A',64))
+                                ?? throw new InvalidOperationException("实际祭坛对象死亡未推进");
+                            That(session.ObserveDungeonAltarDeath(Observation(keys[0])) is { RoundAdvanced: false },
+                                "255之后重报39可补发退场资格，不因上报协议不同重复推进");
+                        }
                     }
                 }
                 roomsCleared++;
@@ -146,6 +174,7 @@ internal static class DungeonAltarSessionTests
             var abandoned = session.StartDungeonAltar(reloaded)!;
             That(session.ReturnFromFormalDungeon() is not null && !session.CanPublishDungeonAltar(abandoned) &&
                 session.TickDungeonAltar(abandoned) is null && session.DungeonSnapshot is null &&
+                session.ObserveDungeonAltarDeath(Observation(entered.Monsters.Altar!.Actors[0].ObjectKey)) is null &&
                 session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!.Counts.Single(row => row.Dungeon == dungeonId).Daily == 1,
                 "祭坛已启动波次退出后旧计时不能发布或复活实例，已提交的两次入场不退款");
             session.End();
@@ -198,6 +227,9 @@ internal static class DungeonAltarSessionTests
             return session.EnterFormalDungeon(id,0,0,dungeons,rooms,items: null,draw:_=>0,pieces:items.EpicPieces)
                 ?? throw new InvalidOperationException("祭坛实际准入失败："+session.LastFormalDungeonRejection);
         }
+
+        NativeDungeonDeathObservation Observation(ushort key) => new(key, 1, 0x111, 1, 600, 1, 0, 70, 0, 650, 1,
+            true, new string('A',64));
     }
 
     sealed class Clock : TimeProvider

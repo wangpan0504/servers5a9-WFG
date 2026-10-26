@@ -71,10 +71,24 @@ internal static partial class FormalDungeonTcpTests
             while (next is {Kind:0,Opcode:213}) next=peer.Read();
             That(next is {Kind:0,Opcode:210} && next.Body.Length==4+U16(next.Body,0)*17 && U16(next.Body,0)>0,
                 "UI准备后实际计时发布210，正文数量和17字节对象记录相符");
-            // 只合成已发布对象的死亡报告，未使用普通39经验/掉落。
+            // 两祭坛实机均有完整39，不能仅用255合成报告证明击杀链路。
             int count=U16(next.Body,0);
             byte[] killed=new byte[1+count*2]; killed[0]=checked((byte)count);
             for(int at=0;at<count;at++) next.Body.AsSpan(3+at*17,2).CopyTo(killed.AsSpan(1+at*2));
+            ushort key = U16(next.Body,3);
+            byte[] normalDeath = Death(key,peer.Id,next.Body[10]);
+            byte[] corrupt = (byte[])normalDeath.Clone();
+            corrupt[^1] ^= 1;
+            peer.Send(39,corrupt);
+            peer.Send(39,Death(ushort.MaxValue,peer.Id,next.Body[10]));
+            peer.Barrier();
+            foreach (bool replay in new[] { false, true })
+            {
+                peer.Send(39,normalDeath);
+                Bytes(ReadUntil(38).Body,[(byte)key,(byte)(key>>8),0,0,0,0,255,0,0],
+                    replay ? "祭坛重复39补发相同对象退场，不重复推进或发奖" : "祭坛合法39先回完整38清除死亡对象");
+            }
+            // 255与39共用本Run死亡事实，混合重报不重复推进。
             peer.Send(255,killed);
             peer.Send(40,[0x74,0,4,1,0,0]);
             ReadUntil(32);
