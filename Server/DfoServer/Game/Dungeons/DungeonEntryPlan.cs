@@ -22,6 +22,9 @@ internal sealed record DungeonEntryPlan(
     // 实验性（未在95客户端实证）：深渊派对入场（op16 请求 [7]=1）。非空表示本次入场走 maze 的 [hell dungeon] 深渊房间，
     // 并在 DUNGEON_INFO/START_MAP 里带深渊标志；HellPartyMode 取请求标志（参考项目 ResolveHellPartyMode：requestFlag != 0 ? requestFlag : 按难度权重）。
     public DungeonHellPartyRoom? HellParty { get; init; }
+    // 时空裂缝（[inferno dungeon]）：按深渊派对模式进入，但整条路线本身就是深渊场地，没有密门房间可换图。
+    // 与密门深渊共用 HellPartyMode/深渊标志，区别只在 HellParty 为空、不抽柱子波次。
+    public bool IsInfernoParty { get; init; }
     public byte HellPartyMode { get; init; }
     public bool IsHellLegend { get; init; }
     public bool IsCosmo { get; init; }
@@ -167,6 +170,8 @@ internal sealed record DungeonEntryPlan(
                 definition.StartFatigue != 8)
             { reason = "cosmo-entry-contract-unsupported"; return false; }
         }
+        // 时空裂缝只能按深渊派对模式进入（PVF 副本头 [select dungeon normal disable] 1），普通请求不能落回普通路线白进。
+        if (definition.IsInfernoDungeon && !hellParty) { reason = "inferno-mode-required"; return false; }
         // 悲叹只能由已核对账号额度和当前楼层的专用准入进入，不能借普通入口跳层或叠加两张票。
         if (definition.RequiresGriefEntryContract)
         {
@@ -349,10 +354,18 @@ internal sealed record DungeonEntryPlan(
             }
         }
         // 实验性：深渊派对只走普通（无任务连接）且声明了 [hell dungeon] 深渊房间的 maze；不沿用任务/顺序任务/普通狩猎的路线推断。
+        // 时空裂缝（[inferno dungeon]）没有密门，整条路线就是深渊场地：候选是该副本全部无任务连接 maze，不换图、不加房间。
+        bool infernoParty = hellParty && definition.IsInfernoDungeon;
+        if (infernoParty && (cosmo || hellLegend)) { reason = "hell-party-mode-unsupported"; return false; }
         if (hellParty)
         {
-            candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && (cosmo || maze.HellParty is not null) &&
-                (cosmo || !hellLegend || maze.HellParty!.LegendMapId > 0 && maze.HellLegendPath is not null)).ToArray();
+            candidates = definition.Mazes.Where(maze =>
+            {
+                if (maze.QuestConnectionTokens.Count != 0) return false;
+                if (cosmo || infernoParty) return true;
+                return maze.HellParty is not null &&
+                    (!hellLegend || maze.HellParty.LegendMapId > 0 && maze.HellLegendPath is not null);
+            }).ToArray();
             ordinaryHunt = false; routeQuest = 0; quest = null; layoutQuest = null;
             if (candidates.Length == 0) { reason = "hell-party-maze-unavailable"; return false; }
             // 同一副本声明了多个带深渊房间的普通 maze（如 291100319 的 313166/313173）：与普通入场一样随机选一个。
@@ -557,12 +570,14 @@ internal sealed record DungeonEntryPlan(
             IsQuestReplay = isReplay,
             IsPractice = practice,
             GriefLayer = grief?.Before.State.Layer,
-            HellParty = hellParty && !cosmo ? activeHell : null,
+            HellParty = hellParty && !cosmo && !infernoParty ? activeHell : null,
+            IsInfernoParty = infernoParty,
             IsHellLegend = hellParty && !cosmo && hellLegend,
             IsCosmo = cosmo,
             AllowsCompanionAi = definition.AllowsCompanionAi,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
-            StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : (ushort)0,
+            // 时空裂缝入场一次扣 6 点疲劳（用户指定的本服规则）；PVF 没有声明分段数，不能沿用逐房间一点。
+            StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : infernoParty ? (ushort)6 : (ushort)0,
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };

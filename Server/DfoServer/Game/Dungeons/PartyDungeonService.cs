@@ -82,7 +82,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         var prepared = new List<(PartyMember Member, GameSession.PartyDungeonPreparation Preparation)>();
         if (leader.FormalDungeonResultFocus() is { } previous)
         {
-            hellParty = previous.Entry.HellParty is not null || previous.Entry.IsCosmo;
+            hellParty = previous.Entry.HellParty is not null || previous.Entry.IsCosmo || previous.Entry.IsInfernoParty;
             hellLegend = previous.Entry.IsHellLegend;
             questId = leader.Selected?.ActiveMainQuests.Any(q => q.QuestId == previous.Entry.QuestId) == true
                 ? previous.Entry.QuestId : 0;

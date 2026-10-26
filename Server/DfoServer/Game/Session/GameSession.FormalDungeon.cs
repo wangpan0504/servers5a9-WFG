@@ -275,7 +275,8 @@ internal sealed partial class GameSession
         // 票据在下面统一规划并随实例安装原子提交；组队逐人核验并由共享入场事务扣除。
         if (hellParty)
         {
-            if (retry is not null && !retry.Entry.IsCosmo && !partyAdmission || training || trainingRoom || classExperience || assault is not null || questId != 0 ||
+            // 结算页再挑战对超星空与时空裂缝放行；两者都按当前背包重算门票与入场疲劳，不免费重开旧实例。
+            if (retry is not null && !retry.Entry.IsCosmo && !retry.Entry.IsInfernoParty && !partyAdmission || training || trainingRoom || classExperience || assault is not null || questId != 0 ||
                 sealDoor && (hellLegend || dungeonId == DungeonCosmoRewardCatalog.DungeonId))
                 return RejectFormal("hell-party-mode-unsupported");
             if (!towns.Areas.TryGetValue((expected.Position.Town, expected.Position.Area), out var hellArea) || hellArea.DungeonWorldMap is not { } hellWorld ||
@@ -333,7 +334,10 @@ internal sealed partial class GameSession
         }
         if (partyAdmission && (entry!.Maze.IsGriefTower || entry.IsAltar || entry.IsDespair || entry.IsTournament))
             return RejectFormal("party-special-dungeon-unsupported");
-        if (hellParty && entry!.HellParty is null && !entry.IsCosmo) return RejectFormal("hell-party-room-unavailable");
+        // 时空裂缝：除区域 [hell quest] 外，副本头 [inferno quest] 也须已完成（世界地图同一副本声明为 [is clear quest]）。
+        if (entry!.IsInfernoParty && catalog.Get(checked((int)dungeonId)).InfernoQuestId is int infernoQuest and > 0 && !done.Contains(infernoQuest))
+            return RejectFormal("hell-party-quest-required:" + infernoQuest);
+        if (hellParty && entry!.HellParty is null && !entry.IsCosmo && !entry.IsInfernoParty) return RejectFormal("hell-party-room-unavailable");
         HellPartyTicket? hellTicket = null;
         HellPartyTicket? legendTicket = null;
         var cosmoPasses = entry!.IsCosmo && items is not null ? items.CosmoPasses() : [];
@@ -346,6 +350,7 @@ internal sealed partial class GameSession
                 towns.DungeonMaps.TryGetValue(ticketWorld, out var ticketMap) ? ticketMap.HellItemConditions : [];
             var dungeonDefinition = catalog.Get(checked((int)dungeonId));
             int ticketCount = entry!.IsCosmo ? dungeonDefinition.CosmoInvitationCount :
+                entry.IsInfernoParty ? dungeonDefinition.HellPartyItemCount :
                 HellPartyEntryCost.RequiredCount(entry.HellParty!, dungeonDefinition.MinimumLevel);
             var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
             var pass = entry.IsCosmo && pieces is not null ? HellPartyEntryCost.CosmoPass(expected.Inventory, cosmoPasses, pieces, now) : (null, null, null);
@@ -536,6 +541,9 @@ internal sealed partial class GameSession
                 if (entry.HellParty is { } hellRoom && map.Position == hellRoom.Room && map.Id == hellRoom.MapId)
                     plan = plan.WithHellWaves(rooms.ResolveHellWaves(room, entry.HellPartyMode, entry.BasisLevel, RandomNumberGenerator.GetInt32), expected.Id,
                         rooms.HellParty.RewardRollCount(entry.HellPartyMode));
+                // 时空裂缝没有密门柱子波次：把同一份深渊装备骰绑到终点 Boss，死亡时沿用末波末杀的地面奖励事务。
+                else if (entry.IsInfernoParty && map.Position == entry.BossMap.Position && map.Id == entry.BossMap.Id)
+                    plan = plan.WithHellRewardRolls(rooms.HellParty.RewardRollCount(entry.HellPartyMode));
                 plans.Add(plan);
                 if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0 || plan.HellWaves.Count > 0) next = plan.NextObjectKey;
             }
