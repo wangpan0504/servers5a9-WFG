@@ -4,7 +4,8 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryEnchantmentService(ItemCatalog items, EnchantmentCatalog enchantments, TimeProvider? clock = null)
+internal sealed class InventoryEnchantmentService(ItemCatalog items, EnchantmentCatalog enchantments, TimeProvider? clock = null,
+    Func<int, int>? random = null)
 {
     // 272有公共u16拒绝分支；细分错误文案尚待客户端验收，不复用其他版本的宝珠错误表。
     internal const ushort Rejection = 23;
@@ -23,11 +24,11 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
             return InventoryResult.Reject(Rejection);
         var definition = enchantments.Get(source.Core.ItemId);
         if (definition is null) return InventoryResult.Reject(Rejection);
-        return Plan(character, request, utcSeconds, definition, items.Get(source.Core.ItemId), items.Get(target.Core.ItemId));
+        return Plan(character, request, utcSeconds, definition, items.Get(source.Core.ItemId), items.Get(target.Core.ItemId), random);
     }
 
     internal static InventoryResult Plan(Character character, EnchantmentRequest request, long now,
-        EnchantmentDefinition definition, ItemTemplate beadTemplate, ItemTemplate targetTemplate)
+        EnchantmentDefinition definition, ItemTemplate beadTemplate, ItemTemplate targetTemplate, Func<int, int>? random = null)
     {
         var before = character.Inventory;
         var source = before.Find(request.Source);
@@ -38,7 +39,7 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
             source.Core.Count <= 0 || target.Core.IsStackable || source.Core.EquipmentLockId != 0 || target.Core.EquipmentLockId != 0 ||
             source.IsExpired(now) || target.IsExpired(now) || beadTemplate.Id != source.Core.ItemId || beadTemplate.Kind != source.Core.Kind ||
             targetTemplate.Id != target.Core.ItemId || targetTemplate.Kind != target.Core.Kind || definition.BeadItemId != source.Core.ItemId ||
-            definition.CardItemId <= 0 || !definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)) ||
+            definition.CardItemId <= 0 && definition.RandomTitle is null || !definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)) ||
             !definition.LimitedItems.IsEmpty && !definition.LimitedItems.Contains(target.Core.ItemId) ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) ||
             !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind) || beadTemplate.UseForbidden ||
@@ -47,7 +48,10 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
             return InventoryResult.Reject(Rejection);
         var consumed = InventoryDeleteService.Plan(before, source.Position, source.Core.ItemId, 1);
         if (!consumed.Accepted) return InventoryResult.Reject(Rejection);
-        var changed = target with { Core = target.Core with { EnchantCardId = definition.CardItemId, EnchantUpgrade = definition.Upgrade } };
+        // 随机技能独立于普通卡片附魔；低16位奖池、高16位序号由客户端按完整表解释。
+        var core = definition.RandomTitle is { } pool ? target.Core with { Extension97 = pool.Draw(random ?? Random.Shared.Next) } :
+            target.Core with { EnchantCardId = definition.CardItemId, EnchantUpgrade = definition.Upgrade };
+        var changed = target with { Core = core };
         var after = consumed.Plan!.After with { Items = consumed.Plan.After.Items.Replace(target, changed) };
         after.Validate();
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
