@@ -25,9 +25,12 @@ internal static partial class FormalDungeonTcpTests
         int sequence = 0;
         foreach (var sample in new[] { (Id:9595,Tired:false,Ticket:false),(Id:9595,Tired:false,Ticket:true),(Id:5101,Tired:true,Ticket:true),
             (Id:5101,Tired:false,Ticket:true),(Id:400000016,Tired:false,Ticket:false),
-            (Id:400000016,Tired:true,Ticket:true),(Id:400000016,Tired:false,Ticket:true) })
+            (Id:400000016,Tired:true,Ticket:true),(Id:400000016,Tired:false,Ticket:true) }.Select(row => (row.Id,row.Tired,row.Ticket,Explicit:true))
+            .Concat(Enumerable.Range(5102,5).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:true)))
+            .Concat(Enumerable.Range(5101,6).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:false))))
         {
             var definition = dungeons.Get(sample.Id);
+            bool luke = definition.IsOrdinaryLuke;
             var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == sample.Id));
             var done = new HashSet<int>(area.Quests);
@@ -40,7 +43,7 @@ internal static partial class FormalDungeonTcpTests
             var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
             var position = new Location(area.Town,area.Area,(ushort)(walk.X+walk.Width/2),(ushort)(walk.Y+walk.Height/2));
             // 最后防线独立账号不继承普通频道历史，避免把副本准入用例变成跨类型换频道测试。
-            string account = sample.Id == 400000016 ? "entry608fiendwar" : fixture.Options.DevelopmentAccount;
+            string account = sample.Id == 400000016 ? "entry608fiendwar" : luke ? "entryluke"+sequence : fixture.Options.DevelopmentAccount;
             Character created;
             using (var owner = new AccountOwners().Acquire(account,() => { }))
             {
@@ -56,17 +59,17 @@ internal static partial class FormalDungeonTcpTests
                     var inventory = new InventoryService(items.Items,items.GoldLimits,items.EpicPieces);
                     created = InventoryService.Commit(repository,owner,created,inventory.Grant(created,[new(ticket.ItemId,ticket.Count * 2)]));
                 }
-                if (sample.Id == 9595 && sample.Ticket)
+                if (sample.Id == 9595 && sample.Ticket || luke && sample.Explicit && !sample.Tired)
                 {
                     var items = resources.ItemResources;
                     var inventory = new InventoryService(items.Items,items.GoldLimits,items.EpicPieces);
-                    created = InventoryService.Commit(repository,owner,created,inventory.Grant(created,[new(1,2)]));
+                    created = InventoryService.Commit(repository,owner,created,inventory.Grant(created,[new(1,luke ? 14 : 2)]));
                 }
             }
-            int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : 100;
+            int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : luke && !sample.Explicit ? 8 : 100;
             fixture.Sql("UPDATE character_fatigue SET remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
             // 最后防线只经频道39进入；普通选角先到共享房间，再出门到115/0，不能把上一角色的普通频道历史当作团本快照。
-            using var peer = sample.Id == 400000016 ? Open(fixture,account,gamePort:ChannelTcpTests.Endpoints(fixture)[39],channelNumber:39) : Open(fixture);
+            using var peer = sample.Id == 400000016 ? Open(fixture,account,gamePort:ChannelTcpTests.Endpoints(fixture)[39],channelNumber:39) : Open(fixture,account);
             if (sample.Id == 400000016)
             {
                 var entry = peer.Select(created.Slot,prepared:done.Count != 0);
@@ -78,7 +81,7 @@ internal static partial class FormalDungeonTcpTests
             }
             else
                 peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
-            ushort questId = sample.Id == 9595 ? (ushort)2683 : sample.Id == 5101 ? (ushort)2902 : (ushort)8683;
+            ushort questId = sample.Id == 9595 ? (ushort)2683 : luke ? (ushort)2902 : (ushort)8683;
             peer.Send(31,[(byte)31,0,(byte)questId,(byte)(questId >> 8)]);
             var accepted = peer.Expect(1,31).Body;
             That(accepted[0] == 1 && U16(accepted,1) == questId, "普通材料或累计通关任务经真实31接取");
@@ -115,10 +118,22 @@ internal static partial class FormalDungeonTcpTests
             }
             byte[] request = Selection(0);
             BinaryPrimitives.WriteUInt32LittleEndian(request,(uint)sample.Id);
-            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),questId);
+            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),sample.Explicit ? questId : 0u);
             string before = fixture.Snapshot();
-            peer.Send(16,request); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
-            That(fixture.Snapshot() == before,"非指定难度拒绝不扣票、疲劳或预留实例");
+            foreach (byte wrong in luke ? new byte[] { 0,1,3,4 } : new byte[] { 0 })
+            {
+                request[4] = wrong;
+                peer.Send(16,request); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+                That(fixture.Snapshot() == before,"非指定难度拒绝不扣票、疲劳或预留实例");
+            }
+            if (luke)
+            {
+                request[4] = 2;
+                request[8] = 1;
+                peer.Send(16,request); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+                That(fixture.Snapshot() == before,"卢克禁止练习，不能借免费模式绕过费用或任务身份");
+                request[8] = 0;
+            }
             request[4] = 2;
             peer.Send(16,request);
             if (sample.Tired || !sample.Ticket)
@@ -130,7 +145,7 @@ internal static partial class FormalDungeonTcpTests
             var info = peer.Expect(0,28).Body;
             var map = peer.Expect(0,29).Body;
             That(U32(info,0) == sample.Id && info[4] == 2 && U32(map,14) == (sample.Id switch
-                { 9595 => 310353,5101 => 55916,_ => 400000000 }),"普通频道按28→29加载真实普通副本首图与指定难度");
+                { 9595 => 310353,5101 => 55916,5102 => 55924,5103 => 55935,5104 => 55940,5105 => 55950,5106 => 55954,_ => 400000000 }),"普通频道按28→29加载真实普通副本首图与指定难度");
             if (definition.OrdinaryEntryTicket is { } paidTicket)
             {
                 peer.Expect(0,14);
@@ -164,7 +179,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Send(39,report);
                     var packets = Drain();
                     foreach (var notice in packets.Where(packet => packet.Kind == 0 && packet.Opcode == 38))
-                        PickupResourceDrops(fixture,peer,notice.Body,questId);
+                        PickupResourceDrops(fixture,peer,notice.Body,sample.Explicit ? questId : 0u);
                     var state = fixture.Snapshot();
                     peer.Send(39,report);
                     Drain();
@@ -194,6 +209,22 @@ internal static partial class FormalDungeonTcpTests
                     fixture.Snapshot("SELECT * FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id),
                     "结算菜单死亡复活不重开通关回执、不改牌面或领取状态");
             }
+            if (luke && sample.Explicit)
+            {
+                for (int coinsLeft = 13; coinsLeft >= 2; coinsLeft--) ReviveAfterClear(coinsLeft);
+                byte[] key = [(byte)peer.Id,(byte)(peer.Id >> 8)];
+                peer.Send(40,[0x74,0,4,1,0,0]);
+                peer.Expect(0,32,[key[0],key[1],0,0]);
+                string beforeRejected = fixture.Snapshot();
+                for (int repeat = 0; repeat < 2; repeat++)
+                {
+                    peer.Send(41,key);
+                    peer.Expect(1,41,[0,1,0]);
+                    peer.Barrier();
+                    That(fixture.Snapshot() == beforeRejected && fixture.Query("SELECT revive_coins FROM characters WHERE id=$p0",peer.Id)
+                        is [[2L]],"六白图TCP第十三次复活及重放均拒绝，无扣币或部分写入");
+                }
+            }
             That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)
                 is [[long scalar]] && scalar == (sample.Id == 400000016 ? 4 : 1),"真实通关减少一次计数，跨图收集任务保留未齐状态");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
@@ -213,7 +244,7 @@ internal static partial class FormalDungeonTcpTests
                 string saved = fixture.Snapshot();
                 peer.Send(41,key); peer.Barrier();
                 That(fixture.Snapshot() == saved && fixture.Query("SELECT revive_coins FROM characters WHERE id=$p0",peer.Id)
-                    is [[long coins]] && coins == remaining,"770安徒恩清图后复活仍扣一币，重复请求不扣币");
+                    is [[long coins]] && coins == remaining,"清图后合法复活仍扣一币，重复请求不扣币");
             }
 
             List<WirePacket> Drain()
