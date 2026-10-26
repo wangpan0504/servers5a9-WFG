@@ -130,12 +130,15 @@ internal static class AntonRaidTcpTests
             var beforeCost = Information(observer, key, 2);
             foreach (var reporter in new[] { leader, peers[1], observer })
             {
-                for (int attempt = 0; attempt < 2; attempt++)
+                foreach (byte flag in new byte[] { 0, 1 })
                 {
-                    reporter.Send(658, [1]);
-                    Bytes(Until(reporter, 1, 658).Body, [1], "658重复状态请求的公共ACK不证明足额、扣票或正式开战");
+                    for (int attempt = 0; attempt < 2; attempt++)
+                    {
+                        reporter.Send(658, [flag]);
+                        Bytes(Until(reporter, 1, 658).Body, [1], "658已证0/1重复请求的公共ACK不证明足额、扣票、退款或正式开战");
+                    }
                 }
-                foreach (byte[] body in new byte[][] { [], [1, 0] })
+                foreach (byte[] body in new byte[][] { [], [1, 0], [2], [255] })
                 {
                     reporter.Send(658, body); Drain(reporter);
                 }
@@ -147,7 +150,7 @@ internal static class AntonRaidTcpTests
             var afterCost = Information(observer, key, 2);
             That(beforeCost.Leader == afterCost.Leader && beforeCost.Members.SequenceEqual(afterCost.Members) &&
                 fixture.Snapshot() == saved && Assets() == assets,
-                "有票成员及无票团外者的658和畸形666不改变团长、完整名册、门票、位置、疲劳或回执");
+                "有票成员及无票团外者的658两种已证值、未知值及畸形666不改变团长、完整名册、门票、位置、疲劳或回执");
             for (int attempt = 0; attempt < 2; attempt++)
             {
                 leader.Send(666); Bytes(Until(leader, 1, 666).Body, [0, 19, 0], "二十人五个满分队仍不能绕过未闭合的开战成功链");

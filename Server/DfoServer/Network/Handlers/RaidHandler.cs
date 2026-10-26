@@ -239,7 +239,8 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
 
     async Task<CommandResult> EntryCostAsync(GameConnectionContext context, Packet request)
     {
-        if (request.Body.Length != 1) return CommandResult.Unhandled;
+        // 01DC65B0归一化参数为0/1，02173DB0明确传0；自动费用检测另发1，均不代表扣票确认。
+        if (request.Body.Length != 1 || request.Body[0] > 1) return CommandResult.Unhandled;
         log.Write("raid_entry_cost_request", new { Connection = context.Id, Flag = request.Body[0] });
         await context.Reply(CmdPacketType.RAID_ENTRY_COST_INFO, RaidPackets.EntryCostSuccess, "raid_entry_cost");
         return CommandResult.Handled;
