@@ -92,17 +92,19 @@ internal static partial class FormalDungeonTcpTests
                 // tutorial表中的正式团本索引不能借普通选图进入；拒绝后仍须能进入原普通副本。
                 string EntryState() => string.Join("\n", new[] { "characters", "character_inventory_items", "character_fatigue",
                     "character_dungeon_state", "character_dungeon_growth_receipts", "character_dungeon_loot_receipts",
-                    "character_dungeon_card_rewards" }.Select(table => fixture.Snapshot($"SELECT * FROM {table} ORDER BY 1,2")));
+                    "character_dungeon_card_rewards", "character_dungeon_settlement_receipts", "character_active_main_quests"
+                    }.Select(table => fixture.Snapshot($"SELECT * FROM {table} ORDER BY 1,2")));
                 string originalEntry = EntryState();
-                foreach (uint raidDungeon in new uint[] { 210,218,224 })
+                foreach (uint raidDungeon in new uint[] { 210,211,212,213,214,215,216,218,219,220,221,222,223,224 })
                 {
                     byte[] raidRequest = Selection(2);
                     BinaryPrimitives.WriteUInt32LittleEndian(raidRequest,raidDungeon);
-                    raidRequest.AsSpan(16,4).Clear();
                     // 练习分支同样不能把备用索引当生产目录；offset8不是tutorial表切换授权。
-                    foreach (byte mode in new byte[] { 0,1 })
+                    foreach (var entry in new[] { (Mode:(byte)0,Quest:0u), (Mode:(byte)1,Quest:0u), (Mode:(byte)1,Quest:(uint)questId) })
                     {
-                        raidRequest[8] = mode;
+                        raidRequest[4] = entry.Quest == 0 ? (byte)2 : (byte)0;
+                        raidRequest[8] = entry.Mode;
+                        BinaryPrimitives.WriteUInt32LittleEndian(raidRequest.AsSpan(16),entry.Quest);
                         for (int repeat = 0; repeat < 2; repeat++)
                         {
                             peer.Send(16,raidRequest);
@@ -112,7 +114,7 @@ internal static partial class FormalDungeonTcpTests
                         peer.Send(37,new byte[8]);
                         peer.Barrier();
                         That(EntryState() == originalEntry,
-                            $"团本{raidDungeon}模式{mode}不能从选图或重放加载建立实例、扣材料疲劳或写奖励回执");
+                            $"团本{raidDungeon}模式{entry.Mode}任务{entry.Quest}不能从选图或重放加载建立实例、扣材料疲劳、改任务或写奖励回执");
                     }
                 }
             }
