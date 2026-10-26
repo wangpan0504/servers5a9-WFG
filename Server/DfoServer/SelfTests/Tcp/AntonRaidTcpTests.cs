@@ -113,6 +113,7 @@ internal static class AntonRaidTcpTests
                 }
                 requester.Send(695, new byte[5]);
                 requester.Send(695, Build(w => { w.Write(0x12345678u); w.Write((byte)1); w.Write(uint.MaxValue); }));
+                requester.Send(695, new byte[5 + 4 * 256]); // 低u8计数回绕；不因零计数丢弃完整尾部后授权结算。
                 requester.Send(695, new byte[5]);
                 Drain(requester);
                 var unchanged = Information(observer, key, 1);

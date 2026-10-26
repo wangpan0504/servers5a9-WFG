@@ -38,8 +38,17 @@ internal static class RaidMemberTests
         for (int length = 0; length < hpBody.Length; length++)
             Reject<InvalidDataException>(() => RaidRequests.MonsterHp(hpBody[..length]), "695截断或计数不符拒绝");
         Reject<InvalidDataException>(() => RaidRequests.MonsterHp([.. hpBody, 0]), "695多余尾部拒绝");
-        byte[] maximumHp = new byte[5 + 4 * byte.MaxValue]; maximumHp[4] = byte.MaxValue;
+        byte[] maximumHp = new byte[5 + 4 * byte.MaxValue];
+        maximumHp[4] = byte.MaxValue;
         That(RaidRequests.MonsterHp(maximumHp).RawEntries.Length == byte.MaxValue, "695计数按u8上界解析，不收窄成分队人数");
+        // 两个发送循环保留完整列表；低8位回绕不代表客户端只发送截断后的N项。
+        foreach (int count in new[] { 256, 257, 511 })
+        {
+            byte[] wrappedHp = new byte[5 + 4 * count];
+            wrappedHp[4] = unchecked((byte)count);
+            Reject<InvalidDataException>(() => RaidRequests.MonsterHp(wrappedHp),
+                "695完整列表与低u8计数不一致时拒绝，不静默截断或把回绕零计数解释为空表");
+        }
 
         string root = Path.Combine(Path.GetTempPath(), "s5a9-raid-members-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);

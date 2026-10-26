@@ -92,6 +92,11 @@ internal static class AntonRaidResourceTests
         var truncatedReward = Parse([.. input[..(rewardAt + 5)], .. input[(rewardAt + 6)..]]);
         That(truncatedReward.Issues.Any(i => i.Code == "unsupported-reward") && truncatedReward.Phases[0].Rewards.IsEmpty,
             "STATE REWARD缺末整数时拒绝整行，不补默认奖励字段");
+        // 042A99F1额外读取可选数值，但其业务含义未闭合；当前只支持已核对的四整数声明。
+        var extendedReward = Parse([.. input[..(rewardAt + 6)], 7, .. input[(rewardAt + 6)..]]);
+        That(extendedReward.Issues.Any(i => i.Code == "unsupported-reward") && extendedReward.Phases[0].Rewards.IsEmpty &&
+            extendedReward.Phases[1].Rewards.SequenceEqual(script.Phases[1].Rewards),
+            "STATE REWARD额外数值拒绝整行，不忽略未知列或污染下一阶段");
         var repeatedReward = Parse([.. input[..rewardAt], .. input[rewardAt..(rewardAt + 6)], .. input[rewardAt..]]);
         That(repeatedReward.Issues.IsEmpty && repeatedReward.Phases[0].Rewards.SequenceEqual(new[]
             { new AntonRaidReward("squad_item", -1, 665, 100, 1), new AntonRaidReward("squad_item", -1, 665, 100, 1) }) &&
