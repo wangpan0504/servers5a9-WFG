@@ -207,8 +207,8 @@ internal static class ChannelAreaLandingTests
             ?? throw new InvalidDataException("缺少内置频道脚本");
         using var reader = new StreamReader(stream);
         var script = ChannelCatalog.Parse(reader.ReadToEnd());
-        // #740 房间出口分档：16 个特殊区域/团队入口仍按频道落点，其余 21 个普通入口按角色记住的返回地区。
-        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 40, 41, 42, 43, 44, 45 };
+        // #740 房间出口分档：含再战魔界46在内的17个特殊入口按频道落点，其余21个普通入口按记住的返回地区。
+        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 40, 41, 42, 43, 44, 45, 46 };
         foreach (var row in script.Channels)
             That(ChannelAreaLanding.RoomExitUsesRememberedDistrict(new ChannelEntry(new(2, checked((byte)row.Number)), row.Type, row.Group)) ==
                 !specialChannels.Contains(row.Number), "房间出口分档 " + row.Number + " type " + row.Type + " " + row.Group);

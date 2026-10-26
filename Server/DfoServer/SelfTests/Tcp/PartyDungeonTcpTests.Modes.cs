@@ -111,7 +111,7 @@ internal static partial class PartyDungeonTcpTests
         {
             using var group = new Coop(fixture,resources,"h"+scenario,position,done.ToArray(),95,2,
                 tickets:scenario=="short" ? 29 : 90,withoutHellQuest:scenario=="quest");
-            group.Join(); group.Open();
+            group.Join(); group.Open(scenario == "quest" ? [1] : []);
             string before=fixture.Snapshot();
             if (scenario=="rollback") fixture.Sql("CREATE TRIGGER reject_coop_hell BEFORE UPDATE ON character_dungeon_state WHEN NEW.character_id="+
                 group.Peers[1].Id+" BEGIN SELECT RAISE(ABORT,'hell party rollback'); END");
@@ -125,7 +125,7 @@ internal static partial class PartyDungeonTcpTests
             var rows=group.All();
             if (scenario!="success")
             {
-                That(rows[0].Any(p => p is {Kind:1,Opcode:16} && p.Body.SequenceEqual(new byte[] {0,(byte)(scenario=="quest" ? 0xAD : 0x11),0,0})) &&
+                That(rows[0].Any(p => p is {Kind:1,Opcode:16} && p.Body.SequenceEqual(new byte[] {0,(byte)(scenario=="quest" ? 9 : 0x11),0,0})) &&
                     rows.All(r => !r.Any(p => p.Opcode is 28 or 29)) && fixture.Snapshot()==before,
                     "队员未开启深渊或少一张票时全队拒绝，队长也不扣材料");
                 continue;
@@ -247,12 +247,14 @@ internal static partial class PartyDungeonTcpTests
         public uint LegendTarget { get; private set; }
         public WirePacket[][] LastPackets { get; private set; }=[];
         byte[] physicalMap=[];
+        readonly ushort[] expectedIncompleteHellQuestSlots;
         public Coop(TcpTestFixture fixture,TcpTestResources resources,string prefix,Location position,int[] done,byte level,int count,
             int tickets=0,bool withoutHellQuest=false,int stones=0)
         {
             this.fixture=fixture;
             Peers=new TcpPeer[count];
             var growth=SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
+            var blocked = new List<ushort>();
             for (int i=0;i<count;i++)
             {
                 string account=prefix+i;
@@ -262,6 +264,7 @@ internal static partial class PartyDungeonTcpTests
                 var repo=new CharacterRepository(fixture.Database);
                 var role=repo.Create(owner,candidate with { Level=level,AcceptedStoryLevel=level,InitialLearning=learning,
                     CompletedQuests=withoutHellQuest && i==1 ? done.Except([6080]).ToArray() : done });
+                if (FormalDungeonTcpTests.HasIncompleteHellQuest(resources, role)) blocked.Add((ushort)i);
                 if (tickets>0) role=repo.CommitInventory(owner,role,new(role.Inventory,role.Inventory with { Items=role.Inventory.Items.Add(
                     new(0,new(InventoryListType.Main,121),new(3330,ItemKind.Material,i==0 ? 90 : tickets))) },"party_hell_ticket"));
                 if (stones>0)
@@ -271,6 +274,7 @@ internal static partial class PartyDungeonTcpTests
                 }
                 Peers[i]=TcpPeer.Open(fixture,account); Peers[i].Select(role.Slot,prepared:true,resumeTown:true,room:false);
             }
+            expectedIncompleteHellQuestSlots = blocked.ToArray();
             All();
         }
         public WirePacket[][] All(TcpPeer? requester=null)
@@ -295,12 +299,18 @@ internal static partial class PartyDungeonTcpTests
                 That(All(peer).Take(Array.IndexOf(Peers,peer)+1).All(r => r.Any(p => p is {Kind:0,Opcode:9})),"扩展玩法通过真实邀请加入队伍");
             }
         }
-        public void Open()
+        public void Open(ushort[]? incompleteHellQuestSlots = null)
         {
             Peers[0].Send(15,new byte[4]); var rows=All();
             That(rows.All(r => r.Any(p => p is {Kind:0,Opcode:27})),"扩展玩法全员打开选图");
-            LegendTarget=U32(rows[0].Single(p => p is {Kind:0,Opcode:27}).Body,9);
-            That(rows.All(r => U32(r.Single(p => p is {Kind:0,Opcode:27}).Body,9)==LegendTarget),"全队看到相同传奇深渊目标");
+            incompleteHellQuestSlots ??= expectedIncompleteHellQuestSlots;
+            int tailOffset = incompleteHellQuestSlots.Length * 2;
+            byte[] notice = rows[0].Single(p => p is {Kind:0,Opcode:27}).Body;
+            That(notice[8] == incompleteHellQuestSlots.Length &&
+                incompleteHellQuestSlots.Select((slot, i) => U16(notice, 9 + i * 2) == slot).All(matches => matches) &&
+                rows.All(r => r.Single(p => p is {Kind:0,Opcode:27}).Body.SequenceEqual(notice)),
+                "全队收到相同未完成区域深渊任务的队伍槽位名单，不能写角色ID或任务号");
+            LegendTarget=U32(notice,9 + tailOffset);
         }
         public void Enter(uint dungeon,uint quest)
         {

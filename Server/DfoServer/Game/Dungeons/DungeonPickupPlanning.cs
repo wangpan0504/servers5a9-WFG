@@ -23,6 +23,19 @@ internal static class DungeonPickupPlanning
         content.Validate();
         if (content.Item is not { } core || core.ItemId != template.Id || core.Kind != template.Kind)
             return InventoryResult.Reject();
+        if (pieces.ByPiece.TryGetValue(core.ItemId, out var piece))
+        {
+            if (core.Kind != ItemKind.Material || core.Count > template.StackLimit || core.IsExpired(now.ToUnixTimeSeconds()) ||
+                (core with { Value = 1, ExpireTime = 0 }) != new ItemCore(core.ItemId, ItemKind.Material, 1))
+                return InventoryResult.Reject(19);
+            var before = character.Inventory;
+            before.EpicPieces.Validate(pieces);
+            long balance = (long)before.EpicPieces.Get(piece.Index) + core.Count;
+            if (balance > int.MaxValue) return InventoryResult.Reject(17);
+            var after = before with { EpicPieces = before.EpicPieces.Set(pieces, piece.Index, (int)balance) };
+            return new(true, 0, new(before, after, "dungeon_pickup_epic_piece",
+                new(character, qualificationExpiresAt: core.ExpireTime > 0 ? core.ExpireTime : null)));
+        }
         if (CurrencyWallet.RewardKind(core.ItemId) is { } kind)
         {
             if (core.IsExpired(now.ToUnixTimeSeconds()) || core.Count > template.StackLimit)

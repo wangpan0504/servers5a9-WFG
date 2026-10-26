@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Dungeons;
@@ -31,6 +32,25 @@ internal static class DungeonPickupPlanningTests
             "存量超携带值仍不能溢出或因拾取覆盖现有余额");
         Reject<InvalidDataException>(() => DungeonPickupPlanning.Gold(original,
             new(new ItemCore(1000, ItemKind.Consumable, 1)), limits), "普通物品不借金币分支改写资产owner");
+        var pieces = new EpicPieceCatalog("[piece list]\n9000 10300000\n[/piece list]\n[equipment recipe info]\n[/equipment recipe info]");
+        var fragment = new ItemTemplate(10300000, ItemKind.Material, 0, 1, 0, 1000, 0, 4, 1, "[trade]", ushort.MaxValue, 0, "碎片");
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000);
+        var full = original with { Inventory = new(Enumerable.Range(121, 56).Select(slot =>
+            new InventoryItem(slot, new(InventoryListType.Main, (short)slot), new(2, ItemKind.Material, 1))).ToImmutableArray()) };
+        var core = new ItemCore(fragment.Id, fragment.Kind, 3);
+        var granted = DungeonPickupPlanning.Item(full, new(core), fragment, limits, pieces, now);
+        That(granted.Accepted && granted.Plan!.After.EpicPieces.Get(0) == 3 && granted.Plan.ChangedSlots.IsEmpty &&
+            granted.Plan.ChangedCurrencies.IsEmpty && granted.Plan.ChangedEpicPieces.SequenceEqual(new[] { 0 }) &&
+            granted.Plan.After.Items.SequenceEqual(full.Inventory.Items) && granted.Plan.CharacterPrecondition?.Matches(full) == true,
+            "满材料页的地面碎片只规划账号图鉴增量，不创建UID或占用真实槽位");
+        var capped = full with { Inventory = full.Inventory with { EpicPieces = EpicPieceBook.Empty.Set(pieces, 0, int.MaxValue - 2) } };
+        That(!DungeonPickupPlanning.Item(capped, new(core), fragment, limits, pieces, now).Accepted &&
+            capped.Inventory.EpicPieces.Get(0) == int.MaxValue - 2,
+            "碎片余额不足以接收整件时拒绝，不截断地面数量或修改原图鉴");
+        foreach (var invalid in new[] { core with { ExpireTime = (int)now.ToUnixTimeSeconds() },
+            core with { Value = 1001 }, core with { ItemId = 2 }, core with { Attr = 1 } })
+            That(!DungeonPickupPlanning.Item(full, new(invalid), fragment, limits, pieces, now).Accepted,
+                "过期、超堆叠、错模板或携带装备属性的碎片拒绝，不把特殊核心折算成数量");
         Console.WriteLine($"PASS {Count - before} 地面金币纯规划与携带上限断言");
     }
 

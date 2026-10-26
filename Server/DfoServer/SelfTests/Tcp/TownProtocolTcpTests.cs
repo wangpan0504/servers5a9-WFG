@@ -177,11 +177,11 @@ internal static partial class TownProtocolTcpTests
             peer.Send(15, new byte[4]);
             peer.Expect(1, 15, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
-            peer.Expect(0, 27, new byte[42]);
+            peer.Expect(0, 27, peer.SelectionNoticeBody());
             peer.Send(15, new byte[4]);
             peer.Expect(1, 15, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
-            peer.Expect(0, 27, new byte[42]);
+            peer.Expect(0, 27, peer.SelectionNoticeBody());
             That(fixture.Snapshot() == before, "入口重复请求冻结返回点，不提前写库");
             foreach (ushort cancelOpcode in new ushort[] { 13, 444 })
             {
@@ -195,7 +195,7 @@ internal static partial class TownProtocolTcpTests
                 {
                     peer.Send(cancelOpcode);
                     peer.Expect(1, cancelOpcode, [1]);
-                    peer.Expect(0, 27, new byte[42]);
+                    peer.Expect(0, 27, peer.SelectionNoticeBody());
                 }
                 peer.Barrier();
                 That(fixture.Snapshot() == before, "快速组队重复取消不改写城镇返回点、revision或资产");
@@ -350,7 +350,7 @@ internal static partial class TownProtocolTcpTests
                     peer.SendBarrier();
                     peer.Expect(1, 15, [1]);
                     peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
-                    peer.Expect(0, 27, new byte[42]);
+                    peer.Expect(0, 27, peer.SelectionNoticeBody());
                     peer.Expect(1, 1347, [1]);
                     That(fixture.Snapshot() == before, "opening dungeon select preserves town state and does not answer a short opcode 16");
                     peer.Send(16, [3, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0, 0, 0, 0, 0, 0x49, 0x0C, 0, 0, 0, 0, 0, 0, 0]);
@@ -388,7 +388,7 @@ internal static partial class TownProtocolTcpTests
                     peer.Send(15, new byte[4]);
                     peer.Expect(1, 15, [1]);
                     peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
-                    peer.Expect(0, 27, new byte[42]);
+                    peer.Expect(0, 27, peer.SelectionNoticeBody());
                     peer.Send(132);
                     peer.Batch((1, 132), (0, 3), (0, 23), (0, 24));
                     peer.Send(631, Move(854, 261, motion: true));

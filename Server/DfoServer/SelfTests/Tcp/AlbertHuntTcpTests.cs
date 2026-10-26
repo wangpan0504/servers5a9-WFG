@@ -90,7 +90,7 @@ internal static class AlbertHuntTcpTests
             That(Identities() == identities && Materials() == 2 && Completions() is [[0L]],
                 "未猎杀前真实34拒绝，不把等级或父接取变成已达成子任务");
             peer.Send(15,new byte[4]); peer.Expect(1,15,[1]);
-            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,new byte[42]);
+            peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),1]); peer.Expect(0,27,peer.SelectionNoticeBody());
             var selection = Convert.FromHexString("030000000000000000FFFF0000000000490C00000000000000");
             BinaryPrimitives.WriteUInt32LittleEndian(selection,158);
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),3458);

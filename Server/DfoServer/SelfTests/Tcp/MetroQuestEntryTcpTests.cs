@@ -2176,7 +2176,7 @@ internal static class MetroQuestEntryTcpTests
     static void SelectMap(TcpPeer peer)
     {
         peer.Send(15, new byte[4]); peer.Expect(1, 15, [1]);
-        peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]); peer.Expect(0, 27, new byte[42]);
+        peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]); peer.Expect(0, 27, peer.SelectionNoticeBody());
     }
 
     static byte[] Selection(uint dungeon, ushort request)

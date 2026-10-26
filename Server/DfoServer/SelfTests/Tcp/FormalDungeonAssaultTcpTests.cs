@@ -61,7 +61,7 @@ internal static partial class FormalDungeonTcpTests
             for (int read = 0; read < 16 && peer.Read() is not { Kind: 0, Opcode: 24 }; read++) { }
             peer.Barrier();
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[54L, 2L]], "fixture 角色位于 54/2");
-            SelectMap(peer);
+            SelectMap(peer, incompleteHellQuest: true);
             peer.Send(1547, [0x9F, 0x1C, 0, 0]);
             peer.Expect(1, 1547, [1, 0x9B, 0x1C, 0, 0, 0, 0, 0, 0]);
             peer.Send(15, [0x9B, 0x1C, 0, 0]);
@@ -107,7 +107,9 @@ internal static partial class FormalDungeonTcpTests
             peer.Expect(1, 72, [1, 1, 1]);
             peer.Expect(1, 15, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
-            peer.Expect(0, 27, new byte[42]);
+            byte[] selectNotice = new byte[44];
+            selectNotice[8] = 1;
+            peer.Expect(0, 27, selectNotice);
             peer.Barrier();
             string returned = fixture.Snapshot();
             peer.Send(72, [1, 1]); peer.Send(72, [1, 3]); peer.Send(72, [1, 2]);

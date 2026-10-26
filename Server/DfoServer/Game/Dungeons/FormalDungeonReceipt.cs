@@ -54,8 +54,12 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public DungeonRoomClearFact? RoomClearFact { get; init; }
     public DfoServer.GameWorld.Dungeons.DungeonPoint? BossPositionUpdate { get; init; }
 }
+internal sealed record EpicPiecePickup(int Index, int PieceId, int Amount, int Balance, long BookRevision);
 internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, InventorySlot Destination, long ItemUid,
-    bool ProjectionCurrent, CurrencyKind? Currency = null, int Amount = 0);
+    bool ProjectionCurrent, CurrencyKind? Currency = null, int Amount = 0)
+{
+    public EpicPiecePickup? EpicPiece { get; init; }
+}
 internal sealed record FormalDungeonPickupResult(DungeonRunOutcome Outcome, FormalDungeonReceipt? Receipt = null,
     DungeonGroundObject? Ground = null, DungeonPickupCommit? Commit = null)
 {

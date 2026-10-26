@@ -39,7 +39,7 @@ internal static partial class FormalDungeonTcpTests
         }
         using var peer = Open(fixture,account);
         peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
-        SelectMap(peer);
+        SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, created));
         var selection = Selection();
         BinaryPrimitives.WriteUInt32LittleEndian(selection,dungeonId);
         BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),0);

@@ -94,7 +94,8 @@ internal sealed partial class DungeonHandler
             foreach (var member in notice.Members)
                 await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(member.Actor.Character.Id), "party_selection_state", Guard);
             await PublishPartyHostAsync(context, notice.Members, Guard);
-            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(notice.LegendDungeon), "party_selection_notice", Guard);
+            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(notice.LegendDungeon,
+                incompleteHellQuestMemberSlots: context.Session.IncompleteHellQuestMemberSlots()), "party_selection_notice", Guard);
             return;
         }
         if (notice.Kind == PartyDungeonNoticeKind.Death && notice.Death is { } death)
@@ -156,7 +157,7 @@ internal sealed partial class DungeonHandler
                 {
                     await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, 0), "party_result_retry", Current);
                     await PublishPartyHostAsync(context, notice.Members, Current);
-                    await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(), "party_retry_transition", Current);
+                    await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "party_retry_transition", Current);
                 }
                 await PublishPartyRosterAsync(context, notice.Members, Current);
                 await PublishPartyHostAsync(context, notice.Members, Current);
@@ -199,6 +200,7 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.HELL_PARTY_CLEAR,DungeonPackets.HellPartyCleared(),"party_hell_clear",Current);
                 if (scene.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
                     await DungeonSettlementProjection.EnableAsync(context);
+                await PublishEpicPieceShopAsync(context, prepare: false);
                 break;
             case PartyDungeonNoticeKind.Move:
                 if (scene.NavigationReplay) break;
@@ -267,7 +269,7 @@ internal sealed partial class DungeonHandler
         return CommandResult.Handled;
     }
 
-    static async Task PublishPartyPickupAsync(GameConnectionContext context, PartyDungeonNotice notice)
+    async Task PublishPartyPickupAsync(GameConnectionContext context, PartyDungeonNotice notice)
     {
         var result = notice.Pickup!;
         if (result.Receipt is not { } picked || result.Commit is not { } commit || notice.Scene is not { } scene)
@@ -283,12 +285,16 @@ internal sealed partial class DungeonHandler
         var body = commit.Currency == CurrencyKind.Gold
             ? DungeonPickupPackets.IndependentGoldNotification(key, picked.Character.Id, checked((uint)commit.Amount), notice.Recipient.Slot)
             : DungeonPickupPackets.OrdinaryNotification(key, picked.Character.Id, new byte[8], picked.Character.Id,
-                checked((ushort)destination.Index), 0);
+                commit.EpicPiece is not null ? DungeonPickupPackets.NoInventorySlot : checked((ushort)destination.Index), 0);
         await context.Notify(NotiPacketType.GET_ITEM, body, "party_pickup_notice", Guard);
         if (scene.Character.Id != picked.Character.Id) return;
         if (!commit.ProjectionCurrent) { context.Disconnect(); return; }
-        await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(picked.Character.Inventory,
-            destination.List, [destination]), "party_pickup_inventory", Guard);
+        if (commit.EpicPiece is { } fragment)
+            await context.Notify(NotiPacketType.EPIC_BOOK_INFO,
+                EpicBookPackets.Info(picked.Character.Inventory.EpicPieces, pieces!, [fragment.Index]), "party_pickup_epic_piece", Guard);
+        else
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(picked.Character.Inventory,
+                destination.List, [destination]), "party_pickup_inventory", Guard);
         if (scene.Character.Id == notice.Peer)
             await context.Reply(CmdPacketType.GET_ITEM, DungeonPickupPackets.Accepted(), "party_pickup_ack", Guard);
         if (picked.Character.ActiveMainQuests.Length > 0)

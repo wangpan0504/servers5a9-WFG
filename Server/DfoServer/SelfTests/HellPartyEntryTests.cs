@@ -19,6 +19,25 @@ namespace DfoServer;
 // 这里只锁定本服的假设行为：请求体解析、PVF 深渊房间/区域声明解析、入场资格、DUNGEON_INFO/START_MAP 的深渊字段、拒绝包形状。
 internal static class HellPartyEntryTests
 {
+    internal static void RunCore()
+    {
+        Bytes(DungeonPackets.SelectionNotice(), new byte[42], "空深渊资格名单保持原42字节选图通知");
+        byte[] expected = new byte[46];
+        expected[8] = 2; expected[11] = 3;
+        expected[13] = 0x78; expected[14] = 0x56; expected[15] = 0x34; expected[16] = 0x12;
+        expected[24] = 39; expected[43] = 72;
+        Bytes(DungeonPackets.SelectionNotice(0x12345678, 72, 39, [0, 3]), expected,
+            "countA逐项写u16队伍槽位，传奇目标与双塔楼层随列表平移");
+        byte[] full = DungeonPackets.SelectionNotice(incompleteHellQuestMemberSlots: [0, 1, 2, 3, 4, 5, 6, 7]);
+        That(full.Length == 58 && full[8] == 8 && BinaryPrimitives.ReadUInt16LittleEndian(full.AsSpan(23)) == 7,
+            "未完成任务名单不超过本版客户端8项局部缓冲容量");
+        foreach (ushort[] invalid in new ushort[][] { [8], [1, 1], [0, 1, 2, 3, 4, 5, 6, 7, 0] })
+            Reject<ArgumentOutOfRangeException>(() => DungeonPackets.SelectionNotice(incompleteHellQuestMemberSlots: invalid),
+                "拒绝越界、重复或过长的队伍槽位名单");
+        Bytes(DungeonPackets.HellPartyRejected(9), [0, 9, 0, 0], "缺任务拒绝保持原生失败恢复，不发送次数上限0xAD");
+        Bytes(DungeonPackets.HellPartyRejected(17), [0, 17, 0, 0], "缺门票保留材料不足拒绝");
+    }
+
     internal static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills)
     {
@@ -32,8 +51,7 @@ internal static class HellPartyEntryTests
         That(sample.Length == 25 && DungeonRequests.TryParseSelection(sample, out var request) &&
             request == new DungeonSelectionRequest(291100308, 4, 0, 1, 0, ushort.MaxValue, 0, 0, 6114, 0, 0),
             "深渊派对实机请求样本：25 字节，[7]=1，[4]=4，[16:20]=6114");
-        That(DungeonPackets.HellPartyRejected(0xAD).SequenceEqual(new byte[] { 0, 0xAD, 0, 0 }) &&
-            DungeonPackets.HellPartyRejected(0x01).SequenceEqual(new byte[] { 0, 0x01, 0, 0 }) &&
+        That(DungeonPackets.HellPartyRejected(0x01).SequenceEqual(new byte[] { 0, 0x01, 0, 0 }) &&
             DungeonPackets.SelectionRejected().SequenceEqual(new byte[] { 0, 9, 0, 0 }),
             "深渊派对拒绝包保持 4 字节形状，普通拒绝包不变");
 
@@ -67,6 +85,9 @@ internal static class HellPartyEntryTests
         using (var blocked = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, done.Order().ToArray(), position: position))
         {
             var before = blocked.Read();
+            That(blocked.Session.IncompleteHellQuestMemberSlots().SequenceEqual(new ushort[] { 0 }) &&
+                blocked.Read().Revision == before.Revision,
+                "未完成区域深渊任务只投影单人槽位0，不补任务或修改角色资产");
             That(blocked.Session.EnterFormalDungeon(291100308, 0, 4, dungeons, rooms, hellParty: true) is null &&
                 blocked.Session.LastFormalDungeonRejection == "hell-party-quest-required:6080" && blocked.Read().Revision == before.Revision,
                 "未完成区域 [hell quest] 时拒绝深渊派对入场（原因 hell-party-quest-required:6080）");
@@ -82,6 +103,8 @@ internal static class HellPartyEntryTests
         done.Add(6080);
         using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95, done.Order().ToArray(), position: position, items: [(3330, 30), (3331, 5)]);
         var character = fixture.Read();
+        That(fixture.Session.IncompleteHellQuestMemberSlots().Length == 0,
+            "已完成普通深渊任务时不列入countA，缺传奇任务不误禁普通深渊按钮");
         That(DungeonEntryPlan.TryCreate(dungeons, character, 291100308, 0, 4, out var plan, out var reason, quests: quests, hellParty: true) &&
             plan!.HellParty is { MapId: 313163, Room: { X: 2, Y: 2 }, RequiredItemCount: 30 } && plan.HellPartyMode == 1 && plan.QuestId == 0 && plan.RouteQuestId == 0 &&
             plan.Maze.HellParty == plan.HellParty && plan.Difficulty == 4,

@@ -114,7 +114,7 @@ internal interface ICharacterRepository
         DungeonCardDelivery? premiumDelivery = null, bool grantLuckyStar = false, int luckyStarLimit = 0,
         bool recommendedClear = false);
     DungeonPickupCommit CommitDungeonPickup(AccountOwners.Lease owner, Character expected,
-        DungeonGroundPickupPreparation prepared, InventoryPlan plan);
+        DungeonGroundPickupPreparation prepared, InventoryPlan plan, DfoServer.GameWorld.Items.EpicPieceCatalog? pieces = null);
     Character CommitDungeonDiscard(AccountOwners.Lease owner, DungeonInventoryDiscardPreparation prepared);
     Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
     Character CommitSkillSwitchInventory(AccountOwners.Lease owner, SkillSwitchInventoryPlan plan);

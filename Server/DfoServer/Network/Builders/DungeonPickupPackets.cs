@@ -4,6 +4,9 @@ namespace DfoServer.Network.Builders;
 
 internal static class DungeonPickupPackets
 {
+    // 本版查槽与插入均先检查容量；FFFF不安装Main实体，实际余额由1152同步。
+    public const ushort NoInventorySlot = ushort.MaxValue;
+
     // 普通NOTI39由023C8E00读取19B，并使用既有地面物品对象入包；不适用于资源0/1199特殊分支。
     // flags8与tailFlag的业务来源尚未恢复，调用方必须完整提供，不在Builder补零或推断含义。
     public static byte[] OrdinaryNotification(uint groundObjectKey, ushort firstPickerKey, ReadOnlySpan<byte> flags8,

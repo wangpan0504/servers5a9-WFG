@@ -120,7 +120,12 @@ internal static class ServerRuntime
         var privateCharacters = new Game.Pvp.PvpPrivateCharacterService(characters,PvpPrivateCharacterCatalog.Load(pvf),
             learning,growth,itemResources.Items,towns);
         var experienceBonuses = new Game.Characters.ExperienceBonusService(itemResources.Items, itemResources.RecoveryConsumables,
-            GameWorld.Characters.ExperienceBonusCatalog.Load(pvf));
+            GameWorld.Characters.ExperienceBonusCatalog.Load(pvf), clock: clock,
+            missingTemplate: (request, item) => log.Write("resource_warning", new
+            {
+                Source = "experience_bonus", Reason = "equipped_item_template_missing", CharacterId = request.Character.Id,
+                request.Event, request.DungeonId, ItemId = item.Core.ItemId, item.Uid, Slot = item.Position.Index
+            }));
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
@@ -224,6 +229,7 @@ internal static class ServerRuntime
         IGameCommandModule? questReplay = null;
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
         DungeonPassiveDropPolicy? passiveDrops = null;
+        EpicPieceShopService? epicPieceShop = null;
         AssaultModeCatalog? assaultMode = null;
         OperationHopeCatalog? operationHope = null;
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
@@ -264,17 +270,23 @@ internal static class ServerRuntime
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
                 new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get));
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
-            int epicPermille = int.TryParse(Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE"), out int configuredPermille) ? Math.Clamp(configuredPermille, 0, 1000) : 0;
-            DungeonItemDropPool? epicPool = null;
-            if (epicPermille > 0)
+            int epicPermille = 1000;
+            string? fragmentRate = Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE");
+            if (fragmentRate is not null && (!int.TryParse(fragmentRate, out epicPermille) || epicPermille is < 0 or > 1000))
+                throw new InvalidDataException("DFO_HELL_EPIC_FRAGMENT_PERMILLE 必须为0至1000，0显式关闭碎片掉落");
+            var epicPool = epicPermille > 0 ? itemResources.EpicPieceDrops : null;
+            if (itemResources.EpicPieceShop is { } shopRules)
             {
-                var fragmentTemplates = new List<DfoServer.GameWorld.Items.ItemTemplate>();
-                foreach (int pieceId in itemResources.EpicPieces.ByPiece.Keys)
+                string? appearance = Environment.GetEnvironmentVariable("DFO_EPIC_PIECE_SHOP_APPEAR_PERCENT");
+                if (appearance is not null)
                 {
-                    try { var template = itemResources.Items.Get(pieceId); if (DungeonDropCreation.Supports(template.Kind) && template.StackLimit > 0) fragmentTemplates.Add(template); }
-                    catch (Exception error) when (error is InvalidDataException or NotSupportedException or KeyNotFoundException or FileNotFoundException) { }
+                    if (!int.TryParse(appearance, out int percent) || percent is < 0 or > 100)
+                        throw new InvalidDataException("DFO_EPIC_PIECE_SHOP_APPEAR_PERCENT 必须为0至100");
+                    shopRules = shopRules with { AppearancePercent = percent };
                 }
-                epicPool = new DungeonItemDropPool(fragmentTemplates);
+                epicPieceShop = new(shopRules, itemResources.EpicPieceDrops, itemResources.EpicPieces, harlemDungeons);
+                log.Write("startup", new { Stage = "Epic piece shop", State = "complete", shopRules.NpcId,
+                    shopRules.AppearancePercent, Override = appearance is not null });
             }
             var hellRewards = DungeonHellDropRules.TryLoad(pvf) is { } hellDropRules ? new DungeonHellRewardPolicy(hellDropRules, dropCandidates, epicPool, epicPermille) : null;
             Func<DungeonPlannedMonster, DungeonDropGenerationPlan> PrepareDrops(DungeonEntryPlan entry) => resourceDrops.PrepareEntry(entry, hellRewards);
@@ -303,7 +315,7 @@ internal static class ServerRuntime
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
-                despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,tagEvildomRun);
+                despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -474,6 +486,7 @@ internal static class ServerRuntime
             module.Register(commands);
         settlement?.Register(commands);
         questReplay?.Register(commands);
+        if (epicPieceShop is not null) new EpicPieceShopHandler(epicPieceShop, inventoryProjection, log).Register(commands);
         commands.Seal();
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
