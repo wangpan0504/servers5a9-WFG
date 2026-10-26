@@ -60,6 +60,7 @@ internal static class SelfTestRunner
         WeaponSkinTests.RunCore();
         AvatarCompoundTests.RunCore();
         AvatarDyeTests.RunCore();
+        AvatarAbilityChangeTests.RunCore();
         AvatarSocketTests.RunCore();
         AvatarDisjointTests.RunCore();
         AvatarPresetTests.RunCore();
