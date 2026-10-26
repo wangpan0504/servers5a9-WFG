@@ -52,8 +52,11 @@ internal sealed class InventoryEquipmentPeriodChangeService(ItemCatalog catalog,
         if (after.Find(targetSlot) is not { } current)
             return InventoryResult.Reject(19);
         after = after with { Items = after.Items.Replace(current, upgraded) };
-        long deadline = source.ExpireTime;
+        // 保留源消费的冷却/日次数前提，同时防止规划期间目标到期后仍被旧计划升级。
+        long? deadline = consumed.Plan.CharacterPrecondition!.QualificationExpiresAt;
+        if (target.ExpireTime > 0)
+            deadline = Math.Min(deadline ?? long.MaxValue, target.ExpireTime);
         return new(true, 0, new(character.Inventory, after, "equipment_period_changed",
-            new(character, deadline > 0 ? deadline : null, Clock, requirePosition: true)));
+            new(character, deadline, Clock, requirePosition: true)));
     }
 }

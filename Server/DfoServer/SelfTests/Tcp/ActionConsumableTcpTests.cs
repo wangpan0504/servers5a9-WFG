@@ -105,6 +105,7 @@ internal static class ActionConsumableTcpTests
             Use(peer,70,69,0,10);peer.Expect(1,515,[0,0,0,70,0,0,69]);peer.Barrier();
             That(Count(70)==0 && ReadTarget().ExpireTime==targetCore.ExpireTime+2*86400,"源已耗尽的重放不再次延期，也不重复发送扣源成功ACK");
         }
+        PeriodChange(fixture, resources, clock, repo, owners);
         await fixture.StopAsync();
 
         ItemCore ReadTarget() => JsonSerializer.Deserialize<ItemCore>((string)fixture.Query(
@@ -130,6 +131,51 @@ internal static class ActionConsumableTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_wallets ORDER BY account"))+
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_consumable_states ORDER BY character_id,item_id,kind"))+
             fixture.Snapshot("SELECT id,revision,gold FROM characters ORDER BY id");
+    }
+
+    static void PeriodChange(TcpTestFixture fixture, TcpTestResources resources,
+        ConsumableUseSessionTests.FakeClock clock, CharacterRepository repo, AccountOwners owners)
+    {
+        const int designId = 490014171;
+        var items = resources.ItemResources.Items;
+        var definition = items.EquipmentPeriodChange(designId)!;
+        That(definition is not null, "真实制作图沿已注册action136解析成对升级表");
+        var route = definition!.Upgrades.First(row => items.Get(row.Key).AllowsUse(95, 0) && items.Get(row.Value).AllowsUse(95, 0));
+        var source = InventoryRewardGrantService.Create(items.Get(designId), utcNow: clock.GetUtcNow(), shopExpiration: true)
+            with { ExpireTime = 0 };
+        var weapon = InventoryRewardGrantService.Create(items.Get(route.Key), utcNow: clock.GetUtcNow(), shopExpiration: true)
+            with { Attr = 11, GenuineUpgrade = 3, ExpireTime = 0 };
+        int expires = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 10);
+        DfoServer.Game.Characters.Character role;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            role = repo.Create(owner, new("PeriodTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, new(InventoryListType.Main, 65), source),
+                    new(0, new(InventoryListType.Main, 66), source),
+                    new(0, new(InventoryListType.Main, 9), weapon),
+                    new(0, new(InventoryListType.Main, 10), weapon with { ExpireTime = expires })])
+            });
+        using var peer = Open(fixture);
+        peer.Select(role.Slot);
+        Use(peer, 65, 136, 0, 9); Ack(peer, 65, 136);
+        peer.Expect(0, 1681); peer.Expect(0, 1681); peer.Barrier();
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var current = repo.LoadCharacter(owner, role.Slot);
+            That(current.Inventory.Find(new(InventoryListType.Main, 9)) ==
+                role.Inventory.Find(new(InventoryListType.Main, 9))! with { Core = weapon with { ItemId = route.Value } } &&
+                current.Inventory.Find(new(InventoryListType.Main, 65)) is null &&
+                current.Inventory.Find(new(InventoryListType.Main, 66))!.Core.Count == 1,
+                "真实515制作图消费一件，产物沿用UID、位置与全部打造，不扣商店材料");
+        }
+        clock.Advance(TimeSpan.FromSeconds(10));
+        string before = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT id,revision FROM characters ORDER BY id") + fixture.Snapshot("SELECT * FROM inventory_audit_log");
+        Use(peer, 66, 136, 0, 10); peer.Expect(1, 515, [0, 0, 0, 66, 0, 0, 136]); peer.Barrier();
+        That(before == fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT id,revision FROM characters ORDER BY id") + fixture.Snapshot("SELECT * FROM inventory_audit_log"),
+            "目标恰到期的真实请求拒绝且连接可继续，不扣源、不写产物或审计");
     }
 
     static void Use(TcpPeer peer,ushort slot,uint action,uint first=0,uint second=0) => peer.Send(515,Build(w=>

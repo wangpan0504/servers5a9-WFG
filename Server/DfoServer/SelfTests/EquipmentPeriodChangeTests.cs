@@ -3,6 +3,9 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using PvfLib;
+using DfoServer.Game.Accounts;
+using DfoServer.Persistence;
+using System.Text.Json;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -98,6 +101,44 @@ internal static class EquipmentPeriodChangeTests
         var noMaterial = character with { Inventory = new([design, weapon]) };
         That(service.Plan(noMaterial, designSlot, weaponSlot, inTown: true).Accepted,
             "★ 没有任何商店材料时仍可制作，证明不把[need material]当作使用成本");
+        int expires = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 10);
+        foreach (var (sourceExpiry, targetExpiry, expectedExpiry) in new[]
+        {
+            (0, expires, expires), (expires + 10, expires, expires),
+            (expires, expires + 10, expires), (expires, 0, expires)
+        })
+        {
+            var limited = character with { Inventory = new([
+                design with { Core = design.Core with { ExpireTime = sourceExpiry } },
+                weapon with { Core = weapon.Core with { ExpireTime = targetExpiry } }]) };
+            var pending = service.Plan(limited, designSlot, weaponSlot, inTown: true);
+            That(pending.Accepted && pending.Plan!.CharacterPrecondition!.Matches(limited, expectedExpiry - 1) &&
+                !pending.Plan.CharacterPrecondition.Matches(limited, expectedExpiry),
+                "制作图和目标的最早截止在提交前复验，到期等号不能继续消费或升级");
+        }
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-period-expiry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repo = new CharacterRepository(Path.Combine(root, "game.db"));
+            using var owner = new AccountOwners().Acquire("period-expiry", () => { });
+            var saved = repo.Create(owner, new("PeriodExpiry", character.Position, null)
+            {
+                Job = character.Job, Level = character.Level,
+                Inventory = new([design with { Uid = 0 },
+                    weapon with { Uid = 0, Core = weapon.Core with { ExpireTime = expires } }])
+            });
+            var pending = service.Plan(saved, designSlot, weaponSlot, inTown: true);
+            That(pending.Accepted, "真实文件库中有效目标可生成制作计划");
+            string before = JsonSerializer.Serialize(repo.LoadCharacter(owner, saved.Slot));
+            clock.Advance(TimeSpan.FromSeconds(10));
+            bool rejected = false;
+            try { repo.CommitInventory(owner, saved, pending.Plan!); }
+            catch (InventoryQualificationExpiredException) { rejected = true; }
+            That(rejected && JsonSerializer.Serialize(repo.LoadCharacter(owner, saved.Slot)) == before,
+                "目标恰到期后文件库拒绝旧计划，源、目标UID和核心、冷却与revision全部保持");
+        }
+        finally { Directory.Delete(root, true); }
         Console.WriteLine("PASS 誓约之缚武器制作图成对装配、不扣商店材料与核心保留断言");
     }
 }
