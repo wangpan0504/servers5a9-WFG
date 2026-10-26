@@ -17,6 +17,14 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
     {
         commands.Register(CmdPacketType.ENTER_SELECT_DUNGEON, EnterAsync, nameof(DungeonSelectionHandler));
         commands.Register(CmdPacketType.BACK_2_VILLAGE, ReturnAsync, nameof(DungeonSelectionHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CANCEL_QUICK_PARTY, CancelQuickPartyAsync, nameof(DungeonSelectionHandler), UserStateRequirement.WorldReady);
+    }
+
+    async Task<CommandResult> CancelQuickPartyAsync(GameConnectionContext context, Packet request)
+    {
+        if (request.Body.Length != 0) return CommandResult.Unhandled;
+        return await projection.RestoreDungeonSelectionAsync(context, CmdPacketType.CANCEL_QUICK_PARTY)
+            ? CommandResult.Handled : CommandResult.Unhandled;
     }
 
     async Task<CommandResult> EnterAsync(GameConnectionContext context, Packet request)

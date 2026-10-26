@@ -295,6 +295,25 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         });
     }
 
+    public async Task<bool> RestoreDungeonSelectionAsync(GameConnectionContext context, CmdPacketType cancellation)
+    {
+        var state = context.Owner.Execute<(DungeonSelectionReceipt Receipt, int Legend)?>(() =>
+        {
+            var session = context.Session;
+            if (context.BlocksTownActions || !session.Ready || session.Phase != DfoServer.Game.Session.SessionPhase.MapSelect ||
+                session.Selected is not { } character || session.CurrentDungeonSelection is not { IsTutorial: false, IsClassExperience: false } selection ||
+                session.CurrentParty?.Invoke() is not null)
+                return null;
+            return (new(character, context.Owner.Generation, session.SelectionEpoch, selection.Id), selection.HellLegendDungeonId ?? 0);
+        });
+        if (state is not { } current) return false;
+        bool Guard() => context.Session.CanPublishDungeonSelection(current.Receipt) && context.Session.CurrentParty?.Invoke() is null;
+        // 取消ACK没有界面恢复逻辑；重发正常27请求刷新选图，保留本次选择身份及冻结返回点。
+        await context.Reply(cancellation, [1], "quick_party_cancelled", Guard);
+        await GriefTowerProjection.SelectionAsync(context, dungeons, current.Legend, "quick_party_selection_restored", Guard);
+        return true;
+    }
+
     public async Task ReturnFromFormalDungeonAsync(GameConnectionContext context, TownTravelReceipt receipt, string action)
     {
         bool CanSend() => context.Session.CanPublishTravel(receipt);

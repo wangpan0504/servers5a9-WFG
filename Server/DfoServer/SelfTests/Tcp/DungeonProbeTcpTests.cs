@@ -41,8 +41,9 @@ internal static class DungeonProbeTcpTests
             That(firstKey > previousKey, "reselection does not reuse diagnostic object keys on the connection");
             previousKey = U16(map, 25 + 3 * 22);
             peer.Send(132);
+            peer.Send(444);
             peer.Barrier();
-            That(fixture.Snapshot() == before, "选图132不能越过已开始的副本诊断活动");
+            That(fixture.Snapshot() == before, "选图132及快速组队取消不能越过已开始的副本诊断活动");
             peer.Send(37, new byte[8]);
             peer.Expect(1, 37, [1]);
             peer.Expect(0, 30, new byte[5]);
