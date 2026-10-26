@@ -167,11 +167,11 @@ internal static partial class TownProtocolTcpTests
         string assets = JsonSerializer.Serialize(tables.Select(table => fixture.Query($"SELECT * FROM \"{table}\" ORDER BY rowid")));
         string columns = string.Join(',', fixture.Query("PRAGMA table_info(characters)").Select(row => (string)row[1])
             .Where(name => name is not ("town" or "area" or "x" or "y" or "revision")).Select(name => '"' + name + '"'));
-        string character = fixture.Snapshot($"SELECT {columns} FROM characters WHERE id=$p0", peer.Id);
         foreach (ushort x in new ushort[] { 90, 79 })
         {
             peer.Send(35, Move(x, 249));
             peer.Barrier();
+            string character = fixture.Snapshot($"SELECT {columns} FROM characters WHERE id=$p0", peer.Id);
             string before = fixture.Snapshot();
             long revision = Convert.ToInt64(fixture.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id)[0][0]);
             peer.Send(15, new byte[4]);
@@ -186,8 +186,8 @@ internal static partial class TownProtocolTcpTests
             peer.Send(132);
             peer.Expect(1, 132, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
-            peer.Expect(0, 23, Build(w => { w.Write(peer.Id); w.Write((byte)38); w.Write((byte)2); w.Write((ushort)89); w.Write((ushort)249); w.Write((byte)0); w.Write((byte)3); }));
-            peer.Expect(0, 24, Build(w => { w.Write((byte)38); w.Write((byte)2); w.Write((ushort)1); w.Write(peer.Id); w.Write((ushort)89); w.Write((ushort)249); w.Write(new byte[] { 0, 3, 1 }); }));
+            peer.Expect(0, 23, Build(w => { w.Write(peer.Id); w.Write((byte)38); w.Write((byte)2); w.Write((ushort)89); w.Write((ushort)249); w.Write((byte)5); w.Write((byte)3); }));
+            peer.Expect(0, 24, Build(w => { w.Write((byte)38); w.Write((byte)2); w.Write((ushort)1); w.Write(peer.Id); w.Write((ushort)89); w.Write((ushort)249); w.Write(new byte[] { 5, 3, 1 }); }));
             That(fixture.Snapshot("SELECT town,area,x,y,revision FROM characters WHERE id=$p0", peer.Id) == $"[[38,2,89,249,{revision + 1}]]",
                 "边界内外返回提交安全落点，包体与落库一致");
             before = fixture.Snapshot();

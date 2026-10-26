@@ -19,6 +19,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         public GameConnectionSender Sender { get; } = sender;
         public Scene Scene { get; set; } = scene;
         public Character Character { get; set; } = character;
+        public ushort ScaledSpeed { get; set; } = 100;
         public string AdventureName { get; set; } = adventureName;
         public long Serial { get; } = serial;
         public ChannelIdentity Channel => Scene.Channel;
@@ -60,7 +61,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         var c = source.Character;
         return new(TownPackets.Actor(c, source.Channel, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds(), source.AdventureName,
             premiumPcRoom: debugSettings?.PremiumPcRoom == true), TownPackets.ActorState(c.Id),
-            TownPackets.Position(c, false), TownPackets.Position(c, true));
+            TownPackets.Position(c, false, source.ScaledSpeed), TownPackets.Position(c, true));
     }
     RemoteTownActor Projection(Member source, Member target, Bodies bodies) =>
         new(source.Character.Id, source.Serial, bodies.Actor, bodies.State, bodies.Position, () => Visible(source, target))
@@ -118,15 +119,19 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             return true;
         }
     });
-    public void Move(AccountOwners.Lease owner, GameConnectionSender sender, Character character) => owner.Execute(() =>
+    public void Move(AccountOwners.Lease owner, GameConnectionSender sender, Character character, ushort scaledSpeed = 100) => owner.Execute(() =>
     {
         lock (gate)
         {
             if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id)
                 throw new InvalidOperationException("Town move without current membership");
-            if (AlignPhase(source, character, "Town move without current membership"))
+            bool changed = source.Character.Position != character.Position || source.ScaledSpeed != scaledSpeed;
+            if (AlignPhase(source, character, "Town move without current membership", scaledSpeed))
                 return true;
             source.Character = character;
+            // 实时速度只归本次场景成员，不加入角色位置或持久化快照。
+            source.ScaledSpeed = scaledSpeed;
+            if (!changed) return true;
             var peers = Peers(source);
             if (peers.Length == 0)
                 return true;
@@ -160,13 +165,14 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     });
     // 完成任务会换掉同一城镇区域的 PVF 阶段。人还在，只是地图路径变了。
     // 旧阶段同屏离场，新阶段入场；城镇或区域变了仍视为没有当前成员。
-    bool AlignPhase(Member source, Character character, string mismatch)
+    bool AlignPhase(Member source, Character character, string mismatch, ushort? scaledSpeed = null)
     {
         var next = SceneOf(source.Owner, character, source.Channel);
         if (source.Scene == next)
             return false;
         if (next.Channel != source.Channel || next.Town != source.Scene.Town || next.Area != source.Scene.Area)
             throw new InvalidOperationException(mismatch);
+        if (scaledSpeed is { } speed) source.ScaledSpeed = speed;
         var previous = scenes[source.Scene];
         previous.Remove(source);
         if (previous.Count == 0)

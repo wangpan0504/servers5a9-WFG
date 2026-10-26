@@ -10,7 +10,7 @@ internal static class TownRequests
     {
         if (opcode == (ushort)CmdPacketType.USER_STATE_MOTION ? b.Length != 13 : opcode != (ushort)CmdPacketType.SET_USER_POSITION || b.Length != 7)
             throw new InvalidDataException("Position body width");
-        if (b[4] is < 1 or > 9)
+        if (b[4] > 9 || (opcode == (ushort)CmdPacketType.USER_STATE_MOTION && b[4] == 0))
             throw new InvalidDataException("Movement code outside native 1..9");
         if (b.Length == 13 && (b[10] != 0 || b[11] != 0 || b[12] != 0))
             throw new InvalidDataException("Unknown movement tail");

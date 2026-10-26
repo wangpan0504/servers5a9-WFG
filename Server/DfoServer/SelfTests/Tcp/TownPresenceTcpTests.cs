@@ -95,6 +95,36 @@ internal static class TownPresenceTcpTests
                     fixture.Snapshot("SELECT * FROM characters WHERE account='beta'") == otherBefore,
                     "同屏观察不把源账号黑钻或PC房资格写入接收账号");
             }
+            alpha.Send(35, Move(633, 196));
+            alpha.Barrier();
+            beta.SendBarrier();
+            beta.Expect(0, 22, Position(alpha.Id, 633, 196, direction: 5));
+            beta.Expect(1, 1347, [1]);
+            foreach (byte direction in new byte[] { 1, 3, 5 })
+            {
+                alpha.Send(35, Build(w =>
+                {
+                    w.Write((ushort)633); w.Write((ushort)196); w.Write(direction); w.Write((ushort)513);
+                }));
+                alpha.Barrier();
+                beta.SendBarrier();
+                beta.Expect(0, 22, Position(alpha.Id, 633, 196, direction, 513));
+                beta.Expect(1, 1347, [1]);
+            }
+            string beforeSpeed = fixture.Snapshot();
+            foreach (ushort speed in new ushort[] { 0, ushort.MaxValue })
+            {
+                // 坐标未变且方向0必须沿用5，速度仍按完整u16原样转发。
+                alpha.Send(35, Build(w =>
+                {
+                    w.Write((ushort)633); w.Write((ushort)196); w.Write((byte)0); w.Write(speed);
+                }));
+                alpha.Barrier();
+                beta.SendBarrier();
+                beta.Expect(0, 22, Position(alpha.Id, 633, 196, 5, speed));
+                beta.Expect(1, 1347, [1]);
+                That(fixture.Snapshot() == beforeSpeed, "仅改变速度不保存位置、不增加revision或污染副本准入快照");
+            }
             string selectionBefore = fixture.Snapshot();
             alpha.Send(15, new byte[4]);
             var select = alpha.Batch((0, 6), (1, 15), (0, 3), (0, 1536), (0, 27));
@@ -108,10 +138,19 @@ internal static class TownPresenceTcpTests
             beta.SendBarrier();
             beta.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             That(fixture.Snapshot() == selectionBefore, "选图离场和回城重建双向同屏，不改变两账号资产");
+            byte[] motion = Move(634, 196, motion: true);
+            motion[4] = 9;
+            motion[5] = 1;
+            motion[6] = 2;
+            alpha.Send(631, motion);
+            alpha.Barrier();
+            beta.SendBarrier();
+            beta.Expect(0, 22, Position(alpha.Id, 634, 196, direction: 5));
+            beta.Expect(1, 1347, [1]);
             alpha.Send(35, Move(633, 196));
             alpha.Barrier();
             beta.SendBarrier();
-            beta.Expect(0, 22, Position(alpha.Id, 633, 196));
+            beta.Expect(0, 22, Position(alpha.Id, 633, 196, direction: 5));
             beta.Expect(1, 1347, [1]);
             alpha.Send(35, Move(633, 196));
             alpha.Send(35, Move(0, 0));
@@ -121,7 +160,7 @@ internal static class TownPresenceTcpTests
             alpha.SendBarrier();
             alpha.Batch((0, 23), (0, 24), (0, 1379), (1, 1347));
             beta.SendBarrier();
-            beta.Expect(0, 23, Build(w => { w.Write(alpha.Id); w.Write(new byte[] { 38, 1, 194, 1, 234, 0, 0, 3 }); }));
+            beta.Expect(0, 23, Build(w => { w.Write(alpha.Id); w.Write(new byte[] { 38, 1, 194, 1, 234, 0, 5, 3 }); }));
             beta.Expect(1, 1347, [1]);
             alpha.Send(1426);
             alpha.SendBarrier();
@@ -175,12 +214,12 @@ internal static class TownPresenceTcpTests
         Console.WriteLine("PASS C# TCP presence: private/public scenes, snapshots, movement, scene clear, takeover, online GM and return selection");
     }
 
-    static byte[] Position(ushort id, ushort x, ushort y) => Build(w =>
+    static byte[] Position(ushort id, ushort x, ushort y, byte direction = 0, ushort speed = 100) => Build(w =>
     {
         w.Write(id);
         w.Write(x);
         w.Write(y);
-        w.Write((byte)0);
-        w.Write((ushort)100);
+        w.Write(direction);
+        w.Write(speed);
     });
 }
