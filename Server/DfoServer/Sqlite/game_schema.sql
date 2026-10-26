@@ -82,6 +82,12 @@ CREATE TABLE character_assault_daily(
   hidden_count INTEGER NOT NULL CHECK(hidden_count BETWEEN 0 AND 255),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE character_boss_selection_buff(
+    character_id INTEGER PRIMARY KEY,
+    account TEXT NOT NULL,
+    state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='object'),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
 CREATE TABLE character_consumable_states(
   character_id INTEGER NOT NULL,
   account TEXT NOT NULL,

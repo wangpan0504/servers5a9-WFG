@@ -32,6 +32,7 @@ internal sealed partial class GameSession
         public GriefTowerItemUse? GriefItems { get; init; }
         public GriefTowerAdmission? GriefAdmission { get; init; }
         public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];
+        public BossSelectionBuff? BossSelectionBuff { get; init; }
         public long DeathSerial { get; set; }
         public long? AltarRevivalDue { get; set; }
         public int ReviveCount { get; set; }
@@ -287,11 +288,15 @@ internal sealed partial class GameSession
         }
         bool allowClearedQuest = questId is > 0 and < 30000 &&
             repository.LoadQuestClear(owner, expected, (ushort)questId) is not null;
+        var bossBuff = hellParty && expected.Inventory.BossSelectionBuff is { } activeBossBuff &&
+            activeBossBuff.Allows(dungeonId, partyAdmission, practice, (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds())
+            ? activeBossBuff : null;
         if (!DungeonEntryPlan.TryCreate(catalog, expected, dungeonId, questId, difficulty, out var entry, out var entryReason, allowClearedQuest, quest,draw,questCatalog,
             allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null,
             hellParty: hellParty,hellLegend: hellLegend,practice: practice,
             // 频道专属城镇的选图副本（超时空之战 400000016 的 [boss map] 6 0 只写 `map`）按客户端规则把 Boss 坐标格当 Boss 图；其他副本不变。
-            bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute,tagEvildom:tagEntry?.Admission,tagMaze:tagEntry?.MazeOrdinal))
+            bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute,tagEvildom:tagEntry?.Admission,tagMaze:tagEntry?.MazeOrdinal,
+            bossWeights: bossBuff?.Definition.Weights.ToDictionary(row => row.MapId, row => row.Weight)))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         // 普通卢克目前只证实单人Run额度；组队共享/个人语义未闭合，不把十二次解释成每人十二次。
         // 祭坛、绝望之塔等原有限额仍由EntryPlan设置，不受这项窄范围投影影响。
@@ -367,6 +372,8 @@ internal sealed partial class GameSession
         if (partyAdmission && shared is null) entry = entry with { PartyRoute = entry };
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes,crackRewards,shared,partyFirstKey,partyInstance);
+        if (prepared is not null && bossBuff is not null)
+            prepared = prepared with { Dungeon = prepared.Dungeon with { BossSelectionBuff = bossBuff } };
         if (prepared is not null && entry.Maze.IsGriefTower)
             prepared = prepared with { Dungeon = prepared.Dungeon with { GriefItems = new(catalog.GriefTower), GriefAdmission = grief } };
         // 只有正式入场计入冒险团每周地下城信息：练习、训练、职业体验与比赛不消耗次数。
@@ -769,6 +776,14 @@ internal sealed partial class GameSession
                 entryItems = DungeonAltarEntryPolicy.Payment(character, specialEntry);
                 if (entryItems is null) return null;
             }
+        }
+        if (installing.BossSelectionBuff is { } bossBuff)
+        {
+            if (!installing.Entry.IsCosmo || !bossBuff.Active((timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds()) ||
+                !BossSelectionBuff.Same(character.Inventory.BossSelectionBuff, bossBuff)) return null;
+            var before = entryItems?.Before ?? character.Inventory;
+            var after = (entryItems?.After ?? before) with { BossSelectionBuff = bossBuff.Remaining == 1 ? null : bossBuff with { Remaining = bossBuff.Remaining - 1 } };
+            entryItems = entryItems is null ? new(before, after, "boss_selection_buff_entry") : entryItems.WithAfter(after);
         }
         ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : installing.Entry.StartFatigue;
         Character committed;

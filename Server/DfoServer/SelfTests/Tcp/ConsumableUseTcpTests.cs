@@ -38,7 +38,33 @@ internal static partial class ConsumableUseTcpTests
                     .Add(new(0, new(InventoryListType.Main, 68), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(6001), 2)))
                     .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1073), 2))) } });
         }
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var candidate = CharacterCreation.Prepare("BossPotion", resources.Characters.Get(0), resources.Towns.Room,
+                resources.Towns.InitialReturn, resources.Learning.Get);
+            var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
+            repository.Create(owner, candidate with { Level = 95, InitialLearning = SkillPointLedger.Synchronize(0, 0, 95,
+                candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(95) }, resources.Learning),
+                Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65),
+                    InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(490705256), 3))) } });
+        }
         await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2);
+            Use(peer, 65, 0, 490705256); Accepted(peer, 65, 0, 490705256); peer.Barrier();
+            That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id) is [[5L]],
+                "截图药水通过真实CMD44分派和完整ACK生效，五次效果已提交");
+            Use(peer, 65, 1, 490705256); Refused(peer, 1, 490705256); peer.Barrier();
+            That(fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND list_type=0 AND slot_index=65", peer.Id) is [[2L]],
+                "一分钟冷却拒绝保留剩余两瓶，后续连接仍正常");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2); peer.Barrier();
+            That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id) is [[5L]],
+                "断线重连保留实际五次药效，不重复消费或补发");
+        }
         using (var peer = Open(fixture))
         {
             string before = Assets();

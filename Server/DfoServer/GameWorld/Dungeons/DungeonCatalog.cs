@@ -383,9 +383,27 @@ internal sealed class DungeonCatalog
         }, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
 
-    public DungeonMaze ResolveOrdinaryMaze(DungeonDefinition definition, DungeonMaze maze, Func<int,int>? draw = null, bool hellParty = false)
+    public DungeonMaze ResolveOrdinaryMaze(DungeonDefinition definition, DungeonMaze maze, Func<int,int>? draw = null, bool hellParty = false,
+        IReadOnlyDictionary<int,int>? bossWeights = null)
     {
         var choose = draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32;
+        if (bossWeights is not null)
+        {
+            if (definition.Id != DungeonCosmoRewardCatalog.DungeonId || maze.MapSpecification is null)
+                throw new InvalidDataException("白斯追击效果缺少超星空终点声明");
+            int replaced = 0;
+            var maps = maze.MapSpecification.Select(map =>
+            {
+                if (map.Kind != "boss" || map.CandidateWeights.Count != map.CandidateIds.Count || map.CandidateIds.Count < 2)
+                    return map;
+                if (map.CandidateIds.Count != bossWeights.Count || map.CandidateIds.Any(id => !bossWeights.ContainsKey(id)))
+                    throw new InvalidDataException("白斯追击效果与实际终点候选不匹配");
+                replaced++;
+                return map with { CandidateWeights = map.CandidateIds.Select(id => bossWeights[id]).ToArray() };
+            }).ToArray();
+            if (replaced != 1) throw new InvalidDataException("白斯追击效果须对应唯一加权终点");
+            maze = maze with { MapSpecification = maps };
+        }
         // 先按当前房间用途区分普通、dummy和Boss候选，不能提前将混合候选随机压成单图。
         if (maze.ResourceError is null && maze.QuestConnectionTokens.Count == 0 &&
             (!maze.StaticTopology.Supported || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||

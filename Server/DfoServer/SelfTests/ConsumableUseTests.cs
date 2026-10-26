@@ -17,6 +17,16 @@ internal static class ConsumableUseTests
 
     public static void RunCore()
     {
+        var bossBuff = new BossSelectionBuff(490705256, 5, 2000,
+            new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]));
+        bossBuff.Validate();
+        That(bossBuff.Allows(7191, false, false, 1999) && !bossBuff.Allows(7191, false, false, 2000) &&
+            !bossBuff.Allows(7191, true, false, 1000) && !bossBuff.Allows(7191, false, true, 1000) &&
+            !bossBuff.Allows(10, false, false, 1000) && !(bossBuff with { Remaining = 0 }).Active(1000),
+            "白斯药效仅单人正式超星空触发，到期等号、组队、练习、普通副本和耗尽均不生效");
+        var restoredBuff = System.Text.Json.JsonSerializer.Deserialize<BossSelectionBuff>(System.Text.Json.JsonSerializer.Serialize(bossBuff));
+        That(BossSelectionBuff.Same(bossBuff, restoredBuff) && !BossSelectionBuff.Same(bossBuff, bossBuff with { Remaining = 4 }),
+            "重读后的完整权重按内容核对，旧次数快照不能提交");
         byte[] body = [65, 0, 0, 0xEF, 0xCD, 0xAB, 0x89, 0x54, 4, 0, 0, 0, 0, 0, 0];
         var request = ConsumableUseRequests.Read(body);
         That(request.Position == new InventorySlot(InventoryListType.Main, 65) && request.OpaqueCheck == 0x89ABCDEF && request.ItemId == 1108 && request.Argument == 0,
@@ -50,7 +60,7 @@ internal static class ConsumableUseTests
             That(RecoveryConsumableCatalog.Read(other) is { ItemId: 500001, MinimumLevel: 16, CoolTime: 10000 },
                 "普通waste按大类识别，不按目录、ID、分组名称或子型固定值限制");
         }
-        foreach (string category in new[] { "[etc]", "[contract]", "[booster]", "[creature]", "[material]" })
+        foreach (string category in new[] { "[etc]", "[contract]", "[booster]", "[creature]", "[material]", "[expert town potion]" })
             That(RecoveryConsumableCatalog.Read(raw with { Stackable = declaration with { TypeDeclaration = new(category, [4]) } }) is null,
                 "其他业务大类不能通过普通消耗应答伪造已实现");
         foreach (string category in new[] { "[throw]", "[set]" })
@@ -121,6 +131,13 @@ internal static class ConsumableUseTests
 
     public static void RunResources(ItemResources resources)
     {
+        That(resources.Items.Get(490705256) is { Name: "白斯追击药水", MinimumLevel: 95 } &&
+            resources.RecoveryConsumables.TryGet(490705256, out var bossPotion) && bossPotion is
+            { MinimumLevel: 95, CoolTime: 60000, BossSelectionBuff: { BuffId: 300, DungeonId: 7191, Entries: 5 } } &&
+            bossPotion.BossSelectionBuff.Weights.SequenceEqual(new BossSelectionWeight[] { new(92689, 40), new(92690, 40), new(92697, 20) }),
+            "截图490705256由真实STK及两份variousbuff表解释为95级城镇药、40/40/20和5次，不按名称猜规则");
+        That(!resources.RecoveryConsumables.TryGet(490012682, out _),
+            "不同buff的强力药保持未接入，不能借普通追击药规则扣源冒充100%效果");
         That(resources.RecoveryConsumables.TryGet(1108, out var hp) && hp == Hp &&
             resources.RecoveryConsumables.TryGet(1114, out var mp) && mp == Mp,
             "匹配PVF两种药只保留最低等级和冷却原值/组，不把恢复效果带入服务端使用定义");
