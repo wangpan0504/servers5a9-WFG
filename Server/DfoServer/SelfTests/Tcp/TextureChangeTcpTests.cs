@@ -103,6 +103,32 @@ internal static class TextureChangeTcpTests
                 committed.Inventory.Find(Bag(26))?.Core == SavedCore(),
                 "重连保留已提交材质与完整核心，回滚结果不污染角色快照");
         }
+        var plateCore = InventoryRewardGrantService.Create(items.Items.Get(PlateId)) with { Attr = 11, GenuineUpgrade = 3 };
+        ushort targetLimit = items.Items.Get(ClothId).Durability;
+        That(plateCore.Durability > targetLimit, "真实板甲转布甲模板的耐久上限下降");
+        Character clampRole;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            clampRole = repository.Create(owner, new("TextureClamp", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 95, Skills = resources.Characters.Get(0).Skills, AcceptedStoryLevel = 1,
+                Inventory = new([new(0, Bag(26), plateCore), new(0, Bag(121), Stack(ClothMaterialId, 80))], Gold: 600_000)
+            });
+        using (var peer = Open(fixture))
+        {
+            peer.Select(clampRole.Slot); Apply(peer, [26, 0, 0], ClothId, 100_000);
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var saved = repository.LoadCharacter(owner, clampRole.Slot);
+            That(saved.Inventory.Find(Bag(26)) == clampRole.Inventory.Find(Bag(26))! with
+                { Core = plateCore with { ItemId = ClothId, Durability = targetLimit } },
+                "真实转甲提交后耐久钳制到新上限，UID及其它核心字段逐项保留");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(clampRole.Slot); peer.Barrier();
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            That(repository.LoadCharacter(owner, clampRole.Slot).Inventory.Find(Bag(26))!.Core.Durability == targetLimit,
+                "重连仍恢复已提交的新模板耐久，不恢复超限旧值");
+        }
         await fixture.StopAsync();
 
         Character Reload()

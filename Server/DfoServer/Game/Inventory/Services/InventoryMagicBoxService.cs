@@ -6,8 +6,10 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCatalog boxes, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-    Random? random = null, PremiumContractCatalog? contracts = null, GameDebugSettings? debugSettings = null)
+    Random? random = null, PremiumContractCatalog? contracts = null, GameDebugSettings? debugSettings = null, TimeProvider? clock = null)
 {
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+
     public InventoryResult Open(Character character, MagicBoxOpenRequest request, out MagicBoxReceipt? receipt, DateTimeOffset? utcNow = null)
     {
         receipt = null;
@@ -17,7 +19,7 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
             request.Count <= 0 || request.Count > ushort.MaxValue)
             return InventoryResult.Reject(19);
         var before = character.Inventory;
-        DateTimeOffset now = utcNow ?? DateTimeOffset.UtcNow;
+        DateTimeOffset now = utcNow ?? Clock.GetUtcNow();
         var box = before.Find(request.BoxSlot);
         if (box is null || !box.Core.IsStackable || box.Core.EquipmentLockId != 0 || box.Core.IsExpired(now.ToUnixTimeSeconds()) ||
             request.BoxItemId != 0 && request.BoxItemId != box.Core.ItemId)
@@ -28,6 +30,8 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
         // 全部正权重候选须具有完整交付能力；未知premium在抽取前拒绝，不能抽后重选或只写期限。
         try
         {
+            if (!InventoryAvatarPackageService.SourceEligible(character, box, catalog.Get(box.Core.ItemId)))
+                return InventoryResult.Reject(19);
             foreach (int id in definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId).Distinct())
             {
                 if (Currency.CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id)) continue;
@@ -183,7 +187,12 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
         // 赛丽亚无材料协议使用客户端约定的 -1 哨兵；回显盒子槽位会让结果读取器错位到奖励行，成功发奖后触发客户端崩溃。
         receipt = new(box.Core.ItemId, box.Position.Index, material?.Position.Index ?? (short)-1, opens, rows,
             request.RawListType, doubleRows, seriaSource ? luckBefore : 0, seriaSource ? luck : 0, displayRows);
-        var plan = new InventoryPlan(before, after, "magic_box_open", overflowItems: grant.Plan.OverflowItems);
+        long? deadline = InventoryAvatarPackageService.EarliestDeadline(box, material is null ? [] : [material]);
+        foreach (var item in after.Items.Concat(grant.Plan.OverflowItems))
+            if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
+                (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
+        var plan = new InventoryPlan(before, after, "magic_box_open",
+            new(character, deadline, Clock, requirePosition: true), overflowItems: grant.Plan.OverflowItems);
         return new(true, 0, plan);
     }
 }

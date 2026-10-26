@@ -19,11 +19,11 @@ internal sealed class InventoryPremiumContractUseService(ItemCatalog items, Prem
     public InventoryResult Plan(Character character, ConsumableUseRequest request, long now)
     {
         if (!TryDefinition(request.ItemId, out _)) return InventoryResult.Reject(123);
-        return Plan(character, request, now, contracts, items.Get(request.ItemId));
+        return Plan(character, request, now, contracts, items.Get(request.ItemId), Clock);
     }
 
     internal static InventoryResult Plan(Character character, ConsumableUseRequest request, long now,
-        PremiumContractCatalog contracts, ItemTemplate template)
+        PremiumContractCatalog contracts, ItemTemplate template, TimeProvider? clock = null)
     {
         if (!contracts.TryConsumableContract(request.ItemId, out var contract)) return InventoryResult.Reject(123);
         var before = character.Inventory;
@@ -33,8 +33,7 @@ internal sealed class InventoryPremiumContractUseService(ItemCatalog items, Prem
             source.Core.Count <= 0 || !ItemSlotBoundService.Allows(before, request.Position, ItemKind.Consumable) ||
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now) ||
             contract.ItemId != request.ItemId || contract.DurationSeconds <= 0 ||
-            template.Id != request.ItemId || template.Kind != ItemKind.Consumable || template.UseForbidden ||
-            character.Level < template.MinimumLevel || (template.Jobs & (1 << character.Job)) == 0 ||
+            template.Id != request.ItemId || template.Kind != ItemKind.Consumable || !template.AllowsUse(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(123);
 
@@ -45,7 +44,7 @@ internal sealed class InventoryPremiumContractUseService(ItemCatalog items, Prem
             // 实体扣一件和账号续期构成同一个规划；提交、owner和重复请求由 Session 统一控制。
             var wallet = before.AccountWallet.ActivateContract(contract.Type, contract.DurationSeconds, DateTimeOffset.FromUnixTimeSeconds(now));
             var after = deletion.Plan.After with { AccountWallet = wallet };
-            return new(true, 0, new(before, after, "use_premium_contract", new(character)));
+            return new(true, 0, new(before, after, "use_premium_contract", new(character, source.ExpireTime > 0 ? source.ExpireTime : null, clock)));
         }
         catch (Exception error) when (error is OverflowException or ArgumentOutOfRangeException)
         {

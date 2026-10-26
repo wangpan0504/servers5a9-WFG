@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -72,6 +73,19 @@ internal static class RandomOptionTests
         texts["equipment/common/shoes/leather/test.equ"] = "[pvp]\n[random option]\n1\n[/pvp]";
         Reject<InvalidDataException>(() => catalog.ResolveBoosterReward(freeTemplate), "嵌套random option不作为普通礼盒根资格");
         texts["equipment/common/shoes/leather/test.equ"] = equipmentText;
+        var itemCatalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        itemCatalog.PrefillTemplates([new(template.Id, template), new(15, template with { Id = 15, Kind = ItemKind.Consumable,
+            EquipmentSlot = 0, StackLimit = 999, QualityBox = new(80, 99, []) })]);
+        Character role = new(1, 0, "SealRule", 0, new(1, 0, 10, 10), null)
+        {
+            Level = 95, Inventory = new([new(1, new(InventoryListType.Main, 9), new(1, ItemKind.Equipment, 123)),
+                new(2, new(InventoryListType.Main, 65), new(15, ItemKind.Consumable, 2))], Gold: 1000)
+        };
+        var service = new InventoryRandomOptionService(itemCatalog, catalog, _ => 0);
+        InventoryQualificationTests.CheckInputs(role, value => service.Unseal(value, new(9, 0)),
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(), new InventorySlot(InventoryListType.Main, 9));
+        InventoryQualificationTests.CheckInputs(role, value => service.ResetQuality(value, new(9, 1, 65, 0, false)),
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(), new(InventoryListType.Main, 9), new(InventoryListType.Main, 65));
         EquipmentRandomOptionChangeTests.RunCatalog((readTokens, resolve) => new RandomOptionCatalog(path => texts[path],
             new Dictionary<int, string> { [1] = "common/shoes/leather/test.equ" }, readTokens, resolve), template);
         texts["equipment/common/shoes/leather/test.equ"] = "[random option]\n0";

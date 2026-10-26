@@ -25,6 +25,8 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
         long total = 0;
         long now = time.ToUnixTimeSeconds();
         bool all = request.Position.Index == -1;
+        long? deadline = automatic ? Math.Min(DevilContractPolicy.Expiry(before.AccountWallet, 6),
+            DailyBoosterUsage.NextReset(time).ToUnixTimeSeconds()) : null;
         ActionConsumableDefinition? tool = null;
         InventoryResult? paidTool = null;
         if (request.RepairItemSlot >= 0)
@@ -38,6 +40,8 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
                 ? "[seria room]" : "[village]";
             paidTool = InventoryActionConsumableService.Plan(character, position, tool, place, clock, time);
             if (!paidTool.Accepted) return paidTool;
+            if (paidTool.Plan!.CharacterPrecondition?.QualificationExpiresAt is { } sourceDeadline)
+                deadline = Math.Min(deadline ?? long.MaxValue, sourceDeadline);
         }
         var candidates = all ? before.Items.Where(item => item.Position.List == InventoryListType.Equipment ||
             item.Position.List == InventoryListType.Main && item.Position.Index is >= 3 and <= 8).ToArray() :
@@ -61,6 +65,9 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
             // 一键修理覆盖普通穿戴与快捷装备，不把背包装备页、仓库或特殊盾牌一起收费。
             if (all && template.EquipmentSlot is 13 or 24 or 30)
                 continue;
+            // 单件的无变化目标仍须有效；批量只绑定实际修理及客户端战损回述的有效候选。
+            if ((!all || item.Core.Durability < template.Durability || automatic && clientBattleWear && template.Durability > 0) &&
+                item.ExpireTime > 0 && (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
             if (item.Core.Durability >= template.Durability)
                 continue;
             int price = 0;
@@ -81,10 +88,10 @@ internal sealed class InventoryRepairService(ItemCatalog catalog, EquipmentRepai
                 if (sourcePlan.BeforeIndex.Find(item.Position) != item)
                     after = after with { Items = after.Items.Replace(after.Find(item.Position)!, item) };
             return new(true, 0, new(before, after with { Gold = checked(before.Gold - (uint)total) },
-                tool!.Label == "[repair coupon]" ? "equipment_repair_coupon" : "equipment_repair_item", sourcePlan.CharacterPrecondition));
+                tool!.Label == "[repair coupon]" ? "equipment_repair_coupon" : "equipment_repair_item", new(character, deadline, clock, requirePosition: true)));
         }
         return new(true, 0, new(before, charged with { Items = planned, Gold = checked(before.Gold - (uint)total) }, "equipment_repair",
-            automatic ? new(character, DevilContractPolicy.Expiry(before.AccountWallet, 6)) : null))
+            new(character, deadline, clock, requirePosition: true)))
             { WholeListRefresh = automatic && clientBattleWear };
     }
 }

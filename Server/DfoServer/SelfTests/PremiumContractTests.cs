@@ -112,11 +112,13 @@ internal static class PremiumContractTests
         InventoryResult Plan(Character candidate, ConsumableUseRequest use) => InventoryPremiumContractUseService.Plan(candidate, use, 1000, usable, template);
         var result = Plan(character, request);
         var plan = result.Plan!;
-        That(result.Accepted && plan.Changed && plan.CharacterPrecondition!.Matches(character) &&
+        That(result.Accepted && plan.Changed && plan.CharacterPrecondition!.Matches(character, 1000) &&
             plan.After.Items.Single() == new InventoryItem(11, position, core with { Value = 1 }) && character.Inventory.Find(position)!.Core == core,
             "契约使用规划只扣原持久UID一件，保留排序锁和核心，源快照不变");
-        That(!plan.CharacterPrecondition!.Matches(character with { Revision = character.Revision + 1 }) &&
-            !plan.CharacterPrecondition.Matches(character with { Level = 2 }), "旧revision或资格变更不能重新绑定旧契约规划");
+        That(!plan.CharacterPrecondition!.Matches(character with { Revision = character.Revision + 1 }, 1000) &&
+            !plan.CharacterPrecondition.Matches(character with { Level = 2 }, 1000), "旧revision或资格变更不能重新绑定旧契约规划");
+        That(plan.CharacterPrecondition!.QualificationExpiresAt == 2000 && plan.CharacterPrecondition.Matches(character, 1999) &&
+            !plan.CharacterPrecondition.Matches(character, 2000), "契约实体精确到期不能凭旧规划续期账号权益");
         That(plan.After.AccountWallet.ContractExpiry(27) == 87400 && plan.After.AccountWallet.Get(CurrencyKind.Cera) == 100 &&
             plan.After.AccountWallet.PremiumContracts.Count == 1 && character.Inventory.AccountWallet.PremiumContracts.Count == 0,
             "只激活源物品真实契约类型，不扣点券或激活其他账号服务");
@@ -135,10 +137,13 @@ internal static class PremiumContractTests
             character with { Inventory = new([new(11, position, core with { ExpireTime = 1000 })]) },
             character with { Inventory = new([new(11, position, core with { Value = 0 })]) } })
             That(!Plan(invalid, request).Accepted, "空槽、临时UID、安全锁、期限边界和零数量不能消费");
-        foreach (var invalid in new[] { template with { MinimumLevel = 2 }, template with { Jobs = 2 }, template with { UseForbidden = true },
+        foreach (var invalid in new[] { template with { MinimumLevel = 2 }, template with { MaximumLevel = 0 }, template with { Jobs = 2 }, template with { UseForbidden = true },
             template with { Id = 30 }, template with { Kind = ItemKind.Material } })
             That(!InventoryPremiumContractUseService.Plan(character, request, 1000, usable, invalid).Accepted,
                 "真实模板的等级、职业、禁止使用和类别独立参与资格");
+        That(InventoryPremiumContractUseService.Plan(character, request, 1000, usable, template with { MaximumLevel = 1 }).Accepted &&
+            !InventoryPremiumContractUseService.Plan(character with { Level = 2 }, request, 1000, usable,
+                template with { MaximumLevel = 1 }).Accepted, "契约最高等级边界包含本级并拒绝超过有效上限的角色");
         That(!InventoryPremiumContractUseService.Plan(character, request, 1000,
             new PremiumContractCatalog(new Dictionary<int, PremiumContract> { [contract.ItemId] = contract with { Type = 1 } }, expertSkillLevels: 2), template).Accepted,
             "带其他奖励的premium服务不能按普通契约只续期后吞掉源物品");

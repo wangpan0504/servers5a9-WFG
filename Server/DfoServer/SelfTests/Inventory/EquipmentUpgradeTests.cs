@@ -131,8 +131,9 @@ internal static class EquipmentUpgradeTests
         var items = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
         items.PrefillTemplates(new[] { 300, 301, 302 }.ToDictionary(id => id,
             id => new ItemTemplate(id, ItemKind.Equipment, 16, 95, 50, 1, 0, 4, 3, "[trade]", ushort.MaxValue, 0, "fixture")));
+        var clock = new ConsumableUseSessionTests.FakeClock();
         var service = new InventoryEquipmentUpgradeService(items, catalog,
-            new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]"));
+            new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]"), clock);
         var core = new ItemCore(300, ItemKind.Equipment, 999999998)
         {
             Attr = 15, AmplifyType = 2, AmplifyValue = 45, EnchantCardId = 2000, EnchantUpgrade = 3,
@@ -222,5 +223,40 @@ internal static class EquipmentUpgradeTests
         That(!service.Imprint(weaponCharacter, weaponRequest).Accepted &&
             !service.Imprint(weaponCharacter, weaponRequest with { TargetId = 203 }, weaponFusion: true).Accepted,
             "普通刻印与权能融合各自受精确映射约束，不能混用费用");
+
+        CheckDeadlines(character, role => service.Convert(role, 26, 300, 301), source.Position, material.Position);
+        CheckDeadlines(upgradeCharacter, role => service.Upgrade(role, upgradeRequest),
+            donor.Position, new(InventoryListType.Main, 31), new(InventoryListType.Main, 32));
+        CheckDeadlines(imprintCharacter, role => service.Imprint(role, new(26, 200, 27, 203)), donor.Position, recipient.Position);
+        CheckDeadlines(weaponCharacter, role => service.Imprint(role, weaponRequest, weaponFusion: true),
+            weaponDonor.Position, weaponRecipient.Position, material.Position);
+        var sameTarget = imprintCharacter with { Inventory = imprintCharacter.Inventory with
+            { Items = imprintCharacter.Inventory.Items.Replace(recipient, imprinted) } };
+        var sameTargetPlan = service.Imprint(sameTarget, new(26, 200, 27, 203));
+        That(sameTargetPlan.Accepted && !sameTargetPlan.Plan!.ChangedSlots.Contains(recipient.Position),
+            "刻印目标已有相同打造时可以只消费源，目标不制造差量");
+        CheckDeadlines(sameTarget, role => service.Imprint(role, new(26, 200, 27, 203)), recipient.Position);
+
+        void CheckDeadlines(Character role, Func<Character, InventoryResult> plan, params InventorySlot[] inputs)
+        {
+            int expires = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 10);
+            foreach (var position in inputs)
+            {
+                var input = role.Inventory.Find(position)!;
+                var limited = role with { Inventory = role.Inventory with
+                    { Items = role.Inventory.Items.Replace(input, input with { Core = input.Core with { ExpireTime = expires } }) } };
+                var result = plan(limited);
+                That(result.Accepted && result.Plan!.CharacterPrecondition is { } qualification &&
+                    qualification.Matches(limited, expires - 1) && !qualification.Matches(limited, expires) &&
+                    !qualification.Matches(limited with { Position = limited.Position with { X = checked((ushort)(limited.Position.X + 1)) } }, expires - 1),
+                    "升级、转换或刻印的每个实际输入在提交前复验期限及原位置，到期等号拒绝");
+            }
+            var unrelated = new InventoryItem(90, new(InventoryListType.PersonalCargo, 0),
+                new ItemCore(102, ItemKind.Material, 1) { ExpireTime = expires - 1 });
+            var extra = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Add(unrelated) } };
+            var unchanged = plan(extra);
+            That(unchanged.Accepted && unchanged.Plan!.CharacterPrecondition is { QualificationExpiresAt: null },
+                "未参与的有限期仓库物品不成为本次升级截止，永久输入不制造期限");
+        }
     }
 }

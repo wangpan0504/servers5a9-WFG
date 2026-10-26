@@ -47,13 +47,17 @@ internal sealed class InventoryEquipmentPeriodChangeService(ItemCatalog catalog,
         if (!consumed.Accepted)
             return consumed;
         var after = consumed.Plan!.After;
-        // 只替换物品ID；强化、增幅、锻造、附魔与品级随实例原样保留。
-        var upgraded = target with { Core = target.Core with { ItemId = replacementId } };
+        // 换模板只钳制超出新上限的耐久；不借升级修理，其他打造随实例保留。
+        var upgraded = target with { Core = target.Core with
+            { ItemId = replacementId, Durability = Math.Min(target.Core.Durability, replacement.Durability) } };
         if (after.Find(targetSlot) is not { } current)
             return InventoryResult.Reject(19);
         after = after with { Items = after.Items.Replace(current, upgraded) };
-        long deadline = source.ExpireTime;
+        // 保留源消费的冷却/日次数前提，同时防止规划期间目标到期后仍被旧计划升级。
+        long? deadline = consumed.Plan.CharacterPrecondition!.QualificationExpiresAt;
+        if (target.ExpireTime > 0)
+            deadline = Math.Min(deadline ?? long.MaxValue, target.ExpireTime);
         return new(true, 0, new(character.Inventory, after, "equipment_period_changed",
-            new(character, deadline > 0 ? deadline : null, Clock, requirePosition: true)));
+            new(character, deadline, Clock, requirePosition: true)));
     }
 }

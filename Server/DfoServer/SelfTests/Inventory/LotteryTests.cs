@@ -227,6 +227,11 @@ internal static class LotteryTests
         That(random.Bounds.SequenceEqual((long[])[10000, 10000, ownRunes.Length]),
             "符文箱抽取上界依次为本职业万分比、档权重与池大小");
 
+        InventoryQualificationTests.CheckInputs(runeSource, value =>
+        {
+            random.Values = new([0, 0, 0]);
+            return service.OpenLottery(value, new(0, 117), out _, now);
+        }, now.ToUnixTimeSeconds(), Bag(117));
         var ownTalismans = catalog.TalismanCandidates(2).Where(id => catalog.Talisman(id)!.AllowsUse(95, 0, 1)).ToArray();
         That(ownTalismans.Length >= 2, "匹配资源提供至少两枚本职业可用的2级护石");
         random.Values = new([0, 0, 0]);
@@ -279,6 +284,25 @@ internal static class LotteryTests
             var rejected = service.OpenLottery(role with { Inventory = new([new(1, Bag(117), core)]) }, new(0, 117), out _, now);
             That(!rejected.Accepted && rejected.Error == 19 && rejected.RejectReason == "rune_box_source" &&
                 random.Bounds.Count == 0, "锁定或到期的符文箱拒绝且不抽取");
+        }
+        var boxTemplate = catalog.Get(10310784);
+        foreach (var invalid in new[]
+        {
+            boxTemplate with { MinimumLevel = 96 }, boxTemplate with { MaximumLevel = 94 },
+            boxTemplate with { Jobs = 2 }, boxTemplate with { RequiredSkill = ushort.MaxValue },
+            boxTemplate with { UseForbidden = true }, boxTemplate with { Kind = ItemKind.Material },
+            boxTemplate with { Id = boxTemplate.Id + 1 }
+        })
+        {
+            var isolated = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+            isolated.PrefillTemplates([new(boxTemplate.Id, invalid)]);
+            var guarded = new InventoryBoosterService(isolated, items.Boosters, items.GoldLimits, items.EpicPieces, random);
+            random.Values = new();
+            random.Bounds.Clear();
+            var denied = guarded.OpenLottery(runeSource, new(0, 117), out var deniedReceipt, now);
+            That(!denied.Accepted && denied.Error == 19 && denied.RejectReason == "rune_box_source" &&
+                deniedReceipt is null && random.Bounds.Count == 0,
+                "符文盒在读取产物池及抽取前复验源模板身份、种类、等级、职业、技能与禁用资格");
         }
         random.Values = new();
         random.Bounds.Clear();

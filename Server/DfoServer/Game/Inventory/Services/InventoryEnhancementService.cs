@@ -96,7 +96,7 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
             targetTemplate.MinimumLevel < definition.MinimumItemLevel || targetTemplate.MinimumLevel > definition.MaximumItemLevel ||
             !definition.AllowedItems.IsEmpty && !definition.AllowedItems.Contains(target.Core.ItemId) ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) || !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind) ||
-            sourceTemplate.UseForbidden || character.Level < sourceTemplate.MinimumLevel || character.Job >= 16 || (sourceTemplate.Jobs & (1 << character.Job)) == 0 ||
+            !sourceTemplate.AllowsUse(character.Level, character.Job) ||
             !InventoryMoveService.RequiredSkillSatisfied(character, sourceTemplate))
             return InventoryResult.Reject(Rejection);
         if (request.Mode == EnhancementMode.Reinforce ? target.Core.AmplifyType != 0 :

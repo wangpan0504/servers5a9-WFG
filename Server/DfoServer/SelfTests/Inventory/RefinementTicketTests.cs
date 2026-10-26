@@ -82,6 +82,8 @@ internal static class RefinementTicketTests
         var same = service.Refine(Role(Bag(3), core with { GenuineUpgrade = 5 }), request, out var sameReceipt, now);
         That(same.Accepted && sameReceipt is { Succeeded: true, OldLevel: 5, NewLevel: 5, NeedsAttributeRefresh: false, MaterialRemaining: 1 },
             "fixed ticket on equal level still consumes exactly one without inventing a no-op exemption");
+        InventoryQualificationTests.CheckInputs(Role(Bag(3), core with { GenuineUpgrade = 5 }),
+            role => service.Refine(role, request, out _, now), now.ToUnixTimeSeconds(), Bag(3), Bag(4));
         var plus = service.Refine(Role(Bag(3), coupon: Ticket(10007990)), request with { Confirmation = 1 }, out var plusReceipt, now);
         That(plus.Accepted && plusReceipt is { UsedTicket: true, OldLevel: 7, NewLevel: 8, Announce: true }, "additional ticket reaches cap despite damaged durability");
         var allowedCore = InventoryRewardGrantService.Create(items.Get(401000012)) with { Durability = 0, ExpireTime = 0 };

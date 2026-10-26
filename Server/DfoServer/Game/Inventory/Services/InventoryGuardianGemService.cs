@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
@@ -17,8 +18,9 @@ internal static class InventoryGuardianGemService
         return key == 0 ? 0 : BaseItemId + key;
     }
 
-    public static InventoryResult Plan(InventorySnapshot before, GuardianGemUseRequest request, ItemCatalog catalog, long utcSeconds)
+    public static InventoryResult Plan(Character character, GuardianGemUseRequest request, ItemCatalog catalog, long utcSeconds, TimeProvider? clock = null)
     {
+        var before = character.Inventory;
         if (request.Socket >= SocketCount || request.MedalItemId <= 0 || request.GemItemId <= BaseItemId ||
             request.GemItemId - BaseItemId > short.MaxValue ||
             !ItemSlotBoundService.Allows(before, new(InventoryListType.GuildMedal, request.MaterialSlot), ItemKind.GuardianGem))
@@ -60,6 +62,7 @@ internal static class InventoryGuardianGemService
             Items = consumed.Plan.After.Items.Replace(target, target with { Core = target.Core with { GuardianGemKeys = keys } })
         };
         after.Validate();
-        return new(true, 0, new(before, after, "guardian_gem_use"));
+        long? deadline = InventoryAvatarPackageService.EarliestDeadline(target, [material]);
+        return new(true, 0, new(before, after, "guardian_gem_use", new(character, deadline, clock)));
     }
 }

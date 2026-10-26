@@ -35,7 +35,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             return InventoryResult.Reject(17);
         var before = character.Inventory;
         var after = before;
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? Clock.GetUtcNow();
         int today = ShopPurchaseCount.Today(now);
         if (price.Limit is { } limit)
         {
@@ -112,7 +112,14 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             receivedCore = received.Core;
         }
         receipt = new(request.ItemId, count, position, receivedCore, paid, materials.ToImmutable());
-        return new(true, 0, new(before, after, "npc_shop_buy"));
+        long? deadline = price.Limit is { ResetDaily: true } ? DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds() : null;
+        foreach (var consumedSlot in spent.Plan.ChangedSlots)
+            if (spent.Plan.BeforeIndex.Find(consumedSlot) is { ExpireTime: > 0 } input &&
+                (deadline is null || input.ExpireTime < deadline)) deadline = input.ExpireTime;
+        foreach (var item in after.Items)
+            if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
+                (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
+        return new(true, 0, new(before, after, "npc_shop_buy", new(character, deadline, Clock, requirePosition: true)));
     }
 
     public ShopPurchaseCount[]? PurchaseCounts(Character character, int npcId, DateTimeOffset? utcNow = null)
@@ -154,6 +161,7 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         long gold = (long)before.Gold + (long)price * count;
         if (gold > int.MaxValue || gold > new CurrencyService(goldLimits).CarryLimit(character))
             return InventoryResult.Reject(22);
+        long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         var planned = before;
         if (template.ShopPrice.SaleLimit is { } saleLimit)
         {
@@ -164,12 +172,13 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             if ((long)used + count > saleLimit.Count)
                 return InventoryResult.Reject(0x85);
             key = key with { Count = used + count };
+            deadline = Math.Min(deadline ?? long.MaxValue, DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds());
             planned = before with { ShopPurchases = previous is null ? before.ShopPurchases.Add(key) : before.ShopPurchases.Replace(previous, key) };
         }
         var deletion = InventoryDeleteService.Plan(planned, request.Position, source.Core.Value, count);
         if (!deletion.Accepted)
             return deletion;
-        return new(true, 0, new(before, deletion.Plan!.After with { Gold = checked((uint)gold) }, "npc_shop_sell", new(character, source.ExpireTime > 0 ? source.ExpireTime : null, Clock)), count);
+        return new(true, 0, new(before, deletion.Plan!.After with { Gold = checked((uint)gold) }, "npc_shop_sell", new(character, deadline, Clock)), count);
     }
 
     InventoryResult SellWalletCube(Character character, SellItemRequest request, CurrencyKind kind, int itemId)

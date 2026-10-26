@@ -557,6 +557,8 @@ internal sealed partial class ItemCatalog
                 Regex.Match(text.Section("explain"), @"扩展到\s*(\d+)\s*阶段") is { Success: true } stageMatch
                 ? int.Parse(stageMatch.Groups[1].Value) : 0,
             QualityBox = isEquipment ? null : EquipmentQualityBox.Parse(id, text),
+            AvatarAbilityChange = isEquipment || !text.Has("avatar select ability change") ? null :
+                AvatarAbilityChangeDefinition.Parse(new PvfTokenDocument(pvf.ReadTokens("stackable/" + path), pvf.ResolveString), pvf.ResolveString),
 
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
             CloneAvatar = kind == ItemKind.Avatar && (Int("clear avatar", 0) == 1 || text.ContainsString("item category", "clear avatar")),

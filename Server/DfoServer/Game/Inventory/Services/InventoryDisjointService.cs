@@ -6,14 +6,16 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCatalog disjoint, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Random? random = null,
-    ExpertJobScriptCatalog? expertJobs = null)
+    ExpertJobScriptCatalog? expertJobs = null, TimeProvider? clock = null)
 {
+    public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+
     public InventoryResult Disjoint(Character character, DisjointRequest request, out DisjointReceipt? receipt,
         DateTimeOffset? utcNow = null, DisjointMode mode = DisjointMode.Ordinary)
     {
         receipt = null;
         var before = character.Inventory;
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? Clock.GetUtcNow();
         var source = before.Find(request.Position);
         if (!Enum.IsDefined(mode)) return InventoryResult.Reject(19);
         bool playerMachine = mode != DisjointMode.Ordinary;
@@ -80,6 +82,10 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
         if (received.Count > byte.MaxValue)
             return InventoryResult.Reject(4);
         receipt = new(request, received.ToArray());
-        return new(true, 0, new(before, after, "equipment_disjoint"));
+        long? deadline = InventoryAvatarPackageService.EarliestDeadline(source, tool is null ? [] : [tool]);
+        foreach (var item in after.Items)
+            if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
+                (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
+        return new(true, 0, new(before, after, "equipment_disjoint", new(character, deadline, Clock, requirePosition: true)));
     }
 }

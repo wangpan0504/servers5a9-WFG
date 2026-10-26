@@ -57,7 +57,8 @@ internal static class DarkRevelationTests
             """;
         var catalog = new DarkRevelationCatalog(table, new Dictionary<int, string> { [400] = "weapon.equ" },
             _ => "[custom ability type]\n`dark revelation`\n[custom ability count]\n2\n[upgrade dark revelation]\n1\n");
-        var service = new InventoryDarkRevelationService(catalog, new("[piece list]\n50000 50001\n[/piece list]"));
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        var service = new InventoryDarkRevelationService(catalog, new("[piece list]\n50000 50001\n[/piece list]"), clock);
         var source = new InventoryItem(1, new(InventoryListType.Main, 26), new(400, ItemKind.Equipment, 999999998)
         {
             Attr = 15, EnchantCardId = 12345, Extension114 = new(0x77, 0xA0000000)
@@ -98,5 +99,22 @@ internal static class DarkRevelationTests
             That(!rejected.Accepted && rejected.Plan is null, "重复状态条件、越界能力、源编号不符及未装备权能套装均拒绝");
         That(character.Inventory.Find(source.Position) == source && character.Inventory.Gold == 600000,
             "黑暗诉求规划不改输入快照、金币和其他打造");
+        int expires = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 10);
+        foreach (var slot in new InventorySlot[] { source.Position, new(InventoryListType.Equipment, 19), new(InventoryListType.Main, 30) })
+        {
+            var input = character.Inventory.Find(slot)!;
+            var limited = character with { Inventory = character.Inventory with
+                { Items = character.Inventory.Items.Replace(input, input with { Core = input.Core with { ExpireTime = expires } }) } };
+            var result = service.Apply(limited, new(26, 400, 0, 3));
+            That(result.Accepted && result.Plan!.CharacterPrecondition is { } qualification &&
+                qualification.Matches(limited, expires - 1) && !qualification.Matches(limited, expires) &&
+                !qualification.Matches(limited with { Level = 94 }, expires - 1),
+                "黑暗诉求的武器、所需装备与实际消耗材料均在提交时复验最早截止和角色资格");
+        }
+        var unneeded = character.Inventory.Find(new(InventoryListType.Equipment, 22))!;
+        var unused = character with { Inventory = character.Inventory with
+            { Items = character.Inventory.Items.Replace(unneeded, unneeded with { Core = unneeded.Core with { ExpireTime = expires } }) } };
+        That(service.Apply(unused, new(26, 400, 0, 3)).Plan!.CharacterPrecondition is { QualificationExpiresAt: null },
+            "未参与当前权能槽的装备不缩短黑暗诉求提交期限");
     }
 }

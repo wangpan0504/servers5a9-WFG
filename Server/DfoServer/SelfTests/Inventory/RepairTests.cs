@@ -68,6 +68,10 @@ internal static class RepairTests
                 "all repair includes both damaged quickbar and worn equipment");
             That(!repair.Repair(current with { Inventory = current.Inventory with { Gold = 177 } }, request with { Position = Bag(-1) }).Accepted,
                 "all-repair fee is preflighted across every candidate");
+            InventoryQualificationTests.CheckInputs(current, role => repair.Repair(role, request),
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds(), Bag(3));
+            InventoryQualificationTests.CheckInputs(current, role => repair.Repair(role, request with { Position = Bag(-1) }),
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds(), Bag(3), Worn(14));
             var result = repair.Repair(current, request);
             That(result.Accepted && result.Plan!.After.Gold == 982, "single quickbar costs only missing durability");
             var ack = RepairPackets.Ack(request, result);
@@ -79,6 +83,8 @@ internal static class RepairTests
             That(saved.Uid == old.Uid && (saved.Core with { Durability = old.Core.Durability }) == old.Core,
                 "repair preserves UID, locks, seal and every non-durability field");
             long audit = (long)Query("SELECT count(*) FROM inventory_audit_log")!;
+            InventoryQualificationTests.CheckInputs(current, role => repair.Repair(role, request),
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds(), Bag(3));
             var repeated = repair.Repair(current, request);
             That(repeated.Accepted && !repeated.Plan!.Changed && InventoryService.Commit(repo, owner, current, repeated) == current,
                 "repeat full repair does not charge or advance revision");

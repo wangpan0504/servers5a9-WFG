@@ -32,7 +32,8 @@ internal static class ShopTests
             That(rejected, name);
         }
         var catalog = itemResources.Items;
-        var shop = new InventoryShopService(catalog, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
+        var now = new DateTimeOffset(2026, 10, 3, 21, 59, 59, TimeSpan.Zero);
+        var shop = new InventoryShopService(catalog, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, new Clock(now));
         var items = new InventoryService(catalog, itemResources.GoldLimits, itemResources.EpicPieces);
         That(NpcShopCatalog.ParseSaleRestrictions("[undeletable item]\n17 23 17\n[/undeletable item]").SetEquals(new[] { 17, 23 }),
             "sale restriction resource uses declared item IDs and tolerates repeated entries");
@@ -42,7 +43,6 @@ internal static class ShopTests
             "[undeletable item]\n-1\n[/undeletable item]", "[undeletable item]\n2147483648\n[/undeletable item]",
             "[undeletable item]\n17 bad\n[/undeletable item]", "[undeletable item]\n17\n[/undeletable item]\n[undeletable item]\n23\n[/undeletable item]" })
             Reject(() => NpcShopCatalog.ParseSaleRestrictions(text), "missing or malformed sale restrictions cannot silently allow sales");
-        var now = new DateTimeOffset(2026, 10, 3, 21, 59, 59, TimeSpan.Zero);
         string root = Path.Combine(Path.GetTempPath(), "s5a9-shop-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -239,6 +239,8 @@ internal static class ShopTests
                 "virtual reward and virtual cost share account-wallet transaction");
             bought = shop.Buy(current, Offer(3137, 3), out receipt);
             That(bought.Accepted && receipt!.Materials.Single().Remaining == 0, "ordinary material exchange consumes whole source");
+            InventoryQualificationTests.CheckInputs(current, role => shop.Buy(role, Offer(3137, 3), out _),
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds(), current.Inventory.Items.Single(item => item.Core.ItemId == 3030).Position);
             current = Commit(bought);
             That(current.Inventory.Items.All(item => item.Core.ItemId != 3030) && current.Inventory.Items.Any(item => item.Core.ItemId == 3137 && item.Core.Count == 3),
                 "material slot released then reused by complete reward");
@@ -264,7 +266,12 @@ internal static class ShopTests
 
             var limited = Offer(10099885, 3);
             That(catalog.Get(limited.ItemId).ShopPrice.Limit is { AccountWide: true, Count: 3, ResetDaily: true }, "account daily definition");
-            current = Commit(shop.Buy(current, limited, out _, now));
+            var nearReset = shop.Buy(current, limited, out _, now);
+            long reset = now.AddSeconds(1).ToUnixTimeSeconds();
+            That(nearReset.Accepted && nearReset.Plan!.CharacterPrecondition is { } daily &&
+                daily.Matches(current, reset - 1) && !daily.Matches(current, reset),
+                "每日限购在06:00 UTC+8边界不能提交上一日计数规划");
+            current = Commit(nearReset);
             That(shop.Buy(current, limited with { Count = 1 }, out _, now) is { Accepted: false, Error: 0x85 }, "limit rejects over-cap buy");
             var sibling = repo.Create(owner, new("ShopSibling", towns.Room, towns.InitialReturn) { Level = 60, Inventory = InventorySnapshot.Empty with { Gold = 1_000_000 } });
             That(!shop.Buy(sibling, limited with { Count = 1 }, out _, now).Accepted, "new sibling sees already-consumed account quota");
@@ -363,6 +370,10 @@ internal static class ShopTests
         }
         finally { Directory.Delete(root, true); }
         Console.WriteLine($"PASS {Count - checks} NPC shop assertions");
+    }
+    sealed class Clock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
     static InventorySlot Bag(short index) => new(InventoryListType.Main, index);
     static int I32(byte[] bytes, int offset) => BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset));

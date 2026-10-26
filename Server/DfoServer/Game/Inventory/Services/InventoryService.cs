@@ -7,8 +7,10 @@ namespace DfoServer.Game.Inventory.Services;
 
 // 统一业务入口：只读规划完成后才提交。在线真源为当前角色的不可变 InventorySnapshot。
 internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
-    PremiumContractCatalog? contracts = null)
+    PremiumContractCatalog? contracts = null, TimeProvider? clock = null)
 {
+    readonly TimeProvider time = clock ?? TimeProvider.System;
+
     public InventoryResult Move(Character character, InventoryMoveRequest request, bool loginWearRestatement = false) =>
         // 已选中装扮预设时，穿戴/卸下在同一事务内实时回写该预设。
         AvatarPresetService.SyncActive(InventoryMoveService.Plan(character, request, catalog,
@@ -34,7 +36,7 @@ internal sealed class InventoryService(ItemCatalog catalog, GoldLimitCatalog gol
         return InventoryDiscardPlan.Prepare(character, request, catalog.Get(source.Core.ItemId), DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     }
     public InventoryResult UseGuardianGem(Character character, GuardianGemUseRequest request) =>
-        InventoryGuardianGemService.Plan(character.Inventory, request, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        InventoryGuardianGemService.Plan(character, request, catalog, time.GetUtcNow().ToUnixTimeSeconds(), time);
     public InventoryResult Lock(Character character, InventorySlot slot, InventoryLockOperation operation) =>
         InventoryLockService.Plan(character.Inventory, slot, operation, catalog, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     public static Character Commit(ICharacterRepository repository, AccountOwners.Lease owner, Character character, InventoryResult result) => owner.Execute(() =>

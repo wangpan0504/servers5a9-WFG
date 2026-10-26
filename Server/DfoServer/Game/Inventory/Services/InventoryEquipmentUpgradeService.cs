@@ -6,8 +6,9 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryEquipmentUpgradeService(ItemCatalog items, EquipmentUpgradeCatalog upgrades,
-    EpicPieceCatalog pieces)
+    EpicPieceCatalog pieces, TimeProvider? time = null)
 {
+    public TimeProvider Clock { get; } = time ?? TimeProvider.System;
     public void PrepareImprint(InventoryItem? source, EquipmentFusionRequest request)
     {
         _ = items.Get(request.SourceId);
@@ -20,7 +21,7 @@ internal sealed class InventoryEquipmentUpgradeService(ItemCatalog items, Equipm
     public InventoryResult Upgrade(Character character, EquipmentUpgradeRequest request,
         DateTimeOffset? utcNow = null)
     {
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? Clock.GetUtcNow();
         var before = character.Inventory;
         var source = before.Find(new(InventoryListType.Main, request.Slot));
         if (request.Slot < 0 || source is null || source.Uid <= 0 || source.Core.ItemId != request.ItemId ||
@@ -56,13 +57,13 @@ internal sealed class InventoryEquipmentUpgradeService(ItemCatalog items, Equipm
             Emblem2 = request.InheritEmblems ? source.Core.Emblem2 : 0
         };
         after = after with { Items = after.Items.Replace(source, source with { Core = upgraded }) };
-        return new(true, 0, new InventoryPlan(before, after, "equipment_upgrade"));
+        return new(true, 0, CreatePlan(character, after, "equipment_upgrade", source));
     }
 
     public InventoryResult Imprint(Character character, EquipmentFusionRequest request,
         DateTimeOffset? utcNow = null, bool weaponFusion = false)
     {
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? Clock.GetUtcNow();
         var before = character.Inventory;
         var source = before.Find(new(InventoryListType.Main, request.SourceSlot));
         var target = before.Find(new(InventoryListType.Main, request.TargetSlot));
@@ -113,14 +114,14 @@ internal sealed class InventoryEquipmentUpgradeService(ItemCatalog items, Equipm
             Emblem2 = source.Core.Emblem2
         };
         after = after with { Items = after.Items.Remove(source).Replace(target, target with { Core = inherited }) };
-        return new(true, 0, new InventoryPlan(before, after, weaponFusion ? "equipment_weapon_fusion" : "equipment_imprint"));
+        return new(true, 0, CreatePlan(character, after, weaponFusion ? "equipment_weapon_fusion" : "equipment_imprint", source, target));
     }
 
     // 权能转换使用 [inherit ability] 组；完整保留实例打造，只替换表内同部位物品编号。
     public InventoryResult Convert(Character character, short slot, int itemId, int targetId,
         DateTimeOffset? utcNow = null)
     {
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? Clock.GetUtcNow();
         var before = character.Inventory;
         var source = before.Find(new(InventoryListType.Main, slot));
         if (slot < 0 || source is null || source.Core.ItemId != itemId || source.Core.Kind != ItemKind.Equipment ||
@@ -154,6 +155,16 @@ internal sealed class InventoryEquipmentUpgradeService(ItemCatalog items, Equipm
         {
             Items = after.Items.Replace(source, source with { Core = source.Core with { ItemId = targetId } })
         };
-        return new(true, 0, new InventoryPlan(before, after, "equipment_power_conversion"));
+        return new(true, 0, CreatePlan(character, after, "equipment_power_conversion", source));
+    }
+
+    InventoryPlan CreatePlan(Character character, InventorySnapshot after, string reason, params InventoryItem[] targets)
+    {
+        var index = new InventoryIndex(after);
+        // 目标即使打造未变化也必须有效；材料只绑定本次实际消费的实例，不受无关过期物品影响。
+        long? deadline = character.Inventory.Items.Where(item => item.ExpireTime > 0 &&
+            (targets.Any(target => target.Uid == item.Uid) || item != index.Find(item.Position)))
+            .Select(item => (long?)item.ExpireTime).Min();
+        return new(character.Inventory, after, reason, new(character, deadline, Clock, requirePosition: true));
     }
 }

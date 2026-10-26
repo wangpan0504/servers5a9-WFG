@@ -200,6 +200,14 @@ internal static class MagicBoxTests
             regularOpened.Plan!.After.Find(new(InventoryListType.Main, 69)) is null &&
             regularOpened.Plan.After.Find(new(InventoryListType.Main, 121)) is null,
             "PVF-defined hammer box converges the captured 100-open request to available stock");
+        InventoryQualificationTests.CheckInputs(regularCharacter, role => service.Open(role, request, out _),
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(), new(InventoryListType.Main, 69), new(InventoryListType.Main, 121));
+        var boxSource = regularCharacter.Inventory.Find(new(InventoryListType.Main, 69))!;
+        var wrongKind = regularCharacter with { Inventory = regularCharacter.Inventory with { Items = regularCharacter.Inventory.Items.Replace(
+            boxSource, boxSource with { Core = boxSource.Core with { Kind = ItemKind.Material } }) } };
+        int drawsBefore = random.Calls;
+        Check(service.Open(wrongKind, request, out _) is { Accepted: false, Plan: null } && random.Calls == drawsBefore,
+            "随机盒源种类与真实模板不符在随机前拒绝，不借合法奖池绕过源资格");
         CheckEveryReward();
         Console.WriteLine($"PASS {checks} magic-box assertions");
 
