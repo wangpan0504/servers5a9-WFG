@@ -19,7 +19,7 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
         var action = StackableActionCatalog.Arguments(raw);
         if (raw.TemplateId != item.Id || item.Kind != ItemKind.Consumable || item.UseForbidden ||
             file.StructureDiagnostics.Length != 0 || raw.TypeDeclaration is null ||
-            action is not ({ Label: "[rent point]" or "[add mileage]", Parameters: [> 0] } or
+            action is not ({ Label: "[rent point]" or "[add mileage]" or "[use favor point]", Parameters: [> 0] } or
                 { Label: "[repair coupon]" or "[repair equipment]", Parameters.Count: 0 } or
                 // 装扮预设扩展券（CMD515 action216）：无参数，容量由所属玩法落库。
                 { Label: "[add avatar preset]", Parameters.Count: 0 } or

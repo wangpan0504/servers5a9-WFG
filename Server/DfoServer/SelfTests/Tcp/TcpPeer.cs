@@ -66,6 +66,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] WeeklyDungeonConfig { get; private set; } = [];
     public WirePacket[] TagEvildomInfo { get; private set; } = [];
     public byte[] AvatarPresetList { get; private set; } = [];
+    public byte[] NpcFavor { get; private set; } = [];
     public byte[] CardMembershipInformation { get; private set; } = [];
     public byte[] DevilService0 { get; private set; } = [];
     public Dictionary<byte, long> PremiumServices { get; private set; } = [];
@@ -570,6 +571,8 @@ internal sealed class TcpPeer : IDisposable
         AvatarPresetList = Expect(0, 1597).Body;
         TestCheck.That(AvatarPresetList.Length >= 2 && AvatarPresetList[1] <= AvatarPresetList[0],
             "装扮预设容量与列表先于每周地下城下发，条目数不超过容量");
+        NpcFavor = Expect(0, 746).Body;
+        TestCheck.That(NpcFavor.Length >= 1 && NpcFavor.Length == 1 + NpcFavor[0] * 10, "好感度按完整绝对快照恢复");
         Expect(0, 720, []);
         WeeklyDungeonConfig = Expect(0, 721).Body;
         TestCheck.That(WeeklyDungeonConfig.Length == 5, "每周地下城721固定回放5个槽位");
