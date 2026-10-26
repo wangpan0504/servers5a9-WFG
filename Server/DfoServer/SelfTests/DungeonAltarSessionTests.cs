@@ -30,6 +30,25 @@ internal static class DungeonAltarSessionTests
         var bounds = area.Map(done.ToHashSet()).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)),
             checked((ushort)(bounds.Y + bounds.Height / 2)));
+        // 原生选图会自动携带关联支线任务；不能只测手工清零任务号的请求。
+        foreach (var (dungeonId, questId, prerequisite) in new[] { (11006u, (ushort)5650, 63), (11007u, (ushort)7340, 7339) })
+        {
+            using var linked = New(new Clock(), done.Append(prerequisite).Distinct().ToArray());
+            var accepted = linked.Session.ChangeQuest(questId, DfoServer.Game.Quests.QuestLifecycleAction.Accept,
+                resources.Quests, items.Items, items.GoldLimits, items.EpicPieces);
+            That(accepted?.Commit is not null, "合法接取祭坛关联支线：" + questId);
+            That(linked.Session.BeginDungeonSelection() is not null, "关联任务祭坛建立原选图上下文");
+            That(linked.Session.EnterFormalDungeon(dungeonId, (uint)(questId + 1), 0, dungeons, rooms, pieces: items.EpicPieces) is null &&
+                linked.Session.EnterFormalDungeon(dungeonId == 11006 ? 11007u : 11006u, questId, 0, dungeons, rooms, pieces: items.EpicPieces) is null &&
+                linked.Session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!.Counts.All(row => row.Daily == 3) &&
+                linked.Session.Selected!.Inventory.Gold == 500000 && linked.Session.DungeonSnapshot is null,
+                "未接取或目标属于另一祭坛的任务仍拒绝，不扣费扣次或安装实例");
+            var entered = linked.Session.EnterFormalDungeon(dungeonId, questId, 0, dungeons, rooms, pieces: items.EpicPieces);
+            That(entered is not null, $"关联任务不阻断祭坛准入：{questId}/{linked.Session.LastFormalDungeonRejection}");
+            That(entered!.Monsters.Altar is not null && entered.Entry.QuestId == questId && entered.Entry.RouteQuestId == 0 &&
+                entered.Entry.QuestAcceptanceId == linked.Session.Selected!.ActiveMainQuests.Single(row => row.QuestId == questId).AcceptanceId,
+                "祭坛复用普通任务路线资格并冻结原接取，仍使用专用波次与次数事务");
+        }
         foreach (uint dungeonId in new uint[] { 11006, 11007 })
         {
             var clock = new Clock();
@@ -166,10 +185,10 @@ internal static class DungeonAltarSessionTests
         }
         Console.WriteLine($"PASS {Count-before} 实际祭坛入口、全波次、专用结算、复活窗口和币上限断言");
 
-        QuestSceneTests.Fixture New(Clock clock)
+        QuestSceneTests.Fixture New(Clock clock, int[]? completed = null)
         {
             var fixture = new QuestSceneTests.Fixture(resources.Towns,resources.Characters,resources.Learning,growth,
-                resources.Quests,false,70,done,position:position,timeProvider:clock);
+                resources.Quests,false,70,completed ?? done,position:position,timeProvider:clock);
             That(fixture.Session.MutateInventory(c => CurrencyService.SetGold(c,500000)).Accepted,"准备隔离角色祭坛费用");
             return fixture;
         }
