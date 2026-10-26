@@ -186,7 +186,7 @@ internal static class ServerRuntime
         new TagEvildomHandler(tagEvildomProjection, projection, log).Register(commands);
         var tagEvildomRun = new TagEvildomRunProjection(new TagEvildomRewardCatalog(pvf, itemResources.Boosters),
             itemResources.Items, repository, tagEvildomProjection, log);
-        var raidCatalog = GameWorld.Raids.RaidCatalog.Load(pvf).PrepareAnton(pvf, dungeonCatalog, itemResources.Items);
+        var raidCatalog = GameWorld.Raids.RaidCatalog.Load(pvf).PrepareResources(pvf, dungeonCatalog, itemResources.Items);
         var raidHandler = new RaidHandler(log, raidCatalog, new Game.Raids.RaidRegistry(clock), online);
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
         new DevilContractHandler(log, clock).Register(commands);
@@ -399,7 +399,7 @@ internal static class ServerRuntime
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,
                 itemResources.AvatarCompounds, itemResources.AvatarPackages), inventoryProjection, log),
             new AvatarDyeHandler(new InventoryAvatarDyeService(itemResources.Items, itemResources.AvatarDyes), inventoryProjection, log),
-            new AvatarSocketHandler(new InventoryAvatarSocketService(itemResources.Items, itemResources.AvatarPackages), inventoryProjection, log),
+            new AvatarSocketHandler(new InventoryAvatarSocketService(itemResources.Items, itemResources.AvatarPackages, clock), inventoryProjection, log),
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
             new EnchantmentHandler(enchantmentService, inventoryProjection, log),
             new EquipmentEmblemHandler(new InventoryEquipmentEmblemService(itemResources.Items, clock), inventoryProjection, log),
