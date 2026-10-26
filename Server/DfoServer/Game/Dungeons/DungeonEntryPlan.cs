@@ -40,6 +40,7 @@ internal sealed record DungeonEntryPlan(
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
     public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }
+    public DfoServer.Game.Raids.AntonRaidDungeonIdentity? AntonRaid { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
     public bool DisableGiveupPenalty { get; init; }
     public int? CoinLimit { get; init; }

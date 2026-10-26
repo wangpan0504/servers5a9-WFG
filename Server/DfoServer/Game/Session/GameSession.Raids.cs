@@ -40,6 +40,7 @@ internal sealed partial class GameSession
 
     void InvalidateRaids()
     {
+        antonDungeonAdmission = null;
         var registry = raidRegistry;
         raidRegistry = null;
         registry?.RemoveSession(this, SelectionEpoch);
