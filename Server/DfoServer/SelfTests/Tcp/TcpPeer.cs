@@ -434,6 +434,14 @@ internal sealed class TcpPeer : IDisposable
         TestCheck.That(true, note);
     }
 
+    // NetworkStream未包装缓冲读器，ReadExactly只取当前帧；Poll保留下一帧在socket中，不消费或忽略它。
+    public void WaitForPendingData(int milliseconds, string note)
+    {
+        TestCheck.That(milliseconds is > 0 and <= 10000, "等待积压帧必须有界");
+        TestCheck.That(client.Client.Poll(TimeSpan.FromMilliseconds(milliseconds), SelectMode.SelectRead) &&
+            client.Client.Available > 0, note + ": 未收到数据或对端已经关闭");
+    }
+
     public void Closed()
     {
         try

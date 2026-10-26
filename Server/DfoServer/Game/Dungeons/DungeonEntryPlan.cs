@@ -39,7 +39,11 @@ internal sealed record DungeonEntryPlan(
     // 地图自带原生 [ai character] 行的房间照常叠加伴侣行。
     public bool AllowsCompanionAi { get; init; } = true;
     public bool IsTutorial { get; init; }
+    public bool IsOrdinaryLuke { get; init; }
+    // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
+    public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }
+    public DfoServer.Game.Raids.AntonRaidDungeonIdentity? AntonRaid { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
     public bool DisableGiveupPenalty { get; init; }
     public int? CoinLimit { get; init; }
@@ -55,6 +59,8 @@ internal sealed record DungeonEntryPlan(
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
     public bool IsClassExperience => DungeonId == 7142 && Maze.IsClassExperience;
     public bool IsPractice { get; init; }
+    // 仅由专用准入与当前TAG资源核验生成，不凭9608图号授予普通经济路径。
+    public bool IsTagEvildom { get; init; }
     public bool HasFreeCombatConsumption => IsPractice || IsTrainingRoom || IsClassExperience;
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
@@ -114,7 +120,8 @@ internal sealed record DungeonEntryPlan(
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
-        bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null)
+        bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null,
+        IReadOnlyDictionary<int,int>? bossWeights = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -132,15 +139,15 @@ internal sealed record DungeonEntryPlan(
         }
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
-            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty),allowClearedTerminalQuest:allowClearedTerminalQuest,
-            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute);
+            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty,bossWeights),allowClearedTerminalQuest:allowClearedTerminalQuest,
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null)
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -155,10 +162,13 @@ internal sealed record DungeonEntryPlan(
         }
         // 当前PVF这两图为tag tournament 3/4、tagsystem ruleset2，不能由普通单角色Run消费或结算。
         // 9609/9610是中央竞技场剧情图，继续走已有剧情路线。
-        if (dungeonId is 9608 or 400000095)
+        if (dungeonId is 9608 or 400000095 || tagEvildom is not null)
         {
-            reason = "tag-evildom-runtime-required";
-            return false;
+            if (tagEvildom is null || tagEvildom.DungeonId != dungeonId || !ReferenceEquals(tagEvildom.Primary, character) ||
+                questId != 0 || difficulty != 0 || isReplay || practice || hellParty || hellLegend || partyRoute is not null ||
+                tagMaze is null || !TagEvildomEntryPolicy.Supports(definition))
+            { reason = "tag-evildom-runtime-required"; return false; }
+            tagEvildom.Validate();
         }
         bool cosmo = definition.RequiresCosmoEntryContract;
         if (cosmo)
@@ -266,7 +276,12 @@ internal sealed record DungeonEntryPlan(
             }
         var candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)));
         bool finishedObjectiveRequest = questId != 0 && finishedObjective.Contains((int)questId);
-        if (practice || finishedObjectiveRequest)
+        if (tagEvildom is not null)
+        {
+            candidates = definition.Mazes.Where(maze => maze.SourceOrdinal == tagMaze && maze.QuestConnectionTokens.Count == 0).ToArray();
+            routeQuest = 0; layoutQuest = null;
+        }
+        else if (practice || finishedObjectiveRequest)
         {
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
             if (candidates.Length > 1)
@@ -325,6 +340,11 @@ internal sealed record DungeonEntryPlan(
             candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(routeQuest,difficulty)));
         else if (questId == 0) candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
         else routeQuest = questId;
+        // 迷宫直接关联父任务时也要冻结当前清图子目标；路线仍使用父连接，不补造子接取。
+        if (!isReplay && candidates.Length != 0 && quest is not null && quests is not null &&
+            CurrentSequentialChild(character,quest,quests,dungeonId,difficulty) is { } currentChild &&
+            QuestClearEligibility.IsSingleMap(currentChild))
+            layoutQuest = currentChild;
         // 父请求保留自己的接取身份；布局和终点只借用真实顺序中的当前子任务。
         if (!isReplay && candidates.Length == 0 && questId != 0 && quest is not null && quests is not null &&
             QuestRelationProgress.SequentialParent(quest,quests))
@@ -536,6 +556,7 @@ internal sealed record DungeonEntryPlan(
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
             BasisLevel = definition.BasisLevel,
+            IsOrdinaryLuke = definition.IsOrdinaryLuke,
             RecommendedQuestClear = !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
                 DungeonLuckyStarPolicy.IsRecommendedClear(definition, questId, routeQuest, character.Level),
             // 本入口只规划原生普通单人PVE；构造初始team0，START_MAP普通分支保持该值。
@@ -543,7 +564,8 @@ internal sealed record DungeonEntryPlan(
             PlayerTeam = 0,
             IsTutorial = definition.IsTutorial,
             DisableClearReward = definition.DisableClearReward,
-            DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience,
+            IsTagEvildom = tagEvildom is not null,
+            DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience || tagEvildom is not null,
             DisableGiveupPenalty = definition.DisableGiveupPenalty,
             CoinLimit = definition.Id is >= 11006 and <= 11107 ? definition.CoinLimit : null,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
@@ -558,7 +580,7 @@ internal sealed record DungeonEntryPlan(
             TerminalLayerAcceptanceId = terminalAcceptance,
             RouteQuestId = routeQuest,
             IsOrdinaryHunt = ordinaryHunt,
-            QuestAcceptances = definition.IsClassExperience || practice ? [] : character.ActiveMainQuests.ToImmutableArray(),
+            QuestAcceptances = definition.IsClassExperience || practice || tagEvildom is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
             ExperienceEquipmentModule = definition.RawSections.Any(row => row.Tag == "tower of despair") ? "despair tower" :
                 definition.RawSections.Any(row => row.Tag == "tower of scream") ? "scream tower" :
                 definition.DungeonType?.Trim().Trim('`', '[', ']') switch
@@ -574,7 +596,7 @@ internal sealed record DungeonEntryPlan(
             IsInfernoParty = infernoParty,
             IsHellLegend = hellParty && !cosmo && hellLegend,
             IsCosmo = cosmo,
-            AllowsCompanionAi = definition.AllowsCompanionAi,
+            AllowsCompanionAi = definition.AllowsCompanionAi && tagEvildom is null,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
             // 时空裂缝入场一次扣 6 点疲劳（用户指定的本服规则）；PVF 没有声明分段数，不能沿用逐房间一点。
             StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : infernoParty ? (ushort)6 : (ushort)0,
@@ -611,6 +633,10 @@ internal sealed record DungeonEntryPlan(
     {
         bool listClear = quest.Grade == "[side]" && QuestDungeonClearProgress.MatchesAlternative(quest,dungeonId,difficulty);
         bool autoDaily = QuestAutoDailyPlan.MatchesDungeon(quest,dungeonId,difficulty);
+        // 极限支线只在猎杀四元组声明本图；不要求资源中不存在的 dungeon info。
+        bool altarHunt = dungeonId is 11006 or 11007 && quest.Grade == "[side]" &&
+            quest.Condition == "[hunt monster]" && QuestHuntProgress.TryTargets(quest,out var altarTargets) &&
+            altarTargets.Any(target => target.DungeonId == dungeonId && target.MinimumDifficulty <= difficulty);
         // 已支持的材料每日与每日累计通关任务保留接取身份，但不要求原资源不存在的任务迷宫。
         bool normalMission = QuestCycle.NormalDungeonMission(quest) &&
             (quest.Definition!.Dungeons.Any(row => row.DungeonId == dungeonId &&
@@ -630,7 +656,7 @@ internal sealed record DungeonEntryPlan(
             quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear && !normalMission && !dailyClear && !preyNormalClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
             // 悲叹列表通关的目标由int data给出；已核对专用准入后不强求不存在的dungeon info。
             // 其它支线仍须命中dungeon info，杀怪保留0..3，列表通关沿正式0..4难度域。
-            quest.Grade == "[side]" && !dailyClear && !(definition.IsGriefTower && listClear) && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
+            quest.Grade == "[side]" && !dailyClear && !altarHunt && !(definition.IsGriefTower && listClear) && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
                 (row.Parameter == -1 || (quest.Condition == "[hunt monster]" && row.Parameter is >= 0 and <= 3 ||
                     listClear && row.Parameter is >= 0 and <= 4) && row.Parameter <= difficulty)) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
