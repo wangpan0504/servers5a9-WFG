@@ -58,6 +58,7 @@ internal static class SelfTestRunner
         WeaponSkinTests.RunCore();
         AvatarCompoundTests.RunCore();
         AvatarDyeTests.RunCore();
+        AvatarSocketTests.RunCore();
         AvatarDisjointTests.RunCore();
         AvatarPresetTests.RunCore();
         NpcFavorTests.RunCore();
@@ -312,6 +313,7 @@ internal static class SelfTestRunner
         GuildCompoundTests.RunResources(itemResources);
         AvatarCompoundTests.RunResources(itemResources);
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
+        AvatarSocketTests.RunResources(itemResources.Items, itemResources.AvatarPackages);
         MagicBoxTests.Run(towns, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         ConsumableUseTests.RunResources(itemResources);

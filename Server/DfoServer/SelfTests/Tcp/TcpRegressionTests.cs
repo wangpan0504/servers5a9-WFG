@@ -336,6 +336,7 @@ internal static class TcpRegressionTests
         ("equipment-emblem", EquipmentEmblemTcpTests.RunAsync),
         ("avatar-compound", AvatarCompoundTcpTests.RunAsync),
         ("avatar-dye", AvatarDyeTcpTests.RunAsync),
+        ("avatar-socket", AvatarSocketTcpTests.RunAsync),
         ("mailbox", MailboxTcpTests.RunAsync),
         ("gm-assets", DevelopmentAssetTcpTests.RunAsync),
         ("repair", RepairTcpTests.RunAsync),

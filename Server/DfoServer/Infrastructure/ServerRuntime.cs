@@ -387,6 +387,7 @@ internal static class ServerRuntime
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,
                 itemResources.AvatarCompounds, itemResources.AvatarPackages), inventoryProjection, log),
             new AvatarDyeHandler(new InventoryAvatarDyeService(itemResources.Items, itemResources.AvatarDyes), inventoryProjection, log),
+            new AvatarSocketHandler(new InventoryAvatarSocketService(itemResources.Items, itemResources.AvatarPackages), inventoryProjection, log),
             new RefinementHandler(new InventoryRefinementService(itemResources.Items, itemResources.Refinement), inventoryProjection),
             new EnchantmentHandler(enchantmentService, inventoryProjection, log),
             new EquipmentEmblemHandler(new InventoryEquipmentEmblemService(itemResources.Items, clock), inventoryProjection, log),

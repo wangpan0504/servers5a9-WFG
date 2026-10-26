@@ -41,7 +41,7 @@ internal static partial class StackableActionCatalog
                 "[emancipate growth item upgrade]" or "[portable amplify]" or "[new portable amplify]" or
                 "[lucky enchant deed]" or "[amplify protect equipment]" or "[new amplify protect equipment]"
                     or "[rent point]" or "[repair coupon]" or "[repair equipment]" or "[change creature random]" or "[creature effect]"
-                    or "[creature use item]" or "[extend item period]" or "[creature transport stone]" or "[add mileage]"
+                    or "[creature use item]" or "[extend item period]" or "[creature transport stone]" or "[add mileage]" or "[add avatar socket]"
                     => StackableActionBusinessStatus.ExistingVariants,
                 _ => StackableActionBusinessStatus.Pending
             };
