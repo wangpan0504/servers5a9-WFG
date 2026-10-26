@@ -356,7 +356,8 @@ internal sealed partial class GameSession
         if (despair is not null) entry = entry! with { EntryItem = despair.Ticket };
         if (dungeonId is 11006 or 11007)
         {
-            if (questId != 0 || difficulty != 0 || practice || hellParty || classExperience || assault is not null)
+            // 关联支线已由原任务资格与普通路线核验，不把原生请求携带的任务号当成模式冲突。
+            if (questId != 0 && !entry!.IsOrdinaryHunt || difficulty != 0 || practice || hellParty || classExperience || assault is not null)
                 return RejectFormal("altar-mode-conflict");
             int day = ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow());
             var kind = dungeonId == 11006 ? DungeonSpecialEntryKind.Blood : DungeonSpecialEntryKind.Ultimate;

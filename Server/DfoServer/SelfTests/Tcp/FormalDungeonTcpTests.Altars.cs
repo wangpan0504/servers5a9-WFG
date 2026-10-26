@@ -28,13 +28,14 @@ internal static partial class FormalDungeonTcpTests
         var growth = SelfTestCatalogs.Growth(resources.Archive);
         foreach (uint id in new uint[] {11006,11007})
         {
+            ushort questId = id == 11006 ? (ushort)5650 : (ushort)7340;
             Character created;
             using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{}))
             {
                 var repo = new CharacterRepository(fixture.Database);
                 var candidate = CharacterCreation.Prepare(id==11006?"Blood466":"Ultimate466",resources.Characters.Get(0),
                     position,position,resources.Learning.Get);
-                created = repo.Create(owner,candidate with { Level=70,AcceptedStoryLevel=70,CompletedQuests=done,
+                created = repo.Create(owner,candidate with { Level=70,AcceptedStoryLevel=70,CompletedQuests=done.Append(id == 11006 ? 63 : 7339).Distinct().ToArray(),
                     InitialLearning=SkillPointLedger.Synchronize(0,0,70,candidate.InitialLearning with
                         { Experience=growth.GetLevelStartExperience(70) },resources.Learning) });
                 created = repo.CommitInventory(owner,created,new(created.Inventory,created.Inventory with
@@ -42,11 +43,14 @@ internal static partial class FormalDungeonTcpTests
             }
             using var peer = Open(fixture);
             peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            peer.Send(31, [31, 0, (byte)questId, (byte)(questId >> 8)]);
+            That(peer.Expect(1, 31).Body[0] == 1, "生产31合法接取祭坛关联支线");
+            RefreshedQuests(peer);
             // 新角色悲叹为第1层；塔类入口严格核对1536→1303→两包550→27。
             SelectTowerMap(peer,griefLayer:1);
             var request = Selection();
             BinaryPrimitives.WriteUInt32LittleEndian(request,id);
-            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),0);
+            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),questId);
             peer.Send(16,request);
             var info = peer.Expect(0,212).Body;
             var map = peer.Expect(0,211).Body;
@@ -98,6 +102,7 @@ internal static partial class FormalDungeonTcpTests
             foreach (bool loaded in new[] { false, true })
             {
                 SelectTowerMap(peer,griefLayer:1);
+                BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16), loaded ? questId : 0u);
                 peer.Send(16,request);
                 peer.Expect(0,212);
                 var returningMap = peer.Expect(0,211).Body;
@@ -106,8 +111,10 @@ internal static partial class FormalDungeonTcpTests
                 peer.Barrier();
                 if (loaded)
                 {
+                    // 极限覆盖258先于37；完整加载收尾前仍不允许启动回合。
+                    if (id == 11007) { peer.Send(258); peer.Barrier(); }
                     Load(peer);
-                    peer.Send(258);
+                    if (id == 11006) peer.Send(258);
                     peer.Expect(0,215);
                     var spawned = ReadUntil(210);
                     That(U16(spawned.Body,0) > 0, "已启动波次的祭坛仍可主动退出");

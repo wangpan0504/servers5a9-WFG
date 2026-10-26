@@ -604,6 +604,10 @@ internal sealed record DungeonEntryPlan(
     {
         bool listClear = quest.Grade == "[side]" && QuestDungeonClearProgress.MatchesAlternative(quest,dungeonId,difficulty);
         bool autoDaily = QuestAutoDailyPlan.MatchesDungeon(quest,dungeonId,difficulty);
+        // 极限支线只在猎杀四元组声明本图；不要求资源中不存在的 dungeon info。
+        bool altarHunt = dungeonId is 11006 or 11007 && quest.Grade == "[side]" &&
+            quest.Condition == "[hunt monster]" && QuestHuntProgress.TryTargets(quest,out var altarTargets) &&
+            altarTargets.Any(target => target.DungeonId == dungeonId && target.MinimumDifficulty <= difficulty);
         // 已支持的材料每日与每日累计通关任务保留接取身份，但不要求原资源不存在的任务迷宫。
         bool normalMission = QuestCycle.NormalDungeonMission(quest) &&
             (quest.Definition!.Dungeons.Any(row => row.DungeonId == dungeonId &&
@@ -623,7 +627,7 @@ internal sealed record DungeonEntryPlan(
             quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear && !normalMission && !dailyClear && !preyNormalClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
             // 悲叹列表通关的目标由int data给出；已核对专用准入后不强求不存在的dungeon info。
             // 其它支线仍须命中dungeon info，杀怪保留0..3，列表通关沿正式0..4难度域。
-            quest.Grade == "[side]" && !dailyClear && !(definition.IsGriefTower && listClear) && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
+            quest.Grade == "[side]" && !dailyClear && !altarHunt && !(definition.IsGriefTower && listClear) && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
                 (row.Parameter == -1 || (quest.Condition == "[hunt monster]" && row.Parameter is >= 0 and <= 3 ||
                     listClear && row.Parameter is >= 0 and <= 4) && row.Parameter <= difficulty)) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
