@@ -35,10 +35,10 @@ internal static class AntonRaidMapEntryTcpTests
         };
         var main = SelfTestCatalogs.Dungeons(resources.Archive);
         var raid = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main, resources.ItemResources.Items).Find(0)!.Resources!;
-        var original = AntonRaidDungeonCatalog.Load(resources.Archive, raid, main);
+        var original = RaidDungeonCatalog.Load(resources.Archive, raid, main);
         That(original.MissingMaps.Length == 72 && original.Find(210) is null && !main.ContainsDungeon(210),
             "原始主表仍缺72项MAP；不能靠备用DGN或测试显式登记污染生产目录");
-        var catalog = AntonRaidDungeonCatalog.Load(resources.Archive, raid, id => paths.GetValueOrDefault(id) ?? main.MapPath(id));
+        var catalog = RaidDungeonCatalog.Load(resources.Archive, raid, id => paths.GetValueOrDefault(id) ?? main.MapPath(id));
         That(catalog.Find(210) is { Mazes.Count: 1 } && catalog.MissingMaps.Length == 68 && !catalog.Ready,
             "四项显式登记只使黑雾之源资源可准备，不冒充全部14DGN/72MAP就绪");
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "anton-map-entry"), resources: resources);
@@ -84,7 +84,7 @@ internal static class AntonRaidMapEntryTcpTests
                 session.MarkReady();
                 sessions.Add(session);
                 var actor = new RaidActor(session, owner, session.SelectionEpoch, character.Id, character.Name, new(2, 19));
-                That(session.Selected!.Position == waiting && session.AuthorizeAntonRaidDungeon(new(instance, actor, 0, (byte)(i + 1),
+                That(session.Selected!.Position == waiting && session.AuthorizeRaidDungeon(new(instance, actor, 0, (byte)(i + 1),
                     catalog, () => started, id => id == 210)), "夹具从原owner、候战室及已开战实例绑定分队入口");
                 var accept = listener.AcceptTcpClientAsync(stop.Token);
                 var client = new TcpPeer(((IPEndPoint)listener.LocalEndpoint).Port, channelNumber: 19);
@@ -121,7 +121,7 @@ internal static class AntonRaidMapEntryTcpTests
             That(map[0] == 0 && map[1] == 0 && map[2] == 0 && map[13] == 1 && U32(map, 14) == 32200,
                 "完整NOTI29采用已登记32200起点、原生地图操作及随机种子");
             var receipt = sessions[0].CurrentFormalDungeonScene()!;
-            That(receipt.Entry.AntonRaid == new AntonRaidDungeonIdentity(instance, 0, 1) &&
+            That(receipt.Entry.RaidEntry == new RaidDungeonIdentity(instance, 0, 1) &&
                 receipt.Monsters.Monsters.Count == map[18] && map.Length == 23 + map[18] * 22,
                 "已提交Run保留攻坚实例/阶段/分队，起点所有演员按原22B逐项发送");
             for (int i = 0; i < receipt.Monsters.Monsters.Count; i++)
@@ -155,7 +155,7 @@ internal static class AntonRaidMapEntryTcpTests
                 fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts") is [[0L]],
                 "重复37不重复初始化；DGN的no fatigue语义保留且进图不扣开战门票");
             started = false;
-            That(!sessions[0].CanPublishFormalDungeon(receipt) && !sessions[0].AuthorizeAntonRaidDungeon(new(instance, new(sessions[0], leases[0], sessions[0].SelectionEpoch,
+            That(!sessions[0].CanPublishFormalDungeon(receipt) && !sessions[0].AuthorizeRaidDungeon(new(instance, new(sessions[0], leases[0], sessions[0].SelectionEpoch,
                 id0, "AntonMap0", new(2, 19)), 0, 1, catalog, () => started, _ => true)),
                 "原实例撤销后旧入场回执不能发布，旧授权不能重绑正在运行的会话");
         }

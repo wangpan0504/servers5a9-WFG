@@ -70,6 +70,9 @@ internal sealed partial class GameSession
         raid.Battle.Instance == instance && raid.Battle.View.Phase == phase &&
         raid.Battle.BindDungeon(dungeon.Run.Snapshot.Identity, dungeon.Run.DungeonId));
 
+    internal AntonRaidBattle? CurrentRaidBattle(RaidActor actor) => owner.Execute(() =>
+        raidCombat is { } raid && raid.Actor == actor && actor.IsCurrent ? raid.Battle : null);
+
     public AntonRaidBattleView? RaidCombatView() => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent ? raid.Battle.View : null);
 
@@ -83,7 +86,7 @@ internal sealed partial class GameSession
     // 117协调已提交死亡，不能由695、客户端symbol或复制的ClearFact创建阶段胜利。
     public AntonRaidBattleChange? CompleteRaidCombatDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>
     {
-        if (raidCombat is not { } raid || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
+        if (raidCombat is not { } raid || raid.Battle.Kind == RaidKind.Luke || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
             receipt.Generation != owner.Generation || receipt.SelectionEpoch != SelectionEpoch ||
             receipt.Snapshot.Identity != dungeon.Run.Snapshot.Identity || dungeon.Run.ClearFact is not { } fact ||
             fact.Identity != receipt.Snapshot.Identity || !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap)) return null;

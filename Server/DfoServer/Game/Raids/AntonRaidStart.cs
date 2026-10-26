@@ -54,14 +54,17 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
     {
         var result = actor.Owner.Execute(() =>
         {
+            var departingBattle = actor.Session.CurrentRaidBattle(actor);
+            var beforeBattle = departingBattle?.View;
             var change = registry.Leave(actor, target);
             if (change is { Before.Type: 1, Before.Started: { } started, Removed: { } departed })
                 departed.Session.DetachRaidCombatStart(departed, started.InstanceId);
             PartyNotice[] notices = change?.Before.Started is not null && change.Removed is { } removed
                 ? parties.DetachNotices(removed.Session) : [];
-            return (Change: change, Notices: notices);
+            return (Change: change, Notices: notices, Battle: departingBattle, BeforeBattle: beforeBattle);
         });
         if (result.Notices.Length != 0) parties.Publish(result.Notices);
+        if (result.Battle is { Kind: RaidKind.Luke } battle && !ReferenceEquals(battle.View, result.BeforeBattle)) battle.Publish(battle.View);
         return result.Change;
     }
 

@@ -384,6 +384,7 @@ internal static class TcpRegressionTests
         ("anton-raid", AntonRaidTcpTests.RunAsync),
         ("luke-raid", LukeRaidTcpTests.RunAsync),
         ("luke-raid-start", LukeRaidStartTcpTests.RunAsync),
+        ("luke-raid-run", LukeRaidStartTcpTests.RunDungeonsAsync),
         ("raid-channel-type", RaidChannelTypeTcpTests.RunAsync),
         ("raid-channel-landing", RaidChannelLandingTcpTests.RunAsync),
         ("raid-channel-events", RaidChannelLandingTcpTests.RunEventsAsync),

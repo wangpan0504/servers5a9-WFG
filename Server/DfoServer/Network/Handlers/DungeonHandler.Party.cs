@@ -56,6 +56,17 @@ internal sealed partial class DungeonHandler
     async Task PublishPartyNoticeAsync(GameConnectionContext context, PartyDungeonNotice notice)
     {
         using var publication = context.Sender.QueuePublication(notice.Recipient.Actor.IsCurrent);
+        if (notice.Kind == PartyDungeonNoticeKind.RaidBattleSync)
+        {
+            if (notice.RaidBattleChange is { } change)
+                log.Write("raid_run_clear", new { Connection = context.Id, RaidType = 1, Instance = change.After.Instance,
+                    Run = notice.Scene?.Snapshot.Identity.InstanceId, Dungeon = notice.Scene?.Entry.DungeonId,
+                    Members = notice.Members.Length, change.After.Phase, BeforeRevision = change.Before.Revision,
+                    AfterRevision = change.After.Revision, State = change.After.State.ToString() });
+            context.Session.PublishRaidCombat();
+            return;
+        }
+        if (notice.RaidBattleChange is not null) context.Session.PublishRaidCombat();
         if (notice.Kind == PartyDungeonNoticeKind.Departure && notice.Travel is { } departure)
         {
             if (context.Death is not null) await context.Death.StopAsync();
@@ -83,7 +94,7 @@ internal sealed partial class DungeonHandler
             await town.ReturnFromFormalDungeonAsync(context, travel, "party_result_town");
             return;
         }
-        if (notice.Kind is PartyDungeonNoticeKind.Selection or PartyDungeonNoticeKind.ResultSelection && notice.Selection is { } selection)
+        if (notice.Kind is PartyDungeonNoticeKind.RaidSelection or PartyDungeonNoticeKind.Selection or PartyDungeonNoticeKind.ResultSelection && notice.Selection is { } selection)
         {
             if (!await town.DetachForDungeonSelectionAsync(context, selection)) return;
             bool Guard() => context.Session.CanPublishDungeonSelection(selection);
@@ -94,7 +105,8 @@ internal sealed partial class DungeonHandler
             foreach (var member in notice.Members)
                 await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(member.Actor.Character.Id), "party_selection_state", Guard);
             await PublishPartyHostAsync(context, notice.Members, Guard);
-            await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(notice.LegendDungeon,
+            if (notice.Kind != PartyDungeonNoticeKind.RaidSelection)
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(notice.LegendDungeon,
                 incompleteHellQuestMemberSlots: context.Session.IncompleteHellQuestMemberSlots()), "party_selection_notice", Guard);
             return;
         }

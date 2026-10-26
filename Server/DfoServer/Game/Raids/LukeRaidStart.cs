@@ -10,7 +10,10 @@ namespace DfoServer.Game.Raids;
 
 // 必须显式提供已解释的执行脚本及来源；原资源Issues不会被清空或默认为Anton策略。
 // 当前生产装配没有该策略。测试的合成脚本只证明启动事务，不证明原服阶段规则。
-internal sealed record LukeRaidStartPolicy(string Source, RaidScript ExecutionScript);
+internal sealed record LukeRaidStartPolicy(string Source, RaidScript ExecutionScript)
+{
+    public LukeRaidRunPolicy? Run { get; init; }
+}
 
 internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
     TownCatalog towns, EpicPieceCatalog pieces, LukeRaidStartPolicy policy, TimeProvider? clock = null)
@@ -100,6 +103,14 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
             script.Phases.Length != definition.PhaseMax || original.Phases.Length != definition.PhaseMax ||
             !script.Symbols.OrderBy(p => p.Key).SequenceEqual(original.Symbols.OrderBy(p => p.Key)))
             return "luke-execution-policy-unavailable";
+        if (policy.Run is { } run)
+        {
+            if (definition.Resources.EntryCatalog is not { } catalog) return "luke-run-catalog-unavailable";
+            if (run.Rejection(catalog) is { } rejection) return rejection;
+            // 首个Run用例没有奖励协调者；不能开放会自动进入空奖励窗口的执行策略。
+            if (script.Phases.Any(phase => phase.Rules.Any(rule => rule.Behavior.Any(clause => clause.Tag == "[clear phase]"))))
+                return "luke-run-reward-coordination-unavailable";
+        }
         for (int index = 0; index < script.Phases.Length; index++)
         {
             var phase = script.Phases[index];

@@ -49,6 +49,7 @@ internal static class LukeRaidStartTests
                 session.Select(0); session.MarkReady(); session.CurrentParty=()=>parties.Current(session);
                 return session.CaptureRaidActor(raids)!;
             }).ToArray();
+            LukeRaidRunTests.RunCore(actors.Take(8).ToArray());
             var leader=actors[0]; raids.Create(leader,1,"start","start"u8.ToArray(),8,1);
             for(int index=1;index<8;index++)
             { raids.Invite(leader,actors[index],0); That(raids.Respond(actors[index],leader.Character,true).Accepted,"Luke通过原邀请加入"); }
@@ -90,6 +91,8 @@ internal static class LukeRaidStartTests
             }
             action=()=>
             {
+                That(context.DispatchGates!.Holds(context,existing.Commands)&&!context.DispatchGates.Holds(context,other.Commands),
+                    "Luke选图只能扩取当前Dispatch已持普通队伍的成员，另一队门禁不构成证明");
                 var scope=RaidStartCommandScope.TryEnter(context,raid)!;
                 That(scope.IsCurrent(),"真实Dispatch证明允许跳过同对象本人及本队gate");
                 scope.Dispose(); scope.Dispose();

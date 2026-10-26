@@ -16,15 +16,26 @@ namespace DfoServer.Testing;
 // 正常Runtime和666入口。明确合成无行为执行策略，只保留当前PVF的阶段/DGN/symbol身份；不代表原服规则已恢复。
 internal static class LukeRaidStartTcpTests
 {
-    public static async Task RunAsync(ServerOptions source,string root,TcpTestResources resources)
+    public static Task RunAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,false);
+    public static Task RunDungeonsAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true);
+
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons)
     {
         var definition=RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
             SelfTestCatalogs.Dungeons(resources.Archive),resources.ItemResources.Items).Find(1)!;
         var raw=definition.Resources!.Script;
         var execution=new RaidScript("selftest/luke-start-only.etc",raw.WaitingRoom,raw.EntryCost,raw.RetryItem,raw.Symbols,
             raw.Phases.Select(phase=>new RaidPhase(phase.Name,phase.Dungeons,[],[])).ToImmutableArray(),[],[]);
-        var policy=new LukeRaidStartPolicy("selftest/no-phase-actions-no-rewards",execution);
-        await using var fixture=new TcpTestFixture(source,Path.Combine(root,"luke-raid-start"),resources:resources,lukeStartPolicy:policy);
+        // 仅并发Run夹具：显式把已登记第二图设Open；原第三图Hide保留为准入负例，不冒充原P1初态。
+        if(runDungeons) execution=execution with {Phases=execution.Phases.SetItem(0,execution.Phases[0] with
+            {Dungeons=execution.Phases[0].Dungeons.SetItem(1,execution.Phases[0].Dungeons[1] with {InitialState=RaidDungeonState.Open})})};
+        var catalog=definition.Resources!.EntryCatalog!;
+        var policy=new LukeRaidStartPolicy("selftest/no-phase-actions-no-rewards",execution)
+        { Run=runDungeons ? new LukeRaidRunPolicy("selftest/explicit-first-maze-no-economy",
+            raw.Phases.SelectMany((phase,index)=>phase.Dungeons.Select(dungeon=>new LukeRaidMazeChoice(index,dungeon.Id,
+                catalog.Find(dungeon.Id)!.Mazes.First(maze=>maze.QuestConnectionTokens.Count==0).SourceOrdinal))).ToImmutableArray(),
+            LukeRaidRunEconomy.ControlledNoRewardsOrRevival) : null };
+        await using var fixture=new TcpTestFixture(source,Path.Combine(root,runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy);
         await fixture.StartAsync();
         var endpoints=ChannelTcpTests.Endpoints(fixture); var repository=new CharacterRepository(fixture.Database);
         var owners=new AccountOwners(); List<TcpPeer> peers=[];
@@ -142,6 +153,7 @@ internal static class LukeRaidStartTcpTests
             That(fixture.Snapshot()==committed,"重放和原生分队握手不改任何持久资产/位置/次数");
             leader.Send(660,[0,0]);Drain(leader);
             That(fixture.Snapshot()==committed,"start-only Luke不借未类型隔离的Anton领奖表发奖");
+            if(runDungeons) LukeRaidRunTcpTests.Single(fixture,leader,raw.Phases[0].Dungeons[0].Id);
             // 同一Runtime继续覆盖满八人跨两队；不另启服务，不手工Attach领域实例。
             foreach(var peer in peers)peer.Dispose();peers.Clear();
             for(int index=4;index<12;index++)peers.Add(CreatePeer(index));
@@ -195,6 +207,9 @@ internal static class LukeRaidStartTcpTests
                     is [[long count]]&&count==raw.EntryCost.Count,"满团成功只扣一次门票，失败未留部分扣费");
             }
 
+            if(runDungeons) LukeRaidRunTcpTests.Parties(fixture,peers.ToArray(),raw.Phases[0].Dungeons.Select(row=>row.Id).ToArray(),
+                full[0].Single(p=>p.Opcode==9).Body,full[4].Single(p=>p.Opcode==9).Body,catalog);
+
             void Join(TcpPeer captain,TcpPeer member)
             {
                 captain.Send(10,Peer(member.Id,0,true));Until(captain,1,10);Until(member,0,7);
@@ -214,6 +229,15 @@ internal static class LukeRaidStartTcpTests
         }
         finally{foreach(var peer in peers)peer.Dispose();}
         await fixture.StopAsync();
+        if(runDungeons)
+        {
+            // StopAsync已收尾日志writer；不把正在刷新的JSON尾行当作完整事件。
+            var clears=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="raid_run_clear").Select(row=>row.GetProperty("Detail")).ToArray();
+            That(clears.Length==1&&clears[0].GetProperty("Members").GetInt32()==4&&
+                clears[0].GetProperty("AfterRevision").GetInt64()==clears[0].GetProperty("BeforeRevision").GetInt64()+1,
+                "真实Runtime四人共同Run只推进Battle一次，重复事实仅重同步");
+            LukeRaidRunTransactionTests.Run(resources,definition,policy);
+        }
         That(fixture.Events().Any(e=>e.GetProperty("Kind").GetString()=="closed"&&
             e.GetProperty("Detail").GetProperty("Reason").GetString()=="SqliteException"&&
             e.GetProperty("Detail").GetProperty("Message").GetString()!.Contains("luke TCP last member rollback",StringComparison.Ordinal)),

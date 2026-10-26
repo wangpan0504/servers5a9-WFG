@@ -103,16 +103,19 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     public void ReturnToRoster()
     {
-        owner.Execute(() =>
+        var battle = owner.Execute(() =>
         {
+            var departing = raidCombat?.Battle;
             // 移动和传送已逐次提交；这里只结束当前角色会话，不重写位置或进度。
             Invalidate("not-requested");
-            return true;
+            return departing;
         });
+        if (battle?.Kind == Raids.RaidKind.Luke) battle.Publish(battle.View);
     }
 
     public void End()
     {
+        var departingBattle = raidCombat?.Battle;
         // 断线时旧 generation 已不能拿锁，仍要让这个会话自己的代数失效。
         try
         {
@@ -129,6 +132,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         finally
         {
             gameCache.Dispose();
+            if (departingBattle?.Kind == Raids.RaidKind.Luke) departingBattle.Publish(departingBattle.View);
         }
     }
 
