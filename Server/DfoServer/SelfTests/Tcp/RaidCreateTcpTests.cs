@@ -46,6 +46,9 @@ internal static class RaidCreateTcpTests
             That(ack.Length == 5 && ack[0] == 1 && U32(ack, 1) == key, "ACK664 成功 = 01 + 同一 key");
             peer.Send(658, [1]);
             peer.Expect(1, 658, [1]);
+            peer.Send(669, Build(writer => { writer.Write(2u); writer.Write((uint)id); writer.Write(11u); }));
+            peer.Barrier(packet => That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6,
+                "类型3的operation2只恢复了客户端槽编码，未闭合服务端合同不能回成功或修改团记录"));
             peer.Send(666, []);
             peer.Expect(1, 666, [0, 0x13, 0]);
             peer.Send(667, [0, 3]);

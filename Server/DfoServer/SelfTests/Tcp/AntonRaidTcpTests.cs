@@ -35,7 +35,8 @@ internal static class AntonRaidTcpTests
                         { Level = 85, AcceptedStoryLevel = 85, CompletedQuests = [12829, 3779], InitialLearning = learning });
                     var items = resources.ItemResources;
                     var inventory = new InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
-                    InventoryService.Commit(repository, owner, created, inventory.Grant(created, [new(10096296, 2)]));
+                    if (index < 20)
+                        InventoryService.Commit(repository, owner, created, inventory.Grant(created, [new(10096296, 2)]));
                 }
                 var peer = Open(fixture, account, gamePort: endpoints[19], channelNumber: 19);
                 peers.Add(peer); peer.Select();
@@ -47,7 +48,7 @@ internal static class AntonRaidTcpTests
                 .Select(table => fixture.Snapshot($"SELECT * FROM {table} ORDER BY 1,2")));
             string assets = Assets();
             That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296")
-                is [[42L]], "二十一名角色均真实持有两张团本门票，拒绝开战不能靠无票夹具掩盖扣费");
+                is [[40L]], "二十名参团角色均真实持有两张门票，团外观察者无票，拒绝不能靠全团无票掩盖扣费");
             var leader = peers[0]; var observer = peers[20];
             leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Anton")); w.Write(new byte[4]); }));
             var list = Until(leader, 0, 590).Body;
@@ -121,6 +122,27 @@ internal static class AntonRaidTcpTests
                 Bytes(Until(leader, 1, 669).Body, [1], "队长编队");
                 foreach (var peer in peers) Drain(peer);
             }
+            var beforeCost = Information(observer, key, 2);
+            foreach (var reporter in new[] { leader, peers[1], observer })
+            {
+                for (int attempt = 0; attempt < 2; attempt++)
+                {
+                    reporter.Send(658, [1]);
+                    Bytes(Until(reporter, 1, 658).Body, [1], "658重复状态请求的公共ACK不证明足额、扣票或正式开战");
+                }
+                foreach (byte[] body in new byte[][] { [], [1, 0] })
+                {
+                    reporter.Send(658, body); Drain(reporter);
+                }
+            }
+            foreach (byte[] body in new byte[][] { [0], [0, 0, 0, 0] })
+            {
+                leader.Send(666, body); Drain(leader);
+            }
+            var afterCost = Information(observer, key, 2);
+            That(beforeCost.Leader == afterCost.Leader && beforeCost.Members.SequenceEqual(afterCost.Members) &&
+                fixture.Snapshot() == saved && Assets() == assets,
+                "有票成员及无票团外者的658和畸形666不改变团长、完整名册、门票、位置、疲劳或回执");
             for (int attempt = 0; attempt < 2; attempt++)
             {
                 leader.Send(666); Bytes(Until(leader, 1, 666).Body, [0, 19, 0], "二十人五个满分队仍不能绕过未闭合的开战成功链");
@@ -144,13 +166,16 @@ internal static class AntonRaidTcpTests
             foreach (var (sender, operation, target, argument) in new (TcpPeer, uint, uint, uint)[]
             {
                 (peers[1], 1, peers[7].Id, 0), (leader, 1, observer.Id, 0), (leader, 1, leader.Id, 0),
-                (leader, 1, peers[7].Id, 1), (leader, 1, 0x10000u + peers[7].Id, 0), (leader, 2, peers[7].Id, 0)
+                (leader, 1, peers[7].Id, 1), (leader, 1, 0x10000u + peers[7].Id, 0), (leader, 2, peers[7].Id, 0),
+                (leader, 2, peers[7].Id, 11), (leader, 2, peers[7].Id, 14), (leader, 2, peers[7].Id, 21)
             })
             {
                 sender.Send(669, Build(w => { w.Write(operation); w.Write(target); w.Write(argument); }));
                 Drain(sender);
             }
-            That(Information(observer, key, 2).Leader == leader.Id, "越权、团外、自身、非法参数、角色溢出及未知操作不委任或伪造成功");
+            var afterRejectedAppointment = Information(observer, key, 2);
+            That(afterRejectedAppointment.Leader == leader.Id && beforeAppointment.Members.SequenceEqual(afterRejectedAppointment.Members),
+                "非法委任及类型3专用operation2槽编码不能改变安徒恩团长、成员顺序或五个分队，也不伪造成功");
             leader.Send(669, Build(w => { w.Write(1u); w.Write((uint)peers[7].Id); w.Write(0u); }));
             Bytes(Until(leader, 1, 669).Body, [1], "委任团长ACK只含公共成功标志");
             foreach (var peer in peers)
