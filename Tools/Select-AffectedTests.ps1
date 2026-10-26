@@ -93,6 +93,7 @@ $keywordGroups = [ordered]@{
     'Setting'    = 'settings','settings-storage'
     'Tutorial'   = 'tutorial'
     'Channel'    = 'channel-entry'
+    'TagEvildom' = 'tag-evildom','channel-entry'
     'Title'      = 'titles'
     'CollectBox' = 'collectbox'
     'Gm|Development' = 'gm-assets','gm-progress','gm-debug'

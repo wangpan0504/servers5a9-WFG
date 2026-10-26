@@ -18,7 +18,7 @@ using DfoServer.Testing;
 
 namespace DfoServer;
 
-internal static class SessionPlanningTests
+internal static partial class SessionPlanningTests
 {
     static readonly SkillLearningCommand Purchase = new(0, 0, [new(5, false, 1)]);
     static readonly CharacterProfile Profile = new(0, new(1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), [new(5, 1)]);
@@ -31,6 +31,9 @@ internal static class SessionPlanningTests
         DeletionCapacity();
         DeletionRosterMapping();
         PublishedRosterIdentity();
+        TagEvildomPublishedRoster();
+        TagEvildomConfigurationLifecycle();
+        await TagEvildomPublicationRacesAsync();
         SlotChange();
         Initialization();
         ExpertJobStoreLifecycle();

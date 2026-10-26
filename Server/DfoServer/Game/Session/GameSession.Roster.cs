@@ -7,6 +7,12 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     CharacterRosterSnapshot? publishedRoster;
+    CharacterRosterSnapshot? tagEvildomRoster;
+
+    // TAG 的 index 仍指向入城前实际发送的 NOTI2 行序；不能以城镇重查或过滤后的名册重新编号。
+    public CharacterRosterSnapshot? PublishedTagEvildomRoster() => owner.Execute(() =>
+        Ready && Phase == SessionPhase.Town && Selected is not null && tagEvildomRoster is { } roster && MatchesRoster(roster)
+            ? roster : null);
 
     public CharacterRosterSnapshot PrepareRoster() => owner.Execute(CaptureRoster);
 
@@ -36,7 +42,10 @@ internal sealed partial class GameSession
     {
         if (Selected is not null) throw new InvalidDataException("Invalid selection state");
         var entry = PublishedRosterEntry(index) ?? throw new InvalidDataException("Selection published roster index absent");
+        var roster = publishedRoster!;
         SelectCharacter(entry.Slot, goldLimits, entry, resumeTown);
+        // 只有选角成功才把原发布映射绑定到新生命周期；普通选角映射仍保持自己的旧 epoch。
+        tagEvildomRoster = roster with { SelectionEpoch = SelectionEpoch };
         return true;
     });
 

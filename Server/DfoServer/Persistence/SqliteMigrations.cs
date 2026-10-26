@@ -213,6 +213,7 @@ internal static class SqliteMigrations
         new(99, "角色称号替换动画", AddCloneTitleColumn),
         new(100, "角色技能方案开通及当前方案", static (db, tx) => Execute(db, tx,
             "ALTER TABLE characters ADD COLUMN selected_skill_tree INTEGER NOT NULL DEFAULT -1 CHECK(typeof(selected_skill_tree)='integer' AND selected_skill_tree BETWEEN -1 AND 1)")),
+        new(101, "再战魔界账号编队配置", TagEvildomConfigurationSchema.Upgrade),
     ];
 
     internal const string PvpPrivateCharacterSchema = """
@@ -2088,6 +2089,8 @@ internal static class SqliteMigrations
             ("character_pvp_training_skills",PvpTrainingSkillsSchema),
             ("account_pvp_private_characters",PvpPrivateCharacterSchema),
             ("character_operation_hope_reward_receipts",OperationHopeRewardSchema.Definition),
+            (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
+            (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),
             ("quest_eligibility_mail_dispatches",QuestEligibilityMailSchema),
             ("character_collectbox_state",CollectBoxStateTableSchema),
             ("character_collectbox_slots",CollectBoxSlotsTableSchema),

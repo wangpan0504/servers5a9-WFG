@@ -67,6 +67,7 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("Character deletion identity or revision changed");
         if (expected.AdventureBusy) throw new InvalidDataException("Character participates in an adventure expedition");
         RequireDeletionDependencies(db, tx);
+        RemoveTagEvildomCharacter(db, tx, owner.Account, expected.Id);
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id);

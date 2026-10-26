@@ -14,7 +14,8 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null, AdventureProjection? adventure = null,
     ExpertJobScriptCatalog? expertJobs = null, AdventureWeeklyProjection? weekly = null,
     AvatarPresetProjection? avatarPresets = null, AvatarPresetService? avatarPresetService = null,
-    DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null, DfoServer.Game.Pvp.PvpPrivateCharacterService? privateCharacters = null) : IGameCommandModule
+    DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null, DfoServer.Game.Pvp.PvpPrivateCharacterService? privateCharacters = null,
+    TagEvildomProjection? tagEvildom = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -86,10 +87,11 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
             log.Write("avatar_preset_base", new { Connection = context.Id, Character = c.Id,
                 Capacity = c.Inventory.AvatarPresets.Capacity, Presets = c.Inventory.AvatarPresets.Presets.Length,
                 Revision = c.Revision });
-        await projection.EnterAsync(context, resumeTown);
+        var projectedCharacter = await projection.EnterAsync(context, resumeTown);
         if (expertJobs is not null && context.Session.Selected is { ExpertJobType: >= 1 and <= 4 } selected)
             await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(selected, expertJobs, includeQualifications: true), "expert_job_info");
         context.Session.MarkReady();
+        if (tagEvildom is not null && !await tagEvildom.InitializeAsync(context, projectedCharacter)) return CommandResult.Handled;
         // 预设容量与列表必须早于窗口打开；与每周配置同属就绪后、任务核对前的固定包序。
         if (avatarPresets is not null) await avatarPresets.DeliverAsync(context);
         // 每周地下城固定在入城完成包之后、任务核对与同屏加入之前下发，包序稳定且不依赖其他投影结果。

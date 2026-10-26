@@ -73,6 +73,8 @@ internal static class ChannelPackets
     const int PreyRaidType = 0x32;
     const int AntonRaidType = 0x17;
     const int LukeRaidType = 0x20;
+    // 再战魔界：028FA250按+1010==0x35选择双角色UI和9608/400000095；该字段由ACK LOGIN类型写入。
+    const int EvildomGatheringType = 0x35;
 
     // ACK LOGIN 正文第 0 字节是结果，之后 ARAD 0233EA10 依次读 u8 年龄 [ebp-0x34b]、u8 网吧 [ebp-0x347]、u8 频道类型 [ebp-0x336]；
     // 频道类型经 0233EF02 → 028FA920 写入频道对象 +0x1010（02330DF0 读出），RaidModeSelectWindow 打开时 014C0D40 按它选信息框下标：
@@ -87,7 +89,7 @@ internal static class ChannelPackets
     // 页签与换频道快照谓词读脚本类型（+8），不读 +0x1010。证据：evidence/anton-luke-channel-type-audit-20261021.txt。
     // 普通type22用于冒险团页准入（012AE420→028FB170）；其他未确认入口继续发0，避免扩大客户端模式变化。
     public static byte LoginChannelType(ChannelEntry channel) =>
-        channel.Type is 22 or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType ? (byte)channel.Type : (byte)0;
+        channel.Type is 22 or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
 
     public static byte[] Endpoint(string address, int port, uint association = 0, byte channelType = 0)
     {
