@@ -33,6 +33,7 @@ internal static class DungeonEntryCostTests
             new[]{100,1,-1,-1},new[]{100,1,-1,0,100,1,-1,2}})
             Reject<InvalidDataException>(()=>Parse(malformed),"通行证残缺、零数量、未确认附加条件及重复条目拒绝");
         PartyEntryTransaction();
+        DazzlementTowerAdmissionTests.RunCore();
         Console.WriteLine($"PASS {Count-checks} 超星空通行证声明边界断言");
     }
 

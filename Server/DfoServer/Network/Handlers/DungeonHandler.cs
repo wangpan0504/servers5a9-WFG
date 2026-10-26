@@ -214,10 +214,13 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             HellTicket = receipt?.HellTicket, EntryItem = receipt?.Entry.EntryItem, StartFatigue = receipt?.Entry.StartFatigue,
             EntryFatigueCharged = receipt?.EntryFatigueCharged, EntryCostNote = receipt?.Entry.EntryCostNote,
             GriefLayer = receipt?.Entry.GriefLayer, Grief = receipt?.GriefAdmission?.Decision,
+            Dazzlement = receipt?.Dazzlement,
             CharacterId = character.Id, CharacterName = character.Name });
         if (receipt is null) return await RejectAsync();
         await town.DetachAsync(context);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+        if (receipt.Dazzlement is not null)
+            await DazzlementTowerProjection.BindingsAsync(context, Guard);
         if (receipt.Entry.Hope is { } hope)
             await context.Reply(CmdPacketType.ACCEPT_QUEST, QuestPackets.Accepted(hope.Acceptance.QuestId,1,[]),
                 "operation_hope_quest_assigned",Guard);

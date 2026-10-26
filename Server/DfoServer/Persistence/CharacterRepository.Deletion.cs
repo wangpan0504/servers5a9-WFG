@@ -168,6 +168,8 @@ internal sealed partial class CharacterRepository
         var affected = DeletionTables.Concat(["characters", "cube_premium", "item_making_skill_info", "character_inventory_items", "character_inventory_slots",
             "inventory_avatar_details", "inventory_creature_details", "mailbox_messages", "mailbox_attachments", "mailbox_audit_log",
             "shop_purchase_counts", "account_completed_quests", "account_pvp_private_characters", "account_adventure_representatives",
+            // ON DELETE SET NULL保留眩惑本周名额，不能加入按角色删除的表清单。
+            "account_dazzlement_tower_bindings",
             "account_adventure_receipts", "account_adventure_expedition_members", "account_adventure_expeditions",
             // 两端均以 ON DELETE CASCADE 清理，账号级冒险团好友不随单个角色删除。
             "character_social_links"])
