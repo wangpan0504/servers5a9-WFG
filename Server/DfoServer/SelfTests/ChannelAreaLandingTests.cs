@@ -33,6 +33,22 @@ internal static class ChannelAreaLandingTests
         That(ChannelAreaLanding.Place(towns, luke, 85, none) is null, "卢克等级不足时留在共享房间");
         That(ChannelAreaLanding.Place(towns, sky, 95, none) is null, "天空之城任务不足时不离开共享房间");
         That(ChannelAreaLanding.Place(towns, harlem, 1, none) is null, "哈林任务不足时留在共享房间");
+        foreach (string group in new[] { "[harlem]", "[east harlem]" })
+        {
+            var entry = harlem with { Group = group };
+            That(ChannelAreaLanding.Place(towns, entry, 95, none) is null &&
+                ChannelAreaLanding.Place(towns, entry, 89, new HashSet<int> { 5936 }) is null,
+                "黑市落点仍要求5936与90级，不因修正区域绕过准入");
+            foreach (var done in new[] { new HashSet<int> { 5936 }, new HashSet<int> { 5936, 6045, 6356 } })
+            {
+                var landing = ChannelAreaLanding.Place(towns, entry, 95, done);
+                That(landing is { Town: 54, Area: 1 } && towns.IsPosition(landing, done), "两个哈林分组均使用正式黑市街道及其当前阶段门口");
+                That(towns.Areas[(54, 1)].Map(done).Npcs.Any(npc => npc.Id == 100000175) == done.Contains(6045),
+                    "解放后地图放置6356变身的乔斯拉，Before阶段不提前放置");
+            }
+        }
+        That(!towns.Areas[(54, 0)].Map(new HashSet<int> { 5936, 6045, 6356 }).Npcs.Any(npc => npc.Id == 100000175),
+            "旧黑市0区固定Before地图，不能承接乔斯拉的解放后身份");
         That(ChannelAreaLanding.Place(towns, fiend, 95, none) is null, "未完成入场任务 8672 的超时空之战频道留在共享房间");
         That(ChannelAreaLanding.Place(towns, fiend, 95, new HashSet<int> { 8672 }) is { Town: 115, Area: 0 }, "完成 8672 的超时空之战频道落到最后防线 115/0");
         That(towns.Areas.ContainsKey((10, 0)) && towns.Areas[(10, 0)].Gate is not null, "决斗场城镇 10 在目录里且写有门口");

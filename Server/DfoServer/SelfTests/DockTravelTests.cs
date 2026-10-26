@@ -83,7 +83,10 @@ internal static class DockTravelTests
                 towns.ResolveRoomReturn(towns.Room, new(54, 0, 1050, 462), 95, stage) == expected,
                 "旧黑市街道位置与已在房间的旧返回点都解析为54/1");
         }
-        var legacy = repo.Create(owner, preparation.ToCharacter("LegacyHarlem", towns));
+        var legacy = repo.Create(owner, preparation.ToCharacter("LegacyHarlem", towns) with
+        {
+            CompletedQuests = [.. preparation.CompletedQuests.Append(6356).Distinct().Order()]
+        });
         legacy = repo.Save(owner, legacy, new(54, 0, 1102, 515), new(54, 0, 1050, 462));
         var recovered = new GameSession(new CharacterRepository(path), towns, owner);
         recovered.Select(legacy.Slot);
@@ -92,6 +95,9 @@ internal static class DockTravelTests
             recovered.Selected.CompletedQuests.SequenceEqual(legacy.CompletedQuests) && recovered.Selected.Level == legacy.Level,
             "重开旧黑市存档只修正正常选角的返回地区，不更改任务与等级");
         That(recovered.LeaveRoom() && recovered.Selected!.Position is { Town: 54, Area: 1 }, "旧黑市存档出房进入54/1");
+        That(recovered.Selected!.CompletedQuests.Contains(6356) &&
+            towns.Areas[(54, 1)].Map(recovered.Selected.CompletedQuests.ToHashSet()).Npcs.Any(npc => npc.Id == 100000175),
+            "旧存档重选后保留乔斯拉变身任务，出房地图包含其实际NPC身份");
         That(recovered.Travel(new(54, 2, 941, 85, 5, 54, 1, 0)) &&
             recovered.Travel(new(54, 1, 2256, 576, 5, 54, 2, 0)), "修正后可进入哈林副本入口并返回黑市");
         That(recovered.Travel(new(40, 1, 1672, 200, 5, 54, 1, 255)), "修正后黑市码头可离开哈林");
