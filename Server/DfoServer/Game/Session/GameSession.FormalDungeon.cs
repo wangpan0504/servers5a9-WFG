@@ -146,8 +146,8 @@ internal sealed partial class GameSession
         CrackDimensionRewardServices? crackRewards = null, PartyDungeonPreparation? shared = null,
         uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false)
     {
-        if (HasAntonDungeonAdmission || dungeonId <= int.MaxValue && antonDungeonAdmission?.Catalog.Find((int)dungeonId) is not null)
-            return PrepareAntonDungeon(dungeonId, questId, difficulty, rooms, draw, requiredCharacter,
+        if (HasRaidDungeonAdmission || dungeonId <= int.MaxValue && raidDungeonAdmission?.Catalog.Find((int)dungeonId) is not null)
+            return PrepareRaidDungeon(dungeonId, questId, difficulty, rooms, draw, requiredCharacter,
                 retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice,
                 shared, partyFirstKey, partyInstance, partyAdmission);
         var (expected, epoch, selection) = owner.Execute(() => (Ready && (retry is not null || pendingDungeonContinuation is null) && CanEnterFormalDungeon(retry, partyAdmission) &&
@@ -474,7 +474,7 @@ internal sealed partial class GameSession
             (expected.Fatigue is not { } storedFatigue || storedFatigue.Remaining < entry.StartFatigue ||
                 FatigueForClient(expected).Remaining < entry.StartFatigue))
             return RejectFormal("start-fatigue-insufficient:" + entry.StartFatigue);
-        var ordinaryReturn = entry.AntonRaid is not null ? CurrentDungeonSelection?.ReturnPosition : entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
+        var ordinaryReturn = entry.RaidEntry is not null ? CurrentDungeonSelection?.ReturnPosition : entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");
         QuestDropResources? questDrops = null;
@@ -631,7 +631,7 @@ internal sealed partial class GameSession
         }
         if (!authority.BindTo(run!)) return RejectFormal("run-authority-bind-failed");
         var passiveGrounds = new List<DungeonGroundObject>();
-        if (passiveDrops is not null && !entry.IsAltar && entry.AntonRaid is null)
+        if (passiveDrops is not null && !entry.IsAltar && entry.RaidEntry is null)
         {
             try
             {
@@ -695,7 +695,7 @@ internal sealed partial class GameSession
     {
         if (HasMultiplePartyMembers?.Invoke() == true) return null;
         if (HasPendingTownQuestCommit || !Ready || SelectionEpoch != prepared.SelectionEpoch || !ReferenceEquals(Selected,prepared.Character)) return null;
-        if (!CanInstallAntonDungeon(prepared.Dungeon.Entry)) return null;
+        if (!CanInstallRaidDungeon(prepared.Dungeon.Entry)) return null;
         if (prepared.Dungeon.Entry.IsClassExperience && (prepared.ClassExperienceSelection is not { IsClassExperience: true } ||
             !ReferenceEquals(CurrentDungeonSelection, prepared.ClassExperienceSelection))) return null;
         // 先持久预留本实例key/attempt；通知失败不重新安装或复用原实例身份。
@@ -903,13 +903,13 @@ internal sealed partial class GameSession
         var (expected,dungeon,epoch,identity,entry) = owner.Execute(() =>
             (Ready && Phase == SessionPhase.Loading ? Selected : null, formalDungeon, SelectionEpoch,
                 formalDungeon?.Run.Snapshot.Identity,formalDungeon?.Run.Entry));
-        if (expected is null || dungeon is null || identity is null || entry is null || !IsCurrentAntonDungeon(entry)) return null;
+        if (expected is null || dungeon is null || identity is null || entry is null || !IsCurrentRaidDungeon(entry)) return null;
         bool hasMatchingQuest = !entry.IsClassExperience && !entry.IsPractice && questCatalog is not null && expected.ActiveMainQuests.Any(active =>
             QuestHuntProgress.Bound(active,entry) && questCatalog.TryGet(active.QuestId,out var quest) &&
             QuestDungeonClearProgress.CountsInitializations(quest,entry));
         return owner.Execute(() =>
         {
-            if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading || !IsCurrentAntonDungeon(dungeon.Entry) ||
+            if (!Ready || !ReferenceEquals(Selected,expected) || SelectionEpoch != epoch || Phase != SessionPhase.Loading || !IsCurrentRaidDungeon(dungeon.Entry) ||
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
                 dungeon.Run.HasScriptedTransit && ScriptedNavigationBlocked(dungeon) ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
@@ -1271,17 +1271,18 @@ internal sealed partial class GameSession
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRun();
         if (dungeon.Run.TagEvildomLife is not null) tagEvildomPair = null;
+        var raidChange = ReleaseCurrentRaidDungeon();
         formalDungeon = null;
         CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
         CancelDungeonContinuation();
         pendingQuestReplay = null;
         SetState(SessionPhase.Town);
-        return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch);
+        return new TownTravelReceipt(Selected, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange };
     });
 
     public bool CanPublishFormalDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>
         Ready && owner.Generation == receipt.Generation && SelectionEpoch == receipt.SelectionEpoch &&
-        ReferenceEquals(Selected, receipt.Character) && formalDungeon is { } dungeon && dungeon.Run.Snapshot.Identity == receipt.Snapshot.Identity && IsCurrentAntonDungeon(dungeon.Entry) &&
+        ReferenceEquals(Selected, receipt.Character) && formalDungeon is { } dungeon && dungeon.Run.Snapshot.Identity == receipt.Snapshot.Identity && IsCurrentRaidDungeon(dungeon.Entry) &&
         (receipt.ScriptedReturnId == Guid.Empty || CanUseScriptedReturn(dungeon) && dungeon.Run.MatchesScriptedReturn(receipt.ScriptedReturnId)));
 
     public bool CanPublishFormalDungeonRejection(Character character, long epoch, SessionPhase phase,
