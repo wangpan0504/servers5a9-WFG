@@ -56,6 +56,56 @@ internal static class IndependentAttributePairTests
             That(result.Accepted && cube!.ResultItemId == expected && random.Bounds.SequenceEqual(new long[] { 11, 11 }) &&
                 result.Plan!.After.AccountWallet.Get(CurrencyKind.ClearCube) == 0, "实际395资源保持原账号无色10及独立两抽结果");
         }
+        var bundled = IndependentAttributePairCatalog.Load(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "rules.json"),
+            resources.Items, resources.Boosters, resources.LimitCubes, resources.Enchantments, resources.EpicPieces, resources.Contracts,
+            id => CurrencyWallet.RewardKind(id) is not null, useBundledDefault: true);
+        That(bundled.ValidatedFamilies == 1, "实际PVF与单文件内嵌默认规则完整匹配");
+        var service = new InventoryLimitCubeService(resources.Items, resources.LimitCubes, resources.EpicPieces, resources.Contracts,
+            resources.Boosters.DirectActivationItems, _ => 0, new() { IgnoreCashShopAbsoluteExpiration = true }, bundled);
+        var definition = resources.LimitCubes.Get(TicketId)!;
+        foreach (var target in definition.Targets)
+        {
+            var role = RerollRole(target.ItemId);
+            var result = service.Apply(role, new(82, target.ItemId, 84), out var receipt, out _, Now);
+            That(result.Accepted && definition.Results.Any(row => row.ItemId == receipt!.ResultItemId) &&
+                result.Plan!.After.Find(new(InventoryListType.Main, 84))?.Core.Count == 2 &&
+                result.Plan.After.AccountWallet.Get(CurrencyKind.ClearCube) == 0,
+                "实际券覆盖全部66种目标，含现场319，三张券只扣一张并扣十无色");
+        }
+        var original = RerollRole(490705319);
+        foreach (var (role, targetId, reason) in new[]
+        {
+            (original with { Inventory = original.Inventory with
+                { AccountWallet = AccountWallet.Empty.Set(CurrencyKind.ClearCube, 9) } }, 490705319, "materials"),
+            (RerollRole(BoosterId), BoosterId, "target-condition"),
+            (ChangeTarget(original, core => core with { EquipmentLockId = 1 }), 490705319, "item-state"),
+            (ChangeTarget(original, core => core with { ExpireTime = checked((int)Now.ToUnixTimeSeconds() - 1) }), 490705319, "item-state")
+        })
+        {
+            string before = JsonSerializer.Serialize(role);
+            var result = service.Apply(role, new(82, targetId, 84), out var receipt, out var rejection, Now);
+            That(!result.Accepted && result.Plan is null && receipt is null && rejection == reason &&
+                JsonSerializer.Serialize(role) == before, "实际资源材料不足、不匹配、安全锁和过期仍无消耗拒绝");
+        }
+        foreach (int petId in new[] { 400990444, 400990445, 400990446, 400990447 })
+        {
+            var template = resources.Items.Get(petId);
+            var pet = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Pet, 0), Core(petId)) with
+                { Uid = 2, Core = Core(petId) with { Value = 2, ExpireTime = 0 } };
+            var role = Role([new(1, new(InventoryListType.Main, 82), Core(490705319)), pet]);
+            var result = new InventoryEnchantmentService(resources.Items, resources.Enchantments).Plan(role,
+                new(new(InventoryListType.Main, 82), pet.Position, 0), Now.ToUnixTimeSeconds());
+            That(result.Accepted && result.Plan!.After.Find(pet.Position)?.Core.EnchantCardId == 490705457 &&
+                result.Plan.After.Find(new(InventoryListType.Main, 82)) is null,
+                "现场319宝珠在四个PVF成年宠物白名单目标上均可右键安装，不依赖重掷策略");
+        }
+        Character RerollRole(int targetId) => Role([new(1, new(InventoryListType.Main, 84), Core(TicketId) with { Value = 3 }),
+            new(2, new(InventoryListType.Main, 82), Core(targetId))]);
+        static Character ChangeTarget(Character role, Func<ItemCore, ItemCore> change) => role with
+        {
+            Inventory = role.Inventory with { Items = role.Inventory.Items.Select(row => row.Position.Index == 82
+                ? row with { Core = change(row.Core) } : row).ToImmutableArray() }
+        };
         ItemCore Core(int id) => InventoryRewardGrantService.Create(resources.Items.Get(id), utcNow: Now, shopExpiration: true);
         Character Role(ImmutableArray<InventoryItem> rows) => new(1, 0, "PairResource", 0, new(1, 0, 10, 10), null)
         { Level = 95, Inventory = new(rows) { Expansion = 24, AccountWallet = AccountWallet.Empty.Set(CurrencyKind.ClearCube, 10) } };
@@ -102,8 +152,32 @@ internal static class IndependentAttributePairTests
             }
         Batch(fixture);
         FailClosed(fixture);
+        BundledConfiguration(fixture);
         InvalidFamilies();
         Console.WriteLine($"PASS {Count - checks} 独立属性两抽、完整卡向量、批量与必需策略失败闭合断言");
+    }
+
+    static void BundledConfiguration(Fixture fixture)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "attribute-pairs-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(directory, "rules.json");
+        IndependentAttributePairCatalog Load() => IndependentAttributePairCatalog.Load(path, fixture.Items,
+            fixture.Boosters, fixture.Cubes, fixture.Enchantments, fixture.Pieces, fixture.Contracts,
+            id => CurrencyWallet.RewardKind(id) is not null, useBundledDefault: true);
+        try
+        {
+            That(Load().ValidatedFamilies == 1, "单文件无Resources目录时使用同版本内嵌规则并完成全部资源校验");
+            Directory.CreateDirectory(directory);
+            That(Load().ValidatedFamilies == 1, "外部目录存在但规则文件缺失时仍可加载内嵌规则");
+            File.WriteAllText(path, "{");
+            That(Load().ValidatedFamilies == 0, "外部坏配置不能通过内嵌规则回退绕过失败闭合");
+            File.WriteAllText(path, Change(fixture.Json, root => root[0]!["Enabled"] = false));
+            That(Load().ValidatedFamilies == 0, "外部显式禁用优先于内嵌默认规则");
+            File.WriteAllText(path, fixture.Json);
+            using var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            That(Load().ValidatedFamilies == 0, "外部文件不可读时不能回退内嵌规则");
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
 
     static void Batch(Fixture fixture)

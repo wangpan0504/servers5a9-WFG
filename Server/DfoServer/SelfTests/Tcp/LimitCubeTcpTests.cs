@@ -126,6 +126,11 @@ internal static class LimitCubeTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] &&
             fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "变更券事务完成后数据库完整且无孤立实例");
+        await fixture.StopAsync();
+        That(fixture.Events().Any(row => row.GetProperty("Kind").GetString() == "startup" &&
+            row.GetProperty("Detail").TryGetProperty("Stage", out var stage) && stage.GetString() == "Independent attribute pairs" &&
+            row.GetProperty("Detail").GetProperty("ValidatedFamilies").GetInt32() == 1),
+            "Runtime完成必需属性族装配；停服后读取日志，不与写入句柄争用");
 
         InventorySnapshot BuildInventory()
         {
