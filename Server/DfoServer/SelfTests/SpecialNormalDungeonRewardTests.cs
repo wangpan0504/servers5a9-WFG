@@ -78,9 +78,27 @@ internal static class SpecialNormalDungeonRewardTests
         {
             var definition = dungeons.Get(id);
             var (position, done) = Entrance(id);
+            if (definition.IsOrdinaryLuke)
+            {
+                That(done.Contains(4872),"六白图原选图前置为4872，不借团本2903");
+                using var missing = new QuestSceneTests.Fixture(resources.Towns,resources.Characters,resources.Learning,
+                    growth,resources.Quests,false,95,done.Where(quest => quest != 4872).ToArray(),position:position);
+                string before = JsonSerializer.Serialize(missing.Read());
+                That(missing.Session.EnterFormalDungeon((uint)id,0,2,dungeons,rooms,monsters,items.Items,
+                    pieces:items.EpicPieces,prepareDrops:value => drops.PrepareEntry(value)) is null &&
+                    missing.Session.LastFormalDungeonRejection == "selection-quest-required:4872" &&
+                    JsonSerializer.Serialize(missing.Read()) == before,"缺白图前置时拒绝且不扣资产/疲劳");
+            }
             using var fixture = new QuestSceneTests.Fixture(resources.Towns, resources.Characters, resources.Learning,
                 growth, resources.Quests, false, 95, done.ToArray(), position: position,
                 items: definition.OrdinaryEntryTicket is { } ticket ? [(ticket.ItemId, ticket.Count)] : []);
+            if (id is >= 5101 and <= 5106)
+            {
+                fixture.Session.ReturnToRoster();
+                fixture.Sql("UPDATE characters SET revive_coins=14");
+                fixture.Session.Select(0,resumeTown:true);
+                fixture.Session.MarkReady();
+            }
             Play(fixture, id);
         }
 
@@ -92,6 +110,8 @@ internal static class SpecialNormalDungeonRewardTests
             long beforeFee = fee is { } cost ? CountItem(cost.ItemId) : 0;
             var random = new Random(id);
             bool rollbackChecked = false;
+            bool lukeRevival = id is >= 5101 and <= 5106 && questId == 0;
+            int revivals = 0;
             var entry = fixture.Session.EnterFormalDungeon((uint)id, questId, difficulty, dungeons, rooms, monsters, items.Items,
                 draw: bound => id == 400000016 && bound == 1000000 ? 0 : random.Next(bound),
                 pieces: items.EpicPieces, prepareDrops: value => drops.PrepareEntry(value));
@@ -103,6 +123,8 @@ internal static class SpecialNormalDungeonRewardTests
             {
                 var loaded = fixture.Session.CompleteFormalDungeonLoading()!;
                 That(loaded is not null, $"{id}/{point}正式加载");
+                if (lukeRevival && (point == route[0] || point == route[^1]))
+                    for (int count = 0; count < 6; count++) ReviveOnce();
                 foreach (var monster in loaded!.Monsters.Monsters.Where(row => row.IsBlocking && row.CanReportDeath && !row.IsFriendly)
                     .OrderBy(row => row.IsBoss).ToArray())
                 {
@@ -184,7 +206,47 @@ internal static class SpecialNormalDungeonRewardTests
             settled = JsonSerializer.Serialize(fixture.Read());
             fixture.Session.SelectFormalDungeonPaidCard(1, 0, cards);
             That(JsonSerializer.Serialize(fixture.Read()) == settled, "重复付费牌不扣费、不重抽");
+            if (lukeRevival)
+            {
+                That(revivals == 12 && fixture.Session.ReportFormalCharacterDeath() is not null,
+                    $"{id}跨房保留十二次复活后仍可报告死亡");
+                string before = JsonSerializer.Serialize(fixture.Read());
+                for (int repeat = 0; repeat < 2; repeat++)
+                    That(fixture.Session.ReviveFormalCharacter(fixture.Read().Id) is { Accepted:false } &&
+                        JsonSerializer.Serialize(fixture.Read()) == before,
+                        $"{id}第十三次及重复复活被拒绝，余额仍有两币且资产不变");
+            }
             That(fixture.Session.ReturnFromFormalDungeon() is not null, $"{id}领奖后回城");
+            if (lukeRevival)
+            {
+                That(fixture.Session.EnterFormalDungeon((uint)id,0,2,dungeons,rooms,monsters,items.Items,
+                    pieces:items.EpicPieces,prepareDrops:value => drops.PrepareEntry(value)) is not null &&
+                    fixture.Session.CompleteFormalDungeonLoading() is not null,
+                    $"{id}回城后新Run重新入场");
+                ReviveOnce();
+                That(fixture.Read().Inventory.ReviveCoins == 1,"新Run不继承旧复活次数，真实余额继续扣一币");
+                That(fixture.Session.ReturnFromFormalDungeon() is not null,"新Run复活后正常回城");
+            }
+
+            void ReviveOnce()
+            {
+                That(fixture.Session.ReportFormalCharacterDeath() is not null,"已加载房间报告真实角色死亡");
+                string before = JsonSerializer.Serialize(fixture.Read());
+                int coins = fixture.Read().Inventory.ReviveCoins;
+                if (revivals == 11)
+                {
+                    fixture.Sql("CREATE TRIGGER luke_revive_fail BEFORE INSERT ON currency_audit_log BEGIN SELECT RAISE(ABORT,'luke revive rollback'); END");
+                    Reject<SqliteException>(() => fixture.Session.ReviveFormalCharacter(fixture.Read().Id),"第十二次复活晚审计失败");
+                    That(JsonSerializer.Serialize(fixture.Read()) == before,"失败不扣币、不提前占用第十二次资格");
+                    fixture.Sql("DROP TRIGGER luke_revive_fail");
+                }
+                That(fixture.Session.ReviveFormalCharacter(fixture.Read().Id) is { Accepted:true } &&
+                    fixture.Read().Inventory.ReviveCoins == coins-1,"合法复活实际扣一币");
+                revivals++;
+                string saved = JsonSerializer.Serialize(fixture.Read());
+                That(fixture.Session.ReviveFormalCharacter(fixture.Read().Id) is null &&
+                    JsonSerializer.Serialize(fixture.Read()) == saved,"活角色重复复活不扣币或占次数");
+            }
         }
 
         void VerifyPreyPrerequisite()

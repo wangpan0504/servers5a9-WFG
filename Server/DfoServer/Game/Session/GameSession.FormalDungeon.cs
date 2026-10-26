@@ -293,6 +293,10 @@ internal sealed partial class GameSession
             // 频道专属城镇的选图副本（超时空之战 400000016 的 [boss map] 6 0 只写 `map`）按客户端规则把 Boss 坐标格当 Boss 图；其他副本不变。
             bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute,tagEvildom:tagEntry?.Admission,tagMaze:tagEntry?.MazeOrdinal))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
+        // 普通卢克目前只证实单人Run额度；组队共享/个人语义未闭合，不把十二次解释成每人十二次。
+        // 祭坛、绝望之塔等原有限额仍由EntryPlan设置，不受这项窄范围投影影响。
+        if (!partyAdmission && entry!.IsOrdinary && catalog.Get(checked((int)dungeonId)) is { IsOrdinaryLuke:true } luke)
+            entry = entry with { CoinLimit = luke.CoinLimit };
         if (partyAdmission && (entry!.Maze.IsGriefTower || entry.IsAltar || entry.IsDespair || entry.IsTournament))
             return RejectFormal("party-special-dungeon-unsupported");
         if (hellParty && entry!.HellParty is null && !entry.IsCosmo) return RejectFormal("hell-party-room-unavailable");

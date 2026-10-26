@@ -25,6 +25,14 @@ internal static class SpecialNormalDungeonEntryTests
         foreach (int id in DungeonIds)
         {
             var definition = catalog.Get(id);
+            if (id is >= 5101 and <= 5106)
+            {
+                That(definition is { IsOrdinaryLuke:true,CoinLimit:12,StartFatigue:8,AllowsPractice:false,OrdinaryEntryTicket:null },
+                    "六白图原资源声明：十二币、八疲劳、禁止练习、无普通门票");
+                That(!(definition with { Id=5107 }).IsOrdinaryLuke &&
+                    !(definition with { Path="dungeon/luke/phase.dgn" }).IsOrdinaryLuke,
+                    "不能只凭卢克标记把团队副本或其他编号纳入白图限币策略");
+            }
             int choices = Math.Max(definition.Mazes.Count,definition.Mazes.SelectMany(maze => maze.MapSpecification ?? [])
                 .Select(map => map.CandidateIds.Count).DefaultIfEmpty(1).Max());
             var sourceMaps = definition.Mazes.SelectMany(maze => maze.MapSpecification ?? []).ToArray();

@@ -191,6 +191,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool DeclaresRequiredItem => RawSections.Any(row => row.Tag == "required item");
     public bool IsOrdinaryAnton => Marker("anton dungeon") && Marker("raid normal dungeon");
     public string? WarriorsDungeon { get; init; }
+    public bool IsOrdinaryLuke => Id is >= 5101 and <= 5106 &&
+        Path.StartsWith("dungeon/luke_normal/",StringComparison.OrdinalIgnoreCase) &&
+        Marker("normal luke dungeon") && Marker("raid normal dungeon");
     public bool IsNormalFiendwar => Id == 400000016 && WarriorsDungeon == "normalfiend";
     // 普通安徒恩保留完整消耗数量；第三列1为消耗，不能把数量8忽略成免费入场。
     public DungeonRequiredItemRow? OrdinaryEntryTicket => RequiredItemRows is [{ Count: > 0, Third: 1 } ticket] &&
