@@ -65,6 +65,7 @@ internal static class DungeonMapPoolTests
         ExplicitCandidates();
         LostLandResources();
         GriefResource();
+        // BossRush 的有效地图可以规划，类型大小写和 Boss 格投影开关不改变原有格子内终点。
         // BossRush已有地图规划不等于专用计时/结果流程；合法几何保留，缺资源仍不能补图。
         var ordinary = definition with { Mazes = [result] };
         var ready = new Character(99,0,"BossRushBoundary",0,new(38,2,1085,249),null) { Level = 95 };
@@ -73,10 +74,17 @@ internal static class DungeonMapPoolTests
         foreach (bool bossCell in new[] { false,true })
         {
             var rush = ordinary with { DungeonType = type };
-            That(DungeonEntryPlan.TryCreate(rush,ready,10,0,0,out var planned,out string reason,
-                    bossCellFromBossMap:bossCell) && reason == "resource-plan-ready" &&
-                planned is not null && planned.StartMap == result.MapSpecification![0] && planned.BossMap == result.MapSpecification[1],
-                "BossRush合法格子内路线保留原资源起终点，大小写与Boss格投影不改变路径");
+            int resolved = 0;
+            That(DungeonEntryPlan.TryCreate(rush,ready,10,0,0,out var entry,out string reason,
+                    resolveMaze: candidate =>
+                    {
+                        resolved++;
+                        return candidate;
+                    },bossCellFromBossMap:bossCell) &&
+                entry is { StartMap.Id: 100, BossMap.Id: 201 } && reason == "resource-plan-ready" &&
+                resolved == 1 && ReferenceEquals(entry.Maze,result) && entry.BossMap.Position == new DungeonPoint(1,0) &&
+                entry.StartMap == result.MapSpecification![0] && entry.BossMap == result.MapSpecification[1],
+                "BossRush完整几何只解析一次，保留已声明的格子内Boss与共享资源身份");
             foreach (var invalid in new[] { result with { MapSpecification = null }, result with { Width = 0, Height = 0 } })
                 That(!DungeonEntryPlan.TryCreate(rush with { Mazes = [invalid] },ready,10,0,0,out var rejected,out string rejectedReason,
                         bossCellFromBossMap:bossCell) && rejected is null && rejectedReason == "boss-rush-room-contract-unproven",
