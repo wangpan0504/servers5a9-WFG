@@ -143,6 +143,8 @@ internal static partial class FormalDungeonTcpTests
         {
             peer.Expect(0, 550, [0xFE, 0x2A, 0, 0, blood, 0]);
             peer.Expect(0, 550, [0xFF, 0x2A, 0, 0, ultimate, 0]);
+            peer.ExpectGriefTowerEnterCounts();
+            That(peer.DungeonEnterCounts[5115] == (1, 0), "两祭坛入场与跨日不消耗悲叹基础挑战");
         }
         byte[] Request()
         {

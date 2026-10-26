@@ -292,6 +292,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         }
         if (receipt.SpecialEntry?.Kind is DungeonSpecialEntryKind.Blood or DungeonSpecialEntryKind.Ultimate)
             await DungeonEnterCountProjection.RefreshAsync(context, dungeons, Guard);
+        else if (receipt.GriefAdmission is not null)
+            await DungeonEnterCountProjection.RefreshGriefAsync(context, dungeons, Guard);
         return CommandResult.Handled;
 
         async Task<CommandResult> RejectAsync()
