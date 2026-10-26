@@ -6,6 +6,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Session;
@@ -96,6 +97,52 @@ internal static class DisjointTests
         var tooHigh = current with { Inventory = new([new(1, Bag(3), InventoryRewardGrantService.Create(catalog.Get(10117))), new(2, Bag(4), tool)]) };
         That(!service.Disjoint(tooHigh, request with { ToolSlot = 4 }, out _).Accepted && service.Disjoint(tooHigh, request, out _).Accepted,
             "portable level cap does not become a blanket NPC level limit");
+        // 保留工单六个原始样本，避免用任意一件史诗代替90/95级套装的资源合同。
+        foreach (var (id, level, pieceId) in new[]
+        {
+            (100060651, 95, 10305633), (100160525, 90, 10300751), (100110584, 90, 10300741),
+            (100260565, 90, 10300771), (100210549, 90, 10300761), (100060598, 90, 10300731)
+        })
+        {
+            var template = catalog.Get(id);
+            That(template.Kind == ItemKind.Equipment && template.Rarity == 4 && template.MinimumLevel == level &&
+                template.Grade == level + 6 && template.AttachType.Trim('`', ' ', '\r', '\n') == "[trade]" && !template.DisjointForbidden &&
+                template.Expiration == new ItemExpiration() && config.PieceResults[id] == pieceId &&
+                itemResources.EpicPieces.ByPiece[pieceId].EquipmentId == id && !config.EventResults.Contains(id) &&
+                !config.IndependentResults.ContainsKey(id), "工单装备仅追加对应碎片，无禁止标记或活动分支：" + id);
+            var grant = InventoryRewardGrantService.TryGrantBatch(current with { Inventory = InventorySnapshot.Empty },
+                [new(id, 1)], catalog, itemResources.GoldLimits, itemResources.EpicPieces);
+            var granted = grant.Plan!.After.Items.Single().Core;
+            var dropped = DungeonDropCreation.Create(template, 1, _ => 123, DateTimeOffset.UtcNow);
+            That(grant.Accepted && granted == InventoryRewardGrantService.Create(template) &&
+                dropped.Value == 123 && (dropped with { Value = granted.Value }) == granted,
+                "GM直接入包与普通购买共用创建策略，普通掉落仅改变品级种子：" + id);
+            foreach (var core in new[] { granted, dropped, granted with
+            {
+                Attr = 12, Durability = 0, SealFlag = 1, TradeRestriction = 2,
+                GenuineUpgrade = 3, AmplifyType = 1, AmplifyValue = 25
+            } })
+            {
+                var source = current with { Inventory = new([new(1, Bag(3), core)]) };
+                var decomposed = service.Disjoint(source, request, out var reportedReceipt);
+                That(decomposed.Accepted && decomposed.Plan!.After.Find(Bag(3)) is null &&
+                    reportedReceipt!.Rewards.Select(row => row.ItemId).SequenceEqual(new[] { 3037, 10158124, pieceId }) &&
+                    reportedReceipt.Rewards.Single(row => row.ItemId == pieceId) == new DisjointReward(-1, pieceId, 110) &&
+                    decomposed.Plan.After.EpicPieces.Get(itemResources.EpicPieces.ByPiece[pieceId].Index) == 110 &&
+                    decomposed.Plan.After.Items.All(item => item.Core.ItemId != pieceId),
+                    "原始装备及品级/耐久/强化/净化增幅/封装/交易计数变化均可NPC分解并完整入图鉴：" + id);
+            }
+            var prohibited = current with { Inventory = new([new(1, Bag(3), granted with { AmplifyType = 0x80 })]) };
+            That(!service.Disjoint(prohibited, request, out _).Accepted,
+                "原始史诗仍拒绝未净化红字，不因碎片支持绕过资格：" + id);
+        }
+        var forbidden = catalog.Get(100050791);
+        var forbiddenResult = service.Disjoint(current with
+        {
+            Inventory = new([new(1, Bag(3), InventoryRewardGrantService.Create(forbidden))])
+        }, request, out var forbiddenReceipt);
+        That(forbidden.DisjointForbidden && !forbiddenResult.Accepted && forbiddenResult.Plan is null && forbiddenReceipt is null,
+            "真实PVF禁止分解的限期装备仍整笔拒绝");
         var fullWallet = current with { Inventory = current.Inventory with { AccountWallet = AccountWallet.Empty.Set(CurrencyKind.ClearCube, int.MaxValue) } };
         That(!service.Disjoint(fullWallet, request with { ToolSlot = 4 }, out _).Accepted && fullWallet.Inventory.Find(Bag(3))!.Core == coat,
             "wallet overflow rejects whole plan rather than clipping reward");

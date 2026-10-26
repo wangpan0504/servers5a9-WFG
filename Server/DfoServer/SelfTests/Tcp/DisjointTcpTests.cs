@@ -4,6 +4,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
+using DfoServer.Network.Management;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -18,7 +19,7 @@ internal static class DisjointTcpTests
             itemResources.Disjoint.EventResults.Count == 4 && itemResources.EpicPieces.Entries.All(entry =>
                 itemResources.Disjoint.PieceResults[entry.EquipmentId] == entry.PieceId),
             "匹配资源338独立和1172片映射完整，4活动仍单列拒绝");
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "disjoint"), resources: resources);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "disjoint"), gm: true, resources: resources);
         var characters = resources.Characters;
         var towns = resources.Towns;
         var repo = new CharacterRepository(fixture.Database);
@@ -46,6 +47,22 @@ internal static class DisjointTcpTests
                 totals.Concat(pieceTotals).Select(pair => new InventoryReward(pair.Key, pair.Value)).ToArray(), itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces));
         }
         await fixture.StartAsync();
+        // 走GM的真实命令与存档入口，不能用手工种默认Core替代发放链路。
+        int[] reportedIds = [100060651, 100160525, 100110584, 100260565, 100210549, 100060598];
+        foreach (int id in reportedIds)
+        {
+            int count = id == 100060651 ? 2 : 1;
+            That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, $"grant DisjointTcp {id} {count} 0 0 direct", out string reply) &&
+                reply.StartsWith("OK ", StringComparison.Ordinal), "GM直接发放工单装备成功：" + id + " " + reply);
+        }
+        That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "grant DisjointTcp 100060651 1 0 0 mail", out string mailReply) &&
+            mailReply.StartsWith("OK ", StringComparison.Ordinal), "GM邮件发放95级原始样本成功：" + mailReply);
+        InventoryItem[] reportedSources;
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            reportedSources = repo.List(owner).Single().Inventory.Items.Where(item => reportedIds.Contains(item.Core.ItemId)).ToArray();
+        That(reportedSources.Length == 7 && reportedSources.Select(item => item.Uid).Distinct().Count() == 7 &&
+            reportedSources.All(item => item.Core == InventoryRewardGrantService.Create(itemResources.Items.Get(item.Core.ItemId))),
+            "GM六种七件装备保存独立UID与完整默认核心，无额外来源、交易、期限或未净化标记");
         using (var peer = Open(fixture))
         {
             Send(peer, 3, 4);
@@ -85,6 +102,26 @@ internal static class DisjointTcpTests
             Receive(peer, 14, -1, 0, [3037, 10158124, 10093974]);
             Send(peer, 15, -1);
             Receive(peer, 15, -1, 0, [3037, 3332, 10099775, 10161538]);
+            foreach (var sourceItem in reportedSources)
+            {
+                int pieceId = itemResources.Disjoint.PieceResults[sourceItem.Core.ItemId];
+                Send(peer, sourceItem.Position.Index, -1);
+                Receive(peer, sourceItem.Position.Index, -1, 0, [3037, 10158124, pieceId]);
+            }
+            var mailed = peer.Mailbox.SelectMany(packet => MailboxTcpTests.ReadList(packet).Summaries)
+                .Single(row => row.ItemId == 100060651);
+            That(mailed.ItemId == 100060651, "选角恢复GM邮件中的95级原始装备");
+            peer.Send(95, Build(writer => { writer.Write(1); writer.Write(mailed.ClaimId); }));
+            peer.Expect(1, 95, Build(writer =>
+            {
+                writer.Write((byte)1); writer.Write(1); writer.Write(mailed.MailId); writer.Write(mailed.ClaimId); writer.Write(0);
+            }));
+            var claimed = peer.Expect(0, 14).Body;
+            That(claimed.Length == 126 && U32(claimed, 5) == 100060651 && U32(claimed, 9) == InventoryRewardGrantService.InitialQuality,
+                "GM邮件真实领取保持装备ID与默认品级");
+            short mailedSlot = (short)U16(claimed, 3);
+            Send(peer, mailedSlot, -1);
+            Receive(peer, mailedSlot, -1, 0, [3037, 10158124, 10305633]);
             peer.Barrier();
         }
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -96,8 +133,10 @@ internal static class DisjointTcpTests
                 That(CurrencyWallet.RewardKind(pair.Key) is { } kind ? CurrencyWallet.Get(current.Inventory, kind) == pair.Value :
                     current.Inventory.Items.Where(item => item.Core.ItemId == pair.Key).Sum(item => item.Core.Count) == pair.Value,
                     "database result equals exact received increments for " + pair.Key);
-            That(current.Inventory.EpicPieces.Get(epic.Index) == pieceTotals[epic.PieceId] &&
-                current.Inventory.Items.All(item => item.Core.ItemId != epic.PieceId), "图鉴绝对余额持久化且Main不存在伪碎片实体");
+            That(pieceTotals.All(pair => current.Inventory.EpicPieces.Get(itemResources.EpicPieces.ByPiece[pair.Key].Index) == pair.Value) &&
+                current.Inventory.Items.All(item => !pieceTotals.ContainsKey(item.Core.ItemId)) &&
+                reportedSources.All(sourceItem => current.Inventory.Items.All(item => item.Uid != sourceItem.Uid)),
+                "七件直接发放与一件邮件装备均已删除，全部图鉴绝对余额持久化且Main不存在伪碎片实体");
             var after = current.Inventory with { Items = current.Inventory.Items.Add(new(0, Bag(3), coat)).Add(new(0, Bag(4), tool)) };
             repo.CommitInventory(owner, current, new(current.Inventory, after, "disjoint_fixture_restore"));
         }
@@ -211,13 +250,17 @@ internal static class DisjointTcpTests
                 int target = Entry(delta, slot);
                 That(U32(delta, target + 2) == item && U32(delta, target + 6) == totals[item], "ACK increment then exact committed total");
             }
-            if (expectedItems.Contains(epic.PieceId))
-                CheckPieces(peer.Expect(0, 1152).Body, 1);
+            foreach (int pieceId in expectedItems.Where(itemResources.EpicPieces.ByPiece.ContainsKey))
+                CheckPieces(peer.Expect(0, 1152).Body, 1, pieceId);
         }
-        void CheckPieces(byte[] packet, byte mode)
+        void CheckPieces(byte[] packet, byte mode, int? changedPiece = null)
         {
-            That(packet.Length == 13 && packet[0] == mode && U32(packet, 1) == 1 && U32(packet, 5) == epic.PieceId &&
-                U32(packet, 9) == pieceTotals[epic.PieceId], "NOTI1152按片目录键发送最终绝对余额，重连不重加本次增量");
+            var expected = changedPiece is { } id ? new Dictionary<int, int> { [id] = pieceTotals[id] } : pieceTotals;
+            int count = (int)U32(packet, 1);
+            That(packet.Length == 5 + count * 8 && packet[0] == mode && count == expected.Count &&
+                Enumerable.Range(0, count).Select(index => (int)U32(packet, 5 + index * 8)).ToHashSet().SetEquals(expected.Keys) &&
+                Enumerable.Range(0, count).All(index => U32(packet, 9 + index * 8) == expected[(int)U32(packet, 5 + index * 8)]),
+                "NOTI1152按片目录键发送最终绝对余额，重连不重加本次增量");
         }
         void CheckWallet(byte[] full)
         {
