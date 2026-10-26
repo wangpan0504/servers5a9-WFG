@@ -18,10 +18,11 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     WeeklyDungeonEntry? Weekly = null, GriefTowerAdmission? Grief = null)
 {
     public DungeonSpecialEntry? Special { get; init; }
+    public DazzlementTowerAdmission? Dazzlement { get; init; }
     public int DungeonId { get; init; }
     public DungeonEntryPlan? OrdinaryLukeEntry { get; init; }
     public OperationHopeAdmission? Hope { get; init; }
     public DungeonEntryIncount? Incount { get; init; }
     public DfoServer.Game.TagEvildom.TagEvildomAdmission? TagEvildom { get; init; }
-    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Grief is null && Hope is null && Incount is null && TagEvildom is null && OrdinaryLukeEntry is null;
+    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Incount is null && TagEvildom is null && OrdinaryLukeEntry is null;
 }

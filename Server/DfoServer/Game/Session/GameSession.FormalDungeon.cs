@@ -82,6 +82,7 @@ internal sealed partial class GameSession
         // 入场代价：DungeonIncountInfo 角色/账号次数与频道专属城镇 [required item] 消耗，入场提交时同一事务扣除。
         public DungeonEntryCost? ChannelCost { get; init; }
         public DungeonSpecialEntry? SpecialEntry { get; init; }
+        public DazzlementTowerAdmission? Dazzlement { get; init; }
         public AltarSettlementState? AltarSettlement { get; set; }
         public DespairSettlementState? DespairSettlement { get; set; }
         // 实验性：波次怪"带奖励"的掉落计划；死亡时若它是本波次最后一只存活者则用它替换 DropPlans 里的普通计划。
@@ -148,6 +149,16 @@ internal sealed partial class GameSession
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
         if (expected is null || expected.DungeonState is null || !partyAdmission && HasMultiplePartyMembers?.Invoke() == true)
             return RejectFormal("session-not-ready-or-no-dungeon-state");
+        DazzlementTowerAdmission? dazzlement = null;
+        if (dungeonId <= int.MaxValue && catalog.DungeonPath((int)dungeonId)?.StartsWith("dungeon/towers/towerofdazzlement", StringComparison.Ordinal) == true &&
+            catalog.Get((int)dungeonId).IsDazzlementTower)
+        {
+            if (questId != 0 || difficulty != 0 || practice || classExperience || hellParty || hellLegend || sealDoor || partyAdmission)
+                return RejectFormal("dazzlement-mode-conflict");
+            dazzlement = DazzlementTowerAdmission.At(IncountNow());
+            if (repository.LoadDazzlementTower(owner).Rejection(expected.Id, dazzlement) is { } reason)
+                return RejectFormal(reason);
+        }
         var tagEntry = dungeonId is 9608 or 400000095 ? CurrentTagEvildomSelection(expected, epoch, dungeonId) : null;
         if (dungeonId is 9608 or 400000095 && (tagEntry is null || questId != 0 || difficulty != 0 || retry is not null ||
             practice || classExperience || hellParty || hellLegend || sealDoor || partyAdmission)) return RejectFormal("tag-evildom-selection-required");
@@ -398,7 +409,7 @@ internal sealed partial class GameSession
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
             // 普通入场票已覆盖相同物品时，频道代价只保留次数；超星空通行证规划字段仍完整传入提交阶段。
             Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { TagEvildomEntry = tagEntry, HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
-                CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry,
+                CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry, Dazzlement = dazzlement,
                 ChannelCost = channelCost is { Consume: not null } && entry.EntryItem is not null ? channelCost with { Consume = null } : channelCost } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
@@ -803,13 +814,16 @@ internal sealed partial class GameSession
             entryItems = entryItems is null ? new(before, after, "boss_selection_buff_entry") : entryItems.WithAfter(after);
         }
         ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : installing.Entry.StartFatigue;
+        if (installing.Dazzlement is { } dazzlement &&
+            (dazzlement != DazzlementTowerAdmission.At(IncountNow()) || repository.LoadDazzlementTower(owner).Rejection(character.Id, dazzlement) is not null))
+            return null;
         Character committed;
-        if (entryItems is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null)
+        if (entryItems is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             var entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                 new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                    prepared.Weekly,installing.GriefAdmission) { OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = hopeIncount, TagEvildom = installing.TagEvildomEntry?.Admission });
+                    prepared.Weekly,installing.GriefAdmission) { OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = hopeIncount, TagEvildom = installing.TagEvildomEntry?.Admission });
             committed = entryCommit.Character;
             if (hopeIncount is { Row: { } hopeRow, Increment: true } && entryCommit.IncountUsage is { } actualUsage)
                 enterCounts = [.. DungeonIncountPolicy.Views(hopeRow, actualUsage)];
@@ -842,7 +856,7 @@ internal sealed partial class GameSession
         SetState(SessionPhase.Loading);
         return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue, ChannelConsumedSlots = channelSlots, EnterCounts = enterCounts,
-            GriefAdmission = installing.GriefAdmission, SpecialEntry = installing.SpecialEntry };
+            GriefAdmission = installing.GriefAdmission, SpecialEntry = installing.SpecialEntry, Dazzlement = installing.Dazzlement };
     }
 
     bool CanReplaceSettledDungeon(FormalDungeon? dungeon, FormalDungeonReceipt receipt, bool partyAdmission = false) =>

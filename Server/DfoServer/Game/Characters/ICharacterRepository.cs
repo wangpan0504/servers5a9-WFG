@@ -96,6 +96,7 @@ internal interface ICharacterRepository
     DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge);
     Guid? LoadOrdinaryLukeDropEvent(AccountOwners.Lease owner, ushort characterId, int day, int sourceMonsterId);
     OrdinaryLukeProgress LoadOrdinaryLukeProgress(AccountOwners.Lease owner, ushort characterId);
+    DazzlementTowerState LoadDazzlementTower(AccountOwners.Lease owner);
     GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId);
     DungeonSpecialEntryUsage LoadSpecialEntryUsage(AccountOwners.Lease owner, Character expected, int day, DungeonSpecialEntryKind kind);
     DungeonDespairProgress LoadDespairProgress(AccountOwners.Lease owner, Character expected);

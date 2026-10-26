@@ -1241,6 +1241,15 @@ CREATE TABLE character_pvp_training_skills(
     before_revision INTEGER NOT NULL CHECK(before_revision>=0)
 );
 
+CREATE TABLE account_dazzlement_tower_bindings(
+  account TEXT NOT NULL,
+  slot INTEGER NOT NULL CHECK(typeof(slot)='integer' AND slot BETWEEN 1 AND 5),
+  week INTEGER NOT NULL CHECK(typeof(week)='integer' AND week BETWEEN 10000101 AND 99991231),
+  character_id INTEGER UNIQUE REFERENCES characters(id) ON DELETE SET NULL,
+  last_entry_day INTEGER NOT NULL CHECK(typeof(last_entry_day)='integer' AND last_entry_day>=0),
+  PRIMARY KEY(account,slot)
+);
+
 CREATE TABLE account_pvp_private_characters(
     account TEXT NOT NULL,
     job INTEGER NOT NULL CHECK(job BETWEEN 0 AND 15),

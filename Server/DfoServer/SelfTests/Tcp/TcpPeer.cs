@@ -57,6 +57,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[] AssaultDailyInfo { get; private set; } = [];
     public byte[][] EnterCounts { get; private set; } = [];
     public byte[] GriefTowerClearInfo { get; private set; } = [];
+    public byte[] DazzlementBindings { get; private set; } = [];
     public byte[] ItemMakingSkills { get; private set; } = [];
     public byte[] EpicProductionState { get; private set; } = [];
     public WirePacket[] CollectBoxes { get; private set; } = [];
@@ -219,9 +220,10 @@ internal sealed class TcpPeer : IDisposable
         // 选图附带的状态通知逐项校验后记录，550须成对且与本人真实账本一致；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
-                packet.Opcode == 550))
+                packet.Opcode is 550 or 1608))
         {
             if (packet.Opcode == 1536) AssaultDailyInfo = packet.Body;
+            else if (packet.Opcode == 1608) ExpectDazzlementBindings(packet);
             else if (packet.Opcode == 1303)
             {
                 GriefTowerClearInfo = packet.Body;
@@ -239,6 +241,29 @@ internal sealed class TcpPeer : IDisposable
         if (body is not null)
             TestCheck.Bytes(packet.Body, body, $"body ({kind},{opcode})");
         return packet;
+    }
+
+    internal void ExpectDazzlementBindings(WirePacket? information = null)
+    {
+        var packet = information ?? Expect(0, 1608);
+        var f = fixture ?? throw new InvalidOperationException("眩惑通知核验需要真实账本");
+        int week = DfoServer.Game.Dungeons.WeeklyDungeonPolicy.WeekKey(f.UtcNow);
+        var rows = f.Query("""
+            SELECT c.name,c.job FROM account_dazzlement_tower_bindings b
+            JOIN characters c ON c.id=b.character_id AND c.account=b.account
+            WHERE b.account=$p0 AND b.week=$p1 ORDER BY b.slot
+            """, f.Options.DevelopmentAccount, week);
+        TestCheck.That(rows.Length <= 5, "眩惑账号本周绑定名单最多五名");
+        TestCheck.Bytes(packet.Body, Build(w =>
+        {
+            w.Write((byte)rows.Length);
+            foreach (var row in rows)
+            {
+                byte[] name = names.GetBytes((string)row[0]);
+                w.Write(name.Length); w.Write(name); w.Write(Convert.ToByte(row[1]));
+            }
+        }), "1608完整名称/职业名单等于当前账号本周持久绑定");
+        DazzlementBindings = packet.Body;
     }
 
     // 已显式校验悲叹状态的选图用例使用同一真实账本断言，不交给27的兼容读取再次猜测前置包。
