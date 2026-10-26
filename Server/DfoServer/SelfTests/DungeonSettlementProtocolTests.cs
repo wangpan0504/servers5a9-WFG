@@ -15,6 +15,7 @@ internal static class DungeonSettlementProtocolTests
     public static void Run()
     {
         int before = Count;
+        ClearLimitTimeStartPacket();
         MembershipPackets();
         ExperiencePartOffsets();
         PartyReports();
@@ -280,6 +281,24 @@ internal static class DungeonSettlementProtocolTests
         body[4 + 7 * participants.Length] = participants.Max(member => member.Point);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(body.Length - 4), ClientBodyChecksum.Compute(body.AsSpan(0, body.Length - 4)));
         return body;
+    }
+
+    static void ClearLimitTimeStartPacket()
+    {
+        // 固定字节独立编码；600仅作为读宽样本，不代表D4000时长政策。
+        Bytes(DungeonPackets.ClearLimitTimeStart(600, 0xFEDCBA98),
+            Convert.FromHexString("5802000098BADCFE"), "603正文严格8B，秒值不提前乘1000，未知次项不截断或换序");
+        Bytes(DungeonPackets.ClearLimitTimeStart(0, 0),
+            Convert.FromHexString("0000000000000000"), "603显式零值保持原样，不代入默认时限或计数");
+        // 全宽仅证明序列化，不授予原生乘1000后的安全计时资格。
+        Bytes(DungeonPackets.ClearLimitTimeStart(uint.MaxValue, 0x80000001),
+            Convert.FromHexString("FFFFFFFF01000080"), "603两项均保留完整无符号32位线格式");
+        byte[] first = DungeonPackets.ClearLimitTimeStart(1, 2);
+        byte[] second = DungeonPackets.ClearLimitTimeStart(1, 2);
+        That(!ReferenceEquals(first, second), "603每次构包返回独立数组");
+        first[0] = 255;
+        Bytes(second,
+            Convert.FromHexString("0100000002000000"), "603每次独立构包，不共享可变正文");
     }
 
     static uint U32(byte[] bytes, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset));

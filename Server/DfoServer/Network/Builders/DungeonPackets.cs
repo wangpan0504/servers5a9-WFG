@@ -33,6 +33,17 @@ internal static class DungeonPackets
     public static byte[] BossEntranceOpened() => new byte[5];
     // 0237F740不读取正文；向场景发布0x26并把深渊完成字节+0x208置1。
     public static byte[] HellPartyCleared() => [];
+
+    // NOTI603：0237F460依次读取两个u32；首项按秒投影计时基值，次项语义未闭合。
+    // 两项均由调用方显式提供；这里只保留线格式，不选择时限、校验玩法范围或发送通知。
+    public static byte[] ClearLimitTimeStart(uint timerBaseSeconds, uint opaqueValue)
+    {
+        byte[] body = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, timerBaseSeconds);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), opaqueValue);
+        return body;
+    }
+
     public static byte[] Elevator(DungeonElevatorNotice notice) => [notice.Counter, notice.State];
 
     public static byte[] StoryPause(ushort characterId, byte state, byte type)
