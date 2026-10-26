@@ -6,6 +6,7 @@ using DfoServer.GameWorld.Items;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
+using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -130,6 +131,50 @@ internal static class EnchantmentTests
         var timed = Plan(timedRole, request);
         That(timed.Accepted && timed.Plan!.CharacterPrecondition!.Matches(timedRole, now + 9) &&
             !timed.Plan.CharacterPrecondition.Matches(timedRole, now + 10), "源或目标的有限期限在真实提交前再次核对");
+
+        PvfTokenDocument Pool(params object[] values)
+        {
+            var strings = new List<string> { "[index]", "[/index]" };
+            PvfToken Token(object value)
+            {
+                if (value is int integer) return new(0, integer);
+                strings.Add((string)value);
+                return new(6, strings.Count - 1);
+            }
+            return new([new(3, 0), .. values.Select(Token), new(3, 1)], index => strings[index]);
+        }
+        var pool = Pool(10015, 1, 1, 100, "[at priest]", 14, 1,
+            2, 1, 0, "[at priest]", 15, 1,
+            3, 2, 50, "[at priest]", 14, 2, "[at priest]", 15, 2,
+            1, 1, 999, "[at priest]", 109, 2);
+        string auto = $"[stackable type]\n`[auto enchant]` 0\n[string data]\n`[title name]`\n[/string data]\n" +
+            $"[random title enchant]\n10015\n[bead limited usable item]\n{gearId}\n[/bead limited usable item]\n";
+        var randomDefinition = new EnchantmentCatalog(_ => auto, new Dictionary<int, string> { [beadId] = "bead.stk" },
+            _ => pool).Get(beadId)!;
+        That(randomDefinition.RandomTitle is { TotalWeight: 150 } &&
+            randomDefinition.RandomTitle.Draw(_ => 0) == 0x0001271Fu &&
+            randomDefinition.RandomTitle.Draw(_ => 99) == 0x0001271Fu &&
+            randomDefinition.RandomTitle.Draw(_ => 100) == 0x0003271Fu &&
+            randomDefinition.RandomTitle.Draw(_ => 149) == 0x0003271Fu,
+            "随机称号按完整行权重抽样，零权重不可中、重复序号首条有效，双技能共用一个序号");
+        foreach (var invalid in new[] { Pool(10016, 1, 1, 1, "[at priest]", 14, 1),
+            Pool(10015, 1, 1, 0, "[at priest]", 14, 1), Pool(10015, 65536, 1, 1, "[at priest]", 14, 1),
+            Pool(10015, 1, 3, 1), Pool(10015, 1, 1, -1), Pool(10015, 1, 1, 1, "[at priest]", 14) })
+            Reject<InvalidDataException>(() => RandomTitleEnchantmentPool.Parse(invalid, 10015),
+                "奖池缺失、全零、索引越界、技能个数、负权重和截断行拒绝");
+        Reject<OverflowException>(() => RandomTitleEnchantmentPool.Parse(Pool(10015,
+            1, 1, int.MaxValue, "[at priest]", 14, 1, 2, 1, 1, "[at priest]", 15, 1), 10015), "权重和溢出拒绝");
+        var titleTemplate = gearTemplate with { EquipmentSlot = 13 };
+        int draws = 0;
+        InventoryResult RandomPlan(Character character, EnchantmentDefinition? rule = null) => InventoryEnchantmentService.Plan(
+            character, request, now, rule ?? randomDefinition, beadTemplate, titleTemplate, maximum => { draws++; return maximum - 1; });
+        var enchanted = RandomPlan(role);
+        That(enchanted.Accepted && draws == 1 && enchanted.Plan!.After.Find(target.Position) ==
+            target with { Core = target.Core with { Extension97 = 0x0003271Fu } } &&
+            enchanted.Plan.After.Find(source.Position)!.Core.Count == 1,
+            "随机称号保留普通Card/Upgrade及完整核心UID，只改97扩展并原子扣一颗，奖池职业不收窄all使用资格");
+        That(!RandomPlan(role, randomDefinition with { LimitedItems = [gearId + 1] }).Accepted && draws == 1,
+            "白名单拒绝不抽奖、不消耗；请求opaque不能指定效果");
     }
 
     public static void RunResources(ItemResources resources, EnchantmentCatalog enchantments)
@@ -145,5 +190,9 @@ internal static class EnchantmentTests
         }
         var weapon = resources.Items.Get(27308);
         That(!definition!.Targets.Contains((weapon.Kind, weapon.EquipmentSlot)), "用户强化目标不是该首饰宝珠的允许附魔部位");
+        var title = enchantments.Get(490703772)!;
+        That(title.RandomTitle is { Index: 10015 } && title.Targets.SetEquals([(ItemKind.Equipment, (byte)13)]) &&
+            title.LimitedItems.SetEquals([400330167, 400330168, 400330169, 400330170]) &&
+            title.RandomTitle.Entries.All(entry => entry.Weight > 0), "女圣职者从零宝珠读取真实奖池和四件称号白名单");
     }
 }

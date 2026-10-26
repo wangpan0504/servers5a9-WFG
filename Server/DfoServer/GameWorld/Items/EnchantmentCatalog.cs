@@ -7,15 +7,19 @@ using PvfLib;
 namespace DfoServer.GameWorld.Items;
 
 internal sealed record EnchantmentDefinition(int BeadItemId, int CardItemId, byte Upgrade,
-    ImmutableHashSet<(ItemKind Kind, byte Slot)> Targets, ImmutableHashSet<int> LimitedItems);
+    ImmutableHashSet<(ItemKind Kind, byte Slot)> Targets, ImmutableHashSet<int> LimitedItems)
+{
+    public RandomTitleEnchantmentPool? RandomTitle { get; init; }
+}
 internal sealed record EnchantmentEffect(string Tag, ImmutableArray<int> IntegerValues);
 
 // 宝珠与卡片共享当前PVF的STK目录；只解析实际使用的依赖，不扫描所有卡片。
-internal sealed class EnchantmentCatalog
+internal sealed partial class EnchantmentCatalog
 {
     readonly Func<string, string> read;
     readonly IReadOnlyDictionary<int, string> stackable;
     readonly Func<string, PvfTokenDocument>? readDocument;
+    readonly Lazy<PvfTokenDocument> randomTitles;
     readonly ConcurrentDictionary<int, Lazy<EnchantmentDefinition?>> definitions = new();
 
     public EnchantmentCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
@@ -27,6 +31,8 @@ internal sealed class EnchantmentCatalog
         this.read = read;
         this.stackable = stackable;
         this.readDocument = readDocument;
+        randomTitles = new(() => readDocument?.Invoke("etc/randomtitleenchant.etc") ??
+            throw new InvalidDataException("随机称号附魔缺少token读取器"));
     }
 
     // 仅供显式属性对族校验完整效果；普通Get及CMD272不附加本族规则。
@@ -70,16 +76,14 @@ internal sealed class EnchantmentCatalog
         if (!stackable.TryGetValue(itemId, out var path)) return null;
         string bead = read("stackable/" + path);
         var typeFields = Fields(bead, "stackable type");
-        if (typeFields.Count != 1 || !Regex.IsMatch(RawValues(bead, typeFields[0]), @"^\s*`\[enchant waste\]`\s+0\s*$"))
+        if (typeFields.Count != 1) return null;
+        bool randomTitle = Regex.IsMatch(RawValues(bead, typeFields[0]), @"^\s*`\[auto enchant\]`\s+0\s*$");
+        if (!randomTitle && !Regex.IsMatch(RawValues(bead, typeFields[0]), @"^\s*`\[enchant waste\]`\s+0\s*$"))
             return null; // 普通卡片、收集箱使用和其他券入口不在CMD272消费。
         foreach (string field in new[] { "cooltime maintenance", "effect maintenance", "total usable count", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime", "usable first growtype",
             "action usable server type", "usable game server type", "usable server type", "check usable itemlevel" })
             if (Fields(bead, field).Count != 0) return null; // 额外资格和次数账本尚未闭合，不能只消费普通源。
-        int cardId = Scalar(bead, "monster card id");
-        if (cardId <= 0 || !stackable.TryGetValue(cardId, out var cardPath)) return null;
-        int index = Scalar(bead, "enchant index", optional: true);
-        if (index is < 0 or > byte.MaxValue) return null;
         var restrictions = Fields(bead, "bead limited usable item");
         if (restrictions.Count > 1) throw new InvalidDataException("宝珠适用物品清单重复");
         var restricted = ImmutableHashSet.CreateBuilder<int>();
@@ -92,6 +96,11 @@ internal sealed class EnchantmentCatalog
             }
         if (Fields(bead, "target item id").Count != 0)
             return null; // 尚未核对的旧式限制不能被忽略后扩大目标范围。
+        if (randomTitle) return LoadRandomTitle(itemId, bead, restricted.ToImmutable());
+        int cardId = Scalar(bead, "monster card id");
+        if (cardId <= 0 || !stackable.TryGetValue(cardId, out var cardPath)) return null;
+        int index = Scalar(bead, "enchant index", optional: true);
+        if (index is < 0 or > byte.MaxValue) return null;
         string card = read("stackable/" + cardPath);
         var cardTypes = Fields(card, "stackable type");
         if (cardTypes.Count != 1 || !Regex.IsMatch(RawValues(card, cardTypes[0]), @"^\s*`\[material expert job\]`\s+1\s*$"))
