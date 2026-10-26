@@ -21,5 +21,6 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public int DungeonId { get; init; }
     public OperationHopeAdmission? Hope { get; init; }
     public DungeonEntryIncount? Incount { get; init; }
-    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Grief is null && Hope is null && Incount is null;
+    public DfoServer.Game.TagEvildom.TagEvildomAdmission? TagEvildom { get; init; }
+    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Grief is null && Hope is null && Incount is null && TagEvildom is null;
 }

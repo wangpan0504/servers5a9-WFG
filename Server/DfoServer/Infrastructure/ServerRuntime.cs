@@ -179,6 +179,8 @@ internal static class ServerRuntime
         var commands = new GameCommandRegistry();
         var tagEvildomProjection = new TagEvildomProjection(repository, stats, log, clock, learning, projection, itemResources.Items);
         new TagEvildomHandler(tagEvildomProjection, projection, log).Register(commands);
+        var tagEvildomRun = new TagEvildomRunProjection(new TagEvildomRewardCatalog(pvf, itemResources.Boosters),
+            itemResources.Items, repository, tagEvildomProjection, log);
         var raidCatalog = GameWorld.Raids.RaidCatalog.Load(pvf).PrepareAnton(pvf, dungeonCatalog, itemResources.Items);
         var raidHandler = new RaidHandler(log, raidCatalog, new Game.Raids.RaidRegistry(clock), online);
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
@@ -301,7 +303,7 @@ internal static class ServerRuntime
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
-                despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties);
+                despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,tagEvildomRun);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -422,7 +424,7 @@ internal static class ServerRuntime
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings), inventoryProjection),
-            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection),
+            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),

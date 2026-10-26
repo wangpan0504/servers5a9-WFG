@@ -11,7 +11,7 @@ namespace DfoServer.Network.Handlers;
 internal sealed class DungeonSelectionHandler(TownProjection projection, ServerLog log,
     DfoServer.GameWorld.Characters.TutorialCatalog? tutorials = null,
     DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
-    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null, TagEvildomProjection? tagEvildom = null) : IGameCommandModule
+    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null, TagEvildomProjection? tagEvildom = null, TagEvildomRunProjection? tagRun = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -22,16 +22,28 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
     async Task<CommandResult> EnterAsync(GameConnectionContext context, Packet request)
     {
         if (request.Body.Length == 6 && context.Session.ChannelEntry?.Type == 53 && tagEvildom is not null &&
-            context.Session.ReadTagEvildom(tagEvildom.Store, tagEvildom.Now) is { } tag &&
             context.Session.Selected?.Position is { Town: 62, Area: 0 })
         {
             uint tagDungeon = TagEvildomRequests.Entry(request.Body);
-            // 结构与资格分开：重置ACK后等待原生7时可能仍到达旧6B15；合法53/Stadium正文明确拒绝，不落普通4B断线。
-            // 正式Run未开放，空队/未就绪或真实双队均不能假建普通单角色实例。
-            log.Write("tag_evildom_entry_unavailable", new { Connection = context.Id, Dungeon = tagDungeon, Reason = "tag-runtime-not-implemented" });
-            await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "tag_evildom_entry_unavailable");
-            await context.Notify(NotiPacketType.AAS_TIPS, ServerNoticePackets.Build("再战魔界", "编队资料已同步，双角色战斗流程尚未开放；当前没有扣除次数、疲劳或道具。"),
-                "tag_evildom_entry_notice");
+            // 结构与资格分开；重置后旧6B15明确拒绝，不把合法TAG正文落入普通4B断线分支。
+            var selected = !context.BlocksTownActions && dungeons is not null && tagRun is not null
+                ? context.Session.BeginTagEvildomSelection(tagDungeon, dungeons, tagRun.Rewards, tagEvildom.Store) : null;
+            log.Write(selected is null ? "tag_evildom_entry_rejected" : "tag_evildom_selection_opened",
+                new { Connection = context.Id, Dungeon = tagDungeon, selected?.SelectionId });
+            if (selected is null)
+            {
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "tag_evildom_entry_rejected");
+                await context.Notify(NotiPacketType.AAS_TIPS, ServerNoticePackets.Build("再战魔界",
+                    "未进入：请确认当前已选难度、两名95级角色资料和当日/每周次数。资料变更后请以编队第一名重新登录。"), "tag_evildom_entry_notice");
+            }
+            else if (await projection.DetachForDungeonSelectionAsync(context, selected))
+            {
+                bool Guard() => context.Session.CanPublishDungeonSelection(selected);
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "tag_evildom_selection_opened", Guard);
+                await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(selected.Character.Id), "tag_evildom_selection_state", Guard);
+                // solo TAG没有705入队旁路；先27建立scene2，随后28/29才能进入原生scene23。
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.EmptySelectNotice(0), "tag_evildom_selection_scene", Guard);
+            }
             return CommandResult.Handled;
         }
         var entry = DungeonRequests.ParseEntry(request.Body);

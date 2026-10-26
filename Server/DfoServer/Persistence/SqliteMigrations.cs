@@ -215,6 +215,7 @@ internal static class SqliteMigrations
             "ALTER TABLE characters ADD COLUMN selected_skill_tree INTEGER NOT NULL DEFAULT -1 CHECK(typeof(selected_skill_tree)='integer' AND selected_skill_tree BETWEEN -1 AND 1)")),
         new(101, "再战魔界账号编队配置", TagEvildomConfigurationSchema.Upgrade),
         new(102, "角色NPC好感度", AddNpcFavorColumn),
+        new(103, "再战魔界固定准入与原子领奖回执", TagEvildomRunSchema.Upgrade),
     ];
 
     internal const string PvpPrivateCharacterSchema = """
@@ -2105,6 +2106,7 @@ internal static class SqliteMigrations
             ("character_operation_hope_reward_receipts",OperationHopeRewardSchema.Definition),
             (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
             (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),
+            (TagEvildomRunSchema.Table,TagEvildomRunSchema.Definition),
             ("quest_eligibility_mail_dispatches",QuestEligibilityMailSchema),
             ("character_collectbox_state",CollectBoxStateTableSchema),
             ("character_collectbox_slots",CollectBoxSlotsTableSchema),

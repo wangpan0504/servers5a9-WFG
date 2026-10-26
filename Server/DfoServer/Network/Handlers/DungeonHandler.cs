@@ -28,7 +28,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     DungeonDespairRewardPolicy? despairRewards = null, DfoServer.Game.Titles.TitleAchievementService? titles = null,
     TitleProjection? titleProjection = null, InventoryProjection? inventoryProjection = null,
     PartyDungeonService? partyDungeons = null, CharacterStatComputer? partyStats = null,
-    DfoServer.Game.Party.PartyService? parties = null) : IGameCommandModule
+    DfoServer.Game.Party.PartyService? parties = null, TagEvildomRunProjection? tagEvildomRun = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -395,6 +395,11 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             audit = observation;
             result = context.Session.ObserveFormalDungeonDeath(observation,rewards,growth);
         }
+        if (result.PendingTagEvildomClear is { } pendingTag)
+        {
+            if (tagEvildomRun is null) throw new InvalidOperationException("正式TAG终点缺少奖励提交服务");
+            result = tagEvildomRun.Commit(context, pendingTag) ?? throw new InvalidOperationException("TAG终点规划期间原会话已失效");
+        }
         return await PublishDeathAsync(context, result, previousCharacter, objectKey, audit);
     }
 
@@ -409,7 +414,11 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             return CommandResult.Unhandled;
         if (result.Receipt is not { } receipt)
         {
-            if (result.Outcome == DungeonRunOutcome.Duplicate) await EnableSettlementAsync(context, result.MonsterKey);
+            if (result.Outcome == DungeonRunOutcome.Duplicate && context.Session.CurrentTagEvildomClear() is { } clearedTag)
+            {
+                if (tagEvildomRun is not null) await tagEvildomRun.ClearAsync(context, clearedTag);
+            }
+            else if (result.Outcome == DungeonRunOutcome.Duplicate) await EnableSettlementAsync(context, result.MonsterKey);
             return CommandResult.Handled;
         }
         if (result.SpecialChildRetired)
@@ -445,7 +454,12 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         {
             foreach (ushort key in result.CulledMonsterKeys)
                 await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(key, [], enteredDungeon), "formal_clear_room_cull", Guard);
-            if (result.ClearFact is not null)
+            if (result.TagEvildomClear is { } clearedTag)
+            {
+                if (tagEvildomRun is null) throw new InvalidOperationException("TAG已提交结果缺少投影服务");
+                await tagEvildomRun.ClearAsync(context, clearedTag);
+            }
+            else if (result.ClearFact is not null)
                 await EnableSettlementAsync(context, result.MonsterKey);
             return CommandResult.Handled;
         }
@@ -602,6 +616,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             }
             return CommandResult.Handled;
         }
+        bool tag = context.Session.HasFormalTagEvildom;
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
         if (context.Altar is not null) await context.Altar.StopAsync();
@@ -609,6 +624,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool Guard() => context.Session.CanPublishTravel(receipt);
         await context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack", Guard);
         await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_return_town");
+        if (tag && tagEvildomRun is not null) await tagEvildomRun.ReturnAsync(context, town, receipt);
         log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "giveup", receipt.Character.Id, receipt.Character.Position });
         return CommandResult.Handled;
     }

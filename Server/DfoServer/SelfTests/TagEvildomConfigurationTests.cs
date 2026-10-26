@@ -21,6 +21,8 @@ internal static partial class TagEvildomConfigurationTests
         Rules();
         Packets();
         InventoryReadiness();
+        TagEvildomRunTests.Run();
+        TagEvildomRewardTests.Run();
         Persistence();
         Console.WriteLine($"PASS {Count - before} 再战魔界编队解析、身份规则与原子配置断言（未接通客户端玩法）");
     }

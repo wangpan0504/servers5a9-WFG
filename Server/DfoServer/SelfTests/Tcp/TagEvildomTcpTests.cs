@@ -15,7 +15,9 @@ internal static partial class TagEvildomTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int checks = Count;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "tag-evildom"), resources: resources);
+        ResourceRewards(resources);
+        var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "tag-evildom"), resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
         var profile = resources.Characters.Get(0);
         var template = profile.Equipment.First(row => row.Template.EquipmentSlot is >= 12 and <= 25).Template;
@@ -41,6 +43,7 @@ internal static partial class TagEvildomTcpTests
             standby = Create("TagSecond", 95, true);
             Create("TagTooLow", 93);
         }
+        ResourceRoutes(resources, primary, standby);
         await fixture.StartAsync();
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         byte[] empty = Teams(-1, -1), populated = Teams(0, 2), status = Gathering();
@@ -72,16 +75,26 @@ internal static partial class TagEvildomTcpTests
             ExitRoom(peer);
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", primary.Id) is [[62L, 0L]],
                 "真实53房间出口通过当前PVF准入和gate落中央竞技场62/0");
-            string beforeEntry = Assets();
+            string beforeEntry = Economy(fixture);
             foreach (uint dungeon in new uint[] { 9608, 400000095 })
             {
-                // 原生15后不等待ACK，立即发同栈25B16。
-                peer.Send(15, Build(w => { w.Write(dungeon); w.Write((ushort)0); }));
-                peer.Send(16, Selection(dungeon));
-                peer.Expect(1, 15, [0, 1, 0]); peer.Expect(0, 1709); peer.Expect(1, 16, [0, 9, 0, 0]);
-                peer.Send(42); peer.Barrier();
-                That(Assets() == beforeEntry && fixture.Query("SELECT count(*) FROM account_tag_evildom_clearances") is [[0L]],
-                    "TAG正式Run未开放明确拒绝15/16；Town内42不假成功、不扣次数或资产且连接仍可操作");
+                var map = EnterTag(peer, dungeon);
+                // Loading的生命请求不改状态，1468按项目通用拒绝解除pending。
+                peer.Send(1468, [1]); peer.Expect(1, 1468, [0, 19, 0]);
+                FormalDungeonTcpTests.Load(peer); peer.Barrier();
+                peer.Send(1468, [1]); peer.Expect(1, 1468, [1]); peer.Expect(0, 1407, [1]);
+                peer.Send(1468, [1]); peer.Expect(1, 1468, [1]); peer.Barrier();
+                peer.Send(1469, [0]); peer.Barrier();
+                peer.Send(1469, [0]); peer.Barrier();
+                peer.Send(1468, [0]); peer.Expect(1, 1468, [0, 19, 0]);
+                clock.Advance(TimeSpan.FromMilliseconds(11_999)); peer.Barrier();
+                clock.Advance(TimeSpan.FromMilliseconds(1)); peer.Expect(0, 1676, new byte[4]);
+                peer.Send(1469, [1]); peer.Expect(0, 1407, [0]);
+                peer.Send(1469, [0]); peer.Expect(1, 1469, [1]); peer.Barrier();
+                ReturnTag(peer);
+                clock.Advance(TimeSpan.FromSeconds(12)); peer.Barrier();
+                That(Economy(fixture) == beforeEntry && fixture.Query("SELECT count(*) FROM account_tag_evildom_clearances") is [[0L]],
+                    "双难度真实15/16/37、切角/单角12秒复活/双死42仅推进原Run，不扣疲劳币、不发奖励；回城自动重建下一轮pair");
             }
             peer.Send(1663); peer.Expect(1, 1663, Accepted(empty));
             peer.Expect(0, 1677, empty); peer.Expect(0, 1678, status); peer.Barrier();
@@ -128,6 +141,8 @@ internal static partial class TagEvildomTcpTests
         }
         await VerifyExpiredEquipmentAsync(fixture, endpoints[46], standby);
         await VerifyExpiredStandbyAsync(fixture, resources, endpoints[46], primary, standby);
+        await fixture.StopAsync();
+        await VerifyClearAsync(source, root, resources);
         Console.WriteLine($"PASS {Count - checks} 再战魔界真实频道、编队重置、双角色资料、准入拒绝与重登TCP断言");
 
         string Assets() => fixture.Snapshot("SELECT id,revision,gold FROM characters ORDER BY id") +

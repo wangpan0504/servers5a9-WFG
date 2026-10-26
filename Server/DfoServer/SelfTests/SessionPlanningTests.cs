@@ -33,6 +33,7 @@ internal static partial class SessionPlanningTests
         PublishedRosterIdentity();
         TagEvildomPublishedRoster();
         TagEvildomConfigurationLifecycle();
+        await TagEvildomRunSchedulingAsync();
         await TagEvildomPublicationRacesAsync();
         SlotChange();
         Initialization();

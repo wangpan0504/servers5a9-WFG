@@ -74,7 +74,7 @@ internal sealed partial class GameSession
         {
             var dungeon = formalDungeon;
             var character = Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement && dungeon is not null &&
-                !dungeon.Entry.IsClassExperience && !dungeon.Entry.IsPractice &&
+                dungeon.Run.TagEvildomLife is null && !dungeon.Entry.IsClassExperience && !dungeon.Entry.IsPractice &&
                 !dungeon.Ground.HasPendingOperation && (!dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingPassiveClear &&
                     dungeon.QuestSceneEvents.Any(pair => pair.Key.Map == dungeon.Run.Snapshot.CurrentMap &&
                         pair.Key.Template == (int)templateId && !pair.Value.Committed)) &&

@@ -52,6 +52,8 @@ internal sealed record DungeonEntryPlan(
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
     public bool IsClassExperience => DungeonId == 7142 && Maze.IsClassExperience;
     public bool IsPractice { get; init; }
+    // 仅由专用准入与当前TAG资源核验生成，不凭9608图号授予普通经济路径。
+    public bool IsTagEvildom { get; init; }
     public bool HasFreeCombatConsumption => IsPractice || IsTrainingRoom || IsClassExperience;
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
@@ -111,7 +113,7 @@ internal sealed record DungeonEntryPlan(
     public static bool TryCreate(DungeonCatalog catalog, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
-        bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null)
+        bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -130,14 +132,14 @@ internal sealed record DungeonEntryPlan(
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
             maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty),allowClearedTerminalQuest:allowClearedTerminalQuest,
-            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute);
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null)
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -152,10 +154,13 @@ internal sealed record DungeonEntryPlan(
         }
         // 当前PVF这两图为tag tournament 3/4、tagsystem ruleset2，不能由普通单角色Run消费或结算。
         // 9609/9610是中央竞技场剧情图，继续走已有剧情路线。
-        if (dungeonId is 9608 or 400000095)
+        if (dungeonId is 9608 or 400000095 || tagEvildom is not null)
         {
-            reason = "tag-evildom-runtime-required";
-            return false;
+            if (tagEvildom is null || tagEvildom.DungeonId != dungeonId || !ReferenceEquals(tagEvildom.Primary, character) ||
+                questId != 0 || difficulty != 0 || isReplay || practice || hellParty || hellLegend || partyRoute is not null ||
+                tagMaze is null || !TagEvildomEntryPolicy.Supports(definition))
+            { reason = "tag-evildom-runtime-required"; return false; }
+            tagEvildom.Validate();
         }
         bool cosmo = definition.RequiresCosmoEntryContract;
         if (cosmo)
@@ -265,7 +270,12 @@ internal sealed record DungeonEntryPlan(
             }
         var candidates = DistinctQuestRoutes(definition.Mazes.Where(maze => maze.ConnectsQuest(questId,difficulty)));
         bool finishedObjectiveRequest = questId != 0 && finishedObjective.Contains((int)questId);
-        if (practice || finishedObjectiveRequest)
+        if (tagEvildom is not null)
+        {
+            candidates = definition.Mazes.Where(maze => maze.SourceOrdinal == tagMaze && maze.QuestConnectionTokens.Count == 0).ToArray();
+            routeQuest = 0; layoutQuest = null;
+        }
+        else if (practice || finishedObjectiveRequest)
         {
             candidates = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
             if (candidates.Length > 1)
@@ -517,7 +527,8 @@ internal sealed record DungeonEntryPlan(
             PlayerTeam = 0,
             IsTutorial = definition.IsTutorial,
             DisableClearReward = definition.DisableClearReward,
-            DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience,
+            IsTagEvildom = tagEvildom is not null,
+            DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience || tagEvildom is not null,
             DisableGiveupPenalty = definition.DisableGiveupPenalty,
             CoinLimit = definition.Id is >= 11006 and <= 11107 ? definition.CoinLimit : null,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
@@ -532,7 +543,7 @@ internal sealed record DungeonEntryPlan(
             TerminalLayerAcceptanceId = terminalAcceptance,
             RouteQuestId = routeQuest,
             IsOrdinaryHunt = ordinaryHunt,
-            QuestAcceptances = definition.IsClassExperience || practice ? [] : character.ActiveMainQuests.ToImmutableArray(),
+            QuestAcceptances = definition.IsClassExperience || practice || tagEvildom is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
             ExperienceEquipmentModule = definition.RawSections.Any(row => row.Tag == "tower of despair") ? "despair tower" :
                 definition.RawSections.Any(row => row.Tag == "tower of scream") ? "scream tower" :
                 definition.DungeonType?.Trim().Trim('`', '[', ']') switch
@@ -547,7 +558,7 @@ internal sealed record DungeonEntryPlan(
             HellParty = hellParty && !cosmo ? activeHell : null,
             IsHellLegend = hellParty && !cosmo && hellLegend,
             IsCosmo = cosmo,
-            AllowsCompanionAi = definition.AllowsCompanionAi,
+            AllowsCompanionAi = definition.AllowsCompanionAi && tagEvildom is null,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
             StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : (ushort)0,
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&

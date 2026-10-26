@@ -12,7 +12,7 @@ internal sealed partial class GameSession
         {
             var dungeon = formalDungeon;
             bool allowed = Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
-                dungeon is not null && !dungeon.Ground.HasPendingPickup && !dungeon.Run.HasPendingDeath &&
+                dungeon is not null && dungeon.Run.TagEvildomLife is null && !dungeon.Ground.HasPendingPickup && !dungeon.Run.HasPendingDeath &&
                 !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue && !HasPendingQuestScene &&
                 dungeon.PendingTutorialClear is null &&
                 (dungeon.PendingInventoryDiscard is null || dungeon.PendingInventoryDiscard.Plan.Request == request);
@@ -28,7 +28,7 @@ internal sealed partial class GameSession
         return owner.Execute(() =>
         {
             if (!Ready || !ReferenceEquals(Selected, expected) || !ReferenceEquals(formalDungeon, dungeon) ||
-                dungeon.Run.Snapshot.Identity != identity || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) ||
+                dungeon.Run.TagEvildomLife is not null || dungeon.Run.Snapshot.Identity != identity || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 !ReferenceEquals(dungeon.PendingInventoryDiscard, capture.Pending) || dungeon.Ground.HasPendingPickup ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || dungeon.HasPendingFatigue ||
                 HasPendingQuestScene || dungeon.PendingTutorialClear is not null)

@@ -16,7 +16,7 @@ internal sealed partial class GameSession
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(prepared);
-        if (!Ready || SelectionEpoch != expectedSelectionEpoch || !ReferenceEquals(Selected, expected) ||
+        if (run.TagEvildomLife is not null || !Ready || SelectionEpoch != expectedSelectionEpoch || !ReferenceEquals(Selected, expected) ||
             run.Snapshot.Identity.CharacterId != expected.Id || !run.IsPendingDeath(prepared))
             throw new InvalidOperationException("副本成长的选角、角色快照或待提交死亡已失效");
 
