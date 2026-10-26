@@ -299,8 +299,8 @@ internal static partial class FormalDungeonTcpTests
             .Select(row => row.GetProperty("Detail")).Where(row => row.GetProperty("Request").GetProperty("DungeonIndex").GetUInt32() == 337).ToArray();
         That(soulRejections.Length == 2 && soulRejections.All(row => !row.GetProperty("Accepted").GetBoolean() &&
             row.GetProperty("Identity").ValueKind == System.Text.Json.JsonValueKind.Null &&
-            row.GetProperty("RejectReason").GetString() == "entry-plan:boss-rush-room-contract-unproven"),
-            "337经真实选图到达EntryPlan，重复拒绝记录准确原因且不发布实例身份");
+            row.GetProperty("RejectReason").GetString() == "maze-topology-unsupported"),
+            "337通过资源规划后仍在正式拓扑拒绝，重复拒绝记录准确原因且不发布实例身份");
     }
 
     static void VerifyBossRushRejection(TcpTestFixture fixture,TcpTestResources resources)
