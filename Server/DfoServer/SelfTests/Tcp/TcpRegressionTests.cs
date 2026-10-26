@@ -52,6 +52,11 @@ internal static class TcpRegressionTests
         ("titles", TitleTcpTests.RunAsync),
         ("collectbox", CollectBoxTcpTests.RunAsync),
         ("epic-production", EpicProductionTcpTests.RunAsync),
+        ("epic-production-rules", (_, _, resources) =>
+        {
+            EpicProductionTests.RunResources(resources.Archive,resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("clear-avatar", ClearAvatarTcpTests.RunAsync),
         ("adventure", AdventureCoreTcpTests.RunAsync),
         ("adventure-names", AdventureNameTcpTests.RunAsync),
