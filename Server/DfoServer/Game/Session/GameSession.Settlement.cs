@@ -480,7 +480,7 @@ internal sealed partial class GameSession
         return EnterFormalDungeon(expected.Entry.DungeonId,quest,expected.Entry.Difficulty,dungeons,rooms,drops,items,
             draw: original.Draw, pieces: pieces, requiredCharacter: expected.Character,retry: expected,
             prepareDrops: original.PrepareDrops, practice: expected.Entry.IsPractice, crackRewards: original.CrackRewards,
-            hellParty: expected.Entry.IsCosmo);
+            hellParty: expected.Entry.IsCosmo || expected.Entry.IsInfernoParty);
     }
 
     public bool CanRetryCosmoDungeon(FormalDungeonReceipt expected, bool partyAdmission = false) => owner.Execute(() =>

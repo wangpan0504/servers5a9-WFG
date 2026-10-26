@@ -160,6 +160,103 @@ internal static class HellPartyEntryTests
             That(richReceipt is not null && rich.Read().Inventory.Items.Where(row => row.Core.ItemId == 3330).Sum(row => row.Core.Count) == 7,
                 "票分散在多格（17+20=37）时跨格扣 30，剩 7");
         }
+        // ===== 时空裂缝（[inferno dungeon]）：整条路线就是深渊场地，没有密门房间可换 =====
+        // 地轨中心选图区域声明 [hell dungeon] 1 / [hell quest] 2900 / [item condition] 3330；7539 副本头另带 [inferno quest] 10110。
+        var riftArea = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+            towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 7539));
+        var riftMap = towns.DungeonMaps[riftArea.DungeonWorldMap!.Value];
+        var riftGate = new HashSet<int>(riftArea.Quests);
+        var riftDone = new HashSet<int>(riftGate) { 2900, 10110 };
+        var riftWalk = riftArea.Map(riftDone).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(riftDone.Contains)).Bounds;
+        var riftPosition = new Location(riftArea.Town, riftArea.Area,
+            checked((ushort)(riftWalk.X + riftWalk.Width / 2)), checked((ushort)(riftWalk.Y + riftWalk.Height / 2)));
+        That(riftMap.HellDungeon && riftMap.HellQuests.SequenceEqual([2900]) && riftMap.HellItemConditions.SequenceEqual([3330]),
+            "地轨中心选图区域：[hell dungeon] 1、[hell quest] 2900、[item condition]=3330");
+        using (var rift = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+            riftDone.Order().ToArray(), position: riftPosition, items: [(3330, 30), (3331, 1)]))
+        {
+            var riftReceipt = rift.Session.EnterFormalDungeon(7539, 0, 2, dungeons, rooms, pieces: items.EpicPieces, hellParty: true);
+            That(riftReceipt is not null && rift.Session.LastFormalDungeonRejection is null && riftReceipt.Entry.IsInfernoParty &&
+                riftReceipt.Entry.HellParty is null && riftReceipt.Entry.Maze.HellParty is null && riftReceipt.Entry.HellPartyMode == 1 &&
+                riftReceipt.HellTicket == new HellPartyTicket(3330, 30) && riftReceipt.Entry.StartFatigue == 6 &&
+                rift.Read().Inventory.Items.All(row => row.Core.ItemId != 3330) &&
+                rift.Read().Inventory.Items.Where(row => row.Core.ItemId == 3331).Sum(row => row.Core.Count) == 1,
+                "时空裂缝 7539 入场：扣 30 张 3330、入场一次扣 6 点疲劳、不换密门房间：" + rift.Session.LastFormalDungeonRejection);
+            byte[] riftInfo = DungeonPackets.Information(riftReceipt!.Entry);
+            byte[] riftStart = DungeonPackets.StartMap(riftReceipt.Entry, 7u);
+            That(riftInfo[10] == byte.MaxValue && riftInfo[11] == byte.MaxValue &&
+                BinaryPrimitives.ReadUInt16LittleEndian(riftInfo.AsSpan(14)) == 1 && riftInfo[18] == 0x0B &&
+                riftStart[7] == 1 && riftStart[20] == 1 && riftStart[22] == byte.MaxValue,
+                "时空裂缝 DUNGEON_INFO/START_MAP 带深渊标志，但没有密门坐标（保持 FF）");
+        }
+        // ===== 时空裂缝「再次挑战」=====
+        // 修复前 RetryFormalDungeon 固定按非深渊重开，时空裂缝被自己的准入否掉返回 null，结算页收不到 ACK 就停住，
+        // 后续的「选择其他地图」和「回城」也发不出去。这里验证同一条 Run 清完并结算后能按深渊模式重开新尝试。
+        using (var riftRetry = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+            riftDone.Order().ToArray(), position: riftPosition, items: [(3330, 60)]))
+        {
+            var first = riftRetry.Session.EnterFormalDungeon(7539, 0, 2, dungeons, rooms, pieces: items.EpicPieces, hellParty: true)!;
+            int riftId = riftRetry.Read().Id;
+            That(first.Entry.IsInfernoParty && riftRetry.Read().Inventory.Items.Where(row => row.Core.ItemId == 3330).Sum(row => row.Core.Count) == 30,
+                "时空裂缝首次入场扣 30 张邀请函，再次挑战前还留 30 张");
+            var riftKills = global::DfoServer.Testing.SelfTestCatalogs.KillExperience(pvf);
+            var riftClear = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);
+            var riftDrops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
+            // 沿真实拓扑一路清到终点；终点只按 plan.BossMap 认，不按"最后一个房间"猜。
+            var riftPath = RiftPath(first.Entry.Maze, first.Entry.StartMap.Position, first.Entry.BossMap.Position);
+            That(riftPath.Count > 0 && riftPath[^1] == first.Entry.BossMap.Position, "时空裂缝起点可沿真实连接抵达终点房");
+            var riftLoaded = riftRetry.Session.CompleteFormalDungeonLoading()!;
+            for (int step = 0; ; step++)
+            {
+                foreach (var monster in riftLoaded.Monsters.Monsters.Where(row => row.IsBlocking))
+                {
+                    var death = riftRetry.Session.ObserveFormalDungeonDeath(new(monster.ObjectKey, (ushort)riftId, 0x0111,
+                        (ushort)riftId, 600, 3, 0, (uint)monster.CandidateLevel, 504, 620, 3, true, new string('D', 64)),
+                        riftKills, growth);
+                    That(death.Outcome == DungeonRunOutcome.Accepted && death.Receipt is not null,
+                        "时空裂缝逐房静态怪物经正式死亡通道提交");
+                    riftLoaded = death.Receipt!;
+                }
+                if (riftLoaded.Snapshot.CurrentMap.Position == first.Entry.BossMap.Position) break;
+                That(step < riftPath.Count, "时空裂缝过房次数不超过真实连接数");
+                var target = riftPath[step];
+                That(riftRetry.Session.MoveFormalDungeon((byte)target.X, (byte)target.Y) is not null && riftRetry.Read().DungeonState is not null,
+                    "清房后沿真实连接过房");
+                riftLoaded = riftRetry.Session.CompleteFormalDungeonLoading()!;
+            }
+            That(riftLoaded.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement, "时空裂缝终点死亡后进入结算阶段");
+            var settled = riftRetry.Session.SettleFormalDungeon((ushort)riftId, 99, 99, [1, 2, 3], dungeons, riftClear, growth);
+            That(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt is not null, "时空裂缝结算提交");
+            var settledReceipt = settled.Receipt!;
+            var retried = riftRetry.Session.RetryFormalDungeon(settledReceipt, dungeons, rooms, riftDrops, items.Items, items.EpicPieces);
+            That(retried is not null && retried.Entry.IsInfernoParty && retried.Entry.HellParty is null &&
+                retried.Entry.StartFatigue == 6 && retried.HellTicket == new HellPartyTicket(3330, 30) &&
+                retried.Snapshot.Identity.TaskAttempt == settledReceipt.Snapshot.Identity.TaskAttempt + 1 &&
+                retried.Snapshot.Identity.InstanceId != settledReceipt.Snapshot.Identity.InstanceId &&
+                riftRetry.Read().Inventory.Items.All(row => row.Core.ItemId != 3330),
+                "时空裂缝「再次挑战」按深渊模式重开：新尝试号、再扣 30 张邀请函与 6 点疲劳：" + riftRetry.Session.LastFormalDungeonRejection);
+        }
+        using (var riftNoInfernoQuest = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+            new HashSet<int>(riftGate) { 2900 }.Order().ToArray(), position: riftPosition, items: [(3330, 30)]))
+        {
+            var saved = riftNoInfernoQuest.Read();
+            That(riftNoInfernoQuest.Session.EnterFormalDungeon(7539, 0, 2, dungeons, rooms, pieces: items.EpicPieces, hellParty: true) is null &&
+                riftNoInfernoQuest.Session.LastFormalDungeonRejection == "selection-quest-required:10110" &&
+                QuestCompletionRepositoryTests.Same(saved, riftNoInfernoQuest.Read()),
+                // 世界地图同一副本声明 10110 为 [is clear quest]，会话在选图阶段就先按缺少的选图任务拒绝；入场阶段的 [inferno quest] 复查是第二道。
+                "未完成 [inferno quest] 10110 时无法进入时空裂缝（选图阶段即拒绝），不扣票也不改角色：" + riftNoInfernoQuest.Session.LastFormalDungeonRejection);
+        }
+        using (var riftPoor = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+            riftDone.Order().ToArray(), position: riftPosition, items: [(3330, 29)]))
+        {
+            var saved = riftPoor.Read();
+            That(riftPoor.Session.EnterFormalDungeon(7539, 0, 2, dungeons, rooms, pieces: items.EpicPieces, hellParty: true) is null &&
+                riftPoor.Session.LastFormalDungeonRejection == "hell-party-item-required" &&
+                riftPoor.Read().Inventory.Items.Where(row => row.Core.ItemId == 3330).Sum(row => row.Core.Count) == 29 &&
+                QuestCompletionRepositoryTests.Same(saved, riftPoor.Read()),
+                "时空裂缝票不足（29/30）时以 hell-party-item-required 拒绝，背包与 revision 不变");
+        }
+
         // ===== 实验性：密门（[seal door appear rate]）与传奇深渊（[hell dungeon legend]/6081）=====
         That(plan!.HellParty!.AppearRate == 10 && plan.HellParty.LegendMapId == 313169 && plan.HellParty.LegendRequiredCount == 2 &&
             map.HellLegendDungeon && map.HellLegendQuests.SequenceEqual([6081]),
@@ -314,12 +411,28 @@ internal static class HellPartyEntryTests
         foreach (int inferno in new[] { 7191, 7527, 7528, 7529, 7530, 7531, 7532, 7533, 7534, 7535, 7539, 7540, 7541, 7542 })
         {
             var infernoDungeon = dungeons.Get(inferno);
-            bool infernoPlan = DungeonEntryPlan.TryCreate(dungeons, character, (uint)inferno, 0, inferno == 7191 ? (byte)4 : (byte)0,
-                out _, out var infernoReason, quests: quests, hellParty: true);
-            That(InfernoNoSeal(infernoDungeon) && infernoDungeon.Mazes.All(maze => maze.HellParty is null) &&
-                (inferno == 7191 ? infernoPlan && infernoReason == "resource-plan-ready" : !infernoPlan && infernoReason == "hell-party-maze-unavailable"),
-                (inferno == 7191 ? "超星空不伪造seal door房间，使用独立加权路线：" : "Inferno/时空裂缝不伪造seal door房间：") + inferno + "/" + infernoReason);
+            byte infernoDifficulty = infernoDungeon.TryGetDesignatedDifficulty(out byte designated) ? designated : (byte)0;
+            bool infernoPlan = DungeonEntryPlan.TryCreate(dungeons, character, (uint)inferno, 0, infernoDifficulty,
+                out var infernoEntry, out var infernoReason, quests: quests, hellParty: true, draw: _ => 0);
+            if (inferno == 7191)
+            {
+                That(InfernoNoSeal(infernoDungeon) && infernoDungeon.Mazes.All(maze => maze.HellParty is null) &&
+                    infernoPlan && infernoReason == "resource-plan-ready",
+                    "超星空不伪造seal door房间，使用独立加权路线：" + inferno + "/" + infernoReason);
+                continue;
+            }
+            That(InfernoNoSeal(infernoDungeon) && infernoDungeon.IsInfernoDungeon && !infernoDungeon.IsCosmoDungeon &&
+                infernoDungeon.Mazes.All(maze => maze.HellParty is null) && infernoDungeon.HellPartyItemCount > 0 && infernoPlan &&
+                infernoEntry!.IsInfernoParty && infernoEntry.HellParty is null && infernoEntry.HellPartyMode == 1 &&
+                infernoEntry.StartFatigue == 6 && infernoEntry.Maze.HellParty is null && infernoEntry.QuestId == 0,
+                "时空裂缝按深渊派对模式进入自己的无密门路线（不伪造seal door房间）：" + inferno + "/" + infernoReason);
+            That(!DungeonEntryPlan.TryCreate(dungeons, character, (uint)inferno, 0, infernoDifficulty,
+                out _, out var plainReason, quests: quests),
+                "时空裂缝不接受普通入场（[select dungeon normal disable] 1）：" + inferno + "/" + plainReason);
         }
+        That(dungeons.Get(7539) is { IsInfernoDungeon: true, HellPartyItemCount: 30, InfernoQuestId: 10110 } &&
+            !dungeons.Get(7191).IsInfernoDungeon && !dungeons.Get(291100308).IsInfernoDungeon,
+            "7539 时空裂缝：邀请函 30 张、前置任务 [inferno quest]=10110；超星空与普通深渊副本不按时空裂缝处理");
 
         // 同一副本有多个深渊 maze（291100319：313166 / 313173，同在 (3,0)）：按抽签选其一，不再按“有歧义”拒绝。
         var multi = dungeons.Get(291100319).Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0 && maze.HellParty is not null).ToArray();
@@ -396,6 +509,33 @@ internal static class HellPartyEntryTests
             hellRules.Rarity(2) is { } rarityB && rarityB.Zip(rarityB.Skip(1)).All(pair => pair.Second >= pair.First) && rarityB[6] == 1000002 &&
             hellRules.GradeRange(90) == (84, 92),
             "etc/itemdropinfo_monster_hell.etc：概率 875/1000/0、稀有度行 A 原样、行 B 单调夹紧、90 级装备等级区间 [84,92]");        Console.WriteLine("HellPartyEntryTests: " + (Count - checks) + " checks");
+    }
+
+    // 从起点沿真实连接走到终点的房间序列（不含起点，末项是终点房）。
+    static IReadOnlyList<DungeonPoint> RiftPath(DungeonMaze maze, DungeonPoint start, DungeonPoint boss)
+    {
+        var previous = new Dictionary<DungeonPoint, DungeonPoint?> { [start] = null };
+        var queue = new Queue<DungeonPoint>();
+        queue.Enqueue(start);
+        while (queue.Count > 0 && !previous.ContainsKey(boss))
+        {
+            var point = queue.Dequeue();
+            foreach (var link in maze.StaticTopology.Links ?? [])
+            {
+                DungeonPoint? adjacent = link.First == point ? link.Second : link.Second == point ? link.First : null;
+                if (adjacent is not { } next || previous.ContainsKey(next)) continue;
+                previous.Add(next, point);
+                queue.Enqueue(next);
+            }
+        }
+        var reversed = new List<DungeonPoint>();
+        for (DungeonPoint? cursor = boss; cursor is { } current && current != start;)
+        {
+            reversed.Add(current);
+            cursor = previous.TryGetValue(current, out var parent) ? parent : null;
+        }
+        reversed.Reverse();
+        return reversed;
     }
 
     static bool InfernoNoSeal(DungeonDefinition dungeon) =>

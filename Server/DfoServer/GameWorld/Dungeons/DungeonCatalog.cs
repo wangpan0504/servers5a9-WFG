@@ -141,8 +141,18 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool RequiresCosmoEntryContract => Id == DungeonCosmoRewardCatalog.DungeonId || RawSections.Any(row => row.Tag == "cosmo dungeon");
     public bool IsCosmoDungeon => Id == DungeonCosmoRewardCatalog.DungeonId &&
         RawSections.Where(row => row.Tag == "cosmo dungeon").ToArray() is [{ Tokens.Count: 0 }];
-    public int CosmoInvitationCount => RawSections.Where(row => row.Tag == "hell party required item count").ToArray() is
+    // 时空裂缝（[inferno dungeon]）：整条路线本身就是深渊场地，没有 [seal door] 密门，只能按深渊派对模式进入。
+    // 与超星空共用副本头的 [hell dungeon] 1 与 [hell party required item count]，用 [inferno dungeon] 区分。
+    public bool IsInfernoDungeon => !RequiresCosmoEntryContract &&
+        RawSections.Any(row => row.Tag == "inferno dungeon" && row.Tokens.Count == 0) &&
+        RawSections.Any(row => row.Tag == "hell dungeon" && row.Tokens is [{ Type: 0, Value: 1 }]);
+    // 时空裂缝的前置任务（副本头 [inferno quest]）：与世界地图同一副本的 [is clear quest] 是同一条。
+    public int InfernoQuestId => RawSections.Where(row => row.Tag == "inferno quest").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } quest] }] ? quest.Value : 0;
+    // 副本头的邀请函数量：超星空 40、地轨中心时空裂缝 30、列车 22。缺失为 0，不能退化成免费入场。
+    public int HellPartyItemCount => RawSections.Where(row => row.Tag == "hell party required item count").ToArray() is
         [{ Tokens: [{ Type: 0, Value: > 0 and <= ushort.MaxValue } count] }] ? count.Value : 0;
+    public int CosmoInvitationCount => HellPartyItemCount;
     public int CosmoStoneCount => RawSections.Where(row => row.Tag == "hell party required item count add").ToArray() is
         [{ Tokens: [{ Type: 0, Value: -1 }, { Type: 0, Value: > 0 and <= ushort.MaxValue } count] }] ? count.Value : 0;
     public int CosmoQuestId => RawSections.Where(row => row.Tag == "cosmo quest").ToArray() is
