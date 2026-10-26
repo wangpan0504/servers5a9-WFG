@@ -29,6 +29,17 @@ internal static class RaidMemberTests
         That(RaidRequests.Rejoin([1,0,19,2]) == 0x02130001, "668严格消费原团key");
         Reject<InvalidDataException>(() => RaidRequests.Rejoin(new byte[5]), "668多余尾部拒绝");
         Reject<InvalidDataException>(() => RaidRequests.Peer(new byte[13], false), "普通组队不借团本mode10解析");
+        var emptyHp = RaidRequests.MonsterHp(new byte[5]);
+        That(emptyHp.RawValue == 0 && emptyHp.RawEntries.Length == 0, "695已证全零分支保留原始字段，不解释为死亡");
+        byte[] hpBody = [0x78,0x56,0x34,0x12, 2, 1,0,0,0, 0xff,0xff,0xff,0xff];
+        var hp = RaidRequests.MonsterHp(hpBody);
+        That(hp.RawValue == 0x12345678 && hp.RawEntries.SequenceEqual(new uint[] { 1, uint.MaxValue }),
+            "695合成输入保留u32读宽和列表顺序，不赋予对象或权威HP语义");
+        for (int length = 0; length < hpBody.Length; length++)
+            Reject<InvalidDataException>(() => RaidRequests.MonsterHp(hpBody[..length]), "695截断或计数不符拒绝");
+        Reject<InvalidDataException>(() => RaidRequests.MonsterHp([.. hpBody, 0]), "695多余尾部拒绝");
+        byte[] maximumHp = new byte[5 + 4 * byte.MaxValue]; maximumHp[4] = byte.MaxValue;
+        That(RaidRequests.MonsterHp(maximumHp).RawEntries.Length == byte.MaxValue, "695计数按u8上界解析，不收窄成分队人数");
 
         string root = Path.Combine(Path.GetTempPath(), "s5a9-raid-members-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);

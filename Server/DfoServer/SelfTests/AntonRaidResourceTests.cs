@@ -69,6 +69,9 @@ internal static class AntonRaidResourceTests
             (Change("[CHECK DUNGEON STATE]", 1, 218), "phase-dungeon-reference-missing"),
             (Change("[CHECK TIMER END]", 1, 9), "phase-timer-reference-missing"),
             (Change("[CLEAR PHASE]", 0, "[FUTURE RULE]"), "unsupported-clause"),
+            (Change("[STATE REWARD]", 1, "future_reward"), "unsupported-reward"),
+            (Change("[STATE REWARD]", 3, "unverified"), "unsupported-reward"),
+            (Change("[STATE REWARD]", 4, 0), "unsupported-reward"),
             ([.. input, "[WAITING ROOM]", 19, 2], "duplicate-header"),
             (input.Where(v => !Equals(v, "[/PHASE]")).ToArray(), "block-incomplete"),
             (Change("[PHASE NAME]", 0, "[UNKNOWN PHASE FIELD]"), "unsupported-phase-field"),
@@ -84,6 +87,16 @@ internal static class AntonRaidResourceTests
         That(Parse(input, symbols[..^2]).Issues.Any(i => i.Code == "symbol-reference-missing"), "缺符号不能静默跳过");
         That(Parse(input, [.. symbols, 4, "[FLAG]"]).Issues.Any(i => i.Code == "duplicate-or-invalid-symbol"), "重复符号名拒绝");
         That(Parse(input, [.. symbols, 1, "[OTHER]"]).Issues.Any(i => i.Code == "duplicate-or-invalid-symbol"), "冲突符号编号拒绝");
+
+        int rewardAt = Array.IndexOf(input, "[STATE REWARD]");
+        var truncatedReward = Parse([.. input[..(rewardAt + 5)], .. input[(rewardAt + 6)..]]);
+        That(truncatedReward.Issues.Any(i => i.Code == "unsupported-reward") && truncatedReward.Phases[0].Rewards.IsEmpty,
+            "STATE REWARD缺末整数时拒绝整行，不补默认奖励字段");
+        var repeatedReward = Parse([.. input[..rewardAt], .. input[rewardAt..(rewardAt + 6)], .. input[rewardAt..]]);
+        That(repeatedReward.Issues.IsEmpty && repeatedReward.Phases[0].Rewards.SequenceEqual(new[]
+            { new AntonRaidReward("squad_item", -1, 665, 100, 1), new AntonRaidReward("squad_item", -1, 665, 100, 1) }) &&
+            repeatedReward.Phases[1].Rewards.SequenceEqual(script.Phases[1].Rewards),
+            "重复STATE REWARD声明仍按阶段保序保留，不擅自去重或推断发放次数");
 
         var directory = DungeonCatalog.ParseDirectory(Tokens([210, "Anton/One.DGN", 218, "ANTON/TWO.dgn"]), Resolve, "dungeon");
         That(directory[210] == "dungeon/anton/one.dgn", "备用列表按Dungeon根归一化大小写，不能加tutorial路径前缀");

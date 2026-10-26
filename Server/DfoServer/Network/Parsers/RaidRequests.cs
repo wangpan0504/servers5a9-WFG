@@ -16,10 +16,21 @@ internal readonly record struct ModifyRaidRequest(byte RaidType, string Name, by
 internal readonly record struct RaidManagerRequest(uint Operation, uint Character, uint Argument);
 internal readonly record struct RaidInfoRequest(byte Mode, uint Key);
 internal readonly record struct RaidPeerRequest(ushort Character, uint Peer);
+internal readonly record struct RaidMonsterHpRequest(uint RawValue, uint[] RawEntries);
 
 internal static class RaidRequests
 {
     public const int MaxNameBytes = 64;
+
+    public static RaidMonsterHpRequest MonsterHp(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 5 || body.Length != 5 + 4 * body[4])
+            throw new InvalidDataException("RAID_MONSTER_HP 长度或条目数错误");
+        var entries = new uint[body[4]];
+        for (int index = 0; index < entries.Length; index++)
+            entries[index] = BinaryPrimitives.ReadUInt32LittleEndian(body[(5 + 4 * index)..]);
+        return new(BinaryPrimitives.ReadUInt32LittleEndian(body), entries);
+    }
 
     // NOTI835的023AB9FA..023ABA1B发送REJOIN_RAID：唯一正文为原通知的u32团key。
     public static uint Rejoin(ReadOnlySpan<byte> body)
