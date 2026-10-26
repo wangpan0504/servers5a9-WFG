@@ -65,6 +65,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var death = new DungeonDeathProjection(context, projection, log, time);
         context.Death = death;
         var revival = new DungeonRevivalProjection(context, log, time);
+        var tagRevival = new TagEvildomRevivalProjection(context, log, time);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);
@@ -215,6 +216,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                             mailbox?.Alarm(context,invitation);
                         }
                         await revival.RefreshAsync();
+                        await tagRevival.RefreshAsync();
                         if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
                         if (context.Premiums is { } premiums) await premiums.RefreshAsync();
                         if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
@@ -235,6 +237,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         {
             nativeRegistration?.Dispose();
             await revival.DisposeAsync();
+            await tagRevival.DisposeAsync();
             if (context.BoosterUses is { } boosterUses) await boosterUses.DisposeAsync();
             if (context.Creatures is { } creatureClock) await creatureClock.DisposeAsync();
             if (cubeConsumption is not null) await cubeConsumption.DisposeAsync();

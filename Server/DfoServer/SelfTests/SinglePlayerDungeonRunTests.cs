@@ -5,11 +5,12 @@ using PvfLib;
 
 namespace DfoServer;
 
-internal static class SinglePlayerDungeonRunTests
+internal static partial class SinglePlayerDungeonRunTests
 {
     public static void RunCore()
     {
         int checks = Count;
+        VerifyTagEvildomLife();
         VerifyLayeredBossTerminal();
         VerifyExplicitTerminalLayer();
         VerifyPassiveClearCondition();

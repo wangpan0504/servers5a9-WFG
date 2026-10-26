@@ -24,7 +24,7 @@ internal sealed partial class GameSession
 
     public FormalDungeonReceipt? ReportFormalCharacterDeath() => owner.Execute(() =>
     {
-        if (!CanChangeDungeonLife()) return null;
+        if (!CanChangeDungeonLife() || formalDungeon!.Run.TagEvildomLife is not null) return null;
         if (formalDungeon!.CharacterDead) return null;
         var character = Selected!;
         long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds();
@@ -50,7 +50,7 @@ internal sealed partial class GameSession
     });
 
     public DungeonDeathReturnReceipt? CurrentDungeonDeathReturn() => owner.Execute(() =>
-        Ready && Selected is { } character && formalDungeon is { CharacterDead: true } dungeon
+        Ready && Selected is { } character && formalDungeon is { CharacterDead: true } dungeon && dungeon.Run.TagEvildomLife is null
             ? new DungeonDeathReturnReceipt(character.Id, owner.Generation, SelectionEpoch,
                 dungeon.Run.Snapshot.Identity.InstanceId, dungeon.DeathSerial) : null);
 
@@ -58,13 +58,13 @@ internal sealed partial class GameSession
     public TownTravelReceipt? ReturnFromFormalDungeonOnDeath(DungeonDeathReturnReceipt scheduled) => owner.Execute(() =>
         Ready && Selected?.Id == scheduled.CharacterId && owner.Generation == scheduled.Generation &&
         SelectionEpoch == scheduled.SelectionEpoch && formalDungeon is { CharacterDead: true } dungeon &&
-        dungeon.DeathSerial == scheduled.DeathSerial && dungeon.Run.Snapshot.Identity.InstanceId == scheduled.InstanceId
+        dungeon.Run.TagEvildomLife is null && dungeon.DeathSerial == scheduled.DeathSerial && dungeon.Run.Snapshot.Identity.InstanceId == scheduled.InstanceId
             ? ReturnFromFormalDungeon() : null);
 
     // 扣币提交失败时保留死亡状态；只有实际提交结果才能发布复活。
     public InventoryResult? ReviveFormalCharacter(ushort targetKey) => owner.Execute(() =>
     {
-        if (!CanChangeDungeonLife() || !formalDungeon!.CharacterDead || Selected!.Id != targetKey ||
+        if (!CanChangeDungeonLife() || formalDungeon!.Run.TagEvildomLife is not null || !formalDungeon.CharacterDead || Selected!.Id != targetKey ||
             formalDungeon.Entry.Maze.IsGriefTower) return null;
         if (formalDungeon.Entry.CoinLimit is { } maximum && formalDungeon.ReviveCount >= maximum)
             return InventoryResult.Reject();

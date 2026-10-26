@@ -22,7 +22,7 @@ internal sealed partial class CharacterRepository
         ArgumentNullException.ThrowIfNull(reward);
         ArgumentNullException.ThrowIfNull(catalog);
         ulong amount = reward.Amount;
-        if (!run.IsPendingDeath(prepared) || prepared.Death.Identity.CharacterId != expected.Id ||
+        if (run.TagEvildomLife is not null || !run.IsPendingDeath(prepared) || prepared.Death.Identity.CharacterId != expected.Id ||
             (run.Entry.DisableMonsterAndClearExperience ? amount != 0 : amount == 0) ||
             string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 || reward.MonsterId != prepared.Monster.MonsterId ||
             reward.MonsterLevel != prepared.Monster.CandidateLevel || reward.ResourceSource != DungeonKillExperienceCatalog.ResourcePath)

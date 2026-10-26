@@ -19,6 +19,7 @@ internal sealed record TownNpc(uint Id, int X, int Y);
 internal sealed record TownMap(string Path, WalkRegion[] Bounds, Link[] Links, bool IsRoom, TownNpc[] Npcs, string? Error = null)
 {
     public WalkRegion[] DungeonGates { get; init; } = [];
+    public bool TagDungeonPopup { get; init; }
 }
 internal sealed record TownPhase(int Index, int Quest);
 internal sealed record RoomPortal(byte Town, byte Area, Rectangle Bounds, int Level, int Quest);
@@ -478,6 +479,7 @@ internal sealed class TownCatalog
 
                 map = new(path, bounds, links.ToArray(), data.IsRoom, npcs.Distinct().ToArray())
                 {
+                    TagDungeonPopup = HasTagDungeonPopup(own),
                     DungeonGates = movable.Where(r => r.Values[4] == -1 && r.Values[5] == -1)
                         .Select(r => new WalkRegion(Rect(r.Values), r.Quests, r.Conditions)).ToArray()
                 };
@@ -573,6 +575,13 @@ internal sealed class TownCatalog
         cache.Add(path, result);
         return result;
     }
+
+    // 只识别完整已核入口声明；这是UI能力，不把热点矩形当人物必须站入的物理门。
+    internal static bool HasTagDungeonPopup(string text) => Regex.Matches(Block(text, "popup window areas"),
+        @"\[window area\](.*?)\[/window area\]", RegexOptions.Singleline).Any(match =>
+        Regex.IsMatch(Section(match.Groups[1].Value, "popup window"), @"^\s*`enter tagdungeon`\s*$") &&
+        Integers(Section(match.Groups[1].Value, "area")) is [_, _, > 0, > 0] &&
+        !Regex.IsMatch(match.Groups[1].Value, @"\[(quest|check) condition\]"));
 
     internal sealed record Row(int[] Values, int[] Quests, int[] Conditions);
     internal static Row[] Rows(string text, string tag, int width)

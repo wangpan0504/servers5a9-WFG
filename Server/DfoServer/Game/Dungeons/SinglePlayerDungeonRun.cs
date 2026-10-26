@@ -51,6 +51,7 @@ internal sealed class PreparedDungeonDeath(ConfirmedDungeonMonsterDeath death, D
     public DungeonPlannedMonster Monster { get; } = monster;
     public DungeonRunResult Result { get; } = result;
     internal int DummyStageIndex { get; } = dummyStageIndex;
+    internal DfoServer.Game.TagEvildom.TagEvildomClearFact? TagEvildomClear { get; init; }
 }
 
 // 正式战斗组件持有的能力对象。协议 handler 不创建权威，也不把客户端死亡字段变成此事件。
@@ -199,7 +200,7 @@ internal sealed partial class SinglePlayerDungeonRun
     public DungeonClearFact? ClearFact { get; private set; }
     internal void BindPartyInstance(Guid instance)
     {
-        if (instance == Guid.Empty || Phase != SinglePlayerDungeonPhase.Loading || allRooms.Any(room => room.Loaded))
+        if (tagEvildom is not null || instance == Guid.Empty || Phase != SinglePlayerDungeonPhase.Loading || allRooms.Any(room => room.Loaded))
             throw new InvalidOperationException("共享实例身份只能在入场准备阶段绑定");
         identity = identity with { InstanceId = instance };
     }
@@ -638,6 +639,7 @@ internal sealed partial class SinglePlayerDungeonRun
         if (HasPendingDeath || pendingSettlement is not null || !Matches(expected) || Phase == SinglePlayerDungeonPhase.Returned || actionId == Guid.Empty || identity.Epoch == long.MaxValue)
             return Result(DungeonRunOutcome.Rejected);
         acceptedActions.Add(actionId, new(expected, "return", null));
+        CancelTagEvildom();
         Phase = SinglePlayerDungeonPhase.Returned;
         Advance();
         return Result(DungeonRunOutcome.Accepted);
@@ -674,14 +676,17 @@ internal sealed partial class SinglePlayerDungeonRun
         var target = current.Plan.Monsters.Single(monster => monster.ObjectKey == confirmed.MonsterKey);
         bool conditionClears = !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && MatchesClearCondition(target) &&
             !HasPendingBossDeaths(confirmed.MonsterKey);
-        bool settles = !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && (TerminalBossCleared(confirmed.MonsterKey) ||
+        // TAG终末尚无自己的到账合同；真实怪物死亡可提交，但不能产生普通翻牌/任务通关许可。
+        bool settles = tagEvildom is null && !entry.IsClassExperience && Phase == SinglePlayerDungeonPhase.Dungeon && (TerminalBossCleared(confirmed.MonsterKey) ||
             conditionClears && IsTerminalRoom());
+        bool tagSettles = TagEvildomAdmission is not null && Phase == SinglePlayerDungeonPhase.Dungeon &&
+            (TerminalBossCleared(confirmed.MonsterKey) || conditionClears && IsTerminalRoom());
         // 明确的猎杀条件同样清退当前房间；非终点不产生通关事实，清退不产生击杀奖励。
-        ushort[] culled = current.Altar is null && (settles || conditionClears) ? current.Plan.Monsters.Where(monster => monster.IsBlocking &&
+        ushort[] culled = current.Altar is null && (settles || tagSettles || conditionClears) ? current.Plan.Monsters.Where(monster => monster.IsBlocking &&
             (conditionClears || !monster.IsBoss) &&
             monster.ObjectKey != confirmed.MonsterKey && !current.Dead.Contains(monster.ObjectKey)).Select(monster => monster.ObjectKey).ToArray() : [];
         // 中途任务目标保留原Boss与结算；仅最后可信阻挡死亡推进清房epoch。
-        bool clearsQuestRoom = !settles && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsQuestReplay &&
+        bool clearsQuestRoom = tagEvildom is null && !settles && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsQuestReplay &&
             Phase == SinglePlayerDungeonPhase.Dungeon && entry.QuestClearMap == current.Plan.Room.Map && target.IsBlocking &&
             current.Plan.Monsters.All(monster => !monster.IsBlocking || monster.ObjectKey == confirmed.MonsterKey ||
                 current.Dead.Contains(monster.ObjectKey) || current.Culled.Contains(monster.ObjectKey));
@@ -692,9 +697,9 @@ internal sealed partial class SinglePlayerDungeonRun
             storyStageIndex >= 0 && storyStageIndex + 1 < storyRooms.Length;
         DungeonPoint nextBossPosition = advancesStoryBoss ? storyRooms[storyStageIndex + 1].Plan.Room.Map.Position : BossPosition(nextStage);
         DungeonPoint? bossUpdate = target.IsDummyMapBoss ? nextBossPosition : null;
-        DungeonRunIdentity nextIdentity = settles || clearsQuestRoom || advancesDummy || advancesStoryBoss ? identity with { Epoch = checked(identity.Epoch + 1) } : identity;
+        DungeonRunIdentity nextIdentity = settles || tagSettles || clearsQuestRoom || advancesDummy || advancesStoryBoss ? identity with { Epoch = checked(identity.Epoch + 1) } : identity;
         var nextSnapshot = new DungeonRunSnapshot(nextIdentity,
-            settles ? SinglePlayerDungeonPhase.Settlement : Phase, current.Plan.Room.Map,
+            settles || tagSettles ? SinglePlayerDungeonPhase.Settlement : Phase, current.Plan.Room.Map,
             Array.AsReadOnly(current.Plan.Monsters.Where(monster => !current.Dead.Contains(monster.ObjectKey) &&
                 !current.Culled.Contains(monster.ObjectKey) && !culled.Contains(monster.ObjectKey) &&
                 monster.ObjectKey != confirmed.MonsterKey && (current.Altar is null || current.Altar.WasPublished(monster.ObjectKey)))
@@ -709,7 +714,8 @@ internal sealed partial class SinglePlayerDungeonRun
                 BossPositionUpdate = bossUpdate,
                 RoomClearFact = clearsQuestRoom ? new(nextIdentity,entry.DungeonId,current.Plan.Room.Map,
                     Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) : null
-            }, nextStage);
+            }, nextStage)
+            { TagEvildomClear = tagSettles ? new(nextIdentity, confirmed.EventId, TagEvildomAdmission!) : null };
         return new(DungeonRunOutcome.Accepted, pendingDeath);
     }
 
@@ -729,6 +735,19 @@ internal sealed partial class SinglePlayerDungeonRun
             clear.DungeonId == receipt.DungeonId && clear.Map.Id == receipt.MapId);
 
     public DungeonRunResult ConfirmCommittedDeath(PreparedDungeonDeath prepared)
+    {
+        if (prepared.TagEvildomClear is not null) return Result(DungeonRunOutcome.Rejected);
+        return ConfirmDeath(prepared);
+    }
+
+    internal DungeonRunResult ConfirmCommittedTagEvildomClear(DfoServer.Game.TagEvildom.TagEvildomClearCommit committed)
+    {
+        if (!ReferenceEquals(committed.Plan.Run, this) || committed.MailId == 0 ||
+            committed.Plan.Death.TagEvildomClear is null) return Result(DungeonRunOutcome.Rejected);
+        return ConfirmDeath(committed.Plan.Death);
+    }
+
+    DungeonRunResult ConfirmDeath(PreparedDungeonDeath prepared)
     {
         ArgumentNullException.ThrowIfNull(prepared);
         if (!ReferenceEquals(pendingDeath, prepared))
@@ -769,7 +788,7 @@ internal sealed partial class SinglePlayerDungeonRun
     {
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
-        if (entry.IsPractice || entry.DungeonId is >= 11008 and <= 11107 || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
+        if (tagEvildom is not null || entry.IsPractice || entry.DungeonId is >= 11008 and <= 11107 || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
             HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial && !entry.DisableMonsterAndClearExperience ||
             entry.DisableMonsterAndClearExperience && reward.TotalExperience != 0 ||
             (ulong)reward.BaseExperience + reward.RankExperience + reward.ExtraExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||
@@ -816,7 +835,7 @@ internal sealed partial class SinglePlayerDungeonRun
         first.MonsterKey == second.MonsterKey && first.CombatSequence == second.CombatSequence;
 
     internal bool IsPassiveClearCondition(DungeonRunIdentity expected, int templateId, int sourceOrdinal) =>
-        Matches(expected) && Phase == SinglePlayerDungeonPhase.Dungeon && !entry.IsClassExperience &&
+        tagEvildom is null && Matches(expected) && Phase == SinglePlayerDungeonPhase.Dungeon && !entry.IsClassExperience &&
         pendingDeath is null && pendingPassiveClear is null && pendingSettlement is null && CanAdvance() && !HasCommittedPassiveClearCondition &&
         passiveClearTarget == templateId && sourceOrdinal >= 0 && sourceOrdinal < current.Plan.Room.PassiveObjects.Count &&
         current.Plan.Room.PassiveObjects[sourceOrdinal].ObjectId == templateId &&
@@ -877,7 +896,7 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private DungeonRunResult SettleIfCleared()
     {
-        if (!entry.IsClassExperience && TerminalBossCleared() && deaths.Count > 0)
+        if (tagEvildom is null && !entry.IsClassExperience && TerminalBossCleared() && deaths.Count > 0)
         {
             Phase = SinglePlayerDungeonPhase.Settlement;
             Advance();
@@ -1058,7 +1077,7 @@ internal sealed partial class SinglePlayerDungeonRun
         return new(DungeonRunOutcome.Accepted, Snapshot, ClearFact);
     }
     private bool Matches(DungeonRunIdentity expected) => identity == expected && Phase != SinglePlayerDungeonPhase.Returned;
-    private bool CanAdvance() => identity.Epoch < long.MaxValue - 2;
+    private bool CanAdvance() => identity.Epoch < long.MaxValue - 2 && tagEvildom?.Snapshot is not { Defeated: true } and not { Cancelled: true };
     private void Advance()
     {
         CancelRidable();

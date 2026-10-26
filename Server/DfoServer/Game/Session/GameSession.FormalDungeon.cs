@@ -48,6 +48,13 @@ internal sealed partial class GameSession
         public uint ClearTimeMilliseconds { get; set; }
         public bool SettlementEnabled { get; set; }
         public FormalSettlement? Settlement { get; set; }
+        public TagEvildomEntrySelection? TagEvildomEntry { get; init; }
+        public long? TagEvildomStartedTimestamp { get; set; }
+        public TagEvildomClearPreparation? PendingTagEvildomClear { get; set; }
+        public DfoServer.Game.TagEvildom.TagEvildomRewardSelection? TagEvildomRewardSelection { get; set; }
+        public DfoServer.Game.TagEvildom.TagEvildomClearPlan? PendingTagEvildomReward { get; set; }
+        public TagEvildomClearReceipt? CommittedTagEvildomClear { get; set; }
+        public bool TagEvildomResultPublished { get; set; }
         public OperationHopeRewardPlan? PendingHopeReward { get; set; }
         public bool HopeRewardConfirmed { get; set; }
         public Dictionary<(DungeonMap Map, int Template, int Ordinal), PendingQuestScene> QuestSceneEvents { get; } = [];
@@ -137,6 +144,9 @@ internal sealed partial class GameSession
             (requiredCharacter is null || ReferenceEquals(requiredCharacter,Selected)) ? Selected : null, SelectionEpoch, CurrentDungeonSelection));
         if (expected is null || expected.DungeonState is null || !partyAdmission && HasMultiplePartyMembers?.Invoke() == true)
             return RejectFormal("session-not-ready-or-no-dungeon-state");
+        var tagEntry = dungeonId is 9608 or 400000095 ? CurrentTagEvildomSelection(expected, epoch, dungeonId) : null;
+        if (dungeonId is 9608 or 400000095 && (tagEntry is null || questId != 0 || difficulty != 0 || retry is not null ||
+            practice || classExperience || hellParty || hellLegend || sealDoor || partyAdmission)) return RejectFormal("tag-evildom-selection-required");
         var hope = dungeonId == 8523 ? CurrentHopeAdmission(expected,epoch) : null;
         if (dungeonId == 8523 && (hope is null || questId != 0 || difficulty != hope.Catalog.Difficulty || retry is not null ||
             classExperience || hellParty || hellLegend || sealDoor || practice)) return RejectFormal("operation-hope-admission-required");
@@ -221,13 +231,13 @@ internal sealed partial class GameSession
             selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id || selection.OriginPosition != expected.Position))
             return RejectFormal("practice-selection-missing");
         var approvedPartyRoute = shared?.Session.PreparedParty(shared).Dungeon.Entry.PartyRoute;
-        if (!training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon, approvedPartyRoute) is { } selectionReason)
+        if (tagEntry is null && !training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon, approvedPartyRoute) is { } selectionReason)
             return RejectFormal(selectionReason);
         // 频道专属城镇（最后防线）的选图副本要求持有 dgn [required item]；次数与第三列消耗见 EntryCost。
         bool channelTown = !training && !trainingRoom && !classExperience && assault is null && !hellParty &&
             ChannelAreaLanding.IsChannelBoundTown(towns, expected.Position.Town);
         // 悲叹/绝望之塔与祭坛的入场券、邀请函由各自准入策略规划，不再按频道城镇 [required item] 先行拒绝。
-        bool specialAdmission = grief is not null || despair is not null || dungeonId is 11006 or 11007;
+        bool specialAdmission = tagEntry is not null || grief is not null || despair is not null || dungeonId is 11006 or 11007;
         if (channelTown && !specialAdmission &&
             ChannelTownDungeonRequirement.Check(catalog.Get(checked((int)dungeonId)), expected.Inventory, pieces, DateTimeOffset.UtcNow) is { } missingItem)
             return RejectFormal(missingItem);
@@ -281,7 +291,7 @@ internal sealed partial class GameSession
             allowClearedTerminalQuest: questId == 0 ? HasOriginalTerminalClear : null,
             hellParty: hellParty,hellLegend: hellLegend,practice: practice,
             // 频道专属城镇的选图副本（超时空之战 400000016 的 [boss map] 6 0 只写 `map`）按客户端规则把 Boss 坐标格当 Boss 图；其他副本不变。
-            bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute))
+            bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute,tagEvildom:tagEntry?.Admission,tagMaze:tagEntry?.MazeOrdinal))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         if (partyAdmission && (entry!.Maze.IsGriefTower || entry.IsAltar || entry.IsDespair || entry.IsTournament))
             return RejectFormal("party-special-dungeon-unsupported");
@@ -357,12 +367,12 @@ internal sealed partial class GameSession
             prepared = prepared with { Dungeon = prepared.Dungeon with { GriefItems = new(catalog.GriefTower), GriefAdmission = grief } };
         // 只有正式入场计入冒险团每周地下城信息：练习、训练、职业体验与比赛不消耗次数。
         WeeklyDungeonEntry? weekly = null;
-        if (!entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTournament && !entry.IsTrainingRoom &&
+        if (tagEntry is null && !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTournament && !entry.IsTrainingRoom &&
             WeeklyDungeonPolicy.SlotOf(catalog.Get(checked((int)dungeonId))) is { } weeklySlot)
             weekly = new(WeeklyDungeonPolicy.WeekKey((timeProvider ?? TimeProvider.System).GetUtcNow()), weeklySlot);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
             // 普通入场票已覆盖相同物品时，频道代价只保留次数；超星空通行证规划字段仍完整传入提交阶段。
-            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
+            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { TagEvildomEntry = tagEntry, HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
                 CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry,
                 ChannelCost = channelCost is { Consume: not null } && entry.EntryItem is not null ? channelCost with { Consume = null } : channelCost } };
 
@@ -422,7 +432,7 @@ internal sealed partial class GameSession
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");
         QuestDropResources? questDrops = null;
-        if (!entry.IsTutorial && !entry.IsClassExperience && !entry.IsPractice && questCatalog is not null && items is not null && pieces is not null)
+        if (!entry.IsTagEvildom && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsPractice && questCatalog is not null && items is not null && pieces is not null)
         {
             try { questDrops = QuestDropResources.Create(expected,entry,questCatalog,items,pieces,contracts?.Growth); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException) { return RejectFormal("quest-drop-resources-unsupported"); }
@@ -500,7 +510,7 @@ internal sealed partial class GameSession
         var groundReservations = new List<DungeonGroundReservation>();
         if ((drops is null) != (items is null)) throw new InvalidDataException("掉落资源依赖必须同时提供");
         // 比赛副本 [disable drop item]，不准备掉落。
-        if (drops is not null && items is not null && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
+        if (drops is not null && items is not null && !entry.IsTagEvildom && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
         {
             var prepareMonsterDrops = prepareDrops?.Invoke(entry);
             foreach (var plan in plans)
@@ -544,7 +554,7 @@ internal sealed partial class GameSession
                 }
             }
         }
-        else if (prepareDrops is not null && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
+        else if (prepareDrops is not null && !entry.IsTagEvildom && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
             throw new InvalidDataException("集合掉落生成计划必须同时装配实际物品依赖");
         var route = new DungeonFixedRoute(Array.AsReadOnly(plans.ToArray()),
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
@@ -639,6 +649,8 @@ internal sealed partial class GameSession
         // 先持久预留本实例key/attempt；通知失败不重新安装或复用原实例身份。
         var character = prepared.Character;
         var installing = prepared.Dungeon;
+        if (installing.TagEvildomEntry is { } tagEntry &&
+            !ReferenceEquals(CurrentTagEvildomSelection(character, prepared.SelectionEpoch, installing.Entry.DungeonId), tagEntry)) return null;
         if (installing.GriefAdmission is { } grief &&
             grief.Decision.Day != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow())) return null;
         if (installing.Entry.IsPractice && (installing.Entry.HellParty is not null || installing.Entry.IsHellLegend ||
@@ -754,12 +766,12 @@ internal sealed partial class GameSession
         }
         ushort entryFatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : installing.Entry.StartFatigue;
         Character committed;
-        if (entryItems is not null || entryFatigue > 0 || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Entry.Hope is not null)
+        if (entryItems is not null || entryFatigue > 0 || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             var entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                 new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                    prepared.Weekly,installing.GriefAdmission) { Special = installing.SpecialEntry, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = hopeIncount });
+                    prepared.Weekly,installing.GriefAdmission) { Special = installing.SpecialEntry, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = hopeIncount, TagEvildom = installing.TagEvildomEntry?.Admission });
             committed = entryCommit.Character;
             if (hopeIncount is { Row: { } hopeRow, Increment: true } && entryCommit.IncountUsage is { } actualUsage)
                 enterCounts = [.. DungeonIncountPolicy.Views(hopeRow, actualUsage)];
@@ -772,6 +784,9 @@ internal sealed partial class GameSession
             }
         }
         else committed = repository.ReserveDungeonAttempt(owner,character,prepared.NextKey,prepared.Weekly);
+        if (installing.TagEvildomEntry is { } tagInstalled &&
+            !installing.Run.InstallTagEvildom(new(committed, tagInstalled.Admission.Standby, tagInstalled.Admission.Configuration.Revision), tagInstalled.Admission))
+            throw new InvalidOperationException("已提交TAG准入不能安装原正式实例");
         prepared.Dungeon.Ground.PublishPassiveEntry();
         if (formalDungeon is { } previous)
         {
@@ -781,6 +796,7 @@ internal sealed partial class GameSession
         }
         Selected = committed;
         formalDungeon = installing;
+        tagEvildomSelection = null;
         if (installing.Entry.Hope is not null) hopeSelection = null;
         pendingDungeonContinuation = null;
         pendingQuestReplay = null;
@@ -845,6 +861,8 @@ internal sealed partial class GameSession
             }
             var result = dungeon.Run.CompleteLoading(identity,Guid.NewGuid(),hasMatchingQuest);
             if (result.Outcome != DungeonRunOutcome.Accepted) return null;
+            if (dungeon.Run.TagEvildomLife is not null)
+                dungeon.TagEvildomStartedTimestamp ??= (timeProvider ?? TimeProvider.System).GetTimestamp();
             pendingDungeonContinuation = null;
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
@@ -1007,12 +1025,15 @@ internal sealed partial class GameSession
         if (preparation.Outcome != DungeonRunOutcome.Accepted)
             return new FormalDungeonDeathResult(preparation.Outcome) { ReportedTarget = target };
         var pending = preparation.Pending!;
-        if (dungeon.Entry.IsClassExperience || dungeon.Entry.IsPractice)
+        if (pending.TagEvildomClear is not null)
+            return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, MonsterKey: pending.Death.MonsterKey)
+                { PendingTagEvildomClear = PrepareTagEvildomClear(dungeon, pending), ReportedTarget = target };
+        if (dungeon.Entry.IsClassExperience || dungeon.Entry.IsPractice || dungeon.Run.TagEvildomLife is not null)
         {
-            // 体验和练习只推进本次内存死亡，不写成长、掉落或任务账本。
+            // 体验、练习及尚无经济生产者的TAG只推进本次内存死亡，不写成长、掉落或任务账本。
             var death = dungeon.Run.ConfirmCommittedDeath(pending);
             if (death.Outcome != DungeonRunOutcome.Accepted)
-                throw new InvalidOperationException("练习或职业体验死亡不能确认原实例准备");
+                throw new InvalidOperationException("无经济死亡不能确认原实例准备");
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
             if (death.ClearFact is not null)
                 dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
@@ -1100,7 +1121,8 @@ internal sealed partial class GameSession
     public FormalDungeonPickupResult PickFormalDungeonItem(uint groundKey, ItemCatalog items, EpicPieceCatalog pieces,
         GoldLimitCatalog? goldLimits = null) => owner.Execute(() =>
     {
-        if (!CanMutatePartyDungeon || !Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.Run.HasPendingSettlement || HasPendingQuestScene)
+        if (!CanMutatePartyDungeon || !Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon ||
+            dungeon.Run.TagEvildomLife is not null || dungeon.Run.HasPendingSettlement || HasPendingQuestScene)
             return new FormalDungeonPickupResult(DungeonRunOutcome.Rejected);
         var identity = dungeon.Run.Snapshot.Identity;
         var original = dungeon.Ground.FindAvailable(identity, groundKey) ?? dungeon.Ground.Snapshot.Items
@@ -1163,6 +1185,7 @@ internal sealed partial class GameSession
         }
         if (dungeon.Run.Return(dungeon.Run.Snapshot.Identity, Guid.NewGuid()).Outcome != DungeonRunOutcome.Accepted) return null;
         dungeon.Ground.ExpireRun();
+        if (dungeon.Run.TagEvildomLife is not null) tagEvildomPair = null;
         formalDungeon = null;
         CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
         CancelDungeonContinuation();

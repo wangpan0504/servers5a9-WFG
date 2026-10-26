@@ -68,7 +68,7 @@ internal sealed class TagEvildomProjection(ITagEvildomConfigurationStore store,
             bool informationSent = false;
             await context.Notify(NotiPacketType.TAG_TOURNAMENT_CHARACTER_INFO,
                 characterInfo, "tag_evildom_character_info", () => informationSent = CharactersGuard());
-            if (informationSent) return true;
+            if (informationSent && context.Session.MarkTagEvildomPairPublished(Store, characters, primaryAppearance, standbyAppearance, Now)) return true;
             log.Write("tag_evildom_character_info_retry", new { Connection = context.Id, Attempt = attempt + 1, MetadataSent = metadataSent });
         }
         if (!Guard()) return false;

@@ -311,6 +311,32 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         });
     }
 
+    // TAG回城后下一次入场使用新双Actor；只刷新真实登录队首资料，不重复选角/邮箱等初始化协议。
+    public async Task<TownCharacterProjection?> RefreshTagEvildomPrimaryAsync(GameConnectionContext context, TownTravelReceipt receipt)
+    {
+        var character = receipt.Character;
+        var now = timer.GetUtcNow();
+        var appearance = DfoServer.Game.TagEvildom.TagEvildomAppearance.Capture(character, now);
+        bool Guard() => context.Session.CanPublishTravel(receipt) && appearance.Matches(character, timer.GetUtcNow());
+        if (!Guard()) return null;
+        bool actorSent = false, playerSent = false, skillsSent = !character.Learning.Initialized, combosSent = character.Job != 9;
+        bool premiumPcRoom = context.Session.PremiumPcRoom;
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel, now.ToUnixTimeSeconds(),
+            context.Session.ReadAdventureName(), premiumPcRoom: premiumPcRoom), "tag_evildom_return_actor", () => actorSent = Guard());
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(character, stats.Compute(character),
+            context.Session.ReadAdventureLevel(), context.Channel, now), "tag_evildom_return_player", () => playerSent = Guard());
+        if (character.Learning.Initialized)
+        {
+            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning,
+                learning is null ? null : id => learning.Get(character.Job, id).DefaultCommand), "tag_evildom_return_skills", () => skillsSent = Guard());
+            if (character.Job == 9)
+                await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(character.Learning), "tag_evildom_return_combos", () => combosSent = Guard());
+        }
+        if (!actorSent || !playerSent || !skillsSent || !combosSent || !Guard()) return null;
+        context.Premiums?.RecordPremiumAppearance(character, now.ToUnixTimeSeconds(), premiumPcRoom);
+        return new(character, now);
+    }
+
     public async Task GiftEffectAsync(GameConnectionContext context, int itemId, Func<bool> guard)
     {
         if (!guard()) return;

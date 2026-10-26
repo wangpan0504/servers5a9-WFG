@@ -1,3 +1,26 @@
+CREATE TABLE account_tag_evildom_runs(
+  account TEXT NOT NULL,
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  first INTEGER NOT NULL CHECK(typeof(first)='integer' AND first BETWEEN 1 AND 65535),
+  second INTEGER NOT NULL CHECK(typeof(second)='integer' AND second BETWEEN 1 AND 65535 AND second<>first),
+  task_attempt INTEGER NOT NULL CHECK(typeof(task_attempt)='integer' AND task_attempt>0),
+  configuration_revision INTEGER NOT NULL CHECK(typeof(configuration_revision)='integer' AND configuration_revision>0),
+  team_index INTEGER NOT NULL CHECK(typeof(team_index)='integer' AND team_index BETWEEN 0 AND 2),
+  dungeon_id INTEGER NOT NULL CHECK(dungeon_id IN(9608,400000095)),
+  resource_key TEXT NOT NULL CHECK(length(resource_key)=64),
+  admitted_at INTEGER NOT NULL CHECK(typeof(admitted_at)='integer' AND admitted_at>=0),
+  clearance_receipt TEXT,
+  clear_event TEXT CHECK(clear_event IS NULL OR length(clear_event)=32),
+  reward_json TEXT CHECK(reward_json IS NULL OR json_valid(reward_json)),
+  cleared_at INTEGER CHECK(cleared_at IS NULL OR (typeof(cleared_at)='integer' AND cleared_at>=0)),
+  elapsed_ms INTEGER CHECK(elapsed_ms IS NULL OR (typeof(elapsed_ms)='integer' AND elapsed_ms>=0)),
+  mail_id INTEGER CHECK(mail_id IS NULL OR (typeof(mail_id)='integer' AND mail_id>0)),
+  PRIMARY KEY(account,instance_id),UNIQUE(first,task_attempt),
+  CHECK((clearance_receipt IS NULL AND clear_event IS NULL AND reward_json IS NULL AND cleared_at IS NULL AND elapsed_ms IS NULL AND mail_id IS NULL)
+    OR (clearance_receipt IS NOT NULL AND clearance_receipt=instance_id AND clear_event IS NOT NULL AND reward_json IS NOT NULL AND cleared_at IS NOT NULL AND elapsed_ms IS NOT NULL AND mail_id IS NOT NULL)),
+  FOREIGN KEY(account,clearance_receipt) REFERENCES account_tag_evildom_clearances(account,receipt)
+);
+
 -- S5A9 当前完整数据库结构；账号与游戏数据统一保存。
 CREATE TABLE account_tag_evildom_clearances(
   receipt TEXT NOT NULL CHECK(length(receipt)>0),

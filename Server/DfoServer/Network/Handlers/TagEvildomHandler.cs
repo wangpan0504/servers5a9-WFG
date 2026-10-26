@@ -1,4 +1,5 @@
 using DfoServer.Infrastructure;
+using DfoServer.Game.Session;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
@@ -6,10 +7,12 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class TagEvildomHandler(TagEvildomProjection projection, TownProjection town, ServerLog log) : IGameCommandModule
+internal sealed partial class TagEvildomHandler(TagEvildomProjection projection, TownProjection town, ServerLog log) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
+        commands.Register(CmdPacketType.TAG_TOURNAMENT_CHARACTER_TAG_IN, SwitchAsync, nameof(TagEvildomHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.DIE_TAG_TOURNAMENT_CHARACTER, DeathAsync, nameof(TagEvildomHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.TAG_EVILDOM_TEAM_SETTING, (context, packet) => ChangeAsync(context, packet, false), nameof(TagEvildomHandler));
         commands.Register(CmdPacketType.TAG_EVILDOM_TEAM_INIT, (context, packet) => ChangeAsync(context, packet, true), nameof(TagEvildomHandler));
     }

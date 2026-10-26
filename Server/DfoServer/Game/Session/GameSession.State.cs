@@ -23,7 +23,11 @@ internal sealed partial class GameSession
         bool endingPvp = next != SessionPhase.PvpRoom;
         _ = ReadState(next, endingDungeon, endingPvp);
         if (endingPvp) pvpTraining = null;
-        if (endingDungeon) formalDungeon = null;
+        if (endingDungeon)
+        {
+            formalDungeon?.Run.CancelTagEvildom();
+            formalDungeon = null;
+        }
         if (Phase == SessionPhase.Town && next != SessionPhase.Town)
         {
             // 离开首次入城场景即结束登录复述窗口；快速取消选图也不能重新吸收真实卸装。

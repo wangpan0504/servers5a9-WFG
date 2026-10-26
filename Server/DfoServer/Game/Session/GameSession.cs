@@ -285,6 +285,9 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         pendingPvpSkills = null;
         InvalidateExpertJobStore(publishExpertJob);
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
+        tagEvildomPair = null;
+        tagEvildomSelection = null;
+        formalDungeon?.Run.CancelTagEvildom();
         formalDungeon = null;
         gameCache.Clear();
         ClearConsumableUse();

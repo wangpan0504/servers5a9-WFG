@@ -52,6 +52,7 @@ internal sealed partial class GameSession
         catch (InvalidDataException) { return ((TagEvildomProjection?)null, "invalid-team-shape"); }
         if (reason != "ready") return ((TagEvildomProjection?)null, reason);
         var committed = store.CommitTagEvildomConfiguration(owner, before, desired, TagEvildomPeriod.At(now));
+        tagEvildomPair = null;
         return (snapshot with { State = snapshot.State with { Configuration = committed } }, "committed");
     });
 
