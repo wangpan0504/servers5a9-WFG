@@ -119,12 +119,14 @@ internal static class AvatarPackageTcpTests
             repository.Create(owner, new("ObservedBox", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Job = 15, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
-                Inventory = new([new(0, Bag(68), Core(490705413)), new(0, Bag(69), Core(490705389)), new(0, Bag(70), Core(490705390)), new(0, Bag(71), Core(490705389)), new(0, Bag(72), Core(490705390))])
+                Inventory = new([new(0, Bag(68), Core(490705413)), new(0, Bag(69), Core(490705389)), new(0, Bag(70), Core(490705390)), new(0, Bag(71), Core(490705389)), new(0, Bag(72), Core(490705390)),
+                    new(0, Bag(73), Core(490704635)), new(0, Bag(74), Core(490704635))])
             });
         await fixture.StartAsync();
         BoosterTcpTests.SetExpirationDebug(fixture, true);
         foreach (var failure in new[] {
             (Table: "inventory_avatar_details", Body: "450001000000000014C7EF170000"),
+            (Table: "inventory_avatar_details", Body: "490001000000000002C7EF170000"),
             (Table: "inventory_creature_details", Body: "4600010000000000ECA0E6170000") })
         {
             string unchanged;
@@ -158,7 +160,9 @@ internal static class AvatarPackageTcpTests
                 (Id: 490705389, Slot: (short)69, Reward: 401590036, Body: "450001000000000014C7EF170000"),
                 (Id: 490705390, Slot: (short)70, Reward: 400990444, Body: "4600010000000000ECA0E6170000"),
                 (Id: 490705389, Slot: (short)71, Reward: 401590037, Body: "470001000000000015C7EF170000"),
-                (Id: 490705390, Slot: (short)72, Reward: 400990445, Body: "4800010000000000EDA0E6170000") })
+                (Id: 490705390, Slot: (short)72, Reward: 400990445, Body: "4800010000000000EDA0E6170000"),
+                (Id: 490704635, Slot: (short)73, Reward: 401590018, Body: "490001000000000002C7EF170000"),
+                (Id: 490704635, Slot: (short)74, Reward: 401590019, Body: "4A0001000000000003C7EF170000") })
             {
                 byte[] body = Convert.FromHexString(sample.Body);
                 peer.Send(160, body);
@@ -188,15 +192,23 @@ internal static class AvatarPackageTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
-            CheckAvatarRows(peer.SpecialContainers[1].Body, [new(415600033, 0), new(401590036, 0), new(401590037, 0)], full: true);
+            CheckAvatarRows(peer.SpecialContainers[1].Body,
+                [new(415600033, 0), new(401590036, 0), new(401590037, 0), new(401590018, 0), new(401590019, 0)], full: true);
             That(peer.SpecialContainers.Single(packet => packet.Opcode == 105).Body.SequenceEqual(committedPetDetails),
                 "重连仍恢复两个选择各自的完整宠物详情");
         }
         await fixture.StopAsync();
-        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[3L]] &&
+        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[5L]] &&
             fixture.Query("SELECT count(*) FROM inventory_creature_details") is [[2L]] &&
-            fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[5L, 5L]],
-            "光环与宠物各两项选择及共享武器礼盒保存五个唯一实例，源礼盒均已扣除");
+            fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[7L, 7L]],
+            "使徒与金秋光环各两项、两种宠物及武器装扮保存七个唯一实例，源礼盒均已扣除");
+        foreach (int id in new[] { 401590018, 401590019 })
+        {
+            string json = (string)fixture.Query("SELECT d.detail FROM inventory_avatar_details d JOIN character_inventory_items i USING(item_uid) WHERE json_extract(i.item_core,'$.ItemId')=$p0", id).Single().Single()!;
+            That(JsonSerializer.Deserialize<AvatarDetail>(json) ==
+                new AvatarDetail { Socket0 = new(239, -1), Socket1 = new(239, -1) },
+                "金秋光环完整详情持久化两个多色空孔，其余孔及期限保持零");
+        }
         ItemCore Core(int id) => InventoryRewardGrantService.Create(items.Get(id), shopExpiration: true);
         string State() => Snapshot(fixture) + JsonSerializer.Serialize(fixture.Query("SELECT item_uid,detail FROM inventory_creature_details ORDER BY item_uid"));
     }
@@ -335,6 +347,10 @@ internal static class AvatarPackageTcpTests
             if (choice.ItemId == 401580026)
                 That(U16(body, at + 127) == 239 && U32(body, at + 129) == uint.MaxValue &&
                     U16(body, at + 133) == 239 && U32(body, at + 135) == uint.MaxValue, "type4皮肤投影两枚空M孔");
+            if (choice.ItemId is 401590018 or 401590019)
+                Bytes(body.AsSpan(at + 123, 34), Convert.FromHexString(
+                    "1E000000EF00FFFFFFFFEF00FFFFFFFF000000000000000000000000000000000000"),
+                    "金秋光环发奖和重连均下发RAW30：双M孔、空徽章-1、其余三孔关闭");
         }
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);

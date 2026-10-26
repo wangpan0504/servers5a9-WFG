@@ -339,9 +339,27 @@ internal static class AvatarPackageTests
         var now = DateTimeOffset.UtcNow;
         var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces,
             new() { IgnoreCashShopAbsoluteExpiration = true });
+        foreach (int id in new[] { 401590018, 401590019 })
+        {
+            var template = resources.Items.Get(id);
+            That(template is { Kind: ItemKind.Avatar, EquipmentSlot: 9 } &&
+                template.AvatarSockets == new AvatarSocketTypes(239, 239, 0, 0, 0) &&
+                packages.GetAvatar(id).Types.IsEmpty &&
+                packages.Get(490704635).Categories.Single().Rows.Single(row => row.ItemId == id).Type == 4,
+                "金秋光环礼盒type4没有对应期限表，须使用模板声明的永久双M孔");
+            var direct = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Avatar, 0),
+                InventoryRewardGrantService.Create(template, utcNow: now));
+            That(direct.Avatar == new AvatarDetail { Socket0 = new(239, -1), Socket1 = new(239, -1) },
+                "金秋光环直接发放保留两个开放空孔，其余孔位关闭且永久");
+        }
+        That(resources.Items.Get(101590015).AvatarSockets == new AvatarSocketTypes(239, 239, 0, 0, 0) &&
+            resources.Items.Get(401590017).AvatarSockets == default,
+            "带孔光环按声明读取，无孔光环不因同部位而补孔");
         foreach (var sample in new[] {
             (Id: 490705389, Body: "450001000000000014C7EF170000"),
             (Id: 490705389, Body: "450001000000000015C7EF170000"),
+            (Id: 490704635, Body: "450001000000000002C7EF170000"),
+            (Id: 490704635, Body: "450001000000000003C7EF170000"),
             (Id: 490705413, Body: "4400010000000900A18DC5180000") })
         {
             var request = AvatarPackageRequests.Read(Convert.FromHexString(sample.Body), 1, 1);
@@ -355,6 +373,10 @@ internal static class AvatarPackageTests
             if (sample.Id == 490705389)
                 That(result.Plan!.After.Items.Single().Avatar is { Socket0.Type: 239, Socket1.Type: 239 },
                     "无期限表光环保留模板声明的两个M孔，不虚构期限类型表");
+            if (sample.Id == 490704635)
+                That(result.Plan!.After.Items.Single().Avatar ==
+                    new AvatarDetail { Socket0 = new(239, -1), Socket1 = new(239, -1) },
+                    "金秋礼盒两项选择均生成永久双M空孔，不被奖励行type4覆盖成无孔");
             That(!packages.GetAvatar(request.ItemIds[0]).RequiresAbilityChoice, "实际产物没有可选属性声明");
             foreach (var bad in new[] { request with { Choices = [new(request.ItemIds[0], 1)] },
                 request with { Choices = [new(1, 0)] }, request with { Category = 255 } })
