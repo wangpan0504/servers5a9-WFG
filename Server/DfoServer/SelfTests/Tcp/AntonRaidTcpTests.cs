@@ -98,6 +98,23 @@ internal static class AntonRaidTcpTests
             That(fixture.Snapshot() == saved && Assets() == assets, "扩至二十人仍保持完整位置/资产/疲劳/回执不变");
             leader.Send(668, Build(w => w.Write(key)));
             Bytes(Until(leader, 1, 668).Body, [0, 19, 0], "招募成员不能伪装成正式攻坚重入");
+            // 660 的两字节读宽已证；招募成员和团外玩家均无正式奖励资格，不能借重复选牌进入成功链。
+            var beforeReward = Information(observer, key, 1).Members;
+            foreach (var requester in new[] { leader, observer })
+            {
+                foreach (byte selection in new byte[] { 0, 1, 2, 5 })
+                {
+                    for (int repeat = 0; repeat < 2; repeat++)
+                    {
+                        requester.Send(660, [selection, 0]);
+                        Drain(requester); // 只接受既有旁路通知；任何领奖ACK或阶段/奖励通知均失败。
+                    }
+                }
+                var unchanged = Information(observer, key, 1);
+                That(unchanged.Members.SequenceEqual(beforeReward) &&
+                    fixture.Snapshot() == saved && Assets() == assets,
+                    "未开战选牌及重复请求不改变成员、分队、位置、门票、资产、疲劳或副本回执");
+            }
             for (int index = 0; index < 20; index++)
             {
                 leader.Send(669, Build(w => { w.Write(0u); w.Write((uint)peers[index].Id); w.Write((uint)(index / 4 + 1)); }));
@@ -200,6 +217,12 @@ internal static class AntonRaidTcpTests
             peers[2].Select(); Drain(peers[2]);
             peers[2].Send(666);
             Bytes(Until(peers[2], 1, 666).Body, [0, 19, 0], "重新选角不继承旧攻坚队或开战资格");
+            var beforeStaleMembers = Information(observer, key, 1).Members;
+            string beforeStaleReward = fixture.Snapshot();
+            peers[2].Send(660, [0, 0]); Drain(peers[2]);
+            That(fixture.Snapshot() == beforeStaleReward && Assets() == assets &&
+                Information(observer, key, 1).Members.SequenceEqual(beforeStaleMembers),
+                "重新选角后旧会话不恢复团本奖励资格、不发奖或重新加入原团");
 
             // 真正关闭socket后等待幸存者的完整成员通知，以可观测事件代替固定休眠。
             Drain(peers[1]);
