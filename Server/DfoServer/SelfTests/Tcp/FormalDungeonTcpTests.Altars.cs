@@ -15,6 +15,8 @@ internal static partial class FormalDungeonTcpTests
     public static async Task RunAltarsAsync(ServerOptions source,string root,TcpTestResources resources)
     {
         DungeonAltarSessionTests.Run(resources);
+        var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
+        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         var clock = new AltarTimers(20);
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"dungeon-altars"),resources:resources,clock:clock);
         await fixture.StartAsync();
@@ -118,7 +120,7 @@ internal static partial class FormalDungeonTcpTests
                 SelectTowerMap(peer,griefLayer:1);
                 BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16), loaded ? questId : 0u);
                 peer.Send(16,request);
-                peer.Expect(0,212);
+                var returningInfo = peer.Expect(0,212).Body;
                 var returningMap = peer.Expect(0,211).Body;
                 That(U32(returningMap,8) == U32(returningMap,2), "再入场仍使用真实地图编号");
                 if (fee > 0) peer.Expect(0,14);
@@ -128,10 +130,66 @@ internal static partial class FormalDungeonTcpTests
                     // 极限覆盖258先于37；完整加载收尾前仍不允许启动回合。
                     if (id == 11007) { peer.Send(258); peer.Barrier(); }
                     Load(peer);
+                    byte[] move = new byte[100];
+                    if (id == 11006)
+                    {
+                        var definition = dungeons.Get(11006);
+                        var maze = dungeons.ResolveOrdinaryMaze(definition,
+                            definition.Mazes.Single(row => row.SourceOrdinal == returningInfo[5]), _ => 0);
+                        var origin = new DfoServer.GameWorld.Dungeons.DungeonPoint(returningMap[0], returningMap[1]);
+                        var target = maze.StaticTopology.Links!.SelectMany(link =>
+                            new[] { (From: link.First, To: link.Second), (From: link.Second, To: link.First) })
+                            .Single(edge => edge.From == origin).To;
+                        move[0] = checked((byte)target.X);
+                        move[1] = checked((byte)target.Y);
+                        peer.Send(45, move);
+                        peer.Barrier();
+                    }
                     if (id == 11006) peer.Send(258);
                     peer.Expect(0,215);
                     var spawned = ReadUntil(210);
                     That(U16(spawned.Body,0) > 0, "已启动波次的祭坛仍可主动退出");
+                    if (id == 11006)
+                    {
+                        // 逐批消费实际210；末批interval=0来自资源计划，不用固定怪物数或等待时间模拟清房。
+                        int batches = 0;
+                        while (true)
+                        {
+                            That(++batches <= ushort.MaxValue && spawned.Body.Length == 4 + U16(spawned.Body,0) * 17,
+                                "无尽清首房的波次数量有界且每个对象记录完整");
+                            int actors = U16(spawned.Body,0);
+                            bool last = U16(spawned.Body,spawned.Body.Length - 2) == 0;
+                            if (last)
+                            {
+                                That(actors == 1, "无尽首房末批为实际资源声明的单个尾怪");
+                                ushort tail = U16(spawned.Body,3);
+                                peer.Send(39,Death(tail,peer.Id,spawned.Body[10]));
+                                Bytes(ReadUntil(38).Body,[(byte)tail,(byte)(tail>>8),0,0,0,0,255,0,0],
+                                    "无尽清首房尾怪39获得完整退场38后才能请求第二房");
+                                break;
+                            }
+                            byte[] deaths = new byte[1 + actors * 2];
+                            deaths[0] = checked((byte)actors);
+                            for (int at = 0; at < actors; at++)
+                                spawned.Body.AsSpan(3 + at * 17,2).CopyTo(deaths.AsSpan(1 + at * 2));
+                            peer.Send(255,deaths);
+                            spawned = ReadUntil(210);
+                        }
+                        peer.Send(45,move);
+                        peer.Expect(1,45,[1]);
+                        var nextMap = peer.Expect(0,211).Body;
+                        That(nextMap.Length == 15 && nextMap[0] == move[0] && nextMap[1] == move[1] &&
+                            nextMap[7] == 1 && U32(nextMap,8) == U32(nextMap,2),
+                            "首房清完后原先被拒的45成功，ACK45后211携带第二房坐标及真实地图编号");
+                        int mapId = checked((int)U32(nextMap,8));
+                        That(dungeons.MapPath(mapId) is { } path && rooms.Get(new("map", new(move[0],move[1]),mapId,path))
+                            .AltarWaves is { Ultimate: false }, "第二房211创建字段在当前PVF中对应实际无尽波次地图，不能是随机种子");
+                        Load(peer);
+                        peer.Send(258);
+                        var round = peer.Expect(0,215).Body;
+                        That(round.Length == 5 && round[0] == 6 && U16(ReadUntil(210).Body,0) > 0,
+                            "第二房完成37及258后从第六回合继续实际刷怪，不重复入场或提前结算");
+                    }
                 }
                 peer.Send(42);
                 peer.Expect(1,42,[1]);
@@ -156,7 +214,7 @@ internal static partial class FormalDungeonTcpTests
                 throw new InvalidOperationException("祭坛预期通知没有到达："+opcode);
             }
         }
-        Console.WriteLine("PASS 两祭坛实际TCP准入、UI门禁、计时刷怪、255、复活与失败专用结算（非客户端验收）");
+        Console.WriteLine("PASS 两祭坛实际TCP准入、UI门禁、清首房换房、计时刷怪、255、复活与失败专用结算（非客户端验收）");
     }
 
     sealed class AltarTimers(int factor) : TimeProvider
