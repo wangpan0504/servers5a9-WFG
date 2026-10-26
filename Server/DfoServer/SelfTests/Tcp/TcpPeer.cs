@@ -262,6 +262,7 @@ internal sealed class TcpPeer : IDisposable
             DungeonEnterCounts[dungeonId] = (packet.Body[4], packet.Body[5]);
         }
         ExpectGriefTowerEnterCounts();
+        ExpectDespairTowerEnterCounts();
     }
 
     public void ExpectGriefTowerEnterCounts()
@@ -282,6 +283,34 @@ internal sealed class TcpPeer : IDisposable
         int day = int.Parse(fixture.UtcNow.UtcDateTime.AddHours(2).ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture));
         byte remaining = Convert.ToInt32(state[1]) < day && layer <= 100 ? (byte)1 : (byte)0;
         foreach (int dungeonId in new[] { 5115, 5114 + Math.Min(layer, 100) }.Distinct())
+        {
+            byte[] expected = new byte[6];
+            BinaryPrimitives.WriteUInt32LittleEndian(expected, checked((uint)dungeonId));
+            expected[4] = remaining;
+            Expect(0, 550, expected);
+            DungeonEnterCounts[dungeonId] = (remaining, 0);
+        }
+    }
+
+    public void ExpectDespairTowerEnterCounts()
+    {
+        // 原生登录组没有fixture且不挑战塔，仍严格核对完整首层初始化包。
+        if (fixture is null)
+        {
+            Expect(0, 550, [0, 0x2B, 0, 0, 1, 0]);
+            DungeonEnterCounts[11008] = (1, 0);
+            return;
+        }
+        TestCheck.That(Id != 0, "绝望550必须绑定当前角色");
+        var local = fixture.UtcNow.ToOffset(TimeSpan.FromHours(8)).AddHours(-6);
+        int day = DateOnly.FromDateTime(local.DateTime).DayNumber;
+        var state = fixture.Query("""
+            SELECT COALESCE(p.next_layer,1),COALESCE(p.last_clear_day,0),
+                (SELECT count(*) FROM dungeon_special_entry_receipts e WHERE e.character_id=c.id AND e.kind=3 AND e.service_day=$p1)
+            FROM characters c LEFT JOIN dungeon_despair_progress p ON p.character_id=c.id WHERE c.id=$p0
+            """, Id, day).Single();
+        byte remaining = Convert.ToInt64(state[2]) == 0 && Convert.ToInt32(state[1]) != day ? (byte)1 : (byte)0;
+        foreach (int dungeonId in new[] { 11008, 11007 + Convert.ToInt32(state[0]) }.Distinct())
         {
             byte[] expected = new byte[6];
             BinaryPrimitives.WriteUInt32LittleEndian(expected, checked((uint)dungeonId));
@@ -738,6 +767,7 @@ internal sealed class TcpPeer : IDisposable
                     DungeonEnterCounts.Add(dungeonId, (count[4], count[5]));
                 }
                 ExpectGriefTowerEnterCounts();
+                ExpectDespairTowerEnterCounts();
             }
             middle.Add(packet);
         }

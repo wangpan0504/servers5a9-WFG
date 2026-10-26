@@ -60,6 +60,25 @@ internal sealed partial class GameSession
         });
     }
 
+    public DungeonEnterCountReceipt? CaptureDespairTowerEnterCounts(TowerOfDespairCatalog catalog, bool onlyForSelection = false) =>
+        owner.Execute(() =>
+        {
+            if (Selected is not { } character) return null;
+            if (onlyForSelection && (!towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) ||
+                area.DungeonWorldMap is not { } world || !towns.DungeonMaps.TryGetValue(world, out var map) ||
+                !map.Options.Any(option => option.DungeonId == catalog.RootDungeonId))) return null;
+            int day = ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow());
+            var progress = repository.LoadDespairProgress(owner, character);
+            var usage = repository.LoadSpecialEntryUsage(owner, character, day, DungeonSpecialEntryKind.Despair);
+            // 首次入场即用掉基础日额度，放弃不退还；4473重试与通关日限制继续由原准入规则处理。
+            byte remaining = usage.CharacterEntries == 0 && progress.LastClearDay != day ? (byte)1 : (byte)0;
+            int dungeon = catalog.Floors[progress.NextLayer - 1].DungeonId;
+            var counts = ImmutableArray.CreateBuilder<DungeonEnterCount>();
+            counts.Add(new(checked((uint)catalog.RootDungeonId), remaining, 0));
+            if (dungeon != catalog.RootDungeonId) counts.Add(new(checked((uint)dungeon), remaining, 0));
+            return new DungeonEnterCountReceipt(owner.Generation, SelectionEpoch, character, day, counts.ToImmutable());
+        });
+
     public bool CanPublishDungeonEnterCounts(DungeonEnterCountReceipt receipt) => owner.Execute(() =>
         owner.Generation == receipt.Generation && SelectionEpoch == receipt.Epoch && ReferenceEquals(Selected, receipt.Character) &&
         ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow()) == receipt.Day);

@@ -14,12 +14,20 @@ internal static class DungeonEnterCountProjection
         if (context.Session.CaptureDungeonEnterCounts(catalog.EnterCounts, onlyForSelection) is { } receipt)
             await PublishAsync(context, receipt, guard);
         await RefreshGriefAsync(context, catalog, guard, onlyForSelection);
+        await RefreshDespairAsync(context, catalog, guard, onlyForSelection);
     }
 
     public static async Task RefreshGriefAsync(GameConnectionContext context, DungeonCatalog? catalog, Func<bool>? guard = null,
         bool onlyForSelection = false)
     {
         if (catalog is not null && context.Session.CaptureGriefTowerEnterCounts(catalog.GriefTower, onlyForSelection) is { } receipt)
+            await PublishAsync(context, receipt, guard);
+    }
+
+    public static async Task RefreshDespairAsync(GameConnectionContext context, DungeonCatalog? catalog, Func<bool>? guard = null,
+        bool onlyForSelection = false)
+    {
+        if (catalog is not null && context.Session.CaptureDespairTowerEnterCounts(catalog.Despair, onlyForSelection) is { } receipt)
             await PublishAsync(context, receipt, guard);
     }
 
