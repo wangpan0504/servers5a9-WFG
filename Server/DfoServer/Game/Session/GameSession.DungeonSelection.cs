@@ -121,7 +121,7 @@ internal sealed partial class GameSession
         if (pendingRental is not null || HasPendingTownQuestCommit) return null;
         if (!Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.MapSelect))
             throw new InvalidDataException("Invalid dungeon-selection state");
-        if (HasAntonDungeonAdmission) return BeginAntonDungeonSelection(partyAdmission);
+        if (HasRaidDungeonAdmission) return BeginRaidDungeonSelection(partyAdmission);
         if (CurrentDungeonSelection is null || CurrentDungeonSelection.IsClassExperience)
         {
             var back = towns.SelectionReturn(Selected.Position, completed);
