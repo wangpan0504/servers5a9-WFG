@@ -86,6 +86,9 @@ internal static class DungeonExplicitDropPolicyTests
         RejectTemplate(template => template with { StackLimit = 1 }, "堆叠上限不匹配拒绝");
         RejectTemplate(template => template with { Expiration = new(1, 0) }, "绝对期限拒绝");
         RejectTemplate(template => template with { Expiration = new(0, 1) }, "相对期限拒绝");
+        RejectTemplate(template => template with { Expiration = new(DailyDelete: 1) }, "每日删除不能进入永久掉落目录");
+        RejectTemplate(template => template with { Expiration = new(WeeklyDeleteDay: 0) }, "周日删除0不是永久，不能进入永久掉落目录");
+        RejectTemplate(template => template with { Expiration = new(WeeklyDeleteDay: 7) }, "未知周期不能进入永久掉落目录");
         RejectTemplate(template => template with { Expiration = new(-1, -1) }, "异常期限不当作永久");
         RejectTemplate(template => template with { AttachType = "[sealing]" }, "封装模板拒绝");
         RejectTemplate(template => template with { StackableType = "[waste]" }, "类型参数缺失拒绝");
