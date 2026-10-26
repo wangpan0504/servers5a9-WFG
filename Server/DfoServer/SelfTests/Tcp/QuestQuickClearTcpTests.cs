@@ -129,7 +129,7 @@ internal static class QuestQuickClearTcpTests
     {
         var growth=SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         var tickets=new[] {(Slot:(short)65,Id:10162928,Action:119u),(Slot:(short)66,Id:10162929,Action:122u),
-            (Slot:(short)67,Id:10006257,Action:130u),(Slot:(short)68,Id:10005390,Action:130u)};
+            (Slot:(short)67,Id:490704510,Action:130u),(Slot:(short)68,Id:490704511,Action:130u)};
         Character created;
         using (var owner=new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{}))
         {
@@ -166,7 +166,7 @@ internal static class QuestQuickClearTcpTests
             That(fixture.Query("SELECT grow_type,equipment_slot_flags FROM characters WHERE id=$p0",created.Id) is [[33L,3L]] &&
                 fixture.Query("SELECT count(*) FROM character_quest_skip_receipts WHERE character_id=$p0",created.Id) is [[4L]] &&
                 fixture.Query("SELECT count(*) FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index BETWEEN 65 AND 68",created.Id) is [[0L]],
-                "同一TCP选角连续一觉、二觉、辅助装备、魔法石各提交一次并消费实际源");
+                "同一TCP选角连续一觉、二觉及#476新秀辅助装备/魔法石券各提交一次并消费实际源");
         }
         using (var peer=Open(fixture))
         {

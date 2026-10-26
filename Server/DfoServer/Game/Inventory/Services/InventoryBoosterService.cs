@@ -63,7 +63,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         var definition = boosters.Get(source.Core.ItemId);
         if (!definition.Available || definition.RuneBox is not { } box || !source.Core.IsStackable ||
             source.Core.EquipmentLockId != 0 || source.Core.IsExpired(now.ToUnixTimeSeconds()) ||
-            !definition.AllowsFirstGrowType(character.GrowType))
+            !definition.AllowsFirstGrowType(character.GrowType) ||
+            !InventoryAvatarPackageService.SourceEligible(character, source, catalog.Get(source.Core.ItemId)))
             return RejectRuneBox("rune_box_source");
         if (HasCooldown(character.Inventory, source.Core.ItemId, definition, now))
             return InventoryResult.Reject(19);

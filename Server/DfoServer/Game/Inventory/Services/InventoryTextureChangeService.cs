@@ -8,8 +8,9 @@ namespace DfoServer.Game.Inventory.Services;
 // 1546 装备材质转换：目标材质特殊材料 80 个 + 500,000 金币 + 传说灵魂 1 个，费用与物品替换同一事务提交。
 // 替换物品编号时耐久不超过新模板上限；强化、增幅、附魔、徽章、词条、锁与品级 Value 保留。
 internal sealed class InventoryTextureChangeService(ItemCatalog items, EquipmentTextureChangeCatalog textures,
-    EpicPieceCatalog pieces)
+    EpicPieceCatalog pieces, TimeProvider? time = null)
 {
+    public TimeProvider Clock { get; } = time ?? TimeProvider.System;
     public const int GoldCost = 500_000;
     public const int MaterialCount = 80;
     public const int LegendarySoulItemId = 10099775;
@@ -19,7 +20,7 @@ internal sealed class InventoryTextureChangeService(ItemCatalog items, Equipment
 
     public InventoryResult Apply(Character character, EquipmentTextureChangeRequest request, DateTimeOffset? utcNow = null)
     {
-        var now = utcNow ?? DateTimeOffset.UtcNow;
+        var now = utcNow ?? Clock.GetUtcNow();
         var before = character.Inventory;
         var slot = new InventorySlot(InventoryListType.Main, request.Slot);
         var target = before.Find(slot);
@@ -59,6 +60,10 @@ internal sealed class InventoryTextureChangeService(ItemCatalog items, Equipment
             Items = after.Items.Replace(target, target with { Core = target.Core with
                 { ItemId = replacementId, Durability = Math.Min(target.Core.Durability, replacement.Durability) } })
         };
-        return new(true, 0, new InventoryPlan(before, after, "equipment_texture_change"));
+        var index = new InventoryIndex(after);
+        long? deadline = before.Items.Where(item => item.ExpireTime > 0 && item != index.Find(item.Position))
+            .Select(item => (long?)item.ExpireTime).Min();
+        return new(true, 0, new InventoryPlan(before, after, "equipment_texture_change",
+            new(character, deadline, Clock, requirePosition: true)));
     }
 }

@@ -1,10 +1,13 @@
 using System.Collections.Immutable;
+using System.Text.Json;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Parsers.Inventory;
+using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing.Inventory;
@@ -121,6 +124,44 @@ internal static class TextureChangeTests
                 { Core = input.Core with { ItemId = 103, Durability = Math.Min(durability, (ushort)18) } },
                 "转到较低耐久上限材质时只钳制超限部分，不修理或改写其它打造及UID");
         }
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        var guarded = new InventoryTextureChangeService(fixture.Items, fixture.Textures,
+            new EpicPieceCatalog("[piece list]\n50000 50001\n[/piece list]"), clock);
+        int expires = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 10);
+        foreach (var position in new[] { original.Position, new InventorySlot(InventoryListType.Main, 30), new(InventoryListType.Main, 31) })
+        {
+            var input = character.Inventory.Find(position)!;
+            var limited = character with { Inventory = character.Inventory with
+                { Items = character.Inventory.Items.Replace(input, input with { Core = input.Core with { ExpireTime = expires } }) } };
+            var pending = guarded.Apply(limited, new(26, 2));
+            That(pending.Accepted && pending.Plan!.CharacterPrecondition is { } qualification &&
+                qualification.Matches(limited, expires - 1) && !qualification.Matches(limited, expires),
+                "转甲的装备、整堆材料及部分扣除材料都在提交前复验最早截止");
+        }
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-texture-expiry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repo = new CharacterRepository(Path.Combine(root, "game.db"));
+            using var owner = new AccountOwners().Acquire("texture-expiry", () => { });
+            var saved = repo.Create(owner, new("TexExpiry", character.Position, null)
+            {
+                Level = character.Level, Inventory = new([
+                    original with { Uid = 0, Core = original.Core with { ExpireTime = expires } },
+                    fixture.Stack(0, 121, 3146, 80)], Gold: 600_000)
+            });
+            saved = repo.CommitInventory(owner, saved, new(saved.Inventory, saved.Inventory with
+                { AccountWallet = saved.Inventory.AccountWallet.Set(CurrencyKind.LegendarySoul, 2) }, "texture_expiry_fixture"));
+            var pending = guarded.Apply(saved, new(26, 2));
+            That(pending.Accepted, "真实文件库中期限内的装备可规划转甲");
+            string snapshot = JsonSerializer.Serialize(repo.LoadCharacter(owner, saved.Slot));
+            clock.Advance(TimeSpan.FromSeconds(10));
+            Reject<InventoryQualificationExpiredException>(() => repo.CommitInventory(owner, saved, pending.Plan!),
+                "转甲规划后目标恰到期限时文件库拒绝提交");
+            That(JsonSerializer.Serialize(repo.LoadCharacter(owner, saved.Slot)) == snapshot,
+                "到期拒绝保留装备UID与核心、材料、金币、账号灵魂、revision及账本");
+        }
+        finally { Directory.Delete(root, true); }
         Console.WriteLine($"PASS {Count - checks} 材质转换协议、映射表、费用与字段保留断言");
     }
 

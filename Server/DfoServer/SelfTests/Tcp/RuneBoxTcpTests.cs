@@ -2,6 +2,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using DfoServer.Testing.Inventory;
 using static DfoServer.Testing.TcpPeer;
@@ -32,7 +33,12 @@ internal static class RuneBoxTcpTests
             var service = new InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
             var granted = service.Grant(role, [new(RuneBox, 2), new(TalismanBox, 1), new(LastBox, 1)]);
             That(granted.Accepted, "符文箱 TCP 夹具奖励全部进入库存");
-            InventoryService.Commit(repo, owner, role, granted);
+            var saved = InventoryService.Commit(repo, owner, role, granted);
+            repo.CommitInventory(owner, saved, new(saved.Inventory, saved.Inventory with
+            {
+                Items = saved.Inventory.Items.Add(new(0, new(InventoryListType.Main, 121),
+                    new ItemCore(RuneBox, ItemKind.Material, 1)))
+            }, "rune_box_invalid_source_fixture"));
         }
         await fixture.StartAsync();
         int stoneProduct = 0;
@@ -44,6 +50,10 @@ internal static class RuneBoxTcpTests
             var talisman = SlotOf(TalismanBox);
             var last = SlotOf(LastBox);
             That(runeBox.List == 0 && talisman.List == 0 && last.List == 0, "三个符文箱都落在主背包消耗品栏");
+
+            string invalidBaseline = Snapshot();
+            peer.Send(27, Request(121)); peer.Expect(1, 27, [0, 19, 0]); peer.Barrier();
+            That(Snapshot() == invalidBaseline, "符文盒源实例种类与真实模板不符时拒绝，库存、UID、revision与审计均不变");
 
             var first = OpenBox(peer, runeBox.Slot);
             var firstRune = catalog.Rune(first.Product)!;

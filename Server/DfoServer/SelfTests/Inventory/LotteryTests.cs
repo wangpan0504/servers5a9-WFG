@@ -280,6 +280,25 @@ internal static class LotteryTests
             That(!rejected.Accepted && rejected.Error == 19 && rejected.RejectReason == "rune_box_source" &&
                 random.Bounds.Count == 0, "锁定或到期的符文箱拒绝且不抽取");
         }
+        var boxTemplate = catalog.Get(10310784);
+        foreach (var invalid in new[]
+        {
+            boxTemplate with { MinimumLevel = 96 }, boxTemplate with { MaximumLevel = 94 },
+            boxTemplate with { Jobs = 2 }, boxTemplate with { RequiredSkill = ushort.MaxValue },
+            boxTemplate with { UseForbidden = true }, boxTemplate with { Kind = ItemKind.Material },
+            boxTemplate with { Id = boxTemplate.Id + 1 }
+        })
+        {
+            var isolated = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+            isolated.PrefillTemplates([new(boxTemplate.Id, invalid)]);
+            var guarded = new InventoryBoosterService(isolated, items.Boosters, items.GoldLimits, items.EpicPieces, random);
+            random.Values = new();
+            random.Bounds.Clear();
+            var denied = guarded.OpenLottery(runeSource, new(0, 117), out var deniedReceipt, now);
+            That(!denied.Accepted && denied.Error == 19 && denied.RejectReason == "rune_box_source" &&
+                deniedReceipt is null && random.Bounds.Count == 0,
+                "符文盒在读取产物池及抽取前复验源模板身份、种类、等级、职业、技能与禁用资格");
+        }
         random.Values = new();
         random.Bounds.Clear();
         That(!service.Open(role with { Inventory = new([new(1, Bag(117), Core(10310784))]) }, new(117, 1), out _, now)
