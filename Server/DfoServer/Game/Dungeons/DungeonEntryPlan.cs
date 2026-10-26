@@ -43,7 +43,7 @@ internal sealed record DungeonEntryPlan(
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
     public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }
-    public DfoServer.Game.Raids.AntonRaidDungeonIdentity? AntonRaid { get; init; }
+    public DfoServer.Game.Raids.RaidDungeonIdentity? RaidEntry { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
     public bool DisableGiveupPenalty { get; init; }
     public int? CoinLimit { get; init; }
@@ -147,7 +147,7 @@ internal sealed record DungeonEntryPlan(
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null)
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -402,6 +402,14 @@ internal sealed record DungeonEntryPlan(
                 hope.SourceRevision != character.Revision || !hope.Catalog.Mazes.ContainsKey(hope.MazeOrdinal))
             { reason = "operation-hope-admission-mismatch"; return false; }
             candidates = definition.Mazes.Where(row => row.SourceOrdinal == hope.MazeOrdinal && row.QuestConnectionTokens.Count == 0).ToArray();
+            routeQuest = 0; layoutQuest = null;
+        }
+        if (raid is not null)
+        {
+            if (raid.Kind != DfoServer.Game.Raids.RaidKind.Luke || raid.InstanceId == Guid.Empty || raid.Squad is not (1 or 2) ||
+                questId != 0 || difficulty != 2 || isReplay || practice || hellParty || tagEvildom is not null || hope is not null)
+            { reason = "raid-maze-admission-mismatch"; return false; }
+            candidates = definition.Mazes.Where(row => row.SourceOrdinal == raidMaze && row.QuestConnectionTokens.Count == 0).ToArray();
             routeQuest = 0; layoutQuest = null;
         }
         if (candidates.Length != 1)
