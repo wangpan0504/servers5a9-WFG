@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Persistence;
@@ -15,8 +17,8 @@ internal static class QuestCinematicSettlementTcpTests
     internal static void Verify(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain)
     {
-        foreach (var scenario in new[] { (Request:(ushort)3599,FinishFirst:false,AllEnemies:true),(Request:(ushort)0,FinishFirst:false,AllEnemies:false),
-            (Request:(ushort)3599,FinishFirst:true,AllEnemies:false) })
+        foreach (var scenario in new[] { (Request:(ushort)3599,FinishFirst:false,AllEnemies:true,Potion:1),(Request:(ushort)0,FinishFirst:false,AllEnemies:false,Potion:2),
+            (Request:(ushort)3599,FinishFirst:true,AllEnemies:false,Potion:0) })
         {
             var area = resources.Towns.Areas.Values.First(row => row.Level <= 74 && row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 96 &&
@@ -38,15 +40,21 @@ internal static class QuestCinematicSettlementTcpTests
                 var learning = SkillPointLedger.Synchronize(0,0,74,candidate.InitialLearning with
                     { Experience=growth.GetLevelStartExperience(74) },resources.Learning);
                 created = new CharacterRepository(fixture.Database).Create(owner,candidate with
-                    { Level=74,AcceptedStoryLevel=74,CompletedQuests=done.ToArray(),InitialLearning=learning });
+                    { Level=74,AcceptedStoryLevel=74,CompletedQuests=done.ToArray(),InitialLearning=learning,
+                        Inventory=scenario.Potion == 0 ? candidate.Inventory : candidate.Inventory with
+                        { Items=candidate.Inventory.Items.Add(new(0,new(InventoryListType.Main,65),
+                            InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(7440),1))) } });
             }
             using (var peer = Open(fixture))
             {
                 peer.Select(RoleIndex(peer.Roster,created),prepared:true,resumeTown:true,room:false);
                 That(peer.Id == created.Id,"演出TCP选中本条独立角色身份");
+                if (scenario.Potion == 1) UsePotion();
                 var map = FormalDungeonTcpTests.Enter(peer,3599,96,requestQuestId:scenario.Request);
-                int enabled = 0, bossChecks = 0;
+                int enabled = 0, bossChecks = 0, potionNotices = 0;
+                byte[]? clearReward = null;
                 Load(76112);
+                if (scenario.Potion == 2) UsePotion();
                 Move(0); Load(76114);
                 That(enabled == 0,"零死亡友方基础路线不凭动画目标生成31");
                 var dummy = Enumerable.Range(0,map[18]).Single(at => U32(map,27+22*at) == 62959);
@@ -91,6 +99,16 @@ internal static class QuestCinematicSettlementTcpTests
                     "46沿原事务结算真实终点并保留显式或普通0实例请求号");
                 before = State(); peer.Send(46,report); Drain();
                 That(State() == before,"重复46不重发奖励或提交第二份通关回执");
+                uint expectedPotion = scenario.Potion == 0 ? 0 : SelfTestCatalogs.ClearExperience(resources.Archive)
+                    .Calculate(SelfTestCatalogs.Dungeons(resources.Archive).Get(96),0,99).TotalExperience;
+                That(clearReward is not null && U32(clearReward,21) == expectedPotion &&
+                    (scenario.Potion == 0 || potionNotices > 0),
+                    "3599图外/图内秘药和无药对照均在真实33许可后收到35，秘药分项按已到账经验保留");
+                peer.Send(69); peer.Expect(1,69,[1]);
+                peer.Send(70); That(peer.Expect(1,70).Body.Length == 17,"演出终点保留八席翻牌资格");
+                peer.Send(71,[0,0]); That(peer.Expect(1,71).Body[0] == 1,"演出终点实际领取免费牌"); Drain();
+                That(fixture.Query("SELECT claimed FROM character_dungeon_card_rewards WHERE character_id=$p0",peer.Id) is [[1L]],
+                    "演出终点的秘药不影响免费牌领取落库");
                 if (!scenario.FinishFirst) Finish();
                 before = State();
                 peer.Send(34,[34,0,15,14,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
@@ -98,10 +116,20 @@ internal static class QuestCinematicSettlementTcpTests
                 peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
                 peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
 
+                void UsePotion()
+                {
+                    peer.Send(44,Build(writer => { writer.Write((ushort)65);writer.Write((byte)0);writer.Write(0u);writer.Write(7440);writer.Write(0); }));
+                    That(peer.Expect(1,44).Body[0] == 1,"3599图外或首房真实44成功消费秘药");
+                    drain(peer,null);
+                    That(fixture.Query("SELECT permille FROM character_exp_bonus WHERE character_id=$p0",peer.Id) is [[1000L]],
+                        "演出路线秘药效果实际持久化为1000千分比");
+                }
                 void Drain() => drain(peer,packet =>
                 {
                     if (packet.Opcode == 31) { Bytes(packet.Body,[],"演出许可31保持空正文"); enabled++; }
                     if (packet.Opcode == 115) bossChecks++;
+                    if (packet.Kind == 0 && packet.Opcode == 35) clearReward = packet.Body;
+                    if (packet.Kind == 0 && packet.Opcode == 37 && U32(packet.Body,87) > 0) potionNotices++;
                 });
                 void Load(uint expected,bool cached = false)
                 {
