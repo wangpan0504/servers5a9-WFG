@@ -48,7 +48,10 @@ internal static class QuestLifecycleTcpTests
                 "监听A真实完成冻结Deferred而不越过C");
             Accept(peer,29961); ulong before=Experience(peer.Id); var result=Finish(peer,29961);
             Validate(result,13,growth.GetLevelStartExperience(13),checked((uint)(growth.GetLevelStartExperience(13)-before)),0);
-            That(result.Notices.Single(row=>row.Opcode==21).Body is { } available && List(available,13).Contains(29962),"阶段EXP升级后真实任务列表立即开放后继");
+            int[] available=List(result.Notices.Single(row=>row.Opcode==21).Body,13);
+            That(available.Contains(29962),"阶段EXP升级后真实任务列表立即开放后继");
+            That(!available.Contains(29960) && !available.Contains(29961) && !available.Contains(29964) &&
+                available.Distinct().Count()==available.Length,"新任务通知携带真实后继编号，排除已完成、前置不符及重复项，不能靠伪定位编号驱动图标");
             string saved=State(peer.Id); var repeat=Finish(peer,29961);
             Bytes(repeat.Ack,[0,19,0],"阶段重发ACK34拒绝");
             That(repeat.Notices.Length==0 && State(peer.Id)==saved,"屏障确认重发无奖励通知且SQL不变");
