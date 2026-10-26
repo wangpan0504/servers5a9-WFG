@@ -23,6 +23,7 @@ internal static class BoosterSelectionTests
 {
     public static void RunCore()
     {
+        BoosterCooldownTests.RunCore();
         BoosterEpicExchangeTests.RunCore();
         int checks = Count;
         RunCustomAbilityGradeDeclarations();
@@ -193,6 +194,7 @@ internal static class BoosterSelectionTests
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
         int checks = Count;
+        BoosterCooldownTests.RunResources(towns, itemResources);
         RunEquivalentDuplicateResources(towns, itemResources);
         void Reject(Action action, string name)
         {
