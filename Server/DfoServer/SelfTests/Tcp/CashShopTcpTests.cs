@@ -17,6 +17,20 @@ internal static partial class CashShopTcpTests
     {
         Inventory.CashShopTests.RunCore();
         Inventory.CashShopTests.Run(resources.Towns, resources.Characters, resources.ItemResources);
+        var originalTemplate = resources.ItemResources.Items.Get(490705385);
+        try
+        {
+            LegacyExpiryFixture.Restore(resources.ItemResources.Items, (490705385, "2020-04-09 06:00:00"));
+            await RunWithLegacyExpirationAsync(source, root, resources);
+        }
+        finally
+        {
+            resources.ItemResources.Items.PrefillTemplates([KeyValuePair.Create(originalTemplate.Id, originalTemplate)]);
+        }
+    }
+
+    static async Task RunWithLegacyExpirationAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
         var now = DateTimeOffset.UtcNow;
         var product = resources.ItemResources.CashShop.Products.Values.First(row =>
             row.CeraPrice > 0 && row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&

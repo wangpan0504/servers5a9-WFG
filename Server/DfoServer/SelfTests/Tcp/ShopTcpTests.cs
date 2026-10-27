@@ -320,6 +320,7 @@ internal static class ShopTcpTests
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "shop TCP database integrity");
+        await VerifyTargetBatchAndRoomAdmissionAsync(source, root, resources);
 
         void Counts(TcpPeer peer)
         {
@@ -344,6 +345,175 @@ internal static class ShopTcpTests
                 InventoryRewardGrantService.Create(template) with { ExpireTime = 0 });
         }
     }
+
+    internal static async Task VerifyTargetBatchAndRoomAdmissionAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        int beforeChecks = TestCheck.Count;
+        const int item = 490705437, material = 490705400, shop = 400000097, npc = 400001107;
+        const short firstMaterialSlot = 121, remainingMaterialSlot = 122;
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "shop-target-batch"), resources: resources);
+        var repo = new CharacterRepository(fixture.Database);
+        var starter = InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0));
+        var materialTemplate = resources.ItemResources.Items.Get(material);
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repo.Create(owner, new("ShopBatch", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 60, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = starter with
+                {
+                    Gold = 1_000_000,
+                    Items = [.. starter.Items,
+                        InventoryRewardGrantService.CreateItem(materialTemplate, new(InventoryListType.Main, firstMaterialSlot),
+                            InventoryRewardGrantService.Create(materialTemplate, 3)),
+                        InventoryRewardGrantService.CreateItem(materialTemplate, new(InventoryListType.Main, remainingMaterialSlot),
+                            InventoryRewardGrantService.Create(materialTemplate, 16))]
+                }
+            });
+        long firstUid = (long)fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=1 AND list_type=0 AND slot_index=$p0", firstMaterialSlot)[0][0];
+        long remainingUid = (long)fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=1 AND list_type=0 AND slot_index=$p0", remainingMaterialSlot)[0][0];
+        long rewardUid = 0;
+        short rewardSlot = -1;
+        byte[] rewardCore = [], remainingCore = [];
+        string committedAssets = "";
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            var initial = peer.Select();
+            remainingCore = FullEntry(Main(initial), remainingMaterialSlot);
+            BitConverter.GetBytes(11).CopyTo(remainingCore, 6);
+            // 保留足够材料，成功后外城样本的材料与额度仍均合法，只改变房间准入条件。
+            byte[] request = Convert.FromHexString("1D923F1D020000006184D7175388D717");
+            That(request.Length == 16, "目标批量请求沿四个i32的真实16B线上合同");
+            peer.Send(21, request);
+            byte[] ack = peer.Expect(1, 21).Body;
+            That(ack.Length == 149 && ack[0] == 1 && U32(ack, 1) == 1_000_000 && U32(ack, 5) == 0 &&
+                U32(ack, 9) == 0 && U32(ack, 13) == 0 && U32(ack, 19) == item && U32(ack, 23) == 2 &&
+                ack[140] == 1 && U32(ack, 141) == material && U32(ack, 145) == 0,
+                "目标ACK21先返回四个钱包标量、完整123B核心、本次增量2及首个旧材料格余0");
+            rewardSlot = checked((short)U16(ack, 17));
+            rewardCore = ack.AsSpan(17, 123).ToArray();
+            byte[] delta = peer.Expect(0, 14).Body;
+            That(delta[0] == 0 && U16(delta, 1) == (rewardSlot == firstMaterialSlot ? 2 : 3),
+                "成功ACK之后才发送全部实际扣料格与奖励的最终差量");
+            if (rewardSlot != firstMaterialSlot) Entry(delta, firstMaterialSlot, -1, 0);
+            Entry(delta, remainingMaterialSlot, material, 11);
+            Entry(delta, rewardSlot, item, 2);
+            Bytes(DeltaEntry(delta, rewardSlot), rewardCore, "目标NOTI14保留ACK的全部123B核心及最终奖励量2");
+            Bytes(DeltaEntry(delta, remainingMaterialSlot), remainingCore, "第二材料格仅从16扣至11，保留其余完整核心字段");
+            peer.Barrier();
+            rewardUid = (long)fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=1 AND list_type=0 AND slot_index=$p0", rewardSlot)[0][0];
+            CheckCommitted();
+            Counts(peer);
+            committedAssets = Assets();
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "target-tcp-batch", item, material, shop, npc, count = 2,
+                requestLength = request.Length, ackLength = ack.Length, rewardSlot, rewardUid, remainingUid, materialRemaining = 11, permanentPurchased = 2 }));
+
+            string beforeAlias = SqlState();
+            Buy(peer, item, 2, shop, 400001112);
+            peer.Expect(1, 21, [0, 17, 0]);
+            peer.Barrier();
+            That(SqlState() == beforeAlias, "房间内不把400001112当成目标NPC107别名，拒绝无任何SQL资产变化且连接可继续");
+
+            peer.Send(1426);
+            var location = peer.Expect(0, 23).Body;
+            var returned = peer.Expect(0, 24).Body;
+            var outer = resources.Towns.InitialReturn;
+            That(U16(location) == peer.Id && location[2] == outer.Town && location[3] == outer.Area &&
+                fixture.Query("SELECT town,area,x,y FROM characters WHERE id=1") is [[long savedTown, long savedArea, long savedX, long savedY]] &&
+                savedTown == outer.Town && savedArea == outer.Area && savedX == U16(location, 4) && savedY == U16(location, 6),
+                "真实CMD1426把目标角色送回保存的外城区，23与实际持久落点一致");
+            Bytes(returned.AsSpan(6, 4), location.AsSpan(4, 4), "回城24与23的实际安全落点一致");
+            peer.Barrier();
+            That(Assets() == committedAssets, "离房只提交位置，不改变本次批量结果、UID或永久额度");
+            string beforeOutside = SqlState();
+            Buy(peer, item, 2, shop, npc);
+            peer.Expect(1, 21, [0, 17, 0]);
+            peer.Barrier();
+            That(SqlState() == beforeOutside, "外城仍有11材料及6额度时同一目标批量请求拒绝17，无SQL增量且连接可继续");
+            Counts(peer);
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "target-tcp-room-admission", aliasRejected = true, outsideRejected = true,
+                materialStillSufficient = 11 >= 8, quotaStillSufficient = 8 - 2 >= 2, sqlUnchanged = SqlState() == beforeOutside }));
+        }
+        using (var peer = Open(fixture))
+        {
+            Restored(peer.Select(), "重连");
+            Counts(peer);
+            peer.Barrier();
+        }
+        await fixture.StopAsync();
+        // 真正启动子进程；不以同进程重建ServerRuntime冒充持久恢复。
+        await fixture.StartAsync("target-reopened", isolatedProcess: true);
+        using (var peer = Open(fixture))
+        {
+            Restored(peer.Select(), "真实进程重启");
+            Counts(peer);
+            peer.Barrier();
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "target-tcp-process-restart", isolatedProcess = true, rewardUid,
+                remainingUid, materialRemaining = 11, permanentPurchased = 2, fullCoreRestored = true, starterRegranted = false }));
+        }
+        await fixture.StopAsync();
+        That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
+            "目标批量TCP数据库完整性及外键检查");
+        Console.WriteLine("T03_TARGET_SHOP_TCP_ASSERTIONS " + (TestCheck.Count - beforeChecks));
+
+        void CheckCommitted()
+        {
+            That(rewardUid > 0 && rewardUid != firstUid && rewardUid != remainingUid &&
+                fixture.Query("SELECT gold FROM characters WHERE id=1") is [[1_000_000L]] &&
+                fixture.Query("SELECT count(*) FROM character_inventory_items WHERE item_uid=$p0", firstUid) is [[0L]] &&
+                fixture.Query("SELECT s.item_uid,json_extract(i.item_core,'$.Value') FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) WHERE s.character_id=1 AND s.list_type=0 AND s.slot_index=$p0 AND json_extract(i.item_core,'$.ItemId')=$p1", remainingMaterialSlot, material)
+                    is [[long savedRemainingUid, 11L]] && savedRemainingUid == remainingUid &&
+                fixture.Query("SELECT s.item_uid,json_extract(i.item_core,'$.Value') FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid) WHERE s.character_id=1 AND s.list_type=0 AND s.slot_index=$p0 AND json_extract(i.item_core,'$.ItemId')=$p1", rewardSlot, item)
+                    is [[long savedRewardUid, 2L]] && savedRewardUid == rewardUid &&
+                fixture.Query("SELECT count(*) FROM character_inventory_items WHERE character_id=1")[0][0] is long instances && instances == starter.Items.Length + 2 &&
+                fixture.Query("SELECT character_id,npc_id,item_id,reset_daily,day,count FROM shop_purchase_counts WHERE account=$p0 ORDER BY item_id", fixture.Options.DevelopmentAccount)
+                    is [[0L, 400001107L, 490705437L, 0L, 0L, 2L]],
+                "目标持久提交只扣8材料奖2、保持第二格UID并创建真实奖励UID，限购仅账号永久day0/count2且不重发starter");
+        }
+        void Counts(TcpPeer peer)
+        {
+            peer.Send(715, Build(w => w.Write(npc)));
+            peer.Expect(1, 715, Build(w => { w.Write((byte)1); w.Write(1); w.Write(item); w.Write(2); w.Write(new byte[12]); }));
+        }
+        void Restored(WirePacket[] packets, string phase)
+        {
+            byte[] full = Main(packets);
+            Bytes(FullEntry(full, rewardSlot), rewardCore, phase + "完整NOTI13恢复奖励全部123B核心");
+            Bytes(FullEntry(full, remainingMaterialSlot), remainingCore, phase + "完整NOTI13保留扣料后的核心与余11");
+            That(!Enumerable.Range(0, U16(full, 3)).Any(index => U16(full, 5 + index * 123) == firstMaterialSlot && U32(full, 7 + index * 123) == material),
+                phase + "不恢复已耗尽的首格材料");
+            CheckCommitted();
+            That(Assets() == committedAssets, phase + "保留全部库存核心、槽位、钱包、永久额度和审计，不重发starter或恢复材料");
+        }
+        static byte[] Main(WirePacket[] packets)
+        {
+            byte[] full = packets.Single(packet => packet.Kind == 0 && packet.Opcode == 13 && packet.Body[0] == 0).Body;
+            That(full.Length == 5 + 123 * U16(full, 3), "主背包全量保留每条完整123B核心");
+            return full;
+        }
+        static byte[] FullEntry(byte[] full, short slot)
+        {
+            int offset = Enumerable.Range(0, U16(full, 3)).Select(index => 5 + index * 123).Single(offset => U16(full, offset) == slot);
+            return full.AsSpan(offset, 123).ToArray();
+        }
+        static byte[] DeltaEntry(byte[] delta, short slot)
+        {
+            int offset = Enumerable.Range(0, U16(delta, 1)).Select(index => 3 + index * 123).Single(offset => U16(delta, offset) == slot);
+            return delta.AsSpan(offset, 123).ToArray();
+        }
+        string SqlState() => fixture.Snapshot() + Assets();
+        string Assets() => fixture.Snapshot("SELECT gold FROM characters ORDER BY id") +
+            fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account") +
+            fixture.Snapshot("SELECT * FROM account_currency_balances ORDER BY account,currency_kind") +
+            fixture.Snapshot("SELECT * FROM currency_audit_log ORDER BY audit_id") +
+            fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM inventory_avatar_details ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM inventory_creature_details ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM shop_purchase_counts ORDER BY item_id") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id");
+    }
+
 
     static void Buy(TcpPeer peer, int item, int count, int shop, int npc) => peer.Send(21, Build(w => { w.Write(item); w.Write(count); w.Write(shop); w.Write(npc); }));
     static void Sell(TcpPeer peer, byte list, short slot, int count) => peer.Send(22, Build(w =>

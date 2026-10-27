@@ -34,6 +34,11 @@ internal static class FormalDungeonSessionTests
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
         var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        VerifyShopRoomAdmission(towns, pvf, characters, itemResources);
+        VerifyShopSceneAdmission(towns, pvf, characters, itemResources);
+        VerifyShopExchangeMatrix(towns, pvf, characters, itemResources);
+        VerifyShopSettlementAdmission(towns, pvf, characters, itemResources);
+        VerifyShopBatchAndIdentityAdmission(towns, pvf, characters, itemResources);
         VerifyLoginWearWindow(towns, pvf, characters);
         OrdinaryHuntLifecycle();
         Lifecycle(0);
@@ -1472,6 +1477,1093 @@ internal static class FormalDungeonSessionTests
             ?? throw new InvalidOperationException("FAIL 正式3145资源入口未建立");
         void MoveToEntry(GameSession session) => Check(session.LeaveRoom() && session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
             "重新选角后经合法出房旅行到左入口");
+    }
+
+    internal static void VerifyShopSettlementAdmission(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
+    {
+        int beforeChecks = TestCheck.Count;
+        const int targetShop = 400000097, nolan = 400001107, material = 490705400;
+        const int otherShop = 1000, otherNpc = 1000, otherItem = 2600655, cube = 3037;
+        (int Item, int Cost, int? Limit)[] rows =
+        [
+            (490705437, 4, 8), (490705421, 9, 2), (490705286, 4, 3), (490705424, 6, 1),
+            (490705422, 4, 2), (490703887, 3, 1), (490700411, 3, 1), (490013680, 1, null)
+        ];
+        var learning = SelfTestCatalogs.SkillLearning(pvf);
+        var quests = SelfTestCatalogs.Quests(pvf);
+        var dungeons = SelfTestCatalogs.Dungeons(pvf);
+        var rooms = SelfTestCatalogs.Rooms(pvf);
+        var kills = SelfTestCatalogs.KillExperience(pvf);
+        var growth = SelfTestCatalogs.Growth(pvf);
+        var clear = SelfTestCatalogs.ClearExperience(pvf);
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
+        var now = DateTimeOffset.UtcNow;
+        using var fixture = new Fixture("ShopSettle", towns, characters, learning, quests);
+        fixture.SelectEntry();
+        // 沿既有Delilah夹具用真实发放服务初始化3037账号钱包，不伪造背包币种或装备。
+        Check(fixture.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+            [new(material, 500), new(cube, 41)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, now)).Accepted,
+            "结算商店夹具真实提交兑换材料与无色账号钱包");
+        var prepared = fixture.Read();
+        Check(CountItem(prepared, material) == 500 && CubeBalance(prepared) == 41 && CountItem(prepared, cube) == 0 &&
+            CountItem(prepared, otherItem) == 0 && rows.All(row => CountItem(prepared, row.Item) == 0 &&
+                !prepared.Inventory.ShopPurchases.Any(value => value.ItemId == row.Item)) && ShopSame(prepared, fixture.Session.Selected!),
+            "结算负例保留八项首次购买资格且3037只存在于真实账号钱包");
+        Check(fixture.Session.BeginDungeonSelection() is not null, "结算场景沿正式Session选择入口");
+        var entry = fixture.Session.EnterFormalDungeon(3, 3145, 0, dungeons, rooms)
+            ?? throw new InvalidOperationException("FAIL 结算商店夹具无法进入正式3145");
+        var maps = dungeons.Get(3).Mazes.Single(maze => maze.ConnectsQuest(3145)).MapSpecification!;
+        var loaded = fixture.Session.CompleteFormalDungeonLoading()
+            ?? throw new InvalidOperationException("FAIL 结算商店夹具首次加载失败");
+        bool routeValid = loaded.Snapshot.Phase == SinglePlayerDungeonPhase.Dungeon && fixture.Session.Phase == SessionPhase.Dungeon;
+        int deathCount = 0;
+        DungeonClearFact? clearFact = null;
+        for (int i = 0; i < maps.Count; i++)
+        {
+            routeValid &= loaded.Snapshot.CurrentMap == maps[i];
+            foreach (var monster in loaded.Monsters.Monsters.Where(monster => monster.IsBlocking))
+            {
+                // 与既有真实结算用例相同的合成死亡观察；不代表客户端击杀或通知验证。
+                var death = fixture.Session.ObserveFormalDungeonDeath(new(monster.ObjectKey, fixture.Created.Id, 0x0111, fixture.Created.Id,
+                    600, 3, 0, monster.SpawnType == 3 ? 6u : (uint)monster.CandidateLevel,
+                    monster.SpawnType == 3 ? 0UL : 504UL, 620, 3, true, new string('A', 64)), kills, growth);
+                if (death.Outcome != DungeonRunOutcome.Accepted || death.Receipt is null)
+                    throw new InvalidOperationException("FAIL 结算商店夹具正式死亡未提交");
+                deathCount++;
+                if (death.ClearFact is { } fact)
+                {
+                    routeValid &= clearFact is null && i == maps.Count - 1;
+                    clearFact = fact;
+                }
+            }
+            if (i < maps.Count - 1)
+            {
+                var target = maps[i + 1].Position;
+                if (fixture.Session.MoveFormalDungeon((byte)target.X, (byte)target.Y) is null)
+                    throw new InvalidOperationException("FAIL 结算商店夹具资源批准连接过房失败");
+                loaded = fixture.Session.CompleteFormalDungeonLoading()
+                    ?? throw new InvalidOperationException("FAIL 结算商店夹具过房加载失败");
+            }
+        }
+        Check(routeValid && deathCount > 0 && clearFact is { } cleared && cleared.ConfirmedDeathEvents.Count == deathCount &&
+            cleared.Identity.InstanceId == entry.Snapshot.Identity.InstanceId &&
+            fixture.Count() == deathCount && fixture.Session.Phase == SessionPhase.Settlement &&
+            fixture.Session.DungeonSnapshot?.Phase == SinglePlayerDungeonPhase.Settlement,
+            "资源批准路线真实加载、blocking击杀与过房产生唯一已提交清图事实");
+        byte[] report = [1, 2, 3, 4];
+        var settled = fixture.Session.SettleFormalDungeon(fixture.Created.Id, 99, 99, report, dungeons, clear, growth);
+        Check(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt is not null &&
+            fixture.Session.CanPublishFormalDungeon(settled.Receipt) && fixture.Session.FormalDungeonResultFocus() is not null &&
+            ShopSame(settled.Receipt.Character, fixture.Read()) && ShopSame(fixture.Read(), fixture.Session.Selected!),
+            "结算成功后才取得已提交角色和结果焦点，不伪造Phase或ClearFact");
+
+        // 取基线前核对普通通关账本保存本次真实身份、死亡集合和报告；后续拒绝只比较该基线。
+        var completedClear = clearFact ?? throw new InvalidOperationException("FAIL 结算商店夹具缺少真实清图事实");
+        var identity = completedClear.Identity;
+        string deathsHex = Convert.ToHexString(completedClear.ConfirmedDeathEvents.SelectMany(value => value.ToByteArray()).ToArray());
+        long settlementRows = Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts"));
+        long matchingSettlementRows = Convert.ToInt64(fixture.Query($"SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id={fixture.Created.Id} AND instance_id='{identity.InstanceId:N}' AND quest_id={identity.QuestId} AND task_attempt={identity.TaskAttempt} AND epoch={identity.Epoch} AND dungeon_id=3 AND map_id={completedClear.ClearMap!.Id} AND generation={fixture.Owner.Generation} AND death_events=X'{deathsHex}' AND report_body=X'{Convert.ToHexString(report)}'"));
+        var baseline = fixture.Read();
+        var selectedBaseline = fixture.Session.Selected!;
+        string sqlBaseline = SqlSnapshot(fixture);
+        Check(settlementRows == 1 && matchingSettlementRows == 1 && fixture.Session.Phase == SessionPhase.Settlement &&
+            ShopSame(baseline, selectedBaseline) && CountItem(baseline, material) == 500 && CubeBalance(baseline) == 41 &&
+            CountItem(baseline, otherItem) == 0 && rows.All(row => CountItem(baseline, row.Item) == 0 &&
+                !baseline.Inventory.ShopPurchases.Any(value => value.ItemId == row.Item)),
+            "真实结算receipt和死亡集合持久化后冻结首次兑换及资产基线");
+        Console.WriteLine(JsonSerializer.Serialize(new { kind = "settlement-entry", dungeonId = 3, questId = 3145,
+            phase = fixture.Session.Phase.ToString(), mapCount = maps.Count, deathCount, settlementRows, matchingSettlementRows,
+            characterMatchesReload = ShopSame(baseline, selectedBaseline), materialBalance = CountItem(baseline, material), cubeBalance = CubeBalance(baseline) }));
+
+        foreach (var row in rows)
+        {
+            var request = new DfoServer.Game.Inventory.Models.BuyItemRequest(row.Item, 1, targetShop, nolan);
+            var legal = shop.Buy(baseline, request, out var legalReceipt, now);
+            long legalDebit = legal.Plan is { } plan ? CountItem(baseline, material) - CountItem(baseline with { Inventory = plan.After }, material) : -1;
+            long legalReward = legal.Plan is { } rewardPlan ? CountItem(baseline with { Inventory = rewardPlan.After }, row.Item) - CountItem(baseline, row.Item) : -1;
+            bool quotaPlanValid = legal.Plan is { } quotaPlan && (row.Limit is null ?
+                !quotaPlan.After.ShopPurchases.Any(value => value.ItemId == row.Item) :
+                quotaPlan.After.ShopPurchases.SingleOrDefault(value => value.ItemId == row.Item) == new ShopPurchaseCount(nolan, row.Item, true, false, 0, 1));
+            bool purePlanUncommitted = ReferenceEquals(selectedBaseline, fixture.Session.Selected) &&
+                ShopSame(baseline, fixture.Read()) && ShopSame(baseline, fixture.Session.Selected!) && SqlSnapshot(fixture) == sqlBaseline;
+            Check(legal.Accepted && legalReceipt is { Count: 1, Core: { } core } && core.ItemId == row.Item &&
+                legalDebit == row.Cost && legalReward == 1 && quotaPlanValid && purePlanUncommitted,
+                "Settlement目标负例先证明纯规划精确成本、单件和首次限额合法且未提交 " + row.Item);
+            int planned = 0;
+            var result = fixture.Session.PlanAndCommitShopBuy(targetShop, character =>
+            {
+                planned++;
+                return shop.Buy(character, request, out _, now);
+            });
+            bool characterUnchanged = ReferenceEquals(selectedBaseline, fixture.Session.Selected) &&
+                ShopSame(baseline, fixture.Read()) && ShopSame(baseline, fixture.Session.Selected!);
+            bool sqlUnchanged = SqlSnapshot(fixture) == sqlBaseline;
+            bool rejected = result is { Accepted: false, Error: 17, Receipt: null } && planned == 0 && characterUnchanged && sqlUnchanged;
+            Check(rejected, "Settlement目标wrapper在capture拒绝17、零规划且完整角色和全表SQL不变 " + row.Item);
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "settlement-target", itemId = row.Item, legalPlan = legal.Accepted,
+                legalDebit, legalReward, quotaPlanValid, purePlanUncommitted, planned, accepted = result.Accepted, error = result.Error,
+                characterUnchanged, sqlUnchanged, rejected }));
+        }
+
+        // 精确复用既有CMD21商品合同；此处验证Session提交，不把它声称为wire或ACK证据。
+        var template = itemResources.Items.Get(otherItem);
+        Check(template.ShopPrice.Gold == 0 && template.ShopPrice.Materials is [{ ItemId: cube, Count: 20 }] &&
+            DfoServer.Game.Currency.CurrencyWallet.RewardKind(cube) == DfoServer.Game.Currency.CurrencyKind.ClearCube,
+            "非目标对照使用1000商店2600655的真实20无色价格和账号钱包币种");
+        var otherRequest = new DfoServer.Game.Inventory.Models.BuyItemRequest(otherItem, 1, otherShop, otherNpc);
+        var otherLegal = shop.Buy(baseline, otherRequest, out var otherLegalReceipt, now);
+        Check(otherLegal.Accepted && otherLegal.Plan is { } otherPlan && otherLegalReceipt is { Count: 1, Core: { ItemId: otherItem } } &&
+            CubeBalance(baseline with { Inventory = otherPlan.After }) == 21 &&
+            CountItem(baseline with { Inventory = otherPlan.After }, otherItem) == 1 &&
+            ReferenceEquals(selectedBaseline, fixture.Session.Selected) && ShopSame(baseline, fixture.Read()) && SqlSnapshot(fixture) == sqlBaseline,
+            "非目标纯规划合法且仍未提交，防止错误测试输入掩盖全局收紧");
+        int otherPlanned = 0;
+        ShopPurchaseReceipt? otherReceipt = null;
+        var bought = fixture.Session.PlanAndCommitShopBuy(otherShop, character =>
+        {
+            otherPlanned++;
+            return shop.Buy(character, otherRequest, out otherReceipt, now);
+        });
+        var after = fixture.Read();
+        var granted = after.Inventory.Items.SingleOrDefault(item => item.Core.ItemId == otherItem);
+        bool committed = bought.Accepted && otherPlanned == 1 && otherReceipt is { Count: 1, Core: { } boughtCore } &&
+            granted is { Uid: > 0 } && granted.Core == boughtCore && granted.Core == otherLegalReceipt!.Core && granted.Position == otherReceipt.Position &&
+            otherReceipt.Materials is [{ ItemId: cube, Remaining: 21 }] &&
+            CubeBalance(after) == CubeBalance(baseline) - 20 && CountItem(after, otherItem) == CountItem(baseline, otherItem) + 1 &&
+            after.Revision == baseline.Revision + 1 && after.Inventory.AccountWallet.Revision == baseline.Inventory.AccountWallet.Revision + 1 &&
+            bought.Receipt is not null && fixture.Session.CanPublishInventory(bought.Receipt) &&
+            ShopSame(after, bought.Receipt.Character) && ShopSame(after, fixture.Session.Selected!) && SqlSnapshot(fixture) != sqlBaseline;
+        Check(committed, "Settlement非目标wrapper真实规划一次、扣20发1并发布持久化UID和完整提交回执");
+        var expectedInventory = baseline.Inventory with
+        {
+            Items = baseline.Inventory.Items.Add(granted!).OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray(),
+            AccountWallet = baseline.Inventory.AccountWallet.Set(DfoServer.Game.Currency.CurrencyKind.ClearCube, 21) with
+                { Revision = baseline.Inventory.AccountWallet.Revision + 1 }
+        };
+        bool exactChangesOnly = ShopSame(baseline with { Revision = baseline.Revision + 1, Inventory = expectedInventory }, after);
+        Check(exactChangesOnly, "合法非目标购买只增加实际UID单件并扣无色，八项材料、额度及完整其他角色字段不变");
+        var cold = new CharacterRepository(fixture.Path, quests).LoadCharacter(fixture.Owner, fixture.Created.Slot);
+        bool coldMatches = ShopSame(after, cold) && ShopSame(cold, fixture.Session.Selected!) &&
+            bought.Receipt is not null && ShopSame(cold, bought.Receipt.Character);
+        Check(coldMatches, "非目标提交在重开仓储完整读回一致，不把纯计划临时UID当成提交结果");
+        Console.WriteLine(JsonSerializer.Serialize(new { kind = "settlement-other-shop", shopId = otherShop, npcId = otherNpc, itemId = otherItem,
+            planned = otherPlanned, accepted = bought.Accepted, error = bought.Error, cubeDebit = CubeBalance(baseline) - CubeBalance(after),
+            rewardIncrease = CountItem(after, otherItem) - CountItem(baseline, otherItem), grantedUid = granted?.Uid,
+            committed, exactChangesOnly, coldMatches, assertions = TestCheck.Count - beforeChecks }));
+
+        static long CountItem(Character character, int item) => character.Inventory.Items
+            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count);
+        static long CubeBalance(Character character) => DfoServer.Game.Currency.CurrencyWallet.Get(character.Inventory,
+            DfoServer.Game.Currency.CurrencyKind.ClearCube);
+        static Character Normalize(Character character) => character with
+        {
+            Inventory = character.Inventory with
+            {
+                ShopPurchases = character.Inventory.ShopPurchases.OrderBy(row => row.NpcId).ThenBy(row => row.ItemId)
+                    .ThenByDescending(row => row.AccountWide).ThenBy(row => row.ResetDaily)
+                    .ThenBy(row => row.Day).ThenBy(row => row.Count).ToImmutableArray()
+            }
+        };
+        static bool ShopSame(Character first, Character second) =>
+            JsonSerializer.Serialize(Normalize(first)) == JsonSerializer.Serialize(Normalize(second));
+
+        // 比较当前夹具全部表及审计；仅限临时库，不写结算表或业务数据。
+        static string SqlSnapshot(Fixture fixture)
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = fixture.Path, Pooling = false, ForeignKeys = true }.ToString());
+            db.Open();
+            using var read = db.BeginTransaction();
+            using var namesCommand = db.CreateCommand();
+            namesCommand.Transaction = read;
+            namesCommand.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name";
+            var names = new List<string>();
+            using (var reader = namesCommand.ExecuteReader())
+                while (reader.Read()) names.Add(reader.GetString(0));
+            var tables = new SortedDictionary<string, string[]>(StringComparer.Ordinal);
+            foreach (string name in names)
+            {
+                using var command = db.CreateCommand();
+                command.Transaction = read;
+                command.CommandText = "SELECT * FROM \"" + name.Replace("\"", "\"\"") + "\"";
+                using var reader = command.ExecuteReader();
+                var values = new List<string>();
+                while (reader.Read())
+                    values.Add(JsonSerializer.Serialize(Enumerable.Range(0, reader.FieldCount)
+                        .Select(index => reader.IsDBNull(index) ? null : reader.GetValue(index)).ToArray()));
+                tables[name] = values.Order(StringComparer.Ordinal).ToArray();
+            }
+            return JsonSerializer.Serialize(tables);
+        }
+    }
+
+    internal static void VerifyShopRoomAdmission(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
+    {
+        const int targetShop = 400000097, nolan = 400001107, material = 490705400;
+        (int Item, int Cost, int? Limit)[] rows =
+        [
+            (490705437, 4, 8), (490705421, 9, 2), (490705286, 4, 3), (490705424, 6, 1),
+            (490705422, 4, 2), (490703887, 3, 1), (490700411, 3, 1), (490013680, 1, null)
+        ];
+        var learning = SelfTestCatalogs.SkillLearning(pvf);
+        var quests = SelfTestCatalogs.Quests(pvf);
+        var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
+        var now = DateTimeOffset.UtcNow;
+        bool allRoomAccepted = true;
+        foreach (var row in rows)
+        {
+            using var room = new Fixture("ShopRoom" + Array.IndexOf(rows, row), towns, characters, learning, quests);
+            PrepareRoom(room);
+            var before = room.Read();
+            ShopPurchaseReceipt? receipt = null;
+            var result = room.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(row.Item, 1, targetShop, nolan), out receipt, now));
+            var after = room.Read();
+            bool quotaKeyValid = row.Limit is null ? after.Inventory.ShopPurchases.IsEmpty :
+                after.Inventory.ShopPurchases is [{ NpcId: nolan, ItemId: var item, AccountWide: true, ResetDaily: false, Day: 0, Count: 1 }] && item == row.Item;
+            bool purchaseValid = result.Accepted && receipt is { Count: 1, Core: { } granted } && granted.ItemId == row.Item &&
+                CountItem(after, material) == CountItem(before, material) - row.Cost &&
+                CountItem(after, row.Item) == CountItem(before, row.Item) + 1 && after.Inventory.Gold == before.Inventory.Gold &&
+                after.Revision == before.Revision + 1 && quotaKeyValid && result.Receipt is not null &&
+                Same(after, result.Receipt.Character) && Same(after, room.Session.Selected!);
+            allRoomAccepted &= purchaseValid;
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "room", itemId = row.Item,
+                accepted = result.Accepted, error = result.Error, quotaKeyValid, purchaseValid }));
+        }
+        using var outside = new Fixture("ShopOutside", towns, characters, learning, quests);
+        PrepareRoom(outside);
+        Check(outside.Session.LeaveRoom() && outside.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)) &&
+            outside.Session.Phase == SessionPhase.Town && !InRoom(outside), "外城负例真实出房并旅行到原38/2且仍为Ready Town");
+        var nonTarget = outside.Session.PlanAndCommitShopBuy(2,
+            character => shop.Buy(character, new(3175, 1, 2, 1), out _, now));
+        bool nonTargetMatchesReload = Same(outside.Read(), outside.Session.Selected!);
+        Console.WriteLine(JsonSerializer.Serialize(new { kind = "other-shop-outside", shopId = 2, itemId = 3175,
+            accepted = nonTarget.Accepted, error = nonTarget.Error, characterMatchesReload = nonTargetMatchesReload }));
+        Check(nonTarget.Accepted && nonTargetMatchesReload, "非目标shop2保留同一外城真实购买");
+        bool allOutsideRejected = true;
+        foreach (var row in rows)
+        {
+            var before = outside.Read();
+            Check(!before.Inventory.ShopPurchases.Any(value => value.ItemId == row.Item) && CountItem(before, row.Item) == 0,
+                "外城样本仍是该SKU首次购买 " + row.Item);
+            var request = new DfoServer.Game.Inventory.Models.BuyItemRequest(row.Item, 1, targetShop, nolan);
+            var legal = shop.Buy(before, request, out var legalReceipt, now);
+            Check(legal.Accepted && legalReceipt is { Count: 1 }, "外城负例先证真实材料、商品和额度合法 " + row.Item);
+            string sql = SqlSnapshot(outside);
+            int planned = 0;
+            var result = outside.Session.PlanAndCommitShopBuy(targetShop, character =>
+            {
+                planned++;
+                return shop.Buy(character, request, out _, now);
+            });
+            var after = outside.Read();
+            bool materialUnchanged = CountItem(before, material) == CountItem(after, material);
+            bool inventoryUnchanged = JsonSerializer.Serialize(before.Inventory) == JsonSerializer.Serialize(after.Inventory);
+            bool quotaUnchanged = before.Inventory.ShopPurchases.SequenceEqual(after.Inventory.ShopPurchases);
+            bool characterUnchanged = Same(before, after) && Same(before, outside.Session.Selected!);
+            bool sqlUnchanged = SqlSnapshot(outside) == sql;
+            bool rejected = result is { Accepted: false, Error: 17 } && planned == 0 && materialUnchanged &&
+                inventoryUnchanged && quotaUnchanged && characterUnchanged && sqlUnchanged;
+            allOutsideRejected &= rejected;
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "outside-town", itemId = row.Item, legalPlan = legal.Accepted,
+                planned, accepted = result.Accepted, error = result.Error, materialUnchanged, inventoryUnchanged,
+                quotaUnchanged, characterUnchanged, sqlUnchanged, rejected }));
+        }
+        using var leaving = new Fixture("ShopLeaving", towns, characters, learning, quests);
+        PrepareRoom(leaving);
+        Character? transition = null;
+        string? transitionSql = null;
+        int transitionPlanned = 0;
+        var changed = leaving.Session.PlanAndCommitShopBuy(targetShop, character =>
+        {
+            transitionPlanned++;
+            var plan = shop.Buy(character, new(490705437, 1, targetShop, nolan), out _, now);
+            Check(plan.Accepted, "出房回归先取得真实房间内合法购买计划");
+            Check(leaving.Session.LeaveRoom() && leaving.Session.Phase == SessionPhase.Town && !InRoom(leaving),
+                "锁外规划期间真实出房且仍在Ready Town");
+            transition = leaving.Read();
+            transitionSql = SqlSnapshot(leaving);
+            return plan;
+        });
+        bool transitionCharacterUnchanged = transition is not null && Same(transition, leaving.Read()) && Same(transition, leaving.Session.Selected!);
+        bool transitionSqlUnchanged = SqlSnapshot(leaving) == transitionSql;
+        bool transitionRejected = changed is { Accepted: false, Error: 17 } && transitionPlanned == 1 &&
+            transitionCharacterUnchanged && transitionSqlUnchanged;
+        Console.WriteLine(JsonSerializer.Serialize(new { kind = "room-to-outside", itemId = 490705437,
+            planned = transitionPlanned, accepted = changed.Accepted, error = changed.Error, phase = leaving.Session.Phase.ToString(),
+            isRoom = InRoom(leaving), characterUnchanged = transitionCharacterUnchanged, sqlUnchanged = transitionSqlUnchanged,
+            rejected = transitionRejected }));
+        Check(allRoomAccepted, "八项真实房间内合法兑换均精确扣材发奖并提交完整永久限额键");
+        Check(allOutsideRejected, "八项首次合法兑换在房间外Town均须capture拒绝17且零规划，材料库存配额完整角色与全SQL不变");
+        Check(transitionRejected, "真实出房后拒绝旧购买计划，出房之外不扣材发奖或写限额审计");
+
+        bool InRoom(Fixture fixture) => fixture.Session.Selected is { } character &&
+            towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character));
+        void PrepareRoom(Fixture fixture)
+        {
+            fixture.Session.Select(fixture.Created.Slot);
+            fixture.Session.MarkReady();
+            Check(fixture.Session.Phase == SessionPhase.Town && InRoom(fixture), "目标商店夹具真实选角并Ready且IsRoom为真");
+            Check(fixture.Session.MutateInventory(character => service.Grant(character, [new(material, 500)])).Accepted,
+                "房间夹具通过真实服务取得兑换材料");
+            fixture.Session.SetCharacterGold(fixture.Created.Name, 1_000_000);
+        }
+        static long CountItem(Character character, int item) => character.Inventory.Items
+            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count);
+    }
+
+    // 只比较本用例现有临时文件库，覆盖全部表的行及审计，不建立另一套持久模型。
+    static string SqlSnapshot(Fixture fixture)
+    {
+        using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = fixture.Path, Pooling = false, ForeignKeys = true }.ToString());
+        db.Open();
+        using var read = db.BeginTransaction();
+        using var namesCommand = db.CreateCommand();
+        namesCommand.Transaction = read;
+        namesCommand.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name";
+        var names = new List<string>();
+        using (var reader = namesCommand.ExecuteReader())
+            while (reader.Read()) names.Add(reader.GetString(0));
+        var tables = new SortedDictionary<string, string[]>(StringComparer.Ordinal);
+        foreach (string name in names)
+        {
+            using var command = db.CreateCommand();
+            command.Transaction = read;
+            command.CommandText = "SELECT * FROM \"" + name.Replace("\"", "\"\"") + "\"";
+            using var reader = command.ExecuteReader();
+            var values = new List<string>();
+            while (reader.Read())
+                values.Add(JsonSerializer.Serialize(Enumerable.Range(0, reader.FieldCount)
+                    .Select(index => reader.IsDBNull(index) ? null : reader.GetValue(index)).ToArray()));
+            tables[name] = values.Order(StringComparer.Ordinal).ToArray();
+        }
+        return JsonSerializer.Serialize(tables);
+    }
+
+    internal static void VerifyShopSceneAdmission(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
+    {
+        const int targetShop = 400000097, nolan = 400001107, otherNolan = 400001112, material = 490705400;
+        (int Item, int Cost, int? Limit)[] rows =
+        [
+            (490705437, 4, 8), (490705421, 9, 2), (490705286, 4, 3), (490705424, 6, 1),
+            (490705422, 4, 2), (490703887, 3, 1), (490700411, 3, 1), (490013680, 1, null)
+        ];
+        var sortingWitness = new Character(1, 0, "ShopSort", 0, new(0, 0, 0, 0), null)
+        {
+            Inventory = InventorySnapshot.Empty with { ShopPurchases =
+                [new(nolan, 490705437, true, false, 0, 1), new(nolan, 490705421, true, false, 0, 1)] }
+        };
+        var sortingRows = sortingWitness.Inventory.ShopPurchases;
+        Character WithSortingRows(ImmutableArray<ShopPurchaseCount> values) => sortingWitness with
+            { Inventory = sortingWitness.Inventory with { ShopPurchases = values } };
+        Check(ShopSame(sortingWitness, WithSortingRows(sortingRows.Reverse().ToImmutableArray())) &&
+            !ShopSame(sortingWitness, WithSortingRows(sortingRows.SetItem(0, sortingRows[0] with { Count = 2 }))) &&
+            !ShopSame(sortingWitness, WithSortingRows(sortingRows.SetItem(0, sortingRows[0] with { Day = 1 }))) &&
+            !ShopSame(sortingWitness, WithSortingRows(sortingRows.Add(sortingRows[0]))) &&
+            !ShopSame(sortingWitness, sortingWitness with { Revision = 1 }) &&
+            !ShopSame(sortingWitness, sortingWitness with { Inventory = sortingWitness.Inventory with { Gold = 1 } }),
+            "限购行仅消除排列差异，Count、Day、重复行及完整角色其他字段仍严格比较");
+        var learning = SelfTestCatalogs.SkillLearning(pvf);
+        var quests = SelfTestCatalogs.Quests(pvf);
+        var catalog = SelfTestCatalogs.Dungeons(pvf);
+        var rooms = SelfTestCatalogs.Rooms(pvf);
+        var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
+        using (var town = new Fixture("ShopTown", towns, characters, learning, quests))
+        {
+            Prepare(town, room: true);
+            foreach (var row in rows)
+            {
+                var before = town.Read();
+                ShopPurchaseReceipt? receipt = null;
+                var result = town.Session.PlanAndCommitShopBuy(targetShop,
+                    character => shop.Buy(character, new(row.Item, 1, targetShop, nolan), out receipt));
+                var after = town.Read();
+                bool characterMatchesReload = ShopSame(after, town.Session.Selected!);
+                var counters = after.Inventory.ShopPurchases.Where(value => value.ItemId == row.Item).ToArray();
+                bool quotaKeyValid = row.Limit is null ? counters.Length == 0 :
+                    counters is [{ NpcId: nolan, AccountWide: true, ResetDaily: false, Count: 1 }];
+                bool purchaseValid = result.Accepted && receipt is { Count: 1, Core: { } granted } && granted.ItemId == row.Item &&
+                    CountItem(after, material) == CountItem(before, material) - row.Cost &&
+                    CountItem(after, row.Item) == CountItem(before, row.Item) + 1 &&
+                    characterMatchesReload && result.Receipt is not null;
+                Console.WriteLine(JsonSerializer.Serialize(new { kind = "town", itemId = row.Item, accepted = result.Accepted,
+                    error = result.Error, materialDebit = CountItem(before, material) - CountItem(after, material),
+                    rewardIncrease = CountItem(after, row.Item) - CountItem(before, row.Item), characterMatchesReload, quotaKeyValid, purchaseValid }));
+                Check(purchaseValid,
+                    "Town首次真实购买提交完整单件和精确材料 " + row.Item);
+                Check(quotaKeyValid,
+                    "八行首次购买使用完整NPC账号永久限额键 " + row.Item);
+            }
+            foreach (var row in rows)
+            {
+                var before = town.Read();
+                string sql = SqlSnapshot(town);
+                var result = town.Session.PlanAndCommitShopBuy(targetShop,
+                    character => shop.Buy(character, new(row.Item, 1, targetShop, otherNolan), out _));
+                bool characterUnchanged = ShopSame(before, town.Read()) && ShopSame(before, town.Session.Selected!);
+                bool sqlUnchanged = SqlSnapshot(town) == sql;
+                Console.WriteLine(JsonSerializer.Serialize(new { kind = "npc112", itemId = row.Item, npcId = otherNolan,
+                    accepted = result.Accepted, error = result.Error, characterUnchanged, sqlUnchanged }));
+                Check(result is { Accepted: false, Error: 17 } && characterUnchanged && sqlUnchanged,
+                    "完整NPC400001112仍拒绝且整角色与SQL不变 " + row.Item);
+            }
+            Character? transition = null;
+            string? transitionSql = null;
+            var changed = town.Session.PlanAndCommitShopBuy(targetShop, character =>
+            {
+                var plan = shop.Buy(character, new(490705437, 1, targetShop, nolan), out _);
+                Check(plan.Accepted, "转场回归先取得真实可购买计划");
+                Check(town.Session.LeaveRoom() && town.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+                    "锁外规划期间真实出房并旅行到原选图入口");
+                Check(town.Session.BeginDungeonSelection() is not null, "锁外规划期间通过真实入口转入MapSelect");
+                transition = town.Read();
+                transitionSql = SqlSnapshot(town);
+                return plan;
+            });
+            bool transitionCharacterUnchanged = transition is not null && ShopSame(transition, town.Read()) && ShopSame(transition, town.Session.Selected!);
+            bool transitionSqlUnchanged = SqlSnapshot(town) == transitionSql;
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "town-to-mapselect", itemId = 490705437,
+                accepted = changed.Accepted, error = changed.Error, phase = town.Session.Phase.ToString(),
+                characterUnchanged = transitionCharacterUnchanged, sqlUnchanged = transitionSqlUnchanged }));
+            Check(changed is { Accepted: false, Error: 17 } && transitionCharacterUnchanged && transitionSqlUnchanged,
+                "提交前转场拒绝旧购买计划，转场之外不扣材发奖或写限额审计");
+        }
+
+        // 独立副本夹具从未买过八行，避免一次限额耗尽掩盖场景准入。
+        using var dungeon = new Fixture("ShopDungeon", towns, characters, learning, quests);
+        Prepare(dungeon);
+        Check(dungeon.Session.BeginDungeonSelection() is not null &&
+            dungeon.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is not null &&
+            dungeon.Session.CompleteFormalDungeonLoading() is not null && dungeon.Session.Phase == SessionPhase.Dungeon,
+            "目标商店场景回归建立真实Ready正式副本");
+        bool allRejected = true;
+        foreach (var row in rows)
+        {
+            var before = dungeon.Read();
+            Check(!before.Inventory.ShopPurchases.Any(value => value.ItemId == row.Item) && CountItem(before, row.Item) == 0,
+                "副本样本仍是该SKU首次购买 " + row.Item);
+            var request = new DfoServer.Game.Inventory.Models.BuyItemRequest(row.Item, 1, targetShop, nolan);
+            var legal = shop.Buy(before, request, out var legalReceipt);
+            Check(legal.Accepted && legalReceipt is { Count: 1 }, "副本负例的真实商品材料和额度规划合法 " + row.Item);
+            string sql = SqlSnapshot(dungeon);
+            int planned = 0;
+            var result = dungeon.Session.PlanAndCommitShopBuy(targetShop, character =>
+            {
+                planned++;
+                return shop.Buy(character, request, out _);
+            });
+            bool characterUnchanged = ShopSame(before, dungeon.Read()) && ShopSame(before, dungeon.Session.Selected!);
+            bool sqlUnchanged = SqlSnapshot(dungeon) == sql;
+            bool rejected = result is { Accepted: false, Error: 17 } && planned == 0 && characterUnchanged && sqlUnchanged;
+            allRejected &= rejected;
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "dungeon", itemId = row.Item, legalPlan = legal.Accepted,
+                planned, accepted = result.Accepted, error = result.Error, characterUnchanged, sqlUnchanged, rejected }));
+        }
+        var nonTarget = dungeon.Session.PlanAndCommitShopBuy(2,
+            character => shop.Buy(character, new(3175, 1, 2, 1), out _));
+        bool nonTargetMatchesReload = ShopSame(dungeon.Read(), dungeon.Session.Selected!);
+        Console.WriteLine(JsonSerializer.Serialize(new { kind = "other-shop", shopId = 2, itemId = 3175,
+            accepted = nonTarget.Accepted, error = nonTarget.Error, characterMatchesReload = nonTargetMatchesReload }));
+        Check(nonTarget.Accepted && nonTargetMatchesReload, "非目标shop2保留副本真实购买");
+        Check(allRejected, "八项首次合法兑换在Ready副本均须capture拒绝17且零规划，完整角色与SQL不变");
+
+        static Character Normalize(Character character) => character with
+        {
+            Inventory = character.Inventory with
+            {
+                ShopPurchases = character.Inventory.ShopPurchases.OrderBy(row => row.NpcId).ThenBy(row => row.ItemId)
+                    .ThenByDescending(row => row.AccountWide).ThenBy(row => row.ResetDaily)
+                    .ThenBy(row => row.Day).ThenBy(row => row.Count).ToImmutableArray()
+            }
+        };
+        static bool ShopSame(Character first, Character second) =>
+            JsonSerializer.Serialize(Normalize(first)) == JsonSerializer.Serialize(Normalize(second));
+
+        void Prepare(Fixture fixture, bool room = false)
+        {
+            if (room)
+            {
+                fixture.Session.Select(fixture.Created.Slot);
+                fixture.Session.MarkReady();
+                Check(fixture.Session.Phase == SessionPhase.Town && towns.IsRoom(fixture.Session.Selected!.Position,
+                    DfoServer.Game.Quests.QuestEligibility.Completed(fixture.Session.Selected!)), "目标商店合法夹具留在真实赛丽亚房间");
+            }
+            else fixture.SelectEntry();
+            Check(fixture.Session.MutateInventory(character => service.Grant(character, [new(material, 500)])).Accepted,
+                "场景夹具使用真实兑换材料实例");
+            fixture.Session.SetCharacterGold(fixture.Created.Name, 1_000_000);
+        }
+        static long CountItem(Character character, int item) => character.Inventory.Items
+            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count);
+
+    }
+
+    internal static void VerifyShopExchangeMatrix(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
+    {
+        const int targetShop = 400000097, nolan = 400001107, material = 490705400;
+        (int Item, int Cost, int? Limit)[] rows =
+        [
+            (490705437, 4, 8), (490705421, 9, 2), (490705286, 4, 3), (490705424, 6, 1),
+            (490705422, 4, 2), (490703887, 3, 1), (490700411, 3, 1), (490013680, 1, null)
+        ];
+        var learning = SelfTestCatalogs.SkillLearning(pvf);
+        var quests = SelfTestCatalogs.Quests(pvf);
+        var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
+        var now = DateTimeOffset.UtcNow;
+        foreach (var row in rows)
+        {
+            var template = itemResources.Items.Get(row.Item);
+            var expectedKind = row.Item is 490705286 or 490700411 or 490013680 ? DfoServer.GameWorld.Items.ItemKind.Material : DfoServer.GameWorld.Items.ItemKind.Consumable;
+            int expectedStack = row.Item == 490705286 ? 1000 : row.Item == 490700411 ? 1 : int.MaxValue;
+            Check(template.Kind == expectedKind && template.StackLimit == expectedStack && template.ShopPrice.Gold == 0 &&
+                template.ShopPrice.Materials is [{ ItemId: material, Count: var cost }] && cost == row.Cost &&
+                (row.Limit is { } cap ? template.ShopPrice.Limit is { AccountWide: true, ResetDaily: false } limit && limit.Count == cap :
+                    template.ShopPrice.Limit is null), "八项矩阵使用已保存定义的真实模板、材料、永久账号上限 " + row.Item);
+        }
+        Console.WriteLine("T03_MATRIX_FIXTURE_KINDS " + JsonSerializer.Serialize(new { materialId = material,
+            materialKind = itemResources.Items.Get(material).Kind.ToString(), fillerId = 490705421,
+            fillerKind = itemResources.Items.Get(490705421).Kind.ToString() }));
+        Check(itemResources.Items.Get(material).Kind == DfoServer.GameWorld.Items.ItemKind.Material && itemResources.Items.Get(490705421).Kind == DfoServer.GameWorld.Items.ItemKind.Consumable,
+            "容量夹具只用已证材料和消耗品分类");
+        using (var caps = new Fixture("ShopCaps", towns, characters, learning, quests))
+        {
+            Prepare(caps);
+            foreach (var row in rows.Where(value => value.Limit is not null))
+            {
+                for (int i = 0; i < row.Limit!.Value; i++) BuyOne(caps, row);
+                var before = caps.Read();
+                string sql = SqlSnapshot(caps);
+                var result = caps.Session.PlanAndCommitShopBuy(targetShop,
+                    character => shop.Buy(character, new(row.Item, 1, targetShop, nolan), out _, now));
+                bool unchanged = ShopSame(before, caps.Read()) && ShopSame(before, caps.Session.Selected!) && SqlSnapshot(caps) == sql;
+                var quota = before.Inventory.ShopPurchases.Single(value => value.ItemId == row.Item);
+                bool exactCap = quota == new ShopPurchaseCount(nolan, row.Item, true, false, 0, row.Limit.Value);
+                Console.WriteLine(JsonSerializer.Serialize(new { kind = "matrix-cap", itemId = row.Item, limit = row.Limit,
+                    accepted = result.Accepted, error = result.Error, exactCap, unchanged }));
+                Check(result is { Accepted: false, Error: 0x85 } && exactCap && unchanged, "永久账号上限已足额且超购不扣材 " + row.Item);
+            }
+            Check(CountItem(caps.Read(), material) == 418 && caps.Read().Inventory.ShopPurchases.Length == 7 &&
+                caps.Query("SELECT count(*) FROM shop_purchase_counts WHERE account='formal-session' AND character_id=0 AND npc_id=400001107 AND reset_daily=0 AND day=0") is 7L &&
+                caps.Query("SELECT count(*) FROM shop_purchase_counts") is 7L,
+                "七项十八次真实购买独立合计扣82材料且仅七个永久账号键");
+            var sibling = caps.Repository.Create(caps.Owner,
+                CharacterCreation.Prepare("CapSibling", characters.Get(0), towns.Room, towns.InitialReturn, learning.Get));
+            caps.Session.ReturnToRoster(); caps.Session.Select(sibling.Slot); caps.Session.MarkReady();
+            Check(caps.Session.Phase == SessionPhase.Town && towns.IsRoom(caps.Session.Selected!.Position,
+                DfoServer.Game.Quests.QuestEligibility.Completed(caps.Session.Selected!)) &&
+                caps.Session.MutateInventory(character => service.Grant(character, [new(material, 500)])).Accepted,
+                "同库兄弟角色真实选角留在赛丽亚房间并备足兑换材料");
+            caps.Session.SetCharacterGold(sibling.Name, 1_000_000);
+            var reopened = new CharacterRepository(caps.Path, quests);
+            var cold = reopened.LoadCharacter(caps.Owner, sibling.Slot);
+            Check(ShopSame(cold, caps.Session.Selected!), "兄弟角色与重开仓储完整快照相等");
+            foreach (var row in rows.Where(value => value.Limit is not null))
+            {
+                var before = caps.Repository.LoadCharacter(caps.Owner, sibling.Slot);
+                string sql = SqlSnapshot(caps);
+                var result = caps.Session.PlanAndCommitShopBuy(targetShop,
+                    character => shop.Buy(character, new(row.Item, 1, targetShop, nolan), out _, now));
+                var nextDay = shop.Buy(cold, new(row.Item, 1, targetShop, nolan), out _, now.AddDays(1));
+                bool coldCap = cold.Inventory.ShopPurchases.Single(value => value.ItemId == row.Item) ==
+                    new ShopPurchaseCount(nolan, row.Item, true, false, 0, row.Limit!.Value);
+                bool unchanged = ShopSame(before, caps.Repository.LoadCharacter(caps.Owner, sibling.Slot)) && ShopSame(before, caps.Session.Selected!) && SqlSnapshot(caps) == sql;
+                Console.WriteLine(JsonSerializer.Serialize(new { kind = "matrix-sibling-reopen", itemId = row.Item,
+                    accepted = result.Accepted, error = result.Error, nextDayAccepted = nextDay.Accepted, nextDayError = nextDay.Error, coldCap, unchanged }));
+                Check(result is { Accepted: false, Error: 0x85 } && nextDay is { Accepted: false, Error: 0x85 } && coldCap && unchanged,
+                    "兄弟和冷读跨日仍共享永久账号已耗尽上限 " + row.Item);
+            }
+            BuyOne(caps, rows[7]); BuyOne(caps, rows[7]);
+            var unlimited = caps.Repository.LoadCharacter(caps.Owner, sibling.Slot);
+            bool noArtificialKey = !unlimited.Inventory.ShopPurchases.Any(value => value.ItemId == rows[7].Item) &&
+                unlimited.Inventory.ShopPurchases.Length == 7 && CountItem(unlimited, rows[7].Item) == 2 && CountItem(unlimited, material) == 498 &&
+                caps.Query("SELECT count(*) FROM shop_purchase_counts WHERE item_id=490013680") is 0L;
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "matrix-unlimited", itemId = rows[7].Item, purchases = 2, noArtificialKey }));
+            Check(noArtificialKey && ShopSame(unlimited, reopened.LoadCharacter(caps.Owner, sibling.Slot)),
+                "第八项两次兑换不制造限购键且完整重开一致");
+        }
+        foreach (var test in new[]
+        {
+            (Name: "CapConsFull", Row: rows[0], Merge: false, FreeCost: false, Accepted: false),
+            (Name: "CapConsMerge", Row: rows[0], Merge: true, FreeCost: false, Accepted: true),
+            (Name: "CapMatFull", Row: rows[2], Merge: false, FreeCost: false, Accepted: false),
+            (Name: "CapMatFree", Row: rows[2], Merge: false, FreeCost: true, Accepted: true),
+            (Name: "CapSingle", Row: rows[6], Merge: false, FreeCost: false, Accepted: false)
+        })
+        {
+            var seed = CapacitySeed(test.Name, test.Row, test.Merge, test.FreeCost);
+            using var full = new Fixture(test.Name, towns, characters, learning, quests, prepared: seed);
+            SelectRoom(full);
+            var before = full.Read(); string sql = SqlSnapshot(full);
+            var template = itemResources.Items.Get(test.Row.Item);
+            var range = ItemSlotBoundService.Range(template.Kind, before.Inventory);
+            Check(before.Inventory.Items.Count(value => value.Position.List == InventoryListType.Main &&
+                value.Position.Index >= range.Start && value.Position.Index <= range.End) == 56,
+                "真实奖励目标页确实全满且不占用快捷栏 " + test.Name);
+            var result = test.Accepted ? BuyOne(full, test.Row) : full.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(test.Row.Item, 1, targetShop, nolan), out _, now));
+            bool unchanged = ShopSame(before, full.Read()) && ShopSame(before, full.Session.Selected!) && SqlSnapshot(full) == sql;
+            if (!test.Accepted)
+                Check(result is { Accepted: false, Error: 4 } && unchanged, "目标满页拒绝保持完整角色、配额和全SQL " + test.Name);
+            bool placement = !test.Accepted || (test.Merge ?
+                full.Read().Inventory.Find(new(InventoryListType.Main, 65)) is { Core.ItemId: 490705437, Core.Count: 2 } :
+                CountItem(full.Read(), material) == 0 && full.Read().Inventory.Find(new(InventoryListType.Main, 121)) is { Core.ItemId: 490705286, Core.Count: 1 });
+            Check(placement, "成功使用兼容原栈或成本实际释放槽 " + test.Name);
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "matrix-capacity", name = test.Name, itemId = test.Row.Item,
+                accepted = result.Accepted, error = result.Error, unchanged, placement }));
+        }
+        using (var late = new Fixture("ShopLate", towns, characters, learning, quests))
+        {
+            Prepare(late);
+            var request = new DfoServer.Game.Inventory.Models.BuyItemRequest(490705424, 1, targetShop, nolan);
+            Check(shop.Buy(late.Read(), request, out _, now).Accepted, "晚SQL夹具先证真实商品和材料合法且未消耗配额");
+            late.Sql("CREATE TRIGGER t03_exact_quota AFTER INSERT ON shop_purchase_counts WHEN NEW.account='formal-session' AND NEW.character_id=0 AND NEW.npc_id=400001107 AND NEW.item_id=490705424 AND NEW.reset_daily=0 AND NEW.day=0 AND NEW.count=1 BEGIN SELECT RAISE(ABORT,'t03 exact quota late'); END");
+            var before = late.Read(); string sql = SqlSnapshot(late); bool failed = false;
+            try { late.Session.PlanAndCommitShopBuy(targetShop, character => shop.Buy(character, request, out _, now)); }
+            catch (SqliteException error) when (error.SqliteErrorCode == 19 && error.Message.Contains("t03 exact quota late", StringComparison.Ordinal)) { failed = true; }
+            bool unchanged = ShopSame(before, late.Read()) && ShopSame(before, late.Session.Selected!) && SqlSnapshot(late) == sql;
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "matrix-late-rollback", itemId = request.ItemId, failed, unchanged }));
+            Check(failed && unchanged, "精确配额AFTER INSERT故障完整回滚UID、审计、revision、成本、奖励和配额");
+            late.Sql("DROP TRIGGER t03_exact_quota");
+            BuyOne(late, rows[3], request);
+            var after = late.Read();
+            bool once = CountItem(after, material) == 494 && CountItem(after, request.ItemId) == 1 &&
+                after.Inventory.ShopPurchases is [{ NpcId: nolan, ItemId: 490705424, AccountWide: true, ResetDaily: false, Day: 0, Count: 1 }] &&
+                late.Query("SELECT count(*) FROM shop_purchase_counts WHERE account='formal-session' AND character_id=0 AND npc_id=400001107 AND item_id=490705424 AND reset_daily=0 AND day=0 AND count=1") is 1L &&
+                late.Query("SELECT count(*) FROM shop_purchase_counts") is 1L &&
+                ShopSame(after, new CharacterRepository(late.Path, quests).LoadCharacter(late.Owner, late.Created.Slot));
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "matrix-late-retry", itemId = request.ItemId, sameRequest = true, once }));
+            Check(once, "完全同请求重试只扣6材、发1件、累计1次且完整重开相等");
+        }
+
+        void Prepare(Fixture fixture)
+        {
+            SelectRoom(fixture);
+            Check(fixture.Session.MutateInventory(character => service.Grant(character, [new(material, 500)])).Accepted,
+                "矩阵夹具通过真实服务取得兑换材料");
+            fixture.Session.SetCharacterGold(fixture.Created.Name, 1_000_000);
+        }
+        void SelectRoom(Fixture fixture)
+        {
+            fixture.Session.Select(fixture.Created.Slot);
+            fixture.Session.MarkReady();
+            Check(fixture.Session.Phase == SessionPhase.Town && towns.IsRoom(fixture.Session.Selected!.Position,
+                DfoServer.Game.Quests.QuestEligibility.Completed(fixture.Session.Selected!)), "目标商店矩阵夹具留在真实赛丽亚房间");
+        }
+        InventoryResult BuyOne(Fixture fixture, (int Item, int Cost, int? Limit) row, DfoServer.Game.Inventory.Models.BuyItemRequest? sameRequest = null)
+        {
+            var before = fixture.Session.Selected!;
+            ShopPurchaseReceipt? receipt = null;
+            var request = sameRequest ?? new DfoServer.Game.Inventory.Models.BuyItemRequest(row.Item, 1, targetShop, nolan);
+            var result = fixture.Session.PlanAndCommitShopBuy(targetShop, character => shop.Buy(character, request, out receipt, now));
+            var after = fixture.Repository.LoadCharacter(fixture.Owner, before.Slot);
+            int previous = before.Inventory.ShopPurchases.SingleOrDefault(value => value.ItemId == row.Item)?.Count ?? 0;
+            bool quota = row.Limit is null ? !after.Inventory.ShopPurchases.Any(value => value.ItemId == row.Item) :
+                after.Inventory.ShopPurchases.SingleOrDefault(value => value.ItemId == row.Item) == new ShopPurchaseCount(nolan, row.Item, true, false, 0, previous + 1);
+            Check(result.Accepted && receipt is { Count: 1, Core: { } core } && core.ItemId == row.Item &&
+                CountItem(after, material) == CountItem(before, material) - row.Cost && CountItem(after, row.Item) == CountItem(before, row.Item) + 1 &&
+                after.Inventory.Gold == before.Inventory.Gold && after.Revision == before.Revision + 1 && quota &&
+                result.Receipt is not null && ShopSame(after, result.Receipt.Character) && ShopSame(after, fixture.Session.Selected!),
+                "真实购买精确扣材发奖、永久键、revision及完整已发布读回 " + row.Item);
+            return result;
+        }
+        NewCharacter CapacitySeed(string name, (int Item, int Cost, int? Limit) row, bool merge, bool freeCost)
+        {
+            var seed = CharacterCreation.Prepare(name, characters.Get(0), towns.Room, towns.InitialReturn, learning.Get);
+            var template = itemResources.Items.Get(row.Item);
+            var filler = itemResources.Items.Get(template.Kind == DfoServer.GameWorld.Items.ItemKind.Consumable ? 490705421 : row.Item == 490700411 ? 490705286 : 490700411);
+            var range = ItemSlotBoundService.Range(template.Kind, seed.Inventory);
+            var items = seed.Inventory.Items.ToBuilder();
+            for (short slot = range.Start; slot <= range.End; slot++)
+            {
+                var item = merge && slot == range.Start ? template : filler;
+                items.Add(InventoryRewardGrantService.CreateItem(item, new(InventoryListType.Main, slot), InventoryRewardGrantService.Create(item, 1, now)));
+            }
+            var materialTemplate = itemResources.Items.Get(material);
+            var costSlot = new InventorySlot(InventoryListType.Main, 121);
+            var cost = InventoryRewardGrantService.CreateItem(materialTemplate, costSlot,
+                InventoryRewardGrantService.Create(materialTemplate, freeCost ? row.Cost : row.Cost + 1, now));
+            int index = -1;
+            for (int i = 0; i < items.Count; i++) if (items[i].Position == costSlot) { index = i; break; }
+            if (index < 0) items.Add(cost); else items[index] = cost;
+            return seed with { Inventory = seed.Inventory with { Gold = 1_000_000, Items = items.ToImmutable() } };
+        }
+        static Character Normalize(Character character) => character with
+        {
+            Inventory = character.Inventory with
+            {
+                ShopPurchases = character.Inventory.ShopPurchases.OrderBy(row => row.NpcId).ThenBy(row => row.ItemId)
+                    .ThenByDescending(row => row.AccountWide).ThenBy(row => row.ResetDaily)
+                    .ThenBy(row => row.Day).ThenBy(row => row.Count).ToImmutableArray()
+            }
+        };
+        static bool ShopSame(Character first, Character second) =>
+            JsonSerializer.Serialize(Normalize(first)) == JsonSerializer.Serialize(Normalize(second));
+
+        static long CountItem(Character character, int item) => character.Inventory.Items
+            .Where(value => value.Core.ItemId == item).Sum(value => (long)value.Core.Count);
+
+        // 只比较本用例现有临时文件库，覆盖全部表的行及审计，不建立另一套持久模型。
+        static string SqlSnapshot(Fixture fixture)
+        {
+            using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = fixture.Path, Pooling = false, ForeignKeys = true }.ToString());
+            db.Open();
+            using var read = db.BeginTransaction();
+            using var namesCommand = db.CreateCommand();
+            namesCommand.Transaction = read;
+            namesCommand.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name";
+            var names = new List<string>();
+            using (var reader = namesCommand.ExecuteReader())
+                while (reader.Read()) names.Add(reader.GetString(0));
+            var tables = new SortedDictionary<string, string[]>(StringComparer.Ordinal);
+            foreach (string name in names)
+            {
+                using var command = db.CreateCommand();
+                command.Transaction = read;
+                command.CommandText = "SELECT * FROM \"" + name.Replace("\"", "\"\"") + "\"";
+                using var reader = command.ExecuteReader();
+                var values = new List<string>();
+                while (reader.Read())
+                    values.Add(JsonSerializer.Serialize(Enumerable.Range(0, reader.FieldCount)
+                        .Select(index => reader.IsDBNull(index) ? null : reader.GetValue(index)).ToArray()));
+                tables[name] = values.Order(StringComparer.Ordinal).ToArray();
+            }
+            return JsonSerializer.Serialize(tables);
+        }
+    }
+
+    internal static void VerifyShopBatchAndIdentityAdmission(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
+    {
+        int beforeChecks = TestCheck.Count;
+        const int targetShop = 400000097, nolan = 400001107, material = 490705400;
+        (int Item, int Cost, int? Limit)[] rows =
+        [
+            (490705437, 4, 8), (490705421, 9, 2), (490705286, 4, 3), (490705424, 6, 1),
+            (490705422, 4, 2), (490703887, 3, 1), (490700411, 3, 1), (490013680, 1, null)
+        ];
+        var learning = SelfTestCatalogs.SkillLearning(pvf);
+        var quests = SelfTestCatalogs.Quests(pvf);
+        var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
+        var now = DateTimeOffset.UtcNow;
+        Check(rows.All(row => itemResources.Items.Get(row.Item).ShopPrice.Materials is [{ ItemId: material, Count: var cost }] && cost == row.Cost &&
+            (row.Limit is { } cap ? itemResources.Items.Get(row.Item).ShopPrice.Limit is { AccountWide: true, ResetDaily: false } limit && limit.Count == cap :
+                itemResources.Items.Get(row.Item).ShopPrice.Limit is null)), "批量夹具仍绑定八项真实成本和七项永久账号上限，第八项无限购");
+
+        int sample = 0;
+        foreach (var row in rows.Where(row => row.Limit is not null))
+        foreach (int delta in new[] { -1, 0, 1 })
+        {
+            int count = row.Limit!.Value + delta;
+            using var f = Prepare("Batch" + sample++);
+            var before = f.Read();
+            string sql = SqlSnapshot(f);
+            Check(before.Inventory.ShopPurchases.IsEmpty && CountItem(before, row.Item) == 0,
+                "批量边界初始已购量为零，Count由真实cap计算 " + row.Item + "/" + count);
+            ShopPurchaseReceipt? receipt = null;
+            var result = f.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(row.Item, count, targetShop, nolan), out receipt, now));
+            bool accepted = count > 0 && count <= row.Limit.Value;
+            if (accepted) Committed(f, before, result, receipt, row, count);
+            else Rejected(f, before, sql, result, 0x85, "批量越界不扣材、不发奖、不占额度 " + row.Item + "/" + count);
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "batch-cap", itemId = row.Item, initialPurchased = 0,
+                cap = row.Limit, count, delta, expectedAccepted = accepted, result.Accepted, result.Error }));
+        }
+
+        using (var unlimited = Prepare("BatchNoCap"))
+        {
+            // 9已超过其余商品的最大cap；013680不借用这些上限，也不为它制造cap±1。
+            var before = unlimited.Read();
+            ShopPurchaseReceipt? receipt = null;
+            var result = unlimited.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(rows[7].Item, 9, targetShop, nolan), out receipt, now));
+            Committed(unlimited, before, result, receipt, rows[7], 9);
+            Check(unlimited.Query("SELECT count(*) FROM shop_purchase_counts") is 0L,
+                "无限购商品单请求九件不制造任何限购键");
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "batch-unlimited", itemId = rows[7].Item, count = 9, quotaRows = 0 }));
+        }
+
+        // 共同扣材分支只用一种真实SKU；不足、锁定及过期均保留原实例与全库基线。
+        foreach (var test in new[]
+        {
+            (Name: "SplitCost", Second: 6, Locked: false, Expiring: false, Accepted: true),
+            (Name: "ShortCost", Second: 4, Locked: false, Expiring: false, Accepted: false),
+            (Name: "LockedCost", Second: 6, Locked: true, Expiring: false, Accepted: false),
+            (Name: "ExpiredCost", Second: 6, Locked: false, Expiring: true, Accepted: false)
+        })
+        {
+            int expires = test.Expiring ? checked((int)now.AddDays(1).ToUnixTimeSeconds()) : 0;
+            using var f = Prepare(test.Name, Seed(test.Name, 3, test.Second, test.Locked, expires));
+            var before = f.Read();
+            var first = before.Inventory.Find(new(InventoryListType.Main, 121))!;
+            var second = before.Inventory.Find(new(InventoryListType.Main, 122))!;
+            var purchaseTime = test.Expiring ? now.AddDays(2) : now;
+            Check(first is { Uid: > 0, Core.Count: 3 } && second.Uid > 0 && second.Uid != first.Uid &&
+                second.Core.Count == test.Second && second.Core.EquipmentLockId == (test.Locked ? 1 : 0) &&
+                second.Core.ExpireTime == expires && !second.Core.IsExpired(now.ToUnixTimeSeconds()) &&
+                second.Core.IsExpired(purchaseTime.ToUnixTimeSeconds()) == test.Expiring,
+                "扣材夹具使用两个已持久化真实材料槽且锁定/到期时点明确 " + test.Name);
+            string sql = SqlSnapshot(f);
+            ShopPurchaseReceipt? receipt = null;
+            var result = f.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(rows[0].Item, 2, targetShop, nolan), out receipt, purchaseTime));
+            if (test.Accepted)
+            {
+                var after = Committed(f, before, result, receipt, rows[0], 2);
+                Check(after.Inventory.Find(first.Position) is null && after.Inventory.Find(second.Position) is { } rest &&
+                    rest.Uid == second.Uid && rest.Core == (second.Core with { Value = 1 }) &&
+                    receipt!.Materials is [{ ItemId: material, Remaining: 0 }],
+                    "单请求跨两槽精确扣八材，首槽删除、后槽保留原UID及一件，ACK材料基数对应首旧槽");
+            }
+            else Rejected(f, before, sql, result, 10, "可用材料不足不消费其他合格槽或占用额度 " + test.Name);
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "batch-material", test.Name, firstCount = 3, secondCount = test.Second,
+                test.Locked, test.Expiring, count = 2, required = 8, result.Accepted, result.Error }));
+        }
+
+        using (var day = Prepare("BatchNextDay"))
+        {
+            var before = day.Read();
+            ShopPurchaseReceipt? receipt = null;
+            var first = day.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(rows[0].Item, 7, targetShop, nolan), out receipt, now));
+            var seven = Committed(day, before, first, receipt, rows[0], 7);
+            string sql = SqlSnapshot(day);
+            var over = day.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(rows[0].Item, 2, targetShop, nolan), out _, now));
+            Rejected(day, seven, sql, over, 0x85, "已购七件后单请求两件超永久八件上限且整批不扣材");
+            receipt = null;
+            var next = day.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(rows[0].Item, 1, targetShop, nolan), out receipt, now.AddDays(1)));
+            var eight = Committed(day, seven, next, receipt, rows[0], 1);
+            sql = SqlSnapshot(day);
+            var exhausted = day.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(rows[0].Item, 1, targetShop, nolan), out _, now.AddDays(1)));
+            Rejected(day, eight, sql, exhausted, 0x85, "次日实际提交最后一件后永久额度仍耗尽，不只验证纯规划");
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "batch-next-day", initialPurchased = 7, count = 1,
+                committedPurchased = 8, persistentDay = 0, accepted = next.Accepted, exhausted.Error }));
+        }
+
+        using (var epoch = Prepare("BatchEpoch"))
+        {
+            Character? transition = null;
+            string? transitionSql = null;
+            int planned = 0;
+            var result = epoch.Session.PlanAndCommitShopBuy(targetShop, character =>
+            {
+                planned++;
+                var plan = shop.Buy(character, new(rows[0].Item, 2, targetShop, nolan), out _, now);
+                Check(plan.Accepted, "旧epoch负例先取得目标商店合法批量计划");
+                epoch.Session.ReturnToRoster(); epoch.Session.Select(epoch.Created.Slot); epoch.Session.MarkReady();
+                transition = epoch.Read(); transitionSql = SqlSnapshot(epoch);
+                return plan;
+            });
+            Check(result is { Accepted: false, Error: 17, Receipt: null } && planned == 1 && transition is not null &&
+                Same(transition, epoch.Read()) && Same(transition, epoch.Session.Selected!) && SqlSnapshot(epoch) == transitionSql,
+                "重选同一角色的新epoch拒绝旧目标批量计划，过渡之外的资产、额度和全表均不变");
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "batch-old-epoch", planned, result.Accepted, result.Error }));
+        }
+
+        using (var replaced = Prepare("BatchFresh"))
+        {
+            var stale = replaced.Session.Selected!;
+            Character? winner = null;
+            string? winnerSql = null;
+            int planned = 0;
+            var result = replaced.Session.PlanAndCommitShopBuy(targetShop, character =>
+            {
+                planned++;
+                var plan = shop.Buy(character, new(rows[0].Item, 2, targetShop, nolan), out _, now);
+                Check(plan.Accepted && replaced.Session.MutateInventory(current => service.Grant(current, [new(material, 1)])).Accepted,
+                    "同Session旧计划负例先合法规划，再真实提交一件材料替换Selected");
+                winner = replaced.Session.Selected!;
+                winnerSql = SqlSnapshot(replaced);
+                return plan;
+            });
+            Check(result is { Accepted: false, Error: 17, Plan: null, Receipt: null } && planned == 1 &&
+                winner is not null && !ReferenceEquals(stale, winner) && ReferenceEquals(winner, replaced.Session.Selected) &&
+                winner.Revision == stale.Revision + 1 && CountItem(winner, material) == CountItem(stale, material) + 1 &&
+                CountItem(winner, rows[0].Item) == 0 && winner.Inventory.ShopPurchases.IsEmpty &&
+                Same(winner, replaced.Read()) && SqlSnapshot(replaced) == winnerSql,
+                "同Session新Selected使旧目标计划在提交复核拒绝17，不重规划且winner完整角色、成本、配额和全SQL不变");
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "batch-replaced-selected", planned, result.Accepted, result.Error,
+                oldRevision = stale.Revision, winnerRevision = winner!.Revision }));
+        }
+
+        using (var revision = Prepare("BatchRev"))
+        {
+            var stale = revision.Session.Selected!;
+            var other = new GameSession(revision.Repository, towns, revision.Owner, questCatalog: quests);
+            other.Select(stale.Slot); other.MarkReady();
+            Character? winner = null;
+            string? winnerSql = null;
+            bool conflicted = false;
+            try
+            {
+                revision.Session.PlanAndCommitShopBuy(targetShop, character =>
+                {
+                    var plan = shop.Buy(character, new(rows[0].Item, 2, targetShop, nolan), out _, now);
+                    Check(plan.Accepted && other.MutateInventory(current => service.Grant(current, [new(material, 1)])).Accepted,
+                        "旧revision负例用另一正式Session真实提交一件材料，保留原计划角色引用");
+                    winner = revision.Read(); winnerSql = SqlSnapshot(revision);
+                    return plan;
+                });
+            }
+            catch (InvalidOperationException error) when (error.Message.Contains("owner/revision", StringComparison.Ordinal)) { conflicted = true; }
+            Check(conflicted && winner is not null && winner.Revision == stale.Revision + 1 &&
+                CountItem(winner, material) == CountItem(stale, material) + 1 && winner.Inventory.ShopPurchases.IsEmpty &&
+                ReferenceEquals(stale, revision.Session.Selected) && Same(winner, revision.Read()) && SqlSnapshot(revision) == winnerSql,
+                "目标wrapper的旧revision在真实仓储CAS拒绝，只保留另一Session已提交的材料和审计");
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "batch-old-revision", conflicted }));
+        }
+
+        using (var takeover = Prepare("BatchOwner"))
+        {
+            var before = takeover.Read(); string sql = SqlSnapshot(takeover);
+            AccountOwners.Lease? replacement = null;
+            int planned = 0;
+            bool staleOwner = false;
+            try
+            {
+                takeover.Session.PlanAndCommitShopBuy(targetShop, character =>
+                {
+                    planned++;
+                    var plan = shop.Buy(character, new(rows[0].Item, 2, targetShop, nolan), out _, now);
+                    Check(plan.Accepted, "接管负例先取得原owner/generation的合法目标计划");
+                    replacement = takeover.Owners.Acquire(takeover.Owner.Account, () => { });
+                    return plan;
+                });
+            }
+            catch (InvalidOperationException error) when (error.Message == "Stale account generation") { staleOwner = true; }
+            using (replacement)
+            {
+                Check(staleOwner && planned == 1 && replacement is { IsCurrent: true } &&
+                    replacement.Generation > takeover.Owner.Generation && !takeover.Owner.IsCurrent &&
+                    Same(before, takeover.Repository.LoadCharacter(replacement, before.Slot)) && SqlSnapshot(takeover) == sql,
+                    "接管使旧owner和generation在提交前失效，不扣目标成本、发奖、写配额或审计");
+                takeover.Owner.Dispose();
+                var current = new GameSession(takeover.Repository, towns, replacement!, questCatalog: quests);
+                current.Select(before.Slot); current.MarkReady();
+                ShopPurchaseReceipt? receipt = null;
+                var result = current.PlanAndCommitShopBuy(targetShop,
+                    character => shop.Buy(character, new(rows[0].Item, 2, targetShop, nolan), out receipt, now));
+                Committed(takeover, before, result, receipt, rows[0], 2, current, replacement);
+                Check(replacement!.IsCurrent, "旧lease释放不撤销新owner，原批量请求由新generation正常提交一次");
+                Console.WriteLine(JsonSerializer.Serialize(new { kind = "batch-old-owner-generation", planned, staleOwner,
+                    oldGeneration = takeover.Owner.Generation, newGeneration = replacement.Generation, currentAccepted = result.Accepted }));
+            }
+        }
+
+        using (var race = Prepare("BatchRaceA"))
+        {
+            var before = race.Read();
+            ShopPurchaseReceipt? initialReceipt = null;
+            var initial = race.Session.PlanAndCommitShopBuy(targetShop,
+                character => shop.Buy(character, new(rows[0].Item, 7, targetShop, nolan), out initialReceipt, now));
+            Committed(race, before, initial, initialReceipt, rows[0], 7);
+            var sibling = race.Repository.Create(race.Owner, Seed("BatchRaceB"));
+            var secondSession = new GameSession(race.Repository, towns, race.Owner, questCatalog: quests);
+            secondSession.Select(sibling.Slot); secondSession.MarkReady();
+            var a = race.Session.Selected!;
+            var b = secondSession.Selected!;
+            Check(a.Id != b.Id && a.Inventory.ShopPurchases.Single().Count == 7 && b.Inventory.ShopPurchases.Single().Count == 7,
+                "同账号A/B两角色从相同永久七件额度快照竞争最后一件");
+            InventoryResult? secondResult = null;
+            ShopPurchaseReceipt? secondReceipt = null;
+            Character? committedB = null;
+            string? winnerSql = null;
+            int firstPlans = 0, secondPlans = 0;
+            bool firstConflicted = false;
+            try
+            {
+                race.Session.PlanAndCommitShopBuy(targetShop, character =>
+                {
+                    firstPlans++;
+                    var firstPlan = shop.Buy(character, new(rows[0].Item, 1, targetShop, nolan), out _, now);
+                    Check(firstPlan.Accepted, "A锁外规划最后一件时仍合法");
+                    // 确定性交错两个规划/提交窗口，不用睡眠、线程调度或两份互相接管的lease冒充竞争。
+                    secondResult = secondSession.PlanAndCommitShopBuy(targetShop, current =>
+                    {
+                        secondPlans++;
+                        return shop.Buy(current, new(rows[0].Item, 1, targetShop, nolan), out secondReceipt, now);
+                    });
+                    committedB = race.Repository.LoadCharacter(race.Owner, b.Slot);
+                    winnerSql = SqlSnapshot(race);
+                    return firstPlan;
+                });
+            }
+            catch (InvalidOperationException error) when (error.Message.Contains("owner/revision", StringComparison.Ordinal)) { firstConflicted = true; }
+            var afterA = race.Repository.LoadCharacter(race.Owner, a.Slot);
+            var afterB = Committed(race, b, secondResult!, secondReceipt, rows[0], 1, secondSession);
+            var expectedA = a with { Inventory = a.Inventory with { ShopPurchases = afterB.Inventory.ShopPurchases } };
+            Check(firstConflicted && firstPlans == 1 && secondPlans == 1 && committedB is not null &&
+                Same(expectedA, afterA) && Same(committedB, afterB) && ReferenceEquals(a, race.Session.Selected) &&
+                afterA.Inventory.ShopPurchases.Single() == new ShopPurchaseCount(nolan, rows[0].Item, true, false, 0, 8) &&
+                CountItem(afterA, rows[0].Item) + CountItem(afterB, rows[0].Item) == 8 &&
+                CountItem(afterA, material) + CountItem(afterB, material) == 1000 - 8 * rows[0].Cost &&
+                race.Query("SELECT count(*) FROM shop_purchase_counts WHERE account='formal-session' AND character_id=0 AND npc_id=400001107 AND item_id=490705437 AND reset_daily=0 AND day=0 AND count=8") is 1L &&
+                SqlSnapshot(race) == winnerSql && Same(afterA, new CharacterRepository(race.Path, quests).LoadCharacter(race.Owner, a.Slot)),
+                "B真实提交最后一件后A旧额度CAS拒绝，合计八件、最后额度只扣一次成本，A自有资产不变且双角色冷读一致");
+            Console.WriteLine(JsonSerializer.Serialize(new { kind = "batch-account-last-quota", firstPlans, secondPlans, firstConflicted,
+                winner = "B", finalPurchased = 8, firstRevisionUnchanged = afterA.Revision == a.Revision, secondAccepted = secondResult!.Accepted }));
+        }
+        Console.WriteLine("T03_BATCH_IDENTITY_ASSERTIONS " + (TestCheck.Count - beforeChecks));
+
+        Fixture Prepare(string name, NewCharacter? seed = null)
+        {
+            var f = new Fixture(name, towns, characters, learning, quests, prepared: seed ?? Seed(name));
+            try
+            {
+                f.Session.Select(f.Created.Slot); f.Session.MarkReady();
+                Check(f.Session.Phase == SessionPhase.Town && f.Session.Selected is { } character &&
+                    towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character)),
+                    "新增验收夹具沿真实选角Ready留在赛丽亚房间 " + name);
+                return f;
+            }
+            catch { f.Dispose(); throw; }
+        }
+        NewCharacter Seed(string name, int first = 500, int second = 0, bool locked = false, int expires = 0)
+        {
+            var seed = CharacterCreation.Prepare(name, characters.Get(0), towns.Room, towns.InitialReturn, learning.Get);
+            var template = itemResources.Items.Get(material);
+            var items = seed.Inventory.Items.ToBuilder();
+            items.Add(InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 121),
+                InventoryRewardGrantService.Create(template, first, now)));
+            if (second > 0)
+                items.Add(InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Main, 122),
+                    InventoryRewardGrantService.Create(template, second, now) with { EquipmentLockId = (byte)(locked ? 1 : 0), ExpireTime = expires }));
+            return seed with { Inventory = seed.Inventory with { Gold = 1_000_000, Items = items.ToImmutable() } };
+        }
+        Character Committed(Fixture f, Character before, InventoryResult result, ShopPurchaseReceipt? receipt,
+            (int Item, int Cost, int? Limit) row, int count, GameSession? session = null, AccountOwners.Lease? owner = null)
+        {
+            session ??= f.Session; owner ??= f.Owner;
+            var after = f.Repository.LoadCharacter(owner, before.Slot);
+            int previous = before.Inventory.ShopPurchases.SingleOrDefault(value => value.ItemId == row.Item)?.Count ?? 0;
+            bool quota = row.Limit is null ? after.Inventory.ShopPurchases.IsEmpty : after.Inventory.ShopPurchases is [{ } key] &&
+                key == new ShopPurchaseCount(nolan, row.Item, true, false, 0, previous + count);
+            var received = receipt is null ? null : after.Inventory.Find(receipt.Position);
+            var allowed = before with { Revision = before.Revision + 1, Inventory = before.Inventory with
+                { Items = after.Inventory.Items, ShopPurchases = after.Inventory.ShopPurchases } };
+            Check(result.Accepted && result.Receipt is { } committed && session.CanPublishInventory(committed) &&
+                receipt is not null && receipt.ItemId == row.Item && receipt.Count == count && received is { Uid: > 0 } &&
+                received.Core == receipt.Core && CountItem(after, material) == CountItem(before, material) - (long)row.Cost * count &&
+                CountItem(after, row.Item) == CountItem(before, row.Item) + count && quota && Same(allowed, after) &&
+                before.Inventory.Items.Where(item => item.Core.ItemId != material && item.Core.ItemId != row.Item)
+                    .SequenceEqual(after.Inventory.Items.Where(item => item.Core.ItemId != material && item.Core.ItemId != row.Item)) &&
+                Same(after, session.Selected!) && Same(after, committed.Character) &&
+                Same(after, new CharacterRepository(f.Path, quests).LoadCharacter(owner, before.Slot)),
+                "单批真实提交精确总成本、增量、永久键、持久UID和完整冷读，仅允许本次库存及revision变化 " + row.Item + "/" + count);
+            return after;
+        }
+        void Rejected(Fixture f, Character before, string sql, InventoryResult result, ushort error, string name) =>
+            Check(result is { Accepted: false, Plan: null, Receipt: null } && result.Error == error &&
+                Same(before, f.Read()) && Same(before, f.Session.Selected!) && SqlSnapshot(f) == sql, name);
+        static long CountItem(Character character, int itemId) => character.Inventory.Items
+            .Where(item => item.Core.ItemId == itemId).Sum(item => (long)item.Core.Count);
     }
 
     internal static void VerifyLoginWearWindow(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters)

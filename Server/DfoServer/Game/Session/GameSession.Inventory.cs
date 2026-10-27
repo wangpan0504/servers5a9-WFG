@@ -89,6 +89,13 @@ internal sealed partial class GameSession
         bool requireTown = true, SessionPhase? requiredPhase = null, InventorySlot? usedItem = null) =>
         PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase, usedItem: usedItem);
 
+    public InventoryResult PlanAndCommitShopBuy(int shopId, Func<Character, InventoryResult> plan) =>
+        PlanAndCommitInventory(plan, 17, requireTown: shopId == 400000097, allowSettlement: false,
+            additionalGuard: shopId == 400000097
+                ? () => Phase == SessionPhase.Town && Selected is { } character &&
+                    towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character))
+                : null);
+
     public InventoryResult SellAtShop(SellItemRequest request, InventoryShopService shop) =>
         PlanAndCommitInventory(character => shop.Sell(character, request), requireTown: false);
 
