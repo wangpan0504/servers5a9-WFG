@@ -61,7 +61,7 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
         var request = ShopRequests.Buy(packet.Body);
         ShopPurchaseReceipt? receipt = null;
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(17) :
-            context.Session.PlanAndCommitInventory(character => shop.Buy(character, request, out receipt), 17, requireTown: false);
+            context.Session.PlanAndCommitShopBuy(request.ShopId, character => shop.Buy(character, request, out receipt));
         var committed = result.Receipt;
         // ACK先扣客户端材料、再增加获得量；不能在其前面推送已经叠好的最终奖励数量。
         await context.Reply(CmdPacketType.BUY_ITEM, ShopPackets.Bought(result, receipt, committed?.Character.Inventory),
