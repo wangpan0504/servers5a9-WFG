@@ -444,7 +444,7 @@ internal static class ServerRuntime
             new AdventureWeeklyHandler(adventureWeeklyProjection),
             new SkillHandler(learning, log, inventoryProjection),
             new SkillSwitchInventoryHandler(skillSwitchInventory, log),
-            new TownHandler(projection, log),
+            new TownHandler(projection, log, tagEvildomProjection),
             new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
                 options.TeleportPotionGates), projection, inventoryProjection, presence, log),
             new SettingsHandler(settings, log, projection),

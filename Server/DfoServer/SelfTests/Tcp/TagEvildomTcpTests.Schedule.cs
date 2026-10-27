@@ -31,7 +31,7 @@ internal static partial class TagEvildomTcpTests
         await fixture.StartAsync();
         int port = ChannelTcpTests.Endpoints(fixture)[46];
         using var peer = Open(fixture, gamePort: port, channelNumber: 46);
-        peer.Select(tagEvildom: [1677, 1678, 1393, 1394]); ExitRoom(peer);
+        peer.Select(tagEvildom: [1677, 1678, 1393, 1394]); ExitRoom(peer, republish: true);
         string Assets() => fixture.Snapshot("SELECT id,level,experience,gold,revive_coins FROM characters ORDER BY id") +
             fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid");
         string economy = Assets();
@@ -40,10 +40,15 @@ internal static partial class TagEvildomTcpTests
         clock.Advance(TimeSpan.FromSeconds(1));
         peer.Send(16, Selection(9608)); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
         That(fixture.Query("SELECT count(*) FROM account_tag_evildom_challenges") is [[0L]], "15跨05:30到16不得落入已关闭副本");
-        ReturnToSelection(peer); peer.Select(tagEvildom: [1677, 1678, 1393, 1394]); ExitRoom(peer);
+        ReturnToSelection(peer); peer.Select(tagEvildom: [1677, 1678, 1393, 1394]); ExitRoom(peer, republish: true);
         // 重选后沿原房间出口到中央竞技场，06点重开仍走原生15/16。
         clock.Advance(TimeSpan.FromMinutes(30));
         peer.ExpectUnusedDailyBoosterReset();
+        // 05:40 回城会清掉双角色标记，日界后的下一次 15 仍按未装双角色拒绝。
+        // 首次空编队的进图不依赖这条路径；这里先重选，让 1393 在新业务日重新装上。
+        ReturnToSelection(peer);
+        peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+        ExitRoom(peer, republish: true);
         EnterTag(peer, 9608);
         int ordinal = Convert.ToInt32(fixture.Query("SELECT maze_ordinal FROM account_tag_evildom_challenges")[0][0]);
         ReturnTag(peer);
@@ -62,6 +67,9 @@ internal static partial class TagEvildomTcpTests
         peer.Expect(1, 15, [0, 1, 0]); peer.Expect(0, 1709); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
         clock.Advance(TimeSpan.FromMinutes(20));
         peer.ExpectUnusedDailyBoosterReset();
+        ReturnToSelection(peer);
+        peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+        ExitRoom(peer, republish: true);
         EnterTag(peer, 9608); FormalDungeonTcpTests.Load(peer); peer.Barrier();
         peer.Send(1469, [0]); peer.Expect(0, 1407, [1]);
         peer.Send(1469, [1]); peer.Expect(1, 1469, [1]); peer.Barrier();
@@ -71,6 +79,9 @@ internal static partial class TagEvildomTcpTests
             "双角色全灭实例也由同一到期任务真实回城");
         clock.Advance(TimeSpan.FromMinutes(20));
         peer.ExpectUnusedDailyBoosterReset();
+        ReturnToSelection(peer);
+        peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+        ExitRoom(peer, republish: true);
         EnterTag(peer, 9608); ReturnTag(peer);
         ReturnToSelection(peer); peer.Select(tagEvildom: [1677, 1678, 1393, 1394]); peer.Barrier();
         clock.Advance(TimeSpan.FromDays(1)); peer.ExpectUnusedDailyBoosterReset(); peer.Barrier();

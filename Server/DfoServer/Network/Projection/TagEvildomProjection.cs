@@ -22,6 +22,9 @@ internal sealed class TagEvildomProjection(ITagEvildomConfigurationStore store,
     {
         // 共享TAG包依赖真实再战频道；普通频道、帝国竞技场不能冒充type53。
         if (context.Session.ChannelEntry?.Type != 53 || context.Session.ReadTagEvildom(Store, Now) is not { } snapshot) return true;
+        // 首次空编队在发 1677 前提交。已有队、不合格或备用技能未初始化时保持原快照。
+        if (context.Session.EnsureTagEvildomTeam(Store, Now) is { } seeded &&
+            context.Session.CanPublishTagEvildom(seeded)) snapshot = seeded;
         return await DeliverAsync(context, snapshot, reportUnavailable: true, primarySource: primarySource);
     }
 
@@ -33,7 +36,7 @@ internal sealed class TagEvildomProjection(ITagEvildomConfigurationStore store,
         bool Guard() => context.Session.CanPublishTagEvildom(snapshot);
         await context.Notify(NotiPacketType.TAG_EVILDOM_TEAM_INFO, TagEvildomPackets.Teams(snapshot), "tag_evildom_teams", Guard);
         await context.Notify(NotiPacketType.EVILDOM_GATHERING, TagEvildomPackets.Gathering(snapshot), "tag_evildom_gathering", Guard);
-        if (!activeCharacters) return Guard();
+        if (!activeCharacters || !Guard()) return Guard();
         bool metadataSent = false;
         bool primaryChanged = false;
         // 1393会清旧active Actor；1394因真实状态变化被跳过时必须完整重捕获，不能只留下空HUD。

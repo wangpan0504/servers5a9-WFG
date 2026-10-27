@@ -79,10 +79,9 @@ internal static partial class TagEvildomTcpTests
         long initialMailCount = 0;
         using (var peer = Open(fixture, gamePort: port, channelNumber: 46))
         {
-            peer.Select(tagEvildom: [1677, 1678]);
-            peer.Send(1662, Setting(0, 1)); peer.Expect(1, 1662, Accepted(Teams(0, 1)));
-            ReadConfiguration(peer, Teams(0, 1), Gathering()); ReturnToSelection(peer);
-            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]); ExitRoom(peer);
+            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+            Bytes(peer.TagEvildomInfo[0].Body, Teams(0, 1), "两名合格角色首次入城即提交编队，进图按钮所需1393已发出");
+            ExitRoom(peer, republish: true);
             // 保留正常任务邀请邮件；本次通关只允许在已存在邮箱上新增一封，不把其它业务邮件算成重复奖励。
             initialMailCount = (long)fixture.Query("SELECT count(*) FROM mailbox_messages")[0][0]!;
             string economy = Economy(fixture);

@@ -6,7 +6,7 @@ using DfoServer.Game.Session;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class TownHandler(TownProjection projection, ServerLog log) : IGameCommandModule
+internal sealed class TownHandler(TownProjection projection, ServerLog log, TagEvildomProjection? tagEvildom = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -54,7 +54,17 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log) : IG
         bool accepted = session.LeaveRoom(out var receipt);
         log.Write("room_exit", new { Connection = context.Id, Accepted = accepted, Reason = session.TravelReason, session.Selected?.Position, session.Selected?.Revision });
         if (accepted)
+        {
             await projection.TravelAsync(context, receipt!);
+            // 出房间会改位置。入城时记下的双角色标记对不上新位置，进图按钮仍要 1393。
+            if (tagEvildom is not null && context.Session.ChannelEntry?.Type == 53 &&
+                context.Session.ReadTagEvildom(tagEvildom.Store, tagEvildom.Now) is { } snapshot &&
+                !snapshot.State.Configuration.Teams[snapshot.State.Configuration.SelectedTeam].Empty)
+            {
+                var primary = new TownCharacterProjection(receipt!.Character, tagEvildom.Now);
+                await tagEvildom.DeliverAsync(context, snapshot, primarySource: primary);
+            }
+        }
         return CommandResult.Handled;
     }
 
