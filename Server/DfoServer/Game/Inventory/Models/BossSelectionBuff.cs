@@ -16,8 +16,13 @@ internal sealed record BossSelectionBuff(int ItemId, int Remaining, long UntilMi
 
     public void Validate()
     {
-        if (ItemId <= 0 || UntilMilliseconds <= 0 || Remaining is < 1 or > 5 || Definition is not { BuffId: 300, DungeonId: 7191, Entries: 5 } ||
-            !Definition.Weights.SequenceEqual(new BossSelectionWeight[] { new(92689, 40), new(92690, 40), new(92697, 20) }))
+        if (Definition is null) throw new InvalidDataException("白斯追击药水定义缺失");
+        bool ordinary = Definition.BuffId is 300 or 1282 &&
+            Definition.Weights.SequenceEqual(new BossSelectionWeight[] { new(92689, 40), new(92690, 40), new(92697, 20) });
+        bool strong = Definition.BuffId == 1275 &&
+            Definition.Weights.SequenceEqual(new BossSelectionWeight[] { new(92689, 0), new(92690, 0), new(92697, 100) });
+        if (ItemId <= 0 || UntilMilliseconds <= 0 || Remaining < 1 || Remaining > Definition.Entries ||
+            Definition.DungeonId != 7191 || Definition.Entries != (Definition.BuffId == 1282 ? 1 : 5) || !ordinary && !strong)
             throw new InvalidDataException("白斯追击药水状态无效");
     }
 }

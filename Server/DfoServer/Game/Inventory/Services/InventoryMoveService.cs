@@ -318,15 +318,13 @@ internal static class InventoryMoveService
             core.SealFlag != 0 && catalog.Get(core.ItemId).AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase))
             core = core with { SealFlag = 0 };
         var avatar = item.Avatar;
-        // 克隆外观（含转职光环装扮、梦幻克隆武器）记在物品自己身上：已经复制过外观的实例在卸下、
-        // 背包内换格或穿回空槽时保持原值，国服语义是卸下再穿不丢外观，装扮预设也依赖物品自身保留。
-        // 只有还没有外观的克隆穿到装备栏、且该位置原有装扮时，才复制原装扮的外观、来源与染色；
-        // 未复制过外观的克隆不携带借用染色，移动到任何位置都按无外观处理。
-        if (avatar is { ClearAvatarId: 0 })
+        // 穿到已有真实装扮的槽位时重新采样；卸下、移格及穿回空槽保留已复制的外观。
+        if (avatar is not null)
         {
             var template = catalog.Get(core.ItemId);
             if (template.CloneAvatar && template.BorrowAvatarAppearance &&
-                destination.List == InventoryListType.Equipment && previous?.Avatar is { } prior)
+                destination.List == InventoryListType.Equipment && previous?.Avatar is { } prior &&
+                (avatar.ClearAvatarId == 0 || !catalog.Get(previous.Core.ItemId).CloneAvatar))
             {
                 bool previousClone = catalog.Get(previous.Core.ItemId).CloneAvatar;
                 avatar = avatar with
@@ -337,7 +335,7 @@ internal static class InventoryMoveService
                     Color2 = prior.Color2
                 };
             }
-            else if (template.CloneAvatar)
+            else if (template.CloneAvatar && avatar.ClearAvatarId == 0)
                 avatar = avatar with { ClearAvatarSourceUid = 0, Color1 = 0, Color2 = 0 };
         }
         return item with { Position = destination, Core = core, Avatar = avatar };

@@ -39,6 +39,8 @@ internal static class CurrencyTcpTests
             peer.Expect(0, 53, cera);
             var packets = peer.Select();
             Bytes(packets[8].Body, [0], "base gold cap stage initialized");
+            That(fixture.Query("SELECT gold_carry_limit,auction_gold_limit FROM characters WHERE slot=0") is [[400000000L,400000000L]],
+                "基础携带与拍卖上限均为四亿，950仅发送阶段0而非七个9");
             Bytes(packets[9].Body, cera, "account wallet initialized on selection");
             var main = packets[4].Body;
             That(Balance(main, 0, 0) == 20_000_000 && Balance(main, 1, 1) == 9 && Balance(main, 2, 2) == 10 &&

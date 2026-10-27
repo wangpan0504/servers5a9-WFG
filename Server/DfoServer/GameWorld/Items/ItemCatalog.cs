@@ -527,7 +527,7 @@ internal sealed partial class ItemCatalog
             (name.Contains("升级", StringComparison.Ordinal) || path!.Contains("safe_upgradekit", StringComparison.OrdinalIgnoreCase)))
         {
             // 目标容量来自工具说明；同名道具可能直接升到不同档位，不能一律加16格。
-            var match = Regex.Match(text.Section("explain"), @"(?:增加到|升级至|升级到)\s*(\d+)\s*格");
+            var match = Regex.Match(text.Section("explain"), @"(?:增加到|升级至|升级到|升级为)\s*(\d+)\s*格");
             if (match.Success)
                 cargoTarget = checked((ushort)int.Parse(match.Groups[1].Value));
         }

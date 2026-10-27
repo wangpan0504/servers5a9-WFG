@@ -27,6 +27,17 @@ internal static class ConsumableUseTests
         var restoredBuff = System.Text.Json.JsonSerializer.Deserialize<BossSelectionBuff>(System.Text.Json.JsonSerializer.Serialize(bossBuff));
         That(BossSelectionBuff.Same(bossBuff, restoredBuff) && !BossSelectionBuff.Same(bossBuff, bossBuff with { Remaining = 4 }),
             "重读后的完整权重按内容核对，旧次数快照不能提交");
+        foreach (var definition in new[]
+        {
+            new BossSelectionBuffDefinition(1275, 7191, 5, [new(92689, 0), new(92690, 0), new(92697, 100)]),
+            new BossSelectionBuffDefinition(1282, 7191, 1, [new(92689, 40), new(92690, 40), new(92697, 20)])
+        })
+        {
+            var effect = bossBuff with { Remaining = definition.Entries, Definition = definition };
+            effect.Validate();
+            That(effect.Allows(7191, false, false, 1999), "强力五次与普通一次效果保持原单人准入");
+            Reject<InvalidDataException>(() => (effect with { Remaining = definition.Entries + 1 }).Validate(), "持久次数不能超过资源上限");
+        }
         byte[] body = [65, 0, 0, 0xEF, 0xCD, 0xAB, 0x89, 0x54, 4, 0, 0, 0, 0, 0, 0];
         var request = ConsumableUseRequests.Read(body);
         That(request.Position == new InventorySlot(InventoryListType.Main, 65) && request.OpaqueCheck == 0x89ABCDEF && request.ItemId == 1108 && request.Argument == 0,
@@ -136,8 +147,10 @@ internal static class ConsumableUseTests
             { MinimumLevel: 95, CoolTime: 60000, BossSelectionBuff: { BuffId: 300, DungeonId: 7191, Entries: 5 } } &&
             bossPotion.BossSelectionBuff.Weights.SequenceEqual(new BossSelectionWeight[] { new(92689, 40), new(92690, 40), new(92697, 20) }),
             "截图490705256由真实STK及两份variousbuff表解释为95级城镇药、40/40/20和5次，不按名称猜规则");
-        That(!resources.RecoveryConsumables.TryGet(490012682, out _),
-            "不同buff的强力药保持未接入，不能借普通追击药规则扣源冒充100%效果");
+        foreach (int id in new[] { 490012682, 490705137, 490705059 })
+            That(resources.RecoveryConsumables.TryGet(id, out var extra) &&
+                extra.BossSelectionBuff is { } effect && effect.BuffId == (id == 490705059 ? 1282 : 1275) &&
+                effect.Entries == (id == 490705059 ? 1 : 5), "不同白斯药水从真实资源映射保留强力权重与次数 " + id);
         That(resources.RecoveryConsumables.TryGet(1108, out var hp) && hp == Hp &&
             resources.RecoveryConsumables.TryGet(1114, out var mp) && mp == Mp,
             "匹配PVF两种药只保留最低等级和冷却原值/组，不把恢复效果带入服务端使用定义");
