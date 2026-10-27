@@ -3,6 +3,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Session;
+using DfoServer.Game.Skills;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Protocol;
@@ -46,6 +47,12 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         if (!CanSend())
             return;
         var current = receipt.Character;
+        // CMD19只转移已有实例；登记已配置时不能用本人Player重新初始化登记，否则0267BFA0会关闭UI355。
+        // 完整穿戴差量安装核心/时装孔位，Actor保留克隆来源和宠物实体，1372随后更新同UID登记位置。
+        bool preserveSkillSwitch = receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect &&
+            plan.Reason == "move_item" && plan.EquipmentSlotFlagsAfter is null &&
+            (!receipt.PreviousSkillSwitchInventory.Same(SkillSwitchInventoryState.Empty) ||
+             !current.SkillSwitchInventory.Same(SkillSwitchInventoryState.Empty));
         bool mainExpansionChanged = plan.Before.Expansion != current.Inventory.Expansion;
         if (mainExpansionChanged)
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_capacity_committed", CanSend);
@@ -72,7 +79,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 .Concat(CurrencyPackets.VirtualSlots.Select(slot => new InventorySlot(InventoryListType.Main, slot)))
                 .Distinct().ToArray();
         }
-        var slots = changedSlots.Where(slot => acknowledgedSlots?.Contains(slot) != true &&
+        var slots = changedSlots.Where(slot => (preserveSkillSwitch || acknowledgedSlots?.Contains(slot) != true) &&
             slot != new InventorySlot(InventoryListType.Equipment, 30) && !(inPlaceCreature && slot == creatureSlot)).ToArray();
         bool rebuildMain = silentMainMove && changedSlots.Where(slot => slot.List == InventoryListType.Main)
             .Select(plan.BeforeIndex.Find).Any(item => item is { Core.IsStackable: true } &&
@@ -170,9 +177,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                         sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
                             ? ActorSceneState.Dungeon : ActorSceneState.Town,
                         premiumPcRoom: context.Session.PremiumPcRoom), "equipment_actor", CanSend);
-            // 幻化选择的ACK已刷新战斗对象，Actor再同步城镇对象及成员快照；Player仍须重发本人
-            // 全量属性与熟练状态，本条目原先的发送条件与上一层判定等价，合并不额外扩大刷新面。
-            if (equipmentChanged || plan.EquipmentSlotFlagsAfter is not null)
+            // 登记配置下的纯移动由上面的完整差量和Actor完成；其它装备/开栏变更仍同步完整本人属性。
+            if (equipmentChanged && !preserveSkillSwitch || plan.EquipmentSlotFlagsAfter is not null)
                 await context.Notify(NotiPacketType.USERINFO,
                     TownPackets.Player(current, stats.Compute(current), context.Session.ReadAdventureLevel(), context.Channel), "equipment_player", CanSend);
             context.Owner.Execute(() =>

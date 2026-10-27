@@ -20,6 +20,7 @@ internal static class SkillSwitchInventoryTcpTests
 
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        await WindowRefreshRegressionAsync(source, root, resources);
         var support = SwitchingSupportSkillCatalog.Load(resources.Archive);
         var profile = FindProfile(support);
         ItemTemplate template = resources.Characters.Get(profile.Job).Equipment
@@ -259,6 +260,162 @@ internal static class SkillSwitchInventoryTcpTests
             fixture.Snapshot("SELECT list_type,slot_index,item_uid FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index", created.Id);
     }
 
+    static async Task WindowRefreshRegressionAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        var profile = FindProfile(SwitchingSupportSkillCatalog.Load(resources.Archive));
+        var avatarTemplate = resources.ItemResources.Items.Get(resources.Characters.Get(profile.Job).DefaultAvatarEquipment[3]);
+        var avatar = InventoryRewardGrantService.CreateItem(avatarTemplate, new(InventoryListType.Avatar, 0),
+            InventoryRewardGrantService.Create(avatarTemplate)) with
+            { Avatar = new() { Socket0 = new(1, 3333001), Color1 = 7, Color2 = 8 } };
+        var weaponTemplate = resources.Characters.Get(profile.Job).Equipment.Single(row => row.Slot == 12).Template;
+        var weapon = InventoryRewardGrantService.CreateItem(weaponTemplate, new(InventoryListType.Main, 9),
+            InventoryRewardGrantService.Create(weaponTemplate) with
+            { SealFlag = 0, Attr = 7, EnchantCardId = 10309006, EnchantUpgrade = 2, AmplifyType = 1, AmplifyValue = 55, GenuineUpgrade = 3, Rune = 3 });
+        var clone = new InventoryItem(0, new(InventoryListType.Avatar, 1), new(113590006, ItemKind.Avatar, 0))
+            { Avatar = new() { Socket0 = new(2, 3333002) } };
+        var aura = new InventoryItem(0, new(InventoryListType.Avatar, 2), new(101590068, ItemKind.Avatar, 0))
+            { Avatar = new() { Color1 = 7, Color2 = 8 } };
+        var pet = new InventoryItem(0, new(InventoryListType.Pet, 0), new(63032, ItemKind.Creature, 0))
+            { Creature = new() { Name = "BuffPet", Satiety = 73 } };
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "buff-window-refresh"), resources: resources);
+        var repository = new CharacterRepository(fixture.Database);
+        Character created;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            created = repository.Create(owner, new("BuffWindow", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = profile.Job, GrowType = profile.Grow, Level = 95, AcceptedStoryLevel = 1,
+                Skills = resources.Characters.Get(profile.Job).Skills,
+                Inventory = new([avatar, pet, weapon, clone, aura])
+            });
+        await fixture.StartAsync();
+        using var peer = Open(fixture);
+        peer.Select();
+        peer.Barrier();
+        peer.Send(Command, Request(profile.Skill, 36, 47, ushort.MaxValue));
+        peer.Expect(1, Command, []);
+        peer.Expect(0, AllDataNotice, Build(writer => { writer.Write(profile.Skill); writer.Write((byte)0); }));
+        int closingPlayers = 0;
+        string skills = fixture.Snapshot("SELECT * FROM character_skills WHERE character_id=$p0 ORDER BY skill_id", created.Id);
+        foreach (var row in new[] { (List: (byte)1, Part: (byte)3, Item: avatarTemplate.Id),
+            (List: (byte)7, Part: (byte)26, Item: 63032),
+            (List: (byte)0, Part: (byte)12, Item: weaponTemplate.Id) })
+        {
+            short bag = row.List == 0 ? (short)9 : (short)0;
+            peer.Send(Command, Request(profile.Skill, row.Part, row.List, checked((ushort)bag)));
+            peer.Expect(1, Command, []);
+            Delta(peer.Expect(0, DeltaNotice).Body, row.Part, row.List, checked((ushort)bag), present: true);
+            peer.Barrier();
+            string bindings = fixture.Snapshot("SELECT * FROM character_skill_switch_inventory_items WHERE character_id=$p0 ORDER BY equipment_part", created.Id);
+            foreach (bool wear in new[] { true, false })
+            {
+                byte from = wear ? row.List : (byte)3, to = wear ? (byte)3 : row.List;
+                short fromSlot = wear ? bag : row.Part, toSlot = wear ? row.Part : bag;
+                // 取消选择后装备登记仍在，纯移动同样不能重建窗口。
+                if (!wear)
+                {
+                    peer.Send(Command, Request(0, 36, 47, ushort.MaxValue));
+                    peer.Expect(1, Command, []);
+                    var cleared = peer.Expect(0, AllDataNotice).Body;
+                    That(U16(cleared, 0) == 0 && cleared[2] > 0, "取消选择立即同步零技能并保留已有装备登记");
+                    peer.Barrier();
+                }
+                peer.Send(19, MoveItem(fromSlot, row.Item, toSlot, from, to));
+                peer.Expect(1, 19, MoveAck(fromSlot, toSlot, from, to));
+                int deltaCount = 0, equipmentCount = 0, actorCount = 0, creatureDetails = 0;
+                peer.Barrier(packet =>
+                {
+                    That(packet.Opcode is 2 or 14 or 105 or 1372 or 1449 or 1599 or 1681,
+                        "普通穿脱只发布库存、外观及登记同步，不发送全量库存或未知窗口通知");
+                    if (packet.Opcode == 2 && packet.Body[0] == 1)
+                        closingPlayers++;
+                    if (packet.Opcode == 2 && packet.Body[0] == 0)
+                    {
+                        actorCount++;
+                        That(packet.Body[132 + NameWidth("BuffWindow")] == 0, "城镇换装Actor保持城镇成员状态");
+                        if (row.Part == 26)
+                        {
+                            int petAt = 156 + NameWidth("BuffWindow") + packet.Body[133 + NameWidth("BuffWindow")] * 25;
+                            That(U32(packet.Body, petAt) == (wear ? 63032u : 0u), "Actor仍声明实际宠物模板或清除卸下实体");
+                        }
+                    }
+                    if (packet.Opcode == 105)
+                    {
+                        creatureDetails++;
+                        That(packet.Body[0] == 1 && packet.Body[5] == 73, "宠物完整详情在装备差量前恢复原饱食与UID");
+                    }
+                    if (packet.Opcode == 14 && packet.Body[0] == 3)
+                    {
+                        equipmentCount++;
+                        That(U16(packet.Body, 1) == 1 && U16(packet.Body, 3) == row.Part &&
+                            U32(packet.Body, 5) == (wear ? (uint)row.Item : uint.MaxValue), "穿戴专属完整差量覆盖实际穿脱槽");
+                        if (wear && row.Part == 3)
+                            That(packet.Body.Length == 168 && U32(packet.Body, 126) == 30 &&
+                                U16(packet.Body, 130) == 1 && U32(packet.Body, 132) == 3333001 &&
+                                U32(packet.Body, 160) == 4 && U16(packet.Body, 164) == 7 && U16(packet.Body, 166) == 8,
+                                "不依赖Player仍完整同步五孔位RAW30与染色RAW4");
+                        if (wear && row.Part == 12)
+                            That(packet.Body.Length == 126 && packet.Body[13] == 7 && U32(packet.Body, 17) == 10309006 &&
+                                packet.Body[21] == 2 && packet.Body[22] == 1 && U16(packet.Body, 23) == 55 &&
+                                U16(packet.Body, 72) == 3 && packet.Body[90] == 3,
+                                "完整123B差量保留强化、附魔、增幅、符文与锻造");
+                        if (row.Part == 26 && wear)
+                            That(creatureDetails == 1, "先到宠物详情再安装穿戴实例");
+                    }
+                    if (packet.Opcode == DeltaNotice)
+                    {
+                        Delta(packet.Body, row.Part, to, checked((ushort)toSlot), present: true);
+                        deltaCount++;
+                    }
+                });
+                That(deltaCount == 1 && fixture.Snapshot("SELECT * FROM character_skill_switch_inventory_items WHERE character_id=$p0 ORDER BY equipment_part", created.Id) == bindings,
+                    "穿脱只更新登记投影的位置，同一UID登记保持不变");
+                That(equipmentCount == 1 && actorCount == 1, "完整装备差量和外观声明各发布一次，替代登记重建");
+                if (!wear)
+                {
+                    peer.Send(Command, Request(profile.Skill, 36, 47, ushort.MaxValue));
+                    peer.Expect(1, Command, []);
+                    byte[] restored = peer.Expect(0, AllDataNotice).Body;
+                    That(U16(restored, 0) == profile.Skill && restored[2] > 0, "重新勾选立即恢复目标技能及全部有效绑定");
+                    peer.Barrier();
+                }
+            }
+        }
+        // 克隆在已穿原件上覆盖，来源UID/颜色由本次事务决定；再卸下并穿回空槽保持同一关联。
+        foreach (var move in new[] { (Bag: (short)2, Id: aura.Core.ItemId, Target: 0),
+            (Bag: (short)1, Id: clone.Core.ItemId, Target: aura.Core.ItemId),
+            (Bag: (short)2, Id: 0, Target: clone.Core.ItemId),
+            (Bag: (short)2, Id: clone.Core.ItemId, Target: 0) })
+        {
+            peer.Send(19, MoveItem(move.Bag, move.Id, 9, 1, 3, move.Target));
+            peer.Expect(1, 19, MoveAck(move.Bag, 9, 1, 3));
+            bool cloneWorn = move.Id == clone.Core.ItemId;
+            int actors = 0;
+            peer.Barrier(packet =>
+            {
+                That(packet.Kind == 0 && (packet.Opcode != 2 || packet.Body[0] == 0), "克隆覆盖、卸下及穿回同样不得发布本人Player");
+                if (packet.Opcode == 2)
+                {
+                    actors++;
+                    if (cloneWorn)
+                    {
+                        int at = 134 + NameWidth("BuffWindow");
+                        That(packet.Body[at] == 9 && U32(packet.Body, at + 1) == clone.Core.ItemId &&
+                            U32(packet.Body, at + 16) == aura.Core.ItemId && U16(packet.Body, at + 9) == 7,
+                            "Actor仍投影真实克隆模板、本次原件关联与借用颜色");
+                    }
+                }
+                if (cloneWorn && packet.Opcode == 14 && packet.Body[0] == 3 && U32(packet.Body, 5) != uint.MaxValue)
+                    That(U16(packet.Body, 130) == 2 && U32(packet.Body, 132) == 3333002,
+                        "克隆自身孔位来自完整实例差量，不错误借用原件孔位");
+            });
+            That(actors == 1, "克隆移动保留一次本人Actor外观同步");
+        }
+        That(fixture.Snapshot("SELECT * FROM character_skills WHERE character_id=$p0 ORDER BY skill_id", created.Id) == skills,
+            "穿脱和勾选只影响库存位置与偏好，不改变已学技能或等级");
+        Console.WriteLine($"#802 avatar/pet wear/unwear: closing Player packets={closingPlayers}");
+        That(closingPlayers == 0, "Buff窗口打开期间的时装/宠物穿脱不得发送重建登记并关闭窗口的本人Player");
+    }
+
     static (byte Job, byte Grow, ushort Skill, ushort Second) FindProfile(SwitchingSupportSkillCatalog support)
     {
         for (byte job = 0; job < 16; job++)
@@ -279,7 +436,7 @@ internal static class SkillSwitchInventoryTcpTests
         writer.Write(slot);
     });
 
-    static byte[] MoveItem(short source, int itemId, short destination, byte sourceList = 0, byte targetList = 0) => Build(writer =>
+    static byte[] MoveItem(short source, int itemId, short destination, byte sourceList = 0, byte targetList = 0, int targetItemId = 0) => Build(writer =>
     {
         writer.Write(sourceList);
         writer.Write(source);
@@ -287,7 +444,7 @@ internal static class SkillSwitchInventoryTcpTests
         writer.Write(1);
         writer.Write(targetList);
         writer.Write(destination);
-        writer.Write(0);
+        writer.Write(targetItemId);
         writer.Write(0);
         writer.Write(-1);
         writer.Write((ushort)0);
