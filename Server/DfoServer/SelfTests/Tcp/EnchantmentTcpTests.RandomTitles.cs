@@ -31,7 +31,7 @@ internal static partial class EnchantmentTcpTests
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
-            peer.Select(inventoryNotices: [(1,713),(1,713)]);
+            peer.Select(inventoryNotices: [(1,713),(1,714)]);
             string before = Snapshot();
             Send(peer, 0, 10); peer.Expect(1, 272, [0, 23, 0]); peer.Barrier();
             That(Snapshot() == before, "随机称号宝珠拒绝白名单外装备，不扣源或写扩展");
@@ -44,7 +44,7 @@ internal static partial class EnchantmentTcpTests
         var saved = new Dictionary<byte, byte[]>();
         using (var peer = Open(fixture))
         {
-            peer.Select(inventoryNotices: [(1,713),(1,713)]);
+            peer.Select(inventoryNotices: [(1,713),(1,714)]);
             foreach (var (list, slot) in new (byte, short)[] { (0,9), (3,13) })
             {
                 Send(peer, list, slot);
@@ -59,7 +59,7 @@ internal static partial class EnchantmentTcpTests
                     "真实从零宝珠安装正权重技能索引并保留普通卡片附魔");
                 if (list == 3)
                     That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1, "穿戴称号同步Actor/Player");
-                peer.Expect(1, 713, [1,list,(byte)slot,0]);
+                peer.Expect(1, list == 3 ? (ushort)714 : (ushort)713, [1,list,(byte)slot,0]);
                 peer.Expect(1, 272, [1,list,(byte)slot,0]); peer.Barrier();
             }
             string before = Snapshot();
@@ -68,7 +68,7 @@ internal static partial class EnchantmentTcpTests
         }
         using (var peer = Open(fixture))
         {
-            var entry = peer.Select(inventoryNotices: [(1,713),(1,713)]);
+            var entry = peer.Select(inventoryNotices: [(1,713),(1,714)]);
             Bytes(Row(entry.First(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body, 9, true),
                 saved[0], "重连恢复背包称号完整随机附魔行，穿戴核心另由仓储读取核对");
         }

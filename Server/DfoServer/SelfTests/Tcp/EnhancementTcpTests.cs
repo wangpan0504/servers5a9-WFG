@@ -30,7 +30,7 @@ internal static class EnhancementTcpTests
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
-            peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713)]);
+            peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 714)]);
             string before = Snapshot();
             peer.Send(80, EnhancementTests.Request(1, 0, 21, sword, sourceSlot, [])); peer.Expect(1, 80, [0, 23, 0]);
             peer.Send(80, EnhancementTests.Request(0, 0, 21, sword + 1, sourceSlot, [])); peer.Expect(1, 80, [0, 23, 0]);
@@ -45,7 +45,7 @@ internal static class EnhancementTcpTests
         byte[]? saved = null;
         using (var peer = Open(fixture))
         {
-            var entry = peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713)]);
+            var entry = peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 714)]);
             var full = entry.First(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body;
             var expected = Row(full, 21, true); expected[10] = 0xEB;
             Send(peer, 0, 21); Ack(peer, 7, 2, 0, 21);
@@ -66,7 +66,7 @@ internal static class EnhancementTcpTests
             var worn = peer.Expect(0, 14).Body;
             That(worn[0] == 3 && Row(worn, 12)[10] == 0xEB, "穿戴目标同步同一提交的完整+11核心");
             That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1, "穿戴强化沿共享Actor/Player刷新");
-            peer.Expect(1, 713, [1, 3, 12, 0]);
+            peer.Expect(1, 714, [1, 3, 12, 0]);
             peer.Barrier();
             string before = Snapshot();
             Send(peer, 0, 21); peer.Expect(1, 80, [0, 23, 0]); peer.Barrier();
@@ -74,7 +74,7 @@ internal static class EnhancementTcpTests
         }
         using (var peer = Open(fixture))
         {
-            var entry = peer.Select(inventoryNotices: [(1, 713), (1, 713)]);
+            var entry = peer.Select(inventoryNotices: [(1, 713), (1, 714)]);
             var full = entry.First(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body;
             Bytes(Row(full, 21, true), saved!, "重连完整恢复真实券写入的+11武器行"); peer.Barrier();
         }

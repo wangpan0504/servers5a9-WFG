@@ -37,7 +37,7 @@ internal static partial class EnchantmentTcpTests
         await fixture.StartAsync();
         using (var peer = Open(fixture))
         {
-            peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713), (1, 713), (1, 713)]);
+            peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713), (1, 713), (1, 714)]);
             string before = Snapshot();
             foreach (short invalid in new short[] { 9, sourceSlot, 100 })
             {
@@ -54,7 +54,7 @@ internal static partial class EnchantmentTcpTests
         byte[]? savedWrist = null, savedRing = null;
         using (var peer = Open(fixture))
         {
-            var entry = peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713), (1, 713), (1, 713)]);
+            var entry = peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713), (1, 713), (1, 714)]);
             var full = entry.First(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body;
             foreach (var (slot, remaining) in new[] { ((short)20, 2), ((short)23, 1) })
             {
@@ -83,7 +83,7 @@ internal static partial class EnchantmentTcpTests
                 "穿戴首饰同步同一真实附魔核心");
             That(peer.Expect(0, 2).Body[0] == 0 && peer.Expect(0, 2).Body[0] == 1,
                 "穿戴附魔沿共享Actor/Player刷新，不向CHR基础属性重复叠加宝珠效果");
-            peer.Expect(1, 713, [1, 3, 20, 0]);
+            peer.Expect(1, 714, [1, 3, 20, 0]);
             peer.Expect(1, 272, [1, 3, 20, 0]);
             peer.Barrier();
             string before = Snapshot();
@@ -92,7 +92,7 @@ internal static partial class EnchantmentTcpTests
         }
         using (var peer = Open(fixture))
         {
-            var entry = peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713), (1, 713)]);
+            var entry = peer.Select(inventoryNotices: [(1, 713), (1, 713), (1, 713), (1, 714)]);
             var full = entry.First(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 0).Body;
             Bytes(Row(full, 20, full: true), savedWrist!, "重连恢复真实护腕完整附魔行");
             Bytes(Row(full, 23, full: true), savedRing!, "重连恢复真实戒指完整附魔行");
