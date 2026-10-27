@@ -78,6 +78,10 @@ internal sealed class GameConnectionSender : IAsyncDisposable
 
     // Written仅用于成功写帧后的本人owner内展示记账，不得执行网络等待或SQL。
     public void Post(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null, Action? written = null) =>
+        TryPost(kind, opcode, body, action, canSend, written);
+
+    // 返回的是有界队列接收状态，不表示网络已经写出或客户端已经显示。
+    internal bool TryPost(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null, Action? written = null) =>
         Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: canSend, Written: written)));
 
     // 固定长度预算；发送泵本人owner内即时构包，不得执行SQL或网络等待。null代表原身份失效。
