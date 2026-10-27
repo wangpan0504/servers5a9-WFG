@@ -59,6 +59,7 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
     public bool IsRental { get; init; }
     // 服务端装备实例来源；旧 JSON 为 null，不从模板或未知 wire 位推断。
     public EpicExchangeOrigin? EpicExchangeOrigin { get; init; }
+    public EchonSet? EchonSet { get; init; }
     [JsonIgnore] public byte Upgrade => (byte)(Attr & 0x1F);
     [JsonIgnore] public bool IsStackable => Kind is ItemKind.Consumable or ItemKind.Material or ItemKind.Quest or
         ItemKind.CreatureConsumable or ItemKind.Emblem or ItemKind.Profession or ItemKind.GuardianGem or ItemKind.Rune;
@@ -74,5 +75,11 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
             throw new InvalidDataException("无效物品核心");
         if (Kind == ItemKind.Talisman)
             TalismanSocketColors.Read(this).Validate();
+        if (EchonSet is { } set)
+        {
+            set.Validate();
+            if (Kind != ItemKind.Equipment || EchonEquipmentState.Read(this).SetIndex != set.Index)
+                throw new InvalidDataException("艾肯套装定义与装备索引不一致");
+        }
     }
 }

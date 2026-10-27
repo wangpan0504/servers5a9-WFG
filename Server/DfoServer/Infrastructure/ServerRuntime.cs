@@ -455,6 +455,8 @@ internal static class ServerRuntime
                 itemResources.EpicPieces, clock), inventoryProjection, log),
             new DarkRevelationHandler(new InventoryDarkRevelationService(itemResources.DarkRevelations,
                 itemResources.EpicPieces, clock), itemResources.DarkRevelations, inventoryProjection, log),
+            new EchonEquipmentHandler(new InventoryEchonEquipmentService(itemResources.Items, itemResources.Echon,
+                itemResources.EpicPieces), inventoryProjection, log),
             new EquipmentUpgradeHandler(new InventoryEquipmentUpgradeService(itemResources.Items,
                 itemResources.EquipmentUpgrades, itemResources.EpicPieces, clock), inventoryProjection, log),
             new LimitCubeHandler(new InventoryLimitCubeService(itemResources.Items, itemResources.LimitCubes,

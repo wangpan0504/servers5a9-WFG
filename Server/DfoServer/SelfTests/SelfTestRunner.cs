@@ -69,6 +69,7 @@ internal static class SelfTestRunner
         TextureChangeTests.RunCore();
         EquipmentUpgradeTests.RunCore();
         DarkRevelationTests.RunCore();
+        EchonEquipmentTests.RunCore();
         WeaponSkinTests.RunCore();
         AvatarCompoundTests.RunCore();
         AvatarDyeTests.RunCore();

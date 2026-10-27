@@ -40,6 +40,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public ItemExpiration Expiration { get; init; } = new();
     public int RepairPrice { get; init; }
     public int CreationRate { get; init; }
+    public EchonEquipmentDefinition? Echon { get; init; }
     public bool DisjointForbidden { get; init; }
     public bool IsOperationHope { get; init; }
     public bool BossDrop { get; init; }

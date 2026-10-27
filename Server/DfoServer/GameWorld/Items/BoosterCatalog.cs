@@ -28,6 +28,7 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     public ImmutableArray<byte> FirstGrowTypes { get; init; } = [];
     public bool AllowsFirstGrowType(byte growType) => FirstGrowTypes.IsEmpty || FirstGrowTypes.Contains((byte)(growType & 15));
     public bool UnsealsRandomOptions { get; init; }
+    public int? CustomAbilityGrade { get; init; }
     public bool SetsDisjointInstanceType { get; init; }
     public bool SetsEpicExchangeInstanceType { get; init; }
     // 休亚商店在售的选组礼盒：PVF 没写交换声明，但产物同样是在休亚处兑换来的。
@@ -110,6 +111,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         return ParseContents(text) with
         {
             FirstGrowTypes = branches, UnsealsRandomOptions = unseal,
+            CustomAbilityGrade = int.TryParse(PvfScript.Section(tags, "custom ability grade").Trim(),
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out int abilityGrade) ? abilityGrade : null,
             CoolTime = coolTime, CoolGroup = coolGroup, CooltimeMaintenance = maintenance
         };
     }
@@ -223,8 +226,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
             if (!servers.Contains("[general server]") || servers.Length != servers.Distinct().Count())
                 return new([], "action usable server type");
         }
-        // [custom ability grade] 规定发放装备的品级。本服没有实例级品级字段，只校验声明形态，
-        // 数值不写入实例，也不据此收窄可领取范围；形态不合法仍整包拒绝。
+        // 品级声明由艾肯产物创建消费；其他装备不借这个字段启用斗气能力。
         var gradeDeclarations = Regex.Matches(tags,
             @"\[\s*/?\s*custom\s+ability\s+grade[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
         if (gradeDeclarations.Count != 0)
