@@ -141,19 +141,25 @@ internal static partial class DevelopmentGm
                 if (count <= 0) throw new InvalidDataException("数量至少为1");
                 RequireEquipmentOptions(template, upgrade, refinement);
                 string[] extra = [.. args.Skip(5)];
-                if (extra.Count(token => token.StartsWith("amp:", StringComparison.Ordinal)) > 1 || extra.Count(token => token == "seal:open") > 1 || extra.Count(token => token == "period:off") > 1 || extra.Count(token => token.StartsWith("ability:", StringComparison.Ordinal)) > 1 || extra.Count(token => token.StartsWith("expire:", StringComparison.Ordinal)) > 1)
+                if (extra.Count(token => token.StartsWith("amp:", StringComparison.Ordinal)) > 1 || extra.Count(token => token == "seal:open") > 1 || extra.Count(token => token == "period:off") > 1 || extra.Count(token => token.StartsWith("ability:", StringComparison.Ordinal)) > 1 || extra.Count(token => token.StartsWith("expire:", StringComparison.Ordinal)) > 1 || extra.Count(token => token.StartsWith("quality:", StringComparison.Ordinal)) > 1)
                     throw new InvalidDataException("可选参数只能各出现一次");
                 int ability = -1;
                 bool clearPeriod = false;
                 int? customExpire = null;
+                int? qualityPercent = null;
                 foreach (string token in extra)
                 {
                     if (token.StartsWith("amp:", StringComparison.Ordinal) || token == "seal:open") continue;
                     if (token == "period:off") { clearPeriod = true; continue; }
                     if (token.StartsWith("expire:", StringComparison.Ordinal)) { customExpire = ParseExpire(token); continue; }
                     if (token.StartsWith("ability:", StringComparison.Ordinal)) { ability = (int)Number(token[8..], 65535); continue; }
-                    throw new InvalidDataException("可选参数只能是 amp:<类型>:<值>、seal:open、ability:<选项>、period:off、expire:<Unix秒>");
+                    if (token.StartsWith("quality:", StringComparison.Ordinal)) { qualityPercent = (int)Number(token[8..], 100); continue; }
+                    throw new InvalidDataException("可选参数只能是 amp:<类型>:<值>、seal:open、ability:<选项>、period:off、expire:<Unix秒>、quality:<1-100>");
                 }
+                // 品级只对普通装备有意义；百分比 1-100 换算成客户端实例品级种子（100 = 最上级）。
+                if (qualityPercent is not null && template.Kind != ItemKind.Equipment)
+                    throw new InvalidDataException("只有普通装备可以指定品级 quality:<1-100>");
+                int? qualitySeed = qualityPercent is { } qualityValue ? EquipmentQualityBox.SeedForPercent(qualityValue) : null;
                 if (clearPeriod && customExpire is not null) throw new InvalidDataException("期限不能同时改为不过期和指定时间");
                 var amplify = ParseAmplify(extra.FirstOrDefault(token => token.StartsWith("amp:", StringComparison.Ordinal)), false);
                 if (amplify.Type != 0 && template.Kind != ItemKind.Equipment) throw new InvalidDataException("只有普通装备可以增幅");
@@ -165,7 +171,7 @@ internal static partial class DevelopmentGm
                 if (args[4] == "mail")
                 {
                     var now = DateTimeOffset.UtcNow;
-                    var prototype = InventoryRewardGrantService.Create(template, utcNow: now, upgrade: (byte)upgrade, refinement: (byte)refinement);
+                    var prototype = InventoryRewardGrantService.Create(template, utcNow: now, upgrade: (byte)upgrade, refinement: (byte)refinement, quality: qualitySeed);
                     if (prototype.IsStackable ? count > template.StackLimit : count > 10)
                         throw new InvalidDataException(prototype.IsStackable ? "数量超过该道具堆叠上限 " + template.StackLimit : "非堆叠道具每封邮件最多发放10件");
                     if (prototype.IsStackable) prototype = prototype with { Value = count };
@@ -181,10 +187,10 @@ internal static partial class DevelopmentGm
                     throw new InvalidDataException("单次直接入包非堆叠物品最多352件");
                 int? grantedExpire = clearPeriod ? ClearedExpire(template) : customExpire;
                 var granted = Commit(live, owners, repository, request, true, character => AmplifyNew(character.Inventory, InventoryRewardGrantService.TryGrantBatch(character,
-                    [new InventoryReward(template.Id, count, (byte)upgrade, (byte)refinement)], resources.Items, resources.GoldLimits, resources.EpicPieces), amplify, unseal, ability < 0 ? null : ability, grantedExpire),
+                    [new InventoryReward(template.Id, count, (byte)upgrade, (byte)refinement, Quality: qualitySeed)], resources.Items, resources.GoldLimits, resources.EpicPieces), amplify, unseal, ability < 0 ? null : ability, grantedExpire),
                     "背包空间、堆叠、期限或余额上限不满足，整批未发放");
                 return Ok(new { target = "inventory", name = granted.Name, rev = granted.Revision, item = template.Id, itemName = template.Name, count, upgrade, refinement,
-                    amplifyType = amplify.Type, amplifyValue = amplify.Value, unsealed = unseal });
+                    amplifyType = amplify.Type, amplifyValue = amplify.Value, unsealed = unseal, quality = qualityPercent });
             }
             case DevelopmentAction.SetGrant:
             {
@@ -365,19 +371,24 @@ internal static partial class DevelopmentGm
             case DevelopmentAction.MailDelete:
             {
                 var service = mailbox ?? throw new InvalidOperationException("邮件服务未装配");
+                // force：GM 强制删除。默认规则只删「无附件、无金币、未过期」的邮件；带 force 时连附件、
+                // 金币和过期邮件一起删（附件行保留在库里但已不可达，与过期清理同一语义）。
+                bool force = args.Length > 1 && args[1] == "force";
+                if (args.Length > 1 && !force) throw new InvalidDataException("mail-delete 的可选参数只有 force");
                 int deleted = Target(live, owners, repository, request, true, (lease, character) =>
                 {
                     var now = DateTimeOffset.UtcNow;
                     var ids = args[0] == "all"
-                        ? service.Inspect(lease, character.Id, now).Entries.Where(mail => mail.Gold == 0 && mail.Attachments.IsEmpty && mail.Available(now.ToUnixTimeSeconds()))
+                        ? service.Inspect(lease, character.Id, now).Entries
+                            .Where(mail => force || mail.Gold == 0 && mail.Attachments.IsEmpty && mail.Available(now.ToUnixTimeSeconds()))
                             .Select(mail => mail.Id).ToImmutableArray()
                         : args[0].Split(',').Select(text => (uint)Number(text, uint.MaxValue)).ToImmutableArray();
-                    if (ids.IsEmpty) throw new InvalidDataException("没有可删除的邮件");
-                    var result = service.ChangeState(lease, character.Id, ids, 0, now);
-                    if (!result.Accepted) throw new InvalidDataException("邮件删除被拒绝：" + result.Error + "（未领取资产或已过期的邮件不能删除）");
+                    if (ids.IsEmpty) throw new InvalidDataException(force ? "邮箱里没有邮件" : "没有可删除的邮件（带附件/金币或已过期的邮件要加 force）");
+                    var result = service.ChangeState(lease, character.Id, ids, 0, now, force);
+                    if (!result.Accepted) throw new InvalidDataException("邮件删除被拒绝：" + result.Error + "（未领取资产或已过期的邮件要加 force）");
                     return ids.Length;
                 });
-                return Ok(new { name = request.Name, deleted });
+                return Ok(new { name = request.Name, deleted, forced = force });
             }
             case DevelopmentAction.Rename:
             {

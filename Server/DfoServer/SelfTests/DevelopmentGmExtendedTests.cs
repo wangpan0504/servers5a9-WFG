@@ -191,6 +191,23 @@ internal static class DevelopmentGmExtendedTests
         TestCheck.That(Json(Answer("item-clear Other 0")).GetProperty("deleted").GetInt32() > 0 &&
             Load().Inventory.Items.All(item => item.Position.List != InventoryListType.Main), "分类清理整栏原子删除");
 
+        // 品级：quality:<1-100> 换算成客户端实例品级种子（1..99 = 999999893+p，100 = 999999998）。
+        TestCheck.That(Json(Answer("grant Other 18400 1 0 0 direct quality:37")).GetProperty("quality").GetInt32() == 37 &&
+            Load().Inventory.Items.Single(item => item.Core.ItemId == 18400).Core.Value == 999_999_930, "品级百分比写入实例种子");
+        TestCheck.That(Json(Answer("grant Other 18400 1 0 0 direct quality:100")).GetProperty("quality").GetInt32() == 100 &&
+            Load().Inventory.Items.Where(item => item.Core.ItemId == 18400).Select(item => item.Core.Value).OrderBy(value => value)
+                .SequenceEqual([999_999_930, 999_999_998]), "100 品级使用最上级常量，未指定沿用默认");
+        TestCheck.That(new[] { "grant Other 18400 1 0 0 direct quality:0", "grant Other 18400 1 0 0 direct quality:101",
+            "grant Other 3175 1 0 0 direct quality:50", "grant Other 18400 1 0 0 direct quality:50 quality:60" }
+            .All(line => Answer(line).StartsWith("ERR ")), "品级范围、非装备与重复参数拒绝");
+        TestCheck.That(Answer("grant Other 18400 1 0 0 mail quality:50").StartsWith("OK "), "邮件发放可带品级");
+        // 可选参数叠加：amp + quality + period:off 一共 8 个参数，不能被命令行参数上限挡掉。
+        var stacked = Json(Answer("grant Other 18400 1 6 0 direct amp:3:120 quality:50 period:off"));
+        TestCheck.That(stacked.GetProperty("quality").GetInt32() == 50 && stacked.GetProperty("amplifyValue").GetInt32() == 120 &&
+            Load().Inventory.Items.Any(item => item.Core.ItemId == 18400 && item.Core.Value == 999_999_943 && item.Core.Attr != 0),
+            "增幅、品级与期限可同时指定");
+        TestCheck.That(Answer("item-clear Other 0").StartsWith("OK "), "品级用例后清理物品栏");
+
         var set = catalog.Items.Where(row => row.Equipment && row.SetIndex > 0 && (row.Jobs & 1) != 0).GroupBy(row => row.SetIndex)
             .FirstOrDefault(group => group.Select(row => resources.Items.Get(row.Id).EquipmentSlot).Distinct().Count() is >= 2 and <= 10);
         if (set is not null)
@@ -220,11 +237,22 @@ internal static class DevelopmentGmExtendedTests
         TestCheck.That(Answer("grant Other 18400 1 0 0 direct", session).StartsWith("ERR ") && Answer("item-clear Other 0", session).StartsWith("ERR "),
             "游戏中的角色拒绝背包实例写入");
         TestCheck.That(session.ClaimMail(mailbox, [.. mails.Select(mail => mail.GetProperty("id").GetUInt32())]).Accepted, "领取GM邮件");
+        TestCheck.That(session.Selected!.Inventory.Items.Any(item => item.Core.ItemId == 18400 && item.Core.Value == 999_999_943),
+            "邮件附件按指定品级种子到账");
         TestCheck.That(Answer("mail-delete Other all", session).StartsWith("ERR "), "游戏中的角色拒绝删除邮件");
         session.ReturnToRoster();
         var deleted = Json(Answer("mail-delete Other all", session));
         TestCheck.That(deleted.GetProperty("deleted").GetInt32() == mails.Length &&
             Json(Answer("mails Other", session)).GetProperty("mails").GetArrayLength() == 0, "回到选角后经原owner删除已领取邮件");
+        // force：默认规则拒绝删带附件的邮件，加 force 才连附件一起删。
+        TestCheck.That(Answer("grant Other 18400 1 0 0 mail quality:50", session).StartsWith("OK "), "再发一封带品级与附件的邮件");
+        var forcedMail = Json(Answer("mails Other", session)).GetProperty("mails").EnumerateArray().Single();
+        uint forcedId = forcedMail.GetProperty("id").GetUInt32();
+        TestCheck.That(Answer("mail-delete Other " + forcedId, session).StartsWith("ERR "), "默认规则仍拒绝删除未领取附件");
+        var forced = Json(Answer("mail-delete Other " + forcedId + " force", session));
+        TestCheck.That(forced.GetProperty("deleted").GetInt32() == 1 && forced.GetProperty("forced").GetBoolean() &&
+            Json(Answer("mails Other", session)).GetProperty("mails").GetArrayLength() == 0, "force 连附件一起删除");
+        TestCheck.That(Answer("mail-delete Other " + forcedId + " hard", session).StartsWith("ERR "), "mail-delete 的可选参数只认 force");
         session.Select(0, resources.GoldLimits);
         session.MarkReady();
         TestCheck.That(Answer("grant Other 3175 2 0 0 mail", session).StartsWith("OK "), "游戏中的角色仍可邮件发放");

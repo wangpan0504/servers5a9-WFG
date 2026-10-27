@@ -168,10 +168,10 @@ python3 Tools/GmWeb/gm_web.py --self-check
 | `wallet <角色>` | 读取金币、复活币、胜点、账号级货币（点券、代币券、晶块、灵魂等）及黑钻到期时间与是否有效 |
 | `currency <角色> <键> <set\|add\|sub> <数量>` | 修改单项货币；结果越出 0–2147483647 时整笔拒绝 |
 | `item-categories` / `item-search <偏移> <最低> <最高> <稀有度\|*> <分类\|*> [关键字]` | 按名称/ID、分类、等级、稀有度检索，每页 50 条 |
-| `grant <角色> <ID> <数量> <强化> <锻造> <mail\|direct>` | 邮件或直接入包；锻造只允许普通武器且不超过资源上限 |
+| `grant <角色> <ID> <数量> <强化> <锻造> <mail\|direct> [amp:<类型1-4>:<值>] [seal:open] [ability:<选项>] [period:off] [expire:<Unix秒>] [quality:<1-100>]` | 邮件或直接入包；锻造只允许普通武器且不超过资源上限。可选参数各自最多一次、可任意组合；`quality` 只对普通装备有效，百分比换算成实例品级种子（100 = 最上级），非装备携带直接拒绝 |
 | `set-grant <角色> <套装> <强化> <锻造> <mail\|direct>` | 按当前职业每部位一件；邮件方式超过 10 件时拆成多封（单封邮件原子投递） |
 | `item-delete <角色> <容器:位置:UID,…>` / `item-clear <角色> <容器>` | 按现有删除规划整批删除；UID 不符或锁定时整批保留，锁定物品保留 |
-| `mails <角色>` / `mail-delete <角色> <ID,…\|all>` | 只读查看邮箱；删除走 `MailboxService.ChangeState`，有未领取资产的邮件拒绝删除 |
+| `mails <角色>` / `mail-delete <角色> <ID,…\|all> [force]` | 只读查看邮箱，回包含 `deletable` 与附件明细（物品、数量、强化、增幅、是否过期）；删除走 `MailboxService.ChangeState`，有未领取资产或已过期的邮件默认拒绝删除，`force` 时连同附件与金币一起删除 |
 | `quest-search` / `quest-chain` / `quest-batch` | 任务名称检索；整链按职业前置组展开；批量最多 3000 个，同一事务完成。`quest-batch`/`quest-chain`跳过每日和`[normaly repeat]`，避免写成 `daily_period=0` 的永久完成导致当天无法再接。单独 `quest-add` 对这类任务写入当天游戏日周期。网页“全部完成”的 `ids` 同样不含每日/重复。 |
 
 ### 在线路由规则
@@ -214,7 +214,7 @@ python3 Tools/GmWeb/gm_web.py --self-check
 - 本服装备建设分：`equipment-score <角色>`，只读服务器穿戴快照，返回版本、捕获revision、12槽分项及Complete/Partial/Invalid和封顶提示；[规则与排除项](../模块/角色属性.md#本服装备建设分-v1)。不写存档，不是原版战斗力或玩家原生面板。
 - 账号金库：currency <角色> vault-gold set|add|sub <数量>（上限为当前容量档位，在线安全）；item-clear 支持容器 AccountCargo。
 - 高级筛选：item-filter <偏移> <最低> <最高> <稀有度|*> <分类|*> <词条|*> <期限*|none|rel|abs|any> <技能职业*|all|职业> [关键字]；属性索引首次使用时后台构建，未就绪会提示稍后重试。
-- 发放：grant 可选 amp:<类型>:<值> 与 seal:open（仅 [sealing] 封装装备）。
+- 发放：grant 可选 amp:<类型>:<值>、seal:open（仅 [sealing] 封装装备）、ability:<选项>、period:off、expire:<Unix秒> 与 quality:<1-100>（仅普通装备，100 = 最上级）。
 
 ## 第三轮补充
 

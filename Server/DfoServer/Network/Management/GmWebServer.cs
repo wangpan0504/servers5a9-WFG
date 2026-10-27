@@ -256,7 +256,8 @@ internal static partial class GmWebServer
                 b.Amp is not null && !Amplify.IsMatch(b.Amp) && b.Amp != "amp:0:0" || b.Ability is < 0 or > 65535) return Bad("物品参数无效");
             if (b.ClearPeriod == true && b.Expire is not null) return Bad("期限不能同时改为不过期和指定时间");
             if (b.Expire is < 1) return Bad("到期时间无效");
-            return Run(http, data, "mail-item", b.Account, b.Name, $"account {b.Account} grant {b.Name} {b.ItemId} {b.Count} {b.Upgrade} {b.Refine} mail{(b.Amp is null ? "" : " " + b.Amp)}{(b.Unseal == true ? " seal:open" : "")}{(b.Ability is null ? "" : " ability:" + b.Ability)}{(b.ClearPeriod == true ? " period:off" : "")}{(b.Expire is null ? "" : " expire:" + b.Expire)}", null);
+            if (b.Quality is < 1 or > 100) return Bad("品级要填 1-100（100 = 最上级）");
+            return Run(http, data, "mail-item", b.Account, b.Name, $"account {b.Account} grant {b.Name} {b.ItemId} {b.Count} {b.Upgrade} {b.Refine} mail{(b.Amp is null ? "" : " " + b.Amp)}{(b.Unseal == true ? " seal:open" : "")}{(b.Ability is null ? "" : " ability:" + b.Ability)}{(b.Quality is null ? "" : " quality:" + b.Quality)}{(b.ClearPeriod == true ? " period:off" : "")}{(b.Expire is null ? "" : " expire:" + b.Expire)}", null);
         });
         app.MapPost("/api/mail/set", (HttpContext http, MailSetBody b) =>
         {
@@ -384,7 +385,7 @@ internal static partial class GmWebServer
         };
     }
 
-    internal sealed record MailItemBody(string Account, string Name, int ItemId, int Count, int Upgrade, int Refine, string? Amp, bool? Confirm, bool? Unseal = null, int? Ability = null, bool? ClearPeriod = null, int? Expire = null);
+    internal sealed record MailItemBody(string Account, string Name, int ItemId, int Count, int Upgrade, int Refine, string? Amp, bool? Confirm, bool? Unseal = null, int? Ability = null, bool? ClearPeriod = null, int? Expire = null, int? Quality = null);
     internal sealed record MailSetBody(string Account, string Name, int SetIndex, int Upgrade, int Refine, bool? Confirm);
     internal sealed record MailGoldBody(string Account, string Name, long Gold, string? Text, bool? Confirm);
     internal sealed record KickBody(string Account, string? Name, bool? Confirm);

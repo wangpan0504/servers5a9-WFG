@@ -7,22 +7,26 @@ using DfoServer.Game.Currency;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed record InventoryReward(int ItemId, int Count, byte Upgrade = 0, byte Refinement = 0);
+internal sealed record InventoryReward(int ItemId, int Count, byte Upgrade = 0, byte Refinement = 0, int? Quality = null);
 internal static class InventoryRewardGrantService
 {
     // 普通创建策略：满耐久、100%品级种子；强化/锻造默认零，显式奖励可指定，期限与部位来自 CHR/PVF。
     public const int InitialQuality = 999_999_998;
     public static ItemCore Create(ItemTemplate template, int count = 1, DateTimeOffset? utcNow = null, byte upgrade = 0, byte refinement = 0,
-        bool shopExpiration = false, bool ignoreUsablePeriod = false, Func<int, int>? talismanColorDraw = null)
+        bool shopExpiration = false, bool ignoreUsablePeriod = false, Func<int, int>? talismanColorDraw = null, int? quality = null)
     {
         if (count <= 0 || count > template.StackLimit || template.Kind is (ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal or ItemKind.Talisman) && count != 1)
             throw new InvalidDataException("无效发放数量");
         if (upgrade > 31 || refinement > 127 || template.Kind != ItemKind.Equipment && (upgrade != 0 || refinement != 0))
             throw new InvalidDataException("无效装备创建属性");
+        // quality 是实例品级种子（999999893+pct / 999999998），只有普通装备有；其它类型带了就拒绝，不静默丢弃。
+        if (quality is not null && template.Kind != ItemKind.Equipment)
+            throw new InvalidDataException("无效装备创建属性");
         var core = new ItemCore(template.Id, template.Kind, template.Kind switch
         {
             ItemKind.Avatar or ItemKind.Creature => 0,
-            ItemKind.Equipment or ItemKind.CreatureEquipment or ItemKind.Talisman => InitialQuality,
+            ItemKind.Equipment => quality ?? InitialQuality,
+            ItemKind.CreatureEquipment or ItemKind.Talisman => InitialQuality,
             _ => count
         })
         {
@@ -124,7 +128,8 @@ internal static class InventoryRewardGrantService
                 incomingInstance = incomingInstance with { Core = InventoryTalismanCompatibility.Normalize(incomingInstance.Core, template) };
             }
             var prototype = incomingInstance is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement,
-                shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod) : incomingInstance.Core;
+                shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod,
+                quality: reward.Quality) : incomingInstance.Core;
             if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || instances?[rewardIndex].IsExpired(now.ToUnixTimeSeconds()) == true)
                 return InventoryResult.Reject(19);
             if (prototype.IsExpired(now.ToUnixTimeSeconds()))

@@ -20,8 +20,9 @@ internal static partial class GmWebServer
     internal sealed record NameBody(string Account, string Name, bool? Confirm);
     internal sealed record DeleteItemsBody(string Account, string Name, string[]? Refs, bool? ReturnFirst, bool? Confirm);
     internal sealed record ClearBody(string Account, string Name, int Container, bool? ReturnFirst, bool? Confirm);
-    internal sealed record DeleteMailBody(string Account, string Name, uint[]? Ids, bool? All, bool? ReturnFirst, bool? Confirm);
-    internal sealed record DirectItemBody(string Account, string Name, int ItemId, int Count, int Upgrade, int Refine, string? Amp, bool? ReturnFirst, bool? Confirm, bool? Unseal = null, int? Ability = null, bool? ClearPeriod = null, int? Expire = null);
+    // Force=true：GM 强制删除，不校验未领取附件/金币与是否过期（默认 false 保持收件箱规则）。
+    internal sealed record DeleteMailBody(string Account, string Name, uint[]? Ids, bool? All, bool? ReturnFirst, bool? Confirm, bool? Force = null);
+    internal sealed record DirectItemBody(string Account, string Name, int ItemId, int Count, int Upgrade, int Refine, string? Amp, bool? ReturnFirst, bool? Confirm, bool? Unseal = null, int? Ability = null, bool? ClearPeriod = null, int? Expire = null, int? Quality = null);
     internal sealed record ItemEditBody(string Account, string Name, int List, int Slot, long Uid, int? Upgrade, int? Refine, string? Amp, int? Ability, int? Count, bool? ClearPeriod, bool? ReturnFirst, bool? Confirm, int? Expire = null);
     internal sealed record DirectSetBody(string Account, string Name, int SetIndex, int Upgrade, int Refine, bool? ReturnFirst, bool? Confirm);
     internal sealed record QuickItem(int Id, string? Label, int Count, int Upgrade, int Refine);
@@ -74,7 +75,7 @@ internal static partial class GmWebServer
             if (b.All == true) target = "all";
             else if (b.Ids is { Length: >= 1 and <= 20 } ids) target = string.Join(',', ids);
             else return Bad("邮件须为 1–20 个 ID，或选择全部可删除邮件");
-            return await RunReturning(http, data, "mail-delete", b.Account, b.Name, $"account {b.Account} mail-delete {b.Name} {target}", b.ReturnFirst == true);
+            return await RunReturning(http, data, "mail-delete", b.Account, b.Name, $"account {b.Account} mail-delete {b.Name} {target}{(b.Force == true ? " force" : "")}", b.ReturnFirst == true);
         });
         app.MapPost("/api/direct/item", async (HttpContext http, DirectItemBody b) =>
         {
@@ -83,8 +84,9 @@ internal static partial class GmWebServer
                 b.Amp is not null && !Amplify.IsMatch(b.Amp) && b.Amp != "amp:0:0" || b.Ability is < 0 or > 65535) return Bad("物品参数无效");
             if (b.ClearPeriod == true && b.Expire is not null) return Bad("期限不能同时改为不过期和指定时间");
             if (b.Expire is < 1) return Bad("到期时间无效");
+            if (b.Quality is < 1 or > 100) return Bad("品级要填 1-100（100 = 最上级）");
             return await RunReturning(http, data, "direct-item", b.Account, b.Name,
-                $"account {b.Account} grant {b.Name} {b.ItemId} {b.Count} {b.Upgrade} {b.Refine} direct{(b.Amp is null ? "" : " " + b.Amp)}{(b.Unseal == true ? " seal:open" : "")}{(b.Ability is null ? "" : " ability:" + b.Ability)}{(b.ClearPeriod == true ? " period:off" : "")}{(b.Expire is null ? "" : " expire:" + b.Expire)}", b.ReturnFirst == true);
+                $"account {b.Account} grant {b.Name} {b.ItemId} {b.Count} {b.Upgrade} {b.Refine} direct{(b.Amp is null ? "" : " " + b.Amp)}{(b.Unseal == true ? " seal:open" : "")}{(b.Ability is null ? "" : " ability:" + b.Ability)}{(b.Quality is null ? "" : " quality:" + b.Quality)}{(b.ClearPeriod == true ? " period:off" : "")}{(b.Expire is null ? "" : " expire:" + b.Expire)}", b.ReturnFirst == true);
         });
         app.MapPost("/api/items/edit", async (HttpContext http, ItemEditBody b) =>
         {
