@@ -40,6 +40,7 @@ internal static class FormalDungeonSessionTests
         Lifecycle(14);
         OrdinaryJobs();
         OtherAdmissions();
+        LostLandSessionTests.Run(towns, pvf, characters);
         RejectedEntry();
         Reservation();
         ObjectKeyReuse();

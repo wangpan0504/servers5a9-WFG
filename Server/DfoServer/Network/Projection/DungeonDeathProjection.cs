@@ -27,6 +27,7 @@ internal sealed class DungeonDeathProjection(GameConnectionContext context, Town
             // 计时经注入的 TimeProvider，回归可按比例缩短等待；生产未注入时使用系统时钟。
             await Task.Delay(ReturnDelay, time ?? TimeProvider.System, stop);
             if (context.Session.ReturnFromFormalDungeonOnDeath(scheduled) is not { } receipt) return;
+            if (context.LostLand is not null) await context.LostLand.StopAsync();
             await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_death_return_town");
             log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "death_timeout",
                 receipt.Character.Id, receipt.Character.Position });

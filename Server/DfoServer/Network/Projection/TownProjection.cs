@@ -267,6 +267,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             return true;
         });
         if (!returning) return;
+        if (context.LostLand is not null) await context.LostLand.StopAsync();
         parties?.Detach(context.Session);
         await DetachAsync(context);
         if (departedParty is not null)

@@ -63,6 +63,8 @@ internal sealed record DungeonMaze(
     public string? ResourceError { get; init; }
     public bool IsTrainingRoom { get; init; }
     public bool IsClassExperience { get; init; }
+    // 仅由4000的严格资源解析设置；专用静态连接不代表正式限时玩法已接通。
+    public bool IsLostLand { get; init; }
     public bool IsGriefTower { get; init; }
     // 资源池已核验的同层唯一MAP；静态拓扑必须继续匹配它，不能只凭模式布尔值放宽BB。
     public DungeonMap? GriefRoom { get; init; }

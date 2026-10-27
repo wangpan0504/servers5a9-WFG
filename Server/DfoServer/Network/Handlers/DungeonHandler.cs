@@ -388,6 +388,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt.Entry.UsesFatigue)
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
+        if (context.LostLand is not null) await context.LostLand.StartAsync(receipt);
         if (context.Altar is not null && context.Session.StartDungeonAltar(receipt) is { } altar)
             await context.Altar.WakeAsync(altar);
         if (receipt.HellPartyRoomCleared)
@@ -686,6 +687,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool tag = context.Session.HasFormalTagEvildom;
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
+        if (context.LostLand is not null) await context.LostLand.StopAsync();
         if (context.Altar is not null) await context.Altar.StopAsync();
         if (context.Death is not null) await context.Death.StopAsync();
         bool Guard() => context.Session.CanPublishTravel(receipt);

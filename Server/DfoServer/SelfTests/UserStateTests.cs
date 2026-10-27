@@ -23,7 +23,11 @@ internal static class UserStateTests
             That(UserStatePolicy.Read(phase, true, true, false, state, false) == UserState.Dungeon &&
                 UserStatePolicy.Read(phase, true, true, false, state, true) == UserState.TutorialDungeon,
                 "普通/训练粗业务状态保留加载、战斗、结算的真实细阶段");
-            foreach (var wrong in Enum.GetValues<SinglePlayerDungeonPhase>().Where(value => value != state))
+            That(UserStatePolicy.Read(phase, true, true, false, SinglePlayerDungeonPhase.TimedOut, false) == UserState.Dungeon,
+                "限时模式在加载、战斗或退出等待时到期均保留原实例退出资格");
+            Reject<InvalidOperationException>(() => UserStatePolicy.Read(phase, true, true, false, SinglePlayerDungeonPhase.TimedOut, true),
+                "训练实例不能借用限时模式状态");
+            foreach (var wrong in Enum.GetValues<SinglePlayerDungeonPhase>().Where(value => value != state && value != SinglePlayerDungeonPhase.TimedOut))
                 Reject<InvalidOperationException>(() => UserStatePolicy.Read(phase, true, true, false, wrong, false), "会话与Run阶段错配拒绝");
         }
         That(UserStatePolicy.Read(SessionPhase.Unselected, false, false, false, null, false) == UserState.CharacterSelect &&
