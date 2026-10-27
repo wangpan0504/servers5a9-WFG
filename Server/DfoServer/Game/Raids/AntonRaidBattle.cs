@@ -130,7 +130,7 @@ internal sealed partial class AntonRaidBattle
 
 
     public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton,
-        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null, LukeFixedCardRoute? fixedRoute = null)
+        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null, LukeFixedCardRoute? fixedRoute = null, LukeFacilityReportPolicy? facilities = null)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
@@ -144,6 +144,9 @@ internal sealed partial class AntonRaidBattle
             throw new InvalidDataException("卢克阶段超时兼容策略不完整");
         if (fixedRoute is not null && (kind != RaidKind.Luke || !fixedRoute.Matches(script)))
             throw new InvalidDataException("卢克固定路线与执行脚本不匹配");
+        if (facilities is not null && (kind != RaidKind.Luke || !facilities.Valid))
+            throw new InvalidDataException("卢克设施桥必须显式声明客户端动作报告信任合同");
+        lukeFacilities = facilities;
         lukeFixedRoute = fixedRoute;
         lukePhaseTimeout = phaseTimeout;
         lukeRevival = revival;
