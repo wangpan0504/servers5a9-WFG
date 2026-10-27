@@ -5,6 +5,7 @@ using System.Net;
 using System.Text;
 using System.IO.Compression;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Events;
 
 namespace DfoServer.Testing;
 
@@ -66,8 +67,8 @@ internal sealed class TcpPeer : IDisposable
     public byte[] ExpertContract { get; private set; } = [];
     public byte[] PremiumInfo { get; private set; } = [];
     public byte[] SeriaLuckInfo { get; private set; } = [];
-    // 团本时段开放时 EVENT_INFO 在 2037 之后追加的开放事件（按 RaidEntryEvents.OpenEvents 顺序）；默认无开放时段。
-    public ushort[] ExpectedOpenEvents { get; set; } = [];
+    // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
+    public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId];
     public byte[] EventInfoPayload { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];

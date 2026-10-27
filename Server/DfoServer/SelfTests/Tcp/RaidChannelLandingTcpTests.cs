@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Events;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Towns;
@@ -56,14 +57,14 @@ internal static class RaidChannelLandingTcpTests
         foreach (byte channel in new byte[] { endpoints.Keys.Min(), 19 })
         {
             using var peer = Open(fixture, gamePort: endpoints[channel], channelNumber: channel);
-            peer.ExpectedOpenEvents = [282, 2449, 414, 181];
+            peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
             // 共享房间38/1与安徒恩战舰入口19/0均为房间图，严格保留两边的1379→事件初始化包序。
             var entry = peer.Select(character.Slot, prepared: true);
             var location = entry.Single(packet => packet is { Kind: 0, Opcode: 24 }).Body;
             That(location[0] == (channel == 19 ? 19 : 38) && location[1] == (channel == 19 ? 0 : 1),
                 $"频道 {channel} 普通选角绑定真实初始地区，事件初始化不改变落点");
             peer.Barrier();
-            That(peer.EventInfoPayload.Length == 68 + 15 * 4, $"频道 {channel} EVENT_INFO 含 2037 + 卢克282/超时空2449/普雷414/安徒恩181");
+            That(peer.EventInfoPayload.Length == 68 + 15 * 5, $"频道 {channel} EVENT_INFO 含2037、四项团本事件与默认诺兰2532");
             That(peer.CompletedQuestHistory.Length > 0, $"频道 {channel} 下发已完成任务表");
             peer.Send(3, [1]); peer.Expect(1, 3, [1]); peer.Closed();
             fixture.Sql("UPDATE characters SET town=38,area=0,x=629,y=196 WHERE id=$p0", character.Id);

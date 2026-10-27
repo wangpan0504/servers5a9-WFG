@@ -27,7 +27,11 @@ internal static partial class TownProtocolTcpTests
             })
                 peer.Send(opcode);
             peer.Create("DoorTest", variant: 1);
+            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId];
             peer.Select();
+            That(serverEvents.Read(ServerEventService.NolanVisibilityId) is { Active: true, Schedule: { Revision: 0, OverrideActive: null } } &&
+                fixture.Query("SELECT count(*) FROM server_events WHERE event_id=2532") is [[0L]],
+                "正常部署未配置2532时首次入城即投影诺兰，查询不补写活动配置");
             DfoServer.WorldMapHoverTests.AssertPermissionBody(peer.DungeonPermission, towns);
             byte[] mapHistory = new byte[30004];
             mapHistory[0] = 0x30;
@@ -81,10 +85,12 @@ internal static partial class TownProtocolTcpTests
             var nolanOff = serverEvents.Override(ServerEventService.NolanVisibilityId, false);
             peer.ExpectedOpenEvents = [];
             peer.Select();
-            That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanOff &&
+            That(new ServerEventService(new ServerEventRepository(fixture.Database)).Read(ServerEventService.NolanVisibilityId) == nolanOff &&
                 serverEvents.Read(ServerEventService.DoubleGoldCardId) == goldOn,
                 "同连接重选按最新提交移除2532，黄金牌64仍开也只发送完整2037事件表");
             serverEvents.Override(ServerEventService.DoubleGoldCardId, false);
+            That(serverEvents.Override(ServerEventService.NolanVisibilityId, null) is { Active: true, Schedule: { OverrideActive: null } },
+                "独立显隐用例结束恢复auto默认，后续通用选角验证默认显示诺兰");
         }
 
         foreach (byte variant in new byte[]
@@ -341,7 +347,8 @@ internal static partial class TownProtocolTcpTests
             }
         }
 
-        serverEvents.Override(ServerEventService.NolanVisibilityId, false);
+        That(serverEvents.Override(ServerEventService.NolanVisibilityId, null) is { Active: true, Schedule: { OverrideActive: null } },
+            "显式on重建验证结束恢复auto默认，后续通用重连验证默认显示诺兰");
 
         (uint District, Trip[] Routes)[] respawns = [(39, [new(40, 1, 1782, 193, 38, 1, Kind: 5), new(54, 1, 201, 570, 40, 1), new(60, 3, 202, 59, 54, 1), new(60, 1, 538, 73, 60, 3), new(118, 0, 379, 229, 60, 1, Npc: 400000062), new(60, 1, 1140, 90, 118, 0, Kind: 255, Npc: 8001), new(118, 0, 379, 229, 60, 1, Npc: 400000062)]), (60, [new(60, 1, 1241, 139, 38, 1, Kind: 6)]), (60, [])];
         foreach (var respawn in respawns)

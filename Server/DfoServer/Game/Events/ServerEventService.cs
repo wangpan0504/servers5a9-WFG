@@ -42,7 +42,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     public ServerEventState Schedule(ushort eventId, DateTimeOffset start, DateTimeOffset end)
     {
         if (eventId == NolanVisibilityId)
-            throw new InvalidDataException("2532仅支持显式常驻开关，不支持时间表");
+            throw new InvalidDataException("2532仅支持常驻开关，不支持时间表");
         return Update(eventId,
             value => value with { StartsAt = start.ToUnixTimeSeconds(), EndsAt = end.ToUnixTimeSeconds(), OverrideActive = null });
     }
@@ -57,7 +57,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
     }
 
     ServerEventState State(ServerEventSchedule schedule) => new(schedule,
-        schedule.EventId == NolanVisibilityId ? schedule.OverrideActive == true : schedule.IsActive(time.GetUtcNow()));
+        schedule.EventId == NolanVisibilityId ? schedule.OverrideActive ?? true : schedule.IsActive(time.GetUtcNow()));
 
     public static void RequireRegistered(ushort eventId)
     {

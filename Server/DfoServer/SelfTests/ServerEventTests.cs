@@ -68,8 +68,11 @@ internal static class ServerEventTests
             ServerEventState? initial = null;
             try { initial = events.Read(nolan); }
             catch (InvalidDataException) { }
-            That(initial is { Active: false, Schedule: { EventId: nolan, Revision: 0, StartsAt: null, EndsAt: null, OverrideActive: null } },
-                "2532已登记且未配置时关闭，独立于黄金牌64");
+            That(initial is { Active: true, Schedule: { EventId: nolan, Revision: 0, StartsAt: null, EndsAt: null, OverrideActive: null } },
+                "2532未配置时默认显示诺兰，不要求部署后手动开启");
+            That(new ServerEventService(new ServerEventRepository(path), clock).Read(nolan) == initial &&
+                store.Read(nolan) == new ServerEventSchedule(nolan) && events.Read(64) == goldBefore,
+                "2532默认可见在服务及仓储重建后保持，只读不补写覆盖或修改64");
             var nolanOn = events.Override(nolan, true);
             That(nolanOn is { Active: true, Schedule: { Revision: 1, StartsAt: null, EndsAt: null, OverrideActive: true } } &&
                 events.Override(nolan, true) == nolanOn, "2532显式常驻开启且同值不增加版本");
@@ -92,7 +95,9 @@ internal static class ServerEventTests
                 "2532显式关闭只增加自己的版本且不关闭黄金牌64");
             Reject<InvalidOperationException>(() => nolanReopened.Save(nolanOn.Schedule, nolanOn.Schedule with { OverrideActive = false }),
                 "2532旧revision不能覆盖新常驻开关");
-            That(nolanReloaded.Read(nolan) == nolanOff && events.Read(64) == goldBefore, "2532旧版本拒绝后两项状态完整不变");
+            That(nolanReloaded.Read(nolan) == nolanOff &&
+                new ServerEventService(new ServerEventRepository(path), clock).Read(nolan) == nolanOff && events.Read(64) == goldBefore,
+                "2532显式off在服务及仓储重建后仍关闭，旧版本拒绝不复活默认状态");
             Reject<InvalidDataException>(() => store.Save(nolanOff.Schedule, goldBefore.Schedule), "2532配置不能借64的键或revision跨活动提交");
             Sql("CREATE TRIGGER nolan_event_fail AFTER UPDATE ON server_events WHEN NEW.event_id=2532 BEGIN SELECT RAISE(ABORT,'nolan event rollback'); END");
             Reject<SqliteException>(() => events.Override(nolan, true), "2532晚期SQL失败不返回常驻开启成功");
@@ -100,20 +105,25 @@ internal static class ServerEventTests
                 "2532失败回滚保留自己的开关及版本且不修改64");
             Sql("DROP TRIGGER nolan_event_fail");
             var nolanAuto = events.Override(nolan, null);
-            That(nolanAuto is { Active: false, Schedule: { Revision: 3, OverrideActive: null } } && events.Read(64) == goldBefore,
-                "2532清除显式覆盖后默认关闭，不借64状态激活");
+            That(nolanAuto is { Active: true, Schedule: { Revision: 3, OverrideActive: null } } &&
+                new ServerEventService(new ServerEventRepository(path), clock).Read(nolan) == nolanAuto && events.Read(64) == goldBefore,
+                "2532的auto恢复默认可见，重建仍生效且不借64状态激活");
             var dated = store.Save(nolanAuto.Schedule, nolanAuto.Schedule with
             {
-                StartsAt = clock.GetUtcNow().AddHours(-1).ToUnixTimeSeconds(),
-                EndsAt = clock.GetUtcNow().AddHours(1).ToUnixTimeSeconds(), OverrideActive = true
+                StartsAt = clock.GetUtcNow().AddHours(-2).ToUnixTimeSeconds(),
+                EndsAt = clock.GetUtcNow().AddHours(-1).ToUnixTimeSeconds(), OverrideActive = true
             });
             var cleared = events.Override(nolan, null);
-            That(!cleared.Active && cleared.Schedule.OverrideActive is null && cleared.Schedule.Revision == dated.Revision + 1 &&
+            That(cleared.Active && cleared.Schedule.OverrideActive is null && cleared.Schedule.Revision == dated.Revision + 1 &&
                 nolanReloaded.Read(nolan) == cleared && events.Read(64) == goldBefore,
-                "2532清除覆盖及重读均不复活已存历史日期规则");
+                "2532的auto忽略已过期历史日期规则，默认可见及版本在重读后保持");
+            clock.Advance(TimeSpan.FromDays(370));
+            That(events.Read(nolan) == cleared && events.Read(64) == goldBefore,
+                "2532默认可见跨日跨年保持，不依赖旧活动日期也不改64版本");
             var nolanBeforeGold = store.Read(nolan);
             var goldOff = events.Override(64, false);
-            That(!goldOff.Active && goldOff.Schedule.Revision == goldBefore.Schedule.Revision + 1 && store.Read(nolan) == nolanBeforeGold,
+            That(!goldOff.Active && goldOff.Schedule.Revision == goldBefore.Schedule.Revision + 1 && store.Read(nolan) == nolanBeforeGold &&
+                events.Read(nolan).Active,
                 "黄金牌64的真实状态及revision变更也不修改2532");
         }
         finally
