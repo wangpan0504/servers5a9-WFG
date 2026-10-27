@@ -7,7 +7,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class EnhancementTcpTests
+internal static partial class EnhancementTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
@@ -88,6 +88,8 @@ internal static class EnhancementTcpTests
         }
         That(Uids() == uids && fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "强化不更换目标UID、不损坏外键或数据库");
+        await fixture.StopAsync();
+        await RandomAsync(options, root, resources);
 
         string Uids() => fixture.Snapshot("SELECT i.item_uid,s.list_type,s.slot_index FROM character_inventory_items i " +
             "JOIN character_inventory_slots s USING(item_uid) WHERE json_extract(i.item_core,'$.ItemId')<>$p0 ORDER BY i.item_uid", coupon);

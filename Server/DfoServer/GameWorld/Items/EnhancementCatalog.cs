@@ -6,17 +6,23 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-internal enum EnhancementMode : byte { Reinforce, Amplify, LuckyAmplify = 5 }
+internal enum EnhancementMode : byte { Reinforce, Amplify, RandomReinforce, LuckyAmplify = 5 }
 
 internal sealed record EnhancementDefinition(int ItemId, EnhancementMode Mode, byte Level, int SuccessWeight,
     bool Additional, int RawLevelLimit, int MinimumItemLevel, int MaximumItemLevel,
     ImmutableHashSet<int> AllowedItems, string? PendingRule = null)
 {
+    public ImmutableArray<EnhancementLevelWeight> RandomLevels { get; init; } = [];
+    public ImmutableHashSet<int> Rarities { get; init; } = [];
+    public int SlotClass { get; init; }
+    public bool SealedOnly { get; init; }
+    public int RandomWeight => RandomLevels.Sum(row => row.Weight);
     public bool Available => PendingRule is null;
     public bool TryTargetLevel(byte current, out byte desired)
     {
-        int level = Additional ? current + Level : Level;
         desired = 0;
+        if (Mode == EnhancementMode.RandomReinforce) return Available && !RandomLevels.IsEmpty && current <= 31;
+        int level = Additional ? current + Level : Level;
         if (!Available || current > 31 || level is < 1 or > 31 || Additional && RawLevelLimit >= 0 && current >= RawLevelLimit)
             return false;
         desired = (byte)level;
@@ -24,8 +30,10 @@ internal sealed record EnhancementDefinition(int ItemId, EnhancementMode Mode, b
     }
 }
 
+internal readonly record struct EnhancementLevelWeight(byte Level, int Weight);
+
 // 两份共享LST仅用于实际请求的券和目标；不扫描STK或另载PVF。
-internal sealed class EnhancementCatalog
+internal sealed partial class EnhancementCatalog
 {
     readonly Func<string, string> read;
     readonly IReadOnlyDictionary<int, string> stackable, equipment;
@@ -46,7 +54,7 @@ internal sealed class EnhancementCatalog
     public bool Allows(int id, EnhancementMode mode)
     {
         var pending = targets.GetOrAdd(id, key => new(() => Target(key)));
-        try { var value = pending.Value; return mode == EnhancementMode.Reinforce ? value.Reinforce : value.Amplify; }
+        try { var value = pending.Value; return mode is EnhancementMode.Reinforce or EnhancementMode.RandomReinforce ? value.Reinforce : value.Amplify; }
         catch { targets.TryRemove(new KeyValuePair<int, Lazy<(bool Reinforce, bool Amplify)>>(id, pending)); throw; }
     }
 
@@ -71,6 +79,8 @@ internal sealed class EnhancementCatalog
         var reinforce = Fields(text, "equipment reinforcement ticket");
         var amplify = Fields(text, "equipment amplify reinforcement ticket");
         var lucky = Fields(text, "lucky enchant deed");
+        if (reinforce.Count + amplify.Count + lucky.Count == 0 && Fields(text, "enchant random").Count != 0)
+            return ParseRandom(id, text);
         if (reinforce.Count + amplify.Count + lucky.Count == 0) return null;
         EnhancementDefinition Pending(string reason) => new(id, EnhancementMode.Reinforce, 0, 0, false, -1, 0, 0, [], reason);
         if (reinforce.Count + amplify.Count + lucky.Count != 1) return Pending("重复或混合的强化券资源族");
@@ -84,6 +94,13 @@ internal sealed class EnhancementCatalog
         if (match.Groups[3].Value == "fixed" && maximum != -1)
             return new(id, reinforce.Count == 1 ? EnhancementMode.Reinforce : EnhancementMode.Amplify,
                 level, chance * 100, false, maximum, 0, byte.MaxValue, [], "固定券第四原始参数的限制语义尚未闭合");
+        return ParseRestrictions(new(id, reinforce.Count == 1 ? EnhancementMode.Reinforce : EnhancementMode.Amplify,
+            level, chance * 100, match.Groups[3].Value == "additional", maximum, 0, byte.MaxValue, []), text);
+    }
+
+    static EnhancementDefinition ParseRestrictions(EnhancementDefinition definition, string text)
+    {
+        EnhancementDefinition Pending(string reason) => definition with { PendingRule = reason };
         foreach (string name in new[] { "enchant random", "target item id", "cooltime maintenance", "effect maintenance",
             "total usable count", "total weekly usable count", "total accumulated usable count", "use count limit all server item",
             "usable datetime", "usable first growtype", "action usable server type", "usable game server type", "usable server type",
@@ -116,8 +133,7 @@ internal sealed class EnhancementCatalog
         if (places.Count == 1 && !Regex.Matches(Value(text, places[0]), "`([^`]*)`")
             .Any(place => place.Groups[1].Value == "[village]"))
             return Pending("仅赛丽亚房间的使用限制尚未接入，不能放宽成所有Town");
-        return new(id, reinforce.Count == 1 ? EnhancementMode.Reinforce : EnhancementMode.Amplify,
-            level, chance * 100, match.Groups[3].Value == "additional", maximum, min, max, allowed.ToImmutable());
+        return definition with { MinimumItemLevel = min, MaximumItemLevel = max, AllowedItems = allowed.ToImmutable() };
     }
 
     static string Mask(string text) => Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
