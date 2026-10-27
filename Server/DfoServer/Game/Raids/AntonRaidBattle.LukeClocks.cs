@@ -18,6 +18,7 @@ internal sealed partial class AntonRaidBattle
             // 构造Battle发生在费用SQL之前；初始SET从实际提交后的激活时刻起算。
             long now = lukeClock.GetTimestamp();
             current = current with { TimerAnchors = current.Timers.Keys.ToImmutableDictionary(timer => timer, _ => now) };
+            AnchorLukePhaseLocked();
             ScheduleLukeClockLocked();
         }
     }
@@ -51,9 +52,9 @@ internal sealed partial class AntonRaidBattle
         { lease.Schedule(retryDelay); return; }
         // 正常请求可能先恢复原候选；旧退避不能继续压住下一phase的新SET。
         lease.SetRetry(null);
-        if (pendingTransition is not null || TerminalRequested(current) || current.Timers.IsEmpty)
+        if (pendingTransition is not null || TerminalRequested(current))
         { lease.Schedule(Timeout.InfiniteTimeSpan); return; }
-        TimeSpan? earliest = null;
+        TimeSpan? earliest = LukePhaseRemainingLocked();
         foreach (var timer in current.Timers)
         {
             if (!current.TimerAnchors.TryGetValue(timer.Key, out long anchor)) continue;
@@ -72,6 +73,15 @@ internal sealed partial class AntonRaidBattle
                 pendingTransition is not null || TerminalRequested(current)) return false;
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。
             var before = current;
+            if (LukePhaseDueLocked())
+            {
+                current = current with { PhaseExpired = true, Revision = current.Revision + 1,
+                    Dungeons = current.Dungeons.ToImmutableDictionary(row => row.Key, _ => RaidDungeonState.Hide),
+                    Timers = ImmutableDictionary<RaidTimer, int>.Empty,
+                    TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty,
+                    TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty };
+                return true;
+            }
             var due = current.Timers.Where(row => current.TimerAnchors.TryGetValue(row.Key, out long anchor) &&
                 lukeClock.GetElapsedTime(anchor) >= TimeSpan.FromSeconds(row.Value))
                 .Select(row => (Timer: row.Key, Generation: current.TimerGenerations.GetValueOrDefault(row.Key))).ToArray();
