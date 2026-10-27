@@ -22,6 +22,10 @@ internal static class DazzlementTowerAdmissionTests
         That(ordinaryDay.Week == previous.Week && ordinaryDay.Day == previous.Day,
             "周三06:00切日不换周");
         previous = DazzlementTowerAdmission.At(boundary.AddDays(-3));
+        Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.State(0), new byte[11], "1605 type0未入场完整11B正文");
+        Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.State(1), [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+            "1605已用资格只写offset6，不把日用量写到层进度或领奖标志");
+        Reject<InvalidDataException>(() => DfoServer.Network.Builders.DazzlementTowerPackets.State(2), "每日上限1不截断非法计数");
         Bytes(DfoServer.Network.Builders.DazzlementTowerPackets.Bindings(new(previous,
                 [new(1, 1, previous.Day, "眩惑", 0)])),
             [1, 4, 0, 0, 0, 0xD1, 0xA3, 0xBB, 0xF3, 0],
@@ -54,6 +58,9 @@ internal static class DazzlementTowerAdmissionTests
             Sql("DROP TRIGGER fail_dazzlement_entry");
             character = repo.CommitDungeonEntry(owner, character, 500, Charge(character, previous)).Character;
             var saved = repo.LoadDazzlementTower(owner);
+            That(saved.UsedToday(character.Id, previous) == 1 && saved.UsedToday(characters[1].Id, previous) == 0 &&
+                saved.UsedToday(character.Id, previous with { Day = previous.Day + 1 }) == 0 && saved.UsedToday(character.Id, next) == 0,
+                "1605日状态按角色及日周账本恢复，日切周切不造新计数");
             That(saved.Week == previous.Week && saved.Bindings is [{ Slot: 1, CharacterId: { } id }] && id == character.Id &&
                 character.DungeonState!.LastAttempt == 1 && saved.Rejection(character.Id, previous) == "dazzlement-daily-entry-exhausted",
                 "首次绑定、日资格与新尝试号同事务提交，退出或通关均不返还当日入场");

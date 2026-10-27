@@ -29,6 +29,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public DfoServer.Network.Projection.CreatureRuntimeProjection? Creatures { get; set; }
     // 每日礼盒只保存已发视图与连接时钟，不拥有角色次数。
     public DfoServer.Network.Projection.Inventory.DailyRetainedBoosterProjection? BoosterUses { get; set; }
+    public DfoServer.Network.Projection.DazzlementTowerProjection? Dazzlement { get; set; }
     // 名册请求的协议握手状态；Selected/Ready 只保存在 GameSession。
     public bool RosterRequested { get; set; }
     // 返回选角时服务端已主动推送名册；用于吞掉客户端随后重复的 C2S8，避免双重名册刷新。
