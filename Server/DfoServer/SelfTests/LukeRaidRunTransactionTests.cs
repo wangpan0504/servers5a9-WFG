@@ -52,7 +52,7 @@ internal static class LukeRaidRunTransactionTests
             var unsupported=new LukeRaidStart(raids,parties,repository,resources.Towns,items.EpicPieces,policy with {ExecutionScript=withReward},phaseClock,timers:phaseTimers);
             That(unsupported.UnavailableReason(definition)=="luke-run-reward-coordination-unavailable",
                 "Run首竖切拒自动奖励转换，领域pending单测不等于可配置线上能力");
-            var run=new LukeRaidDungeonService(raids,parties,definition.Resources!.EntryCatalog!,policy.Run!);
+            var run=new LukeRaidDungeonService(raids,parties,definition.Resources!.EntryCatalog!,policy.Run!,definition.Resources.LukeObjects);
             var service=new PartyDungeonService(parties,repository);
             var dungeons=SelfTestCatalogs.Dungeons(resources.Archive);var rooms=SelfTestCatalogs.Rooms(resources.Archive);
             var kills=SelfTestCatalogs.KillExperience(resources.Archive);
@@ -227,6 +227,7 @@ internal static class LukeRaidRunTransactionTests
                 string Persistent()=>JsonSerializer.Serialize(actors.Select(actor=>repository.LoadCharacter(actor.Owner,0)).ToArray());
                 string State()=>JsonSerializer.Serialize(sessions.Select(session=>session.Selected).ToArray());
                 var initial=State();
+                var initialRoute=battle.CaptureLukeRoute(0,dungeon,policy.Run?.FixedRoute);
                 PartyDungeonNotice[] Enter()=>service.Enter(sessions[0],(uint)dungeon,2,dungeons,rooms,null,null,null,null);
                 That(service.Enter(sessions[0],(uint)definition.Resources.Script.Phases[0].Dungeons[1].Id,2,dungeons,rooms,null,null,null,null).Length==0&&
                     sessions[0].LastFormalDungeonRejection=="luke-entry-authorization-changed"&&State()==initial&&
@@ -236,6 +237,8 @@ internal static class LukeRaidRunTransactionTests
                 Reject<SqliteException>(()=>Enter(),"首/中/末成员入图SQL失败");
                 That(State()==initial&&sessions.All(session=>session.PartyDungeon is null&&session.CurrentFormalDungeonScene() is null)&&!battle.HasPendingTransition,
                     "入图失败全员零Run/零资产，预留撤销且不丢阶段状态");
+                if(initialRoute is not null) That(battle.CaptureLukeRoute(0,dungeon,policy.Run?.FixedRoute)==initialRoute,
+                    "Fixed入图SQL失败撤销预留但保留原ordinal/HP/step");
                 Sql("DROP TRIGGER fail_luke_run");
                 var entered=Enter();That(entered.Count(n=>n.Kind==PartyDungeonNoticeKind.Entry)==4&&
                     entered.Count(n=>n.Kind==PartyDungeonNoticeKind.RaidBattleSync&&n.RaidEvent==RaidStageFactKind.EnterDungeon)==1&&entered.Length==5,
@@ -290,11 +293,15 @@ internal static class LukeRaidRunTransactionTests
                             Reject<SqliteException>(()=>Kill(),"首/中/末成员终图死亡SQL失败");
                             That(ReferenceEquals(battle.View,view)&&actors.All(actor=>!battle.HasDungeonContribution(actor,instance.Id)),
                                 "逐员SQL未全部提交前Battle零提前推进和参与");
+                            if(initialRoute is not null) That(battle.CaptureLukeRoute(0,dungeon,policy.Run?.FixedRoute)==initialRoute,
+                                "Fixed首中末成员清图SQL失败不提前推进lease/HP/step");
                             Sql("DROP TRIGGER fail_luke_clear");
                             var resumed=Kill();
                             That(resumed.Count(n=>n.Kind==PartyDungeonNoticeKind.Death)==4&&resumed.Count(n=>n.Kind==PartyDungeonNoticeKind.RaidBattleSync)==1&&
                                 battle.View.Revision==view.Revision+1&&actors.All(actor=>battle.HasDungeonContribution(actor,instance.Id)),
                                 "原PendingDeath恢复全四人后一次地图推进、四份真实事实、一次锁外广播通知");
+                            if(initialRoute is not null) That(battle.CaptureLukeRoute(0,dungeon,policy.Run?.FixedRoute) is { Step:1,ExpectedHp:2 } nextRoute &&
+                                nextRoute.MazeOrdinal==policy.Run!.FixedRoute!.Maze(dungeon,1), "Fixed原PendingDeath恢复只提交下一步一次");
                             var committed=State();var finalView=battle.View;
                             That(Kill().All(n=>n.Kind==PartyDungeonNoticeKind.RaidBattleSync)&&State()==committed&&ReferenceEquals(battle.View,finalView),
                                 "重复报告只允许当前view重同步，不重写角色或再次推进");
