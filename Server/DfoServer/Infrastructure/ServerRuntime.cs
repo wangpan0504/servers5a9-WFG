@@ -205,6 +205,12 @@ internal static class ServerRuntime
             log.Write("resource_warning", new { Source = "Luke cardset metadata", Reasons = cardSetEvidence.Issues.ToArray() });
         log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
             AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
+        lukeStartPolicy = Game.Raids.LukeResourceCompletion.Resolve(lukeStartPolicy, raidCatalog.Find(1), itemResources.Items);
+        if (lukeStartPolicy?.ResourceCompletion is not null && lukeStartPolicy.Completion is { } resourceCompletion)
+            log.Write("startup", new { Stage = "Luke resource completion policy", State = "complete", resourceCompletion.Source,
+                resourceCompletion.WeeklyClearLimit, resourceCompletion.Cycle,
+                Phases = resourceCompletion.Phases.Select((phase, index) => new { Phase = index, phase.MinimumCommittedRuns,
+                    phase.WeeklyEligibilityLimit, phase.Rewards.Offers, phase.Rewards.Result }).ToArray() });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
         var lukeTimers = lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }));
