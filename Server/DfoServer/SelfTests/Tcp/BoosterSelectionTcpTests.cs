@@ -264,6 +264,7 @@ internal static class BoosterSelectionTcpTests
         }
         RunProgressiveCategories(fixture, resources, 2);
         RunRookieBoxes();
+        RunTayberrsBoxes();
         await fixture.StopAsync();
         That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
         {
@@ -272,7 +273,7 @@ internal static class BoosterSelectionTcpTests
                 data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
                 data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'empty duplicate late rollback'.";
         }) == 1, "新兼容盒断线精确来自所注入的晚SQL故障一次");
-        That(fixture.Query("SELECT gold FROM characters ORDER BY slot") is [[12345L], [12345L], [12345L], [12345L], [12345L]], "selection does not add a gold or purchase-material fee");
+        That(fixture.Query("SELECT gold FROM characters ORDER BY slot") is [[12345L], [12345L], [12345L], [12345L], [12345L], [12345L], [12345L]], "selection does not add a gold or purchase-material fee");
         That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
         {
             using var entry = JsonDocument.Parse(line); var data = entry.RootElement;
@@ -280,6 +281,13 @@ internal static class BoosterSelectionTcpTests
                 data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
                 data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'progressive category late rollback'.";
         }) == 1, "逐项扩展盒断线精确来自晚SQL故障一次");
+        That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
+        {
+            using var entry = JsonDocument.Parse(line); var data = entry.RootElement;
+            return data.GetProperty("Kind").GetString() == "closed" &&
+                data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
+                data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'tayberrs nested rollback'.";
+        }) == 2, "泰波尔斯父盒与末级装备盒各精确命中一次晚SQL故障");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "selection database integrity");
         await RunRealTemplateSelectionsAsync(source, root, resources);
         await RunOrdinaryNativeSelectionsAsync(source, root, resources);
@@ -351,6 +359,134 @@ internal static class BoosterSelectionTcpTests
                 peer.Barrier();
                 That(entries.Count==11 && fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_slots WHERE character_id=$p0",rookie.Id) is [[11L,11L]],
                     "新秀父盒及四个子盒消耗后仅持久化完整十一件独立装备");
+            }
+        }
+        void RunTayberrsBoxes()
+        {
+            const int parentId = 490011785;
+            int[] children = [490011783, 490011826, 490011827, 490011828];
+            var entries = new Dictionary<short, byte[]>();
+            DfoServer.Game.Characters.Character role, fullRole;
+            var range = ItemSlotBoundService.Range(ItemKind.Consumable, InventorySnapshot.Empty);
+            using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            {
+                role = repo.Create(owner, new("TayberrsBox", towns.Room, towns.InitialReturn)
+                {
+                    Job = 0, Level = 95, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                    Inventory = new([new(0, Bag(3), Core(parentId)), new(0, Bag(4), Core(parentId)),
+                        new(0, Bag(5), Core(parentId)), new(0, Bag(6), Core(parentId)), new(0, Bag(120), Core(1106))], Gold: 12345)
+                });
+                fullRole = repo.Create(owner, new("TayberrsFull", towns.Room, towns.InitialReturn)
+                {
+                    Job = 0, Level = 95, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
+                    Inventory = new([new(0, Bag(3), Core(parentId)), .. Enumerable.Range(range.Start, range.End - range.Start + 1)
+                        .Select(slot => new InventoryItem(0, Bag((short)slot), Core(1106)))], Gold: 12345)
+                });
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select(fullRole.Slot); peer.Barrier();
+                string before = Snapshot();
+                SendSelect(peer, 3, [children[0]]); peer.Expect(1, 160, [0, 4, 0]); peer.Barrier();
+                That(Snapshot() == before, "806 快捷栏父盒不能借空快捷格绕过已满消耗品页，全部角色资产保持");
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select(role.Slot); peer.Barrier();
+                string before = Snapshot();
+                SendSelect(peer, 3, [1106]); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+                That(Snapshot() == before, "806 外来选项不会消费父盒、产生子盒或修改任意角色资产");
+                FailLate(peer, 3, children[0]);
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select(role.Slot); peer.Barrier();
+                for (int index = 0; index < children.Length; index++)
+                    OpenOne(peer, (short)(3 + index), parentId, children[index]);
+                FailLate(peer, 65, 101000783);
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select(role.Slot); peer.Barrier();
+                OpenOne(peer, 65, children[0], 101000783, equipment: true);
+                foreach (var (slot, child, set, equipment) in new (short, int, int, int)[]
+                {
+                    (66, 490011826, 490011888, 100150662),
+                    (67, 490011827, 490011893, 100312640),
+                    (68, 490011828, 490011895, 100344897)
+                })
+                {
+                    var setBox = OpenOne(peer, slot, child, set);
+                    OpenOne(peer, setBox.Position.Index, set, equipment, equipment: true);
+                }
+            }
+            var committed = ReadRole();
+            That(committed.Inventory.Items.Length == 5 && committed.Inventory.Gold == 12345 &&
+                committed.Inventory.Items.Single(item => item.Core.ItemId == 1106).Position == Bag(120) &&
+                committed.Inventory.Items.Select(item => item.Uid).Distinct().Count() == 5 && entries.Count == 4 &&
+                committed.Inventory.Items.All(item => item.Uid > 0) &&
+                committed.Inventory.Items.Select(item => item.Core.ItemId).Order().SequenceEqual(
+                    new[] { 1106, 101000783, 100150662, 100312640, 100344897 }.Order()),
+                "806 四条真实链只持久化四件独立装备与原哨兵，不遗留父/子/孙盒或扣金币");
+            using (var peer = Open(fixture))
+            {
+                var full = peer.Select(role.Slot)[4].Body;
+                foreach (var entry in entries)
+                    Bytes(EquipmentEntry(full, entry.Key, true), entry.Value, "806 重连逐字节恢复四件装备完整123B及原期限/实例位");
+                That(full.SequenceEqual(InventoryPackets.Full(committed.Inventory)) &&
+                    JsonSerializer.Serialize(ReadRole().Inventory) == JsonSerializer.Serialize(committed.Inventory),
+                    "806 重连恢复原实际UID和完整核心，来源记录归末级真实盒且不重建期限");
+                peer.Barrier();
+            }
+
+            DfoServer.Game.Characters.Character ReadRole()
+            {
+                using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+                return repo.List(owner).Single(saved => saved.Id == role.Id);
+            }
+            void FailLate(TcpPeer peer, short slot, int reward)
+            {
+                string before = Snapshot();
+                fixture.Sql($"CREATE TRIGGER tayberrs_nested_abort BEFORE INSERT ON inventory_audit_log WHEN NEW.character_id={role.Id} BEGIN SELECT RAISE(ABORT,'tayberrs nested rollback'); END");
+                SendSelect(peer, slot, [reward]); peer.Closed();
+                That(Snapshot() == before, "806 源与奖励已写入后的末段审计失败无成功ACK，回滚所有角色资产、UID序列与revision");
+                fixture.Sql("DROP TRIGGER tayberrs_nested_abort");
+            }
+            InventoryItem OpenOne(TcpPeer peer, short slot, int sourceId, int rewardId, bool equipment = false)
+            {
+                var before = ReadRole();
+                var sourceItem = before.Inventory.Find(Bag(slot))!;
+                That(sourceItem.Core.ItemId == sourceId && sourceItem.Core.Count == 1,
+                    "806 各级真实来源须为前一步实际获得的单个盒，不补造中间资产 " + sourceId);
+                var earliest = DateTimeOffset.UtcNow;
+                SendSelect(peer, slot, [rewardId]); ExpectAck(peer, sourceId, slot, [(rewardId, 1)]);
+                var saved = ReadRole();
+                var reward = saved.Inventory.Items.Single(item => item.Core.ItemId == rewardId);
+                var rewardTemplate = itemResources.Items.Get(rewardId);
+                var first = InventoryRewardGrantService.Create(rewardTemplate, utcNow: earliest);
+                var last = InventoryRewardGrantService.Create(rewardTemplate, utcNow: DateTimeOffset.UtcNow);
+                var nestedExpectedCore = first with { ExpireTime = reward.Core.ExpireTime };
+                if (equipment)
+                    nestedExpectedCore = nestedExpectedCore with { EpicExchangeOrigin = new(1, sourceId), Extension119 = 0x01 };
+                var expected = before.Inventory with { Items = before.Inventory.Items.Where(item => item.Position != Bag(slot))
+                    .Append(reward).OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray() };
+                That(rewardTemplate.Kind == (equipment ? ItemKind.Equipment : ItemKind.Consumable) &&
+                    reward.Core == nestedExpectedCore && reward.Core.ExpireTime >= Math.Min(first.ExpireTime, last.ExpireTime) &&
+                    reward.Core.ExpireTime <= Math.Max(first.ExpireTime, last.ExpireTime) && reward.Uid > 0 && reward.Uid != sourceItem.Uid &&
+                    reward.Avatar is null && reward.Creature is null && JsonSerializer.Serialize(saved.Inventory) == JsonSerializer.Serialize(expected) &&
+                    fixture.Query("SELECT item_uid FROM character_inventory_items WHERE item_uid=$p0", sourceItem.Uid).Length == 0,
+                    "806 单次扣源并提交真实完整核心与期限，只有末级装备记自身来源，其他资产保持 " + sourceId);
+                if (reward.Position == Bag(slot))
+                    Bytes(peer.Expect(0, 14).Body, InventoryPackets.Delta(InventorySnapshot.Empty, InventoryListType.Main, [Bag(slot)]),
+                        "806 源格复用先清旧模板");
+                var delta = peer.Expect(0, 14).Body;
+                Bytes(delta, InventoryPackets.Delta(saved.Inventory, InventoryListType.Main, [Bag(slot), reward.Position]),
+                    "806 ACK后源与奖励差量精确匹配已提交库存");
+                if (equipment) entries.Add(reward.Position.Index, EquipmentEntry(delta, reward.Position.Index));
+                peer.Barrier(); string snapshot = Snapshot();
+                SendSelect(peer, slot, [rewardId]); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+                That(Snapshot() == snapshot, "806 耗尽旧盒请求重放不重复发奖、分配UID或写审计 " + sourceId);
+                return reward;
             }
         }
         string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT revision,gold FROM characters")) +

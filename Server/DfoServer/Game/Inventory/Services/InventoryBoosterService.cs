@@ -360,11 +360,19 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                             return InventoryResult.Reject(19);
                     }
                 }
-                // 该声明只约束领取到的实例是装备；本服没有实例级“不可分解”字段，官方同款装备本身可分解，
-                // 因此不按模板 DisjointForbidden 收窄，也不猜测实例标志。
+                // 本服没有实例级“不可分解”字段，装备不按模板 DisjointForbidden 收窄，也不猜测实例标志。
+                // 仅分解声明的选择盒还可领取真实可用的自选消耗品子盒；史诗声明与特殊owner仍不可走此兼容。
                 if ((definition.SetsDisjointInstanceType || definition.SetsEpicExchangeInstanceType) &&
                     catalog.Get(id).Kind != ItemKind.Equipment)
-                    return InventoryResult.Reject(19);
+                {
+                    var childTemplate = catalog.Get(id);
+                    if (definition.SetsEpicExchangeInstanceType || definition.Selection is null ||
+                        childTemplate.Kind != ItemKind.Consumable || CurrencyWallet.RewardKind(id) is not null ||
+                        pieces.ByPiece.ContainsKey(id) || childTemplate.AcquisitionContract is not null ||
+                        childTemplate.IsPremiumService || contracts?.Recognizes(id) == true ||
+                        boosters.DirectActivationItems.Contains(id) || boosters.Get(id) is not { Available: true, Selection: not null })
+                        return InventoryResult.Reject(19);
+                }
                 if (lottery && (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
                     contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id) ||
                     catalog.Get(id).AcquisitionContract is not null ||
