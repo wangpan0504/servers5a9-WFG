@@ -17,6 +17,27 @@ namespace DfoServer.Testing;
 
 internal static partial class FormalDungeonTcpTests
 {
+    // TCP不能预知系统随机数；只接受有资源概率的单只合法提升，其余字段仍由调用方逐项核对。
+    internal static DungeonMonsterPlan ObserveChampionTypes(byte[] map, DungeonMonsterPlan expected,
+        DungeonDefinition dungeon, byte difficulty = 0)
+    {
+        That(map.Length >= 19 + expected.Monsters.Count * 22, "精英检查使用完整22B演员行");
+        int promoted = 0;
+        int percent = DungeonChampionRates.For(dungeon).Percent(difficulty);
+        var named = DungeonKillExperienceCatalog.GetNamedMonsters(dungeon);
+        var monsters = expected.Monsters.Select((actor, index) =>
+        {
+            byte type = map[19 + index * 22 + 13];
+            if (type == actor.SpawnType) return actor;
+            That(type == 1 && percent > 0 && DungeonMonsterPlan.CanBecomeChampion(actor) && !named.Contains(actor.MonsterId),
+                "线上品级只允许有资源依据的普通敌人0→1，特殊演员保持原值");
+            promoted++;
+            return actor with { SpawnType = type };
+        }).ToArray();
+        That(promoted <= 1, "线上每房至多随机提升一只，不能把整房或Boss改为精英");
+        return expected with { Monsters = monsters };
+    }
+
     // 本组验证穿脱、奖励与冷启动，经过时间由宠物专用用例推进；UTC仍用真实时间，保留期限与日期判断。
     sealed class FixedElapsedClock : TimeProvider
     {

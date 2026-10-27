@@ -553,8 +553,9 @@ internal sealed partial class GameSession
                         includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam,
                         // 伴侣行只进起始房间：客户端会让该AIC跨房间跟随，逐房间重发会每房多出一名并卡清房。
                         companionRows: map.Id == entry.StartMap.Id ? entry.CompanionMapRows : []);
-                if (entry.ChampionPercents.Length > 0)
-                    plan = plan.WithChampionRolls(entry.ChampionPercents, entry.Difficulty, RandomNumberGenerator.GetInt32);
+                if (entry.ChampionPercents.IsEnabled)
+                    plan = plan.WithChampionRolls(entry.ChampionPercents, entry.Difficulty, draw ?? RandomNumberGenerator.GetInt32,
+                        entry.NamedMonsters);
                 // 实验性（未在95客户端实证）：深渊派对房间（[seal door pos] 处换成 [seal door map index] 深渊图）抽波次。
                 if (entry.HellParty is { } hellRoom && map.Position == hellRoom.Room && map.Id == hellRoom.MapId)
                     plan = plan.WithHellWaves(rooms.ResolveHellWaves(room, entry.HellPartyMode, entry.BasisLevel, RandomNumberGenerator.GetInt32), expected.Id,

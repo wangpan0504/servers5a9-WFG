@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Persistence;
@@ -129,14 +130,19 @@ internal static class QuestAdventureSettlementTcpTests
             peer.Send(16,selection); var info = peer.Expect(0,28).Body;
             That(U32(info,0) == 9618 && info[4] == scenario.Difficulty,"山巅两入口保留副本与所选难度");
             var map = peer.Expect(0,29).Body;
+            var definition = SelfTestCatalogs.Dungeons(resources.Archive).Get(9618);
+            var maze = definition.Mazes.Single(row => row.SourceOrdinal == info[7]);
             for (byte x = 0; x < 3; x++)
             {
                 That(U32(map,14) == 655961u+x,"山巅TCP沿实际路线到达原先拒绝的第三房");
                 FormalDungeonTcpTests.Load(peer); drain(peer,null);
                 if (x == 2)
                 {
-                    That(map[18] == 6 && Enumerable.Range(0,6).All(i => map[19+22*i+13] == 0),
-                        "第三房完整生成六只普通怪，不为两个空父行发送type9");
+                    var source = DungeonMonsterPlan.Create(SelfTestCatalogs.Rooms(resources.Archive),
+                        maze.MapSpecification!.Single(row => row.Id == 655963), peer.Id, 100, definition.BasisLevel, 0);
+                    var observed = FormalDungeonTcpTests.ObserveChampionTypes(map, source, definition, scenario.Difficulty);
+                    That(map[18] == 6 && observed.Monsters.Count == 6 && observed.Monsters.All(actor => actor.SpawnType <= 1),
+                        "第三房完整生成六只普通来源怪，允许单只随机精英，不为两个空父行发送type9");
                     break;
                 }
                 foreach (int offset in Enumerable.Range(0,map[18]).Select(i => 19+22*i).Where(at => map[at+21] == 0))

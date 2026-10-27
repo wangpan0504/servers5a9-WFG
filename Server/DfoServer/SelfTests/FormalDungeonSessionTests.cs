@@ -1241,10 +1241,13 @@ internal static class FormalDungeonSessionTests
             f.Session.BeginDungeonSelection();
             var drops = global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf);
             int calls = 0;
+            bool dropping = false;
             var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
-                bound => { calls++; return 0; }) ?? throw new InvalidOperationException("FAIL 显式池准入失败");
+                bound => { if (!dropping) return bound - 1; calls++; return 0; }) ?? throw new InvalidOperationException("FAIL 显式池准入失败");
             Check(entry.Character.DungeonState!.NextObjectKey > 285 && Same(entry.Character, f.Read()),
                 "准入同事务预留完整怪物与最多一件地面key范围");
+            // 本用例保留原普通怪顺序，只核对死亡掉落随机与SQL回滚；精英另有专项覆盖。
+            dropping = true;
             f.Session.CompleteFormalDungeonLoading();
             var first = entry.Monsters.Monsters[0];
             var observation = Observation(entry, first) with
@@ -1340,6 +1343,7 @@ internal static class FormalDungeonSessionTests
             int missCalls = 0;
             var missEntry = miss.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
                 bound => { missCalls++; return bound - 1; })!;
+            missCalls = 0;
             miss.Session.CompleteFormalDungeonLoading();
             var missObservation = Observation(missEntry, missEntry.Monsters.Monsters[0]);
             Check(miss.Session.ObserveFormalDungeonDeath(missObservation, kills, growth).Drop is null && missCalls == 2 &&
@@ -1356,7 +1360,10 @@ internal static class FormalDungeonSessionTests
             full.Repository.CommitInventory(full.Owner, empty, new(empty.Inventory,
                 empty.Inventory with { Items = empty.Inventory.Items.AddRange(occupied) }, "explicit-full-bag-fixture"));
             full.SelectEntry();
-            var fullEntry = full.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items, bound => 0)!;
+            bool fullDropping = false;
+            var fullEntry = full.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, drops, itemResources.Items,
+                bound => fullDropping ? 0 : bound - 1)!;
+            fullDropping = true;
             full.Session.CompleteFormalDungeonLoading();
             var fullDeath = full.Session.ObserveFormalDungeonDeath(Observation(fullEntry, fullEntry.Monsters.Monsters[0]), kills, growth);
             var fullGround = fullDeath.Drop!;
@@ -1402,9 +1409,11 @@ internal static class FormalDungeonSessionTests
                     return monster.IsBoss ? boss : ordinary;
                 })!;
             int preparedCount = inputs.Count;
+            int championDraws = draws;
             Check(preparedCount > entry.Monsters.Monsters.Count && inputs.Values.Any(row => row.Type == 3) &&
-                inputs.Values.Select(row => row.Level).Distinct().Count() > 1 && inputs.Values.All(row => row.Difficulty == 0) && draws == 0,
-                "准入锁外为全路线各怪准备实际等级/类型/难度规则，不只为首房准备或消费掉落随机");
+                inputs.Values.Select(row => row.Level).Distinct().Count() > 1 && inputs.Values.All(row => row.Difficulty == 0) &&
+                inputs.Values.Any(row => row.Type == 1) && championDraws > 0,
+                "准入锁外先沿注入随机冻结精英，再为全路线各怪准备实际等级/类型/难度规则");
             var maps = entry.Entry.Maze.MapSpecification!;
             var receipt = f.Session.CompleteFormalDungeonLoading()!;
             int deaths = 0, seenBoss = 0;

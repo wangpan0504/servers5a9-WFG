@@ -33,7 +33,8 @@ internal static class QuestScriptedSettlementTests
                 "各职业通过实际等级与前置正常接取3151: " + job);
             That(f.Session.Travel(new(38,2,1085,249,5,38,0,0)),"真实格兰之森入口旅行");
             var quest = quests.Get(3151);
-            var opening = f.Session.EnterFormalDungeon(checked((uint)quest.DungeonIndex!.Value),3151,0,dungeons,rooms);
+            // 结算用例保持原始品级，随机精英的实际品级另有专项覆盖。
+            var opening = f.Session.EnterFormalDungeon(checked((uint)quest.DungeonIndex!.Value),3151,0,dungeons,rooms,draw: max => max - 1);
             That(opening is not null && opening.Entry.BossMap.Id == 76187 && opening.Entry.BossMap.Position == new DungeonPoint(3,1) &&
                 opening.Entry.BaseBossMap.Id == 76186,"实际3151终点是资源声明的安全层，不借用基础Boss地图");
             var entry = opening!.Entry;

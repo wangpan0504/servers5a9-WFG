@@ -174,7 +174,8 @@ internal static class MiddleQuestEntryTests
                 That(SinglePlayerDungeonRun.TryCreate(entry,1,100,route,authority,out var run,out var runReason) &&
                     authority.BindTo(run!) && run!.Snapshot.Identity.QuestId == request,
                     "完整资源与全部演员能建立原正式Run："+scenario.Quest+" "+runReason);
-                var opening = fixture.Session.EnterFormalDungeon(scenario.Dungeon,request,0,dungeons,rooms);
+                // 本组逐项核对原始资源演员；随机精英由专门的规划与Session用例覆盖。
+                var opening = fixture.Session.EnterFormalDungeon(scenario.Dungeon,request,0,dungeons,rooms,draw: max => max - 1);
                 That(opening is not null,"完整生产Session入场不得删除后续演员或替换地图："+scenario.Quest);
                 var opened = opening!;
                 CheckBinding(opened.Entry,before,accepted,scenario,request);

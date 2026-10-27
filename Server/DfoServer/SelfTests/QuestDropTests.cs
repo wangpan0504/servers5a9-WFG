@@ -139,9 +139,12 @@ internal static class QuestDropTests
                 That(f.Session.ChangeQuest(id,QuestLifecycleAction.Accept,catalog,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,"任务掉落正常接取并保留独立身份");
             That(f.Session.Travel(new(38,2,1085,249,5,38,0,0)),"掉落测试进入实际副本入口");
             int draws = 0;
+            bool dropping = false;
             That(f.Session.EnterFormalDungeon(3,3145,0,dungeons,rooms,drops,items.Items,Draw,items.EpicPieces) is not null,"任务所需物品在入场规划中装载");
             var receipt = f.Session.CompleteFormalDungeonLoading()!;
-            var monster = receipt.Monsters.Monsters.First(monster => monster.IsBlocking && monster.MonsterId == 1);
+            // 本例固定不提升精英，只计普通怪死亡后的掉落随机。
+            dropping = true;
+            var monster = receipt.Monsters.Monsters.First(monster => monster.IsBlocking && monster.MonsterId == 1 && monster.SpawnType == 0);
             var observation = FormalDungeonSessionTests.Observation(receipt,monster);
             var online = f.Session.Selected!; var previous = f.Read();
             if (lost) Reject<IOException>(() => Observe(),"任务物品和死亡经验已提交但返回丢失");
@@ -183,7 +186,7 @@ internal static class QuestDropTests
             f.Session.ReturnFromFormalDungeon(); f.Session.ReturnToRoster(); f.Session.Select(0); f.Session.MarkReady();
             That(f.Session.Selected!.Inventory.Items.Single(item => item.Core.ItemId == 10165055).Uid == actual.Inventory.Items.Single(item => item.Core.ItemId == 10165055).Uid &&
                 f.Session.Selected.ActiveMainQuests.Single(row => row.QuestId == 29987).ConditionState == 0,"重登恢复同一任务物品UID和实际寻物状态");
-            int Draw(int limit) { if (limit == 100) draws++; return 0; }
+            int Draw(int limit) { if (!dropping) return limit - 1; if (limit == 100) draws++; return 0; }
             FormalDungeonDeathResult Observe() => f.Session.ObserveFormalDungeonDeath(observation,kills,growth);
         }
         foreach (bool lost in new[] {false,true})

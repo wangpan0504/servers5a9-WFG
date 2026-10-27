@@ -268,7 +268,8 @@ internal static class MetroQuestEntryCoverageTests
                     "显式与普通0复用同一原接取路线：" + row.Quest.Id);
                 first ??= plan;
                 var expected = CompletePlans(plan!, before.DungeonState!.NextObjectKey);
-                var opened = f.Session.EnterFormalDungeon(row.Dungeon, request, 0, dungeons, rooms);
+                // 保持原始演员形状的确定性；精英提升另由专项覆盖。
+                var opened = f.Session.EnterFormalDungeon(row.Dungeon, request, 0, dungeons, rooms, draw: max => max - 1);
                 That(opened is not null, $"生产Session完整资源准备并入场：{row.Quest.Id}/{request}");
                 Binding(opened!.Entry, before, row, routeQuest, request, "installed", reason);
                 That(opened.Entry.CharacterRevision == before.Revision + 1 && opened.Generation == f.Owner.Generation &&

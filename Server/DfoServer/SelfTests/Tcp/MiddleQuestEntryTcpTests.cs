@@ -73,6 +73,7 @@ internal static class MiddleQuestEntryTcpTests
                 var expected = DungeonMonsterPlan.Create(rooms,start,peer.Id,100,dungeons.Get(checked((int)scenario.Dungeon)).BasisLevel,0);
                 That(map[18] == expected.Monsters.Count+expected.SpecialObjects.Count,
                     "入场29完整包含资源声明的起点演员，不删友方或特殊对象："+scenario.Quest);
+                expected = FormalDungeonTcpTests.ObserveChampionTypes(map, expected, dungeons.Get(checked((int)scenario.Dungeon)));
                 for (int at = 0; at < expected.Monsters.Count; at++)
                 {
                     var actor = expected.Monsters[at];

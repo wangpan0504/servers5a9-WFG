@@ -143,6 +143,28 @@ internal static partial class PartyDungeonTcpTests
             }
             var point = new DungeonPoint(map[0], map[1]);
             visited.Add(point);
+            if (map.Length > 18)
+            {
+                int actualMapId = checked((int)U32(map, 14));
+                var actualMap = new DungeonMap("map", point, actualMapId,
+                    SelfTestCatalogs.Dungeons(resources.Archive).MapPath(actualMapId) ??
+                    throw new InvalidDataException("线上地图缺少PVF路径"));
+                var roomSource = SelfTestCatalogs.Rooms(resources.Archive).Get(actualMap, requirePassiveDefinitions: false);
+                int promoted = 0;
+                foreach (int offset in Enumerable.Range(0, map[18]).Select(i => 19 + i * 22)
+                    .Where(i => map[i + 13] < 5 && map[i + 14] == 0))
+                {
+                    var sourceMonster = roomSource.Monsters[checked((int)U32(map, offset + 2))];
+                    if (sourceMonster.RankKind == "[normal]")
+                    {
+                        That(map[offset + 13] <= 1, "组队普通怪只能保持普通或提升为精英，不能变成超级精英或Boss");
+                        if (map[offset + 13] == 1) promoted++;
+                    }
+                    else if (sourceMonster.RankKind == "[boss]")
+                        That(map[offset + 13] == 3, "普通组队Boss保持原生类型3");
+                }
+                That(promoted <= 1, "真实TCP共享地图每房最多一只随机增益怪，全员沿同一冻结演员完成击杀");
+            }
             bool boss = false;
             if (map.Length > 18)
             foreach (int offset in Enumerable.Range(0, map[18]).Select(i => 19 + i * 22)

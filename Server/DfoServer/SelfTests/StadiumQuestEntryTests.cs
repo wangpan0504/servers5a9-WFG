@@ -58,7 +58,7 @@ internal static class StadiumQuestEntryTests
                 }
                 // 两端职业正式Session走完显式和普通0；其余职业覆盖同资源准入及完整规划。
                 if (job is not (0 or 15)) continue;
-                var opened = f.Session.EnterFormalDungeon(9609,request,0,dungeons,rooms)
+                var opened = f.Session.EnterFormalDungeon(9609,request,0,dungeons,rooms,draw: _ => 0)
                     ?? throw new InvalidOperationException("中央竞技场正式入场失败");
                 That(opened.Entry.RouteQuestId == 6304 && opened.Entry.QuestId == request &&
                     opened.Snapshot.Identity.InstanceId != Guid.Empty,"正式入场保留原路线及实际请求身份");
@@ -71,6 +71,7 @@ internal static class StadiumQuestEntryTests
                         "沿实际五房路线加载，不直接跳末房");
                     if (x == 4)
                     {
+                        CheckTerminal(receipt.Entry with { StartMap = receipt.Snapshot.CurrentMap }, receipt.Monsters);
                         CheckTerminal(receipt.Entry,receipt.Monsters);
                     }
                     if (x == 4 && job == 15)
@@ -120,7 +121,7 @@ internal static class StadiumQuestEntryTests
     static void CheckTerminal(DungeonEntryPlan entry,DungeonMonsterPlan plan)
     {
         That(plan.Monsters is [
-            {MonsterId:109008549,SourceOrdinal:0,SpawnType:0,IsBlocking:true,CanReportDeath:true,IsBoss:false},
+            {MonsterId:109008549,SourceOrdinal:0,SpawnType:0,IsBlocking:true,CanReportDeath:true,IsBoss:false,Source.ChampionRestricted:true},
             {MonsterId:63821,SourceOrdinal:1,SpawnType:3,Team:100,IsFriendly:false,IsBlocking:false,CanReportDeath:false,IsBoss:false,IsScriptedBoss:false}],
             "真敌与显示控制演员完整保留，显示品级仍3且不冒充dummy或战斗Boss");
         That(plan.Monsters[1].Source!.IsDisplayHuntDummy,"显示标记由原资源精确派生");

@@ -20,6 +20,15 @@ internal static class DungeonMonsterPacketsTests
         var entry = new DungeonEntryPlan(99,0,3,0,byte.MaxValue,0,maze,map,map);
         var source = new DungeonRoomMonster(1034,[1034,0,20,993,421,0,1,1],"[fixed]","[normal]","monster/fixture.mob");
         var room = new DungeonRoomDefinition(map,[source,source,source,source],[],[],[100,0,7,-1]);
+        var championPlan = DungeonMonsterPlan.FromRoom(room, 99, 10, playerTeam: 0).WithChampionRolls(new(100, 100, 100, 100), 0, _ => 0);
+        foreach (var payload in new[] { DungeonMapPayload.Build, DungeonMapPayload.Refresh })
+        {
+            byte[] body = DungeonPackets.StartMap(entry, championPlan, 803, payload: payload);
+            Bytes(body.AsSpan(19, 22), [0,0,0,0,0,0,10,0,10,4,0,0,20,1,0,0,255,0,0,0,0,0],
+                "随机精英沿22B行offset13投影类型1，Build与Refresh不增加伪造词条字段");
+            That(body[32] == 1 && body[54] == 0 && body[76] == 0 && body[98] == 0,
+                "线上精英类型与冻结规划一致，其余怪物保持类型0");
+        }
         foreach (var (team, flags) in new (int? Team, byte[] Flags)[]
         {
             (0,[0,1,0,0]), (7,[0,0,1,0]), (null,[0,0,0,0])

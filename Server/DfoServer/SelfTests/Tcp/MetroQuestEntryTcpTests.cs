@@ -400,7 +400,7 @@ internal static class MetroQuestEntryTcpTests
                 for (int at = 0; at < path.Length; at++)
                 {
                     var plan = plans.Single(row => row.Room.Map.Position == path[at]);
-                    Actors(peer, map, plan, id);
+                    Actors(peer, map, plan, id, definition);
                     That(string.Join(",", plan.Monsters.GroupBy(actor => actor.MonsterId).OrderBy(group => group.Key)
                             .Select(group => group.Key + ":" + group.Count())) == groups[at] &&
                         plan.Monsters.All(actor => actor.AiCharacter is null && actor.CandidateLevel == definition.BasisLevel &&
@@ -607,7 +607,7 @@ internal static class MetroQuestEntryTcpTests
                 for (byte x=0;x<5;x++)
                 {
                     var plan=plans.Single(row=>row.Room.Map.Id==655510+x);
-                    Actors(peer,map,plan,6304);
+                    Actors(peer,map,plan,6304,dungeons.Get(9609));
                     FormalDungeonTcpTests.Load(peer); Drain();
                     if (x==4)
                     {
@@ -731,7 +731,7 @@ internal static class MetroQuestEntryTcpTests
                     for (int at = 0; at < path.Length; at++)
                     {
                         var plan = plans.Single(row => row.Room.Map.Position == path[at]);
-                        Actors(peer, map, plan, scenario.Quest);
+                        Actors(peer, map, plan, scenario.Quest, dungeons.Get(313));
                         That(string.Join(",", plan.Monsters.Where(row => row.AiCharacter is null).GroupBy(row => row.MonsterId).OrderBy(group => group.Key)
                                 .Select(group => group.Key + ":" + group.Count())) == scenario.Groups[at] &&
                             plan.Monsters.Where(row => row.AiCharacter is null).All(row => row.Source is { SpecialChild: null, ScriptedRetirement: false } &&
@@ -891,7 +891,7 @@ internal static class MetroQuestEntryTcpTests
                         _ => plan.Monsters.Count == 0
                     }), "独立核对八图演员：起点友方16802、两房各五个65709、终点友方74657，其余无怪");
                     if (at == path.Length - 1) removed = 0;
-                    Actors(peer, map, plan, id); FormalDungeonTcpTests.Load(peer); Drain();
+                    Actors(peer, map, plan, id, dungeons.Get(313)); FormalDungeonTcpTests.Load(peer); Drain();
                     That(enabled == 0 && bossChecks == 0 && Scalar(peer.Id, id) == 1 && Identity(peer.Id, id) == acceptance,
                         "加载及前房战斗不代替演出终末，也不提前开放结算");
                     if (at == 0)
@@ -923,7 +923,7 @@ internal static class MetroQuestEntryTcpTests
                 var boss = layer.Monsters.Single(row => row.MonsterId == 75100);
                 That(boss is { IsBoss: true, IsScriptedBoss: true, CanReportDeath: true } &&
                     layer.Room.DeclaredType == "[boss]", "实际末层保留原75100及三件地面物品");
-                map = MoveMap(peer, path[^1], 1); Actors(peer, map, layer, id);
+                map = MoveMap(peer, path[^1], 1); Actors(peer, map, layer, id, dungeons.Get(313));
                 // 实收包序45→1425→33→37→39；1425没有已确认ACK，不能靠它伪造终末或死亡。
                 peer.Send(1425, [0x2F, 0x0B]);
                 SendCondition(0); peer.Expect(1, 33, [1, (byte)id, (byte)(id >> 8), 0, 0, 0, 0]); Drain();
@@ -1046,7 +1046,7 @@ internal static class MetroQuestEntryTcpTests
                     for (int at = 0; at < path.Length; at++)
                     {
                         var plan = plans.Single(row => row.Room.Map.Position == path[at]);
-                        Actors(peer, map, plan, scenario.Quest);
+                        Actors(peer, map, plan, scenario.Quest, dungeons.Get(checked((int)scenario.Dungeon)));
                         if (!bell)
                             That(string.Join(",", plan.Monsters.Where(row => row.AiCharacter is null && !row.IsBoss)
                                     .GroupBy(row => row.MonsterId).OrderBy(group => group.Key).Select(group => group.Key + ":" + group.Count())) == normalGroups[at] &&
@@ -1317,7 +1317,7 @@ internal static class MetroQuestEntryTcpTests
                     for (int at = 0; at < path.Length; at++)
                     {
                         var plan = plans.Single(row => row.Room.Map.Position == path[at]);
-                        Actors(peer, map, plan, scenario.Quest);
+                        Actors(peer, map, plan, scenario.Quest, dungeons.Get(313));
                         FormalDungeonTcpTests.Load(peer); Drain();
                         foreach (var actor in plan.Monsters.Where(row => row.CanReportDeath && !row.IsBoss)) Kill(actor, plan.Room.Map.Id);
                         That(Materials(10164785).Length == 0 && Materials(10164814).Length == 0 &&
@@ -1889,7 +1889,7 @@ internal static class MetroQuestEntryTcpTests
                 {
                     current = maze.MapSpecification!.Single(row => row.Position == path[index]);
                     var actors = plans.Single(plan => plan.Room.Map == current);
-                    Actors(peer, map, actors, id);
+                    Actors(peer, map, actors, id, dungeons.Get(checked((int)dungeon)));
                     FormalDungeonTcpTests.Load(peer); Drain();
                     if (index == path.Length - 1) break;
                     foreach (var actor in actors.Monsters.Where(actor => actor.IsBlocking))
@@ -1907,7 +1907,7 @@ internal static class MetroQuestEntryTcpTests
                     // 首次kind1沿当前基础房原声明进入叠层，不需要先杀基础dummy，也不提前杀末层Boss。
                     map = MoveMap(peer, destination, 1);
                     var expectedLayer = plans.Single(plan => plan.Room.Map.Id == layer && plan.Room.Map.Position == destination);
-                    Actors(peer, map, expectedLayer, id);
+                    Actors(peer, map, expectedLayer, id, dungeons.Get(checked((int)dungeon)));
                     That(map[2] == 1 && U32(map, 14) == layer, "7958真实kind1下发655667及完整原演员");
                     FormalDungeonTcpTests.Load(peer); Drain();
                 }
@@ -1995,7 +1995,7 @@ internal static class MetroQuestEntryTcpTests
                 var expected = Plans(maze, peer.Id, next, dungeons.Get(checked((int)dungeon)).BasisLevel)
                     .Single(plan => plan.Room.Map.Position == maze.Starts.Single());
                 var map = Enter(peer, connection, dungeon, request, maze);
-                Actors(peer, map, expected, connection);
+                Actors(peer, map, expected, connection, dungeons.Get(checked((int)dungeon)));
                 FormalDungeonTcpTests.Load(peer); peer.Barrier();
                 That(QuestState(peer.Id) == accepted && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id)
                         is [[long saved]] && saved == ++attempt, "每次16建立独立尝试且保留全部原任务身份：" + connection);
@@ -2194,11 +2194,12 @@ internal static class MetroQuestEntryTcpTests
         return peer.Expect(0, 29).Body;
     }
 
-    static void Actors(TcpPeer peer, byte[] map, DungeonMonsterPlan expected, ushort quest)
+    static void Actors(TcpPeer peer, byte[] map, DungeonMonsterPlan expected, ushort quest, DungeonDefinition dungeon)
     {
         That(map.Length >= 23 && map[0] == expected.Room.Map.Position.X && map[1] == expected.Room.Map.Position.Y &&
             U32(map, 14) == expected.Room.Map.Id && map[18] == expected.Monsters.Count + expected.SpecialObjects.Count,
             "真实29保留完整原房间与全部演员数量：" + quest);
+        expected = FormalDungeonTcpTests.ObserveChampionTypes(map, expected, dungeon);
         for (int at = 0; at < expected.Monsters.Count; at++)
         {
             int offset = 19 + 22 * at; var actor = expected.Monsters[at];

@@ -87,6 +87,7 @@ internal static class QuestCounterattackEntryTcpTests
             That(map.Length >= 19 && map[0] == 0 && map[1] == 0 && U32(map,14) == 92463 &&
                 map[18] == expected.Monsters.Count + expected.SpecialObjects.Count && map.Length >= 19+22*map[18],
                 "NOTI29从92463入场且完整保留起点演员");
+            expected = FormalDungeonTcpTests.ObserveChampionTypes(map, expected, definition);
             for (int index = 0; index < expected.Monsters.Count; index++)
             {
                 var actor = expected.Monsters[index];

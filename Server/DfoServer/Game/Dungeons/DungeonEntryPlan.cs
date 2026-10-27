@@ -95,8 +95,8 @@ internal sealed record DungeonEntryPlan(
     public ImmutableArray<ActiveMainQuest> QuestAcceptances { get; init; } = [];
     public float ExperienceWeight { get; init; } = 1;
     public IReadOnlyList<int> NamedMonsters { get; init; } = Array.Empty<int>();
-    // 断头谷 [champion] 后四项：难度 0–3 把普通怪升为精英的百分比。其它副本保持 0，不改已有生成。
-    public int[] ChampionPercents { get; init; } = [];
+    // 普通副本 [champion] 后四项：难度 0–3 的每房随机精英百分比；更高难度沿用末项。
+    public DungeonChampionRates ChampionPercents { get; init; }
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
@@ -617,7 +617,8 @@ internal sealed record DungeonEntryPlan(
                 { "tower of death" => "dead tower", "advance altar" => "advanced altar", null or "" => "dungeon", var module => module },
             ExperienceWeight = DungeonKillExperienceCatalog.GetDungeonWeight(definition),
             NamedMonsters = DungeonKillExperienceCatalog.GetNamedMonsters(definition),
-            ChampionPercents = DungeonChampionRates.For(definition),
+            ChampionPercents = practice || raid is not null || tagEvildom is not null || hope is not null
+                ? default : DungeonChampionRates.For(definition),
             IndividualMapMovement = definition.IndividualMapMovement,
             IsQuestReplay = isReplay,
             IsPractice = practice,

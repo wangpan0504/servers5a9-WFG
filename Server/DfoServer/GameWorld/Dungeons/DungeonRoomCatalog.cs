@@ -7,6 +7,8 @@ internal sealed record DungeonRoomMonster(int MonsterId, IReadOnlyList<int> RawV
 {
     public int? Team { get; init; }
     public bool ScriptedRetirement { get; init; }
+    // MOB禁止强化或命名演员声明只限制随机提升，不覆盖MAP显式品级。
+    public bool ChampionRestricted { get; init; }
     // monster 内 [NPC] 的原整数；缺省与显式0/-1不同，不将它猜为NPC编号或生成资格。
     public int? NpcParameter { get; init; }
     // 冠军/命名品级的附加数量独立于八整数；当前只恢复空附加集合，不截断未知正数量。
@@ -111,6 +113,17 @@ internal sealed class DungeonRoomCatalog
         var tokens = archive.ReadTokens(path);
         var room = ParseResource(map with { Path = path }, tokens, archive.ResolveString, monsters, passiveObjects, archive.Contains,
             requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
+        // 只读本房引用的MOB，同模板在本次操作内只解析一次；限制随资源行冻结，不另建全局缓存。
+        var restrictions = new Dictionary<int, bool>();
+        room = room with { Monsters = Array.AsReadOnly(room.Monsters.Select(monster =>
+        {
+            if (!restrictions.TryGetValue(monster.MonsterId, out bool restricted))
+            {
+                restricted = ParseChampionRestriction(archive.ReadTokens(monster.Path), archive.ResolveString);
+                restrictions.Add(monster.MonsterId, restricted);
+            }
+            return monster with { ChampionRestricted = restricted };
+        }).ToArray()) };
         if (room.AltarWaves is { } altar)
             foreach (int ordinal in altar.Phases.Select(phase => phase.MonsterOrdinal).Distinct())
             {
@@ -126,6 +139,22 @@ internal sealed class DungeonRoomCatalog
             BossDeathLayerChange = room.Map.Kind == "boss" ? ReadBossCinematic(room,tokens,false) : null,
             StartCinematicBossDestroy = room.Map.Kind == "layered" ? ReadBossCinematic(room,tokens,true) : null
         };
+    }
+
+    internal static bool ParseChampionRestriction(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
+    {
+        int seen = 0;
+        for (int at = 0; at < tokens.Count; at++)
+        {
+            if (tokens[at].Type != 3) continue;
+            int flag = resolve(tokens[at].Value) switch { "[no champion]" => 1, "[is named monster]" => 2, _ => 0 };
+            if (flag == 0) continue;
+            // 缺值、重复和未知形状不阻断原演员，只禁止本次随机强化。
+            if ((seen & flag) != 0 || at + 1 >= tokens.Count || tokens[at + 1] is not { Type: 0, Value: 0 } ||
+                at + 2 < tokens.Count && tokens[at + 2].Type != 3) return true;
+            seen |= flag;
+        }
+        return false;
     }
 
     DungeonCinematicBossEvidence? ReadBossCinematic(DungeonRoomDefinition room,IReadOnlyList<PvfToken> tokens,bool destroy)
