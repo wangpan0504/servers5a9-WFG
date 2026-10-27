@@ -15,6 +15,16 @@ namespace DfoServer.Development;
 
 internal static partial class DevelopmentGm
 {
+    internal static string QueryCharacterScore(ICharacterRepository repository, AccountOwners owners, GameSession? session,
+        DevelopmentRequest request, Func<CharacterInvestmentSnapshot, CharacterInvestmentResult> calculate)
+    {
+        request.Validate();
+        if (request.Action != DevelopmentAction.CharacterScore) throw new InvalidDataException("角色评分命令不符");
+        var snapshot = Target(session, owners, repository, request, false,
+            (_, character) => CharacterInvestmentScore.Capture(character, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        return Ok(calculate(snapshot));
+    }
+
     public const string Written = " 已写入。服务端通行校验立即使用新等级和任务。客户端回到选角并再次进入后刷新画面。属性块仍是匹配职业的初始值。";
     public static string Answer(string line, string defaultAccount, ICharacterRepository repository, AccountOwners owners, Func<string, GameSession?> find,
         MailboxService? mailbox = null, ItemCatalog? items = null, CharacterProgressReset? progress = null,
@@ -51,6 +61,28 @@ internal static partial class DevelopmentGm
                 return ExecuteEquipmentSlots(repository, owners, find(request.Account), request);
             if (request.Action == DevelopmentAction.Appearance)
                 return DescribeAppearance(repository, owners, find(request.Account), request);
+            if (request.Action == DevelopmentAction.CharacterScore)
+            {
+                var resources = catalog?.Resources ?? throw new InvalidDataException("角色建设评分目录未装配");
+                var metadata = resources.CharacterInvestmentMetadata;
+                return QueryCharacterScore(repository, owners, find(request.Account), request, snapshot =>
+                    CharacterInvestmentScore.Calculate(snapshot, resources.Items.Get,
+                    (card, index, kind, slot) =>
+                    {
+                        var definition = metadata.ReadEnchantment(card, index);
+                        return definition.ValidIndex && definition.Targets.Contains((kind, slot));
+                    },
+                    metadata.ValidateRandomTitle, metadata.ReadSet, resources.Items.Talisman, resources.Items.Rune,
+                    resources.CollectBoxes.Get, (item, type) =>
+                    {
+                        var original = resources.RandomOptions.Resolve(item);
+                        if (original?.Pools.Any(pool => pool.Groups.Any(group => group.Any(option => option.Type == type && option.Weight > 0))) == true)
+                            return true;
+                        var changed = resources.RandomOptions.ResolveChange(item);
+                        return changed?.Types.Any(row => row.Weight > 0 && row.Groups.Any(group => group.Weight > 0 &&
+                            group.Options.Any(option => option.Type == type && option.Weight > 0))) == true;
+                    }));
+            }
             if (request.Action == DevelopmentAction.EquipmentScore)
             {
                 var snapshot = Target(find(request.Account), owners, repository, request, false,
