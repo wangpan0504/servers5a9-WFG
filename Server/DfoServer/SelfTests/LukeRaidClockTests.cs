@@ -105,6 +105,8 @@ internal static class LukeRaidClockTests
             foreach (var actor in actors) battle.DetachStart(actor);
         }
         finally { faultService.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        PhaseTimeout(actors);
+        PhaseReservedOperations(actors);
         RecipientFailure(actors);
         Shutdown(actors);
         Console.WriteLine($"Luke raid clocks: {Count - before} assertions passed");
@@ -115,6 +117,110 @@ internal static class LukeRaidClockTests
             foreach (var actor in actors) That(result.JoinStart(actor), "定时实例只引用当前原成员");
             return result;
         }
+    }
+
+    static void PhaseReservedOperations(RaidActor[] actors)
+    {
+        foreach (bool commit in new[] { false, true })
+        {
+            var clock = new Clock(); var store = new Store();
+            var service = new LukeRaidClocks(clock, store, (_, _) => { }, 1);
+            try
+            {
+                var script = AntonRaidBattleTests.Script(10, 20);
+                script = script with { Phases = script.Phases.SetItem(0, script.Phases[0] with
+                    { Dungeons = script.Phases[0].Dungeons.Add(script.Phases[0].Dungeons[0] with { Id = 11 }) }) };
+                var battle = new AntonRaidBattle(script, kind: RaidKind.Luke,
+                    clock: clock, revival: new("fixture/revival"), phaseTimeout: new("fixture/local-seconds", [5, 5]));
+                foreach (var actor in actors) That(battle.JoinStart(actor), "跨deadline预留登记原成员");
+                using var timer = service.Reserve(battle)!; timer.Activate();
+                var run = Guid.NewGuid();
+                var rows = actors.Take(4).Select(actor => (Actor: actor,
+                    Identity: new Game.Dungeons.DungeonRunIdentity(actor.Character, 0, 1, run, 1))).ToArray();
+                using var entry = battle.ReserveDungeon(new(battle.Instance, 0, 1, RaidKind.Luke), 10, rows)!;
+                entry.Install();
+                using var revival = battle.ReserveLukeRevival(rows[0].Actor, rows[0].Identity, 1)!;
+                var lateRun = Guid.NewGuid();
+                var late = actors.Skip(4).Select(actor => (Actor: actor,
+                    Identity: new Game.Dungeons.DungeonRunIdentity(actor.Character, 0, 1, lateRun, 1))).ToArray();
+                using var pending = battle.ReserveDungeon(new(battle.Instance, 0, 2, RaidKind.Luke), 11, late);
+                That(pending is not null && revival is not null, "两队分别持截止前入场/复活预留");
+                clock.Advance(5);
+                if (commit) { pending!.Install(); revival!.Commit(); revival.Commit(); }
+                else { pending!.Dispose(); revival!.Dispose(); }
+                foreach (var row in late) battle.ReleaseDungeon(row.Actor, lateRun);
+                foreach (var row in rows) battle.ReleaseDungeon(row.Actor, run);
+                That(battle.View.PhaseExpired && !battle.HasPendingTransition && store.Calls == 0 &&
+                    battle.ReserveLukeRevival(rows[0].Actor, rows[0].Identity, 2) is null,
+                    "截止前复活预留成功/失败均可收尾，重复确认不奖励，新复活拒绝");
+                foreach (var actor in actors) battle.DetachStart(actor);
+                var next = new AntonRaidBattle(AntonRaidBattleTests.Script(10, 20), kind: RaidKind.Luke);
+                foreach (var actor in actors) next.JoinStart(actor);
+                using var nextLease = service.Reserve(next);
+                That(nextLease is not null, "失败团最后原成员离开释放容量，不伪装自动重开");
+            }
+            finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        }
+    }
+
+    static void PhaseTimeout(RaidActor[] actors)
+    {
+        var clock = new Clock(); var store = new Store();
+        var service = new LukeRaidClocks(clock, store, (_, _) => { });
+        try
+        {
+            var battle = new AntonRaidBattle(AntonRaidBattleTests.Script(10, 20), kind: RaidKind.Luke,
+                clock: clock, phaseTimeout: new("fixture/local-phase-seconds", [10, 20]));
+            foreach (var actor in actors) That(battle.JoinStart(actor), "阶段时钟登记原成员");
+            using var timer = service.Reserve(battle)!;
+            clock.Advance(100);
+            That(battle.View.PhaseClockGeneration == 0 && !battle.View.PhaseExpired, "费用SQL前没有phase锚点");
+            timer.Activate();
+            That(battle.View.Timers.IsEmpty && battle.LukePhaseSeconds(battle.Instance, 0, 1) == 10,
+                "无DGN计时器也按实际Activate启动阶段deadline");
+            clock.Advance(9);
+            battle.Publish(battle.View);
+            That(battle.LukePhaseSeconds(battle.Instance, 0, 1) == 1, "广播不续期，返回实际剩余而非总时长");
+            clock.AdvanceWithoutCallbacks(1);
+            That(battle.SetMechanism(battle.Instance, battle.View.Revision, "[hp]", 0) is null,
+                "调度延迟时机制入口也在deadline拒绝，不抢先封存成功");
+            clock.FireQueued();
+            That(battle.View.PhaseExpired && battle.View.State == AntonRaidBattleState.Fighting &&
+                battle.View.Dungeons.Values.All(value => value == RaidDungeonState.Hide), "失败独立标记并封图，不猜原生state");
+            That(store.Calls == 0 && battle.PendingLukeSettlement() is null && !battle.HasPendingTransition,
+                "超时不调用奖励SQL，也不等待成功receipt屏障");
+            That(battle.LukePhaseSeconds(battle.Instance, 0, 1) is null, "已失败代不再发布597");
+            var expired = battle.View; clock.Advance(100);
+            That(ReferenceEquals(expired, battle.View), "重复时钟不会再次超时或推进阶段");
+        }
+        finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+
+        var retryClock = new Clock(); var retryStore = new Store { Failures = 2 };
+        var retryService = new LukeRaidClocks(retryClock, retryStore, (_, _) => { });
+        try
+        {
+            var battle = new AntonRaidBattle(Script(true), kind: RaidKind.Luke, completion: Completion(),
+                clock: retryClock, phaseTimeout: new("fixture/local-phase-seconds", [6, 20]));
+            foreach (var actor in actors) That(battle.JoinStart(actor), "成功先封存场景登记原成员");
+            using var timer = retryService.Reserve(battle)!; timer.Activate(); retryClock.Advance(5);
+            var pending = battle.PendingLukeSettlement(); retryClock.Advance(1);
+            That(pending is not null && ReferenceEquals(pending, battle.PendingLukeSettlement()) && !battle.View.PhaseExpired,
+                "成功已封存，SQL重试跨阶段deadline不得倒退为失败");
+            retryClock.Advance(2);
+            That(battle.View.State == AntonRaidBattleState.Reward && !battle.View.PhaseExpired, "同候选成功后进入Reward");
+            var candidate = retryStore.Seen[0];
+            foreach (var actor in actors)
+                battle.ConfirmReward(actor, new(battle.Instance, 0, 0, 1, actor.Character, candidate.Policy.Rewards.Source,
+                    [new(100, 1)], false, candidate.Week) { RaidType = RaidKind.Luke });
+            That(battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision)?.After.Phase == 1 &&
+                battle.LukePhaseSeconds(battle.Instance, 1, 2) == 20, "实际P2Initialize提交才建立第二阶段锚点");
+            retryClock.FireQueued();
+            That(!battle.View.PhaseExpired && battle.LukePhaseSeconds(battle.Instance, 0, 1) is null,
+                "旧回调与旧phase不能提前结束或显示新阶段");
+            retryClock.Advance(20);
+            That(battle.View.PhaseExpired && retryStore.Calls == 3, "P2没有PhaseEnd规则仍走独立本服失败，不新增奖励SQL");
+        }
+        finally { retryService.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     }
 
     static void RecipientFailure(RaidActor[] actors)
@@ -227,32 +333,40 @@ internal static class LukeRaidClockTests
         }
     }
 
-    sealed class Clock : TimeProvider
+    internal sealed class Clock(DateTimeOffset? origin = null) : TimeProvider
     {
         readonly List<Timer> timers = [];
+        readonly object gate = new();
         long stamp;
         internal int Callbacks;
         public override long TimestampFrequency => 1000;
-        public override long GetTimestamp() => stamp;
-        public override DateTimeOffset GetUtcNow() => DateTimeOffset.Parse("2026-10-25T00:00:00Z").AddMilliseconds(stamp);
+        public override long GetTimestamp() { lock (gate) return stamp; }
+        public override DateTimeOffset GetUtcNow() => (origin ?? DateTimeOffset.Parse("2026-10-25T00:00:00Z")).AddMilliseconds(GetTimestamp());
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            var timer = new Timer(this, callback, state); timers.Add(timer); timer.Change(dueTime, period); return timer;
+            var timer = new Timer(this, callback, state); lock (gate) timers.Add(timer); timer.Change(dueTime, period); return timer;
         }
+        internal void AdvanceWithoutCallbacks(int seconds) { lock (gate) stamp += seconds * 1000L; }
         internal void Advance(int seconds)
         {
-            stamp += seconds * 1000L;
+            AdvanceWithoutCallbacks(seconds);
             for (int count = 0; count < 128; count++)
             {
-                var next = timers.FirstOrDefault(timer => !timer.Stopped && timer.Due <= stamp);
-                if (next is null) return;
-                next.Due = long.MaxValue; Callbacks++; next.Callback(next.State);
+                Timer? next;
+                lock (gate)
+                {
+                    next = timers.FirstOrDefault(timer => !timer.Stopped && timer.Due <= stamp);
+                    if (next is null) return;
+                    next.Due = long.MaxValue; Callbacks++;
+                }
+                next.Callback(next.State);
             }
             throw new InvalidOperationException("clock fixture exceeded bounded callbacks");
         }
         internal void FireQueued()
         {
-            foreach (var timer in timers.Where(timer => !timer.Stopped).ToArray()) timer.Callback(timer.State);
+            Timer[] queued; lock (gate) queued = timers.Where(timer => !timer.Stopped).ToArray();
+            foreach (var timer in queued) timer.Callback(timer.State);
         }
         sealed class Timer(Clock clock, TimerCallback callback, object? state) : ITimer
         {
@@ -262,12 +376,15 @@ internal static class LukeRaidClockTests
             internal bool Stopped;
             public bool Change(TimeSpan dueTime, TimeSpan period)
             {
+                lock (clock.gate)
+                {
                 if (Stopped) return false;
                 That(period == Timeout.InfiniteTimeSpan, "每实例只有one-shot timer，不叠加周期任务");
                 Due = dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue : checked(clock.stamp + (long)Math.Ceiling(dueTime.TotalMilliseconds));
                 return true;
+                }
             }
-            public void Dispose() { Stopped = true; Due = long.MaxValue; }
+            public void Dispose() { lock (clock.gate) { Stopped = true; Due = long.MaxValue; } }
             public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
         }
     }
