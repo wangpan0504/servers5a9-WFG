@@ -64,6 +64,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Player(c, stats.Compute(c), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
+        await PcRoomBuffProjection.PostAsync(context);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons);
         await DazzlementTowerProjection.StateAsync(context);
         if (c.Guild is { } membership)
@@ -385,6 +386,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (receipt.RaidBattleChange is not null) context.Session.PublishRaidCombat();
         bool CanSend() => context.Session.CanPublishTravel(receipt);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "formal_return_town_state", CanSend);
+        // 返城重建Actor后补发网吧特权buff；副本内的buff栏不会保留系统buff。
+        await PcRoomBuffProjection.PostAsync(context, CanSend);
         await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
         if (context.Dazzlement is { HasBindings: true })
             await DazzlementTowerProjection.StateAsync(context, CanSend);

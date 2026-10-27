@@ -1613,12 +1613,14 @@ internal static partial class FormalDungeonTcpTests
         body[4] = difficulty;
         return body;
     }
-    internal static void Load(TcpPeer peer)
+    internal static void Load(TcpPeer peer, bool pcRoom = false)
     {
         peer.Send(37, new byte[8]);
         peer.Expect(1, 37, [1]);
         peer.Expect(0, 30, new byte[5]);
         peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
+        // 网吧身份在副本加载完成后补发487特权buff；关闭时没有该包。
+        if (pcRoom) peer.Expect(0, 487);
     }
     // 明确合成的网络统计。独立正文编码/MD5折叠，不调用服务Parser/Builder自证。
     internal static byte[] Death(ushort key, ushort reporter, byte level, ulong decrease = 600,

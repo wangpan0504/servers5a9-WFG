@@ -106,6 +106,9 @@ internal sealed class PremiumContractProjection(GameConnectionContext context, C
             context.Session.ReadAdventureLevel(), context.Channel, DateTimeOffset.FromUnixTimeSeconds(now)),
             "premium_identity_player", () => sent = CanSend());
         if (!sent) return;
+        // 网吧身份真正切换时同步特权buff：打开补发NOTI487，关闭沿NOTI488移除；同值刷新不重发。
+        if (state.PcRoom != (announcedAppearance?.PcRoom ?? false))
+            await PcRoomBuffProjection.SetAsync(context, state.PcRoom, CanSend);
         announcedAppearance = state;
         context.Owner.Execute(() =>
         {

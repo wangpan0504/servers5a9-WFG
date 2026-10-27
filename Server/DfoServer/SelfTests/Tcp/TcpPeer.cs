@@ -674,6 +674,9 @@ internal sealed class TcpPeer : IDisposable
             TestCheck.That(actor is { Kind: 0, Opcode: 2 }, "网吧身份变化只刷新Actor，不捏造账号契约通知");
             AssertBlackDiamondActor(actor.Body, blackDiamond, dungeon, enabled);
             TestCheck.That(Expect(0, 2).Body is [1, ..], "网吧身份刷新后恢复完整本人Player");
+            // 身份切换同时同步网吧特权buff：开启补发487，关闭沿488移除。
+            TestCheck.That(Expect(0, enabled ? (ushort)487 : (ushort)488).Body[0] == 1,
+                "网吧身份切换后同步特权buff，不与身份刷新包序混用");
             if (!ceraFirst) Expect(0, 53);
         }
         else TestCheck.That(ceraFirst, "同值开关或Loading不重复刷新Actor");
@@ -772,7 +775,7 @@ internal sealed class TcpPeer : IDisposable
         (int[] Owned, int Selected)? weaponSkins = null,
         (SkinOwnership[] Owned, int Selected)? damageFonts = null,
         (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool nativeSwitch = false,
-        ushort[]? tagEvildom = null, byte[][]? echonSets = null)
+        ushort[]? tagEvildom = null, byte[][]? echonSets = null, bool premiumPcRoom = false)
     {
         // nativeSwitch：原生换频道新连接直接发选角4，不先请求名册；服务端按换频道判定是否保留客户端城镇快照。
         if (!resumeTown && !requestedRoster && !nativeSwitch)
@@ -879,6 +882,13 @@ internal sealed class TcpPeer : IDisposable
             if (packet is { Kind: 0, Opcode: 2 } && packet.Body is [1, ..])
             {
                 PlayerBody = packet.Body;
+                // 网吧身份的入城在本人Player后紧接487特权buff，随后才是两祭坛次数初始化。
+                if (premiumPcRoom)
+                {
+                    byte[] buff = Expect(0, 487).Body;
+                    TestCheck.That(buff.Length == 17 && buff[0] == 1 && U32(buff, 1) == 1249 && U32(buff, 5) == 0,
+                        "网吧身份入城在本人Player后补发487特权buff，永久实例三项动态整数为0");
+                }
                 foreach (int dungeonId in new[] { 11006, 11007 })
                 {
                     var count = Expect(0, 550).Body;

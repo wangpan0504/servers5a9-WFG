@@ -108,6 +108,12 @@ internal static class BlackDiamondTests
                 "非法网吧开关不改变当前状态");
             That(DevelopmentGm.Answer("pc-room on", "black", repo, owners, _ => null).StartsWith("ERR ", StringComparison.Ordinal) &&
                 !new GameDebugSettings().PremiumPcRoom, "离线入口拒绝网吧设置，新实例恢复关闭，不写入账号期限");
+            // 网吧特权buff沿用487原生buff参数；1249永久实例的三项动态整数全为0，与公会属性同形。
+            Bytes(DfoServer.Network.Projection.PcRoomBuffProjection.AddedBody(),
+                Testing.TcpPeer.Build(writer =>
+                {
+                    writer.Write((byte)1); writer.Write(1249u); writer.Write(0u); writer.Write(0u); writer.Write(0u);
+                }), "网吧特权buff使用487原生参数，永久实例三项动态整数为0");
             // GM伴侣开关默认关闭；只读查询不写任何角色状态。
             That(!settings.SummonWangFugui &&
                 Switch("summon-wangfugui") == "OK {\"summonWangFugui\":false}" &&

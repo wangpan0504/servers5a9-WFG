@@ -384,6 +384,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         await context.Reply(CmdPacketType.FINISH_LOADING, [1], "formal_loading_ack", Guard);
         await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "formal_loading_notice", Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
+        // 进入副本重建Actor后补发网吧特权buff，否则buff栏在副本内是空的。
+        await PcRoomBuffProjection.PostAsync(context, Guard);
         if (receipt.ScriptedReturnId != Guid.Empty)
         {
             if (published) context.Session.ConfirmScriptedReturnLoading(receipt);

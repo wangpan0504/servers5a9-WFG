@@ -20,8 +20,8 @@ internal static class TownPresenceTcpTests
         {
             alpha.Create("PresenceA");
             beta.Create("PresenceB", job: 1);
-            AssertBlackDiamondActor(alpha.Select()[2].Body, active: false, pcRoom: true);
-            AssertBlackDiamondActor(beta.Select()[2].Body, active: false, pcRoom: true);
+            AssertBlackDiamondActor(alpha.Select(premiumPcRoom: true)[2].Body, active: false, pcRoom: true);
+            AssertBlackDiamondActor(beta.Select(premiumPcRoom: true)[2].Body, active: false, pcRoom: true);
             alpha.Barrier();
             beta.Barrier();
             string beforePcRoom = fixture.Snapshot() + fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account");
