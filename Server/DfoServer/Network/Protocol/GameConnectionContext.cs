@@ -22,6 +22,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal DispatchGateScope? DispatchGates { get; set; }
     public DfoServer.Network.Projection.DungeonElevatorProjection? Elevator { get; set; }
     public DfoServer.Network.Projection.DungeonAltarProjection? Altar { get; set; }
+    public DfoServer.Network.Projection.LostLandProjection? LostLand { get; set; }
     public ChannelIdentity Channel => Session.ChannelEntry?.Identity ?? channel;
     public DfoServer.Network.Projection.DungeonDeathProjection? Death { get; set; }
     public DfoServer.Network.Projection.DungeonCardProjection? Cards { get; set; }

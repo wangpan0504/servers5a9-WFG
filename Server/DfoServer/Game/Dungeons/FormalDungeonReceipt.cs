@@ -8,6 +8,7 @@ namespace DfoServer.Game.Dungeons;
 internal sealed record FormalDungeonReceipt(Character Character, long Generation, long SelectionEpoch,
     DungeonEntryPlan Entry, DungeonRunSnapshot Snapshot, DungeonMonsterPlan Monsters, uint MapSeed)
 {
+    public bool LostLandStarted { get; init; }
     public ImmutableArray<ushort> PartyActors { get; init; } = [];
     public byte PartySlot { get; init; }
     public bool HellPartyRoomCleared => Snapshot.Phase == SinglePlayerDungeonPhase.Dungeon &&

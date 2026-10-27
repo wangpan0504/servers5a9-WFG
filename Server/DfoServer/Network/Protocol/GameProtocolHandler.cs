@@ -63,6 +63,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         context.Elevator = elevator;
         var altar = new DungeonAltarProjection(context, log, projection, inventory, levels, time);
         context.Altar = altar;
+        var lostLand = new LostLandProjection(context, projection, log, time);
+        context.LostLand = lostLand;
         var death = new DungeonDeathProjection(context, projection, log, time);
         context.Death = death;
         var revival = new DungeonRevivalProjection(context, log, time);
@@ -251,6 +253,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             if (context.Cards is not null) await context.Cards.DisposeAsync();
             await elevator.DisposeAsync();
             await altar.DisposeAsync();
+            await lostLand.DisposeAsync();
             online.RemoveConnection(connection.Id, session);
             await PartyDungeonProjection.DetachAsync(context);
             parties?.Detach(session);

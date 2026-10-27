@@ -11,6 +11,7 @@ internal static partial class SinglePlayerDungeonRunTests
     {
         int checks = Count;
         VerifyTagEvildomLife();
+        VerifyLostLandClock();
         VerifyLayeredBossTerminal();
         VerifyExplicitTerminalLayer();
         VerifyPassiveClearCondition();

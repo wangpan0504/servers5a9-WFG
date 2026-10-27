@@ -638,7 +638,7 @@ internal sealed partial class GameSession
         }
         var authority = new NativeDungeonCombatAuthority();
         var committedEntry = entry with { CharacterRevision = checked(expected.Revision + 1) };
-        if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out var runReason))
+        if (!SinglePlayerDungeonRun.TryCreate(committedEntry, state.LastAttempt + 1, epoch, route, authority, out var run, out var runReason, timeProvider))
             return RejectFormal("run-create:" + runReason);
         if (partyInstance is { } instance) run!.BindPartyInstance(instance);
         if (entry.Hope is { } hope)
@@ -766,7 +766,7 @@ internal sealed partial class GameSession
         }
         System.Collections.Immutable.ImmutableArray<InventorySlot> channelSlots = [];
         System.Collections.Immutable.ImmutableArray<DungeonEnterCount> enterCounts = [];
-        DungeonEntryIncount? hopeIncount = null;
+        DungeonEntryIncount? entryIncount = null;
         if (installing.ChannelCost is { } cost)
         {
             // 入场提交时按当前背包重算材料；次数已满或材料不足则整个入场作废。
@@ -779,13 +779,15 @@ internal sealed partial class GameSession
                 if (!spent.Accepted || spent.Plan is not { } plan) return null;
                 consumption = plan;
             }
-            if (installing.Entry.Hope is not null)
+            if (installing.Entry.Hope is not null || installing.Entry.LostLand is not null)
             {
-                // 希望任务与首区疲劳可能在末段失败，次数和材料必须随原入场事务一起回滚。
+                // 专用入场在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
                 if (consumption is not null && entryItems is not null) return null;
                 entryItems ??= consumption;
                 int countKey = cost.Incount?.CountKey ?? cost.DungeonId;
-                hopeIncount = new(countKey, IncountPeriod(countKey), cost.Incount,
+                var period = IncountPeriod(countKey);
+                if (installing.Entry.LostLand is not null && period != cost.Period) return null;
+                entryIncount = new(countKey, period, cost.Incount,
                     AccountCharges(cost.DungeonId), !cost.ChargeOnClear);
             }
             else
@@ -850,15 +852,15 @@ internal sealed partial class GameSession
             (dazzlement != DazzlementTowerAdmission.At(IncountNow()) || repository.LoadDazzlementTower(owner).Rejection(character.Id, dazzlement) is not null))
             return null;
         Character committed;
-        if (entryItems is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null)
+        if (entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             var entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                 new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                    prepared.Weekly,installing.GriefAdmission) { OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = hopeIncount, TagEvildom = installing.TagEvildomEntry?.Admission });
+                    prepared.Weekly,installing.GriefAdmission) { OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission });
             committed = entryCommit.Character;
-            if (hopeIncount is { Row: { } hopeRow, Increment: true } && entryCommit.IncountUsage is { } actualUsage)
-                enterCounts = [.. DungeonIncountPolicy.Views(hopeRow, actualUsage)];
+            if (entryIncount is { Row: { } countRow, Increment: true } && entryCommit.IncountUsage is { } actualUsage)
+                enterCounts = [.. DungeonIncountPolicy.Views(countRow, actualUsage)];
             if (installing.HellTicket is null) entrySlots = entryItems?.ChangedSlots ?? [];
             if (committed.Revision != installing.Entry.CharacterRevision)
             {
@@ -947,10 +949,11 @@ internal sealed partial class GameSession
             if (result.Outcome != DungeonRunOutcome.Accepted) return null;
             if (dungeon.Run.TagEvildomLife is not null)
                 dungeon.TagEvildomStartedTimestamp ??= (timeProvider ?? TimeProvider.System).GetTimestamp();
+            bool lostLandStarted = dungeon.Run.LostLandClock?.Start() == true;
             pendingDungeonContinuation = null;
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
-            return FormalReceipt();
+            return FormalReceipt() with { LostLandStarted = lostLandStarted };
         });
     }
 

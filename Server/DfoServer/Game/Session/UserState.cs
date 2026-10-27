@@ -55,6 +55,9 @@ internal static class UserStatePolicy
             SessionPhase.PvpRoom when ready && selected && pvpTraining && !selectingDungeon && dungeon is null => UserState.PvpRoom,
             SessionPhase.Town when !selectingDungeon && dungeon is null => UserState.Town,
             SessionPhase.MapSelect when selectingDungeon && dungeon is null => UserState.DungeonSelect,
+            // 时限可在命令门外到达；保留原实例的退出资格，战斗与移动由TimedOut门禁冻结。
+            SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement
+                when dungeon == SinglePlayerDungeonPhase.TimedOut && !tutorial => UserState.Dungeon,
             SessionPhase.Loading when dungeon == SinglePlayerDungeonPhase.Loading => tutorial ? UserState.TutorialDungeon : UserState.Dungeon,
             SessionPhase.Dungeon when dungeon == SinglePlayerDungeonPhase.Dungeon => tutorial ? UserState.TutorialDungeon : UserState.Dungeon,
             SessionPhase.Settlement when dungeon == SinglePlayerDungeonPhase.Settlement => tutorial ? UserState.TutorialDungeon : UserState.Dungeon,
