@@ -119,6 +119,7 @@ internal sealed partial class DungeonHandler
             foreach (var member in notice.Members)
                 await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(member.Actor.Character.Id), "party_selection_state", Guard);
             await PublishPartyHostAsync(context, notice.Members, Guard);
+            RaidCombatProjection.Selection(context, Guard);
             if (notice.Kind != PartyDungeonNoticeKind.RaidSelection)
                 await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(notice.LegendDungeon,
                 incompleteHellQuestMemberSlots: context.Session.IncompleteHellQuestMemberSlots()), "party_selection_notice", Guard);

@@ -12,6 +12,24 @@ internal static class RaidCombatPackets
     // 02396E0E/1D：u8状态、i8阶段。只允许本模块已实现的阶段状态。
     public static byte[] State(AntonRaidBattleView view) => [(byte)view.State, checked((byte)view.Phase)];
 
+    // 0237F2C0完整读序为6+5N；首字节仅消费，尾字段是感染地下城索引，均由调用方显式给出。
+    public static byte[] Dungeons(byte reserved, IReadOnlyList<(int Id, DfoServer.GameWorld.Raids.RaidDungeonState State)> rows,
+        int infectionDungeon)
+    {
+        if (rows.Count > byte.MaxValue || rows.Any(row => row.Id <= 0 || !Enum.IsDefined(row.State)) ||
+            rows.Select(row => row.Id).Distinct().Count() != rows.Count || infectionDungeon < 0)
+            throw new InvalidDataException("攻坚地下城快照非法");
+        byte[] body = new byte[checked(6 + rows.Count * 5)];
+        body[0] = reserved; body[1] = (byte)rows.Count;
+        for (int index = 0; index < rows.Count; index++)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2 + index * 5), rows[index].Id);
+            body[6 + index * 5] = (byte)rows[index].State;
+        }
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2 + rows.Count * 5), infectionDungeon);
+        return body;
+    }
+
     // 0237F210：使用原.symbol显式ID；不发(0,0)清表哨兵，避免清其它共享符号。
     public static byte[] Symbols(IReadOnlyList<(int Id, int Value)> rows)
     {

@@ -58,7 +58,7 @@ internal static partial class AntonRaidTcpTests
                 var packet = members[i].Read(); packets.Add(packet);
                 if (packet is { Kind: 0, Opcode: 587 }) { Bytes(packet.Body, [2, 0], "587精确首阶段启动状态/phase"); started = true; }
                 else if (packet is { Kind: 1, Opcode: 666 }) { Bytes(packet.Body, [1], "666仅公共成功标志，不追加猜测实例字段"); acknowledged = true; }
-                else That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 14 or 22 or 23 or 24 or 26 or 153 or 591 or 594 or 598,
+                else That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 14 or 22 or 23 or 24 or 26 or 153 or 583 or 585 or 591 or 594 or 598,
                     $"开战只发送已证普通及团本通知：{packet.Kind}/{packet.Opcode}");
                 if (packet is { Kind: 0, Opcode: 22 or 23 })
                     That(packet.Body.Length == (packet.Opcode == 22 ? 9 : 10) && ids.Contains(U16(packet.Body)),
@@ -73,6 +73,10 @@ internal static partial class AntonRaidTcpTests
             That(place[2] == 19 && place[3] == 2 && U16(place, 4) == 25 && U16(place, 6) == 405,
                 "位置取WAITING ROOM声明19/2及真实PVF门中心25/405，不拼造副本MAP编号");
             VerifyCosts(packets.Single(p => p.Opcode == 598).Body, ids, 2, 1);
+            VerifyMap(packets.Single(p => p.Opcode == 585).Body);
+            That(transition < packets.FindIndex(p => p.Opcode == 585) &&
+                packets.FindIndex(p => p.Opcode == 585) < packets.FindIndex(p => p.Opcode == 587),
+                "二十人均在候战室迁移后、阶段演出前收到完整战况快照");
             byte[] roster = packets.Single(p => p.Opcode == 9).Body;
             That(U16(roster, 4) == U16(frames[i / 4 * 4].Single(p => p.Opcode == 9).Body, 4), "同分队共享真实普通Party编号");
             Bytes(packets.Single(p => p.Opcode == 26).Body, [0], "每分队普通Party首槽为host");
@@ -103,6 +107,22 @@ internal static partial class AntonRaidTcpTests
         That(fixture.Snapshot() == committed && fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") == committedInventory,
             "普通分队回应、重复开战和越权请求不重复扣费或迁移");
 
+        leader.Send(15, new byte[4]);
+        foreach (var peer in members.Take(4))
+        {
+            var selecting = new List<WirePacket>();
+            for (int n = 0; n < 64 && !selecting.Any(p => p is { Kind: 0, Opcode: 27 }); n++) selecting.Add(peer.Read());
+            VerifyMap(selecting.Single(p => p.Opcode == 585).Body);
+            That(selecting.All(p => p.Opcode is not (587 or 28 or 29)), "多人分队打开选图同步地图，不重播阶段或伪造入场");
+        }
+        leader.Send(132);
+        foreach (var peer in members.Take(4)) ReadUntil(peer, 0, 24);
+        That(fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") == committedInventory &&
+            fixture.Query("SELECT count(DISTINCT action_name) FROM inventory_audit_log WHERE action_name LIKE 'anton_raid_start:%'") is [[1L]],
+            "多人选图返回不重复扣票，门票审计仍属于原开战实例");
+        // 132按原城镇规则保存安全返回点与revision；之后的退团断言从这次实际提交开始比较。
+        committed = fixture.Snapshot();
+
         var leaving = members[3]; ushort originalParty = U16(frames[3].Single(p => p.Opcode == 9).Body, 4);
         leaving.Send(665, Build(w => w.Write(leaving.Id)));
         bool detached = false, left = false;
@@ -131,6 +151,16 @@ internal static partial class AntonRaidTcpTests
         That(fixture.Snapshot() == committed && fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") == committedInventory,
             "候战室退出与重新普通成组不冒充未知退款，不再修改已提交资产");
         return Task.CompletedTask;
+    }
+
+    static void VerifyMap(byte[] body)
+    {
+        int[] ids = [210, 211, 212, 213, 214, 215, 216, 218, 219, 220, 221, 222, 223, 224];
+        That(body.Length == 76 && body[0] == 0 && body[1] == 14 && U32(body, 72) == 0,
+            "585为76B完整14图列表，未知首字节保守0、无感染图索引0");
+        for (int index = 0; index < ids.Length; index++)
+            That(U32(body, 2 + index * 5) == ids[index] && body[6 + index * 5] == (index == 0 ? 0 : 2),
+                "585数字ID及初始open/hide逐项独立核对，不替换为普通9595系列");
     }
 
     static WirePacket ReadUntil(TcpPeer peer, byte kind, ushort opcode)

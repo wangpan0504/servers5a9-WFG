@@ -58,7 +58,7 @@ internal sealed partial class GameSession
 
     internal bool DetachRaidCombatStart(RaidActor actor, Guid instance) => owner.Execute(() =>
     {
-        if (raidCombat is not { Battle.Kind: RaidKind.Luke } current || current.Actor != actor ||
+        if (raidCombat is not { } current || current.Actor != actor ||
             current.Battle.Instance != instance || !MatchesRaidCombatActor(actor)) return false;
         current.Battle.DetachStart(actor);
         raidCombat = null;
@@ -77,6 +77,12 @@ internal sealed partial class GameSession
 
     public AntonRaidBattleView? RaidCombatView() => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent ? raid.Battle.View : null);
+
+    // 选图只读取原实例聚合，不另存一份初始战况；离团、换角与接管后不可重发旧列表。
+    internal (RaidActor Actor, AntonRaidBattle Battle)? AntonRaidMap() => owner.Execute<(RaidActor, AntonRaidBattle)?>(() =>
+        Ready && ChannelEntry?.Type == 23 && Selected?.Position is { Town: 19, Area: 2 } &&
+        raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton } raid && StartedRaid?.InstanceId == raid.Battle.Instance
+            ? (raid.Actor, raid.Battle) : null);
 
     public RaidResultDisplay? RaidCombatResult(AntonRaidBattleView view) => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent && raid.Battle.IsCurrent(view)

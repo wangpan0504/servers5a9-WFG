@@ -24,6 +24,11 @@ internal static class AntonRaidBattleTests
     public static void RunCore()
     {
         int before = Count;
+        Bytes(RaidCombatPackets.Dungeons(0, [(210, RaidDungeonState.Open), (218, RaidDungeonState.Hide)], 221),
+            [0, 2, 210, 0, 0, 0, 0, 218, 0, 0, 0, 2, 221, 0, 0, 0], "585独立字节预期覆盖6+5N、状态与感染索引");
+        Bytes(RaidCombatPackets.DungeonState(210, 0, RaidDungeonState.Clear), [210, 0, 0, 0, 0, 3], "586末字节才是新状态");
+        Reject<InvalidDataException>(() => RaidCombatPackets.Dungeons(0, [(210, RaidDungeonState.Open), (210, RaidDungeonState.Hide)], 0),
+            "585拒绝重复键，避免客户端顺序覆盖");
         var battle = new AntonRaidBattle(Script(10, 20));
         var identity = new DungeonRunIdentity(1, 0, 1, Guid.NewGuid(), 1);
         var map = new DungeonMap("boss", new(0, 0), 77, "fixture/boss.map");
@@ -102,6 +107,9 @@ internal static class AntonRaidBattleTests
     internal static void RunResources( RaidScript script)
     {
         var battle = new AntonRaidBattle(script);
+        That(battle.DungeonSnapshot(battle.View).Length == 14 && battle.DungeonSnapshot(battle.View)
+            .All(row => row.State == (row.Id == 210 ? RaidDungeonState.Open : RaidDungeonState.Hide)),
+            "真实初始14图仅210开放，下一阶段7图隐藏，不套下一阶段初始open");
         Clear(210);
         That(battle.View.Dungeons[213] == RaidDungeonState.Open && battle.View.Dungeons[215] == RaidDungeonState.Open &&
             battle.View.Deferred.Values.Any(c => c.Tag == "[reserve dungeon state]"),

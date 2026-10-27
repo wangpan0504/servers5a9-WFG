@@ -88,7 +88,11 @@ internal static class RaidProjection
         if (party.Type == (byte)RaidKind.Luke && receipt.Battle is { } initial &&
             recipient.Session.CurrentRaidBattle(recipient) is { } currentBattle)
             RaidCombatProjection.PostLukeSnapshot(context, currentBattle, initial, Guard);
-        if (party.Type == (byte)RaidKind.Luke && receipt.Battle is { } battle)
+        if (party.Type == (byte)RaidKind.Anton && receipt.Battle is { } antonInitial &&
+            recipient.Session.CurrentRaidBattle(recipient) is { } antonBattle)
+            RaidCombatProjection.PostAntonSnapshot(context, antonBattle, antonInitial,
+                () => Guard() && recipient.Session.CanPublishRaidBattle(recipient, antonInitial));
+        if (receipt.Battle is { } battle)
             RaidCombatProjection.PostState(context, battle, recipient, Guard, "raid_started_state");
         else context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE,
             receipt.Battle is { } anton ? RaidCombatPackets.State(anton) : RaidPackets.Started(party.Started!.Phase), "raid_started_state", Guard);

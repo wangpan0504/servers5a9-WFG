@@ -21,19 +21,39 @@ internal static class RaidCombatProjection
             context.Session.RaidCombatResult(view) is null) return;
         if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } luke)
             PostLukeSnapshot(context, luke, view, Guard);
+        else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)
+            foreach (var row in anton.DungeonSnapshot(view))
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
+                    RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_state", Guard);
         PostState(context, view, actor, Guard, "raid_phase_state");
+    }
+
+    internal static void PostAntonSnapshot(GameConnectionContext context, AntonRaidBattle battle,
+        AntonRaidBattleView view, Func<bool> current)
+    {
+        if (battle.Kind != RaidKind.Anton || view.Instance != battle.Instance ||
+            !view.Symbols.TryGetValue("[is exist infection dungeon]", out int infected) ||
+            !view.Symbols.TryGetValue("[infection dungeon index]", out int infectionDungeon)) return;
+        bool Guard() => current() && battle.IsCurrent(view);
+        // 显式清感染存在位，585尾0本身不清symbol7；其余HP/机关符号不伪造。
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
+            RaidCombatPackets.Symbols([(7, infected)]), "raid_infection_state", Guard);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_DUNGEON_STATE,
+            RaidCombatPackets.Dungeons(0, battle.DungeonSnapshot(view), infectionDungeon),
+            "raid_dungeon_snapshot", Guard);
+    }
+
+    internal static void Selection(GameConnectionContext context, Func<bool> current)
+    {
+        if (context.Session.AntonRaidMap() is not { } map) return;
+        var view = map.Battle.View;
+        PostAntonSnapshot(context, map.Battle, view, () => current() &&
+            context.Session.StartedRaid?.InstanceId == view.Instance && context.Session.CanPublishRaidBattle(map.Actor, view));
     }
 
     internal static void PostState(GameConnectionContext context, AntonRaidBattleView view, RaidActor actor,
         Func<bool> current, string action)
     {
-        if (context.Session.CurrentRaidBattle(actor)?.Kind != RaidKind.Luke)
-        {
-            if (view.State == AntonRaidBattleState.Reward && context.Session.RaidCombatResult(view) is { } result)
-                context.Sender.Post(0, (ushort)NotiPacketType.RAID_RESULT, RaidCombatPackets.Result(result), "raid_phase_result", current);
-            context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE, RaidCombatPackets.State(view), action, current);
-            return;
-        }
         context.Owner.Execute(() =>
         {
             var identity = RaidCombatDisplayIdentity.Capture(actor, view);

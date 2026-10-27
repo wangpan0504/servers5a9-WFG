@@ -61,7 +61,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             var departingBattle = actor.Session.CurrentRaidBattle(actor);
             var beforeBattle = departingBattle?.View;
             var change = registry.Leave(actor, target);
-            if (change is { Before.Type: 1, Before.Started: { } started, Removed: { } departed })
+            if (change is { Before.Started: { } started, Removed: { } departed })
                 departed.Session.DetachRaidCombatStart(departed, started.InstanceId);
             PartyNotice[] notices = change?.Before.Started is not null && change.Removed is { } removed
                 ? parties.DetachNotices(removed.Session) : [];
@@ -86,18 +86,32 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         var now = (clock ?? TimeProvider.System).GetUtcNow();
         var reservations = PlanReservations(expected, cost, room, towns, pieces, now, out var rejection);
         if (rejection is not null) return new(19, rejection);
+        // 初始状态沿已解析的真实阶段规则；无奖励策略、MAP登记或计时驱动不授予对应资格。
+        var battle = new AntonRaidBattle(definition.Resources.Script);
         try
         {
             return AccountOwners.Lease.ExecuteRaid(reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
-                registry.CommitStart(actor, expected, reservations, cost, () => parties.CreateRaidSquads(expected, () =>
+            {
+                if (registry.Find(actor)?.Started is not null) return new RaidStartResult(0, "already-started", Replay: true);
+                var combat = new List<Game.Session.GameSession.RaidCombatStartBinding>();
+                foreach (var reservation in reservations)
                 {
-                    var instance = Guid.NewGuid();
+                    var binding = reservation.Actor.Session.PrepareRaidCombatStart(reservation.Actor, battle);
+                    if (binding is null) return new RaidStartResult(19, "raid-combat-binding-conflict");
+                    combat.Add(binding);
+                }
+                var result = registry.CommitStart(actor, expected, reservations, cost, () => parties.CreateRaidSquads(expected, () =>
+                {
+                    var instance = battle.Instance;
                     var committed = store.CommitRaidStart(RaidKind.Anton, definition, instance, reservations);
                     for (int i = 0; i < reservations.Length; i++)
                         reservations[i].Actor.Session.InstallRaidStart(reservations[i], committed[i]);
+                    foreach (var binding in combat) binding.Install();
                     return (new RaidStarted(instance, now, expected.Members.OrderBy(m => m.Slot)
                         .Select(m => (m.Actor.Character, m.Slot, m.Squad)).ToImmutableArray()), committed);
-                })));
+                }));
+                return result.Receipt is { } receipt ? result with { Receipt = receipt with { Battle = battle.View } } : result;
+            });
         }
         catch (InvalidOperationException) when (reservations.Any(r => !r.Actor.IsCurrent))
         { return new(19, "member-owner-changed"); }

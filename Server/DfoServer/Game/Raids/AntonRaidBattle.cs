@@ -59,26 +59,29 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Luke || !actor.IsCurrent || current.Revision != 0 || members.Count >= 8 ||
+            if (!actor.IsCurrent || current.Revision != 0 || members.Count >= (Kind == RaidKind.Luke ? 8 : 20) ||
                 members.Keys.Any(m => m.Character == actor.Character)) return false;
             if (lukeCompletion is { } completion)
             {
                 if (!Join(actor, completion.Phases.Select(phase => phase.Rewards).ToImmutableArray())) return false;
             }
             else members.Add(actor, []);
-            originalLukeMembers.Add(actor.Character, actor);
+            if (Kind == RaidKind.Luke) originalLukeMembers.Add(actor.Character, actor);
             return true;
         }
     }
 
-    // 精确移除Luke旧actor及其Run占用；不清新会话、不改变Anton领奖语义。
+    // 精确移除原actor及其Run占用；不清新会话，不把离团当作领奖或退款。
     internal bool DetachStart(RaidActor actor)
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Luke || !members.Remove(actor)) return false;
-            ReleaseLukeActor(actor, null);
-            ScheduleLukeClockLocked();
+            if (!members.Remove(actor)) return false;
+            if (Kind == RaidKind.Luke)
+            {
+                ReleaseLukeActor(actor, null);
+                ScheduleLukeClockLocked();
+            }
             foreach (var key in entries.Where(row => row.Value.Identity.CharacterId == actor.Character).Select(row => row.Key).ToArray())
                 entries.Remove(key);
             return true;
@@ -244,7 +247,8 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (instance != Instance || revision != current.Revision || current.ClockFaulted || current.State != AntonRaidBattleState.Reward ||
-                Kind == RaidKind.Luke && (lukeRuns.Count != 0 || lukeRevivalReservations.Count != 0 || members.Any(member => member.Value.Length != PhaseCount)) ||
+                members.Any(member => member.Value.Length != PhaseCount) ||
+                Kind == RaidKind.Luke && (lukeRuns.Count != 0 || lukeRevivalReservations.Count != 0) ||
                 !AllRewardsConfirmed(current.Phase)) return null;
             var before = current;
             current = before.Phase + 1 == script.Phases.Length
