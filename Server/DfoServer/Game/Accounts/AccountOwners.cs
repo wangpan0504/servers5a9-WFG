@@ -170,9 +170,9 @@ internal sealed class AccountOwners
 
         // 攻坚开战固定全团；普通副本的 ExecuteGroup 仍只接受一至四人，不能循环分队提交。
         internal static T ExecuteRaid<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, Func<T> action)
-            => ExecuteFixedGroup(members, action, 10, 20);
+            => ExecuteFixedGroup(members, action, 1, 20);
 
-        // 卢克准备使用同一账号锁目录；上限来自已核资源且硬限八人，不放宽普通四人或安徒恩十至二十人。
+        // 卢克准备使用同一账号锁目录；上限来自已核资源且硬限八人，不放宽普通四人或安徒恩二十人上限。
         internal static T ExecuteRaidGroup<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, int maximum, Func<T> action)
         {
             if (maximum is < 1 or > 8) throw new InvalidOperationException("卢克准备人数上限必须为一至八人");

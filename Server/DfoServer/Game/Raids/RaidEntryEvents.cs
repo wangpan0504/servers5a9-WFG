@@ -20,7 +20,7 @@ internal static class RaidEntryEvents
     // 不在三张卡里、只影响团队频道列表的事件。017128D0 对 type 0x17（安徒恩，频道 19）与 0x19 走 017134ED：
     // (事件 0xB5=181 在 EVENT_INFO 集合 或 当前频道 type 0x11/0x15) 且任务 0x321D=12829 完成才保留，否则 2FE77B0 删除。
     // 181 在客户端的引用点与卢克 282 成对出现（0160477D/016046DF、036D74F1/036D7588、0399F38F/0399F3F1）。
-    // 不进 RAID_WEEKLY_CLEAR_INFO：安徒恩没有对应的卡与团本类型证据。
+    // 通道事件仍独立维护；选角次数投影另补类型0，供原生紧凑卡及可选第四张大卡读取。
     public readonly record struct ChannelEvent(string Name, ushort EventId, int Quest);
 
     public static readonly ChannelEvent[] ChannelEvents =

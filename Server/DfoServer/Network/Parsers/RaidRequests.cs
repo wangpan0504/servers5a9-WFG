@@ -10,6 +10,7 @@ namespace DfoServer.Network.Parsers;
 // u32 字节数 + 队名（03BDF8E0）；随后依次 u8 窗口[+0x210]、u8 [+0x211]、u8 [+0x214]、u8 标志（局部 bl，0216E0BD 可清 bit2）。
 // 三个窗口字段与标志的业务含义未恢复，只原样保留。
 internal readonly record struct CreateRaidRequest(byte RaidType, string Name, byte Field210, byte Field211, byte Field214, byte Flags);
+internal readonly record struct RaidSearchRequest(uint Offset, byte RaidType, string Name);
 
 // C2S670 MODIFY_RAID_INFO（发送点 0216F165..0216F1B7）：u8 团本类型（01DC69B0）、u32 字节数 + 队名（03BDF8E0）、u8 [ebp-0x34]（含义未恢复，原样保留）。
 internal readonly record struct ModifyRaidRequest(byte RaidType, string Name, byte Field);
@@ -20,6 +21,17 @@ internal readonly record struct RaidMonsterHpRequest(uint RawValue, uint[] RawEn
 
 internal static class RaidRequests
 {
+    // 01DC88B7..01DC88FE：mode0、12B筛选块、CP936字符串。筛选块+0为分页偏移、+8为raid.lst类型；其余字段尚未恢复。
+    public static RaidSearchRequest Search(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 17 || body[0] != 0) throw new InvalidDataException("攻坚搜索需要mode0与完整筛选块");
+        int length = BinaryPrimitives.ReadInt32LittleEndian(body[13..]);
+        if (length < 0 || length > MaxNameBytes || body.Length != 17 + length)
+            throw new InvalidDataException("攻坚搜索名称长度无效");
+        try { return new(BinaryPrimitives.ReadUInt32LittleEndian(body[1..]), body[9], CharacterName.Encoding.GetString(body[17..])); }
+        catch (DecoderFallbackException error) { throw new InvalidDataException("攻坚搜索名称不是CP936", error); }
+    }
+
     public const int MaxNameBytes = 64;
 
     // KB-20261026T063752-c3b822a45d：0130F140/0130F5F9写低u8计数，但遍历完整列表。

@@ -147,6 +147,19 @@ internal static class RaidPackets
         }
     });
 
+    // NOTI756/023CAEF0：三个u32，随后逐条完整记录、u8人数及人数个u8；尾无额外正文。
+    public static byte[] SearchResults(uint total, uint offset,
+        IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart, byte Members)> rows) => Build(writer =>
+    {
+        writer.Write(total); writer.Write(offset); writer.Write((uint)rows.Count);
+        foreach (var row in rows)
+        {
+            WriteRecord(writer, row.Key, row.Title, row.Type, row.Leader, row.Name, row.Squad, canStart: row.CanStart);
+            writer.Write(row.Members);
+            writer.Write(new byte[row.Members]); // 逐成员附加状态尚未恢复，保持未知零值，不冒充准备或通关资格。
+        }
+    });
+
     // 02349A20成功：mode0读记录，mode1读成员，mode2两者；21失败仍读mode/key。
     public static byte[] Information(byte mode, uint key, byte[] title, byte type, ushort leader, byte[] name,
         IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members, byte state = 0, byte phase = 0, bool canStart = false) => Build(writer =>

@@ -187,7 +187,16 @@ internal static class ServerRuntime
         new TagEvildomHandler(tagEvildomProjection, projection, log).Register(commands);
         var tagEvildomRun = new TagEvildomRunProjection(new TagEvildomRewardCatalog(pvf, itemResources.Boosters),
             itemResources.Items, repository, tagEvildomProjection, log);
-        var raidCatalog = GameWorld.Raids.RaidCatalog.Load(pvf).PrepareResources(pvf, dungeonCatalog, itemResources.Items);
+        string raidSettingsPath = Path.Combine(options.DataDirectory, "raid-start.json");
+        var raidSettings = File.Exists(raidSettingsPath)
+            ? System.Text.Json.JsonSerializer.Deserialize<Game.Raids.RaidStartSettings>(File.ReadAllText(raidSettingsPath),
+                new System.Text.Json.JsonSerializerOptions { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow })
+                ?? throw new InvalidDataException("攻坚开战配置不能为空")
+            : new Game.Raids.RaidStartSettings();
+        var raidCatalog = raidSettings.Apply(GameWorld.Raids.RaidCatalog.Load(pvf))
+            .PrepareResources(pvf, dungeonCatalog, itemResources.Items);
+        log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
+            AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
         var lukeTimers = lukeStartPolicy?.Timers is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }));

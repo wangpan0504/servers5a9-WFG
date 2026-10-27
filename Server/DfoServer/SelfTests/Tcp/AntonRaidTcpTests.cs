@@ -57,6 +57,7 @@ internal static partial class AntonRaidTcpTests
             uint key = U32(list, 4);
             That((key >> 16 & 255) == 19, "招募key属于实际频道19");
             Until(leader, 0, 591); Bytes(Until(leader, 1, 664).Body, Build(w => { w.Write((byte)1); w.Write(key); }), "创建成功key");
+            leader.Send(666); Bytes(Until(leader, 1, 666).Body, [0, 22, 0], "未配置覆盖时单人按真实PVF十人门槛拒绝");
             observer.Send(667, [0, 0]); Bytes(Until(observer, 1, 667).Body, [1], "候战登记");
             bool listed = false;
             Drain(observer, packet => { if (packet.Opcode == 590) listed |= U32(packet.Body) == 1 && U32(packet.Body, 4) == key; });

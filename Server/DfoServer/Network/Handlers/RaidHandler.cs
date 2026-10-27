@@ -26,10 +26,34 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         commands.Register(CmdPacketType.MODIFY_RAID_INFO, ModifyAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_MANAGER_WORK, ManagerAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.REQUEST_RAID_INFO, InformationAsync, nameof(RaidHandler));
+        commands.Register(CmdPacketType.RAID_OTHER_CHANNEL_LIST, SearchAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.REJOIN_RAID, RejoinAsync, nameof(RaidHandler));
     }
 
     RaidActor? Actor(GameConnectionContext context) => context.BlocksTownActions ? null : context.Session.CaptureRaidActor(registry);
+
+    async Task<CommandResult> SearchAsync(GameConnectionContext context, Packet request)
+    {
+        RaidSearchRequest parsed;
+        try { parsed = RaidRequests.Search(request.Body); }
+        catch (InvalidDataException) { return CommandResult.Unhandled; }
+        if (Actor(context) is not { } actor || !MatchesType(actor, parsed.RaidType)) return CommandResult.Unhandled;
+        // 当前频道的正式招募目录；不以未知跨频道加入合同发布其它频道的可加入记录。
+        var snapshot = registry.List(actor.Channel, parsed.RaidType);
+        var matches = snapshot.Where(p => p.Title.Contains(parsed.Name, StringComparison.OrdinalIgnoreCase)).ToArray();
+        uint offset = Math.Min(parsed.Offset, (uint)matches.Length);
+        // 02171960..0217196D按页号乘33发送偏移，保持同一页宽，不创建额外会话或后台查询。
+        var rows = matches.Skip((int)offset).Take(33).ToArray();
+        var body = RaidPackets.SearchResults((uint)matches.Length, offset, rows.Select(p =>
+            (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
+                p.Members.Single(m => m.Actor.Character == p.Leader).Squad, RaidProjection.CanStart(p, lukeStart is not null),
+                checked((byte)p.Members.Length))).ToArray());
+        log.Write("raid_search_request", new { Connection = context.Id, parsed.RaidType, parsed.Offset,
+            Total = matches.Length, Returned = rows.Length });
+        // 查询回复是请求时的只读快照；目录并发变化不能吞掉唯一756、令原生窗口继续等待。
+        await context.Notify(NotiPacketType.RAID_OTHER_CHANNEL_LIST, body, "raid_search_results", () => actor.IsCurrent);
+        return CommandResult.Handled;
+    }
     bool MatchesType(RaidActor actor, byte type) => actor.Session.ChannelEntry is { } channel &&
         RaidTypes.FromChannelType(channel.Type) == type && catalog.Find(type) is not null;
 

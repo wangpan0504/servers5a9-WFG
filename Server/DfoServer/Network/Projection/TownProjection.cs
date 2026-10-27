@@ -128,9 +128,12 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(c)), "fatigue_after_town_hud");
         await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(c.Inventory.AccountWallet.SeriaLuck,
             c.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_initialize");
-        // 团队频道卡次数：本服不记录团本通关次数，三种团本按已用 0 下发（显示 1/1 与 WEEKLY CLEAR COUNT 上限），替代缺项的 -1（2/1、3/2）。
+        // 本服尚不记录通关次数；补齐安徒恩类型0，四卡均按已用0显示，避免缺项-1产生3/2。
         await context.Notify(NotiPacketType.RAID_WEEKLY_CLEAR_INFO, RaidPackets.WeeklyClearInfo(
-            DfoServer.Game.Raids.RaidEntryEvents.Cards.Select(card => new RaidPackets.WeeklyClear(card.RaidType, 0, 0)).ToArray()), "raid_weekly_clear_initialize");
+            DfoServer.Game.Raids.RaidEntryEvents.Cards.Select(card => card.RaidType).Append((byte)0)
+                .Select(type => new RaidPackets.WeeklyClear(type, 0, 0)).ToArray()), "raid_weekly_clear_initialize");
+        // 03BD1990读取单个u8后调用01DC6480，释放寻找攻坚队的初始忙状态；客户端保留原生3秒冷却。
+        await context.Notify(NotiPacketType.POST_CHARAC_INFO, [0], "post_character_info");
         if (resumeTown)
         {
             // 124会恢复换频道前的地图；最终24必须在它之后绑定本人，不能在恢复前宣布场景完成。

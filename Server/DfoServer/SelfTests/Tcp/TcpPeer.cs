@@ -1024,8 +1024,10 @@ internal sealed class TcpPeer : IDisposable
             SeriaLuckInfo = gauge.Body;
             TestCheck.That(!gauge.Protected && gauge.Body.Length == 2 && gauge.Body[0] == gauge.Body[1] &&
                 gauge.Body[0] <= 40 && gauge.Body[0] % 5 == 0, "幸运值初始通知使用普通CRC/序号，两端阶段一致且不超8");
-            // 团队频道卡次数：卢克/超时空漩涡/普雷三种团本按已用 0 下发（01DD61C0 读 u8 n + n×{u8 类型,u32,u32,u8 子表数}）。
-            Expect(0, 1446, [3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            // 01DD61C0读u8 n及每项10B；第四项安徒恩类型0也明确下发已用0。
+            Expect(0, 1446, [4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            Expect(0, 1232, [0]); // POST_CHARAC_INFO：单字节消费者释放团本窗口初始忙状态。
         }
 
         void ReadSceneInitialization()
