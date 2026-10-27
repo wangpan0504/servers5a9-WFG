@@ -14,6 +14,7 @@ internal static class SelfTestRunner
     public static async Task RunCoreAsync()
     {
         EquipmentPowerScoreTests.RunCore();
+        EquipmentInvestmentScoreTests.RunCore();
         LukeCardSetTests.RunCore();
         EvildomWarPacketTests.RunCore();
         OrdinaryLukeProgressTests.RunCore();
