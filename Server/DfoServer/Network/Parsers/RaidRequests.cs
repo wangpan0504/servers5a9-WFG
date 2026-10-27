@@ -21,6 +21,14 @@ internal readonly record struct RaidMonsterHpRequest(uint RawValue, uint[] RawEn
 
 internal static class RaidRequests
 {
+    // ARAD 01DC6180: symbol:u32, value:u32, operation:u8。这里只开放三设施+1白名单。
+    public static int? LukeFacilitySymbol(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 9 || BinaryPrimitives.ReadUInt32LittleEndian(body[4..]) != 1 || body[8] != 1) return null;
+        uint symbol = BinaryPrimitives.ReadUInt32LittleEndian(body);
+        return symbol is 117 or 118 or 119 ? checked((int)symbol) : null;
+    }
+
     // 01DC88B7..01DC88FE：mode0、12B筛选块、CP936字符串。筛选块+0为分页偏移、+8为raid.lst类型；其余字段尚未恢复。
     public static RaidSearchRequest Search(ReadOnlySpan<byte> body)
     {
