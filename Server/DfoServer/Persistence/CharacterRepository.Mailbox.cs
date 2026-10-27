@@ -290,7 +290,9 @@ internal sealed partial class CharacterRepository
         return new(MailboxError.None, character) { Claimed = plan.Results };
     });
 
-    public MailboxResult ChangeMailState(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, ushort state, long now) => owner.Execute(() =>
+    // force：仅供开发 GM 强制删除（state=0）。跳过「未领取资产」「已过期」两条常规限制，
+    // 附件行不单独清理——与过期邮件同一语义，状态置删除后邮箱不再列出。
+    public MailboxResult ChangeMailState(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, ushort state, long now, bool force = false) => owner.Execute(() =>
     {
         ValidateMailIds(ids);
         if (state is not (0 or 2 or 3) || ids.Any(id => id >= MailboxAttachment.ClaimFlag))
@@ -311,9 +313,9 @@ internal sealed partial class CharacterRepository
         using var write = db.BeginWrite("CharacterRepository.ChangeMailState");
         using var tx = write.Transaction;
         var mails = ids.Select(id => ReadMail(db, tx, characterId, id)).ToArray();
-        if (mails.Any(mail => mail is null || !(state == 0 && mail.State == 0) && !mail.Available(now)))
+        if (mails.Any(mail => mail is null || !(state == 0 && mail.State == 0) && !mail.Available(now) && !force))
             return MailboxResult.Reject(MailboxError.MailMissing);
-        if (state == 0 && mails.Any(mail => mail!.Gold != 0 || mail.Attachments.Length != 0))
+        if (state == 0 && !force && mails.Any(mail => mail!.Gold != 0 || mail.Attachments.Length != 0))
             return MailboxResult.Reject(MailboxError.UnclaimedAssets);
         using var command = db.CreateCommand();
         command.Transaction = tx;

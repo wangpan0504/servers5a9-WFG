@@ -13,6 +13,6 @@ internal interface IMailboxStore
     void ExpireMailbox(AccountOwners.Lease owner, ushort characterId, long now);
     MailboxResult SendMail(AccountOwners.Lease owner, Character expected, MailboxSendPlan plan);
     MailboxResult ClaimMail(AccountOwners.Lease owner, Character expected, MailboxClaimPlan plan);
-    MailboxResult ChangeMailState(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, ushort state, long now);
+    MailboxResult ChangeMailState(AccountOwners.Lease owner, ushort characterId, ImmutableArray<uint> ids, ushort state, long now, bool force = false);
     MailboxResult DeliverMail(MailboxDelivery delivery);
 }

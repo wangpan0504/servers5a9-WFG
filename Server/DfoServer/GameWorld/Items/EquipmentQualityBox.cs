@@ -32,13 +32,23 @@ internal sealed record EquipmentQualityBox(int MinimumPercent, int MaximumPercen
     public bool Allows(ItemTemplate equipment) => equipment.Kind == ItemKind.Equipment &&
         equipment.EquipmentSlot is >= 12 and <= 25 && (EquipmentSlots.IsEmpty || EquipmentSlots.Contains(equipment.EquipmentSlot));
 
+    /// <summary>
+    /// 品级百分比 → 实例品级种子。客户端 03FA9900/03FA9940 的固定映射：1..99 用 999999893+p，
+    /// 100 用独立常量 999999998；GM 指定品级与调整箱固定范围走同一套换算。
+    /// </summary>
+    public static int SeedForPercent(int percent)
+    {
+        if (percent is < 1 or > 100) throw new InvalidDataException("品级百分比要在 1-100 之间");
+        return percent == 100 ? 999_999_998 : 999_999_893 + percent;
+    }
+
     public int Roll(Func<long, long> random)
     {
         // 当前客户端03FA9900/03FA9940：1..99使用999999893+p，100使用独立常量。
         // 普通随机种子避开客户端的固定品级保留区，不强制重抽相同结果。
         if (!Fixed) return checked(1 + (int)Draw(999_999_892));
         int percent = MinimumPercent + (int)Draw(MaximumPercent - MinimumPercent + 1);
-        return percent == 100 ? 999_999_998 : 999_999_893 + percent;
+        return SeedForPercent(percent);
 
         long Draw(long maximum)
         {
