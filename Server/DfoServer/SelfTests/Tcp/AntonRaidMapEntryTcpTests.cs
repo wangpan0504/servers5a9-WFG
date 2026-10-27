@@ -164,6 +164,7 @@ internal static partial class AntonRaidMapEntryTcpTests
             foreach (var owner in leases) owner.Dispose();
         }
         await VerifyFormalSquadsAsync(source, root, resources, registeredDefinition);
+        await VerifyPhaseProgressAsync(source, root, resources, registeredDefinition);
 
         async Task ServeAsync(TcpClient socket, AccountOwners.Lease owner, GameSession session)
         {

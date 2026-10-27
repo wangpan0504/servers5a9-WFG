@@ -52,7 +52,7 @@ internal sealed class RaidStartCommands : IDisposable
 }
 
 internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
-    TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null)
+    TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null, bool phaseProgress = false)
 {
     public RaidChange? Leave(RaidActor actor, ushort target)
     {
@@ -87,7 +87,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         var reservations = PlanReservations(expected, cost, room, towns, pieces, now, out var rejection);
         if (rejection is not null) return new(19, rejection);
         // 初始状态沿已解析的真实阶段规则；无奖励策略、MAP登记或计时驱动不授予对应资格。
-        var battle = new AntonRaidBattle(definition.Resources.Script);
+        var battle = new AntonRaidBattle(definition.Resources.Script, antonPhaseProgress: phaseProgress);
         try
         {
             return AccountOwners.Lease.ExecuteRaid(reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
