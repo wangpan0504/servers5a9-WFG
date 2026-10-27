@@ -15,6 +15,8 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public long TimerSequence { get; init; }
     public byte? LukePhaseCoinsUsed { get; init; }
     public bool ClockFaulted { get; init; }
+    public bool PhaseExpired { get; init; }
+    public long PhaseClockGeneration { get; init; }
     public ImmutableDictionary<RaidTimer, long> TimerAnchors { get; init; } = ImmutableDictionary<RaidTimer, long>.Empty;
 }
 internal enum RaidStageFactKind { EnterDungeon, EnterMap, GiveUpDungeon, PhaseEnd }
@@ -127,7 +129,7 @@ internal sealed partial class AntonRaidBattle
 
 
     public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton,
-        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null)
+        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
@@ -137,6 +139,9 @@ internal sealed partial class AntonRaidBattle
             throw new InvalidDataException("卢克阶段策略不完整");
         if (revival is not null && (kind != RaidKind.Luke || script.Phases.Length != 2 || string.IsNullOrWhiteSpace(revival.Source)))
             throw new InvalidDataException("卢克复活策略不完整");
+        if (phaseTimeout is not null && (kind != RaidKind.Luke || !phaseTimeout.Valid(script.Phases.Length)))
+            throw new InvalidDataException("卢克阶段超时兼容策略不完整");
+        lukePhaseTimeout = phaseTimeout;
         lukeRevival = revival;
         lukeCompletion = completion; lukeClock = clock ?? TimeProvider.System;
         Kind = kind;
@@ -206,7 +211,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
                 !current.Symbols.TryGetValue(symbol, out int previous) || previous == value) return null;
             var before = current;
             CommitBattleCandidate(before, Evaluate(before with { Symbols = before.Symbols.SetItem(symbol, value) }, null, symbol, null));
@@ -219,7 +224,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
                 !current.Timers.ContainsKey(timer)) return null;
             var before = current;
             CommitBattleCandidate(before, Evaluate(before with { Timers = before.Timers.Remove(timer), TimerAnchors = before.TimerAnchors.Remove(timer), TimerGenerations = before.TimerGenerations.Remove(timer) }, null, null, timer));
@@ -233,7 +238,7 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (Kind != RaidKind.Luke || instance != Instance || pendingTransition is not null ||
-                TerminalRequested(current) || generation <= 0 ||
+                TerminalRequested(current) || LukePhaseDueLocked() || generation <= 0 ||
                 current.TimerGenerations.GetValueOrDefault(timer) != generation || !current.Timers.ContainsKey(timer)) return null;
             var before = current;
             CommitBattleCandidate(before, Evaluate(before with { Timers = before.Timers.Remove(timer),
@@ -257,6 +262,7 @@ internal sealed partial class AntonRaidBattle
                 : Initialize(before.Phase + 1, before.Revision + 1, Kind == RaidKind.Luke ? before.Symbols : null, before.TimerSequence);
             // 旧阶段实例不能在下一阶段再次产生clear，集合随阶段释放，不随游玩时长增长。
             entries.Clear();
+            AnchorLukePhaseLocked();
             ScheduleLukeClockLocked();
             return new(before, current);
         }
@@ -266,7 +272,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
                 !current.Deferred.TryGetValue(token, out var action)) return null;
             int id;
             RaidDungeonState next;
@@ -285,7 +291,7 @@ internal sealed partial class AntonRaidBattle
         }
     }
 
-    static bool TerminalRequested(AntonRaidBattleView view) => view.ClockFaulted || view.State != AntonRaidBattleState.Fighting ||
+    static bool TerminalRequested(AntonRaidBattleView view) => view.PhaseExpired || view.ClockFaulted || view.State != AntonRaidBattleState.Fighting ||
         view.Deferred.Values.Any(action => action.Tag == "[fail phase]");
 
     AntonRaidBattleView Evaluate(AntonRaidBattleView state, int? dungeon, string? symbol, RaidTimer? timer, RaidStageFact? fact = null)
