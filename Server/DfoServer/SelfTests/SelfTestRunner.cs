@@ -18,6 +18,7 @@ internal static class SelfTestRunner
         CharacterInvestmentScoreTests.RunCore();
         CharacterInvestmentMetadataTests.RunCore();
         ChronicleInvestmentTests.RunCore();
+        DimensionEnergyInvestmentTests.RunCore();
         await CharacterScoreNoticeTests.RunCore();
         await SelfCharacterScoreTests.RunCore();
         await MachineCharacterScoreTests.RunCore();

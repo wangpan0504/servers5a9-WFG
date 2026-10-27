@@ -23,6 +23,7 @@ internal static class CharacterInvestmentScore
 {
     public const string Profile = "character-investment/v2";
     public const string ChronicleProfile = "character-investment/v2.1";
+    public const string DimensionEnergyProfile = "character-investment/v2.2";
     static readonly string[] Modules = ["equipment", "title", "avatar", "pet", "artifact", "medal", "gem",
         "enchant", "random-title", "emblem", "talisman", "rune", "collectbox", "set", "auxiliary", "cosmetic", "random-option", "chronicle", "emancipation", "quality"];
 
@@ -46,9 +47,12 @@ internal static class CharacterInvestmentScore
         Func<int, byte, ItemKind, byte, bool> enchant, Func<uint, bool> randomTitle,
         Func<int, EquipmentSetInvestmentMetadata?> set, Func<int, TalismanDefinition?> talisman,
         Func<int, RuneDefinition?> rune, Func<byte, CollectBoxEntry> collectBox, Func<ItemTemplate, byte, bool> randomOption,
-        Func<ChronicleOption, ChronicleInvestmentMetadata>? chronicle = null)
+        Func<ChronicleOption, ChronicleInvestmentMetadata>? chronicle = null,
+        Func<ItemTemplate, byte, DimensionEnergyInvestmentMetadata>? dimensionEnergy = null)
     {
-        string profile = chronicle is null ? Profile : ChronicleProfile;
+        if (dimensionEnergy is not null && chronicle is null)
+            throw new ArgumentException("v2.2须同时提供已支持的气息目录", nameof(chronicle));
+        string profile = dimensionEnergy is not null ? DimensionEnergyProfile : chronicle is null ? Profile : ChronicleProfile;
         var basis = EquipmentInvestmentScore.Calculate(snapshot.Equipment, template);
         var parts = ImmutableArray.CreateBuilder<CharacterInvestmentPart>();
         CharacterInvestmentResult Result(bool invalid = false) => new(profile, basis.CharacterId, basis.CharacterRevision,
@@ -179,7 +183,22 @@ internal static class CharacterInvestmentScore
                 }
             }
             if (core.EmancipateLevel != 0)
-                Add("emancipation", source, 0, true, note: "unmapped_persisted_emancipate_state");
+            {
+                if (dimensionEnergy is null)
+                    Add("emancipation", source, 0, true, note: "unmapped_persisted_emancipate_state");
+                else Try("emancipation", source, () =>
+                {
+                    if (core.Kind != ItemKind.Equipment) throw new InvalidDataException("次元档宿主不是普通装备");
+                    var support = dimensionEnergy(pair.Template, core.EmancipateLevel);
+                    if (!support.Supported)
+                    {
+                        Add("emancipation", source, 0, true, note: support.Reason);
+                        return;
+                    }
+                    Add("emancipation", source + $"/stages:{core.EmancipateLevel}/effective-level:{support.EffectiveLevel}/profiles:{string.Join(',', support.SourceIds)}",
+                        20 * core.EmancipateLevel, note: "current_resource_support_envelope_not_consumption_history");
+                });
+            }
             RandomOption[] options = [core.Random0, core.Random1, core.Random2];
             bool gap = false;
             var randomTypes = new HashSet<byte>();

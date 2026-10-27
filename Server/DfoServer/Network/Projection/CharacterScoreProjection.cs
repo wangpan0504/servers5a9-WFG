@@ -19,7 +19,7 @@ internal static class CharacterScoreProjection
         var snapshot = capture.Snapshot;
         var score = calculate(snapshot);
         if (score.CharacterId != snapshot.Equipment.CharacterId || score.CharacterRevision != snapshot.Equipment.CharacterRevision ||
-            score.ObservedAt != snapshot.Equipment.ObservedAt || score.Profile is not (CharacterInvestmentScore.Profile or CharacterInvestmentScore.ChronicleProfile) || score.Status == "Invalid" || score.Score is null)
+            score.ObservedAt != snapshot.Equipment.ObservedAt || score.Profile is not (CharacterInvestmentScore.Profile or CharacterInvestmentScore.ChronicleProfile or CharacterInvestmentScore.DimensionEnergyProfile) || score.Status == "Invalid" || score.Score is null)
             throw new InvalidDataException("评分提示计算身份或数据无效");
         long deadline = checked(snapshot.Equipment.ObservedAt + GameSession.ScoreNoticeLifetimeSeconds);
         foreach (var item in snapshot.Worn)
@@ -45,7 +45,12 @@ internal static class CharacterScoreProjection
             int ttl = session.CharacterScoreRemainingMilliseconds(capture, deadline);
             if (ttl == 0) return new("expired", false, score.CharacterId, score.CharacterRevision, score.Profile,
                 score.Score, score.Status, score.ScoreCapped, deadline, false, "机器缓存已到期，未入队");
-            string version = score.Profile == CharacterInvestmentScore.ChronicleProfile ? "v2.1" : "v2";
+            string version = score.Profile switch
+            {
+                CharacterInvestmentScore.DimensionEnergyProfile => "v2.2",
+                CharacterInvestmentScore.ChronicleProfile => "v2.1",
+                _ => "v2"
+            };
             body = MachineCharacterScorePackets.Build(machineNonce, score.CharacterId, score.CharacterRevision,
                 "character-investment", version, score.Partial ? "partial" : "complete", score.Score, score.ScoreCapped, ttl);
         }
