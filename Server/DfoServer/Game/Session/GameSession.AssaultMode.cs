@@ -47,8 +47,9 @@ internal sealed partial class GameSession
     public AssaultDailyCounts AssaultDailyCounts(DateTimeOffset localNow) => owner.Execute(() =>
         Selected is { } character ? repository.LoadAssaultDaily(owner, character.Id, AssaultModeEntryPolicy.DayKey(localNow)) : default);
 
-    AssaultModeAuthorization? CurrentAssaultAuthorization(Character character, uint dungeonId, uint questId) =>
-        questId == 0 && assaultAuthorization is { } authorization && authorization.CharacterId == character.Id &&
+    // 请求可以携带已接取的猎杀任务；任务资格和路线仍由正式入场校验，不影响1547的副本授权身份。
+    AssaultModeAuthorization? CurrentAssaultAuthorization(Character character, uint dungeonId) =>
+        assaultAuthorization is { } authorization && authorization.CharacterId == character.Id &&
         authorization.Selection.Mission == dungeonId &&
         Stopwatch.GetElapsedTime(authorization.IssuedTimestamp) <= AssaultAuthorizationLifetime ? authorization : null;
 
