@@ -13,6 +13,7 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableDictionary<int, long> DungeonGenerations { get; init; } = ImmutableDictionary<int, long>.Empty;
     public ImmutableDictionary<RaidTimer, long> TimerGenerations { get; init; } = ImmutableDictionary<RaidTimer, long>.Empty;
     public long TimerSequence { get; init; }
+    public byte? LukePhaseCoinsUsed { get; init; }
 }
 internal enum RaidStageFactKind { EnterDungeon, EnterMap, GiveUpDungeon, PhaseEnd }
 // 只由已复验的正式Run或阶段deadline构造；不接客户端任意symbol/地图号。
@@ -117,7 +118,7 @@ internal sealed partial class AntonRaidBattle
 
 
     public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton,
-        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null)
+        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
@@ -125,6 +126,9 @@ internal sealed partial class AntonRaidBattle
         if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
         if (completion is not null && (kind != RaidKind.Luke || !ValidLukeCompletion(completion)))
             throw new InvalidDataException("卢克阶段策略不完整");
+        if (revival is not null && (kind != RaidKind.Luke || script.Phases.Length != 2 || string.IsNullOrWhiteSpace(revival.Source)))
+            throw new InvalidDataException("卢克复活策略不完整");
+        lukeRevival = revival;
         lukeCompletion = completion; lukeClock = clock ?? TimeProvider.System;
         Kind = kind;
         this.script = script;
@@ -141,7 +145,8 @@ internal sealed partial class AntonRaidBattle
         return Evaluate(new(Instance, revision, phase, AntonRaidBattleState.Fighting, symbols,
             definition.Dungeons.ToImmutableDictionary(d => d.Id, d => d.InitialState),
             ImmutableDictionary<RaidTimer, int>.Empty)
-            { TimerSequence = timerSequence, DungeonGenerations = Kind == RaidKind.Luke
+            { LukePhaseCoinsUsed = SupportsLukeRevival && phase == 1 ? (byte)0 : null,
+                TimerSequence = timerSequence, DungeonGenerations = Kind == RaidKind.Luke
                 ? definition.Dungeons.ToImmutableDictionary(d => d.Id, d => d.InitialState == RaidDungeonState.Open ? 1L : 0L)
                 : ImmutableDictionary<int, long>.Empty }, null, null, null);
     }
@@ -233,7 +238,7 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (instance != Instance || revision != current.Revision || current.State != AntonRaidBattleState.Reward ||
-                Kind == RaidKind.Luke && (lukeRuns.Count != 0 || members.Any(member => member.Value.Length != PhaseCount)) ||
+                Kind == RaidKind.Luke && (lukeRuns.Count != 0 || lukeRevivalReservations.Count != 0 || members.Any(member => member.Value.Length != PhaseCount)) ||
                 !AllRewardsConfirmed(current.Phase)) return null;
             var before = current;
             current = before.Phase + 1 == script.Phases.Length

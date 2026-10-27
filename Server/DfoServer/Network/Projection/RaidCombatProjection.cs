@@ -47,6 +47,10 @@ internal static class RaidCombatProjection
                 if (actor.IsCurrent && context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance)
                     context.RaidDisplay = identity;
             });
+            // 778没有阶段字段；对应587确实写出后才可按该phase解释used，不发送P1假计数。
+            if (view.Phase == 1 && view.LukePhaseCoinsUsed is { } used)
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_PHASE_COIN_INFO,
+                    RaidCombatPackets.PhaseCoins(used), "raid_phase_coins", () => current() && context.RaidDisplay == identity);
             return true;
         });
     }
