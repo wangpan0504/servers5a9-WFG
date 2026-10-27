@@ -21,6 +21,16 @@ internal sealed partial class GameSession
             CharacterInvestmentScore.Capture(selected, now));
     });
 
+    // 仅提供构造时的剩余缓存提示；发送泵仍另行核验真实身份/期限，入队不表示送达。
+    internal int CharacterScoreRemainingMilliseconds(CharacterScoreNoticeCapture capture, long deadline)
+    {
+        var clock = timeProvider ?? TimeProvider.System;
+        double elapsed = clock.GetElapsedTime(capture.Timestamp).TotalMilliseconds;
+        double lifetime = Math.Min(ScoreNoticeLifetimeSeconds, deadline - capture.Snapshot.Equipment.ObservedAt) * 1000d;
+        double remaining = Math.Min(lifetime - elapsed, deadline * 1000d - clock.GetUtcNow().ToUnixTimeMilliseconds());
+        return elapsed < 0 || remaining < 1 ? 0 : (int)Math.Min(10000, Math.Floor(remaining));
+    }
+
     // 发送泵已在同一owner内，Lease.Execute允许同账号重入；此处不做目录、SQL、网络或日志等待。
     internal string CharacterScoreNoticeStatus(CharacterScoreNoticeCapture capture, long deadline)
     {

@@ -84,7 +84,7 @@ internal static class SelfCharacterScoreTests
         finally { Directory.Delete(logs, true); }
     }
 
-    static async Task ConcurrentCapture()
+    internal static async Task ConcurrentCapture(string? nonce = null)
     {
         using var f = new CharacterScoreNoticeTests.Fixture();
         using var stop = new CancellationTokenSource();
@@ -100,7 +100,7 @@ internal static class SelfCharacterScoreTests
             if (!release.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("score test barrier");
             return f.Calculate(snapshot);
         }, _ => null);
-        var task = Task.Run(() => query.Query(context));
+        var task = Task.Run(() => query.Query(context, nonce));
         try
         {
             That(entered.Wait(TimeSpan.FromSeconds(5)), "已进入锁外资源计算");
@@ -123,7 +123,7 @@ internal static class SelfCharacterScoreTests
         f.Session.EndSelfCharacterScore(newer.Capture!);
     }
 
-    static async Task RejectedQueue()
+    internal static async Task RejectedQueue(string? nonce = null)
     {
         using var f = new CharacterScoreNoticeTests.Fixture();
         using var stop = new CancellationTokenSource();
@@ -134,7 +134,7 @@ internal static class SelfCharacterScoreTests
         await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         for (int i = 0; i < 257 && !stop.IsCancellationRequested; i++) sender.TryPost(0, 2, [1], "fill");
         var query = new SelfCharacterScoreProjection(f.Calculate, _ => null);
-        That(query.Query(context) == "queue_rejected", "自助查询真实有界队列拒绝不伪作已显示");
+        That(query.Query(context, nonce) == "queue_rejected", "自助查询真实有界队列拒绝不伪作已显示");
         try { await held.WaitAsync(TimeSpan.FromSeconds(5)); }
         catch (Exception error) when (error is IOException or OperationCanceledException) { }
     }
