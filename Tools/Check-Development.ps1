@@ -38,7 +38,7 @@ try {
     $directory = Join-Path $output "bin/DfoServer/$variant"
     $server = Join-Path $directory 'DfoServer.dll'
     $artifact = Get-CheckArtifactKey $directory
-    Assert-CheckInputsUnchanged $root $Configuration $source $directory $artifact
+    Assert-CheckInputsUnchanged $root $Configuration $source $directory $artifact $environment
     foreach ($project in @('ArchitectureCheck', 'PvfLib.Tests')) {
         Invoke-Dotnet @((Join-Path $output "bin/$project/$variant/$project.dll"))
     }
@@ -46,14 +46,14 @@ try {
         # 完整入口已包含核心自测；联合验证只运行一次，保留全部资源与事务覆盖。
         Invoke-Dotnet @($server, '--pvf-path', $PvfPath, '--selftest')
     } elseif ($Incremental -and (Test-CheckCache $stamp $source $environment $artifact)) {
-        Write-Output 'CACHED --selftest-core：源码、SDK/环境与程序集内容完全匹配；不是本轮重新执行。'
+        Write-CheckCacheReuse $stamp
     } else {
         Remove-Item -LiteralPath $stamp -ErrorAction SilentlyContinue
         Invoke-Dotnet @($server, '--selftest-core')
-        Assert-CheckInputsUnchanged $root $Configuration $source $directory $artifact
+        Assert-CheckInputsUnchanged $root $Configuration $source $directory $artifact $environment
         Save-CheckCache $stamp $source $environment $artifact
     }
-    Assert-CheckInputsUnchanged $root $Configuration $source $directory $artifact
+    Assert-CheckInputsUnchanged $root $Configuration $source $directory $artifact $environment
     if ($Incremental) { Write-Output 'Incremental development checks passed; cached stages are not a fresh full verification.' }
     elseif ($PvfPath) { Write-Output 'Development and resource checks passed; TCP tests run separately.' }
     else { Write-Output 'Development checks passed; resource integration and TCP tests run separately.' }
