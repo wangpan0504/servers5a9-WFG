@@ -25,7 +25,7 @@ internal static class AvatarPackageTcpTests
                 Inventory = new([.. Enumerable.Range(65, 8).Select(slot => new InventoryItem(0, Bag((short)slot),
                     InventoryRewardGrantService.Create(items.Get(1106), 1000))),
                     new(0, Bag(73), Core(490705385)), new(0, Bag(74), Core(490705425)), new(0, Bag(75), Core(490705426)),
-                    new(0, Bag(76), Core(490008059)), new(0, Bag(77), Core(2683776))])
+                    new(0, Bag(76), Core(490008059)), new(0, Bag(77), Core(2683776)), new(0, Bag(78), Core(490702666))])
             });
         await fixture.StartAsync();
         BoosterTcpTests.SetExpirationDebug(fixture, true);
@@ -94,15 +94,30 @@ internal static class AvatarPackageTcpTests
                 That(before == Snapshot(fixture), "追忆源只消费一次，耗尽重放不重复发八件装扮");
             }
         }
+        var constant = OpenConstantMagnitude(fixture, packages, repo);
+        expected.Add(new(39952, 2));
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
-            CheckAvatarRows(peer.SpecialContainers[1].Body, expected.ToArray(), full: true);
+            byte[] full = peer.SpecialContainers[1].Body;
+            CheckAvatarRows(full, expected.ToArray(), full: true);
+            Bytes(AvatarRow(full, 39952, full: true), constant.Row,
+                "真实39952重连恢复原165B完整核心、永久期限、五孔和颜色，不重建实例");
         }
         await fixture.StopAsync();
-        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[34L]] &&
-            fixture.Query("SELECT count(*),count(DISTINCT i.item_uid) FROM character_inventory_items i JOIN inventory_avatar_details a USING(item_uid)") is [[34L, 34L]],
-            "既有十八件及追忆直开和子盒各八件各自保存一份唯一核心与装扮详情");
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            That(repo.List(owner).Single().Inventory.Items.Single(item => item.Uid == constant.Item.Uid) == constant.Item,
+                "真实39952重连后完整UID、位置、核心和装扮详情与提交实例一致");
+        That(File.ReadLines(Path.Combine(fixture.Options.LogDirectory, "server.jsonl")).Count(line =>
+        {
+            using var entry = JsonDocument.Parse(line); var data = entry.RootElement;
+            return data.GetProperty("Kind").GetString() == "closed" &&
+                data.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
+                data.GetProperty("Detail").GetProperty("Message").GetString() == "SQLite Error 19: 'constant avatar late rollback'.";
+        }) == 1, "真实39952断线精确来自所注入的晚SQL审计故障一次");
+        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[35L]] &&
+            fixture.Query("SELECT count(*),count(DISTINCT i.item_uid) FROM character_inventory_items i JOIN inventory_avatar_details a USING(item_uid)") is [[35L, 35L]],
+            "既有三十四件及真实39952各自保存一份唯一核心与装扮详情");
         await RunMailAsync(source, root, resources, packages);
         await RunObservedSelectionsAsync(source, root, resources);
 
@@ -230,7 +245,22 @@ internal static class AvatarPackageTcpTests
                 Job = 15, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
                 Inventory = new([new(0, Bag(73), InventoryRewardGrantService.Create(items.Get(490705387), shopExpiration: true)), .. filled])
             });
+        // 490702666不允许原邮件角色的Job15；同一fixture保留原角色并增加合法Job0满页角色。
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repo.Create(owner, new("ConstantFull", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 0, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, Bag(74), InventoryRewardGrantService.Create(items.Get(490702666), shopExpiration: true)), .. filled])
+            });
         await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select(1); peer.Barrier();
+            string before = Snapshot(fixture);
+            peer.Send(160, Selection(74, [ConstantRow(packages)], [new(39952, 2)]));
+            peer.Expect(1, 160, [0, 4, 0]); peer.Barrier();
+            That(before == Snapshot(fixture), "真实39952合法选项遇210格满页明确拒绝4，源、实例、UID、审计和邮件均不变");
+        }
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
@@ -271,7 +301,7 @@ internal static class AvatarPackageTcpTests
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             for (short slot = 0; slot < choices.Length; slot++)
             {
-                var character = repo.List(owner).Single();
+                var character = repo.List(owner).Single(character => character.Name == "AvatarMail");
                 var item = character.Inventory.Find(new(InventoryListType.Avatar, slot))!;
                 InventoryService.Commit(repo, owner, character, InventoryDeleteService.Plan(character.Inventory, item.Position, item.Core.Value, 1));
             }
@@ -298,7 +328,7 @@ internal static class AvatarPackageTcpTests
         await fixture.StopAsync();
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
-            var restored = repo.List(owner).Single();
+            var restored = repo.List(owner).Single(character => character.Name == "AvatarMail");
             foreach (var choice in choices)
             {
                 var item = restored.Inventory.Items.Single(item => item.Uid == identities[choice.ItemId]);
@@ -310,6 +340,76 @@ internal static class AvatarPackageTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "装扮礼盒邮件存档完整性");
+    }
+
+    static (byte[] Row, InventoryItem Item) OpenConstantMagnitude(TcpTestFixture fixture,
+        AvatarPackageCatalog packages, CharacterRepository repository)
+    {
+        var row = ConstantRow(packages);
+        var choice = new AvatarPackageChoice(39952, 2);
+        byte[] body = Selection(78, [row], [choice]);
+        long sourceUid = Convert.ToInt64(fixture.Query(
+            "SELECT item_uid FROM character_inventory_slots WHERE list_type=0 AND slot_index=78").Single().Single());
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            string before = Snapshot(fixture);
+            foreach (var invalid in new AvatarPackageChoice[][] { [], [new(39952, 4)], [new(39952, 255)], [new(39953, 2)] })
+            {
+                peer.Send(160, Selection(78, [row], invalid)); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+                That(before == Snapshot(fixture), "真实39952缺属性、越界属性或错配奖励均拒绝19，不消费源或改变任何资产");
+            }
+            fixture.Sql("CREATE TRIGGER fail_constant_avatar BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'constant avatar late rollback'); END");
+            peer.Send(160, body); peer.Closed();
+            That(before == Snapshot(fixture), "真实39952写入核心、详情和槽后的晚审计故障无成功ACK，完整资产、revision和UID序列回滚");
+            fixture.Sql("DROP TRIGGER fail_constant_avatar");
+        }
+        byte[] committed;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            peer.Send(160, body);
+            BoosterTcpTests.ExpectAck(peer, 490702666, 78, [(39952, 1)]);
+            BoosterTcpTests.Entry(peer.Expect(0, 14).Body, 78, -1, 0);
+            byte[] avatars = peer.Expect(0, 14).Body;
+            CheckAvatarRows(avatars, [choice]);
+            committed = AvatarRow(avatars, 39952);
+            byte[] raw = new byte[42]; raw[0] = 30; raw[34] = 4;
+            Bytes(committed.AsSpan(123, 42), raw, "真实39952永久type3完整五孔及颜色均为零，只保留RAW30和RAW4长度标记");
+            peer.Barrier();
+            string before = Snapshot(fixture);
+            peer.Send(160, body); peer.Expect(1, 160, [0, 19, 0]); peer.Barrier();
+            That(before == Snapshot(fixture), "真实490702666耗尽重放不重复发39952，不改变完整实例、版本或UID序列");
+        }
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var item = repository.List(owner).Single().Inventory.Items.Single(item => item.Core.ItemId == 39952);
+            That(item.Position.List == InventoryListType.Avatar && item.Uid > 0 && item.Uid != sourceUid &&
+                item.Core == new ItemCore(39952, ItemKind.Avatar, checked((int)item.Uid)) { Durability = 2 } &&
+                item.Avatar == new AvatarDetail() &&
+                fixture.Query("SELECT item_uid FROM character_inventory_items WHERE item_uid=$p0", sourceUid).Length == 0 &&
+                fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=39952") is [[1L, 1L]],
+                "真实39952完整核心仅属性2和UID非零，永久无孔详情完整持久化，源UID注销且新UID唯一");
+            return (committed, item);
+        }
+    }
+
+    static AvatarPackageRow ConstantRow(AvatarPackageCatalog packages)
+    {
+        var definition = packages.Get(490702666);
+        var row = definition.Categories.Single(category => category.Category == 0 && category.Subcategory == 0)
+            .Rows.Single(row => row.ItemId == 39952);
+        That(definition.SelectionCount == 1 && row == new AvatarPackageRow(39952, 1, 3, 0),
+            "真实490702666的0/0分类选择一件39952，保持原数量、永久type3和默认预览属性0");
+        return row;
+    }
+
+    static byte[] AvatarRow(byte[] body, int itemId, bool full = false)
+    {
+        int header = full ? 5 : 3;
+        int at = Enumerable.Range(0, U16(body, full ? 3 : 1)).Select(index => header + index * 165)
+            .Single(at => U32(body, at + 2) == itemId);
+        return body.AsSpan(at, 165).ToArray();
     }
 
     static void CheckAvatarMailSummary(MailboxTcpTests.Summary summary, AvatarPackageChoice[] choices)
