@@ -19,7 +19,7 @@ internal static class CharacterScoreProjection
         var snapshot = capture.Snapshot;
         var score = calculate(snapshot);
         if (score.CharacterId != snapshot.Equipment.CharacterId || score.CharacterRevision != snapshot.Equipment.CharacterRevision ||
-            score.ObservedAt != snapshot.Equipment.ObservedAt || score.Profile != CharacterInvestmentScore.Profile || score.Status == "Invalid" || score.Score is null)
+            score.ObservedAt != snapshot.Equipment.ObservedAt || score.Profile is not (CharacterInvestmentScore.Profile or CharacterInvestmentScore.ChronicleProfile) || score.Status == "Invalid" || score.Score is null)
             throw new InvalidDataException("评分提示计算身份或数据无效");
         long deadline = checked(snapshot.Equipment.ObservedAt + GameSession.ScoreNoticeLifetimeSeconds);
         foreach (var item in snapshot.Worn)

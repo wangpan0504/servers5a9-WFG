@@ -10,7 +10,7 @@ internal sealed record EnchantmentInvestmentMetadata(bool Known, bool ValidIndex
 internal sealed record EquipmentSetInvestmentMetadata(int SetId, ImmutableArray<int> Thresholds);
 
 // 仅确认建设来源与套装件数，不解释伤害词条或把附魔索引当效果强度。
-internal sealed class CharacterInvestmentMetadataCatalog
+internal sealed partial class CharacterInvestmentMetadataCatalog
 {
     readonly Func<string, PvfTokenDocument> read;
     readonly Func<int, string> resolve;
