@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using PvfLib;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
@@ -18,6 +19,39 @@ namespace DfoServer.Testing.Inventory;
 
 internal static class CeraPackageAvatarTests
 {
+    // 原始解析保留资源声明，正式目录仅对获准的神选内容做精确修正。
+    public static void ShenxuanDefinitions(PvfArchive pvf, ItemResources resources)
+    {
+        foreach (int source in Enumerable.Range(490703475, 56))
+        {
+            var raw = BoosterCatalog.Parse(pvf.ReadText($"stackable/cash/chn_{source}.stk"));
+            That(raw.Available && raw.PackageRewards.Length == 20 &&
+                raw.PackageRewards[^1] == new BoosterReward(5050548, 1, 3),
+                $"神选源{source}的原始解析仍完整保留20项声明");
+            var actual = resources.Boosters.Get(source);
+            That(actual.Available && actual.PackageRewards.Length == 19 &&
+                actual.PackageRewards.SequenceEqual(raw.PackageRewards.Take(19)),
+                $"神选源{source}只移除获准的末项，前19项顺序数量不变");
+        }
+        var original = BoosterCatalog.Parse(pvf.ReadText("stackable/cash/chn_490703475.stk"));
+        foreach (var (id, path, definition) in new (int, string, BoosterDefinition)[]
+        {
+            (490703474, "cash/chn_490703474.stk", original),
+            (490703531, "cash/chn_490703531.stk", original),
+            (490703475, "cash/other.stk", original),
+            (490703475, "cash/chn_490703475.stk", new([new(1, [new(1106, 1, 1)])])),
+            (490703475, "cash/chn_490703475.stk", original with { PendingRule = "资格未实现" }),
+            (490703475, "cash/chn_490703475.stk", original with { PackageRewards = original.PackageRewards.RemoveAt(19) }),
+            (490703475, "cash/chn_490703475.stk", original with { PackageRewards = original.PackageRewards.Add(new(1106, 1, 1)) }),
+            (490703475, "cash/chn_490703475.stk", original with { PackageRewards = original.PackageRewards.SetItem(19, new(1112, 1, 3)) }),
+            (490703475, "cash/chn_490703475.stk", original with { PackageRewards = original.PackageRewards.SetItem(19, new(5050548, 1, 2)) }),
+            (490703475, "cash/chn_490703475.stk", original with { PackageRewards = original.PackageRewards.SetItem(19, new(5050548, 2, 3)) }),
+            (490703475, "cash/chn_490703475.stk", original with { PackageRewards = original.PackageRewards.SetItem(0, new(5050548, 1, 1)) })
+        })
+            That(ReferenceEquals(BoosterCatalog.CorrectShenxuanPackageContents(id, path, definition), definition),
+                "神选内容修正不吞其它来源、结构变化、重复未知奖励或原拒绝规则");
+    }
+
     const int PackageId = 2683533;
     static readonly InventorySlot SourceSlot = new(InventoryListType.Main, 65);
 

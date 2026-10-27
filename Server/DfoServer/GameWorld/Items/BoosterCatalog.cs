@@ -69,8 +69,21 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
 
     // 商店来源只在运行时按在售编号补上：同款礼盒在 PVF 内不带交换声明，判定只依赖商人库存。
     public BoosterDefinition Get(int itemId) => definitions.GetOrAdd(itemId, id => stackable.TryGetValue(id, out string? path)
-        ? Parse(archive.ReadText("stackable/" + path)) with { FromExchangeShop = exchangeShopStock?.Contains(id) == true }
+        ? CorrectShenxuanPackageContents(id, path, Parse(archive.ReadText("stackable/" + path))) with
+        { FromExchangeShop = exchangeShopStock?.Contains(id) == true }
         : new([], "非礼包物品"));
+
+    // 神选固定礼包发放前19项内容；只有已确认的56个源及完整末项形态才应用此内容修正。
+    // 原始解析和其他礼包继续保留全部声明，未知奖励仍由原发奖校验拒绝。
+    internal static BoosterDefinition CorrectShenxuanPackageContents(int itemId, string path, BoosterDefinition definition)
+    {
+        var rewards = definition.PackageRewards;
+        if (itemId is < 490703475 or > 490703530 || path != $"cash/chn_{itemId}.stk" ||
+            !definition.Available || rewards.IsDefaultOrEmpty || rewards.Length != 20 ||
+            rewards[^1] != new BoosterReward(5050548, 1, 3) || rewards.Take(19).Any(row => row.ItemId == 5050548))
+            return definition;
+        return definition with { PackageRewards = rewards.RemoveAt(19) };
+    }
 
     internal static BoosterDefinition Parse(string text)
     {

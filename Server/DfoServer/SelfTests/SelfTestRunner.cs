@@ -351,6 +351,7 @@ internal static class SelfTestRunner
         EpicExchangeTests.Run(towns, characters, itemResources);
         EpicProductionTests.RunResources(pvf,itemResources);
         MaterialExchangeTests.Run(towns, characters, itemResources);
+        CeraPackageAvatarTests.ShenxuanDefinitions(pvf, itemResources);
         BoosterTests.Run(towns, characters, itemResources);
         BoosterSelectionTests.Run(towns, characters, itemResources);
         BoosterDisjointNestedSelectionTests.RunResources(towns, characters, itemResources, DateTimeOffset.UtcNow);
