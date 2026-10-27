@@ -9,18 +9,20 @@ namespace DfoServer.Game.Creatures;
 
 internal sealed record CreatureTransportRequest(ushort StoneSlot, ushort PetSlot, byte Mode, uint RecipientIndex);
 internal sealed record CreatureTransportPlan(Character Character, CharacterRosterEntry Recipient,
-    InventoryPlan Inventory, InventoryItem Pet, long Created);
+    InventoryPlan Inventory, InventoryItem Pet, long Created, InventoryItem Stone, CreatureTransportMailExpiry MailExpiry);
 internal sealed record CreatureTransportCommit(Character Character, uint MailId);
 internal sealed record CreatureTransportResult(InventoryResult Inventory, ushort RecipientId = 0, uint MailId = 0);
 
 // 专用跨界资格与普通寄件交易资格分开，持久化仍复用同一库存及邮件托管事务。
 internal interface ICreatureTransportStore
 {
-    CreatureTransportCommit CommitCreatureTransport(AccountOwners.Lease owner, CreatureTransportPlan plan);
+    CreatureTransportCommit CommitCreatureTransport(AccountOwners.Lease owner, CreatureTransportPlan plan,
+        CreatureTransportMailPolicy currentPolicy);
 }
 
 internal sealed class CreatureTransportService(Func<int, ItemTemplate> items,
     Func<int, ActionConsumableDefinition?> definitions, CreatureCatalog creatures, ICreatureTransportStore store,
+    Func<CreatureTransportMailPolicy> currentMailPolicy,
     TimeProvider? time = null)
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
@@ -51,10 +53,13 @@ internal sealed class CreatureTransportService(Func<int, ItemTemplate> items,
         var after = paid.Plan!.After with { Items = paid.Plan.After.Items.Remove(target) };
         long? deadline = new[] { source.ExpireTime, target.ExpireTime }.Where(value => value > 0).Select(value => (long?)value).Min();
         if (definition.DailyLimit > 0) deadline = Math.Min(deadline ?? long.MaxValue, DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds());
+        long created = now.ToUnixTimeSeconds();
+        var expiry = currentMailPolicy().Create(source.Core.ItemId, created);
         plan = new(character, recipient, new(character.Inventory, after, "creature_transport",
-            new(character, deadline, clock, requirePosition: true)), target, now.ToUnixTimeSeconds());
+            new(character, deadline, clock, requirePosition: true)), target, created, source, expiry);
         return 0;
     }
 
-    public CreatureTransportCommit Commit(AccountOwners.Lease owner, CreatureTransportPlan plan) => store.CommitCreatureTransport(owner, plan);
+    public CreatureTransportCommit Commit(AccountOwners.Lease owner, CreatureTransportPlan plan) =>
+        store.CommitCreatureTransport(owner, plan, currentMailPolicy());
 }

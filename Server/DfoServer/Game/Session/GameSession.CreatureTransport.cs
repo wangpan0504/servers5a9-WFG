@@ -13,7 +13,7 @@ internal sealed partial class GameSession
             // 收件值是最近下发名册的行索引，不是角色ID、持久槽位或排除自身后的下拉框序号。
             var recipient = publishedRoster is { } roster && roster.Generation == owner.Generation &&
                 request.RecipientIndex < roster.Entries.Length ? roster.Entries[(int)request.RecipientIndex] : null;
-            return (Character: CanTransport() ? Selected : null, Recipient: recipient, Epoch: SelectionEpoch);
+            return (Character: CanTransport() ? Selected : null, Recipient: recipient, Epoch: SelectionEpoch, Roster: publishedRoster);
         });
         if (capture.Character is not { } character || capture.Recipient is not { } recipient)
             return new(InventoryResult.Reject(7));
@@ -22,7 +22,10 @@ internal sealed partial class GameSession
         if (error != 0) return new(InventoryResult.Reject(error));
         return owner.Execute(() =>
         {
-            if (!CanTransport() || SelectionEpoch != capture.Epoch || !ReferenceEquals(Selected, character))
+            if (!CanTransport() || SelectionEpoch != capture.Epoch || !ReferenceEquals(Selected, character) ||
+                !ReferenceEquals(publishedRoster, capture.Roster) || publishedRoster is not { } currentRoster ||
+                currentRoster.Generation != owner.Generation || request.RecipientIndex >= currentRoster.Entries.Length ||
+                currentRoster.Entries[(int)request.RecipientIndex] != recipient)
                 return new CreatureTransportResult(InventoryResult.Reject(7));
             var committed = service.Commit(owner, plan!);
             Selected = committed.Character;
