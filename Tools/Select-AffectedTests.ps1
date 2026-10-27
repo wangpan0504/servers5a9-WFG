@@ -58,7 +58,9 @@ $changed = @($changed | Where-Object { $_ } | ForEach-Object { $_.Trim() -replac
 $fullPatterns = @(
     '^Server/DfoServer/(Program\.cs|Application/|Infrastructure/|Network/Core/)',
     '^Server/DfoServer/SelfTests/(SelfTestRunner|TestCheck|SelfTestCatalogs)\.cs$',
-    '^Tools/PvfLib/', '\.csproj$', '\.sln$', '^Directory\.Build\.', '^global\.json$'
+    '^Tools/(PvfLib|PvfLib.Tests|ArchitectureCheck)/', '\.(csproj|fsproj|sln|slnx|props|targets)$',
+    '(^|/)(global\.json|nuget\.config|packages\.lock\.json)$',
+    '^Server/DfoServer/(Resources|Data)/', '\.(json|config|pvf)$'
 )
 # 公共测试框架与 TCP 入口：开发期跑冒烟组，合并前必须全量 TCP（见 CONTRIBUTING.md 检查范围）。
 $harnessPattern = '^Server/DfoServer/SelfTests/Tcp/(TcpPeer|TcpRegressionTests|TcpTestFixture|TcpTestResources|TcpTestShards|TcpTestArtifacts|TcpTestRetention|TcpTestTimings|TcpTestDatabaseTemplate|TcpTestClient\w*)\.cs$'
@@ -141,15 +143,21 @@ $coreOnly = New-Object System.Collections.Generic.List[string]
 $reasons = New-Object System.Collections.Generic.List[string]
 $groups = New-Object System.Collections.Generic.SortedSet[string]
 $codeChanged = $false
+$scriptChanged = $false
 $broadLimit = [math]::Ceiling($groupText.Count * 0.4)
 if ($Full) { $reasons.Add('指定 -Full（合并前全量）') }
 foreach ($path in $changed) {
-    if ($path -match '\.(md|txt)$' -or $path -match '^(Docs|\.forgejo)/') { continue }
-    if ($path -match '^Tools/' -and $path -notmatch '^Tools/(PvfLib|ArchitectureCheck)/') { continue }
+    if ($path -match '\.md$' -or $path -match '^Docs/') { continue }
+    # 先识别共享配置与资源，不能被 Tools 或 .txt 的忽略规则吞掉。
+    if ($fullPatterns | Where-Object { $path -match $_ }) {
+        $codeChanged = $true; $full = $true; $reasons.Add("共享输入：$path"); continue
+    }
+    if ($path -match '\.txt$') { continue }
+    if ($path -match '^Tools/.*\.(ps1|py|sh|bat|cmd)$') { $scriptChanged = $true; continue }
     $codeChanged = $true
-    if ($fullPatterns | Where-Object { $path -match $_ }) { $full = $true; $reasons.Add("入口文件：$path"); continue }
     if ($path -match $harnessPattern) { $harness = $true; foreach ($g in $smokeGroups) { [void]$groups.Add($g) }; continue }
     if ($schemaPatterns | Where-Object { $path -match $_ }) { $schema = $true; foreach ($g in $schemaGroups) { [void]$groups.Add($g) }; continue }
+    if ($path -notmatch '\.cs$') { $full = $true; $reasons.Add("无法证明依赖：$path"); continue }
     $stem = [IO.Path]::GetFileNameWithoutExtension($path) -replace '\..*$', ''
     $matched = @(Get-RegistryGroups $stem)
     foreach ($key in $keywordGroups.Keys) {
@@ -164,7 +172,7 @@ foreach ($path in $changed) {
     if ($matched.Count -ne 0) { continue }
     # 非 TCP 的自测文件由 --selftest-core / 完整 --selftest 覆盖，不触发全量 TCP。
     if ($path -match '^Server/DfoServer/SelfTests/[^/]+\.cs$') { $coreOnly.Add($path); continue }
-    if ($path -match '\.cs$') { $full = $true; $reasons.Add("无法映射：$path") }
+    $full = $true; $reasons.Add("无法映射：$path")
 }
 
 $selected = @($groups | Where-Object { $groupText.Contains($_) })
@@ -187,7 +195,8 @@ function Get-Estimate([string[]]$names) {
 }
 
 Write-Output "基线：$baseText；改动文件 $($changed.Count) 个"
-if (-not $codeChanged -and -not $Full) { Write-Output '仅文档或脚本变化：检查链接与内容即可，无需构建或 TCP。' }
+if ($scriptChanged) { Write-Output '工具脚本变化：须执行对应脚本/参数回归；验证工具使用 Tools/Test-DevelopmentChecks.ps1。未在此自动执行脚本验证。' }
+if (-not $codeChanged -and -not $Full) { Write-Output 'SKIPPED build/TCP：仅文档或独立工具脚本变化；文档检查与上述脚本验证不能省略。' }
 elseif ($full) {
     Write-Output ('全量 TCP：' + (($reasons | Select-Object -First 5) -join '；'))
     Write-Output ('全量估计：' + (Get-Estimate @($groupText.Keys)))
@@ -221,16 +230,16 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "构建失败（$LASTEXITCODE）" }
     Write-Output ('EXECUTED build {0:F1}s' -f $watch.Elapsed.TotalSeconds)
     $artifact = Get-CheckArtifactKey $artifactDirectory
-    Assert-CheckInputsUnchanged $root $Configuration $key $artifactDirectory $artifact
+    Assert-CheckInputsUnchanged $root $Configuration $key $artifactDirectory $artifact $environment
     $watch.Restart()
     if (-not $full -and -not $NoCache -and (Test-CheckCache $coreStamp $key $environment $artifact)) {
-        Write-Output 'CACHED --selftest-core：源码、SDK/环境与程序集内容完全匹配；不是本轮重新执行。'
+        Write-CheckCacheReuse $coreStamp
     } else {
         # 失败或中断前先撤销旧通过记录，不能保留旧绿灯。
         Remove-Item -LiteralPath $coreStamp -ErrorAction SilentlyContinue
         & dotnet $dll --selftest-core
         if ($LASTEXITCODE -ne 0) { throw "--selftest-core 失败（$LASTEXITCODE）" }
-        Assert-CheckInputsUnchanged $root $Configuration $key $artifactDirectory $artifact
+        Assert-CheckInputsUnchanged $root $Configuration $key $artifactDirectory $artifact $environment
         Save-CheckCache $coreStamp $key $environment $artifact
         Write-Output ('EXECUTED --selftest-core {0:F1}s' -f $watch.Elapsed.TotalSeconds)
     }
@@ -239,15 +248,19 @@ try {
     if ($PvfPath) { $runArgs += @('--pvf-path', $PvfPath) }
     $runArgs += '--selftest-tcp'
     if (-not $full) { $runArgs += $selection }
-    $env:DFO_TCP_TIMINGS = $TimingsPath
-    $watch.Restart()
-    & dotnet $dll @runArgs
-    if ($LASTEXITCODE -ne 0) { throw "TCP 回归失败（$LASTEXITCODE）" }
+    # 只在 TCP 子进程期间覆盖耗时文件，不能污染下轮 core 的环境指纹。
+    $previousTimings = $env:DFO_TCP_TIMINGS
+    try {
+        $env:DFO_TCP_TIMINGS = $TimingsPath
+        $watch.Restart()
+        & dotnet $dll @runArgs
+        if ($LASTEXITCODE -ne 0) { throw "TCP 回归失败（$LASTEXITCODE）" }
+    } finally { $env:DFO_TCP_TIMINGS = $previousTimings }
     Write-Output ('TCP {0:F1}s' -f $watch.Elapsed.TotalSeconds)
     if ($full) { Write-Output '全量 TCP 已通过；合并前还须运行一次完整 --selftest（Tools/Check-Development.ps1 -PvfPath <PVF>）。' }
     elseif ($harness -or $schema) { Write-Output '开发期定向检查已通过；合并前仍须 -Full 全量 TCP 与完整 --selftest。' }
 
-    Assert-CheckInputsUnchanged $root $Configuration $key $artifactDirectory $artifact
+    Assert-CheckInputsUnchanged $root $Configuration $key $artifactDirectory $artifact $environment
 } catch {
     if ($lock -and $coreStamp) { Remove-Item -LiteralPath $coreStamp -ErrorAction SilentlyContinue }
     throw
