@@ -51,6 +51,8 @@ internal static partial class AntonRaidTcpTests
         for (int n = 0; n < 64 && !packets.Any(p => p is { Kind: 1, Opcode: 666 }); n++) packets.Add(peer.Read());
         Bytes(packets.Single(p => p is { Kind: 1, Opcode: 666 }).Body, [1], "配置覆盖从正常Runtime与666完成单人开战");
         Bytes(packets.Single(p => p.Opcode == 587).Body, [2, 0], "单人收到真实阶段通知");
+        VerifyMap(packets.Single(p => p.Opcode == 585).Body);
+        Bytes(packets.Single(p => p.Opcode == 583).Body, [1, 7, 0, 0, 0, 0, 0, 0, 0], "开战显式清除旧感染存在位");
         That(packets.Any(p => p.Opcode == 9) && packets.Any(p => p.Opcode == 594) && packets.Any(p => p.Opcode == 24),
             "单人完整分队、准备和迁移链");
         VerifyCosts(packets.Single(p => p.Opcode == 598).Body, [peer.Id], 2, 1);
@@ -65,5 +67,22 @@ internal static partial class AntonRaidTcpTests
         peer.Send(666); Bytes(Until(peer, 1, 666).Body, [1], "单人重复开战幂等确认"); Drain(peer);
         That(fixture.Snapshot() == saved && fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") == inventory,
             "普通12回应与重复666不重扣、不迁移或重建资产");
+        for (int round = 0; round < 2; round++)
+        {
+            peer.Send(15, new byte[4]);
+            var selected = new List<WirePacket>();
+            for (int n = 0; n < 64 && !selected.Any(p => p is { Kind: 0, Opcode: 27 }); n++) selected.Add(peer.Read());
+            VerifyMap(selected.Single(p => p.Opcode == 585).Body);
+            Bytes(selected.Single(p => p is { Kind: 1, Opcode: 15 }).Body, [1], "候战室正常打开选图");
+            Bytes(selected.Single(p => p.Opcode == 27).Body, new byte[42], "27保留场景合同，地下城状态由585单独提供");
+            That(selected.FindIndex(p => p.Opcode == 585) < selected.FindIndex(p => p.Opcode == 27) &&
+                selected.All(p => p.Opcode is not (587 or 28 or 29)), "重复打开只重同步地图，不重播开战或伪造入场");
+            peer.Send(132);
+            Bytes(peer.Expect(1, 132).Body, [1], "选图返回保持原ACK132");
+            peer.Expect(0, 3); peer.Expect(0, 23); peer.Expect(0, 24); Drain(peer);
+        }
+        That(fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") == inventory &&
+            fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE action_name LIKE 'anton_raid_start:%'") is [[1L]],
+            "选图重同步与返回不重复扣票或改变资产");
     }
 }

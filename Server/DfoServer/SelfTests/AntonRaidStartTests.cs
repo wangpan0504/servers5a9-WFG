@@ -84,13 +84,17 @@ internal static class AntonRaidStartTests
             That(Scalar(balance) == 60 && Scalar("SELECT count(*) FROM characters WHERE town=19 AND area=2") == 0 &&
                 Scalar("SELECT count(*) FROM inventory_audit_log WHERE action_name LIKE 'anton_raid_start:%'") == 0 &&
                 registry.IsCurrent(expected) && parties.Snapshot().Length == 0 &&
-                sessions.Take(20).Select((s, i) => ReferenceEquals(s.Selected, original[i]) && s.StartedRaid is null).All(x => x),
+                sessions.Take(20).Select((s, i) => ReferenceEquals(s.Selected, original[i]) && s.StartedRaid is null && s.RaidCombatView() is null).All(x => x),
                 "SQL失败不留下部分扣票、迁移、审计、分队或在线开战状态");
             Sql("DROP TRIGGER fail_anton_last;");
             var result = service.Start(actors[0], expected, definition);
             That(result is { Error: 0, Receipt.Party.Started.Participants.Length: 20 } && Scalar(balance) == 40 &&
                 Scalar("SELECT count(*) FROM characters WHERE town=19 AND area=2") == 20, "二十人一次提交实际成功并持久扣票/迁移");
             var receipt = result.Receipt!;
+            That(receipt.Battle is { } view && view.Instance == receipt.Party.Started!.InstanceId &&
+                actors.Take(20).All(a => ReferenceEquals(a.Session.CurrentRaidBattle(a), actors[0].Session.CurrentRaidBattle(actors[0]))) &&
+                actors[0].Session.CurrentRaidBattle(actors[0])?.RewardPolicy(actors[0], 0) is null,
+                "开战后全员共享实际实例聚合；没有显式奖励策略仍无领奖资格");
             for (int i = 0; i < 20; i++)
             {
                 var committed = sessions[i].Selected!;
@@ -120,7 +124,7 @@ internal static class AntonRaidStartTests
             var departing = sessions[3].Selected;
             var left = service.Leave(actors[3], actors[3].Character);
             That(left is not null && left.Before.Started?.InstanceId == receipt.Party.Started!.InstanceId && left.After?.Members.Length == 19 &&
-                registry.Find(actors[3]) is null && sessions[3].StartedRaid is null && parties.Current(sessions[3]) is null &&
+                registry.Find(actors[3]) is null && sessions[3].StartedRaid is null && sessions[3].RaidCombatView() is null && parties.Current(sessions[3]) is null &&
                 parties.Current(sessions[0])?.Members.Length == 3 && ReferenceEquals(sessions[3].Selected, departing) && Scalar(balance) == 30,
                 "665在原owner内同时清除攻坚与普通分队身份，剩余名册取实际结果且不凭未知退款合同改资产");
 

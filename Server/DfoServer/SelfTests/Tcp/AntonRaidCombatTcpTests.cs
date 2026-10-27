@@ -116,6 +116,7 @@ internal static class AntonRaidCombatTcpTests
                 BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(2), boss!.ObjectKey);
                 BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(13), 6);
                 peer.Send(117, body);
+                Bytes(peer.Expect(0, 586).Body, [3, 0, 0, 0, 0, 3], "已提交清图先更新真实DGN状态，未收到585也可建键");
                 Bytes(peer.Expect(0, 601).Body, [0, (byte)phase, 17, 0, 0, 0, 0x34, 0x12, 3, 1], "601先安装配置明确的本阶段结果");
                 Bytes(peer.Expect(0, 587).Body, [3, (byte)phase], "587随后打开本阶段奖励");
                 Bytes(peer.Expect(0, 115).Body, [1, 1, (byte)boss.ObjectKey, (byte)(boss.ObjectKey >> 8)], "117确认仅回实际Boss键");

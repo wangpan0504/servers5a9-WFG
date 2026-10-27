@@ -335,9 +335,11 @@ internal static partial class AntonRaidTcpTests
             .Select(e => e.GetProperty("Detail")).Where(e => e.GetProperty("Reason").GetString() == "squads-unassigned").ToArray();
         That(starts.Length == 5 && starts.Count(e => e.GetProperty("Members").GetInt32() == 10) == 2 &&
             starts.Count(e => e.GetProperty("Members").GetInt32() == 20) == 3 && starts.All(e => e.GetProperty("Error").GetInt32() == 19 &&
-            e.GetProperty("MissingDungeons").GetInt32() == 14 && e.GetProperty("MissingMaps").GetInt32() == 72 &&
+            e.GetProperty("MissingDungeons").GetInt32() == 0 && e.GetProperty("MissingMaps").GetInt32() == 72 &&
+            e.GetProperty("MissingFormalDungeons").GetInt32() == 14 && e.GetProperty("MissingFormalMaps").GetInt32() == 72 &&
             e.GetProperty("TutorialScripts").GetInt32() == 14 && e.GetProperty("MissingItems").GetInt32() == 0 &&
-            e.GetProperty("DefinitionIssues").GetInt32() == 0 && e.GetProperty("DungeonSample").GetString()!.Split(',').Length <= 8),
+            e.GetProperty("DefinitionIssues").GetInt32() == 0 && e.GetProperty("DungeonSample").GetString() == "" &&
+            e.GetProperty("FormalDungeonSample").GetString()!.Split(',').Length <= 8),
             "未编队拒绝保留有界资源诊断，但主地图缺项不再阻塞已闭合的开战候战室路径");
     }
 

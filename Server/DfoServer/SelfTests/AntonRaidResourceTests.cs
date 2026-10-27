@@ -132,6 +132,9 @@ internal static class AntonRaidResourceTests
         var dungeons = SelfTestCatalogs.Dungeons(pvf);
         var definition = catalog.PrepareResources(pvf, dungeons, items).Find(0)!;
         var resources = definition.Resources!;
+        That(resources.EntryCatalog is { MissingDungeons.IsEmpty: true, DungeonPaths.Count: 14, MissingMaps.Length: 72 } entry &&
+            resources.Dungeons.All(row => entry.DungeonPaths[row.Id] == row.TutorialPath) && entry.Find(210) is null,
+            "团本专用目录登记真实tutorial的14项DGN；缺72MAP继续拒绝可执行Definition且不污染普通主表");
         var script = resources.Script;
         AntonRaidBattleTests.RunResources(script);
         That(resources.Issues.IsEmpty, "真实安徒恩资源语法完整支持：" + string.Join(';', resources.Issues.Select(i => $"{i.Code}@{i.TokenIndex}:{i.Detail}")));
