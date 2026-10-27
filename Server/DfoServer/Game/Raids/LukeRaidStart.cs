@@ -16,6 +16,7 @@ internal sealed record LukeRaidStartPolicy(string Source, RaidScript ExecutionSc
     public LukeRaidCompletionPolicy? Completion { get; init; }
     public LukeRaidRevivalPolicy? Revival { get; init; }
     public LukeRaidClockPolicy? Timers { get; init; }
+    public LukeRaidPhaseTimeoutPolicy? PhaseTimeout { get; init; }
 }
 
 internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
@@ -51,8 +52,9 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
         if (PrepareBattle(out var preparedBattle) is { } executionRejection) return new(19, executionRejection);
         var battle = preparedBattle!;
         var instance = battle.Instance;
-        var timerLease = policy.Timers is null ? null : timers?.Reserve(battle);
-        if (policy.Timers is not null && timerLease is null) return new(19, "luke-timer-capacity-unavailable");
+        bool needsClock = policy.Timers is not null || policy.PhaseTimeout is not null;
+        var timerLease = needsClock ? timers?.Reserve(battle) : null;
+        if (needsClock && timerLease is null) return new(19, "luke-timer-capacity-unavailable");
         bool installed = false;
         try
         {
@@ -106,7 +108,7 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
     string? PrepareBattle(out AntonRaidBattle? battle)
     {
         battle = null;
-        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival); }
+        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival, policy.PhaseTimeout); }
         catch (InvalidDataException) { return "luke-execution-policy-invalid"; }
         catch (KeyNotFoundException) { return "luke-execution-policy-reference-invalid"; }
         catch (IndexOutOfRangeException) { return "luke-execution-policy-field-invalid"; }
@@ -128,6 +130,11 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
                 grant.Count <= 0 || !rewardItems.TryGet(grant.ItemId, out _)))))) return "luke-completion-policy-unavailable";
         if (policy.Timers is { } timerPolicy && (string.IsNullOrWhiteSpace(timerPolicy.Source) || policy.Run is null || timers is null))
             return "luke-timer-policy-unavailable";
+        if (policy.PhaseTimeout is { } phaseTimeout && (policy.Run is null || timers is null ||
+            !phaseTimeout.Matches(original))) return "luke-phase-timeout-policy-unavailable";
+        if (policy.PhaseTimeout is not null && policy.Timers is null && script.Phases.Any(phase =>
+            phase.Rules.Any(rule => rule.Behavior.Any(clause => clause.Tag == "[set timer]"))))
+            return "luke-rule-timer-policy-required";
         if (policy.Revival is { } revival && (string.IsNullOrWhiteSpace(revival.Source) || policy.Run is null ||
             original.Phases.Length != 2 || original.Phases[0].Declarations.Any(row => row.Tag == "[phase coin limit]") ||
             original.Phases[1].Declarations.Count(row => row.Tag == "[phase coin limit]" && row.Values.Length == 1 &&
