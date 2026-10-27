@@ -28,7 +28,7 @@ namespace DfoServer.Network.Handlers;
 /// 字节合同见 <c>Docs/协议/聊天.md</c>；层 id 兜底等已知缺陷见 <c>Docs/模块/聊天.md</c>。
 /// </para>
 /// <para>
-/// 本服普通频道精确全文“#战力”是唯一自助评分命令；其余合法 <c>0x0011</c> 走正式投递
+/// 本服普通频道精确全文“#战力”与明确的客户端机器命令是自助评分入口；其余合法 <c>0x0011</c> 走正式投递
 /// （解析 → 每连接节流 → 静音/封禁预留钩子 → CP936 截断到 200 字节 → 喇叭先扣物品 → 投递计划 → 记录实际投递结果）。
 /// GM <c>chat-inject</c> 是独立的诊断入口，只向指定在线连接注入测试帧，不经过这里。
 /// </para>
@@ -81,7 +81,15 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
-        // 限流和封禁后只识别本服明确的一条普通频道全文命令，不trim、不接收目标或任意GM参数。
+        // 限流和封禁后只识别本服明确的普通频道评分命令，不trim、不接收目标或任意GM参数。
+        if (SelfCharacterScoreProjection.MachineNamespace(send))
+        {
+            string? nonce = SelfCharacterScoreProjection.MachineNonce(send);
+            string status = nonce is null ? "invalid_request" : selfScore?.Query(context, nonce) ?? "unavailable";
+            log.Write("character_score_machine_query", new { Connection = context.Id, Status = status });
+            return CommandResult.Handled;
+        }
+
         if (SelfCharacterScoreProjection.Matches(send))
         {
             string status = selfScore?.Query(context) ?? "unavailable";
