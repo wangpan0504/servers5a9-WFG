@@ -26,8 +26,14 @@ internal sealed partial class GameSession
             published.Characters.Version != tagEvildomCharacterVersion ||
             !ReferenceEquals(published.Characters.Projection.Roster, tagEvildomRoster)) return null;
         var original = published.Characters.Primary;
-        // 普通走动/房间出口只改位置与revision，不改Actor资料；其余变化必须重新完成真实入城投影。
-        if ((current with { Revision = original.Revision, Position = original.Position, Return = original.Return }) != original ||
+        // 普通走动/房间出口只改位置与revision，不改Actor资料；每日服务器道具补充只改Inventory.ServerItems，
+        // 同属跨特性日切而不是玩家资料变化。其余背包、技能与外观字段仍须逐项一致，改变时重新完成真实入城投影。
+        var comparable = current with
+        {
+            Revision = original.Revision, Position = original.Position, Return = original.Return,
+            Inventory = current.Inventory with { ServerItems = original.Inventory.ServerItems }
+        };
+        if (comparable != original ||
             !published.PrimaryAppearance.Matches(current, now) || !published.StandbyAppearance.Matches(published.Characters.Standby, now)) return null;
         var rebased = published.Characters with { Primary = current };
         return store.MatchesTagEvildomCharacters(owner, rebased) ? rebased : null;
