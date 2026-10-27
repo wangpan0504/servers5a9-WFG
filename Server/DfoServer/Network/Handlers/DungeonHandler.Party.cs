@@ -14,8 +14,11 @@ namespace DfoServer.Network.Handlers;
 
 internal sealed partial class DungeonHandler
 {
-    public void PreparePartyContext(GameConnectionContext context) =>
+    public void PreparePartyContext(GameConnectionContext context)
+    {
         context.Session.PartyDungeonNoticeArrived = notice => PublishPartyNoticeAsync(context, notice);
+        if (partyDungeons is not null) context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle);
+    }
 
     static Task PublishPartyHostAsync(GameConnectionContext context, PartyMember[] members, Func<bool> guard)
     {
