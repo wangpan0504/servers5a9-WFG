@@ -31,7 +31,10 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool CanMoveHopeOrOrdinary(DungeonPoint target) => HopeCatalog is { } catalog && HopeBinding is { } binding
         ? OperationHopePlan.IsDeclaredTransition(catalog,binding.MazeOrdinal,current.Plan.Room.Map.Position,target)
-        : connections.Contains((current.Plan.Room.Map.Position,target)) || CanRidableWarp(target) || CanBorderTownWarp(target);
+        : connections.Contains((current.Plan.Room.Map.Position,target)) || CanRidableWarp(target) || CanBorderTownWarp(target) ||
+            entry.LostLand is not null && target != current.Plan.Room.Map.Position &&
+            entry.Maze.WarpMaps.Any(warp => warp.Source == current.Plan.Room.Map.Position && warp.Destination == target) &&
+            current.Plan.Room.LostLandWarps.Any(warp => warp.Destination == target);
 
     private bool IsHopeTerminalRoom() => HopeCatalog is { } catalog && HopeBinding is { } binding &&
         OperationHopePlan.IsDeclaredTerminal(catalog,binding.MazeOrdinal,current.Plan.Room.Map.Id) &&

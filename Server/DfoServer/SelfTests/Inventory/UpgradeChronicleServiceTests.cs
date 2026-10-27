@@ -27,7 +27,7 @@ internal static class UpgradeChronicleServiceTests
         {
             [Blueprint] = new(Blueprint, ItemKind.Consumable, 0, 95, 0, 0, 10, 4, 95, "[trade]", 255, 0, "设计图"),
             [Target] = new(Target, ItemKind.Equipment, 14, 95, 0, 0, 10, 6, 95, "[trade]", 255, 0, "传说上衣"),
-            [Output] = new(Output, ItemKind.Equipment, 14, 95, 18, 0, 10, 4, 95, "[trade]", 255, 0, "史诗上衣"),
+            [Output] = new(Output, ItemKind.Equipment, 14, 95, 18, 1, 10, 4, 95, "[trade]", 255, 0, "史诗上衣"),
             [Cube] = new(Cube, ItemKind.Material, 0, 1, 0, 999, 0, 3, 1, "[trade]", 255, 0, "晶块"),
             [Cloth] = new(Cloth, ItemKind.Material, 0, 1, 0, 999, 0, 3, 1, "[trade]", 255, 0, "布片"),
             [Other] = new(Other, ItemKind.Equipment, 14, 95, 0, 0, 10, 6, 95, "[trade]", 255, 0, "别的传说")
@@ -78,6 +78,29 @@ internal static class UpgradeChronicleServiceTests
         That(!service.Upgrade(Fixture(targetItemId: Other), BlueprintSlot, Blueprint, TargetSlot, Other).Accepted, "不在0号位的装备不能升级");
         That(!service.Upgrade(Fixture(), BlueprintSlot, Other, TargetSlot, Target).Accepted, "设计图槽位与id不符时拒绝");
         That(!service.Upgrade(Fixture(), new(InventoryListType.Equipment, 5), Blueprint, TargetSlot, Target).Accepted, "非Main槽位不能当设计图");
+        foreach (int ticketType in new[] { 0, 1, 4, 6, 8, 18, 19, 22, 23 })
+        {
+            var rules = new UpgradeChronicleDefinition(Blueprint, [new(0, [Target], [], Output, 1)], ticketType)
+                { MaximumUpgrade = ticketType is 4 or 18 ? 10 : -1, MaximumAmplify = ticketType is 4 or 18 ? 10 : -1,
+                    MaximumRefinement = ticketType is 4 or 18 ? 4 : -1 };
+            var legacyService = new InventoryUpgradeChronicleService(new([rules]), catalog,
+                new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"));
+            var fixture = Fixture();
+            var original = fixture.Inventory.Find(TargetSlot)!;
+            original = original with { Core = original.Core with { Attr = 15, GenuineUpgrade = 8,
+                AmplifyType = 2, AmplifyValue = 123, SealFlag = 1, Value = 87654321 } };
+            fixture = fixture with { Inventory = fixture.Inventory with { Items = fixture.Inventory.Items.Replace(fixture.Inventory.Find(TargetSlot)!, original) } };
+            var legacy = legacyService.Upgrade(fixture, BlueprintSlot, Blueprint, TargetSlot, Target);
+            var core = legacy.Plan!.After.Find(TargetSlot)!.Core;
+            That(legacy.Accepted && legacy.Plan.After.Find(TargetSlot)!.Uid == original.Uid && core.Value == original.Core.Value,
+                "各转换族保持真实UID与原品级");
+            bool reset = ticketType is 0 or 8 or 22;
+            That(core.Upgrade == (reset ? 0 : ticketType is 4 or 18 ? 10 : 15) &&
+                core.GenuineUpgrade == (reset ? 0 : ticketType is 4 or 18 ? 4 : 8) &&
+                core.EnchantCardId == (reset ? 0 : 900), "按卷轴族重置、封顶或完整保留打造");
+            That(core.EmblemSocketCount == (ticketType is 0 or 1 or 4 or 6 or 8 or 18 or 22 ? 0 : 1),
+                "只在规则声明会消失的转换族清除孔和徽章");
+        }
         Character Change(InventorySlot slot, Func<InventoryItem, InventoryItem> change)
         {
             var fixture = Fixture();

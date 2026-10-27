@@ -12,7 +12,7 @@ namespace DfoServer;
 internal static class RecipeCraftServiceTests
 {
     const int Blueprint = 65001, Target = 65002, Output = 65003, Cube = 65004, Cloth = 65005,
-        Ordinary = 65006, Npc = 65007, Failed = 65008;
+        Ordinary = 65006, Npc = 65007, Failed = 65008, ProbabilityUpgrade = 65009;
     static readonly InventorySlot BlueprintSlot = new(InventoryListType.Main, 65);
     static readonly InventorySlot TargetSlot = new(InventoryListType.Main, 9);
     static readonly InventorySlot CubeSlot = new(InventoryListType.Main, 121);
@@ -28,6 +28,7 @@ internal static class RecipeCraftServiceTests
             [Ordinary] = new(Ordinary, ItemKind.Consumable, 0, 1, 0, 999, 120, 4, 1, "[trade]", 255, 0, "普通图"),
             [Npc] = new(Npc, ItemKind.Consumable, 0, 1, 0, 999, 9999, 4, 1, "[trade]", 255, 0, "NPC配方"),
             [Failed] = new(Failed, ItemKind.Consumable, 0, 1, 0, 999, 0, 4, 1, "[trade]", 255, 0, "概率配方"),
+            [ProbabilityUpgrade] = new(ProbabilityUpgrade, ItemKind.Consumable, 0, 1, 0, 999, 0, 4, 1, "[trade]", 255, 0, "概率升级图"),
             [Target] = new(Target, ItemKind.Equipment, 14, 90, 0, 1, 10, 6, 90, "[sealing]", 255, 0, "原装备"),
             [Output] = new(Output, ItemKind.Equipment, 14, 90, 0, 1, 10, 4, 90, "[sealing]", 255, 0, "产物"),
             [Cube] = new(Cube, ItemKind.Material, 0, 1, 0, 999, 0, 3, 1, "[trade]", 255, 0, "晶块"),
@@ -40,7 +41,9 @@ internal static class RecipeCraftServiceTests
         var recipes = new ItemRecipeCatalog([new ItemRecipeDefinition(Blueprint, false,
             [new(Target, 1), new(Cube, 100), new(Cloth, 20)], [new(Output, 1)]) { MaintainAbility = "normal", MaintainSocketStat = true },
             ordinary, new(Npc, true, [new(Cloth, 1), new(0, 200)], [new(Cube, 1)]) { Skills = [new(900, 1)] },
-            new(Failed, false, [new(Cloth, 1)], [new(Cube, 1)]) { SuccessPercent = 1 }]);
+            new(Failed, false, [new(Cloth, 1)], [new(Cube, 1)]) { SuccessRate = 100 },
+            new(ProbabilityUpgrade, false, [new(Target, 1), new(Cube, 100), new(Cloth, 20)], [new(Output, 1)])
+                { MaintainAbility = "normal", SuccessRate = 1000, FailureOutputs = [new(Target, 1), new(Cloth, 1)] }]);
         var service = new InventoryRecipeCraftService(recipes, catalog,
             new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"),
             new GoldLimitCatalog("[gold limit from level]\n0 2000000000\n[/gold limit from level]"), making, random: _ => 0);
@@ -131,6 +134,27 @@ internal static class RecipeCraftServiceTests
         That(chance.Accepted && chanceReceipt is { Success: false, Products.IsEmpty: true } &&
             chance.Plan!.After.Find(BlueprintSlot) is null && chance.Plan.After.Find(ClothSlot)!.Core.Count == 59,
             "原生制作失败仍消费设计图和材料，回包结果2但不伪造产物");
+        var attempted = Fixture(blueprintItem: ProbabilityUpgrade);
+        var failedUpgrade = chanceService.Craft(attempted, 65, 0, 1, out var failedReceipt);
+        That(failedUpgrade.Accepted && failedReceipt is { Success: false, Products.Length: 2 } &&
+            failedUpgrade.Plan!.After.Find(TargetSlot) == attempted.Inventory.Find(TargetSlot) &&
+            failedUpgrade.Plan.After.Find(ClothSlot)!.Core.Count == 41 && failedUpgrade.Plan.After.Find(CubeSlot)!.Core.Count == 150,
+            "概率失败原UID与完整打造原样返还，额外失败材料只增加一次，成功费用仍正常消费");
+        var failedCommitted = failedUpgrade with { Receipt = new(attempted with { Inventory = failedUpgrade.Plan!.After }, 1, 1) };
+        var failureAck = CompoundPackets.Result(failedCommitted, failedReceipt);
+        That(failureAck[2 + 7 * failedReceipt!.Consumed.Length] == 2 &&
+            failureAck[3 + 7 * failedReceipt.Consumed.Length] == 2, "失败也在原生ACK携带真实返还产物，不伪装成功");
+        InventoryResult At(long sample, out RecipeCraftReceipt? details) => new InventoryRecipeCraftService(recipes, catalog,
+            new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"),
+            new GoldLimitCatalog("[gold limit from level]\n0 2000000000\n[/gold limit from level]"), making,
+            random: maximum => { That(maximum == 10000, "配方概率抽样使用万分母"); return sample; })
+            .Craft(attempted, 65, 0, 1, out details);
+        var lower = At(999, out var lowerReceipt);
+        var upper = At(1000, out var upperReceipt);
+        That(lowerReceipt!.Success && !upperReceipt!.Success && lower.Plan!.After.Find(TargetSlot)!.Core is
+            { ItemId: Output, SealFlag: 1, EmblemSocketCount: 0, Attr: 7, GenuineUpgrade: 3, EnchantCardId: 900 } &&
+            upper.Plan!.After.Find(TargetSlot) == attempted.Inventory.Find(TargetSlot),
+            "万分值1000表示百分之十，成功按产物封装及独立孔位规则，失败保持完整原件");
         var expired = pure with { Inventory = pure.Inventory with { Items = pure.Inventory.Items.Select(item =>
             item.Position == CubeSlot ? item with { Core = item.Core with { ExpireTime = 1 } } : item).ToImmutableArray() } };
         That(!Craft(expired, out _).Accepted, "过期输入不能参加制作");

@@ -19,7 +19,7 @@ internal static class CharacterScoreProjection
         var snapshot = capture.Snapshot;
         var score = calculate(snapshot);
         if (score.CharacterId != snapshot.Equipment.CharacterId || score.CharacterRevision != snapshot.Equipment.CharacterRevision ||
-            score.ObservedAt != snapshot.Equipment.ObservedAt || score.Profile is not (CharacterInvestmentScore.Profile or CharacterInvestmentScore.ChronicleProfile or CharacterInvestmentScore.DimensionEnergyProfile) || score.Status == "Invalid" || score.Score is null)
+            score.ObservedAt != snapshot.Equipment.ObservedAt || score.Profile is not (CharacterInvestmentScore.Profile or CharacterInvestmentScore.ChronicleProfile or CharacterInvestmentScore.DimensionEnergyProfile or CharacterInvestmentScore.QualityProfile) || score.Status == "Invalid" || score.Score is null)
             throw new InvalidDataException("评分提示计算身份或数据无效");
         long deadline = checked(snapshot.Equipment.ObservedAt + GameSession.ScoreNoticeLifetimeSeconds);
         foreach (var item in snapshot.Worn)
@@ -48,6 +48,7 @@ internal static class CharacterScoreProjection
             string version = score.Profile switch
             {
                 CharacterInvestmentScore.DimensionEnergyProfile => "v2.2",
+                CharacterInvestmentScore.QualityProfile => "v2.3",
                 CharacterInvestmentScore.ChronicleProfile => "v2.1",
                 _ => "v2"
             };

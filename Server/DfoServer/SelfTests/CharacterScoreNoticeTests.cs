@@ -4,6 +4,7 @@ using DfoServer.Development;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Items;
 using DfoServer.GameWorld.Towns;
@@ -77,7 +78,31 @@ internal static class CharacterScoreNoticeTests
         foreach (string change in new[] { "none", "same-role", "other-role", "revision", "end", "ttl", "rollback", "item-expiry", "box-expiry", "item-rollback", "box-rollback" })
             await Queued(change);
         await QueueFailure();
+        ServiceDayChanges();
         Console.WriteLine($"CharacterScoreNoticeTests: {Count - before} passed");
+    }
+
+    static void ServiceDayChanges()
+    {
+        using var f = new Fixture(serviceDays: true);
+        var capture = f.Session.CaptureCharacterScoreNotice("notice", "NoticeHero");
+        var fatigue = f.Session.AdvanceFatigueDay(f.Clock.GetUtcNow().AddDays(1));
+        That(fatigue is not null && f.Session.CharacterScoreNoticeStatus(capture, f.Clock.Utc + 10) == "character_changed",
+            "真实疲劳日切提交替换Selected后拒绝原评分，即使分值未变");
+        var fresh = f.Session.CaptureCharacterScoreNotice("notice", "NoticeHero");
+        That(f.Session.CharacterScoreNoticeStatus(fresh, f.Clock.Utc + 10) == "ready" &&
+            f.Calculate(fresh.Snapshot).Profile == CharacterInvestmentScore.QualityProfile &&
+            f.Calculate(fresh.Snapshot).Score == f.Calculate(capture.Snapshot).Score,
+            "疲劳日切后的新快照可评分，不把疲劳余额混入建设分");
+        f.Clock.Advance(5);
+        var cycle = f.Session.AdvanceServerItems();
+        That(cycle?.Accepted == true && f.Session.CharacterScoreNoticeStatus(fresh, f.Clock.Utc + 5) == "character_changed",
+            "物品周期真实回收已穿戴武器后拒绝原评分快照");
+        var after = f.Session.CaptureCharacterScoreNotice("notice", "NoticeHero");
+        That(f.Session.CharacterScoreNoticeStatus(after, f.Clock.Utc + 10) == "ready" &&
+            !after.Snapshot.Equipment.Items.Any(item => item.Slot == 12) &&
+            f.Calculate(after.Snapshot).Score < f.Calculate(fresh.Snapshot).Score,
+            "周期回收后的新快照不再计算已移除宿主，仍可正常请求");
     }
 
     static async Task Queued(string change)
@@ -160,8 +185,10 @@ internal static class CharacterScoreNoticeTests
         public GameSession Session { get; }
         public DevelopmentRequest Request => DevelopmentRequest.Parse("character-score-notice NoticeHero", "notice");
         readonly Dictionary<int, ItemTemplate> templates = [];
-        public Fixture(bool expiring = false)
+        readonly bool currentProfile;
+        public Fixture(bool expiring = false, bool serviceDays = false)
         {
+            currentProfile = serviceDays;
             var point = new Location(1, 0, 10, 10);
             var map = new TownMap("notice.map", [new(new(0, 0, 20, 20), [], [])], [], false, []);
             var towns = new TownCatalog(new() { [(1, 0)] = new(1, 0, 1, [], [], [], point, map, [], []) }, point, point, new(0, [], []), [], new Dictionary<uint, uint[]>());
@@ -181,14 +208,27 @@ internal static class CharacterScoreNoticeTests
                 templates[3] = templates[1] with { Id = 3, Kind = ItemKind.Avatar, EquipmentSlot = 0, Grade = 1 };
                 templates[4] = templates[1] with { Id = 4, Kind = ItemKind.Creature, EquipmentSlot = 26 };
             }
-            repository.Create(Owner, new("NoticeHero", point, point) { Level = 95, Inventory = new([.. items]) });
+            repository.Create(Owner, new("NoticeHero", point, point)
+                { Level = 95, Inventory = new([.. items]), DungeonState = serviceDays ? CharacterDungeonState.NewOrdinary : null });
             repository.Create(Owner, new("OtherHero", point, point) { Level = 95 });
-            Session = new(repository, towns, Owner, timeProvider: Clock);
+            ServerItemCycleService? cycles = null;
+            if (serviceDays)
+            {
+                var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+                catalog.PrefillTemplates(templates);
+                var until = TimeZoneInfo.ConvertTime(Clock.GetUtcNow().AddSeconds(5), Clock.LocalTimeZone).DateTime;
+                cycles = new(new([], [new(1, until)], [], [], []), catalog,
+                    new("[gold limit from level]\n0 1000000\n[/gold limit from level]"),
+                    new("[piece list]\n90001 90002\n[/piece list]"), Clock);
+            }
+            Session = new(repository, towns, Owner, timeProvider: Clock, itemCycles: cycles);
             Session.Select(0); Session.MarkReady();
         }
         public CharacterInvestmentResult Calculate(CharacterInvestmentSnapshot snapshot) => CharacterInvestmentScore.Calculate(snapshot,
             id => templates[id], (_, _, _, _) => true, _ => true, _ => null, _ => null, _ => null,
-            _ => throw new InvalidDataException("empty box"), (_, _) => false);
+            _ => throw new InvalidDataException("empty box"), (_, _) => false,
+            currentProfile ? _ => throw new InvalidDataException("empty chronicle") : null,
+            currentProfile ? (_, _) => throw new InvalidDataException("empty dimension") : null, includeQualitySeedTier: currentProfile);
         public void Dispose() { Session.End(); Owner.Dispose(); Directory.Delete(root, true); }
     }
 }

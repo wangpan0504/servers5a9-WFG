@@ -48,19 +48,25 @@ internal sealed class InventoryRecipeCraftService(ItemRecipeCatalog recipes, Ite
             return Reject(Rejection, "recipe-resource-or-qualification");
 
         var outputs = new List<InventoryReward>();
+        var failureOutputs = new List<InventoryReward>();
         int equipmentCount = 0;
-        foreach (var output in definition.Outputs)
+        foreach (var branch in new[] { (Costs: definition.Outputs, Rewards: outputs), (Costs: definition.FailureOutputs, Rewards: failureOutputs) })
         {
-            long count = (long)output.Count * amount;
-            var template = items.Get(output.ItemId);
-            if (count is <= 0 or > int.MaxValue || template.Kind is not (ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material) ||
-                template.IsPremiumService || template.AcquisitionContract is not null || pieces.ByPiece.ContainsKey(output.ItemId))
-                return Reject(Rejection, "unsupported-output");
-            if (template.Kind == ItemKind.Equipment)
+            int branchEquipment = 0;
+            foreach (var output in branch.Costs)
             {
-                if (count > 1 || ++equipmentCount > 1) return Reject(23, "multiple-equipment-output");
+                long count = (long)output.Count * amount;
+                var template = items.Get(output.ItemId);
+                if (count is <= 0 or > int.MaxValue || template.Kind is not (ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material) ||
+                    template.IsPremiumService || template.AcquisitionContract is not null || pieces.ByPiece.ContainsKey(output.ItemId))
+                    return Reject(Rejection, "unsupported-output");
+                if (template.Kind == ItemKind.Equipment)
+                {
+                    if (count > 1 || ++branchEquipment > 1) return Reject(23, "multiple-equipment-output");
+                }
+                branch.Rewards.Add(new(output.ItemId, (int)count));
             }
-            outputs.Add(new(output.ItemId, (int)count));
+            if (ReferenceEquals(branch.Rewards, outputs)) equipmentCount = branchEquipment;
         }
 
         var paid = before;
@@ -91,11 +97,16 @@ internal sealed class InventoryRecipeCraftService(ItemRecipeCatalog recipes, Ite
         paid = spent.Plan!.After;
         if (preserved is not null)
         {
+            if (!definition.UpgradeTransitions.IsEmpty && (mode != 0 || preserved.Core.AmplifyType != 0 ||
+                preserved.Core.IsRental || preserved.Core.ItemId != 102030279 ||
+                paid.Items.Count(item => item.Position.List == InventoryListType.Main && item.Core.ItemId == preserved.Core.ItemId) != 1))
+                return Reject(Rejection, "custom-upgrade-target");
             var removed = InventoryDeleteService.Plan(paid, preserved.Position, preserved.Core.Value, 1);
             if (!removed.Accepted) return Reject(19, "preserved-equipment-changed");
             paid = removed.Plan!.After;
         }
-        foreach (var group in outputs.Where(output => CurrencyWallet.RewardKind(output.ItemId) is not null)
+        foreach (var branch in new[] { outputs, failureOutputs })
+        foreach (var group in branch.Where(output => CurrencyWallet.RewardKind(output.ItemId) is not null)
             .GroupBy(output => CurrencyWallet.RewardKind(output.ItemId)!.Value))
         {
             if (ItemSlotBoundService.CurrencySlot(group.Key) is null ||
@@ -119,33 +130,64 @@ internal sealed class InventoryRecipeCraftService(ItemRecipeCatalog recipes, Ite
         }
         if (consumed.Count > byte.MaxValue) return Reject(Rejection, "too-many-input-rows");
 
-        InventoryResult Grant(IReadOnlyList<InventoryReward> products)
+        byte? customUpgrade = null;
+        InventoryResult Grant(IReadOnlyList<InventoryReward> products, bool successful)
         {
-            if (preserved is not null)
+            var baseInventory = paid;
+            var rewards = products.ToList();
+            if (preserved is not null && rewards.FindIndex(reward => reward.ItemId ==
+                (successful ? definition.Outputs[0].ItemId : preserved.Core.ItemId)) is var at && at >= 0)
             {
-                var updated = preserved with { Core = preserved.Core with { ItemId = products[0].ItemId } };
-                return new(true, 0, new(paid, paid with { Items = paid.Items.Add(updated) }, "recipe_output"));
+                if (rewards[at].Count != 1) return Reject(Rejection, "invalid-preserved-output-count");
+                var template = items.Get(rewards[at].ItemId);
+                var core = successful ? preserved.Core with { ItemId = template.Id,
+                    Durability = Math.Min(preserved.Core.Durability, template.Durability) } : preserved.Core;
+                if (successful && !definition.MaintainSocketStat)
+                    core = core with { EmblemSocketCount = 0, Emblem1 = 0, Emblem2 = 0,
+                        SealFlag = template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0 };
+                var updated = preserved with { Core = core };
+                if (successful && customUpgrade is { } upgrade)
+                    updated = updated with { Core = updated.Core with { Attr = (byte)((updated.Core.Attr & 0xE0) | upgrade) } };
+                baseInventory = paid with { Items = paid.Items.Add(updated) };
+                rewards.RemoveAt(at);
             }
-            return InventoryRewardGrantService.TryGrantBatch(character with { Inventory = paid }, products, items, goldLimits, pieces, now);
+            return rewards.Count == 0 ? new(true, 0, new(paid, baseInventory, "recipe_output")) :
+                InventoryRewardGrantService.TryGrantBatch(character with { Inventory = baseInventory }, rewards, items, goldLimits, pieces, now);
         }
         // 容量检查先于随机，不因抽到失败而让满包请求悄悄扣掉材料。
-        var grant = Grant(outputs);
+        var grant = Grant(outputs, true);
         if (!grant.Accepted) return Reject(4, "output-capacity");
-        bool success = definition.SuccessPercent == 0 || ItemMakingSkillCatalog.Draw(draw, 100) < definition.SuccessPercent;
+        var failedGrant = Grant(failureOutputs, false);
+        if (!failedGrant.Accepted) return Reject(4, "failure-output-capacity");
+        bool success = definition.SuccessRate is 0 or 10000 || ItemMakingSkillCatalog.Draw(draw, 10000) < definition.SuccessRate;
         var after = paid;
         if (success)
         {
+            if (!definition.UpgradeTransitions.IsEmpty)
+            {
+                long value = ItemMakingSkillCatalog.Draw(draw, 1000000);
+                var weights = definition.UpgradeTransitions[preserved!.Core.Upgrade];
+                for (byte grade = 0; grade < weights.Length; grade++)
+                {
+                    if (value < weights[grade]) { customUpgrade = grade; break; }
+                    value -= weights[grade];
+                }
+                if (customUpgrade is null) throw new InvalidDataException("活动重铸抽样未命中");
+                grant = Grant(outputs, true);
+                if (!grant.Accepted) return Reject(4, "custom-upgrade-capacity");
+            }
             if (preserved is null && definition.MakingType is { } type)
             {
                 int level = makingSkills.Level(before.ItemMakingSkills.Points[type], character.Level);
                 for (int index = 0; index < outputs.Count; index++)
                     if (items.Get(outputs[index].ItemId) is { Kind: ItemKind.Equipment, Rarity: not 5 })
                         outputs[index] = outputs[index] with { Upgrade = makingSkills.Upgrade(level, draw) };
-                grant = Grant(outputs);
+                grant = Grant(outputs, true);
                 if (!grant.Accepted) return Reject(4, "output-capacity-after-upgrade");
             }
             after = grant.Plan!.After;
         }
+        else after = failedGrant.Plan!.After;
         var productPlan = new InventoryPlan(paid, after, "recipe_outputs");
         var products = ImmutableArray.CreateBuilder<RecipeProducedItem>();
         foreach (var position in productPlan.ChangedSlots)
@@ -158,7 +200,7 @@ internal sealed class InventoryRecipeCraftService(ItemRecipeCatalog recipes, Ite
         foreach (var currency in productPlan.ChangedCurrencies)
         {
             var slot = ItemSlotBoundService.CurrencySlot(currency);
-            int itemId = definition.Outputs.First(row => CurrencyWallet.RewardKind(row.ItemId) == currency).ItemId;
+            int itemId = (success ? definition.Outputs : definition.FailureOutputs).First(row => CurrencyWallet.RewardKind(row.ItemId) == currency).ItemId;
             long count = CurrencyWallet.Get(after, currency) - CurrencyWallet.Get(paid, currency);
             if (slot is null || count <= 0 || count > int.MaxValue) return Reject(Rejection, "unsupported-output-wallet");
             products.Add(new(new(InventoryListType.Main, slot.Value), itemId, (int)count));

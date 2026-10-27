@@ -7,13 +7,14 @@ using DfoServer.Game.Currency;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed record InventoryReward(int ItemId, int Count, byte Upgrade = 0, byte Refinement = 0, int? Quality = null);
+internal sealed record InventoryReward(int ItemId, int Count, byte Upgrade = 0, byte Refinement = 0, int? CustomAbilityGrade = null, int? Quality = null);
 internal static class InventoryRewardGrantService
 {
     // 普通创建策略：满耐久、100%品级种子；强化/锻造默认零，显式奖励可指定，期限与部位来自 CHR/PVF。
     public const int InitialQuality = 999_999_998;
     public static ItemCore Create(ItemTemplate template, int count = 1, DateTimeOffset? utcNow = null, byte upgrade = 0, byte refinement = 0,
-        bool shopExpiration = false, bool ignoreUsablePeriod = false, Func<int, int>? talismanColorDraw = null, int? quality = null)
+        bool shopExpiration = false, bool ignoreUsablePeriod = false, Func<int, int>? talismanColorDraw = null,
+        byte? echonGrade = null, Func<int, int>? echonDraw = null, int? quality = null)
     {
         if (count <= 0 || count > template.StackLimit || template.Kind is (ItemKind.Equipment or ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment or ItemKind.GuildMedal or ItemKind.Talisman) && count != 1)
             throw new InvalidDataException("无效发放数量");
@@ -37,6 +38,16 @@ internal static class InventoryRewardGrantService
             SealFlag = template.Kind != ItemKind.Creature && template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0,
             ExpireTime = template.Expiration.Resolve(utcNow ?? DateTimeOffset.UtcNow, shopExpiration, ignoreUsablePeriod)
         };
+        if (template.Echon is { } echon)
+        {
+            if (echon.Rules.IsModern)
+                core = new EchonEquipmentState(echon.InitialFirst, echon.InitialSecond, 0, 0, 0).Apply(core);
+            else
+            {
+                var rolled = echon.Rules.Roll(echonDraw, echonGrade);
+                core = new EchonEquipmentState(rolled.First, rolled.Second, 0, 0, rolled.Grade).Apply(core);
+            }
+        }
         return template.Kind == ItemKind.Talisman && template.Rarity > 0
             ? TalismanSocketPolicy.Generate(talismanColorDraw).Apply(core) : core;
     }
@@ -120,6 +131,8 @@ internal static class InventoryRewardGrantService
             if (template.Kind != ItemKind.Equipment && (reward.Upgrade != 0 || reward.Refinement != 0))
                 return InventoryResult.Reject();
             InventoryItem? incomingInstance = instances?[rewardIndex];
+            if (incomingInstance is null && template.Echon is not null && reward.CustomAbilityGrade is < 0 or > 3)
+                return InventoryResult.Reject(19);
             bool legacyRune = incomingInstance?.Core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
             if (incomingInstance is not null)
             {
@@ -129,12 +142,24 @@ internal static class InventoryRewardGrantService
             }
             var prototype = incomingInstance is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement,
                 shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod,
+                echonGrade: template.Echon is not null && reward.CustomAbilityGrade is { } grade ? (byte)grade : null,
                 quality: reward.Quality) : incomingInstance.Core;
             if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || instances?[rewardIndex].IsExpired(now.ToUnixTimeSeconds()) == true)
                 return InventoryResult.Reject(19);
             if (prototype.IsExpired(now.ToUnixTimeSeconds()))
                 return InventoryResult.Reject(19);
-            if (!placement.TryAdd(template, prototype, reward.Count, incomingInstance, splitLegacyRune: legacyRune))
+            if (template.Echon is not null && incomingInstance is null)
+            {
+                // 每件斗气装备独立抽取；不能把同一原型复制成整批相同属性。
+                for (int at = 0; at < reward.Count; at++)
+                {
+                    var core = at == 0 ? prototype : Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement,
+                        shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod,
+                        echonGrade: reward.CustomAbilityGrade is { } fixedGrade ? (byte)fixedGrade : null, quality: reward.Quality);
+                    if (!placement.TryAdd(template, core, 1)) return InventoryResult.Reject(17);
+                }
+            }
+            else if (!placement.TryAdd(template, prototype, reward.Count, incomingInstance, splitLegacyRune: legacyRune))
                 return InventoryResult.Reject(17);
         }
 

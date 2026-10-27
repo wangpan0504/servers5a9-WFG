@@ -6,6 +6,8 @@ namespace PvfLib;
 public sealed record EquipmentEmancipationFile(int Type, ImmutableArray<EmancipateEntry> Inputs,
     ImmutableArray<EmancipateEntry> Outputs)
 {
+    public int GrowGroup { get; init; }
+    public int GrowStage { get; init; }
     public static EquipmentEmancipationFile? Parse(PvfToken[] tokens, Func<int, string> resolve)
     {
         var document = new PvfTokenDocument(tokens, resolve);
@@ -14,13 +16,21 @@ public sealed record EquipmentEmancipationFile(int Type, ImmutableArray<Emancipa
             return null;
         var block = blocks[0];
         var types = block.Children.Where(section => section.Name == "emancipate type").ToArray();
-        if (!block.IsBlock || !block.Values.IsEmpty || block.Children.Any(section => section.Name is not ("input" or "output" or "emancipate type")) ||
-            types.Length != 1 || types[0].IsBlock || !types[0].Children.IsEmpty ||
-            types[0].Values.Length != 1 || types[0].Values[0].Type != 0 || types[0].Values[0].Value < 0)
+        if (!block.IsBlock || !block.Values.IsEmpty || block.Children.Any(section => section.Name is not ("input" or "output" or "emancipate type" or "emancipate explain" or "equipment grow")) ||
+            types.Length > 1 || types.Length == 1 && (types[0].IsBlock || !types[0].Children.IsEmpty ||
+            types[0].Values.Length != 1 || types[0].Values[0].Type != 0 || types[0].Values[0].Value < 0))
             return null;
+        var explanations = block.Children.Where(section => section.Name == "emancipate explain").ToArray();
+        if (explanations.Length > 1 || explanations.Length == 1 &&
+            (explanations[0].IsBlock || explanations[0].Values is not [{ Type: 6 }])) return null;
+        var growth = block.Children.Where(section => section.Name == "equipment grow").ToArray();
+        if (growth.Length > 1 || growth.Length == 1 &&
+            (growth[0].IsBlock || growth[0].Values is not [{ Type: 0, Value: > 0 }, { Type: 0, Value: > 0 }])) return null;
         var inputs = Pairs("input");
         var outputs = Pairs("output");
-        return inputs is null || outputs is null ? null : new(types[0].Values[0].Value, inputs.Value, outputs.Value);
+        return inputs is null || outputs is null ? null : new(types.Length == 0 ? 0 : types[0].Values[0].Value, inputs.Value, outputs.Value)
+        { GrowGroup = growth.Length == 0 ? 0 : growth[0].Values[0].Value,
+            GrowStage = growth.Length == 0 ? 0 : growth[0].Values[1].Value };
 
         ImmutableArray<EmancipateEntry>? Pairs(string name)
         {

@@ -19,6 +19,7 @@ internal static class SelfTestRunner
         CharacterInvestmentMetadataTests.RunCore();
         ChronicleInvestmentTests.RunCore();
         DimensionEnergyInvestmentTests.RunCore();
+        EquipmentQualityInvestmentTests.RunCore();
         await CharacterScoreNoticeTests.RunCore();
         await SelfCharacterScoreTests.RunCore();
         await MachineCharacterScoreTests.RunCore();
@@ -38,6 +39,7 @@ internal static class SelfTestRunner
         CreatureChangeTests.RunCore();
         CreatureGroupTests.RunCore();
         CreatureTransportTests.RunCore();
+        EquipmentTransferSealTests.RunCore();
         CommandLineTests.Run();
         ConnectionAddressTests.Run();
         Testing.TcpTestFixtureProcessTests.Run();
@@ -69,6 +71,7 @@ internal static class SelfTestRunner
         TextureChangeTests.RunCore();
         EquipmentUpgradeTests.RunCore();
         DarkRevelationTests.RunCore();
+        EchonEquipmentTests.RunCore();
         WeaponSkinTests.RunCore();
         AvatarCompoundTests.RunCore();
         AvatarDyeTests.RunCore();
@@ -443,6 +446,7 @@ internal static class SelfTestRunner
         LegacyStatusConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         FatigueConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         ServerItemCycleTests.RunResource(pvf);
+        ChronicleInvestmentTests.RunResource(itemResources);
         PermanentGrowthTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         QuestCascadeCompletionTests.Run(towns, pvf, characters, itemResources);
         await QuestCompletionPublicationTests.RunAsync(towns, pvf, characters, itemResources);

@@ -129,13 +129,19 @@ internal sealed partial class AntonRaidBattle
             .Select(id => (id, view.Dungeons.GetValueOrDefault(id, RaidDungeonState.Hide))).ToArray();
 
 
+    readonly bool antonPhaseProgress;
+    internal bool PhaseProgress => antonPhaseProgress;
+
     public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton,
-        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null, LukeFixedCardRoute? fixedRoute = null, LukeFacilityReportPolicy? facilities = null)
+        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null,
+        LukeFixedCardRoute? fixedRoute = null, bool antonPhaseProgress = false, LukeFacilityReportPolicy? facilities = null)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
             throw new InvalidDataException("攻坚阶段资源不完整或超出已证协议范围");
         if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        if (antonPhaseProgress && kind != RaidKind.Anton) throw new InvalidDataException("阶段推进开关只属于安徒恩");
+        this.antonPhaseProgress = antonPhaseProgress;
         if (completion is not null && (kind != RaidKind.Luke || !ValidLukeCompletion(completion)))
             throw new InvalidDataException("卢克阶段策略不完整");
         if (revival is not null && (kind != RaidKind.Luke || script.Phases.Length != 2 || string.IsNullOrWhiteSpace(revival.Source)))
@@ -213,6 +219,46 @@ internal sealed partial class AntonRaidBattle
         }
     }
 
+    // 正式进图预留的 Run 带 entry.Run，旧 CompleteDungeon 故意不消费它。开关打开后才按同一规则迁移战况。
+    // 不扣 HP、不发送 596、不把 reserve 的延迟数字解释成调度。
+    internal AntonRaidBattleChange? CompleteAntonReservedDungeon(DungeonClearFact fact, int? week = null)
+    {
+        lock (gate)
+        {
+            if (!antonPhaseProgress || Kind != RaidKind.Anton || current.State != AntonRaidBattleState.Fighting ||
+                fact.ConfirmedDeathEvents.Count == 0 || fact.ClearMap is null ||
+                !entries.TryGetValue((fact.Identity.InstanceId, fact.Identity.CharacterId), out var entry) ||
+                entry.Run is not { Installed: true } run || run.Cleared ||
+                entry.Identity.CharacterId != fact.Identity.CharacterId || entry.Identity.QuestId != fact.Identity.QuestId ||
+                entry.Identity.TaskAttempt != fact.Identity.TaskAttempt || fact.Identity.Epoch < entry.Identity.Epoch ||
+                entry.Phase != current.Phase || entry.Dungeon != fact.DungeonId ||
+                run.Phase != current.Phase || run.Dungeon != fact.DungeonId) return null;
+            var owner = run.Actors.FirstOrDefault(row => row.Identity == entry.Identity);
+            if (owner.Actor is not { IsCurrent: true } actor) return null;
+            int dungeon = checked((int)fact.DungeonId);
+            if (!current.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open) return null;
+            var before = current;
+            var after = Evaluate(before with { Dungeons = before.Dungeons.SetItem(dungeon, RaidDungeonState.Clear) }, dungeon, null, null);
+            run.ClearFacts.Add(actor, fact);
+            if (after.State == AntonRaidBattleState.Reward) rewardWeek ??= week;
+            current = after with { Revision = before.Revision + 1 };
+            return new(before, current);
+        }
+    }
+
+    internal bool AllowsAntonEntry(int dungeon)
+    {
+        lock (gate) return AntonEntryOpenLocked(dungeon);
+    }
+
+    bool AntonEntryOpenLocked(int dungeon)
+    {
+        if (Kind != RaidKind.Anton || pendingTransition is not null || current.State != AntonRaidBattleState.Fighting ||
+            !current.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open) return false;
+        if (!antonPhaseProgress) return current.Phase == 0 && dungeon == 210;
+        return script.Phases[current.Phase].Dungeons.Any(row => row.Id == dungeon);
+    }
+
     // 机制值只能来自服务端已验证的机制；网络 RAID_SET_SYMBOL 不调用这个入口。
     public AntonRaidBattleChange? SetMechanism(Guid instance, long revision, string symbol, int value)
     {
@@ -226,12 +272,13 @@ internal sealed partial class AntonRaidBattle
         }
     }
 
-    // 原声明的时长由调度方解释；这里仅消费原阶段、原revision的到期事实，不猜测秒/毫秒。
+    // 安徒恩 SET TIMER / PHASE TIME OVER 的原值单位未闭合，拒绝把声明数字当成到期事实。
+    // 卢克仍走 ExpireLukeTimer。其它调用方必须自备已证单位，不能靠本入口猜测秒或毫秒。
     public AntonRaidBattleChange? ExpireTimer(Guid instance, long revision, RaidTimer timer)
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
+            if (Kind == RaidKind.Anton || instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
                 !current.Timers.ContainsKey(timer)) return null;
             var before = current;
             CommitBattleCandidate(before, Evaluate(before with { Timers = before.Timers.Remove(timer), TimerAnchors = before.TimerAnchors.Remove(timer), TimerGenerations = before.TimerGenerations.Remove(timer) }, null, null, timer));

@@ -28,7 +28,7 @@ internal static class BoosterSelectionResourceTests
                 "分类5为首饰/特殊装备且含100353086 " + id);
             That(selection.Categories.All(row => row.Rewards.Length is >= 5 and <= 6), "每个分类的候选数量在5到6件之间 " + id);
         }
-        // [custom ability grade] 只校验形态：合法整数放行且不写入实例，非法值仍整包拒绝。
+        // 此处只验证声明形态；艾肯产物另在所属用例验证品级写入，其他装备保持原有行为。
         const string head = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n1\n" +
             "[booster select category]\n0 0\n[equipment]\n401030066 1\n[/equipment]\n[/booster select category]\n";
         That(BoosterCatalog.Parse("[custom ability grade]\n3\n" + head).Available, "合法品级声明放行");

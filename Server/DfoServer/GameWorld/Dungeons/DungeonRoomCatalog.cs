@@ -56,6 +56,7 @@ internal sealed record DungeonRoomDefinition(
     public DungeonScriptedLayerReturn? ScriptedLayerReturn { get; init; }
     public DungeonCinematicBossEvidence? BossDeathLayerChange { get; init; }
     public DungeonCinematicBossEvidence? StartCinematicBossDestroy { get; init; }
+    public IReadOnlyList<DungeonLostLandWarp> LostLandWarps { get; init; } = [];
 }
 
 internal sealed class DungeonRoomCatalog
@@ -139,6 +140,33 @@ internal sealed class DungeonRoomCatalog
             BossDeathLayerChange = room.Map.Kind == "boss" ? ReadBossCinematic(room,tokens,false) : null,
             StartCinematicBossDestroy = room.Map.Kind == "layered" ? ReadBossCinematic(room,tokens,true) : null
         };
+    }
+
+    public DungeonRoomDefinition WithLostLandWarps(DungeonRoomDefinition room)
+    {
+        var warps = new List<DungeonLostLandWarp>();
+        for (int ordinal = 0; ordinal < room.PassiveObjects.Count; ordinal++)
+        {
+            var source = room.PassiveObjects[ordinal];
+            if (source.RawValues.Count != 4 || source.Path is not { Length: > 0 } objectPath ||
+                !archive.Contains(objectPath)) continue;
+            try
+            {
+                string? action = DungeonCinematicLayerReturnRules.BasicAction(archive.ReadTokens(objectPath),archive.ResolveString);
+                if (string.IsNullOrWhiteSpace(action)) continue;
+                string path = PvfArchive.NormalizePath(objectPath[..(objectPath.LastIndexOf('/') + 1)] + action);
+                if (!path.StartsWith("passiveobject/",StringComparison.Ordinal) || !path.EndsWith(".act",StringComparison.Ordinal) ||
+                    !archive.Contains(path)) continue;
+                if (DungeonLostLandWarpRules.UnconditionalMove(archive.ReadTokens(path),archive.ResolveString) is { } move)
+                    warps.Add(new(ordinal,source.ObjectId,objectPath,path,move.Destination,move.PlayerX,move.PlayerY));
+                else if (DungeonLostLandWhirlwind.Read(ordinal,source,passiveObjects,
+                    file => archive.Contains(file) ? archive.ReadTokens(file) : [],archive.ResolveString) is { } whirlwind)
+                    warps.Add(whirlwind);
+            }
+            // 可选导航声明不完整时仍保留原房间，但不开放该传送。
+            catch (InvalidDataException) { }
+        }
+        return room with { LostLandWarps = Array.AsReadOnly(warps.ToArray()) };
     }
 
     internal static bool ParseChampionRestriction(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)

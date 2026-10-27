@@ -49,7 +49,7 @@ internal sealed partial class AntonRaidBattle
                 if (objects is not null && (battle.Kind != RaidKind.Luke || objects.Dungeon != dungeon || actors.Length == 0 || objects.Run != actors[0].Identity.InstanceId) ||
                     identity.Kind != battle.Kind || identity.InstanceId != battle.Instance ||
                     identity.Phase != battle.current.Phase || identity.Squad < 1 || identity.Squad > (battle.Kind == RaidKind.Luke ? 2 : 5) ||
-                    battle.Kind == RaidKind.Anton && (identity.Phase != 0 || dungeon != 210) ||
+                    battle.Kind == RaidKind.Anton && !battle.AntonEntryOpenLocked(checked((int)dungeon)) ||
                     TerminalRequested(battle.current) || battle.LukePhaseDueLocked() || battle.pendingTransition is not null ||
                     !battle.current.Dungeons.TryGetValue(checked((int)dungeon), out var state) || state != RaidDungeonState.Open ||
                     actors.Length is < 1 or > 4 || actors.Any(actor => !actor.Actor.IsCurrent || !battle.members.ContainsKey(actor.Actor) ||

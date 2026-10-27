@@ -204,6 +204,7 @@ internal static partial class DungeonGrowthRepositoryTests
         RunSessionPublication(towns, pvf, characters);
         RunProficiencyKills(towns, pvf, characters);
         RunSparseReads(towns, pvf, characters);
+        RunEquipmentGrowth(towns, pvf, characters);
 
         DungeonExperienceReward Reward(uint amount, PreparedDungeonDeath prepared) =>
             new("fixture-only", DungeonKillExperienceCatalog.ResourcePath, prepared.Monster.MonsterId, prepared.Monster.CandidateLevel, amount);

@@ -19,6 +19,7 @@ internal static class LostLandSessionTests
         var time = new LostLandTestClock();
         var dungeons = SelfTestCatalogs.Dungeons(pvf);
         var rooms = SelfTestCatalogs.Rooms(pvf);
+        VerifyWhirlwindSources(pvf,rooms);
         var incounts = DungeonIncountCatalog.Load(pvf);
         using var f = new QuestSceneTests.Fixture(towns, characters, SelfTestCatalogs.SkillLearning(pvf),
             SelfTestCatalogs.Growth(pvf), SelfTestCatalogs.Quests(pvf), false, level: 95, job: 4,
@@ -50,7 +51,52 @@ internal static class LostLandSessionTests
             session.CompleteFormalDungeonLoading() is null, "首次37才启动600秒，重复37不成功或重置");
         That(session.TickLostLandTimer(timer) is { Expired: false } && session.Phase == SessionPhase.Dungeon,
             "提前计时唤醒不结束实例");
-        time.Advance(TimeSpan.FromSeconds(600));
+        var originalKeys = loaded.Snapshot.LivingMonsters.ToArray();
+        string beforeMove = State();
+        That(loaded.Snapshot.CurrentMap.Id == 11200 &&
+            loaded.Monsters.Monsters.Any(monster => monster.IsBlocking && originalKeys.Contains(monster.ObjectKey)),
+            "真实起点保留尚未击杀的阻塞怪，换房不用空房夹具替代");
+        var sea = session.MoveFormalDungeon(7,9);
+        That(sea is { Snapshot.CurrentMap.Id: 11214, Snapshot.MapPayload: DungeonMapPayload.Build } && State() == beforeMove,
+            "真实港口的水旋风可到达海域，沿原入场账本只扣一次");
+        That(session.CompleteFormalDungeonLoading() is { LostLandStarted: false }, "水旋风转场不重新启动时钟");
+        var seaKeys = sea!.Snapshot.LivingMonsters.ToArray();
+        That(session.MoveFormalDungeon(8,6) is null && session.MoveFormalDungeon(0,6) is null,
+            "海域不能借其他源房的传送声明或无关目标换房");
+        var fromSea = session.MoveFormalDungeon(9,6);
+        That(fromSea is { Snapshot.CurrentMap.Id: 11200, Snapshot.MapPayload: DungeonMapPayload.Cached } &&
+            fromSea.Snapshot.LivingMonsters.SequenceEqual(originalKeys) && State() == beforeMove,
+            "海域水旋风返回港口仍沿原缓存保留怪物key和次数");
+        session.CompleteFormalDungeonLoading();
+        That(session.MoveFormalDungeon(7,9) is { Snapshot.MapPayload: DungeonMapPayload.Cached } cachedSea &&
+            cachedSea.Snapshot.LivingMonsters.SequenceEqual(seaKeys), "再次使用水旋风保留海域原演员");
+        session.CompleteFormalDungeonLoading();
+        session.MoveFormalDungeon(9,6); session.CompleteFormalDungeonLoading();
+        time.Advance(TimeSpan.FromSeconds(100));
+        var moved = session.MoveFormalDungeon(8, 6);
+        That(moved is { Snapshot.CurrentMap.Id: 11251, Snapshot.MapPayload: DungeonMapPayload.Build } && State() == beforeMove,
+            "真实首房有活怪时可向左进入11251，不重复提交次数、尝试号和对象key");
+        That(session.CompleteFormalDungeonLoading() is { LostLandStarted: false }, "邻房加载不重复启动计时");
+        var secondKeys = moved!.Snapshot.LivingMonsters.ToArray();
+        That(moved.Monsters.Room.LostLandWarps.Select(warp => warp.Destination).OrderBy(point => point.X).ThenBy(point => point.Y)
+            .SequenceEqual(new DungeonPoint[] { new(0,6),new(1,6),new(1,7) }), "真实第二房只从三个无条件ACT取得传送目标");
+        foreach (var (target,id) in new (DungeonPoint,int)[] { (new(1,7),11206),(new(1,6),11205),(new(0,6),11252),(new(8,7),11202) })
+        {
+            var destination = session.MoveFormalDungeon((byte)target.X,(byte)target.Y);
+            That(destination is not null && destination.Snapshot.CurrentMap.Id == id && State() == beforeMove,
+                "第二房无条件传送及向下普通门均只推进原实例，不改变入场账本");
+            That(session.CompleteFormalDungeonLoading() is { LostLandStarted: false }, "传送目标加载不重启时钟");
+            var back = session.MoveFormalDungeon(8,6);
+            That(back is { Snapshot.CurrentMap.Id: 11251, Snapshot.MapPayload: DungeonMapPayload.Cached } &&
+                back.Snapshot.LivingMonsters.SequenceEqual(secondKeys), "传送回访保持第二房全部原怪物key");
+            session.CompleteFormalDungeonLoading();
+        }
+        var returned = session.MoveFormalDungeon(9, 6);
+        That(returned is { Snapshot.CurrentMap.Id: 11200, Snapshot.MapPayload: DungeonMapPayload.Cached } &&
+            returned.Snapshot.LivingMonsters.SequenceEqual(originalKeys), "真实往返沿原缓存保留起点全部存活怪物key");
+        That(session.CompleteFormalDungeonLoading() is { LostLandStarted: false } &&
+            session.TickLostLandTimer(timer) is { Expired: false, Remaining.TotalSeconds: 500 }, "往返加载不重发启动事实或重置600秒总时限");
+        time.Advance(TimeSpan.FromSeconds(500));
         var expired = session.TickLostLandTimer(timer)!;
         That(expired.Expired && session.DungeonSnapshot!.Phase == SinglePlayerDungeonPhase.TimedOut &&
             !session.CanPublishLostLandTimer(timer) && session.CanPublishLostLandTimer(expired), "到期冻结原Run并使开始通知失效");
@@ -82,5 +128,37 @@ internal static class LostLandSessionTests
         string State() => $"{f.Query("SELECT printf('%d|%d|%d',c.revision,s.last_attempt,s.next_object_key) FROM characters c JOIN character_dungeon_state s ON s.character_id=c.id")};" +
             $"{f.Query("SELECT coalesce(sum(daily_used),0) FROM character_dungeon_incount WHERE dungeon=4000")};" +
             $"{f.Query("SELECT coalesce(sum(used),0) FROM account_dungeon_incount WHERE dungeon=4000")}";
+    }
+
+    static void VerifyWhirlwindSources(PvfArchive pvf,DungeonRoomCatalog rooms)
+    {
+        var objects = DungeonRoomCatalog.ParsePassiveDirectory(pvf.ReadTokens("passiveobject/passiveobject.lst"),pvf.ResolveString);
+        foreach (var (id,path,point,objectId,target) in new (int,string,DungeonPoint,int,DungeonPoint)[]
+        {
+            (11200,"map/forgotten_land/forgotten_land_1.map",new(9,6),37074,new(7,9)),
+            (11214,"map/forgotten_land_hiden/forgotten_land_hiden1.map",new(7,9),37077,new(9,6))
+        })
+        {
+            var room = rooms.Get(new("map",point,id,path));
+            int ordinal = room.PassiveObjects.ToList().FindIndex(source => source.ObjectId == objectId);
+            var source = room.PassiveObjects[ordinal];
+            var warp = DungeonLostLandWhirlwind.Read(ordinal,source,objects,pvf.ReadTokens,pvf.ResolveString);
+            That(warp is not null && warp.ObjectOrdinal == ordinal && warp.ObjectId == objectId &&
+                warp.Destination == target && warp.MoveParameter == 550 &&
+                warp.SourceChain.Contains(source.Path!) && warp.SourceChain.Contains(objects[objectId+1]) &&
+                warp.SourceChain.Contains(objects[objectId+2]) && warp.SourceChain.Contains(warp.ActionPath),
+                "真实去返旋风必须完整连接实际NPC、施法、两级生成、起始、传送和销毁资源");
+            var files = warp!.SourceChain.ToDictionary(file => file,file => (IReadOnlyList<PvfToken>)pvf.ReadTokens(file));
+            foreach (string file in warp.SourceChain)
+                That(DungeonLostLandWhirlwind.Read(ordinal,source,objects,
+                    candidate => candidate == file ? [] : files[candidate],pvf.ResolveString) is null,
+                    "链中任一OBJ或ACT缺失均不得授予水旋风导航");
+            foreach (string file in warp.SourceChain.Where(file => file.EndsWith(".act",StringComparison.Ordinal)))
+                That(DungeonLostLandWhirlwind.Read(ordinal,source,objects,
+                    candidate => candidate == file ? files[candidate].Append(new PvfToken(0,1)).ToArray() : files[candidate],pvf.ResolveString) is null,
+                    "链中任一ACT附加未知条件或动作均不得授予水旋风导航");
+            That(DungeonLostLandWhirlwind.Read(ordinal,source with { Path = objects[37073] },objects,pvf.ReadTokens,pvf.ResolveString) is null,
+                "只报NPC编号而实际物件引用不符不能借用旋风链");
+        }
     }
 }

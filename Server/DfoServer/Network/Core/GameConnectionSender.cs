@@ -7,6 +7,7 @@ namespace DfoServer.Network;
 internal sealed record RemoteTownActor(ushort Id, long Membership, ReadOnlyMemory<byte> Actor, ReadOnlyMemory<byte> State, ReadOnlyMemory<byte> Position, Func<bool> Visible)
 {
     public ReadOnlyMemory<byte> Area { get; init; }
+    public IReadOnlyList<byte[]> EchonSets { get; init; } = [];
 }
 internal enum SceneActorClear { Delete, Preserve, Hide }
 // 一个连接只有一个写入泵；账号 gate 内只入队，网络等待及日志在泵内执行。
@@ -204,7 +205,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     }
 
     static long ActorBytes(RemoteTownActor actor) => (long)actor.Actor.Length + actor.State.Length + actor.Position.Length + 3 * 16 +
-        (actor.Area.IsEmpty ? 0 : actor.Area.Length + 16L);
+        (actor.Area.IsEmpty ? 0 : actor.Area.Length + 16L) + actor.EchonSets.Sum(body => body.Length + 16L);
 
     void Cancel() => _ = cancellation.Value;
 
@@ -249,8 +250,16 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         if (!Visible(actor, expected))
             return false;
         await Write(0, (ushort)NotiPacketType.USERINFO, actor.Actor, "town_peer_actor");
+        await WriteEchonSets(actor, expected);
         known[actor.Id] = actor.Membership;
         return true;
+    }
+
+    async Task WriteEchonSets(RemoteTownActor actor, long expected)
+    {
+        foreach (var body in actor.EchonSets)
+            if (Visible(actor, expected))
+                await Write(0, (ushort)NotiPacketType.CUSTOM_ABILITY_PART_SET_OPTION, body, "town_peer_echon_set");
     }
 
     async Task Run()
@@ -310,7 +319,10 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                     {
                         bool alreadyKnown = known.TryGetValue(refreshed.Id, out long membership) && membership == refreshed.Membership;
                         if (await EnsureActor(refreshed, message.Epoch) && alreadyKnown && Visible(refreshed, message.Epoch))
+                        {
                             await Write(0, (ushort)NotiPacketType.USERINFO, refreshed.Actor, "town_peer_equipment");
+                            await WriteEchonSets(refreshed, message.Epoch);
+                        }
                     }
                     else if (message.Move is not null)
                     {

@@ -65,7 +65,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     }
     RemoteTownActor Projection(Member source, Member target, Bodies bodies) =>
         new(source.Character.Id, source.Serial, bodies.Actor, bodies.State, bodies.Position, () => Visible(source, target))
-        { Area = bodies.Area };
+        { Area = bodies.Area, EchonSets = DfoServer.Network.Builders.Inventory.EchonEquipmentPackets.Snapshot(source.Character) };
 
     // 只枚举当前场景，固定接收者快照后入队。
     Member[] Peers(Member source) => scenes[source.Scene].Where(member => !ReferenceEquals(member, source)).ToArray();

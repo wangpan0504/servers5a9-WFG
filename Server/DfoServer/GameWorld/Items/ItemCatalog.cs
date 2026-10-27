@@ -16,6 +16,8 @@ internal sealed partial class ItemCatalog
     readonly IReadOnlySet<int> premiumServiceItems;
     readonly IReadOnlyDictionary<int, PremiumContract> acquisitionContracts;
     readonly GameWorld.Creatures.CreatureCatalog? creatures;
+    readonly EchonEquipmentCatalog? echon;
+    readonly EchonEquipmentCatalog? newEchon;
     readonly ConcurrentDictionary<int, ItemTemplate> templates = new();
     readonly ConcurrentDictionary<int, Lazy<ItemTemplate>> pendingTemplates = new();
     readonly ConcurrentDictionary<int, QuestTicketDefinition> questTickets = new();
@@ -75,18 +77,23 @@ internal sealed partial class ItemCatalog
     readonly Lazy<RuneRandomChooseTable> runeRandomChoices;
     readonly Lazy<FrozenDictionary<byte, ImmutableArray<int>>> runePool;
     readonly Lazy<FrozenDictionary<int, ImmutableArray<int>>> talismanPool;
+    public EquipmentGrowthCatalog EquipmentGrowth { get; }
 
     public ItemCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment,
         IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
-        IReadOnlyDictionary<int, PremiumContract>? acquisitionContracts = null, GameWorld.Creatures.CreatureCatalog? creatures = null)
+        IReadOnlyDictionary<int, PremiumContract>? acquisitionContracts = null, GameWorld.Creatures.CreatureCatalog? creatures = null,
+        EchonEquipmentCatalog? echon = null, EchonEquipmentCatalog? newEchon = null)
     {
         pvf = archive;
+        EquipmentGrowth = new(archive, equipment);
         this.equipment = equipment;
         this.stackable = stackable;
         this.premiumServiceItems = premiumServiceItems ?? new HashSet<int>();
         this.acquisitionContracts = acquisitionContracts ?? new Dictionary<int, PremiumContract>();
         this.equipmentSellRate = equipmentSellRate;
         this.creatures = creatures;
+        this.echon = echon;
+        this.newEchon = newEchon;
         cosmoPasses = new(() => CosmoPassCost.Load(archive));
         runeSystem = new(() => RuneSystemFile.Parse(
             archive.ReadTokens("etc/runesystem.etc"), archive.ResolveString));
@@ -506,8 +513,26 @@ internal sealed partial class ItemCatalog
 
         int minimum = Int("minimum level", isEquipment ? 1 : 0), durability = Int("durability", 0);
         int maximum = int.MaxValue;
-        if (text.Has("maximum level") && (!text.TryGetInt32("maximum level", out maximum) || maximum < minimum))
-            throw new InvalidDataException("PVF物品最高等级声明无效: " + id);
+        if (text.Has("maximum level"))
+        {
+            if (isEquipment)
+            {
+                if (!text.TryGetInt32("maximum level", out maximum) || maximum < minimum)
+                    throw new InvalidDataException("PVF物品最高等级声明无效: " + id);
+            }
+            else
+            {
+                // 次元能量等把目标装备条件嵌在子块中，不能把目标上限当作角色使用上限。
+                var root = new PvfTokenDocument(pvf.ReadTokens("stackable/" + path), pvf.ResolveString).Sections
+                    .Where(section => section.Name == "maximum level").ToArray();
+                if (root.Length != 0)
+                {
+                    if (root is not [{ Values: [{ Type: 0 } limit] }] || limit.Value < minimum)
+                        throw new InvalidDataException("PVF物品最高等级声明无效: " + id);
+                    maximum = limit.Value;
+                }
+            }
+        }
         int baseValue = Int("value", -1);
         if (baseValue < 0)
             baseValue = Int("price", 0);
@@ -559,6 +584,12 @@ internal sealed partial class ItemCatalog
             QualityBox = isEquipment ? null : EquipmentQualityBox.Parse(id, text),
             AvatarAbilityChange = isEquipment || !text.Has("avatar select ability change") ? null :
                 AvatarAbilityChangeDefinition.Parse(new PvfTokenDocument(pvf.ReadTokens("stackable/" + path), pvf.ResolveString), pvf.ResolveString),
+            ResealConsumable = isEquipment ? null : EquipmentResealConsumable.Parse(path!, text),
+            GrowthEquipment = isEquipment && (text.Has("level section ani") || !string.IsNullOrWhiteSpace(text.Section("level linear ability")) ||
+                PvfScript.Integers(text.Section("equipment grow")) is [> 0, > 0]),
+            RandomOptionEquipment = isEquipment && text.Has("random option"),
+            PeriodEquipment = isEquipment && (PvfScript.Integers(text.Section("usable period")).Any(value => value > 0) ||
+                PvfScript.Integers(text.Section("expiration date")).Any(value => value > 0)),
 
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
             CloneAvatar = kind == ItemKind.Avatar && (Int("clear avatar", 0) == 1 || text.ContainsString("item category", "clear avatar")),
@@ -572,6 +603,8 @@ internal sealed partial class ItemCatalog
             CreatureEgg = kind == ItemKind.Creature && creatures?.Get(id)?.Egg == true,
             RepairPrice = isEquipment ? Int("repair price", 0) : 0,
             CreationRate = CreationRate(text),
+            Echon = isEquipment && text.TryGetString("custom ability type", out string abilityType) &&
+                abilityType is "warriors dungeon" or "new warriors dungeon" ? ReadEchon(id, text, abilityType) : null,
             PvpFreeEquipment = isEquipment && text.Has("pvp free equip"),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
             IsOperationHope = isEquipment && text.Has("operation hope"),
@@ -585,6 +618,29 @@ internal sealed partial class ItemCatalog
         };
 
         int Int(string tag, int fallback) => Integers(text.Section(tag)).FirstOrDefault(fallback);
+    }
+
+    EchonEquipmentDefinition ReadEchon(int id, PvfDocument document, string type)
+    {
+        if (type == "new warriors dungeon")
+        {
+            if (newEchon is null || !document.TryGetInt32("custom ability count", out int abilityCount) || abilityCount != 2)
+                throw new InvalidDataException("新版斗气装备缺少已装配的能力资源");
+            var raw = new PvfTokenDocument(pvf.ReadTokens("equipment/" + equipment[id]), pvf.ResolveString);
+            var fixedOptions = raw.Sections.Where(row => row.Name == "fix custom ability").ToArray();
+            if (!raw.Diagnostics.IsEmpty || fixedOptions.Length != 2 || fixedOptions.Any(row => row.IsBlock ||
+                    row.Values.Length != 2 || row.Values.Any(value => value.Type != 0) ||
+                    row.Values[0].Value is < 0 or > 1 || row.Values[1].Value is <= 0 or > 255 ||
+                    !newEchon.Options.Contains((byte)row.Values[1].Value)) ||
+                fixedOptions.Select(row => row.Values[0].Value).Distinct().Count() != 2)
+                throw new InvalidDataException("新版斗气装备初始能力无效");
+            byte Fixed(int position) => checked((byte)fixedOptions.Single(row => row.Values[0].Value == position).Values[1].Value);
+            return new(0, document.TryGetInt32("sub type", out int material) ? material : -1, newEchon, Fixed(0), Fixed(1));
+        }
+        if (echon is null || !document.TryGetInt32("custom ability count", out int count) || count != 2 ||
+            !document.TryGetInt32("custom ability part set index", out int index) || index is <= 0 or > 255 ||
+            !echon.Sets.ContainsKey((byte)index)) throw new InvalidDataException("艾肯装备缺少已装配的能力资源");
+        return new((byte)index, document.TryGetInt32("sub type", out int armor) ? armor : -1, echon);
     }
 
     internal static decimal ReadExperiencePercent(PvfDocument document)

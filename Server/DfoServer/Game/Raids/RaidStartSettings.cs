@@ -8,6 +8,8 @@ internal sealed record RaidStartSettings
 {
     public int? StartMinimumOverride { get; init; }
     public bool AntonFormalEntryEnabled { get; init; }
+    // 只打开已解析的地下城状态迁移。计时原值单位未闭合，不因此发送 596 或调度超时。
+    public bool AntonPhaseProgressEnabled { get; init; }
 
     public RaidCatalog Apply(RaidCatalog catalog)
     {

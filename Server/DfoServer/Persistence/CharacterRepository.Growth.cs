@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Adventure;
 using DfoServer.Game.Characters;
@@ -14,7 +15,7 @@ internal sealed partial class CharacterRepository
     // 成功返回后调用方在原owner内确认死亡并发布Selected；这里不修改实例或发送通知。
     public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected,
         SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog,
-        FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null) => owner.Execute(() =>
+        FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -29,6 +30,9 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("成长提交需要本角色当前实例的待提交死亡及符合副本声明的经验");
         var death = prepared.Death;
         var identity = death.Identity;
+        if (equipmentGrowth is not null && (!ReferenceEquals(equipmentGrowth.Expected, expected) ||
+            equipmentGrowth.EventId != death.EventId || equipmentGrowth.Identity != identity))
+            throw new InvalidDataException("装备成长不是原死亡和角色的冻结规划");
         if (questDrops is not null && (!ReferenceEquals(questDrops.Expected,expected) || questDrops.EventId != death.EventId ||
             questDrops.Identity != identity || questDrops.MapId != prepared.Result.Snapshot.CurrentMap.Id))
             throw new InvalidDataException("任务掉落不是原死亡、角色和地图的冻结规划");
@@ -63,7 +67,7 @@ internal sealed partial class CharacterRepository
                 proficiencyGained = checked((uint)reader.GetInt64(15));
             }
         }
-        var current = duplicate ? Require(db, tx, owner.Account, expected.Name)
+        var current = duplicate || equipmentGrowth is not null ? Require(db, tx, owner.Account, expected.Name)
             : ReadDungeonGrowthCharacter(db, tx, owner.Account, expected, questDrops);
         if (current.Id != expected.Id)
             throw new InvalidOperationException("成长角色或账号已变化");
@@ -75,7 +79,11 @@ internal sealed partial class CharacterRepository
             VerifyQuestDrops(db,tx,owner.Account,expected.Id,prepared.Death.EventId,questDrops);
             SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: true);
             tx.Commit();
-            return new DungeonGrowthCommit(current, true, gained, proficiencyGained);
+            // 提交返回丢失时Session仍持有旧装备；仅回放与已落库结果完全一致的成长投影，不再次写资产。
+            var replayEquipment = equipmentGrowth?.Changes.Where(change =>
+                current.Inventory.Find(change.After.Position) == change.After).ToImmutableArray() ?? [];
+            return new DungeonGrowthCommit(current, true, gained, proficiencyGained)
+                { EquipmentChanges = replayEquipment };
         }
         var result = amount == 0 ? CharacterGrowthPlan.WithoutExperience(expected, catalog) : CharacterGrowthPlan.AddExperience(expected, amount, catalog);
         if (!result.Success)
@@ -90,9 +98,26 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$account", owner.Account);
         if (questDrops is not null)
             ValidateInventoryPlan(expected, questDrops.Inventory);
-        var inventoryCharacter = questDrops is null ? current : CommitInventoryInTransaction(db,tx,owner,current,expected,questDrops.Inventory);
+        var inventoryPlan = questDrops?.Inventory;
+        if (equipmentGrowth is not null)
+        {
+            ValidateInventoryPlan(expected, equipmentGrowth.Inventory);
+            if (equipmentGrowth.Inventory.CharacterPrecondition?.IsExpired() == true ||
+                inventoryPlan?.CharacterPrecondition?.IsExpired() == true)
+                throw new DfoServer.Game.Inventory.Models.InventoryQualificationExpiredException();
+            var after = inventoryPlan?.After ?? expected.Inventory;
+            foreach (var change in equipmentGrowth.Changes)
+            {
+                if (after.Find(change.Before.Position) != change.Before || change.After.Uid != change.Before.Uid ||
+                    change.After.Position != change.Before.Position)
+                    throw new InvalidOperationException("装备成长不能覆盖同笔任务掉落或替换实例身份");
+                after = after with { Items = after.Items.Replace(change.Before, change.After) };
+            }
+            inventoryPlan = new(expected.Inventory, after, "dungeon_equipment_growth", equipmentGrowth.Inventory.CharacterPrecondition);
+        }
+        var inventoryCharacter = inventoryPlan is null ? current : CommitInventoryInTransaction(db,tx,owner,current,expected,inventoryPlan);
         command.Parameters.AddWithValue("$revision", inventoryCharacter.Revision);
-        command.Parameters.AddWithValue("$increment", questDrops?.Inventory.Changed == true ? 0 : 1);
+        command.Parameters.AddWithValue("$increment", inventoryPlan?.Changed == true ? 0 : 1);
         command.Parameters.AddWithValue("$level", plan.TargetLevel);
         command.Parameters.AddWithValue("$experience", checked((long)plan.Learning.Experience));
         command.CommandText = """
@@ -166,7 +191,8 @@ internal sealed partial class CharacterRepository
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久成长结果与候选不一致");
         tx.Commit();
-        return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience), proficiencyGained);
+        return new DungeonGrowthCommit(committed, false, checked((uint)plan.GainedExperience), proficiencyGained)
+            { EquipmentChanges = equipmentGrowth?.Changes ?? [] };
     });
 
     static void WriteDungeonGrowthReceipt(Microsoft.Data.Sqlite.SqliteConnection db, Microsoft.Data.Sqlite.SqliteTransaction tx,

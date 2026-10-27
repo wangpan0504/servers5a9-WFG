@@ -218,8 +218,9 @@ internal static class ServerRuntime
                 fixedRoute.Options.ColumnDungeons, fixedRoute.Options.StepOffsets, fixedRoute.Options.InitialHp,
                 Failure = fixedRoute.Options.Failure.ToString(), Reset = fixedRoute.Options.Reset.ToString(), fixedRoute.Choices });
         log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
-            raidSettings.AntonFormalEntryEnabled,
+            raidSettings.AntonFormalEntryEnabled, raidSettings.AntonPhaseProgressEnabled,
             Reason = raidSettings.AntonFormalEntryEnabled ? "anton-entry-enabled-resource-gates-required" : "anton-entry-waiting-client-resources",
+            PhaseProgress = raidSettings.AntonPhaseProgressEnabled ? "anton-phase-progress-enabled-timer-unit-unknown" : "anton-phase-progress-disabled",
             AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
         lukeStartPolicy = Game.Raids.LukeResourceCompletion.Resolve(lukeStartPolicy, raidCatalog.Find(1), itemResources.Items);
         if (lukeStartPolicy?.ResourceCompletion is not null && lukeStartPolicy.Completion is { } resourceCompletion)
@@ -249,7 +250,7 @@ internal static class ServerRuntime
             lukeRun = null;
         }
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
-            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock), lukeStart);
+            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled), lukeStart);
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
         new DevilContractHandler(log, clock).Register(commands);
         var auctionProbe = Development.Auction.AuctionProbe.Parse(options.DevelopmentAuctionProbe);
@@ -449,11 +450,14 @@ internal static class ServerRuntime
                 cashShop,
                 inventoryProjection, log),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
-            new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions, clock: clock), inventoryProjection, log),
+            new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions, clock: clock), inventoryProjection, log,
+                new EquipmentResealService(itemResources.Items, itemResources.EquipmentReseals, itemResources.EpicPieces, clock)),
             new TextureChangeHandler(new InventoryTextureChangeService(itemResources.Items, itemResources.TextureChanges,
                 itemResources.EpicPieces, clock), inventoryProjection, log),
             new DarkRevelationHandler(new InventoryDarkRevelationService(itemResources.DarkRevelations,
                 itemResources.EpicPieces, clock), itemResources.DarkRevelations, inventoryProjection, log),
+            new EchonEquipmentHandler(new InventoryEchonEquipmentService(itemResources.Items, itemResources.Echon,
+                itemResources.EpicPieces), inventoryProjection, log),
             new EquipmentUpgradeHandler(new InventoryEquipmentUpgradeService(itemResources.Items,
                 itemResources.EquipmentUpgrades, itemResources.EpicPieces, clock), inventoryProjection, log),
             new LimitCubeHandler(new InventoryLimitCubeService(itemResources.Items, itemResources.LimitCubes,
@@ -497,7 +501,7 @@ internal static class ServerRuntime
                 itemResources.Disjoint, itemResources.AmplifyUpgrades, itemResources.GoldLimits, itemResources.EpicPieces, clock: clock), inventoryProjection, log),
             // 设计图升级：CMD271，材料与产物来自设计图自身的 [emancipate group]。
             new UpgradeChronicleHandler(new InventoryUpgradeChronicleService(itemResources.UpgradeChronicles, itemResources.Items,
-                itemResources.EpicPieces, clock), inventoryProjection),
+                itemResources.EpicPieces, clock), inventoryProjection, itemResources.Items),
             // 设计图制造：CMD25，配方来自 [recipe] 设计图的 [input item]/[output item]。
             new CompoundHandler(new InventoryRecipeCraftService(itemResources.ItemRecipes, itemResources.Items,
                 itemResources.EpicPieces, itemResources.GoldLimits, itemResources.ItemMakingSkills, clock), inventoryProjection, log),
@@ -530,7 +534,9 @@ internal static class ServerRuntime
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler,
                 new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock)),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
-                itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log),
+                itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log,
+                new EquipmentTransportService(itemResources.Items.Get, itemResources.Items.ActionConsumable,
+                    itemResources.EquipmentTransports, itemResources.EpicPieces, repository, clock)),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs),

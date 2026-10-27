@@ -31,7 +31,12 @@ internal sealed partial class GameSession
             committed = new(tutorial.Character, tutorial.Duplicate,
                 checked((uint)(tutorial.Character.Learning.Experience - expected.Learning.Experience)));
         }
-        else committed = repository.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops);
+        else
+        {
+            var equipmentGrowth = items is null ? null : Game.Inventory.Services.EquipmentGrowthPlan.Create(expected, run, prepared,
+                items, (timeProvider ?? TimeProvider.System).GetUtcNow(), timeProvider);
+            committed = repository.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth);
+        }
         if (committed.Character.Id != expected.Id || committed.Character.Revision < expected.Revision)
             throw new InvalidOperationException("副本成长提交结果不属于原角色或revision回退");
         var death = run.ConfirmCommittedDeath(prepared);

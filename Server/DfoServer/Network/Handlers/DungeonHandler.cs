@@ -548,6 +548,17 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (result.QuestDropSlots.Count > 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main,[.. result.QuestDropSlots]),"formal_quest_drop_items",Guard);
+        foreach (var change in result.EquipmentChanges.Where(change => change.Before.Core.ItemId == change.After.Core.ItemId))
+            await context.Notify(NotiPacketType.GROWTH_ITEM_RENEW_DATA, EquipmentGrowthPackets.Experience(change.After, change.Gain),
+                "equipment_growth_experience", Guard);
+        var evolved = result.EquipmentChanges.Where(change => change.Before.Core.ItemId != change.After.Core.ItemId).Select(change => change.After).ToArray();
+        if (evolved.Length > 0)
+        {
+            await context.Notify(NotiPacketType.GROWTH_ITEM_CHANGE_DATA, EquipmentGrowthPackets.State(evolved, true),
+                "equipment_growth_evolved", Guard);
+            if (inventoryProjection is not null)
+                await inventoryProjection.RefreshCharacterAsync(context, receipt.Character, "equipment_growth", Guard);
+        }
         if (previousCharacter is not null && previousCharacter.Level == receipt.Character.Level &&
             SkillPackets.BindingsChanged(previousCharacter.Learning, receipt.Character.Learning))
             await SkillProjection.PublishAsync(context, receipt.Character, "formal_growth_skills", "formal_growth_combo", Guard);

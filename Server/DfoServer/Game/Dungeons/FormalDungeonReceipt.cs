@@ -47,6 +47,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public uint GainedExperience { get; init; }
     // 同一笔击杀经验里记入熟练度的额度；与 GainedExperience 相加才是本次有效经验。
     public uint ProficiencyGained { get; init; }
+    public ImmutableArray<Game.Inventory.Services.EquipmentGrowthChange> EquipmentChanges { get; init; } = [];
     public DungeonPlannedMonster? ReportedTarget { get; init; }
     public bool SpecialChildRetired { get; init; }
     public DungeonElevatorReceipt? Elevator { get; init; }
