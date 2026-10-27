@@ -185,7 +185,8 @@ internal static class EvildomWarChannelTests
         // 所以客户端在 67/2 走到 x≈1116 就停住，也不会因走路打开选图（实机 2026-10-21 日志无 ENTER_SELECT_DUNGEON）。
         // 该图的入口是 NPC：67/1 无间者伊奇 100000147 带 [create evildom war]/[enter evildom war waiting area]，
         // 67/2 归来者芮兹 100000148 带 [start evildom war]/[leave evildom war waiting area]。实机点伊奇建魔界大战时客户端发
-        // C2S CREATE_RAID(0x298)，服务端回 ACK664 失败 0x13（dstr 32060），不发成功；之后的等待区与开战包序未证明，入场规则不改，全部按选图门检查拒绝。
+        // C2S CREATE_RAID(0x298)只是旧泛用窗口的历史线索，不代表当前Party建队失败；当前CMD12 kind5可建队。
+        // 专用1652接入后仍不能借普通门或CREATE_RAID类型6绕过开战与专用选图身份。
         var waitingArea = towns.Areas[(Town, 2)].Default;
         That(waitingArea.Bounds.Length == 1 && waitingArea.Bounds[0].Bounds is { X: 16, Y: 154, Width: 1100, Height: 190 } &&
             waitingArea.Links.Length == 1 && waitingArea.Npcs.Any(npc => npc.Id == 100000148) &&
@@ -196,9 +197,9 @@ internal static class EvildomWarChannelTests
             pvf.ReadText("npc/100000147_ikki_the_vikki.npc").Contains("`[create evildom war]`"),
             "魔界大战由 NPC 角色开局：伊奇 [create evildom war]、芮兹 [start evildom war]");
 
-        That(results.Count == dungeons.Length && results.Values.All(r => r == "selection-gate-unavailable") &&
+        That(results.Count == dungeons.Length && results.Values.All(r => r == "evildom-war-start-and-selection-required") &&
             towns.Areas[(Town, 2)].Default.DungeonGates.Length == 0,
-            "67/2 地图没有选图门，魔界大战副本暂不能经正式入场进入（未证明，待实机）");
+            "67/2 地图没有选图门，裸16不能绕过魔界大战开战与选图身份");
         CreateRaidRequests();
         Console.WriteLine($"PASS {Count - before} 魔界大战频道、艾尔丁纪念馆与副本断言（非实机）");
     }

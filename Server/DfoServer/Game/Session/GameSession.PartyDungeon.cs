@@ -90,6 +90,11 @@ internal sealed partial class GameSession
             !(Phase == SessionPhase.MapSelect && formalDungeon is null ||
                 Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null) || HasPendingTownQuestCommit) return null;
         var dungeon = plan.Dungeon;
+        if (dungeon.EvildomWarEntry is { } admission && !ReferenceEquals(CurrentEvildomWar(Selected), admission)) return null;
+        if (dungeon.Entry.DungeonId <= int.MaxValue && dungeon.Entry.StartFatigue > 0 &&
+            CurrentEvildomWar(Selected) is { Charged: false } war && EvildomWarCostRejection(Selected, war.Catalog) is not null) return null;
+        if (CurrentEvildomWar(Selected) is { Charged: false } currentWar && dungeon.ChannelCost is { } warCost &&
+            (warCost.DungeonId != currentWar.Catalog.IncountDungeon || warCost.Period != IncountPeriod(warCost.DungeonId))) return null;
         if (!CanInstallRaidDungeon(dungeon.Entry)) return null;
         if (dungeon.Entry.OrdinaryLukeDay is { } day &&
             !repository.LoadOrdinaryLukeProgress(owner, Selected.Id).Allows(day, dungeon.Entry.DungeonId)) return null;
@@ -153,6 +158,8 @@ internal sealed partial class GameSession
         }
         installing.Ground.PublishPassiveEntry();
         Selected = committed;
+        if (CurrentEvildomWar(committed) is { } war && war.Catalog.Dungeons.Any(row => row.Id == installing.Entry.DungeonId && row.Mode == war.Mode))
+            war.Charged = true;
         formalDungeon = installing;
         PartyDungeon = instance;
         partyPreparation = null;

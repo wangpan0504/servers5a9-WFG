@@ -77,6 +77,7 @@ $keywordGroups = [ordered]@{
     'Quest'      = 'quest-lifecycle','quest-extras','quest-chains','quest-chain-settlement','quest-metro','quest-auto-daily','quest-gold-mail','quest-question-state','quest-continuation','quest-core-rewards','quest-initialization','story-digest'
     'Social|PlayerInteraction|PublicCharacter|NamedWhisper' = 'social','presence','chat','channel-entry'
     'PartyDungeon' = 'party-dungeon','party-dungeon-modes'
+    'EvildomWar' = 'evildom-war','channel-entry','solo-party'
     'Party'     = 'solo-party','social','presence','teleport','formal-dungeon'
     'Story'      = 'story-digest','story-cinematic','story-scenes','story-quest-entry','story-publication'
     'Dungeon|GriefTower|Dazzlement' = 'formal-dungeon','dungeon-growth','grief-tower','dungeon-training','class-experience','dungeon-revive','dungeon-altars','dungeon-despair','dungeon-dazzlement','hero-tomb-entry','dungeon-probe','dungeon-settlement','dungeon-entry-plan'
