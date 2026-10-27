@@ -10,7 +10,7 @@ namespace DfoServer.Network;
 
 internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol,
     Func<PacketCapture?, CancellationToken, Task>? runManagement, Func<OnlineCharacterView[]> onlineCharacters, Action onStarted, ServerLog log, GameChannelListeners gameChannels,
-    Protocol.NativeChannel? native = null, IDisposable? runtimeMemory = null)
+    Protocol.NativeChannel? native = null, IDisposable? runtimeMemory = null, IAsyncDisposable? gameplayTimers = null)
 {
     readonly ConcurrentDictionary<int, Task> active = new();
     int counter;
@@ -88,6 +88,8 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         finally
         {
             lifetime.Cancel();
+            // 先停止玩法时钟并等待已开始的有界操作；不让旧回调跨越Runtime缓存释放。
+            if (gameplayTimers is not null) await gameplayTimers.DisposeAsync();
             channel.Stop();
             gameChannels.Stop();
             native?.Stop();
