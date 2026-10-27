@@ -25,7 +25,15 @@ internal static class LukeRaidStartTcpTests
 
     public static Task RunPhaseTimeoutAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,phaseTimeout:true);
 
-    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false)
+    // 定向资源/SQLite回归复用同一准备逻辑，不另起网络fixture，也不增加默认TCP分组。
+    public static void RunLifecycleOnly(TcpTestResources resources)
+    {
+        var (definition,policy,_)=Prepare(resources,true,true,false,false);
+        LukeRaidLifecycleTransactionTests.Run(resources,definition,policy);
+    }
+
+    static (RaidDefinition Definition,LukeRaidStartPolicy Policy,LukeRaidClockTests.Clock? Clock) Prepare(
+        TcpTestResources resources,bool runDungeons,bool completePhases,bool timed,bool phaseTimeout)
     {
         var definition=RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
             SelfTestCatalogs.Dungeons(resources.Archive),resources.ItemResources.Items).Find(1)!;
@@ -76,6 +84,13 @@ internal static class LukeRaidStartTcpTests
         var phaseClock = phaseTimeout ? new LukeRaidClockTests.Clock(DateTimeOffset.UtcNow) : null;
         if(phaseTimeout) policy=policy with {PhaseTimeout=new("selftest/local-resource-seconds",
             raw.Headers.Single(row=>row.Tag=="[phase time over]").Values.Select(value=>value.Number).ToImmutableArray())};
+        return (definition,policy,phaseClock);
+    }
+
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false)
+    {
+        var (definition,policy,phaseClock)=Prepare(resources,runDungeons,completePhases,timed,phaseTimeout);
+        var raw=definition.Resources!.Script;var catalog=definition.Resources.EntryCatalog!;
         await using var fixture=new TcpTestFixture(source,Path.Combine(root,phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
         await fixture.StartAsync();
         var endpoints=ChannelTcpTests.Endpoints(fixture); var repository=new CharacterRepository(fixture.Database);
