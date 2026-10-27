@@ -75,10 +75,17 @@ function Test-CheckCache([string]$Path, [string]$Source, [string]$Environment, [
     if (-not $Source -or -not $Environment -or -not $Artifact -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     try {
         $record = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        $completed = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse([string]$record.completedUtc, [ref]$completed)) { return $false }
         return $record.version -eq 2 -and $record.status -eq 'passed' -and
             $record.command -eq '--selftest-core' -and $record.source -eq $Source -and
             $record.environment -eq $Environment -and $record.artifact -eq $Artifact
     } catch { return $false }
+}
+
+function Write-CheckCacheReuse([string]$Path) {
+    $record = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Write-Output "CACHED --selftest-core：复用 $Path；原完成时间 $($record.completedUtc)；不是本轮重新执行。"
 }
 
 function Save-CheckCache([string]$Path, [string]$Source, [string]$Environment, [string]$Artifact) {
@@ -88,13 +95,16 @@ function Save-CheckCache([string]$Path, [string]$Source, [string]$Environment, [
     $temp = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
     try {
         [IO.File]::WriteAllText($temp, ($record | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temp, $Path, $null) }
+        if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temp, $Path, [NullString]::Value) }
         else { [IO.File]::Move($temp, $Path) }
     } finally { if ([IO.File]::Exists($temp)) { [IO.File]::Delete($temp) } }
 }
 
 function Assert-CheckInputsUnchanged([string]$Root, [string]$Configuration, [string]$Source,
-    [string]$ArtifactDirectory, [string]$Artifact) {
+    [string]$ArtifactDirectory, [string]$Artifact, [string]$Environment) {
+    if ($Environment -and (Get-CheckEnvironmentKey) -ne $Environment) {
+        throw '检查期间 SDK 或环境改变：撤销成功缓存，请固定输入后重跑。'
+    }
     if (-not $Source) { return }
     if ((Get-CheckSourceKey $Root $Configuration) -ne $Source -or
         (Get-CheckArtifactKey $ArtifactDirectory) -ne $Artifact) {
