@@ -61,6 +61,8 @@ internal static partial class DevelopmentGm
                 return ExecuteEquipmentSlots(repository, owners, find(request.Account), request);
             if (request.Action == DevelopmentAction.Appearance)
                 return DescribeAppearance(repository, owners, find(request.Account), request);
+            if (request.Action is DevelopmentAction.LukeRewardInspect or DevelopmentAction.LukeRewardClaim)
+                return ExecuteLukeRewardRecovery(repository, owners, find(request.Account), request, catalog);
             if (request.Action == DevelopmentAction.CharacterScore)
             {
                 var resources = catalog?.Resources ?? throw new InvalidDataException("角色建设评分目录未装配");
