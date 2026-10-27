@@ -26,10 +26,11 @@ internal sealed class RaidCatalog(ImmutableDictionary<byte, RaidDefinition> defi
         var prepared = Definitions;
         foreach (byte type in new byte[] { 0, 1 })
             if (Find(type) is { } raid)
-                {
+            {
                 var resources = RaidResourceLoader.Load(pvf, raid, dungeons, items);
                 if (type == 1 && rooms is not null && lukeObjectChoices is not null && resources.EntryCatalog is { } entry)
-                    resources = resources with { LukeObjects = LukeRaidObjectCatalog.Load(pvf, entry, rooms, lukeObjectChoices) };
+                    resources = resources with { LukeObjects = LukeRaidObjectCatalog.Load(pvf, entry, rooms, lukeObjectChoices),
+                        LukeCardSet = LukeCardSetCatalog.Load(pvf, entry, rooms) };
                 prepared = prepared.SetItem(type, raid with { Resources = resources });
             }
         return new(prepared);
