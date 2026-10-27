@@ -80,7 +80,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
             return new(19, "anton-start-definition-unavailable");
         if (definition.Resources.MissingItems.Contains(cost.ItemId)) return new(19, "entry-cost-resource-missing");
         if (expected.Members.Length < definition.StartMinimum) return new(22, "too-few-members");
-        if (expected.Members.Length > definition.MemberMax || expected.Members.Length is < 10 or > 20 ||
+        if (expected.Members.Length > definition.MemberMax || expected.Members.Length is < 1 or > 20 ||
             expected.Members.Any(m => m.Squad is < 1 or > 5) || expected.Members.GroupBy(m => m.Squad).Any(g => g.Count() > 4))
             return new(19, "squads-unassigned");
         var now = (clock ?? TimeProvider.System).GetUtcNow();

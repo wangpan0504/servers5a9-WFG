@@ -1,9 +1,11 @@
 using static DfoServer.Testing.TestCheck;
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Raids;
 using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Raids;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Parsers;
 using PvfLib;
 
 namespace DfoServer;
@@ -61,6 +63,25 @@ internal static class RaidCreateFlowTests
         var fiend = RaidCatalog.Parse(2, "Etc/Raid/Fiendwar_KR/Fiendwar.etc", tokens, id => strings[id]);
         That(fiend is { MemberMax: 8, StartMinimum: 1, PhaseMax: 1 }, "超时空之战脚本用 FIENDWAR 标签，区内 [MEMBER MAX] 不混入");
         That(RaidCatalog.Parse(0, "x", [], id => strings[id]) is null, "缺人数标签的类型不可创建");
+        That(RaidRequests.Search(new byte[17]) is { Offset: 0, RaidType: 0, Name: "" }, "攻坚搜索接受已证空名称筛选");
+        foreach (byte[] invalid in new byte[][] { [], [1], new byte[16], new byte[18] })
+            Reject<InvalidDataException>(() => RaidRequests.Search(invalid), "攻坚搜索拒绝截断、未知mode与多余正文");
+        var defaults = new RaidCatalog(new[] { new RaidDefinition(0, "anton", 20, 10, 2),
+            new RaidDefinition(1, "luke", 8, 1, 2), new RaidDefinition(2, "fiend", 8, 1, 1),
+            new RaidDefinition(3, "prey", 12, 1, 2), new RaidDefinition(4, "dnfaos", 4, 2, 1),
+            new RaidDefinition(5, "dnfaos", 4, 2, 1) }.ToImmutableDictionary(raid => raid.Type));
+        That(ReferenceEquals(new RaidStartSettings().Apply(defaults), defaults), "无覆盖时原样读取PVF人数");
+        var overridden = new RaidStartSettings { StartMinimumOverride = 1 }.Apply(defaults);
+        That(overridden.Definitions.Values.All(raid => raid.StartMinimum == 1) && defaults.Find(0)!.StartMinimum == 10 &&
+            overridden.Definitions.Values.All(raid => raid.MemberMax == defaults.Find(raid.Type)!.MemberMax),
+            "全部攻坚队显式覆盖最低一人，不修改原目录或各类型容量");
+        foreach (int invalid in new[] { -1, 0, 9, int.MaxValue })
+            Reject<InvalidDataException>(() => new RaidStartSettings { StartMinimumOverride = invalid }.Apply(defaults),
+                "非法人数或超过任一团本容量拒绝装配");
+        That(RaidStartCheck.Evaluate(true, 1, defaults.Find(0)).Error == 22 &&
+            RaidStartCheck.Evaluate(true, 0, overridden.Find(0)).Error == 22 &&
+            RaidStartCheck.Evaluate(false, 1, overridden.Find(0)).Error == 8,
+            "覆盖不开放零人、无覆盖单人仍拒绝，团长权限优先");
         Console.WriteLine($"PASS {Count - before} 团本建队包体、频道类型表、队伍 key 与脚本解析断言");
     }
 

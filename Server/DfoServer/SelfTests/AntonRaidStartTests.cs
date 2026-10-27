@@ -123,6 +123,22 @@ internal static class AntonRaidStartTests
                 registry.Find(actors[3]) is null && sessions[3].StartedRaid is null && parties.Current(sessions[3]) is null &&
                 parties.Current(sessions[0])?.Members.Length == 3 && ReferenceEquals(sessions[3].Selected, departing) && Scalar(balance) == 30,
                 "665在原owner内同时清除攻坚与普通分队身份，剩余名册取实际结果且不凭未知退款合同改资产");
+
+            var soloDefinition = new RaidStartSettings { StartMinimumOverride = 1 }
+                .Apply(new RaidCatalog(ImmutableDictionary<byte, RaidDefinition>.Empty.Add(0, definition))).Find(0)!;
+            var solo = Recruit([actors[3]]);
+            That(service.Start(actors[3], solo, definition) is { Error: 22 } && Scalar(balance) == 30,
+                "未覆盖时已编队持票单人仍按PVF十人拒绝且不扣票");
+            registry.Leave(actors[3], actors[3].Character);
+            registry.Create(actors[3], 0, "solo", "solo"u8.ToArray(), 20, soloDefinition.StartMinimum);
+            registry.Assign(actors[3], actors[3].Character, 1);
+            solo = registry.Find(actors[3])!;
+            var soloResult = service.Start(actors[3], solo, soloDefinition);
+            That(soloResult is { Error: 0, Receipt.Party.Started.Participants.Length: 1 } && Scalar(balance) == 29 &&
+                parties.Current(sessions[3]) is { Members.Length: 1 } && sessions[3].Selected!.Inventory.Items.Length == 0,
+                "覆盖一人经真实固定owner锁、SQL扣票及普通单人分队完成开战");
+            That(service.Start(actors[3], registry.Find(actors[3])!, soloDefinition) is { Error: 0, Replay: true } && Scalar(balance) == 29,
+                "单人重复开战不重复扣票或建立新实例");
         }
         finally
         {
