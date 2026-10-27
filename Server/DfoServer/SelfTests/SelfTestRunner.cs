@@ -20,6 +20,7 @@ internal static class SelfTestRunner
         ChronicleInvestmentTests.RunCore();
         await CharacterScoreNoticeTests.RunCore();
         await SelfCharacterScoreTests.RunCore();
+        await MachineCharacterScoreTests.RunCore();
         LukeCardSetTests.RunCore();
         EvildomWarPacketTests.RunCore();
         OrdinaryLukeProgressTests.RunCore();
