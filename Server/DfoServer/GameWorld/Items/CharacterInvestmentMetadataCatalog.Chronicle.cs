@@ -9,6 +9,7 @@ internal sealed record ChronicleInvestmentMetadata(bool Valid, byte Type, string
 internal sealed partial class CharacterInvestmentMetadataCatalog
 {
     readonly ConcurrentDictionary<int, Lazy<ChronicleDefinition>> chronicles = new();
+    readonly ConcurrentDictionary<int, Lazy<ChronicleDefinition>> installedChronicles = new();
     readonly record struct ChronicleKey(byte Job, byte Grow, byte Slot, byte Number);
     sealed record ChronicleDefinition(byte Type, ImmutableDictionary<ChronicleKey, ImmutableArray<PvfTokenSection>> Entries);
     static readonly string[] ChronicleJobs = ["[swordman]", "[fighter]", "[gunner]", "[mage]", "[priest]",
@@ -16,9 +17,17 @@ internal sealed partial class CharacterInvestmentMetadataCatalog
         "[at swordman]", "[knight]", "[demonic lancer]", "[at priest]", "[gun blader]"];
 
     public ChronicleInvestmentMetadata ReadChronicle(int id, byte job, byte grow, byte slot, byte number)
+        => ReadChronicle(id, job, grow, slot, number, false);
+
+    // v2.3识别安装器保存的原效果模板；旧版本的动作声明合同与缓存不变。
+    public ChronicleInvestmentMetadata ReadInstalledChronicle(int id, byte job, byte grow, byte slot, byte number)
+        => ReadChronicle(id, job, grow, slot, number, id is >= 1254 and <= 1256);
+
+    ChronicleInvestmentMetadata ReadChronicle(int id, byte job, byte grow, byte slot, byte number, bool installedEffect)
     {
         if (id <= 0 || !stackable.ContainsKey(id)) return new(false, 0, "unknown_template");
-        var definition = chronicles.GetOrAdd(id, key => new(() => LoadChronicle(key))).Value;
+        var cache = installedEffect ? installedChronicles : chronicles;
+        var definition = cache.GetOrAdd(id, key => new(() => LoadChronicle(key, installedEffect))).Value;
         if (!definition.Entries.TryGetValue(new(job, grow, slot, number), out var entries))
             return new(false, definition.Type, "missing_key");
         if (entries.Length != 1) return new(false, definition.Type, "ambiguous_key");
@@ -40,7 +49,7 @@ internal sealed partial class CharacterInvestmentMetadataCatalog
         return new(true, definition.Type, "validated_installed_option");
     }
 
-    ChronicleDefinition LoadChronicle(int id)
+    ChronicleDefinition LoadChronicle(int id, bool installedEffect)
     {
         var chain = new List<PvfTokenDocument>();
         var visited = new HashSet<string>(StringComparer.Ordinal);
@@ -62,10 +71,15 @@ internal sealed partial class CharacterInvestmentMetadataCatalog
             if (fields.Length != 1) throw new InvalidDataException("气息字段缺失或继承歧义: " + name);
             return fields[0];
         }
-        var action = Field("action type");
-        if (!action.IsBlock || !action.Children.IsEmpty || action.Values.Length != 1 || action.Values[0].Type != 6 ||
-            resolve(action.Values[0].Value) != "[3rd chronicle ability enchant]")
-            throw new InvalidDataException("模板不是气息安装动作");
+        // EffectItemId固定为1254+Type；原效果表不是消耗品，不要求它重复声明安装动作。
+        // 已声明的动作仍须唯一且匹配，不能用新入口吞掉冲突或错误动作。
+        if (!installedEffect || chain.Any(doc => Roots(doc, "action type").Length != 0))
+        {
+            var action = Field("action type");
+            if (!action.IsBlock || !action.Children.IsEmpty || action.Values.Length != 1 || action.Values[0].Type != 6 ||
+                resolve(action.Values[0].Value) != "[3rd chronicle ability enchant]")
+                throw new InvalidDataException("模板不是气息安装动作");
+        }
         var kind = Field("stackable type");
         if (kind.IsBlock || kind.Values.Length != 2 || kind.Values[0].Type != 6 || resolve(kind.Values[0].Value) != "[etc]" ||
             kind.Values[1].Type != 0 || kind.Values[1].Value != 1)
@@ -73,6 +87,8 @@ internal sealed partial class CharacterInvestmentMetadataCatalog
         var type = Field("type");
         if (type.IsBlock || type.Values.Length != 1 || type.Values[0].Type != 0 || type.Values[0].Value is < 0 or > 2)
             throw new InvalidDataException("气息类型不符");
+        if (installedEffect && type.Values[0].Value != id - 1254)
+            throw new InvalidDataException("原气息效果模板与类型不符");
         var table = Field("3choro enchant");
         if (!table.IsBlock || !table.Values.IsEmpty || table.Children.IsEmpty)
             throw new InvalidDataException("气息表结构不完整");
