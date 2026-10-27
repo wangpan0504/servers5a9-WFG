@@ -146,13 +146,21 @@ internal static class AvatarPackageTests
         }
         foreach (string changed in new[] {
             "0 `[HP MAX]` `+` 101 37 `[MP MAX]` `*` 1.5",
+            "0 `[HP MAX]` `+` 1e2 37 `[MP MAX]` `*` 1.5" })
+        {
+            var single = AvatarPackageCatalog.ParseAvatar(AvatarText(stats));
+            var actual = AvatarPackageCatalog.ParseAvatar(AvatarText(stats) + Block(changed));
+            That(actual.PendingRule is null && actual.RequiresAbilityChoice && actual.Types.SequenceEqual(single.Types) &&
+                actual.Abilities.SetEquals(new byte[] { 0, 37 }),
+                "重复完整块只改变合法非技能数字幅度或其词法时，保留全部能力编号、期限与孔位");
+        }
+        foreach (string changed in new[] {
             "0 `[HP MAX]` `*` 100 37 `[MP MAX]` `*` 1.5",
-            "0 `[HP MAX]` `+` 1e2 37 `[MP MAX]` `*` 1.5",
             "0 `[HP  MAX]` `+` 100 37 `[MP MAX]` `*` 1.5",
             "0 `[MP MAX]` `+` 100 37 `[MP MAX]` `*` 1.5",
             "37 `[MP MAX]` `*` 1.5 0 `[HP MAX]` `+` 100" })
             That(AvatarPackageCatalog.ParseAvatar(AvatarText(stats) + Block(changed)).PendingRule is not null,
-                "能力索引相同仍拒绝数值、操作符、词法表示、字符串内部空白、种类或顺序冲突");
+                "能力索引相同仍拒绝操作符、字符串内部空白、种类或顺序冲突");
         foreach (string changed in new[] { "140 `[SKILL_LEVEL]` `[mage]` 261 1", "140 `[SKILL_LEVEL]` `[swordman]` 262 1",
             "140 `[SKILL_LEVEL]` `[swordman]` 261 2" })
             That(AvatarPackageCatalog.ParseAvatar(AvatarText(skill) + Block(changed)).PendingRule is not null,
@@ -160,6 +168,8 @@ internal static class AvatarPackageTests
         foreach (string text in new[] {
             AvatarText(stats) + Block(""), AvatarText("") + Block(stats),
             AvatarText(stats) + Block("0 `[HP MAX]` `+`"),
+            AvatarText(stats) + Block("0 `[HP MAX]` `+` bad 37 `[MP MAX]` `*` 1.5"),
+            AvatarText(stats) + Block("0 `[HP MAX]` `+` `101` 37 `[MP MAX]` `*` 1.5"),
             AvatarText(stats) + Block(stats + "\n[unknown]\n1"),
             AvatarText(stats) + "\n[avatar select ability]\n" + stats,
             "[avatar select ability]\n" + stats + Block(stats),
@@ -233,6 +243,7 @@ internal static class AvatarPackageTests
 
     public static void RunResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
     {
+        DuplicateConstantMagnitudeResources(towns, resources, packages);
         FirstGrowResources(towns, resources, packages);
         RankZeroResources(towns, resources, packages);
         AbilitySentinelResources(towns, resources, packages);
@@ -289,6 +300,62 @@ internal static class AvatarPackageTests
         PeriodDeadlinePlans(towns, resources);
         CapturedNoAbilitySelections(towns, resources, packages);
         LegacySelections(towns, resources, packages);
+    }
+
+    static void DuplicateConstantMagnitudeResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
+    {
+        const int sourceId = 490702666, avatarId = 39952;
+        var definition = packages.Get(sourceId);
+        var category = definition.Categories.Single(value => value.Category == 0 && value.Subcategory == 0);
+        That(definition.Available && definition.SelectionCount == 1 && definition.Dimensions.SequenceEqual(new[] { 7, 2 }) &&
+            definition.Categories.Length == 14 && category.Rows.SequenceEqual(new AvatarPackageRow[] {
+                new(39186, 1, 3, 0), new(39601, 1, 3, 0), new(39952, 1, 3, 0), new(40342, 1, 3, 0),
+                new(40825, 1, 3, 0), new(41220, 1, 3, 0), new(41545, 1, 3, 0), new(41997, 1, 3, 0) }),
+            "绝版装扮单件自选真实0/0分类完整保留八部位、永久无孔类型及选择上限");
+        var now = DateTimeOffset.UtcNow;
+        var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces);
+        var source = new InventoryItem(1000, Bag(), InventoryRewardGrantService.Create(resources.Items.Get(sourceId), 2, now));
+        var before = new InventorySnapshot([source], Gold: 321);
+        Character character = new(1, 0, "DupAvatar", 0, towns.Room, towns.InitialReturn)
+            { Job = 0, Level = 99, Inventory = before };
+        var sourceTemplate = resources.Items.Get(sourceId);
+        var targetTemplate = resources.Items.Get(avatarId);
+        That(InventoryAvatarPackageService.SourceEligible(character, source, sourceTemplate) &&
+            definition.AllowsFirstGrowType(character.GrowType) &&
+            source.Core is { IsStackable: true, Count: 2, EquipmentLockId: 0 } && !source.IsExpired(now.ToUnixTimeSeconds()) &&
+            targetTemplate.Kind == ItemKind.Avatar && targetTemplate.Expiration.SupportsCreation,
+            "RED前提：真实源资格、首转、数量、锁及期限合法，目标是支持创建的装扮");
+        // 39952两个完整属性块只有ATTACK_SPEED幅度50/55不同；先验证实际选择2，不由默认属性代选。
+        var request = new AvatarPackageOpenRequest(73, 1, 0, 0, [avatarId], [new(avatarId, 2)]);
+        foreach (byte ability in new byte[] { 2, 0, 1, 3 })
+        {
+            var chosen = request with { Choices = [new(avatarId, ability)] };
+            var result = service.Open(character, chosen, out var receipt, now);
+            if (!result.Accepted)
+                That(packages.GetAvatar(avatarId).PendingRule == "装扮属性选项无效",
+                    "真实39952合法选项被拒绝时，阻断应明确来自重复属性块校验");
+            That(result.Accepted,
+                $"真实490702666选择39952合法属性{ability}应可开启：accepted={result.Accepted} error={result.Error} metadata={packages.GetAvatar(avatarId).PendingRule}");
+            var after = result.Plan!.After;
+            var reward = after.Items.Single(item => item.Core.ItemId == avatarId);
+            That(character.Inventory == before && after.Items.Length == 2 &&
+                after.Find(Bag()) is { Uid: 1000, Core.Count: 1 } && after.Gold == 321 &&
+                reward.Uid == 0 && reward.Core is { Value: 0, Attr: 0, ExpireTime: 0 } &&
+                reward.Core.Durability == ability && reward.Avatar == new AvatarDetail() &&
+                receipt!.ItemId == sourceId && receipt.Rewards.Single() is { ItemId: avatarId, Count: 1 },
+                "常量幅度差异不改写玩家选择编号，单次扣源并生成一件永久无孔完整装扮原型");
+        }
+        var avatar = packages.GetAvatar(avatarId);
+        That(avatar.PendingRule is null && avatar.RequiresAbilityChoice && avatar.Abilities.SetEquals([0, 1, 2, 3]) &&
+            avatar.Types.Length == 5 && avatar.Types[3] is { Days: 0, Sockets: var sockets } && sockets == default,
+            "真实重复属性块保留全部四个合法编号及原type3期限孔位，不选取或改写效果幅度");
+        foreach (var bad in new[] { request with { Choices = [] }, request with { Choices = [new(avatarId, 4)] },
+            request with { Choices = [new(avatarId, byte.MaxValue)] } })
+        {
+            var rejected = service.Open(character, bad, out var receipt, now);
+            That(!rejected.Accepted && rejected.Plan is null && receipt is null && character.Inventory == before,
+                "真实常量重复声明仍拒绝缺失、未知与哨兵属性，失败不消耗源或生成奖励");
+        }
     }
 
     static void LegacySelections(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
