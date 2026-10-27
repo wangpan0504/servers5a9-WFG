@@ -5,6 +5,7 @@ using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection.Inventory;
+using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
@@ -27,13 +28,13 @@ namespace DfoServer.Network.Handlers;
 /// 字节合同见 <c>Docs/协议/聊天.md</c>；层 id 兜底等已知缺陷见 <c>Docs/模块/聊天.md</c>。
 /// </para>
 /// <para>
-/// 本处理器不按文本内容分流：所有合法 <c>0x0011</c> 一律走正式投递
+/// 本服普通频道精确全文“#战力”是唯一自助评分命令；其余合法 <c>0x0011</c> 走正式投递
 /// （解析 → 每连接节流 → 静音/封禁预留钩子 → CP936 截断到 200 字节 → 喇叭先扣物品 → 投递计划 → 记录实际投递结果）。
 /// GM <c>chat-inject</c> 是独立的诊断入口，只向指定在线连接注入测试帧，不经过这里。
 /// </para>
 /// </summary>
 internal sealed class ChatHandler(ChatService chat, InventoryProjection? inventory, ServerLog log,
-    NamedWhisperService? named = null) : IGameCommandModule
+    NamedWhisperService? named = null, SelfCharacterScoreProjection? selfScore = null) : IGameCommandModule
 {
     // 日志里的文本上限：单条聊天不能把热点日志撑大。
     const int LogTextLimit = 64;
@@ -80,7 +81,15 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
-        // 普通/公会/悄悄话与两种喇叭都走这里；文本内容不参与分流。
+        // 限流和封禁后只识别本服明确的一条普通频道全文命令，不trim、不接收目标或任意GM参数。
+        if (SelfCharacterScoreProjection.Matches(send))
+        {
+            string status = selfScore?.Query(context) ?? "unavailable";
+            log.Write("character_score_query", new { Connection = context.Id, Status = status });
+            return CommandResult.Handled;
+        }
+
+        // 其余普通/公会/悄悄话与喇叭完全保留原投递与扣减路径。
         string text = ChatText.Truncate(send.Text, out bool truncated);
         bool known = ChatService.TryKind(send.Type, out var kind);
         uint target = kind is ChatKind.Whisper or ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone ? send.Arg : 0;
