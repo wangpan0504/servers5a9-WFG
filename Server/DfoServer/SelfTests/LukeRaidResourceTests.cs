@@ -66,10 +66,15 @@ internal static class LukeRaidResourceTests
         }) That(Parse(values).Issues.Any(i => i.Code == code && i.TokenIndex >= 0), "卢克未知/损坏声明保留来源并拒绝：" + code);
         int behavior = Array.IndexOf(input, "[BEHAVIOR]"), end = Array.IndexOf(input, "[/BEHAVIOR]");
         var unresolved = Parse([.. input[..(behavior + 1)], "[RESET TIMER]", 1, 999, .. input[end..]]);
-        That(unresolved.Issues.Any(i => i.Code == "phase-dungeon-reference-missing" && i.Detail == "999") &&
-            unresolved.Issues.Any(i => i.Code == "phase-timer-reference-missing" && i.Detail == "1:999") &&
+        That(unresolved.Issues.Any(i => i.Code == "raid-timer-dungeon-reference-missing" && i.Detail == "999") &&
             unresolved.Phases.Single().Rules.Single().Behavior.Single().RawIntegers.SequenceEqual(new[] { 1, 999 }),
-            "未闭合timer作用域保留原值和问题，不吞掉引用或补造SET");
+            "实例未登记DGN的timer保留原值与引用错误，不补造目标或SET");
+        var absentReset = Parse([.. input[..(behavior + 1)], "[RESET TIMER]", 1, 5054, .. input[end..]]);
+        That(absentReset.Issues.IsEmpty, "卢克登记图的缺键RESET是幂等取消，无需伪造SET");
+        int trigger = Array.IndexOf(input, "[TRIGGER]"), triggerEnd = Array.IndexOf(input, "[/TRIGGER]");
+        var absentCheck = Parse([.. input[..(trigger + 1)], "[CHECK TIMER END]", 1, 5054, .. input[triggerEnd..]]);
+        That(absentCheck.Issues.Any(i => i.Code == "raid-timer-reference-missing" && i.Detail == "1:5054"),
+            "等待到期必须有实例级SET声明，缺键RESET例外不扩展为吞掉所有引用问题");
         var resource = RaidResourceLoader.Check(script, new Dictionary<int, string>(), _ => "dungeon/test.dgn", _ => "map/test.map",
             _ => true, _ => Tokens(["[map specification]", "boss", 0, 0, 55845, "[/map specification]"]), id => strings[id], _ => true);
         That(resource.ResourcesReady && RaidStartCheck.Evaluate(true, 8,
@@ -100,10 +105,9 @@ internal static class LukeRaidResourceTests
             resources.Dungeons.Length == 15 && resources.Dungeons.All(d => d.FormalFileExists) &&
             resources.Dungeons.SelectMany(d => d.MapIds).Distinct().Count() == 141,
             "主目录完整登记15地下城及141张显式地图，物品齐全，不借普通卢克5101系列");
-        That(resources.Issues.Length == 3 && resources.Issues.Count(i => i.Code == "phase-dungeon-reference-missing" && i.Detail == "5054") == 2 &&
-            resources.Issues.Count(i => i.Code == "phase-timer-reference-missing" && i.Detail == "1:5063") == 1,
-            "跨阶段timer(1,5054)及无同阶段set的reset(1,5063)保留未闭合诊断：" + string.Join(';', resources.Issues));
-        That(resources.StartBlocker == "formal-raid-definition-unsupported", "真实卢克拒绝原因来自精确声明问题，而非未装配");
-        Console.WriteLine($"PASS {Count - before} 卢克真实资源与未闭合引用断言");
+        That(resources.Issues.IsEmpty && resources.ResourcesReady,
+            "实例级timer(1,5054)与缺键RESET(1,5063)经明确验证合同成立，不删除Issues结果冒充支持：" + string.Join(';', resources.Issues));
+        That(resources.StartBlocker == "formal-raid-flow-unavailable", "资源齐全不代表阶段消费者与正式生产策略已就绪");
+        Console.WriteLine($"PASS {Count - before} 卢克真实资源与实例级引用合同断言");
     }
 }

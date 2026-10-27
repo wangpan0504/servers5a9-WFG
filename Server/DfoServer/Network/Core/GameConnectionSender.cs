@@ -14,7 +14,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
 {
     // 按包体及帧头计费，包含活动消息；共享包体在每个接收连接独立计费。
     internal const long MaxPendingBytes = 2 * 1024 * 1024;
-    sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false);
+    sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false, Action? Written = null);
     sealed record Message(long Epoch, Output? Own = null, RemoteTownActor? Enter = null, (ushort, long)? Move = null,
         (ushort Id, long Membership, byte[]? Effect, Func<bool>? Current, byte[]? Prepare, byte[]? DestinationArea, bool HideActor)? Leave = null,
         TaskCompletionSource? Barrier = null, RemoteTownActor? Refresh = null, SceneActorClear Actors = SceneActorClear.Delete, long Bytes = 0, bool IsClear = false);
@@ -76,8 +76,9 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         return done.Task;
     }
 
-    public void Post(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null) =>
-        Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: canSend)));
+    // Written仅用于成功写帧后的本人owner内展示记账，不得执行网络等待或SQL。
+    public void Post(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null, Action? written = null) =>
+        Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: canSend, Written: written)));
 
     // 共享副本先完整规划并提交；发布只入原有有界发送队列，不持队伍/连接门禁等待慢客户端。
     // 原回执守卫在入队时复核；泵复核原会话，后续合法revision不能吞掉已提交的奖励帧。
@@ -259,7 +260,10 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                     if (message.Own is { } own)
                     {
                         if (owner.Execute(() => own.CanSend?.Invoke() ?? true))
+                        {
                             await Write(own.Kind, own.Opcode, own.Body, own.Action, own.Protected);
+                            if (own.Written is { } written) owner.Execute(() => { written(); return true; });
+                        }
                     }
                     else if (message.IsClear)
                     {

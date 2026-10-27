@@ -98,10 +98,10 @@ internal static class LukeRaidTcpTests
         finally { foreach (var peer in peers) peer.Dispose(); }
         await fixture.StopAsync();
         var starts = fixture.Events().Where(e => e.GetProperty("Kind").GetString() == "raid_start_request")
-            .Select(e => e.GetProperty("Detail")).Where(e => e.GetProperty("Reason").GetString() == "formal-raid-definition-unsupported").ToArray();
+            .Select(e => e.GetProperty("Detail")).Where(e => e.GetProperty("Reason").GetString() == "formal-raid-flow-unavailable").ToArray();
         That(starts.Length == 3 && starts.All(e => e.GetProperty("MissingDungeons").GetInt32() == 0 &&
             e.GetProperty("MissingMaps").GetInt32() == 0 && e.GetProperty("MissingItems").GetInt32() == 0 &&
-            e.GetProperty("DefinitionIssues").GetInt32() == 3 && e.GetProperty("IssueSample").GetString()!.Contains("phase-dungeon-reference-missing")),
-            "卢克START诊断来自共享装配结果：精确未闭合引用而非未准备资源或误报缺图");
+            e.GetProperty("DefinitionIssues").GetInt32() == 0 && e.GetProperty("IssueSample").GetString() == ""),
+            "卢克START资源合同已完整但生产策略仍未配，不能把无解析问题当作开战许可");
     }
 }

@@ -84,6 +84,7 @@ internal static class NpcFavorTests
             using var db=new SqliteConnection("Data Source="+path+";Pooling=False");db.Open();
             using var sql=db.CreateCommand();
             // 真实v101升级保留原角色与完整库存，默认没有历史好感度。
+            DatabaseSchemaTests.RewindRaidLifecycle(db);
             sql.CommandText="ALTER TABLE characters DROP COLUMN npc_favor; PRAGMA user_version=101";sql.ExecuteNonQuery();
             repository=new CharacterRepository(path);
             var loaded=repository.LoadCharacter(owner,0);

@@ -63,6 +63,7 @@ internal static partial class DatabaseSchemaTests
                 }
                 if (version == 78)
                     Execute(db, "DROP TABLE account_social_requests;" + SocialSchema.LegacyRequestSql);
+                RewindRaidLifecycle(db);
                 Execute(db, $"""
                     INSERT INTO character_social_links VALUES({role.Id},{peer.Id},0,123,'好友');
                     INSERT INTO account_social_links VALUES('key-schema','key-target',123,'备注',2);

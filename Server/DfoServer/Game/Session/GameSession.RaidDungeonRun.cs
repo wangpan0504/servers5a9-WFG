@@ -51,6 +51,33 @@ internal sealed partial class GameSession
         return facts.All(row => firstRaid.Battle.HasDungeonContribution(row.Actor, instance));
     }
 
+    // 输入来自原共享实例全部已安装/加载确认的正式投影；不能用客户端地图号直接触发规则。
+    internal static PartyDungeonNotice[] ObserveRaidPartyRun(PartyMember[] members, Guid instance,
+        PartyDungeonNotice[] notices, bool observeMap)
+    {
+        if (members.Length is < 1 or > 4 || members[0].Actor.Session.raidCombat is not { Battle.Kind: RaidKind.Luke } first)
+            return notices;
+        var rows = new List<(RaidActor Actor, DungeonRunIdentity Identity)>();
+        DfoServer.GameWorld.Dungeons.DungeonMap? map = null;
+        foreach (var member in members)
+        {
+            var session = member.Actor.Session;
+            if (session.raidCombat is not { } raid || !ReferenceEquals(raid.Battle, first.Battle) || !raid.Actor.IsCurrent ||
+                session.formalDungeon is not { Entry.RaidEntry.Kind: RaidKind.Luke } dungeon ||
+                dungeon.Entry.RaidEntry.InstanceId != raid.Battle.Instance || dungeon.Run.Snapshot.Identity.InstanceId != instance)
+                return notices;
+            var snapshot = dungeon.Run.Snapshot;
+            if (map is not null && map != snapshot.CurrentMap) return notices;
+            map = snapshot.CurrentMap;
+            rows.Add((raid.Actor, snapshot.Identity));
+        }
+        var change = first.Battle.ObserveLukeRun(instance, rows.ToArray(), observeMap ? map!.Id : null);
+        // 通知仍由原发布队列在owner锁外分发；重放时允许以当前view恢复丢失投影。
+        return [.. notices, new(PartyDungeonNoticeKind.RaidBattleSync, members[0], members,
+            members[0].Actor.Session.CurrentFormalDungeonScene(), RaidBattleChange: change,
+            RaidEvent: observeMap ? RaidStageFactKind.EnterMap : RaidStageFactKind.EnterDungeon)];
+    }
+
     AntonRaidBattleChange? ReleaseCurrentRaidDungeon()
     {
         if (formalDungeon is not { Entry.RaidEntry.Kind: RaidKind.Luke } dungeon ||

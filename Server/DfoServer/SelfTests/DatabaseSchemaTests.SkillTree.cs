@@ -8,6 +8,7 @@ internal static partial class DatabaseSchemaTests
 {
     internal static void RemoveSkillTreeExpansionSchema(SqliteConnection db)
     {
+        RewindRaidLifecycle(db);
         if (Query(db, "SELECT count(*) FROM pragma_table_info('characters') WHERE name='selected_skill_tree'") is 1L)
         {
             if (Query(db, "SELECT count(*) FROM characters WHERE selected_skill_tree<>-1") is not 0L)

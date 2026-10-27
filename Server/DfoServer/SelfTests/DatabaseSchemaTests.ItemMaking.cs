@@ -70,7 +70,10 @@ internal static partial class DatabaseSchemaTests
         string collision = Path.Combine(root, "item-making-collision.db");
         _ = new CharacterRepository(collision);
         using (var db = Open(collision))
+        {
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE item_making_skill_info; CREATE TABLE item_making_skill_info(unknown INTEGER); PRAGMA user_version=76");
+        }
         Reject<InvalidDataException>(() => _ = new CharacterRepository(collision), "未知同名表不能被迁移当作合法经验覆盖");
         Check(QueryOn(collision, "PRAGMA user_version") is 76L, "结构冲突不伪造已升级版本");
 

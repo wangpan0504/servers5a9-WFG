@@ -186,6 +186,7 @@ internal static partial class DungeonGrowthRepositoryTests
             Execute("DROP TABLE character_dungeon_loot_receipts");
             Execute("DROP TABLE character_dungeon_state");
             Execute("DROP TABLE character_game_settings; DROP TABLE account_client_settings; DROP TABLE character_client_settings; DROP TABLE character_dungeon_growth_receipts; DROP TABLE mailbox_audit_log; DROP TABLE mailbox_attachments; DROP TABLE mailbox_sent_gold; DROP TABLE mailbox_messages");
+            DatabaseSchemaTests.RewindRaidLifecycle(path);
             Execute("PRAGMA user_version=2");
             var migrated = new CharacterRepository(path).List(replacement).Single(character => character.Id == edited.Id);
             That(SkillRepositoryTests.Equal(migrated, edited) && CountReceipts() == 0 &&

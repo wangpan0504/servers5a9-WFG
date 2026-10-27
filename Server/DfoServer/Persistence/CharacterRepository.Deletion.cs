@@ -22,7 +22,7 @@ internal sealed partial class CharacterRepository
         "character_dungeon_pickup_receipts", "character_dungeon_loot_receipts",
         "character_quest_stage_claims", "character_quest_stage_witnesses",
         "character_operation_hope_reward_receipts",
-        "character_raid_reward_receipts",
+        "character_raid_reward_receipts", "character_raid_runs",
         "character_quest_completion_receipts", "character_quest_clear_receipts", "character_quest_daily_clear", "character_quest_drop_receipts",
         "character_dungeon_settlement_receipts", "character_dungeon_scene_clear_receipts",
         "character_dungeon_growth_receipts", "character_adventure_credits",

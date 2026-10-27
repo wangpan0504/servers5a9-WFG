@@ -85,8 +85,13 @@ internal static class RaidProjection
         // 594无载荷，先安装同分队普通Party；其后11/12按同一普通接收器幂等确认。
         context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "raid_prepare", Guard);
         recipient.Owner.Execute(() => { if (Guard()) town.QueueRaidArrival(context, character, Guard); return true; });
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE,
-            receipt.Battle is { } battle ? RaidCombatPackets.State(battle) : RaidPackets.Started(party.Started!.Phase), "raid_started_state", Guard);
+        if (party.Type == (byte)RaidKind.Luke && receipt.Battle is { } initial &&
+            recipient.Session.CurrentRaidBattle(recipient) is { } currentBattle)
+            RaidCombatProjection.PostLukeSnapshot(context, currentBattle, initial, Guard);
+        if (party.Type == (byte)RaidKind.Luke && receipt.Battle is { } battle)
+            RaidCombatProjection.PostState(context, battle, recipient, Guard, "raid_started_state");
+        else context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE,
+            receipt.Battle is { } anton ? RaidCombatPackets.State(anton) : RaidPackets.Started(party.Started!.Phase), "raid_started_state", Guard);
     }
 
     public static void Notice(GameConnectionContext context, RaidChange change, RaidActor recipient, bool enableLuke = false)

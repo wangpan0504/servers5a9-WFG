@@ -165,6 +165,7 @@ internal static partial class DatabaseSchemaTests
             TagEvildomUpgrade(root);
             OrdinaryLukeUpgrade(root);
             OrdinaryLukeDropUpgrade(root);
+            RaidLifecycleUpgrade(root);
             PlayerInteractionPreviewUpgrade(root);
             VerifyReceiptDefinitionFixture(root);
             ObjectKeyUpgrade(root);
@@ -265,6 +266,7 @@ internal static partial class DatabaseSchemaTests
                 RemoveHotkeySchema(db);
                 RemoveTutorialSchema(db);
                 RemoveTitleSchema(db);
+                RewindRaidLifecycle(db);
                 Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
                 // 挂牌表与公会两表只由 v37/v38 建出：回退到更早版本的夹具必须把它们一起移除。
                 DropLaterTables(db);
@@ -383,6 +385,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RewindRaidLifecycle(db);
                 Execute(db, "DROP TABLE character_boss_selection_buff; PRAGMA user_version=103");
                 if (conflict) Execute(db, "CREATE TABLE character_boss_selection_buff(character_id INTEGER,account TEXT,state_json TEXT)");
             }
@@ -455,6 +458,7 @@ internal static partial class DatabaseSchemaTests
                       VALUES(1,1,19,456);
                     """);
                 RewindPickupUids(db);
+                RewindRaidLifecycle(db);
                 Execute(db, "DROP TABLE character_dungeon_passive_pickups; PRAGMA user_version=44");
                 if (mode == "broken")
                     Execute(db, """
@@ -530,6 +534,7 @@ internal static partial class DatabaseSchemaTests
                 }
                 rows = tables.Select(table => Rows(db, table, ColumnNames(db, table))).ToArray();
                 secondary = (string)Query(db, "SELECT group_concat(sql,'|') FROM (SELECT sql FROM sqlite_schema WHERE name LIKE 'uid_%' ORDER BY name)")!;
+                RewindRaidLifecycle(db);
                 Execute(db, "DROP TABLE character_dungeon_passive_pickups; PRAGMA user_version=44");
                 if (mode == "unknown-shape")
                     ChangeReceiptDefinition(db, tables[1], sql => sql.Replace("CHECK(amount>0)", "CHECK(amount>=0)", StringComparison.Ordinal));
@@ -902,6 +907,7 @@ internal static partial class DatabaseSchemaTests
                   VALUES('weekly-history',3,'WeeklyHistory',20261020,1,0,'0',0,0,zeroblob(20),202610,1,0,0,0);
                 """);
             RemoveAdventureWeekly(db);
+            RewindRaidLifecycle(db);
             Execute(db, "PRAGMA user_version=68");
             Check(Query(db, "SELECT count(*) FROM sqlite_schema WHERE name='account_adventure_weekly_config'") is 0L,
                 "v71夹具真实移除每周地下城配置表");
@@ -929,6 +935,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(collision))
         {
             RemoveAdventureWeekly(db);
+            RewindRaidLifecycle(db);
             Execute(db, "PRAGMA user_version=68");
             Execute(db, "CREATE VIEW account_adventure_weekly_config AS SELECT 1 AS account, zeroblob(5) AS slots");
         }
@@ -951,6 +958,7 @@ internal static partial class DatabaseSchemaTests
         new AuthenticationService(new AuthenticationRepository(path)).Create("weekly-usage", "fixture-password");
         using (var db = Open(path))
         {
+            RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
                   VALUES('weekly-usage',0,'Usage',0,38,1,450,234,0,0);
@@ -1006,6 +1014,7 @@ internal static partial class DatabaseSchemaTests
         new AuthenticationService(new AuthenticationRepository(path)).Create("temp-numbering", "fixture-password");
         using (var db = Open(path))
         {
+            RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO account_adventures(account,revision,name,created_date,level,experience,remainder,capsule_experience,
                   brave_experience,points,month,name_initialized,capsule_week,login_streak_days,last_login_day)
@@ -1058,6 +1067,7 @@ internal static partial class DatabaseSchemaTests
                 CREATE TRIGGER rental_history_insert AFTER INSERT ON character_quest_completion_receipts
                   BEGIN INSERT INTO rental_migration_audit VALUES(1); END;
                 """);
+            RewindRaidLifecycle(db);
             Execute(db,$"PRAGMA user_version={oldVersion}");
             names = ColumnNames(db, table);
             originalRows = Rows(db, table, names);
@@ -1121,6 +1131,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(path))
         {
             RewindQuestRentalCompletion(db);
+            RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
                   VALUES('cube-history',0,'CubeHistory',7,38,1,450,234,0,123);
@@ -1211,6 +1222,7 @@ internal static partial class DatabaseSchemaTests
         using(var db=Open(broken))
         {
             RewindDungeonSceneSettlement(db);
+            RewindRaidLifecycle(db);
             Execute(db,"""
                 DROP TABLE character_quest_special_reward_claims; DROP TABLE character_quest_effect_receipts;
                 DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings; CREATE TABLE character_quest_special_reward_claims(bad INTEGER); PRAGMA user_version=33;
@@ -1240,6 +1252,7 @@ internal static partial class DatabaseSchemaTests
                   before_revision,revision,rewards,clear_acceptance_id)
                 VALUES(29,1,'scene-history','{acceptance}',100,'{eventId}','old-instance',1,2,1,'fixture','fixture','fixture',0,0,0,'fixture',0,0,0,1,1,0,0,7,8,'[]','{acceptance}')
                 """);
+            RewindRaidLifecycle(db);
             Execute(db,"CREATE TABLE scene_migration_audit(value INTEGER); CREATE INDEX scene_history_map ON character_quest_clear_receipts(map_id); CREATE TRIGGER scene_history_insert AFTER INSERT ON character_quest_clear_receipts BEGIN INSERT INTO scene_migration_audit VALUES(1); END; PRAGMA user_version=39");
             clearRows=JsonSerializer.Serialize(TcpTestFixture.Rows(path,"SELECT "+clearColumns+" FROM character_quest_clear_receipts"));
             completedRows=JsonSerializer.Serialize(TcpTestFixture.Rows(path,"SELECT rowid,* FROM character_quest_completion_receipts"));
@@ -1267,6 +1280,7 @@ internal static partial class DatabaseSchemaTests
         using(var db=Open(failed))
         {
             RewindQuestSceneClearSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db,"PRAGMA foreign_keys=OFF; DELETE FROM character_dungeon_growth_receipts; PRAGMA foreign_keys=ON; PRAGMA user_version=39");
         }
         string damaged=Snapshot(failed);
@@ -1288,6 +1302,7 @@ internal static partial class DatabaseSchemaTests
                 INSERT INTO character_dungeon_card_rewards(character_id,account,instance_id,plan_json,reward_json,mail_id,revision) VALUES(1,'history','instance','{}','{}',NULL,7);
                 """);
             RemoveCardClaimSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "PRAGMA user_version=33; CREATE TABLE server_events(collision INTEGER)");
         }
         string original = Snapshot(path);
@@ -1369,6 +1384,7 @@ internal static partial class DatabaseSchemaTests
             {
                 RemoveCardClaimSchema(db);
                 Execute(db,sql);
+                RewindRaidLifecycle(db);
                 Execute(db,"PRAGMA user_version=35");
             }
             string before = Snapshot(damaged);
@@ -1381,6 +1397,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(mixed))
         {
             RemoveCardClaimSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db,"UPDATE account_wallets SET revision=9,premium_contracts='{\"27\":400,\"58\":300}' WHERE account='history'; PRAGMA user_version=35");
             Execute(db,$"INSERT INTO account_currency_balances VALUES('history',{(int)CurrencyKind.Cera},321)");
         }
@@ -1409,6 +1426,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db,"PRAGMA user_version=22");
             // 挂牌表与公会两表只由 v37/v38 建出：回退到更早版本的夹具必须把它们一起移除。
             DropLaterTables(db);
@@ -1472,6 +1490,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=17");
             // 挂牌表与公会两表只由 v37/v38 建出：回退到更早版本的夹具必须把它们一起移除。
             DropLaterTables(db);
@@ -1610,6 +1629,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
             DropLaterTables(db);
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,quest_cycle_day,equipment_slot_flags) VALUES('master-quest',0,'MasterQuest',9,38,1,450,234,0,20261009,7)");
@@ -1694,6 +1714,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
             DropLaterTables(db);
             ChangeCompletionDefinition(db,sql => sql.Replace("44,49,64","44,64").Replace("65,67,70)","65,67)"));
@@ -1764,6 +1785,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db,"DROP TABLE character_dungeon_fatigue_receipts; DROP TABLE character_fatigue; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
             DropLaterTables(db);
             ChangeCompletionDefinition(db,sql => sql.Replace("44,49,64","44,64"));
@@ -1813,6 +1835,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=17");
             DropLaterTables(db);
             Execute(db, "INSERT INTO character_quest_skip_receipts(rowid,character_id,account,acceptance_id,parent_key,question_quest,before_revision,revision,plan_snapshot) VALUES(59,1,'history','34567890abcdef1234567890abcdef12',19,6217,6,7,'{\"Old\":true}')");
@@ -1880,6 +1903,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=18");
             // 挂牌表与公会两表只由 v37/v38 建出：回退到更早版本的夹具必须把它们一起移除。
             DropLaterTables(db);
@@ -1932,6 +1956,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db,"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=14");
             DropLaterTables(db);
             tables = TableNames(db); columns = tables.Select(table => ColumnNames(db,table)).ToArray();
@@ -1993,6 +2018,7 @@ internal static partial class DatabaseSchemaTests
             RemoveTitleSchema(db);
             RewindExperienceCaps(db);
             RewindAccountQuestSource(db);
+            RewindRaidLifecycle(db);
             Execute(db, $"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version={sourceVersion}");
             DropLaterTables(db);
             tables = TableNames(db).Where(table => table != "character_fatigue").ToArray();
@@ -2084,6 +2110,7 @@ internal static partial class DatabaseSchemaTests
             // 恢复真实v36后连续升级；v37的建表、三个索引及保证金断言不依赖最新版本号。
             DropLaterTables(db);
             RemoveAdventureNames(db);
+            RewindRaidLifecycle(db);
             Execute(db, "PRAGMA user_version=36");
         });
         Check(Snapshot(upgrade) != Snapshot(path), "v36夹具与v37新库结构不同");
@@ -2164,6 +2191,7 @@ internal static partial class DatabaseSchemaTests
             RewindPickupUids(db);
             Execute(db, "DROP TABLE character_dungeon_passive_pickups");
             DropGuildSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "PRAGMA user_version=43");
         });
         Check(QueryOn(upgrade, "SELECT count(*) FROM sqlite_schema WHERE name='guilds'") is 0L,
@@ -2191,6 +2219,7 @@ internal static partial class DatabaseSchemaTests
             RewindPickupUids(db);
             Execute(db, "DROP TABLE character_dungeon_passive_pickups");
             DropGuildSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "CREATE TABLE guilds(bad INTEGER); PRAGMA user_version=43");
         });
         string original = Snapshot(broken);
@@ -2326,6 +2355,7 @@ internal static partial class DatabaseSchemaTests
             RewindDevilServices(db);
             Execute(db, "ALTER TABLE characters DROP COLUMN avatar_expansion");
             Execute(db, "ALTER TABLE account_wallets DROP COLUMN character_slots");
+            RewindRaidLifecycle(db);
             Execute(db, "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(sql,'CHECK(slot BETWEEN 0 AND 61)','CHECK(slot BETWEEN 0 AND 31)') WHERE name='characters'; " +
                 "UPDATE sqlite_schema SET sql=replace(replace(sql,'CHECK(list_type<>1 OR slot_index<420)','CHECK(list_type<>1 OR slot_index<210)'),'CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419))','CHECK(slot_index BETWEEN 0 AND 351)') WHERE name='character_inventory_slots'; " +
                 "PRAGMA writable_schema=OFF; PRAGMA schema_version=9000; PRAGMA user_version=47");
@@ -2452,6 +2482,7 @@ internal static partial class DatabaseSchemaTests
                 RemoveAdventureActivity(db);
                 RemoveAdventureWeekly(db);
                 if (oldVersion < 70) RemoveAdventureLedger(db);
+                RewindRaidLifecycle(db);
                 Execute(db, $"PRAGMA user_version={oldVersion}");
                 if (oldVersion == 13)
                     AddDropDependencyFixture(db);
@@ -2566,6 +2597,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=1");
             // 挂牌表与公会两表只由 v37/v38 建出：回退到更早版本的夹具必须把它们一起移除。
             DropLaterTables(db);
@@ -2582,6 +2614,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE character_dungeon_settlement_receipts; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=9; CREATE TABLE character_dungeon_settlement_receipts(collision INTEGER)");
             // 挂牌表与公会两表只由 v37/v38 建出：回退到更早版本的夹具必须把它们一起移除。
             DropLaterTables(db);
@@ -2598,6 +2631,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE IF EXISTS character_dungeon_card_rewards; PRAGMA user_version=12");
             // 挂牌表与公会两表只由 v37/v38 建出：回退到更早版本的夹具必须把它们一起移除。
             DropLaterTables(db);
@@ -2653,6 +2687,7 @@ internal static partial class DatabaseSchemaTests
                         INSERT INTO character_quest_special_reward_claims VALUES(1,100,'00112233445566778899aabbccddeeff');
                         """);
                 }
+                RewindRaidLifecycle(db);
                 Execute(db, "PRAGMA user_version=34");
                 Check(Query(db, "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='premium_contracts'") is long columns &&
                     columns == (legacyColumn ? 1 : 0) &&
@@ -2768,6 +2803,7 @@ internal static partial class DatabaseSchemaTests
                 RemoveHotkeySchema(db);
                 RemoveTutorialSchema(db);
                 RemoveTitleSchema(db);
+                RewindRaidLifecycle(db);
                 Execute(db, """
                     INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold) VALUES(1,'title-legacy',0,'TitleLegacy',9,38,1,450,234,0,123);
                     INSERT INTO character_inventory_items(item_uid,character_id,account,item_core) VALUES(87,1,'title-legacy','{"ItemId":26596,"Kind":1,"Value":123,"EnchantCardId":3185}');
@@ -2807,6 +2843,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(v50))
         {
             DropQuestStageSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold)
                 VALUES(1,'collect-v50',0,'CollectV50',7,38,1,450,234,0,321);
@@ -2829,6 +2866,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(v51))
         {
             DropQuestStageSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
                 VALUES(1,'collect-v51',0,'CollectV51',9,38,1,450,234,0);
@@ -2857,6 +2895,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(v50Failure))
         {
             DropQuestStageSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
                 VALUES(1,'collect-fail',0,'CollectFail',11,38,1,450,234,0);
@@ -2880,6 +2919,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(v51Failure))
         {
             DropQuestStageSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
                 VALUES(1,'expiry-fail',0,'ExpiryFail',13,38,1,450,234,0);
@@ -2904,6 +2944,7 @@ internal static partial class DatabaseSchemaTests
             using (var db = Open(path))
             {
                 DropQuestStageSchema(db);
+                RewindRaidLifecycle(db);
                 Execute(db,"PRAGMA user_version=52; INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('stage-old',0,'StageOld',7,38,1,450,234,0,321)");
                 if (fail) Execute(db,"CREATE VIEW character_quest_stage_claims AS SELECT 1 AS collision");
             }
@@ -2937,6 +2978,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(v53))
         {
             RewindDailyBoosterUsage(db);
+            RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold)
                 VALUES(1,'skill-switch-v53',0,'SkillSwitchV53',17,38,1,450,234,0,456);
@@ -3002,6 +3044,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(failure))
         {
             RewindDailyBoosterUsage(db);
+            RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction)
                 VALUES(1,'skill-switch-fail',0,'SkillSwitchFail',19,38,1,450,234,0);
@@ -3092,6 +3135,7 @@ internal static partial class DatabaseSchemaTests
         RemoveHotkeySchema(db);
         RemoveTutorialSchema(db);
         RemoveTitleSchema(db);
+        RewindRaidLifecycle(db);
         Execute(db, "PRAGMA user_version=13; PRAGMA foreign_keys=ON");
         // 挂牌表与公会两表只由 v37/v38 建出：回退到更早版本的夹具必须把它们一起移除。
         DropLaterTables(db);
@@ -3180,6 +3224,7 @@ internal static partial class DatabaseSchemaTests
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
             RemoveTitleSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "PRAGMA user_version=23");
             // 挂牌表与公会两表只由 v37/v38 建出：回退到更早版本的夹具必须把它们一起移除。
             DropLaterTables(db);
@@ -3286,6 +3331,7 @@ internal static partial class DatabaseSchemaTests
             RemoveEmotionSchema(db);
             RemoveHotkeySchema(db);
             RemoveTutorialSchema(db);
+            RewindRaidLifecycle(db);
             Execute(db, "PRAGMA user_version=25");
             DropLaterTables(db);
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,level,gold) VALUES('old',0,'OldLevel1',7,38,1,450,234,0,1,123)");

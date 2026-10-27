@@ -1,5 +1,6 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Party;
+using DfoServer.Game.Raids;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
@@ -115,6 +116,8 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             questId = leader.Selected?.ActiveMainQuests.Any(q => q.QuestId == previous.Entry.QuestId) == true
                 ? previous.Entry.QuestId : 0;
         }
+        AntonRaidBattle.DungeonReservation? raidReservation = null;
+        Exception? entryFailure = null;
         try
         {
             foreach (var member in party.Members.OrderBy(m => ReferenceEquals(m.Actor.Session, leader) ? 0 : 1))
@@ -130,17 +133,29 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
                 var reservations = prepared.Select(p => p.Member.Actor.Session.ReservePartyDungeon(p.Preparation)).ToArray();
                 if (reservations.Any(r => r is null) || !leader.IsPartyAdmissionDayCurrent(prepared[0].Preparation)) return [];
                 using var raidRun = GameSession.ReserveRaidPartyRun(prepared.Select(row => row.Preparation).ToArray(), out bool raidRequired);
+                raidReservation = raidRun;
                 if (raidRequired && raidRun is null) return [];
                 var committed = store.CommitPartyDungeonEntry(reservations.Select(r => r!).ToArray());
                 var notices = prepared.Select((p, index) => new PartyDungeonNotice(PartyDungeonNoticeKind.Entry, p.Member, party.Members,
                     p.Member.Actor.Session.InstallPartyDungeon(p.Preparation, committed[index], reservations[index]!, instance))).ToArray();
                 raidRun?.Install();
-                return notices;
+                return GameSession.ObserveRaidPartyRun(party.Members, instance.Id, notices, observeMap: false);
             });
         }
+        catch (Exception error) { entryFailure = error; throw; }
         finally
         {
             foreach (var entry in prepared) entry.Member.Actor.Session.DiscardPartyPreparation(entry.Preparation);
+            // using预留已在原四人owner组内撤销，此处ExecuteGroup已退出；只发布本次最后释放形成的变化。
+            if (raidReservation?.ReleasedChange is { } released)
+            {
+                try { leader.PublishRaidCombat(released); }
+                catch (Exception publicationError) when (entryFailure is not null)
+                {
+                    // 不让通知失败覆盖真实SQL异常；已提交阶段事实仍可从当前view重同步。
+                    entryFailure.Data["RaidPublicationFailure"] = publicationError.GetType().Name;
+                }
+            }
         }
     }
 }

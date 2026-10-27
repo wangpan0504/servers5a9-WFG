@@ -19,6 +19,7 @@ internal static class GameSenderBudgetTests
         await DepartureAreaAsync();
         await PhaseDepartureAsync();
         await WriteFailureAsync();
+        await WrittenCallbackAsync();
         await QueuedPublicationAsync();
         await QueuedPartyCommandAsync();
         Console.WriteLine($"PASS {TestCheck.Count - checks} game sender budget assertions");
@@ -244,20 +245,58 @@ internal static class GameSenderBudgetTests
         TestCheck.That(sender.PendingBytes == 0 && sender.PendingMoves == 0 && stream.Frames.Count == 1, "stale concurrent moves drain without sending old snapshots");
     }
 
+    static async Task WrittenCallbackAsync()
+    {
+        foreach(int scenario in new[]{0,1,2,3})
+        {
+            var owners=new AccountOwners();using var owner=owners.Acquire("written",()=>{});
+            using var stop=new CancellationTokenSource();using var stream=new HeldStream();
+            await using var sender=new GameConnectionSender(owner,stream,stop,0,(_,_,_,_,_)=>{});
+            Task held=sender.Send(1,1347,[1],"held-written");
+            await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            int written=0;bool current=true;
+            sender.Post(0,587,[2,0],"written-contract",()=>current,()=>written++);
+            Task barrier=sender.DrainAsync();
+            AccountOwners.Lease? replacement=null;
+            if(scenario==1)current=false;
+            if(scenario==2)stop.Cancel();
+            if(scenario==3)replacement=owners.Acquire("written",()=>{});
+            try
+            {
+                TestCheck.That(written==0,"写入阻塞期间不提前调用展示Written");
+                stream.Release.TrySetResult();
+                if(scenario<2)await Task.WhenAll(held,barrier).WaitAsync(TimeSpan.FromSeconds(2));
+                else if(scenario==2)await FailuresAsync([held,barrier]);
+                else
+                {
+                    bool stale=false;
+                    try{await Task.WhenAll(held,barrier).WaitAsync(TimeSpan.FromSeconds(2));}
+                    catch(InvalidOperationException error) when(error.Message=="Stale account generation"){stale=true;}
+                    TestCheck.That(stale,"旧owner在原发送泵拒绝，不执行Written回调");
+                }
+                await sender.DisposeAsync();
+                TestCheck.That(written==(scenario==0?1:0),"Written仅对成功写出的当前owner帧执行一次；拒绝/取消/旧owner不执行");
+            }
+            finally{stream.Release.TrySetResult();replacement?.Dispose();}
+        }
+    }
+
     static async Task WriteFailureAsync()
     {
         using var owner = new AccountOwners().Acquire("failure", () => { });
         using var stop = new CancellationTokenSource();
         using var stream = new HeldStream { FailWrite = true };
         await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
+        int written=0;
         var tasks = new List<Task> { sender.Send(0, 2, [1], "held") };
         await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        sender.Post(0,587,[2,0],"queued-written",written:()=>written++);
         tasks.Add(sender.Send(0, 2, [2], "queued"));
         tasks.Add(sender.ClearScene());
         stream.Release.TrySetResult();
         await FailuresAsync(tasks);
         await sender.DisposeAsync();
-        TestCheck.That(stop.IsCancellationRequested && sender.PendingBytes == 0, "write failure cancels connection and drains reliable waiters");
+        TestCheck.That(stop.IsCancellationRequested && sender.PendingBytes == 0 && written==0, "write failure cancels connection, drains reliable waiters and does not confirm queued display");
         await FailuresAsync([sender.Send(0, 2, [3], "closed")]);
         TestCheck.That(sender.PendingBytes == 0, "closed queue rejects without reserving bytes");
     }

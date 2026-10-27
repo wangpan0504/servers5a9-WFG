@@ -157,6 +157,20 @@ internal static class RaidScriptParser
             foreach (var value in field.Values.Skip(field.Tag == "[hatchery info]" ? 2 : 0))
                 if (value.Type == 0 && !allDungeons.Contains(value.Number))
                     Issue("header-dungeon-reference-missing", field.TokenIndex, value.Number.ToString());
+        if (luke)
+        {
+            // 卢克timer属于实例键空间，可引用其它阶段登记的地下城；RESET缺键是幂等取消。
+            var timerClauses = phases.SelectMany(p => p.Rules).SelectMany(r => r.Trigger.Concat(r.Behavior))
+                .Where(c => c.Timer is not null).ToArray();
+            var declaredTimers = timerClauses.Where(c => c.Tag == "[set timer]").Select(c => c.Timer).ToHashSet();
+            foreach (var clause in timerClauses)
+            {
+                if (!allDungeons.Contains(clause.Timer!.DungeonId))
+                    Issue("raid-timer-dungeon-reference-missing", clause.TokenIndex, clause.Timer.DungeonId.ToString());
+                if (clause.Tag == "[check timer end]" && !declaredTimers.Contains(clause.Timer))
+                    Issue("raid-timer-reference-missing", clause.TokenIndex, $"{clause.Timer.Kind}:{clause.Timer.DungeonId}");
+            }
+        }
         return new(path, room, entry, retry, symbols.ToImmutable(), phases.ToImmutableArray(),
             headers.ToImmutableArray(), issues.ToImmutableArray());
 
@@ -362,8 +376,8 @@ internal static class RaidScriptParser
             var timers = clauses.Where(c => c.Tag == "[set timer]").Select(c => c.Timer).ToHashSet();
             foreach (var clause in clauses)
             {
-                if (clause.DungeonId is { } id && !ids.Contains(id)) Issue("phase-dungeon-reference-missing", clause.TokenIndex, id.ToString());
-                if (clause.Timer is { } t && !timers.Contains(t)) Issue("phase-timer-reference-missing", clause.TokenIndex, $"{t.Kind}:{t.DungeonId}");
+                if ((!luke || clause.Timer is null) && clause.DungeonId is { } id && !ids.Contains(id)) Issue("phase-dungeon-reference-missing", clause.TokenIndex, id.ToString());
+                if (!luke && clause.Timer is { } t && !timers.Contains(t)) Issue("phase-timer-reference-missing", clause.TokenIndex, $"{t.Kind}:{t.DungeonId}");
             }
             return new(name, dungeons.ToImmutableArray(), rules.ToImmutableArray(), rewards.ToImmutableArray()) { Declarations = source };
         }

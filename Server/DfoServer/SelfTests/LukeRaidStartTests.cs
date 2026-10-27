@@ -40,6 +40,28 @@ internal static class LukeRaidStartTests
                 ImmutableDictionary<string,int>.Empty, [new("first",[],[],[]),new("second",[],[],[])], [], []);
             var definition = new RaidDefinition(1, script.Path, 8, 1, 2) { Resources = new(script,[],[],[],[],[]) };
             var service = new LukeRaidStart(raids, parties, repository, towns, pieces, new("synthetic/start-only",script));
+            foreach (var (symbol,id) in new (string,int)[] {
+                ("[kill all character]",102),("[kick out character]",103),("[birth sanctum object]",117),
+                ("[extinction sanctum object]",118),("[spread sanctum object]",119),("[card set pattern a]",130),
+                ("[card set pattern b]",131),("[card set pattern c]",132),("[energy control open]",133),
+                ("[energy control effect]",138),("[energy save effect]",139),("[unknown future symbol]",999) })
+            {
+                var unsafeScript=script with { Symbols=script.Symbols.Add(symbol,id),
+                    Phases=script.Phases.SetItem(0,script.Phases[0] with {Rules=[new([], [new("[set]",0,null,symbol,null,null,[1])])]}) };
+                var unsafeDefinition=definition with {Resources=definition.Resources! with {Script=unsafeScript}};
+                var unsafeService=new LukeRaidStart(raids,parties,repository,towns,pieces,new("synthetic/unresolved-native-consumer",unsafeScript));
+                That(unsafeService.UnavailableReason(unsafeDefinition)=="luke-execution-symbol-consumer-unavailable",
+                    "未闭合/未来symbol写入不能借583触发原生行为："+symbol);
+            }
+
+            foreach(var (symbol,id) in new (string,int)[]{("[temple clear]",122),("[altar clear]",124),("[altar enterance clear]",140)})
+            {
+                var counted=script with {Symbols=script.Symbols.Add(symbol,id),Phases=script.Phases.SetItem(0,script.Phases[0] with
+                    {Rules=[new([], [new("[set]",0,null,symbol,null,null,[1])])]})};
+                var countedDefinition=definition with {Resources=definition.Resources! with {Script=counted}};
+                That(new LukeRaidStart(raids,parties,repository,towns,pieces,new("synthetic/known-counter",counted))
+                    .UnavailableReason(countedDefinition) is null,"精确已登记计数符号不被消费者guard误伤");
+            }
             var actors = Enumerable.Range(0,10).Select(index =>
             {
                 var owner = owners.Acquire("luke-start-"+index, () => {}); leases.Add(owner);
@@ -50,6 +72,7 @@ internal static class LukeRaidStartTests
                 return session.CaptureRaidActor(raids)!;
             }).ToArray();
             LukeRaidRunTests.RunCore(actors.Take(8).ToArray());
+            LukeRaidCompletionTests.RunCore(actors.Take(8).ToArray());
             var leader=actors[0]; raids.Create(leader,1,"start","start"u8.ToArray(),8,1);
             for(int index=1;index<8;index++)
             { raids.Invite(leader,actors[index],0); That(raids.Respond(actors[index],leader.Character,true).Accepted,"Luke通过原邀请加入"); }
@@ -207,11 +230,15 @@ internal static class LukeRaidStartTests
                 "末成员SQL失败整团角色/费用/位置/Battle/Started回滚，已有队伍及无关队伍不变");
             That(Scalar("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=100")==20 &&
                 Scalar("SELECT count(*) FROM characters WHERE town=32 AND area=4")==0,"独立SQL读取确认没有部分费用或迁移");
+            That(Scalar("SELECT count(*) FROM character_raid_runs")==0,"末成员失败也回滚全部666生命周期签发");
             Sql("DROP TRIGGER fail_luke;"); await Dispatch();
             That(result is {Error:0,Receipt.Party.Started.Participants.Length:8},"八人费用提交与唯一实例绑定成功");
             var firstReceipt=result!.Receipt!;
             That(!RaidProjection.CanStart(firstReceipt.Party,enableLuke:true),"已Started不再次投影招募开战旗标");
             var instance=firstReceipt.Party.Started!.InstanceId;
+            await VerifyDisplayAsync(leader,firstReceipt.Battle!);
+            That(Scalar($"SELECT count(*) FROM character_raid_runs WHERE instance_id='{instance:N}' AND raid_type=1 AND state=0 AND phase0_receipt IS NULL AND phase1_receipt IS NULL")==8,
+                "666同SQL签发八人精确实例入场事实，不预填阶段资格或通关");
             That(sessions.Take(8).Select((s,i)=>s.StartedRaid?.InstanceId==instance&&s.RaidCombatView()?.Instance==instance&&
                 s.Selected!.Position==landing&&s.Selected.Inventory.Items.Single().Core.Count==1&&
                 s.Selected.Inventory.Items.Single().Uid==original[i].Inventory.Items.Single().Uid).All(x=>x),"真实提交角色、Started和Battle同实例，扣一次且保持UID");
@@ -250,6 +277,11 @@ internal static class LukeRaidStartTests
                     "合成无次数策略下离团后正常一人开团建立新实例，不残留旧绑定");
                 That(!entrant.Session.DetachRaidCombatStart(entrant,instance)&&entrant.Session.RaidCombatView()?.Instance==nextInstance,
                     "旧实例迟到清理不能删除新一人团绑定");
+                int lateNotices=0;entrant.Session.RaidBattleNoticeArrived=(_,_)=>lateNotices++;
+                entrant.Session.PublishRaidCombat(new(oldView,oldView));
+                That(lateNotices==0&&entrant.Session.RaidCombatView()?.Instance==nextInstance,
+                    "旧预留迟到ReleasedChange不能向新实例发布或替换其状态");
+                entrant.Session.RaidBattleNoticeArrived=null;
                 leaving.Leave(entrant,entrant.Character);
                 That(entrant.Session.RaidCombatView() is null&&raids.Find(entrant) is null,"最后成员离团清除本团与绑定");
             }
@@ -271,7 +303,7 @@ internal static class LukeRaidStartTests
                     Task barrier=publicationSender.Send(1,1347,[1],"after-mutation");
                     held.Release.TrySetResult();
                     await Task.WhenAll(first,barrier).WaitAsync(TimeSpan.FromSeconds(2));
-                    That(held.Frames.Count==2&&publicationSender.PendingBytes==0,note+"：旧名单/背包/598/594/候战位置/587均丢弃，不退回旧场景");
+                    That(held.Frames.Count==2&&publicationSender.PendingBytes==0&&publicationContext.RaidDisplay is null,note+"：旧名单/背包/598/594/候战位置/587均丢弃，不退回旧场景");
                 }
                 finally{held.Release.TrySetResult();}
             }
@@ -301,4 +333,56 @@ internal static class LukeRaidStartTests
         finally{foreach(var session in sessions)session.Disconnect();foreach(var lease in leases)lease.Dispose();Directory.Delete(root,true);}
         Console.WriteLine($"Luke raid start: {Count-before} assertions passed");
     }
+    static async Task VerifyDisplayAsync(RaidActor actor, AntonRaidBattleView view)
+    {
+        using var stop=new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var held=new GameSenderBudgetTests.HeldStream();
+        List<(ushort Opcode,byte[] Body)> frames=[];
+        await using var sender=new GameConnectionSender(actor.Owner,held,stop,0,(_,opcode,_,body,_)=>frames.Add((opcode,body.ToArray())));
+        var context=new GameConnectionContext(new(40,IPAddress.Loopback,held,stop),actor.Owner,actor.Session,sender);
+        Task first=sender.Send(1,1347,[1],"display-held");
+        await held.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        bool current=true;
+        RaidCombatProjection.PostState(context,view,actor,()=>current,"display-stale");
+        current=false;held.Release.TrySetResult();
+        await Task.WhenAll(first,sender.DrainAsync()).WaitAsync(TimeSpan.FromSeconds(2));
+        That(context.RaidDisplay is null&&frames.All(row=>row.Opcode!=587),"首587排队后失效不确认展示，后续可恢复");
+        current=true;
+        var display=RaidCombatDisplayIdentity.Capture(actor,view);
+        That(display==RaidCombatDisplayIdentity.Capture(actor with {Name="display-only-name",Channel=new(9,99)},view),
+            "展示名字或频道元数据不构成新阶段身份，不因展示字段变化重播动画");
+        That(display!=RaidCombatDisplayIdentity.Capture(actor with {Epoch=actor.Epoch+1},view)&&
+            display!=RaidCombatDisplayIdentity.Capture(actor,view with {Instance=Guid.NewGuid()}),
+            "换选角epoch或攻坚实例必须构成不同展示身份");
+        using(var otherOwner=new AccountOwners().Acquire("display-other-owner",()=>{}))
+            That(display!=RaidCombatDisplayIdentity.Capture(actor with {Owner=otherOwner},view),"新owner代不能继承旧连接展示身份");
+        RaidCombatProjection.Notice(context,view,actor);RaidCombatProjection.Notice(context,view,actor);
+        await sender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        That(frames.Count(row=>row.Opcode==587)==1&&frames.Count(row=>row.Opcode==583)==2&&context.RaidDisplay?.Phase==0,
+            "同view重复发布仍同步symbol，但实际成功写出587一次");
+        // 纯投影边界：合成下一phase视图；真实领域转换另由两阶段Runtime用例覆盖。
+        var next=view with {Phase=1};
+        RaidCombatProjection.PostState(context,next,actor,()=>current,"display-next-phase");
+        await sender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        That(frames.Count(row=>row.Opcode==587)==2&&frames.Last(row=>row.Opcode==587).Body.SequenceEqual(new byte[]{2,1}),
+            "相同state不同phase必须发送新阶段，不能仅按state去重");
+        using var failedStop=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var failedStream=new GameSenderBudgetTests.HeldStream{FailWrite=true};
+        await using var failedSender=new GameConnectionSender(actor.Owner,failedStream,failedStop,0,(_,_,_,_,_)=>{});
+        var failedContext=new GameConnectionContext(new(41,IPAddress.Loopback,failedStream,failedStop),actor.Owner,actor.Session,failedSender);
+        RaidCombatProjection.PostState(failedContext,view,actor,()=>true,"display-fails");
+        await failedStream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task failedBarrier=failedSender.DrainAsync();failedStream.Release.TrySetResult();
+        try{await failedBarrier.WaitAsync(TimeSpan.FromSeconds(2));throw new InvalidOperationException("expected display write failure");}
+        catch(IOException){}
+        await failedSender.DisposeAsync();
+        That(failedContext.RaidDisplay is null&&failedStop.IsCancellationRequested,"587真实写入失败不确认游标且原连接作废");
+        using var recoveredStop=new CancellationTokenSource(TimeSpan.FromSeconds(5));using var recoveredStream=new MemoryStream();
+        await using var recoveredSender=new GameConnectionSender(actor.Owner,recoveredStream,recoveredStop,0,(_,_,_,_,_)=>{});
+        var recovered=new GameConnectionContext(new(42,IPAddress.Loopback,recoveredStream,recoveredStop),actor.Owner,actor.Session,recoveredSender);
+        RaidCombatProjection.PostState(recovered,view,actor,()=>true,"display-recovered");
+        await recoveredSender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        That(recovered.RaidDisplay?.Instance==view.Instance&&recoveredStream.Length>0,"新连接无旧展示游标，可恢复相同实例当前阶段");
+    }
+
 }

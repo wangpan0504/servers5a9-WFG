@@ -55,6 +55,7 @@ internal static class WeaponSkinTcpTests
             });
         }
         string beforeUpgrade = fixture.Snapshot("SELECT id,revision,job,level,gold FROM characters ORDER BY id") + Assets();
+        DatabaseSchemaTests.RewindRaidLifecycle(fixture.Database);
         fixture.Sql("ALTER TABLE characters DROP COLUMN weapon_skin_state; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=66;");
         await fixture.StartAsync();
         That(fixture.Query("PRAGMA user_version") is [[long upgradedVersion]] && upgradedVersion == DfoServer.Persistence.SqliteMigrations.CurrentVersion &&

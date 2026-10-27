@@ -48,6 +48,20 @@ internal static class AntonRaidBattleTests
             [2, 1, 0x78, 0x56, 0x34, 0x12, 0xbc, 0x9a, 4, 7], "601独立编码验证读宽与字段顺序");
         Bytes(RaidCombatPackets.Reward(1, [new(0x1234, 5, [new(7, 0x89abcdef, 0x2345, 9)])]),
             [1, 1, 0x34, 0x12, 5, 1, 7, 0xef, 0xcd, 0xab, 0x89, 0x45, 0x23, 9], "600安徒恩专用布局没有普通分支额外u32");
+        var additionScript = Script(10);
+        additionScript = additionScript with { Symbols = additionScript.Symbols.Add("[signal]", 8).Add("[counter]", 9),
+            Phases = additionScript.Phases.SetItem(0, additionScript.Phases[0] with { Rules = [new(
+                [new("[on change symbol]", 0, null, "[signal]", null, null, [])],
+                [new("[set]", 1, null, "[counter]", null, null, [1]) { Operator = "[+]" }])] }) };
+        var arithmetic = new AntonRaidBattle(additionScript);
+        arithmetic.SetMechanism(arithmetic.Instance, arithmetic.View.Revision, "[signal]", 1);
+        arithmetic.SetMechanism(arithmetic.Instance, arithmetic.View.Revision, "[signal]", 2);
+        That(arithmetic.View.Symbols["[counter]"] == 2, "Anton共享算术同样累计加法，不能仍把[+]误当赋值");
+        arithmetic.SetMechanism(arithmetic.Instance, arithmetic.View.Revision, "[counter]", int.MaxValue);
+        var unchanged = arithmetic.View;
+        Reject<OverflowException>(() => arithmetic.SetMechanism(arithmetic.Instance, arithmetic.View.Revision, "[signal]", 3),
+            "Anton共享加法也有溢出保护");
+        That(ReferenceEquals(unchanged, arithmetic.View), "算术失败不发布部分输入符号");
         Migration(104);
         Migration(107);
         Console.WriteLine($"PASS {Count - before} 攻坚阶段成功、并发清图与结果展示断言");
@@ -63,6 +77,7 @@ internal static class AntonRaidBattleTests
             using (var db = Open())
             {
                 using var command = db.CreateCommand();
+                DatabaseSchemaTests.RewindRaidLifecycle(db);
                 command.CommandText = $"DROP TABLE character_raid_reward_receipts; PRAGMA user_version={previousVersion}";
                 command.ExecuteNonQuery();
             }
