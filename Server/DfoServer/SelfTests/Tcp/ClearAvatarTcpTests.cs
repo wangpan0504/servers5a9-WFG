@@ -149,6 +149,32 @@ internal static class ClearAvatarTcpTests
                 "SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=1 AND slot_index=1",
                 roles[0].Id) is [[var sourceUid]] && Equals(sourceUid, detail.ClearAvatarSourceUid),
                 "重穿克隆后来源更新到本次被退回的真实实例UID，1449与存档一致");
+            // #819：交换已提交，客户端下一次穿戴仍把实际占用的目标回显为0。
+            string instances = fixture.Snapshot("SELECT item_uid,item_core,detail FROM character_inventory_items JOIN inventory_avatar_details USING(item_uid) WHERE character_id=$p0 ORDER BY item_uid", peer.Id);
+            foreach (int id in new[] { cases[0].Original, cases[0].Clone })
+            {
+                peer.Send(19, MoveFrom(1, id, 0));
+                peer.Expect(1, 19, Build(w => { w.Write((byte)1); w.Write((byte)1); w.Write((short)1);
+                    w.Write(1); w.Write((byte)3); w.Write((short)3); }));
+                peer.Expect(0, 1681); peer.Expect(0, 1681);
+                peer.Expect(0, 1449); peer.Expect(0, 0x063F); peer.Expect(0, 2); peer.Expect(0, 2);
+                peer.Barrier();
+            }
+            That(fixture.Snapshot("SELECT item_uid,item_core,detail FROM character_inventory_items JOIN inventory_avatar_details USING(item_uid) WHERE character_id=$p0 ORDER BY item_uid", peer.Id) == instances,
+                "零目标回显往返交换保留全部实例UID、核心、染色及克隆来源详情");
+            string stable = fixture.Snapshot("SELECT * FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index", peer.Id);
+            peer.Send(19, MoveFrom(1, cases[0].Clone, 0));
+            peer.Expect(1, 19, [0, 23, 0, 1, 3]);
+            peer.Barrier();
+            That(fixture.Snapshot("SELECT * FROM character_inventory_slots WHERE character_id=$p0 ORDER BY list_type,slot_index", peer.Id) == stable,
+                "旧源模板重放仍拒绝，不能用零目标回显交换错误实例");
+        }
+        using (var peer = Open(fixture))
+        {
+            var packets = peer.Select(roles[0].Slot);
+            Verify(packets[2].Body, packets[3].Body, cases[0].Name, 3, cases[0].Clone, cases[0].Original, 3, 4);
+            Bytes(peer.CloneAvatarSources, Sources(3, 1), "零目标回显交换后重连恢复真实穿戴及原件关联");
+            peer.Barrier();
         }
         using (var peer = Open(fixture))
         {
@@ -178,7 +204,7 @@ internal static class ClearAvatarTcpTests
                 w.Write(slot == linkedSlot && bagSlot >= 0 ? bagSlot + 12 : 0);
             }
         });
-        static void Verify(byte[] actor, byte[] player, string name, short slot, int physical, int appearance, ushort color)
+        static void Verify(byte[] actor, byte[] player, string name, short slot, int physical, int appearance, ushort color, ushort secondColor = 8)
         {
             int at = 134 + NameWidth(name);
             That(actor[at - 1] == (slot == 10 ? 2 : 1) && actor[at] == slot && U32(actor, at + 1) == physical &&
@@ -188,11 +214,11 @@ internal static class ClearAvatarTcpTests
             if (slot == 10)
                 That(actor[at + 25] == 12 && U32(actor, at + 26) > 0 && U32(actor, at + 41) == 0,
                     "空武器克隆与实际武器独立传输，二者均不伪造克隆来源");
-            That(U32(actor, at + 5) == 4 && U16(actor, at + 9) == color && U16(actor, at + 11) == (color == 0 ? 0 : 8),
+            That(U32(actor, at + 5) == 4 && U16(actor, at + 9) == color && U16(actor, at + 11) == (color == 0 ? 0 : secondColor),
                 "Actor借用染色与关联编号来自同一已提交详情");
             int sockets = slot == 9 ? 187 : 153;
             That(U32(player, sockets) == 30 && U32(player, sockets + 34) == 4 &&
-                U16(player, sockets + 38) == color && U16(player, sockets + 40) == (color == 0 ? 0 : 8),
+                U16(player, sockets + 38) == color && U16(player, sockets + 40) == (color == 0 ? 0 : secondColor),
                 "Player装扮孔位和染色保持完整；9槽的前置RAW30不挤占实例扩展");
             if (slot == 9)
                 That(U32(actor, at + 20) == 30 && U32(player, 145) == 30,

@@ -94,11 +94,12 @@ internal static class InventoryBehaviorTests
             InventoryMoveService.WearLevelSatisfied(enchantress with { Level = 255 }, broom with { MinimumLevel = 255 }, now),
             "极大PVF增量用宽整数计算，byte原等级上界仍保留原本合格资格");
         LoginWearRestatement();
+        AvatarEmptyTargetEcho();
         ExpiredEquipmentMove();
     }
 
     // 选角入城后客户端会把已穿武器复述一次：Main空源格（编号0，数量1）→ Equipment/12 目标编号一致。
-    // 复述与真实卸装同形：只在入城窗口内吸收为无变化，窗口外仍按原顺序卸装，源格占用仍拒绝。
+    // 空格形状不能与真实卸装区分；只吸收实际源格已占用、不能合法卸入的候选。
     static void LoginWearRestatement()
     {
         const int weaponId = 100312577;
@@ -122,9 +123,9 @@ internal static class InventoryBehaviorTests
             absorbedOccupied.Plan.After.Find(worn.Position)?.Uid == worn.Uid,
             "login wear restatement with occupied main slot stays equipped without error 23");
         var absorbedEmpty = InventoryMoveService.Plan(character, restatement, catalog, now, loginWearRestatement: true);
-        Testing.TestCheck.That(absorbedEmpty.Accepted && absorbedEmpty.Plan!.Changed == false &&
-            absorbedEmpty.Plan.After.Find(Bag(9)) is null && absorbedEmpty.Plan.After.Find(worn.Position)?.Uid == worn.Uid,
-            "login wear restatement with empty main slot does not unequip");
+        Testing.TestCheck.That(absorbedEmpty.Accepted && absorbedEmpty.Plan!.Changed &&
+            absorbedEmpty.Plan.After.Find(Bag(9))?.Uid == worn.Uid && absorbedEmpty.Plan.After.Find(worn.Position) is null,
+            "入城窗口内空格卸装必须真实移动，不能用复述假成功吞掉玩家操作");
         var outsideWindow = InventoryMoveService.Plan(character, restatement, catalog, now);
         Testing.TestCheck.That(outsideWindow.Accepted && outsideWindow.Plan!.After.Find(Bag(9))?.Uid == worn.Uid,
             "outside the login window the same shape still unequips");
@@ -139,6 +140,39 @@ internal static class InventoryBehaviorTests
         Testing.TestCheck.That(wornNow.Accepted && wornNow.Plan!.After.Find(new(InventoryListType.Equipment, 12))?.Uid == carried.Uid &&
             wornNow.Plan.After.Find(Bag(9)) is null,
             "login window does not absorb a genuine wear with a source item id");
+    }
+
+    static void AvatarEmptyTargetEcho()
+    {
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, ItemTemplate>
+        {
+            [1] = new(1, ItemKind.Avatar, 5, 1, 20, 1, 0, 0, 0, "[free]", 1, 0, "装扮一"),
+            [2] = new(2, ItemKind.Avatar, 5, 1, 20, 1, 0, 0, 0, "[free]", 1, 0, "装扮二")
+        });
+        var bag = new InventoryItem(11, new(InventoryListType.Avatar, 39), new(1, ItemKind.Avatar, 11))
+            { Avatar = new() { Color1 = 3, Socket0 = new(1, 3333001) } };
+        var worn = new InventoryItem(12, new(InventoryListType.Equipment, 5), new(2, ItemKind.Avatar, 12))
+            { Avatar = new() { Color2 = 4 } };
+        var character = new Character(1, 0, "AvatarEcho", 0, new(0, 0, 0, 0), null)
+            { Job = 0, Level = 20, Inventory = new([bag, worn]) };
+        var request = Request(bag, worn.Position, count: 1);
+        var result = InventoryMoveService.Plan(character, request, catalog, 2_000_000_000);
+        Testing.TestCheck.That(result.Accepted &&
+            result.Plan!.After.Find(worn.Position) == bag with { Position = worn.Position } &&
+            result.Plan.After.Find(bag.Position) == worn with { Position = bag.Position },
+            "装扮零目标回显按真实占用交换，保留双方完整实例");
+        foreach (var invalid in new[]
+        {
+            request with { SourceItemId = 2 }, request with { SourceItemId = 0 },
+            request with { DestinationItemId = 3 }, request with { Destination = new(InventoryListType.Equipment, 4) }
+        })
+            Testing.TestCheck.That(!InventoryMoveService.Plan(character, invalid, catalog, 2_000_000_000).Accepted,
+                "零目标兼容不放宽旧源、未知目标编号或穿戴部位");
+        Testing.TestCheck.That(!InventoryMoveService.Plan(character with { Level = 0 }, request, catalog, 2_000_000_000).Accepted,
+            "装扮零目标回显仍校验穿戴等级");
+        var stale = InventoryMoveService.Plan(character with { Inventory = result.Plan!.After }, request, catalog, 2_000_000_000);
+        Testing.TestCheck.That(!stale.Accepted, "交换后的旧源请求仍拒绝，不以零目标兼容反复交换");
     }
 
     // Codeberg #449：过期「先行体验」装备不能卸下/更换。核心自测没有 PVF，用 PrefillTemplates

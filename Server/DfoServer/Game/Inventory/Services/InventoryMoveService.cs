@@ -42,17 +42,24 @@ internal static class InventoryMoveService
         // 0 仍是空格哨兵，不能把 0 号格的真实物品当成别名。已占用格只在编号对不上模板时改投空格，避免盖掉原物品。
         bool sourceMatches = source is not null && CargoCell(request.Source, request.SourceItemId) ||
             (source?.Core.ItemId ?? 0) == request.SourceItemId;
+        // 实收装扮换装后的下一次穿戴会把仍有实例的目标回显为0。仅有真实源装扮时兼容，
+        // 实际占用仍取权威快照，沿后续双向资格校验和原子交换保留两件实例；非零错误编号仍拒绝。
+        bool avatarEmptyTargetEcho = request.Source.List == InventoryListType.Avatar &&
+            request.Destination is { List: InventoryListType.Equipment, Index: >= 0 and <= 11 } &&
+            request.Count == 1 && request.DestinationItemId == 0 &&
+            source is { Core.Kind: ItemKind.Avatar, Avatar: not null } &&
+            destination is { Core.Kind: ItemKind.Avatar, Avatar: not null };
         bool destinationMatches = destination is null && (CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho) ||
-            (destination?.Core.ItemId ?? 0) == request.DestinationItemId ||
+            (destination?.Core.ItemId ?? 0) == request.DestinationItemId || avatarEmptyTargetEcho ||
             destination is not null && IsCargo(request.Destination.List) &&
             (request.DestinationItemId == 0 || CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho);
         bool throwOntoOccupied = source is not null && destination is not null && destinationMatches &&
             IsCargo(request.Destination.List) &&
             destination.Core.ItemId != request.DestinationItemId &&
             (request.DestinationItemId == 0 || CargoCell(request.Destination, request.DestinationItemId) || sourceContainerEcho);
-        // 入城复述与真实卸装同形：源格为空（编号0）时直接按原顺序解析会把复述执行成卸装，
-        // 源格被占用时又因编号不匹配回23弹「无法移动该物品」。只在入城窗口内吸收为无变化回执，不落库。
-        if (loginWearRestatement && IsLoginWearRestatement(request, destination))
+        // 空源格与真实卸装无法区分，必须执行真实移动，不能按入城时间吞掉玩家操作。
+        // 只保留实际源格已占用、源编号却为0的登录复述兼容；这种请求无法合法卸入该格。
+        if (loginWearRestatement && source is not null && IsLoginWearRestatement(request, destination))
             return new(true, 0, new(before, before, LoginWearRestatementReason));
         if (request.Actor is not (-1 or 0) || request.Flag0 != 0 || request.Flag1 != 0 || request.DestinationCount != 0 ||
             !sourceMatches || !destinationMatches)
@@ -209,7 +216,7 @@ internal static class InventoryMoveService
     static bool IsEquippedRune(InventorySlot slot) => slot.List == InventoryListType.Talisman &&
         slot.Index is >= ItemSlotBoundService.EquippedRuneStart and <= ItemSlotBoundService.EquippedRuneEnd;
 
-    // 复述包固定为：Main空源格(编号0) 数量1 → 已穿装备槽12–25，保留字段为 -1/0/0；目标必须与当前实例一致。
+    // 复述候选：Main源编号0、数量1 → 已穿装备槽12–25；还须由调用方确认源格实际被占用。
     static bool IsLoginWearRestatement(InventoryMoveRequest request, InventoryItem? destination) =>
         request.SourceItemId == 0 && request.Count == 1 && request.DestinationCount == 0 &&
         request.Actor is -1 or 0 && request.Flag0 == 0 && request.Flag1 == 0 &&

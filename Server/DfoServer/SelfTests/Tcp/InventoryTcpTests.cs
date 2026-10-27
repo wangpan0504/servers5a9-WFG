@@ -164,11 +164,21 @@ internal static partial class InventoryTcpTests
             int weaponId = characters.Get(0).Equipment.Single(item => item.Slot == 12).Template.Id;
             int pantsId = characters.Get(0).Equipment.Single(item => item.Slot == 17).Template.Id;
             var quickUid = fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=3 AND slot_index=17", characterId)[0][0];
-            string loginSnapshot = Snapshot(fixture);
+            // #819：入城五秒内的空格卸装必须真实提交，紧接着才能从该格穿回。
             peer.Send(19, MoveItem(0, 21, 0, 1, 3, 17, pantsId));
-            peer.Expect(1, 19, MoveAck(0, 21, 0, 3, 17));
+            peer.Expect(1, 19, MoveAck(0, 21, 1, 3, 17));
+            DeltaAndAppearance(peer, 4, reloadMain: true);
+            That(Equals(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=0 AND slot_index=21", characterId)[0][0], quickUid),
+                "入城窗口内卸装提交原UID，不仅回成功却仍保留穿戴");
+            peer.Send(19, MoveItem(0, 21, pantsId, 1, 3, 17, 0));
+            peer.Expect(1, 19, MoveAck(0, 21, 1, 3, 17));
+            DeltaAndAppearance(peer, 5);
             peer.Barrier();
-            That(Snapshot(fixture) == loginSnapshot, "首次入城同形穿戴复述仅ACK零移动，不改持久装备");
+            string loginSnapshot = Snapshot(fixture);
+            peer.Send(19, MoveItem(0, 21, pantsId, 1, 3, 17, 0));
+            peer.Expect(1, 19, [0, 23, 0, 0, 3]);
+            peer.Barrier();
+            That(Snapshot(fixture) == loginSnapshot, "立即重穿后重放旧穿戴请求仍拒绝，不能反向卸装");
             clock.Advance(TimeSpan.FromSeconds(5));
             peer.Barrier();
             peer.Send(19, MoveItem(0, 21, 0, 1, 3, 17, pantsId));
