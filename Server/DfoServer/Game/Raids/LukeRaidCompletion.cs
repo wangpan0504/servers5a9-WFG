@@ -46,7 +46,7 @@ internal sealed partial class AntonRaidBattle
         policy.WeeklyClearLimit > 0 && policy.Cycle is { Valid: true } && policy.Cutoff == LukeParticipationCutoff.TerminalCommittedFacts &&
         !policy.Phases.IsDefault && policy.Phases.Length == 2 && policy.Phases.All(phase => phase is not null && phase.Rewards is not null && phase.MinimumCommittedRuns >= 0 && phase.WeeklyEligibilityLimit > 0 &&
             !string.IsNullOrWhiteSpace(phase.Rewards.Source) && !phase.Rewards.Offers.IsDefaultOrEmpty && phase.Rewards.Offers.Length <= 32 &&
-            phase.Rewards.Offers.All(offer => offer is not null && offer.Kind is 0 or 1 && offer.Display.IsEmpty && !offer.Grants.IsDefaultOrEmpty && offer.Grants.Length <= 32)) &&
+            phase.Rewards.Offers.All(offer => offer is not null && offer.Kind is 0 or 1 && offer.Display.IsEmpty && !offer.Grants.IsDefaultOrEmpty && offer.Grants.Length <= 32 && (offer.LukeResult is null || offer.LukeResult.Matches(offer)))) &&
         policy.Phases.Select((phase, index) => phase.Rewards.Result.Phase == index && phase.Rewards.Result.Result is 0 or 2 &&
             phase.Rewards.Offers.Select(offer => (offer.Kind, offer.Card)).Distinct().Count() == phase.Rewards.Offers.Length).All(value => value);
 
@@ -91,7 +91,7 @@ internal sealed partial class AntonRaidBattle
     internal static bool SameLukeOffers(ImmutableArray<RaidRewardOffer> left, ImmutableArray<RaidRewardOffer> right) =>
         !left.IsDefault && !right.IsDefault && left.Length == right.Length && left.Zip(right).All(pair =>
             pair.First.Kind == pair.Second.Kind && pair.First.Card == pair.Second.Card && pair.First.Display.IsEmpty && pair.Second.Display.IsEmpty &&
-            pair.First.Grants.SequenceEqual(pair.Second.Grants));
+            pair.First.Grants.SequenceEqual(pair.Second.Grants) && pair.First.LukeResult == pair.Second.LukeResult);
     static bool SameLukeEligibility(RaidPhaseEligibility left, RaidPhaseEligibility right) =>
         left.Instance == right.Instance && left.RaidType == right.RaidType && left.Phase == right.Phase && left.Event == right.Event &&
         left.Anchor == right.Anchor && left.Character == right.Character && left.CountsAsClear == right.CountsAsClear &&
