@@ -254,6 +254,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await elevator.DisposeAsync();
             await altar.DisposeAsync();
             await lostLand.DisposeAsync();
+            if (context.LukePhaseExit is { } lukeExit) await lukeExit.DisposeAsync();
             online.RemoveConnection(connection.Id, session);
             await PartyDungeonProjection.DetachAsync(context);
             parties?.Detach(session);
