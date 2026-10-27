@@ -21,26 +21,22 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-internal static class AntonRaidMapEntryTcpTests
+internal static partial class AntonRaidMapEntryTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        // 此夹具明确补齐四项登记；它验证可执行进图链，不证明原客户端/PVF已有这些登记。
-        var paths = new Dictionary<int, string>
-        {
-            [32200] = "map/210_close_blacksmoke/(0,0)32200_start.map",
-            [32202] = "map/210_close_blacksmoke/(1,0)32202_normal.map",
-            [32201] = "map/210_close_blacksmoke/(2,0)32201_normal.map",
-            [32204] = "map/210_close_blacksmoke/(4,0)32204_boss.map"
-        };
+        // 与Runtime使用同一R2有证增量；普通目录仍保持原值，不替换DGN/MAP内容。
         var main = SelfTestCatalogs.Dungeons(resources.Archive);
         var raid = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main, resources.ItemResources.Items).Find(0)!.Resources!;
         var original = RaidDungeonCatalog.Load(resources.Archive, raid, main);
         That(original.MissingMaps.Length == 72 && original.Find(210) is null && !main.ContainsDungeon(210),
             "原始主表仍缺72项MAP；不能靠备用DGN或测试显式登记污染生产目录");
-        var catalog = RaidDungeonCatalog.Load(resources.Archive, raid, id => paths.GetValueOrDefault(id) ?? main.MapPath(id));
-        That(catalog.Find(210) is { Mazes.Count: 1 } && catalog.MissingMaps.Length == 68 && !catalog.Ready,
-            "四项显式登记只使黑雾之源资源可准备，不冒充全部14DGN/72MAP就绪");
+        var registeredDefinition = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main, resources.ItemResources.Items,
+            antonMapPath: AntonRaidMapPaths.Bind(main.MapPath)).Find(0)!;
+        var registered = registeredDefinition.Resources!;
+        var catalog = registered.EntryCatalog!;
+        That(catalog.Find(210) is { Mazes.Count: 1 } && catalog.MissingMaps.IsEmpty && catalog.Ready && registered.MissingFormalMaps.IsEmpty,
+            "同应用有证登记使14DGN/72MAP可准备，黑雾真实28/29不依赖测试造表");
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "anton-map-entry"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
@@ -167,6 +163,7 @@ internal static class AntonRaidMapEntryTcpTests
             foreach (var session in sessions) session.End();
             foreach (var owner in leases) owner.Dispose();
         }
+        await VerifyFormalSquadsAsync(source, root, resources, registeredDefinition);
 
         async Task ServeAsync(TcpClient socket, AccountOwners.Lease owner, GameSession session)
         {

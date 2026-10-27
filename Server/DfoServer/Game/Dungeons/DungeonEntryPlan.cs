@@ -416,7 +416,8 @@ internal sealed record DungeonEntryPlan(
         }
         if (raid is not null)
         {
-            if (raid.Kind != DfoServer.Game.Raids.RaidKind.Luke || raid.InstanceId == Guid.Empty || raid.Squad is not (1 or 2) ||
+            if (!Enum.IsDefined(raid.Kind) || raid.InstanceId == Guid.Empty || raid.Squad < 1 ||
+                raid.Squad > (raid.Kind == DfoServer.Game.Raids.RaidKind.Luke ? 2 : 5) ||
                 questId != 0 || difficulty != 2 || isReplay || practice || hellParty || tagEvildom is not null || hope is not null)
             { reason = "raid-maze-admission-mismatch"; return false; }
             candidates = definition.Mazes.Where(row => row.SourceOrdinal == raidMaze && row.QuestConnectionTokens.Count == 0).ToArray();

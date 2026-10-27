@@ -11,7 +11,8 @@ namespace DfoServer.Network.Handlers;
 internal sealed class DungeonSelectionHandler(TownProjection projection, ServerLog log,
     DfoServer.GameWorld.Characters.TutorialCatalog? tutorials = null,
     DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
-    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null, TagEvildomProjection? tagEvildom = null, TagEvildomRunProjection? tagRun = null, DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null) : IGameCommandModule
+    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null, TagEvildomProjection? tagEvildom = null, TagEvildomRunProjection? tagRun = null,
+    DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null, DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -58,6 +59,25 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
+        if (entry.DungeonIndex != 0 && context.Session.ChannelEntry?.Type == 23 && antonRaid is { Enabled: true } &&
+            (context.Session.StartedRaid is not null || entry.DungeonIndex <= int.MaxValue && antonRaid.Contains((int)entry.DungeonIndex)))
+        {
+            var party = context.Session.CurrentParty?.Invoke();
+            string? reason = "anton-entry-party-dispatch-gate-mismatch";
+            DfoServer.Game.Dungeons.PartyDungeonNotice[] selected = [];
+            if (party is not null && context.DispatchGates?.Holds(context, party.Commands) == true)
+            {
+                using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+                if (entry.DungeonIndex <= int.MaxValue)
+                    selected = antonRaid.Select(context.Session, (int)entry.DungeonIndex, party, out reason);
+            }
+            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length != 0, Party = true,
+                RaidType = 0, Dungeon = entry.DungeonIndex, Members = selected.Length, RejectReason = reason, MissingMaps = antonRaid.MissingMaps });
+            if (selected.Length == 0)
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "anton_selection_rejected");
+            else await PartyDungeonProjection.PublishAsync(selected);
+            return CommandResult.Handled;
+        }
         if (context.Session.ChannelEntry?.Type == 54 && context.Session.Selected?.Position is { Town: 67, Area: 2 })
         {
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, context.Session.CurrentParty?.Invoke()?.Members ?? []);

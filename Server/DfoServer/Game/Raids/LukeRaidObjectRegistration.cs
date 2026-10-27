@@ -4,7 +4,7 @@ using DfoServer.GameWorld.Raids;
 
 namespace DfoServer.Game.Raids;
 
-// 生命周期归原共享LukeDungeonRun。只登记潜在出现，不代表销毁、更不写入攻坚符号。
+// 生命周期归原共享RaidDungeonRun。只登记潜在出现，不代表销毁、更不写入攻坚符号。
 // 同Run回房/四人重复加载共用同一集合；epoch不进入出现key，不能借换房刷新一次性身份。
 internal sealed class LukeRaidObjectRegistration
 {

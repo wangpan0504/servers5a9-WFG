@@ -29,7 +29,7 @@ internal sealed partial class AntonRaidBattle
 {
     readonly object gate = new();
     readonly RaidScript script;
-    sealed record DungeonBinding(DungeonRunIdentity Identity, int Phase, uint Dungeon, LukeDungeonRun? Luke = null);
+    sealed record DungeonBinding(DungeonRunIdentity Identity, int Phase, uint Dungeon, RaidDungeonRun? Run = null);
     readonly Dictionary<(Guid Run, ushort Character), DungeonBinding> entries = [];
     readonly Dictionary<RaidActor, ImmutableArray<RaidPhaseRewardPolicy>> members = [];
     readonly HashSet<(ushort Character, int Phase, byte Kind)> rewards = [];
@@ -79,9 +79,9 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (!members.Remove(actor)) return false;
+            ReleaseDungeonActor(actor, null);
             if (Kind == RaidKind.Luke)
             {
-                ReleaseLukeActor(actor, null);
                 ScheduleLukeClockLocked();
             }
             foreach (var key in entries.Where(row => row.Value.Identity.CharacterId == actor.Character).Select(row => row.Key).ToArray())
@@ -190,7 +190,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (Kind != RaidKind.Anton || current.State != AntonRaidBattleState.Fighting ||
                 fact.ConfirmedDeathEvents.Count == 0 || fact.ClearMap is null ||
-                !entries.TryGetValue((fact.Identity.InstanceId, fact.Identity.CharacterId), out var entry) ||
+                !entries.TryGetValue((fact.Identity.InstanceId, fact.Identity.CharacterId), out var entry) || entry.Run is not null ||
                 entry.Identity.CharacterId != fact.Identity.CharacterId || entry.Identity.QuestId != fact.Identity.QuestId ||
                 entry.Identity.TaskAttempt != fact.Identity.TaskAttempt || fact.Identity.Epoch < entry.Identity.Epoch ||
                 entry.Phase != current.Phase || entry.Dungeon != fact.DungeonId) return null;
@@ -253,7 +253,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (instance != Instance || revision != current.Revision || current.ClockFaulted || current.State != AntonRaidBattleState.Reward ||
                 members.Any(member => member.Value.Length != PhaseCount) ||
-                Kind == RaidKind.Luke && (lukeRuns.Count != 0 || lukeRevivalReservations.Count != 0) ||
+                Kind == RaidKind.Luke && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0) ||
                 !AllRewardsConfirmed(current.Phase)) return null;
             var before = current;
             current = before.Phase + 1 == script.Phases.Length

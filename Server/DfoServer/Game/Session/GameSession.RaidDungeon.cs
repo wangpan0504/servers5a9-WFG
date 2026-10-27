@@ -21,19 +21,19 @@ internal sealed partial class GameSession
         return true;
     });
 
-    internal bool CanBeginLukeDungeonSelection(RaidDungeonAdmission admission) => owner.Execute(() =>
-        admission.Kind == RaidKind.Luke && admission.Current && ReferenceEquals(admission.Actor.Session, this) &&
+    internal bool CanBeginRaidDungeonSelection(RaidDungeonAdmission admission) => owner.Execute(() =>
+        admission.Current && admission.Battle is not null && ReferenceEquals(admission.Actor.Session, this) &&
         ReferenceEquals(CurrentRaidBattle(admission.Actor), admission.Battle) && StartedRaid?.InstanceId == admission.InstanceId &&
         ReferenceEquals(admission.Actor.Owner, owner) && ChannelEntry?.Identity == admission.Actor.Channel &&
-        RaidTypes.FromChannelType(ChannelEntry.Type) == 1 && Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect &&
+        RaidTypes.FromChannelType(ChannelEntry.Type) == (byte)admission.Kind && Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect &&
         formalDungeon is null && pendingRental is null && !HasPendingTownQuestCommit &&
         admission.Catalog.Script.WaitingRoom is { } room && Selected?.Position is { } position &&
         position.Town == room.Town && position.Area == room.Area);
 
-    internal DungeonSelectionReceipt InstallLukeDungeonSelection(RaidDungeonSelection selection) => owner.Execute(() =>
+    internal DungeonSelectionReceipt InstallRaidDungeonSelection(RaidDungeonSelection selection) => owner.Execute(() =>
     {
-        if (!CanBeginLukeDungeonSelection(selection.Admission))
-            throw new InvalidOperationException("卢克选图安装前身份已变化");
+        if (!CanBeginRaidDungeonSelection(selection.Admission))
+            throw new InvalidOperationException("团本选图安装前身份已变化");
         raidDungeonAdmission = selection.Admission;
         CurrentDungeonSelection = new(++dungeonSelectionId, SelectionEpoch, Selected!.Id, Selected.Position, Selected.Position)
             { Raid = selection };
@@ -42,6 +42,21 @@ internal sealed partial class GameSession
     });
 
     internal bool HasLukeRaidSelection => CurrentDungeonSelection?.Raid?.Admission.Kind == RaidKind.Luke;
+    internal bool HasFormalRaidSelection => CurrentDungeonSelection?.Raid is not null;
+    internal void CancelRaidDungeonSelection(PartyDungeonNotice[] selections)
+    {
+        // 仅清本次选择令牌；事务成功安装的Run和后来建立的选择均不回滚。
+        foreach (var notice in selections)
+            notice.Recipient.Actor.Owner.Execute(() =>
+            {
+                var session = notice.Recipient.Actor.Session;
+                if (notice.Selection is not { } receipt || session.formalDungeon is not null ||
+                    session.CurrentDungeonSelection?.Id != receipt.SelectionId || session.SelectionEpoch != receipt.SelectionEpoch) return false;
+                session.CurrentDungeonSelection = session.CurrentDungeonSelection with { Raid = null };
+                session.raidDungeonAdmission = null;
+                return true;
+            });
+    }
     internal void ClearLukeRaidSelection() => owner.Execute(() =>
     {
         if (CurrentDungeonSelection?.Raid is null || formalDungeon is not null) return false;
@@ -89,25 +104,25 @@ internal sealed partial class GameSession
         var definition = admission.Catalog.Find((int)dungeonId);
         if (definition is null) return RejectFormal(prefix + "-entry-resource-unregistered");
         var selected = captured.CurrentDungeonSelection.Raid;
-        bool luke = admission.Kind == RaidKind.Luke;
-        if (luke && (selected is null || !ReferenceEquals(selected.Admission, admission) || selected.Dungeon != dungeonId ||
-            admission.LukePolicy?.Maze(admission.Phase, selected.Dungeon) != selected.MazeOrdinal))
-            return RejectFormal("luke-entry-selection-changed");
+        bool controlled = admission.Kind == RaidKind.Luke || admission.Battle is not null;
+        if (controlled && (selected is null || !ReferenceEquals(selected.Admission, admission) || selected.Dungeon != dungeonId ||
+            admission.Kind == RaidKind.Luke && admission.LukePolicy?.Maze(admission.Phase, selected.Dungeon) != selected.MazeOrdinal))
+            return RejectFormal(prefix + "-entry-selection-changed");
         var identity = new RaidDungeonIdentity(admission.InstanceId, admission.Phase, admission.Squad, admission.Kind);
         var sharedEntry = shared?.Session.PreparedParty(shared).Dungeon.Entry;
         if (sharedEntry is not null && sharedEntry.RaidEntry != identity)
             return RejectFormal(prefix + "-entry-squad-mismatch");
         if (!DungeonEntryPlan.TryCreate(definition, character, dungeonId, 0, difficulty, out var entry, out string reason,
-            draw: draw, resolveMaze: maze => admission.Catalog.ResolveMaze(maze, draw), partyRoute: sharedEntry, raid: luke ? identity : null, raidMaze: selected?.MazeOrdinal))
+            draw: draw, resolveMaze: maze => admission.Catalog.ResolveMaze(maze, draw), partyRoute: sharedEntry, raid: controlled ? identity : null, raidMaze: selected?.MazeOrdinal))
             return RejectFormal(prefix + "-entry-plan:" + reason);
         entry = entry! with
         {
             RaidEntry = identity,
-            CoinLimit = luke ? 0 : definition.CoinLimit, AllowsCompanionAi = false,
-            DisableMonsterAndClearExperience = luke || entry!.DisableMonsterAndClearExperience,
-            DisableClearReward = luke || entry.DisableClearReward,
-            DisableFatigueConsumption = luke || entry.DisableFatigueConsumption,
-            DisableGiveupPenalty = luke || entry.DisableGiveupPenalty
+            CoinLimit = controlled ? 0 : definition.CoinLimit, AllowsCompanionAi = false,
+            DisableMonsterAndClearExperience = controlled || entry!.DisableMonsterAndClearExperience,
+            DisableClearReward = controlled || entry.DisableClearReward,
+            DisableFatigueConsumption = controlled || entry.DisableFatigueConsumption,
+            DisableGiveupPenalty = controlled || entry.DisableGiveupPenalty
         };
         var prepared = PrepareFormalDungeonResources(character, captured.SelectionEpoch, entry, rooms, null, null, draw, null,
             shared: shared, partyFirstKey: firstKey, partyInstance: partyInstance);

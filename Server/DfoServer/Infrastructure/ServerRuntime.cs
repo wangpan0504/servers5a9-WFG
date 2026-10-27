@@ -198,12 +198,15 @@ internal static class ServerRuntime
         var lukeObjectRooms = lukeStartPolicy?.Run is null ? null : DungeonRoomCatalog.Load(pvf);
         var raidCatalog = raidSettings.Apply(GameWorld.Raids.RaidCatalog.Load(pvf)).PrepareResources(pvf, dungeonCatalog, itemResources.Items,
             lukeObjectRooms, lukeStartPolicy?.Run is { Mazes.IsDefaultOrEmpty: false } objectPolicy
-                ? objectPolicy.Mazes.Where(row => row.Phase == 0).Select(row => (row.Dungeon, row.MazeOrdinal)).ToArray() : null);
+                ? objectPolicy.Mazes.Where(row => row.Phase == 0).Select(row => (row.Dungeon, row.MazeOrdinal)).ToArray() : null,
+            antonMapPath: GameWorld.Raids.AntonRaidMapPaths.Bind(dungeonCatalog.MapPath));
         if (raidCatalog.Find(1)?.Resources?.LukeObjects is { Issues.IsEmpty: false } objectEvidence)
             log.Write("resource_warning", new { Source = "Luke static object evidence", Reasons = objectEvidence.Issues.ToArray() });
         if (raidCatalog.Find(1)?.Resources?.LukeCardSet is { Issues.IsEmpty: false } cardSetEvidence)
             log.Write("resource_warning", new { Source = "Luke cardset metadata", Reasons = cardSetEvidence.Issues.ToArray() });
         log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
+            raidSettings.AntonFormalEntryEnabled,
+            Reason = raidSettings.AntonFormalEntryEnabled ? "anton-entry-enabled-resource-gates-required" : "anton-entry-waiting-client-resources",
             AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
         lukeStartPolicy = Game.Raids.LukeResourceCompletion.Resolve(lukeStartPolicy, raidCatalog.Find(1), itemResources.Items);
         if (lukeStartPolicy?.ResourceCompletion is not null && lukeStartPolicy.Completion is { } resourceCompletion)
@@ -212,6 +215,10 @@ internal static class ServerRuntime
                 Phases = resourceCompletion.Phases.Select((phase, index) => new { Phase = index, phase.MinimumCommittedRuns,
                     phase.WeeklyEligibilityLimit, phase.Rewards.Offers, phase.Rewards.Result }).ToArray() });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
+        var antonRun = raidCatalog.Find(0)?.Resources?.EntryCatalog is { } antonCatalog
+            ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, antonCatalog, raidSettings.AntonFormalEntryEnabled) : null;
+        if (!raidSettings.AntonFormalEntryEnabled)
+            log.Write("resource_warning", new { Source = "Anton formal entry", Reason = "anton-entry-waiting-client-resources" });
         var lukeTimers = lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }));
         var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items, lukeTimers);
@@ -358,7 +365,7 @@ internal static class ServerRuntime
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
                 despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun,
-                evildomWar: EvildomWarCatalog.Load(pvf,dungeonCatalog), lukeRaid: lukeRun, lukeLifecycle: repository);
+                evildomWar: EvildomWarCatalog.Load(pvf,dungeonCatalog), lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -483,7 +490,7 @@ internal static class ServerRuntime
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock), inventoryProjection),
-            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun),
+            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),

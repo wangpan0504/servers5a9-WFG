@@ -13,6 +13,17 @@ internal static class AntonRaidResourceTests
     public static void RunCore()
     {
         int before = Count;
+        That(AntonRaidMapPaths.Paths.Count == 72 && AntonRaidMapPaths.Paths.Values.Distinct().Count() == 72,
+            "安徒恩只读增量限定72个唯一MAP登记");
+        string existingMap = "Map\\210_Close_Blacksmoke\\(0,0)32200_start.map";
+        var mapPath = AntonRaidMapPaths.Bind(id => id == 32200 ? existingMap : id == 1 ? "map/lorien/s0.map" : null);
+        That(mapPath(32200) == existingMap && mapPath(32204) == AntonRaidMapPaths.Paths[32204] &&
+            mapPath(1) == "map/lorien/s0.map" && mapPath(int.MaxValue) is null,
+            "原登记优先且允许等价大小写/分隔符，非目标回退主目录，未知不造路径");
+        bool conflict = false;
+        try { AntonRaidMapPaths.Bind(id => id == 32200 ? "map/other.map" : null); }
+        catch (InvalidDataException) { conflict = true; }
+        That(conflict, "同号不同路径拒绝装配，不能覆盖原主表");
         var strings = new List<string>();
         PvfToken[] Tokens(object[] values) => values.Select(value =>
         {
@@ -150,6 +161,19 @@ internal static class AntonRaidResourceTests
             resources.MissingFormalMaps.Length == 72 && resources.Dungeons.All(d => d.TutorialFileExists && !d.FormalFileExists) &&
             resources.Dungeons[0].MapIds.SequenceEqual(new[] { 32200, 32202, 32201, 32204 }) && !dungeons.ContainsDungeon(210),
             "真实主表缺14DGN/72MAP、备用脚本存在，检查不污染正式目录");
+        var registered = catalog.PrepareResources(pvf, dungeons, items,
+            antonMapPath: AntonRaidMapPaths.Bind(dungeons.MapPath)).Find(0)!.Resources!;
+        That(registered.MissingFormalMaps.IsEmpty && registered.EntryCatalog is { Ready: true, MissingMaps.IsEmpty: true } &&
+            registered.MissingFormalDungeons.SequenceEqual(resources.MissingFormalDungeons) &&
+            registered.Dungeons.All(row => registered.EntryCatalog.Find(row.Id) is not null) &&
+            AntonRaidMapPaths.Paths.Keys.All(id => dungeons.MapPath(id) is null) && !dungeons.ContainsDungeon(210),
+            "应用显式登记后14团本定义可用、两处MissingMaps归零，普通主目录与原缺DGN诊断不变");
+        var blacksmoke = registered.EntryCatalog!.Find(210)!.Mazes.Single().MapSpecification!;
+        var rooms = SelfTestCatalogs.Rooms(pvf);
+        That(blacksmoke.Select(map => map.Id).SequenceEqual(new[] { 32200, 32202, 32201, 32204 }) &&
+            blacksmoke.Single(map => map.Id == 32204).Position == new DungeonPoint(3, 0) &&
+            blacksmoke.All(map => rooms.Get(map).Monsters.Count > 0),
+            "黑雾四房沿真实MAP解析演员，DGN坐标保留3/0而不按boss文件名4/0修图");
         var legs = script.Phases[0].Rules.Where(r => r.Trigger.Count(c => c.State == RaidDungeonState.Clear && c.DungeonId is 213 or 215) == 2).ToArray();
         That(legs.Length == 2 && legs.All(r => r.Behavior.Any(c => c.Symbol == "[1phase success]" && c.RawIntegers.SequenceEqual(new[] { 1 }))) &&
             script.Phases[0].Rules.Any(r => r.Trigger.Any(c => c.Symbol == "[1phase success]") && r.Behavior.Any(c => c.Tag == "[clear phase]")),

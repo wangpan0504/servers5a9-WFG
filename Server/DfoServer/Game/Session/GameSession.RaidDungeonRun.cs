@@ -6,23 +6,24 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    internal bool IsLukeRaidDungeon => owner.Execute(() => formalDungeon?.Entry.RaidEntry?.Kind == RaidKind.Luke);
+    internal bool IsFormalRaidDungeon => owner.Execute(() => formalDungeon?.Entry.RaidEntry is not null);
 
     // 调用方已持原四人owner组；资源准备完成，SQL尚未开始。
     internal static AntonRaidBattle.DungeonReservation? ReserveRaidPartyRun(PartyDungeonPreparation[] prepared, out bool required)
     {
-        required = prepared.Any(token => token.Session.PreparedParty(token).Dungeon.Entry.RaidEntry?.Kind == RaidKind.Luke);
+        required = prepared.Any(token => token.Session.PreparedParty(token).Dungeon.Entry.RaidEntry?.Kind == RaidKind.Luke ||
+            token.Session.raidDungeonAdmission?.Battle is not null);
         if (!required || prepared.Length is < 1 or > 4) return null;
         var first = prepared[0].Session.PreparedParty(prepared[0]).Dungeon;
         var admission = prepared[0].Session.raidDungeonAdmission;
-        if (first.Entry.RaidEntry is not { Kind: RaidKind.Luke } identity || admission?.Battle is not { } battle) return null;
+        if (first.Entry.RaidEntry is not { } identity || admission?.Battle is not { } battle) return null;
         var actors = new List<(RaidActor Actor, DungeonRunIdentity Identity)>();
         foreach (var token in prepared)
         {
             var session = token.Session;
             var dungeon = session.PreparedParty(token).Dungeon;
             if (dungeon.Entry.RaidEntry != identity || dungeon.Entry.DungeonId != first.Entry.DungeonId ||
-                session.raidDungeonAdmission is not { Kind: RaidKind.Luke } own || !ReferenceEquals(own.Battle, battle) ||
+                session.raidDungeonAdmission is not { } own || own.Kind != identity.Kind || !ReferenceEquals(own.Battle, battle) ||
                 !ReferenceEquals(session.CurrentRaidBattle(own.Actor), battle) || !session.CanInstallRaidDungeon(dungeon.Entry)) return null;
             actors.Add((own.Actor, dungeon.Run.Snapshot.Identity));
         }
@@ -82,8 +83,7 @@ internal sealed partial class GameSession
 
     AntonRaidBattleChange? ReleaseCurrentRaidDungeon()
     {
-        if (formalDungeon is not { Entry.RaidEntry.Kind: RaidKind.Luke } dungeon ||
-            raidCombat is not { Battle.Kind: RaidKind.Luke } raid) return null;
+        if (formalDungeon is not { Entry.RaidEntry: not null } dungeon || raidCombat is not { } raid) return null;
         return raid.Battle.ReleaseDungeon(raid.Actor, dungeon.Run.Snapshot.Identity.InstanceId);
     }
 }

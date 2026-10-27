@@ -35,10 +35,10 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
                 member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, view.Phase, id), RaidKind.Luke)
                 { LukePolicy = policy, Battle = battle, LukeObjects = objects }, dungeon, maze)).ToArray();
             if (selections.Any(selection => !ReferenceEquals(selection.Admission.Actor.Session.CurrentRaidBattle(selection.Admission.Actor), battle) ||
-                !selection.Admission.Actor.Session.CanBeginLukeDungeonSelection(selection.Admission))) return [];
+                !selection.Admission.Actor.Session.CanBeginRaidDungeonSelection(selection.Admission))) return [];
             return selections.Select(selection => new PartyDungeonNotice(PartyDungeonNoticeKind.RaidSelection,
                 party.Members.Single(member => ReferenceEquals(member.Actor.Session, selection.Admission.Actor.Session)), party.Members,
-                Selection: selection.Admission.Actor.Session.InstallLukeDungeonSelection(selection))).ToArray();
+                Selection: selection.Admission.Actor.Session.InstallRaidDungeonSelection(selection))).ToArray();
         });
 
         bool MemberCurrent(RaidMember member)

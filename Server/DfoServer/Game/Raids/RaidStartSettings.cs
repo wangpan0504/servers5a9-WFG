@@ -3,10 +3,11 @@ using DfoServer.GameWorld.Raids;
 
 namespace DfoServer.Game.Raids;
 
-// 仅覆盖开战人数；PVF 的类型、容量、阶段、费用和资源门禁保持权威。
+// 开战人数与显式进图能力；PVF 的类型、容量、阶段、费用和资源门禁保持权威。
 internal sealed record RaidStartSettings
 {
     public int? StartMinimumOverride { get; init; }
+    public bool AntonFormalEntryEnabled { get; init; }
 
     public RaidCatalog Apply(RaidCatalog catalog)
     {
