@@ -35,7 +35,7 @@ internal sealed partial class AntonRaidBattle
             lock (battle.gate)
             {
                 if (!battle.SupportsLukeRevival || !actor.IsCurrent || death <= 0 ||
-                    battle.pendingTransition is not null || TerminalRequested(battle.current) ||
+                    battle.pendingTransition is not null || TerminalRequested(battle.current) || battle.LukePhaseDueLocked() ||
                     !battle.members.ContainsKey(actor) || !battle.lukeRuns.TryGetValue(identity.InstanceId, out var run) ||
                     !run.Installed || !run.Active.Contains(actor) || run.Phase != battle.current.Phase ||
                     battle.current.DungeonGenerations.GetValueOrDefault(checked((int)run.Dungeon)) != run.Generation ||
