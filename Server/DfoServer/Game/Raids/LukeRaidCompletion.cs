@@ -29,6 +29,8 @@ internal sealed record LukePhaseCommit(ImmutableArray<RaidPhaseEligibility> Memb
 internal interface ILukeRaidLifecycleStore
 {
     LukePhaseCommit CommitLukePhase(AntonRaidBattle.LukePhaseSettlement candidate);
+    // 存储实现判定可恢复错误；默认不把未知异常当作忙锁。
+    bool IsRetryable(Exception error) => false;
 }
 
 internal sealed partial class AntonRaidBattle
@@ -115,7 +117,7 @@ internal sealed partial class AntonRaidBattle
 
     internal LukePhaseSettlement? PendingLukeSettlement()
     {
-        lock (gate) return lukeSettlements.GetValueOrDefault(current.Phase) is { } candidate && !lukePhaseCommits.ContainsKey(candidate.Phase)
+        lock (gate) return !current.ClockFaulted && lukeSettlements.GetValueOrDefault(current.Phase) is { } candidate && !lukePhaseCommits.ContainsKey(candidate.Phase)
             ? candidate : null;
     }
 
