@@ -21,6 +21,13 @@ internal sealed partial class GameSession
         return result;
     });
 
+    // 历史奖励恢复只允许整个账号处于选角，避免修改另一在线角色共享钱包却未安装快照。
+    public T WithUnselectedDevelopmentOwner<T>(string name, Func<AccountOwners.Lease, Character, T> action) => owner.Execute(() =>
+    {
+        if (Selected is not null) throw new InvalidOperationException("账号有已选角色，请先回到选角再恢复领取");
+        return action(owner, DevelopmentTarget(name, true));
+    });
+
     public T WithDevelopmentOwner<T>(string name, bool refuseSelected, Func<AccountOwners.Lease, Character, T> action) =>
         owner.Execute(() => action(owner, DevelopmentTarget(name, refuseSelected)));
 
