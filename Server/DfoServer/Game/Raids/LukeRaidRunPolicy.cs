@@ -3,15 +3,15 @@ using DfoServer.GameWorld.Raids;
 
 namespace DfoServer.Game.Raids;
 
-// 首个正式Run用例显式隔离经济与复活；不把普通图或安徒恩默认规则当卢克规则。
-internal enum LukeRaidRunEconomy { ControlledNoRewardsOrRevival }
+// 正式Run显式隔离普通经济；手动复活另须经独立策略核验，不继承普通图或安徒恩默认规则。
+internal enum LukeRaidRunEconomy { ControlledNoOrdinaryRewards }
 internal sealed record LukeRaidMazeChoice(int Phase, int Dungeon, int MazeOrdinal);
 internal sealed record LukeRaidRunPolicy(string Source, ImmutableArray<LukeRaidMazeChoice> Mazes, LukeRaidRunEconomy Economy)
 {
     public string? Rejection(RaidDungeonCatalog catalog)
     {
         if (string.IsNullOrWhiteSpace(Source) || catalog.Type != 1 || !catalog.MapsReady ||
-            Economy != LukeRaidRunEconomy.ControlledNoRewardsOrRevival || Mazes.IsDefaultOrEmpty ||
+            Economy != LukeRaidRunEconomy.ControlledNoOrdinaryRewards || Mazes.IsDefaultOrEmpty ||
             Mazes.Length > catalog.Script.Phases.Sum(phase => phase.Dungeons.Length) ||
             Mazes.Select(row => (row.Phase, row.Dungeon)).Distinct().Count() != Mazes.Length)
             return "luke-run-policy-invalid";

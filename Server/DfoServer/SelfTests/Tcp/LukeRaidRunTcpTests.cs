@@ -51,6 +51,8 @@ internal static partial class LukeRaidRunTcpTests
             "第二分队不能占用第一分队同一阶段地下城");
         foreach(var peer in second.Where(peer=>peer!=otherCaptain))That(!Drain(peer).Any(p=>p.Opcode is 28 or 29),"冲突拒绝不部分安装其它成员Run");
         Enter(second,otherCaptain,dungeons[1]);Load(second);
+        ManualCoins(fixture,first,second,0,8);
+        ManualCoins(fixture,second,first,0,1);
         Return(first,captain);
         captain.Send(15,BitConverter.GetBytes(dungeons[0]));
         That(!Drain(captain).Any(p=>p is {Kind:1,Opcode:15,Body:[1]}),"队长先返回而同分队仍在Dungeon时不得重开选择");
@@ -202,7 +204,13 @@ internal static partial class LukeRaidRunTcpTests
         {
             var packet=peer.Read();
             if(packet is {Kind:1,Opcode:1347}){Bytes(packet.Body,[1],"Luke Run连接屏障");return rows;}
-            if(phaseResults&&packet is {Kind:0,Opcode:601})
+            if(packet is {Kind:0,Opcode:778})
+                That(packet.Body.Length==1&&packet.Body[0]<=20,"778严格一字节已用数，非phase+remaining");
+            else if(packet is {Kind:0,Opcode:32})
+                That(packet.Body.Length==4&&packet.Body[2] is 0 or 1&&packet.Body[3]==0,"手动复活仅原生死亡/复活状态通知");
+            else if(packet is {Kind:1,Opcode:41})
+                That(packet.Body is [1,_,_,0] or [0,1,0],"41仅既有本人复活成功或额度拒绝");
+            else if(phaseResults&&packet is {Kind:0,Opcode:601})
                 That(packet.Body.Length==10&&packet.Body[0] is 0 or 2,"显式两阶段策略只接已证10B成功结果，不接600未知展示");
             else if(phaseResults&&packet is {Kind:1,Opcode:660})
                 That(packet.Body.SequenceEqual(new byte[]{1})||packet.Body.SequenceEqual(new byte[]{0,0x12,0}),"660仅已证成功或明确清pending失败包");

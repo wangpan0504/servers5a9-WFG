@@ -92,7 +92,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         var scene = context.Session.CurrentFormalDungeonScene();
         var result = context.Session.ReviveFormalCharacter(targetKey);
         log.Write("formal_character_revive", new { Connection = context.Id, Target = targetKey, Accepted = result?.Accepted == true,
-            Coins = result?.Receipt?.Character.Inventory.ReviveCoins });
+            Coins = result?.Receipt?.Character.Inventory.ReviveCoins, RaidPhaseCoinsUsed = context.Session.RaidCombatView()?.LukePhaseCoinsUsed });
         if (result is null) return CommandResult.Handled;
         if (!result.Accepted)
         {

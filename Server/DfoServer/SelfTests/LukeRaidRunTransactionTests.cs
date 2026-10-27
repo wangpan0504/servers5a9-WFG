@@ -24,6 +24,7 @@ internal static class LukeRaidRunTransactionTests
     internal static void Run(TcpTestResources resources,RaidDefinition definition,LukeRaidStartPolicy policy)
     {
         int before=Count;
+        policy=policy with {Revival=new("fixture/current-pvf-manual-shared-coins")};
         string root=Path.Combine(Path.GetTempPath(),"S5A9-luke-raid-run-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);string path=Path.Combine(root,"game.db");
         bool completed=false;
@@ -59,6 +60,9 @@ internal static class LukeRaidRunTransactionTests
                     var character=repository.Create(owner,candidate with {Level=90,AcceptedStoryLevel=90,CompletedQuests=[2903,4872],InitialLearning=learning});
                     var inventory=new InventoryService(items.Items,items.GoldLimits,items.EpicPieces);
                     InventoryService.Commit(repository,owner,character,inventory.Grant(character,[new(definition.Resources.Script.EntryCost!.ItemId,1)]));
+                    var funded=repository.LoadCharacter(owner,0)!;
+                    InventoryService.Commit(repository,owner,funded,new(true,0,new(funded.Inventory,
+                        funded.Inventory with {ReviveCoins=30},"fixture_raid_coins")));
                     var session=new GameSession(repository,resources.Towns,owner,questCatalog:resources.Quests,entry:new(new(2,20),32,"[raid]"));
                     all.Add(session);session.Select(0);session.MarkReady();session.CurrentParty=()=>parties.Current(session);return session;
                 }).ToArray();
@@ -97,7 +101,7 @@ internal static class LukeRaidRunTransactionTests
                 var instance=sessions[0].PartyDungeon!;var party=parties.Current(sessions[0])!;
                 var plan=entered[0].Scene!.Entry;
                 var route=QuestStoryRouteTests.Path(plan.Maze.StaticTopology,plan.StartMap.Position,plan.BossMap.Position);
-                bool injected=false;
+                bool injected=false; bool revivalChecked=false;
                 foreach(var point in route)
                 {
                     foreach(var session in sessions.SkipLast(1))instance.CompleteLoading(session);
@@ -105,6 +109,28 @@ internal static class LukeRaidRunTransactionTests
                     That(loaded.Length==5&&loaded.Count(n=>n.Kind==PartyDungeonNoticeKind.Loaded)==4&&
                         loaded.Count(n=>n.Kind==PartyDungeonNoticeKind.RaidBattleSync&&n.RaidEvent==RaidStageFactKind.EnterMap)==1,
                         "真实四人加载屏障及一次权威房间事件同步");
+                    if(!revivalChecked)
+                    {
+                        revivalChecked=true;
+                        var reviving=sessions[failureIndex]; var dead=reviving.ReportFormalCharacterDeath();
+                        That(dead is not null&&reviving.CurrentDungeonDeathReturn() is not null,"本人正式死亡事实进入手动复活路径，非祝福免耗");
+                        var deadBefore=State();var storedBefore=Persistent();
+                        var selectedBefore=reviving.Selected; var deathBefore=reviving.CurrentDungeonDeathReturn();
+                        Sql($"CREATE TRIGGER fail_luke_coin BEFORE UPDATE OF revive_coins ON characters WHEN NEW.id={actors[failureIndex].Character} AND NEW.revive_coins<>OLD.revive_coins BEGIN SELECT RAISE(ABORT,'Luke coin rollback'); END");
+                        Reject<SqliteException>(()=>reviving.ReviveFormalCharacter(actors[failureIndex].Character),"本人原钱包UPDATE失败撤销本次共享池预留");
+                        That(State()==deadBefore&&Persistent()==storedBefore&&ReferenceEquals(reviving.Selected,selectedBefore)&&
+                            reviving.CurrentDungeonDeathReturn()==deathBefore&&ReferenceEquals(reviving.PartyDungeon,instance)&&
+                            ReferenceEquals(parties.Current(reviving),party),"复活SQL失败保死亡、当前角色引用、队伍/Run及全员持久资产");
+                        Sql("DROP TRIGGER fail_luke_coin");
+                        var revived=reviving.ReviveFormalCharacter(actors[failureIndex].Character);
+                        That(revived is {Accepted:true}&&reviving.CurrentDungeonDeathReturn() is null&&
+                            reviving.Selected!.Inventory.ReviveCoins==selectedBefore!.Inventory.ReviveCoins-1&&
+                            repository.LoadCharacter(actors[failureIndex].Owner,0)!.Inventory.ReviveCoins==reviving.Selected.Inventory.ReviveCoins,
+                            "同死亡事实重试只扣本人一币，SQL后确认共享配额");
+                        var afterRevive=Persistent();
+                        That(reviving.ReviveFormalCharacter(actors[failureIndex].Character) is null&&Persistent()==afterRevive,
+                            "已复活的重复41不再扣币、不再占共享额度");
+                    }
                     var loadedView=battle.View;
                     That(sessions.All(session=>instance.CompleteLoading(session).Length==0)&&ReferenceEquals(battle.View,loadedView),
                         "已释放屏障的重复加载回调不再发房间事件或重复推进");

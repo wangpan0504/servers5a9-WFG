@@ -72,6 +72,7 @@ internal static class LukeRaidStartTests
                 return session.CaptureRaidActor(raids)!;
             }).ToArray();
             LukeRaidRunTests.RunCore(actors.Take(8).ToArray());
+            LukeRaidRevivalTests.RunCore(actors.Take(8).ToArray());
             LukeRaidCompletionTests.RunCore(actors.Take(8).ToArray());
             var leader=actors[0]; raids.Create(leader,1,"start","start"u8.ToArray(),8,1);
             for(int index=1;index<8;index++)
@@ -361,11 +362,23 @@ internal static class LukeRaidStartTests
         That(frames.Count(row=>row.Opcode==587)==1&&frames.Count(row=>row.Opcode==583)==2&&context.RaidDisplay?.Phase==0,
             "同view重复发布仍同步symbol，但实际成功写出587一次");
         // 纯投影边界：合成下一phase视图；真实领域转换另由两阶段Runtime用例覆盖。
-        var next=view with {Phase=1};
+        var next=view with {Phase=1,LukePhaseCoinsUsed=0};
+        RaidCombatProjection.PostState(context,next,actor,()=>false,"display-dropped-next-phase");
+        await sender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        That(frames.All(row=>row.Opcode!=778)&&context.RaidDisplay?.Phase==0,
+            "新phase587被guard丢弃时不能只发778让旧阶段误读");
         RaidCombatProjection.PostState(context,next,actor,()=>current,"display-next-phase");
         await sender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(2));
         That(frames.Count(row=>row.Opcode==587)==2&&frames.Last(row=>row.Opcode==587).Body.SequenceEqual(new byte[]{2,1}),
             "相同state不同phase必须发送新阶段，不能仅按state去重");
+        That(frames[^1].Opcode==778&&frames[^1].Body.SequenceEqual(new byte[]{0})&&frames[^2].Opcode==587,
+            "恢复的新phase先写587再写778已用0");
+        var used=next with {LukePhaseCoinsUsed=1,Revision=next.Revision+1};
+        RaidCombatProjection.PostState(context,used,actor,()=>true,"display-coin-update");
+        RaidCombatProjection.PostState(context,next,actor,()=>false,"display-old-coin-update");
+        await sender.DrainAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        That(frames.Count(row=>row.Opcode==587)==2&&frames.Last(row=>row.Opcode==778).Body.SequenceEqual(new byte[]{1}),
+            "同phase额度更新不重播587，旧额度guard拒绝");
         using var failedStop=new CancellationTokenSource(TimeSpan.FromSeconds(5));
         using var failedStream=new GameSenderBudgetTests.HeldStream{FailWrite=true};
         await using var failedSender=new GameConnectionSender(actor.Owner,failedStream,failedStop,0,(_,_,_,_,_)=>{});

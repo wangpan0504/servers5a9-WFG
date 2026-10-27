@@ -62,21 +62,54 @@ internal sealed partial class GameSession
             ? ReturnFromFormalDungeon() : null);
 
     // 扣币提交失败时保留死亡状态；只有实际提交结果才能发布复活。
-    public InventoryResult? ReviveFormalCharacter(ushort targetKey) => owner.Execute(() =>
+    public InventoryResult? ReviveFormalCharacter(ushort targetKey)
     {
-        if (!CanChangeDungeonLife() || formalDungeon!.Run.TagEvildomLife is not null || !formalDungeon.CharacterDead || Selected!.Id != targetKey ||
-            formalDungeon.Entry.Maze.IsGriefTower) return null;
-        if (formalDungeon.Entry.CoinLimit is { } maximum && formalDungeon.ReviveCount >= maximum)
-            return InventoryResult.Reject();
-        var result = CommitInventory(Selected, DungeonRevive.Plan(Selected,PreservesDungeonConsumables));
-        if (result.Accepted)
+        Raids.AntonRaidBattle.RevivalReservation? reservation = null;
+        Exception? revivalFailure = null;
+        try
         {
-            formalDungeon.CharacterDead = false;
-            formalDungeon.AltarRevivalDue = null;
-            formalDungeon.ReviveCount++;
+            return owner.Execute(() =>
+            {
+                if (!CanChangeDungeonLife() || formalDungeon!.Run.TagEvildomLife is not null || !formalDungeon.CharacterDead || Selected!.Id != targetKey ||
+                    formalDungeon.Entry.Maze.IsGriefTower) return null;
+                bool luke = formalDungeon.Entry.RaidEntry?.Kind == Raids.RaidKind.Luke;
+                if (luke)
+                {
+                    if (raidCombat is not { Actor.IsCurrent: true, Battle.Kind: Raids.RaidKind.Luke } raid ||
+                        formalDungeon.Entry.RaidEntry!.InstanceId != raid.Battle.Instance || PreservesDungeonConsumables)
+                        return InventoryResult.Reject();
+                    reservation = raid.Battle.ReserveLukeRevival(raid.Actor, formalDungeon.Run.Snapshot.Identity, formalDungeon.DeathSerial);
+                    if (reservation is null) return InventoryResult.Reject();
+                }
+                else if (formalDungeon.Entry.CoinLimit is { } maximum && formalDungeon.ReviveCount >= maximum)
+                    return InventoryResult.Reject();
+                try
+                {
+                    var result = CommitInventory(Selected, DungeonRevive.Plan(Selected, PreservesDungeonConsumables));
+                    if (result.Accepted)
+                    {
+                        reservation?.Commit();
+                        formalDungeon.CharacterDead = false;
+                        formalDungeon.AltarRevivalDue = null;
+                        formalDungeon.ReviveCount++;
+                    }
+                    return result;
+                }
+                finally { reservation?.Dispose(); }
+            });
         }
-        return result;
-    });
+        catch (Exception error) { revivalFailure = error; throw; }
+        finally
+        {
+            // 扣币SQL与本人owner已经释放；只发布本次token产生的已提交快照。
+            if (reservation?.Change is { } change)
+            {
+                try { PublishRaidCombat(change); }
+                catch (Exception publicationError) when (revivalFailure is not null)
+                { revivalFailure.Data["RaidPublicationFailure"] = publicationError.GetType().Name; }
+            }
+        }
+    }
 
     // 清图后角色仍留在原房间，残留攻击可能致死；结算菜单不结束死亡与扣币资格。
     bool CanChangeDungeonLife() => pendingRental is null && pendingConsumableUse is null &&

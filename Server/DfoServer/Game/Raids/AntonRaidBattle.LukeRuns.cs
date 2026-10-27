@@ -16,6 +16,8 @@ internal sealed partial class AntonRaidBattle
         public long Generation { get; } = generation;
         public (RaidActor Actor, DungeonRunIdentity Identity)[] Actors { get; } = actors;
         public HashSet<RaidActor> Active { get; } = actors.Select(actor => actor.Actor).ToHashSet();
+        public int RevivalUsed { get; set; }
+        public Dictionary<RaidActor, long> RevivedDeaths { get; } = [];
         public bool Installed { get; set; }
         public bool EnterConsumed { get; set; }
         public Dictionary<RaidActor, long> MapEpochs { get; } = [];
@@ -48,7 +50,7 @@ internal sealed partial class AntonRaidBattle
                         actor.Identity.CharacterId != actor.Actor.Character || actor.Identity.InstanceId == Guid.Empty) ||
                     actors.Select(actor => actor.Actor.Character).Distinct().Count() != actors.Length ||
                     actors.Select(actor => actor.Identity.InstanceId).Distinct().Count() != 1 ||
-                    battle.lukeRuns.Count >= 2 || battle.lukeRuns.Values.Any(run => run.Squad == identity.Squad ||
+                    battle.lukeRuns.Count >= 2 || battle.lukeRevivalReservations.Any(row => row.Squad == identity.Squad) || battle.lukeRuns.Values.Any(run => run.Squad == identity.Squad ||
                         run.Phase == identity.Phase && run.Dungeon == dungeon) ||
                     actors.Any(actor => battle.lukeRuns.Values.Any(run => run.Active.Contains(actor.Actor)))) return null;
                 var run = new LukeDungeonRun(actors[0].Identity.InstanceId, identity.Phase, dungeon, identity.Squad,
@@ -200,7 +202,7 @@ internal sealed partial class AntonRaidBattle
     void CommitBattleCandidate(AntonRaidBattleView before, AntonRaidBattleView candidate)
     {
         if (ReferenceEquals(before, candidate)) return;
-        if (Kind == RaidKind.Luke && candidate.State != AntonRaidBattleState.Fighting && (lukeRuns.Count != 0 || lukeCompletion is not null))
+        if (Kind == RaidKind.Luke && candidate.State != AntonRaidBattleState.Fighting && (lukeRuns.Count != 0 || lukeRevivalReservations.Count != 0 || lukeCompletion is not null))
         {
             pendingTransition = candidate;
             if (lukeCompletion is not null && candidate.State == AntonRaidBattleState.Reward)
@@ -216,10 +218,10 @@ internal sealed partial class AntonRaidBattle
 
     AntonRaidBattleChange? CommitPendingTransition()
     {
-        if (lukeRuns.Count != 0 || pendingTransition is not { } pending ||
+        if (lukeRuns.Count != 0 || lukeRevivalReservations.Count != 0 || pendingTransition is not { } pending ||
             lukeCompletion is not null && !lukePhaseCommits.ContainsKey(pending.Phase)) return null;
         var before = current;
-        current = pending with { Revision = current.Revision + 1 };
+        current = pending with { Revision = current.Revision + 1, LukePhaseCoinsUsed = current.LukePhaseCoinsUsed };
         pendingTransition = null;
         if (lukeCompletion is not null && current.State == AntonRaidBattleState.Reward &&
             lukePhaseCommits.TryGetValue(current.Phase, out var committed) && committed.Members.All(row => !row.Eligible))

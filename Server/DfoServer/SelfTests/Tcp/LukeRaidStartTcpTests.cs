@@ -46,7 +46,8 @@ internal static class LukeRaidStartTcpTests
         { Run=runDungeons ? new LukeRaidRunPolicy("selftest/explicit-first-maze-no-economy",
             raw.Phases.SelectMany((phase,index)=>phase.Dungeons.Select(dungeon=>new LukeRaidMazeChoice(index,dungeon.Id,
                 catalog.Find(dungeon.Id)!.Mazes.First(maze=>maze.QuestConnectionTokens.Count==0).SourceOrdinal))).ToImmutableArray(),
-            LukeRaidRunEconomy.ControlledNoRewardsOrRevival) : null };
+            LukeRaidRunEconomy.ControlledNoOrdinaryRewards) : null };
+        if(runDungeons) policy=policy with {Revival=new("selftest/current-pvf-manual-shared-coins")};
         if(completePhases) policy=policy with {Completion=new("selftest/explicit-terminal-receipts",2,
             new(DayOfWeek.Sunday,new TimeOnly(6,0),TimeSpan.FromHours(8)),
             Enumerable.Range(0,2).Select(phase=>new LukePhaseCompletionPolicy(0,2,
@@ -83,6 +84,12 @@ internal static class LukeRaidStartTcpTests
                     var role=repository.Create(owner,candidate with {Level=90,AcceptedStoryLevel=90,CompletedQuests=[2903,4872],InitialLearning=learning});
                     var inventory=new InventoryService(resources.ItemResources.Items,resources.ItemResources.GoldLimits,resources.ItemResources.EpicPieces);
                     InventoryService.Commit(repository,owner,role,inventory.Grant(role,[new(raw.EntryCost!.ItemId,2*raw.EntryCost.Count)]));
+                    if(runDungeons)
+                    {
+                        var funded=repository.LoadCharacter(owner,0)!;
+                        InventoryService.Commit(repository,owner,funded,new(true,0,new(funded.Inventory,
+                            funded.Inventory with {ReviveCoins=30},"fixture_raid_coins")));
+                    }
                 }
                 var peer=Open(fixture,account,gamePort:endpoints[20],channelNumber:20);peer.Select();return peer;
         }

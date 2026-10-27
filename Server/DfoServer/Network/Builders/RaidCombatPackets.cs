@@ -5,6 +5,10 @@ namespace DfoServer.Network.Builders;
 
 internal static class RaidCombatPackets
 {
+    // 0239ED80只读u8已使用次数；02617674按phase资源上限判断，不是剩余数量。
+    public static byte[] PhaseCoins(byte used) => used <= LukeRaidRevivalPolicy.PhaseLimit
+        ? [used] : throw new ArgumentOutOfRangeException(nameof(used));
+
     // 02396E0E/1D：u8状态、i8阶段。只允许本模块已实现的阶段状态。
     public static byte[] State(AntonRaidBattleView view) => [(byte)view.State, checked((byte)view.Phase)];
 

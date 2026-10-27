@@ -19,6 +19,7 @@ internal static partial class LukeRaidRunTcpTests
             for(int run=0;run<definition.HpRaw;run++)
             {
                 var entered=Enter(members,captain,dungeon);Load(members);
+                if(phase==1&&run==0) ManualCoins(fixture,members,others,phase,20);
                 Clear(fixture,members,others,captain,entered[0],catalog,phase);
                 bool terminal=run+1==definition.HpRaw;
                 string field=phase==0?"phase0":"phase1";
@@ -68,7 +69,15 @@ internal static partial class LukeRaidRunTcpTests
                 That(replayed.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==2&&fixture.Snapshot()==saved&&
                     !replayed.Any(packet=>packet.Opcode is 587 or 601),
                     "乱序重放沿各自原receipt恢复，不重复发奖/计次/阶段演出");
-                foreach(var other in peers.Where(other=>other!=peer))Drain(other,true);
+                var otherFrames=peers.Where(other=>other!=peer).Select(other=>Drain(other,true)).ToArray();
+                if(phase==0&&peer==peers[^1])
+                {
+                    var recipients=otherFrames.Append(claimed.Concat(replayed).ToList()).ToArray();
+                    That(recipients.Length==8&&recipients.All(rows=>rows.Any(packet=>packet is {Kind:0,Opcode:778}&&packet.Body.SequenceEqual(new byte[]{0}))),
+                        "P1所有奖励确认后，全八人P2初始778为已用0，不是剩余20");
+                    foreach(var rows in recipients)
+                        That(!rows.Any(packet=>packet is {Kind:0,Opcode:778}&&packet.Body[0]!=0),"跨phase不能发布旧额度");
+                }
             }
             That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE instance_id=$p0 AND phase=$p1 AND raid_type=1",instance,phase)
                 is [[16L]],"每阶段八人两种奖项各一条，与Anton类型隔离");

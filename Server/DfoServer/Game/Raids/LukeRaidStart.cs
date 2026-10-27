@@ -14,6 +14,7 @@ internal sealed record LukeRaidStartPolicy(string Source, RaidScript ExecutionSc
 {
     public LukeRaidRunPolicy? Run { get; init; }
     public LukeRaidCompletionPolicy? Completion { get; init; }
+    public LukeRaidRevivalPolicy? Revival { get; init; }
 }
 
 internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
@@ -93,7 +94,7 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
     string? PrepareBattle(out AntonRaidBattle? battle)
     {
         battle = null;
-        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock); }
+        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival); }
         catch (InvalidDataException) { return "luke-execution-policy-invalid"; }
         catch (KeyNotFoundException) { return "luke-execution-policy-reference-invalid"; }
         catch (IndexOutOfRangeException) { return "luke-execution-policy-field-invalid"; }
@@ -113,6 +114,13 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
         if (policy.Completion is { } completion && (!AntonRaidBattle.ValidLukeCompletion(completion) || policy.Run is null ||
             rewardItems is null || completion.Phases.Any(phase => phase.Rewards.Offers.Any(offer => offer.Grants.Any(grant =>
                 grant.Count <= 0 || !rewardItems.TryGet(grant.ItemId, out _)))))) return "luke-completion-policy-unavailable";
+        if (policy.Revival is { } revival && (string.IsNullOrWhiteSpace(revival.Source) || policy.Run is null ||
+            original.Phases.Length != 2 || original.Phases[0].Declarations.Any(row => row.Tag == "[phase coin limit]") ||
+            original.Phases[1].Declarations.Count(row => row.Tag == "[phase coin limit]" && row.Values.Length == 1 &&
+                row.Values[0].Number == LukeRaidRevivalPolicy.PhaseLimit) != 1 ||
+            definition.Resources.EntryCatalog is not { } revivalCatalog ||
+            original.Phases[0].Dungeons.Any(row => revivalCatalog.Find(row.Id)?.CoinLimit != LukeRaidRevivalPolicy.DungeonLimit)))
+            return "luke-revival-policy-unavailable";
         if (policy.Run is { } run)
         {
             if (definition.Resources.EntryCatalog is not { } catalog) return "luke-run-catalog-unavailable";
