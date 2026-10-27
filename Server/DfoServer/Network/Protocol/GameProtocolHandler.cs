@@ -137,7 +137,9 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                             "expert_job_customer_owner_actor", Guard);
                         await context.Notify(NotiPacketType.EXPERT_JOB_INFO, info, "expert_job_customer_owner_info", Guard);
                         projection.Refresh(context);
-                    }));
+                    }),
+                guardedProbe: (opcode, body, action, guard) => sender.TryPost(0, opcode, body, action,
+                    () => !connection.Stop.IsCancellationRequested && session.Ready && session.Selected is not null && guard()));
             nativeRegistration = native?.Register(context);
             session.SetPeerAccount(nativeRegistration?.Token ?? 0);
             adventure?.Prepare(context);
