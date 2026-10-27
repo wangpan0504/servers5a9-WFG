@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Creatures;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
@@ -19,6 +20,8 @@ internal static class CreatureTransportTcpTests
         var assets = resources.ItemResources;
         That(assets.Items.ActionConsumable(10007991) is { Label: "[creature transport stone]", Parameters: [4012] },
             "实测10007991使用当前PVF动作，不将规则编号4012当道具消耗数量");
+        That(assets.Items.ActionConsumable(490705421) is { Label: "[creature transport stone]", Parameters: [>= 0] },
+            "421的365天邮件仍要求当前PVF真实跨界动作定义");
         var repo = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
         ushort senderId, recipientId;
@@ -31,11 +34,11 @@ internal static class CreatureTransportTcpTests
             {
                 Level = 60, AcceptedStoryLevel = 1, Skills = profile.Skills,
                 Inventory = starter with { Items = [.. starter.Items,
-                    new(0, new(InventoryListType.Main,82), new(10007991, GameWorld.Items.ItemKind.Consumable,2)),
+                    new(0, new(InventoryListType.Main,82), new(490705421, GameWorld.Items.ItemKind.Consumable,2)),
                     new(0, new(InventoryListType.Pet,16), new(63008, GameWorld.Items.ItemKind.Creature,0)
                         { EnchantCardId=1234, Extension27=99, TradeRestriction=1 })
                     { Creature = new() { Name="PetKeep", Level=5, Experience=50, Satiety=41,
-                        ExpireTime=(int)clock.GetUtcNow().ToUnixTimeSeconds()+86400 } } ] }
+                        ExpireTime=(int)clock.GetUtcNow().ToUnixTimeSeconds()+100 } } ] }
             });
             senderId = sender.Id;
             pet = sender.Inventory.Find(new(InventoryListType.Pet,16))!;
@@ -44,15 +47,21 @@ internal static class CreatureTransportTcpTests
             recipientId = recipient.Id;
             using var other = owners.Acquire(fixture.Options.DevelopmentAccount+"-other", () => { });
             var foreign = repo.Create(other, new("ForeignPet",resources.Towns.Room,resources.Towns.InitialReturn));
-            var service = new CreatureTransportService(assets.Items.Get,assets.Items.ActionConsumable,assets.Creatures,repo,clock);
+            var policy = new CreatureTransportMailPolicy(1);
+            var service = new CreatureTransportService(assets.Items.Get,assets.Items.ActionConsumable,assets.Creatures,repo,() => policy,clock);
             That(service.Plan(sender,CharacterRosterEntry.FromCharacter(foreign),new(82,16,1,1),"[seria room]",out var forged)==0,
                 "源规则规划不猜测账号归属，跨账号身份须由提交事务重新确认");
             string before = State();
             Reject<InvalidOperationException>(() => service.Commit(owner,forged!),"持久化拒绝伪造的其他账号收件人");
             That(State()==before,"跨账号伪造不会修改源、附件、邮件或任何角色快照");
+            That(service.Plan(sender,CharacterRosterEntry.FromCharacter(recipient),new(82,16,1,1),"[seria room]",out var staleRoster)==0,
+                "当前真实收件名册可规划");
+            // 真实名册有空槽时，行号1不等于持久槽7，也不等于数据库角色ID。
+            fixture.Sql("UPDATE characters SET slot=7 WHERE id=$p0", recipientId);
+            before = State();
+            Reject<InvalidOperationException>(() => service.Commit(owner,staleRoster!),"持久化拒绝已变动的旧目标名册槽");
+            That(State()==before,"旧目标名册行拒绝不修改原资产");
         }
-        // 真实名册有空槽时，行号1不等于持久槽7，也不等于数据库角色ID。
-        fixture.Sql("UPDATE characters SET slot=7 WHERE id=$p0", recipientId);
         await fixture.StartAsync();
         uint mailId;
         using (var peer = Open(fixture))
@@ -79,6 +88,11 @@ internal static class CreatureTransportTcpTests
                 fixture.Query("SELECT COUNT(*) FROM character_inventory_slots WHERE item_uid=$p0",pet.Uid) is [[0L]],
                 "有限期、名称、经验及饱食保持不变，附件托管期间没有第二份真实库存槽");
             mailId = Convert.ToUInt32(fixture.Query("SELECT mail_id FROM mailbox_messages WHERE recipient_id=$p0",recipientId).Single().Single());
+            long created = clock.GetUtcNow().ToUnixTimeSeconds();
+            That(fixture.Query("SELECT created_at,expires_at FROM mailbox_messages WHERE mail_id=$p0",mailId)
+                is [[var sentAt,var expiresAt]] && Convert.ToInt64(sentAt)==created && Convert.ToInt64(expiresAt)==created+365L*86400 &&
+                pet.Creature!.ExpireTime==created+100,
+                "557提交的421邮件保存365天，原宠物自身100秒寿命不延长");
             string committed = State();
             peer.Send(557, Request(1)); peer.Expect(1,557,[0,17,0]); peer.Barrier();
             That(State()==committed, "目标已转出后的重放不再次扣剩余石头或生成邮件");

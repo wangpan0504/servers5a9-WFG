@@ -100,6 +100,7 @@ internal static class ServerRuntime
         var enchantmentService = new InventoryEnchantmentService(itemResources.Items, itemResources.Enchantments, clock);
         var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var mailboxProjection = new MailboxProjection(mailbox, online);
+        var creatureTransportMailPolicy = new CreatureTransportMailPolicy(1);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")),
             CharacterEmotionCatalog.Load(pvf));
         var questParameters = QuestRewardParameterCatalog.Load(pvf);
@@ -499,7 +500,7 @@ internal static class ServerRuntime
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler,
                 new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock)),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
-                itemResources.Items.ActionConsumable, itemResources.Creatures, repository, clock), inventoryProjection, log),
+                itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log),
             new QuestConditionHandler(log, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, questRooms, questParameters, growth),
             new QuestCompletionHandler(quests, questParameters, itemResources.Items,
                 itemResources.GoldLimits, itemResources.EpicPieces, growth, log, levelProjection, questProjection, creatureProjection, expertJobs),
