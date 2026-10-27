@@ -9,6 +9,15 @@ internal static class RaidCombatPackets
     public static byte[] PhaseCoins(byte used) => used <= LukeRaidRevivalPolicy.PhaseLimit
         ? [used] : throw new ArgumentOutOfRangeException(nameof(used));
 
+    // 597首字节为计时槽；本批只使用已证攻略标题的key0，不推导待命状态。
+    public static byte[] PhaseRemaining(uint seconds)
+    {
+        if (seconds > 86400) throw new ArgumentOutOfRangeException(nameof(seconds));
+        byte[] body = new byte[5];
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1), seconds);
+        return body;
+    }
+
     // 02396E0E/1D：u8状态、i8阶段。只允许本模块已实现的阶段状态。
     public static byte[] State(AntonRaidBattleView view) => [(byte)view.State, checked((byte)view.Phase)];
 
