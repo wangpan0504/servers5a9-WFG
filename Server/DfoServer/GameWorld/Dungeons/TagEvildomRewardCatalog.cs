@@ -31,6 +31,9 @@ internal sealed class TagEvildomRewardCatalog
         if (weekly.Values is not [{ Type: 0, Value: 3 }])
             throw new InvalidDataException("再战周额度与当前三队保护合同不一致");
         WeeklyLimit = 3;
+        var returning = Required("tag tournament return village time", false);
+        if (returning.Values is not [{ Type: 0, Value: 5 }, { Type: 0, Value: 30 }, { Type: 0, Value: 10 }])
+            throw new InvalidDataException("再战关闭入场与强制回城时刻不符合本版日界合同");
         Hard = Read("clear reward");
         Easy = Read("clear reward easy mode");
         // 只标识这张已解释的小奖励表，不读取或校验整份PVF哈希。

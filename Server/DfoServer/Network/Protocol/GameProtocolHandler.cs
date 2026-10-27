@@ -29,7 +29,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null,
     DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null, Action<GameConnectionContext>? prepareDungeon = null, bool enableLukeRaidStart = false,
     DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
-    ImperialArenaProjection? imperialArena = null) : IConnectionProtocol
+    ImperialArenaProjection? imperialArena = null, TagEvildomRunProjection? tagEvildomRun = null) : IConnectionProtocol
 {
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
@@ -73,6 +73,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var revival = new DungeonRevivalProjection(context, log, time);
         var tagRevival = new TagEvildomRevivalProjection(context, log, time);
         var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory);
+        var tagDeadline = tagEvildomRun is null ? null : new TagEvildomDeadlineProjection(context, projection, tagEvildomRun, log, SqliteBusyRetry.IsBusy, time);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);
@@ -183,6 +184,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     await context.CommandGate.WaitAsync(connection.Stop);
                     try
                     {
+                    if (tagDeadline is not null) await tagDeadline.CheckAsync();
                     if (session.AdvanceQuestCycle(DateTimeOffset.UtcNow) is { } cycle)
                     {
                         bool Guard() => session.CanPublishQuestCycle(cycle);
@@ -236,6 +238,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         await dailyFatigue.RefreshAsync();
                         await revival.RefreshAsync();
                         await tagRevival.RefreshAsync();
+                        if (tagDeadline is not null) await tagDeadline.RefreshAsync();
                         if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
                         await context.Dazzlement.RefreshAsync();
                         if (context.Premiums is { } premiums) await premiums.RefreshAsync();
@@ -259,6 +262,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await dailyFatigue.DisposeAsync();
             await revival.DisposeAsync();
             await tagRevival.DisposeAsync();
+            if (tagDeadline is not null) await tagDeadline.DisposeAsync();
             if (context.BoosterUses is { } boosterUses) await boosterUses.DisposeAsync();
             await context.Dazzlement.DisposeAsync();
             if (context.Creatures is { } creatureClock) await creatureClock.DisposeAsync();

@@ -29,7 +29,8 @@ internal static partial class TagEvildomTcpTests
             That(TagEvildomEntryPolicy.Supports(definition), $"本版TAG{id}资源准入声明完整");
             foreach (var source in definition.Mazes)
             {
-                var admission = new TagEvildomAdmission(configuration, first, second, id, new string('a', 64), 1);
+                var admission = new TagEvildomAdmission(configuration, first, second, id, new string('a', 64), 1)
+                    { MazeOrdinal = source.SourceOrdinal };
                 That(DungeonEntryPlan.TryCreate(catalog, first, (uint)id, 0, 0, out var entry, out var reason,
                     draw: _ => throw new InvalidOperationException("15已冻结迷宫，16不得重抽"),
                     quests: SelfTestCatalogs.Quests(resources.Archive), tagEvildom: admission, tagMaze: source.SourceOrdinal),

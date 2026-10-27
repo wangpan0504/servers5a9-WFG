@@ -50,13 +50,14 @@ internal static partial class TagEvildomTcpTests
         "SELECT * FROM character_skill_points ORDER BY character_id,context", "SELECT * FROM character_dungeon_state ORDER BY character_id",
         "SELECT * FROM account_wallets ORDER BY account", "SELECT * FROM account_currency_balances ORDER BY account,currency_kind",
         "SELECT * FROM account_tag_evildom_configuration ORDER BY account", "SELECT * FROM account_tag_evildom_runs ORDER BY account,instance_id",
+        "SELECT * FROM account_tag_evildom_challenges ORDER BY account,day,team_index",
         "SELECT * FROM account_tag_evildom_clearances ORDER BY account,receipt", "SELECT * FROM mailbox_messages ORDER BY mail_id",
         "SELECT * FROM mailbox_attachments ORDER BY attachment_id", "SELECT * FROM mailbox_audit_log ORDER BY audit_id"
     }.Select(sql => fixture.Snapshot(sql)));
 
     static async Task VerifyClearAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        var clock = new DailyBoosterTestClock(DateTimeOffset.UtcNow);
+        var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-27T00:00:00Z"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "tag-evildom-clear"), resources: resources, clock: clock);
         Character first, second;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -134,7 +135,11 @@ internal static partial class TagEvildomTcpTests
                 "重复终点不重抽、不重发1679、不增邮件/次数/普通经验；回放counts/alarm允许幂等");
             peer.Send(46, new byte[4]); peer.Barrier();
             That(RewardState(fixture) == committed, "TAG结算不能借普通翻牌产生第二份资产");
-            ReturnTag(peer);
+            clock.Advance(DateTimeOffset.Parse("2026-10-28T05:40:00+08:00") - clock.GetUtcNow());
+            DailyReturn(peer, 3, counts);
+            That(fixture.Query("SELECT state FROM account_tag_evildom_challenges") is [[2L]] &&
+                fixture.Query("SELECT count(*) FROM account_tag_evildom_clearances") is [[1L]],
+                "已提交结果页05:40也主动退场，保持真实完成及奖励，不转成失败罚次");
             peer.Send(15, Build(w => { w.Write(9608u); w.Write((ushort)0); })); peer.Send(16, Selection(9608));
             peer.Expect(1, 15, [0,1,0]); peer.Expect(0,1709); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
             peer.Send(1663); peer.Expect(1,1663,Accepted(Teams(0,1)));

@@ -12,6 +12,7 @@ internal static partial class SessionPlanningTests
     {
         await TagEvildomInstalledRunAsync();
         TagEvildomClearTransaction();
+        TagEvildomChallengeTransaction();
         using (var fixture = new Fixture())
         {
             var session = fixture.Session;

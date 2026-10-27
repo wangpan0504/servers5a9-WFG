@@ -6,6 +6,7 @@ namespace DfoServer.Game.TagEvildom;
 internal sealed record TagEvildomAdmission(TagEvildomConfiguration Configuration, Character Primary, Character Standby,
     int DungeonId, string ResourceKey, long AdmittedAt)
 {
+    public int MazeOrdinal { get; init; }
     public int TeamIndex => Configuration.SelectedTeam;
     public TagEvildomTeam Team => Configuration.Teams[TeamIndex];
     public void Validate()
@@ -13,7 +14,7 @@ internal sealed record TagEvildomAdmission(TagEvildomConfiguration Configuration
         Configuration.Validate();
         new TagEvildomParticipants(Primary, Standby, Configuration.Revision).Validate();
         if (Team != new TagEvildomTeam(Primary.Id, Standby.Id) || DungeonId is not (9608 or 400000095) ||
-            ResourceKey.Length != 64 || ResourceKey.Any(value => !char.IsAsciiHexDigitLower(value)) || AdmittedAt < 0)
+            ResourceKey.Length != 64 || ResourceKey.Any(value => !char.IsAsciiHexDigitLower(value)) || AdmittedAt < 0 || MazeOrdinal is < 0 or > 4)
             throw new InvalidDataException("再战准入必须固定完整队首、备用及本次资源身份");
     }
 }

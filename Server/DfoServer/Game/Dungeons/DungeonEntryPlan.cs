@@ -193,7 +193,7 @@ internal sealed record DungeonEntryPlan(
         {
             if (tagEvildom is null || tagEvildom.DungeonId != dungeonId || !ReferenceEquals(tagEvildom.Primary, character) ||
                 questId != 0 || difficulty != 0 || isReplay || practice || hellParty || hellLegend || partyRoute is not null ||
-                tagMaze is null || !TagEvildomEntryPolicy.Supports(definition))
+                tagMaze is null || tagMaze != tagEvildom.MazeOrdinal || !TagEvildomEntryPolicy.Supports(definition))
             { reason = "tag-evildom-runtime-required"; return false; }
             tagEvildom.Validate();
         }

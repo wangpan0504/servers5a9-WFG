@@ -96,6 +96,7 @@ internal static partial class TagEvildomTcpTests
                 That(Economy(fixture) == beforeEntry && fixture.Query("SELECT count(*) FROM account_tag_evildom_clearances") is [[0L]],
                     "双难度真实15/16/37、切角/单角12秒复活/双死42仅推进原Run，不扣疲劳币、不发奖励；回城自动重建下一轮pair");
             }
+            status = Gathering(4);
             peer.Send(1663); peer.Expect(1, 1663, Accepted(empty));
             peer.Expect(0, 1677, empty); peer.Expect(0, 1678, status); peer.Barrier();
             peer.Send(15, Build(w => { w.Write(9608u); w.Write((ushort)0); })); peer.Send(16, Selection(9608));
@@ -143,6 +144,7 @@ internal static partial class TagEvildomTcpTests
         await VerifyExpiredStandbyAsync(fixture, resources, endpoints[46], primary, standby);
         await fixture.StopAsync();
         await VerifyClearAsync(source, root, resources);
+        await VerifyDailyScheduleAsync(source, root, resources);
         Console.WriteLine($"PASS {Count - checks} 再战魔界真实频道、编队重置、双角色资料、准入拒绝与重登TCP断言");
 
         string Assets() => fixture.Snapshot("SELECT id,revision,gold FROM characters ORDER BY id") +
@@ -166,8 +168,8 @@ internal static partial class TagEvildomTcpTests
     static byte[] Setting(int first, int second, byte region = 2) => Build(w =>
     { w.Write(Enumerable.Repeat((byte)0xAC, 13).ToArray()); w.Write(Teams(first, second, region)); w.Write(0); w.Write(0x78563412); });
     static byte[] Accepted(byte[] teams) => Build(w => { w.Write((byte)1); w.Write(new byte[13]); w.Write(teams); w.Write(0); w.Write(0); });
-    static byte[] Gathering() => Build(w =>
-    { w.Write(0); w.Write(0); w.Write(-1); w.Write(3); for (int i = 0; i < 6; i++) { w.Write((byte)0); w.Write(-1); } });
+    static byte[] Gathering(int mode = 3) => Build(w =>
+    { w.Write(0); w.Write(0); w.Write(-1); w.Write(mode); for (int i = 0; i < 6; i++) { w.Write((byte)0); w.Write(-1); } });
 
     static void ReadConfiguration(TcpPeer peer, byte[] teams, byte[] gathering)
     { peer.Expect(0, 1677, teams); peer.Expect(0, 1678, gathering); peer.Barrier(); }

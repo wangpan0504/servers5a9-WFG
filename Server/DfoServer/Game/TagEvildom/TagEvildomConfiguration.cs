@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.TagEvildom;
 
@@ -75,6 +77,9 @@ internal sealed record TagEvildomConfiguration(long Revision, int SelectedTeam, 
 // 编队配置与通关账本分开；此合同不接收或修改客户端提供的清图次数、保护名单或资产。
 internal interface ITagEvildomConfigurationStore
 {
+    int? ReadTagEvildomRoute(AccountOwners.Lease owner, int day, int teamIndex);
+    Character CommitTagEvildomReturn(AccountOwners.Lease owner, Character expected, Guid instance,
+        Location position, Location? returnPoint, InventoryPlan? inventory, int day);
     TagEvildomConfiguration ReadTagEvildomConfiguration(AccountOwners.Lease owner);
     TagEvildomState ReadTagEvildomState(AccountOwners.Lease owner, TagEvildomPeriod period);
     bool MatchesTagEvildomCharacters(AccountOwners.Lease owner, TagEvildomCharacters expected);
@@ -95,4 +100,7 @@ internal readonly record struct TagEvildomPeriod(int Day, int Week)
 }
 
 internal sealed record TagEvildomState(TagEvildomConfiguration Configuration, int UsedThisWeek,
-    ImmutableHashSet<ushort> ProtectedMembers);
+    ImmutableHashSet<ushort> ProtectedMembers)
+{
+    public int Mode { get; init; } = 3;
+}
