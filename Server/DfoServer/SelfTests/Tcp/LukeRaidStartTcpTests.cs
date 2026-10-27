@@ -23,7 +23,9 @@ internal static class LukeRaidStartTcpTests
 
     public static Task RunTimersAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,timed:true);
 
-    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false)
+    public static Task RunPhaseTimeoutAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,phaseTimeout:true);
+
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false)
     {
         var definition=RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
             SelfTestCatalogs.Dungeons(resources.Archive),resources.ItemResources.Items).Find(1)!;
@@ -71,7 +73,10 @@ internal static class LukeRaidStartTcpTests
             Enumerable.Range(0,2).Select(phase=>new LukePhaseCompletionPolicy(0,2,
                 new("selftest/explicit-phase-"+phase,[new(0,1,[new(10400,1)],[]),new(1,1,[new(10400,1)],[])],
                     new(0,(byte)phase,1,0,0,0)))).ToImmutableArray(),LukeParticipationCutoff.TerminalCommittedFacts)};
-        await using var fixture=new TcpTestFixture(source,Path.Combine(root,timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy);
+        var phaseClock = phaseTimeout ? new LukeRaidClockTests.Clock(DateTimeOffset.UtcNow) : null;
+        if(phaseTimeout) policy=policy with {PhaseTimeout=new("selftest/local-resource-seconds",
+            raw.Headers.Single(row=>row.Tag=="[phase time over]").Values.Select(value=>value.Number).ToImmutableArray())};
+        await using var fixture=new TcpTestFixture(source,Path.Combine(root,phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
         await fixture.StartAsync();
         var endpoints=ChannelTcpTests.Endpoints(fixture); var repository=new CharacterRepository(fixture.Database);
         var owners=new AccountOwners(); List<TcpPeer> peers=[];
@@ -133,6 +138,18 @@ internal static class LukeRaidStartTcpTests
                 }
                 var result=new List<WirePacket>[members.Count];result[leaderIndex]=leading;
                 for(int i=0;i<members.Count;i++)if(i!=leaderIndex)result[i]=ReadStart(members[i],false,replay);
+                if(phaseTimeout)
+                    for(int i=0;i<members.Count;i++)
+                    {
+                        Drain(members[i],packet=>result[i].Add(packet));
+                        var countdown=result[i].Where(packet=>packet is {Kind:0,Opcode:597}).ToArray();
+                        That(countdown.Length==1&&countdown[0].Body.Length==5&&countdown[0].Body[0]==0,
+                            "真实Runtime每成员收到一次5B攻略计时597/key0，不以允许旁路代替实际收到");
+                        That(U32(countdown[0].Body,1)==(replay?2093u:2100u),
+                            "首次为本服35分钟，推进7秒后重放只给原截止点剩余2093秒，不增加时长");
+                        if(!replay)That(result[i].FindIndex(packet=>packet.Opcode==587)<result[i].FindIndex(packet=>packet.Opcode==597),
+                            "同一实际连接587先写出，随后才收到597");
+                    }
                 return result;
             }
             throw new InvalidOperationException("Luke开团门禁连续32次Busy，保留现场");
@@ -180,6 +197,7 @@ internal static class LukeRaidStartTcpTests
             string committed=fixture.Snapshot();
             // 首次发布已写出；重试恢复名单/资产/图状态，但不能重播同阶段动画。
             foreach(var peer in peers)Drain(peer);
+            if(phaseTimeout)phaseClock!.Advance(7);
             var repeated=await StartAsync(peers,0,true);
             for(int index=0;index<peers.Count;index++)
             {
@@ -254,7 +272,8 @@ internal static class LukeRaidStartTcpTests
                     is [[long count]]&&count==raw.EntryCost.Count,"满团成功只扣一次门票，失败未留部分扣费");
             }
 
-            if(timed) await LukeRaidRunTcpTests.TimersAsync(fixture,peers.ToArray());
+            if(phaseTimeout) LukeRaidRunTcpTests.PhaseTimeout(fixture,peers.ToArray(),phaseClock!);
+            else if(timed) await LukeRaidRunTcpTests.TimersAsync(fixture,peers.ToArray());
             else if(completePhases) LukeRaidRunTcpTests.Phases(fixture,peers.ToArray(),raw,
                 full[0].Single(p=>p.Opcode==9).Body,catalog);
             else if(runDungeons) LukeRaidRunTcpTests.Parties(fixture,peers.ToArray(),raw.Phases[0].Dungeons.Select(row=>row.Id).ToArray(),
@@ -299,6 +318,7 @@ internal static class LukeRaidStartTcpTests
         }
         finally{foreach(var peer in peers)peer.Dispose();}
         await fixture.StopAsync();
+        if(phaseTimeout) LukeRaidRunTransactionTests.Run(resources,definition,policy,phaseExpiry:true);
         if(completePhases)
         {
             LukeRaidLifecycleTransactionTests.Run(resources,definition,policy);
@@ -315,7 +335,7 @@ internal static class LukeRaidStartTcpTests
             That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE state=2") is [[7L]],
                 "删除精确角色不清同团其它七人的已提交通关");
         }
-        if(runDungeons&&!completePhases&&!timed)
+        if(runDungeons&&!completePhases&&!timed&&!phaseTimeout)
         {
             // StopAsync已收尾日志writer；不把正在刷新的JSON尾行当作完整事件。
             var clears=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="raid_run_clear").Select(row=>row.GetProperty("Detail")).ToArray();
@@ -358,7 +378,7 @@ internal static class LukeRaidStartTcpTests
         That(at+16<=body.Length&&body[at]==1&&body[at+7]==expected,"Luke记录+DC与Runtime实际可用启动能力一致");
     }
 
-    static void Validate(WirePacket packet) => That(packet.Kind==0&&packet.Opcode is
+    static void Validate(WirePacket packet) => That(packet.Kind==0 && packet.Opcode==597 && packet.Body.Length==5 && packet.Body[0]==0 && U32(packet.Body,1)<=86400 || packet.Kind==0&&packet.Opcode is
         2 or 3 or 4 or 6 or 7 or 8 or 9 or 11 or 13 or 14 or 22 or 23 or 24 or 26 or 153 or 583 or 586 or 590 or 591 or 592 or 593 or 594 or 598,
         $"Luke夹具仅消费已证旁路通知：{packet.Kind}/{packet.Opcode}");
 
@@ -394,7 +414,7 @@ internal static class LukeRaidStartTcpTests
                 }
                 Bytes(packet.Body,[1],"666已证单字节成功");ack=true;
             }
-            else That(packet.Kind==0&&packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 13 or 14 or 22 or 23 or 24 or 26 or 153 or 583 or 586 or 591 or 594 or 598,
+            else That(packet.Kind==0&&packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 13 or 14 or 22 or 23 or 24 or 26 or 153 or 583 or 586 or 591 or 594 or 597 or 598,
                 $"Luke启动只消费已证通知：{packet.Kind}/{packet.Opcode}");
             if(replay&&frames.Count(p=>p.Opcode==586)==15&&frames.Any(p=>p.Opcode==583))started=true;
         }
