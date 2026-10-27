@@ -52,6 +52,7 @@ internal static class DevilContractTcpTests
         string migrationAssets = MigrationAssets();
         // 恢复真实v48缺列结构，验证本次权益迁移。
         fixture.Sql("DROP TABLE character_skill_switch_inventory_items; DROP TABLE character_skill_switch_inventory; DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses");
+        DatabaseSchemaTests.RewindRaidLifecycle(fixture.Database);
         fixture.Sql("ALTER TABLE characters DROP COLUMN devil_usage; ALTER TABLE characters DROP COLUMN stamina_until; ALTER TABLE characters DROP COLUMN daily_booster_usage; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=48");
         That(fixture.Query("PRAGMA user_version") is [[48L]] &&
             fixture.Query("SELECT count(*) FROM sqlite_schema WHERE name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[0L]] &&

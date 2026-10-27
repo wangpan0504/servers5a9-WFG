@@ -221,6 +221,7 @@ internal static class SqliteMigrations
         new(106, "普通卢克单人首击掉落日资格", OrdinaryLukeDropSchema.Upgrade),
         new(107, "眩惑之塔账号周绑定与角色日入场", DazzlementTowerSchema.Upgrade),
         new(108, "攻坚阶段奖励原子回执", static (db, tx) => Execute(db, tx, RaidRewardSchema.Definition)),
+        new(109, "团本类型隔离与卢克两阶段生命周期", RaidLifecycleSchema.Upgrade),
     ];
 
     internal const string BossSelectionBuffSchema = """
@@ -2119,7 +2120,8 @@ internal static class SqliteMigrations
             ("character_pvp_training_skills",PvpTrainingSkillsSchema),
             ("account_pvp_private_characters",PvpPrivateCharacterSchema),
             ("character_operation_hope_reward_receipts",OperationHopeRewardSchema.Definition),
-            ("character_raid_reward_receipts",RaidRewardSchema.Definition.Split(';')[0].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_raid_runs",RaidLifecycleSchema.Definition),
+            ("character_raid_reward_receipts",RaidLifecycleSchema.RewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
             (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),
             (TagEvildomRunSchema.Table,TagEvildomRunSchema.Definition),

@@ -119,6 +119,7 @@ internal static class ClientSettingsStoreTests
         Check(Same(reopened.Load(replacement, f.First.Id).Hotkeys, keys), "拒绝旧owner后存档仍可恢复");
 
         DatabaseSchemaTests.RemoveAdventureSchema(f.Path);
+        DatabaseSchemaTests.RewindRaidLifecycle(f.Path);
         f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; DROP TABLE account_quick_chat; PRAGMA user_version=26");
         string existing = f.ExistingSettings();
         _ = new ClientSettingsRepository(f.Path);
@@ -131,6 +132,7 @@ internal static class ClientSettingsStoreTests
             "普通与旧库快照均检查新增魔王字段，不能因迁移列序变化而忽略字段值");
         f.Execute($"UPDATE characters SET stamina_until=0 WHERE id={f.First.Id}");
         DatabaseSchemaTests.RemoveAdventureSchema(f.Path);
+        DatabaseSchemaTests.RewindRaidLifecycle(f.Path);
         f.Execute("ALTER TABLE characters DROP COLUMN emotion; DROP TABLE account_hotkey_settings; PRAGMA user_version=26; CREATE TABLE account_hotkey_settings(collision INTEGER)");
         string rollbackAssets = f.Assets();
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "键位迁移碰撞不吞错误");
@@ -427,6 +429,7 @@ internal static class ClientSettingsStoreTests
     {
         using var f = new Fixture();
         DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
+        DatabaseSchemaTests.RewindRaidLifecycle(f.Path);
         f.Execute("DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5");
         string assets = f.Assets(includeAcceptance: false);
         var migrated = new ClientSettingsRepository(f.Path);
@@ -446,6 +449,7 @@ internal static class ClientSettingsStoreTests
         f.Integrity();
 
         DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
+        DatabaseSchemaTests.RewindRaidLifecycle(f.Path);
         f.Execute("DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; DROP TABLE character_client_settings; DROP TABLE account_client_settings; PRAGMA user_version=5; CREATE TABLE character_client_settings(collision INTEGER)");
         assets = f.Assets(includeAcceptance: false);
         Reject<SqliteException>(() => new ClientSettingsRepository(f.Path), "v6 第二条 DDL 冲突回滚整个升级");
@@ -467,6 +471,7 @@ internal static class ClientSettingsStoreTests
         f.Service.SaveGameOptions(f.Owner, game);
         f.Service.SaveCharacterOptions(f.Owner, f.First.Id, character);
         DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
+        DatabaseSchemaTests.RewindRaidLifecycle(f.Path);
         f.Execute("DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6");
         string assets = f.Assets(includeAcceptance: false), existing = f.ExistingSettings();
         var upgraded = new ClientSettingsRepository(f.Path);
@@ -481,6 +486,7 @@ internal static class ClientSettingsStoreTests
         f.Integrity();
 
         DatabaseSchemaTests.RewindQuestSystemToV13(f.Path);
+        DatabaseSchemaTests.RewindRaidLifecycle(f.Path);
         f.Execute("DROP TABLE IF EXISTS character_dungeon_fatigue_receipts; DROP TABLE IF EXISTS character_fatigue; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_dungeon_pickup_receipts; DROP TABLE character_dungeon_loot_receipts; DROP TABLE character_dungeon_state; DROP TABLE character_game_settings; PRAGMA user_version=6; CREATE TABLE character_game_settings(collision INTEGER)");
         assets = f.Assets(includeAcceptance: false);
         existing = f.ExistingSettings();

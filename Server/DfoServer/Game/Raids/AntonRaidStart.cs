@@ -12,7 +12,11 @@ namespace DfoServer.Game.Raids;
 
 internal sealed record RaidStarted(Guid InstanceId, DateTimeOffset StartedAt,
     ImmutableArray<(ushort Character, byte Slot, byte Squad)> Participants, byte Phase = 0);
-internal sealed record RaidStartReservation(RaidActor Actor, Character Expected, Location Position, InventoryPlan Inventory);
+internal sealed record RaidLifecycleAdmission(string Source, DateTimeOffset At, int? Week = null, int? WeeklyLimit = null);
+internal sealed record RaidStartReservation(RaidActor Actor, Character Expected, Location Position, InventoryPlan Inventory)
+{
+    public RaidLifecycleAdmission? Lifecycle { get; init; }
+}
 internal sealed record RaidStartReceipt(RaidParty Party, ImmutableArray<RaidStartReservation> Reservations,
     ImmutableArray<Character> Characters, PartyNotice[] Squads, RaidCost Cost)
 {

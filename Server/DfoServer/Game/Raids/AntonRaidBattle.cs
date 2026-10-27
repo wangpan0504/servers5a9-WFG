@@ -10,7 +10,13 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     ImmutableDictionary<RaidTimer, int> Timers)
 {
     public ImmutableDictionary<int, RaidClause> Deferred { get; init; } = ImmutableDictionary<int, RaidClause>.Empty;
+    public ImmutableDictionary<int, long> DungeonGenerations { get; init; } = ImmutableDictionary<int, long>.Empty;
+    public ImmutableDictionary<RaidTimer, long> TimerGenerations { get; init; } = ImmutableDictionary<RaidTimer, long>.Empty;
+    public long TimerSequence { get; init; }
 }
+internal enum RaidStageFactKind { EnterDungeon, EnterMap, GiveUpDungeon, PhaseEnd }
+// 只由已复验的正式Run或阶段deadline构造；不接客户端任意symbol/地图号。
+internal readonly record struct RaidStageFact(RaidStageFactKind Kind, int Phase, int Dungeon = 0, int Map = 0);
 internal sealed record AntonRaidBattleChange(AntonRaidBattleView Before, AntonRaidBattleView After);
 
 // 正式实例的阶段聚合。输入只有已绑定副本的清图事实、服务端计时器和服务端机制结果；不执行客户端 SET。
@@ -52,7 +58,12 @@ internal sealed partial class AntonRaidBattle
         {
             if (Kind != RaidKind.Luke || !actor.IsCurrent || current.Revision != 0 || members.Count >= 8 ||
                 members.Keys.Any(m => m.Character == actor.Character)) return false;
-            members.Add(actor, []);
+            if (lukeCompletion is { } completion)
+            {
+                if (!Join(actor, completion.Phases.Select(phase => phase.Rewards).ToImmutableArray())) return false;
+            }
+            else members.Add(actor, []);
+            originalLukeMembers.Add(actor.Character, actor);
             return true;
         }
     }
@@ -77,11 +88,10 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (!actor.IsCurrent || prepared.Instance != Instance || prepared.Character != actor.Character ||
+            if (!actor.IsCurrent || prepared.RaidType != Kind || !RequiresReward(actor, current.Phase) || prepared.Instance != Instance || prepared.Character != actor.Character ||
                 prepared.Phase != current.Phase || current.State != AntonRaidBattleState.Reward || !members.TryGetValue(actor, out var policy) || policy.IsEmpty) return false;
             rewards.Add((actor.Character, current.Phase, prepared.Kind));
-            return members.All(m => m.Value[current.Phase].Offers.Select(o => o.Kind).Distinct()
-                .All(kind => rewards.Contains((m.Key.Character, current.Phase, kind))));
+            return AllRewardsConfirmed(current.Phase);
         }
     }
 
@@ -99,12 +109,23 @@ internal sealed partial class AntonRaidBattle
 
     public bool IsCurrent(AntonRaidBattleView view) { lock (gate) return ReferenceEquals(current, view); }
 
-    public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton)
+    internal (int Id, int Value)[] SymbolSnapshot(AntonRaidBattleView view) =>
+        script.Symbols.OrderBy(row => row.Value).Select(row => (row.Value, view.Symbols[row.Key])).ToArray();
+    internal (int Id, RaidDungeonState State)[] DungeonSnapshot(AntonRaidBattleView view) =>
+        script.Phases.SelectMany(phase => phase.Dungeons).Select(d => d.Id).Distinct().Order()
+            .Select(id => (id, view.Dungeons.GetValueOrDefault(id, RaidDungeonState.Hide))).ToArray();
+
+
+    public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton,
+        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
             throw new InvalidDataException("攻坚阶段资源不完整或超出已证协议范围");
         if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        if (completion is not null && (kind != RaidKind.Luke || !ValidLukeCompletion(completion)))
+            throw new InvalidDataException("卢克阶段策略不完整");
+        lukeCompletion = completion; lukeClock = clock ?? TimeProvider.System;
         Kind = kind;
         this.script = script;
         Instance = instance ?? Guid.NewGuid();
@@ -112,14 +133,17 @@ internal sealed partial class AntonRaidBattle
         current = Initialize(0, 0);
     }
 
-    AntonRaidBattleView Initialize(int phase, long revision)
+    AntonRaidBattleView Initialize(int phase, long revision, ImmutableDictionary<string, int>? inheritedSymbols = null, long timerSequence = 0)
     {
         var definition = script.Phases[phase];
-        var symbols = script.Symbols.Keys.ToImmutableDictionary(s => s, _ => 0);
+        var symbols = inheritedSymbols ?? script.Symbols.Keys.ToImmutableDictionary(s => s, _ => 0);
         foreach (var dungeon in definition.Dungeons) symbols = symbols.SetItem(dungeon.HpSymbol, dungeon.HpRaw);
         return Evaluate(new(Instance, revision, phase, AntonRaidBattleState.Fighting, symbols,
             definition.Dungeons.ToImmutableDictionary(d => d.Id, d => d.InitialState),
-            ImmutableDictionary<RaidTimer, int>.Empty), null, null, null);
+            ImmutableDictionary<RaidTimer, int>.Empty)
+            { TimerSequence = timerSequence, DungeonGenerations = Kind == RaidKind.Luke
+                ? definition.Dungeons.ToImmutableDictionary(d => d.Id, d => d.InitialState == RaidDungeonState.Open ? 1L : 0L)
+                : ImmutableDictionary<int, long>.Empty }, null, null, null);
     }
 
     // 由会话在真正安装正式副本后调用；同一实例不能跨角色、阶段或副本重绑。
@@ -168,7 +192,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.State != AntonRaidBattleState.Fighting ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) ||
                 !current.Symbols.TryGetValue(symbol, out int previous) || previous == value) return null;
             var before = current;
             CommitBattleCandidate(before, Evaluate(before with { Symbols = before.Symbols.SetItem(symbol, value) }, null, symbol, null));
@@ -181,10 +205,25 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.State != AntonRaidBattleState.Fighting ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) ||
                 !current.Timers.ContainsKey(timer)) return null;
             var before = current;
-            CommitBattleCandidate(before, Evaluate(before with { Timers = before.Timers.Remove(timer) }, null, null, timer));
+            CommitBattleCandidate(before, Evaluate(before with { Timers = before.Timers.Remove(timer), TimerGenerations = before.TimerGenerations.Remove(timer) }, null, null, timer));
+            return new(before, current);
+        }
+    }
+
+    // 计时任务持有SET时签发的代；其它图推进revision后仍可到期，但被RESET/重设的旧任务无权触发。
+    public AntonRaidBattleChange? ExpireLukeTimer(Guid instance, RaidTimer timer, long generation)
+    {
+        lock (gate)
+        {
+            if (Kind != RaidKind.Luke || instance != Instance || pendingTransition is not null ||
+                TerminalRequested(current) || generation <= 0 ||
+                current.TimerGenerations.GetValueOrDefault(timer) != generation || !current.Timers.ContainsKey(timer)) return null;
+            var before = current;
+            CommitBattleCandidate(before, Evaluate(before with { Timers = before.Timers.Remove(timer),
+                TimerGenerations = before.TimerGenerations.Remove(timer) }, null, null, timer));
             return new(before, current);
         }
     }
@@ -195,12 +234,12 @@ internal sealed partial class AntonRaidBattle
         {
             if (instance != Instance || revision != current.Revision || current.State != AntonRaidBattleState.Reward ||
                 Kind == RaidKind.Luke && (lukeRuns.Count != 0 || members.Any(member => member.Value.Length != PhaseCount)) ||
-                members.Any(m => m.Value[current.Phase].Offers.Select(o => o.Kind).Distinct()
-                    .Any(kind => !rewards.Contains((m.Key.Character, current.Phase, kind))))) return null;
+                !AllRewardsConfirmed(current.Phase)) return null;
             var before = current;
             current = before.Phase + 1 == script.Phases.Length
-                ? before with { State = AntonRaidBattleState.Completed, Revision = before.Revision + 1, Timers = ImmutableDictionary<RaidTimer, int>.Empty }
-                : Initialize(before.Phase + 1, before.Revision + 1);
+                ? before with { State = AntonRaidBattleState.Completed, Revision = before.Revision + 1, Timers = ImmutableDictionary<RaidTimer, int>.Empty,
+                    TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty }
+                : Initialize(before.Phase + 1, before.Revision + 1, Kind == RaidKind.Luke ? before.Symbols : null, before.TimerSequence);
             // 旧阶段实例不能在下一阶段再次产生clear，集合随阶段释放，不随游玩时长增长。
             entries.Clear();
             return new(before, current);
@@ -211,62 +250,96 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.State != AntonRaidBattleState.Fighting ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) ||
                 !current.Deferred.TryGetValue(token, out var action)) return null;
             int id;
             RaidDungeonState next;
             if (action.Tag == "[reserve dungeon state]")
             { id = action.DungeonId!.Value; next = action.State!.Value; }
-            else
+            else if (action.Tag == "[open random hatchery]")
             {
                 // 候选集合属于机制规则；调用方必须给出已验证目标，本层不凭ID范围猜孵化场。
                 if (selectedDungeon is not { } selected || !current.Dungeons.ContainsKey(selected)) return null;
                 id = selected; next = RaidDungeonState.Open;
             }
+            else return null;
             var before = current;
             CommitBattleCandidate(before, Evaluate(before with { Deferred = before.Deferred.Remove(token), Dungeons = before.Dungeons.SetItem(id, next) }, id, null, null));
             return new(before, current);
         }
     }
 
-    AntonRaidBattleView Evaluate(AntonRaidBattleView state, int? dungeon, string? symbol, RaidTimer? timer)
+    static bool TerminalRequested(AntonRaidBattleView view) => view.State != AntonRaidBattleState.Fighting ||
+        view.Deferred.Values.Any(action => action.Tag == "[fail phase]");
+
+    AntonRaidBattleView Evaluate(AntonRaidBattleView state, int? dungeon, string? symbol, RaidTimer? timer, RaidStageFact? fact = null)
     {
-        var events = new Queue<(int? Dungeon, string? Symbol, RaidTimer? Timer)>();
-        events.Enqueue((dungeon, symbol, timer));
+        var events = new Queue<(int? Dungeon, string? Symbol, RaidTimer? Timer, RaidStageFact? Fact)>();
+        events.Enqueue((dungeon, symbol, timer, fact));
         int budget = 4096;
-        while (state.State == AntonRaidBattleState.Fighting && events.TryDequeue(out var changed))
+        while (!TerminalRequested(state) && events.TryDequeue(out var changed))
         {
             if (--budget == 0) throw new InvalidDataException("攻坚规则循环超出单次事件预算");
             foreach (var rule in script.Phases[state.Phase].Rules)
             {
+                // 当前规则的终结尾动作仍执行，之后不再匹配新的旧阶段规则。
+                if (TerminalRequested(state)) break;
                 if (!rule.Trigger.All(Matches)) continue;
                 foreach (var action in rule.Behavior)
                 {
                     switch (action.Tag)
                     {
                         case "[set]":
-                            string key = action.Symbol!; int value = action.RawIntegers[0];
+                            string key = action.Symbol!;
+                            int value = action.Operator switch
+                            {
+                                null => action.RawIntegers[0],
+                                "[+]" => checked(state.Symbols[key] + action.RawIntegers[0]),
+                                _ => throw new InvalidDataException("未支持的攻坚符号运算 " + action.Operator)
+                            };
                             if (state.Symbols[key] != value)
-                            { state = state with { Symbols = state.Symbols.SetItem(key, value) }; events.Enqueue((null, key, null)); }
+                            { state = state with { Symbols = state.Symbols.SetItem(key, value) }; events.Enqueue((null, key, null, null)); }
                             break;
                         case "[set dungeon state]":
                             int id = action.DungeonId!.Value; var next = action.State!.Value;
                             if (state.Dungeons[id] != next)
-                            { state = state with { Dungeons = state.Dungeons.SetItem(id, next) }; events.Enqueue((id, null, null)); }
+                            {
+                                // 同Open不续HP；真正重开才开始新目标代，旧Run不能完成新代目标。
+                                if (Kind == RaidKind.Luke && next == RaidDungeonState.Open)
+                                {
+                                    var definition = script.Phases[state.Phase].Dungeons.Single(d => d.Id == id);
+                                    bool hpChanged = state.Symbols[definition.HpSymbol] != definition.HpRaw;
+                                    state = state with { Symbols = state.Symbols.SetItem(definition.HpSymbol, definition.HpRaw),
+                                        DungeonGenerations = state.DungeonGenerations.SetItem(id,
+                                            checked(state.DungeonGenerations.GetValueOrDefault(id) + 1)) };
+                                    if (hpChanged) events.Enqueue((null, definition.HpSymbol, null, null));
+                                }
+                                state = state with { Dungeons = state.Dungeons.SetItem(id, next) };
+                                events.Enqueue((id, null, null, null));
+                            }
                             break;
                         case "[set timer]":
-                            state = state with { Timers = state.Timers.SetItem(action.Timer!, action.RawIntegers[2]) };
+                            long generation = checked(state.TimerSequence + 1);
+                            state = state with { Timers = state.Timers.SetItem(action.Timer!, action.RawIntegers[2]),
+                                TimerGenerations = state.TimerGenerations.SetItem(action.Timer!, generation), TimerSequence = generation };
                             break;
                         case "[reset timer]":
-                            state = state with { Timers = state.Timers.Remove(action.Timer!) };
+                            state = state with { Timers = state.Timers.Remove(action.Timer!), TimerGenerations = state.TimerGenerations.Remove(action.Timer!) };
                             break;
                         case "[clear phase]":
-                            state = state with { State = AntonRaidBattleState.Reward, Timers = ImmutableDictionary<RaidTimer, int>.Empty };
+                            state = state with { State = AntonRaidBattleState.Reward, Timers = ImmutableDictionary<RaidTimer, int>.Empty,
+                                TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty };
                             break;
                         // 调度与随机目标未证实时保留待执行事实；不能静默丢弃或改为立即开图。
                         case "[reserve dungeon state]":
                         case "[open random hatchery]":
+                        case "[reset sanctum object]" when Kind == RaidKind.Luke:
                             state = state with { Deferred = state.Deferred.SetItem(action.TokenIndex, action) };
+                            break;
+                        case "[fail phase]" when Kind == RaidKind.Luke:
+                            state = state with { Deferred = state.Deferred.SetItem(action.TokenIndex, action),
+                                Timers = ImmutableDictionary<RaidTimer, int>.Empty,
+                                TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty };
                             break;
                         default: throw new InvalidDataException("未支持的攻坚行为 " + action.Tag);
                     }
@@ -280,6 +353,14 @@ internal sealed partial class AntonRaidBattle
                 "[on change dungeon state]" => changed.Dungeon == clause.DungeonId,
                 "[check dungeon state]" => state.Dungeons[clause.DungeonId!.Value] == clause.State,
                 "[check timer end]" => changed.Timer == clause.Timer,
+                "[on enter dungeon]" when Kind == RaidKind.Luke => changed.Fact is { Kind: RaidStageFactKind.EnterDungeon } entered &&
+                    entered.Phase == state.Phase && entered.Dungeon == clause.DungeonId,
+                "[on enter map]" when Kind == RaidKind.Luke => changed.Fact is { Kind: RaidStageFactKind.EnterMap } map &&
+                    map.Phase == state.Phase && map.Map == clause.MapId,
+                "[on giveup dungeon]" when Kind == RaidKind.Luke => changed.Fact is { Kind: RaidStageFactKind.GiveUpDungeon } abandoned &&
+                    abandoned.Phase == state.Phase && abandoned.Dungeon == clause.DungeonId,
+                "[phase end]" when Kind == RaidKind.Luke => changed.Fact is { Kind: RaidStageFactKind.PhaseEnd } ended &&
+                    ended.Phase == state.Phase && clause.RawIntegers.Length == 1 && clause.RawIntegers[0] == ended.Phase,
                 _ => throw new InvalidDataException("未支持的攻坚触发器 " + clause.Tag)
             };
         }

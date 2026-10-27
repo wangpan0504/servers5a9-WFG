@@ -51,6 +51,7 @@ internal static partial class DatabaseSchemaTests
                 Execute(db, "DROP TABLE character_dungeon_incount; DROP TABLE account_dungeon_incount");
                 if (mainline == 66) Execute(db, "ALTER TABLE characters DROP COLUMN weapon_skin_state");
                 if (mainline < 69) RemoveMainlineAdventureAdditions(db);
+                RewindRaidLifecycle(db);
                 Execute(db, $"PRAGMA user_version={mainline}");
             }
             _ = new CharacterRepository(master);
@@ -80,6 +81,7 @@ internal static partial class DatabaseSchemaTests
                 Execute(db, "ALTER TABLE characters DROP COLUMN weapon_skin_state; DROP TABLE character_permanent_stats");
                 RemoveMainlineAdventureAdditions(db);
                 if (branch == 67) Execute(db, "DROP TABLE account_dungeon_incount");
+                RewindRaidLifecycle(db);
                 Execute(db, $"PRAGMA user_version={branch}");
                 Check(Query(db, SkinColumnSql) is 0L && Query(db, MainlineV62To66Sql) is 5L &&
                     Query(db, IncountTablesSql) is long tables && tables == (branch == 68 ? 2 : 1),
@@ -151,6 +153,7 @@ internal static partial class DatabaseSchemaTests
                 Execute(db, "DROP TABLE character_permanent_stats");
                 RemoveMainlineAdventureAdditions(db);
                 if (branch == 68) Execute(db, "DROP TABLE account_dungeon_incount");
+                RewindRaidLifecycle(db);
                 Execute(db, $"PRAGMA user_version={branch}");
                 Check(Query(db, PermanentStatSql) is 0L && Query(db, SkinColumnSql) is 1L && Query(db, MainlineV62To66Sql) is 5L &&
                     Query(db, IncountTablesSql) is long tables && tables == (branch == 69 ? 2 : 1),
@@ -188,6 +191,7 @@ internal static partial class DatabaseSchemaTests
                 Execute(db, "INSERT INTO account_dungeon_incount VALUES('incount',7184,20261015,3)");
                 RemoveMainlineAdventureAdditions(db);
                 if (branch == 69) Execute(db, "DROP TABLE account_dungeon_incount");
+                RewindRaidLifecycle(db);
                 Execute(db, $"PRAGMA user_version={branch}");
                 Check(Query(db, PermanentStatSql) is 1L && Query(db, SkinColumnSql) is 1L && Query(db, MainlineV62To66Sql) is 5L &&
                     Query(db, MainlineAdventureSql) is 0L && Query(db, IncountTablesSql) is long tables && tables == (branch == 70 ? 2 : 1),
@@ -224,6 +228,7 @@ internal static partial class DatabaseSchemaTests
                 Execute(db, "INSERT INTO account_dungeon_incount VALUES('incount',7184,20261015,3)");
                 Execute(db, "ALTER TABLE character_dungeon_settlement_receipts DROP COLUMN proficiency_gain; ALTER TABLE character_dungeon_growth_receipts DROP COLUMN proficiency_gain");
                 if (branch == 74) Execute(db, "DROP TABLE account_dungeon_incount");
+                RewindRaidLifecycle(db);
                 Execute(db, $"PRAGMA user_version={branch}");
                 Check(Query(db, ProficiencyGainSql) is 0L && Query(db, MainlineAdventureSql) is 9L &&
                     Query(db, IncountTablesSql) is long tables && tables == (branch == 75 ? 2 : 1),
@@ -261,6 +266,7 @@ internal static partial class DatabaseSchemaTests
                 Execute(db, "INSERT INTO account_dungeon_incount VALUES('incount',7184,20261015,3)");
                 RemoveMainlineV83To87(db);
                 if (branch == 83) Execute(db, "DROP TABLE account_dungeon_incount");
+                RewindRaidLifecycle(db);
                 Execute(db, $"PRAGMA user_version={branch}");
                 Check(Query(db, MainlineV83To87Sql) is 0L && Query(db, ProficiencyGainSql) is 2L && Query(db, MainlineAdventureSql) is 9L &&
                     Query(db, IncountTablesSql) is long tables && tables == (branch == 84 ? 2 : 1),
@@ -357,6 +363,7 @@ internal static partial class DatabaseSchemaTests
             "' WHERE type='table' AND name='" + table + "'; PRAGMA schema_version=" + (schemaVersion + 1) +
             "; PRAGMA writable_schema=OFF; SELECT * FROM " + table + " LIMIT 0");
         if (local == 62) Execute(db, "DROP TABLE account_dungeon_incount");
+        RewindRaidLifecycle(db);
         Execute(db, $"PRAGMA user_version={local}");
     }
 }

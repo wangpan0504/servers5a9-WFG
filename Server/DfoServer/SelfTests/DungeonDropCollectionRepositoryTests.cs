@@ -168,6 +168,7 @@ internal static class DungeonDropCollectionRepositoryTests
                     DatabaseSchemaTests.RewindExperienceCaps(db);
                     DatabaseSchemaTests.RewindAccountQuestSource(db);
                 }
+                DatabaseSchemaTests.RewindRaidLifecycle(path);
                 Sql($"DROP TABLE IF EXISTS character_dungeon_card_options; DROP TABLE IF EXISTS character_gold_card_uses; DROP TABLE IF EXISTS account_card_memberships; DROP TABLE character_dungeon_card_rewards; PRAGMA user_version={sourceVersion}");
                 var upgraded = new CharacterRepository(path).LoadCharacter(owner, current.Slot);
                 That(Query("PRAGMA user_version") == SqliteMigrations.CurrentVersion && Query("SELECT count(*) FROM character_dungeon_drop_objects") == 0 &&

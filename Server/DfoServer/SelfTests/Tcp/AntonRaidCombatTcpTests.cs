@@ -188,6 +188,19 @@ internal static class AntonRaidCombatTcpTests
             var replay = new CharacterRepository(database).CommitRaidReward(owner, current, second, secondPlan, now)!;
             That(replay.Duplicate && replay.Character.Revision == committed.Character.Revision && replay.MailIds.SequenceEqual(committed.MailIds),
                 "重建仓储回放原奖励回执和真实邮件，不再增发");
+            query.CommandText = $"UPDATE character_raid_reward_receipts SET plan_json=json_remove(plan_json,'$.RaidType') WHERE instance_id='{second.Instance:N}'";
+            query.ExecuteNonQuery();
+            var legacy = new CharacterRepository(database).CommitRaidReward(owner, current, second, secondPlan, now)!;
+            That(legacy.Duplicate&&legacy.MailIds.SequenceEqual(committed.MailIds),"迁移前缺type的Anton旧JSON完整兼容重放，无需Luke生命周期行");
+            query.CommandText = $"UPDATE character_raid_reward_receipts SET plan_json=json_set(plan_json,'$.UnknownField',1) WHERE instance_id='{second.Instance:N}'";
+            query.ExecuteNonQuery();
+            Reject<InvalidDataException>(()=>repository.CommitRaidReward(owner,current,second,secondPlan,now),"旧JSON未知字段不能被兼容规范化吞掉");
+            query.CommandText = $"UPDATE character_raid_reward_receipts SET plan_json=json_remove(plan_json,'$.UnknownField') WHERE instance_id='{second.Instance:N}'";
+            query.ExecuteNonQuery();
+            Reject<InvalidDataException>(()=>repository.CommitRaidReward(owner,current,second with {RaidType=RaidKind.Luke},secondPlan,now),
+                "同实例不能改type绕过原奖励PK再发一次");
+            That(repository.CommitRaidReward(owner,committed.Character,second with {Instance=Guid.NewGuid(),RaidType=RaidKind.Luke},RewardPlan(committed.Character),now) is null,
+                "新Luke缺666/阶段资格时不得借旧Anton兼容分支发奖");
             var third = second with { Instance = Guid.NewGuid() };
             That(repository.CommitRaidReward(owner, committed.Character, third, RewardPlan(committed.Character), now) is null,
                 "每周第三次最终奖励不提交资产");

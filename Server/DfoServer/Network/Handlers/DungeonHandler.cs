@@ -31,7 +31,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     PartyDungeonService? partyDungeons = null, CharacterStatComputer? partyStats = null,
     DfoServer.Game.Party.PartyService? parties = null, EpicPieceShopService? epicPieceShop = null,
     TagEvildomRunProjection? tagEvildomRun = null, EvildomWarCatalog? evildomWar = null,
-    DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null) : IGameCommandModule
+    DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null,
+    DfoServer.Game.Raids.ILukeRaidLifecycleStore? lukeLifecycle = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -179,7 +180,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 if (entered.Length == 0) lukeRaid?.CancelSelection(context.Session, selectedParty);
             }
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length > 0, Party = true,
-                RaidType = 1, Dungeon = selection.DungeonIndex, Members = entered.Length,
+                RaidType = 1, Dungeon = selection.DungeonIndex, Members = entered.Count(notice => notice.Kind == PartyDungeonNoticeKind.Entry),
                 RaidInstance = context.Session.StartedRaid?.InstanceId,
                 Runs = entered.Select(notice => notice.Scene?.Snapshot.Identity.InstanceId).Distinct().ToArray(),
                 RejectReason = entered.Length == 0 ? context.Session.LastFormalDungeonRejection ?? "luke-entry-unavailable" : null });
@@ -236,7 +237,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 dungeons, rooms, drops, items, pieces, prepareDrops,
                 questId: hell ? 0u : selection.Unknown16, hellParty: hell, hellLegend: legend, crackRewards: crackRewards);
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length > 0, Party = true,
-                Members = entered.Length, Dungeon = selection.DungeonIndex, Quest = selection.Unknown16, HellParty = hell, HellLegend = legend,
+                Members = entered.Count(notice => notice.Kind == PartyDungeonNoticeKind.Entry), Dungeon = selection.DungeonIndex, Quest = selection.Unknown16, HellParty = hell, HellLegend = legend,
                 RejectReason = entered.Length == 0 ? context.Session.LastFormalDungeonRejection ?? "party-entry-unavailable" : null });
             if (entered.Length == 0) return await RejectAsync();
             await PartyDungeonProjection.PublishAsync(entered);

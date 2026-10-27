@@ -94,6 +94,7 @@ internal static class DazzlementTowerAdmissionTests
             var stale = Charge(character, later);
             Reject<InvalidOperationException>(() => repo.CommitDungeonEntry(owner, character, 502, stale),
                 "旧周准备结果不能复活旧绑定或清理新周名单");
+            DatabaseSchemaTests.RewindRaidLifecycle(path);
             Sql("DROP TABLE account_dazzlement_tower_bindings; PRAGMA user_version=106");
             repo = new CharacterRepository(path);
             That(repo.LoadDazzlementTower(owner).Bindings.IsEmpty && repo.LoadCharacter(owner, character.Slot).Revision == character.Revision,

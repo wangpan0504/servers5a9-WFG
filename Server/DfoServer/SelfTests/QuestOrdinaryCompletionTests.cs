@@ -1255,6 +1255,7 @@ internal static class QuestOrdinaryCompletionTests
     internal sealed class Fixture : IDisposable
     {
         readonly string root = Path.Combine(Path.GetTempPath(), "S5A9-ordinary-quest-" + Guid.NewGuid().ToString("N"));
+        internal string Database => Path.Combine(root, "game.db");
         readonly ItemResources items; readonly CharacterGrowthCatalog growth; readonly QuestRewardParameterCatalog parameters;
         public CharacterRepository Repository { get; }
         readonly AccountOwners owners = new(); public AccountOwners.Lease Owner { get; }

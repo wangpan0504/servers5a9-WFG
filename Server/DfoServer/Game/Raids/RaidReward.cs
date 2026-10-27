@@ -20,7 +20,10 @@ internal sealed record RaidRewardOffer(byte Kind, byte Card, ImmutableArray<Inve
     ImmutableArray<RaidRewardDisplayRow> Display);
 internal sealed record RaidPhaseRewardPolicy(string Source, ImmutableArray<RaidRewardOffer> Offers, RaidResultDisplay Result);
 internal sealed record PreparedRaidReward(Guid Instance, int Phase, byte Kind, byte Card, ushort Character,
-    string Source, ImmutableArray<InventoryReward> Grants, bool FinalPhase, int Week);
+    string Source, ImmutableArray<InventoryReward> Grants, bool FinalPhase, int Week)
+{
+    public RaidKind RaidType { get; init; } = RaidKind.Anton;
+}
 internal sealed record RaidRewardCommit(Character Character, bool Duplicate, ImmutableArray<uint> MailIds);
 internal sealed record RaidRewardReceipt(PreparedRaidReward Prepared, RaidRewardOffer Offer, RaidRewardCommit Commit,
     InventoryResult Inventory, long Generation, long Epoch);
@@ -30,3 +33,7 @@ internal interface IRaidRewardStore
     RaidRewardCommit? CommitRaidReward(AccountOwners.Lease owner, Character expected, PreparedRaidReward prepared,
         InventoryPlan inventory, DateTimeOffset now);
 }
+
+// 每阶段资格独立冻结；不是资产计划，也不以领取次数代替最终通关次数。
+internal sealed record RaidPhaseEligibility(Guid Instance, RaidKind RaidType, int Phase, Guid Event, long Anchor,
+    ushort Character, bool CountsAsClear, bool Eligible, string Reason, string Source, int Week, ImmutableArray<RaidRewardOffer> Offers);

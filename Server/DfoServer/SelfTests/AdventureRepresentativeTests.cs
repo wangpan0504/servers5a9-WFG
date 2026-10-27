@@ -120,6 +120,7 @@ internal static class AdventureRepresentativeTests
                 using (var db = Open(path))
                 {
                     DatabaseSchemaTests.RemoveAdventureRepresentatives(db);
+                    DatabaseSchemaTests.RewindRaidLifecycle(db);
                     Execute(db, "PRAGMA user_version=29; " +
                         "INSERT INTO account_adventures VALUES('legacy',7,'LegacyGroup',20261011,1,0,'0',0,0,zeroblob(20),202610)");
                     if (fail) Execute(db, "CREATE VIEW account_adventure_representatives AS SELECT 1 AS collision");

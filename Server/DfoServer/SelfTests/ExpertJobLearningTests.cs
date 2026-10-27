@@ -106,6 +106,7 @@ internal static class ExpertJobLearningTests
             var cleared = repository.CommitExpertJobClear(owner, repository.LoadCharacter(owner, 0));
             That(cleared.ExpertJobRecipes.IsEmpty && repository.LoadCharacter(owner, 0).ExpertJobRecipes.IsEmpty,
                 "放弃副职业清理当前与持久化已学图，不泄漏到下一职业");
+            DatabaseSchemaTests.RewindRaidLifecycle(path);
             Sql("ALTER TABLE character_expert_job DROP COLUMN learned_recipes; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=77");
             _ = new SqliteGameDatabase(path);
             That(repository.LoadCharacter(owner, 0).ExpertJobRecipes.IsEmpty, "v77旧库升级为空学习集合，不凭等级补造学习记录");

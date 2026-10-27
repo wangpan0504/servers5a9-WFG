@@ -174,6 +174,7 @@ internal static class AdventureNameTests
                 using (var db = Open(path))
                 {
                     DatabaseSchemaTests.RemoveAdventureNames(db);
+                    DatabaseSchemaTests.RewindRaidLifecycle(db);
                     Execute(db, "PRAGMA user_version=37; INSERT INTO account_adventures VALUES('legacy',7,'LegacyGroup',20261011,1,0,'0',0,0,zeroblob(20),202610)");
                     if (fail) Execute(db, "CREATE INDEX account_adventure_name ON characters(name)");
                 }
