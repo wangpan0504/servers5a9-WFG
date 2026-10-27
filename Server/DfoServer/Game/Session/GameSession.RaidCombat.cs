@@ -75,6 +75,8 @@ internal sealed partial class GameSession
 
     internal RaidKind? RaidCombatKind() => owner.Execute(() => raidCombat is { Actor.IsCurrent: true } raid ? (RaidKind?)raid.Battle.Kind : null);
 
+    internal bool RaidPhaseProgress => owner.Execute(() => raidCombat is { Battle.PhaseProgress: true });
+
     public AntonRaidBattleView? RaidCombatView() => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent ? raid.Battle.View : null);
 
@@ -98,7 +100,8 @@ internal sealed partial class GameSession
             receipt.Generation != owner.Generation || receipt.SelectionEpoch != SelectionEpoch ||
             receipt.Snapshot.Identity != dungeon.Run.Snapshot.Identity || dungeon.Run.ClearFact is not { } fact ||
             fact.Identity != receipt.Snapshot.Identity || !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap)) return null;
-        var change = raid.Battle.CompleteDungeon(fact, DungeonIncountPolicy.Period((timeProvider ?? TimeProvider.System).GetUtcNow()).Week);
+        int? week = DungeonIncountPolicy.Period((timeProvider ?? TimeProvider.System).GetUtcNow()).Week;
+        var change = raid.Battle.CompleteDungeon(fact, week) ?? raid.Battle.CompleteAntonReservedDungeon(fact, week);
         if (change?.After.State == AntonRaidBattleState.Reward)
             raid.RewardWeek ??= DungeonIncountPolicy.Period((timeProvider ?? TimeProvider.System).GetUtcNow()).Week;
         return change;

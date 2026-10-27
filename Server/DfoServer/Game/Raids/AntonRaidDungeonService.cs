@@ -6,7 +6,7 @@ using DfoServer.GameWorld.Raids;
 
 namespace DfoServer.Game.Raids;
 
-// 只授权原开战实例的首阶段黑雾；不装配机关、阶段推进或奖励能力。
+// 正式进图只读原 Battle 当前开放图。阶段迁移由 Battle.PhaseProgress 决定，本服务不解释计时或机关。
 internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyService parties,
     RaidDungeonCatalog catalog, bool enabled)
 {
@@ -63,10 +63,5 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
         }
     }
 
-    static bool Allows(AntonRaidBattle battle, int dungeon)
-    {
-        var view = battle.View;
-        return !battle.HasPendingTransition && view is { Phase: 0, State: AntonRaidBattleState.Fighting } &&
-            dungeon == 210 && view.Dungeons.TryGetValue(dungeon, out var state) && state == RaidDungeonState.Open;
-    }
+    static bool Allows(AntonRaidBattle battle, int dungeon) => battle.AllowsAntonEntry(dungeon);
 }

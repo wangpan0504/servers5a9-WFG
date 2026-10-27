@@ -43,7 +43,18 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (receipt is null) return CommandResult.Unhandled;
         if (context.Session.RaidCombatView() is not null)
         {
-            if (context.Session.CompleteRaidCombatDungeon(receipt) is not null) context.Session.PublishRaidCombat();
+            bool phaseProgress = context.Session.RaidPhaseProgress;
+            if (context.Session.CompleteRaidCombatDungeon(receipt) is { } change)
+            {
+                context.Session.PublishRaidCombat();
+                if (phaseProgress)
+                {
+                    int phaseSuccess = change.After.Symbols.TryGetValue("[1phase success]", out int success) ? success : -1;
+                    log.Write("anton_phase_progress", new { Connection = context.Id, change.After.Phase,
+                        State = change.After.State.ToString(), PhaseSuccess = phaseSuccess, Timers = change.After.Timers.Count,
+                        Deferred = change.After.Deferred.Count, TimerUnit = "unknown" });
+                }
+            }
             await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(parsed.BossKey), "raid_boss_confirmed");
             return CommandResult.Handled;
         }

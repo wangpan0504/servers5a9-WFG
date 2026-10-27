@@ -126,6 +126,7 @@ internal static class AntonRaidBattleTests
         That(battle.View.Dungeons[220] == RaidDungeonState.Open, "真实火山clear规则开放心脏");
         Clear(220);
         That(battle.View.State == AntonRaidBattleState.Reward, "真实心脏clear规则完成第二阶段");
+        PhaseZeroResource(script);
 
         void Clear(int id)
         {
@@ -135,5 +136,50 @@ internal static class AntonRaidBattleTests
                 { ClearMap = new("boss", new(0, 0), 77, "fixture/resource-clear.map") };
             That(battle.CompleteDungeon(fact) is not null, "资源规则消费已验证清图输入，非自然客户端清图证明");
         }
+    }
+
+    // 真实 anton.etc 的阶段 0 clear 声明。不调用延迟开图，也不把计时原值当成秒。
+    static void PhaseZeroResource(RaidScript script)
+    {
+        var battle = new AntonRaidBattle(script);
+        void Clear(int id)
+        {
+            var identity = new DungeonRunIdentity(1, 0, 1, Guid.NewGuid(), 1);
+            That(battle.BindDungeon(identity, checked((uint)id)), "资源夹具绑定当前开放的阶段 0 图");
+            var fact = new DungeonClearFact(identity, checked((uint)id), [Guid.NewGuid()])
+                { ClearMap = new("boss", new(0, 0), 77, "fixture/resource-clear.map") };
+            That(battle.CompleteDungeon(fact) is not null, "真实规则消费已验证清图");
+        }
+        Clear(210);
+        string timers = string.Join(",", battle.View.Timers.OrderBy(row => row.Key.DungeonId).ThenBy(row => row.Key.Kind)
+            .Select(row => $"{row.Key.Kind}/{row.Key.DungeonId}={row.Value}"));
+        That(battle.View.Dungeons[210] == RaidDungeonState.Hide && battle.View.Dungeons[211] == RaidDungeonState.Close &&
+            new[] { 212, 213, 214, 215 }.All(id => battle.View.Dungeons[id] == RaidDungeonState.Open) &&
+            battle.View.Dungeons[216] == RaidDungeonState.Hide && battle.View.Symbols["[1phase success]"] == 0 &&
+            battle.View.Timers[new RaidTimer(2, 211)] == 300 && battle.View.Timers[new RaidTimer(1, 212)] == 300 &&
+            battle.View.Timers[new RaidTimer(1, 214)] == 300 &&
+            battle.View.Deferred.Values.Any(clause => clause.Tag == "[reserve dungeon state]" && clause.DungeonId == 216 &&
+                clause.State == RaidDungeonState.Open && clause.RawIntegers[^1] == 20),
+            "真实 210 clear 的战况与计时原值 " + timers);
+        That(battle.ExpireTimer(battle.Instance, battle.View.Revision, new RaidTimer(1, 212)) is null, "真实安徒恩计时原值不能到期");
+        Clear(212);
+        That(battle.View.Dungeons[212] == RaidDungeonState.Close && !battle.View.Timers.ContainsKey(new RaidTimer(1, 212)) &&
+            battle.View.Timers[new RaidTimer(2, 212)] == 150 &&
+            battle.View.Deferred.Values.Any(clause => clause.Tag == "[reserve dungeon state]" && clause.DungeonId == 212 &&
+                clause.RawIntegers[^1] == 150),
+            "真实 212 clear 关闭并保留 150");
+        Clear(214);
+        That(battle.View.Dungeons[214] == RaidDungeonState.Close && battle.View.Timers[new RaidTimer(2, 214)] == 150 &&
+            battle.View.Deferred.Values.Any(clause => clause.Tag == "[reserve dungeon state]" && clause.DungeonId == 214 &&
+                clause.RawIntegers[^1] == 150),
+            "真实 214 clear 关闭并保留 150");
+        Clear(213);
+        That(battle.View.State == AntonRaidBattleState.Fighting && battle.View.Symbols["[1phase success]"] == 0 &&
+            battle.View.Dungeons[213] == RaidDungeonState.Clear, "真实单腿 clear 不结束阶段");
+        Clear(215);
+        That(battle.View.State == AntonRaidBattleState.Reward && battle.View.Phase == 0 &&
+            battle.View.Symbols["[1phase success]"] == 1 && battle.View.Timers.IsEmpty &&
+            new[] { 210, 211, 212, 213, 214, 215, 216 }.All(id => battle.View.Dungeons[id] == RaidDungeonState.Hide),
+            "真实双腿 clear 记录阶段成功并进入 Reward，阶段号仍是 0");
     }
 }
