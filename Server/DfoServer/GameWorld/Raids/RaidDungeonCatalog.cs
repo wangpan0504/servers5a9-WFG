@@ -19,6 +19,13 @@ internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<
     public bool Ready => Script.Issues.IsEmpty && MapsReady;
     public bool MapsReady => Type is 0 or 1 && MissingMaps.IsEmpty &&
         Script.Phases.SelectMany(phase => phase.Dungeons).All(row => definitions.ContainsKey(row.Id));
+    // 保留原列顺序，仅投影整数；业务层不得直接依赖PVF解析记录或推定列含义。
+    public int[] LukeCardMapColumns(int group)
+    {
+        if (group < 0 || group >= Script.LukeCardMapRecords.Length) return [];
+        var row = Script.LukeCardMapRecords[group];
+        return [row.RawA, row.RawB, row.RawC];
+    }
     public DungeonDefinition? Find(int id) => definitions.GetValueOrDefault(id);
     public DungeonMaze ResolveMaze(DungeonMaze maze, Func<int, int>? draw) => DungeonCatalog.ResolveMapCandidates(maze,
         maps, exists, draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32);
