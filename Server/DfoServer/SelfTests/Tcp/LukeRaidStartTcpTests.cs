@@ -21,7 +21,9 @@ internal static class LukeRaidStartTcpTests
 
     public static Task RunPhasesAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,true);
 
-    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false)
+    public static Task RunTimersAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,timed:true);
+
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false)
     {
         var definition=RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
             SelfTestCatalogs.Dungeons(resources.Archive),resources.ItemResources.Items).Find(1)!;
@@ -41,6 +43,21 @@ internal static class LukeRaidStartTcpTests
                     new("[check dungeon state]",901,index==0?5054:5311,null,RaidDungeonState.Clear,null,[])],
                     [new("[clear phase]",902,null,null,null,null,[])]))}).ToImmutableArray()};
         }
+        if(timed)
+        {
+            var timer=new RaidTimer(1,5056);
+            execution=execution with {Phases=execution.Phases.SetItem(0,execution.Phases[0] with {Rules=[
+                new([new("[on enter dungeon]",910,5054,null,null,null,[])],
+                    [new("[set dungeon state]",909,5055,null,RaidDungeonState.Open,null,[]),
+                     new("[set dungeon state]",911,5056,null,RaidDungeonState.Close,null,[]),
+                     new("[set timer]",912,null,null,null,timer,[1,5056,3])]),
+                new([new("[check timer end]",913,null,null,null,timer,[])],
+                    [new("[set dungeon state]",914,5056,null,RaidDungeonState.Open,null,[])]),
+                new([new("[on enter dungeon]",915,5055,null,null,null,[])],
+                    [new("[set timer]",916,null,null,null,new(1,5055),[1,5055,6])]),
+                new([new("[check timer end]",917,null,null,null,new(1,5055),[])],
+                    [new("[clear phase]",918,null,null,null,null,[])])]})};
+        }
         var catalog=definition.Resources!.EntryCatalog!;
         var policy=new LukeRaidStartPolicy("selftest/no-phase-actions-no-rewards",execution)
         { Run=runDungeons ? new LukeRaidRunPolicy("selftest/explicit-first-maze-no-economy",
@@ -48,12 +65,13 @@ internal static class LukeRaidStartTcpTests
                 catalog.Find(dungeon.Id)!.Mazes.First(maze=>maze.QuestConnectionTokens.Count==0).SourceOrdinal))).ToImmutableArray(),
             LukeRaidRunEconomy.ControlledNoOrdinaryRewards) : null };
         if(runDungeons) policy=policy with {Revival=new("selftest/current-pvf-manual-shared-coins")};
-        if(completePhases) policy=policy with {Completion=new("selftest/explicit-terminal-receipts",2,
+        if(timed) policy=policy with {Timers=new("selftest/explicit-three-second-open")};
+        if(completePhases||timed) policy=policy with {Completion=new("selftest/explicit-terminal-receipts",2,
             new(DayOfWeek.Sunday,new TimeOnly(6,0),TimeSpan.FromHours(8)),
             Enumerable.Range(0,2).Select(phase=>new LukePhaseCompletionPolicy(0,2,
                 new("selftest/explicit-phase-"+phase,[new(0,1,[new(10400,1)],[]),new(1,1,[new(10400,1)],[])],
                     new(0,(byte)phase,1,0,0,0)))).ToImmutableArray(),LukeParticipationCutoff.TerminalCommittedFacts)};
-        await using var fixture=new TcpTestFixture(source,Path.Combine(root,completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy);
+        await using var fixture=new TcpTestFixture(source,Path.Combine(root,timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy);
         await fixture.StartAsync();
         var endpoints=ChannelTcpTests.Endpoints(fixture); var repository=new CharacterRepository(fixture.Database);
         var owners=new AccountOwners(); List<TcpPeer> peers=[];
@@ -181,7 +199,7 @@ internal static class LukeRaidStartTcpTests
             That(fixture.Snapshot()==committed,"重放和原生分队握手不改任何持久资产/位置/次数");
             leader.Send(660,[0,0]);Bytes(Until(leader,1,660).Body,[0,0x12,0],"未终结660明确失败并清原生pending，不能断线或发成功");Drain(leader);
             That(fixture.Snapshot()==committed,"start-only Luke不借未类型隔离的Anton领奖表发奖");
-            if(runDungeons) LukeRaidRunTcpTests.Single(fixture,leader,raw.Phases[0].Dungeons[0].Id);
+            if(runDungeons&&!timed) LukeRaidRunTcpTests.Single(fixture,leader,raw.Phases[0].Dungeons[0].Id);
             // 同一Runtime继续覆盖满八人跨两队；不另启服务，不手工Attach领域实例。
             foreach(var peer in peers)peer.Dispose();peers.Clear();
             for(int index=4;index<12;index++)peers.Add(CreatePeer(index));
@@ -236,7 +254,8 @@ internal static class LukeRaidStartTcpTests
                     is [[long count]]&&count==raw.EntryCost.Count,"满团成功只扣一次门票，失败未留部分扣费");
             }
 
-            if(completePhases) LukeRaidRunTcpTests.Phases(fixture,peers.ToArray(),raw,
+            if(timed) await LukeRaidRunTcpTests.TimersAsync(fixture,peers.ToArray());
+            else if(completePhases) LukeRaidRunTcpTests.Phases(fixture,peers.ToArray(),raw,
                 full[0].Single(p=>p.Opcode==9).Body,catalog);
             else if(runDungeons) LukeRaidRunTcpTests.Parties(fixture,peers.ToArray(),raw.Phases[0].Dungeons.Select(row=>row.Id).ToArray(),
                 full[0].Single(p=>p.Opcode==9).Body,full[4].Single(p=>p.Opcode==9).Body,catalog);
@@ -296,7 +315,7 @@ internal static class LukeRaidStartTcpTests
             That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE state=2") is [[7L]],
                 "删除精确角色不清同团其它七人的已提交通关");
         }
-        if(runDungeons&&!completePhases)
+        if(runDungeons&&!completePhases&&!timed)
         {
             // StopAsync已收尾日志writer；不把正在刷新的JSON尾行当作完整事件。
             var clears=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="raid_run_clear").Select(row=>row.GetProperty("Detail")).ToArray();
