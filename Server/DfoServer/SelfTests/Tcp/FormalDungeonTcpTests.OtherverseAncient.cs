@@ -102,8 +102,9 @@ internal static partial class FormalDungeonTcpTests
                     }
                 }
             });
-            That(cube && material && (long)fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", ancient.Id)[0][0] == fatigue - 6,
-                "远古入场双材料和六点疲劳均真实提交与投影");
+            long remaining = (long)fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", ancient.Id)[0][0];
+            That(cube && material && remaining == fatigue - 6,
+                $"远古入场双材料和六点疲劳均真实提交与投影 cube={cube} material={material} fatigue={fatigue} remaining={remaining}");
             Load(peer); Drain(peer); Return(peer);
         }
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))

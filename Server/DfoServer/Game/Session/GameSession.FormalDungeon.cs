@@ -815,6 +815,8 @@ internal sealed partial class GameSession
             if (!check.Accepted || check.Plan is null) return null;
         }
         System.Collections.Immutable.ImmutableArray<InventorySlot> channelSlots = [];
+        // 频道代价可能含账号货币（如远古同时要无色晶体与材料）：预览差量必须把货币一起投影给客户端。
+        System.Collections.Immutable.ImmutableArray<DfoServer.Game.Currency.CurrencyKind> channelCurrencies = [];
         System.Collections.Immutable.ImmutableArray<DungeonEnterCount> enterCounts = [];
         DungeonEntryIncount? entryIncount = null;
         if (installing.Entry.Dimension is { } dimension && dimension.Period != IncountPeriod(dimension.Catalog.DailyRow.CountKey)) return null;
@@ -852,6 +854,7 @@ internal sealed partial class GameSession
                 if (consumption is not null)
                 {
                     channelSlots = consumption.ChangedSlots;
+                    channelCurrencies = consumption.ChangedCurrencies;
                     var rebased = installing.Entry with { CharacterRevision = checked(character.Revision + 1) };
                     installing.Run.RebasePreparedRevision(rebased.CharacterRevision);
                     installing = installing with { Entry = rebased };
@@ -945,7 +948,7 @@ internal sealed partial class GameSession
         SetState(SessionPhase.Loading);
         return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue, ChannelConsumedSlots = channelSlots, EnterCounts = enterCounts,
-            EntryChangedCurrencies = entryItems?.ChangedCurrencies ?? [],
+            EntryChangedCurrencies = [.. entryItems?.ChangedCurrencies ?? [], .. channelCurrencies],
             GriefAdmission = installing.GriefAdmission, SpecialEntry = installing.SpecialEntry, Dazzlement = installing.Dazzlement };
     }
 
