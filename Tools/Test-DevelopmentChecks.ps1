@@ -3,6 +3,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'DevelopmentCheckCache.ps1')
 $root = Join-Path ([IO.Path]::GetTempPath()) ('s5a9-check-tests-' + [guid]::NewGuid().ToString('N'))
 $checks = 0
+$originalMarker = $env:DFO_DEVELOPMENT_CACHE_TEST
+$originalTimings = $env:DFO_TCP_TIMINGS
 function Assert([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "FAIL: $Message" }
     $script:checks++
@@ -17,11 +19,11 @@ function Write-Fixture([string]$Path, [string]$Text) {
     New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
     [IO.File]::WriteAllText($target, $Text)
 }
-$global:DevelopmentCheckMock = @{ Core = 0; Tcp = 0; Build = 0; Fail = $false; Mutate = $false; Root = $root }
+$global:DevelopmentCheckMock = @{ Core = 0; Tcp = 0; Build = 0; Fail = $false; Mutate = $false; Sdk = 'Synthetic SDK 10'; Root = $root }
 function global:dotnet {
     $global:LASTEXITCODE = 0
     $m = $global:DevelopmentCheckMock
-    if ($args[0] -eq '--info') { 'Synthetic SDK 10'; return }
+    if ($args[0] -eq '--info') { $m.Sdk; return }
     if ($args[0] -eq 'build') {
         $m.Build++
         if ($m.FailBuild) { $global:LASTEXITCODE = 1; return }
@@ -35,10 +37,12 @@ function global:dotnet {
     }
     if ($args -contains '--selftest-core') {
         $m.Core++
+        if ($m.MutateSdk) { $m.Sdk = 'Synthetic SDK changed' }
+        if ($m.MutateEnvironment) { $env:DFO_DEVELOPMENT_CACHE_TEST = [guid]::NewGuid().ToString('N') }
         if ($m.Fail) { $global:LASTEXITCODE = 1 }
         if ($m.Mutate) { [IO.File]::AppendAllText((Join-Path $m.Root 'input.cs'), 'changed while running') }
     }
-    if ($args -contains '--selftest-tcp') { $m.Tcp++ }
+    if ($args -contains '--selftest-tcp') { $m.Tcp++; $m.TcpTimings = $env:DFO_TCP_TIMINGS; if ($m.FailTcp) { $global:LASTEXITCODE = 1 } }
 }
 try {
     New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -118,12 +122,83 @@ try {
     Write-Fixture 'bad.cs' ('first line' + "`n" + 'C' + ':' + '/machine/path')
     Reject { & $repositoryCheck -Repository $root } '机器绝对路径仍拒绝'
     Remove-Item (Join-Path $root 'bad.cs')
+    # 实际 TCP 使用替身：重复调用应只复用 core，且不能泄漏耗时配置。
+    $tcpParams = @{ Paths = @('Server/DfoServer/SelfTests/Tcp/CommandTests.cs'); Run = $true; ArtifactsPath = $artifacts; TimingsPath = (Join-Path $root 'build/timings.json') }
+    # 两个现有入口共享同一 core 收据；无 caller 覆盖时也不能诱发重复执行。
+    Remove-Item Env:DFO_TCP_TIMINGS -ErrorAction SilentlyContinue
+    & $check -ArtifactsPath $artifacts -Incremental | Out-Null
+    $before = $global:DevelopmentCheckMock.Core
+    $tcpBefore = $global:DevelopmentCheckMock.Tcp
+    $cachedOutput = (& $selector @tcpParams) -join "`n"
+    Assert ($global:DevelopmentCheckMock.Core -eq $before -and $global:DevelopmentCheckMock.Tcp -eq $tcpBefore + 1 -and $cachedOutput.Contains('CACHED')) 'Check 到 Selector 跨入口复用 core，TCP 实际执行'
+    Assert ($global:DevelopmentCheckMock.TcpTimings -eq $tcpParams.TimingsPath -and -not $env:DFO_TCP_TIMINGS) 'TCP 收到目标耗时路径，退出后 caller 仍无覆盖'
+    $cachedOutput = (& $check -ArtifactsPath $artifacts -Incremental) -join "`n"
+    Assert ($global:DevelopmentCheckMock.Core -eq $before -and $cachedOutput.Contains('CACHED')) 'Selector 返回 Check 仍复用原 core'
+    $env:DFO_TCP_TIMINGS = 'caller-owned-timings'
+    & $selector @tcpParams | Out-Null
+    $before = $global:DevelopmentCheckMock.Core
+    $tcpBefore = $global:DevelopmentCheckMock.Tcp
+    $cachedOutput = (& $selector @tcpParams) -join "`n"
+    Assert ($global:DevelopmentCheckMock.Core -eq $before -and $global:DevelopmentCheckMock.Tcp -eq $tcpBefore + 1) '同输入只复用 core，TCP 仍执行'
+    Assert ($cachedOutput.Contains('CACHED') -and $cachedOutput.Contains($stamp) -and $cachedOutput.Contains('原完成时间')) '复用输出包含原收据与时间'
+    Assert ($global:DevelopmentCheckMock.TcpTimings -eq $tcpParams.TimingsPath -and $env:DFO_TCP_TIMINGS -eq 'caller-owned-timings') 'TCP 成功时使用目标路径，随后恢复调用者配置'
+    $global:DevelopmentCheckMock.FailTcp = $true
+    Reject { & $selector @tcpParams } 'TCP 失败不能被 core 缓存掩盖'
+    Assert (-not (Test-Path $stamp)) '新失败撤销原 core 收据'
+    Assert ($global:DevelopmentCheckMock.TcpTimings -eq $tcpParams.TimingsPath -and $env:DFO_TCP_TIMINGS -eq 'caller-owned-timings') 'TCP 失败时也使用目标路径，随后恢复调用者配置'
+    $global:DevelopmentCheckMock.FailTcp = $false
+    $env:DFO_TCP_TIMINGS = $originalTimings
+    $global:DevelopmentCheckMock.MutateEnvironment = $true
+    Reject { & $selector @params } 'core 期间环境改变拒绝保存'
+    Assert (-not (Test-Path $stamp)) '环境改变不得留下通过收据'
+    $global:DevelopmentCheckMock.MutateEnvironment = $false
+    $env:DFO_DEVELOPMENT_CACHE_TEST = $originalMarker
+    & $check -ArtifactsPath $artifacts | Out-Null
+    $global:DevelopmentCheckMock.MutateEnvironment = $true
+    Reject { & $check -ArtifactsPath $artifacts } '默认完整检查也拒绝环境改变'
+    Assert (-not (Test-Path $stamp)) '完整检查环境变化撤销旧收据'
+    $global:DevelopmentCheckMock.MutateEnvironment = $false
+    $env:DFO_DEVELOPMENT_CACHE_TEST = $originalMarker
+    & $check -ArtifactsPath $artifacts -Incremental | Out-Null
+    Assert (Test-Path $stamp) 'SDK 变化回归前存在有效收据'
+    $global:DevelopmentCheckMock.MutateSdk = $true
+    Reject { & $selector @params -NoCache } 'core 期间 dotnet --info 变化拒绝通过'
+    Assert (-not (Test-Path $stamp)) 'SDK 变化撤销旧成功收据'
+    $global:DevelopmentCheckMock.MutateSdk = $false
+    $global:DevelopmentCheckMock.Sdk = 'Synthetic SDK 10'
+    foreach ($status in @('failed', 'interrupted', 'skipped')) {
+        Save-CheckCache $stamp 'source' 'environment' 'artifact'
+        $record = Get-Content $stamp -Raw | ConvertFrom-Json
+        $record.status = $status
+        $record | ConvertTo-Json | Set-Content $stamp
+        Assert (-not (Test-CheckCache $stamp 'source' 'environment' 'artifact')) "$status 不能当作通过"
+    }
+    Save-CheckCache $stamp 'source' 'environment' 'artifact'
+    $record = Get-Content $stamp -Raw | ConvertFrom-Json
+    $record.completedUtc = 'invalid'
+    $record | ConvertTo-Json | Set-Content $stamp
+    Assert (-not (Test-CheckCache $stamp 'source' 'environment' 'artifact')) '缺可靠完成时间不复用'
+    # 仅检查选择输出，不启动构建或 TCP；未知非 C# 输入必须保守扩大。
+    foreach ($path in @('Tools/Other/Other.csproj', 'Tools/PvfLib.Tests/Program.cs', 'Directory.Packages.props',
+        'Tools/Other/Unknown.cs', 'Server/DfoServer/Resources/channel.txt', 'Server/DfoServer/Data/Script.pvf',
+        'NuGet.Config', 'unknown.dependency', 'Game/Inventory/unknown.rules', 'Server/DfoServer/Resources/rules.json')) {
+        $selectionOutput = (& $selector -Paths $path) -join "`n"
+        Assert ($selectionOutput.Contains('全量 TCP：')) "共享或未知输入保守全量：$path"
+    }
+    foreach ($path in @('Docs/example.json', 'Tools/PvfLib/README.md', 'README.md')) {
+        $selectionOutput = (& $selector -Paths $path) -join "`n"
+        Assert ($selectionOutput.Contains('SKIPPED build/TCP') -and -not $selectionOutput.Contains('全量 TCP：')) "文档不触发业务重跑：$path"
+    }
+    $selectionOutput = (& $selector -Paths 'Tools/Check-Development.ps1') -join "`n"
+    Assert ($selectionOutput.Contains('对应脚本/参数回归') -and $selectionOutput.Contains('未在此自动执行')) '脚本变化不伪称文档检查足够'
     Remove-Item -LiteralPath (Join-Path $root '.git') -Recurse -Force
     $before = $global:DevelopmentCheckMock.Core
     & $check -ArtifactsPath $artifacts -Incremental | Out-Null
     Assert ($global:DevelopmentCheckMock.Core -eq $before + 1) '源码归档无 Git 时仍实跑、不复用缓存'
     Write-Output "PASS $checks development cache and execution assertions"
 } finally {
+    $env:DFO_DEVELOPMENT_CACHE_TEST = $originalMarker
+    $env:DFO_TCP_TIMINGS = $originalTimings
     Remove-Item Function:global:dotnet -ErrorAction SilentlyContinue
     Remove-Variable DevelopmentCheckMock -Scope Global -ErrorAction SilentlyContinue
     if (Test-Path $root) { Remove-Item -LiteralPath $root -Recurse -Force }
