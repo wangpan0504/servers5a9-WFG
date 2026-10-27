@@ -29,6 +29,10 @@ internal static class LukeRaidLifecycleTransactionTests
         try
         {
             var items=resources.ItemResources;var repository=new CharacterRepository(path,resources.Quests);
+            ILukeRaidLifecycleStore lifecycle=repository;
+            That(lifecycle.IsRetryable(new SqliteException("fixture busy",5)) && lifecycle.IsRetryable(new SqliteException("fixture locked",6)) &&
+                !lifecycle.IsRetryable(new SqliteException("fixture constraint",19)) && !lifecycle.IsRetryable(new InvalidDataException("fixture identity")),
+                "阶段自动重试仅接真实忙锁分类，不把约束或原身份损坏当作可恢复错误");
             var raids=new RaidRegistry();var parties=new PartyService(repository);
             policy=policy with {Completion=policy.Completion! with {WeeklyClearLimit=1}};
             var clock=new Clock(DateTimeOffset.Parse("2026-10-25T05:59:59+08:00"));

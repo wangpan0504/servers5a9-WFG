@@ -209,16 +209,18 @@ internal sealed partial class AntonRaidBattle
                 _ = LukePhaseSettlement.Capture(this, candidate.Phase);
             // 逻辑终结即停止旧阶段timer，不等旧Run全部退场；phase/Reward仍由退出屏障提交。
             if (!before.Timers.IsEmpty)
-                current = before with { Timers = before.Timers.Clear(), TimerGenerations = before.TimerGenerations.Clear(),
+                current = before with { Timers = before.Timers.Clear(), TimerGenerations = before.TimerGenerations.Clear(), TimerAnchors = before.TimerAnchors.Clear(),
                     TimerSequence = candidate.TimerSequence, Revision = before.Revision + 1 };
+            ScheduleLukeClockLocked();
             return;
         }
         current = candidate with { Revision = before.Revision + 1 };
+        ScheduleLukeClockLocked();
     }
 
     AntonRaidBattleChange? CommitPendingTransition()
     {
-        if (lukeRuns.Count != 0 || lukeRevivalReservations.Count != 0 || pendingTransition is not { } pending ||
+        if (current.ClockFaulted || lukeRuns.Count != 0 || lukeRevivalReservations.Count != 0 || pendingTransition is not { } pending ||
             lukeCompletion is not null && !lukePhaseCommits.ContainsKey(pending.Phase)) return null;
         var before = current;
         current = pending with { Revision = current.Revision + 1, LukePhaseCoinsUsed = current.LukePhaseCoinsUsed };
@@ -226,6 +228,7 @@ internal sealed partial class AntonRaidBattle
         if (lukeCompletion is not null && current.State == AntonRaidBattleState.Reward &&
             lukePhaseCommits.TryGetValue(current.Phase, out var committed) && committed.Members.All(row => !row.Eligible))
             _ = AdvanceAfterRewards(Instance, current.Revision);
+        ScheduleLukeClockLocked();
         return new(before, current);
     }
 

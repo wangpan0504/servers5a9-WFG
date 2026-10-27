@@ -15,10 +15,11 @@ internal sealed record LukeRaidStartPolicy(string Source, RaidScript ExecutionSc
     public LukeRaidRunPolicy? Run { get; init; }
     public LukeRaidCompletionPolicy? Completion { get; init; }
     public LukeRaidRevivalPolicy? Revival { get; init; }
+    public LukeRaidClockPolicy? Timers { get; init; }
 }
 
 internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
-    TownCatalog towns, EpicPieceCatalog pieces, LukeRaidStartPolicy policy, TimeProvider? clock = null, ItemCatalog? rewardItems = null)
+    TownCatalog towns, EpicPieceCatalog pieces, LukeRaidStartPolicy policy, TimeProvider? clock = null, ItemCatalog? rewardItems = null, LukeRaidClocks? timers = null)
 {
     public RaidStartResult Start(RaidActor actor, RaidParty expected, RaidDefinition definition,
         ImmutableArray<PartySnapshot> bindings, Func<bool> commandsCurrent)
@@ -50,9 +51,12 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
         if (PrepareBattle(out var preparedBattle) is { } executionRejection) return new(19, executionRejection);
         var battle = preparedBattle!;
         var instance = battle.Instance;
+        var timerLease = policy.Timers is null ? null : timers?.Reserve(battle);
+        if (policy.Timers is not null && timerLease is null) return new(19, "luke-timer-capacity-unavailable");
+        bool installed = false;
         try
         {
-            return RaidOwnerGroup.Execute(RaidKind.Luke, reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
+            var startResult = RaidOwnerGroup.Execute(RaidKind.Luke, reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
             {
                 if (!commandsCurrent() || !roster.IsCurrent(registry)) return new RaidStartResult(19, "raid-members-changed");
                 var (batch, reason) = parties.PlanRaidPreparation(roster, bindings);
@@ -77,10 +81,18 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
                 }, batch));
                 return result.Receipt is { } receipt ? result with { Receipt = receipt with { Battle = battle.View } } : result;
             });
+            if (startResult.Receipt is not null)
+            {
+                installed = true;
+                timerLease?.Activate();
+                return startResult with { Receipt = startResult.Receipt with { Battle = battle.View } };
+            }
+            return startResult;
         }
         catch (RaidLifecycleRejectedException error) { return new(19, error.Reason); }
         catch (InvalidOperationException) when (reservations.Any(r => !r.Actor.IsCurrent))
         { return new(19, "member-owner-changed"); }
+        finally { if (!installed) timerLease?.Dispose(); }
     }
     // Runtime在装配时核验一次，命令与能力旗标共用同一可用服务，不凭策略非null亮按钮。
     internal string? UnavailableReason(RaidDefinition? definition)
@@ -114,6 +126,8 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
         if (policy.Completion is { } completion && (!AntonRaidBattle.ValidLukeCompletion(completion) || policy.Run is null ||
             rewardItems is null || completion.Phases.Any(phase => phase.Rewards.Offers.Any(offer => offer.Grants.Any(grant =>
                 grant.Count <= 0 || !rewardItems.TryGet(grant.ItemId, out _)))))) return "luke-completion-policy-unavailable";
+        if (policy.Timers is { } timerPolicy && (string.IsNullOrWhiteSpace(timerPolicy.Source) || policy.Run is null || timers is null))
+            return "luke-timer-policy-unavailable";
         if (policy.Revival is { } revival && (string.IsNullOrWhiteSpace(revival.Source) || policy.Run is null ||
             original.Phases.Length != 2 || original.Phases[0].Declarations.Any(row => row.Tag == "[phase coin limit]") ||
             original.Phases[1].Declarations.Count(row => row.Tag == "[phase coin limit]" && row.Values.Length == 1 &&
@@ -143,6 +157,9 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
                 original.Phases.Any(p => p.Dungeons.Any(d => d.Id == timer.DungeonId));
             foreach (var rule in phase.Rules)
             {
+                if (policy.Timers is not null && rule.Behavior.Any(clause => clause.Tag == "[set timer]" &&
+                    (clause.RawIntegers.Length != 3 || clause.RawIntegers[2] is <= 0 or > 86400)))
+                    return "luke-timer-duration-unavailable";
                 if (rule.Behavior.Any(clause => clause.Tag == "[set]" && !SymbolWriteSupported(clause.Symbol, original)))
                     return "luke-execution-symbol-consumer-unavailable";
                 if (rule.Trigger.Any(clause => clause.Operator is not null || !(clause.Tag switch
@@ -191,7 +208,7 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
                 return new RaidStartResult(19, "raid-replay-stale");
             var captures = expected.Members.OrderBy(m => m.Slot).Select(m => (m.Actor, Character: m.Actor.Session.CaptureRaidStart(m.Actor))).ToArray();
             var battle = actor.Session.RaidCombatView();
-            if (battle?.Instance != started.InstanceId || battle.Phase != started.Phase || battle.State != AntonRaidBattleState.Fighting ||
+            if (battle?.Instance != started.InstanceId || battle.Phase != started.Phase || battle.State != AntonRaidBattleState.Fighting || battle.ClockFaulted ||
                 captures.Any(m => m.Character is null || m.Character.Position.Town != room.Town || m.Character.Position.Area != room.Area ||
                 !ReferenceEquals(m.Actor.Session.RaidCombatView(), battle))) return new(19, "raid-replay-binding-changed");
             var notices = parties.RaidStartNotices(expected, bindings);

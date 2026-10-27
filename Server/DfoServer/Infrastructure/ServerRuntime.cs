@@ -189,7 +189,9 @@ internal static class ServerRuntime
             itemResources.Items, repository, tagEvildomProjection, log);
         var raidCatalog = GameWorld.Raids.RaidCatalog.Load(pvf).PrepareResources(pvf, dungeonCatalog, itemResources.Items);
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
-        var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items);
+        var lukeTimers = lukeStartPolicy?.Timers is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
+            repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }));
+        var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items, lukeTimers);
         if (lukeStart?.UnavailableReason(raidCatalog.Find(1)) is { } unavailable)
         {
             log.Write("resource_warning", new { Source = "Luke raid start policy", Reason = unavailable });
@@ -523,7 +525,7 @@ internal static class ServerRuntime
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
         Func<PacketCapture?, CancellationToken, Task>? management = gmCommands is null && gmWeb is null ? null : RunManagement;
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
-        return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache);
+        return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache,lukeTimers);
 
         async Task RunManagement(PacketCapture? capture, CancellationToken stop)
         {

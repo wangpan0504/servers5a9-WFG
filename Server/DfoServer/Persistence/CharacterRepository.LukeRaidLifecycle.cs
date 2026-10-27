@@ -8,6 +8,8 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
 {
     // 调用方不持Account/Battle/Party领域gate；仅操作666原事务签发的身份行，不读写Selected或资产。
+    bool ILukeRaidLifecycleStore.IsRetryable(Exception error) => SqliteBusyRetry.IsBusy(error);
+
     public LukePhaseCommit CommitLukePhase(AntonRaidBattle.LukePhaseSettlement candidate)
     {
         using var db = database.Open();

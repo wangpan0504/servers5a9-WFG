@@ -131,6 +131,7 @@ internal sealed partial class GameSession
             if (!Ready || Selected is not { } character || raidCombat is not { } raid || !raid.Actor.IsCurrent ||
                 !Enum.IsDefined(raid.Battle.Kind)) return null;
             var view = raid.Battle.View;
+            if (view.ClockFaulted) return null;
             int phase = view.Phase;
             if (view.State != AntonRaidBattleState.Reward)
             {
