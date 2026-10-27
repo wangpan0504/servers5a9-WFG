@@ -26,7 +26,9 @@ internal sealed partial class GameSession
                 !ReferenceEquals(session.CurrentRaidBattle(own.Actor), battle) || !session.CanInstallRaidDungeon(dungeon.Entry)) return null;
             actors.Add((own.Actor, dungeon.Run.Snapshot.Identity));
         }
-        return battle.ReserveDungeon(identity, first.Entry.DungeonId, actors.ToArray());
+        var objects = admission.LukeObjects is { } catalog
+            ? new LukeRaidObjectRegistration(first.Run.Snapshot.Identity.InstanceId, checked((int)first.Entry.DungeonId), first.Entry.Maze, catalog) : null;
+        return battle.ReserveDungeon(identity, first.Entry.DungeonId, actors.ToArray(), objects);
     }
 
     // PartyDungeonInstance在全部成员SQL已确认后调用；即使上次网络前消费中断，也从原Run保留的事实恢复。
@@ -71,7 +73,7 @@ internal sealed partial class GameSession
             map = snapshot.CurrentMap;
             rows.Add((raid.Actor, snapshot.Identity));
         }
-        var change = first.Battle.ObserveLukeRun(instance, rows.ToArray(), observeMap ? map!.Id : null);
+        var change = first.Battle.ObserveLukeRun(instance, rows.ToArray(), observeMap ? map!.Id : null, observeMap ? map : null);
         // 通知仍由原发布队列在owner锁外分发；重放时允许以当前view恢复丢失投影。
         return [.. notices, new(PartyDungeonNoticeKind.RaidBattleSync, members[0], members,
             members[0].Actor.Session.CurrentFormalDungeonScene(), RaidBattleChange: change,
