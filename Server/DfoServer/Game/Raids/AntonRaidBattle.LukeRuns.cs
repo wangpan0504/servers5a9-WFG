@@ -16,6 +16,7 @@ internal sealed partial class AntonRaidBattle
         public long Generation { get; } = generation;
         public (RaidActor Actor, DungeonRunIdentity Identity)[] Actors { get; } = actors;
         public HashSet<RaidActor> Active { get; } = actors.Select(actor => actor.Actor).ToHashSet();
+        public LukeRaidObjectRegistration? Objects { get; set; }
         public int RevivalUsed { get; set; }
         public Dictionary<RaidActor, long> RevivedDeaths { get; } = [];
         public bool Installed { get; set; }
@@ -38,11 +39,11 @@ internal sealed partial class AntonRaidBattle
         internal AntonRaidBattleChange? ReleasedChange { get; private set; }
         private DungeonReservation(AntonRaidBattle battle, LukeDungeonRun run) { this.battle = battle; this.run = run; }
         internal static DungeonReservation? Prepare(AntonRaidBattle battle, RaidDungeonIdentity identity,
-            uint dungeon, (RaidActor Actor, DungeonRunIdentity Identity)[] actors)
+            uint dungeon, (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects)
         {
             lock (battle.gate)
             {
-                if (battle.Kind != RaidKind.Luke || identity.Kind != RaidKind.Luke || identity.InstanceId != battle.Instance ||
+                if (objects is not null && (objects.Dungeon != dungeon || actors.Length == 0 || objects.Run != actors[0].Identity.InstanceId) || battle.Kind != RaidKind.Luke || identity.Kind != RaidKind.Luke || identity.InstanceId != battle.Instance ||
                     identity.Phase != battle.current.Phase || identity.Squad is not (1 or 2) ||
                     TerminalRequested(battle.current) || battle.pendingTransition is not null ||
                     !battle.current.Dungeons.TryGetValue(checked((int)dungeon), out var state) || state != RaidDungeonState.Open ||
@@ -54,7 +55,7 @@ internal sealed partial class AntonRaidBattle
                         run.Phase == identity.Phase && run.Dungeon == dungeon) ||
                     actors.Any(actor => battle.lukeRuns.Values.Any(run => run.Active.Contains(actor.Actor)))) return null;
                 var run = new LukeDungeonRun(actors[0].Identity.InstanceId, identity.Phase, dungeon, identity.Squad,
-                    battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon)), actors);
+                    battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon)), actors) { Objects = objects };
                 if (!battle.lukeRuns.TryAdd(run.Id, run)) return null;
                 return new(battle, run);
             }
@@ -89,7 +90,8 @@ internal sealed partial class AntonRaidBattle
     }
 
     internal DungeonReservation? ReserveDungeon(RaidDungeonIdentity identity, uint dungeon,
-        (RaidActor Actor, DungeonRunIdentity Identity)[] actors) => DungeonReservation.Prepare(this, identity, dungeon, actors);
+        (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects = null) =>
+        DungeonReservation.Prepare(this, identity, dungeon, actors, objects);
 
     // 各成员的正式事务全部确认后调用。先验证整批，再记录一次共享Run推进，不接受部分候选事实。
     internal AntonRaidBattleChange? CompleteLukeDungeon((RaidActor Actor, DungeonClearFact Fact)[] facts)
@@ -139,7 +141,8 @@ internal sealed partial class AntonRaidBattle
     // 正式安装/全员地图投影确认后调用；每个Run最多四个epoch，不记录无限房间历史。
     // 规则失败不消费事件，下次原Run加载/同步仍可重试；失效目标代仅确认事实而不执行新代业务。
     internal AntonRaidBattleChange? ObserveLukeRun(Guid instance,
-        (RaidActor Actor, DungeonRunIdentity Identity)[] actors, int? map = null)
+        (RaidActor Actor, DungeonRunIdentity Identity)[] actors, int? map = null,
+        DfoServer.GameWorld.Dungeons.DungeonMap? objectRoom = null)
     {
         lock (gate)
         {
@@ -167,6 +170,8 @@ internal sealed partial class AntonRaidBattle
             }
             run.EnterConsumed = true;
             if (map is not null) foreach (var row in actors) run.MapEpochs[row.Actor] = row.Identity.Epoch;
+            if (changedMap && objectRoom is { } observedRoom && observedRoom.Id == map && pendingTransition is null && CurrentObjective(run))
+                run.Objects?.Observe(observedRoom);
             CommitBattleCandidate(before, candidate);
             return ReferenceEquals(before, current) ? null : new(before, current);
         }
