@@ -74,6 +74,7 @@ internal static class LukeRaidStartTests
             LukeRaidRunTests.RunCore(actors.Take(8).ToArray());
             LukeRaidRevivalTests.RunCore(actors.Take(8).ToArray());
             LukeRaidClockTests.RunCore(actors.Take(8).ToArray());
+            LukeRaidObjectTests.RunCore(actors.Take(8).ToArray());
             LukeRaidCompletionTests.RunCore(actors.Take(8).ToArray());
             var leader=actors[0]; raids.Create(leader,1,"start","start"u8.ToArray(),8,1);
             for(int index=1;index<8;index++)
