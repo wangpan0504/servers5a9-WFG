@@ -20,9 +20,31 @@ internal static class GameSenderBudgetTests
         await PhaseDepartureAsync();
         await WriteFailureAsync();
         await WrittenCallbackAsync();
+        await PreparedBodyAsync();
         await QueuedPublicationAsync();
         await QueuedPartyCommandAsync();
         Console.WriteLine($"PASS {TestCheck.Count - checks} game sender budget assertions");
+    }
+
+    static async Task PreparedBodyAsync()
+    {
+        using var owner = new AccountOwners().Acquire("prepared-countdown", () => { });
+        using var stop = new CancellationTokenSource();
+        using var stream = new HeldStream();
+        await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
+        var held = sender.Send(0, 2, [1], "held");
+        await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        uint seconds = 10; int prepared = 0;
+        sender.PostPrepared(0, 597, 5, () => { prepared++; return Network.Builders.RaidCombatPackets.PhaseRemaining(seconds); },
+            "phase-clock", () => true);
+        sender.PostPrepared(0, 597, 5, () => throw new InvalidOperationException("stale must not prepare"), "stale-clock", () => false);
+        sender.PostPrepared(0, 597, 5, () => null, "expired-clock", () => true);
+        TestCheck.That(prepared == 0 && sender.PendingBytes == 17 + 3 * 21, "延迟构包仍按固定长度预算，不提前冻结秒数");
+        seconds = 2;
+        stream.Release.TrySetResult(); await held;
+        await sender.DrainAsync();
+        TestCheck.That(prepared == 1 && stream.Frames.Count == 2 && sender.PendingBytes == 0, "旧身份及到期代不写帧，预算完整释放");
+        TestCheck.Bytes(stream.Frames[1], GameFrame.Build(0, 597, 1, [0, 2, 0, 0, 0]), "慢队列恢复写实际剩余2秒，不重新给10秒");
     }
 
     static async Task QueuedPublicationAsync()
