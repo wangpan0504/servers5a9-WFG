@@ -4,6 +4,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
+using DfoServer.Testing.Inventory;
 using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -136,6 +137,10 @@ internal static class WeaponSkinTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(weaponSkins: ([32000], 32000));
+            That(WeaponSkinTests.RosterWeaponSkin(peer.Roster, 0) == 32000 &&
+                WeaponSkinTests.RosterWeaponSkin(peer.Roster, 1) == 0 &&
+                WeaponSkinTests.RosterWeaponSkin(peer.Roster, 2) == 0,
+                "登录名册 tail[42] 恢复已选幻化，无幻化角色保持0且不改包长语义");
             That(State().Selected == 32000 && Uid(65) == firstOutputUid, "重连恢复已保存选择及同一来源外观券UID");
             Select(peer, 0); peer.Expect(1, 1573, SelectionAck(0));
             That(U32(peer.Expect(0, 2).Body, 115) == 0, "取消选择同步实际场景Actor，不依赖重选角色恢复普通外观");
@@ -149,7 +154,11 @@ internal static class WeaponSkinTcpTests
             Make(peer, 1, 36); peer.Expect(1, 1599, [0, 3, 0]);
             peer.Barrier();
             That(Snapshot() == before && Core(65).Value == 2, "SQL恢复后可重试；相同来源券正常合堆，模具不足时不删除剩余武器");
-            peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            peer.Send(7); peer.Expect(1, 7, [1]);
+            byte[] canceledRoster = peer.Expect(0, 2).Body;
+            That(WeaponSkinTests.RosterWeaponSkin(canceledRoster, 0) == 0 &&
+                WeaponSkinTests.RosterWeaponSkin(canceledRoster, 1) == 0,
+                "取消幻化后返回选角，名册与入城字段同为0");
             peer.Select(1, weaponSkins: ([], 0));
             That(fixture.Query("SELECT weapon_skin_state FROM characters WHERE id=2") is [[string siblingState]] &&
                 JsonSerializer.Deserialize<SkinStorageState>(siblingState)!.Owned.IsEmpty,
@@ -170,6 +179,8 @@ internal static class WeaponSkinTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(2);
+            That(WeaponSkinTests.RosterWeaponSkin(peer.Roster, 0) == 0 &&
+                WeaponSkinTests.RosterWeaponSkin(peer.Roster, 2) == 0, "未选择幻化的1级角色登录名册保持0");
             Use(peer, 65);
             peer.Expect(1, 515, [1, 65, 0, 0, 199, 0, 0, 0]);
             peer.Expect(0, 1557, Build(w => { w.Write((byte)4); w.Write((ushort)1); w.Write(101040572); }));

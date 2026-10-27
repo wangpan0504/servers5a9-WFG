@@ -34,6 +34,8 @@ internal static class CharacterPackets
     // 名册行 48 字节尾部中超时空漩涡资格字节的偏移（KB-20261021T015635-5c920e4e59）。
     internal const int FiendWarEligibleTailOffset = 40;
     internal const int PreyEligibleTailOffset = 41;
+    // 02681030 读 u32 进 Data+49Ch；与 Actor 头 +6Eh 同一武器幻化字段。光环 u16 仍在 tail[46]。
+    internal const int WeaponSkinTailOffset = 42;
 
     public static byte[] Roster(CharacterRosterEntry[] rows, ushort capacity = 32)
     {
@@ -63,6 +65,8 @@ internal static class CharacterPackets
             tail[LukeEligibleTailOffset] = character.LukeEligible ? (byte)1 : (byte)0;
             tail[FiendWarEligibleTailOffset] = character.FiendWarEligible ? (byte)1 : (byte)0;
             tail[PreyEligibleTailOffset] = character.PreyEligible ? (byte)1 : (byte)0;
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(tail.AsSpan(WeaponSkinTailOffset),
+                character.WeaponSkin);
             // 0268104E读取末尾u16，只有1才经02A8DCF0启用预览光环；高字节由零初始化保留。
             tail[46] = 1;
             writer.Write(tail);

@@ -1,14 +1,18 @@
 using System.Buffers.Binary;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Parsers;
+using DfoServer.Persistence;
 using System.Text.Json;
 using PvfLib;
+using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing.Inventory;
@@ -155,6 +159,83 @@ internal static class WeaponSkinTests
                 actor.AsSpan(0,115).SequenceEqual(canceled.AsSpan(0,115)) && actor.AsSpan(119).SequenceEqual(canceled.AsSpan(119)),
                 "取消幻化只清独立选择，不清克隆来源、真实装备及相邻字段");
         }
+        byte[] roster = CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(role)]);
+        var rosterUnselected = role with { Inventory = role.Inventory with { Skins = new([32000]) } };
+        byte[] bareRoster = CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(rosterUnselected)]);
+        That(roster.Length == bareRoster.Length, "名册包长不因武器幻化变化");
+        That(RosterWeaponSkin(roster) == 32000 && RosterWeaponSkin(bareRoster) == 0 &&
+            RosterWeaponSkin(roster) == BinaryPrimitives.ReadInt32LittleEndian(TownPackets.Actor(role).AsSpan(115)),
+            "名册 tail[42..45] 与入城 Actor 正文115 写同一 Selected；未选外观保持0");
+        byte[] withTail = RosterTail(roster);
+        byte[] bareTail = RosterTail(bareRoster);
+        That(Enumerable.Range(0, 48).All(i => i is >= CharacterPackets.WeaponSkinTailOffset and < CharacterPackets.WeaponSkinTailOffset + 4 ||
+                withTail[i] == bareTail[i]), "幻化只改 tail[42..45]，资格位、光环使能与克隆称号不变");
+        That(withTail[46] == 1 && bareTail[46] == 1 && CharacterPackets.WeaponSkinTailOffset == 42, "光环使能不被幻化字段挤掉");
+        RosterRepository();
         Console.WriteLine($"PASS {Count - checks} 武器幻化资源、原生正文、来源核心与所有权边界断言");
+    }
+
+    internal static int RosterWeaponSkin(byte[] body, int rowIndex = 0)
+    {
+        using var reader = new BinaryReader(new MemoryStream(body));
+        reader.ReadBytes(15);
+        for (int row = 0; row < body[1]; row++)
+        {
+            reader.ReadUInt16();
+            reader.ReadBytes(reader.ReadInt32());
+            reader.ReadBytes(15);
+            int items = reader.ReadByte();
+            for (int i = 0; i < items; i++)
+            {
+                byte slot = reader.ReadByte();
+                reader.ReadInt32();
+                reader.ReadBytes(reader.ReadInt32());
+                reader.ReadBytes(3);
+                int clear = reader.ReadInt32();
+                if (slot == 9 && clear > 0)
+                    reader.ReadBytes(reader.ReadInt32());
+                reader.ReadInt32();
+                reader.ReadByte();
+            }
+            byte[] tail = reader.ReadBytes(48);
+            if (row == rowIndex)
+                return BinaryPrimitives.ReadInt32LittleEndian(tail.AsSpan(CharacterPackets.WeaponSkinTailOffset));
+        }
+        throw new InvalidDataException("名册行不存在");
+    }
+
+    static byte[] RosterTail(byte[] body) => body.AsSpan(body.Length - 10 - 48, 48).ToArray();
+
+    static void RosterRepository()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-weapon-skin-roster-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repository = new CharacterRepository(Path.Combine(root, "game.db"));
+            var owners = new AccountOwners();
+            using var owner = owners.Acquire("weapon-skin-roster", () => { });
+            var point = new Location(1, 0, 10, 10);
+            var skinned = repository.Create(owner, new("SkinRoster", point, point) { Level = 75 });
+            var bare = repository.Create(owner, new("BareRoster", point, point) { Level = 75 });
+            using (var db = new SqliteConnection("Data Source=" + Path.Combine(root, "game.db") + ";Pooling=False"))
+            {
+                db.Open();
+                using var command = db.CreateCommand();
+                command.CommandText = "UPDATE characters SET weapon_skin_state=$state WHERE id=$id";
+                command.Parameters.AddWithValue("$state", JsonSerializer.Serialize(new SkinStorageState([32000], 32000)));
+                command.Parameters.AddWithValue("$id", skinned.Id);
+                command.ExecuteNonQuery();
+            }
+            var roster = repository.ListRoster(owner);
+            That(roster.Single(row => row.Id == skinned.Id).WeaponSkin == 32000 &&
+                roster.Single(row => row.Id == bare.Id).WeaponSkin == 0, "名册查询读取 weapon_skin_state.Selected，无幻化角色为0");
+            var full = repository.List(owner);
+            That(CharacterPackets.Roster(roster).SequenceEqual(CharacterPackets.Roster(full.Select(CharacterRosterEntry.FromCharacter).ToArray())),
+                "轻量名册与完整角色的幻化字段一致");
+            That(RosterWeaponSkin(CharacterPackets.Roster(roster), 0) == 32000 &&
+                RosterWeaponSkin(CharacterPackets.Roster(roster), 1) == 0, "按槽位顺序第一行有幻化、第二行保持0");
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 }
