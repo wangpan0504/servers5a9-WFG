@@ -14,7 +14,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
 {
     // 按包体及帧头计费，包含活动消息；共享包体在每个接收连接独立计费。
     internal const long MaxPendingBytes = 2 * 1024 * 1024;
-    sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false, Action? Written = null, Func<byte[]?>? Prepare = null);
+    sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false, Action? Written = null, Func<byte[]?>? Prepare = null, Action? AfterWritten = null);
     sealed record Message(long Epoch, Output? Own = null, RemoteTownActor? Enter = null, (ushort, long)? Move = null,
         (ushort Id, long Membership, byte[]? Effect, Func<bool>? Current, byte[]? Prepare, byte[]? DestinationArea, bool HideActor)? Leave = null,
         TaskCompletionSource? Barrier = null, RemoteTownActor? Refresh = null, SceneActorClear Actors = SceneActorClear.Delete, long Bytes = 0, bool IsClear = false);
@@ -81,8 +81,9 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         TryPost(kind, opcode, body, action, canSend, written);
 
     // 返回的是有界队列接收状态，不表示网络已经写出或客户端已经显示。
-    internal bool TryPost(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null, Action? written = null) =>
-        Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: canSend, Written: written)));
+    // afterWritten在写成功且退出本人owner后同步调用；不得等待网络/SQL，可发布已提交领域变化。
+    internal bool TryPost(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null, Action? written = null, Action? afterWritten = null) =>
+        Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: canSend, Written: written, AfterWritten: afterWritten)));
 
     // 固定长度预算；发送泵本人owner内即时构包，不得执行SQL或网络等待。null代表原身份失效。
     internal void PostPrepared(byte kind, ushort opcode, int bodyLength, Func<byte[]?> prepare, string action, Func<bool> canSend)
@@ -277,6 +278,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                             if (body.Length != own.Body.Length) throw new InvalidDataException("发送时包体长度超过固定预算合同");
                             await Write(own.Kind, own.Opcode, body, own.Action, own.Protected);
                             if (own.Written is { } written) owner.Execute(() => { written(); return true; });
+                            own.AfterWritten?.Invoke();
                         }
                     }
                     else if (message.IsClear)
