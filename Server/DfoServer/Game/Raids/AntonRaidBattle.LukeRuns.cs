@@ -18,6 +18,8 @@ internal sealed partial class AntonRaidBattle
         public HashSet<RaidActor> Active { get; } = actors.Select(actor => actor.Actor).ToHashSet();
         public LukeRouteLease? Route { get; init; }
         public LukeRaidObjectRegistration? Objects { get; set; }
+        public LukeObjectBinding? FacilityRoom { get; set; }
+        public HashSet<LukeObjectBinding> ConsumedFacilities { get; } = [];
         public int RevivalUsed { get; set; }
         public Dictionary<RaidActor, long> RevivedDeaths { get; } = [];
         public bool Installed { get; set; }
@@ -187,7 +189,10 @@ internal sealed partial class AntonRaidBattle
             run.EnterConsumed = true;
             if (map is not null) foreach (var row in actors) run.MapEpochs[row.Actor] = row.Identity.Epoch;
             if (changedMap && objectRoom is { } observedRoom && observedRoom.Id == map && pendingTransition is null && CurrentObjective(run))
-                run.Objects?.Observe(observedRoom);
+            {
+                var bindings = run.Objects?.Observe(observedRoom);
+                run.FacilityRoom = CreateFacilityRoom(run, bindings);
+            }
             CommitBattleCandidate(before, candidate);
             return ReferenceEquals(before, current) ? null : new(before, current);
         }
