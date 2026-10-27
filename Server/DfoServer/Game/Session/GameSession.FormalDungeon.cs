@@ -421,7 +421,7 @@ internal sealed partial class GameSession
             !QuestEligibility.Evaluate(expected with { ActiveMainQuests = expected.ActiveMainQuests.Where(row => row.QuestId != entry.RouteQuestId).ToArray() },
                 questCatalog.Get((int)entry.RouteQuestId),questCatalog).Eligible) return RejectFormal("route-quest-not-eligible");
         if (partyAdmission && (entry.IsPractice || entry.IsTournament || entry.IsTrainingRoom || entry.IsClassExperience ||
-            entry.IsTutorial || entry.IsQuestReplay || entry.Hope is not null || assault is not null)) return RejectFormal("party-mode-unsupported");
+            entry.IsTutorial || entry.IsQuestReplay || assault is not null)) return RejectFormal("party-mode-unsupported");
         if (partyAdmission && shared is null) entry = entry with { PartyRoute = entry };
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes,crackRewards,shared,partyFirstKey,partyInstance);
@@ -509,10 +509,26 @@ internal sealed partial class GameSession
             if (!SinglePlayerDungeonRun.TryCreate(participantEntry, state.LastAttempt + 1, epoch, source.Route, participantAuthority,
                 out var participant, out var reason)) return RejectFormal("party-participant:" + reason);
             participant!.BindPartyInstance(source.Run.Snapshot.Identity.InstanceId);
+            if (entry.Hope is { } participantHope)
+            {
+                var binding = OperationHopePlan.TryBind(participantHope.Catalog,participantHope.Acceptance.QuestId,
+                    participantHope.MazeOrdinal,expected.Level,participant.Snapshot.Identity,participantHope.Acceptance);
+                if (binding is null || !participant.ConfigureHope(participantHope.Catalog,binding))
+                    return RejectFormal("party-operation-hope-run-bind-failed");
+            }
             if (!participantAuthority.BindTo(participant)) return RejectFormal("party-participantAuthority-bind-failed");
             var participantGround = source.Ground.ForPartyParticipant(participant, source.Route.Rooms);
+            var participantDropPlans=source.DropPlans;
+            if (entry.Hope is not null && source.PrepareDrops is not null)
+            {
+                // 物理怪物和预留key共用；每人专属装备池按本人的冻结职业准备。
+                var preparePersonal=source.PrepareDrops(participantEntry);
+                participantDropPlans=source.Route.Rooms.SelectMany(room=>room.Monsters)
+                    .Where(monster=>source.DropPlans.ContainsKey(monster.ObjectKey))
+                    .ToImmutableDictionary(monster=>monster.ObjectKey,preparePersonal);
+            }
             var participantDungeon = new FormalDungeon(participant.Entry, source.Route, participant, participantAuthority, source.MapSeed,
-                participantGround, source.Pools, draw ?? RandomNumberGenerator.GetInt32, source.PrepareDrops, source.DropPlans)
+                participantGround, source.Pools, draw ?? RandomNumberGenerator.GetInt32, source.PrepareDrops, participantDropPlans)
                 { NextObjectKey = shared.Session.PreparedParty(shared).NextKey, QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, EntryPieces = pieces,
                     HellRewardPlans = source.HellRewardPlans, CrackRewards = crackRewards ?? source.CrackRewards };
             return new(expected, epoch, participantDungeon, shared.Session.PreparedParty(shared).NextKey);

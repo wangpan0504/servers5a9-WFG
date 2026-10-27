@@ -22,6 +22,8 @@ internal sealed class OperationHopeCatalog
     public ImmutableArray<int> MissionIds { get; }
     public int FatigueValue { get; }
     public int NeedFatigue { get; }
+    public int HiddenNumerator { get; }
+    public int HiddenDenominator { get; }
     public byte Difficulty { get; }
     public ImmutableDictionary<int, OperationHopeMaze> Mazes { get; }
     public ImmutableDictionary<int, OperationHopeMission> Missions { get; }
@@ -57,6 +59,11 @@ internal sealed class OperationHopeCatalog
         MissionIds = source.MissionIds;
         FatigueValue = source.FatigueValue;
         NeedFatigue = source.NeedFatigue;
+        if (source.Fields.Where(f=>f.Name=="hidden boss appear rate").ToArray() is not
+            [{ Children.Length:0,Values:[{Type:0,Value:>=0} numerator,{Type:0,Value:>0} denominator] }] ||
+            numerator.Value>denominator.Value)
+            throw new InvalidDataException("代号希望隐藏迷宫概率声明无效");
+        HiddenNumerator=numerator.Value;HiddenDenominator=denominator.Value;
         if (definition.Id != 8523 || dungeon.ContinuousDungeon != 1 || dungeon.Mazes.Length != definition.Mazes.Count || dungeon.Warps.IsEmpty)
             throw new InvalidDataException("代号希望迷宫与副本目录不一致");
         var missions = ImmutableDictionary.CreateBuilder<int, OperationHopeMission>();

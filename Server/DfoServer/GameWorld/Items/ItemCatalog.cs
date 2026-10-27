@@ -574,6 +574,7 @@ internal sealed partial class ItemCatalog
             CreationRate = CreationRate(text),
             PvpFreeEquipment = isEquipment && text.Has("pvp free equip"),
             DisjointForbidden = impossible.Contains("disjoint", StringComparison.OrdinalIgnoreCase),
+            IsOperationHope = isEquipment && text.Has("operation hope"),
             BossDrop = isEquipment && text.ContainsString("item category", "boss drop"),
             IsMonsterCard = !isEquipment && text.ContainsString("item category", "monster card"),
             AmplifyPollutionForbidden = isEquipment && text.ContainsString("impossible contents", "pollution"),

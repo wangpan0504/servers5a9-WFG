@@ -164,11 +164,11 @@ internal static partial class DungeonSpecificCardRewardsTests
         var other = tokens.ToArray(); other[2] = new(0, 71);
         That(DungeonSpecificCardRewards.Parse(other, index => strings[index]).IsEmpty,
             "其它类型不能借黎明裂缝的表形状发放奖励");
-        foreach (int type in new[] { 45,75 })
+        foreach (int type in new[] { 45,75,76 })
         {
             var supported = tokens.ToArray(); supported[2] = new(0,type);
             That(DungeonSpecificCardRewards.Parse(supported,index => strings[index])[530].SequenceEqual(rows[530]),
-                "安徒恩与超时空表沿同一严格五整数布局保留全部权重和数量");
+                "安徒恩、超时空与代号希望表沿同一严格五整数布局保留全部权重和数量");
             supported[4] = new(0,1);
             Reject<NotSupportedException>(() => DungeonSpecificCardRewards.Parse(supported,index => strings[index]),
                 "专用翻牌非零选择字段不作默认奖励");

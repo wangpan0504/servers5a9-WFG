@@ -22,11 +22,18 @@ internal sealed class DisjointCatalog
     public FrozenDictionary<int, DisjointIndependent[]> IndependentResults { get; }
     public FrozenDictionary<int, int> PieceResults { get; }
     public FrozenSet<int> EventResults { get; }
+    public FrozenDictionary<int,int> OperationHopeResults { get; }
 
-    public DisjointCatalog(PvfArchive pvf) : this(pvf.ReadText("etc/disjoint.etc"), pvf.ReadText("etc/epicpieceinfo.etc")) { }
+    public DisjointCatalog(PvfArchive pvf) : this(pvf.ReadText("etc/disjoint.etc"), pvf.ReadText("etc/epicpieceinfo.etc"),
+        pvf.ReadText("etc/dungeonetc/operationhopedungeoninfo.etc")) { }
 
-    internal DisjointCatalog(string text, string epicPieces)
+    internal DisjointCatalog(string text, string epicPieces, string? operationHope = null)
     {
+        int[] hopeResults = operationHope is null ? [] : Integers(Block(operationHope,"disjoint item"));
+        if (hopeResults.Length % 2 != 0 || operationHope is not null && hopeResults.Length == 0 ||
+            hopeResults.Any(value=>value<=0) || hopeResults.Where((_,index)=>index%2==0).Distinct().Count()!=hopeResults.Length/2)
+            throw new InvalidDataException("代号希望分解产物必须为唯一物品与正数量对");
+        OperationHopeResults = Enumerable.Range(0,hopeResults.Length/2).ToFrozenDictionary(i=>hopeResults[i*2],i=>hopeResults[i*2+1]);
         var cubes = Regex.Matches(text, @"\[cube index\](.*?)\[/cube index\]", RegexOptions.Singleline)
             .Single(match => match.Groups[1].Value.Contains("[no element]", StringComparison.Ordinal));
         CubeItemId = Integers(cubes.Groups[1].Value).First();

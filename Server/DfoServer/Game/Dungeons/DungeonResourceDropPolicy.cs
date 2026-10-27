@@ -8,7 +8,8 @@ namespace DfoServer.Game.Dungeons;
 internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, DungeonItemDropCatalog candidates,
     Func<int, DungeonMonsterDropDeclaration> resolveMonster, Func<int, ItemTemplate> resolveItem, DungeonSpecialDropCatalog? special = null,
     EquipmentAmplificationDropPolicy? amplification = null, HarlemMaterialDropPolicy? materials = null,
-    HarlemHellEpicDropPolicy? harlemEpics = null, HarlemAbyssBonusDropPolicy? abyssBonuses = null, SleepyHollowMaterialDropPolicy? sleepyHollow = null)
+    HarlemHellEpicDropPolicy? harlemEpics = null, HarlemAbyssBonusDropPolicy? abyssBonuses = null, SleepyHollowMaterialDropPolicy? sleepyHollow = null,
+    OperationHopeRewardPolicy? hopeRewards = null)
 {
     public const string Rule = "pvf-monster-reference-v1";
     public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity rows[1..3]", "party member drop bonusrate",
@@ -48,6 +49,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             if (materials is not null) plan = materials.Extend(plan, entry, monster);
             if (abyssBonuses is not null) plan = abyssBonuses.Extend(plan, entry, monster);
             if (sleepyHollow is not null) plan = sleepyHollow.Extend(plan, entry, monster);
+            if (hopeRewards is not null) plan = hopeRewards.Extend(plan,entry,monster);
             if (ordinaryLuke && monster.CanReportDeath && !monster.IsFriendly && !monster.IsScriptedBoss &&
                 monster.SpawnType <= 3 && special?.OrdinaryLukeCards.TryGetValue(monster.MonsterId, out var card) == true)
             {

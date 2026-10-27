@@ -170,7 +170,8 @@ internal sealed partial class GameSession
             !CharacterGrowthPlan.AddExperience(Selected!, reward.TotalExperience, growth).Success)
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo && !dungeon.Entry.Maze.IsGriefTower ? cards?.Prepare(
-            dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count) : null);
+            dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count,
+            job:Selected!.Job,grow:Selected.GrowType) : null);
         var options = dungeon.Settlement?.Pending.Options;
         if (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo && !dungeon.Entry.Maze.IsGriefTower && cards is not null)
         {

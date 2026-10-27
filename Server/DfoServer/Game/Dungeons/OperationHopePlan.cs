@@ -12,6 +12,20 @@ internal sealed record OperationHopeMissionBinding(DungeonRunIdentity Identity, 
 // 仅判断资源声明的区域连接，不以此替代正式实例的清图事实或开启任务许可。
 internal static class OperationHopePlan
 {
+    // 用户确认的本服兼容：先按26/100决定隐藏分支，再在该分支内均匀选择一次迷宫。
+    public static int ChooseMaze(OperationHopeCatalog catalog,Func<int,int>? draw=null)
+    {
+        int Sample(int bound)
+        {
+            int value=(draw??Random.Shared.Next)(bound);
+            return value>=0 && value<bound ? value : throw new InvalidDataException("希望迷宫抽样越界");
+        }
+        bool hidden=Sample(catalog.HiddenDenominator)>=catalog.HiddenDenominator-catalog.HiddenNumerator;
+        var candidates=catalog.Mazes.Where(row=>row.Value.HiddenBoss==hidden).OrderBy(row=>row.Key).Select(row=>row.Key).ToArray();
+        if (candidates.Length==0) throw new InvalidDataException("希望概率分支缺少迷宫");
+        return candidates[Sample(candidates.Length)];
+    }
+
     public static bool CanConnectAreas(OperationHopeCatalog catalog, int sourceMapId, int destinationMapId) =>
         catalog.Maps.TryGetValue(sourceMapId, out var source) &&
         catalog.Maps.TryGetValue(destinationMapId, out var destination) &&

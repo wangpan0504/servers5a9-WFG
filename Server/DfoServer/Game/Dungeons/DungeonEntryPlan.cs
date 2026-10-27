@@ -71,6 +71,7 @@ internal sealed record DungeonEntryPlan(
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
     public OperationHopeAdmission? Hope { get; init; }
+    public (byte Job,byte Grow)? HopeRewardProfession { get; init; }
     public bool UsesRoomFatigue => UsesFatigue && StartFatigue == 0 && Hope is null;
     // #510/#511 普通入场的 [required item]「物品 1 1」：入场提交时与疲劳、尝试号同事务扣除。
     public DungeonRequiredItemRow? EntryItem { get; init; }
@@ -250,7 +251,10 @@ internal sealed record DungeonEntryPlan(
         {
             if (shared.PartyRoute is not null || shared.DungeonId != dungeonId || shared.Difficulty != difficulty ||
                 shared.IsPractice || shared.IsTutorial || shared.IsClassExperience || shared.IsTrainingRoom || shared.IsTournament ||
-                shared.IsQuestReplay || shared.Hope is not null || (shared.HellParty is not null || shared.IsCosmo) != hellParty || shared.IsHellLegend != hellLegend)
+                shared.IsQuestReplay || (shared.HellParty is not null || shared.IsCosmo) != hellParty || shared.IsHellLegend != hellLegend ||
+                (shared.Hope is null) != (hope is null) || hope is not null && (shared.Hope is not { } sharedHope ||
+                    !ReferenceEquals(sharedHope.Catalog,hope.Catalog) || sharedHope.MazeOrdinal != hope.MazeOrdinal ||
+                    hope.SourceRevision != character.Revision || questId != 0))
             { reason = "party-route-mismatch"; return false; }
             var accepted = questId == 0 ? null : character.ActiveMainQuests.Single(row => row.QuestId == questId);
             var participantTerminal = character.ActiveMainQuests.SingleOrDefault(row => row.QuestId == shared.TerminalLayerQuestId);
@@ -259,7 +263,9 @@ internal sealed record DungeonEntryPlan(
                 CharacterId = character.Id, CharacterRevision = character.Revision,
                 QuestId = questId, ActiveQuestSlot = accepted?.Slot ?? byte.MaxValue,
                 QuestAcceptanceId = accepted?.AcceptanceId ?? Guid.Empty,
-                QuestAcceptances = character.ActiveMainQuests.ToImmutableArray(),
+                QuestAcceptances = hope is null ? character.ActiveMainQuests.ToImmutableArray() :
+                    character.ActiveMainQuests.ToImmutableArray().Add(hope.Acceptance), Hope = hope,
+                HopeRewardProfession = hope is null ? null : (character.Job,character.GrowType),
                 IsOrdinaryHunt = accepted is not null && shared.RouteQuestId == 0,
                 TerminalLayerQuestId = participantTerminal?.QuestId ?? 0, TerminalLayerQuestSlot = participantTerminal?.Slot ?? byte.MaxValue,
                 TerminalLayerAcceptanceId = participantTerminal?.AcceptanceId ?? Guid.Empty,
@@ -637,7 +643,7 @@ internal sealed record DungeonEntryPlan(
         };
         plan = WithEntryCost(plan, definition, hellParty || isReplay || grief is not null);
         if (hope is not null)
-            plan = plan with { Hope = hope, StartFatigue = checked((ushort)hope.Catalog.FatigueValue),
+            plan = plan with { Hope = hope, HopeRewardProfession = (character.Job,character.GrowType), StartFatigue = checked((ushort)hope.Catalog.FatigueValue),
                 QuestAcceptances = plan.QuestAcceptances.Add(hope.Acceptance) };
         reason = "resource-plan-ready";
         return true;
