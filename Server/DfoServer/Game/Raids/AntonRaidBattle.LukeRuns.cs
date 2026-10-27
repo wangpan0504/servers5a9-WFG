@@ -16,6 +16,7 @@ internal sealed partial class AntonRaidBattle
         public long Generation { get; } = generation;
         public (RaidActor Actor, DungeonRunIdentity Identity)[] Actors { get; } = actors;
         public HashSet<RaidActor> Active { get; } = actors.Select(actor => actor.Actor).ToHashSet();
+        public LukeRouteLease? Route { get; init; }
         public LukeRaidObjectRegistration? Objects { get; set; }
         public int RevivalUsed { get; set; }
         public Dictionary<RaidActor, long> RevivedDeaths { get; } = [];
@@ -39,7 +40,7 @@ internal sealed partial class AntonRaidBattle
         internal AntonRaidBattleChange? ReleasedChange { get; private set; }
         private DungeonReservation(AntonRaidBattle battle, RaidDungeonRun run) { this.battle = battle; this.run = run; }
         internal static DungeonReservation? Prepare(AntonRaidBattle battle, RaidDungeonIdentity identity,
-            uint dungeon, (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects)
+            uint dungeon, (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects, LukeRouteLease? route, int? mazeOrdinal)
         {
             lock (battle.gate)
             {
@@ -57,8 +58,11 @@ internal sealed partial class AntonRaidBattle
                     battle.dungeonRuns.Values.Any(run => run.Squad == identity.Squad ||
                         battle.Kind == RaidKind.Luke && run.Phase == identity.Phase && run.Dungeon == dungeon) ||
                     actors.Any(actor => battle.dungeonRuns.Values.Any(run => run.Active.Contains(actor.Actor)))) return null;
+                if (battle.UsesFixedRoute(identity.Phase)
+                    ? route is null || route.Dungeon != dungeon || route.Phase != identity.Phase || route.MazeOrdinal != mazeOrdinal || !battle.IsLukeRouteCurrent(route)
+                    : route is not null) return null;
                 var run = new RaidDungeonRun(actors[0].Identity.InstanceId, identity.Phase, dungeon, identity.Squad,
-                    battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon)), actors) { Objects = objects };
+                    battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon)), actors) { Objects = objects, Route = route };
                 if (!battle.dungeonRuns.TryAdd(run.Id, run)) return null;
                 return new(battle, run);
             }
@@ -93,8 +97,9 @@ internal sealed partial class AntonRaidBattle
     }
 
     internal DungeonReservation? ReserveDungeon(RaidDungeonIdentity identity, uint dungeon,
-        (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects = null) =>
-        DungeonReservation.Prepare(this, identity, dungeon, actors, objects);
+        (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects = null,
+        LukeRouteLease? route = null, int? mazeOrdinal = null) =>
+        DungeonReservation.Prepare(this, identity, dungeon, actors, objects, route, mazeOrdinal);
 
     // 各成员的正式事务全部确认后调用。先验证整批，再记录一次共享Run推进，不接受部分候选事实。
     internal AntonRaidBattleChange? CompleteLukeDungeon((RaidActor Actor, DungeonClearFact Fact)[] facts)
@@ -121,11 +126,19 @@ internal sealed partial class AntonRaidBattle
             {
                 var definition = script.Phases[run.Phase].Dungeons.Single(d => d.Id == run.Dungeon);
                 if (!before.Symbols.TryGetValue(definition.HpSymbol, out int hp) || hp <= 0) return null;
+                if (UsesFixedRoute(run.Phase) && (run.Route is not { } lease || !IsLukeRouteCurrent(lease) || lease.ExpectedHp != hp)) return null;
                 int remaining = hp - 1;
                 candidate = before with { Symbols = before.Symbols.SetItem(definition.HpSymbol, remaining),
                     Dungeons = before.Dungeons.SetItem(checked((int)run.Dungeon), remaining == 0 ? RaidDungeonState.Clear : RaidDungeonState.Open) };
+                if (run.Route is { } route)
+                {
+                    var progress = candidate.LukeRoutes[route.Dungeon];
+                    candidate = candidate with { LukeRoutes = candidate.LukeRoutes.SetItem(route.Dungeon,
+                        progress with { Step = progress.Step + 1, Revision = checked(progress.Revision + 1) }) };
+                }
                 candidate = Evaluate(candidate, remaining == 0 ? checked((int)run.Dungeon) : null, definition.HpSymbol, null);
             }
+            candidate = ReconcileLukeRoutes(candidate);
             // 第一次ClearPhase产生Reward候选即结束旧阶段业务；随后只补原Run已提交成员事实，
             // 不再扣HP、改图状态或执行旧阶段symbol/timer行为。
             // Evaluate可能拒绝未知执行语义；在它成功前不消费已提交事实，原Run可完整重放。
@@ -210,6 +223,7 @@ internal sealed partial class AntonRaidBattle
     void CommitBattleCandidate(AntonRaidBattleView before, AntonRaidBattleView candidate)
     {
         if (ReferenceEquals(before, candidate)) return;
+        candidate = ReconcileLukeRoutes(candidate);
         if (Kind == RaidKind.Luke && candidate.State != AntonRaidBattleState.Fighting && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0 || lukeCompletion is not null))
         {
             pendingTransition = candidate;

@@ -17,19 +17,21 @@ internal sealed partial class GameSession
         var first = prepared[0].Session.PreparedParty(prepared[0]).Dungeon;
         var admission = prepared[0].Session.raidDungeonAdmission;
         if (first.Entry.RaidEntry is not { } identity || admission?.Battle is not { } battle) return null;
+        var route = prepared[0].Session.CurrentDungeonSelection?.Raid?.Route;
         var actors = new List<(RaidActor Actor, DungeonRunIdentity Identity)>();
         foreach (var token in prepared)
         {
             var session = token.Session;
             var dungeon = session.PreparedParty(token).Dungeon;
             if (dungeon.Entry.RaidEntry != identity || dungeon.Entry.DungeonId != first.Entry.DungeonId ||
+                dungeon.Entry.Maze.SourceOrdinal != first.Entry.Maze.SourceOrdinal || session.CurrentDungeonSelection?.Raid?.Route != route ||
                 session.raidDungeonAdmission is not { } own || own.Kind != identity.Kind || !ReferenceEquals(own.Battle, battle) ||
                 !ReferenceEquals(session.CurrentRaidBattle(own.Actor), battle) || !session.CanInstallRaidDungeon(dungeon.Entry)) return null;
             actors.Add((own.Actor, dungeon.Run.Snapshot.Identity));
         }
         var objects = admission.LukeObjects is { } catalog
             ? new LukeRaidObjectRegistration(first.Run.Snapshot.Identity.InstanceId, checked((int)first.Entry.DungeonId), first.Entry.Maze, catalog) : null;
-        return battle.ReserveDungeon(identity, first.Entry.DungeonId, actors.ToArray(), objects);
+        return battle.ReserveDungeon(identity, first.Entry.DungeonId, actors.ToArray(), objects, route, first.Entry.Maze.SourceOrdinal);
     }
 
     // PartyDungeonInstance在全部成员SQL已确认后调用；即使上次网络前消费中断，也从原Run保留的事实恢复。

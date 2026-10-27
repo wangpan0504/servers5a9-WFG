@@ -17,6 +17,7 @@ namespace DfoServer.Testing;
 internal static class LukeRaidStartTcpTests
 {
     public static Task RunAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,false);
+    public static Task RunFixedRouteAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,fixedRoute:true);
     public static Task RunDungeonsAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true);
 
     public static Task RunPhasesAsync(ServerOptions source,string root,TcpTestResources resources) =>
@@ -94,10 +95,14 @@ internal static class LukeRaidStartTcpTests
         return (definition,policy,phaseClock);
     }
 
-    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false,bool resourceRewards=false)
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false,bool resourceRewards=false,bool fixedRoute=false)
     {
         var (definition,policy,phaseClock)=Prepare(resources,runDungeons,completePhases,timed,phaseTimeout);
         var raw=definition.Resources!.Script;var catalog=definition.Resources.EntryCatalog!;
+        if(fixedRoute)
+            policy=policy with {Run=policy.Run! with {FixedRouteOptions=new("LukeExplicitCardRoutePolicyV1",
+                LukeFixedCardRoute.Fingerprint(catalog),0,[5054,5055,5056],[0,1,2],3,
+                LukeRouteFailure.RetrySameStep,LukeRouteReset.ResetStepKeepGroup)}};
         if(resourceRewards)
         {
             // 合成终结目标改为第二张已开放5313：先5311再5313，证明真实最少2资格，非原版路线承诺。
@@ -114,8 +119,27 @@ internal static class LukeRaidStartTcpTests
             That(resolved.Completion.Phases.Select(row=>row.Rewards.Offers.Single().Grants.Single().ItemId).SequenceEqual(new[]{10308804,10304817}),
                 "当前真实party_card映射到两只原booster箱，不把RawB100当100个箱");
         }
-        await using var fixture=new TcpTestFixture(source,Path.Combine(root,resourceRewards?"luke-raid-resource-rewards":phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
+        await using var fixture=new TcpTestFixture(source,Path.Combine(root,fixedRoute?"luke-raid-fixed-route":resourceRewards?"luke-raid-resource-rewards":phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
         await fixture.StartAsync();
+        if(fixedRoute)
+        {
+            var routeLog=fixture.Events().Single(row=>row.GetProperty("Kind").GetString()=="startup" &&
+                row.GetProperty("Detail").TryGetProperty("Stage",out var stage) && stage.GetString()=="Luke explicit fixed compatibility route").GetProperty("Detail");
+            That(routeLog.GetProperty("Choices").GetArrayLength()==9 && routeLog.GetProperty("Group").GetInt32()==0,
+                "Runtime核验九maze全部设施后才解析显式Fixed兼容策略");
+            var inspection=fixture.Events().Single(row=>row.GetProperty("Kind").GetString()=="startup" &&
+                row.GetProperty("Detail").TryGetProperty("Stage",out var stage) && stage.GetString()=="Luke fixed route resource inspection")
+                .GetProperty("Detail").GetProperty("Mazes").EnumerateArray().ToArray();
+            That(inspection.Length==9 && inspection.All(row=>row.GetProperty("Problems").GetArrayLength()==0) &&
+                inspection.Sum(row=>row.GetProperty("Rooms").GetInt32())==61 && inspection.Sum(row=>row.GetProperty("CoveredRooms").GetInt32())==61,
+                "当前真实九maze的61个潜在房间完整覆盖，74113不能被忽略或缩组");
+            var evidence=fixture.Events().Single(row=>row.GetProperty("Kind").GetString()=="resource_warning" &&
+                row.GetProperty("Detail").TryGetProperty("Source",out var evidenceSource) && evidenceSource.GetString()=="Luke static object evidence").GetProperty("Detail");
+            That(evidence.GetProperty("Reasons").GetArrayLength()==10 && evidence.GetProperty("BlockingRouteIssues").GetArrayLength()==0 &&
+                evidence.GetProperty("RouteWarnings").GetArrayLength()==10 && evidence.GetProperty("RouteWarnings").EnumerateArray()
+                    .Select(row=>row.GetProperty("Reference").GetProperty("ActionPath").GetString()).Distinct().Count()==2,
+                "十次ETC2缺引用只映射两条已证未消费动作路径，保留warning而不假修文件");
+        }
         var endpoints=ChannelTcpTests.Endpoints(fixture); var repository=new CharacterRepository(fixture.Database);
         var owners=new AccountOwners(); List<TcpPeer> peers=[];
         int observedStarts=0;
@@ -255,7 +279,8 @@ internal static class LukeRaidStartTcpTests
             That(fixture.Snapshot()==committed,"重放和原生分队握手不改任何持久资产/位置/次数");
             leader.Send(660,[0,0]);Bytes(Until(leader,1,660).Body,[0,0x12,0],"未终结660明确失败并清原生pending，不能断线或发成功");Drain(leader);
             That(fixture.Snapshot()==committed,"start-only Luke不借未类型隔离的Anton领奖表发奖");
-            if(runDungeons&&!timed) LukeRaidRunTcpTests.Single(fixture,leader,raw.Phases[0].Dungeons[0].Id);
+            if(fixedRoute) LukeRaidRunTcpTests.FixedRoute(fixture,leader,catalog,raw);
+            else if(runDungeons&&!timed) LukeRaidRunTcpTests.Single(fixture,leader,raw.Phases[0].Dungeons[0].Id);
             // 同一Runtime继续覆盖满八人跨两队；不另启服务，不手工Attach领域实例。
             foreach(var peer in peers)peer.Dispose();peers.Clear();
             for(int index=4;index<12;index++)peers.Add(CreatePeer(index));
@@ -374,7 +399,28 @@ internal static class LukeRaidStartTcpTests
             That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE state=2") is [[7L]],
                 "删除精确角色不清同团其它七人的已提交通关");
         }
-        if(runDungeons&&!completePhases&&!timed&&!phaseTimeout)
+        if(fixedRoute)
+        {
+            var clears=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="raid_run_clear").Select(row=>row.GetProperty("Detail")).ToArray();
+            That(clears.Length==10 && clears.Take(9).All(row=>row.GetProperty("Members").GetInt32()==1) &&
+                clears[^1].GetProperty("Members").GetInt32()==4 && clears.All(row=>
+                    row.GetProperty("AfterRevision").GetInt64()==row.GetProperty("BeforeRevision").GetInt64()+1),
+                "九次单人加一次四人清图都只提交一份Battle候选，重复39不追加清图");
+            var entries=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="formal_dungeon_entry")
+                .Select(row=>row.GetProperty("Detail")).Where(row=>row.TryGetProperty("RaidType",out var type)&&type.GetInt32()==1&&row.GetProperty("Accepted").GetBoolean()).ToArray();
+            That(entries.Length==17 && entries.Take(12).All(row=>row.GetProperty("Members").GetInt32()==1) &&
+                entries.Select(row=>row.GetProperty("Dungeon").GetInt32()).SequenceEqual(
+                    Enumerable.Repeat(5054,4).Concat(Enumerable.Repeat(5055,4)).Concat(Enumerable.Repeat(5056,4)).Concat(new[]{5054,5055,5054,5055,5055})) &&
+                entries.Select(row=>row.GetProperty("Runs")[0].GetGuid()).Distinct().Count()==17,
+                "九maze加三次失败重试及原分队并行回归共十七个独立正式Run");
+            // 复用同一共享归档，领域SQLite故障注入不冒充网络入口；全九maze设施仍须重新匹配本目录身份。
+            var objects=LukeRaidObjectCatalog.Load(resources.Archive,catalog,SelfTestCatalogs.Rooms(resources.Archive),
+                LukeFixedCardRoute.ResourceChoices(policy.Run!.FixedRouteOptions!,catalog));
+            var transactionDefinition=definition with {Resources=definition.Resources! with {LukeObjects=objects}};
+            var transactionPolicy=LukeFixedCardRoute.Resolve(policy,transactionDefinition)!;
+            LukeRaidRunTransactionTests.Run(resources,transactionDefinition,transactionPolicy);
+        }
+        if(runDungeons&&!completePhases&&!timed&&!phaseTimeout&&!fixedRoute)
         {
             // StopAsync已收尾日志writer；不把正在刷新的JSON尾行当作完整事件。
             var clears=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="raid_run_clear").Select(row=>row.GetProperty("Detail")).ToArray();

@@ -10,7 +10,8 @@ namespace DfoServer.Game.Raids;
 internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService parties,
     RaidDungeonCatalog catalog, LukeRaidRunPolicy policy, LukeRaidObjectCatalog? objects = null)
 {
-    public string? UnavailableReason => policy.Rejection(catalog);
+    public string? UnavailableReason => policy.Rejection(catalog) ??
+        (policy.FixedRoute is { } route && !route.MatchesObjects(objects) ? "luke-fixed-route-object-catalog-changed" : null);
 
     public PartyDungeonNotice[] Select(GameSession leader, int dungeon, PartySnapshot? party)
     {
@@ -29,11 +30,14 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
             var battle = leader.CurrentRaidBattle(anchor.Actor);
             if (battle is not { Kind: RaidKind.Luke } || battle.HasPendingTransition || battle.Instance != start.InstanceId) return [];
             var view = battle.View;
-            if (!battle.LukePhaseOpen(view.Phase) || policy.Maze(view.Phase, dungeon) is not { } maze ||
+            var route = battle.CaptureLukeRoute(view.Phase, dungeon, policy.FixedRoute);
+            int? selectedMaze = battle.UsesFixedRoute(view.Phase) ? route?.MazeOrdinal : policy.Maze(view.Phase, dungeon);
+            if (battle.UsesFixedRoute(view.Phase) != (view.Phase == 0 && policy.FixedRoute is not null) ||
+                !battle.LukePhaseOpen(view.Phase) || selectedMaze is not { } maze ||
                 !view.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open) return [];
             var selections = members.Select(member => new RaidDungeonSelection(new(start.InstanceId, member.Actor, view.Phase,
                 member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, view.Phase, id), RaidKind.Luke)
-                { LukePolicy = policy, Battle = battle, LukeObjects = objects }, dungeon, maze)).ToArray();
+                { LukePolicy = policy, Battle = battle, LukeObjects = objects }, dungeon, maze) { Route = route }).ToArray();
             if (selections.Any(selection => !ReferenceEquals(selection.Admission.Actor.Session.CurrentRaidBattle(selection.Admission.Actor), battle) ||
                 !selection.Admission.Actor.Session.CanBeginRaidDungeonSelection(selection.Admission))) return [];
             return selections.Select(selection => new PartyDungeonNotice(PartyDungeonNoticeKind.RaidSelection,
@@ -51,7 +55,7 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
         bool Allows(AntonRaidBattle battle, int phase, int id)
         {
             var current = battle.View;
-            return battle.LukePhaseOpen(phase) && current.Phase == phase && policy.Maze(phase, id) is not null &&
+            return battle.LukePhaseOpen(phase) && current.Phase == phase && (battle.UsesFixedRoute(phase) ? battle.CaptureLukeRoute(phase, id, policy.FixedRoute) is not null : policy.Maze(phase, id) is not null) &&
                 current.Dungeons.TryGetValue(id, out var state) && state == RaidDungeonState.Open;
         }
     }

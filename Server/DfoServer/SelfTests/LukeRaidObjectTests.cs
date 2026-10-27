@@ -37,6 +37,23 @@ internal static class LukeRaidObjectTests
             "[/passive object]"), Resolve), "缺失外层闭合也不能降为根字段");
         That(!RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[passive object]", 64249, 1, 2, 0), Resolve), "普通对象缺失闭合拒绝");
         That(!RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[passive object]", 64249, 1, 2, "[/passive object]"), Resolve), "截断行拒绝");
+        PvfToken StringValue(string value) { strings.Add(value); return new(6,strings.Count-1); }
+        var shadow = Tokens("[shadow type]").Concat(new[]{StringValue("[mirror]")}).ToArray();
+        var rootObjects = Tokens("[passive object]",64250,1116,174,0,"[/passive object]");
+        That(RaidObjectEvidence.UnconditionalPassiveObjects(shadow.Concat(rootObjects).ToArray(),Resolve),
+            "74113同形根shadow type单字符串mirror不包裹后续普通对象块");
+        foreach(var bad in new[]{
+            Tokens("[shadow type]").Concat(new[]{StringValue("[unknown]")}).ToArray(),
+            Tokens("[shadow type]",1), Tokens("[shadow type]","[mirror]"),
+            shadow.Concat(new[]{StringValue("[mirror]")}).ToArray(),
+            shadow.Concat(shadow).ToArray(), shadow.Concat(Tokens("[/shadow type]")).ToArray() })
+            That(!RaidObjectEvidence.UnconditionalPassiveObjects(bad.Concat(rootObjects).ToArray(),Resolve),
+                "shadow未知值/非字符串/多值/重复/块形状仍拒绝，不泛化视觉tag白名单");
+        That(!RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[condition]").Concat(shadow).Concat(rootObjects)
+            .Concat(Tokens("[/condition]")).ToArray(),Resolve), "shadow不能把嵌套条件中的对象提升为根出生");
+        That(!RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[animation]").Concat(shadow)
+            .Concat(Tokens("[/animation]")).Concat(rootObjects).ToArray(),Resolve),
+            "即使外层是已知块，嵌套shadow仍不能借root scalar白名单获准");
         var etc = Tokens("[etc action]");
         strings.Add("Action/direct.act");
         etc = [.. etc, new(6, strings.Count - 1), Text("[/etc action]")];
@@ -99,6 +116,30 @@ internal static class LukeRaidObjectTests
         That(registration.Observe(map with { LayerIndex = 0 }) is null, "未知layer不继承普通出现");
         var independent = new LukeRaidObjectRegistration(Guid.NewGuid(), 10, maze, catalog);
         That(independent.ObservedObjects == 0, "不同Run登记生命周期隔离");
+        const string spread = "passiveobject/actionobject/map/luke_raid/phase1/sanctum_of_spread/";
+        var covered = new LukeObjectRoom(5056,0,"map",new(0,0),74171,"map/fixture-spread.map");
+        var primary = new LukeObjectBinding(covered,8,64252,119,1,spread+"action/censor_machine_broken_front_raid.act");
+        var front = new LukeObjectMissingAction(covered,8,64252,spread+"censor_machine_front_raid.obj",2,
+            spread+"action/censor_machine_broken_forever_front_raid.act");
+        var back = new LukeObjectMissingAction(covered,7,64287,spread+"censor_machine_back_raid.obj",2,
+            spread+"action/censor_machine_broken_forever_back_raid.act");
+        var coveredRooms = ImmutableDictionary<LukeObjectRoom,ImmutableArray<LukeObjectBinding>>.Empty.Add(covered,[primary]);
+        var classified = new LukeRaidObjectCatalog(coveredRooms,[front.Issue,back.Issue]) {MissingActions=[front,back]};
+        That(classified.Issues.Length==2 && classified.RouteWarnings.Length==2 && classified.BlockingRouteIssues.IsEmpty,
+            "完整房间/action1下精确两OBJ的未消费ETC2仅作类型化warning，诊断不删除");
+        foreach(var unknown in new[]{front with {ActionOrdinal=1},front with {ObjectId=999},front with {ObjectOrdinal=9},
+            front with {ObjectPath="other.obj"},front with {ActionPath=spread+"action/unknown.act"},
+            front with {Room=covered with {MazeOrdinal=1}}})
+        {
+            var rejected = new LukeRaidObjectCatalog(coveredRooms,[unknown.Issue]) {MissingActions=[unknown]};
+            That(rejected.RouteWarnings.IsEmpty && rejected.BlockingRouteIssues.Length==1,
+                "未知OBJ/动作/路径/源ordinal/未覆盖房间不能借ETC2分类放行");
+        }
+        var missingRequired = new LukeRaidObjectCatalog(coveredRooms.SetItem(covered,[primary with {ActionOrdinal=0}]),[front.Issue])
+            {MissingActions=[front]};
+        That(!missingRequired.BlockingRouteIssues.IsEmpty,"缺已证必需action1不授予非阻断分类");
+        var unknownIssue = new LukeRaidObjectCatalog(coveredRooms,[front.Issue,"unrecognized-required-resource"]) {MissingActions=[front]};
+        That(unknownIssue.BlockingRouteIssues.SequenceEqual(new[]{"unrecognized-required-resource"}),"非消费warning不遮蔽其它必需/未知缺口");
         Console.WriteLine($"PASS {Count-before} 卢克静态对象潜在绑定、回房身份与非销毁边界断言");
     }
     internal static void RunResources(PvfArchive pvf, RaidDungeonCatalog entry, LukeRaidRunPolicy policy)

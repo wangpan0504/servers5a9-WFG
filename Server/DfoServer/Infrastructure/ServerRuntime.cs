@@ -199,11 +199,22 @@ internal static class ServerRuntime
         var raidCatalog = raidSettings.Apply(GameWorld.Raids.RaidCatalog.Load(pvf)).PrepareResources(pvf, dungeonCatalog, itemResources.Items,
             lukeObjectRooms, lukeStartPolicy?.Run is { Mazes.IsDefaultOrEmpty: false } objectPolicy
                 ? objectPolicy.Mazes.Where(row => row.Phase == 0).Select(row => (row.Dungeon, row.MazeOrdinal)).ToArray() : null,
-            antonMapPath: GameWorld.Raids.AntonRaidMapPaths.Bind(dungeonCatalog.MapPath));
+            antonMapPath: GameWorld.Raids.AntonRaidMapPaths.Bind(dungeonCatalog.MapPath),
+            lukeResourceChoices: lukeStartPolicy?.Run?.FixedRouteOptions is { } routeOptions
+                ? entry => Game.Raids.LukeFixedCardRoute.ResourceChoices(routeOptions, entry) : null);
         if (raidCatalog.Find(1)?.Resources?.LukeObjects is { Issues.IsEmpty: false } objectEvidence)
-            log.Write("resource_warning", new { Source = "Luke static object evidence", Reasons = objectEvidence.Issues.ToArray() });
+            log.Write("resource_warning", new { Source = "Luke static object evidence", Reasons = objectEvidence.Issues.ToArray(), objectEvidence.RoomFailures, objectEvidence.RouteWarnings, objectEvidence.BlockingRouteIssues });
         if (raidCatalog.Find(1)?.Resources?.LukeCardSet is { Issues.IsEmpty: false } cardSetEvidence)
             log.Write("resource_warning", new { Source = "Luke cardset metadata", Reasons = cardSetEvidence.Issues.ToArray() });
+        if (lukeStartPolicy?.Run?.FixedRouteOptions is { } diagnosticOptions && raidCatalog.Find(1)?.Resources?.EntryCatalog is { } diagnosticCatalog)
+            log.Write("startup", new { Stage = "Luke fixed route resource inspection", State = "diagnostic-only",
+                Mazes = Game.Raids.LukeFixedCardRoute.InspectResources(diagnosticOptions, diagnosticCatalog, raidCatalog.Find(1)!.Resources!.LukeObjects) });
+        lukeStartPolicy = Game.Raids.LukeFixedCardRoute.Resolve(lukeStartPolicy, raidCatalog.Find(1));
+        if (lukeStartPolicy?.Run?.FixedRoute is { } fixedRoute)
+            log.Write("startup", new { Stage = "Luke explicit fixed compatibility route", State = "complete",
+                fixedRoute.Options.Version, fixedRoute.Options.ResourceFingerprint, fixedRoute.Options.Group,
+                fixedRoute.Options.ColumnDungeons, fixedRoute.Options.StepOffsets, fixedRoute.Options.InitialHp,
+                Failure = fixedRoute.Options.Failure.ToString(), Reset = fixedRoute.Options.Reset.ToString(), fixedRoute.Choices });
         log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
             raidSettings.AntonFormalEntryEnabled,
             Reason = raidSettings.AntonFormalEntryEnabled ? "anton-entry-enabled-resource-gates-required" : "anton-entry-waiting-client-resources",

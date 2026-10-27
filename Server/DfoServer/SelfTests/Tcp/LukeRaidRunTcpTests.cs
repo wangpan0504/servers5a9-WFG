@@ -21,6 +21,32 @@ internal static partial class LukeRaidRunTcpTests
             "单人两次进入沿原尝试事务，不由测试建立Run");
     }
 
+    // 全部九条路线沿真实666/15/16/39/42消费，不手工推进Battle或修改HP。
+    internal static void FixedRoute(TcpTestFixture fixture,TcpPeer peer,RaidDungeonCatalog catalog,RaidScript raw)
+    {
+        foreach(int dungeon in new[]{5054,5055,5056})
+        {
+            int symbol=raw.Symbols[raw.Phases[0].Dungeons.Single(row=>row.Id==dungeon).HpSymbol];
+            for(int step=0;step<3;step++)
+            {
+                var entry=Enter([peer],peer,dungeon);
+                That(entry[0].Single(packet=>packet.Opcode==28).Body[7]==step,"显式组0每个Run冻结对应SourceOrdinal而非始终maze0");
+                Load([peer]);
+                if(step==1)
+                {
+                    Return([peer],peer);
+                    entry=Enter([peer],peer,dungeon);
+                    That(entry[0].Single(packet=>packet.Opcode==28).Body[7]==step,"中途退出真实42不跳ordinal，重进仍同step");
+                    Load([peer]);
+                }
+                Clear(fixture,[peer],[],peer,entry[0],catalog,expectedHp:(symbol,2-step));
+                Return([peer],peer);
+            }
+            Select(peer,dungeon);
+            That(!Drain(peer).Any(packet=>packet.Opcode is 28 or 29),"第三次清图后不能继续入图，未绕过Clear状态");
+        }
+    }
+
     public static void Parties(TcpTestFixture fixture,TcpPeer[] peers,int[] dungeons,byte[] firstRoster,byte[] secondRoster,RaidDungeonCatalog catalog)
     {
         var first=peers.Take(4).ToArray();var second=peers.Skip(4).ToArray();
@@ -95,13 +121,13 @@ internal static partial class LukeRaidRunTcpTests
             "所有已开团角色最终仍在正式候战位置");
     }
 
-    static void Clear(TcpTestFixture fixture,TcpPeer[] members,TcpPeer[] others,TcpPeer captain,List<WirePacket> entry,RaidDungeonCatalog catalog,byte phase=0)
+    static void Clear(TcpTestFixture fixture,TcpPeer[] members,TcpPeer[] others,TcpPeer captain,List<WirePacket> entry,RaidDungeonCatalog catalog,byte phase=0,(int Symbol,int Value)? expectedHp=null)
     {
         byte[] information=entry.Single(p=>p.Opcode==28).Body;
         byte[] map=entry.Single(p=>p.Opcode==29).Body;
         var maze=catalog.Find((int)U32(information))!.Mazes.Single(row=>row.SourceOrdinal==information[7]);
         var route=QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),new(information[8],information[9]));
-        ushort last=0;byte lastLevel=0;
+        ushort last=0;byte lastLevel=0; byte[]? lastSymbols=null;
         foreach(var point in route)
         {
             foreach(int offset in Enumerable.Range(0,map[18]).Select(index=>19+index*22)
@@ -110,6 +136,7 @@ internal static partial class LukeRaidRunTcpTests
                 last=U16(map,offset+6);lastLevel=map[offset+12];
                 captain.Send(39,FormalDungeonTcpTests.Death(last,captain.Id,lastLevel));
                 var own=Drain(captain);
+                lastSymbols=own.LastOrDefault(packet=>packet.Opcode==583)?.Body ?? lastSymbols;
                 That(!own.Any(p=>p.Opcode is 31 or 115 or 601),"Luke受控清图不借普通结算许可或空团本奖励窗口");
                 That(own.Any(p=>p is {Kind:0,Opcode:38}&&U16(p.Body)==last),"队长真实39提交死亡");
                 foreach(var member in members.Where(peer=>peer!=captain))
@@ -121,6 +148,10 @@ internal static partial class LukeRaidRunTcpTests
             foreach(var member in members.Where(peer=>peer!=captain))Bytes(Drain(member).Single(p=>p.Opcode==29).Body,map,"共同45仍为同图同对象");
             Load(members);
         }
+        if(expectedHp is { } hp)
+            That(lastSymbols is not null && Enumerable.Range(0,lastSymbols[0]).Any(index=>
+                U32(lastSymbols,1+index*8)==hp.Symbol && U32(lastSymbols,5+index*8)==hp.Value),
+                "真实死亡事务提交后HP恰减1，与下一次ordinal推进一致");
         foreach(var peer in others)
         {
             var updates=Drain(peer);

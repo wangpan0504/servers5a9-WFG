@@ -47,8 +47,13 @@ public static class RaidObjectEvidence
             "near sight scroll", "pathgate pos", "map name", "dungeon start area", "pathgate object", "pathgate recognize range"];
         string[] blocks = ["dungeon", "tile", "extended tile", "background animation", "sound", "animation", "passive object",
             "monster", "monster specific ai", "event monster position", "dungeon movable area"];
-        return document.Diagnostics.IsEmpty && document.Sections.All(row =>
-                blocks.Contains(row.Name) ? row.IsBlock : scalar.Contains(row.Name) && !row.IsBlock) &&
+        // 匹配client04273E81..3EBD：单字符串[mirror]仅写shadow枚举+798，再取下一顶层tag；不是对象条件块。
+        int shadowCount = tokens.Count(token => token.Type == 3 && resolve(token.Value).Equals("[shadow type]", StringComparison.OrdinalIgnoreCase));
+        var shadow = document.Sections.Where(row => row.Name == "shadow type").ToArray();
+        bool ShadowValue(PvfTokenSection row) => !row.IsBlock && row.Children.IsEmpty &&
+            row.Values is [{ Type: 6 } value] && resolve(value.Value).Equals("[mirror]", StringComparison.Ordinal);
+        return document.Diagnostics.IsEmpty && shadowCount == shadow.Length && shadow.Length <= 1 && document.Sections.All(row =>
+                row.Name == "shadow type" ? ShadowValue(row) : blocks.Contains(row.Name) ? row.IsBlock : scalar.Contains(row.Name) && !row.IsBlock) &&
             count == roots.Length && roots.Length <= 1 &&
             roots.All(row => row.IsBlock && row.Children.IsEmpty && row.Values.Length % 4 == 0 && row.Values.All(token => token.Type == 0));
     }

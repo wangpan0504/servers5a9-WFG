@@ -14,6 +14,7 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableDictionary<RaidTimer, long> TimerGenerations { get; init; } = ImmutableDictionary<RaidTimer, long>.Empty;
     public long TimerSequence { get; init; }
     public byte? LukePhaseCoinsUsed { get; init; }
+    public ImmutableDictionary<int, LukeRouteProgress> LukeRoutes { get; init; } = ImmutableDictionary<int, LukeRouteProgress>.Empty;
     public bool ClockFaulted { get; init; }
     public bool PhaseExpired { get; init; }
     public long PhaseClockGeneration { get; init; }
@@ -129,7 +130,7 @@ internal sealed partial class AntonRaidBattle
 
 
     public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton,
-        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null)
+        LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null, LukeFixedCardRoute? fixedRoute = null)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
@@ -141,6 +142,9 @@ internal sealed partial class AntonRaidBattle
             throw new InvalidDataException("卢克复活策略不完整");
         if (phaseTimeout is not null && (kind != RaidKind.Luke || !phaseTimeout.Valid(script.Phases.Length)))
             throw new InvalidDataException("卢克阶段超时兼容策略不完整");
+        if (fixedRoute is not null && (kind != RaidKind.Luke || !fixedRoute.Matches(script)))
+            throw new InvalidDataException("卢克固定路线与执行脚本不匹配");
+        lukeFixedRoute = fixedRoute;
         lukePhaseTimeout = phaseTimeout;
         lukeRevival = revival;
         lukeCompletion = completion; lukeClock = clock ?? TimeProvider.System;
@@ -148,7 +152,7 @@ internal sealed partial class AntonRaidBattle
         this.script = script;
         Instance = instance ?? Guid.NewGuid();
         if (Instance == Guid.Empty) throw new InvalidDataException("攻坚实例身份不能为空");
-        current = Initialize(0, 0);
+        current = ReconcileLukeRoutes(Initialize(0, 0));
     }
 
     AntonRaidBattleView Initialize(int phase, long revision, ImmutableDictionary<string, int>? inheritedSymbols = null, long timerSequence = 0)
