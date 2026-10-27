@@ -24,6 +24,7 @@ internal static class LukeRaidRunTransactionTests
     internal static void Run(TcpTestResources resources,RaidDefinition definition,LukeRaidStartPolicy policy)
     {
         int before=Count;
+        LukeCardSetTests.RunResources(resources.Archive, definition);
         LukeRaidObjectTests.RunResources(resources.Archive, definition.Resources!.EntryCatalog!, policy.Run!);
         policy=policy with {Revival=new("fixture/current-pvf-manual-shared-coins")};
         string root=Path.Combine(Path.GetTempPath(),"S5A9-luke-raid-run-"+Guid.NewGuid().ToString("N"));
