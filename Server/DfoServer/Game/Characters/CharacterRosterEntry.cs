@@ -3,7 +3,7 @@ using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Game.Characters;
 
-// 名册只包含身份、穿戴外观与选角前客户端门槛位，不能作为可提交的完整角色快照。
+// 名册只包含身份、穿戴外观、武器幻化选择与选角前客户端门槛位，不能作为可提交的完整角色快照。
 // ARAD 03B55580 在选角前按频道类型读名册行的资格字节，为 0 时弹 IRDPopupWindow 1099：
 //   type 0x17 +0x491 dstr 66087 安徒恩；type 0x20 +0x492 dstr 66088 卢克；type 0x28 +0x493 dstr 66089 魔兽；
 //   type 0x2D +0x499 dstr 75560 超时空漩涡；type 0x32 +0x494 dstr 32116 普雷·伊希斯。
@@ -15,6 +15,8 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
     bool AntonEligible = false, bool LukeEligible = false, bool PreyEligible = false, bool IsPvpPrivate = false)
 {
     public uint CloneTitleItemId { get; init; }
+    // 与 Actor 116B 头偏移 110 同源：名册 tail[42..45] → Data+49Ch → 选角预览 +0A9Ch。
+    public int WeaponSkin { get; init; }
     // etc/enterablespecialchannel.etc fiendwar=8672（Fiendwar_enter.qst「[超时空漩涡]奔赴前线」）。
     public const int FiendWarEntryQuest = 8672;
     // anton=12829（Anton/Anton_dimension_enter.qst「[安徒恩团队模式]异次元的安徒恩」，前置主线 3779）。
@@ -38,5 +40,5 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
         AntonEligible: character.CompletedQuests.Contains(AntonEntryQuest),
         LukeEligible: character.CompletedQuests.Contains(LukeEntryQuest),
         PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level), IsPvpPrivate: character.IsPvpPrivate)
-        { CloneTitleItemId = character.CloneTitleItemId };
+        { CloneTitleItemId = character.CloneTitleItemId, WeaponSkin = character.Inventory.Skins.Selected };
 }
