@@ -5,10 +5,15 @@ namespace DfoServer.Game.Dungeons;
 
 internal sealed record DazzlementTowerBinding(int Slot, ushort? CharacterId, int LastEntryDay, string Name = "", byte Job = 0);
 internal sealed record DazzlementTowerBindingNotice(DazzlementTowerAdmission Period, ImmutableArray<DazzlementTowerBinding> Bindings);
+internal sealed record DazzlementTowerNotice(long Generation, long Epoch, Game.Characters.Character Character,
+    DazzlementTowerBindingNotice Binding, byte UsedToday);
 internal sealed record DazzlementTowerState(int Week, ImmutableArray<DazzlementTowerBinding> Bindings)
 {
     // 国服2019-05规格：每账号每服务器每周最多绑定5个角色，每角色每天入场一次。
     public const int CharacterLimit = 5;
+
+    public byte UsedToday(ushort character, DazzlementTowerAdmission period) =>
+        Week == period.Week && Bindings.Any(row => row.CharacterId == character && row.LastEntryDay >= period.Day) ? (byte)1 : (byte)0;
 
     public string? Rejection(ushort character, DazzlementTowerAdmission admission)
     {

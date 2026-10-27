@@ -61,6 +61,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Player(c, stats.Compute(c), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons);
+        await DazzlementTowerProjection.StateAsync(context);
         if (c.Guild is { } membership)
             await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
@@ -335,6 +336,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         bool CanSend() => context.Session.CanPublishTravel(receipt);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "formal_return_town_state", CanSend);
         await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
+        if (context.Dazzlement is { HasBindings: true })
+            await DazzlementTowerProjection.StateAsync(context, CanSend);
         // 城镇场景绑定后重新投影当前任务，不依赖重新选角。
         if (quests is not null)
             await quests.RefreshAsync(context, receipt.Character, CanSend);

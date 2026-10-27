@@ -8,7 +8,7 @@ internal static class NativeLoginTcpTests
 {
     static TcpPeer Begin(TcpTestFixture fixture, string account)
     {
-        var peer = new TcpPeer(fixture.Options.GamePort);
+        var peer = new TcpPeer(fixture.Options.GamePort, fixture: fixture);
         try
         {
             var hello = peer.Expect(0, 1).Body;
@@ -64,7 +64,8 @@ internal static class NativeLoginTcpTests
         byte[] roster;
         using (var first = Open(fixture, "alice").Peer)
         {
-            roster = first.Create("凭据测试");
+            // 补齐只读账本关联后仍保留原生登录原有的未完成教程状态。
+            roster = first.Create("凭据测试", withTutorial: true);
             TestCheck.Bytes(roster.AsSpan(roster.Length - 12, 2), [1, 0], "原生创建名册行末u16启用光环，不依赖先进入角色");
             first.Select();
             first.Barrier();

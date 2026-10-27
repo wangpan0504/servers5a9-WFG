@@ -51,6 +51,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
         if (boosters is not null) context.BoosterUses = new(context, boosters, log, time);
+        context.Dazzlement = new(context, log, time);
         CubeContractConsumptionProjection? cubeConsumption = null;
         if (contracts is not null)
         {
@@ -221,6 +222,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         await revival.RefreshAsync();
                         await tagRevival.RefreshAsync();
                         if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
+                        await context.Dazzlement.RefreshAsync();
                         if (context.Premiums is { } premiums) await premiums.RefreshAsync();
                         if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
                         if (context.Creatures is { } creatureClock) await creatureClock.RefreshAsync();
@@ -242,6 +244,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await revival.DisposeAsync();
             await tagRevival.DisposeAsync();
             if (context.BoosterUses is { } boosterUses) await boosterUses.DisposeAsync();
+            await context.Dazzlement.DisposeAsync();
             if (context.Creatures is { } creatureClock) await creatureClock.DisposeAsync();
             if (cubeConsumption is not null) await cubeConsumption.DisposeAsync();
             await death.DisposeAsync();
