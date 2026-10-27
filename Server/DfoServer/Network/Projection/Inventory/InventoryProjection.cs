@@ -182,8 +182,15 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 return true;
             });
         }
-        var lockSlots = rebuildMain ? changedSlots.Concat(current.Inventory.Items.Where(item => item.Position.List == InventoryListType.Main)
-            .Select(item => item.Position)) : changedSlots;
+        // 全量重载会重建未变化的图标，锁通知必须覆盖同一批容器中的全部实例。
+        bool reloadLocks = rebuildMain || mainExpansionChanged || plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion ||
+            plan.Reason is "magic_box_open" or "rune_box_open";
+        var lockSlots = reloadLocks ? changedSlots.Concat(current.Inventory.Items.Where(item =>
+            plan.Reason == "magic_box_open" && item.Position.List is (InventoryListType.Main or InventoryListType.PersonalCargo or
+                InventoryListType.AccountCargo or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman) ||
+            (rebuildMain || mainExpansionChanged || plan.Reason == "rune_box_open") && item.Position.List == InventoryListType.Main ||
+            plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion && item.Position.List == InventoryListType.Avatar ||
+            plan.Reason == "rune_box_open" && item.Position.List == InventoryListType.Talisman).Select(item => item.Position)) : changedSlots;
         await RestoreLocksAsync(context, current.Inventory, lockSlots, plan.Before, CanSend, receipt.Index, plan.BeforeIndex);
         if (plan.ChangedCurrencies.Any(kind => kind is >= DfoServer.Game.Currency.CurrencyKind.Cera and <= DfoServer.Game.Currency.CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
@@ -246,6 +253,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         if (!CanSend())
             return;
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(character.Inventory, list), action, CanSend);
+        await RestoreLocksAsync(context, character.Inventory,
+            character.Inventory.Items.Where(item => item.Position.List == list).Select(item => item.Position), canSend: CanSend);
     }
 
     public static async Task RestoreLocksAsync(GameConnectionContext context, InventorySnapshot inventory,
@@ -265,8 +274,9 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             var previous = beforeIndex?.FindUid(item.Uid);
             if (item.Core.SortLockFlag != 0 || old is { Core.SortLockFlag: not 0 } || previous is { Core.SortLockFlag: not 0 })
             {
-                var operation = item.Core.SortLockFlag != 0 ? InventoryLockOperation.SortLock : InventoryLockOperation.SortUnlock;
-                var opcode = item.Core.SortLockFlag != 0 ? CmdPacketType.REQUEST_ITEM_SORT_LOCK : CmdPacketType.REQUEST_ITEM_SORT_UNLOCK;
+                bool visible = item.Core.SortLockFlag != 0 && slot.List != InventoryListType.Equipment;
+                var operation = visible ? InventoryLockOperation.SortLock : InventoryLockOperation.SortUnlock;
+                var opcode = visible ? CmdPacketType.REQUEST_ITEM_SORT_LOCK : CmdPacketType.REQUEST_ITEM_SORT_UNLOCK;
                 await context.Reply(opcode, InventoryLockPackets.Ack(slot, operation, new(true, 0)), "restore_sort_lock", canSend);
             }
             if (item.Core.EquipmentLockId != 0)

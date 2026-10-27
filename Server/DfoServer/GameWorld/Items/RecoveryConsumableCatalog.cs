@@ -33,7 +33,7 @@ internal sealed class RecoveryConsumableCatalog
     readonly IReadOnlyDictionary<int, string>? stackable;
     readonly ItemCatalog? items;
     readonly ConcurrentDictionary<int, Lazy<RecoveryConsumableDefinition?>> definitions = new();
-    readonly Lazy<(BossSelectionBuffDefinition? Definition, ImmutableHashSet<int> Items)> bossSelection;
+    readonly Lazy<ImmutableDictionary<int, BossSelectionBuffDefinition>> bossSelection;
 
     public RecoveryConsumableCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable, ItemCatalog items)
     {
@@ -45,7 +45,7 @@ internal sealed class RecoveryConsumableCatalog
 
     internal RecoveryConsumableCatalog(IEnumerable<RecoveryConsumableDefinition> source)
     {
-        bossSelection = new(() => (null, ImmutableHashSet<int>.Empty));
+        bossSelection = new(() => ImmutableDictionary<int, BossSelectionBuffDefinition>.Empty);
         foreach (var definition in source)
             definitions.TryAdd(definition.ItemId, new(() => definition));
     }
@@ -121,8 +121,8 @@ internal sealed class RecoveryConsumableCatalog
         if (!archive!.Contains("stackable/" + path))
             return null;
         var file = RecoveryConsumableFile.Parse(id, "stackable/" + path, archive.ReadTokens("stackable/" + path), archive.ResolveString);
-        var buff = file.Stackable.TypeDeclaration?.Label == "[expert town potion]" ? bossSelection.Value : default;
-        var definition = Read(file, buff.Items?.Contains(id) == true ? buff.Definition : null);
+        var buff = file.Stackable.TypeDeclaration?.Label == "[expert town potion]" ? bossSelection.Value.GetValueOrDefault(id) : null;
+        var definition = Read(file, buff);
         if (definition is null)
             return null;
         var template = items!.Get(id);

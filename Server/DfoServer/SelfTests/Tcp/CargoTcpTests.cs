@@ -34,7 +34,7 @@ internal static class CargoTcpTests
                 Inventory = InventoryRewardGrantService.CreateStarter(characters.Get(0))
             });
             var items = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(0, 20_000_000), new(3299, 600), new(50, 1)]));
+            current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(0, 20_000_000), new(3299, 600), new(6, 1)]));
             current = InventoryService.Commit(repo, owner, current, new CurrencyService(itemResources.GoldLimits).Grant(current, CurrencyKind.Cera, 5000));
             var weapon = current.Inventory.Find(new(InventoryListType.Equipment, 12))!;
             var core = weapon.Core with { Attr = 11, Rune = 3, AmplifyValue = 25, Random0 = new(1, 2, 3), Extension114 = new(1, 222) };
@@ -117,7 +117,7 @@ internal static class CargoTcpTests
             peer.Send(408, [65, 0]);
             peer.Expect(1, 408, [1]);
             That(U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue, "personal upgrade consumes the requested tool");
-            Cargo(peer.Expect(0, 13).Body, 2, 24, 0, 0);
+            Cargo(peer.Expect(0, 13).Body, 2, 32, 0, 0);
             peer.Send(408, [65, 0]);
             peer.Expect(1, 408, [0, 17, 0]);
             peer.Barrier();

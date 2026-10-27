@@ -20,6 +20,9 @@ internal static class ItemListProtocolWriter
     public static void Write(BinaryWriter writer, InventorySlot slot, InventoryItem? item, long utcSeconds)
     {
         var core = item?.Core;
+        // 排序锁仍随实例保存，穿戴栏不参与整理，也不展示背包的蓝锁。
+        if (slot.List == InventoryListType.Equipment && core is { SortLockFlag: not 0 })
+            core = core with { SortLockFlag = 0 };
         if (item?.Avatar is not null)
             core = core! with { Value = item.RemainingSeconds(utcSeconds) };
         else if (item?.Creature is not null)

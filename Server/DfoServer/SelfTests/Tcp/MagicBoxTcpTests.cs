@@ -33,6 +33,8 @@ internal static class MagicBoxTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
+            peer.Send(713, [0, 121, 0]); peer.Expect(1, 713, [1, 0, 121, 0]);
+            peer.Send(713, [0, 70, 0]); peer.Expect(1, 713, [1, 0, 70, 0]);
             peer.Send(1130, request);
             byte[] ack = peer.Expect(1, 1130).Body;
             That(ack.Length >= 15 && ack[0] == 4 && ack[1] == 4 && U16(ack, 3) == 10 &&
@@ -53,11 +55,19 @@ internal static class MagicBoxTcpTests
                 CreatureDetails(peer.Expect(0, 105).Body, committed);
             foreach (byte list in new byte[] { 0, 2, 12, 1, 7, 38, 46 })
                 That(peer.Expect(0, 13).Body[0] == list, "提交后重建实际物品容器：" + list);
+            var restoredLocks = new HashSet<ushort>();
+            for (int i = 0; i < 2; i++)
+            {
+                var locked = peer.Expect(1, 713).Body;
+                That(locked.Length == 4 && locked[0] == 1 && locked[1] == 0, "开箱整列载入后恢复真实Main排序锁");
+                restoredLocks.Add(U16(locked, 2));
+            }
+            That(restoredLocks.SetEquals(new ushort[] { 70, 121 }), "源数量变化与未变化的锁定物品均恢复蓝锁");
             ReadEffects(peer);
         }
         using (var peer = Open(fixture))
         {
-            byte[] full = peer.Select(expertContract: restoreExpertContract)[4].Body;
+            byte[] full = peer.Select(expertContract: restoreExpertContract, inventoryNotices: [(1, 713), (1, 713)])[4].Body;
             CreatureDetails(peer.SpecialContainers[0].Body, committed);
             peer.Barrier();
             Bytes(peer.SeriaLuckInfo, [5, 5], "重新选角向客户端恢复已提交的幸运值阶段1");
@@ -102,7 +112,8 @@ internal static class MagicBoxTcpTests
     }
 
     static InventorySnapshot VideoInventory() => new([new(0, new(InventoryListType.Main, 70),
-        new(2682272, ItemKind.Consumable, 999))])
+        new(2682272, ItemKind.Consumable, 999)),
+        new(0, new(InventoryListType.Main, 121), new(3299, ItemKind.Material, 2))])
     {
         Gold = 364755, ReviveCoins = 129,
         AccountWallet = AccountWallet.Empty.Set(CurrencyKind.Cera, 99881120)

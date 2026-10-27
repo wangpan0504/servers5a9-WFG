@@ -43,10 +43,11 @@ internal static partial class ConsumableUseTcpTests
             var candidate = CharacterCreation.Prepare("BossPotion", resources.Characters.Get(0), resources.Towns.Room,
                 resources.Towns.InitialReturn, resources.Learning.Get);
             var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
-            repository.Create(owner, candidate with { Level = 95, InitialLearning = SkillPointLedger.Synchronize(0, 0, 95,
+            foreach (var (id, name) in new[] { (490705256, "BossPotion"), (490012682, "StrongBoss"), (490705059, "OneBoss") })
+                repository.Create(owner, candidate with { Name = name, Level = 95, InitialLearning = SkillPointLedger.Synchronize(0, 0, 95,
                 candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(95) }, resources.Learning),
                 Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65),
-                    InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(490705256), 3))) } });
+                    InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(id), id == 490705256 ? 3 : 1))) } });
         }
         await fixture.StartAsync();
         using (var peer = Open(fixture))
@@ -64,6 +65,23 @@ internal static partial class ConsumableUseTcpTests
             peer.Select(2); peer.Barrier();
             That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id) is [[5L]],
                 "断线重连保留实际五次药效，不重复消费或补发");
+        }
+        foreach (var (slot, id, count, buff) in new[] { (3, 490012682, 5, 1275), (4, 490705059, 1, 1282) })
+        {
+            using (var peer = Open(fixture))
+            {
+                peer.Select((ushort)slot); peer.Barrier();
+                Use(peer, 65, 0, id); Accepted(peer, 65, 0, id); peer.Barrier();
+                That(fixture.Query("SELECT json_extract(state_json,'$.Remaining'),json_extract(state_json,'$.Definition.BuffId') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id)
+                    is [[var remaining, var kind]] && Equals(remaining, (long)count) && Equals(kind, (long)buff),
+                    "强力五次与普通一次均经真实44消费，保存独立资源效果");
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select((ushort)slot); peer.Barrier();
+                That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id)
+                    is [[var remaining]] && Equals(remaining, (long)count), "新药型重登保持真实次数，不赠药或续期");
+            }
         }
         using (var peer = Open(fixture))
         {

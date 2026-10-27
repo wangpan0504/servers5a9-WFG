@@ -35,6 +35,8 @@ internal static class ClearAvatarTcpTests
             {
                 var items = new List<InventoryItem> { Item(0, new(InventoryListType.Avatar, 0), row.Clone) };
                 if (row.Original != 0) items.Add(Item(0, new(InventoryListType.Equipment, row.Slot), row.Original));
+                if (row.Name == "ClearCoat") items.Add(Item(0, new(InventoryListType.Avatar, 3), row.Original) with
+                    { Avatar = new() { Color1 = 3, Color2 = 4 } });
                 if (row.Slot == 10)
                 {
                     var weapon = resources.Characters.Get(0).Equipment.Single(item => item.Slot == 12).Template;
@@ -130,6 +132,24 @@ internal static class ClearAvatarTcpTests
             peer.Expect(0, 2); peer.Expect(0, 2);
             peer.Barrier();
         }
+        // 已有克隆卸下后覆盖另一真实实例，必须重采样该实例，而不是沿用旧来源UID。
+        using (var peer = Open(fixture))
+        {
+            peer.Select(roles[0].Slot); peer.Barrier();
+            peer.Send(19, MoveFrom(3, cases[0].Original, 0));
+            peer.Expect(1, 19); peer.Expect(0, 1681); peer.Expect(0, 0x063F); peer.Expect(0, 2); peer.Expect(0, 2); peer.Barrier();
+            peer.Send(19, MoveFrom(1, cases[0].Clone, cases[0].Original));
+            peer.Expect(1, 19); peer.Expect(0, 1681); peer.Expect(0, 1681);
+            peer.Expect(0, 1449, Sources(3, 1)); peer.Expect(0, 0x063F); peer.Expect(0, 2); peer.Expect(0, 2); peer.Barrier();
+            var detail = JsonSerializer.Deserialize<AvatarDetail>((string)fixture.Query("""
+                SELECT a.detail FROM inventory_avatar_details a JOIN character_inventory_slots s ON s.item_uid=a.item_uid
+                WHERE s.character_id=$p0 AND s.list_type=3 AND s.slot_index=3
+                """, roles[0].Id).Single().Single()!)!;
+            That(detail.ClearAvatarId == cases[0].Original && fixture.Query(
+                "SELECT item_uid FROM character_inventory_slots WHERE character_id=$p0 AND list_type=1 AND slot_index=1",
+                roles[0].Id) is [[var sourceUid]] && Equals(sourceUid, detail.ClearAvatarSourceUid),
+                "重穿克隆后来源更新到本次被退回的真实实例UID，1449与存档一致");
+        }
         using (var peer = Open(fixture))
         {
             var packets = peer.Select(roles[1].Slot);
@@ -142,6 +162,11 @@ internal static class ClearAvatarTcpTests
         static byte[] Move(int id, short slot, int original) => Build(w =>
         {
             w.Write((byte)1); w.Write((short)0); w.Write(id); w.Write(1); w.Write((byte)3); w.Write(slot);
+            w.Write(original); w.Write(0); w.Write(-1); w.Write((ushort)0);
+        });
+        static byte[] MoveFrom(short source, int id, int original) => Build(w =>
+        {
+            w.Write((byte)1); w.Write(source); w.Write(id); w.Write(1); w.Write((byte)3); w.Write((short)3);
             w.Write(original); w.Write(0); w.Write(-1); w.Write((ushort)0);
         });
         static byte[] Sources(short linkedSlot, int bagSlot) => Build(w =>
