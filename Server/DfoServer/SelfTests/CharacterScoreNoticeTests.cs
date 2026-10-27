@@ -24,7 +24,7 @@ internal static class CharacterScoreNoticeTests
             byte[]? sent = null;
             var target = new ChatProbeConnection(1, f.Session, (_, _, _) => throw new Exception("unguarded path"))
             { GuardedProbe = (opcode, body, action, current) =>
-                { That(opcode == 0x06AD && action == "gm_character_score_notice", "使用既有AAS_TIPS而非PVP字段"); guard = current; sent = body; return true; } };
+                { That(opcode == 0x06AD && action == "character_score_notice", "使用既有AAS_TIPS而非PVP字段"); guard = current; sent = body; return true; } };
             var result = DevelopmentGm.PrepareCharacterScoreNotice(f.Request, target, f.Calculate, _ => null);
             That(result.Status == "queued" && !result.DeliveryConfirmed && result.ScoreStatus == "Partial" && result.ScoreCapped,
                 "管理提示只确认入队，先标Partial及封顶不宣称显示");
@@ -64,7 +64,7 @@ internal static class CharacterScoreNoticeTests
         using (var f = new Fixture())
         {
             var score = f.Calculate(CharacterInvestmentScore.Capture(f.Session.Selected!, f.Clock.Utc));
-            byte[] packet = DevelopmentGm.CharacterScoreNoticeBody(string.Concat(Enumerable.Repeat("角😀色", 300)), score, out bool truncated);
+            byte[] packet = DfoServer.Network.Builders.CharacterScorePackets.Body(string.Concat(Enumerable.Repeat("角😀色", 300)), score, out bool truncated);
             int titleBytes = BinaryPrimitives.ReadInt32LittleEndian(packet);
             int length = BinaryPrimitives.ReadInt32LittleEndian(packet.AsSpan(4 + titleBytes));
             That(truncated && titleBytes <= 24 && length <= 600 && packet[^1] == 0, "UTF8摘要遵守标题24/正文600字节合同");
@@ -140,7 +140,7 @@ internal static class CharacterScoreNoticeTests
         return new UTF8Encoding(false, true).GetString(body, 8 + title, length);
     }
 
-    sealed class Clock : TimeProvider
+    internal sealed class Clock : TimeProvider
     {
         long utc = 2_000_000_000, ticks;
         public long Utc => Interlocked.Read(ref utc);
@@ -151,7 +151,7 @@ internal static class CharacterScoreNoticeTests
         public void RollBack(int seconds) => Interlocked.Add(ref utc, -seconds);
     }
 
-    sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         readonly string root = Path.Combine(Path.GetTempPath(), "score-notice-" + Guid.NewGuid().ToString("N"));
         public Clock Clock { get; } = new();
