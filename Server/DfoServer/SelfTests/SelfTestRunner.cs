@@ -13,6 +13,7 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        EvildomWarPacketTests.RunCore();
         OrdinaryLukeProgressTests.RunCore();
         SkillTreeExpansionTests.RunCore();
         CharacterPreparationTests.RunCore();

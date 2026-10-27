@@ -56,6 +56,16 @@ internal sealed partial class DungeonHandler
     async Task PublishPartyNoticeAsync(GameConnectionContext context, PartyDungeonNotice notice)
     {
         using var publication = context.Sender.QueuePublication(notice.Recipient.Actor.IsCurrent);
+        if (notice.Kind == PartyDungeonNoticeKind.EvildomWarStarted)
+        {
+            var war = context.Session.ReadEvildomWar();
+            if (war is null) return;
+            await context.Notify(NotiPacketType.EVILDOM_WAR_INFO, EvildomWarPackets.Info(war.Mode,
+                (int)(war.Deadline - context.Session.EvildomWarNow).TotalSeconds,
+                war.Dungeons),
+                "evildom_war_info", () => ReferenceEquals(context.Session.ReadEvildomWar(), war));
+            return;
+        }
         if (notice.Kind == PartyDungeonNoticeKind.RaidBattleSync)
         {
             if (notice.RaidBattleChange is { } change)

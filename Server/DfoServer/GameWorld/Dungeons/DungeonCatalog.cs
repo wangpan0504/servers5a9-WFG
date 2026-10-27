@@ -545,6 +545,12 @@ internal sealed class DungeonCatalog
         Dictionary<string, DungeonRawSection>? current = null;
         var mazeSections = new List<DungeonRawSection>();
         bool mazeClosed = false;
+        // 匹配PVF的5424缺少[maze info]，但完整布局直接位于副本头；仅接受魔界大战单迷宫的这一形式。
+        // 仍由同一ParseMaze校验尺寸、起点、Boss与显式地图，不借用5418布局或补造房间。
+        if (!sections.Any(section => section.Tag == "maze info") &&
+            path.StartsWith("dungeon/kcontents2/theevildomwar/", StringComparison.Ordinal) &&
+            sections.Any(section => section.Tag == "evildom war dungeon" && section.Tokens.Count == 0))
+            current = new(StringComparer.Ordinal);
         for (int i = 0; i < sections.Count; i++)
         {
             var section = sections[i];

@@ -30,10 +30,12 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     TitleProjection? titleProjection = null, InventoryProjection? inventoryProjection = null,
     PartyDungeonService? partyDungeons = null, CharacterStatComputer? partyStats = null,
     DfoServer.Game.Party.PartyService? parties = null, EpicPieceShopService? epicPieceShop = null,
-    TagEvildomRunProjection? tagEvildomRun = null, DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null) : IGameCommandModule
+    TagEvildomRunProjection? tagEvildomRun = null, EvildomWarCatalog? evildomWar = null,
+    DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
+        commands.Register(CmdPacketType.START_EVILDOM_WAR, StartEvildomWarAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.SELECT_DUNGEON, SelectAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.FINISH_LOADING, LoadedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.DIE_MONSTER, DeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
@@ -225,7 +227,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             (selection.Unknown7 != (hell ? 1 : 0) || selection.Unknown8 != (direct || practice ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
             selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0) || selection.Unknown21 != 0))
             return await RejectAsync();
-        if (context.Session.HasMultiplePartyMembers?.Invoke() == true)
+        if (context.Session.HasMultiplePartyMembers?.Invoke() == true || context.Session.ReadEvildomWar() is not null)
         {
             if (partyDungeons is null || direct || replay || practice || continuation || sealDoor)
                 return await RejectAsync();

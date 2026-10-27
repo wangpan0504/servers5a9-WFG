@@ -51,6 +51,7 @@ internal sealed partial class GameSession
         public bool SettlementEnabled { get; set; }
         public FormalSettlement? Settlement { get; set; }
         public TagEvildomEntrySelection? TagEvildomEntry { get; init; }
+        public EvildomWarAdmission? EvildomWarEntry { get; init; }
         public long? TagEvildomStartedTimestamp { get; set; }
         public TagEvildomClearPreparation? PendingTagEvildomClear { get; set; }
         public DfoServer.Game.TagEvildom.TagEvildomRewardSelection? TagEvildomRewardSelection { get; set; }
@@ -165,6 +166,17 @@ internal sealed partial class GameSession
                 return RejectFormal(reason);
         }
         var tagEntry = dungeonId is 9608 or 400000095 ? CurrentTagEvildomSelection(expected, epoch, dungeonId) : null;
+        bool evildomDungeon = dungeonId <= int.MaxValue &&
+            catalog.DungeonPath((int)dungeonId)?.StartsWith("dungeon/kcontents2/theevildomwar/", StringComparison.Ordinal) == true &&
+            catalog.Get((int)dungeonId).RawSections.Any(row => row.Tag == "evildom war dungeon");
+        var war = evildomDungeon ? owner.Execute(() => CurrentEvildomWar(expected)) : null;
+        if (evildomDungeon && (war is null || !partyAdmission || questId != 0 || hellParty || hellLegend || practice || classExperience ||
+            retry is not null || selection is null || selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id ||
+            selection.OriginPosition != expected.Position || war.SelectionDungeon != dungeonId || !war.Dungeons.Any(row => row.Id == dungeonId && row.State == 0) ||
+            !war.Catalog.Dungeons.Any(row => row.Mode == war.Mode && row.Id == dungeonId && row.Difficulty == difficulty)))
+            return RejectFormal("evildom-war-start-and-selection-required");
+        if (war is { Charged: false } && owner.Execute(() => EvildomWarCostRejection(expected, war.Catalog)) is { } warCostReason)
+            return RejectFormal("evildom-war-" + warCostReason);
         if (dungeonId is 9608 or 400000095 && (tagEntry is null || questId != 0 || difficulty != 0 || retry is not null ||
             practice || classExperience || hellParty || hellLegend || sealDoor || partyAdmission)) return RejectFormal("tag-evildom-selection-required");
         var hope = dungeonId == 8523 ? CurrentHopeAdmission(expected,epoch) : null;
@@ -251,19 +263,24 @@ internal sealed partial class GameSession
             selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id || selection.OriginPosition != expected.Position))
             return RejectFormal("practice-selection-missing");
         var approvedPartyRoute = shared?.Session.PreparedParty(shared).Dungeon.Entry.PartyRoute;
-        if (tagEntry is null && !training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon, approvedPartyRoute) is { } selectionReason)
+        if (war is null && tagEntry is null && !training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon, approvedPartyRoute) is { } selectionReason)
             return RejectFormal(selectionReason);
         // 频道专属城镇（最后防线）的选图副本要求持有 dgn [required item]；次数与第三列消耗见 EntryCost。
         bool channelTown = !training && !trainingRoom && !classExperience && assault is null && !hellParty &&
             ChannelAreaLanding.IsChannelBoundTown(towns, expected.Position.Town);
         // 悲叹/绝望之塔与祭坛的入场券、邀请函由各自准入策略规划，不再按频道城镇 [required item] 先行拒绝。
-        bool specialAdmission = tagEntry is not null || grief is not null || despair is not null || dungeonId is 11006 or 11007;
+        bool specialAdmission = war is not null || tagEntry is not null || grief is not null || despair is not null || dungeonId is 11006 or 11007;
         if (channelTown && !specialAdmission &&
             ChannelTownDungeonRequirement.Check(catalog.Get(checked((int)dungeonId)), expected.Inventory, pieces, DateTimeOffset.UtcNow) is { } missingItem)
             return RejectFormal(missingItem);
         // DungeonIncountInfo 次数：任意城镇、非练习的普通入场（含任务与结算再挑战）；新手训练、训练室、职业体验、强袭、深渊派对不计。
         // 悲叹之塔、绝望之塔与血之/究极祭坛已由各自专表（账号日额度、特殊入场账本）计次扣费，这里不再叠加一次。
         DungeonEntryCost? channelCost = null;
+        if (war is { Charged: false })
+        {
+            var row = incounts!.Find(war.Catalog.IncountDungeon)!;
+            channelCost = new(row.CountKey, row, IncountPeriod(row.CountKey), null, null);
+        }
         if (!practice && !training && !trainingRoom && !classExperience && assault is null && !hellParty &&
             !specialAdmission)
         {
@@ -373,6 +390,7 @@ internal sealed partial class GameSession
         }
         // #233 强袭材料走自己的入场消耗；不叠加 [required item] / 入场一次性疲劳。
         if (assault is not null) entry = entry! with { EntryItem = null, StartFatigue = 0, EntryCostNote = null };
+        if (war is not null) entry = entry! with { StartFatigue = war.Charged ? (ushort)0 : war.Catalog.NeedFatigue };
         DungeonSpecialEntry? specialEntry = despair?.Entry;
         if (despair is not null) entry = entry! with { EntryItem = despair.Ticket };
         if (dungeonId is 11006 or 11007)
@@ -418,7 +436,7 @@ internal sealed partial class GameSession
             weekly = new(WeeklyDungeonPolicy.WeekKey((timeProvider ?? TimeProvider.System).GetUtcNow()), weeklySlot);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
             // 普通入场票已覆盖相同物品时，频道代价只保留次数；超星空通行证规划字段仍完整传入提交阶段。
-            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { TagEvildomEntry = tagEntry, HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
+            Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { EvildomWarEntry = war, TagEvildomEntry = tagEntry, HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
                 CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry, Dazzlement = dazzlement,
                 ChannelCost = channelCost is { Consume: not null } && entry.EntryItem is not null ? channelCost with { Consume = null } : channelCost } };
 
