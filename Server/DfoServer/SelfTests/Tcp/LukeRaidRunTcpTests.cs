@@ -219,7 +219,7 @@ internal static partial class LukeRaidRunTcpTests
         }
         throw new InvalidOperationException("Luke Run通知超过有界预算");
     }
-    static void Validate(WirePacket packet) => That(packet.Kind==0&&packet.Opcode is
+    static void Validate(WirePacket packet) => That(packet.Kind==0 && packet.Opcode==597 && packet.Body.Length==5 && packet.Body[0]==0 && U32(packet.Body,1)<=86400 || packet.Kind==0&&packet.Opcode is
         2 or 3 or 4 or 6 or 9 or 11 or 13 or 14 or 21 or 22 or 23 or 24 or 26 or 27 or 28 or 29 or 30 or 31 or 37 or 38 or 153 or 356 or 583 or 586 or 587 or 590 or 591 or 593 or 594 or 598 ||
         packet.Kind==1&&packet.Opcode is 15 or 16 or 37 or 42 or 45,
         $"Luke Run只消费已证通知/应答：{packet.Kind}/{packet.Opcode}");
