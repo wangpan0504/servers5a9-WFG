@@ -102,6 +102,7 @@ internal static partial class FormalDungeonTcpTests
                     "真实未通关退出不制造条件、清图凭据或完成位："+scenario.Quest);
             }
         }
+        VerifyQuestDifficulty(fixture,resources,growth);
         VerifyBorderTownWarp(fixture,resources,growth);
     }
 }

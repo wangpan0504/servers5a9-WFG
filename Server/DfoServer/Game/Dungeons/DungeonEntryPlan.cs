@@ -423,7 +423,15 @@ internal sealed record DungeonEntryPlan(
         try { maze = resolveMaze is null ? candidates[0] : resolveMaze(candidates[0]); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
         { reason = "dungeon-resource-unavailable"; return false; }
-        if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0,maze.ConnectionQuestId))
+        // 普通任务路线不因故事属性表只有一档而锁定普通难度；仍使用原任务迷宫和地下城开放难度。
+        // 先验证故事块本身，回放、专用模式及指定难度副本继续沿各自门禁。
+        if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0,maze.ConnectionQuestId) &&
+            !(!isReplay && !practice && !hellParty && hope is null && tagEvildom is null && raid is null &&
+            !definition.IsTutorial && !definition.IsClassExperience && !definition.IsTournament && !definition.IsRaid &&
+            !definition.RequiresGriefEntryContract && !definition.IsInfernoDungeon && !cosmo && definition.DungeonType is null &&
+            !definition.RawSections.Any(section => section.Tag == "designate dungeon difficulty") &&
+            maze.ConnectionQuestId is { } connected && definition.AllowsDifficulty(0,true,connected) &&
+            definition.AllowsDifficulty(difficulty,false)))
         { reason = "difficulty-unsupported"; return false; }
         // 多起点、多Boss是候选集合，由资源装配选择本次实际路线；深渊沿用同一组格入口。
         if (maze.SourceOrdinal < 0 || maze.Width <= 0 || maze.Height <= 0 || maze.Starts.Count != 1 ||

@@ -12,6 +12,7 @@ internal static class DungeonCatalogTests
 {
     public static void RunCore()
     {
+        DungeonEntryPlanTests.RunCore();
         int checks = Count;
         var size = new DungeonRawSection("difficulty size",[new(0,1)]);
         var start = new DungeonRawSection("story mode",[]);
