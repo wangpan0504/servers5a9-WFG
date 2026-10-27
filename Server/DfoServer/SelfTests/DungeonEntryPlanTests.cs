@@ -1042,7 +1042,7 @@ internal static class DungeonEntryPlanTests
         var negative = basis with { Level = 93, CompletedQuests = [6050],
             ActiveMainQuests = [new(5,6060,1) { AcceptanceId = Guid.NewGuid() }] };
         That(DungeonEntryPlan.TryCreate(catalog,negative,7322,6060,0,out var elitePlan,out var eliteReason,quest: quests.Get(6060),quests: quests) &&
-            elitePlan is { IsOrdinaryHunt: true } && elitePlan.ChampionPercents.SequenceEqual(new[] { 25, 40, 60, 60 }),
+            elitePlan is { IsOrdinaryHunt: true } && elitePlan.ChampionPercents == new DungeonChampionRates(25, 40, 60, 60),
             "6060走普通路线进断头谷，并带上精英出现率：" + eliteReason);
 
         // #256 系统排查：6051-6060 每个任务按其 PVF 声明的目标副本逐个走入场规划（已接取、等级达标）。

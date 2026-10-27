@@ -110,18 +110,21 @@ internal static class AlbertHuntTcpTests
                 That(source.Monsters.Select(actor => actor.MonsterId).SequenceEqual(expected.Monsters) &&
                     source.PassiveObjects.Count == expected.Objects && source.AiCharacters.All(row => DungeonCompanion.IsCompanionRow(row.Id)) &&
                     source.SpecialObjects.Count == 0 &&
-                    source.MonsterTeams is null or { Count: 0 } && source.Monsters.All(actor => actor.Modifiers.Count == 0),
+                    source.MonsterTeams is null or { Count: 0 } && source.Monsters.All(actor => actor.Modifiers.Count == 0 &&
+                        actor.RankKind == (actor.MonsterId == 70176 ? "[boss]" : "[normal]")),
                     "每图完整演员及普通物件保留，无友方/APC/dummy或特殊父子："+source.Map.Id);
                 That(U32(map,14) == 70248+roomIndex && map[0] == expected.Position.X && map[1] == expected.Position.Y &&
                     map[18] == expected.Monsters.Length && map.Length == 23+22*expected.Monsters.Length,
                     "真实29完整演员数与九图原序一致，不删非任务怪："+source.Map.Id);
+                var actors = FormalDungeonTcpTests.ObserveChampionTypes(map,
+                    DungeonMonsterPlan.FromRoom(source, peer.Id, 100, definition.BasisLevel!.Value, playerTeam: 0), definition);
                 FormalDungeonTcpTests.Load(peer); drain(peer,null);
                 for (int actorIndex = 0; actorIndex < expected.Monsters.Length; actorIndex++)
                 {
                     int offset = 19+22*actorIndex, template = expected.Monsters[actorIndex];
                     ushort key = U16(map,offset+6);
                     That(U32(map,offset+2) == actorIndex && U32(map,offset+8) == template && map[offset+12] == 59 &&
-                        map[offset+13] == (template == 70176 ? 3 : 0) && map[offset+14] == 0 && map[offset+21] == 0 &&
+                        map[offset+13] == actors.Monsters[actorIndex].SpawnType && map[offset+14] == 0 && map[offset+21] == 0 &&
                         key != peer.Id && keys.Add(key),"独立22B演员合同与本次实际唯一key一致："+source.Map.Id);
                     uint previous = scalar;
                     if (template == 65031) { targetDeaths++; if (targetDeaths <= 25) scalar--; }

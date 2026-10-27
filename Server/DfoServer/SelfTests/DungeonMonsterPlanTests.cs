@@ -8,11 +8,59 @@ namespace DfoServer;
 
 internal static class DungeonMonsterPlanTests
 {
+    static void VerifyChampionRolls(DungeonRoomMonster source)
+    {
+        var map = new DungeonMap("map", new(0, 0), 1, "map/champion-fixture.map");
+        var boss = source with { RankKind = "[boss]" };
+        var champion = source with { RankKind = "[champion]", RankParameterCount = 0 };
+        var npc = source with { Modifiers = ["[NPC]"], NpcParameter = 7 };
+        var room = new DungeonRoomDefinition(map, [source, boss, champion, npc, source, source], [], [], [100, 100, 100, 100, 0, 100]);
+        var plan = DungeonMonsterPlan.FromRoom(room, 99, 10, playerTeam: 0);
+        var bounds = new List<int>();
+        var picked = plan.WithChampionRolls(new(33, 50, 70, 80), 0, max => { bounds.Add(max); return max == 100 ? 32 : 1; });
+        That(bounds.SequenceEqual(new[] { 100, 2 }) && picked.Monsters[5].SpawnType == 1 &&
+            picked.Monsters.Take(5).SequenceEqual(plan.Monsters.Take(5)) && plan.Monsters[5].SpawnType == 0 &&
+            picked.Monsters[5] == plan.Monsters[5] with { SpawnType = 1 },
+            "每房一次出现骰与完整候选均匀选取，只提升一只并保留来源、key、等级和原计划");
+        foreach (var (rates, difficulty, roll, hit) in new (DungeonChampionRates Rates, byte Difficulty, int Roll, bool Hit)[]
+        {
+            (new(33,50,70,80), 0, 33, false), (new(33,50,70,80), 1, 49, true),
+            (new(33,50,70,80), 2, 70, false), (new(33,50,70,80), 4, 79, true), (new(100,100,100,100), 0, 99, true)
+        })
+            That(!ReferenceEquals(plan.WithChampionRolls(rates, difficulty, max => max == 100 ? roll : 0), plan) == hit,
+                "出现概率使用严格小于边界，难度四沿用末档且一百必出");
+        int NoDraw(int _) => throw new InvalidOperationException("不合资格时不应抽随机数");
+        That(ReferenceEquals(plan.WithChampionRolls(default, 0, NoDraw), plan) &&
+            ReferenceEquals(plan.WithChampionRolls(new(0,0,0,0), 0, NoDraw), plan) &&
+            ReferenceEquals(plan.WithChampionRolls(new(100,100,100,100), 0, NoDraw, [source.MonsterId]), plan) &&
+            ReferenceEquals((plan with { Monsters = [plan.Monsters[1], plan.Monsters[2], plan.Monsters[3], plan.Monsters[4]] })
+                .WithChampionRolls(new(100,100,100,100), 0, NoDraw).Monsters[0], plan.Monsters[1]),
+            "零概率、named名册及仅有Boss、显式精英、NPC或友军的房间不抽取、不改变演员");
+        var excluded = plan with { Monsters =
+        [
+            plan.Monsters[0] with { Source = source with { RankKind = "[named]" } },
+            plan.Monsters[0] with { Source = source with { ChampionRestricted = true } },
+            plan.Monsters[0] with { IsBlocking = false },
+            plan.Monsters[0] with { Source = source with { ScriptedRetirement = true } },
+            plan.Monsters[0] with { Source = source with { SpecialChild = new(0, "[monster]", [], source.Path) } },
+            plan.Monsters[0] with { AiCharacter = new(1, [], "[monster]", "[normal]", "aicharacter/test.aic", 3) }
+        ] };
+        That(ReferenceEquals(excluded.WithChampionRolls(new(100,100,100,100), 0, NoDraw), excluded),
+            "named、MOB禁止强化、非阻挡、脚本退场、特殊子演员及APC不成为普通随机精英");
+        var first = new Random(803);
+        var second = new Random(803);
+        var outcomes = Enumerable.Range(0, 64).Select(_ => plan.WithChampionRolls(new(50,50,50,50), 0, first.Next)).ToArray();
+        That(outcomes.All(result => result.Monsters.SequenceEqual(plan.WithChampionRolls(new(50,50,50,50), 0, second.Next).Monsters)) &&
+            outcomes.Any(result => ReferenceEquals(result, plan)) && outcomes.Any(result => !ReferenceEquals(result, plan)),
+            "注入相同种子可逐次复现有无精英及选中对象，不依赖系统随机或概率容差");
+    }
+
     public static void RunCore()
     {
         int checks = Count;
         var source = new DungeonRoomMonster(1, Array.AsReadOnly(new[] { 1, 0, 3, 100, 100, 0, 1, 1 }),
             "[fixed]", "[normal]", "monster/fixture.mob");
+        VerifyChampionRolls(source);
         var room = new DungeonRoomDefinition(new("boss", new(0, 0), 1, "map/fixture.map"),
             Array.AsReadOnly(new[] { source with { RankKind = "[boss]" }, source }), [], []);
         var defaultPlan = DungeonMonsterPlan.FromRoom(room, 99, 10);
@@ -35,9 +83,9 @@ internal static class DungeonMonsterPlanTests
         That(ordinaryPlan.Monsters.Select(monster => monster.CandidateLevel).SequenceEqual([7, 3]) &&
             ordinaryPlan.Monsters.Select(monster => monster.SpawnType).SequenceEqual(new byte[] { 1, 0 }) &&
             ReferenceEquals(ordinaryPlan.Monsters[0].Source, relative), "本服普通相对和绝对等级分别计算，完整冠军原行和类型保留");
-        That(defaultPlan.WithChampionRolls([100, 0, 0, 0], 0, _ => 0).Monsters.Single(monster => monster.Source?.RankKind == "[normal]").SpawnType == 1 &&
-            defaultPlan.WithChampionRolls([0, 0, 0, 0], 0, _ => 0).Monsters.Single(monster => monster.Source?.RankKind == "[normal]").SpawnType == 0 &&
-            defaultPlan.WithChampionRolls([100, 0, 0, 0], 0, _ => 0).Monsters.Single(monster => monster.IsBoss).SpawnType == 3,
+        That(defaultPlan.WithChampionRolls(new(100, 0, 0, 0), 0, _ => 0).Monsters.Single(monster => monster.Source?.RankKind == "[normal]").SpawnType == 1 &&
+            defaultPlan.WithChampionRolls(default, 0, _ => 0).Monsters.Single(monster => monster.Source?.RankKind == "[normal]").SpawnType == 0 &&
+            defaultPlan.WithChampionRolls(new(100, 0, 0, 0), 0, _ => 0).Monsters.Single(monster => monster.IsBoss).SpawnType == 3,
             "断头谷精英率只把普通怪升成类型1，Boss保持类型3");
         var named = relative with { RankKind = "[named]", RankParameterCount = null };
         var namedPlan = DungeonMonsterPlan.FromRoom(room with { Monsters = [source,named] },99,98,5,playerTeam:0);

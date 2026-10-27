@@ -56,7 +56,8 @@ internal static class HarlemQuestEntryTests
             if (previousPlan is null) fullPlans = CompletePlans(entry,rooms);
             else That(entry.Maze.SameLayout(previousPlan.Maze),"普通0与显式5934沿同一实际任务布局");
             previousPlan = entry;
-            var opening = fixture.Session.EnterFormalDungeon(291100318,request,0,dungeons,rooms);
+            // 本组核对完整资源演员与骑乘，精英随机由专项覆盖。
+            var opening = fixture.Session.EnterFormalDungeon(291100318,request,0,dungeons,rooms,draw: max => max - 1);
             var opened = opening ?? throw new InvalidOperationException("真实哈林Session入场被拒绝");
             CheckBinding(opened.Entry,before,accepted,request);
             That(opened.Generation == fixture.Owner.Generation && opened.Entry.CharacterRevision == before.Revision+1 &&

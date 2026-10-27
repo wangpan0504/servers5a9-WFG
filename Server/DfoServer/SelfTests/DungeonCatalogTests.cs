@@ -10,10 +10,35 @@ namespace DfoServer;
 
 internal static class DungeonCatalogTests
 {
+    static void VerifyChampionRates()
+    {
+        var row = new DungeonRawSection("champion", [new(0, 4), new(0, 33), new(0, 50), new(0, 70), new(0, 80)]);
+        var ordinary = new DungeonDefinition(3, "dungeon/act1/mirkwood.dgn", 1, 1, [], [row]);
+        That(DungeonChampionRates.For(ordinary) == new DungeonChampionRates(33, 50, 70, 80),
+            "普通图直接使用PVF四档百分比，不再只放行断头谷");
+        foreach (var sections in new IReadOnlyList<DungeonRawSection>[]
+        {
+            [], [row, row], [row with { Tokens = [new(0, 4), new(0, 33)] }],
+            [row with { Tokens = [new(0, 4), new(0, 33), new(0, 50), new(0, 70), new(0, 101)] }],
+            [row with { Tokens = [new(0, 4), new(0, 33), new(0, 50), new(0, -1), new(0, 80)] }],
+            [row with { Tokens = [new(0, 4), new(7, 33), new(0, 50), new(0, 70), new(0, 80)] }],
+            [row with { Tokens = [new(0, 0), new(0, 0), new(0, 0), new(0, 0), new(0, 0)] }],
+            [row, new("raid dungeon", [new(0, 1)])], [row, new("raid normal dungeon", [])],
+            [row, new("tutorial dungeon", [new(0, 1)])], [row, new("blood dungeon", [new(0, 1)])],
+            [row, new("special dungeon", [])], [row, new("tournament dungeon", [new(0, 1)])]
+        })
+            That(!DungeonChampionRates.For(ordinary with { RawSections = sections }).IsEnabled,
+                "缺失、重复、畸形、全零或特殊玩法声明不借普通精英策略生成演员");
+        That(!DungeonChampionRates.For(ordinary with { DungeonType = "assaultmode dungeon" }).IsEnabled &&
+            !DungeonChampionRates.For(ordinary with { Path = "dungeon/towers/test.dgn" }).IsEnabled,
+            "非普通类型与塔类不改变既有演员合同");
+    }
+
     public static void RunCore()
     {
         DungeonEntryPlanTests.RunCore();
         int checks = Count;
+        VerifyChampionRates();
         var size = new DungeonRawSection("difficulty size",[new(0,1)]);
         var start = new DungeonRawSection("story mode",[]);
         var end = new DungeonRawSection("/story mode",[]);
@@ -295,6 +320,10 @@ internal static class DungeonCatalogTests
             countCatalog.Limits[11006] == new DungeonEnterCountLimit(0, 3, 1, -1, 1) &&
             countCatalog.Limits[11007] == countCatalog.Limits[11006], "实际PVF角色次数表保留18图，外传三图上限1、3、3");
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
+        That(DungeonChampionRates.For(catalog.Get(3)) == new DungeonChampionRates(33, 50, 70, 80) &&
+            DungeonChampionRates.For(catalog.Get(7322)) == new DungeonChampionRates(25, 40, 60, 60) &&
+            new[] { 1, 2, 5000, 5101, 11006, 400000016 }.All(id => !DungeonChampionRates.For(catalog.Get(id)).IsEnabled),
+            "匹配PVF普通图恢复实际精英率，零声明、训练、卢克、祭坛及超时空不新增精英");
         var lostLand = catalog.Get(4000);
         That(lostLand.Mazes[0] is { ResourceError: null, MapSpecification.Count: 86 } &&
             lostLand.RawSections.Count(section => section.Tag == "map specification") == 2 &&

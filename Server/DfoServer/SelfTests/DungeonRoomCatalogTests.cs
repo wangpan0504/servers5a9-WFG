@@ -13,6 +13,15 @@ internal static class DungeonRoomCatalogTests
     {
         int checks = Count;
         var fixture = new Fixture();
+        foreach (string tag in new[] { "no champion", "is named monster" })
+        {
+            bool Restricted(params PvfToken[] body) => DungeonRoomCatalog.ParseChampionRestriction(body, id => fixture.Resolve(id));
+            var marker = fixture.Tag(tag);
+            That(!Restricted() && !Restricted(marker, new(0, 0)) && Restricted(marker, new(0, 1)) &&
+                Restricted(marker) && Restricted(marker, new(6, 0)) && Restricted(marker, new(0, 0), new(0, 1)) &&
+                Restricted(marker, new(0, 0), marker, new(0, 0)),
+                "MOB精英限制尊重非零声明，歧义只禁止强化，不删除原演员：" + tag);
+        }
         AltarResources(fixture);
         That(fixture.Parse([fixture.Tag("type"),fixture.String("[boss]")]).DeclaredType == "[boss]" &&
             fixture.Parse(fixture.Monster()).DeclaredType is null,
@@ -469,6 +478,7 @@ internal static class DungeonRoomCatalogTests
         }
 
         public PvfToken Tag(string value) => new(3, String("[" + value + "]").Value);
+        public string Resolve(int id) => strings[id];
         public PvfToken[] Block(string tag, PvfToken[] values) => [Tag(tag), .. values, Tag("/" + tag)];
         public PvfToken[] Monster(int[]? values = null, string placement = "[fixed]", string rank = "[normal]") =>
             Block("monster", [.. (values ?? [1, 0, 3, 573, 197, 0, 1, 1]).Select(value => new PvfToken(0, value)), String(placement), String(rank)]);

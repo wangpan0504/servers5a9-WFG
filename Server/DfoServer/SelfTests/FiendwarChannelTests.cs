@@ -295,7 +295,7 @@ internal static class FiendwarChannelTests
             "independent_drop 110994：列表掉落 4%，难度2 抽 3 次，含 401000048 权重900");
         // 精英外观怪：地图行全是 [fixed] [normal]（只有 400000015 的 110994 是 [boss]，见 evidence/fiendwar-rooms），dgn [champion] 0 0 0 0 0 不升精英；
         // 怪物文件写 [is named monster] 1 但 [common champion drop item] 为空。服务端按生成类型 0 取 monster type drop bonusrate。
-        That(DungeonChampionRates.For(definition).Length == 0, "400000016 不做精英升级（[champion] 全 0）");
+        That(!DungeonChampionRates.For(definition).IsEnabled, "400000016 不做精英升级（[champion] 全 0）");
         var monsterDrops = DungeonMonsterDropCatalog.Load(pvf);
         int[] namedLooking = [110979, 110982, 110987, 110973, 110974, 110980, 110977, 110981, 110984, 110709, 110978, 110992];
         That(namedLooking.All(id => monsterDrops.Get(id) is { Items: null or { Count: 0 }, CommonChampionItems: null or { Count: 0 } }),

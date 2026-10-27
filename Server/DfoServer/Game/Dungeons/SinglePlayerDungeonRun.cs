@@ -417,6 +417,7 @@ internal sealed partial class SinglePlayerDungeonRun
             var baseMonsters = plan.Monsters.Where(monster => monster.HellWave is null).ToArray();
             var waveMonsters = plan.Monsters.Where(monster => monster.HellWave is not null).ToArray();
             if (baseMonsters.Length != resourcePlan.Monsters.Count || waveMonsters.Length != plan.HellWaves.Count ||
+                baseMonsters.Zip(resourcePlan.Monsters).Count(pair => pair.First.SpawnType != pair.Second.SpawnType) > 1 ||
                 waveMonsters.Any(wave => !wave.IsBlocking || wave.ObjectKey == entry.CharacterId || !keys.Add(wave.ObjectKey) ||
                     !plan.HellWaves.Any(hell => hell.ObjectKey == wave.ObjectKey && hell.MonsterId == wave.MonsterId)) ||
                 baseMonsters.Zip(resourcePlan.Monsters).Any(pair =>
@@ -479,9 +480,8 @@ internal sealed partial class SinglePlayerDungeonRun
 
     // 入场已按资源[champion]抽出精英；复验不能把这一步合法的0→1变化当成伪造演员。
     static bool AllowedChampionPromotion(DungeonPlannedMonster planned, DungeonPlannedMonster resource, DungeonEntryPlan entry) =>
-        resource.SpawnType == 0 && planned.SpawnType == 1 && resource.Source?.RankKind == "[normal]" &&
-        resource.CanReportDeath && !resource.IsFriendly && entry.ChampionPercents.Length > 0 &&
-        entry.ChampionPercents[Math.Min(entry.Difficulty, entry.ChampionPercents.Length - 1)] > 0;
+        DungeonMonsterPlan.CanBecomeChampion(resource) && !entry.NamedMonsters.Contains(resource.MonsterId) &&
+        planned.SpawnType == 1 && entry.ChampionPercents.Percent(entry.Difficulty) > 0;
 
     public DungeonRunResult CompleteLoading(DungeonRunIdentity expected, Guid actionId, bool hasMatchingQuest = false)
     {

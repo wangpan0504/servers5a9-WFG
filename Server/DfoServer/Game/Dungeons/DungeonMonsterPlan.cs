@@ -53,17 +53,26 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
             { Altar = altar, BasisLevel = level };
     }
     public IReadOnlyList<DungeonPlannedSpecialObject> SpecialObjects { get; init; } = Array.Empty<DungeonPlannedSpecialObject>();
-    public DungeonMonsterPlan WithChampionRolls(IReadOnlyList<int> percents, byte difficulty, Func<int, int> draw)
+    public DungeonMonsterPlan WithChampionRolls(DungeonChampionRates percents, byte difficulty, Func<int, int> draw,
+        IReadOnlyList<int>? namedMonsters = null)
     {
-        if (percents.Count == 0) return this;
-        int percent = difficulty < percents.Count ? percents[difficulty] : percents[^1];
+        int percent = percents.Percent(difficulty);
         if (percent <= 0) return this;
-        return this with
-        {
-            Monsters = Monsters.Select(monster => monster.SpawnType == 0 && monster.Source?.RankKind == "[normal]" &&
-                monster.CanReportDeath && !monster.IsFriendly && draw(100) < percent ? monster with { SpawnType = 1 } : monster).ToArray()
-        };
+        var candidates = Enumerable.Range(0, Monsters.Count).Where(index => CanBecomeChampion(Monsters[index]) &&
+            namedMonsters?.Contains(Monsters[index].MonsterId) != true).ToArray();
+        if (candidates.Length == 0 || draw(100) >= percent) return this;
+        // 每房只抽一次出现，再在完整候选中等概率选一只；不偏向资源行的第一只。
+        int selected = candidates[draw(candidates.Length)];
+        var monsters = Monsters.ToArray();
+        monsters[selected] = monsters[selected] with { SpawnType = 1 };
+        return this with { Monsters = Array.AsReadOnly(monsters) };
     }
+
+    internal static bool CanBecomeChampion(DungeonPlannedMonster monster) =>
+        monster.SpawnType == 0 && monster.AiCharacter is null && monster.HellWave is null &&
+        monster.Source is { RankKind: "[normal]", PlacementKind: "[fixed]", NpcParameter: null,
+            Modifiers.Count: 0, SpecialChild: null, ScriptedRetirement: false, ChampionRestricted: false } &&
+        monster.CanReportDeath && monster.IsBlocking && !monster.IsFriendly && !monster.IsDummyMapBoss;
 
     public uint NextObjectKey => (uint)Monsters.Select(monster => (int)monster.ObjectKey)
         .Concat(SpecialObjects.Select(actor => (int)actor.ObjectKey)).Concat(HellWaves.Select(wave => (int)wave.ObjectKey)).DefaultIfEmpty(0).Max() + 1;

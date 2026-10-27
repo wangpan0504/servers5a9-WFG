@@ -158,6 +158,7 @@ internal static class QuestCollaboratorTcpTests
             That(map.Length >= 19 && map[0] == 0 && map[1] == 0 && U32(map,14) == 91351 &&
                 map[18] == plan.Monsters.Count + plan.SpecialObjects.Count && map.Length >= 19 + 22*map[18],
                 "真实29完整起点地图、坐标与演员数量");
+            plan = FormalDungeonTcpTests.ObserveChampionTypes(map, plan, definition);
             for (int index = 0; index < plan.Monsters.Count; index++)
             {
                 int at = 19 + 22*index;

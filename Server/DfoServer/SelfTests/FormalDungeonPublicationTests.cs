@@ -646,7 +646,11 @@ internal static class FormalDungeonPublicationTests
         async Task PickupLostResultAsync()
         {
             using var f = new Fixture(towns, characters, learning, quests, true, losePickup: true);
-            var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), items.Items, bound => 0)!;
+            bool dropping = false;
+            // 本例精确核对普通单件掉落封包，入场不提升精英；随后保留原可控命中。
+            var entry = f.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms, global::DfoServer.Testing.SelfTestCatalogs.MonsterDrops(pvf), items.Items,
+                bound => dropping ? 0 : bound - 1)!;
+            dropping = true;
             f.Session.CompleteFormalDungeonLoading();
             var commands = Registry(f);
             using var stop = new CancellationTokenSource();
