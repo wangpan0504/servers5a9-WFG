@@ -27,15 +27,29 @@ internal static partial class LukeRaidRunTcpTests
             That(Amount(peer.Id,10308804)==0&&Amount(peer.Id,10308807)==0,"领取前原箱与盒内材料均未提前发放");
             peer.Send(660,[0,1]);
             var claimed=Drain(peer,true);
-            That(claimed.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==1&&!claimed.Any(packet=>packet.Opcode==600),
-                "Runtime资源策略实际660领取原箱，不填造600展示");
+            That(claimed.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==1&&claimed.Count(packet=>packet.Opcode==600)==1 &&
+                claimed.FindIndex(packet=>packet.Opcode==600)<claimed.FindIndex(packet=>packet is {Kind:1,Opcode:660}),
+                "完整显式配置实际写Luke600后再写660成功，不提前确认");
+            Bytes(claimed.Single(packet=>packet.Opcode==600).Body,
+                Network.Builders.LukeRewardPackets.Result(new(0,peer.Id,1,new(1,10308804,1,0,0x89abcdef,0))),
+                "实际TCP包owner绑定原receipt角色，card/kind/数量与封存原箱一致");
             That(Amount(peer.Id,10308804)==1&&Amount(peer.Id,10308807)==0,"实际SQL仅发显式一个10308804原箱，不直接拆25材料");
             string saved=fixture.Snapshot();
             peer.Send(660,[0,1]);
             var replay=Drain(peer,true);
-            That(replay.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==1&&fixture.Snapshot()==saved,
+            That(replay.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==1&&!replay.Any(packet=>packet.Opcode==600)&&fixture.Snapshot()==saved,
                 "原箱领取重放使用原回执，不重复箱子或资格");
-            foreach(var other in peers.Where(other=>other!=peer))Drain(other,true);
+            foreach(var other in peers.Where(other=>other!=peer))
+                That(!Drain(other,true).Any(packet=>packet.Opcode==600),"本期仅本人结果，不伪造全团广播合同");
+            if(peer==peers[1])
+            {
+                // 第二人的确认已推进同phase revision；第一人的原receipt仍可ACK，不重发600。
+                string revisionReplaySnapshot=fixture.Snapshot();
+                peers[0].Send(660,[0,1]);var afterPeer=Drain(peers[0],true);
+                That(afterPeer.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==1 &&
+                    !afterPeer.Any(packet=>packet.Opcode==600) && fixture.Snapshot()==revisionReplaySnapshot,
+                    "同阶段其它成员确认推进revision，不吞本人原receipt的合法ACK重试");
+            }
         }
         That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE instance_id=$p0 AND phase=0 AND raid_type=1",instance) is [[8L]],
             "资源单kind布局每人仅一条持久回执，未额外创造其它奖励种类");
@@ -58,14 +72,15 @@ internal static partial class LukeRaidRunTcpTests
                 "达到资源最少2次的P2成员真实领取原箱");
             That(Amount(peer.Id,10304817)==1&&Amount(peer.Id,10308807)==0,"P2仅发10304817原箱，不自动拆100材料");
             string saved=fixture.Snapshot();peer.Send(660,[0,2]);var replay=Drain(peer,true);
-            That(replay.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==1&&fixture.Snapshot()==saved,"P2原箱回执重放不重复发放");
-            foreach(var other in peers.Where(other=>other!=peer))Drain(other,true);
+            That(replay.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==1&&!replay.Any(packet=>packet.Opcode==600)&&fixture.Snapshot()==saved,"P2原箱回执重放不重复发放");
+            foreach(var other in peers.Where(other=>other!=peer))
+                That(!Drain(other,true).Any(packet=>packet.Opcode==600),"本期仅本人结果，不伪造全团广播合同");
         }
         foreach(var peer in others)
         {
             string saved=fixture.Snapshot();
             peer.Send(660,[0,1]);var oldReceipt=Drain(peer,true);
-            That(oldReceipt.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==1&&fixture.Snapshot()==saved,
+            That(oldReceipt.Count(packet=>packet is {Kind:1,Opcode:660,Body:[1]})==1&&!oldReceipt.Any(packet=>packet.Opcode==600)&&fixture.Snapshot()==saved,
                 "P2不合资格成员仍可幂等重放旧P1卡，不把原回执误判成新发奖");
             peer.Send(660,[0,2]);var denied=Drain(peer,true);
             That(denied.Count(packet=>packet is {Kind:1,Opcode:660,Body:[0,0x12,0]})==1 && fixture.Snapshot()==saved && Amount(peer.Id,10304817)==0,
