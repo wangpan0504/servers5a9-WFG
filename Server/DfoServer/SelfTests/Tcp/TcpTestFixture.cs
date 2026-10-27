@@ -266,7 +266,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                     throw new InvalidOperationException("Fixture exited before ready: " + ReadDiagnostic(Path.Combine(Options.LogDirectory, "stderr.txt")));
                 }
                 if (deadline.Elapsed > TimeSpan.FromSeconds(45))
-                    throw new TimeoutException("Fixture not ready: " + Root);
+                    throw new TimeoutException("Fixture not ready: " + Root + "; " +
+                        ReadinessDiagnostic(phase, deadline.Elapsed, ready, Path.Combine(Options.LogDirectory, "server.jsonl"), process, hosted));
                 await Task.Delay(50);
             }
 
@@ -419,6 +420,84 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         int count;
         while ((count = await reader.ReadAsync(buffer.AsMemory())) != 0)
             await writer.WriteAsync(buffer.AsMemory(0, count));
+    }
+
+    // 只在原45秒门槛已失败时取证，不等待日志、不重试启动，也不改变原有退出清理。
+    internal static string ReadinessDiagnostic(string phase, TimeSpan elapsed, string ready, string log,
+        Process? child = null, Task? hosted = null)
+    {
+        try
+        {
+            string processState = "none";
+            if (child is not null)
+            {
+                try
+                {
+                    int pid = child.Id;
+                    bool exited = child.HasExited;
+                    processState = $"Pid={pid};HasExited={exited};ExitCode={(exited ? child.ExitCode.ToString(CultureInfo.InvariantCulture) : "not-exited")}";
+                }
+                catch (Exception error) { processState = "unavailable:" + error.GetType().Name; }
+            }
+            return JsonSerializer.Serialize(new
+            {
+                ObservedUtc = DateTimeOffset.UtcNow, Phase = phase.Length <= 160 ? phase : phase[..160], ElapsedMs = elapsed.TotalMilliseconds,
+                ReadyExists = File.Exists(ready), Process = processState, Hosted = hosted?.Status.ToString() ?? "none",
+                Startup = ReadStartupDiagnostic(log)
+            });
+        }
+        catch (Exception error) { return "readiness-diagnostic-unavailable:" + error.GetType().Name; }
+    }
+
+    internal sealed record StartupDiagnostic(long? FileBytes, int ReadBytes, bool TailOnly, string? Time,
+        string? Stage, string? State, double? ElapsedMs, string? Error);
+
+    // 活动日志只读最多64KiB尾部；不借用Events整份加载，半行/截断行跳过且不输出原始日志正文。
+    internal static StartupDiagnostic ReadStartupDiagnostic(string path)
+    {
+        const int budget = 64 * 1024;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            long length = stream.Length, offset = Math.Max(0, length - budget);
+            stream.Seek(offset, SeekOrigin.Begin);
+            byte[] bytes = new byte[(int)Math.Min(length, budget)];
+            int count = 0, read;
+            while (count < bytes.Length && (read = stream.Read(bytes, count, bytes.Length - count)) > 0) count += read;
+            string text = System.Text.Encoding.UTF8.GetString(bytes, 0, count);
+            if (offset > 0)
+            {
+                int newline = text.IndexOf('\n');
+                text = newline < 0 ? "" : text[(newline + 1)..];
+            }
+            string? time = null, stage = null, state = null;
+            double? milliseconds = null;
+            bool found = false;
+            foreach (string line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    var root = doc.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object || Value(root, "Kind") != "startup" ||
+                        !root.TryGetProperty("Detail", out var detail) || detail.ValueKind != JsonValueKind.Object) continue;
+                    time = Value(root, "Time"); stage = Value(detail, "Stage"); state = Value(detail, "State");
+                    milliseconds = detail.TryGetProperty("ElapsedMs", out var number) && number.ValueKind == JsonValueKind.Number &&
+                        number.TryGetDouble(out double value) && double.IsFinite(value) ? value : null;
+                    found = true;
+                }
+                catch (JsonException) { /* 当前写入中的半行不能覆盖此前完整启动事件。 */ }
+            }
+            return new(length, count, offset > 0, time, stage, state, milliseconds, found ? null : "no-complete-startup-in-tail");
+        }
+        catch (Exception error) { return new(null, 0, false, null, null, null, null, error.GetType().Name); }
+
+        static string? Value(JsonElement row, string property)
+        {
+            if (!row.TryGetProperty(property, out var value) || value.ValueKind != JsonValueKind.String) return null;
+            string text = value.GetString()!;
+            return text.Length <= 160 ? text : text[..160];
+        }
     }
 
     static string ReadDiagnostic(string path)
