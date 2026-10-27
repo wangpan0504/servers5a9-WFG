@@ -167,6 +167,14 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         // 回执自己完成 210–212→装备键 34、213–215→装备键 35 的联动（0069A170/0069A4A0），服务端不需要补发本人
         // USERINFO。补发的 USERINFO 会走 0267C4F0→023C3A90 重灌六符文向量并触发护石面板刷新（00698B70），
         // 是图鉴符文页在按技能筛选时退回「所有技能」的唯一未排除触发路径（#747）；符文变化只发容器 46 差量。
+        var oldSets = InventoryEchonEquipmentService.Records(plan.Before);
+        var newSets = InventoryEchonEquipmentService.Records(current.Inventory);
+        foreach (var old in oldSets.Where(old => !newSets.Any(set => set.Index == old.Index)))
+            await context.Notify(NotiPacketType.CUSTOM_ABILITY_PART_SET_OPTION, EchonEquipmentPackets.Clear(current.Id, old.Index),
+                "echon_set_removed", CanSend);
+        foreach (var set in newSets.Where(set => !oldSets.Contains(set)))
+            await context.Notify(NotiPacketType.CUSTOM_ABILITY_PART_SET_OPTION, EchonEquipmentPackets.Set(current.Id, set),
+                "echon_set_committed", CanSend);
         bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
         bool weaponSkinChanged = plan.Before.Skins.Selected != current.Inventory.Skins.Selected;
         if (refreshEquipment && (equipmentChanged || weaponSkinChanged || plan.EquipmentSlotFlagsAfter is not null))

@@ -36,6 +36,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // 公开属性依赖同一目标的Actor身份，不能复用本人Player或接收者的资产。
         await context.Notify(NotiPacketType.USERINFO, actor, "other_player_actor", canSend);
         await context.Notify(NotiPacketType.USERINFO, player, "other_player_info", canSend);
+        foreach (var set in EchonEquipmentPackets.Snapshot(character))
+            await context.Notify(NotiPacketType.CUSTOM_ABILITY_PART_SET_OPTION, set, "other_player_echon_set", canSend);
     }
     public async Task<TownCharacterProjection> EnterAsync(GameConnectionContext context, bool resumeTown = false)
     {
@@ -67,6 +69,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (c.Guild is { } membership)
             await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
+        foreach (var set in EchonEquipmentPackets.Snapshot(c))
+            await context.Notify(NotiPacketType.CUSTOM_ABILITY_PART_SET_OPTION, set, "echon_set_initialize");
         await context.Notify(NotiPacketType.TOTAL_ITEM_MAKING_SKILL_POINT, CompoundPackets.MakingSkills(c.Inventory.ItemMakingSkills), "item_making_skills_initialize");
         long consumableNow = timer.GetUtcNow().ToUnixTimeMilliseconds();
         if (ConsumableStatePackets.Restore(c.Inventory, DfoServer.Game.Inventory.Models.ConsumableStateKind.Cooldown, consumableNow) is { } cooldowns)

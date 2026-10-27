@@ -63,6 +63,12 @@ internal sealed class InventoryUpgradeChronicleService(UpgradeChronicleCatalog r
                 Durability = Math.Min(instance.Core.Durability, output.Durability)
             }
         };
+        if (output.Echon is { Rules.IsModern: true })
+        {
+            // 转换保留打造，能力改用目标模板的固定初值，清除旧套装关联。
+            var initial = InventoryRewardGrantService.Create(output, utcNow: now);
+            upgraded = upgraded with { Core = upgraded.Core with { Extension114 = initial.Extension114, EchonSet = null } };
+        }
         after = after with { Items = after.Items.SetItem(index, upgraded) };
         // 提交时复验角色/位置与本次实际用到的最早期限；不把未消耗材料纳入资格。
         var remaining = after.Items.ToDictionary(item => item.Uid);

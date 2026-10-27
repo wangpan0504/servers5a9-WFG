@@ -537,6 +537,12 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         }
         else
             grants.AddRange(totals.Select(pair => new InventoryReward(pair.Key, pair.Value)));
+        if (definition.CustomAbilityGrade is { } customGrade)
+        {
+            if (grants.Any(row => catalog.Get(row.ItemId).Echon is not null) && customGrade > 3)
+                return InventoryResult.Reject(19);
+            for (int at = 0; at < grants.Count; at++) grants[at] = grants[at] with { CustomAbilityGrade = customGrade };
+        }
         InventoryResult grant;
         if (definition.UnsealsRandomOptions || definition.GrantsEpicExchangeOrigin)
         {
@@ -553,7 +559,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     {
                         var core = InventoryRewardGrantService.Create(catalog.Get(reward.ItemId), utcNow: now,
                             upgrade: reward.Upgrade, refinement: reward.Refinement, shopExpiration: shopExpiration,
-                            ignoreUsablePeriod: ignoreUsablePeriod);
+                            ignoreUsablePeriod: ignoreUsablePeriod, echonGrade: catalog.Get(reward.ItemId).Echon is not null &&
+                                reward.CustomAbilityGrade is { } grade ? checked((byte)grade) : null);
                         // 同ID多件仍逐件创建，保留强化、锻造、封装、耐久及期限。
                         if (definition.UnsealsRandomOptions)
                             core = InventoryRandomOptionService.Initialize(core, unsealDefinitions[reward.ItemId],

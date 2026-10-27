@@ -354,6 +354,7 @@ internal static class TcpRegressionTests
         ("equipment-quality", EquipmentQualityTcpTests.RunAsync),
         ("texture-change", TextureChangeTcpTests.RunAsync),
         ("equipment-upgrade", EquipmentUpgradeTcpTests.RunAsync),
+        ("echon-equipment", EchonEquipmentTcpTests.RunAsync),
         ("weapon-skin", WeaponSkinTcpTests.RunAsync),
         ("refinement", RefinementTcpTests.RunAsync),
         ("refinement-tickets", RefinementTicketTcpTests.RunAsync),
