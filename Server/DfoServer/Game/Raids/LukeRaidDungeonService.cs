@@ -29,7 +29,7 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
             var battle = leader.CurrentRaidBattle(anchor.Actor);
             if (battle is not { Kind: RaidKind.Luke } || battle.HasPendingTransition || battle.Instance != start.InstanceId) return [];
             var view = battle.View;
-            if (view.State != AntonRaidBattleState.Fighting || policy.Maze(view.Phase, dungeon) is not { } maze ||
+            if (!battle.LukePhaseOpen(view.Phase) || policy.Maze(view.Phase, dungeon) is not { } maze ||
                 !view.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open) return [];
             var selections = members.Select(member => new RaidDungeonSelection(new(start.InstanceId, member.Actor, view.Phase,
                 member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, view.Phase, id), RaidKind.Luke)
@@ -51,7 +51,7 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
         bool Allows(AntonRaidBattle battle, int phase, int id)
         {
             var current = battle.View;
-            return !battle.HasPendingTransition && current.State == AntonRaidBattleState.Fighting && current.Phase == phase && policy.Maze(phase, id) is not null &&
+            return battle.LukePhaseOpen(phase) && current.Phase == phase && policy.Maze(phase, id) is not null &&
                 current.Dungeons.TryGetValue(id, out var state) && state == RaidDungeonState.Open;
         }
     }
