@@ -18,6 +18,8 @@ internal sealed class GmNoticeSender(OnlineSessionDirectory online)
     /// <summary>GM 公告标题，固定「系统公告」。</summary>
     public const string Title = "系统公告";
 
+    internal ChatProbeConnection? FindScoreTarget(string name) => online.FindConnectionByCharacterName(name);
+
     /// <summary>发送泵与 GM 审计里使用的动作名。</summary>
     public const string Action = "gm_notice";
 
