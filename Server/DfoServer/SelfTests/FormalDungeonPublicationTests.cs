@@ -883,7 +883,9 @@ internal static class FormalDungeonPublicationTests
         public CharacterDeletion LoadDeletionTarget(AccountOwners.Lease owner, ushort slot) => inner.LoadDeletionTarget(owner, slot);
         public CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected) => inner.Delete(owner, expected);
         public void SwapSlots(AccountOwners.Lease owner, ushort slotA, ushort slotB) => inner.SwapSlots(owner, slotA, slotB);
-        public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? back, InventoryPlan? inventory = null) => inner.Save(owner, expected, position, back, inventory);
+        internal Action? BeforeSave { get; set; }
+        public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? back, InventoryPlan? inventory = null)
+        { BeforeSave?.Invoke(); return inner.Save(owner, expected, position, back, inventory); }
         public Character CommitTeleport(AccountOwners.Lease owner, DfoServer.Game.Town.TeleportPlan plan) => inner.CommitTeleport(owner, plan);
         public DfoServer.Game.Dungeons.AssaultDailyCounts LoadAssaultDaily(AccountOwners.Lease owner, ushort characterId, int day) => inner.LoadAssaultDaily(owner, characterId, day);
         public DfoServer.Game.Dungeons.AssaultDailyCommit CommitAssaultClear(AccountOwners.Lease owner, Character expected, int day, bool hidden, DfoServer.Game.Inventory.Models.InventoryPlan? reward) => inner.CommitAssaultClear(owner, expected, day, hidden, reward);
@@ -931,7 +933,9 @@ internal static class FormalDungeonPublicationTests
             if (++settlementCalls == 1 && loseSettlement) throw new IOException("合成翻牌及经验已提交但返回结果丢失");
             return result;
         }
-        public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitInventory(owner, expected, plan);
+        internal Action<InventoryPlan>? BeforeInventoryCommit { get; set; }
+        public Character CommitInventory(AccountOwners.Lease owner, Character expected, InventoryPlan plan)
+        { BeforeInventoryCommit?.Invoke(plan); return inner.CommitInventory(owner, expected, plan); }
         public Character CommitSkillSwitchInventory(AccountOwners.Lease owner, SkillSwitchInventoryPlan plan) =>
             inner.CommitSkillSwitchInventory(owner, plan);
         public Character CommitPvpTrainingSkills(AccountOwners.Lease owner,DfoServer.Game.Pvp.PvpTrainingSkillPlan plan) => inner.CommitPvpTrainingSkills(owner,plan);
