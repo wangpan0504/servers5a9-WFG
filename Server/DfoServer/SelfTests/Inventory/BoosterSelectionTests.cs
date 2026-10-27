@@ -26,6 +26,7 @@ internal static class BoosterSelectionTests
         BoosterCooldownTests.RunCore();
         BoosterEpicExchangeTests.RunCore();
         int checks = Count;
+        RunRepeatedDisjointDeclarations();
         RunCustomAbilityGradeDeclarations();
         RunServerTypeDeclarations();
         const string empty = "[default select]\n0\n[booster equipment upgrade]\n10\n[stackable]\n[/stackable]";
@@ -248,6 +249,7 @@ internal static class BoosterSelectionTests
         RunRealTemplateSelection(towns, itemResources, now);
         BoosterNativeSelectionTests.RunResources(towns, characters, itemResources, now);
         RunDisjointInstanceSelection(towns, itemResources, now);
+        RunRepeatedDisjointSelection(towns, characters, itemResources, now);
         RunHarlemAccessorySelection(towns, itemResources, now);
         BoosterEpicExchangeSkinPropagationTests.RunResources(towns, characters, itemResources);
         BoosterEpicExchangeTests.RunResources(towns, itemResources, now);
@@ -916,13 +918,16 @@ internal static class BoosterSelectionTests
             "[outer]\n[/outer]\n" + marker + "[outer]\n[/outer]\n"));
         That(guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
             "两个独立且完整闭合的同名区间之间仍是根级，不因保守配对扩大拒绝范围");
-        foreach (string declaration in new[] { marker + marker, marker + "1\n", marker + "`value`\n", marker + "[/set disjoint instance type]\n",
+        definitions[10000743] = BoosterCatalog.Parse(Text(safe, marker + marker));
+        That(guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
+            "完整根级空实例分解声明重复时仍沿真实开箱入口发放");
+        foreach (string declaration in new[] { marker + "1\n", marker + "`value`\n", marker + "[/set disjoint instance type]\n",
             marker + marker + "[/set disjoint instance type]\n", "[/set disjoint instance type]\n",
             "[set disjoint instance type\n", "[set disjoint instance type extra]\n", "[ set disjoint instance type]\n" })
         {
             definitions[10000743] = BoosterCatalog.Parse(Text(safe, declaration));
             That(!guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
-                "重复、有值、嵌套或闭合冲突的实例分解声明保持拒绝");
+                "有值、嵌套或闭合冲突的实例分解声明保持拒绝");
         }
         definitions[10000743] = BoosterCatalog.Parse(Text(safe + "\n" + marker, ""));
         That(!guarded.Open(syntheticRole, Select(3, [401030066]), out _, now).Accepted,
@@ -968,6 +973,101 @@ internal static class BoosterSelectionTests
             That(!rejected.Accepted && rejected.Plan is null && receipt is null &&
                 JsonSerializer.Serialize(syntheticRole) == beforeCrossedDeclaration,
                 "畸形品级声明经真实开箱整盒拒绝，无计划、无回执且全部输入资产不变");
+        }
+    }
+
+    internal static void RunRepeatedDisjointDeclarations()
+    {
+        const string marker = "[set disjoint instance type]\n";
+        const string box = "[stackable type]\n`[booster selection]` 0\n[booster selection num]\n1\n" +
+            "[booster select category]\n0 0\n[equipment]\n16400 1\n[/equipment]\n[/booster select category]\n";
+        foreach (string text in new[] { marker + box + marker, marker + marker + box + marker })
+        {
+            var definition = BoosterCatalog.Parse(text);
+            That(definition.Available && definition.SetsDisjointInstanceType && !definition.SetsEpicExchangeInstanceType &&
+                definition.Selection is { SelectionCount: 1, Categories.Length: 1 } selection &&
+                selection.Categories[0].Rewards is [{ ItemId: 16400, Count: 1, Upgrade: 0, Refinement: 0 }],
+                "根级完整空实例分解声明幂等重复，不撤回或增添原奖励");
+        }
+        foreach (string declaration in new[]
+        {
+            marker + "1\n" + marker, marker + marker + "1\n", marker + "`value`\n" + marker,
+            marker + "[outer]\n" + marker + "[/outer]\n", "[outer]\n" + marker + "[/outer]\n" + marker,
+            marker + "[set disjoint instance type\n", marker + "[set disjoint instance type extra]\n",
+            marker + "[ set disjoint instance type]\n", marker + marker + "[/set disjoint instance type]\n"
+        })
+            That(!BoosterCatalog.Parse(declaration + box).Available,
+                "重复声明的每一项都必须完整、根级且无值，不能只检查第一项");
+    }
+
+    internal static void RunRepeatedDisjointSelection(TownCatalog towns, CharacterCatalog characters, ItemResources resources, DateTimeOffset now)
+    {
+        var catalog = resources.Items;
+        var service = new InventoryBoosterService(catalog, resources.Boosters, resources.GoldLimits, resources.EpicPieces);
+        // 原资源三盒全部15奖励行；首盒选3，另两盒各在两类中单选，不按产物穿戴资格收窄领取。
+        foreach (var (sourceId, count, minimumLevel, epic, expectedIds) in new (int, int, int, bool, int[][])[]
+        {
+            (490010294, 3, 85, false, [[100300221, 100312103, 100321962]]),
+            (490013512, 1, 1, true, [[100300946, 100312640, 100322533], [100322534, 100300947, 100312641]]),
+            (490013513, 1, 1, true, [[100344897, 100390020, 100353080], [100390021, 100353081, 100344898]])
+        })
+        {
+            var source = catalog.Get(sourceId);
+            var definition = resources.Boosters.Get(sourceId);
+            That(source is { Kind: ItemKind.Consumable, Jobs: ushort.MaxValue, RequiredSkill: 0, UseForbidden: false } &&
+                source.MinimumLevel == minimumLevel && definition.Available && definition.SetsDisjointInstanceType &&
+                definition.SetsEpicExchangeInstanceType == epic && definition.GrantsEpicExchangeOrigin == epic &&
+                definition.Selection is { } selection && selection.SelectionCount == count && selection.Categories.Length == expectedIds.Length &&
+                service.UsePlaces(sourceId) == new BoosterUsePlacesDefinition(epic, epic),
+                "重复空声明三盒保留原源职业/等级、分类选数、交换来源及使用地点 " + sourceId);
+            for (byte category = 0; category < expectedIds.Length; category++)
+            {
+                int[] ids = expectedIds[category];
+                var group = definition.Selection!.Categories.Single(row => row.Category == category && row.Subcategory == 0);
+                That(group.PendingRule is null && group.Rewards.Select(row => row.ItemId).SequenceEqual(ids) &&
+                    group.Rewards.All(row => row.Count == 1 && row.Upgrade == 0 && row.Refinement == 0),
+                    "三盒完整原奖励顺序及一件数量不变 " + sourceId + ":" + category);
+                IEnumerable<int[]> vectors = count == 3 ? new[] { ids } : ids.Select(id => new[] { id });
+                foreach (int[] selected in vectors)
+                    foreach (var legal in BoosterNativeSelectionTests.ResourceRoles(towns, characters, source, now))
+                        foreach (byte level in new[] { legal.Level, (byte)95 }.Distinct())
+                        {
+                            var role = legal with { Level = level };
+                            string before = JsonSerializer.Serialize(role);
+                            var opened = service.Open(role, Select(65, selected, category), out var receipt, now);
+                            That(opened.Accepted && opened.Plan is not null && receipt is not null &&
+                                receipt.Rewards.SequenceEqual(selected.Select(id => new BoosterGrantedItem(id, 1))) &&
+                                opened.Plan.After.Find(Bag(65)) is null && opened.Plan.After.Items.Length == selected.Length &&
+                                opened.Plan.After.Gold == role.Inventory.Gold && JsonSerializer.Serialize(role) == before,
+                                "三盒每个合法职业及原最低等级完整领取且只在计划中消费源 " + sourceId + ":" + category + ":" + role.Job + ":" + level);
+                            foreach (var reward in opened.Plan!.After.Items)
+                            {
+                                var template = catalog.Get(reward.Core.ItemId);
+                                var expected = InventoryRewardGrantService.Create(template, utcNow: now);
+                                if (epic) expected = expected with { EpicExchangeOrigin = new(1, sourceId), Extension119 = 1 };
+                                That(selected.Contains(reward.Core.ItemId) && template.Kind == ItemKind.Equipment && reward.Uid == 0 &&
+                                    reward.Core == expected && reward.Avatar is null && reward.Creature is null,
+                                    "三盒完整装备核心保留，原epic两盒带不可交换来源与119资格位 " + sourceId + ":" + reward.Core.ItemId);
+                            }
+                        }
+            }
+            var first = BoosterNativeSelectionTests.ResourceRoles(towns, characters, source, now).First();
+            int[] valid = count == 3 ? expectedIds[0] : [expectedIds[0][0]];
+            foreach (var bad in new[] { Select(65, []), Select(65, [valid[0], valid[0]]), Select(65, [1106]),
+                Select(65, valid, 255), Select(65, valid, 0, 1) })
+            {
+                string before = JsonSerializer.Serialize(first);
+                var rejected = service.Open(first, bad, out var receipt, now);
+                That(!rejected.Accepted && rejected.Plan is null && receipt is null && JsonSerializer.Serialize(first) == before,
+                    "三盒仍拒绝空、重复、外来及错误分类选择且全部资产不变 " + sourceId);
+            }
+            foreach (var role in new[] { first with { Job = 255 }, first with { Level = (byte)(minimumLevel - 1) } })
+            {
+                string before = JsonSerializer.Serialize(role);
+                var rejected = service.Open(role, Select(65, valid), out var receipt, now);
+                That(!rejected.Accepted && rejected.Plan is null && receipt is null && JsonSerializer.Serialize(role) == before,
+                    "三盒不能因重复声明绕过源职业或最低等级资格 " + sourceId);
+            }
         }
     }
 
