@@ -82,6 +82,7 @@ internal static class SelfTestRunner
         await BufferedLogTests.RunAsync();
         await ServerLogTests.RunAsync();
         await DevelopmentGmTests.RunCoreAsync();
+        LukeRewardRecoveryTests.RunCore();
         DevelopmentEquipmentSlotTests.RunCore();
         AvatarPortraitTests.RunCore();
         await GameSenderBudgetTests.RunAsync();
