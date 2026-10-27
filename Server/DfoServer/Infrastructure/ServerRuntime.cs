@@ -193,8 +193,13 @@ internal static class ServerRuntime
                 new System.Text.Json.JsonSerializerOptions { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow })
                 ?? throw new InvalidDataException("攻坚开战配置不能为空")
             : new Game.Raids.RaidStartSettings();
-        var raidCatalog = raidSettings.Apply(GameWorld.Raids.RaidCatalog.Load(pvf))
-            .PrepareResources(pvf, dungeonCatalog, itemResources.Items);
+        // 仅显式Luke Run策略装配静态对象证据；与正式副本共用同一房间目录，不增加网络写入口。
+        var lukeObjectRooms = lukeStartPolicy?.Run is null ? null : DungeonRoomCatalog.Load(pvf);
+        var raidCatalog = raidSettings.Apply(GameWorld.Raids.RaidCatalog.Load(pvf)).PrepareResources(pvf, dungeonCatalog, itemResources.Items,
+            lukeObjectRooms, lukeStartPolicy?.Run is { Mazes.IsDefaultOrEmpty: false } objectPolicy
+                ? objectPolicy.Mazes.Where(row => row.Phase == 0).Select(row => (row.Dungeon, row.MazeOrdinal)).ToArray() : null);
+        if (raidCatalog.Find(1)?.Resources?.LukeObjects is { Issues.IsEmpty: false } objectEvidence)
+            log.Write("resource_warning", new { Source = "Luke static object evidence", Reasons = objectEvidence.Issues.ToArray() });
         log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
             AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
@@ -208,7 +213,7 @@ internal static class ServerRuntime
         }
         var lukeRun = lukeStart is not null && lukeStartPolicy?.Run is { } runPolicy &&
             raidCatalog.Find(1)?.Resources?.EntryCatalog is { } runCatalog
-            ? new Game.Raids.LukeRaidDungeonService(raidRegistry, parties, runCatalog, runPolicy) : null;
+            ? new Game.Raids.LukeRaidDungeonService(raidRegistry, parties, runCatalog, runPolicy, raidCatalog.Find(1)?.Resources?.LukeObjects) : null;
         if (lukeRun?.UnavailableReason is { } runUnavailable)
         {
             log.Write("resource_warning", new { Source = "Luke raid run policy", Reason = runUnavailable });
@@ -264,7 +269,7 @@ internal static class ServerRuntime
         {
             selectionDungeons = dungeonCatalog;
             assaultMode = AssaultModeCatalog.Load(pvf, dungeonCatalog);
-            var rooms = DungeonRoomCatalog.Load(pvf);
+            var rooms = lukeObjectRooms ?? DungeonRoomCatalog.Load(pvf);
             operationHope = OperationHopeCatalog.Load(pvf,dungeonCatalog,quests,rooms);
             tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
             questRooms = rooms;
