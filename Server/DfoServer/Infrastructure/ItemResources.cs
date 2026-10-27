@@ -34,6 +34,7 @@ internal sealed class ItemResources
     public ItemMakingSkillCatalog ItemMakingSkills { get; }
     public LimitCubeCatalog LimitCubes { get; }
     public EnchantmentCatalog Enchantments { get; }
+    public CharacterInvestmentMetadataCatalog CharacterInvestmentMetadata { get; }
     public EnhancementCatalog Enhancements { get; }
     public AmplificationCatalog Amplifications { get; }
     public AmplifyUpgradeCatalog AmplifyUpgrades { get; }
@@ -92,6 +93,7 @@ internal sealed class ItemResources
         ItemMakingSkills = new(archive);
         LimitCubes = new(archive, stackable, equipment);
         Enchantments = new(archive, stackable);
+        CharacterInvestmentMetadata = new(archive, equipment, stackable);
         Enhancements = new(archive, stackable, equipment);
         Amplifications = new(archive, stackable, equipment);
         AmplifyUpgrades = new(archive, stackable);
