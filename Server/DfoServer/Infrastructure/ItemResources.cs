@@ -37,6 +37,7 @@ internal sealed class ItemResources
     public CharacterInvestmentMetadataCatalog CharacterInvestmentMetadata { get; }
     public EnhancementCatalog Enhancements { get; }
     public AmplificationCatalog Amplifications { get; }
+    public ChronicleEnchantCatalog ChronicleEnchants { get; }
     public AmplifyUpgradeCatalog AmplifyUpgrades { get; }
     public MedalUpgradeCatalog MedalUpgrades { get; }
     public CreatureEggCatalog CreatureEggs { get; }
@@ -96,6 +97,7 @@ internal sealed class ItemResources
         CharacterInvestmentMetadata = new(archive, equipment, stackable);
         Enhancements = new(archive, stackable, equipment);
         Amplifications = new(archive, stackable, equipment);
+        ChronicleEnchants = new(archive, stackable, equipment);
         AmplifyUpgrades = new(archive, stackable);
         MedalUpgrades = new(archive);
         CreatureEggs = new(archive, equipment, Items);

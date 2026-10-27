@@ -50,6 +50,7 @@ internal static class SelfTestRunner
         EnchantmentTests.RunCore();
         EnhancementTests.RunCore();
         AmplificationTests.RunCore();
+        ChronicleEnchantTests.RunCore();
         AmplifyUpgradeTests.RunCore();
         MedalUpgradeTests.RunCore();
         TalismanTests.RunCore();
