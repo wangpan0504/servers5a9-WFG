@@ -88,6 +88,7 @@ internal static class LukeRaidRunTests
             survivors.All(row => departed.HasDungeonContribution(row.Actor, row.Fact.Identity.InstanceId)),
             "已离开Run但未提交清图的成员不因共享Cleared获得参与资格");
         ObjectiveGenerations();
+        LukeFixedCardRouteTests.RunCore(actors);
         Console.WriteLine($"PASS {Count - before} 卢克Run预留、阶段屏障和成员事实断言");
 
         void ObjectiveGenerations()
