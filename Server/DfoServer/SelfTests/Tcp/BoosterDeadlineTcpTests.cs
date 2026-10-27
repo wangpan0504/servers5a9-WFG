@@ -33,10 +33,12 @@ internal static class BoosterDeadlineTcpTests
             BoosterTcpTests.SetExpirationDebug(fixture, true);
             using var peer = Open(fixture);
             peer.Select(); peer.Barrier();
-            string State() => JsonSerializer.Serialize(fixture.Query("SELECT revision,daily_booster_usage FROM characters")) +
+            string State() => JsonSerializer.Serialize(fixture.Query("SELECT daily_booster_usage FROM characters")) +
                 JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
                 JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_slots ORDER BY item_uid"));
             string before = State();
+            long revision = (long)fixture.Query("SELECT revision FROM characters").Single().Single();
+            long day = (long)fixture.Query("SELECT json_extract(state_json,'$.RefillDay') FROM character_server_item_usage").Single().Single();
             using var db = new SqliteConnection("Data Source=" + fixture.Database);
             db.Open();
             using var writer = waitForWriter ? db.BeginTransaction(deferred: false) : null;
@@ -49,9 +51,19 @@ internal static class BoosterDeadlineTcpTests
             clock.Release();
             writer?.Commit();
             peer.Expect(1, 160, [0, 19, 0]);
-            ExpectUsed(peer, resources, 0);
-            peer.Barrier();
-            That(State() == before, "同一真实请求跨截止失败ACK19且源、奖励、账本与revision完整不变，writer等待=" + waitForWriter);
+            var notices = PartyDungeonTcpTests.Drain(peer);
+            var daily = notices.Where(row => row is { Kind: 0, Opcode: 541 })
+                .SelectMany(row => DailyBoosterProjectionTests.Decode(row.Body)).ToDictionary(row => row.Key, row => row.Value);
+            That(daily.Count == resources.ItemResources.Boosters.DailyRetainedTemplateIds.Count && daily[490704515] == 0 &&
+                resources.ItemResources.Boosters.DailyRetainedTemplateIds.All(daily.ContainsKey), "跨界失败后仍收到完整零次数视图");
+            That(notices.Any(row => row is { Kind: 0, Opcode: 550, Body.Length: 6 }) &&
+                notices.Any(row => row is { Kind: 0, Opcode: 1536, Body.Length: 5 }) &&
+                notices.Where(row => row.Opcode == 550).All(row => row.Body.Length == 6 && U32(row.Body) > 0) &&
+                notices.All(row => row.Kind == 0 && row.Opcode is 21 or 356 or 541 or 550 or 574 or 1343 or 1349 or 1536),
+                "失败ACK之后的在线日切通知保留完整副本次数和强袭信息");
+            That(State() == before && fixture.Query("SELECT revision FROM characters") is [[long currentRevision]] && currentRevision == revision + 1 &&
+                fixture.Query("SELECT json_extract(state_json,'$.RefillDay') FROM character_server_item_usage") is [[long currentDay]] && currentDay == day + 1,
+                "跨截止失败ACK19，源、奖励和礼盒账本不变；仅新服务日水印更新revision，writer等待=" + waitForWriter);
             That(clock.RepositoryReads >= (waitForWriter ? 2 : 1), "期限复验实际位于原请求提交边界");
             peer.Send(160, Build(w => { w.Write((short)65); w.Write(1); }));
             BoosterTcpTests.ExpectAck(peer, 490704515, 65, [(490704522, 10)]);

@@ -29,6 +29,22 @@ internal static class QuestCycleContinuationTests
         That(QuestCycle.Day(before) != QuestCycle.Day(after),"合成时钟准确跨过UTC+8 06:00游戏日边界");
         using (var f = new Fixture(DateTimeOffset.UtcNow))
         {
+            f.Session.ReturnToRoster();
+            int savedDay = QuestCycle.Day(DateTimeOffset.UtcNow.AddDays(2));
+            f.Sql($"UPDATE characters SET quest_cycle_day={savedDay}; UPDATE character_completed_quests SET daily_period={savedDay} WHERE quest_id=100");
+            var saved = f.Read();
+            var unchanged = f.Repository.AdvanceQuestCycle(f.Owner, saved, QuestCycle.Day(DateTimeOffset.UtcNow));
+            That(ReferenceEquals(unchanged, saved) && Same(saved, f.Read()), "回拨周期请求保持零写入，不抛异常或清除每日领取记录");
+            f.Session.Select(0); f.Session.MarkReady();
+            That(Same(saved, f.Read()) && Same(saved, f.Session.Selected!) && f.Session.AdvanceQuestCycle(DateTimeOffset.UtcNow) is null,
+                "任务周期早于存档仍可正常选角，保留任务、接取、资产及revision");
+            var advanced = f.Session.AdvanceQuestCycle(DateTimeOffset.UtcNow.AddDays(3));
+            That(advanced is not null && advanced.Character.QuestCycleDay > savedDay && advanced.Character.CompletedQuests.Length == 0 &&
+                advanced.Character.ActiveMainQuests.SequenceEqual(saved.ActiveMainQuests) && f.Session.AdvanceQuestCycle(DateTimeOffset.UtcNow.AddDays(3)) is null,
+                "时钟恢复到新服务日后只推进一次，继续原有每日资格重置");
+        }
+        using (var f = new Fixture(DateTimeOffset.UtcNow))
+        {
             var selected = f.Read();
             var sameDay = selected with { Revision = selected.Revision+1 };
             int day = selected.QuestCycleDay;
@@ -265,6 +281,7 @@ internal static class QuestCycleContinuationTests
         readonly CharacterRepository repository;
         readonly AccountOwners.Lease owner;
         public GameSession Session { get; }
+        public CharacterRepository Repository => repository;
         public AccountOwners.Lease Owner => owner;
         public TownCatalog Towns { get; }
 

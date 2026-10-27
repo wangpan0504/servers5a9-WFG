@@ -33,6 +33,12 @@ internal sealed partial class GameSession
                 return Reject("cooldown");
             if (plan.Inventory.ChangedSlots.Any(position => plan.Inventory.Before.Find(position) is { } item && item.IsExpired(now.ToUnixTimeSeconds())))
                 return Reject("source-or-material-expired");
+            if (itemCycles is not null)
+            {
+                var limited = itemCycles.ApplyUsage(expected, new(true, 0, plan.Inventory), 0, plan.Source.Core.ItemId, 1);
+                if (!limited.Accepted) return Reject("server-item-usage-limit");
+                plan = plan with { Inventory = limited.Plan! };
+            }
             pendingConsumableUse = plan.Inventory;
             // 提交结果不明时保留原未决标记，由原连接关闭后重新装载；不重做扣物或补发增量。
             var character = repository.CommitExperienceConsumable(owner, plan, now);

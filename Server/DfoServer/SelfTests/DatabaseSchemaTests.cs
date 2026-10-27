@@ -166,6 +166,8 @@ internal static partial class DatabaseSchemaTests
             OrdinaryLukeUpgrade(root);
             OrdinaryLukeDropUpgrade(root);
             RaidLifecycleUpgrade(root);
+            FatigueDailyUpgrade(root);
+            ServerItemUpgrade(root);
             PlayerInteractionPreviewUpgrade(root);
             VerifyReceiptDefinitionFixture(root);
             ObjectKeyUpgrade(root);
@@ -3106,6 +3108,7 @@ internal static partial class DatabaseSchemaTests
     // 成功迁移夹具恢复完整已发布v13结构，不以改版本号冒充旧库。
     internal static void RewindQuestSystemToV13(SqliteConnection db, bool keepFatigue = false)
     {
+        Execute(db,"DROP TABLE IF EXISTS character_fatigue_reset_days; DROP TABLE IF EXISTS character_server_item_usage; DROP TABLE IF EXISTS account_server_item_refills");
         RemoveEmotionSchema(db);
         RemoveHotkeySchema(db);
         RemoveTutorialSchema(db);

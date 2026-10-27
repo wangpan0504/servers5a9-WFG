@@ -171,6 +171,9 @@ internal sealed partial class CharacterRepository
             "shop_purchase_counts", "account_completed_quests", "account_pvp_private_characters", "account_adventure_representatives",
             // ON DELETE SET NULL保留眩惑本周名额，不能加入按角色删除的表清单。
             "account_dazzlement_tower_bindings",
+            // 疲劳owner删除时级联清除日戳，不对没有account列的子表重复执行删除。
+            "character_fatigue_reset_days",
+            "character_server_item_usage",
             "account_adventure_receipts", "account_adventure_expedition_members", "account_adventure_expeditions",
             // 两端均以 ON DELETE CASCADE 清理，账号级冒险团好友不随单个角色删除。
             "character_social_links"])

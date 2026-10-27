@@ -4,6 +4,7 @@ namespace DfoServer.Game.Characters;
 internal sealed record CharacterFatigueState(ushort Used, ushort Maximum, ushort UsedMaximum,
     ushort Remaining, ushort ContextAuxiliary, ushort SelectionAuxiliary)
 {
+    public int ResetDay { get; init; }
     public const string OrdinaryRoomRuleId = "local-3145-first-room-fatigue-v1";
     public const string NormalRoomRuleId = "local-normal-first-room-fatigue-v1";
     // #511 [use fatigue only start dungeon] N 的入场一次性扣点账本规则。
@@ -37,7 +38,7 @@ internal sealed record CharacterFatigueState(ushort Used, ushort Maximum, ushort
 
     public void Validate()
     {
-        if (Maximum == 0 || Used > Maximum || Remaining > Maximum)
+        if (Maximum == 0 || Used > Maximum || Remaining > Maximum || ResetDay < 0 || ResetDay > DateOnly.MaxValue.DayNumber)
             throw new InvalidDataException("疲劳耗用值或当前剩余量超过实际上限");
     }
 

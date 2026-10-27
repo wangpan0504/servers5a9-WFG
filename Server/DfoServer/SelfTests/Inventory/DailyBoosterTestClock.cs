@@ -1,12 +1,13 @@
 namespace DfoServer.Testing.Inventory;
 
 // 测试用一次性虚拟时钟，定时器注册/释放有可观测信号，不等待真实服务日。
-internal sealed class DailyBoosterTestClock(DateTimeOffset origin) : TimeProvider
+internal sealed class DailyBoosterTestClock(DateTimeOffset origin, TimeZoneInfo? zone = null) : TimeProvider
 {
     readonly object sync = new();
     readonly List<ClockTimer> timers = [];
     TaskCompletionSource changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     long ticks;
+    public override TimeZoneInfo LocalTimeZone => zone ?? base.LocalTimeZone;
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
     public override long GetTimestamp() { lock (sync) return ticks; }
     public override DateTimeOffset GetUtcNow() { lock (sync) return origin.AddTicks(ticks); }

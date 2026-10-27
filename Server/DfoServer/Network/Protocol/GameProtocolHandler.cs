@@ -27,7 +27,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     TownPresence? presence = null,
     DfoServer.GameWorld.Dungeons.DungeonIncountCatalog? incounts = null, CharacterLevelProjection? levels = null,
     DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null,
-    DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null, Action<GameConnectionContext>? prepareDungeon = null, bool enableLukeRaidStart = false) : IConnectionProtocol
+    DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null, Action<GameConnectionContext>? prepareDungeon = null, bool enableLukeRaidStart = false,
+    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null) : IConnectionProtocol
 {
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
@@ -46,7 +47,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }, connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items, experienceBonuses: experienceBonuses, incounts: incounts,
-            channelHistory: channelHistory, operationHope: operationHope);
+            channelHistory: channelHistory, operationHope: operationHope, itemCycles: itemCycles);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
@@ -69,6 +70,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         context.Death = death;
         var revival = new DungeonRevivalProjection(context, log, time);
         var tagRevival = new TagEvildomRevivalProjection(context, log, time);
+        var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);
@@ -183,6 +185,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         if (cycle.Phase == SessionPhase.Town && quests is not null)
                             await new QuestProjection(quests).RefreshAsync(context, cycle.Character, Guard);
                     }
+                    await dailyFatigue.PublishAsync();
                     }
                     finally { context.CommandGate.Release(); }
                     return await commands.DispatchAsync(context, request);
@@ -223,6 +226,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                             log.Write("quest_mail_arrived",new {Connection=context.Id,Character=invitation.Character.Id,Timing="first-eligible"});
                             mailbox?.Alarm(context,invitation);
                         }
+                        await dailyFatigue.RefreshAsync();
                         await revival.RefreshAsync();
                         await tagRevival.RefreshAsync();
                         if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
@@ -245,6 +249,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         finally
         {
             nativeRegistration?.Dispose();
+            await dailyFatigue.DisposeAsync();
             await revival.DisposeAsync();
             await tagRevival.DisposeAsync();
             if (context.BoosterUses is { } boosterUses) await boosterUses.DisposeAsync();

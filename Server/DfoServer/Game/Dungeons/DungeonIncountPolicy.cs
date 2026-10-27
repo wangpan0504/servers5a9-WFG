@@ -14,6 +14,7 @@ namespace DfoServer.Game.Dungeons;
 //   账号表重置键查 [reset info]：值 -1 = 每日，0..6 = 每周该星期（PVF 0→-1、1→4 与“每周四”吻合）。
 internal readonly record struct DungeonIncountUsage(int DailyUsed, int WeeklyUsed);
 internal readonly record struct DungeonIncountPeriod(int Day, int Week);
+internal readonly record struct StoredDungeonIncount(int Dungeon, DungeonIncountPeriod Period, DungeonIncountUsage Usage);
 internal readonly record struct DungeonEnterCount(uint Dungeon, byte Daily, byte Weekly);
 internal sealed record DungeonIncountCommit(Character Character, DungeonIncountUsage Usage);
 // 账号次数一次记账：副本、当前周期键（每日为日键，每周为周起始日键）、上限；Check=false 为 [enter add incount dungeon index] 连带记次，不做拒绝判断。

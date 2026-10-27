@@ -29,6 +29,12 @@ internal sealed partial class GameSession
                 previous.Clock.GetElapsedTime(previous.Timestamp).TotalMilliseconds < plan.Definition.CoolTime)
                 return Reject("cooldown");
             if (plan.Source.IsExpired(now.ToUnixTimeSeconds())) return Reject("source-expired");
+            if (itemCycles is not null)
+            {
+                var limited = itemCycles.ApplyUsage(expected, new(true, 0, plan.Inventory), 0, plan.Source.Core.ItemId, 1);
+                if (!limited.Accepted) return Reject("server-item-usage-limit");
+                plan = plan with { Inventory = limited.Plan! };
+            }
             // 钱包奖励必须实际扣物，不沿练习战斗道具的免耗分支。
             pendingConsumableUse = plan.Inventory;
             var committed = repository.CommitLegacyStatusConsumable(owner, plan, now);

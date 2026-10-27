@@ -96,8 +96,8 @@ internal static partial class FormalDungeonTcpTests
 
             async Task ResetAt(DateTimeOffset at)
             {
-                // 无客户端请求触发：礼盒与眩惑各有一个有界日界时钟，共用同一连接门禁。
-                await clock.WaitForTimersAsync(2);
+                // 无客户端请求触发：礼盒、眩惑和服务日各有一个有界时钟，共用同一连接门禁。
+                await clock.WaitForTimersAsync(3);
                 clock.Advance(at - clock.GetUtcNow());
                 int chunks = 0;
                 bool tower = false;
@@ -110,13 +110,15 @@ internal static partial class FormalDungeonTcpTests
                         That(peer.DazzlementState[6] == 0, "06:00自动刷新1605恢复1/1，不要求再次选图或保活");
                         tower = true;
                     }
-                    else
+                    else if (packet is { Kind: 0, Opcode: 541 })
                     {
-                        That(packet is { Kind: 0, Opcode: 541 } && chunks < peer.InitialDailyBoosterPackets.Length,
-                            "日界只收到完整541与1608→1605，不能吞掉其它包");
+                        That(chunks < peer.InitialDailyBoosterPackets.Length, "礼盒日界分片不能重复");
                         Bytes(packet.Body, peer.InitialDailyBoosterPackets[chunks++], "礼盒日界完整零名册保持原序");
                     }
+                    else peer.ValidateServiceDayNotice(packet);
                 }
+                await clock.WaitForTimersAsync(peer.DazzlementBindings is [0] ? 2 : 3);
+                foreach (var packet in PartyDungeonTcpTests.Drain(peer)) peer.ValidateServiceDayNotice(packet);
             }
         }
         await clock.WaitForTimersAsync(0);

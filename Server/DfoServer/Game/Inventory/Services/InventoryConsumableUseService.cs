@@ -21,6 +21,7 @@ internal sealed class InventoryConsumableUseService(RecoveryConsumableCatalog co
         var deletion = definition.Unlimited ? new InventoryResult(true, 0, new(before, before, "unlimited_consumable")) :
             InventoryDeleteService.Plan(before, request.Position, request.ItemId, 1);
         if (!deletion.Accepted || deletion.Plan is null) return InventoryResult.Reject(123);
-        return new(true, 0, new(before, deletion.Plan.After, "use_recovery_consumable", new(character, source.ExpireTime > 0 ? source.ExpireTime : null, Clock)));
+        return new(true, 0, new(before, deletion.Plan.After, "use_recovery_consumable", new(character, source.ExpireTime > 0 ? source.ExpireTime : null, Clock))
+        { UsedItems = [new(request.ItemId, 1)] });
     }
 }

@@ -318,6 +318,7 @@ internal sealed partial class CharacterRepository
             throw new InventoryQualificationExpiredException();
         if (!plan.Changed)
             return current;
+        WriteAccountItemRefills(db, transaction, owner.Account, current.Id, plan.AccountRefillClaims);
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -397,6 +398,7 @@ internal sealed partial class CharacterRepository
             WriteConsumableStates(db, transaction, owner.Account, current.Id, inventory.ConsumableStates);
         if (!BossSelectionBuff.Same(plan.Before.BossSelectionBuff, plan.After.BossSelectionBuff))
             WriteBossSelectionBuff(db, transaction, owner.Account, current.Id, inventory.BossSelectionBuff);
+        if (!plan.Before.ServerItems.Same(inventory.ServerItems)) WriteServerItems(db, transaction, current.Id, inventory.ServerItems);
         // 未参与本次库存操作的任务等进度取事务内实读值，不能用旧expected覆盖在线快照。
         return current with { Revision = current.Revision + 1, Inventory = inventory, ActiveMainQuests = active, Learning = learning,
             EquipmentSlotFlags = plan.EquipmentSlotFlagsAfter ?? current.EquipmentSlotFlags, SkillSwitchInventory = skillSwitch,
@@ -427,7 +429,7 @@ internal sealed partial class CharacterRepository
         var right = plan.Before;
         if (ReferenceEquals(left, right))
             return true;
-        if (!BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
+        if (!left.ServerItems.Same(right.ServerItems) || !BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
             left.WinPoints != right.WinPoints || left.GoldCarryLimit != right.GoldCarryLimit || left.AuctionGoldLimit != right.AuctionGoldLimit ||
             !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || !DailyBoosterUsage.Same(left.DailyBoosterUses, right.DailyBoosterUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
             !ShopPurchaseCount.Same(left.ShopPurchases, right.ShopPurchases) || !left.EpicPieces.Same(right.EpicPieces) ||
@@ -494,7 +496,8 @@ internal sealed partial class CharacterRepository
             NpcFavor = npcFavor, Skins = weaponSkins, AvatarPresets = avatarPresets, ItemMakingSkills = ReadItemMakingSkills(db, transaction, characterId, account),
             ShopPurchases = purchases, EpicPieces = shared.Pieces, DailyBoosterUses = dailyBoosterUses,
             ConsumableStates = ReadConsumableStates(db, transaction, characterId, account),
-            BossSelectionBuff = ReadBossSelectionBuff(db, transaction, characterId, account)
+            BossSelectionBuff = ReadBossSelectionBuff(db, transaction, characterId, account),
+            ServerItems = ReadServerItems(db, transaction, characterId)
         };
         inventory.Validate();
         return inventory;

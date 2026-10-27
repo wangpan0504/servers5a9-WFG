@@ -48,13 +48,19 @@ internal sealed partial class GameSession
     public IReadOnlyList<DungeonEnterCount> EnterCounts() => owner.Execute(() =>
     {
         if (incounts is null || Selected is not { } character) return (IReadOnlyList<DungeonEnterCount>)[];
+        var stored = repository.LoadDungeonIncounts(owner, character.Id).ToDictionary(row => row.Dungeon);
+        var now = IncountNow();
         var result = new List<DungeonEnterCount>();
         foreach (var row in incounts.Rows)
             if (row.Limit > 0)
+            {
+                var period = DungeonIncountPolicy.Period(now, incounts.WeeklyResetDay(row.CountKey));
+                var usage = stored.TryGetValue(row.CountKey, out var saved) ?
+                    DungeonIncountPolicy.Current(saved.Usage, saved.Period, period) : default;
                 // 两祭坛由专用入场账本投影；通用账本从不扣这两项，不能随后以满次数覆盖真实剩余。
-                result.AddRange(DungeonIncountPolicy.Views(row,
-                    repository.LoadDungeonIncount(owner, character.Id, row.CountKey, IncountPeriod(row.CountKey)))
+                result.AddRange(DungeonIncountPolicy.Views(row, usage)
                     .Where(count => count.Dungeon is not (11006 or 11007)));
+            }
         return result;
     });
 

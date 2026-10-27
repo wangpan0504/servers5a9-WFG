@@ -63,6 +63,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public ImmutableArray<DevilServiceUsage> DevilUses { get; init; } = [];
     public ImmutableArray<DailyBoosterUsage> DailyBoosterUses { get; init; } = [];
     public ImmutableArray<NpcFavorPoint> NpcFavor { get; init; } = [];
+    public ServerItemUsageState ServerItems { get; init; } = ServerItemUsageState.Empty;
     public long StaminaUntil { get; init; }
     public ImmutableArray<ConsumableState> ConsumableStates { get; init; } = [];
     public BossSelectionBuff? BossSelectionBuff { get; init; }
@@ -81,6 +82,7 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
         ItemMakingSkills.Validate();
         DailyBoosterUsage.Validate(DailyBoosterUses);
         NpcFavorPoint.Validate(NpcFavor);
+        ServerItems.Validate();
         ConsumableState.Validate(ConsumableStates);
         BossSelectionBuff?.Validate();
         if (StaminaUntil < 0 || DevilUses.IsDefault || DevilUses.Any(row => row.Slot > 7 || row.Day < 0 || row.Allowance > 30) ||
@@ -151,6 +153,7 @@ internal sealed record InventoryResult(bool Accepted, ushort Error, InventoryPla
 {
     public InventoryCommitReceipt? Receipt { get; init; }
     public string? RejectReason { get; init; }
+    public bool MailboxChanged { get; init; }
 
     /// <summary>
     /// 要求投影把**整个容器**重发一遍（而不是只发变化槽的差量）。

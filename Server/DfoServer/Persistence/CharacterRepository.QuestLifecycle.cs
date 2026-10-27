@@ -144,8 +144,10 @@ internal sealed partial class CharacterRepository
 
     public Character AdvanceQuestCycle(AccountOwners.Lease owner, Character expected, int day, QuestAutoDailyPlan? daily = null) => owner.Execute(() =>
     {
-        if (day is < 19000101 or > 99991231 || day < expected.QuestCycleDay)
-            throw new InvalidDataException("游戏日不能逆向切换");
+        if (day is < 19000101 or > 99991231)
+            throw new InvalidDataException("任务游戏日范围无效");
+        // 时钟回拨不阻止选角，也不倒退已保存周期或重新分配已领取的每日资格。
+        if (day < expected.QuestCycleDay) return expected;
         if (daily is not null && (!ReferenceEquals(daily.Expected,expected) || daily.Day != day))
             throw new InvalidOperationException("自动每日规划不属于本次角色和游戏日");
         if (day == expected.QuestCycleDay && daily is null) return expected;

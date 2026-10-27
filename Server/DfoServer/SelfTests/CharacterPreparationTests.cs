@@ -79,11 +79,12 @@ internal static class CharacterPreparationTests
             using var owner = new AccountOwners().Acquire("prepared-owner",() => {});
             var legacy = repository.Create(owner,new("Legacy",point,point));
             var prepared = repository.Create(owner,definition.ToCharacter("Prepared",towns));
-            That(prepared.DungeonState == CharacterDungeonState.NewOrdinary && prepared.Fatigue == CharacterFatigueState.NewOrdinary,
+            That(prepared.DungeonState == CharacterDungeonState.NewOrdinary && prepared.Fatigue is { ResetDay: > 0 } initialFatigue &&
+                initialFatigue with { ResetDay = 0 } == CharacterFatigueState.NewOrdinary,
                 "离线实验新角色与普通建角一样初始化副本owner及疲劳");
             var reopened = new CharacterRepository(path);
             var saved = reopened.List(owner).Single(row => row.Id == prepared.Id);
-            That(saved.DungeonState == CharacterDungeonState.NewOrdinary && saved.Fatigue == CharacterFatigueState.NewOrdinary,
+            That(saved.DungeonState == CharacterDungeonState.NewOrdinary && saved.Fatigue == prepared.Fatigue,
                 "实验角色重新开库仍可提供正式副本状态");
             That(saved.Learning.Initialized && saved.Learning.Experience == 12345 && saved.Learning.BonusSp == 0 &&
                 saved.Learning.BonusTp == 0 && saved.Learning.Trees.All(tree => tree.Sp == 100 && tree.Tp == 20),

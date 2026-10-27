@@ -169,6 +169,43 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     // GM 团本入场时段（与 GmWebData 共用同一实例）；为空时三张团队频道卡都按关闭下发。
     internal DfoServer.Game.Raids.RaidEntryStore? RaidWindows { get; set; }
 
+    public async Task QuestCycleAsync(GameConnectionContext context)
+    {
+        if (context.Session.AdvanceQuestCycle(timer.GetUtcNow()) is not { } cycle) return;
+        bool Guard() => context.Session.CanPublishQuestCycle(cycle);
+        if (!cycle.Before.ActiveMainQuests.SequenceEqual(cycle.Character.ActiveMainQuests))
+            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(cycle.Character.ActiveMainQuests), "quest_auto_daily_cycle", Guard);
+        await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(cycle.Character), "quest_daily_cycle", Guard);
+        if (cycle.Phase == DfoServer.Game.Session.SessionPhase.Town && quests is not null)
+            await quests.RefreshAsync(context, cycle.Character, Guard);
+    }
+
+    public async Task LegacyServiceDayAsync(GameConnectionContext context)
+    {
+        var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch));
+        if (capture.Selected is not { } character) return;
+        int day = DfoServer.Game.Inventory.Models.ShopPurchaseCount.Today(timer.GetUtcNow());
+        bool Guard() => context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == capture.SelectionEpoch &&
+            context.Session.Selected?.Id == character.Id && DfoServer.Game.Inventory.Models.ShopPurchaseCount.Today(timer.GetUtcNow()) == day);
+        foreach (var count in context.Session.EnterCounts())
+            await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Remaining(count), "dungeon_enter_count_daily", Guard);
+        await DungeonEnterCountProjection.RefreshAsync(context, dungeons, Guard);
+        if (adventure is not null) await adventure.InformationAsync(context);
+        if (context.Premiums is { } premiums) await premiums.RefreshAsync();
+        if (context.BoosterUses is { } boosters) await boosters.RefreshAsync();
+    }
+
+    public async Task AssaultServiceDayAsync(GameConnectionContext context)
+    {
+        var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch));
+        if (capture.Selected is not { } character) return;
+        int day = DfoServer.Game.Characters.FatigueDailyReset.Day(timer.GetUtcNow(), timer.LocalTimeZone);
+        bool Guard() => context.Owner.Execute(() => context.Session.Ready && context.Session.SelectionEpoch == capture.SelectionEpoch &&
+            context.Session.Selected?.Id == character.Id && DfoServer.Game.Characters.FatigueDailyReset.Day(timer.GetUtcNow(), timer.LocalTimeZone) == day);
+        await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO,
+            AssaultModePackets.Today(timer, context.Session.AssaultDailyCounts(timer.GetLocalNow())), "assault_mode_daily_reset", Guard);
+    }
+
     public Task ReconcileQuestsAsync(GameConnectionContext context) => quests?.CloseReadyChildrenAsync(context,refreshList: true) ?? Task.CompletedTask;
 
     async Task LocationAsync(GameConnectionContext context, Character c, bool initial = false, Func<bool>? canSend = null, bool transition = true)

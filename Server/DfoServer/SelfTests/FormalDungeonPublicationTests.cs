@@ -789,6 +789,11 @@ internal static class FormalDungeonPublicationTests
     internal sealed class LostResultRepository(ICharacterRepository inner, bool loseGrowth = true, bool losePickup = false,
         bool loseSettlement = false,bool losePaid = false,bool loseDiscard = false,bool loseFree = false) : ICharacterRepository
     {
+        public Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now) =>
+            inner.ResetDailyFatigue(owner, expected, day, now);
+        public System.Collections.Immutable.ImmutableDictionary<int,AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner) => inner.ReadAccountItemRefills(owner);
+        public ServerItemCycleCommit CommitServerItemCycle(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitServerItemCycle(owner, expected, plan);
+        public System.Collections.Immutable.ImmutableArray<StoredDungeonIncount> LoadDungeonIncounts(AccountOwners.Lease owner, ushort characterId) => inner.LoadDungeonIncounts(owner, characterId);
         public Character CommitPermanentGrowth(AccountOwners.Lease owner, PermanentGrowthPlan plan, DateTimeOffset now) =>
             inner.CommitPermanentGrowth(owner, plan, now);
         public Character CommitLegacyStatusConsumable(AccountOwners.Lease owner, LegacyStatusConsumablePlan plan, DateTimeOffset now) =>

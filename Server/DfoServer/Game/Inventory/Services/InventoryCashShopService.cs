@@ -9,7 +9,8 @@ namespace DfoServer.Game.Inventory.Services;
 
 // 商品、扣点券及资源明确声明的契约或实物奖励在同一个库存计划提交。
 internal sealed partial class InventoryCashShopService(ItemCatalog catalog, CashShopCatalog shop, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CargoCatalog cargo,
-    GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null, DevilContractService? devil = null)
+    GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null, DevilContractService? devil = null,
+    ServerItemUsageCatalog? serverItems = null)
 {
     readonly GameDebugSettings debug = debugSettings ?? new();
     // 仅当前服务实例的调试开关；每次购买冻结一次状态，不改变其它发奖入口。
@@ -239,6 +240,14 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         if (nameTag is not null)
             after = after with { Items = after.Items.Where(item => item.Position != nameTag.Position).Append(nameTag).ToImmutableArray() };
         after = after with { AccountWallet = after.AccountWallet with { CharacterSlotCapacity = characterSlots } };
+        if (serverItems is not null)
+            foreach (var product in products)
+            {
+                if (!ServerItemUsageState.TryConsume(after.ServerItems, serverItems, 2, product.ItemId, 1, now, TimeZoneInfo.Local, out var usage))
+                    return InventoryResult.Reject(17);
+                if (!usage.Same(after.ServerItems)) Deadline(FatigueDailyReset.NextReset(now, TimeZoneInfo.Local).ToUnixTimeSeconds());
+                after = after with { ServerItems = usage };
+            }
         receipt = new(products.ToImmutableArray(), bonuses);
         return new(true, 0, new(before, after with { CargoCapacity = cargoCapacity }, "cash_shop_buy", new(character, deadline), overflow)
         { UnlockSkillTree = unlockSkillTree });

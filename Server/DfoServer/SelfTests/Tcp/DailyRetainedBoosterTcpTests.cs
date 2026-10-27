@@ -66,14 +66,30 @@ internal static class DailyRetainedBoosterTcpTests
             peer.Select();
             That(peer.DailyBoosterUsed[Source] == 1, "重连从真实账本恢复已用次数");
             peer.Barrier();
-            await clock.WaitForTimersAsync(1);
+            await clock.WaitForTimersAsync(2);
             clock.Advance(TimeSpan.FromSeconds(1));
             // 没有发送请求，必须由连接独立时钟下发跨日显式zero。
-            ExpectUsed(peer, resources, 0);
-            peer.Expect(0, 746, [1, 17, 0, 0, 0, 48, 117, 0, 0, 0, 4, 0, 47, 1, 0, 2, 0, 3, 0]);
+            var notices = new List<WirePacket>();
+            while (!notices.Any(row => row.Opcode == 541) || !notices.Any(row => row.Opcode == 746))
+            {
+                That(notices.Count < 200, "无请求的日切通知数量有界");
+                notices.Add(peer.Read());
+            }
+            await clock.WaitForTimersAsync(2);
+            notices.AddRange(PartyDungeonTcpTests.Drain(peer));
+            var usedRows = notices.Where(row => row is { Kind: 0, Opcode: 541 })
+                .SelectMany(row => DailyBoosterProjectionTests.Decode(row.Body)).ToDictionary(row => row.Key, row => row.Value);
+            That(usedRows.Count == resources.ItemResources.Boosters.DailyRetainedTemplateIds.Count && usedRows[Source] == 0 &&
+                resources.ItemResources.Boosters.DailyRetainedTemplateIds.All(usedRows.ContainsKey), "无请求时收到完整的礼盒零次数视图");
+            var favor = notices.Single(row => row is { Kind: 0, Opcode: 746 });
+            Bytes(favor.Body, [1, 17, 0, 0, 0, 48, 117, 0, 0, 0, 4, 0, 47, 1, 0, 2, 0, 3, 0], "NPC好感在线日切保留颜色并清零视图次数");
+            That(notices.Any(row => row is { Kind: 0, Opcode: 550, Body.Length: 6 }) &&
+                notices.Any(row => row is { Kind: 0, Opcode: 1536, Body.Length: 5 }) &&
+                notices.Where(row => row.Opcode == 550).All(row => row.Body.Length == 6 && U32(row.Body) > 0) &&
+                notices.All(row => row.Kind == 0 && row.Opcode is 21 or 356 or 541 or 550 or 574 or 746 or 1343 or 1349 or 1536),
+                "礼盒、好感、副本和强袭在线日切通知均按已登记格式接收");
             That(fixture.Query("SELECT json_extract(npc_favor,'$[0].GiftCount') FROM characters WHERE name='DailyBox'") is [[long count]] && count == 5,
                 "跨日只从持久日戳投影零次数，保留好感与颜色，不额外写库");
-            await clock.WaitForTimersAsync(1);
             OpenBox(peer);
             BoosterTcpTests.ExpectAck(peer, Source, 65, [(Reward, 10)]);
             peer.Expect(0, 14);
@@ -86,7 +102,7 @@ internal static class DailyRetainedBoosterTcpTests
             peer.Select(1);
             That(peer.DailyBoosterUsed[Source] == 0, "同连接换角显式覆盖上一角色已用值");
             peer.Barrier();
-            await clock.WaitForTimersAsync(1);
+            await clock.WaitForTimersAsync(2);
             using var replacement = Open(fixture);
             peer.Closed();
             replacement.Select();

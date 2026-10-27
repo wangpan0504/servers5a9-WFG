@@ -47,6 +47,8 @@ internal static class QuestInventoryPendingTests
             TestCheck.Reject<SqliteException>(Commit,"任务末段SQL回滚建立原提交恢复状态: " + mode);
             That(ReferenceEquals(before,f.Session.Selected) && Same(before,f.Read()) && Receipts(f,table) == 0,
                 "真实SQL失败保持全部资产、任务和revision: " + mode);
+            That(!f.Session.CanAdvanceServiceDay() && f.Session.AdvanceFatigueDay(DateTimeOffset.UtcNow.AddDays(1)) is null &&
+                ReferenceEquals(before,f.Session.Selected), "未决任务期间不提前日切或覆盖原快照: " + mode);
             That(f.Session.BeginDungeonSelection() is null && f.Session.CurrentDungeonSelection is null &&
                 f.Session.Phase == DfoServer.Game.Session.SessionPhase.Town && ReferenceEquals(before,f.Session.Selected),
                 "未决任务不能进入选图改变原请求场景: " + mode);
@@ -65,6 +67,7 @@ internal static class QuestInventoryPendingTests
             Commit();
             That(Receipts(f,table) == 1 && f.Read().Revision == before.Revision+1 && Same(f.Read(),f.Session.Selected!),
                 "原任务恢复一次并安装完整持久结果: " + mode);
+            That(f.Session.CanAdvanceServiceDay(), "原任务完成后允许日切补查: " + mode);
             if (mode == "lifecycle") That(f.Lost!.SameLifecyclePlan,"接取恢复复用原冻结Plan和OperationId");
             if (mode == "completion") That(f.Lost!.SamePlan && f.Lost.Calls == 2,"领奖恢复复用原冻结Plan和AcceptanceId");
             That(f.Session.BeginDungeonSelection() is not null && f.Session.ReturnFromDungeonSelection() is not null,

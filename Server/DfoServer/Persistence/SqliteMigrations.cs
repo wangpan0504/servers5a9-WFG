@@ -222,6 +222,8 @@ internal static class SqliteMigrations
         new(107, "眩惑之塔账号周绑定与角色日入场", DazzlementTowerSchema.Upgrade),
         new(108, "攻坚阶段奖励原子回执", static (db, tx) => Execute(db, tx, RaidRewardSchema.Definition)),
         new(109, "团本类型隔离与卢克两阶段生命周期", RaidLifecycleSchema.Upgrade),
+        new(110, "角色疲劳每日恢复日戳", FatigueDailyResetSchema.Upgrade),
+        new(111, "全局物品限次和周期补给", ServerItemUsageSchema.Upgrade),
     ];
 
     internal const string BossSelectionBuffSchema = """
@@ -2128,6 +2130,9 @@ internal static class SqliteMigrations
             (OrdinaryLukeProgressSchema.Table,OrdinaryLukeProgressSchema.Definition),
             (OrdinaryLukeDropSchema.Table,OrdinaryLukeDropSchema.Definition),
             (DazzlementTowerSchema.Table,DazzlementTowerSchema.Definition),
+            (FatigueDailyResetSchema.Table,FatigueDailyResetSchema.Definition),
+            (ServerItemUsageSchema.StateTable,ServerItemUsageSchema.StateDefinition),
+            (ServerItemUsageSchema.AccountTable,ServerItemUsageSchema.AccountDefinition),
             ("quest_eligibility_mail_dispatches",QuestEligibilityMailSchema),
             ("character_collectbox_state",CollectBoxStateTableSchema),
             ("character_collectbox_slots",CollectBoxSlotsTableSchema),
