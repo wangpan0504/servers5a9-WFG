@@ -37,6 +37,7 @@ internal static class NativeGameplayRecordsTests
             "原生回送保留源与目标关联，不套普通游戏帧");
         frame[0] = 0;
         That(NativeFrame.Parse(frame) is { Kind: 0, Association: 0x12345678, Route: 0x90ABCDEF }, "接纳原码中的kind0中继发送分支");
+        NativeObjectStateTests.RunCore();
         Domain();
         using var lifetime = new CancellationTokenSource();
         using var block = new BlockedStream();
