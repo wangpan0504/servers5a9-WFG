@@ -106,7 +106,9 @@ internal sealed partial class GameSession
         var selected = captured.CurrentDungeonSelection.Raid;
         bool controlled = admission.Kind == RaidKind.Luke || admission.Battle is not null;
         if (controlled && (selected is null || !ReferenceEquals(selected.Admission, admission) || selected.Dungeon != dungeonId ||
-            admission.Kind == RaidKind.Luke && admission.LukePolicy?.Maze(admission.Phase, selected.Dungeon) != selected.MazeOrdinal))
+            admission.Kind == RaidKind.Luke && (selected.Route is { } route
+                ? admission.Battle?.IsLukeRouteCurrent(route) != true || route.Dungeon != selected.Dungeon || route.MazeOrdinal != selected.MazeOrdinal
+                : admission.Battle?.UsesFixedRoute(admission.Phase) == true || admission.LukePolicy?.Maze(admission.Phase, selected.Dungeon) != selected.MazeOrdinal)))
             return RejectFormal(prefix + "-entry-selection-changed");
         var identity = new RaidDungeonIdentity(admission.InstanceId, admission.Phase, admission.Squad, admission.Kind);
         var sharedEntry = shared?.Session.PreparedParty(shared).Dungeon.Entry;
