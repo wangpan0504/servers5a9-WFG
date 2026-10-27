@@ -33,5 +33,6 @@ TownEpisodeFileTests.Run();
 OperationHopeFileTests.Run();
 CustomAbilityFileTests.Run();
 TalismanFileTests.Run();
+LukeCardSetFileTests.Run();
 Console.WriteLine($"PASS {TestCheck.Count} PvfLib assertions");
 return 0;

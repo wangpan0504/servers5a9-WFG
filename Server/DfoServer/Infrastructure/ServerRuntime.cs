@@ -200,6 +200,8 @@ internal static class ServerRuntime
                 ? objectPolicy.Mazes.Where(row => row.Phase == 0).Select(row => (row.Dungeon, row.MazeOrdinal)).ToArray() : null);
         if (raidCatalog.Find(1)?.Resources?.LukeObjects is { Issues.IsEmpty: false } objectEvidence)
             log.Write("resource_warning", new { Source = "Luke static object evidence", Reasons = objectEvidence.Issues.ToArray() });
+        if (raidCatalog.Find(1)?.Resources?.LukeCardSet is { Issues.IsEmpty: false } cardSetEvidence)
+            log.Write("resource_warning", new { Source = "Luke cardset metadata", Reasons = cardSetEvidence.Issues.ToArray() });
         log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
             AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
