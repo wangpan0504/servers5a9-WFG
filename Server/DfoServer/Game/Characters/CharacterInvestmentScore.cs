@@ -10,6 +10,7 @@ internal sealed record CharacterInvestmentSnapshot(InvestmentSnapshot Equipment,
     ImmutableArray<InventoryItem> Worn, CollectBoxState CollectBox);
 internal sealed record CharacterInvestmentPart(string Module, string Source, int Score, bool Partial, bool Capped, string Note)
 {
+    public EquipmentQualitySeedTier? Quality { get; init; }
     public string RuleVersion { get; init; } = Module == "equipment" ? EquipmentInvestmentScore.Profile : CharacterInvestmentScore.Profile;
     public string Status => Partial ? "Partial" : Note == "appearance_only_no_double_count" ? "AppearanceCovered" :
         Score == 0 ? "KnownZero" : "Complete";
@@ -24,6 +25,7 @@ internal static class CharacterInvestmentScore
     public const string Profile = "character-investment/v2";
     public const string ChronicleProfile = "character-investment/v2.1";
     public const string DimensionEnergyProfile = "character-investment/v2.2";
+    public const string QualityProfile = "character-investment/v2.3";
     static readonly string[] Modules = ["equipment", "title", "avatar", "pet", "artifact", "medal", "gem",
         "enchant", "random-title", "emblem", "talisman", "rune", "collectbox", "set", "auxiliary", "cosmetic", "random-option", "chronicle", "emancipation", "quality"];
 
@@ -48,11 +50,13 @@ internal static class CharacterInvestmentScore
         Func<int, EquipmentSetInvestmentMetadata?> set, Func<int, TalismanDefinition?> talisman,
         Func<int, RuneDefinition?> rune, Func<byte, CollectBoxEntry> collectBox, Func<ItemTemplate, byte, bool> randomOption,
         Func<ChronicleOption, ChronicleInvestmentMetadata>? chronicle = null,
-        Func<ItemTemplate, byte, DimensionEnergyInvestmentMetadata>? dimensionEnergy = null)
+        Func<ItemTemplate, byte, DimensionEnergyInvestmentMetadata>? dimensionEnergy = null, bool includeQualitySeedTier = false)
     {
         if (dimensionEnergy is not null && chronicle is null)
             throw new ArgumentException("v2.2须同时提供已支持的气息目录", nameof(chronicle));
-        string profile = dimensionEnergy is not null ? DimensionEnergyProfile : chronicle is null ? Profile : ChronicleProfile;
+        if (includeQualitySeedTier && dimensionEnergy is null)
+            throw new ArgumentException("v2.3须同时提供已支持的次元目录", nameof(dimensionEnergy));
+        string profile = includeQualitySeedTier ? QualityProfile : dimensionEnergy is not null ? DimensionEnergyProfile : chronicle is null ? Profile : ChronicleProfile;
         var basis = EquipmentInvestmentScore.Calculate(snapshot.Equipment, template);
         var parts = ImmutableArray.CreateBuilder<CharacterInvestmentPart>();
         CharacterInvestmentResult Result(bool invalid = false) => new(profile, basis.CharacterId, basis.CharacterRevision,
@@ -145,7 +149,14 @@ internal static class CharacterInvestmentScore
             var item = pair.Item;
             var core = item.Core;
             string source = $"equipment:{slot}/uid:{item.Uid}";
-            if (core.Kind == ItemKind.Equipment)
+            if (includeQualitySeedTier && core.Kind == ItemKind.Equipment && EquipmentInvestmentScore.Slots.Contains(slot))
+            {
+                var quality = EquipmentQualitySeedResolver.Resolve(core.Value);
+                // 不重复乘武器权重；零属性模板也按本服seed规则计，不推断原生UI适用性。
+                parts.Add(new("quality", source, 25 * quality.Tier, false, false, "standard_equipment_seed_tier_investment")
+                { RuleVersion = profile, Quality = quality });
+            }
+            else if (core.Kind == ItemKind.Equipment)
                 Add("quality", source + $"/seed-or-code:{core.Value}", 0, note: "covered_by_equipment_base_seed_not_percentage");
             if (chronicle is null)
             {

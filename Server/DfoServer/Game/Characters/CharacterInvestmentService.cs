@@ -25,7 +25,7 @@ internal sealed class CharacterInvestmentService(ItemCatalog items, CharacterInv
                 var changed = random.ResolveChange(item);
                 return changed?.Types.Any(row => row.Weight > 0 && row.Groups.Any(group => group.Weight > 0 &&
                     group.Options.Any(option => option.Type == type && option.Weight > 0))) == true;
-            }, option => metadata.ReadChronicle(option.Id, option.Job, option.GrowType, option.EquipmentType, option.Number), metadata.ReadDimensionEnergy);
+            }, option => metadata.ReadInstalledChronicle(option.Id, option.Job, option.GrowType, option.EquipmentType, option.Number), metadata.ReadDimensionEnergy, includeQualitySeedTier: true);
     }
 
 }
