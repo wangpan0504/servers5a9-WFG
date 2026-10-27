@@ -50,7 +50,10 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         // 先提交资产，再刷新实际UID/邮件，随后发布同份冻结展示，最后确认660；成功ACK不携带物品。
         await inventory.RefreshAsync(context, receipt.Inventory);
         if (!receipt.Commit.MailIds.IsEmpty) context.Session.NotifyMailbox(receipt.Prepared.Character);
-        // Luke仅已证请求事务能力：600通用尾两列未解释，不能猜0发送展示；没有普通生产配置入口。
+        // 只有完整显式原箱结果才使用Luke16B；无配置保留原领取能力，不补未知列。
+        if (receipt.Prepared.RaidType == RaidKind.Luke &&
+            LukeRewardResults.Bind(receipt, items, (clock ?? TimeProvider.System).GetUtcNow()) is { } result &&
+            context.LukeResults.Post(context, receipt, result)) return CommandResult.Handled;
         if (receipt.Prepared.RaidType == RaidKind.Anton)
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, RaidCombatPackets.Reward(receipt.Prepared.Kind, receipt.Offer.Display),
                 "raid_reward_display", Guard);
