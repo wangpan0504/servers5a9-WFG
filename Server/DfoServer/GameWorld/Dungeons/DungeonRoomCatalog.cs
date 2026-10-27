@@ -349,6 +349,9 @@ internal sealed class DungeonRoomCatalog
         return new(id,row.Values,row.Faction,row.Rank,path,minimum[5].Value);
     }
 
+    // 仅核对共享monster.lst及正文存在性，不创建演员或证明地图生成资格。
+    internal bool HasMonsterDefinition(int id) => monsters.TryGetValue(id, out var path) && path.Length != 0 && archive.Contains(path);
+
     public bool ReportsQuestDeath(DungeonRoomPassiveObject source) =>
         Tagged(source, "[quest type]", "[must be destroyed]");
 
