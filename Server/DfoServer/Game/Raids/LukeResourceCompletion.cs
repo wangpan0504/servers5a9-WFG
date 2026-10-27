@@ -7,7 +7,10 @@ namespace DfoServer.Game.Raids;
 
 // 数量、选卡身份、阶段资格次数及601展示均由调用者明示；原STATE REWARD未证列不提供这些默认值。
 internal sealed record LukeResourceRewardPhase(byte Kind, byte Card, int BoxCount, int WeeklyEligibilityLimit,
-    RaidResultDisplay Result);
+    RaidResultDisplay Result)
+{
+    public LukeRewardResultSpec? LukeResult { get; init; }
+}
 internal sealed record LukeResourceCompletionProfile(string Source, string ResourceVersion, RaidWeeklyCycle Cycle,
     ImmutableArray<LukeResourceRewardPhase> Phases);
 
@@ -50,7 +53,10 @@ internal static class LukeResourceCompletion
                 item.StackableType.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries) is not ["[booster]", "0"])
                 throw new InvalidDataException("卢克阶段party_card不唯一、列形状变化或原奖励箱不存在");
             var offer = new RaidRewardOffer(configured.Kind, configured.Card,
-                [new InventoryReward(card.ItemId, configured.BoxCount)], []);
+                [new InventoryReward(card.ItemId, configured.BoxCount)], []) { LukeResult = configured.LukeResult };
+            if (offer.LukeResult is { } display && (!display.Matches(offer) ||
+                display.EnchantUpgrade != InventoryRewardGrantService.Create(item).EnchantUpgrade))
+                throw new InvalidDataException("卢克原箱结果展示与真实发放核心不一致或字段缺失");
             phases.Add(new(minimum, configured.WeeklyEligibilityLimit,
                 new(source, [offer], configured.Result)));
         }
