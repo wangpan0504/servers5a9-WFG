@@ -1,0 +1,123 @@
+using System.Collections.Immutable;
+using System.Text.Json;
+using DfoServer.Development;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
+using PvfLib;
+using static DfoServer.Testing.TestCheck;
+
+namespace DfoServer;
+
+internal static class ChronicleInvestmentTests
+{
+    public static void RunCore()
+    {
+        int before = Count;
+        var strings = new List<string>();
+        var documents = new Dictionary<string, PvfTokenDocument>();
+        string Resolve(int id) => strings[id];
+        PvfToken Text(string value, byte type = 6) { strings.Add(value); return new(type, strings.Count - 1); }
+        PvfToken Tag(string value) => Text("[" + value + "]", 3);
+        PvfToken N(int value) => new(0, value);
+        PvfTokenDocument Doc(params PvfToken[] tokens) => new(tokens, Resolve);
+        PvfToken[] Skill(int number, string job = "[swordman]", string field = "[level]", int amount = -12) =>
+            [Tag("skill"), N(number), Text(job), N(46), Text("[dungeon type]"), Text(field), N(0), Text("%"), N(amount), Tag("/skill")];
+        PvfToken[] Group(int job, int grow, string slot, params PvfToken[] body) =>
+            [Tag("check"), N(job), N(grow), Text(slot), .. body, Tag("/check")];
+        PvfTokenDocument Table(params PvfToken[] groups) => Doc([Tag("3choro enchant"), .. groups, Tag("/3choro enchant")]);
+        PvfTokenDocument Child(int type, string import = "parent.stk", string action = "[3rd chronicle ability enchant]") =>
+            Doc(Tag("import script"), Text(import), Tag("action type"), Text(action), Tag("/action type"),
+                Tag("stackable type"), Text("[etc]"), N(1), Tag("type"), N(type));
+        CharacterInvestmentMetadataCatalog Catalog() => new(path => documents.TryGetValue(path, out var doc) ? doc :
+            throw new FileNotFoundException(path), Resolve, new Dictionary<int, string>(),
+            new Dictionary<int, string> { [1299] = "red.stk", [1300] = "blue.stk", [1301] = "green.stk", [1400] = "red.stk" });
+        documents["stackable/red.stk"] = Child(0);
+        documents["stackable/blue.stk"] = Child(1);
+        documents["stackable/green.stk"] = Child(2);
+        var validTable = Table([.. Group(0, 1, "weapon", [.. Skill(0), .. Skill(1)]),
+            Tag("Monitor"), N(13), N(1), N(2), Text("coat"), Text("pants"), .. Skill(0), Tag("/Monitor")]);
+        documents["stackable/parent.stk"] = validTable;
+        var catalog = Catalog();
+        foreach (int id in new[] { 1299, 1300, 1301 })
+            That(catalog.ReadChronicle(id, 0, 1, 12, 0) is { Valid: true } r && r.Type == id - 1299,
+                "气息三type、selector0与负效果量合法：" + id);
+        That(catalog.ReadChronicle(1299, 13, 1, 14, 0).Valid && catalog.ReadChronicle(1299, 13, 1, 16, 0).Valid,
+            "Monitor展开多个规范部位");
+        That(!catalog.ReadChronicle(1299, 0, 1, 14, 0).Valid && !catalog.ReadChronicle(1299, 0, 1, 12, 2).Valid,
+            "部位与selector精确匹配");
+        documents["stackable/parent.stk"] = Table([.. Group(0, 1, "weapon", Skill(0)),
+            .. Group(3, 2, "coat", [.. Skill(6), .. Skill(6, amount: 20)]),
+            .. Group(4, 1, "weapon", Skill(0, "[at preist]"))]);
+        var local = Catalog();
+        That(local.ReadChronicle(1301, 0, 1, 12, 0).Valid &&
+            local.ReadChronicle(1301, 3, 2, 14, 6) is { Valid: false, Reason: "ambiguous_key" } &&
+            local.ReadChronicle(1301, 4, 1, 12, 0) is { Valid: false, Reason: "unsupported_effect" },
+            "无关绿重键和错误职业拼写不污染唯一目标，不first/last或修别名");
+        foreach (var invalid in new[]
+        {
+            Table(Group(256, 1, "weapon", Skill(0))), Table(Group(0, 256, "weapon", Skill(0))),
+            Table(Group(0, 1, "weapon", Skill(256))), Table(Group(0, 1, "unknown", Skill(0))),
+            Table([Tag("Monitor"), N(0), N(1), N(2), Text("weapon"), .. Skill(0), Tag("/Monitor")]),
+            Doc([Tag("3choro enchant"), Tag("check"), N(0), N(1), Text("weapon"), .. Skill(0)])
+        })
+        {
+            documents["stackable/parent.stk"] = invalid;
+            Reject<InvalidDataException>(() => Catalog().ReadChronicle(1299, 0, 1, 12, 0));
+        }
+        documents["stackable/parent.stk"] = validTable;
+        foreach (var invalid in new[] { Child(3), Child(0, "red.stk"), Child(0, "../outside.stk"), Child(0, "missing.stk"),
+            Child(0, action: "[other]"), Doc(Tag("import script"), Text("parent.stk"), Tag("type"), N(0)) })
+        {
+            documents["stackable/red.stk"] = invalid;
+            Reject<InvalidDataException>(() => Catalog().ReadChronicle(1299, 0, 1, 12, 0));
+        }
+        documents["stackable/red.stk"] = Child(0);
+        catalog = Catalog();
+        var weapon = new InventoryItem(1, new(InventoryListType.Equipment, 12), new(100, ItemKind.Equipment, 1) { Durability = 30 });
+        var template = new ItemTemplate(100, ItemKind.Equipment, 12, 95, 30, 1, 0, 4, 1, "[free]", ushort.MaxValue, 0, "fixture");
+        ItemTemplate Get(int id) => id == 100 ? template : throw new KeyNotFoundException();
+        Character Character(InventoryItem item) => new(1, 0, "气息测试", 7, default!, null)
+            { Level = 95, Job = 15, GrowType = 4, Inventory = new([item]) };
+        ChronicleInvestmentMetadata Read(ChronicleOption option) => catalog.ReadChronicle(option.Id, option.Job, option.GrowType, option.EquipmentType, option.Number);
+        CharacterInvestmentResult Calculate(CharacterInvestmentSnapshot snapshot, bool current = true) =>
+            CharacterInvestmentScore.Calculate(snapshot, Get, (_, _, _, _) => false, _ => false, _ => null,
+                _ => null, _ => null, _ => throw new KeyNotFoundException(), (_, _) => false, current ? Read : null);
+        CharacterInvestmentResult Score(ChronicleOption a, ChronicleOption b = default, bool current = true) =>
+            Calculate(CharacterInvestmentScore.Capture(Character(weapon with { Core = weapon.Core with { Chronicle0 = a, Chronicle1 = b } }), 1000), current);
+        var red0 = new ChronicleOption(1299, 0, 1, 12, 0);
+        That(Score(red0) is { Score: 3740, Partial: false, Profile: CharacterInvestmentScore.ChronicleProfile },
+            "v2.1真实冻结来源增加40，持久职业不强制匹配当前角色");
+        That(Score(red0, current: false) is { Score: 3700, Partial: true, Profile: CharacterInvestmentScore.Profile },
+            "旧v2保留未解释状态与旧分数");
+        That(Score(default) is { Score: 3700, Partial: false } && Score(default).Parts.All(p =>
+            p.RuleVersion == (p.Module == "equipment" ? EquipmentInvestmentScore.Profile : CharacterInvestmentScore.ChronicleProfile)),
+            "新版本所有模块明细显式版本，合法空不Partial");
+        That(Score(red0, red0 with { Number = 1 }).Score == 3780, "同type不同selector可分别计入两个wire槽");
+        That(Score(red0, red0 with { Id = 1300 }).Score == 3780, "不同type同selector独立来源");
+        That(Score(red0, red0 with { Id = 1400 }) is { Score: 3740, Partial: true }, "不同Id不能绕过type/Number去重");
+        That(Score(red0 with { EquipmentType = 14 }) is { Score: 3700, Partial: true }, "错误宿主只拒绝该选项");
+        That(Score(red0 with { Id = 0 }) is { Score: 3700, Partial: true }, "空Id残留键不是合法空选项");
+        That(Score(red0 with { Id = -1 }) is { Score: 3700, Partial: true }, "负Id不得成为已安装来源");
+        var expired = Character(weapon with { Core = weapon.Core with { Chronicle0 = red0, ExpireTime = 1000 } });
+        That(Calculate(CharacterInvestmentScore.Capture(expired, 1000)).Score == 0, "宿主到期同时排除气息");
+        var unknown = Character(weapon with { Core = weapon.Core with { Chronicle0 = red0, EmancipateLevel = 1 } });
+        That(Calculate(CharacterInvestmentScore.Capture(unknown, 1000)) is { Score: 3740, Partial: true }, "已解释气息不隐藏未知Emancipate");
+        using (var fixture = new MailboxPersistenceTests.Fixture())
+        {
+            var created = fixture.Repository.Create(fixture.SenderOwner, new("ChrScoreHero", fixture.Sender.Position, null)
+            { Level = 95, Inventory = new([weapon with { Uid = 0, Core = weapon.Core with { Chronicle0 = red0, Chronicle1 = red0 with { Id = 1300 } } }]) });
+            fixture.SenderOwner.Dispose();
+            string beforeQuery = fixture.Snapshot();
+            string response = DevelopmentGm.QueryCharacterScore(fixture.Repository, fixture.Owners, null,
+                DevelopmentRequest.Parse("character-score ChrScoreHero", "sender"), snapshot => Calculate(snapshot));
+            using var json = JsonDocument.Parse(response[3..]);
+            var root = json.RootElement;
+            That(root.GetProperty("Score").GetInt32() == 3780 && root.GetProperty("Profile").GetString() == CharacterInvestmentScore.ChronicleProfile &&
+                root.GetProperty("Status").GetString() == "Complete" && root.GetProperty("CharacterId").GetUInt16() == created.Id &&
+                root.GetProperty("CharacterRevision").GetInt64() == created.Revision, "真实SQLite气息字段经GM只读查询，新版本与明细完整");
+            That(fixture.Snapshot() == beforeQuery, "气息评分不持久化写入资产");
+        }
+        Console.WriteLine($"ChronicleInvestmentTests: {Count - before} passed");
+    }
+}
