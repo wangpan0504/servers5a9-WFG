@@ -61,29 +61,15 @@ internal static partial class DevelopmentGm
                 return ExecuteEquipmentSlots(repository, owners, find(request.Account), request);
             if (request.Action == DevelopmentAction.Appearance)
                 return DescribeAppearance(repository, owners, find(request.Account), request);
+            if (request.Action == DevelopmentAction.CharacterScoreNotice)
+                return SendCharacterScoreNotice(request, noticeSender, catalog?.Resources, log);
             if (request.Action is DevelopmentAction.LukeRewardInspect or DevelopmentAction.LukeRewardClaim)
                 return ExecuteLukeRewardRecovery(repository, owners, find(request.Account), request, catalog);
             if (request.Action == DevelopmentAction.CharacterScore)
             {
                 var resources = catalog?.Resources ?? throw new InvalidDataException("角色建设评分目录未装配");
-                var metadata = resources.CharacterInvestmentMetadata;
-                return QueryCharacterScore(repository, owners, find(request.Account), request, snapshot =>
-                    CharacterInvestmentScore.Calculate(snapshot, resources.Items.Get,
-                    (card, index, kind, slot) =>
-                    {
-                        var definition = metadata.ReadEnchantment(card, index);
-                        return definition.ValidIndex && definition.Targets.Contains((kind, slot));
-                    },
-                    metadata.ValidateRandomTitle, metadata.ReadSet, resources.Items.Talisman, resources.Items.Rune,
-                    resources.CollectBoxes.Get, (item, type) =>
-                    {
-                        var original = resources.RandomOptions.Resolve(item);
-                        if (original?.Pools.Any(pool => pool.Groups.Any(group => group.Any(option => option.Type == type && option.Weight > 0))) == true)
-                            return true;
-                        var changed = resources.RandomOptions.ResolveChange(item);
-                        return changed?.Types.Any(row => row.Weight > 0 && row.Groups.Any(group => group.Weight > 0 &&
-                            group.Options.Any(option => option.Type == type && option.Weight > 0))) == true;
-                    }));
+                return QueryCharacterScore(repository, owners, find(request.Account), request,
+                    snapshot => CalculateCharacterScore(snapshot, resources));
             }
             if (request.Action == DevelopmentAction.EquipmentScore)
             {
