@@ -160,15 +160,17 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         bool setsDisjointInstanceType = disjointDeclarations.Count != 0;
         if (setsDisjointInstanceType)
         {
-            if (type != "booster selection" || disjointDeclarations.Count != 1)
+            if (type != "booster selection")
                 return new([], "set disjoint instance type");
-            var declaration = disjointDeclarations[0];
-            int end = declaration.Index + declaration.Length;
-            int next = tags.IndexOf('[', end);
-            if (!declaration.Value.Equals("[set disjoint instance type]", StringComparison.OrdinalIgnoreCase) ||
-                !string.IsNullOrWhiteSpace(text[end..(next < 0 ? text.Length : next)]) ||
-                !IsRootDeclaration(tags, declaration.Index))
-                return new([], "set disjoint instance type");
+            foreach (Match declaration in disjointDeclarations)
+            {
+                int end = declaration.Index + declaration.Length;
+                int next = tags.IndexOf('[', end);
+                if (!declaration.Value.Equals("[set disjoint instance type]", StringComparison.OrdinalIgnoreCase) ||
+                    !string.IsNullOrWhiteSpace(text[end..(next < 0 ? text.Length : next)]) ||
+                    !IsRootDeclaration(tags, declaration.Index))
+                    return new([], "set disjoint instance type");
+            }
         }
         var epicDeclarations = Regex.Matches(tags,
             @"\[\s*/?\s*set\s+epic\s+exchange\s+instance\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
