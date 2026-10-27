@@ -45,7 +45,7 @@ internal sealed partial class AntonRaidBattle
             {
                 if (objects is not null && (objects.Dungeon != dungeon || actors.Length == 0 || objects.Run != actors[0].Identity.InstanceId) || battle.Kind != RaidKind.Luke || identity.Kind != RaidKind.Luke || identity.InstanceId != battle.Instance ||
                     identity.Phase != battle.current.Phase || identity.Squad is not (1 or 2) ||
-                    TerminalRequested(battle.current) || battle.pendingTransition is not null ||
+                    TerminalRequested(battle.current) || battle.LukePhaseDueLocked() || battle.pendingTransition is not null ||
                     !battle.current.Dungeons.TryGetValue(checked((int)dungeon), out var state) || state != RaidDungeonState.Open ||
                     actors.Length is < 1 or > 4 || actors.Any(actor => !actor.Actor.IsCurrent || !battle.members.ContainsKey(actor.Actor) ||
                         actor.Identity.CharacterId != actor.Actor.Character || actor.Identity.InstanceId == Guid.Empty) ||
@@ -98,7 +98,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Luke || facts.Length is < 1 or > 4 ||
+            if (Kind != RaidKind.Luke || current.PhaseExpired || LukePhaseDueLocked() || facts.Length is < 1 or > 4 ||
                 !lukeRuns.TryGetValue(facts[0].Fact.Identity.InstanceId, out var run) || !run.Installed ||
                 facts.Length != run.Active.Count || run.Cleared || run.Phase != current.Phase ||
                 current.State != AntonRaidBattleState.Fighting || facts.Select(row => row.Actor).Distinct().Count() != facts.Length) return null;
@@ -200,7 +200,7 @@ internal sealed partial class AntonRaidBattle
             entry.Luke?.ClearFacts.ContainsKey(actor) == true;
     }
 
-    bool CurrentObjective(LukeDungeonRun run) => !TerminalRequested(current) && run.Phase == current.Phase &&
+    bool CurrentObjective(LukeDungeonRun run) => !TerminalRequested(current) && !LukePhaseDueLocked() && run.Phase == current.Phase &&
         current.Dungeons.GetValueOrDefault(checked((int)run.Dungeon)) == RaidDungeonState.Open &&
         current.DungeonGenerations.GetValueOrDefault(checked((int)run.Dungeon)) == run.Generation;
 
