@@ -211,6 +211,7 @@ python3 Tools/GmWeb/gm_web.py --self-check
 
 - 称号：命令 title-list <角色> [分类或关键字]（只读）、title-complete <角色> <成就ID,...|all|book|book:分类>（直接完成成就并发放称号、奖励与邮件；须在选角界面，网页可先强制小退）。
 - 属性：stats <角色>，服务端只计算等级与转职的基础属性，不含装备、技能、称号、套装修正。
+- 本服装备建设分：`equipment-score <角色>`，只读服务器穿戴快照，返回版本、捕获revision、12槽分项及Complete/Partial/Invalid和封顶提示；[规则与排除项](../模块/角色属性.md#本服装备建设分-v1)。不写存档，不是原版战斗力或玩家原生面板。
 - 账号金库：currency <角色> vault-gold set|add|sub <数量>（上限为当前容量档位，在线安全）；item-clear 支持容器 AccountCargo。
 - 高级筛选：item-filter <偏移> <最低> <最高> <稀有度|*> <分类|*> <词条|*> <期限*|none|rel|abs|any> <技能职业*|all|职业> [关键字]；属性索引首次使用时后台构建，未就绪会提示稍后重试。
 - 发放：grant 可选 amp:<类型>:<值> 与 seal:open（仅 [sealing] 封装装备）。
