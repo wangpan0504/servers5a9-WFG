@@ -68,7 +68,8 @@ internal enum DevelopmentAction
     EquipSlots,
     Appearance,
     ExpertJob,
-    EquipmentScore
+    EquipmentScore,
+    CharacterScore
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
@@ -110,6 +111,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["char-delete"] = (DevelopmentAction.CharDelete, true, 1, 1),
         ["stats"] = (DevelopmentAction.Stats, true, 0, 0),
         ["equipment-score"] = (DevelopmentAction.EquipmentScore, true, 0, 0),
+        ["character-score"] = (DevelopmentAction.CharacterScore, true, 0, 0),
         ["title-list"] = (DevelopmentAction.TitleList, true, 0, 1),
         ["title-complete"] = (DevelopmentAction.TitleComplete, true, 1, 1),
         ["skill-list"] = (DevelopmentAction.SkillList, true, 0, 0),
