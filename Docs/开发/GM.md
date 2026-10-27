@@ -296,3 +296,5 @@ python3 Tools/GmWeb/gm_web.py --self-check
 - `GET /api/items/{id}/preview` 增加 `grade`、`durability`、`weight`、`stackLimit`、`price`、`value`、`attachType`（归一后的交易类型）、`trade`（中文交易限制说明，按服务端交易与仓库判定归纳）、`weaponSub`、`booster`（礼包内容：与开箱同一解析，最多 30 项，含数量区间；自选礼包只标注 `selection`）。
 - `POST /api/story {account,name,level,confirm}`：设置剧情等级（0–95），调用已有 `story` 命令并写审计。
 - 物品索引缓存版本升到 3（新增武器子类字段），首次启动会重建一次 `gm-index-items.json`。
+
+`character-score <角色>`：只读查询 `character-investment/v2`，包含十二装备基础层及称号、时装、宠物、勋章、附魔、徽章、护石符文、收集箱、套装等逐来源建设明细。沿用账号/角色归属与owner快照边界，不修改资产。空模块为0；Partial说明已安装来源仍有缺失或非法定义，不可当完整排名。旧 `equipment-score` 仍返回十二装备v1。规则与限制见[角色属性](../模块/角色属性.md#本服角色建设分-v2)，此命令不是客户端自助查询或原生战斗力面板。
