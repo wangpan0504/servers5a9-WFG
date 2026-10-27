@@ -8,13 +8,18 @@ internal enum LukeRaidRunEconomy { ControlledNoOrdinaryRewards }
 internal sealed record LukeRaidMazeChoice(int Phase, int Dungeon, int MazeOrdinal);
 internal sealed record LukeRaidRunPolicy(string Source, ImmutableArray<LukeRaidMazeChoice> Mazes, LukeRaidRunEconomy Economy)
 {
+    public LukeFixedCardRouteOptions? FixedRouteOptions { get; init; }
+    public LukeFixedCardRoute? FixedRoute { get; init; }
     public string? Rejection(RaidDungeonCatalog catalog)
     {
+        if (FixedRouteOptions is not null) return "luke-fixed-route-unresolved";
         if (string.IsNullOrWhiteSpace(Source) || catalog.Type != 1 || !catalog.MapsReady ||
             Economy != LukeRaidRunEconomy.ControlledNoOrdinaryRewards || Mazes.IsDefaultOrEmpty ||
             Mazes.Length > catalog.Script.Phases.Sum(phase => phase.Dungeons.Length) ||
             Mazes.Select(row => (row.Phase, row.Dungeon)).Distinct().Count() != Mazes.Length)
             return "luke-run-policy-invalid";
+        if (FixedRoute is { } route && (!route.Matches(catalog) || !route.Matches(catalog.Script)))
+            return "luke-fixed-route-catalog-changed";
         foreach (var choice in Mazes)
             if (choice.Phase < 0 || choice.Phase >= catalog.Script.Phases.Length ||
                 !catalog.Script.Phases[choice.Phase].Dungeons.Any(row => row.Id == choice.Dungeon) ||
@@ -28,4 +33,7 @@ internal sealed record LukeRaidRunPolicy(string Source, ImmutableArray<LukeRaidM
 }
 
 // 归原Session选图上下文，替换选择或清理上下文即失效；尚未扣费或占用地下城。
-internal sealed record RaidDungeonSelection(RaidDungeonAdmission Admission, int Dungeon, int MazeOrdinal);
+internal sealed record RaidDungeonSelection(RaidDungeonAdmission Admission, int Dungeon, int MazeOrdinal)
+{
+    public LukeRouteLease? Route { get; init; }
+}
