@@ -69,7 +69,9 @@ internal enum DevelopmentAction
     Appearance,
     ExpertJob,
     EquipmentScore,
-    CharacterScore
+    CharacterScore,
+    LukeRewardInspect,
+    LukeRewardClaim
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
@@ -110,6 +112,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["rename"] = (DevelopmentAction.Rename, true, 1, 1),
         ["char-delete"] = (DevelopmentAction.CharDelete, true, 1, 1),
         ["stats"] = (DevelopmentAction.Stats, true, 0, 0),
+        ["luke-reward-inspect"] = (DevelopmentAction.LukeRewardInspect, true, 5, 5),
+        ["luke-reward-claim"] = (DevelopmentAction.LukeRewardClaim, true, 7, 7),
         ["equipment-score"] = (DevelopmentAction.EquipmentScore, true, 0, 0),
         ["character-score"] = (DevelopmentAction.CharacterScore, true, 0, 0),
         ["title-list"] = (DevelopmentAction.TitleList, true, 0, 1),
@@ -382,7 +386,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
 
     public bool Writes => Action == DevelopmentAction.Event ? Event?.Operation != "status" :
         Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue or DevelopmentAction.PcRoom or DevelopmentAction.SummonWangFugui or DevelopmentAction.SummonGuangbing ? Primary >= 0 :
-        Action is DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify or DevelopmentAction.ItemEdit or DevelopmentAction.Rename or DevelopmentAction.CharDelete or DevelopmentAction.TitleComplete ||
+        Action is DevelopmentAction.LukeRewardClaim or DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify or DevelopmentAction.ItemEdit or DevelopmentAction.Rename or DevelopmentAction.CharDelete or DevelopmentAction.TitleComplete ||
         Action == DevelopmentAction.EquipSlots && Args.Length == 1 ||
         Action == DevelopmentAction.ExpertJob && Args.Length == 2 ||
         Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Tp or DevelopmentAction.Contract or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard;
