@@ -33,6 +33,8 @@ internal static class ChannelTcpTests
             Bytes(script.AsSpan(0, expected.Length), expected, "channel script transport");
             string decoded = Encoding.GetEncoding(936).GetString(script).TrimEnd('\0');
             That(Regex.IsMatch(decoded, @"\[server\]\s+2\s"), "下发脚本属于服务器2，不依赖PVF中预存server0");
+            That(Regex.IsMatch(decoded, @"(?m)^19 `<chn_channel_info_036>` 23 `\[raid\]` "),
+                "实际频道脚本保留CH.19的安徒恩名称、0x17类型和raid分组，不占用其他团本卡的类型");
             (string Group, int Type)[] groups =
             [
                 ("elven_guard", 22), ("granfloris", 22), ("sky_catle", 22), ("behemoth", 22),

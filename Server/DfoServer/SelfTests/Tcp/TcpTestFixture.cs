@@ -57,25 +57,32 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         Root = Path.GetFullPath(root);
         Directory.CreateDirectory(Root);
         pvfSource = source.PvfPath;
+        Options = AllocatePorts(source, gm, packetHttp) with
+        {
+            ListenAddress = connectionAddress ? "0.0.0.0" : "127.0.0.1",
+            AdvertisedAddress = connectionAddress ? "connection" : "127.0.0.1",
+            NativePort = 0,
+            DataDirectory = Path.Combine(Root, "Data"),
+            PvfPath = Path.Combine(Root, "Data", "Pvf", "Script.pvf"),
+            LogDirectory = Path.Combine(Root, "Logs"),
+            SessionTtlSeconds = 300
+        };
+    }
+
+    static ServerOptions AllocatePorts(ServerOptions source, bool gm, bool packetHttp)
+    {
         TcpListener[] reservations = Enumerable.Range(0, 2 + (gm ? 1 : 0) + (packetHttp ? 1 : 0)).Select(_ => new TcpListener(IPAddress.Loopback, 0)).ToArray();
         try
         {
             foreach (var listener in reservations)
                 listener.Start();
             int[] ports = reservations.Select(l => ((IPEndPoint)l.LocalEndpoint).Port).ToArray();
-            Options = source with
+            return source with
             {
-                ListenAddress = connectionAddress ? "0.0.0.0" : "127.0.0.1",
-                AdvertisedAddress = connectionAddress ? "connection" : "127.0.0.1",
                 ChannelPort = ports[0],
                 GamePort = ports[1],
-                NativePort = 0,
                 GmPort = gm ? ports[2] : 0,
-                PacketHttpPort = packetHttp ? ports[gm ? 3 : 2] : 0,
-                DataDirectory = Path.Combine(Root, "Data"),
-                PvfPath = Path.Combine(Root, "Data", "Pvf", "Script.pvf"),
-                LogDirectory = Path.Combine(Root, "Logs"),
-                SessionTtlSeconds = 300
+                PacketHttpPort = packetHttp ? ports[gm ? 3 : 2] : 0
             };
         }
         finally
@@ -175,6 +182,9 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         var startup = Stopwatch.StartNew();
         if (process is not null || hosted is not null)
             throw new InvalidOperationException("Fixture already running");
+        // 停服后旧端口可能被系统重新分配；重启重新申请端口，数据库和程序目录仍沿用原夹具。
+        if (previousPhase is not null)
+            Options = AllocatePorts(Options, Options.GmPort != 0, Options.PacketHttpPort != 0);
         if (previousPhase is not null && Directory.Exists(Options.LogDirectory))
         {
             var archiveWait = Stopwatch.StartNew();
