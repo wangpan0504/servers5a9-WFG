@@ -60,7 +60,7 @@ export const api = {
   auditCsvUrl: (filter = {}) => '/api/audit?' + new URLSearchParams({ format: 'csv', limit: 5000, ...Object.fromEntries(Object.entries(filter).filter(([, v]) => v !== '' && v != null)) }),
   indexStatus: () => call('GET', '/api/index-status').then(r => r.data),
   debug: () => call('GET', '/api/debug').then(r => r.data),
-  events: () => call('GET', '/api/events').then(r => r.data),
+  events: (id) => call('GET', '/api/events' + (id == null ? '' : '?id=' + enc(id))).then(r => r.data),
   questSearch: (a, n, p) => call('GET', `/api/characters/${enc(a)}/${enc(n)}/quest-search?` + new URLSearchParams(clean(p))).then(r => r.data),
   auditPage: async (filter, page, size) => { const r = await getWithHeaders('/api/audit?' + new URLSearchParams({ page, pageSize: size, ...clean(filter) })); return { rows: r.json, total: r.total }; },
   post: (path, body) => call('POST', '/api/' + path, { ...body, confirm: true }),

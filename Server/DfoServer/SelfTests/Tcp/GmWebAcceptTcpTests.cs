@@ -177,6 +177,8 @@ internal static class GmWebAcceptTcpTests
         var iconResponse = await Get("/api/items/18400/icon");
         Check("物品库", "图标：200 PNG 或 204（无 ImagePacks2）", iconResponse.Status is HttpStatusCode.OK or HttpStatusCode.NoContent, Short(iconResponse));
         await Read("活动", "/api/events");
+        await Read("诺兰常驻", "/api/events?id=2532", d => d.GetProperty("eventId").GetInt32() == 2532 &&
+            d.GetProperty("active").GetBoolean() && d.GetProperty("mode").GetString() == "auto");
         await Read("快捷物品", "/api/quick-items");
         await Read("审计", "/api/audit?limit=50");
 
@@ -230,6 +232,12 @@ internal static class GmWebAcceptTcpTests
         await Write("活动", "/api/events", new { id = 64, op = "off", confirm = true });
         await Write("活动", "/api/events", new { id = 64, op = "auto", confirm = true });
         await Write("活动", "/api/events", new { id = 5, op = "on", confirm = true }, expectOk: false);
+        foreach (string op in new[] { "on", "off", "auto" })
+        {
+            await Write("诺兰常驻", "/api/events", new { id = 2532, op, confirm = true });
+            await Read("诺兰常驻", "/api/events?id=2532", d => d.GetProperty("eventId").GetInt32() == 2532 &&
+                d.GetProperty("active").GetBoolean() == (op != "off") && d.GetProperty("mode").GetString() == op);
+        }
         await Write("快捷物品", "/api/quick-items", new { items = new[] { new { id = 18400, name = "验收", count = 1 } }, confirm = true });
         await Write("踢下线", "/api/kick", new { account = Account, name = "AccA", confirm = true }, expectOk: false, expectText: "不在线");
 

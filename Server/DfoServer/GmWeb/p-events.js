@@ -10,7 +10,26 @@ const toInput = unix => {
 const showTime = unix => unix ? new Date(unix * 1000).toLocaleString('zh-CN', { hour12: false }) : '未设置';
 
 export function render(root) {
-  const out = h('div');
+  const out = h('div', { class: 'body' });
+  const nolan = h('div', { class: 'body' });
+  const loadNolan = async () => {
+    try {
+      const e = await api.events(2532);
+      const reason = e.mode === 'on' ? '手动显示' : e.mode === 'off' ? '手动隐藏' : '默认显示';
+      const run = async (label, op) => {
+        if (!await openConfirm({ title: label, detail: `诺兰：${label}。设置会保存，重新选择角色或换频道后刷新。`, danger: op === 'off' })) return;
+        try { await api.post('events', { id: 2532, op }); toast(label + ' 完成'); await loadNolan(); }
+        catch (x) { toast(x.message, true); }
+      };
+      nolan.replaceChildren(
+        note('未配置或恢复默认时显示诺兰；手动隐藏后，重启仍保持隐藏。重新选择角色或换频道后刷新。此处只控制NPC显示，春节活动功能仍未启用。'),
+        kv({ 编号: e.eventId, 现在: e.active ? '显示' : '隐藏', 模式: reason }),
+        h('div', { class: 'toolbar' },
+          h('button', { class: 'btn primary', onclick: () => run('显示诺兰', 'on') }, '显示诺兰'),
+          h('button', { class: 'btn danger', onclick: () => run('隐藏诺兰', 'off') }, '隐藏诺兰'),
+          h('button', { class: 'btn', onclick: () => run('恢复默认显示', 'auto') }, '恢复默认显示')));
+    } catch (e) { nolan.replaceChildren(note(e.message, 'err')); }
+  };
   const load = async () => {
     try {
       const e = await api.events();
@@ -39,6 +58,9 @@ export function render(root) {
           } }, '保存时间')));
     } catch (e) { out.replaceChildren(note(e.message, 'err')); }
   };
-  root.append(h('h1', null, '黄金卡牌双倍'), h('p', { class: 'lead' }, '全服活动 64。公告 74 不是这个开关。'), out);
+  root.append(h('h1', null, '全服活动'), h('p', { class: 'lead' }, '诺兰显示与黄金卡牌双倍分别设置，开关会在重启后保留。'),
+    h('section', { class: 'panel' }, h('header', null, h('h2', null, '诺兰常驻')), nolan),
+    h('section', { class: 'panel' }, h('header', null, h('h2', null, '黄金卡牌双倍')), out));
+  loadNolan();
   load();
 }

@@ -347,6 +347,35 @@ internal static class GmWebServerTests
             && (await Post("/api/events", new { id = 64, op = "schedule", start = "x y", end = "z", confirm = true })).StatusCode == HttpStatusCode.BadRequest
             && (await Post("/api/events", new { id = 1, op = "on", confirm = true })).StatusCode == HttpStatusCode.BadRequest
             && (await Post("/api/events", new { id = 64, op = "on" })).StatusCode == HttpStatusCode.BadRequest, "活动开关读写与校验");
+        int eventReads = data.Commands.Count;
+        TestCheck.That((await http.GetAsync("/api/events")).IsSuccessStatusCode &&
+            data.Commands.Skip(eventReads).SequenceEqual(["event status 64"]), "不带编号的活动查询保留黄金牌64合同");
+        eventReads = data.Commands.Count;
+        TestCheck.That((await http.GetAsync("/api/events?id=2532")).IsSuccessStatusCode &&
+            data.Commands.Skip(eventReads).SequenceEqual(["event status 2532"]), "管理网页按编号读取诺兰常驻状态，不误读64");
+        foreach (string op in new[] { "on", "off", "auto" })
+        {
+            int eventWrites = data.Commands.Count;
+            TestCheck.That((await Post("/api/events", new { id = 2532, op, confirm = true })).IsSuccessStatusCode &&
+                data.Commands.Skip(eventWrites).SequenceEqual(["event status 2532", $"event {op} 2532", "event status 2532"]),
+                "诺兰网页开关复用GM命令，审计前后快照也只读取2532：" + op);
+        }
+        int rejectedEvents = data.Commands.Count;
+        foreach (var body in new object[]
+        {
+            new { id = 2532, op = "on" }, new { id = 2532, op = "toggle", confirm = true },
+            new { id = 2532, op = "schedule", start = "2026-10-20T00:00:00+08:00", end = "2026-10-27T00:00:00+08:00", confirm = true }
+        })
+            TestCheck.That((await Post("/api/events", body)).StatusCode == HttpStatusCode.BadRequest &&
+                data.Commands.Count == rejectedEvents, "诺兰网页缺确认、未知操作或时间表均拒绝且不调用命令");
+        foreach (string id in new[] { "1", "74", "-1", "65536", "x" })
+            TestCheck.That((await http.GetAsync("/api/events?id=" + id)).StatusCode == HttpStatusCode.BadRequest &&
+                data.Commands.Count == rejectedEvents, "活动查询拒绝未登记或无效编号：" + id);
+        var eventAudit = (await http.GetFromJsonAsync<JsonElement>("/api/audit?limit=200")).EnumerateArray()
+            .Where(row => row.GetProperty("target").GetString() == "-/活动2532").ToArray();
+        TestCheck.That(eventAudit.Length == 3 && eventAudit.All(row => row.GetProperty("ok").GetBoolean()) &&
+            eventAudit.Select(row => row.GetProperty("action").GetString()).ToHashSet().SetEquals(["event-on", "event-off", "event-auto"]),
+            "诺兰网页三种持久开关写入原审计，不覆盖黄金牌记录");
         TestCheck.That((await Post("/api/quick-items", new { items = new[] { new { id = 7, label = "测试", count = 2, upgrade = 3, refine = 0 } }, confirm = true })).IsSuccessStatusCode
             && (await http.GetFromJsonAsync<JsonElement>("/api/quick-items")).GetProperty("data")[0].GetProperty("Id").GetInt32() == 7
             && (await Post("/api/quick-items", new { items = new[] { new { id = 0, label = "x", count = 1, upgrade = 0, refine = 0 } }, confirm = true })).StatusCode == HttpStatusCode.BadRequest

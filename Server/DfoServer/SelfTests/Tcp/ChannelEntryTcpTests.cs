@@ -46,7 +46,7 @@ internal static class ChannelEntryTcpTests
             !endpoints.Values.Contains(nativePort) && U32(alpha.LoginEndpoint, 5) != 0 && U32(isolated.LoginEndpoint, 5) != 0,
             "LOGIN返回独立Native端口及关联值，NOTI1和后续Actor仍使用所选频道身份");
         alpha.Create("EntryA"); isolated.Create("EntryB");
-        alpha.ExpectedOpenEvents = isolated.ExpectedOpenEvents = [282, 2449, 414, 181];
+        alpha.ExpectedOpenEvents = isolated.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
         var alphaEntry = alpha.Select();
         var isolatedEntry = isolated.Select();
         foreach (var frames in new[] { alphaEntry, isolatedEntry })

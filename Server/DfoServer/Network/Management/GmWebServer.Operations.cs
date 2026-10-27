@@ -179,19 +179,24 @@ internal static partial class GmWebServer
             catch (InvalidDataException ex) { return Bad(ex.Message); }
             catch (Exception ex) when (ex is JsonException or KeyNotFoundException) { return Bad("时段表无效"); }
         });
-        app.MapGet("/api/events", () => Reply(data.Command("event status 64")));
+        app.MapGet("/api/events", (int? id) =>
+        {
+            int eventId = id ?? 64;
+            return eventId is 64 or 2532 ? Reply(data.Command($"event status {eventId}")) : Bad("未注册的活动");
+        });
         app.MapPost("/api/events", (HttpContext http, EventBody b) =>
         {
             if (b.Confirm != true) return Bad("需要二次确认");
-            if (b.Id != 64) return Bad("未注册的活动");
+            if (b.Id is not (64 or 2532)) return Bad("未注册的活动");
             if (b.Op is not ("on" or "off" or "auto" or "schedule")) return Bad("操作无效");
             string command = $"event {b.Op} {b.Id}";
             if (b.Op == "schedule")
             {
+                if (b.Id != 64) return Bad("2532仅支持常驻开关，不支持时间表");
                 if (!EventTime.IsMatch(b.Start ?? "") || !EventTime.IsMatch(b.End ?? "")) return Bad("时间须为 ISO8601，如 2026-10-20T00:00:00+08:00 或以 Z 结尾");
                 command = $"event schedule {b.Id} {b.Start} {b.End}";
             }
-            return Run(http, data, "event-" + b.Op, "-", "活动" + b.Id, command, "event status 64");
+            return Run(http, data, "event-" + b.Op, "-", "活动" + b.Id, command, $"event status {b.Id}");
         });
 
         // 账号钱包由同账号角色共享：取该账号第一个角色作为入口，并要求货币确实是账号级。
