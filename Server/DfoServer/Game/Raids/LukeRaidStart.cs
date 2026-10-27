@@ -14,6 +14,7 @@ internal sealed record LukeRaidStartPolicy(string Source, RaidScript ExecutionSc
 {
     public LukeRaidRunPolicy? Run { get; init; }
     public LukeRaidCompletionPolicy? Completion { get; init; }
+    public LukeResourceCompletionProfile? ResourceCompletion { get; init; }
     public LukeRaidRevivalPolicy? Revival { get; init; }
     public LukeRaidClockPolicy? Timers { get; init; }
     public LukeRaidPhaseTimeoutPolicy? PhaseTimeout { get; init; }
