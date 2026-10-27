@@ -212,6 +212,8 @@ internal static partial class LukeRaidRunTcpTests
                 That(packet.Body is [1,_,_,0] or [0,1,0],"41仅既有本人复活成功或额度拒绝");
             else if(phaseResults&&packet is {Kind:0,Opcode:601})
                 That(packet.Body.Length==10&&packet.Body[0] is 0 or 2,"显式两阶段策略只接已证10B成功结果，不接600未知展示");
+            else if(phaseResults&&packet is {Kind:0,Opcode:600})
+                That(packet.Body.Length==22&&packet.Body[1]==1&&packet.Body[5]==1,"Luke显式原箱结果只允许单行16B物品");
             else if(phaseResults&&packet is {Kind:1,Opcode:660})
                 That(packet.Body.SequenceEqual(new byte[]{1})||packet.Body.SequenceEqual(new byte[]{0,0x12,0}),"660仅已证成功或明确清pending失败包");
             else Validate(packet);
