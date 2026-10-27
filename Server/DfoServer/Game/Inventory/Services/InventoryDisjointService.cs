@@ -46,8 +46,12 @@ internal sealed class InventoryDisjointService(ItemCatalog catalog, DisjointCata
             var machine = playerMachine ? DfoServer.Game.ExpertJob.ExpertJobCraft.DisjointProducts(character.ExpertMachineGrade,
                 expertJobs!.DisjointRules, template, source.Core, rng.Next, mode == DisjointMode.OwnMachine) : null;
             rewards = DisjointResultCalculator.Calculate(disjoint, template, rng, machine);
+            rewards = rewards.Concat(InventoryEchonEquipmentService.DisjointRewards(source.Core, template))
+                .Where(row => template.Echon?.Rules.DisabledDisjointItems.Contains(row.ItemId) != true)
+                .GroupBy(row => row.ItemId).Select(group => new InventoryReward(group.Key, checked(group.Sum(row => row.Count)))).ToArray();
         }
         catch (OverflowException) { return InventoryResult.Reject(4); }
+        catch (InvalidDataException) { return InventoryResult.Reject(19); }
         if (rewards.Length == 0)
             return InventoryResult.Reject(19);
         // 先释放输入，再按真实产物规划空间；分解不能沿普通赠送的封顶策略吞掉超限产物。

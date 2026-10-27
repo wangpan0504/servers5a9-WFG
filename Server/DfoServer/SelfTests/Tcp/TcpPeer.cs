@@ -771,7 +771,7 @@ internal sealed class TcpPeer : IDisposable
         (int[] Owned, int Selected)? weaponSkins = null,
         (SkinOwnership[] Owned, int Selected)? damageFonts = null,
         (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool nativeSwitch = false,
-        ushort[]? tagEvildom = null)
+        ushort[]? tagEvildom = null, byte[][]? echonSets = null)
     {
         // nativeSwitch：原生换频道新连接直接发选角4，不先请求名册；服务端按换频道判定是否保留客户端城镇快照。
         if (!resumeTown && !requestedRoster && !nativeSwitch)
@@ -834,6 +834,7 @@ internal sealed class TcpPeer : IDisposable
         DungeonEnterCounts = [];
         for (int index = 2; index < afterCargo; index++)
         {
+            if (index == 5) foreach (var set in echonSets ?? []) Expect(0, 1282, set);
             var packet = Read();
             if (index == 5)
             {

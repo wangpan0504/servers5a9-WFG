@@ -5,10 +5,12 @@ namespace PvfLib;
 public sealed record ItemRecipeEntry(int ItemId, int Count);
 public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, int SourceType,
     ImmutableArray<ItemRecipeEntry> Inputs, ImmutableArray<ItemRecipeEntry> Outputs,
-    string? MaintainAbility, bool MaintainSocketStat, int SuccessPercent, string? MakingType, int MakingLevel,
+    string? MaintainAbility, bool MaintainSocketStat, int SuccessRate, string? MakingType, int MakingLevel,
     ImmutableArray<ItemRecipeEntry> Skills, ImmutableArray<string> Diagnostics)
 {
     public ImmutableArray<ItemRecipeEntry> BeadInputs { get; init; } = [];
+    public ImmutableArray<ItemRecipeEntry> FailureOutputs { get; init; } = [];
+    public string? CustomUpgradeType { get; init; }
 
     public static ItemRecipeFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -32,7 +34,8 @@ public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, int Sourc
             for (int at = 0; at < values.Length; at += 2)
             {
                 int item = values[at].Value, count = values[at + 1].Value;
-                if (item < (allowZero ? 0 : 1) || count <= 0) errors.Add("配方编号或数量无效：" + name);
+                if (item < (allowZero ? 0 : 1) || count < 0 || count == 0 && name != "input item") errors.Add("配方编号或数量无效：" + name);
+                if (count == 0 && name == "input item") continue;
                 result.Add(new(item, count));
             }
             return result.ToImmutable();
@@ -69,8 +72,41 @@ public sealed record ItemRecipeFile(int TemplateId, string ScriptPath, int Sourc
         }
         var inputs = Pairs("input item", true);
         var outputs = Pairs("output item", false);
+        if (inputs.IsEmpty && outputs.IsEmpty && Field("int data") is { } packed && Field("input item") is null && Field("output item") is null)
+        {
+            // 旧图使用计数前缀的输入、输出二元组，尾部0表示没有额外条件。
+            // 不截断未知后缀，否则附魔技能等前置会被绕过。
+            int at = 0;
+            ImmutableArray<ItemRecipeEntry> PackedPairs(bool allowGold)
+            {
+                if (at >= packed.Values.Length || packed.Values[at].Type != 0 || packed.Values[at].Value is < 1 or > 255)
+                { errors.Add("旧配方计数无效"); return []; }
+                int count = packed.Values[at++].Value;
+                if (count > (packed.Values.Length - at) / 2) { errors.Add("旧配方二元组截断"); return []; }
+                var entries = ImmutableArray.CreateBuilder<ItemRecipeEntry>();
+                for (int i = 0; i < count; i++)
+                {
+                    var item = packed.Values[at++]; var amount = packed.Values[at++];
+                    if (item.Type != 0 || amount.Type != 0 || item.Value < (allowGold ? 0 : 1) || amount.Value <= 0)
+                        errors.Add("旧配方编号或数量无效");
+                    entries.Add(new(item.Value, amount.Value));
+                }
+                return entries.ToImmutable();
+            }
+            inputs = PackedPairs(true); outputs = PackedPairs(false);
+            if (packed.Values.Length - at != 1 || packed.Values[at].Type != 0 || packed.Values[at].Value != 0)
+                errors.Add("旧配方含未识别的额外条件");
+        }
         var skills = Pairs("need skill", true);
         var beadInputs = Pairs("bead item", false);
-        return new(id, path, sourceType, inputs, outputs, maintain, sockets, chance, makingType, makingLevel, skills, errors.ToImmutable()) { BeadInputs = beadInputs };
+        var failures = Pairs("fail output", false);
+        string? custom = null;
+        if (Field("custom upgrade type") is { } table)
+        {
+            if (table.Values is [{ Type: 6 } name]) custom = resolve(name.Value);
+            else errors.Add("配方强化表声明无效");
+        }
+        return new(id, path, sourceType, inputs, outputs, maintain, sockets, chance, makingType, makingLevel, skills, errors.ToImmutable())
+        { BeadInputs = beadInputs, FailureOutputs = failures, CustomUpgradeType = custom };
     }
 }

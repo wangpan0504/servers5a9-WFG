@@ -38,6 +38,7 @@ internal static class SelfTestRunner
         CreatureChangeTests.RunCore();
         CreatureGroupTests.RunCore();
         CreatureTransportTests.RunCore();
+        EquipmentTransferSealTests.RunCore();
         CommandLineTests.Run();
         ConnectionAddressTests.Run();
         Testing.TcpTestFixtureProcessTests.Run();
@@ -69,6 +70,7 @@ internal static class SelfTestRunner
         TextureChangeTests.RunCore();
         EquipmentUpgradeTests.RunCore();
         DarkRevelationTests.RunCore();
+        EchonEquipmentTests.RunCore();
         WeaponSkinTests.RunCore();
         AvatarCompoundTests.RunCore();
         AvatarDyeTests.RunCore();

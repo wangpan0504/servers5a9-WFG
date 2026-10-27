@@ -141,11 +141,76 @@ internal static class RecipeCraftTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "设计图及制作熟练度数据库完整");
+        await RunProbabilityAndCustomAsync(fixture, repository, resources);
 
         string Snapshot() => fixture.Snapshot() + JsonSerializer.Serialize(fixture.Query("SELECT * FROM item_making_skill_info ORDER BY charac_no")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM account_currency_balances ORDER BY account,currency_kind")) +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM sqlite_sequence ORDER BY name"));
+    }
+
+    static async Task RunProbabilityAndCustomAsync(TcpTestFixture fixture, CharacterRepository repository, TcpTestResources resources)
+    {
+        var items = resources.ItemResources;
+        Character actor;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            actor = repository.Create(owner, CharacterCreation.Prepare("RecipeChance", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get) with { Level = 95 });
+            var grant = InventoryRewardGrantService.TryGrantBatch(actor, [new(10095704,1),new(109040072,1),new(10000204,15),
+                new(10000327,75),new(3167,250),new(3037,2800)], items.Items, items.GoldLimits, items.EpicPieces);
+            That(grant.Accepted, "概率升级真实原件及材料准备");
+            actor = repository.CommitInventory(owner, actor, new(actor.Inventory, grant.Plan!.After with
+                { Items = grant.Plan.After.Items.Select(item => item.Core.ItemId == 109040072 ? item with { Core = item.Core with
+                    { Attr=7, EnchantCardId=100000201, EmblemSocketCount=1, Emblem1=42 } } : item).ToImmutableArray() }, "chance_setup"));
+        }
+        var original = actor.Inventory.Items.Single(item => item.Core.ItemId == 109040072);
+        var book = actor.Inventory.Items.Single(item => item.Core.ItemId == 10095704);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(actor.Slot);
+            Send(peer,(uint)book.Position.Index,0,1);
+            var reply = Decode(peer.Expect(1,25).Body);
+            That(reply.Success is 1 or 2 && reply.Products.Any(product => product.Id == (reply.Success == 1 ? 109040073 : 109040072)),
+                "原生制作结果标记与真实成功/失败产物一致");
+            peer.Barrier();
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            actor = repository.LoadCharacter(owner,actor.Slot);
+            var output = actor.Inventory.Items.Single(item => item.Core.ItemId is 109040072 or 109040073);
+            var expected = reply.Success == 2 ? original.Core : original.Core with { ItemId=109040073, EmblemSocketCount=0,
+                Emblem1=0,Emblem2=0,SealFlag=1,Durability=Math.Min(original.Core.Durability,items.Items.Get(109040073).Durability) };
+            That(output.Uid == original.Uid && output.Core == expected && !actor.Inventory.Items.Any(item => item.Core.ItemId == 10095704) &&
+                (reply.Success == 1 || actor.Inventory.Items.Any(item => item.Core.ItemId == 10150748)),
+                "实际概率分支保留UID，失败完整返件及额外返料，成功按封装规则生成");
+        }
+        if (items.ItemRecipes.Get(10090321) is null) return;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            actor = repository.Create(owner, CharacterCreation.Prepare("ReforgeTcp", resources.Characters.Get(0),
+                resources.Towns.Room,resources.Towns.InitialReturn,resources.Learning.Get) with { Level=95 });
+            var grant=InventoryRewardGrantService.TryGrantBatch(actor,[new(10090321,1),new(10090322,1),new(10090323,1),new(10090324,1),new(102030279,1)],
+                items.Items,items.GoldLimits,items.EpicPieces);
+            That(grant.Accepted,"四张本服重铸图真实准备");
+            actor=repository.CommitInventory(owner,actor,grant.Plan!);
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(actor.Slot);
+            foreach (int id in Enumerable.Range(10090321,4))
+            {
+                var source=actor.Inventory.Items.Single(item=>item.Core.ItemId==id);
+                var before=actor.Inventory.Items.Single(item=>item.Core.ItemId==102030279);
+                Send(peer,(uint)source.Position.Index,0,1);
+                var reply=Decode(peer.Expect(1,25).Body);
+                peer.Barrier();
+                using var owner=new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{});
+                actor=repository.LoadCharacter(owner,actor.Slot);
+                var after=actor.Inventory.Items.Single(item=>item.Core.ItemId==102030279);
+                That(reply.Success==1 && after.Uid==before.Uid && after.Core==before.Core with { Attr=after.Core.Attr } &&
+                    items.ItemRecipes.Get(id)!.UpgradeTransitions[before.Core.Upgrade][after.Core.Upgrade]>0,
+                    "四张图使用对应概率表，原位原UID重铸并完整保留其他字段");
+            }
+        }
     }
 
     static void Send(TcpPeer peer, uint source, byte mode, ushort count) => peer.Send(25,

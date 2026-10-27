@@ -189,7 +189,7 @@ internal static class InventoryMoveService
             // 只有本次实际穿戴依赖霸王等级加成时冻结期限；卸装、普通移格和原等级合格不受其到期限制。
             if (position.List == InventoryListType.Equipment && position.Index != InventoryCreatureSkinService.AuraTargetSlot &&
                 core.Kind is (ItemKind.Equipment or ItemKind.Avatar) &&
-                character.Level < catalog.Get(core.ItemId).MinimumLevel)
+                character.Level < catalog.Get(core.ItemId).MinimumLevel + (core.Kind == ItemKind.Equipment ? unchecked((sbyte)core.EmancipateLevel) : 0))
                 qualificationExpiresAt = character.Inventory.AccountWallet.ContractExpiry(22);
             return true;
         }
@@ -282,7 +282,7 @@ internal static class InventoryMoveService
         // 宠物容器先核对物品部位；角色等级、职业和技能不能代替宠物成长系统的规则。
         if (core.Kind is ItemKind.Creature or ItemKind.CreatureEquipment)
             return matchesSlot;
-        return matchesSlot && WearLevelSatisfied(character, template, utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts) &&
+        return matchesSlot && WearLevelSatisfied(character, template, utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts, core) &&
             (template.Jobs & (1 << character.Job)) != 0 &&
             RequiredSkillSatisfied(character, template);
     }
@@ -297,10 +297,13 @@ internal static class InventoryMoveService
         template.Id == core.ItemId && template is { Kind: ItemKind.Creature, EquipmentSlot: 26, CreatureSubType: 0 };
 
     internal static bool WearLevelSatisfied(Character character, ItemTemplate template, long utcSeconds,
-        PremiumContractCatalog? contracts = null) =>
-        character.Level >= template.MinimumLevel || template.Kind is (ItemKind.Equipment or ItemKind.Avatar) &&
-        character.Inventory.AccountWallet.ContractExpiry(22) > utcSeconds &&
-        (long)character.Level + (contracts?.EquipmentLevelAllowance(template) ?? 0) >= template.MinimumLevel;
+        PremiumContractCatalog? contracts = null, ItemCore? core = null)
+    {
+        int required = template.MinimumLevel + (core?.Kind == ItemKind.Equipment ? unchecked((sbyte)core.EmancipateLevel) : 0);
+        return character.Level >= required || template.Kind is (ItemKind.Equipment or ItemKind.Avatar) &&
+            character.Inventory.AccountWallet.ContractExpiry(22) > utcSeconds &&
+            (long)character.Level + (contracts?.EquipmentLevelAllowance(template) ?? 0) >= required;
+    }
 
     internal static bool RequiredSkillSatisfied(Character character, ItemTemplate template)
     {

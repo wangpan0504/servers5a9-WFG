@@ -12,11 +12,15 @@ internal sealed class ItemResources
     public CargoCatalog Cargo { get; }
     public NpcShopCatalog Shops { get; }
     public EquipmentRepairCatalog Repair { get; }
+    public EquipmentTransportCatalog EquipmentTransports { get; }
+    public EquipmentResealCatalog EquipmentReseals { get; }
     public EquipmentRefinementCatalog Refinement { get; }
     public RandomOptionCatalog RandomOptions { get; }
     public EquipmentTextureChangeCatalog TextureChanges { get; }
     public EquipmentUpgradeCatalog EquipmentUpgrades { get; }
     public DarkRevelationCatalog DarkRevelations { get; }
+    public EchonEquipmentCatalog Echon { get; }
+    public EchonEquipmentCatalog NewEchon { get; }
     public DisjointCatalog Disjoint { get; }
     public AvatarDisjointCatalog AvatarDisjoint { get; }
     public EpicPieceCatalog EpicPieces { get; }
@@ -68,6 +72,8 @@ internal sealed class ItemResources
         Cargo = new(archive);
         Shops = new(archive);
         Repair = new(archive);
+        EquipmentTransports = new(archive);
+        EquipmentReseals = new(archive);
         Refinement = new(archive);
         Disjoint = new(archive);
         AvatarDisjoint = new(archive);
@@ -80,9 +86,13 @@ internal sealed class ItemResources
         CreatureGroups = new(archive);
         Contracts = PremiumContractCatalog.Load(archive, equipment, stackable);
         Boosters = new(archive, stackable, Shops.Stock(EpicExchangeCatalog.MerchantNpcId));
+        Echon = new(archive);
+        NewEchon = new(PvfLib.CustomAbilityFile.Parse(archive.ReadText("etc/customability/newwarriorscustomability.etc")),
+            new([], [], []), PvfScript.List(archive.ReadText("etc/customability/newwarriorscustomability.lst")));
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
-            Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures);
+            Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures, echon: Echon,
+            newEchon: NewEchon);
         epicPieceDrops = new(() => new(EpicPieces, Items.Get));
         expertJobs = new(() => ExpertJobScriptCatalog.Load(archive, Items, stackable));
         CollectBoxes = new(archive, Items);

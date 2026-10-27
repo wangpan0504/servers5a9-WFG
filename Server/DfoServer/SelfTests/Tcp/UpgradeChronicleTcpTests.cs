@@ -10,7 +10,7 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-internal static class UpgradeChronicleTcpTests
+internal static partial class UpgradeChronicleTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
@@ -94,7 +94,7 @@ internal static class UpgradeChronicleTcpTests
         }
         fixture.Sql("DROP TRIGGER victory_abort");
         await fixture.StopAsync();
-        await fixture.StartAsync();
+        await fixture.StartAsync("conversion-reopened");
         using (var peer = Open(fixture))
         {
             peer.Select(actor.Slot);
@@ -115,6 +115,8 @@ internal static class UpgradeChronicleTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "转换事务数据库完整");
+        await RunLevelAsync(fixture, repository, resources);
+        RunEquipmentGrowth(fixture, repository, resources);
 
         string Snapshot() => fixture.Snapshot() +
             JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_items ORDER BY item_uid")) +
@@ -127,6 +129,76 @@ internal static class UpgradeChronicleTcpTests
             writer.Write((ushort)book.Position.Index); writer.Write(10308623);
             writer.Write((ushort)original.Position.Index); writer.Write(targetId);
             writer.Write(quality); writer.Write(-1); writer.Write((ushort)0);
+        }));
+    }
+
+    static async Task RunLevelAsync(TcpTestFixture fixture, CharacterRepository repository, TcpTestResources resources)
+    {
+        var items = resources.ItemResources;
+        Character actor;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            actor = repository.Create(owner, CharacterCreation.Prepare("LevelEnergy", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get) with { Level = 95 });
+            var grant = InventoryRewardGrantService.TryGrantBatch(actor,
+                [new(10094062, 2), new(409040007, 1), new(3311, 100), new(108030500, 1)], items.Items, items.GoldLimits, items.EpicPieces);
+            That(grant.Accepted, "等级能量及龙跃查询真实材料准备");
+            actor = repository.CommitInventory(owner, actor, grant.Plan!);
+        }
+        var book = actor.Inventory.Items.Single(item => item.Core.ItemId == 10094062);
+        var target = actor.Inventory.Items.Single(item => item.Core.ItemId == 409040007);
+        var fee = actor.Inventory.Items.Single(item => item.Core.ItemId == 3311);
+        var dragon = actor.Inventory.Items.Single(item => item.Core.ItemId == 108030500);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(actor.Slot);
+            Send(peer, target.Core.ItemId);
+            peer.Expect(1, 271, [0,4,0]);
+            peer.Barrier();
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                That(repository.LoadCharacter(owner, actor.Slot).Inventory.Find(book.Position)!.Core.Count == 2,
+                    "费用提示不能借用目标装备或伪造材料编号");
+            Send(peer, 3311);
+            peer.Expect(1, 271, [1,0]);
+            var delta = peer.Expect(0, 14).Body;
+            BoosterTcpTests.Entry(delta, target.Position.Index, 409040007, target.Core.Value);
+            BoosterTcpTests.Entry(delta, book.Position.Index, 10094062, 1);
+            BoosterTcpTests.Entry(delta, fee.Position.Index, 3311, 93);
+            peer.Send(678, []);
+            var query = peer.Expect(0, 481).Body;
+            That(query.Length == 12 && query[0] == 2 && query[1] == 1 && U16(query,3) == dragon.Position.Index &&
+                U32(query,5) == 108030500, "空678只查询真实成长装备，481不伪造经验到账");
+            peer.Barrier();
+        }
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            actor = repository.LoadCharacter(owner, actor.Slot);
+            That(actor.Inventory.Find(target.Position) is { } current && current.Uid == target.Uid &&
+                current.Core == target.Core with { EmancipateLevel = 3 } && actor.Inventory.Find(fee.Position)!.Core.Count == 93,
+                "同模板等级增加保留完整实例，尾部材料不重复收费");
+        }
+        fixture.Sql("CREATE TRIGGER level_energy_abort AFTER INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'level energy rollback'); END");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(actor.Slot);
+            Send(peer, 3311);
+            peer.Closed();
+        }
+        fixture.Sql("DROP TRIGGER level_energy_abort");
+        await fixture.StopAsync();
+        await fixture.StartAsync("level-reopened");
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var restored = repository.LoadCharacter(owner, actor.Slot);
+            That(restored.Inventory.Find(target.Position) == actor.Inventory.Find(target.Position) &&
+                restored.Inventory.Find(book.Position)!.Core.Count == 1 && restored.Inventory.Find(fee.Position)!.Core.Count == 93,
+                "晚期SQL失败及服务重建不丢同模板等级、UID或重复扣费");
+        }
+        void Send(TcpPeer peer, int feeId) => peer.Send(271, Build(writer =>
+        {
+            writer.Write((ushort)book.Position.Index); writer.Write(10094062);
+            writer.Write((ushort)target.Position.Index); writer.Write(409040007); writer.Write((byte)0);
+            writer.Write((ushort)fee.Position.Index); writer.Write(feeId);
         }));
     }
 }
