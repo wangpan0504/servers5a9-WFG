@@ -55,6 +55,14 @@ internal sealed partial class CharacterRepository
     {
         using var db = database.Open(); using var write = db.BeginWrite("CharacterRepository.ClearOperationHopeAcceptances",deferred: true);
         using var tx = write.Transaction;
+        var committed = ClearOperationHopeAcceptancesInTransaction(db,tx,owner,expected,catalog,removals);
+        tx.Commit();
+        return committed;
+    });
+
+    Character ClearOperationHopeAcceptancesInTransaction(SqliteConnection db,SqliteTransaction tx,AccountOwners.Lease owner,
+        Character expected,OperationHopeCatalog catalog,IReadOnlyList<ActiveMainQuest> removals)
+    {
         var current = Require(db,tx,owner.Account,expected.Name);
         if (current.Id != expected.Id || current.Revision != expected.Revision ||
             !current.ActiveMainQuests.SequenceEqual(expected.ActiveMainQuests) || !current.CompletedQuests.SequenceEqual(expected.CompletedQuests))
@@ -86,7 +94,6 @@ internal sealed partial class CharacterRepository
             current.ActiveMainQuests.Where(row => !ids.Contains(row.AcceptanceId))) ||
             !committed.CompletedQuests.SequenceEqual(current.CompletedQuests))
             throw new InvalidOperationException("希望任务清理影响了无关进度");
-        tx.Commit();
         return committed;
-    });
+    }
 }

@@ -11,6 +11,9 @@ internal static class DisjointResultCalculator
         int rarity = template.Rarity;
         if (rarity is < 0 or > 6)
             return [];
+        // 希望装备的专属产物完整替代普通分解，NPC与玩家机器均不追加传说灵魂或普通金色晶块。
+        if (template.IsOperationHope)
+            return config.OperationHopeResults.Select(pair=>new InventoryReward(pair.Key,pair.Value)).ToArray();
         if (config.EventResults.Contains(template.Id))
             return [];
         if (config.SpecialResults.Contains(template.Id) && !config.IndependentResults.ContainsKey(template.Id) &&

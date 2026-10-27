@@ -5,7 +5,7 @@ namespace DfoServer.GameWorld.Dungeons;
 
 internal readonly record struct DungeonSpecificCardItem(int ItemId, int Weight, int Count);
 
-// 消费已接入的普通安徒恩、黎明裂缝和普通超时空默认行；非零选择字段不作推断。
+// 消费已接入副本的默认行；非零选择字段不作推断。
 internal static class DungeonSpecificCardRewards
 {
     public static ImmutableDictionary<int, ImmutableArray<DungeonSpecificCardItem>> Parse(
@@ -23,7 +23,7 @@ internal static class DungeonSpecificCardRewards
                 seen = inside = true;
             }
             else if (tag == "[/dungeon_index specific reward rate]") inside = false;
-            else if (inside && tag == "[dungeon type]" && at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 45 or 72 or 75 })
+            else if (inside && tag == "[dungeon type]" && at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 45 or 72 or 75 or 76 })
             {
                 int start = at + 2;
                 at = start;

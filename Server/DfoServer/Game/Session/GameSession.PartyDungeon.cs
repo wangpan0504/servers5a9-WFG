@@ -61,6 +61,9 @@ internal sealed partial class GameSession
         if (shared is not null)
         {
             var source = shared.Session.PreparedParty(shared).Dungeon.Entry;
+            // 队员共用队长已冻结的物理迷宫，任务、槽位及接取身份仍由本人生成和提交。
+            if (source.Hope is { } hope &&
+                !BeginOperationHope(hope.Catalog,catalog,requiredMaze:hope.MazeOrdinal)) return null;
             // 助战者无需接取队长任务；只有本人仍持有原请求任务时才绑定个人请求身份。
             questId = owner.Execute(() => Selected?.ActiveMainQuests.Any(q => q.QuestId == source.QuestId && q.AcceptanceId != Guid.Empty) == true
                 ? source.QuestId : 0u);
@@ -128,7 +131,7 @@ internal sealed partial class GameSession
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
             { OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
-                DungeonId = dungeon.Entry.OrdinaryLukeDay is null ? 0 : checked((int)dungeon.Entry.DungeonId) }, incount);
+                DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope }, incount);
     });
 
     public FormalDungeonReceipt InstallPartyDungeon(PartyDungeonPreparation token, PartyDungeonEntryCommit result,
@@ -161,6 +164,7 @@ internal sealed partial class GameSession
         if (CurrentEvildomWar(committed) is { } war && war.Catalog.Dungeons.Any(row => row.Id == installing.Entry.DungeonId && row.Mode == war.Mode))
             war.Charged = true;
         formalDungeon = installing;
+        if (installing.Entry.Hope is not null) hopeSelection = null;
         PartyDungeon = instance;
         partyPreparation = null;
         preparedPartyDungeon = null;
@@ -195,6 +199,7 @@ internal sealed partial class GameSession
         if (!CanMutatePartyDungeon || formalDungeon is not { } dungeon ||
             dungeon.Ground.HasPendingOperation || HasPendingFormalCard || pendingQuestCompletion is not null ||
             dungeon.HasPendingFatigue || HasPendingQuestScene || dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement ||
+            dungeon.PendingHopeReward is not null && !dungeon.HopeRewardConfirmed ||
             dungeon.PendingTutorialClear is not null) return null;
         if (kind == PartyDungeonExitKind.HellSelection ? !CanBeginClearedHellSelection(0) : FormalDungeonResultFocus() is null)
             return null;
@@ -204,7 +209,10 @@ internal sealed partial class GameSession
             StaminaRecoveryService.ApplyDungeonRetreat(character, dungeon.Entry, dungeon.Run.Phase, now, PremiumPcRoom);
         after = ConsumableStatePolicy.CrossBoundary(after, ConsumableMaintenance.Town, now.ToUnixTimeMilliseconds());
         var inventory = after == character.Inventory ? null : new InventoryPlan(character.Inventory, after, "dungeon_retreat_stamina", new(character));
-        return new PartyExitPreparation(new(owner, character, dungeon.OrdinaryReturnPosition ?? character.Position, inventory),
+        var activeHope = dungeon.Run.HopeBinding is { } binding
+            ? character.ActiveMainQuests.SingleOrDefault(q => q.AcceptanceId == binding.Acceptance.AcceptanceId) : null;
+        return new PartyExitPreparation(new(owner, character, dungeon.OrdinaryReturnPosition ?? character.Position, inventory)
+            { Hope = activeHope is null ? null : new(dungeon.Run.HopeCatalog!,activeHope) },
             SelectionEpoch, dungeon, kind);
     });
 

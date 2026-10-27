@@ -14,11 +14,17 @@ internal sealed record DungeonCardReward(int Gold, ItemCore? Item, string RuleId
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public ItemCore? ExtraItem { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ItemCore? HopeEquipment { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ItemCore? HopeSealingItem { get; init; }
 
     public IEnumerable<ItemCore> Items()
     {
         if (Item is not null) yield return Item;
         if (ExtraItem is not null) yield return ExtraItem;
+        if (HopeEquipment is not null) yield return HopeEquipment;
+        if (HopeSealingItem is not null) yield return HopeSealingItem;
     }
 
     public void Validate()
@@ -28,6 +34,12 @@ internal sealed record DungeonCardReward(int Gold, ItemCore? Item, string RuleId
             throw new InvalidDataException("免费翻牌奖励声明无效");
         Item?.Validate();
         ExtraItem?.Validate();
+        HopeEquipment?.Validate();
+        HopeSealingItem?.Validate();
+        if (HopeSealingItem is not null && (HopeEquipment is null || HopeSealingItem.Kind!=ItemKind.Material))
+            throw new InvalidDataException("希望封装材料只能随本次装备牌冻结");
+        if (HopeEquipment is not null && (HopeEquipment.Kind!=ItemKind.Equipment || Item?.ItemId!=10307438))
+            throw new InvalidDataException("希望通关装备必须随专属材料牌冻结");
         if (ExtraItem is not null && (Item is null || Item.IsStackable || ExtraItem != Item))
             throw new InvalidDataException("双倍装备必须保留两件相同完整核心");
     }
@@ -36,13 +48,13 @@ internal sealed record DungeonCardReward(int Gold, ItemCore? Item, string RuleId
 // 与普通掉落共用PVF引用表及候选目录；倍率采用本服参考规则，不声称还原原服抽样。
 internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, DungeonItemDropCatalog candidates,
     ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<int, int>? random = null,
-    DungeonCardPriceCatalog? prices = null)
+    DungeonCardPriceCatalog? prices = null, OperationHopeRewardPolicy? hopeRewards = null)
 {
     public const string Rule = "pvf-free-clear-card-v1";
     static readonly decimal[] DifficultyRates = [1.02m, 1.38m, 1.60m, 1.90m, 2.00m];
 
     public DungeonCardReward Prepare(DungeonDefinition dungeon, byte difficulty, int confirmedKills,
-        Func<int, int>? draw = null, DateTimeOffset? utcNow = null)
+        Func<int, int>? draw = null, DateTimeOffset? utcNow = null, byte job = 0, byte grow = 0, bool includeHopeEquipment = true)
     {
         if (dungeon.BasisLevel is not int level || level <= 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
             throw new InvalidDataException("免费翻牌需要明确的副本等级、难度和非负的已提交击杀数");
@@ -63,7 +75,7 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         // 专表只属于资源里写了行的团本。安徒恩故事副本（227/233–238）同样带 anton dungeon 与
         // raid normal dungeon，但没有入场券，也不在类型 45 专表里。缺行时继续走下面的普通基准等级翻牌，
         // 不借用团本魔能石，也不把 NotSupportedException 抛出连接循环。
-        if (dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsNormalFiendwar ||
+        if (dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsOperationHope || dungeon.IsNormalFiendwar ||
             dungeon.IsOrdinaryAnton && (prices is null || dungeon.OrdinaryEntryTicket is not null ||
                 prices.SpecificRewards.ContainsKey(dungeon.Id)))
         {
@@ -75,7 +87,15 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
                 if (roll >= row.Weight) { roll -= row.Weight; continue; }
                 var item = DungeonDropCreation.Create(items.Get(row.ItemId), row.Count, Next, now);
                 var declared = new DungeonCardReward(checked((int)Math.Max(1, amount)), item, Rule,
-                    $"{DungeonCardPriceCatalog.ResourcePath};{dungeon.Path}", now.ToUnixTimeSeconds());
+                    $"{DungeonCardPriceCatalog.ResourcePath};{dungeon.Path}", now.ToUnixTimeSeconds())
+                {
+                    HopeEquipment = dungeon.IsOperationHope && includeHopeEquipment
+                        ? (hopeRewards ?? throw new NotSupportedException("希望通关未装配专属装备策略")).Create(job,grow,Next,now) : null,
+                    HopeSealingItem = dungeon.IsOperationHope && includeHopeEquipment
+                        ? hopeRewards!.CreateSealingItem(Next,now) : null
+                };
+                if (declared.HopeEquipment is not null) declared=declared with
+                    { ResourceSource=declared.ResourceSource+";"+OperationHopeRewardPolicy.Rule+";"+OperationHopeRewardCatalog.PoolPath };
                 declared.Validate();
                 return declared;
             }
@@ -104,12 +124,12 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         }
         bool golden = !dungeon.DisablePaidCard && membership.GoldCardAvailable(now.ToUnixTimeSeconds());
         bool doubled = !dungeon.DisablePaidCard && goldCardEvent?.Active == true;
-        var paid = Prepare(dungeon,difficulty,confirmedKills,utcNow:now) with { Gold = 0 };
+        var paid = Prepare(dungeon,difficulty,confirmedKills,utcNow:now,includeHopeEquipment:false) with { Gold = 0 };
         if (doubled) paid = DoubleItems(paid);
         return new(paid,
             golden ? 0 : prices.Price(dungeon.BasisLevel ?? throw new InvalidDataException("付费牌没有基准等级")), golden,membership,
             membership.BlackDiamondActive(now.ToUnixTimeSeconds()) && !dungeon.DisableBlackDiamondCardReward
-                ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now) : null)
+                ? Prepare(dungeon,difficulty,confirmedKills,utcNow:now,includeHopeEquipment:false) : null)
         {
             PaidDisabled = dungeon.DisablePaidCard,
             DoublePaidItems = doubled,

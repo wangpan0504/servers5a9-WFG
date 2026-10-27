@@ -16,6 +16,7 @@ internal static partial class FormalDungeonTcpTests
 {
     public static async Task RunOperationHopeAsync(ServerOptions source,string root,TcpTestResources resources)
     {
+        OperationHopeSessionTests.Run(resources.Archive,resources.ItemResources);
         await using var f = new TcpTestFixture(source,Path.Combine(root,"operation-hope"),gm:true,resources:resources);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);

@@ -183,6 +183,9 @@ internal sealed partial class DungeonHandler
         {
             case PartyDungeonNoticeKind.Entry:
                 await town.DetachAsync(context);
+                if (scene.Entry.Hope is { } hope)
+                    await context.Reply(CmdPacketType.ACCEPT_QUEST, QuestPackets.Accepted(hope.Acceptance.QuestId,1,[]),
+                        "party_operation_hope_quest_assigned",Current);
                 if (notice.State == 1)
                 {
                     await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, 0), "party_result_retry", Current);

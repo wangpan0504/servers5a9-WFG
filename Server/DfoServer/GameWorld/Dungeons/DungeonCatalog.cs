@@ -134,6 +134,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public int DummyAppearCount => RawSections.Where(row => row.Tag == "dummy appear count").ToArray() is
         [{ Tokens: [{ Type: 0, Value: >= 0 and < ushort.MaxValue } count] }] ? count.Value : 0;
     public string? DungeonType { get; init; }
+    public bool IsOperationHope => RawSections.Where(row => row.Tag == "operation hope dungeon").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
     // [crack of dimension dungeon] 正数：异次元裂缝副本，通关奖励读 etc/crackofdimensionlist.etc。

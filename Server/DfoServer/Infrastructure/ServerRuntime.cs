@@ -328,9 +328,11 @@ internal static class ServerRuntime
             var abyssBonuses = new HarlemAbyssBonusDropPolicy(bonusRules, harlemEpics, itemResources.Items.Get);
             log.Write("startup", new { Stage = "Harlem material rewards", State = "complete", Rule = HarlemMaterialDropPolicy.Rule,
                 materialRules.Enabled, Configured = configuredMaterials is not null });
+            var hopeRewards = new OperationHopeRewardPolicy(new OperationHopeRewardCatalog(pvf,itemResources.Items),itemResources.Items);
+            log.Write("startup",new { Stage="Operation Hope rewards",State="complete",Rule=OperationHopeRewardPolicy.Rule });
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
-                new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get));
+                new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards);
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
             int epicPermille = 1000;
             string? fragmentRate = Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE");
@@ -382,7 +384,7 @@ internal static class ServerRuntime
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
-                prices: DungeonCardPriceCatalog.Load(pvf)), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons);
+                prices: DungeonCardPriceCatalog.Load(pvf),hopeRewards:hopeRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops,crackRewards);
         }
         else

@@ -1,4 +1,5 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
 
@@ -9,8 +10,39 @@ internal sealed partial class GameSession
     sealed record HopeSelection(ushort CharacterId, long SelectionEpoch, OperationHopeAdmission Admission);
     HopeSelection? hopeSelection;
 
+    // 命令层先持有队伍和各连接门禁；全部选择成功才保留，失败不留下半队抽签。
+    public bool BeginPartyOperationHope(OperationHopeCatalog catalog, DungeonCatalog dungeons, Func<int,int>? draw = null)
+    {
+        var party = CurrentParty?.Invoke();
+        if (party is null) return BeginOperationHope(catalog,dungeons,draw);
+        if (!party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session,this))) return false;
+        return AccountOwners.Lease.ExecuteGroup(party.Members.Select(m => (m.Actor.Owner,m.Actor.Character.Id)).ToArray(), () =>
+        {
+            if (!ReferenceEquals(CurrentParty?.Invoke(),party) || party.Members.Any(m => !m.IsCurrent() ||
+                m.Actor.Session.Selected?.Position.Town != Selected?.Position.Town ||
+                m.Actor.Session.Selected?.Position.Area != Selected?.Position.Area)) return false;
+            var previous = party.Members.Select(m => (Session:m.Actor.Session,Selection:m.Actor.Session.hopeSelection)).ToArray();
+            bool accepted = false;
+            try
+            {
+                if (!BeginOperationHope(catalog,dungeons,draw)) return false;
+                int maze = hopeSelection!.Admission.MazeOrdinal;
+                foreach (var member in party.Members.Where(m => !ReferenceEquals(m.Actor.Session,this)))
+                    if (!member.Actor.Session.BeginOperationHope(catalog,dungeons,draw,maze)) return false;
+                accepted = true;
+                return true;
+            }
+            finally
+            {
+                if (!accepted)
+                    foreach (var member in previous) member.Session.hopeSelection = member.Selection;
+            }
+        });
+    }
+
     // 1598 只固定本次合法入场选择；任务和首区疲劳在16的原入场事务中一起提交。
-    public bool BeginOperationHope(OperationHopeCatalog catalog, DungeonCatalog dungeons, Func<int,int>? draw = null)
+    public bool BeginOperationHope(OperationHopeCatalog catalog, DungeonCatalog dungeons, Func<int,int>? draw = null,
+        int? requiredMaze = null)
     {
         var capture = owner.Execute(() => (Character: Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect &&
             formalDungeon is null && !HasPendingTownQuestCommit ? Selected : null, Epoch: SelectionEpoch, Previous: hopeSelection));
@@ -23,7 +55,7 @@ internal sealed partial class GameSession
         {
             // 位置或背包修改不能把已抽取任务永久锁死，也不能借刷新角色版本重新抽签。
             var admission = previous.Admission with { SourceRevision = character.Revision };
-            if (!ReferenceEquals(admission.Catalog,catalog) || character.ActiveMainQuests.Any(row =>
+            if (!ReferenceEquals(admission.Catalog,catalog) || requiredMaze is { } required && admission.MazeOrdinal != required || character.ActiveMainQuests.Any(row =>
                 row.Slot == admission.Acceptance.Slot || row.AcceptanceId == admission.Acceptance.AcceptanceId) ||
                 !DungeonEntryPlan.TryCreate(dungeons,character,8523,0,catalog.Difficulty,out _,out _,
                     draw:_ => 0,quests:questCatalog,hope:admission)) return false;
@@ -31,11 +63,23 @@ internal sealed partial class GameSession
         }
         else
         {
-            if (!DungeonEntryPlan.TryCreate(dungeons,character,8523,0,catalog.Difficulty,out var entry,out _,draw:draw,quests:questCatalog) ||
-                entry is null || OperationHopePlan.ChooseMission(catalog,entry.Maze.SourceOrdinal,draw) is not { } questId) return false;
+            int mazeOrdinal;
+            if (requiredMaze is { } sharedMaze)
+            {
+                if (!catalog.Mazes.ContainsKey(sharedMaze)) return false;
+                mazeOrdinal = sharedMaze;
+            }
+            else
+            {
+                mazeOrdinal = OperationHopePlan.ChooseMaze(catalog,draw);
+            }
+            if (OperationHopePlan.ChooseMission(catalog,mazeOrdinal,draw) is not { } questId) return false;
             byte slot = Enumerable.Range(0,30).Select(value => (byte)value).First(value => character.ActiveMainQuests.All(row => row.Slot != value));
             var active = new ActiveMainQuest(slot,checked((ushort)questId),1) { AcceptanceId = Guid.NewGuid() };
-            selection = new(character.Id,capture.Epoch,new(catalog,entry.Maze.SourceOrdinal,active,character.Revision));
+            var admission = new OperationHopeAdmission(catalog,mazeOrdinal,active,character.Revision);
+            if (!DungeonEntryPlan.TryCreate(dungeons,character,8523,0,catalog.Difficulty,out _,out _,
+                draw:_ => 0,quests:questCatalog,hope:admission)) return false;
+            selection = new(character.Id,capture.Epoch,admission);
         }
         return owner.Execute(() =>
         {

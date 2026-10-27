@@ -2,6 +2,7 @@ using DfoServer.Game.Session;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Protocol;
+using DfoServer.Network.Projection;
 
 namespace DfoServer.Network.Handlers;
 
@@ -15,8 +16,10 @@ internal sealed class OperationHopeHandler(OperationHopeCatalog? catalog, Dungeo
     {
         if (request.Body.Length != 0) return CommandResult.Unhandled;
         var before = context.Owner.Execute(() => (context.Session.Selected,context.Session.SelectionEpoch));
+        var party = context.Session.CurrentParty?.Invoke();
+        using var peers = await PartyDungeonProjection.AcquirePeersAsync(context,party?.Members ?? []);
         bool accepted = catalog is not null && dungeons is not null && context.Activity?.BlocksTownActions != true &&
-            context.Session.BeginOperationHope(catalog,dungeons);
+            context.Session.BeginPartyOperationHope(catalog,dungeons);
         log.Write("operation_hope_selection",new { Connection = context.Id, Accepted = accepted });
         await context.Reply(CmdPacketType.SELECT_OPERATION_HOPE_DUNGEON,accepted ? [1,0,0,0,0] : [0,1,0],
             accepted ? "operation_hope_selected" : "operation_hope_rejected", () => context.Owner.Execute(() =>

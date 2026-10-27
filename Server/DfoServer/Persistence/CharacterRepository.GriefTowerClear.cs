@@ -57,7 +57,7 @@ internal sealed partial class CharacterRepository
         {
             var selected=clear.Reward.Items[i];var reward=delivery.Rewards[i];
             if (selected.Slot is <1 or >10 || i>0 && selected.Slot<=clear.Reward.Items[i-1].Slot ||
-                reward.Gold!=0 || reward.ExtraItem is not null || reward.RuleId!=clear.Reward.Rule ||
+                reward.Gold!=0 || reward.ExtraItem is not null || reward.HopeEquipment is not null || reward.HopeSealingItem is not null || reward.RuleId!=clear.Reward.Rule ||
                 reward.ResourceSource!=GameWorld.Dungeons.GriefTowerRewardTable.ResourcePath ||
                 reward.Item is not { IsStackable:true } core || core.ItemId!=selected.ItemId || core.Count!=selected.Count)
                 throw new InvalidDataException("悲叹完整核心与冻结槽位不一致");

@@ -23,6 +23,7 @@ internal static class OperationHopeSessionTests
     {
         int before = Count;
         var resources = new Resources(pvf,items);
+        VerifyHopeRewards(pvf,items,resources);
         using (var f = new Fixture(resources))
         {
             That(f.Session.EnterFormalDungeon(8523,0,resources.Hope.Difficulty,resources.Dungeons,resources.Rooms) is null,"没有1598固定选择不能直接普通入场希望");
@@ -117,7 +118,47 @@ internal static class OperationHopeSessionTests
                 relog.Selected.Inventory.Items.Where(row => row.Core.ItemId == 10307438).Sum(row => row.Core.Count) == 60,
                 "重选清理真实入场遗留任务，不重发旧实例奖励");
         }
+        OperationHopePartyTests.Run(pvf,items);
         Console.WriteLine($"PASS {Count-before} 代号希望Session入场与领奖链断言");
+    }
+
+    static void VerifyHopeRewards(PvfArchive pvf,ItemResources items,Resources resources)
+    {
+        var prices=SelfTestCatalogs.CardPrices(pvf);
+        var rows=prices.SpecificRewards[8523];
+        That(rows.Select(r=>r.Count).SequenceEqual([130,140,200]) && rows.Select(r=>r.Weight).SequenceEqual([3000,4000,3000]) &&
+            rows.All(r=>r.ItemId==10307438),"希望翻牌完整保留当前PVF类型76三档材料，不混入普通装备池");
+        var policy=new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf),items.DungeonDropItems,items.Items,
+            items.GoldLimits,items.EpicPieces,prices:prices,
+            hopeRewards:new(new OperationHopeRewardCatalog(pvf,items.Items),items.Items));
+        OperationHopeEquipmentTests.Run(pvf,items,resources.Hope);
+        int offset=0;
+        foreach(var row in rows)
+        {
+            foreach(int roll in new[]{offset,offset+row.Weight-1})
+            {
+                var reward=policy.Prepare(resources.Dungeons.Get(8523),resources.Hope.Difficulty,1,draw:bound=>bound==10000?roll:0);
+                That(reward.Item is {ItemId:10307438} && reward.Item.Count==row.Count && reward.HopeEquipment is not null &&
+                    reward.ResourceSource.Contains(DungeonCardPriceCatalog.ResourcePath,StringComparison.Ordinal),"希望翻牌逐档首尾边界命中原声明");
+            }
+            offset+=row.Weight;
+        }
+        var withoutTable=new DungeonCardRewardPolicy(SelfTestCatalogs.DropRules(pvf),items.DungeonDropItems,items.Items,items.GoldLimits,items.EpicPieces);
+        Reject<NotSupportedException>(()=>withoutTable.Prepare(resources.Dungeons.Get(8523),resources.Hope.Difficulty,1,draw:_=>0),
+            "希望缺专表明确拒绝，不能发普通装备掩盖资源装配错误");
+        var disjoint=new DfoServer.GameWorld.Items.DisjointCatalog(pvf);
+        foreach(int id in new[]{100070640,101040543,101030831})
+        {
+            var template=items.Items.Get(id);
+            That(template.IsOperationHope,"防具、普通武器及胜武器均按真实operation hope标签识别");
+            foreach(var machine in new DfoServer.Game.Inventory.Services.InventoryReward[]?[]{null,[new(3037,99)]})
+            {
+                var rewards=DfoServer.Game.Inventory.Services.DisjointResultCalculator.Calculate(disjoint,template,new Random(1),machine);
+                That(rewards.OrderBy(r=>r.ItemId).Select(r=>(r.ItemId,r.Count)).SequenceEqual(new[]{(3262,5),(10307438,5)}),
+                    "希望分解按PVF给5碎片和5金色晶块，普通与玩家机器不额外生成灵魂");
+            }
+        }
+        That(!items.Items.Get(100070603).IsOperationHope,"同为95级传说不应仅凭等级稀有度套用希望分解");
     }
 
     static DungeonMap[] Route(OperationHopeCatalog catalog,DungeonMaze maze,DungeonPoint start,int destination)

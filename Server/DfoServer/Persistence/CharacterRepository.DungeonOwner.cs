@@ -178,8 +178,13 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             using var write = db.BeginWrite("CharacterRepository.CommitPartyDungeonExit");
             using var tx = write.Transaction;
             Validate(tx);
-            var result = reservations.Select(r => r.Changed
-                ? SaveInTransaction(db, tx, r.Owner, r.Expected, r.Position, r.Expected.Return, r.Inventory) : r.Expected).ToArray();
+            var result = reservations.Select(r =>
+            {
+                var character = r.Position != r.Expected.Position || r.Inventory is not null
+                    ? SaveInTransaction(db,tx,r.Owner,r.Expected,r.Position,r.Expected.Return,r.Inventory) : r.Expected;
+                return r.Hope is { } hope
+                    ? ClearOperationHopeAcceptancesInTransaction(db,tx,r.Owner,character,hope.Catalog,[hope.Acceptance]) : character;
+            }).ToArray();
             tx.Commit();
             return result;
 
