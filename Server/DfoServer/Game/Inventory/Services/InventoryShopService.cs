@@ -6,7 +6,8 @@ using System.Collections.Immutable;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog shops, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TimeProvider? clock = null)
+internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog shops, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TimeProvider? clock = null,
+    ServerItemUsageCatalog? serverItems = null)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
     static readonly int[] CubeItemIds = [3033, 3034, 3035, 3036, 3037, 3262];
@@ -37,6 +38,8 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         var after = before;
         var now = utcNow ?? Clock.GetUtcNow();
         int today = ShopPurchaseCount.Today(now);
+        if (serverItems is not null && !ServerItemUsageState.TryConsume(before.ServerItems, serverItems, 2, request.ItemId, count,
+            now, Clock.LocalTimeZone, out _)) return InventoryResult.Reject(0x85);
         if (price.Limit is { } limit)
         {
             var key = new ShopPurchaseCount(request.NpcId, request.ItemId, limit.AccountWide, limit.ResetDaily, limit.ResetDaily ? today : 0, count);
@@ -119,6 +122,17 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         foreach (var item in after.Items)
             if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
                 (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;
+        if (serverItems is not null)
+        {
+            if (!ServerItemUsageState.TryConsume(after.ServerItems, serverItems, 2, request.ItemId, count,
+                now, Clock.LocalTimeZone, out var itemUsage)) return InventoryResult.Reject(0x85);
+            if (!itemUsage.Same(after.ServerItems))
+            {
+                long nextDay = FatigueDailyReset.NextReset(now, Clock.LocalTimeZone).ToUnixTimeSeconds();
+                deadline = deadline is { } existing ? Math.Min(existing, nextDay) : nextDay;
+                after = after with { ServerItems = itemUsage };
+            }
+        }
         return new(true, 0, new(before, after, "npc_shop_buy", new(character, deadline, Clock, requirePosition: true)));
     }
 

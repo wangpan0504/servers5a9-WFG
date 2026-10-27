@@ -363,6 +363,7 @@ internal static class TcpRegressionTests
         ("avatar-disjoint", AvatarDisjointTcpTests.RunAsync),
         ("avatar-preset", AvatarPresetTcpTests.RunAsync),
         ("npc-favor", NpcFavorTcpTests.RunAsync),
+        ("fatigue-daily", FatigueDailyResetTcpTests.RunAsync),
         ("epic-book", EpicBookTcpTests.RunAsync),
         ("epic-piece-drops", FormalDungeonTcpTests.RunEpicPiecesAsync),
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),

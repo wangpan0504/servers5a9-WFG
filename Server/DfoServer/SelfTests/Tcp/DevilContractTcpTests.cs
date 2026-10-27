@@ -253,7 +253,11 @@ internal static class DevilContractTcpTests
             Return(peer); peer.Barrier();
             long expiry = (long)fixture.Query("SELECT json_extract(premium_contracts,'$.56') FROM account_wallets")[0][0];
             string beforeExpiry = fixture.Snapshot("SELECT revision,premium_contracts FROM account_wallets");
-            clock.Set(expiry - 1); peer.Barrier();
+            // 隔离跨30天日切与最后一秒的权益到期；跨日在线推送由fatigue-daily单独核验。
+            peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            clock.Set(expiry - 1);
+            AssertBlackDiamondActor(peer.Select()[2].Body, active: true);
+            peer.Barrier();
             clock.Set(expiry);
             peer.CheckBlackDiamondRefresh(active: false, allowDailyReset: true);
             peer.Barrier();

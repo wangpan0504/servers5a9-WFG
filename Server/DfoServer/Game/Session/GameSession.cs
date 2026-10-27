@@ -27,7 +27,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null,
     Game.Creatures.CreatureService? creatures = null, GameWorld.Quests.QuestStageGraph? stageGraph = null,
     ItemCatalog? items = null, ExperienceBonusService? experienceBonuses = null, GameWorld.Dungeons.DungeonIncountCatalog? incounts = null,
-    ChannelHistory? channelHistory = null, GameWorld.Dungeons.OperationHopeCatalog? operationHope = null)
+    ChannelHistory? channelHistory = null, GameWorld.Dungeons.OperationHopeCatalog? operationHope = null,
+    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 
@@ -39,11 +40,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     public long SelectionEpoch { get; private set; }
     public string TravelReason { get; private set; } = "not-requested";
     public bool PremiumPcRoom => debugSettings?.PremiumPcRoom == true;
-
     public CharacterFatigueState FatigueForClient(Character character)
     {
         var state = (character.Fatigue ?? CharacterFatigueState.NewOrdinary)
-            .ForBlackDiamond(character.BlackDiamondExpiresAt > DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            .ForBlackDiamond(character.BlackDiamondExpiresAt > (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds());
         state.Validate();
         return debugSettings?.InfiniteFatigue == true ? state with { Used = 0, Remaining = state.Maximum } : state;
     }
@@ -163,7 +163,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             }
             if (character.IsPvpPrivate && ChannelEntry?.Type != 24)
                 throw new InvalidDataException("专用决斗角色只允许进入已实现的决斗频道");
-            character = repository.GrantBlackDiamondFatigue(owner, character, DateTimeOffset.UtcNow);
+            var fatigueNow = (timeProvider ?? TimeProvider.System).GetUtcNow();
+            character = repository.ResetDailyFatigue(owner, character,
+                FatigueDailyReset.Day(fatigueNow, (timeProvider ?? TimeProvider.System).LocalTimeZone), fatigueNow);
+            character = repository.GrantBlackDiamondFatigue(owner, character, fatigueNow);
             if (questCatalog is not null)
             {
                 if(DfoServer.Game.Quests.QuestQuickClearPlan.TryCreateOrphanRepair(character,questCatalog,out var repair))

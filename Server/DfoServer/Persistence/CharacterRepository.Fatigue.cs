@@ -13,8 +13,10 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            SELECT f.used,f.maximum,f.used_maximum,f.remaining,f.context_auxiliary,f.selection_auxiliary,f.account,c.account
-            FROM character_fatigue f JOIN characters c ON c.id=f.character_id WHERE f.character_id=$id
+            SELECT f.used,f.maximum,f.used_maximum,f.remaining,f.context_auxiliary,f.selection_auxiliary,f.account,c.account,
+              COALESCE(d.service_day,0)
+            FROM character_fatigue f JOIN characters c ON c.id=f.character_id
+              LEFT JOIN character_fatigue_reset_days d ON d.character_id=f.character_id WHERE f.character_id=$id
             """;
         command.Parameters.AddWithValue("$id", id);
         using var reader = command.ExecuteReader();
@@ -24,7 +26,7 @@ internal sealed partial class CharacterRepository
             throw new InvalidDataException("疲劳owner账号归属损坏");
         var state = new CharacterFatigueState(checked((ushort)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)),
             checked((ushort)reader.GetInt32(2)), checked((ushort)reader.GetInt32(3)), checked((ushort)reader.GetInt32(4)),
-            checked((ushort)reader.GetInt32(5)));
+            checked((ushort)reader.GetInt32(5))) { ResetDay = reader.GetInt32(8) };
         state.Validate();
         return state;
     }
@@ -40,7 +42,46 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$account", account);
         command.Parameters.AddWithValue("$maximum", maximum);
         command.ExecuteNonQuery();
+        command.Parameters.AddWithValue("$day", FatigueDailyReset.Day(DateTimeOffset.UtcNow, TimeZoneInfo.Local));
+        command.CommandText = "INSERT INTO character_fatigue_reset_days(character_id,service_day) VALUES($id,$day)";
+        command.ExecuteNonQuery();
     }
+
+    public Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now) => owner.Execute(() =>
+    {
+        if (expected.Fatigue is not { } before || day <= before.ResetDay) return expected;
+        var target = FatigueDailyReset.Restore(before, day, expected.BlackDiamondExpiresAt > now.ToUnixTimeSeconds());
+        using var db = database.Open();
+        using var write = db.BeginWrite("CharacterRepository.ResetDailyFatigue", deferred: true);
+        using var tx = write.Transaction;
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.Parameters.AddWithValue("$id", expected.Id);
+        command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$revision", expected.Revision);
+        command.Parameters.AddWithValue("$name", expected.Name);
+        command.CommandText = "SELECT revision FROM characters WHERE id=$id AND account=$account AND name=$name";
+        if (command.ExecuteScalar() is not long revision || revision != expected.Revision || ReadFatigue(db, expected.Id, tx) != before ||
+            ReadAccountWallet(db, owner.Account, tx).ContractExpiry(56) != expected.BlackDiamondExpiresAt)
+            throw new InvalidOperationException("每日疲劳恢复的角色或资格快照已变化");
+        command.Parameters.AddWithValue("$day", day);
+        command.Parameters.AddWithValue("$maximum", target.Maximum);
+        command.Parameters.AddWithValue("$remaining", target.Remaining);
+        command.CommandText = "UPDATE characters SET revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("每日疲劳恢复revision冲突");
+        command.CommandText = "UPDATE character_fatigue SET used=0,maximum=$maximum,remaining=$remaining WHERE character_id=$id AND account=$account";
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("每日疲劳恢复缺少原owner");
+        command.CommandText = """
+            INSERT INTO character_fatigue_reset_days(character_id,service_day) VALUES($id,$day)
+            ON CONFLICT(character_id) DO UPDATE SET service_day=excluded.service_day
+            WHERE service_day<excluded.service_day
+            """;
+        if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("每日疲劳恢复日戳冲突");
+        // 只改疲劳与版本，不在每日定时器的writer内重载两遍整套角色资产。
+        var committed = expected with { Fatigue = target, Revision = checked(expected.Revision + 1) };
+        tx.Commit();
+        return committed;
+    });
 
     public Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now) => owner.Execute(() =>
     {

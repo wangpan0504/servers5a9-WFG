@@ -778,6 +778,24 @@ CREATE TABLE character_fatigue(
   selection_auxiliary INTEGER NOT NULL CHECK(selection_auxiliary BETWEEN 0 AND 65535),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
 
+CREATE TABLE character_server_item_usage(
+  character_id INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+  state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='object')
+);
+
+CREATE TABLE account_server_item_refills(
+  account TEXT NOT NULL,item_id INTEGER NOT NULL CHECK(item_id>0),
+  service_day INTEGER NOT NULL CHECK(service_day BETWEEN 1 AND 3652058),
+  character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+  completed INTEGER NOT NULL CHECK(completed IN (0,1)),
+  PRIMARY KEY(account,item_id)
+);
+
+CREATE TABLE character_fatigue_reset_days(
+  character_id INTEGER PRIMARY KEY REFERENCES character_fatigue(character_id) ON DELETE CASCADE,
+  service_day INTEGER NOT NULL CHECK(typeof(service_day)='integer' AND service_day BETWEEN 1 AND 3652058)
+);
+
 CREATE TABLE character_dungeon_fatigue_receipts(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
   task_attempt INTEGER NOT NULL CHECK(task_attempt>0),map_id INTEGER NOT NULL CHECK(map_id>0),

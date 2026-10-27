@@ -49,18 +49,17 @@ internal static partial class FormalDungeonTcpTests
             That(peer.DungeonEnterCounts[11007] == (0, 0), "重连从同一持久账本恢复用尽状态");
             Select(peer, 0);
             clock.Now = clock.Now.AddSeconds(2);
-            peer.SendBarrier();
-            var reset = peer.Read();
-            // 每日视图可由连接计时器或本命令刷新，仍严格校验一条541和一条屏障应答。
-            if (reset is { Kind: 0, Opcode: 541 }) peer.Expect(1, 1347, [1]);
-            else
-            {
-                That(reset is { Kind: 1, Opcode: 1347, Body: [1] }, "跨日屏障之前只允许每日视图刷新");
-                reset = peer.Expect(0, 541);
-            }
-            That(Inventory.DailyBoosterProjectionTests.Decode(reset.Body).Values.All(value => value == 0),
+            var notices = PartyDungeonTcpTests.Drain(peer);
+            var reset = notices.Where(row => row is { Kind: 0, Opcode: 541 }).ToArray();
+            That(reset.Length == 1 && Inventory.DailyBoosterProjectionTests.Decode(reset[0].Body).Values.All(value => value == 0),
                 "跨06:00校验既有每日礼盒清零通知，不吞掉其它包");
-            peer.Barrier();
+            var dailyCounts = notices.Where(row => row is { Kind: 0, Opcode: 550 }).ToArray();
+            That(dailyCounts.All(row => row.Body.Length == 6 && U32(row.Body) > 0) &&
+                dailyCounts.Any(row => U32(row.Body) == 11006 && row.Body[4] == 3 && row.Body[5] == 0) &&
+                dailyCounts.Any(row => U32(row.Body) == 11007 && row.Body[4] == 3 && row.Body[5] == 0) &&
+                notices.Any(row => row is { Kind: 0, Opcode: 1536, Body.Length: 5 }) &&
+                notices.All(row => row.Kind == 0 && row.Opcode is 21 or 356 or 541 or 550 or 574 or 1343 or 1349 or 1536),
+                "跨日主动推送真实祭坛剩余和强袭视图，其余通知属于已登记的每日刷新");
             Enter(peer, 2);
             Load(peer); Return(peer);
             That(Entries(first.Id) == 4, "06:00跨游戏日后原连接可入场，历史三次保留且本日只扣一次");

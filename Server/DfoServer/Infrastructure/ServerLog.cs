@@ -93,6 +93,8 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "dungeon_selection_return" => "Dungeon selection return", "formal_dungeon_return" => "Returned to town",
             "quest_lifecycle" => "Quest update", "quest_completion" => "Quest completion", "gm" => "GM command",
             "gm_notice" => "GM notice",
+            "fatigue_daily_reset" => "Daily fatigue restored",
+            "fatigue_daily_reset_failed" => "Daily fatigue restore failed",
             "consumable_use" => "Consumable use",
             "chat_send" => "Chat message", "chat_delivered" => "Chat delivered", "chat_throttled" => "Chat throttled",
             "chat_whisper_offline" => "Whisper target offline", "chat_megaphone_rejected" => "Megaphone rejected",
@@ -149,7 +151,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
     static bool ShowsOnConsole(string kind) => kind is
         "startup" or "server_failed" or "listener_failed" or "listening" or "server_ready" or "stopped" or "resource_warning" or
         "connected" or "disconnected" or "closed" or "db_busy" or "db_slow" or "channel" or "authenticated" or "auth_rejected" or "owner_rejected" or
-        "selected" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
+        "selected" or "fatigue_daily_reset" or "character_deleted" or "exit" or "travel" or "room_exit" or "dungeon_entry" or "formal_dungeon_entry" or
         "formal_dungeon_settlement" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_selection" or "dungeon_entry_probe" or "dungeon_probe_return" or
         "quest_lifecycle" or "quest_completion" or "consumable_use" or "class_change" or "growup_change" or "cube_contract_select" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or

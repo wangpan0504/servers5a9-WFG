@@ -20,6 +20,12 @@ internal sealed partial class GameSession
         if (character is null)
             return MailboxResult.Reject(MailboxError.InvalidState);
         var error = service.PlanSend(character, owner.Account, request, DateTimeOffset.UtcNow, out var plan);
+        if (error == MailboxError.None && itemCycles is not null)
+        {
+            var counted = itemCycles.ApplyUsage(character, new(true, 0, plan!.Inventory), 3, 0, 1);
+            if (!counted.Accepted) error = MailboxError.InvalidState;
+            else plan = plan with { Inventory = counted.Plan! };
+        }
         return owner.Execute(() =>
         {
             if (!MailPlanIsCurrent(character, epoch))

@@ -30,6 +30,12 @@ internal sealed partial class GameSession
                 return Reject("cooldown");
             if (plan.Source.IsExpired(now.ToUnixTimeSeconds()) || plan.Inventory.CharacterPrecondition!.IsExpired(now.ToUnixTimeSeconds()))
                 return Reject("source-or-quota-expired");
+            if (itemCycles is not null)
+            {
+                var limited = itemCycles.ApplyUsage(expected, new(true, 0, plan.Inventory), 0, plan.Source.Core.ItemId, 1);
+                if (!limited.Accepted) return Reject("server-item-usage-limit");
+                plan = plan with { Inventory = limited.Plan! };
+            }
             pendingConsumableUse = plan.Inventory;
             var committed = repository.CommitFatigueConsumable(owner, plan, now);
             pendingConsumableUse = null;

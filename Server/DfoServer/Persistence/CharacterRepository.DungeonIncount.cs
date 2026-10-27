@@ -43,6 +43,20 @@ internal sealed partial class CharacterRepository
         return ReadDungeonIncount(db, null, characterId, owner.Account, dungeon, now);
     });
 
+    public ImmutableArray<StoredDungeonIncount> LoadDungeonIncounts(AccountOwners.Lease owner, ushort characterId) => owner.Execute(() =>
+    {
+        using var db = database.Open();
+        using var query = db.CreateCommand();
+        query.CommandText = "SELECT dungeon,day,daily_used,week,weekly_used FROM character_dungeon_incount WHERE character_id=$id AND account=$account";
+        query.Parameters.AddWithValue("$id", characterId);
+        query.Parameters.AddWithValue("$account", owner.Account);
+        using var reader = query.ExecuteReader();
+        var rows = ImmutableArray.CreateBuilder<StoredDungeonIncount>();
+        while (reader.Read()) rows.Add(new(reader.GetInt32(0), new(reader.GetInt32(1), reader.GetInt32(3)),
+            new(reader.GetInt32(2), reader.GetInt32(4))));
+        return rows.ToImmutable();
+    });
+
     public int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) => owner.Execute(() =>
     {
         using var db = database.Open();

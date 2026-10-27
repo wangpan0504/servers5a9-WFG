@@ -53,6 +53,10 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             plan.Reason == "move_item" && plan.EquipmentSlotFlagsAfter is null &&
             (!receipt.PreviousSkillSwitchInventory.Same(SkillSwitchInventoryState.Empty) ||
              !current.SkillSwitchInventory.Same(SkillSwitchInventoryState.Empty));
+        foreach (var usage in current.Inventory.ServerItems.Uses.Where(row => row.Type<=1 && !plan.Before.ServerItems.Uses.Contains(row)))
+            await context.Notify(NotiPacketType.LIMIT_ITEM_USAGE,
+                ServerItemUsagePackets.Changed(usage.ItemId, context.Session.ServerItemLimit(usage.Type, usage.ItemId), usage.Used),
+                "server_item_usage", CanSend);
         bool mainExpansionChanged = plan.Before.Expansion != current.Inventory.Expansion;
         if (mainExpansionChanged)
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_capacity_committed", CanSend);

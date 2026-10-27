@@ -73,7 +73,11 @@ internal static class QuestCompletionRepositoryTests
             using (var db = fixture.Open()) DatabaseSchemaTests.RewindQuestSystemToV13(db);
             var migrated = new CharacterRepository(fixture.Path);
             var oldReplay = migrated.CommitQuestCompletion(fixture.Owner, plan);
-            Check(ReceiptRows() == originalReceipt && clearRows == JsonSerializer.Serialize(Testing.TcpTestFixture.Rows(fixture.Path,"SELECT rowid,* FROM character_quest_clear_receipts")) && Same(migrated.LoadCharacter(fixture.Owner, fixture.Created.Slot), commit.Character) &&
+            // v13没有日切水印，升级只建空表；原疲劳余额和全部资产仍须逐项保持。
+            var migratedCharacter=migrated.LoadCharacter(fixture.Owner, fixture.Created.Slot);
+            var legacyExpected=commit.Character with { Fatigue=commit.Character.Fatigue! with {ResetDay=0} };
+            Check(ReceiptRows() == originalReceipt && clearRows == JsonSerializer.Serialize(Testing.TcpTestFixture.Rows(fixture.Path,"SELECT rowid,* FROM character_quest_clear_receipts")) &&
+                migratedCharacter.Fatigue?.ResetDay==0 && Same(migratedCharacter, legacyExpected) &&
                 oldReplay is { Duplicate: true, ProjectionCurrent: true } && oldReplay.Rewards.SequenceEqual(commit.Rewards),
                 "真实v13非空领奖迁移逐列保留旧规则/rowid/EXP/七UID/Core，原计划仍精确只读重放");
         }
@@ -267,6 +271,11 @@ internal static class QuestCompletionRepositoryTests
     // 真实提交结果丢失，仅在第一次返回之后注入；保存原计划引用用于精确重试检查。
     internal sealed class LostResultRepository(ICharacterRepository inner) : ICharacterRepository
     {
+        public Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now) =>
+            inner.ResetDailyFatigue(owner, expected, day, now);
+        public System.Collections.Immutable.ImmutableDictionary<int,AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner) => inner.ReadAccountItemRefills(owner);
+        public ServerItemCycleCommit CommitServerItemCycle(AccountOwners.Lease owner, Character expected, InventoryPlan plan) => inner.CommitServerItemCycle(owner, expected, plan);
+        public System.Collections.Immutable.ImmutableArray<StoredDungeonIncount> LoadDungeonIncounts(AccountOwners.Lease owner, ushort characterId) => inner.LoadDungeonIncounts(owner, characterId);
         public bool LoseExperienceResult { get; set; }
         public bool LosePermanentGrowthResult { get; set; }
         public bool LoseLegacyStatusResult { get; set; }

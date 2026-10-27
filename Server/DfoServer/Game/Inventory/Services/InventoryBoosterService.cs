@@ -42,7 +42,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             destinations.Sum(item => item.Core.Count - PriorCount(item)) != reward.Count)
             return InventoryResult.Reject(4);
         receipt = new(request.Slot, destinations[0].Position, reward.ItemId, destinations[0].Core.Count - PriorCount(destinations[0]));
-        return result with { Plan = new(plan.Before, plan.After, "lottery_open", plan.CharacterPrecondition) };
+        return result with { Plan = new(plan.Before, plan.After, "lottery_open", plan.CharacterPrecondition) { UsedItems = plan.UsedItems } };
 
         int PriorCount(InventoryItem item)
         {
@@ -120,7 +120,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             destination.Core.Count - (prior.TryGetValue(destination.Position, out int priorCount) ? priorCount : 0));
         long? deadline = InventoryAvatarPackageService.EarliestDeadline(source, [destination]);
         return new(true, 0, new InventoryPlan(before, after, "rune_box_open",
-            new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true)));
+            new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true)) { UsedItems = [new(source.Core.ItemId, 1)] });
 
         static InventoryResult RejectRuneBox(string reason) => InventoryResult.Reject(19) with { RejectReason = reason };
     }
@@ -252,7 +252,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         after = cooled;
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray());
         return new(true, 0, new(before, after, "booster_open",
-            new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true), overflow));
+            new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true), overflow) { UsedItems = [new(source.Core.ItemId, 1)] });
     }
 
     InventoryResult OpenCore(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt,
@@ -593,7 +593,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             SelectionTrace = trace,
             SelectionSummary = trace is null ? null : IndependentAttributePairSampler.Describe(selectionPolicy.Policy!, trace)
         };
-        return new(true, 0, new(before, after, "booster_open", precondition, overflowItems: grant.Plan.OverflowItems));
+        return new(true, 0, new(before, after, "booster_open", precondition, overflowItems: grant.Plan.OverflowItems)
+        { UsedItems = [new(source.Core.ItemId, request.Count)] });
 
         void Add(int id, int count, long draws) => totals[id] = checked(totals.GetValueOrDefault(id) + checked((int)(count * draws)));
     }

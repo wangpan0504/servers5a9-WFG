@@ -226,7 +226,9 @@ internal static partial class FormalDungeonTcpTests
 
     sealed class DespairDays : TimeProvider
     {
-        long milliseconds = new DateTimeOffset(2026, 10, 26, 5, 59, 59, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
+        // 百日推进后仍不晚于真实系统日，避免冷启动人为回拨原任务账本。
+        long milliseconds = DfoServer.Game.Inventory.Models.DailyBoosterUsage.NextReset(DateTimeOffset.UtcNow)
+            .AddDays(-101).AddSeconds(-1).ToUnixTimeMilliseconds();
         int systemTime;
         public override DateTimeOffset GetUtcNow() => Volatile.Read(ref systemTime) == 1 ? DateTimeOffset.UtcNow :
             DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref milliseconds));

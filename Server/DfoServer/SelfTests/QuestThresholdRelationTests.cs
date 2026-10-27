@@ -227,7 +227,8 @@ internal static class QuestThresholdRelationTests
             }
             var repository = new DfoServer.Persistence.CharacterRepository(path,f.Catalog);
             var migrated = repository.LoadCharacter(f.Owner,0);
-            That(Same(original,migrated),"真实v13结构单次迁移保存阈值相关原任务、材料、技能及接取身份");
+            That(migrated.Fatigue?.ResetDay==0 && Same(original with {Fatigue=original.Fatigue! with {ResetDay=0}},migrated),
+                "真实v13结构迁移不补造服务日，保存原疲劳余额、阈值任务、材料、技能及接取身份");
             var plan = QuestCompletionPlan.Prepare(migrated,parent,ushort.MaxValue,f.Catalog,parameters,
                 items.Items,items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow).Plan!;
             var committed = repository.CommitQuestCompletion(f.Owner,plan);

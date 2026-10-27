@@ -52,6 +52,9 @@ internal interface ICharacterRepository
     Character ConsumeOperationHopeAreaFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run);
     Character ConsumeDungeonRoomFatigue(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run);
     Character GrantBlackDiamondFatigue(AccountOwners.Lease owner, Character expected, DateTimeOffset now);
+    Character ResetDailyFatigue(AccountOwners.Lease owner, Character expected, int day, DateTimeOffset now);
+    System.Collections.Immutable.ImmutableDictionary<int, AccountItemRefillState> ReadAccountItemRefills(AccountOwners.Lease owner);
+    ServerItemCycleCommit CommitServerItemCycle(AccountOwners.Lease owner, Character expected, InventoryPlan plan);
     CardMembership LoadCardMembership(AccountOwners.Lease owner,ushort characterId,DateTimeOffset now);
     CardMembership SetCardMembership(AccountOwners.Lease owner,string name,CardMembershipKind kind,long expires);
     DungeonPaidCardCommit CommitPaidDungeonCard(AccountOwners.Lease owner,Character expected,PreparedDungeonSettlement prepared,
@@ -131,6 +134,8 @@ internal interface ICharacterRepository
     // DungeonIncountInfo 角色日/周与账号进入次数；只有 SQLite 仓库实现，测试包装默认不支持。
     DungeonIncountUsage LoadDungeonIncount(AccountOwners.Lease owner, ushort characterId, int dungeon, DungeonIncountPeriod now) =>
         throw new NotSupportedException("仓库不支持副本进入次数");
+    System.Collections.Immutable.ImmutableArray<StoredDungeonIncount> LoadDungeonIncounts(AccountOwners.Lease owner, ushort characterId) =>
+        throw new NotSupportedException("仓库不支持批量查询副本进入次数");
     DungeonIncountCommit? CommitDungeonIncountEntry(AccountOwners.Lease owner, Character expected, int dungeon, DungeonIncountPeriod now,
         DfoServer.GameWorld.Dungeons.DungeonIncountRow? row, InventoryPlan? consumption,
         System.Collections.Immutable.ImmutableArray<AccountIncountCharge> account = default, bool increment = true, bool check = true) =>

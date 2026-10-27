@@ -79,6 +79,12 @@ internal static class DungeonEntryCostTests
                 r.Character.DungeonState?.LastAttempt == 1 && r.EnterCounts.Single().Daily == 0) &&
                 repository.LoadAccountDungeonIncount(a, 3, period.Day) == 1 && repository.LoadAccountDungeonIncount(b, 3, period.Day) == 1,
                 "失败后重试只扣一次，分别返回各成员的实际余额、次数与尝试号");
+            var batch = repository.LoadDungeonIncounts(a, first.Id);
+            That(batch is [{ Dungeon: 3, Period: var savedPeriod, Usage: { DailyUsed: 1, WeeklyUsed: 1 } }] && savedPeriod == period &&
+                repository.LoadDungeonIncounts(b, first.Id).IsEmpty &&
+                DungeonIncountPolicy.Current(batch[0].Usage, batch[0].Period, period with { Day = period.Day + 1 }) ==
+                    repository.LoadDungeonIncount(a, first.Id, 3, period with { Day = period.Day + 1 }),
+                "批量只读按角色和账号隔离，跨日结果与原单项查询一致");
             var exhausted = new[] { Reserve(a, committed[0].Character), Reserve(b, committed[1].Character) };
             Reject<InvalidOperationException>(() => repository.CommitPartyDungeonEntry(exhausted), "次数耗尽时整队拒绝");
             That(repository.LoadCharacter(a, 0)!.Revision == committed[0].Character.Revision &&

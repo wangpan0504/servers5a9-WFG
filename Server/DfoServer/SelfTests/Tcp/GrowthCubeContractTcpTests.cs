@@ -129,8 +129,8 @@ internal static class GrowthCubeContractTcpTests
         async Task WaitTimer()
         {
             for (int attempt = 0; attempt < 200 && clock.CubeTimerCount == 0; attempt++) await Task.Delay(10);
-            That(clock.CubeTimerCount == 1 && clock.DailyTimerCount == 1 && clock.TimerCount == 2,
-                "已加载副本且有材料时只有一个30秒晶体周期，独立保留一个日界通知，不依赖下一条客户端消耗请求");
+            That(clock.CubeTimerCount == 1 && clock.DailyTimerCount == 2 && clock.TimerCount == 3,
+                "已加载副本且有材料时只有一个30秒晶体周期，同时保留礼盒及服务日唤醒，不依赖下一条客户端消耗请求");
         }
         void EnterDungeon(TcpPeer peer)
         {
@@ -153,7 +153,7 @@ internal static class GrowthCubeContractTcpTests
             clock.Advance(TimeSpan.FromSeconds(1)); Consumed(peer,4);
             peer.Send(535,[0,255]);peer.Expect(1,535,[1,0,255]);peer.Expect(0,901,[0,255]);Player(peer);peer.Barrier();
             clock.Advance(TimeSpan.FromSeconds(60)); peer.Barrier();
-            That(ClearBalance() == 4 && clock.CubeTimerCount == 0 && clock.DailyTimerCount == 1 && clock.TimerCount == 1, "取消后停止晶体周期，保留日界通知，不补扣后台时间");
+            That(ClearBalance() == 4 && clock.CubeTimerCount == 0 && clock.DailyTimerCount == 2 && clock.TimerCount == 2, "取消后停止晶体周期，保留礼盒及服务日通知，不补扣后台时间");
             peer.Send(535,[0,4]);peer.Expect(1,535,[1,0,4]);peer.Expect(0,901,[0,4]);Player(peer);peer.Barrier();
             await WaitTimer();
             peer.Send(7);peer.Expect(1,7,[1]);peer.Expect(0,2);peer.Send(63);peer.Expect(0,53);
@@ -169,14 +169,14 @@ internal static class GrowthCubeContractTcpTests
                 clock.Advance(TimeSpan.FromSeconds(30)); Consumed(peer,remaining);
             }
             string before = Balances();clock.Advance(TimeSpan.FromMinutes(2));peer.Barrier();
-            That(before == Balances() && clock.CubeTimerCount == 0 && clock.DailyTimerCount == 1 && clock.TimerCount == 1, "材料耗尽停止晶体周期并保留日界通知，无忙等或补扣，不自动改写角色选择");
+            That(before == Balances() && clock.CubeTimerCount == 0 && clock.DailyTimerCount == 2 && clock.TimerCount == 2, "材料耗尽停止晶体周期并保留礼盒及服务日通知，无忙等或补扣，不自动改写角色选择");
             That(fixture.Query("SELECT count(*) FROM currency_audit_log WHERE action_name='cube_contract_consume'") is [[5L]],
                 "原生晶体脚本不发周期C2S，服务端只记五次实际扣款");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
             peer.Expect(0,24); FormalDungeonTcpTests.RefreshedQuests(peer); peer.Barrier();
             peer.Send(535,[0,3]); peer.Expect(1,535,[1,0,3]); peer.Expect(0,901,[0,3]); Player(peer); peer.Barrier();
             That(fixture.Query("SELECT selected,cube_type FROM cube_premium") is [[0L,3L]] &&
-                clock.CubeTimerCount == 0 && clock.DailyTimerCount == 1 && clock.TimerCount == 1,
+                clock.CubeTimerCount == 0 && clock.DailyTimerCount == 2 && clock.TimerCount == 2,
                 "退出副本恢复城镇state0后可更换契约颜色，不重新选角且不在城镇消费晶块");
             peer.Send(535,[0,4]); peer.Expect(1,535,[1,0,4]); peer.Expect(0,901,[0,4]); Player(peer); peer.Barrier();
 
@@ -217,10 +217,12 @@ internal static class GrowthCubeContractTcpTests
     sealed class Clock : TimeProvider
     {
         readonly object sync = new();
+        static readonly TimeZoneInfo zone = TimeZoneInfo.CreateCustomTimeZone("cube-contract-test", TimeSpan.FromHours(8), "test", "test");
         // 固定在当前UTC日零点，远离服务日界；商城期限仍按实际UTC生成，保持在本测试时钟之后。
         readonly DateTimeOffset origin = new(DateTimeOffset.UtcNow.Date, TimeSpan.Zero);
         readonly List<ClockTimer> timers = [];
         long milliseconds;
+        public override TimeZoneInfo LocalTimeZone => zone;
         public override long TimestampFrequency => 1000;
         public override long GetTimestamp() { lock(sync) return milliseconds; }
         public override DateTimeOffset GetUtcNow() { lock(sync) return origin.AddMilliseconds(milliseconds); }

@@ -61,6 +61,9 @@ internal sealed partial class GameSession
 
     InventoryResult CommitInventory(Character character, InventoryResult result, ushort qualificationError = 1)
     {
+        if (itemCycles is not null && result.Accepted && result.Plan is { } original)
+            foreach (var use in original.UsedItems)
+                result = itemCycles.ApplyUsage(character, result, 0, use.ItemId, use.Count);
         try
         {
             Selected = InventoryService.Commit(repository, owner, character, result);
@@ -152,6 +155,18 @@ internal sealed partial class GameSession
 
         // 只读资源解析和批量规划不占用所属账号锁；此回调不能写库或修改在线状态。
         var result = plan(character);
+        if (result is { Accepted: true, Plan: { } planned } && UsedItemId(character) is > 0 and var usedId &&
+            !planned.UsedItems.Any(row => row.ItemId == usedId))
+        {
+            long beforeCount = character.Inventory.Items.Where(item => item.Core.ItemId == usedId).Sum(item => (long)item.Core.Count);
+            long afterCount = planned.After.Items.Where(item => item.Core.ItemId == usedId).Sum(item => (long)item.Core.Count);
+            if (beforeCount > afterCount)
+            {
+                // 已明确声明为使用源的计划才记使用次数，移动、出售和邮件扣物不进入此路径。
+                result = result with { Plan = planned.WithAfter(planned.After,
+                    usedItems: planned.UsedItems.Add(new(usedId, checked((int)(beforeCount - afterCount))))) };
+            }
+        }
         return owner.Execute(() =>
         {
             // 换角、接管及 GM/其他业务替换快照后，不能把旧随机结果提交给新的状态，也不自动重抽。

@@ -155,6 +155,8 @@ internal static class SelfTestRunner
         ExperienceConsumableTests.RunCore();
         LegacyStatusConsumableTests.RunCore();
         FatigueConsumableTests.RunCore();
+        FatigueDailyResetTests.RunCore();
+        ServerItemCycleTests.RunCore();
         StackableActionTests.RunCore();
         ActionConsumableTests.RunCore();
         EquipmentPeriodChangeTests.RunCore();
@@ -439,6 +441,7 @@ internal static class SelfTestRunner
         ExperienceConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         LegacyStatusConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         FatigueConsumableTests.Run(towns,pvf,characters,itemResources,sharedSkills);
+        ServerItemCycleTests.RunResource(pvf);
         PermanentGrowthTests.Run(towns,pvf,characters,itemResources,sharedSkills);
         QuestCascadeCompletionTests.Run(towns, pvf, characters, itemResources);
         await QuestCompletionPublicationTests.RunAsync(towns, pvf, characters, itemResources);

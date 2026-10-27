@@ -570,15 +570,53 @@ internal sealed class TcpPeer : IDisposable
                 TestCheck.Bytes(packet.Body, [1], "跨日日界同步屏障ACK");
                 acknowledged = true;
             }
-            else
+            else if (packet is { Kind: 0, Opcode: 541 })
             {
-                TestCheck.That(packet is { Kind: 0, Opcode: 541 } && resetChunks < InitialDailyBoosterPackets.Length,
-                    $"跨日只允许一次屏障ACK与完整541分片，实际{packet.Kind}/{packet.Opcode}");
+                TestCheck.That(resetChunks < InitialDailyBoosterPackets.Length, "跨日礼盒次数分片不能重复");
                 var expected = InitialDailyBoosterPackets[resetChunks++];
                 TestCheck.That(Inventory.DailyBoosterProjectionTests.Decode(expected).Values.All(used => used == 0),
                     "本用例没有消费每日礼盒，跨日完整恢复零次数");
                 TestCheck.Bytes(packet.Body, expected, "跨日541名册、分片顺序及零次数与初始化一致");
             }
+            else ValidateServiceDayNotice(packet);
+        }
+        foreach (var packet in PartyDungeonTcpTests.Drain(this)) ValidateServiceDayNotice(packet);
+    }
+
+    internal void ValidateServiceDayNotice(WirePacket packet)
+    {
+        TestCheck.That(packet.Kind == 0 && fixture is not null && Id != 0, "在线日切通知必须属于当前测试角色");
+        switch (packet.Opcode)
+        {
+            case 36:
+                var fatigue = fixture!.Query("SELECT used,maximum,used_maximum,remaining,context_auxiliary FROM character_fatigue WHERE character_id=$p0", Id).Single();
+                TestCheck.Bytes(packet.Body, Build(w => { foreach (var field in fatigue) w.Write(checked((ushort)Convert.ToInt64(field))); }), "在线疲劳通知与已提交余额一致");
+                break;
+            case 99:
+                TestCheck.Bytes(packet.Body, [1, 0], "在线日切邮件提醒包体");
+                TestCheck.That(fixture!.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0 AND delivery_key LIKE 'server-daily-item:%'", Id) is [[long mails]] && mails > 0,
+                    "邮件提醒对应当前角色已提交的每日补给");
+                break;
+            case 550:
+                TestCheck.That(packet.Body.Length == 6 && U32(packet.Body) > 0 &&
+                    (EnterCounts.Any(row => U32(row) == U32(packet.Body)) || DungeonEnterCounts.ContainsKey((int)U32(packet.Body))),
+                    "在线副本次数属于初始化的当前角色副本且包含完整字段");
+                break;
+            case 1536:
+                TestCheck.That(packet.Body.Length == 5 && packet.Body[2] <= 6 && packet.Body[3] == 0 && packet.Body[4] == 0,
+                    "在线强袭信息保持完整五字节");
+                break;
+            case 1343:
+                TestCheck.That(packet.Body.Length > 7440 && U16(packet.Body) == Id, "冒险团日切视图绑定当前角色");
+                break;
+            case 1349:
+                TestCheck.That(packet.Body.Length == 50 && U16(packet.Body) == Id, "冒险团头顶日切视图绑定当前角色");
+                break;
+            case 21 or 356 or 574:
+                TestCheck.That(packet.Body.Length > 0, "任务日切通知保留完整非空正文");
+                break;
+            default:
+                throw new InvalidOperationException($"FAIL: 未核对的在线日切通知 {packet.Kind}/{packet.Opcode}");
         }
     }
 

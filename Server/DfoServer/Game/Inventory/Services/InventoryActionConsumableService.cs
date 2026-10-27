@@ -34,6 +34,7 @@ internal static class InventoryActionConsumableService
             after = after with { DailyBoosterUses = uses };
             deadline = Math.Min(deadline ?? long.MaxValue, DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds());
         }
-        return new(true, 0, new(character.Inventory, after, "action_consumable_source", new(character, deadline, clock, requirePosition: true)));
+        return new(true, 0, new(character.Inventory, after, "action_consumable_source", new(character, deadline, clock, requirePosition: true))
+        { UsedItems = [new(source.Core.ItemId, 1)] });
     }
 }

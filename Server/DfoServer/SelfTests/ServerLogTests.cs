@@ -23,6 +23,11 @@ internal static class ServerLogTests
                     log.Write(kind, new { Body = "hidden", Connection = 1 });
                 TestCheck.That(output.ToString().Length == 0, "routine packet and hot-path events stay out of stdout");
                 log.Write("server_ready", new { Pid = 1 });
+                log.Write("fatigue_daily_reset", new { Connection = 1, Character = 7, Day = 739916, Remaining = 156, Maximum = 156, Revision = 3 });
+                log.Write("fatigue_daily_reset_failed", new { Connection = 1, Epoch = 2, Error = "fixture" });
+                TestCheck.That(output.ToString().Contains("[INFO] [fatigue_daily_reset] Daily fatigue restored:") &&
+                    output.ToString().Contains("[WARN] [fatigue_daily_reset_failed] Daily fatigue restore failed:"),
+                    "疲劳日切提交与失败使用现有英文纯文本日志，区分INFO和WARN");
                 log.Write("auth_rejected", new { Connection = 1, Failure = "InvalidCredentials" });
                 log.Write("formal_dungeon_entry", new { Connection = 1, Accepted = false });
                 log.Write("formal_quest_continuation_selection", new { Connection = 1, DungeonIndex = 6, Opened = true, SelectionId = 2 });
@@ -128,7 +133,7 @@ internal static class ServerLogTests
                 TestCheck.That(seen.Count == 64, "all concurrent console events are delivered");
             }
             string[] fileLines = File.ReadAllLines(Path.Combine(root, "server.jsonl"));
-            TestCheck.That(fileLines.Length == 98,
+            TestCheck.That(fileLines.Length == 100 && fileLines.Count(line => line.Contains("\"Kind\":\"fatigue_daily_reset", StringComparison.Ordinal)) == 2,
                 "console filtering preserves every structured file event and flushes the tail");
             using (var json = JsonDocument.Parse(fileLines[0]))
                 TestCheck.That(json.RootElement.GetProperty("Kind").GetString() == "send" &&

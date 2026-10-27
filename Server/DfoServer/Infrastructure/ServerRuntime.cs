@@ -139,6 +139,8 @@ internal static class ServerRuntime
         var guildPermits = new Game.Guild.GuildPermitRegistry();
         var guildPermitDelivery = new GuildPermitDelivery(guildPermits);
         var devil = new DevilContractService(itemResources.DevilContracts, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+        var serverItemRules = ServerItemUsageCatalog.Load(pvf);
+        var serverItemCycles = new ServerItemCycleService(serverItemRules, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock);
         var epicProduction = new EpicProductionCatalog(pvf);
         var epicAbilities = new EpicProductionAbilityCatalog(pvf);
         string epicPolicyPath=Path.Combine(options.DataDirectory,"epic-production-compatibility.json");
@@ -179,7 +181,7 @@ internal static class ServerRuntime
         // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
         var guildProjection = new GuildProjection(inventoryProjection, presence);
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
-            debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil);
+            debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, serverItemRules);
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
@@ -441,7 +443,7 @@ internal static class ServerRuntime
             new InventoryExpansionHandler(new InventoryExpansionService(itemResources.Items, clock), inventoryProjection, log),
             new CargoHandler(new InventoryCargoService(itemResources.Items, itemResources.Cargo, itemResources.GoldLimits, clock), inventoryProjection),
             new ShopHandler(
-                new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock),
+                new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock, serverItemRules),
                 cashShop,
                 inventoryProjection, log),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
@@ -558,7 +560,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null, enableLukeRaidStart: lukeStart is not null);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null, enableLukeRaidStart: lukeStart is not null, itemCycles: serverItemCycles);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;

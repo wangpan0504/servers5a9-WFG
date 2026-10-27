@@ -108,6 +108,8 @@ internal sealed partial class GameSession
             if (!planned.Accepted) return Reject("creature-feed-source");
             var source = character.Inventory.Find(request.Position)!;
             if (source.IsExpired(service.Clock.GetUtcNow().ToUnixTimeSeconds())) return Reject("creature-feed-expired");
+            if (planned.Plan is { } feedPlan)
+                planned = planned with { Plan = feedPlan.WithAfter(feedPlan.After, usedItems: [new(request.ItemId, 1)]) };
             var committed = CommitInventory(character, planned);
             if (committed.Accepted) CommitDungeonItemUse(request.ItemId);
             creatureFeedUse = new(request, SelectionEpoch, service.Clock.GetTimestamp(), coolTime);

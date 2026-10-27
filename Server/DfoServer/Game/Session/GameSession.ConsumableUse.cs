@@ -95,7 +95,7 @@ internal sealed partial class GameSession
                 var original = actual.Plan!;
                 var after = ConsumableStatePolicy.Activate(original.After, definition, service.Clock.GetUtcNow().ToUnixTimeMilliseconds());
                 if (after is null) return Reject("effect-capacity");
-                actual = actual with { Plan = new(original.Before, after, original.Reason, original.CharacterPrecondition) };
+                actual = actual with { Plan = original.WithAfter(after) };
             }
             // 秘药的 2 小时冷却只记在自己的 cooltime group（7440/7377 为 99），不挡住组 0/1 的 HP/MP。
             if (!preserve && definition.ExpBonusPermille > 0 && actual.Plan is { } bonusPlan)
@@ -105,7 +105,7 @@ internal sealed partial class GameSession
             var result = CommitInventory(character, actual, 123);
             // 异常返回保留未决标记并由连接生命周期关闭，不自动重做SQL、重发ACK或宣称药效已回滚。
             pendingConsumableUse = null;
-            if (!result.Accepted) return Reject("source-expired");
+            if (!result.Accepted) return Reject(result.RejectReason ?? "source-expired");
             CommitDungeonItemUse(request.ItemId);
             if (freeEffects is { } effects) formalDungeon!.FreeConsumableEffects = effects;
             usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock)
