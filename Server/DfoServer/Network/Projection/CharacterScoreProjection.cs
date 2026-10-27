@@ -14,7 +14,7 @@ internal static class CharacterScoreProjection
     internal static CharacterScoreNoticeResult Send(GameSession session, CharacterScoreNoticeCapture capture,
         Func<CharacterInvestmentSnapshot, CharacterInvestmentResult> calculate,
         Func<CharacterInvestmentSnapshot, long?> boxExpiration,
-        Func<ushort, byte[], string, Func<bool>, bool> send)
+        Func<ushort, byte[], string, Func<bool>, bool> send, string? machineNonce = null)
     {
         var snapshot = capture.Snapshot;
         var score = calculate(snapshot);
@@ -35,7 +35,20 @@ internal static class CharacterScoreProjection
             // 缺失收集箱资源已由真实计算标Partial，摘要允许显示已知分；不将未知期限伪作永久有效。
             if (!score.Partial) throw new InvalidDataException("完整评分缺少收集箱期限", error);
         }
-        var body = CharacterScorePackets.Body(capture.Character.Name, score, out bool truncated);
+        bool truncated = false;
+        byte[] body;
+        if (machineNonce is null) body = CharacterScorePackets.Body(capture.Character.Name, score, out truncated);
+        else
+        {
+            if (score.Status != (score.Partial ? "Partial" : "Complete"))
+                throw new InvalidDataException("机器评分状态不一致");
+            int ttl = session.CharacterScoreRemainingMilliseconds(capture, deadline);
+            if (ttl == 0) return new("expired", false, score.CharacterId, score.CharacterRevision, score.Profile,
+                score.Score, score.Status, score.ScoreCapped, deadline, false, "机器缓存已到期，未入队");
+            string version = score.Profile == CharacterInvestmentScore.ChronicleProfile ? "v2.1" : "v2";
+            body = MachineCharacterScorePackets.Build(machineNonce, score.CharacterId, score.CharacterRevision,
+                "character-investment", version, score.Partial ? "partial" : "complete", score.Score, score.ScoreCapped, ttl);
+        }
         string status = session.CharacterScoreNoticeStatus(capture, deadline);
         if (status == "ready")
         {
