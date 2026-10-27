@@ -41,6 +41,8 @@ internal sealed partial class TagEvildomHandler
         else if (receipt.Result.SwitchTo is not null)
             await context.Notify(NotiPacketType.TAG_TOURNAMENT_CHARACTER_TAG_IN,
                 TagEvildomRunPackets.SwitchNotification(receipt.Result), "tag_evildom_death_switch", Guard);
+        if (!receipt.ImperialArenaMails.IsEmpty)
+            await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "imperial_arena_defeat_mail", Guard);
         return CommandResult.Handled;
     }
 }

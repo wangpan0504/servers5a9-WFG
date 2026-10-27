@@ -120,6 +120,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         long revision = charge.Items is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
         ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore, charge.Weekly);
         CommitTagEvildomAdmission(db, tx, owner, expected, charge);
+        CommitImperialArenaAdmission(db, tx, owner, expected, charge);
         CommitHopeAdmission(db, tx, owner, expected, charge);
         CommitGriefEntry(db, tx, owner, expected, charge, checked(revision + 1));
         WriteSpecialEntry(db, tx, owner, expected, charge, checked(revision + 1));

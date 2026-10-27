@@ -12,7 +12,8 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
     DfoServer.GameWorld.Characters.TutorialCatalog? tutorials = null,
     DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
     DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null, TagEvildomProjection? tagEvildom = null, TagEvildomRunProjection? tagRun = null,
-    DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null, DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null) : IGameCommandModule
+    DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null, DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null,
+    ImperialArenaProjection? imperialArena = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -30,6 +31,24 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
 
     async Task<CommandResult> EnterAsync(GameConnectionContext context, Packet request)
     {
+        if (request.Body.Length == 6 && context.Session.ChannelEntry?.Type == 39 && imperialArena is not null)
+        {
+            uint imperialDungeon = ImperialArenaRequests.Entry(request.Body);
+            var selected = !context.BlocksTownActions && dungeons is not null
+                ? context.Session.BeginImperialArenaSelection(imperialDungeon, dungeons, imperialArena.Catalog, imperialArena.Store) : null;
+            log.Write(selected is null ? "imperial_arena_entry_rejected" : "imperial_arena_selection_opened",
+                new { Connection = context.Id, Dungeon = imperialDungeon, selected?.SelectionId });
+            if (selected is null)
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "imperial_arena_entry_rejected");
+            else if (await projection.DetachForDungeonSelectionAsync(context, selected))
+            {
+                bool Guard() => context.Session.CanPublishDungeonSelection(selected);
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "imperial_arena_selection_opened", Guard);
+                await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(selected.Character.Id), "imperial_arena_selection_state", Guard);
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(0), "imperial_arena_selection_scene", Guard);
+            }
+            return CommandResult.Handled;
+        }
         if (request.Body.Length == 6 && context.Session.ChannelEntry?.Type == 53 && tagEvildom is not null &&
             context.Session.Selected?.Position is { Town: 62, Area: 0 })
         {

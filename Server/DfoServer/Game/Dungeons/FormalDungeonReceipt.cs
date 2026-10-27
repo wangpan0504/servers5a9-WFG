@@ -42,6 +42,8 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     DungeonGroundObject? Drop = null, byte? PreviousLevel = null)
 {
     public Game.Session.TagEvildomClearPreparation? PendingTagEvildomClear { get; init; }
+    public Game.Session.ImperialArenaDeathPreparation? PendingImperialArenaDeath { get; init; }
+    public Game.ImperialArena.ImperialArenaDeathCommit? ImperialArenaDeath { get; init; }
     public Game.Session.TagEvildomClearReceipt? TagEvildomClear { get; init; }
     public ImmutableArray<DungeonGroundObject> Drops { get; init; } = [];
     public uint GainedExperience { get; init; }

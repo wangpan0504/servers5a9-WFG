@@ -23,7 +23,7 @@ internal static class QuestMarriageProgress
 
     public static bool NormalDungeon(DungeonEntryPlan entry) => entry.IsOrdinary && !entry.IsPractice && !entry.IsQuestReplay &&
         !entry.IsTrainingRoom && !entry.IsClassExperience && !entry.IsTournament && !entry.IsAltar && !entry.IsDespair &&
-        !entry.Maze.IsGriefTower && !entry.IsTagEvildom && entry.Hope is null;
+        !entry.Maze.IsGriefTower && !entry.IsTagSystem && entry.Hope is null;
 
     public static bool Matches(DungeonEntryPlan entry, SinglePlayerDungeonRun? run) => NormalDungeon(entry) &&
         run?.MarriagePartyClear is { } party && party.SharedInstanceId != Guid.Empty && party.MarriageId != Guid.Empty &&

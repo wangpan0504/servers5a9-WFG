@@ -33,7 +33,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     TagEvildomRunProjection? tagEvildomRun = null, EvildomWarCatalog? evildomWar = null,
     DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null,
     DfoServer.Game.Raids.ILukeRaidLifecycleStore? lukeLifecycle = null,
-    DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null) : IGameCommandModule
+    DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null, ImperialArenaProjection? imperialArena = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -456,6 +456,11 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             audit = observation;
             result = context.Session.ObserveFormalDungeonDeath(observation,rewards,growth);
         }
+        if (result.PendingImperialArenaDeath is { } pendingImperial)
+        {
+            if (imperialArena is null) throw new InvalidOperationException("帝国竞技场缺少奖励提交服务");
+            result = imperialArena.Commit(context, pendingImperial) ?? throw new InvalidOperationException("帝国竞技场奖励规划期间会话已失效");
+        }
         if (result.PendingTagEvildomClear is { } pendingTag)
         {
             if (tagEvildomRun is null) throw new InvalidOperationException("正式TAG终点缺少奖励提交服务");
@@ -519,7 +524,12 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         {
             foreach (ushort key in result.CulledMonsterKeys)
                 await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(key, [], enteredDungeon), "formal_clear_room_cull", Guard);
-            if (result.TagEvildomClear is { } clearedTag)
+            if (result.ImperialArenaDeath is { } imperialDeath)
+            {
+                if (imperialArena is null) throw new InvalidOperationException("帝国竞技场已提交奖励缺少投影服务");
+                await imperialArena.DeathAsync(context, imperialDeath, Guard);
+            }
+            else if (result.TagEvildomClear is { } clearedTag)
             {
                 if (tagEvildomRun is null) throw new InvalidOperationException("TAG已提交结果缺少投影服务");
                 await tagEvildomRun.ClearAsync(context, clearedTag);
@@ -712,7 +722,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool Guard() => context.Session.CanPublishTravel(receipt);
         await context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack", Guard);
         await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_return_town");
-        if (tag && tagEvildomRun is not null) await tagEvildomRun.ReturnAsync(context, town, receipt);
+        if (tag && context.Session.ChannelEntry?.Type == 39 && imperialArena is not null) await imperialArena.ReturnAsync(context, receipt);
+        else if (tag && tagEvildomRun is not null) await tagEvildomRun.ReturnAsync(context, town, receipt);
         log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "giveup", receipt.Character.Id, receipt.Character.Position });
         return CommandResult.Handled;
     }

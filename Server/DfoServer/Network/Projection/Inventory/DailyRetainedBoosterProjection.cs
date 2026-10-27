@@ -10,7 +10,7 @@ namespace DfoServer.Network.Projection.Inventory;
 
 // 仅保存连接已发视图，次数与角色的唯一真源仍是 Session.Selected.Inventory。
 internal sealed class DailyRetainedBoosterProjection(GameConnectionContext context, BoosterCatalog catalog,
-    ServerLog log, TimeProvider? time = null) : IAsyncDisposable
+    ServerLog log, TimeProvider? time = null, Func<Task>? afterDailyReset = null) : IAsyncDisposable
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
     readonly HashSet<int> everSent = [];
@@ -84,6 +84,7 @@ internal sealed class DailyRetainedBoosterProjection(GameConnectionContext conte
                         ? context.Session.Selected : null);
                     if (selected is null) return;
                     await PublishAsync(selected, true);
+                    if (afterDailyReset is not null) await afterDailyReset();
                     // 复用连接已有的服务日计时任务；好感度日次数仍从当前角色快照投影，不建平行账本。
                     if (!selected.Inventory.NpcFavor.IsEmpty)
                     {

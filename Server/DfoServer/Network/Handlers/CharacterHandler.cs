@@ -15,7 +15,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     ExpertJobScriptCatalog? expertJobs = null, AdventureWeeklyProjection? weekly = null,
     AvatarPresetProjection? avatarPresets = null, AvatarPresetService? avatarPresetService = null,
     DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null, DfoServer.Game.Pvp.PvpPrivateCharacterService? privateCharacters = null,
-    TagEvildomProjection? tagEvildom = null, TimeProvider? time = null, RaidHandler? raids = null) : IGameCommandModule
+    TagEvildomProjection? tagEvildom = null, TimeProvider? time = null, RaidHandler? raids = null, ImperialArenaProjection? imperialArena = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -94,6 +94,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
             await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(selected, expertJobs, includeQualifications: true), "expert_job_info");
         context.Session.MarkReady();
         if (tagEvildom is not null && !await tagEvildom.InitializeAsync(context, projectedCharacter)) return CommandResult.Handled;
+        if (imperialArena is not null && !await imperialArena.InitializeAsync(context, projectedCharacter)) return CommandResult.Handled;
         // 预设容量与列表必须早于窗口打开；与每周配置同属就绪后、任务核对前的固定包序。
         if (avatarPresets is not null) await avatarPresets.DeliverAsync(context);
         await context.Notify(NotiPacketType.NPC_FAVOR_POINT_INFO,

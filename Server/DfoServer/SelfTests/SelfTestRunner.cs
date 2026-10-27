@@ -228,6 +228,7 @@ internal static class SelfTestRunner
         RepositoryBoundaryTests.Run();
         CharacterReadTests.Run();
         TagEvildomConfigurationTests.Run();
+        ImperialArenaTests.Run();
         FiendWarRosterTests.Run();
         RaidRosterFlagTests.Run();
         await SessionPlanningTests.RunAsync();
@@ -314,6 +315,7 @@ internal static class SelfTestRunner
         MarriagePreparationTests.Run(towns, pvf, characters, itemResources);
         MarriageDungeonTests.RunResources(DfoServer.GameWorld.Dungeons.DungeonCatalog.Load(pvf), towns);
         MarriageShopTests.Run(pvf, itemResources);
+        ImperialArenaTests.RunResources(pvf);
         WorldMapHoverTests.RunResources(towns, pvf);
         await RunCoreAsync();
         var sharedQuests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);

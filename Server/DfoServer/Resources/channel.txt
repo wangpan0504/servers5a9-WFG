@@ -67,4 +67,5 @@
 44 `<chn_channel_info_060>` 63 `[dnfaos_free]` 0 0 0 0 0 0 0 0 0 0 0 ``
 45 `<chn_channel_info_061>` 62 `[dnfaos_rank]` 0 0 0 0 0 0 0 0 0 0 0 ``
 46 `<chn_channel_info_057>` 53 `[evildom_gathering]` 0 0 0 0 0 0 0 0 0 0 0 ``
+48 `<chn_channel_info_049>` 39 `[tag_tournament]` 0 0 0 0 0 0 0 0 0 0 0 ``
 [/server]

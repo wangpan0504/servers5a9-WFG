@@ -28,7 +28,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.GameWorld.Dungeons.DungeonIncountCatalog? incounts = null, CharacterLevelProjection? levels = null,
     DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null,
     DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null, Action<GameConnectionContext>? prepareDungeon = null, bool enableLukeRaidStart = false,
-    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null) : IConnectionProtocol
+    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
+    ImperialArenaProjection? imperialArena = null) : IConnectionProtocol
 {
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
@@ -51,7 +52,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
-        if (boosters is not null) context.BoosterUses = new(context, boosters, log, time);
+        if (boosters is not null) context.BoosterUses = new(context, boosters, log, time,
+            imperialArena is null ? null : () => imperialArena.RefreshPeriodAsync(context));
         context.Dazzlement = new(context, log, time);
         CubeContractConsumptionProjection? cubeConsumption = null;
         if (contracts is not null)

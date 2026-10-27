@@ -6,10 +6,10 @@ namespace DfoServer.Game.TagEvildom;
 
 internal sealed record TagEvildomParticipants(Character Primary, Character Standby, long ConfigurationRevision)
 {
-    public void Validate()
+    public void Validate(int minimumLevel = 95)
     {
         if (ConfigurationRevision <= 0 || Primary.Id == 0 || Standby.Id == 0 || Primary.Id == Standby.Id ||
-            Primary.Level < 95 || Standby.Level < 95 || Primary.IsPvpPrivate || Standby.IsPvpPrivate ||
+            minimumLevel is not (90 or 95) || Primary.Level < minimumLevel || Standby.Level < minimumLevel || Primary.IsPvpPrivate || Standby.IsPvpPrivate ||
             !Primary.Learning.Initialized || !Standby.Learning.Initialized)
             throw new InvalidDataException("TAG参与者必须是本次完整编队的两名已就绪95级角色");
         Primary.Learning.Validate();
@@ -32,20 +32,30 @@ internal sealed class TagEvildomRunState
     public const int RevivalDelayMilliseconds = 12_000;
     public TagEvildomParticipants Participants { get; }
     public TagEvildomLifeSnapshot Snapshot { get; private set; }
+    readonly bool imperialArena;
+    readonly int switchCooldownMilliseconds;
+    long nextSwitchAt;
 
-    public TagEvildomRunState(Guid instanceId, TagEvildomParticipants participants)
+    public TagEvildomRunState(Guid instanceId, TagEvildomParticipants participants, bool imperialArena = false, int switchCooldownMilliseconds = 0)
     {
-        participants.Validate();
+        participants.Validate(imperialArena ? 90 : 95);
+        if (switchCooldownMilliseconds < 0 || !imperialArena && switchCooldownMilliseconds != 0)
+            throw new InvalidDataException("TAG切角冷却与玩法不一致");
+        this.imperialArena = imperialArena;
+        this.switchCooldownMilliseconds = switchCooldownMilliseconds;
         if (instanceId == Guid.Empty) throw new InvalidDataException("TAG生命状态必须绑定真实Run实例");
         Participants = participants;
         Snapshot = new(instanceId, 0, 0, [new(true, 0, null), new(true, 0, null)], false, false);
     }
 
-    public TagEvildomLifeResult Switch(byte ordinal)
+    public TagEvildomLifeResult Switch(byte ordinal, long nowMilliseconds = 0)
     {
         if (!Available || ordinal > 1 || !Snapshot.Slots[ordinal].Alive || !Snapshot.Slots[Snapshot.ActiveOrdinal].Alive)
             return Result(DungeonRunOutcome.Rejected);
         if (ordinal == Snapshot.ActiveOrdinal) return Result(DungeonRunOutcome.Duplicate);
+        if (nowMilliseconds < nextSwitchAt || nowMilliseconds > long.MaxValue - switchCooldownMilliseconds)
+            return Result(DungeonRunOutcome.Rejected);
+        nextSwitchAt = nowMilliseconds + switchCooldownMilliseconds;
         Snapshot = Snapshot with { Version = checked(Snapshot.Version + 1), ActiveOrdinal = ordinal };
         return Result(DungeonRunOutcome.Accepted, switchTo: ordinal);
     }
@@ -59,7 +69,7 @@ internal sealed class TagEvildomRunState
         byte other = (byte)(1 - ordinal);
         bool defeated = !Snapshot.Slots[other].Alive;
         var slots = Snapshot.Slots.SetItem(ordinal, new(false, checked(slot.DeathSerial + 1),
-            defeated ? null : checked(nowMilliseconds + RevivalDelayMilliseconds)));
+            defeated || imperialArena ? null : checked(nowMilliseconds + RevivalDelayMilliseconds)));
         if (defeated) slots = slots.SetItem(other, slots[other] with { ReviveAtMilliseconds = null });
         // 原生本机TAG context内的非当前Actor也可发1469，不能只准active槽；死亡备用不打断当前活角色。
         byte? switchTo = !defeated && ordinal == Snapshot.ActiveOrdinal ? other : null;
