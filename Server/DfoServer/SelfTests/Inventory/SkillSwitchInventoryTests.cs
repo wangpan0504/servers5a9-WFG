@@ -270,6 +270,25 @@ internal static class SkillSwitchInventoryTests
             2_000_000_000);
         That(avatarStream.Length == 172,
             "时装登记项在123字节核心后追加RAW30与RAW4可选块");
+
+        var registered = new SkillSwitchInventoryState(77, [new(3, avatar.Uid, avatar.Core.ItemId)]);
+        foreach (ushort skill in new ushort[] { 0, 77 })
+        foreach (var position in new[] { new InventorySlot(InventoryListType.Avatar, 3), new InventorySlot(InventoryListType.Equipment, 3) })
+        {
+            var moved = avatar with { Position = position,
+                Avatar = new() { Socket0 = new(1, 3333001), Color1 = 7, Color2 = 8 } };
+            var snapshot = new InventorySnapshot([moved]);
+            var selection = registered.WithSkill(skill).Reconcile(snapshot);
+            That(selection.Items.SequenceEqual(registered.Items), "取消或重选后穿脱仍保持同UID登记，而非复制装备或删除绑定");
+            byte[] location = SkillSwitchInventoryPackets.Delta(selection, snapshot, [3]);
+            That(location.AsSpan().SequenceEqual(new byte[] { 1, 1, 3, (byte)position.List, 3, 0 }),
+                "穿脱1372使用当前提交位置，不携带未知等级字段");
+            byte[] complete = InventoryPackets.Delta(snapshot, position.List, [position], utcSeconds: 0);
+            That(complete.Length == 168 && BitConverter.ToInt32(complete, 126) == 30 &&
+                BitConverter.ToUInt16(complete, 130) == 1 && BitConverter.ToInt32(complete, 132) == 3333001 &&
+                BitConverter.ToInt32(complete, 160) == 4 && BitConverter.ToUInt16(complete, 164) == 7,
+                "已登记时装的穿戴/包裹完整差量均带孔位与染色，不依赖全量Player补齐");
+        }
     }
 
     static void PresetPersistence()
