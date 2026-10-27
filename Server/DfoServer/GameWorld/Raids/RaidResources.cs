@@ -12,6 +12,7 @@ internal sealed record RaidResources(RaidScript Script, ImmutableArray<RaidDunge
     ImmutableArray<RaidIssue> Issues)
 {
     public RaidDungeonCatalog? EntryCatalog { get; init; }
+    public LukeRaidObjectCatalog? LukeObjects { get; init; }
     public bool ResourcesReady => Issues.IsEmpty && MissingFormalDungeons.IsEmpty && MissingFormalMaps.IsEmpty && MissingItems.IsEmpty;
     // 即使资源完整，计费、候战室迁移及阶段权威输入仍未闭合，不能把此结果当作开战许可。
     public string StartBlocker => !Issues.IsEmpty ? "formal-raid-definition-unsupported" :
