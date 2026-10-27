@@ -195,6 +195,20 @@ internal sealed partial class GameSession
         raid.Actor.IsCurrent && receipt.Prepared.Instance == raid.Battle.Instance && receipt.Prepared.RaidType == raid.Battle.Kind &&
         ReferenceEquals(raid.Receipts.GetValueOrDefault((receipt.Prepared.Phase, receipt.Prepared.Kind))?.Prepared, receipt.Prepared));
 
+    // 原receipt同阶段只读身份，不要求原revision仍是最新；阶段推进后不把旧600装入新窗口。
+    internal (RaidActor Actor, AntonRaidBattleView View)? LukeResultView(RaidRewardReceipt receipt) => owner.Execute<(RaidActor, AntonRaidBattleView)?>(() =>
+    {
+        if (!CanPublishRaidReward(receipt) || raidCombat is not { Battle.Kind: RaidKind.Luke } raid ||
+            raid.Battle.View is not { State: AntonRaidBattleState.Reward, ClockFaulted: false, PhaseExpired: false } view ||
+            view.Phase != receipt.Prepared.Phase || raid.Battle.LukeEligibility(receipt.Prepared.Character, view.Phase) is not { Eligible: true } eligibility ||
+            eligibility.Offers.SingleOrDefault(offer => offer.Kind == receipt.Prepared.Kind && offer.Card == receipt.Prepared.Card) is not { } offer ||
+            !SameLukeResultOffer(offer, receipt.Offer)) return null;
+        return (raid.Actor, view);
+    });
+
+    static bool SameLukeResultOffer(RaidRewardOffer left, RaidRewardOffer right) =>
+        left.Kind == right.Kind && left.Card == right.Card && left.LukeResult == right.LukeResult && left.Grants.SequenceEqual(right.Grants);
+
     public void ConfirmRaidRewardPublished(RaidRewardReceipt receipt)
     {
         var battle = owner.Execute(() =>

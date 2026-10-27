@@ -19,14 +19,14 @@ internal static class LukeRaidStartTcpTests
     public static Task RunAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,false);
     public static Task RunDungeonsAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true);
 
-    public static async Task RunPhasesAsync(ServerOptions source,string root,TcpTestResources resources)
-    {
-        await RunCoreAsync(source,root,resources,true,true);
-        await RunResourceCompletionAsync(source,root,resources);
-    }
+    public static Task RunPhasesAsync(ServerOptions source,string root,TcpTestResources resources) =>
+        RunCoreAsync(source,root,resources,true,true);
 
-    internal static Task RunResourceCompletionAsync(ServerOptions source,string root,TcpTestResources resources) =>
-        RunCoreAsync(source,root,resources,true,true,resourceRewards:true);
+    internal static async Task RunResourceCompletionAsync(ServerOptions source,string root,TcpTestResources resources)
+    {
+        await LukeRewardWriteTcpTests.RunAsync();
+        await RunCoreAsync(source,root,resources,true,true,resourceRewards:true);
+    }
 
     public static Task RunTimersAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,timed:true);
 
@@ -104,7 +104,8 @@ internal static class LukeRaidStartTcpTests
             var phase=policy.ExecutionScript.Phases[1];
             var terminal=phase.Rules[^1];
             terminal=terminal with {Trigger=terminal.Trigger.Select(clause=>clause.DungeonId==5311 ? clause with {DungeonId=5313} : clause).ToImmutableArray()};
-            policy=policy with {Completion=null,ResourceCompletion=LukeResourceCompletionTests.Profile(),
+            policy=policy with {Completion=null,ResourceCompletion=LukeResourceCompletionTests.Profile() with {Phases=LukeResourceCompletionTests.Profile().Phases.SetItem(0,
+                    LukeResourceCompletionTests.Profile().Phases[0] with {LukeResult=new(1,10308804,1,0,0x89abcdef,0)})},
                 ExecutionScript=policy.ExecutionScript with {Phases=policy.ExecutionScript.Phases.SetItem(1,
                     phase with {Rules=phase.Rules.SetItem(phase.Rules.Length-1,terminal)})}};
             var resolved=LukeResourceCompletion.Resolve(policy,definition,resources.ItemResources.Items)!;

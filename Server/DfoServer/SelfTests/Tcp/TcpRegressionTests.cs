@@ -390,6 +390,7 @@ internal static class TcpRegressionTests
         ("luke-raid-start", LukeRaidStartTcpTests.RunAsync),
         ("luke-raid-run", LukeRaidStartTcpTests.RunDungeonsAsync),
         ("luke-raid-phases", LukeRaidStartTcpTests.RunPhasesAsync),
+        ("luke-raid-result600", LukeRaidStartTcpTests.RunResourceCompletionAsync),
         ("luke-raid-timers", LukeRaidStartTcpTests.RunTimersAsync),
         ("luke-raid-phase-timeout", LukeRaidStartTcpTests.RunPhaseTimeoutAsync),
         ("raid-channel-type", RaidChannelTypeTcpTests.RunAsync),

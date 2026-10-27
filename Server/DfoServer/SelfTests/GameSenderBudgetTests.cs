@@ -20,10 +20,39 @@ internal static class GameSenderBudgetTests
         await PhaseDepartureAsync();
         await WriteFailureAsync();
         await WrittenCallbackAsync();
+        await ResultWrittenSequenceAsync();
         await PreparedBodyAsync();
         await QueuedPublicationAsync();
         await QueuedPartyCommandAsync();
         Console.WriteLine($"PASS {TestCheck.Count - checks} game sender budget assertions");
+    }
+
+    static async Task ResultWrittenSequenceAsync()
+    {
+        var owners=new AccountOwners(); using var owner=owners.Acquire("result-owner",()=>{});
+        using var peer=owners.Acquire("result-peer",()=>{});
+        using var stop=new CancellationTokenSource(); using var stream=new HeldStream();
+        await using var sender=new GameConnectionSender(owner,stream,stop,0,(_,_,_,_,_)=>{});
+        var held=sender.Send(0,587,[3,0],"phase");
+        await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        bool resultWritten=false,allowAck=false; int confirmed=0;
+        void PostPair()
+        {
+            sender.TryPost(0,600,[7],"result",()=>!resultWritten,()=>resultWritten=true);
+            sender.TryPost(1,660,[1],"ack",()=>resultWritten&&allowAck,afterWritten:()=>
+                peer.Execute(()=>{confirmed++;return true;}));
+        }
+        using(sender.QueuePublication(()=>true)) PostPair();
+        TestCheck.That(!resultWritten&&confirmed==0,"入队不提前标结果或ACK确认，不等待socket");
+        stream.Release.TrySetResult(); await held; await sender.DrainAsync();
+        TestCheck.That(resultWritten&&confirmed==0&&stream.Frames.Count==2,"结果写成功但ACK门禁拒绝不确认奖励");
+        allowAck=true; PostPair(); await sender.DrainAsync();
+        TestCheck.That(confirmed==1&&stream.Frames.Count==3,"合法重试跳过已written结果但仍写ACK，锁外回调可访问另一owner");
+        TestCheck.Bytes(stream.Frames[2],GameFrame.Build(1,660,2,[1]),"ACK严格排在成功结果帧之后");
+        sender.TryPost(1,660,[1],"callback-failure",afterWritten:()=>throw new IOException("test callback failure"));
+        var barrier=sender.DrainAsync();
+        await FailuresAsync([barrier]); await sender.DisposeAsync();
+        TestCheck.That(sender.PendingBytes==0&&stop.IsCancellationRequested,"回调异常沿原泵关闭路径释放全部预算及等待者");
     }
 
     static async Task PreparedBodyAsync()

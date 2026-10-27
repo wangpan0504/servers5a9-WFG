@@ -17,7 +17,11 @@ internal sealed record RaidRewardDisplayItem(byte RawCode, uint ItemId, ushort D
 internal sealed record RaidRewardDisplayRow(ushort RawOwner, byte Card, ImmutableArray<RaidRewardDisplayItem> Items);
 internal sealed record RaidResultDisplay(byte Result, byte Phase, uint Seconds, ushort RawValue, byte Rank, byte RawFlag);
 internal sealed record RaidRewardOffer(byte Kind, byte Card, ImmutableArray<InventoryReward> Grants,
-    ImmutableArray<RaidRewardDisplayRow> Display);
+    ImmutableArray<RaidRewardDisplayRow> Display)
+{
+    // 历史JSON缺属性保持null；Anton仍仅使用原8B Display。
+    public LukeRewardResultSpec? LukeResult { get; init; }
+}
 internal sealed record RaidPhaseRewardPolicy(string Source, ImmutableArray<RaidRewardOffer> Offers, RaidResultDisplay Result);
 internal sealed record PreparedRaidReward(Guid Instance, int Phase, byte Kind, byte Card, ushort Character,
     string Source, ImmutableArray<InventoryReward> Grants, bool FinalPhase, int Week)

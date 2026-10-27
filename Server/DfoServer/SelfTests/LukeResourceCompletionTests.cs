@@ -27,6 +27,19 @@ internal static class LukeResourceCompletionTests
             "资源周清上限与阶段最少通关分别读取，零门槛不当零资格次数");
         That(result.Phases.Select(p => p.Rewards.Offers.Single().Grants.Single().ItemId).SequenceEqual(new[] {10308804,10304817}) &&
             result.Phases.All(p => p.Rewards.Offers.Single().Grants.Single().Count == 1), "显式单箱策略发原箱，不拆成25/100材料");
+        var explicitSpec = new LukeRewardResultSpec(1,10308804,1,0,0x89abcdef,0);
+        var visibleProfile=profile with {Phases=profile.Phases.SetItem(0,profile.Phases[0] with {LukeResult=explicitSpec})};
+        var visible=LukeResourceCompletion.Create(visibleProfile,raw,Item);
+        That(visible.Phases[0].Rewards.Offers.Single().LukeResult==explicitSpec &&
+            visible.Phases[0].Rewards.Offers.Single().Grants.SequenceEqual(result.Phases[0].Rewards.Offers.Single().Grants),
+            "完整展示配置不改变原资产offer，tail1全部bit冻结");
+        foreach(var bad in new[]{explicitSpec with {RawTail1=null},explicitSpec with {EnchantUpgrade=1},explicitSpec with {ItemId=1},explicitSpec with {DisplayNumber=2}})
+        {
+            bool rejected=false;
+            try { LukeResourceCompletion.Create(visibleProfile with {Phases=visibleProfile.Phases.SetItem(0,visibleProfile.Phases[0] with {LukeResult=bad})},raw,Item); }
+            catch(InvalidDataException){rejected=true;}
+            That(rejected,"缺列、伪附魔与grant不符配置拒绝，不默认或修改资产");
+        }
         var changed = profile with { Phases = profile.Phases.SetItem(0, profile.Phases[0] with { BoxCount = 3, WeeklyEligibilityLimit = 4, Card = 7 }) };
         var adjusted = LukeResourceCompletion.Create(changed, raw, Item);
         That(result.Cycle == profile.Cycle && result.Cycle.Day == DayOfWeek.Sunday && result.Cycle.Time == new TimeOnly(6,0) &&
