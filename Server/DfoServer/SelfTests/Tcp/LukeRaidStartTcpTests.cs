@@ -18,6 +18,7 @@ internal static class LukeRaidStartTcpTests
 {
     public static Task RunAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,false);
     public static Task RunFixedRouteAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,fixedRoute:true);
+    public static Task RunFacilitiesAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,true,facilities:true);
     public static Task RunDungeonsAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true);
 
     public static Task RunPhasesAsync(ServerOptions source,string root,TcpTestResources resources) =>
@@ -95,10 +96,21 @@ internal static class LukeRaidStartTcpTests
         return (definition,policy,phaseClock);
     }
 
-    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false,bool resourceRewards=false,bool fixedRoute=false)
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false,bool resourceRewards=false,bool fixedRoute=false,bool facilities=false)
     {
         var (definition,policy,phaseClock)=Prepare(resources,runDungeons,completePhases,timed,phaseTimeout);
         var raw=definition.Resources!.Script;var catalog=definition.Resources.EntryCatalog!;
+        if(facilities)
+        {
+            // 只用第二个spread设施作为合成终结门，独立验证662→原资格SQL；不冒充原全团规则。
+            var phase=policy.ExecutionScript.Phases[0];
+            policy=policy with {Facilities=new("selftest/original-662-current-scene-client-report",true),
+                ExecutionScript=policy.ExecutionScript with {Phases=policy.ExecutionScript.Phases.SetItem(0,phase with
+                {Rules=phase.Rules.Where(rule=>rule.Trigger.Any(clause=>clause.Tag=="[on enter dungeon]")).ToImmutableArray().Add(
+                    new([new("[on change symbol]",920,null,"[spread sanctum object]",null,null,[]),
+                         new("[if]",921,null,"[spread sanctum object]",null,null,[2])],
+                        [new("[clear phase]",922,null,null,null,null,[])]))})}};
+        }
         if(fixedRoute)
             policy=policy with {Run=policy.Run! with {FixedRouteOptions=new("LukeExplicitCardRoutePolicyV1",
                 LukeFixedCardRoute.Fingerprint(catalog),0,[5054,5055,5056],[0,1,2],3,
@@ -119,7 +131,7 @@ internal static class LukeRaidStartTcpTests
             That(resolved.Completion.Phases.Select(row=>row.Rewards.Offers.Single().Grants.Single().ItemId).SequenceEqual(new[]{10308804,10304817}),
                 "当前真实party_card映射到两只原booster箱，不把RawB100当100个箱");
         }
-        await using var fixture=new TcpTestFixture(source,Path.Combine(root,fixedRoute?"luke-raid-fixed-route":resourceRewards?"luke-raid-resource-rewards":phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
+        await using var fixture=new TcpTestFixture(source,Path.Combine(root,facilities?"luke-raid-facilities":fixedRoute?"luke-raid-fixed-route":resourceRewards?"luke-raid-resource-rewards":phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
         await fixture.StartAsync();
         if(fixedRoute)
         {
@@ -335,7 +347,8 @@ internal static class LukeRaidStartTcpTests
                     is [[long count]]&&count==raw.EntryCost.Count,"满团成功只扣一次门票，失败未留部分扣费");
             }
 
-            if(resourceRewards) LukeRaidRunTcpTests.ResourceCompletion(fixture,peers.ToArray(),raw,full[0].Single(p=>p.Opcode==9).Body,catalog);
+            if(facilities) LukeRaidRunTcpTests.Facilities(fixture,peers.ToArray(),full[0].Single(p=>p.Opcode==9).Body,catalog,resources);
+            else if(resourceRewards) LukeRaidRunTcpTests.ResourceCompletion(fixture,peers.ToArray(),raw,full[0].Single(p=>p.Opcode==9).Body,catalog);
             else if(phaseTimeout) LukeRaidRunTcpTests.PhaseTimeout(fixture,peers.ToArray(),phaseClock!);
             else if(timed) await LukeRaidRunTcpTests.TimersAsync(fixture,peers.ToArray());
             else if(completePhases) LukeRaidRunTcpTests.Phases(fixture,peers.ToArray(),raw,
@@ -382,8 +395,13 @@ internal static class LukeRaidStartTcpTests
         }
         finally{foreach(var peer in peers)peer.Dispose();}
         await fixture.StopAsync();
+        if(facilities)
+            That(fixture.Events().Any(e=>e.GetProperty("Kind").GetString()=="closed"&&
+                e.GetProperty("Detail").GetProperty("Reason").GetString()=="SqliteException"&&
+                e.GetProperty("Detail").GetProperty("Message").GetString()!.Contains("luke facility last member rollback",StringComparison.Ordinal)),
+                "设施失败连接确由末成员资格SQL注入关闭，不以任意断线冒充回滚证据");
         if(phaseTimeout) LukeRaidRunTransactionTests.Run(resources,definition,policy,phaseExpiry:true);
-        if(completePhases&&!resourceRewards)
+        if(completePhases&&!resourceRewards&&!facilities)
         {
             LukeRaidLifecycleTransactionTests.Run(resources,definition,policy);
             using var deletionOwner=owners.Acquire("lukestart4",()=>{});
