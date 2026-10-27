@@ -14,6 +14,76 @@ namespace DfoServer;
 
 internal static class DungeonEntryPlanTests
 {
+    internal static void RunCore()
+    {
+        var start = new DungeonMap("map", new(0, 0), 1001, "map/start.map");
+        var boss = new DungeonMap("boss", new(1, 0), 1002, "map/boss.map");
+        var maze = new DungeonMaze(0, 2, 1, "BB EE", [start.Position], [boss.Position], [start, boss],
+            [new(0, 0), new(0, 100), new(0, -1)]);
+        DungeonRawSection[] sections = [new("story mode", []), new("difficulty size", [new(0, 1)]),
+            new("/story mode", []), new("difficulty level", [new(0, 1), new(0, 1), new(0, 1), new(0, 1), new(0, 0)])];
+        var definition = new DungeonDefinition(17, "dungeon/quest.dgn", 1, 20, [maze], sections);
+        var accepted = new ActiveMainQuest(0, 100, 1) { AcceptanceId = Guid.NewGuid() };
+        var character = new Character(1, 0, "Difficulty", 0, new(38, 1, 1, 1), null)
+            { Level = 95, ActiveMainQuests = [accepted] };
+        foreach (string grade in new[] { "[epic]", "[side]" })
+        {
+            var quest = QuestEligibilityTests.Quest(100) with { Grade = grade, Condition = "[clear map]", SubType = -1,
+                IntData = [1002], DungeonIndex = 17 };
+            for (byte difficulty = 0; difficulty <= 5; difficulty++)
+            {
+                bool ready = DungeonEntryPlan.TryCreate(definition, character, 17, 100, difficulty, out var plan, out var reason, quest: quest);
+                That(ready == (difficulty < 4) && (ready
+                    ? plan!.Difficulty == difficulty && plan.Maze == maze && plan.BossMap == boss && plan.QuestAcceptanceId == accepted.AcceptanceId
+                    : reason == "difficulty-unsupported"), "主线与支线沿原连接接受开放难度，地下城难度表和协议上限仍拒绝越界");
+            }
+            foreach (var blocked in new[]
+            {
+                definition with { RawSections = [.. sections, new("designate dungeon difficulty", [new(0, 0)])] },
+                definition with { DungeonType = "tower of death" },
+                definition with { RawSections = sections.Where(row => row.Tag != "/story mode").ToArray() },
+                definition with { RawSections = sections.Select(row => row.Tag == "difficulty size" ? row with { Tokens = [new(7, 1)] } : row).ToArray() }
+            })
+                That(!DungeonEntryPlan.TryCreate(blocked, character, 17, 100, 1, out _, out var reason, quest: quest) &&
+                    reason == "difficulty-unsupported", "指定难度、特殊类型与非法故事块不能借普通任务难度扩展放行");
+            That(!DungeonEntryPlan.TryCreate(definition, character with { CompletedQuests = [100], ActiveMainQuests = [] },
+                17, 100, 1, out _, out _, quest: quest, isReplay: true), "回放继续限定普通难度");
+        }
+        var ordinary = definition with { Mazes = [maze with { QuestConnectionTokens = [] }] };
+        That(DungeonEntryPlan.TryCreate(ordinary, character with { ActiveMainQuests = [] }, 17, 0, 0, out var normal, out _) &&
+            normal is { IsOrdinary: true, Difficulty: 0, RouteQuestId: 0 }, "无任务普通入场不变");
+        That(!DungeonEntryPlan.TryCreate(definition with { Mazes = [maze with { QuestConnectionTokens = [new(0, 0), new(0, 100), new(0, 2)] }] },
+            character, 17, 100, 1, out _, out var connectionReason) && connectionReason == "quest-maze-unavailable",
+            "非-1连接第三字段保留精确难度匹配，不擅自解释成最低难度");
+    }
+
+    static void QuestDifficultyRoutes(DungeonCatalog catalog, QuestCatalog quests)
+    {
+        var failures = new List<string>();
+        foreach (var sample in new[] { (Dungeon: 101, Quest: 3708), (Dungeon: 104, Quest: 3749), (Dungeon: 86, Quest: 3571) })
+        {
+            var quest = quests.Get(sample.Quest);
+            var accepted = new ActiveMainQuest(0, checked((ushort)sample.Quest),
+                QuestClearEligibility.IsSingleMap(quest) ? 1 : QuestHuntProgress.Initial(quest))
+                { AcceptanceId = Guid.NewGuid() };
+            var character = new Character(1, 0, "Difficulty", 0, new(38, 1, 1, 1), null)
+                { Level = 95, ActiveMainQuests = [accepted] };
+            var source = catalog.Get(sample.Dungeon).Mazes.Single(row => row.ConnectsQuest((uint)sample.Quest));
+            foreach (uint requested in new uint[] { (uint)sample.Quest, 0 })
+            foreach (byte difficulty in new byte[] { 0, 1, 2, 3 })
+            {
+                bool ready = DungeonEntryPlan.TryCreate(catalog, character, (uint)sample.Dungeon, requested, difficulty,
+                    out var plan, out var reason, quest: requested == 0 ? null : quest, quests: quests);
+                if (!ready) failures.Add($"{sample.Dungeon}/{sample.Quest}/{requested}/{difficulty}: {reason}");
+                else That(plan!.Difficulty == difficulty && plan.RouteQuestId == sample.Quest &&
+                    plan.Maze.SourceOrdinal == source.SourceOrdinal && plan.Maze.SameLayout(source) &&
+                    plan.QuestAcceptances.Single() == accepted,
+                    "任务难度变化保留原任务连接、完整房间布局与接取身份");
+            }
+        }
+        That(failures.Count == 0, "冒险任务地下城沿原路线接受自身已开放难度：" + string.Join("; ", failures));
+    }
+
     static void SeaTrainParentClearMap(DungeonCatalog catalog, QuestCatalog quests, Character basis)
     {
         var parent = quests.Get(3578);
@@ -63,9 +133,9 @@ internal static class DungeonEntryPlanTests
                 That(DungeonEntryPlan.TryCreate(catalog,incomplete,102,request,0,out var story,out _,
                         quest: request == 0 ? null : quest,quests: quests) && story is { RouteQuestId: 3735, IsOrdinary: false } &&
                     story.StartMap.Id == 76510,"未达成、材料不足或过期、无接取身份均不能凭裸state0改普通路线");
-                That(!DungeonEntryPlan.TryCreate(catalog,incomplete,102,request,3,out _,out var rejected,
-                        quest: request == 0 ? null : quest,quests: quests) && rejected == "difficulty-unsupported",
-                    "未完成收集的剧情路线继续使用原难度限制");
+                That(DungeonEntryPlan.TryCreate(catalog,incomplete,102,request,3,out var harder,out _,
+                        quest: request == 0 ? null : quest,quests: quests) && harder is { RouteQuestId: 3735, Difficulty: 3, StartMap.Id: 76510 },
+                    "未完成收集在开放难度使用原任务路线，不因难度绕过材料检查");
             }
         }
         That(ready.ActiveMainQuests.Single() == active && ready.CompletedQuests.Length == 0 &&
@@ -139,8 +209,8 @@ internal static class DungeonEntryPlanTests
         That(DungeonEntryPlan.TryCreate(catalog,pending,51,3344,0,out var story,out var storyReason,quest: quest,quests: quests) &&
             story is { RouteQuestId: 3344, IsOrdinary: false, Maze.ConnectionQuestId: 3344 } && story.BossMap.Id == 76329,
             "未达成仍走剧情迷宫：" + storyReason + "/" + story?.BossMap.Id);
-        That(!DungeonEntryPlan.TryCreate(catalog,pending,51,3344,1,out _,out var storyRejected,quest: quest,quests: quests) &&
-            storyRejected == "difficulty-unsupported","未达成的剧情难度仍只有普通");
+        That(DungeonEntryPlan.TryCreate(catalog,pending,51,3344,1,out var harderStory,out _,quest: quest,quests: quests) &&
+            harderStory is { RouteQuestId: 3344, Difficulty: 1, BossMap.Id: 76329 },"未达成任务在冒险难度保留原剧情终点");
         That(!DungeonEntryPlan.TryCreate(catalog,ready,51,3344,0,out _,out var bare,quest: quest,quests: quests) &&
             bare == "quest-condition-not-pending","没有清图凭据的条件0不能进入");
         That(DungeonEntryPlan.TryCreate(catalog,ready,51,0,0,out var locked,out _,quests: quests) &&
@@ -159,8 +229,8 @@ internal static class DungeonEntryPlanTests
             cycle is { RouteQuestId: 0, IsOrdinary: true, QuestId: 3560 } && cycle.Maze.QuestConnectionTokens.Count == 0,
             "顺序清图子任务达成未交后进入循环图冒险难度：" + cycleReason);
         var pendingClear = cleared with { ActiveMainQuests = [clearActive with { ConditionState = 1 }] };
-        That(!DungeonEntryPlan.TryCreate(catalog,pendingClear,82,3560,1,out _,out var pendingReason,quest: clear,quests: quests) &&
-            pendingReason == "difficulty-unsupported","未达成的顺序清图子任务仍锁剧情普通难度");
+        That(DungeonEntryPlan.TryCreate(catalog,pendingClear,82,3560,1,out var pendingPlan,out _,quest: clear,quests: quests) &&
+            pendingPlan is { RouteQuestId: 3560, Difficulty: 1, Maze.ConnectionQuestId: 3560 },"未达成的顺序清图子任务在冒险难度保留自身连接路线");
 
         var hunt = quests.Get(3472);
         var huntActive = new ActiveMainQuest(2,3472,0) { AcceptanceId = Guid.NewGuid() };
@@ -172,8 +242,8 @@ internal static class DungeonEntryPlanTests
             "顺序猎杀子任务计数归零后进入循环图冒险难度：" + huntReason);
         uint pendingScalar = QuestHuntProgress.Initial(hunt);
         var pendingHunt = hunted with { ActiveMainQuests = [huntActive with { ConditionState = pendingScalar }] };
-        That(pendingScalar != 0 && !DungeonEntryPlan.TryCreate(catalog,pendingHunt,158,3472,1,out _,out var huntPending,quest: hunt,quests: quests) &&
-            huntPending == "difficulty-unsupported","猎杀尚未归零时仍锁剧情普通难度");
+        That(pendingScalar != 0 && DungeonEntryPlan.TryCreate(catalog,pendingHunt,158,3472,1,out var huntPending,out _,quest: hunt,quests: quests) &&
+            huntPending is { RouteQuestId: 3472, Difficulty: 1, Maze.ConnectionQuestId: 3472 },"猎杀尚未归零时在冒险难度保留原子任务路线");
     }
 
     static void DeathTowerCompanionPolicy(PvfArchive pvf, DungeonCatalog catalog)
@@ -206,6 +276,8 @@ internal static class DungeonEntryPlanTests
 
     public static void Run(PvfArchive pvf)
     {
+        QuestDifficultyRoutes(global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf),
+            global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf));
         int checks = Count;
         GriefTowerResourceTests.Run(pvf);
         Issue704Routes(pvf);

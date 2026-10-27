@@ -30,14 +30,14 @@ internal static partial class FormalDungeonTcpTests
             string assets = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
             string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue");
             SelectMap(peer);
-            byte[] selection = Selection(1);
+            byte[] selection = Selection(3);
             BinaryPrimitives.WriteUInt32LittleEndian(selection,151);
             BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),3240);
             string beforeRejection = fixture.Snapshot();
             peer.Send(16,selection);
             peer.Expect(1,16,[0,9,0,0]);
             peer.Barrier();
-            That(fixture.Snapshot() == beforeRejection,"英雄冢剧情难度1拒绝后保持角色、任务与资产，连接继续可用");
+            That(fixture.Snapshot() == beforeRejection,"英雄冢未开放难度3拒绝后保持角色、任务与资产，连接继续可用");
             selection[4] = 0;
             for (int attempt = 1; attempt <= 2; attempt++)
             {
