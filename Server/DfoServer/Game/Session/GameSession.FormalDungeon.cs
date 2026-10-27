@@ -213,7 +213,7 @@ internal sealed partial class GameSession
             }
         }
         // #233 强袭：只有 ACK1547 授权过的任务副本可绕过选图地图选项，改以主副本(7300)在当前选图中核对。
-        var assault = practice ? null : owner.Execute(() => CurrentAssaultAuthorization(expected, dungeonId, questId));
+        var assault = practice ? null : owner.Execute(() => CurrentAssaultAuthorization(expected, dungeonId));
         if (assault is not null)
         {
             if (retry is not null || classExperience) return RejectFormal("assault-retry-or-class-experience");

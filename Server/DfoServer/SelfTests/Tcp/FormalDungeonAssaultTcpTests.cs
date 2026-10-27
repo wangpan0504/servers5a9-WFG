@@ -17,13 +17,20 @@ internal static partial class FormalDungeonTcpTests
     // 本用例走真实 1547→15→16 强袭入场、逐房清图与结算，锁定强袭 72{1,1} 同样走 ACK72{1,1}→ACK15→NOTI3 state1→完整NOTI27。
     public static async Task RunAssaultResultMenuAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        await RunAssaultResultMenuAsync(source, root, resources, 3, 7323, 0);
+        await RunAssaultResultMenuAsync(source, root, resources, 2, 7321, 6084);
+    }
+
+    static async Task RunAssaultResultMenuAsync(ServerOptions source, string root, TcpTestResources resources,
+        int day, uint mission, ushort questId)
+    {
         string? previousDay = Environment.GetEnvironmentVariable(AssaultModePackets.DayIndexOverrideVariable);
-        // day3 隐藏任务固定为7323（与实机同一张图），避免依赖运行当天的星期。
-        Environment.SetEnvironmentVariable(AssaultModePackets.DayIndexOverrideVariable, "3");
+        // 固定覆盖原菜单现场与接取6084后的周二隐藏关，不依赖运行当天的星期。
+        Environment.SetEnvironmentVariable(AssaultModePackets.DayIndexOverrideVariable, day.ToString());
         try
         {
             await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled },
-                Path.Combine(root, "assault-result-menu"), gm: true, resources: resources);
+                Path.Combine(root, "assault-result-menu-" + day), gm: true, resources: resources);
             await fixture.StartAsync();
             using var peer = Open(fixture);
             peer.Create("AssaultMenu");
@@ -33,6 +40,8 @@ internal static partial class FormalDungeonTcpTests
             var towns = resources.Towns;
             var area = towns.Areas[(54, 2)];
             var done = new HashSet<int> { 6119 };
+            if (questId != 0)
+                done.UnionWith(resources.Quests.Get(questId).Definition!.PrerequisiteGroups.SelectMany(group => group));
             done.UnionWith(area.Quests);
             if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
             done.UnionWith(area.Map(done).DungeonGates.First(gate => gate.Conditions.Length == 0).Quests);
@@ -61,15 +70,48 @@ internal static partial class FormalDungeonTcpTests
             for (int read = 0; read < 16 && peer.Read() is not { Kind: 0, Opcode: 24 }; read++) { }
             peer.Barrier();
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[54L, 2L]], "fixture 角色位于 54/2");
+            if (questId != 0)
+            {
+                peer.Send(31, [31, 0, (byte)questId, (byte)(questId >> 8)]);
+                That(peer.Expect(1, 31).Body[0] == 1, "真实接取强袭特殊补给6084");
+                QuestLifecycleTcpTests.DrainNotifications(peer);
+            }
             SelectMap(peer, incompleteHellQuest: true);
+            byte[] selection = Convert.FromHexString("9B1C00000000000000FFFF0000000000000000000000000000");
+            BinaryPrimitives.WriteUInt32LittleEndian(selection, mission);
+            BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16), questId);
+            if (questId != 0)
+            {
+                string before = fixture.Snapshot();
+                peer.Send(16, selection);
+                peer.Expect(1, 16, [0, 9, 0, 0]);
+                peer.Barrier();
+                That(fixture.Snapshot() == before, "已接任务但没有1547授权不能直接进入隐藏mission或扣费");
+            }
             peer.Send(1547, [0x9F, 0x1C, 0, 0]);
-            peer.Expect(1, 1547, [1, 0x9B, 0x1C, 0, 0, 0, 0, 0, 0]);
-            peer.Send(15, [0x9B, 0x1C, 0, 0]);
+            peer.Expect(1, 1547, Build(w => { w.Write((byte)1); w.Write(mission); w.Write(0u); }));
+            if (questId != 0)
+            {
+                string before = fixture.Snapshot();
+                foreach (var (dungeon, quest) in new (uint, uint)[] { (7320, questId), (3, 0), (mission, 65535) })
+                {
+                    byte[] invalid = (byte[])selection.Clone();
+                    BinaryPrimitives.WriteUInt32LittleEndian(invalid, dungeon);
+                    BinaryPrimitives.WriteUInt32LittleEndian(invalid.AsSpan(16), quest);
+                    peer.Send(16, invalid);
+                    peer.Expect(1, 16, [0, 9, 0, 0]);
+                    peer.Barrier();
+                    That(fixture.Snapshot() == before, "强袭授权不能用于其它mission、非强袭越区图或伪造任务号");
+                }
+            }
+            peer.Send(15, Build(w => w.Write(mission)));
             peer.Expect(1, 15, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
             peer.Barrier();
-            peer.Send(16, Convert.FromHexString("9B1C00000000000000FFFF0000000000000000000000000000"));
-            That(U32(peer.Expect(0, 28).Body) == 7323, "强袭隐藏任务按实机1547/15/16进入7323");
+            peer.Send(16, selection);
+            var information = peer.Read();
+            That(information is { Kind: 0, Opcode: 28 } && U32(information.Body) == mission,
+                $"普通3次后强袭隐藏关{mission}携带任务{questId}应正式进图，实际kind={information.Kind} opcode={information.Opcode} body={Convert.ToHexString(information.Body)}");
             byte[] map = peer.Expect(0, 29).Body;
             // 入场提交扣除10个诞生之芽后的库存差量通知。
             QuestLifecycleTcpTests.DrainNotifications(peer);
@@ -98,6 +140,15 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(46, DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 99)); QuestLifecycleTcpTests.DrainNotifications(peer);
             That(fixture.Query("SELECT clear_count,hidden_count FROM character_assault_daily WHERE character_id=$p0", peer.Id) is [[3L, 1L]],
                 "强袭隐藏任务通关提交当日隐藏计数");
+            if (questId != 0)
+            {
+                That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", peer.Id, questId) is [[2L]],
+                    "隐藏关真实暗影格鲁姆死亡推进6084，保留任务接取身份");
+                peer.Send(46, DfoServer.DungeonSettlementProtocolTests.Report(peer.Id, 99));
+                QuestLifecycleTcpTests.DrainNotifications(peer);
+                That(fixture.Query("SELECT clear_count,hidden_count FROM character_assault_daily WHERE character_id=$p0", peer.Id) is [[3L, 1L]],
+                    "重复结算不再次增加隐藏或普通强袭计数");
+            }
             long attempt = Attempt();
             // 实机先发两次焦点 72{2,x}，再点 F11 选其它地下城。
             peer.Send(72, [2, 2]); peer.Expect(1, 72, [1, 2, 2]);
@@ -111,6 +162,17 @@ internal static partial class FormalDungeonTcpTests
             selectNotice[8] = 1;
             peer.Expect(0, 27, selectNotice);
             peer.Barrier();
+            if (questId != 0)
+            {
+                foreach (uint parent in new uint[] { 7300, 7327 })
+                {
+                    peer.Send(1547, Build(w => w.Write(parent)));
+                    peer.Expect(1, 1547, [0, 1, 0]);
+                }
+                peer.Barrier();
+                That(fixture.Query("SELECT clear_count,hidden_count FROM character_assault_daily WHERE character_id=$p0", peer.Id) is [[3L, 1L]],
+                    "通关后普通3次和隐藏1次上限继续拒绝1547");
+            }
             string returned = fixture.Snapshot();
             peer.Send(72, [1, 1]); peer.Send(72, [1, 3]); peer.Send(72, [1, 2]);
             peer.Barrier();
