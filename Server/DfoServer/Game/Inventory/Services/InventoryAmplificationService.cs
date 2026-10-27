@@ -24,12 +24,13 @@ internal sealed class InventoryAmplificationService(ItemCatalog items, Amplifica
             items.Get(source.Core.ItemId), items.Get(target.Core.ItemId), enhancements.Allows(target.Core.ItemId, EnhancementMode.Amplify),
             amplifications.UsesCharacterLevel(target.Core.ItemId), !definition.Village && definition.SeriaRoom &&
                 towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet()),
-            Random.Shared.NextInt64, out receipt);
+            Random.Shared.NextInt64, out receipt, Clock);
     }
 
     internal static InventoryResult Plan(Character character, AmplificationRequest request, long now,
         AmplificationMaterial definition, AmplificationRules rules, ItemTemplate sourceTemplate, ItemTemplate targetTemplate,
-        bool allowsTarget, bool usesCharacterLevel, bool inRoom, Func<long, long> roll, out AmplificationReceipt? receipt)
+        bool allowsTarget, bool usesCharacterLevel, bool inRoom, Func<long, long> roll, out AmplificationReceipt? receipt,
+        TimeProvider? clock = null)
     {
         receipt = null;
         var before = character.Inventory;
@@ -125,7 +126,7 @@ internal sealed class InventoryAmplificationService(ItemCatalog items, Amplifica
         if (target.ExpireTime > 0) deadline = deadline is null ? target.ExpireTime : Math.Min(deadline.Value, target.ExpireTime);
         receipt = new(definition.Operation, request.MaterialSlot, source.Core.Count - definition.Count, request.TargetSlot,
             resultType, value, newLevel, definition.Operation == AmplificationOperation.GoldClear && target.Core.Upgrade != 0);
-        return new(true, 0, new(before, after, "equipment_amplification_option", new(character, deadline)));
+        return new(true, 0, new(before, after, "equipment_amplification_option", new(character, deadline, clock)));
     }
 
     static InventorySlot MainSlot(short slot) => new(InventoryListType.Main, slot);

@@ -3,6 +3,10 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Mailbox;
+using DfoServer.Game.Accounts;
+using DfoServer.Persistence;
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using DfoServer.GameWorld.Items;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
@@ -174,10 +178,60 @@ internal static class AmplificationTests
         var timePlan = Plan(timed, use, out _);
         That(timePlan.Accepted && timePlan.Plan!.CharacterPrecondition!.Matches(timed, now + 9) &&
             !timePlan.Plan.CharacterPrecondition.Matches(timed, now + 10), "源期限冻结到提交前置条件，到期等号拒绝");
+        ClockCommit(role, sourceTemplate, targetTemplate, definition, rules, use);
         var lastRole = role with { Inventory = new([source with { Core = source.Core with { Value = 1 } }, target]) };
         var last = Plan(lastRole, use, out receipt);
         That(last.Accepted && last.Plan!.After.Find(MainSlot(65)) is null && receipt!.MaterialRemaining == 0 &&
             !Plan(role with { Inventory = last.Plan.After }, use, out _).Accepted, "耗尽源清槽，重放拒绝且不重复赋予或扣除");
+    }
+
+    static void ClockCommit(Character seed, ItemTemplate book, ItemTemplate gear, AmplificationMaterial definition,
+        AmplificationRules rules, AmplificationRequest request)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-amplification-clock-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string database = Path.Combine(root, "game.db");
+            var repository = new CharacterRepository(database);
+            var owners = new AccountOwners();
+            foreach (short slot in new short[] { request.MaterialSlot, request.TargetSlot })
+            {
+                var clock = new ConsumableUseSessionTests.FakeClock();
+                using var owner = owners.Acquire("amplification-clock-" + slot, () => { });
+                int expires = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 10);
+                var role = repository.Create(owner, new("Clock" + slot, seed.Position, seed.Return)
+                {
+                    Job = seed.Job, Level = seed.Level,
+                    Inventory = seed.Inventory with { Items = seed.Inventory.Items.Select(item => item with
+                        { Uid = 0, Core = item.Position.Index == slot ? item.Core with { ExpireTime = expires } : item.Core }).ToImmutableArray() }
+                });
+                var result = InventoryAmplificationService.Plan(role, request, clock.GetUtcNow().ToUnixTimeSeconds(), definition,
+                    rules, book, gear, true, false, false, _ => 0, out _, clock);
+                var guard = result.Plan!.CharacterPrecondition!;
+                That(result.Accepted && guard.Matches(role) &&
+                    !guard.Matches(role with { Revision = role.Revision + 1 }) && !guard.Matches(role with { Level = 74 }),
+                    "异次元源或目标准确绑定原角色与注入时钟，角色资格变化拒绝旧计划");
+                string before = Snapshot();
+                clock.Advance(TimeSpan.FromSeconds(9));
+                That(guard.Matches(role), "异次元提交使用原时钟，截止前一秒仍有效");
+                clock.Advance(TimeSpan.FromSeconds(1));
+                That(!guard.Matches(role), "异次元提交沿注入时钟在源或目标到期等号拒绝");
+                Reject<InventoryQualificationExpiredException>(() => InventoryService.Commit(repository, owner, role, result),
+                    "异次元文件库不能用系统时钟放行已经到期的规划");
+                That(Snapshot() == before, "到期拒绝保留完整核心、UID、钱包、金币、revision及审计");
+
+                string Snapshot()
+                {
+                    using var connection = new SqliteConnection("Data Source=" + database + ";Pooling=False");
+                    connection.Open();
+                    using var command = connection.CreateCommand();
+                    command.CommandText = "SELECT (SELECT count(*) FROM inventory_audit_log)||':'||" +
+                        "(SELECT count(*) FROM currency_audit_log)||':'||(SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items')";
+                    return JsonSerializer.Serialize(repository.LoadCharacter(owner, role.Slot)) + ":" + command.ExecuteScalar();
+                }
+            }
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     internal static AmplificationRules Rules() => new(55,
