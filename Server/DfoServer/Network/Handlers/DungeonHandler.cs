@@ -331,6 +331,13 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main, [.. receipt.ChannelConsumedSlots]), "channel_town_entry_items", Guard);
         }
+        var currencySlots = receipt.EntryChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).OfType<short>()
+            .Select(slot => new InventorySlot(InventoryListType.Main, slot)).ToArray();
+        if (currencySlots.Length != 0)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main, currencySlots), "dungeon_entry_currencies", Guard);
+        if (receipt.EntryChangedCurrencies.Any(kind => kind is >= CurrencyKind.Cera and <= CurrencyKind.HappyTokenCera))
+            await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(receipt.Character.Inventory.AccountWallet), "dungeon_entry_cera", Guard);
         foreach (var enterCount in receipt.EnterCounts.IsDefault ? [] : receipt.EnterCounts)
             await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(enterCount.Dungeon, enterCount.Daily, enterCount.Weekly),
                 "dungeon_enter_count_after_entry", Guard);
@@ -347,6 +354,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await DungeonEnterCountProjection.RefreshGriefAsync(context, dungeons, Guard);
         else if (receipt.SpecialEntry is { Kind: DungeonSpecialEntryKind.Despair })
             await DungeonEnterCountProjection.RefreshDespairAsync(context, dungeons, Guard);
+        if (receipt.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Guard, entranceOnly: false);
         return CommandResult.Handled;
 
         async Task<CommandResult> RejectAsync()

@@ -97,7 +97,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
     });
 
     DungeonEntryCommit CommitDungeonEntryInTransaction(SqliteConnection db, SqliteTransaction tx,
-        AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge, out DungeonTransientFatigue? cachedFatigue)
+        AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge, out DungeonTransientFatigue? cachedFatigue,
+        DungeonIncountUsage? partyCounted = null)
     {
         var state = ReservationState(expected, nextObjectKey);
         var identity = charge.Identity;
@@ -113,6 +114,21 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             fatigueAfter = fatigueBefore.ConsumeAtEntry(charge.Fatigue);
         }
         DungeonIncountCommit? counted = null;
+        if (charge.Dimension is { } dimension)
+        {
+            var wantedUsage = partyCounted is null ? dimension.DailyBefore :
+                new DungeonIncountUsage(checked(dimension.DailyBefore.DailyUsed + 1), checked(dimension.DailyBefore.WeeklyUsed + 1));
+            if (dimension.DungeonId != charge.DungeonId ||
+                partyCounted is { } actualUsage && actualUsage != wantedUsage ||
+                ReadDungeonIncount(db, tx, expected.Id, owner.Account, dimension.Catalog.DailyRow.CountKey, dimension.Period) != wantedUsage)
+                throw new InvalidOperationException("异界入场计数已变化，不能提交旧抽样");
+            if (dimension.HiddenCharge is { } hidden)
+            {
+                if (ReadDungeonIncount(db, tx, expected.Id, owner.Account, hidden.Dungeon, hidden.Period) != hidden.ExpectedUsage ||
+                    CommitDungeonIncountInTransaction(db, tx, owner, expected, hidden.Dungeon, hidden.Period, hidden.Row, null, [], true) is null)
+                    throw new InvalidOperationException("异界隐藏领主周额度已变化");
+            }
+        }
         if (charge.Incount is { } incount)
             counted = CommitDungeonIncountInTransaction(db, tx, owner, expected,
                 incount.Dungeon, incount.Period, incount.Row, null, incount.Account, incount.Increment) ??
@@ -171,8 +187,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
                 var counted = count is null ? null : CommitDungeonIncountInTransaction(db, tx, r.Owner, r.Expected,
                     count.Dungeon, count.Period, count.Row, null, count.Account, count.Increment, check: true);
                 if (count is not null && counted is null) throw new InvalidOperationException("组队成员入场次数已变化");
-                var character = CommitDungeonEntryInTransaction(db, tx, r.Owner, r.Expected, r.NextObjectKey, r.Charge, out fatigue[i]);
-                result[i] = new(character.Character, counted is not null && count is { Increment: true, Row: { } row }
+                var character = CommitDungeonEntryInTransaction(db, tx, r.Owner, r.Expected, r.NextObjectKey, r.Charge, out fatigue[i], counted?.Usage);
+                result[i] = new(character.Character, r.Charge.Dimension is null && counted is not null && count is { Increment: true, Row: { } row }
                     ? [.. DungeonIncountPolicy.Views(row, counted.Usage)] : []);
             }
             tx.Commit();

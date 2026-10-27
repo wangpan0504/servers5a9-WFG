@@ -103,6 +103,12 @@ internal sealed partial class CharacterRepository
                 throw new InvalidDataException("宠物通关成长不是同一角色当前装备实例的冻结计划");
             WriteInventory(db, tx, owner, expected.Id, creatureInventory, creatureInventory.After);
         }
+        if (prepared.AncientGate is { } ancient)
+        {
+            if (prepared.Fact.DungeonId is < 7101 or > 7107 || run.Entry.IsPractice ||
+                !DailyBoosterUsage.Same(current.Inventory.DailyBoosterUses, ancient.Before))
+                throw new InvalidOperationException("远古奖励进度的角色快照已变化");
+        }
         var result = reward.TotalExperience == 0 && run.Entry.DisableMonsterAndClearExperience
             ? CharacterGrowthPlan.WithoutExperience(expected, catalog) : CharacterGrowthPlan.AddExperience(expected, reward.TotalExperience, catalog);
         if (!result.Success)
@@ -116,8 +122,9 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$revision", plan.Revision);
         command.Parameters.AddWithValue("$level", plan.TargetLevel);
         command.Parameters.AddWithValue("$experience", checked((long)plan.Learning.Experience));
+        command.Parameters.AddWithValue("$dailyBooster", JsonSerializer.Serialize(prepared.AncientGate?.After ?? current.Inventory.DailyBoosterUses));
         command.CommandText = """
-            UPDATE characters SET level=$level,experience=$experience,revision=revision+1
+            UPDATE characters SET level=$level,experience=$experience,revision=revision+1,daily_booster_usage=$dailyBooster
             WHERE id=$id AND account=$account AND revision=$revision
             """;
         if (command.ExecuteNonQuery() != 1)
@@ -248,7 +255,7 @@ internal sealed partial class CharacterRepository
             Card = prepared.Card, Options = prepared.Options,
             GriefReward = prepared.Grief?.Reward, MailId = griefMail,
             BlackDiamond = prepared.Options?.BlackDiamond,
-            Inventory = prepared.Grief?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true }
+            Inventory = prepared.AncientGate is not null || prepared.Grief?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true }
                 ? new(expected.Inventory, committed.Inventory, prepared.Grief is null ? "creature_experience" : "grief_tower_reward") : null
         };
     });

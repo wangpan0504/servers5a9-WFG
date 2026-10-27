@@ -202,6 +202,8 @@ internal static class TcpRegressionTests
         ("hero-tomb-entry", FormalDungeonTcpTests.RunHeroTombAsync),
         ("assault-result-menu", FormalDungeonTcpTests.RunAssaultResultMenuAsync),
         ("operation-hope", FormalDungeonTcpTests.RunOperationHopeAsync),
+        ("otherverse-ancient", FormalDungeonTcpTests.RunOtherverseAncientAsync),
+        ("party-otherverse-ancient", PartyDungeonTcpTests.RunOtherverseAncientAsync),
         ("special-normal-entry", FormalDungeonTcpTests.RunSpecialNormalAsync),
         ("dungeon-entry-plan", (_, _, resources) =>
         {
@@ -377,6 +379,7 @@ internal static class TcpRegressionTests
         ("material-exchange", MaterialExchangeTcpTests.RunAsync),
         ("recipe-craft", RecipeCraftTcpTests.RunAsync),
         ("upgrade-chronicle", UpgradeChronicleTcpTests.RunAsync),
+        ("chronicle-enchant", ChronicleEnchantTcpTests.RunAsync),
         ("daily-retained-booster", DailyRetainedBoosterTcpTests.RunAsync),
         ("booster", BoosterTcpTests.RunAsync),
         ("magic-box", MagicBoxTcpTests.RunAsync),

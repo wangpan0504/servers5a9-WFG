@@ -35,4 +35,10 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
     public DungeonCardOptions? Options { get; } = options;
     public DfoServer.Game.Inventory.Models.InventoryPlan? CreatureInventory { get; } = creatureInventory;
     public GriefTowerClearReward? Grief { get; } = grief;
+    public AncientGateClear? AncientGate { get; private set; }
+    public void FreezeAncientGate(AncientGateClear? value)
+    {
+        if (AncientGate is not null) return;
+        AncientGate = value;
+    }
 }

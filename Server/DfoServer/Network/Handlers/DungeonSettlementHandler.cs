@@ -143,6 +143,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "formal_clear_lucky_star", Guard);
         if (result.Inventory is { } inventory)
             await (inventoryProjection ?? throw new InvalidOperationException("免费牌缺少库存投影")).RefreshAsync(context, inventory);
+        if (receipt.Entry.DungeonId is >= 7101 and <= 7107 && !receipt.Entry.IsPractice)
+            await DimensionEntranceProjection.AncientAsync(context, Guard, entranceOnly: false);
         if (result.AssaultClear is { } assaultClear)
         {
             log.Write("assault_mode_clear_committed", new { Connection = context.Id, assaultClear.Counts.Clears, assaultClear.Counts.Hidden,

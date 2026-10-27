@@ -346,10 +346,12 @@ internal static class ServerRuntime
             log.Write("startup", new { Stage = "Harlem material rewards", State = "complete", Rule = HarlemMaterialDropPolicy.Rule,
                 materialRules.Enabled, Configured = configuredMaterials is not null });
             var hopeRewards = new OperationHopeRewardPolicy(new OperationHopeRewardCatalog(pvf,itemResources.Items),itemResources.Items);
+            var dimensionRewards = new DimensionRewardPolicy(incounts?.Dimension ?? throw new InvalidDataException("Missing dimension dungeon catalog"),
+                new DimensionRewardCatalog(pvf, itemResources.Items), itemResources.Items);
             log.Write("startup",new { Stage="Operation Hope rewards",State="complete",Rule=OperationHopeRewardPolicy.Rule });
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
-                new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards);
+                new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards);
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
             int epicPermille = 1000;
             string? fragmentRate = Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE");
@@ -402,7 +404,7 @@ internal static class ServerRuntime
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
-                prices: DungeonCardPriceCatalog.Load(pvf),hopeRewards:hopeRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons);
+                prices: DungeonCardPriceCatalog.Load(pvf),hopeRewards:hopeRewards,dimensionRewards:dimensionRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops,crackRewards);
         }
         else
@@ -553,7 +555,8 @@ internal static class ServerRuntime
                 new FatigueConsumableHandler(new Game.Characters.FatigueConsumableService(itemResources.Items, towns, clock), inventoryProjection, log), rentalHandler, creatureHandler,
                 new InventoryPeriodExtensionService(itemResources.Items, towns, clock), new InventoryMileageService(itemResources.Items, towns, clock),
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler,
-                new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler),
+                new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler,
+                new DimensionEntryTicketService(itemResources.Items, clock)),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log,
                 new EquipmentTransportService(itemResources.Items.Get, itemResources.Items.ActionConsumable,

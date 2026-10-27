@@ -13,6 +13,18 @@ internal sealed record WirePacket(byte Kind, ushort Opcode, byte[] Body, bool Pr
 // 独立实现测试帧与 CRC，不能调用服务端的 Frame、Parser、Builder 来自证。
 internal sealed partial class TcpPeer : IDisposable
 {
+    public byte[]? DimensionEntranceState { get; private set; }
+    public uint? AncientGateEnergy { get; private set; }
+    internal void ReadAncientGate(WirePacket packet)
+    {
+        TestCheck.That(packet is { Kind: 0, Opcode: 772, Body.Length: 4 }, "772按完整u32能量合同接收");
+        AncientGateEnergy = U32(packet.Body, 0);
+    }
+    internal void ReadDimensionEntrance(WirePacket packet)
+    {
+        TestCheck.That(packet is { Kind: 0, Opcode: 815, Body.Length: 9 }, "815按完整u32/u32/u8合同接收");
+        DimensionEntranceState = packet.Body;
+    }
     public static readonly (byte Kind, ushort Opcode)[] Entry =
         [(1, 4), (0, 1382), (0, 2), (0, 2), (0, 13), (0, 988), (0, 356), (0, 13), (0, 13), (0, 950), (0, 53), (0, 427), (0, 1152), (0, 3), (0, 1153), (0, 22), (0, 23), (0, 24), (0, 1379), (0, 124)];
     public static readonly (byte Kind, ushort Opcode)[] PreparedEntry =
@@ -229,10 +241,12 @@ internal sealed partial class TcpPeer : IDisposable
         // 选图附带的状态通知逐项校验后记录，550须按两祭坛及悲叹当前楼层逐项匹配真实账本；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
-                packet.Opcode is 550 or 1608))
+                packet.Opcode is 550 or 1608 or 815 or 772))
         {
             if (packet.Opcode == 1536) AssaultDailyInfo = packet.Body;
             else if (packet.Opcode == 1608) ExpectDazzlementBindings(packet);
+            else if (packet.Opcode == 815) ReadDimensionEntrance(packet);
+            else if (packet.Opcode == 772) ReadAncientGate(packet);
             else if (packet.Opcode == 1303)
             {
                 GriefTowerClearInfo = packet.Body;
@@ -962,6 +976,16 @@ internal sealed partial class TcpPeer : IDisposable
                 {
                     TestCheck.That(packet.Body.Length == 6, "NOTI 550 固定 6 字节");
                     enterCounts.Add(packet.Body);
+                    packet = Read();
+                }
+                if (packet is { Kind: 0, Opcode: 815 })
+                {
+                    ReadDimensionEntrance(packet);
+                    packet = Read();
+                }
+                if (packet is { Kind: 0, Opcode: 772 })
+                {
+                    ReadAncientGate(packet);
                     packet = Read();
                 }
                 TestCheck.That(enterCounts.Count is 0 or 16 && enterCounts.All(body => U32(body, 0) is not (11006 or 11007)) && enterCounts.Select(body => U32(body, 0)).Distinct().Count() == enterCounts.Count,

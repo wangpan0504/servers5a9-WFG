@@ -121,10 +121,12 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         Exception? entryFailure = null;
         try
         {
+            // 共用物理路线时只在全员尚有隐藏周额度才抽隐藏，避免一人满额就随机拒绝整队。
+            bool allowDimensionHidden = party.Members.All(member => member.Actor.Session.CanUseDimensionHidden(dungeon));
             foreach (var member in party.Members.OrderBy(m => ReferenceEquals(m.Actor.Session, leader) ? 0 : 1))
             {
                 var plan = member.Actor.Session.PreparePartyDungeon(dungeon, difficulty, catalog, rooms, drops, items, pieces,
-                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards);
+                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, allowDimensionHidden);
                 if (plan is null) return [];
                 prepared.Add((member, plan));
             }

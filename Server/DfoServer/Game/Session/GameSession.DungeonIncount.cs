@@ -3,6 +3,8 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Game.Session;
 
@@ -17,17 +19,48 @@ internal sealed record DungeonEntryCost(int DungeonId, DungeonIncountRow? Incoun
 {
     public ImmutableArray<AccountIncountCharge> Account { get; init; } = [];
     public bool ChargeOnClear { get; init; }
+    public ImmutableArray<ItemMaterialCost> AdditionalMaterials { get; init; } = [];
+    public ItemMaterialCost[] Materials => [.. Consume is { } first ? new[] { new ItemMaterialCost(first.ItemId, first.Count) } : [], .. AdditionalMaterials];
 }
 
 internal sealed partial class GameSession
 {
+    internal bool CanUseDimensionHidden(uint dungeon) => owner.Execute(() => Selected is { } character && dungeon <= int.MaxValue &&
+        incounts?.Dimension is { } dimension && dimension.Contains((int)dungeon) && DungeonIncountPolicy.CanEnter(dimension.HiddenRow,
+            repository.LoadDungeonIncount(owner, character.Id, DimensionDungeonCatalog.Entrance, IncountPeriod(dimension.DailyRow.CountKey))));
+
+    public uint? AncientGateEnergy(bool entranceOnly = false) => owner.Execute(() => Selected is { } character &&
+        (!entranceOnly || character.Position.Town == 17 && character.Position.Area is 3 or 5)
+        ? (uint?)AncientGateProgression.Energy(character.Inventory, IncountNow()) : null);
+
+    public (uint BasicUsed, uint ExtraRemaining, byte HiddenUsed)? DimensionEntranceInfo(bool entranceOnly = false) => owner.Execute(() =>
+    {
+        if (Selected is not { } character || incounts?.Dimension is not { } dimension ||
+            entranceOnly && !(character.Position.Town == 17 && character.Position.Area is 2 or 4))
+            return ((uint, uint, byte)?)null;
+        var period = IncountPeriod(dimension.DailyRow.CountKey);
+        var used = repository.LoadDungeonIncount(owner, character.Id, dimension.DailyRow.CountKey, period);
+        var hidden = repository.LoadDungeonIncount(owner, character.Id, DimensionDungeonCatalog.Entrance, period);
+        int extra = DimensionEntryTicketService.Extra(character.Inventory, IncountNow());
+        return ((uint)Math.Min(used.DailyUsed, dimension.DailyLimit),
+            (uint)Math.Max(0, extra - Math.Max(0, used.DailyUsed - dimension.DailyLimit)),
+            (byte)Math.Min(hidden.WeeklyUsed, dimension.HiddenWeeklyLimit));
+    });
+
+    public InventoryResult UseDimensionEntryTicket(DfoServer.Game.Inventory.Models.InventorySlot position,
+        DimensionEntryTicketService service) => PlanAndCommitInventory(character => incounts?.Dimension is { } dimension
+            ? service.Plan(character, position, dimension.ExtraLimit, towns.IsRoom(character.Position, character.CompletedQuests.ToHashSet())
+                ? "[seria room]" : "[village]") : InventoryResult.Reject(19), 19, usedItem: position);
+
     DateTimeOffset IncountNow() => (timeProvider ?? TimeProvider.System).GetUtcNow();
 
     DungeonIncountPeriod IncountPeriod(int dungeon) =>
         DungeonIncountPolicy.Period(IncountNow(), incounts?.WeeklyResetDay(dungeon) ?? DungeonIncountCatalog.DefaultWeeklyResetDay);
 
     DungeonIncountRow? IncountRow(uint dungeon) =>
-        incounts is not null && dungeon <= int.MaxValue && incounts.Find((int)dungeon) is { Limit: > 0 } row ? row : null;
+        incounts is not null && dungeon <= int.MaxValue && incounts.Find((int)dungeon) is { Limit: > 0 } row
+            ? incounts.Dimension?.Contains((int)dungeon) == true && Selected is { } character
+                ? row with { Limit = row.Limit + DimensionEntryTicketService.Extra(character.Inventory, IncountNow()) } : row : null;
 
     // 进入 dungeon 要记的账号次数：自身（Check）+ [enter add incount dungeon index] 连带副本（只记不拦）。
     ImmutableArray<AccountIncountCharge> AccountCharges(int dungeon)
@@ -58,7 +91,9 @@ internal sealed partial class GameSession
                 var usage = stored.TryGetValue(row.CountKey, out var saved) ?
                     DungeonIncountPolicy.Current(saved.Usage, saved.Period, period) : default;
                 // 两祭坛由专用入场账本投影；通用账本从不扣这两项，不能随后以满次数覆盖真实剩余。
-                result.AddRange(DungeonIncountPolicy.Views(row, usage)
+                result.AddRange(DungeonIncountPolicy.Views(incounts.Dimension?.Contains(row.CountKey) == true
+                    ? row with { Limit = row.Limit + DimensionEntryTicketService.Extra(character.Inventory, IncountNow()) } : row,
+                    repository.LoadDungeonIncount(owner, character.Id, row.CountKey, IncountPeriod(row.CountKey)))
                     .Where(count => count.Dungeon is not (11006 or 11007)));
             }
         return result;
@@ -88,19 +123,29 @@ internal sealed partial class GameSession
         // 频道专属城镇已由 ChannelTownDungeonRequirement 核对持有；其它城镇在这里按入场前背包核对，缺物品拒绝，与 400000016 相同。
         // 第三列为 0（只持有）在普通城镇仍不核对：只有频道专属城镇启用持有检查。
         var consume = definition.RequiredItem is { Flag: not 0, Count: > 0 } required ? required : null;
+        ImmutableArray<ItemMaterialCost> additional = [];
+        if (definition.IsAncientInfinite)
+        {
+            // 正式远古脚本同时要求无色与无尽的永恒；不能经单行RequiredItem属性变成免费入场。
+            var requiredRows = definition.RequiredItemRows;
+            if (requiredRows.IsEmpty || requiredRows.Any(item => item.Third != 1))
+            { rejection = "ancient-required-items-invalid"; return null; }
+            consume = new(requiredRows[0].ItemId, requiredRows[0].Count, 1);
+            additional = [.. requiredRows.Skip(1).Select(item => new ItemMaterialCost(item.ItemId, item.Count))];
+        }
         if (consume is not null && pieces is null)
         {
             rejection = channelTown ? "channel-town-required-item-unverifiable" : "dungeon-required-item-unverifiable";
             return null;
         }
-        if (consume is not null && !channelTown && !DfoServer.Game.Inventory.Services.InventoryMaterialConsumptionService.Plan(expected.Inventory,
-                [new ItemMaterialCost(consume.ItemId, consume.Count)], pieces!, DateTimeOffset.UtcNow).Accepted)
+        if (consume is not null && (!channelTown || definition.IsAncientInfinite) && !DfoServer.Game.Inventory.Services.InventoryMaterialConsumptionService.Plan(expected.Inventory,
+                [new ItemMaterialCost(consume.ItemId, consume.Count), .. additional], pieces!, IncountNow()).Accepted)
         {
             rejection = "dungeon-required-item:" + consume.ItemId;
             return null;
         }
         return row is null && account.IsEmpty && consume is null ? null
-            : new(id, row, period, consume, pieces) { Account = account, ChargeOnClear = incounts.ChargesOnClear(id) };
+            : new(id, row, period, consume, pieces) { Account = account, ChargeOnClear = incounts.ChargesOnClear(id), AdditionalMaterials = additional };
     }
 
     // [sub incount on clear dungeon]：通关结算提交后补记次数，不再拦截（本次已经打完）；周期按通关时刻重算。

@@ -33,6 +33,7 @@ internal sealed class DungeonIncountCatalog
     public ImmutableArray<(int Entered, int Linked)> EnterAdd { get; }
     public ImmutableHashSet<int> SubOnClear { get; }
     public ImmutableDictionary<int, int> SpecialWeeklyResetDay { get; }
+    public DimensionDungeonCatalog? Dimension { get; private init; }
 
     DungeonIncountCatalog(ImmutableArray<DungeonIncountRow> rows, ImmutableArray<AccountIncountRow> accountRows, ImmutableDictionary<int, int> resetInfo,
         ImmutableArray<(int, int)> enterAdd, ImmutableHashSet<int> subOnClear, ImmutableDictionary<int, int> specialWeekly)
@@ -45,7 +46,8 @@ internal sealed class DungeonIncountCatalog
         SpecialWeeklyResetDay = specialWeekly;
     }
 
-    public DungeonIncountRow? Find(int dungeon) => Rows.FirstOrDefault(row => row.Dungeons.Contains(dungeon));
+    public DungeonIncountRow? Find(int dungeon) => Rows.FirstOrDefault(row => row.Dungeons.Contains(dungeon)) ??
+        (Dimension?.Contains(dungeon) == true ? Dimension.DailyRow : null);
     public AccountIncountRow? FindAccount(int dungeon) => AccountRows.FirstOrDefault(row => row.Dungeon == dungeon);
     public bool ChargesOnClear(int dungeon) => SubOnClear.Contains(dungeon);
     // 角色次数的每周重置星期：[special weekly reset day] 有该副本时用它（星期编码为假设），否则默认周四。
@@ -53,7 +55,16 @@ internal sealed class DungeonIncountCatalog
     // 进入 dungeon 时一起记账号次数的其它副本（[enter add incount dungeon index] 成对，去重、去自身）。
     public IEnumerable<int> Linked(int dungeon) => EnterAdd.Where(pair => pair.Entered == dungeon && pair.Linked != dungeon).Select(pair => pair.Linked).Distinct();
 
-    public static DungeonIncountCatalog Load(PvfArchive archive) => Parse(archive.ReadTokens(Path), archive.ResolveString);
+    public static DungeonIncountCatalog Load(PvfArchive archive)
+    {
+        var catalog = Parse(archive.ReadTokens(Path), archive.ResolveString);
+        if (!archive.Contains(DimensionDungeonCatalog.Path)) return catalog;
+        var dimension = new DimensionDungeonCatalog(archive);
+        if (catalog.Rows.Any(row => row.Dungeons.Any(dimension.Contains)))
+            throw new InvalidDataException("异界专表与通用次数重复登记");
+        return new(catalog.Rows, catalog.AccountRows, catalog.ResetInfo,
+            catalog.EnterAdd, catalog.SubOnClear, catalog.SpecialWeeklyResetDay) { Dimension = dimension };
+    }
 
     internal static DungeonIncountCatalog Parse(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
     {

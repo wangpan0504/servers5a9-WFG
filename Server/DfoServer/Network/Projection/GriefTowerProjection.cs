@@ -16,6 +16,8 @@ internal static class GriefTowerProjection
         await DungeonEnterCountProjection.RefreshAsync(context, catalog, guard, onlyForSelection: true);
         await DazzlementTowerProjection.BindingsAsync(context, guard);
         RaidCombatProjection.Selection(context, guard);
+        await DimensionEntranceProjection.RefreshAsync(context, guard);
+        await DimensionEntranceProjection.AncientAsync(context, guard);
         await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
             DungeonPackets.SelectionNotice(legendDungeon,grief?.Layer ?? 0,context.Session.DespairSelectionLayer(),
                 context.Session.IncompleteHellQuestMemberSlots()),eventName,guard);

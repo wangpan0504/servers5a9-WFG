@@ -73,6 +73,8 @@ internal sealed record DungeonEntryPlan(
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
     public OperationHopeAdmission? Hope { get; init; }
+    public DimensionDungeonAdmission? Dimension { get; init; }
+    public (byte Job, byte Grow)? DimensionRewardProfession { get; init; }
     public (byte Job,byte Grow)? HopeRewardProfession { get; init; }
     public MarriageDungeonAdmission? Marriage { get; init; }
     public bool UsesRoomFatigue => UsesFatigue && StartFatigue == 0 && Hope is null;
@@ -127,7 +129,7 @@ internal sealed record DungeonEntryPlan(
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
         bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null,
         IReadOnlyDictionary<int,int>? bossWeights = null,
-        DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null)
+        DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null, DimensionDungeonAdmission? dimension = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -147,14 +149,14 @@ internal sealed record DungeonEntryPlan(
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
             maze => imperialArena is null ? catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty,bossWeights) :
                 catalog.ResolveImperialArenaMaze(definition, maze, imperialArena.Route.Opponents(imperialArena.Mode).Select(row => row.MapId).ToArray()),allowClearedTerminalQuest:allowClearedTerminalQuest,
-            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze,imperialArena:imperialArena);
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze,imperialArena:imperialArena,dimension:dimension);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null,
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null, DimensionDungeonAdmission? dimension = null,
         DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null)
     {
         plan = null;
@@ -443,6 +445,16 @@ internal sealed record DungeonEntryPlan(
             candidates = definition.Mazes.Where(row => row.SourceOrdinal == raidMaze && row.QuestConnectionTokens.Count == 0).ToArray();
             routeQuest = 0; layoutQuest = null;
         }
+        if (definition.IsModernDimension && (questId == 0 || ordinaryHunt))
+        {
+            if (dimension is not null && (dimension.DungeonId != dungeonId || isReplay || practice || hellParty))
+            { reason = "dimension-admission-mismatch"; return false; }
+            // 隐藏路线由入场资格抽样；没有资格的纯规划/练习只能取普通路线，不能随机绕过周上限。
+            candidates = definition.Mazes.Where(row => row.QuestConnectionTokens.Count == 0 &&
+                row.IsDimensionHiddenBoss == (dimension?.HiddenBoss == true)).ToArray();
+        }
+        if (definition.IsAncientInfinite && questId == 0)
+            candidates = definition.Mazes.Where(row => row.QuestConnectionTokens.Count == 0 && !row.IsAncientInfiniteVariant).ToArray();
         if (candidates.Length != 1)
         {
             reason = candidates.Length == 0 ? "route-maze-unavailable" : "route-maze-ambiguous";

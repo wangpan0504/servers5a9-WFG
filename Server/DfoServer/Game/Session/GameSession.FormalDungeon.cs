@@ -149,7 +149,7 @@ internal sealed partial class GameSession
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false, bool hellParty = false,
         bool hellLegend = false, bool sealDoor = false, bool practice = false,
         CrackDimensionRewardServices? crackRewards = null, PartyDungeonPreparation? shared = null,
-        uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false)
+        uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true)
     {
         if (HasRaidDungeonAdmission || dungeonId <= int.MaxValue && raidDungeonAdmission?.Catalog.Find((int)dungeonId) is not null)
             return PrepareRaidDungeon(dungeonId, questId, difficulty, rooms, draw, requiredCharacter,
@@ -270,6 +270,22 @@ internal sealed partial class GameSession
             selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id || selection.OriginPosition != expected.Position))
             return RejectFormal("practice-selection-missing");
         var approvedPartyRoute = shared?.Session.PreparedParty(shared).Dungeon.Entry.PartyRoute;
+        DimensionDungeonAdmission? dimension = null;
+        if (!practice && dungeonId <= int.MaxValue && incounts?.Dimension is { } dimensionCatalog && dimensionCatalog.Contains((int)dungeonId))
+        {
+            if (hellParty || classExperience) return RejectFormal("dimension-mode-conflict");
+            var period = IncountPeriod(dimensionCatalog.DailyRow.CountKey);
+            var usage = repository.LoadDungeonIncount(owner, expected.Id, dimensionCatalog.DailyRow.CountKey, period);
+            var hidden = repository.LoadDungeonIncount(owner, expected.Id, DimensionDungeonCatalog.Entrance, period);
+            int extraEntries = DimensionEntryTicketService.Extra(expected.Inventory, IncountNow());
+            if (!DungeonIncountPolicy.CanEnter(dimensionCatalog.DailyRow with { Limit = dimensionCatalog.DailyLimit + extraEntries }, usage)) return RejectFormal("dimension-daily-exhausted");
+            bool hiddenBoss = shared?.Session.PreparedParty(shared).Dungeon.Entry.Dimension?.HiddenBoss ??
+                (allowDimensionHidden && DungeonIncountPolicy.CanEnter(dimensionCatalog.HiddenRow, hidden) &&
+                 (draw ?? RandomNumberGenerator.GetInt32)(10000) < dimensionCatalog.HiddenRate(usage.DailyUsed + 1));
+            if (hiddenBoss && !DungeonIncountPolicy.CanEnter(dimensionCatalog.HiddenRow, hidden))
+                return RejectFormal("dimension-hidden-weekly-exhausted");
+            dimension = new((int)dungeonId, dimensionCatalog.Tiers[(int)dungeonId], hiddenBoss, period, usage, hidden, dimensionCatalog, extraEntries);
+        }
         var marriageAdmission = MarriageDungeonAdmission.Applies(dungeonId)
             ? PrepareMarriageDungeonAdmission(catalog, expected, questId, difficulty,
                 practice || hellParty || hellLegend || sealDoor || classExperience, partyAdmission) : null;
@@ -345,9 +361,10 @@ internal sealed partial class GameSession
             hellParty: hellParty,hellLegend: hellLegend,practice: practice,
             // 频道专属城镇的选图副本（超时空之战 400000016 的 [boss map] 6 0 只写 `map`）按客户端规则把 Boss 坐标格当 Boss 图；其他副本不变。
             bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute,tagEvildom:tagEntry?.Admission,tagMaze:tagEntry?.MazeOrdinal,
-            bossWeights: bossBuff?.Definition.Weights.ToDictionary(row => row.MapId, row => row.Weight), imperialArena: imperialEntry?.Admission))
+            bossWeights: bossBuff?.Definition.Weights.ToDictionary(row => row.MapId, row => row.Weight), imperialArena: imperialEntry?.Admission,dimension:dimension))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         if (marriageAdmission is not null) entry = entry! with { Marriage = marriageAdmission };
+        if (dimension is not null) entry = entry! with { Dimension = dimension, DimensionRewardProfession = (expected.Job, expected.GrowType) };
         // 普通卢克目前只证实单人Run额度；组队共享/个人语义未闭合，不把十二次解释成每人十二次。
         // 祭坛、绝望之塔等原有限额仍由EntryPlan设置，不受这项窄范围投影影响。
         if (!partyAdmission && entry!.IsOrdinary && catalog.Get(checked((int)dungeonId)) is { IsOrdinaryLuke:true } luke)
@@ -532,7 +549,7 @@ internal sealed partial class GameSession
             if (!participantAuthority.BindTo(participant)) return RejectFormal("party-participantAuthority-bind-failed");
             var participantGround = source.Ground.ForPartyParticipant(participant, source.Route.Rooms);
             var participantDropPlans=source.DropPlans;
-            if (entry.Hope is not null && source.PrepareDrops is not null)
+            if ((entry.Hope is not null || entry.Dimension is not null) && source.PrepareDrops is not null)
             {
                 // 物理怪物和预留key共用；每人专属装备池按本人的冻结职业准备。
                 var preparePersonal=source.PrepareDrops(participantEntry);
@@ -800,19 +817,20 @@ internal sealed partial class GameSession
         System.Collections.Immutable.ImmutableArray<InventorySlot> channelSlots = [];
         System.Collections.Immutable.ImmutableArray<DungeonEnterCount> enterCounts = [];
         DungeonEntryIncount? entryIncount = null;
+        if (installing.Entry.Dimension is { } dimension && dimension.Period != IncountPeriod(dimension.Catalog.DailyRow.CountKey)) return null;
         if (installing.ChannelCost is { } cost)
         {
             // 入场提交时按当前背包重算材料；次数已满或材料不足则整个入场作废。
             InventoryPlan? consumption = null;
-            if (cost.Consume is { } consume)
+            if (cost.Consume is not null)
             {
                 if (cost.Pieces is null) return null;
-                var spent = InventoryMaterialConsumptionService.Plan(character.Inventory,
-                    [new ItemMaterialCost(consume.ItemId, consume.Count)], cost.Pieces, DateTimeOffset.UtcNow);
+                var spent = InventoryMaterialConsumptionService.Plan(entryItems?.After ?? character.Inventory,
+                    cost.Materials, cost.Pieces, IncountNow());
                 if (!spent.Accepted || spent.Plan is not { } plan) return null;
                 consumption = plan;
             }
-            if (installing.Entry.Hope is not null || installing.Entry.LostLand is not null)
+            if (installing.Entry.Hope is not null || installing.Entry.LostLand is not null || installing.Entry.Dimension is not null)
             {
                 // 专用入场在末段仍可能失败，次数和材料必须随尝试号预留一起回滚。
                 if (consumption is not null && entryItems is not null) return null;
@@ -890,9 +908,9 @@ internal sealed partial class GameSession
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             var entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                 new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                    prepared.Weekly,installing.GriefAdmission) { OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, ImperialArena = installing.ImperialArenaEntry?.Admission });
+                    prepared.Weekly,installing.GriefAdmission) { OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
             committed = entryCommit.Character;
-            if (entryIncount is { Row: { } countRow, Increment: true } && entryCommit.IncountUsage is { } actualUsage)
+            if (installing.Entry.Dimension is null && entryIncount is { Row: { } countRow, Increment: true } && entryCommit.IncountUsage is { } actualUsage)
                 enterCounts = [.. DungeonIncountPolicy.Views(countRow, actualUsage)];
             if (installing.HellTicket is null) entrySlots = entryItems?.ChangedSlots ?? [];
             if (committed.Revision != installing.Entry.CharacterRevision)
@@ -927,6 +945,7 @@ internal sealed partial class GameSession
         SetState(SessionPhase.Loading);
         return FormalReceipt() with { AssaultConsumedSlots = assaultSlots, HellConsumedSlots = hellSlots, HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryItemConsumedSlots = entrySlots, EntryFatigueCharged = entryFatigue, ChannelConsumedSlots = channelSlots, EnterCounts = enterCounts,
+            EntryChangedCurrencies = entryItems?.ChangedCurrencies ?? [],
             GriefAdmission = installing.GriefAdmission, SpecialEntry = installing.SpecialEntry, Dazzlement = installing.Dazzlement };
     }
 

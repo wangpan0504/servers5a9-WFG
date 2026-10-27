@@ -15,6 +15,15 @@ internal static class ChannelTownDungeonRequirement
     {
         if (!definition.DeclaresRequiredItem)
             return null;
+        if (definition.IsAncientInfinite)
+        {
+            var rows = definition.RequiredItemRows;
+            if (rows.IsEmpty || rows.Any(row => row.Third != 1)) return "channel-town-required-item-format";
+            if (pieces is null) return "channel-town-required-item-unverifiable";
+            return InventoryMaterialConsumptionService.Plan(inventory,
+                rows.Select(row => new ItemMaterialCost(row.ItemId, row.Count)).ToArray(), pieces, utcNow).Accepted
+                ? null : "ancient-required-items-insufficient";
+        }
         if (definition.RequiredItem is not { } required)
             return "channel-town-required-item-format";
         if (pieces is null)

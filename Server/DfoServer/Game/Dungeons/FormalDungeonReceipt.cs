@@ -27,6 +27,7 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
     public ushort EntryFatigueCharged { get; init; }
     // 频道专属城镇入场扣除的 [required item] 背包格；扣次后该行全部副本的日/周剩余（NOTI 550），仅入场回执携带。
     public ImmutableArray<InventorySlot> ChannelConsumedSlots { get; init; } = [];
+    public ImmutableArray<CurrencyKind> EntryChangedCurrencies { get; init; } = [];
     public ImmutableArray<DungeonEnterCount> EnterCounts { get; init; } = [];
     public GriefTowerAdmission? GriefAdmission { get; init; }
     public DungeonSpecialEntry? SpecialEntry { get; init; }
