@@ -36,8 +36,11 @@ internal sealed class MailboxHandler(MailboxService service, MailboxProjection p
     {
         var opcode = (CmdPacketType)packet.Opcode;
         var request = MailboxRequests.Send(packet.Body, opcode == CmdPacketType.MULTI_MAILBOX_SEND);
-        if (request.Special != 0 || request.Global != 0)
+        if (request.Special != 0 || request.RecipientServerIndex != 0 && request.RecipientServerIndex != context.Channel.ServerIndex)
             return CommandResult.Unhandled;
+        // 查询和寄送共用目标服务器选择值；确认本服后才交给仅支持本服的领域寄送合同。
+        if (request.RecipientServerIndex != 0)
+            request = request with { RecipientServerIndex = 0 };
         var result = context.BlocksTownActions ? MailboxResult.Reject(MailboxError.InvalidState) : context.Session.SendMail(service, request);
         projection.Arrived(result);
         await context.Reply(opcode, MailboxPackets.Result(result), "mail_send_result", () => MailboxProjection.CanPublish(context, result));
@@ -75,10 +78,13 @@ internal sealed class MailboxHandler(MailboxService service, MailboxProjection p
     async Task<CommandResult> Query(GameConnectionContext context, Packet packet)
     {
         var request = MailboxRequests.Query(packet.Body);
-        if (request.Mode > 1)
-            return CommandResult.Unhandled;
+        if (request.RecipientServerIndex != 0 && request.RecipientServerIndex != context.Channel.ServerIndex)
+        {
+            await context.Reply(CmdPacketType.QUERY_CHARAC_INFO_MAILBOX, MailboxPackets.QueryServerUnavailable(), "mail_recipient_server_unavailable");
+            return CommandResult.Handled;
+        }
         var result = context.BlocksTownActions ? MailboxResult.Reject(MailboxError.InvalidState) : context.Session.QueryMailRecipient(service, request.Name);
-        await context.Reply(CmdPacketType.QUERY_CHARAC_INFO_MAILBOX, MailboxPackets.Query(result), "mail_recipient", () => MailboxProjection.CanPublish(context, result));
+        await context.Reply(CmdPacketType.QUERY_CHARAC_INFO_MAILBOX, MailboxPackets.Query(result, context.Channel.ServerIndex), "mail_recipient", () => MailboxProjection.CanPublish(context, result));
         return CommandResult.Handled;
     }
 }

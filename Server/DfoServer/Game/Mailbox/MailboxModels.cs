@@ -15,7 +15,7 @@ internal enum MailboxError
 internal sealed record MailboxRecipient(ushort Id, string Account, string Name, byte Job, byte GrowType, byte Level);
 internal sealed record MailboxSendItem(byte Type, short Slot, int ItemId, int Count);
 internal sealed record MailboxSendRequest(string Recipient, uint Gold, ImmutableArray<MailboxSendItem> Items,
-    string Text, uint Special = 0, byte Global = 0);
+    string Text, uint Special = 0, byte RecipientServerIndex = 0);
 internal sealed record MailboxAttachment(uint Id, InventoryItem Item)
 {
     // 两条持久序列各受 SQL 上限约束，领取对象与邮件合并 key 永不重叠。
