@@ -523,8 +523,9 @@ internal sealed partial class SinglePlayerDungeonRun
             return replay;
         if (HasPendingDeath)
             return Result(DungeonRunOutcome.Rejected);
+        // 遗忘之地允许带怪穿过已核验的普通门，清房事实仍由原死亡集合维护。
         if (!Matches(expected) || Phase != SinglePlayerDungeonPhase.Dungeon || actionId == Guid.Empty || !CanAdvance() ||
-            current.Elevator is { Completed: false } || !current.Cleared || HasPendingLayer() ||
+            current.Elevator is { Completed: false } || (entry.LostLand is null && !current.Cleared) || HasPendingLayer() ||
             !CanMoveHopeOrOrdinary(target) ||
             !rooms.TryGetValue(target, out Room? next))
             return Result(DungeonRunOutcome.Rejected);

@@ -557,6 +557,7 @@ internal sealed partial class GameSession
             {
                 if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("整条路线对象key超界");
                 var room = rooms.Get(map, requirePassiveDefinitions: false, allowUnresolvedSpecialMetadata: entry.IsTutorial);
+                if (entry.LostLand is not null) room = rooms.WithLostLandWarps(room);
                 if (entry.IsTutorial) room = (tutorialScenes ?? throw new InvalidDataException("训练动作目录未装配")).Apply(room);
                 // 实验性（#259）：比赛副本在唯一比赛图上追加四轮对手（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
                 var plan = entry.IsAltar

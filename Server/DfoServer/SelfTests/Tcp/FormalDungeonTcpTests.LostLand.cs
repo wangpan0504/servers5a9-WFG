@@ -33,11 +33,63 @@ internal static partial class FormalDungeonTcpTests
         {
             using var peer = Open(fixture);
             peer.Select(slot, prepared: true, resumeTown: true, room: false);
-            Enter(peer);
+            var initialMap = Enter(peer);
             if (slot == 0)
             {
                 peer.Send(16, Request()); peer.Send(37, new byte[8]); peer.Barrier();
                 That(Used() == 1, "真实TCP重复16/37不重扣次数或重发603");
+            }
+            if (slot == 2)
+            {
+                That(initialMap[18] > 0, "带怪过门使用真实首房演员，不发送合成击杀");
+                var move = new byte[100]; move[0] = 8; move[1] = 6;
+                peer.Send(45, move); peer.Expect(1, 45, [1]);
+                var next = peer.Expect(0, 29).Body;
+                That(next[0] == 8 && next[1] == 6 && next[13] == 1 && U32(next, 14) == 11251,
+                    "真实TCP未清怪过左门依次收到ACK45和目标房完整29");
+                Load(peer); peer.Barrier();
+                // 实收的第二房传送正文，保留客户端其余统计字段，仅目标格驱动原请求路径。
+                var warp = Convert.FromHexString("010758060000F7000000007FA6050000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000C1010000000000000300000000000000000000000300080023600000000000003E410000000000");
+                peer.Send(45,warp); peer.Expect(1,45,[1]);
+                var destination = peer.Expect(0,29).Body;
+                That(destination[0] == 1 && destination[1] == 7 && destination[13] == 1 && U32(destination,14) == 11206,
+                    "实收CMD45从第二房跨区域到11206，沿原包序完成加载");
+                Load(peer); peer.Barrier();
+                peer.Send(45,move); peer.Expect(1,45,[1]);
+                var secondCached = peer.Expect(0,29).Body;
+                That(secondCached[0] == 8 && secondCached[1] == 6 && secondCached.Length == 16 && secondCached[13] == 0,
+                    "传送返回第二房使用同一缓存，后续普通移动仍可执行");
+                Load(peer); peer.Barrier();
+                move[1] = 7;
+                peer.Send(45,move); peer.Expect(1,45,[1]);
+                var below = peer.Expect(0,29).Body;
+                That(below[0] == 8 && below[1] == 7 && below[13] == 1 && U32(below,14) == 11202,
+                    "传送后第二房向下普通出口仍完成完整45/29/37流程");
+                Load(peer); peer.Barrier();
+                move[1] = 6;
+                peer.Send(45,move); peer.Expect(1,45,[1]); peer.Expect(0,29); Load(peer); peer.Barrier();
+                move[0] = 9;
+                peer.Send(45, move); peer.Expect(1, 45, [1]);
+                var cached = peer.Expect(0, 29).Body;
+                That(cached[0] == 9 && cached[1] == 6 && cached.Length == 16 && cached[13] == 0,
+                    "真实TCP未清怪回访只使用起点缓存正文");
+                Load(peer); peer.Barrier();
+                // 水旋风实收正文同样走kind0；统计尾部不当作位置、高度或事件完成证明。
+                var water = Convert.FromHexString("070947010000DD00000000926B010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000FD000800000000001E0003000200F9FFFFFF0900230002009B5B0000000000003E410000BFFF00");
+                peer.Send(45,water); peer.Expect(1,45,[1]);
+                var sea = peer.Expect(0,29).Body;
+                That(sea[0] == 7 && sea[1] == 9 && sea[13] == 1 && U32(sea,14) == 11214,
+                    "实收水旋风请求沿完整资源链进入海域，保留正式ACK45和29包序");
+                Load(peer); peer.Barrier();
+                peer.Send(45,water); peer.Barrier();
+                var wrongSource = new byte[100]; wrongSource[0] = 8; wrongSource[1] = 6;
+                peer.Send(45,wrongSource); peer.Barrier();
+                var returnWater = new byte[100]; returnWater[0] = 9; returnWater[1] = 6;
+                peer.Send(45,returnWater); peer.Expect(1,45,[1]);
+                var port = peer.Expect(0,29).Body;
+                That(port[0] == 9 && port[1] == 6 && port.Length == 16 && port[13] == 0,
+                    "同格及错误源房拒绝后，海域水旋风仍可返回原港口缓存");
+                Load(peer); peer.Barrier();
             }
             if (slot < 2) peer.Expect(0, 31, []);
             if (slot == 0)
@@ -51,9 +103,9 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(42); peer.Barrier();
             That(Used() == slot + 1, "自然结束、无42回城或主动退出均只消耗各角色一次，重复42与后续屏障正常");
         }
-        Console.WriteLine($"PASS {Count - checks} 遗忘之地真实TCP603、到期31、42退出和无响应回城断言（非客户端验收）");
+        Console.WriteLine($"PASS {Count - checks} 遗忘之地真实TCP带怪换房、603、到期31、42退出和无响应回城断言（非客户端验收）");
 
-        void Enter(TcpPeer peer)
+        byte[] Enter(TcpPeer peer)
         {
             SelectMap(peer);
             peer.Send(16, Request());
@@ -64,6 +116,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Expect(0, 550);
             Load(peer);
             peer.Expect(0, 603, [0x58, 0x02, 0, 0, 0xB0, 0x04, 0, 0]);
+            return map;
         }
         void Town(TcpPeer peer)
         {
