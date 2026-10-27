@@ -299,6 +299,8 @@ python3 Tools/GmWeb/gm_web.py --self-check
 
 `character-score <角色>`：只读查询 `character-investment/v2`，包含十二装备基础层及称号、时装、宠物、勋章、附魔、徽章、护石符文、收集箱、套装等逐来源建设明细。沿用账号/角色归属与owner快照边界，不修改资产。空模块为0；Partial说明已安装来源仍有缺失或非法定义，不可当完整排名。旧 `equipment-score` 仍返回十二装备v1。规则与限制见[角色属性](../模块/角色属性.md#本服角色建设分-v2)，此命令不是客户端自助查询或原生战斗力面板。
 
+`character-score-notice <角色>`：管理触发当前在线就绪角色的建设分摘要，沿用账号归属验证，使用与 `character-score` 相同的真实 v2 计算。通过既有 AAS_TIPS 弹框投递，不接管聊天文本，也不自动在登录或换装时弹出。结果 `queued` 只表示发送队列已接受，`DeliveryConfirmed=false`，不确认客户端接收/显示；`queue_rejected`、`expired` 或身份变化状态需手动重新查询。摘要优先显示 Partial/封顶、分数及版本，UTF-8 正文最多600字节；完整逐来源明细仍查 JSON。
+
 ## 卢克历史已赢得奖励的显式领取
 
 仅已授权开发/管理人员使用现有本机GM入口；不新增公网API、游戏opcode或玩家自助命令。管理监听仍只接受loopback，离线执行仍取得原`server.lock`；账号租约采用拒绝重复而非接管。检查和领取均要求账号没有已选角色（在线先回到选角，或完全离线），不能在同账号另一角色仍在线时修改共享钱包。
