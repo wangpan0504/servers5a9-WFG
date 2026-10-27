@@ -25,6 +25,11 @@ internal static class RaidCombatProjection
             foreach (var row in anton.DungeonSnapshot(view))
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
                     RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_state", Guard);
+        if (view.PhaseExpired)
+        {
+            context.LukePhaseExit?.Notice(view, actor);
+            return;
+        }
         PostState(context, view, actor, Guard, "raid_phase_state");
     }
 
@@ -54,6 +59,7 @@ internal static class RaidCombatProjection
     internal static void PostState(GameConnectionContext context, AntonRaidBattleView view, RaidActor actor,
         Func<bool> current, string action)
     {
+        if (view.PhaseExpired) return;
         context.Owner.Execute(() =>
         {
             var identity = RaidCombatDisplayIdentity.Capture(actor, view);
@@ -71,6 +77,12 @@ internal static class RaidCombatProjection
             if (view.Phase == 1 && view.LukePhaseCoinsUsed is { } used)
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_PHASE_COIN_INFO,
                     RaidCombatPackets.PhaseCoins(used), "raid_phase_coins", () => current() && context.RaidDisplay == identity);
+            if (view.State == AntonRaidBattleState.Fighting && view.PhaseClockGeneration > 0 &&
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } battle)
+                context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_REMAIN_TIME, 5,
+                    () => battle.LukePhaseSeconds(view.Instance, view.Phase, view.PhaseClockGeneration) is { } seconds
+                        ? RaidCombatPackets.PhaseRemaining(seconds) : null, "luke_phase_remaining",
+                    () => current() && context.RaidDisplay == identity);
             return true;
         });
     }
