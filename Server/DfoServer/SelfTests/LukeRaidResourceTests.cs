@@ -37,6 +37,24 @@ internal static class LukeRaidResourceTests
             RaidScriptParser.Parse("etc/raid/luke/luke.etc", Tokens(values), Tokens(symbols), id => strings[id], kind);
         var script = Parse(input);
         That(script.Issues.IsEmpty, "卢克最小资源声明完整：" + string.Join(';', script.Issues));
+        That(script.LukeCardMapRecords.SequenceEqual(Enumerable.Range(0, 5)
+            .Select(index => new LukeCardMapRecord((byte)(index * 3), (byte)(index * 3), (byte)(index * 3)))),
+            "十五个整数保留为五条三字节记录，不作迷宫索引或权重");
+        That(LukeCardMapTable.Parse([new(0, 0), new(0, 127), new(0, 255)]) is [{ RawA: 0, RawB: 127, RawC: 255 }],
+            "三列原值保序且不要求相等");
+        That(LukeCardMapTable.Parse(Enumerable.Repeat(new PvfToken(0, 0), LukeCardMapTable.MaximumRecords * 3).ToArray()).Length ==
+            LukeCardMapTable.MaximumRecords, "三字节记录资源预算上界");
+        foreach (PvfToken[] malformed in new PvfToken[][]
+        {
+            [], [new(0, 1)], [new(0, 1), new(0, 2)], [new(0, -1), new(0, 0), new(0, 0)],
+            [new(0, 256), new(0, 0), new(0, 0)], [new(2, 0), new(0, 0), new(0, 0)],
+            Enumerable.Repeat(new PvfToken(0, 0), (LukeCardMapTable.MaximumRecords + 1) * 3).ToArray()
+        })
+        {
+            bool rejected = false;
+            try { LukeCardMapTable.Parse(malformed); } catch (InvalidDataException) { rejected = true; }
+            That(rejected, "残缺/越界/非整数/超预算三字节记录拒绝，不沿客户端低字节截断");
+        }
         var phase = script.Phases.Single(); var rule = phase.Rules.Single();
         That(script.WaitingRoom == new RaidWaitingRoom(32, 4) && phase.Dungeons.Single().HpRaw == 3 &&
             phase.Dungeons.Single().Declarations.Any(f => f.Tag == "[lockout type]" && f.Values.Length == 2),
@@ -50,8 +68,21 @@ internal static class LukeRaidResourceTests
         {
             var copy = (object[])input.Clone(); copy[Array.IndexOf(copy, tag) + offset] = value; return copy;
         }
+        int cardStart = Array.IndexOf(input, "[CARD SET MAP INFO]");
+        int cardEnd = Array.IndexOf(input, "[/CARD SET MAP INFO]");
+        var duplicateCards = input.Concat(input.Skip(cardStart).Take(cardEnd - cardStart + 1)).ToArray();
+        var nestedCards = input.Take(cardStart + 1).Concat(new object[] { "[NESTED UNKNOWN]" })
+            .Concat(input.Skip(cardStart + 1)).ToArray();
+        var missingClose = input.Where((_, index) => index != cardEnd).ToArray();
+        var twelveValues = input.Where((_, index) => index < cardStart + 1 || index > cardStart + 3).ToArray();
+        That(Parse(duplicateCards).Issues.Any(issue => issue.Code == "duplicate-header"), "重复卡牌地图头拒绝");
+        That(Parse(nestedCards).Issues.Any(issue => issue.Code == "header-block-incomplete"), "卡牌地图内嵌字段不作相邻合法块");
+        That(Parse(missingClose).Issues.Any(issue => issue.Code == "header-block-incomplete"), "卡牌地图缺闭块拒绝");
+        That(Parse(twelveValues).Issues.Any(issue => issue.Code == "unsupported-header"), "完整四条三元组仍不放宽当前十五整数兼容形状");
         foreach (var (values, code) in new (object[], string)[]
         {
+            (Change("[CARD SET MAP INFO]", 1, 256), "invalid-card-map-records"),
+            (Change("[CARD SET MAP INFO]", 2, -1), "invalid-card-map-records"),
             (Change("[LOCKOUT TYPE]", 1, "unknown"), "dungeon-declaration-invalid"),
             (Change("[OBJECT]", 0, "[MISSING SYMBOL]"), "symbol-reference-missing"),
             (Change("[+]", 1, "unknown"), "unsupported-clause"),

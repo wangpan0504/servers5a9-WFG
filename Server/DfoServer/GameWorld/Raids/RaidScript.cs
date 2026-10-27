@@ -33,7 +33,10 @@ internal sealed record RaidPhase(string Name, ImmutableArray<RaidDungeon> Dungeo
 }
 internal sealed record RaidScript(string Path, RaidWaitingRoom? WaitingRoom, RaidCost? EntryCost,
     RaidCost? RetryItem, ImmutableDictionary<string, int> Symbols, ImmutableArray<RaidPhase> Phases,
-    ImmutableArray<RaidField> Headers, ImmutableArray<RaidIssue> Issues);
+    ImmutableArray<RaidField> Headers, ImmutableArray<RaidIssue> Issues)
+{
+    public ImmutableArray<LukeCardMapRecord> LukeCardMapRecords { get; init; } = [];
+}
 
 // 按团本类型隔离已核对的资源语法；只保存声明，不执行触发器、计时、状态推进或奖励。
 internal static class RaidScriptParser
@@ -171,8 +174,20 @@ internal static class RaidScriptParser
                     Issue("raid-timer-reference-missing", clause.TokenIndex, $"{clause.Timer.Kind}:{clause.Timer.DungeonId}");
             }
         }
+        ImmutableArray<LukeCardMapRecord> cardMaps = [];
+        if (luke && headers.Where(field => field.Tag == "[card set map info]").ToArray() is [var cardMap])
+        {
+            try
+            {
+                cardMaps = LukeCardMapTable.Parse(tokens.Skip(cardMap.TokenIndex + 1).Take(cardMap.Values.Length).ToArray());
+            }
+            catch (InvalidDataException error)
+            {
+                Issue("invalid-card-map-records", cardMap.TokenIndex, error.Message);
+            }
+        }
         return new(path, room, entry, retry, symbols.ToImmutable(), phases.ToImmutableArray(),
-            headers.ToImmutableArray(), issues.ToImmutableArray());
+            headers.ToImmutableArray(), issues.ToImmutableArray()) { LukeCardMapRecords = cardMaps };
 
         bool Integers(RaidField field, int count) => field.Values.Length == count && field.Values.All(v => v.Type == 0);
         bool Text(RaidField field, int count = 1) => field.Values.Length == count && field.Values.All(v => v.Type == 6);
