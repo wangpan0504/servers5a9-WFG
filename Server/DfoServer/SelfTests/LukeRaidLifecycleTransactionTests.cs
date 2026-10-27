@@ -66,6 +66,7 @@ internal static class LukeRaidLifecycleTransactionTests
             var battle=sessions[0].CurrentRaidBattle(actors[0])!;
             var members=sessions.Take(4).ToArray();
             var leave=new AntonRaidStart(raids,parties,repository,resources.Towns,items.EpicPieces);
+            RaidPhaseEligibility[]? recoveryCandidates=null;
             RunStages(false);
             That(battle.View.State==AntonRaidBattleState.Completed,"两阶段原领取路径后完成");
             foreach(var actor in actors.Reverse())That(leave.Leave(actor,actor.Character) is not null,"完成后真实离团");
@@ -94,6 +95,11 @@ internal static class LukeRaidLifecycleTransactionTests
             battle=sessions[0].CurrentRaidBattle(actors[0])!;
             RunStages(false,unclaimedRestart:true);
             LukeRaidResourceRulesTests.Run(definition.Resources.Script,actors,policy.Completion!);
+            if(recoveryCandidates is not null)
+            {
+                foreach(var actor in actors.Reverse())That(leave.Leave(actor,actor.Character) is not null,"恢复入口验证前合法退出新实例");
+                LukeRewardRecoveryTests.RunResources(resources,repository,owners,sessions,actors,recoveryCandidates,path);
+            }
             done=true;
 
             void RunStages(bool supersede,bool stageDenied=false,bool unclaimedRestart=false)
@@ -235,6 +241,7 @@ internal static class LukeRaidLifecycleTransactionTests
                         That(current.State==0&&current.Eligibility is null&&current.Remaining==0,
                             "新实例没有借用旧P1资格，纯读不会恢复旧团或自动选卡发奖");
                     }
+                    recoveryCandidates=original.Select(row=>row.Eligibility!).ToArray();
                     return;
                 }
                 if(phase==0&&!supersede)clock.Now=clock.Now.AddSeconds(2);
