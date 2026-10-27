@@ -98,7 +98,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         if (prices is null) return null;
         if (goldCardEvent is not null)
         {
-            Events.ServerEventService.RequireRegistered(goldCardEvent.Schedule.EventId);
+            if (goldCardEvent.Schedule.EventId != Events.ServerEventService.DoubleGoldCardId)
+                throw new InvalidDataException("黄金卡牌双倍奖励只接受活动64");
             goldCardEvent.Schedule.Validate();
         }
         bool golden = !dungeon.DisablePaidCard && membership.GoldCardAvailable(now.ToUnixTimeSeconds());

@@ -63,6 +63,25 @@ internal static class DungeonDropRuleCatalogTests
                 ushort.MaxValue, 0, "合成参考策略候选") { CreationRate = weight };
         var candidates = DungeonItemDropCatalog.Create([Template(1000, ItemKind.Consumable, 2),
             Template(1001, ItemKind.Material, 7), Template(2000, ItemKind.Equipment, 5)]);
+        var cardPrices = DungeonCardPriceCatalog.Parse([new(3, 1), new(0, 1), new(0, 100)], _ => "[gold card cost table]");
+        int cardDraws = 0;
+        // 空候选池真实走完付费牌规划；物品、钱包与碎片目录仅由未调用的发放阶段使用。
+        var cards = new DungeonCardRewardPolicy(parsed, DungeonItemDropCatalog.Create([]), null!, null!, null!,
+            random: _ => { cardDraws++; return 0; }, prices: cardPrices);
+        var cardDungeon = new DungeonDefinition(1, "dungeon/合成活动隔离.dgn", 1, 1, [], []);
+        var cardNow = DateTimeOffset.FromUnixTimeSeconds(1800000000);
+        var goldEvent = new DfoServer.Game.Events.ServerEventState(new(64, 7, OverrideActive: true), true);
+        var goldOptions = cards.PrepareOptions(cardDungeon, 0, 1, new(), cardNow, goldEvent);
+        That(goldOptions is { DoublePaidItems: true, GoldCardEventRevision: 7, Price: 100, UseGoldCard: false, Paid.Gold: 0 } && cardDraws == 2,
+            "黄金牌64沿真实无PVF空池规划保持双倍标记、版本及独立费用");
+        foreach (bool active in new[] { true, false })
+        {
+            int previousDraws = cardDraws;
+            var foreign = new DfoServer.Game.Events.ServerEventState(new(2532, 11, OverrideActive: active), active);
+            Reject<InvalidDataException>(() => cards.PrepareOptions(cardDungeon, 0, 1, new(), cardNow, foreign),
+                "2532无论开关均不能作为黄金牌64状态或revision输入");
+            That(cardDraws == previousDraws, "非64活动在抽奖及翻牌规划之前拒绝");
+        }
         var referencePolicy = new DungeonResourceDropPolicy(parsed, candidates,
             id => new(id, "monster/合成任意模板.mob", null, null), _ => throw new InvalidOperationException("合成无显式物品"));
         var bossPlan = referencePolicy.Prepare(42, 1, 3, 1);

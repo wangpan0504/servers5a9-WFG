@@ -1,5 +1,7 @@
 using System.Text.Json;
 using DfoServer.GameWorld.Towns;
+using DfoServer.Game.Events;
+using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -13,6 +15,7 @@ internal static partial class TownProtocolTcpTests
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "town"), resources: resources);
         await fixture.StartAsync();
         ChannelTcpTests.Run(fixture);
+        var serverEvents = new ServerEventService(new ServerEventRepository(fixture.Database));
         using (var peer = Open(fixture))
         {
             peer.Send(1723);
@@ -66,8 +69,22 @@ internal static partial class TownProtocolTcpTests
             peer.Send(692, Name("DoorTest"));
             peer.Expect(1, 692, [0, 24, 0]);
             That(fixture.Snapshot() == before, "return selection and unselected movement preserve all persisted fields");
+            var goldOn = serverEvents.Override(ServerEventService.DoubleGoldCardId, true);
+            var nolanOn = serverEvents.Override(ServerEventService.NolanVisibilityId, true);
+            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId];
             peer.Select();
             Bytes(peer.CompletedQuestHistory, mapHistory, "返回选角再入城恢复同一月轮山显示标记");
+            That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanOn &&
+                serverEvents.Read(ServerEventService.DoubleGoldCardId) == goldOn,
+                "重选只投影已提交2532，不混入黄金牌64或改写两项活动版本");
+            peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            var nolanOff = serverEvents.Override(ServerEventService.NolanVisibilityId, false);
+            peer.ExpectedOpenEvents = [];
+            peer.Select();
+            That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanOff &&
+                serverEvents.Read(ServerEventService.DoubleGoldCardId) == goldOn,
+                "同连接重选按最新提交移除2532，黄金牌64仍开也只发送完整2037事件表");
+            serverEvents.Override(ServerEventService.DoubleGoldCardId, false);
         }
 
         foreach (byte variant in new byte[]
@@ -129,6 +146,7 @@ internal static partial class TownProtocolTcpTests
         }
 
         DeleteCharacters(fixture);
+        var nolanRestart = serverEvents.Override(ServerEventService.NolanVisibilityId, true);
 
         using (var waiting = Open(fixture))
         {
@@ -155,7 +173,7 @@ internal static partial class TownProtocolTcpTests
             That(!sent.Any(p => p.GetProperty("Kind").GetInt32() == 1 && p.GetProperty("Opcode").GetInt32() == opcode), "unimplemented has no fabricated ACK");
         }
 
-        await PreparedAsync(fixture, towns, resources);
+        await PreparedAsync(fixture, towns, resources, nolanRestart);
         Console.WriteLine("PASS C# TCP town: entry, exit, raw travel, quests, docks, portals, NPC, dungeon select notice and reconnect");
     }
 
@@ -237,7 +255,7 @@ internal static partial class TownProtocolTcpTests
         return JsonSerializer.Serialize(rows);
     }
 
-    static async Task PreparedAsync(TcpTestFixture fixture, TownCatalog towns, TcpTestResources resources)
+    static async Task PreparedAsync(TcpTestFixture fixture, TownCatalog towns, TcpTestResources resources, ServerEventState nolanRestart)
     {
         string original = fixture.Snapshot();
         string audit = Path.Combine(fixture.Root, "preparation");
@@ -256,6 +274,7 @@ internal static partial class TownProtocolTcpTests
         CharacterPreparationTests.VerifyQuestCoverage(definition, resources.Quests);
         CharacterPreparationTests.RequireQuestSet(quests, definition.CompletedQuests.ToHashSet(), "意图到真实数据库");
         byte[] completed;
+        var serverEvents = new ServerEventService(new ServerEventRepository(fixture.Database));
         await fixture.StartAsync("prepared");
         using (var peer = Open(fixture))
         {
@@ -279,7 +298,10 @@ internal static partial class TownProtocolTcpTests
             peer.Send(692, Name("备用角色"));
             peer.Expect(1, 692, [1]);
             That(fixture.Snapshot() == beforeNameCheck, "Chinese duplicate and available name checks preserve all character data");
+            peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId];
             var packets = peer.Select(slot, prepared: true);
+            That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanRestart,
+                "原fixture停止及Runtime重建后仍投影同一已提交2532，CLI准备和入城不改写revision");
             Bytes(packets[1].Body, [95, 0, 0, 0], "accepted story level");
             That(DecodeName(packets[2].Body, 127, 4) == "剑影", "Chinese actor name");
             Bytes(packets[2].Body.AsSpan(131, 3), [0, 0x25, 95], "prepared actor identity");
@@ -318,6 +340,8 @@ internal static partial class TownProtocolTcpTests
                 Travel(peer, trip);
             }
         }
+
+        serverEvents.Override(ServerEventService.NolanVisibilityId, false);
 
         (uint District, Trip[] Routes)[] respawns = [(39, [new(40, 1, 1782, 193, 38, 1, Kind: 5), new(54, 1, 201, 570, 40, 1), new(60, 3, 202, 59, 54, 1), new(60, 1, 538, 73, 60, 3), new(118, 0, 379, 229, 60, 1, Npc: 400000062), new(60, 1, 1140, 90, 118, 0, Kind: 255, Npc: 8001), new(118, 0, 379, 229, 60, 1, Npc: 400000062)]), (60, [new(60, 1, 1241, 139, 38, 1, Kind: 6)]), (60, [])];
         foreach (var respawn in respawns)

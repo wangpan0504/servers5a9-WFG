@@ -4,6 +4,8 @@ using System.Net;
 using System.Net.Sockets;
 using DfoServer.GameWorld.Channels;
 using DfoServer.Network;
+using DfoServer.Game.Events;
+using DfoServer.Persistence;
 
 namespace DfoServer.Testing;
 
@@ -14,8 +16,13 @@ internal static class ChannelEntryTcpTests
         VerifyListenerRollback();
         await VerifyConnectionAddressesAsync(source, root, resources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "channel-entry"), resources: resources);
+        Directory.CreateDirectory(fixture.Options.DataDirectory);
+        string allDay = string.Join(",", Enumerable.Range(1, 7).Select(day => $"{{\"weekday\":{day},\"start\":\"00:00\",\"end\":\"24:00\"}}"));
+        File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "gm-raid-windows.json"),
+            "{" + string.Join(",", new[] { "luke", "hyperspace", "prey", "anton" }.Select(raid => $"\"{raid}\":[{allDay}]")) + "}");
         await fixture.StartAsync();
         ChannelTcpTests.Run(fixture);
+        var serverEvents = new ServerEventService(new ServerEventRepository(fixture.Database));
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         foreach (var (number, port) in endpoints)
         {
@@ -39,6 +46,7 @@ internal static class ChannelEntryTcpTests
             !endpoints.Values.Contains(nativePort) && U32(alpha.LoginEndpoint, 5) != 0 && U32(isolated.LoginEndpoint, 5) != 0,
             "LOGIN返回独立Native端口及关联值，NOTI1和后续Actor仍使用所选频道身份");
         alpha.Create("EntryA"); isolated.Create("EntryB");
+        alpha.ExpectedOpenEvents = isolated.ExpectedOpenEvents = [282, 2449, 414, 181];
         var alphaEntry = alpha.Select();
         var isolatedEntry = isolated.Select();
         foreach (var frames in new[] { alphaEntry, isolatedEntry })
@@ -65,7 +73,9 @@ internal static class ChannelEntryTcpTests
         alpha.Barrier();
         isolated.Barrier();
         isolated.Send(3, [1]); isolated.Expect(1, 3, [1]); isolated.Closed();
+        var nolanOn = serverEvents.Override(ServerEventService.NolanVisibilityId, true);
         using var beta = Open(fixture, "entryb", gamePort: endpoints[11], channelNumber: 11);
+        beta.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
         beta.Select(resumeTown: true, room: false);
         beta.SendBarrier(); var toBeta = beta.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
         alpha.SendBarrier(); var toAlpha = alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
@@ -105,6 +115,7 @@ internal static class ChannelEntryTcpTests
         alpha.Send(3, [1]);
         alpha.Expect(1, 3, [1]); alpha.Closed();
         using var switched = Open(fixture, "entrya", gamePort: endpoints[21], channelNumber: 21);
+        switched.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
         var reentry = switched.Select(resumeTown: true, room: false, settings: settings);
         That(switched.ClientSettings is [{ Kind: 0, Opcode: 390 }, { Kind: 0, Opcode: 454 }], "换频道的设置回放在最终24绑定后逐包核对，保留角色选项与账号键位");
         That(switched.Id == id && fixture.Query("SELECT count(*) FROM characters WHERE account='entrya'") is [[1L]] &&
@@ -136,16 +147,23 @@ internal static class ChannelEntryTcpTests
 
         using var takeover = Open(fixture, "entrya");
         switched.Closed(); beta.Barrier();
+        takeover.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
         takeover.Select(settings: settings); takeover.Barrier();
+        That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanOn,
+            "换频道、重连和接管合并完整团本事件与同一2532提交，不改写活动revision");
         That(takeover.Id == id, "跨入口接管沿用唯一账号generation，旧连接清理不删除新owner");
         That(fixture.Snapshot("SELECT town,area,x,y FROM characters WHERE id=$p0", id) == "[[38,1,450,234]]",
             "主入口格兰之森普通名册选角与换频道分开，冷登录仍回共享房间");
         takeover.Send(35, Move(451, 235)); takeover.Barrier();
         string gateLocation = fixture.Snapshot("SELECT town,area,x,y,revision FROM characters WHERE id=$p0", id);
         takeover.Send(3, [1]); takeover.Expect(1, 3, [1]); takeover.Closed();
+        var nolanOff = serverEvents.Override(ServerEventService.NolanVisibilityId, false);
         using var gateReentry = Open(fixture, "entrya", gamePort: endpoints[11], channelNumber: 11);
+        gateReentry.ExpectedOpenEvents = [282, 2449, 414, 181];
         var gatePackets = gateReentry.Select(resumeTown: true, settings: settings);
         gateReentry.Barrier();
+        That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanOff,
+            "gate换频道按最新提交移除2532，保留原四项团本事件和已提交revision");
         That(gatePackets[^2] is { Kind: 0, Opcode: 124 } && gatePackets[^1] is { Kind: 0, Opcode: 24 } &&
             fixture.Snapshot("SELECT town,area,x,y,revision FROM characters WHERE id=$p0", id) == gateLocation,
             "gate换频道沿用合法1379与124/24边界，不回归为强制坐标重置");

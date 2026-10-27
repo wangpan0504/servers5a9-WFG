@@ -8,6 +8,7 @@ using DfoServer.Network.Projection.Inventory;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Town;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Events;
 
 namespace DfoServer.Network.Projection;
 
@@ -18,7 +19,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     SkillLearningCatalog? learning = null, TitleProjection? titles = null, AdventureProjection? adventure = null, TimeProvider? clock = null,
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
     CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null,
-    EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null)
+    EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
+    ServerEventService? events = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
@@ -122,9 +124,12 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             GrowUpChangePackets.ManageInfo(context.Session.GrowUpChangeCount(), c.Level), "growup_change_info");
         await TrainingSkillsAsync(context, initializing: true);
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
-        // EVENT_INFO 整表替换客户端事件集合：赛丽亚 2037 之外，加入当前处于 GM 团本时段的卡事件（282/2449/414），去掉团队频道卡的「非可入场时间」。
+        // EVENT_INFO 整表替换：保留赛丽亚与团本事件，只从已提交服务状态追加2532。
+        var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow());
+        if (events?.Read(ServerEventService.NolanVisibilityId).Active == true)
+            openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
         await context.NotifyProtected(NotiPacketType.EVENT_INFO,
-            SeriaLuckPackets.EventInfoCompressed(DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow())), "seria_luck_event_initialize");
+            SeriaLuckPackets.EventInfoCompressed(openEvents), "seria_luck_event_initialize");
         await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(c)), "fatigue_after_town_hud");
         await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(c.Inventory.AccountWallet.SeriaLuck,
             c.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_initialize");
