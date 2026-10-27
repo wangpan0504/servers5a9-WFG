@@ -521,7 +521,9 @@ internal static class ServerRuntime
             // 两种喇叭投已实测可见的 0x76 喇叭页签（见 Docs/模块/聊天.md）。
             // 成员/目标查询走只读存储合同（repository），在线定位与投递走 OnlineSessionDirectory，不另建在线状态。
             new ChatHandler(new Game.Chat.ChatService(repository, new Game.Chat.ChatDelivery(online), repository), inventoryProjection, log,
-                new Game.Chat.NamedWhisperService(online, repository))
+                new Game.Chat.NamedWhisperService(online, repository),
+                new SelfCharacterScoreProjection(new Game.Characters.CharacterInvestmentService(itemResources.Items,
+                    itemResources.CharacterInvestmentMetadata, itemResources.CollectBoxes, itemResources.RandomOptions)))
         ];
         foreach (var module in modules)
             module.Register(commands);
