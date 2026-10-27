@@ -71,7 +71,8 @@ internal enum DevelopmentAction
     EquipmentScore,
     CharacterScore,
     LukeRewardInspect,
-    LukeRewardClaim
+    LukeRewardClaim,
+    CharacterScoreNotice
 }
 
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
@@ -116,6 +117,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["luke-reward-claim"] = (DevelopmentAction.LukeRewardClaim, true, 7, 7),
         ["equipment-score"] = (DevelopmentAction.EquipmentScore, true, 0, 0),
         ["character-score"] = (DevelopmentAction.CharacterScore, true, 0, 0),
+        ["character-score-notice"] = (DevelopmentAction.CharacterScoreNotice, true, 0, 0),
         ["title-list"] = (DevelopmentAction.TitleList, true, 0, 1),
         ["title-complete"] = (DevelopmentAction.TitleComplete, true, 1, 1),
         ["skill-list"] = (DevelopmentAction.SkillList, true, 0, 0),
