@@ -45,7 +45,7 @@ internal static class AmplifyUpgradeTests
             Reject<InvalidDataException>(() => InventoryAmplifyUpgradeService.AdjustedFailureWeight(failure,bonus));
         var parsed = EnhancementRequests.Read(EnhancementTests.Request(5, 0, 19, 31440, 84, new byte[17]));
         That(parsed.Mode == EnhancementMode.LuckyAmplify && parsed.MaterialSlot == 84, "幸运增幅沿原生mode5及同一20B固定骨架，不判成畸形");
-        foreach (byte mode in new byte[] { 2, 3, 4, 6, 255 })
+        foreach (byte mode in new byte[] { 3, 4, 6, 255 })
             Reject<InvalidDataException>(() => EnhancementRequests.Read(EnhancementTests.Request(mode, 0, 19, 31440, 84, [])));
         for (byte level = 0; level < 31; level++)
         {
@@ -82,6 +82,9 @@ internal static class AmplifyUpgradeTests
             rules.Steps[10] is { FailureWeight: 60000, PenaltyType: 3, MaterialCount: 11 }, "当前PVF普通amplify表按24列读取，不误选new amplify表");
         That(r.AmplifyUpgrades.Lucky.Length == 15 && r.AmplifyUpgrades.Lucky[14] == new LuckyAmplifyStep(14, 82, 0, 18),
             "当前PVF独立幸运增幅概率覆盖+0至+14，不使用活动旧fortune表");
+        That(r.AmplifyUpgrades.LuckyReinforce.Length == 15 && r.AmplifyUpgrades.LuckyReinforce[14] == new LuckyAmplifyStep(14, 85, 0, 15) &&
+            r.AmplifyUpgrades.Get(10007406) is { Kind: AmplifyUseKind.Lucky, Reinforce: true },
+            "幸运强化使用strengthening独立概率，+14成功率15%而非幸运增幅的18%");
         That(r.AmplifyUpgrades.Get(10005313) is { Kind: AmplifyUseKind.Portable, MinimumUpgrade: 0, MaximumUpgrade: 50, MaximumItemLevel: 85 } &&
             r.AmplifyUpgrades.Get(10007839) is { Kind: AmplifyUseKind.Portable, MinimumUpgrade: 0, MaximumUpgrade: 14,
                 MaximumItemLevel:85, SuccessBonusWeight:30000, PendingRule:null } &&
@@ -103,6 +106,23 @@ internal static class AmplifyUpgradeTests
         var request = new EnhancementRequest(EnhancementMode.Amplify, MainSlot(9), 31440, 121, -1, ReadOnlyMemory<byte>.Empty, -1, -1);
         var rng = new FixedRandom(99999);
         var service = new InventoryAmplifyUpgradeService(r.Items, r.AmplifyUpgrades, r.Enhancements, r.Disjoint, r.GoldLimits, r.EpicPieces, resources.Towns, rng);
+        var luckySource = new InventoryItem(3, MainSlot(65), InventoryRewardGrantService.Create(r.Items.Get(10007406), 2) with { ExpireTime = 0 });
+        var reinforcement = target with { Core = core with { Attr = 0xEE, AmplifyType = 0, AmplifyValue = 0 } };
+        var luckyRole = role with { Inventory = new([reinforcement, luckySource], Gold: 0) };
+        var luckyRequest = request with { Mode = EnhancementMode.Reinforce, MaterialSlot = 65 };
+        foreach (var (roll, level, code) in new[] { (84999, 13, 2), (85000, 15, 0) })
+        {
+            rng.Value = roll;
+            var luckyResult = service.Plan(luckyRole, luckyRequest, out var luckyReceipt);
+            That(luckyResult.Accepted && luckyReceipt is { Mode: EnhancementMode.Reinforce, Path: 4, MaterialRemaining: 1, GoldCost: 0, TerminalSlot: -1 } &&
+                luckyReceipt.NewLevel == level && luckyReceipt.OutcomeCode == code &&
+                luckyResult.Plan!.After.Find(target.Position) == reinforcement with { Core = reinforcement.Core with { Attr = (byte)(0xE0 | level) } },
+                "幸运强化+14按独立概率降一级或升一级，不扣金币或任何保护券，完整UID和核心保留");
+        }
+        That(!service.Plan(luckyRole, luckyRequest with { Mode = EnhancementMode.LuckyAmplify }, out _).Accepted &&
+            !service.Plan(luckyRole with { Inventory = luckyRole.Inventory with { Items = [reinforcement with { Core = reinforcement.Core with { Attr = 0xEF } }, luckySource] } },
+                luckyRequest, out _).Accepted, "幸运强化不接受增幅模式或当前+15目标");
+        rng.Value = 99999;
         var result = service.Plan(role, request, out var receipt);
         That(result.Accepted && receipt is { OldLevel: 0, NewLevel: 1, MaterialRemaining: 999, OutcomeCode: 0 } &&
             result.Plan!.After.Find(MainSlot(9)) == target with { Core = core with { Attr = 0xE1 } } &&

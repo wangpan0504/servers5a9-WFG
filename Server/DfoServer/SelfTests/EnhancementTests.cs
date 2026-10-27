@@ -10,7 +10,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class EnhancementTests
+internal static partial class EnhancementTests
 {
     public static void RunCore()
     {
@@ -22,7 +22,7 @@ internal static class EnhancementTests
         var empty = EnhancementRequests.Read(Request(1, 3, 12, 27308, 86, []));
         That(empty.Mode == EnhancementMode.Amplify && empty.TargetText.IsEmpty, "CMD80空DSTR仍保留末尾两个槽");
         var malformed = new[] { body[..^1], body.Concat(new byte[1]).ToArray(), new byte[19],
-            Request(2, 0, 21, 27308, 86, []), Request(0, 0, -1, 27308, 86, []), Request(0, 0, 21, 0, 86, []),
+            Request(3, 0, 21, 27308, 86, []), Request(0, 0, -1, 27308, 86, []), Request(0, 0, 21, 0, 86, []),
             Request(0, 0, 21, 27308, 86, new byte[257]) };
         foreach (var value in malformed) Reject<InvalidDataException>(() => EnhancementRequests.Read(value), "错误模式/目标/长度及未知尾部拒绝");
         byte[] badLength = (byte[])body.Clone();
@@ -36,6 +36,7 @@ internal static class EnhancementTests
             "概率失败是已消费券后的成功事务，结果码1保级");
         Bytes(EnhancementPackets.Ack(InventoryResult.Reject(23), null), [0, 23, 0], "拒绝分支公共u16且没有成功字段");
         CatalogAndPlans();
+        RandomCoupons();
     }
 
     static void CatalogAndPlans()
@@ -128,8 +129,9 @@ internal static class EnhancementTests
         foreach (var bad in new[] { role with { Job = 32 }, role with { Inventory = new([source with { Uid = 0 }, target]) },
             role with { Inventory = new([source with { Core = source.Core with { EquipmentLockId = 1 } }, target]) },
             role with { Inventory = new([source, target with { Core = target.Core with { EquipmentLockId = 1 } }]) },
+            role with { Inventory = new([source, target with { Core = target.Core with { IsRental = true } }]) },
             role with { Inventory = new([source with { Core = source.Core with { ExpireTime = (int)now } }, target]) } })
-            That(!Plan(bad, use, out _).Accepted, "临时UID、安全锁及准确到期实例拒绝");
+            That(!Plan(bad, use, out _).Accepted, "临时UID、安全锁、租赁及准确到期实例拒绝");
         That(!Plan(role, use, out _, additional with { RawLevelLimit = 14 }).Accepted &&
             !Plan(amplified, use with { Mode = EnhancementMode.Amplify }, out _, additional with { Mode = EnhancementMode.Amplify, RawLevelLimit = 9 }).Accepted &&
             !Plan(role, use, out _, restricted with { AllowedItems = [gear + 1] }).Accepted &&
@@ -162,6 +164,16 @@ internal static class EnhancementTests
         That(enhancements.Get(10007133) is { Available: true, Mode: EnhancementMode.Amplify, Level: 10, SuccessWeight: 10000 } &&
             resources.Items.Get(10007133).ShopPrice.Materials is [{ ItemId: 10007110, Count: 5 }],
             "真实+10增幅券正常可用，五份邀请函仅保留在商店兑换价格中");
+        foreach (int id in new[] { 2749947, 10002479, 10003709, 10004055, 10004774, 2681908, 2681909,
+            2681910, 2682455, 2682943, 490008480, 490704576 })
+            That(enhancements.Get(id) is { Available: true, Mode: EnhancementMode.RandomReinforce, RandomLevels.IsEmpty: false },
+                "真实祝福及单档随机强化模板分别读取自身权重和资格");
+        That(enhancements.Get(490704576)!.RandomLevels.SequenceEqual(new EnhancementLevelWeight[]
+            { new(7, 46400), new(8, 40000), new(9, 10000), new(10, 3000), new(11, 500), new(12, 100) }) &&
+            enhancements.Get(2682943)!.RandomWeight == 99999 && enhancements.Get(2681908) is { SlotClass: 1 },
+            "当前祝福券保留+7至+12权重，旧券99999总权重不补齐为另一个分布，武器券保留部位限制");
+        foreach (int id in new[] { 2683049, 2683624, 490008479, 10007406, 10007407 })
+            That(enhancements.Get(id) is { Available: false }, "随机锻造及幸运动作不误走随机强化");
     }
 
     internal static byte[] Request(byte mode, byte list, short slot, int item, short material, byte[] text)

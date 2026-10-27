@@ -8,7 +8,10 @@ internal enum AmplifyUseKind { Portable, Lucky, Protection }
 internal sealed record AmplifyUse(AmplifyUseKind Kind, int MinimumUpgrade = 0, int MaximumUpgrade = 30,
     int MinimumItemLevel = 0, int MaximumItemLevel = 255, int SlotClass = 0, bool SealedOnly = false,
     ImmutableHashSet<int>? Rarities = null, int RetainLevel = 0, bool Village = true, bool SeriaRoom = true, string? PendingRule = null,
-    int SuccessBonusWeight = 0);
+    int SuccessBonusWeight = 0)
+{
+    public bool Reinforce { get; init; }
+}
 internal sealed record AmplifyUpgradeStep(int FailureWeight, byte PenaltyType, int PenaltyValue, int MaterialId, int MaterialCount);
 internal readonly record struct LuckyAmplifyStep(int Level, int DownWeight, int SameWeight, int UpWeight);
 internal sealed record UpgradeDestroyBonus(int ItemId, int MinimumGrade, int MinimumUpgrade,
@@ -48,10 +51,12 @@ internal sealed class AmplifyUpgradeCatalog
     readonly IReadOnlyDictionary<int, string> stackable;
     readonly Lazy<AmplifyUpgradeRules> rules;
     readonly Lazy<ImmutableArray<LuckyAmplifyStep>> lucky;
+    readonly Lazy<ImmutableArray<LuckyAmplifyStep>> luckyReinforce;
     readonly Lazy<UpgradeDestroyBonus> companionBonus;
     readonly ConcurrentDictionary<int, Lazy<AmplifyUse?>> uses = new();
     public AmplifyUpgradeRules Rules => rules.Value;
     public ImmutableArray<LuckyAmplifyStep> Lucky => lucky.Value;
+    public ImmutableArray<LuckyAmplifyStep> LuckyReinforce => luckyReinforce.Value;
     public UpgradeDestroyBonus CompanionBonus => companionBonus.Value;
 
     public AmplifyUpgradeCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
@@ -61,6 +66,7 @@ internal sealed class AmplifyUpgradeCatalog
         this.read = read; this.resolve = resolve; this.stackable = stackable;
         rules = new(() => Parse(read("etc/amplifyupgrade.etc"), resolve));
         lucky = new(() => ParseLucky(read("etc/chn_lucky_enchant_deed.etc"), resolve));
+        luckyReinforce = new(() => ParseLucky(read("etc/chn_lucky_enchant_deed.etc"), resolve, reinforce: true));
         companionBonus = new(() => ParseBonus(read("etc/upgrade.etc"), resolve));
     }
 
@@ -91,12 +97,13 @@ internal sealed class AmplifyUpgradeCatalog
             ParseBonus(document, resolve));
     }
 
-    internal static ImmutableArray<LuckyAmplifyStep> ParseLucky(PvfTokenDocument document, Func<int, string> resolve)
+    internal static ImmutableArray<LuckyAmplifyStep> ParseLucky(PvfTokenDocument document, Func<int, string> resolve, bool reinforce = false)
     {
-        var sections = document.Sections.Where(row => row.Name == "lucky enchant deed" && AmplificationFiles.Scalar(row with { Children = [] }) == 1).ToArray();
+        var sections = document.Sections.Where(row => row.Name == "lucky enchant deed" &&
+            AmplificationFiles.Scalar(row with { Children = [] }) == (reinforce ? 0 : 1)).ToArray();
         Require(sections.Length == 1);
         var table = One(sections[0].Children, "enchant type");
-        Require(table.Values.Length > 0 && table.Values[0].Type == 6 && resolve(table.Values[0].Value) == "amplify");
+        Require(table.Values.Length > 0 && table.Values[0].Type == 6 && resolve(table.Values[0].Value) == (reinforce ? "strengthening" : "amplify"));
         var rows = AmplificationFiles.LuckyRows(table);
         Require(rows.Length == 15 && rows.Select((row, at) => row.Level == at && row.DownWeight >= 0 && row.SameWeight >= 0 && row.UpWeight >= 0 &&
             (long)row.DownWeight + row.SameWeight + row.UpWeight == 100).All(value => value));
@@ -127,6 +134,7 @@ internal sealed class AmplifyUpgradeCatalog
             "[portable amplify]" => new(AmplifyUseKind.Portable),
             "[new portable amplify]" => new(AmplifyUseKind.Portable),
             "[lucky enchant deed]" when values is [1] => new(AmplifyUseKind.Lucky, MaximumUpgrade: 14),
+            "[lucky enchant deed]" when values is [0] => new(AmplifyUseKind.Lucky, MaximumUpgrade: 14) { Reinforce = true },
             "[amplify protect equipment]" => new(AmplifyUseKind.Protection),
             "[new amplify protect equipment]" => new(AmplifyUseKind.Protection),
             _ => null

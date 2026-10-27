@@ -20,26 +20,28 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         var source = before.Find(sourcePosition);
         var target = before.Find(request.Target);
         long now = (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
-        if (request.Mode is not (EnhancementMode.Amplify or EnhancementMode.LuckyAmplify) ||
+        bool reinforce = request.Mode == EnhancementMode.Reinforce;
+        if (request.Mode is not (EnhancementMode.Amplify or EnhancementMode.LuckyAmplify or EnhancementMode.Reinforce) ||
             request.Target.List is not (InventoryListType.Main or InventoryListType.Equipment) || request.Target == sourcePosition ||
             request.ProtectionSlot != -1 || request.AuxiliarySlot0 != -1 || request.AuxiliarySlot1 != -1 ||
             source is null || target is null || source.Uid <= 0 || target.Uid <= 0 || source.Uid == target.Uid || !source.Core.IsStackable ||
             target.Core.ItemId != request.TargetItemId || target.Core.Kind != ItemKind.Equipment || target.Core.IsRental ||
             source.Core.EquipmentLockId != 0 || target.Core.EquipmentLockId != 0 || source.IsExpired(now) || target.IsExpired(now) ||
-            target.Core.AmplifyType is < 1 or > 4 || target.Core.AmplifyValue == 0 || target.Core.Upgrade >= 31 ||
+            (reinforce ? target.Core.AmplifyType != 0 : target.Core.AmplifyType is < 1 or > 4 || target.Core.AmplifyValue == 0) ||
+            target.Core.Upgrade >= 31 ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) || !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind))
             return InventoryResult.Reject(RejectCode);
         var template = items.Get(target.Core.ItemId);
         var sourceTemplate = items.Get(source.Core.ItemId);
         if (sourceTemplate.Kind != source.Core.Kind || template.Kind != target.Core.Kind || sourceTemplate.UseForbidden ||
             template.EquipmentSlot is not (12 or >= 14 and <= 23 or 25) || target.Core.Durability != template.Durability ||
-            !enhancements.Allows(template.Id, EnhancementMode.Amplify))
+            !enhancements.Allows(template.Id, request.Mode))
             return InventoryResult.Reject(RejectCode);
 
         var use = upgrades.Get(source.Core.ItemId);
-        bool lucky = request.Mode == EnhancementMode.LuckyAmplify;
+        bool lucky = reinforce || request.Mode == EnhancementMode.LuckyAmplify;
         byte old = target.Core.Upgrade;
-        if (use?.PendingRule is not null || (lucky ? use?.Kind != AmplifyUseKind.Lucky : use is { Kind: not AmplifyUseKind.Portable }))
+        if (use?.PendingRule is not null || (lucky ? use?.Kind != AmplifyUseKind.Lucky || use.Reinforce != reinforce : use is { Kind: not AmplifyUseKind.Portable }))
             return InventoryResult.Reject(RejectCode);
         if (use is not null && !AllowsUse(use, character, target, template))
             return InventoryResult.Reject(RejectCode);
@@ -95,7 +97,8 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         }
         int rolled = rng.Next(100000);
         if (rolled is < 0 or >= 100000) throw new InvalidOperationException("增幅随机源越界");
-        var outcome = lucky ? LuckyOutcome(upgrades.Lucky[old], rolled) : Outcome(old, rolled >= failureWeight, penalty, step.PenaltyValue);
+        var outcome = lucky ? LuckyOutcome((reinforce ? upgrades.LuckyReinforce : upgrades.Lucky)[old], rolled) :
+            Outcome(old, rolled >= failureWeight, penalty, step.PenaltyValue);
         short protectionSlot = -1;
         int protectionRemaining = 0;
         if (outcome.Code == 3 && protection is not null)
@@ -117,10 +120,11 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         after.Validate(allocating: true);
         long? deadline = new[] { source.ExpireTime, target.ExpireTime, protectionSlot >= 0 ? protection!.ExpireTime : 0 }
             .Where(value => value > 0).Select(value => (long?)value).Min();
-        receipt = new(EnhancementMode.Amplify, request.Target, request.MaterialSlot, source.Core.Count - count, old, outcome.Level, outcome.Code == 0)
+        receipt = new(reinforce ? EnhancementMode.Reinforce : EnhancementMode.Amplify,
+            request.Target, request.MaterialSlot, source.Core.Count - count, old, outcome.Level, outcome.Code == 0)
         { OutcomeCode = outcome.Code, Path = lucky ? (byte)4 : (byte)0, GoldCost = gold, InPlace = true,
             TerminalSlot = protectionSlot, TerminalRemaining = protectionRemaining, Refunds = refunds };
-        return new(true, 0, new(before, after, lucky ? "equipment_amplification_lucky" : portable ? "equipment_amplification_portable" :
+        return new(true, 0, new(before, after, reinforce ? "equipment_reinforcement_lucky" : lucky ? "equipment_amplification_lucky" : portable ? "equipment_amplification_portable" :
             "equipment_amplification_npc", new(character, deadline, clock)));
     }
 
