@@ -80,7 +80,7 @@ internal static class NativeGameplayRecords
         return result;
     }
 
-    static void Transform(Span<byte> bytes, bool sending)
+    internal static void Transform(Span<byte> bytes, bool sending)
     {
         uint seed = 3084777u + (uint)UdpPacketType.END;
         uint first = unchecked(seed * 1103515245u + 12345u);
