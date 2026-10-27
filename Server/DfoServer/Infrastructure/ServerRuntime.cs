@@ -206,7 +206,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
             AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
-        var lukeTimers = lukeStartPolicy?.Timers is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
+        var lukeTimers = lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }));
         var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items, lukeTimers);
         if (lukeStart?.UnavailableReason(raidCatalog.Find(1)) is { } unavailable)
