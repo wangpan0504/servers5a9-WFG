@@ -51,6 +51,13 @@ internal static partial class DevelopmentGm
                 return ExecuteEquipmentSlots(repository, owners, find(request.Account), request);
             if (request.Action == DevelopmentAction.Appearance)
                 return DescribeAppearance(repository, owners, find(request.Account), request);
+            if (request.Action == DevelopmentAction.EquipmentScore)
+            {
+                var snapshot = Target(find(request.Account), owners, repository, request, false,
+                    (_, character) => EquipmentInvestmentScore.Capture(character, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+                var scoreItems = items ?? catalog?.Resources.Items ?? throw new InvalidDataException("装备评分目录未装配");
+                return Ok(EquipmentInvestmentScore.Calculate(snapshot, scoreItems.Get));
+            }
             if (request.Action >= DevelopmentAction.Wallet)
                 return ExecuteExtended(repository, owners, find(request.Account), request, mailbox,
                     catalog ?? throw new InvalidOperationException("开发GM资源目录未装配"));
