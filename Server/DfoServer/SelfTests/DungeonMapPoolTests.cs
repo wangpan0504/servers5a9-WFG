@@ -65,14 +65,26 @@ internal static class DungeonMapPoolTests
         ExplicitCandidates();
         LostLandResources();
         GriefResource();
-        // BossRush 的有效地图可以规划，类型大小写和 Boss 格投影开关不改变原有格子内终点。
-        // BossRush已有地图规划不等于专用计时/结果流程；合法几何保留，缺资源仍不能补图。
+        // BossRush保留合法格内终点；格外Boss沿已有最远格规划且保留原声明，不证明专用计时或结果流程。
+        // 类型大小写和Boss格投影不改变上述合同，缺资源或非法几何仍不能补图。
         var ordinary = definition with { Mazes = [result] };
         var ready = new Character(99,0,"BossRushBoundary",0,new(38,2,1085,249),null) { Level = 95 };
         That(DungeonEntryPlan.TryCreate(ordinary,ready,10,0,0,out _,out _),"BossRush隔离用例的对照路线可正式规划");
         foreach (string type in new[] { "boss rush dungeon", " BOSS RUSH DUNGEON " })
         foreach (bool bossCell in new[] { false,true })
         {
+            That(DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type },ready,10,0,0,out var regular,out _,
+                    bossCellFromBossMap:bossCell) && regular!.BossMap.Position == new DungeonPoint(1,0),
+                "BossRush 的合法格内终点保留，类型大小写与Boss格投影不改变落点");
+            var offGrid = result with { Bosses = [new(6,6)] };
+            That(DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type, Mazes = [offGrid] },ready,10,0,0,out var planned,out _,
+                    bossCellFromBossMap:bossCell) && planned!.BossMap.Position == new DungeonPoint(1,0) &&
+                planned.Maze.Bosses.SequenceEqual([new DungeonPoint(6,6)]),
+                "BossRush 格外Boss取已有最远格作终点，同时保留原资源Boss坐标");
+            That(!DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type, Mazes = [offGrid with { MapSpecification = null }] },
+                    ready,10,0,0,out var offGridRejected,out string offGridReason,bossCellFromBossMap:bossCell) &&
+                offGridRejected is null && offGridReason == "boss-rush-room-contract-unproven",
+                "BossRush 缺少明确地图时仍拒绝，不从格外Boss伪造地图");
             var rush = ordinary with { DungeonType = type };
             int resolved = 0;
             That(DungeonEntryPlan.TryCreate(rush,ready,10,0,0,out var entry,out string reason,
@@ -117,8 +129,56 @@ internal static class DungeonMapPoolTests
         That(resolved.MapSpecification is { Count: 3 } && resolved.MapSpecification.Single(map => map.Position == boss) is { Id: 201, Kind: "boss" } &&
             resolved.MapSpecification.Single(map => map.Position == zero) == maze.MapSpecification![1],
             "遗忘之地保留显式AA房间，缺失Boss按真实归属、种类和II布局的唯一反向注册解析");
-        That(!resolved.StaticTopology.Supported && resolved.WarpMaps.SequenceEqual(maze.WarpMaps) && resolved.Greed == maze.Greed,
-            "资源补齐不放宽普通拓扑，不添加传送或改写出口");
+        That(resolved.IsLostLand && resolved.StaticTopology is { Supported: true, Rooms.Count: 3, Links.Count: 0 } &&
+            resolved.StaticTopology.Rooms!.Single(room => room.Map.Position == zero).ExitMask == 0 &&
+            resolved.WarpMaps.SequenceEqual(maze.WarpMaps) && resolved.Greed == maze.Greed &&
+            !(resolved with { IsLostLand = false }).StaticTopology.Supported,
+            "遗忘之地保留AA房和单侧出口原文，不据此补普通连接或放宽其它副本");
+        var right = new DungeonPoint(1, 0); var down = new DungeonPoint(0, 1);
+        var hidden = new DungeonPoint(1, 1); var isolated = new DungeonPoint(2, 1); var far = new DungeonPoint(3, 1);
+        var specialBoss = new DungeonPoint(3, 0);
+        var route = resolved with
+        {
+            Width = 4, Height = 2, Greed = "JJEEAAIICCAABBEE", Bosses = [specialBoss],
+            MapSpecification = [new("map", start, 100, "map/start.map"), new("map", right, 103, "map/right.map"),
+                new("map", down, 104, "map/down.map"), new("map", hidden, 102, "map/hidden.map"),
+                new("map", isolated, 105, "map/isolated.map"), new("map", far, 106, "map/far.map"),
+                new("boss", specialBoss, 201, "map/boss.map")],
+            WarpMaps = [new(start, hidden), new(new(-1, -1), isolated)]
+        };
+        var topology = route.StaticTopology;
+        That(topology is { Supported: true, Rooms.Count: 7, Links.Count: 3 } && topology.Links!.SequenceEqual(
+            [new(start, right), new(start, down), new(isolated, far)]) &&
+            topology.Rooms!.Single(room => room.Map.Position == hidden).ExitMask == 0,
+            "专用路线只收双方出口匹配的水平和垂直门；独立房间保留，单侧门与两类传送不进入普通连接");
+        That(topology.Rooms is System.Collections.IList { IsReadOnly: true } &&
+            topology.Links is System.Collections.IList { IsReadOnly: true } &&
+            (route with { Greed = "JJEEAAIICCAABBBB" }).StaticTopology.Links!.Count == 2 && topology.Links!.Count == 3,
+            "专用路线只读且按当前Greed重算，不沿用修改前连接");
+        foreach (var invalid in new[]
+        {
+            route with { MapSpecification = route.MapSpecification!.Where(map => map.Position != right).ToArray() },
+            route with { MapSpecification = [.. route.MapSpecification!, route.MapSpecification![0]] },
+            route with { WarpMaps = [new(new(-1, -1), hidden)] },
+            route with { WarpMaps = [new(new(2, 0), hidden)] },
+            route with { WarpMaps = [new(hidden, hidden)] },
+            route with { Starts = [new(2, 0)] }, route with { Bosses = [new(4, 0)] },
+            route with { ResourceError = "invalid" }, route with { LayeredMaps = [route.MapSpecification![0]] },
+            route with { Greed = "QQ" }
+        })
+            That(invalid.StaticTopology is { Supported: false, Rooms: null, Links: null, UnsupportedReason: not null },
+                "专用拓扑仍拒绝缺图、重复图、伪传送来源、无效起终点和混合资源，不发布部分路线");
+        var character = new Character(99, 0, "LostLandPlan", 0, new(40, 0, 845, 155), null) { Level = 95 };
+        foreach (var blocked in new[] { definition with { Mazes = [route] },
+            definition with { DungeonType = "normal", Mazes = [route] },
+            definition with { Id = 3, DungeonType = " LOST LAND ", Mazes = [route] } })
+            That(!DungeonEntryPlan.TryCreate(blocked, character, (uint)blocked.Id, 0, 0, out var rejected, out string reason,
+                draw: _ => throw new InvalidOperationException(), resolveMaze: _ => throw new InvalidOperationException()) &&
+                rejected is null && reason == "lost-land-mode-unsupported",
+                "专用静态路线不能替代无疲劳、无撤退惩罚声明，不借图号或类型变体进入普通Boss结算");
+        That(!DungeonEntryPlan.TryCreate(definition with { Id = 3, DungeonType = "normal", Mazes = [route] },
+            character, 3, 0, 0, out _, out string markedReason) && markedReason == "lost-land-resource-unsupported",
+            "其它定义也不能借已经标记的遗忘之地路线进入正式普通实例");
         var explicitOnly = new DungeonMapPool([entries[2]], entries.ToDictionary(row => row.Id, row => row.Path));
         That(explicitOnly.Resolve(definition, maze, _ => 0).MapSpecification is { Count: 3 },
             "DGN显式地图不依赖MAP反向随机池资格，路径仍来自正式目录");
@@ -127,7 +187,9 @@ internal static class DungeonMapPoolTests
                 "Boss归属、种类或布局不符时不猜缺失地图");
         That(ReferenceEquals(new DungeonMapPool([.. entries, entries[2] with { Id = 202, Path = "map/other.map" }]).Resolve(definition, maze, _ => 0), maze),
             "多个反向Boss候选尚无专用抽签合同，不任取首项");
-        foreach (var invalid in new[] { maze with { WarpMaps = [] }, maze with { Greed = "BBIIAABB" },
+        foreach (var invalid in new[] { maze with { WarpMaps = [] }, maze with { WarpMaps = [new(new(-1, -1), zero)] },
+            maze with { WarpMaps = [new(new(1, 1), zero)] }, maze with { WarpMaps = [new(zero, zero)] },
+            maze with { Greed = "BBIIAABB" },
             maze with { MapSpecification = [maze.MapSpecification![0], maze.MapSpecification[1] with { Path = "map/forged.map" }] },
             maze with { MapSpecification = [maze.MapSpecification![0], maze.MapSpecification[1] with { CandidateIds = [999] }] },
             maze with { Starts = [boss] }, maze with { Bosses = [new(2, 0)] } })
@@ -369,6 +431,13 @@ internal static class DungeonMapPoolTests
     {
         int checks = Count;
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf); var definition = catalog.Get(10);
+        var lostLand = catalog.Get(4000);
+        var lostMaze = catalog.ResolveOrdinaryMaze(lostLand, lostLand.Mazes[0], _ => 0);
+        var lostTopology = lostMaze.StaticTopology;
+        That(lostMaze.IsLostLand && lostTopology is { Supported: true, Rooms.Count: 87, Links.Count: 81 } &&
+            lostTopology.Rooms!.Single(room => room.Map.Id == 38009).ExitMask == 0 &&
+            lostTopology.Links!.All(link => link.First != lostMaze.Bosses[0] && link.Second != lostMaze.Bosses[0]),
+            "真实遗忘之地87图与81条双向门可解析，AA房及独立Boss均保留，传送不补普通连接");
         var cosmoDefinition = catalog.Get(7191);
         That(cosmoDefinition.IsCosmoDungeon && cosmoDefinition.CosmoInvitationCount == 40 && cosmoDefinition.CosmoStoneCount == 4 &&
             cosmoDefinition.CosmoQuestId == 10112 && cosmoDefinition.StartFatigue == 8 && cosmoDefinition.TryGetDesignatedDifficulty(out byte cosmoDifficulty) &&

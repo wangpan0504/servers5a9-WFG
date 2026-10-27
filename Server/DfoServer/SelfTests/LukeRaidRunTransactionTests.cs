@@ -83,15 +83,17 @@ internal static class LukeRaidRunTransactionTests
                 var initial=State();
                 PartyDungeonNotice[] Enter()=>service.Enter(sessions[0],(uint)dungeon,2,dungeons,rooms,null,null,null,null);
                 That(service.Enter(sessions[0],(uint)definition.Resources.Script.Phases[0].Dungeons[1].Id,2,dungeons,rooms,null,null,null,null).Length==0&&
-                    sessions[0].LastFormalDungeonRejection=="luke-entry-selection-changed"&&State()==initial&&
+                    sessions[0].LastFormalDungeonRejection=="luke-entry-authorization-changed"&&State()==initial&&
                     sessions.All(session=>session.PartyDungeon is null&&session.HasLukeRaidSelection),
-                    "错DGN沿Luke精确诊断拒绝，零Run/零资产且领域选择保持供上层处理");
+                    "尚未Enter开图的隐藏DGN先按授权拒绝，零Run/零资产且选择保持");
                 Sql($"CREATE TRIGGER fail_luke_run BEFORE UPDATE ON character_dungeon_state WHEN NEW.character_id={actors[failureIndex].Character} BEGIN SELECT RAISE(ABORT,'Luke entry rollback'); END");
                 Reject<SqliteException>(()=>Enter(),"首/中/末成员入图SQL失败");
                 That(State()==initial&&sessions.All(session=>session.PartyDungeon is null&&session.CurrentFormalDungeonScene() is null)&&!battle.HasPendingTransition,
                     "入图失败全员零Run/零资产，预留撤销且不丢阶段状态");
                 Sql("DROP TRIGGER fail_luke_run");
-                var entered=Enter();That(entered.Length==4,"失败后沿原上下文成功进入，不遗留占图");
+                var entered=Enter();That(entered.Count(n=>n.Kind==PartyDungeonNoticeKind.Entry)==4&&
+                    entered.Count(n=>n.Kind==PartyDungeonNoticeKind.RaidBattleSync&&n.RaidEvent==RaidStageFactKind.EnterDungeon)==1&&entered.Length==5,
+                    "失败后四人成功进入，附一次已提交Enter开图全团广播，不遗留占图");
                 var instance=sessions[0].PartyDungeon!;var party=parties.Current(sessions[0])!;
                 var plan=entered[0].Scene!.Entry;
                 var route=QuestStoryRouteTests.Path(plan.Maze.StaticTopology,plan.StartMap.Position,plan.BossMap.Position);
@@ -99,7 +101,13 @@ internal static class LukeRaidRunTransactionTests
                 foreach(var point in route)
                 {
                     foreach(var session in sessions.SkipLast(1))instance.CompleteLoading(session);
-                    That(instance.CompleteLoading(sessions[^1]).Length==4,"真实四人加载屏障");
+                    var loaded=instance.CompleteLoading(sessions[^1]);
+                    That(loaded.Length==5&&loaded.Count(n=>n.Kind==PartyDungeonNoticeKind.Loaded)==4&&
+                        loaded.Count(n=>n.Kind==PartyDungeonNoticeKind.RaidBattleSync&&n.RaidEvent==RaidStageFactKind.EnterMap)==1,
+                        "真实四人加载屏障及一次权威房间事件同步");
+                    var loadedView=battle.View;
+                    That(sessions.All(session=>instance.CompleteLoading(session).Length==0)&&ReferenceEquals(battle.View,loadedView),
+                        "已释放屏障的重复加载回调不再发房间事件或重复推进");
                     var scene=sessions[0].CurrentFormalDungeonScene()!;
                     var monsters=scene.Monsters.Monsters.Where(m=>m.IsBlocking&&m.CanReportDeath&&!m.IsFriendly).OrderBy(m=>m.IsBoss).ToArray();
                     for(int index=0;index<monsters.Length;index++)
@@ -153,6 +161,11 @@ internal static class LukeRaidRunTransactionTests
                 int nextDungeon=definition.Resources.Script.Phases[0].Dungeons[1].Id;
                 That(run.Select(sessions[0],nextDungeon,remaining).Length==3,"剩余三人沿真实新队伍快照选择另一已开放图");
                 var nextContexts=sessions.Take(3).Select(session=>session.CurrentDungeonSelection).ToArray();
+                var beforeMismatch=State();
+                That(Enter().Length==0&&sessions[0].LastFormalDungeonRejection=="luke-entry-selection-changed"&&
+                    State()==beforeMismatch&&sessions.Take(3).All(session=>session.PartyDungeon is null)&&
+                    sessions.Take(3).Select((session,index)=>ReferenceEquals(session.CurrentDungeonSelection,nextContexts[index])).All(value=>value),
+                    "已开放但非当前所选DGN仍按选择身份拒绝，零Run/零资产且选择保持");
                 That(!run.CancelSelection(sessions[0],party)&&sessions.Take(3).Select((session,index)=>
                     ReferenceEquals(session.CurrentDungeonSelection,nextContexts[index])).All(value=>value),
                     "真实离团前的旧快照不能清除新分队选择上下文");

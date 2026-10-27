@@ -72,6 +72,7 @@ internal static class DailyBoosterUsageTests
             That((long)command.ExecuteScalar()! == 1, "当前schema包含独立每日礼盒非空数组列");
             // 回退到55的夹具先真的删掉v72表，确保重放时走真实建表而不是按已有结构跳过。
             DatabaseSchemaTests.RemoveAdventureWeekly(db);
+            DatabaseSchemaTests.RewindRaidLifecycle(db);
             command.CommandText = "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('daily-old',0,'DailyOld',7,38,1,450,234,0,77); ALTER TABLE characters DROP COLUMN daily_booster_usage; ALTER TABLE account_adventures DROP COLUMN capsule_week; PRAGMA user_version=55";
             command.ExecuteNonQuery();
             _ = new CharacterRepository(path);

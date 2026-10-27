@@ -13,6 +13,7 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        EvildomWarPacketTests.RunCore();
         OrdinaryLukeProgressTests.RunCore();
         SkillTreeExpansionTests.RunCore();
         CharacterPreparationTests.RunCore();
@@ -347,6 +348,7 @@ internal static class SelfTestRunner
         MaterialExchangeTests.Run(towns, characters, itemResources);
         BoosterTests.Run(towns, characters, itemResources);
         BoosterSelectionTests.Run(towns, characters, itemResources);
+        BoosterDisjointNestedSelectionTests.RunResources(towns, characters, itemResources, DateTimeOffset.UtcNow);
         BoosterEquipmentTests.Run(towns, characters, itemResources);
         ItemUsePersistenceTests.Run(towns, itemResources);
         ItemTemplateImportTests.Run(towns, pvf, characters, itemResources);

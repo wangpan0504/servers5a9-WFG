@@ -65,11 +65,13 @@ internal static class GriefTowerPersistenceTests
             repository=new(path);
             That(repository.ReadGriefTower(owner,role.Id).InstanceId==retryCharge.Identity.InstanceId &&
                 repository.LoadCharacter(owner,role.Slot).Inventory.Items.Single().Core.Count==1,"重开仓储恢复悲叹挑战与门票");
+            DatabaseSchemaTests.RewindRaidLifecycle(path);
             Execute("DROP TABLE character_grief_tower_clears; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=83");
             repository=new(path);
             That(repository.ReadGriefTower(owner,role.Id).InstanceId==retryCharge.Identity.InstanceId &&
                 JsonSerializer.Serialize(repository.LoadCharacter(owner,role.Slot))==JsonSerializer.Serialize(role),
                 "v83升级v84只加空通关表，不改准入、库存或revision");
+            DatabaseSchemaTests.RewindRaidLifecycle(path);
             Execute("DROP TABLE character_grief_tower_clears; CREATE TABLE character_grief_tower_clears(unknown INTEGER); ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=83");
             Reject<InvalidDataException>(()=>_=new CharacterRepository(path),"v84拒绝接管同名未知通关表");
             Execute("DROP TABLE character_grief_tower_clears; "+GriefTowerSchema.ClearSql);
@@ -81,10 +83,12 @@ internal static class GriefTowerPersistenceTests
             repository.Delete(owner,repository.LoadDeletionTarget(owner,role.Slot));
             That(repository.ReadGriefTower(owner,other.Id).State.AccountUsed==1,"删除角色不能返还或清空账号次数");
             string previous=JsonSerializer.Serialize(repository.LoadCharacter(owner,other.Slot));
+            DatabaseSchemaTests.RewindRaidLifecycle(path);
             Execute("DROP TABLE character_grief_tower_entries; DROP TABLE character_grief_tower; DROP TABLE account_grief_tower; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=82");
             repository=new(path);
             That(previous==JsonSerializer.Serialize(repository.LoadCharacter(owner,other.Slot)) &&
                 repository.ReadGriefTower(owner,other.Id).State==fresh.State,"v82升级仅建立新账本，不改角色资产和revision");
+            DatabaseSchemaTests.RewindRaidLifecycle(path);
             Execute("DROP TABLE character_grief_tower_entries; DROP TABLE character_grief_tower; DROP TABLE account_grief_tower; CREATE TABLE character_grief_tower_entries(unknown INTEGER); ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=82");
             Reject<InvalidDataException>(()=>_=new CharacterRepository(path),"同名未知悲叹表拒绝迁移");
             using var db = Open();

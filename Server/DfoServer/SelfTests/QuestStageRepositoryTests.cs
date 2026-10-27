@@ -244,6 +244,7 @@ internal static partial class QuestStageRepositoryTests
         That(plan.StagePlan is null && plan.Snapshot == legacy,"无阶段路径按旧匿名对象顺序保持Snapshot逐字节一致");
         f.Repository.CommitQuestCompletion(f.Owner,plan);
         var beforeMigration = f.Read();
+        DatabaseSchemaTests.RewindRaidLifecycle(f.Database);
         f.Sql("UPDATE character_quest_completion_receipts SET rowid=17,rule_id='legacy-ordinary'; DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses; ALTER TABLE characters DROP COLUMN daily_booster_usage; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=52");
         That(Scalar(f,"PRAGMA user_version") == "52" &&
             Scalar(f,"SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage'") == "0",

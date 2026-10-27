@@ -6,7 +6,7 @@ using static DfoServer.Testing.TcpPeer;
 namespace DfoServer.Testing;
 
 // 仅由正常Runtime的666夹具调用；不手工Attach、授权或绑定Run。
-internal static class LukeRaidRunTcpTests
+internal static partial class LukeRaidRunTcpTests
 {
     public static void Single(TcpTestFixture fixture,TcpPeer peer,int dungeon)
     {
@@ -29,9 +29,20 @@ internal static class LukeRaidRunTcpTests
         Select(captain,dungeons[2]);
         var hidden=Drain(captain);
         That(hidden.Any(p=>p is {Kind:1,Opcode:15}&&p.Body.SequenceEqual(new byte[]{0,1,0}))&&
-            !hidden.Any(p=>p.Opcode is 28 or 29),"原始Hide第三图不能借合成第二图Open策略进入");
+            !hidden.Any(p=>p.Opcode is 28 or 29),"尚未正式进入5054前，原始Hide第三图拒绝");
         foreach(var peer in first.Where(peer=>peer!=captain))Drain(peer);
         var entered=Enter(first,captain,dungeons[0]);
+        foreach(var frames in entered)
+            foreach(int opened in dungeons.Skip(1))
+                That(frames.Any(p=>p is {Kind:0,Opcode:586}&&p.Body.Length==6&&U32(p.Body)==opened&&p.Body[4]==0&&p.Body[5]==0),
+                    "真实入5054后，本分队收到5055/56开放586，不借手工Open");
+        foreach(var peer in second)
+        {
+            var updates=Drain(peer);
+            foreach(int opened in dungeons.Skip(1))
+                That(updates.Any(p=>p is {Kind:0,Opcode:586}&&U32(p.Body)==opened&&p.Body[5]==0),"另一分队同步收到真实Enter开图");
+            That(updates.Any(p=>p is {Kind:0,Opcode:583}&&p.Body.Length==1+8*p.Body[0]),"另一分队收到同view完整symbol快照");
+        }
         ushort partyId=U16(entered[0].Last(p=>p.Opcode==9).Body,4);
         Load(first);
         Select(otherCaptain,dungeons[0]);
@@ -82,7 +93,7 @@ internal static class LukeRaidRunTcpTests
             "所有已开团角色最终仍在正式候战位置");
     }
 
-    static void Clear(TcpTestFixture fixture,TcpPeer[] members,TcpPeer[] others,TcpPeer captain,List<WirePacket> entry,RaidDungeonCatalog catalog)
+    static void Clear(TcpTestFixture fixture,TcpPeer[] members,TcpPeer[] others,TcpPeer captain,List<WirePacket> entry,RaidDungeonCatalog catalog,byte phase=0)
     {
         byte[] information=entry.Single(p=>p.Opcode==28).Body;
         byte[] map=entry.Single(p=>p.Opcode==29).Body;
@@ -108,7 +119,13 @@ internal static class LukeRaidRunTcpTests
             foreach(var member in members.Where(peer=>peer!=captain))Bytes(Drain(member).Single(p=>p.Opcode==29).Body,map,"共同45仍为同图同对象");
             Load(members);
         }
-        foreach(var peer in others)That(Drain(peer).Any(p=>p is {Kind:0,Opcode:587,Body:[2,0]}),"另一分队收到真实清图后当前Fighting状态同步");
+        foreach(var peer in others)
+        {
+            var updates=Drain(peer);
+            That(updates.Any(p=>p is {Kind:0,Opcode:583})&&updates.Any(p=>p is {Kind:0,Opcode:586}&&U32(p.Body)==U32(information)),
+                "另一分队收到真实清图后的symbol及本图状态，不借重复开场动画同步");
+            That(updates.All(p=>p.Opcode!=587),"同Fighting阶段清图只更新583/586，不重播587");
+        }
         captain.Send(39,FormalDungeonTcpTests.Death(last,captain.Id,lastLevel));
         foreach(var peer in members.OrderBy(peer=>peer==captain?0:1))
             That(!Drain(peer).Any(p=>p.Opcode==38),"终图死亡重放不重复成员死亡事务");
@@ -164,10 +181,10 @@ internal static class LukeRaidRunTcpTests
         foreach(var peer in members.SkipLast(1))That(Drain(peer).Any(p=>p is {Kind:1,Opcode:37,Body:[1]}),"全员完成原加载屏障");
         foreach(var peer in members)Drain(peer);
     }
-    static void Return(TcpPeer[] members,TcpPeer target)
+    static List<WirePacket> Return(TcpPeer[] members,TcpPeer target,bool phaseResults=false)
     {
         target.Send(42);
-        var returned=Drain(target);
+        var returned=Drain(target,phaseResults);
         int ack=returned.FindIndex(p=>p is {Kind:1,Opcode:42,Body:[1]});
         int state=returned.FindIndex(p=>p is {Kind:0,Opcode:3}&&p.Body.SequenceEqual(new byte[]{1,(byte)target.Id,(byte)(target.Id>>8),0}));
         int town=returned.FindIndex(p=>p is {Kind:0,Opcode:24}&&p.Body.Length==13&&p.Body[0]==32&&p.Body[1]==4&&U16(p.Body,4)==target.Id);
@@ -175,22 +192,27 @@ internal static class LukeRaidRunTcpTests
         int completed=returned.FindIndex(p=>p is {Kind:0,Opcode:356});
         That(ack>=0&&state>ack&&town>state&&quests>town&&completed>quests,
             "正常42严格ACK→本人Town状态→32/4位置→21/356任务刷新，不以任意旁路包冒充回城");
-        foreach(var peer in members.Where(peer=>peer!=target))Drain(peer);
+        foreach(var peer in members.Where(peer=>peer!=target))returned.AddRange(Drain(peer,phaseResults));
+        return returned;
     }
-    static List<WirePacket> Drain(TcpPeer peer)
+    static List<WirePacket> Drain(TcpPeer peer,bool phaseResults=false)
     {
         peer.SendBarrier();List<WirePacket> rows=[];
         for(int index=0;index<256;index++)
         {
             var packet=peer.Read();
             if(packet is {Kind:1,Opcode:1347}){Bytes(packet.Body,[1],"Luke Run连接屏障");return rows;}
-            Validate(packet);
+            if(phaseResults&&packet is {Kind:0,Opcode:601})
+                That(packet.Body.Length==10&&packet.Body[0] is 0 or 2,"显式两阶段策略只接已证10B成功结果，不接600未知展示");
+            else if(phaseResults&&packet is {Kind:1,Opcode:660})
+                That(packet.Body.SequenceEqual(new byte[]{1})||packet.Body.SequenceEqual(new byte[]{0,0x12,0}),"660仅已证成功或明确清pending失败包");
+            else Validate(packet);
             rows.Add(packet);
         }
         throw new InvalidOperationException("Luke Run通知超过有界预算");
     }
     static void Validate(WirePacket packet) => That(packet.Kind==0&&packet.Opcode is
-        2 or 3 or 4 or 6 or 9 or 11 or 13 or 14 or 21 or 22 or 23 or 24 or 26 or 27 or 28 or 29 or 30 or 31 or 37 or 38 or 153 or 356 or 587 or 590 or 591 or 593 or 594 or 598 ||
+        2 or 3 or 4 or 6 or 9 or 11 or 13 or 14 or 21 or 22 or 23 or 24 or 26 or 27 or 28 or 29 or 30 or 31 or 37 or 38 or 153 or 356 or 583 or 586 or 587 or 590 or 591 or 593 or 594 or 598 ||
         packet.Kind==1&&packet.Opcode is 15 or 16 or 37 or 42 or 45,
         $"Luke Run只消费已证通知/应答：{packet.Kind}/{packet.Opcode}");
 

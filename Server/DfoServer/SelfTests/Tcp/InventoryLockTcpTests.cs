@@ -62,6 +62,22 @@ internal static partial class InventoryTcpTests
             peer.Expect(1, 19, MoveAck(0, 8, 1, 3, 12));
             WearDelta(peer);
             peer.Expect(0, 251, [1, 0, 3, 12, 0, 1]);
+            peer.Send(713, [3, 12, 0]);
+            peer.Expect(1, 713, [1, 3, 12, 0]);
+            peer.Expect(1, 714, [1, 3, 12, 0]);
+            peer.Send(19, MoveItem(3, 12, weaponId, 1, 0, 64, 0));
+            peer.Expect(1, 19, MoveAck(3, 12, 1, 0, 64));
+            WearDelta(peer, reloadMain: true);
+            peer.Expect(1, 713, [1, 0, 64, 0]);
+            peer.Expect(0, 251, [1, 0, 0, 64, 0, 1]);
+            peer.Send(19, MoveItem(0, 64, weaponId, 1, 3, 12, 0));
+            peer.Expect(1, 19, MoveAck(0, 64, 1, 3, 12));
+            WearDelta(peer);
+            peer.Expect(1, 714, [1, 3, 12, 0]);
+            peer.Expect(0, 251, [1, 0, 3, 12, 0, 1]);
+            That(fixture.Query("SELECT json_extract(item_core,'$.SortLockFlag') FROM character_inventory_items WHERE item_uid=$p0", uid) is [[1L]],
+                "穿戴只隐藏蓝锁，原实例的排序锁仍保存，卸下会恢复");
+            peer.Send(714, [3, 12, 0]); peer.Expect(1, 714, [1, 3, 12, 0]);
             peer.Send(268, [3, 12, 0]);
             peer.Expect(1, 268, [1, 3, 12, 0, 0, 0, 0, 0]);
             peer.Expect(0, 252, [3, 12, 0]);

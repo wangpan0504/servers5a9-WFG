@@ -242,8 +242,6 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             // 显式行由DGN直接声明，不要求MAP具备反向随机池资格；最终候选仍由Catalog复验文件存在。
             string? PathOf(int id) => paths?.GetValueOrDefault(id) ?? byId.GetValueOrDefault(id)?.Path;
             if (!ids.Contains(map.Id) || ids.Any(id => PathOf(id) is null) || PathOf(map.Id) != map.Path) return maze;
-            if (grid.Cells![map.Position.Y * maze.Width + map.Position.X].Index == 0 &&
-                !maze.WarpMaps.Any(warp => warp.Destination == map.Position && InBounds(warp.Source))) return maze;
         }
         if (maps.ContainsKey(boss) || !maps.ContainsKey(maze.Starts[0])) return maze;
         for (int at = 0; at < grid.Cells!.Count; at++)
@@ -258,6 +256,12 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
             (row.Layouts & (1 << layout)) != 0).ToArray();
         if (candidates is not [var candidate]) return maze;
         maps.Add(boss, new("boss", boss, candidate.Id, candidate.Path));
-        return maze with { MapSpecification = maps.Values.OrderBy(row => row.Position.Y).ThenBy(row => row.Position.X).ToImmutableArray() };
+        // AA是显式传送房，来源也必须有真实地图；胶囊的(-1,-1)不能单独证明房间连接。
+        foreach (var map in maps.Values)
+            if (grid.Cells![map.Position.Y * maze.Width + map.Position.X].Index == 0 &&
+                !maze.WarpMaps.Any(warp => warp.Destination == map.Position && warp.Source != map.Position && maps.ContainsKey(warp.Source)))
+                return maze;
+        return maze with { IsLostLand = true,
+            MapSpecification = maps.Values.OrderBy(row => row.Position.Y).ThenBy(row => row.Position.X).ToImmutableArray() };
     }
 }

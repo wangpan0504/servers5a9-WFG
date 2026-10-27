@@ -300,7 +300,7 @@ internal static partial class FormalDungeonTcpTests
         That(soulRejections.Length == 2 && soulRejections.All(row => !row.GetProperty("Accepted").GetBoolean() &&
             row.GetProperty("Identity").ValueKind == System.Text.Json.JsonValueKind.Null &&
             row.GetProperty("RejectReason").GetString() == "maze-topology-unsupported"),
-            "337通过入场规划后由正式拓扑检查重复拒绝，记录准确原因且不发布实例身份");
+            "337经真实选图完成入场规划后由拓扑校验拒绝，重复记录准确原因且不发布实例身份");
     }
 
     static void VerifyBossRushTopologyRejection(TcpTestFixture fixture,TcpTestResources resources)

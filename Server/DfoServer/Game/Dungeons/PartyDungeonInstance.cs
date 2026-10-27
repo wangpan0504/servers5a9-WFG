@@ -7,12 +7,13 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
-internal enum PartyDungeonNoticeKind { RaidBattleSync, RaidSelection, Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure }
+internal enum PartyDungeonNoticeKind { RaidBattleSync, RaidSelection, Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure, EvildomWarStarted }
 internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMember Recipient,
     PartyMember[] Members, FormalDungeonReceipt? Scene = null, DungeonSelectionReceipt? Selection = null,
     FormalDungeonDeathResult? Death = null, Character? Previous = null, FormalDungeonPickupResult? Pickup = null,
     ushort Peer = 0, DfoServer.Game.Town.TownTravelReceipt? Travel = null,
-    byte State = 0, byte Option = 0, QuestLifecycleReceipt? QuestScene = null, int LegendDungeon = 0, DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange = null);
+    byte State = 0, byte Option = 0, QuestLifecycleReceipt? QuestScene = null, int LegendDungeon = 0, DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange = null,
+    DfoServer.Game.Raids.RaidStageFactKind? RaidEvent = null);
 
 // 共享实例拥有全员加载屏障、路线推进与击杀事实；掉落随机、地面物品及拾取归各角色账本。
 // 各Session的Run仅作为同一实例的角色账本投影，不能绕过此owner单独过图或发奖。
@@ -105,7 +106,7 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
             m.Actor.Session.CompleteFormalDungeonLoading() ?? m.Actor.Session.CurrentFormalDungeonScene() ??
                 throw new InvalidOperationException("全员加载屏障释放失败"))).ToArray();
         loaded.Clear();
-        return notices;
+        return GameSession.ObserveRaidPartyRun(current, Id, notices, observeMap: true);
     }
 
     public PartyDungeonNotice[] Move(GameSession reporter, byte x, byte y, byte kind) => Execute(current =>

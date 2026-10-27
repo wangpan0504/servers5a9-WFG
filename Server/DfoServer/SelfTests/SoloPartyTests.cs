@@ -18,6 +18,9 @@ internal static class SoloPartyTests
         var (operation, settings) = PartyRequests.Information(Convert.FromHexString("000304000000000500000000000007"));
         That(operation == 0 && settings == new PartySettings(3, "", 4, 0, 5, 0, 0, 0, 0, 7),
             "实收15B创建请求完整保留设置");
+        var evildom = PartyRequests.Information(Convert.FromHexString("0000040000003132333104000000000500000005010007"));
+        That(evildom.Operation == 0 && evildom.Settings == new PartySettings(0, "1231", 4, 0, 5, 0, 0, 5, 1, 7),
+            "魔界大战实收CMD12保留kind5与kindArgument1，不改写为普通招募或CREATE_RAID");
         foreach (int width in new[] { 0, 13, 14, 16 })
             Reject<InvalidDataException>(() => PartyRequests.Information(new byte[width]), "畸形创建请求不接受缺失或未知尾部");
         var custom = DfoServer.Testing.TcpPeer.Build(w =>

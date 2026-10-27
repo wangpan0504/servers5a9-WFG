@@ -81,6 +81,7 @@ internal static class AdventureShopTests
                 "代表写入也保存完整月重置，不能只推进月份而保留旧限购");
             That(new CharacterRepository(path).ReadAdventure(owner, catalog, now).State.Purchases.IsEmpty &&
                 Query(db, "PRAGMA integrity_check") is "ok" && Query(db, "SELECT count(*) FROM pragma_foreign_key_check") is 0L, "重开保留周期和完整资产外键");
+            DatabaseSchemaTests.RewindRaidLifecycle(db);
             DatabaseSchemaTests.RemoveAdventurePurchases(db); Execute(db, "PRAGMA user_version=31; CREATE VIEW account_adventure_purchases AS SELECT 1 AS collision");
             Reject<SqliteException>(() => new CharacterRepository(path), "v32撞名迁移失败回滚");
             That(Query(db, "PRAGMA user_version") is 31L && Query(db, "SELECT count(*) FROM account_adventure_receipts") is 1L,

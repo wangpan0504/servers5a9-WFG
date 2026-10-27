@@ -73,6 +73,8 @@ internal sealed partial class GameSession
     internal AntonRaidBattle? CurrentRaidBattle(RaidActor actor) => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor == actor && actor.IsCurrent ? raid.Battle : null);
 
+    internal RaidKind? RaidCombatKind() => owner.Execute(() => raidCombat is { Actor.IsCurrent: true } raid ? (RaidKind?)raid.Battle.Kind : null);
+
     public AntonRaidBattleView? RaidCombatView() => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent ? raid.Battle.View : null);
 
@@ -99,6 +101,22 @@ internal sealed partial class GameSession
     public AntonRaidBattleChange? CompleteCurrentRaidCombatDungeon() => owner.Execute(() =>
         formalDungeon?.Run.ClearFact is not null ? CompleteRaidCombatDungeon(FormalReceipt()) : null);
 
+    // 纯生命周期writer在自身owner短读取之后执行，不在本分队owner/Battle/Party领域锁内扩锁或等待SQL。
+    internal bool CommitPendingLukePhase(ILukeRaidLifecycleStore store)
+    {
+        var battle = owner.Execute(() => raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Luke } raid ? raid.Battle : null);
+        if (battle?.PendingLukeSettlement() is not { } candidate) return false;
+        var receipt = store.CommitLukePhase(candidate);
+        _ = battle.AcceptLukeSettlement(candidate, receipt);
+        return true;
+    }
+
+    internal void PublishRaidCombat(AntonRaidBattleChange change)
+    {
+        var battle = owner.Execute(() => raidCombat is { Actor.IsCurrent: true } raid && raid.Battle.Instance == change.After.Instance ? raid.Battle : null);
+        battle?.Publish(change.After);
+    }
+
     public void PublishRaidCombat()
     {
         var battle = owner.Execute(() => raidCombat?.Battle);
@@ -111,14 +129,16 @@ internal sealed partial class GameSession
         var capture = owner.Execute(() =>
         {
             if (!Ready || Selected is not { } character || raidCombat is not { } raid || !raid.Actor.IsCurrent ||
-                raid.Battle.Kind != RaidKind.Anton) return null;
+                !Enum.IsDefined(raid.Battle.Kind)) return null;
             var view = raid.Battle.View;
             int phase = view.Phase;
             if (view.State != AntonRaidBattleState.Reward)
             {
-                var old = raid.Receipts.Where(r => r.Key.Kind == kind).MaxBy(r => r.Key.Phase).Value;
+                var old = raid.Receipts.Where(r => r.Key.Kind == kind).Select(r => r.Value).MaxBy(r => r.Prepared.Phase);
                 return old is not null && old.Prepared.Card == card ? new RaidRewardCapture(raid, character, old.Prepared, old.Offer, old) : null;
             }
+            var eligibility = raid.Battle.Kind == RaidKind.Luke ? raid.Battle.LukeEligibility(character.Id, phase) : null;
+            if (raid.Battle.Kind == RaidKind.Luke && eligibility is not { Eligible: true }) return null;
             var policy = raid.Battle.RewardPolicy(raid.Actor, phase);
             var offer = policy?.Offers.SingleOrDefault(o => o.Kind == kind && o.Card == card);
             if (offer is null) return null;
@@ -127,7 +147,8 @@ internal sealed partial class GameSession
             if (!raid.Pending.TryGetValue((phase, kind), out var pending))
             {
                 pending = new(raid.Battle.Instance, phase, kind, card, character.Id, policy!.Source, offer.Grants,
-                    phase + 1 == raid.Battle.PhaseCount, raid.Battle.RewardWeek ?? raid.RewardWeek ?? DungeonIncountPolicy.Period(now).Week);
+                    phase + 1 == raid.Battle.PhaseCount, eligibility?.Week ?? raid.Battle.RewardWeek ?? raid.RewardWeek ?? DungeonIncountPolicy.Period(now).Week)
+                    { RaidType = raid.Battle.Kind };
                 raid.RewardWeek = pending.Week;
                 raid.Pending.Add((phase, kind), pending);
             }
@@ -164,7 +185,7 @@ internal sealed partial class GameSession
 
     public bool CanPublishRaidReward(RaidRewardReceipt receipt) => owner.Execute(() =>
         Ready && receipt.Generation == owner.Generation && receipt.Epoch == SelectionEpoch && raidCombat is { } raid &&
-        raid.Actor.IsCurrent && receipt.Prepared.Instance == raid.Battle.Instance &&
+        raid.Actor.IsCurrent && receipt.Prepared.Instance == raid.Battle.Instance && receipt.Prepared.RaidType == raid.Battle.Kind &&
         ReferenceEquals(raid.Receipts.GetValueOrDefault((receipt.Prepared.Phase, receipt.Prepared.Kind))?.Prepared, receipt.Prepared));
 
     public void ConfirmRaidRewardPublished(RaidRewardReceipt receipt)

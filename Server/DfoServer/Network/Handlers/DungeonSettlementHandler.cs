@@ -124,6 +124,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
             result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
             result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience, receipt.PartySlot), "formal_clear_reward", Guard);
+        if (dungeons.Get(checked((int)receipt.Entry.DungeonId)).IsDazzlementTower)
+            await DazzlementTowerProjection.StateAsync(context, Guard);
         if (result.LuckyStarGained)
             await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST,
                 RentalPackets.State(receipt.Character.Inventory, DateTimeOffset.UtcNow),

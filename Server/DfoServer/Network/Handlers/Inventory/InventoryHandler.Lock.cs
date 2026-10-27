@@ -20,6 +20,10 @@ internal sealed partial class InventoryHandler
                 await context.Notify(NotiPacketType.ITEM_UNLOCK, InventoryLockPackets.Unlocked(slot), "item_unlock_immediate");
             else if (operation is InventoryLockOperation.EquipmentLock or InventoryLockOperation.CancelUnlock)
                 await context.Notify(NotiPacketType.ITEM_LOCK_LIST, InventoryLockPackets.Locked([slot]), "item_lock_state");
+            else if (operation == InventoryLockOperation.SortLock && slot.List == InventoryListType.Equipment && result.Receipt is { } receipt)
+                await context.Reply(CmdPacketType.REQUEST_ITEM_SORT_UNLOCK,
+                    InventoryLockPackets.Ack(slot, InventoryLockOperation.SortUnlock, result), "restore_sort_lock",
+                    () => context.Session.CanPublishInventory(receipt));
         }
         return CommandResult.Handled;
     }

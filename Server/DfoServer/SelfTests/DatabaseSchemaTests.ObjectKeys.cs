@@ -25,6 +25,7 @@ internal static partial class DatabaseSchemaTests
             // 六张空表回退到v82的真实键结构，再写旧行；不让当前建库结构冒充迁移输入。
             RewindObjectKeys(db);
             SeedObjectKeyReceipts(db, role.Id, "old-event", new string('a', 32), 258, hasObjectInstance: false);
+            RewindRaidLifecycle(db);
             Execute(db, $"UPDATE character_dungeon_state SET next_object_key=65536,last_attempt=258 WHERE character_id={role.Id};PRAGMA user_version={previousVersion}");
             Execute(db, """
                 CREATE INDEX key_fixture_index ON character_dungeon_drop_objects(core);

@@ -21,7 +21,7 @@ internal sealed class TcpPeer : IDisposable
         NoDelay = true
     };
     readonly NetworkStream stream;
-    TcpTestFixture? fixture;
+    readonly TcpTestFixture? fixture;
     ushort sequence;
     bool requestedRoster;
     readonly byte channelNumber;
@@ -58,6 +58,7 @@ internal sealed class TcpPeer : IDisposable
     public byte[][] EnterCounts { get; private set; } = [];
     public byte[] GriefTowerClearInfo { get; private set; } = [];
     public byte[] DazzlementBindings { get; private set; } = [];
+    public byte[] DazzlementState { get; private set; } = [];
     public byte[] ItemMakingSkills { get; private set; } = [];
     public byte[] EpicProductionState { get; private set; } = [];
     public WirePacket[] CollectBoxes { get; private set; } = [];
@@ -95,8 +96,10 @@ internal sealed class TcpPeer : IDisposable
         names = Encoding.GetEncoding(936, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
     }
 
-    public TcpPeer(int port, string? localAddress = null, byte channelNumber = 10, string serverAddress = "127.0.0.1")
+    public TcpPeer(int port, string? localAddress = null, byte channelNumber = 10, string serverAddress = "127.0.0.1",
+        TcpTestFixture? fixture = null)
     {
+        this.fixture = fixture;
         this.channelNumber = channelNumber;
         try
         {
@@ -117,8 +120,7 @@ internal sealed class TcpPeer : IDisposable
     public static TcpPeer Open(TcpTestFixture fixture, string account = "10000", string? digest = null, int? gamePort = null, byte channelNumber = 10,
         string serverAddress = "127.0.0.1")
     {
-        var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber, serverAddress: serverAddress);
-        peer.fixture = fixture;
+        var peer = new TcpPeer(gamePort ?? fixture.Options.GamePort, channelNumber: channelNumber, serverAddress: serverAddress, fixture: fixture);
         peer.lastBarrierCompleted = peer.UnixTime;
         try
         {
@@ -243,16 +245,17 @@ internal sealed class TcpPeer : IDisposable
         return packet;
     }
 
-    internal void ExpectDazzlementBindings(WirePacket? information = null)
+    internal void ExpectDazzlementBindings(WirePacket? information = null, ushort? characterId = null)
     {
         var packet = information ?? Expect(0, 1608);
         var f = fixture ?? throw new InvalidOperationException("眩惑通知核验需要真实账本");
         int week = DfoServer.Game.Dungeons.WeeklyDungeonPolicy.WeekKey(f.UtcNow);
+        var account = f.Query("SELECT account FROM characters WHERE id=$p0", characterId ?? Id).Single()[0];
         var rows = f.Query("""
             SELECT c.name,c.job FROM account_dazzlement_tower_bindings b
             JOIN characters c ON c.id=b.character_id AND c.account=b.account
             WHERE b.account=$p0 AND b.week=$p1 ORDER BY b.slot
-            """, f.Options.DevelopmentAccount, week);
+            """, account, week);
         TestCheck.That(rows.Length <= 5, "眩惑账号本周绑定名单最多五名");
         TestCheck.Bytes(packet.Body, Build(w =>
         {
@@ -264,6 +267,22 @@ internal sealed class TcpPeer : IDisposable
             }
         }), "1608完整名称/职业名单等于当前账号本周持久绑定");
         DazzlementBindings = packet.Body;
+        ExpectDazzlementState(characterId: characterId);
+    }
+
+    internal void ExpectDazzlementState(byte? expectedUsed = null, ushort? characterId = null)
+    {
+        var f = fixture ?? throw new InvalidOperationException("眩惑通知核验需要真实账本");
+        int day = DfoServer.Game.Inventory.Models.ShopPurchaseCount.Today(f.UtcNow);
+        int week = DfoServer.Game.Dungeons.WeeklyDungeonPolicy.WeekKey(f.UtcNow);
+        var account = f.Query("SELECT account FROM characters WHERE id=$p0", characterId ?? Id).Single()[0];
+        var rows = f.Query("""
+            SELECT last_entry_day FROM account_dazzlement_tower_bindings
+            WHERE account=$p0 AND character_id=$p1 AND week=$p2
+            """, account, characterId ?? Id, week);
+        byte used = rows.Any(row => Convert.ToInt32(row[0]) >= day) ? (byte)1 : (byte)0;
+        if (expectedUsed is { } expected) TestCheck.That(used == expected, "眩惑日次数的独立持久账本预期");
+        DazzlementState = Expect(0, 1605, [0, 0, 0, 0, 0, 0, used, 0, 0, 0, 0]).Body;
     }
 
     // 已显式校验悲叹状态的选图用例使用同一真实账本断言，不交给27的兼容读取再次猜测前置包。
@@ -829,6 +848,7 @@ internal sealed class TcpPeer : IDisposable
                 }
                 ExpectGriefTowerEnterCounts();
                 ExpectDespairTowerEnterCounts();
+                ExpectDazzlementBindings(characterId: U16(prefix[0].Body, 9));
             }
             middle.Add(packet);
         }

@@ -152,6 +152,10 @@ internal static class CargoTests
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
         int checks = Count;
+        That(itemResources.Items.Get(6).PersonalCargoUpgradeTarget == 32 &&
+            itemResources.Items.Get(110).PersonalCargoUpgradeTarget == 40 &&
+            itemResources.Items.Get(50).PersonalCargoUpgradeTarget == 24,
+            "旧银质升级为32格、新银质增加到40格和原24格工具分别保留真实资源容量");
         void Reject(Action action, string name)
         {
             bool rejected = false;

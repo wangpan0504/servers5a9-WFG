@@ -19,23 +19,40 @@ internal static class LukeRaidStartTcpTests
     public static Task RunAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,false);
     public static Task RunDungeonsAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true);
 
-    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons)
+    public static Task RunPhasesAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,true);
+
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false)
     {
         var definition=RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive,
             SelfTestCatalogs.Dungeons(resources.Archive),resources.ItemResources.Items).Find(1)!;
         var raw=definition.Resources!.Script;
         var execution=new RaidScript("selftest/luke-start-only.etc",raw.WaitingRoom,raw.EntryCost,raw.RetryItem,raw.Symbols,
             raw.Phases.Select(phase=>new RaidPhase(phase.Name,phase.Dungeons,[],[])).ToImmutableArray(),[],[]);
-        // 仅并发Run夹具：显式把已登记第二图设Open；原第三图Hide保留为准入负例，不冒充原P1初态。
+        // 受控Run夹具只启用真实Enter规则：5054正式安装后开放5055/56，不再手工改初态。
+        // 未启用其余阶段结束/对象行为，不能称完整原生两阶段策略。
         if(runDungeons) execution=execution with {Phases=execution.Phases.SetItem(0,execution.Phases[0] with
-            {Dungeons=execution.Phases[0].Dungeons.SetItem(1,execution.Phases[0].Dungeons[1] with {InitialState=RaidDungeonState.Open})})};
+            {Rules=raw.Phases[0].Rules.Where(rule=>rule.Trigger.Any(clause=>clause.Tag=="[on enter dungeon]")).ToImmutableArray()})};
+        if(completePhases)
+        {
+            // 保留P2真实初始化（5311/5313开放）；终结条件为明确合成单目标，不冒充原40条完整机制。
+            execution=execution with {Phases=execution.Phases.SetItem(1,execution.Phases[1] with {Rules=[raw.Phases[1].Rules[0]]})};
+            execution=execution with {Phases=execution.Phases.Select((phase,index)=>phase with
+                {Rules=phase.Rules.Add(new([new("[on change dungeon state]",900,index==0?5054:5311,null,null,null,[]),
+                    new("[check dungeon state]",901,index==0?5054:5311,null,RaidDungeonState.Clear,null,[])],
+                    [new("[clear phase]",902,null,null,null,null,[])]))}).ToImmutableArray()};
+        }
         var catalog=definition.Resources!.EntryCatalog!;
         var policy=new LukeRaidStartPolicy("selftest/no-phase-actions-no-rewards",execution)
         { Run=runDungeons ? new LukeRaidRunPolicy("selftest/explicit-first-maze-no-economy",
             raw.Phases.SelectMany((phase,index)=>phase.Dungeons.Select(dungeon=>new LukeRaidMazeChoice(index,dungeon.Id,
                 catalog.Find(dungeon.Id)!.Mazes.First(maze=>maze.QuestConnectionTokens.Count==0).SourceOrdinal))).ToImmutableArray(),
             LukeRaidRunEconomy.ControlledNoRewardsOrRevival) : null };
-        await using var fixture=new TcpTestFixture(source,Path.Combine(root,runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy);
+        if(completePhases) policy=policy with {Completion=new("selftest/explicit-terminal-receipts",2,
+            new(DayOfWeek.Sunday,new TimeOnly(6,0),TimeSpan.FromHours(8)),
+            Enumerable.Range(0,2).Select(phase=>new LukePhaseCompletionPolicy(0,2,
+                new("selftest/explicit-phase-"+phase,[new(0,1,[new(10400,1)],[]),new(1,1,[new(10400,1)],[])],
+                    new(0,(byte)phase,1,0,0,0)))).ToImmutableArray(),LukeParticipationCutoff.TerminalCommittedFacts)};
+        await using var fixture=new TcpTestFixture(source,Path.Combine(root,completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy);
         await fixture.StartAsync();
         var endpoints=ChannelTcpTests.Endpoints(fixture); var repository=new CharacterRepository(fixture.Database);
         var owners=new AccountOwners(); List<TcpPeer> peers=[];
@@ -127,6 +144,7 @@ internal static class LukeRaidStartTcpTests
             That(created.Distinct().Count()==1&&created[0]!=existingId,"缺失三人分队一次安装，不覆盖原单人队");
             foreach(var frames in first)
             {
+                CheckInitialSnapshot(frames);
                 int prepare=frames.FindIndex(p=>p.Opcode==594),party=frames.FindIndex(p=>p.Opcode==9);
                 That(party>=0&&party<prepare&&prepare<frames.FindIndex(p=>p.Opcode==587),"普通完整名单先于594，再发布真实Battle首阶段");
             }
@@ -135,11 +153,14 @@ internal static class LukeRaidStartTcpTests
             That(fixture.Query("SELECT count(*) FROM characters WHERE town=$p0 AND area=$p1",raw.WaitingRoom!.Town,raw.WaitingRoom.Area) is [[4L]],"全部提交到当前PVF候战室");
             CheckFlag(leader,raidKey,0);
             string committed=fixture.Snapshot();
-            // 首次发布已消费但明确丢弃其客户端视图，重试必须给出完整恢复，而非仅成功ACK。
+            // 首次发布已写出；重试恢复名单/资产/图状态，但不能重播同阶段动画。
             foreach(var peer in peers)Drain(peer);
             var repeated=await StartAsync(peers,0,true);
             for(int index=0;index<peers.Count;index++)
             {
+                CheckInitialSnapshot(repeated[index]);
+                That(repeated[index].All(p=>p.Opcode!=587),"重复666恢复完整快照但不重播已发送的同阶段动画");
+                Bytes(repeated[index].Single(p=>p.Opcode==583).Body,first[index].Single(p=>p.Opcode==583).Body,"重放完整symbol快照字节相同");
                 That(U16(repeated[index].Single(p=>p.Opcode==9).Body,4)==U16(first[index].Single(p=>p.Opcode==9).Body,4),"重放沿原Party编号完整恢复，不重复建队");
                 That(repeated[index].Any(p=>p.Opcode==13)&&!repeated[index].Any(p=>p.Opcode==14),"重放完整主背包而非丢失的原扣费差量");
             }
@@ -151,7 +172,7 @@ internal static class LukeRaidStartTcpTests
             }
             foreach(var peer in peers)Drain(peer);
             That(fixture.Snapshot()==committed,"重放和原生分队握手不改任何持久资产/位置/次数");
-            leader.Send(660,[0,0]);Drain(leader);
+            leader.Send(660,[0,0]);Bytes(Until(leader,1,660).Body,[0,0x12,0],"未终结660明确失败并清原生pending，不能断线或发成功");Drain(leader);
             That(fixture.Snapshot()==committed,"start-only Luke不借未类型隔离的Anton领奖表发奖");
             if(runDungeons) LukeRaidRunTcpTests.Single(fixture,leader,raw.Phases[0].Dungeons[0].Id);
             // 同一Runtime继续覆盖满八人跨两队；不另启服务，不手工Attach领域实例。
@@ -199,6 +220,7 @@ internal static class LukeRaidStartTcpTests
                 "自然666一次提交两支四人普通分队，编号不互相覆盖");
             foreach(var frames in full)That(frames.FindIndex(p=>p.Opcode==9)<frames.FindIndex(p=>p.Opcode==594)&&
                 frames.FindIndex(p=>p.Opcode==594)<frames.FindIndex(p=>p.Opcode==587),"八人各自收到完整名单→594→同阶段状态");
+            foreach(var frames in full)CheckInitialSnapshot(frames);
             foreach(var peer in peers)
             {
                 That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0",peer.Id) is [[long town,long area]]&&
@@ -207,8 +229,30 @@ internal static class LukeRaidStartTcpTests
                     is [[long count]]&&count==raw.EntryCost.Count,"满团成功只扣一次门票，失败未留部分扣费");
             }
 
-            if(runDungeons) LukeRaidRunTcpTests.Parties(fixture,peers.ToArray(),raw.Phases[0].Dungeons.Select(row=>row.Id).ToArray(),
+            if(completePhases) LukeRaidRunTcpTests.Phases(fixture,peers.ToArray(),raw,
+                full[0].Single(p=>p.Opcode==9).Body,catalog);
+            else if(runDungeons) LukeRaidRunTcpTests.Parties(fixture,peers.ToArray(),raw.Phases[0].Dungeons.Select(row=>row.Id).ToArray(),
                 full[0].Single(p=>p.Opcode==9).Body,full[4].Single(p=>p.Opcode==9).Body,catalog);
+
+            void CheckInitialSnapshot(List<WirePacket> frames)
+            {
+                var symbols=frames.Single(p=>p.Opcode==583).Body;
+                That(symbols.Length==1+raw.Symbols.Count*8&&symbols[0]==raw.Symbols.Count,"初态583完整有界符号表");
+                var actual=Enumerable.Range(0,symbols[0]).ToDictionary(i=>checked((int)U32(symbols,1+i*8)),i=>checked((int)U32(symbols,5+i*8)));
+                foreach(var symbol in raw.Symbols)
+                {
+                    int expected=raw.Phases[0].Dungeons.FirstOrDefault(d=>d.HpSymbol==symbol.Key)?.HpRaw??0;
+                    That(actual[symbol.Value]==expected,"使用PVF显式symbol ID和原HP初值，不按数组下标");
+                }
+                var states=frames.Where(p=>p.Opcode==586).ToArray();
+                That(states.Length==15&&states.Select(p=>U32(p.Body)).Distinct().Count()==15,"初态覆盖全部15图以清除旧阶段残留");
+                foreach(var packet in states)
+                {
+                    var dungeon=raw.Phases[0].Dungeons.FirstOrDefault(d=>d.Id==U32(packet.Body));
+                    That(packet.Body.Length==6&&packet.Body[4]==0&&packet.Body[5]==(byte)(dungeon?.InitialState??RaidDungeonState.Hide),
+                        "586中间保留0，非当前phase的已登记图显式Hide");
+                }
+            }
 
             void Join(TcpPeer captain,TcpPeer member)
             {
@@ -229,13 +273,39 @@ internal static class LukeRaidStartTcpTests
         }
         finally{foreach(var peer in peers)peer.Dispose();}
         await fixture.StopAsync();
-        if(runDungeons)
+        if(completePhases)
+        {
+            LukeRaidLifecycleTransactionTests.Run(resources,definition,policy);
+            using var deletionOwner=owners.Acquire("lukestart4",()=>{});
+            var old=repository.LoadCharacter(deletionOwner,0)!;
+            That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0 AND state=2",old.Id) is [[1L]],
+                "删角回归前角色有真实666/两阶段正式清图签发的通关事实");
+            repository.Delete(deletionOwner,repository.LoadDeletionTarget(deletionOwner,old.Slot));
+            That(repository.Import(deletionOwner,[old])==1&&repository.LoadCharacter(deletionOwner,old.Slot)!.Id==old.Id,
+                "沿原Delete/Import确实重用同character ID，不靠假定ID永不重用");
+            That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0",old.Id) is [[0L]]&&
+                fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE character_id=$p0",old.Id) is [[0L]],
+                "同id新角色不能继承旧实例参与/周clear/阶段资格或奖励receipt");
+            That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE state=2") is [[7L]],
+                "删除精确角色不清同团其它七人的已提交通关");
+        }
+        if(runDungeons&&!completePhases)
         {
             // StopAsync已收尾日志writer；不把正在刷新的JSON尾行当作完整事件。
             var clears=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="raid_run_clear").Select(row=>row.GetProperty("Detail")).ToArray();
             That(clears.Length==1&&clears[0].GetProperty("Members").GetInt32()==4&&
                 clears[0].GetProperty("AfterRevision").GetInt64()==clears[0].GetProperty("BeforeRevision").GetInt64()+1,
                 "真实Runtime四人共同Run只推进Battle一次，重复事实仅重同步");
+            var entries=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="formal_dungeon_entry")
+                .Select(row=>row.GetProperty("Detail")).Where(row=>row.TryGetProperty("RaidType",out var type)&&type.GetInt32()==1&&row.GetProperty("Accepted").GetBoolean()).ToArray();
+            That(entries.Select(row=>row.GetProperty("Members").GetInt32()).SequenceEqual(new[]{1,1,4,4,4,4,3})&&
+                entries.Select(row=>row.GetProperty("Dungeon").GetInt32()).SequenceEqual(new[]{5054,5054,5054,5055,5054,5055,5055})&&
+                entries.Take(2).Select(row=>row.GetProperty("RaidInstance").GetGuid()).Distinct().Count()==1&&
+                entries.Skip(2).Select(row=>row.GetProperty("RaidInstance").GetGuid()).Distinct().Count()==1&&
+                entries[0].GetProperty("RaidInstance").GetGuid()!=entries[2].GetProperty("RaidInstance").GetGuid()&&
+                entries.All(row=>row.GetProperty("Runs").GetArrayLength()==1)&&
+                entries.Select(row=>row.GetProperty("Runs")[0].GetGuid()).Distinct().Count()==7,
+                "七次入场精确覆盖两次单人、四次四人及断线后三人，同步notice不计人数；实例/图/唯一Run均匹配流程");
             LukeRaidRunTransactionTests.Run(resources,definition,policy);
         }
         That(fixture.Events().Any(e=>e.GetProperty("Kind").GetString()=="closed"&&
@@ -263,7 +333,7 @@ internal static class LukeRaidStartTcpTests
     }
 
     static void Validate(WirePacket packet) => That(packet.Kind==0&&packet.Opcode is
-        2 or 3 or 4 or 6 or 7 or 8 or 9 or 11 or 13 or 14 or 22 or 23 or 24 or 26 or 153 or 590 or 591 or 592 or 593 or 594 or 598,
+        2 or 3 or 4 or 6 or 7 or 8 or 9 or 11 or 13 or 14 or 22 or 23 or 24 or 26 or 153 or 583 or 586 or 590 or 591 or 592 or 593 or 594 or 598,
         $"Luke夹具仅消费已证旁路通知：{packet.Kind}/{packet.Opcode}");
 
     static WirePacket Until(TcpPeer peer,byte kind,ushort opcode)
@@ -288,7 +358,7 @@ internal static class LukeRaidStartTcpTests
         for(int index=0;index<256&&(!started||!ack);index++)
         {
             var packet=peer.Read();frames.Add(packet);
-            if(packet is {Kind:0,Opcode:587}){Bytes(packet.Body,[2,0],"Luke启动/候战恢复状态严格2与phase0");started=true;}
+            if(packet is {Kind:0,Opcode:587}){That(!replay,"已发送的同阶段重放不得重复587动画");Bytes(packet.Body,[2,0],"Luke首次状态严格2与phase0");started=true;}
             else if(packet is {Kind:1,Opcode:666})
             {
                 if(allowBusy&&packet.Body.SequenceEqual(new byte[]{0,19,0}))
@@ -298,8 +368,9 @@ internal static class LukeRaidStartTcpTests
                 }
                 Bytes(packet.Body,[1],"666已证单字节成功");ack=true;
             }
-            else That(packet.Kind==0&&packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 13 or 14 or 22 or 23 or 24 or 26 or 153 or 591 or 594 or 598,
+            else That(packet.Kind==0&&packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 13 or 14 or 22 or 23 or 24 or 26 or 153 or 583 or 586 or 591 or 594 or 598,
                 $"Luke启动只消费已证通知：{packet.Kind}/{packet.Opcode}");
+            if(replay&&frames.Count(p=>p.Opcode==586)==15&&frames.Any(p=>p.Opcode==583))started=true;
         }
         That(started&&ack&&frames.Single(p=>p.Opcode==594).Body.Length==0,"各成员完成有界启动/恢复链");
         That(frames.Any(p=>p.Opcode==(replay?13:14)),"首次增量与重放完整背包分别使用已证opcode");

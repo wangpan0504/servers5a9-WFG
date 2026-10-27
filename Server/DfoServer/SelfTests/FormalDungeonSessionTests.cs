@@ -40,6 +40,7 @@ internal static class FormalDungeonSessionTests
         Lifecycle(14);
         OrdinaryJobs();
         OtherAdmissions();
+        LostLandSessionTests.Run(towns, pvf, characters);
         RejectedEntry();
         Reservation();
         ObjectKeyReuse();
@@ -1023,6 +1024,7 @@ internal static class FormalDungeonSessionTests
             f.Sql("DROP TABLE character_tp_sources; DROP TABLE character_skill_commands; DROP TABLE character_skill_combos; DROP TABLE character_skill_point_sources; DROP TABLE account_expert_contracts; DROP TABLE character_dungeon_settlement_receipts; DROP TABLE character_quest_completion_receipts; DROP TABLE character_quest_clear_receipts; DROP INDEX character_active_quest_acceptance; ALTER TABLE character_active_main_quests DROP COLUMN acceptance_id; DROP TABLE character_dungeon_pickup_receipts");
             f.Sql("DROP TABLE character_dungeon_loot_receipts");
             f.Sql("DROP TABLE character_dungeon_state");
+            DatabaseSchemaTests.RewindRaidLifecycle(f.Path);
             f.Sql("PRAGMA user_version=7");
             var legacy = new CharacterRepository(f.Path).LoadCharacter(f.Owner, f.Created.Slot);
             Check(legacy.DungeonState is null &&

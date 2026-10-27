@@ -50,6 +50,23 @@ internal static class InventoryProjectionTests
                     actual.Length == 5 + expectedSlots.Length * ItemListProtocolWriter.EntrySize, "列表头、虚拟零值记录及全部实体长度不变");
                 TestCheck.That(expectedSlots.Select((slot, index) => slot == BinaryPrimitives.ReadInt16LittleEndian(actual.AsSpan(5 + index * ItemListProtocolWriter.EntrySize))).All(value => value), "所有输出槽位按 wire 顺序有序且无遗漏");
             }
+        var wornCore = new ItemCore(18400, ItemKind.Equipment, 999999998) { SortLockFlag = 1, EquipmentLockId = 2 };
+        foreach (var list in new[] { InventoryListType.Main, InventoryListType.Equipment })
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream);
+            var item = new InventoryItem(7, new(list, 12), wornCore);
+            ItemListProtocolWriter.Write(writer, item.Position, item, 0);
+            TestCheck.That(stream.ToArray()[95] == (list == InventoryListType.Equipment ? 0 : 1) &&
+                stream.ToArray()[96] == 2 && item.Core == wornCore, "穿戴蓝锁投影隐藏，背包和安全锁保留，实例不解锁");
+        }
+        using (var stream = new MemoryStream())
+        {
+            using var writer = new BinaryWriter(stream);
+            EquipmentProtocolWriter.Player(writer, new([new(7, new(InventoryListType.Equipment, 12), wornCore)]), 0);
+            TestCheck.That(stream.ToArray()[44] == 0 && stream.ToArray()[45] == 2,
+                "Player穿戴尾部独立隐藏排序锁，保留装备安全锁");
+        }
         var duplicate = new InventorySnapshot([new(1, new(InventoryListType.Main, 121), new(50001, ItemKind.Material, 1)),
             new(2, new(InventoryListType.Main, 121), new(50002, ItemKind.Material, 1))]);
         try { InventoryPackets.Full(duplicate); throw new Exception("重复槽位未拒绝"); }

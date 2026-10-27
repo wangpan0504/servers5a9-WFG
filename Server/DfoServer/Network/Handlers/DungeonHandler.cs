@@ -30,10 +30,13 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     TitleProjection? titleProjection = null, InventoryProjection? inventoryProjection = null,
     PartyDungeonService? partyDungeons = null, CharacterStatComputer? partyStats = null,
     DfoServer.Game.Party.PartyService? parties = null, EpicPieceShopService? epicPieceShop = null,
-    TagEvildomRunProjection? tagEvildomRun = null, DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null) : IGameCommandModule
+    TagEvildomRunProjection? tagEvildomRun = null, EvildomWarCatalog? evildomWar = null,
+    DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null,
+    DfoServer.Game.Raids.ILukeRaidLifecycleStore? lukeLifecycle = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
+        commands.Register(CmdPacketType.START_EVILDOM_WAR, StartEvildomWarAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.SELECT_DUNGEON, SelectAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.FINISH_LOADING, LoadedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.DIE_MONSTER, DeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
@@ -177,7 +180,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 if (entered.Length == 0) lukeRaid?.CancelSelection(context.Session, selectedParty);
             }
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length > 0, Party = true,
-                RaidType = 1, Dungeon = selection.DungeonIndex, Members = entered.Length,
+                RaidType = 1, Dungeon = selection.DungeonIndex, Members = entered.Count(notice => notice.Kind == PartyDungeonNoticeKind.Entry),
                 RaidInstance = context.Session.StartedRaid?.InstanceId,
                 Runs = entered.Select(notice => notice.Scene?.Snapshot.Identity.InstanceId).Distinct().ToArray(),
                 RejectReason = entered.Length == 0 ? context.Session.LastFormalDungeonRejection ?? "luke-entry-unavailable" : null });
@@ -225,7 +228,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             (selection.Unknown7 != (hell ? 1 : 0) || selection.Unknown8 != (direct || practice ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
             selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0) || selection.Unknown21 != 0))
             return await RejectAsync();
-        if (context.Session.HasMultiplePartyMembers?.Invoke() == true)
+        if (context.Session.HasMultiplePartyMembers?.Invoke() == true || context.Session.ReadEvildomWar() is not null)
         {
             if (partyDungeons is null || direct || replay || practice || continuation || sealDoor)
                 return await RejectAsync();
@@ -234,7 +237,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 dungeons, rooms, drops, items, pieces, prepareDrops,
                 questId: hell ? 0u : selection.Unknown16, hellParty: hell, hellLegend: legend, crackRewards: crackRewards);
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length > 0, Party = true,
-                Members = entered.Length, Dungeon = selection.DungeonIndex, Quest = selection.Unknown16, HellParty = hell, HellLegend = legend,
+                Members = entered.Count(notice => notice.Kind == PartyDungeonNoticeKind.Entry), Dungeon = selection.DungeonIndex, Quest = selection.Unknown16, HellParty = hell, HellLegend = legend,
                 RejectReason = entered.Length == 0 ? context.Session.LastFormalDungeonRejection ?? "party-entry-unavailable" : null });
             if (entered.Length == 0) return await RejectAsync();
             await PartyDungeonProjection.PublishAsync(entered);
@@ -385,6 +388,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt.Entry.UsesFatigue)
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
+        if (context.LostLand is not null) await context.LostLand.StartAsync(receipt);
         if (context.Altar is not null && context.Session.StartDungeonAltar(receipt) is { } altar)
             await context.Altar.WakeAsync(altar);
         if (receipt.HellPartyRoomCleared)
@@ -683,6 +687,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool tag = context.Session.HasFormalTagEvildom;
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
+        if (context.LostLand is not null) await context.LostLand.StopAsync();
         if (context.Altar is not null) await context.Altar.StopAsync();
         if (context.Death is not null) await context.Death.StopAsync();
         bool Guard() => context.Session.CanPublishTravel(receipt);

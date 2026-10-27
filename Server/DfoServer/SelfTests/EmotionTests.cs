@@ -68,6 +68,7 @@ internal static class EmotionTests
             using var replacement = owners.Acquire("mood-a", () => { });
             Reject<InvalidOperationException>(() => store.SaveEmotion(owner, first.Id, 0), "过期generation不能保存心情");
             DatabaseSchemaTests.RemoveAdventureSchema(path);
+            DatabaseSchemaTests.RewindRaidLifecycle(path);
             Execute("ALTER TABLE characters DROP COLUMN emotion; PRAGMA user_version=27");
             Execute("INSERT INTO character_title_progress VALUES(1,'mood-a',6501,1,2,3,0); INSERT INTO character_title_sections VALUES(1,'mood-a',0,1)");
             Execute("INSERT INTO character_tutorial_state VALUES(1,'mood-a',7115,0,0); INSERT INTO account_hotkey_settings VALUES('mood-a',0,X'4930310937370A')");

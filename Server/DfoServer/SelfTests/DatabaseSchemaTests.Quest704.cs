@@ -56,6 +56,7 @@ internal static partial class DatabaseSchemaTests
                     Execute(db,"INSERT INTO character_operation_hope_reward_receipts VALUES(1,'preview','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',1,0,12001,1,1,6,7,95,95,0,0,0,'{}','[]','[]',1234)");
                 foreach (string table in taskTables)
                     if (TableNames(db).Contains(table)) preserved.Add(table, Rows(db, table, ColumnNames(db, table)));
+                RewindRaidLifecycle(db);
                 Execute(db,$"PRAGMA user_version={version}");
             }
             // 连续两次打开覆盖真实升级以及升级后重启，不重复制作或邮件。
@@ -89,6 +90,7 @@ internal static partial class DatabaseSchemaTests
             {
                 RemoveSkillTreeExpansionSchema(db);
                 if (fault != "mixed-talisman") RewindTalismanInventory(db);
+                RewindRaidLifecycle(db);
                 Execute(db,"DROP TABLE character_social_links; DROP TABLE account_social_links; DROP TABLE account_social_requests; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE account_pvp_private_characters; DROP TABLE character_pvp_training_skills; DROP TABLE quest_eligibility_mail_dispatches; PRAGMA user_version=90");
                 Execute(db,"INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction) VALUES('preview',0,'Preview',7,1,0,100,100,0); INSERT INTO character_epic_production VALUES(1,5000,123,20261024,2,3,4,5,6,7)");
                 if (fault == "unknown-epic") Execute(db,"ALTER TABLE character_epic_production ADD COLUMN unexpected INTEGER");

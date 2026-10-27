@@ -925,7 +925,8 @@ internal static class QuestSceneTests
         public Fixture(TownCatalog towns,CharacterCatalog characters,SkillLearningCatalog skills,CharacterGrowthCatalog growth,QuestCatalog quests,bool lost,
             byte level = 3, int[]? completed = null, bool loseGrowth = false, byte job = 0, Location? position = null,
             Func<PreparedDungeonDeath,bool>? growthLossCondition = null,PremiumContractCatalog? contracts = null,
-            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null,ushort? fatigueRemaining = null,byte growType = 0)
+            TimeProvider? timeProvider = null,long? growthContractExpiresAt = null,bool loseSettlement = false,(int Id,int Count)[]? items = null,QuestStageGraph? stages = null,ushort? fatigueRemaining = null,byte growType = 0,
+            DungeonIncountCatalog? incounts = null)
         {
             path = Path.Combine(root,"game.db"); Repository = new(path,quests); Owner = owners.Acquire("scene-quest",() => { });
             var candidate = CharacterCreation.Prepare("SceneQuest",characters.Get(job),position ?? towns.Room,position ?? towns.InitialReturn,skills.Get);
@@ -957,7 +958,7 @@ internal static class QuestSceneTests
             if (loseSettlement)
                 repository = new FormalDungeonPublicationTests.LostResultRepository(repository,loseGrowth:false,loseSettlement:true);
             Session = new(repository,towns,Owner,questCatalog: quests,
-                contracts: contracts,timeProvider: timeProvider,stageGraph: stages);
+                contracts: contracts,timeProvider: timeProvider,stageGraph: stages,incounts: incounts);
             Session.Select(0, resumeTown: position is not null); Session.MarkReady();
         }
         public Character Read() => Repository.LoadCharacter(Owner,0);

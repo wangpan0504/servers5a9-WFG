@@ -126,6 +126,7 @@ internal static partial class DatabaseSchemaTests
                 RewindZeroExperience(db);
                 Execute(db, "DROP TABLE character_quest_daily_clear;ALTER TABLE character_expert_job DROP COLUMN learned_recipes");
                 if (version == 78) Execute(db, "ALTER TABLE character_teleport_cooldowns DROP COLUMN party_aura_until");
+                RewindRaidLifecycle(db);
                 Execute(db, $"INSERT INTO character_teleport_cooldowns VALUES(1,'preview-aura',1000,2000,3000{(version == 79 ? ",4000" : "")});PRAGMA user_version={version}");
             }
             string damaged = Path.Combine(root, "preview-unknown-" + version + ".db");

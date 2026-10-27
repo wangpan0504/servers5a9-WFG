@@ -55,11 +55,25 @@ internal sealed partial class DungeonHandler
 
     async Task PublishPartyNoticeAsync(GameConnectionContext context, PartyDungeonNotice notice)
     {
+        if (lukeLifecycle is not null && notice.Kind is PartyDungeonNoticeKind.RaidBattleSync or PartyDungeonNoticeKind.Departure &&
+            context.Session.CommitPendingLukePhase(lukeLifecycle))
+            log.Write("raid_phase_committed", new { Connection = context.Id, RaidType = 1, Instance = context.Session.RaidCombatView()?.Instance });
         using var publication = context.Sender.QueuePublication(notice.Recipient.Actor.IsCurrent);
+        if (notice.Kind == PartyDungeonNoticeKind.EvildomWarStarted)
+        {
+            var war = context.Session.ReadEvildomWar();
+            if (war is null) return;
+            await context.Notify(NotiPacketType.EVILDOM_WAR_INFO, EvildomWarPackets.Info(war.Mode,
+                (int)(war.Deadline - context.Session.EvildomWarNow).TotalSeconds,
+                war.Dungeons),
+                "evildom_war_info", () => ReferenceEquals(context.Session.ReadEvildomWar(), war));
+            return;
+        }
         if (notice.Kind == PartyDungeonNoticeKind.RaidBattleSync)
         {
             if (notice.RaidBattleChange is { } change)
-                log.Write("raid_run_clear", new { Connection = context.Id, RaidType = 1, Instance = change.After.Instance,
+                log.Write(notice.RaidEvent is null ? "raid_run_clear" : "raid_run_event", new { Connection = context.Id,
+                    Event = notice.RaidEvent?.ToString(), RaidType = 1, Instance = change.After.Instance,
                     Run = notice.Scene?.Snapshot.Identity.InstanceId, Dungeon = notice.Scene?.Entry.DungeonId,
                     Members = notice.Members.Length, change.After.Phase, BeforeRevision = change.Before.Revision,
                     AfterRevision = change.After.Revision, State = change.After.State.ToString() });

@@ -63,6 +63,8 @@ internal sealed record DungeonMaze(
     public string? ResourceError { get; init; }
     public bool IsTrainingRoom { get; init; }
     public bool IsClassExperience { get; init; }
+    // 仅由4000的严格资源解析设置；专用静态连接不代表正式限时玩法已接通。
+    public bool IsLostLand { get; init; }
     public bool IsGriefTower { get; init; }
     // 资源池已核验的同层唯一MAP；静态拓扑必须继续匹配它，不能只凭模式布尔值放宽BB。
     public DungeonMap? GriefRoom { get; init; }
@@ -545,6 +547,12 @@ internal sealed class DungeonCatalog
         Dictionary<string, DungeonRawSection>? current = null;
         var mazeSections = new List<DungeonRawSection>();
         bool mazeClosed = false;
+        // 匹配PVF的5424缺少[maze info]，但完整布局直接位于副本头；仅接受魔界大战单迷宫的这一形式。
+        // 仍由同一ParseMaze校验尺寸、起点、Boss与显式地图，不借用5418布局或补造房间。
+        if (!sections.Any(section => section.Tag == "maze info") &&
+            path.StartsWith("dungeon/kcontents2/theevildomwar/", StringComparison.Ordinal) &&
+            sections.Any(section => section.Tag == "evildom war dungeon" && section.Tokens.Count == 0))
+            current = new(StringComparer.Ordinal);
         for (int i = 0; i < sections.Count; i++)
         {
             var section = sections[i];

@@ -27,6 +27,7 @@ internal static partial class DatabaseSchemaTests
                 CREATE TRIGGER zero_schema_trigger AFTER UPDATE ON character_dungeon_growth_receipts BEGIN SELECT 1; END;
                 """);
             RewindZeroExperience(db);
+            RewindRaidLifecycle(db);
             Execute(db, "PRAGMA user_version=77");
         }
         string previous = Snapshot(path);
@@ -56,6 +57,7 @@ internal static partial class DatabaseSchemaTests
         {
             Execute(db, "UPDATE character_dungeon_growth_receipts SET amount=13,after_experience=13");
             RewindZeroExperience(db);
+            RewindRaidLifecycle(db);
             Execute(db, "ALTER TABLE character_dungeon_settlement_receipts ADD COLUMN unexpected INTEGER;PRAGMA user_version=77");
         }
         string malformed = Snapshot(path);

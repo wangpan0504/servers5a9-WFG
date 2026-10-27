@@ -304,6 +304,7 @@ internal static class AdventureExpeditionTests
                 using (var db = Open(path))
                 {
                     DatabaseSchemaTests.RemoveAdventureExpeditions(db);
+                    DatabaseSchemaTests.RewindRaidLifecycle(db);
                     Execute(db, "PRAGMA user_version=30; INSERT INTO account_adventures VALUES('legacy',7,'LegacyGroup',20261011,1,0,'0',0,0,zeroblob(20),202610); " +
                         "INSERT INTO account_adventure_representatives VALUES('legacy',0,1,NULL)");
                     if (fail) Execute(db, "CREATE VIEW account_adventure_receipts AS SELECT 1 AS collision");

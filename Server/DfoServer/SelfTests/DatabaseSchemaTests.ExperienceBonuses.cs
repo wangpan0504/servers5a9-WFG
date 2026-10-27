@@ -17,6 +17,8 @@ internal static partial class DatabaseSchemaTests
             var database = new SqliteGameDatabase(path);
             using var owner = new AccountOwners().Acquire("exp-schema", () => { });
             var role = new CharacterRepository(path).Create(owner,new NewCharacter("ExpMigration",new(38,1,450,234),null));
+            string[] tables;
+            string[][] columns;
             using (var db = database.Open())
             {
                 Execute(db,$"""
@@ -30,9 +32,16 @@ internal static partial class DatabaseSchemaTests
                     CREATE TRIGGER bonus_migration_trigger AFTER UPDATE ON character_dungeon_settlement_receipts BEGIN SELECT 1; END;
                     """);
                 RemoveExperienceBonusSchema(db);
+                RewindRaidLifecycle(db);
+                Execute(db,"INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card," +
+                    "week_key,final_phase,plan_json,mail_ids,created_at) VALUES(" + role.Id +
+                    ",'exp-schema','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',0,0,1,20261022,0,'{\"legacy\":true}','[]',1)");
                 Execute(db,"PRAGMA user_version=65");
+                // 冻结真实旧结构的全部表列；新增表列另验缺省值，不能混入原值比较。
+                tables = TableNames(db);
+                columns = tables.Select(table => ColumnNames(db,table)).ToArray();
             }
-            string before = Data(path), old = Snapshot(path);
+            string before = Data(path,tables,columns), old = Snapshot(path);
             using (var db = Open(path))
             {
                 using (var tx = db.BeginTransaction())
@@ -43,19 +52,23 @@ internal static partial class DatabaseSchemaTests
             }
             Check(Snapshot(path) == old,"经验列、CHECK及版本在事务回滚后完整恢复");
             _ = new SqliteGameDatabase(path);
-            Check(Data(path) == before && QueryOn(path,"PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
+            Check(Data(path,tables,columns) == before && QueryOn(path,"PRAGMA user_version") is long version && version == SqliteMigrations.CurrentVersion &&
                 QueryOn(path,"SELECT other_bonus_experience FROM character_dungeon_settlement_receipts") is 0L &&
                 QueryOn(path,"SELECT bonus_json FROM character_dungeon_settlement_receipts") is "[]" &&
                 QueryOn(path,"SELECT proficiency_gain FROM character_dungeon_settlement_receipts") is 0L &&
                 QueryOn(path,"SELECT count(*) FROM characters WHERE selected_skill_tree<>-1") is 0L &&
                 QueryOn(path,"SELECT count(*) FROM sqlite_schema WHERE name IN ('bonus_migration_index','bonus_migration_trigger')") is 2L,
                 "真实65旧库升级到当前版本保留全表原值、UID序列和历史回执，旧分项缺省0且无补发");
+            Check(QueryOn(path,"SELECT count(*) FROM character_raid_runs") is 0L &&
+                QueryOn(path,"SELECT raid_type FROM character_raid_reward_receipts") is 0L,
+                "升级不补造攻坚生命周期，历史奖励回执缺省为Anton类型0");
             string current = Snapshot(path);
             _ = new SqliteGameDatabase(path);
             Check(Snapshot(path) == current,"重复打开新结构不重复迁移、修改资产或重建表");
             using (var db = Open(path))
             {
                 RemoveExperienceBonusSchema(db);
+                RewindRaidLifecycle(db);
                 Execute(db,"ALTER TABLE character_dungeon_settlement_receipts ADD COLUMN unexpected INTEGER;PRAGMA user_version=65");
             }
             string malformed = Snapshot(path);
@@ -64,11 +77,10 @@ internal static partial class DatabaseSchemaTests
         }
         finally { Directory.Delete(root,true); }
 
-        static string Data(string file)
+        static string Data(string file, string[] tables, string[][] columns)
         {
             using var db = Open(file);
-            return string.Join('|', TableNames(db).Select(table => table + ":" + Rows(db,table,
-                ColumnNames(db,table).Where(column => column is not "\"other_bonus_experience\"" and not "\"bonus_json\"" and not "\"proficiency_gain\"" and not "\"selected_skill_tree\"").ToArray())));
+            return string.Join('|', tables.Select((table,index) => table + ":" + Rows(db,table,columns[index])));
         }
     }
 }

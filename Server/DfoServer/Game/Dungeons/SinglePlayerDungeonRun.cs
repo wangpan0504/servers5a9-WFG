@@ -2,7 +2,7 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
-internal enum SinglePlayerDungeonPhase { Loading, Dungeon, Settlement, Returned }
+internal enum SinglePlayerDungeonPhase { Loading, Dungeon, Settlement, Returned, TimedOut }
 internal enum DungeonRunOutcome { Accepted, Duplicate, Rejected, Unsupported }
 internal enum DungeonMapOperation : byte { Current, AdvanceLayer, RestoreBase }
 internal enum DungeonMapPayload : byte { Cached, Build, Refresh }
@@ -199,7 +199,14 @@ internal sealed partial class SinglePlayerDungeonRun
         if (pendingPassiveClear is null && current.Plan.Monsters.Any(monster => monster.ObjectKey == key && !monster.CanReportDeath))
             current.Dead.Add(key);
     }
-    public SinglePlayerDungeonPhase Phase { get; private set; } = SinglePlayerDungeonPhase.Loading;
+    SinglePlayerDungeonPhase phase = SinglePlayerDungeonPhase.Loading;
+    // 截止瞬间停止新战斗与移动，不依赖后台任务何时取得命令门；已准备的事务仍由原回执确认。
+    public SinglePlayerDungeonPhase Phase
+    {
+        get => phase != SinglePlayerDungeonPhase.Returned && LostLandClock?.Elapsed == true ? SinglePlayerDungeonPhase.TimedOut : phase;
+        private set => phase = value;
+    }
+    internal LostLandRunClock? LostLandClock { get; }
     public DungeonClearFact? ClearFact { get; private set; }
     internal void BindPartyInstance(Guid instance)
     {
@@ -230,13 +237,14 @@ internal sealed partial class SinglePlayerDungeonRun
         return current.Dead.Add(death.MonsterKey) ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate;
     }
 
-    private SinglePlayerDungeonRun(DungeonEntryPlan entry, long attempt, long epoch, DungeonFixedRoute route, DungeonCombatAuthority authority)
+    private SinglePlayerDungeonRun(DungeonEntryPlan entry, long attempt, long epoch, DungeonFixedRoute route, DungeonCombatAuthority authority, TimeProvider? time)
     {
         scriptedTransitLayer = ResolveScriptedTransitLayer(entry.PartyRoute ?? entry, route);
         if (scriptedTransitLayer is not null)
             entry = entry with { TerminalLayerMap = null, TerminalLayerQuestId = 0,
                 TerminalLayerQuestSlot = byte.MaxValue, TerminalLayerAcceptanceId = Guid.Empty };
         this.entry = entry;
+        LostLandClock = entry.LostLand is { } admission ? new(admission, time ?? TimeProvider.System) : null;
         this.authority = authority;
         var baseRooms = route.Rooms.Where(plan => entry.Maze.MapSpecification!.Contains(plan.Room.Map)).Select(plan => new Room(
             plan with { Monsters = Array.AsReadOnly(plan.Monsters.ToArray()) })).ToArray();
@@ -273,12 +281,20 @@ internal sealed partial class SinglePlayerDungeonRun
     }
 
     public static bool TryCreate(DungeonEntryPlan entry, long taskAttempt, long initialEpoch, DungeonFixedRoute? approvedRoute,
-        DungeonCombatAuthority? combatAuthority, out SinglePlayerDungeonRun? run, out string reason)
+        DungeonCombatAuthority? combatAuthority, out SinglePlayerDungeonRun? run, out string reason, TimeProvider? time = null)
     {
         run = null;
         reason = "unsupported: 需要正式战斗权威及已确认门墙连接";
         if (approvedRoute is null || combatAuthority is null)
             return false;
+        if ((entry.DungeonId == 4000 || entry.Maze.IsLostLand || entry.LostLand is not null) &&
+            (entry.DungeonId != 4000 || !entry.Maze.IsLostLand || entry.LostLand is null || entry.QuestId != 0 ||
+                entry.Difficulty != 0 || entry.IsPractice || entry.IsQuestReplay || entry.HellPartyMode != 0 || entry.PartyRoute is not null ||
+                !entry.DisableFatigueConsumption || !entry.DisableGiveupPenalty || !entry.DisableClearReward ||
+                entry.AllowsCompanionAi || !entry.Maze.StaticTopology.Supported ||
+                entry.Maze.ClearConditions is not [{ Type: "limit time", TargetId: 600, Count: > 0 } timeLimit] ||
+                entry.LostLand.OpaqueValue != timeLimit.Count))
+        { reason = "invalid: 遗忘之地专用准入不完整"; return false; }
         // 此字段只由本Run依据完整批准路线派生，调用方不能预先声明一个任意末层。
         if (entry.PassiveClearTerminalMap is not null || entry.CinematicClearTerminalMap is not null)
         {
@@ -448,12 +464,15 @@ internal sealed partial class SinglePlayerDungeonRun
                     pending.Enqueue(edge.Item2);
             }
         }
-        if (reachable.Count != points.Count || keys.Count == 0 && !entry.IsTrainingRoom)
+        // 遗忘之地有独立传送房；只接受原静态普通连接，不补边以伪造全图可达。
+        bool lostLandLinksMatch = entry.LostLand is not null && entry.Maze.StaticTopology.Links is { } links &&
+            links.Count == approvedRoute.Connections.Count && links.All(link => edges.Contains((link.First, link.Second)));
+        if (entry.LostLand is not null ? !lostLandLinksMatch || keys.Count == 0 : reachable.Count != points.Count || keys.Count == 0 && !entry.IsTrainingRoom)
         {
             reason = "invalid: 路线不可达或无可生成演员";
             return false;
         }
-        run = new(entry, taskAttempt, initialEpoch, approvedRoute, combatAuthority);
+        run = new(entry, taskAttempt, initialEpoch, approvedRoute, combatAuthority, time);
         reason = "domain-run-created";
         return true;
     }
@@ -791,7 +810,7 @@ internal sealed partial class SinglePlayerDungeonRun
     {
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
-        if (tagEvildom is not null || entry.IsPractice || entry.DungeonId is >= 11008 and <= 11107 || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
+        if (entry.LostLand is not null || tagEvildom is not null || entry.IsPractice || entry.DungeonId is >= 11008 and <= 11107 || !ReferenceEquals(ClearFact, fact) || fact.Identity != identity || Phase != SinglePlayerDungeonPhase.Settlement ||
             HasPendingDeath || reportBody.IsEmpty || reportBody.Length > 4096 || reward.TotalExperience == 0 && !entry.IsTutorial && !entry.DisableMonsterAndClearExperience ||
             entry.DisableMonsterAndClearExperience && reward.TotalExperience != 0 ||
             (ulong)reward.BaseExperience + reward.RankExperience + reward.ExtraExperience != reward.TotalExperience || reward.RankBonusIndex is < -1 or > 4 ||

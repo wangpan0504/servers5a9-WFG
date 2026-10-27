@@ -108,6 +108,8 @@ internal static class AmplificationTcpTests
             fixture.Snapshot("SELECT item_uid FROM character_inventory_items ORDER BY item_uid") == uids &&
             fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "异次元属性操作不更换UID或扣普通金币，持久化及外键一致");
+        await fixture.StopAsync();
+        await ClockAsync(options, root, resources);
 
         ItemCore Saved(short slot) => System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)fixture.Query(
             "SELECT item_core FROM character_inventory_items JOIN character_inventory_slots USING(item_uid) WHERE list_type=0 AND slot_index=$p0", slot).Single().Single())!;
@@ -115,6 +117,65 @@ internal static class AmplificationTcpTests
             fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
             fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id");
         static byte[] GoldRequest() => AmplificationTests.Request(2, 9, weapon, 69, 8238, 3, "amplify-test-item"u8.ToArray());
+        static InventorySlot Main(short slot) => new(InventoryListType.Main, slot);
+    }
+
+    static async Task ClockAsync(ServerOptions options, string root, TcpTestResources resources)
+    {
+        // 人工实例时限与系统日期刻意不同，证明整个真实请求链使用Runtime的同一时钟。
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        clock.Advance(DateTimeOffset.FromUnixTimeSeconds(1_600_000_000) - clock.GetUtcNow());
+        int expires = checked((int)clock.GetUtcNow().ToUnixTimeSeconds() + 10);
+        var items = resources.ItemResources.Items;
+        var core = InventoryRewardGrantService.Create(items.Get(31440)) with { Attr = 0xE0, EnchantCardId = 3175 };
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "amplification-clock"), resources: resources, clock: clock);
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            new CharacterRepository(fixture.Database).Create(owner, new("ClockTcp", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Job = 2, Level = 75, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(2).Skills,
+                Inventory = new([
+                    new(0, Main(9), core),
+                    new(0, Main(10), core with { AmplifyType = 0x83, AmplifyValue = 51, ExpireTime = expires }),
+                    new(0, Main(11), core),
+                    new(0, Main(65), InventoryRewardGrantService.Create(items.Get(1184), 2) with { ExpireTime = expires }),
+                    new(0, Main(66), InventoryRewardGrantService.Create(items.Get(1183), 1) with { ExpireTime = 0 })], Gold: 1234)
+            });
+        string uidsForTargets = fixture.Snapshot("SELECT item_uid FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=31440 ORDER BY item_uid");
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            peer.Send(205, [0, 9, 0, 0xD0, 0x7A, 0, 0, 65, 0, 0xA0, 4, 0, 0, 0]);
+            peer.Expect(1, 205, [1, 0, 65, 0, 1, 0, 0, 0, 9, 0, 3, 6, 0]); peer.Barrier();
+            That(Saved(9) == core with { AmplifyType = 3, AmplifyValue = 6 } && Saved(65).Count == 1,
+                "固定205请求在注入时钟截止前成功，系统日期不能提前判源过期");
+            peer.Send(204, [10, 0, 0xD0, 0x7A, 0, 0, 66, 0, 0x9F, 4, 0, 0]);
+            peer.Expect(1, 204, [1, 66, 0, 0, 0, 0, 0, 10, 0, 3, 51, 0]); peer.Barrier();
+            That(Saved(10) == core with { AmplifyType = 3, AmplifyValue = 51, ExpireTime = expires },
+                "固定204请求沿同一时钟净化有限期目标，完整实例及原隐藏基础值保留");
+            That(fixture.Snapshot("SELECT item_uid FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=31440 ORDER BY item_uid") ==
+                uidsForTargets, "两条成功请求保留三个目标的原UID");
+            clock.Advance(TimeSpan.FromSeconds(10));
+            string before = Snapshot();
+            peer.Send(205, [0, 11, 0, 0xD0, 0x7A, 0, 0, 65, 0, 0xA0, 4, 0, 0, 0]);
+            peer.Expect(1, 205, [0, 17, 0]); peer.Barrier();
+            That(Snapshot() == before && Saved(11) == core, "同连接在源到期等号收到固定拒绝ACK，库存、revision及审计零变化");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            That(Saved(9) == core with { AmplifyType = 3, AmplifyValue = 6 } && Saved(11) == core &&
+                fixture.Query("SELECT 1 FROM character_inventory_slots WHERE list_type=0 AND slot_index IN (10,65,66)").Length == 0,
+                "重选恢复合法提交的完整核心，过期源和目标沿既有清理删除，耗尽净化材料不复生");
+        }
+        That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0 &&
+            fixture.Query("SELECT gold FROM characters") is [[1234L]], "异次元共享时钟TCP数据库完整性及金币保持");
+
+        ItemCore Saved(short slot) => System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)fixture.Query(
+            "SELECT item_core FROM character_inventory_items JOIN character_inventory_slots USING(item_uid) WHERE list_type=0 AND slot_index=$p0", slot).Single().Single())!;
+        string Snapshot() => fixture.Snapshot("SELECT id,revision,gold FROM characters") +
+            fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id");
         static InventorySlot Main(short slot) => new(InventoryListType.Main, slot);
     }
 }

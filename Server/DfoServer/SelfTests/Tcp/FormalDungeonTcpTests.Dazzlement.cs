@@ -12,7 +12,7 @@ internal static partial class FormalDungeonTcpTests
 {
     public static async Task RunDazzlementAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        var clock = new DazzlementDays();
+        var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-26T12:00:00+08:00"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "dungeon-dazzlement"), resources: resources, clock: clock);
         await fixture.StartAsync();
         var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
@@ -36,6 +36,7 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(created.Slot, prepared: true, resumeTown: true, room: false);
+            That(peer.DazzlementState[6] == 0, "首次选角1608→1605恢复1/1，无旧角色状态");
             SelectTowerMap(peer);
             That(peer.DazzlementBindings is [0], "首次选图1608明确清空旧角色遗留名单");
             byte[] map = Enter(peer);
@@ -61,7 +62,10 @@ internal static partial class FormalDungeonTcpTests
                 }
             }
             peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 90));
-            peer.Expect(0, 34); peer.ReadCardMembershipState(); peer.Expect(0, 35); Drain(peer);
+            peer.Expect(0, 34); peer.ReadCardMembershipState(); peer.Expect(0, 35);
+            peer.ExpectDazzlementBindings();
+            That(peer.DazzlementState[6] == 1, "通关35之后完整1605保持日已用1，界面剩余0/1");
+            Drain(peer);
             That(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0 AND dungeon_id=7601", created.Id) is [[1L]],
                 "真实TCP清图及46结算仍完成，不以提前拒绝代替通关");
             ReturnTown(peer);
@@ -77,20 +81,45 @@ internal static partial class FormalDungeonTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(created.Slot, prepared: true, resumeTown: true, room: false);
+            That(peer.DazzlementState[6] == 1, "重登初始化1605从日账本恢复0/1");
             SelectTowerMap(peer); Reject(peer);
             That(Attempts() == 1 && Bindings() == 1, "重连仍拒绝当天重入，未另开实例或重复绑定");
-            clock.Now = DateTimeOffset.Parse("2026-10-27T06:00:00+08:00");
-            peer.ExpectUnusedDailyBoosterReset();
+            await ResetAt(DateTimeOffset.Parse("2026-10-27T06:00:00+08:00"));
             SelectTowerMap(peer); Enter(peer); Load(peer); ReturnTown(peer);
             That(Attempts() == 2 && Bindings() == 1, "次日06:00允许原绑定角色进入，未消耗新绑定名额");
             SelectTowerMap(peer); Reject(peer);
-            clock.Now = DateTimeOffset.Parse("2026-10-29T06:00:00+08:00");
-            peer.ExpectUnusedDailyBoosterReset();
+            await ResetAt(DateTimeOffset.Parse("2026-10-29T06:00:00+08:00"));
             SelectTowerMap(peer);
             That(peer.DazzlementBindings is [0], "周四边界的选图不回放旧周名单");
             Enter(peer); Load(peer); ReturnTown(peer);
             That(Attempts() == 3 && Bindings() == 1, "新周首次入场原子替换旧绑定周期");
+
+            async Task ResetAt(DateTimeOffset at)
+            {
+                // 无客户端请求触发：礼盒与眩惑各有一个有界日界时钟，共用同一连接门禁。
+                await clock.WaitForTimersAsync(2);
+                clock.Advance(at - clock.GetUtcNow());
+                int chunks = 0;
+                bool tower = false;
+                while (!tower || chunks < peer.InitialDailyBoosterPackets.Length)
+                {
+                    var packet = peer.Read();
+                    if (packet is { Kind: 0, Opcode: 1608 } && !tower)
+                    {
+                        peer.ExpectDazzlementBindings(packet);
+                        That(peer.DazzlementState[6] == 0, "06:00自动刷新1605恢复1/1，不要求再次选图或保活");
+                        tower = true;
+                    }
+                    else
+                    {
+                        That(packet is { Kind: 0, Opcode: 541 } && chunks < peer.InitialDailyBoosterPackets.Length,
+                            "日界只收到完整541与1608→1605，不能吞掉其它包");
+                        Bytes(packet.Body, peer.InitialDailyBoosterPackets[chunks++], "礼盒日界完整零名册保持原序");
+                    }
+                }
+            }
         }
+        await clock.WaitForTimersAsync(0);
 
         long Attempts() => (long)fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", created.Id).Single()[0];
         long Bindings() => (long)fixture.Query("SELECT count(*) FROM account_dazzlement_tower_bindings").Single()[0];
@@ -98,14 +127,17 @@ internal static partial class FormalDungeonTcpTests
         byte[] Enter(TcpPeer peer)
         {
             peer.Send(16, Request()); peer.ExpectDazzlementBindings();
-            That(U32(peer.Expect(0, 28).Body, 0) == 7601, "绑定提交后1608→28→29仍按原路线入场");
+            That(peer.DazzlementState[6] == 1, "入场成功在28之前1605投影已提交日消耗");
+            That(U32(peer.Expect(0, 28).Body, 0) == 7601, "绑定提交后1608→1605→28→29仍按原路线入场");
             var map = peer.Expect(0, 29).Body; Drain(peer); return map;
         }
         void Reject(TcpPeer peer) { peer.Send(16, Request()); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier(); }
         void ReturnTown(TcpPeer peer)
         {
             peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
-            peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+            peer.Expect(0, 24); peer.ExpectDazzlementBindings();
+            That(peer.DazzlementState[6] == 1, "回城24之后刷新0/1，放弃不返还资格");
+            RefreshedQuests(peer); peer.Barrier();
         }
         List<WirePacket> Drain(TcpPeer peer)
         {
@@ -120,9 +152,4 @@ internal static partial class FormalDungeonTcpTests
         }
     }
 
-    sealed class DazzlementDays : TimeProvider
-    {
-        public DateTimeOffset Now = DateTimeOffset.Parse("2026-10-26T12:00:00+08:00");
-        public override DateTimeOffset GetUtcNow() => Now;
-    }
 }

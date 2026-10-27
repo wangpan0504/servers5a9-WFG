@@ -110,7 +110,7 @@ internal static class EquipmentProtocolWriter
                     writer.Write(core.RandomChange.Value2);
                 }
             }
-            ItemListProtocolWriter.WriteTail(writer, core);
+            ItemListProtocolWriter.WriteTail(writer, core with { SortLockFlag = 0 });
             // 023C4064..023C40AD: 五个长度前缀块，中间额外读一个u8。
             Raw(writer, extension => extension.Write(core.Extension97));
             Raw(writer, extension => extension.Write(core.GuardianGemKeys));

@@ -43,6 +43,14 @@ internal static class CurrencyTests
             var currency = new CurrencyService(itemResources.GoldLimits);
             Check(currency.CarryLimit(current) == 100_000 && currency.CarryLimit(current with { Level = 60 }) == 400_000_000,
                 "carry caps come from matched PVF levels");
+            foreach (byte level in new byte[] { 60, 95 })
+            {
+                var boundary = current with { Level = level, Inventory = InventorySnapshot.Empty with
+                    { Gold = 399_999_999, GoldCarryLimit = 9_999_999 } };
+                Check(currency.CarryLimit(boundary) == 400_000_000 &&
+                    currency.Grant(boundary, CurrencyKind.Gold, 2).Plan!.After.Gold == 400_000_000,
+                    "旧七个9存量不覆盖PVF四亿上限，临界奖励仍按四亿饱和");
+            }
             Check(repo.LoadAccountWallet(owner).Same(AccountWallet.Empty), "empty account wallet available before selection");
             var originalItems = current.Inventory.Items;
             current = Commit(inventory.Grant(current, [new(0, 200_000), new(42, 3), new(1, 2), new(2, 9), new(3037, 20), new(10158124, 8), new(2681762, 7), new(2681917, 6)]));

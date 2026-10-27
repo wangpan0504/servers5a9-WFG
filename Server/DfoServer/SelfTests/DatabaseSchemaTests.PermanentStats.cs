@@ -67,6 +67,7 @@ internal static partial class DatabaseSchemaTests
                       10,2,13,0,'old','old',1,1,0,13,1,1);
                     """);
                 RemoveExperienceBonusSchema(db);
+                RewindRaidLifecycle(db);
                 Execute(db, "DROP TABLE character_permanent_stats; PRAGMA user_version=66");
             }
             var migrated = new CharacterRepository(path).LoadCharacter(owner, legacy.Slot);

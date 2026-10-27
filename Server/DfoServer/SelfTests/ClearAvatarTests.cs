@@ -86,8 +86,8 @@ internal static class ClearAvatarTests
                 details with { ClearAvatarId = 777, ClearAvatarSourceUid = 88 });
             var realAvatar = Avatar(17, new(InventoryListType.Equipment, 3), Template(3).Id, details with { Color1 = 3 });
             result = Move(Role([lookBuyer, realAvatar]), lookBuyer.Position, realAvatar.Position);
-            That(result.Plan!.After.Find(realAvatar.Position)!.Avatar is { ClearAvatarId: 777, ClearAvatarSourceUid: 88, Color1: 7 },
-                "已复制外观的克隆覆盖原装扮时保留自己的外观和染色，不重新借用");
+            That(result.Plan!.After.Find(realAvatar.Position)!.Avatar is { ClearAvatarId: 103, ClearAvatarSourceUid: 17, Color1: 3 },
+                "已复制外观的克隆重新覆盖真实装扮时更新来源和染色");
             foreach (byte growth in new byte[] { 1, 0x11, 0x21 })
             {
                 role = Role([bag]) with { GrowType = growth };

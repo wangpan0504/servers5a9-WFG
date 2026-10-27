@@ -35,6 +35,7 @@ internal static partial class DatabaseSchemaTests
                     CREATE INDEX proficiency_migration_index ON character_dungeon_growth_receipts(account);
                     """);
                 RemoveProficiencySchema(db);
+                RewindRaidLifecycle(db);
                 Execute(db, "PRAGMA user_version=73");
             }
             string old = Snapshot(path);
@@ -59,6 +60,7 @@ internal static partial class DatabaseSchemaTests
             using (var db = Open(path))
             {
                 RemoveProficiencySchema(db);
+                RewindRaidLifecycle(db);
                 Execute(db, "ALTER TABLE character_dungeon_settlement_receipts ADD COLUMN proficiency_gain TEXT;PRAGMA user_version=73");
             }
             string malformed = Snapshot(path);

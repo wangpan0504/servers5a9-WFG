@@ -15,6 +15,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RewindRaidLifecycle(db);
                 Execute(db, """
                     INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
                     VALUES('tag-old',0,'TagOld',7,38,1,450,234,0,123);
@@ -57,6 +58,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RewindRaidLifecycle(db);
                 Execute(db, """
                     DROP TABLE account_tag_evildom_runs;
                     INSERT INTO account_tag_evildom_clearances VALUES('legacy','tag-old',20261026,20261026,1,2);

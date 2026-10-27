@@ -224,9 +224,16 @@ internal sealed class AvatarPackageCatalog
                 var value = block.Groups[1];
                 string body = text.Substring(value.Index, value.Length);
                 var parsed = ParseAbilities(body);
+                if (parsed.IsEmpty) return Reject("装扮属性选项无效");
                 var tokens = Tokens(body);
-                // 动画段可重复完整声明；只忽略token之间的空白，不合并冲突选项或取首段掩盖坏段。
-                if (parsed.IsEmpty || firstTokens is not null && !firstTokens.SequenceEqual(tokens, StringComparer.Ordinal))
+                // 每块先完整校验；只忽略已验证的非技能数字幅度，其余token及全部技能参数仍逐项比较。
+                for (int at = 0; at < tokens.Length;)
+                {
+                    bool skill = tokens[at + 1] == "`[SKILL_LEVEL]`";
+                    if (!skill) tokens[at + 3] = string.Empty;
+                    at += skill ? 5 : 4;
+                }
+                if (firstTokens is not null && !firstTokens.SequenceEqual(tokens, StringComparer.Ordinal))
                     return Reject("装扮属性选项无效");
                 firstTokens ??= tokens;
                 abilities = parsed;

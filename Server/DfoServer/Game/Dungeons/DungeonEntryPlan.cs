@@ -58,6 +58,7 @@ internal sealed record DungeonEntryPlan(
     public bool IsOrdinary => !IsTutorial && RouteQuestId == 0 && (QuestId == 0 || IsOrdinaryHunt);
     public bool IsTrainingRoom => DungeonId == 5000 && Maze.IsTrainingRoom;
     public bool IsClassExperience => DungeonId == 7142 && Maze.IsClassExperience;
+    public LostLandAdmission? LostLand { get; init; }
     public bool IsPractice { get; init; }
     // 仅由专用准入与当前TAG资源核验生成，不凭9608图号授予普通经济路径。
     public bool IsTagEvildom { get; init; }
@@ -65,7 +66,7 @@ internal sealed record DungeonEntryPlan(
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
     public int? GriefLayer { get; init; }
-    public bool RequiresFatigueOwner => IsOrdinary && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower;
+    public bool RequiresFatigueOwner => IsOrdinary && LostLand is null && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower;
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
@@ -99,12 +100,12 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
-    public bool IsTerminalMap(DungeonMap map) => Hope is { } hope ? OperationHopePlan.IsDeclaredTerminal(hope.Catalog,hope.MazeOrdinal,map.Id) : Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
+    public bool IsTerminalMap(DungeonMap map) => LostLand is null && (Hope is { } hope ? OperationHopePlan.IsDeclaredTerminal(hope.Catalog,hope.MazeOrdinal,map.Id) : Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
         PassiveClearTerminalMap is { } passive ? map == passive :
         CinematicClearTerminalMap is { } cinematic ? map == cinematic :
         TerminalLayerMap is { } layer ? map == layer :
         map == BossMap || BossMap.Kind != "layered" && map.IsConditional &&
-        map.Position == BaseBossMap.Position && Maze.ConditionalMaps.Contains(map);
+        map.Position == BaseBossMap.Position && Maze.ConditionalMaps.Contains(map));
 
     public static bool TryCreateReplay(DungeonCatalog catalog,QuestReplayPlan replay,out DungeonEntryPlan? plan,out string reason)
     {
@@ -158,6 +159,15 @@ internal sealed record DungeonEntryPlan(
         if (definition.Id != dungeonId)
         {
             reason = "dungeon-resource-mismatch";
+            return false;
+        }
+        bool lostLand = dungeonId == 4000 || string.Equals(definition.DungeonType?.Trim(), "lost land", StringComparison.OrdinalIgnoreCase);
+        if (lostLand && (dungeonId != 4000 || definition.DungeonType != "lost land" ||
+            !definition.DisableFatigueConsumption || !definition.DisableGiveupPenalty ||
+            questId != 0 || difficulty != 0 || isReplay || practice || hellParty || hellLegend || partyRoute is not null ||
+            grief is not null || hope is not null || tagEvildom is not null || raid is not null))
+        {
+            reason = "lost-land-mode-unsupported";
             return false;
         }
         // 当前PVF这两图为tag tournament 3/4、tagsystem ruleset2，不能由普通单角色Run消费或结算。
@@ -423,6 +433,9 @@ internal sealed record DungeonEntryPlan(
         try { maze = resolveMaze is null ? candidates[0] : resolveMaze(candidates[0]); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
         { reason = "dungeon-resource-unavailable"; return false; }
+        LostLandAdmission? lostLandAdmission = null;
+        if ((lostLand || maze.IsLostLand) && !LostLandAdmission.TryCreate(definition, maze, out lostLandAdmission))
+        { reason = "lost-land-resource-unsupported"; return false; }
         // 普通任务路线不因故事属性表只有一档而锁定普通难度；仍使用原任务迷宫和地下城开放难度。
         // 先验证故事块本身，回放、专用模式及指定难度副本继续沿各自门禁。
         if (!definition.AllowsDifficulty(difficulty,maze.QuestConnectionTokens.Count != 0,maze.ConnectionQuestId) &&
@@ -571,15 +584,16 @@ internal sealed record DungeonEntryPlan(
         var active = questId == 0 || isReplay ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
+            LostLand = lostLandAdmission,
             BasisLevel = definition.BasisLevel,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
-            RecommendedQuestClear = !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
+            RecommendedQuestClear = !lostLand && !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
                 DungeonLuckyStarPolicy.IsRecommendedClear(definition, questId, routeQuest, character.Level),
             // 本入口只规划原生普通单人PVE；构造初始team0，START_MAP普通分支保持该值。
             // 未实现的组队/对抗模式须提供自身阵营来源，不能沿用这个入口的单人合同。
             PlayerTeam = 0,
             IsTutorial = definition.IsTutorial,
-            DisableClearReward = definition.DisableClearReward,
+            DisableClearReward = definition.DisableClearReward || lostLand,
             IsTagEvildom = tagEvildom is not null,
             DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience || tagEvildom is not null,
             DisableGiveupPenalty = definition.DisableGiveupPenalty,
@@ -612,7 +626,7 @@ internal sealed record DungeonEntryPlan(
             IsInfernoParty = infernoParty,
             IsHellLegend = hellParty && !cosmo && hellLegend,
             IsCosmo = cosmo,
-            AllowsCompanionAi = definition.AllowsCompanionAi && tagEvildom is null,
+            AllowsCompanionAi = definition.AllowsCompanionAi && tagEvildom is null && !lostLand,
             HellPartyMode = hellParty ? (byte)1 : (byte)0,
             // 时空裂缝入场一次扣 6 点疲劳（用户指定的本服规则）；PVF 没有声明分段数，不能沿用逐房间一点。
             StartFatigue = cosmo ? definition.StartFatigue ?? (ushort)0 : infernoParty ? (ushort)6 : (ushort)0,

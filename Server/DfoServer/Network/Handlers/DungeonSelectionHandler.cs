@@ -58,6 +58,17 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
+        if (context.Session.ChannelEntry?.Type == 54 && context.Session.Selected?.Position is { Town: 67, Area: 2 })
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, context.Session.CurrentParty?.Invoke()?.Members ?? []);
+            var selected = partyDungeons?.BeginSelection(context.Session, evildomDungeon: entry.DungeonIndex) ?? [];
+            log.Write("evildom_war_selection", new { Connection = context.Id, Dungeon = entry.DungeonIndex, Accepted = selected.Length > 0,
+                Members = selected.Length });
+            if (selected.Length == 0)
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "evildom_war_selection_rejected");
+            else await PartyDungeonProjection.PublishAsync(selected);
+            return CommandResult.Handled;
+        }
         if (entry.DungeonIndex != 0 && context.Session.ChannelEntry?.Type == 32 &&
             context.Session.StartedRaid is not null && context.Session.Phase is SessionPhase.Town or SessionPhase.MapSelect)
         {

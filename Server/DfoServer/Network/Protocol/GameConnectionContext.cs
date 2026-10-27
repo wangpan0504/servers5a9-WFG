@@ -9,6 +9,8 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     IGameConnectionActivity? activity = null, ChannelIdentity channel = default)
 {
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }
+    // 仅记录本连接实际写出的攻坚展示，不拥有玩法状态；断线/新连接自然失效。
+    internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidDisplay { get; set; }
     public int Id => connection.Id;
     public IPAddress Peer => connection.Peer;
     public CancellationToken Stop => connection.Stop;
@@ -20,6 +22,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     internal DispatchGateScope? DispatchGates { get; set; }
     public DfoServer.Network.Projection.DungeonElevatorProjection? Elevator { get; set; }
     public DfoServer.Network.Projection.DungeonAltarProjection? Altar { get; set; }
+    public DfoServer.Network.Projection.LostLandProjection? LostLand { get; set; }
     public ChannelIdentity Channel => Session.ChannelEntry?.Identity ?? channel;
     public DfoServer.Network.Projection.DungeonDeathProjection? Death { get; set; }
     public DfoServer.Network.Projection.DungeonCardProjection? Cards { get; set; }
@@ -29,6 +32,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public DfoServer.Network.Projection.CreatureRuntimeProjection? Creatures { get; set; }
     // 每日礼盒只保存已发视图与连接时钟，不拥有角色次数。
     public DfoServer.Network.Projection.Inventory.DailyRetainedBoosterProjection? BoosterUses { get; set; }
+    public DfoServer.Network.Projection.DazzlementTowerProjection? Dazzlement { get; set; }
     // 名册请求的协议握手状态；Selected/Ready 只保存在 GameSession。
     public bool RosterRequested { get; set; }
     // 返回选角时服务端已主动推送名册；用于吞掉客户端随后重复的 C2S8，避免双重名册刷新。
