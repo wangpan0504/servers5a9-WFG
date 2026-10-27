@@ -65,14 +65,26 @@ internal static class DungeonMapPoolTests
         ExplicitCandidates();
         LostLandResources();
         GriefResource();
-        // BossRush 的有效地图可以规划，类型大小写和 Boss 格投影开关不改变原有格子内终点。
-        // BossRush已有地图规划不等于专用计时/结果流程；合法几何保留，缺资源仍不能补图。
+        // BossRush保留合法格内终点；格外Boss沿已有最远格规划且保留原声明，不证明专用计时或结果流程。
+        // 类型大小写和Boss格投影不改变上述合同，缺资源或非法几何仍不能补图。
         var ordinary = definition with { Mazes = [result] };
         var ready = new Character(99,0,"BossRushBoundary",0,new(38,2,1085,249),null) { Level = 95 };
         That(DungeonEntryPlan.TryCreate(ordinary,ready,10,0,0,out _,out _),"BossRush隔离用例的对照路线可正式规划");
         foreach (string type in new[] { "boss rush dungeon", " BOSS RUSH DUNGEON " })
         foreach (bool bossCell in new[] { false,true })
         {
+            That(DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type },ready,10,0,0,out var regular,out _,
+                    bossCellFromBossMap:bossCell) && regular!.BossMap.Position == new DungeonPoint(1,0),
+                "BossRush 的合法格内终点保留，类型大小写与Boss格投影不改变落点");
+            var offGrid = result with { Bosses = [new(6,6)] };
+            That(DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type, Mazes = [offGrid] },ready,10,0,0,out var planned,out _,
+                    bossCellFromBossMap:bossCell) && planned!.BossMap.Position == new DungeonPoint(1,0) &&
+                planned.Maze.Bosses.SequenceEqual([new DungeonPoint(6,6)]),
+                "BossRush 格外Boss取已有最远格作终点，同时保留原资源Boss坐标");
+            That(!DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type, Mazes = [offGrid with { MapSpecification = null }] },
+                    ready,10,0,0,out var offGridRejected,out string offGridReason,bossCellFromBossMap:bossCell) &&
+                offGridRejected is null && offGridReason == "boss-rush-room-contract-unproven",
+                "BossRush 缺少明确地图时仍拒绝，不从格外Boss伪造地图");
             var rush = ordinary with { DungeonType = type };
             int resolved = 0;
             That(DungeonEntryPlan.TryCreate(rush,ready,10,0,0,out var entry,out string reason,
