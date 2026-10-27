@@ -148,6 +148,7 @@ internal sealed partial class NativeChannel(ServerOptions options, OnlineSession
     {
         readonly Action disconnect;
         readonly NativeConnectionSender sender;
+        public NativeStateObservation StateObservations { get; } = new();
         public Registration Entry { get; }
         public NativeLease(Registration entry, ConnectionContext connection, Action disconnect)
         {

@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Raids;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Projection;
 
@@ -20,6 +21,11 @@ internal sealed partial class NativeChannel
         var peerScene = destination.CurrentFormalDungeonScene();
         if (initial is null || peerScene is null || initial.Snapshot.Identity.InstanceId != peerScene.Snapshot.Identity.InstanceId ||
             initial.Snapshot.CurrentMap != peerScene.Snapshot.CurrentMap || records.Any(row => row.SourceSlot != initial.PartySlot)) return false;
+        // 只预解码，不改变转发接受规则；未知/坏Native5仍按既有中继合同处理。
+        var observations = initial.Entry.RaidEntry is { Kind: RaidKind.Luke }
+            ? records.Select(row => (Row: row, State: NativeObjectStates.TryRead(row,
+                initial.Snapshot.CurrentMap.Position, out var state) ? state : null)).Where(x => x.State is not null).ToArray()
+            : [];
         var party = origin.PartyDungeon;
         if (party is null && (!ReferenceEquals(origin, destination) || records.Any(row => row.Appearance is null && row.Kind != 0))) return false;
         if (party is not null && !ReferenceEquals(party, destination.PartyDungeon)) return false;
@@ -53,6 +59,19 @@ internal sealed partial class NativeChannel
                     var body = bytes.ToArray();
                     bool CanSend() => Current() && origin.CanPublishNativeScene(initial) && destination.CanPublishNativeScene(peerScene);
                     bool sent = target.Post(NativeFrame.Build(source.Entry.Token, targetEntry.Token, body), CanSend);
+                    if (sent)
+                    {
+                        foreach (var observation in observations)
+                        {
+                            var result = source.StateObservations.Observe(initial.Snapshot.Identity,
+                                initial.Snapshot.CurrentMap, observation.Row, observation.State!);
+                            var counts = source.StateObservations.Snapshot();
+                            // 仅新增计数的2次幂输出汇总，重传/冲突不制造逐包热点日志。
+                            if (result == NativeObservationResult.Added && (counts.Added & (counts.Added - 1)) == 0)
+                                log.Write("luke_native_state_observation", new { Queued = true, counts.Added,
+                                    counts.Duplicates, counts.Conflicts, counts.Retained });
+                        }
+                    }
                     if (records.Any(row => row.Appearance is not null))
                         log.Write("npc_favor_dungeon", new { Source = source.Context.Id, Target = target.Context.Id,
                             Instance = initial.Snapshot.Identity.InstanceId, Map = initial.Snapshot.CurrentMap.Id, Sent = sent,

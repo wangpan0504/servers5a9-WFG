@@ -243,7 +243,7 @@ internal static class LukeRaidRunTransactionTests
                 var instance=sessions[0].PartyDungeon!;var party=parties.Current(sessions[0])!;
                 var plan=entered[0].Scene!.Entry;
                 var route=QuestStoryRouteTests.Path(plan.Maze.StaticTopology,plan.StartMap.Position,plan.BossMap.Position);
-                bool injected=false; bool revivalChecked=false;
+                bool injected=false; bool revivalChecked=false; bool nativeRelayChecked=false;
                 foreach(var point in route)
                 {
                     foreach(var session in sessions.SkipLast(1))instance.CompleteLoading(session);
@@ -304,8 +304,12 @@ internal static class LukeRaidRunTransactionTests
                     }
                     if(point==route[^1])break;
                     var next=route[Array.IndexOf(route,point)+1];
-                    That(instance.Move(sessions[0],(byte)next.X,(byte)next.Y,0).Length==4,"全队沿实际资源通路过房");
+                    void MoveNext()=>That(instance.Move(sessions[0],(byte)next.X,(byte)next.Y,0).Length==4,"全队沿实际资源通路过房");
+                    if(failureIndex==0 && point==route[0])
+                    { NativeObjectStateRelayTests.RunAsync(sessions,root,MoveNext).GetAwaiter().GetResult(); nativeRelayChecked=true; }
+                    else MoveNext();
                 }
+                if(failureIndex==0)That(nativeRelayChecked,"真实Luke多房路线确实执行Native观测接入场景");
                 That(injected,"实际末图至少一名可报告怪物触发清图失败回归");
                 // 明确人工瞬态状态，只用于迫使原回城维护路径写库，不代表本版道具效果资源。
                 That(sessions[0].PlanAndCommitInventory(character=>new(true,0,new(character.Inventory,
