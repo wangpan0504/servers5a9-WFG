@@ -60,7 +60,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         if (removed?.Actor.Session.PartyDungeon is not { } instance ||
             !instance.Members.Contains(removed)) return new(19, [], []);
         var target = removed.Actor.Session;
-        bool preserveRaidSquad = target.IsLukeRaidDungeon;
+        bool preserveRaidSquad = target.IsFormalRaidDungeon;
         var travel = instance.Execute(_ => target.ReturnFromFormalDungeon());
         if (travel is null) return new(19, [], []);
         // 提交完成后仍在命令门禁内移除名册，并释放剩余加载屏障。
@@ -100,7 +100,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null)
     {
         var party = parties.Current(leader);
-        if (party is null || party.Members.Length < 2 && leader.PartyDungeon is null && leader.ReadEvildomWar() is null && !leader.HasLukeRaidSelection ||
+        if (party is null || party.Members.Length < 2 && leader.PartyDungeon is null && leader.ReadEvildomWar() is null && !leader.HasFormalRaidSelection ||
             !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, leader)) ||
             party.Members.Any(m => m.Actor.Session.Phase != SessionPhase.MapSelect &&
                 m.Actor.Session.FormalDungeonResultFocus() is null) ||

@@ -32,7 +32,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     DfoServer.Game.Party.PartyService? parties = null, EpicPieceShopService? epicPieceShop = null,
     TagEvildomRunProjection? tagEvildomRun = null, EvildomWarCatalog? evildomWar = null,
     DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null,
-    DfoServer.Game.Raids.ILukeRaidLifecycleStore? lukeLifecycle = null) : IGameCommandModule
+    DfoServer.Game.Raids.ILukeRaidLifecycleStore? lukeLifecycle = null,
+    DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -153,6 +154,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (character is null || !before.Ready || before.Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
             context.BlocksTownActions)
             return CommandResult.Unhandled;
+        if (context.Session.ChannelEntry?.Type == 23 && (context.Session.StartedRaid is not null ||
+            selection.DungeonIndex <= int.MaxValue && antonRaid?.Contains((int)selection.DungeonIndex) == true))
+            return await SelectAntonAsync(context, selection);
         if (context.Session.ChannelEntry?.Type == 32 && context.Session.StartedRaid is not null)
         {
             var selectedParty = context.Session.CurrentParty?.Invoke();

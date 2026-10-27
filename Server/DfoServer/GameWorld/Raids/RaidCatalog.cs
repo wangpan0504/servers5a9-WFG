@@ -21,13 +21,14 @@ internal sealed class RaidCatalog(ImmutableDictionary<byte, RaidDefinition> defi
     public RaidDefinition? Find(byte type) => Definitions.GetValueOrDefault(type);
 
     public RaidCatalog PrepareResources(PvfArchive pvf, Dungeons.DungeonCatalog dungeons, Items.ItemCatalog items,
-        Dungeons.DungeonRoomCatalog? rooms = null, IReadOnlyList<(int Dungeon, int MazeOrdinal)>? lukeObjectChoices = null)
+        Dungeons.DungeonRoomCatalog? rooms = null, IReadOnlyList<(int Dungeon, int MazeOrdinal)>? lukeObjectChoices = null,
+        Func<int, string?>? antonMapPath = null)
     {
         var prepared = Definitions;
         foreach (byte type in new byte[] { 0, 1 })
             if (Find(type) is { } raid)
             {
-                var resources = RaidResourceLoader.Load(pvf, raid, dungeons, items);
+                var resources = RaidResourceLoader.Load(pvf, raid, dungeons, items, type == 0 ? antonMapPath : null);
                 if (type == 1 && rooms is not null && lukeObjectChoices is not null && resources.EntryCatalog is { } entry)
                     resources = resources with { LukeObjects = LukeRaidObjectCatalog.Load(pvf, entry, rooms, lukeObjectChoices),
                         LukeCardSet = LukeCardSetCatalog.Load(pvf, entry, rooms) };

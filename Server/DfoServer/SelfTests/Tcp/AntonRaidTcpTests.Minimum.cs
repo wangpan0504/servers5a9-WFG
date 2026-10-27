@@ -77,6 +77,11 @@ internal static partial class AntonRaidTcpTests
             Bytes(selected.Single(p => p.Opcode == 27).Body, new byte[42], "27保留场景合同，地下城状态由585单独提供");
             That(selected.FindIndex(p => p.Opcode == 585) < selected.FindIndex(p => p.Opcode == 27) &&
                 selected.All(p => p.Opcode is not (587 or 28 or 29)), "重复打开只重同步地图，不重播开战或伪造入场");
+            peer.Send(16, Convert.FromHexString("D20000000200000000FFFF0000000000000000000000000000"));
+            Bytes(Until(peer, 1, 16).Body, [0, 9, 0, 0], "缺省关闭入口沿已证ACK16拒绝");
+            Drain(peer);
+            That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[0L]],
+                "默认关闭不创建Run或尝试号，仍可原样132返回");
             peer.Send(132);
             Bytes(peer.Expect(1, 132).Body, [1], "选图返回保持原ACK132");
             peer.Expect(0, 3); peer.Expect(0, 23); peer.Expect(0, 24); Drain(peer);

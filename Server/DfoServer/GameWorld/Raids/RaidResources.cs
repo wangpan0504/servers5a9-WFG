@@ -26,8 +26,10 @@ internal static class RaidResourceLoader
 {
     internal const string TutorialListPath = "dungeon/tutorial/dungeon.lst";
 
-    public static RaidResources Load(PvfArchive pvf, RaidDefinition raid, DungeonCatalog dungeons, ItemCatalog items)
+    public static RaidResources Load(PvfArchive pvf, RaidDefinition raid, DungeonCatalog dungeons, ItemCatalog items,
+        Func<int, string?>? mapPath = null)
     {
+        mapPath ??= dungeons.MapPath;
         var script = RaidScriptParser.Parse(raid.Path, pvf.ReadTokens(raid.Path),
             pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString,
             raid.Type == 1 ? RaidScriptKind.Luke : RaidScriptKind.Anton);
@@ -41,10 +43,10 @@ internal static class RaidResourceLoader
             else if (raid.Type == 0) issues.Add(new("tutorial-list-missing", TutorialListPath, 0, "candidate list unavailable"));
         }
         catch (InvalidDataException error) { issues.Add(new("tutorial-list-invalid", TutorialListPath, 0, error.Message)); }
-        var result = Check(script, tutorial, dungeons.DungeonPath, dungeons.MapPath, pvf.Contains,
+        var result = Check(script, tutorial, dungeons.DungeonPath, mapPath, pvf.Contains,
             pvf.ReadTokens, pvf.ResolveString, ItemExists);
         result = result with { Issues = result.Issues.AddRange(issues) };
-        return raid.Type is 0 or 1 ? result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, dungeons, raid.Type) } : result;
+        return raid.Type is 0 or 1 ? result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, mapPath, raid.Type) } : result;
 
         bool ItemExists(int id)
         {

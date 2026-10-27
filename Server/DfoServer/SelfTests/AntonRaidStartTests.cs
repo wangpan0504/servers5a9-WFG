@@ -34,7 +34,8 @@ internal static class AntonRaidStartTests
             var parties = new PartyService(repository);
             var pieces = new EpicPieceCatalog("[piece list]\n9001 9002\n[/piece list]");
             var script = new RaidScript("synthetic/anton.etc", new(19, 2), new(100, 1), null,
-                ImmutableDictionary<string, int>.Empty, [new("first", [], [], [])], [], []);
+                ImmutableDictionary<string, int>.Empty.Add("[hp]", 1), [new("first",
+                    [new(210, RaidDungeonState.Open, "[hp]", 4, 5), new(211, RaidDungeonState.Hide, "[hp]", 1, 1)], [], [])], [], []);
             var definition = new RaidDefinition(0, script.Path, 20, 10, 1) { Resources = new(script, [], [], [], [], []) };
             var service = new AntonRaidStart(registry, parties, repository, towns, pieces);
             var actors = Enumerable.Range(0, 30).Select(i =>
@@ -111,6 +112,7 @@ internal static class AntonRaidStartTests
                 "开战冻结分队；尚未闭合的战中委任不借招募合同放行");
             That(parties.Leave(sessions[3]).Error == 19 && parties.Current(sessions[3])?.Members.Length == 4,
                 "普通13不能绕过开战冻结名单拆队，应通过攻坚队665退出");
+            AntonRaidEntryTests.RunCore(registry, parties, actors, script);
 
             var ten = Recruit(actors[20..]);
             var racing = Task.WhenAll(Enumerable.Range(0, 2).Select(_ => Task.Run(() => service.Start(actors[20], ten, definition))))

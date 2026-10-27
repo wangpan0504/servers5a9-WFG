@@ -20,13 +20,13 @@ internal sealed partial class AntonRaidBattle
     internal sealed class RevivalReservation : IDisposable
     {
         readonly AntonRaidBattle battle;
-        readonly LukeDungeonRun run;
+        readonly RaidDungeonRun run;
         readonly RaidActor actor;
         readonly long death;
         bool finished;
         internal byte Squad => run.Squad;
         internal AntonRaidBattleChange? Change { get; private set; }
-        private RevivalReservation(AntonRaidBattle battle, LukeDungeonRun run, RaidActor actor, long death)
+        private RevivalReservation(AntonRaidBattle battle, RaidDungeonRun run, RaidActor actor, long death)
         { this.battle = battle; this.run = run; this.actor = actor; this.death = death; }
 
         internal static RevivalReservation? Prepare(AntonRaidBattle battle, RaidActor actor,
@@ -36,12 +36,12 @@ internal sealed partial class AntonRaidBattle
             {
                 if (!battle.SupportsLukeRevival || !actor.IsCurrent || death <= 0 ||
                     battle.pendingTransition is not null || TerminalRequested(battle.current) || battle.LukePhaseDueLocked() ||
-                    !battle.members.ContainsKey(actor) || !battle.lukeRuns.TryGetValue(identity.InstanceId, out var run) ||
+                    !battle.members.ContainsKey(actor) || !battle.dungeonRuns.TryGetValue(identity.InstanceId, out var run) ||
                     !run.Installed || !run.Active.Contains(actor) || run.Phase != battle.current.Phase ||
                     battle.current.DungeonGenerations.GetValueOrDefault(checked((int)run.Dungeon)) != run.Generation ||
                     battle.current.Dungeons.GetValueOrDefault(checked((int)run.Dungeon)) is not (RaidDungeonState.Open or RaidDungeonState.Clear) ||
                     !battle.entries.TryGetValue((identity.InstanceId, actor.Character), out var entry) ||
-                    !ReferenceEquals(entry.Luke, run) || identity.CharacterId != actor.Character ||
+                    !ReferenceEquals(entry.Run, run) || identity.CharacterId != actor.Character ||
                     identity.QuestId != entry.Identity.QuestId || identity.TaskAttempt != entry.Identity.TaskAttempt ||
                     identity.Epoch < entry.Identity.Epoch || death <= run.RevivedDeaths.GetValueOrDefault(actor) ||
                     battle.lukeRevivalReservations.Count >= 8 || battle.lukeRevivalReservations.Any(row => row.actor == actor))

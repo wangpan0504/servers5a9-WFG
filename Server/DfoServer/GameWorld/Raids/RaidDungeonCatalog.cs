@@ -4,7 +4,7 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Raids;
 
-// 团本目录与普通目录隔离；安徒恩保留明确tutorial备用项，卢克仅认正式DGN，MAP均须显式登记。
+// 团本目录与普通目录隔离；安徒恩保留明确tutorial备用项，MAP只取主表或应用显式传入的有证登记。
 internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<int, DungeonDefinition> definitions,
     ImmutableArray<int> missingMaps, IReadOnlyDictionary<int, string> maps, Func<string, bool> exists, byte type = 0,
     ImmutableDictionary<int, string>? dungeonPaths = null)
