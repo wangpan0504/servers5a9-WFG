@@ -10,7 +10,7 @@ internal sealed record CharacterInvestmentSnapshot(InvestmentSnapshot Equipment,
     ImmutableArray<InventoryItem> Worn, CollectBoxState CollectBox);
 internal sealed record CharacterInvestmentPart(string Module, string Source, int Score, bool Partial, bool Capped, string Note)
 {
-    public string RuleVersion => Module == "equipment" ? EquipmentInvestmentScore.Profile : CharacterInvestmentScore.Profile;
+    public string RuleVersion { get; init; } = Module == "equipment" ? EquipmentInvestmentScore.Profile : CharacterInvestmentScore.Profile;
     public string Status => Partial ? "Partial" : Note == "appearance_only_no_double_count" ? "AppearanceCovered" :
         Score == 0 ? "KnownZero" : "Complete";
 }
@@ -22,6 +22,7 @@ internal sealed record CharacterInvestmentResult(string Profile, ushort Characte
 internal static class CharacterInvestmentScore
 {
     public const string Profile = "character-investment/v2";
+    public const string ChronicleProfile = "character-investment/v2.1";
     static readonly string[] Modules = ["equipment", "title", "avatar", "pet", "artifact", "medal", "gem",
         "enchant", "random-title", "emblem", "talisman", "rune", "collectbox", "set", "auxiliary", "cosmetic", "random-option", "chronicle", "emancipation", "quality"];
 
@@ -44,11 +45,13 @@ internal static class CharacterInvestmentScore
     public static CharacterInvestmentResult Calculate(CharacterInvestmentSnapshot snapshot, Func<int, ItemTemplate> template,
         Func<int, byte, ItemKind, byte, bool> enchant, Func<uint, bool> randomTitle,
         Func<int, EquipmentSetInvestmentMetadata?> set, Func<int, TalismanDefinition?> talisman,
-        Func<int, RuneDefinition?> rune, Func<byte, CollectBoxEntry> collectBox, Func<ItemTemplate, byte, bool> randomOption)
+        Func<int, RuneDefinition?> rune, Func<byte, CollectBoxEntry> collectBox, Func<ItemTemplate, byte, bool> randomOption,
+        Func<ChronicleOption, ChronicleInvestmentMetadata>? chronicle = null)
     {
+        string profile = chronicle is null ? Profile : ChronicleProfile;
         var basis = EquipmentInvestmentScore.Calculate(snapshot.Equipment, template);
         var parts = ImmutableArray.CreateBuilder<CharacterInvestmentPart>();
-        CharacterInvestmentResult Result(bool invalid = false) => new(Profile, basis.CharacterId, basis.CharacterRevision,
+        CharacterInvestmentResult Result(bool invalid = false) => new(profile, basis.CharacterId, basis.CharacterRevision,
             basis.ObservedAt, invalid ? "Invalid" : basis.Partial || parts.Any(p => p.Partial) ? "Partial" : "Complete",
             invalid ? null : checked((basis.Score ?? 0) + parts.Where(p => p.Module != "equipment").Sum(p => p.Score)),
             !invalid && (basis.Partial || parts.Any(p => p.Partial)), basis.ScoreCapped || parts.Any(p => p.Capped), basis, parts.ToImmutable());
@@ -67,7 +70,8 @@ internal static class CharacterInvestmentScore
         try { snapshot.CollectBox.Validate(); }
         catch (InvalidDataException) { boxValid = false; }
         void Add(string module, string source, int score, bool partial = false, bool cap = false, string note = "covered") =>
-            parts.Add(new(module, source, score, partial, cap, note));
+            parts.Add(new(module, source, score, partial, cap, note)
+            { RuleVersion = module == "equipment" ? EquipmentInvestmentScore.Profile : profile });
         void Try(string module, string source, Action action)
         {
             try { action(); }
@@ -139,8 +143,41 @@ internal static class CharacterInvestmentScore
             string source = $"equipment:{slot}/uid:{item.Uid}";
             if (core.Kind == ItemKind.Equipment)
                 Add("quality", source + $"/seed-or-code:{core.Value}", 0, note: "covered_by_equipment_base_seed_not_percentage");
-            if (core.Chronicle0 != default || core.Chronicle1 != default)
-                Add("chronicle", source, 0, true, note: "unmapped_persisted_chronicle_state");
+            if (chronicle is null)
+            {
+                // 保留v2旧合同；只有显式提供气息目录的v2.1才解释这些字段。
+                if (core.Chronicle0 != default || core.Chronicle1 != default)
+                    Add("chronicle", source, 0, true, note: "unmapped_persisted_chronicle_state");
+            }
+            else
+            {
+                var identities = new HashSet<(byte Type, byte Number)>();
+                ChronicleOption[] installed = [core.Chronicle0, core.Chronicle1];
+                for (int index = 0; index < installed.Length; index++)
+                {
+                    var option = installed[index];
+                    if (option == default) continue;
+                    string location = source + $"/chronicle:{index}/id:{option.Id}/job:{option.Job}/grow:{option.GrowType}/slot:{option.EquipmentType}/number:{option.Number}";
+                    Try("chronicle", location, () =>
+                    {
+                        if (core.Kind != ItemKind.Equipment || option.Id <= 0 || option.EquipmentType != slot)
+                            throw new InvalidDataException("气息已提交宿主不符");
+                        var definition = chronicle(option);
+                        if (!definition.Valid)
+                        {
+                            Add("chronicle", location, 0, true, note: definition.Reason);
+                            return;
+                        }
+                        if (definition.Type > 2) throw new InvalidDataException("气息目录类型不符");
+                        if (!identities.Add((definition.Type, option.Number)))
+                        {
+                            Add("chronicle", location, 0, true, note: "duplicate_type_number_excluded");
+                            return;
+                        }
+                        Add("chronicle", location + $"/type:{definition.Type}", 40, note: "validated_installed_option");
+                    });
+                }
+            }
             if (core.EmancipateLevel != 0)
                 Add("emancipation", source, 0, true, note: "unmapped_persisted_emancipate_state");
             RandomOption[] options = [core.Random0, core.Random1, core.Random2];
