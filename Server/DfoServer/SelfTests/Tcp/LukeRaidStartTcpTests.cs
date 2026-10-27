@@ -19,7 +19,14 @@ internal static class LukeRaidStartTcpTests
     public static Task RunAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,false);
     public static Task RunDungeonsAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true);
 
-    public static Task RunPhasesAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,true);
+    public static async Task RunPhasesAsync(ServerOptions source,string root,TcpTestResources resources)
+    {
+        await RunCoreAsync(source,root,resources,true,true);
+        await RunResourceCompletionAsync(source,root,resources);
+    }
+
+    internal static Task RunResourceCompletionAsync(ServerOptions source,string root,TcpTestResources resources) =>
+        RunCoreAsync(source,root,resources,true,true,resourceRewards:true);
 
     public static Task RunTimersAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,timed:true);
 
@@ -87,11 +94,26 @@ internal static class LukeRaidStartTcpTests
         return (definition,policy,phaseClock);
     }
 
-    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false)
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false,bool resourceRewards=false)
     {
         var (definition,policy,phaseClock)=Prepare(resources,runDungeons,completePhases,timed,phaseTimeout);
         var raw=definition.Resources!.Script;var catalog=definition.Resources.EntryCatalog!;
-        await using var fixture=new TcpTestFixture(source,Path.Combine(root,phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
+        if(resourceRewards)
+        {
+            // 合成终结目标改为第二张已开放5313：先5311再5313，证明真实最少2资格，非原版路线承诺。
+            var phase=policy.ExecutionScript.Phases[1];
+            var terminal=phase.Rules[^1];
+            terminal=terminal with {Trigger=terminal.Trigger.Select(clause=>clause.DungeonId==5311 ? clause with {DungeonId=5313} : clause).ToImmutableArray()};
+            policy=policy with {Completion=null,ResourceCompletion=LukeResourceCompletionTests.Profile(),
+                ExecutionScript=policy.ExecutionScript with {Phases=policy.ExecutionScript.Phases.SetItem(1,
+                    phase with {Rules=phase.Rules.SetItem(phase.Rules.Length-1,terminal)})}};
+            var resolved=LukeResourceCompletion.Resolve(policy,definition,resources.ItemResources.Items)!;
+            That(resolved.Completion!.WeeklyClearLimit==2 && resolved.Completion.Phases.Select(row=>row.MinimumCommittedRuns).SequenceEqual(new[]{0,2}),
+                "当前真实资源奖励配置读取周2与阶段最少0/2，工厂不改调用者提供的执行脚本");
+            That(resolved.Completion.Phases.Select(row=>row.Rewards.Offers.Single().Grants.Single().ItemId).SequenceEqual(new[]{10308804,10304817}),
+                "当前真实party_card映射到两只原booster箱，不把RawB100当100个箱");
+        }
+        await using var fixture=new TcpTestFixture(source,Path.Combine(root,resourceRewards?"luke-raid-resource-rewards":phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
         await fixture.StartAsync();
         var endpoints=ChannelTcpTests.Endpoints(fixture); var repository=new CharacterRepository(fixture.Database);
         var owners=new AccountOwners(); List<TcpPeer> peers=[];
@@ -287,7 +309,8 @@ internal static class LukeRaidStartTcpTests
                     is [[long count]]&&count==raw.EntryCost.Count,"满团成功只扣一次门票，失败未留部分扣费");
             }
 
-            if(phaseTimeout) LukeRaidRunTcpTests.PhaseTimeout(fixture,peers.ToArray(),phaseClock!);
+            if(resourceRewards) LukeRaidRunTcpTests.ResourceCompletion(fixture,peers.ToArray(),raw,full[0].Single(p=>p.Opcode==9).Body,catalog);
+            else if(phaseTimeout) LukeRaidRunTcpTests.PhaseTimeout(fixture,peers.ToArray(),phaseClock!);
             else if(timed) await LukeRaidRunTcpTests.TimersAsync(fixture,peers.ToArray());
             else if(completePhases) LukeRaidRunTcpTests.Phases(fixture,peers.ToArray(),raw,
                 full[0].Single(p=>p.Opcode==9).Body,catalog);
@@ -334,7 +357,7 @@ internal static class LukeRaidStartTcpTests
         finally{foreach(var peer in peers)peer.Dispose();}
         await fixture.StopAsync();
         if(phaseTimeout) LukeRaidRunTransactionTests.Run(resources,definition,policy,phaseExpiry:true);
-        if(completePhases)
+        if(completePhases&&!resourceRewards)
         {
             LukeRaidLifecycleTransactionTests.Run(resources,definition,policy);
             using var deletionOwner=owners.Acquire("lukestart4",()=>{});
