@@ -8,7 +8,7 @@ namespace DfoServer.Game.Raids;
 
 // 正常666绑定的原Battle是唯一授权来源；此服务不创建攻坚实例，不收开团票，不保存第二份队伍。
 internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService parties,
-    RaidDungeonCatalog catalog, LukeRaidRunPolicy policy)
+    RaidDungeonCatalog catalog, LukeRaidRunPolicy policy, LukeRaidObjectCatalog? objects = null)
 {
     public string? UnavailableReason => policy.Rejection(catalog);
 
@@ -33,7 +33,7 @@ internal sealed class LukeRaidDungeonService(RaidRegistry registry, PartyService
                 !view.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open) return [];
             var selections = members.Select(member => new RaidDungeonSelection(new(start.InstanceId, member.Actor, view.Phase,
                 member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, view.Phase, id), RaidKind.Luke)
-                { LukePolicy = policy, Battle = battle }, dungeon, maze)).ToArray();
+                { LukePolicy = policy, Battle = battle, LukeObjects = objects }, dungeon, maze)).ToArray();
             if (selections.Any(selection => !ReferenceEquals(selection.Admission.Actor.Session.CurrentRaidBattle(selection.Admission.Actor), battle) ||
                 !selection.Admission.Actor.Session.CanBeginLukeDungeonSelection(selection.Admission))) return [];
             return selections.Select(selection => new PartyDungeonNotice(PartyDungeonNoticeKind.RaidSelection,
