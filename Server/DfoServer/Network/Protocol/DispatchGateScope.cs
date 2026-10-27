@@ -14,16 +14,16 @@ internal sealed class DispatchGateScope : IDisposable
         ReferenceEquals(context, caller) && ReferenceEquals(context.DispatchGates, this) &&
         (ReferenceEquals(gate, context.CommandGate) || ReferenceEquals(gate, party));
 
-    public static async Task<DispatchGateScope> EnterAsync(GameConnectionContext context)
+    public static async Task<DispatchGateScope> EnterAsync(GameConnectionContext context, CancellationToken? stop = null)
     {
         while (true)
         {
             var party = context.Session.CurrentParty?.Invoke()?.Commands;
-            if (party is not null) await party.WaitAsync(context.Stop);
+            if (party is not null) await party.WaitAsync(stop ?? context.Stop);
             bool commandHeld = false;
             try
             {
-                await context.CommandGate.WaitAsync(context.Stop);
+                await context.CommandGate.WaitAsync(stop ?? context.Stop);
                 commandHeld = true;
                 context.Owner.Execute(() => true);
                 if (ReferenceEquals(party, context.Session.CurrentParty?.Invoke()?.Commands))
