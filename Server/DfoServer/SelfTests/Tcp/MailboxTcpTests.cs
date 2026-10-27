@@ -56,12 +56,27 @@ internal static partial class MailboxTcpTests
             sender.Select(prepared: true); receiver.Select(prepared: true);
             That(sender.Mailbox is [var empty] && empty.SequenceEqual(new byte[6]), "空邮箱上线包完整");
             That(ReadList(receiver.Mailbox.Single()).Details.Single().Text == "上线正文", "非空邮箱在入城阶段直接恢复正文");
-            sender.Send(324, Build(w => { WriteString(w, "MailRecv"); w.Write((byte)0); }));
-            var query = sender.Expect(1, 324).Body;
-            That(query.SequenceEqual(Build(w => { w.Write((byte)1); WriteString(w, "MailRecv"); w.Write((byte)0); w.Write((ushort)60);
-                w.Write((byte)0); w.Write((byte)0); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); })),
-                "收件人查询包含 server 标记、等级、职业及全部尾字节");
-            SendMail(sender, false, 1000, [(0, 9, 18400, 1)], "装备正文");
+            string beforeQueries = fixture.Snapshot();
+            foreach (byte server in new byte[] { 0, 2 })
+            {
+                sender.Send(324, Build(w => { WriteString(w, "MailRecv"); w.Write(server); }));
+                sender.Expect(1, 324, Build(w => { w.Write((byte)1); WriteString(w, "MailRecv"); w.Write((byte)2); w.Write((ushort)60);
+                    w.Write((byte)0); w.Write((byte)0); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); }));
+                sender.Send(324, Build(w => { WriteString(w, "MailAbsent"); w.Write(server); }));
+                sender.Expect(1, 324, [0, 21, 0]);
+                sender.Send(324, Build(w => { WriteString(w, "MailSender"); w.Write(server); }));
+                sender.Expect(1, 324, [0, 7, 0]);
+            }
+            foreach (byte server in new byte[] { 1, 3, 10, 255 })
+            {
+                sender.Send(324, Build(w => { WriteString(w, "MailRecv"); w.Write(server); }));
+                sender.Expect(1, 324, [0, 2, 0]);
+            }
+            sender.Barrier();
+            That(fixture.Snapshot() == beforeQueries, "查询本服、外服、不存在及自己均不改变角色revision或资产");
+            sender.Send(324, Build(w => { WriteString(w, "MailRecv"); w.Write((byte)2); }));
+            That(sender.Expect(1, 324).Body[0] == 1, "查询失败后同连接仍可成功查找真实本服收件人");
+            SendMail(sender, false, 1000, [(0, 9, 18400, 1)], "装备正文", recipientServerIndex: 2);
             sender.Expect(1, 94, [1]);
             var sentDelta = sender.Expect(0, 14).Body;
             CheckItem(sentDelta, 0, 0, balanceAfterEquipment); CheckItem(sentDelta, 9, -1, 0);
@@ -100,7 +115,7 @@ internal static partial class MailboxTcpTests
             receiver.Expect(0, 98, Build(w => { w.Write(1); w.Write(attachment.MailId); }));
             That(ReadList(receiver.Expect(0, 97).Body).Details.All(row => row.Id != attachment.MailId), "删除后补页不再出现该邮件");
 
-            SendMail(sender, true, 0, [(0, 121, material.Id, 4), (0, 10, 10400, 1)], "多附件");
+            SendMail(sender, true, 0, [(0, 121, material.Id, 4), (0, 10, 10400, 1)], "多附件", recipientServerIndex: 2);
             sender.Expect(1, 315, [1]);
             var multiDelta = sender.Expect(0, 14).Body;
             CheckItem(multiDelta, 0, 0, balanceAfterEquipment - secondFee); CheckItem(multiDelta, 121, material.Id, 6); CheckItem(multiDelta, 10, -1, 0);
@@ -135,6 +150,11 @@ internal static partial class MailboxTcpTests
             SendMail(sender, false, 0, [], "特殊", special: 1);
             sender.Barrier();
             That(fixture.Query("SELECT count(*) FROM mailbox_messages WHERE body='特殊'") is [[0L]], "未知寄送子型不伪造成功或写邮件");
+            string beforeUnsupportedServer = fixture.Snapshot();
+            SendMail(sender, false, 0, [], "外服正文", recipientServerIndex: 3);
+            sender.Barrier();
+            That(fixture.Snapshot() == beforeUnsupportedServer && fixture.Query("SELECT count(*) FROM mailbox_messages WHERE body='外服正文'") is [[0L]],
+                "不支持的跨服寄送不误投本服同名角色、不扣费或写邮件");
         }
         VerifyPetClaims(fixture, resources);
         VerifyWalletClaims(fixture, resources);
@@ -159,14 +179,15 @@ internal static partial class MailboxTcpTests
             "TCP 邮件全过程数据库与外键完整");
     }
 
-    static void SendMail(TcpPeer peer, bool multiple, uint gold, (byte Type, short Slot, int Id, int Count)[] attachments, string text, uint special = 0) =>
+    static void SendMail(TcpPeer peer, bool multiple, uint gold, (byte Type, short Slot, int Id, int Count)[] attachments, string text, uint special = 0,
+        byte recipientServerIndex = 0) =>
         peer.Send(multiple ? (ushort)315 : (ushort)94, Build(w =>
         {
             WriteString(w, "MailRecv"); w.Write(gold);
             if (multiple) w.Write((byte)attachments.Length);
             if (!multiple && attachments.Length == 0) w.Write(new byte[11]);
             foreach (var item in attachments) { w.Write(item.Type); w.Write(item.Slot); w.Write(item.Id); w.Write(item.Count); }
-            WriteString(w, text); w.Write(special); w.Write((byte)0);
+            WriteString(w, text); w.Write(special); w.Write(recipientServerIndex);
         }));
     static void Extract(TcpPeer peer, IReadOnlyList<uint> ids) => peer.Send(95, Build(w => { w.Write(ids.Count); foreach (uint id in ids) w.Write(id); }));
     static void ExpectClaim(TcpPeer peer, IReadOnlyList<Summary> changes) => peer.Expect(1, 95, Build(w =>

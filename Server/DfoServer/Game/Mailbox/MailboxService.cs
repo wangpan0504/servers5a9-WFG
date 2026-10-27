@@ -31,7 +31,7 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
     {
         plan = null;
         if (!CharacterName.IsValid(request.Recipient) || request.Items.IsDefault || request.Items.Length > 10 ||
-            request.Special != 0 || request.Global != 0 || request.Text is null || request.Text.Contains('\0') ||
+            request.Special != 0 || request.RecipientServerIndex != 0 || request.Text is null || request.Text.Contains('\0') ||
             CharacterName.Encoding.GetByteCount(request.Text) > 511)
             return MailboxError.InvalidRequest;
         var recipient = store.FindMailRecipient(request.Recipient);

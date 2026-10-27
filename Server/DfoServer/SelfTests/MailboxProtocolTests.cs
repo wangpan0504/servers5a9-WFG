@@ -35,6 +35,8 @@ internal static class MailboxProtocolTests
         var parsed = MailboxRequests.Send(send, false);
         TestCheck.That(parsed.Recipient == "Receiver" && parsed.Gold == 1234 && parsed.Text == "中文邮件" &&
             parsed.Items.Single() == new MailboxSendItem(0, 9, 101010912, 1), "本版单附件寄送保留完整输入");
+        TestCheck.That(MailboxRequests.Send([.. send.AsSpan(0, send.Length - 1), 2], false).RecipientServerIndex == 2,
+            "寄送尾字节保留原生目标服务器索引，不把本服2当作全局邮件开关");
         byte[] multi = Bytes(w =>
         {
             String(w, "Receiver"); w.Write(0); w.Write((byte)2);
@@ -63,7 +65,24 @@ internal static class MailboxProtocolTests
         var state = MailboxRequests.State([.. idsBody, 3, 0]);
         TestCheck.That(state.State == 3 && state.Ids.SequenceEqual(claimIds), "状态请求在对象列表后读 u16");
         var query = MailboxRequests.Query(Bytes(w => { String(w, "Receiver"); w.Write((byte)1); }));
-        TestCheck.That(query == ("Receiver", (byte)1), "收件人查询保留模式");
+        TestCheck.That(query == ("Receiver", (byte)1), "收件人查询保留服务器索引，路由资格由连接边界核对");
+        foreach (byte server in new byte[] { 0, 2, 255 })
+            TestCheck.That(MailboxRequests.Query(Bytes(w => { String(w, "Receiver"); w.Write(server); })).RecipientServerIndex == server,
+                "查询解析不把服务器索引压成布尔值");
+        var recipient = new MailboxRecipient(2, "receiver", "Receiver", 3, 17, 60);
+        TestCheck.Bytes(MailboxPackets.Query(new() { Recipient = recipient }, 7), Bytes(w =>
+        {
+            w.Write((byte)1); String(w, "Receiver"); w.Write((byte)7); w.Write((ushort)60);
+            w.Write((byte)3); w.Write((byte)17); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0);
+        }), "查询成功回真实服务器索引及完整资料，末尾限制位保持0");
+        TestCheck.Bytes(MailboxPackets.Query(MailboxResult.Reject(MailboxError.RecipientMissing), 2), [0, 21, 0],
+            "查询不存在使用21触发5558，不误报2对应的请稍后再使用");
+        TestCheck.Bytes(MailboxPackets.Query(MailboxResult.Reject(MailboxError.SelfSend), 2), [0, 7, 0], "查询自己保持原生失败");
+        TestCheck.Bytes(MailboxPackets.Query(MailboxResult.Reject(MailboxError.InvalidState), 2), [0, 2, 0],
+            "未就绪的查询使用原生稍后再试，不复用寄送状态限制码114");
+        TestCheck.Bytes(MailboxPackets.QueryServerUnavailable(), [0, 2, 0], "未接入的目标服务器按暂不可查询结束等待，不谎报角色不存在");
+        TestCheck.Bytes(MailboxPackets.Result(MailboxResult.Reject(MailboxError.RecipientMissing)), [0, 3, 0],
+            "寄送不存在仍保留原生3，不受查询专用错误映射影响");
         MailboxRequests.Open([]);
         Reject(() => MailboxRequests.Open([0]), "打开邮箱长度严格");
 

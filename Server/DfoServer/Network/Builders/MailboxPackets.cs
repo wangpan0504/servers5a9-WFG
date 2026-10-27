@@ -49,12 +49,19 @@ internal static class MailboxPackets
         foreach (uint id in ids) writer.Write(id);
     });
     public static byte[] Alarm() => [1, 0];
-    public static byte[] Query(MailboxResult result) => !result.Accepted ? Result(result) : Build(writer =>
+    public static byte[] QueryServerUnavailable() => [0, 2, 0];
+    public static byte[] Query(MailboxResult result, byte serverIndex) => !result.Accepted ? result.Error switch
+    {
+        // 02E02340：21对应5558“该ID不存在”，2对应5560“请稍后再使用”。
+        MailboxError.RecipientMissing => [0, 21, 0],
+        MailboxError.InvalidState => [0, 2, 0],
+        _ => Result(result)
+    } : Build(writer =>
     {
         var recipient = result.Recipient ?? throw new InvalidDataException("邮件查询缺少收件人");
         writer.Write((byte)1);
         PacketEncoding.WriteString(writer, recipient.Name);
-        writer.Write((byte)0); // 本服 server 标记，0234D0F9 读；不是 growType。
+        writer.Write(serverIndex); // 0234D0F9读取，02E021A0用于服务器名称显示。
         writer.Write((ushort)recipient.Level);
         writer.Write(recipient.Job);
         writer.Write(recipient.GrowType);

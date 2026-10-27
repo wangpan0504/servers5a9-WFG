@@ -28,9 +28,9 @@ internal static class MailboxRequests
         }
         string text = reader.String(511);
         uint special = reader.U32();
-        byte global = reader.U8();
+        byte recipientServerIndex = reader.U8();
         reader.End();
-        return new(name, gold, items.ToImmutable(), text, special, global);
+        return new(name, gold, items.ToImmutable(), text, special, recipientServerIndex);
     }
 
     public static ImmutableArray<uint> Extract(ReadOnlySpan<byte> body)
@@ -48,13 +48,13 @@ internal static class MailboxRequests
         reader.End();
         return (ids, state);
     }
-    public static (string Name, byte Mode) Query(ReadOnlySpan<byte> body)
+    public static (string Name, byte RecipientServerIndex) Query(ReadOnlySpan<byte> body)
     {
         var reader = new Reader(body);
         string name = reader.String(29);
-        byte mode = reader.U8();
+        byte recipientServerIndex = reader.U8();
         reader.End();
-        return (name, mode);
+        return (name, recipientServerIndex);
     }
     public static void Open(ReadOnlySpan<byte> body)
     {
