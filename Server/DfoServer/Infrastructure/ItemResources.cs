@@ -12,6 +12,8 @@ internal sealed class ItemResources
     public CargoCatalog Cargo { get; }
     public NpcShopCatalog Shops { get; }
     public EquipmentRepairCatalog Repair { get; }
+    public EquipmentTransportCatalog EquipmentTransports { get; }
+    public EquipmentResealCatalog EquipmentReseals { get; }
     public EquipmentRefinementCatalog Refinement { get; }
     public RandomOptionCatalog RandomOptions { get; }
     public EquipmentTextureChangeCatalog TextureChanges { get; }
@@ -70,6 +72,8 @@ internal sealed class ItemResources
         Cargo = new(archive);
         Shops = new(archive);
         Repair = new(archive);
+        EquipmentTransports = new(archive);
+        EquipmentReseals = new(archive);
         Refinement = new(archive);
         Disjoint = new(archive);
         AvatarDisjoint = new(archive);

@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using System.Buffers.Binary;
 
 namespace DfoServer.Network.Builders.Inventory;
@@ -11,7 +12,7 @@ internal static class UpgradeChroniclePackets
     public static byte[] Result(InventoryResult result)
     {
         if (result.Accepted)
-            return [1, 0, 0];
+            return result.Plan?.Reason == InventoryUpgradeChronicleService.LevelReason ? [1, 0] : [1, 0, 0];
         var body = new byte[3];
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), result.Error);
         return body;

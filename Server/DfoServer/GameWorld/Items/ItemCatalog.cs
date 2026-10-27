@@ -77,6 +77,7 @@ internal sealed partial class ItemCatalog
     readonly Lazy<RuneRandomChooseTable> runeRandomChoices;
     readonly Lazy<FrozenDictionary<byte, ImmutableArray<int>>> runePool;
     readonly Lazy<FrozenDictionary<int, ImmutableArray<int>>> talismanPool;
+    public EquipmentGrowthCatalog EquipmentGrowth { get; }
 
     public ItemCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment,
         IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
@@ -84,6 +85,7 @@ internal sealed partial class ItemCatalog
         EchonEquipmentCatalog? echon = null, EchonEquipmentCatalog? newEchon = null)
     {
         pvf = archive;
+        EquipmentGrowth = new(archive, equipment);
         this.equipment = equipment;
         this.stackable = stackable;
         this.premiumServiceItems = premiumServiceItems ?? new HashSet<int>();
@@ -511,8 +513,26 @@ internal sealed partial class ItemCatalog
 
         int minimum = Int("minimum level", isEquipment ? 1 : 0), durability = Int("durability", 0);
         int maximum = int.MaxValue;
-        if (text.Has("maximum level") && (!text.TryGetInt32("maximum level", out maximum) || maximum < minimum))
-            throw new InvalidDataException("PVF物品最高等级声明无效: " + id);
+        if (text.Has("maximum level"))
+        {
+            if (isEquipment)
+            {
+                if (!text.TryGetInt32("maximum level", out maximum) || maximum < minimum)
+                    throw new InvalidDataException("PVF物品最高等级声明无效: " + id);
+            }
+            else
+            {
+                // 次元能量等把目标装备条件嵌在子块中，不能把目标上限当作角色使用上限。
+                var root = new PvfTokenDocument(pvf.ReadTokens("stackable/" + path), pvf.ResolveString).Sections
+                    .Where(section => section.Name == "maximum level").ToArray();
+                if (root.Length != 0)
+                {
+                    if (root is not [{ Values: [{ Type: 0 } limit] }] || limit.Value < minimum)
+                        throw new InvalidDataException("PVF物品最高等级声明无效: " + id);
+                    maximum = limit.Value;
+                }
+            }
+        }
         int baseValue = Int("value", -1);
         if (baseValue < 0)
             baseValue = Int("price", 0);
@@ -564,6 +584,12 @@ internal sealed partial class ItemCatalog
             QualityBox = isEquipment ? null : EquipmentQualityBox.Parse(id, text),
             AvatarAbilityChange = isEquipment || !text.Has("avatar select ability change") ? null :
                 AvatarAbilityChangeDefinition.Parse(new PvfTokenDocument(pvf.ReadTokens("stackable/" + path), pvf.ResolveString), pvf.ResolveString),
+            ResealConsumable = isEquipment ? null : EquipmentResealConsumable.Parse(path!, text),
+            GrowthEquipment = isEquipment && (text.Has("level section ani") || !string.IsNullOrWhiteSpace(text.Section("level linear ability")) ||
+                PvfScript.Integers(text.Section("equipment grow")) is [> 0, > 0]),
+            RandomOptionEquipment = isEquipment && text.Has("random option"),
+            PeriodEquipment = isEquipment && (PvfScript.Integers(text.Section("usable period")).Any(value => value > 0) ||
+                PvfScript.Integers(text.Section("expiration date")).Any(value => value > 0)),
 
             AvatarSockets = kind == ItemKind.Avatar ? ReadAvatarSockets(text) : default,
             CloneAvatar = kind == ItemKind.Avatar && (Int("clear avatar", 0) == 1 || text.ContainsString("item category", "clear avatar")),

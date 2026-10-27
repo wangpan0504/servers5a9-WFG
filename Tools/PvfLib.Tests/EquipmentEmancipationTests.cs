@@ -21,5 +21,6 @@ internal static class EquipmentEmancipationTests
         That(Parse(nonInteger) is null, "非整数材料数量拒绝");
         That(Parse([..tokens[..^1], new(3, 7), new(0, 50), new(3, 1)]) is null, "未知概率或条件不能被静默丢弃");
         That(Parse([]) is null, "没有装备转换声明不合成默认配方");
+        That(Parse([..tokens[..^3], new(3, 1)]) is { Type: 0 }, "旧勇者省略类型时按原生0号类型解析");
     }
 }

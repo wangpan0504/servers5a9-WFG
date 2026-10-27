@@ -19,7 +19,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
     public Task RefreshSkillTreeAsync(GameConnectionContext context, Character character, Func<bool> canSend) =>
         RefreshCharacterAsync(context, character, "skill_tree", canSend);
 
-    async Task RefreshCharacterAsync(GameConnectionContext context, Character character, string action, Func<bool> canSend)
+    internal async Task RefreshCharacterAsync(GameConnectionContext context, Character character, string action, Func<bool> canSend)
     {
         bool inDungeon = context.Session.Phase is SessionPhase.Dungeon or SessionPhase.Settlement;
         await context.Notify(NotiPacketType.USERINFO,

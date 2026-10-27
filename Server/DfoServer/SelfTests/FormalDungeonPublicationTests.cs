@@ -867,12 +867,12 @@ internal static class FormalDungeonPublicationTests
         }
         public bool PickupDuplicate { get; private set; }
         public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
-            PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, DfoServer.Game.Quests.QuestDropPlan? questDrops = null)
+            PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, DfoServer.Game.Quests.QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null)
         {
             Calls++;
             first ??= prepared;
             SamePrepared = ReferenceEquals(first, prepared);
-            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops);
+            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth);
             LastDuplicate = result.Duplicate;
             if (Calls == 1 && loseGrowth) throw new IOException("合成SQL已提交但结果丢失");
             return result;

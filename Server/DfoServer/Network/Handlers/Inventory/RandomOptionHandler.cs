@@ -9,7 +9,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed partial class RandomOptionHandler(InventoryRandomOptionService options, InventoryProjection projection,
-    ServerLog log) : IGameCommandModule
+    ServerLog log, EquipmentResealService? reseal = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {

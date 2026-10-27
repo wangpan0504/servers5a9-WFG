@@ -443,9 +443,9 @@ internal static class QuestCompletionRepositoryTests
             PreparedDungeonAltarSettlement prepared, CharacterGrowthCatalog growth) => inner.CommitDungeonAltarSettlement(owner, run, prepared, growth);
         public QuestClearReceipt? LoadQuestClear(AccountOwners.Lease owner, Character expected, ushort questId) => inner.LoadQuestClear(owner, expected, questId);
         public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected, SinglePlayerDungeonRun run,
-            PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null)
+            PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog, FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null)
         {
-            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops);
+            var result = inner.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth);
             if (LoseGrowthResult && (GrowthLossCondition?.Invoke(prepared) ?? true) && ++growthCalls == 1)
                 throw new IOException("合成死亡事务已提交但返回值丢失");
             return result;

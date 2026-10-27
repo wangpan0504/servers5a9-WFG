@@ -57,6 +57,8 @@ internal sealed class TownCatalog
     public RoomPortal[] RoomPortals { get; }
     public IReadOnlyDictionary<uint, uint[]> NpcMoves { get; }
     public IReadOnlySet<uint> NpcExits { get; init; } = new HashSet<uint>();
+    public IReadOnlySet<uint> EquipmentTransportNpcs { get; init; } = new HashSet<uint>();
+    public IReadOnlySet<uint> EquipmentResealNpcs { get; init; } = new HashSet<uint>();
     public bool HasNpcExit(Location position, IReadOnlySet<int> completed) =>
         Areas.TryGetValue((position.Town, position.Area), out var area) &&
         area.Map(completed).Npcs.Any(npc => NpcExits.Contains(npc.Id));
@@ -409,6 +411,8 @@ internal sealed class TownCatalog
         var npcMoves = new Dictionary<uint, uint[]>();
         var npcExits = new HashSet<uint>();
         var lostLandNpcs = new HashSet<uint>();
+        var equipmentTransportNpcs = new HashSet<uint>();
+        var equipmentResealNpcs = new HashSet<uint>();
         var npcList = List(pvf.ReadText("npc/npc.lst"));
         foreach (uint id in maps.Values.SelectMany(m => m.Npcs).Select(n => n.Id).Distinct())
         {
@@ -419,6 +423,10 @@ internal sealed class TownCatalog
                 .Any(role => Regex.IsMatch(role.Groups[1].Value, @"`\[exit town\]`\s+0(?=\s|$)")))
                 npcExits.Add(id);
             if (HasLostLandEntryRole(text)) lostLandNpcs.Add(id);
+            string roles = string.Join("\n", Regex.Matches(text, @"\[role\](.*?)\[/role\]", RegexOptions.Singleline)
+                .Select(match => match.Groups[1].Value));
+            if (Regex.IsMatch(roles, @"`\[trans using soul\]`\s+0(?=\s|$)")) equipmentTransportNpcs.Add(id);
+            if (Regex.IsMatch(roles, @"`\[reseal using soul\]`\s+0(?=\s|$)")) equipmentResealNpcs.Add(id);
             var targets = Regex.Matches(text, @"\[role\](.*?)\[/role\]", RegexOptions.Singleline | RegexOptions.IgnoreCase)
                 .SelectMany(m => Regex.Matches(m.Groups[1].Value, @"`\[(?:move town|enter town|enter town2)\]`\s+(\d+)")
                     .Select(t => uint.Parse(t.Groups[1].Value)))
@@ -438,7 +446,9 @@ internal sealed class TownCatalog
             { dungeonMaps.Add(id,new(id,path,[],error.Message)); }
         }
         var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps)
-            { SpecialChannelQuests = LoadSpecialChannelQuests(pvf), NpcExits = npcExits, EpisodeTowns = episodes, LostLandEntryNpcs = lostLandNpcs };
+            { SpecialChannelQuests = LoadSpecialChannelQuests(pvf), NpcExits = npcExits, EpisodeTowns = episodes,
+                LostLandEntryNpcs = lostLandNpcs,
+                EquipmentTransportNpcs = equipmentTransportNpcs, EquipmentResealNpcs = equipmentResealNpcs };
         if (!catalog.IsPosition(room) || !catalog.IsPosition(catalog.InitialReturn))
             throw new InvalidDataException("PVF initial position outside native movable regions");
         return catalog;

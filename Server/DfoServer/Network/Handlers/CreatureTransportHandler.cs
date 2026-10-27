@@ -1,6 +1,7 @@
 using System.Data.Common;
 using DfoServer.Game.Creatures;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
@@ -9,7 +10,8 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class CreatureTransportHandler(CreatureTransportService service, InventoryProjection projection, ServerLog log) : IGameCommandModule
+internal sealed class CreatureTransportHandler(CreatureTransportService service, InventoryProjection projection, ServerLog log,
+    EquipmentTransportService? equipment = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) =>
         commands.Register(CmdPacketType.CARGO_TRANSPORT_ITEM, UseAsync, nameof(CreatureTransportHandler));
@@ -17,11 +19,13 @@ internal sealed class CreatureTransportHandler(CreatureTransportService service,
     async Task<CommandResult> UseAsync(GameConnectionContext context, Packet packet)
     {
         var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
-        bool valid = CreatureTransportRequests.TryRead(packet.Body, out var request) && request.Mode == 1;
+        bool valid = CreatureTransportRequests.TryRead(packet.Body, out var request);
         CreatureTransportResult transfer;
         try
         {
-            transfer = !valid || context.BlocksTownActions ? new(InventoryResult.Reject(7)) : context.Session.TransportCreature(service, request);
+            transfer = !valid || context.BlocksTownActions ? new(InventoryResult.Reject(7)) : request.Mode == 1
+                ? context.Session.TransportCreature(service, request) : equipment is not null
+                    ? context.Session.TransportEquipment(equipment, request) : new(InventoryResult.Reject(7));
         }
         catch (Exception error) when (error is DbException or InvalidOperationException or InvalidDataException or KeyNotFoundException)
         {
@@ -40,7 +44,7 @@ internal sealed class CreatureTransportHandler(CreatureTransportService service,
             var source = new InventorySlot(InventoryListType.Main, (short)request.StoneSlot);
             int count = result.Receipt!.Character.Inventory.Find(source)?.Core.Count ?? 0;
             // ACK自行同步源数量；超出u16显示范围时再用完整静默库存行纠正，不截断服务端资产。
-            await projection.RefreshAsync(context, result, count <= ushort.MaxValue ? new HashSet<InventorySlot> { source } : null,
+            await projection.RefreshAsync(context, result, request.Mode != 2 && count <= ushort.MaxValue ? new HashSet<InventorySlot> { source } : null,
                 suppressMainNotice: true, refreshEquipment: false);
         }
         return CommandResult.Handled;

@@ -1225,6 +1225,7 @@ internal sealed partial class GameSession
         {
             Drops = loot?.Grounds ?? [],
             GainedExperience = committed.Commit.GainedExperience,
+            EquipmentChanges = committed.Commit.EquipmentChanges,
             ProficiencyGained = committed.Commit.ProficiencyGained,
             ReportedTarget = target,
             PreviousQuests = previousQuests,

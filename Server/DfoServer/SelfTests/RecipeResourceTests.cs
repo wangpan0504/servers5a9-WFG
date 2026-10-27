@@ -1,4 +1,7 @@
 using DfoServer.GameWorld.Items;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
@@ -35,6 +38,37 @@ internal static class RecipeResourceTests
             making.Level(0, 14) == 1 && making.Level(20, 20) == 2, "当前资源提供1至3熟练经验、等级差2限制及逐级阈值");
         // 非[recipe]物品不能当配方使用。
         That(catalog.Get(10308046) is null, "设计图升级类物品不按普通配方解析");
+        RunCustomUpgrade(pvf, catalog);
         Console.WriteLine($"PASS {Count - checks} 配方资源断言");
+    }
+
+    static void RunCustomUpgrade(PvfArchive pvf, ItemRecipeCatalog catalog)
+    {
+        var definitions = Enumerable.Range(10090321, 4).Select(catalog.Get).ToArray();
+        if (definitions.All(definition => definition is null))
+        {
+            Console.WriteLine("CUSTOM_UPGRADE_PATCH_REQUIRED 10090321..10090324");
+            return;
+        }
+        That(definitions.All(definition => definition is { UpgradeTransitions.Length: 32 }), "四张重铸图需整体应用资源补丁");
+        var items = new ItemCatalog(pvf, PvfScript.List(pvf.ReadText("equipment/equipment.lst")), PvfScript.List(pvf.ReadText("stackable/stackable.lst")), 0);
+        var original = new InventoryItem(12, new(InventoryListType.Main, 9),
+            InventoryRewardGrantService.Create(items.Get(102030279)) with
+                { Attr = 0, EnchantCardId = 100000201, EmblemSocketCount = 1, Emblem1 = 42, TradeRestriction = 1 });
+        foreach (var definition in definitions)
+        {
+            foreach (int draw in new[] { definition!.UpgradeTransitions[0][0] - 1, definition.UpgradeTransitions[0][0] })
+            {
+                var actor = new Character(1, 0, "Reforge", 0, new(1, 0, 0, 0), null) { Level = 95,
+                    Inventory = new([new(11, new(InventoryListType.Main, 65), new(definition.BlueprintItemId, ItemKind.Consumable, 1)), original]) };
+                var service = new InventoryRecipeCraftService(catalog, items,
+                    new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"), new GoldLimitCatalog(pvf),
+                    new ItemMakingSkillCatalog(pvf), random: _ => draw);
+                var result = service.Craft(actor, 65, 0, 1, out var receipt);
+                byte expected = draw < definition.UpgradeTransitions[0][0] ? (byte)0 : (byte)1;
+                That(result.Accepted && receipt is { Success: true } && result.Plan!.After.Items is [{ Uid: 12 } output] &&
+                    output.Core == original.Core with { Attr = expected }, "四表概率边界准确且不丢UID、附魔、孔或徽章");
+            }
+        }
     }
 }

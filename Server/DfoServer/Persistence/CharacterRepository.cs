@@ -14,7 +14,8 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository(string path, DfoServer.GameWorld.Quests.QuestCatalog? quests = null,
     DfoServer.GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
     DfoServer.GameWorld.Characters.CharacterGrowthCatalog? growthCatalog = null)
-    : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore, IAuctionListingStore, DfoServer.Game.Creatures.ICreatureTransportStore
+    : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore, IAuctionListingStore, DfoServer.Game.Creatures.ICreatureTransportStore,
+      DfoServer.Game.Inventory.Services.IEquipmentTransportStore
 {
     readonly SqliteGameDatabase database = new(path);
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>

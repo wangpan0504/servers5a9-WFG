@@ -335,6 +335,7 @@ internal static class TcpRegressionTests
         }),
         ("creature-system", CreatureSystemTcpTests.RunAsync),
         ("creature-transport", CreatureTransportTcpTests.RunAsync),
+        ("equipment-transfer-seal", EquipmentTransferSealTcpTests.RunAsync),
         ("creature-change", CreatureChangeTcpTests.RunAsync),
         ("creature-group", CreatureGroupTcpTests.RunAsync),
         ("creature-dungeon", FormalDungeonTcpTests.RunCreatureAsync),

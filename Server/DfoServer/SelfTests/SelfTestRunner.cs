@@ -38,6 +38,7 @@ internal static class SelfTestRunner
         CreatureChangeTests.RunCore();
         CreatureGroupTests.RunCore();
         CreatureTransportTests.RunCore();
+        EquipmentTransferSealTests.RunCore();
         CommandLineTests.Run();
         ConnectionAddressTests.Run();
         Testing.TcpTestFixtureProcessTests.Run();

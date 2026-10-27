@@ -17,6 +17,9 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
     {
         var raw = file.Stackable;
         var action = StackableActionCatalog.Arguments(raw);
+        bool generalTransport = action?.Label is "[cargo transport stone]" or "[avatar transport stone]" or
+            "[flag transport stone]" or "[emblem transport stone]" or "[creature transport stone]" &&
+            raw.DeclaredActionUsableServerTypes is ["[general server]"];
         if (raw.TemplateId != item.Id || item.Kind != ItemKind.Consumable || item.UseForbidden ||
             file.StructureDiagnostics.Length != 0 || raw.TypeDeclaration is null ||
             action is not ({ Label: "[rent point]" or "[add mileage]" or "[use favor point]", Parameters: [> 0] } or
@@ -24,7 +27,8 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 // 装扮预设扩展券（CMD515 action216）：无参数，容量由所属玩法落库。
                 { Label: "[add avatar preset]", Parameters.Count: 0 } or
                 { Label: "[extend item period]", Parameters: [0, > 0] } or
-                { Label: "[creature transport stone]", Parameters: [>= 0] } or
+                { Label: "[creature transport stone]" or "[cargo transport stone]" or "[avatar transport stone]" or
+                    "[flag transport stone]" or "[emblem transport stone]", Parameters: [>= 0] } or
                 { Label: "[change creature random]", Parameters.Count: >= 5 } or
                 { Label: "[creature effect]", Parameters: [> 0] }) ||
             (action.Label is "[rent point]" or "[add mileage]" ? raw.DeclaredUseActionPacket != 1 : raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0) ||
@@ -37,7 +41,7 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
             file.DeclaredFields.Contains("cooltime maintenance") && file.CooltimeMaintenance is null ||
             file.DeclaredFields.Contains("total usable count") && file.TotalUsableCount is null or < 0 or > byte.MaxValue ||
             file.DeclaredFields.Contains("effect maintenance") && (action.Label != "[creature effect]" || file.EffectMaintenance is null) ||
-            file.DeclaredFields.Any(field => field is "action usable server type" or "usable game server type" or "usable server type" or
+            file.DeclaredFields.Any(field => field == "action usable server type" && !generalTransport || field is "usable game server type" or "usable server type" or
                 "booster info" or "increase status type" or "hp recovery" or "mp recovery" or "stat change" or "stat change duration" or
                 "total weekly usable count" or "total accumulated usable count" or "use count limit all server item"))
             return null;

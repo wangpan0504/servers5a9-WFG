@@ -37,7 +37,9 @@ internal sealed class ItemMakingSkillCatalog
 
     public static bool TryType(string name, out byte type)
     {
-        int index = Array.IndexOf(Types, name.Replace('_', ' ').Trim('[', ']').ToLowerInvariant());
+        string normalized = name.Replace('_', ' ').Trim('[', ']').ToLowerInvariant();
+        normalized = normalized switch { "larmor" => "light armor", "harmor" => "heavy armor", _ => normalized };
+        int index = Array.IndexOf(Types, normalized);
         type = unchecked((byte)index);
         return index >= 0;
     }

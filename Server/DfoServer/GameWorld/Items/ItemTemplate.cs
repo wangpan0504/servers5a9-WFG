@@ -59,6 +59,10 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public RefinementTicketDefinition? RefinementTicket { get; init; }
     public EquipmentQualityBox? QualityBox { get; init; }
     public AvatarAbilityChangeDefinition? AvatarAbilityChange { get; init; }
+    public EquipmentResealConsumable? ResealConsumable { get; init; }
+    public bool GrowthEquipment { get; init; }
+    public bool RandomOptionEquipment { get; init; }
+    public bool PeriodEquipment { get; init; }
     public AvatarSocketTypes AvatarSockets { get; init; }
     public bool CloneAvatar { get; init; }
     public bool BorrowAvatarAppearance { get; init; }
