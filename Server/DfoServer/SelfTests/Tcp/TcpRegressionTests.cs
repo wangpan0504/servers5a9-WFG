@@ -347,6 +347,7 @@ internal static class TcpRegressionTests
         ("avatar-ability-change", AvatarAbilityChangeTcpTests.RunAsync),
         ("avatar-socket", AvatarSocketTcpTests.RunAsync),
         ("mailbox", MailboxTcpTests.RunAsync),
+        ("chronicle-enchant", ChronicleEnchantTcpTests.RunAsync),
         ("gm-assets", DevelopmentAssetTcpTests.RunAsync),
         ("repair", RepairTcpTests.RunAsync),
         ("random-option", RandomOptionTcpTests.RunAsync),
