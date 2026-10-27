@@ -34,7 +34,9 @@ internal static class LukeRaidLifecycleTransactionTests
                 !lifecycle.IsRetryable(new SqliteException("fixture constraint",19)) && !lifecycle.IsRetryable(new InvalidDataException("fixture identity")),
                 "阶段自动重试仅接真实忙锁分类，不把约束或原身份损坏当作可恢复错误");
             var raids=new RaidRegistry();var parties=new PartyService(repository);
-            policy=policy with {Completion=policy.Completion! with {WeeklyClearLimit=1}};
+            policy=policy with {Completion=policy.Completion! with {WeeklyClearLimit=1,
+                Phases=policy.Completion.Phases.Select(phase=>phase with {Rewards=phase.Rewards with {
+                    Offers=phase.Rewards.Offers.Add(phase.Rewards.Offers.First() with {Card=2})}}).ToImmutableArray()}};
             var clock=new Clock(DateTimeOffset.Parse("2026-10-25T05:59:59+08:00"));
             var start=new LukeRaidStart(raids,parties,repository,resources.Towns,items.EpicPieces,policy,clock,rewardItems:items.Items);
             var selection=new LukeRaidDungeonService(raids,parties,definition.Resources!.EntryCatalog!,policy.Run!);
@@ -63,9 +65,9 @@ internal static class LukeRaidLifecycleTransactionTests
             That(start.Start(actors[0],raids.Find(actors[0])!,definition,[],()=>true).Error==0,"原Start签发SQL身份/绑定Battle，不手工Attach");
             var battle=sessions[0].CurrentRaidBattle(actors[0])!;
             var members=sessions.Take(4).ToArray();
+            var leave=new AntonRaidStart(raids,parties,repository,resources.Towns,items.EpicPieces);
             RunStages(false);
             That(battle.View.State==AntonRaidBattleState.Completed,"两阶段原领取路径后完成");
-            var leave=new AntonRaidStart(raids,parties,repository,resources.Towns,items.EpicPieces);
             foreach(var actor in actors.Reverse())That(leave.Leave(actor,actor.Character) is not null,"完成后真实离团");
             Create();string full=Snapshot();var references=sessions.Select(session=>session.Selected).ToArray();
             That(start.Start(actors[0],raids.Find(actors[0])!,definition,[],()=>true) is {Error:19,Reason:"luke-weekly-clear-limit"},
@@ -82,10 +84,19 @@ internal static class LukeRaidLifecycleTransactionTests
             battle=sessions[0].CurrentRaidBattle(actors[0])!;
             RunStages(true);
             RunStages(false,stageDenied:true);
+            foreach(var actor in actors.Reverse())That(leave.Leave(actor,actor.Character) is not null,"未领对账前合法离开已拒阶段旧团");
+            clock.Now=clock.Now.AddDays(7);
+            foreach(var session in sessions)That(session.PlanAndCommitInventory(character=>InventoryRewardGrantService.TryGrantBatch(character,
+                [new(definition.Resources.Script.EntryCost!.ItemId,2)],items.Items,items.GoldLimits,items.EpicPieces,utcNow:clock.Now)).Accepted,
+                "新合成周期按同一准入时钟经库存用例准备两次真实门票，不借系统日期造成过期前提");
+            Create();
+            That(start.Start(actors[0],raids.Find(actors[0])!,definition,[],()=>true).Error==0,"新周期从原666开始未领资格场景");
+            battle=sessions[0].CurrentRaidBattle(actors[0])!;
+            RunStages(false,unclaimedRestart:true);
             LukeRaidResourceRulesTests.Run(definition.Resources.Script,actors,policy.Completion!);
             done=true;
 
-            void RunStages(bool supersede,bool stageDenied=false)
+            void RunStages(bool supersede,bool stageDenied=false,bool unclaimedRestart=false)
             {
             for(int phase=0;phase<2;phase++)
             {
@@ -139,6 +150,9 @@ internal static class LukeRaidLifecycleTransactionTests
                             Create();
                             That(start.Start(actors[0],raids.Find(actors[0])!,definition,[],()=>true).Error==0,"新666先获得writer并关闭旧active");
                             var next=sessions[0].CurrentRaidBattle(actors[0])!;var nextView=next.View;
+                            var oldPhase=ReadCommitted(retiring.Instance,0,actors[0]);
+                            That(oldPhase.State==1&&oldPhase.Eligibility is {Eligible:true}&&oldPhase.Remaining==0,
+                                "新666关闭旧active仍保留已提交P1资格及领取事实，不把state1当资格删除");
                             var denied=repository.CommitLukePhase(candidate);retiring.AcceptLukeSettlement(candidate,denied);
                             That(denied.Members.All(row=>!row.CountsAsClear&&!row.Eligible&&row.Reason=="admission-abandoned")&&
                                 ReferenceEquals(next.View,nextView)&&sessions.All(session=>session.StartedRaid?.InstanceId==next.Instance),
@@ -158,6 +172,14 @@ internal static class LukeRaidLifecycleTransactionTests
                             Sql("DROP TRIGGER fail_phase");
                         }
                         var committed=repository.CommitLukePhase(candidate);battle.AcceptLukeSettlement(candidate,committed);
+                        foreach(var actor in actors)
+                        {
+                            var saved=ReadCommitted(candidate.Instance,phase,actor);
+                            var expected=committed.Members.Single(row=>row.Character==actor.Character);
+                            That(JsonSerializer.Serialize(saved.Eligibility)==JsonSerializer.Serialize(expected)&&
+                                saved.Remaining==(expected.Eligible?expected.Offers.Select(offer=>offer.Kind).Distinct().Count():0),
+                                "新只读连接重读密封资格；同kind多个备选只计一份未选权益");
+                        }
                         That(JsonSerializer.Serialize(repository.CommitLukePhase(candidate))==JsonSerializer.Serialize(committed),"原候选SQL重放返回同anchor/完整奖励/资格，不重计");
                         That(committed.Members.All(row=>row.CountsAsClear==(phase==1)&&row.Eligible==!stageDenied),"P1资格与P2通关分别持久提交");
                         That(battle.View.State==AntonRaidBattleState.Fighting,"阶段SQL成功也不能跳过旧Run退出屏障");
@@ -190,9 +212,39 @@ internal static class LukeRaidLifecycleTransactionTests
                     return;
                 }
                 That(battle.View.State==AntonRaidBattleState.Reward,"SQL及全部退出均完成才进入Reward");
+                if(unclaimedRestart)
+                {
+                    That(phase==0,"只在P1已SQL且全Run退出后测试未领资格，不伪造P2");
+                    Guid previous=battle.Instance;
+                    var original=actors.Select(actor=>ReadCommitted(previous,0,actor)).ToArray();
+                    That(original.All(row=>row.State==0&&row.Eligibility is {Eligible:true}&&row.Remaining==2),
+                        "旧P1有两个kind待领，备选card不是额外权益");
+                    foreach(var actor in actors.Reverse())That(leave.Leave(actor,actor.Character) is not null,
+                        "未领取时也沿原离团用例退出，不直接改SQL state");
+                    Create();
+                    That(start.Start(actors[0],raids.Find(actors[0])!,definition,[],()=>true).Error==0,
+                        "原666合法签发新实例并关闭旧active");
+                    battle=sessions[0].CurrentRaidBattle(actors[0])!;
+                    foreach(var pair in actors.Select((actor,index)=>(actor,index)))
+                    {
+                        var closed=ReadCommitted(previous,0,pair.actor);
+                        That(closed.State==1&&closed.Remaining==2&&JsonSerializer.Serialize(closed.Eligibility)==
+                            JsonSerializer.Serialize(original[pair.index].Eligibility),
+                            "新只读快照仍识别旧state1未领P1，原完整资格/备选/anchor不变");
+                        var current=ReadCommitted(battle.Instance,0,pair.actor);
+                        That(current.State==0&&current.Eligibility is null&&current.Remaining==0,
+                            "新实例没有借用旧P1资格，纯读不会恢复旧团或自动选卡发奖");
+                    }
+                    return;
+                }
                 if(phase==0&&!supersede)clock.Now=clock.Now.AddSeconds(2);
                 var character=sessions[0].Selected!;var eligibility=battle.LukeEligibility(character.Id,phase)!;
                 That(eligibility.Week==(!supersede&&phase==0?20261018:20261025),"阶段anchor跨显式合成周界，迟领P1仍取旧周而P2按新anchor周");
+                var beforeClaim=ReadCommitted(battle.Instance,phase,actors[0]);
+                That(beforeClaim.Eligibility is {} savedEligibility&&savedEligibility.Week==eligibility.Week&&savedEligibility.Anchor==eligibility.Anchor&&beforeClaim.Remaining==2,
+                    "跨周迟领使用原资格周和anchor，不按当前时间重算");
+                if(phase==1)That(ReadCommitted(battle.Instance,0,actors[0]).Remaining==0,
+                    "P2未领不改变已领取P1，阶段分开读取");
                 var changed=new PreparedRaidReward(battle.Instance,phase,0,1,character.Id,eligibility.Source,[new(10400,2)],phase==1,eligibility.Week){RaidType=RaidKind.Luke};
                 var altered=InventoryRewardGrantService.TryGrantBatch(character,changed.Grants,items.Items,items.GoldLimits,items.EpicPieces,
                     utcNow:DateTimeOffset.UtcNow,allowOverflowMail:true).Plan!;
@@ -206,7 +258,10 @@ internal static class LukeRaidLifecycleTransactionTests
                 foreach(var session in sessions)foreach(byte kind in new byte[]{1,0})
                 {
                     var receipt=session.ClaimRaidReward(kind,1,repository,items.Items,items.GoldLimits,items.EpicPieces,DateTimeOffset.UtcNow);
-                    That(receipt is not null,"原Session/库存writer按冻结资格发奖，不直接插入奖励表");session.ConfirmRaidRewardPublished(receipt!);
+                    That(receipt is not null,"原Session/库存writer按冻结资格发奖，不直接插入奖励表");
+                    var saved=ReadCommitted(battle.Instance,phase,actors.Single(actor=>actor.Session==session));
+                    That(saved.Remaining==(kind==1?1:0),"资产SQL已提交但尚未发布ACK也按已领取对账；半领与全领独立");
+                    session.ConfirmRaidRewardPublished(receipt!);
                 }
             }
             }
@@ -219,6 +274,39 @@ internal static class LukeRaidLifecycleTransactionTests
         }
         Console.WriteLine($"PASS {Count-before} 卢克阶段真实SQL故障、两阶段领取及满额开团断言");
         void Sql(string sql){using var db=new SqliteConnection("Data Source="+path);db.Open();using var command=db.CreateCommand();command.CommandText=sql;command.ExecuteNonQuery();}
+        (RaidPhaseEligibility? Eligibility,int State,int Remaining) ReadCommitted(Guid instance,int phase,RaidActor actor)
+        {
+            // 仅合成测试库的新只读快照，不调用写入/恢复接口，不重建Battle或自动选卡。
+            using var db=new SqliteConnection(new SqliteConnectionStringBuilder {
+                DataSource=path,Mode=SqliteOpenMode.ReadOnly,Pooling=false}.ToString());
+            db.Open();using var tx=db.BeginTransaction(deferred:true);using var command=db.CreateCommand();command.Transaction=tx;
+            command.Parameters.AddWithValue("$instance",instance.ToString("N"));command.Parameters.AddWithValue("$id",actor.Character);
+            command.Parameters.AddWithValue("$account",actor.Owner.Account);command.Parameters.AddWithValue("$phase",phase);
+            command.CommandText=$"SELECT state,phase{phase}_receipt,phase{phase}_event,phase{phase}_anchor FROM character_raid_runs WHERE instance_id=$instance AND character_id=$id AND account=$account AND raid_type=1";
+            RaidPhaseEligibility? eligibility;int state;
+            using(var reader=command.ExecuteReader())
+            {
+                That(reader.Read(),"只读快照只取原账号角色实例");state=reader.GetInt32(0);
+                eligibility=reader.IsDBNull(1)?null:JsonSerializer.Deserialize<RaidPhaseEligibility>(reader.GetString(1));
+                if(eligibility is not null)That(eligibility.Instance==instance&&eligibility.Character==actor.Character&&
+                    eligibility.RaidType==RaidKind.Luke&&eligibility.Phase==phase&&eligibility.Event!=Guid.Empty&&
+                    eligibility.Event.ToString("N")==reader.GetString(2)&&eligibility.Anchor==reader.GetInt64(3),
+                    "阶段JSON身份/事件/anchor必须与同一持久行列一致");
+            }
+            command.CommandText="SELECT kind,card,week_key,plan_json FROM character_raid_reward_receipts WHERE instance_id=$instance AND character_id=$id AND account=$account AND phase=$phase AND raid_type=1";
+            HashSet<byte> claimed=[];
+            using(var reader=command.ExecuteReader())while(reader.Read())
+            {
+                var plan=JsonSerializer.Deserialize<PreparedRaidReward>(reader.GetString(3))!;
+                var offer=eligibility?.Offers.SingleOrDefault(row=>row.Kind==reader.GetByte(0)&&row.Card==reader.GetByte(1));
+                That(eligibility is {Eligible:true}&&offer is not null&&plan.Instance==instance&&plan.Character==actor.Character&&
+                    plan.Phase==phase&&plan.FinalPhase==(phase==1)&&plan.RaidType==RaidKind.Luke&&plan.Source==eligibility.Source&&plan.Week==eligibility.Week&&
+                    reader.GetInt32(2)==eligibility.Week&&plan.Kind==offer.Kind&&plan.Card==offer.Card&&plan.Grants.SequenceEqual(offer.Grants),
+                    "领取回执仍对应原阶段资格及完整备选资产，不凭kind存在就假定身份一致");
+                claimed.Add(reader.GetByte(0));
+            }
+            return (eligibility,state,eligibility is {Eligible:true}?eligibility.Offers.Select(row=>row.Kind).Distinct().Count(kind=>!claimed.Contains(kind)):0);
+        }
         string Snapshot()
         {
             using var db=new SqliteConnection("Data Source="+path);db.Open();using var command=db.CreateCommand();
