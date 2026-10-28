@@ -81,6 +81,8 @@ internal static class ChannelCatalogTests
         var catalog = ChannelCatalog.Parse(source);
         That(ChannelAreaLanding.SameSnapshotPredicates(53, 53) && !ChannelAreaLanding.SameSnapshotPredicates(22, 53) &&
             !ChannelAreaLanding.SameSnapshotPredicates(53, 22), "再战vt+38独立参与换频道快照，同类型保留、普通互换不保留");
+        That(!ChannelAreaLanding.SameSnapshotPredicates(22, 56) && !ChannelAreaLanding.SameSnapshotPredicates(56, 22) &&
+            ChannelAreaLanding.SameSnapshotPredicates(56, 56), "五陵补丁独立比较类型，普通互换不保留快照，同类型仍保留");
         That(ChannelAreaLanding.SameSnapshotPredicates(40, 40) && !ChannelAreaLanding.SameSnapshotPredicates(22, 40) &&
             !ChannelAreaLanding.SameSnapshotPredicates(40, 22) && !ChannelAreaLanding.SameSnapshotPredicates(40, 53) &&
             !ChannelAreaLanding.SameSnapshotPredicates(40, 32), "魔兽vt+30独立参与换频道快照，仅同类型保留，不能沿用普通、再战或团队城镇");
