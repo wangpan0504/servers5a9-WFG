@@ -10,6 +10,18 @@ internal sealed record EnchantmentDefinition(int BeadItemId, int CardItemId, byt
     ImmutableHashSet<(ItemKind Kind, byte Slot)> Targets, ImmutableHashSet<int> LimitedItems)
 {
     public RandomTitleEnchantmentPool? RandomTitle { get; init; }
+    public RandomCardEnchantmentPool? RandomCards { get; init; }
+    public bool VillageOnly { get; init; }
+}
+internal sealed record RandomCardEnchantmentPool(ImmutableArray<int> Positions)
+{
+    public int Draw(Func<int, int> next)
+    {
+        int position = next(Positions.Length);
+        if (position < 0 || position >= Positions.Length)
+            throw new InvalidDataException("随机卡片附魔抽样越界");
+        return Positions[position];
+    }
 }
 internal sealed record EnchantmentEffect(string Tag, ImmutableArray<int> IntegerValues);
 
@@ -97,10 +109,46 @@ internal sealed partial class EnchantmentCatalog
         if (Fields(bead, "target item id").Count != 0)
             return null; // 尚未核对的旧式限制不能被忽略后扩大目标范围。
         if (randomTitle) return LoadRandomTitle(itemId, bead, restricted.ToImmutable());
-        int cardId = Scalar(bead, "monster card id");
-        if (cardId <= 0 || !stackable.TryGetValue(cardId, out var cardPath)) return null;
+        var cardFields = Fields(bead, "monster card id");
+        if (cardFields.Count != 1) throw new InvalidDataException("宝珠字段无效: monster card id");
+        var cardIds = ImmutableArray.CreateBuilder<int>();
+        foreach (string token in RawValues(bead, cardFields[0]).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out int cardId) || cardId <= 0)
+                throw new InvalidDataException("宝珠字段无效: monster card id");
+            cardIds.Add(cardId);
+        }
+        if (cardIds.Count == 0) throw new InvalidDataException("宝珠字段无效: monster card id");
+        bool villageOnly = false;
+        if (cardIds.Count > 1)
+        {
+            if (Fields(bead, "usable expired item").Count != 0 ||
+                !TryRootBlock(bead, "action usable place", out string? places) ||
+                !TryRootBlock(bead, "item category", out string? category) ||
+                places is not null && !Regex.IsMatch(places, @"^\s*`\[village\]`(?:\s+`\[seria room\]`)?\s*$") ||
+                category is not null && !Regex.IsMatch(category, @"^\s*`event`\s*$"))
+                return null; // 未证过期标记、地点或分类不能因普通卡片可解析而放行。
+            villageOnly = places is not null;
+            // need material 属于模板的NPC购买价，使用宝珠不再次收费。
+        }
         int index = Scalar(bead, "enchant index", optional: true);
         if (index is < 0 or > byte.MaxValue) return null;
+        ImmutableHashSet<(ItemKind Kind, byte Slot)>? targets = null;
+        // 重复位置就是权重；只复用候选校验，不去重实际抽样列表。
+        foreach (int cardId in cardIds.Distinct())
+        {
+            var allowed = CardTargets(cardId, index);
+            if (allowed is null) return null;
+            targets = targets is null ? allowed : targets.Intersect(allowed);
+        }
+        if (targets is null || targets.IsEmpty) return null;
+        return new(itemId, cardIds.Count == 1 ? cardIds[0] : 0, (byte)index, targets, restricted.ToImmutable())
+        { RandomCards = cardIds.Count == 1 ? null : new(cardIds.ToImmutable()), VillageOnly = villageOnly };
+    }
+
+    ImmutableHashSet<(ItemKind Kind, byte Slot)>? CardTargets(int cardId, int index)
+    {
+        if (!stackable.TryGetValue(cardId, out var cardPath)) return null;
         string card = read("stackable/" + cardPath);
         var cardTypes = Fields(card, "stackable type");
         if (cardTypes.Count != 1 || !Regex.IsMatch(RawValues(card, cardTypes[0]), @"^\s*`\[material expert job\]`\s+1\s*$"))
@@ -129,7 +177,40 @@ internal sealed partial class EnchantmentCatalog
             CultureInfo.InvariantCulture, out int value) && value == index).ToArray();
         // 空表或重复等级不能视作成功效果；卡片属性由客户端按完整Card/Upgrade派生。
         if (matching.Length != 1 || !matching[0].Groups[2].Value.Contains('[')) return null;
-        return new(itemId, cardId, (byte)index, targets.ToImmutable(), restricted.ToImmutable());
+        return targets.ToImmutable();
+    }
+
+    // 仅新多卡资格读取完整根块；说明字符串不参与标签和块层级判断。
+    static bool TryRootBlock(string text, string name, out string? values)
+    {
+        values = null;
+        if (text.Count(value => value == '`') % 2 != 0) return false;
+        string masked = MaskStrings(text);
+        var tags = Regex.Matches(masked, @"\[(/?)([^\[\]\r\n]+)\]");
+        var blocks = tags.Where(tag => tag.Groups[1].Length != 0)
+            .Select(tag => tag.Groups[2].Value).ToHashSet(StringComparer.Ordinal);
+        var stack = new Stack<string>();
+        for (int index = 0; index < tags.Count; index++)
+        {
+            var tag = tags[index];
+            string current = tag.Groups[2].Value;
+            if (tag.Groups[1].Length != 0)
+            {
+                if (stack.Count == 0 || stack.Pop() != current) return false;
+                continue;
+            }
+            if (current == name)
+            {
+                if (values is not null || stack.Count != 0 || index + 1 >= tags.Count ||
+                    tags[index + 1].Groups[1].Value != "/" || tags[index + 1].Groups[2].Value != name)
+                    return false;
+                int start = tag.Index + tag.Length;
+                values = text.Substring(start, tags[index + 1].Index - start);
+            }
+            if (blocks.Contains(current)) stack.Push(current);
+        }
+        int declarations = Regex.Matches(masked, @"\[/?" + Regex.Escape(name) + @"(?=[\]\s]|$)").Count;
+        return stack.Count == 0 && declarations == (values is null ? 0 : 2);
     }
 
     static int Scalar(string text, string name, bool optional = false)

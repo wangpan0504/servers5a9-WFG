@@ -111,6 +111,7 @@ internal static partial class EnchantmentTcpTests
             fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "附魔保留所有目标持久UID，源耗尽后没有孤儿或外键损坏");
         await RunRandomTitlesAsync(options, root, resources);
+        await RunMultipleCardsAsync(options, root, resources);
 
         string Uids() => fixture.Snapshot("SELECT i.item_uid,s.list_type,s.slot_index FROM character_inventory_items i " +
             "JOIN character_inventory_slots s USING(item_uid) WHERE json_extract(i.item_core,'$.ItemId')<>$p0 ORDER BY i.item_uid", beadId);

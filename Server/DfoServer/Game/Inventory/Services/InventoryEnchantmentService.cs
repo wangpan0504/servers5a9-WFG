@@ -22,9 +22,33 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
             !source.Core.IsStackable || target.Core.IsStackable || source.Core.EquipmentLockId != 0 || target.Core.EquipmentLockId != 0 ||
             source.IsExpired(utcSeconds) || target.IsExpired(utcSeconds))
             return InventoryResult.Reject(Rejection);
-        var definition = enchantments.Get(source.Core.ItemId);
-        if (definition is null) return InventoryResult.Reject(Rejection);
-        return Plan(character, request, utcSeconds, definition, items.Get(source.Core.ItemId), items.Get(target.Core.ItemId), random, Clock);
+        var definition = Definition(source.Core.ItemId);
+        return definition is null ? InventoryResult.Reject(Rejection) : Plan(character, request, utcSeconds, definition);
+    }
+
+    internal EnchantmentDefinition? Definition(int itemId)
+    {
+        try { return enchantments.Get(itemId); }
+        catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
+        { return null; }
+    }
+
+    internal InventoryResult Plan(Character character, EnchantmentRequest request, long utcSeconds, EnchantmentDefinition definition)
+    {
+        var source = character.Inventory.Find(request.Source);
+        var target = character.Inventory.Find(request.Target);
+        if (source is null || target is null || definition.BeadItemId != source.Core.ItemId)
+            return InventoryResult.Reject(Rejection);
+        ItemTemplate beadTemplate, targetTemplate;
+        try
+        {
+            beadTemplate = items.Get(source.Core.ItemId);
+            targetTemplate = items.Get(target.Core.ItemId);
+        }
+        catch (Exception error) when (error is InvalidDataException or KeyNotFoundException or OverflowException)
+        { return InventoryResult.Reject(Rejection); }
+        // 业务规划与抽样在资源catch之外；程序、RNG及提交异常不得冒充资源拒绝。
+        return Plan(character, request, utcSeconds, definition, beadTemplate, targetTemplate, random, Clock);
     }
 
     internal static InventoryResult Plan(Character character, EnchantmentRequest request, long now,
@@ -39,7 +63,8 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
             source.Core.Count <= 0 || target.Core.IsStackable || source.Core.EquipmentLockId != 0 || target.Core.EquipmentLockId != 0 ||
             source.IsExpired(now) || target.IsExpired(now) || beadTemplate.Id != source.Core.ItemId || beadTemplate.Kind != source.Core.Kind ||
             targetTemplate.Id != target.Core.ItemId || targetTemplate.Kind != target.Core.Kind || definition.BeadItemId != source.Core.ItemId ||
-            definition.CardItemId <= 0 && definition.RandomTitle is null || !definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)) ||
+            definition.CardItemId <= 0 && definition.RandomTitle is null && definition.RandomCards is null ||
+            !definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)) ||
             !definition.LimitedItems.IsEmpty && !definition.LimitedItems.Contains(target.Core.ItemId) ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) ||
             !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind) || beadTemplate.UseForbidden ||
@@ -50,12 +75,13 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
         if (!consumed.Accepted) return InventoryResult.Reject(Rejection);
         // 随机技能独立于普通卡片附魔；低16位奖池、高16位序号由客户端按完整表解释。
         var core = definition.RandomTitle is { } pool ? target.Core with { Extension97 = pool.Draw(random ?? Random.Shared.Next) } :
-            target.Core with { EnchantCardId = definition.CardItemId, EnchantUpgrade = definition.Upgrade };
+            target.Core with { EnchantCardId = definition.RandomCards?.Draw(random ?? Random.Shared.Next) ?? definition.CardItemId,
+                EnchantUpgrade = definition.Upgrade };
         var changed = target with { Core = core };
         var after = consumed.Plan!.After with { Items = consumed.Plan.After.Items.Replace(target, changed) };
         after.Validate();
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (target.ExpireTime > 0) deadline = deadline is null ? target.ExpireTime : Math.Min(deadline.Value, target.ExpireTime);
-        return new(true, 0, new(before, after, "enchant_by_bead", new(character, deadline, clock: clock)));
+        return new(true, 0, new(before, after, "enchant_by_bead", new(character, deadline, clock: clock, requirePosition: definition.VillageOnly)));
     }
 }

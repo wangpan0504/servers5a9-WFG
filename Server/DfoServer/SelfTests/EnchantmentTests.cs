@@ -16,7 +16,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class EnchantmentTests
+internal static partial class EnchantmentTests
 {
     public static void RunCore()
     {
@@ -42,6 +42,9 @@ internal static class EnchantmentTests
             [0, 255, 255, 0, 20, 0, 0, 0, 0, 0], [0, 65, 0, 0, 255, 255, 0, 0, 0, 0] })
             Reject<InvalidDataException>(() => EnchantmentRequests.Read(body), "附魔结构或有符号槽位范围无效时拒绝");
         CatalogAndPlans();
+        MultipleCardPlans();
+        MultipleCardExtraQualificationPlans();
+        EnchantmentResourceParsingFailures();
     }
 
     static void CatalogAndPlans()
@@ -215,6 +218,8 @@ internal static class EnchantmentTests
 
     public static void RunResources(ItemResources resources, EnchantmentCatalog enchantments)
     {
+        MultipleCardResourcePlans(resources, enchantments);
+        MultipleCardExtraQualificationResources(resources, enchantments);
         var definition = enchantments.Get(490705314);
         That(definition is { CardItemId: 10309006, Upgrade: 0 } && definition.Targets.SetEquals(
             new[] { (ItemKind.Equipment, (byte)19), (ItemKind.Equipment, (byte)20), (ItemKind.Equipment, (byte)21) }),
