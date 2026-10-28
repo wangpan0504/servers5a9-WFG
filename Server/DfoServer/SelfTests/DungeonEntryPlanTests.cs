@@ -293,14 +293,16 @@ internal static class DungeonEntryPlanTests
             "337确为95级、难度0、无资源门票及疲劳消耗的120秒BossRush，不能按缺票或疲劳不足诊断");
         var soulCharacter = new Character(99,0,"SoulEntry337",0,new(38,2,1085,249),null) { Level = 95 };
         That(DungeonEntryPlan.TryCreate(catalog,soulCharacter,337,0,0,out var soulPlan,out string soulReason) &&
-            soulReason == "resource-plan-ready" && soulPlan is { UsesFatigue: false, DisableFatigueConsumption: true } &&
+            soulReason == "resource-plan-ready" && soulPlan is { UsesFatigue: false, DisableFatigueConsumption: true,
+                IsBossRush: true, TimeoutMilliseconds: 120000 } &&
             soulPlan.StartMap.Position == new DungeonPoint(2,2) &&
             soulPlan.BossMap is { Position: { X: 4, Y: 4 }, Kind: "boss" } &&
             soulPlan.BossMap.Position.X < soulPlan.Maze.Width && soulPlan.BossMap.Position.Y < soulPlan.Maze.Height &&
             soulPlan.Maze.MapSpecification is { Count: 25 } && soulPlan.Maze.MapSpecification.Contains(soulPlan.BossMap) &&
             soulPlan.Maze.Bosses.SequenceEqual([new DungeonPoint(6,6)]) &&
-            soul.Mazes.Single().Bosses.SequenceEqual([new DungeonPoint(6,6)]) && !soulPlan.Maze.StaticTopology.Supported,
-            "真实337不耗疲劳，按已有最远格规划结算房且不改共享目录的6,6声明；格外Boss仍不满足正式拓扑，规划不代替专用计时和结算验收");
+            soul.Mazes.Single().Bosses.SequenceEqual([new DungeonPoint(6,6)]) &&
+            soulPlan.Maze.IsBossRush && soulPlan.Maze.StaticTopology.Supported,
+            "真实337不耗疲劳，按已有最远格规划结算房且不改共享目录的6,6声明；拓扑只核起点，并冻结 120 秒 BossRush 合同");
         // GM伴侣只在普通副本注入：祭坛/塔/亡者峡谷按资源标记整类排除，普通副本与Boss Rush保持放行。
         // 7601 眩惑之塔、11006/11007 两座祭坛、11008 绝望之塔首层。
         DeathTowerCompanionPolicy(pvf, catalog);

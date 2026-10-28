@@ -323,6 +323,13 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await MonsterAiProjection.SendAsync(context, receipt, "formal_monster_ai", Guard);
             await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
                 passiveItems: receipt.PassiveItems), "formal_start_map", Guard);
+            if (context.Session.FormalBossRushView() is { } rush)
+            {
+                await context.Notify(NotiPacketType.BOSS_RUSH_DUNGEON_INFO, BossRushPackets.DungeonInfo(rush.Bosses),
+                    "formal_boss_rush_info", Guard);
+                await context.Notify(NotiPacketType.BOSS_RUSH_DATA, BossRushPackets.Data(rush.Hud.Rank, rush.Hud.Score, rush.Hud.RemainMilliseconds),
+                    "formal_boss_rush_data", Guard);
+            }
         }
         if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo)
             await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
@@ -560,6 +567,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         int enteredDungeon = checked((int)receipt.Entry.DungeonId);
         await context.Notify(NotiPacketType.DIE_MONSTER,
             ExclusiveDropPackets.MonsterDeath(result.MonsterKey, dropRows, enteredDungeon, result.BossPositionUpdate), "formal_monster_death", Guard);
+        if (result.BossRushHud is { } hud)
+            await context.Notify(NotiPacketType.BOSS_RUSH_DATA, BossRushPackets.Data(hud.Rank, hud.Score, hud.RemainMilliseconds),
+                "formal_boss_rush_data", Guard);
         if (receipt.HellPartyRoomCleared)
             await context.Notify(NotiPacketType.HELL_PARTY_CLEAR, DungeonPackets.HellPartyCleared(), "formal_hell_party_clear", Guard);
         if (context.Session.PendingDungeonBossEntrance() is { } entrance)

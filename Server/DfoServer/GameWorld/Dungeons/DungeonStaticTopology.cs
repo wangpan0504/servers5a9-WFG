@@ -110,8 +110,9 @@ internal sealed record DungeonStaticTopology(
             }
         }
 
-        if (rooms.Count == 0 || maze.Starts.Count == 0 || maze.Bosses.Count == 0 ||
-            maze.Starts.Concat(maze.Bosses).Any(point => !maps.ContainsKey(point)))
+        var terminals = maze.IsBossRush ? maze.Starts : maze.Starts.Concat(maze.Bosses);
+        if (rooms.Count == 0 || maze.Starts.Count == 0 || (!maze.IsBossRush && maze.Bosses.Count == 0) ||
+            terminals.Any(point => !maps.ContainsKey(point)))
             return Unsupported("起点或Boss点没有对应真实房间");
         // 特殊传送另有运行资格；保留独立房间，不从单侧门、胶囊或可达性补造普通连接。
         if (maze.IsLostLand)

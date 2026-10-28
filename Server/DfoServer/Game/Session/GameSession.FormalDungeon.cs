@@ -38,6 +38,7 @@ internal sealed partial class GameSession
         public NpcFavorAppearance? FavorNpc { get; set; }
         public GriefTowerItemUse? GriefItems { get; init; }
         public GriefTowerAdmission? GriefAdmission { get; init; }
+        public BossRushRunState? BossRush { get; init; }
         public ImmutableArray<ConsumableState> FreeConsumableEffects { get; set; } = [];
         public BossSelectionBuff? BossSelectionBuff { get; init; }
         public long DeathSerial { get; set; }
@@ -403,12 +404,26 @@ internal sealed partial class GameSession
                 return RejectFormal("luke-normal-progress-locked");
             entry = entry! with { OrdinaryLukeDay = day };
         }
-        if (partyAdmission && (entry!.Maze.IsGriefTower || entry.IsAltar || entry.IsDespair || entry.IsTournament))
+        if (partyAdmission && (entry!.Maze.IsGriefTower || entry.IsBossRush || entry.IsAltar || entry.IsDespair || entry.IsTournament))
             return RejectFormal("party-special-dungeon-unsupported");
+        if (entry!.IsBossRush && (practice || hellParty || questId != 0 || classExperience || training || trainingRoom))
+            return RejectFormal("boss-rush-mode-conflict");
+        if (entry.IsBossRush && entry.TimeoutMilliseconds <= 0) return RejectFormal("boss-rush-timeout-unspecified");
+        if (entry.IsBossRush)
+        {
+            try
+            {
+                if (catalog.BossRush.Bosses.IsDefaultOrEmpty) return RejectFormal("boss-rush-catalog-unavailable");
+            }
+            catch (Exception error) when (error is InvalidDataException or FileNotFoundException or NotSupportedException)
+            {
+                return RejectFormal("boss-rush-catalog-unavailable");
+            }
+        }
         // 时空裂缝：除区域 [hell quest] 外，副本头 [inferno quest] 也须已完成（世界地图同一副本声明为 [is clear quest]）。
-        if (entry!.IsInfernoParty && catalog.Get(checked((int)dungeonId)).InfernoQuestId is int infernoQuest and > 0 && !done.Contains(infernoQuest))
+        if (entry.IsInfernoParty && catalog.Get(checked((int)dungeonId)).InfernoQuestId is int infernoQuest and > 0 && !done.Contains(infernoQuest))
             return RejectFormal("hell-party-quest-required:" + infernoQuest);
-        if (hellParty && entry!.HellParty is null && !entry.IsCosmo && !entry.IsInfernoParty) return RejectFormal("hell-party-room-unavailable");
+        if (hellParty && entry.HellParty is null && !entry.IsCosmo && !entry.IsInfernoParty) return RejectFormal("hell-party-room-unavailable");
         HellPartyTicket? hellTicket = null;
         HellPartyTicket? legendTicket = null;
         var cosmoPasses = entry!.IsCosmo && items is not null ? items.CosmoPasses() : [];
@@ -484,6 +499,8 @@ internal sealed partial class GameSession
             prepared = prepared with { Dungeon = prepared.Dungeon with { BossSelectionBuff = bossBuff } };
         if (prepared is not null && entry.Maze.IsGriefTower)
             prepared = prepared with { Dungeon = prepared.Dungeon with { GriefItems = new(catalog.GriefTower), GriefAdmission = grief } };
+        if (prepared is not null && entry.IsBossRush)
+            prepared = prepared with { Dungeon = prepared.Dungeon with { BossRush = new BossRushRunState(catalog.BossRush, entry.TimeoutMilliseconds) } };
         // 只有正式入场计入冒险团每周地下城信息：练习、训练、职业体验与比赛不消耗次数。
         WeeklyDungeonEntry? weekly = null;
         if (tagEntry is null && imperialEntry is null && war?.Charged != true && !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTournament && !entry.IsTrainingRoom &&
@@ -1277,9 +1294,9 @@ internal sealed partial class GameSession
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
             if (death.ClearFact is not null)
                 dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
-            return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey)
+            return AttachBossRushHud(new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey)
                 { ReportedTarget = target, ClearFact = death.ClearFact, CulledMonsterKeys = death.CulledMonsterKeys,
-                    BossPositionUpdate = death.BossPositionUpdate };
+                    BossPositionUpdate = death.BossPositionUpdate }, dungeon, target);
         }
         // 契约跨到期或提交返回丢失时仍恢复原死亡的奖励与规划时刻，不重算已冻结额度。
         if (dungeon.PendingDeathReward is null)
@@ -1373,7 +1390,7 @@ internal sealed partial class GameSession
             dungeon.KillBossExperience = checked(dungeon.KillBossExperience + reward.BaseAmount);
         if (committed.Death.ClearFact is not null)
             dungeon.ClearTimeMilliseconds = checked((uint)System.Diagnostics.Stopwatch.GetElapsedTime(dungeon.StartedTimestamp).TotalMilliseconds);
-        return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward,
+        return AttachBossRushHud(new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, FormalReceipt(), pending.Death.MonsterKey, reward,
             committed.Death.ClearFact, loot?.UsesCollectionLedger == true ? null : loot?.Ground, previousLevel)
         {
             Drops = loot?.Grounds ?? [],
@@ -1387,8 +1404,17 @@ internal sealed partial class GameSession
             RoomClearFact = committed.Death.RoomClearFact,
             BossPositionUpdate = committed.Death.BossPositionUpdate,
             CulledMonsterKeys = committed.Death.CulledMonsterKeys
-        };
+        }, dungeon, target);
     });
+
+    static FormalDungeonDeathResult AttachBossRushHud(FormalDungeonDeathResult result, FormalDungeon dungeon,
+        DungeonPlannedMonster? target)
+    {
+        if (result.Outcome != DungeonRunOutcome.Accepted || dungeon.BossRush is not { } rush || target is null ||
+            !rush.TryScore(target.MonsterId))
+            return result;
+        return result with { BossRushHud = rush.Hud(dungeon.StartedTimestamp) };
+    }
 
     public FormalDungeonPickupResult PickFormalDungeonItem(uint groundKey, ItemCatalog items, EpicPieceCatalog pieces,
         GoldLimitCatalog? goldLimits = null) => owner.Execute(() =>
@@ -1483,6 +1509,13 @@ internal sealed partial class GameSession
         Ready && owner.Generation == receipt.Generation && SelectionEpoch == receipt.SelectionEpoch &&
         ReferenceEquals(Selected, receipt.Character) && formalDungeon is { } dungeon && dungeon.Run.Snapshot.Identity == receipt.Snapshot.Identity && IsCurrentRaidDungeon(dungeon.Entry) &&
         (receipt.ScriptedReturnId == Guid.Empty || CanUseScriptedReturn(dungeon) && dungeon.Run.MatchesScriptedReturn(receipt.ScriptedReturnId)));
+
+    public (ImmutableArray<int> Bosses, BossRushHud Hud)? FormalBossRushView() =>
+        owner.Execute<(ImmutableArray<int> Bosses, BossRushHud Hud)?>(() =>
+            formalDungeon is { BossRush: { } rush } dungeon
+                ? (rush.Catalog.Bosses, rush.Hud(dungeon.StartedTimestamp)) : null);
+
+    public bool AcceptBossRushReport() => owner.Execute(() => formalDungeon?.BossRush is not null);
 
     public bool CanPublishFormalDungeonRejection(Character character, long epoch, SessionPhase phase,
         DungeonSelectionContext? selection) => owner.Execute(() =>

@@ -68,6 +68,7 @@ internal sealed record DungeonMaze(
     // 仅由4000的严格资源解析设置；专用静态连接不代表正式限时玩法已接通。
     public bool IsLostLand { get; init; }
     public bool IsGriefTower { get; init; }
+    public bool IsBossRush { get; init; }
     // 资源池已核验的同层唯一MAP；静态拓扑必须继续匹配它，不能只凭模式布尔值放宽BB。
     public DungeonMap? GriefRoom { get; init; }
     public bool IsDespairTower { get; init; }
@@ -97,7 +98,7 @@ internal sealed record DungeonMaze(
         SameMaps(StoryStages, other.StoryStages) && SameMaps(ConditionalMaps, other.ConditionalMaps) &&
         WarpMaps.SequenceEqual(other.WarpMaps) && ClearConditions.SequenceEqual(other.ClearConditions) &&
         RandomizedObjects.SequenceEqual(other.RandomizedObjects) &&
-        SameEntrance(BossEntrance, other.BossEntrance);
+        IsBossRush == other.IsBossRush && SameEntrance(BossEntrance, other.BossEntrance);
 
     static bool SameEntrance(DungeonBossEntrance? left, DungeonBossEntrance? right) =>
         left is null || right is null ? left is null && right is null :
@@ -218,6 +219,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public GriefTowerFloor? GriefFloor { get; init; }
     public bool IsDespairTower => RawSections.Where(row => row.Tag == "tower of despair").ToArray() is [{ Tokens.Count: 0 }];
     public bool IsBossRushDungeon => string.Equals(DungeonType?.Trim(), "boss rush dungeon", StringComparison.OrdinalIgnoreCase);
+    public int TimeoutSeconds => RawSections.Where(row => row.Tag == "dungeon timeout").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: > 0 } seconds, { Type: 0, Value: 1 }] }] ? seconds.Value : 0;
     public bool IsDazzlementTower => string.Equals(DungeonType?.Trim(), "tower of dazzlement", StringComparison.OrdinalIgnoreCase);
     // GM伴侣AIC只在普通副本注入。祭坛（[blood dungeon]）、塔与亡者峡谷各图由资源自带AI演员、
     // 波次或楼层合同，再叠加伴侣会与地图断言、重复演员或楼层规则冲突；按资源标记整类排除，新增同类副本自动覆盖。
@@ -412,6 +415,7 @@ internal sealed class DungeonCatalog
     private readonly ConcurrentDictionary<int, Lazy<DungeonDefinition>> definitions = new();
     private readonly Lazy<DungeonMapPool> mapPool;
     private readonly Lazy<GriefTowerCatalog> griefTower;
+    private readonly Lazy<BossRushCatalog> bossRush;
     private readonly Lazy<DungeonAltarAdmissionCatalog> altarAdmission;
     public DungeonAltarAdmissionCatalog AltarAdmission => altarAdmission.Value;
     private readonly Lazy<TowerOfDespairCatalog> despair;
@@ -423,6 +427,7 @@ internal sealed class DungeonCatalog
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
         mapPool = new(() => DungeonMapPool.Load(archive,maps),LazyThreadSafetyMode.ExecutionAndPublication);
         griefTower = new(() => new GriefTowerCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
+        bossRush = new(() => new BossRushCatalog(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         altarAdmission = new(() => DungeonAltarAdmissionCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         despair = new(() => TowerOfDespairCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         enterCounts = new(() => DungeonEnterCountCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
@@ -444,6 +449,7 @@ internal sealed class DungeonCatalog
         return maze with { MapSpecification = selected };
     }
     public GriefTowerCatalog GriefTower => griefTower.Value;
+    public BossRushCatalog BossRush => bossRush.Value;
 
     public static DungeonCatalog Load(PvfArchive pvf)
     {
@@ -992,7 +998,7 @@ internal sealed class DungeonCatalog
             }
         }
         var maze = new DungeonMaze(ordinal,width,height,greed,starts,bosses,specification,quest)
-            { LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),MapAlternatives = Freeze(alternatives),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
+            { IsBossRush = allowOffGridBoss, LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),MapAlternatives = Freeze(alternatives),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
                 ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve),
                 RandomizedObjects = DungeonMazeConditions.RandomizedObjects(mazeSections),
                 IsDimensionHiddenBoss = mazeSections.Any(row => row.Tag == "hidden boss maze"),

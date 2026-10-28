@@ -30,6 +30,7 @@ internal sealed partial class GameSession
         public byte? SelectedCard { get; set; }
         public DungeonCardReward? Card { get; set; }
         public GriefTowerReward? GriefReward { get; set; }
+        public BossRushClearReward? BossRushReward { get; set; }
         public uint? MailId { get; set; }
         public GuildDungeonProgress? GuildDungeon { get; set; }
         public bool AutoRevealScheduled { get; set; }
@@ -151,6 +152,16 @@ internal sealed partial class GameSession
             guildReward = GuildDungeonClearReward.Prepare(guildDefinition, griefItems,
                 (timeProvider ?? TimeProvider.System).GetUtcNow(), guildDungeons!);
         }
+        BossRushClearReward? bossRushReward = null;
+        if (!capture.Prepared && capture.Character is { } rushCharacter &&
+            capture.Dungeon is { Entry.IsBossRush: true, BossRush: { } rush, Run.ClearFact: not null } &&
+            maximumRankPoint == rankPoint)
+        {
+            if (griefItems is null || griefPieces is null) return new(DungeonRunOutcome.Rejected);
+            bossRushReward = BossRushClearReward.Prepare(rush,
+                rushCharacter with { Inventory = creatureInventory?.After ?? rushCharacter.Inventory },griefItems,griefPieces,
+                capture.Dungeon.Draw,(timeProvider ?? TimeProvider.System).GetUtcNow());
+        }
         return owner.Execute(() =>
     {
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon || dungeon.Entry.IsPractice || dungeon.Entry.RaidEntry is not null ||
@@ -187,7 +198,7 @@ internal sealed partial class GameSession
         // 魔界大战的小图与超星空、悲叹之塔同一口径：没有普通白图的通关翻牌，结果页只留“重选地图/返回城镇”。
         // 翻牌层会一直占着结算阶段（客户端跳过翻牌的 1434 本服未实现），撤退与再选图都被阶段门挡住。
         bool noClearCards = dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.Maze.IsGriefTower ||
-            dungeon.EvildomWarEntry is not null;
+            dungeon.Entry.IsBossRush || dungeon.EvildomWarEntry is not null;
         var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !noClearCards ? cards?.Prepare(
             dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count,
             job:Selected!.Job,grow:Selected.GrowType,ancientBonus:ancientGate?.Bonus == true) : null);
@@ -200,7 +211,7 @@ internal sealed partial class GameSession
                 fact.ConfirmedDeathEvents.Count,membership,now,goldCardEvent,Selected.Job,Selected.GrowType);
         }
         var prepared = dungeon.Run.PrepareSettlement(fact, reportBody, reward, card,options,creatureInventory,
-            dungeon.Settlement?.Pending.Grief ?? griefReward);
+            dungeon.Settlement?.Pending.Grief ?? griefReward, dungeon.Settlement?.Pending.BossRush ?? bossRushReward);
         if (prepared.Pending is null || prepared.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         prepared.Pending.FreezeAncientGate(ancientGate);
@@ -266,6 +277,7 @@ internal sealed partial class GameSession
             Selected = commit.Character;
             settlement.Card = commit.Card;
             settlement.GriefReward = commit.GriefReward;
+            settlement.BossRushReward = commit.BossRushReward;
             settlement.MailId = commit.MailId;
             settlement.BlackDiamond = commit.BlackDiamond ?? prepared.Pending.Options?.BlackDiamond;
             settlement.GainedExperience = commit.GainedExperience;
@@ -323,6 +335,7 @@ internal sealed partial class GameSession
                 GuildContribution = guildContribution,
                 GuildDungeon = settlement.GuildDungeon,
                 Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond,GriefReward = settlement.GriefReward,
+                BossRushReward = settlement.BossRushReward ?? settlement.Pending.BossRush,
                 EvildomWarClear = dungeon.EvildomWarEntry is not null };
         });
     }
@@ -342,6 +355,7 @@ internal sealed partial class GameSession
     public FormalDungeonReceipt? AdvanceFormalDungeonCards(bool showCards) => owner.Execute(() =>
     {
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
+            formalDungeon?.Entry.IsBossRush == true ||
             formalDungeon?.Settlement is not { Committed: true } settlement)
             return null;
         if (showCards)
@@ -356,6 +370,7 @@ internal sealed partial class GameSession
     public FormalFreeCardResult? SelectFormalDungeonFreeCard(byte row, byte card) => owner.Execute<FormalFreeCardResult?>(() =>
     {
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
+            formalDungeon?.Entry.IsBossRush == true ||
             formalDungeon?.Settlement is not { Committed: true, CardsShown: true } settlement ||
             row != 0 || card != formalDungeon.PartySlot || settlement.SelectedCard is { } old && old != card)
             return null;
@@ -406,6 +421,7 @@ internal sealed partial class GameSession
     bool MatchesCardInstance(FormalDungeonReceipt receipt) => Ready && Phase == SessionPhase.Settlement &&
         receipt.Generation == owner.Generation && receipt.SelectionEpoch == SelectionEpoch &&
         formalDungeon?.Entry.IsCosmo != true && formalDungeon?.Entry.Maze.IsGriefTower != true &&
+        formalDungeon?.Entry.IsBossRush != true &&
         formalDungeon?.Run.Snapshot.Identity == receipt.Snapshot.Identity;
 
     // 牌面属于已提交实例，与之后德利拉物品服务产生的新库存revision无关。

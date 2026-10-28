@@ -63,6 +63,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public DungeonRoomClearFact? RoomClearFact { get; init; }
     public ImmutableArray<InventorySlot> BeastRewardSlots { get; init; } = [];
     public DfoServer.GameWorld.Dungeons.DungeonPoint? BossPositionUpdate { get; init; }
+    public BossRushHud? BossRushHud { get; init; }
 }
 internal sealed record EpicPiecePickup(int Index, int PieceId, int Amount, int Balance, long BookRevision);
 internal sealed record DungeonPickupCommit(Character Character, bool Duplicate, InventorySlot Destination, long ItemUid,
@@ -112,4 +113,5 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
+    public BossRushClearReward? BossRushReward { get; init; }
 }

@@ -35,6 +35,15 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         commands.Register(CmdPacketType.EPLP_COMMAND, ResultCommandAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.TOURNAMENT_REWARD_SELECT_STATE, TournamentStateAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.TOURNAMENT_REWARD_SELECT, TournamentSelectAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.BOSS_RUSH_REPORT, ReportBossRushAsync, nameof(DungeonSettlementHandler), UserStateRequirement.DungeonContext);
+    }
+
+    Task<CommandResult> ReportBossRushAsync(GameConnectionContext context, Packet request)
+    {
+        if (!DungeonSettlementRequests.TryParseBossRushReport(request.Body, out _, out _) ||
+            !context.Session.AcceptBossRushReport())
+            return Task.FromResult(CommandResult.Unhandled);
+        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> BossAsync(GameConnectionContext context, Packet request)
@@ -102,7 +111,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         bool grief = receipt.Entry.Maze.IsGriefTower;
         // 魔界大战小图只发结果页（34）：没有普通白图的翻牌会员刷新与 35 通关奖励，否则翻牌层压住结算阶段。
         bool war = result.EvildomWarClear;
-        if (!tournament && !cosmo && !grief)
+        bool bossRush = receipt.Entry.IsBossRush;
+        if (!tournament && !cosmo && !grief && !bossRush)
             await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!, receipt.PartyActors), "formal_play_result", Guard);
         var previous = result.PreviousCharacter ?? throw new InvalidOperationException("通关结算缺少真实提交前角色");
         if (CharacterExperienceNotice.ShouldPublish(previous.Level))
@@ -122,7 +132,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "formal_clear_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard,
             previousLearning: previous.Learning);
-        if (!receipt.Entry.IsTutorial && !cosmo && !grief && !war)
+        if (!receipt.Entry.IsTutorial && !cosmo && !grief && !war && !bossRush)
             await DungeonCardMembershipProjection.RefreshAsync(context);
         if (tournament)
         {
@@ -134,6 +144,12 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Notify(NotiPacketType.TOG_CLEAR_REWARD,GriefTowerPackets.ClearReward(receipt.ClearTimeMilliseconds,
                 result.Receipt.Entry.GriefLayer ?? throw new InvalidOperationException("悲叹通关缺少已冻结楼层"),
                 result.GriefReward ?? throw new InvalidOperationException("悲叹通关缺少已提交奖励")),"formal_grief_clear_reward",Guard);
+        else if (bossRush)
+        {
+            var rush = result.BossRushReward ?? throw new InvalidOperationException("BossRush 通关缺少已提交奖励");
+            await context.Notify(NotiPacketType.BOSS_RUSH_DUNGEON_RESULT, BossRushPackets.Result(rush.Rank, rush.Score,
+                rush.Item?.ItemId ?? 0, rush.Item?.Count ?? 0), "formal_boss_rush_result", Guard);
+        }
         else if (!cosmo && !war)
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(effective),
             result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,

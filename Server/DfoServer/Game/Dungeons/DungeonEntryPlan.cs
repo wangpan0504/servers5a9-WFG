@@ -80,7 +80,9 @@ internal sealed record DungeonEntryPlan(
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
     public int? GriefLayer { get; init; }
-    public bool RequiresFatigueOwner => IsOrdinary && LostLand is null && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower;
+    public bool IsBossRush { get; init; }
+    public int TimeoutMilliseconds { get; init; }
+    public bool RequiresFatigueOwner => IsOrdinary && LostLand is null && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower && !IsBossRush;
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
@@ -341,7 +343,7 @@ internal sealed record DungeonEntryPlan(
             if (shared.PartyRoute is not null || shared.DungeonId != dungeonId || shared.Difficulty != difficulty ||
                 shared.BeastMode != beastMode ||
                 shared.IsPractice || shared.IsTutorial || shared.IsClassExperience || shared.IsTrainingRoom || shared.IsTournament ||
-                shared.IsQuestReplay || (shared.HellParty is not null || shared.IsCosmo) != hellParty || shared.IsHellLegend != hellLegend ||
+                shared.IsQuestReplay || shared.IsBossRush || (shared.HellParty is not null || shared.IsCosmo) != hellParty || shared.IsHellLegend != hellLegend ||
                 (shared.Hope is null) != (hope is null) || hope is not null && (shared.Hope is not { } sharedHope ||
                     !ReferenceEquals(sharedHope.Catalog,hope.Catalog) || sharedHope.MazeOrdinal != hope.MazeOrdinal ||
                     hope.SourceRevision != character.Revision || questId != 0))
@@ -712,6 +714,8 @@ internal sealed record DungeonEntryPlan(
             planMaze = maze with { MapSpecification = hellSpec.Select(map => map.Position == hellRoom.Room && map.Kind == "map"
                 ? map with { Id = hellRoom.MapId, Path = hellMapPath, CandidateIds = Array.Empty<int>() } : map).ToArray() };
         }
+        if (definition.IsBossRushDungeon)
+            planMaze = planMaze with { IsBossRush = true };
         var active = questId == 0 || isReplay ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
@@ -760,6 +764,8 @@ internal sealed record DungeonEntryPlan(
             IsAncientInfinite = definition.IsAncientInfinite,
             IsPractice = practice,
             GriefLayer = grief?.Before.State.Layer,
+            IsBossRush = definition.IsBossRushDungeon,
+            TimeoutMilliseconds = definition.IsBossRushDungeon ? checked(definition.TimeoutSeconds * 1000) : 0,
             HellParty = hellParty && !cosmo && !infernoParty ? activeHell : null,
             IsInfernoParty = infernoParty,
             IsHellLegend = hellParty && !cosmo && hellLegend,
@@ -771,7 +777,7 @@ internal sealed record DungeonEntryPlan(
             InitializationCounterSupported = !definition.IsClassExperience && !practice && maze.LayeredMaps.Count == 0 && maze.StoryStages.Count == 0 &&
                 !definition.RawSections.Any(section => section.Tag is "mercenary broker dungeon" or "dnfaos dungeon")
         };
-        plan = WithEntryCost(plan, definition, hellParty || isReplay || grief is not null);
+        plan = WithEntryCost(plan, definition, hellParty || isReplay || grief is not null || definition.IsBossRushDungeon);
         if (hope is not null)
             plan = plan with { Hope = hope, HopeRewardProfession = (character.Job,character.GrowType), StartFatigue = checked((ushort)hope.Catalog.FatigueValue),
                 QuestAcceptances = plan.QuestAcceptances.Add(hope.Acceptance) };
