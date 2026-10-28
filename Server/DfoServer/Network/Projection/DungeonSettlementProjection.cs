@@ -1,3 +1,4 @@
+using DfoServer.Game.Raids;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Protocol;
 
@@ -5,15 +6,16 @@ namespace DfoServer.Network.Projection;
 
 internal static class DungeonSettlementProjection
 {
-    internal static async Task EnableAsync(GameConnectionContext context, ushort? reportedBossKey = null)
+    internal static async Task<AntonRaidBattleChange?> EnableAsync(GameConnectionContext context, ushort? reportedBossKey = null)
     {
         if (context.Session.RaidCombatView() is not null)
         {
-            if (context.Session.CompleteCurrentRaidCombatDungeon() is not null)
+            var change = context.Session.CompleteCurrentRaidCombatDungeon();
+            if (change is not null)
                 context.Session.PublishRaidCombat();
-            return;
+            return change;
         }
-        if (context.Session.EnableFormalDungeonSettlement(reportedBossKey) is not { } completion) return;
+        if (context.Session.EnableFormalDungeonSettlement(reportedBossKey) is not { } completion) return null;
         bool Guard() => context.Session.CanPublishDungeonSettlement(completion.Receipt);
         if (completion.Receipt.Entry.IsPractice)
         {
@@ -22,7 +24,7 @@ internal static class DungeonSettlementProjection
                 DungeonSettlementPackets.PracticeCleared(completion.Receipt.ClearTimeMilliseconds), "formal_practice_clear",
                 () => sent = Guard());
             if (sent) context.Session.ConfirmFormalDungeonSettlementEnabled(completion.Receipt);
-            return;
+            return null;
         }
         // 空终点的物件或演出条件只许可已有清图的结算，不编造115需要的怪物key。
         if (completion.BossKey is { } bossKey)
@@ -34,6 +36,7 @@ internal static class DungeonSettlementProjection
             context.Session.ConfirmFormalDungeonSettlementEnabled(completion.Receipt);
             if (completion.Receipt.Entry.IsCosmo && context.Session.PartyDungeon is null) await RefreshCosmoRetryAsync(context);
         }
+        return null;
     }
 
     internal static async Task RefreshCosmoRetryAsync(GameConnectionContext context)

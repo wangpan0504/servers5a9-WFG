@@ -427,6 +427,7 @@ internal static class TcpRegressionTests
         ("raid-create", RaidCreateTcpTests.RunAsync),
         ("anton-raid", AntonRaidTcpTests.RunAsync),
         ("anton-raid-rejoin", AntonRaidRejoinTcpTests.RunAsync),
+        ("anton-tcp-probe", AntonRaidTcpTests.RunProbeAsync),
         ("raid-start-minimum", AntonRaidTcpTests.RunMinimumAsync),
         ("luke-raid", LukeRaidTcpTests.RunAsync),
         ("luke-raid-start", LukeRaidStartTcpTests.RunAsync),

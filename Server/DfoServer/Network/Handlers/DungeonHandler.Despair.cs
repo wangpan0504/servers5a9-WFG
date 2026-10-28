@@ -12,7 +12,14 @@ internal sealed partial class DungeonHandler
     {
         if (context.Session.FormalEnteredDungeonId is not (>= 11008 and <= 11107))
         {
-            await DungeonSettlementProjection.EnableAsync(context, reportedBossKey);
+            var change = await DungeonSettlementProjection.EnableAsync(context, reportedBossKey);
+            if (change is not null && context.Session.RaidPhaseProgress)
+            {
+                int phaseSuccess = change.After.Symbols.TryGetValue("[1phase success]", out int success) ? success : -1;
+                log.Write("anton_phase_progress", new { Connection = context.Id, change.After.Phase,
+                    State = change.After.State.ToString(), PhaseSuccess = phaseSuccess, Timers = change.After.Timers.Count,
+                    Deferred = change.After.Deferred.Count, TimerUnit = "unknown" });
+            }
             return;
         }
         if (despairRewards is null || titles is null || titleProjection is null || inventoryProjection is null)
