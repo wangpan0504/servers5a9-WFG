@@ -143,7 +143,7 @@ internal static partial class LukeRewardRestartTests
         string file=Path.Combine(root,"worker.json");File.WriteAllText(file,JsonSerializer.Serialize(input));File.WriteAllText(Path.Combine(root,"nonce"),input.Nonce);
         string host=Environment.ProcessPath??throw new InvalidOperationException("测试进程host未知");
         var start=new ProcessStartInfo(host){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        if(Path.GetFileNameWithoutExtension(host).Equals("dotnet",StringComparison.OrdinalIgnoreCase))start.ArgumentList.Add(typeof(LukeRewardRestartTests).Assembly.Location);
+        if(Path.GetFileNameWithoutExtension(host).Equals("dotnet",StringComparison.OrdinalIgnoreCase))start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, typeof(LukeRewardRestartTests).Assembly.GetName().Name + ".dll"));
         start.ArgumentList.Add("--selftest-core");start.Environment[WorkerVariable]=file;
         using var child=Process.Start(start)??throw new IOException("测试child启动失败");child.StandardInput.Close();
         string label=input.Recover?"recover":input.Replay?"replay":input.BeforeCommit?"precommit":"committed";
