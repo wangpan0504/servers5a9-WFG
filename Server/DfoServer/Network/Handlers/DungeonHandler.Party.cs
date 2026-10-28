@@ -220,6 +220,12 @@ internal sealed partial class DungeonHandler
         }
         switch (notice.Kind)
         {
+            case PartyDungeonNoticeKind.LoadingReplay:
+                // 现场00:02:51的28/29及首次Entry构包合同；重用冻结seed/演员，不补无证ACK16。
+                await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(scene.Entry), "anton_loading_information_replay", Current);
+                await context.Notify(NotiPacketType.START_MAP,
+                    DungeonPackets.StartMap(scene.Entry, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems), "anton_loading_map_replay", Current);
+                break;
             case PartyDungeonNoticeKind.Entry:
                 await town.DetachAsync(context);
                 GuildDungeonPartyBuffProjection.Post(context, clear: true);

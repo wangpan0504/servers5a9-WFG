@@ -14,7 +14,8 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
     public IReadOnlyList<int> MissingMaps => catalog.MissingMaps;
     public bool Contains(int dungeon) => catalog.DungeonPaths.ContainsKey(dungeon);
 
-    public PartyDungeonNotice[] Select(GameSession leader, int dungeon, PartySnapshot? party, out string? rejection)
+    public PartyDungeonNotice[] Select(GameSession leader, int dungeon, PartySnapshot? party, out string? rejection,
+        bool replayLoading = false)
     {
         rejection = "anton-entry-waiting-client-resources";
         if (!enabled) return [];
@@ -39,6 +40,19 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
             int phase = battle.View.Phase;
             reason = "anton-entry-dungeon-not-open";
             if (!Allows(battle, dungeon)) return [];
+            if (replayLoading)
+            {
+                reason = "anton-entry-loading-identity-changed";
+                var instance = leader.PartyDungeon;
+                if (instance is null || instance.Members.Length != members.Length ||
+                    members.Any(member => !ReferenceEquals(member.Actor.Session.PartyDungeon, instance) ||
+                        member.Actor.Session.ReplayAntonLoading(dungeon) is not { Entry.RaidEntry: { } identity } ||
+                        identity.InstanceId != start.InstanceId || identity.Phase != phase || identity.Squad != anchor.Squad)) return [];
+                // 只重放请求者的原Run；不重新授权、不建Run、不改变全员37屏障。
+                return [new(PartyDungeonNoticeKind.LoadingReplay,
+                    party.Members.Single(member => ReferenceEquals(member.Actor.Session, leader)), party.Members,
+                    leader.ReplayAntonLoading(dungeon))];
+            }
             reason = "anton-entry-missing-maps";
             if (catalog.Find(dungeon) is not { } definition) return [];
             var mazes = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();

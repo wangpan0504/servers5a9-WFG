@@ -130,11 +130,43 @@ internal static partial class AntonRaidMapEntryTcpTests
                 new RaidDungeonIdentity(sessions[0].StartedRaid!.InstanceId, 0, 1) && scene.Entry.DisableClearReward &&
                 scene.Entry.DisableMonsterAndClearExperience && scene.Entry.CoinLimit == 0,
                 "实际Run绑定原Battle/阶段/分队且不授予普通经济与复活");
+            string loadingCommitted = fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id");
+            var loadingInstance = sessions[0].PartyDungeon;
+            // 现场25B请求末字段FFFFFFFF；覆盖连续两轮15/16重试及拒绝后的合法请求。
+            var liveRequest = (byte[])request.Clone(); Array.Fill(liveRequest, (byte)255, 21, 4);
+            peers[0].Send(16, hidden);
+            Bytes(Read(peers[0]).Single(p => p is { Kind: 1, Opcode: 16 }).Body, [0, 9, 0, 0], "Loading不能借重试切换地下城");
+            peers[1].Send(16, request);
+            Bytes(Read(peers[1]).Single(p => p is { Kind: 1, Opcode: 16 }).Body, [0, 9, 0, 0], "Loading非队长仍拒绝");
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                peers[0].Send(15, BitConverter.GetBytes(210u));
+                var confirm = Read(peers[0]);
+                That(confirm.Count == 1 && confirm[0] is { Kind: 1, Opcode: 15, Body: [1] },
+                    "Loading重复15仅回原成功ACK，不重新发布选图场景或失败弹窗");
+                peers[0].Send(16, liveRequest);
+                var replay = Read(peers[0]);
+                That(replay.Count == 2 && replay[0] is { Kind: 0, Opcode: 28 } && replay[1] is { Kind: 0, Opcode: 29 },
+                    "Loading重复16只按原序重放28/29，无拒绝或重建名册");
+                Bytes(replay[0].Body, first.Single(p => p.Opcode == 28).Body, "重放28逐字节一致");
+                Bytes(replay[1].Body, first.Single(p => p.Opcode == 29).Body, "重放29的地图种子和演员逐字节一致");
+                That(ReferenceEquals(sessions[0].PartyDungeon, loadingInstance) &&
+                    sessions[0].CurrentFormalDungeonScene()!.Snapshot.Identity == scene.Snapshot.Identity &&
+                    fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") == loadingCommitted,
+                    "重试保留原Run及尝试号，不新增数据库提交");
+            }
             peers[2].Send(15, BitConverter.GetBytes(210u));
             That(Read(peers[2]).Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }), "原单人第二分队可沿非零15建立选择");
             peers[2].Send(16, request);
             That(Read(peers[2]).Any(p => p.Opcode == 29) && sessions[2].PartyDungeon != sessions[0].PartyDungeon &&
                 sessions[2].CurrentFormalDungeonScene()!.Entry.RaidEntry?.Squad == 2, "不同分队持独立Run，同属原Battle");
+            var soloScene = sessions[2].CurrentFormalDungeonScene()!;
+            peers[2].Send(15, BitConverter.GetBytes(210u));
+            Bytes(Read(peers[2]).Single(p => p.Opcode == 15).Body, [1], "单人分队Loading重复15成功");
+            peers[2].Send(16, liveRequest);
+            That(Read(peers[2]).Select(p => p.Opcode).SequenceEqual(new ushort[] { 28, 29 }) &&
+                sessions[2].CurrentFormalDungeonScene()!.Snapshot.Identity == soloScene.Snapshot.Identity,
+                "单人分队重试保持独立原Run");
             peers[0].Send(37, new byte[8]);
             That(Read(peers[0]).All(p => p.Opcode != 30), "首成员加载不能提前释放共享屏障");
             peers[1].Send(37, new byte[8]);
@@ -150,6 +182,14 @@ internal static partial class AntonRaidMapEntryTcpTests
             That(Read(peers[0]).All(p => p.Opcode is not (28 or 29)) &&
                 fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") == committed,
                 "重复16不重复尝试、分配或28/29");
+            // 原分队身份失效后，即使本地仍保留Loading Run，也不能沿幂等入口获得成功。
+            raids.RemoveSession(sessions[2], sessions[2].SelectionEpoch);
+            peers[2].Send(15, BitConverter.GetBytes(210u));
+            Bytes(Read(peers[2]).Single(p => p is { Kind: 1, Opcode: 15 }).Body, [0, 1, 0], "Loading原团授权失效仍拒绝15");
+            peers[2].Send(16, liveRequest);
+            Bytes(Read(peers[2]).Single(p => p is { Kind: 1, Opcode: 16 }).Body, [0, 9, 0, 0], "Loading原团授权失效仍拒绝16");
+            That(fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") == committed,
+                "授权失效拒绝不修改原Run账本");
         }
         finally
         {
