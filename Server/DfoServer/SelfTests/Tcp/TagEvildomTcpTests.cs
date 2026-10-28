@@ -179,10 +179,11 @@ internal static partial class TagEvildomTcpTests
         if (republish) { peer.Expect(0, 1677); peer.Expect(0, 1678); peer.Expect(0, 1393); peer.Expect(0, 1394); }
         peer.Barrier();
     }
-    static byte[] Selection(uint dungeon) => Build(w =>
+    // trailer 是25B16的末位u32：普通副本固定0，再战魔界/帝国竞技场实机发0xFFFFFFFF，两者都必须能入场。
+    static byte[] Selection(uint dungeon, uint trailer = 0) => Build(w =>
     {
         w.Write(dungeon); w.Write((byte)0); w.Write((ushort)0); w.Write((byte)0); w.Write((byte)0);
-        w.Write(ushort.MaxValue); w.Write(0u); w.Write((byte)0); w.Write(0u); w.Write((byte)0); w.Write(0u);
+        w.Write(ushort.MaxValue); w.Write(0u); w.Write((byte)0); w.Write(0u); w.Write((byte)0); w.Write(trailer);
     });
     static byte[] Teams(int first, int second, byte region = 2) => Build(w =>
     {

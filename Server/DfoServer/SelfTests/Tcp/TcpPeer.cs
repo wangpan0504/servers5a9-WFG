@@ -52,15 +52,20 @@ internal sealed partial class TcpPeer : IDisposable
 
     // 预期来自夹具的原持久位置、完成位与只读资源；不调用生产Session或Builder，也不接受收到的包体自证。
     internal byte[] SelectionNoticeBody(ushort griefLayer = 0, ushort despairLayer = 0, int legendDungeon = 0,
-        bool? incompleteHellQuest = null)
+        bool? incompleteHellQuest = null, IReadOnlyList<int>? selectionCandidates = null)
     {
         bool missing = incompleteHellQuest ?? (fixture ?? throw new InvalidOperationException("选图预期缺少夹具")).HasIncompleteHellQuest(Id);
         int shift = missing ? 2 : 0;
-        byte[] expected = new byte[42 + shift];
+        int candidates = selectionCandidates?.Count ?? 0;
+        byte[] expected = new byte[42 + shift + candidates * 4];
         expected[8] = missing ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(9 + shift), legendDungeon);
         BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(20 + shift), despairLayer);
         BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(39 + shift), griefLayer);
+        // 末字节是魔兽选图候选计数，每项 int32 跟着往后排；空列表保持原 42 字节。
+        expected[41 + shift] = (byte)candidates;
+        for (int i = 0; i < candidates; i++)
+            BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(42 + shift + i * 4), selectionCandidates![i]);
         return expected;
     }
     public WirePacket[] SpecialContainers { get; private set; } = [];

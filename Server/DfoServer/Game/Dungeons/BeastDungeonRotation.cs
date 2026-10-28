@@ -30,8 +30,10 @@ internal static class BeastDungeonRotation
     public static bool IsGateway(uint dungeonId) => dungeonId is >= FirstGatewayDungeonId and < FirstGatewayDungeonId + 5;
     public static int SourceDungeonId(int dungeonId) => IsGateway(unchecked((uint)dungeonId))
         ? FirstDungeonId + dungeonId - FirstGatewayDungeonId : dungeonId;
+    // 兼容网关的六个难度按钮由客户端选图面板给出，实机样本为 2；布局与倍率都固定取 BeastLayouts[0]，
+    // 难度不参与服务端选路，只按面板实际可发的范围 0–5 校验。原 310–314 的魔兽入口仍是难度 4 + MAZE2。
     public static bool SupportsDifficulty(uint dungeonId, byte difficulty) => IsGateway(dungeonId)
-        ? difficulty == 0 : dungeonId is >= FirstDungeonId and < FirstDungeonId + 5 && difficulty == 4;
+        ? difficulty <= 5 : dungeonId is >= FirstDungeonId and < FirstDungeonId + 5 && difficulty == 4;
 
     // 第六难度 = 难度4 + MAZE2（用户 2026-10-28 口径：MAZE 0/1/2 分别是普通/深渊/魔兽拓扑）。
     // MAZE1 是深渊拓扑，必须留给原有深渊分支，不能吞成魔兽；难度4 + MAZE0 是普通噩梦按钮。

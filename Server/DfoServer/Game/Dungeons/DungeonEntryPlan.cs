@@ -947,7 +947,10 @@ internal sealed record DungeonEntryPlan(
             return "dungeon-unsupported";
         if (questId >= 30000)
             return "quest-unsupported";
-        if (difficulty > 4 || questId == 0 && dungeonId is 3 or 5 or 6 or 7 or 8 or 9 or 1000 && difficulty != 0)
+        // 魔兽兼容入口的选图面板有六个难度按钮（0–5，实机点击样本为2）；其它副本上限仍是4。
+        // 这条只放行取值，仍由 SupportsDifficulty 与网关分支决定是否真的能进。
+        if (difficulty > (BeastDungeonRotation.IsGateway(dungeonId) ? 5 : 4) ||
+            questId == 0 && dungeonId is 3 or 5 or 6 or 7 or 8 or 9 or 1000 && difficulty != 0)
             return "difficulty-unsupported";
         if (character.Level is < 1 or > 95)
             return "character-level-invalid";

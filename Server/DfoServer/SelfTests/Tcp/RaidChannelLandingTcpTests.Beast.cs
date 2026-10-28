@@ -27,6 +27,8 @@ internal static partial class RaidChannelLandingTcpTests
         That(peer.LoginEndpoint[3] == 40,"专属入口真实LOGIN保留type40");
         peer.Select(character.Slot,prepared:true,nativeSwitch:true,room:true);
         peer.Barrier();
+        // 落点 51/2：51 只有区域2声明 [dungeon gate] 46，魔兽世界地图46的气球与 -1/-1 选图区域都在这里；
+        // 落 51/0 开图只有底图没有气球（用户 2026-10-28 实测「走进中央公园，一张地图都没有」）。
         var landing = DfoServer.Game.Characters.ChannelAreaLanding.Place(resources.Towns,new(new(2,49),40,"[beast]"),95,done)!;
         // 魔兽落点就是等待区 51/2：它不是房间，出门因此不发 1379 返回城镇通知（与五陵 117/1 同一判定）。
         peer.Travel(landing.Town,landing.Area,landing.X,landing.Y,38,1,bottom:true);
@@ -42,11 +44,13 @@ internal static partial class RaidChannelLandingTcpTests
             expected[4] = BeastDungeonRotation.Contains(BeastDungeonRotation.ServiceDay(at),target) ? (byte)2 : (byte)0;
             peer.Expect(0,550,expected);
         }
-        peer.Expect(0,27,peer.SelectionNoticeBody());
+        // 选图通知末尾带五个气球候选；不填这张列表客户端只有底图（用户 2026-10-28 实测）。
+        peer.Expect(0,27,peer.SelectionNoticeBody(selectionCandidates:[5335,5336,5337,5338,5339]));
         byte[] request = new byte[25];
         BinaryPrimitives.WriteUInt32LittleEndian(request,5335);
         request[9]=255; request[10]=255;
-        var bad = (byte[])request.Clone(); bad[4]=4;
+        // 魔兽六个难度按钮按 0–5 下发（实机点击样本为2）；越界的6才是错难度。
+        var bad = (byte[])request.Clone(); bad[4]=6;
         string before = fixture.Snapshot("SELECT * FROM character_beast_dungeon_entries");
         peer.Send(16,bad); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
         That(fixture.Snapshot("SELECT * FROM character_beast_dungeon_entries") == before,"错难度拒绝不扣魔兽次数");

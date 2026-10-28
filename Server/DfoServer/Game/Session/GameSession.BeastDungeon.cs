@@ -5,6 +5,10 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
+    // 选图候选列表与次数同源：复用上面同一套门禁，避免两处判断漂移。
+    public int[] BeastSelectionCandidates() =>
+        [.. BeastSelectionCounts().Select(entry => (int)entry.Dungeon)];
+
     public (uint Dungeon, byte Remaining)[] BeastSelectionCounts() => owner.Execute<(uint,byte)[]>(() =>
     {
         // 魔兽世界地图46（worldmap/beast_metrocenter.wdm）的气球编号就是 5335–5339，次数必须按这五个下发。

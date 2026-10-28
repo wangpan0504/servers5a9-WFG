@@ -11,11 +11,11 @@ namespace DfoServer.Testing;
 
 internal static partial class TagEvildomTcpTests
 {
-    static byte[] EnterTag(TcpPeer peer, uint dungeon)
+    static byte[] EnterTag(TcpPeer peer, uint dungeon, uint trailer = 0)
     {
         // 原生15发完同栈紧跟16，测试不等待15 ACK才开始第二步。
         peer.Send(15, Build(w => { w.Write(dungeon); w.Write((ushort)0); }));
-        peer.Send(16, Selection(dungeon));
+        peer.Send(16, Selection(dungeon, trailer));
         // 已装双Actor仍有效时15直接ACK，不额外重发1393→1394；重发只属于真正过时的投影。
         peer.Expect(1, 15, [1]); peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
         peer.Expect(0, 27, new byte[42]);
@@ -88,7 +88,8 @@ internal static partial class TagEvildomTcpTests
             string economy = Economy(fixture);
             peer.Send(16, Selection(9608)); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM account_tag_evildom_runs") is [[0L]], "只有真实双角色仍不能绕过专用15许可直发16");
-            var map = EnterTag(peer, 9608);
+            // 实机2026-10-28 10:41 的25B16末位u32为0xFFFFFFFF；照客户端原样回放，不能只测全0变体。
+            var map = EnterTag(peer, 9608, uint.MaxValue);
             for (int room = 0; room < 5; room++)
             {
                 FormalDungeonTcpTests.Load(peer); peer.Barrier();
