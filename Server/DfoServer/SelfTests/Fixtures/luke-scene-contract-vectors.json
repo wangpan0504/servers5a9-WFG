@@ -1,0 +1,50 @@
+{
+  "contract": "CP_LUKE_SCENE/1",
+  "representation": "logical-field-strings-not-transport",
+  "baseRequest": {
+    "version": "1",
+    "requestId": "00112233445566778899aabbccddeeff",
+    "characterId": "42",
+    "town": "19",
+    "area": "0",
+    "targetRevision": "1",
+    "ttlMs": "30000"
+  },
+  "requests": [
+    {"name": "base", "change": {}, "valid": true},
+    {"name": "zero-character-separate-identity", "change": {"characterId": "0", "town": "0", "ttlMs": "1"}, "valid": true},
+    {"name": "upper-bounds", "change": {"characterId": "65535", "town": "255", "area": "255", "targetRevision": "9223372036854775807"}, "valid": true},
+    {"name": "request-id-uppercase", "change": {"requestId": "00112233445566778899AABBCCDDEEFF"}, "valid": false},
+    {"name": "request-id-zero", "change": {"requestId": "00000000000000000000000000000000"}, "valid": false},
+    {"name": "request-id-short", "change": {"requestId": "00112233445566778899aabbccddeef"}, "valid": false},
+    {"name": "request-id-long", "change": {"requestId": "00112233445566778899aabbccddeeff0"}, "valid": false},
+    {"name": "request-id-hyphenated", "change": {"requestId": "00112233-4455-6677-8899-aabbccddeeff"}, "valid": false},
+    {"name": "request-id-invalid-hex", "change": {"requestId": "00112233445566778899aabbccddeefg"}, "valid": false},
+    {"name": "character-overflow", "change": {"characterId": "65536"}, "valid": false},
+    {"name": "character-negative", "change": {"characterId": "-1"}, "valid": false},
+    {"name": "character-leading-zero", "change": {"characterId": "042"}, "valid": false},
+    {"name": "town-overflow", "change": {"town": "256"}, "valid": false},
+    {"name": "area-overflow", "change": {"area": "256"}, "valid": false},
+    {"name": "revision-zero", "change": {"targetRevision": "0"}, "valid": false},
+    {"name": "revision-overflow", "change": {"targetRevision": "9223372036854775808"}, "valid": false},
+    {"name": "revision-leading-zero", "change": {"targetRevision": "01"}, "valid": false},
+    {"name": "ttl-zero", "change": {"ttlMs": "0"}, "valid": false},
+    {"name": "ttl-overflow", "change": {"ttlMs": "30001"}, "valid": false},
+    {"name": "ttl-uint64-overflow", "change": {"ttlMs": "18446744073709551616"}, "valid": false},
+    {"name": "ttl-space", "change": {"ttlMs": " 100"}, "valid": false},
+    {"name": "ttl-plus", "change": {"ttlMs": "+100"}, "valid": false},
+    {"name": "ttl-newline", "change": {"ttlMs": "100\n"}, "valid": false},
+    {"name": "ttl-nul", "change": {"ttlMs": "100\u0000"}, "valid": false},
+    {"name": "ttl-empty", "change": {"ttlMs": ""}, "valid": false},
+    {"name": "unknown-version", "change": {"version": "2"}, "valid": false}
+  ],
+  "replies": [
+    {"name": "base", "version": "1", "requestId": "00112233445566778899aabbccddeeff", "valid": true},
+    {"name": "all-f", "version": "1", "requestId": "ffffffffffffffffffffffffffffffff", "valid": true},
+    {"name": "zero", "version": "1", "requestId": "00000000000000000000000000000000", "valid": false},
+    {"name": "uppercase", "version": "1", "requestId": "00112233445566778899AABBCCDDEEFF", "valid": false},
+    {"name": "new-version", "version": "2", "requestId": "00112233445566778899aabbccddeeff", "valid": false},
+    {"name": "short", "version": "1", "requestId": "00112233445566778899aabbccddeef", "valid": false},
+    {"name": "trailing-nul", "version": "1", "requestId": "00112233445566778899aabbccddeeff\u0000", "valid": false}
+  ]
+}
