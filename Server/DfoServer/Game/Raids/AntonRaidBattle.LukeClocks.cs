@@ -101,11 +101,7 @@ internal sealed partial class AntonRaidBattle
                 pendingTransition is not null || TerminalRequested(current)) return false;
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。
             var before = current;
-            if (Kind == RaidKind.Anton)
-            {
-                ExpireDueAntonClockLocked();
-                return !ReferenceEquals(before, current);
-            }
+
             if (LukePhaseDueLocked())
             {
                 var expired = current with { PhaseExpired = true, Revision = current.Revision + 1,
