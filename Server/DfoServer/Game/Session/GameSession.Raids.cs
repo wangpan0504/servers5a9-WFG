@@ -56,13 +56,22 @@ internal sealed partial class GameSession
     public bool CanPublishRaidWaiting(RaidActor actor, byte type, RaidWaiting[] rows) => actor.IsCurrent &&
         raidRegistry?.IsWaitingSnapshot(actor.Channel, type, rows) == true;
 
-    void InvalidateRaids()
+    void InvalidateRaids(bool disconnected = false)
     {
+        var registry = raidRegistry;
+        AntonRaidDisconnectFact? fact = null;
+        if (disconnected && registry is not null && raidCombat is { } combat)
+        {
+            bool inRun = Phase is SessionPhase.Loading or SessionPhase.Dungeon;
+            fact = registry.CaptureAntonDisconnect(combat.Actor, combat.Battle,
+                inRun ? PartyDungeon?.Id ?? partyDungeonRun : null, Phase == SessionPhase.Loading);
+        }
         if (raidCombat is { } previous) previous.Battle.DetachStart(previous.Actor);
         raidCombat = null;
         raidDungeonAdmission = null;
-        var registry = raidRegistry;
         raidRegistry = null;
+        partyDungeonRun = null;
         registry?.RemoveSession(this, SelectionEpoch);
+        if (fact is not null) registry?.CommitAntonDisconnect(fact);
     }
 }

@@ -13,6 +13,7 @@ internal sealed partial class GameSession
 {
     public SemaphoreSlim CommandGate { get; } = new(1, 1);
     public PartyDungeonInstance? PartyDungeon { get; private set; }
+    Guid? partyDungeonRun;
     public Func<PartyDungeonNotice, Task>? PartyDungeonNoticeArrived { get; set; }
     bool CanMutatePartyDungeon => PartyDungeon is null || PartyDungeon.IsExecuting;
 
@@ -166,6 +167,7 @@ internal sealed partial class GameSession
         formalDungeon = installing;
         if (installing.Entry.Hope is not null) hopeSelection = null;
         PartyDungeon = instance;
+        partyDungeonRun = instance.Id;
         partyPreparation = null;
         preparedPartyDungeon = null;
         CurrentDungeonSelection = null;

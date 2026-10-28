@@ -285,7 +285,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     void Invalidate(string reason, bool publishExpertJob = true)
     {
-        InvalidateRaids();
+        InvalidateRaids(reason == "session-ended");
         npcTownVisit = null;
         hopeSelection = null;
         pvpTraining = null;
