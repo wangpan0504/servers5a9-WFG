@@ -57,6 +57,8 @@ internal static partial class AntonRaidTcpTests
         var report = AntonTcpProbe.Play(peer, catalog, AntonTcpProbe.StopAfterForSteps("start,enter,phase,reward,card"));
         That(report.Steps.SequenceEqual(new[] { "start", "enter", "phase", "reward", "card" }) && !report.CardUnavailable,
             "探针跑完五个步骤，正式资源奖励已提交并推进阶段1");
+        That(report.RejectedCards == 2 && report.Opcode600 > 0 && report.Opcode601 == 0,
+            "正式翻牌拒绝无配置kind/card；600只发空列表且先于ACK，601业务列保持UNIMPLEMENTED");
         That(assets != fixture.Snapshot("SELECT * FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')<>10096296 ORDER BY 1,2") &&
             gold == fixture.Snapshot("SELECT id,gold FROM characters ORDER BY id") &&
             fixture.Query("SELECT count(*),count(DISTINCT kind) FROM character_raid_reward_receipts") is [[2L, 2L]] &&
