@@ -218,9 +218,10 @@ internal static class ServerRuntime
                 fixedRoute.Options.ColumnDungeons, fixedRoute.Options.StepOffsets, fixedRoute.Options.InitialHp,
                 Failure = fixedRoute.Options.Failure.ToString(), Reset = fixedRoute.Options.Reset.ToString(), fixedRoute.Choices });
         log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
-            raidSettings.AntonFormalEntryEnabled, raidSettings.AntonPhaseProgressEnabled,
+            raidSettings.AntonFormalEntryEnabled, raidSettings.AntonPhaseProgressEnabled, raidSettings.AntonRejoinEnabled,
             Reason = raidSettings.AntonFormalEntryEnabled ? "anton-entry-enabled-resource-gates-required" : "anton-entry-waiting-client-resources",
             PhaseProgress = raidSettings.AntonPhaseProgressEnabled ? "anton-phase-progress-enabled-timer-unit-unknown" : "anton-phase-progress-disabled",
+            Rejoin = raidSettings.AntonRejoinEnabled ? "rejoin-recovery-sequence-unknown" : "anton-rejoin-disabled",
             AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
         lukeStartPolicy = Game.Raids.LukeResourceCompletion.Resolve(lukeStartPolicy, raidCatalog.Find(1), itemResources.Items);
         if (lukeStartPolicy?.ResourceCompletion is not null && lukeStartPolicy.Completion is { } resourceCompletion)
@@ -229,6 +230,8 @@ internal static class ServerRuntime
                 Phases = resourceCompletion.Phases.Select((phase, index) => new { Phase = index, phase.MinimumCommittedRuns,
                     phase.WeeklyEligibilityLimit, phase.Rewards.Offers, phase.Rewards.Result }).ToArray() });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
+        var antonRejoin = new Game.Raids.AntonRaidRejoin(raidSettings.AntonRejoinEnabled);
+        raidRegistry.BindRejoin(antonRejoin);
         var antonRun = raidCatalog.Find(0)?.Resources?.EntryCatalog is { } antonCatalog
             ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, antonCatalog, raidSettings.AntonFormalEntryEnabled) : null;
         if (!raidSettings.AntonFormalEntryEnabled)
@@ -250,7 +253,9 @@ internal static class ServerRuntime
             lukeRun = null;
         }
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
-            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled), lukeStart);
+            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled), lukeStart, antonRejoin);
+        if (raidSettings.AntonRejoinEnabled)
+            log.Write("resource_warning", new { Source = "Anton raid rejoin", Reason = "rejoin-recovery-sequence-unknown" });
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
         new DevilContractHandler(log, clock).Register(commands);
         var auctionProbe = Development.Auction.AuctionProbe.Parse(options.DevelopmentAuctionProbe);
@@ -410,7 +415,7 @@ internal static class ServerRuntime
             new KeepaliveHandler(log),
             new PvpTrainingHandler(new GameWorld.Pvp.PvpArcadeCatalog(pvf),new GameWorld.Pvp.PvpPracticeComboCatalog(pvf),quests,log,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
-                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters, tagEvildomProjection, clock),
+                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters, tagEvildomProjection, clock, raidHandler),
             new SocialHandler(repository, social, online, log),
             new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),

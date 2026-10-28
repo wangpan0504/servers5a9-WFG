@@ -39,6 +39,7 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
     readonly Dictionary<ChannelIdentity, ushort> next = [];
     // 招募窗口订阅只保留原会话身份，随选角失效清理；不是在线角色或资产目录。
     readonly Dictionary<GameSession, RaidActor> observers = [];
+    AntonRaidRejoin? rejoin;
     long revision;
     DateTimeOffset Now => (clock ?? TimeProvider.System).GetUtcNow();
 
@@ -54,6 +55,65 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
         // 全团current owner阻止成员、编队、委任、离队、开战与当前会话失效；旧generation收尾只匹配旧Session/epoch。
         // 复验至安装没有await、SQL或外部回调。不持目录gate等待Party gate，兼容普通队伍中的StartedRaid查询。
         return ordinary.CommitRaidPreparation(batch, cancellation);
+    }
+
+    internal void BindRejoin(AntonRaidRejoin service) => rejoin = service;
+
+    // 在移除成员前调用。只读取原 Battle 视图和名册，不取得其它账号锁。
+    internal AntonRaidDisconnectFact? CaptureAntonDisconnect(RaidActor actor, AntonRaidBattle battle, Guid? run, bool wasLoading)
+    {
+        if (rejoin is not { Enabled: true } || battle.Kind != RaidKind.Anton) return null;
+        var view = battle.View;
+        if (view.Instance != battle.Instance || view.State is not (AntonRaidBattleState.Fighting or AntonRaidBattleState.Reward) ||
+            view.ClockFaulted || view.PhaseExpired) return null;
+        lock (gate)
+        {
+            var party = FindCore(actor);
+            if (party is not { Type: 0, Started: { } started } || started.InstanceId != battle.Instance) return null;
+            var member = party.Members.FirstOrDefault(m => Same(m.Actor, actor));
+            return member is null ? null : new AntonRaidDisconnectFact(actor.Owner.Account, actor.Character, actor.Epoch, actor.Owner,
+                party.Key, battle.Instance, actor.Channel, member.Slot, member.Squad, run, wasLoading);
+        }
+    }
+
+    internal bool CommitAntonDisconnect(AntonRaidDisconnectFact fact)
+    {
+        if (rejoin is not { Enabled: true }) return false;
+        lock (gate)
+        {
+            if (!parties.TryGetValue(fact.Key, out var party) || party.Type != 0 || party.Channel != fact.Channel ||
+                party.Started?.InstanceId != fact.Instance ||
+                party.Members.Any(m => m.Actor.Character == fact.Character && m.Actor.Epoch == fact.Epoch)) return false;
+        }
+        return rejoin.Record(fact);
+    }
+
+    internal bool AntonBattleAlive(AntonRaidDisconnectFact fact)
+    {
+        RaidMember[] members;
+        lock (gate)
+        {
+            if (!parties.TryGetValue(fact.Key, out var party) || party.Type != 0 || party.Channel != fact.Channel ||
+                party.Started?.InstanceId != fact.Instance) return false;
+            members = party.Members.ToArray();
+        }
+        foreach (var member in members)
+        {
+            AntonRaidBattle? battle;
+            try { battle = member.Actor.Session.CurrentRaidBattle(member.Actor); }
+            catch (InvalidOperationException) { continue; }
+            if (battle is not { Kind: RaidKind.Anton } || battle.Instance != fact.Instance) continue;
+            var view = battle.View;
+            return view.Instance == fact.Instance && view.State is AntonRaidBattleState.Fighting or AntonRaidBattleState.Reward &&
+                !view.ClockFaulted && !view.PhaseExpired;
+        }
+        return false;
+    }
+
+    internal bool AntonMemberCurrent(AntonRaidDisconnectFact fact)
+    {
+        lock (gate) return parties.TryGetValue(fact.Key, out var party) &&
+            party.Members.Any(m => m.Actor.Character == fact.Character && m.Actor.IsCurrent);
     }
 
     public int Count { get { lock (gate) return parties.Count; } }
@@ -224,7 +284,8 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
             Leader = old.Leader == actor.Character ? members.MinBy(m => m.Slot)!.Actor.Character : old.Leader,
             Revision = ++revision
         };
-        if (updated is null) parties.Remove(old.Key); else parties[old.Key] = updated;
+        if (updated is null) { parties.Remove(old.Key); rejoin?.DropParty(old.Key); }
+        else parties[old.Key] = updated;
         foreach (var key in invitations.Where(p => p.Value.Raid == old.Key ||
             Same(p.Value.Source, actor) || Same(p.Value.Target, actor)).Select(p => p.Key).ToArray()) invitations.Remove(key);
         return new(old, updated, actor, kicked);

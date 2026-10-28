@@ -15,7 +15,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     ExpertJobScriptCatalog? expertJobs = null, AdventureWeeklyProjection? weekly = null,
     AvatarPresetProjection? avatarPresets = null, AvatarPresetService? avatarPresetService = null,
     DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null, DfoServer.Game.Pvp.PvpPrivateCharacterService? privateCharacters = null,
-    TagEvildomProjection? tagEvildom = null, TimeProvider? time = null) : IGameCommandModule
+    TagEvildomProjection? tagEvildom = null, TimeProvider? time = null, RaidHandler? raids = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -105,6 +105,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         social?.Initialize(context);
         await projection.ReconcileQuestsAsync(context);
         projection.Join(context);
+        if (raids is not null) await raids.NotifyDisconnAsync(context);
         return CommandResult.Handled;
     }
 

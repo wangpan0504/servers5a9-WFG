@@ -12,7 +12,7 @@ namespace DfoServer.Network.Handlers;
 
 // 招募及开战复用正式会话身份；首阶段提交与进图、战斗奖励按各自领域边界处理。
 internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegistry registry, OnlineSessionDirectory? online = null,
-    AntonRaidStart? start = null, LukeRaidStart? lukeStart = null) : IGameCommandModule
+    AntonRaidStart? start = null, LukeRaidStart? lukeStart = null, AntonRaidRejoin? rejoin = null) : IGameCommandModule
 {
     public RaidHandler(ServerLog log) : this(log, RaidCatalog.Empty, new RaidRegistry()) { }
 
@@ -27,6 +27,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         commands.Register(CmdPacketType.RAID_MANAGER_WORK, ManagerAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.REQUEST_RAID_INFO, InformationAsync, nameof(RaidHandler));
         commands.Register(CmdPacketType.RAID_OTHER_CHANNEL_LIST, SearchAsync, nameof(RaidHandler));
+        // CMD668 REJOIN_RAID 与同号 NOTI668 REAL_ESTATE_STATE 是两套枚举，这里只注册命令。
         commands.Register(CmdPacketType.REJOIN_RAID, RejoinAsync, nameof(RaidHandler));
     }
 
@@ -63,11 +64,58 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         try { key = RaidRequests.Rejoin(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
         if (Actor(context) is not { } actor) return CommandResult.Unhandled;
-        // ACK668成功会调用0055D870继续恢复正式界面；招募记录不能充当可重入的攻坚实例。
-        log.Write("raid_start_request", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
-            Error = RaidPackets.CreateUnavailable, Reason = "formal-raid-rejoin-unavailable" });
+        if (rejoin is not { Enabled: true })
+        {
+            // ACK668成功会调用0055D870继续恢复正式界面；招募记录不能充当可重入的攻坚实例。
+            log.Write("raid_start_request", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
+                Error = RaidPackets.CreateUnavailable, Reason = "formal-raid-rejoin-unavailable" });
+            await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "raid_rejoin_rejected", () => actor.IsCurrent);
+            return CommandResult.Handled;
+        }
+        var decision = Decide(actor, key);
+        log.Write("raid_rejoin_rejected", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
+            decision.Reason, decision.OldEpoch, decision.NewEpoch, decision.Slot, decision.Squad,
+            decision.OldSessionReleased, decision.OwnerReplace, decision.LoadingBarrier, decision.Unknown,
+            Error = RaidPackets.CreateUnavailable });
         await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "raid_rejoin_rejected", () => actor.IsCurrent);
         return CommandResult.Handled;
+    }
+
+    // 入城完成后下发。客户端无本地团记录且 key 高位匹配时才会自动发 668；异频道不下发，避免走到缺低 16 位的提示回调。
+    internal async Task NotifyDisconnAsync(GameConnectionContext context)
+    {
+        if (rejoin is not { Enabled: true } || context.Session.Selected is not { } character || !rejoin.HasCandidate(character.Id)) return;
+        if (Actor(context) is not { } actor)
+        {
+            log.Write("raid_rejoin_rejected", new { Connection = context.Id, Character = character.Id, Reason = "rejoin-actor-unavailable" });
+            return;
+        }
+        var notice = Describe(actor);
+        if (!notice.Matched)
+        {
+            if (notice.Reason != "none")
+                log.Write("raid_rejoin_rejected", new { Connection = context.Id, Self = actor.Character, Key = notice.Key?.ToString("X8"), notice.Reason });
+            return;
+        }
+        uint key = notice.Key!.Value;
+        log.Write("raid_rejoin_notice", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
+            notice.OldEpoch, notice.NewEpoch, UnknownTail = "u8+u16", Tail = "00-0000", Reason = "835-tail-semantics-unknown" });
+        await context.Notify(NotiPacketType.RAID_DISCONN_INFO, RaidPackets.DisconnInfo(key), "raid_rejoin_notice", () => actor.IsCurrent);
+    }
+
+    AntonRaidRejoinDecision Describe(RaidActor actor)
+    {
+        var fact = rejoin!.Peek(actor.Character);
+        if (fact is null || fact.Account != actor.Owner.Account) return AntonRaidRejoinDecision.Reject("none");
+        return rejoin.DescribeNotice(actor, registry.AntonBattleAlive(fact), registry.AntonMemberCurrent(fact));
+    }
+
+    AntonRaidRejoinDecision Decide(RaidActor actor, uint key)
+    {
+        var fact = rejoin!.Peek(actor.Character);
+        bool alive = fact is not null && registry.AntonBattleAlive(fact);
+        bool member = fact is not null && registry.AntonMemberCurrent(fact);
+        return rejoin.Evaluate(actor, key, alive, member);
     }
 
     async Task<CommandResult> StartAsync(GameConnectionContext context, Packet request)

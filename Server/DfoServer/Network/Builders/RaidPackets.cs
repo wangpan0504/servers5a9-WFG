@@ -12,6 +12,9 @@ internal static class RaidPackets
 
     public static byte[] CreateFailure(ushort error = CreateUnavailable) => [0, (byte)error, (byte)(error >> 8)];
 
+    // NOTI835 023AB84E/023AB85C/023AB86C 读 key:u32, unknown:u8, unknown:u16。自动 668 不使用尾部，写 0 只为对齐 7B，不表示已证业务值。
+    public static byte[] DisconnInfo(uint key) => [(byte)key, (byte)(key >> 8), (byte)(key >> 16), (byte)(key >> 24), 0, 0, 0];
+
     public static byte[] CreateSuccess(uint key) => [1, (byte)key, (byte)(key >> 8), (byte)(key >> 16), (byte)(key >> 24)];
 
     // ACK665 LEAVE_RAID（02344640，0234A08D 注册）：成功读 u8 强退标志（非 0 弹 dstr 46791「已经强制退出攻坚队。」），
