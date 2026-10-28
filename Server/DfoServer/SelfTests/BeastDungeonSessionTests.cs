@@ -68,12 +68,23 @@ internal static class BeastDungeonSessionTests
                         "非开放日专属入口拒绝且不扣次");
                     clock.Advance(TimeSpan.FromDays(-closed));
                 }
-                var scene = session.EnterFormalDungeon((uint)dungeon,0,gateway ? (byte)0 : (byte)4,catalog,rooms,drops,
+                // 难度取实机原值：全量日志 217,237 行里五张兼容入口图（5335–5339）的 CMD16 一律是难度 2，
+                // 原生 310–314 则出现 0/1/4（4 是第六档）。以前这里一律用 0，测的不是客户端真正发的东西。
+                // 兼容入口的 PVF 难度表只有 `1 1 1 0 0`，客户端发 5 会被服务端以 difficulty-unsupported 拒绝，
+                // 这一点在没有第六按钮实机包之前不改行为。
+                byte difficulty = gateway ? (byte)2 : (byte)4;
+                var scene = session.EnterFormalDungeon((uint)dungeon,0,difficulty,catalog,rooms,drops,
                     items:resources.ItemResources.Items,pieces:resources.ItemResources.EpicPieces,beastMode:true);
-                That(scene is not null,"真实魔兽Session完整路线准备及原子入场："+dungeon+" / "+session.LastFormalDungeonRejection);
+                That(scene is not null,"真实魔兽Session完整路线准备及原子入场："+dungeon+" / 难度"+difficulty+" / "+session.LastFormalDungeonRejection);
                 That(scene!.Entry.BeastMode && scene.Entry.Maze.MapSpecification!.Count == 15 &&
                     scene.Entry.Maze.StaticTopology.Supported && session.CompleteFormalDungeonLoading() is not null,
                     "五张魔兽图均通过正式Run及地图加载，不能只证明资源能打开");
+                // 「有魔兽过场图」的判据在魔兽区块身上，不在客户端；第六难度也必须带着它进场。
+                // 兼容入口固定取 310 的 BeastLayouts[0]，所以这里钉死资源路径；原图只要求非空，各自的区块可不同。
+                That(gateway
+                        ? scene.Entry.Maze.BeastLayout?.CutsceneImage == "Map/CutScene/Beast.img"
+                        : !string.IsNullOrEmpty(scene.Entry.Maze.BeastLayout?.CutsceneImage),
+                    "魔兽入场带区块声明的过场图："+dungeon+" / 难度"+difficulty+" / "+scene.Entry.Maze.BeastLayout?.CutsceneImage);
                 That(repository.LoadBeastDungeonUsed(owner,session.Selected!.Id,BeastDungeonRotation.ServiceDay(at),dungeon)==1,
                     "正式魔兽Session成功入场只扣一次本图次数");
                 if (dungeon != 310 && dungeon != BeastDungeonRotation.FirstGatewayDungeonId) continue;
