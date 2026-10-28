@@ -216,16 +216,28 @@ internal static class AntonTcpProbe
         }
         if (stopAfter == "card")
         {
+            // 01101417/039EC4D0已观察(1,0)/(0,0)。正式策略由原Battle/账本提供，不推导其它牌种或槽位。
+            bool? available = null;
+            bool advanced = false;
             foreach (byte[] request in new byte[][] { [1, 0], [1, 0], [0, 0], [0, 0] })
             {
                 peer.Send(660, request);
-                var cards = Flush(peer, "660 正式资源奖励 " + Hex(request));
+                var cards = Flush(peer, "660 正式翻牌 " + Hex(request));
                 Note(report, cards);
-                if (!cards.Any(packet => packet is {Kind:1,Opcode:660,Body:[1]}))
-                    throw new InvalidOperationException("正式资源奖励未确认660");
+                bool accepted = cards.Any(packet => packet is { Kind: 1, Opcode: 660, Body: [1] });
+                available ??= accepted;
+                if (accepted != available || !accepted && cards.Any(packet => packet.Opcode is 600 or 601 or 660))
+                    throw new InvalidOperationException("660正式策略状态不一致，或未提交却返回了结果包");
+                if (accepted && cards.Any(packet => packet.Kind == 1 && packet.Opcode == 660 && !packet.Body.SequenceEqual(new byte[] { 1 })))
+                    throw new InvalidOperationException("ACK660成功应只有01，不能追加奖励业务体");
+                if (advanced && cards.Any(packet => packet.Opcode is 600 or 601))
+                    throw new InvalidOperationException("旧阶段660回放不能向下一阶段窗口发布600/601");
+                advanced |= cards.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [2, 1] });
             }
-            report.CardUnavailable = false;
-            FinishStep(report, elapsed, "card", "formal rewards committed; replay idempotent; phase1 entered");
+            report.CardUnavailable = available != true;
+            FinishStep(report, elapsed, "card", report.CardUnavailable
+                ? "UNIMPLEMENTED: no configured offer; no success ACK/600/601; connection alive"
+                : "660 (1,0)/(0,0) + duplicates committed/replayed; ACK=01; other kinds/slots UNIMPLEMENTED");
         }
         peer.Send(42);
         Note(report, Flush(peer, "42 Reward 返回候战室"));
@@ -344,7 +356,7 @@ internal static class AntonTcpProbe
         }
     }
 
-    static void ClearRoom(TcpPeer peer, byte[] map, AntonProbeReport report, out ushort bossKey, out byte bossLevel, bool bossRoom,
+    internal static void ClearRoom(TcpPeer peer, byte[] map, AntonProbeReport report, out ushort bossKey, out byte bossLevel, bool bossRoom,
         TcpPeer? witness = null, AntonProbeReport? witnessReport = null)
     {
         bossKey = 0;
@@ -377,7 +389,7 @@ internal static class AntonTcpProbe
             throw new InvalidOperationException("Boss 房没有可击杀对象");
     }
 
-    static DungeonPoint[] Route(RaidDungeonCatalog catalog, int dungeon, byte ordinal, byte x, byte y, byte bossX, byte bossY)
+    internal static DungeonPoint[] Route(RaidDungeonCatalog catalog, int dungeon, byte ordinal, byte x, byte y, byte bossX, byte bossY)
     {
         var definition = catalog.Find(dungeon) ?? throw new InvalidOperationException("团本目录没有副本 " + dungeon);
         var maze = definition.Mazes.FirstOrDefault(row => row.SourceOrdinal == ordinal)

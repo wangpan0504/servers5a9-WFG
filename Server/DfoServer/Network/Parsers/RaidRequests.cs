@@ -18,9 +18,17 @@ internal readonly record struct RaidManagerRequest(uint Operation, uint Characte
 internal readonly record struct RaidInfoRequest(byte Mode, uint Key);
 internal readonly record struct RaidPeerRequest(ushort Character, uint Peer);
 internal readonly record struct RaidMonsterHpRequest(uint RawValue, uint[] RawEntries);
+internal readonly record struct RaidRewardCardRequest(byte Kind, byte Card);
 
 internal static class RaidRequests
 {
+    // 副本协议：01101417..01101446连续写两个u8；只固定读宽，不猜牌种/槽位全集。
+    public static RaidRewardCardRequest RewardCard(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 2) throw new InvalidDataException("SELECT_RAID_REWARD_CARD 需要两个u8");
+        return new(body[0], body[1]);
+    }
+
     // ARAD 01DC6180: symbol:u32, value:u32, operation:u8。这里只开放三设施+1白名单。
     public static int? LukeFacilitySymbol(ReadOnlySpan<byte> body)
     {

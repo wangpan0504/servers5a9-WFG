@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Towns;
+using DfoServer.GameWorld.Raids;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -18,13 +19,21 @@ internal static class AntonRaidRejoinTcpTests
         await RunCaseAsync(source, root, resources, enabled: true);
     }
 
-    static async Task RunCaseAsync(ServerOptions source, string root, TcpTestResources resources, bool enabled)
+    public static Task RunRecoverAsync(ServerOptions source, string root, TcpTestResources resources) =>
+        RunCaseAsync(source, root, resources, enabled: true, inRun: true);
+
+    public static Task RunClientNotifyGapAsync(ServerOptions source, string root, TcpTestResources resources) =>
+        RunCaseAsync(source, root, resources, enabled: true, inRun: true, clientNotifyGap: true);
+
+    static async Task RunCaseAsync(ServerOptions source, string root, TcpTestResources resources, bool enabled,
+        bool inRun = false, bool clientNotifyGap = false)
     {
-        string name = enabled ? "anton-raid-rejoin" : "anton-raid-rejoin-off";
+        string name = clientNotifyGap ? "anton-raid-rejoin-client-notify" : inRun ? "anton-raid-rejoin-recover" :
+            enabled ? "anton-raid-rejoin" : "anton-raid-rejoin-off";
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, name), resources: resources);
         Directory.CreateDirectory(fixture.Options.DataDirectory);
         string json = enabled
-            ? """{"StartMinimumOverride":1,"AntonRejoinEnabled":true}"""
+            ? """{"StartMinimumOverride":1,"AntonRejoinEnabled":true,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}"""
             : """{"StartMinimumOverride":1}""";
         File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "raid-start.json"), json);
         await fixture.StartAsync();
@@ -73,6 +82,26 @@ internal static class AntonRaidRejoinTcpTests
         Bytes(ReadUntil(leader, 1, 666).Body, [1], "两人覆盖完成开战");
         QuietDrain(leader);
         QuietDrain(member);
+        RaidDungeonCatalog? runCatalog = null;
+        byte[]? runInfo = null, runMap = null;
+        if (inRun)
+        {
+            var main = SelfTestCatalogs.Dungeons(resources.Archive);
+            runCatalog = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main, resources.ItemResources.Items,
+                antonMapPath: AntonRaidMapPaths.Bind(main.MapPath)).Find(0)!.Resources!.EntryCatalog!;
+            leader.Send(15, BitConverter.GetBytes(210u));
+            Bytes(AntonRaidTcpTests.Until(leader, 1, 15).Body, [1], "恢复测试沿正式Runtime选择210");
+            QuietDrain(member);
+            AntonTcpProbe.Enter(leader, runCatalog, 210, new(), clear: false, leave: false);
+            var entry = AntonTcpProbe.Barrier(member, "断线前真实Run");
+            That(entry.Any(p => p is { Kind: 0, Opcode: 28 }) && entry.Any(p => p is { Kind: 0, Opcode: 29 }),
+                "两人已进入同一原Run，队员在加载确认前断线");
+            runInfo = entry.Single(p => p is { Kind: 0, Opcode: 28 }).Body;
+            runMap = entry.Single(p => p is { Kind: 0, Opcode: 29 }).Body;
+            leader.Send(37, new byte[8]);
+            That(AntonTcpProbe.Barrier(leader, "队长先确认加载").All(p => p is not { Kind: 0, Opcode: 30 }),
+                "队员尚未确认时原共享加载屏障仍关闭");
+        }
         ushort disconnected = member.Id;
         member.Dispose();
         bool left = false;
@@ -102,22 +131,112 @@ internal static class AntonRaidRejoinTcpTests
         var notice = ReadNotice(again);
         That(notice.Length == 7 && U32(notice) == key && notice[4] == 0 && notice[5] == 0 && notice[6] == 0,
             "重登后835携带原团key和未知零尾");
-        again.Send(668, Build(w => w.Write(key)));
-        Bytes(ReadAck(again, 668), [0, 19, 0], "校验通过仍回已证错误19");
-        again.Send(668, Build(w => w.Write(key)));
-        Bytes(ReadAck(again, 668), [0, 19, 0], "重复668拒绝");
-        again.Send(668, Build(w => w.Write(key + 9)));
-        Bytes(ReadAck(again, 668), [0, 19, 0], "错误key拒绝");
+        string assets = RejoinAssets();
+        AssertClientNotifyGap(key, "首次668状态恢复");
+        AssertClientNotifyGap(key, "重复668");
+        AssertClientNotifyGap(key + 9, "错误key");
+        That(RejoinAssets() == assets, "668首次、重复与错误key均不改变库存、资产审计或奖励回执");
         var members = AntonRaidTcpTests.Information(leader, key, 1).Members;
-        That(members.All(row => row.Character != again.Id), "拒绝后原成员没有回到当前名册");
-        AssertRejoinClean(fixture, again, "开启");
+        That(members.Any(row => row.Character == again.Id) && members.Length == 2, "状态恢复使新owner回到原团名册，不建立新团");
+        That(fixture.Query("SELECT town,area FROM characters WHERE name='Rej1'") is [[19L, 2L]],
+            "状态恢复持久保存原候战室位置，不停在重登频道落点19/0");
+        That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[2L]],
+            "状态恢复和重复668没有再次扣票或退票");
+        if (inRun)
+        {
+            var clean = AntonTcpProbe.Barrier(again, "恢复wire缺口屏障");
+            That(clean.All(p => p.Opcode is not (27 or 28 or 29 or 30 or 585 or 586)),
+                "UNIMPLEMENTED 恢复通知序列：状态恢复未擅自发送场景通知");
+            if (clientNotifyGap)
+            {
+                That(AntonTcpProbe.Barrier(leader, "668后幸存者加载屏障").All(p => p is not { Kind: 0, Opcode: 30 }),
+                    "UNIMPLEMENTED 客户端未自然加载，幸存者也不能收到伪造30放行");
+            }
+            else
+            {
+                again.Send(37, new byte[8]);
+                var loaded = AntonTcpProbe.Barrier(again, "原Run重新确认加载");
+                That(loaded.Any(p => p is { Kind: 0, Opcode: 30 }), "测试主动37仅验证原Run屏障能力，不代表客户端自然恢复");
+                RejectChangedRun(fixture, leader, again, key, runCatalog!, runInfo!, runMap!);
+            }
+        }
+        else
+        {
+            leader.Send(15, BitConverter.GetBytes(210u));
+            Bytes(AntonRaidTcpTests.Until(leader, 1, 15).Body, [1], "恢复普通分队后原队长可重新选择原Battle开放图");
+            That(AntonTcpProbe.Barrier(again, "恢复分队参与选图").Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }),
+                "新owner已是原普通分队成员，能收到共享选图通知");
+        }
         await fixture.StopAsync();
         var saved = CompleteEvents(logs);
         That(LastReason(saved, "raid_rejoin_notice") == "835-tail-semantics-unknown", "835尾部在日志中标为unknown");
         That(saved.Any(row => row.GetProperty("Kind").GetString() == "raid_rejoin_rejected" &&
-            row.GetProperty("Detail").GetProperty("Reason").GetString() == "recovery-sequence-unknown"), "成功恢复包序unknown，不替换owner");
+            row.GetProperty("Detail").TryGetProperty("StateRestored", out var restored) && restored.GetBoolean()),
+            "日志明确记录状态已恢复，与wire未知分开");
         That(saved.Any(row => row.GetProperty("Kind").GetString() == "raid_rejoin_rejected" &&
             row.GetProperty("Detail").GetProperty("Reason").GetString() == "duplicate-rejoin"), "重复重入有独立原因");
+        if (inRun)
+        {
+            var entry = saved.Single(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry" &&
+                row.GetProperty("Detail").GetProperty("Accepted").GetBoolean()).GetProperty("Detail");
+            var restored = saved.Single(row => row.GetProperty("Kind").GetString() == "raid_rejoin_rejected" &&
+                row.GetProperty("Detail").GetProperty("StateRestored").GetBoolean()).GetProperty("Detail");
+            That(entry.GetProperty("RaidInstance").GetGuid() == restored.GetProperty("Instance").GetGuid() &&
+                entry.GetProperty("Runs")[0].GetGuid() == restored.GetProperty("Run").GetGuid(),
+                "恢复日志与真实入场日志的Battle/Run GUID完全相同，没有另建实例");
+        }
+
+        string RejoinAssets() => fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY character_id,item_uid") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") +
+            fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY character_id,instance_id,phase,kind");
+
+        void AssertClientNotifyGap(uint requestedKey, string why)
+        {
+            // 证据见 Docs/协议/安徒恩重入/EVIDENCE.md：0234447C→0055D870在0x17直接返回；
+            // 585/586/27/28/29/30的恢复顺序未证。必须收齐ACK前后帧，不能由ReadAck吞掉提前通知。
+            again.Send(668, Build(w => w.Write(requestedKey)));
+            var received = AntonTcpProbe.Barrier(again, why);
+            var acknowledgements = received.Where(p => p is { Kind: 1, Opcode: 668 }).ToArray();
+            That(acknowledgements.Length == 1, why + " 恰好一个668应答");
+            Bytes(acknowledgements[0].Body, [0, 19, 0], why + " wire未知仍回已证错误19，不能以01冒充成功");
+            That(received.All(p => p is not { Kind: 0, Opcode: 27 or 28 or 29 or 30 or 585 or 586 or 587 or 594 or 600 or 601 } &&
+                p is not { Kind: 1, Opcode: 16 or 666 }), why + " UNIMPLEMENTED 恢复通知，ACK前后均无猜测场景、状态或奖励包");
+        }
+    }
+
+    static void RejectChangedRun(TcpTestFixture fixture, TcpPeer leader, TcpPeer member, uint key,
+        RaidDungeonCatalog catalog, byte[] info, byte[] firstMap)
+    {
+        AntonTcpProbe.ClearRoom(leader, firstMap, new(), out _, out _, false, member, new());
+        member.Dispose();
+        AntonRaidTcpTests.Until(leader, 0, 591);
+        QuietDrain(leader);
+        var path = AntonTcpProbe.Route(catalog, 210, info[7], firstMap[0], firstMap[1], info[8], info[9]);
+        That(path.Length > 2, "重入过期用例使用210非Boss相邻房，不借最终通关改变阶段");
+        var next = Move(checked((byte)path[1].X), checked((byte)path[1].Y));
+        AntonTcpProbe.ClearRoom(leader, next, new(), out _, out _, false);
+        var back = Move(firstMap[0], firstMap[1]);
+        That(back[0] == firstMap[0] && back[1] == firstMap[1], "幸存者过房后返回已清原房，地图与当前存活集合再次相同");
+        using var stale = Open(fixture, "antonrejoin1", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
+        stale.Select();
+        ReadNotice(stale);
+        stale.Send(668, Build(w => w.Write(key)));
+        Bytes(ReadAck(stale, 668), [0, 19, 0], "已错过房间进度的旧个人Run不能覆盖幸存者");
+        That(AntonRaidTcpTests.Information(leader, key, 1).Members.All(m => m.Character != stale.Id),
+            "仅有相同地图与存活集合不足以恢复，原Run进度不同仍不安装成员");
+        That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[2L]],
+            "恢复与过期拒绝都不重新扣票");
+
+        byte[] Move(byte x, byte y)
+        {
+            var request = new byte[100]; request[0] = x; request[1] = y;
+            leader.Send(45, request);
+            var moved = AntonTcpProbe.Barrier(leader, "恢复过期用例过房");
+            var map = moved.Single(p => p is { Kind: 0, Opcode: 29 }).Body;
+            leader.Send(37, new byte[8]);
+            AntonTcpProbe.Barrier(leader, "恢复过期用例加载");
+            return map;
+        }
     }
 
     static void AssertRejoinClean(TcpTestFixture fixture, TcpPeer again, string why)

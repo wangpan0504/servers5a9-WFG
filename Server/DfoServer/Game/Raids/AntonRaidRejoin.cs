@@ -10,6 +10,7 @@ internal sealed record AntonRaidDisconnectFact(
 {
     public bool Attempted { get; set; }
     internal LukeRaidRejoinReservation? Luke { get; init; }
+    internal AntonRaidRejoinReservation? Anton { get; init; }
 }
 
 internal sealed record AntonRaidRejoinDecision(
@@ -48,6 +49,10 @@ internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled =
         if (fact.Luke is null ? !Enabled : !LukeCandidatesEnabled) return false;
         lock (gate)
         {
+            // 旧连接的迟到收尾不能覆盖后来代次的恢复能力；同代也不能用缺少上下文的记录降级完整候选。
+            if (byCharacter.TryGetValue(fact.Character, out var current) && current.Account == fact.Account &&
+                (current.OldOwner.Generation > fact.OldOwner.Generation ||
+                 ReferenceEquals(current.OldOwner, fact.OldOwner) && current.Anton is not null && fact.Anton is null)) return false;
             byCharacter[fact.Character] = fact;
             return true;
         }
@@ -116,7 +121,7 @@ internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled =
                 byCharacter.Remove(actor.Character);
                 return AntonRaidRejoinDecision.Reject("battle-not-alive", key);
             }
-            fact.Attempted = true;
+            if (fact.Anton is null) fact.Attempted = true;
             return new(true, "recovery-sequence-unknown", key, fact.Epoch, actor.Epoch, fact.Slot, fact.Squad,
                 !fact.OldOwner.IsCurrent, "withheld", Barrier(fact), "recovery-sequence-unknown");
         }

@@ -60,11 +60,11 @@ internal sealed partial class GameSession
     {
         // 魔界大战开战记录随选角代次失效（CurrentEvildomWar 比较 SelectionEpoch），这里只清战斗状态。
         var registry = raidRegistry;
-        AntonRaidDisconnectFact? fact = null;
+        AntonRaidDisconnectFact? fact = disconnected ? preparedAntonDisconnect : null;
         if (disconnected && registry is not null && raidCombat is { } combat)
         {
             bool inRun = Phase is SessionPhase.Loading or SessionPhase.Dungeon;
-            fact = registry.CaptureAntonDisconnect(combat.Actor, combat.Battle,
+            fact ??= registry.CaptureAntonDisconnect(combat.Actor, combat.Battle,
                 inRun ? PartyDungeon?.Id ?? partyDungeonRun : null, Phase == SessionPhase.Loading);
         }
         if (raidCombat is { } previous) previous.Battle.DetachStart(previous.Actor);
@@ -74,5 +74,6 @@ internal sealed partial class GameSession
         partyDungeonRun = null;
         registry?.RemoveSession(this, SelectionEpoch);
         if (fact is not null) registry?.CommitAntonDisconnect(fact);
+        preparedAntonDisconnect = null;
     }
 }

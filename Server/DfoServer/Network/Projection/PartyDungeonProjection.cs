@@ -52,6 +52,7 @@ internal static class PartyDungeonProjection
     // 连接清理从命令门禁外进入，先串行队伍，再等待剩余连接；不得拿实例锁等待账号锁。
     public static async Task DetachAsync(GameConnectionContext context)
     {
+        context.Session.PrepareAntonRejoinDisconnect();
         if (context.Session.PartyDungeon is not { } instance) return;
         var partyGate = context.Session.CurrentParty?.Invoke()?.Commands;
         if (partyGate is not null) await partyGate.WaitAsync();

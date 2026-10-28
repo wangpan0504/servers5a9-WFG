@@ -28,6 +28,10 @@ internal static class RaidMemberTests
         Reject<InvalidDataException>(() => RaidRequests.Manager(new byte[11]), "669截断拒绝");
         That(RaidRequests.Rejoin([1,0,19,2]) == 0x02130001, "668严格消费原团key");
         Reject<InvalidDataException>(() => RaidRequests.Rejoin(new byte[5]), "668多余尾部拒绝");
+        That(RaidRequests.RewardCard([5, 255]) == new RaidRewardCardRequest(5, 255),
+            "660只固定两个u8，不在Parser猜牌种和槽位合法全集");
+        foreach (int length in new[] { 0, 1, 3 })
+            Reject<InvalidDataException>(() => RaidRequests.RewardCard(new byte[length]), "660截断或多余尾部拒绝");
         Reject<InvalidDataException>(() => RaidRequests.Peer(new byte[13], false), "普通组队不借团本mode10解析");
         var emptyHp = RaidRequests.MonsterHp(new byte[5]);
         That(emptyHp.RawValue == 0 && emptyHp.RawEntries.Length == 0, "695已证全零分支保留原始字段，不解释为死亡");
