@@ -1,0 +1,215 @@
+using System.Buffers.Binary;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Skills;
+using DfoServer.GameWorld.Raids;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Persistence;
+using static DfoServer.Testing.TestCheck;
+using static DfoServer.Testing.TcpPeer;
+
+namespace DfoServer.Testing;
+
+// 补开战失败回包、关闭阶段推进、以及同一分队两人的迁图/586。不改服务端规则。
+internal static class AntonRaidGapTcpTests
+{
+    public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await RunTicketsAsync(source, root, resources);
+        await RunPhaseOffAsync(source, root, resources);
+        await RunPartyAsync(source, root, resources);
+    }
+
+    static async Task RunTicketsAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await using var fixture = await BootAsync(source, root, resources, "anton-raid-gap-ticket",
+            """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""");
+        Create(fixture, resources, "gapbroke", "GapBroke", 0);
+        Create(fixture, resources, "gaprich", "GapRich", 2);
+        Create(fixture, resources, "gappoor", "GapPoor", 0);
+        var port = ChannelTcpTests.Endpoints(fixture)[19];
+        using var broke = Open(fixture, "gapbroke", gamePort: port, channelNumber: 19);
+        using var rich = Open(fixture, "gaprich", gamePort: port, channelNumber: 19);
+        using var poor = Open(fixture, "gappoor", gamePort: port, channelNumber: 19);
+        broke.Select(); rich.Select(); poor.Select();
+        AntonRaidTcpTests.Drain(broke); AntonRaidTcpTests.Drain(rich); AntonRaidTcpTests.Drain(poor);
+        broke.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Broke")); w.Write(new byte[4]); }));
+        AntonRaidTcpTests.Until(broke, 1, 664);
+        AntonTcpProbe.Barrier(broke, "无票建队");
+        broke.Send(669, Build(w => { w.Write(0u); w.Write((uint)broke.Id); w.Write(1u); }));
+        Bytes(AntonRaidTcpTests.Until(broke, 1, 669).Body, [1], "无票角色仍能编队");
+        broke.Send(666);
+        Bytes(AntonRaidTcpTests.Until(broke, 1, 666).Body, [0, 19, 0], "一张票都没有时 666 回错误 19");
+        That(fixture.Query("SELECT town, area FROM characters WHERE name='GapBroke'") is [[19L, 0L]], "无票开战留在频道落点 19/0，不进候战室 19/2");
+
+        rich.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Rich")); w.Write(new byte[4]); }));
+        AntonRaidTcpTests.Until(rich, 1, 664);
+        poor.Send(10, AntonRaidTcpTests.Peer(rich.Id, 7, true));
+        AntonRaidTcpTests.Until(poor, 1, 10);
+        AntonRaidTcpTests.Until(rich, 0, 7);
+        rich.Send(11, AntonRaidTcpTests.Peer(poor.Id, 7, false));
+        AntonRaidTcpTests.Until(rich, 1, 11);
+        AntonTcpProbe.Barrier(rich, "邀请排空");
+        AntonTcpProbe.Barrier(poor, "邀请队员排空");
+        rich.Send(666);
+        Bytes(AntonRaidTcpTests.Until(rich, 1, 666).Body, [0, 19, 0], "未分队开战回错误 19");
+        poor.Send(666);
+        Bytes(AntonRaidTcpTests.Until(poor, 1, 666).Body, [0, 8, 0], "非队长开战回错误 8");
+        rich.Send(669, Build(w => { w.Write(0u); w.Write((uint)rich.Id); w.Write(1u); }));
+        Bytes(AntonRaidTcpTests.Until(rich, 1, 669).Body, [1], "队长编入第一分队");
+        rich.Send(669, Build(w => { w.Write(0u); w.Write((uint)poor.Id); w.Write(1u); }));
+        Bytes(AntonRaidTcpTests.Until(rich, 1, 669).Body, [1], "无票队员编入同一分队");
+        rich.Send(666);
+        Bytes(AntonRaidTcpTests.Until(rich, 1, 666).Body, [0, 19, 0], "队员票不足时整队 666 回错误 19");
+        That(fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[2L]] &&
+            fixture.Query("SELECT town, area FROM characters WHERE name='GapRich'") is [[19L, 0L]] &&
+            fixture.Query("SELECT town, area FROM characters WHERE name='GapPoor'") is [[19L, 0L]],
+            "票不足不扣队长的两张票，两人留在 19/0，不进候战室");
+        string?[] reasons = [];
+        bool accepted = true;
+        for (int i = 0; i < 20 && (reasons.Count(reason => reason == "entry-cost-insufficient") < 2 || accepted); i++)
+        {
+            await Task.Delay(200);
+            reasons = Reasons(fixture, "raid_start_request");
+            accepted = Accepted(fixture);
+        }
+        That(reasons.Count(reason => reason == "entry-cost-insufficient") == 2 && reasons.Contains("squads-unassigned") &&
+            reasons.Contains("not-leader") && !accepted,
+            "失败原因分别是无票、未分队和非队长，没有一次开战成功。实际 " + string.Join(',', reasons) + " accepted=" + accepted);
+    }
+
+    static async Task RunPhaseOffAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await using var fixture = await BootAsync(source, root, resources, "anton-raid-gap-phase-off",
+            """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true}""");
+        Create(fixture, resources, "gapoff", "GapOff", 2);
+        var catalog = Catalog(resources);
+        using var peer = Open(fixture, "gapoff", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
+        peer.Select();
+        AntonRaidTcpTests.Drain(peer);
+        var report = AntonTcpProbe.Play(peer, catalog, "clear210");
+        That(report.Entered210 && !report.Reward && report.Opcode586 == 0 && report.Opcode596 == 0 && report.Opcode597 == 0 && report.Opcode601 == 0,
+            "关闭阶段推进时清 210 不发 586/596/597/601，也不进 Reward：" + report.Summary());
+        That(fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[1L]],
+            "关闭阶段推进仍按开战扣一张票");
+        var events = fixture.Events();
+        That(events.Any(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry" &&
+                row.GetProperty("Detail").GetProperty("Dungeon").GetInt32() == 210 &&
+                row.GetProperty("Detail").GetProperty("Accepted").GetBoolean()) &&
+            !events.Any(row => row.GetProperty("Kind").GetString() == "anton_phase_progress"),
+            "关闭阶段推进仍能进 210，且没有 anton_phase_progress");
+    }
+
+    static async Task RunPartyAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        await using var fixture = await BootAsync(source, root, resources, "anton-raid-gap-party",
+            """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""");
+        Create(fixture, resources, "gaplead", "GapLead", 2);
+        Create(fixture, resources, "gapmate", "GapMate", 2);
+        var catalog = Catalog(resources);
+        var port = ChannelTcpTests.Endpoints(fixture)[19];
+        using var leader = Open(fixture, "gaplead", gamePort: port, channelNumber: 19);
+        using var member = Open(fixture, "gapmate", gamePort: port, channelNumber: 19);
+        leader.Select(); member.Select();
+        AntonRaidTcpTests.Drain(leader); AntonRaidTcpTests.Drain(member);
+        leader.Send(664, Build(w => { w.Write((byte)0); w.Write(Name("Party")); w.Write(new byte[4]); }));
+        AntonRaidTcpTests.Until(leader, 1, 664);
+        member.Send(10, AntonRaidTcpTests.Peer(leader.Id, 7, true));
+        AntonRaidTcpTests.Until(member, 1, 10);
+        AntonRaidTcpTests.Until(leader, 0, 7);
+        leader.Send(11, AntonRaidTcpTests.Peer(member.Id, 7, false));
+        AntonRaidTcpTests.Until(leader, 1, 11);
+        AntonTcpProbe.Barrier(leader, "双人邀请");
+        AntonTcpProbe.Barrier(member, "双人邀请队员");
+        leader.Send(669, Build(w => { w.Write(0u); w.Write((uint)leader.Id); w.Write(1u); }));
+        Bytes(AntonRaidTcpTests.Until(leader, 1, 669).Body, [1], "队长进入第一分队");
+        leader.Send(669, Build(w => { w.Write(0u); w.Write((uint)member.Id); w.Write(1u); }));
+        Bytes(AntonRaidTcpTests.Until(leader, 1, 669).Body, [1], "队员进入同一分队");
+        leader.Send(666);
+        var started = AntonTcpProbe.Barrier(leader, "双人开战");
+        var memberStarted = AntonTcpProbe.Barrier(member, "双人开战队员");
+        That(started.Any(packet => packet is { Kind: 1, Opcode: 666, Body: [1] }) &&
+            started.Any(packet => packet is { Kind: 0, Opcode: 23 } && packet.Body.Length >= 4 && packet.Body[2] == 19 && packet.Body[3] == 2) &&
+            memberStarted.Any(packet => packet is { Kind: 0, Opcode: 23 } && packet.Body.Length >= 4 && U16(packet.Body) == member.Id &&
+                packet.Body[2] == 19 && packet.Body[3] == 2),
+            "两人开战成功并都落到 19/2");
+        AntonTcpProbe.RejectClosed(leader, member, 216);
+        AntonTcpProbe.RejectClosed(leader, member, 999);
+        leader.Send(15, BitConverter.GetBytes(210u));
+        var opened = AntonTcpProbe.Barrier(leader, "15 打开 210");
+        AntonTcpProbe.Barrier(member, "15 打开 210 队员");
+        That(opened.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }), "210 的 15 打开选图");
+        AntonTcpProbe.RejectSelect(leader, member, 216);
+        AntonTcpProbe.RejectSelect(leader, member, 210, 2);
+        AntonTcpProbe.RejectSelect(leader, member, 999);
+        var leaderReport = new AntonTcpProbe.AntonProbeReport();
+        var memberReport = new AntonTcpProbe.AntonProbeReport();
+        AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport);
+        That(leaderReport.Maps.Count > 0 && memberReport.Maps.Count > 0, "两人都能收到 29");
+        SameRoom(leaderReport.Maps[0], memberReport.Maps[0], 32200, "进 210 时两人 29 都在起点 32200");
+        SameRoom(leaderReport.Maps[^1], memberReport.Maps[^1], null, "清到 Boss 房时两人 29 的地图和坐标一致");
+        foreach (var (id, state) in new (int Id, byte State)[] { (210, 2), (211, 1), (212, 0), (213, 0), (214, 0), (215, 0), (216, 2) })
+        {
+            AssertState(leaderReport, id, state);
+            AssertState(memberReport, id, state);
+        }
+        That(leaderReport.Opcode596 == 0 && leaderReport.Opcode597 == 0 && leaderReport.Opcode601 == 0 &&
+            memberReport.Opcode596 == 0 && memberReport.Opcode597 == 0 && memberReport.Opcode601 == 0,
+            "双人清 210 不发 596/597/601");
+        That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[2L]],
+            "双人开战各扣一张，进图和清 210 不再扣");
+    }
+
+    static void SameRoom(byte[] leader, byte[] member, uint? map, string why) =>
+        That(leader.Length >= 18 && member.Length >= 18 && leader[0] == member[0] && leader[1] == member[1] &&
+            U32(leader, 14) == U32(member, 14) && (map is null || U32(leader, 14) == map), why);
+
+    static void AssertState(AntonTcpProbe.AntonProbeReport report, int dungeon, byte state)
+    {
+        byte[]? body = report.States.LastOrDefault(row => row.Length >= 6 && BinaryPrimitives.ReadInt32LittleEndian(row) == dungeon);
+        That(body is { Length: 6 } && body[4] == 0 && body[5] == state,
+            $"586 应是 6 字节、保留字节 0、{dungeon} 状态 {state}，实际 " +
+            (body is null ? "没有这张图" : Convert.ToHexString(body)));
+    }
+
+    static async Task<TcpTestFixture> BootAsync(ServerOptions source, string root, TcpTestResources resources, string name, string json)
+    {
+        var fixture = new TcpTestFixture(source, Path.Combine(root, name), resources: resources);
+        Directory.CreateDirectory(fixture.Options.DataDirectory);
+        File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "raid-start.json"), json);
+        await fixture.StartAsync();
+        return fixture;
+    }
+
+    static void Create(TcpTestFixture fixture, TcpTestResources resources, string account, string name, int tickets)
+    {
+        var repository = new CharacterRepository(fixture.Database);
+        var owners = new AccountOwners();
+        using var owner = owners.Acquire(account, () => { });
+        var point = new Location(38, 0, 629, 196);
+        var candidate = CharacterCreation.Prepare(name, resources.Characters.Get(0), point, point, resources.Learning.Get);
+        var learning = SkillPointLedger.Synchronize(0, 0, 85, candidate.InitialLearning with
+            { Experience = resources.Growth.GetLevelStartExperience(85) }, resources.Learning);
+        var created = repository.Create(owner, candidate with
+            { Level = 85, AcceptedStoryLevel = 85, CompletedQuests = [12829, 3779], InitialLearning = learning });
+        if (tickets == 0) return;
+        var items = resources.ItemResources;
+        InventoryService.Commit(repository, owner, created,
+            new InventoryService(items.Items, items.GoldLimits, items.EpicPieces).Grant(created, [new(10096296, tickets)]));
+    }
+
+    static RaidDungeonCatalog Catalog(TcpTestResources resources)
+    {
+        var main = SelfTestCatalogs.Dungeons(resources.Archive);
+        return RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main, resources.ItemResources.Items,
+            antonMapPath: AntonRaidMapPaths.Bind(main.MapPath)).Find(0)!.Resources!.EntryCatalog!;
+    }
+
+    static string?[] Reasons(TcpTestFixture fixture, string kind) => fixture.Events()
+        .Where(row => row.GetProperty("Kind").GetString() == kind)
+        .Select(row => row.GetProperty("Detail").GetProperty("Reason").GetString()).ToArray();
+
+    static bool Accepted(TcpTestFixture fixture) => fixture.Events().Any(row => row.GetProperty("Kind").GetString() == "raid_start_request" &&
+        row.GetProperty("Detail").GetProperty("Accepted").GetBoolean());
+}
