@@ -15,6 +15,8 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public long TimerSequence { get; init; }
     public byte? LukePhaseCoinsUsed { get; init; }
     public ImmutableDictionary<int, LukeRouteProgress> LukeRoutes { get; init; } = ImmutableDictionary<int, LukeRouteProgress>.Empty;
+    // 仅显式设施报告兼容模式使用，键最多为三个已证设施符号；随候选原子提交。
+    public ImmutableDictionary<string, long> LukeFacilityWriteEpochs { get; init; } = ImmutableDictionary<string, long>.Empty;
     public bool ClockFaulted { get; init; }
     public bool PhaseExpired { get; init; }
     public long PhaseClockGeneration { get; init; }
@@ -267,7 +269,7 @@ internal sealed partial class AntonRaidBattle
             if (instance != Instance || revision != current.Revision || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
                 !current.Symbols.TryGetValue(symbol, out int previous) || previous == value) return null;
             var before = current;
-            CommitBattleCandidate(before, Evaluate(before with { Symbols = before.Symbols.SetItem(symbol, value) }, null, symbol, null));
+            CommitBattleCandidate(before, Evaluate(StampLukeFacilityWrite(before with { Symbols = before.Symbols.SetItem(symbol, value) }, symbol), null, symbol, null));
             return new(before, current);
         }
     }
@@ -373,6 +375,7 @@ internal sealed partial class AntonRaidBattle
                                 "[+]" => checked(state.Symbols[key] + action.RawIntegers[0]),
                                 _ => throw new InvalidDataException("未支持的攻坚符号运算 " + action.Operator)
                             };
+                            state = StampLukeFacilityWrite(state, key);
                             if (state.Symbols[key] != value)
                             { state = state with { Symbols = state.Symbols.SetItem(key, value) }; events.Enqueue((null, key, null, null)); }
                             break;

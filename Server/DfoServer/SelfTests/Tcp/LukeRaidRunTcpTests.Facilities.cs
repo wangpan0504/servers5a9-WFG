@@ -14,7 +14,7 @@ internal static partial class LukeRaidRunTcpTests
         var captain=members.Single(peer=>peer.Id==Leader(roster));
         var reporter=members.First(peer=>peer!=captain);
         var instance=(string)fixture.Query("SELECT instance_id FROM character_raid_runs WHERE character_id=$p0 AND state=0",captain.Id)[0][0]!;
-        foreach(var (dungeon,objectId,symbol) in new[]{(5054,64249,117),(5055,64251,118),(5056,64252,119)})
+        foreach(var (dungeon,objectId,symbol) in new[]{(5054,64249,117),(5054,64249,117),(5055,64251,118),(5056,64252,119)})
         {
             var entered=Enter(members,captain,dungeon);
             foreach(var peer in others)Drain(peer,true);
@@ -99,10 +99,15 @@ internal static partial class LukeRaidRunTcpTests
                 var partial=Return(members,peer,true);
                 foreach(var other in others)partial.AddRange(Drain(other,true));
                 NoReward(partial,"非末成员退出仍无Reward/结果，不把任意一次Return当全部退出");
+                if(dungeon!=5056)
+                    That(partial.Where(packet=>packet.Opcode==583).All(packet=>Symbol(packet.Body,symbol)==2),"非末成员退出不撤销同Run设施贡献");
                 returned.AddRange(partial);
             }
             returned.AddRange(Return(members,captain,true));
             foreach(var peer in others)returned.AddRange(Drain(peer,true));
+            if(dungeon!=5056)
+                That(returned.Any(packet=>packet.Opcode==583)&&returned.Where(packet=>packet.Opcode==583).Last() is var last&&Symbol(last.Body,symbol)==0,
+                    "真实末成员Return回滚未清图设施贡献，重复进5054不能累积");
             if(dungeon==5056)
             {
                 That(returned.Any(packet=>packet is {Kind:0,Opcode:587,Body:[3,0]})&&returned.Any(packet=>packet.Opcode==601),

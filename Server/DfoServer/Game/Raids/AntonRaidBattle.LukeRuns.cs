@@ -20,6 +20,8 @@ internal sealed partial class AntonRaidBattle
         public LukeRaidObjectRegistration? Objects { get; set; }
         public LukeObjectBinding? FacilityRoom { get; set; }
         public HashSet<LukeObjectBinding> ConsumedFacilities { get; } = [];
+        public FacilityLedger? FacilityLedger { get; set; }
+        public bool FacilityLedgerAmbiguous { get; set; }
         public int RevivalUsed { get; set; }
         public Dictionary<RaidActor, long> RevivedDeaths { get; } = [];
         public bool Installed { get; set; }
@@ -271,7 +273,7 @@ internal sealed partial class AntonRaidBattle
         {
             // 最后成员正式退出且未清图才是GiveUp；旧目标代/已结束阶段不执行新业务。
             if (Kind == RaidKind.Luke && run.Active.Count == 1 && run.Installed && !run.Cleared && pendingTransition is null && CurrentObjective(run))
-                CommitBattleCandidate(current, Evaluate(current, null, null, null,
+                CommitBattleCandidate(current, Evaluate(RevertLukeFacilityReports(run), null, null, null,
                     new(RaidStageFactKind.GiveUpDungeon, run.Phase, checked((int)run.Dungeon))));
             run.Active.Remove(actor);
             if (Kind == RaidKind.Anton) entries.Remove((run.Id, actor.Character));
