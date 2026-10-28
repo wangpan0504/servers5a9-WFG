@@ -18,8 +18,9 @@ internal static class GriefTowerProjection
         RaidCombatProjection.Selection(context, guard);
         await DimensionEntranceProjection.RefreshAsync(context, guard);
         await DimensionEntranceProjection.AncientAsync(context, guard);
+        // 魔兽选图的气球来自这张候选列表：不填就只有底图，玩家点不到任何副本入口。
         await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
             DungeonPackets.SelectionNotice(legendDungeon,grief?.Layer ?? 0,context.Session.DespairSelectionLayer(),
-                context.Session.IncompleteHellQuestMemberSlots()),eventName,guard);
+                context.Session.IncompleteHellQuestMemberSlots(),context.Session.BeastSelectionCandidates()),eventName,guard);
     }
 }

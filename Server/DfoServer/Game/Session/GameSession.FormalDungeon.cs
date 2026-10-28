@@ -167,8 +167,10 @@ internal sealed partial class GameSession
         if (expected is null || expected.DungeonState is null ||
             !partyAdmission && HasMultiplePartyMembers?.Invoke() == true)
             return RejectFormal("session-not-ready-or-no-dungeon-state");
+        // 难度不在这里卡：实机确认包带的是玩家在选图面板上选中的难度（样本为2），
+        // 兼容网关的布局固定取源副本的 BeastLayouts[0]，难度只影响客户端显示。
         if (BeastDungeonRotation.IsGateway(dungeonId) && (!beastMode || ChannelEntry?.Type != ChannelAreaLanding.BeastType ||
-            expected.Position is not { Town: 51, Area: 2 } || questId != 0 || difficulty != 0 ||
+            expected.Position is not { Town: 51, Area: 2 } || questId != 0 ||
             classExperience || hellParty || hellLegend || sealDoor || practice))
             return RejectFormal("beast-gateway-channel-and-mode-required");
         DazzlementTowerAdmission? dazzlement = null;

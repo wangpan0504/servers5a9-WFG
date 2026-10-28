@@ -71,7 +71,9 @@ internal static class GuildPackets
         }
         if (panel?.Economy is { } economy) writer.Write(GuildEconomyPackets.Benefits(economy));
         else writer.Write((byte)0);
-        writer.Write(checked((uint)(panel?.Economy?.PublicFunds ?? 0)));
+        // 实机探针（@257=111111、@312=444444、@316=555555、@320=333333）确认：本版客户端不消费权益块之后的
+        // @257/@262（90CN 在同一结构位写的是公会公共积分），公会资金实际来自成长尾的 @316。
+        writer.Write(0u);
         writer.Write((byte)0);
         writer.Write(0u);
         writer.Write((byte)0);
@@ -89,9 +91,10 @@ internal static class GuildPackets
         writer.Write((uint)guild.Level);
         // 023DB934起读取现代成长尾：累计经验为8B；末个u32同时供NPC升级材料检查。
         writer.Write((ulong)guild.Experience);
-        writer.Write(0u);
-        writer.Write(0u);
-        writer.Write(guild.Crystals);
+        writer.Write(0u); // @312 本版不消费（哨兵 444444 无处显示）。
+        // @316 才是公会资金显示位：哨兵 555555 实测渲染为「公会资金 555,555」。
+        writer.Write(checked((uint)(panel?.Economy?.PublicFunds ?? 0)));
+        writer.Write(guild.Crystals); // @320 公会水晶：哨兵 333333 实测显示。
         writer.Write((byte)0);
         return stream.ToArray();
     }

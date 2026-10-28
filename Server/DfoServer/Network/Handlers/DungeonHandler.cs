@@ -215,8 +215,11 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         // 实机 2026-10-25T14:49:06 的副本310/难度4/[7]=0 是普通噩梦按钮；MAZE1 留给下面的深渊分支。
         bool mazeBeast = BeastDungeonRotation.MatchesEntry(checked((int)selection.DungeonIndex), selection.Parameter, selection.Unknown7) &&
             selection.Unknown8 == 0 && !direct && !continuation;
+        // 实机样本 2026-10-28T10:54:58（魔兽城镇51/2点气球）：
+        // 5336 难度2 [7]=0 [8]=0 [9]=FFFF [16]=10000。难度由客户端选图面板随确认包直接下发，
+        // [16] 是角色当时进行中的魔兽材料任务10000；两者都不是入场条件，此前按「普通难度0、无任务」写的判定把每一次点击都拒了。
         bool gatewayBeast = BeastDungeonRotation.IsGateway(selection.DungeonIndex) && selection.Unknown7 == 0 &&
-            selection.Unknown8 == 0 && selection.Unknown16 == 0 && selection.Parameter == 0 && !direct && !continuation &&
+            selection.Unknown8 == 0 && !direct && !continuation &&
             context.Session.ChannelEntry?.Type == ChannelAreaLanding.BeastType;
         bool beastMode = mazeBeast || gatewayBeast;
         bool hell = selection.Unknown7 == 1 && selection.Unknown8 == 0 && !direct && !continuation && !beastMode;
@@ -239,10 +242,15 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (selection.DungeonIndex == 7142 && (!experience || selection.Parameter != 0)) return await RejectAsync();
         // 回放由1459的完成事实/显式路线授权；附加Scene flags只保留审计，不套普通选图常量。
         // 魔兽入场由 [7]=MAZE2 表示，深渊由 [7]=1 表示，普通噩梦仍是 [7]=0；三者不能互相吞并。
+        // 再战魔界(9608/400000095)与帝国竞技场(320/336)的25B16末位u32是0xFFFFFFFF，普通副本为0；
+        // 实机2026-10-28 10:41/10:43三连拒绝均为该字段。两类随后仍须过PrepareFormalDungeon的专用入场许可，
+        // 放宽一个未知字段不会放行普通副本，也不能替代编队/双角色资料校验。
+        bool specialSelection = selection.DungeonIndex is 9608 or 400000095 or 320 or 336;
+        bool unknown21Accepted = selection.Unknown21 == 0 || specialSelection && selection.Unknown21 == uint.MaxValue;
         byte expectedFlag = mazeBeast ? selection.Unknown7 : (byte)(hell ? 1 : 0);
         if (selection.Unknown5 != 0 || selection.Unknown11 != 0 || !replay &&
             (selection.Unknown7 != expectedFlag || selection.Unknown8 != (direct || practice ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
-            selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0) || selection.Unknown21 != 0))
+            selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0) || !unknown21Accepted))
             return await RejectAsync();
         if (context.Session.HasMultiplePartyMembers?.Invoke() == true || context.Session.ReadEvildomWar() is not null)
         {

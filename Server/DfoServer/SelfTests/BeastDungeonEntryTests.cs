@@ -122,9 +122,11 @@ internal static class BeastDungeonEntryTests
                     gatewayPlan is { BeastMode: true, MonsterBasisLevel: 90, BeastHpScale: 5, BeastAttackScale: 2.3 } &&
                     gatewayPlan.Maze.MapSpecification!.Count == 15 && gatewayPlan.Maze.MapSpecification.Count(map => map.Kind == "Beast") == 6,
                     "专属普通请求冻结六阶段、完整路线与倍率：" + gateway + " / " + gatewayReason);
+                // 2026-10-28T10:54:58 实机：点气球直接下发难度2，此前只认0把每次点击都拒了。
                 That(!DungeonEntryPlan.TryCreate(catalog, beastCharacter, (uint)gateway, 0, 0, out _, out _) &&
-                    !DungeonEntryPlan.TryCreate(catalog, beastCharacter, (uint)gateway, 0, 4, out _, out _, beastMode: true),
-                    "专属图禁止普通经济路径和旧特殊难度");
+                    DungeonEntryPlan.TryCreate(catalog, beastCharacter, (uint)gateway, 0, 2, out _, out _, beastMode: true) &&
+                    !DungeonEntryPlan.TryCreate(catalog, beastCharacter, (uint)gateway, 0, 6, out _, out _, beastMode: true),
+                    "专属图禁止普通经济路径；实机难度2可通过，越界6仍拒绝");
                 var maze = gatewayDefinition.Mazes[0];
                 var maps = maze.MapSpecification!;
                 That(!DungeonEntryPlan.GatewayMatches(gatewayDefinition with { Mazes = [maze with { MapSpecification = [..maps.SkipLast(1), maps[0]] }] }, source),

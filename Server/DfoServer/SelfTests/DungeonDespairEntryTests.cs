@@ -16,6 +16,15 @@ internal static class DungeonDespairEntryTests
             "选图通知同时保留传奇深渊、绝望与悲叹的独立字段，不能将第二个参数复用于绝望楼层");
         Reject<ArgumentOutOfRangeException>(() => DfoServer.Network.Builders.DungeonPackets.SelectionNotice(despairLayer:101),
             "绝望选图楼层拒绝超出100层");
+        byte[] candidates=new byte[62];
+        candidates[41]=5;
+        for(int i=0;i<5;i++)
+        {
+            candidates[42+i*4]=(byte)(5335+i);
+            candidates[43+i*4]=0x14;
+        }
+        Bytes(DfoServer.Network.Builders.DungeonPackets.SelectionNotice(selectionCandidates:[5335,5336,5337,5338,5339]),
+            candidates,"选图候选列表占用偏移41的u8计数与随后五个int32，魔兽地图46的五个气球由它驱动");
         var dungeons=SelfTestCatalogs.Dungeons(resources.Archive);
         var tower=DfoServer.GameWorld.Dungeons.TowerOfDespairCatalog.Load(resources.Archive);
         var growth=SelfTestCatalogs.Growth(resources.Archive);

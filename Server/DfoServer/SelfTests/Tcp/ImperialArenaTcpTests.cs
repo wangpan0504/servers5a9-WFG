@@ -82,7 +82,8 @@ internal static class ImperialArenaTcpTests
                 long mailBefore = (long)fixture.Query("SELECT count(*) FROM mailbox_messages")[0][0]!;
                 for (int attempt = 0; attempt < 2; attempt++)
                 {
-                    var map = Enter(peer, dungeon);
+                    // 实机2026-10-28 10:43 竞技场25B16末位u32为0xFFFFFFFF，按客户端原样回放。
+                    var map = Enter(peer, dungeon, uint.MaxValue);
                     for (int room = 0; room <= route.Length; room++)
                     {
                         ClearRoom(peer, map, room == 0 ? 0 : route[room - 1].MonsterId, clock, attempt == 0,
@@ -215,11 +216,12 @@ internal static class ImperialArenaTcpTests
             That(U32(body, 28 + i * 5) == route.Hard[i].MonsterId && body[32 + i * 5] == route.HardWeakness[i], "1400七轮困难对手与元素弱点逐项一致");
         That(body[63] == route.CommonWeakness && body[26] == 4, "1400共同弱点准确且竞技之王保留无元素弱点");
     }
-    static byte[] Enter(TcpPeer peer, uint dungeon)
+    // trailer 是25B16末位u32：实机帝国竞技场发0xFFFFFFFF，普通副本发0；全0变体仍由336困难路线覆盖。
+    static byte[] Enter(TcpPeer peer, uint dungeon, uint trailer = 0)
     {
         peer.Send(15, Build(w => { w.Write(dungeon); w.Write((ushort)0); }));
         peer.Send(16, Build(w => { w.Write(dungeon); w.Write((byte)0); w.Write((ushort)0); w.Write((byte)0); w.Write((byte)0);
-            w.Write(ushort.MaxValue); w.Write(0u); w.Write((byte)0); w.Write(0u); w.Write((byte)0); w.Write(0u); }));
+            w.Write(ushort.MaxValue); w.Write(0u); w.Write((byte)0); w.Write(0u); w.Write((byte)0); w.Write(trailer); }));
         peer.Expect(1, 15, [1]); peer.Expect(0, 3); peer.Expect(0, 27); peer.Expect(0, 28);
         return peer.Expect(0, 29).Body;
     }
