@@ -40,11 +40,12 @@ internal static class SpecialAreaChannelTests
         That(lowLevel.Spot is null && lowLevel.Reason == "admission-target-level-required",
             $"Lv1 五陵频道按 117/1 need level 17 拒绝: {lowLevel.Spot} {lowLevel.Reason}");
         That(!ChannelAreaLanding.IsChannelBoundTown(towns, 117), "五陵 117 有其他城镇连入，不是频道专属城镇");
-        That(ChannelAreaLanding.ClientKeepsTownSnapshot(towns, xian, new(38, 0, 1, 1)) &&
+        That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, xian, new(38, 0, 1, 1)) &&
+            ChannelAreaLanding.ClientKeepsTownSnapshot(towns, xian, start) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, gate!) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, xian, new(67, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, evildom, gate!),
-            "0x38 与普通谓词全同互换保留快照；与魔界大战 0x36 互换不保留");
+            "无历史时普通街道进入五陵不保留快照；五陵城内可恢复同类快照，普通频道仍保留非专属城镇兼容推断");
         That(ChannelPackets.LoginChannelType(xian) == 0 && ChannelPackets.LoginChannelType(trade) == 0,
             "五陵/交易频道 ACK LOGIN 第 3 字节保持 0（未证客户端读取）");
 

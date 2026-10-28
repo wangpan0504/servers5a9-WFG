@@ -136,7 +136,7 @@ internal static partial class RaidChannelLandingTcpTests
         };
     }
 
-    // #613 特殊区域页频道：五陵 43（0x38，谓词与普通相同）。
+    // 特殊区域页频道：五陵 43 配合客户端补丁独立比较类型，跨五陵边界先进赛丽亚房间。
     public static async Task RunSpecialAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "special-channel-landing"), resources: resources);
@@ -145,13 +145,15 @@ internal static partial class RaidChannelLandingTcpTests
         var character = CreateRaider(fixture, resources, "SpecLand");
         var Switch = Switcher(fixture, resources, endpoints, character);
         byte normal = endpoints.Keys.Min();
-        // 艾尔文防线 38/0 的普通频道角色换入五陵：0x38 与普通 0x16 的 01EB5AF0 谓词全同，客户端留快照，服务端保留原位置。
-        Switch(43, land: false, town: null, "普通→五陵 43（0x38 谓词同普通）");
+        // 没有旧频道历史也不能把普通街道当作五陵快照；先入共享房间，再按五陵出口到 117/1。
+        Switch(43, land: true, town: 38, "普通街道→五陵 43（先进赛丽亚房间）", area: 1, exit: 117);
         // 魔界大战 0x36 的 vt+0x4C 与 0x38 不同：客户端不留快照，进赛丽亚房间，出门按频道落点。
         Switch(41, land: true, town: 38, "五陵 43→魔界大战 41（出门 67/0）", area: 1, exit: 67);
         Switch(43, land: true, town: 38, "魔界大战 41→五陵 43（出门 117/1 入口图）", area: 1, exit: 117);
-        // 117 不是频道专属城镇，五陵→普通谓词全同，保留五陵位置。
-        Switch(normal, land: false, town: null, "五陵 43→普通（保留 117）");
+        // 有频道历史时不再按 117 非专属城镇误判为普通频道，离开五陵也进共享房间。
+        Switch(normal, land: true, town: 38, "五陵 43→普通（恢复普通房间）", area: 1);
+        Switch(43, land: true, town: 38, "普通房间→五陵 43（出门到五陵入口）", area: 1, exit: 117);
+        Switch(normal, land: true, town: 38, "再次离开五陵", area: 1);
         // 勇士对决 0x3F/0x3E 在团队页签谓词里：普通→勇士对决不留快照，出门 119；两者之间及与超时空之战 0x2D 互换保留快照。
         Switch(44, land: true, town: 38, "普通→勇士对决-自由 44（出门 119）", area: 1, exit: 119);
         Switch(45, land: false, town: null, "勇士对决-自由 44→排位 45（同为团本页签）");

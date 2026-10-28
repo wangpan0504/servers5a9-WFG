@@ -24,7 +24,8 @@ internal static class ChannelAreaLanding
     internal const int PreyRaidType = 0x32;
 
     // 五陵频道类型：ARAD 频道类型名表 03EFBF9F 写入 CHANNEL_XIAN_VILLAGE = 0x38。外层白名单 028FB090 含 0x38，页签分类 vt+0x114（01EB5810，type==0x38）
-    // 放进特殊区域页；01EB5AF0 比较的 14 个谓词（vt+0x14/0x28/0x30/0x34/0x38/0x3C/0x40/0x44/0x48/0x4C/0x60/0x64/0x6C/0x78）对 0x38 与普通 0x16 全部相同。
+    // 放进特殊区域页；原生 01EB5AF0 对 0x38 与普通 0x16 的谓词全部相同。配套 95JP 补丁额外比较五陵类型位，
+    // 跨入或离开五陵不记录旧城镇快照，按普通选角进入共享赛丽亚房间，再由频道出口到 117/1。
     internal const int XianVillageType = 0x38;
 
     // 勇士对决：PVF etc/channel_info 名称键060 `勇士对决 - 自由`、061 `勇士对决 - 排位`；ARAD 类型名表 CHANNEL_DNFAOS_FREE = 0x3F、
@@ -77,12 +78,14 @@ internal static class ChannelAreaLanding
     // 有落点城镇的谓词频道；服务端不保存旧频道，按存档城镇推断旧频道类型。
     static readonly (int Type, string Group)[] PredicateChannels =
         [(0x17, "[raid]"), (0x20, "[luke_raid]"), (FiendwarType, "[fiendwar]"), (EvildomWarType, "[evildom_war]"), (PreyRaidType, "[prey]"),
-         (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]"), (53, "[evildom_gathering]"), (BeastType, "[beast]"), (39, "[tag_tournament]")];
+         (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]"), (53, "[evildom_gathering]"), (BeastType, "[beast]"), (39, "[tag_tournament]"),
+         (XianVillageType, "[xian_village]")];
 
     // 01EB5BCD..5C0B另比较vt+38，01EB5780正是type53；跨入/离开再战不能复用旧城镇快照。
     // 01EB5760（vt+30）比较type40魔兽；01EB5790比较type39帝国竞技场，虚表054946E0对应+3C；01EB5AF0同样比较新旧值。
-    static (bool RaidTab, bool Beast, bool Evildom, bool TagEvildom, bool ImperialArena) SnapshotPredicates(int type) =>
-        (RaidTabTypes.Contains(type), type == BeastType, type == EvildomWarType, type == 53, type == 39);
+    // 五陵位由配套客户端补丁比较；其余各项仍对应原生谓词，同类型五陵频道保留原生快照行为。
+    static (bool RaidTab, bool Beast, bool Evildom, bool TagEvildom, bool ImperialArena, bool XianVillage) SnapshotPredicates(int type) =>
+        (RaidTabTypes.Contains(type), type == BeastType, type == EvildomWarType, type == 53, type == 39, type == XianVillageType);
 
     public static Location? Place(TownCatalog towns, ChannelEntry channel, int level, IReadOnlySet<int> completed) =>
         Decide(towns, channel, level, completed).Spot;
