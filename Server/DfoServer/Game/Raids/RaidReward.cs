@@ -15,6 +15,8 @@ internal static class RaidRewardRules
 // 展示列只保存已证读宽，不以UI显示数量替代实际发放计划。所有列均由明确配置提供，无推测默认值。
 internal sealed record RaidRewardDisplayItem(byte RawCode, uint ItemId, ushort DisplayValue, byte RawFlag);
 internal sealed record RaidRewardDisplayRow(ushort RawOwner, byte Card, ImmutableArray<RaidRewardDisplayItem> Items);
+// 601：KB-20261026T063752-4691836ed4，C只证秒制显示，D只证整数，E只证rank动画选择。
+// Seconds不证明起止时刻，Rank不证明评分公式，RawFlag不证明已领奖；正式策略缺列时禁止补零发布。
 internal sealed record RaidResultDisplay(byte Result, byte Phase, uint Seconds, ushort RawValue, byte Rank, byte RawFlag);
 internal sealed record RaidRewardOffer(byte Kind, byte Card, ImmutableArray<InventoryReward> Grants,
     ImmutableArray<RaidRewardDisplayRow> Display)

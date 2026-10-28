@@ -85,9 +85,13 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         if (receipt.Prepared.RaidType == RaidKind.Luke &&
             LukeRewardResults.Bind(receipt, items, (clock ?? TimeProvider.System).GetUtcNow()) is { } result &&
             context.LukeResults.Post(context, receipt, result)) return CommandResult.Handled;
-        if (receipt.Prepared.RaidType == RaidKind.Anton)
+        // 600会写当前卡片窗口；旧阶段receipt只回放领取确认，不把旧展示装进新阶段。
+        // 同阶段保护沿B线c0070b73；01DC8B70消费者及Docs/协议/副本.md翻牌章节。
+        bool DisplayGuard() => Guard() && context.Session.RaidCombatView() is { State: AntonRaidBattleState.Reward } view &&
+            view.Phase == receipt.Prepared.Phase;
+        if (receipt.Prepared.RaidType == RaidKind.Anton && DisplayGuard())
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, RaidCombatPackets.Reward(receipt.Prepared.Kind, receipt.Offer.Display),
-                "raid_reward_display", Guard);
+                "raid_reward_display", DisplayGuard);
         bool sent = false;
         await context.Reply(CmdPacketType.SELECT_RAID_REWARD_CARD, [1], "raid_reward_selected", () => sent = Guard());
         if (sent) context.Session.ConfirmRaidRewardPublished(receipt);
