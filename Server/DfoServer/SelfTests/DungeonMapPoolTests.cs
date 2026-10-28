@@ -65,7 +65,7 @@ internal static class DungeonMapPoolTests
         ExplicitCandidates();
         LostLandResources();
         GriefResource();
-        // BossRush保留合法格内终点；格外Boss沿已有最远格规划且保留原声明，不证明专用计时或结果流程。
+        // BossRush保留合法格内终点；格外Boss沿已有最远格规划且保留原声明。
         // 类型大小写和Boss格投影不改变上述合同，缺资源或非法几何仍不能补图。
         var ordinary = definition with { Mazes = [result] };
         var ready = new Character(99,0,"BossRushBoundary",0,new(38,2,1085,249),null) { Level = 95 };
@@ -74,12 +74,14 @@ internal static class DungeonMapPoolTests
         foreach (bool bossCell in new[] { false,true })
         {
             That(DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type },ready,10,0,0,out var regular,out _,
-                    bossCellFromBossMap:bossCell) && regular!.BossMap.Position == new DungeonPoint(1,0),
+                    bossCellFromBossMap:bossCell) && regular is { IsBossRush: true, BossMap.Position: { X: 1, Y: 0 } } &&
+                regular.Maze.IsBossRush && regular.Maze.StaticTopology.Supported,
                 "BossRush 的合法格内终点保留，类型大小写与Boss格投影不改变落点");
             var offGrid = result with { Bosses = [new(6,6)] };
             That(DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type, Mazes = [offGrid] },ready,10,0,0,out var planned,out _,
-                    bossCellFromBossMap:bossCell) && planned!.BossMap.Position == new DungeonPoint(1,0) &&
-                planned.Maze.Bosses.SequenceEqual([new DungeonPoint(6,6)]),
+                    bossCellFromBossMap:bossCell) && planned is { IsBossRush: true, BossMap.Position: { X: 1, Y: 0 } } &&
+                planned.Maze.Bosses.SequenceEqual([new DungeonPoint(6,6)]) && planned.Maze.IsBossRush &&
+                planned.Maze.StaticTopology.Supported,
                 "BossRush 格外Boss取已有最远格作终点，同时保留原资源Boss坐标");
             That(!DungeonEntryPlan.TryCreate(ordinary with { DungeonType = type, Mazes = [offGrid with { MapSpecification = null }] },
                     ready,10,0,0,out var offGridRejected,out string offGridReason,bossCellFromBossMap:bossCell) &&
@@ -93,8 +95,8 @@ internal static class DungeonMapPoolTests
                         resolved++;
                         return candidate;
                     },bossCellFromBossMap:bossCell) &&
-                entry is { StartMap.Id: 100, BossMap.Id: 201 } && reason == "resource-plan-ready" &&
-                resolved == 1 && ReferenceEquals(entry.Maze,result) && entry.BossMap.Position == new DungeonPoint(1,0) &&
+                entry is { StartMap.Id: 100, BossMap.Id: 201, IsBossRush: true } && reason == "resource-plan-ready" &&
+                resolved == 1 && entry.BossMap.Position == new DungeonPoint(1,0) &&
                 entry.StartMap == result.MapSpecification![0] && entry.BossMap == result.MapSpecification[1],
                 "BossRush完整几何只解析一次，保留已声明的格子内Boss与共享资源身份");
             foreach (var invalid in new[] { result with { MapSpecification = null }, result with { Width = 0, Height = 0 } })
@@ -497,13 +499,14 @@ internal static class DungeonMapPoolTests
             fatigueReason == "grief-tower-fatigue-mismatch","无疲劳标记未成立时不能再走零疲劳准入");
         var soul = catalog.Get(337);
         var soulMaze = soul.Mazes.Single();
-        That(soul.IsBossRushDungeon && soulMaze is { Width: 5, Height: 5, ResourceError: null } &&
+        That(soul.IsBossRushDungeon && soul.TimeoutSeconds == 120 && soulMaze is { Width: 5, Height: 5, ResourceError: null, IsBossRush: true } &&
             soulMaze.Starts.SequenceEqual([new DungeonPoint(2,2)]) && soulMaze.Bosses.SequenceEqual([new DungeonPoint(6,6)]) &&
-            soulMaze.MapSpecification is { Count: 25 } &&
+            soulMaze.MapSpecification is { Count: 25 } && soulMaze.StaticTopology.Supported &&
             DungeonEntryPlan.TryCreate(catalog,eligible with { Level = 95 },337,0,0,out var soulEntry,out string soulReason) &&
-            soulReason == "resource-plan-ready" && soulEntry is { StartMap.Position: { X: 2, Y: 2 }, BossMap.Position: { X: 4, Y: 4 }, BossMap.Kind: "boss" } &&
-            soulMaze.Bosses.SequenceEqual([new DungeonPoint(6,6)]),
-            "337 保留 5×5 与格子外 Boss 6,6；入场用最远格作结算房，不把 6,6 搬进网格");
+            soulReason == "resource-plan-ready" && soulEntry is { IsBossRush: true, TimeoutMilliseconds: 120000,
+                StartMap.Position: { X: 2, Y: 2 }, BossMap.Position: { X: 4, Y: 4 }, BossMap.Kind: "boss" } &&
+            soulEntry.Maze.StaticTopology.Supported && soulMaze.Bosses.SequenceEqual([new DungeonPoint(6,6)]),
+            "337 保留 5×5 与格子外 Boss 6,6；拓扑不要求 6,6 落格，入场用最远格作结算房");
         var fake = soulMaze with { Width = 0, Height = 0, ResourceError = "maze 坐标超出 size",
             MapSpecification = [new("boss", new(0,0), 1, "map/fake.map")] };
         That(!DungeonEntryPlan.TryCreate(soul with { Mazes = [fake] }, eligible with { Level = 95 }, 337, 0, 0, out _, out string fakeReason) &&

@@ -301,6 +301,7 @@ internal static class SelfTestRunner
         WarpMazeConditionsTests.Run();
         DungeonClearConditionTests.Run();
         DungeonMapPoolTests.RunCore();
+        BossRushTests.RunCore();
         GriefTowerResourceTests.RunCore();
         GriefTowerRewardTests.RunCore();
         GriefTowerPersistenceTests.RunCore();
@@ -455,6 +456,7 @@ internal static class SelfTestRunner
         TournamentSettlementTests.Run();
         MainlineQuestBatchTests.Run(pvf, itemResources);
         DungeonMapPoolTests.Run(pvf);
+        BossRushTests.Run(pvf);
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
         await BeastSixthDifficultyTests.RunAsync(towns, pvf, characters, itemResources);
         await DungeonSelectionReturnTests.RunAsync(towns, characters, itemResources);

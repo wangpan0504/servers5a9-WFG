@@ -878,7 +878,8 @@ internal sealed partial class SinglePlayerDungeonRun
 
     public DungeonSettlementPreparation PrepareSettlement(DungeonClearFact fact, ReadOnlySpan<byte> reportBody,
         DungeonClearExperienceReward reward, DungeonCardReward? card = null, DungeonCardOptions? options = null,
-        DfoServer.Game.Inventory.Models.InventoryPlan? creatureInventory = null, GriefTowerClearReward? grief = null)
+        DfoServer.Game.Inventory.Models.InventoryPlan? creatureInventory = null, GriefTowerClearReward? grief = null,
+        BossRushClearReward? bossRush = null)
     {
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentNullException.ThrowIfNull(reward);
@@ -891,16 +892,19 @@ internal sealed partial class SinglePlayerDungeonRun
             return new(DungeonRunOutcome.Rejected);
         if ((pendingSettlement ?? committedSettlement) is { } frozen)
             return frozen.ReportBody.SequenceEqual(reportBody) && frozen.Reward == reward && frozen.Card == card && frozen.Options == options &&
-                ReferenceEquals(frozen.Grief,grief)
+                ReferenceEquals(frozen.Grief,grief) && ReferenceEquals(frozen.BossRush,bossRush)
                 ? new(committedSettlement is null ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate, frozen)
                 : new(DungeonRunOutcome.Rejected);
         card?.Validate();
         if (entry.Maze.IsGriefTower != (grief is not null) || grief is not null &&
             (grief.Before.InstanceId != identity.InstanceId || grief.Before.TaskAttempt != identity.TaskAttempt ||
                 grief.Floor.DungeonId != entry.DungeonId || grief.Floor.Layer != grief.Before.State.Layer || entry.GriefLayer != grief.Floor.Layer ||
-                card is not null || options is not null))
+                card is not null || options is not null || bossRush is not null))
             return new(DungeonRunOutcome.Rejected);
-        pendingSettlement = new(fact, reportBody, reward, current.Plan.Room.Map.Id, card, options, creatureInventory, grief);
+        if (entry.IsBossRush != (bossRush is not null) || bossRush is not null &&
+            (card is not null || options is not null || grief is not null))
+            return new(DungeonRunOutcome.Rejected);
+        pendingSettlement = new(fact, reportBody, reward, current.Plan.Room.Map.Id, card, options, creatureInventory, grief, bossRush);
         return new(DungeonRunOutcome.Accepted, pendingSettlement);
     }
 

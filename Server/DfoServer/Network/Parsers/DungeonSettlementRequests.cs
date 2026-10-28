@@ -48,4 +48,13 @@ internal static class DungeonSettlementRequests
             Array.AsReadOnly(body[(maximumAt + 1)..checksumAt].ToArray()));
         return true;
     }
+
+    public static bool TryParseBossRushReport(ReadOnlySpan<byte> body, out int first, out int second)
+    {
+        first = second = 0;
+        if (body.Length != 8) return false;
+        first = BinaryPrimitives.ReadInt32LittleEndian(body);
+        second = BinaryPrimitives.ReadInt32LittleEndian(body[4..]);
+        return true;
+    }
 }

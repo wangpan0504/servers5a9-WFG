@@ -20,7 +20,7 @@ internal static partial class FormalDungeonTcpTests
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"special-normal-entry"),gm:true,resources:resources);
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out _),"普通副本回归关闭无限疲劳");
-        VerifyBossRushTopologyRejection(fixture,resources);
+        VerifyBossRushEntry(fixture,resources);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         int sequence = 0;
@@ -295,16 +295,17 @@ internal static partial class FormalDungeonTcpTests
             }
         }
         await fixture.StopAsync();
-        var soulRejections = fixture.Events().Where(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry")
+        var soulEntries = fixture.Events().Where(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry")
             .Select(row => row.GetProperty("Detail")).Where(row => row.GetProperty("Request").GetProperty("DungeonIndex").GetUInt32() == 337).ToArray();
-        That(soulRejections.Length == 2 && soulRejections.All(row => !row.GetProperty("Accepted").GetBoolean() &&
-            row.GetProperty("Identity").ValueKind == System.Text.Json.JsonValueKind.Null &&
-            row.GetProperty("RejectReason").GetString() == "maze-topology-unsupported"),
-            "337经真实选图完成入场规划后由拓扑校验拒绝，重复记录准确原因且不发布实例身份");
+        That(soulEntries.Length == 1 && soulEntries[0].GetProperty("Accepted").GetBoolean() &&
+            soulEntries[0].GetProperty("Identity").ValueKind != System.Text.Json.JsonValueKind.Null,
+            "337经真实选图进入正式实例并记录入场身份");
     }
 
-    static void VerifyBossRushTopologyRejection(TcpTestFixture fixture,TcpTestResources resources)
+    static void VerifyBossRushEntry(TcpTestFixture fixture,TcpTestResources resources)
     {
+        var catalog = SelfTestCatalogs.Dungeons(resources.Archive);
+        var bosses = catalog.BossRush.Bosses;
         var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
             resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 337));
         var done = area.Quests.Concat(area.AnyQuests.Take(1)).ToHashSet();
@@ -321,22 +322,21 @@ internal static partial class FormalDungeonTcpTests
             fixture.Sql("INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id) VALUES($p0,$p1)",peer.Id,quest);
         peer.Select(prepared:true,resumeTown:true,room:false);
         SelectMap(peer,griefLayer:1);
-        string EntryState() => string.Join("\n",new[] { "characters","character_inventory_items","character_fatigue",
-            "character_dungeon_state","character_dungeon_growth_receipts","character_dungeon_loot_receipts",
-            "character_dungeon_card_rewards","character_dungeon_settlement_receipts","character_active_main_quests" }
-            .Select(table => fixture.Snapshot($"SELECT * FROM {table} ORDER BY 1,2")));
-        string before = EntryState();
         byte[] request = Selection();
         BinaryPrimitives.WriteUInt32LittleEndian(request,337);
         BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),0);
-        for (int repeat = 0; repeat < 2; repeat++)
-        {
-            peer.Send(16,request);
-            peer.Expect(1,16,[0,9,0,0]);
-            peer.Barrier();
-        }
-        peer.Send(37,new byte[8]);
-        peer.Barrier();
-        That(EntryState() == before,"337拒绝及重放加载不扣费、不预留尝试号、不产生奖励或任务进度，连接保持可用");
+        peer.Send(16,request);
+        peer.Expect(0,28);
+        peer.Expect(0,29);
+        byte[] info = peer.Expect(0,1488).Body;
+        byte[] data = peer.Expect(0,1487).Body;
+        That(info.Length == 4 + 9 * bosses.Length && BinaryPrimitives.ReadInt32LittleEndian(info) == bosses.Length &&
+            BinaryPrimitives.ReadInt32LittleEndian(info.AsSpan(4)) == bosses[0] && info.AsSpan(8,5).ToArray().All(value => value == 0),
+            "1488 按专表 24 条下发怪物编号，后 5 字节保持零");
+        That(data.Length == 9 && data[0] == 0 && BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(1)) == 0 &&
+            BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(5)) is >= 100000 and <= 120000,
+            "1487 入场 rank/score 为 0，剩余毫秒取自 120 秒时限");
+        Load(peer);
+        peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
     }
 }

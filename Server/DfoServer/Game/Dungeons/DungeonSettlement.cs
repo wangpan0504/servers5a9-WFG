@@ -23,12 +23,14 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
     public GuildDungeonProgress? GuildDungeon { get; init; }
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public GriefTowerReward? GriefReward { get; init; }
+    public BossRushClearReward? BossRushReward { get; init; }
 }
 
 // 冻结首份报告与经验候选；只有原实例保存的同一对象能取得提交资格。
 internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlySpan<byte> reportBody,
     DungeonClearExperienceReward reward, int mapId, DungeonCardReward? card = null, DungeonCardOptions? options = null,
-    DfoServer.Game.Inventory.Models.InventoryPlan? creatureInventory = null, GriefTowerClearReward? grief = null)
+    DfoServer.Game.Inventory.Models.InventoryPlan? creatureInventory = null, GriefTowerClearReward? grief = null,
+    BossRushClearReward? bossRush = null)
 {
     private readonly byte[] report = reportBody.ToArray();
     public Guid EventId { get; } = Guid.NewGuid();
@@ -40,6 +42,7 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
     public DungeonCardOptions? Options { get; } = options;
     public DfoServer.Game.Inventory.Models.InventoryPlan? CreatureInventory { get; } = creatureInventory;
     public GriefTowerClearReward? Grief { get; } = grief;
+    public BossRushClearReward? BossRush { get; } = bossRush;
     public AncientGateClear? AncientGate { get; private set; }
     public void FreezeAncientGate(AncientGateClear? value)
     {

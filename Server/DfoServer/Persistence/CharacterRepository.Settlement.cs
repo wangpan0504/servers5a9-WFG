@@ -88,6 +88,10 @@ internal sealed partial class CharacterRepository
             if (prepared.Grief is { } grief)
                 restored = restored with { GriefReward = grief.Reward, MailId = ReadGriefClear(db,tx,owner,prepared),
                     Inventory = new(expected.Inventory,current.Inventory,"grief_tower_reward") };
+            if (prepared.BossRush is { } rush)
+                restored = restored with { BossRushReward = rush,
+                    Inventory = rush.Delivery.Inventory.Changed
+                        ? new(expected.Inventory,current.Inventory,"boss_rush_reward") : restored.Inventory };
             if (ReadGuildDungeonReward(db, tx, owner, prepared) is { } guildMail)
                 restored = restored with { MailId = guildMail };
             tx.Commit();
@@ -215,6 +219,7 @@ internal sealed partial class CharacterRepository
         command.ExecuteNonQuery();
         ClearOrdinaryLuke(db, tx, owner, run);
         uint? griefMail = CommitGriefClear(db,tx,owner,expected,prepared);
+        uint? bossRushMail = CommitBossRushClear(db,tx,owner,expected,prepared);
         long guildNow = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var guildReward = CommitGuildDungeonReward(db, tx, owner, expected, prepared, guildNow);
         uint guildMileageGuildId = CommitGuildDungeonMileage(db, tx, owner, run, prepared);
@@ -266,10 +271,13 @@ internal sealed partial class CharacterRepository
             GuildContribution = guildContribution,
             GuildDungeon = guildDungeon,
             Card = prepared.Card, Options = prepared.Options,
-            GriefReward = prepared.Grief?.Reward, MailId = guildReward.Mail ?? griefMail,
+            GriefReward = prepared.Grief?.Reward, MailId = guildReward.Mail ?? griefMail ?? bossRushMail,
+            BossRushReward = prepared.BossRush,
             BlackDiamond = prepared.Options?.BlackDiamond,
-            Inventory = prepared.AncientGate is not null || prepared.Grief?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true }
-                ? new(expected.Inventory, committed.Inventory, prepared.Grief is null ? "creature_experience" : "grief_tower_reward") : null
+            Inventory = prepared.AncientGate is not null || prepared.Grief?.Delivery.Inventory.Changed == true ||
+                prepared.BossRush?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true }
+                ? new(expected.Inventory, committed.Inventory, prepared.Grief is not null ? "grief_tower_reward" :
+                    prepared.BossRush is not null ? "boss_rush_reward" : "creature_experience") : null
         };
     });
 
