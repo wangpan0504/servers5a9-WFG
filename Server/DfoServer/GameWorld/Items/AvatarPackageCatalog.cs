@@ -6,8 +6,11 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Items;
 
-// [avatar]四字段依次为物品、数量、期限/孔位类型索引、默认属性编号；默认属性是UI预览提示。
-internal sealed record AvatarPackageRow(int ItemId, ushort Count, ushort Type, byte DefaultAbility);
+// [avatar]四字段保留原默认预览值；强制属性另按物品编号绑定，不把-1改成合法选项。
+internal sealed record AvatarPackageRow(int ItemId, ushort Count, ushort Type, int DefaultAbility)
+{
+    public byte? ForcedAbility { get; init; }
+}
 internal sealed record AvatarPackageCategory(byte Category, byte Subcategory, ImmutableArray<AvatarPackageRow> Rows,
     string? PendingRule = null);
 internal sealed record AvatarPackageDefinition(int SelectionCount, ImmutableArray<int> Dimensions,
@@ -148,6 +151,7 @@ internal sealed class AvatarPackageCatalog
     {
         AvatarPackageCategory Reject(string reason) => new(category, subcategory, [], reason);
         var rows = ImmutableArray.CreateBuilder<AvatarPackageRow>();
+        Dictionary<int, byte>? forcedOptions = null;
         int at = 0;
         while (at < body.Length)
         {
@@ -164,6 +168,18 @@ internal sealed class AvatarPackageCatalog
                     values.Skip(1).Any(value => !int.TryParse(value, out _))) return Reject("装扮选择提示无效");
                 continue; // UI提示不代替客户端实际选择，也不产生额外奖励。
             }
+            if (tag == "force insert avatar option")
+            {
+                const string forceEnd = "[/force insert avatar option]";
+                if (forcedOptions is not null || !body.AsSpan(at).StartsWith(forceEnd, StringComparison.Ordinal) ||
+                    values.Length == 0 || values.Length % 2 != 0) return Reject("装扮强制属性行宽、闭合或声明无效");
+                at += forceEnd.Length;
+                forcedOptions = new();
+                for (int i = 0; i < values.Length; i += 2)
+                    if (!int.TryParse(values[i], out int id) || id <= 0 || !byte.TryParse(values[i + 1], out byte ability) ||
+                        !forcedOptions.TryAdd(id, ability)) return Reject("装扮强制属性编号无效或重复");
+                continue;
+            }
             if (tag != "avatar") return Reject(tag);
             const string end = "[/avatar]";
             if (!body.AsSpan(at).StartsWith(end, StringComparison.Ordinal) || values.Length == 0 || values.Length % 4 != 0)
@@ -172,12 +188,20 @@ internal sealed class AvatarPackageCatalog
             for (int i = 0; i < values.Length; i += 4)
             {
                 if (!int.TryParse(values[i], out int id) || id <= 0 || !ushort.TryParse(values[i + 1], out ushort count) || count == 0 ||
-                    !ushort.TryParse(values[i + 2], out ushort type) || !byte.TryParse(values[i + 3], out byte ability))
+                    !ushort.TryParse(values[i + 2], out ushort type) || !int.TryParse(values[i + 3], out int ability) || ability is < -1 or > 255)
                     return Reject("装扮奖励参数超出字段范围");
                 rows.Add(new(id, count, type, ability));
             }
         }
-        return rows.Count == 0 ? Reject("装扮分类为空") : new(category, subcategory, rows.ToImmutable());
+        if (rows.Count == 0) return Reject("装扮分类为空");
+        if (forcedOptions is not null)
+        {
+            if (!forcedOptions.Keys.ToHashSet().SetEquals(rows.Select(row => row.ItemId)))
+                return Reject("装扮强制属性未完整对应全部奖励");
+            for (int i = 0; i < rows.Count; i++) rows[i] = rows[i] with { ForcedAbility = forcedOptions[rows[i].ItemId] };
+        }
+        else if (rows.Any(row => row.DefaultAbility < 0)) return Reject("装扮默认属性超出字段范围");
+        return new(category, subcategory, rows.ToImmutable());
     }
 
     internal static AvatarPackageItemDefinition ParseAvatar(string text,

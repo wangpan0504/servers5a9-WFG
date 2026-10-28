@@ -43,7 +43,8 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         AvatarPackageRow[]? selected = null;
         foreach (var category in definition.Categories)
         {
-            if (!TrySelect(definition, category, ids, out var rows)) continue;
+            if (!TrySelect(definition, category, ids, out var rows) || rows.Any(row => row.ForcedAbility is byte forced &&
+                !request.Choices.Any(choice => choice.ItemId == row.ItemId && choice.Option == forced))) continue;
             // 男鬼剑/黑暗武士等分类可声明同一套装；完全等价的奖励可匹配，参数冲突则拒绝。
             if (selected is not null && !Equivalent(selected, rows)) return InventoryResult.Reject(19);
             selected ??= rows;
@@ -88,6 +89,8 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 bool hasChoice = options.TryGetValue(row.ItemId, out byte ability);
                 if (template.Kind != ItemKind.Avatar || !template.Expiration.SupportsCreation || avatar.PendingRule is not null ||
                     !avatar.Types.IsEmpty && row.Type >= avatar.Types.Length) return InventoryResult.Reject(19);
+                if (row.ForcedAbility is byte forced && (!hasChoice || ability != forced || !avatar.Abilities.Contains(forced)))
+                    return InventoryResult.Reject(19);
                 if (avatar.RequiresAbilityChoice)
                 {
                     if (!hasChoice || !avatar.Abilities.Contains(ability)) return InventoryResult.Reject(19);
@@ -179,6 +182,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
     }
 
     static bool Equivalent(AvatarPackageRow[] left, AvatarPackageRow[] right) => left.OrderBy(row => row.ItemId)
-        .ThenBy(row => row.Count).ThenBy(row => row.Type).ThenBy(row => row.DefaultAbility)
-        .SequenceEqual(right.OrderBy(row => row.ItemId).ThenBy(row => row.Count).ThenBy(row => row.Type).ThenBy(row => row.DefaultAbility));
+        .ThenBy(row => row.Count).ThenBy(row => row.Type).ThenBy(row => row.DefaultAbility).ThenBy(row => row.ForcedAbility)
+        .SequenceEqual(right.OrderBy(row => row.ItemId).ThenBy(row => row.Count).ThenBy(row => row.Type)
+            .ThenBy(row => row.DefaultAbility).ThenBy(row => row.ForcedAbility));
 }

@@ -15,6 +15,7 @@ internal static class AvatarPackageTests
 {
     public static void RunCore()
     {
+        ForcedOptionsParsing();
         var full = Package("101 1 3 0 102 2 4 37", 0);
         That(full.Recognized, "装扮族身份与当前可用性分别保留");
         string firstGrow = "[usable first growtype]\n5\n[/usable first growtype]\n";
@@ -127,6 +128,37 @@ internal static class AvatarPackageTests
         That(captured is { Slot: 73, Count: 1, Category: 0, Subcategory: 0 } && captured.Choices.SequenceEqual(CapturedChoices()) &&
             captured.ItemIds.SequenceEqual(CapturedChoices().Select(choice => choice.ItemId)), "实际91B请求完整保留九部位和九项选择，不按普通160零扩展布局截断");
         QualificationAndDeadlines();
+    }
+
+    static void ForcedOptionsParsing()
+    {
+        string Forced(string pairs, string rows = "101 1 4 -1 102 2 4 -1") => PackageText(rows).Replace("[avatar]",
+            "[force insert avatar option]\n" + pairs + "\n[/force insert avatar option]\n[avatar]");
+        var definition = AvatarPackageCatalog.Parse(Forced("102 0 101 138"));
+        That(definition.Available && definition.Categories[0].PendingRule is null && definition.Categories[0].Rows.SequenceEqual(
+            new AvatarPackageRow[] { new(101, 1, 4, -1) { ForcedAbility = 138 }, new(102, 2, 4, -1) { ForcedAbility = 0 } }),
+            "强制属性按物品编号绑定显式key，保留默认-1、原奖励顺序和全部数量，不按映射顺序或属性序号转换");
+        var ordinary = Package("101 1 3 0 102 2 4 37");
+        That(ordinary.Categories[0].Rows.All(row => row.ForcedAbility is null) &&
+            ordinary.Categories[0].Rows.Select(row => row.DefaultAbility).SequenceEqual(new[] { 0, 37 }),
+            "普通装扮默认预览与强制属性独立，未声明force不改变已有玩家选择合同");
+        foreach (string invalid in new[]
+        {
+            Forced(""), Forced("101 138 102"), Forced("0 138 102 0"), Forced("101 -1 102 0"),
+            Forced("101 256 102 0"), Forced("101 138"), Forced("101 138 103 0"),
+            Forced("101 138 102 0 103 0"), Forced("101 138 101 138 102 0"), Forced("101 138 101 84 102 0"),
+            Forced("101 138 102 0").Replace("[avatar]", "[force insert avatar option]\n101 138 102 0\n[/force insert avatar option]\n[avatar]"),
+            Forced("101 138 102 0").Replace("[/force insert avatar option]", ""),
+            Forced("101 138 102 0").Replace("[/force insert avatar option]", "[/force insert avatar option]\n[/force insert avatar option]"),
+            Forced("101 138 102 0", "101 1 4 -2 102 2 4 -1"),
+            Forced("101 138 102 0", "101 1 4 256 102 2 4 -1"),
+            PackageText("101 1 4 -1 102 2 4 -1")
+        })
+        {
+            var rejected = AvatarPackageCatalog.Parse(invalid);
+            That(rejected.Recognized && (!rejected.Available || rejected.Categories.Any(row => row.PendingRule is not null)),
+                "残缺、重复、冲突、越界和未覆盖全部奖励的强制属性不得截断发奖或放行默认-1");
+        }
     }
 
     static void DuplicateAbilityDeclarations()
@@ -243,6 +275,7 @@ internal static class AvatarPackageTests
 
     public static void RunResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
     {
+        ForcedOptionsResources(towns, resources, packages);
         DuplicateConstantMagnitudeResources(towns, resources, packages);
         FirstGrowResources(towns, resources, packages);
         RankZeroResources(towns, resources, packages);
@@ -300,6 +333,61 @@ internal static class AvatarPackageTests
         PeriodDeadlinePlans(towns, resources);
         CapturedNoAbilitySelections(towns, resources, packages);
         LegacySelections(towns, resources, packages);
+    }
+
+    static void ForcedOptionsResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
+    {
+        // 两个分类回显相同ID但两件上衣的强制key不同；预期来自各自完整资源行。
+        AvatarPackageChoice[] first = [new(101500896, 70), new(101501102, 76), new(101550946, 0), new(101561081, 0),
+            new(101570842, 2), new(101520903, 2), new(101511262, 0), new(101530865, 4), new(101541018, 0)];
+        AvatarPackageChoice[] second = [new(101501102, 78), new(101500896, 84), new(101550946, 0), new(101561081, 0),
+            new(101570842, 2), new(101520903, 2), new(101511262, 0), new(101530865, 4), new(101541018, 0)];
+        var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces);
+        var now = DateTimeOffset.FromUnixTimeSeconds(2_000_000_000);
+        var source = new InventoryItem(1000, Bag(), InventoryRewardGrantService.Create(resources.Items.Get(10305409), utcNow: now));
+        var before = new InventorySnapshot([source], Gold: 321);
+        var character = new Character(1, 0, "ForcedAvatar", 0, towns.Room, towns.InitialReturn) { Job = 0, Level = 95, Inventory = before };
+        foreach (var sample in new[] { (Subcategory: (byte)0, Choices: first), (Subcategory: (byte)1, Choices: second) })
+        {
+            int[] ids = sample.Choices.Select(choice => choice.ItemId).ToArray();
+            var request = new AvatarPackageOpenRequest(73, 1, 0, sample.Subcategory, ids, sample.Choices);
+            var result = service.Open(character, request, out var receipt, now);
+            AssertFull(result, receipt, sample.Choices, "160");
+            var cera = new CeraPackageOpenRequest(73, sample.Choices.Select(choice => new CeraPackageChoice(choice.ItemId, choice.Ability)).ToArray());
+            result = service.OpenCeraPackage(character, cera, out receipt, now);
+            AssertFull(result, receipt, sample.Choices, "518");
+        }
+        // 84是第一件上衣的正式合法key，但不属于0/0；不能只验证目标能力集合。
+        var wrong = first.Select(choice => choice.ItemId == 101500896 ? new AvatarPackageChoice(choice.ItemId, 84) : choice).ToArray();
+        foreach (var invalid in new[] { wrong, first[..^1], first.Select(choice => choice.ItemId == 101500896 ? new AvatarPackageChoice(choice.ItemId, byte.MaxValue) : choice).ToArray() })
+        {
+            var request = new AvatarPackageOpenRequest(73, 1, 0, 0, first.Select(choice => choice.ItemId).ToArray(), invalid);
+            var denied = service.Open(character, request, out var receipt, now);
+            That(!denied.Accepted && denied.Plan is null && receipt is null && character.Inventory == before,
+                "160拒绝合法但不符本分类的force、缺项和伪造选项，保留完整源与资产");
+        }
+        var mixed = first.Select(choice => choice.ItemId == 101501102 ? new AvatarPackageChoice(choice.ItemId, 78) : choice).ToArray();
+        var conflict = service.OpenCeraPackage(character, new(73, mixed.Select(choice => new CeraPackageChoice(choice.ItemId, choice.Ability)).ToArray()), out var conflictReceipt, now);
+        That(!conflict.Accepted && conflict.Plan is null && conflictReceipt is null && character.Inventory == before,
+            "518不能混用两个分类的合法key拼成无原始完整分类的请求");
+
+        void AssertFull(InventoryResult result, BoosterReceipt? receipt, AvatarPackageChoice[] choices, string command)
+        {
+            That(result.Accepted && result.Plan is not null && receipt is not null && character.Inventory == before &&
+                result.Plan.After.Find(Bag()) is null && result.Plan.After.Gold == 321 && result.Plan.After.Items.Length == 9 &&
+                receipt.Rewards.OrderBy(row => row.ItemId).SequenceEqual(choices.OrderBy(row => row.ItemId).Select(row => new BoosterGrantedItem(row.ItemId, 1))),
+                command + "按完整force匹配分类，单次消费源并保留全部九件奖励，不因同ID异force错误拒绝");
+            foreach (var choice in choices)
+            {
+                var reward = result.Plan!.After.Items.Single(item => item.Core.ItemId == choice.ItemId);
+                var type = packages.GetAvatar(choice.ItemId).Types[4];
+                That(reward.Core.Durability == choice.Ability && reward.Core.ExpireTime == 0 && reward.Avatar is { ExpireTime: 0 } &&
+                    reward.Avatar.Socket0 == AvatarSocket.Empty(type.Sockets.First) && reward.Avatar.Socket1 == AvatarSocket.Empty(type.Sockets.Second) &&
+                    reward.Avatar.Socket2 == AvatarSocket.Empty(type.Sockets.Third) && reward.Avatar.Socket3 == AvatarSocket.Empty(type.Sockets.Fourth) &&
+                    reward.Avatar.Socket4 == AvatarSocket.Empty(type.Sockets.Fifth),
+                    command + "完整保存该分类明确key、type4永久期限与五个原始孔位");
+            }
+        }
     }
 
     static void DuplicateConstantMagnitudeResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
@@ -467,7 +555,7 @@ internal static class AvatarPackageTests
             var role = new Character(1, 0, "BranchHat", 0, towns.Room, towns.InitialReturn)
                 { Job = id == 490703950 ? (byte)0 : (byte)3, GrowType = 0x25, Level = 95, Inventory = new([source]) };
             var request = new AvatarPackageOpenRequest(73, 1, category.Category, category.Subcategory, [row.ItemId],
-                avatar.RequiresAbilityChoice ? [new(row.ItemId, row.DefaultAbility)] : []);
+                avatar.RequiresAbilityChoice ? [new(row.ItemId, row.ForcedAbility ?? checked((byte)row.DefaultAbility))] : []);
             That(!service.Open(role with { GrowType = 4 }, request, out _, now).Accepted,
                 "错误分支不能通过选择装扮入口绕过资格 " + id);
             var opened = service.Open(role, request, out var receipt, now);
@@ -494,11 +582,12 @@ internal static class AvatarPackageTests
                 var template = resources.Items.Get(row.ItemId);
                 var avatar = packages.GetAvatar(row.ItemId);
                 That(template.Kind == ItemKind.Avatar && avatar.PendingRule is null && (avatar.Types.IsEmpty || row.Type < avatar.Types.Length) &&
-                    avatar.Abilities.Contains(row.DefaultAbility), "全部实际无分类奖励的类型、期限及默认属性有效 " + row.ItemId);
+                    avatar.Abilities.Contains(row.ForcedAbility ?? checked((byte)row.DefaultAbility)), "全部实际无分类奖励的类型、期限及默认属性有效 " + row.ItemId);
                 var source = new InventoryItem(1000, Bag(), InventoryRewardGrantService.Create(resources.Items.Get(id), 2, shopExpiration: true));
                 var role = new Character(1, 0, "RankZero", 0, towns.Room, towns.InitialReturn) { Job = template.Jobs == 0 ? (byte)0 :
                     (byte)Enumerable.Range(0, 16).First(job => (template.Jobs & (1 << job)) != 0), Level = 95, Inventory = new([source]) };
-                var request = new AvatarPackageOpenRequest(73, 1, 0, 0, [row.ItemId], avatar.RequiresAbilityChoice ? [new(row.ItemId, row.DefaultAbility)] : []);
+                var request = new AvatarPackageOpenRequest(73, 1, 0, 0, [row.ItemId],
+                    avatar.RequiresAbilityChoice ? [new(row.ItemId, row.ForcedAbility ?? checked((byte)row.DefaultAbility))] : []);
                 var result = service.Open(role, request, out var receipt);
                 That(result.Accepted && result.Plan!.After.Find(Bag())!.Core.Count == 1 &&
                     result.Plan.After.Items.Single(item => item.Core.Kind == ItemKind.Avatar) is { Avatar: not null } &&
