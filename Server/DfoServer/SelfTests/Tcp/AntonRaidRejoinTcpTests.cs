@@ -92,6 +92,7 @@ internal static class AntonRaidRejoinTcpTests
             AntonRaidTcpTests.Drain(again);
             again.Send(668, Build(w => w.Write(key)));
             Bytes(AntonRaidTcpTests.Until(again, 1, 668).Body, [0, 19, 0], "关闭时668仍是原拒绝");
+            AssertRejoinClean(fixture, again, "关闭");
             await fixture.StopAsync();
             var events = CompleteEvents(logs);
             That(!events.Any(row => row.GetProperty("Kind").GetString() == "raid_rejoin_notice"), "开关关闭不在重登后下发835");
@@ -109,6 +110,7 @@ internal static class AntonRaidRejoinTcpTests
         Bytes(ReadAck(again, 668), [0, 19, 0], "错误key拒绝");
         var members = AntonRaidTcpTests.Information(leader, key, 1).Members;
         That(members.All(row => row.Character != again.Id), "拒绝后原成员没有回到当前名册");
+        AssertRejoinClean(fixture, again, "开启");
         await fixture.StopAsync();
         var saved = CompleteEvents(logs);
         That(LastReason(saved, "raid_rejoin_notice") == "835-tail-semantics-unknown", "835尾部在日志中标为unknown");
@@ -116,6 +118,14 @@ internal static class AntonRaidRejoinTcpTests
             row.GetProperty("Detail").GetProperty("Reason").GetString() == "recovery-sequence-unknown"), "成功恢复包序unknown，不替换owner");
         That(saved.Any(row => row.GetProperty("Kind").GetString() == "raid_rejoin_rejected" &&
             row.GetProperty("Detail").GetProperty("Reason").GetString() == "duplicate-rejoin"), "重复重入有独立原因");
+    }
+
+    static void AssertRejoinClean(TcpTestFixture fixture, TcpPeer again, string why)
+    {
+        That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[2L]],
+            why + " 时断线和 668 不退票也不再扣");
+        again.Send(833, Build(w => { w.Write((byte)0); w.Write(0u); w.Write(0x100u); w.Write(0u); w.Write(Name("")); }));
+        That(AntonRaidTcpTests.Until(again, 0, 756).Body.Length >= 12, why + " 时重连后仍能 833 寻找队");
     }
 
     static string? LastReason(JsonElement[] events, string kind) => events.Last(row => row.GetProperty("Kind").GetString() == kind)

@@ -47,7 +47,8 @@ internal static partial class AntonRaidTcpTests
         peer.Select();
         Drain(peer);
         var report = AntonTcpProbe.Play(peer, catalog);
-        That(report.Started && report.Entered210 && report.Reward && report.Opcode586 > 0 && report.Opcode596 == 0 && report.Opcode597 == 0,
+        That(report.Started && report.Entered210 && report.Reward && report.Opcode586 > 0 &&
+                report.Opcode596 == 0 && report.Opcode597 == 0 && report.Opcode601 == 0,
             "假客户端跑完开战、210 和 Reward：" + report.Summary());
         That(fixture.Query("SELECT town, area FROM characters WHERE name='AntProbe'") is [[19L, 2L]] &&
             fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[1L]],

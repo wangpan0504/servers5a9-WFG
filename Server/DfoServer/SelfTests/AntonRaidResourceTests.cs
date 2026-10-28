@@ -151,6 +151,9 @@ internal static class AntonRaidResourceTests
         That(resources.Issues.IsEmpty, "真实安徒恩资源语法完整支持：" + string.Join(';', resources.Issues.Select(i => $"{i.Code}@{i.TokenIndex}:{i.Detail}")));
         That(script.WaitingRoom == new RaidWaitingRoom(19, 2) && script.EntryCost == new RaidCost(10096296, 1) &&
             script.RetryItem == script.EntryCost, "真实候战室与费用/重试声明，不表示已扣票");
+        That(script.Headers.Any(field => field.Tag == "[weekly clear count]" && field.Values.Length == 1 && field.Values[0].Number == 2),
+            "安徒恩 [weekly clear count] 声明为 2（客户端写入 +0x190）。实际 " +
+            string.Join(',', script.Headers.Select(field => field.Tag + "=" + string.Join('/', field.Values.Select(value => value.Number.ToString())))));
         That(script.Phases.Length == 2 && script.Symbols.Count == 41 && script.Phases.Select(p => p.Dungeons.Length).SequenceEqual(new[] { 7, 7 }) &&
             script.Phases.Select(p => p.Rules.Length).SequenceEqual(new[] { 28, 23 }), "真实两阶段14地下城51规则及41符号完整保序");
         That(script.Phases.Select(p => p.Rewards.Length).SequenceEqual(new[] { 6, 8 }) &&

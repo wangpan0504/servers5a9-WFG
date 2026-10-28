@@ -180,19 +180,27 @@ internal static class AntonTcpProbe
         if (stopAfter == "start")
             return report;
         RejectTail(peer, 210);
-        Enter(peer, catalog, 210, report, clear: stopAfter == "phase");
+        Enter(peer, catalog, 210, report, clear: stopAfter is "phase" or "clear210", requireClearNotice: stopAfter != "clear210");
         report.Entered210 = true;
         if (stopAfter == "enter")
             return report;
+        if (stopAfter == "clear210")
+        {
+            ExpectClosed(peer, 212);
+            ExpectClosed(peer, 216);
+            if (report.Reward || report.Opcode586 != 0 || report.Opcode596 != 0 || report.Opcode597 != 0 || report.Opcode601 != 0)
+                throw new InvalidOperationException("关闭阶段推进后清 210 仍推进了战况：" + report.Summary());
+            return report;
+        }
         ExpectClosed(peer, 211);
         foreach (int dungeon in new[] { 212, 214, 213, 215 })
-            Enter(peer, catalog, dungeon, report, clear: true);
+            Enter(peer, catalog, dungeon, report, clear: true, stressReward: true);
         if (!report.Reward)
             throw new InvalidOperationException("213/215 清完后没有见到 Reward 态 587 [3,0]");
         if (report.Opcode586 == 0)
             throw new InvalidOperationException("阶段推进没有 586");
-        if (report.Opcode596 != 0 || report.Opcode597 != 0)
-            throw new InvalidOperationException($"不应发送 596/597，实际 596={report.Opcode596} 597={report.Opcode597}");
+        if (report.Opcode596 != 0 || report.Opcode597 != 0 || report.Opcode601 != 0)
+            throw new InvalidOperationException($"不应发送 596/597/601，实际 596={report.Opcode596} 597={report.Opcode597} 601={report.Opcode601}");
         return report;
     }
 
@@ -222,7 +230,8 @@ internal static class AntonTcpProbe
             throw new InvalidOperationException(dungeon + " 仍是 open，15 被接受");
     }
 
-    static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear)
+    static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear,
+        bool stressReward = false, bool requireClearNotice = true)
     {
         if (dungeon != 210)
         {
@@ -274,15 +283,18 @@ internal static class AntonTcpProbe
         int seen = report.Opcode586;
         var cleared = Flush(peer, "117 确认 " + dungeon);
         Note(report, cleared);
-        if (report.Opcode586 == seen && !cleared.Any(p => p is { Kind: 0, Opcode: 115 or 586 }))
+        if (requireClearNotice && report.Opcode586 == seen && !cleared.Any(p => p is { Kind: 0, Opcode: 115 or 586 }))
             throw new InvalidOperationException(dungeon + " 的清图没有 586，117 也没有确认");
         if (cleared.Any(p => p is { Kind: 0, Opcode: 587, Body: [3, 0] }))
             report.Reward = true;
+        if (stressReward && report.Reward)
+            StressReward(peer, report, check);
         peer.Send(42);
         Note(report, Flush(peer, "42 返回候战室"));
     }
 
-    static void ClearRoom(TcpPeer peer, byte[] map, AntonProbeReport report, out ushort bossKey, out byte bossLevel, bool bossRoom)
+    static void ClearRoom(TcpPeer peer, byte[] map, AntonProbeReport report, out ushort bossKey, out byte bossLevel, bool bossRoom,
+        TcpPeer? witness = null, AntonProbeReport? witnessReport = null)
     {
         bossKey = 0;
         bossLevel = 0;
@@ -300,6 +312,8 @@ internal static class AntonTcpProbe
             peer.Send(39, FormalDungeonTcpTests.Death(key, peer.Id, level));
             var died = Flush(peer, "39 key " + key);
             Note(report, died);
+            if (witness is not null)
+                Note(witnessReport!, Barrier(witness, "39 队员 key " + key));
             if (!died.Any(p => p is { Kind: 0, Opcode: 38 }))
                 throw new InvalidOperationException($"怪物 {key} 死亡未被接受");
             if (boss || bossRoom && bossKey == 0)
@@ -348,12 +362,140 @@ internal static class AntonTcpProbe
         throw new InvalidOperationException(why + " 超过读取预算");
     }
 
+    internal static List<WirePacket> Barrier(TcpPeer peer, string why) => Flush(peer, why);
+
+    // Reward 态下再发一次 117，并选已隐藏的 216。只锁定现有回包：不崩、不发 601/596/597、不进图。
+    static void StressReward(TcpPeer peer, AntonProbeReport report, byte[] check)
+    {
+        peer.Send(117, check);
+        var again = Flush(peer, "117 Reward 重复");
+        Note(report, again);
+        if (again.Any(packet => packet.Opcode is 596 or 597 or 601) || again.Any(packet => packet is { Kind: 0, Opcode: 28 or 29 }))
+            throw new InvalidOperationException("Reward 后重复 117 发出了进图或发奖包");
+        byte[] closed = (byte[])LiveSelect210.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(closed, 216);
+        peer.Send(16, closed);
+        var rejected = Flush(peer, "16 Reward 态进 216");
+        Note(report, rejected);
+        if (rejected.Any(packet => packet.Opcode is 28 or 29 or 601 or 596 or 597))
+            throw new InvalidOperationException("Reward 态进 216 仍发布了进图或发奖包");
+        // 清图后仍在副本里，16 不在 MapSelect，当前实现不回 ACK16。连接必须还在。
+        var ack = rejected.LastOrDefault(packet => packet is { Kind: 1, Opcode: 16 });
+        if (ack is not null && ack.Body is not [0, 9, 0, 0])
+            throw new InvalidOperationException("Reward 态进 216 的 ACK 不是拒绝：" + Hex(ack.Body));
+    }
+
+    internal static void RejectClosed(TcpPeer peer, TcpPeer? witness, int dungeon)
+    {
+        peer.Send(15, DungeonId(dungeon));
+        var opened = Flush(peer, "15 关闭图 " + dungeon);
+        if (witness is not null)
+            _ = Barrier(witness, "15 关闭图队员 " + dungeon);
+        if (opened.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] } || packet.Opcode is 28 or 29))
+            throw new InvalidOperationException(dungeon + " 在未开放时被 15 接受");
+        var ack = opened.LastOrDefault(packet => packet is { Kind: 1, Opcode: 15 });
+        if (ack is not { Body: [0, 1, 0] })
+            throw new InvalidOperationException(dungeon + " 的 15 拒绝不是 [0,1,0]：" + (ack is null ? "没有 ACK15" : Hex(ack.Body)));
+    }
+
+    internal static void RejectSelect(TcpPeer peer, TcpPeer? witness, int dungeon, uint unknown21 = uint.MaxValue)
+    {
+        byte[] request = (byte[])LiveSelect210.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(request, (uint)dungeon);
+        BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(21), unknown21);
+        peer.Send(16, request);
+        var rejected = Flush(peer, "16 拒绝 " + dungeon);
+        if (witness is not null)
+            _ = Barrier(witness, "16 拒绝队员 " + dungeon);
+        if (rejected.Any(packet => packet.Opcode is 28 or 29))
+            throw new InvalidOperationException(dungeon + " 的拒绝仍发布了 28/29");
+        var ack = rejected.LastOrDefault(packet => packet is { Kind: 1, Opcode: 16 });
+        if (ack is not { Body: [0, 9, 0, 0] })
+            throw new InvalidOperationException(dungeon + " 的 16 拒绝不是 [0,9,0,0]：" + (ack is null ? "没有 ACK16" : Hex(ack.Body)));
+    }
+
+    internal static void EnterSquad(TcpPeer leader, TcpPeer member, RaidDungeonCatalog catalog, int dungeon,
+        AntonProbeReport leaderReport, AntonProbeReport memberReport)
+    {
+        byte[] request = (byte[])LiveSelect210.Clone();
+        BinaryPrimitives.WriteUInt32LittleEndian(request, (uint)dungeon);
+        leader.Send(16, request);
+        var entered = Flush(leader, "16 进图 " + dungeon);
+        var witnessed = Barrier(member, "16 队员进图 " + dungeon);
+        Note(leaderReport, entered);
+        Note(memberReport, witnessed);
+        var info = entered.LastOrDefault(packet => packet is { Kind: 0, Opcode: 28 } && packet.Body.Length >= 10 && TcpPeer.U32(packet.Body) == (uint)dungeon);
+        var map = entered.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 19);
+        var memberMap = witnessed.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 19);
+        if (info is null || map is null || memberMap is null)
+            throw new InvalidOperationException(dungeon + " 分队没有双方 28/29");
+        leader.Send(37, new byte[8]);
+        member.Send(37, new byte[8]);
+        Note(leaderReport, Flush(leader, "37 加载"));
+        Note(memberReport, Barrier(member, "37 队员加载"));
+        var path = Route(catalog, dungeon, info.Body[7], map.Body[0], map.Body[1], info.Body[8], info.Body[9]);
+        ClearRoom(leader, map.Body, leaderReport, out ushort bossKey, out byte bossLevel,
+            path[0].X == info.Body[8] && path[0].Y == info.Body[9], member, memberReport);
+        for (int i = 1; i < path.Length; i++)
+        {
+            byte[] move = new byte[100];
+            move[0] = checked((byte)path[i].X);
+            move[1] = checked((byte)path[i].Y);
+            leader.Send(45, move);
+            var moved = Flush(leader, $"45 -> {path[i].X},{path[i].Y}");
+            var memberMoved = Barrier(member, $"45 队员 -> {path[i].X},{path[i].Y}");
+            Note(leaderReport, moved);
+            Note(memberReport, memberMoved);
+            map = moved.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 19)
+                ?? throw new InvalidOperationException($"{dungeon} 移动到 {path[i].X},{path[i].Y} 没有 29");
+            leader.Send(37, new byte[8]);
+            member.Send(37, new byte[8]);
+            Note(leaderReport, Flush(leader, "37 下一房"));
+            Note(memberReport, Barrier(member, "37 队员下一房"));
+            ClearRoom(leader, map.Body, leaderReport, out ushort nextBoss, out byte nextLevel, i + 1 == path.Length, member, memberReport);
+            if (i + 1 == path.Length)
+            {
+                bossKey = nextBoss;
+                bossLevel = nextLevel;
+            }
+        }
+        byte[] check = new byte[39];
+        BinaryPrimitives.WriteUInt16LittleEndian(check, leader.Id);
+        BinaryPrimitives.WriteUInt16LittleEndian(check.AsSpan(2), bossKey);
+        BinaryPrimitives.WriteUInt32LittleEndian(check.AsSpan(13), bossLevel);
+        BinaryPrimitives.WriteUInt64LittleEndian(check.AsSpan(17), 504);
+        leader.Send(117, check);
+        int seen = leaderReport.Opcode586;
+        var cleared = Flush(leader, "117 确认 " + dungeon);
+        var memberCleared = Barrier(member, "117 队员 " + dungeon);
+        Note(leaderReport, cleared);
+        Note(memberReport, memberCleared);
+        if (leaderReport.Opcode586 == seen && !cleared.Any(packet => packet is { Kind: 0, Opcode: 115 or 586 }))
+            throw new InvalidOperationException(dungeon + " 的分队清图没有 586，117 也没有确认");
+        if (memberReport.Opcode586 == 0)
+            throw new InvalidOperationException("队员没有收到 586");
+        leader.Send(42);
+        member.Send(42);
+        Note(leaderReport, Flush(leader, "42 返回候战室"));
+        Note(memberReport, Barrier(member, "42 队员返回"));
+    }
+
     static void Note(AntonProbeReport report, List<WirePacket> rows)
     {
-        report.Opcode586 += rows.Count(p => p is { Kind: 0, Opcode: 586 });
-        report.Opcode596 += rows.Count(p => p.Opcode == 596);
-        report.Opcode597 += rows.Count(p => p.Opcode == 597);
-        if (rows.Any(p => p is { Kind: 0, Opcode: 587, Body: [3, 0] }))
+        foreach (var packet in rows)
+        {
+            if (packet is { Kind: 0, Opcode: 586 })
+            {
+                report.Opcode586++;
+                report.States.Add(packet.Body.ToArray());
+            }
+            else if (packet.Opcode == 596) report.Opcode596++;
+            else if (packet.Opcode == 597) report.Opcode597++;
+            else if (packet.Opcode == 601) report.Opcode601++;
+            if (packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 18)
+                report.Maps.Add(packet.Body.ToArray());
+        }
+        if (rows.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [3, 0] }))
             report.Reward = true;
     }
 
@@ -520,8 +662,11 @@ internal static class AntonTcpProbe
         public int Opcode586;
         public int Opcode596;
         public int Opcode597;
+        public int Opcode601;
+        public List<byte[]> States { get; } = [];
+        public List<byte[]> Maps { get; } = [];
         public string Summary() =>
-            $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597}";
+            $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597} 601={Opcode601}";
     }
 
     sealed record ProbeArgs(bool Seed, string? Host, int? ChannelPort, int? GamePort, string? Account, string Digest,
