@@ -34,6 +34,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
         int failures = 0;
         bool returnCommitted = false;
         AntonRaidBattle? originalBattle = null;
+        string prefix = context.Session.CurrentRaidBattle(actor)?.Kind == RaidKind.Anton ? "anton" : "luke";
         while (!stop.IsCancellationRequested)
         {
             try
@@ -51,7 +52,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                         returnCommitted = true;
                         using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
                         await town.ReturnFromFormalDungeonAsync(context,
-                            new(returned.Character, returned.Generation, returned.SelectionEpoch), "luke_phase_selection_return");
+                            new(returned.Character, returned.Generation, returned.SelectionEpoch), prefix + "_phase_selection_return");
                     }
                     return;
                 }
@@ -60,13 +61,13 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                 if (departure.Error != 0)
                 {
                     // 未决资产事务不能丢弃；断开原连接，由既有持久回执/实例清理路径收尾。
-                    log.Write("luke_phase_exit_failed", new { Connection = context.Id, view.Instance, view.Phase, Reason = "pending-operation" });
+                    log.Write(prefix + "_phase_exit_failed", new { Connection = context.Id, view.Instance, view.Phase, Reason = "pending-operation" });
                     context.Disconnect();
                     return;
                 }
                 returnCommitted = true;
                 await PartyDungeonProjection.PublishAsync(departure.DungeonNotices);
-                log.Write("luke_phase_expired", new { Connection = context.Id, view.Instance, view.Phase, Reason = "local-policy", State = "returned" });
+                log.Write(prefix + "_phase_expired", new { Connection = context.Id, view.Instance, view.Phase, Reason = "local-policy", State = "returned" });
                 return;
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested || context.Stop.IsCancellationRequested) { return; }
@@ -74,11 +75,11 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
             {
                 failures++;
                 if (failures <= 3 || failures % 32 == 0)
-                    log.Write("luke_phase_exit_retry", new { Connection = context.Id, view.Instance, view.Phase, Attempts = failures, Reason = error.GetType().Name });
+                    log.Write(prefix + "_phase_exit_retry", new { Connection = context.Id, view.Instance, view.Phase, Attempts = failures, Reason = error.GetType().Name });
             }
             catch (Exception error) when (error is IOException or InvalidOperationException or DbException)
             {
-                log.Write("luke_phase_exit_failed", new { Connection = context.Id, view.Instance, view.Phase, Error = error.Message });
+                log.Write(prefix + "_phase_exit_failed", new { Connection = context.Id, view.Instance, view.Phase, Error = error.Message });
                 if (!returnCommitted && error is (DbException or InvalidDataException)) originalBattle?.FaultExpiredLukePhase(view.Instance);
                 context.Disconnect();
                 return;

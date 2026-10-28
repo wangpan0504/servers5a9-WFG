@@ -158,8 +158,9 @@ internal sealed partial class AntonRaidBattle
             throw new InvalidDataException("卢克阶段策略不完整");
         if (revival is not null && (kind != RaidKind.Luke || script.Phases.Length != 2 || string.IsNullOrWhiteSpace(revival.Source)))
             throw new InvalidDataException("卢克复活策略不完整");
-        if (phaseTimeout is not null && (kind != RaidKind.Luke || !phaseTimeout.Valid(script.Phases.Length)))
-            throw new InvalidDataException("卢克阶段超时兼容策略不完整");
+        if (phaseTimeout is not null && (!phaseTimeout.Valid(script.Phases.Length) ||
+            kind != RaidKind.Luke && (antonRewards is null || !phaseTimeout.Matches(script))))
+            throw new InvalidDataException("攻坚阶段超时兼容策略与资源不匹配");
         if (fixedRoute is not null && (kind != RaidKind.Luke || !fixedRoute.Matches(script)))
             throw new InvalidDataException("卢克固定路线与执行脚本不匹配");
         if (facilities is not null && (kind != RaidKind.Luke || !facilities.Valid))
@@ -195,7 +196,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (current.State != AntonRaidBattleState.Fighting || !current.Dungeons.TryGetValue(checked((int)dungeon), out var state) ||
+            if (pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() || !current.Dungeons.TryGetValue(checked((int)dungeon), out var state) ||
                 state != RaidDungeonState.Open || identity.InstanceId == Guid.Empty) return false;
             if (Kind != RaidKind.Anton) return false;
             var key = (identity.InstanceId, identity.CharacterId);
@@ -213,7 +214,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Anton || current.State != AntonRaidBattleState.Fighting ||
+            if (Kind != RaidKind.Anton || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
                 fact.ConfirmedDeathEvents.Count == 0 || fact.ClearMap is null ||
                 !entries.TryGetValue((fact.Identity.InstanceId, fact.Identity.CharacterId), out var entry) || entry.Run is not null ||
                 entry.Identity.CharacterId != fact.Identity.CharacterId || entry.Identity.QuestId != fact.Identity.QuestId ||
@@ -237,7 +238,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (!antonPhaseProgress || Kind != RaidKind.Anton || current.State != AntonRaidBattleState.Fighting ||
+            if (!antonPhaseProgress || Kind != RaidKind.Anton || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
                 fact.ConfirmedDeathEvents.Count == 0 || fact.ClearMap is null ||
                 !entries.TryGetValue((fact.Identity.InstanceId, fact.Identity.CharacterId), out var entry) ||
                 entry.Run is not { Installed: true } run || run.Cleared ||
@@ -266,7 +267,7 @@ internal sealed partial class AntonRaidBattle
 
     bool AntonEntryOpenLocked(int dungeon)
     {
-        if (Kind != RaidKind.Anton || pendingTransition is not null || current.State != AntonRaidBattleState.Fighting ||
+        if (Kind != RaidKind.Anton || pendingTransition is not null || TerminalRequested(current) || LukePhaseDueLocked() ||
             !current.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open) return false;
         if (!antonPhaseProgress) return current.Phase == 0 && dungeon == 210;
         return script.Phases[current.Phase].Dungeons.Any(row => row.Id == dungeon);
@@ -398,6 +399,14 @@ internal sealed partial class AntonRaidBattle
                             int id = action.DungeonId!.Value; var next = action.State!.Value;
                             if (state.Dungeons[id] != next)
                             {
+                                // 219 clear明确hide孵化场；旧clear留下的240预留不能越过这次隐藏重新开图。
+                                if (Kind == RaidKind.Anton && next == RaidDungeonState.Hide)
+                                {
+                                    var cancelled = state.Deferred.Where(row => row.Value.Tag == "[reserve dungeon state]" && row.Value.DungeonId == id)
+                                        .Select(row => row.Key).ToArray();
+                                    state = state with { Deferred = state.Deferred.RemoveRange(cancelled),
+                                        DeferredAnchors = state.DeferredAnchors.RemoveRange(cancelled), DeferredGenerations = state.DeferredGenerations.RemoveRange(cancelled) };
+                                }
                                 // 同Open不续HP；真正重开才开始新目标代，旧Run不能完成新代目标。
                                 if (next == RaidDungeonState.Open && (Kind == RaidKind.Luke || HasAntonRewards))
                                 {

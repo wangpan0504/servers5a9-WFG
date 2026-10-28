@@ -91,7 +91,16 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         if (rewards is not null)
             reservations = reservations.Select(row => row with { Lifecycle = new( AntonResourceRewards.Source, now,
                 Game.Dungeons.DungeonIncountPolicy.Period(now).Week, RaidRewardRules.WeeklyClearLimit) }).ToImmutableArray();
-        var battle = new AntonRaidBattle(definition.Resources.Script, antonPhaseProgress: phaseProgress, clock: clock, antonRewards: rewards);
+        // etc/raid/anton.etc [PHASE TIME OVER]；沿Luke现有秒制与激活锚点，是本服约定，非客户端原厂证明。
+        LukeRaidPhaseTimeoutPolicy? timeout = null;
+        if (rewards is not null)
+        {
+            var limits = definition.Resources.Script.Headers.Where(row => row.Tag == "[phase time over]").ToArray();
+            if (limits is not [var limit]) return new(19, "anton-phase-timeout-unavailable");
+            timeout = new("anton-local-phase-seconds-v1;etc/raid/anton.etc", limit.Values.Select(row => row.Number).ToImmutableArray());
+            if (!timeout.Matches(definition.Resources.Script)) return new(19, "anton-phase-timeout-unavailable");
+        }
+        var battle = new AntonRaidBattle(definition.Resources.Script, antonPhaseProgress: phaseProgress, clock: clock, antonRewards: rewards, phaseTimeout: timeout);
         var timerLease = timers?.Reserve(battle);
         if (timers is not null && timerLease is null) return new(19, "anton-clock-capacity");
         bool installed = false;
