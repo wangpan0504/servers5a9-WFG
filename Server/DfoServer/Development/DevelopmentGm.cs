@@ -73,7 +73,7 @@ internal static partial class DevelopmentGm
             }
             if (request.Action == DevelopmentAction.CharacterScoreNotice)
                 return SendCharacterScoreNotice(request, noticeSender, catalog?.Resources, log);
-            if (request.Action is DevelopmentAction.LukeRewardInspect or DevelopmentAction.LukeRewardClaim)
+            if (request.Action is DevelopmentAction.LukeRewardList or DevelopmentAction.LukeRewardInspect or DevelopmentAction.LukeRewardClaim)
                 return ExecuteLukeRewardRecovery(repository, owners, find(request.Account), request, catalog);
             if (request.Action == DevelopmentAction.CharacterScore)
             {

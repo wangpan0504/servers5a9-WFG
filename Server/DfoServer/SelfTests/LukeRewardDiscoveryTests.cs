@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using DfoServer.Development;
+using DfoServer.Network.Management;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Raids;
@@ -91,6 +93,40 @@ internal static class LukeRewardDiscoveryTests
             using var replacement = owners.Acquire("discovery-owner", () => { });
             Reject<InvalidOperationException>(() => reopened.ListLukeRewardRecovery(owner, role), "旧owner不能查询新连接的资格");
             That(reopened.ListLukeRewardRecovery(replacement, role).Entries.Length == 3 && Facts() == stable, "新owner可重开查询，所有读取保持全表内容不变");
+            // 复用现有本机GM监听与客户端；这不是玩家认证协议或真实通关夹具。
+            replacement.Dispose(); stranger.Dispose();
+            using var stop = new CancellationTokenSource();
+            var (port, loop) = DevelopmentGmServer.StartEphemeral(
+                line => DevelopmentGm.Answer(line, "discovery-owner", reopened, owners, _ => null), stop.Token);
+            try
+            {
+                string Query(string command)
+                {
+                    That(DevelopmentGmClient.TryExecute(port, command, out var reply), "本机GM真实TCP响应");
+                    return reply;
+                }
+                string list = $"luke-reward-list {role.Name} {role.Id}";
+                That(DevelopmentRequest.Parse(list, "discovery-owner") is { Writes: false, Action: DevelopmentAction.LukeRewardList }, "历史发现为只读管理命令");
+                string pageReply = Query(list + " 1");
+                That(pageReply == "OK " + JsonSerializer.Serialize(page), "真实GM查询重开存储，精确保留原event/anchor/备选牌/已领回执及分页");
+                That(Query(list + $" 1 {first:N}") == "OK " + JsonSerializer.Serialize(tail), "显式游标续页不自动挑选最新实例");
+                That(Query(list + $" 1 {second:N}").Contains("\"Entries\":[]"), "历史末页明确返回空结果");
+                foreach (string invalid in new[] { list + " 0", list + " 17", list + " 1 invalid", list + " 1 " + Guid.Empty.ToString("N"),
+                    list + " 1 " + first.ToString("D"), list + " 1\t", list + $" 1 {first:N}\0", $"luke-reward-list {role.Name} {role.Id + 1}",
+                    $"account discovery-other {list}" })
+                    That(Query(invalid).StartsWith("ERR ", StringComparison.Ordinal), "无效参数/控制字符/错误账号角色不能查询历史");
+                using (var held = owners.Acquire("discovery-owner", () => { }))
+                {
+                    That(Query(list).StartsWith("ERR ", StringComparison.Ordinal), "已有owner未在在线目录时拒绝查询，不接管租约");
+                    That(held.Execute(() => true), "被拒绝管理查询不使原owner失效");
+                }
+                That(Query(list + " 1") == pageReply && Facts() == stable, "重复/拒绝管理查询保持全部SQL表内容、资产及领取回执不变");
+            }
+            finally
+            {
+                stop.Cancel();
+                That(loop.Wait(TimeSpan.FromSeconds(3)), "历史发现GM监听正常退出");
+            }
             passed = true;
             Console.WriteLine($"LukeRewardDiscoveryTests core/SQLite: {Count - before} passed");
 

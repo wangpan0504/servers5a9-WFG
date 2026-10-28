@@ -309,6 +309,7 @@ python3 Tools/GmWeb/gm_web.py --self-check
 
 仅已授权开发/管理人员使用现有本机GM入口；不新增公网API、游戏opcode或玩家自助命令。管理监听仍只接受loopback，离线执行仍取得原`server.lock`；账号租约采用拒绝重复而非接管。检查和领取均要求账号没有已选角色（在线先回到选角，或完全离线），不能在同账号另一角色仍在线时修改共享钱包。
 
+- `luke-reward-list <角色名> <角色ID> [limit:1..16] [after:N]`：首参数是角色名而不是账号；账号沿既有 `account <账号> luke-reward-list …` 前缀指定（省略时使用当前管理命令默认账号）。只读发现该账号角色的历史资格，默认最多16个实例，按实例主键分页；`NextAfter` 非空时原样用于下一页（允许末尾空页）。返回原阶段event/anchor、全部保存备选、已领取kind/card及原邮件回执；`AvailableOffers` 仅排除已领取kind，不自动选牌或调用领取。只依赖保存历史，不装载当前PVF；不是普通玩家聊天命令。
 - `luke-reward-inspect <角色名> <角色ID> <instance:N> <phase:0|1> <kind> <card>`：只检查明确原资格与领取回执，返回原event、anchor、计划与是否已领。`N`为32位无连字符GUID；不搜索最近实例或自动选择牌面。
 - `luke-reward-claim <角色名> <角色ID> <instance:N> <phase:0|1> <kind> <card> <event:N> <anchor>`：管理员确认检查结果后显式领取，event/anchor必须来自同一原资格。其他账号沿已有`account <账号>`前缀指定。
 

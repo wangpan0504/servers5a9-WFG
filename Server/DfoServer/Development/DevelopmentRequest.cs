@@ -71,6 +71,7 @@ internal enum DevelopmentAction
     WeeklyEntryReset,
     EquipmentScore,
     CharacterScore,
+    LukeRewardList,
     LukeRewardInspect,
     LukeRewardClaim,
     CharacterScoreNotice
@@ -115,6 +116,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         ["rename"] = (DevelopmentAction.Rename, true, 1, 1),
         ["char-delete"] = (DevelopmentAction.CharDelete, true, 1, 1),
         ["stats"] = (DevelopmentAction.Stats, true, 0, 0),
+        ["luke-reward-list"] = (DevelopmentAction.LukeRewardList, true, 1, 3),
         ["luke-reward-inspect"] = (DevelopmentAction.LukeRewardInspect, true, 5, 5),
         ["luke-reward-claim"] = (DevelopmentAction.LukeRewardClaim, true, 7, 7),
         ["equipment-score"] = (DevelopmentAction.EquipmentScore, true, 0, 0),
@@ -155,6 +157,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
         if (i >= tokens.Length)
             throw new InvalidDataException(Usage);
         string op = tokens[i];
+        if (op == "luke-reward-list" && line.Any(char.IsControl))
+            throw new InvalidDataException("历史资格查询不能含控制字符");
         if (op == "chat-inject")
         {
             // 按连接号注入，不接受 account 前缀；文本取剩余整行，保留内部空格。
