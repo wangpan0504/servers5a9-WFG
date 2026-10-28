@@ -47,7 +47,7 @@ internal static partial class FormalDungeonTcpTests
             That(Stable() == original && fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id) == noAttempt,
                 "直接伪造16缺少本次15体验上下文时拒绝且不预留尝试");
             OpenExperience();
-            foreach (int offset in new[] { 4, 5, 7, 8, 9, 11, 15, 16, 20, 21 })
+            foreach (int offset in new[] { 4, 5, 7, 8, 9, 11, 15, 16, 20 })
             {
                 byte[] invalid = (byte[])request.Clone();
                 invalid[offset] ^= 1;
@@ -59,7 +59,9 @@ internal static partial class FormalDungeonTcpTests
                 "错误完整模式字段只结束入场等待，不创建普通或回放实例");
             RejectSkillWrites();
             That(Stable() == original, "体验等待阶段也不接受永久技能写入");
-            peer.Send(16, request);
+            byte[] eventRequest = (byte[])request.Clone();
+            eventRequest.AsSpan(21,4).Fill(255);
+            peer.Send(16, eventRequest);
             peer.Expect(0, 27, new byte[42]);
             byte[] info = peer.Expect(0, 28).Body;
             byte[] map = peer.Expect(0, 29).Body;

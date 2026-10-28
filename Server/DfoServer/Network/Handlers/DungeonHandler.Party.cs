@@ -324,8 +324,10 @@ internal sealed partial class DungeonHandler
         }
         else
         {
-            if (!DungeonRequests.TryParseDeath(request.Body, out var parsed) || parsed!.SinglePlayerStatistics is not { } statistics)
+            if (!DungeonRequests.TryParseDeath(request.Body, out var parsed))
                 return CommandResult.Unhandled;
+            if (parsed!.SinglePlayerStatistics is not { } statistics)
+                return await PublishDeathAsync(context,new(DungeonRunOutcome.Rejected),context.Session.Selected,parsed.ObjectKey,parsed);
             key = parsed.ObjectKey;
             var part = statistics.Participant;
             var observation = new NativeDungeonDeathObservation(key, parsed.Reporter, part.Kind, part.ObjectKey,
@@ -336,7 +338,8 @@ internal sealed partial class DungeonHandler
                 p.CumulativeHpDecrease, p.PositiveHpDecreaseCount)).ToImmutableArray() };
             observe = session => session.ObserveFormalDungeonDeath(observation, rewards, growth);
         }
-        if (key > ushort.MaxValue) return CommandResult.Unhandled;
+        if (key > ushort.MaxValue)
+            return await PublishDeathAsync(context,new(DungeonRunOutcome.Rejected),context.Session.Selected,key,new { key });
         using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, instance.Members);
         var results = instance.ObserveDeath(context.Session, (ushort)key, observe);
         await PartyDungeonProjection.PublishAsync(results);

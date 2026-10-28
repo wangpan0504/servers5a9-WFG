@@ -25,6 +25,8 @@ internal static partial class FormalDungeonTcpTests
             checked((ushort)(bounds.X + bounds.Width / 2)), checked((ushort)(bounds.Y + bounds.Height / 2)));
         var growth = SelfTestCatalogs.Growth(resources.Archive);
         var repository = new CharacterRepository(fixture.Database, resources.Quests);
+        Bytes(Request(),Convert.FromHexString("FF2A00000000000000FFFF00000000000000000000FFFFFFFF"),
+            "极限祭坛零任务、活动尾字段FFFFFFFF与客户端实收25字节一致");
         Character first = Create("Entry694A"), second = Create("Entry694B");
         using (var peer = Open(fixture))
         {
@@ -40,7 +42,7 @@ internal static partial class FormalDungeonTcpTests
                 Load(peer); Return(peer);
             }
             Select(peer, 0);
-            peer.Send(16, Request()); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
+            peer.Send(16, Request()); peer.Expect(1, 16, [0, 246, 0, 0]); peer.Barrier();
             That(Entries(first.Id) == 3, "当日第四次拒绝，数据库计数和最后一条550均保持零剩余");
         }
         using (var peer = Open(fixture))
@@ -88,7 +90,7 @@ internal static partial class FormalDungeonTcpTests
             Select(peer, 3);
             for (int repeat = 0; repeat < 2; repeat++)
             {
-                peer.Send(16, bloodRequest); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
+                peer.Send(16, bloodRequest); peer.Expect(1, 16, [0, 10, 0, 0]); peer.Barrier();
             }
             That(Entries(blood.Id) == 0 && peer.DungeonEnterCounts[11006] == (3, 0),
                 "无尽有3次但金币不足明确回复拒绝，重复请求不扣次数");
@@ -110,7 +112,7 @@ internal static partial class FormalDungeonTcpTests
                 "补足真实费用后无尽入场，金币与次数只提交一次，加载重复不再扣款");
             Load(peer); Return(peer);
             Select(peer, 3, blood: 2);
-            peer.Send(16, bloodRequest); peer.Expect(1, 16, [0, 9, 0, 0]); peer.Barrier();
+            peer.Send(16, bloodRequest); peer.Expect(1, 16, [0, 10, 0, 0]); peer.Barrier();
             That(Entries(blood.Id) == 1 && fixture.Query("SELECT gold FROM characters WHERE id=$p0", blood.Id) is [[0L]],
                 "选图550已确认剩余2次，费用不足继续拒绝且次数金币不变");
         }
@@ -152,6 +154,7 @@ internal static partial class FormalDungeonTcpTests
             var request = Selection();
             BinaryPrimitives.WriteUInt32LittleEndian(request, 11007);
             BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16), 0);
+            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(21), uint.MaxValue);
             return request;
         }
         void Enter(TcpPeer peer, byte remaining)

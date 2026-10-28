@@ -42,7 +42,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         commands.Register(CmdPacketType.START_EVILDOM_WAR, StartEvildomWarAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.SELECT_DUNGEON, SelectAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.FINISH_LOADING, LoadedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
-        commands.Register(CmdPacketType.DIE_MONSTER, DeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        // 已记录死亡格式跨会话状态接收；实际死亡和奖励仍由当前上下文中的事实决定。
+        commands.Register(CmdPacketType.DIE_MONSTER, DeathAsync, nameof(DungeonHandler));
         commands.Register(CmdPacketType.DIE_CHARACTER, CharacterDeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.USE_COIN, UseCoinAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.MOVE_MAP, MoveAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
@@ -50,7 +51,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         commands.Register(CmdPacketType.GIVEUP_GAME, ReturnAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.GET_ITEM, PickupAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.DUNGEON_EVENT_STORY_PAUSE, StoryPauseAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
-        commands.Register(CmdPacketType.DIE_BLOOD_MONSTER, AltarDeathAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+        commands.Register(CmdPacketType.DIE_BLOOD_MONSTER, AltarDeathAsync, nameof(DungeonHandler));
         commands.Register(CmdPacketType.BLOOD_ROUND_UI_PREPARE_FINISH_, AltarPreparedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.SELECT_ULTIMATE_DIFFICULTY, AltarDifficultyAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
     }
@@ -240,17 +241,13 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         // 练习与两个直入共享offset8=1；非零任务号仍须经过1459的剧情回放授权。
         if (selection.DungeonIndex == 5000 && (!training || selection.Parameter != 0)) return await RejectAsync();
         if (selection.DungeonIndex == 7142 && (!experience || selection.Parameter != 0)) return await RejectAsync();
-        // 回放由1459的完成事实/显式路线授权；附加Scene flags只保留审计，不套普通选图常量。
+        // 回放由1459的完成事实/显式路线授权；offset21是活动关联值，仅保留审计，不作为普通入场资格。
         // 魔兽入场由 [7]=MAZE2 表示，深渊由 [7]=1 表示，普通噩梦仍是 [7]=0；三者不能互相吞并。
-        // 再战魔界(9608/400000095)与帝国竞技场(320/336)的25B16末位u32是0xFFFFFFFF，普通副本为0；
-        // 实机2026-10-28 10:41/10:43三连拒绝均为该字段。两类随后仍须过PrepareFormalDungeon的专用入场许可，
-        // 放宽一个未知字段不会放行普通副本，也不能替代编队/双角色资料校验。
-        bool specialSelection = selection.DungeonIndex is 9608 or 400000095 or 320 or 336;
-        bool unknown21Accepted = selection.Unknown21 == 0 || specialSelection && selection.Unknown21 == uint.MaxValue;
+        // 末位活动关联值也可能出现在普通及祭坛请求；特殊模式仍须通过各自的专用入场许可。
         byte expectedFlag = mazeBeast ? selection.Unknown7 : (byte)(hell ? 1 : 0);
         if (selection.Unknown5 != 0 || selection.Unknown11 != 0 || !replay &&
             (selection.Unknown7 != expectedFlag || selection.Unknown8 != (direct || practice ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
-            selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0) || !unknown21Accepted))
+            selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0)))
             return await RejectAsync();
         if (context.Session.HasMultiplePartyMembers?.Invoke() == true || context.Session.ReadEvildomWar() is not null)
         {
@@ -289,7 +286,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             GriefLayer = receipt?.Entry.GriefLayer, Grief = receipt?.GriefAdmission?.Decision,
             Dazzlement = receipt?.Dazzlement,
             CharacterId = character.Id, CharacterName = character.Name });
-        if (receipt is null) return await RejectAsync();
+        if (receipt is null) return await RejectAsync(!continuation && !replay ? context.Session.LastFormalDungeonRejection : null);
         await town.DetachAsync(context);
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         if (receipt.Dazzlement is not null)
@@ -400,7 +397,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Guard, entranceOnly: false);
         return CommandResult.Handled;
 
-        async Task<CommandResult> RejectAsync()
+        async Task<CommandResult> RejectAsync(string? entryReason = null)
         {
             // 每一条被拒的选图都留原始请求体，实机排错不用再靠猜标志位。
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = false, Replay = replay, Continuation = continuation,
@@ -408,10 +405,17 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 RejectReason = context.Session.LastFormalDungeonRejection ?? "selection-rejected", CharacterId = character.Id });
             bool CanSend() => context.Session.CanPublishFormalDungeonRejection(character, before.SelectionEpoch,
                 before.Phase, before.CurrentDungeonSelection);
-            // 只结束本次入场等待，保留原选图和回城锚点；不发送成功、弹窗或自动回城通知。
+            // 结束本次入场等待，保留原选图和回城锚点；不发送成功或自动回城通知。
             // 区域任务提示由NOTI27的未完成队员名单驱动；强制入场只恢复等待，不误用次数上限0xAD。
             string? hellReason = hell || legend ? context.Session.LastFormalDungeonRejection : null;
-            byte[] rejection = hellReason is { } why && why.StartsWith("hell-party-", StringComparison.Ordinal)
+            byte? altarError = selection.DungeonIndex is 11006 or 11007 ? entryReason switch
+            {
+                "altar-entry-daily-limit" => 246,
+                "altar-entry-insufficient-gold" => 10,
+                _ => null
+            } : null;
+            byte[] rejection = altarError is { } code ? DungeonPackets.SelectionRejected(code) :
+                hellReason is { } why && why.StartsWith("hell-party-", StringComparison.Ordinal)
                 ? DungeonPackets.HellPartyRejected(why.StartsWith("hell-party-quest-required:", StringComparison.Ordinal) ? (byte)0x09 :
                     why == "hell-party-item-required" ? (byte)0x11 : (byte)0x01)
                 : DungeonPackets.SelectionRejected();
@@ -465,8 +469,6 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (context.Session.PartyDungeon is not null) return await PartyDeathAsync(context, request);
         if (DungeonRequests.TryParsePassiveDeath(request.Body, out var passive))
         {
-            if (!context.Session.Ready || context.Session.DungeonSnapshot is not { Phase: SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement })
-                return CommandResult.Unhandled;
             var progress = context.Session.ObserveFormalPassiveDeath(passive!.ObjectIdentifier,
                 passive.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body)),rooms);
             log.Write("formal_passive_death", new { Connection = context.Id, Accepted = progress?.Commit is { ProjectionCurrent: true },
@@ -493,13 +495,18 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         {
             objectKey = scripted!.ObjectKey;
             audit = scripted;
-            result = context.Session.ObserveFormalDungeonScriptedDeath(new NativeDungeonScriptedDeathObservation(objectKey,scripted.RewriteFlag,
-                scripted.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body))),rewards,growth);
+            var observation = new NativeDungeonScriptedDeathObservation(objectKey,scripted.RewriteFlag,
+                scripted.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body)));
+            if (context.Session.HasDungeonAltar)
+                return await PublishAltarMonsterDeathAsync(context,objectKey,context.Session.ObserveDungeonAltarScriptedDeath(observation));
+            result = context.Session.ObserveFormalDungeonScriptedDeath(observation,rewards,growth);
         }
         else
         {
-            if (!DungeonRequests.TryParseDeath(request.Body,out var parsed) || parsed!.SinglePlayerStatistics is not { } statistics)
+            if (!DungeonRequests.TryParseDeath(request.Body,out var parsed))
                 return CommandResult.Unhandled;
+            if (parsed!.SinglePlayerStatistics is not { } statistics)
+                return await PublishDeathAsync(context,new(DungeonRunOutcome.Rejected),previousCharacter,parsed.ObjectKey,parsed);
             objectKey = parsed.ObjectKey;
             var part = statistics.Participant;
             var observation = new NativeDungeonDeathObservation(objectKey,parsed.Reporter,part.Kind,part.ObjectKey,
@@ -508,8 +515,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 Convert.ToHexString(SHA256.HashData(request.Body)))
             { Participants = statistics.Participants.Select(value => new NativeDungeonDeathParticipant(value.Kind,value.ObjectKey,
                 value.CumulativeHpDecrease,value.PositiveHpDecreaseCount)).ToImmutableArray() };
-            if (context.Session.FormalEnteredDungeonId is 11006 or 11007)
-                return await AltarMonsterDeathAsync(context, observation);
+            if (context.Session.HasDungeonAltar)
+                return await PublishAltarMonsterDeathAsync(context,objectKey,context.Session.ObserveDungeonAltarDeath(observation));
             audit = observation;
             result = context.Session.ObserveFormalDungeonDeath(observation,rewards,growth);
         }
@@ -530,11 +537,12 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         Character? previousCharacter, uint objectKey, object audit)
     {
         var target = result.ReportedTarget;
-        log.Write("formal_dungeon_death", new { Connection = context.Id, result.Outcome, ObjectKey = objectKey, Report = audit,
+        log.Write("formal_dungeon_death", new { Connection = context.Id, Recognized = true, context.Session.Phase,
+            result.Outcome, ObjectKey = objectKey, Report = audit,
             Target = target is null ? null : new { target.MonsterId, target.SpawnType, target.Team, target.IsFriendly, target.IsBlocking, target.CanReportDeath },
             result.Receipt?.Snapshot.Identity, result.Reward, result.GainedExperience, result.ProficiencyGained, result.ClearFact, result.RoomClearFact });
         if (result.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
-            return CommandResult.Unhandled;
+            return CommandResult.Handled;
         if (result.Receipt is not { } receipt)
         {
             if (result.Outcome == DungeonRunOutcome.Duplicate && context.Session.CurrentTagEvildomClear() is { } clearedTag)

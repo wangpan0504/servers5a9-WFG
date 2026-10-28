@@ -52,7 +52,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(16, ordinary);
         peer.Expect(1, 16, [0, 9, 0, 0]);
         peer.Barrier();
-        foreach (int offset in new[] { 5, 7, 9, 11, 15, 16, 20, 21 })
+        foreach (int offset in new[] { 5, 7, 9, 11, 15, 16, 20 })
         {
             byte[] invalid = (byte[])request.Clone();
             invalid[offset] ^= 1;
@@ -66,6 +66,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
         That(Stable() == stable && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[0L]],
             "零疲劳普通入场及非法混合模式拒绝；非零任务号不冒充授权回放，均不预留尝试");
+        request.AsSpan(21,4).Fill(255);
         byte[] map = EnterPractice();
         string entered = fixture.Snapshot();
         peer.Send(18, Convert.FromHexString("1000000010001A0A080210E60218DD172005200001"));
@@ -187,7 +188,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(16, request);
         byte[] actualInfo = peer.Expect(0, 28).Body;
         That(U32(actualInfo) == 1000 && actualInfo[12] == 1 && actualInfo[7] == 0 && U32(peer.Expect(0, 29).Body, 14) == 58590,
-            "实收E803...01FFFF...请求进入暗黑雷鸣废墟普通迷宫，不误走剧情回放");
+            "1000练习请求携活动尾字段进入暗黑雷鸣废墟普通迷宫，不误走剧情回放");
         Load(peer);
         peer.Barrier();
         Return();

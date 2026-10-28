@@ -29,14 +29,21 @@ internal static class DungeonSpecialEntryTests
         var definition = new DungeonDefinition(11006, "synthetic", 60, 60, [],
             [new("blood dungeon", [new(0, 1)]), new("no fatigue", []), new("enter without fatigue", [new(0, 1)])])
             { DisableFatigueConsumption = true };
-        That(DungeonAltarEntryPolicy.Prepare(before, definition, day, new(0, 0), prices)?.Gold == 22000 &&
-            DungeonAltarEntryPolicy.Prepare(before, definition, day, new(1, 1), prices)?.Gold == 29200 &&
-            DungeonAltarEntryPolicy.Prepare(before, definition, day, new(2, 1), prices)?.Gold == 46000 &&
-            DungeonAltarEntryPolicy.Prepare(before, definition, day, new(3, 1), prices) is null,
+        That(DungeonAltarEntryPolicy.Prepare(before, definition, day, new(0, 0), prices, out var accepted)?.Gold == 22000 &&
+            accepted == DungeonAltarRejection.None &&
+            DungeonAltarEntryPolicy.Prepare(before, definition, day, new(1, 1), prices, out _)?.Gold == 29200 &&
+            DungeonAltarEntryPolicy.Prepare(before, definition, day, new(2, 1), prices, out _)?.Gold == 46000 &&
+            DungeonAltarEntryPolicy.Prepare(before, definition, day, new(3, 1), prices, out var exhausted) is null &&
+            exhausted == DungeonAltarRejection.DailyLimit,
             "无尽三次兼容规则分别使用本次收费，第四次拒绝");
-        That(DungeonAltarEntryPolicy.Prepare(before with { Level = 59 }, definition, day, new(0, 0), prices) is null &&
-            DungeonAltarEntryPolicy.Prepare(before with { Inventory = before.Inventory with { Gold = 21999 } }, definition, day, new(0, 0), prices) is null,
-            "等级与金币不足时没有入场准备");
+        var poor = before with { Inventory = before.Inventory with { Gold = 21999 } };
+        That(DungeonAltarEntryPolicy.Prepare(before with { Level = 59 }, definition, day, new(0, 0), prices, out var invalid) is null &&
+            invalid == DungeonAltarRejection.Ineligible &&
+            DungeonAltarEntryPolicy.Prepare(poor, definition, day, new(0, 0), prices, out var noGold) is null &&
+            noGold == DungeonAltarRejection.InsufficientGold &&
+            DungeonAltarEntryPolicy.Prepare(poor, definition, day, new(3, 1), prices, out var both) is null &&
+            both == DungeonAltarRejection.DailyLimit,
+            "等级不合、金币不足和次数用尽分开；两者同时不足先按原先次序判断次数");
         var usage = repo.LoadSpecialEntryUsage(owner, before, day, DungeonSpecialEntryKind.Blood);
         That(usage == new DungeonSpecialEntryUsage(0, 0), "新角色专用入场账本为空");
         var identity = new DungeonRunIdentity(before.Id, 0, before.DungeonState!.LastAttempt + 1, Guid.NewGuid(), 1);

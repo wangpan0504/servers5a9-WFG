@@ -17,9 +17,9 @@ internal static class DungeonAltarPackets
         return body;
     }
 
-    // V31 023801B0在两个u8后固定遍历四个队员槽；每项为itemId:u32、addInfo:u32。
+    // V31 023801B0在两个u8后固定遍历四个队员槽；每项为物品编号和显示数量。
     public static byte[] ClearRewards(byte completedRounds, byte maximumRounds,
-        IReadOnlyList<IReadOnlyList<(uint ItemId, uint AddInfo)>> members)
+        IReadOnlyList<IReadOnlyList<DungeonAltarRewardDraw>> members)
     {
         if (maximumRounds == 0 || completedRounds > maximumRounds || members.Count != 4 ||
             members.Any(member => member.Count > byte.MaxValue)) throw new ArgumentOutOfRangeException(nameof(members));
@@ -30,8 +30,10 @@ internal static class DungeonAltarPackets
         foreach (var member in members)
         {
             body[at++] = checked((byte)member.Count);
-            foreach (var (itemId, info) in member)
+            foreach (var reward in member)
             {
+                uint itemId = reward.Item is { } item ? checked((uint)item.Core.ItemId) : reward.Gold > 0 ? 0u : uint.MaxValue;
+                uint info = reward.Item is { } granted ? checked((uint)granted.Core.Count) : checked((uint)reward.Gold);
                 BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at), itemId);
                 BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at + 4), info);
                 at += 8;

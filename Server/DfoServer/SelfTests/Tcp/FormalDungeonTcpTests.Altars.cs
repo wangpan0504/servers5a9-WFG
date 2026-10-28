@@ -16,6 +16,7 @@ internal static partial class FormalDungeonTcpTests
 {
     public static async Task RunAltarsAsync(ServerOptions source,string root,TcpTestResources resources)
     {
+        DungeonAltarRewardTests.Run(resources.Archive,resources.ItemResources);
         DungeonAltarSessionTests.Run(resources);
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);
@@ -30,6 +31,7 @@ internal static partial class FormalDungeonTcpTests
         var position = new DfoServer.GameWorld.Towns.Location(area.Town,area.Area,
             checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
         var growth = SelfTestCatalogs.Growth(resources.Archive);
+        DungeonSpecialEntryTests.Run(resources.Towns,resources.Characters,resources.Learning,growth,resources.Quests);
         foreach (uint id in new uint[] {11006,11007})
         {
             Action<WirePacket>? validateSpawn = null;
@@ -61,6 +63,7 @@ internal static partial class FormalDungeonTcpTests
             var request = Selection();
             BinaryPrimitives.WriteUInt32LittleEndian(request,id);
             BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),questId);
+            if (id == 11007) BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(21),uint.MaxValue);
             peer.Send(16,request);
             var info = peer.Expect(0,212).Body;
             var map = peer.Expect(0,211).Body;
@@ -88,12 +91,17 @@ internal static partial class FormalDungeonTcpTests
             for(int at=0;at<count;at++) next.Body.AsSpan(3+at*17,2).CopyTo(killed.AsSpan(1+at*2));
             ushort key = U16(next.Body,3);
             byte[] normalDeath = Death(key,peer.Id,next.Body[10]);
+            byte[] zeroDeath = AltarZeroParticipantDeath(key,next.Body[10]);
             byte[] corrupt = (byte[])normalDeath.Clone();
             corrupt[^1] ^= 1;
+            byte[] corruptZero = (byte[])zeroDeath.Clone();
+            corruptZero[^1] ^= 1;
             var invalidDeathSpawnKeys = new HashSet<ushort>();
             ValidateTimedSpawn(next);
             peer.Send(39,corrupt);
+            peer.Send(39,corruptZero);
             peer.Send(39,Death(ushort.MaxValue,peer.Id,next.Body[10]));
+            peer.Send(39,AltarZeroParticipantDeath(ushort.MaxValue,next.Body[10]));
             // 无效死亡不能推进回合；合法计时刷怪同时核对完整资源批次与对象键，不吞死亡或奖励通知。
             peer.Barrier(packet =>
             {
@@ -101,11 +109,11 @@ internal static partial class FormalDungeonTcpTests
                 validateSpawn!(packet);
                 if (packet.Opcode == 210) ValidateTimedSpawn(packet);
             });
-            foreach (bool replay in new[] { false, true })
+            foreach (byte[] death in new[] { zeroDeath, normalDeath, zeroDeath })
             {
-                peer.Send(39,normalDeath);
+                peer.Send(39,death);
                 Bytes(ReadUntil(38).Body,[(byte)key,(byte)(key>>8),0,0,0,0,255,0,0],
-                    replay ? "祭坛重复39补发相同对象退场，不重复推进或发奖" : "祭坛合法39先回完整38清除死亡对象");
+                    "祭坛74B零参与者死亡及88B交叉重放均确认同一对象，不重复推进或发奖");
             }
             // 255与39共用本Run死亡事实，混合重报不重复推进。
             peer.Send(255,killed);
@@ -128,14 +136,38 @@ internal static partial class FormalDungeonTcpTests
                 fixture.Query("SELECT count(*) FROM dungeon_altar_clear_receipts WHERE character_id=$p0",peer.Id) is [[1L]] &&
                 fixture.Query("SELECT revive_coins FROM characters WHERE id=$p0",peer.Id) is [[2L]],
                 "第二次死亡截止后仅提交一次专用失败奖励，第一轮死亡回调与复活不重复结算");
+            string committedItems = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
+            ulong committedExperience = Experience(fixture,peer.Id);
+            long committedGold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]);
             var rewards=peer.Expect(0,209).Body;
             That(rewards.Length>=6 && rewards[1]==(id==11006?15:7) && rewards[^3..].All(value=>value==0),
                 "失败209保留四队员槽与真实完成回合，不替换成普通翻牌");
+            if (id == 11007)
+            {
+                peer.Send(72,[1,2]);
+                var exp = peer.Expect(0,37).Body;
+                That(exp.Length==91 && BinaryPrimitives.ReadUInt64LittleEndian(exp.AsSpan(1))==committedExperience,
+                    "点击回城先完整发布已提交的祭坛经验");
+                var reply = peer.Read();
+                int itemFrames = 0;
+                while (reply is { Kind:0,Opcode:14 })
+                {
+                    That(++itemFrames<=2 && reply.Body.Length>=3 && reply.Body[0]==0 &&
+                        reply.Body.Length==3+U16(reply.Body,1)*123,
+                        "回城ACK前的祭坛库存通知保留完整条目且数量有界");
+                    reply=peer.Read();
+                }
+                That(reply is { Kind:1,Opcode:72 },"手动回城不等待60秒兜底，完整奖励投影之后才回复ACK72");
+                Bytes(reply.Body,[1,1,2],"祭坛手动回城ACK保持原请求选项");
+            }
             var state=ReadUntil(3);
             That(state.Body is [1,_,_,0],"祭坛专用演出结束恢复本人城镇state0");
             peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             That(fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0",peer.Id) is [[1L]] &&
-                fixture.Query("SELECT count(*) FROM dungeon_altar_clear_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
+                fixture.Query("SELECT count(*) FROM dungeon_altar_clear_receipts WHERE character_id=$p0",peer.Id) is [[1L]] &&
+                fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")==committedItems &&
+                Experience(fixture,peer.Id)==committedExperience &&
+                Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0])==committedGold,
                 "一次准入和一次失败持久事实保持独立，计时不重复收费或发奖");
 
             // 同一角色剩余两次分别覆盖加载前和加载后放弃，不另起资源或服务夹具。
@@ -255,6 +287,19 @@ internal static partial class FormalDungeonTcpTests
             That(fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0",peer.Id) is [[3L]] &&
                 fixture.Query("SELECT count(*) FROM dungeon_altar_clear_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
                 "加载前后放弃各保留一次准入，不由迟到加载/UI请求重复扣次或结算");
+            SelectTowerMap(peer,griefLayer:1);
+            var exhaustedState = fixture.Snapshot("SELECT gold,revision FROM characters WHERE id=$p0",peer.Id);
+            var exhaustedAttempt = fixture.Snapshot("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id);
+            peer.Send(16,request); peer.Expect(1,16,[0,246,0,0]);
+            var invalidRequest = (byte[])request.Clone(); invalidRequest[5] = 1;
+            peer.Send(16,invalidRequest); peer.Expect(1,16,[0,9,0,0]);
+            peer.Send(16,request); peer.Expect(1,16,[0,246,0,0]); peer.Barrier();
+            That(fixture.Snapshot("SELECT gold,revision FROM characters WHERE id=$p0",peer.Id) == exhaustedState &&
+                fixture.Snapshot("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) == exhaustedAttempt &&
+                fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0",peer.Id) is [[3L]],
+                "两祭坛次数用尽回复246，不创建第四次入场；后续非法字段仍用通用9，不复用旧拒绝原因");
+            peer.Send(132); peer.Expect(1,132,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
+            peer.Expect(0,23); peer.Expect(0,24); peer.Barrier();
 
             int StartTracker(byte[] entryInfo,byte[] entryMap,WirePacket first)
             {
@@ -422,7 +467,152 @@ internal static partial class FormalDungeonTcpTests
                         "定时刷怪记录保留合法类型、怪物、等级和互不重复的对象键");
             }
         }
+        foreach (var (dungeonId, option) in new (uint, byte)[] { (11007,0), (11007,1), (11006,0), (11006,1) })
+        {
+            ushort questId = dungeonId == 11006 ? (ushort)5650 : (ushort)7340;
+            int prerequisite = dungeonId == 11006 ? 63 : 7339;
+            int fee = dungeonId == 11006 ? 22000 : 0;
+            int retryFee = dungeonId == 11006 ? dungeons.AltarAdmission.BloodFee(70,1) : 0;
+            Character created;
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{}))
+            {
+                var repo = new CharacterRepository(fixture.Database);
+                var candidate = CharacterCreation.Prepare($"Altar{dungeonId}{option}", resources.Characters.Get(0),
+                    position,position,resources.Learning.Get);
+                created = repo.Create(owner,candidate with { Level=70, AcceptedStoryLevel=70, CompletedQuests=done.Append(prerequisite).Distinct().ToArray(),
+                    InitialLearning=SkillPointLedger.Synchronize(0,0,70,candidate.InitialLearning with
+                        { Experience=growth.GetLevelStartExperience(70) },resources.Learning) });
+                created = repo.CommitInventory(owner,created,new(created.Inventory,created.Inventory with
+                    { Gold=500000 },"altar_result_action_seed"));
+            }
+            using var peer = Open(fixture);
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            peer.Send(31,[31,0,(byte)questId,(byte)(questId>>8)]);
+            That(peer.Expect(1,31).Body[0] == 1, "结果操作角色合法接取祭坛关联任务");
+            RefreshedQuests(peer);
+            SelectTowerMap(peer,griefLayer:1);
+            var request = Selection();
+            BinaryPrimitives.WriteUInt32LittleEndian(request,dungeonId);
+            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),questId);
+            if (dungeonId == 11007) BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(21),uint.MaxValue);
+            peer.Send(16,request);
+            peer.Expect(0,212); peer.Expect(0,211); if (fee > 0) peer.Expect(0,14); peer.Barrier();
+            Load(peer); peer.Send(258);
+            peer.Send(40,[0x74,0,4,1,0,0]);
+            ReadTo(208);
+            var exp = Experience(fixture,peer.Id);
+            long resultGold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]);
+            var rewards = peer.Expect(0,209).Body;
+            Bytes(rewards,[0,(byte)(dungeonId == 11006 ? 15 : 7),1,255,255,255,255,0,0,0,0,0,0,0],
+                "零回合失败以空奖FFFFFFFF通知而不是伪造零金币");
+            peer.Send(72,[2,option]);
+            peer.Expect(1,72,[1,2,option]);
+            peer.Send(72,[1,option]);
+            var experience = peer.Expect(0,37).Body;
+            That(experience.Length == 91 && BinaryPrimitives.ReadUInt64LittleEndian(experience.AsSpan(1)) == exp,
+                "祭坛结果操作先发布已提交的经验");
+            var reply = peer.Read();
+            while (reply is { Kind:0, Opcode:14 }) reply = peer.Read();
+            That(reply is { Kind:1, Opcode:72 }, "祭坛结果操作收到确认而不是等待超时");
+            Bytes(reply.Body,[1,1,option],"祭坛结果操作确认保留选项");
+            if (option == 0)
+            {
+                peer.Expect(0,27); peer.Expect(0,212); peer.Expect(0,211);
+                if (fee > 0) peer.Expect(0,14);
+                peer.Barrier();
+                That(fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0",peer.Id) is [[2L]] &&
+                    Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id)[0][0]) == resultGold - retryFee,
+                    "再次挑战建立新的祭坛实例并按原准入扣次和费用");
+            }
+            else
+            {
+                peer.Expect(1,15,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]);
+                peer.Expect(0,27); peer.Barrier();
+                That(fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0",peer.Id) is [[1L]],
+                    "选择其他地下城只退场并打开选图，不重复扣次");
+            }
+            That(fixture.Query("SELECT count(*) FROM dungeon_altar_clear_receipts WHERE character_id=$p0",peer.Id) is [[1L]] &&
+                Experience(fixture,peer.Id) == exp, "结果操作不重复结算或发放经验");
+            if (option == 0 && dungeonId == 11007)
+            {
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
+                peer.Expect(0,24); RefreshedQuests(peer);
+                SelectTowerMap(peer,griefLayer:1);
+                peer.Send(16,request); peer.Expect(0,212); peer.Expect(0,211); peer.Barrier();
+                Load(peer); peer.Send(258); peer.Send(40,[0x74,0,4,1,0,0]);
+                ReadTo(208); peer.Expect(0,209);
+                var lastExp = Experience(fixture,peer.Id);
+                peer.Send(72,[1,0]);
+                var lastNotice = peer.Expect(0,37).Body;
+                That(BinaryPrimitives.ReadUInt64LittleEndian(lastNotice.AsSpan(1)) == lastExp,
+                    "次数用尽时仍先完整发布已提交经验");
+                var rejected = peer.Read();
+                while (rejected is { Kind:0, Opcode:14 }) rejected = peer.Read();
+                That(rejected is { Kind:1, Opcode:72 }, "次数用尽的再次挑战不能让结果页等待超时");
+                Bytes(rejected.Body,[1,1,2],"次数用尽按回城选项确认");
+                peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]); peer.Expect(0,24);
+                RefreshedQuests(peer); peer.Barrier();
+                That(fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0",peer.Id) is [[3L]] &&
+                    fixture.Query("SELECT count(*) FROM dungeon_altar_clear_receipts WHERE character_id=$p0",peer.Id) is [[2L]] &&
+                    Experience(fixture,peer.Id) == lastExp, "次数用尽不创建第四次入场、不重复发奖");
+            }
+
+            WirePacket ReadTo(ushort opcode)
+            {
+                for (int i = 0; i < 200; i++)
+                {
+                    var packet = peer.Read();
+                    if (packet.Kind == 0 && packet.Opcode == opcode) return packet;
+                    That(packet.Kind == 0 && packet.Opcode is 2 or 13 or 14 or 19 or 21 or 32 or 36 or 210 or 213 or 215 or 297 or 550 or 1303 or 1536,
+                        $"祭坛结果操作的前置帧必须属于当前玩法：{packet.Kind}/{packet.Opcode}");
+                }
+                throw new InvalidOperationException("祭坛结果操作缺少通知："+opcode);
+            }
+        }
+        {
+            Character created;
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{}))
+            {
+                var repo = new CharacterRepository(fixture.Database);
+                var candidate = CharacterCreation.Prepare("AltarPoor",resources.Characters.Get(0),position,position,resources.Learning.Get);
+                created = repo.Create(owner,candidate with { Level=70,AcceptedStoryLevel=70,CompletedQuests=done.Append(63).Distinct().ToArray(),
+                    InitialLearning=SkillPointLedger.Synchronize(0,0,70,candidate.InitialLearning with
+                        { Experience=growth.GetLevelStartExperience(70) },resources.Learning) });
+                created = repo.CommitInventory(owner,created,new(created.Inventory,created.Inventory with { Gold=21999 },"altar_poor_seed"));
+            }
+            using var peer = Open(fixture);
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            ushort questId = 5650;
+            peer.Send(31,[31,0,(byte)questId,(byte)(questId>>8)]);
+            That(peer.Expect(1,31).Body[0] == 1,"金币不足角色合法接取无尽关联任务");
+            RefreshedQuests(peer); SelectTowerMap(peer,griefLayer:1);
+            var request = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(request,11006);
+            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),5650);
+            var before = fixture.Snapshot("SELECT gold,revision FROM characters WHERE id=$p0",peer.Id);
+            var attempt = fixture.Snapshot("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id);
+            peer.Send(16,request); peer.Expect(1,16,[0,10,0,0]);
+            var invalid = (byte[])request.Clone(); invalid[5] = 1;
+            peer.Send(16,invalid); peer.Expect(1,16,[0,9,0,0]);
+            peer.Send(16,request); peer.Expect(1,16,[0,10,0,0]); peer.Barrier();
+            That(fixture.Snapshot("SELECT gold,revision FROM characters WHERE id=$p0",peer.Id) == before &&
+                fixture.Snapshot("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) == attempt &&
+                fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                "金币不足回复10且不扣费扣次或创建尝试，非法请求不继承旧金币错误");
+            peer.Send(132); peer.Expect(1,132,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
+            peer.Expect(0,23); peer.Expect(0,24); peer.Barrier();
+        }
         Console.WriteLine("PASS 两祭坛实际TCP准入、UI门禁、清首房换房、计时刷怪、255、复活与失败专用结算（非客户端验收）");
+    }
+
+    static byte[] AltarZeroParticipantDeath(ushort key, byte level)
+    {
+        byte[] full = Death(key,ushort.MaxValue,level);
+        byte[] bytes = [..full[..31],..full[45..]];
+        bytes[30] = 0;
+        bytes[31] = 0x4D;
+        bytes[41] = 1;
+        SealDeath(bytes);
+        return bytes;
     }
 
     sealed class AltarTimers(int factor) : TimeProvider

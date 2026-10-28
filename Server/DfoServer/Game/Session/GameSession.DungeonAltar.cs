@@ -20,6 +20,8 @@ internal sealed record DungeonAltarReceipt(long Generation, long SelectionEpoch,
 
 internal sealed partial class GameSession
 {
+    public bool HasDungeonAltar => owner.Execute(() => formalDungeon?.Run.CurrentAltar is not null);
+
     public DungeonAltarReceipt? WaitDungeonAltarRevival() => owner.Execute(() =>
     {
         if (!Ready || Selected is null || Phase != SessionPhase.Dungeon ||
@@ -93,14 +95,22 @@ internal sealed partial class GameSession
 
     public DungeonAltarReceipt? ObserveDungeonAltarDeath(NativeDungeonDeathObservation observation) => owner.Execute(() =>
     {
-        // 极限及无尽房间尾怪实机以完整CMD39上报；仍只授权已发布对象，不接入普通经验/掉落事务。
-        if (formalDungeon?.Entry.DungeonId is not (11006 or 11007) || !observation.ChecksumMatches || observation.MonsterKey > ushort.MaxValue)
+        // 带参与者的CMD39沿原祭坛账本确认已发布对象，不接入普通经验/掉落事务。
+        if (!observation.ChecksumMatches || observation.MonsterKey > ushort.MaxValue)
             return null;
         return ObserveAltarDeaths([checked((ushort)observation.MonsterKey)], observation.BodySha256, acknowledgeDuplicate: true);
     });
 
     public DungeonAltarReceipt? ObserveDungeonAltarDeaths(ImmutableArray<ushort> keys, string fingerprint) =>
         owner.Execute(() => ObserveAltarDeaths(keys, fingerprint));
+
+    public DungeonAltarReceipt? ObserveDungeonAltarScriptedDeath(NativeDungeonScriptedDeathObservation observation) => owner.Execute(() =>
+    {
+        // 零参与者也可以是真实祭坛击杀，不转入普通经验/掉落通道。
+        if (!observation.ChecksumMatches || observation.MonsterKey > ushort.MaxValue)
+            return null;
+        return ObserveAltarDeaths([checked((ushort)observation.MonsterKey)], observation.BodySha256, acknowledgeDuplicate: true);
+    });
 
     DungeonAltarReceipt? ObserveAltarDeaths(ImmutableArray<ushort> keys, string fingerprint, bool acknowledgeDuplicate = false)
     {

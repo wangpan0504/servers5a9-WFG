@@ -5,6 +5,8 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
+internal enum DungeonAltarRejection { None, Ineligible, DailyLimit, InsufficientGold }
+
 internal static class DungeonAltarEntryPolicy
 {
     // 兼容依据：Neople官方Infinity Ascension and Despair列两祭坛每日3次，等级60/65与本版资源一致。
@@ -13,16 +15,26 @@ internal static class DungeonAltarEntryPolicy
     public const string RuleId = "neople-valley-daily-three-pvf-fee-v1";
 
     public static DungeonSpecialEntry? Prepare(Character character, DungeonDefinition definition, int day,
-        DungeonSpecialEntryUsage usage, DungeonAltarAdmissionCatalog prices)
+        DungeonSpecialEntryUsage usage, DungeonAltarAdmissionCatalog prices, out DungeonAltarRejection rejection)
     {
+        rejection = DungeonAltarRejection.Ineligible;
         if (definition.Id is not (11006 or 11007) || definition.AltarKind != (definition.Id == 11006 ? 1 : 2) ||
             definition.MinimumLevel is not { } minimum || character.Level < minimum ||
-            !definition.DisableFatigueConsumption || !definition.EnterWithoutFatigue || definition.DeclaresRequiredItem ||
-            usage.CharacterEntries >= DailyLimit) return null;
+            !definition.DisableFatigueConsumption || !definition.EnterWithoutFatigue || definition.DeclaresRequiredItem) return null;
+        if (usage.CharacterEntries >= DailyLimit)
+        {
+            rejection = DungeonAltarRejection.DailyLimit;
+            return null;
+        }
         int gold = definition.AltarKind == 1 ? prices.BloodFee(character.Level, usage.CharacterEntries) : 0;
-        if (character.Inventory.Gold < gold) return null;
+        if (character.Inventory.Gold < gold)
+        {
+            rejection = DungeonAltarRejection.InsufficientGold;
+            return null;
+        }
         var entry = new DungeonSpecialEntry(day, (DungeonSpecialEntryKind)definition.AltarKind, 0, gold, usage);
         entry.Validate();
+        rejection = DungeonAltarRejection.None;
         return entry;
     }
 

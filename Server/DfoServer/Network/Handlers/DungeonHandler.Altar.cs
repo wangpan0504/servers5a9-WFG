@@ -16,14 +16,13 @@ internal sealed partial class DungeonHandler
         return await PublishAltarDeathsAsync(context, receipt, keys.Length, CmdPacketType.DIE_BLOOD_MONSTER);
     }
 
-    async Task<CommandResult> AltarMonsterDeathAsync(GameConnectionContext context, NativeDungeonDeathObservation observation)
+    async Task<CommandResult> PublishAltarMonsterDeathAsync(GameConnectionContext context, uint objectKey, DungeonAltarReceipt? receipt)
     {
-        var receipt = context.Session.ObserveDungeonAltarDeath(observation);
         if (receipt is not null)
-            await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(checked((ushort)observation.MonsterKey), [],
+            await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(checked((ushort)objectKey), [],
                 context.Session.FormalEnteredDungeonId),
                 "formal_altar_monster_death", () => context.Session.CanPublishDungeonAltar(receipt));
-        return await PublishAltarDeathsAsync(context, receipt, 1, CmdPacketType.DIE_MONSTER, observation.MonsterKey);
+        return await PublishAltarDeathsAsync(context, receipt, 1, CmdPacketType.DIE_MONSTER, objectKey);
     }
 
     async Task<CommandResult> PublishAltarDeathsAsync(GameConnectionContext context, DungeonAltarReceipt? receipt,

@@ -65,6 +65,23 @@ internal sealed partial class GameSession
     sealed record AltarCapture(Character Character, FormalDungeon Dungeon, bool Failed, bool Dead, long Clock,
         int CompletedRounds, int MaximumRounds, bool Prepared);
 
+    public DungeonAltarReceipt? CurrentDungeonAltarResult() => owner.Execute(() =>
+    {
+        if (!Ready || Selected is null || Phase != SessionPhase.Settlement ||
+            formalDungeon is not { AltarSettlement: { Commit: not null } result } dungeon ||
+            dungeon.Run.CurrentAltar is null || result.Stage is < 0 or > 2) return null;
+        return AltarResultReceipt(dungeon, result, AltarClock());
+    });
+
+    public DungeonAltarReceipt? AdvanceDungeonAltarResult(DungeonAltarReceipt expected) => owner.Execute(() =>
+    {
+        if (expected.Result is not { Stage: >= 0 and < 2 } || !CanPublishDungeonAltar(expected) ||
+            formalDungeon?.AltarSettlement is not { Commit: not null } result) return null;
+        long now = AltarClock();
+        result.Due = now;
+        return TickAltarSettlement(expected, result, now);
+    });
+
     DungeonAltarReceipt? CommitAltarResult(FormalDungeon dungeon, CharacterGrowthCatalog growth)
     {
         if (!Ready || !ReferenceEquals(formalDungeon, dungeon) || dungeon.AltarSettlement is not { } result ||
