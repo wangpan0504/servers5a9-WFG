@@ -451,10 +451,26 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             {
                 ObservedUtc = DateTimeOffset.UtcNow, Phase = phase.Length <= 160 ? phase : phase[..160], ElapsedMs = elapsed.TotalMilliseconds,
                 ReadyExists = File.Exists(ready), Process = processState, Hosted = hosted?.Status.ToString() ?? "none",
-                Startup = ReadStartupDiagnostic(log)
+                ChildMetrics = ReadChildMetrics(child), Startup = ReadStartupDiagnostic(log)
             });
         }
         catch (Exception error) { return "readiness-diagnostic-unavailable:" + error.GetType().Name; }
+    }
+
+    internal sealed record ChildMetrics(int? Pid, double? CpuMs, long? WorkingSetBytes, long? PrivateBytes, string? Error);
+
+    // 只读本夹具持有的子进程句柄，不枚举其他进程或冒充跨进程GC数据。
+    internal static ChildMetrics ReadChildMetrics(Process? child)
+    {
+        if (child is null) return new(null, null, null, null, "no-child");
+        int? pid = null;
+        try
+        {
+            pid = child.Id;
+            child.Refresh();
+            return new(pid, child.TotalProcessorTime.TotalMilliseconds, child.WorkingSet64, child.PrivateMemorySize64, null);
+        }
+        catch (Exception error) { return new(pid, null, null, null, error.GetType().Name); }
     }
 
     internal sealed record StartupDiagnostic(long? FileBytes, int ReadBytes, bool TailOnly, string? Time,

@@ -68,6 +68,7 @@ internal static class SelfTestRunner
         CommandLineTests.Run();
         ConnectionAddressTests.Run();
         Testing.TcpTestFixtureProcessTests.Run();
+        StartupStageTests.Run();
         await Testing.TcpTestArtifactsTests.RunAsync();
         CashShopTests.RunCore();
         PremiumContractTests.RunCore();
@@ -542,6 +543,8 @@ internal static class SelfTestRunner
         DungeonSettlementSessionTests.Run(towns, pvf, characters, itemResources);
         DungeonMonsterDropCatalogTests.Run(pvf);
         DungeonDropRuleCatalogTests.RunResources(pvf);
+        DungeonItemDropCatalogTests.RunParsedResources(pvf);
+        DungeonItemDropCatalogTests.RunSnapshotResources(pvf, itemResources.Items);
         DungeonItemDropCatalogTests.RunResources(itemResources.DungeonDropItems);
         DungeonSpecialDropCatalogTests.RunResources(itemResources.DungeonSpecialDrops);
         DungeonPickupPlanningTests.RunResources(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);

@@ -370,9 +370,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         foreach (var slot in receipt.ChannelConsumedSlots) projectedSlots.Add(slot.Index);
         foreach (var slot in receipt.HellConsumedSlots) projectedSlots.Add(slot.Index);
         foreach (var slot in receipt.AssaultConsumedSlots) projectedSlots.Add(slot.Index);
-        var currencySlots = receipt.EntryChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).OfType<short>()
-            .Where(slot => !projectedSlots.Contains(slot))
-            .Select(slot => new InventorySlot(InventoryListType.Main, slot)).ToArray();
+        var currencySlots = EntryCurrencySlots(receipt.EntryChangedCurrencies, projectedSlots);
         if (currencySlots.Length != 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main, currencySlots), "dungeon_entry_currencies", Guard);
@@ -423,6 +421,12 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             return CommandResult.Handled;
         }
     }
+
+    // 沿用统一入场已投影槽集合；只补剩余货币，按原序去重，不遗漏其它入场货币。
+    internal static InventorySlot[] EntryCurrencySlots(IEnumerable<CurrencyKind> currencies, IReadOnlySet<short> projectedSlots) =>
+        currencies.Select(ItemSlotBoundService.CurrencySlot).OfType<short>()
+            .Where(slot => !projectedSlots.Contains(slot)).Distinct()
+            .Select(slot => new InventorySlot(InventoryListType.Main, slot)).ToArray();
 
     async Task<CommandResult> LoadedAsync(GameConnectionContext context, Packet request)
     {

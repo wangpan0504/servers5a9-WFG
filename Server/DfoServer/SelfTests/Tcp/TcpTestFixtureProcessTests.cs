@@ -27,6 +27,9 @@ internal static class TcpTestFixtureProcessTests
             "预算拒绝保留原有子进程配置及其它环境设置");
         That(Environment.GetEnvironmentVariable("DOTNET_GCHeapHardLimit") == parent, "子进程预算不能修改驱动进程环境");
         ReadinessDiagnostics();
+        That(TcpTestFixture.ReadChildMetrics(null).Error == "no-child", "同进程夹具不能把驱动GC冒充子进程GC");
+        using var absent = new Process();
+        That(TcpTestFixture.ReadChildMetrics(absent).Error is not null, "不可用进程指标返回未知，不抛出诊断异常");
         EventLog();
     }
 
@@ -82,6 +85,9 @@ internal static class TcpTestFixtureProcessTests
                     !value.GetProperty("ReadyExists").GetBoolean() && value.GetProperty("Hosted").GetString() == "RanToCompletion" &&
                     value.GetProperty("Process").GetString()!.Contains($"Pid={current.Id};HasExited=False;ExitCode=not-exited"),
                     "仅观察原持有句柄、原阶段及elapsed，不启动、终止或重试进程");
+                That(value.GetProperty("ChildMetrics").GetProperty("Pid").GetInt32() == current.Id &&
+                    value.GetProperty("ChildMetrics").GetProperty("CpuMs").GetDouble() >= 0 &&
+                    value.GetProperty("ChildMetrics").GetProperty("WorkingSetBytes").GetInt64() > 0, "超时只读取指定进程CPU及内存，不改变生命周期");
                 That(!parsed.RootElement.GetRawText().Contains("must-not-leak"), "不把其它日志或完整正文附加到超时异常");
             }
             File.WriteAllText(log, first + "\n" + new string('x', 128 * 1024));

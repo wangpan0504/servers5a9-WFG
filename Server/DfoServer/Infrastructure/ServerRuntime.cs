@@ -403,31 +403,31 @@ internal static class ServerRuntime
         if (options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled)
         {
             selectionDungeons = dungeonCatalog;
-            assaultMode = AssaultModeCatalog.Load(pvf, dungeonCatalog);
-            var rooms = lukeObjectRooms ?? DungeonRoomCatalog.Load(pvf);
-            operationHope = OperationHopeCatalog.Load(pvf,dungeonCatalog,quests,rooms);
+            assaultMode = StartupStage.Run(log, "Assault mode catalog", () => AssaultModeCatalog.Load(pvf, dungeonCatalog));
+            var rooms = StartupStage.Run(log, "Dungeon room catalog", () => lukeObjectRooms ?? DungeonRoomCatalog.Load(pvf));
+            operationHope = StartupStage.Run(log, "Operation Hope catalog", () => OperationHopeCatalog.Load(pvf,dungeonCatalog,quests,rooms));
             tutorialScenes ??= new TutorialScenes(pvf, tutorials, dungeonCatalog);
             questRooms = rooms;
-            var drops = DungeonMonsterDropCatalog.Load(pvf);
-            var dropRules = DungeonDropRuleCatalog.Load(pvf);
-            var dropCandidates = itemResources.DungeonDropItems;
-            var specialDrops = itemResources.DungeonSpecialDrops;
+            var drops = StartupStage.Run(log, "Dungeon monster drops", () => DungeonMonsterDropCatalog.Load(pvf));
+            var dropRules = StartupStage.Run(log, "Dungeon drop rules", () => DungeonDropRuleCatalog.Load(pvf));
+            var dropCandidates = StartupStage.Run(log, "Dungeon item candidates", () => itemResources.DungeonDropItems);
+            var specialDrops = StartupStage.Run(log, "Dungeon special drops", () => itemResources.DungeonSpecialDrops);
             var amplificationDrops = new EquipmentAmplificationDropPolicy(itemResources.Amplifications.Rules);
             string? configuredMaterials = Environment.GetEnvironmentVariable("DFO_HARLEM_MATERIAL_RULES");
             var materialRules = HarlemMaterialDropRules.Parse(configuredMaterials ?? "{}");
             var harlemDungeons = towns.DungeonMaps.Values.Where(map => map.HellDungeon && map.HellQuests.Contains(6080))
                 .SelectMany(map => map.Options).Select(option => checked((uint)option.DungeonId)).ToArray();
-            var hellEpicTable = DungeonHellEpicCatalog.Load(pvf);
+            var hellEpicTable = StartupStage.Run(log, "Hell epic catalog", () => DungeonHellEpicCatalog.Load(pvf));
             string? configuredEpics = Environment.GetEnvironmentVariable("DFO_HARLEM_HELL_EPIC_RULES");
             var epicRules = HarlemHellEpicRules.Parse(configuredEpics ?? "{}");
-            var cosmoRewards = DungeonCosmoRewardCatalog.Load(pvf, dungeonCatalog, rooms);
-            var harlemEpics = new HarlemHellEpicDropPolicy(harlemDungeons,
+            var cosmoRewards = StartupStage.Run(log, "Cosmo reward catalog", () => DungeonCosmoRewardCatalog.Load(pvf, dungeonCatalog, rooms));
+            var harlemEpics = StartupStage.Run(log, "Harlem epic pools", () => new HarlemHellEpicDropPolicy(harlemDungeons,
                 hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.NormalList, itemResources.Items.Get),
                 hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.WeaponList, itemResources.Items.Get),
                 hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.TayberrsList, itemResources.Items.Get),
                 hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.CosmoList, itemResources.Items.Get),
                 epicRules, cosmoRewards,
-                hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.SuperList, itemResources.Items.Get));
+                hellEpicTable.Pool(HarlemHellEpicDropPolicy.Area, HarlemHellEpicDropPolicy.SuperList, itemResources.Items.Get)));
             var materialDrops = new HarlemMaterialDropPolicy(materialRules, harlemDungeons, itemResources.Items.Get, harlemEpics);
             string? configuredBonuses = Environment.GetEnvironmentVariable("DFO_HARLEM_ABYSS_BONUS_RULES");
             var bonusRules = HarlemAbyssBonusRules.Parse(configuredBonuses ?? "{}");
