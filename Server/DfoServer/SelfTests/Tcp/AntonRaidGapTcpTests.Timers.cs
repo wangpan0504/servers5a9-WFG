@@ -49,8 +49,15 @@ internal static partial class AntonRaidGapTcpTests
             string failed = fixture.Snapshot("SELECT * FROM character_raid_runs ORDER BY 1,2");
             peer.Send(660, [1, 0]);
             var rejected = AntonTcpProbe.Barrier(peer, "超时后领奖拒绝");
-            // Anton失败ACK字节尚无证据；沿既有card600-601负例保持Unhandled，不借Luke错误码。
-            That(rejected.All(packet => packet.Opcode is not (660 or 600 or 601)), "失败回执不产生奖励或猜测的660失败ACK");
+            // P1无历史回执保持Unhandled；P2仍可幂等确认P1旧回执，但不能给失败阶段发奖或重开窗口。
+            // 合同复用card600-601的旧阶段回放；不借Luke失败码，不撤销已提交的原资产确认。
+            That(rejected.All(packet => packet.Opcode is not (600 or 601)) &&
+                (phase == 0 ? rejected.All(packet => packet.Opcode != 660) :
+                    rejected.Count(packet => packet is { Kind: 1, Opcode: 660, Body: [1] }) == 1),
+                "失败阶段不发奖；无历史回执不猜失败ACK，已领旧阶段仅幂等确认");
+            peer.Send(660, [1, 1]);
+            That(AntonTcpProbe.Barrier(peer, "超时后未配置牌位拒绝").All(packet => packet.Opcode is not (660 or 600 or 601)),
+                "失败后未配置牌位不能借历史回执生成成功或展示");
             AntonTcpProbe.RejectClosed(peer, null, phase == 0 ? 210 : 218);
             clock.Advance(600);
             var rest = AntonTcpProbe.Barrier(peer, "UNIMPLEMENTED休息边界");
