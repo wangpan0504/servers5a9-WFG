@@ -73,6 +73,7 @@ internal sealed partial class CharacterRepository
                 return new QuestLifecycleCommit(current, plan, true, projectionCurrent);
             }
         }
+        VerifyQuestPvpRating(db,tx,owner.Account,expected.Id,plan.PvpRating);
         if (current.Id != expected.Id || current.Revision != expected.Revision || current.Level != expected.Level ||
             current.Job != expected.Job || current.GrowType != expected.GrowType || current.Position != expected.Position ||
             current.AcceptedStoryLevel != expected.AcceptedStoryLevel || !current.Skills.SequenceEqual(expected.Skills) ||

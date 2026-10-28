@@ -49,6 +49,12 @@ internal static class QuestCharacterReward
             quest.Id == 6081 && quest.RewardType == "[hell legend]" && quest.Rewards is [{ Type: 0, Text: null, Value: 291100268 }]) &&
         quest.Definition is { SelectRewards.Length: 0 };
 
+    // 时间广场魔兽资格只记录完成。公告 mode 31 还没有客户端读者，这里不发物品、不发公告。
+    public static bool TryBeastQualification(StoryQuest quest) =>
+        quest.Id == 5927 && quest.Path.EndsWith("open_beast.qst", StringComparison.OrdinalIgnoreCase) &&
+        quest.RewardType == "[beast dungeon challenge]" && quest.Rewards is [{ Type: 0, Text: null, Value: 311 }] &&
+        quest.Definition is { SelectRewards.Length: 0 };
+
     // 假设（无原服依据，Refs #256）：深渊派对入口资格 = 角色已完成任一确认形态的 [hell challenge] 资格任务。
     // 服务端没有单独的资格表，完成态已随 CompletedQuests 持久化；客户端入口 UI 如何判定、深渊入场请求的包形状均未逆向确认，
     // 因此此函数只供将来的入场校验使用，目前不参与任何入场拒绝。

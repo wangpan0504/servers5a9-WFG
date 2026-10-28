@@ -57,6 +57,30 @@ internal static class SkillLearningTests
         var source = State(30, [new(8, 7, 1)]);
         var dependent = State(18, [new(0, 5, 1), new(1, 6, 1)]);
         var free = new Dictionary<ushort, byte>();
+        var steal = new SkillLearningDefinition(0, 30, "skill/steal.skl", SkillType.Active, [25],
+            Enumerable.Repeat(20,6).ToArray(), Enumerable.Repeat(10,6).ToArray(),25,2,[],new int[6],false,false,[],3,1,
+            skillFitnessGrowtypes:[3],steelLearning:new(true,50,200,4));
+        var ownSteal = steal.IsSteelLearning(3);
+        That(!ownSteal && steal.IsSteelLearning(1) && steal.GetPointCost(0,3)==25 &&
+            steal.GetPointCost(0,1)==50 && steal.GetLearningMaximum(1)==10 && steal.GetNextRequiredCharacterLevel(1,1)==31,
+            "本职费用保持资源值，非本职按明确偷学兼容费用、等级和上限计算");
+        SkillLearningDefinition SteelResolve(byte job,ushort id)=>id==30 ? steal : Resolve(job,id);
+        var stealSource=State(200,[]);
+        That(SkillLearning.Plan(0,1,60,stealSource,new(0,0,[new(5,false,1),new(30,false,1)]),SteelResolve).Failure==SkillLearningFailure.Prerequisite &&
+            stealSource.Trees[0].Sp==200 && stealSource.Trees[0].Skills.Count==0,
+            "355未完成时混合学习整批拒绝，普通条目不先扣点");
+        That(SkillLearning.Plan(0,3,60,stealSource,new(0,0,[new(30,false,1)]),SteelResolve).Success,
+            "本职技能不错误要求偷学任务解锁");
+        That(SkillLearning.Plan(0,1,28,stealSource,new(0,0,[new(30,false,1)]),SteelResolve,steelUnlocked:true).Failure==SkillLearningFailure.RequiredLevel,
+            "解锁资格不绕过偷学附加等级");
+        var stolen=SkillLearning.Plan(0,1,60,stealSource,new(1,0,[new(30,false,3)]),SteelResolve,steelUnlocked:true);
+        That(stolen.Success && stolen.State!.Trees[1].Sp==50 && stolen.State.Trees[0].Sp==200 &&
+            stolen.State.Trees[1].Skills.Single().Level==3,"偷学多级只扣指定方案真实特殊费用");
+        var returned=SkillLearning.Plan(0,1,60,stolen.State!,new(1,0,[new(30,true,3)]),SteelResolve,free,200);
+        That(returned.Success && returned.State!.Trees[1].Sp==200 && returned.State.Trees[1].Skills.Count==0,
+            "退点不需要重新解锁并完整退回特殊费用");
+        That(SkillLearning.Plan(0,1,60,stealSource,new(0,0,[new(30,false,11)]),SteelResolve,steelUnlocked:true).Failure==SkillLearningFailure.Mastered,
+            "偷学不能越过资源成长及兼容百分比上限");
         var deniedRefund = SkillLearning.Plan(0, 0, 10, dependent, new(0, 0, [new(5, true, 1)]), Resolve, free, 30);
         That(deniedRefund.Failure == SkillLearningFailure.Prerequisite && dependent.Trees[0].Sp == 18,
             "前置降至零而后继保留时整批失败，原余额和绑定不动");
@@ -209,6 +233,15 @@ internal static class SkillLearningTests
         That(real.Success && real.State!.Trees[0].Sp == 0 && real.Changes.Single().Level == 1, "real PVF ordinary hardattack learning consumes15 SP");
         CharacterProfile actualProfile = characters.Get(0);
         SkillLearningResult realInitial = SkillLearning.Initialize(0, actualProfile.Skills, actual);
+        var arena49=SkillPointLedger.Synchronize(0,0,49,realInitial.State! with {BonusSp=0,BonusTp=0},actual);
+        var arenaPaid=SkillLearning.Plan(0,0,49,arena49,Request(),actual).State!;
+        var ordinary50=SkillPointLedger.Synchronize(0,0,50,arena49,actual);
+        var arenaCharacter=new Character(1,0,"ArenaGrowth",0,new(10,0,0,0),null)
+            {Level=50,Learning=ordinary50,PvpTrainingSkills=new(arenaPaid,0,Guid.Empty){Arena=arenaPaid}};
+        var arena50=DfoServer.Game.Pvp.PvpTrainingSkills.ArenaSource(arenaCharacter,actual);
+        That(arena50.Trees[0].Tp==1 && arena50.Trees[0].Sp==ordinary50.Trees[0].Sp-15 &&
+            arena50.Trees[0].Skills.Single(skill=>skill.Id==5).Level==arenaPaid.Trees[0].Skills.Single(skill=>skill.Id==5).Level &&
+            arenaPaid.Trees[0].Tp==0,"正式PK投影按当前等级即时重算SP/TP，保留独立付费等级和原存档");
         That(actualProfile.Skills.Length == 6 && realInitial.Success && realInitial.State!.Trees.All(tree => tree.Sp == 0 && tree.Tp == 0),
             "real job0 all six initial skills bind with zero points including mastered resource without range");
         That(realInitial.State!.Trees.All(tree => tree.Skills.Select(skill => new CharacterSkill(skill.Id, skill.Level)).SequenceEqual(actualProfile.Skills)) &&

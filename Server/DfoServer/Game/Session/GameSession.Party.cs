@@ -5,7 +5,7 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     // 沿用原单人队伍的会话门禁；共享队伍服务在账号提交边界内复核。
-    internal bool CanChangeTownParty => Ready && Phase == SessionPhase.Town && Selected is not null && pendingRental is null &&
+    internal bool CanChangeTownParty => Ready && Phase == SessionPhase.Town && Selected is not null && pendingRental is null && pvpMatching is null &&
         !HasPendingTownQuestCommit && !HasActiveDungeonContinuation && !HasPendingQuestReplay && !HasPendingFormalCard;
     PartyEndpoint? partyEndpoint;
     long partyMembershipVersion;

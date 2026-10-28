@@ -35,15 +35,23 @@ internal sealed partial class CharacterRepository : IGuildDirectoryStore
         command.CommandText = """
             SELECT g.guild_id,g.name,g.level,
                 (SELECT count(*) FROM guild_members members WHERE members.guild_id=g.guild_id),
-                c.name,g.notice,g.experience,g.created_at_unix
+                c.name,g.notice,g.experience,g.created_at_unix,g.tier,g.guild_crystal,g.master_character_id,m.grade
             FROM guild_members m JOIN guilds g ON g.guild_id=m.guild_id
             JOIN characters c ON c.id=g.master_character_id WHERE m.character_id=$id
             """;
         command.Parameters.AddWithValue("$id", characterId);
         using var reader = command.ExecuteReader();
-        return reader.Read() ? new(checked((uint)reader.GetInt64(0)), reader.GetString(1), checked((byte)reader.GetInt32(2)),
+        if (!reader.Read()) return null;
+        var guild = new GuildMembership(checked((uint)reader.GetInt64(0)), reader.GetString(1), checked((byte)reader.GetInt32(2)),
             checked((ushort)reader.GetInt32(3)), reader.GetString(4), reader.GetString(5),
-            checked((uint)reader.GetInt64(6)), checked((uint)reader.GetInt64(7))) : null;
+            checked((uint)reader.GetInt64(6)), checked((uint)reader.GetInt64(7)))
+            {
+                Tier = checked((byte)reader.GetInt32(8)), Crystals = checked((uint)reader.GetInt64(9)),
+                Grade = GuildRoleRules.NormalizeGrade(characterId, checked((ushort)reader.GetInt32(10)),
+                    checked((byte)reader.GetInt32(11)))
+            };
+        reader.Close();
+        return guild with { Appearance = ReadAppearanceInTransaction(db, transaction, guild.Id) };
     }
 
     /// <summary>
@@ -116,9 +124,16 @@ internal sealed partial class CharacterRepository : IGuildDirectoryStore
             if (plan.InviteeCharacterId != 0 && plan.InviteeCharacterId != expected.Id &&
                 GuildMembershipExists(db, transaction, plan.InviteeCharacterId))
                 return new GuildCreateResult(GuildCreateError.AlreadyInGuild, null, 0);
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (ApplicationCooldown(db, transaction, expected.Id, now) ||
+                plan.InviteeCharacterId != 0 && ApplicationCooldown(db, transaction, plan.InviteeCharacterId, now))
+                return new GuildCreateResult(GuildCreateError.AlreadyInGuild, null, 0);
 
             var character = CommitInventoryInTransaction(db, transaction, owner, expected, plan.Inventory);
             long guildId = InsertGuild(db, transaction, plan, character.Id);
+            RemoveAllGuildApplications(db, transaction, character.Id, checked((uint)guildId));
+            if (plan.InviteeCharacterId != 0)
+                RemoveAllGuildApplications(db, transaction, plan.InviteeCharacterId, checked((uint)guildId));
             character = character with { Guild = ReadGuildMembership(db, character.Id, transaction) };
             transaction.Commit();
             return new GuildCreateResult(GuildCreateError.None, character, guildId);

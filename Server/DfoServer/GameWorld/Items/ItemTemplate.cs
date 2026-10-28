@@ -35,6 +35,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool PvpFreeEquipment { get; init; }
     public bool PersonalCargoForbidden { get; init; }
     public bool AccountCargoForbidden { get; init; }
+    public bool AccountBoundAfterTrade { get; init; }
     public ushort PersonalCargoUpgradeTarget { get; init; }
     public ItemShopPrice ShopPrice { get; init; } = new(0, 0, [], null);
     public ItemExpiration Expiration { get; init; } = new();

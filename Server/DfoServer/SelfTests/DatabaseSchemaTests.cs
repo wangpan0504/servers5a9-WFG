@@ -13,6 +13,47 @@ namespace DfoServer;
 
 internal static partial class DatabaseSchemaTests
 {
+    // 仅用于隔离测试库回退到v100及更早；先卸跨资产触发器，再按子表顺序移除后续公会结构。
+    internal const string GuildExtensionFixtureRewindSql = """
+        DROP TRIGGER IF EXISTS guild_cargo_exclusive_insert;
+        DROP TRIGGER IF EXISTS guild_cargo_exclusive_update;
+        DROP TRIGGER IF EXISTS inventory_not_guild_cargo_insert;
+        DROP TRIGGER IF EXISTS inventory_not_guild_cargo_update;
+        DROP TRIGGER IF EXISTS title_not_guild_cargo_insert;
+        DROP TRIGGER IF EXISTS title_not_guild_cargo_update;
+        DROP TRIGGER IF EXISTS mail_not_guild_cargo_insert;
+        DROP TRIGGER IF EXISTS mail_not_guild_cargo_update;
+        DROP TABLE IF EXISTS guild_request_claims;
+        DROP TABLE IF EXISTS guild_recommended_channels;
+        DROP TABLE IF EXISTS guild_experience_receipts;
+        DROP TABLE IF EXISTS guild_teleport_receipts;
+        DROP TABLE IF EXISTS guild_attendance;
+        DROP TABLE IF EXISTS guild_contribution_settlements;
+        DROP TABLE IF EXISTS guild_contribution_events;
+        DROP TABLE IF EXISTS guild_npc_receipts;
+        DROP TABLE IF EXISTS guild_growth_item_receipts;
+        DROP TABLE IF EXISTS guild_npc_craft_receipts;
+        DROP TABLE IF EXISTS guild_npc_craft_completions;
+        DROP TABLE IF EXISTS guild_npc_crafts;
+        DROP TABLE IF EXISTS guild_npc_progress;
+        DROP TABLE IF EXISTS guild_appearance;
+        DROP TABLE IF EXISTS guild_economy_events;
+        DROP TABLE IF EXISTS guild_mileage_history;
+        DROP TABLE IF EXISTS guild_economy_receipts;
+        DROP TABLE IF EXISTS guild_benefits;
+        DROP TABLE IF EXISTS guild_economy;
+        DROP TABLE IF EXISTS guild_cargo_receipts;
+        DROP TABLE IF EXISTS guild_cargo_history;
+        DROP TABLE IF EXISTS guild_cargo_slots;
+        DROP TABLE IF EXISTS guild_cargo_state;
+        DROP TABLE IF EXISTS guild_applications;
+        DROP TABLE IF EXISTS guild_membership_cooldowns;
+        DROP TABLE IF EXISTS guild_roles;
+        DROP TABLE IF EXISTS guild_settings;
+        """;
+
+    internal static void RemoveGuildExtensionSchema(SqliteConnection db) => Execute(db, GuildExtensionFixtureRewindSql);
+
     const string SettlementColumns = "character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision";
 
     internal static void RemoveExperienceBonusSchema(SqliteConnection db)
@@ -160,12 +201,18 @@ internal static partial class DatabaseSchemaTests
         Directory.CreateDirectory(root);
         try
         {
+            GuildExtensionsUpgrade(root);
             SkillTreeUpgrade(root);
             CloneTitleUpgrade(root);
             TagEvildomUpgrade(root);
             OrdinaryLukeUpgrade(root);
             OrdinaryLukeDropUpgrade(root);
+            PvpArenaResultUpgrade(root);
+            PvpRatingUpgrade(root);
+            PvpTotalTeamUpgrade(root);
             RaidLifecycleUpgrade(root);
+            PvpTotalRatingUpgrade(root);
+            PvpRankUpgrade(root);
             FatigueDailyUpgrade(root);
             ServerItemUpgrade(root);
             PlayerInteractionPreviewUpgrade(root);
@@ -387,6 +434,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveGuildExtensionSchema(db);
                 RewindRaidLifecycle(db);
                 Execute(db, "DROP TABLE character_boss_selection_buff; PRAGMA user_version=103");
                 if (conflict) Execute(db, "CREATE TABLE character_boss_selection_buff(character_id INTEGER,account TEXT,state_json TEXT)");
@@ -776,7 +824,9 @@ internal static partial class DatabaseSchemaTests
             for (int index = 0; index < tables.Length; index++)
                 Check(Rows(db, tables[index], columns[index]) == history[index], "v43保留全部原列、rowid和冻结JSON/BLOB，不改历史关联：" + tables[index]);
             Check(Query(db, "SELECT count(*) FROM scene_settlement_migration_audit") is 0L &&
-                Query(db, "SELECT count(*) FROM sqlite_schema WHERE tbl_name IN('character_dungeon_scene_clear_receipts','character_quest_clear_receipts','character_quest_completion_receipts','character_dungeon_settlement_receipts','character_dungeon_card_rewards','character_dungeon_card_options') AND (name GLOB '*_history' OR name GLOB '*_history_insert')") is 12L,
+                tables.Skip(1).All(table => Query(db, "SELECT count(*) FROM sqlite_schema WHERE tbl_name='" + table +
+                    "' AND ((type='index' AND name='" + table + "_history') OR (type='trigger' AND name='" +
+                    table + "_history_insert'))") is 2L),
                 "v43保留六表索引和触发器，复制历史时不重放业务");
             Check(Query(db, "SELECT scene_operation_id IS NULL AND growth_contract_experience=0 FROM character_dungeon_settlement_receipts WHERE rowid=23") is 1L &&
                 Query(db, "SELECT condition_type||':'||plan_snapshot FROM character_quest_completion_receipts WHERE rowid=21") is "19:{\"History\":19}" &&
@@ -960,6 +1010,7 @@ internal static partial class DatabaseSchemaTests
         new AuthenticationService(new AuthenticationRepository(path)).Create("weekly-usage", "fixture-password");
         using (var db = Open(path))
         {
+            RemoveGuildExtensionSchema(db);
             RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
@@ -1016,6 +1067,7 @@ internal static partial class DatabaseSchemaTests
         new AuthenticationService(new AuthenticationRepository(path)).Create("temp-numbering", "fixture-password");
         using (var db = Open(path))
         {
+            RemoveGuildExtensionSchema(db);
             RewindRaidLifecycle(db);
             Execute(db, """
                 INSERT INTO account_adventures(account,revision,name,created_date,level,experience,remainder,capsule_experience,
@@ -2261,6 +2313,7 @@ internal static partial class DatabaseSchemaTests
 
     static void RewindDailyBoosterUsage(SqliteConnection db)
     {
+        RewindPvpRankCompletion(db);
         RemoveSkillTreeExpansionSchema(db);
         if (Query(db, "SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage'") is 1L)
             Execute(db, "ALTER TABLE characters DROP COLUMN daily_booster_usage");
@@ -2269,8 +2322,11 @@ internal static partial class DatabaseSchemaTests
     static void DropAuctionSchema(SqliteConnection db) =>
         Execute(db, "DROP INDEX IF EXISTS auction_listings_expiry; DROP INDEX IF EXISTS auction_listings_seller; DROP INDEX IF EXISTS auction_listings_template; DROP TABLE IF EXISTS auction_listings");
 
-    static void DropGuildSchema(SqliteConnection db) =>
+    static void DropGuildSchema(SqliteConnection db)
+    {
+        RemoveGuildExtensionSchema(db);
         Execute(db, "DROP INDEX IF EXISTS guild_members_grade; DROP TABLE IF EXISTS guild_members; DROP TABLE IF EXISTS guilds");
+    }
 
     static void VerifyReceiptDefinitionFixture(string root)
     {
@@ -2383,6 +2439,10 @@ internal static partial class DatabaseSchemaTests
             using (var db = Open(path))
             {
                 RemoveExperienceBonusSchema(db);
+                if (oldVersion < 141) Execute(db, "DROP TABLE guild_dungeon_effective_progress");
+                if (oldVersion < 140) Execute(db, "DROP TABLE guild_dungeon_reward_receipts");
+                if (oldVersion < 139) Execute(db, "DROP TABLE guild_ranking_months; DROP TABLE guild_ranking_party_clears");
+                if (oldVersion < 138) Execute(db, "DROP TABLE guild_hongbao_claims; DROP TABLE guild_hongbao_records");
                 RewindDailyBoosterUsage(db);
                 if (oldVersion < 49) RewindDevilServices(db);
                 if (oldVersion < 53) DropQuestStageSchema(db);

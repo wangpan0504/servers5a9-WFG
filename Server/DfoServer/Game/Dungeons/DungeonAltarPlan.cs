@@ -4,7 +4,11 @@ using DfoServer.GameWorld.Dungeons;
 namespace DfoServer.Game.Dungeons;
 
 internal sealed record DungeonAltarActor(ushort ObjectKey, DungeonAltarPhase Phase, int Repetition,
-    byte Kind, byte Rank, byte Level);
+    byte Kind, byte Rank, byte Level)
+{
+    public byte? BattleLevelOverride { get; init; }
+    public byte BattleLevel => BattleLevelOverride ?? Level;
+}
 internal sealed record DungeonAltarBatch(long DelayMilliseconds, ushort Interval, ImmutableArray<DungeonAltarActor> Actors);
 internal sealed record DungeonAltarRound(int Round, byte Difficulty, ImmutableArray<DungeonAltarBatch> Batches);
 

@@ -164,6 +164,8 @@ internal static partial class CashShopTests
         };
         var service = new InventoryCashShopService(resources.Items, resources.CashShop, resources.GoldLimits, resources.EpicPieces, resources.Cargo, contracts: resources.Contracts)
             { IgnoreAbsoluteExpiration = false };
+        VerifyHongbaoPayment(character, product, resources);
+        VerifyHongbaoStorage(towns, characters, resources);
         // 新版PVF商城新增商品可能指向含重复 impossible contents 块的物品（加载器按设计拒绝）；这类商品不能作为过期夹具，跳过。
         LegacyExpiryFixture.Restore(resources.Items, (490705385, "2020-04-09 06:00:00"), (490705234, "2020-04-09 06:00:00"), (490705235, "2020-04-09 06:00:00"),
             (490705286, "2020-03-19 06:00:00"), (490705249, "2020-02-20 06:00:00"));

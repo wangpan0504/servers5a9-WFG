@@ -32,6 +32,8 @@ internal static class SelfTestCatalogs
     static Cache For(PvfArchive archive) => caches.GetValue(archive, _ => new Cache());
 
     public static QuestCatalog Quests(PvfArchive archive) => For(archive).Get(typeof(QuestCatalog), () => QuestCatalog.Load(archive));
+    public static DfoServer.GameWorld.Pvp.PvpArenaCatalog PvpArena(PvfArchive archive) =>
+        For(archive).Get(typeof(DfoServer.GameWorld.Pvp.PvpArenaCatalog), () => new DfoServer.GameWorld.Pvp.PvpArenaCatalog(archive));
     public static QuestConnectionCatalog QuestConnections(PvfArchive archive) => For(archive).Get(typeof(QuestConnectionCatalog), () => QuestConnectionCatalog.Load(archive));
     public static QuestRewardParameterCatalog QuestRewardParameters(PvfArchive archive) => For(archive).Get(typeof(QuestRewardParameterCatalog), () => QuestRewardParameterCatalog.Load(archive));
     public static DungeonCatalog Dungeons(PvfArchive archive) => For(archive).Get(typeof(DungeonCatalog), () => DungeonCatalog.Load(archive));

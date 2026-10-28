@@ -34,10 +34,13 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (request.Body.Length == 6 && context.Session.ChannelEntry?.Type == 39 && imperialArena is not null)
         {
             uint imperialDungeon = ImperialArenaRequests.Entry(request.Body);
+            // 修理/购券会改主角记录，但已装的双Actor只装备用角色；失效时就地重建一次，不再要求重登。
+            if (!context.BlocksTownActions) await imperialArena.RefreshPairAsync(context);
             var selected = !context.BlocksTownActions && dungeons is not null
                 ? context.Session.BeginImperialArenaSelection(imperialDungeon, dungeons, imperialArena.Catalog, imperialArena.Store) : null;
             log.Write(selected is null ? "imperial_arena_entry_rejected" : "imperial_arena_selection_opened",
-                new { Connection = context.Id, Dungeon = imperialDungeon, selected?.SelectionId });
+                new { Connection = context.Id, Dungeon = imperialDungeon, Reason = selected is null ? context.Session.ImperialArenaEntryReject : null,
+                    selected?.SelectionId });
             if (selected is null)
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "imperial_arena_entry_rejected");
             else if (await projection.DetachForDungeonSelectionAsync(context, selected))
@@ -53,11 +56,14 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             context.Session.Selected?.Position is { Town: 62, Area: 0 })
         {
             uint tagDungeon = TagEvildomRequests.Entry(request.Body);
+            // 采购、修理与体力恢复会改主角记录；已装的双Actor失效时就地重建一次，不再要求重登。
+            if (!context.BlocksTownActions) await tagEvildom.RefreshPairAsync(context);
             // 结构与资格分开；重置后旧6B15明确拒绝，不把合法TAG正文落入普通4B断线分支。
             var selected = !context.BlocksTownActions && dungeons is not null && tagRun is not null
                 ? context.Session.BeginTagEvildomSelection(tagDungeon, dungeons, tagRun.Rewards, tagEvildom.Store) : null;
             log.Write(selected is null ? "tag_evildom_entry_rejected" : "tag_evildom_selection_opened",
-                new { Connection = context.Id, Dungeon = tagDungeon, selected?.SelectionId });
+                new { Connection = context.Id, Dungeon = tagDungeon, Reason = selected is null ? context.Session.TagEvildomEntryReject : null,
+                    selected?.SelectionId });
             if (selected is null)
             {
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "tag_evildom_entry_rejected");
@@ -286,7 +292,15 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "dungeon_selection_state", CanSend);
         // #233 实验：打开选图前刷新强袭模式每日信息（跨日后客户端不会自行更新今日索引）。
         if (dungeon == 0)
+        {
             await context.Notify(NotiPacketType.ASSAULT_MODE_DAILY_INFO, AssaultModePackets.Today(TimeProvider.System, context.Session.AssaultDailyCounts(TimeProvider.System.GetLocalNow())), "assault_mode_daily_info", CanSend);
+            // 仅刷新专属魔兽选择界面的五项；普通地图不接收同号魔兽次数，时钟沿Session准入。
+            foreach (var count in context.Session.BeastSelectionCounts())
+            {
+                await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Remaining, 0),
+                    "beast_dungeon_daily_count", CanSend);
+            }
+        }
         if (dungeon == 0 || receipt.Tutorial && receipt.OpensClientSelector)
             await GriefTowerProjection.SelectionAsync(context,dungeons,legendTarget,"dungeon_select_notice",CanSend);
         return CommandResult.Handled;

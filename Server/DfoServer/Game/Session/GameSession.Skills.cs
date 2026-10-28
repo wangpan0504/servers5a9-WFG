@@ -8,7 +8,10 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    public SkillLearningFailure InitializeLearning(SkillLearningCatalog catalog, ExpertJobScriptCatalog? expertJobs = null) => InitializeLearning(character =>
+    public SkillLearningFailure InitializeLearning(SkillLearningCatalog catalog, ExpertJobScriptCatalog? expertJobs = null)
+    {
+        arenaSkillCatalog=catalog;
+        var failure=InitializeLearning(character =>
     {
         var result = SkillLearning.Initialize(character, catalog.Get);
         if (!result.Success) return result;
@@ -23,7 +26,10 @@ internal sealed partial class GameSession
         }
         catch (NotSupportedException) { return result; }
         catch (KeyNotFoundException) { return result; }
-    });
+        });
+        if(failure==SkillLearningFailure.None && UsesArenaSkills) InitializeArenaLearning(catalog);
+        return failure;
+    }
 
     internal SkillLearningFailure InitializeLearning(Func<byte, ushort, SkillLearningDefinition> definition) =>
         InitializeLearning(character => SkillLearning.Initialize(character, definition));
@@ -46,7 +52,8 @@ internal sealed partial class GameSession
     }
 
     public SkillLearningResult LearnSkills(SkillLearningCommand request, SkillLearningCatalog catalog) => ApplySkillLearning(character =>
-        SkillLearning.Plan(character.Job, character.GrowType, character.Level, character.Learning, request, catalog));
+        SkillLearning.Plan(character.Job, character.GrowType, character.Level, character.Learning, request, catalog,
+            DfoServer.Game.Quests.QuestEligibility.Completed(character).Contains(355)));
 
     public SkillLearningResult CustomizeSkills(IReadOnlyList<SkillCommandChange> changes, bool reset, SkillLearningCatalog catalog) =>
         ApplySkillLearning(character => SkillCustomization.Commands(character.Job, character.Learning, changes, reset, catalog));
@@ -79,11 +86,11 @@ internal sealed partial class GameSession
         var captured = owner.Execute(() => (Character: Selected,
             SelectionEpoch, Phase, Allowed: pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext && !IsImperialArenaCombat && Selected?.Position is not {Town:10,Area:4}));
         if (!captured.Allowed || captured.Character is not { } character ||
-            character.Job != 9 || !character.Learning.Initialized || context > 1)
+            character.Job != 9 || !ReadSkillLearning(character).Initialized || context > 1)
             return new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>()));
         // 目录查询只读，规划放锁外；回锁后按选择代次重新校验。
         SkillLearningResult planned;
-        try { planned = SkillCustomization.PrepareAutoCombo(character.Job, character.Learning, context, catalog); }
+        try { planned = SkillCustomization.PrepareAutoCombo(character.Job, ReadSkillLearning(character), context, catalog); }
         catch (KeyNotFoundException) { planned = new(SkillLearningFailure.Unsupported, null, Array.AsReadOnly(Array.Empty<LearnedSkill>())); }
         return owner.Execute(() =>
         {
@@ -92,11 +99,11 @@ internal sealed partial class GameSession
                 throw new InvalidOperationException("Stale auto combo state");
             if (!planned.Success)
                 return planned;
-            if (!ReferenceEquals(planned.State, character.Learning))
-                Selected = repository.CommitSkillLayout(owner, character, planned.State!);
+            if (!ReferenceEquals(planned.State, ReadSkillLearning(character)))
+                Selected = CommitActiveSkills(character, planned.State!,layout:true);
             // 实测客户端在收到510回执后立即回传508；5秒窗口足够且不会误伤随后的手工编辑。
             autoComboPending = (context, DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeSeconds(), captured.SelectionEpoch);
-            return new SkillLearningResult(SkillLearningFailure.None, Selected!.Learning,
+            return new SkillLearningResult(SkillLearningFailure.None, ReadSkillLearning(Selected!),
                 Array.AsReadOnly(Array.Empty<LearnedSkill>()))
             {
                 RequiresSynchronization = planned.RequiresSynchronization,
@@ -145,13 +152,13 @@ internal sealed partial class GameSession
             {
                 if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || HasClassExperienceContext || IsImperialArenaCombat || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
                     throw new InvalidOperationException("Stale skill learning state");
-                return new SkillLearningResult(SkillLearningFailure.None, Selected!.Learning, Array.AsReadOnly(Array.Empty<LearnedSkill>()))
+                return new SkillLearningResult(SkillLearningFailure.None, ReadSkillLearning(Selected!), Array.AsReadOnly(Array.Empty<LearnedSkill>()))
                 {
                     Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase }
                 };
             });
         SkillLearningResult result;
-        try { result = plan(character, captured.AutoCombo); }
+        try { result = plan(ReadSkillCharacter(character), captured.AutoCombo); }
         catch (NotSupportedException) { return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>()); }
         catch (KeyNotFoundException) { return new(SkillLearningFailure.Unsupported, null, Array.Empty<LearnedSkill>()); }
         return owner.Execute(() =>
@@ -160,9 +167,9 @@ internal sealed partial class GameSession
                 throw new InvalidOperationException("Stale skill learning state");
             if (!result.Success)
                 return result;
-            if (!ReferenceEquals(result.State, character.Learning))
-                Selected = repository.CommitLearning(owner, character, result.State!, result.TotalSp, result.TotalTp);
-            if (Selected!.Learning.SelectedTree != character.Learning.SelectedTree)
+            if (!ReferenceEquals(result.State, ReadSkillLearning(character)))
+                Selected = CommitActiveSkills(character, result.State!, result.TotalSp, result.TotalTp);
+            if (ReadSkillLearning(Selected!).SelectedTree != ReadSkillLearning(character).SelectedTree)
             {
                 // 切页后旧页的自动排列及重建回传窗口失效，不能误处理新页编辑。
                 autoComboPending = null;
@@ -170,7 +177,7 @@ internal sealed partial class GameSession
             }
             return result with
             {
-                State = Selected!.Learning,
+                State = ReadSkillLearning(Selected!),
                 Receipt = new(Selected, owner.Generation, SelectionEpoch)
                 {
                     Phase = Phase,
@@ -194,7 +201,7 @@ internal sealed partial class GameSession
             Allowed: Selected is not null && pendingRental is null && !HasPendingTownQuestCommit && Ready && !HasClassExperienceContext && !IsImperialArenaCombat && Selected?.Position is not {Town:10,Area:4}));
         if (!captured.Allowed || captured.Character is not { } character)
             return new(SkillLearningFailure.Unsupported, null);
-        var result = SkillLayout.Move(character.Job, character.Learning, command, definition);
+        var result = SkillLayout.Move(character.Job, ReadSkillLearning(character), command, definition);
         return owner.Execute(() =>
         {
             if (pendingRental is not null || HasPendingTownQuestCommit || !Ready || HasClassExperienceContext || IsImperialArenaCombat || Phase != captured.Phase || SelectionEpoch != captured.SelectionEpoch || !ReferenceEquals(Selected, character))
@@ -202,9 +209,9 @@ internal sealed partial class GameSession
             if (!result.Success)
                 return result;
             // 同槽请求只确认原事实；没有布局变化不申请writer或递增revision。
-            if (!ReferenceEquals(result.State, character.Learning))
-                Selected = repository.CommitSkillLayout(owner, character, result.State!);
-            return result with { State = Selected!.Learning, Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase } };
+            if (!ReferenceEquals(result.State, ReadSkillLearning(character)))
+                Selected = CommitActiveSkills(character, result.State!,layout:true);
+            return result with { State = ReadSkillLearning(Selected!), Receipt = new(Selected, owner.Generation, SelectionEpoch) { Phase = Phase } };
         });
     }
 }

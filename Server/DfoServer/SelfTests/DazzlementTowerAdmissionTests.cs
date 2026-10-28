@@ -95,6 +95,7 @@ internal static class DazzlementTowerAdmissionTests
             Reject<InvalidOperationException>(() => repo.CommitDungeonEntry(owner, character, 502, stale),
                 "旧周准备结果不能复活旧绑定或清理新周名单");
             DatabaseSchemaTests.RewindRaidLifecycle(path);
+            // 眩惑账本在本线为 v107（公会及其余新增迁移已接在 120-143），回退点相应改为 v106。
             Sql("DROP TABLE account_dazzlement_tower_bindings; PRAGMA user_version=106");
             repo = new CharacterRepository(path);
             That(repo.LoadDazzlementTower(owner).Bindings.IsEmpty && repo.LoadCharacter(owner, character.Slot).Revision == character.Revision,

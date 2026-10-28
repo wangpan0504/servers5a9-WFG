@@ -25,6 +25,7 @@ internal sealed class InventoryPlan
     public (long Until, int Permille)? ExpBonus { get; set; }
     public byte? EquipmentSlotFlagsAfter { get; init; }
     public bool UnlockSkillTree { get; init; }
+    public DfoServer.Game.Guild.GuildHongbaoPurchase? GuildHongbaoPurchase { get; init; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;
     readonly Lazy<ImmutableArray<CurrencyKind>> currencies;
@@ -60,6 +61,7 @@ internal sealed class InventoryPlan
         ResetItemIds = ResetItemIds,
         EquipmentSlotFlagsAfter = EquipmentSlotFlagsAfter,
         UnlockSkillTree = UnlockSkillTree,
+        GuildHongbaoPurchase = GuildHongbaoPurchase,
         ExpBonus = ExpBonus
     };
     public InventoryIndex BeforeIndex => beforeIndex.Value;

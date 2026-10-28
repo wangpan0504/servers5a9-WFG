@@ -19,6 +19,13 @@ internal static class QuestStateProgressTests
         var grow = level with { Id = 101, Condition = "[first grow]", IntData = [] };
         var awake = level with { Id = 102, Condition = "[awakening]", IntData = [2] };
         var done = level with { Id = 103, Condition = "[clear quest]", IntData = [104] };
+        var rank = level with { Id = 105, Condition = "[pvp rank]", IntData = [2] };
+        That(QuestStateProgress.Type(rank) == 5 && QuestStateProgress.Scalar(character,rank,1) == 1 &&
+            QuestStateProgress.Scalar(character,rank,2) == 0 && QuestStateProgress.Scalar(character,rank,3) == 0,
+            "段位目标使用本版type5并包含目标边界");
+        Reject<NotSupportedException>(() => QuestStateProgress.Scalar(character,rank),"缺少真实段位上下文不能靠客户端事件归零");
+        That(QuestStateProgress.Type(rank with {IntData=[]}) is null &&
+            QuestStateProgress.Type(rank with {IntData=[2,0]}) is null,"段位条件不接受缺失或额外参数");
         That(QuestStateProgress.Type(level) == 31 && QuestStateProgress.Type(grow) == 39 && QuestStateProgress.Type(awake) == 40 &&
             QuestStateProgress.Type(done) == 12,"本版目标类型31/39/40/12不沿用参考版本编号");
         That(QuestStateProgress.Scalar(character with { Level = 19 },level) == 1 &&
@@ -39,6 +46,9 @@ internal static class QuestStateProgressTests
         That(QuestStateProgress.Refresh([active],character with { Level = 20 },catalog).Single().ConditionState == 0 &&
             QuestStateProgress.Refresh([active with { AcceptanceId = Guid.Empty }],character with { Level = 20 },catalog).Single().ConditionState == 1,
             "状态重算保持槽和接取身份，不把历史无身份活动槽接管成新任务");
+        var rankCatalog = new QuestCatalog(new[] {rank}.ToDictionary(row=>row.Id));
+        That(QuestStateProgress.Refresh([active with {QuestId=105}],character,rankCatalog).Single().ConditionState == 1,
+            "普通资产刷新不在缺少评分上下文时覆盖段位条件");
         Console.WriteLine($"PASS {Count-checks} 角色状态任务及本版类型断言");
     }
 

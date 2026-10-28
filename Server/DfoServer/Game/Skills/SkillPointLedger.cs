@@ -92,8 +92,8 @@ internal static class SkillPointLedger
                 // 契约到期后普通 SP 与 feature TP 都要按实际角色等级回退超门槛的等级。
                 else if (state.ExpertContractExpiresAt > 0 && contractLevels == 0 && resource.SupportsPointLearning)
                 {
-                    int cap = Math.Min(resource.GetMaximum(growth), resource.DeclaredMaximumLevels![growth & 15]);
-                    while (cap > 0 && resource.GetOrdinaryNextRequiredCharacterLevel(cap - 1) > level) cap--;
+                    int cap = resource.GetLearningMaximum(growth);
+                    while (cap > 0 && resource.GetNextRequiredCharacterLevel(cap - 1,growth) > level) cap--;
                     target = Math.Min(target, Math.Max(cap, free.GetValueOrDefault(skill.Id)));
                 }
                 if (target == skill.Level) continue;

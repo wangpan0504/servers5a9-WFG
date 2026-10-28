@@ -10,6 +10,7 @@ using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
 using DfoServer.Game.Rental;
 using DfoServer.Game.Currency;
+using DfoServer.Game.Pvp;
 using DfoServer.Game.Settings;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Quests;
@@ -193,7 +194,35 @@ internal static class QuestLifecycleTests
             That(f.Receipts == 0, "资格和owner失效均不产生任务回执");
         }
         RentalProgress(towns, items);
+        RankProgress(towns,items);
         Console.WriteLine($"PASS {Count - checks} 通用任务接取/放弃、赠品原子性与回放/恢复断言");
+    }
+
+    static void RankProgress(TownCatalog towns,ItemResources items)
+    {
+        var quest=QuestEligibilityTests.Quest(100) with {Condition="[pvp rank]",IntData=[1]};
+        using var f=new Fixture(towns,items,[quest],ranked:true);
+        var ratings=new PvpRatingSettlement(f.Repository,new(PvpRatingTests.Fixture()));
+        var accepted=f.Change(100,QuestLifecycleAction.Accept)!;
+        That(accepted.Character.ActiveMainQuests.Single().ConditionState==1,"段位接取读取真实初始账本，不能直接归零");
+        using var other=f.Owners.Acquire("rank-other",()=>{});
+        var opponent=f.Repository.Create(other,new("RankOther",towns.Room,towns.InitialReturn));
+        void Win()
+        {
+            var result=new PvpArenaResultRecord(Guid.NewGuid(),Guid.NewGuid(),296,PvpArenaMode.Individual,
+                [new(f.Owner.Account,accepted.Character.Id,0,0,PvpArenaOutcome.Win),new(other.Account,opponent.Id,1,1,PvpArenaOutcome.Lose)],false,0);
+            f.Repository.CommitPvpArenaResult(f.Owner,result);ratings.Settle(f.Owner,accepted.Character.Id,result.MatchId);
+        }
+        for(int index=0;index<27;index++) Win();
+        var snapshot=ratings.Capture(f.Owner,accepted.Character.Id);
+        That(ratings.Grade(snapshot)==1,"真实逐局来源达到目标段位");
+        var planned=QuestLifecyclePlan.SetCondition(f.Session.Selected!,quest,0,pvpGrade:ratings.Grade(snapshot));
+        planned.PvpRating=snapshot;
+        Win();
+        Reject<InvalidOperationException>(()=>f.Repository.CommitQuestLifecycle(f.Owner,planned),"规划后评分版本变化，旧段位计划不能提交");
+        That(f.Read().ActiveMainQuests.Single().ConditionState==1,"拒绝旧评分不留下半份任务条件");
+        var changed=f.Session.ChangeQuest(100,QuestLifecycleAction.Condition,f.Catalog,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0));
+        That(changed is {Commit:not null} && changed.Character.ActiveMainQuests.Single().ConditionState==0,"新请求重新捕获真实段位后可以推进");
     }
 
     static void RentalProgress(TownCatalog towns, ItemResources items)
@@ -385,7 +414,7 @@ internal static class QuestLifecycleTests
         public GameSession Session { get; }
         public QuestCatalog Catalog { get; }
         public QuestCompletionRepositoryTests.LostResultRepository? Lost { get; }
-        public Fixture(TownCatalog towns, ItemResources items, StoryQuest[] definitions, ActiveMainQuest[]? active = null, int questItems = 0, bool loseResult = false, bool rental = false)
+        public Fixture(TownCatalog towns, ItemResources items, StoryQuest[] definitions, ActiveMainQuest[]? active = null, int questItems = 0, bool loseResult = false, bool rental = false, bool ranked = false)
         {
             this.items = items; Path = System.IO.Path.Combine(root, "game.db"); Catalog = new(definitions.ToDictionary(quest => quest.Id)); Repository = new(Path, Catalog);
             new AuthenticationService(new AuthenticationRepository(Path)).Create("quest-lifecycle","fixture-password");
@@ -397,7 +426,8 @@ internal static class QuestLifecycleTests
             if (rental) Repository.CommitInventory(Owner,created,new(created.Inventory,created.Inventory with
                 { AccountWallet = created.Inventory.AccountWallet.Set(CurrencyKind.RentalPoint,9) },"fixture_rental_points"));
             Lost = loseResult ? new(Repository) { LoseLifecycleResult = true } : null;
-            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog:rental ? Catalog : null); Session.Select(0); Session.MarkReady();
+            Session = new(Lost is null ? Repository : Lost, towns, Owner, questCatalog:rental || ranked ? Catalog : null,
+                pvpRatings:ranked ? new(Repository,new(PvpRatingTests.Fixture())) : null); Session.Select(0); Session.MarkReady();
         }
         public QuestLifecycleReceipt? Change(ushort id, QuestLifecycleAction action) =>
             Session.ChangeQuest(id, action, Catalog, items.Items, items.GoldLimits, items.EpicPieces);

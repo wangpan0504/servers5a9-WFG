@@ -24,6 +24,7 @@ internal static class ChannelEntryTcpTests
         ChannelTcpTests.Run(fixture);
         var serverEvents = new ServerEventService(new ServerEventRepository(fixture.Database));
         var endpoints = ChannelTcpTests.Endpoints(fixture);
+        byte pvp = ChannelTcpTests.PvpChannelNumber(fixture);
         foreach (var (number, port) in endpoints)
         {
             using var probe = new TcpPeer(port, channelNumber: number);
@@ -36,6 +37,7 @@ internal static class ChannelEntryTcpTests
 
         using var alpha = Open(fixture, "entrya", gamePort: endpoints[11], channelNumber: 11);
         using var isolated = Open(fixture, "entryb", gamePort: endpoints[12], channelNumber: 12);
+        alpha.Send(195); alpha.Expect(1, 195, [0, 0x15, 0]);
         int nativePort = NativePort(fixture);
         var channelCatalog = DfoServer.Infrastructure.ServerRuntime.LoadChannels(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
         That(alpha.LoginEndpoint[3] == channelCatalog.Entry(11).Type &&
@@ -49,6 +51,13 @@ internal static class ChannelEntryTcpTests
         alpha.ExpectedOpenEvents = isolated.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
         var alphaEntry = alpha.Select();
         var isolatedEntry = isolated.Select();
+        alpha.Send(195);
+        alpha.Expect(1, 195, Build(w =>
+        {
+            w.Write((byte)1); w.Write(0u); w.Write((byte)3);
+            foreach (uint number in new uint[] { 11, pvp, 47 })
+            { w.Write(number); w.Write(0u); w.Write(1u); }
+        }));
         foreach (var frames in new[] { alphaEntry, isolatedEntry })
         {
             var ownActor = frames.Single(frame => frame is { Kind: 0, Opcode: 2 } && frame.Body[0] == 0).Body;

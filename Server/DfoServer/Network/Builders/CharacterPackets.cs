@@ -29,7 +29,7 @@ internal static class CharacterPackets
     // 名册行 48 字节尾部 tail[37..41] 由 ARAD 02676A00 依次读到 +0x491/+0x492/+0x493/+0x499/+0x494（==1 为真）。
     internal const int AntonEligibleTailOffset = 37;
     internal const int LukeEligibleTailOffset = 38;
-    // tail[39] -> +0x493 魔兽频道（type 0x28）：条件未证明，固定 0。
+    // tail[39] -> +0x493 魔兽频道（type 0x28）：完成 5927 为 1。
     internal const int BeastEligibleTailOffset = 39;
     // 名册行 48 字节尾部中超时空漩涡资格字节的偏移（KB-20261021T015635-5c920e4e59）。
     internal const int FiendWarEligibleTailOffset = 40;
@@ -60,9 +60,10 @@ internal static class CharacterPackets
             // 02680FA3读取非零为真，02680FCE安装到Data+420，再投影展示角色+149C。
             tail[34] = character.IsPvpPrivate ? (byte)1 : (byte)0;
             tail[27] = 4;
-            // 选角前资格位：为 0 时进入对应类型频道弹 1099。tail[39]（魔兽）条件未证，保持 0。
+            // 选角前资格位：为 0 时进入对应类型频道弹 1099。
             tail[AntonEligibleTailOffset] = character.AntonEligible ? (byte)1 : (byte)0;
             tail[LukeEligibleTailOffset] = character.LukeEligible ? (byte)1 : (byte)0;
+            tail[BeastEligibleTailOffset] = character.BeastEligible ? (byte)1 : (byte)0;
             tail[FiendWarEligibleTailOffset] = character.FiendWarEligible ? (byte)1 : (byte)0;
             tail[PreyEligibleTailOffset] = character.PreyEligible ? (byte)1 : (byte)0;
             System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(tail.AsSpan(WeaponSkinTailOffset),

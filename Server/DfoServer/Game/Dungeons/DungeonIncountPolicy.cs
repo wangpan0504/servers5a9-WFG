@@ -41,6 +41,18 @@ internal static class DungeonIncountPolicy
         return reset < 0 ? Key(date) : WeekKey(date, reset);
     }
 
+    // 账号行的重置节奏来自 PVF [reset info]：日键或 0..6 任意周起点的周键。
+    // 按账号刷新次数时不知道每行的重置类型，列出当前可能命中的全部周期键一次清零；
+    // 非当前周期的旧行即便被列中也不会改变可读值（读侧本就按周期比对返回 0）。
+    public static int[] CurrentAccountPeriods(DateTimeOffset now)
+    {
+        var date = BusinessDate(now);
+        var keys = new int[8];
+        keys[0] = Key(date);
+        for (int weekday = 0; weekday < 7; weekday++) keys[weekday + 1] = WeekKey(date, weekday);
+        return keys;
+    }
+
     public static DungeonIncountUsage Current(DungeonIncountUsage stored, DungeonIncountPeriod storedPeriod, DungeonIncountPeriod now) =>
         new(storedPeriod.Day == now.Day ? stored.DailyUsed : 0, storedPeriod.Week == now.Week ? stored.WeeklyUsed : 0,
             storedPeriod.Day == now.Day ? stored.DailyExtra : 0, storedPeriod.Week == now.Week ? stored.WeeklyExtra : 0);

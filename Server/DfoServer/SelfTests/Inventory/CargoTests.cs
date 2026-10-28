@@ -37,6 +37,39 @@ internal static class CargoTests
         That(InventoryMoveService.Plan(role, move with { DestinationItemId = 0 }, catalog, 0).Accepted, "保留标准空格零值");
         var accountRole = role with { Inventory = role.Inventory with { AccountCargo = new(Capacity: 8) } };
         var accountMove = move with { Count = 2, Destination = new(InventoryListType.AccountCargo, 1) };
+        var accountBead = template with { AttachType = "", AccountBoundAfterTrade = true };
+        foreach (byte attr in new byte[] { 0, 32 })
+        {
+            catalog.PrefillTemplates(new Dictionary<int, DfoServer.GameWorld.Items.ItemTemplate> { [50] = accountBead });
+            var bead = source with { Core = source.Core with { Attr = attr, Extension97 = 1234 } };
+            var beadOwner = accountRole with { Inventory = accountRole.Inventory with { Items = [bead] } };
+            var storedBead = InventoryMoveService.Plan(beadOwner, accountMove, catalog, 0);
+            That(storedBead.Accepted && storedBead.Plan!.After.Find(accountMove.Destination) == bead with { Position = accountMove.Destination } &&
+                storedBead.Plan.After.Find(bead.Position) is null, "限次交易后账号绑定宝珠存入保留UID、完整核心和数量，不依赖实例剩余交易次数");
+        }
+        foreach (var denied in new[] { accountBead with { AccountBoundAfterTrade = false }, accountBead with { AccountCargoForbidden = true },
+            accountBead with { PvpFreeEquipment = true }, accountBead with { AttachType = "[trade]" }, accountBead with { AttachType = "[trade delete]" } })
+            That(!InventoryCargoService.AllowsInsert(source.Core, InventoryListType.AccountCargo, denied),
+                "缺少有效账号声明、禁入标记、PK专用装备及显式角色绑定仍拒绝入库");
+        That(!InventoryCargoService.AllowsInsert(source.Core with { EquipmentLockId = 1 }, InventoryListType.AccountCargo, accountBead) &&
+            !InventoryCargoService.AllowsInsert(source.Core with { TradeRestriction = 1 }, InventoryListType.AccountCargo, accountBead),
+            "新交易限制声明不绕过实例安全锁和交易限制");
+        var limited = template with { AttachType = "[trade limit]" };
+        catalog.PrefillTemplates(new Dictionary<int, DfoServer.GameWorld.Items.ItemTemplate> { [50] = limited });
+        foreach (byte attr in new byte[] { 0, 31, 32, 63, 255 })
+        {
+            var limitedItem = source with { Core = source.Core with { Attr = attr } };
+            var limitedOwner = accountRole with { Inventory = accountRole.Inventory with { Items = [limitedItem] } };
+            var limitedMove = InventoryMoveService.Plan(limitedOwner, accountMove, catalog, 0);
+            That(limitedMove.Accepted == (attr >> 5 != 0) &&
+                (!limitedMove.Accepted || limitedMove.Plan!.After.Find(accountMove.Destination) == limitedItem with { Position = accountMove.Destination }),
+                "限次交易物品只在剩余次数大于0时可存账号仓库，低五位强化不冒充次数，存入不消费次数或改核心");
+        }
+        That(!InventoryCargoService.AllowsInsert(source.Core with { Attr = 32, TradeRestriction = 1 }, InventoryListType.AccountCargo, limited) &&
+            !InventoryCargoService.AllowsInsert(source.Core with { Attr = 32, EquipmentLockId = 1 }, InventoryListType.AccountCargo, limited) &&
+            !InventoryCargoService.AllowsInsert(source.Core with { Attr = 32 }, InventoryListType.AccountCargo, limited with { AccountCargoForbidden = true }),
+            "限次交易资格不绕过实例限制、安全锁或账号仓库禁入");
+        catalog.PrefillTemplates(new Dictionary<int, DfoServer.GameWorld.Items.ItemTemplate> { [50] = template });
         foreach (short target in new short[] { 1, 7 })
         {
             var result = InventoryMoveService.Plan(accountRole, accountMove with

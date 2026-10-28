@@ -53,6 +53,12 @@ internal sealed class GuildPermitRegistry
 
     public int DraftCount { get { lock (gate) return drafts.Count; } }
 
+    public bool HasParticipant(ushort characterId, long now)
+    {
+        lock (gate) return byInvitee.Values.Any(permit => permit.ExpiresAtUnix > now &&
+            (permit.InitiatorCharacterId == characterId || permit.InviteeCharacterId == characterId));
+    }
+
     /// <summary>名称查重成功后记入草稿（只有「可用」的文本才会成为建会名）。</summary>
     public void RememberName(ushort initiatorCharacterId, string name, long now) =>
         Remember(initiatorCharacterId, now, draft => draft with { Name = name });

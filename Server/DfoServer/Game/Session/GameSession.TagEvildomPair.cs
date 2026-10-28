@@ -18,23 +18,23 @@ internal sealed partial class GameSession
         return true;
     });
 
+    // 已发布的双Actor是否仍可直接用于入场；入场前据此决定要不要就地重建一次投影。
+    public bool HasCurrentTagEvildomPair(ITagEvildomConfigurationStore store, DateTimeOffset now) =>
+        CurrentTagEvildomPair(store, now) is not null;
+
     // 入场使用真正发完1393→1394的双Actor资料，不重新加载一份客户端从未安装的备用快照。
     TagEvildomCharacters? CurrentTagEvildomPair(ITagEvildomConfigurationStore store, DateTimeOffset now)
     {
         if (!Ready || Selected is not { } current || tagEvildomPair is not { } published || ChannelEntry?.Type != 53 ||
             published.Characters.Projection.Generation != owner.Generation || published.Characters.Projection.Epoch != SelectionEpoch ||
             published.Characters.Version != tagEvildomCharacterVersion ||
-            !ReferenceEquals(published.Characters.Projection.Roster, tagEvildomRoster)) return null;
-        var original = published.Characters.Primary;
-        // 普通走动/房间出口只改位置与revision，不改Actor资料；每日服务器道具补充只改Inventory.ServerItems，
-        // 同属跨特性日切而不是玩家资料变化。其余背包、技能与外观字段仍须逐项一致，改变时重新完成真实入城投影。
-        var comparable = current with
-        {
-            Revision = original.Revision, Position = original.Position, Return = original.Return,
-            Inventory = current.Inventory with { ServerItems = original.Inventory.ServerItems }
-        };
-        if (comparable != original ||
-            !published.PrimaryAppearance.Matches(current, now) || !published.StandbyAppearance.Matches(published.Characters.Standby, now)) return null;
+            !ReferenceEquals(published.Characters.Projection.Roster, selectedRoster)) return null;
+        // 1394只安装备用角色：主角由客户端已持有的真实Actor提供。走动、修理、金币与体力恢复只改动主角
+        // 自己的记录，不改变已装好的双Actor；按整条记录判等会让一次装备修理把投影判死，逼玩家重登。
+        // 真正让已发布资料过时的只有主角身份、账号钱包版本和备用投影的到期。
+        if (current.Id != published.Characters.Primary.Id ||
+            current.Inventory.AccountWallet.Revision != published.PrimaryAppearance.WalletRevision ||
+            !published.StandbyAppearance.Matches(published.Characters.Standby, now)) return null;
         var rebased = published.Characters with { Primary = current };
         return store.MatchesTagEvildomCharacters(owner, rebased) ? rebased : null;
     }

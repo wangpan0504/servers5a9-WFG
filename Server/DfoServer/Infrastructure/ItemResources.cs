@@ -10,6 +10,9 @@ internal sealed class ItemResources
     public ItemCatalog Items { get; }
     public GoldLimitCatalog GoldLimits { get; }
     public CargoCatalog Cargo { get; }
+    public GameWorld.Guilds.GuildCargoCatalog GuildCargo { get; }
+    public GameWorld.Guilds.GuildContentCatalog GuildContents { get; }
+    public GameWorld.Guilds.GuildHongbaoCatalog GuildHongbao { get; }
     public NpcShopCatalog Shops { get; }
     public EquipmentRepairCatalog Repair { get; }
     public EquipmentTransportCatalog EquipmentTransports { get; }
@@ -18,6 +21,7 @@ internal sealed class ItemResources
     public RandomOptionCatalog RandomOptions { get; }
     public EquipmentTextureChangeCatalog TextureChanges { get; }
     public EquipmentUpgradeCatalog EquipmentUpgrades { get; }
+    public EquipmentTransmissionCatalog EquipmentTransmissions { get; }
     public DarkRevelationCatalog DarkRevelations { get; }
     public EchonEquipmentCatalog Echon { get; }
     public EchonEquipmentCatalog NewEchon { get; }
@@ -82,6 +86,9 @@ internal sealed class ItemResources
         EpicExchanges = new(archive);
         var equipment = PvfScript.List(archive.ReadText("equipment/equipment.lst"));
         var stackable = PvfScript.List(archive.ReadText("stackable/stackable.lst"));
+        GuildCargo = new(archive, equipment, stackable);
+        GuildContents = new(archive);
+        GuildHongbao = new(archive);
         Creatures = new(archive, equipment, stackable);
         CreatureGroups = new(archive);
         Contracts = PremiumContractCatalog.Load(archive, equipment, stackable);
@@ -121,6 +128,7 @@ internal sealed class ItemResources
         RandomOptions = new(archive, equipment);
         TextureChanges = new(archive, equipment);
         EquipmentUpgrades = new(archive);
+        EquipmentTransmissions = new(archive);
         DarkRevelations = new(archive, equipment);
         dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
         dungeonAltarItems = new(() => DungeonItemDropCatalog.LoadAltar(Items));

@@ -279,7 +279,7 @@ internal static class DungeonPackets
         writer.Write(checked((byte)actorCount));
         foreach (var monster in monsters.Monsters.Where(monster => monster.HellWave is null))
         {
-            if (monster.CandidateLevel is < 1 or > byte.MaxValue)
+            if (monster.BattleLevel is < 1 or > byte.MaxValue)
                 throw new NotSupportedException("怪物生成等级超出单字节范围");
             if (monster.SpawnType is not (<= 3 or >= 5 and <= 8))
                 throw new NotSupportedException("演员生成类型不是已核验的怪物或APC类型");
@@ -287,7 +287,7 @@ internal static class DungeonPackets
             writer.Write(checked((uint)(monster.Source?.SpecialChild?.SourceOrdinal ?? monster.SourceOrdinal)));
             writer.Write(monster.ObjectKey);
             writer.Write(checked((uint)monster.MonsterId));
-            writer.Write(checked((byte)monster.CandidateLevel));
+            writer.Write(checked((byte)monster.BattleLevel));
             writer.Write(monster.SpawnType);
             writer.Write(monster.IsSpecialChild ? (byte)1 : (byte)0);
             writer.Write(monster.IsSpecialChild ? (byte)1 : (byte)0);
@@ -320,7 +320,7 @@ internal static class DungeonPackets
             writer.Write(checked((uint)wave.PacketIndex));
             writer.Write(wave.ObjectKey);
             writer.Write(checked((uint)wave.MonsterId));
-            writer.Write(wave.Level);
+            writer.Write(monsters.BattleLevelFor(wave));
             writer.Write(wave.Type);
             writer.Write((byte)1);
             writer.Write(byte.MaxValue);
@@ -359,7 +359,7 @@ internal static class DungeonPackets
     {
         var entries = new List<(int Code, int Level)>();
         foreach (var wave in monsters.HellWaves)
-            if (wave.MonsterId > 0 && entries.All(entry => entry.Code != wave.MonsterId)) entries.Add((wave.MonsterId, Math.Max(1, (int)wave.Level)));
+            if (wave.MonsterId > 0 && entries.All(entry => entry.Code != wave.MonsterId)) entries.Add((wave.MonsterId, Math.Max(1, (int)monsters.BattleLevelFor(wave))));
         if (entries.Count == 0) return null;
         var body = new byte[4 + entries.Count * 8];
         BinaryPrimitives.WriteInt32LittleEndian(body, entries.Count);

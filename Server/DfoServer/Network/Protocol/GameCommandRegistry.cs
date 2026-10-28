@@ -11,6 +11,7 @@ internal enum CommandResult
 }
 
 internal delegate Task<CommandResult> GameCommandHandler(GameConnectionContext context, Packet request);
+internal delegate SemaphoreSlim? GameCommandGate(GameConnectionContext context, Packet request);
 internal interface IGameCommandModule
 {
     void Register(GameCommandRegistry commands);
@@ -18,12 +19,12 @@ internal interface IGameCommandModule
 
 internal sealed class GameCommandRegistry
 {
-    sealed record Registration(string Source, GameCommandHandler Handler, UserStateRequirement MinimumState);
+    sealed record Registration(string Source, GameCommandHandler Handler, UserStateRequirement MinimumState, GameCommandGate? SharedGate);
     readonly Dictionary<ushort, Registration> registrations = [];
     FrozenDictionary<ushort, Registration>? commands;
     public int Count => commands?.Count ?? registrations.Count;
     public void Register(CmdPacketType opcode, GameCommandHandler handler, string source,
-        UserStateRequirement minimumState = UserStateRequirement.Owner)
+        UserStateRequirement minimumState = UserStateRequirement.Owner, GameCommandGate? sharedGate = null)
     {
         if (commands is not null)
             throw new InvalidOperationException("Command registry is already sealed");
@@ -35,7 +36,7 @@ internal sealed class GameCommandRegistry
         ushort value = (ushort)opcode;
         if (registrations.TryGetValue(value, out var previous))
             throw new InvalidOperationException($"Duplicate command {opcode} ({value}): {previous.Source} / {source}");
-        registrations.Add(value, new(source, handler, minimumState));
+        registrations.Add(value, new(source, handler, minimumState, sharedGate));
     }
 
     public void Seal()
@@ -52,17 +53,18 @@ internal sealed class GameCommandRegistry
             throw new InvalidOperationException("Command registry is not sealed");
         // 保留旧owner拒绝的优先级；等待门禁期间可能接管，取得后仍须复验。
         context.Owner.Execute(() => true);
+        commands.TryGetValue(request.Opcode, out var command);
         CommandResult result = CommandResult.Unhandled;
-        using (var gates = await DispatchGateScope.EnterAsync(context))
+        using (var gates = await DispatchGateScope.EnterAsync(context, request, command?.SharedGate))
         {
             context.DispatchGates = gates;
-            // 队伍门禁协调所有成员命令；本人应答也只能入队，不能等慢连接拖住整队。
-            using var publication = !gates.HasParty ? null : context.Sender.QueuePublication(() =>
+            // 共享门禁协调所有成员命令；本人应答也只能入队，不能等慢连接拖住整组。
+            using var publication = !gates.HasShared ? null : context.Sender.QueuePublication(() =>
             {
                 long epoch = context.Session.SelectionEpoch;
                 return () => context.Owner.IsCurrent && context.Session.SelectionEpoch == epoch && !context.Stop.IsCancellationRequested;
             });
-            if (commands.TryGetValue(request.Opcode, out var command) && context.Session.CheckState(command.MinimumState))
+            if (command is not null && context.Session.CheckState(command.MinimumState))
             {
                 if (context.Creatures is { } creatures) await creatures.BeforeCommandAsync(request);
                 result = await command.Handler(context, request);

@@ -102,7 +102,7 @@ internal static partial class SessionPlanningTests
             "实际Session只改变Run当前槽，生成带owner/epoch的非终局回执");
         await timer.RefreshAsync();
         await timer.RefreshAsync();
-        await clock.WaitForTimersAsync(1);
+        await clock.WaitForOneShotTimersAsync(1);
         clock.Advance(TimeSpan.FromSeconds(12));
         Bytes(await published.Task.WaitAsync(TimeSpan.FromSeconds(5)), [0, 0, 0, 0], "实际调度和发送泵在12秒发准确ordinal0");
         await timer.RefreshAsync();
@@ -112,10 +112,10 @@ internal static partial class SessionPlanningTests
         session.ReportFormalTagEvildomDeath(1);
         var oldEpoch = session.CurrentTagEvildomRevival()!;
         await timer.RefreshAsync();
-        await clock.WaitForTimersAsync(1);
+        await clock.WaitForOneShotTimersAsync(1);
         session.ReturnToRoster();
         await timer.RefreshAsync();
-        await clock.WaitForTimersAsync(0);
+        await clock.WaitForOneShotTimersAsync(0);
         clock.Advance(TimeSpan.FromSeconds(12));
         That(sent == 1 && run.TagEvildomLife is { Cancelled: true } &&
             session.ReviveFormalTagEvildom(oldEpoch, clock.GetUtcNow().ToUnixTimeMilliseconds()) is null && fixture.Snapshot() == before,

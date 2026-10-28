@@ -31,6 +31,15 @@ internal static class EvildomWarChannelTests
         var sky = new ChannelEntry(new(2, 11), 22, "[sky_catle]");
         // 67/0 的 [gate] 474 234 在 twn 里是独立标签而非 `[gate]` 字符串，TownCatalog 不读它；落点走通用的相邻门口反推。
         var gate = new Location(Town, 0, 445, 377);
+        // 67/0 导入 gate_seria.map，是房间式区域：落进去玩家还要再走一次门。67/0 自己的门 295,327 300x100 通往 67/1；
+        // 67/1 回 67/0 的零尺寸标记 581,138 在门矩形 581,139 150x30 之外不可站，TownCatalog.Entrance 因此给不出 67/1 落点，
+        // 只能取 67/1 侧门矩形中心作为从 67/0 进广场的到达点（线上出门要按两次门，Issue #833）。
+        static Location DoorCenter(TownCatalog towns, byte town, byte area, byte fromArea) =>
+            towns.Areas[(town, area)].Default.Links.Where(l => l.Town == town && l.Area == fromArea && l.Gate.Door)
+                .Select(l => new Location(town, area, (ushort)(l.Gate.X + l.Gate.Width / 2), (ushort)(l.Gate.Y + l.Gate.Height / 2))).Single();
+        var hall = DoorCenter(towns, Town, 1, 0);
+        var waiting = DoorCenter(towns, Town, 2, 1);
+        var hallBack = DoorCenter(towns, Town, 1, 2);
 
         That(towns.Areas[(Town, 0)] is { Level: 95, Quests.Length: 0, Gate: null } &&
             towns.Areas[(Town, 1)].Level == 95 && towns.Areas[(Town, 2)] is { Level: 95, DungeonWorldMap: WorldMap },
@@ -44,10 +53,10 @@ internal static class EvildomWarChannelTests
             "选图 154 列出 5416–5427、5436–5441，全部无任务条件");
 
         var low = ChannelAreaLanding.Decide(towns, evildom, 94, none);
-        That(low.Spot is null && low.Reason.StartsWith("admission-", StringComparison.Ordinal), "94 级按 67/0 need level 留在共享房间: " + low.Reason);
+        That(low.Spot is null && low.Reason.StartsWith("admission-", StringComparison.Ordinal), "94 级按 67/1 need level 留在共享房间: " + low.Reason);
         var landing = ChannelAreaLanding.Decide(towns, evildom, 95, none);
-        That(landing.Spot == gate && landing.Reason == "neighbor-door" && towns.IsPosition(gate, none),
-            "95 级落到 67/0 通往 67/1 的门口 445,377: " + landing.Spot + " " + landing.Reason);
+        That(landing.Spot == hall && landing.Reason == "room-door-center" && !towns.IsRoom(hall, none),
+            "95 级出门一次直接落到 67/1 广场 656,154，不再先落房间式 67/0: " + landing.Spot + " " + landing.Reason);
         Console.WriteLine($"ASSERT evildom_war lands {landing.Spot} reason {landing.Reason}");
 
         // ACK LOGIN 正文 [结果, 年龄, 网吧, 频道类型, ...]：ARAD 0233EBEA 读第 3 字节写频道对象 +0x1010。
@@ -89,19 +98,19 @@ internal static class EvildomWarChannelTests
         var role = repo.Create(owner, Role("Evildom95", 95));
         var weak = repo.Create(owner, Role("Evildom94", 94));
 
-        // 22 -> 魔界大战 原生换频道：客户端不留快照，先进赛丽亚房间（返回地区仍是原街道），出门到艾尔丁纪念馆 67/0。
+        // 22 -> 魔界大战 原生换频道：客户端不留快照，先进赛丽亚房间（返回地区仍是原街道），出门直接到艾尔丁纪念馆 67/1 广场。
         var history = new ChannelHistory();
         var session = new GameSession(repo, towns, owner, entry: evildom, channelHistory: history);
         session.Select(role.Slot, resumeTown: true);
         That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room && session.Selected.Return == streetReturn,
             "换入魔界大战频道先进赛丽亚房间，返回地区仍是原街道");
         session.MarkReady();
-        That(session.LeaveRoom() && session.Selected!.Position == gate && session.Selected.Return == streetReturn,
-            "赛丽亚房间出门到艾尔丁纪念馆 67/0，返回地区仍是原街道: " + session.TravelReason);
+        That(session.LeaveRoom() && session.Selected!.Position == hall && session.Selected.Return == streetReturn,
+            "赛丽亚房间出门一次到艾尔丁纪念馆 67/1 广场，返回地区仍是原街道: " + session.TravelReason);
         session.ReturnToRoster();
         session = new GameSession(repo, towns, owner, entry: evildom, channelHistory: history);
         session.Select(role.Slot, resumeTown: true);
-        That(session.TownSnapshotResumed && session.Selected!.Position == gate, "魔界大战频道之间换频道保留艾尔丁纪念馆 67/0快照");
+        That(session.TownSnapshotResumed && session.Selected!.Position == hall, "魔界大战频道之间换频道保留艾尔丁纪念馆 67/1 快照");
         session.ReturnToRoster();
         foreach (var other in new[] { weak })
         {
@@ -133,15 +142,6 @@ internal static class EvildomWarChannelTests
         session.ReturnToRoster();
 
         // 67/0 -> 67/1 -> 67/2，选图 154 逐个尝试正式入场，只记录通用入场计划的结论，不改入场规则。
-        // 67/0 导入 gate_seria.map，是房间式区域；它自己的门 295,327 300x100 通往 67/1。67/1 回 67/0 的零尺寸标记 581,138
-        // 在门矩形 581,139 150x30 之外不可站，TownCatalog.Entrance 因此给不出 67/1 落点。客户端走门时带自己的落点坐标，
-        // 这里取目标区域通往来源区域的门矩形中心作为请求坐标。
-        static Location DoorCenter(TownCatalog towns, byte town, byte area, byte fromArea) =>
-            towns.Areas[(town, area)].Default.Links.Where(l => l.Town == town && l.Area == fromArea && l.Gate.Door)
-                .Select(l => new Location(town, area, (ushort)(l.Gate.X + l.Gate.Width / 2), (ushort)(l.Gate.Y + l.Gate.Height / 2))).Single();
-        var hall = DoorCenter(towns, Town, 1, 0);
-        var waiting = DoorCenter(towns, Town, 2, 1);
-        var hallBack = DoorCenter(towns, Town, 1, 2);
         That(towns.IsRoom(gate, none) && !towns.IsRoom(hall, none) && !towns.IsRoom(waiting, none),
             "67/0 是房间式门口区域，67/1、67/2 是街道");
         That(towns.Entrance(gate, new(Town, 1, 0, 0), none) is null && hall == new Location(Town, 1, 656, 154) &&
@@ -156,10 +156,11 @@ internal static class EvildomWarChannelTests
             s.Select(role.Slot);
             s.MarkReady();
             That(s.Selected!.Position == towns.Room && s.LeaveRoom(), "魔界大战频道选角在赛丽亚房间，出门: " + s.TravelReason);
-            That(s.Travel(new(Town, 1, hall.X, hall.Y, 5, Town, 0, 0)) && s.Travel(new(Town, 2, waiting.X, waiting.Y, 5, Town, 1, 0)) &&
+            That(s.Selected!.Position == hall, "出门一次即到 67/1 广场，不需要第二次门");
+            That(s.Travel(new(Town, 2, waiting.X, waiting.Y, 5, Town, 1, 0)) &&
                 s.Travel(new(Town, 1, hallBack.X, hallBack.Y, 5, Town, 2, 0)) && s.Travel(new(Town, 0, gate.X, gate.Y, 5, Town, 1, 0)) &&
-                s.Selected!.Position.Town == Town && s.Selected.Position.Area == 0 && s.Selected.Return == streetReturn,
-                "67/0→67/1→67/2→67/1→67/0 往返，返回地区保持进入前街道: " + s.TravelReason);
+                s.Travel(new(Town, 1, hall.X, hall.Y, 5, Town, 0, 0)) && s.Selected!.Position == hall && s.Selected.Return == streetReturn,
+                "67/1→67/2→67/1→67/0→67/1 往返，返回地区保持进入前街道: " + s.TravelReason);
             s.ReturnToRoster();
         }
         var results = new Dictionary<int, string>();
@@ -171,8 +172,7 @@ internal static class EvildomWarChannelTests
             s.Select(role.Slot);
             s.MarkReady();
             That(s.Selected!.Position == towns.Room && s.LeaveRoom(), "魔界大战频道选角在赛丽亚房间，出门: " + s.TravelReason);
-            That(s.Selected!.Position == gate, "正式选角落到艾尔丁纪念馆 67/0");
-            That(s.Travel(new(Town, 1, hall.X, hall.Y, 5, Town, 0, 0)), "67/0 走到 67/1: " + s.TravelReason);
+            That(s.Selected!.Position == hall, "正式选角出门一次落到艾尔丁纪念馆 67/1 广场");
             That(s.Travel(new(Town, 2, waiting.X, waiting.Y, 5, Town, 1, 0)) && s.Selected!.Return == streetReturn,
                 "67/1 走到选图区域 67/2，返回地区不变: " + s.TravelReason);
             var receipt = s.EnterFormalDungeon(checked((uint)dungeon), 0, 0, catalog, rooms, null, itemResources.Items, _ => 0, itemResources.EpicPieces);

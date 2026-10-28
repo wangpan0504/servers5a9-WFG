@@ -14,7 +14,10 @@ internal sealed record PartyDungeonReservation(AccountOwners.Lease Owner, Charac
 }
 internal sealed record PartyDungeonIncount(int Dungeon, DungeonIncountPeriod Period, DungeonIncountRow? Row,
     ImmutableArray<AccountIncountCharge> Account, bool Increment);
-internal sealed record PartyDungeonEntryCommit(Character Character, ImmutableArray<DungeonEnterCount> EnterCounts);
+internal sealed record PartyDungeonEntryCommit(Character Character, ImmutableArray<DungeonEnterCount> EnterCounts)
+{
+    public ImmutableArray<DfoServer.Game.Guild.GuildDungeonMembership> GuildMemberships { get; init; } = [];
+}
 internal sealed record PartyDungeonExitReservation(AccountOwners.Lease Owner, Character Expected, Location Position, InventoryPlan? Inventory)
 {
     public PartyHopeExit? Hope { get; init; }

@@ -22,14 +22,25 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Creatures.CreatureService? creatures = null, CreatureProjection? creatureProjection = null,
     DfoServer.GameWorld.Quests.QuestStageGraph? stageGraph = null, DfoServer.GameWorld.Items.BoosterCatalog? boosters = null,
     NativeChannel? native = null, DfoServer.GameWorld.Items.ItemCatalog? items = null,
+    DfoServer.GameWorld.Items.GoldLimitCatalog? goldLimits = null, DfoServer.GameWorld.Items.EpicPieceCatalog? pieces = null,
     ExperienceBonusService? experienceBonuses = null,
     DfoServer.Network.Projection.Inventory.SkinStorageProjection? skins = null, DfoServer.Game.ExpertJob.ExpertJobStoreBoard? expertStores = null,
     TownPresence? presence = null,
     DfoServer.GameWorld.Dungeons.DungeonIncountCatalog? incounts = null, CharacterLevelProjection? levels = null,
     DfoServer.Game.Social.SocialService? social = null, DfoServer.Game.Party.PartyService? parties = null,
-    DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null, Action<GameConnectionContext>? prepareDungeon = null, bool enableLukeRaidStart = false,
-    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
-    ImperialArenaProjection? imperialArena = null, TagEvildomRunProjection? tagEvildomRun = null) : IConnectionProtocol
+    DfoServer.GameWorld.Dungeons.OperationHopeCatalog? operationHope = null, Action<GameConnectionContext>? prepareDungeon = null,
+    GuildManagementProjection? guildManagement = null, DfoServer.Game.Guild.GuildInvitations? guildInvitations = null,
+    GuildCargoProjection? guildCargo = null, GuildEconomyProjection? guildEconomy = null,
+    GuildTeleportHandler? guildTeleport = null, DfoServer.Game.Guild.GuildTeleportService? guildTeleportService = null,
+    GuildNpcProjection? guildNpcs = null, bool enableLukeRaidStart = false,
+    DfoServer.Game.Pvp.PvpArenaService? arena = null,
+    DfoServer.GameWorld.Guilds.GuildDungeonCatalog? guildDungeons = null,
+    DfoServer.Game.Pvp.PvpRatingSettlement? pvpRatings = null,
+    TagEvildomRunProjection? tagEvildomRun = null,
+    ImperialArenaProjection? imperialArena = null,
+    DfoServer.Game.Dungeons.DungeonBattleLevelSettings? monsterBattleLevels = null,
+    DfoServer.Game.Dungeons.DungeonMonsterAiSettings? monsterAi = null,
+    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null) : IConnectionProtocol
 {
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
@@ -44,11 +55,13 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             // 保活回包不逐条记 send；连接心跳由 KeepaliveHandler 的 keepalive 汇总覆盖。
             if (KeepaliveHandler.IsKeepalive(opcode))
                 return;
-            log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = kind == 1 && PacketCapture.IsAuthentication(opcode) ? "[login-redacted]" : Convert.ToHexString(body.Span) });
+            log.Write("send", new { Connection = connection.Id, Kind = kind, Opcode = opcode, Name = kind == 1 ? ((CmdPacketType)opcode).ToString() : ((NotiPacketType)opcode).ToString(), Sequence = sequence, Action = action, Body = kind == 1 && PacketCapture.IsSensitiveCommand(opcode) ? PacketCapture.RedactedCommandBody(opcode) : Convert.ToHexString(body.Span) });
         }, connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
-            timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items, experienceBonuses: experienceBonuses, incounts: incounts,
-            channelHistory: channelHistory, operationHope: operationHope, itemCycles: itemCycles);
+            timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items,
+            goldLimits: goldLimits, pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
+            channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
+            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
@@ -72,8 +85,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         context.Death = death;
         var revival = new DungeonRevivalProjection(context, log, time);
         var tagRevival = new TagEvildomRevivalProjection(context, log, time);
-        var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory);
         var tagDeadline = tagEvildomRun is null ? null : new TagEvildomDeadlineProjection(context, projection, tagEvildomRun, log, SqliteBusyRetry.IsBusy, time);
+        var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);
@@ -88,6 +101,20 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             session.GuildPermitNoticeArrived = notice => guild.Notice(context, notice);
             session.GuildPermitResolved = outcome => guild.ResolvedAsync(context, outcome);
         }
+        session.GuildManagementNoticeArrived = notice =>
+        {
+            guildManagement?.Post(context, notice);
+            guildEconomy?.Post(context, force: notice.Kind == DfoServer.Game.Guild.GuildManagementNoticeKind.Refresh);
+            if (notice.NpcsChanged) guildNpcs?.Post(context);
+        };
+        session.GuildCargoNoticeArrived = notice => guildCargo?.Post(context, notice);
+        session.GuildManagementClosing = () => { guildInvitations?.Close(session); guildEconomy?.Close(session); guildTeleportService?.Close(session); };
+        guildTeleport?.PrepareContext(context);
+        session.GuildPresenceFailed = failure => log.Write("guild_presence_failed", new
+        {
+            Connection = connection.Id, Character = failure.CharacterId,
+            ObservedAt = failure.ObservedAtUnix, Error = failure.Error.Message
+        });
         // 聊天投递入口绑定本条连接：服务端从在线会话目录按快照选中本会话后，由这里把 0x0C/0x76 入本连接队列。
         session.ChatNoticeArrived = notice => ChatProjection.Notice(context, notice);
         session.ExpertJobStoreClosed = id =>
@@ -97,6 +124,14 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     ExpertJobPackets.CloseStoreNotice(id), "expert_job_store_invalidated");
         };
         session.SocialNoticeArrived = view => SocialProjection.Notice(context, view);
+        session.PvpArenaNoticeArrived = notice => PvpArenaProjection.Notice(context, notice, stats);
+        session.PvpArenaResultArrived = delivery =>
+        {
+            bool queued = arena is not null && PvpArenaResultProjection.TryQueue(context, arena, delivery);
+            log.Write("pvp_arena_result_queued", new { Connection = context.Id, Match = delivery.Match.Id,
+                Character = delivery.Receipt.CharacterId, Queued = queued, Rule = delivery.Receipt.RuleVersion });
+            return queued;
+        };
         session.SocialAccountDeleted = (name, guard) => sender.Post(0, (ushort)NotiPacketType.ACCOUNT_FRIEND_DELETE,
             SocialPackets.Name(name), "account_friend_deleted", guard);
         ushort socialCharacter = 0;
@@ -119,6 +154,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         long partyEpoch = session.SelectionEpoch;
         await using var partyDirectory = parties is null ? null : new PartyDirectoryProjection(context, parties, towns, log);
         context.PartyDirectory = partyDirectory;
+        await using var arenaDirectory = arena is null ? null : new PvpArenaDirectoryProjection(context, arena, log);
         long directoryEpoch = sender.Epoch;
         var directoryPhase = session.Phase;
         NativeChannel.Registration? nativeRegistration = null;
@@ -145,13 +181,13 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         await context.Notify(NotiPacketType.EXPERT_JOB_INFO, info, "expert_job_customer_owner_info", Guard);
                         projection.Refresh(context);
                     }),
-                guardedProbe: (opcode, body, action, guard) => sender.TryPost(0, opcode, body, action,
-                    () => !connection.Stop.IsCancellationRequested && session.Ready && session.Selected is not null && guard()),
-                marriage: new OnlineMarriageConnection(
+                new OnlineMarriageConnection(
                     result => inventory?.RefreshAsync(context, result) ?? Task.CompletedTask,
                     (opcode, body, action, guard) => context.Notify((NotiPacketType)opcode, body, action, guard),
                     receipt => projection.TravelAsync(context, receipt),
-                    () => { if (session.Phase == SessionPhase.Town) projection.Refresh(context, marriageOnly: true); }));
+                    () => { if (session.Phase == SessionPhase.Town) projection.Refresh(context, marriageOnly: true); }),
+                guardedProbe: (opcode, body, action, guard) => sender.TryPost(0, opcode, body, action,
+                    () => !connection.Stop.IsCancellationRequested && session.Ready && session.Selected is not null && guard()));
             nativeRegistration = native?.Register(context);
             session.SetPeerAccount(nativeRegistration?.Token ?? 0);
             adventure?.Prepare(context);
@@ -166,14 +202,17 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 log.Write("db_busy", new { Connection = connection.Id, Phase = session.Phase.ToString(), request.Kind, request.Opcode,
                     Name = name, Stage = stage, Attempts = attempts, Message = error.Message });
 
+            var clientSequence = new ClientRequestSequence();
             while (!connection.Stop.IsCancellationRequested)
             {
                 var request = GameFrame.ParseClient(await connection.ReadAsync());
+                request = request with { RequestSerial = clientSequence.Observe(request.Sequence) };
+                session.ObserveGuildRequest(request.RequestSerial);
                 bool loginPacket = request.Opcode is (ushort)CmdPacketType.LOGIN or (ushort)CmdPacketType.LOGIN_PRECHECK;
                 if (loginPacket)
                     throw new InvalidDataException("Login already completed on this connection");
                 string name = ((CmdPacketType)request.Opcode).ToString();
-                string body = PacketCapture.IsAuthentication(request.Opcode) ? "[login-redacted]" : Convert.ToHexString(request.Body);
+                string body = PacketCapture.IsSensitiveCommand(request.Opcode) ? PacketCapture.RedactedCommandBody(request.Opcode) : Convert.ToHexString(request.Body);
                 // 收包只记录一次：忙锁重试重放的是本包分派与刷新，不重复收包日志。
                 // 保活包每 10 秒一次，逐包 recv/send 会刷屏：由 KeepaliveHandler 每连接每 60 秒汇总一条 keepalive。
                 if (!KeepaliveHandler.IsKeepalive(request.Opcode))
@@ -211,6 +250,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     await PartyDungeonProjection.DetachAsync(context);
                     // 只拆上一选角代次；Ready期间恢复的真实席位已经绑定当前代次。
                     parties?.Detach(session, session.Ready ? session.SelectionEpoch : null);
+                    if (arena is not null) arena.Publish(await arena.DetachAsync(session));
                 }
                 partyEpoch = session.SelectionEpoch;
                 ushort currentSocial = session.Ready ? session.Selected?.Id ?? (ushort)0 : (ushort)0;
@@ -226,6 +266,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     directoryPhase = session.Phase;
                     // 选图会移除城镇实体，也必须让其他观察者移除招募行；不能只刷新本人列表。
                     parties?.PresenceChanged();
+                    arenaDirectory?.Request();
                 }
                 // 提交后的自动刷新单独重试，不与已完成的命令一起重放。
                 var (refreshed, _) = await SqliteBusyRetry.TryExecuteAsync(async () =>
@@ -279,6 +320,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             online.RemoveConnection(connection.Id, session);
             await PartyDungeonProjection.DetachAsync(context);
             parties?.Detach(session);
+            if (arena is not null) arena.Publish(await arena.DetachAsync(session));
             online.Remove(login.Owner.Account, session);
             if (socialCharacter != 0) social?.PresenceChanged(socialCharacter, login.Owner.Account);
             projection.Remove(context);

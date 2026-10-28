@@ -13,6 +13,7 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        ClientRequestSequenceTests.RunCore();
         EquipmentPowerScoreTests.RunCore();
         EquipmentInvestmentScoreTests.RunCore();
         CharacterInvestmentScoreTests.RunCore();
@@ -38,8 +39,19 @@ internal static class SelfTestRunner
         MarriagePreparationTests.RunCore();
         MarriageLifecycleTests.RunCore();
         MarriageDungeonTests.RunCore();
+        PvpArenaTests.RunCore();
+        PvpArenaCatalogTests.RunCore();
+        PvpRatingTests.RunCore();
+        PvpRatingSettlementTests.RunCore();
+        PvpTotalRatingSettlementTests.RunCore();
+        PvpTotalBattleTests.RunCore();
+        PvpTotalTeamTests.RunCore();
+        PvpArenaWireTests.RunCore();
+        await PvpArenaSessionTests.RunCoreAsync();
+        await PvpMatchingSessionTests.RunCoreAsync();
         OrdinaryLukeProgressTests.RunCore();
         SkillTreeExpansionTests.RunCore();
+        WeeklyEntryResetTests.RunCore();
         CharacterPreparationTests.RunCore();
         PlayerInteractionTests.RunCore();
         SocialTests.RunCore();
@@ -65,7 +77,6 @@ internal static class SelfTestRunner
         EnchantmentTests.RunCore();
         EnhancementTests.RunCore();
         AmplificationTests.RunCore();
-        ChronicleEnchantTests.RunCore();
         AmplifyUpgradeTests.RunCore();
         MedalUpgradeTests.RunCore();
         TalismanTests.RunCore();
@@ -83,6 +94,7 @@ internal static class SelfTestRunner
         EquipmentEmblemTests.RunCore();
         TextureChangeTests.RunCore();
         EquipmentUpgradeTests.RunCore();
+        EquipmentTransmissionTests.RunCore();
         DarkRevelationTests.RunCore();
         EchonEquipmentTests.RunCore();
         WeaponSkinTests.RunCore();
@@ -118,6 +130,7 @@ internal static class SelfTestRunner
         AuctionReplyTests.Run();
         DungeonRequestTests.Run();
         DungeonEntryCostTests.RunCore();
+        BeastDungeonEntryTests.RunCore();
         AssaultModePacketTests.Run();
         RiftDailyPacketTests.Run();
         ParticularHellPartyTests.Run();
@@ -137,6 +150,27 @@ internal static class SelfTestRunner
         SkillLearningDisconnectTests.Run();
         GuildParameterTests.RunCore();
         GuildDirectoryTests.RunCore();
+        GuildPanelTests.RunCore();
+        GuildPresenceTests.RunCore();
+        GuildManagementTests.RunCore();
+        GuildApplicationTests.RunCore();
+        GuildGovernanceTests.RunCore();
+        GuildCargoTests.RunCore();
+        GuildHallTests.RunCore();
+        GuildEconomyTests.RunCore();
+        GuildDungeonMileageTests.RunCore();
+        GuildDungeonProgressTests.RunCore();
+        GuildDungeonSchemaTests.RunCore();
+        GuildHongbaoPurchaseTests.RunCore();
+        GuildHongbaoTests.RunCore();
+        GuildRankingTests.RunCore();
+        GuildAppearanceTests.RunCore();
+        GuildAttendanceTests.RunCore();
+        GuildContributionTests.RunCore();
+        GuildHallWaitTests.RunCore();
+        GuildNpcTests.RunCore();
+        GuildExperienceGiftTests.RunCore();
+        GuildTeleportTests.RunCore();
         GuildPermitTests.RunCore();
         GuildPermitHandlerTests.Run();
         GuildCommitTests.Run();
@@ -293,6 +327,7 @@ internal static class SelfTestRunner
         ItemRequestTests.Run();
         ConsumableUseTests.RunCore();
         UpgradeChronicleServiceTests.RunCore();
+        ChronicleEnchantTests.RunCore();
         OtherverseAncientTests.RunCore();
         RecipeCraftServiceTests.RunCore();
         ConsumableStateTests.RunCore();
@@ -314,6 +349,8 @@ internal static class SelfTestRunner
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
+        BeastDungeonEntryTests.RunMaps(pvf);
+        BeastDungeonEntryTests.RunAccessoryQuest(pvf, itemResources);
         MarriageResourceTests.Run(pvf);
         var marriageCatalog = DfoServer.GameWorld.Marriage.MarriageCatalog.Load(pvf);
         MarriageCoupleTests.Run(marriageCatalog, itemResources.Items);
@@ -419,9 +456,11 @@ internal static class SelfTestRunner
         MainlineQuestBatchTests.Run(pvf, itemResources);
         DungeonMapPoolTests.Run(pvf);
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
+        await BeastSixthDifficultyTests.RunAsync(towns, pvf, characters, itemResources);
         await DungeonSelectionReturnTests.RunAsync(towns, characters, itemResources);
         QuestCatalogTests.Run(pvf);
         PvpArcadeCatalogTests.RunResources(pvf);
+        PvpArenaCatalogTests.RunResources(pvf);
         PvpPracticeComboCatalogTests.RunResources(pvf);
         QuestHarlemExpTests.Run(pvf);
         QuestHarlemExpTests.RunSeeking(pvf, itemResources);
@@ -484,6 +523,10 @@ internal static class SelfTestRunner
         RecipeResourceTests.Run(pvf);
         SkillCatalogTests.Run(pvf);
         GuildParameterTests.Run(pvf);
+        GuildNpcTests.RunResources(pvf);
+        GuildDungeonProgressTests.RunResources(pvf);
+        GuildRankingTests.RunResources(pvf);
+        GuildExperienceGiftTests.RunResources(itemResources.Items);
         GuildCreationTests.Run(towns, characters, itemResources, pvf);
         CollectBoxTests.RunResources(towns, itemResources);
         CharacterGrowthCatalogTests.Run(pvf);

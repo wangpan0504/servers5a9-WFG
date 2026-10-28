@@ -45,10 +45,11 @@ internal static class PartyPackets
         InformationBlock(w, id, server, channel, members, leader, removed ? (byte)3 : (byte)0, settings);
     });
 
-    public static byte[] Members(ushort id, byte server, byte channel, (byte Slot, ushort Actor)[] members, byte leader) => SocialPackets.Build(w =>
+    public static byte[] Members(ushort id, byte server, byte channel, (byte Slot, ushort Actor)[] members, byte leader,
+        PartySettings settings) => SocialPackets.Build(w =>
     {
         w.Write((ushort)1); w.Write((ushort)9999);
-        InformationBlock(w, id, server, channel, members, leader, 2, null);
+        InformationBlock(w, id, server, channel, members, leader, 2, settings);
     });
 
     public static byte[] Directory(byte server, byte channel, PartySnapshot[] rows, int total) => SocialPackets.Build(w =>
@@ -67,10 +68,10 @@ internal static class PartyPackets
         w.Write(id); w.Write(server); w.Write(channel);
         w.Write((byte)0); w.Write(action); w.Write((byte)0);
         if (action == 3) return;
+        var info = settings ?? PartySettings.Default;
         if (action == 0)
         {
             // action0完整info块；保留已确认宽度的未命名字段为零，不借用S4固定8槽结构。
-            var info = settings ?? PartySettings.Default;
             w.Write((byte)0); w.Write(info.TitleCode);
             if (info.TitleCode == 0) PacketEncoding.WriteString(w, info.Title);
             // 01B4BC0F/22/86回填创建窗口：容量在+4C，目标副本在+74，招募选项在+1E4。
@@ -86,7 +87,9 @@ internal static class PartyPackets
             w.Write(new byte[5]); // 023BAF86/99/AB/C0/FFE，五个独立u8。
         }
         w.Write((byte)0); // 023BB0F7额外成员记录数量。
-        w.Write((byte)0); w.Write(leader); w.Write(new byte[6]); // 023BB300..427八个u8。
+        w.Write((byte)0); w.Write(leader); w.Write(new byte[5]);
+        // 023BB427/43F用末u8覆盖模型+82；芮兹0399E450读取对应类型，完整名册和成员增量都必须保留它。
+        w.Write(info.Kind);
         w.Write((byte)0); // 023BB8A9扩展类型；0不带后续数据。
     }
 }

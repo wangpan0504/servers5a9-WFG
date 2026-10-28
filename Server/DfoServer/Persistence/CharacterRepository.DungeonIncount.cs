@@ -3,6 +3,8 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Quests;
+using DfoServer.Game.TagEvildom;
 using DfoServer.GameWorld.Dungeons;
 using Microsoft.Data.Sqlite;
 
@@ -133,5 +135,120 @@ internal sealed partial class CharacterRepository
                 command.ExecuteNonQuery();
             }
         return new DungeonIncountCommit(character, usage);
+    }
+
+    // 账号级刷新地下城入场次数：覆盖所有按次限进的副本与所有重置节奏。
+    // 冒险团面板删当前周；角色日/周次数的 daily_used 与 weekly_used、账号次数（日键或任意周起点的周键）、
+    // 魔兽日次数、强袭日次数都清当前周期。旧周期行保留：跨周期本就读作 0。
+    // 魔界塔（ dazzle）只清本周已绑角色的当日入场；悲叹塔清账号日额度与角色当日通关锁，楼层进度保留；
+    // 祭坛（血/究极）与绝望的当日入场回执把 service_day 挪到 1，绝望的当日通关日一并清零，楼层进度保留；
+    // 卢克团本删本周（含上一周，周键依赖 PVF 周期）的已通关记录，再战魔界的本周通关回执挪到 1/1 周并丢掉跨日未完成尝试。
+    // 次元裂缝的日通关数与卢克奖励回执只决定奖励进度、不限制入场，不在刷新范围；
+    // character_dungeon_incount_extra 是买来的额外次数（额度），清零等于没收玩家已买的次数，也不在范围。
+    // 在线内存不缓存已用次数，下次入场重新读库。
+    public DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner) => owner.Execute(() =>
+    {
+        var now = DateTimeOffset.UtcNow;
+        int panelWeek = WeeklyDungeonPolicy.WeekKey(now);
+        var period = DungeonIncountPolicy.Period(now);
+        int beastDay = ShopPurchaseCount.Today(now);
+        int assaultDay = AssaultModeEntryPolicy.DayKey(DateTimeOffset.Now);
+        int dazzlementWeek = DazzlementTowerAdmission.At(now).Week;
+        int griefDay = QuestCycle.Day(now);
+        var tagPeriod = TagEvildomPeriod.At(now);
+        int raidWeekFloor = RaidWeekFloor(now);
+        using var db = database.Open();
+        using var write = db.BeginWrite("CharacterRepository.ResetDungeonEntries");
+        using var tx = write.Transaction;
+        int panel = Execute(db, tx, "DELETE FROM character_weekly_dungeon WHERE account=$account AND week=$week",
+            ("$account", owner.Account), ("$week", panelWeek));
+        int daily = Execute(db, tx, """
+            UPDATE character_dungeon_incount SET daily_used=0
+            WHERE account=$account AND day=$day AND daily_used<>0
+            """, ("$account", owner.Account), ("$day", period.Day));
+        int weekly = Execute(db, tx, """
+            UPDATE character_dungeon_incount SET weekly_used=0
+            WHERE account=$account AND week=$week AND weekly_used<>0
+            """, ("$account", owner.Account), ("$week", period.Week));
+        int account = ClearAccountEntries(db, tx, owner.Account, DungeonIncountPolicy.CurrentAccountPeriods(now));
+        int beast = Execute(db, tx, "DELETE FROM character_beast_dungeon_entries WHERE account=$account AND day=$day",
+            ("$account", owner.Account), ("$day", beastDay));
+        int assault = Execute(db, tx, """
+            UPDATE character_assault_daily SET clear_count=0,hidden_count=0
+            WHERE account=$account AND day=$day AND (clear_count<>0 OR hidden_count<>0)
+            """, ("$account", owner.Account), ("$day", assaultDay));
+        // 魔界塔：每角色每天入场一次；只清本周绑定行的当日入场日，周内已绑角色数量不变。
+        int dazzlement = Execute(db, tx, """
+            UPDATE account_dazzlement_tower_bindings SET last_entry_day=0
+            WHERE account=$account AND week=$week AND last_entry_day<>0
+            """, ("$account", owner.Account), ("$week", dazzlementWeek));
+        // 悲叹塔：账号日额度 + 角色当天通关锁；把日期挪到 1（合法的最早日期）即视为新的一天，楼层进度保留。
+        int griefAccount = Execute(db, tx, """
+            UPDATE account_grief_tower SET game_day=1,used=0
+            WHERE account=$account AND (used<>0 OR game_day=$day)
+            """, ("$account", owner.Account), ("$day", griefDay));
+        int griefCharacter = Execute(db, tx, """
+            UPDATE character_grief_tower SET game_day=1,cleared=0
+            WHERE account=$account AND (cleared<>0 OR game_day=$day)
+            """, ("$account", owner.Account), ("$day", griefDay));
+        // 祭坛/绝望：当日入场回执挪到 1，计数按当日回执条数算，等于当日次数清零；回执身份与通关校验链不变。
+        int special = Execute(db, tx, """
+            UPDATE dungeon_special_entry_receipts SET service_day=1
+            WHERE account=$account AND service_day=$day AND kind IN(1,2,3)
+            """, ("$account", owner.Account), ("$day", beastDay));
+        int despair = Execute(db, tx, """
+            UPDATE dungeon_despair_progress SET last_clear_day=0
+            WHERE account=$account AND last_clear_day=$day
+            """, ("$account", owner.Account), ("$day", beastDay));
+        // 卢克团本：周通关上限按 clear_week 计数，把本周已通关记录挪到第 1 周即不计入本周。
+        // 保留行本身：阶段回执还在里面，删了会丢未领取奖励的恢复链。周键由 PVF 周期决定，
+        // 这里按日期回退 8 天兜底（最多连带上一周的历史行，它们本来也不计入本周）。
+        int raid = Execute(db, tx, """
+            UPDATE character_raid_runs SET clear_week=1
+            WHERE account=$account AND raid_type=1 AND state=2 AND clear_week>=$floor
+            """, ("$account", owner.Account), ("$floor", raidWeekFloor));
+        // 再战魔界：周内通关 3 次上限按本周通关回执计数，回执挪到 1/1 周即不计入本周；
+        // 跨日未完成的尝试原本也占本周次数，一并删掉。回执行本身保留给通关记录引用。
+        int tag = Execute(db, tx, """
+            UPDATE account_tag_evildom_clearances SET day=1,week=1
+            WHERE account=$account AND (week=$week OR day=$day)
+            """, ("$account", owner.Account), ("$week", tagPeriod.Week), ("$day", tagPeriod.Day));
+        int tagChallenge = Execute(db, tx, """
+            DELETE FROM account_tag_evildom_challenges
+            WHERE account=$account AND week=$week AND day<$day AND state=0
+            """, ("$account", owner.Account), ("$week", tagPeriod.Week), ("$day", tagPeriod.Day));
+        tx.Commit();
+        return new DungeonEntryResetResult(owner.Account, panelWeek, panel, daily, weekly, account, beast, assault,
+            dazzlement, griefAccount, griefCharacter, special, despair, raid, tag, tagChallenge);
+    });
+
+    // 卢克周键是「本周起点日期」的 yyyyMMdd（起点由 PVF 周期决定，最多早于现在 7 天）。
+    // 回退 8 天取整做下限：一定包含本周，最多连带上一周的历史行。
+    static int RaidWeekFloor(DateTimeOffset now)
+    {
+        var day = now.ToOffset(TimeSpan.FromHours(8)).Date.AddDays(-8);
+        return day.Year * 10000 + day.Month * 100 + day.Day;
+    }
+
+    // 账号次数一账号一副本一行，周期键可能是日键或任意周起点的周键；按当前可能命中的周期键一次清零。
+    static int ClearAccountEntries(SqliteConnection db, SqliteTransaction tx, string account, int[] periods)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = "UPDATE account_dungeon_incount SET used=0 WHERE account=$account AND used<>0 AND period IN ("
+            + string.Join(",", Enumerable.Range(0, periods.Length).Select(index => "$p" + index)) + ")";
+        command.Parameters.AddWithValue("$account", account);
+        for (int index = 0; index < periods.Length; index++)
+            command.Parameters.AddWithValue("$p" + index, periods[index]);
+        return command.ExecuteNonQuery();
+    }
+
+    static int Execute(SqliteConnection db, SqliteTransaction tx, string sql, params (string Name, object Value)[] parameters)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = sql;
+        foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value);
+        return command.ExecuteNonQuery();
     }
 }

@@ -46,7 +46,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
         }
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill tree receipt");
         bool Guard() => context.Session.CanPublishLearning(receipt);
-        await context.Reply(CmdPacketType.CHANGE_ANOTHER_SKILL_TREE, SkillPackets.TreeChanged(receipt.Character.Learning), "skill_tree_change_committed", Guard);
+        await context.Reply(CmdPacketType.CHANGE_ANOTHER_SKILL_TREE, SkillPackets.TreeChanged(result.State!), "skill_tree_change_committed", Guard);
         await SkillProjection.PublishCombosAsync(context, receipt.Character, "skill_tree_change_combos", Guard);
         await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         await projection.RefreshSkillTreeAsync(context, receipt.Character, Guard);
@@ -188,7 +188,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
         {
             // 扣点、等级、绑定及revision已提交，ACK仅发布该事实，不以发送失败重跑。
             var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill commit receipt");
-            await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Success(parsed.Context, parsed.Mode, receipt.Character.Learning, result.Changes),
+            await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Success(parsed.Context, parsed.Mode, result.State!, result.Changes),
                 "skill_purchase_committed", () => context.Session.CanPublishLearning(receipt));
             // 普通学习/回退只回ACK29：客户端不会因加点清空连招列，
             // 额外推送NOTI447会用服务端存档覆盖客户端尚未提交的当前排列。

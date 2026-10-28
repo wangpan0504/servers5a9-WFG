@@ -75,6 +75,15 @@ internal static class ItemModelTests
         That(equipment.DeclaredPrice is null && equipment.UnsupportedFields.Count(x => x == "price") == 1, "duplicate raw declaration is unsupported");
         var stackable = StackableFile.Parse(0, "stackable/a.stk", [new(3, 1), new(0, 0), new(3, 2), new(6, 3), new(0, -1), new(0, 2)], Resolve);
         That(stackable.DeclaredStackLimit == 0 && stackable.TypeDeclaration!.Parameters.SequenceEqual(new[] { -1, 2 }), "raw type parameters have no invented nonnegative constraint");
+        foreach (int count in new[] { 0, 1, 7 })
+            That(StackableTradeLimitDeclaration.Read(new($"[trade limit]\n{count} `[account]`\n")) == new StackableTradeLimitDeclaration(count, "[account]"),
+                "限次交易声明保留次数和后续账号绑定标签，零次数不是缺省值");
+        That(StackableTradeLimitDeclaration.Read(new("[trade limit]\n1 `[trade]`\n"))?.Attachment == "[trade]",
+            "原始解析保留角色绑定标签，不自动解释为账号绑定");
+        foreach (string declaration in new[] { "", "1", "-1 `[account]`", "2147483648 `[account]`", "1 `[account]` 0", "1 `[account]`\n[trade limit]\n1 `[account]`" })
+            That(StackableTradeLimitDeclaration.Read(new("[trade limit]\n" + declaration)) is null,
+                "空值、缺少绑定标签、负数、溢出、多余参数及重复声明不能成为有效交易限制");
+        That(StackableTradeLimitDeclaration.Read(new("[name]\n`fixture`")) is null, "没有交易限制声明时不创造绑定规则");
         Reject<InvalidDataException>(() => StackableFile.Parse(1, "stackable/a.stk", [new(3, 0), new(0, -1)], Resolve));
         That(EquipmentFile.Parse(1, "equipment/a.equ", [new(3, 0), new(0, -1)], Resolve).DeclaredPrice is null, "equipment unsupported scalar remains nonfatal");
         That(PvfItemIndex.Stackable([new(0, 0), new(6, 4)], Resolve, _ => true)[0] == "stackable/fixture.stk", "stackable zero identity is retained");

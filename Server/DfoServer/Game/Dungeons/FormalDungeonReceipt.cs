@@ -10,12 +10,15 @@ internal sealed record FormalDungeonReceipt(Character Character, long Generation
 {
     public bool LostLandStarted { get; init; }
     public ImmutableArray<ushort> PartyActors { get; init; } = [];
+    public ImmutableArray<DfoServer.Game.Guild.GuildDungeonMembership> GuildMemberships { get; init; } = [];
     public byte PartySlot { get; init; }
     public bool HellPartyRoomCleared => Snapshot.Phase == SinglePlayerDungeonPhase.Dungeon &&
         Entry.HellParty is { } hell && Snapshot.CurrentMap.Id == hell.MapId && Monsters.HellWaves.Count > 0 &&
         Monsters.Monsters.Where(monster => monster.IsBlocking).All(monster => !Snapshot.LivingMonsters.Contains(monster.ObjectKey));
 
     public ImmutableArray<DungeonGroundObject> PassiveItems { get; init; } = [];
+    // 本次房间访问冻结的四项AI参数；null 表示冻结时功能关闭，不为该次29发送私有包。
+    public MonsterAiProfile? MonsterAi { get; init; }
     // #233 强袭入场提交时扣除材料变化的背包格，仅入场回执携带。
     public ImmutableArray<InventorySlot> AssaultConsumedSlots { get; init; } = [];
     // 实验性：深渊派对入场票在入场提交时扣掉的背包格与票据（日志 + UPDATE_ITEM_LIST 用）。
@@ -58,6 +61,7 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public IReadOnlyList<InventorySlot> QuestDropSlots { get; init; } = [];
     public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];
     public DungeonRoomClearFact? RoomClearFact { get; init; }
+    public ImmutableArray<InventorySlot> BeastRewardSlots { get; init; } = [];
     public DfoServer.GameWorld.Dungeons.DungeonPoint? BossPositionUpdate { get; init; }
 }
 internal sealed record EpicPiecePickup(int Index, int PieceId, int Amount, int Balance, long BookRevision);
@@ -89,6 +93,9 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     DfoServer.GameWorld.Dungeons.DungeonClearExperienceReward? Reward = null, DungeonSettlementPresentation? Presentation = null,
     Character? PreviousCharacter = null)
 {
+    public uint GuildMileageGuildId { get; init; }
+    public DfoServer.Game.Guild.GuildContributionCommit? GuildContribution { get; init; }
+    public DfoServer.Game.Guild.GuildDungeonProgress? GuildDungeon { get; init; }
     public uint GainedExperience { get; init; }
     // 通关结算的熟练度到账额度；展示位统一使用两者之和，不把满级入口线的实际收益显示成 0。
     public uint ProficiencyGained { get; init; }
@@ -100,6 +107,8 @@ internal sealed record FormalDungeonSettlementResult(DungeonRunOutcome Outcome, 
     public uint? MailId { get; init; }
     public DfoServer.Game.Session.AssaultClearResult? AssaultClear { get; init; }
     public DfoServer.Game.Session.CrackClearResult? CrackClear { get; init; }
+    // 魔界大战小图：发结果页（34）但不发普通白图的通关翻牌（35），发布端据此收窄。
+    public bool EvildomWarClear { get; init; }
     public DungeonCardOptions? Options { get; init; }
     public DungeonCardReward? BlackDiamond { get; init; }
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }

@@ -43,7 +43,7 @@ internal static class PartyProjection
             {
                 Post(NotiPacketType.UDP_HOST, PartyPackets.Host(party.Leader), "party_host");
                 Post(NotiPacketType.PARTY_INFO, PartyPackets.Members(party.Id, channel.ServerIndex,
-                    checked((byte)channel.Number), members, party.Leader), "party_leader_info");
+                    checked((byte)channel.Number), members, party.Leader, party.Settings), "party_leader_info");
                 Post(NotiPacketType.PARTY_MEMBER_REALTIME_INFO, Realtime(), "party_leader_realtime");
                 return;
             }
@@ -51,7 +51,7 @@ internal static class PartyProjection
             {
                 // 副本中离队只更新名册，不能重建幸存者Actor或用城镇100%覆盖战斗血蓝。
                 Post(NotiPacketType.PARTY_INFO, PartyPackets.Members(party.Id, channel.ServerIndex,
-                    checked((byte)channel.Number), members, party.Leader), "party_dungeon_members");
+                    checked((byte)channel.Number), members, party.Leader, party.Settings), "party_dungeon_members");
                 Post(NotiPacketType.UDP_HOST, PartyPackets.Host(party.Leader), "party_dungeon_members_host");
                 return;
             }

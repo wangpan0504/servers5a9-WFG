@@ -30,7 +30,7 @@ internal sealed record RaidJoinResult(bool Accepted, RaidInvitation? Invitation 
 internal sealed record RaidDirectoryChange(RaidParty? Party = null, RaidWaiting? Waiting = null, bool Removed = false);
 
 // 进程内招募聚合；锁内不访问数据库、不取得账号锁、不等待网络。业务先持原owner，双人操作按既有锁序。
-internal sealed class RaidRegistry(TimeProvider? clock = null)
+internal sealed class RaidRegistry
 {
     readonly object gate = new();
     readonly Dictionary<uint, RaidParty> parties = [];
@@ -39,9 +39,13 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
     readonly Dictionary<ChannelIdentity, ushort> next = [];
     // 招募窗口订阅只保留原会话身份，随选角失效清理；不是在线角色或资产目录。
     readonly Dictionary<GameSession, RaidActor> observers = [];
+    readonly TimeProvider timer;
     AntonRaidRejoin? rejoin;
     long revision;
-    DateTimeOffset Now => (clock ?? TimeProvider.System).GetUtcNow();
+
+    public RaidRegistry() { timer = TimeProvider.System; }
+    public RaidRegistry(TimeProvider? clock) { timer = clock ?? TimeProvider.System; }
+    DateTimeOffset Now => timer.GetUtcNow();
 
     internal RaidPreparationResult CommitPreparation(RaidPreparationPlan plan, PartyService ordinary,
         RaidPartyBatch batch, CancellationToken cancellation)
@@ -414,6 +418,6 @@ internal sealed class RaidRegistry(TimeProvider? clock = null)
             low = (ushort)(low == ushort.MaxValue ? 1 : low + 1);
             if (!parties.ContainsKey(high | low)) { next[channel] = low; return high | low; }
         }
-        throw new InvalidOperationException("频道攻坚队编号已用尽");
+        throw new InvalidOperationException("频道攻坚队编号已用完");
     }
 }

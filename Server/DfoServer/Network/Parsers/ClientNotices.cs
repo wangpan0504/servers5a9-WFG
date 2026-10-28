@@ -36,18 +36,11 @@ internal static class ClientNotices
             case (ushort)CmdPacketType.REQUEST_BLACKLIST when body.IsEmpty:
                 notice = new("blacklist_request", "empty");
                 return true;
-            case (ushort)CmdPacketType.GUILD_ALL_MEMBER_LIST when body.Length == 4:
-                notice = new("guild_member_list", "value=" + BinaryPrimitives.ReadUInt32LittleEndian(body));
-                return true;
             case (ushort)CmdPacketType.MERCENARY_INFO when body.Length > 0 && body[0] == body.Length - 1:
                 notice = new("mercenary_info", "count=" + body[0] + " bytes=" + Convert.ToHexString(body[1..]));
                 return true;
             case (ushort)CmdPacketType.SECURITY_STATUS when TryReport(body, out string report):
                 notice = new("security_status", report);
-                return true;
-            case (ushort)CmdPacketType.SEARCH_GUILD_RANKING when body.Length == 4:
-                // 枚举名和网吧奖励都还不是本包合同。只留下 4 字节样本，不按任一名字回包。
-                notice = new("recorded_1507", "a=" + body[0] + " b=" + body[1] + " c=" + BinaryPrimitives.ReadUInt16LittleEndian(body[2..]));
                 return true;
             case (ushort)CmdPacketType.FPS_PERFORMANCE_STATISTIC when body.Length == 0x298:
                 notice = new("fps_statistic", "bytes=664");

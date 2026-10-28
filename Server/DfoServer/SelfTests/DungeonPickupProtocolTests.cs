@@ -19,15 +19,28 @@ internal static class DungeonPickupProtocolTests
         requestBody[5] = 0;
         requestBody[18] = 0;
         That(request.Context == 0xA5 && request.Token2 == 0xE789, "解析值不借用可变输入");
-        foreach (int length in Enumerable.Range(0, 20).Concat(new[] { 21, 22, 24, 40 }))
+        // 实机地面key 15185 的客户端短文：key:u16 + form=1 + context + 7×u16，尾段与长式同布局但正文只有18B。
+        // 尾段字节必须与长式逐字节一致（同为小端u16），否则断言实际在验证另一种字节序。
+        byte[] shortBody = Convert.FromHexString("513B01042381349245A356B467C578D689E7");
+        That(DungeonPickupRequests.TryParseOrdinary(shortBody, out var shortRequest), "识别普通18B短式请求");
+        That(shortRequest == new DungeonPickupRequest(0x3B51, 0x04, 0x8123, 0x9234, 0xA345,
+            0xB456, 0xC567, 0xD678, 0xE789), "短式与长式保存同一组坐标和token，读数严格不越过18B");
+        foreach (int length in Enumerable.Range(0, 20).Where(length => length != 18).Concat(new[] { 21, 22, 24, 40 }))
             That(!DungeonPickupRequests.TryParseOrdinary(new byte[length], out var invalid) && invalid == default,
-                "拒绝截尾、18B变体或追加字节长度" + length);
+                "拒绝截尾或追加字节长度" + length);
         foreach (byte fixedField in new byte[] { 1, 4, 255 })
         {
             byte[] invalidBody = new byte[20];
             invalidBody[4] = fixedField;
             That(!DungeonPickupRequests.TryParseOrdinary(invalidBody, out var invalid) && invalid == default,
                 "普通固定字段非零拒绝" + fixedField);
+        }
+        foreach (byte form in new byte[] { 0, 2, 255 })
+        {
+            byte[] invalidBody = new byte[18];
+            invalidBody[2] = form;
+            That(!DungeonPickupRequests.TryParseOrdinary(invalidBody, out var invalid) && invalid == default,
+                "短式form非1拒绝" + form);
         }
         byte[] maximumRequest = Enumerable.Repeat(byte.MaxValue, 20).ToArray();
         maximumRequest[4] = 0;

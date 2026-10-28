@@ -43,14 +43,17 @@ internal static class FiendWarRosterTests
         TestCheck.That(questOnly[40] == 0, "缺公会：tail[40]=0");
         TestCheck.That(guildOnly[40] == 0, "缺任务 8672：tail[40]=0");
         TestCheck.That(neither[40] == 0, "两项都缺：tail[40]=0");
-        TestCheck.That(eligible[37] == 0 && eligible[38] == 0 && eligible[39] == 0 && eligible[41] == 0, "未证语义的 tail[37]/[38]/[39]/[41] 保持 0");
+        TestCheck.That(eligible[37] == 0 && eligible[38] == 0 && eligible[39] == 0 && eligible[41] == 0,
+            "未完成对应任务的 tail[37]/[38]/[39]/[41] 保持 0");
         TestCheck.That(eligible[24] == 3 && eligible[27] == 4, "原有 tail[24]/[27] 不变");
         TestCheck.That(Enumerable.Range(0, TailLength).All(i => i == 40 || eligible[i] == neither[i]), "资格只改变 tail[40] 一个字节");
     }
 
-    static byte[] Tail(Character character)
+    static byte[] Tail(Character character) => TailOf(CharacterRosterEntry.FromCharacter(character));
+
+    static byte[] TailOf(CharacterRosterEntry entry)
     {
-        byte[] body = CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(character)]);
+        byte[] body = CharacterPackets.Roster([entry]);
         return body.AsSpan(body.Length - RosterTrailer - TailLength, TailLength).ToArray();
     }
 
@@ -69,6 +72,9 @@ internal static class FiendWarRosterTests
             var both = repository.Create(owner, Role("FwBoth", [8672]));
             var questOnly = repository.Create(owner, Role("FwQuest", [8672]));
             var guildOnly = repository.Create(owner, Role("FwGuild", [10]));
+            // 魔兽频道（type 0x28）走同一条投影：完成 5927 才置 tail[39]，缺任务必须为 0。
+            var beastDone = repository.Create(owner, Role("FwBeast", [5927]));
+            var beastMiss = repository.Create(owner, Role("FwPlain", [10]));
             using (var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
             {
                 db.Open();
@@ -84,6 +90,11 @@ internal static class FiendWarRosterTests
             var roster = repository.ListRoster(owner);
             bool Flag(ushort id) => roster.Single(row => row.Id == id).FiendWarEligible;
             TestCheck.That(Flag(both.Id) && !Flag(questOnly.Id) && !Flag(guildOnly.Id), "名册查询按 character_completed_quests 与 guild_members 计算资格");
+            bool BeastFlag(ushort id) => roster.Single(row => row.Id == id).BeastEligible;
+            TestCheck.That(BeastFlag(beastDone.Id) && !BeastFlag(beastMiss.Id),
+                "名册查询按 character_completed_quests 打开魔兽资格（tail[39]）");
+            TestCheck.That(TailOf(roster.Single(row => row.Id == beastDone.Id))[39] == 1 &&
+                TailOf(roster.Single(row => row.Id == beastMiss.Id))[39] == 0, "完成 5927 的角色名册尾部 tail[39]=1");
             var full = repository.List(owner);
             TestCheck.That(CharacterPackets.Roster(roster).SequenceEqual(CharacterPackets.Roster(full.Select(CharacterRosterEntry.FromCharacter).ToArray())),
                 "轻量名册与完整角色的资格字节一致");

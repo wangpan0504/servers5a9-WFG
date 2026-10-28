@@ -23,7 +23,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     Inventory.SkinStorageHandler? skinStorage=null,FatigueConsumableHandler? fatigueConsumables=null,
     RentalHandler? rental=null,CreatureHandler? creatures=null,InventoryPeriodExtensionService? periodExtensions=null,
     InventoryMileageService? mileage=null,InventoryEquipmentPeriodChangeService? periodChanges=null,
-    AvatarPresetHandler? avatarPresets=null, InventoryNpcFavorService? npcFavor=null, MarriageHandler? marriage=null,
+    AvatarPresetHandler? avatarPresets=null,GuildEconomyHandler? guildEconomy=null,
+    GuildExperienceHandler? guildExperience=null, InventoryNpcFavorService? npcFavor=null, MarriageHandler? marriage=null,
     DimensionEntryTicketService? dimensionTickets=null, DungeonIncountTicketHandler? incountTickets=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
@@ -35,6 +36,10 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     {
         if (!StackableActionRequests.TryUse(packet.Body,out var request))
             return CommandResult.Unhandled;
+        if (request.Action == 146 && guildEconomy is not null)
+            return await guildEconomy.UseGiftAsync(context, request, packet.RequestSerial);
+        if (request.Action == 145 && guildExperience is not null)
+            return await guildExperience.UseAsync(context, request, packet.RequestSerial);
         // 这两类由原提交回执识别重放：源可能已耗尽，不能用当前空槽否认原操作。
         // 首次消费的动作身份仍由任务券/成长定义校验，原owner与回执门禁保持不变。
         if (request.Action is QuestTicketDefinition.Action or QuestTicketDefinition.SpecifiedAction or

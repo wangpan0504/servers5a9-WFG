@@ -51,6 +51,7 @@ internal static class TcpTestFixtureProcessTests
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }
+
     static void ReadinessDiagnostics()
     {
         string root = Path.Combine(Path.GetTempPath(), "S5A9-ready-diagnostic-" + Guid.NewGuid().ToString("N"));

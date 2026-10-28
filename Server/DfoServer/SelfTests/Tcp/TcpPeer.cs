@@ -36,6 +36,7 @@ internal sealed partial class TcpPeer : IDisposable
     readonly NetworkStream stream;
     readonly TcpTestFixture? fixture;
     ushort sequence;
+    ushort clientSequence;
     bool requestedRoster;
     readonly byte channelNumber;
     byte? staminaPercent;
@@ -47,7 +48,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] SceneSkillInfo { get; private set; } = [];
     public byte[] AvailableQuests { get; private set; } = [];
     public byte[] CompletedQuestHistory { get; private set; } = [];
-    public ushort Id { get; private set; }
+    public ushort Id { get; internal set; }
 
     // 预期来自夹具的原持久位置、完成位与只读资源；不调用生产Session或Builder，也不接受收到的包体自证。
     internal byte[] SelectionNoticeBody(ushort griefLayer = 0, ushort despairLayer = 0, int legendDungeon = 0,
@@ -96,6 +97,8 @@ internal sealed partial class TcpPeer : IDisposable
     public WirePacket[] TagEvildomInfo { get; private set; } = [];
     public byte[] AvatarPresetList { get; private set; } = [];
     public byte[] NpcFavor { get; private set; } = [];
+    public byte OwnGuildGrade { get; private set; } = 100;
+    public byte[] GuildNpcs { get; private set; } = [];
     public byte[] CardMembershipInformation { get; private set; } = [];
     public byte[] DevilService0 { get; private set; } = [];
     public Dictionary<byte, long> PremiumServices { get; private set; } = [];
@@ -167,12 +170,16 @@ internal sealed partial class TcpPeer : IDisposable
     }
 
     public void Send(ushort opcode, byte[]? body = null)
+        => SendAtSequence(opcode, clientSequence++, body);
+
+    public void SendAtSequence(ushort opcode, ushort wireSequence, byte[]? body = null)
     {
         body ??= [];
         byte[] frame = new byte[13 + body.Length];
         frame[0] = 1;
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(1), opcode);
         BinaryPrimitives.WriteInt32LittleEndian(frame.AsSpan(3), frame.Length);
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(11), wireSequence);
         body.CopyTo(frame, 13);
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(7), Crc(frame.AsSpan(11)));
         stream.Write(frame);
@@ -224,6 +231,12 @@ internal sealed partial class TcpPeer : IDisposable
             TestCheck.Bytes(frame.AsSpan(19, 2), [2, actorChannel], "USERINFO进入本次期待的频道Actor表，普通读取保持接收者频道");
         var packet = new WirePacket(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..], protectedFrame);
         if (packet is { Kind: 0, Opcode: 4, Body.Length: 1 }) staminaPercent = packet.Body[0];
+        if (packet is { Kind: 0, Opcode: 127 })
+        {
+            TestCheck.That(packet.Body.Length == 1 && packet.Body[0] is >= 1 and <= 5 or 100,
+                "本人公会职位通知必须是独立单字节合法职位或无会籍100");
+            OwnGuildGrade = packet.Body[0];
+        }
         return packet;
     }
 
@@ -238,6 +251,7 @@ internal sealed partial class TcpPeer : IDisposable
             packet = Read();
         }
         bool griefAnnounced = false;
+        WirePacket? beastDailyFirst = null;
         // 选图附带的状态通知逐项校验后记录，550须按两祭坛及悲叹当前楼层逐项匹配真实账本；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
@@ -252,7 +266,7 @@ internal sealed partial class TcpPeer : IDisposable
                 GriefTowerClearInfo = packet.Body;
                 griefAnnounced = true;
             }
-            else
+            else if (!ConsumeBeastDailyCount(packet, ref beastDailyFirst))
             {
                 TestCheck.That(griefAnnounced && ++countUpdates == 1,
                     "亡者峡谷状态之后只允许一组两祭坛与悲叹次数通知，不扩展普通选图包序");
@@ -260,6 +274,7 @@ internal sealed partial class TcpPeer : IDisposable
             }
             packet = Read();
         }
+        TestCheck.That(beastDailyFirst is null, "魔兽日次数通知必须成对，不能只发一张");
         TestCheck.That(packet.Kind == kind && packet.Opcode == opcode, $"packet order: expected ({kind},{opcode}), got ({packet.Kind},{packet.Opcode})");
         if (body is not null)
             TestCheck.Bytes(packet.Body, body, $"body ({kind},{opcode})");
@@ -308,6 +323,38 @@ internal sealed partial class TcpPeer : IDisposable
 
     // 已显式校验悲叹状态的选图用例使用同一真实账本断言，不交给27的兼容读取再次猜测前置包。
     public void ExpectAltarEnterCounts() => ReadDungeonEnterCounts(Read());
+
+    // 打开选图时服务端会在27之前补发当天两张魔兽图的剩余次数。只有副本编号、先后顺序和本人
+    // 魔兽账本全部对得上才消费这两条；其余550继续走原有祭坛守卫，不放宽通用包序。
+    bool ConsumeBeastDailyCount(WirePacket packet, ref WirePacket? first)
+    {
+        if (fixture is null || packet is not { Kind: 0, Opcode: 550, Body.Length: 6 }) return false;
+        int day = DfoServer.Game.Dungeons.BeastDungeonRotation.ServiceDay(fixture.UtcNow);
+        var pair = DfoServer.Game.Dungeons.BeastDungeonRotation.Pair(day);
+        uint target = U32(packet.Body, 0);
+        if (first is null)
+        {
+            if (target != (uint)pair.First) return false;
+            first = packet;
+            return true;
+        }
+        if (target != (uint)pair.Second) return false;
+        CheckBeastDailyCount(first, (uint)pair.First, day);
+        CheckBeastDailyCount(packet, target, day);
+        first = null;
+        return true;
+    }
+
+    void CheckBeastDailyCount(WirePacket packet, uint dungeon, int day)
+    {
+        long used = Convert.ToInt64(fixture!.Query("""
+            SELECT COALESCE((SELECT used FROM character_beast_dungeon_entries
+                WHERE character_id=$p0 AND account=$p1 AND day=$p2 AND dungeon_id=$p3),0);
+            """, Id, fixture.Options.DevelopmentAccount, day, (int)dungeon)[0][0]);
+        byte remaining = (byte)Math.Max(0, DfoServer.Game.Dungeons.BeastDungeonRotation.DailyLimit - used);
+        TestCheck.That(packet.Body[4] == remaining && packet.Body[5] == remaining,
+            "魔兽" + dungeon + "日次数等于本人魔兽账本剩余，日周同值");
+    }
 
     void ReadDungeonEnterCounts(WirePacket first)
     {
@@ -782,6 +829,46 @@ internal sealed partial class TcpPeer : IDisposable
         for (uint i = 0; i < friends; i++) Expect(0, 274);
         AccountFriends = Expect(0, 1376).Body;
         AccountFriendRequests = Expect(0, 1377).Body;
+        if (OwnGuildGrade != 100)
+        {
+            ReadGuildNpcs();
+            ReadGuildDungeon();
+        }
+    }
+
+    public void ReadGuildDungeon() => CheckGuildDungeon(Expect(0, 744).Body);
+
+    public void CheckGuildDungeon(byte[] body)
+    {
+        uint[] ids = [8500, 8503, 8504, 8505, 8507, 8508];
+        TestCheck.That(body.Length == 17 + ids.Length * 8 && body[0] == 1 && U32(body, 1) == 8500 &&
+            U32(body, 5) == 0 && U32(body, 9) == 0 && U32(body, 13) == ids.Length && fixture is not null,
+            "744从正式资源根图打开，完整六行计数，不伪造周期或未知头字段");
+        var saved = fixture!.Query("""
+            SELECT dungeon_id,clear_count FROM guild_dungeon_progress
+            WHERE guild_id=(SELECT guild_id FROM guild_members WHERE character_id=$p0)
+            """, Id).ToDictionary(row => Convert.ToUInt32(row[0]), row => Convert.ToUInt32(row[1]));
+        for (int i = 0; i < ids.Length; i++)
+            TestCheck.That(U32(body, 17 + i * 8) == ids[i] && U32(body, 21 + i * 8) == saved.GetValueOrDefault(ids[i]),
+                "744每行只投影本公会真实持久通关次数，既无百分比替代也无遗漏");
+    }
+
+    public void ReadGuildNpcs()
+    {
+        GuildNpcs = Expect(0, 1771).Body;
+        TestCheck.That(GuildNpcs.Length == 128 &&
+            Enumerable.Range(0, 8).Select(index => U32(GuildNpcs, index * 16)).Distinct().Count() == 8,
+            "登录及打开面板后恢复八条独立NPC状态，不能依赖客户端额外请求1737");
+        // 单条制造通知后紧跟完整缓存；空制造集合只发送1773。
+        var packet = Read();
+        int count = 0;
+        while (packet is { Kind: 0, Opcode: 1772 })
+        {
+            TestCheck.That(packet.Body.Length == 12 && ++count <= 1, "守护石制造单条通知有界且完整");
+            packet = Read();
+        }
+        TestCheck.That(packet is { Kind: 0, Opcode: 1773, Body.Length: 1080 },
+            "NPC初始化以固定1080字节福利快照结束");
     }
 
     public byte[] CharacterFriends { get; private set; } = [];
@@ -795,7 +882,7 @@ internal sealed partial class TcpPeer : IDisposable
         (int[] Owned, int Selected)? weaponSkins = null,
         (SkinOwnership[] Owned, int Selected)? damageFonts = null,
         (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool nativeSwitch = false,
-        ushort[]? tagEvildom = null, byte[][]? echonSets = null, bool premiumPcRoom = false)
+        ushort[]? tagEvildom = null, byte[][]? echonSets = null, byte[]? pvpTotalTeam = null, bool premiumPcRoom = false)
     {
         // nativeSwitch：原生换频道新连接直接发选角4，不先请求名册；服务端按换频道判定是否保留客户端城镇快照。
         if (!resumeTown && !requestedRoster && !nativeSwitch)
@@ -918,7 +1005,24 @@ internal sealed partial class TcpPeer : IDisposable
                 }
                 ExpectGriefTowerEnterCounts();
                 ExpectDespairTowerEnterCounts();
+                // 无夹具的连接（原生登录等直接 new TcpPeer 用例）只能按线上包读职位；
+                // 有夹具时再与公会成员表逐值对照，不能因为缺夹具就跳过 127/70 的消费。
+                var memberInfo = Expect(0, 127).Body;
+                TestCheck.That(memberInfo.Length == 1, "127 本人职位单字节");
+                byte grade = memberInfo[0];
+                if (fixture is not null)
+                {
+                    ushort characterId = U16(prefix[0].Body, 9);
+                    var memberships = fixture.Query("""
+                        SELECT CASE WHEN g.master_character_id=m.character_id THEN 1
+                            WHEN m.grade BETWEEN 2 AND 5 THEN m.grade ELSE 4 END
+                        FROM guild_members m JOIN guilds g ON g.guild_id=m.guild_id WHERE m.character_id=$p0
+                        """, characterId);
+                    byte expectedGrade = memberships.Length == 0 ? (byte)100 : Convert.ToByte(memberships[0][0]);
+                    TestCheck.That(grade == expectedGrade, "127 职位与公会成员表一致（无会籍=100，会长=1，2-5 原值，其余=4）");
+                }
                 ExpectDazzlementBindings(characterId: U16(prefix[0].Body, 9));
+                if (grade != 100) Expect(0, 70);
             }
             middle.Add(packet);
         }
@@ -1065,6 +1169,7 @@ internal sealed partial class TcpPeer : IDisposable
             "client expansion reader stays within its three-stage table");
         TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
         if (expertJobInfo is not null) Expect(0, 205, expertJobInfo);
+        if (pvpTotalTeam is not null) Expect(0, 804, pvpTotalTeam);
         TagEvildomInfo = (tagEvildom ?? []).Select(opcode => Expect(0, opcode)).ToArray();
         ReadWeeklyDungeon();
         // 新增的空历史356已逐包校验，并由CompletedQuestHistory暴露；
@@ -1080,14 +1185,14 @@ internal sealed partial class TcpPeer : IDisposable
             using (var compressed = new MemoryStream(events.Body, writable: false))
             using (var zlib = new ZLibStream(compressed, CompressionMode.Decompress))
             {
-                byte[] payload = new byte[68 + 15 * ExpectedOpenEvents.Length];
+                byte[] payload = new byte[163 + 15 * ExpectedOpenEvents.Length];
                 zlib.ReadExactly(payload);
                 TestCheck.That(zlib.ReadByte() == -1, $"事件正文必须恰好{payload.Length}B，解压不产生无界输出");
                 EventInfoPayload = payload;
                 TestCheck.Bytes(payload, Build(writer =>
                 {
-                    writer.Write((ushort)(1 + ExpectedOpenEvents.Length));
-                    foreach (ushort id in (ushort[])[2037, .. ExpectedOpenEvents])
+                    writer.Write((ushort)(4 + ExpectedOpenEvents.Length));
+                    foreach (ushort id in (ushort[])[2037, 2378, 2395, 333, .. ExpectedOpenEvents])
                     {
                         writer.Write(id);
                         writer.Write(1u);
@@ -1095,11 +1200,13 @@ internal sealed partial class TcpPeer : IDisposable
                         writer.Write(0u);
                         writer.Write((byte)0);
                     }
-                    writer.Write((byte)1);
+                    writer.Write((byte)2);
                     writer.Write((ushort)2037);
                     writer.Write(8u);
                     for (int index = 1; index < 12; index++) writer.Write(0u);
-                }), "独立核对事件2037、最大阶段8及完整尾部，不能跳过新通知");
+                    writer.Write((ushort)2395);
+                    for (int index = 0; index < 12; index++) writer.Write(0u);
+                }), "独立核对赛丽亚2037、红包2378、乔纳森2395、魔兽333、开放团本及完整尾部，不能跳过门禁或覆盖原事件");
             }
             var gauge = Expect(0, 412);
             SeriaLuckInfo = gauge.Body;

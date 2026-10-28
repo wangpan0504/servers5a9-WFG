@@ -1,3 +1,4 @@
+﻿using System.Collections.Immutable;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Network.Builders;
@@ -14,12 +15,16 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     SkillLearningCatalog? learning = null, TutorialCatalog? tutorials = null, AdventureProjection? adventure = null,
     ExpertJobScriptCatalog? expertJobs = null, AdventureWeeklyProjection? weekly = null,
     AvatarPresetProjection? avatarPresets = null, AvatarPresetService? avatarPresetService = null,
-    DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null, DfoServer.Game.Pvp.PvpPrivateCharacterService? privateCharacters = null,
-    TagEvildomProjection? tagEvildom = null, TimeProvider? time = null, RaidHandler? raids = null, ImperialArenaProjection? imperialArena = null,
+    DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null,
+    DfoServer.Game.Pvp.PvpPrivateCharacterService? privateCharacters = null,
+    GuildContributionProjection? guildContribution = null, TagEvildomProjection? tagEvildom = null,
+    TimeProvider? time = null, DfoServer.Game.Pvp.PvpArenaService? arena = null,
+    DfoServer.Game.Pvp.PvpTotalTeamService? totalTeams = null,
     DfoServer.Game.Dungeons.IEvildomWarRewardStore? warRewards = null,
     DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null,
     DfoServer.GameWorld.Dungeons.EvildomWarCatalog? warCatalog = null,
-    DfoServer.Game.Dungeons.EvildomWarRewardPolicy? warPolicy = null) : IGameCommandModule
+    DfoServer.Game.Dungeons.EvildomWarRewardPolicy? warPolicy = null,
+    ImperialArenaProjection? imperialArena = null, RaidHandler? raids = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -110,6 +115,21 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
                 log.Write("evildom_war_reward_recovered", new { Connection = context.Id, Character = c.Id, MailIds = recovered });
             }
         }
+        if (arena is not null)
+        {
+            bool complete = arena.RecoverRatings(context.Session);
+            log.Write("pvp_rating_recovery", new { Connection = context.Id, Character = context.Session.Selected?.Id, Complete = complete });
+        }
+        if (totalTeams?.CaptureInitialization(context.Session) is { } totalTeam)
+        {
+            // 804消费者先取得当前Actor；必须在EnterAsync建立本人实体后回放原名册索引。
+            await context.Notify(NotiPacketType.PVP_TOTAL_MATCH_TEAM_INFO,
+                PvpMatchingPackets.Team(totalTeam.Team.Name,
+                    totalTeam.Selection.Members.Select(row => row.RosterIndex).ToImmutableArray()),
+                "pvp_total_team_initialize", () => context.Session.CanPublishPvpTotalRoster(totalTeam.Selection));
+            log.Write("pvp_total_team_initialize", new { Connection = context.Id, Team = totalTeam.Team.Id,
+                totalTeam.Team.Revision });
+        }
         if (tagEvildom is not null && !await tagEvildom.InitializeAsync(context, projectedCharacter)) return CommandResult.Handled;
         if (imperialArena is not null && !await imperialArena.InitializeAsync(context, projectedCharacter)) return CommandResult.Handled;
         // 预设容量与列表必须早于窗口打开；与每周配置同属就绪后、任务核对前的固定包序。
@@ -121,9 +141,10 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         // 每周地下城固定在入城完成包之后、任务核对与同屏加入之前下发，包序稳定且不依赖其他投影结果。
         if (weekly is not null) await weekly.DeliverAsync(context, includeReset: true);
         social?.Initialize(context);
+        projection.GuildNpcs?.Post(context);
         await projection.ReconcileQuestsAsync(context);
         projection.Join(context);
-        if (raids is not null) await raids.NotifyDisconnAsync(context);
+        if (guildContribution is not null) await guildContribution.ReadyAsync(context);
         if (partyDungeons is not null && warCatalog is not null)
         {
             await partyDungeons.RecoverEvildomWarAsync(context.Session, warCatalog, context.Stop);
@@ -136,6 +157,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
                     Battle = recoveredWar.Battle.View.BattleId, Revision = recoveredWar.Battle.View.Revision });
             }
         }
+        if (raids is not null) await raids.NotifyDisconnAsync(context);
         return CommandResult.Handled;
     }
 

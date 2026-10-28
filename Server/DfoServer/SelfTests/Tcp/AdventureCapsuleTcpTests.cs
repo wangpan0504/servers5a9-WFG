@@ -44,8 +44,12 @@ internal static class AdventureCapsuleTcpTests
                 var packet = peer.Read();
                 if (packet is { Kind: 0, Opcode: 1343 })
                 {
-                    peer.Expect(0, 1349); finished = true;
-                    That(U64(packet.Body, 18 + 7424) == 0, "账号与Actor回放扣除后的胶囊进度"); break;
+                    var refresh = peer.Expect(0, 1349); finished = true;
+                    That(U64(packet.Body, 18 + 7424) == 0, "账号与Actor回放扣除后的胶囊进度");
+                    // 客户端0102F910把1349 RAW+16原样写管理器+0x190，01034220在1343里用经验表按level+1算同一字段，
+                    // 提取后紧跟的1349必须回放同一个分母，否则页面的「下一级所需经验」被覆盖成0。
+                    That(U64(refresh.Body, 6 + 16) == catalog.Experience[checked((int)U32(packet.Body, 18)) + 1],
+                        "1349 RAW+16回放下一级所需经验，与1343按经验表算出的一致"); break;
                 }
                 That(packet.Kind == 0 && packet.Opcode is 2 or 19 or 21 or 356, "胶囊只追加现有技能、等级与任务投影，不切场景");
             }

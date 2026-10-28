@@ -7,7 +7,7 @@ internal sealed partial class GameSession
     private (NpcTownVisit Visit, long Epoch)? npcTownVisit;
 
     // 已进入提交的任务依赖原角色快照恢复；未提交手册与已提交的券回执不排斥城镇操作，按普通操作自然失效。
-    bool HasPendingTownQuestCommit => formalDungeon is { PendingHopeReward: not null, HopeRewardConfirmed: false } || pendingPvpSkills is not null || pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null ||
+    bool HasPendingTownQuestCommit => formalDungeon is { PendingHopeReward: not null, HopeRewardConfirmed: false } || pendingTrainingCopy is not null || pendingPvpSkills is not null || pendingCommunication is not null || pendingQuestCompletion is not null || pendingQuestLifecycle is not null ||
         pendingQuestQuickClear is { CommitStarted: true } or { Committed: null, Plan.IsPreparedSkip: false } || HasPendingQuestScene;
 
     public bool Move(PositionRequest request) => owner.Execute(() =>
@@ -18,7 +18,11 @@ internal sealed partial class GameSession
         if (target is null)
             return false;
         if (target != Selected.Position)
-            Selected = repository.Save(owner, Selected, target, Selected.Return);
+        {
+            var saved = SaveTownPosition(Selected, target, Selected.Return);
+            if (saved is null) return false;
+            Selected = saved;
+        }
         return true;
     });
 
@@ -48,13 +52,21 @@ internal sealed partial class GameSession
         TravelReason = plan.Reason;
         if (pendingRental is not null || HasPendingTownQuestCommit || !plan.Accepted)
             return null;
-        Selected = repository.Save(owner, Selected!, plan.Position!, plan.Return);
+        var saved = SaveTownPosition(Selected!, plan.Position!, plan.Return);
+        if (saved is null) { TravelReason = "guild-membership-required"; return null; }
+        Selected = saved;
         // 保存成功后才替换来源；失败重试保留原票据，不提前消耗也不制造成功入场。
         npcTownVisit = plan.NpcVisit is { } visit ? (visit, SelectionEpoch) : null;
         InvalidateImageCommunication();
         InvalidateExpertJobStore();
         return new(Selected, owner.Generation, SelectionEpoch);
     }
+
+    Game.Characters.Character? SaveTownPosition(Game.Characters.Character character,
+        GameWorld.Towns.Location position, GameWorld.Towns.Location? returnPoint) =>
+        towns.IsGuildHall(position, completed)
+            ? repository is Game.Guild.IGuildHallStore hall ? hall.SaveGuildHallPosition(owner, character, position, returnPoint) : null
+            : repository.Save(owner, character, position, returnPoint);
 
     public bool CanPublishTravel(TownTravelReceipt receipt) => owner.Execute(() =>
     {

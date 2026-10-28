@@ -15,6 +15,7 @@ internal sealed partial class CharacterRepository
         "character_evildom_war_hidden_rewards",
         "character_dungeon_incount_extra",
         "character_evildom_war_seats",
+        "character_pvp_rating_claims", "character_pvp_ratings",
         "character_luke_normal_drop_claims", "character_luke_normal_progress",
         "character_boss_selection_buff",
         "character_tutorial_receipts", "character_tutorial_state",
@@ -36,7 +37,7 @@ internal sealed partial class CharacterRepository
         "character_active_main_quests", "character_completed_quests", "character_skill_bindings",
         "character_skill_points", "character_skills", "character_skill_commands", "character_skill_combos",
         "character_skill_point_sources", "character_tp_sources", "character_permanent_stats", "character_client_settings", "character_game_settings",
-        "character_fatigue", "character_dungeon_state", "mailbox_sent_gold", "character_teleport_cooldowns", "character_exp_bonus", "character_consumable_states", "character_expert_job", "character_expert_meta", "character_assault_daily", "character_crack_daily", "character_growup_change", "character_weekly_dungeon", "character_dungeon_incount",
+        "character_fatigue", "character_dungeon_state", "mailbox_sent_gold", "character_teleport_cooldowns", "character_exp_bonus", "character_consumable_states", "character_expert_job", "character_expert_meta", "character_assault_daily", "character_beast_dungeon_entries", "character_crack_daily", "character_growup_change", "character_weekly_dungeon", "character_dungeon_incount",
         "character_collectbox_slots", "character_collectbox_expirations", "character_collectbox_state", "character_epic_production", "character_pvp_training_skills",
         "character_skill_switch_inventory_items", "character_skill_switch_inventory",
         // 公会成员行随角色删除清理（guild_members.character_id 外键到 characters）。
@@ -80,10 +81,17 @@ internal sealed partial class CharacterRepository
         RequireDeletionDependencies(db, tx);
         RemoveTagEvildomCharacter(db, tx, owner.Account, expected.Id);
         RemoveImperialArenaCharacter(db, tx, owner.Account, expected.Id);
+        RemovePvpTotalCharacter(db, tx, owner.Account, expected.Id);
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id);
         command.Parameters.AddWithValue("$account", owner.Account);
+        command.CommandText = """
+            SELECT 1 FROM guild_cargo_slots s JOIN guilds g ON g.guild_id=s.guild_id
+            WHERE g.master_character_id=$id LIMIT 1
+            """;
+        if (command.ExecuteScalar() is not null)
+            throw new InvalidDataException("公会仓库仍有物品，不能删除会长角色");
         // 会长角色被删除时公会不能留下悬空的 master_character_id：连同该公会全部成员行一起解散。
         // 接任/转让由公会成员玩法（阶段 3）接管后再替换本策略；在此之前解散是唯一不产生悬空状态的选择。
         command.CommandText = "DELETE FROM guild_members WHERE guild_id IN (SELECT guild_id FROM guilds WHERE master_character_id=$id)";
@@ -180,14 +188,18 @@ internal sealed partial class CharacterRepository
             "shop_purchase_counts", "account_completed_quests", "account_pvp_private_characters", "account_adventure_representatives",
             // ON DELETE SET NULL保留眩惑本周名额，不能加入按角色删除的表清单。
             "account_dazzlement_tower_bindings",
+            "account_pvp_total_teams",
+            // 队伍身份不随单个角色删除，独立评分及整局来源也继续保留。
+            "account_pvp_total_ratings", "account_pvp_total_rating_claims",
             // 疲劳owner删除时级联清除日戳，不对没有account列的子表重复执行删除。
             "character_fatigue_reset_days",
             "character_server_item_usage",
             "account_adventure_receipts", "account_adventure_expedition_members", "account_adventure_expeditions",
             // 两端均以 ON DELETE CASCADE 清理，账号级冒险团好友不随单个角色删除。
-            "character_social_links",
+            "character_social_links", "guild_membership_cooldowns", "guild_applications", "guild_cargo_slots", "guild_attendance",
+            "guild_contribution_events", "guild_contribution_settlements", "guild_npc_progress", "guild_npc_crafts",
             // 活动婚约已由删除事务显式拒绝；历史聚合不外键角色，不能随删角清账。
-            "marriage_active_members"])
+            "marriage_active_members", "character_guild_hongbao_purchases"])
             .ToHashSet(StringComparer.Ordinal);
         using var query = db.CreateCommand();
         query.Transaction = tx;

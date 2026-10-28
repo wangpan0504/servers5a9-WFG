@@ -6,6 +6,7 @@ using DfoServer.Game.Auth;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Settings;
 using DfoServer.Game.Caching;
+using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Game.Session;
 
@@ -26,17 +27,31 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.Game.Quests.QuestSkipEffects? questEffects = null, PremiumContractCatalog? contracts = null, TimeProvider? timeProvider = null,
     DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null,
     Game.Creatures.CreatureService? creatures = null, GameWorld.Quests.QuestStageGraph? stageGraph = null,
-    ItemCatalog? items = null, ExperienceBonusService? experienceBonuses = null, GameWorld.Dungeons.DungeonIncountCatalog? incounts = null,
+    ItemCatalog? items = null, GoldLimitCatalog? goldLimits = null, EpicPieceCatalog? pieces = null,
+    ExperienceBonusService? experienceBonuses = null, GameWorld.Dungeons.DungeonIncountCatalog? incounts = null,
     ChannelHistory? channelHistory = null, GameWorld.Dungeons.OperationHopeCatalog? operationHope = null,
+    GameWorld.Guilds.GuildDungeonCatalog? guildDungeons = null,
+    Game.Pvp.PvpRatingSettlement? pvpRatings = null,
+    DungeonBattleLevelSettings? monsterBattleLevels = null, DungeonMonsterAiSettings? monsterAi = null,
     DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 
     public AuthenticatedIdentity? Identity { get; } = identity;
     public GameWorld.Channels.ChannelEntry? ChannelEntry { get; } = entry;
-    public Character? Selected { get; private set; }
+    Character? selected;
+    public Character? Selected
+    {
+        get => selected;
+        private set { InvalidateGuildHallWait(selected, value); selected = value; }
+    }
     public bool Ready { get; private set; }
-    public SessionPhase Phase { get; private set; } = SessionPhase.Unselected;
+    SessionPhase phase = SessionPhase.Unselected;
+    public SessionPhase Phase
+    {
+        get => phase;
+        private set { if (phase != value) guildHallWait = null; phase = value; }
+    }
     public long SelectionEpoch { get; private set; }
     public string TravelReason { get; private set; } = "not-requested";
     public bool PremiumPcRoom => debugSettings?.PremiumPcRoom == true;
@@ -51,6 +66,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     IReadOnlySet<int> completed = new HashSet<int>();
     public CharacterRosterEntry[] Roster() => repository.ListRoster(owner);
     public Character[] QueryCharacters() => repository.List(owner);
+
+    public DungeonEntryResetResult ResetDungeonEntries() => repository.ResetDungeonEntries(owner);
 
     internal OnlineCharacterSnapshot? OnlineCharacter()
     {
@@ -163,7 +180,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
                 var orphaned = character.ActiveMainQuests.Where(row => operationHope.Missions.ContainsKey(row.QuestId)).ToArray();
                 if (orphaned.Length > 0) character = repository.ClearOperationHopeAcceptances(owner,character,operationHope,orphaned);
             }
-            if (character.IsPvpPrivate && ChannelEntry?.Type != 24)
+            if (character.IsPvpPrivate && ChannelEntry?.Type is not (8 or 24))
                 throw new InvalidDataException("专用决斗角色只允许进入已实现的决斗频道");
             var fatigueNow = (timeProvider ?? TimeProvider.System).GetUtcNow();
             character = repository.ResetDailyFatigue(owner, character,
@@ -222,6 +239,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             loginWearRestatementUntil = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds() +
                 LoginWearRestatementWindowMillis;
             SetState(SessionPhase.Town);
+            ObserveGuildPresence();
+            ObserveGuildAttendance();
             return true;
         });
     }
@@ -239,8 +258,10 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             string.Equals(Selected?.Name, request.Name, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("任务结果待确认，不能覆盖当前角色进度");
         var updated = repository.UpdateProgress(owner, request);
-        // 旧GM单字段合同可能不推进revision；即使目标是备用角色，也必须使已捕获TAG双角色资料失效。
-        tagEvildomCharacterVersion++;
+        // 旧GM单字段合同可能不推进revision，所以非当前角色（尤其是1394备用角色）的进度改动靠本版本号失效。
+        // 主角由客户端自己持有的真实Actor提供，改动随Selected一起刷新，不必重装双Actor；
+        // 捕获到发布的窗口由CanPublishTagEvildomCharacters的引用相等与钱包版本把关。
+        if (Selected?.Id != updated.Id) tagEvildomCharacterVersion++;
         // 提交成功后才替换内存。任务集合立即参与城镇准入；客户端画面仍等下次选角。
         if (Selected?.Id == updated.Id)
         {
@@ -275,7 +296,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
                 (HasPendingFormalCard || HasPendingTownQuestCommit) && Selected?.Id == captured.Character.Id)
                 throw new InvalidOperationException("在线角色快照已变化，请重试");
             var updated = repository.ResetProgress(owner, plan);
-            tagEvildomCharacterVersion++;
+            // 与UpdateProgress同口径：只有非当前角色的进度改动需要让双Actor资料失效。
+            if (Selected?.Id != updated.Id) tagEvildomCharacterVersion++;
             if (Selected?.Id == updated.Id)
             {
                 InvalidateImageCommunication();
@@ -294,11 +316,16 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             warPersistenceFailed = true;
             EvildomWarCleanupFailed?.Invoke(error);
         }
+        GuildManagementClosing?.Invoke();
+        ObserveGuildPresence();
         InvalidateRaids(reason == "session-ended");
         npcTownVisit = null;
         hopeSelection = null;
         pvpTraining = null;
+        Volatile.Write(ref pvpArena, null);
+        pvpArenaVersion++;
         pendingPvpSkills = null;
+        pendingTrainingCopy = null;
         InvalidateExpertJobStore(publishExpertJob);
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
         tagEvildomPair = null;
@@ -310,7 +337,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         gameCache.Clear();
         ClearConsumableUse();
         publishedRoster = null;
-        tagEvildomRoster = null;
+        selectedRoster = null;
         pendingDungeonContinuation = null;
         pendingQuestReplay = null;
         pendingQuestCompletion = null;

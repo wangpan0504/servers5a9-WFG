@@ -280,17 +280,20 @@ internal sealed class DungeonProbeModule : IGameCommandModule
         });
         // NOTI24 的当前模块 3 分支负责离开副本；不提前发送城镇状态改变其分支。
         await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(character), "probe_return_town_transition");
-        context.Owner.Execute(() =>
+        var returned = context.Owner.Execute(() =>
         {
             if (context.BlocksTownActions && context.Session.Selected?.Id == character.Id && context.Session.Selected.Revision == character.Revision)
             {
                 // 诊断42已投影原计划的位置，只结束共用选择阶段，不追加132的落点提交。
-                context.Session.ReturnFromDungeonSelection(restorePosition: false);
+                var receipt = context.Session.ReturnFromDungeonSelection(restorePosition: false);
+                // 诊断从不建立正式选择实例，回执为空也要结束诊断闸门，否则返城后城镇写操作会一直被拦到重选。
                 probe.ReturnedToTown = true;
-                projection?.Join(context);
+                return receipt;
             }
-            return true;
+            return null;
         });
+        if (returned is not null)
+            projection?.Join(context, () => context.Session.CanPublishDungeonSelection(returned, returning: true));
         return CommandResult.Handled;
     }
 }

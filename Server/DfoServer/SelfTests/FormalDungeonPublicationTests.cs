@@ -914,7 +914,16 @@ internal static class FormalDungeonPublicationTests
         public Character CommitExpertJobMachine(AccountOwners.Lease owner, Character expected, InventoryPlan wallet, int grade, int endurance) => inner.CommitExpertJobMachine(owner, expected, wallet, grade, endurance);
         public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
             DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonAttempt(owner, expected, nextObjectKey, weekly);
+        public DfoServer.Game.Dungeons.DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner) =>
+            inner.ResetDungeonEntries(owner);
+        public DfoServer.Game.Dungeons.DungeonEntryCommit ReserveDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
+            DfoServer.Game.Dungeons.WeeklyDungeonEntry? weekly = null) => inner.ReserveDungeonEntry(owner, expected, nextObjectKey, weekly);
         public DfoServer.Game.Dungeons.DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DfoServer.Game.Dungeons.DungeonEntryCharge charge) => inner.CommitDungeonEntry(owner, expected, nextObjectKey, charge);
+        public DfoServer.Game.Guild.GuildDungeonAdmission? PrepareGuildDungeonEntry(AccountOwners.Lease owner, ushort characterId,
+            uint dungeonId, DfoServer.GameWorld.Guilds.GuildDungeonCatalog catalog) => inner.PrepareGuildDungeonEntry(owner, characterId, dungeonId, catalog);
+        public int ReadGuildDungeonPartyCount(AccountOwners.Lease owner, ushort characterId,
+            IReadOnlyList<DfoServer.Game.Guild.GuildDungeonMembership> frozen, IReadOnlyCollection<ushort> active) =>
+            inner.ReadGuildDungeonPartyCount(owner, characterId, frozen, active);
         public Guid? LoadOrdinaryLukeDropEvent(AccountOwners.Lease owner, ushort characterId, int day, int sourceMonsterId) => inner.LoadOrdinaryLukeDropEvent(owner, characterId, day, sourceMonsterId);
         public DfoServer.Game.Dungeons.OrdinaryLukeProgress LoadOrdinaryLukeProgress(AccountOwners.Lease owner, ushort characterId) => inner.LoadOrdinaryLukeProgress(owner, characterId);
         public DfoServer.Game.Dungeons.DazzlementTowerState LoadDazzlementTower(AccountOwners.Lease owner) => inner.LoadDazzlementTower(owner);

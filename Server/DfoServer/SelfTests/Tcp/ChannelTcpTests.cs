@@ -14,6 +14,7 @@ internal static class ChannelTcpTests
     public static void Run(TcpTestFixture fixture, string serverAddress = "127.0.0.1")
     {
         var endpoints = Endpoints(fixture);
+        var numbers = ReferenceNumbers();
         using (var client = Connect())
         {
             var stream = client.GetStream();
@@ -23,13 +24,8 @@ internal static class ChannelTcpTests
             Bytes(hello.AsSpan(4, 16), "EMU-LAB-KEY-0001"u8, "channel key");
             Write(stream, 9, []);
             byte[] script = Decode(Read(stream, 10));
-            string path = Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt");
-            using var reference = File.Exists(path) ? File.OpenRead(path) :
-                typeof(ChannelTcpTests).Assembly.GetManifestResourceStream("DfoServer.Resources.channel.txt")
-                ?? throw new InvalidDataException("频道回归缺少参考脚本");
-            using var reader = new StreamReader(reference, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            byte[] expected = Encoding.GetEncoding(936).GetBytes(reader.ReadToEnd());
+            byte[] expected = Encoding.GetEncoding(936).GetBytes(ReferenceScript());
             Bytes(script.AsSpan(0, expected.Length), expected, "channel script transport");
             string decoded = Encoding.GetEncoding(936).GetString(script).TrimEnd('\0');
             That(Regex.IsMatch(decoded, @"\[server\]\s+2\s"), "下发脚本属于服务器2，不依赖PVF中预存server0");
@@ -43,8 +39,8 @@ internal static class ChannelTcpTests
                 ("metro", 22), ("north_myre", 22), ("deathtower", 11), ("ancient", 11),
                 ("Antwer", 22), ("impossible", 11), ("seatrain", 22), ("stormpass", 22),
                 ("timedoor", 22), ("powerstation", 22), ("attackzone", 18), ("trade", 3),
-                ("noblsky", 22), ("CastleofDead", 22), ("crack", 11), ("sainthorn", 26),
-                ("harlem", 22), ("east harlem", 22), ("fiendwar", 45), ("pvp", 24), ("evildom_war", 54), ("prey", 50), ("xian_village", 56), ("dnfaos_free", 63), ("dnfaos_rank", 62), ("evildom_gathering", 53), ("tag_tournament", 39)
+                ("noblsky", 22), ("CastleofDead", 22), ("crack", 11), ("sainthorn", 26), ("pvp", 8),
+                ("harlem", 22), ("east harlem", 22), ("fiendwar", 45), ("pvp", 24), ("evildom_war", 54), ("prey", 50), ("xian_village", 56), ("dnfaos_free", 63), ("dnfaos_rank", 62), ("evildom_gathering", 53), ("tag_tournament", 39), ("beast", 40)
             ];
             foreach (var (group, type) in groups)
                 That(Regex.IsMatch(decoded, @"(?m)^\d+ `<(?:\d+::)?[A-Za-z0-9_]+>` " + type + @" `\[" + Regex.Escape(group) + @"\]` "),
@@ -53,11 +49,11 @@ internal static class ChannelTcpTests
             byte[] directory = Decode(Read(stream, 18));
             That(BinaryPrimitives.ReadInt32LittleEndian(directory) == 1 &&
                 BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(4)) == 2 &&
-                BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(8)) == 39, "目录声明服务器2和全部39个入口");
-            for (int i = 0; i < 39; i++)
+                BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(8)) == numbers.Length, "目录声明服务器2和本轮脚本全部入口");
+            for (int i = 0; i < numbers.Length; i++)
             {
                 int at = 12 + i * 64;
-                int number = i == 38 ? 48 : i == 0 ? 1 : i + 9;
+                int number = numbers[i];
                 That(Encoding.ASCII.GetString(directory, at, 20).TrimEnd('\0') == "#ch." + number, "目录保留独立分类号 " + number);
                 That(BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(at + 60)) == endpoints[(byte)number] &&
                     Encoding.ASCII.GetString(directory, at + 28, 32).TrimEnd('\0') == serverAddress, "分类入口端口独立，同一目录使用本连接的服务端地址");
@@ -71,7 +67,7 @@ internal static class ChannelTcpTests
             Write(stream, 11, new byte[32]); Read(stream, 12);
             Write(stream, 17, new byte[24]);
             var directory = Decode(Read(stream, 18));
-            That(BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(8)) == 39 && stream.ReadByte() == -1,
+            That(BinaryPrimitives.ReadInt32LittleEndian(directory.AsSpan(8)) == numbers.Length && stream.ReadByte() == -1,
                 "已缓存脚本的11/17自动重连只收到目录并结束，不等待9或补发未请求脚本");
         }
 
@@ -105,16 +101,43 @@ internal static class ChannelTcpTests
         }
     }
 
+    // 决斗场普通入口的编号必须存在于客户端 etc/pvpchannellist.etc，不能按位置猜；从目录按类型与分组取，
+    // 目录换号时用例自动跟随，不再重复写死一个已失效的 40。
+    public static byte PvpChannelNumber(TcpTestFixture fixture)
+    {
+        using var ready = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Options.LogDirectory, "ready.json")));
+        var numbers = ready.RootElement.GetProperty("ChannelEntries").EnumerateArray()
+            .Where(row => row.GetProperty("Entry").GetProperty("Type").GetInt32() == 24 &&
+                row.GetProperty("Entry").GetProperty("Group").GetString() == "[pvp]")
+            .Select(row => row.GetProperty("Entry").GetProperty("Identity").GetProperty("Number").GetByte()).ToArray();
+        That(numbers.Length == 1, "普通决斗场入口在目录中唯一");
+        return numbers[0];
+    }
+
     public static Dictionary<byte, int> Endpoints(TcpTestFixture fixture)
     {
         using var ready = JsonDocument.Parse(File.ReadAllText(Path.Combine(fixture.Options.LogDirectory, "ready.json")));
         var entries = ready.RootElement.GetProperty("ChannelEntries").EnumerateArray().ToDictionary(
             row => row.GetProperty("Entry").GetProperty("Identity").GetProperty("Number").GetByte(),
             row => row.GetProperty("Port").GetInt32());
-        That(entries.Count == 39 && entries.Values.Distinct().Count() == 39 && entries[10] == fixture.Options.GamePort &&
+        var expected = ReferenceNumbers();
+        That(entries.Keys.Order().SequenceEqual(expected.Order()) && entries.Values.Distinct().Count() == expected.Length && entries[10] == fixture.Options.GamePort &&
             entries.Values.All(port => port is > 0 and <= 65535 && port != fixture.Options.ChannelPort && port != fixture.Options.GmPort),
-            "一个服务实例提供39个不同入口，不占用频道或GM端口");
+            "一个服务实例提供本轮脚本全部独立入口，不占用频道或GM端口");
         return entries;
+    }
+
+    static byte[] ReferenceNumbers() => Regex.Matches(ReferenceScript(), @"(?m)^\s*(\d+)\s+`")
+        .Select(match => byte.Parse(match.Groups[1].Value,System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+
+    static string ReferenceScript()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory,"Resources","channel.txt");
+        using var stream = File.Exists(path) ? File.OpenRead(path) :
+            typeof(ChannelTcpTests).Assembly.GetManifestResourceStream("DfoServer.Resources.channel.txt")
+            ?? throw new InvalidDataException("频道回归缺少参考脚本");
+        using var reader = new StreamReader(stream,Encoding.UTF8,detectEncodingFromByteOrderMarks:true);
+        return reader.ReadToEnd();
     }
 
     static void Write(Stream stream, byte opcode, byte[] body)

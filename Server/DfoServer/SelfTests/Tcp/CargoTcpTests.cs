@@ -26,6 +26,10 @@ internal static class CargoTcpTests
         long weaponUid;
         string weaponCore;
         long mirrorUid;
+        const int beadId = 10094768;
+        long beadUid;
+        short beadSlot;
+        string beadCore;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repo.Create(owner, new("CargoTcp", towns.Room, towns.InitialReturn)
@@ -34,7 +38,12 @@ internal static class CargoTcpTests
                 Inventory = InventoryRewardGrantService.CreateStarter(characters.Get(0))
             });
             var items = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(0, 20_000_000), new(3299, 600), new(6, 1)]));
+            // 上游把填充道具从50换成6，本地宝珠夹具保留在此之后入包，槽位仍由实际位置计算。
+            current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(0, 20_000_000), new(3299, 600), new(6, 1), new(beadId, 2)]));
+            var bead = current.Inventory.Items.Single(item => item.Core.ItemId == beadId);
+            beadUid = bead.Uid;
+            beadSlot = bead.Position.Index;
+            beadCore = JsonSerializer.Serialize(bead.Core);
             current = InventoryService.Commit(repo, owner, current, new CurrencyService(itemResources.GoldLimits).Grant(current, CurrencyKind.Cera, 5000));
             var weapon = current.Inventory.Find(new(InventoryListType.Equipment, 12))!;
             var core = weapon.Core with { Attr = 11, Rune = 3, AmplifyValue = 25, Random0 = new(1, 2, 3), Extension114 = new(1, 222) };
@@ -186,6 +195,38 @@ internal static class CargoTcpTests
             var restored = repo.LoadCharacter(owner, 1).Inventory.Find(new(InventoryListType.PersonalCargo, 0));
             That(restored?.Uid == weaponUid && JsonSerializer.Serialize(restored.Core) == weaponCore,
                 "个人仓库整理后重登保持同一UID及完整属性");
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(0);
+            Transfer(peer, 0, beadSlot, beadId, 2, 12, 0, 0, 2);
+            That(U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue && U32(peer.Expect(0, 14).Body, 5) == beadId,
+                "真实宝珠10094768从背包存入账号仓库，成功后清空源槽并发布完整目标");
+            peer.Barrier();
+            That(fixture.Query("SELECT character_id,item_core FROM character_inventory_items WHERE item_uid=$p0", beadUid) is [[DBNull, var stored]] &&
+                Equals(stored, beadCore), "宝珠入库仅改变owner，同一UID、数量和完整核心不变");
+        }
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(1);
+            Cargo(entry[7].Body, 12, 24, 0, 1);
+            That(U32(entry[7].Body, 11) == beadId, "同账号另一角色重登后可见原宝珠，而非只刷新当前界面");
+            Transfer(peer, 12, 0, beadId, 2, 0, 65, 0, 2);
+            That(U32(peer.Expect(0, 14).Body, 5) == beadId && U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue,
+                "另一角色可取出同一宝珠，账号源槽清空");
+            peer.Barrier();
+            That(fixture.Query("SELECT character_id,item_core FROM character_inventory_items WHERE item_uid=$p0", beadUid) is [[long id, var taken]] &&
+                id == peer.Id && Equals(taken, beadCore), "宝珠跨角色取回仍只有一个owner，交易次数、数量和完整核心保持");
+        }
+        using (var peer = Open(fixture))
+        {
+            var entry = peer.Select(1);
+            Cargo(entry[7].Body, 12, 24, 0, 0);
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var restored = repo.LoadCharacter(owner, 1).Inventory.Find(new(InventoryListType.Main, 65));
+            That(restored?.Uid == beadUid && JsonSerializer.Serialize(restored.Core) == beadCore,
+                "宝珠取回后再次登录保持同一UID及完整核心，不在账号仓库重复出现");
             peer.Barrier();
         }
         await fixture.StopAsync();

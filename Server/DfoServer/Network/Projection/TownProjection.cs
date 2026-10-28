@@ -20,13 +20,18 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
     CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null,
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
-    ServerEventService? events = null, MarriageProjection? marriage = null)
+    MarriageProjection? marriage = null, ServerEventService? events = null)
 {
+    const ushort JonathanVisibleEvent = 2395;
+    internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
+    internal GuildEconomyProjection? GuildEconomy { get; set; }
+    internal GuildNpcProjection? GuildNpcs { get; set; }
+    internal GuildDungeonProjection? GuildDungeons { get; set; }
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
         Func<bool> canSend)
     {
-        var character = snapshot.Character;
+        var character = snapshot.SkillCharacter;
         var now = timer.GetUtcNow();
         var actor = TownPackets.Actor(character, snapshot.Channel, now.ToUnixTimeSeconds(), snapshot.AdventureName,
             snapshot.Phase == DfoServer.Game.Session.SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
@@ -60,16 +65,19 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         var appearanceTime = timer.GetUtcNow();
         bool premiumPcRoom = context.Session.PremiumPcRoom;
         await context.Notify(NotiPacketType.USERINFO,
-            TownPackets.Actor(c, context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
+            TownPackets.Actor(context.Session.ReadSkillCharacter(c), context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
                 premiumPcRoom: premiumPcRoom), "actor");
         context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
         await context.Notify(NotiPacketType.USERINFO,
-            TownPackets.Player(c, stats.Compute(c), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
+            TownPackets.Player(context.Session.ReadSkillCharacter(c), stats.Compute(context.Session.ReadSkillCharacter(c)), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
         await PcRoomBuffProjection.PostAsync(context);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons);
+        // 本人Actor初始职位为6；成员名单和70均不会设置它，必须由127独立安装权限索引。
+        await context.Notify(NotiPacketType.GUILD_MEMBER_INFO, [c.Guild?.Grade ?? (byte)100], "guild_member_grade_initialize");
         await DazzlementTowerProjection.StateAsync(context);
         if (c.Guild is { } membership)
-            await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex), "guild_information_initialize");
+            await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(membership, context.Channel.ServerIndex,
+                GuildPanels?.Read(context.Owner, c.Id, context.Channel.ServerIndex)), "guild_information_initialize");
         await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(c.Inventory), "main_inventory_initialize");
         foreach (var set in EchonEquipmentPackets.Snapshot(c))
             await context.Notify(NotiPacketType.CUSTOM_ABILITY_PART_SET_OPTION, set, "echon_set_initialize");
@@ -84,7 +92,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         // 空历史也须初始化月轮山显示标记；后续所有356均由同一Builder保留它。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(c), "completed_quests");
         if (c.Learning.Initialized)
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(c.Learning), "skill_info");
+            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(context.Session.ReadSkillLearning(c)), "skill_info");
         if (c.Learning.ExpertContractExpiresAt > 0)
             await context.Notify(NotiPacketType.CERA_SPECIALITEM, SkillPackets.ExpertContract(c.Learning.ExpertContractExpiresAt,
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds()), "expert_contract_initialize");
@@ -134,12 +142,14 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             GrowUpChangePackets.ManageInfo(context.Session.GrowUpChangeCount(), c.Level), "growup_change_info");
         await TrainingSkillsAsync(context, initializing: true);
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
-        // EVENT_INFO 整表替换：保留赛丽亚与团本事件，只从已提交服务状态追加2532。
+        // EVENT_INFO整表替换事件集合：保留赛丽亚、公会红包、魔兽频道门禁（333，仅目录记录）及开放团本；2395是乔纳森脚本的独立出现门禁。
+        // 2532（诺兰）只在已提交服务状态为激活时追加。
         var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow());
+        openEvents = [GuildHongbaoPackets.OpenEvent, JonathanVisibleEvent, 333, .. openEvents];
         if (events?.Read(ServerEventService.NolanVisibilityId).Active == true)
             openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
         await context.NotifyProtected(NotiPacketType.EVENT_INFO,
-            SeriaLuckPackets.EventInfoCompressed(openEvents), "seria_luck_event_initialize");
+            SeriaLuckPackets.EventInfoCompressed(openEvents, activeEvents: [JonathanVisibleEvent]), "seria_luck_event_initialize");
         await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(c)), "fatigue_after_town_hud");
         await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(c.Inventory.AccountWallet.SeriaLuck,
             c.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_initialize");
@@ -157,10 +167,10 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         }
         // 显式恢复资源默认指令，不能只重发缺省field4并假定按住方向已经注册。
         if (c.Learning.Initialized)
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(c.Learning,
+            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(context.Session.ReadSkillLearning(c),
                 learning is null ? null : id => learning.Get(c.Job, id).DefaultCommand), "skill_commands_after_scene");
         if (c.Job == 9 && c.Learning.Initialized)
-            await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(c.Learning), "skill_combo_initialize");
+            await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(context.Session.ReadSkillLearning(c)), "skill_combo_initialize");
         if (settings is not null && settingReceipt is not null)
             await settings.InitializeAsync(context, settingReceipt);
         if (quests is not null)
@@ -294,10 +304,22 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.ARCADE_MODE_SKILL_DATA, PvpTrainingPackets.Skills(state), "pvp_training_skill_snapshot", Guard);
     }
 
-    public void Join(GameConnectionContext context)
+    public void Join(GameConnectionContext context, Func<bool>? canJoin = null)
     {
-        if (context.Session.Ready && context.Session.Selected is { } c)
-            presence?.Join(context.Owner, context.Sender, c, context.Channel, context.Session.ReadAdventureName());
+        var captured = context.Owner.Execute(() =>
+            context.Session.Ready && (canJoin?.Invoke() ?? true) ? context.Session.Selected : null);
+        if (captured is null || context.Session.CaptureGuildPanelQuery() is not { } query) return;
+        // 面板会逐个捕获在线会友，必须在本人账号锁外读取；安装场景前复验原角色和旅行回执。
+        var panel = GuildDungeons is null ? null : GuildPanels?.Read(context.Owner, captured.Id, context.Channel.ServerIndex);
+        context.Owner.Execute(() =>
+        {
+            if (!query.IsCurrent() || !ReferenceEquals(context.Session.Selected, captured) || !(canJoin?.Invoke() ?? true)) return false;
+            if (panel is not null)
+                GuildDungeons?.Post(context, panel, query.IsCurrent);
+            presence?.Join(context.Owner, context.Sender, captured, context.Channel, context.Session.ReadAdventureName());
+            GuildEconomy?.Post(context, force: true);
+            return true;
+        });
     }
 
     internal void QueueRaidDeparture(GameConnectionContext context, Character character, Func<bool> current)
@@ -357,6 +379,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (detached is null)
             return false;
         await detached;
+        if (context.Session.CanPublishDungeonSelection(receipt)) GuildDungeonPartyBuffProjection.Post(context, clear: true);
         return context.Session.CanPublishDungeonSelection(receipt);
     }
 
@@ -397,6 +420,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     {
         if (receipt.RaidBattleChange is not null) context.Session.PublishRaidCombat();
         bool CanSend() => context.Session.CanPublishTravel(receipt);
+        if (CanSend()) GuildDungeonPartyBuffProjection.Post(context, clear: true);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "formal_return_town_state", CanSend);
         // 返城重建Actor后补发网吧特权buff；副本内的buff栏不会保留系统buff。
         await PcRoomBuffProjection.PostAsync(context, CanSend);
@@ -407,11 +431,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (quests is not null)
             await quests.RefreshAsync(context, receipt.Character, CanSend);
         if (context.Premiums is { } premiums) await premiums.StaminaAsync(receipt.Character, CanSend);
-        context.Owner.Execute(() =>
-        {
-            if (CanSend()) Join(context);
-            return true;
-        });
+        Join(context, CanSend);
     }
 
     // TAG回城后下一次入场使用新双Actor；只刷新真实登录队首资料，不重复选角/邮箱等初始化协议。

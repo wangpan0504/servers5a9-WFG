@@ -10,6 +10,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Quests;
+using DfoServer.Game.Guild;
 
 namespace DfoServer.Game.Session;
 
@@ -30,6 +31,7 @@ internal sealed partial class GameSession
         public DungeonCardReward? Card { get; set; }
         public GriefTowerReward? GriefReward { get; set; }
         public uint? MailId { get; set; }
+        public GuildDungeonProgress? GuildDungeon { get; set; }
         public bool AutoRevealScheduled { get; set; }
         public DungeonCardReward? BlackDiamond { get; set; }
         public DungeonCardReward? Paid { get; set; }
@@ -48,6 +50,7 @@ internal sealed partial class GameSession
             return ((FormalDungeonReceipt, ushort?)?)null;
         var snapshot = dungeon.Run.Snapshot;
         if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort?)?)null;
+        if (dungeon.Entry.BeastMode && dungeon.BeastStages.Count < 6) return ((FormalDungeonReceipt, ushort?)?)null;
         if (dungeon.Entry.IsTutorial && dungeon.TutorialClearTarget is { } tutorialTarget)
             return (FormalReceipt(), tutorialTarget);
         // 剧情终点可以只有普通敌对APC；115引用真实死亡key，不将清场移除或友方NPC当成Boss死亡。
@@ -113,7 +116,8 @@ internal sealed partial class GameSession
         byte[] reportBody, DungeonCatalog dungeons, DungeonClearExperienceCatalog rewards, CharacterGrowthCatalog growth,
         DungeonCardRewardPolicy? cards = null, int luckyStarLimit = 0,
         Events.ServerEventState? goldCardEvent = null, AdventureCatalog? adventure = null,
-        ItemCatalog? griefItems = null, EpicPieceCatalog? griefPieces = null, IReadOnlyList<ushort>? reportMembers = null)
+        ItemCatalog? griefItems = null, EpicPieceCatalog? griefPieces = null, IReadOnlyList<ushort>? reportMembers = null,
+        GoldLimitCatalog? goldLimits = null)
     {
         var capture = owner.Execute(() => (Character: Ready && Phase == SessionPhase.Settlement ? Selected : null,
             Dungeon: formalDungeon, Points: formalDungeon?.Run.CreatureExperiencePoints ?? 0,
@@ -137,6 +141,15 @@ internal sealed partial class GameSession
             griefReward = GriefTowerClearReward.Prepare(dungeons.GriefTower,progress,checked((int)griefDungeon.Entry.DungeonId),
                 griefCharacter with { Inventory = creatureInventory?.After ?? griefCharacter.Inventory },griefItems,griefPieces,
                 griefDungeon.Draw,(timeProvider ?? TimeProvider.System).GetUtcNow());
+        }
+        GuildDungeonClearReward? guildReward = null;
+        if (!capture.Prepared && capture.ValidReport && capture.Character is not null &&
+            capture.Dungeon is { Run.ClearFact: not null } guildDungeon &&
+            guildDungeons?.Find(guildDungeon.Entry.DungeonId) is { } guildDefinition)
+        {
+            if (griefItems is null) return new(DungeonRunOutcome.Rejected);
+            guildReward = GuildDungeonClearReward.Prepare(guildDefinition, griefItems,
+                (timeProvider ?? TimeProvider.System).GetUtcNow(), guildDungeons!);
         }
         return owner.Execute(() =>
     {
@@ -171,11 +184,15 @@ internal sealed partial class GameSession
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         var ancientGate = dungeon.Settlement?.Pending.AncientGate ?? (dungeon.Entry.DungeonId is >= 7101 and <= 7107 && !dungeon.Entry.IsPractice
             ? AncientGateProgression.Prepare(Selected!.Inventory, IncountNow()) : null);
-        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo && !dungeon.Entry.Maze.IsGriefTower ? cards?.Prepare(
+        // 魔界大战的小图与超星空、悲叹之塔同一口径：没有普通白图的通关翻牌，结果页只留“重选地图/返回城镇”。
+        // 翻牌层会一直占着结算阶段（客户端跳过翻牌的 1434 本服未实现），撤退与再选图都被阶段门挡住。
+        bool noClearCards = dungeon.Entry.IsTutorial || dungeon.Entry.IsCosmo || dungeon.Entry.Maze.IsGriefTower ||
+            dungeon.EvildomWarEntry is not null;
+        var card = dungeon.Settlement?.Pending.Card ?? (dungeon.Settlement is null && !noClearCards ? cards?.Prepare(
             dungeons.Get(checked((int)dungeon.Entry.DungeonId)), dungeon.Entry.Difficulty, fact.ConfirmedDeathEvents.Count,
             job:Selected!.Job,grow:Selected.GrowType,ancientBonus:ancientGate?.Bonus == true) : null);
         var options = dungeon.Settlement?.Pending.Options;
-        if (dungeon.Settlement is null && !dungeon.Entry.IsTutorial && !dungeon.Entry.IsCosmo && !dungeon.Entry.Maze.IsGriefTower && cards is not null)
+        if (dungeon.Settlement is null && !noClearCards && cards is not null)
         {
             var now = DateTimeOffset.UtcNow;
             var membership = repository.LoadCardMembership(owner,Selected!.Id,now);
@@ -187,6 +204,19 @@ internal sealed partial class GameSession
         if (prepared.Pending is null || prepared.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         prepared.Pending.FreezeAncientGate(ancientGate);
+        var contributionDefinition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
+        GuildContributionSource? contributionSource = null;
+        if (dungeon.Entry.IsOrdinary && !dungeon.Entry.IsPractice && !dungeon.Entry.DisableClearReward)
+        {
+            if (contributionDefinition.RawSections.Any(row => row.Tag == "guild dungeon") &&
+                dungeon.Entry.DungeonId is 8500 or 8503 or 8504 or 8505 or 8507 or 8508)
+                contributionSource = GuildContributionSource.GuildDungeon;
+            else if (contributionDefinition.WarriorsDungeon is "Tayberrs" or "normalfiend")
+                contributionSource = GuildContributionSource.SpecialDungeon;
+            else if (dungeon.Entry.GuildMileageEligible)
+                contributionSource = GuildContributionSource.RecommendedDungeon;
+        }
+        prepared.Pending.FreezeGuildContribution(dungeon.GuildMemberships, contributionSource, guildDungeons, guildReward);
         var settlement = dungeon.Settlement ??= new(prepared.Pending,
             new(dungeon.ClearTimeMilliseconds, rankPoint, rewards.GradeForPoint(rankPoint), dungeon.KillExperienceTotal)
             {
@@ -195,11 +225,13 @@ internal sealed partial class GameSession
                 MonsterBossExperience = dungeon.KillBossExperience,
                 MonsterExperienceEntries = [.. dungeon.KillObjectExperience]
             }, Selected!)
-            { CardPolicy = dungeon.Entry.IsCosmo || dungeon.Entry.Maze.IsGriefTower ? null : cards };
+            { CardPolicy = noClearCards ? null : cards };
         if (!ReferenceEquals(settlement.Pending, prepared.Pending))
             throw new InvalidOperationException("结算准备与本实例冻结报告不同");
         InventoryResult? inventory = null;
         AdventureProgressionCommit? adventureCommit = null;
+        uint guildMileageGuildId = 0;
+        GuildContributionCommit? guildContribution = null;
         if (!settlement.Committed)
         {
             // 原owner内校验、提交并安装实际结果；异常时保留同一准备供持久receipt查询。
@@ -241,6 +273,9 @@ internal sealed partial class GameSession
             settlement.LuckyStarGained = commit.LuckyStarGained;
             settlement.LuckyStarTotal = commit.LuckyStarTotal;
             adventureCommit = commit.Adventure;
+            guildMileageGuildId = commit.GuildMileageGuildId;
+            guildContribution = commit.GuildContribution;
+            settlement.GuildDungeon = commit.GuildDungeon;
             if (commit.Inventory is { } plan)
                 inventory = new InventoryResult(true, 0, plan)
                 {
@@ -284,7 +319,11 @@ internal sealed partial class GameSession
                 LuckyStarGained = settlement.LuckyStarGained,
                 LuckyStarTotal = settlement.LuckyStarTotal,
                 Adventure = adventureCommit,
-                Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond,GriefReward = settlement.GriefReward };
+                GuildMileageGuildId = guildMileageGuildId,
+                GuildContribution = guildContribution,
+                GuildDungeon = settlement.GuildDungeon,
+                Options = settlement.Pending.Options,BlackDiamond = settlement.BlackDiamond,GriefReward = settlement.GriefReward,
+                EvildomWarClear = dungeon.EvildomWarEntry is not null };
         });
     }
 

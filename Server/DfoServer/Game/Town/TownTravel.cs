@@ -53,6 +53,25 @@ internal static class TownTravel
         }
         if (request.PreviousTown != character.Position.Town || request.PreviousArea != character.Position.Area)
             return TownTravelPlan.Reject("source-area-mismatch");
+        // 公会菜单005B7960直接发送固定落点，不经过街区的PVF有向门。
+        // 仅放行本版这一种菜单形状；最终保存仍在同一事务复核真实会籍。
+        if (request is { Town: 8, Area: 0, X: 2110, Y: 270, Movement: 5, TargetNpc: 0, PathKind: 0 })
+        {
+            var hall = new Location(8, 0, 2110, 270, character.Position.Direction);
+            if (!towns.IsGuildHall(hall, completed)) return TownTravelPlan.Reject("target-not-guild-hall");
+            string admission = towns.DestinationAdmission(hall, character.Level, completed);
+            if (admission != "ready") return TownTravelPlan.Reject(admission);
+            // 菜单坐标是客户端写死的旧版大地图落点，本版公会大厅步行区止于 x≈1040：
+            // 不可站时改用该地图地形首块可走矩形中心，与从外场走门进入的实际落点相同。
+            if (!towns.IsPosition(hall, completed))
+            {
+                if (towns.Spawn(hall, completed) is not { } spawn) return TownTravelPlan.Reject("arrival-unavailable");
+                hall = spawn;
+            }
+            var origin = towns.IsRoom(character.Position, completed) || towns.IsGuildHall(character.Position, completed)
+                ? character.Return : character.Position;
+            return origin is null ? TownTravelPlan.Reject("return-gate-unavailable") : new(hall, origin, "ready");
+        }
         // 婚房-101门返回本次入场缓存的来源地图，原码固定落点300/200，不把-101解释成普通城镇号。
         if (character.Position is { Town: 101, Area: 0 } && npcVisit is { Town: 101, Area: 0 } home &&
             request is { TargetNpc: 0, Movement: 5, PathKind: 0, X: 300, Y: 200 } &&

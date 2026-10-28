@@ -26,7 +26,7 @@ namespace DfoServer.Network.Handlers;
 /// <see cref="GuildPermitDelivery"/> 补投；接受时创建者已离线则用离线账号租约提交建会。
 /// </summary>
 internal sealed class GuildHandler(GuildDirectory directory, GuildPermitRegistry permits, OnlineSessionDirectory online,
-    AccountOwners owners, ServerLog log, GuildProjection projection) : IGameCommandModule
+    AccountOwners owners, ServerLog log, GuildProjection projection, GuildInvitations? invitations = null) : IGameCommandModule
 {
     /// <summary>
     /// 申请有效期。客户端在被邀请方窗口停留 60 秒后**自动发拒绝**（`cmp eax,0xEA60`），而顺序模式下
@@ -168,7 +168,18 @@ internal sealed class GuildHandler(GuildDirectory directory, GuildPermitRegistry
 
         var permit = new GuildPermit(region, draft.Name, draft.AddressOrName, draft.Promote, creator.Id, context.Owner.Account,
             target.Id, target.Account, now + PermitLifetimeSeconds) { InitiatorName = creator.Name };
-        permits.Register(permit);
+        bool busy;
+        lock (invitations?.SyncRoot ?? permits)
+        {
+            busy = invitations?.HasParticipant(context.Session) == true ||
+                invitee is not null && invitations?.HasParticipant(invitee) == true;
+            if (!busy) permits.Register(permit);
+        }
+        if (busy)
+        {
+            await Reject(context, CmdPacketType.REQUEST_GUILD_CREATE_PERMIT, PermitMissing, "guild_permit_consent_busy", creator.Id);
+            return CommandResult.Handled;
+        }
         if (state == GuildInviteeState.Ready)
         {
             if (!invitee!.TryDeliverGuildPermit(target.Id, new GuildPermitNotice(GuildPermitNoticeKind.Invite, permit)))

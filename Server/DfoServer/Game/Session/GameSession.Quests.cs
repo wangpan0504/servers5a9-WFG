@@ -76,15 +76,20 @@ internal sealed partial class GameSession
             incomplete.Plan.Multiplier != multiplier || incomplete.SelectionEpoch != captured.SelectionEpoch || incomplete.Phase != captured.Phase ||
             incomplete.DungeonIdentity != captured.Identity || !ReferenceEquals(incomplete.Plan.Expected, expected)))
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection) { Failure = QuestCompletionFailure.EligibilityChanged };
+        var rank = quest.Condition == "[pvp rank]" ? pvpRatings?.Capture(owner,expected.Id) : null;
         QuestCompletionPreparation preparation;
         if (captured.Pending is { } pending && pending.SelectionEpoch == captured.SelectionEpoch && pending.Phase == captured.Phase &&
             pending.DungeonIdentity == captured.Identity && ReferenceEquals(pending.Plan.Expected, expected) &&
             pending.Plan.AuthoritativeClear == captured.Clear && pending.Plan.RewardSelector == selector && pending.Plan.Multiplier == multiplier)
             preparation = new(QuestCompletionOutcome.Accepted, pending.Plan, "原领奖计划精确重试");
         else
+        {
             preparation = QuestCompletionPlan.Prepare(expected, quest, selector, quests, parameters, items, goldLimits, pieces,
                 growth, DateTimeOffset.UtcNow, captured.Clear, multiplier,contracts?.Growth, stageGraph,
-                stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom, expertJobs);
+                stageGraph is null ? null : repository.LoadQuestStageState(owner, expected), experienceBonuses, PremiumPcRoom, expertJobs,
+                rank is null ? null : pvpRatings!.Grade(rank));
+            if (preparation.Plan is { } planned) planned.PvpRating = rank;
+        }
         return owner.Execute(() =>
         {
             if (pendingRental is not null || pendingCommunication is not null || pendingQuestLifecycle is not null || pendingQuestQuickClear is { CommitStarted: true } ||

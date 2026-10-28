@@ -163,6 +163,8 @@ internal static class DungeonScriptedReturnSessionTests
             var prepared = Nested("PreparedFormalDungeon", expected, Session.SelectionEpoch, dungeon, 31u);
             That(typeof(GameSession).GetMethod("InstallFormalDungeon", Instance)!.Invoke(Session, [prepared]) is not null,
                 "合成实例仍经正式attempt/key预留安装");
+            // 入场提交安装含冻结会籍的副本快照，后续pending必须注入实际owner而非准备期记录。
+            dungeon = typeof(GameSession).GetProperty("formalDungeon", Instance)!.GetValue(Session)!;
             That(Session.CompleteFormalDungeonLoading() is not null && Session.MoveFormalDungeon(1, 0) is not null &&
                 Session.CompleteFormalDungeonLoading() is not null && Session.MoveFormalDungeon(1, 0, 1) is not null &&
                 Session.CompleteFormalDungeonLoading() is not null, "真实Session加载并进入未清末层");

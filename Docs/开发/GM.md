@@ -43,7 +43,7 @@
 | `cash-shop-expiration [on\|off]` | 运行状态 | 不带参数查询`ignoreAbsoluteExpiration`；on只忽略固定`[expiration date]`，off保留，默认on。不改变相对期限 |
 | `cash-shop-usable-period [on\|off]` | 运行状态 | 不带参数查询`ignoreUsablePeriod`；on忽略`[usable period]`及装扮所选相对天数，off保留，默认off。不改变绝对日期开关 |
 | `infinite-fatigue [on\|off]` | 运行状态 | 不带参数查询；on显示满疲劳且不扣余额，服务端照常累计应耗疲劳；off恢复真实疲劳显示、准入和扣点。计数规则见[单人副本实例](../模块/单人副本实例.md#普通图疲劳owner) |
-| `pc-room [on\|off]` | 运行状态 | 当前服务实例的全局网吧身份，默认off；不带参数查询。on独立发送网吧index2并豁免本次退图虚弱，off恢复普通判断；不授予或撤销账号黑钻index3，不改已有虚弱、疲劳余额或会员期限。下一客户端请求完成后刷新本人及同屏外观，Loading延后至37完成；其他网吧业务不因此自动实现。仅在线，不持久化，重启恢复off，account前缀不缩小作用范围 |
+| `pc-room [on\|off]` | 运行状态 | 当前服务实例的全局网吧身份，默认on，数据目录`pc-room.json`写`{"enabled":false}`才默认off（缺文件即on，重启按此恢复）；不带参数查询。on独立发送网吧index2并豁免本次退图虚弱，off恢复普通判断；不授予或撤销账号黑钻index3，不改已有虚弱、疲劳余额或会员期限。下一客户端请求完成后刷新本人及同屏外观，Loading延后至37完成；其他网吧业务不因此自动实现。on/off只改当前进程、不写角色数据，account前缀不缩小作用范围 |
 | `show <角色>` | 否 | 单个角色的 id、槽位、job、grow、等级、剧情接受等级、revision、位置、返回点、任务数、技能数和金币余额 |
 | `quests <角色>` | 否 | 已完成任务编号，按编号升序 |
 | `skills <角色>` | 否 | `技能:等级`，按技能编号升序 |

@@ -51,6 +51,20 @@ internal static class PacketCaptureTests
             text = ReadCapture(path);
             TestCheck.That(text.Split("[authentication payload redacted]").Length == 4, "all credential-bearing requests are redacted");
             TestCheck.That(!text.Contains(BitConverter.ToString(secret).Replace('-', ' ')), "credential absent from body and raw");
+            using (var roomCapture = new PacketCapture(Path.Combine(root, "arena"), retainRecent: true))
+            {
+                foreach (ushort opcode in new[] { (ushort)CmdPacketType.MAKE_PVP_ROOM, (ushort)CmdPacketType.ENTER_PVP_ROOM })
+                {
+                    roomCapture.Write(12, false, false, ClientFrame(opcode, secret));
+                    roomCapture.Write(12, false, false, ClientFrame(opcode, [1]));
+                }
+                roomCapture.Flush();
+                string roomText = ReadCapture(Path.Combine(root, "arena", "packet_log.txt"));
+                TestCheck.That(roomCapture.Recent().Length == 4 && roomCapture.Recent().All(row => row.Redacted && row.BodyHex == "") &&
+                    !roomText.Contains(BitConverter.ToString(secret).Replace('-', ' ')) && !roomText.Contains("raw:") &&
+                    roomText.Split("[pvp password payload redacted]").Length == 5,
+                    "房间密码连同畸形正文在抓包文件及在线历史中一并脱敏");
+            }
             byte[] channel = new byte[14];
             channel[1] = 11;
             channel[11] = 0xaa;

@@ -435,6 +435,21 @@ internal static class GmWebServerTests
         TestCheck.That(csv.IsSuccessStatusCode && csv.Content.Headers.ContentType?.MediaType == "text/csv" && csv.Content.Headers.ContentDisposition?.FileName == "gm-audit.csv"
             && csvText.Contains("\"'=cmd|") && !csvText.Contains(",\"=cmd") && csvText.Contains("\"line1\nline2, \"\"q\"\"\""), "审计 CSV 导出：防公式注入并正确转义");
         TestCheck.That(!GmAudit.ToCsv([new(DateTimeOffset.Now, "gm", "x", " =1", "@a", true, "", "", "")]).Contains("\" =1"), "CSV 前导空白后的公式也被中和");
+        // 外部工具或手改可能留下字段全为 null 的占位行；反序列化会把 null 塞进非空字段，
+        // 这类行必须在过滤前按损坏行跳过，不能让账号筛选与列表在空引用上失败。
+        File.AppendAllText(auditPath,
+            "{\"time\":\"0001-01-01T00:00:00+00:00\",\"operator\":null,\"action\":null,\"target\":null,\"command\":null,\"ok\":false,\"before\":null,\"after\":null,\"result\":null}\n");
+        string directError = "";
+        try { data.Audit.Query(200, "acct", null, null, null, null); }
+        catch (Exception ex) { directError = ex.GetType().Name + ": " + ex.Message; }
+        var placeholderAccount = await http.GetAsync("/api/audit?account=acct&limit=200");
+        var placeholderAll = await http.GetAsync("/api/audit?limit=200");
+        string accountBody = await placeholderAccount.Content.ReadAsStringAsync();
+        string allBody = await placeholderAll.Content.ReadAsStringAsync();
+        TestCheck.That(placeholderAccount.StatusCode == HttpStatusCode.OK && placeholderAll.StatusCode == HttpStatusCode.OK && directError.Length == 0,
+            $"缺字段的审计占位行按损坏行跳过，账号筛选与列表都不失败（account={(int)placeholderAccount.StatusCode}:{accountBody[..Math.Min(200, accountBody.Length)]} all={(int)placeholderAll.StatusCode}:{allBody[..Math.Min(200, allBody.Length)]} direct={directError}）");
+        TestCheck.That((await http.GetFromJsonAsync<JsonElement>("/api/audit?account=acct&limit=200")).EnumerateArray()
+            .All(row => row.GetProperty("action").GetString() is not null), "占位行不出现在账号筛选结果里");
 
         var closed = await http.GetFromJsonAsync<JsonElement>("/api/raid-windows");
         TestCheck.That(closed.GetProperty("luke").GetArrayLength() == 0 && closed.GetProperty("hyperspace").GetArrayLength() == 0 && closed.GetProperty("prey").GetArrayLength() == 0,

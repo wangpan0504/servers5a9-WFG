@@ -35,7 +35,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         lock (gate)
             return characters.TryGetValue(firstId, out var a) && characters.TryGetValue(secondId, out var b) &&
                 ReferenceEquals(a.Owner, first) && ReferenceEquals(b.Owner, second) && first.IsCurrent && second.IsCurrent &&
-                a.Scene == b.Scene && a.Scene.RoomAccount is null;
+                a.Scene == b.Scene && (a.Scene.RoomAccount is null || a.Scene.RoomAccount.StartsWith("guild:", StringComparison.Ordinal));
     }
 
     Scene SceneOf(AccountOwners.Lease owner, Character character, ChannelIdentity identity)
@@ -44,6 +44,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         // 频道与房间账号在这里补齐。
         var town = towns.Scene(character.Position, character.CompletedQuests.ToHashSet());
         return new(identity, town.Town, town.Area, town.Map, town.OwnerKey(owner.Account,character.Id,
+            character.Guild?.Id ?? 0,
             character.Marriage is { State: 4 } marriage && marriage.IsMember(character.Id) ? marriage.Id : null,
             character.WeddingHall?.CeremonyId));
     }

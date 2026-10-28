@@ -51,9 +51,9 @@ internal static class FatigueDailyResetTcpTests
             var map = FormalDungeonTcpTests.Enter(peer, information: body => information = body, requestQuestId: 0);
             FormalDungeonTcpTests.Load(peer); PartyDungeonTcpTests.Drain(peer);
             That(Remaining(first) == 0 && Remaining(second) == 7, "06:00前正常首次房间扣至0，不影响另一个账号");
-            await clock.WaitForTimersAsync(4);
+            await clock.WaitForOneShotTimersAsync(4);
             clock.Advance(TimeSpan.FromSeconds(1));
-            await clock.WaitForTimersAsync(4);
+            await clock.WaitForOneShotTimersAsync(4);
             foreach (var client in new[] { peer, other })
             {
                 // 不发送屏障或心跳，直接等定时通知，证明持续在线且没有新请求也会刷新。
@@ -85,7 +85,7 @@ internal static class FatigueDailyResetTcpTests
             FormalDungeonTcpTests.Load(peer); PartyDungeonTcpTests.Drain(peer);
             That(Remaining(first) == 155 && Remaining(second) == 156, "原实例跨日后仍可正常过图，新房间实扣1，不影响另一账号");
 
-            await clock.WaitForTimersAsync(4);
+            await clock.WaitForOneShotTimersAsync(4);
             clock.Advance(TimeSpan.FromHours(16));
             foreach (var client in new[] { peer, other })
             {
@@ -104,14 +104,14 @@ internal static class FatigueDailyResetTcpTests
                 That(!later.Any(row => row is { Kind:0,Opcode:36 or 1536 }), "原日界刷新不触发本机日切通知");
             }
         }
-        await clock.WaitForTimersAsync(0);
+        await clock.WaitForOneShotTimersAsync(0);
         using (var peer = Open(fixture))
         {
             peer.Select(1); peer.Barrier();
             That(fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=(SELECT id FROM characters WHERE name='DailyOffline')") is [[156L]],
                 "未在线角色在选角时补齐日切，不要求06:00在线");
         }
-        await clock.WaitForTimersAsync(0);
+        await clock.WaitForOneShotTimersAsync(0);
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "日切后存档完整，退出收尾不遗留时钟任务");

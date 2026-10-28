@@ -15,6 +15,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveGuildExtensionSchema(db);
                 RewindRaidLifecycle(db);
                 Execute(db, """
                     INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
@@ -59,6 +60,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                // 回退点 113 高于团本生命周期 109，该步不会重跑，团本表须保持当前结构。
                 Execute(db, """
                     DROP TABLE account_tag_evildom_challenges;
                     INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
@@ -100,6 +102,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveGuildExtensionSchema(db);
                 RewindRaidLifecycle(db);
                 Execute(db, """
                     DROP TABLE account_tag_evildom_runs;

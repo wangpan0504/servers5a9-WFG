@@ -1,5 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Dungeons;
+using DfoServer.Game.Guild;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Dungeons;
 
@@ -16,6 +18,9 @@ internal sealed record DungeonSettlementCommit(Character Character, bool Duplica
     public uint ProficiencyGained { get; init; }
     public bool LuckyStarGained { get; init; }
     public int LuckyStarTotal { get; init; }
+    public uint GuildMileageGuildId { get; init; }
+    public GuildContributionCommit? GuildContribution { get; init; }
+    public GuildDungeonProgress? GuildDungeon { get; init; }
     public DfoServer.Game.Adventure.AdventureProgressionCommit? Adventure { get; init; }
     public GriefTowerReward? GriefReward { get; init; }
 }
@@ -40,5 +45,20 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
     {
         if (AncientGate is not null) return;
         AncientGate = value;
+    }
+    public ImmutableArray<GuildDungeonMembership> GuildMemberships { get; private set; }
+    public GuildContributionSource? GuildContributionSource { get; private set; }
+    public DfoServer.GameWorld.Guilds.GuildDungeonCatalog? GuildDungeonCatalog { get; private set; }
+    public GuildDungeonClearReward? GuildDungeonReward { get; private set; }
+    public void FreezeGuildContribution(ImmutableArray<GuildDungeonMembership> memberships, GuildContributionSource? source,
+        DfoServer.GameWorld.Guilds.GuildDungeonCatalog? dungeonCatalog = null, GuildDungeonClearReward? dungeonReward = null)
+    {
+        if (!GuildMemberships.IsDefault) return;
+        GuildMemberships = memberships; GuildContributionSource = source;
+        if (source == Game.Guild.GuildContributionSource.GuildDungeon)
+        {
+            GuildDungeonCatalog = dungeonCatalog;
+            GuildDungeonReward = dungeonReward;
+        }
     }
 }

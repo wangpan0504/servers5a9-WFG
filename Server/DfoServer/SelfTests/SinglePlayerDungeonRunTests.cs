@@ -10,6 +10,8 @@ internal static partial class SinglePlayerDungeonRunTests
     public static void RunCore()
     {
         int checks = Count;
+        VerifyBattleLevels();
+        VerifyMonsterAi();
         VerifyTagEvildomLife();
         VerifyLostLandClock();
         VerifyLayeredBossTerminal();

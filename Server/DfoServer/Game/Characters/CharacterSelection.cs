@@ -13,10 +13,17 @@ internal static class CharacterSelection
         TownCatalog towns, IReadOnlySet<int> completed, GoldLimitCatalog? goldLimits, bool resumeTown = false,
         ItemCatalog? items = null, TimeProvider? clock = null, ChannelEntry? channel = null) => owner.Execute(() =>
     {
+        if (resumeTown && towns.IsGuildHall(character.Position, completed))
+        {
+            var admitted = repository is Game.Guild.IGuildHallStore hall
+                ? hall.SaveGuildHallPosition(owner, character, character.Position, character.Return) : null;
+            if (admitted is null) resumeTown = false;
+            else character = admitted;
+        }
         if (character.IsPvpPrivate)
         {
             // 专用角色没有普通城镇入口；重登仍使用决斗地区，不能先落共享赛丽亚房间。
-            if (channel?.Type != 24) throw new InvalidDataException("专用角色不能在非决斗频道选角");
+            if (channel?.Type is not (8 or 24)) throw new InvalidDataException("专用角色不能在非决斗频道选角");
             var decision=ChannelAreaLanding.DecideArea(towns,10,0,character.Level,completed);
             var landing=decision.Spot ?? throw new InvalidDataException("专用角色决斗落点不可用");
             if (resumeTown && character.Position.Town==10 && towns.Areas.TryGetValue((10,character.Position.Area),out var pvpArea) &&

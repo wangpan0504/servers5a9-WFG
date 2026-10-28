@@ -10,19 +10,31 @@ using DfoServer.Network.Protocol;
 using DfoServer.GameWorld.Items;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Network.Builders.Inventory;
+using DfoServer.Network.Projection;
 
 namespace DfoServer.Network.Handlers;
 
 // 只处理原训练链的私有连招及街机实例，不把普通玩家决斗或裸33进度当训练胜利。
 internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComboCatalog combos,QuestCatalog quests,ServerLog log,
-    ItemCatalog items,GoldLimitCatalog goldLimits,EpicPieceCatalog pieces) : IGameCommandModule
+    ItemCatalog items,GoldLimitCatalog goldLimits,EpicPieceCatalog pieces,DfoServer.GameWorld.Characters.SkillLearningCatalog skills) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
-        commands.Register(CmdPacketType.MAKE_PVP_ROOM,CreateAsync,nameof(PvpTrainingHandler));
-        commands.Register(CmdPacketType.SET_PVP_SEAT_STATE,SeatAsync,nameof(PvpTrainingHandler));
         commands.Register(CmdPacketType.ARCADEMODE_PVP_ROUND_INFO,RoundAsync,nameof(PvpTrainingHandler));
         commands.Register(CmdPacketType.PONGUNTOOKUK_REWARD,ManualAsync,nameof(PvpTrainingHandler));
+        commands.Register(CmdPacketType.ARCADE_PVP_DATA_COPY,CopyAsync,nameof(PvpTrainingHandler));
+    }
+
+    async Task<CommandResult> CopyAsync(GameConnectionContext context,Packet packet)
+    {
+        byte choice=PvpTrainingRequests.CopyChoice(packet.Body);
+        var receipt=context.Session.ChooseTrainingSkills(choice,skills);
+        log.Write("pvp_training_copy",new {Connection=context.Id,choice,Committed=receipt is not null});
+        if(receipt is not null && context.Session.UsesArenaSkills)
+            await SkillProjection.PublishAsync(context,receipt.Character,"pvp_training_copy_skills","pvp_training_copy_combos",
+                ()=>context.Session.CanPublishLearning(receipt));
+        // 本版未证实1268独立ACK；仅在事务后回放实际正式决斗技能，不造成功正文。
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> ManualAsync(GameConnectionContext context,Packet packet)
@@ -39,7 +51,7 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
         return CommandResult.Handled;
     }
 
-    async Task<CommandResult> CreateAsync(GameConnectionContext context,Packet packet)
+    internal async Task<CommandResult> CreateAsync(GameConnectionContext context,Packet packet)
     {
         var request=PvpTrainingRequests.Create(packet.Body);
         var receipt=request is {Kind:3,MapIndex:0,Setting:0,Mode:>0} or {Kind:1,MapIndex:0,Setting:0,Mode:0}
@@ -70,7 +82,7 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
         }
     }
 
-    async Task<CommandResult> SeatAsync(GameConnectionContext context,Packet packet)
+    internal async Task<CommandResult> SeatAsync(GameConnectionContext context,Packet packet)
     {
         var request=PvpTrainingRequests.Seat(packet.Body);
         var run=context.Session.ReadPvpTraining();

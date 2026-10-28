@@ -49,9 +49,26 @@ internal sealed class NpcShopCatalog
                 .Concat(Integers(Section(text, "one a day item")).Where(item => item > 0)).ToFrozenSet();
             shops.Add(id, new(npc, items) { Raid = raid });
         }
+        AddBeastShopItems(shops);
         if (shops.Count == 0 || EquipmentSellRate < 0)
             throw new InvalidDataException("PVF 商店或售价表无效");
         Shops = shops.ToFrozenDictionary();
+    }
+
+    // 合并专用商店脚本比纯净页多出的商品，补进已有的 598。没有 598 或脚本不存在时不动。
+    static void AddBeastShopItems(Dictionary<int, NpcShop> shops)
+    {
+        var current = shops.FirstOrDefault(pair => pair.Value.NpcId == 598);
+        if (current.Value is null) return;
+        string? root = Environment.GetEnvironmentVariable("DFO_BEAST_SHOP");
+        if (string.IsNullOrWhiteSpace(root) || !File.Exists(root)) return;
+        string text = File.ReadAllText(root);
+        if (Integers(Section(text, "NPC")).FirstOrDefault(-1) != 598) return;
+        string sell = string.Join("\n", Regex.Matches(text, @"\[sell info\](.*?)\[/sell info\]", RegexOptions.Singleline | RegexOptions.IgnoreCase)
+            .Select(match => match.Groups[1].Value));
+        var added = Regex.Matches(sell, @"\[item list\](.*?)\[/item list\]", RegexOptions.Singleline | RegexOptions.IgnoreCase)
+            .SelectMany(match => Integers(match.Groups[1].Value)).Where(item => item > 0);
+        shops[current.Key] = current.Value with { Items = current.Value.Items.Concat(added).ToFrozenSet() };
     }
 
     // 交易窗口客户端固定发 ShopId=-1，此时只核对交易名册内的商人-商品对；普通商店仍校验 .shp。

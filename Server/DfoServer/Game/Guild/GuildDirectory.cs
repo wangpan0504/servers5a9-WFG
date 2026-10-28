@@ -21,6 +21,9 @@ internal interface IGuildDirectoryStore
 
     GuildMembership? GuildMembershipOf(ushort characterId);
 
+    /// <summary>在同一只读快照内，按当前账号和角色的真实关系读取公会与成员资料。</summary>
+    GuildPanel? ReadGuildPanel(AccountOwners.Lease owner, ushort characterId);
+
     /// <summary>
     /// 按角色名解析**认证邀请**的目标（只读一行）：角色 id、所属账号与是否已在公会。
     /// 查不到返回 null（客户端失败码 3）；同账号在用例层判定（失败码 5）；已在公会判定为失败码 23。

@@ -33,7 +33,7 @@ internal static class MileageTests
                 Sql(db,"INSERT INTO account_currency_balances(account,currency_kind,balance) VALUES('keep',15,88)");
                 That(Scalar(db,"SELECT mileage FROM account_wallets WHERE account='keep'") is 123L,"新建库含正式积分列");
                 DatabaseSchemaTests.RewindRaidLifecycle(db);
-                Sql(db,"ALTER TABLE account_wallets DROP COLUMN mileage; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=74");
+                Sql(db,DatabaseSchemaTests.GuildExtensionFixtureRewindSql + "ALTER TABLE account_wallets DROP COLUMN mileage; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=74");
             }
             using (var db=new SqliteGameDatabase(path).Open())
             {
@@ -45,7 +45,7 @@ internal static class MileageTests
                 Sql(db,"UPDATE account_wallets SET mileage=123 WHERE account='keep'");
                 Reject<SqliteException>(() => Sql(db,"UPDATE account_wallets SET mileage=-1 WHERE account='keep'"),"数据库限制负积分");
                 DatabaseSchemaTests.RewindRaidLifecycle(db);
-                Sql(db,"ALTER TABLE account_wallets DROP COLUMN mileage; ALTER TABLE account_currency_balances RENAME COLUMN currency_kind TO broken_kind; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=74");
+                Sql(db,DatabaseSchemaTests.GuildExtensionFixtureRewindSql + "ALTER TABLE account_wallets DROP COLUMN mileage; ALTER TABLE account_currency_balances RENAME COLUMN currency_kind TO broken_kind; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=74");
             }
             bool failed=false;
             try { using var _=new SqliteGameDatabase(path).Open(); }

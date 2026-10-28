@@ -18,6 +18,8 @@ internal sealed record DungeonExperienceReward(string RuleId, string ResourceSou
 // GainedExperience是角色经验到账，ProficiencyGained是同一笔经验记入熟练度的额度；两者之和是本次有效经验。
 internal sealed record DungeonGrowthCommit(Character Character, bool Duplicate, uint GainedExperience = 0, uint ProficiencyGained = 0)
 {
+    public ExperienceBonuses? CommittedBonuses { get; init; }
+    public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Models.InventorySlot> BeastRewardSlots { get; init; } = [];
     public System.Collections.Immutable.ImmutableArray<DfoServer.Game.Inventory.Services.EquipmentGrowthChange> EquipmentChanges { get; init; } = [];
 }
 

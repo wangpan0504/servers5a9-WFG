@@ -1,5 +1,6 @@
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Game.Party;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -26,6 +27,18 @@ internal static class EvildomWarPacketTests
         Bytes(Convert.FromHexString("0201B80B000002000000321500000002002E150000010003"),
             EvildomWarPackets.Info(1, 3000, [new(5426, 0, 2, 0), new(5422, 1, 0, 3)]),
             "1671按真实读宽投影状态、模式、秒数、记录数、逐图三字节，不混用拼图NOTI1652");
+        for (ushort mode = 0; mode < 3; mode++)
+        {
+            var settings = PartySettings.Default with { TitleCode = 4, Kind = 5, KindArgument = mode,
+                Capacity = mode == 2 ? (byte)1 : (byte)4 };
+            byte[] party = PartyPackets.Information(1, 2, 41, [(0, 42)], 0, false, settings);
+            That(party.Length == 56 && party[23] == 5 && BitConverter.ToUInt16(party, 24) == mode &&
+                party[54] == 5 && party[55] == 0,
+                "芮兹菜单使用最终安装的队伍类型，NOTI9包尾不能把设置段的魔界类型5覆盖为0: " + mode);
+            byte[] members = PartyPackets.Members(1, 2, 41, [(0, 42)], 0, settings);
+            That(members.Length == 30 && members[9] == 2 && members[28] == 5 && members[29] == 0,
+                "成员增量不附加设置或模式字段，末尾仍保留魔界类型5: " + mode);
+        }
         Console.WriteLine($"PASS evildom war packets {Count - before}");
     }
 }

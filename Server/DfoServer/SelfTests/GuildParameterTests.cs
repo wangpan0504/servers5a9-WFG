@@ -32,6 +32,10 @@ internal static class GuildParameterTests
             "建会花费与公会仓库格数按 `etc/guild.etc` 段落读取");
         That(catalog.LevelExperience(0, 1) == 1001 && catalog.LevelExperience(4, 10) == 5010,
             "公会等级经验按档位与等级定位");
+        That(catalog.LevelAtExperience(0, 1000) == 1 && catalog.LevelAtExperience(0, 1001) == 2 &&
+            catalog.LevelAtExperience(0, 1009) == 10 && catalog.LevelAtExperience(0, long.MaxValue) == 10 &&
+            catalog.LevelAtExperience(1, 1009) == 1,
+            "累计经验在门槛精确升级，档内满级不越过守护石晋阶，新档使用独立累计门槛");
         Reject<ArgumentOutOfRangeException>(() => catalog.LevelExperience(5, 1), "档位越界拒绝而不是夹取");
         Reject<ArgumentOutOfRangeException>(() => catalog.LevelExperience(0, 11), "等级越界拒绝而不是夹取");
 

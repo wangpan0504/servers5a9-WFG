@@ -42,6 +42,8 @@ internal sealed record DungeonMaze(
     IReadOnlyList<DungeonMap>? MapSpecification,
     IReadOnlyList<PvfToken> QuestConnectionTokens)
 {
+    // 仅由魔兽准入冻结；普通迷宫不能仅靠地图种类字符串放行魔兽房间。
+    public BeastDungeonLayout? BeastLayout { get; init; }
     // 实验性：只有普通（非任务连接）maze 带密门深渊房间时才非空；任务 maze 带 [escape hell]，不属于深渊派对。
     public DungeonHellPartyRoom? HellParty { get; init; }
     // 实验性：深渊房间地图的 PVF 路径（[seal door map index] 对应的 map 文件），用于把 HellParty.Room 处的普通房间换成深渊房间。
@@ -125,6 +127,46 @@ internal sealed record DungeonMaze(
 }
 
 internal sealed record DungeonRequiredItem(int ItemId, int Count, int Flag);
+
+// 已登记副本里无参数 [Beast dungeon] 后面的一条 5×3。它不进入普通 Mazes。
+internal sealed record BeastDungeonLayout(int LevelMin, int LevelMax, int Width, int Height, DungeonPoint Start,
+    IReadOnlyList<DungeonMap> Maps)
+{
+    public string Greed { get; init; } = "";
+    public string? BalanceTable { get; init; }
+    public string? MonsterDifficultyTable { get; init; }
+    // 魔兽区块自带的过场图（正式PVF是 Map/CutScene/Beast.img）；客户端进图时按它播片，服务端只保留声明值。
+    public string? CutsceneImage { get; init; }
+    public double NormalHpScale { get; init; } = BeastBalance.Unset;
+    public double NormalAttackScale { get; init; } = BeastBalance.Unset;
+}
+
+internal static class BeastBalance
+{
+    public const double Unset = -1;
+
+    public static (double Hp, double Attack) Normal(string text)
+    {
+        double hp = Row(text, "MAX_HP", "NORMAL");
+        double attack = Row(text, "ATTACK", "NORMAL");
+        if (hp <= 0 || attack < 0) throw new InvalidDataException("魔兽平衡表普通档倍率无效");
+        return (hp, attack);
+    }
+
+    static double Row(string text, string section, string rank)
+    {
+        int at = text.IndexOf("[" + section + "]", StringComparison.OrdinalIgnoreCase);
+        if (at < 0) throw new InvalidDataException("魔兽平衡表缺少 " + section);
+        int end = text.IndexOf("[/", at, StringComparison.Ordinal);
+        string body = end < 0 ? text[at..] : text[at..end];
+        int rankAt = body.IndexOf("[" + rank + "]", StringComparison.OrdinalIgnoreCase);
+        if (rankAt < 0) throw new InvalidDataException("魔兽平衡表缺少 " + rank);
+        var parts = body[(rankAt + rank.Length + 2)..].Split((char[])[' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0 || !double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double value))
+            throw new InvalidDataException("魔兽平衡表普通档不是数字");
+        return value;
+    }
+}
 
 internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel, int? BasisLevel, IReadOnlyList<DungeonMaze> Mazes, IReadOnlyList<DungeonRawSection> RawSections)
 {
@@ -245,6 +287,10 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         RawSections.Where(row => row.Tag == "prohibit practice").All(row => row.Tokens is [{ Type: 0, Value: 0 }]);
     // 强袭任务副本均带 [disable black diamond card reward]（无值标记）：通关翻牌不提供黑钻额外卡。
     public bool DisableBlackDiamondCardReward => RawSections.Any(row => row.Tag == "disable black diamond card reward" && row.Tokens.Count == 0);
+    public IReadOnlyList<BeastDungeonLayout> BeastLayouts { get; init; } = [];
+    // 单整数 [beast dungeon] 1：官方专属入口的魔兽身份声明，客户端解析为 runtime+551。
+    // 无参数的同名段才是 310–314 的五段布局，两者不会同时出现。
+    public bool BeastFlag { get; init; }
     public bool IsClassExperience => Id == 7142 &&
         Path.Equals("dungeon/cataclysm/changeclass/7142_changeclass.dgn", StringComparison.OrdinalIgnoreCase) &&
         Marker("disable drop item") && Marker("disable clear reward") && Marker("no fatigue") &&
@@ -415,7 +461,7 @@ internal sealed class DungeonCatalog
         // Lazy 在完整解析成功后才发布 Definition；失败缓存为异常，不发布局部 maze。
         return definitions.GetOrAdd(id, _ => new(() =>
         {
-            var definition = ParseResource(id, path, archive.ReadTokens(path), archive.ResolveString, maps, archive.Contains);
+            var definition = ParseResource(id, path, archive.ReadTokens(path), archive.ResolveString, maps, archive.Contains, archive.ReadText);
             if (!definition.RequiresGriefEntryContract) return definition;
             if (!GriefTower.FloorsByDungeon.TryGetValue(id, out var floor))
                 throw new InvalidDataException("悲叹副本未登记于楼层专表: " + id);
@@ -556,7 +602,7 @@ internal sealed class DungeonCatalog
         return result.AsReadOnly();
     }
 
-    internal static DungeonDefinition ParseResource(int id, string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, IReadOnlyDictionary<int, string> mapPaths, Func<string, bool> exists)
+    internal static DungeonDefinition ParseResource(int id, string path, IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, IReadOnlyDictionary<int, string> mapPaths, Func<string, bool> exists, Func<string, string>? readText = null)
     {
         if (id < 0)
             throw new InvalidDataException("副本索引不能为负");
@@ -572,6 +618,10 @@ internal sealed class DungeonCatalog
             ? resolve(type.Value) : null;
         bool allowOffGridBoss = string.Equals(dungeonType?.Trim(), "boss rush dungeon", StringComparison.OrdinalIgnoreCase);
         var mazes = new List<DungeonMaze>();
+        var beasts = new List<BeastDungeonLayout>();
+        // 按全部分段先判定：maze 块在循环尾部才解析，不能依赖 [beast dungeon] 与 [maze info] 的先后。
+        bool beastFlag = sections.Any(section =>
+            section.Tag == "beast dungeon" && section.Tokens is [{ Type: 0, Value: not 0 }]);
         Dictionary<string, DungeonRawSection>? current = null;
         var mazeSections = new List<DungeonRawSection>();
         bool mazeClosed = false;
@@ -586,11 +636,18 @@ internal sealed class DungeonCatalog
             var section = sections[i];
             if (section.Tag == "beast dungeon")
             {
+                // 单整数是官方专属入口的身份声明（客户端写 runtime+551），不是布局段头；
+                // 无参数形式才是 310–314 的魔兽布局。其他形状继续保持拒绝。
+                if (section.Tokens is [{ Type: 0, Value: var declared }])
+                {
+                    beastFlag = declared != 0;
+                    continue;
+                }
                 if (section.Tokens.Count != 0)
                     throw new InvalidDataException("beast dungeon 标记带有未知参数");
                 // 魔兽模式另有尺寸、地图种类和无普通Boss的布局，不归前一条普通迷宫。
-                // 原始区块仍完整保留；这里只结束普通路线，不启用魔兽玩法。
                 Finish();
+                beasts.Add(ParseBeastLayout(sections, i, resolve, mapPaths, id, exists, readText));
                 continue;
             }
             if (section.Tag == "maze info")
@@ -640,6 +697,8 @@ internal sealed class DungeonCatalog
             throw new NotSupportedException("unsupported: 未发现 maze info 资源结构");
         return new(id, path, minimum, basis, Freeze(mazes), Freeze(sections))
         {
+            BeastLayouts = Freeze(beasts),
+            BeastFlag = beastFlag,
             DungeonType = dungeonType,
             WarriorsDungeon = sections.Where(section => section.Tag == "warriors dungeon").ToArray() is
                 [{ Tokens: [{ Type: 6 } warriors] }] ? resolve(warriors.Value) : null,
@@ -691,7 +750,7 @@ internal sealed class DungeonCatalog
         {
             if (current is null)
                 return;
-            try { mazes.Add(ParseMaze(mazes.Count, current, mazeSections, resolve, mapPaths, exists, dungeonHell, allowOffGridBoss)); }
+            try { mazes.Add(ParseMaze(mazes.Count, current, mazeSections, resolve, mapPaths, exists, dungeonHell, allowOffGridBoss, beastFlag)); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException)
             {
                 // 每条路线独立装载；未使用的旧路线不能阻断同副本的有效剧情路线。
@@ -702,8 +761,93 @@ internal sealed class DungeonCatalog
         }
     }
 
+    private static BeastDungeonLayout ParseBeastLayout(IReadOnlyList<DungeonRawSection> sections, int marker,
+        Func<int, string> resolve, IReadOnlyDictionary<int, string> mapPaths, int dungeonId,
+        Func<string, bool> exists, Func<string, string>? readText)
+    {
+        int end = marker + 1;
+        while (end < sections.Count && sections[end].Tag is not ("beast dungeon" or "maze info")) end++;
+        var block = sections.Skip(marker + 1).Take(end - marker - 1).ToArray();
+        DungeonRawSection One(string tag) => block.Count(row => row.Tag == tag) == 1
+            ? block.Single(row => row.Tag == tag)
+            : throw new InvalidDataException("魔兽区块字段缺失或重复: " + tag);
+        var levels = One("beast level").Tokens;
+        if (levels.Count != 2 || levels.Any(token => token.Type != 0) || levels[0].Value is < 1 or > 99 || levels[1].Value < levels[0].Value)
+            throw new InvalidDataException("魔兽等级必须是两个递增等级");
+        var size = One("size").Tokens;
+        if (size.Count != 2 || size.Any(token => token.Type != 0) || size[0].Value <= 0 || size[1].Value <= 0)
+            throw new InvalidDataException("魔兽尺寸必须是两个正整数");
+        int width = size[0].Value, height = size[1].Value;
+        var greedTokens = One("greed").Tokens;
+        if (greedTokens is not [{ Type: 6 } greedToken] ||
+            !DungeonGreedGrid.Read(width, height, resolve(greedToken.Value)).Supported)
+            throw new InvalidDataException("魔兽greed与尺寸不一致或含未知编码");
+        var start = One("start map").Tokens;
+        if (start.Count != 2 || start.Any(token => token.Type != 0) || start[0].Value < 0 || start[1].Value < 0 ||
+            start[0].Value >= width || start[1].Value >= height)
+            throw new InvalidDataException("魔兽起点超出尺寸");
+        var maps = One("map specification").Tokens;
+        var rows = new List<DungeonMap>();
+        var positions = new HashSet<DungeonPoint>();
+        for (int at = 0; at < maps.Count;)
+        {
+            if (maps[at].Type != 6 || at + 3 >= maps.Count || maps[at + 1].Type != 0 || maps[at + 2].Type != 0 || maps[at + 3].Type != 0)
+                throw new InvalidDataException("魔兽地图行不完整");
+            var point = new DungeonPoint(maps[at + 1].Value, maps[at + 2].Value);
+            if (point.X < 0 || point.Y < 0 || point.X >= width || point.Y >= height)
+                throw new InvalidDataException("魔兽地图坐标超出尺寸");
+            int mapId = maps[at + 3].Value;
+            string kind = resolve(maps[at].Value);
+            if (kind is not ("map" or "Beast") || !positions.Add(point) ||
+                !mapPaths.TryGetValue(mapId, out string? path) || !exists(path))
+                throw new InvalidDataException("魔兽地图类型、坐标或资源引用无效");
+            rows.Add(new(kind, point, mapId, path));
+            at += 4;
+        }
+        if (!positions.Contains(new(start[0].Value, start[1].Value)))
+            throw new InvalidDataException("魔兽起点没有对应地图");
+        string? PathOf(string tag)
+        {
+            var matches = block.Where(row => row.Tag == tag).ToArray();
+            if (matches.Length == 0) return null;
+            if (matches.Length != 1 || matches[0].Tokens is not [{ Type: 6 } token])
+                throw new InvalidDataException("魔兽表路径无效: " + tag);
+            return resolve(token.Value);
+        }
+        string? balance = PathOf("beast dungeon balance table");
+        double hp = BeastBalance.Unset, attack = BeastBalance.Unset;
+        if (balance is { Length: > 0 })
+        {
+            if (!exists(balance) || readText is null)
+                throw new InvalidDataException("魔兽平衡表资源缺失");
+            var scale = BeastBalance.Normal(readText(balance));
+            hp = scale.Hp;
+            attack = scale.Attack;
+        }
+        return new(levels[0].Value, levels[1].Value, width, height, new(start[0].Value, start[1].Value), Freeze(rows))
+        {
+            Greed = resolve(greedToken.Value),
+            BalanceTable = balance,
+            MonsterDifficultyTable = PathOf("beast monsterapc diff table"),
+            CutsceneImage = Cutscene(block, resolve),
+            NormalHpScale = hp,
+            NormalAttackScale = attack
+        };
+    }
+
+    // [cutscene image] 是两个令牌：图片路径 + 帧序号。缺失视为没有声明，重复或形状不对视为资源损坏。
+    private static string? Cutscene(IReadOnlyList<DungeonRawSection> block, Func<int, string> resolve)
+    {
+        var rows = block.Where(row => row.Tag == "cutscene image").ToArray();
+        if (rows.Length == 0) return null;
+        if (rows.Length != 1 || rows[0].Tokens is not [{ Type: 6 } image, { Type: 0 } _] || resolve(image.Value).Length == 0)
+            throw new InvalidDataException("魔兽过场图字段缺失或重复");
+        return resolve(image.Value);
+    }
+
     private static DungeonMaze ParseMaze(int ordinal, IReadOnlyDictionary<string, DungeonRawSection> sections, IReadOnlyList<DungeonRawSection> mazeSections,
-        Func<int, string> resolve, IReadOnlyDictionary<int, string> mapPaths, Func<string, bool> exists, bool dungeonHell, bool allowOffGridBoss)
+        Func<int, string> resolve, IReadOnlyDictionary<int, string> mapPaths, Func<string, bool> exists, bool dungeonHell, bool allowOffGridBoss,
+        bool beastGateway = false)
     {
         var size = Integers(Required("size"));
         if (size.Length != 2 || size[0] <= 0 || size[1] <= 0)
@@ -715,7 +859,12 @@ internal sealed class DungeonCatalog
         string greed = resolve(greedTokens[0].Value);
         // 保留原文；类型化GreedGrid独立返回不支持原因，未知编码不使整个副本定义失败。
         var starts = Points(Required("start map"));
-        var bosses = Points(Required("boss map"), allowRepeated: true, allowOffGrid: allowOffGridBoss);
+        // 官方魔兽专属入口的选图预览不声明Boss（-1 -1），真正终点来自同源魔兽布局（入场时整条路线重建）；
+        // 只有声明了单整数 [beast dungeon] 的入口放行该形式，其他副本仍必须给出网格内Boss。
+        var bossTokens = Required("boss map");
+        IReadOnlyList<DungeonPoint> bosses = beastGateway && bossTokens is [{ Type: 0, Value: -1 }, { Type: 0, Value: -1 }]
+            ? []
+            : Points(bossTokens, allowRepeated: true, allowOffGrid: allowOffGridBoss);
         IReadOnlyList<DungeonMap>? specification = null;
         var layered = new List<DungeonMap>();
         if (sections.TryGetValue("map specification", out var mapSection))
@@ -730,7 +879,8 @@ internal sealed class DungeonCatalog
                     throw new NotSupportedException("unsupported: map specification 的类型标记未实现");
                 string kind = resolve(values[i].Value);
                 bool weightedBoss = kind == "boss_selection_probability";
-                if (kind is not ("map" or "boss" or "layered") && !weightedBoss)
+                // 官方魔兽专属入口的预览把阶段房记作 Beast；只有 [beast dungeon] 声明的入口认这种房间。
+                if (kind is not ("map" or "boss" or "layered") && !(beastGateway && kind == "Beast") && !weightedBoss)
                     throw new NotSupportedException("unsupported: map specification 类型 " + kind);
                 if (i + (weightedBoss ? 2 : 3) >= values.Count)
                     throw new NotSupportedException("unsupported: map specification 数值不完整");

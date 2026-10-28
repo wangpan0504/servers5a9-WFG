@@ -28,12 +28,17 @@ internal static class SpecialAreaChannelTests
         That(pvf.ReadText("town/chn_teaching_xian.twn").Contains("`五陵`"), "chn_Teaching_xian.twn [name] 五陵");
         var gate = towns.Areas[(117, 0)].Gate;
         That(gate == new Location(117, 0, 474, 234), "117/0 [gate] 474 234: " + gate);
-        foreach (int level in new[] { 1, 95 })
-        {
-            var landing = ChannelAreaLanding.Decide(towns, xian, level, none);
-            That(landing.Spot == gate && landing.Reason == "area-gate" && towns.IsPosition(landing.Spot!, none),
-                $"Lv{level} 五陵频道落到 117/0 门口: {landing.Spot} {landing.Reason}");
-        }
+        // 117/0 是 Gate_Seria 桩图，唯一出门通往 1/1，进不了五陵其他区域；落点改到入口图 117/1，
+        // 落点是回赛丽亚房间的那扇门的中心（1070,213），从那里沿 [town movable area] 走进 117/2 主城。
+        var start = new Location(117, 1, 1070, 213);
+        var xianLanding = ChannelAreaLanding.Decide(towns, xian, 95, none);
+        That(xianLanding.Spot == start && xianLanding.Reason == "room-entrance" && towns.IsPosition(xianLanding.Spot!, none),
+            $"五陵频道落到 117/1 入口图: {xianLanding.Spot} {xianLanding.Reason}");
+        That(towns.Areas[(117, 1)].Map(none).Links.Any(l => l.Gate.Door && l.Town == 117 && l.Area == 2),
+            "117/1 入口图有通往五陵主城 117/2 的门");
+        var lowLevel = ChannelAreaLanding.Decide(towns, xian, 1, none);
+        That(lowLevel.Spot is null && lowLevel.Reason == "admission-target-level-required",
+            $"Lv1 五陵频道按 117/1 need level 17 拒绝: {lowLevel.Spot} {lowLevel.Reason}");
         That(!ChannelAreaLanding.IsChannelBoundTown(towns, 117), "五陵 117 有其他城镇连入，不是频道专属城镇");
         That(ChannelAreaLanding.ClientKeepsTownSnapshot(towns, xian, new(38, 0, 1, 1)) &&
             ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, gate!) &&

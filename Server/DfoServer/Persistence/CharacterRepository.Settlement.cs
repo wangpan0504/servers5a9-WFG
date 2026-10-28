@@ -82,10 +82,14 @@ internal sealed partial class CharacterRepository
         if (duplicate)
         {
             var restored = ReadCardCommit(db, tx, owner.Account, prepared, current, expected, true, gained, proficiencyGained);
-            restored = restored with { LuckyStarTotal = ReadAccountWallet(db, owner.Account, tx).RentalPoints };
+            restored = restored with { LuckyStarTotal = ReadAccountWallet(db, owner.Account, tx).RentalPoints,
+                GuildMileageGuildId = ReadGuildDungeonMileage(db, tx, prepared),
+                GuildDungeon = RestoreGuildDungeonProgress(db, tx, prepared) };
             if (prepared.Grief is { } grief)
                 restored = restored with { GriefReward = grief.Reward, MailId = ReadGriefClear(db,tx,owner,prepared),
                     Inventory = new(expected.Inventory,current.Inventory,"grief_tower_reward") };
+            if (ReadGuildDungeonReward(db, tx, owner, prepared) is { } guildMail)
+                restored = restored with { MailId = guildMail };
             tx.Commit();
             return restored;
         }
@@ -211,6 +215,12 @@ internal sealed partial class CharacterRepository
         command.ExecuteNonQuery();
         ClearOrdinaryLuke(db, tx, owner, run);
         uint? griefMail = CommitGriefClear(db,tx,owner,expected,prepared);
+        long guildNow = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var guildReward = CommitGuildDungeonReward(db, tx, owner, expected, prepared, guildNow);
+        uint guildMileageGuildId = CommitGuildDungeonMileage(db, tx, owner, run, prepared);
+        var guildContribution = CommitGuildDungeonContribution(db, tx, owner, prepared, guildReward.Contribution);
+        var guildDungeon = CommitGuildDungeonProgress(db, tx, prepared, guildNow);
+        CommitGuildRankingParty(db, tx, prepared);
         var committed = Require(db, tx, owner.Account, expected.Name);
         if (committed.Level != plan.TargetLevel || committed.Revision != plan.Revision + 1 || !SameLearning(committed.Learning, plan.Learning))
             throw new InvalidOperationException("持久通关成长结果与候选不一致");
@@ -252,8 +262,11 @@ internal sealed partial class CharacterRepository
             Adventure = adventureCommit,
             LuckyStarGained = luckyStar.Granted,
             LuckyStarTotal = luckyStar.Total,
+            GuildMileageGuildId = guildMileageGuildId,
+            GuildContribution = guildContribution,
+            GuildDungeon = guildDungeon,
             Card = prepared.Card, Options = prepared.Options,
-            GriefReward = prepared.Grief?.Reward, MailId = griefMail,
+            GriefReward = prepared.Grief?.Reward, MailId = guildReward.Mail ?? griefMail,
             BlackDiamond = prepared.Options?.BlackDiamond,
             Inventory = prepared.AncientGate is not null || prepared.Grief?.Delivery.Inventory.Changed == true || creatureInventory is { Changed: true }
                 ? new(expected.Inventory, committed.Inventory, prepared.Grief is null ? "creature_experience" : "grief_tower_reward") : null

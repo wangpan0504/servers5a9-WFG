@@ -52,7 +52,19 @@ internal sealed class PreparedDungeonDeath(ConfirmedDungeonMonsterDeath death, D
     public DungeonRunResult Result { get; } = result;
     internal int DummyStageIndex { get; } = dummyStageIndex;
     internal DfoServer.Game.TagEvildom.TagEvildomClearFact? TagEvildomClear { get; init; }
+    internal DungeonRoomClearFact? BeastRoomClear { get; init; }
+    internal BeastStageRewardPlan? BeastStageReward { get; private set; }
+    internal bool BeastStageRewardFrozen { get; private set; }
     internal int? ImperialArenaRound { get; init; }
+
+    internal void FreezeBeastStageReward(BeastStageRewardPlan? plan)
+    {
+        if (plan is not null && !ReferenceEquals(plan.Prepared, this) ||
+            BeastStageRewardFrozen && !ReferenceEquals(BeastStageReward, plan))
+            throw new InvalidOperationException("原死亡的阶段奖励规划已冻结，不能替换");
+        BeastStageReward = plan;
+        BeastStageRewardFrozen = true;
+    }
 }
 
 // 正式战斗组件持有的能力对象。协议 handler 不创建权威，也不把客户端死亡字段变成此事件。
@@ -87,9 +99,11 @@ internal sealed partial class SinglePlayerDungeonRun
     internal DfoServer.Game.Quests.QuestMarriagePartyClear? MarriagePartyClear { get; set; }
     private sealed class Room(DungeonMonsterPlan plan)
     {
-        public DungeonMonsterPlan Plan { get; } = plan;
+        public DungeonMonsterPlan Plan { get; set; } = plan;
+        public bool BattleLevelsFrozen { get; set; }
+        public MonsterAiProfile? MonsterAi { get; set; }
         public DungeonElevatorState? Elevator { get; } = DungeonElevatorState.Create(plan);
-        public DungeonAltarState? Altar { get; } = plan.Altar is { } altar ? new(altar) : null;
+        public DungeonAltarState? Altar { get; set; } = plan.Altar is { } altar ? new(altar) : null;
         public HashSet<ushort> Dead { get; } = [];
         public HashSet<ushort> Culled { get; } = [];
         public bool Loaded { get; set; }
@@ -99,6 +113,8 @@ internal sealed partial class SinglePlayerDungeonRun
     private sealed record ActionFact(DungeonRunIdentity Identity, string Kind, DungeonPoint? Target);
     private DungeonEntryPlan entry;
     private readonly DungeonCombatAuthority authority;
+    internal DungeonBattleLevelRooms BattleLevels { get; }
+    internal DungeonMonsterAiRooms MonsterAiRooms { get; }
     private readonly Dictionary<DungeonPoint, Room> rooms;
     private readonly Dictionary<DungeonMap, Room> layeredRooms;
     private readonly Room[] storyRooms;
@@ -147,6 +163,7 @@ internal sealed partial class SinglePlayerDungeonRun
     public bool InitializationCounterSupported { get; }
     public DungeonLoadingFact? LastLoadingFact { get; private set; }
     internal DungeonEntryPlan Entry => entry;
+    internal DungeonMonsterPlan CurrentMonsterPlan => current.Plan;
     internal bool HasPendingDeath => pendingDeath is not null || pendingPassiveClear is not null;
     internal bool HasPendingPassiveClear => pendingPassiveClear is not null;
     internal uint DungeonId => entry.DungeonId;
@@ -239,8 +256,12 @@ internal sealed partial class SinglePlayerDungeonRun
         return current.Dead.Add(death.MonsterKey) ? DungeonRunOutcome.Accepted : DungeonRunOutcome.Duplicate;
     }
 
-    private SinglePlayerDungeonRun(DungeonEntryPlan entry, long attempt, long epoch, DungeonFixedRoute route, DungeonCombatAuthority authority, TimeProvider? time)
+    private SinglePlayerDungeonRun(DungeonEntryPlan entry, long attempt, long epoch, DungeonFixedRoute route, DungeonCombatAuthority authority, TimeProvider? time,
+        DungeonBattleLevelSettings? battleLevels, DungeonBattleLevelRooms? sharedBattleLevels,
+        DungeonMonsterAiSettings? monsterAi, DungeonMonsterAiRooms? sharedMonsterAi)
     {
+        BattleLevels = sharedBattleLevels ?? new(battleLevels);
+        MonsterAiRooms = sharedMonsterAi ?? new(monsterAi);
         scriptedTransitLayer = ResolveScriptedTransitLayer(entry.PartyRoute ?? entry, route);
         if (scriptedTransitLayer is not null)
             entry = entry with { TerminalLayerMap = null, TerminalLayerQuestId = 0,
@@ -280,10 +301,13 @@ internal sealed partial class SinglePlayerDungeonRun
         InitializationCounterSupported = entry.InitializationCounterSupported && entry.Maze.LayeredMaps.Count == 0 && storyRooms.Length == 0 && grid.Supported;
         int positiveCells = grid.Cells?.Count(cell => cell.Index > 0) ?? 0;
         MazeInitializationThreshold = InitializationCounterSupported && positiveCells > 1 ? checked((uint)(positiveCells - 1)) : null;
+        FreezeCurrentRoom();
     }
 
     public static bool TryCreate(DungeonEntryPlan entry, long taskAttempt, long initialEpoch, DungeonFixedRoute? approvedRoute,
-        DungeonCombatAuthority? combatAuthority, out SinglePlayerDungeonRun? run, out string reason, TimeProvider? time = null)
+        DungeonCombatAuthority? combatAuthority, out SinglePlayerDungeonRun? run, out string reason, TimeProvider? time = null,
+        DungeonBattleLevelSettings? battleLevels = null, DungeonBattleLevelRooms? sharedBattleLevels = null,
+        DungeonMonsterAiSettings? monsterAi = null, DungeonMonsterAiRooms? sharedMonsterAi = null)
     {
         run = null;
         reason = "unsupported: 需要正式战斗权威及已确认门墙连接";
@@ -340,12 +364,14 @@ internal sealed partial class SinglePlayerDungeonRun
             reason = "invalid: 普通猎杀路线与原请求接取身份不一致";
             return false;
         }
-        if (entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BaseBossMap.Kind != "boss" && !(entry.IsTutorial && entry.BaseBossMap.Kind == "map") ||
+        if (entry.BeastMode != (entry.Maze.BeastLayout is not null) ||
+            entry.Maze.Width <= 0 || entry.Maze.Height <= 0 || entry.BaseBossMap.Kind != "boss" &&
+                !(entry.IsTutorial && entry.BaseBossMap.Kind == "map") && !(entry.BeastMode && entry.BaseBossMap.Kind == "Beast") ||
             entry.Maze.MapSpecification is not { Count: > 0 } maps ||
             entry.Maze.ConditionalMaps.Any(map => !map.IsConditional || entry.Maze.BossEntrance is null ||
                 !maps.Any(source => source.Position == map.Position && source.Kind == map.Kind)) ||
             maps.Any(map => map.Position.X < 0 || map.Position.Y < 0 || map.Position.X >= entry.Maze.Width || map.Position.Y >= entry.Maze.Height ||
-                map.Kind is not ("map" or "boss")) || approvedRoute.Rooms.Count == 0 ||
+                map.Kind is not ("map" or "boss") && !(entry.BeastMode && map.Kind == "Beast")) || approvedRoute.Rooms.Count == 0 ||
             approvedRoute.Rooms.Count != maps.Concat(entry.Maze.DummyStages).Concat(entry.Maze.LayeredMaps).Concat(entry.Maze.ConditionalMaps).Distinct().Count() ||
             approvedRoute.Rooms.Select(plan => plan.Room.Map).Distinct().Count() != approvedRoute.Rooms.Count ||
             approvedRoute.Rooms.Any(plan => !maps.Contains(plan.Room.Map) && !entry.Maze.DummyStages.Contains(plan.Room.Map) &&
@@ -405,7 +431,8 @@ internal sealed partial class SinglePlayerDungeonRun
             try
             {
                 // 入场与复验采用同一训练策略；普通副本继续要求完整特殊父子演员。伴侣行按同一放行集合复验。
-                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1, entry.BasisLevel,
+                resourcePlan = DungeonMonsterPlan.FromRoom(plan.Room, entry.CharacterId, 1,
+                    entry.BeastMode ? entry.MonsterBasisLevel : entry.BasisLevel,
                     includeSpecial: !entry.IsTutorial, playerTeam: entry.PlayerTeam ?? plan.PlayerTeam,
                     // 与入场规划同一判据：只有起始房间带伴侣行；放行集合已在入场规划时排除训练/练习等类型。
                     companionRows: plan.Room.Map.Id == entry.StartMap.Id ? entry.CompanionMapRows : []);
@@ -475,7 +502,8 @@ internal sealed partial class SinglePlayerDungeonRun
             reason = "invalid: 路线不可达或无可生成演员";
             return false;
         }
-        run = new(entry, taskAttempt, initialEpoch, approvedRoute, combatAuthority, time);
+        run = new(entry, taskAttempt, initialEpoch, approvedRoute, combatAuthority, time, battleLevels, sharedBattleLevels,
+            monsterAi, sharedMonsterAi);
         reason = "domain-run-created";
         return true;
     }
@@ -484,6 +512,20 @@ internal sealed partial class SinglePlayerDungeonRun
     static bool AllowedChampionPromotion(DungeonPlannedMonster planned, DungeonPlannedMonster resource, DungeonEntryPlan entry) =>
         DungeonMonsterPlan.CanBecomeChampion(resource) && !entry.NamedMonsters.Contains(resource.MonsterId) &&
         planned.SpawnType == 1 && entry.ChampionPercents.Percent(entry.Difficulty) > 0;
+
+    // 等级只在房间首次安装时冻结；AI参数每次安装都重新解析，回访不沿用上一次访问的配置。
+    // 组队各角色共享同一个冻结控制器，同房安装仍取同一份快照。
+    void FreezeCurrentRoom()
+    {
+        current.MonsterAi = MonsterAiRooms.Freeze(entry.DungeonId, current.Plan.Room.Map);
+        if (current.BattleLevelsFrozen) return;
+        current.Plan = DungeonBattleLevels.Freeze(current.Plan, BattleLevels.Freeze(entry.DungeonId, current.Plan.Room.Map));
+        if (current.Plan.Altar is { } altar) current.Altar = new(altar);
+        current.BattleLevelsFrozen = true;
+    }
+
+    // 本次房间访问冻结的AI参数；null 表示冻结时功能关闭，不发送私有包。
+    internal MonsterAiProfile? CurrentMonsterAi => current.MonsterAi;
 
     public DungeonRunResult CompleteLoading(DungeonRunIdentity expected, Guid actionId, bool hasMatchingQuest = false)
     {
@@ -552,6 +594,7 @@ internal sealed partial class SinglePlayerDungeonRun
             conditionalRooms.TryGetValue(target,out var replacement))
             next = replacement;
         current = next;
+        FreezeCurrentRoom();
         mapOperation = DungeonMapOperation.Current;
         mapPayload = replaceVisited ? DungeonMapPayload.Refresh : current.Loaded ? DungeonMapPayload.Cached : DungeonMapPayload.Build;
         pendingLayerBaseAck = null;
@@ -602,6 +645,7 @@ internal sealed partial class SinglePlayerDungeonRun
             pendingLayerBaseAck = target;
         }
         acceptedActions.Add(actionId,new(expected,kind,target)); current = next;
+        FreezeCurrentRoom();
         Phase = SinglePlayerDungeonPhase.Loading; Advance(); return Result(DungeonRunOutcome.Accepted);
     }
 
@@ -749,8 +793,16 @@ internal sealed partial class SinglePlayerDungeonRun
                 RoomClearFact = clearsQuestRoom ? new(nextIdentity,entry.DungeonId,current.Plan.Room.Map,
                     Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) : null
             }, nextStage)
-            { TagEvildomClear = tagSettles && TagEvildomAdmission is not null ? new(nextIdentity, confirmed.EventId, TagEvildomAdmission) : null,
-                ImperialArenaRound = imperialRound };
+            {
+                TagEvildomClear = tagSettles && TagEvildomAdmission is not null ? new(nextIdentity, confirmed.EventId, TagEvildomAdmission) : null,
+                // 阶段房不限于中途任务目标房；末房清退的阻挡怪也属于本次可信清房。
+                BeastRoomClear = entry.BeastMode && target.IsBlocking && current.Plan.Monsters.All(monster =>
+                    !monster.IsBlocking || monster.ObjectKey == confirmed.MonsterKey || current.Dead.Contains(monster.ObjectKey) ||
+                    current.Culled.Contains(monster.ObjectKey) || culled.Contains(monster.ObjectKey))
+                    ? new(nextIdentity, entry.DungeonId, current.Plan.Room.Map,
+                        Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) : null,
+                ImperialArenaRound = imperialRound
+            };
         return new(DungeonRunOutcome.Accepted, pendingDeath);
     }
 
@@ -1064,6 +1116,15 @@ internal sealed partial class SinglePlayerDungeonRun
 
     private bool TerminalBossCleared(ushort? preparedMonsterKey = null, bool passiveConfirmed = false)
     {
+        if (entry.BeastMode)
+        {
+            // 魔兽没有普通固定Boss点；六间阶段房全部真实清完后，最后一间才签发通关事实。
+            var stages = allRooms.Where(room => room.Plan.Room.Map.Kind == "Beast").ToArray();
+            return current.Plan.Room.Map.Kind == "Beast" && stages.Length > 0 && stages.All(room => room.Loaded &&
+                room.Plan.Monsters.Any(monster => monster.IsBlocking) && room.Plan.Monsters.All(monster =>
+                    !monster.IsBlocking || room.Dead.Contains(monster.ObjectKey) || room.Culled.Contains(monster.ObjectKey) ||
+                    ReferenceEquals(room,current) && monster.ObjectKey == preparedMonsterKey));
+        }
         if (current.Altar is { } altar)
             return IsTerminalRoom() && (altar.Completed || altar.CanComplete(current.Dead, preparedMonsterKey));
         // 正常通关由当前终点Boss死亡决定；未走过的支路不属于全图清怪要求。

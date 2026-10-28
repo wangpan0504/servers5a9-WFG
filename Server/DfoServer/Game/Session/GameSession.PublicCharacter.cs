@@ -6,7 +6,12 @@ using DfoServer.GameWorld.Adventure;
 namespace DfoServer.Game.Session;
 
 internal sealed record PublicCharacterSnapshot(Character Character, ChannelIdentity Channel, SessionPhase Phase,
-    int AdventureLevel, string AdventureName, bool PremiumPcRoom, Func<bool> IsCurrent, Func<bool> IsUnchanged);
+    int AdventureLevel, string AdventureName, bool PremiumPcRoom, Func<bool> IsCurrent, Func<bool> IsUnchanged)
+{
+    public bool ArenaSkills { get; init; }
+    public CharacterLearningState? ArenaLearning { get; init; }
+    public Character SkillCharacter => ArenaSkills ? Character with {Learning=ArenaLearning ?? DfoServer.Game.Pvp.PvpTrainingSkills.ArenaSource(Character)} : Character;
+}
 
 internal sealed partial class GameSession
 {
@@ -38,7 +43,8 @@ internal sealed partial class GameSession
                 bool Current() => owner.IsCurrent && Ready && SelectionEpoch == epoch && Selected?.Id == characterId;
                 bool Unchanged() => Current() && Phase == phase && ReferenceEquals(Selected, character);
                 return new PublicCharacterSnapshot(character, ChannelEntry?.Identity ?? default, Phase,
-                    ReadAdventureLevel(), ReadAdventureName(), PremiumPcRoom, Current, Unchanged);
+                    ReadAdventureLevel(), ReadAdventureName(), PremiumPcRoom, Current, Unchanged)
+                    {ArenaSkills=UsesArenaSkills,ArenaLearning=UsesArenaSkills ? ReadSkillLearning(character) : null};
             });
         }
         catch (InvalidOperationException error) when (error.Message == "Stale account generation")

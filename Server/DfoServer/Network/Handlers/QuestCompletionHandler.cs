@@ -23,6 +23,13 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
     public void Register(GameCommandRegistry commands) =>
         commands.Register(CmdPacketType.FINISH_QUEST, FinishAsync, nameof(QuestCompletionHandler));
 
+    // 5927「魔兽研究者凯特丽娜」是 etc/beastdungeon/beastdungeon.etc 的 [required quest index]：
+    // 完成即获得魔兽次元的挑战资格（名册 +0x493 与频道门禁都读这条完成记录）。原服在这一步弹的是
+    // 带魔兽旗帜的专属公告窗，本服没有那扇窗的字节合同；改用已实测可见的 NOTI 0x06AD 公告框
+    // （标题 + 正文 + 「确认」），文本 UTF-8，24/600 字节上限与截断由 ServerNoticePackets 统一处理。
+    const string BeastOpenNoticeTitle = "公告";
+    const string BeastOpenNoticeBody = "[魔兽的次元已开启] 前往中央公园，从「魔兽的次元」频道即可挑战魔兽地下城。";
+
     private async Task<CommandResult> FinishAsync(GameConnectionContext context, Packet packet)
     {
         if (!QuestRequests.TryFinish(packet.Body, out var request) ||
@@ -124,6 +131,10 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
             await projection.RefreshAsync(context, character, Guard, restoreCompleted: false);
         // 匹配客户端空574会清完成集合；完整任务投影最后以356恢复真实完成记录。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(character),"quest_completed_list",Guard);
+        // 魔兽资格任务交付成功后补一帧开启公告；放在完成投影之后，避免公告框被领奖窗覆盖。
+        if (QuestCharacterReward.TryBeastQualification(quests.Get(request.QuestId)))
+            await context.Notify(NotiPacketType.AAS_TIPS,
+                ServerNoticePackets.Build(BeastOpenNoticeTitle, BeastOpenNoticeBody), "quest_beast_open_notice", Guard);
         if ((commit.GoldMailId is not null || commit.ResourceMailId is not null) && receipt.Phase == DfoServer.Game.Session.SessionPhase.Town)
             await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "quest_mail_arrived", Guard);
         if (expertJobs is not null && character.ExpertJobType is >= 1 and <= 4 && commit.ExpertJobType is >= 1 and <= 4)

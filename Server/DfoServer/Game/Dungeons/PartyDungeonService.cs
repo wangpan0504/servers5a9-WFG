@@ -147,10 +147,12 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
     public PartyDungeonNotice[] Enter(GameSession leader, uint dungeon, byte difficulty,
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
-        uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null)
+        uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null,
+        bool beastMode = false)
     {
         var party = parties.Current(leader);
-        if (party is null || party.Members.Length < 2 && leader.PartyDungeon is null && leader.ReadEvildomWar() is null && !leader.HasFormalRaidSelection ||
+        if (party is null || party.Members.Length < 2 && leader.PartyDungeon is null &&
+            leader.ReadEvildomWar() is null && !leader.HasFormalRaidSelection ||
             !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, leader)) ||
             party.Members.Any(m => m.Actor.Session.Phase != SessionPhase.MapSelect &&
                 m.Actor.Session.FormalDungeonResultFocus() is null) ||
@@ -164,6 +166,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         {
             hellParty = previous.Entry.HellParty is not null || previous.Entry.IsCosmo || previous.Entry.IsInfernoParty;
             hellLegend = previous.Entry.IsHellLegend;
+            beastMode = previous.Entry.BeastMode;
             questId = leader.Selected?.ActiveMainQuests.Any(q => q.QuestId == previous.Entry.QuestId) == true
                 ? previous.Entry.QuestId : 0;
         }
@@ -176,7 +179,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             foreach (var member in party.Members.OrderBy(m => ReferenceEquals(m.Actor.Session, leader) ? 0 : 1))
             {
                 var plan = member.Actor.Session.PreparePartyDungeon(dungeon, difficulty, catalog, rooms, drops, items, pieces,
-                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, allowDimensionHidden);
+                    prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, beastMode, allowDimensionHidden);
                 if (plan is null) return [];
                 prepared.Add((member, plan));
             }
@@ -196,9 +199,13 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
                     p.Member.Actor.Session.InstallPartyDungeon(p.Preparation, committed[index], reservations[index]!, instance))).ToArray();
                 raidRun?.Install();
                 var war = warRun?.Install();
-                var entered = war is null ? notices : [..notices, ..EvildomWarNotices(party.Members, war)];
-                return GameSession.ObserveRaidPartyRun(party.Members, instance.Id, entered, observeMap: false);
+                var entered = GameSession.ObserveRaidPartyRun(party.Members, instance.Id, notices, observeMap: false);
+                return war is null ? entered : [..entered, ..EvildomWarNotices(party.Members, war)];
             });
+        }
+        catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
+        {
+            return [];
         }
         catch (Exception error) { entryFailure = error; throw; }
         finally

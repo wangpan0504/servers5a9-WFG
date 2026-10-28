@@ -211,6 +211,9 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         string ready = Path.Combine(Options.LogDirectory, "ready.json");
         if (File.Exists(ready))
             throw new InvalidOperationException("Fresh phase required");
+        // 网吧身份线上默认开；TCP 组在临时数据目录显式关闭，保持既有选角、经验和虚弱断言不随线上默认值漂移。
+        Directory.CreateDirectory(Options.DataDirectory);
+        File.WriteAllText(Path.Combine(Options.DataDirectory, "pc-room.json"), "{\"enabled\":false}");
         if (File.Exists(pvfSource) && !File.Exists(Options.PvfPath))
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Options.PvfPath)!);
@@ -228,7 +231,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 using var databaseLock = new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
                 using var log = new ServerLog(options.LogDirectory);
                 // 与正式启动装配相同的成长及冒险团目录，不能把TCP中的账号经验默默禁用。
-                var repository=new CharacterRepository(Database,quests,resources.Adventure,resources.Growth);
+                var repository=new CharacterRepository(Database,quests,resources.Adventure,resources.Growth,
+                    guildDungeonMileage: resources.ItemResources.GuildContents.DungeonMileage);
                 // 旧测试允许先种角色再由原生登录自动注册；正式账本要求账号先存在。
                 // 只补孤立的合成角色账号，不覆盖已有密码、禁用状态或 revision。
                 var authentication = new AuthenticationService(new AuthenticationRepository(Database));

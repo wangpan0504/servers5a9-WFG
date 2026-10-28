@@ -79,7 +79,7 @@ internal static class DungeonAltarPackets
             BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(at + 1), actor.ObjectKey);
             BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(at + 3), actor.Phase.MonsterId);
             body[at + 7] = actor.Rank;
-            body[at + 8] = actor.Level;
+            body[at + 8] = actor.BattleLevel;
             BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(at + 9), actor.Phase.Scale);
             BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(at + 11), actor.Phase.X);
             BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(at + 13), actor.Phase.Y);

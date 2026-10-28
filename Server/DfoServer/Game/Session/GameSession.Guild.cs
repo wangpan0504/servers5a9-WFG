@@ -6,6 +6,14 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
+    public GuildPanelQuery? CaptureGuildPanelQuery() => owner.Execute(() =>
+    {
+        if (!Ready || Selected is not { } character) return null;
+        long epoch = SelectionEpoch;
+        return new GuildPanelQuery(character.Id, () => owner.IsCurrent && Ready &&
+            SelectionEpoch == epoch && Selected?.Id == character.Id);
+    });
+
     public GuildMembershipReceipt? InstallGuildMembership(ushort characterId, GuildMembership membership) => owner.Execute(() =>
     {
         if (!Ready || Phase != SessionPhase.Town || Selected is not { } current || current.Id != characterId)

@@ -41,10 +41,17 @@ internal static class ImperialArenaTcpTests
         using (var peer = Open(fixture, gamePort: port, channelNumber: 48))
         {
             That(peer.LoginEndpoint[3] == 39, "帝国频道真实LOGIN类型39");
-            peer.Select(tagEvildom: [1403, 1400, 1632]);
+            // 首次入城编队为空时按当前角色为队首自动配队：客户端没有 runtimeActor 时头像、队伍设置和入场按钮全部失效。
+            peer.Select(tagEvildom: [1403, 1400, 1632, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[0].Body, [0, 0, 0], "帝国初始未购买日券");
             Opponents(peer.TagEvildomInfo.Single(packet => packet.Opcode == 1400).Body,
                 ImperialArenaDailyRoute.Create(catalog, ImperialArenaPeriod.At(clock.GetUtcNow())));
+            Bytes(peer.TagEvildomInfo.Single(packet => packet.Opcode == 1393).Body, [2, 0, 2, 2],
+                "自动配队取当前角色为队首、名册里第一名其他90级非决斗角色为队友");
+            That(fixture.Query("SELECT first,second FROM account_imperial_arena_configuration") is [[long seededFirst, long seededSecond]] &&
+                seededFirst == first.Id && seededSecond == second.Id, "自动配队落库稳定身份");
+            // 清空编队后仍须拒绝购券：不扣金币、不递增角色版本、不创建日券。
+            fixture.Sql("DELETE FROM account_imperial_arena_configuration");
             string noTeam = Assets();
             peer.Send(1461, [1]); peer.Expect(1, 1461, [0, 19, 0]); peer.Barrier();
             That(Assets() == noTeam && fixture.Query("SELECT count(*) FROM account_imperial_arena_days") is [[0L]],

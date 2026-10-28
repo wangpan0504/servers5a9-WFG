@@ -9,7 +9,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class TeleportHandler(TeleportService service, TownProjection town, InventoryProjection inventory,
-    TownPresence presence, ServerLog log) : IGameCommandModule
+    TownPresence presence, ServerLog log, GuildTeleportHandler? guildTeleport = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -70,6 +70,7 @@ internal sealed class TeleportHandler(TeleportService service, TownProjection to
     async Task<CommandResult> PartyAsync(GameConnectionContext context, Packet packet)
     {
         var request = TeleportRequests.Party(packet.Body);
+        if (request.Source == 0 && guildTeleport is not null) return await guildTeleport.BeginAsync(context, packet);
         var result = context.Session.TeleportSingleMemberParty(request, service, context.BlocksTownActions);
         Log(context, packet, result);
         long now = service.Clock.GetUtcNow().ToUnixTimeMilliseconds();

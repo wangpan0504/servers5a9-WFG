@@ -132,6 +132,7 @@ internal sealed partial class DungeonHandler
         if (notice.Kind == PartyDungeonNoticeKind.MemberLeft)
         {
             await context.Notify(NotiPacketType.USER_LEAVE, TownPackets.RemoveActor(notice.Peer), "party_dungeon_member_left");
+            GuildDungeonPartyBuffProjection.Post(context);
             await PublishPartyHostAsync(context, notice.Members, () => notice.Recipient.IsCurrent() &&
                 context.Session.PartyDungeon is { } instance && instance.Members.Contains(notice.Recipient));
             return;
@@ -161,9 +162,9 @@ internal sealed partial class DungeonHandler
             await PublishPartyHostAsync(context, notice.Members, Guard);
             RaidCombatProjection.Selection(context, Guard);
             // 非零15已选定NPC副本，完成队伍场景投影即可，不重新打开普通副本列表。
-            if (notice.Option == 0 && notice.Kind != PartyDungeonNoticeKind.RaidSelection)
+            if (notice.Kind != PartyDungeonNoticeKind.RaidSelection && notice.Option == 0)
                 await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(notice.LegendDungeon,
-                incompleteHellQuestMemberSlots: context.Session.IncompleteHellQuestMemberSlots()), "party_selection_notice", Guard);
+                    incompleteHellQuestMemberSlots: context.Session.IncompleteHellQuestMemberSlots()), "party_selection_notice", Guard);
             return;
         }
         if (notice.Kind == PartyDungeonNoticeKind.Death && notice.Death is { } death)
@@ -221,6 +222,7 @@ internal sealed partial class DungeonHandler
         {
             case PartyDungeonNoticeKind.Entry:
                 await town.DetachAsync(context);
+                GuildDungeonPartyBuffProjection.Post(context, clear: true);
                 if (scene.Entry.Hope is { } hope)
                     await context.Reply(CmdPacketType.ACCEPT_QUEST, QuestPackets.Accepted(hope.Acceptance.QuestId,1,[]),
                         "party_operation_hope_quest_assigned",Current);
@@ -233,6 +235,7 @@ internal sealed partial class DungeonHandler
                 await PublishPartyRosterAsync(context, notice.Members, Current);
                 await PublishPartyHostAsync(context, notice.Members, Current);
                 await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(scene.Entry), "party_dungeon_information", Current);
+                await MonsterAiProjection.SendAsync(context, scene, "party_monster_ai", Current);
                 await context.Notify(NotiPacketType.START_MAP,
                     DungeonPackets.StartMap(scene.Entry, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems), "party_start_map", Current);
                 if (DungeonPackets.HellPartyMonsterInfo(scene.Monsters) is { } entryHell)
@@ -269,6 +272,7 @@ internal sealed partial class DungeonHandler
                     await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(member.Actor.Character.Id), "party_player_state", Current);
                 // 组队副本加载确认同样重建Actor，按当前网吧身份补发特权buff。
                 await PcRoomBuffProjection.PostAsync(context, Current);
+                GuildDungeonPartyBuffProjection.Post(context);
                 if (scene.ScriptedReturnId != Guid.Empty)
                 {
                     if (published) context.Session.ConfirmScriptedReturnLoading(scene);
@@ -286,6 +290,7 @@ internal sealed partial class DungeonHandler
             case PartyDungeonNoticeKind.Move:
                 if (scene.NavigationReplay) break;
                 await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveAccepted(), "party_move_ack", Current);
+                await MonsterAiProjection.SendAsync(context, scene, "party_monster_ai", Current);
                 await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(scene.Entry, scene.Monsters, scene.MapSeed,
                     scene.Snapshot.MapOperation, scene.Snapshot.MapPayload, scene.PassiveItems), "party_next_map", Current);
                 if (DungeonPackets.HellPartyMonsterInfo(scene.Monsters) is { } moveHell && scene.Snapshot.MapPayload != DungeonMapPayload.Cached)

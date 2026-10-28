@@ -95,8 +95,15 @@ internal interface ICharacterRepository
     Character CommitFatigueConsumable(AccountOwners.Lease owner, FatigueConsumablePlan plan, DateTimeOffset now);
     Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
         WeeklyDungeonEntry? weekly = null);
+    DungeonEntryResetResult ResetDungeonEntries(AccountOwners.Lease owner);
+    DungeonEntryCommit ReserveDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
+        WeeklyDungeonEntry? weekly = null);
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务提交。
     DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge);
+    DfoServer.Game.Guild.GuildDungeonAdmission? PrepareGuildDungeonEntry(AccountOwners.Lease owner, ushort characterId,
+        uint dungeonId, DfoServer.GameWorld.Guilds.GuildDungeonCatalog catalog);
+    int ReadGuildDungeonPartyCount(AccountOwners.Lease owner, ushort characterId,
+        IReadOnlyList<DfoServer.Game.Guild.GuildDungeonMembership> frozen, IReadOnlyCollection<ushort> active);
     Guid? LoadOrdinaryLukeDropEvent(AccountOwners.Lease owner, ushort characterId, int day, int sourceMonsterId);
     OrdinaryLukeProgress LoadOrdinaryLukeProgress(AccountOwners.Lease owner, ushort characterId);
     DazzlementTowerState LoadDazzlementTower(AccountOwners.Lease owner);
@@ -141,6 +148,12 @@ internal interface ICharacterRepository
         System.Collections.Immutable.ImmutableArray<AccountIncountCharge> account = default, bool increment = true, bool check = true) =>
         throw new NotSupportedException("仓库不支持副本进入次数");
     int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) => throw new NotSupportedException("仓库不支持账号副本进入次数");
+    int LoadBeastDungeonUsed(AccountOwners.Lease owner, ushort characterId, int day, int dungeonId) =>
+        throw new NotSupportedException("仓库不支持魔兽每日次数");
+    int CommitBeastDungeonEntry(AccountOwners.Lease owner, ushort characterId, int day, int dungeonId) =>
+        throw new NotSupportedException("仓库不支持魔兽每日次数");
+    int ResetBeastDungeonDay(AccountOwners.Lease owner, ushort characterId, int day) =>
+        throw new NotSupportedException("仓库不支持魔兽每日次数");
     DfoServer.Game.Dungeons.CrackDailyState LoadCrackDaily(DfoServer.Game.Accounts.AccountOwners.Lease owner, ushort characterId, int day);
     DfoServer.Game.Dungeons.CrackDailyCommit CommitCrackClear(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.CrackDailyState state, DfoServer.Game.Inventory.Models.InventoryPlan? reward);
 }

@@ -235,7 +235,53 @@ internal static class SqliteMigrations
         new(117, "魔界大战引导模式账号周绑定", static (db, tx) => Execute(db, tx, EvildomWarGuideSchema.Table)),
         new(118, "魔界大战实验室独立奖励回执", static (db, tx) => Execute(db, tx, EvildomWarHiddenRewardSchema.Definition)),
         new(119, "副本每日每周追加入场额度", static (db, tx) => Execute(db, tx, DungeonIncountExtraSchema.Definition)),
+        // 以下为本阶段新增：公会九个分支、决斗场与总力、魔兽每日次数。
+        // 前面各分支的临时号与阶段1-8 的 107..119 冲突，统一接在队尾连续排到 143。
+        new(120, "公会成员管理与加入申请", static (db, tx) =>
+        {
+            Execute(db, tx, GuildManagementSchema.Sql);
+            Execute(db, tx, GuildApplicationsSchema.Sql);
+        }),
+        new(121, "公会仓库资产与持久回执", static (db, tx) => Execute(db, tx, GuildCargoSchema.Sql)),
+        new(122, "公会容量福利与公共积分", static (db, tx) => Execute(db, tx, GuildEconomySchema.Sql)),
+        new(123, "公会外观与自然出勤", static (db, tx) =>
+        {
+            Execute(db, tx, GuildAppearanceSchema.Sql);
+            Execute(db, tx, GuildAttendanceSchema.Sql);
+        }),
+        new(124, "公会组队传送持久回执", static (db, tx) => Execute(db, tx, GuildTeleportSchema.Sql)),
+        new(125, "公会资产请求统一去重", static (db, tx) => Execute(db, tx, GuildRequestSchema.Sql)),
+        new(126, "公会经验提交分项回执", static (db, tx) => Execute(db, tx, GuildExperienceSchema.Sql)),
+        new(127, "公会自然贡献与周结算", static (db, tx) => Execute(db, tx, GuildContributionSchema.Sql)),
+        new(128, "公会NPC升级与契约", static (db, tx) => Execute(db, tx, GuildNpcSchema.Sql)),
+        new(129, "公会经验道具持久回执", static (db, tx) => Execute(db, tx, GuildGrowthItemSchema.Sql)),
+        new(130, "守护石结晶定时制造", static (db, tx) => Execute(db, tx, GuildNpcCraftSchema.Sql)),
+        new(131, "公会推荐频道", static (db, tx) => Execute(db, tx, GuildRecommendedChannelSchema.Sql)),
+        new(132, "整局决斗结果事实回执", PvpArenaResultSchema.Upgrade),
+        new(133, "角色决斗评分与逐局结算来源", PvpRatingSchema.Upgrade),
+        new(134, "账号总力队伍及稳定角色阵容", PvpTotalTeamSchema.Upgrade),
+        new(135, "时间广场魔兽每日入场次数", static (db, tx) => Execute(db, tx, BeastDungeonEntrySchema)),
+        new(136, "公会副本净化次数与实例通关回执", static (db, tx) => Execute(db, tx, GuildDungeonProgressSchema.Definition)),
+        new(137, "角色公会红包每日购买额度", static (db, tx) => Execute(db, tx, GuildHongbaoPurchaseSchema.Definition)),
+        new(138, "总力队伍独立评分与逐局来源", PvpTotalRatingSchema.Upgrade),
+        new(139, "段位任务类型5原子交付", UpgradePvpRankQuest),
+        new(140, "公会红包发行领取与退款账本", static (db, tx) => Execute(db, tx, GuildHongbaoSchema.Definition)),
+        new(141, "公会组队排行事实与月榜快照", static (db, tx) => Execute(db, tx, GuildRankingSchema.Definition)),
+        new(142, "公会副本通关奖励与永久邮件回执", static (db, tx) => Execute(db, tx, GuildDungeonRewardSchema.Definition)),
+        new(143, "公会副本独立有效净化与闲置周期", GuildDungeonEffectiveSchema.Upgrade),
     ];
+
+    internal const string BeastDungeonEntrySchema = """
+        CREATE TABLE IF NOT EXISTS character_beast_dungeon_entries(
+            character_id INTEGER NOT NULL,
+            account TEXT NOT NULL,
+            day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day>0),
+            dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 310 AND 314),
+            used INTEGER NOT NULL CHECK(used BETWEEN 0 AND 2),
+            PRIMARY KEY(character_id,day,dungeon_id),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        """;
 
     internal const string BossSelectionBuffSchema = """
         CREATE TABLE IF NOT EXISTS character_boss_selection_buff(
@@ -686,6 +732,21 @@ internal static class SqliteMigrations
     internal static string QuestCompletionSchemaV62 => QuestCompletionSchemaV58
         .Replace("64,65,67,70", "60,64,65,67,70", StringComparison.Ordinal);
 
+    internal static string QuestCompletionSchemaV127 => QuestCompletionSchemaV62.Replace(",4,6,",",4,5,6,",StringComparison.Ordinal);
+
+    static void UpgradePvpRankQuest(SqliteConnection db,SqliteTransaction tx)
+    {
+        const string table="character_quest_completion_receipts";
+        using var query=db.CreateCommand();query.Transaction=tx;
+        query.CommandText="SELECT sql FROM sqlite_schema WHERE type='table' AND name='character_quest_completion_receipts'";
+        string actual=query.ExecuteScalar() as string ?? throw new InvalidDataException("段位任务迁移缺少领奖账本");
+        if(NormalizeTable(actual,table)==NormalizeTable(QuestCompletionSchemaV127,table)) return;
+        if(NormalizeTable(actual,table)!=NormalizeTable(QuestCompletionSchemaV62,table))
+            throw new InvalidDataException("段位任务迁移拒绝未知领奖结构");
+        ReplaceTableConstraint(db,tx,table,"condition_type IN(0,1,2,3,4,6,","condition_type IN(0,1,2,3,4,5,6,");
+        ReplaceTableConstraint(db,tx,table,"condition_type IN(0,2,4,6,","condition_type IN(0,2,4,5,6,");
+    }
+
     static void UpgradeDazzlementQuestCompletion(SqliteConnection db, SqliteTransaction tx)
     {
         const string table = "character_quest_completion_receipts";
@@ -693,8 +754,8 @@ internal static class SqliteMigrations
         query.Parameters.AddWithValue("$table", table);
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
         string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("眩惑贮藏箱领奖迁移缺少原领奖账本");
-        if (NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV62, table)) return;
-        if (NormalizeTable(actual, table) != NormalizeTable(QuestCompletionSchemaV58, table))
+        if (ReceiptShapeApplied(actual, table, QuestCompletionSchemaV62, QuestCompletionSchemaV127)) return;
+        if (!ReceiptShapeApplied(actual, table, QuestCompletionSchemaV58))
             throw new InvalidDataException("眩惑贮藏箱领奖迁移不是已确认的 v58 领奖结构");
         string updated = actual.Replace("64,65,67,70", "60,64,65,67,70", StringComparison.Ordinal);
         if (NormalizeTable(updated, table) != NormalizeTable(QuestCompletionSchemaV62, table))
@@ -723,9 +784,9 @@ internal static class SqliteMigrations
         query.Parameters.AddWithValue("$table", table);
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
         string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("副职业教程领奖迁移缺少原领奖账本");
-        if (NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV58, table) ||
-            NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV62, table)) return;
-        if (NormalizeTable(actual, table) != NormalizeTable(QuestCompletionSchemaV46, table))
+        if (ReceiptShapeApplied(actual, table, QuestCompletionSchemaV58, QuestCompletionSchemaV62,
+                QuestCompletionSchemaV127)) return;
+        if (!ReceiptShapeApplied(actual, table, QuestCompletionSchemaV46))
             throw new InvalidDataException("副职业教程领奖迁移不是已确认的 v46 领奖结构");
         // v53 阶段旁表已外键指向领奖账本，不能 DROP 重建；只把已确认的 IN 列表扩到原生类型 17。
         string updated = actual.Replace("12,19,25", "12,17,19,25", StringComparison.Ordinal);
@@ -755,8 +816,9 @@ internal static class SqliteMigrations
         query.Parameters.AddWithValue("$table",table);
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
         string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("副本列表任务迁移缺少原领奖账本");
-        if (NormalizeTable(actual,table) == NormalizeTable(QuestCompletionSchemaV46,table)) return;
-        if (NormalizeTable(actual,table) != NormalizeTable(QuestCompletionSchemaV42,table))
+        if (ReceiptShapeApplied(actual,table,QuestCompletionSchemaV46,QuestCompletionSchemaV58,
+                QuestCompletionSchemaV62,QuestCompletionSchemaV127)) return;
+        if (!ReceiptShapeApplied(actual,table,QuestCompletionSchemaV42))
             throw new InvalidDataException("副本列表任务迁移不是已确认的v45领奖结构");
         query.CommandText = """
             SELECT count(*) FROM sqlite_schema s JOIN pragma_foreign_key_list(s.name) f
@@ -812,9 +874,10 @@ internal static class SqliteMigrations
         query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
         query.Parameters.AddWithValue("$table", table);
         string actual = query.ExecuteScalar() as string ?? throw new InvalidDataException("租赁任务迁移缺少原领奖账本");
-        if (NormalizeTable(actual, table) == NormalizeTable(QuestCompletionSchemaV42, table)) return;
+        if (ReceiptShapeApplied(actual, table, QuestCompletionSchemaV42, QuestCompletionSchemaV46,
+                QuestCompletionSchemaV58, QuestCompletionSchemaV62, QuestCompletionSchemaV127)) return;
         string previous = ExperienceCapSchema.Definition(QuestCompletionSchemaV18, table);
-        if (NormalizeTable(actual, table) != NormalizeTable(previous, table))
+        if (!ReceiptShapeApplied(actual, table, previous))
             throw new InvalidDataException("租赁任务迁移不是已确认的v41领奖结构");
         query.CommandText = """
             SELECT count(*) FROM sqlite_schema s JOIN pragma_foreign_key_list(s.name) f
@@ -1469,6 +1532,15 @@ internal static class SqliteMigrations
         .Replace("\"character_dungeon_loot_receipts\"", "character_dungeon_loot_receipts")
         .Replace("\"characters\"", "characters");
 
+    // 领奖账本的后续迁移只向上追加 condition_type，后一版结构必然包含前一版的全部变更。
+    // 表已是任一后续已知结构时，本步直接视为已应用；只有未知结构才拒绝。
+    internal static bool ReceiptShapeApplied(string actual, string table, params string[] shapes)
+    {
+        string canonical = NormalizeTable(actual, table);
+        foreach (string shape in shapes) if (canonical == NormalizeTable(shape, table)) return true;
+        return false;
+    }
+
     private const string QuestCompletionSchemaV18 = """
         CREATE TABLE character_quest_completion_receipts(
           character_id INTEGER NOT NULL,account TEXT NOT NULL,
@@ -2116,7 +2188,7 @@ internal static class SqliteMigrations
             if (query.ExecuteScalar() is not string actual || NormalizeTable(actual, table) != NormalizeTable(expected, table))
                 throw new InvalidDataException("社交表的约束或外键不是已确认结构: " + table);
         }
-        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV62),
+        foreach (var (table,expected) in new[] { ("character_quest_completion_receipts",QuestCompletionSchemaV127),
             ("character_boss_selection_buff",BossSelectionBuffSchema.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_quest_clear_receipts",QuestClearSchemaV40),
             ("character_quest_lifecycle_receipts",PartyQuestLifecycleSql),
@@ -2148,6 +2220,14 @@ internal static class SqliteMigrations
             (OrdinaryLukeProgressSchema.Table,OrdinaryLukeProgressSchema.Definition),
             (OrdinaryLukeDropSchema.Table,OrdinaryLukeDropSchema.Definition),
             (DazzlementTowerSchema.Table,DazzlementTowerSchema.Definition),
+            ("marriage_records",MarriageSchema.RecordsSql),
+            ("marriage_active_members",MarriageSchema.ActiveMembersSql),
+            (PvpArenaResultSchema.Table,PvpArenaResultSchema.Definition),
+            (PvpRatingSchema.StateTable,PvpRatingSchema.StateDefinition),
+            (PvpRatingSchema.ClaimTable,PvpRatingSchema.ClaimDefinition),
+            (PvpTotalTeamSchema.Table,PvpTotalTeamSchema.Definition),
+            (PvpTotalRatingSchema.StateTable,PvpTotalRatingSchema.StateDefinition),
+            (PvpTotalRatingSchema.ClaimTable,PvpTotalRatingSchema.ClaimDefinition),
             (FatigueDailyResetSchema.Table,FatigueDailyResetSchema.Definition),
             (ServerItemUsageSchema.StateTable,ServerItemUsageSchema.StateDefinition),
             (ServerItemUsageSchema.AccountTable,ServerItemUsageSchema.AccountDefinition),
@@ -2167,7 +2247,17 @@ internal static class SqliteMigrations
             ("character_evildom_war_seats",EvildomWarRecoverySchema.Seats.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("account_evildom_war_guides",EvildomWarGuideSchema.Table.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (EvildomWarHiddenRewardSchema.Table,EvildomWarHiddenRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
-            (DungeonIncountExtraSchema.Table,DungeonIncountExtraSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) })
+            ("guild_dungeon_progress",GuildDungeonProgressSchema.Definition.Split(';')[0].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_dungeon_clear_receipts",GuildDungeonProgressSchema.Definition.Split(';')[1].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_guild_hongbao_purchases",GuildHongbaoPurchaseSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            (DungeonIncountExtraSchema.Table,DungeonIncountExtraSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_hongbao_records",GuildHongbaoSchema.Records.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_hongbao_claims",GuildHongbaoSchema.Claims.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_ranking_party_clears",GuildRankingSchema.Parties.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_ranking_months",GuildRankingSchema.Archives.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_dungeon_reward_receipts",GuildDungeonRewardSchema.Table.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_dungeon_effective_progress",GuildDungeonEffectiveSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_recommended_channels",GuildRecommendedChannelSchema.Sql.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";
@@ -2175,6 +2265,8 @@ internal static class SqliteMigrations
             if (query.ExecuteScalar() is not string actual || NormalizeTable(actual,table) != NormalizeTable(DungeonObjectKeySchema.Definition(expected, table),table))
                 throw new InvalidDataException("关键表的约束或外键不是已确认结构: " + table);
         }
+        PvpRatingSchema.ValidateIndex(db, tx);
+        PvpTotalRatingSchema.ValidateIndex(db, tx);
         using var constraints = db.CreateCommand();
         constraints.Transaction = tx;
         constraints.CommandText = """
@@ -2188,6 +2280,7 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT guild_id,region,channel FROM guild_recommended_channels LIMIT 0",
         "SELECT owner_id,target_id,kind,created,memo FROM character_social_links LIMIT 0",
         "SELECT owner_account,target_account,created,memo,group_id FROM account_social_links LIMIT 0",
         "SELECT source_account,target_account,message,created,memo,group_id FROM account_social_requests LIMIT 0",
@@ -2200,6 +2293,32 @@ internal static class SqliteMigrations
         // 公会两表由 v44 建出（`IF NOT EXISTS`），同样缺表或缺列直接拒绝启动。
         "SELECT guild_id,name,address,master_character_id,tier,level,experience,public_funds,guild_crystal,notice,memo,created_at_unix FROM guilds LIMIT 0",
         "SELECT guild_id,character_id,grade,contribution,member_memo,joined_at_unix,last_login_unix FROM guild_members LIMIT 0",
+        "SELECT guild_id,revision,promotion,tags,join_mode,webpage FROM guild_settings LIMIT 0",
+        "SELECT guild_id,revision,capacity FROM guild_cargo_state LIMIT 0",
+        "SELECT guild_id,slot_index,item_uid,account,owner_character_id FROM guild_cargo_slots LIMIT 0",
+        "SELECT id,guild_id,created_at_unix,kind,name,item_core,moved_count FROM guild_cargo_history LIMIT 0",
+        "SELECT request_id,fingerprint,account,character_id,guild_id,revision,destination_slot,created_at_unix FROM guild_cargo_receipts LIMIT 0",
+        "SELECT request_id,kind,account,character_id FROM guild_request_claims LIMIT 0",
+        "SELECT character_id,event_id,bonuses FROM guild_experience_receipts LIMIT 0",
+        "SELECT event_id,character_id,guild_id,joined_at_unix,source,business_day_unix,week_start_unix,points,created_at_unix FROM guild_contribution_events LIMIT 0",
+        "SELECT guild_id,character_id,joined_at_unix,week_start_unix,points,coins,settled_at_unix FROM guild_contribution_settlements LIMIT 0",
+        "SELECT guild_id,npc_id,level,upgrade_target,upgrade_until,contract_until FROM guild_npc_progress LIMIT 0",
+        "SELECT guild_id,npc_id,benefit_id,public_funds,reward_count,deadline,craft_id FROM guild_npc_crafts LIMIT 0",
+        "SELECT request_id,account,character_id,guild_id,joined_at,action,benefit_id,craft_id,deadline FROM guild_npc_craft_receipts LIMIT 0",
+        "SELECT craft_id,guild_id,benefit_id,reward_count,before_crystal,after_crystal,completed_at FROM guild_npc_craft_completions LIMIT 0",
+        "SELECT request_id,account,character_id,guild_id,joined_at,npc_id,action,argument,deadline FROM guild_npc_receipts LIMIT 0",
+        "SELECT request_id,account,character_id,guild_id,joined_at_unix,source_uid,source_slot,item_id,amount,before_experience,after_experience,before_level,after_level,created_at_unix FROM guild_growth_item_receipts LIMIT 0",
+        "SELECT guild_id,member_limit FROM guild_economy LIMIT 0",
+        "SELECT guild_id,type,value,expires_unix FROM guild_benefits LIMIT 0",
+        "SELECT request_id,operation,content_id,source_uid,source_slot,amount FROM guild_economy_receipts LIMIT 0",
+        "SELECT id,guild_id,character_id,character_name,kind,content_id,amount,created_at_unix FROM guild_mileage_history LIMIT 0",
+        "SELECT event_id,character_id,guild_id,amount FROM guild_economy_events LIMIT 0",
+        "SELECT guild_id,mark,aura_mark,aura_frame FROM guild_appearance LIMIT 0",
+        "SELECT guild_id,character_id,joined_at_unix,business_day_unix,observed_at_unix FROM guild_attendance LIMIT 0",
+        "SELECT request_id,account,character_id,guild_id,joined_at_unix,participants,destination FROM guild_teleport_receipts LIMIT 0",
+        "SELECT guild_id,grade,permissions,name FROM guild_roles LIMIT 0",
+        "SELECT character_id,until_unix FROM guild_membership_cooldowns LIMIT 0",
+        "SELECT guild_id,character_id,message,region,created_at_unix FROM guild_applications LIMIT 0",
         "SELECT character_id,operation_id,before_revision,revision,claimed_quests,changed_items FROM character_quest_effect_receipts LIMIT 0",
         "SELECT character_id,quest_id,operation_id FROM character_quest_special_reward_claims LIMIT 0",
         "SELECT account,item_id,count FROM account_adventure_purchases LIMIT 0",

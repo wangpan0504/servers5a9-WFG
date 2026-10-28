@@ -15,6 +15,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RemoveGuildExtensionSchema(db);
                 RewindRaidLifecycle(db);
                 Execute(db, """
                     INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)

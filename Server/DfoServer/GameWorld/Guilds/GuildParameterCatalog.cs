@@ -43,6 +43,16 @@ internal sealed partial class GuildParameterCatalog
         return levelExperience[tier * LevelPerTier + (level - 1)];
     }
 
+    public byte LevelAtExperience(int tier, long experience)
+    {
+        if (experience < 0) throw new ArgumentOutOfRangeException(nameof(experience));
+        byte level = 1;
+        while (level < LevelPerTier && experience >= LevelExperience(tier, level)) level++;
+        // 档位由守护石晋阶，经验达到后续档位门槛也不能越过晋阶步骤。
+        _ = LevelExperience(tier, level);
+        return level;
+    }
+
     static int Scalar(string text, string tag, string what)
     {
         int[] values = PvfScript.Integers(PvfScript.Section(text, tag));

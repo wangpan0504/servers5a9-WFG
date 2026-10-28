@@ -4,6 +4,7 @@ using PvfLib;
 namespace DfoServer.GameWorld.Characters;
 
 internal readonly record struct SkillPrerequisite(ushort SkillId, int Level);
+internal readonly record struct SteelLearningRule(bool Enabled, int MaximumPercent, int CostPercent, int RequiredLevelOffset);
 
 internal enum SkillType
 {
@@ -28,7 +29,7 @@ internal sealed class SkillLearningDefinition
         int[]? secondGrowtypeMaximumLevels = null, FixedSkillRule? fixedLevel = null,
         int[]? skillFitnessGrowtypes = null, int[]? skillFitnessSecondGrowtypes = null,
         bool guildSkill = false, bool expertSkill = false, int[]? tpCosts = null, ushort[]? comboSkills = null,
-        bool commandCustomizing = true, string defaultCommand = "")
+        bool commandCustomizing = true, string defaultCommand = "", SteelLearningRule? steelLearning = null)
     {
         growtypeFitness = fitness is null ? null : Array.AsReadOnly(fitness);
         IsFeatureSkill = featureSkill;
@@ -49,6 +50,7 @@ internal sealed class SkillLearningDefinition
         ComboSkills = Array.AsReadOnly(comboSkills ?? []);
         CommandCustomizing = commandCustomizing;
         DefaultCommand = defaultCommand;
+        SteelLearning = steelLearning;
         this.costs = costs is null ? null : Array.AsReadOnly(costs);
         this.maximumLevels = maximumLevels is null ? null : Array.AsReadOnly(maximumLevels);
         this.growtypeMaximumLevels = growtypeMaximumLevels is null ? null : Array.AsReadOnly(growtypeMaximumLevels);
@@ -83,6 +85,19 @@ internal sealed class SkillLearningDefinition
     public IReadOnlyList<ushort> ComboSkills { get; }
     public bool CommandCustomizing { get; }
     public string DefaultCommand { get; }
+    public SteelLearningRule? SteelLearning { get; }
+    public bool IsSteelLearning(byte growth) => SteelLearning is { Enabled: true } && !IsFeatureSkill &&
+        !SkillFitnessGrowtypes.Contains(growth & 15) &&
+        !((growth >> 4) > 0 && SkillFitnessSecondGrowtypes.Any(value => (growth >> 4) >= value));
+    // 本服兼容：保留当前成长上限，再以资源百分比限制可偷学等级；本职和通用技能不走此分支。
+    public int GetLearningMaximum(byte growth)
+    {
+        int maximum = Math.Min(GetMaximum(growth), maximumLevels![growth & 15]);
+        return IsSteelLearning(growth) ? Math.Min(maximum,
+            checked((int)((long)maximumLevels[growth & 15] * SteelLearning!.Value.MaximumPercent / 100))) : maximum;
+    }
+    public int GetNextRequiredCharacterLevel(int rank, byte growth) => checked(GetOrdinaryNextRequiredCharacterLevel(rank) +
+        (IsSteelLearning(growth) ? SteelLearning!.Value.RequiredLevelOffset : 0));
     public bool IsFeatureSkill { get; }
     public bool HasComboDeclaration { get; }
     public bool IsGuildSkill { get; }
@@ -124,7 +139,8 @@ internal sealed class SkillLearningDefinition
     public bool SupportsPointLearning => SupportsOrdinarySpLearning || SupportsTpLearning;
     public int GetPointCost(int rank, byte growth) => IsFeatureSkill
         ? SupportsTpLearning ? TpCosts[Math.Min(rank, TpCosts.Count - 1)] : throw new NotSupportedException("TP费用缺失")
-        : GetOrdinaryResourceSpCost(rank, growth & 15);
+        : IsSteelLearning(growth) ? Math.Max(1, checked((int)((long)GetOrdinaryResourceSpCost(rank, growth & 15) *
+            SteelLearning!.Value.CostPercent / 100))) : GetOrdinaryResourceSpCost(rank, growth & 15);
 
     public int GetOrdinaryResourceSpCost(int currentLearnedLevel, int growtype)
     {
@@ -259,7 +275,7 @@ internal sealed class SkillLearningCatalog
     {
         string[] tags = ["type", "skill class", "skill fitness growtype", "purchase cost", "maximum level",
             "growtype maximum level", "required level", "required level range", "pre required skill", "growtype fitness",
-            "feature skill type", "combo set", "second growtype maximum level", "fixed level skill",
+            "feature skill type", "combo set", "second growtype maximum level", "fixed level skill", "steel learning skill",
             "interval level", "add level per interval", "is apply contract skillmaster", "skill fitness second growtype", "guild skill", "expert skill", "special purchase cost", "command customizing", "command"];
         var fields = new Dictionary<string, PvfToken[]>(StringComparer.Ordinal);
         var unsupported = new List<string>();
@@ -371,11 +387,19 @@ internal sealed class SkillLearningCatalog
         bool customizing = !fields.ContainsKey("command customizing") || Scalar("command customizing") != 0;
         string command = type == SkillType.Active && customizing && fields.TryGetValue("command", out var commandTokens)
             ? ParseCommand(commandTokens, resolve) : "";
+        SteelLearningRule? steel = null;
+        if (fields.ContainsKey("steel learning skill"))
+        {
+            int[] values = Integers("steel learning skill")!;
+            if (values is not [0 or 1, >= 0 and <= 100, > 0 and <= 10000, >= 0 and <= 255])
+                throw new InvalidDataException("偷学声明必须为开关、上限比例、费用比例及等级偏移四整数");
+            steel = new(values[0] == 1,values[1],values[2],values[3]);
+        }
         return new SkillLearningDefinition(job, skillId, path, type, costs, maximum, growtype, basis, range,
             prerequisites, fitness, featureSkill, comboDeclared, unsupported.ToArray(), skillClass, skillFitnessGrowtypeCount, second, fixedLevel,
             skillFitness, secondFitness, fields.ContainsKey("guild skill"), fields.ContainsKey("expert skill"),
             fields.ContainsKey("special purchase cost") ? Integers("special purchase cost") : null,
-            combo.Select(id => (ushort)id).ToArray(), customizing, command);
+            combo.Select(id => (ushort)id).ToArray(), customizing, command, steel);
 
         int[]? Integers(string tag)
         {

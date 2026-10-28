@@ -73,7 +73,8 @@ internal static class GuildPermitTcpTests
             invitee.Expect(1, 0x02E6, [0x01]);
             uint inviteeGuild = GuildPermitTests.Entered(invitee.Expect(0, 58).Body, checked((ushort)inviteeId), "认证公会", "GuildInvitee");
             var inviteeActor = invitee.Expect(0, 2).Body;
-            GuildPermitTests.Information(invitee.Expect(0, 70).Body, "认证公会", "GuildMaster", 2, inviteeActor[3]);
+            invitee.Expect(0, 127, [4]);
+            GuildPermitTests.Information(invitee.Expect(0, 70).Body, "认证公会", "GuildMaster", 2, inviteeActor[3], online: 2);
             That(Gold(creator.Expect(0, 14).Body) == 700_000,
                 "★ 创建者连接收到建会后的金币差额（1,000,000 − 300,000），不被邀请方连接代发");
             creator.Expect(0, 0x02AE, [0x01]);
@@ -83,7 +84,8 @@ internal static class GuildPermitTcpTests
             That(GuildPermitTests.Entered(entered, checked((ushort)creatorId), "认证公会", "GuildMaster") == guildId &&
                 inviteeGuild == guildId, "创建与双方入会投影使用同一实际公会ID");
             var creatorActor = creator.Expect(0, 2).Body;
-            GuildPermitTests.Information(creator.Expect(0, 70).Body, "认证公会", "GuildMaster", 2, creatorActor[3]);
+            creator.Expect(0, 127, [1]);
+            GuildPermitTests.Information(creator.Expect(0, 70).Body, "认证公会", "GuildMaster", 2, creatorActor[3], online: 2, canInvite: 1);
             That(fixture.Query("SELECT name||':'||address||':'||master_character_id FROM guilds") is [[string guild]] &&
                 guild == "认证公会:认证公会:" + creatorId,
                 "★ 独立读库：公会行用查重过的名称建（客户端没有域名输入框，地址回退为公会名），会长是创建者");

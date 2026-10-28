@@ -22,6 +22,9 @@ internal static class ServerLogTests
                 foreach (string kind in new[] { "send", "recv", "position", "client_notice", "formal_dungeon_death" })
                     log.Write(kind, new { Body = "hidden", Connection = 1 });
                 TestCheck.That(output.ToString().Length == 0, "routine packet and hot-path events stay out of stdout");
+                TestCheck.That(ServerBuildInfo.Version.Length > 0 &&
+                    (ServerBuildInfo.Commit.Length == 0 || ServerBuildInfo.Commit.Length == 40),
+                    "构建标识只取自程序集：版本非空，提交号要么为空要么是完整 git 提交");
                 log.Write("server_ready", new { Pid = 1 });
                 log.Write("fatigue_daily_reset", new { Connection = 1, Character = 7, Day = 739916, Remaining = 156, Maximum = 156, Revision = 3 });
                 log.Write("fatigue_daily_reset_failed", new { Connection = 1, Epoch = 2, Error = "fixture" });
@@ -142,6 +145,10 @@ internal static class ServerLogTests
                 (ushort)CmdPacketType.CLIENT_SPEC_STATISTIC })
                 TestCheck.That(PacketCapture.IsAuthentication(opcode), "capture and unhandled logs share credential redaction");
             TestCheck.That(!PacketCapture.IsAuthentication(65535), "ordinary unknown packets retain their body");
+            foreach (ushort opcode in new[] { (ushort)CmdPacketType.MAKE_PVP_ROOM, (ushort)CmdPacketType.ENTER_PVP_ROOM })
+                TestCheck.That(PacketCapture.IsSensitiveCommand(opcode) &&
+                    PacketCapture.RedactedCommandBody(opcode) == "[pvp-password-redacted]",
+                    "房间收包与未处理日志使用同一密码脱敏合同");
 
             // 真实占用游戏端口，确认前一监听被释放且不发布虚假的就绪。
             var occupied = new TcpListener(IPAddress.Loopback, 0);
@@ -187,6 +194,9 @@ internal static class ServerLogTests
         public Task RunAsync(ConnectionContext connection) => Task.CompletedTask;
     }
 
+    // 探针值而不是真实 schema 版本：证明 ready.json 写的是宿主收到的参数，不是别处抄来的常量。
+    const int ProbeSaveVersion = 99;
+
     static async Task CheckListenerCancellationAsync(ServerOptions ports, string root, DfoServer.GameWorld.Channels.ChannelCatalog catalog)
     {
         foreach (bool reading in new[] { false, true })
@@ -198,7 +208,8 @@ internal static class ServerLogTests
             var channelProtocol = new WaitingProtocol();
             var gameProtocol = new WaitingProtocol();
             var options = ports with { LogDirectory = directory };
-            var host = new ServerHost(options, channelProtocol, gameProtocol, null, static () => [], () => { }, log, new GameChannelListeners(options, catalog));
+            var host = new ServerHost(options, channelProtocol, gameProtocol, null, static () => [], () => { }, log, new GameChannelListeners(options, catalog),
+                saveVersion: ProbeSaveVersion);
             Task running = host.RunAsync(stop.Token);
             using var channel = new TcpClient();
             using var game = new TcpClient();
@@ -219,6 +230,16 @@ internal static class ServerLogTests
             }
             TestCheck.That(running.IsCompletedSuccessfully && output.ToString().Contains("[stopped]") &&
                 !output.ToString().Contains("[listener_failed]"), "待接入或连接读取期间取消宿主正常结束，不记录监听失败");
+            // 构建标识随就绪文件与启动日志一起给出，启动器按它显示「版本 · 存档 · 提交号」。
+            using (var ready = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "ready.json"))))
+            {
+                var marker = ready.RootElement;
+                TestCheck.That(marker.TryGetProperty("ServerVersion", out var build) && build.ValueKind == JsonValueKind.String
+                    && marker.TryGetProperty("Commit", out var built) && built.ValueKind == JsonValueKind.String
+                    && marker.TryGetProperty("SaveVersion", out var save) && save.GetInt32() == ProbeSaveVersion
+                    && output.ToString().Contains($"SaveVersion=v{ProbeSaveVersion}"),
+                    "就绪文件与启动日志带程序版本、构建提交号与存档 schema 版本");
+            }
             if (reading)
             {
                 TestCheck.That(channelProtocol.Released && gameProtocol.Released, "宿主退出前等待频道与游戏连接清理");

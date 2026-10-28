@@ -17,10 +17,19 @@ internal static class TownTravelTests
         int checks = Count;
 
         var completed = preparation.CompletedQuests.ToHashSet();
-        That(towns.Areas.Count == 343 && towns.Areas.Keys.Select(k => k.Item1).Distinct().Count() == 65, "all matching PVF town/area rows loaded");
+        // 正式 PVF 在镇 17（SaintHorn）追加 Area5 时空之门·安魂曲（`Town/Sainthorn/TimeGateRequiemWR.map`，需 85 级、`[dungeon gate]` 26），
+        // 其余镇文件逐字节未变；基准计数随这份正式输入重钉，仍是精确等值，用于发现装载遗漏或未登记的资源变更。
+        var originalAreas = towns.Areas.Where(row => row.Key.Item1 != 51).ToArray();
+        That(originalAreas.Length == 344 && originalAreas.Select(row => row.Key.Item1).Distinct().Count() == 65,
+            "all original matching PVF town/area rows retained");
+        That(!towns.Areas.ContainsKey((51,0)) || towns.Areas.Keys.Where(key => key.Item1 == 51).Select(key => key.Item2).Order().SequenceEqual(new byte[] {0,1,2}),
+            "indexed Beast town adds all three original areas without replacing another town");
         That(towns.Areas.ContainsKey((124, 0)) && towns.Areas.ContainsKey((1, 0)) && towns.Areas.ContainsKey((60, 1)), "no main-town or area-number whitelist");
         var maps = towns.Areas.Values.SelectMany(a => a.Phases.Prepend(a.Default)).DistinctBy(m => m.Path).ToArray();
-        That(maps.Length == 352 && maps.Count(m => m.Error is not null) == 1, "all phase maps loaded and missing optional resource exposed");
+        var originalMaps = maps.Where(map => !map.Path.StartsWith("map/town/beast_centralpark/",StringComparison.OrdinalIgnoreCase)).ToArray();
+        That(originalMaps.Length == 353 && maps.Count(m => m.Error is not null) == 1, "all original phase maps retained and missing optional resource exposed");
+        That(maps.Where(map => map.Path.StartsWith("map/town/beast_centralpark/",StringComparison.OrdinalIgnoreCase)).All(map => map.Error is null),
+            "newly indexed Beast town maps must load successfully");
         That(towns.Admission(new(119, 1, 0, 0), new(119, 0, 450, 234), 95, completed).StartsWith("map-resource-missing:"), "missing map never becomes a fabricated region");
         var bridge = new Location(38, 3, 176, 154);
         var hendon = new Location(39, 0, 330, 130);

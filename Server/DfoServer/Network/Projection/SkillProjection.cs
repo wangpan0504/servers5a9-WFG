@@ -13,6 +13,11 @@ internal static class SkillProjection
     public static async Task PublishGrowthAsync(GameConnectionContext context, CharacterLearningState before,
         Character character, string skillAction, string comboAction, Func<bool> canSend)
     {
+        if(context.Session.UsesArenaSkills)
+        {
+            await PublishAsync(context,character,skillAction,comboAction,canSend);
+            return;
+        }
         before.Validate();
         character.Learning.Validate();
         if (!before.Initialized || !character.Learning.Initialized)
@@ -42,9 +47,10 @@ internal static class SkillProjection
     public static async Task PublishAsync(GameConnectionContext context, Character character, string skillAction,
         string comboAction, Func<bool>? canSend = null, Func<ushort, string>? defaultCommand = null)
     {
-        bool combos = character.Job == 9 && character.Learning.Initialized;
+        var learning=context.Session.ReadSkillLearning(character);
+        bool combos = character.Job == 9 && learning.Initialized;
         if (combos) context.Session.MarkComboRebuild();
-        await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning, defaultCommand), skillAction, canSend);
+        await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(learning, defaultCommand), skillAction, canSend);
         await PublishCombosAsync(context, character, comboAction, canSend);
         if (combos) await PublishCombosAfterRebuildAsync(context, character, comboAction, canSend);
     }
@@ -53,14 +59,14 @@ internal static class SkillProjection
     // 客户端收到后重建技能面板，随后在510回执之后本地生成排列并显示。
     public static Task PublishSkillsAsync(GameConnectionContext context, Character character, string skillAction,
         Func<bool>? canSend = null, Func<ushort, string>? defaultCommand = null) =>
-        context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning, defaultCommand), skillAction, canSend);
+        context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(context.Session.ReadSkillLearning(character), defaultCommand), skillAction, canSend);
 
     // 447首字节必须与登录初始化一致为0；实测写1会让客户端在完整技能树重放后
     // 按自动组合重建六列，把玩家自己的排列覆盖掉。
     public static Task PublishCombosAsync(GameConnectionContext context, Character character, string comboAction,
         Func<bool>? canSend = null) =>
         character.Job == 9 && character.Learning.Initialized
-            ? context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(character.Learning), comboAction, canSend)
+            ? context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(context.Session.ReadSkillLearning(character)), comboAction, canSend)
             : Task.CompletedTask;
 
     // 重建完成前客户端自动回传的508由GameSession窗口拦截；这里在窗口内补发服务端排列，
