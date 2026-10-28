@@ -63,6 +63,24 @@ internal static partial class DatabaseSchemaTests
                     "109不补造旧入场或阶段资格");
                 Check(Query(db, "SELECT revision||':'||gold FROM characters") is "7:123", "迁移不改角色资产");
             }
+            // 145只扩展已证类型约束，保留原Luke行和完整两阶段/奖励事实。
+            using (var db = Open(path))
+            {
+                Execute(db, "INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state) VALUES(1,'raid-old','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',1,'fixture/luke',1,0)");
+                using (var tx = db.BeginTransaction())
+                {
+                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_raid_runs", "CHECK(raid_type IN(0,1))", "CHECK(raid_type=1)");
+                    tx.Commit();
+                }
+                Execute(db, "PRAGMA user_version=144");
+            }
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Check(Query(db, "SELECT source FROM character_raid_runs WHERE raid_type=1") is "fixture/luke", "145升级保留原Luke身份行");
+                Execute(db, "INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state) VALUES(1,'raid-old','cccccccccccccccccccccccccccccccc',0,'fixture/anton',1,0)");
+                Check(Query(db, "SELECT count(*) FROM character_raid_runs") is 2L, "145同时支持Anton与Luke的隔离生命周期");
+            }
             string upgraded = Snapshot(path);
             _ = new CharacterRepository(path);
             Check(Snapshot(path) == upgraded, "二次正常打开不重复迁移或改旧回执");

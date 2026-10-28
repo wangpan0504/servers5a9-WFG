@@ -3,7 +3,7 @@ using PvfLib;
 
 namespace DfoServer.GameWorld.Raids;
 
-// KB-20261027T112356-3f4d3db595：仅采纳原始MAP列表中已核对当前PVF的72项，不导入整表。
+// KB-20261027T112356-3f4d3db595：仅采纳原始MAP列表中已核对当前PVF的73项，不导入整表。
 // 来源：Gloria-GK-406/DNF-JP-86-Server，提交1cff7218ddff1570dcd48eb07b779283ee7c6542，
 // Document/abyss-research-20261007/evidence/upstream-pvf-map-lst.txt，第2行。
 // 原表SHA256：f1522dfa14b5618cb4b85f3195d81cf8e62c3d3e3495123f23d14d3be0a53020。
@@ -56,6 +56,9 @@ internal static class AntonRaidMapPaths
         [19203] = "map/219_blackvolcano/19203(3,0)n.map",
         [19204] = "map/219_blackvolcano/19204(4,0)n.map",
         [19205] = "map/219_blackvolcano/19205(5,0)n.map",
+        // 同一原始MAP列表明确登记19206；当前MAP声明dungeon219、normal、BB BB，
+        // 补blackvolcano.dgn未显式指定的(0,1)起点，编号不从文件名推导。
+        [19206] = "map/219_blackvolcano/19206(6,0)s.map",
         [32200] = "map/210_close_blacksmoke/(0,0)32200_start.map",
         [32201] = "map/210_close_blacksmoke/(2,0)32201_normal.map",
         [32202] = "map/210_close_blacksmoke/(1,0)32202_normal.map",

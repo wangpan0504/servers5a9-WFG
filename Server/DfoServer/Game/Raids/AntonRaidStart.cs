@@ -52,7 +52,8 @@ internal sealed class RaidStartCommands : IDisposable
 }
 
 internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
-    TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null, bool phaseProgress = false)
+    TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null, bool phaseProgress = false,
+    AntonResourceRewards? rewards = null, LukeRaidClocks? timers = null)
 {
     public RaidChange? Leave(RaidActor actor, ushort target)
     {
@@ -86,11 +87,17 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         var now = (clock ?? TimeProvider.System).GetUtcNow();
         var reservations = PlanReservations(expected, cost, room, towns, pieces, now, out var rejection);
         if (rejection is not null) return new(19, rejection);
-        // 初始状态沿已解析的真实阶段规则；无奖励策略、MAP登记或计时驱动不授予对应资格。
-        var battle = new AntonRaidBattle(definition.Resources.Script, antonPhaseProgress: phaseProgress);
+        // 资源政策只由Runtime装配；不改变显式领域夹具或关闭阶段推进时的行为。
+        if (rewards is not null)
+            reservations = reservations.Select(row => row with { Lifecycle = new( AntonResourceRewards.Source, now,
+                Game.Dungeons.DungeonIncountPolicy.Period(now).Week, RaidRewardRules.WeeklyClearLimit) }).ToImmutableArray();
+        var battle = new AntonRaidBattle(definition.Resources.Script, antonPhaseProgress: phaseProgress, clock: clock, antonRewards: rewards);
+        var timerLease = timers?.Reserve(battle);
+        if (timers is not null && timerLease is null) return new(19, "anton-clock-capacity");
+        bool installed = false;
         try
         {
-            return AccountOwners.Lease.ExecuteRaid(reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
+            var startResult = AccountOwners.Lease.ExecuteRaid(reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
             {
                 if (registry.Find(actor)?.Started is not null) return new RaidStartResult(0, "already-started", Replay: true);
                 var combat = new List<Game.Session.GameSession.RaidCombatStartBinding>();
@@ -112,9 +119,18 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
                 }));
                 return result.Receipt is { } receipt ? result with { Receipt = receipt with { Battle = battle.View } } : result;
             });
+            if (startResult.Receipt is not null)
+            {
+                installed = true;
+                timerLease?.Activate();
+                return startResult with { Receipt = startResult.Receipt with { Battle = battle.View } };
+            }
+            return startResult;
         }
+        catch (RaidLifecycleRejectedException error) { return new(19, error.Reason); }
         catch (InvalidOperationException) when (reservations.Any(r => !r.Actor.IsCurrent))
         { return new(19, "member-owner-changed"); }
+        finally { if (!installed) timerLease?.Dispose(); }
     }
 
     internal static ImmutableArray<RaidStartReservation> PlanReservations(RaidParty expected, RaidCost cost, RaidWaitingRoom room,

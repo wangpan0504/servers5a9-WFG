@@ -8,7 +8,7 @@ internal sealed record RaidStartSettings
 {
     public int? StartMinimumOverride { get; init; }
     public bool AntonFormalEntryEnabled { get; init; }
-    // 只打开已解析的地下城状态迁移。计时原值单位未闭合，不因此发送 596 或调度超时。
+    // 打开资源状态、正式奖励和本服秒制SET/RESERVE；不发送未知计时wire或随机孵化目标。
     public bool AntonPhaseProgressEnabled { get; init; }
     public bool AntonRejoinEnabled { get; init; }
 

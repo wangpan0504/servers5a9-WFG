@@ -39,7 +39,7 @@ internal static class AntonTcpProbe
           --server-log <server.jsonl>  跑完后核对该文件里的 210 / anton_phase_progress / 586，且没有 596/597
           --stop-after start|enter|phase   默认 phase
           --steps start,enter,phase,reward,card  按顺序选择步骤；自动执行前置步骤，与 --stop-after 互斥
-                                      reward 检查重复清图；card 检查未装配奖励策略时的拒绝，不伪造成功
+                                      reward 检查重复清图；card 检查正式资源奖励、幂等回放及阶段1推进
           --seed                     只在 --data-dir 写入 85 级角色、两张 10096296 和 raid-start.json，不连接
         服务端进程的 --game-port 是频道 10。频道 19 的入口在频道目录里，不要把这两个端口当成同一个。
         隔离服示例（本轮不要执行）：
@@ -216,17 +216,16 @@ internal static class AntonTcpProbe
         }
         if (stopAfter == "card")
         {
-            // 正式开战没有安徒恩奖励策略，660 当前为 Unhandled，不能借 Luke 错误码冒充已支持。
-            foreach (byte[] request in new byte[][] { [0, 0], [0, 0], [1, 0] })
+            foreach (byte[] request in new byte[][] { [1, 0], [1, 0], [0, 0], [0, 0] })
             {
                 peer.Send(660, request);
-                var cards = Flush(peer, "660 未配置翻牌 " + Hex(request));
+                var cards = Flush(peer, "660 正式资源奖励 " + Hex(request));
                 Note(report, cards);
-                if (cards.Any(packet => packet.Opcode is 600 or 601 or 660))
-                    throw new InvalidOperationException("没有奖励策略时 660 仍返回了翻牌或结果包");
+                if (!cards.Any(packet => packet is {Kind:1,Opcode:660,Body:[1]}))
+                    throw new InvalidOperationException("正式资源奖励未确认660");
             }
-            report.CardUnavailable = true;
-            FinishStep(report, elapsed, "card", "UNIMPLEMENTED: 660 policy unavailable; no ACK/600/601; connection alive");
+            report.CardUnavailable = false;
+            FinishStep(report, elapsed, "card", "formal rewards committed; replay idempotent; phase1 entered");
         }
         peer.Send(42);
         Note(report, Flush(peer, "42 Reward 返回候战室"));
@@ -384,6 +383,7 @@ internal static class AntonTcpProbe
         var maze = definition.Mazes.FirstOrDefault(row => row.SourceOrdinal == ordinal)
             ?? definition.Mazes.FirstOrDefault(row => row.QuestConnectionTokens.Count == 0)
             ?? throw new InvalidOperationException(dungeon + " 没有可用迷宫");
+        maze = catalog.ResolveMaze(definition, maze, _ => 0);
         if (!maze.StaticTopology.Supported)
             throw new InvalidOperationException($"{dungeon} 静态路线不可用：{maze.StaticTopology.UnsupportedReason}");
         return QuestStoryRouteTests.Path(maze.StaticTopology, new DungeonPoint(x, y), new DungeonPoint(bossX, bossY));
@@ -560,6 +560,7 @@ internal static class AntonTcpProbe
                 report.Opcode586++;
                 report.States.Add(packet.Body.ToArray());
             }
+            else if (packet is { Kind: 0, Opcode: 583 }) report.Symbols.Add(packet.Body.ToArray());
             else if (packet.Opcode == 596) report.Opcode596++;
             else if (packet.Opcode == 597) report.Opcode597++;
             else if (packet.Opcode == 601) report.Opcode601++;
@@ -738,6 +739,7 @@ internal static class AntonTcpProbe
         public byte[]? LastClearCheck;
         public List<string> Steps { get; } = [];
         public List<byte[]> States { get; } = [];
+        public List<byte[]> Symbols { get; } = [];
         public List<byte[]> Maps { get; } = [];
         public string Summary() =>
             $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597} 601={Opcode601} cardUnavailable={CardUnavailable} steps={string.Join(',', Steps)}";

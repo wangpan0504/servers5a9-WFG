@@ -35,6 +35,8 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
             if (!parties.IsCurrent(party) || members.Any(member => !MemberCurrent(member))) return [];
             var battle = leader.CurrentRaidBattle(anchor.Actor);
             if (battle is not { Kind: RaidKind.Anton } || battle.Instance != start.InstanceId) return [];
+            // Reward后读取原聚合的实际phase；固定0会使已开放218/219被旧阶段授权拒绝。
+            int phase = battle.View.Phase;
             reason = "anton-entry-dungeon-not-open";
             if (!Allows(battle, dungeon)) return [];
             reason = "anton-entry-missing-maps";
@@ -42,7 +44,7 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
             var mazes = definition.Mazes.Where(maze => maze.QuestConnectionTokens.Count == 0).ToArray();
             reason = "anton-entry-maze-unproven";
             if (mazes.Length != 1) return [];
-            var selections = members.Select(member => new RaidDungeonSelection(new(start.InstanceId, member.Actor, 0,
+            var selections = members.Select(member => new RaidDungeonSelection(new(start.InstanceId, member.Actor, phase,
                 member.Squad, catalog, () => MemberCurrent(member), id => Allows(battle, id)) { Battle = battle },
                 dungeon, mazes[0].SourceOrdinal)).ToArray();
             reason = "anton-entry-authorization-changed";

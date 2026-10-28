@@ -217,7 +217,7 @@ internal static partial class AntonRaidGapTcpTests
     {
         var main = SelfTestCatalogs.Dungeons(resources.Archive);
         return RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main, resources.ItemResources.Items,
-            antonMapPath: AntonRaidMapPaths.Bind(main.MapPath)).Find(0)!.Resources!.EntryCatalog!;
+            antonMapPath: AntonRaidMapPaths.Bind(main.MapPath), antonMapPoolPaths: AntonRaidMapPaths.Paths).Find(0)!.Resources!.EntryCatalog!;
     }
 
     static string?[] Reasons(TcpTestFixture fixture, string kind) => fixture.Events()

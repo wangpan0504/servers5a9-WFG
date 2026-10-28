@@ -270,6 +270,8 @@ internal static class SqliteMigrations
         new(142, "公会副本通关奖励与永久邮件回执", static (db, tx) => Execute(db, tx, GuildDungeonRewardSchema.Definition)),
         new(143, "公会副本独立有效净化与闲置周期", GuildDungeonEffectiveSchema.Upgrade),
         new(144, "账号皮肤仓", static (db, tx) => Execute(db, tx, AccountSkinStorageSchema.Definition)),
+        new(145, "安徒恩复用两阶段通关生命周期", static (db, tx) =>
+            ReplaceTableConstraint(db, tx, "character_raid_runs", "CHECK(raid_type=1)", "CHECK(raid_type IN(0,1))")),
     ];
 
     internal static class AccountSkinStorageSchema
@@ -2216,7 +2218,7 @@ internal static class SqliteMigrations
             ("character_pvp_training_skills",PvpTrainingSkillsSchema),
             ("account_pvp_private_characters",PvpPrivateCharacterSchema),
             ("character_operation_hope_reward_receipts",OperationHopeRewardSchema.Definition),
-            ("character_raid_runs",RaidLifecycleSchema.Definition),
+            ("character_raid_runs",RaidLifecycleSchema.AntonDefinition),
             ("character_raid_reward_receipts",RaidLifecycleSchema.RewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
             (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),

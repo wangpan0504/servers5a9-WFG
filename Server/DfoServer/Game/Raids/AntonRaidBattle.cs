@@ -10,6 +10,8 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     ImmutableDictionary<RaidTimer, int> Timers)
 {
     public ImmutableDictionary<int, RaidClause> Deferred { get; init; } = ImmutableDictionary<int, RaidClause>.Empty;
+    public ImmutableDictionary<int, long> DeferredAnchors { get; init; } = ImmutableDictionary<int, long>.Empty;
+    public ImmutableDictionary<int, long> DeferredGenerations { get; init; } = ImmutableDictionary<int, long>.Empty;
     public ImmutableDictionary<int, long> DungeonGenerations { get; init; } = ImmutableDictionary<int, long>.Empty;
     public ImmutableDictionary<RaidTimer, long> TimerGenerations { get; init; } = ImmutableDictionary<RaidTimer, long>.Empty;
     public long TimerSequence { get; init; }
@@ -70,6 +72,11 @@ internal sealed partial class AntonRaidBattle
             {
                 if (!Join(actor, completion.Phases.Select(phase => phase.Rewards).ToImmutableArray())) return false;
             }
+            else if (antonRewards is not null)
+            {
+                if (!Join(actor, antonRewards.Create(actor.Session.PremiumPcRoom))) return false;
+                originalAntonMembers.Add(actor.Character, actor);
+            }
             else members.Add(actor, []);
             if (Kind == RaidKind.Luke) originalLukeMembers.Add(actor.Character, actor);
             return true;
@@ -83,7 +90,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (!members.Remove(actor)) return false;
             ReleaseDungeonActor(actor, null);
-            if (Kind == RaidKind.Luke)
+            if (Kind == RaidKind.Luke || HasAntonRewards)
             {
                 ScheduleLukeClockLocked();
             }
@@ -136,7 +143,7 @@ internal sealed partial class AntonRaidBattle
 
     public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton,
         LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null,
-        LukeFixedCardRoute? fixedRoute = null, bool antonPhaseProgress = false, LukeFacilityReportPolicy? facilities = null)
+        LukeFixedCardRoute? fixedRoute = null, bool antonPhaseProgress = false, LukeFacilityReportPolicy? facilities = null, AntonResourceRewards? antonRewards = null)
     {
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
@@ -144,6 +151,9 @@ internal sealed partial class AntonRaidBattle
         if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
         if (antonPhaseProgress && kind != RaidKind.Anton) throw new InvalidDataException("阶段推进开关只属于安徒恩");
         this.antonPhaseProgress = antonPhaseProgress;
+        if (antonRewards is not null && (kind != RaidKind.Anton || !antonPhaseProgress))
+            throw new InvalidDataException("安徒恩正式奖励要求正式阶段推进");
+        this.antonRewards = antonRewards;
         if (completion is not null && (kind != RaidKind.Luke || !ValidLukeCompletion(completion)))
             throw new InvalidDataException("卢克阶段策略不完整");
         if (revival is not null && (kind != RaidKind.Luke || script.Phases.Length != 2 || string.IsNullOrWhiteSpace(revival.Source)))
@@ -175,7 +185,7 @@ internal sealed partial class AntonRaidBattle
             definition.Dungeons.ToImmutableDictionary(d => d.Id, d => d.InitialState),
             ImmutableDictionary<RaidTimer, int>.Empty)
             { LukePhaseCoinsUsed = SupportsLukeRevival && phase == 1 ? (byte)0 : null,
-                TimerSequence = timerSequence, DungeonGenerations = Kind == RaidKind.Luke
+                TimerSequence = timerSequence, DungeonGenerations = Kind == RaidKind.Luke || HasAntonRewards
                 ? definition.Dungeons.ToImmutableDictionary(d => d.Id, d => d.InitialState == RaidDungeonState.Open ? 1L : 0L)
                 : ImmutableDictionary<int, long>.Empty }, null, null, null);
     }
@@ -216,13 +226,13 @@ internal sealed partial class AntonRaidBattle
             var after = Evaluate(before with { Dungeons = before.Dungeons.SetItem(dungeon, RaidDungeonState.Clear) }, dungeon, null, null);
             if (after.State == AntonRaidBattleState.Reward) rewardWeek ??= week;
             entries.Remove((fact.Identity.InstanceId, fact.Identity.CharacterId));
-            current = after with { Revision = before.Revision + 1 };
+            CommitBattleCandidate(before, after);
             return new(before, current);
         }
     }
 
     // 正式进图预留的 Run 带 entry.Run，旧 CompleteDungeon 故意不消费它。开关打开后才按同一规则迁移战况。
-    // 不扣 HP、不发送 596、不把 reserve 的延迟数字解释成调度。
+    // HP写入只沿资源SET，计时由Runtime拥有的有界时钟按本服秒制合同消费。
     internal AntonRaidBattleChange? CompleteAntonReservedDungeon(DungeonClearFact fact, int? week = null)
     {
         lock (gate)
@@ -234,7 +244,8 @@ internal sealed partial class AntonRaidBattle
                 entry.Identity.CharacterId != fact.Identity.CharacterId || entry.Identity.QuestId != fact.Identity.QuestId ||
                 entry.Identity.TaskAttempt != fact.Identity.TaskAttempt || fact.Identity.Epoch < entry.Identity.Epoch ||
                 entry.Phase != current.Phase || entry.Dungeon != fact.DungeonId ||
-                run.Phase != current.Phase || run.Dungeon != fact.DungeonId) return null;
+                run.Phase != current.Phase || run.Dungeon != fact.DungeonId ||
+                HasAntonRewards && run.Generation != current.DungeonGenerations.GetValueOrDefault(checked((int)run.Dungeon))) return null;
             var owner = run.Actors.FirstOrDefault(row => row.Identity == entry.Identity);
             if (owner.Actor is not { IsCurrent: true } actor) return null;
             int dungeon = checked((int)fact.DungeonId);
@@ -243,7 +254,7 @@ internal sealed partial class AntonRaidBattle
             var after = Evaluate(before with { Dungeons = before.Dungeons.SetItem(dungeon, RaidDungeonState.Clear) }, dungeon, null, null);
             run.ClearFacts.Add(actor, fact);
             if (after.State == AntonRaidBattleState.Reward) rewardWeek ??= week;
-            current = after with { Revision = before.Revision + 1 };
+            CommitBattleCandidate(before, after);
             return new(before, current);
         }
     }
@@ -307,7 +318,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (instance != Instance || revision != current.Revision || current.ClockFaulted || current.State != AntonRaidBattleState.Reward ||
+            if (instance != Instance || revision != current.Revision || pendingTransition is not null || current.ClockFaulted || current.State != AntonRaidBattleState.Reward ||
                 members.Any(member => member.Value.Length != PhaseCount) ||
                 Kind == RaidKind.Luke && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0) ||
                 !AllRewardsConfirmed(current.Phase)) return null;
@@ -342,7 +353,11 @@ internal sealed partial class AntonRaidBattle
             }
             else return null;
             var before = current;
-            CommitBattleCandidate(before, Evaluate(before with { Deferred = before.Deferred.Remove(token), Dungeons = before.Dungeons.SetItem(id, next) }, id, null, null));
+            CommitBattleCandidate(before, Evaluate(before with { Deferred = before.Deferred.Remove(token),
+                DeferredAnchors = before.DeferredAnchors.Remove(token), DeferredGenerations = before.DeferredGenerations.Remove(token),
+                DungeonGenerations = Kind == RaidKind.Anton && HasAntonRewards && next == RaidDungeonState.Open && before.Dungeons[id] != next
+                    ? before.DungeonGenerations.SetItem(id, checked(before.DungeonGenerations.GetValueOrDefault(id) + 1)) : before.DungeonGenerations,
+                Dungeons = before.Dungeons.SetItem(id, next) }, id, null, null));
             return new(before, current);
         }
     }
@@ -384,14 +399,17 @@ internal sealed partial class AntonRaidBattle
                             if (state.Dungeons[id] != next)
                             {
                                 // 同Open不续HP；真正重开才开始新目标代，旧Run不能完成新代目标。
-                                if (Kind == RaidKind.Luke && next == RaidDungeonState.Open)
+                                if (next == RaidDungeonState.Open && (Kind == RaidKind.Luke || HasAntonRewards))
                                 {
-                                    var definition = script.Phases[state.Phase].Dungeons.Single(d => d.Id == id);
-                                    bool hpChanged = state.Symbols[definition.HpSymbol] != definition.HpRaw;
-                                    state = state with { Symbols = state.Symbols.SetItem(definition.HpSymbol, definition.HpRaw),
-                                        DungeonGenerations = state.DungeonGenerations.SetItem(id,
-                                            checked(state.DungeonGenerations.GetValueOrDefault(id) + 1)) };
-                                    if (hpChanged) events.Enqueue((null, definition.HpSymbol, null, null));
+                                    state = state with { DungeonGenerations = state.DungeonGenerations.SetItem(id,
+                                        checked(state.DungeonGenerations.GetValueOrDefault(id) + 1)) };
+                                    if (Kind == RaidKind.Luke)
+                                    {
+                                        var definition = script.Phases[state.Phase].Dungeons.Single(d => d.Id == id);
+                                        bool hpChanged = state.Symbols[definition.HpSymbol] != definition.HpRaw;
+                                        state = state with { Symbols = state.Symbols.SetItem(definition.HpSymbol, definition.HpRaw) };
+                                        if (hpChanged) events.Enqueue((null, definition.HpSymbol, null, null));
+                                    }
                                 }
                                 state = state with { Dungeons = state.Dungeons.SetItem(id, next) };
                                 events.Enqueue((id, null, null, null));
@@ -408,13 +426,18 @@ internal sealed partial class AntonRaidBattle
                             break;
                         case "[clear phase]":
                             state = state with { State = AntonRaidBattleState.Reward, Timers = ImmutableDictionary<RaidTimer, int>.Empty,
-                                TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty, TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty };
+                                TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty, TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty,
+                                Deferred = Kind == RaidKind.Anton ? ImmutableDictionary<int, RaidClause>.Empty : state.Deferred,
+                                DeferredAnchors = ImmutableDictionary<int, long>.Empty, DeferredGenerations = ImmutableDictionary<int, long>.Empty };
                             break;
                         // 调度与随机目标未证实时保留待执行事实；不能静默丢弃或改为立即开图。
                         case "[reserve dungeon state]":
                         case "[open random hatchery]":
                         case "[reset sanctum object]" when Kind == RaidKind.Luke:
-                            state = state with { Deferred = state.Deferred.SetItem(action.TokenIndex, action) };
+                            state = state with { Deferred = state.Deferred.SetItem(action.TokenIndex, action),
+                                DeferredAnchors = state.DeferredAnchors.SetItem(action.TokenIndex, lukeClock.GetTimestamp()),
+                                DeferredGenerations = state.DeferredGenerations.SetItem(action.TokenIndex, checked(state.TimerSequence + 1)),
+                                TimerSequence = checked(state.TimerSequence + 1) };
                             break;
                         case "[fail phase]" when Kind == RaidKind.Luke:
                             state = state with { Deferred = state.Deferred.SetItem(action.TokenIndex, action),

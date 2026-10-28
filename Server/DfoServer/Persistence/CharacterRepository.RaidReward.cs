@@ -53,6 +53,17 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
         {
             command.CommandText += " AND raid_type=0";
             if (Convert.ToInt32(command.ExecuteScalar()) >= RaidRewardRules.WeeklyClearLimit) return null;
+            if (prepared.Source == AntonResourceRewards.Source)
+            {
+                if (prepared.Phase is not (0 or 1) || prepared.FinalPhase != (prepared.Phase == 1)) return null;
+                string prefix = prepared.Phase == 0 ? "phase0" : "phase1";
+                command.CommandText = $"SELECT {prefix}_receipt FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=0";
+                if (command.ExecuteScalar() is not string json || JsonSerializer.Deserialize<RaidPhaseEligibility>(json) is not { Eligible: true } eligibility ||
+                    eligibility.Instance != prepared.Instance || eligibility.Character != expected.Id || eligibility.Phase != prepared.Phase ||
+                    eligibility.RaidType != RaidKind.Anton || eligibility.Week != prepared.Week || eligibility.Source != prepared.Source ||
+                    eligibility.Offers.SingleOrDefault(offer => offer.Kind == prepared.Kind && offer.Card == prepared.Card) is not { } authorized ||
+                    !authorized.Grants.SequenceEqual(prepared.Grants)) return null;
+            }
         }
         else
         {

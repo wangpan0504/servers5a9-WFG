@@ -23,13 +23,15 @@ internal sealed class RaidCatalog(ImmutableDictionary<byte, RaidDefinition> defi
     public RaidCatalog PrepareResources(PvfArchive pvf, Dungeons.DungeonCatalog dungeons, Items.ItemCatalog items,
         Dungeons.DungeonRoomCatalog? rooms = null, IReadOnlyList<(int Dungeon, int MazeOrdinal)>? lukeObjectChoices = null,
         Func<int, string?>? antonMapPath = null,
-        Func<RaidDungeonCatalog, IReadOnlyList<(int Dungeon, int MazeOrdinal)>>? lukeResourceChoices = null)
+        Func<RaidDungeonCatalog, IReadOnlyList<(int Dungeon, int MazeOrdinal)>>? lukeResourceChoices = null,
+        IReadOnlyDictionary<int, string>? antonMapPoolPaths = null)
     {
         var prepared = Definitions;
         foreach (byte type in new byte[] { 0, 1 })
             if (Find(type) is { } raid)
             {
-                var resources = RaidResourceLoader.Load(pvf, raid, dungeons, items, type == 0 ? antonMapPath : null);
+                var resources = RaidResourceLoader.Load(pvf, raid, dungeons, items, type == 0 ? antonMapPath : null,
+                    type == 0 ? antonMapPoolPaths : null);
                 if (type == 1 && rooms is not null && (lukeObjectChoices is not null || lukeResourceChoices is not null) && resources.EntryCatalog is { } entry)
                     resources = resources with { LukeObjects = LukeRaidObjectCatalog.Load(pvf, entry, rooms, lukeResourceChoices?.Invoke(entry) ?? lukeObjectChoices!),
                         LukeCardSet = LukeCardSetCatalog.Load(pvf, entry, rooms) };

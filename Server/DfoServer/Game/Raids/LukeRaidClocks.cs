@@ -3,7 +3,7 @@ namespace DfoServer.Game.Raids;
 // 显式启用已支持的SET/RESET定时规则；原整数按秒解释，不开放未知界面或失败消费者。
 internal sealed record LukeRaidClockPolicy(string Source);
 
-// Runtime拥有；每实例至多一个停用/活跃timer和一个同步到期操作，不创建无界后台Task。
+// Runtime拥有，Anton复用同一有界所有者与退出回收；每实例至多一个停用/活跃timer和一个同步到期操作，不创建无界后台Task。
 internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore store, Action<string, Exception> report,
     int capacity = 64) : IAsyncDisposable
 {
@@ -121,6 +121,18 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
                     try { changed |= Battle.AcceptLukeSettlement(candidate, receipt) is not null; }
                     catch (Exception error)
                     { Battle.FaultLukeClock(this); Report("receipt", error); Dispose(); return; }
+                }
+                if (!IsStopped && Battle.PendingAntonSettlement() is { } anton)
+                {
+                    try
+                    {
+                        if (store is not IAntonRaidLifecycleStore antonStore) throw new InvalidOperationException("安徒恩时钟缺少阶段存储");
+                        Battle.AcceptAntonSettlement(anton, antonStore.CommitAntonPhase(anton)); changed = true;
+                    }
+                    catch (Exception error) when (store.IsRetryable(error))
+                    { failures = failures == int.MaxValue ? failures : failures + 1; Report("anton-settlement", error); return; }
+                    catch (Exception error)
+                    { Battle.FaultLukeClock(this); Report("anton-settlement-fault", error); Dispose(); return; }
                 }
                 failures = 0;
                 // 接管/慢连接失败只影响该接收者，不重放SQL，不把已提交奖励倒退为失败。

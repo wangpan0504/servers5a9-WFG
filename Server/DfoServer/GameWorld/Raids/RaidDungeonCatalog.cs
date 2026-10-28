@@ -7,7 +7,7 @@ namespace DfoServer.GameWorld.Raids;
 // 团本目录与普通目录隔离；安徒恩保留明确tutorial备用项，MAP只取主表或应用显式传入的有证登记。
 internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<int, DungeonDefinition> definitions,
     ImmutableArray<int> missingMaps, IReadOnlyDictionary<int, string> maps, Func<string, bool> exists, byte type = 0,
-    ImmutableDictionary<int, string>? dungeonPaths = null)
+    ImmutableDictionary<int, string>? dungeonPaths = null, DungeonMapPool? mapPool = null)
 {
     public byte Type { get; } = type;
     public RaidScript Script { get; } = script;
@@ -30,18 +30,31 @@ internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<
     public DungeonMaze ResolveMaze(DungeonMaze maze, Func<int, int>? draw) => DungeonCatalog.ResolveMapCandidates(maze,
         maps, exists, draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32);
 
+    public DungeonMaze ResolveMaze(DungeonDefinition definition, DungeonMaze maze, Func<int, int>? draw)
+    {
+        var choose = draw ?? System.Security.Cryptography.RandomNumberGenerator.GetInt32;
+        // 复用MAP自身dungeon/type/greed反向池，不按相似路径或坐标复制模板。
+        if (Type == 0 && mapPool is not null && !maze.StaticTopology.Supported)
+            maze = mapPool.Resolve(definition, maze, choose);
+        return ResolveMaze(maze, choose);
+    }
+
     public static RaidDungeonCatalog Load(PvfArchive pvf, RaidResources resources, DungeonCatalog main, byte type = 0) =>
         Load(pvf, resources, main.MapPath, type);
 
     // 显式映射也供资源修复工具校验；不扫描文件名，不将缺项补成0或按DGN编号拼路径。
-    internal static RaidDungeonCatalog Load(PvfArchive pvf, RaidResources resources, Func<int, string?> mapPath, byte type = 0)
+    internal static RaidDungeonCatalog Load(PvfArchive pvf, RaidResources resources, Func<int, string?> mapPath, byte type = 0,
+        IReadOnlyDictionary<int, string>? supplementalMaps = null)
     {
         if (type is not (0 or 1)) throw new InvalidDataException("未登记团本目录类型");
         var maps = new Dictionary<int, string>();
         var missing = ImmutableArray.CreateBuilder<int>();
-        foreach (int id in resources.Dungeons.SelectMany(row => row.MapIds).Distinct().Order())
+        foreach (int id in resources.Dungeons.SelectMany(row => row.MapIds).Concat(supplementalMaps?.Keys ?? []).Distinct().Order())
         {
-            string? path = mapPath(id);
+            string? registered = mapPath(id), supplement = supplementalMaps?.GetValueOrDefault(id);
+            if (registered is not null && supplement is not null && PvfArchive.NormalizePath(registered) != PvfArchive.NormalizePath(supplement))
+                throw new InvalidDataException("团本MAP增量登记与原目录冲突：" + id);
+            string? path = registered ?? supplement;
             if (path is null || !path.StartsWith("map/", StringComparison.Ordinal) || !pvf.Contains(path)) missing.Add(id);
             else maps.Add(id, path);
         }
@@ -59,6 +72,7 @@ internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<
                 !definition.Path.StartsWith(type == 0 ? "dungeon/anton/" : "dungeon/luke/", StringComparison.Ordinal)) continue;
             entries.Add(row.Id, definition);
         }
-        return new(resources.Script, entries.ToImmutable(), missing.ToImmutable(), maps.ToImmutableDictionary(), pvf.Contains, type, paths.ToImmutable());
+        return new(resources.Script, entries.ToImmutable(), missing.ToImmutable(), maps.ToImmutableDictionary(), pvf.Contains, type, paths.ToImmutable(),
+            type == 0 && supplementalMaps is not null ? DungeonMapPool.Load(pvf, maps) : null);
     }
 }

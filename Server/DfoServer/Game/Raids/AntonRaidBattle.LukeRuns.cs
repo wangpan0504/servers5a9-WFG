@@ -231,6 +231,17 @@ internal sealed partial class AntonRaidBattle
     {
         if (ReferenceEquals(before, candidate)) return;
         candidate = ReconcileLukeRoutes(candidate);
+        if (Kind == RaidKind.Anton && antonRewards is not null && candidate.State == AntonRaidBattleState.Reward)
+        {
+            pendingTransition = candidate;
+            _ = AntonPhaseSettlement.Capture(this, candidate.Phase);
+            current = before with { Dungeons = candidate.Dungeons, Symbols = candidate.Symbols,
+                Timers = candidate.Timers, TimerAnchors = candidate.TimerAnchors,
+                TimerGenerations = candidate.TimerGenerations, Deferred = candidate.Deferred,
+                DeferredAnchors = candidate.DeferredAnchors, DeferredGenerations = candidate.DeferredGenerations, Revision = before.Revision + 1 };
+            ScheduleLukeClockLocked();
+            return;
+        }
         if (Kind == RaidKind.Luke && candidate.State != AntonRaidBattleState.Fighting && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0 || lukeCompletion is not null))
         {
             pendingTransition = candidate;
@@ -249,6 +260,7 @@ internal sealed partial class AntonRaidBattle
 
     AntonRaidBattleChange? CommitPendingTransition()
     {
+        if (Kind == RaidKind.Anton && antonRewards is not null) return null;
         if (current.ClockFaulted || dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0 || pendingTransition is not { } pending ||
             lukeCompletion is not null && !lukePhaseCommits.ContainsKey(pending.Phase)) return null;
         var before = current;

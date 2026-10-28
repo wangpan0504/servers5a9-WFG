@@ -22,7 +22,11 @@ internal sealed record RaidRewardOffer(byte Kind, byte Card, ImmutableArray<Inve
     // 历史JSON缺属性保持null；Anton仍仅使用原8B Display。
     public LukeRewardResultSpec? LukeResult { get; init; }
 }
-internal sealed record RaidPhaseRewardPolicy(string Source, ImmutableArray<RaidRewardOffer> Offers, RaidResultDisplay Result);
+internal sealed record RaidPhaseRewardPolicy(string Source, ImmutableArray<RaidRewardOffer> Offers, RaidResultDisplay Result)
+{
+    // 正式安徒恩601业务列未闭合，保留已证587窗口，不发布占位的601字段。
+    public bool PublishResult { get; init; } = true;
+}
 internal sealed record PreparedRaidReward(Guid Instance, int Phase, byte Kind, byte Card, ushort Character,
     string Source, ImmutableArray<InventoryReward> Grants, bool FinalPhase, int Week)
 {

@@ -63,7 +63,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     int phaseSuccess = change.After.Symbols.TryGetValue("[1phase success]", out int success) ? success : -1;
                     log.Write("anton_phase_progress", new { Connection = context.Id, change.After.Phase,
                         State = change.After.State.ToString(), PhaseSuccess = phaseSuccess, Timers = change.After.Timers.Count,
-                        Deferred = change.After.Deferred.Count, TimerUnit = "unknown" });
+                        Deferred = change.After.Deferred.Count, TimerUnit = "local-seconds" });
                 }
             }
             await context.Notify(NotiPacketType.BOSS_DIE_CHECK, DungeonSettlementPackets.BossAccepted(parsed.BossKey), "raid_boss_confirmed");
