@@ -64,6 +64,15 @@ internal static class CommandLineTests
             ["--host", "127.0.0.1", "--channel-port", "24100", "--account", "antonprobe"]), "anton probe keeps connection arguments");
         That(Testing.AntonTcpProbe.IsUsageOnly([]) && Testing.AntonTcpProbe.IsUsageOnly(["--help"]) &&
             !Testing.AntonTcpProbe.IsUsageOnly(["--host", "127.0.0.1"]), "anton probe without a host does not connect");
+        foreach (string step in new[] { "start", "enter", "phase", "reward", "card" })
+            That(Testing.AntonTcpProbe.StopAfterForSteps(step) == step, "探针单步自动执行前置步骤：" + step);
+        That(Testing.AntonTcpProbe.StopAfterForSteps("start,enter,phase,reward,card") == "card", "探针完整步骤包含翻牌边界");
+        foreach (string steps in new[] { "", "start,", "card,start", "phase,phase", "unknown" })
+            Testing.TestCheck.Reject<InvalidDataException>(() => Testing.AntonTcpProbe.StopAfterForSteps(steps), "探针拒绝非法步骤：" + steps);
+        That(Testing.AntonTcpProbe.ProbeArgs.Parse(["--host", "127.0.0.1", "--channel-port", "24100", "--account", "antonprobe",
+            "--steps", "start,enter,phase,reward,card"]).StopAfter == "card", "探针CLI解析完整步骤");
+        Testing.TestCheck.Reject<InvalidDataException>(() => Testing.AntonTcpProbe.ProbeArgs.Parse(
+            ["--steps", "card", "--stop-after", "start"]), "探针两种步骤选项互斥，不能静默覆盖");
         foreach (string group in Testing.TcpRegressionTests.GroupNames)
             That(ServerCommand.Parse(["--selftest-tcp", group]).Kind == ServerCommandKind.TcpTest, "known TCP group " + group);
         foreach (string selection in new[] { "", "booster,", "booster,booster", "booster,unknown", "Booster" })

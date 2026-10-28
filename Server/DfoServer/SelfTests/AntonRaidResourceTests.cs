@@ -156,6 +156,9 @@ internal static class AntonRaidResourceTests
             string.Join(',', script.Headers.Select(field => field.Tag + "=" + string.Join('/', field.Values.Select(value => value.Number.ToString())))));
         That(script.Phases.Length == 2 && script.Symbols.Count == 41 && script.Phases.Select(p => p.Dungeons.Length).SequenceEqual(new[] { 7, 7 }) &&
             script.Phases.Select(p => p.Rules.Length).SequenceEqual(new[] { 28, 23 }), "真实两阶段14地下城51规则及41符号完整保序");
+        That(script.Phases[0].Dungeons.Select(dungeon => dungeon.Id).SequenceEqual(new[] { 210, 211, 212, 213, 214, 215, 216 }) &&
+            script.Phases[1].Dungeons.Select(dungeon => dungeon.Id).SequenceEqual(new[] { 218, 219, 220, 221, 222, 223, 224 }),
+            "真实阶段图号逐项绑定，217 不属于安徒恩脚本");
         That(script.Phases.Select(p => p.Rewards.Length).SequenceEqual(new[] { 6, 8 }) &&
             script.Phases[0].Rewards[0] == new RaidReward("party_card", -1, 100, 10304474, 0) &&
             script.Phases[1].Rewards[2] == new RaidReward("squad_item", -1, 665, 10304480, 0) && resources.MissingItems.IsEmpty,

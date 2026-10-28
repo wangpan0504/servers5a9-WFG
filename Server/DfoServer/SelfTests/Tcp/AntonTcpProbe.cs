@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -37,6 +38,8 @@ internal static class AntonTcpProbe
           --channel <号>             默认 19
           --server-log <server.jsonl>  跑完后核对该文件里的 210 / anton_phase_progress / 586，且没有 596/597
           --stop-after start|enter|phase   默认 phase
+          --steps start,enter,phase,reward,card  按顺序选择步骤；自动执行前置步骤，与 --stop-after 互斥
+                                      reward 检查重复清图；card 检查未装配奖励策略时的拒绝，不伪造成功
           --seed                     只在 --data-dir 写入 85 级角色、两张 10096296 和 raid-start.json，不连接
         服务端进程的 --game-port 是频道 10。频道 19 的入口在频道目录里，不要把这两个端口当成同一个。
         隔离服示例（本轮不要执行）：
@@ -59,7 +62,7 @@ internal static class AntonTcpProbe
             return Seed(options, parsed);
         try
         {
-            int gamePort = parsed.GamePort ?? ResolveGamePort(parsed.Host!, parsed.ChannelPort!.Value, parsed.Channel);
+            int gamePort = ResolveGamePort(parsed.Host!, parsed.ChannelPort!.Value, parsed.Channel);
             if (parsed.GamePort is { } pinned && pinned != gamePort)
                 throw new InvalidOperationException($"目录里的频道 {parsed.Channel} 端口是 {gamePort}，与 --game-port {pinned} 不一致");
             Console.WriteLine($"channel {parsed.Channel} game port {gamePort}");
@@ -69,13 +72,14 @@ internal static class AntonTcpProbe
             var catalog = EntryCatalog(archive);
             var report = Play(peer, catalog, parsed.StopAfter);
             if (parsed.ServerLog is { } log)
-                AssertLog(log, report.StartedAt);
+                AssertLog(log, report.StartedAt, report);
             Console.WriteLine(report.Summary());
             return 0;
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            Console.Error.WriteLine("FAIL " + error.Message);
+            Console.Error.WriteLine("FAIL " + error.Message +
+                "；检查本次隔离 Host 的频道目录、角色票/分队及 raid-start.json 开关，按对应 opcode 查询 server.jsonl。");
             return 1;
         }
     }
@@ -158,6 +162,7 @@ internal static class AntonTcpProbe
     internal static AntonProbeReport Play(TcpPeer peer, RaidDungeonCatalog catalog, string stopAfter = "phase")
     {
         var report = new AntonProbeReport();
+        var elapsed = Stopwatch.StartNew();
         peer.Send(833, Search(""));
         _ = Flush(peer, "833 寻找队");
         peer.Send(664, TcpPeer.Build(w => { w.Write((byte)0); w.Write(TcpPeer.Name("Probe")); w.Write(new byte[4]); }));
@@ -177,11 +182,13 @@ internal static class AntonTcpProbe
         if (place is null || place.Body[2] != 19 || place.Body[3] != 2)
             throw new InvalidOperationException("666 后没有落在 19/2");
         report.Started = true;
+        FinishStep(report, elapsed, "start", "833/664/669/666 town=19/2");
         if (stopAfter == "start")
             return report;
         RejectTail(peer, 210);
-        Enter(peer, catalog, 210, report, clear: stopAfter is "phase" or "clear210", requireClearNotice: stopAfter != "clear210");
+        Enter(peer, catalog, 210, report, clear: stopAfter != "enter", requireClearNotice: stopAfter != "clear210");
         report.Entered210 = true;
+        FinishStep(report, elapsed, "enter", "15/16/28/29 dungeon=210 Unknown21=FFFFFFFF");
         if (stopAfter == "enter")
             return report;
         if (stopAfter == "clear210")
@@ -194,14 +201,57 @@ internal static class AntonTcpProbe
         }
         ExpectClosed(peer, 211);
         foreach (int dungeon in new[] { 212, 214, 213, 215 })
-            Enter(peer, catalog, dungeon, report, clear: true, stressReward: true);
+            Enter(peer, catalog, dungeon, report, clear: true, leave: dungeon != 215);
         if (!report.Reward)
             throw new InvalidOperationException("213/215 清完后没有见到 Reward 态 587 [3,0]");
         if (report.Opcode586 == 0)
             throw new InvalidOperationException("阶段推进没有 586");
         if (report.Opcode596 != 0 || report.Opcode597 != 0 || report.Opcode601 != 0)
             throw new InvalidOperationException($"不应发送 596/597/601，实际 596={report.Opcode596} 597={report.Opcode597} 601={report.Opcode601}");
+        FinishStep(report, elapsed, "phase", "39/45/117/586/587 state=Reward phase=0");
+        if (stopAfter is "reward" or "card")
+        {
+            StressReward(peer, report, report.LastClearCheck!);
+            FinishStep(report, elapsed, "reward", "117 duplicate; 16 dungeon=216 rejected; no 600/601");
+        }
+        if (stopAfter == "card")
+        {
+            // 正式开战没有安徒恩奖励策略，660 当前为 Unhandled，不能借 Luke 错误码冒充已支持。
+            foreach (byte[] request in new byte[][] { [0, 0], [0, 0], [1, 0] })
+            {
+                peer.Send(660, request);
+                var cards = Flush(peer, "660 未配置翻牌 " + Hex(request));
+                Note(report, cards);
+                if (cards.Any(packet => packet.Opcode is 600 or 601 or 660))
+                    throw new InvalidOperationException("没有奖励策略时 660 仍返回了翻牌或结果包");
+            }
+            report.CardUnavailable = true;
+            FinishStep(report, elapsed, "card", "UNIMPLEMENTED: 660 policy unavailable; no ACK/600/601; connection alive");
+        }
+        peer.Send(42);
+        Note(report, Flush(peer, "42 Reward 返回候战室"));
         return report;
+    }
+
+    static void FinishStep(AntonProbeReport report, Stopwatch elapsed, string step, string detail)
+    {
+        report.Steps.Add(step);
+        Console.WriteLine($"STEP {step} elapsedMs={elapsed.Elapsed.TotalMilliseconds:F1} {detail}");
+        elapsed.Restart();
+    }
+
+    internal static string StopAfterForSteps(string value)
+    {
+        string[] allowed = ["start", "enter", "phase", "reward", "card"];
+        int last = -1;
+        foreach (string step in value.Split(',', StringSplitOptions.TrimEntries))
+        {
+            int index = Array.IndexOf(allowed, step);
+            if (index < 0 || index <= last)
+                throw new InvalidDataException("--steps 只接受按 start,enter,phase,reward,card 顺序排列的不重复步骤");
+            last = index;
+        }
+        return allowed[last];
     }
 
     static void RejectTail(TcpPeer peer, int dungeon)
@@ -231,7 +281,7 @@ internal static class AntonTcpProbe
     }
 
     static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear,
-        bool stressReward = false, bool requireClearNotice = true)
+        bool leave = true, bool requireClearNotice = true)
     {
         if (dungeon != 210)
         {
@@ -287,10 +337,12 @@ internal static class AntonTcpProbe
             throw new InvalidOperationException(dungeon + " 的清图没有 586，117 也没有确认");
         if (cleared.Any(p => p is { Kind: 0, Opcode: 587, Body: [3, 0] }))
             report.Reward = true;
-        if (stressReward && report.Reward)
-            StressReward(peer, report, check);
-        peer.Send(42);
-        Note(report, Flush(peer, "42 返回候战室"));
+        report.LastClearCheck = check;
+        if (leave)
+        {
+            peer.Send(42);
+            Note(report, Flush(peer, "42 返回候战室"));
+        }
     }
 
     static void ClearRoom(TcpPeer peer, byte[] map, AntonProbeReport report, out ushort bossKey, out byte bossLevel, bool bossRoom,
@@ -339,6 +391,7 @@ internal static class AntonTcpProbe
 
     static List<WirePacket> Flush(TcpPeer peer, string why)
     {
+        var elapsed = Stopwatch.StartNew();
         Console.WriteLine($"C2S 1278 barrier {why}");
         peer.Send(1278);
         var rows = new List<WirePacket>();
@@ -355,6 +408,7 @@ internal static class AntonTcpProbe
             {
                 if (packet.Body is not [1])
                     throw new InvalidOperationException(why + " 的 1278 应答不是 [1]");
+                Console.WriteLine($"  barrier complete elapsedMs={elapsed.Elapsed.TotalMilliseconds:F1}");
                 return rows;
             }
             rows.Add(packet);
@@ -370,14 +424,14 @@ internal static class AntonTcpProbe
         peer.Send(117, check);
         var again = Flush(peer, "117 Reward 重复");
         Note(report, again);
-        if (again.Any(packet => packet.Opcode is 596 or 597 or 601) || again.Any(packet => packet is { Kind: 0, Opcode: 28 or 29 }))
+        if (again.Any(packet => packet.Opcode is 586 or 587 or 596 or 597 or 600 or 601) || again.Any(packet => packet is { Kind: 0, Opcode: 28 or 29 }))
             throw new InvalidOperationException("Reward 后重复 117 发出了进图或发奖包");
         byte[] closed = (byte[])LiveSelect210.Clone();
         BinaryPrimitives.WriteUInt32LittleEndian(closed, 216);
         peer.Send(16, closed);
         var rejected = Flush(peer, "16 Reward 态进 216");
         Note(report, rejected);
-        if (rejected.Any(packet => packet.Opcode is 28 or 29 or 601 or 596 or 597))
+        if (rejected.Any(packet => packet.Opcode is 28 or 29 or 600 or 601 or 596 or 597))
             throw new InvalidOperationException("Reward 态进 216 仍发布了进图或发奖包");
         // 清图后仍在副本里，16 不在 MapSelect，当前实现不回 ACK16。连接必须还在。
         var ack = rejected.LastOrDefault(packet => packet is { Kind: 1, Opcode: 16 });
@@ -417,6 +471,14 @@ internal static class AntonTcpProbe
     internal static void EnterSquad(TcpPeer leader, TcpPeer member, RaidDungeonCatalog catalog, int dungeon,
         AntonProbeReport leaderReport, AntonProbeReport memberReport)
     {
+        if (dungeon != 210)
+        {
+            leader.Send(15, DungeonId(dungeon));
+            var selected = Flush(leader, "15 分队选择 " + dungeon);
+            _ = Barrier(member, "15 分队队员 " + dungeon);
+            if (!selected.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }))
+                throw new InvalidOperationException(dungeon + " 分队不能打开选图");
+        }
         byte[] request = (byte[])LiveSelect210.Clone();
         BinaryPrimitives.WriteUInt32LittleEndian(request, (uint)dungeon);
         leader.Send(16, request);
@@ -429,6 +491,7 @@ internal static class AntonTcpProbe
         var memberMap = witnessed.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 19);
         if (info is null || map is null || memberMap is null)
             throw new InvalidOperationException(dungeon + " 分队没有双方 28/29");
+        SameSquadMap(map, memberMap);
         leader.Send(37, new byte[8]);
         member.Send(37, new byte[8]);
         Note(leaderReport, Flush(leader, "37 加载"));
@@ -448,6 +511,7 @@ internal static class AntonTcpProbe
             Note(memberReport, memberMoved);
             map = moved.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 19)
                 ?? throw new InvalidOperationException($"{dungeon} 移动到 {path[i].X},{path[i].Y} 没有 29");
+            SameSquadMap(map, memberMoved.LastOrDefault(packet => packet is { Kind: 0, Opcode: 29 }));
             leader.Send(37, new byte[8]);
             member.Send(37, new byte[8]);
             Note(leaderReport, Flush(leader, "37 下一房"));
@@ -478,6 +542,13 @@ internal static class AntonTcpProbe
         member.Send(42);
         Note(leaderReport, Flush(leader, "42 返回候战室"));
         Note(memberReport, Barrier(member, "42 队员返回"));
+    }
+
+    static void SameSquadMap(WirePacket leader, WirePacket? member)
+    {
+        if (member is null || member.Body.Length < 19 || leader.Body[0] != member.Body[0] || leader.Body[1] != member.Body[1] ||
+            TcpPeer.U32(leader.Body, 14) != TcpPeer.U32(member.Body, 14))
+            throw new InvalidOperationException("29 分队地图键或房间坐标不同步");
     }
 
     static void Note(AntonProbeReport report, List<WirePacket> rows)
@@ -522,7 +593,7 @@ internal static class AntonTcpProbe
         throw new InvalidOperationException("名册里没有角色 " + character);
     }
 
-    static void AssertLog(string path, DateTimeOffset since)
+    static void AssertLog(string path, DateTimeOffset since, AntonProbeReport report)
     {
         string text = File.ReadAllText(path);
         bool entry = false, phase = false, send586 = false, send596 = false, send597 = false;
@@ -546,10 +617,10 @@ internal static class AntonTcpProbe
                 if (value == 597) send597 = true;
             }
         }
-        if (!entry || !phase || !send586 || send596 || send597)
+        if (report.Entered210 && !entry || report.Reward && (!phase || !send586) || send596 || send597)
             throw new InvalidOperationException(
                 $"server.jsonl 断言失败 entry210={entry} phase={phase} send586={send586} send596={send596} send597={send597}");
-        Console.WriteLine("server.jsonl: 210 accepted, anton_phase_progress, opcode 586, no 596/597");
+        Console.WriteLine($"server.jsonl: entry210={entry} phase={phase} send586={send586}, no 596/597");
     }
 
     static int Seed(ServerOptions options, ProbeArgs parsed)
@@ -663,13 +734,16 @@ internal static class AntonTcpProbe
         public int Opcode596;
         public int Opcode597;
         public int Opcode601;
+        public bool CardUnavailable;
+        public byte[]? LastClearCheck;
+        public List<string> Steps { get; } = [];
         public List<byte[]> States { get; } = [];
         public List<byte[]> Maps { get; } = [];
         public string Summary() =>
-            $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597} 601={Opcode601}";
+            $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597} 601={Opcode601} cardUnavailable={CardUnavailable} steps={string.Join(',', Steps)}";
     }
 
-    sealed record ProbeArgs(bool Seed, string? Host, int? ChannelPort, int? GamePort, string? Account, string Digest,
+    internal sealed record ProbeArgs(bool Seed, string? Host, int? ChannelPort, int? GamePort, string? Account, string Digest,
         string? Character, byte Channel, string? ServerLog, string StopAfter)
     {
         public static ProbeArgs Parse(string[] args)
@@ -678,6 +752,7 @@ internal static class AntonTcpProbe
             int? channelPort = null, gamePort = null;
             byte channel = 19;
             bool seed = false;
+            bool stopSpecified = false, stepsSpecified = false;
             for (int i = 0; i < args.Length; i++)
             {
                 string name = args[i];
@@ -694,12 +769,15 @@ internal static class AntonTcpProbe
                     case "--character": character = Next(); break;
                     case "--channel": channel = byte.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture); break;
                     case "--server-log": log = Next(); break;
-                    case "--stop-after": stop = Next(); break;
+                    case "--stop-after": stop = Next(); stopSpecified = true; break;
+                    case "--steps": stop = StopAfterForSteps(Next()); stepsSpecified = true; break;
                     default: throw new InvalidDataException("未知探针参数：" + name);
                 }
             }
-            if (stop is not ("start" or "enter" or "phase"))
-                throw new InvalidDataException("--stop-after 只能是 start、enter 或 phase");
+            if (stopSpecified && stepsSpecified)
+                throw new InvalidDataException("--steps 与 --stop-after 互斥");
+            if (stop is not ("start" or "enter" or "phase" or "reward" or "card"))
+                throw new InvalidDataException("步骤只能是 start、enter、phase、reward 或 card");
             if (!LoginCredentials.IsDigest(digest!))
                 throw new InvalidDataException("--digest 必须是 32 位十六进制");
             if (seed)

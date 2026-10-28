@@ -122,10 +122,23 @@ internal static class AntonRaidBattleTests
         var first = battle.View; battle.AdvanceAfterRewards(first.Instance, first.Revision);
         That(battle.View is { Phase: 1, State: AntonRaidBattleState.Fighting } && battle.View.Symbols["[black volcano barrier]"] == 10000,
             "真实第二阶段初始化规则安装屏障原始值");
+        That(battle.View.Dungeons.All(row => row.Value == (row.Key is 218 or 219 ? RaidDungeonState.Open : RaidDungeonState.Hide)),
+            "领域夹具跳过无策略的正式奖励门禁后，阶段1只有218/219开放");
+        Clear(218);
+        That(battle.View.Dungeons[218] == RaidDungeonState.Open && battle.View.Symbols["[218 dgn hp]"] == 0 &&
+            battle.View.State == AntonRaidBattleState.Fighting,
+            "阶段1能源218清图重开自身并清资源HP，不提前完成阶段");
+        foreach (int hatchery in new[] { 221, 222, 223, 224 })
+            That(!battle.BindDungeon(new(1, 0, 1, Guid.NewGuid(), 1), (uint)hatchery),
+                hatchery + " 未由未知计时/随机孵化动作打开时，领域层不能绑定清图");
         Clear(219);
-        That(battle.View.Dungeons[220] == RaidDungeonState.Open, "真实火山clear规则开放心脏");
+        That(battle.View.Dungeons.All(row => row.Value == (row.Key == 220 ? RaidDungeonState.Open : RaidDungeonState.Hide)),
+            "真实火山219 clear仅开放心脏220，其余阶段图全部隐藏");
         Clear(220);
         That(battle.View.State == AntonRaidBattleState.Reward, "真实心脏clear规则完成第二阶段");
+        var final = battle.View;
+        That(battle.AdvanceAfterRewards(final.Instance, final.Revision)?.After.State == AntonRaidBattleState.Completed,
+            "无人奖励策略的纯领域夹具完成第二阶段；不表示正式成员能越过奖励门禁");
         PhaseZeroResource(script);
 
         void Clear(int id)

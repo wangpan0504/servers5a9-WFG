@@ -39,7 +39,7 @@ internal static class AntonRaidCombatTcpTests
         // 两阶段都使用已有正式副本3。奖励与未知展示列为明确合成配置，不代表安徒恩自然掉落/评分。
         var battle = new AntonRaidBattle(AntonRaidBattleTests.Script(3, 3));
         var policies = Enumerable.Range(0, 2).Select(phase => new RaidPhaseRewardPolicy("fixture/explicit-raid-rewards",
-            [new(0, 2, [new(10400, 1)], [new(created.Id, 2, [new(0x71, 10400, 1, 1)])]),
+            [new(0, 2, [new(10400, 1), new(0, 123)], [new(created.Id, 2, [new(0x71, 10400, 1, 1)])]),
              new(1, 2, [new(10400, 1)], [new(created.Id, 2, [new(0x72, 10400, 1, 1)])])],
             new(0, (byte)phase, 17, 0x1234, 3, 1))).ToImmutableArray();
         That(session.AttachRaidCombat(actor, battle, policies), "正式开战夹具绑定唯一Session和显式奖励配置");
@@ -151,16 +151,24 @@ internal static class AntonRaidCombatTcpTests
                 }
                 for (byte kind = 0; kind < 2; kind++)
                 {
+                    uint goldBefore = session.Selected!.Inventory.Gold;
                     peer.Send(660, [kind, 2]);
                     var reward = Until(peer, 0, 600);
                     Bytes(reward.Body, [kind, 1, (byte)created.Id, (byte)(created.Id >> 8), 2, 1,
                         (byte)(0x71 + kind), 0xa0, 0x28, 0, 0, 1, 0, 1], "600使用安徒恩专用展示读宽");
                     Bytes(peer.Expect(1, 660).Body, [1], "660提交之后才确认成功");
+                    That(session.Selected!.Inventory.Gold == goldBefore + (kind == 0 ? 123u : 0u),
+                        "显式合成奖励按原事务提交金币，展示列不能替代实际资产");
                     if (kind == 0)
                     {
                         long revision = session.Selected!.Revision;
                         peer.Send(660, [kind, 2]); Until(peer, 0, 600); Bytes(peer.Expect(1, 660).Body, [1], "重复选同牌回放成功");
-                        That(session.Selected.Revision == revision, "重复660不再写库存或邮件");
+                        That(session.Selected.Revision == revision && session.Selected.Inventory.Gold == goldBefore + 123,
+                            "重复660不再写库存、金币或邮件");
+                        peer.Send(660, [kind, 3]);
+                        var refused = AntonTcpProbe.Barrier(peer, "660 已领取后换牌");
+                        That(refused.All(packet => packet.Opcode is not (600 or 601 or 660)) && session.Selected.Revision == revision,
+                            "同阶段换牌不回放成功、不再发奖，原连接可继续领取下一牌种");
                     }
                 }
                 Until(peer, 0, 587);
@@ -205,6 +213,14 @@ internal static class AntonRaidCombatTcpTests
             var third = second with { Instance = Guid.NewGuid() };
             That(repository.CommitRaidReward(owner, committed.Character, third, RewardPlan(committed.Character), now) is null,
                 "每周第三次最终奖励不提交资产");
+            var nextWeek = now.AddDays(7);
+            var next = third with { Week = DungeonIncountPolicy.Period(nextWeek).Week };
+            var nextCommit = new CharacterRepository(database).CommitRaidReward(owner, committed.Character, next,
+                RewardPlan(committed.Character), nextWeek);
+            That(nextCommit is { Duplicate: false } && nextCommit.Character.Revision == committed.Character.Revision + 1,
+                "重建仓储后新业务周恢复显式奖励资格，历史回执不删除；不表示正式开战已接通次数");
+            query.CommandText = "SELECT COUNT(DISTINCT week_key) FROM character_raid_reward_receipts WHERE final_phase=1";
+            That(Convert.ToInt64(query.ExecuteScalar()) == 2, "不同业务周的最终奖励回执分别保留");
             repository.Delete(owner, repository.LoadDeletionTarget(owner, created.Slot));
             query.CommandText = "SELECT (SELECT COUNT(*) FROM character_raid_reward_receipts)+(SELECT COUNT(*) FROM mailbox_attachments)";
             That(Convert.ToInt64(query.ExecuteScalar()) == 0, "删角同事务清理实际攻坚回执和满包邮件资产");
