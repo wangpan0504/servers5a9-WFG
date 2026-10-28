@@ -37,6 +37,23 @@ dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-tcp anto
 
 `MissingFormalDungeons=14` 是主 `dungeon/dungeon.lst` 没有 210–216 与 218–224。团本目录用备用脚本和显式 MAP 登记，这 14 项记在开战日志里，不拒绝这次开战，也不拒绝 210。
 
+## 安徒恩剩余缺口矩阵
+
+基线为合入 !186 后的 `e068f6c2`。表内源码路径均相对于 `Server/DfoServer/`。测试组是源码已有覆盖入口，不表示本基线或实机已通过；缺口测试可能只验证拒绝或未发包。静态地址只适用于[副本协议](../协议/副本.md)所列匹配 x86 构建。PVF、服务端策略、客户端静态反汇编和实机包是不同证据，不能互相代替。
+
+| 项目 | 主线实现位置及已有测试 | 证据和未实现原因 | 用户需采集的最小序列或断点 |
+|---|---|---|---|
+| 596/597 正式发包 | `Network/Projection/RaidCombatProjection.cs:PostState` 的597路径属于 Luke，Anton 不发；`Network/Builders/RaidCombatPackets.cs` 有既有编码。`anton-tcp-probe`、`anton-raid-phase-timer-221-224` 覆盖不发包边界。 | **UNIMPLEMENTED**：RE `02386120` 证实596读宽及 Anton 时钟消费者，597证实显示消费者，但发送时机、键与清理合同未闭合。KB-20261027T145946-bd09524b7c、KB-20261027T180344-d939ca0e3e。 | 采开战、210 clear、计时开始/重置/到期的双向包及时间；观察 `02386120`、`01DD06B0` 和 `01DD17E0` 输入、时钟与画面。 |
+| 随机目标、权重和精英 | `Game/Raids/AntonRaidBattle.cs:CompleteDeferred` 仅接受显式目标；`Game/Raids/AntonRaidBattle.AntonClocks.cs:ExpireDueAntonClockLocked` 执行已支持计时。`anton-raid-phase-timer-221-224` 不证明自然随机或刷怪。 | **UNIMPLEMENTED**：PVF 声明随机孵化场及命名怪符号，但目标候选、权重、实例生成和精英行为未证。KB-20261025T235923-1472d54bb1、KB-20261028T103456-c42b646307。 | 多轮同阶段录219计时到期前后战况包、目标、精英出现时间及画面；定位随机选取、动作消费者和生成调用栈。 |
+| PHASE BREAK TIME=600 休息转换 | `Game/Raids/AntonRaidBattle.cs:AdvanceAfterRewards` 按奖励确认推进；`anton-raid-phase-timer-221-224` 覆盖缺口，`anton-raid-phase1` 覆盖现有推进。 | **UNIMPLEMENTED**：PVF 有原值600；RE 的597 key1/state5仅证明待命显示，起算、结束或转换条件未证。KB-20261027T180344-d939ca0e3e、KB-20261028T000822-9015b0a350。 | 录阶段0结束、两次翻牌确认、休息开始/结束至阶段1的双向包、画面和时间；观察 `01DD17E0` 与阶段动作消费者。 |
+| 客户端演出 | `Network/Projection/RaidCombatProjection.cs:Notice`、`PostState` 投影现有状态，`Game/Raids/AntonResourceRewards.cs` 设置 `PublishResult=false`；`anton-tcp-probe`、`anton-raid-card600-601` 不验收自然演出。 | **UNIMPLEMENTED**：完整翻牌、成功与失败演出缺实机序列及业务值；局部 RE 消费者不能证明全部交互。KB-20261026T035322-6856b70fc3、KB-20261028T104404-8d5d899a41。 | 分录成功及超时失败，从阶段终结经587、600、601、660/ACK到界面稳定的双向帧、动作、画面和资产变化；未观察到的包标缺失。 |
+| 频道19到210 | `Game/Characters/CharacterSelection.cs`、`ChannelAreaLanding.cs:Place` 处理落点；`Network/Handlers/DungeonSelectionHandler.cs`、`Game/Raids/AntonRaidDungeonService.cs` 处理进图。`raid-channel-type`、`anton-tcp-probe` 不能证明自然操作。 | **根因未确定**：现场曾见 type `0x17`、19/0及赛丽亚画面，未达210；RE `03B87FE0` 有落点映射。#852 的 type11 不是该路径。KB-20261021T084252-621bd3de0b。 | 同连接录登录、频道目录、选角位置、1379/1426、移动、833/664/669/666、15/16到210及画面；对照成功与失败，观察 `03B87FE0`、选图发送及场景消费者。 |
+| 668 成功恢复 wire | `Network/Handlers/RaidHandler.cs:RejoinAsync`、`Game/Raids/AntonRaidRejoin.Recovery.cs:RestoreAnton` 已接状态侧恢复，仍返回错误19；`anton-raid-rejoin`、`anton-raid-rejoin-recover`、`anton-raid-rejoin-client-notify` 不证明自然成功。 | **UNIMPLEMENTED**：RE 证835→条件668及 ACK 分支，成功通知、顺序和加载时机未知；现有实机材料无成功样本，主动37不是自然恢复。KB-20261028T104121-475bd2ccbe、KB-20261027T150809-274089169c。 | 两人同团分别采候战室、稳定房、加载、奖励阶段断线至重登稳定的双向包及幸存者状态，含835/668/ACK和可能的585/586/27/28/29/37/30；观察 `023AB820`、`023AB9FA`、`02344439`、`0055D87A`。详见[采集方案](../协议/668恢复序列证据.md)。 |
+| 601 D/E/F 与 C 起止 | `Game/Raids/AntonResourceRewards.cs` 的正式策略不发布结果；`Network/Projection/RaidCombatProjection.cs:PostState` 只在存在结果时发送。`anton-raid-card600-601`、`anton-tcp-probe` 覆盖空600、禁601和回执边界。 | **UNIMPLEMENTED**：RE `023B2A54` 附近证实固定10B及显示消费，C显示分秒但起止未知，D/E/F业务来源未闭合；不能补零或发送短体。KB-20261026T063752-4691836ed4、KB-20261028T104404-8d5d899a41。 | 两阶段分别采完整587/600/601/660/ACK、所有角色画面与资产，记录开战及阶段起止时间；观察 `023B2A54` 读值和显示消费者。 |
+| 原厂计时单位 | `Game/Raids/AntonRaidBattle.LukeClocks.cs:ExpireDueLukeClock` 先检查总期限，`Game/Raids/AntonRaidBattle.AntonClocks.cs:ExpireDueAntonClockLocked` 处理局部计时；`anton-raid-phase-timer-221-224` 测本服秒制及总期限，不证明原厂单位。 | **UNIMPLEMENTED**：PVF 的2400、300、150、20等是原值；RE `042AC35B`、`042AC04C` 只证明动作记录，执行消费者未闭合。秒制是本服策略。KB-20261028T000822-9015b0a350、KB-20261028T033030-cf592ac648。 | 采阶段开始、局部触发和到期的时间戳、完整帧及界面；追踪解析结果至执行消费者和时钟比较，比较多种原值实际耗时。 |
+
+上述采集由用户在授权参考环境手动完成，先核对客户端构建，保留连接、方向及完整正文并脱敏；不可因本服探针主动发包或缺少样本推断原厂行为。总期限已在主线实现并由独立计时组覆盖，但不包含在 `anton-raid-phase1` 单组的验收范围内。
+
 ## 实机缺口与采集
 
 隔离 TCP 探针能到 210，不证明客户端自然操作能到 210。既有现场记录显示频道 19 的 type 为 23（`0x17`），服务端位置为 19/0 时画面仍为赛丽亚房间；该记录没有达到开战和 210，原因未确定。远古频道 type 11 的落点修复（#852 / !178）不是频道 19 的证据，也不能据此认定此问题已修复。
