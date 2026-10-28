@@ -13,6 +13,7 @@ internal static class SelfTestRunner
 {
     public static async Task RunCoreAsync()
     {
+        if (await LukeRewardRestartTests.TryRunWorkerAsync()) return;
         ClientRequestSequenceTests.RunCore();
         EquipmentPowerScoreTests.RunCore();
         EquipmentInvestmentScoreTests.RunCore();
