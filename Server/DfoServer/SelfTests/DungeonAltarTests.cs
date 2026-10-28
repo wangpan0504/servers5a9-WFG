@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Network.Handlers;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
@@ -16,6 +18,20 @@ internal static class DungeonAltarTests
     {
         int before = Count;
         DungeonEnterCountTests.RunCore();
+        CurrencyKind[] changed = [CurrencyKind.Gold, CurrencyKind.ClearCube, CurrencyKind.Gold,
+            CurrencyKind.ClearCube, CurrencyKind.ReviveCoin, CurrencyKind.Cera];
+        That(DungeonHandler.EntryCurrencySlots(changed, new HashSet<short> { 0 }).SequenceEqual(
+            new InventorySlot[] { new(InventoryListType.Main, 358), new(InventoryListType.Main, 1) }),
+            "祭坛只排除已投影金币，其它槽按原顺序去重，点券不混入背包槽");
+        That(DungeonHandler.EntryCurrencySlots(changed, new HashSet<short>()).SequenceEqual(
+            new InventorySlot[] { new(InventoryListType.Main, 0), new(InventoryListType.Main, 358), new(InventoryListType.Main, 1) }),
+            "普通或免费祭坛未提前投影金币时仍保留通用金币差量");
+        That(DungeonHandler.EntryCurrencySlots([CurrencyKind.Gold], new HashSet<short> { 0 }).Length == 0 &&
+            DungeonHandler.EntryCurrencySlots([], new HashSet<short>()).Length == 0,
+            "已发布纯金币或空差量不重复签发14");
+        That(DungeonHandler.EntryCurrencySlots(changed, new HashSet<short> { 0, 358 }).SequenceEqual(
+            new InventorySlot[] { new(InventoryListType.Main, 1) }),
+            "统一入口保留入场票、频道、深渊与强袭已投影槽排除，不退化为仅过滤金币");
         That(DungeonAltarRewardPolicy.GoldAmount(new(70, 10000, 20), 7f, 1.02f, 0.1f, 0) == 26985 &&
             DungeonAltarRewardPolicy.GoldAmount(new(70, 10000, 20), 7f, 1.02f, 0.1f, -20) == 21588 &&
             DungeonAltarRewardPolicy.GoldAmount(new(70, 10000, 20), 7f, 1.02f, 0.1f, 20) == 32382,

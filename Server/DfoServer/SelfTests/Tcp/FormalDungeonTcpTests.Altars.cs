@@ -7,6 +7,7 @@ using DfoServer.GameWorld.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Skills;
 using DfoServer.Persistence;
+using DfoServer.Network.Builders.Inventory;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -68,7 +69,10 @@ internal static partial class FormalDungeonTcpTests
             var info = peer.Expect(0,212).Body;
             var map = peer.Expect(0,211).Body;
             int fee = id==11006?22000:0;
-            if (fee>0) peer.Expect(0,14);
+            if (fee>0)
+                That(peer.Expect(0,14).Body.SequenceEqual(InventoryPackets.Delta(created.Inventory with { Gold = checked((uint)(500000-fee)) },
+                    InventoryListType.Main, [new(InventoryListType.Main, 0)])),
+                    "祭坛入场14仅投影已提交绝对金币余额，后续屏障拒绝重复金币通知");
             That(info.Length==12 && U32(info,0)==id && map.Length==15 && map[7]==1 &&
                 fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id) is [[long gold]] && gold==500000-fee,
                 "实际CMD16按212→211接入祭坛，金币只扣本次资源费用");

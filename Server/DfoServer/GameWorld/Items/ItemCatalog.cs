@@ -19,6 +19,8 @@ internal sealed partial class ItemCatalog
     readonly EchonEquipmentCatalog? echon;
     readonly EchonEquipmentCatalog? newEchon;
     readonly ConcurrentDictionary<int, ItemTemplate> templates = new();
+    readonly object dropCandidatesGate = new();
+    ImmutableArray<ItemTemplate> dropCandidateSnapshot;
     readonly ConcurrentDictionary<int, Lazy<ItemTemplate>> pendingTemplates = new();
     readonly ConcurrentDictionary<int, QuestTicketDefinition> questTickets = new();
     readonly ConcurrentDictionary<int, Lazy<LevelUpTicketDefinition?>> levelUpTickets = new();
@@ -104,11 +106,13 @@ internal sealed partial class ItemCatalog
         talismanPool = new(BuildTalismanPool);
     }
 
-    public ItemTemplate Get(int id)
+    public ItemTemplate Get(int id) => Get(id, null);
+
+    ItemTemplate Get(int id, PvfDocument? parsed)
     {
         if (templates.TryGetValue(id, out var template))
             return template;
-        var pending = pendingTemplates.GetOrAdd(id, key => new(() => templates.GetOrAdd(key, Load)));
+        var pending = pendingTemplates.GetOrAdd(id, key => new(() => templates.GetOrAdd(key, itemId => Load(itemId, parsed))));
         try { return pending.Value; }
         finally
         {
@@ -136,8 +140,13 @@ internal sealed partial class ItemCatalog
     /// </summary>
     internal void PrefillTemplates(IEnumerable<KeyValuePair<int, ItemTemplate>> prefilled)
     {
-        foreach (var (id, template) in prefilled)
-            templates[id] = template;
+        lock (dropCandidatesGate)
+        {
+            // 枚举器中途失败也可能已覆盖部分模板，必须先失效，不能留下过期成功快照。
+            dropCandidateSnapshot = default;
+            foreach (var (id, template) in prefilled)
+                templates[id] = template;
+        }
     }
     public static byte Slot(string tag) => EquipmentSlots.TryGetValue(tag, out var slot) ? slot : throw new InvalidDataException("未知普通装备类型: " + tag);
 
@@ -263,22 +272,39 @@ internal sealed partial class ItemCatalog
     // 在资源装配阶段枚举；正creation rate的普通道具完整解析，失败不得静默删除候选。
     // 逐项解析互不依赖（PVF 按位置读取、缓存与模板表均线程安全），有序并行后结果与串行一致；
     // 原先串行约占服务启动 4 秒。任一项失败仍以原异常终止装配。
-    public IEnumerable<ItemTemplate> DropCandidates(bool includeSpecialEquipment = false)
+    public IEnumerable<ItemTemplate> DropCandidates(bool includeSpecialEquipment = false) =>
+        PositiveDropCandidates().Where(template => AcceptDropCandidate(template, includeSpecialEquipment)).ToImmutableArray();
+
+    // 同一归档/名册生命周期不变；只缓存成功解析的模板引用，普通与祭坛分别执行原过滤。
+    // 失败不发布快照，下一次仍重新预筛；已有Get模板缓存和异常解包合同不变。
+    ImmutableArray<ItemTemplate> PositiveDropCandidates()
     {
-        var rows = equipment.Concat(stackable).OrderBy(row => row.Key).ToArray();
-        try
+        lock (dropCandidatesGate)
         {
-            return rows.AsParallel().AsOrdered().WithDegreeOfParallelism(Math.Clamp(Environment.ProcessorCount / 2, 1, 8))
-                .Select(row => DropCandidate(row.Key, row.Value, includeSpecialEquipment)).Where(template => template is not null).Select(template => template!).ToArray();
-        }
-        catch (AggregateException error) when (error.InnerExceptions.Count >= 1)
-        {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
-            throw;
+            if (!dropCandidateSnapshot.IsDefault)
+                return dropCandidateSnapshot;
+            var rows = equipment.Concat(stackable).OrderBy(row => row.Key).ToArray();
+            try
+            {
+                var result = rows.AsParallel().AsOrdered().WithDegreeOfParallelism(Math.Clamp(Environment.ProcessorCount / 2, 1, 8))
+                    .Select(row => DropCandidate(row.Key, row.Value)).Where(template => template is not null)
+                    .Select(template => template!).ToImmutableArray();
+                dropCandidateSnapshot = result;
+                return result;
+            }
+            catch (AggregateException error) when (error.InnerExceptions.Count >= 1)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerExceptions[0]).Throw();
+                throw;
+            }
         }
     }
 
-    ItemTemplate? DropCandidate(int id, string path, bool includeSpecialEquipment)
+    internal bool AcceptDropCandidate(ItemTemplate template, bool includeSpecialEquipment) =>
+        template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession or ItemKind.Talisman or ItemKind.Rune ||
+        includeSpecialEquipment && equipment.ContainsKey(template.Id) && template.Kind is ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment;
+
+    ItemTemplate? DropCandidate(int id, string path)
     {
         if (id <= 2)
             return null;
@@ -288,13 +314,19 @@ internal sealed partial class ItemCatalog
             return null;
         var document = isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) :
             new PvfDocument(pvf.ReadText("stackable/" + path));
+        return ParsedDropCandidate(id, path, document);
+    }
+
+    // 预筛已经读完同一脚本/import链；正候选复用文档进入原single-flight，不保留额外全文缓存。
+    internal ItemTemplate? ParsedDropCandidate(int id, string path, PvfDocument document)
+    {
+        bool isEquipment = equipment.ContainsKey(id);
         int rate = CreationRate(document);
         if (rate == 0)
             return null;
-        var template = Get(id);
-        return template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession or ItemKind.Talisman or ItemKind.Rune ||
-            includeSpecialEquipment && isEquipment && template.Kind is ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment
-            ? template : null;
+        // 跨名册同ID仍由equipment优先；当前row不是规范路径时沿用原Get重读，不能污染缓存。
+        string? canonicalPath = isEquipment ? equipment[id] : stackable.GetValueOrDefault(id);
+        return Get(id, string.Equals(path, canonicalPath, StringComparison.Ordinal) ? document : null);
     }
 
     internal static int CreationRate(PvfDocument document)
@@ -472,13 +504,13 @@ internal sealed partial class ItemCatalog
         document.TryGetString("action usable place", out string place) && place == "[village]" &&
         document.TryGetInt32("use action packet", out int packet) && packet == 0;
 
-    ItemTemplate Load(int id)
+    ItemTemplate Load(int id, PvfDocument? parsed)
     {
         bool isEquipment = equipment.TryGetValue(id, out string? path);
         if (!isEquipment && !stackable.TryGetValue(id, out path))
             throw new InvalidDataException("PVF 物品不存在: " + id);
-        var text = isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) :
-            new PvfDocument(pvf.ReadText("stackable/" + path));
+        var text = parsed ?? (isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) :
+            new PvfDocument(pvf.ReadText("stackable/" + path)));
         byte slot = 0;
         ItemKind kind;
         if (isEquipment)
