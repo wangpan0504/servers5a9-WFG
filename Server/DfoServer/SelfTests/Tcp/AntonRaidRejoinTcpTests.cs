@@ -221,7 +221,8 @@ internal static class AntonRaidRejoinTcpTests
         That(disconnected.Any(p => p is { Kind: 0, Opcode: 591 } && U32(p.Body, 4) == 3),
             "恢复成员再次断线后原团名册同步移除");
         disconnected.AddRange(AntonTcpProbe.Barrier(leader, "过期Run用例等待原成员断线"));
-        That(disconnected.Any(p => p is { Kind: 0, Opcode: 9, Body.Length: > 0 } && p.Body[0] == 2) &&
+        // PartyPackets.Members先写count/pages及id/server/channel，InformationBlock的action位于正文偏移9。
+        That(disconnected.Any(p => p is { Kind: 0, Opcode: 9, Body.Length: > 9 } && p.Body[9] == 2) &&
             disconnected.Any(p => p is { Kind: 0, Opcode: 26, Body: [0] }),
             "原分队仅余槽0的队长，发送成员增量及真实主机槽0");
         var path = AntonTcpProbe.Route(catalog, 210, info[7], firstMap[0], firstMap[1], info[8], info[9]);
