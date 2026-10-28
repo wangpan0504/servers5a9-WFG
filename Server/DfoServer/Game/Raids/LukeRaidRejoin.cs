@@ -7,7 +7,7 @@ namespace DfoServer.Game.Raids;
 internal sealed record LukeRaidPartyIdentity(ushort Id, SemaphoreSlim Commands,
     ImmutableArray<(ushort Character, byte Slot)> Members);
 
-// 只保存原身份和原聚合引用，不保存角色资产；当前没有Runtime/协议装配。
+// 只保存原身份和原聚合引用，不保存角色资产；不代表客户端恢复已接通。
 internal sealed class LukeRaidRejoinReservation(RaidActor original, AntonRaidBattle battle,
     PartySnapshot party, byte partySlot, int phase)
 {
@@ -20,19 +20,41 @@ internal sealed class LukeRaidRejoinReservation(RaidActor original, AntonRaidBat
     internal RaidActor? Bound { get; set; }
 }
 
+// 仅供宿主本地诊断的只读标量，不暴露会话、Battle或角色资产。
+internal sealed record LukeRaidDisconnectCandidate(Guid Instance, uint Key, byte RaidSlot, byte Squad,
+    ushort PartyId, byte PartySlot, int Phase, bool OldOwnerReleased);
+
 internal sealed record LukeRaidRejoinResult(bool Accepted, string Reason, RaidParty? Raid = null,
     PartySnapshot? Party = null, AntonRaidBattleView? Battle = null);
 
-// 默认未接入835/668及断线事件。先完成可复验的领域事务，不猜恢复通知包序。
+// Runtime仅装配断线身份捕获；仍未接入835/668恢复，不猜恢复通知包序。
 internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties, AntonRaidRejoin candidates)
 {
+    internal LukeRaidDisconnectCandidate? DescribeCandidate(ushort character) => candidates.DescribeLukeCandidate(character);
+
+    internal AntonRaidDisconnectFact? TryCaptureForDisconnect(DfoServer.Game.Session.GameSession session, out string reason)
+    {
+        var actor = session.ReadLukeDisconnectActorHint();
+        var expected = actor is null ? null : registry.Find(actor);
+        if (actor is null || expected is null) { reason = "no-active-luke"; return null; }
+        if (!Accounts.AccountOwners.Lease.TryExecuteLukeDisconnect(expected.Members.Select(m => (m.Actor.Owner, m.Actor.Character)).ToArray(),
+            () => CaptureLocked(actor, expected), out AntonRaidDisconnectFact? fact))
+        { reason = "owner-busy-or-stale"; return null; }
+        reason = fact is null ? "ineligible" : "captured";
+        return fact;
+    }
+
     internal AntonRaidDisconnectFact? Capture(RaidActor actor)
     {
         var expected = registry.Find(actor);
-        if (expected is null) return null;
-        return RaidOwnerGroup.Execute<AntonRaidDisconnectFact?>(RaidKind.Luke, expected.Members.Select(m => (m.Actor.Owner, m.Actor.Character)).ToArray(), () =>
-        {
-        if (!registry.UsesRejoinCandidates(candidates) || !candidates.Enabled || !actor.IsCurrent || !actor.CanManage ||
+        return expected is null ? null : RaidOwnerGroup.Execute<AntonRaidDisconnectFact?>(RaidKind.Luke,
+            expected.Members.Select(m => (m.Actor.Owner, m.Actor.Character)).ToArray(), () => CaptureLocked(actor, expected));
+    }
+
+    // 两个入口均已持同一原全团owner；提示身份从不代替此处的Session/名册/Battle完整复验。
+    AntonRaidDisconnectFact? CaptureLocked(RaidActor actor, RaidParty expected)
+    {
+        if (!registry.UsesRejoinCandidates(candidates) || !candidates.LukeCandidatesEnabled || !actor.IsCurrent || !actor.CanManage ||
             !registry.IsCurrent(expected) || registry.Find(actor) is not { Type: 1, Started: { } started } raid ||
             actor.Session.CurrentRaidBattle(actor) is not { Kind: RaidKind.Luke } battle ||
             started.InstanceId != battle.Instance || parties.Current(actor.Session) is not { } party ||
@@ -46,7 +68,17 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
         return new AntonRaidDisconnectFact(actor.Owner.Account, actor.Character, actor.Epoch, actor.Owner,
             raid.Key, battle.Instance, actor.Channel, member.Slot, member.Squad, null, false)
             { Luke = new(actor, battle, party, own.Slot, battle.View.Phase) };
-        });
+    }
+
+    internal bool TryRecordDisconnected(AntonRaidDisconnectFact fact, out string reason)
+    {
+        var expected = registry.Find(fact.Key, fact.Channel);
+        if (expected is null) { reason = "instance-unavailable"; return false; }
+        if (!Accounts.AccountOwners.Lease.TryExecuteLukeDisconnect(expected.Members.Select(m => (m.Actor.Owner, m.Actor.Character)).ToArray(),
+            () => RecordDisconnected(fact), out bool recorded))
+        { reason = "owner-busy-or-stale"; return false; }
+        reason = recorded ? "recorded" : "ineligible";
+        return recorded;
     }
 
     internal bool RecordDisconnected(AntonRaidDisconnectFact fact)

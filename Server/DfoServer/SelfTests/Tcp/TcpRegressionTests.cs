@@ -435,6 +435,7 @@ internal static class TcpRegressionTests
         ("luke-raid-original-gate", LukeRaidTcpTests.RunOriginalRuleGateAsync),
         ("luke-raid-start", LukeRaidStartTcpTests.RunAsync),
         ("luke-raid-run", LukeRaidStartTcpTests.RunDungeonsAsync),
+        ("luke-raid-disconnect-candidates", LukeRaidStartTcpTests.RunDisconnectCandidatesAsync),
         ("luke-raid-facilities", LukeRaidStartTcpTests.RunFacilitiesAsync),
         ("luke-raid-fixed-route", LukeRaidStartTcpTests.RunFixedRouteAsync),
         ("luke-raid-phases", LukeRaidStartTcpTests.RunPhasesAsync),

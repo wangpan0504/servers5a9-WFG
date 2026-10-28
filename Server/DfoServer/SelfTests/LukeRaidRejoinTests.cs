@@ -65,13 +65,54 @@ internal static class LukeRaidRejoinTests
             That(started.Error == 0 && started.Receipt is not null, "真实SQL开团扣票和普通分队安装");
             var battle = actors[0].Session.CurrentRaidBattle(actors[0])!;
             var beforeRaid = raids.Find(actors[0])!; var beforeParty = parties.Current(actors[0].Session)!;
-            var fact = recovery.Capture(actors[2]);
+            var fact = recovery.TryCaptureForDisconnect(actors[2].Session, out var captureReason);
+            That(captureReason == "captured", "原owner空闲时自动捕获通过真实授权门禁");
             That(fact is { Luke: not null } && fact.Instance == battle.Instance && fact.Slot == 2 && fact.Squad == 1 &&
                 fact.Luke.OriginalParty.Id == beforeParty.Id && fact.Luke.PartySlot == 2, "断线前捕获两个不同层次的精确槽位和原实例");
             That(!recovery.RecordDisconnected(fact!), "旧owner仍有效不发布恢复候选");
-            actors[2].Session.End(); parties.Detach(actors[2].Session); actors[2].Owner.Dispose();
-            That(recovery.RecordDisconnected(fact!), "真实断线清理后登记原身份");
+            using (var held = new ManualResetEventSlim()) using (var release = new ManualResetEventSlim())
+            {
+                var blocker = Task.Run(() => actors[1].Owner.Execute(() =>
+                { held.Set(); if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("owner占用夹具超时"); return true; }));
+                Task? cleanup = null;
+                try
+                {
+                    That(held.Wait(TimeSpan.FromSeconds(5)), "其它成员owner确定已占用，非仅sleep推测");
+                    cleanup = Task.Run(() =>
+                    {
+                        That(recovery.TryCaptureForDisconnect(actors[2].Session, out var reason) is null && reason == "owner-busy-or-stale",
+                            "可选自动捕获遇其它owner占用零等待放弃");
+                        actors[2].Session.End(); parties.Detach(actors[2].Session); actors[2].Owner.Dispose();
+                        That(!recovery.TryRecordDisconnected(fact!, out reason) && reason == "owner-busy-or-stale" && records.Peek(actors[2].Character) is null,
+                            "自动登记也不等待幸存者事务，不排队或留下半记录");
+                    });
+                    That(cleanup.Wait(TimeSpan.FromSeconds(5)) && !release.IsSet && !actors[2].Owner.IsCurrent,
+                        "占用者尚未释放时原Session/Party/owner清理已完成");
+                    var probe = Task.Run(() => actors[0].Owner.Execute(() => true));
+                    That(probe.Wait(TimeSpan.FromSeconds(2)) && probe.Result, "排序中先取得的owner在后续TryEnter失败时已归还");
+                }
+                finally
+                {
+                    release.Set();
+                    Task.WhenAll(new Task?[] { blocker, cleanup }.OfType<Task>()).WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+                }
+            }
+            bool called = false;
+            That(!AccountOwners.Lease.TryExecuteLukeDisconnect([(actors[2].Owner, actors[2].Character)], () => { called = true; return true; }, out _) && !called,
+                "失效owner组合不执行授权动作");
+            Reject<InvalidOperationException>(() => actors[0].Owner.Execute(() =>
+                AccountOwners.Lease.TryExecuteLukeDisconnect([(actors[0].Owner, actors[0].Character)], () => true, out _)),
+                "可选捕获禁止单owner升级，保持原锁权威");
+            Reject<InvalidDataException>(() => AccountOwners.Lease.TryExecuteLukeDisconnect<bool>([(actors[0].Owner, actors[0].Character)],
+                () => throw new InvalidDataException("合成动作失败"), out _), "动作异常仍同步归还组合锁");
+            That(actors[0].Owner.Execute(() => true), "失败后线程组合标记和owner均可正常使用");
+            That(recovery.TryRecordDisconnected(fact!, out var recordedReason) && recordedReason == "recorded", "占用释放后自动登记原身份，不依赖旧owner仍有效");
             var fresh = Login(2, false);
+            var captureOnly = new AntonRaidRejoin(false, lukeCandidatesEnabled: true);
+            That(captureOnly.Record(fact!) && captureOnly.Peek(fresh.Character) == fact && !captureOnly.Enabled &&
+                !captureOnly.HasCandidate(fresh.Character) && !captureOnly.DescribeNotice(fresh, true, false).Matched &&
+                !captureOnly.Evaluate(fresh, fact!.Key, true, false).Matched,
+                "仅Luke内部候选开关不打开Anton通知或668，不把候选当重返成功");
             string sql = Assets(path); var character = fresh.Session.Selected;
             That(recovery.Restore(fresh, fact!.Key).Reason == "waiting-room-required" &&
                 fresh.Session.CurrentRaidBattle(fresh) is null && raids.Find(fresh) is null && Assets(path) == sql &&

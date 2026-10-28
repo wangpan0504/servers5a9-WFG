@@ -21,11 +21,22 @@ internal sealed record AntonRaidRejoinDecision(
 }
 
 // 进程内保留原 Battle 仍存活时的断线身份。没有证明保留时长，不发明计时器。
-internal sealed class AntonRaidRejoin(bool enabled)
+internal sealed class AntonRaidRejoin(bool enabled, bool lukeCandidatesEnabled = false)
 {
     readonly object gate = new();
     readonly Dictionary<ushort, AntonRaidDisconnectFact> byCharacter = [];
     public bool Enabled { get; } = enabled;
+    internal bool LukeCandidatesEnabled { get; } = enabled || lukeCandidatesEnabled;
+
+    internal LukeRaidDisconnectCandidate? DescribeLukeCandidate(ushort character)
+    {
+        lock (gate)
+        {
+            if (!byCharacter.TryGetValue(character, out var fact) || fact.Luke is not { } reservation) return null;
+            return new(fact.Instance, fact.Key, fact.Slot, fact.Squad, reservation.OriginalParty.Id,
+                reservation.PartySlot, reservation.Phase, !fact.OldOwner.IsCurrent);
+        }
+    }
 
     public bool HasCandidate(ushort character)
     {
@@ -34,7 +45,7 @@ internal sealed class AntonRaidRejoin(bool enabled)
 
     public bool Record(AntonRaidDisconnectFact fact)
     {
-        if (!Enabled) return false;
+        if (fact.Luke is null ? !Enabled : !LukeCandidatesEnabled) return false;
         lock (gate)
         {
             byCharacter[fact.Character] = fact;
