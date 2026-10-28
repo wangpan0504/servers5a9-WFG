@@ -92,6 +92,7 @@ internal static class SelfTestRunner
         BoosterSelectionTests.RunCore();
         AvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
+        MonsterCardBindTests.RunCore();
         GuildCompoundTests.RunCore();
         EquipmentEmblemTests.RunCore();
         TextureChangeTests.RunCore();
@@ -399,6 +400,7 @@ internal static class SelfTestRunner
         InventoryExpansionTests.RunResources(itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         EmblemCompoundTests.RunResources(itemResources);
+        MonsterCardBindTests.RunResources(itemResources);
         GuildCompoundTests.RunResources(itemResources);
         AvatarCompoundTests.RunResources(itemResources);
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);

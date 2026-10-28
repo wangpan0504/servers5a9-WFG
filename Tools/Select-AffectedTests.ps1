@@ -87,6 +87,7 @@ $keywordGroups = [ordered]@{
     'MonsterAi|MonsterBattleLevel' = 'monster-ai','monster-battle-level'
     'Booster'    = 'booster','booster-selection','booster-equipment','daily-retained-booster'
     'Inventory'  = 'inventory','consumable-use','inventory-persistence'
+    'MonsterCard' = 'monster-card-bind'
     'Items?/'    = 'inventory','shop','consumable-use'
     'Consumable' = 'consumable-use','consumable-use-rules'
     'Skill'      = 'skills','skill-switch-inventory','skill-slots','skill-material'

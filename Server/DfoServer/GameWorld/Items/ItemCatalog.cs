@@ -657,6 +657,7 @@ internal sealed partial class ItemCatalog
             IsOperationHope = isEquipment && text.Has("operation hope"),
             BossDrop = isEquipment && text.ContainsString("item category", "boss drop"),
             IsMonsterCard = !isEquipment && text.ContainsString("item category", "monster card"),
+            MonsterCardBindType = ReadMonsterCardBindType(isEquipment, text),
             AmplifyPollutionForbidden = isEquipment && text.ContainsString("impossible contents", "pollution"),
             UseForbidden = ForbidsUse(impossible),
             // 分解采用模板价值及基础出售倍率，不使用NPC售出时的耐久和90%折价。
@@ -665,6 +666,18 @@ internal sealed partial class ItemCatalog
         };
 
         int Int(string tag, int fallback) => Integers(text.Section(tag)).FirstOrDefault(fallback);
+    }
+
+    static int? ReadMonsterCardBindType(bool isEquipment, PvfDocument text)
+    {
+        if (isEquipment)
+            return null;
+        int[] values = Integers(text.Section("monstercard bind"));
+        if (values.Length == 0)
+            return null;
+        if (values is not [>= 0 and <= 5])
+            throw new InvalidDataException("怪物卡片合成器类型无效");
+        return values[0];
     }
 
     EchonEquipmentDefinition ReadEchon(int id, PvfDocument document, string type)

@@ -591,6 +591,8 @@ internal static class ServerRuntime
                 debugSettings: debugSettings, attributePairs: attributePairs), inventoryProjection, log),
             new EmblemCompoundHandler(new InventoryEmblemCompoundService(itemResources.Items,
                 itemResources.EmblemCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
+            new MonsterCardBindHandler(new InventoryMonsterCardBindService(itemResources.Items,
+                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new GuildCompoundHandler(new InventoryGuildCompoundService(itemResources.Items,
                 itemResources.GuildCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,
