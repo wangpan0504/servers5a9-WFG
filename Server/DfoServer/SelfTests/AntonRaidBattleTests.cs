@@ -53,6 +53,13 @@ internal static class AntonRaidBattleTests
             [2, 1, 0x78, 0x56, 0x34, 0x12, 0xbc, 0x9a, 4, 7], "601独立编码验证读宽与字段顺序");
         Bytes(RaidCombatPackets.Reward(1, [new(0x1234, 5, [new(7, 0x89abcdef, 0x2345, 9)])]),
             [1, 1, 0x34, 0x12, 5, 1, 7, 0xef, 0xcd, 0xab, 0x89, 0x45, 0x23, 9], "600安徒恩专用布局没有普通分支额外u32");
+        // 01DC8E9F/8EB5分别回跳内外循环；不以单行单项用例代替嵌套读序证据。
+        Bytes(RaidCombatPackets.Reward(0, [new(0xabcd, 4, [new(1, 0x12345678, 0x9abc, 2), new(3, 0x89abcdef, 0xfedc, 4)]),
+                new(0x5678, 6, []), new(0xffff, 7, [new(5, 0x10203040, 0x5060, 6)])]),
+            [0, 3, 0xcd, 0xab, 4, 2, 1, 0x78, 0x56, 0x34, 0x12, 0xbc, 0x9a, 2,
+                3, 0xef, 0xcd, 0xab, 0x89, 0xdc, 0xfe, 4, 0x78, 0x56, 6, 0,
+                0xff, 0xff, 7, 1, 5, 0x40, 0x30, 0x20, 0x10, 0x60, 0x50, 6],
+            "600多行、多项与中间空行均保留直接8B项，不附加Luke尾列；数值为显式合成输入");
         var additionScript = Script(10);
         additionScript = additionScript with { Symbols = additionScript.Symbols.Add("[signal]", 8).Add("[counter]", 9),
             Phases = additionScript.Phases.SetItem(0, additionScript.Phases[0] with { Rules = [new(

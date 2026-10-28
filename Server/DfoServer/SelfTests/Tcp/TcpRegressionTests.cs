@@ -435,6 +435,7 @@ internal static class TcpRegressionTests
         ("anton-tcp-probe", AntonRaidTcpTests.RunProbeAsync),
         ("anton-raid-gap", AntonRaidGapTcpTests.RunAsync),
         ("anton-raid-phase1", AntonRaidGapTcpTests.RunPhaseOneAsync),
+        ("anton-raid-card600-601", AntonRaidGapTcpTests.RunCard600601Async),
         ("raid-start-minimum", AntonRaidTcpTests.RunMinimumAsync),
         ("luke-raid", LukeRaidTcpTests.RunAsync),
         ("luke-raid-original-gate", LukeRaidTcpTests.RunOriginalRuleGateAsync),
