@@ -25,6 +25,7 @@ internal static class SelfTestRunner
         await CharacterScoreNoticeTests.RunCore();
         await SelfCharacterScoreTests.RunCore();
         await MachineCharacterScoreTests.RunCore();
+        await LukeSceneNamespaceTests.RunCore();
         LukeCardSetTests.RunCore();
         EvildomWarPacketTests.RunCore();
         EvildomWarBattleTests.RunCore();

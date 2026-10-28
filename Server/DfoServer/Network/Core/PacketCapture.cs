@@ -97,8 +97,9 @@ internal sealed class PacketCapture : IDisposable
         if (sessions?.TryGetValue(connection, out var session) == true)
             session.Count(send, opcode);
         // 连同畸形认证、房间密码包一起脱敏，不通过解析成功与否决定是否输出敏感正文。
-        bool redact = !channel && (!send || frame[0] == 1) && IsSensitiveCommand(opcode);
         ReadOnlySpan<byte> body = frame[Math.Min(header, frame.Length)..];
+        bool sceneReserved = !channel && !send && IsSceneReservedCommand(opcode, body);
+        bool redact = sceneReserved || !channel && (!send || frame[0] == 1) && IsSensitiveCommand(opcode);
         if (recent is not null)
         {
             int dumpLength = Math.Min(body.Length, MaximumBodyBytes);
@@ -119,7 +120,8 @@ internal sealed class PacketCapture : IDisposable
         var text = new StringBuilder();
         text.Append($"{timestamp:O} connection={connection} protocol={(channel ? "CHANNEL" : "GAME")} {(send ? "SEND" : "RECV")} kind=0x{frame[0]:X2} opcode=0x{opcode:X4} name={name} len={frame.Length} body=({body.Length}B)");
         if (redact)
-            text.Append(IsAuthentication(opcode) ? " [authentication payload redacted]\n" : " [pvp password payload redacted]\n");
+            text.Append(sceneReserved ? " [luke scene reserved payload redacted]\n" :
+                IsAuthentication(opcode) ? " [authentication payload redacted]\n" : " [pvp password payload redacted]\n");
         else
         {
             text.Append(" [");
@@ -163,6 +165,14 @@ internal sealed class PacketCapture : IDisposable
 
     internal static bool IsAuthentication(ushort opcode) => opcode is
         (ushort)CmdPacketType.LOGIN or (ushort)CmdPacketType.LOGIN_PRECHECK or (ushort)CmdPacketType.CLIENT_SPEC_STATISTIC;
+
+    // 在分派/状态门之前也生效；畸形机器字段不得落recv、unimplemented或抓包原文。
+    internal static bool IsSceneReservedCommand(ushort opcode, ReadOnlySpan<byte> body) =>
+        opcode == (ushort)CmdPacketType.SEND_MESSAGE && Parsers.LukeSceneReservedRequests.IsReserved(body);
+
+    internal static string ReceivedCommandBody(ushort opcode, ReadOnlySpan<byte> body) =>
+        IsSensitiveCommand(opcode) ? RedactedCommandBody(opcode) :
+        IsSceneReservedCommand(opcode, body) ? "[luke-scene-reserved-redacted]" : Convert.ToHexString(body);
 
     internal static bool IsSensitiveCommand(ushort opcode) => IsAuthentication(opcode) || opcode is
         (ushort)CmdPacketType.MAKE_PVP_ROOM or (ushort)CmdPacketType.ENTER_PVP_ROOM;
