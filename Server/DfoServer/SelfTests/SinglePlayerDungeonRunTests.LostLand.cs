@@ -165,6 +165,35 @@ internal static partial class SinglePlayerDungeonRunTests
         foreach (var invalid in new[] { whirlwind[..^1],whirlwind.Concat(whirlwind).ToArray(),
             whirlwind.Concat(new[] { Tag("TRIGGER"),Tag("DUNGEON SYMBOL COMPARE"),Text("lab_door_close"),Tag("/TRIGGER") }).ToArray() })
             That(DungeonLostLandWhirlwind.Move(invalid,Resolve) is null,"不完整或附加机关的水旋风ACT仍拒绝");
+
+        PvfToken[] rescue = [Tag("MOTION"),Tag("BASE ANI"),Text("../animation/Event1.ani"),Tag("SPEECH"),Text("返程对话"),
+            new(0,1),new(0,100),Tag("/SPEECH"),Tag("/MOTION"),
+            Tag("TRIGGER"),Tag("FRAME"),new(0,3),new(0,3),Tag("DO BEHAVIOR"),Tag("ME"),new(0,0),Tag("/TRIGGER"),
+            Tag("BEHAVIOR"),Tag("DUNGEON SYMBOL SET"),Text("Event"),new(0,1),Tag("DIALOG"),Text("获救对话"),new(0,30000),Tag("/BEHAVIOR"),
+            Tag("TRIGGER"),Tag("FRAME"),new(0,26),new(0,26),Tag("DO BEHAVIOR"),Tag("ME"),new(0,1),Tag("/TRIGGER"),
+            Tag("BEHAVIOR"),Tag("MOVE MAP"),new(0,9),new(0,6),new(0,376),new(0,320),new(0,0),
+            Tag("IS STATE CHECK"),new(0,0),Tag("/MOVE MAP"),Tag("/BEHAVIOR"),
+            Tag("TRIGGER"),Tag("FRAME"),new(0,27),new(0,27),Tag("DO BEHAVIOR"),Tag("ME"),new(0,2),Tag("/TRIGGER"),
+            Tag("BEHAVIOR"),Tag("DESTROY"),Tag("/BEHAVIOR"),
+            Tag("TRIGGER"),Tag("LIMIT"),new(0,1),Tag("FRAME"),new(0,20),new(0,20),Tag("WHICH"),Tag("PLAYER"),
+            Tag("DO BEHAVIOR"),Tag("CHECKUP OBJECT"),new(0,3),Tag("/TRIGGER"),
+            Tag("TRIGGER"),Tag("LIMIT"),new(0,1),Tag("FRAME"),new(0,21),new(0,21),Tag("WHICH"),Tag("PLAYER"),
+            Tag("DO BEHAVIOR"),Tag("CHECKUP OBJECT"),new(0,3),Tag("/TRIGGER"),
+            Tag("BEHAVIOR"),Tag("CREATE PASSIVEOBJECT"),Tag("INDEX"),new(0,37253),Tag("PARTICLE FILENAME"),Text(""),
+            Tag("LEVEL"),new(0,1),Tag("POS"),new(0,0),new(0,0),new(0,130),Tag("/CREATE PASSIVEOBJECT"),Tag("/BEHAVIOR")];
+        That(DungeonLostLandRescue.Move(rescue,Resolve) == (new DungeonPoint(9,6),376,320) &&
+            DungeonLostLandWarpRules.UnconditionalMove(rescue,Resolve) is null,
+            "公主救援完整动作链保留返程目标和落点，不能当作无条件接近传送");
+        foreach (int at in new[] { 19,20,27,31,35,36,37,38,39,41,50,62,65,82 })
+        {
+            var invalid = rescue.ToArray();
+            invalid[at] = at switch { 19 => Text("OtherEvent"),62 => Tag("MONSTER"),35 or 37 => new(0,-1),
+                36 => new(0,256),38 => new(0,65536),_ => new(0,rescue[at].Value+1) };
+            That(DungeonLostLandRescue.Move(invalid,Resolve) is null,
+                "救援符号、帧、行为索引、主体、目标边界或展示物件变化不能借用原返程链");
+        }
+        foreach (var invalid in new[] { rescue[..^1],rescue.Concat(rescue).ToArray(),rescue.Append(new PvfToken(0,1)).ToArray() })
+            That(DungeonLostLandRescue.Move(invalid,Resolve) is null,"救援动作链不完整或附加未知条件仍拒绝");
     }
 }
 

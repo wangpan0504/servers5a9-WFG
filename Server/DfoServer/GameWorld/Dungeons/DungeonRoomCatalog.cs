@@ -178,6 +178,9 @@ internal sealed class DungeonRoomCatalog
                 else if (DungeonLostLandWhirlwind.Read(ordinal,source,passiveObjects,
                     file => archive.Contains(file) ? archive.ReadTokens(file) : [],archive.ResolveString) is { } whirlwind)
                     warps.Add(whirlwind);
+                else if (DungeonLostLandRescue.Read(ordinal,room,passiveObjects,
+                    file => archive.Contains(file) ? archive.ReadTokens(file) : [],archive.ResolveString) is { } rescue)
+                    warps.Add(rescue);
             }
             // 可选导航声明不完整时仍保留原房间，但不开放该传送。
             catch (InvalidDataException) { }

@@ -20,6 +20,7 @@ internal static class LostLandSessionTests
         var dungeons = SelfTestCatalogs.Dungeons(pvf);
         var rooms = SelfTestCatalogs.Rooms(pvf);
         VerifyWhirlwindSources(pvf,rooms);
+        VerifyRescueSources(pvf,rooms);
         var incounts = DungeonIncountCatalog.Load(pvf);
         using var f = new QuestSceneTests.Fixture(towns, characters, SelfTestCatalogs.SkillLearning(pvf),
             SelfTestCatalogs.Growth(pvf), SelfTestCatalogs.Quests(pvf), false, level: 95, job: 4,
@@ -96,6 +97,21 @@ internal static class LostLandSessionTests
             returned.Snapshot.LivingMonsters.SequenceEqual(originalKeys), "真实往返沿原缓存保留起点全部存活怪物key");
         That(session.CompleteFormalDungeonLoading() is { LostLandStarted: false } &&
             session.TickLostLandTimer(timer) is { Expired: false, Remaining.TotalSeconds: 500 }, "往返加载不重发启动事实或重置600秒总时限");
+        // 按实收路线抵达铁笼房；返程仍是本地救援ACT发起的导航，不代替机关或战斗确认。
+        foreach (var (target,id) in new (DungeonPoint,int)[]
+            { (new(8,6),11251),(new(8,7),11202),(new(0,9),11209),(new(0,8),11212),(new(1,8),11213),(new(1,9),11211) })
+        {
+            That(session.MoveFormalDungeon((byte)target.X,(byte)target.Y) is { } step && step.Snapshot.CurrentMap.Id == id,
+                "实际救援路线的普通门和已有传送均沿原实例抵达公主房");
+            session.CompleteFormalDungeonLoading();
+        }
+        var rescued = session.MoveFormalDungeon(9,6);
+        That(rescued is { Snapshot.CurrentMap.Id: 11200, Snapshot.MapPayload: DungeonMapPayload.Cached } &&
+            rescued.Snapshot.LivingMonsters.SequenceEqual(originalKeys) && State() == beforeMove,
+            "公主返程沿精确救援链回到起始缓存，不重扣次数或清除原怪物");
+        That(session.CompleteFormalDungeonLoading() is { LostLandStarted: false } &&
+            session.TickLostLandTimer(timer) is { Expired: false, Remaining.TotalSeconds: 500 },
+            "救援返程不重启600秒时钟");
         time.Advance(TimeSpan.FromSeconds(500));
         var expired = session.TickLostLandTimer(timer)!;
         That(expired.Expired && session.DungeonSnapshot!.Phase == SinglePlayerDungeonPhase.TimedOut &&
@@ -128,6 +144,45 @@ internal static class LostLandSessionTests
         string State() => $"{f.Query("SELECT printf('%d|%d|%d',c.revision,s.last_attempt,s.next_object_key) FROM characters c JOIN character_dungeon_state s ON s.character_id=c.id")};" +
             $"{f.Query("SELECT coalesce(sum(daily_used),0) FROM character_dungeon_incount WHERE dungeon=4000")};" +
             $"{f.Query("SELECT coalesce(sum(used),0) FROM account_dungeon_incount WHERE dungeon=4000")}";
+    }
+
+    static void VerifyRescueSources(PvfArchive pvf, DungeonRoomCatalog rooms)
+    {
+        var objects = DungeonRoomCatalog.ParsePassiveDirectory(pvf.ReadTokens("passiveobject/passiveobject.lst"),pvf.ResolveString);
+        var room = rooms.Get(new("map",new(1,9),11211,"map/forgotten_land/downroom3.map"));
+        int ordinal = room.PassiveObjects.ToList().FindIndex(source => source.ObjectId == 37073);
+        var warp = DungeonLostLandRescue.Read(ordinal,room,objects,pvf.ReadTokens,pvf.ResolveString);
+        var frozen = rooms.WithLostLandWarps(room).LostLandWarps.Single(candidate => candidate.ObjectId == 37073);
+        That(warp is not null && warp.ObjectOrdinal == ordinal && warp.ObjectId == 37073 &&
+            warp.Destination == new DungeonPoint(9,6) && warp.PlayerX == 376 && warp.PlayerY == 320 && warp.MoveParameter == 0 &&
+            warp.SourceChain.Count == 4 && warp.SourceChain.Contains(objects[37073]) && warp.SourceChain.Contains(objects[37080]) &&
+            frozen.Destination == warp.Destination && frozen.ActionPath == warp.ActionPath && frozen.SourceChain.SequenceEqual(warp.SourceChain),
+            "真实公主房连接实际公主、铁笼、基本动作及救援返程，并由原房间目录冻结资格");
+        var files = warp!.SourceChain.ToDictionary(file => file,file => (IReadOnlyList<PvfToken>)pvf.ReadTokens(file));
+        foreach (string file in warp.SourceChain)
+            That(DungeonLostLandRescue.Read(ordinal,room,objects,
+                candidate => candidate == file ? [] : files[candidate],pvf.ResolveString) is null,
+                "救援链中任一实际OBJ或ACT缺失都不能授予返程导航");
+        foreach (string file in warp.SourceChain.Where(file => file.EndsWith(".act",StringComparison.Ordinal)))
+            That(DungeonLostLandRescue.Read(ordinal,room,objects,
+                candidate => candidate == file ? files[candidate].Append(new PvfToken(0,1)).ToArray() : files[candidate],pvf.ResolveString) is null,
+                "救援ACT附加未知条件或行为不能借用返程导航");
+        var cage = room.PassiveObjects.Single(source => source.ObjectId == 37080);
+        foreach (var sources in new[]
+        {
+            room.PassiveObjects.Where(source => source.ObjectId != 37080).ToArray(),
+            room.PassiveObjects.Append(cage).ToArray(),
+            room.PassiveObjects.Select(source => source == cage ? source with { Path = objects[37074] } : source).ToArray(),
+            room.PassiveObjects.Select(source => source.ObjectId == 37073 ? source with { Path = objects[37074] } : source).ToArray()
+        })
+            That(DungeonLostLandRescue.Read(ordinal,room with { PassiveObjects = sources },objects,pvf.ReadTokens,pvf.ResolveString) is null,
+                "缺少铁笼、歧义铁笼或实际OBJ引用不符均不能取得救援链资格");
+        string basic = warp.SourceChain.Single(file => file.EndsWith("/basic.act",StringComparison.Ordinal));
+        var wrongIndex = files[basic].ToArray();
+        wrongIndex[45] = new(0,1);
+        That(DungeonLostLandRescue.Read(ordinal,room,objects,
+            candidate => candidate == basic ? wrongIndex : files[candidate],pvf.ResolveString) is null,
+            "基本动作切换到不存在的自定义索引时不能取得救援返程资格");
     }
 
     static void VerifyWhirlwindSources(PvfArchive pvf,DungeonRoomCatalog rooms)
