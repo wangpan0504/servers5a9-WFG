@@ -16,7 +16,9 @@ internal static class LukeSceneReservedRequests
     {
         if (body.Length < ChatRequests.HeaderLength + Root.Length) return false;
         var text = body[ChatRequests.HeaderLength..];
-        return text.StartsWith(Root) && (text.Length == Root.Length || text[Root.Length] == '/' ||
+        // 普通聊天按声明长度截取正文；其结束边界与原包结束/分隔符边界均须隔离。
+        uint declared = BinaryPrimitives.ReadUInt32LittleEndian(body[7..]);
+        return text.StartsWith(Root) && (declared == Root.Length || text.Length == Root.Length || text[Root.Length] == '/' ||
             text[Root.Length] <= 0x20 || text[Root.Length] == 0x7f);
     }
 

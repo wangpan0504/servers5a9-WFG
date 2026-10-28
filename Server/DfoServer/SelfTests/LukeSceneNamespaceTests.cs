@@ -29,6 +29,14 @@ internal static class LukeSceneNamespaceTests
             "#cp-luke-scene\0private","#cp-luke-scene\u007fprivate","#cp-luke-scene\tprivate",
             "#cp-luke-scene/1 中文", "#cp-luke-scene/1 "+new string('a',1000)})reserved.Add(Body(text));
         foreach(byte kind in new byte[]{1,3,6,11,13,36,41,46,255})reserved.Add(Body(Receipt,kind));
+        // 声明正文只含根，实际尾部不是分隔符：普通聊天会切掉尾部，分类必须识别该结束边界。
+        foreach (byte suffix in new byte[] { (byte)'x', (byte)'X', 0x80, 0xff })
+        {
+            var truncated=Body("#cp-luke-scene").Concat(new byte[] { suffix }).Concat(Encoding.ASCII.GetBytes(Id)).ToArray();
+            That(ChatRequests.TryParse(truncated,out var parsed)&&parsed.Text=="#cp-luke-scene",
+                "对抗样本确实被普通解析器截为保留根");
+            reserved.Add(truncated);
+        }
         var extra=good.Concat(new byte[]{0x42}).ToArray();reserved.Add(extra);
         var zeroLength=(byte[])good.Clone();BinaryPrimitives.WriteUInt32LittleEndian(zeroLength.AsSpan(7),0);reserved.Add(zeroLength);
         var hugeLength=(byte[])good.Clone();BinaryPrimitives.WriteUInt32LittleEndian(hugeLength.AsSpan(7),uint.MaxValue);reserved.Add(hugeLength);
@@ -44,8 +52,46 @@ internal static class LukeSceneNamespaceTests
             That(!LukeSceneReservedRequests.TryRead(new byte[length],out _,out _),"短包分类不越界或猜前缀");
         var wrongOffset=Encoding.ASCII.GetBytes(Receipt+new string('x',11));
         That(!LukeSceneReservedRequests.IsReserved(wrongOffset),"只在CMD17正文固定头之后识别，不扫描任意偏移");
+        LengthBoundaries();
         await Routing(reserved.Append(good).ToArray());
         Console.WriteLine($"PASS {Count-before} scene namespace隔离断言（无scene发送/能力/恢复授权）");
+    }
+
+    static void LengthBoundaries()
+    {
+        const string root = "#cp-luke-scene";
+        var rootBytes = Encoding.ASCII.GetBytes(root);
+        // 边界集合由聊天合同列举；期望不调用被测分类器，不把整个近似前缀劫持。
+        var boundaries = Enumerable.Range(0, 33).Select(value => (byte)value).Append((byte)'/').Append((byte)0x7f);
+        var cases = new List<(byte[] Text, bool RawReserved)> { (rootBytes, true) };
+        foreach (byte value in boundaries)
+            cases.Add((rootBytes.Concat(new[] { value }).Concat(Encoding.ASCII.GetBytes(Id)).ToArray(), true));
+        foreach (byte value in new byte[] { (byte)'x', (byte)'X', 0x80, 0xff })
+            cases.Add((rootBytes.Concat(new[] { value }).Concat(Encoding.ASCII.GetBytes(Id)).ToArray(), false));
+        foreach (var (text, rawReserved) in cases)
+        {
+            var body = new byte[ChatRequests.HeaderLength + text.Length];
+            body[0] = 3;
+            text.CopyTo(body, ChatRequests.HeaderLength);
+            for (uint declared = 0; declared <= text.Length + 1; declared++)
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7), declared);
+                bool actual = LukeSceneReservedRequests.IsReserved(body);
+                That(actual == (rawReserved || declared == rootBytes.Length),
+                    "长度矩阵保留原包边界与声明根结束，不扩大非边界近似文本");
+                if (ChatRequests.TryParse(body, out var parsed) &&
+                    (parsed.Text == root || parsed.Text.StartsWith(root, StringComparison.Ordinal) &&
+                     parsed.Text.Length > root.Length && (parsed.Text[root.Length] <= ' ' || parsed.Text[root.Length] is '/' or '\x7f')))
+                    That(actual, "普通解码所得保留正文不得绕过原始分类");
+            }
+        }
+        for (int length = 0; length < rootBytes.Length; length++)
+        {
+            var body = new byte[ChatRequests.HeaderLength + length];
+            rootBytes.AsSpan(0, length).CopyTo(body.AsSpan(ChatRequests.HeaderLength));
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7), (uint)rootBytes.Length);
+            That(!LukeSceneReservedRequests.IsReserved(body), "不足根的实际短前缀不能仅靠声明长度被劫持");
+        }
     }
 
     static async Task Routing(byte[][] reserved)
