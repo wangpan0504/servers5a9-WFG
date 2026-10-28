@@ -101,9 +101,9 @@ internal static class TagEvildomPackets
         var indices = Indices(projection);
         var body = new byte[46];
         BinaryPrimitives.WriteInt32LittleEndian(body, projection.State.UsedThisWeek);
-        // offset4/8沿本版未开始run的构造初态0/-1，不伪称日期；初次选择默认普通模式3。
+        // offset4/8沿未开始run的构造初态0/-1；mode沿实际已提交准入恢复，首次保持本版初值3。
         BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(8), -1);
-        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(12), 3);
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(12), projection.State.Mode);
         var protectedIndices = projection.State.ProtectedMembers.Where(indices.ContainsKey).Select(id => indices[id]).Order().ToArray();
         if (protectedIndices.Length > 6) throw new InvalidDataException("再战魔界受保护名册超出6项");
         for (int index = 0; index < 6; index++)

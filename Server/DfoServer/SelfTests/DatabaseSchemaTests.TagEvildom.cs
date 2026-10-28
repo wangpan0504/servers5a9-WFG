@@ -48,6 +48,48 @@ internal static partial class DatabaseSchemaTests
             RejectDatabase(() => new CharacterRepository(path));
         }
         TagEvildomRunUpgrade(root);
+        TagEvildomChallengeUpgrade(root);
+    }
+
+    static void TagEvildomChallengeUpgrade(string root)
+    {
+        foreach (string scenario in new[] { "ordinary", "conflict", "late-failure" })
+        {
+            string path = Path.Combine(root, "tag-challenge-" + scenario + ".db");
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+            {
+                Execute(db, """
+                    DROP TABLE account_tag_evildom_challenges;
+                    INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold)
+                    VALUES('tag-old',0,'RouteOld',7,38,1,450,234,0,123);
+                    INSERT INTO account_tag_evildom_runs(account,instance_id,first,second,task_attempt,configuration_revision,team_index,dungeon_id,resource_key,admitted_at)
+                    VALUES('tag-old','11111111111111111111111111111111',1,2,1,1,0,9608,
+                      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1);
+                    PRAGMA user_version=113;
+                    """);
+                if (scenario == "conflict") Execute(db, "CREATE TABLE account_tag_evildom_challenges(unknown INTEGER)");
+                if (scenario == "late-failure") Execute(db, "ALTER TABLE accounts DROP COLUMN disabled");
+            }
+            if (scenario != "ordinary")
+            {
+                string before = Snapshot(path);
+                RejectDatabase(() => new CharacterRepository(path));
+                Check(Snapshot(path) == before, "挑战表冲突或末段校验失败回滚新DDL、资产及版本");
+                continue;
+            }
+            _ = new CharacterRepository(path);
+            using (var db = Open(path))
+                Check(Query(db, "SELECT count(*) FROM account_tag_evildom_challenges") is 0L &&
+                    Query(db, "SELECT count(*) FROM account_tag_evildom_runs") is 1L &&
+                    Query(db, "SELECT revision||':'||gold FROM characters") is "7:123",
+                    "旧库升级仅建空挑战表，不根据历史admitted补路线、罚次或修改角色");
+            string after = Snapshot(path);
+            _ = new CharacterRepository(path);
+            Check(Snapshot(path) == after, "挑战表当前库重开完全只读保留历史");
+            using (var db = Open(path)) Execute(db, "DROP TABLE account_tag_evildom_challenges");
+            RejectDatabase(() => new CharacterRepository(path));
+        }
     }
 
     static void TagEvildomRunUpgrade(string root)

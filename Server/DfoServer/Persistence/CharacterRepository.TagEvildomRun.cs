@@ -54,6 +54,8 @@ internal sealed partial class CharacterRepository : ITagEvildomClearStore
         var state = ReadTagEvildomState(db, tx, owner.Account, period);
         if (state.UsedThisWeek >= 3 || state.ProtectedMembers.Contains(admission.Primary.Id) || state.ProtectedMembers.Contains(admission.Standby.Id))
             throw new InvalidOperationException("再战真实通关次数或当日保护已变化");
+        command.CommandText = "UPDATE account_tag_evildom_challenges SET state=2 WHERE account=$account AND instance_id=$instance AND state=0";
+        command.ExecuteNonQuery();
         var recipient = FindMailRecipientById(db, tx, admission.Primary.Id);
         if (recipient is null || recipient.Account != owner.Account) throw new InvalidOperationException("再战固定队首收件人不存在");
         command.Parameters.AddWithValue("$day", period.Day);
@@ -128,10 +130,11 @@ internal sealed partial class CharacterRepository : ITagEvildomClearStore
             TagEvildomPeriod.At(DateTimeOffset.FromUnixTimeSeconds(admission.AdmittedAt)));
         if (state.UsedThisWeek >= 3 || state.ProtectedMembers.Contains(admission.Primary.Id) || state.ProtectedMembers.Contains(admission.Standby.Id))
             throw new InvalidOperationException("再战已通关额度或角色当天资格不足");
+        CommitTagEvildomChallenge(db, tx, owner, admission, charge.Identity.InstanceId);
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$account", owner.Account);
-        // 每账号仅保留当前未完成准入；断线残留不耗额度，下一次合法准入清掉它，历史已通关receipt永不裁剪。
+        // 每账号仅保留当前未完成准入；跨日未完成次数另由挑战记录保留，历史已通关receipt永不裁剪。
         command.CommandText = "DELETE FROM account_tag_evildom_runs WHERE account=$account AND clearance_receipt IS NULL";
         command.ExecuteNonQuery();
         command.Parameters.AddWithValue("$instance", charge.Identity.InstanceId.ToString("N"));

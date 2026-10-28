@@ -44,15 +44,31 @@ internal static class TagEvildomRewardTests
             parsed with { Pools = [new(1, [new(100, 1000, 1)]), new(1, [new(100, 1000, 2)])] }
         }) Reject<InvalidDataException>(() => Make([500, 10000], _ => malformed), "未支持附加规则或随机子池不得部分展开发奖");
         Reject<InvalidDataException>(() => Make([500, 10000], _ => parsed, weekly: 4), "周限制变化不能突破现有三队保护合同");
+        foreach (int[] malformed in new int[][] { [], [5, 30], [5, 30, 9], [6, 0, 0], [5, 30, 10, 0] })
+            Reject<InvalidDataException>(() => Make([500, 10000], _ => parsed, returning: malformed), "关闭/返回资源合同变化必须明确拒绝");
+        foreach (var (instant, allowed) in new[]
+        {
+            ("2026-10-27T05:29:59+08:00", true), ("2026-10-27T05:30:00+08:00", false),
+            ("2026-10-27T05:59:59+08:00", false), ("2026-10-27T06:00:00+08:00", true),
+            ("2026-10-26T21:30:00Z", false), ("2026-10-26T22:00:00Z", true)
+        }) That(TagEvildomSchedule.CanEnter(DateTimeOffset.Parse(instant)) == allowed, "关闭边界按UTC+8，不依赖机器时区");
+        foreach (var (entered, returned) in new[]
+        {
+            ("2026-10-27T05:29:59+08:00", "2026-10-27T05:40:00+08:00"),
+            ("2026-10-27T06:00:00+08:00", "2026-10-28T05:40:00+08:00"),
+            ("2026-10-26T21:00:00Z", "2026-10-26T21:40:00Z")
+        }) That(TagEvildomSchedule.ReturnAt(DateTimeOffset.Parse(entered).ToUnixTimeSeconds()) ==
+            DateTimeOffset.Parse(returned).ToUnixTimeSeconds(), "入场固定下一次05:40，不以最后请求延长挑战");
     }
 
-    static TagEvildomRewardCatalog Make(int[] hard, Func<int, BoosterDefinition> definition, int weekly = 3)
+    static TagEvildomRewardCatalog Make(int[] hard, Func<int, BoosterDefinition> definition, int weekly = 3, int[]? returning = null)
     {
         var strings = new List<string>();
         var tokens = new List<PvfToken>();
         void Tag(string text) { strings.Add(text); tokens.Add(new(3, strings.Count - 1)); }
         void Number(int value) => tokens.Add(new(0, value));
         Tag("[weekly reward]"); Number(weekly);
+        Tag("[tag tournament return village time]"); foreach (int value in returning ?? [5, 30, 10]) Number(value);
         Tag("[clear reward]"); foreach (int value in hard) Number(value); Tag("[/clear reward]");
         Tag("[clear reward easy mode]"); Number(600); Number(10000); Tag("[/clear reward easy mode]");
         return new(tokens, index => strings[index], definition);

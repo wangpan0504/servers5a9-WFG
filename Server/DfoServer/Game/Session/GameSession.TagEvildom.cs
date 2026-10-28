@@ -7,6 +7,7 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     long tagEvildomCharacterVersion;
+    bool tagEvildomManualReset;
 
     public TagEvildomProjection? ReadTagEvildom(ITagEvildomConfigurationStore store, DateTimeOffset now) => owner.Execute(() =>
     {
@@ -15,6 +16,54 @@ internal sealed partial class GameSession
         return new TagEvildomProjection(store.ReadTagEvildomState(owner, TagEvildomPeriod.At(now)), server,
             roster, owner.Generation, SelectionEpoch, Selected!.Id);
     });
+
+    // 客户端进图按钮 0153A170 在两个 runtimeActor(+4D8) 为空时直接返回，不发 15 也不提示。
+    // 1393/1394 只在已选队非空时发送，1662 又要等玩家先点设置。首次空编队因此两边互等。
+    // 入城时若选中队为空、当前登录角色合格，且名册里还有另一名 95 级非决斗角色，
+    // 按已发布名册顺序配第一支队伍并走原配置事务。已有编队、保护中、技能未初始化都不猜。
+    public TagEvildomProjection? EnsureTagEvildomTeam(ITagEvildomConfigurationStore store, DateTimeOffset now)
+    {
+        var capture = owner.Execute(() =>
+        {
+            if (tagEvildomManualReset || ChannelEntry?.Type != 53 || ReadTagEvildom(store, now) is not { } snapshot) return default;
+            var configuration = snapshot.State.Configuration;
+            if (!configuration.Teams[configuration.SelectedTeam].Empty) return default;
+            if (Selected is not { } selected || selected.Level < 95 || selected.IsPvpPrivate || !selected.Learning.Initialized) return default;
+            if (snapshot.State.ProtectedMembers.Contains(selected.Id)) return default;
+            var roster = snapshot.Roster.Entries;
+            int primaryIndex = -1;
+            for (int index = 0; index < roster.Length; index++)
+                if (roster[index].Id == selected.Id) { primaryIndex = index; break; }
+            if (primaryIndex < 0) return default;
+            // 名册里更靠前的合格角色才是队首。当前角色靠后时不配队，避免把它写成队友后要求重登。
+            for (int index = 0; index < primaryIndex; index++)
+            {
+                var earlier = roster[index];
+                if (earlier.Level >= 95 && !earlier.IsPvpPrivate && !snapshot.State.ProtectedMembers.Contains(earlier.Id))
+                    return default;
+            }
+            int standbyIndex = -1;
+            for (int index = primaryIndex + 1; index < roster.Length; index++)
+            {
+                var row = roster[index];
+                if (row.Level < 95 || row.IsPvpPrivate || snapshot.State.ProtectedMembers.Contains(row.Id)) continue;
+                standbyIndex = index;
+                break;
+            }
+            if (standbyIndex < 0) return default;
+            var members = new TagEvildomMemberRequest[6];
+            for (int index = 0; index < 6; index++) members[index] = new(0, -1, 0);
+            int slot = configuration.SelectedTeam * 2;
+            members[slot] = new(snapshot.Server, primaryIndex, 0);
+            members[slot + 1] = new(snapshot.Server, standbyIndex, 0);
+            return (Members: ImmutableArray.Create(members), SelectedTeam: configuration.SelectedTeam);
+        });
+        if (capture.Members.IsDefault) return null;
+        var readiness = CaptureTagEvildomSettingCharacters(store, capture.Members, capture.SelectedTeam, now);
+        if (readiness is null) return null;
+        var committed = ConfigureTagEvildom(store, capture.Members, capture.SelectedTeam, now, readiness);
+        return committed.Reason == "committed" ? committed.Projection : null;
+    }
 
     public (TagEvildomProjection? Projection, string Reason) ConfigureTagEvildom(ITagEvildomConfigurationStore store,
         ImmutableArray<TagEvildomMemberRequest>? members, int selectedTeam, DateTimeOffset now,
@@ -53,6 +102,7 @@ internal sealed partial class GameSession
         if (reason != "ready") return ((TagEvildomProjection?)null, reason);
         var committed = store.CommitTagEvildomConfiguration(owner, before, desired, TagEvildomPeriod.At(now));
         tagEvildomPair = null;
+        if (members is null || committed.Teams[committed.SelectedTeam].Empty) tagEvildomManualReset = true;
         return (snapshot with { State = snapshot.State with { Configuration = committed } }, "committed");
     });
 

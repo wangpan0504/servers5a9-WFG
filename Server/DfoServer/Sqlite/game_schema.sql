@@ -1420,3 +1420,19 @@ CREATE TABLE account_imperial_arena_rewards(
   PRIMARY KEY(account,day,monster),
   FOREIGN KEY(account,instance_id) REFERENCES account_imperial_arena_runs(account,instance_id)
 );
+
+CREATE TABLE account_tag_evildom_challenges(
+  account TEXT NOT NULL,
+  day INTEGER NOT NULL CHECK(day>0),
+  week INTEGER NOT NULL CHECK(week>0),
+  team_index INTEGER NOT NULL CHECK(team_index BETWEEN 0 AND 2),
+  maze_ordinal INTEGER NOT NULL CHECK(maze_ordinal BETWEEN 0 AND 4),
+  dungeon_id INTEGER NOT NULL CHECK(dungeon_id IN(9608,400000095)),
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  first INTEGER NOT NULL CHECK(first BETWEEN 1 AND 65535),
+  second INTEGER NOT NULL CHECK(second BETWEEN 1 AND 65535 AND second<>first),
+  admitted_at INTEGER NOT NULL CHECK(admitted_at>=0),
+  sequence INTEGER NOT NULL CHECK(sequence>0),
+  state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 2),
+  PRIMARY KEY(account,day,team_index)
+);

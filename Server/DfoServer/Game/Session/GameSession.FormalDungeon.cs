@@ -1343,7 +1343,11 @@ internal sealed partial class GameSession
                 PremiumPcRoom);
             after = ConsumableStatePolicy.CrossBoundary(after, ConsumableMaintenance.Town, retreatAt.ToUnixTimeMilliseconds());
             var back = dungeon.OrdinaryReturnPosition ?? Selected.Position;
-            if (Selected.Position != back || after != before)
+            if (dungeon.Run.TagEvildomAdmission is not null && repository is DfoServer.Game.TagEvildom.ITagEvildomConfigurationStore tagStore)
+                Selected = tagStore.CommitTagEvildomReturn(owner, Selected, dungeon.Run.Snapshot.Identity.InstanceId,
+                    back, Selected.Return, after == before ? null : new InventoryPlan(before, after, "dungeon_retreat_stamina", new(Selected)),
+                    DfoServer.Game.TagEvildom.TagEvildomPeriod.At(retreatAt).Day);
+            else if (Selected.Position != back || after != before)
                 Selected = repository.Save(owner, Selected, back, Selected.Return,
                     after == before ? null : new InventoryPlan(before, after, "dungeon_retreat_stamina", new(Selected)));
         }

@@ -16,6 +16,7 @@ internal sealed partial class GameSession
         TagEvildomRewardCatalog rewards, ITagEvildomConfigurationStore store, Func<int, int>? draw = null)
     {
         var clock = timeProvider ?? TimeProvider.System;
+        if (!TagEvildomSchedule.CanEnter(clock.GetUtcNow())) return null;
         var capture = owner.Execute(() =>
         {
             if (Phase is not (SessionPhase.Town or SessionPhase.MapSelect) || formalDungeon is not null ||
@@ -34,7 +35,9 @@ internal sealed partial class GameSession
         var definition = dungeons.Get(checked((int)dungeonId));
         if (!TagEvildomEntryPolicy.Supports(definition)) return null;
         int ordinal;
-        if (capture.Previous is { } previous && previous.Admission.DungeonId == dungeonId &&
+        var day = TagEvildomPeriod.At(clock.GetUtcNow()).Day;
+        if (store.ReadTagEvildomRoute(owner, day, capture.State.Configuration.SelectedTeam) is int saved) ordinal = saved;
+        else if (capture.Previous is { } previous &&
             ReferenceEquals(previous.Selection, CurrentDungeonSelection)) ordinal = previous.MazeOrdinal;
         else
         {
@@ -44,13 +47,14 @@ internal sealed partial class GameSession
         }
         return owner.Execute(() =>
         {
-            if (CurrentTagEvildomPair(store, clock.GetUtcNow()) is not { } current || !ReferenceEquals(current.Primary, characters.Primary) ||
+            if (!TagEvildomSchedule.CanEnter(clock.GetUtcNow()) || TagEvildomPeriod.At(clock.GetUtcNow()).Day != day ||
+                CurrentTagEvildomPair(store, clock.GetUtcNow()) is not { } current || !ReferenceEquals(current.Primary, characters.Primary) ||
                 current.Projection.State.Configuration != characters.Projection.State.Configuration ||
                 !ReferenceEquals(tagEvildomSelection, capture.Previous)) return null;
             var receipt = BeginDungeonSelection();
             if (receipt is null) return null;
             var admission = new TagEvildomAdmission(capture.State.Configuration, characters.Primary, characters.Standby,
-                checked((int)dungeonId), rewards.ResourceKey, clock.GetUtcNow().ToUnixTimeSeconds());
+                checked((int)dungeonId), rewards.ResourceKey, clock.GetUtcNow().ToUnixTimeSeconds()) { MazeOrdinal = ordinal };
             admission.Validate();
             tagEvildomSelection = new(admission, ordinal, CurrentDungeonSelection!, store);
             return receipt;
@@ -61,5 +65,8 @@ internal sealed partial class GameSession
         tagEvildomSelection is { } choice && choice.Admission.DungeonId == dungeonId && SelectionEpoch == epoch &&
         ReferenceEquals(choice.Selection, CurrentDungeonSelection) && Phase == SessionPhase.MapSelect &&
         ReferenceEquals(choice.Admission.Primary, expected) &&
+        TagEvildomSchedule.CanEnter((timeProvider ?? TimeProvider.System).GetUtcNow()) &&
+        TagEvildomPeriod.At((timeProvider ?? TimeProvider.System).GetUtcNow()) ==
+            TagEvildomPeriod.At(DateTimeOffset.FromUnixTimeSeconds(choice.Admission.AdmittedAt)) &&
         CurrentTagEvildomPair(choice.Store, (timeProvider ?? TimeProvider.System).GetUtcNow()) is not null ? choice : null);
 }

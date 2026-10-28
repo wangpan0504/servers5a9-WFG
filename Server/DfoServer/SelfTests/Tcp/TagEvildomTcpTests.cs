@@ -50,31 +50,33 @@ internal static partial class TagEvildomTcpTests
         using (var peer = Open(fixture, gamePort: endpoints[46], channelNumber: 46))
         {
             That(peer.LoginEndpoint[3] == 53, "再战真实频道LOGIN类型53，不借魔界大战54或普通频道");
-            peer.Select(tagEvildom: [1677, 1678]);
-            Bytes(peer.TagEvildomInfo[0].Body, empty, "无编队登录真实空配置54B");
+            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+            Bytes(peer.TagEvildomInfo[0].Body, populated, "无编队的合格双角色入城提交第一支队伍并下发54B");
             Bytes(peer.TagEvildomInfo[1].Body, status, "无通关事实的真实1678初态46B");
+            ValidateProjection(peer.TagEvildomInfo, populated, status, primary.Id, standby, equipment, template.EquipmentSlot);
+            long expectFirst = primary.Id, expectSecond = standby.Id;
+            That(fixture.Query("SELECT first0,second0,revision FROM account_tag_evildom_configuration") is [[long seededFirst, long seededSecond, 1L]] &&
+                seededFirst == expectFirst && seededSecond == expectSecond,
+                "首次入城按名册把当前角色配为队首、下一名95级角色配为队友，保存稳定ID");
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", primary.Id) is [[38L, 1L]],
                 "type53仍按本版原生落38/1，不伪称默认62/0");
             string assets = Assets();
             foreach (byte[] invalid in new[] { Setting(0, 1), Setting(0, 0), Setting(0, 99), Setting(0, 2, region: 3) })
             {
                 peer.Send(1662, invalid); peer.Expect(1, 1662, [0, 19, 0]); peer.Expect(0, 1709); peer.Barrier();
-                That(fixture.Query("SELECT count(*) FROM account_tag_evildom_configuration") is [[0L]] && Assets() == assets,
-                    "94级、重复、名册外和跨区配置均拒绝，不建行不改资产");
+                That(fixture.Query("SELECT first0,second0,revision FROM account_tag_evildom_configuration") is [[long keptFirst, long keptSecond, 1L]] &&
+                    keptFirst == expectFirst && keptSecond == expectSecond && Assets() == assets,
+                    "94级、重复、名册外和跨区配置均拒绝，不覆盖首次入城编队，不改资产");
             }
             peer.Send(1662, Setting(0, 2));
             peer.Expect(1, 1662, Accepted(populated));
             ReadConfiguration(peer, populated, status);
-            That(fixture.Query("SELECT first0,second0,revision FROM account_tag_evildom_configuration") is [[long first, long second, 1L]] &&
-                first == primary.Id && second == standby.Id && Assets() == assets,
-                "成功后持久稳定ID而非0/2名册索引，编队只改配置");
-            // 原生非空成功随后发CMD7，重新选中队首才是新的active实例。
-            ReturnToSelection(peer);
-            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
-            ValidateProjection(peer.TagEvildomInfo, populated, status, primary.Id, standby, equipment, template.EquipmentSlot);
-            ExitRoom(peer);
+            That(fixture.Query("SELECT first0,second0,revision FROM account_tag_evildom_configuration") is [[long sameFirst, long sameSecond, 1L]] &&
+                sameFirst == expectFirst && sameSecond == expectSecond && Assets() == assets,
+                "重复保存同一对稳定ID不推进配置版本，也不改角色资产");
+            ExitRoom(peer, republish: true);
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", primary.Id) is [[62L, 0L]],
-                "真实53房间出口通过当前PVF准入和gate落中央竞技场62/0");
+                "真实53房间出口通过当前PVF准入和gate落中央竞技场62/0，并在新位置重发双角色资料");
             string beforeEntry = Economy(fixture);
             foreach (uint dungeon in new uint[] { 9608, 400000095 })
             {
@@ -96,6 +98,7 @@ internal static partial class TagEvildomTcpTests
                 That(Economy(fixture) == beforeEntry && fixture.Query("SELECT count(*) FROM account_tag_evildom_clearances") is [[0L]],
                     "双难度真实15/16/37、切角/单角12秒复活/双死42仅推进原Run，不扣疲劳币、不发奖励；回城自动重建下一轮pair");
             }
+            status = Gathering(4);
             peer.Send(1663); peer.Expect(1, 1663, Accepted(empty));
             peer.Expect(0, 1677, empty); peer.Expect(0, 1678, status); peer.Barrier();
             peer.Send(15, Build(w => { w.Write(9608u); w.Write((ushort)0); })); peer.Send(16, Selection(9608));
@@ -108,23 +111,23 @@ internal static partial class TagEvildomTcpTests
             peer.Send(1662, Setting(-1, -1)); peer.Expect(1, 1662, Accepted(empty));
             peer.Expect(0, 1677, empty); peer.Expect(0, 1678, status);
             peer.Expect(1, 7, [1]); peer.Expect(0, 2);
-            // 此时已在选角态，不能发仅Town可用的1347屏障；下一次真实4会校验没有多余退场包。
+            // 主动清空后的同一次选角保持空队，不把当前角色再写成队友。新连接才重新配队。
             peer.Select(tagEvildom: [1677, 1678]); peer.Barrier();
+            Bytes(peer.TagEvildomInfo[0].Body, empty, "同一次登录里主动清空后重选保持空队");
             That(peer.Id == primary.Id, "空1662走完整既有小退与新名册，随后可正常重选无旧active资料残留发送");
             ReturnToSelection(peer);
-            peer.Select(3, tagEvildom: [1677, 1678]); ExitRoom(peer);
+            peer.Select(3, tagEvildom: [1677, 1678]); ExitRoom(peer, republish: false);
             That(fixture.Query("SELECT town FROM characters WHERE name='TagTooLow'") is [[38L]],
                 "93级不因新增频道跳过Stadium原有94级准入");
         }
         using (var peer = Open(fixture, gamePort: endpoints[46], channelNumber: 46))
         {
-            peer.Select(tagEvildom: [1677, 1678]);
-            Bytes(peer.TagEvildomInfo[0].Body, empty, "重登保留已提交重置，不复活旧队");
-            peer.Send(1662, Setting(0, 2)); peer.Expect(1, 1662, Accepted(populated));
-            ReadConfiguration(peer, populated, status);
+            peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
+            Bytes(peer.TagEvildomInfo[0].Body, populated, "新连接遇到空选中队时再次配第一支合格队伍");
+            ValidateProjection(peer.TagEvildomInfo, populated, status, primary.Id, standby, equipment, template.EquipmentSlot);
             ReturnToSelection(peer);
             peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
-            ExitRoom(peer);
+            ExitRoom(peer, republish: true);
             peer.Send(15, Build(w => { w.Write(9608u); w.Write((ushort)1); })); peer.Closed();
         }
         using (var ordinary = Open(fixture))
@@ -143,6 +146,7 @@ internal static partial class TagEvildomTcpTests
         await VerifyExpiredStandbyAsync(fixture, resources, endpoints[46], primary, standby);
         await fixture.StopAsync();
         await VerifyClearAsync(source, root, resources);
+        await VerifyDailyScheduleAsync(source, root, resources);
         Console.WriteLine($"PASS {Count - checks} 再战魔界真实频道、编队重置、双角色资料、准入拒绝与重登TCP断言");
 
         string Assets() => fixture.Snapshot("SELECT id,revision,gold FROM characters ORDER BY id") +
@@ -152,7 +156,12 @@ internal static partial class TagEvildomTcpTests
     }
 
     static void ReturnToSelection(TcpPeer peer) { peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2); }
-    static void ExitRoom(TcpPeer peer) { peer.Send(1426); peer.Expect(0, 23); peer.Expect(0, 24); peer.Barrier(); }
+    static void ExitRoom(TcpPeer peer, bool republish = false)
+    {
+        peer.Send(1426); peer.Expect(0, 23); peer.Expect(0, 24);
+        if (republish) { peer.Expect(0, 1677); peer.Expect(0, 1678); peer.Expect(0, 1393); peer.Expect(0, 1394); }
+        peer.Barrier();
+    }
     static byte[] Selection(uint dungeon) => Build(w =>
     {
         w.Write(dungeon); w.Write((byte)0); w.Write((ushort)0); w.Write((byte)0); w.Write((byte)0);
@@ -166,8 +175,8 @@ internal static partial class TagEvildomTcpTests
     static byte[] Setting(int first, int second, byte region = 2) => Build(w =>
     { w.Write(Enumerable.Repeat((byte)0xAC, 13).ToArray()); w.Write(Teams(first, second, region)); w.Write(0); w.Write(0x78563412); });
     static byte[] Accepted(byte[] teams) => Build(w => { w.Write((byte)1); w.Write(new byte[13]); w.Write(teams); w.Write(0); w.Write(0); });
-    static byte[] Gathering() => Build(w =>
-    { w.Write(0); w.Write(0); w.Write(-1); w.Write(3); for (int i = 0; i < 6; i++) { w.Write((byte)0); w.Write(-1); } });
+    static byte[] Gathering(int mode = 3) => Build(w =>
+    { w.Write(0); w.Write(0); w.Write(-1); w.Write(mode); for (int i = 0; i < 6; i++) { w.Write((byte)0); w.Write(-1); } });
 
     static void ReadConfiguration(TcpPeer peer, byte[] teams, byte[] gathering)
     { peer.Expect(0, 1677, teams); peer.Expect(0, 1678, gathering); peer.Barrier(); }

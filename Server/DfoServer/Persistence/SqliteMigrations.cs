@@ -227,6 +227,8 @@ internal static class SqliteMigrations
         new(112, "婚姻关系与共享资产账本", MarriageSchema.Upgrade),
         // 帝国竞技场分支的临时号 126 已被本地栈占用到 112，接在队尾顺延为 113。
         new(113, "帝国竞技场编队、日券与领奖账本", ImperialArenaSchema.Upgrade),
+        // 再战魔界挑战分支的临时号 126 已被本地栈占用到 113，接在队尾顺延为 114。
+        new(114, "再战魔界固定挑战路线与跨日尝试", TagEvildomChallengeSchema.Upgrade),
     ];
 
     internal const string BossSelectionBuffSchema = """
@@ -2130,6 +2132,7 @@ internal static class SqliteMigrations
             (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
             (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),
             (TagEvildomRunSchema.Table,TagEvildomRunSchema.Definition),
+            (TagEvildomChallengeSchema.Table,TagEvildomChallengeSchema.Definition),
             ("imperial_arena_daily_routes",ImperialArenaSchema.Routes),
             ("account_imperial_arena_configuration",ImperialArenaSchema.Configuration),
             ("account_imperial_arena_days",ImperialArenaSchema.Days),

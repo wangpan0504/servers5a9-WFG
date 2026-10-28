@@ -60,18 +60,23 @@ internal sealed partial class CharacterRepository : ITagEvildomConfigurationStor
         command.Parameters.AddWithValue("$account", account);
         command.Parameters.AddWithValue("$day", period.Day);
         command.Parameters.AddWithValue("$week", period.Week);
-        using var reader = command.ExecuteReader();
         var protectedMembers = ImmutableHashSet.CreateBuilder<ushort>();
         int used = 0;
-        while (reader.Read())
-        {
-            if (reader.GetInt32(1) == period.Week) used++;
-            if (reader.GetInt32(0) != period.Day) continue;
-            protectedMembers.Add(checked((ushort)reader.GetInt32(2)));
-            protectedMembers.Add(checked((ushort)reader.GetInt32(3)));
-        }
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+            {
+                if (reader.GetInt32(1) == period.Week) used++;
+                if (reader.GetInt32(0) != period.Day) continue;
+                protectedMembers.Add(checked((ushort)reader.GetInt32(2)));
+                protectedMembers.Add(checked((ushort)reader.GetInt32(3)));
+            }
+        // 跨过06点仍未明确退场或通关的旧准入只占原周次数，不伪造通关、保护或奖励。
+        command.CommandText = "SELECT count(*) FROM account_tag_evildom_challenges WHERE account=$account AND week=$week AND day<$day AND state=0";
+        used += checked((int)(long)command.ExecuteScalar()!);
+        command.CommandText = "SELECT dungeon_id FROM account_tag_evildom_challenges WHERE account=$account ORDER BY sequence DESC LIMIT 1";
+        int mode = command.ExecuteScalar() is long dungeon && dungeon == 400000095 ? 4 : 3;
         if (used > 3 || protectedMembers.Count > 6) throw new InvalidDataException("再战魔界通关事实超出本版上限");
-        return new(configuration, used, protectedMembers.ToImmutable());
+        return new(configuration, used, protectedMembers.ToImmutable()) { Mode = mode };
     }
 
     static TagEvildomConfiguration ReadTagEvildomConfiguration(SqliteConnection db, SqliteTransaction? tx, string account)
