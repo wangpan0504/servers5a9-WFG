@@ -73,9 +73,11 @@ internal sealed class InventoryPlan
         Before.GoldCarryLimit != After.GoldCarryLimit || Before.AuctionGoldLimit != After.AuctionGoldLimit ||
         Before.CargoCapacity != After.CargoCapacity || Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
         Before.AccountCargo.Gold != After.AccountCargo.Gold || !ShopPurchaseCount.Same(Before.ShopPurchases, After.ShopPurchases) ||
-        !Before.EpicPieces.Same(After.EpicPieces) || !DailyBoosterUsage.Same(Before.DailyBoosterUses, After.DailyBoosterUses);
+        !Before.EpicPieces.Same(After.EpicPieces) || !DailyBoosterUsage.Same(Before.DailyBoosterUses, After.DailyBoosterUses) ||
+        !Before.AccountSkins.Same(After.AccountSkins);
     public bool AccountCargoChanged => Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
         Before.AccountCargo.Gold != After.AccountCargo.Gold || ChangedSlots.Any(slot => slot.List == InventoryListType.AccountCargo);
+    public bool AccountSkinsChanged => !Before.AccountSkins.Same(After.AccountSkins);
 }
 
 // 只有 Session 完成同步提交、安装在线快照后创建；规划中的 UID=0 不进入发布路径。

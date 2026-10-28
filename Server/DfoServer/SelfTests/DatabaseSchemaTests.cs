@@ -215,6 +215,7 @@ internal static partial class DatabaseSchemaTests
             PvpRankUpgrade(root);
             FatigueDailyUpgrade(root);
             ServerItemUpgrade(root);
+            AccountSkinStorageUpgrade(root);
             PlayerInteractionPreviewUpgrade(root);
             VerifyReceiptDefinitionFixture(root);
             ObjectKeyUpgrade(root);

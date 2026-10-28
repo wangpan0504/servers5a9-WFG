@@ -151,6 +151,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         // 新角色尚无实体；读取同账号已有仓库后合入角色初始物品，不能重写共享资产。
         var before = ReadInventory(db, id, transaction) with { Gold = 0 };
         var initial = character.Inventory with { AccountWallet = before.AccountWallet, AccountCargo = before.AccountCargo,
+            AccountSkins = before.AccountSkins,
             ShopPurchases = before.ShopPurchases, EpicPieces = before.EpicPieces, Items = character.Inventory.Items.AddRange(before.Items) };
         var plan = new InventoryPlan(before, initial, "character_starter");
         var inventory = WriteInventory(db, transaction, owner, id, plan, initial);

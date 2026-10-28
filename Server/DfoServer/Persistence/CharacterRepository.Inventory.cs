@@ -283,6 +283,9 @@ internal sealed partial class CharacterRepository
         if (plan.After.AccountWallet.Revision != plan.Before.AccountWallet.Revision || plan.After.AccountCargo.Revision != plan.Before.AccountCargo.Revision ||
             plan.After.EpicPieces.Revision != plan.Before.EpicPieces.Revision)
             throw new InvalidOperationException("业务不能修改账号资产版本");
+        // 账号皮肤仓只允许兑换券使用改动；其余业务改动账号归属皮肤属于越权。
+        if (plan.AccountSkinsChanged && plan.Reason != "skin_storage_add")
+            throw new InvalidOperationException("业务不能修改账号皮肤仓");
     }
 
     static void ValidateCurrentInventoryPlan(Character current, Character expected, InventoryPlan plan)
@@ -366,6 +369,7 @@ internal sealed partial class CharacterRepository
             WriteLearning(db, transaction, current.Id, learning);
         }
         inventory = WriteCargo(db, transaction, owner, expected.Id, plan, inventory);
+        inventory = WriteAccountSkins(db, transaction, owner.Account, plan, inventory);
         WriteShopPurchases(db, transaction, owner.Account, expected.Id, plan.Before, inventory);
         WriteItemMakingSkills(db, transaction, expected.Id, owner.Account, plan);
         inventory = WriteEpicPieces(db, transaction, owner, expected.Id, plan.Before, inventory, plan.Reason);
@@ -432,7 +436,7 @@ internal sealed partial class CharacterRepository
         var right = plan.Before;
         if (ReferenceEquals(left, right))
             return true;
-        if (!left.ServerItems.Same(right.ServerItems) || !BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
+        if (!left.ServerItems.Same(right.ServerItems) || !BossSelectionBuff.Same(left.BossSelectionBuff, right.BossSelectionBuff) || !left.NpcFavor.SequenceEqual(right.NpcFavor) || !left.ItemMakingSkills.Same(right.ItemMakingSkills) || !left.Skins.Same(right.Skins) || !left.AccountSkins.Same(right.AccountSkins) || !left.ConsumableStates.SequenceEqual(right.ConsumableStates) || left.Gold != right.Gold || left.Expansion != right.Expansion || left.CubeContract != right.CubeContract || left.ReviveCoins != right.ReviveCoins ||
             left.WinPoints != right.WinPoints || left.GoldCarryLimit != right.GoldCarryLimit || left.AuctionGoldLimit != right.AuctionGoldLimit ||
             !left.AccountWallet.Same(right.AccountWallet) || left.StaminaUntil != right.StaminaUntil || !left.DevilUses.SequenceEqual(right.DevilUses) || !DailyBoosterUsage.Same(left.DailyBoosterUses, right.DailyBoosterUses) || left.AvatarExpansion != right.AvatarExpansion || left.CargoCapacity != right.CargoCapacity || left.AccountCargo != right.AccountCargo ||
             !ShopPurchaseCount.Same(left.ShopPurchases, right.ShopPurchases) || !left.EpicPieces.Same(right.EpicPieces) ||
@@ -496,7 +500,7 @@ internal sealed partial class CharacterRepository
         {
             ReviveCoins = coins, WinPoints = wins, GoldCarryLimit = carry, AuctionGoldLimit = auction,
             AccountWallet = shared.Wallet, CubeContract = cubeContract, AvatarExpansion = avatarExpansion, DevilUses = devilUses, StaminaUntil = staminaUntil, CargoCapacity = capacity, AccountCargo = shared.Cargo,
-            NpcFavor = npcFavor, Skins = weaponSkins, AvatarPresets = avatarPresets, ItemMakingSkills = ReadItemMakingSkills(db, transaction, characterId, account),
+            NpcFavor = npcFavor, Skins = weaponSkins, AccountSkins = shared.Skins, AvatarPresets = avatarPresets, ItemMakingSkills = ReadItemMakingSkills(db, transaction, characterId, account),
             ShopPurchases = purchases, EpicPieces = shared.Pieces, DailyBoosterUses = dailyBoosterUses,
             ConsumableStates = ReadConsumableStates(db, transaction, characterId, account),
             BossSelectionBuff = ReadBossSelectionBuff(db, transaction, characterId, account),

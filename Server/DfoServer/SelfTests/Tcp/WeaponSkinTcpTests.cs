@@ -26,9 +26,15 @@ internal static class WeaponSkinTcpTests
             assets.Skins.Token(10303302) is { Type: 2, SkinId: 8, Expiration: { AbsoluteTime: 0, Days: 0 } } &&
             assets.Skins.Token(490005168) is null,
             "新版字体按SKN读取，兼容不同期限，不将当前客户端未识别的旧add damage font动作冒充199");
-        That(assets.Skins.HasCutscenes && assets.Skins.Token(10309379) is { Type: 1, SkinId: 30069 } &&
-            assets.Skins.Token(10309401) is { Type: 1, SkinId: 30068, Expiration.Days: 30 } &&
-            assets.Skins.Token(10303187) is null, "技能插画由真实SKN类型决定；未接账号归属时不把账号券错误落为单角色资产");
+        That(assets.Skins.HasCutscenes && assets.Skins.Token(10309379) is { Type: 1, SkinId: 30069, AccountWide: false } &&
+            assets.Skins.Token(10309401) is { Type: 1, SkinId: 30068, Expiration.Days: 30, AccountWide: false } &&
+            assets.Skins.Token(10303187) is { Type: 1, SkinId: 30024, AccountWide: true },
+            "技能插画由真实SKN类型决定；[action target]为[account]的券保留账号归属，不压成单角色资产");
+        That(assets.Skins.HasPartyFrames && assets.Skins.Token(490013498) is { Type: 0, SkinId: 420000002, AccountWide: true } &&
+            assets.Skins.Token(490010773) is { Type: 0, SkinId: 420000001, AccountWide: true, Expiration: { AbsoluteTime: 0, Days: 0 } } &&
+            assets.Skins.Token(490013423) is { Type: 3, SkinId: 410000046, Expiration.Days: 0, AccountWide: true } &&
+            assets.Skins.Emoticons.Contains(410000046) && assets.Skins.PartyFrames.Contains(20000),
+            "组队头像框与即时表情按0429E5F0的SKN[type]映射读到类别0和3，默认头像框20000在册而表情没有默认");
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "weapon-skin"), resources: resources);
         var repo = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
@@ -41,7 +47,8 @@ internal static class WeaponSkinTcpTests
                     Material(121, 490704411, 2), Material(122, 490704427, 2),
                     Material(71, 10160911, 1), Material(72, 10161605, 1), Material(73, 10303302, 1),
                     Material(74, 10303302, 1), Material(75, 10160602, 1),
-                    Material(76,10309379,1),Material(77,10309401,1),Material(80,10303187,1),Material(81,10301425,1)], Gold: 54321)
+                    Material(76,10309379,1),Material(77,10309401,1),Material(80,10303187,1),Material(81,10301425,1),
+                    Material(82,490013423,1),Material(83,490010773,1)], Gold: 54321)
             });
             repo.Create(owner, new("SkinSibling", resources.Towns.Room, resources.Towns.InitialReturn)
             {
@@ -261,12 +268,11 @@ internal static class WeaponSkinTcpTests
             ChooseCutscenes(peer,[30000,30069,30068]);
             string before=Snapshot();
             Use(peer,81);peer.Expect(1,515,[0,3,0,81,0,0,199]);
-            Use(peer,80);peer.Expect(1,515,[0,3,0,80,0,0,199]);
             peer.Send(1573,Build(w=>{w.Write(1);w.Write(30002);w.Write(new byte[36]);}));peer.Expect(1,1573,[0,19,0]);
             peer.Send(1573,Build(w=>{w.Write(1);w.Write(30069);w.Write(30069);w.Write(new byte[32]);}));peer.Expect(1,1573,[0,19,0]);
             peer.Barrier();
             That(State().SelectedCutscenes.SequenceEqual([30000,30069,30068]) && Snapshot()==before,
-                "多选完整保存；未拥有、重复选择和未接账号路径拒绝，不损坏武器或字体状态");
+                "多选完整保存；未拥有、重复选择和职业不符的券拒绝，不损坏武器或字体状态");
             savedCutscenes=State().Cutscenes.ToArray();
         }
         using(var peer=Open(fixture))
@@ -311,6 +317,76 @@ internal static class WeaponSkinTcpTests
             peer.Send(1573,Build(w=>{w.Write(2);w.Write(3);w.Write(new byte[36]);}));peer.Expect(1,1573,[0,19,0]);peer.Barrier();
             That(Snapshot()==before, "重建服务后过期字体不可选择，回退完成后不反复写入或续期");
         }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(weaponSkins:([32000],0),damageFonts:([savedFonts.Single(row=>row.SkinId==8)],1),
+                cutscenes:([savedCutscenes.Single(row=>row.SkinId==30069)],[30000,30069]));
+            That(AccountState().Cutscenes.IsEmpty && AccountState().Emoticons.IsEmpty, "账号券入库前账号皮肤仓保持空表");
+
+            Use(peer,80);
+            peer.Expect(1,515,Build(w=>{w.Write((byte)1);w.Write((short)80);w.Write((byte)0);w.Write(199);}));
+            // 账号归属的插画只进第二份列表，角色列表仍是默认30000与已拥有的30069。
+            peer.Expect(0,1557,Build(w=>
+            {
+                w.Write((byte)1);w.Write((ushort)2);w.Write(30000);w.Write(0);w.Write(30069);w.Write(0);
+                w.Write((ushort)1);w.Write(30024);w.Write(0);
+            }));
+            peer.Expect(0,1559,Build(w=>{w.Write((byte)1);w.Write((byte)1);w.Write(30024);}));
+            peer.Expect(0,1558,Build(w=>{w.Write((byte)1);w.Write((ushort)2);w.Write(30000);w.Write(30069);}));
+
+            Use(peer,82);
+            peer.Expect(1,515,Build(w=>{w.Write((byte)1);w.Write((short)82);w.Write((byte)0);w.Write(199);}));
+            peer.Expect(0,1557,Build(w=>
+            {
+                w.Write((byte)3);w.Write((ushort)0);w.Write((ushort)1);w.Write(410000046);w.Write(0);
+            }));
+            peer.Expect(0,1559,Build(w=>{w.Write((byte)1);w.Write((byte)3);w.Write(410000046);}));
+            peer.Expect(0,1558,Build(w=>{w.Write((byte)3);w.Write(0);w.Write(0);w.Write(0);w.Write(0);}));
+            peer.Barrier();
+            That(AccountState().Cutscenes is [{SkinId:30024,ExpiresAt:0}] &&
+                AccountState().Emoticons is [{SkinId:410000046,ExpiresAt:0}] &&
+                State().Cutscenes.All(row=>row.SkinId!=30024) && State().Emoticons.IsEmpty,
+                "账号券写入账号皮肤仓，角色皮肤仓不复制账号条目");
+
+            peer.Send(1573,Build(w=>{w.Write(3);w.Write(410000046);w.Write(new byte[36]);}));
+            peer.Expect(1,1573,Build(w=>{w.Write((byte)1);w.Write(3);w.Write(410000046);w.Write(new byte[36]);}));
+            peer.Barrier();
+            That(State().SelectedEmoticons.SequenceEqual([410000046,0,0,0]),
+                "账号皮肤仓的即时表情可以成为本角色4栏选择，选择仍保存在角色存档");
+
+            // 490010773是正式的[account]归属永久头像框券，用它验证账号仓入库；其余头像框券都带已过的[date]期限。
+            That(State().SelectedPartyFrame == 0, "组队头像框未选择时角色存档保持0，服务端仍按原生默认20000下发");
+            peer.Send(1573,Build(w=>{w.Write(0);w.Write(20000);w.Write(new byte[36]);}));
+            peer.Expect(1,1573,Build(w=>{w.Write((byte)1);w.Write(0);w.Write(20000);w.Write(new byte[36]);}));
+            peer.Barrier();
+            That(State().SelectedPartyFrame == 20000, "组队头像框默认20000可以成为本角色选择并写入角色存档");
+
+            Use(peer,83);
+            peer.Expect(1,515,Build(w=>{w.Write((byte)1);w.Write((short)83);w.Write((byte)0);w.Write(199);}));
+            peer.Expect(0,1557,Build(w=>
+            {
+                w.Write((byte)0);w.Write((ushort)1);w.Write(20000);w.Write(0);
+                w.Write((ushort)1);w.Write(420000001);w.Write(0);
+            }));
+            peer.Expect(0,1559,Build(w=>{w.Write((byte)1);w.Write((byte)0);w.Write(420000001);}));
+            peer.Expect(0,1558,Build(w=>{w.Write((byte)0);w.Write(20000);}));
+            peer.Barrier();
+            That(AccountState().PartyFrames is [{SkinId:420000001,ExpiresAt:0}] && State().PartyFrames.IsEmpty,
+                "账号归属的头像框券写入账号皮肤仓，角色皮肤仓不复制条目");
+
+            peer.Send(1573,Build(w=>{w.Write(0);w.Write(420000001);w.Write(new byte[36]);}));
+            peer.Expect(1,1573,Build(w=>{w.Write((byte)1);w.Write(0);w.Write(420000001);w.Write(new byte[36]);}));
+            peer.Barrier();
+            That(State().SelectedPartyFrame == 420000001, "账号皮肤仓的头像框可以成为本角色选择，选择仍保存在角色存档");
+
+            peer.Send(7);peer.Expect(1,7,[1]);peer.Expect(0,2);
+            peer.Select(1, accountSkins: AccountState());
+            peer.Send(1573,Build(w=>{w.Write(1);w.Write(30024);w.Write(new byte[36]);}));
+            peer.Expect(1,1573,Build(w=>{w.Write((byte)1);w.Write(1);w.Write(30024);w.Write(new byte[36]);}));
+            peer.Barrier();
+            That(State(2).SelectedCutscenes.SequenceEqual([30024]) && State(2).Cutscenes.IsEmpty,
+                "同账号其他角色看见并能选择账号皮肤仓的插画，自身角色仓仍为空");
+        }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "武器幻化存档保持SQLite及外键完整");
@@ -327,6 +403,9 @@ internal static class WeaponSkinTcpTests
             "SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", Uid(slot))[0][0])!;
         SkinStorageState State(int characterId = 1) => JsonSerializer.Deserialize<SkinStorageState>((string)fixture.Query(
             "SELECT weapon_skin_state FROM characters WHERE id=$p0", characterId)[0][0])!;
+        SkinStorageState AccountState() => fixture.Query("SELECT state_json FROM account_skin_storage WHERE account=$p0",
+            fixture.Options.DevelopmentAccount) is [[string accountState]]
+            ? JsonSerializer.Deserialize<SkinStorageState>(accountState)! : SkinStorageState.Empty;
         string Snapshot() => fixture.Snapshot("SELECT revision,gold,weapon_skin_state FROM characters ORDER BY id") + Assets();
         string Assets() => fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") +
             fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY item_uid") +

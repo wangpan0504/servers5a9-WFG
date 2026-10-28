@@ -20,14 +20,15 @@ internal static class SkinStorageRequests
         if (body.Length != 44) throw new InvalidDataException("皮肤选择请求应为44字节");
         int type = BinaryPrimitives.ReadInt32LittleEndian(body);
         int first = BinaryPrimitives.ReadInt32LittleEndian(body[4..]);
-        if (first < 0 || type != 1 && body[8..].IndexOfAnyExcept((byte)0) >= 0)
-            throw new InvalidDataException("武器和伤害字体选择只允许一个非负编号");
+        // 类型1（技能插画最多10个）与类型3（即时表情固定4个）带编号列表，其余类别只允许单个编号。
+        if (first < 0 || type is not (1 or 3) && body[8..].IndexOfAnyExcept((byte)0) >= 0)
+            throw new InvalidDataException("武器、伤害字体和组队头像框选择只允许一个非负编号");
         var additional = ImmutableArray.CreateBuilder<int>();
-        if (type == 1)
+        if (type is 1 or 3)
             for (int at = 8; at < body.Length; at += 4)
             {
                 int id = BinaryPrimitives.ReadInt32LittleEndian(body[at..]);
-                if (id < 0) throw new InvalidDataException("技能插画编号不能为负数");
+                if (id < 0) throw new InvalidDataException("多选皮肤编号不能为负数");
                 additional.Add(id);
             }
         return new(type, first) { AdditionalIds = additional.ToImmutable() };

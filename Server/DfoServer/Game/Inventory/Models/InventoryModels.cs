@@ -57,6 +57,8 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
     public AccountWallet AccountWallet { get; init; } = AccountWallet.Empty;
     public CubeContractState CubeContract { get; init; } = CubeContractState.Empty;
     public SkinStorageState Skins { get; init; } = SkinStorageState.Empty;
+    // 账号皮肤仓只保存账号归属的所有权，选中项始终跟随角色，此副本不写选中字段。
+    public SkinStorageState AccountSkins { get; init; } = SkinStorageState.Empty;
     public AvatarPresetState AvatarPresets { get; init; } = AvatarPresetState.Empty;
     public ItemMakingSkillState ItemMakingSkills { get; init; } = ItemMakingSkillState.Empty;
     public ushort AvatarExpansion { get; init; } = 105;
@@ -77,7 +79,8 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
         if (AvatarExpansion > 315 || AvatarExpansion % 7 != 0) throw new InvalidDataException("装扮栏扩展值无效");
         AccountWallet.Validate();
         CubeContract.Validate();
-        Skins.Validate();
+        Skins.Validate(AccountSkins);
+        AccountSkins.Validate();
         AvatarPresets.Validate();
         ItemMakingSkills.Validate();
         DailyBoosterUsage.Validate(DailyBoosterUses);

@@ -257,7 +257,9 @@ internal static partial class TownPackets
             writer.Write(0u); // 02675CD0是成长胶囊计量经验，写player+0x4560，不能填冒险团等级。
             writer.Write(new byte[2]); // 0267B480及其后的独立u8。
             // 0267AC80读类别数量后按类型展开；原先把空类别的计数字节并入上面的保留字节。
-            SkinStoragePackets.WriteUserInfo(writer, character.Inventory.Skins, (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds());
+            // 选择可以指向账号皮肤仓的条目，分组按角色与账号并集投影。
+            SkinStoragePackets.WriteUserInfo(writer, Game.Inventory.Services.InventorySkinStorageService.Merged(character.Inventory),
+                (utcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds());
             return stream.ToArray();
         }
     }

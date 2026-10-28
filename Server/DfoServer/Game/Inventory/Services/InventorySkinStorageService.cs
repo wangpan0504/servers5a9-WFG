@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
@@ -9,13 +10,17 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
     GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, PremiumContractCatalog contracts, TimeProvider? time = null)
 {
     public const byte Type = 4;
-    public const byte DamageFontType = 2;
+    public const byte PartyFrameType = 0;
     public const byte CutsceneType = 1;
+    public const byte DamageFontType = 2;
+    public const byte EmoticonType = 3;
+    public const int EmoticonSlots = 4;
     public const uint AddAction = 199;
     public TimeProvider Clock { get; } = time ?? TimeProvider.System;
     public bool Recognizes(int id) => skins.IsToken(id);
     public bool HasDamageFonts => skins.HasDamageFonts;
     public bool HasCutscenes => skins.HasCutscenes;
+    public bool HasPartyFrames => skins.HasPartyFrames;
 
     public InventoryResult Make(Character character, MakeWeaponSkinRequest request)
     {
@@ -72,7 +77,8 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
             !definition.Places.IsEmpty && !definition.Places.Contains("[all]") &&
                 !definition.Places.Contains(town ? "[village]" : "[dungeon]"))
             return InventoryResult.Reject(3) with { RejectReason = "invalid_skin_token_or_context" };
-        var state = before.Skins;
+        // 账号归属的券写入账号皮肤仓，其余写入角色皮肤仓；选中项始终留在角色身上。
+        var state = definition.AccountWide ? before.AccountSkins : before.Skins;
         long? deadline = token.ExpireTime > 0 ? token.ExpireTime : null;
         if (definition.Type == Type)
         {
@@ -90,17 +96,20 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
         }
         var removed = InventoryDeleteService.Plan(before, position, token.Core.ItemId, 1);
         if (!removed.Accepted) return InventoryResult.Reject(3);
-        return new(true, 0, new(before, removed.Plan!.After with { Skins = state }, "skin_storage_add",
-            new(character, deadline, Clock)));
+        var after = definition.AccountWide
+            ? removed.Plan!.After with { AccountSkins = state }
+            : removed.Plan!.After with { Skins = state };
+        return new(true, 0, new(before, after, "skin_storage_add", new(character, deadline, Clock)));
     }
 
     internal static bool TryAddTimed(SkinStorageState before, SkinStorageToken definition, DateTimeOffset now, out SkinStorageState after)
     {
         after = before;
-        if (definition.Type is not (CutsceneType or DamageFontType) || definition.SkinIds.IsDefaultOrEmpty ||
-            definition.SkinIds.Length > byte.MaxValue || definition.SkinIds.Distinct().Count() != definition.SkinIds.Length) return false;
-        int defaultId = definition.Type == CutsceneType ? 30000 : 1;
-        var owned = (definition.Type == CutsceneType ? before.Cutscenes : before.DamageFonts).ToDictionary(row => row.SkinId);
+        if (definition.Type is not (CutsceneType or DamageFontType or PartyFrameType or EmoticonType) ||
+            definition.SkinIds.IsDefaultOrEmpty || definition.SkinIds.Length > byte.MaxValue ||
+            definition.SkinIds.Distinct().Count() != definition.SkinIds.Length) return false;
+        int defaultId = DefaultSkinId(definition.Type);
+        var owned = OwnedOf(before, definition.Type).ToDictionary(row => row.SkinId);
         foreach (int skinId in definition.SkinIds)
         {
             if (skinId <= 0 || skinId == defaultId) return false;
@@ -115,13 +124,31 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
             owned[skinId] = new(skinId, expiry);
         }
         var updated = owned.Values.OrderBy(row => row.SkinId).ToImmutableArray();
-        after = definition.Type == CutsceneType ? before with { Cutscenes = updated } : before with { DamageFonts = updated };
+        after = WithOwned(before, definition.Type, updated);
         return true;
     }
+
+    static int DefaultSkinId(byte type) => type switch
+    {
+        CutsceneType => 30000, DamageFontType => 1, PartyFrameType => 20000, _ => 0
+    };
+
+    static ImmutableArray<SkinOwnership> OwnedOf(SkinStorageState state, byte type) => type switch
+    {
+        CutsceneType => state.Cutscenes, DamageFontType => state.DamageFonts,
+        PartyFrameType => state.PartyFrames, EmoticonType => state.Emoticons, _ => []
+    };
+
+    static SkinStorageState WithOwned(SkinStorageState state, byte type, ImmutableArray<SkinOwnership> owned) => type switch
+    {
+        CutsceneType => state with { Cutscenes = owned }, DamageFontType => state with { DamageFonts = owned },
+        PartyFrameType => state with { PartyFrames = owned }, EmoticonType => state with { Emoticons = owned }, _ => state
+    };
 
     public InventoryResult Select(Character character, SelectSkinRequest request)
     {
         var state = character.Inventory.Skins;
+        var merged = Merged(character);
         long now = Clock.GetUtcNow().ToUnixTimeSeconds();
         if (request.AdditionalIds.IsDefault || request.AdditionalIds.Length > 9) return InventoryResult.Reject(19);
         if (request.Type == CutsceneType)
@@ -129,22 +156,47 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
             var ids = request.Ids.Where(id => id != 0).ToImmutableArray();
             if (!HasCutscenes || request.AdditionalIds.IsDefault || request.Ids.Any(id => id < 0) ||
                 ids.Length is 0 or > 10 || ids.Distinct().Count() != ids.Length ||
-                ids.Any(id => !skins.Cutscenes.Contains(id) || id != 30000 && !state.Cutscenes.Any(row => row.SkinId == id && row.Active(now))))
+                ids.Any(id => !skins.Cutscenes.Contains(id) || id != 30000 && !merged.Cutscenes.Any(row => row.SkinId == id && row.Active(now))))
                 return InventoryResult.Reject(19);
-            long? deadline = state.Cutscenes.Where(row => ids.Contains(row.SkinId) && row.ExpiresAt > 0)
+            long? deadline = merged.Cutscenes.Where(row => ids.Contains(row.SkinId) && row.ExpiresAt > 0)
                 .Select(row => (long?)row.ExpiresAt).Min();
             return new(true, 0, new(character.Inventory, character.Inventory with
                 { Skins = state with { SelectedCutscenes = ids } }, "skill_cutscene_select", new(character, deadline, Clock)));
         }
         if (!request.AdditionalIds.IsDefaultOrEmpty && request.AdditionalIds.Any(id => id != 0)) return InventoryResult.Reject(19);
+        if (request.Type == PartyFrameType)
+        {
+            var frame = merged.PartyFrames.SingleOrDefault(row => row.SkinId == request.SkinId);
+            if (!HasPartyFrames || !skins.PartyFrames.Contains(request.SkinId) ||
+                request.SkinId != 20000 && (frame is null || !frame.Active(now))) return InventoryResult.Reject(19);
+            return new(true, 0, new(character.Inventory, character.Inventory with
+                { Skins = state with { SelectedPartyFrame = request.SkinId } }, "party_frame_select",
+                new(character, frame is { ExpiresAt: > 0 } ? frame.ExpiresAt : null, Clock)));
+        }
         if (request.Type == DamageFontType)
         {
-            var font = state.DamageFonts.SingleOrDefault(row => row.SkinId == request.SkinId);
+            var font = merged.DamageFonts.SingleOrDefault(row => row.SkinId == request.SkinId);
             if (!HasDamageFonts || !skins.DamageFonts.Contains(request.SkinId) ||
                 request.SkinId != 1 && (font is null || !font.Active(now))) return InventoryResult.Reject(19);
             return new(true, 0, new(character.Inventory, character.Inventory with
                 { Skins = state with { SelectedDamageFont = request.SkinId } }, "damage_font_select",
                 new(character, font is { ExpiresAt: > 0 } ? font.ExpiresAt : null, Clock)));
+        }
+        if (request.Type == EmoticonType)
+        {
+            // 00862C80/01500030 固定发送4个栏位，空栏位补0；客户端按位置应用。
+            // 超出的栏位直接拒绝，避免回执原样复述未被保存的编号。
+            if (request.Ids.Skip(EmoticonSlots).Any(id => id != 0)) return InventoryResult.Reject(19);
+            var slots = request.Ids.Take(EmoticonSlots).Concat(Enumerable.Repeat(0, EmoticonSlots))
+                .Take(EmoticonSlots).ToImmutableArray();
+            var chosen = slots.Where(id => id != 0).ToImmutableArray();
+            if (chosen.Distinct().Count() != chosen.Length || chosen.Any(id => !skins.Emoticons.Contains(id) ||
+                !merged.Emoticons.Any(row => row.SkinId == id && row.Active(now)))) return InventoryResult.Reject(19);
+            long? deadline = merged.Emoticons.Where(row => chosen.Contains(row.SkinId) && row.ExpiresAt > 0)
+                .Select(row => (long?)row.ExpiresAt).Min();
+            return new(true, 0, new(character.Inventory, character.Inventory with
+                { Skins = state with { SelectedEmoticons = slots } }, "instant_emoticon_select",
+                new(character, deadline, Clock)));
         }
         if (request.Type != Type || request.SkinId != 0 && (!state.Owned.Contains(request.SkinId) ||
             Weapon(request.SkinId) is not { } weapon || !SupportsCharacter(character, weapon)))
@@ -156,28 +208,71 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
     public int EffectiveSelection(Character character) => character.Inventory.Skins.Selected is var id && id != 0 &&
         Weapon(id) is { } weapon && SupportsCharacter(character, weapon) ? id : 0;
 
+    // 角色皮肤仓与账号皮肤仓的并集：同一编号取期限较晚的一方，选中项始终由角色持有。
+    internal static SkinStorageState Merged(InventorySnapshot inventory) => inventory.Skins with
+    {
+        Owned = inventory.Skins.Owned.Concat(inventory.AccountSkins.Owned.Where(id => !inventory.Skins.Owned.Contains(id))).ToImmutableArray(),
+        DamageFonts = UnionOwned(inventory.Skins.DamageFonts, inventory.AccountSkins.DamageFonts),
+        Cutscenes = UnionOwned(inventory.Skins.Cutscenes, inventory.AccountSkins.Cutscenes),
+        PartyFrames = UnionOwned(inventory.Skins.PartyFrames, inventory.AccountSkins.PartyFrames),
+        Emoticons = UnionOwned(inventory.Skins.Emoticons, inventory.AccountSkins.Emoticons)
+    };
+
+    static SkinStorageState Merged(Character character) => Merged(character.Inventory);
+
+    static ImmutableArray<SkinOwnership> UnionOwned(ImmutableArray<SkinOwnership> character, ImmutableArray<SkinOwnership> account)
+    {
+        var rows = character.ToDictionary(row => row.SkinId);
+        foreach (var row in account)
+            if (!rows.TryGetValue(row.SkinId, out var local) || Rank(row) > Rank(local)) rows[row.SkinId] = row;
+        return rows.Values.OrderBy(row => row.SkinId).ToImmutableArray();
+    }
+
+    static long Rank(SkinOwnership row) => row.ExpiresAt == 0 ? long.MaxValue : row.ExpiresAt;
+
     public SkinStorageState View(Character character)
     {
         long now = Clock.GetUtcNow().ToUnixTimeSeconds();
-        return character.Inventory.Skins with
+        var state = character.Inventory.Skins;
+        return state with
         {
             SelectedDamageFont = EffectiveDamageFont(character),
             SelectedCutscenes = EffectiveCutscenes(character),
-            Cutscenes = character.Inventory.Skins.Cutscenes.Where(row => row.Active(now) && skins.Cutscenes.Contains(row.SkinId)).ToImmutableArray(),
-            DamageFonts = character.Inventory.Skins.DamageFonts.Where(row => row.Active(now) &&
-                skins.DamageFonts.Contains(row.SkinId)).ToImmutableArray()
+            SelectedPartyFrame = EffectivePartyFrame(character),
+            SelectedEmoticons = EffectiveEmoticons(character),
+            Cutscenes = Active(state.Cutscenes, skins.Cutscenes, now),
+            DamageFonts = Active(state.DamageFonts, skins.DamageFonts, now),
+            PartyFrames = Active(state.PartyFrames, skins.PartyFrames, now),
+            Emoticons = Active(state.Emoticons, skins.Emoticons, now)
         };
     }
 
+    // 账号皮肤仓的条目在1557里单独成表，客户端合并显示但分属两份列表。
+    public SkinStorageState AccountView(Character character)
+    {
+        long now = Clock.GetUtcNow().ToUnixTimeSeconds();
+        var state = character.Inventory.AccountSkins;
+        return state with
+        {
+            Cutscenes = Active(state.Cutscenes, skins.Cutscenes, now),
+            DamageFonts = Active(state.DamageFonts, skins.DamageFonts, now),
+            PartyFrames = Active(state.PartyFrames, skins.PartyFrames, now),
+            Emoticons = Active(state.Emoticons, skins.Emoticons, now)
+        };
+    }
+
+    static ImmutableArray<SkinOwnership> Active(ImmutableArray<SkinOwnership> owned, FrozenSet<int> catalog, long now) =>
+        owned.Where(row => row.Active(now) && catalog.Contains(row.SkinId)).ToImmutableArray();
+
     public int EffectiveDamageFont(Character character) => skins.DamageFonts.Contains(character.Inventory.Skins.SelectedDamageFont)
-        ? character.Inventory.Skins.DamageFontSelection(Clock.GetUtcNow().ToUnixTimeSeconds()) : 1;
+        ? Merged(character).DamageFontSelection(Clock.GetUtcNow().ToUnixTimeSeconds()) : 1;
 
     public bool NeedsFontReset(Character character) => HasDamageFonts && character.Inventory.Skins.SelectedDamageFont > 1 &&
         EffectiveDamageFont(character) == 1;
 
     public ImmutableArray<int> EffectiveCutscenes(Character character)
     {
-        var selected = character.Inventory.Skins.CutsceneSelection(Clock.GetUtcNow().ToUnixTimeSeconds())
+        var selected = Merged(character).CutsceneSelection(Clock.GetUtcNow().ToUnixTimeSeconds())
             .Where(skins.Cutscenes.Contains).ToImmutableArray();
         return selected.IsEmpty ? [30000] : selected;
     }
@@ -185,12 +280,32 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
     public bool NeedsCutsceneReset(Character character) => HasCutscenes && !character.Inventory.Skins.SelectedCutscenes.IsEmpty &&
         !character.Inventory.Skins.SelectedCutscenes.SequenceEqual(EffectiveCutscenes(character));
 
+    // 组队头像框原生默认20000（PartyFrame/default.skn），未选择或过期时回落到它。
+    public int EffectivePartyFrame(Character character) => skins.PartyFrames.Contains(character.Inventory.Skins.SelectedPartyFrame)
+        ? Merged(character).PartyFrameSelection(Clock.GetUtcNow().ToUnixTimeSeconds()) : 20000;
+
+    public bool NeedsPartyFrameReset(Character character) => HasPartyFrames && character.Inventory.Skins.SelectedPartyFrame != 0 &&
+        character.Inventory.Skins.SelectedPartyFrame != EffectivePartyFrame(character);
+
+    public ImmutableArray<int> EffectiveEmoticons(Character character) =>
+        Merged(character).EmoticonSelection(Clock.GetUtcNow().ToUnixTimeSeconds())
+            .Where(id => id == 0 || skins.Emoticons.Contains(id)).ToImmutableArray();
+
+    public bool NeedsEmoticonReset(Character character) => !character.Inventory.Skins.SelectedEmoticons.IsEmpty &&
+        !character.Inventory.Skins.SelectedEmoticons.SequenceEqual(EffectiveEmoticons(character));
+
+    // 即时表情没有原生默认皮肤：角色和账号都没有条目时不发空列表，避免覆盖客户端本地保存。
+    public bool NeedsEmoticonInitialize(Character character) => !character.Inventory.Skins.Emoticons.IsEmpty ||
+        !character.Inventory.Skins.SelectedEmoticons.IsEmpty || !character.Inventory.AccountSkins.Emoticons.IsEmpty;
+
     public InventoryResult ExpireSelections(Character character)
     {
         var before = character.Inventory;
         var state = before.Skins;
         if (NeedsFontReset(character)) state = state with { SelectedDamageFont = 1 };
         if (NeedsCutsceneReset(character)) state = state with { SelectedCutscenes = EffectiveCutscenes(character) };
+        if (NeedsPartyFrameReset(character)) state = state with { SelectedPartyFrame = EffectivePartyFrame(character) };
+        if (NeedsEmoticonReset(character)) state = state with { SelectedEmoticons = EffectiveEmoticons(character) };
         return new(true, 0, new(before, before with { Skins = state }, "skin_storage_expire", new(character, null, Clock)));
     }
 

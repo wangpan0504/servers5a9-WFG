@@ -882,7 +882,9 @@ internal sealed partial class TcpPeer : IDisposable
         (int[] Owned, int Selected)? weaponSkins = null,
         (SkinOwnership[] Owned, int Selected)? damageFonts = null,
         (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool nativeSwitch = false,
-        ushort[]? tagEvildom = null, byte[][]? echonSets = null, byte[]? pvpTotalTeam = null, bool premiumPcRoom = false)
+        ushort[]? tagEvildom = null, byte[][]? echonSets = null, byte[]? pvpTotalTeam = null, bool premiumPcRoom = false,
+        (SkinOwnership[] Owned, int Selected)? partyFrames = null,
+        (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null)
     {
         // nativeSwitch：原生换频道新连接直接发选角4，不先请求名册；服务端按换频道判定是否保留客户端城镇快照。
         if (!resumeTown && !requestedRoster && !nativeSwitch)
@@ -1257,13 +1259,17 @@ internal sealed partial class TcpPeer : IDisposable
                 foreach (int id in skins.Owned) w.Write(id);
             }));
             Expect(0, 1558, Build(w => { w.Write((byte)4); w.Write(skins.Selected); }));
+            var accountFonts = accountSkins?.DamageFonts.ToArray() ?? [];
+            var accountIllustrations = accountSkins?.Cutscenes.ToArray() ?? [];
+            var accountFrames = accountSkins?.PartyFrames.ToArray() ?? [];
+            var accountEmoticons = accountSkins?.Emoticons.ToArray() ?? [];
             var fonts = damageFonts ?? (Owned: Array.Empty<SkinOwnership>(), Selected: 1);
             Expect(0, 1557, Build(w =>
             {
                 w.Write((byte)2); w.Write(checked((ushort)(fonts.Owned.Length + 1)));
                 w.Write(1); w.Write(0);
                 foreach (var font in fonts.Owned) { w.Write(font.SkinId); w.Write(font.ExpiresAt); }
-                w.Write((ushort)0);
+                AccountList(w, accountFonts);
             }));
             Expect(0, 1558, Build(w => { w.Write((byte)2); w.Write(fonts.Selected); }));
             var illustrations = cutscenes ?? (Owned: Array.Empty<SkinOwnership>(), Selected: new[] { 30000 });
@@ -1271,13 +1277,44 @@ internal sealed partial class TcpPeer : IDisposable
             {
                 w.Write((byte)1); w.Write(checked((ushort)(illustrations.Owned.Length+1))); w.Write(30000); w.Write(0);
                 foreach(var row in illustrations.Owned) { w.Write(row.SkinId); w.Write(row.ExpiresAt); }
-                w.Write((ushort)0);
+                AccountList(w, accountIllustrations);
             }));
             Expect(0,1558,Build(w =>
             {
                 w.Write((byte)1); w.Write(checked((ushort)illustrations.Selected.Length));
                 foreach(int id in illustrations.Selected) w.Write(id);
             }));
+            // 组队头像框恒有原生默认20000，服务端每次选角都会下发该类别。
+            var frames = partyFrames ?? (Owned: Array.Empty<SkinOwnership>(), Selected: 20000);
+            Expect(0,1557,Build(w =>
+            {
+                w.Write((byte)0); w.Write(checked((ushort)(frames.Owned.Length+1))); w.Write(20000); w.Write(0);
+                foreach(var row in frames.Owned) { w.Write(row.SkinId); w.Write(row.ExpiresAt); }
+                AccountList(w, accountFrames);
+            }));
+            Expect(0,1558,Build(w => { w.Write((byte)0); w.Write(frames.Selected); }));
+            // 即时表情没有原生默认皮肤，角色与账号都没有条目时服务端不发该类别。
+            if (emoticons.HasValue || accountEmoticons.Length > 0)
+            {
+                var emote = emoticons ?? (Owned: Array.Empty<SkinOwnership>(), Selected: Array.Empty<int>());
+                Expect(0,1557,Build(w =>
+                {
+                    w.Write((byte)3); w.Write(checked((ushort)emote.Owned.Length));
+                    foreach(var row in emote.Owned) { w.Write(row.SkinId); w.Write(row.ExpiresAt); }
+                    AccountList(w, accountEmoticons);
+                }));
+                Expect(0,1558,Build(w =>
+                {
+                    w.Write((byte)3);
+                    for(int at=0;at<4;at++) w.Write(at < emote.Selected.Length ? emote.Selected[at] : 0);
+                }));
+            }
+
+            void AccountList(BinaryWriter writer, SkinOwnership[] rows)
+            {
+                writer.Write(checked((ushort)rows.Length));
+                foreach (var row in rows) { writer.Write(row.SkinId); writer.Write(row.ExpiresAt); }
+            }
         }
     }
 
