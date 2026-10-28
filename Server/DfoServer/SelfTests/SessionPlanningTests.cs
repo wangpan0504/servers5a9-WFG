@@ -855,6 +855,10 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_title_sections VALUES({{id}},'planning',0,1);
                 INSERT INTO character_epic_production VALUES({{id}},101000747,1000,1,2,1,0,0,0,0);
                 INSERT INTO character_pvp_training_skills VALUES({{id}},'{{training}}','1234567890abcdef1234567890abcdef',0);
+                INSERT INTO character_evildom_war_rewards VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','1234567890abcdef1234567890abcdef',1,5422,1,0,'{}','[]',1);
+                INSERT INTO character_evildom_war_hidden_rewards VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','{}','[]');
+                INSERT INTO evildom_war_battles VALUES('1234567890abcdef1234567890abcdef',0,9999999999,'{}');
+                INSERT INTO character_evildom_war_seats VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','1234567890abcdef1234567890abcdef',0,NULL,'{}','1234567890abcdef1234567890abcdef');
                 INSERT INTO character_collectbox_state VALUES({{id}},'planning',2);
                 INSERT INTO character_collectbox_slots VALUES({{id}},'planning',2,3,104);
                 INSERT INTO character_collectbox_expirations VALUES({{id}},'planning',2,2000000000);
@@ -862,6 +866,7 @@ internal static partial class SessionPlanningTests
                   SELECT {{id}},id,0,0,'' FROM characters WHERE id<>{{id}} ORDER BY id LIMIT 1;
                 INSERT INTO character_dungeon_incount VALUES({{id}},'planning',400000016,20261020,1,20261015,1);
                 INSERT INTO character_server_item_usage VALUES({{id}},'{}');
+                INSERT INTO character_dungeon_incount_extra VALUES({{id}},'planning',5428,20261020,1,20261015,1);
                 """);
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
         }

@@ -229,6 +229,12 @@ internal static class SqliteMigrations
         new(113, "帝国竞技场编队、日券与领奖账本", ImperialArenaSchema.Upgrade),
         // 再战魔界挑战分支的临时号 126 已被本地栈占用到 113，接在队尾顺延为 114。
         new(114, "再战魔界固定挑战路线与跨日尝试", TagEvildomChallengeSchema.Upgrade),
+        // 魔界大战分支的临时号 126..130 已被本地栈占用到 114，接在队尾顺延为 115..119。
+        new(115, "魔界大战实际奖励与永久邮件回执", static (db, tx) => Execute(db, tx, EvildomWarRewardSchema.Definition)),
+        new(116, "魔界大战战役检查点与付费席位", static (db, tx) => Execute(db, tx, EvildomWarRecoverySchema.Battles + EvildomWarRecoverySchema.Seats)),
+        new(117, "魔界大战引导模式账号周绑定", static (db, tx) => Execute(db, tx, EvildomWarGuideSchema.Table)),
+        new(118, "魔界大战实验室独立奖励回执", static (db, tx) => Execute(db, tx, EvildomWarHiddenRewardSchema.Definition)),
+        new(119, "副本每日每周追加入场额度", static (db, tx) => Execute(db, tx, DungeonIncountExtraSchema.Definition)),
     ];
 
     internal const string BossSelectionBuffSchema = """
@@ -2155,7 +2161,13 @@ internal static class SqliteMigrations
             ("character_quest_stage_claims",QuestStageSchema.ClaimSql),
             ("character_skill_switch_inventory",SkillSwitchInventoryStateSchema),
             ("character_permanent_stats",PermanentStatSchema.Sql),
-            ("character_skill_switch_inventory_items",SkillSwitchInventoryItemsSchema) })
+            ("character_skill_switch_inventory_items",SkillSwitchInventoryItemsSchema),
+            (EvildomWarRewardSchema.Table,EvildomWarRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("evildom_war_battles",EvildomWarRecoverySchema.Battles.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_evildom_war_seats",EvildomWarRecoverySchema.Seats.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("account_evildom_war_guides",EvildomWarGuideSchema.Table.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            (EvildomWarHiddenRewardSchema.Table,EvildomWarHiddenRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            (DungeonIncountExtraSchema.Table,DungeonIncountExtraSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
             query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name=$table";

@@ -24,7 +24,8 @@ internal sealed partial class DungeonHandler
             () => context.Session.SelectionEpoch == epoch && (rejection is not null || context.Session.ReadEvildomWar() is not null));
         if (rejection is null)
             await PartyDungeonProjection.PublishAsync(party!.Members.Select(member => new DfoServer.Game.Dungeons.PartyDungeonNotice(
-                DfoServer.Game.Dungeons.PartyDungeonNoticeKind.EvildomWarStarted, member, party.Members)));
+                DfoServer.Game.Dungeons.PartyDungeonNoticeKind.EvildomWarStarted, member, party.Members,
+                WarView: member.Actor.Session.ReadEvildomWar()?.Battle.View)));
         return CommandResult.Handled;
     }
 }

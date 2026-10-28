@@ -24,7 +24,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     RentalHandler? rental=null,CreatureHandler? creatures=null,InventoryPeriodExtensionService? periodExtensions=null,
     InventoryMileageService? mileage=null,InventoryEquipmentPeriodChangeService? periodChanges=null,
     AvatarPresetHandler? avatarPresets=null, InventoryNpcFavorService? npcFavor=null, MarriageHandler? marriage=null,
-    DimensionEntryTicketService? dimensionTickets=null) : IGameCommandModule
+    DimensionEntryTicketService? dimensionTickets=null, DungeonIncountTicketHandler? incountTickets=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     const uint PeriodExtensionAction = 69;
@@ -62,6 +62,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
         }
         if (request.Action == FatigueConsumableDefinition.Action)
             return fatigueConsumables is not null ? await fatigueConsumables.UseAsync(context, request) : CommandResult.Unhandled;
+        if (request.Action == DfoServer.Game.Dungeons.DungeonIncountTicketService.Action)
+            return incountTickets is not null ? await incountTickets.UseAsync(context, request) : CommandResult.Unhandled;
         if (request.Action is 90 or 92 or 93)
             return marriage is not null ? await marriage.UseItemActionAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == 106)

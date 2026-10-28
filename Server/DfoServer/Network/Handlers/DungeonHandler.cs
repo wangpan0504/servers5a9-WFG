@@ -33,7 +33,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     TagEvildomRunProjection? tagEvildomRun = null, EvildomWarCatalog? evildomWar = null,
     DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null,
     DfoServer.Game.Raids.ILukeRaidLifecycleStore? lukeLifecycle = null,
-    DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null, ImperialArenaProjection? imperialArena = null) : IGameCommandModule
+    DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null, ImperialArenaProjection? imperialArena = null,
+    EvildomWarRewardPolicy? evildomRewards = null, IEvildomWarRewardStore? evildomRewardStore = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {

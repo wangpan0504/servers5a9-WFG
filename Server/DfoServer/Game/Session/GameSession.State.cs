@@ -27,6 +27,7 @@ internal sealed partial class GameSession
         {
             formalDungeon?.Run.CancelTagEvildom();
             ReleaseCurrentRaidDungeon();
+            ReleaseCurrentEvildomWarDungeon();
             formalDungeon = null;
         }
         if (Phase == SessionPhase.Town && next != SessionPhase.Town)

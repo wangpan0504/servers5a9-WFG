@@ -1,5 +1,6 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Caching;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.Game.Social;
 
@@ -14,6 +15,7 @@ internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Lead
 {
     public SemaphoreSlim Commands { get; } = new(1, 1);
     public PartySettings Settings { get; init; } = PartySettings.Default;
+    public Guid? EvildomWarBattleId { get; init; }
 }
 internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged }
 internal sealed record PartyNotice(PartyNoticeKind Kind, PartyMember Recipient, PartyMember? Peer = null,
@@ -35,24 +37,87 @@ internal sealed partial class PartyService
     }
     readonly ISocialStore social;
     readonly TimeProvider timer;
+    readonly IEvildomWarGuideStore? guideStore;
     readonly object gate = new();
     readonly GameCacheIndex<ushort, PartySnapshot> parties;
     readonly GameCacheIndex<ushort, Invitation> invitations;
     ushort nextId;
     long revision;
     readonly HashSet<ushort> reservedRaidSquads = [];
-    public PartyService(ISocialStore social, TimeProvider? clock = null, GameCache? memory = null)
+    public PartyService(ISocialStore social, TimeProvider? clock = null, GameCache? memory = null,
+        IEvildomWarGuideStore? guideStore = null)
     {
         this.social = social;
         timer = clock ?? TimeProvider.System;
+        this.guideStore = guideStore;
         var cache = memory ?? new GameCache();
         parties = cache.CreateIndex<ushort, PartySnapshot>();
         invitations = cache.CreateIndex<ushort, Invitation>();
     }
     public event Action? Changed;
+    internal SemaphoreSlim EvildomWarRecoveryGate { get; } = new(1, 1);
     public void PresenceChanged() => Changed?.Invoke();
 
     public PartySnapshot[] Snapshot() { lock (gate) return parties.SnapshotValues(); }
+
+    internal PartySnapshot? BindEvildomWar(PartySnapshot expected, Guid battle)
+    {
+        lock (gate)
+        {
+            if (!parties.TryGetValue(expected.Id, out var current) || !ReferenceEquals(current, expected)) return null;
+            var bound = expected with { EvildomWarBattleId = battle, Revision = ++revision };
+            parties.Set(bound.Id, bound);
+            return bound;
+        }
+    }
+
+    internal PartyNotice[] RemoveStaleEvildomWarMembers(Guid battle)
+    {
+        lock (gate)
+        {
+            var party = parties.SnapshotValues().SingleOrDefault(p => p.EvildomWarBattleId == battle);
+            if (party is null) return [];
+            var stale = party.Members.Where(member => !member.Actor.IsCurrent()).ToArray();
+            return stale.Length == 0 ? [] : Remove(party, stale);
+        }
+    }
+
+    internal PartyNotice[] RestoreEvildomWarMember(GameSession session, Guid battleId, byte slot, byte mode,
+        Func<PartySnapshot, bool> restore)
+    {
+        if (Capture(session) is not { } member) return [];
+        return member.Actor.Execute(() =>
+        {
+            PartySnapshot? existing;
+            PartySnapshot candidate;
+            lock (gate)
+            {
+                if (Find(member) is not null || !member.IsCurrent() || !session.CanChangeTownParty) return [];
+                existing = parties.SnapshotValues().SingleOrDefault(p => p.EvildomWarBattleId == battleId);
+                if (existing is not null && (existing.Members.Length >= 4 || existing.Members.Any(m => m.Slot == slot))) return [];
+                if (existing is null && AllocateId() == ushort.MaxValue) return [];
+                if (existing is null) reservedRaidSquads.Add(nextId);
+                candidate = existing is null ? new(nextId, [member with { Slot = slot }], slot, ++revision)
+                {
+                    Settings = PartySettings.Default with { Kind = 5, KindArgument = mode }, EvildomWarBattleId = battleId
+                } : existing with { Members = [..existing.Members, member with { Slot = slot }], Revision = ++revision };
+            }
+            // SQL不得占用Party gate；本人的owner仍由调用方持有。
+            try
+            {
+                if (!restore(candidate)) return [];
+                lock (gate)
+                {
+                    if (existing is not null && (!parties.TryGetValue(existing.Id, out var current) || !ReferenceEquals(current, existing)))
+                        throw new InvalidOperationException("魔界恢复期间队伍发生变化");
+                    session.AdvancePartyMembership();
+                    parties.Set(candidate.Id, candidate);
+                    return candidate.Members.Select(m => Updated(candidate, m)).ToArray();
+                }
+            }
+            finally { if (existing is null) lock (gate) reservedRaidSquads.Remove(candidate.Id); }
+        });
+    }
 
     // 普通Party仍是每分队一至四人；预留与SQL之间不持Party gate，提交后仅安装已规划的新队。
     internal (DfoServer.Game.Raids.RaidStarted Start, System.Collections.Immutable.ImmutableArray<DfoServer.Game.Characters.Character> Characters, PartyNotice[] Notices)?
@@ -128,6 +193,8 @@ internal sealed partial class PartyService
             return Reject(21);
         return member.Actor.Execute(() =>
         {
+            if (settings is { Kind: 5, KindArgument: 2 } && guideStore is not null)
+                return SetEvildomWarGuideInformation(session, member, operation, settings);
             lock (gate)
             {
                 if (!member.IsCurrent() || !session.CanChangeTownParty) return Reject(21);
@@ -369,10 +436,10 @@ internal sealed partial class PartyService
                 Guard: () => Latest(party, member))];
         }
     }
-    public void Detach(GameSession session) => Publish(DetachNotices(session));
+    public void Detach(GameSession session, long? retainedEpoch = null) => Publish(DetachNotices(session, retainedEpoch));
 
     // 生命周期用例在原owner内提交多个聚合，通知必须等owner释放后发布。
-    internal PartyNotice[] DetachNotices(GameSession session)
+    internal PartyNotice[] DetachNotices(GameSession session, long? retainedEpoch = null)
     {
         List<PartyNotice> notices = [];
         lock (gate)
@@ -384,7 +451,7 @@ internal sealed partial class PartyService
             }
             foreach (var party in parties.SnapshotValues().ToArray())
             {
-                var removed = party.Members.Where(m => ReferenceEquals(m.Actor.Session, session)).ToArray();
+                var removed = party.Members.Where(m => ReferenceEquals(m.Actor.Session, session) && m.Actor.Epoch != retainedEpoch).ToArray();
                 if (removed.Length != 0) notices.AddRange(Remove(party, removed));
             }
         }

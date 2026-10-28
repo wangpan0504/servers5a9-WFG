@@ -113,6 +113,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             PartyPackets.Failure(133, 10), "raid_peer_refused", () => actor.IsCurrent);
         session.HasMultiplePartyMembers = () => parties?.HasMultipleMembers(session) == true;
         session.CurrentParty = () => parties?.Current(session);
+        session.EvildomWarCleanupFailed = error => log.Write("evildom_war_cleanup_failed", new
+            { Connection = connection.Id, Error = error.GetType().Name, error.Message });
         prepareDungeon?.Invoke(context);
         long partyEpoch = session.SelectionEpoch;
         await using var partyDirectory = parties is null ? null : new PartyDirectoryProjection(context, parties, towns, log);
@@ -207,7 +209,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 if (!session.Ready || session.SelectionEpoch != partyEpoch)
                 {
                     await PartyDungeonProjection.DetachAsync(context);
-                    parties?.Detach(session);
+                    // 只拆上一选角代次；Ready期间恢复的真实席位已经绑定当前代次。
+                    parties?.Detach(session, session.Ready ? session.SelectionEpoch : null);
                 }
                 partyEpoch = session.SelectionEpoch;
                 ushort currentSocial = session.Ready ? session.Selected?.Id ?? (ushort)0 : (ushort)0;

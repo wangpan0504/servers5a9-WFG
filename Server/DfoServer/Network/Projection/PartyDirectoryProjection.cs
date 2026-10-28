@@ -78,7 +78,7 @@ internal sealed class PartyDirectoryProjection : IAsyncDisposable
                     {
                         var leader = p.Members.Single(m => m.Slot == p.Leader);
                         var target = leader.Actor.Session.PublicCharacter(leader.Actor.Character.Id);
-                        return target is { Phase: SessionPhase.Town } && target.Channel == identity.Channel &&
+                        return p.Settings.DirectoryVisible && target is { Phase: SessionPhase.Town } && target.Channel == identity.Channel &&
                             parties.IsCurrent(p) &&
                             // 普通频道无队伍时原生默认查询实收kind6，也应列出kind0普通队伍。
                             (p.Settings.Kind == active.Query.Kind || active.Query.Kind == 6 && p.Settings.Kind == 0) &&
@@ -112,7 +112,7 @@ internal sealed class PartyDirectoryProjection : IAsyncDisposable
                     {
                         var leader = party.Members.Single(m => m.Slot == party.Leader);
                         var target = leader.Actor.Session.PublicCharacter(leader.Actor.Character.Id);
-                        if (target is { Phase: SessionPhase.Town } && target.Channel == identity.Channel &&
+                        if (party.Settings.DirectoryVisible && target is { Phase: SessionPhase.Town } && target.Channel == identity.Channel &&
                             Scene(target) == scene && parties.IsCurrent(party)) visible.Add(party.Id, party);
                     }
                 async Task<bool> Send(PartySnapshot party, bool removed)

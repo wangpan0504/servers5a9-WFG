@@ -8,7 +8,10 @@ using DfoServer.GameWorld.Towns;
 namespace DfoServer.Game.Dungeons;
 
 internal sealed record PartyDungeonReservation(AccountOwners.Lease Owner, Character Expected,
-    uint NextObjectKey, DungeonEntryCharge Charge, PartyDungeonIncount? Incount = null);
+    uint NextObjectKey, DungeonEntryCharge Charge, PartyDungeonIncount? Incount = null)
+{
+    public EvildomWarSeatEntry? EvildomWar { get; init; }
+}
 internal sealed record PartyDungeonIncount(int Dungeon, DungeonIncountPeriod Period, DungeonIncountRow? Row,
     ImmutableArray<AccountIncountCharge> Account, bool Increment);
 internal sealed record PartyDungeonEntryCommit(Character Character, ImmutableArray<DungeonEnterCount> EnterCounts);

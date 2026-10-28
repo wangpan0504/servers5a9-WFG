@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using static DfoServer.Testing.TestCheck;
 
@@ -26,6 +27,29 @@ internal static class TcpTestFixtureProcessTests
             "预算拒绝保留原有子进程配置及其它环境设置");
         That(Environment.GetEnvironmentVariable("DOTNET_GCHeapHardLimit") == parent, "子进程预算不能修改驱动进程环境");
         ReadinessDiagnostics();
+        EventLog();
+    }
+
+    static void EventLog()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-log-reader-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var fixture = new TcpTestFixture(new(), root);
+            Directory.CreateDirectory(fixture.Options.LogDirectory);
+            using var writer = new FileStream(Path.Combine(fixture.Options.LogDirectory, "server.jsonl"),
+                FileMode.Create, FileAccess.Write, FileShare.Read);
+            void Append(string value) { writer.Write(Encoding.UTF8.GetBytes(value)); writer.Flush(); }
+            Append("{\"Kind\":\"committed\"}\n{\"Kind\":");
+            var first = fixture.Events();
+            That(first.Length == 1 && first[0].GetProperty("Kind").GetString() == "committed",
+                "事件读取与真实日志写句柄兼容，未完成的尾行不能当作事件");
+            Append("\"sent\"}\n");
+            That(fixture.Events().Length == 2, "下一次读取恢复完整尾行，不丢事件");
+            Append("invalid\n");
+            Reject<System.Text.Json.JsonException>(() => fixture.Events(), "完整但损坏的记录仍失败，不能吞异常凑绿");
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }
     static void ReadinessDiagnostics()
     {

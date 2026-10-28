@@ -25,6 +25,12 @@ internal static class SelfTestRunner
         await MachineCharacterScoreTests.RunCore();
         LukeCardSetTests.RunCore();
         EvildomWarPacketTests.RunCore();
+        EvildomWarBattleTests.RunCore();
+        EvildomWarHiddenTests.RunCore();
+        EvildomWarRewardTests.RunCore();
+        EvildomWarRewardSchemaTests.RunCore();
+        EvildomWarRecoverySchemaTests.RunCore();
+        EvildomWarGuideSchemaTests.RunCore();
         MarriageResourceTests.RunCore();
         MarriageCoupleTests.RunCore();
         MarriageWeddingTests.RunCore();

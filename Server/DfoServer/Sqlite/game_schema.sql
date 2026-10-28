@@ -142,6 +142,12 @@ CREATE TABLE character_dungeon_incount(
   PRIMARY KEY(character_id,dungeon),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
+CREATE TABLE character_dungeon_incount_extra(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,dungeon INTEGER NOT NULL CHECK(dungeon>0),
+  day INTEGER NOT NULL,daily_extra INTEGER NOT NULL CHECK(daily_extra BETWEEN 0 AND 1000000),
+  week INTEGER NOT NULL,weekly_extra INTEGER NOT NULL CHECK(weekly_extra BETWEEN 0 AND 1000000),
+  PRIMARY KEY(character_id,dungeon),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE);
 CREATE TABLE account_dungeon_incount(
   account TEXT NOT NULL,
   dungeon INTEGER NOT NULL,
@@ -1436,3 +1442,32 @@ CREATE TABLE account_tag_evildom_challenges(
   state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 2),
   PRIMARY KEY(account,day,team_index)
 );
+CREATE TABLE character_evildom_war_rewards(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL CHECK(length(battle_id)=32),
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
+  dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),mode INTEGER NOT NULL CHECK(mode BETWEEN 0 AND 2),
+  created_at INTEGER NOT NULL CHECK(created_at>=0),reward_json TEXT NOT NULL CHECK(json_valid(reward_json)),
+  mail_ids TEXT NOT NULL CHECK(json_valid(mail_ids)),delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN(0,1)),
+  PRIMARY KEY(character_id,battle_id),UNIQUE(character_id,instance_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE evildom_war_battles(
+  battle_id TEXT PRIMARY KEY NOT NULL CHECK(length(battle_id)=32),revision INTEGER NOT NULL CHECK(revision>=0),
+  deadline INTEGER NOT NULL CHECK(deadline>=0),checkpoint_json TEXT NOT NULL CHECK(json_valid(checkpoint_json)));
+CREATE TABLE character_evildom_war_hidden_rewards(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL CHECK(length(battle_id)=32),
+  reward_json TEXT NOT NULL CHECK(json_valid(reward_json)),mail_ids TEXT NOT NULL CHECK(json_valid(mail_ids)),
+  PRIMARY KEY(character_id,battle_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE account_evildom_war_guides(
+  account TEXT NOT NULL,slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 1),
+  week INTEGER NOT NULL CHECK(week>0),character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+  PRIMARY KEY(account,slot),UNIQUE(account,character_id),
+  FOREIGN KEY(account) REFERENCES accounts(account_id));
+CREATE TABLE character_evildom_war_seats(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL,binding_token TEXT NOT NULL CHECK(length(binding_token)=32),
+  state INTEGER NOT NULL DEFAULT 0 CHECK(state BETWEEN 0 AND 3),reconnect_until INTEGER CHECK(reconnect_until>=0),
+  payment_json TEXT NOT NULL CHECK(json_valid(payment_json)),latest_instance TEXT NOT NULL CHECK(length(latest_instance)=32),
+  PRIMARY KEY(character_id,battle_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account),FOREIGN KEY(battle_id) REFERENCES evildom_war_battles(battle_id));

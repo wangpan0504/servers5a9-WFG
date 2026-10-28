@@ -152,7 +152,13 @@ internal sealed partial class GameSession
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
             { OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
                 Marriage = dungeon.Entry.Marriage,
-                DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Dimension = dungeon.Entry.Dimension }, incount);
+                DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Dimension = dungeon.Entry.Dimension }, incount)
+        {
+            EvildomWar = dungeon.EvildomWarEntry is { Store: not null } activeWar
+                ? new(activeWar.Battle.View, activeWar.BindingToken,
+                    activeWar.Party.Members.Single(member => ReferenceEquals(member.Actor.Session, this)).Slot,
+                    QuestCycle.Day(now), !activeWar.Charged) : null
+        };
     });
 
     public FormalDungeonReceipt InstallPartyDungeon(PartyDungeonPreparation token, PartyDungeonEntryCommit result,
@@ -182,7 +188,7 @@ internal sealed partial class GameSession
         }
         installing.Ground.PublishPassiveEntry();
         Selected = committed;
-        if (CurrentEvildomWar(committed) is { } war && war.Catalog.Dungeons.Any(row => row.Id == installing.Entry.DungeonId && row.Mode == war.Mode))
+        if (installing.EvildomWarEntry is { } war)
             war.Charged = true;
         formalDungeon = installing;
         if (installing.Entry.Hope is not null) hopeSelection = null;
@@ -254,6 +260,7 @@ internal sealed partial class GameSession
                 throw new InvalidOperationException("组队退场不能结束已复核的实例");
             dungeon.Ground.ExpireRun();
             raidChange = ReleaseCurrentRaidDungeon();
+            ReleaseCurrentEvildomWarDungeon();
             formalDungeon = null;
             CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
         }
