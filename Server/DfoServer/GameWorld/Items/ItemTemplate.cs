@@ -32,6 +32,8 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public byte CreatureInitialMode { get; init; }
     public bool IsPremiumService { get; init; }
     public PremiumContract? AcquisitionContract { get; init; }
+    public AccountCargoAcquisition? AcquisitionAccountCargo { get; init; }
+    public bool HasAcquisitionEffect => AcquisitionContract is not null || PersonalCargoUpgradeTarget > 0 || AcquisitionAccountCargo is not null;
     public bool PvpFreeEquipment { get; init; }
     public bool PersonalCargoForbidden { get; init; }
     public bool AccountCargoForbidden { get; init; }

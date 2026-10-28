@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.RegularExpressions;
 using PvfLib;
 
@@ -5,11 +6,16 @@ namespace DfoServer.GameWorld.Items;
 
 internal sealed record AccountCargoTier(ushort Capacity, int GoldLimit, int MaterialId, int MaterialCount,
     int GoldCost, int ProductId, int CeraCost, int ToolItemId);
+internal sealed record AccountCargoAcquisition(ushort PreviousCapacity, AccountCargoTier Tier);
 
 internal sealed class CargoCatalog
 {
+    // 匹配ARAD的04FCC6F0初始化17档；表外容量无法由03949030/03949110更新窗口档位。
+    public static bool SupportsPersonalCapacity(int capacity) => capacity is >= 8 and <= 264 && (capacity - 8) % 16 == 0;
+
     public int RequiredLevel { get; }
     public IReadOnlyList<AccountCargoTier> AccountTiers { get; }
+    public IReadOnlyDictionary<int, AccountCargoAcquisition> AcquisitionItems { get; }
 
     public CargoCatalog(PvfArchive pvf)
     {
@@ -51,6 +57,9 @@ internal sealed class CargoCatalog
                 product > 0 ? prices[product] : 0, product > 0 ? tools[product] : 0));
         }
         AccountTiers = tiers.AsReadOnly();
+        AcquisitionItems = tiers.Select((tier, index) => (Tier: tier, Previous: index == 0 ? (ushort)0 : tiers[index - 1].Capacity))
+            .Where(row => row.Tier.ToolItemId > 0)
+            .ToFrozenDictionary(row => row.Tier.ToolItemId, row => new AccountCargoAcquisition(row.Previous, row.Tier));
     }
 
     public AccountCargoTier? Next(ushort capacity) => capacity == 0 ? AccountTiers[0] :

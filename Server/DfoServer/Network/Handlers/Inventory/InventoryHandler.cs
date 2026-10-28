@@ -41,7 +41,8 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
         // ACK19已转移普通穿戴槽；宠物26–29仍保留专属槽位同步。
         var acknowledgedSlots = result.Plan?.ChangedSlots
             .Where(slot => slot.List == InventoryListType.Equipment && slot.Index is not (>= 26 and <= 29)).ToHashSet();
-        bool silentMainMove = request.Source.List == InventoryListType.Main && request.Destination.List == InventoryListType.Main;
+        InventoryListType? silentMoveList = request.Source.List == request.Destination.List &&
+            request.Source.List is InventoryListType.Main or InventoryListType.Pet ? request.Source.List : null;
         bool suppressMainNotice = request.Source.List == InventoryListType.Main &&
             request.Destination is { List: InventoryListType.Equipment, Index: >= 12 and <= 25 } ||
             request.Destination.List == InventoryListType.Main &&
@@ -50,15 +51,21 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
             request.Destination is { List: InventoryListType.Equipment, Index: >= 0 and <= 11 } ||
             request.Destination.List == InventoryListType.Avatar &&
             request.Source is { List: InventoryListType.Equipment, Index: >= 0 and <= 11 };
-        await projection.RefreshAsync(context, result, acknowledgedSlots, silentMainMove: silentMainMove,
-            suppressMainNotice: suppressMainNotice, suppressAvatarNotice: suppressAvatarNotice);
+        bool suppressPetNotice = request.Source.List == InventoryListType.Pet && request.Destination.List == InventoryListType.Equipment ||
+            request.Destination.List == InventoryListType.Pet && request.Source.List == InventoryListType.Equipment;
+        InventoryListType? suppressMoveNoticeList = suppressMainNotice ? InventoryListType.Main :
+            suppressAvatarNotice ? InventoryListType.Avatar : suppressPetNotice ? InventoryListType.Pet : null;
+        await projection.RefreshAsync(context, result, acknowledgedSlots, silentMoveList: silentMoveList,
+            suppressMoveNoticeList: suppressMoveNoticeList);
         return CommandResult.Handled;
     }
 
     async Task<CommandResult> SortAsync(GameConnectionContext context, Packet packet)
     {
         var request = InventoryRequests.Sort(packet.Body);
-        var result = context.Session.MutateInventory(character => inventory.Sort(character, request), requireTown: IsCargo(request.List));
+        var result = IsCargo(request.List)
+            ? context.Session.PlanAndCommitInventory(character => inventory.Sort(character, request), requireTown: true)
+            : context.Session.MutateInventory(character => inventory.Sort(character, request), requireTown: false);
         // 页面/条件取自客户端菜单，记录原值用于核对护石等特殊容器的分类语义。
         log?.Write("sort_item", new
         {

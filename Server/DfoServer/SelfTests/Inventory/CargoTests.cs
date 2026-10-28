@@ -19,8 +19,81 @@ namespace DfoServer.Testing.Inventory;
 
 internal static class CargoTests
 {
+    static void VerifyAcquisition(TownCatalog towns, ItemResources resources)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var role = new Character(1, 0, "CargoAcquire", 0, towns.InitialReturn, null)
+            { Level = 60, Inventory = new([]) { AccountCargo = new(Capacity: 8) } };
+        var small = resources.Items.Get(50);
+        var silver = resources.Items.Get(110);
+        That(small.PersonalCargoUpgradeTarget == 24 && silver.PersonalCargoUpgradeTarget == 40 && small.HasAcquisitionEffect,
+            "个人工具沿现有资源目标识别即时获取效果");
+        That(Enumerable.Range(0, 17).All(i => GameWorld.Items.CargoCatalog.SupportsPersonalCapacity(8 + 16 * i)) &&
+            !GameWorld.Items.CargoCatalog.SupportsPersonalCapacity(32) && !GameWorld.Items.CargoCatalog.SupportsPersonalCapacity(280) &&
+            resources.Items.Get(6).PersonalCargoUpgradeTarget == 40,
+            "新扩容只接受本版客户端17档，旧32格工具兼容到40格");
+        foreach (int id in new[] { 50, 6, 110, 2681921 })
+        {
+            var template = resources.Items.Get(id);
+            var core = InventoryRewardGrantService.Create(template, utcNow: now);
+            var batch = InventoryRewardGrantService.TryGrantBatch(role, [new(id, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+            var frozen = InventoryRewardGrantService.TryGrantCore(role, core, template, resources.EpicPieces, now);
+            var instance = InventoryRewardGrantService.TryGrantItems(role, [new(1234, new(InventoryListType.Main, 65), core)],
+                resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+            That(batch.Accepted && frozen.Accepted && instance.Accepted && batch.Plan!.After.Items.IsEmpty &&
+                frozen.Plan!.After.Items.IsEmpty && instance.Plan!.After.Items.IsEmpty &&
+                batch.Plan.After.CargoCapacity == frozen.Plan.After.CargoCapacity && batch.Plan.After.AccountCargo == frozen.Plan.After.AccountCargo &&
+                batch.Plan.After.CargoCapacity == instance.Plan.After.CargoCapacity && batch.Plan.After.AccountCargo == instance.Plan.After.AccountCargo,
+                "普通奖励、冻结核心及邮件实例获取均直接扩容，不留下STK " + id);
+            That(batch.Plan!.After.Gold == 0 && batch.Plan.After.AccountWallet.Same(role.Inventory.AccountWallet),
+                "取得工具后只激活效果，不二次收取金币或点券 " + id);
+            That(!InventoryRewardGrantService.TryGrantCore(role, core, template, resources.EpicPieces, now, usePickupSlotPolicy: true).Accepted,
+                "未实现无实体回执的地面路径在提交前拒绝，不伪造目标槽 " + id);
+        }
+        foreach (var row in resources.Cargo.AcquisitionItems)
+            That(resources.Items.Get(row.Key).AcquisitionAccountCargo == row.Value, "账号工具绑定同一合法档位目录 " + row.Key);
+        foreach (ushort capacity in new ushort[] { 24, 40, 264 })
+            That(!InventoryRewardGrantService.TryGrantBatch(role with { Inventory = role.Inventory with { CargoCapacity = capacity } },
+                [new(50, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted,
+                "已达或超过目标时拒绝，不退成STK " + capacity);
+        foreach (ushort capacity in new ushort[] { 0, 1, 16, 240 })
+            That(!InventoryRewardGrantService.TryGrantBatch(role with { Inventory = role.Inventory with { AccountCargo = new(Capacity: capacity) } },
+                [new(2681921, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted,
+                "账号未开通、越档、旧档或满级不能获取该工具实体 " + capacity);
+        That(!InventoryRewardGrantService.TryGrantBatch(role, [new(50, 2)], resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted &&
+            !InventoryRewardGrantService.TryGrantBatch(role, [new(110, 1), new(50, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted,
+            "重复或倒序扩容整笔拒绝，不静默吞掉额外工具");
+        var chain = InventoryRewardGrantService.TryGrantBatch(role, [new(50, 1), new(110, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+        That(chain.Accepted && chain.Plan!.After.CargoCapacity == 40 && chain.Plan.After.Items.IsEmpty,
+            "同批按计划中容量连续扩容，不退回初始容量");
+        var old = new InventoryItem(99, new(InventoryListType.Main, 65), InventoryRewardGrantService.Create(small, utcNow: now));
+        var stocked = role with { Inventory = role.Inventory with { Items = [old] } };
+        var higher = InventoryRewardGrantService.TryGrantBatch(stocked, [new(110, 1)], resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+        That(higher.Accepted && higher.Plan!.After.CargoCapacity == 40 && higher.Plan.After.Items is [var retained] && retained == old,
+            "新获得工具生效，不扫描或消费旧背包中的其他工具");
+        var expired = old with { Core = old.Core with { ExpireTime = checked((int)now.ToUnixTimeSeconds()) } };
+        That(!InventoryRewardGrantService.TryGrantItems(role, [expired], resources.Items, resources.GoldLimits, resources.EpicPieces, now).Accepted,
+            "过期附件不能激活扩容或变成无效果STK");
+        long until = now.ToUnixTimeSeconds() + 60;
+        var expiring = old with { Core = old.Core with { ExpireTime = checked((int)until) } };
+        var pending = InventoryRewardGrantService.TryGrantItems(role, [expiring], resources.Items, resources.GoldLimits, resources.EpicPieces, now);
+        That(pending.Accepted && pending.Plan!.CharacterPrecondition!.Matches(role, until - 1) &&
+            !pending.Plan.CharacterPrecondition.Matches(role, until) &&
+            !pending.Plan.CharacterPrecondition.Matches(role with { Level = 0 }, until - 1),
+            "扩容获取在提交前复验到期边界和原角色资格，不能重绑旧计划");
+        var funded = role with { Inventory = role.Inventory with { AccountWallet = role.Inventory.AccountWallet.Set(CurrencyKind.Cera, 1000) } };
+        var bonusShop = GameWorld.Items.CashShopCatalog.Parse("[item etc]\n100063 50 1 0 0 10 0 0 0",
+            "[bonus item]\n100063 110 1\n[/bonus item]");
+        var bought = new InventoryCashShopService(resources.Items, bonusShop, resources.GoldLimits, resources.EpicPieces, resources.Cargo)
+            .Buy(funded, new(0, [new(100063, 0)]), out _, now);
+        That(bought.Accepted && bought.Plan!.After.CargoCapacity == 40 && bought.Plan.After.Items.IsEmpty &&
+            bought.Plan.After.AccountWallet.Get(CurrencyKind.Cera) == 990,
+            "主商品24格与附赠40格连续生效，最终合并不覆盖附赠扩容");
+    }
+
     public static void RunCore()
     {
+        VerifySortRules();
         var template = new DfoServer.GameWorld.Items.ItemTemplate(50, DfoServer.GameWorld.Items.ItemKind.Consumable,
             0, 10, 0, 100, 0, 0, 0, "[free]", 1, 0, "仓库资格测试") { MaximumLevel = 20, PersonalCargoUpgradeTarget = 24 };
         var catalog = new DfoServer.GameWorld.Items.ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
@@ -182,13 +255,50 @@ internal static class CargoTests
         That(!service.PersonalUpgrade(role, 65).Accepted, "仓库工具禁止使用标记不可绕过");
     }
 
+    static void VerifySortRules()
+    {
+        var equipment = new GameWorld.Items.ItemTemplate(101, GameWorld.Items.ItemKind.Equipment, 19, 10, 10, 1, 0, 4, 1, "[free]", 1, 0, "测试装备");
+        var other = equipment with { Id = 102, EquipmentSlot = 12, MinimumLevel = 20, Rarity = 6 };
+        var potion = equipment with { Id = 201, Kind = GameWorld.Items.ItemKind.Consumable, StackLimit = 100, EquipmentSlot = 0, StackableType = "zeta" };
+        var timed = potion with { Id = 202, StackableType = "alpha" };
+        var catalog = new GameWorld.Items.ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new Dictionary<int, GameWorld.Items.ItemTemplate> { [101] = equipment, [102] = other, [201] = potion, [202] = timed });
+        foreach (var list in new[] { InventoryListType.PersonalCargo, InventoryListType.AccountCargo })
+        {
+            var original = new InventoryItem[]
+            {
+                new(1, new(list, 7), new(101, equipment.Kind, 10) { Attr = 3 }),
+                new(2, new(list, 4), new(102, other.Kind, 20)),
+                new(3, new(list, 3), new(201, potion.Kind, 3)),
+                new(4, new(list, 2), new(202, timed.Kind, 4) { ExpireTime = 100 })
+            };
+            var before = new InventorySnapshot([.. original]) { AccountCargo = new(Capacity: 8) };
+            foreach (var row in new (byte Condition, long[] Order)[] { (0, [1, 2, 3, 4]),
+                (1, [1, 2, 3, 4]), (2, [2, 1, 3, 4]), (3, [2, 1, 4, 3]), (4, [1, 2, 4, 3]), (255, [1, 2, 3, 4]) })
+            {
+                var result = InventorySortService.Plan(before, (GameWorld.Items.ItemKind)20, row.Condition, catalog, 0, list);
+                var sorted = result.Plan!.After.Items.OrderBy(item => item.Position.Index).ToArray();
+                That(result.Accepted && sorted.Select(item => item.Uid).SequenceEqual(row.Order) &&
+                    sorted.Select(item => item.Position.Index).SequenceEqual(new short[] { 0, 1, 2, 3 }) &&
+                    sorted.All(item => item.Core == original.Single(old => old.Uid == item.Uid).Core),
+                    "仓库按类别分组并复用背包品质、等级、类型及期限顺序，保留完整实例 " + row.Condition);
+            }
+            var pinned = before with { Items = before.Items.Select(item => item.Uid == 1 ? item with { Core = item.Core with { SortLockFlag = 1 } } : item).ToImmutableArray() };
+            var locked = InventorySortService.Plan(pinned, (GameWorld.Items.ItemKind)20, 2, catalog, 0, list);
+            That(locked.Plan!.After.Find(new(list, 7)) == pinned.Find(new(list, 7)), "混合仓库排序保留固定排序锁格");
+            var stable = InventorySortService.Plan(locked.Plan.After, (GameWorld.Items.ItemKind)20, 2, catalog, 0, list);
+            That(stable.Accepted && !stable.Plan!.Changed, "相同条件重复整理为零变化");
+        }
+    }
+
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
+        VerifyAcquisition(towns, itemResources);
         int checks = Count;
-        That(itemResources.Items.Get(6).PersonalCargoUpgradeTarget == 32 &&
+        That(itemResources.Items.Get(6).PersonalCargoUpgradeTarget == 40 &&
             itemResources.Items.Get(110).PersonalCargoUpgradeTarget == 40 &&
             itemResources.Items.Get(50).PersonalCargoUpgradeTarget == 24,
-            "旧银质升级为32格、新银质增加到40格和原24格工具分别保留真实资源容量");
+            "旧银质32格声明兼容为40格，新银质40格和原24格工具保持各自目标");
         void Reject(Action action, string name)
         {
             bool rejected = false;
@@ -272,7 +382,9 @@ internal static class CargoTests
                 "another role withdraws original instance and assumes ownership");
             Reject(() => InventoryService.Commit(repo, owner, oldRole, currency.Grant(oldRole, CurrencyKind.Gold, 1)), "stale account storage cannot be overwritten by another role");
             current = repo.List(owner)[0];
-            current = Commit(items.Grant(current, [new(3299, 600), new(50, 2)]));
+            current = Commit(items.Grant(current, [new(3299, 600)]));
+            current = Commit(new(true, 0, new(current.Inventory, current.Inventory with
+                { Items = current.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), new(50, GameWorld.Items.ItemKind.Consumable, 2))) }, "legacy_cargo_tool_fixture")));
             var material = current.Inventory.Items.Single(item => item.Core.ItemId == 3299);
             current = Commit(Move(material.Position, new(InventoryListType.AccountCargo, 1), 17));
             That(current.Inventory.Find(new(InventoryListType.AccountCargo, 1)) is { Core.Count: 17 } split && split.Uid != material.Uid,

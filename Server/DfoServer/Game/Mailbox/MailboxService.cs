@@ -232,7 +232,7 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
         if (!grant.Accepted)
             return MailboxError.InventoryFull;
         var after = grant.Plan!.After with { Gold = checked((uint)(grant.Plan.After.Gold + gold)) };
-        plan = new(new(character.Inventory, after, "mail_claim", new(character)), claims, received, goldMails.ToImmutable(),
+        plan = new(new(character.Inventory, after, "mail_claim", grant.Plan.CharacterPrecondition ?? new(character)), claims, received, goldMails.ToImmutable(),
             now.ToUnixTimeSeconds(), results.ToImmutable());
         return MailboxError.None;
     }

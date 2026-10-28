@@ -180,7 +180,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             {
                 if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id))
                     continue;
-                if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).AcquisitionContract is not null)
+                if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).HasAcquisitionEffect)
                     continue;
                 if (contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id))
                     return InventoryResult.Reject(19);
@@ -245,6 +245,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             if (!restGrant.Accepted)
                 return InventoryResult.Reject(restGrant.Error == 19 ? (ushort)19 : (ushort)4);
             after = restGrant.Plan!.After;
+            if (restGrant.Plan.CharacterPrecondition?.QualificationExpiresAt is { } acquiredUntil && (deadline is null || acquiredUntil < deadline))
+                deadline = acquiredUntil;
             overflow = [.. overflow, .. restGrant.Plan.OverflowItems];
         }
         var cooled = ActivateCooldown(after, sourceTemplate, definition, now);
@@ -319,7 +321,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                 {
                     var template = catalog.Get(row.ItemId);
                     if (template.Kind != pool.RequiredKind || CurrencyWallet.RewardKind(row.ItemId) is not null ||
-                        pieces.ByPiece.ContainsKey(row.ItemId) || template.AcquisitionContract is not null ||
+                        pieces.ByPiece.ContainsKey(row.ItemId) || template.HasAcquisitionEffect ||
                         template.IsPremiumService || contracts?.Recognizes(row.ItemId) == true ||
                         boosters.DirectActivationItems.Contains(row.ItemId))
                         return InventoryResult.Reject(19);
@@ -349,7 +351,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     // 选择行的[creature]只有编号和数量；实体类型由真实模板决定，特殊owner不可走快捷发奖。
                     var selectedTemplate = catalog.Get(id);
                     if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
-                        selectedTemplate.AcquisitionContract is not null || selectedTemplate.IsPremiumService ||
+                        selectedTemplate.HasAcquisitionEffect || selectedTemplate.IsPremiumService ||
                         contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id))
                         return InventoryResult.Reject(19);
                     if (selectedTemplate.Kind == ItemKind.Avatar)
@@ -368,19 +370,19 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
                     var childTemplate = catalog.Get(id);
                     if (definition.SetsEpicExchangeInstanceType || definition.Selection is null ||
                         childTemplate.Kind != ItemKind.Consumable || CurrencyWallet.RewardKind(id) is not null ||
-                        pieces.ByPiece.ContainsKey(id) || childTemplate.AcquisitionContract is not null ||
+                        pieces.ByPiece.ContainsKey(id) || childTemplate.HasAcquisitionEffect ||
                         childTemplate.IsPremiumService || contracts?.Recognizes(id) == true ||
                         boosters.DirectActivationItems.Contains(id) || boosters.Get(id) is not { Available: true, Selection: not null })
                         return InventoryResult.Reject(19);
                 }
                 if (lottery && (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id) ||
                     contracts?.Recognizes(id) == true || boosters.DirectActivationItems.Contains(id) ||
-                    catalog.Get(id).AcquisitionContract is not null ||
+                    catalog.Get(id).HasAcquisitionEffect ||
                     ItemSlotBoundService.List(catalog.Get(id).Kind) != InventoryListType.Main))
                     return InventoryResult.Reject(19);
                 if (CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id))
                     continue;
-                if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).AcquisitionContract is not null)
+                if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).HasAcquisitionEffect)
                     continue;
                 // 仅已实现的普通契约可直接写入账号期限；其他premium服务可能还有即时奖励，
                 // 必须拒绝整包，不能只记期限，也不能跳过实体模板与期限的预检。
@@ -583,6 +585,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             return InventoryResult.Reject(grant.Error == 19 ? (ushort)19 : (ushort)4);
         var after = grant.Plan!.After;
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
+        if (grant.Plan.CharacterPrecondition?.QualificationExpiresAt is { } acquiredUntil && (deadline is null || acquiredUntil < deadline))
+            deadline = acquiredUntil;
         if (dailyDeadline is not null && (deadline is null || dailyDeadline < deadline)) deadline = dailyDeadline;
         foreach (var item in after.Items.Concat(grant.Plan.OverflowItems))
             if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&

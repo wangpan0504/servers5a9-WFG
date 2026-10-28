@@ -30,13 +30,17 @@ internal static partial class InventoryTcpTests
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var stacks = PvfScript.List(resources.Archive.ReadText("stackable/stackable.lst")).Keys.Where(id => id > 2)
-                .Select(id => TryGet(id)).Where(item => item is { Kind: ItemKind.Consumable, StackLimit: >= 30, Expiration: { AbsoluteTime: 0, Days: 0 } })
+                .Select(id => TryGet(id)).Where(item => item is { Kind: ItemKind.Consumable, StackLimit: >= 30,
+                    IsPremiumService: false, HasAcquisitionEffect: false, Expiration: { AbsoluteTime: 0, Days: 0 } })
                 .Take(2).ToArray();
+            That(stacks.Length == 2, "背包移动夹具使用两种普通实体堆叠物品");
             stack = stacks[0]!;
             otherStack = stacks[1]!;
             var character = new GameSession(repository, towns, owner).CreateCharacter("BagStackTest", characters.Get(0));
             var inventory = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            character = InventoryService.Commit(repository, owner, character, inventory.Grant(character, [new(stack.Id, 20), new(otherStack.Id, 3), new(0, 1234)]));
+            var grant = inventory.Grant(character, [new(stack.Id, 20), new(otherStack.Id, 3), new(0, 1234)]);
+            That(grant.Accepted, "背包移动夹具的实体堆叠与金币整笔发放成功");
+            character = InventoryService.Commit(repository, owner, character, grant);
             InventoryService.Commit(repository, owner, character, inventory.Move(character,
                 new(new(InventoryListType.Main, 66), otherStack.Id, 0, new(InventoryListType.Main, 67), 0, 0, -1, 0, 0)));
         }

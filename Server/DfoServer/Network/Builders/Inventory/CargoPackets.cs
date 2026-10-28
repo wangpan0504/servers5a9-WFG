@@ -1,9 +1,18 @@
+using System.Buffers.Binary;
 using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Network.Builders.Inventory;
 
 internal static class CargoPackets
 {
+    public static byte[] PersonalCapacity(ushort capacity)
+    {
+        var body = new byte[4];
+        BinaryPrimitives.WriteUInt16LittleEndian(body, 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(2), capacity);
+        return body;
+    }
+
     public static byte[] Full(InventorySnapshot inventory, InventoryListType list)
     {
         if (list is not (InventoryListType.PersonalCargo or InventoryListType.AccountCargo))
