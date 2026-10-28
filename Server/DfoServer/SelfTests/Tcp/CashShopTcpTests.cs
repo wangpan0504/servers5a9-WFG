@@ -139,6 +139,7 @@ internal static partial class CashShopTcpTests
         await AvatarAsync(source, root, resources);
         await SkillTreeAsync(source, root, resources);
         await HongbaoAsync(source, root, resources);
+        await LimitCubeTcpTests.RunPurchasedTicketsAsync(source, root, resources);
 
         string Snapshot() => PurchaseSnapshot(fixture);
     }

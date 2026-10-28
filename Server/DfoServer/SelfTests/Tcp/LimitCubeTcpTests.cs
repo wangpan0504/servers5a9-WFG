@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Currency;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
@@ -17,14 +18,40 @@ internal static class LimitCubeTcpTests
     const short TargetSlot = 95;
     const short TicketSlot = 85;
 
-    public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
+    public static Task RunAsync(ServerOptions options, string root, TcpTestResources resources) =>
+        RunAsync(options, root, resources, null);
+
+    internal static async Task RunPurchasedTicketsAsync(ServerOptions options, string root, TcpTestResources resources)
+    {
+        foreach (var purchase in new[] { (CommodityId: 105682, Count: 1, Price: 300), (CommodityId: 105683, Count: 10, Price: 2000) })
+            await RunAsync(options, root, resources, purchase);
+    }
+
+    static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources,
+        (int CommodityId, int Count, int Price)? purchase)
     {
         var itemResources = resources.ItemResources;
         var definition = itemResources.LimitCubes.Get(LimitCubeTests.TicketId) ??
             throw new InvalidDataException("现场PVF缺少暴戾搜捕团宝珠变更券规则");
         int requiredTarget = definition.RequiredTargetCount(LimitCubeTests.TargetId) ??
             throw new InvalidDataException("现场变更券不接受暴戾搜捕团宝珠");
-        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "limit-cube"),
+        if (purchase is { } product)
+        {
+            var actual = itemResources.CashShop.Product(product.CommodityId);
+            That(actual is { ItemId: LimitCubeTests.TicketId, Section: "item etc" } &&
+                actual.Count == product.Count && actual.CeraPrice == product.Price,
+                "精确商城商品保留395券的原数量和300／2000点券价格");
+            That(requiredTarget == 1 && definition.Materials.SequenceEqual(new[] { new ItemMaterialCost(3037, 10) }),
+                "395用途保留一颗原珠和十个账号无色的真实费用");
+        }
+        short actualTicketSlot = TicketSlot;
+        InventoryItem? purchasedTicket = null;
+        Character? purchasedCharacter = null;
+        string? purchasedSnapshot = null;
+        InventoryItem? resultItem = null;
+        string? resultSnapshot = null;
+        await using var fixture = new TcpTestFixture(options,
+            Path.Combine(root, purchase is { } sku ? "limit-cube-buy-" + sku.CommodityId : "limit-cube"),
             resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
@@ -44,18 +71,79 @@ internal static class LimitCubeTcpTests
         }
         await fixture.StartAsync();
 
+        if (purchase is { } offer)
+        {
+            if (offer.Count == 1)
+            {
+                using var peer = Open(fixture);
+                peer.Select();
+                string unchanged = Snapshot();
+                fixture.Sql("CREATE TRIGGER fail_r23_purchase_late BEFORE INSERT ON currency_audit_log " +
+                    "WHEN NEW.action_name='cash_shop_buy' BEGIN SELECT RAISE(ABORT,'R23 purchase rollback'); END");
+                Buy(peer, offer.CommodityId);
+                peer.Closed();
+                That(Snapshot() == unchanged, "精确SKU购买末段失败不扣点券、不创建券或推进UID和版本");
+                fixture.Sql("DROP TRIGGER fail_r23_purchase_late");
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select();
+                var before = Read();
+                var started = DateTimeOffset.UtcNow;
+                Buy(peer, offer.CommodityId);
+                var ack = peer.Expect(1, 64).Body;
+                That(ack.Length == 24 && ack[0] == 1 && U32(ack, 6) == offer.CommodityId,
+                    "精确SKU购买先返回原完整商城ACK");
+                var rows = Rows(peer.Expect(0, 14).Body).ToArray();
+                var balance = peer.Expect(0, 53).Body;
+                That(balance.Length == 13 && balance[0] == 1 && U32(balance, 1) == 0,
+                    "原商城一次购买只扣资源价格并返回实际点券余额");
+                peer.Barrier();
+                var ended = DateTimeOffset.UtcNow;
+                purchasedCharacter = Read();
+                purchasedTicket = purchasedCharacter.Inventory.Items.Single(row => row.Core.ItemId == LimitCubeTests.TicketId);
+                actualTicketSlot = purchasedTicket.Position.Index;
+                var template = itemResources.Items.Get(LimitCubeTests.TicketId);
+                var expected = new ItemCore(LimitCubeTests.TicketId, template.Kind, offer.Count)
+                {
+                    Durability = template.Durability,
+                    SealFlag = template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0
+                };
+                That(purchasedTicket.Uid > before.Inventory.Items.Max(row => row.Uid) &&
+                    purchasedTicket.Position.List == InventoryListType.Main &&
+                    (purchasedTicket.Core with { ExpireTime = 0 }) == expected &&
+                    purchasedTicket.ExpireTime >= template.Expiration.Resolve(started, ignoreAbsoluteExpiration: true) &&
+                    purchasedTicket.ExpireTime <= template.Expiration.Resolve(ended, ignoreAbsoluteExpiration: true) &&
+                    purchasedCharacter.Revision == before.Revision + 1 &&
+                    purchasedCharacter.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 0 &&
+                    before.Inventory.AccountWallet.Get(CurrencyKind.Cera) == offer.Price &&
+                    purchasedCharacter.Inventory.Find(new(InventoryListType.Main, TargetSlot)) == before.Inventory.Find(new(InventoryListType.Main, TargetSlot)) &&
+                    purchasedCharacter.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 10 &&
+                    rows.Count(row => U16(row, 0) == actualTicketSlot && I32(row, 2) == LimitCubeTests.TicketId) == 1,
+                    "105682／105683按服务器商品数量创建完整新UID券，目标与无色在购买阶段不消耗");
+                purchasedSnapshot = JsonSerializer.Serialize(purchasedCharacter);
+            }
+        }
+
+        if (purchase is null || purchase.Value.Count == 1)
         using (var peer = Open(fixture))
         {
-            Send(peer);
-            peer.Expect(1, 338, [0, 1, 0]);
+            if (purchase is null)
+            {
+                Send(peer, actualTicketSlot);
+                peer.Expect(1, 338, [0, 1, 0]);
+            }
             peer.Select();
-            peer.Send(338, new byte[7]);
-            peer.Expect(1, 338, [0, 1, 0]);
+            if (purchase is null)
+            {
+                peer.Send(338, new byte[7]);
+                peer.Expect(1, 338, [0, 1, 0]);
+            }
             peer.Barrier();
             string before = Snapshot();
             fixture.Sql("CREATE TRIGGER fail_limit_cube_late BEFORE INSERT ON inventory_audit_log " +
                 "WHEN NEW.action_name='use_limit_cube' BEGIN SELECT RAISE(ABORT,'limit cube rollback'); END");
-            Send(peer);
+            Send(peer, actualTicketSlot);
             peer.Closed();
             That(Snapshot() == before,
                 "CMD338审计末段失败关闭原连接并回滚目标、券、B材料、钱包、结果及UID");
@@ -68,7 +156,7 @@ internal static class LimitCubeTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
-            Send(peer);
+            Send(peer, actualTicketSlot);
             var deltas = new List<byte[]>();
             WirePacket ack = null!;
             for (int packets = 0; packets < 16; packets++)
@@ -100,11 +188,34 @@ internal static class LimitCubeTcpTests
             resultRow = matching[0];
             peer.Barrier();
 
+            if (purchase is { } paid && purchasedTicket is not null && purchasedCharacter is not null)
+            {
+                var saved = Read();
+                resultItem = saved.Inventory.Find(new(InventoryListType.Main, resultSlot))!;
+                var remaining = saved.Inventory.Items.SingleOrDefault(row => row.Uid == purchasedTicket.Uid);
+                var template = itemResources.Items.Get(resultItemId);
+                var expected = new ItemCore(resultItemId, template.Kind, 1)
+                {
+                    Durability = template.Durability,
+                    SealFlag = template.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0
+                };
+                That(resultItem is { Uid: > 0 } && resultItem.Uid > purchasedCharacter.Inventory.Items.Max(row => row.Uid) &&
+                    (resultItem.Core with { ExpireTime = 0 }) == expected &&
+                    saved.Inventory.Items.All(row => row.Uid != purchasedCharacter.Inventory.Find(new(InventoryListType.Main, TargetSlot))!.Uid) &&
+                    (paid.Count == 1 ? remaining is null : remaining == (purchasedTicket with { Core = purchasedTicket.Core with { Value = 9 } })) &&
+                    saved.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 0 &&
+                    saved.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 0 && saved.Revision == purchasedCharacter.Revision + 1 &&
+                    saved.Inventory.Items.Select(row => row.Uid).Distinct().Count() == saved.Inventory.Items.Length &&
+                    JsonSerializer.Serialize(purchasedCharacter) == purchasedSnapshot,
+                    "真实购买券一次变更完整发出一颗新UID珠；单件耗尽，十件只扣一张并保留同UID九张，购买快照不变");
+                resultSnapshot = JsonSerializer.Serialize(saved.Inventory);
+            }
+
             string committed = Snapshot();
-            Send(peer);
+            Send(peer, actualTicketSlot);
             peer.Expect(1, 338, [0, 1, 0]);
             peer.Barrier();
-            That(Snapshot() == committed, "变更券耗尽后的相同请求不重复扣目标、材料或发放结果");
+            That(Snapshot() == committed, "旧目标槽和已扣材料的相同请求不重复扣耗或发放结果");
         }
 
         using (var peer = Open(fixture))
@@ -119,7 +230,7 @@ internal static class LimitCubeTcpTests
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var saved = repository.List(owner).Single();
-            That(saved.Inventory.Find(new(InventoryListType.Main, TicketSlot)) is null &&
+            That(saved.Inventory.Items.Where(row => row.Core.ItemId == LimitCubeTests.TicketId).Sum(row => row.Core.Count) == (purchase?.Count ?? 1) - 1 &&
                 saved.Inventory.Find(new(InventoryListType.Main, resultSlot))?.Core.ItemId == resultItemId,
                 "持久快照已消费唯一变更券并保存实际结果");
         }
@@ -132,6 +243,40 @@ internal static class LimitCubeTcpTests
             row.GetProperty("Detail").GetProperty("ValidatedFamilies").GetInt32() == 1),
             "Runtime完成必需属性族装配；停服后读取日志，不与写入句柄争用");
 
+        if (purchase is not null)
+        {
+            var detail = fixture.Events().Single(row => row.GetProperty("Kind").GetString() == "limit_cube_use" &&
+                row.GetProperty("Detail").GetProperty("Accepted").GetBoolean()).GetProperty("Detail");
+            var summary = detail.GetProperty("SelectionSummary");
+            That(detail.GetProperty("TotalWeight").GetInt64() == 121 &&
+                summary.GetProperty("SelectionMode").GetString() == "independent-attribute-pair" &&
+                summary.GetProperty("Bound").GetInt32() == 11 && summary.GetProperty("DrawCalls").GetInt32() == 2,
+                "购买后的真实338沿已核收两次独立draw11策略及原提交日志，不退回66组合单抽");
+            await fixture.StartAsync("purchased-ticket-restart");
+            using (var peer = Open(fixture))
+            {
+                var entry = peer.Select();
+                var main = entry.Single(packet => packet is { Kind: 0, Opcode: 13 } &&
+                    packet.Body.Length >= 5 && packet.Body[0] == (byte)InventoryListType.Main).Body;
+                Bytes(FullRows(main).Single(row => U16(row, 0) == resultSlot), resultRow,
+                    "同一购买结果在Runtime重建后仍保持完整123B行");
+                peer.Barrier();
+            }
+            await fixture.StopAsync();
+            var reopened = new CharacterRepository(fixture.Database);
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            var restored = reopened.List(owner).Single();
+            That(restored.Inventory.Find(new(InventoryListType.Main, resultSlot)) == resultItem &&
+                JsonSerializer.Serialize(restored.Inventory) == resultSnapshot,
+                "新Repository恢复购买、消费、同UID剩余券、完整结果及两个钱包的实际提交快照");
+        }
+
+        Character Read()
+        {
+            using var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return repository.List(owner).Single();
+        }
+
         InventorySnapshot BuildInventory()
         {
             var rows = new List<InventoryItem>
@@ -143,6 +288,8 @@ internal static class LimitCubeTcpTests
                     InventoryRewardGrantService.Create(itemResources.Items.Get(LimitCubeTests.TargetId),
                         requiredTarget, shopExpiration: true))
             };
+            if (purchase is not null)
+                rows.RemoveAt(0);
             var used = new HashSet<InventorySlot>(rows.Select(row => row.Position));
             AccountWallet wallet = AccountWallet.Empty;
             EpicPieceBook pieces = EpicPieceBook.Empty;
@@ -185,6 +332,8 @@ internal static class LimitCubeTcpTests
                 }
                 That(remaining == 0, "TCP夹具完整准备现场B条件实体材料");
             }
+            if (purchase is { } offer)
+                wallet = wallet.Set(CurrencyKind.Cera, offer.Price);
             return new([.. rows])
             {
                 ReviveCoins = reviveCoins,
@@ -216,11 +365,20 @@ internal static class LimitCubeTcpTests
                 "SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
     }
 
-    static void Send(TcpPeer peer) => peer.Send(338, Build(writer =>
+    static void Buy(TcpPeer peer, int commodityId)
+    {
+        byte[] body = new byte[19];
+        body[2] = 1;
+        body[5] = 0xFF;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(7), checked((uint)commodityId));
+        peer.Send(64, body);
+    }
+
+    static void Send(TcpPeer peer, short ticketSlot = TicketSlot) => peer.Send(338, Build(writer =>
     {
         writer.Write((ushort)TargetSlot);
         writer.Write(LimitCubeTests.TargetId);
-        writer.Write((ushort)TicketSlot);
+        writer.Write((ushort)ticketSlot);
     }));
 
     static IEnumerable<byte[]> Rows(byte[] body)
