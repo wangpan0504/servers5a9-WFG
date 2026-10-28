@@ -1,4 +1,5 @@
 using PvfLib;
+using static DfoServer.GameWorld.Dungeons.DungeonLostLandWarpRules;
 
 namespace DfoServer.GameWorld.Dungeons;
 
@@ -95,30 +96,4 @@ internal static class DungeonLostLandWhirlwind
         return Match(tokens,resolve,returning ? [..motion,..casting] : [..motion,..dialog,..casting,..speech]);
     }
 
-    static string? Action(string source,string? relative)
-    {
-        if (string.IsNullOrWhiteSpace(relative)) return null;
-        string path = PvfArchive.NormalizePath(source[..(source.LastIndexOf('/')+1)]+relative);
-        return path.StartsWith("passiveobject/",StringComparison.Ordinal) && path.EndsWith(".act",StringComparison.Ordinal) ? path : null;
-    }
-
-    // 固定形状逐token核对；null只略过展示字符串，不略过触发器、条件、索引或数值。
-    static bool Match(IReadOnlyList<PvfToken> tokens,Func<int,string> resolve,params object?[] shape)
-    {
-        if (tokens.Count != shape.Length) return false;
-        for (int at = 0; at < shape.Length; at++)
-        {
-            var token = tokens[at];
-            bool matches = shape[at] switch
-            {
-                null => token.Type == 6 && !string.IsNullOrWhiteSpace(resolve(token.Value)),
-                int value => token.Type == 0 && token.Value == value,
-                string tag when tag.StartsWith('[') => token.Type == 3 && resolve(token.Value).Equals(tag,StringComparison.OrdinalIgnoreCase),
-                string text => token.Type == 6 && resolve(token.Value) == text,
-                _ => false
-            };
-            if (!matches) return false;
-        }
-        return true;
-    }
 }

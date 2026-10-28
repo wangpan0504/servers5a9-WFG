@@ -90,6 +90,22 @@ internal static partial class FormalDungeonTcpTests
                 That(port[0] == 9 && port[1] == 6 && port.Length == 16 && port[13] == 0,
                     "同格及错误源房拒绝后，海域水旋风仍可返回原港口缓存");
                 Load(peer); peer.Barrier();
+                // 实收公主返程100B正文；只提供目标格，不把统计尾部解释为救援完成事实。
+                var rescue = Convert.FromHexString("09061F030000C500000000066B0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006C0100000000000003000000000000000000000004000400DD4D000000000000A6370000000000");
+                foreach (var (x,y) in new (byte,byte)[] { (8,6),(8,7),(0,9),(0,8),(1,8),(1,9) })
+                {
+                    move[0] = x; move[1] = y;
+                    peer.Send(45,move); peer.Expect(1,45,[1]);
+                    var step = peer.Expect(0,29).Body;
+                    That(step[0] == x && step[1] == y,"真实TCP沿普通门及已有传送抵达公主房");
+                    Load(peer); peer.Barrier();
+                    if (x == 1 && y == 8) { peer.Send(45,rescue); peer.Barrier(); }
+                }
+                peer.Send(45,rescue); peer.Expect(1,45,[1]);
+                var rescued = peer.Expect(0,29).Body;
+                That(rescued[0] == 9 && rescued[1] == 6 && rescued.Length == 16 && rescued[13] == 0 && Used() == slot + 1,
+                    "错误源房拒绝后，公主房的实收返程仍沿ACK45及缓存29回起点，不重扣次数");
+                Load(peer); peer.Barrier();
             }
             if (slot < 2) peer.Expect(0, 31, []);
             if (slot == 0)
