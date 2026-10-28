@@ -65,8 +65,31 @@ internal static partial class FormalDungeonTcpTests
         long completedOrdinaryRevision = 0;
         int completedOrdinaryGoldLimit = 0, expectedOrdinaryGoldLimit = 0;
         bool expectContractOverview = false;
+        byte[] legacyDeath = new byte[88];
+        BinaryPrimitives.WriteUInt32LittleEndian(legacyDeath,ushort.MaxValue-1);
+        SealDeath(legacyDeath);
+        (ushort Opcode,byte[] Body)[] knownDeaths =
+        [
+            (39,Death(ushort.MaxValue-1,ushort.MaxValue,70)),
+            (39,AltarZeroParticipantDeath(ushort.MaxValue-1,70)),
+            (39,QuestPassiveClearTcpTests.PassiveDeath(69291)),
+            (39,QuestPassiveClearTcpTests.PassiveDeath(69291,74)),
+            (39,legacyDeath),
+            (255,[1,254,255])
+        ];
+        var knownDeathBodies = knownDeaths.Select(row => (row.Opcode,Body:Convert.ToHexString(row.Body))).ToHashSet();
+        void ReceiveKnownDeaths(TcpPeer peer,string state)
+        {
+            string before = fixture.Snapshot();
+            foreach (var report in knownDeaths) peer.Send(report.Opcode,report.Body);
+            peer.Send(39,[0xFA,0xCE,1]);
+            peer.Send(1278);
+            peer.Expect(1,1278,[1]);
+            That(fixture.Snapshot()==before,state+"接收已记录死亡格式，不凭空生成死亡、奖励或状态变更");
+        }
         using (var peer = Open(fixture))
         {
+            ReceiveKnownDeaths(peer,"选角");
             peer.Create("FormalTcp");
             using (var owner = new DfoServer.Game.Accounts.AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             {
@@ -79,8 +102,11 @@ internal static partial class FormalDungeonTcpTests
             }
             fixture.Sql("UPDATE character_dungeon_state SET next_object_key=65536 WHERE character_id=$p0", peer.Id);
             peer.Select();
+            ReceiveKnownDeaths(peer,"已选角色");
             EntryTown(peer);
-            var map = Enter(peer);
+            ReceiveKnownDeaths(peer,"城镇");
+            var map = Enter(peer, eventValue:uint.MaxValue);
+            ReceiveKnownDeaths(peer,"加载");
             That(U16(map, 25) == 256 && fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", peer.Id) is [[1L]],
                 "耗尽旧角色经真实TCP恢复首图，沿完整击杀/拾取/结算流程仅预留一次尝试");
             RejectDelilahServices(fixture,peer,"Loading");
@@ -492,6 +518,12 @@ internal static partial class FormalDungeonTcpTests
         string inventory = fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid");
         string points = fixture.Snapshot("SELECT context,sp,tp FROM character_skill_points ORDER BY context");
         await fixture.StopAsync();
+        var unimplementedDeaths = fixture.Events().Where(row => row.GetProperty("Kind").GetString()=="unimplemented")
+            .Select(row=>row.GetProperty("Detail")).Where(row=>row.GetProperty("Opcode").GetInt32() is 39 or 255).ToArray();
+        That(!unimplementedDeaths.Any(row=>knownDeathBodies.Contains((row.GetProperty("Opcode").GetUInt16(),row.GetProperty("Body").GetString()!))),
+            "已记录死亡格式在选角、城镇或加载等状态均识别接收，不按场景误记未实现");
+        That(unimplementedDeaths.Count(row=>row.GetProperty("Body").GetString()=="FACE01")==4,
+            "未记录的死亡正文仍不冒充已实现格式，不伪造成功应答");
         await fixture.StartAsync("actual-restart", isolatedProcess: true);
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort,"infinite-fatigue off",out fatigueMode) &&
             fatigueMode == "OK {\"infiniteFatigue\":false}", "重启后的正常扣点回归重新关闭无限疲劳");
@@ -661,6 +693,7 @@ internal static partial class FormalDungeonTcpTests
         {
             peer.Create("FiniteTcp"); peer.Select(1); EntryTown(peer); SelectMap(peer);
             byte[] selection = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),0);
+            BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(21),0x12345678);
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
             Load(peer); peer.Expect(0,36,[1,0,156,0,0,0,155,0,0,0]);
             peer.Send(37,new byte[8]); peer.Barrier();
@@ -1443,7 +1476,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Travel(38, 2, 1085, 249, 38, 0, kind: 5);
     }
     internal static byte[] Enter(TcpPeer peer, ushort questId = 3145, uint dungeonId = 3, Action<byte[]>? information = null,
-        ushort? requestQuestId = null, bool? incompleteHellQuest = null, Action? beforeMap = null)
+        ushort? requestQuestId = null, bool? incompleteHellQuest = null, Action? beforeMap = null, uint eventValue = 0)
     {
         peer.Send(31,[31,0,(byte)questId,(byte)(questId >> 8)]);
         byte[] accepted = peer.Expect(1,31).Body;
@@ -1452,6 +1485,7 @@ internal static partial class FormalDungeonTcpTests
         SelectMap(peer, incompleteHellQuest: incompleteHellQuest);
         var selection = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(selection,dungeonId);
         BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16),requestQuestId ?? questId);
+        BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(21),eventValue);
         peer.Send(16, selection);
         var entered = peer.Expect(0, 28).Body;
         That(entered.Length == 36, "正式NOTI28完整36B"); information?.Invoke(entered);

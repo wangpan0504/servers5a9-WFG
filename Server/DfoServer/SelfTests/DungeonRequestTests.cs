@@ -45,6 +45,13 @@ internal static class DungeonRequestTests
             That(rejection.ReadByte() == 0 && rejection.ReadUInt16() == 9 && rejection.ReadByte() == 0 &&
                 rejection.BaseStream.Position == rejection.BaseStream.Length,
                 "静默ACK16独立消费者完整读取失败、u16错误与单人成员槽，无额外字段");
+        foreach (byte code in new byte[] { 10, 246 })
+        {
+            using var rejection = new BinaryReader(new MemoryStream(DungeonPackets.SelectionRejected(code)));
+            That(rejection.ReadByte() == 0 && rejection.ReadUInt16() == code && rejection.ReadByte() == 0 &&
+                rejection.BaseStream.Position == rejection.BaseStream.Length,
+                "祭坛失败ACK16完整编码u16提示码和本人槽");
+        }
         That(DungeonRequests.ParseEntry([0x78, 0x56, 0x34, 0xF2]).DungeonIndex == 0xF2345678u, "entry preserves the unsigned 32-bit index");
         That(DungeonRequests.ParseEntry([0xFF, 0xFF, 0xFF, 0xFF]).DungeonIndex == uint.MaxValue, "entry parsing does not impose an admission range");
         foreach (int length in new[] { 0, 1, 2, 3, 5, 25 })

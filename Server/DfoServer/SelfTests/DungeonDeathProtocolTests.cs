@@ -84,11 +84,23 @@ internal static class DungeonDeathProtocolTests
         // zz在3151安全区的实收终末报告：零参与者、真实角色号12，不是FFFF被动物件格式。
         byte[] retreat = Convert.FromHexString("720200000C000000000000000000000000004D51000000000000440000000022038C0200000000AF7A0110000000764B00000000000022038C020000000000000000000000004494B57B");
         That(DungeonRequests.TryParseScriptedDeath(retreat,out var scripted) &&
-            scripted is { ObjectKey: 626, Reporter: 12, RewriteFlag: 0x22, ChecksumMatches: true },
+            scripted is { ObjectKey: 626, Reporter: 12, RewriteFlag: 1, ChecksumMatches: true },
             "74B撤退报告保留实际角色号用于审计；剧情通关仍由资源演员及实例事件账本确认");
         retreat[^1] ^= 1;
         That(DungeonRequests.TryParseScriptedDeath(retreat,out scripted) && scripted is { ChecksumMatches: false },
             "撤退演员摘要不匹配不会变成有效场景终末事实");
+        foreach (var sample in new[]
+        {
+            (Key: 9929u, Hex: "C9260000FFFF6B0500000000000010000000774E3500000000007C2D0000005803F30000000000455201460000000000000000000000000000000000000000000000000000017A1F1718"),
+            (Key: 9949u, Hex: "DD260000FFFF0000000000000000000000005D70350000000000992D0000004D00F300000000003A4601460000000000000000000000000000000000000000000000000000011EB2EE53")
+        })
+        {
+            byte[] altar = Convert.FromHexString(sample.Hex);
+            That(DungeonRequests.TryParseScriptedDeath(altar,out var zero) && zero is
+                { Reporter: ushort.MaxValue, RewriteFlag: 1, ChecksumMatches: true } && zero.ObjectKey == sample.Key &&
+                altar[30] == 0 && altar[31] != altar[41] && !DungeonRequests.TryParsePassiveDeath(altar,out _),
+                "56016祭坛实收74B零参与者死亡保留真实key及统计尾改写位，不误认被动物件");
+        }
         // 匹配ARAD已实收的13条单人报文，固定预期独立取自原字节；解析不签发死亡或证明本轮实机击杀。
         // 第七例首个u64及u32非零，不能只验证全零前缀。
         (string Hex, uint Key, ulong First, uint FirstCount, ulong Second, uint SecondCount, ulong Contribution, uint Checksum)[] samples =

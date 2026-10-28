@@ -121,8 +121,8 @@ internal static class DungeonPackets
     // ACK16 成功标志为 1 时，0233B36D 不再读后续字段。这只确认导航房间已建立，不代替地图或怪物初始化。
     public static byte[] SelectionAccepted() => [1];
 
-    // ACK16 失败读取 success:u8、error:u16 和 memberSlot:u8；错误9静默恢复选图等待。
-    public static byte[] SelectionRejected() => [0, 9, 0, 0];
+    // ACK16 失败读取 success:u8、error:u16 和 memberSlot:u8；单人成员槽为0。
+    public static byte[] SelectionRejected(byte error = 9) => [0, error, 0, 0];
     // 本版0xAD显示次数/权限上限，不用于缺区域任务；缺任务沿错误9恢复，门票不足保留0x11。
     public static byte[] HellPartyRejected(byte code) => [0, code, 0, 0];
     // NOTI28的匹配36B布局；调用方提供已审核的准入计划，构包不建立实例或确认加载。

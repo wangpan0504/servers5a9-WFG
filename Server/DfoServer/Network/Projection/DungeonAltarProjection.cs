@@ -116,10 +116,8 @@ internal sealed class DungeonAltarProjection(GameConnectionContext context, Serv
                 "formal_altar_ranking", guard);
         else if (result.Stage == 1)
         {
-            var rewards = pending.Reward.Draws.Select(row =>
-                (checked((uint)(row.Item?.Core.ItemId ?? 0)), checked((uint)(row.Item?.Core.Value ?? row.Gold)))).ToArray();
             await context.Notify(NotiPacketType.BLOOD_DUNGEON_STATE_REWARD,
-                DungeonAltarPackets.ClearRewards(checked((byte)fact.CompletedRounds), checked((byte)fact.MaximumRounds), [rewards, [], [], []]),
+                DungeonAltarPackets.ClearRewards(checked((byte)fact.CompletedRounds), checked((byte)fact.MaximumRounds), [pending.Reward.Draws, [], [], []]),
                 "formal_altar_reward", guard);
         }
         else if (result.Stage == 2)

@@ -470,8 +470,13 @@ internal sealed partial class GameSession
             int day = ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow());
             var kind = dungeonId == 11006 ? DungeonSpecialEntryKind.Blood : DungeonSpecialEntryKind.Ultimate;
             var usage = repository.LoadSpecialEntryUsage(owner, expected, day, kind);
-            specialEntry = DungeonAltarEntryPolicy.Prepare(expected, catalog.Get((int)dungeonId), day, usage, catalog.AltarAdmission);
-            if (specialEntry is null) return RejectFormal("altar-entry-count-or-cost-rejected");
+            specialEntry = DungeonAltarEntryPolicy.Prepare(expected, catalog.Get((int)dungeonId), day, usage, catalog.AltarAdmission, out var altarRejection);
+            if (specialEntry is null) return RejectFormal(altarRejection switch
+            {
+                DungeonAltarRejection.DailyLimit => "altar-entry-daily-limit",
+                DungeonAltarRejection.InsufficientGold => "altar-entry-insufficient-gold",
+                _ => "altar-entry-ineligible"
+            });
         }
         if (entry!.EntryItem is { } entryItem)
         {

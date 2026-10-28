@@ -290,6 +290,28 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             log.Write("formal_quest_continuation_tail",new { Connection = context.Id, state, option });
             return CommandResult.Handled;
         }
+        if (context.Altar is { } altar &&
+            context.Session.CurrentDungeonAltarResult() is { } altarResult)
+        {
+            if (state == 2 && altarResult.Result is { Stage: < 2 })
+            {
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "formal_altar_result_focus", () => context.Session.CanPublishDungeonAltar(altarResult));
+                return CommandResult.Handled;
+            }
+            if (state == 1 && option <= 2)
+            {
+                // 跳过等待但不跳过已提交的奖励和资产投影。
+                for (int stage = 0; stage < 2 && altarResult.Result is { Stage: < 2 }; stage++)
+                {
+                    var next = context.Session.AdvanceDungeonAltarResult(altarResult);
+                    if (next is null) return CommandResult.Handled;
+                    await altar.WakeAsync(next);
+                    altarResult = next;
+                }
+                if (altarResult.Result is not { Stage: 2 }) return CommandResult.Handled;
+            }
+        }
         if (context.Session.FormalDungeonResultFocus() is not { } current)
             return CommandResult.Unhandled;
         if (state == 2)
@@ -342,6 +364,18 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             var retry = context.Session.RetryFormalDungeon(current, dungeons, rooms, drops, items,pieces);
             if (retry is null)
             {
+                if (current.Entry.IsAltar)
+                {
+                    log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "altar-retry-rejected",
+                        RejectReason = context.Session.LastFormalDungeonRejection });
+                    var returning = context.Session.ReturnFromFormalDungeon();
+                    if (returning is null) return CommandResult.Handled;
+                    if (context.Altar is { } altarTimer) await altarTimer.StopAsync();
+                    await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, 2),
+                        "formal_altar_retry_return", () => context.Session.CanPublishTravel(returning));
+                    await town.ReturnFromFormalDungeonAsync(context, returning, "formal_altar_retry_town");
+                    return CommandResult.Handled;
+                }
                 if (!current.Entry.IsCosmo && !current.Entry.IsInfernoParty) return CommandResult.Unhandled;
                 if (current.Entry.IsCosmo)
                 {
@@ -362,14 +396,27 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "inferno-retry", infernoReturn.Character.Id, infernoReturn.Character.Position });
                 return CommandResult.Handled;
             }
+            if (current.Entry.IsAltar && context.Altar is { } retryAltar) await retryAltar.StopAsync();
             bool RetryGuard() => context.Session.CanPublishDungeonSettlement(retry);
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_retry", RetryGuard);
             // 261只更新结算页的再挑战资格，不能结束旧Scene；27沿已核验入口切换场景并清理旧结算层。
             await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(0, despairLayer: context.Session.DespairSelectionLayer()), "formal_retry_scene_transition", RetryGuard);
-            await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(retry.Entry, retry.Snapshot.BossPosition), "formal_retry_information", RetryGuard);
-            await MonsterAiProjection.SendAsync(context, retry, "formal_retry_monster_ai", RetryGuard);
-            await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(retry.Entry, retry.Monsters, retry.MapSeed,
-                passiveItems: retry.PassiveItems), "formal_retry_start_map", RetryGuard);
+            if (retry.Monsters.Altar is not null)
+            {
+                await context.Notify(NotiPacketType.BLOOD_INFO, DungeonAltarPackets.Information(retry.Entry), "formal_altar_retry_information", RetryGuard);
+                await context.Notify(NotiPacketType.START_BLOOD_MAP, DungeonAltarPackets.StartMap(retry.Entry), "formal_altar_retry_map", RetryGuard);
+                if (retry.SpecialEntry is { Gold: > 0 })
+                    await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(retry.Character.Inventory,
+                        InventoryListType.Main, [new(InventoryListType.Main, 0)]), "formal_altar_retry_gold", RetryGuard);
+                await DungeonEnterCountProjection.RefreshAsync(context, dungeons, RetryGuard);
+            }
+            else
+            {
+                await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(retry.Entry, retry.Snapshot.BossPosition), "formal_retry_information", RetryGuard);
+                await MonsterAiProjection.SendAsync(context, retry, "formal_retry_monster_ai", RetryGuard);
+                await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(retry.Entry, retry.Monsters, retry.MapSeed,
+                    passiveItems: retry.PassiveItems), "formal_retry_start_map", RetryGuard);
+            }
             if (!retry.HellConsumedSlots.IsDefaultOrEmpty)
             {
                 await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(retry.Character.Inventory,
@@ -424,6 +471,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             }
             var opening = context.Session.OpenFormalDungeonOtherSelection();
             if (opening is null) return CommandResult.Unhandled;
+            if (current.Entry.IsAltar && context.Altar is { } selectionAltar) await selectionAltar.StopAsync();
             int legendTarget = context.Session.PrepareLegendDungeonSelection(dungeons);
             if (!await town.DetachForDungeonSelectionAsync(context, opening)) return CommandResult.Handled;
             bool OpeningGuard() => context.Session.CanPublishDungeonSelection(opening);
@@ -450,6 +498,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
+        if (current.Entry.IsAltar && context.Altar is { } returnAltar) await returnAltar.StopAsync();
         bool Guard() => context.Session.CanPublishTravel(receipt);
         await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_return", Guard);
         await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_result_town");

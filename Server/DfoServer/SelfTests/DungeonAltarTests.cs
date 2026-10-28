@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
@@ -29,10 +30,23 @@ internal static class DungeonAltarTests
         var ranking = DungeonAltarPackets.Ranking(12345, 15, 12000, 15, 15, 98765);
         That(ranking.Length == 24 && BinaryPrimitives.ReadUInt32LittleEndian(ranking.AsSpan(4)) == 15 &&
             BinaryPrimitives.ReadUInt32LittleEndian(ranking.AsSpan(20)) == 98765, "208只发送六项祭坛排名数据");
-        var rewards = DungeonAltarPackets.ClearRewards(7, 7, [[(0u, 1200u), (101u, 7u)], [], [], []]);
-        That(rewards.Length == 22 && rewards[0] == 7 && rewards[1] == 7 && rewards[2] == 2 &&
-            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(7)) == 1200 && rewards.AsSpan(19).SequenceEqual(new byte[3]),
-            "209保留四个队员计数、金币和物品addInfo，不追加普通结算尾部");
+        var equipmentItem = new InventoryItem(0, new(InventoryListType.Main, 0), new(101, ItemKind.Equipment, 987654321));
+        var stackableItem = new InventoryItem(0, new(InventoryListType.Main, 0), new(102, ItemKind.Material, 7));
+        var rewards = DungeonAltarPackets.ClearRewards(7, 7,
+            [[new(0, null), new(1200, null), new(0, equipmentItem), new(0, stackableItem)], [new(55, null)], [], []]);
+        That(rewards.Length == 46 && rewards[0] == 7 && rewards[1] == 7 && rewards[2] == 4 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(3)) == uint.MaxValue &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(7)) == 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(11)) == 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(15)) == 1200 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(19)) == 101 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(23)) == 1 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(27)) == 102 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(31)) == 7 && rewards[35] == 1 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(36)) == 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(rewards.AsSpan(40)) == 55 && rewards.AsSpan(44).SequenceEqual(new byte[2]) &&
+            equipmentItem.Core.Value == 987654321,
+            "209保留四队员槽：空奖使用FFFFFFFF，金币与堆叠数量正确，装备发送1但保留实例随机值");
         var resource = new PvfMapAltarWaves(false,
             [new([1001, 0, 300, 200, 800, 7000, 2000, 1, 1, 3]), new([1002, 0, 400, 210, 0, 5000, 4000, 1, 0, 1])],
             [new(0, 0, 1000, 1.5f, 0, 1, 0), new(1, 1, 3000, 2f, 0, 0, 0)]);

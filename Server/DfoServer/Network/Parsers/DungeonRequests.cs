@@ -107,12 +107,12 @@ internal static class DungeonRequests
     public static bool TryParseScriptedDeath(ReadOnlySpan<byte> body, out DungeonScriptedDeathRequest? request)
     {
         request = null;
-        // 02B52E30普通对象生产者的count=0分支；参与者少14B，共74B。独立于被动物件生产者。
+        // 普通对象生产者的count=0分支，共74B；零参与者不限于剧情演员，且独立于被动物件生产者。
         // reporter可为实际角色号或FFFF；zz的3151撤退演员实际回报角色号，不能把FFFF当资格。
         if (body.Length != 74 || body[30] != 0)
             return false;
-        // 与单参与者形状相比少14B；改写标志在偏移31，不能借用被动物件格式的偏移42。
-        request = new(BinaryPrimitives.ReadUInt32LittleEndian(body),body[31],
+        // 统计尾从31开始，前10B仍为统计字段；029083A0在41写改写标志，再写等级与创建HP。
+        request = new(BinaryPrimitives.ReadUInt32LittleEndian(body),body[41],
             BinaryPrimitives.ReadUInt32LittleEndian(body[70..]) == ClientBodyChecksum.Compute(body[..70]),
             BinaryPrimitives.ReadUInt16LittleEndian(body[4..]));
         return true;

@@ -62,7 +62,7 @@ internal static class DungeonAltarSessionTests
                 var unpaid = session.Selected!;
                 That(session.BeginDungeonSelection() is not null &&
                     session.EnterFormalDungeon(11006, 0, 0, dungeons, rooms, pieces: items.EpicPieces) is null &&
-                    session.LastFormalDungeonRejection == "altar-entry-count-or-cost-rejected" &&
+                    session.LastFormalDungeonRejection == "altar-entry-insufficient-gold" &&
                     ReferenceEquals(session.Selected, unpaid) && fixture.Read().Inventory.Gold == fee - 1 &&
                     session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!.Counts.Single(row => row.Dungeon == 11006).Daily == 3,
                     "无尽次数不是免费资格，费用不足保留选图及全部次数，不安装Run");
@@ -122,6 +122,11 @@ internal static class DungeonAltarSessionTests
                             foreach (var actor in batch.Actors)
                             {
                                 var observation = Observation(actor.ObjectKey);
+                                var zero = new NativeDungeonScriptedDeathObservation(actor.ObjectKey,1,true,new string('C',64));
+                                That(session.ObserveDungeonAltarScriptedDeath(zero with { ChecksumMatches = false }) is null &&
+                                    session.ObserveDungeonAltarScriptedDeath(zero with { MonsterKey = uint.MaxValue }) is null &&
+                                    session.ObserveDungeonAltarScriptedDeath(zero with { MonsterKey = ushort.MaxValue }) is null,
+                                    "祭坛零参与者39仍拒绝错误摘要、溢出键和未发布对象");
                                 That(session.ObserveDungeonAltarDeath(observation with { ChecksumMatches = false }) is null &&
                                     session.ObserveDungeonAltarDeath(observation with { MonsterKey = uint.MaxValue }) is null &&
                                     session.ObserveDungeonAltarDeath(observation with { MonsterKey = ushort.MaxValue }) is null,
@@ -129,7 +134,9 @@ internal static class DungeonAltarSessionTests
                                 current = session.ObserveDungeonAltarDeath(observation)
                                     ?? throw new InvalidOperationException("祭坛实际39死亡未推进");
                                 var deathReplay = session.ObserveDungeonAltarDeath(observation);
+                                var zeroReplay = session.ObserveDungeonAltarScriptedDeath(zero);
                                 That(deathReplay is { RoundAdvanced: false } && deathReplay.Round == current.Round &&
+                                    zeroReplay is { RoundAdvanced: false } && zeroReplay.Round == current.Round &&
                                     ReferenceEquals(session.Selected, entered.Character),
                                     "祭坛重复39只补发退场资格，不重复推进或写普通成长/掉落");
                             }
@@ -195,6 +202,7 @@ internal static class DungeonAltarSessionTests
             session.MutateInventory(c => new(true,0,new(c.Inventory,c.Inventory with { ReviveCoins = 20 },"fixture_coins")));
             Enter(session,11007);
             var loaded = session.CompleteFormalDungeonLoading()!;
+            That(session.CurrentDungeonAltarResult() is null, "尚未提交祭坛结算时不能手动完成结果页");
             session.PrepareDungeonAltarUi(loaded);
             var active = session.StartDungeonAltar(loaded)!;
             DungeonAltarReceipt? old = null;
@@ -216,8 +224,24 @@ internal static class DungeonAltarSessionTests
             clock.AdvanceTo(final.Due!.Value);
             That(!session.CanFinishDungeonAltarDeath(old!) && session.CanFinishDungeonAltarDeath(final),
                 "同实例早先死亡序号失效，只有本次十秒截止能失败结算");
-            That(session.BeginDungeonAltarSettlement(policy,growth)?.Result?.Pending.Fact is
-                { Cleared:false, CompletedRounds:0 }, "十秒未复活才冻结零回合失败，没有虚构通关");
+            var result = session.BeginDungeonAltarSettlement(policy,growth)!;
+            That(result.Result?.Pending.Fact is { Cleared:false, CompletedRounds:0 },
+                "十秒未复活才冻结零回合失败，没有虚构通关");
+            long revision = fixture.Read().Revision;
+            var stage0 = session.CurrentDungeonAltarResult()!;
+            var stage1 = session.AdvanceDungeonAltarResult(stage0)!;
+            That(stage0.Result?.Stage == 0 && stage1.Result?.Stage == 1 &&
+                !session.CanPublishDungeonAltar(stage0) && session.AdvanceDungeonAltarResult(stage0) is null,
+                "手动回城立即推进排名阶段，旧回执不能重复推进或发布");
+            var stage2 = session.AdvanceDungeonAltarResult(stage1)!;
+            That(stage2.Result?.Stage == 2 && session.CurrentDungeonAltarResult()?.Result?.Stage == 2 &&
+                !session.CanPublishDungeonAltar(stage1) && session.AdvanceDungeonAltarResult(stage1) is null &&
+                session.AdvanceDungeonAltarResult(stage2) is null && fixture.Read().Revision == revision,
+                "手动回城依次推进奖励和资产投影，重放不重复写入奖励");
+            That(session.ReturnFromFormalDungeon() is not null && session.Phase == SessionPhase.Town &&
+                session.CurrentDungeonAltarResult() is null && !session.CanPublishDungeonAltar(stage2) &&
+                session.TickDungeonAltar(stage2) is null && fixture.Read().Revision >= revision,
+                "手动回城提交后旧结算和自动计时失效");
         }
         Console.WriteLine($"PASS {Count-before} 实际祭坛入口、全波次、专用结算、复活窗口和币上限断言");
 
