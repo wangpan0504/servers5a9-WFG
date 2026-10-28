@@ -98,6 +98,8 @@ internal static class ServerRuntime
         var social = new Game.Social.SocialService(repository, online);
         var socialProjection = new SocialProjection(social);
         var parties = new Game.Party.PartyService(repository, clock, gameCache, guideStore: repository);
+        var trades = new Game.Trade.TradeRegistry();
+        var tradeHandler = new TradeHandler(trades, online, itemResources.Items, itemResources.GoldLimits, log);
         var pvpRatingCatalog = new GameWorld.Pvp.PvpRatingCatalog(pvf);
         var pvpRatingCalculator = new Game.Pvp.PvpRatingCalculator(pvpRatingCatalog);
         var pvpRatings = new Game.Pvp.PvpRatingSettlement(repository, pvpRatingCalculator);
@@ -533,7 +535,8 @@ internal static class ServerRuntime
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters,
                 guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler),
             new SocialHandler(repository, social, online, log),
-            new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection, arena),
+            new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection, arena, tradeHandler),
+            tradeHandler,
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),
@@ -557,7 +560,7 @@ internal static class ServerRuntime
                 itemResources.EpicPieces), collectBoxProjection, inventoryProjection, clock),
             new EpicProductionHandler(epicProduction,epicAbilities,epicPolicy,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,
                 epicProductionProjection,inventoryProjection,clock),
-            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log),
+            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log, tradeHandler),
             new CubeContractHandler(new CubeContractService(itemResources.Contracts), inventoryProjection, log, clock),
             new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables, clock), log, tutorials, itemResources.Items, inventoryProjection,
                 new InventoryPremiumContractUseService(itemResources.Items, itemResources.Contracts, clock), creatures, creatureProjection, projection,
@@ -713,7 +716,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles,lukeRejoin: lukeRejoin, trade: tradeHandler);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;

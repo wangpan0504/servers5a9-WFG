@@ -56,6 +56,9 @@ internal static class SelfTestRunner
         WeeklyEntryResetTests.RunCore();
         CharacterPreparationTests.RunCore();
         PlayerInteractionTests.RunCore();
+        TradePacketTests.RunCore();
+        TradeRegistryTests.RunCore();
+        PlayerTradeRepositoryTests.RunCore();
         SocialTests.RunCore();
         ExperienceBonusTests.RunCore();
         WorldMapHoverTests.Run();

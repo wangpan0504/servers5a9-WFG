@@ -36,6 +36,7 @@ internal static class TcpRegressionTests
         ("monster-ai", FormalDungeonTcpTests.RunMonsterAiAsync),
         ("party-dungeon-modes", PartyDungeonTcpTests.RunQuestAndHellAsync),
         ("social", SocialTcpTests.RunAsync),
+        ("trade", TradeTcpTests.RunAsync),
         ("marriage", MarriageTcpTests.RunAsync),
         ("marriage-wedding", MarriageWeddingTcpTests.RunAsync),
         ("marriage-home", MarriageHomeTcpTests.RunAsync),

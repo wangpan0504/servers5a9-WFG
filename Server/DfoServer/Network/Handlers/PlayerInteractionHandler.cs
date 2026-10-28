@@ -11,7 +11,8 @@ using DfoServer.Network.Projection;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessionDirectory online, ServerLog log, PartyDungeonService? partyDungeons = null,
-    RaidHandler? raids = null, TownProjection? town = null, DfoServer.Game.Pvp.PvpArenaService? arena = null) : IGameCommandModule
+    RaidHandler? raids = null, TownProjection? town = null, DfoServer.Game.Pvp.PvpArenaService? arena = null,
+    TradeHandler? trade = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -59,6 +60,7 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
     }
     async Task<CommandResult> RequestAsync(GameConnectionContext context, Packet request)
     {
+        if (trade is not null && await trade.TryInviteAsync(context, request)) return CommandResult.Handled;
         if (request.Body.Length >= 3 && request.Body[2] == 10 && raids is not null)
             return await raids.RequestPeerAsync(context, request);
         if (CharacterRequests.TryPeerMenu(request.Body, out ushort target))
@@ -85,6 +87,7 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
     }
     async Task<CommandResult> ResponseAsync(GameConnectionContext context, Packet request)
     {
+        if (trade is not null && await trade.TryRespondAsync(context, request)) return CommandResult.Handled;
         if (request.Body.Length >= 3 && request.Body[2] == 10 && raids is not null)
             return await raids.ResponsePeerAsync(context, request);
         var body = request.Body;
