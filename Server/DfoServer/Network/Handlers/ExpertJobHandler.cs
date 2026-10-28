@@ -132,7 +132,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             return CommandResult.Handled;
         }
         var parsed = ExpertJobRequests.ReadEnchantStore(packet.Body);
-        var current = context.Owner.Execute(() => context.Session.Selected);
+        var current = context.Session.CaptureExpertJobTrade();
         if (current is not null && parsed.First != current.Id && parsed.Third == 2 && parsed.Fourth == 0 && parsed.Sixth == 0 &&
             parsed.Second <= int.MaxValue && parsed.Fifth <= short.MaxValue && parsed.Seventh <= short.MaxValue)
             return await TradeStoreAsync(context, parsed.First, 1, candidate => cardEnchanting?.Plan(candidate,

@@ -1,5 +1,6 @@
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
@@ -24,9 +25,14 @@ internal sealed class EnchantmentHandler(InventoryEnchantmentService service, In
             return CommandResult.Handled;
         }
         var capture = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
-        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(InventoryEnchantmentService.Rejection) :
-            context.Session.PlanAndCommitInventory(character => service.Plan(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds()),
-                InventoryEnchantmentService.Rejection, requireTown: false);
+        int itemId = capture.Selected?.Inventory.Find(request.Source)?.Core.ItemId ?? 0;
+        var definition = context.Activity?.BlocksTownActions == true ? null : service.Definition(itemId);
+        var result = definition is null ? InventoryResult.Reject(InventoryEnchantmentService.Rejection) :
+            context.Session.PlanAndCommitInventory(character => ReferenceEquals(character, capture.Selected) ?
+                service.Plan(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds(), definition) :
+                InventoryResult.Reject(InventoryEnchantmentService.Rejection),
+                InventoryEnchantmentService.Rejection, requireTown: false,
+                requiredPhase: definition.VillageOnly ? SessionPhase.Town : null);
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
             context.Owner.Execute(() => ReferenceEquals(capture.Selected, context.Session.Selected) &&
                 capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);

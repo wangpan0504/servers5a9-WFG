@@ -42,6 +42,7 @@ internal static partial class SessionPlanningTests
         ExpertJobStoreLifecycle();
         Learning();
         Layout();
+        EnchantmentTownPlanning();
         await CreationRacesAsync();
         await SkillRacesAsync();
         await LayoutRacesAsync();
