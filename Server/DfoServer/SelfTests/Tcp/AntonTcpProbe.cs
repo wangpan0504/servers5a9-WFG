@@ -216,6 +216,17 @@ internal static class AntonTcpProbe
         }
         if (stopAfter == "card")
         {
+            // 已证601为完整10B；D/E/F取值来源未闭合，不能用Luke夹具或零补全。
+            // 未配置的牌种/槽位仅作负例，不给它们推定原厂语义。
+            foreach (byte[] rejected in new byte[][] { [byte.MaxValue, 0], [1, byte.MaxValue] })
+            {
+                peer.Send(660, rejected);
+                var packets = Flush(peer, "660 未配置牌面 " + Hex(rejected));
+                Note(report, packets);
+                if (packets.Any(packet => packet.Opcode is 600 or 601 or 660 or 587))
+                    throw new InvalidOperationException("未配置的660不得发布结果、成功ACK或推进阶段");
+                report.RejectedCards++;
+            }
             // 01101417/039EC4D0已观察(1,0)/(0,0)。正式策略由原Battle/账本提供，不推导其它牌种或槽位。
             bool? available = null;
             bool advanced = false;
@@ -230,6 +241,16 @@ internal static class AntonTcpProbe
                     throw new InvalidOperationException("660正式策略状态不一致，或未提交却返回了结果包");
                 if (accepted && cards.Any(packet => packet.Kind == 1 && packet.Opcode == 660 && !packet.Body.SequenceEqual(new byte[] { 1 })))
                     throw new InvalidOperationException("ACK660成功应只有01，不能追加奖励业务体");
+                if (cards.Any(packet => packet.Opcode == 601))
+                    throw new InvalidOperationException("正式601的D/E/F取值来源未闭合，不得在660时补发占位结果");
+                foreach (var display in cards.Where(packet => packet is { Kind: 0, Opcode: 600 }))
+                {
+                    // 01DC8BA7/01DC8BB6读取kind/count；未知8B物品列不补零、不借Luke16B。
+                    if (!display.Body.SequenceEqual(new byte[] { request[0], 0 }))
+                        throw new InvalidOperationException("正式600尚无完整展示列，只允许已证空列表骨架");
+                    if (!accepted || cards.IndexOf(display) >= cards.FindIndex(packet => packet is { Kind: 1, Opcode: 660 }))
+                        throw new InvalidOperationException("600必须在资产提交后的ACK660之前写出");
+                }
                 if (advanced && cards.Any(packet => packet.Opcode is 600 or 601))
                     throw new InvalidOperationException("旧阶段660回放不能向下一阶段窗口发布600/601");
                 advanced |= cards.Any(packet => packet is { Kind: 0, Opcode: 587, Body: [2, 1] });
@@ -237,7 +258,7 @@ internal static class AntonTcpProbe
             report.CardUnavailable = available != true;
             FinishStep(report, elapsed, "card", report.CardUnavailable
                 ? "UNIMPLEMENTED: no configured offer; no success ACK/600/601; connection alive"
-                : "660 (1,0)/(0,0) + duplicates committed/replayed; ACK=01; other kinds/slots UNIMPLEMENTED");
+                : "660 (1,0)/(0,0) + duplicates committed/replayed; ACK=01; 600=empty; 601/display fields UNIMPLEMENTED");
         }
         peer.Send(42);
         Note(report, Flush(peer, "42 Reward 返回候战室"));
@@ -575,6 +596,7 @@ internal static class AntonTcpProbe
             else if (packet is { Kind: 0, Opcode: 583 }) report.Symbols.Add(packet.Body.ToArray());
             else if (packet.Opcode == 596) report.Opcode596++;
             else if (packet.Opcode == 597) report.Opcode597++;
+            else if (packet is { Kind: 0, Opcode: 600 }) report.Opcode600++;
             else if (packet.Opcode == 601) report.Opcode601++;
             if (packet is { Kind: 0, Opcode: 29 } && packet.Body.Length >= 18)
                 report.Maps.Add(packet.Body.ToArray());
@@ -746,7 +768,9 @@ internal static class AntonTcpProbe
         public int Opcode586;
         public int Opcode596;
         public int Opcode597;
+        public int Opcode600;
         public int Opcode601;
+        public int RejectedCards;
         public bool CardUnavailable;
         public byte[]? LastClearCheck;
         public List<string> Steps { get; } = [];
@@ -754,7 +778,7 @@ internal static class AntonTcpProbe
         public List<byte[]> Symbols { get; } = [];
         public List<byte[]> Maps { get; } = [];
         public string Summary() =>
-            $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597} 601={Opcode601} cardUnavailable={CardUnavailable} steps={string.Join(',', Steps)}";
+            $"started={Started} entered210={Entered210} reward={Reward} noti586={Opcode586} 596={Opcode596} 597={Opcode597} 600={Opcode600} 601={Opcode601} rejectedCards={RejectedCards} cardUnavailable={CardUnavailable} steps={string.Join(',', Steps)}";
     }
 
     internal sealed record ProbeArgs(bool Seed, string? Host, int? ChannelPort, int? GamePort, string? Account, string Digest,

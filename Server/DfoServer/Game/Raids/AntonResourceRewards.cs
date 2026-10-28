@@ -36,6 +36,8 @@ internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items)
             int selected = (draw ?? RandomNumberGenerator.GetInt32)(weight);
             if (selected < 0 || selected >= weight) throw new InvalidDataException("安徒恩奖励随机值越界");
             var winner = squad.First(row => (selected -= row.RawB) < 0);
+            // 023B2A54..2AAA无条件连续读取601全部10B。KB-20261026T063752-4691836ed4
+            // 仅证明C秒显示、D整数、E动画，D/E/F没有正式取值来源；下列占位不发布，不能发短前缀。
             result.Add(new(Source,
                 [new(1, 0, fixedGrants.ToImmutable(), []), new(0, 0, [new(winner.ItemId, 1)], [])],
                 new(0, checked((byte)index), 0, 0, 0, 0)) { PublishResult = false });
