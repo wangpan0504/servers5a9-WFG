@@ -80,6 +80,7 @@ internal static class LukeRaidStartTests
             LukeRaidObjectTests.RunCore(actors.Take(8).ToArray());
             LukeFacilityBridgeTests.RunCore(actors.Take(8).ToArray());
             LukeRaidCompletionTests.RunCore(actors.Take(8).ToArray());
+            await LukeRewardRejectionTests.RunAsync(actors[8],root);
             var leader=actors[0]; raids.Create(leader,1,"start","start"u8.ToArray(),8,1);
             for(int index=1;index<8;index++)
             { raids.Invite(leader,actors[index],0); That(raids.Respond(actors[index],leader.Character,true).Accepted,"Luke通过原邀请加入"); }
