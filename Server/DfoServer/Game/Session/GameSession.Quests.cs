@@ -44,8 +44,11 @@ internal sealed partial class GameSession
                 !Ready || Selected is null || Phase is not (SessionPhase.Town or SessionPhase.Dungeon or SessionPhase.Settlement) ||
                 HasPendingFormalCard || formalDungeon?.Ground.HasPendingOperation == true || formalDungeon?.Run.HasPendingDeath == true || formalDungeon?.Run.HasPendingSettlement == true || HasPendingQuestScene)
                 return (Character: (DfoServer.Game.Characters.Character?)null, SelectionEpoch, Phase,
-                    Identity: (DungeonRunIdentity?)null, Clear: (QuestClearReceipt?)null, Pending: (PendingQuestCompletion?)null);
+                    Identity: (DungeonRunIdentity?)null, Clear: (QuestClearReceipt?)null, Pending: (PendingQuestCompletion?)null,
+                    Entry: (DungeonEntryPlan?)null, Room: (DfoServer.GameWorld.Dungeons.DungeonRoomDefinition?)null);
             var identity = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
+            var room = identity is not null && formalDungeon is { } dungeon
+                ? dungeon.Route.Rooms.FirstOrDefault(row => row.Room.Map == dungeon.Run.Snapshot.CurrentMap)?.Room : null;
             var pending = pendingQuestCompletion;
             bool samePending = pending is not null && ReferenceEquals(pending.Plan.Expected, Selected) &&
                 pending.SelectionEpoch == SelectionEpoch && pending.Phase == Phase && pending.DungeonIdentity == identity &&
@@ -56,7 +59,8 @@ internal sealed partial class GameSession
             // 不同请求不能用旧revision读取或替换未决领奖；同请求继续使用冻结清图凭据。
             var clear = (pending is null || samePending) && !Selected.CompletedQuests.Contains(questId) && !completedParentChild
                 ? samePending ? pending!.Plan.AuthoritativeClear : ReadClearedQuest(questId)?.Clear : null;
-            return (Character: Selected, SelectionEpoch, Phase, Identity: identity, Clear: clear, Pending: pendingQuestCompletion);
+            return (Character: Selected, SelectionEpoch, Phase, Identity: identity, Clear: clear, Pending: pendingQuestCompletion,
+                Entry: formalDungeon?.Entry, Room: room);
         });
         if (captured.Character is not { } expected)
             return new(QuestFinishOutcome.Unsupported) { Failure = QuestCompletionFailure.EligibilityChanged };
@@ -71,7 +75,26 @@ internal sealed partial class GameSession
             return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
                 { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "缺少本次接取的通关凭据" };
         // 地点、NPC和实例目标在进度达成时验证；交付使用本次接取的持久事实，不因离开原场景而失效。
+        // 顺序父33只核子完成集。副本/结算内的父34：CompleteNpc若在城镇地图（3521/58、3525/362），当前房间须含该NPC，否则拒绝，避免末子自动归档后在图内交父任务。对话NPC（3146/1247）不在城镇地图，结算34仍按子完成集交付以保留连图。
         // 各目标的实际材料、回答、子任务、角色状态及清图凭据仍由统一领奖规划复验。
+        if (QuestRelationProgress.SequentialParent(quest,quests) && quest.CompleteNpc > 0 &&
+            captured.Phase is SessionPhase.Dungeon or SessionPhase.Settlement)
+        {
+            int resolved = QuestClientSceneProgress.ResolveNpc(expected,quest.CompleteNpc,quest);
+            bool townNpc = resolved > 0 && towns.Areas.Values.Any(area =>
+                area.Default.Npcs.Any(npc => npc.Id == (uint)resolved) ||
+                area.Phases.Any(phase => phase.Npcs.Any(npc => npc.Id == (uint)resolved)));
+            if (townNpc)
+            {
+                bool atNpc = captured.Entry is { } entry && captured.Room is { NpcMetadataError: null } room &&
+                    quest.Definition?.Dungeons.Any(row => row.DungeonId == entry.DungeonId) == true &&
+                    expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,entry)) &&
+                    room.Npcs.Any(npc => npc.Id == resolved);
+                if (!atNpc)
+                    return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                        { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "任务目标或NPC场景尚未满足" };
+            }
+        }
         if (captured.Pending is { } incomplete && (incomplete.Plan.QuestId != questId || incomplete.Plan.RewardSelector != selector ||
             incomplete.Plan.Multiplier != multiplier || incomplete.SelectionEpoch != captured.SelectionEpoch || incomplete.Phase != captured.Phase ||
             incomplete.DungeonIdentity != captured.Identity || !ReferenceEquals(incomplete.Plan.Expected, expected)))
