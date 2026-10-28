@@ -133,7 +133,7 @@ internal static class AntonRaidRejoinTests
             try { That(registry.RestoreAnton(rejoined, key, rejoin, parties).Reason == "command-busy" && !fact!.Attempted,
                 "原分队忙时有界拒绝，不消费恢复资格"); }
             finally { commands.Release(); }
-            using (var db = new SqliteConnection("Data Source=" + Path.Combine(root, "game.db")))
+            using (var db = new SqliteConnection("Data Source=" + Path.Combine(root, "game.db") + ";Pooling=False"))
             {
                 db.Open();
                 using var fail = db.CreateCommand();
