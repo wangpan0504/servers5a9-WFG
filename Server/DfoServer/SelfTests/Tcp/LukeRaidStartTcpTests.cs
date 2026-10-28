@@ -36,6 +36,13 @@ internal static class LukeRaidStartTcpTests
     public static Task RunPhaseTimeoutAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,phaseTimeout:true);
 
     // 定向资源/SQLite回归复用同一准备逻辑，不另起网络fixture，也不增加默认TCP分组。
+    public static Task RunRewardRestartAsync(ServerOptions source,string root,TcpTestResources resources)
+    {
+        var (definition,policy,_)=Prepare(resources,true,true,false,false);
+        LukeRaidLifecycleTransactionTests.Run(resources,definition,policy,source.PvfPath);
+        return Task.CompletedTask;
+    }
+
     public static void RunLifecycleOnly(TcpTestResources resources)
     {
         var (definition,policy,_)=Prepare(resources,true,true,false,false);

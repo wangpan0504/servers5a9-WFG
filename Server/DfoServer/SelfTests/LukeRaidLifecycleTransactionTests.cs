@@ -21,7 +21,7 @@ namespace DfoServer;
 // 与真实Runtime网络组互补：原Start/PartyDungeon/死亡SQL产生候选，直接领域调用只为有界故障重试而不关闭连接。
 internal static class LukeRaidLifecycleTransactionTests
 {
-    internal static void Run(TcpTestResources resources,RaidDefinition definition,LukeRaidStartPolicy policy)
+    internal static void Run(TcpTestResources resources,RaidDefinition definition,LukeRaidStartPolicy policy,string? restartPvf=null)
     {
         int before=Count;string root=Path.Combine(Path.GetTempPath(),"S5A9-luke-lifecycle-"+Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);string path=Path.Combine(root,"game.db");bool done=false;
@@ -95,9 +95,11 @@ internal static class LukeRaidLifecycleTransactionTests
             battle=sessions[0].CurrentRaidBattle(actors[0])!;
             RunStages(false,unclaimedRestart:true);
             LukeRaidResourceRulesTests.Run(definition.Resources.Script,actors,policy.Completion!);
+            if(restartPvf is not null) That(recoveryCandidates is not null,"重启测试必须实际生成待领资格，不能静默跳过");
             if(recoveryCandidates is not null)
             {
                 foreach(var actor in actors.Reverse())That(leave.Leave(actor,actor.Character) is not null,"恢复入口验证前合法退出新实例");
+                if(restartPvf is not null) LukeRewardRestartTests.RunAsync(resources,path,actors[0].Owner.Account,sessions[0].Selected!,recoveryCandidates[0],restartPvf).GetAwaiter().GetResult();
                 LukeRewardRecoveryTests.RunResources(resources,repository,owners,sessions,actors,recoveryCandidates,path);
             }
             done=true;

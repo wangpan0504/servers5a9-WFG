@@ -444,6 +444,7 @@ internal static class TcpRegressionTests
         ("luke-raid-disconnect-candidates", LukeRaidStartTcpTests.RunDisconnectCandidatesAsync),
         ("luke-raid-facilities", LukeRaidStartTcpTests.RunFacilitiesAsync),
         ("luke-raid-fixed-route", LukeRaidStartTcpTests.RunFixedRouteAsync),
+        ("luke-reward-restart", LukeRaidStartTcpTests.RunRewardRestartAsync),
         ("luke-raid-phases", LukeRaidStartTcpTests.RunPhasesAsync),
         ("luke-raid-result600", LukeRaidStartTcpTests.RunResourceCompletionAsync),
         ("luke-raid-timers", LukeRaidStartTcpTests.RunTimersAsync),
@@ -468,6 +469,7 @@ internal static class TcpRegressionTests
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
+        "luke-reward-restart",
         "class-change-rules",
         "levelup-ticket-rules",
         "levelup-table-rules",
