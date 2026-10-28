@@ -209,8 +209,21 @@ internal static class AntonRaidRejoinTcpTests
     {
         AntonTcpProbe.ClearRoom(leader, firstMap, new(), out _, out _, false, member, new());
         member.Dispose();
-        AntonRaidTcpTests.Until(leader, 0, 591);
-        QuietDrain(leader);
+        // 原分队成员退出会发NOTI9/action2与NOTI26；见PartyProjection及PartyPackets.Host的023A2237读宽。
+        // 先等断线事实再收齐后续帧，不能把本连接屏障当成另一连接已清理的证明。
+        var disconnected = new List<WirePacket>();
+        for (int at = 0; at < 256; at++)
+        {
+            var packet = leader.Read();
+            disconnected.Add(packet);
+            if (packet is { Kind: 0, Opcode: 591 } && U32(packet.Body, 4) == 3) break;
+        }
+        That(disconnected.Any(p => p is { Kind: 0, Opcode: 591 } && U32(p.Body, 4) == 3),
+            "恢复成员再次断线后原团名册同步移除");
+        disconnected.AddRange(AntonTcpProbe.Barrier(leader, "过期Run用例等待原成员断线"));
+        That(disconnected.Any(p => p is { Kind: 0, Opcode: 9, Body.Length: > 0 } && p.Body[0] == 2) &&
+            disconnected.Any(p => p is { Kind: 0, Opcode: 26, Body: [0] }),
+            "原分队仅余槽0的队长，发送成员增量及真实主机槽0");
         var path = AntonTcpProbe.Route(catalog, 210, info[7], firstMap[0], firstMap[1], info[8], info[9]);
         That(path.Length > 2, "重入过期用例使用210非Boss相邻房，不借最终通关改变阶段");
         var next = Move(checked((byte)path[1].X), checked((byte)path[1].Y));
