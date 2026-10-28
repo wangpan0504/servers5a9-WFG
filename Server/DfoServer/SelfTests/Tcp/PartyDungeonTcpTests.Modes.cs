@@ -249,7 +249,8 @@ internal static partial class PartyDungeonTcpTests
         byte[] physicalMap=[];
         readonly ushort[] expectedIncompleteHellQuestSlots;
         public Coop(TcpTestFixture fixture,TcpTestResources resources,string prefix,Location position,int[] done,byte level,int count,
-            int tickets=0,bool withoutHellQuest=false,int stones=0)
+            int tickets=0,bool withoutHellQuest=false,int stones=0,
+            IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? rewards=null)
         {
             this.fixture=fixture;
             Peers=new TcpPeer[count];
@@ -271,6 +272,12 @@ internal static partial class PartyDungeonTcpTests
                 {
                     repo.CommitInventory(owner,role,new(role.Inventory,role.Inventory with { Items=role.Inventory.Items.Add(
                         new(0,new(InventoryListType.Main,122),new(10305821,ItemKind.Material,i==0 ? 8 : stones))) },"party_hell_stone"));
+                }
+                if (rewards is not null)
+                {
+                    var items = resources.ItemResources;
+                    var grants = new DfoServer.Game.Inventory.Services.InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
+                    role = DfoServer.Game.Inventory.Services.InventoryService.Commit(repo, owner, role, grants.Grant(role, rewards));
                 }
                 Peers[i]=TcpPeer.Open(fixture,account); Peers[i].Select(role.Slot,prepared:true,resumeTown:true,room:false);
             }

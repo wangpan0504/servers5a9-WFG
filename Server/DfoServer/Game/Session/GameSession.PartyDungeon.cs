@@ -72,7 +72,7 @@ internal sealed partial class GameSession
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         Guid instance, uint firstKey, PartyDungeonPreparation? shared = null, uint questId = 0,
-        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null)
+        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true)
     {
         LastFormalDungeonRejection = null;
         var retry = Phase == SessionPhase.Settlement ? FormalDungeonResultFocus() : null;
@@ -89,7 +89,7 @@ internal sealed partial class GameSession
         }
         var prepared = PrepareFormalDungeon(dungeonId, questId, difficulty, catalog, rooms, drops, items, null, pieces, null, retry,
             prepareDrops: prepareDrops ?? previousDrops, shared: shared, partyFirstKey: firstKey, partyInstance: instance, partyAdmission: true,
-            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards);
+            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards, allowDimensionHidden: allowDimensionHidden);
         if (prepared is null && shared is not null) shared.Session.LastFormalDungeonRejection = LastFormalDungeonRejection;
         return owner.Execute(() =>
         {
@@ -135,7 +135,7 @@ internal sealed partial class GameSession
             if (dungeon.HellTicket is not null) throw new InvalidDataException("普通入场票不能叠加深渊入场费用");
             costs.Add(new(cost.ItemId, cost.Count));
         }
-        if (dungeon.ChannelCost?.Consume is { } channelItem) costs.Add(new(channelItem.ItemId, channelItem.Count));
+        if (dungeon.ChannelCost is { } channelCost) costs.AddRange(channelCost.Materials);
         if (costs.Count > 0)
         {
             if (costPieces is null) return null;
@@ -145,13 +145,14 @@ internal sealed partial class GameSession
         }
         PartyDungeonIncount? incount = dungeon.ChannelCost is { } channel
             ? new(channel.Incount?.CountKey ?? channel.DungeonId, channel.Period, channel.Incount, channel.Account, !channel.ChargeOnClear) : null;
+        if (dungeon.Entry.Dimension is { } dimension && dimension.Period != IncountPeriod(dimension.Catalog.DailyRow.CountKey)) return null;
 
         ushort fatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : dungeon.Entry.StartFatigue;
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
             { OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
                 Marriage = dungeon.Entry.Marriage,
-                DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope }, incount);
+                DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Dimension = dungeon.Entry.Dimension }, incount);
     });
 
     public FormalDungeonReceipt InstallPartyDungeon(PartyDungeonPreparation token, PartyDungeonEntryCommit result,
@@ -197,6 +198,7 @@ internal sealed partial class GameSession
             HellConsumedSlots = installing.HellTicket is not null ? reservation.Charge.Items?.ChangedSlots ?? [] : [],
             HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryFatigueCharged = reservation.Charge.Fatigue, EnterCounts = result.EnterCounts,
+            EntryChangedCurrencies = reservation.Charge.Items?.ChangedCurrencies ?? [],
             ChannelConsumedSlots = installing.ChannelCost?.Consume is not null ? reservation.Charge.Items?.ChangedSlots ?? [] : [] };
     });
 

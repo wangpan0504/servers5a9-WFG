@@ -5,6 +5,21 @@ namespace DfoServer.Network.Builders;
 
 internal static class DungeonEnterCountPackets
 {
+    public static byte[] Ancient(uint energy)
+    {
+        byte[] body = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, energy);
+        return body;
+    }
+    // 95客户端012450F0：基本已入、额外剩余、当周隐藏最高奖励已计次数。
+    public static byte[] Dimension(uint basicUsed, uint extraRemaining, byte hiddenUsed)
+    {
+        byte[] body = new byte[9];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, basicUsed);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), extraRemaining);
+        body[8] = hiddenUsed;
+        return body;
+    }
     // 023A0200逐次读取u32、u8、u8；一包只有一个地下城，没有条数或尾随字段。
     public static byte[] Remaining(DungeonEnterCount count)
     {

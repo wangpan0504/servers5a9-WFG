@@ -70,6 +70,8 @@ internal sealed record DungeonMaze(
     public DungeonMap? GriefRoom { get; init; }
     public bool IsDespairTower { get; init; }
     public bool IsUltimateAltar { get; init; }
+    public bool IsDimensionHiddenBoss { get; init; }
+    public bool IsAncientInfiniteVariant { get; init; }
     // 实验性（#259）：比赛副本的 1x1 单图迷宫，地图取自 PVF 地图反向 [dungeon] 声明。
     public bool IsTournament { get; init; }
     public DungeonMap? WeddingCoupleRoom { get; init; }
@@ -209,6 +211,12 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool IsOrdinaryLuke => Id is >= 5101 and <= 5106 &&
         Path.StartsWith("dungeon/luke_normal/",StringComparison.OrdinalIgnoreCase) &&
         Marker("normal luke dungeon") && Marker("raid normal dungeon");
+    public bool IsAncientInfinite => Id is >= 7101 and <= 7107 &&
+        Path.StartsWith("dungeon/ancient_infinited/", StringComparison.OrdinalIgnoreCase) &&
+        RawSections.Where(row => row.Tag == "ancient dungeon").ToArray() is { Length: > 0 } ancient &&
+        ancient.All(row => row.Tokens is [{ Type: 0, Value: 1 }]);
+    public bool IsModernDimension => Id is >= 7165 and <= 7179 &&
+        RawSections.Any(row => row.Tag == "dimension dungeon" && row.Tokens.Count == 0);
     public bool IsNormalFiendwar => Id == 400000016 && WarriorsDungeon == "normalfiend";
     public bool IsWeddingCouple => Id == 3541 && Path.Equals("dungeon/china/chn_wedding_couple.dgn", StringComparison.OrdinalIgnoreCase) &&
         string.Equals(DungeonType?.Trim(), "wedding couple", StringComparison.OrdinalIgnoreCase);
@@ -837,6 +845,8 @@ internal sealed class DungeonCatalog
             { LayeredMaps = Freeze(layered),OverriddenMaps = Freeze(overridden),MapAlternatives = Freeze(alternatives),StoryStages = Freeze(stages),BossEntrance = entrance,WarpMaps = warps,
                 ClearConditions = DungeonMazeConditions.Clear(mazeSections,resolve),
                 RandomizedObjects = DungeonMazeConditions.RandomizedObjects(mazeSections),
+                IsDimensionHiddenBoss = mazeSections.Any(row => row.Tag == "hidden boss maze"),
+                IsAncientInfiniteVariant = mazeSections.Any(row => row.Tag == "infinite difficulty"),
                 HellParty = HellParty(), HellPartyPath = HellParty() is { } hellRoom ? mapPaths[hellRoom.MapId] : null,
             HellLegendPath = HellParty() is { LegendMapId: > 0 } legendRoom ? mapPaths[legendRoom.LegendMapId] : null };
         return maze with { ConditionalMaps = ConditionalMaps(maze) };

@@ -114,6 +114,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         foreach (var count in context.Session.EnterCounts())
             await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, count.Weekly),
                 "dungeon_enter_count_initialize");
+        await DimensionEntranceProjection.RefreshAsync(context);
+        await DimensionEntranceProjection.AncientAsync(context);
         if (mailbox is not null)
             await mailbox.InitializeAsync(context);
         if (marriage is not null)

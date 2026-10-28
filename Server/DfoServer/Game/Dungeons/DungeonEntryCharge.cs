@@ -10,7 +10,10 @@ namespace DfoServer.Game.Dungeons;
 // Weekly 是本次入场计入的冒险团每周地下城列；没有费用时走普通预留，同样按同一事务累加。
 // 仅保存已解释的次数计划，参与调用方入场事务，不另开事务。
 internal sealed record DungeonEntryIncount(int Dungeon, DungeonIncountPeriod Period, DungeonIncountRow? Row,
-    ImmutableArray<AccountIncountCharge> Account, bool Increment);
+    ImmutableArray<AccountIncountCharge> Account, bool Increment)
+{
+    public DungeonIncountUsage? ExpectedUsage { get; init; }
+}
 
 internal sealed record DungeonEntryCommit(Character Character, DungeonIncountUsage? IncountUsage);
 
@@ -24,7 +27,8 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public OperationHopeAdmission? Hope { get; init; }
     public MarriageDungeonAdmission? Marriage { get; init; }
     public DungeonEntryIncount? Incount { get; init; }
+    public DimensionDungeonAdmission? Dimension { get; init; }
     public DfoServer.Game.TagEvildom.TagEvildomAdmission? TagEvildom { get; init; }
     public DfoServer.Game.ImperialArena.ImperialArenaAdmission? ImperialArena { get; init; }
-    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && TagEvildom is null && ImperialArena is null && OrdinaryLukeEntry is null;
+    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && TagEvildom is null && ImperialArena is null && OrdinaryLukeEntry is null && Dimension is null;
 }

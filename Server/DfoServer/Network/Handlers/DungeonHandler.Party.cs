@@ -213,8 +213,16 @@ internal sealed partial class DungeonHandler
                 if (!scene.ChannelConsumedSlots.IsEmpty)
                     await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(scene.Character.Inventory,
                         InventoryListType.Main, [.. scene.ChannelConsumedSlots]), "party_channel_entry_items", Current);
+                var currencySlots = scene.EntryChangedCurrencies.Select(DfoServer.Game.Inventory.Services.ItemSlotBoundService.CurrencySlot).OfType<short>()
+                    .Select(slot => new InventorySlot(InventoryListType.Main, slot)).ToArray();
+                if (currencySlots.Length != 0)
+                    await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(scene.Character.Inventory,
+                        InventoryListType.Main, currencySlots), "party_entry_currencies", Current);
+                if (scene.EntryChangedCurrencies.Any(kind => kind is >= CurrencyKind.Cera and <= CurrencyKind.HappyTokenCera))
+                    await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(scene.Character.Inventory.AccountWallet), "party_entry_cera", Current);
                 foreach (var count in scene.EnterCounts)
                     await context.Notify(NotiPacketType.DUNGEON_ENTER_COUNT_INFO, DungeonEnterCountPackets.Info(count.Dungeon, count.Daily, count.Weekly), "party_entry_count", Current);
+                if (scene.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Current, entranceOnly: false);
                 break;
             case PartyDungeonNoticeKind.Loaded:
                 if (scene.NavigationReplay) break;

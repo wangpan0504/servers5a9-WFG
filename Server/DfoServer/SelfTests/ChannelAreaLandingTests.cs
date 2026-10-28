@@ -22,6 +22,19 @@ internal static class ChannelAreaLandingTests
         var harlem = new ChannelEntry(new(2, 37), 22, "[harlem]");
         var fiend = new ChannelEntry(new(2, 39), 45, "[fiendwar]");
         var pvp = new ChannelEntry(new(2, 40), 24, "[pvp]");
+        foreach (var (group, area) in new[] { ("[impossible]", (byte)2), ("[ancient]", (byte)5) })
+        {
+            var channel = new ChannelEntry(new(2, 24), 11, group);
+            if (!towns.Areas.TryGetValue((17, area), out var destination))
+            {
+                That(ChannelAreaLanding.Place(towns, channel, 95, none) is null, "缺大厅资源不能假装已有可用远古落点");
+                continue;
+            }
+            var completed = destination.Quests.Concat(destination.AnyQuests).ToHashSet();
+            That(ChannelAreaLanding.Place(towns, channel, 95, completed) is { Town: 17 } spot && spot.Area == area,
+                "异界与远古频道分别到圣者之鸣号已登记副本入口");
+            That(ChannelAreaLanding.Place(towns, channel, 1, completed) is null, "特殊入口仍核对地区等级");
+        }
 
         var elvenSpot = ChannelAreaLanding.Place(towns, elven, 1, none);
         That(elvenSpot is { Town: 38, Area: 0 } && elvenSpot != towns.Room, "艾尔文防线新选角落到艾尔文街道");

@@ -23,7 +23,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     Inventory.SkinStorageHandler? skinStorage=null,FatigueConsumableHandler? fatigueConsumables=null,
     RentalHandler? rental=null,CreatureHandler? creatures=null,InventoryPeriodExtensionService? periodExtensions=null,
     InventoryMileageService? mileage=null,InventoryEquipmentPeriodChangeService? periodChanges=null,
-    AvatarPresetHandler? avatarPresets=null, InventoryNpcFavorService? npcFavor=null, MarriageHandler? marriage=null) : IGameCommandModule
+    AvatarPresetHandler? avatarPresets=null, InventoryNpcFavorService? npcFavor=null, MarriageHandler? marriage=null,
+    DimensionEntryTicketService? dimensionTickets=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     const uint PeriodExtensionAction = 69;
@@ -65,6 +66,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
             return marriage is not null ? await marriage.UseItemActionAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == 106)
             return rental is not null ? await rental.UsePointsAsync(context, request) : CommandResult.Unhandled;
+        if (request.Action == DimensionEntryTicketService.Action && dimensionTickets is not null)
+            return await UseDimensionTicketAsync(context, request);
         if (request.Action == NpcFavorItemDefinition.Action)
             return await UseNpcFavorAsync(context, request);
         if (request.Action == 72)
@@ -123,6 +126,23 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
         await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, StackableActionPackets.Rejected(request), "stackable_action_unsupported",
             () => context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, captured.Selected) &&
                 context.Session.SelectionEpoch == captured.SelectionEpoch && context.Session.Phase == captured.Phase));
+        return CommandResult.Handled;
+    }
+
+    async Task<CommandResult> UseDimensionTicketAsync(GameConnectionContext context, StackableActionUseRequest request)
+    {
+        var captured = context.Owner.Execute(() => (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        var result = request.List == 0 && request.Slot <= short.MaxValue && request.Reserved == 0 &&
+            request.FirstArgument == 0 && request.SecondArgument == 0 && context.Activity?.BlocksTownActions != true
+            ? context.Session.UseDimensionEntryTicket(new(InventoryListType.Main, (short)request.Slot), dimensionTickets!) : InventoryResult.Reject(19);
+        bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>
+            ReferenceEquals(captured.Selected, context.Session.Selected) && captured.SelectionEpoch == context.Session.SelectionEpoch && captured.Phase == context.Session.Phase);
+        await context.Reply(CmdPacketType.USE_STACKABLE_ACTION, result.Accepted ? StackableActionPackets.Used(request) : StackableActionPackets.Rejected(request),
+            result.Accepted ? "dimension_ticket_committed" : "dimension_ticket_rejected", Guard);
+        if (result.Accepted && inventoryProjection is not null)
+            await inventoryProjection.RefreshAsync(context, result, new HashSet<InventorySlot> { new(InventoryListType.Main, (short)request.Slot) });
+        if (result.Accepted) await DimensionEntranceProjection.RefreshAsync(context, Guard, entranceOnly: false);
+        log.Write("dimension_entry_ticket", new { Connection = context.Id, result.Accepted, result.Error, Revision = result.Receipt?.Character.Revision });
         return CommandResult.Handled;
     }
 

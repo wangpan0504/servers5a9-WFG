@@ -34,6 +34,7 @@ internal sealed class ItemResources
     public PremiumContractCatalog Contracts { get; }
     public RecoveryConsumableCatalog RecoveryConsumables { get; }
     public UpgradeChronicleCatalog UpgradeChronicles { get; }
+    public ChronicleEnchantCatalog ChronicleEnchants { get; }
     public ItemRecipeCatalog ItemRecipes { get; }
     public ItemMakingSkillCatalog ItemMakingSkills { get; }
     public LimitCubeCatalog LimitCubes { get; }
@@ -41,7 +42,6 @@ internal sealed class ItemResources
     public CharacterInvestmentMetadataCatalog CharacterInvestmentMetadata { get; }
     public EnhancementCatalog Enhancements { get; }
     public AmplificationCatalog Amplifications { get; }
-    public ChronicleEnchantCatalog ChronicleEnchants { get; }
     public AmplifyUpgradeCatalog AmplifyUpgrades { get; }
     public MedalUpgradeCatalog MedalUpgrades { get; }
     public CreatureEggCatalog CreatureEggs { get; }
@@ -100,6 +100,7 @@ internal sealed class ItemResources
         DevilContracts = new(archive, stackable, CashShop);
         RecoveryConsumables = new(archive, stackable, Items);
         UpgradeChronicles = new(archive, stackable, equipment);
+        ChronicleEnchants = new(archive, stackable, equipment);
         ItemRecipes = new(archive, stackable);
         ItemMakingSkills = new(archive);
         LimitCubes = new(archive, stackable, equipment);
@@ -107,7 +108,6 @@ internal sealed class ItemResources
         CharacterInvestmentMetadata = new(archive, equipment, stackable);
         Enhancements = new(archive, stackable, equipment);
         Amplifications = new(archive, stackable, equipment);
-        ChronicleEnchants = new(archive, stackable, equipment);
         AmplifyUpgrades = new(archive, stackable);
         MedalUpgrades = new(archive);
         CreatureEggs = new(archive, equipment, Items);
