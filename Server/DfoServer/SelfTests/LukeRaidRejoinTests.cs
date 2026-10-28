@@ -228,7 +228,7 @@ internal static class LukeRaidRejoinTests
 
     static string Assets(string path)
     {
-        using var db = new SqliteConnection($"Data Source={path};Mode=ReadOnly"); db.Open();
+        using var db = new SqliteConnection($"Data Source={path};Mode=ReadOnly;Pooling=False"); db.Open();
         using var tables = db.CreateCommand();
         tables.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND (name='characters' OR name LIKE '%inventory%' OR name LIKE '%raid%') ORDER BY name";
         var names = new List<string>(); using (var reader = tables.ExecuteReader()) while (reader.Read()) names.Add(reader.GetString(0));
