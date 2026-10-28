@@ -314,6 +314,8 @@ internal sealed partial class CharacterRepository
     {
         // GM进度修改不递增revision；库存和规划资格都必须在写事务内重新核对。
         ValidateCurrentInventoryPlan(current, expected, plan);
+        // 礼堂实例是本次选角的临时场景身份，重读资产不能将它丢掉；不写入角色存档。
+        current = current with { WeddingHall = expected.WeddingHall };
         if (plan.CharacterPrecondition?.IsExpired() == true)
             throw new InventoryQualificationExpiredException();
         if (!plan.Changed)

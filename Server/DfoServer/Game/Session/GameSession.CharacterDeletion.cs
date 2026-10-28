@@ -18,6 +18,7 @@ internal sealed partial class GameSession
         if (target.Id != entry.Id || target.Name != entry.Name)
             throw new InvalidOperationException("Character deletion roster changed");
         if (target.AdventureBusy) return new CharacterDeletionResult(null, SelectionEpoch, "adventure-expedition-busy");
+        if (target.MarriageBusy) return new CharacterDeletionResult(null, SelectionEpoch, "marriage-busy");
         var deleted = repository.Delete(owner, target);
         SelectionEpoch++;
         return new CharacterDeletionResult(new(index, deleted, CaptureRoster()), SelectionEpoch, "committed");

@@ -77,6 +77,7 @@ internal sealed partial class CharacterRepository
             VerifyCachedDungeonLoot(owner, expected.Id, prepared.Death.EventId, loot);
             CommitOrdinaryLukeDrop(db, tx, owner, run, prepared, loot, verifyOnly: true);
             VerifyQuestDrops(db,tx,owner.Account,expected.Id,prepared.Death.EventId,questDrops);
+            current = ObserveMarriageClearInTransaction(db, tx, owner, run, prepared, current, MarriageResources, verifyOnly: true);
             SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: true);
             tx.Commit();
             // 提交返回丢失时Session仍持有旧装备；仅回放与已落库结果完全一致的成长投影，不再次写资产。
@@ -155,6 +156,7 @@ internal sealed partial class CharacterRepository
         if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
         CommitOrdinaryLukeDrop(db, tx, owner, run, prepared, loot);
         CacheDungeonLoot(owner, expected, prepared, loot);
+        current = ObserveMarriageClearInTransaction(db, tx, owner, run, prepared, current, MarriageResources);
         SaveOrVerifyQuestClear(db, tx, owner, run, prepared, current, verifyOnly: false);
         if (quests is not null)
         {
@@ -180,6 +182,7 @@ internal sealed partial class CharacterRepository
         }
         var committed = inventoryCharacter with
         {
+            Marriage = current.Marriage,
             Level = committedLevel,
             Revision = committedRevision,
             Learning = ReadLearning(db, expected.Id, tx),

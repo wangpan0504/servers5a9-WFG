@@ -83,6 +83,7 @@ internal sealed record DungeonFixedRoute(IReadOnlyList<DungeonMonsterPlan> Rooms
 
 internal sealed partial class SinglePlayerDungeonRun
 {
+    internal DfoServer.Game.Quests.QuestMarriagePartyClear? MarriagePartyClear { get; set; }
     private sealed class Room(DungeonMonsterPlan plan)
     {
         public DungeonMonsterPlan Plan { get; } = plan;

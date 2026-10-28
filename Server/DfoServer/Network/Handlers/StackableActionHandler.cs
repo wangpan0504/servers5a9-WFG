@@ -23,7 +23,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
     Inventory.SkinStorageHandler? skinStorage=null,FatigueConsumableHandler? fatigueConsumables=null,
     RentalHandler? rental=null,CreatureHandler? creatures=null,InventoryPeriodExtensionService? periodExtensions=null,
     InventoryMileageService? mileage=null,InventoryEquipmentPeriodChangeService? periodChanges=null,
-    AvatarPresetHandler? avatarPresets=null, InventoryNpcFavorService? npcFavor=null) : IGameCommandModule
+    AvatarPresetHandler? avatarPresets=null, InventoryNpcFavorService? npcFavor=null, MarriageHandler? marriage=null) : IGameCommandModule
 {
     const uint CreatureSkinAction = 224;
     const uint PeriodExtensionAction = 69;
@@ -61,6 +61,8 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
         }
         if (request.Action == FatigueConsumableDefinition.Action)
             return fatigueConsumables is not null ? await fatigueConsumables.UseAsync(context, request) : CommandResult.Unhandled;
+        if (request.Action is 90 or 92 or 93)
+            return marriage is not null ? await marriage.UseItemActionAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == 106)
             return rental is not null ? await rental.UsePointsAsync(context, request) : CommandResult.Unhandled;
         if (request.Action == NpcFavorItemDefinition.Action)

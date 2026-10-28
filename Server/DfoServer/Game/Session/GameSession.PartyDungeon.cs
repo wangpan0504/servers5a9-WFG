@@ -22,6 +22,24 @@ internal sealed partial class GameSession
         formalDungeon is null && (HasRaidDungeonAdmission || CurrentDungeonSelection is { IsClassExperience: false } ||
             towns.SelectionReturn(Selected.Position, completed) is not null));
 
+    public bool CanBeginMarriageDungeonSelection(DungeonCatalog catalog)
+    {
+        var character = owner.Execute(() => Ready && Phase is SessionPhase.Town or SessionPhase.MapSelect ? Selected : null);
+        if (character is null) return false;
+        var definition = catalog.Get(3541);
+        return definition.TryGetDesignatedDifficulty(out byte difficulty) && character.Level >= definition.MinimumLevel &&
+            PrepareMarriageDungeonAdmission(catalog, character, 0, difficulty, false, true) is not null;
+    }
+
+    MarriageDungeonAdmission? PrepareMarriageDungeonAdmission(DungeonCatalog catalog, Character expected,
+        uint quest, byte difficulty, bool specialMode, bool partyAdmission)
+    {
+        var party = partyAdmission ? CurrentParty?.Invoke() : null;
+        if (party is null || !towns.HasMarriageDungeonEntrance(expected.Position, QuestEligibility.Completed(expected))) return null;
+        return MarriageDungeonAdmission.Prepare(catalog.Get(3541), MarriageStore?.FindMarriage(expected.Id),
+            party.Members.Select(member => member.Actor.Character.Id).ToArray(), quest, difficulty, specialMode);
+    }
+
     internal bool CanMoveWithParty() => owner.Execute(() => Ready && Selected is not null && Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
         formalDungeon is { } dungeon && !dungeon.Ground.HasPendingOperation && dungeon.PendingTutorialClear is null &&
         !HasPendingQuestScene && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.HasPendingFatigue);
@@ -132,6 +150,7 @@ internal sealed partial class GameSession
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
             { OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
+                Marriage = dungeon.Entry.Marriage,
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope }, incount);
     });
 

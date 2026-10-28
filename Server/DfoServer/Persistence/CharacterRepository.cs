@@ -193,6 +193,13 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
         Character expected, Location position, Location? returnPoint, InventoryPlan? inventory)
     {
         if (inventory is not null) expected = CommitInventoryInTransaction(db, transaction, owner, expected, inventory);
+        if (position.Town == 101)
+        {
+            var relationship = ReadMarriage(db, transaction, expected.Id);
+            if (position.Area != 0 || relationship is not { State: 4 } || relationship.Id != expected.Marriage?.Id)
+                throw new InvalidOperationException("婚房位置保存需要当前有效婚姻");
+            expected = expected with { Marriage = relationship };
+        }
         using var command = db.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -275,6 +282,7 @@ internal sealed partial class CharacterRepository(string path, DfoServer.GameWor
             VisibilityFlags = flags,
             Skills = ReadCharacterSkills(db, character.Id, transaction),
             Guild = ReadGuildMembership(db, character.Id, transaction),
+            Marriage = ReadMarriage(db, transaction, character.Id),
             ActiveMainQuests = ReadActiveMainQuests(db, character.Id, transaction),
             Learning = ReadLearning(db, character.Id, transaction),
             PermanentStats = ReadPermanentStats(db, character.Id, transaction),

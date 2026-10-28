@@ -117,6 +117,17 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             if (entry.DungeonIndex != 0)
             {
                 var party = context.Session.CurrentParty?.Invoke();
+                if (entry.DungeonIndex == 3541 && dungeons is not null && context.Session.Phase == SessionPhase.Town &&
+                    context.Session.CanBeginMarriageDungeonSelection(dungeons))
+                {
+                    using var couplePeers = await PartyDungeonProjection.AcquirePeersAsync(context, party?.Members ?? []);
+                    var coupleSelection = partyDungeons.BeginSelection(context.Session);
+                    if (coupleSelection.Length == 0)
+                        await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "marriage_dungeon_selection_rejected");
+                    else await PartyDungeonProjection.PublishAsync(coupleSelection.Select(notice => notice with { Option = 1 }));
+                    // 非零15表示已经选中副本，沿用正式队伍选图状态，不用27重新打开普通列表。
+                    return CommandResult.Handled;
+                }
                 if (party is null || context.Session.Phase != SessionPhase.MapSelect ||
                     !party.Members.Any(m => m.Slot == party.Leader && ReferenceEquals(m.Actor.Session, context.Session)))
                     return CommandResult.Unhandled;

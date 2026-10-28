@@ -776,7 +776,7 @@ internal static partial class DatabaseSchemaTests
             for (int index = 0; index < tables.Length; index++)
                 Check(Rows(db, tables[index], columns[index]) == history[index], "v43保留全部原列、rowid和冻结JSON/BLOB，不改历史关联：" + tables[index]);
             Check(Query(db, "SELECT count(*) FROM scene_settlement_migration_audit") is 0L &&
-                Query(db, "SELECT count(*) FROM sqlite_schema WHERE name GLOB '*_history' OR name GLOB '*_history_insert'") is 12L,
+                Query(db, "SELECT count(*) FROM sqlite_schema WHERE tbl_name IN('character_dungeon_scene_clear_receipts','character_quest_clear_receipts','character_quest_completion_receipts','character_dungeon_settlement_receipts','character_dungeon_card_rewards','character_dungeon_card_options') AND (name GLOB '*_history' OR name GLOB '*_history_insert')") is 12L,
                 "v43保留六表索引和触发器，复制历史时不重放业务");
             Check(Query(db, "SELECT scene_operation_id IS NULL AND growth_contract_experience=0 FROM character_dungeon_settlement_receipts WHERE rowid=23") is 1L &&
                 Query(db, "SELECT condition_type||':'||plan_snapshot FROM character_quest_completion_receipts WHERE rowid=21") is "19:{\"History\":19}" &&

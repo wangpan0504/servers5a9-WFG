@@ -263,7 +263,12 @@ internal sealed partial class GameSession
             selection.SelectionEpoch != epoch || selection.CharacterId != expected.Id || selection.OriginPosition != expected.Position))
             return RejectFormal("practice-selection-missing");
         var approvedPartyRoute = shared?.Session.PreparedParty(shared).Dungeon.Entry.PartyRoute;
-        if (war is null && tagEntry is null && !training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon, approvedPartyRoute) is { } selectionReason)
+        var marriageAdmission = MarriageDungeonAdmission.Applies(dungeonId)
+            ? PrepareMarriageDungeonAdmission(catalog, expected, questId, difficulty,
+                practice || hellParty || hellLegend || sealDoor || classExperience, partyAdmission) : null;
+        if (MarriageDungeonAdmission.Applies(dungeonId) && marriageAdmission is null)
+            return RejectFormal("marriage-dungeon-pair-or-npc-required");
+        if (war is null && marriageAdmission is null && tagEntry is null && !training && !trainingRoom && !classExperience && SelectionRejection(expected, done, optionDungeon, approvedPartyRoute) is { } selectionReason)
             return RejectFormal(selectionReason);
         // 频道专属城镇（最后防线）的选图副本要求持有 dgn [required item]；次数与第三列消耗见 EntryCost。
         bool channelTown = !training && !trainingRoom && !classExperience && assault is null && !hellParty &&
@@ -335,6 +340,7 @@ internal sealed partial class GameSession
             bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute,tagEvildom:tagEntry?.Admission,tagMaze:tagEntry?.MazeOrdinal,
             bossWeights: bossBuff?.Definition.Weights.ToDictionary(row => row.MapId, row => row.Weight)))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
+        if (marriageAdmission is not null) entry = entry! with { Marriage = marriageAdmission };
         // 普通卢克目前只证实单人Run额度；组队共享/个人语义未闭合，不把十二次解释成每人十二次。
         // 祭坛、绝望之塔等原有限额仍由EntryPlan设置，不受这项窄范围投影影响。
         if (!partyAdmission && entry!.IsOrdinary && catalog.Get(checked((int)dungeonId)) is { IsOrdinaryLuke:true } luke)

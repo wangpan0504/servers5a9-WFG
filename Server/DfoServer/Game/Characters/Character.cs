@@ -8,6 +8,8 @@ namespace DfoServer.Game.Characters;
 internal sealed record Character(ushort Id, ushort Slot, string Name, long Revision, Location Position, Location? Return)
 {
     public byte Job { get; init; }
+    public DfoServer.Game.Marriage.MarriageRecord? Marriage { get; init; }
+    public DfoServer.Game.Marriage.MarriageHallContext? WeddingHall { get; init; }
     public DfoServer.Game.Pvp.PvpPrivateCharacterState? PvpPrivate { get; init; }
     public bool IsPvpPrivate => PvpPrivate is not null;
     public byte GrowType { get; init; }

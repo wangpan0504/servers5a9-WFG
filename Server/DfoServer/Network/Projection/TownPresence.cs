@@ -10,7 +10,7 @@ using DfoServer.Game.ExpertJob;
 namespace DfoServer.Network.Projection;
 
 internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = default, TimeProvider? clock = null,
-    GameDebugSettings? debugSettings = null, ExpertJobStoreBoard? expertStores = null)
+    GameDebugSettings? debugSettings = null, ExpertJobStoreBoard? expertStores = null, MarriageAppearance? marriage = null)
 {
     sealed record Scene(ChannelIdentity Channel, byte Town, byte Area, string Map, string? RoomAccount);
     sealed class Member(AccountOwners.Lease owner, GameConnectionSender sender, Scene scene, Character character, long serial, string adventureName)
@@ -43,7 +43,9 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         // 与聊天共用 TownCatalog.Scene 的场景定位（PVF 地图阶段 + 房间判定），避免两处各算一份；
         // 频道与房间账号在这里补齐。
         var town = towns.Scene(character.Position, character.CompletedQuests.ToHashSet());
-        return new(identity, town.Town, town.Area, town.Map, town.OwnerKey(owner.Account,character.Id));
+        return new(identity, town.Town, town.Area, town.Map, town.OwnerKey(owner.Account,character.Id,
+            character.Marriage is { State: 4 } marriage && marriage.IsMember(character.Id) ? marriage.Id : null,
+            character.WeddingHall?.CeremonyId));
     }
 
     bool Visible(Member source, Member target, Func<Character, Character, bool>? recipient = null)
@@ -66,6 +68,12 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     RemoteTownActor Projection(Member source, Member target, Bodies bodies) =>
         new(source.Character.Id, source.Serial, bodies.Actor, bodies.State, bodies.Position, () => Visible(source, target))
         { Area = bodies.Area, EchonSets = DfoServer.Network.Builders.Inventory.EchonEquipmentPackets.Snapshot(source.Character) };
+
+    void PublishMarriage(Member source, Member target, bool clear = false)
+    {
+        if (marriage is null || !clear && source.Character.Marriage?.Active != true) return;
+        target.Sender.Post(0, 1016, marriage.Body(source.Character), "town_peer_marriage", () => Visible(source, target));
+    }
 
     // 只枚举当前场景，固定接收者快照后入队。
     Member[] Peers(Member source) => scenes[source.Scene].Where(member => !ReferenceEquals(member, source)).ToArray();
@@ -110,6 +118,8 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             {
                 sender.Enter(Projection(peer, joined, Capture(peer)));
                 peer.Sender.Enter(Projection(joined, peer, bodies));
+                PublishMarriage(peer, joined);
+                PublishMarriage(joined, peer);
                 if (expertStores?.TryGet(peer.Character.Id, out var store) == true)
                     sender.Post(0, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE,
                         ExpertJobPackets.CreateStoreNotice(store), "expert_job_existing_store",
@@ -143,7 +153,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     });
     // 同一场景换装只更新快照。完成任务换成新的 PVF 阶段时先迁场景，再按入场投递。
     public void Refresh(AccountOwners.Lease owner, GameConnectionSender sender, Character character, string? adventureName = null,
-        bool broadcast = true) => owner.Execute(() =>
+        bool broadcast = true, bool marriageOnly = false) => owner.Execute(() =>
     {
         lock (gate)
         {
@@ -152,14 +162,23 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             if (adventureName is not null) source.AdventureName = adventureName;
             if (AlignPhase(source, character, "外观刷新缺少当前场景成员"))
                 return true;
+            bool clearMarriage = source.Character.Marriage?.Active == true && character.Marriage?.Active != true;
             source.Character = character;
             if (!broadcast) return true;
             var peers = Peers(source);
             if (peers.Length == 0)
                 return true;
+            if (marriageOnly)
+            {
+                foreach (var target in peers) PublishMarriage(source, target, clearMarriage);
+                return true;
+            }
             var bodies = Capture(source);
             foreach (var target in peers)
+            {
                 target.Sender.Refresh(Projection(source, target, bodies));
+                PublishMarriage(source, target, clearMarriage);
+            }
             return true;
         }
     });
@@ -197,6 +216,8 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         {
             source.Sender.Enter(Projection(peer, source, Capture(peer)));
             peer.Sender.Enter(Projection(source, peer, bodies));
+            PublishMarriage(peer, source);
+            PublishMarriage(source, peer);
             if (expertStores?.TryGet(peer.Character.Id, out var store) == true)
                 source.Sender.Post(0, (ushort)NotiPacketType.CREATE_EXPERT_JOB_STORE,
                     ExpertJobPackets.CreateStoreNotice(store), "expert_job_existing_store",

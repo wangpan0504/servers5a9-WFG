@@ -25,6 +25,13 @@ internal static class SelfTestRunner
         await MachineCharacterScoreTests.RunCore();
         LukeCardSetTests.RunCore();
         EvildomWarPacketTests.RunCore();
+        MarriageResourceTests.RunCore();
+        MarriageCoupleTests.RunCore();
+        MarriageWeddingTests.RunCore();
+        MarriagePersistenceTests.RunCore();
+        MarriagePreparationTests.RunCore();
+        MarriageLifecycleTests.RunCore();
+        MarriageDungeonTests.RunCore();
         OrdinaryLukeProgressTests.RunCore();
         SkillTreeExpansionTests.RunCore();
         CharacterPreparationTests.RunCore();
@@ -299,6 +306,14 @@ internal static class SelfTestRunner
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
+        MarriageResourceTests.Run(pvf);
+        var marriageCatalog = DfoServer.GameWorld.Marriage.MarriageCatalog.Load(pvf);
+        MarriageCoupleTests.Run(marriageCatalog, itemResources.Items);
+        MarriageWeddingTests.Run(marriageCatalog);
+        MarriageLifecycleTests.Run(marriageCatalog, itemResources.Items);
+        MarriagePreparationTests.Run(towns, pvf, characters, itemResources);
+        MarriageDungeonTests.RunResources(DfoServer.GameWorld.Dungeons.DungeonCatalog.Load(pvf), towns);
+        MarriageShopTests.Run(pvf, itemResources);
         WorldMapHoverTests.RunResources(towns, pvf);
         await RunCoreAsync();
         var sharedQuests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);

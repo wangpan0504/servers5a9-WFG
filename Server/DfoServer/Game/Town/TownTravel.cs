@@ -34,8 +34,35 @@ internal static class TownTravel
     public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null, NpcTownVisit? npcVisit = null)
     {
         if (character.IsPvpPrivate && request.Town != 10) return TownTravelPlan.Reject("pvp-private-town-only");
+        if (request.Town == 39 && request.Area is >= 8 and < 38 &&
+            (character.Position.Town != 39 || character.Position.Area != request.Area || character.WeddingHall is null))
+            return TownTravelPlan.Reject("wedding-hall-requires-invitation");
+        if (request.Town == 101 && (request.Area != 0 || character.Marriage is not { State: 4 } marriage || !marriage.IsMember(character.Id)))
+            return TownTravelPlan.Reject("marriage-home-not-eligible");
+        var target = new Location(request.Town, request.Area, request.X, request.Y, character.Position.Direction);
+        // 婚礼电影结束发送来源0/0、NPC0的普通CMD36；坐标必须对应资源中的婚礼NPC。
+        if (character.Position is { Town: 39, Area: >= 8 and < 38 } && character.WeddingHall is not null &&
+            request is { PreviousTown: 0, PreviousArea: 0, TargetNpc: 0, Movement: 5, PathKind: 0 } &&
+            towns.IsWeddingMovieReturn(target, completed))
+        {
+            string admission = towns.DestinationAdmission(target, character.Level, completed);
+            if (admission != "ready") return TownTravelPlan.Reject(admission);
+            // 原生NPC返回坐标可落在步行矩形外，与NPC导航一样保留已经按资源精确核对的坐标。
+            var movieBack = towns.ResolveRoomReturn(target, OrdinaryDistrict(character.Return), character.Level, completed);
+            return movieBack is null ? TownTravelPlan.Reject("return-gate-unavailable") : new(target, movieBack, "ready");
+        }
         if (request.PreviousTown != character.Position.Town || request.PreviousArea != character.Position.Area)
             return TownTravelPlan.Reject("source-area-mismatch");
+        // 婚房-101门返回本次入场缓存的来源地图，原码固定落点300/200，不把-101解释成普通城镇号。
+        if (character.Position is { Town: 101, Area: 0 } && npcVisit is { Town: 101, Area: 0 } home &&
+            request is { TargetNpc: 0, Movement: 5, PathKind: 0, X: 300, Y: 200 } &&
+            request.Town == home.Origin.Town && request.Area == home.Origin.Area &&
+            towns.HasSpecialExit(character.Position, -101, 0, completed))
+        {
+            string admission = towns.DestinationAdmission(target, character.Level, completed);
+            if (admission != "ready") return TownTravelPlan.Reject(admission);
+            return towns.IsPosition(target, completed) ? new(target, character.Return, "ready") : TownTravelPlan.Reject("arrival-outside-map");
+        }
         // 原码 exit town 发送缓存来源的普通 C2S36；只允许本选角成功 NPC 入场留下的精确来源。
         if (npcVisit is { } visit && request.TargetNpc == 0 && request.Movement == 5 && request.PathKind == 0 &&
             character.Position.Town == visit.Town && character.Position.Area == visit.Area &&
@@ -50,7 +77,6 @@ internal static class TownTravel
         if (request.TargetNpc == 0 && ChannelAreaLanding.RoomExit(towns, channel, character.Position, character.Level, completed) is { } exit &&
             exit.Town == request.Town && exit.Area == request.Area)
             return ChannelExit(character, towns, completed, exit);
-        var target = new Location(request.Town, request.Area, request.X, request.Y, character.Position.Direction);
         // 房间返回 0 仍绑定存档返回点；地图传送门对象（实测 PathKind 6）按 PVF warpgate 目标放行，
         // 等级与前置任务由 Admission 的 portal 分支继续校验；菜单 5 同样按传送目标处理。
         bool portal = request.TargetNpc == 0 && towns.IsRoom(character.Position, completed) &&
@@ -69,7 +95,7 @@ internal static class TownTravel
         // 有坐标切图保留请求落点；返回地区单独解析，不能用门口覆盖客户端坐标。
         // 频道起始城镇（安徒恩战舰 19、只能经频道进入的 67 等）内走动不改返回地区，离开频道后仍回进入前的普通地区。
         var kept = OrdinaryDistrict(character.Return);
-        var back = ChannelAreaLanding.PreservesRoomReturn(towns, target.Town) && kept is not null
+        var back = target.Town == 101 ? character.Return : ChannelAreaLanding.PreservesRoomReturn(towns, target.Town) && kept is not null
             ? kept
             : towns.IsRoom(target, completed)
             ? towns.Entrance(target, character.Position, completed)
@@ -78,7 +104,7 @@ internal static class TownTravel
         if (back is not null && back.Town == ChannelAreaLanding.AntonTown)
             back = kept ?? towns.ResolveRoomReturn(towns.Room, null, character.Level, completed);
         return back is null ? TownTravelPlan.Reject("return-gate-unavailable") : new(target, back, "ready")
-        { NpcVisit = request.TargetNpc == 0 ? null : new(character.Position, target.Town, target.Area) };
+        { NpcVisit = request.TargetNpc == 0 && target.Town != 101 ? null : new(character.Position, target.Town, target.Area) };
     }
 
     public static TownTravelPlan LeaveRoom(Character character, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null)

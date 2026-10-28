@@ -493,6 +493,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         }
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
         // 02B0FA96读取第二个u16作为可见性过滤；普通掉落显式为0，位置由客户端死亡对象散落链确定。
+        if (receipt.Character.Marriage is { State: 4 } marriage &&
+            marriage.Members.TryGetValue(receipt.Character.Id, out var member) &&
+            previousCharacter?.Marriage?.Members.GetValueOrDefault(receipt.Character.Id)?.CapsuleGauge != member.CapsuleGauge)
+            await context.Notify((NotiPacketType)1019, MarriageCouplePackets.CapsuleGauge(member.CapsuleGauge), "marriage_capsule_clear_gauge", Guard);
         var grounds = result.Drops;
         if (grounds.IsEmpty && result.Drop is { } single)
             grounds = [single];

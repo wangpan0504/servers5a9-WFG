@@ -141,7 +141,12 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         projection.Refresh(context);
                     }),
                 guardedProbe: (opcode, body, action, guard) => sender.TryPost(0, opcode, body, action,
-                    () => !connection.Stop.IsCancellationRequested && session.Ready && session.Selected is not null && guard()));
+                    () => !connection.Stop.IsCancellationRequested && session.Ready && session.Selected is not null && guard()),
+                marriage: new OnlineMarriageConnection(
+                    result => inventory?.RefreshAsync(context, result) ?? Task.CompletedTask,
+                    (opcode, body, action, guard) => context.Notify((NotiPacketType)opcode, body, action, guard),
+                    receipt => projection.TravelAsync(context, receipt),
+                    () => { if (session.Phase == SessionPhase.Town) projection.Refresh(context, marriageOnly: true); }));
             nativeRegistration = native?.Register(context);
             session.SetPeerAccount(nativeRegistration?.Token ?? 0);
             adventure?.Prepare(context);

@@ -24,6 +24,14 @@ internal sealed record DungeonStaticTopology(
             maze.StoryStages.Count != 0 || maze.BossEntrance is not null || maze.HellParty is not null ||
             maze.IsTrainingRoom || maze.IsClassExperience || maze.IsGriefTower || maze.IsDespairTower || maze.IsUltimateAltar || maze.IsTournament))
             return Unsupported("遗忘之地专用地图结构不匹配");
+        // 夫妻单房保留资源BB；身份由严格资源池绑定，不能变成普通图越界出口的豁免。
+        if (maze.WeddingCoupleRoom is { } wedding && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
+            grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss" } declared] && declared == wedding &&
+            wedding.Position == new DungeonPoint(0, 0) && maze.Starts.SequenceEqual([wedding.Position]) &&
+            maze.Bosses.SequenceEqual([wedding.Position]) && maze.QuestConnectionTokens.Count == 0 &&
+            maze.LayeredMaps.Count == 0 && maze.WarpMaps.Count == 0 && maze.ConditionalMaps.Count == 0 &&
+            maze.StoryStages.Count == 0 && maze.BossEntrance is null && maze.HellParty is null)
+            return new([new(wedding, 0)], [], null);
         // 该标记只由严格资源池设置；仍核对唯一实际地图，不能借它放行普通BB。
         if (maze.IsGriefTower && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
             grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss" } grief] && grief == maze.GriefRoom &&

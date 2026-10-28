@@ -60,7 +60,9 @@ internal sealed partial class GameSession
         Guid instance = Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement
             ? formalDungeon?.Run.Snapshot.Identity.InstanceId ?? Guid.Empty
             : Guid.Empty;
-        return new(ChannelEntry?.Identity ?? default, town.Town, town.Area, town.Map, town.OwnerKey(owner.Account,character.Id), instance);
+        return new(ChannelEntry?.Identity ?? default, town.Town, town.Area, town.Map, town.OwnerKey(owner.Account,character.Id,
+            character.Marriage is { State: 4 } marriage && marriage.IsMember(character.Id) ? marriage.Id : null,
+            character.WeddingHall?.CeremonyId), instance);
     }
 
     /// <summary>

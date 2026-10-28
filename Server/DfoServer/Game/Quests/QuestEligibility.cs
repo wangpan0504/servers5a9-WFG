@@ -45,6 +45,9 @@ internal static class QuestEligibility
             return new(QuestResourceEntry.Hidden, "隐藏任务通过合格21候选和884请求开启");
         if (QuestAntonUnlockEntry.Supports(quest))
             return new(QuestResourceEntry.Ordinary, "本服安徒恩解锁任务的奈恩入口；仍须原前置和材料");
+
+        if (QuestMarriageProgress.Supports(quest) && definition.ExposedByNpc)
+            return new(QuestResourceEntry.Ordinary, "婚约准备任务；仍须核对当前关系、前置及原接取身份");
         if (!definition.ExposedByNpc || !OrdinaryGrade(quest.Grade) && !QuestCycle.NormalDungeonMission(quest) && !QuestEpisodeEntry.Supports(quest))
             return new(QuestResourceEntry.Dedicated, "隐藏或专用分类任务需要对应入口");
         return new(QuestResourceEntry.Ordinary, "普通任务候选；仍须核对角色、前置及完成状态");
@@ -104,6 +107,8 @@ internal static class QuestEligibility
             return Reject("未装备任务要求的宠物，或宠物种类、等级及进化产物不符");
         if (access.Entry == QuestResourceEntry.Hardcore) return Reject(access.Reason);
         var definition = quest.Definition!;
+        if (quest.Grade == "[wedding]" && !QuestMarriageProgress.Eligible(character, quest))
+            return Reject("结婚准备需要本人的有效婚约，任务形状必须已接入");
         if (!DfoServer.Game.Pvp.PvpTrainingExposure.Allows(character,quest))
             return Reject("普通与专用决斗角色任务身份不符");
         if (quest.Grade is "[training]" or "[daily random]")

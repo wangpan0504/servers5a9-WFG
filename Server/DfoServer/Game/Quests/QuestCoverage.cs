@@ -55,6 +55,8 @@ internal static class QuestCoverage
             !(field.Name == "pvp private expose" && DfoServer.Game.Pvp.PvpTrainingExposure.TryRead(quest,out _)) &&
             !(field.Name == "sub reward" && DfoServer.Game.Pvp.PvpTrainingProgress.Manual(quest)) &&
             !(field.Name == "synchronization account quest" && QuestAccountPolicy.PaidSynchronization(quest)) &&
+            !(field.Name == "appear map" && QuestMarriageProgress.Supports(quest) && field is
+                { Children.Length: 0, Values: [{ Type: 0, Value: -1 }, { Type: 0, Value: -1 }, { Type: 0, Value: -1 }, { Type: 0, Value: -1 }] }) &&
             !(QuestMailPlan.IsField(field.Name) && (QuestMailPlan.CompletionDeclaration(quest) || QuestEligibilityMailPlan.Declaration(quest))) &&
             !(field.Name == "searching information" && ExplicitMeetWithoutAutoCheck(quest)) &&
             !(field.Name is "daily random set" or "next relation quest" && HarlemExpRelationGroup(quest)))

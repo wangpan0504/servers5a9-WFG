@@ -390,6 +390,14 @@ internal sealed partial class ItemCatalog
 
     public StackableActionIdentity? StackableAction(int id) => StackableDefinition(id) is { } raw ? StackableActionCatalog.Read(raw) : null;
 
+    readonly ConcurrentDictionary<int, Lazy<PartnerTeleportDefinition?>> partnerTeleports = new();
+    public PartnerTeleportDefinition? PartnerTeleport(int id)
+    {
+        if (!stackable.TryGetValue(id, out var path)) return null;
+        return partnerTeleports.GetOrAdd(id, key => new(() => PartnerTeleportDefinition.Parse(
+            key, "stackable/" + path, pvf.ReadTokens("stackable/" + path), pvf.ResolveString, Get(key)))).Value;
+    }
+
     // 誓约之缚武器改造只认成对声明；[need material]是商店卖价，不参与使用成本。
     public EquipmentPeriodChangeDefinition? EquipmentPeriodChange(int id)
     {
