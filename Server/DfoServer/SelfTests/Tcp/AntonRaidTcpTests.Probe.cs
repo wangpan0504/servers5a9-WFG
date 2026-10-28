@@ -59,7 +59,8 @@ internal static partial class AntonRaidTcpTests
             "探针跑完五个步骤，正式资源奖励已提交并推进阶段1");
         That(assets != fixture.Snapshot("SELECT * FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')<>10096296 ORDER BY 1,2") &&
             gold == fixture.Snapshot("SELECT id,gold FROM characters ORDER BY id") &&
-            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]],
+            fixture.Query("SELECT count(*),count(DISTINCT kind) FROM character_raid_reward_receipts") is [[2L, 2L]] &&
+            fixture.Query("SELECT count(DISTINCT phase) FROM character_raid_reward_receipts") is [[1L]],
             "真实Reward实际发放两种独立资源奖励，重复请求不增回执，保留开战扣票");
         That(report.Started && report.Entered210 && report.Reward && report.Opcode586 > 0 &&
                 report.Opcode596 == 0 && report.Opcode597 == 0 && report.Opcode601 == 0,

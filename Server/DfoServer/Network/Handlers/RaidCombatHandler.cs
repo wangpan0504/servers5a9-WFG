@@ -45,7 +45,9 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
 
     async Task<CommandResult> RewardAsync(GameConnectionContext context, Packet request)
     {
-        if (request.Body.Length != 2) return CommandResult.Unhandled;
+        RaidRewardCardRequest selected;
+        try { selected = RaidRequests.RewardCard(request.Body); }
+        catch (InvalidDataException) { return CommandResult.Unhandled; }
         bool luke = context.Session.RaidCombatKind() == RaidKind.Luke;
         var entryView = luke ? context.Session.RaidCombatView() : null;
         var rejectedView = entryView;
@@ -60,7 +62,7 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
             return Task.FromResult(context.Sender.TryPost(1, (ushort)CmdPacketType.SELECT_RAID_REWARD_CARD,
                 [0, 0x12, 0], "raid_reward_rejected", Current) ? CommandResult.Handled : CommandResult.CloseConnection);
         }
-        if (luke && request.Body[0] is not (0 or 1)) return await RejectLukeAsync();
+        if (luke && selected.Kind is not (0 or 1)) return await RejectLukeAsync();
         if (lifecycle is not null) context.Session.CommitPendingLukePhase(lifecycle);
         if (luke)
         {
@@ -71,9 +73,15 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
                 (settled.State == entryView.State || entryView.State == AntonRaidBattleState.Fighting && settled.State == AntonRaidBattleState.Reward)
                 ? settled : null;
         }
-        var receipt = context.Session.ClaimRaidReward(request.Body[0], request.Body[1], rewards, items, gold, pieces,
+        var receipt = context.Session.ClaimRaidReward(selected.Kind, selected.Card, rewards, items, gold, pieces,
             (clock ?? TimeProvider.System).GetUtcNow());
-        if (receipt is null) return luke ? await RejectLukeAsync() : CommandResult.Unhandled;
+        if (receipt is null)
+        {
+            log.Write("raid_reward_rejected", new { Connection = context.Id, selected.Kind, selected.Card,
+                Reason = "reward-state-member-or-offer-unavailable" });
+            // Anton失败字节未闭合；不能照搬Luke错误码或在未提交资产时回复成功。
+            return luke ? await RejectLukeAsync() : CommandResult.Handled;
+        }
         bool Guard() => context.Session.CanPublishRaidReward(receipt);
         log.Write("raid_reward_committed", new { Connection = context.Id, receipt.Prepared.Instance, receipt.Prepared.Phase,
             receipt.Prepared.Kind, receipt.Prepared.Card, receipt.Commit.Duplicate, Items = receipt.Prepared.Grants.Length,

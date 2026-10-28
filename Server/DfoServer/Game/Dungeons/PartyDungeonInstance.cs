@@ -18,7 +18,7 @@ internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMemb
 
 // 共享实例拥有全员加载屏障、路线推进与击杀事实；掉落随机、地面物品及拾取归各角色账本。
 // 各Session的Run仅作为同一实例的角色账本投影，不能绕过此owner单独过图或发奖。
-internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyDungeonStore store)
+internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyDungeonStore store)
 {
     [ThreadStatic] static PartyDungeonInstance? executing;
     readonly object gate = new();

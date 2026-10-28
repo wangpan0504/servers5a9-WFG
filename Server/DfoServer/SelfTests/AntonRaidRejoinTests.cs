@@ -14,6 +14,7 @@ using DfoServer.GameWorld.Towns;
 using DfoServer.Network;
 using DfoServer.Network.Builders;
 using DfoServer.Persistence;
+using Microsoft.Data.Sqlite;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -69,6 +70,7 @@ internal static class AntonRaidRejoinTests
                     Inventory = new([new InventoryItem(0, new(InventoryListType.Main, 121), new(100, ItemKind.Material, 2))])
                 });
                 var session = new GameSession(repository, towns, lease, entry: new(new(2, 19), 23, "[raid]"));
+                session.CurrentParty = () => parties.Current(session);
                 sessions.Add(session);
                 session.Select(0);
                 session.MarkReady();
@@ -95,9 +97,12 @@ internal static class AntonRaidRejoinTests
             That(started.Error == 0 && actors[0].Session.CurrentRaidBattle(actors[0]) is { Kind: RaidKind.Anton }, "三人覆盖开战成功");
             uint key = registry.Find(actors[0])!.Key;
             sessions[1].ReturnToRoster();
+            parties.Detach(sessions[1]);
             That(rejoin.Peek(actors[1].Character) is null && registry.Find(actors[0])!.Members.Length == 2,
                 "返回选角移除成员，但不记断线恢复资格");
 
+            sessions[2].PrepareAntonRejoinDisconnect();
+            parties.Detach(sessions[2]);
             sessions[2].End();
             var fact = rejoin.Peek(actors[2].Character);
             That(fact is not null && fact.Key == key && fact.Epoch == actors[2].Epoch && fact.Account == actors[2].Owner.Account &&
@@ -107,6 +112,7 @@ internal static class AntonRaidRejoinTests
             var nextLease = owners.Acquire("anton-rejoin-2", () => { });
             leases.Add(nextLease);
             var next = new GameSession(repository, towns, nextLease, entry: new(new(2, 19), 23, "[raid]"));
+            next.CurrentParty = () => parties.Current(next);
             sessions.Add(next);
             next.Select(0);
             next.MarkReady();
@@ -121,7 +127,39 @@ internal static class AntonRaidRejoinTests
                 first.LoadingBarrier == "not-applicable" && first.OldSessionReleased && first.OldEpoch == fact!.Epoch &&
                 first.NewEpoch == rejoined.Epoch && registry.Find(key, actors[0].Channel)!.Members.Length == 1,
                 "668校验通过仍不替换owner，等待室没有加载屏障可复用");
-            That(rejoin.Evaluate(rejoined, key, true, false).Reason == "duplicate-rejoin", "同一记录的第二次668拒绝");
+            That(registry.RestoreAnton(rejoined, key + 1, rejoin, parties).Restored == false, "错误key不能消费状态恢复候选");
+            var commands = parties.Current(actors[0].Session)!.Commands;
+            commands.Wait();
+            try { That(registry.RestoreAnton(rejoined, key, rejoin, parties).Reason == "command-busy" && !fact!.Attempted,
+                "原分队忙时有界拒绝，不消费恢复资格"); }
+            finally { commands.Release(); }
+            using (var db = new SqliteConnection("Data Source=" + Path.Combine(root, "game.db")))
+            {
+                db.Open();
+                using var fail = db.CreateCommand();
+                fail.CommandText = "CREATE TRIGGER reject_rejoin_position BEFORE UPDATE OF town ON characters BEGIN SELECT RAISE(ABORT,'rejoin rollback'); END";
+                fail.ExecuteNonQuery();
+                var beforePosition = next.Selected;
+                Reject<SqliteException>(() => registry.RestoreAnton(rejoined, key, rejoin, parties), "原位置SQL失败不能先恢复成员");
+                That(ReferenceEquals(next.Selected, beforePosition) && next.RaidCombatView() is null &&
+                    registry.Find(key, actors[0].Channel)!.Members.Length == 1 && !fact!.Attempted,
+                    "位置失败保留新owner角色和原名册，候选未消费可重试");
+                fail.CommandText = "DROP TRIGGER reject_rejoin_position";
+                fail.ExecuteNonQuery();
+            }
+            That(registry.RestoreAnton(rejoined, key, rejoin, parties) is { Restored: true } &&
+                ReferenceEquals(next.CurrentRaidBattle(rejoined), actors[0].Session.CurrentRaidBattle(actors[0])) &&
+                registry.Find(key, actors[0].Channel)!.Members.Length == 2 && parties.Current(next)?.Id == parties.Current(actors[0].Session)?.Id,
+                "状态恢复绑定原Battle和普通分队，不分配新实例或再扣票");
+            That(registry.RestoreAnton(rejoined, key, rejoin, parties).Reason == "duplicate-rejoin", "恢复候选只能消费一次");
+            actors[2].Session.End();
+            That(nextLease.IsCurrent && next.RaidCombatView() is not null && registry.Find(key, actors[0].Channel)!.Members.Length == 2,
+                "旧Session迟到清理不能移除新owner名册、Battle或原Run");
+            var ordered = new AntonRaidRejoin(true);
+            var newer = fact! with { OldOwner = nextLease, Epoch = rejoined.Epoch };
+            That(ordered.Record(newer) && !ordered.Record(fact!) && ReferenceEquals(ordered.Peek(rejoined.Character), newer),
+                "旧generation迟到断线记录不能覆盖较新owner的恢复候选");
+            That(!ordered.Record(newer with { Anton = null }), "同代缺少上下文的记录不能降级完整Run恢复能力");
             That(rejoin.Evaluate(rejoined, key + 1, true, false).Reason == "key-mismatch", "已决定后错误key仍按key拒绝，不写成恢复成功");
             var barrier = new AntonRaidRejoin(true);
             barrier.Record(new AntonRaidDisconnectFact(fact!.Account, fact.Character, fact.Epoch, fact.OldOwner, fact.Key,
@@ -129,7 +167,7 @@ internal static class AntonRaidRejoinTests
             var loading = barrier.Evaluate(rejoined, fact.Key, true, false);
             That(loading.Matched && loading.OwnerReplace == "withheld" && loading.LoadingBarrier == "withheld" &&
                 loading.Reason == "recovery-sequence-unknown", "加载中的断线只生成复用计划，不写回屏障");
-            That(registry.Find(actors[0])!.Members.Single().Actor.Character == actors[0].Character, "拒绝后原团只剩未断线成员");
+            That(registry.Find(actors[0])!.Members.Any(m => m.Actor == rejoined), "缺少加载能力的拒绝不能移除已恢复成员");
 
             var disabled = new RaidRegistry();
             disabled.BindRejoin(new AntonRaidRejoin(false));

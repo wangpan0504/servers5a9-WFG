@@ -14,7 +14,8 @@ namespace DfoServer.Network.Handlers;
 // 魔界大战不是团本：建队走 SET_PARTY_INFO(kind=5)，开战走 C2S 1652（见 DungeonHandler.EvildomWar），
 // 这里不为它补建类型 6 的团本记录。
 internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegistry registry, OnlineSessionDirectory? online = null,
-    AntonRaidStart? start = null, LukeRaidStart? lukeStart = null, AntonRaidRejoin? rejoin = null) : IGameCommandModule
+    AntonRaidStart? start = null, LukeRaidStart? lukeStart = null, AntonRaidRejoin? rejoin = null,
+    Game.Party.PartyService? parties = null) : IGameCommandModule
 {
     public RaidHandler(ServerLog log) : this(log, RaidCatalog.Empty, new RaidRegistry()) { }
 
@@ -69,7 +70,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         uint key;
         try { key = RaidRequests.Rejoin(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
-        if (Actor(context) is not { } actor) return CommandResult.Unhandled;
+        if (context.Session.CaptureRaidRejoinActor(registry) is not { } actor) return CommandResult.Unhandled;
         if (rejoin is not { Enabled: true })
         {
             // ACK668的0055D870在Luke 0x20/Anton 0x17直接返回；成功ACK不安装团本或队伍，不能冒充恢复。
@@ -79,10 +80,14 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
             return CommandResult.Handled;
         }
         var decision = Decide(actor, key);
+        var recovery = decision.Matched && parties is not null ? registry.RestoreAnton(actor, key, rejoin, parties) : null;
         log.Write("raid_rejoin_rejected", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
             decision.Reason, decision.OldEpoch, decision.NewEpoch, decision.Slot, decision.Squad,
-            decision.OldSessionReleased, decision.OwnerReplace, decision.LoadingBarrier, decision.Unknown,
-            Error = RaidPackets.CreateUnavailable });
+            decision.OldSessionReleased, OwnerReplace = recovery?.Restored == true ? "bound-new-owner" : decision.OwnerReplace,
+            LoadingBarrier = recovery is { Restored: true, Run: not null } ? "original-run-awaiting-client" : decision.LoadingBarrier, decision.Unknown,
+            StateRestored = recovery?.Restored ?? false, StateReason = recovery?.Reason,
+            Instance = recovery?.Instance, Run = recovery?.Run, Error = RaidPackets.CreateUnavailable });
+        // 副本协议668仅证明key:u32与空成功体；状态提交可完成，未知恢复包序仍不发猜测成功。
         await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "raid_rejoin_rejected", () => actor.IsCurrent);
         return CommandResult.Handled;
     }
@@ -292,7 +297,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         RaidInfoRequest parsed;
         try { parsed = RaidRequests.Information(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
-        if (Actor(context) is not { } actor) return CommandResult.Unhandled;
+        if (context.Session.CaptureRaidRejoinActor(registry) is not { } actor) return CommandResult.Unhandled;
         var party = registry.Find(parsed.Key, actor.Channel);
         bool accepted = party is not null && MatchesType(actor, party.Type);
         byte[] body = accepted ? RaidPackets.Information(parsed.Mode, party!.Key, party.TitleBytes, party.Type, party.Leader,
