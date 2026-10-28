@@ -144,7 +144,7 @@ internal sealed partial class GameSession
         return installed;
     }
 
-    /// <summary>#259：最近一次 EnterFormalDungeon 被拒绝的原因（仅用于诊断日志，不影响行为）；成功时为 null。</summary>
+    /// <summary>最近一次入场规划的拒绝原因；明确的疲劳或材料不足也用于选择客户端提示。</summary>
     public string? LastFormalDungeonRejection { get => Volatile.Read(ref lastFormalDungeonRejection); private set => Volatile.Write(ref lastFormalDungeonRejection, value); }
     string? lastFormalDungeonRejection;
     PreparedFormalDungeon? RejectFormal(string reason) { LastFormalDungeonRejection = reason; return null; }
@@ -562,13 +562,15 @@ internal sealed partial class GameSession
     {
         if (expected.DungeonState is not { } state) return RejectFormal("resources-no-dungeon-state");
         state.Validate();
-        if (entry.RequiresFatigueOwner && expected.Fatigue is null ||
-            entry.UsesFatigue && FatigueForClient(expected).Remaining == 0) return RejectFormal("fatigue-exhausted");
+        if (entry.RequiresFatigueOwner && expected.Fatigue is null) return RejectFormal("fatigue-owner-missing");
+        if (entry.UsesFatigue && FatigueForClient(expected).Remaining == 0) return RejectFormal("fatigue-exhausted");
         // #511 [use fatigue only start dungeon] N：余额（客户端可见值与库内值取小）不足 N 时不进图，不扣到负数。
-        if (entry.StartFatigue > 0 && debugSettings?.InfiniteFatigue != true &&
-            (expected.Fatigue is not { } storedFatigue || storedFatigue.Remaining < entry.StartFatigue ||
-                FatigueForClient(expected).Remaining < entry.StartFatigue))
-            return RejectFormal("start-fatigue-insufficient:" + entry.StartFatigue);
+        if (entry.StartFatigue > 0 && debugSettings?.InfiniteFatigue != true)
+        {
+            if (expected.Fatigue is not { } storedFatigue) return RejectFormal("fatigue-owner-missing");
+            if (storedFatigue.Remaining < entry.StartFatigue || FatigueForClient(expected).Remaining < entry.StartFatigue)
+                return RejectFormal("start-fatigue-insufficient:" + entry.StartFatigue);
+        }
         var ordinaryReturn = entry.RaidEntry is not null ? CurrentDungeonSelection?.ReturnPosition : entry.IsTrainingRoom || entry.IsClassExperience ? expected.Position :
             entry.IsTutorial ? tutorialReturn : entry.IsOrdinary ? towns.SelectionReturn(expected.Position, expected.CompletedQuests.ToHashSet()) : null;
         if (entry.IsOrdinary && ordinaryReturn is null) return RejectFormal("ordinary-return-location-missing");
@@ -784,7 +786,7 @@ internal sealed partial class GameSession
         return new(expected,epoch,dungeon,next);
     }
 
-    // #510/#511 选图准入逐项给出具体拒绝原因（只写 LastFormalDungeonRejection 与日志，协议回包仍是 SelectionRejected）。
+    // #510/#511 选图准入逐项给出具体拒绝原因；未知或未核验的原因仍按原静默失败处理。
     // 判定与原合并条件等价：区域→世界地图→该副本选项（任一选项满足即可）→无条件入口。
     string? SelectionRejection(Character expected, IReadOnlySet<int> done, uint optionDungeon, DungeonEntryPlan? partyRoute = null)
     {

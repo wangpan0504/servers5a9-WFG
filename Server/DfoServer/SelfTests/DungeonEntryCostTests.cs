@@ -16,7 +16,7 @@ using static DfoServer.Testing.TestCheck;
 namespace DfoServer;
 
 // #510/#511：选图准入的具体拒绝原因、普通入场票（[required item]「物品 1 1」）与入场一次性疲劳（[use fatigue only start dungeon] N）。
-// 只锁定本服行为：协议拒绝包仍是 SelectionRejected [0,9,0,0]；扣票、扣疲劳与尝试号预留同一事务。
+// 扣票、扣疲劳与尝试号预留同一事务；明确不足原因由请求处理器映射到匹配客户端的拒绝提示。
 internal static class DungeonEntryCostTests
 {
     const int Tayberrs = 291100320, TayberrsSecond = 291100322, RefinedStone = 10158964;

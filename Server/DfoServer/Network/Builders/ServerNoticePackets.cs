@@ -5,6 +5,17 @@ using DfoServer.Game.Characters;
 
 namespace DfoServer.Network.Builders;
 
+// NOTI502 的完整分支名册；4、5缺少专用载荷时明确报错，不允许伪装成普通文本。
+internal enum ServerNoticeDisplay : byte
+{
+    Information = 0, // 普通信息窗1006。
+    InformationMode100 = 1, // 同一1006窗口附参数100；不将该参数猜成确认结果或服务器业务成功。
+    Chat = 2, // 聊天栏系统消息。
+    Toast = 3, // 客户端固定约两秒的屏幕短提示。
+    ItemList = 4, // 底层问题：需要count:u8及每项两个u32；字段的业务来源未接入，不能用文本替代。
+    ToastWithOptions = 5 // 底层问题：文本后必读两个u8，第一项用途未闭合，第二项写短提示对象+108。
+}
+
 /// <summary>
 /// GM 公告 <c>notice</c> 的正式文本通道：<c>NOTI 0x06AD</c>（<c>AAS_TIPS</c>）弹框，已由匹配客户端实测确认。
 /// 两种喇叭不走这里，改走 <see cref="MegaphonePackets"/>（<c>NOTI 0x0076</c> 喇叭页签）。
@@ -25,13 +36,23 @@ internal static class ServerNoticePackets
     public const int InformationMaxBytes = 0x3FF;
 
     // 023C65D0的type0经03BE26C0读取文本，随后打开普通信息窗1006；不是业务成功或强制开兑换结果窗。
-    public static byte[] Information(string text)
+    public static byte[] Information(string text) => Message(ServerNoticeDisplay.Information, text);
+
+    public static byte[] Chat(string text) => Message(ServerNoticeDisplay.Chat, text);
+
+    // 023C66B2/023C6702：type2/3读取同一CP936文本，分别投递聊天和屏幕短提示。
+    public static byte[] Message(ServerNoticeDisplay display, string text)
     {
+        if (!Enum.IsDefined(display)) throw new ArgumentOutOfRangeException(nameof(display));
+        if (display is ServerNoticeDisplay.ItemList or ServerNoticeDisplay.ToastWithOptions)
+            throw new NotSupportedException(display == ServerNoticeDisplay.ItemList
+                ? "NOTI502 type4 requires count:u8 and two u32 values per row; source semantics are not integrated."
+                : "NOTI502 type5 requires two u8 options after text; option semantics are not verified.");
         ArgumentNullException.ThrowIfNull(text);
         int length = CharacterName.Encoding.GetByteCount(text);
         if (length is < 1 or > InformationMaxBytes) throw new ArgumentOutOfRangeException(nameof(text));
         byte[] packet = new byte[5 + length];
-        packet[0] = 0;
+        packet[0] = (byte)display;
         BinaryPrimitives.WriteInt32LittleEndian(packet.AsSpan(1), length);
         CharacterName.Encoding.GetBytes(text, packet.AsSpan(5));
         return packet;

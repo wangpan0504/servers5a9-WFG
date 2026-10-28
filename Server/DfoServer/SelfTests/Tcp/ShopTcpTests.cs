@@ -65,6 +65,12 @@ internal static class ShopTcpTests
             peer.Send(715, Build(w => w.Write(1)));
             peer.Expect(1, 715, [0, 17, 0]);
             peer.Select();
+            string beforeAuctionRejections = Snapshot();
+            peer.Send(183, new byte[37]); peer.Expect(1, 183, [0, 210, 0]); peer.Barrier();
+            peer.Send(184, new byte[9]); peer.Expect(1, 184, [0, 210, 0]); peer.Barrier();
+            peer.Send(185, new byte[30]); peer.Expect(1, 185, [0, 210, 0]); peer.Barrier();
+            That(Snapshot() == beforeAuctionRejections,
+                "auction invalid requests keep the real u16 failure envelope and do not mutate inventory or wallet");
             string beforeForbiddenSale = Snapshot();
             Sell(peer, 0, 177, 1);
             peer.Expect(1, 22, [0, 1, 0]);

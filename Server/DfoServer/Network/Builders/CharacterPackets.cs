@@ -10,7 +10,7 @@ internal static class CharacterPackets
     public static byte[] HiddenRoster() => [1, 0];
     // Client ACK692 错误码为 u16；20/24 都弹“名称重复”，当前采用24。
     // 错误码2只记录致命错误日志，不显示重名弹窗。
-    public static byte[] NameCheck(bool exists) => exists ? [0, 24, 0] : [1];
+    public static byte[] NameCheck(bool exists) => exists ? ClientFailurePackets.Create(ClientCharacterNameError.Duplicate).Body : [1];
     // ACK6成功额外读取u8和u16；123仅作为已确认的静默收尾，不表示某个业务错误。
     public static byte[] Deleted(CharacterDeletionResult result) => result.Receipt is { } receipt
         ? [1, 0, (byte)receipt.RosterIndex, (byte)(receipt.RosterIndex >> 8)] : [0, 123, 0];

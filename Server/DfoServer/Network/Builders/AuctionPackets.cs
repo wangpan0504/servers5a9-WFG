@@ -532,90 +532,26 @@ internal static class AuctionPackets
         return stream.ToArray();
     }
 
-    // —— CMD 183 `AUCTION_REGIST_ITEM`（上架）应答 ——
-    //
-    // **2 字节：`flag(0x01) + mode`**。三条依据都是硬约束，缺一条界面就会坏：
-    //   ① 走 CMD 路径 ⇒ 应答体第 0 字节必须是 flag 且非 0；传输层帧头（kind/opcode/CRC）不承担它。
-    //   ② 成功分支**必须回 `mode = 0`**（普通拍卖行）：客户端 `0x1126cd0` 的 `mode=0` 分支走
-    //      `0x2345cb0 → 0x232f610 → 0x232f6ef`，那里是**清「上架进行中锁」`0x20c` 的唯一路径**。
-    //      不回这个字节，界面会一直锁着：二次上架发不出请求、背包槽位也解不开。
-    //   ③ 失败分支 `flag = 0` 后紧跟的 1 字节是 errcode，且必须落在客户端认识的白名单里，
-    //      否则客户端会 fall-through 到成功路径（界面假装成功、道具还在背包）。
-    //      另外 `0x72` 这一档还会继续读第 2 字节，所以失败也必须发满 2 字节。
-    //
-    // 参考实现里同一 opcode 在**金币寄售面板**下的第 2 字节是 `action`（成功取 1）而不是 `mode`；
-    // 本仓库尚未接入该面板，因此这里只发普通路径的 `mode = 0`。
-
-    /// <summary>CMD 路径应答体的 flag 取值：非 0 才走客户端成功分支。</summary>
+    // CMD183/184/185：成功为success:u8=1 + mode:u8；普通面板沿既有模式0。
+    // 匹配公共分派028F8655失败先读error:u16，不是历史参考端的u8错误码。
+    // 02359FF0的114显示后还读mode；184/185同值也落入读mode路径，故该码保留模式字节。
+    // 兼容byte参数仅限定旧领域白名单，不代表线上只编码一个字节，亦不代表客户端只认识这些码。
     public const byte RegisterSuccessFlag = 0x01;
-
-    /// <summary>上架失败应答体的 flag：`0` 让客户端继续读 errcode 并走失败分支。</summary>
     public const byte RegisterFailureFlag = 0x00;
-
-    /// <summary>普通拍卖行上架的 mode 值（type 7 浏览窗口：清上架锁 + 刷新面板）。</summary>
     public const byte RegisterModeNormal = 0x00;
 
-    /// <summary>
-    /// 上架成功应答（2B）：`flag(0x01) + mode(0)`。
-    /// `mode` 的取值只允许 <see cref="RegisterModeNormal"/>：它是清客户端上架锁
-    /// （`0x20c`）的唯一路径，其它取值会让界面继续锁着。
-    /// </summary>
-    public static byte[] RegisterSuccess()
-    {
-        var body = new byte[2];
-        body[0] = RegisterSuccessFlag;
-        body[1] = RegisterModeNormal;
-        return body;
-    }
+    public static byte[] RegisterSuccess() => [RegisterSuccessFlag, RegisterModeNormal];
 
-    /// <summary>
-    /// 上架失败应答（2B）：`flag(0x00) + errcode`。
-    /// **errcode 必须来自 <see cref="Game.Auction.AuctionRegisterErrors.Whitelist"/>**：客户端把未知码
-    /// 当成上架成功，界面上道具就凭空消失了。这里再挡一道（编码器是最后一道），未知码直接抛异常，
-    /// 免得以后新增领域错误时漏配映射。
-    /// </summary>
     public static byte[] RegisterFailure(byte errorCode)
     {
         if (!AuctionRegisterErrors.Whitelist.Contains(errorCode))
-            throw new InvalidDataException($"上架失败码 0x{errorCode:X2} 不在客户端白名单内：未知码会被当成上架成功");
-        return [RegisterFailureFlag, errorCode];
+            throw new InvalidDataException($"上架失败码0x{errorCode:X2}不在旧领域兼容白名单内");
+        return ClientFailurePackets.Create((ClientAuctionRegisterError)errorCode, RegisterModeNormal).Body;
     }
 
-    // —— CMD 184 `AUCTION_REGIST_CANCEL`（取消上架）应答 ——
-    //
-    // **2 字节：`flag + mode(0)`**，与 183 同形（参考实现 §4.9：成功 `[01, 00]`、失败 `[00, errcode]`）。
-    // 成功分支的回调**还会再读 1 字节 mode**（`0x1126E50`）：`mode=0` 刷新 type 7 面板（普通拍卖行），
-    // 只发 1 字节会让那次读取读超 ⇒ 落到 `mode=0` 分支，因此这里发满 2 字节且第二字节 = 0。
-    // 失败码沿用 183 的白名单（184 自己的分派表没有本客户端实测）；编码器同样再挡一道。
-
-    /// <summary>CMD 184 取消上架成功应答（2B）：`flag(0x01) + mode(0)`。</summary>
     public static byte[] CancelSuccess() => RegisterSuccess();
-
-    /// <summary>
-    /// CMD 184 取消上架失败应答（2B）：`flag(0x00) + errcode`。
-    /// **errcode 必须来自 <see cref="Game.Auction.AuctionRegisterErrors.Whitelist"/>**：与 183 同一条客户端规则
-    /// （未知码会被当成成功），因此这里复用同一个编码器与同一条白名单校验。
-    /// </summary>
     public static byte[] CancelFailure(byte errorCode) => RegisterFailure(errorCode);
-
-    // —— CMD 185 `AUCTION_BIDDING`（一口价购买）应答 ——
-    //
-    // **2 字节：`flag + mode`**，与 183/184 同形（参考实现 §4.10：成功 `[01, mode]`、失败 `[00, errcode]`）。
-    // `mode=0` = 刷新浏览窗口；参考实现里 `mode=1` 是刷新金币寄售窗口，但**本版 D95 没有竞拍入口、
-    // 也没有那条面板路径的实测**，因此只发 `mode=0`（与上架/取消同一个普通拍卖行窗口）。
-    // 参考实现里 334 是**单字节 flag**：那条命令本仓库仍是抓包桩（布局未定），不在这里编它的应答。
-    // ★ **D95 未验证**：185 的成功形态与失败码分派表都只有参考实现 + 183 那张反汇编表。
-    // ★ 成交后**不要补发金币刷新包**（`0x000D`/`0x000E`）：185 回调自身会本地乐观扣一次金币，
-    //   服务端再补发会被叠加成「再扣一次」（参考实现实测：余额不足时显示「余额清空」）。
-
-    /// <summary>CMD 185 一口价购买成功应答（2B）：`flag(0x01) + mode(0)`。</summary>
     public static byte[] BuySuccess() => RegisterSuccess();
-
-    /// <summary>
-    /// CMD 185 一口价购买失败应答（2B）：`flag(0x00) + errcode`。
-    /// **errcode 必须来自 <see cref="Game.Auction.AuctionRegisterErrors.Whitelist"/>**（编码器再挡一道）：
-    /// 未知码会被客户端当成**成交**，界面就会假装买到了而钱货没动。
-    /// </summary>
     public static byte[] BuyFailure(byte errorCode) => RegisterFailure(errorCode);
 
 

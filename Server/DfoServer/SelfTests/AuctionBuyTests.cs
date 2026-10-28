@@ -107,11 +107,12 @@ internal static class AuctionBuyTests
     {
         Bytes(AuctionPackets.BuySuccess(), [0x01, 0x00],
             "★ 购买成功应答 = flag(01) + mode(00)：体首必须是 flag，第二字节刷新浏览窗口（与 183/184 同形）");
-        Bytes(AuctionPackets.BuyFailure(0xd2), [0x00, 0xd2], "失败应答 = flag(00) + errcode");
-        Bytes(AuctionPackets.BuyFailure(0x69), [0x00, 0x69], "买自己的挂牌用 0x69（参考实现里该码就是这条语义）");
-        Bytes(AuctionPackets.BuyFailure(0x7e), [0x00, 0x7e], "过期操作/前提消失用静默码 0x7e（只刷新窗口、不弹框）");
+        Bytes(AuctionPackets.BuyFailure(0xd2), [0x00, 0xd2, 0], "购买失败使用完整u16错误码");
+        Bytes(AuctionPackets.BuyFailure(0x69), [0x00, 0x69, 0], "保留原买自己映射；客户端实际文案是登录保护计时，不能从旧端注释推断文本");
+        Bytes(AuctionPackets.BuyFailure(0x7e), [0x00, 0x7e, 0], "保留过期操作静默码，但补齐公共u16宽度");
+        Bytes(AuctionPackets.BuyFailure(0x72), [0x00, 0x72, 0, 0], "购买114继续读取模式0，不能截断");
         foreach (byte code in new byte[] { 0x00, 0x01, 0x7f, 0xd1, 0xd3, 0xff })
-            Reject<InvalidDataException>(() => AuctionPackets.BuyFailure(code), $"白名单外的码 0x{code:X2} 拒发（会被当成成功）");
+            Reject<InvalidDataException>(() => AuctionPackets.BuyFailure(code), $"旧领域购买入口不扩大白名单0x{code:X2}");
 
         foreach (var error in Enum.GetValues<AuctionBuyError>().Where(value => value != AuctionBuyError.None))
             That(AuctionRegisterErrors.Whitelist.Contains(AuctionBuyErrors.ToClientCode(error)),
@@ -461,28 +462,28 @@ internal static class AuctionBuyTests
             sent.Clear();
             string afterFirst = Dump(path);
             await commands.DispatchAsync(context, new Packet(1, 185, Body(listingId, 24_000, SampleTemplate, now + 86_400)));
-            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0x7e]),
+            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0x7e, 0]),
                 "★ 重复点击同一条挂牌 ⇒ 0x7e（静默：只刷新窗口、不弹框）");
             That(Dump(path) == afterFirst, "★ 重复点击零副作用（整库 dump 一致）");
 
             // ③ 买自己的挂牌 ⇒ 0x69。
             sent.Clear();
             await commands.DispatchAsync(context, new Packet(1, 185, Body(ownListing, 12_000, SampleTemplate, now + 86_400)));
-            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0x69]),
-                "★ 买自己的挂牌 ⇒ 0x69（参考实现里该码就是这条语义，D95 未实测其文本）");
+            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0x69, 0]),
+                "买自己保留旧领域选码105并补齐u16；该码客户端文案是登录保护，不视为专用文案验收");
 
             // ④ 金币不足 ⇒ 0xd2；金额不符 ⇒ 0x7e。
             sent.Clear();
             await commands.DispatchAsync(context, new Packet(1, 185, Body(expensive, 900_000_000, SampleTemplate, now + 86_400)));
-            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0xd2]), "★ 金币不足 ⇒ 0xd2（必须让玩家看到提示）");
+            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0xd2, 0]), "金币不足保留原D2策略并补齐u16；客户端安全模式文案仍属领域映射缺口");
             sent.Clear();
             await commands.DispatchAsync(context, new Packet(1, 185, Body(later, 123, SampleTemplate, now + 86_400)));
-            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0x7e]), "★ 金额与库内不符 ⇒ 0x7e");
+            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0x7e, 0]), "★ 金额与库内不符 ⇒ 0x7e");
 
             // ⑤ 不足 30 字节 ⇒ 白名单码（绝不能走进「未知码 = 成功」）。
             sent.Clear();
             await commands.DispatchAsync(context, new Packet(1, 185, Convert.FromHexString(SampleA)[..20]));
-            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0xd2]), "★ 请求体不足 30 字节 ⇒ 0xd2（读不到 [26..29] 就拒绝）");
+            That(sent.Count == 1 && sent[0].Body.SequenceEqual<byte>([0x00, 0xd2, 0]), "★ 请求体不足 30 字节 ⇒ 0xd2（读不到 [26..29] 就拒绝）");
             That(Dump(path) == afterFirst,
                 "★★ 买自己的挂牌 / 金币不足 / 金额不符 / 短包这几次拒绝全部零副作用（整库 dump 仍与成交后一致）");
 

@@ -2,6 +2,7 @@ using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
 using System.Net;
 using DfoServer.GameWorld.Channels;
+using DfoServer.Network.Builders;
 
 namespace DfoServer.Network.Protocol;
 
@@ -55,6 +56,19 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public void Disconnect() => connection.Disconnect();
 
     public Task Reply(CmdPacketType opcode, byte[] body, string action, Func<bool>? canSend = null) => Sender.Send(1, (ushort)opcode, body, action, canSend);
+    public Task Reply(ClientFailurePacket packet, string action, Func<bool> canSend)
+    {
+        ArgumentNullException.ThrowIfNull(canSend);
+        return Reply(packet.Opcode, packet.Body, action, canSend);
+    }
+
+    // 调用方仍提供原业务回执的发送资格；不会自动绕过事务、角色代次或场景校验。
+    public Task NotifyNotice(ServerNoticeDisplay display, string text, string action, Func<bool> canSend)
+    {
+        ArgumentNullException.ThrowIfNull(canSend);
+        return Notify(NotiPacketType.SERVER_NOTICE_MESSAGE, ServerNoticePackets.Message(display, text), action, canSend);
+    }
+
     public Task Notify(NotiPacketType opcode, byte[] body, string action, Func<bool>? canSend = null) => Sender.Send(0, (ushort)opcode, body, action, canSend);
     public Task NotifyProtected(NotiPacketType opcode, byte[] body, string action, Func<bool>? canSend = null) => Sender.SendProtected(0, (ushort)opcode, body, action, canSend);
 }

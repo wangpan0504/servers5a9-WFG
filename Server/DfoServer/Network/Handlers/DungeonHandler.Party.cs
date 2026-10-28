@@ -144,7 +144,7 @@ internal sealed partial class DungeonHandler
         }
         if (notice.Kind == PartyDungeonNoticeKind.ResultReturn && notice.Travel is { } travel)
         {
-            await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, 2),
+            await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, (byte)DungeonResultOption.ReturnTown),
                 "party_result_return", () => context.Session.CanPublishTravel(travel));
             await town.ReturnFromFormalDungeonAsync(context, travel, "party_result_town");
             return;
@@ -154,7 +154,7 @@ internal sealed partial class DungeonHandler
             if (!await town.DetachForDungeonSelectionAsync(context, selection)) return;
             bool Guard() => context.Session.CanPublishDungeonSelection(selection);
             if (notice.Kind == PartyDungeonNoticeKind.ResultSelection)
-                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, 1), "party_result_selection", Guard);
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, (byte)DungeonResultOption.OtherDungeon), "party_result_selection", Guard);
             await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "party_selection_opened", Guard);
             await PublishPartyRosterAsync(context, notice.Members, Guard);
             foreach (var member in notice.Members)
@@ -228,7 +228,7 @@ internal sealed partial class DungeonHandler
                         "party_operation_hope_quest_assigned",Current);
                 if (notice.State == 1)
                 {
-                    await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, 0), "party_result_retry", Current);
+                    await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, (byte)DungeonResultOption.Retry), "party_result_retry", Current);
                     await PublishPartyHostAsync(context, notice.Members, Current);
                     await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "party_retry_transition", Current);
                 }

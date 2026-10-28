@@ -45,13 +45,29 @@ internal static class DungeonRequestTests
             That(rejection.ReadByte() == 0 && rejection.ReadUInt16() == 9 && rejection.ReadByte() == 0 &&
                 rejection.BaseStream.Position == rejection.BaseStream.Length,
                 "静默ACK16独立消费者完整读取失败、u16错误与单人成员槽，无额外字段");
-        foreach (byte code in new byte[] { 10, 246 })
+        ushort[] nativeErrors = [0, 1, 7, 8, 9, 10, 13, 14, 16, 17, 18, 19, 21, 22, 23, 27, 28, 30, 34, 57,
+            95, 97, 106, 107, 108, 109, 111, 118, 119, 133, 159, 171, 172, 173, 174, 180, 189, 208, 210, 217,
+            225, 230, 233, 234, 235, 238, 244, 245, 246, 247, 248, 249, 254, 255];
+        That(Enum.GetValues<DungeonSelectionError>().Select(value => (ushort)value).SequenceEqual(nativeErrors),
+            "ACK16枚举覆盖本版全部独立显示分支及两个静默值，不把其它数字猜成新含义");
+        foreach (var (code, expectedCode, slot) in new (DungeonSelectionError, ushort, byte)[]
         {
-            using var rejection = new BinaryReader(new MemoryStream(DungeonPackets.SelectionRejected(code)));
-            That(rejection.ReadByte() == 0 && rejection.ReadUInt16() == code && rejection.ReadByte() == 0 &&
+            (DungeonSelectionError.InsufficientGold, 10, 0),
+            (DungeonSelectionError.RequiredMaterials, 17, 0),
+            (DungeonSelectionError.MemberFatigueOrClearCondition, 22, 1),
+            (DungeonSelectionError.GroupMaterials, 27, 1),
+            (DungeonSelectionError.DungeonLimitOrStorageReward, 246, 0)
+        })
+        {
+            using var rejection = new BinaryReader(new MemoryStream(DungeonPackets.SelectionRejected(code, slot)));
+            That(rejection.ReadByte() == 0 && rejection.ReadUInt16() == expectedCode && rejection.ReadByte() == slot &&
                 rejection.BaseStream.Position == rejection.BaseStream.Length,
-                "祭坛失败ACK16完整编码u16提示码和本人槽");
+                "已核对的ACK16错误分支完整编码u16提示码和实际成员槽");
         }
+        Reject<ArgumentOutOfRangeException>(() => DungeonPackets.SelectionRejected(DungeonSelectionError.DailyLimitDialog),
+            "仅有客户端显示文本的分支不能自动假定其完整失败包体");
+        Reject<ArgumentOutOfRangeException>(() => DungeonPackets.SelectionRejected(DungeonSelectionError.MemberFatigueOrClearCondition, 8),
+            "已确认的队伍槽位不能超出客户端本版八槽");
         That(DungeonRequests.ParseEntry([0x78, 0x56, 0x34, 0xF2]).DungeonIndex == 0xF2345678u, "entry preserves the unsigned 32-bit index");
         That(DungeonRequests.ParseEntry([0xFF, 0xFF, 0xFF, 0xFF]).DungeonIndex == uint.MaxValue, "entry parsing does not impose an admission range");
         foreach (int length in new[] { 0, 1, 2, 3, 5, 25 })
