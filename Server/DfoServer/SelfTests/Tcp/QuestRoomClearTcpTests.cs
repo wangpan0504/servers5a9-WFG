@@ -14,10 +14,16 @@ namespace DfoServer.Testing;
 internal static class QuestRoomClearTcpTests
 {
     // 借用quests已启动服务与共享资源；真实3525/3560资源、生产Handler和合成普通39，不代表Windows演出验收。
+    // 3525 CompleteNpc 362 在城镇地图，92247/92251没有该NPC，图内与结算父34拒绝，回城后再交。3578/1276不在城镇地图，结算34仍按子完成集交付。
     internal static void Verify(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain)
     {
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
+        bool TownNpc(uint id) => resources.Towns.Areas.Values.Any(area =>
+            area.Default.Npcs.Any(npc => npc.Id == id) ||
+            area.Phases.Any(phase => phase.Npcs.Any(npc => npc.Id == id)));
+        That(TownNpc(58) && TownNpc(362) && !TownNpc(1247) && !TownNpc(1276),
+            "根特顺序父CompleteNpc在城镇地图，3146/3578交付NPC不在城镇地图");
         foreach (bool ordinary in new[] { false,true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
         foreach (bool ordinary in new[] { false,true }) VerifyGrandine(fixture,resources,growth,drain,dungeons,ordinary);
         foreach (bool ordinary in new[] { false,true }) VerifySeaTrain(fixture,resources,growth,drain,dungeons,ordinary);
@@ -101,6 +107,11 @@ internal static class QuestRoomClearTcpTests
                 fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
                 "中途清图严格绑定原接取及growth epoch+1，普通0保留实际实例请求号和完整死亡集合");
             string cleared = State();
+            peer.Send(34,QuestRequest(34,3525,[255,255,1,0,255,255]));
+            peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == cleared && daily!.OtherRows("quest_id,condition_state") is [[3525L,0L]] &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3525",peer.Id).Length == 0,
+                "92247没有CompleteNpc 362，末子归档后不能在图内提前交付父任务");
             peer.Send(39,lastDeath); Drain();
             That(State() == cleared && enabled == 0 && bossChecks == 0,"RoomClear确认后的重复39仅忽略，不重发进度、奖励或结算");
             peer.Send(33,QuestRequest(33,3525,[0,0]));
@@ -121,16 +132,25 @@ internal static class QuestRoomClearTcpTests
             string settled = State();
             peer.Send(46,report); Drain();
             That(State() == settled,"重复46不增加结算经验或翻牌资产");
+            long goldBefore = (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id).Single()[0];
+            peer.Send(34,QuestRequest(34,3525,[255,255,1,0,255,255]));
+            peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == settled && fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=3525",peer.Id).Length == 0,
+                "92251没有CompleteNpc 362，结算中不能交付父任务");
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
+            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
             peer.Send(34,QuestRequest(34,3525,[255,255,1,0,255,255]));
             var finished = peer.Expect(1,34).Body;
-            That(finished.Length >= 4 && finished[0] == 1 && U16(finished,1) == 3525,"真实34交付已完成全部子项的3525父任务");
+            That(finished.Length >= 4 && finished[0] == 1 && U16(finished,1) == 3525,"回城后真实34交付已完成全部子项的3525父任务");
             Drain();
+            That((long)fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id).Single()[0] > goldBefore &&
+                fixture.Query("SELECT quest_id,experience_amount FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",peer.Id)
+                    is [[3525L,long parentExp],[3560L,0L]] && parentExp > 0,
+                "回城父34发放经验与金币，3560保持零奖励");
             string completed = State();
             peer.Send(34,QuestRequest(34,3525,[255,255,1,0,255,255]));
             peer.Expect(1,34,[0,19,0]); Drain();
             That(State() == completed,"重复父34不再次授予任务奖励");
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
-            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
 
             void Drain() => drain(peer,packet =>
             {
