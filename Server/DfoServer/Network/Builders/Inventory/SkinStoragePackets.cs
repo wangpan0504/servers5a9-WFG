@@ -10,7 +10,14 @@ internal static class SkinStoragePackets
     {
         // 0267AC80：类别数及每类u8类型/u8数量/u32编号；过期字体回退原生默认1。
         writer.Write((byte)((state.Selected == 0 ? 0 : 1) + (state.SelectedDamageFont == 0 ? 0 : 1) +
-            (state.SelectedCutscenes.IsEmpty ? 0 : 1)));
+            (state.SelectedCutscenes.IsEmpty ? 0 : 1) + (state.SelectedPartyFrame == 0 ? 0 : 1) +
+            (state.SelectedEmoticons.IsEmpty ? 0 : 1)));
+        if (state.SelectedPartyFrame != 0)
+        {
+            writer.Write(InventorySkinStorageService.PartyFrameType);
+            writer.Write((byte)1);
+            writer.Write(state.PartyFrameSelection(now ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        }
         if (!state.SelectedCutscenes.IsEmpty)
         {
             var selected = state.CutsceneSelection(now ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -24,6 +31,13 @@ internal static class SkinStoragePackets
             writer.Write((byte)1);
             writer.Write(state.DamageFontSelection(now ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         }
+        if (!state.SelectedEmoticons.IsEmpty)
+        {
+            var selected = state.EmoticonSelection(now ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            writer.Write(InventorySkinStorageService.EmoticonType);
+            writer.Write(checked((byte)selected.Length));
+            foreach (int id in selected) writer.Write(id);
+        }
         if (state.Selected != 0)
         {
             writer.Write(InventorySkinStorageService.Type);
@@ -32,9 +46,9 @@ internal static class SkinStoragePackets
         }
     }
 
-    public static byte[] Owned(SkinStorageState state)
+    public static byte[] Owned(SkinStorageState state, SkinStorageState? account = null)
     {
-        state.Validate();
+        state.Validate(account);
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write(InventorySkinStorageService.Type);
@@ -43,31 +57,54 @@ internal static class SkinStoragePackets
         return stream.ToArray();
     }
 
-    public static byte[] DamageFonts(SkinStorageState state)
+    public static byte[] DamageFonts(SkinStorageState state, SkinStorageState account)
     {
-        state.Validate();
-        return TimedOwned(InventorySkinStorageService.DamageFontType, 1, state.DamageFonts);
+        state.Validate(account);
+        account.Validate();
+        return TimedOwned(InventorySkinStorageService.DamageFontType, 1, state.DamageFonts, account.DamageFonts);
     }
 
-    public static byte[] Cutscenes(SkinStorageState state)
+    public static byte[] Cutscenes(SkinStorageState state, SkinStorageState account)
     {
-        state.Validate();
-        return TimedOwned(InventorySkinStorageService.CutsceneType, 30000, state.Cutscenes);
+        state.Validate(account);
+        account.Validate();
+        return TimedOwned(InventorySkinStorageService.CutsceneType, 30000, state.Cutscenes, account.Cutscenes);
     }
 
-    static byte[] TimedOwned(byte type, int defaultId, IReadOnlyList<SkinOwnership> owned)
+    public static byte[] PartyFrames(SkinStorageState state, SkinStorageState account)
+    {
+        state.Validate(account);
+        account.Validate();
+        return TimedOwned(InventorySkinStorageService.PartyFrameType, 20000, state.PartyFrames, account.PartyFrames);
+    }
+
+    public static byte[] Emoticons(SkinStorageState state, SkinStorageState account)
+    {
+        state.Validate(account);
+        account.Validate();
+        return TimedOwned(InventorySkinStorageService.EmoticonType, 0, state.Emoticons, account.Emoticons);
+    }
+
+    // 即时表情没有原生默认皮肤，defaultId为0时不补默认条目。
+    static byte[] TimedOwned(byte type, int defaultId, IReadOnlyList<SkinOwnership> owned, IReadOnlyList<SkinOwnership> account)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write(type);
-        writer.Write(checked((ushort)(owned.Count + 1)));
-        writer.Write(defaultId); writer.Write(0);
+        writer.Write(checked((ushort)(owned.Count + (defaultId == 0 ? 0 : 1))));
+        if (defaultId != 0) { writer.Write(defaultId); writer.Write(0); }
         foreach (var row in owned)
         {
             writer.Write(row.SkinId);
             writer.Write(row.ExpiresAt);
         }
-        writer.Write((ushort)0); // 1764130：非武器类别还要读取第二份账号期限列表。
+        // 1764130：非武器类别随后读取第二份账号皮肤仓期限列表。
+        writer.Write(checked((ushort)account.Count));
+        foreach (var row in account)
+        {
+            writer.Write(row.SkinId);
+            writer.Write(row.ExpiresAt);
+        }
         return stream.ToArray();
     }
 
@@ -111,6 +148,17 @@ internal static class SkinStoragePackets
         writer.Write(InventorySkinStorageService.CutsceneType);
         writer.Write(checked((ushort)selected.Count));
         foreach (int id in selected) writer.Write(id);
+        return stream.ToArray();
+    }
+
+    // 1766550 case 3：即时表情固定读取4个u32，没有数量字段。
+    public static byte[] EmoticonSelection(IReadOnlyList<int> selected)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(InventorySkinStorageService.EmoticonType);
+        for (int at = 0; at < InventorySkinStorageService.EmoticonSlots; at++)
+            writer.Write(at < selected.Count ? selected[at] : 0);
         return stream.ToArray();
     }
 

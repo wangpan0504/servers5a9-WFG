@@ -99,10 +99,10 @@ internal sealed partial class CharacterRepository
 
     // 仅在一次完整列表读取中共享，不跨请求缓存账号余额、限购或仓库。
     sealed record AccountInventory(AccountWallet Wallet, AccountCargoState Cargo, EpicPieceBook Pieces,
-        ImmutableArray<InventoryItem> Items, ImmutableArray<ShopPurchaseCount> Purchases);
+        ImmutableArray<InventoryItem> Items, ImmutableArray<ShopPurchaseCount> Purchases, SkinStorageState Skins);
 
     static AccountInventory ReadAccountInventory(SqliteConnection db, string account, SqliteTransaction? transaction) =>
         new(ReadAccountWallet(db, account, transaction), ReadAccountCargo(db, account, transaction),
             ReadEpicPieces(db, account, transaction), ReadInventoryItems(db, account, null, transaction),
-            ReadShopPurchases(db, account, 0, transaction));
+            ReadShopPurchases(db, account, 0, transaction), ReadAccountSkins(db, account, transaction));
 }

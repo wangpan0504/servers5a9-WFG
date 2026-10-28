@@ -86,7 +86,7 @@ internal static class WeaponSkinTests
             "字体参与同一库存快照；到期精确回退原生默认SKN1");
         Reject<InvalidDataException>(() => (fonts with { DamageFonts = [new(3, 0), new(3, 0)] }).Validate(), "字体所有权不重复");
         Reject<InvalidDataException>(() => (fonts with { SelectedDamageFont = 4 }).Validate(), "不能保存未拥有字体选择");
-        Bytes(SkinStoragePackets.DamageFonts(fonts), TcpPeer.Build(w =>
+        Bytes(SkinStoragePackets.DamageFonts(fonts, SkinStorageState.Empty), TcpPeer.Build(w =>
         {
             w.Write((byte)2); w.Write((ushort)3); w.Write(1); w.Write(0);
             w.Write(3); w.Write(2000000000); w.Write(8); w.Write(0); w.Write((ushort)0);
@@ -137,6 +137,91 @@ internal static class WeaponSkinTests
         Reject<InvalidDataException>(() => (cutState with { SelectedCutscenes=[30002] }).Validate(), "技能插画不能选择未拥有皮肤");
         Bytes(TcpPeer.Build(w=>SkinStoragePackets.WriteUserInfo(w,cutState,1999999999)),
             [2,1,1,49,117,0,0,4,1,0,125,0,0], "技能插画和武器同在Player选择组中，各自保持类别与完整编号");
+        // 组队头像框（类别0）与即时表情（类别3）：类别编号来自客户端0429E5F0的SKN[type]映射。
+        var frameRequest = SkinStorageRequests.Select(TcpPeer.Build(w =>
+        { w.Write(0); w.Write(420000002); w.Write(new byte[36]); }));
+        That(frameRequest.Type == 0 && frameRequest.SkinId == 420000002 && frameRequest.AdditionalIds.All(id => id == 0),
+            "1573组队头像框沿用单编号形状，类别0不与武器4混淆");
+        var emoteRequest = SkinStorageRequests.Select(TcpPeer.Build(w =>
+        { w.Write(3); w.Write(410000001); w.Write(410000002); w.Write(410000003); w.Write(410000004); w.Write(new byte[24]); }));
+        That(emoteRequest.Type == 3 && emoteRequest.Ids.Take(4).SequenceEqual([410000001, 410000002, 410000003, 410000004]) &&
+            emoteRequest.Ids.Skip(4).All(id => id == 0), "1573即时表情保留4个栏位，其余位置留空");
+        var frameState = oldState with { PartyFrames = [new(420000001, 2000000000)], SelectedPartyFrame = 420000001 };
+        frameState.Validate();
+        That(frameState.PartyFrameSelection(1999999999) == 420000001 && frameState.PartyFrameSelection(2000000000) == 20000 &&
+            !oldState.Same(frameState), "组队头像框到期回退原生默认20000，并参与同一库存快照");
+        Reject<InvalidDataException>(() => (frameState with { PartyFrames = [new(20000, 0)] }).Validate(), "原生默认头像框不能作为所有权保存");
+        Reject<InvalidDataException>(() => (frameState with { SelectedPartyFrame = 420000002 }).Validate(), "未拥有头像框不能成为当前选择");
+        Bytes(SkinStoragePackets.PartyFrames(frameState, SkinStorageState.Empty), TcpPeer.Build(w =>
+        {
+            w.Write((byte)0); w.Write((ushort)2); w.Write(20000); w.Write(0);
+            w.Write(420000001); w.Write(2000000000); w.Write((ushort)0);
+        }), "1557头像框补原生默认20000条目并保留空账号期限列表");
+        var emoteState = oldState with { Emoticons = [new(410000001, 0)], SelectedEmoticons = [410000001, 0, 0, 0] };
+        emoteState.Validate();
+        That(emoteState.EmoticonSelection(1).SequenceEqual([410000001, 0, 0, 0]) && !oldState.Same(emoteState),
+            "即时表情按4个栏位保存，空栏位保持0且参与快照比较");
+        Reject<InvalidDataException>(() => (emoteState with { SelectedEmoticons = [410000001, 410000001] }).Validate(),
+            "即时表情不能重复选择同一皮肤");
+        Reject<InvalidDataException>(() => (emoteState with { SelectedEmoticons = [410000002, 0, 0, 0] }).Validate(),
+            "即时表情不能选择未拥有皮肤");
+        Reject<InvalidDataException>(() => (emoteState with { SelectedEmoticons = [410000001, 0, 0, 0, 0] }).Validate(),
+            "即时表情最多4个栏位");
+        Bytes(SkinStoragePackets.Emoticons(emoteState, SkinStorageState.Empty), TcpPeer.Build(w =>
+        {
+            w.Write((byte)3); w.Write((ushort)1); w.Write(410000001); w.Write(0); w.Write((ushort)0);
+        }), "1557即时表情没有原生默认条目，数量等于实际拥有项");
+        Bytes(SkinStoragePackets.EmoticonSelection([410000001, 410000002]), TcpPeer.Build(w =>
+        { w.Write((byte)3); w.Write(410000001); w.Write(410000002); w.Write(0); w.Write(0); }),
+            "1558即时表情固定4个u32且没有数量字段");
+        Bytes(TcpPeer.Build(w => SkinStoragePackets.WriteUserInfo(w, frameState, 1999999999)),
+            TcpPeer.Build(w =>
+            {
+                w.Write((byte)2); w.Write((byte)0); w.Write((byte)1); w.Write(420000001);
+                w.Write((byte)4); w.Write((byte)1); w.Write(32000);
+            }), "Player选择组同时携带头像框与武器，各自保持类别编号");
+        Bytes(TcpPeer.Build(w => SkinStoragePackets.WriteUserInfo(w, emoteState, 1)),
+            TcpPeer.Build(w =>
+            {
+                w.Write((byte)2); w.Write((byte)3); w.Write((byte)4);
+                w.Write(410000001); w.Write(0); w.Write(0); w.Write(0);
+                w.Write((byte)4); w.Write((byte)1); w.Write(32000);
+            }), "Player选择组携带即时表情4栏与武器，类别互不覆盖");
+        var frameToken = new SkinStorageToken(0, 420000001, new(Days: 30), []);
+        That(InventorySkinStorageService.TryAddTimed(SkinStorageState.Empty, frameToken, time, out var frameGranted) &&
+            frameGranted.PartyFrames is [{ SkinId: 420000001 }], "头像框动作按类别0单独入库");
+        var emoteToken = new SkinStorageToken(3, 410000001, new(Days: 30), []) { SkinIds = [410000001, 410000002] };
+        That(InventorySkinStorageService.TryAddTimed(SkinStorageState.Empty, emoteToken, time, out var emoteGranted) &&
+            emoteGranted.Emoticons.Select(row => row.SkinId).SequenceEqual([410000001, 410000002]),
+            "即时表情动作按类别3批量入库");
+        That(!InventorySkinStorageService.TryAddTimed(SkinStorageState.Empty,
+                new SkinStorageToken(0, 20000, new(Days: 30), []), time, out _), "原生默认头像框不能由动作入库");
+        // 账号皮肤仓只保存所有权，选中项始终在角色存档；不带account的调用正是修复前的唯一路径，
+        // 对账号条目做选择时必然抛异常，因此这里先断言旧行为会拒绝，再断言并集校验通过。
+        var accountOwned = SkinStorageState.Empty with
+        {
+            DamageFonts = [new(9, 0)], Cutscenes = [new(31001, 0)],
+            PartyFrames = [new(420000002, 0)], Emoticons = [new(410000005, 0)]
+        };
+        var accountSelected = SkinStorageState.Empty with
+        {
+            SelectedDamageFont = 9, SelectedCutscenes = [31001], SelectedPartyFrame = 420000002,
+            SelectedEmoticons = [410000005, 0, 0, 0]
+        };
+        accountOwned.Validate();
+        Reject<InvalidDataException>(() => accountSelected.Validate(), "账号仓条目的选择不在角色自身列表，单参数Validate拒绝修复前的存档");
+        accountSelected.Validate(accountOwned);
+        Reject<InvalidDataException>(() => (accountSelected with { SelectedPartyFrame = 420000003 }).Validate(accountOwned),
+            "并集校验仍拒绝角色和账号都没有的头像框");
+        Bytes(SkinStoragePackets.PartyFrames(accountSelected, accountOwned), TcpPeer.Build(w =>
+        {
+            w.Write((byte)0); w.Write((ushort)1); w.Write(20000); w.Write(0);
+            w.Write((ushort)1); w.Write(420000002); w.Write(0);
+        }), "1557头像框账号期限列表携带账号条目，角色列表为空不影响选择");
+        Bytes(SkinStoragePackets.Emoticons(accountSelected, accountOwned), TcpPeer.Build(w =>
+        { w.Write((byte)3); w.Write((ushort)0); w.Write((ushort)1); w.Write(410000005); w.Write(0); }),
+            "1557即时表情账号条目来自账号皮肤仓，角色列表保持空");
+
         var clone = new InventoryItem(239, new(InventoryListType.Equipment, 10), new(404600048, ItemKind.Avatar, 239))
             { Avatar = new() { ClearAvatarId = 104600021, ClearAvatarSourceUid = 245 } };
         var weapon = new InventoryItem(291, new(InventoryListType.Equipment, 12), new(31440, ItemKind.Equipment, 999999998)

@@ -660,6 +660,11 @@ CREATE TABLE account_cargo(
     gold INTEGER NOT NULL DEFAULT 0 CHECK(gold BETWEEN 0 AND 2147483647)
 );
 
+CREATE TABLE account_skin_storage(
+    account TEXT PRIMARY KEY,
+    state_json TEXT NOT NULL DEFAULT '{"Owned":[]}' CHECK(json_valid(state_json) AND json_type(state_json)='object')
+);
+
 CREATE TABLE "character_inventory_items"(
     item_uid INTEGER PRIMARY KEY AUTOINCREMENT,
     character_id INTEGER,

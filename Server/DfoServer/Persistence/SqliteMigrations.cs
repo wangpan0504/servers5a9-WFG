@@ -269,7 +269,18 @@ internal static class SqliteMigrations
         new(141, "公会组队排行事实与月榜快照", static (db, tx) => Execute(db, tx, GuildRankingSchema.Definition)),
         new(142, "公会副本通关奖励与永久邮件回执", static (db, tx) => Execute(db, tx, GuildDungeonRewardSchema.Definition)),
         new(143, "公会副本独立有效净化与闲置周期", GuildDungeonEffectiveSchema.Upgrade),
+        new(144, "账号皮肤仓", static (db, tx) => Execute(db, tx, AccountSkinStorageSchema.Definition)),
     ];
+
+    internal static class AccountSkinStorageSchema
+    {
+        internal const string Definition = """
+            CREATE TABLE IF NOT EXISTS account_skin_storage(
+                account TEXT PRIMARY KEY,
+                state_json TEXT NOT NULL DEFAULT '{"Owned":[]}' CHECK(json_valid(state_json) AND json_type(state_json)='object')
+            );
+            """;
+    }
 
     internal const string BeastDungeonEntrySchema = """
         CREATE TABLE IF NOT EXISTS character_beast_dungeon_entries(
@@ -2410,6 +2421,7 @@ internal static class SqliteMigrations
         "SELECT [account],[currency_kind],[balance] FROM [account_currency_balances] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[currency_kind],[account_scope],[balance_before],[balance_after] FROM [currency_audit_log] LIMIT 0",
         "SELECT [account],[revision],[capacity],[gold] FROM [account_cargo] LIMIT 0",
+        "SELECT [account],[state_json] FROM [account_skin_storage] LIMIT 0",
         "SELECT [item_uid],[character_id],[account],[owner_character_id],[item_core],[created_at],[updated_at] FROM [character_inventory_items] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[personal_capacity_before],[personal_capacity_after],[account_capacity_before],[account_capacity_after],[account_gold_before],[account_gold_after] FROM [cargo_audit_log] LIMIT 0",
         "SELECT [account],[character_id],[npc_id],[item_id],[reset_daily],[day],[count] FROM [shop_purchase_counts] LIMIT 0",

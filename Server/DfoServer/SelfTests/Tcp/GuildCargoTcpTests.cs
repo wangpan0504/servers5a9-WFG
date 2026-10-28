@@ -168,14 +168,15 @@ internal static class GuildCargoTcpTests
                 actors.Add(U16(packet.Body, 121));
             if (packet is { Kind: 0, Opcode: 124 })
             {
-                // 换频道恢复先124再绑定24，随后仍须完成场景技能、设置回放、任务和三类皮肤初始化。
+                // 换频道恢复先124再绑定24，随后仍须完成场景技能、设置回放、任务和四类皮肤初始化：
+                // 武器、伤害字体、技能插画与恒有原生默认20000的组队头像框；本夹具角色没有即时表情条目，服务端不发该类别。
                 peer.Expect(0, 24);
                 peer.Expect(0, 19);
-                // 19之后是角色设置回放：本夹具未保存账号设置与键位，服务端只补发非默认的390，173/454不出现。
+                // 19之后是角色设置回放：本夹具未保存账号设置与键位，服务端只补发非默认的390，173/454不出现（同9f6b45e4）。
                 peer.Expect(0, 390);
                 peer.Expect(0, 21);
                 peer.Expect(0, 356);
-                for (int skin = 0; skin < 3; skin++)
+                for (int skin = 0; skin < 4; skin++)
                 {
                     peer.Expect(0, 1557);
                     peer.Expect(0, 1558);
