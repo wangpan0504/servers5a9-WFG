@@ -15,8 +15,12 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
     Protocol.NativeChannel? native = null, IDisposable? runtimeMemory = null, IDisposable? guildInvitations = null,
     IDisposable? guildEconomy = null, IDisposable? guildTeleport = null, IDisposable? guildNpcs = null,
     Func<CancellationToken, Task>? runGuildHallWait = null, Func<CancellationToken, Task>? runWorld = null,
-    IAsyncDisposable? gameplayTimers = null, int saveVersion = 0)
+    IAsyncDisposable? gameplayTimers = null, int saveVersion = 0,
+    Func<ushort, DfoServer.Game.Raids.LukeRaidDisconnectCandidate?>? lukeRejoinCandidate = null)
 {
+    // 本地宿主诊断；没有对应网络路由，返回值不包含可变领域对象。
+    internal bool HasLukeRejoinDiagnostics => lukeRejoinCandidate is not null;
+    internal DfoServer.Game.Raids.LukeRaidDisconnectCandidate? ReadLukeRejoinCandidate(ushort character) => lukeRejoinCandidate?.Invoke(character);
     readonly ConcurrentDictionary<int, Task> active = new();
     int counter;
     readonly SemaphoreSlim connections = new(64, 64);

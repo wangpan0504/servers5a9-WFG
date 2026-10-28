@@ -17,6 +17,7 @@ namespace DfoServer.Testing;
 internal static class LukeRaidStartTcpTests
 {
     public static Task RunAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,false);
+    public static Task RunDisconnectCandidatesAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,disconnectCandidates:true);
     public static Task RunFixedRouteAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,fixedRoute:true);
     public static Task RunFacilitiesAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,true,facilities:true);
     public static Task RunDungeonsAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true);
@@ -106,7 +107,7 @@ internal static class LukeRaidStartTcpTests
         return (definition,policy,phaseClock);
     }
 
-    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false,bool resourceRewards=false,bool fixedRoute=false,bool facilities=false)
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false,bool resourceRewards=false,bool fixedRoute=false,bool facilities=false,bool disconnectCandidates=false)
     {
         var (definition,policy,phaseClock)=Prepare(resources,runDungeons,completePhases,timed,phaseTimeout);
         var raw=definition.Resources!.Script;var catalog=definition.Resources.EntryCatalog!;
@@ -141,7 +142,7 @@ internal static class LukeRaidStartTcpTests
             That(resolved.Completion.Phases.Select(row=>row.Rewards.Offers.Single().Grants.Single().ItemId).SequenceEqual(new[]{10308804,10304817}),
                 "当前真实party_card映射到两只原booster箱，不把RawB100当100个箱");
         }
-        await using var fixture=new TcpTestFixture(source,Path.Combine(root,facilities?"luke-raid-facilities":fixedRoute?"luke-raid-fixed-route":resourceRewards?"luke-raid-resource-rewards":phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
+        await using var fixture=new TcpTestFixture(source,Path.Combine(root,disconnectCandidates?"luke-raid-disconnect-candidates":facilities?"luke-raid-facilities":fixedRoute?"luke-raid-fixed-route":resourceRewards?"luke-raid-resource-rewards":phaseTimeout?"luke-raid-phase-timeout":timed?"luke-raid-timers":completePhases?"luke-raid-phases":runDungeons?"luke-raid-run":"luke-raid-start"),resources:resources,lukeStartPolicy:policy,clock:phaseClock);
         await fixture.StartAsync();
         if(fixedRoute)
         {
@@ -357,7 +358,9 @@ internal static class LukeRaidStartTcpTests
                     is [[long count]]&&count==raw.EntryCost.Count,"满团成功只扣一次门票，失败未留部分扣费");
             }
 
-            if(facilities) LukeRaidRunTcpTests.Facilities(fixture,peers.ToArray(),full[0].Single(p=>p.Opcode==9).Body,catalog,resources);
+            if(disconnectCandidates) await LukeRaidRunTcpTests.DisconnectCandidatesAsync(fixture,peers,full,
+                account => Open(fixture,account,gamePort:endpoints[20],channelNumber:20),raw.Phases[0].Dungeons[0].Id);
+            else if(facilities) LukeRaidRunTcpTests.Facilities(fixture,peers.ToArray(),full[0].Single(p=>p.Opcode==9).Body,catalog,resources);
             else if(resourceRewards) LukeRaidRunTcpTests.ResourceCompletion(fixture,peers.ToArray(),raw,full[0].Single(p=>p.Opcode==9).Body,catalog);
             else if(phaseTimeout) LukeRaidRunTcpTests.PhaseTimeout(fixture,peers.ToArray(),phaseClock!);
             else if(timed) await LukeRaidRunTcpTests.TimersAsync(fixture,peers.ToArray());
@@ -448,7 +451,7 @@ internal static class LukeRaidStartTcpTests
             var transactionPolicy=LukeFixedCardRoute.Resolve(policy,transactionDefinition)!;
             LukeRaidRunTransactionTests.Run(resources,transactionDefinition,transactionPolicy);
         }
-        if(runDungeons&&!completePhases&&!timed&&!phaseTimeout&&!fixedRoute)
+        if(runDungeons&&!completePhases&&!timed&&!phaseTimeout&&!fixedRoute&&!disconnectCandidates)
         {
             // StopAsync已收尾日志writer；不把正在刷新的JSON尾行当作完整事件。
             var clears=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="raid_run_clear").Select(row=>row.GetProperty("Detail")).ToArray();
@@ -467,12 +470,24 @@ internal static class LukeRaidStartTcpTests
                 "七次入场精确覆盖两次单人、四次四人及断线后三人，同步notice不计人数；实例/图/唯一Run均匹配流程");
             LukeRaidRunTransactionTests.Run(resources,definition,policy);
         }
+        if(disconnectCandidates)
+        {
+            var entries=fixture.Events().Where(row=>row.GetProperty("Kind").GetString()=="formal_dungeon_entry")
+                .Select(row=>row.GetProperty("Detail")).Where(row=>row.TryGetProperty("RaidType",out var type)&&type.GetInt32()==1&&row.GetProperty("Accepted").GetBoolean()).ToArray();
+            That(entries.Select(row=>row.GetProperty("Members").GetInt32()).SequenceEqual(new[]{1,1,4}) &&
+                entries.All(row=>row.GetProperty("Dungeon").GetInt32()==5054) &&
+                entries.Select(row=>row.GetProperty("Runs")[0].GetGuid()).Distinct().Count()==3 &&
+                entries[0].GetProperty("RaidInstance").GetGuid()==entries[1].GetProperty("RaidInstance").GetGuid() &&
+                entries[0].GetProperty("RaidInstance").GetGuid()!=entries[2].GetProperty("RaidInstance").GetGuid(),
+                "候选模式精确两次单人和一次四人真实入场，无手工Run或额外恢复入场");
+            That(!fixture.Events().Any(row=>row.GetProperty("Kind").GetString()=="raid_run_clear"), "候选模式没有清图或奖励事实");
+        }
         That(fixture.Events().Any(e=>e.GetProperty("Kind").GetString()=="closed"&&
             e.GetProperty("Detail").GetProperty("Reason").GetString()=="SqliteException"&&
             e.GetProperty("Detail").GetProperty("Message").GetString()!.Contains("luke TCP last member rollback",StringComparison.Ordinal)),
             "故障连接确由末成员SQL注入关闭，不把任意网络错误当事务回滚证据");
         var accepted=fixture.Events().Where(e=>e.GetProperty("Kind").GetString()=="raid_start_request").Select(e=>e.GetProperty("Detail"))
-            .Where(e=>e.GetProperty("Accepted").GetBoolean()).ToArray();
+            .Where(e=>e.TryGetProperty("Accepted",out var acceptedValue)&&acceptedValue.GetBoolean()).ToArray();
         That(accepted.Length==3&&accepted.All(e=>e.GetProperty("Instance").GetGuid()==e.GetProperty("BattleInstance").GetGuid())&&
             accepted[0].GetProperty("Instance").GetGuid()==accepted[1].GetProperty("Instance").GetGuid()&&accepted[1].GetProperty("Replay").GetBoolean()&&accepted[2].GetProperty("Members").GetInt32()==8&&
             accepted[2].GetProperty("Instance").GetGuid()!=accepted[0].GetProperty("Instance").GetGuid(),

@@ -38,6 +38,13 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     Process? process;
     Task? output, errors;
     Task? hosted;
+    DfoServer.Network.ServerHost? runtimeHost;
+    internal DfoServer.Game.Raids.LukeRaidDisconnectCandidate? LukeRejoinCandidate(ushort character)
+    {
+        var host = Volatile.Read(ref runtimeHost) ?? throw new InvalidOperationException("候选诊断需要同进程Runtime");
+        if (!host.HasLukeRejoinDiagnostics) throw new InvalidOperationException("候选诊断委托尚未装配，不能当作无候选");
+        return host.ReadLukeRejoinCandidate(character);
+    }
     CancellationTokenSource? hostStop;
     readonly TcpTestResources? resources;
     readonly DfoServer.GameWorld.Quests.QuestCatalog? questCatalog;
@@ -243,9 +250,12 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                         ? LoginCredentials.DevelopmentDigest : NativeLoginWire.Digest);
                 }
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
-                await ServerRuntime.Create(options, resources.Archive, repository, resources.Towns,
+                var runtime = ServerRuntime.Create(options, resources.Archive, repository, resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw).RunAsync(hostStop.Token);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw);
+                Volatile.Write(ref runtimeHost, runtime);
+                try { await runtime.RunAsync(hostStop.Token); }
+                finally { Volatile.Write(ref runtimeHost, null); }
             });
         }
         else

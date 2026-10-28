@@ -179,6 +179,40 @@ internal sealed class AccountOwners
             return ExecuteFixedGroup(members, action, 1, maximum);
         }
 
+        // 可选的卢克断线捕获：零等待尝试完整原owner组合，忙/失效直接放弃，不改变既有阻塞入口。
+        internal static bool TryExecuteLukeDisconnect<T>(IReadOnlyList<(Lease Owner, ushort Character)> members,
+            Func<T> action, out T result)
+        {
+            result = default!;
+            if (members.Count is < 1 or > 8 || members.Any(m => m.Character == 0) ||
+                members.Select(m => m.Character).Distinct().Count() != members.Count ||
+                members.Select(m => m.Owner.Account).Distinct(StringComparer.Ordinal).Count() != members.Count ||
+                members.Any(m => !ReferenceEquals(m.Owner.Registry, members[0].Owner.Registry)))
+                throw new InvalidOperationException("断线捕获需要同目录一至八个不同账号角色");
+            if (executingGroup is not null || executing is not null || pairFirst is not null)
+                throw new InvalidOperationException("断线捕获不能从已持owner锁升级或重入");
+            var ordered = members.OrderBy(m => m.Owner.Account, StringComparer.Ordinal).ToArray();
+            var states = ordered.Select(m => m.Owner.State).ToArray();
+            int held = 0;
+            try
+            {
+                foreach (var state in states)
+                {
+                    if (!Monitor.TryEnter(state.Gate)) return false;
+                    held++;
+                }
+                if (ordered.Any(m => !m.Owner.IsCurrent)) return false;
+                executingGroup = states;
+                result = action();
+                return true;
+            }
+            finally
+            {
+                executingGroup = null;
+                for (int i = held - 1; i >= 0; i--) Monitor.Exit(states[i].Gate);
+            }
+        }
+
         static T ExecuteFixedGroup<T>(IReadOnlyList<(Lease Owner, ushort Character)> members, Func<T> action, int minimum, int maximum)
         {
             if (members.Count < minimum || members.Count > maximum || members.Any(m => m.Character == 0) ||

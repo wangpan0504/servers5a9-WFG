@@ -40,13 +40,25 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     ImperialArenaProjection? imperialArena = null,
     DfoServer.Game.Dungeons.DungeonBattleLevelSettings? monsterBattleLevels = null,
     DfoServer.Game.Dungeons.DungeonMonsterAiSettings? monsterAi = null,
-    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null) : IConnectionProtocol
+    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
+    DfoServer.Game.Raids.LukeRaidRejoin? lukeRejoin = null) : IConnectionProtocol
 {
+    // 断线诊断不得阻止剩余原清理，包括诊断后端自身失败；不以日志成功作为登记成功。
+    void LogLukeDisconnect(string kind, object detail)
+    {
+        try { log.Write(kind, detail); }
+        catch (Exception) { }
+    }
+
     // 同一服务端进程内所有频道共享：记录账号上一次选角的频道类型，供原生换频道判断客户端快照。
     readonly ChannelHistory channelHistory = new();
 
     public async Task RunAsync(ConnectionContext connection)
     {
+        DfoServer.Game.Raids.AntonRaidDisconnectFact? lukeDisconnect = null;
+        // 外层finally在sender和login/owner释放之后执行；不改变原会话清理顺序。
+        try
+        {
         using var login = await loginHandler.AuthenticateAsync(connection);
         if (login is null)
             return;
@@ -317,6 +329,21 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await altar.DisposeAsync();
             await lostLand.DisposeAsync();
             if (context.LukePhaseExit is { } lukeExit) await lukeExit.DisposeAsync();
+            // 此处不持本人owner；在普通队伍/团名册/Session移除前冻结原身份。
+            if (lukeRejoin is not null)
+            {
+                try
+                {
+                    lukeDisconnect = lukeRejoin.TryCaptureForDisconnect(session, out string reason);
+                    if (reason == "owner-busy-or-stale")
+                        LogLukeDisconnect("raid_rejoin_candidate", new { Connection = connection.Id, RaidType = "Luke",
+                            Recorded = false, Reason = reason, Recovery = "wire-withheld" });
+                }
+                catch (Exception error)
+                {
+                    LogLukeDisconnect("raid_rejoin_candidate_failed", new { Connection = connection.Id, Stage = "capture", Reason = error.GetType().Name });
+                }
+            }
             online.RemoveConnection(connection.Id, session);
             await PartyDungeonProjection.DetachAsync(context);
             parties?.Detach(session);
@@ -327,6 +354,24 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             context.Activity?.Reset();
             session.End();
             // 随后的 await using 先停止发送泵，再由 login 释放精确 owner。
+        }
+        }
+        finally
+        {
+            if (lukeDisconnect is not null && lukeRejoin is not null)
+            {
+                try
+                {
+                    bool recorded = lukeRejoin.TryRecordDisconnected(lukeDisconnect, out string reason);
+                    LogLukeDisconnect("raid_rejoin_candidate", new { Connection = connection.Id, Self = lukeDisconnect.Character,
+                        RaidType = "Luke", lukeDisconnect.Instance, lukeDisconnect.Slot, lukeDisconnect.Squad,
+                        Recorded = recorded, Reason = reason, Recovery = "wire-withheld" });
+                }
+                catch (Exception error)
+                {
+                    LogLukeDisconnect("raid_rejoin_candidate_failed", new { Connection = connection.Id, Stage = "record", Reason = error.GetType().Name });
+                }
+            }
         }
     }
 }
