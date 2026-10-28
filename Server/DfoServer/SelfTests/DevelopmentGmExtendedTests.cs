@@ -198,8 +198,11 @@ internal static class DevelopmentGmExtendedTests
             Load().Inventory.Items.Where(item => item.Core.ItemId == 18400).Select(item => item.Core.Value).OrderBy(value => value)
                 .SequenceEqual([999_999_930, 999_999_998]), "100 品级使用最上级常量，未指定沿用默认");
         TestCheck.That(new[] { "grant Other 18400 1 0 0 direct quality:0", "grant Other 18400 1 0 0 direct quality:101",
-            "grant Other 3175 1 0 0 direct quality:50", "grant Other 18400 1 0 0 direct quality:50 quality:60" }
-            .All(line => Answer(line).StartsWith("ERR ")), "品级范围、非装备与重复参数拒绝");
+            "grant Other 18400 1 0 0 direct quality:50 quality:60", "grant Other 3175 1 0 0 direct quality:0",
+            "grant Other 3175 1 0 0 mail quality:101" }
+            .All(line => Answer(line).StartsWith("ERR ")), "品级范围与重复参数拒绝");
+        TestCheck.That(Answer("grant Other 3175 2 0 0 mail quality:100").StartsWith("OK ") &&
+            Answer("grant Other 3175 2 0 0 direct quality:100").StartsWith("OK "), "旧版请求附带品级时非装备邮件和直接发放成功");
         TestCheck.That(Answer("grant Other 18400 1 0 0 mail quality:50").StartsWith("OK "), "邮件发放可带品级");
         // 可选参数叠加：amp + quality + period:off 一共 8 个参数，不能被命令行参数上限挡掉。
         var stacked = Json(Answer("grant Other 18400 1 6 0 direct amp:3:120 quality:50 period:off"));
