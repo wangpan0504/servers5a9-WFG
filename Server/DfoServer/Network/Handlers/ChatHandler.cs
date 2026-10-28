@@ -51,6 +51,15 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
 
     async Task<CommandResult> SendAsync(GameConnectionContext context, Packet packet)
     {
+        // 预留scene机器包在宽松解码、具名私聊、正文日志和任何广播之前隔离。
+        // 即使未安装/未启用scene模块也不能把机器回执投递给玩家；不响应、不协商、不执行领域操作。
+        if (LukeSceneReservedRequests.TryRead(packet.Body, out var sceneStatus, out _))
+        {
+            if (context.Session.AllowChatSend())
+                log.Write("luke_scene_reserved", new { Connection = context.Id, Status = sceneStatus.ToString() });
+            return CommandResult.Handled;
+        }
+
         if (!ChatRequests.TryParse(packet.Body, out var send))
             return CommandResult.Unhandled;
 

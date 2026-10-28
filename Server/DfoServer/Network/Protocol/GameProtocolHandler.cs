@@ -224,7 +224,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 if (loginPacket)
                     throw new InvalidDataException("Login already completed on this connection");
                 string name = ((CmdPacketType)request.Opcode).ToString();
-                string body = PacketCapture.IsSensitiveCommand(request.Opcode) ? PacketCapture.RedactedCommandBody(request.Opcode) : Convert.ToHexString(request.Body);
+                string body = PacketCapture.ReceivedCommandBody(request.Opcode, request.Body);
                 // 收包只记录一次：忙锁重试重放的是本包分派与刷新，不重复收包日志。
                 // 保活包每 10 秒一次，逐包 recv/send 会刷屏：由 KeepaliveHandler 每连接每 60 秒汇总一条 keepalive。
                 if (!KeepaliveHandler.IsKeepalive(request.Opcode))
