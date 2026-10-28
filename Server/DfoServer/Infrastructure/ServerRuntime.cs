@@ -300,6 +300,7 @@ internal static class ServerRuntime
             lukeObjectRooms, lukeStartPolicy?.Run is { Mazes.IsDefaultOrEmpty: false } objectPolicy
                 ? objectPolicy.Mazes.Where(row => row.Phase == 0).Select(row => (row.Dungeon, row.MazeOrdinal)).ToArray() : null,
             antonMapPath: GameWorld.Raids.AntonRaidMapPaths.Bind(dungeonCatalog.MapPath),
+            antonMapPoolPaths: GameWorld.Raids.AntonRaidMapPaths.Paths,
             lukeResourceChoices: lukeStartPolicy?.Run?.FixedRouteOptions is { } routeOptions
                 ? entry => Game.Raids.LukeFixedCardRoute.ResourceChoices(routeOptions, entry) : null);
         if (raidCatalog.Find(1)?.Resources?.LukeObjects is { Issues.IsEmpty: false } objectEvidence)
@@ -318,7 +319,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Raid start settings", State = "complete", raidSettings.StartMinimumOverride,
             raidSettings.AntonFormalEntryEnabled, raidSettings.AntonPhaseProgressEnabled, raidSettings.AntonRejoinEnabled,
             Reason = raidSettings.AntonFormalEntryEnabled ? "anton-entry-enabled-resource-gates-required" : "anton-entry-waiting-client-resources",
-            PhaseProgress = raidSettings.AntonPhaseProgressEnabled ? "anton-phase-progress-enabled-timer-unit-unknown" : "anton-phase-progress-disabled",
+            PhaseProgress = raidSettings.AntonPhaseProgressEnabled ? "anton-phase-progress-enabled-local-seconds" : "anton-phase-progress-disabled",
             Rejoin = raidSettings.AntonRejoinEnabled ? "rejoin-recovery-sequence-unknown" : "anton-rejoin-disabled",
             AntonStartMinimum = raidCatalog.Find(0)?.StartMinimum, LukeStartMinimum = raidCatalog.Find(1)?.StartMinimum });
         lukeStartPolicy = Game.Raids.LukeResourceCompletion.Resolve(lukeStartPolicy, raidCatalog.Find(1), itemResources.Items);
@@ -334,8 +335,12 @@ internal static class ServerRuntime
             ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, antonCatalog, raidSettings.AntonFormalEntryEnabled) : null;
         if (!raidSettings.AntonFormalEntryEnabled)
             log.Write("resource_warning", new { Source = "Anton formal entry", Reason = "anton-entry-waiting-client-resources" });
-        var lukeTimers = lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
+        var lukeTimers = !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }));
+        var antonRewards = raidSettings.AntonPhaseProgressEnabled && raidCatalog.Find(0)?.Resources?.Script is { } antonScript
+            ? new Game.Raids.AntonResourceRewards(antonScript, itemResources.Items) : null;
+        // 启动时解析全部奖励模板，避免开战持owner锁时首次读取PVF。
+        if (antonRewards is not null) _ = antonRewards.Create(false);
         var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items, lukeTimers);
         if (lukeStart?.UnavailableReason(raidCatalog.Find(1)) is { } unavailable)
         {
@@ -351,7 +356,7 @@ internal static class ServerRuntime
             lukeRun = null;
         }
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
-            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled), lukeStart, antonRejoin);
+            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards, raidSettings.AntonPhaseProgressEnabled ? lukeTimers : null), lukeStart, antonRejoin);
         if (raidSettings.AntonRejoinEnabled)
             log.Write("resource_warning", new { Source = "Anton raid rejoin", Reason = "rejoin-recovery-sequence-unknown" });
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);

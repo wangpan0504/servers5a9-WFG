@@ -31,12 +31,13 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if (Kind != RaidKind.Luke || lease.Battle != this || lease.IsStopped || lukeClockLease is not null || members.Count == 0)
+            if ((Kind != RaidKind.Luke && !HasAntonRewards) || lease.Battle != this || lease.IsStopped || lukeClockLease is not null || members.Count == 0)
             { lease.Dispose(); return; }
             lukeClockLease = lease; lukeClockActive = true;
             // 构造Battle发生在费用SQL之前；初始SET从实际提交后的激活时刻起算。
             long now = lukeClock.GetTimestamp();
-            current = current with { TimerAnchors = current.Timers.Keys.ToImmutableDictionary(timer => timer, _ => now) };
+            current = current with { TimerAnchors = current.Timers.Keys.ToImmutableDictionary(timer => timer, _ => now),
+                DeferredAnchors = current.Deferred.Keys.ToImmutableDictionary(token => token, _ => now) };
             AnchorLukePhaseLocked();
             ScheduleLukeClockLocked();
         }
@@ -67,7 +68,7 @@ internal sealed partial class AntonRaidBattle
         if (!lukeClockActive || lukeClockLease is not { IsStopped: false } lease) return;
         if (members.Count == 0 || current.State == AntonRaidBattleState.Completed)
         { lease.Dispose(); return; }
-        if (lease.RetryRemaining is { } retryDelay && PendingLukeSettlement() is not null)
+        if (lease.RetryRemaining is { } retryDelay && (PendingLukeSettlement() is not null || PendingAntonSettlement() is not null))
         { lease.Schedule(retryDelay); return; }
         // 正常请求可能先恢复原候选；旧退避不能继续压住下一phase的新SET。
         lease.SetRetry(null);
@@ -81,6 +82,14 @@ internal sealed partial class AntonRaidBattle
             if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
             if (earliest is null || remaining < earliest) earliest = remaining;
         }
+        if (Kind == RaidKind.Anton)
+            foreach (var action in current.Deferred.Where(row => row.Value.Tag == "[reserve dungeon state]"))
+            {
+                if (!current.DeferredAnchors.TryGetValue(action.Key, out long anchor)) continue;
+                var remaining = TimeSpan.FromSeconds(action.Value.RawIntegers[^1]) - lukeClock.GetElapsedTime(anchor);
+                if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
+                if (earliest is null || remaining < earliest) earliest = remaining;
+            }
         lease.Schedule(earliest ?? Timeout.InfiniteTimeSpan);
     }
 
@@ -92,6 +101,11 @@ internal sealed partial class AntonRaidBattle
                 pendingTransition is not null || TerminalRequested(current)) return false;
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。
             var before = current;
+            if (Kind == RaidKind.Anton)
+            {
+                ExpireDueAntonClockLocked();
+                return !ReferenceEquals(before, current);
+            }
             if (LukePhaseDueLocked())
             {
                 current = current with { PhaseExpired = true, Revision = current.Revision + 1,

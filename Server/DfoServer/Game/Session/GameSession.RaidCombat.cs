@@ -88,27 +88,39 @@ internal sealed partial class GameSession
 
     public RaidResultDisplay? RaidCombatResult(AntonRaidBattleView view) => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent && raid.Battle.IsCurrent(view)
-            ? raid.Battle.RewardPolicy(raid.Actor, view.Phase)?.Result : null);
+            ? raid.Battle.RewardPolicy(raid.Actor, view.Phase) is { PublishResult: true } policy ? policy.Result : null : null);
 
     public bool CanPublishRaidBattle(RaidActor actor, AntonRaidBattleView view) => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor == actor && actor.IsCurrent && raid.Battle.IsCurrent(view));
 
     // 117协调已提交死亡，不能由695、客户端symbol或复制的ClearFact创建阶段胜利。
-    public AntonRaidBattleChange? CompleteRaidCombatDungeon(FormalDungeonReceipt receipt) => owner.Execute(() =>
+    public AntonRaidBattleChange? CompleteRaidCombatDungeon(FormalDungeonReceipt receipt)
     {
-        if (raidCombat is not { } raid || raid.Battle.Kind == RaidKind.Luke || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
-            receipt.Generation != owner.Generation || receipt.SelectionEpoch != SelectionEpoch ||
-            receipt.Snapshot.Identity != dungeon.Run.Snapshot.Identity || dungeon.Run.ClearFact is not { } fact ||
-            fact.Identity != receipt.Snapshot.Identity || !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap)) return null;
-        int? week = DungeonIncountPolicy.Period((timeProvider ?? TimeProvider.System).GetUtcNow()).Week;
-        var change = raid.Battle.CompleteDungeon(fact, week) ?? raid.Battle.CompleteAntonReservedDungeon(fact, week);
-        if (change?.After.State == AntonRaidBattleState.Reward)
-            raid.RewardWeek ??= DungeonIncountPolicy.Period((timeProvider ?? TimeProvider.System).GetUtcNow()).Week;
-        return change;
-    });
+        var completedChange = owner.Execute<AntonRaidBattleChange?>(() =>
+        {
+            if (raidCombat is not { } raid || raid.Battle.Kind == RaidKind.Luke || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
+                receipt.Generation != owner.Generation || receipt.SelectionEpoch != SelectionEpoch ||
+                receipt.Snapshot.Identity != dungeon.Run.Snapshot.Identity || dungeon.Run.ClearFact is not { } fact ||
+                fact.Identity != receipt.Snapshot.Identity || !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap)) return null;
+            int? week = DungeonIncountPolicy.Period((timeProvider ?? TimeProvider.System).GetUtcNow()).Week;
+            var change = raid.Battle.CompleteDungeon(fact, week) ?? raid.Battle.CompleteAntonReservedDungeon(fact, week);
+            // 忙锁重试117时清图事实已封存；继续提交同一候选，不让重放只回115而遗失Reward。
+            if (change is null && raid.Battle.PendingAntonSettlement() is not null)
+            { var pending = raid.Battle.View; change = new(pending, pending); }
+            if (change?.After.State == AntonRaidBattleState.Reward)
+                raid.RewardWeek ??= DungeonIncountPolicy.Period((timeProvider ?? TimeProvider.System).GetUtcNow()).Week;
+            return change;
+        });
+        if (completedChange is null) return null;
+        CommitPendingAntonPhase();
+        return new(completedChange.Before, RaidCombatView() ?? completedChange.After);
+    }
 
-    public AntonRaidBattleChange? CompleteCurrentRaidCombatDungeon() => owner.Execute(() =>
-        formalDungeon?.Run.ClearFact is not null ? CompleteRaidCombatDungeon(FormalReceipt()) : null);
+    public AntonRaidBattleChange? CompleteCurrentRaidCombatDungeon()
+    {
+        var receipt = owner.Execute(() => formalDungeon?.Run.ClearFact is not null ? FormalReceipt() : null);
+        return receipt is null ? null : CompleteRaidCombatDungeon(receipt);
+    }
 
     // 纯生命周期writer在自身owner短读取之后执行，不在本分队owner/Battle/Party领域锁内扩锁或等待SQL。
     internal bool CommitPendingLukePhase(ILukeRaidLifecycleStore store)
@@ -128,6 +140,7 @@ internal sealed partial class GameSession
 
     public void PublishRaidCombat()
     {
+        CommitPendingAntonPhase();
         var battle = owner.Execute(() => raidCombat?.Battle);
         battle?.Publish(battle.View);
     }
@@ -135,6 +148,7 @@ internal sealed partial class GameSession
     public RaidRewardReceipt? ClaimRaidReward(byte kind, byte card, IRaidRewardStore store,
         ItemCatalog items, GoldLimitCatalog gold, EpicPieceCatalog pieces, DateTimeOffset now)
     {
+        CommitPendingAntonPhase();
         var capture = owner.Execute(() =>
         {
             if (!Ready || Selected is not { } character || raidCombat is not { } raid || !raid.Actor.IsCurrent ||
@@ -147,8 +161,9 @@ internal sealed partial class GameSession
                 var old = raid.Receipts.Where(r => r.Key.Kind == kind).Select(r => r.Value).MaxBy(r => r.Prepared.Phase);
                 return old is not null && old.Prepared.Card == card ? new RaidRewardCapture(raid, character, old.Prepared, old.Offer, old) : null;
             }
-            var eligibility = raid.Battle.Kind == RaidKind.Luke ? raid.Battle.LukeEligibility(character.Id, phase) : null;
-            if (raid.Battle.Kind == RaidKind.Luke && eligibility is not { Eligible: true }) return null;
+            var eligibility = raid.Battle.Kind == RaidKind.Luke ? raid.Battle.LukeEligibility(character.Id, phase) :
+                raid.Battle.HasAntonRewards ? raid.Battle.AntonEligibility(character.Id, phase) : null;
+            if ((raid.Battle.Kind == RaidKind.Luke || raid.Battle.HasAntonRewards) && eligibility is not { Eligible: true }) return null;
             var policy = raid.Battle.RewardPolicy(raid.Actor, phase);
             var offer = policy?.Offers.SingleOrDefault(o => o.Kind == kind && o.Card == card);
             if (offer is null) return null;

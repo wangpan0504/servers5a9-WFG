@@ -1721,7 +1721,7 @@ CREATE INDEX IF NOT EXISTS character_raid_rewards_week ON character_raid_reward_
 CREATE TABLE character_raid_runs(
     character_id INTEGER NOT NULL, account TEXT NOT NULL,
     instance_id TEXT NOT NULL CHECK(length(instance_id)=32 AND instance_id NOT GLOB '*[^0-9a-f]*' AND instance_id<>'00000000000000000000000000000000'),
-    raid_type INTEGER NOT NULL CHECK(raid_type=1),
+    raid_type INTEGER NOT NULL CHECK(raid_type IN(0,1)),
     source TEXT NOT NULL CHECK(length(source)>0), admitted_at INTEGER NOT NULL CHECK(admitted_at>=0),
     state INTEGER NOT NULL CHECK(state IN(0,1,2)),
     phase0_event TEXT, phase0_anchor INTEGER, phase0_receipt TEXT,

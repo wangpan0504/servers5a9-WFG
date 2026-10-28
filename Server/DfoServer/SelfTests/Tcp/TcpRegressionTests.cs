@@ -7,6 +7,11 @@ internal static class TcpRegressionTests
 {
     static readonly (string Name, Func<ServerOptions, string, TcpTestResources, Task> Run)[] Groups =
     [
+        ("anton-raid-reward-formal", (_, _, resources) =>
+        {
+            AntonResourceRewardTests.Run(resources);
+            return Task.CompletedTask;
+        }),
         ("quest-stage-growth", async (options, root, resources) =>
         {
             QuestStagePolicyTests.RunResources(resources);

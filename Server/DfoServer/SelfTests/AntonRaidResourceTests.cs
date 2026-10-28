@@ -13,8 +13,8 @@ internal static class AntonRaidResourceTests
     public static void RunCore()
     {
         int before = Count;
-        That(AntonRaidMapPaths.Paths.Count == 72 && AntonRaidMapPaths.Paths.Values.Distinct().Count() == 72,
-            "安徒恩只读增量限定72个唯一MAP登记");
+        That(AntonRaidMapPaths.Paths.Count == 73 && AntonRaidMapPaths.Paths.Values.Distinct().Count() == 73,
+            "安徒恩只读增量限定73个唯一MAP登记，包含已证219起点19206");
         string existingMap = "Map\\210_Close_Blacksmoke\\(0,0)32200_start.map";
         var mapPath = AntonRaidMapPaths.Bind(id => id == 32200 ? existingMap : id == 1 ? "map/lorien/s0.map" : null);
         That(mapPath(32200) == existingMap && mapPath(32204) == AntonRaidMapPaths.Paths[32204] &&
@@ -168,7 +168,7 @@ internal static class AntonRaidResourceTests
             resources.Dungeons[0].MapIds.SequenceEqual(new[] { 32200, 32202, 32201, 32204 }) && !dungeons.ContainsDungeon(210),
             "真实主表缺14DGN/72MAP、备用脚本存在，检查不污染正式目录");
         var registered = catalog.PrepareResources(pvf, dungeons, items,
-            antonMapPath: AntonRaidMapPaths.Bind(dungeons.MapPath)).Find(0)!.Resources!;
+            antonMapPath: AntonRaidMapPaths.Bind(dungeons.MapPath), antonMapPoolPaths: AntonRaidMapPaths.Paths).Find(0)!.Resources!;
         That(registered.MissingFormalMaps.IsEmpty && registered.EntryCatalog is { Ready: true, MissingMaps.IsEmpty: true } &&
             registered.MissingFormalDungeons.SequenceEqual(resources.MissingFormalDungeons) &&
             registered.Dungeons.All(row => registered.EntryCatalog.Find(row.Id) is not null) &&

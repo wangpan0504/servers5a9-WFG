@@ -115,7 +115,7 @@ internal sealed partial class GameSession
         if (sharedEntry is not null && sharedEntry.RaidEntry != identity)
             return RejectFormal(prefix + "-entry-squad-mismatch");
         if (!DungeonEntryPlan.TryCreate(definition, character, dungeonId, 0, difficulty, out var entry, out string reason,
-            draw: draw, resolveMaze: maze => admission.Catalog.ResolveMaze(maze, draw), partyRoute: sharedEntry, raid: controlled ? identity : null, raidMaze: selected?.MazeOrdinal))
+            draw: draw, resolveMaze: maze => admission.Catalog.ResolveMaze(definition, maze, draw), partyRoute: sharedEntry, raid: controlled ? identity : null, raidMaze: selected?.MazeOrdinal))
             return RejectFormal(prefix + "-entry-plan:" + reason);
         entry = entry! with
         {

@@ -27,7 +27,7 @@ internal static class RaidResourceLoader
     internal const string TutorialListPath = "dungeon/tutorial/dungeon.lst";
 
     public static RaidResources Load(PvfArchive pvf, RaidDefinition raid, DungeonCatalog dungeons, ItemCatalog items,
-        Func<int, string?>? mapPath = null)
+        Func<int, string?>? mapPath = null, IReadOnlyDictionary<int, string>? supplementalMaps = null)
     {
         mapPath ??= dungeons.MapPath;
         var script = RaidScriptParser.Parse(raid.Path, pvf.ReadTokens(raid.Path),
@@ -46,7 +46,7 @@ internal static class RaidResourceLoader
         var result = Check(script, tutorial, dungeons.DungeonPath, mapPath, pvf.Contains,
             pvf.ReadTokens, pvf.ResolveString, ItemExists);
         result = result with { Issues = result.Issues.AddRange(issues) };
-        return raid.Type is 0 or 1 ? result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, mapPath, raid.Type) } : result;
+        return raid.Type is 0 or 1 ? result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, mapPath, raid.Type, supplementalMaps) } : result;
 
         bool ItemExists(int id)
         {

@@ -22,9 +22,15 @@ internal static class RaidCombatProjection
         if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } luke)
             PostLukeSnapshot(context, luke, view, Guard);
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)
+        {
+            // 218 clear后的HP0等SET是资源明示事实，沿583已证symbol读宽同步。
+            if (anton.HasAntonRewards)
+                context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
+                    RaidCombatPackets.Symbols(anton.SymbolSnapshot(view)), "raid_symbol_snapshot", Guard);
             foreach (var row in anton.DungeonSnapshot(view))
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
                     RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_state", Guard);
+        }
         if (view.PhaseExpired)
         {
             context.LukePhaseExit?.Notice(view, actor);

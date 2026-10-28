@@ -111,6 +111,9 @@ internal sealed partial class AntonRaidBattle
         if (Kind == RaidKind.Luke && lukeCompletion is not null)
             return lukePhaseCommits.TryGetValue(phase, out var committed) && committed.Members.Where(row => row.Eligible)
                 .All(row => row.Offers.Select(offer => offer.Kind).Distinct().All(kind => rewards.Contains((row.Character, phase, kind))));
+        if (Kind == RaidKind.Anton && antonRewards is not null)
+            return antonPhaseCommits.TryGetValue(phase, out var antonCommitted) && antonCommitted.Where(row => row.Eligible)
+                .All(row => row.Offers.Select(offer => offer.Kind).Distinct().All(kind => rewards.Contains((row.Character, phase, kind))));
         return members.All(member => member.Value[phase].Offers.Select(offer => offer.Kind).Distinct()
             .All(kind => rewards.Contains((member.Key.Character, phase, kind))));
     }
