@@ -43,6 +43,14 @@ internal sealed partial class GameSession
 
     internal bool HasLukeRaidSelection => CurrentDungeonSelection?.Raid?.Admission.Kind == RaidKind.Luke;
     internal bool HasFormalRaidSelection => CurrentDungeonSelection?.Raid is not null;
+    internal FormalDungeonReceipt? ReplayAntonLoading(int dungeon) => owner.Execute(() =>
+        Ready && Phase == SessionPhase.Loading && formalDungeon is { } run &&
+        run.Entry.DungeonId == dungeon && run.Run.LastLoadingFact is null &&
+        run.Entry.StartMap == run.Run.Snapshot.CurrentMap &&
+        run.Entry.RaidEntry is { Kind: RaidKind.Anton } identity &&
+        StartedRaid?.InstanceId == identity.InstanceId && IsCurrentRaidDungeon(run.Entry) &&
+        raidDungeonAdmission!.Allows(dungeon) ? FormalReceipt() : null);
+
     internal void CancelRaidDungeonSelection(PartyDungeonNotice[] selections)
     {
         // 仅清本次选择令牌；事务成功安装的Run和后来建立的选择均不回滚。

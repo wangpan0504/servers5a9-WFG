@@ -94,12 +94,18 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             {
                 using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
                 if (entry.DungeonIndex <= int.MaxValue)
-                    selected = antonRaid.Select(context.Session, (int)entry.DungeonIndex, party, out reason);
+                    selected = antonRaid.Select(context.Session, (int)entry.DungeonIndex, party, out reason,
+                        replayLoading: context.Session.Phase == SessionPhase.Loading);
             }
             log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length != 0, Party = true,
-                RaidType = 0, Dungeon = entry.DungeonIndex, Members = selected.Length, RejectReason = reason, MissingMaps = antonRaid.MissingMaps });
+                RaidType = 0, Replay = selected.Any(notice => notice.Kind == DfoServer.Game.Dungeons.PartyDungeonNoticeKind.LoadingReplay),
+                Dungeon = entry.DungeonIndex, Members = selected.Length, RejectReason = reason, MissingMaps = antonRaid.MissingMaps });
             if (selected.Length == 0)
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "anton_selection_rejected");
+            else if (selected is [{ Kind: DfoServer.Game.Dungeons.PartyDungeonNoticeKind.LoadingReplay, Scene: { } antonReplay }])
+                // 与首次party_selection_opened及普通continuation.Replay分支相同的ACK15；不重发选图状态/27。
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "anton_loading_selection_replay",
+                    () => context.Session.CanPublishFormalDungeon(antonReplay));
             else await PartyDungeonProjection.PublishAsync(selected);
             return CommandResult.Handled;
         }
