@@ -428,10 +428,13 @@ internal sealed partial class GameSession
     public bool CanPublishDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed: true, CardsShown: true, SelectedCard: not null });
 
+    public bool CanPublishPartyCards(FormalDungeonReceipt receipt) => owner.Execute(() =>
+        MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed: true });
+
     public DungeonCardView? FormalCardState(FormalDungeonReceipt receipt) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed:true } settlement
             ? new DungeonCardView(settlement.Pending.Options,settlement.SelectedCard is not null,settlement.Paid)
-                { Slot = formalDungeon.PartySlot } : null);
+                { Slot = formalDungeon.PartySlot, Free = settlement.Card } : null);
 
     public bool CanPublishCardView(FormalDungeonReceipt receipt,DungeonCardView view) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed:true,CardsShown:true } settlement &&

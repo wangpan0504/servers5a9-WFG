@@ -232,6 +232,27 @@ internal static class DungeonSettlementProtocolTests
         var reward = new DungeonClearExperienceReward(130, 19, 149, 3, "fixture", "fixture");
         var free = new DungeonCardReward(123, null, "fixture", "fixture", 1);
         var bonus = new DungeonCardReward(456, null, "fixture", "fixture", 1);
+        var cards = new DungeonCardView?[8];
+        cards[1] = new(null, true, bonus) { Slot = 1, Free = bonus };
+        cards[3] = new(null, false, null) { Slot = 3, Free = free };
+        var firstRun = new PartySettlementCards();
+        var secondRunWithSameSeed = new PartySettlementCards();
+        firstRun.Record(cards[1]!);
+        That(firstRun.Snapshot()[1] == cards[1] && secondRunWithSameSeed.Snapshot()[1] is null,
+            "同地图种子的不同队伍实例不共享牌面");
+        var oldSnapshot = firstRun.Snapshot();
+        oldSnapshot[1] = null;
+        That(firstRun.Snapshot()[1] == cards[1], "实例快照不能修改原始牌面");
+        firstRun.Clear();
+        That(firstRun.Snapshot().All(card => card is null), "结算结束后释放全部已记录席位");
+        var original = DungeonSettlementPackets.CardReward(reward, 1200, free);
+        var combined = DungeonSettlementPackets.PartyCardReward(original, 0, cards);
+        That(combined.Length == original.Length + 8 && combined[156] == 1 && U32(combined, 161) == 123 &&
+            combined[165] == 1 && U32(combined, 170) == 456 && combined[174] == 0 && combined[175] == 0,
+            "35聚合已翻免费牌，未翻席保持空，费用和尾段整体平移");
+        var reveal = DungeonSettlementPackets.CardSelected(new DungeonCardView(null, true, null) { Slot = 0 }, cards);
+        That(reveal[1] == 0 && reveal[5] == 1 && reveal[13] == 255 && reveal[6] == 255,
+            "71揭示已翻原席，不公开队友付费牌");
         foreach (byte slot in new byte[] { 0, 1, 3, 7 })
         {
             var rights = DungeonSettlementPackets.CardRights(87, slot);
@@ -259,14 +280,14 @@ internal static class DungeonSettlementProtocolTests
             for (int member = 0; member < 8; member++)
             {
                 bool own = member == slot;
-                That(selected.ReadByte() == (own ? 0 : 255) && selected.ReadByte() == (own ? 0 : 255) &&
+                That(selected.ReadByte() == (own ? slot : 255) && selected.ReadByte() == (own ? slot : 255) &&
                     selected.ReadByte() == (own ? 1 : 0), "71只揭示本人原始席位，不占用队长席");
                 if (own) That(selected.ReadUInt32() == 0 && selected.ReadUInt32() == 456, "付费候选携带本人完整金币");
                 That(selected.ReadByte() == 0, "71成员尾标志保留零");
             }
             That(selected.BaseStream.Position == selected.BaseStream.Length, "71完整消费八席动态正文");
             var onlyFree = DungeonSettlementPackets.FreeCardSelected(slot);
-            That(Enumerable.Range(0, 8).All(i => onlyFree[1 + i * 4] == (i == slot ? 0 : 255) && onlyFree[2 + i * 4] == 255),
+            That(Enumerable.Range(0, 8).All(i => onlyFree[1 + i * 4] == (i == slot ? slot : 255) && onlyFree[2 + i * 4] == 255),
                 "仅免费翻牌同样按本人原始槽位确认");
         }
     }

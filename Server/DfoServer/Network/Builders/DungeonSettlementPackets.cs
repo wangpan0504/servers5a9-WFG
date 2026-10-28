@@ -222,15 +222,16 @@ internal static class DungeonSettlementPackets
             body[1 + index * 4] = byte.MaxValue;
             body[2 + index * 4] = byte.MaxValue;
         }
-        body[1 + slot * 4] = 0;
+        body[1 + slot * 4] = slot;
         // 免费牌从NOTI35预载，ACK71只揭示本人免费席；未开放的付费席保持FF。
         return body;
     }
 
-    public static byte[] CardSelected(DungeonCardView view)
+    public static byte[] CardSelected(DungeonCardView view, IReadOnlyList<DungeonCardView?>? partyCards = null)
     {
         if (view.Slot >= 8) throw new ArgumentOutOfRangeException(nameof(view));
-        if (view.Paid is null && view.FreeSelected) return FreeCardSelected(view.Slot);
+        if (partyCards is not null && partyCards.Count != 8) throw new ArgumentException("队伍牌面必须包含八席", nameof(partyCards));
+        if (partyCards is null && view.Paid is null && view.FreeSelected) return FreeCardSelected(view.Slot);
         var paidItems = view.Paid is null ? [] : Display(view.Paid);
         int count = paidItems.Count;
         byte[] body = new byte[33+count*8];
@@ -238,8 +239,8 @@ internal static class DungeonSettlementPackets
         int at = 1;
         for (int slot = 0; slot < 8; slot++)
         {
-            body[at++] = slot == view.Slot && view.FreeSelected ? (byte)0 : byte.MaxValue;
-            body[at++] = slot == view.Slot && view.Paid is not null ? (byte)0 : byte.MaxValue;
+            body[at++] = (slot == view.Slot ? view.FreeSelected : partyCards?[slot]?.FreeSelected == true) ? (byte)slot : byte.MaxValue;
+            body[at++] = slot == view.Slot && view.Paid is not null ? view.Slot : byte.MaxValue;
             body[at++] = slot == view.Slot ? checked((byte)count) : (byte)0;
             if (slot == view.Slot)
                 foreach (var item in paidItems) Pair(item.Id, item.Count);
@@ -252,6 +253,37 @@ internal static class DungeonSettlementPackets
             BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at+4),amount);
             at += 8;
         }
+    }
+
+    public static byte[] PartyCardReward(byte[] original, byte ownSlot, IReadOnlyList<DungeonCardView?> cards)
+    {
+        if (ownSlot >= 8 || cards.Count != 8) throw new ArgumentOutOfRangeException(nameof(ownSlot));
+        int start = checked(156 + (int)BinaryPrimitives.ReadUInt32LittleEndian(original.AsSpan(151)) * 8);
+        int end = start;
+        var seats = new byte[8][];
+        for (int slot = 0; slot < 8; slot++)
+        {
+            int length = checked(1 + original[end] * 8);
+            seats[slot] = original.AsSpan(end, length).ToArray();
+            end += length;
+            if (slot != ownSlot && cards[slot] is { FreeSelected: true, Free: { } reward })
+            {
+                var items = Display(reward);
+                seats[slot] = new byte[1 + items.Count * 8];
+                seats[slot][0] = checked((byte)items.Count);
+                for (int index = 0; index < items.Count; index++)
+                {
+                    BinaryPrimitives.WriteUInt32LittleEndian(seats[slot].AsSpan(1 + index * 8), items[index].Id);
+                    BinaryPrimitives.WriteUInt32LittleEndian(seats[slot].AsSpan(5 + index * 8), items[index].Count);
+                }
+            }
+        }
+        byte[] result = new byte[start + seats.Sum(seat => seat.Length) + original.Length - end];
+        original.AsSpan(0, start).CopyTo(result);
+        int at = start;
+        foreach (var seat in seats) { seat.CopyTo(result, at); at += seat.Length; }
+        original.AsSpan(end).CopyTo(result.AsSpan(at));
+        return result;
     }
 
     public static byte[] ResultCommand(byte state, byte option) => [1, state, option];

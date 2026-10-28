@@ -6,9 +6,14 @@ using DfoServer.Network.Builders;
 
 namespace DfoServer.Network.Protocol;
 
+internal sealed record PartyCardTemplate(DfoServer.Game.Dungeons.PartyDungeonInstance Instance,
+    DfoServer.Game.Dungeons.FormalDungeonReceipt Receipt, byte[] Body);
+
 internal sealed class GameConnectionContext(ConnectionContext connection, AccountOwners.Lease owner, GameSession session, GameConnectionSender sender,
     IGameConnectionActivity? activity = null, ChannelIdentity channel = default)
 {
+    internal PartyCardTemplate? PartyCardTemplate { get; set; }
+    internal Action? AfterDispatch { get; set; }
     public DfoServer.Network.Projection.PartyDirectoryProjection? PartyDirectory { get; set; }
     // 仅记录本连接实际写出的攻坚展示，不拥有玩法状态；断线/新连接自然失效。
     internal DfoServer.Network.Projection.RaidCombatDisplayIdentity? RaidDisplay { get; set; }
