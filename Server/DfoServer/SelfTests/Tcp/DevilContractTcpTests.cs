@@ -225,8 +225,8 @@ internal static class DevilContractTcpTests
             SetPcRoom(true, blackDiamond: true);
             SetBlackDiamond(0, active: false, pcRoom: true);
             FormalDungeonTcpTests.Enter(peer);
-            FormalDungeonTcpTests.Load(peer);
-            Return(peer); peer.Barrier();
+            FormalDungeonTcpTests.Load(peer, pcRoom: true);
+            Return(peer, pcRoom: true); peer.Barrier();
             That(fixture.Query("SELECT stamina_until FROM characters") is [[0L]],
                 "只有全局网吧资格时真实42退图免虚弱，不需要黑钻期限");
             SetPcRoom(false, blackDiamond: false);
@@ -245,9 +245,10 @@ internal static class DevilContractTcpTests
             That(fixture.Query("SELECT stamina_until FROM characters") is [[0L]], "副本内特权刷新后仍可退出，恢复当前账号实际黑钻免罚");
             FormalDungeonTcpTests.Enter(peer);
             SetPcRoom(true, blackDiamond: true, appearanceChanged: false);
-            FormalDungeonTcpTests.Load(peer);
+            FormalDungeonTcpTests.Load(peer, pcRoom: true);
             AssertBlackDiamondActor(peer.Expect(0, 2).Body, active: true, dungeon: true, pcRoom: true);
             That(peer.Expect(0, 2).Body is [1, ..], "Loading期间网吧开关延后到37刷新，不提前重建场景");
+            That(peer.Expect(0, 487).Body is [1, ..], "延后的网吧身份刷新同时补发487特权buff");
             peer.Barrier();
             SetPcRoom(false, blackDiamond: true, dungeon: true);
             Return(peer); peer.Barrier();
@@ -289,11 +290,12 @@ internal static class DevilContractTcpTests
             peer.Barrier();
         }
 
-        static void Return(TcpPeer peer)
+        static void Return(TcpPeer peer, bool pcRoom = false)
         {
             peer.Send(42);
             peer.Expect(1, 42, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
+            if (pcRoom) peer.Expect(0, 487);
             peer.Expect(0, 24);
             FormalDungeonTcpTests.RefreshedQuests(peer);
         }

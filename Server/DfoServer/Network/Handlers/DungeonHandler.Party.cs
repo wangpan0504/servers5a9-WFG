@@ -230,6 +230,8 @@ internal sealed partial class DungeonHandler
                 await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "party_loading_release", Current);
                 foreach (var member in notice.Members)
                     await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(member.Actor.Character.Id), "party_player_state", Current);
+                // 组队副本加载确认同样重建Actor，按当前网吧身份补发特权buff。
+                await PcRoomBuffProjection.PostAsync(context, Current);
                 if (scene.ScriptedReturnId != Guid.Empty)
                 {
                     if (published) context.Session.ConfirmScriptedReturnLoading(scene);

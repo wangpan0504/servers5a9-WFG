@@ -81,6 +81,7 @@ $keywordGroups = [ordered]@{
     'PartyDungeon' = 'party-dungeon','party-dungeon-modes'
     'EvildomWar' = 'evildom-war','channel-entry','solo-party'
     'Party'     = 'solo-party','social','presence','teleport','formal-dungeon'
+    'PcRoom|PremiumContract' = 'presence','devil-contract','town','party-dungeon'
     'Story'      = 'story-digest','story-cinematic','story-scenes','story-quest-entry','story-publication'
     'Dungeon|GriefTower|Dazzlement|LostLand' = 'formal-dungeon','dungeon-growth','grief-tower','dungeon-training','class-experience','dungeon-revive','dungeon-altars','dungeon-despair','dungeon-dazzlement','hero-tomb-entry','dungeon-probe','dungeon-settlement','dungeon-entry-plan','lost-land'
     'Booster'    = 'booster','booster-selection','booster-equipment','daily-retained-booster'
