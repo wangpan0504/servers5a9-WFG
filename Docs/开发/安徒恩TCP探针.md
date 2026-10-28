@@ -31,6 +31,8 @@ dotnet run --project Server/DfoServer -c Debug --no-build -- --selftest-tcp anto
 
 `anton-raid-gap` 补充无票/队员票不足的整批拒绝、非队长/未分队回包、关闭阶段推进开关及同分队双人完整阶段 0。两人每次进房均核对 29 的地图键与坐标，586 核对完整 6 字节与全部 14 图最终状态，阶段 1 的 218–224 保持拒绝。`anton-tcp-probe` 还重建独立 Host，核对保存的门票、零正式奖励回执及同角色重新开战；这是服务重建，不能当作跨进程战况恢复。
 
+`anton-raid-phase1` 单独检查自然计时、正式奖励和阶段1授权的未实现边界，输出明确标为 `UNIMPLEMENTED`。使用可控时钟而非真实等待；观测窗口不代表已证明PVF计时单位。Reward后的阶段1请求同时覆盖回候战室及通用选图后的15/16拒绝；具体当前行为见[阶段与结算执行入口](../模块/副本.md#安徒恩阶段与结算执行入口)。通过表示拒绝边界符合当前实现，不能报告阶段1自然流程、正式翻牌或超时推进成功。
+
 `MissingFormalDungeons=14` 是主 `dungeon/dungeon.lst` 没有 210–216 与 218–224。团本目录用备用脚本和显式 MAP 登记，这 14 项记在开战日志里，不拒绝这次开战，也不拒绝 210。
 
 实机 CMD16 来自 `codex-runs/anton-live-20261028/pcap-manual-1235/packet_log.txt`：

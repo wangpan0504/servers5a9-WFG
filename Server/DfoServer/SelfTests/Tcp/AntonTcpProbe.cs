@@ -280,7 +280,7 @@ internal static class AntonTcpProbe
             throw new InvalidOperationException(dungeon + " 仍是 open，15 被接受");
     }
 
-    static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear,
+    internal static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear,
         bool leave = true, bool requireClearNotice = true)
     {
         if (dungeon != 210)

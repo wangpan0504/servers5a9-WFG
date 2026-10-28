@@ -12,7 +12,7 @@ using static DfoServer.Testing.TcpPeer;
 namespace DfoServer.Testing;
 
 // 补开战失败回包、关闭阶段推进、以及同一分队两人的迁图/586。不改服务端规则。
-internal static class AntonRaidGapTcpTests
+internal static partial class AntonRaidGapTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -186,9 +186,10 @@ internal static class AntonRaidGapTcpTests
             (body is null ? "没有这张图" : Convert.ToHexString(body)));
     }
 
-    static async Task<TcpTestFixture> BootAsync(ServerOptions source, string root, TcpTestResources resources, string name, string json)
+    static async Task<TcpTestFixture> BootAsync(ServerOptions source, string root, TcpTestResources resources, string name, string json,
+        TimeProvider? clock = null)
     {
-        var fixture = new TcpTestFixture(source, Path.Combine(root, name), resources: resources);
+        var fixture = new TcpTestFixture(source, Path.Combine(root, name), resources: resources, clock: clock);
         Directory.CreateDirectory(fixture.Options.DataDirectory);
         File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "raid-start.json"), json);
         await fixture.StartAsync();
