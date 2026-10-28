@@ -277,6 +277,11 @@ internal static class SkillSwitchInventoryTcpTests
             { Avatar = new() { Color1 = 7, Color2 = 8 } };
         var pet = new InventoryItem(0, new(InventoryListType.Pet, 0), new(63032, ItemKind.Creature, 0))
             { Creature = new() { Name = "BuffPet", Satiety = 73 } };
+        var otherPet = new InventoryItem(0, new(InventoryListType.Pet, 1), new(63023, ItemKind.Creature, 0))
+            { Creature = new() { Name = "OtherPet", Satiety = 60 } };
+        var artifacts = new[] { 63500, 63501, 64000, 64001, 64500, 64501 }
+            .Select((id, index) => new InventoryItem(0, new(InventoryListType.Pet, (short)(140 + index)),
+                new(id, ItemKind.CreatureEquipment, 999999998) { Attr = (byte)(index + 1) })).ToArray();
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "buff-window-refresh"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         Character created;
@@ -285,7 +290,7 @@ internal static class SkillSwitchInventoryTcpTests
             {
                 Job = profile.Job, GrowType = profile.Grow, Level = 95, AcceptedStoryLevel = 1,
                 Skills = resources.Characters.Get(profile.Job).Skills,
-                Inventory = new([avatar, pet, weapon, clone, aura])
+                Inventory = new([avatar, pet, otherPet, weapon, clone, aura, .. artifacts])
             });
         await fixture.StartAsync();
         using var peer = Open(fixture);
@@ -341,7 +346,7 @@ internal static class SkillSwitchInventoryTcpTests
                     if (packet.Opcode == 105)
                     {
                         creatureDetails++;
-                        That(packet.Body[0] == 1 && packet.Body[5] == 73, "宠物完整详情在装备差量前恢复原饱食与UID");
+                        That(packet.Body[0] == 2 && packet.Body[5] == 73, "宠物完整详情在装备差量前恢复原饱食与UID");
                     }
                     if (packet.Opcode == 14 && packet.Body[0] == 3)
                     {
@@ -378,6 +383,55 @@ internal static class SkillSwitchInventoryTcpTests
                     That(U16(restored, 0) == profile.Skill && restored[2] > 0, "重新勾选立即恢复目标技能及全部有效绑定");
                     peer.Barrier();
                 }
+            }
+        }
+        foreach (var move in new[] { (Bag: (short)0, Id: pet.Core.ItemId, Target: 0),
+            (Bag: (short)1, Id: otherPet.Core.ItemId, Target: pet.Core.ItemId),
+            (Bag: (short)1, Id: pet.Core.ItemId, Target: otherPet.Core.ItemId) })
+        {
+            peer.Send(19, MoveItem(move.Bag, move.Id, 26, 7, 3, move.Target));
+            peer.Expect(1, 19, MoveAck(move.Bag, 26, 7, 3));
+            int equipmentCount = 0;
+            peer.Barrier(packet =>
+            {
+                if (packet.Opcode == 14 && packet.Body[0] == 3)
+                {
+                    equipmentCount++;
+                    That(U16(packet.Body, 1) == 1 && U16(packet.Body, 3) == 26 && U32(packet.Body, 5) == move.Id,
+                        "宠物互换后只同步实际穿戴实例，不先清空宠物对象");
+                }
+                That(packet.Opcode != 2 || packet.Body[0] == 0, "宠物互换不重建Buff登记窗口");
+            });
+            That(equipmentCount == 1, "宠物互换发送一次完整穿戴差量");
+        }
+        for (int part = 27; part <= 29; part++)
+        {
+            int index = 2 * (part - 27);
+            var first = artifacts[index];
+            var second = artifacts[index + 1];
+            foreach (var move in new[] { (Bag: first.Position.Index, Item: first, Target: 0),
+                (Bag: second.Position.Index, Item: second, Target: first.Core.ItemId),
+                (Bag: second.Position.Index, Item: first, Target: second.Core.ItemId),
+                (Bag: first.Position.Index, Item: (InventoryItem?)null, Target: first.Core.ItemId) })
+            {
+                peer.Send(19, MoveItem(move.Bag, move.Item?.Core.ItemId ?? 0, (short)part, 7, 3, move.Target));
+                peer.Expect(1, 19, MoveAck(move.Bag, (short)part, 7, 3));
+                int equipmentCount = 0;
+                peer.Barrier(packet =>
+                {
+                    if (packet.Opcode == 14 && packet.Body[0] == 3)
+                    {
+                        equipmentCount++;
+                        That(U16(packet.Body, 1) == 1 && U16(packet.Body, 3) == part &&
+                            U32(packet.Body, 5) == (move.Item is null ? uint.MaxValue : (uint)move.Item.Core.ItemId),
+                            "宠物装备覆盖不清空穿戴对象，真正卸下才发送空槽 " + part);
+                        if (move.Item is not null)
+                            That(packet.Body.Length == 126 && packet.Body[13] == move.Item.Core.Attr,
+                                "宠物装备完整差量保持实际强化属性 " + part);
+                    }
+                    That(packet.Opcode != 2 || packet.Body[0] == 0, "宠物装备穿脱不重建Buff登记窗口");
+                });
+                That(equipmentCount == 1, "每次宠物装备操作只发布一次穿戴差量 " + part);
             }
         }
         // 克隆在已穿原件上覆盖，来源UID/颜色由本次事务决定；再卸下并穿回空槽保持同一关联。
