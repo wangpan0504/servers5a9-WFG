@@ -296,17 +296,18 @@ internal static class AuctionRegisterTests
     {
         Bytes(AuctionPackets.RegisterSuccess(), [0x01, 0x00],
             "★ 上架成功应答 = flag(01) + mode(00)：mode=0 是客户端清「上架进行中锁」0x20c 的唯一路径");
-        Bytes(AuctionPackets.RegisterFailure(0xd2), [0x00, 0xd2], "失败应答 = flag(00) + errcode");
+        Bytes(AuctionPackets.RegisterFailure(0xd2), [0x00, 0xd2, 0], "失败应答 = flag(00) + error:u16");
+        Bytes(AuctionPackets.RegisterFailure(0x72), [0x00, 0x72, 0, 0], "114还必须保留后继读取的面板mode");
         That(AuctionPackets.RegisterSuccessFlag == 0x01 && AuctionPackets.RegisterFailureFlag == 0x00,
-            "flag 非 0 才是成功分支；失败体必须发满 2 字节（0x72 会 fall-through 再读第 2 字节）");
+            "flag非0才是成功分支；失败公共前缀为三字节，114还读取面板字节");
         That(AuctionPackets.RegisterModeNormal == 0, "普通拍卖行上架的 mode = 0（type 7 浏览窗口）");
 
         That(AuctionRegisterErrors.Whitelist.SequenceEqual(new byte[] { 0xd2, 0x69, 0x72, 0x7e, 0xce, 0x7b, 0x89 }),
-            "客户端认识的 7 个码：0xd2/0x69/0x72/0x7e/0xce/0x7b/0x89（其它码会被当成上架成功）");
+            "保留旧领域七码兼容白名单，不将它冒充客户端全部原生分支");
         foreach (byte code in AuctionRegisterErrors.Whitelist)
             That(AuctionPackets.RegisterFailure(code)[1] == code, $"白名单码 0x{code:X2} 可以下发");
         foreach (byte code in new byte[] { 0x00, 0x01, 0x7f, 0xd1, 0xd3, 0xff })
-            Reject<InvalidDataException>(() => AuctionPackets.RegisterFailure(code), $"白名单外的码 0x{code:X2} 拒发（会被当成成功）");
+            Reject<InvalidDataException>(() => AuctionPackets.RegisterFailure(code), $"旧领域兼容入口仍拒绝未映射码0x{code:X2}");
         That(AuctionRegisterErrors.ToClientCode(AuctionRegisterError.ItemNotFound) == AuctionRegisterErrors.Silent,
             "「道具已经不在背包」映射到静默码（过期操作不弹框）");
         That(AuctionRegisterErrors.ToClientCode(AuctionRegisterError.ItemNotTradable) == AuctionRegisterErrors.Generic &&

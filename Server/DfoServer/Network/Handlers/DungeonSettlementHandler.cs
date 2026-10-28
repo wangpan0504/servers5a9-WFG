@@ -319,13 +319,19 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_focus", () => context.Session.CanPublishDungeonSettlement(current));
             return CommandResult.Handled;
         }
+        bool ordinaryRetry = current.Entry.IsOrdinary && !current.Entry.IsPractice && !current.Entry.IsTrainingRoom &&
+            !current.Entry.IsClassExperience && !current.Entry.IsAltar && !current.Entry.IsDespair &&
+            !current.Entry.IsCosmo && !current.Entry.IsInfernoParty && !current.Entry.BeastMode && !current.Entry.IsBossRush &&
+            current.Entry.HellParty is null && current.Entry.RaidEntry is null && current.Entry.Hope is null;
         if (context.Session.PartyDungeon is { } party)
         {
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
+            (string Reason, byte MemberSlot)? rejectedRetry = null;
             PartyDungeonNotice[] notices = option switch
             {
                 0 when partyDungeons is not null => partyDungeons.Enter(context.Session, current.Entry.DungeonId,
-                    current.Entry.Difficulty, dungeons, rooms, drops, items, pieces, null)
+                    current.Entry.Difficulty, dungeons, rooms, drops, items, pieces, null,
+                    onRejected: (reason, slot) => rejectedRetry = (reason, slot))
                     .Select(n => n with { State = 1 }).ToArray(),
                 1 => party.ResultSelection(context.Session),
                 2 => party.ResultReturn(context.Session),
@@ -339,8 +345,11 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             if (option == 0 && notices.Length == 0 && current.Entry.IsCosmo)
                 await PartyDungeonProjection.PublishAsync(party.Members.Select(m =>
                     new PartyDungeonNotice(PartyDungeonNoticeKind.RetryEligibility,m,party.Members,m.Actor.Session.CurrentFormalDungeonScene())));
+            bool retryReturned = option == 0 && notices.Length == 0 && ordinaryRetry;
+            if (retryReturned) notices = party.ResultReturn(context.Session);
             log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "party-result-command", option,
-                Accepted = notices.Length > 0, Party = party.Id });
+                Accepted = notices.Length > 0, Party = party.Id, RetryReturned = retryReturned && notices.Length > 0,
+                RejectReason = rejectedRetry?.Reason, RejectMemberSlot = rejectedRetry?.MemberSlot });
             await PartyDungeonProjection.PublishAsync(notices);
             return CommandResult.Handled;
         }
@@ -374,6 +383,17 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, 2),
                         "formal_altar_retry_return", () => context.Session.CanPublishTravel(returning));
                     await town.ReturnFromFormalDungeonAsync(context, returning, "formal_altar_retry_town");
+                    return CommandResult.Handled;
+                }
+                if (ordinaryRetry)
+                {
+                    log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "ordinary-retry-rejected",
+                        current.Snapshot.Identity, RejectReason = context.Session.LastFormalDungeonRejection });
+                    var returning = context.Session.ReturnFromFormalDungeon();
+                    if (returning is null) return CommandResult.Unhandled;
+                    await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, (byte)DungeonResultOption.ReturnTown),
+                        "formal_ordinary_retry_return", () => context.Session.CanPublishTravel(returning));
+                    await town.ReturnFromFormalDungeonAsync(context, returning, "formal_result_town");
                     return CommandResult.Handled;
                 }
                 if (!current.Entry.IsCosmo && !current.Entry.IsInfernoParty) return CommandResult.Unhandled;

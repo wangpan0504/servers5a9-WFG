@@ -93,6 +93,7 @@ internal static class ChatServiceTests
         Routing();
         ProbeBodies();
         NoticeWire();
+        ClientPromptTests.Run();
         DeliveryPath().GetAwaiter().GetResult();
         ItemHyperlink().GetAwaiter().GetResult();
         ChatInjectCommand();
@@ -877,6 +878,33 @@ internal static class ChatServiceTests
             That(messageFrame.Opcode == (ushort)NotiPacketType.MESSAGE &&
                 Convert.ToHexString(messageFrame.Body) == "0304000008000000B2E2CAD4D6D0CEC4",
                 "普通聊天投影为 0x0C：正文 = [03][layer][v=0][CP936 字节数][测试中文]");
+
+            await context.Reply(ClientFailurePackets.Create(ClientClassChangeError.AdvancementQuestInProgress),
+                "native_prompt_test", () => true);
+            var native = frames.Single(frame => frame.Action == "native_prompt_test");
+            That(native.Kind == 1 && native.Opcode == 502 && native.Body.SequenceEqual(new byte[] { 0, 22, 0 }),
+                "引用原生错误枚举后由现有发送队列发业务ACK，旧dstr仍由客户端业务处理器触发");
+            await context.Reply(CmdPacketType.AUCTION_REGIST_ITEM, AuctionPackets.RegisterFailure(0xd2), "legacy_auction_prompt_test", () => true);
+            var auction = frames.Single(frame => frame.Action == "legacy_auction_prompt_test");
+            That(auction.Kind == 1 && auction.Opcode == 183 && auction.Body.SequenceEqual(new byte[] { 0, 210, 0 }),
+                "旧拍卖业务入口同样通过发送队列写完整u16失败码，不只修正新类型工厂");
+            foreach (var display in Enum.GetValues<ServerNoticeDisplay>().Where(display => (byte)display <= 3))
+            {
+                string action = "notice_prompt_test_" + (byte)display;
+                await context.NotifyNotice(display, "材料不足", action, () => true);
+                var sent = frames.Single(frame => frame.Action == action);
+                byte[] expected = Convert.FromHexString("0008000000B2C4C1CFB2BBD7E3"); expected[0] = (byte)display;
+                That(sent.Kind == 0 && sent.Opcode == 502 && sent.Body.SequenceEqual(expected),
+                    "通用502与业务CMD502通过kind分开，显示动作和正文均由调用方明确选择");
+            }
+            int sentCount = frames.Count;
+            await context.Reply(ClientFailurePackets.Create(ClientMailQueryError.RecipientMissing), "stale_native_prompt", () => false);
+            await context.NotifyNotice(ServerNoticeDisplay.Chat, "材料不足", "stale_notice_prompt", () => false);
+            That(frames.Count == sentCount, "原生提示与通用502都复用发送guard，失效业务不发布旧提示");
+            Reject<ArgumentNullException>(() => context.NotifyNotice(ServerNoticeDisplay.Chat, "x", "missing_prompt_guard", null!),
+                "新通用提示入口要求调用方提供发送身份校验");
+            Reject<ArgumentNullException>(() => context.Reply(ClientFailurePackets.Create(ClientSkillError.SpInsufficient), "missing_native_guard", null!),
+                "新原生提示入口同样不能省略发送身份校验");
 
             log.Flush();
             // 日志写入器仍以「追加 + FileShare.Read」持有文件，读取端必须显式共享写句柄。

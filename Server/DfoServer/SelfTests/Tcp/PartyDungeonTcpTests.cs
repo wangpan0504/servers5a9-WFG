@@ -15,14 +15,21 @@ internal static partial class PartyDungeonTcpTests
         await RunPartyAsync(source, root, resources, 2);
         await RunPartyAsync(source, root, resources, 4);
         await RunPartyAsync(source, root, resources, 2, rollback: true);
+        await RunPartyAsync(source, root, resources, 2, rejectRetry: true);
         await RunDeparturesAsync(source, root, resources);
     }
 
-    static async Task RunPartyAsync(ServerOptions source, string root, TcpTestResources resources, int count, bool rollback = false)
+    static async Task RunPartyAsync(ServerOptions source, string root, TcpTestResources resources, int count, bool rollback = false,
+        bool rejectRetry = false)
     {
+        bool checkFatigue = count == 2 && !rollback;
         await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled },
-            Path.Combine(root, "party-dungeon-" + count + (rollback ? "-rollback" : "")), resources: resources);
+            Path.Combine(root, "party-dungeon-" + count + (rollback ? "-rollback" : rejectRetry ? "-retry-rejected" : "")),
+            gm: checkFatigue, resources: resources);
         await fixture.StartAsync();
+        if (checkFatigue)
+            That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
+                "组队入场拒绝使用实际疲劳余额");
         using var alpha = Open(fixture, "partyalpha");
         using var beta = Open(fixture, "partybeta");
         using var gamma = count == 4 ? Open(fixture, "partygamma") : null;
@@ -40,6 +47,8 @@ internal static partial class PartyDungeonTcpTests
             // 只准备普通路线的前置资格；战斗、奖励和清图均经过真实生产协议。
             fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
             fixture.Sql("UPDATE characters SET revive_coins=1 WHERE id=$p0", peer.Id);
+            if (checkFatigue && ReferenceEquals(peer, rejectRetry ? alpha : beta))
+                fixture.Sql("UPDATE character_fatigue SET used=maximum,remaining=0 WHERE character_id=$p0", peer.Id);
             if (count == 4 && ReferenceEquals(peer, participants[^1]))
                 fixture.Sql("UPDATE character_dungeon_state SET next_object_key=65536 WHERE character_id=$p0", peer.Id);
             peer.Select(prepared: true);
@@ -106,6 +115,18 @@ internal static partial class PartyDungeonTcpTests
                 fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts") is [[0L]],
                 "后续成员预留失败时，全员revision、尝试号、对象高水位及疲劳整笔回滚");
             return;
+        }
+        if (checkFatigue)
+        {
+            string before = fixture.Snapshot();
+            alpha.Send(16, selection);
+            var rejected = All(alpha);
+            byte failedSlot = rejectRetry ? (byte)0 : (byte)1;
+            That(rejected[alpha].Any(p => p is { Kind: 1, Opcode: 16 } && p.Body.SequenceEqual(new byte[] { 0, 22, 0, failedSlot })) &&
+                rejected.Values.All(rows => rows.All(p => p.Opcode is not (28 or 29))) && fixture.Snapshot() == before,
+                "组队疲劳不足的拒绝指向实际失败成员槽，整队不扣费或安装实例");
+            That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue on", out _),
+                "随后开启无限疲劳，验证同一队伍拒绝后仍可重新入场");
         }
         alpha.Send(16, selection);
         var entered = All(alpha); var enteredA = entered[alpha];
@@ -282,6 +303,26 @@ internal static partial class PartyDungeonTcpTests
                     peer.Send(71, [0, slot]);
                     That(Drain(peer).Any(p => p is { Kind: 1, Opcode: 71 }) && fixture.Snapshot() == claimed,
                         "重复领取本人牌不再次增加金币或物品");
+                }
+                if (rejectRetry)
+                {
+                    That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
+                        "结算时恢复队员的真实零疲劳，验证再挑战失败");
+                    string entries = fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id");
+                    string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id");
+                    string assets = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid");
+                    alpha.Send(72, [1, 0]);
+                    var returned = All(alpha);
+                    That(returned.Values.All(rows => rows.Any(p => p is { Kind: 1, Opcode: 72, Body: [1, 1, 2] }) &&
+                        rows.Any(p => p is { Kind: 0, Opcode: 24 }) && rows.All(p => p.Opcode is not (28 or 29))) &&
+                        fixture.Snapshot("SELECT * FROM character_dungeon_state ORDER BY character_id") == entries &&
+                        fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id") == fatigue &&
+                        fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") == assets,
+                        "成员疲劳不足时整队提交回城并确认选项2，不重复扣费、预留或发奖");
+                    alpha.Send(72, [1, 0]);
+                    That(All(alpha).Values.All(rows => rows.All(p => p.Opcode is not (28 or 29))),
+                        "退场后的旧再挑战不会安装新副本");
+                    return;
                 }
                 alpha.Send(72, [1, count == 2 ? (byte)0 : (byte)1]);
                 var result = All(alpha);

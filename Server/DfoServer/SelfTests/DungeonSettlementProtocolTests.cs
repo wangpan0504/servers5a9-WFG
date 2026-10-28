@@ -63,7 +63,12 @@ internal static class DungeonSettlementProtocolTests
             U32(rewarded,165) == 10400 && U32(rewarded,169) == 1 && rewarded[208] == 0 && rewarded[209] == 0 && U32(rewarded,210) == 1200 &&
             rewarded.AsSpan(226,8).IndexOfAnyExcept((byte)0) == -1,
             "35免费席按金币及物品ID/本次数量预载，动态段后218B固定字段及八bool尾保持完整");
-        Bytes(DungeonSettlementPackets.ResultCommand(1, 2), [1, 1, 2], "72先state后option原值回显");
+        Bytes(DungeonSettlementPackets.ResultCommand(1, (byte)DungeonResultOption.ReturnTown), [1, 1, 2], "72先state后option原值回显");
+        That((byte)DungeonResultOption.Retry == 0 && (byte)DungeonResultOption.OtherDungeon == 1 &&
+            (byte)DungeonResultOption.ContinuationTail == 3 && (ushort)DungeonResultClientError.SecretShopPending == 133,
+            "结果页业务动作及神秘商店错误分别绑定72合同，不借16的同值错误");
+        Bytes(DungeonSettlementPackets.RetryEligibility(false), [0], "261不可再挑战");
+        Bytes(DungeonSettlementPackets.RetryEligibility(true), [9], "261可再挑战");
         var membership = new DfoServer.Game.Dungeons.CardMembership(100,200,1,3,0);
         var options = new DfoServer.Game.Dungeons.DungeonCardOptions(bonus,340,false,membership,bonus);
         byte[] premium = DungeonSettlementPackets.CardReward(reward,1200,bonus,options,bonus);

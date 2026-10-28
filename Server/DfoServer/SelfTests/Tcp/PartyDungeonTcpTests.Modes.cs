@@ -99,6 +99,7 @@ internal static partial class PartyDungeonTcpTests
             That(group.All().All(rows => rows.Any(p => p is { Kind:0,Opcode:29 })),"任务组队可从结算再挑战，不沿用旧地面或骑乘许可");
         }
 
+        VerifyOrdinaryMaterialRejection();
         VerifyCinematic();
         VerifyPassiveSequence();
 
@@ -200,6 +201,37 @@ internal static partial class PartyDungeonTcpTests
             That(group.All().All(r => r.Any(p => p is {Kind:0,Opcode:27})),"传奇深渊和超星空终点保留全队祭坛选图出口");
         }
 
+        void VerifyOrdinaryMaterialRejection()
+        {
+            const int dungeon = 9595;
+            const ushort quest = 2683;
+            var definition = SelfTestCatalogs.Dungeons(resources.Archive).Get(dungeon);
+            var ticket = definition.OrdinaryEntryTicket ?? throw new InvalidDataException("普通副本缺少已验证入场票");
+            var entrance = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+                resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeon));
+            var completed = entrance.Quests.Concat(entrance.AnyQuests.Take(1)).Concat([3778, 4872, 8682]).ToHashSet();
+            var options = resources.Towns.DungeonMaps[entrance.DungeonWorldMap!.Value].Options.Where(option => option.DungeonId == dungeon).ToArray();
+            if (!options.Any(option => option.QuestId == -1)) completed.Add(options.First(option => !option.InProgress).QuestId);
+            completed.UnionWith(entrance.Map(completed).DungeonGates.First(gate => gate.Conditions.Length == 0).Quests);
+            var bounds = entrance.Map(completed).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(completed.Contains)).Bounds;
+            using var group = new Coop(fixture, resources, "material", new(entrance.Town, entrance.Area,
+                (ushort)(bounds.X + bounds.Width / 2), (ushort)(bounds.Y + bounds.Height / 2)), completed.ToArray(), 95, 2,
+                leaderRewards: [new(ticket.ItemId, ticket.Count)]);
+            foreach (var peer in group.Peers)
+            {
+                peer.Send(31, [31, 0, (byte)(quest & 0xff), (byte)(quest >> 8)]);
+                That(Drain(peer).Any(packet => packet is { Kind: 1, Opcode: 31 } && packet.Body[0] == 1),
+                    "组队材料测试分别接取真实任务");
+            }
+            group.Join(); group.Open();
+            string before = fixture.Snapshot();
+            group.Peers[0].Send(16, Coop.Selection(dungeon, quest, 2));
+            var rejected = group.All();
+            That(rejected[0].Any(packet => packet is { Kind: 1, Opcode: 16 } && packet.Body.SequenceEqual(new byte[] { 0, 27, 0, 1 })) &&
+                rejected.All(rows => rows.All(packet => packet.Opcode is not (28 or 29))) && fixture.Snapshot() == before,
+                "普通副本队员缺入场材料回复队伍提示，队长持有的材料和全队状态不变");
+        }
+
         void VerifyCinematic()
         {
             var entrance=MiddleQuestEntryTests.Entrance(resources.Towns,resources.Quests.Get(3599),96);
@@ -250,7 +282,8 @@ internal static partial class PartyDungeonTcpTests
         readonly ushort[] expectedIncompleteHellQuestSlots;
         public Coop(TcpTestFixture fixture,TcpTestResources resources,string prefix,Location position,int[] done,byte level,int count,
             int tickets=0,bool withoutHellQuest=false,int stones=0,
-            IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? rewards=null)
+            IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? rewards=null,
+            IReadOnlyList<DfoServer.Game.Inventory.Services.InventoryReward>? leaderRewards=null)
         {
             this.fixture=fixture;
             Peers=new TcpPeer[count];
@@ -273,11 +306,12 @@ internal static partial class PartyDungeonTcpTests
                     repo.CommitInventory(owner,role,new(role.Inventory,role.Inventory with { Items=role.Inventory.Items.Add(
                         new(0,new(InventoryListType.Main,122),new(10305821,ItemKind.Material,i==0 ? 8 : stones))) },"party_hell_stone"));
                 }
-                if (rewards is not null)
+                var memberRewards = i == 0 && leaderRewards is not null ? leaderRewards : rewards;
+                if (memberRewards is not null)
                 {
                     var items = resources.ItemResources;
                     var grants = new DfoServer.Game.Inventory.Services.InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
-                    role = DfoServer.Game.Inventory.Services.InventoryService.Commit(repo, owner, role, grants.Grant(role, rewards));
+                    role = DfoServer.Game.Inventory.Services.InventoryService.Commit(repo, owner, role, grants.Grant(role, memberRewards));
                 }
                 Peers[i]=TcpPeer.Open(fixture,account); Peers[i].Select(role.Slot,prepared:true,resumeTown:true,room:false);
             }

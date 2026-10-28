@@ -148,7 +148,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         uint questId = 0, bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null,
-        bool beastMode = false)
+        bool beastMode = false, Action<string, byte>? onRejected = null)
     {
         var party = parties.Current(leader);
         if (party is null || party.Members.Length < 2 && leader.PartyDungeon is null &&
@@ -180,7 +180,12 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             {
                 var plan = member.Actor.Session.PreparePartyDungeon(dungeon, difficulty, catalog, rooms, drops, items, pieces,
                     prepareDrops, instance.Id, firstKey, prepared.FirstOrDefault().Preparation, questId, hellParty, hellLegend, crackRewards, beastMode, allowDimensionHidden);
-                if (plan is null) return [];
+                if (plan is null)
+                {
+                    if (member.Actor.Session.LastFormalDungeonRejection is { } reason)
+                        onRejected?.Invoke(reason, member.Slot);
+                    return [];
+                }
                 prepared.Add((member, plan));
             }
             return AccountOwners.Lease.ExecuteGroup(party.Members.Select(m => (m.Actor.Owner, m.Actor.Character.Id)).ToArray(), () =>

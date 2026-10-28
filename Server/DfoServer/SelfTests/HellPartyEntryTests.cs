@@ -34,8 +34,8 @@ internal static class HellPartyEntryTests
         foreach (ushort[] invalid in new ushort[][] { [8], [1, 1], [0, 1, 2, 3, 4, 5, 6, 7, 0] })
             Reject<ArgumentOutOfRangeException>(() => DungeonPackets.SelectionNotice(incompleteHellQuestMemberSlots: invalid),
                 "拒绝越界、重复或过长的队伍槽位名单");
-        Bytes(DungeonPackets.HellPartyRejected(9), [0, 9, 0, 0], "缺任务拒绝保持原生失败恢复，不发送次数上限0xAD");
-        Bytes(DungeonPackets.HellPartyRejected(17), [0, 17, 0, 0], "缺门票保留材料不足拒绝");
+        Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.Silent), [0, 9, 0, 0], "缺任务拒绝保持原生失败恢复，不发送次数上限0xAD");
+        Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.RequiredMaterials), [0, 17, 0, 0], "缺门票保留材料不足拒绝");
     }
 
     internal static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
@@ -51,7 +51,7 @@ internal static class HellPartyEntryTests
         That(sample.Length == 25 && DungeonRequests.TryParseSelection(sample, out var request) &&
             request == new DungeonSelectionRequest(291100308, 4, 0, 1, 0, ushort.MaxValue, 0, 0, 6114, 0, 0),
             "深渊派对实机请求样本：25 字节，[7]=1，[4]=4，[16:20]=6114");
-        That(DungeonPackets.HellPartyRejected(0x01).SequenceEqual(new byte[] { 0, 0x01, 0, 0 }) &&
+        That(DungeonPackets.HellPartyRejected(DungeonSelectionError.NoAvailableDifficulty).SequenceEqual(new byte[] { 0, 0x01, 0, 0 }) &&
             DungeonPackets.SelectionRejected().SequenceEqual(new byte[] { 0, 9, 0, 0 }),
             "深渊派对拒绝包保持 4 字节形状，普通拒绝包不变");
 

@@ -77,11 +77,12 @@ internal static class AuctionCancelTests
     {
         Bytes(AuctionPackets.CancelSuccess(), [0x01, 0x00],
             "★ 取消成功应答 = flag(01) + mode(00)：帧体首字节必须是 flag，第二字节让客户端刷新 type7 面板");
-        Bytes(AuctionPackets.CancelFailure(0xd2), [0x00, 0xd2], "失败应答 = flag(00) + errcode");
+        Bytes(AuctionPackets.CancelFailure(0xd2), [0x00, 0xd2, 0], "取消失败使用完整u16错误码");
+        Bytes(AuctionPackets.CancelFailure(0x72), [0x00, 0x72, 0, 0], "取消114保留未知分支继续读取的模式0");
         foreach (byte code in AuctionRegisterErrors.Whitelist)
             That(AuctionPackets.CancelFailure(code)[1] == code, $"白名单码 0x{code:X2} 可以下发（184 复用 183 的白名单）");
         foreach (byte code in new byte[] { 0x00, 0x01, 0x7f, 0xd1, 0xd3, 0xff })
-            Reject<InvalidDataException>(() => AuctionPackets.CancelFailure(code), $"白名单外的码 0x{code:X2} 拒发（会被当成成功）");
+            Reject<InvalidDataException>(() => AuctionPackets.CancelFailure(code), $"旧领域取消入口不扩大白名单0x{code:X2}");
 
         foreach (var error in Enum.GetValues<AuctionCancelError>().Where(value => value != AuctionCancelError.None))
         {

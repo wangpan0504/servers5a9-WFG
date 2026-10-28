@@ -249,20 +249,24 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             (selection.Unknown7 != expectedFlag || selection.Unknown8 != (direct || practice ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
             selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0)))
             return await RejectAsync();
-        if (context.Session.HasMultiplePartyMembers?.Invoke() == true || context.Session.ReadEvildomWar() is not null)
+        bool multiplePartyMembers = context.Session.HasMultiplePartyMembers?.Invoke() == true;
+        if (multiplePartyMembers || context.Session.ReadEvildomWar() is not null)
         {
             if (partyDungeons is null || direct || replay || practice || continuation || sealDoor)
                 return await RejectAsync();
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, context.Session.CurrentParty?.Invoke()?.Members ?? []);
+            (string Reason, byte MemberSlot)? partyRejection = null;
             var entered = partyDungeons.Enter(context.Session, selection.DungeonIndex, selection.Parameter,
                 dungeons, rooms, drops, items, pieces, prepareDrops,
                 questId: hell || beastMode ? 0u : selection.Unknown16, hellParty: hell, hellLegend: legend,
-                crackRewards: crackRewards, beastMode: beastMode);
+                crackRewards: crackRewards, beastMode: beastMode,
+                onRejected: (reason, slot) => partyRejection = (reason, slot));
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length > 0, Party = true,
                 Members = entered.Count(notice => notice.Kind == PartyDungeonNoticeKind.Entry), Dungeon = selection.DungeonIndex, Quest = selection.Unknown16, HellParty = hell, HellLegend = legend,
                 Beast = beastMode, Request = selection,
-                RejectReason = entered.Length == 0 ? context.Session.LastFormalDungeonRejection ?? "party-entry-unavailable" : null });
-            if (entered.Length == 0) return await RejectAsync();
+                RejectReason = entered.Length == 0 ? partyRejection?.Reason ?? "party-entry-unavailable" : null,
+                RejectMemberSlot = partyRejection?.MemberSlot });
+            if (entered.Length == 0) return await RejectAsync(partyRejection?.Reason, partyRejection?.MemberSlot, party: multiplePartyMembers);
             await PartyDungeonProjection.PublishAsync(entered);
             return CommandResult.Handled;
         }
@@ -395,27 +399,34 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt.Entry.Dimension is not null) await DimensionEntranceProjection.RefreshAsync(context, Guard, entranceOnly: false);
         return CommandResult.Handled;
 
-        async Task<CommandResult> RejectAsync(string? entryReason = null)
+        async Task<CommandResult> RejectAsync(string? entryReason = null, byte? memberSlot = null, bool party = false)
         {
             // 每一条被拒的选图都留原始请求体，实机排错不用再靠猜标志位。
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = false, Replay = replay, Continuation = continuation,
                 Training = training, ClassExperience = experience, Practice = practice, Beast = beastMode, Request = selection,
-                RejectReason = context.Session.LastFormalDungeonRejection ?? "selection-rejected", CharacterId = character.Id });
+                RejectReason = entryReason ?? "selection-rejected", MemberSlot = memberSlot, CharacterId = character.Id });
             bool CanSend() => context.Session.CanPublishFormalDungeonRejection(character, before.SelectionEpoch,
                 before.Phase, before.CurrentDungeonSelection);
             // 结束本次入场等待，保留原选图和回城锚点；不发送成功或自动回城通知。
             // 区域任务提示由NOTI27的未完成队员名单驱动；强制入场只恢复等待，不误用次数上限0xAD。
-            string? hellReason = hell || legend ? context.Session.LastFormalDungeonRejection : null;
-            byte? altarError = selection.DungeonIndex is 11006 or 11007 ? entryReason switch
+            string? hellReason = hell || legend ? entryReason : null;
+            DungeonSelectionError? altarError = selection.DungeonIndex is 11006 or 11007 ? entryReason switch
             {
-                "altar-entry-daily-limit" => 246,
-                "altar-entry-insufficient-gold" => 10,
+                "altar-entry-daily-limit" => DungeonSelectionError.DungeonLimitOrStorageReward,
+                "altar-entry-insufficient-gold" => DungeonSelectionError.InsufficientGold,
                 _ => null
             } : null;
             byte[] rejection = altarError is { } code ? DungeonPackets.SelectionRejected(code) :
                 hellReason is { } why && why.StartsWith("hell-party-", StringComparison.Ordinal)
-                ? DungeonPackets.HellPartyRejected(why.StartsWith("hell-party-quest-required:", StringComparison.Ordinal) ? (byte)0x09 :
-                    why == "hell-party-item-required" ? (byte)0x11 : (byte)0x01)
+                ? DungeonPackets.HellPartyRejected(why.StartsWith("hell-party-quest-required:", StringComparison.Ordinal) ? DungeonSelectionError.Silent :
+                    why == "hell-party-item-required" ? DungeonSelectionError.RequiredMaterials : DungeonSelectionError.NoAvailableDifficulty)
+                : entryReason == "fatigue-exhausted" || entryReason?.StartsWith("start-fatigue-insufficient:", StringComparison.Ordinal) == true
+                ? DungeonPackets.SelectionRejected(DungeonSelectionError.MemberFatigueOrClearCondition, memberSlot ?? 0)
+                : entryReason?.StartsWith("entry-item-required:", StringComparison.Ordinal) == true ||
+                  entryReason?.StartsWith("dungeon-required-item:", StringComparison.Ordinal) == true ||
+                  entryReason?.StartsWith("channel-town-required-item:", StringComparison.Ordinal) == true ||
+                  entryReason == "ancient-required-items-insufficient"
+                ? DungeonPackets.SelectionRejected(party ? DungeonSelectionError.GroupMaterials : DungeonSelectionError.RequiredMaterials, memberSlot ?? 0)
                 : DungeonPackets.SelectionRejected();
             await context.Reply(CmdPacketType.SELECT_DUNGEON, rejection, hell ? "formal_hell_party_rejected" : "formal_dungeon_rejected", CanSend);
             return CommandResult.Handled;

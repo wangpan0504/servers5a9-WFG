@@ -5,6 +5,22 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Network.Builders;
 
+internal enum DungeonResultOption : byte
+{
+    Retry = 0, // dstr 479: 再次挑战地下城；dstr 48373: 进入下一个地下城
+    OtherDungeon = 1, // dstr 480: 请选择其他地下城
+    ReturnTown = 2, // dstr 481: 返回城镇；dstr 46658: 返回[冒险者的游戏]
+    ContinuationTail = 3 // 已记录的连图尾包，没有独立文案。
+}
+
+// ACK72失败提示与ACK16错误码不是同一枚举；本版失败分支仅133有独立显示。
+internal enum DungeonResultClientError : ushort
+{
+    SecretShopPending = 133 // dstr 25053: 有队员正在使用神秘商店， 请稍后再进行操作。
+}
+
+internal enum DungeonRetryAvailability : byte { Unavailable = 0, Available = 9 }
+
 internal static class DungeonSettlementPackets
 {
     // NOTI255在023802F1/0238031F读u32和u8；时间由客户端除10，尾标志不触发附加奖励。
@@ -18,7 +34,7 @@ internal static class DungeonSettlementPackets
     public static byte[] BossAccepted(ushort bossKey) => [1, 1, (byte)bossKey, (byte)(bossKey >> 8)];
 
     // NOTI261读取u8写入结算页资格；9开放再挑战，0保留禁用状态，不负责切换场景。
-    public static byte[] RetryEligibility(bool available) => [available ? (byte)9 : (byte)0];
+    public static byte[] RetryEligibility(bool available) => [(byte)(available ? DungeonRetryAvailability.Available : DungeonRetryAvailability.Unavailable)];
 
     public static byte[] PlayResult(ushort actorId, DungeonSettlementPresentation presentation, IReadOnlyList<ushort>? members = null)
     {

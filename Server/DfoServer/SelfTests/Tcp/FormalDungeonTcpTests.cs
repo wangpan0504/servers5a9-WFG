@@ -681,7 +681,7 @@ internal static partial class FormalDungeonTcpTests
                 Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}", "错误开关参数不改变默认状态");
             That(Command("infinite-fatigue off") == "OK {\"infiniteFatigue\":false}", "GM可关闭实际Session共享的无限疲劳");
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
-            SelectMap(peer); peer.Send(16,selection); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+            SelectMap(peer); peer.Send(16,selection); peer.Expect(1,16,[0,22,0,0]); peer.Barrier();
             That(fixture.Snapshot("SELECT * FROM character_fatigue") == stored, "关闭后真实零疲劳拒绝重新入场");
             That(Command("infinite-fatigue on").StartsWith("OK "), "重新开启无限疲劳");
             peer.Send(16,selection); peer.Expect(0,28); peer.Expect(0,29);
@@ -701,6 +701,7 @@ internal static partial class FormalDungeonTcpTests
                 fixture.Query("SELECT count(*) FROM character_dungeon_fatigue_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
                 "关闭开关真实扣点一次，重复加载不重复扣费且不写旧房间明细");
         }
+        VerifyExhaustedOrdinaryRetry(fixture, resources);
         await fixture.StopAsync();
         await fixture.StartAsync("restart");
         That(Command("infinite-fatigue") == "OK {\"infiniteFatigue\":true}" &&
@@ -708,6 +709,73 @@ internal static partial class FormalDungeonTcpTests
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "调试切换保留SQLite完整性");
         await fixture.StopAsync();
+    }
+
+    static void VerifyExhaustedOrdinaryRetry(TcpTestFixture fixture, TcpTestResources resources)
+    {
+        static WirePacket[] Drain(TcpPeer peer) => PartyDungeonTcpTests.Drain(peer);
+        using var peer = Open(fixture);
+        peer.Create("RetryTired");
+        fixture.Sql("DELETE FROM character_active_main_quests WHERE character_id=$p0", peer.Id);
+        fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
+        fixture.Sql("UPDATE character_fatigue SET used=maximum-1,remaining=1 WHERE character_id=$p0", peer.Id);
+        peer.Select(2, prepared: true);
+        EntryTown(peer);
+        SelectMap(peer);
+        var selection = Selection();
+        BinaryPrimitives.WriteUInt32LittleEndian(selection.AsSpan(16), 0);
+        peer.Send(16, selection);
+        var information = peer.Expect(0, 28).Body;
+        var map = peer.Expect(0, 29).Body;
+        var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(3).Mazes[information[7]];
+        var path = QuestStoryRouteTests.Path(maze.StaticTopology, new(map[0], map[1]), new(information[8], information[9]));
+        foreach (var point in path)
+        {
+            if (point != path[0])
+            {
+                byte[] move = new byte[100]; move[0] = (byte)point.X; move[1] = (byte)point.Y;
+                peer.Send(45, move); peer.Expect(1, 45, [1]); map = peer.Expect(0, 29).Body;
+            }
+            Load(peer);
+            Drain(peer);
+            foreach (int at in Enumerable.Range(0, map[18]).Select(index => 19 + 22 * index)
+                .Where(at => map[at + 21] == 0 && map[at + 13] != 9).OrderBy(at => map[at + 13] == 3))
+            {
+                ushort key = U16(map, at + 6);
+                peer.Send(39, Death(key, peer.Id, map[at + 12]));
+                That(Drain(peer).Any(packet => packet is { Kind: 0, Opcode: 38 } && U16(packet.Body) == key),
+                    "疲劳耗尽后仍可完成已开始副本的真实死亡链");
+            }
+        }
+        peer.Send(46, DungeonSettlementProtocolTests.Report(peer.Id, 99));
+        var settled = Drain(peer);
+        That(settled.Any(packet => packet is { Kind: 0, Opcode: 34 }) &&
+            settled.Any(packet => packet is { Kind: 0, Opcode: 35 }) &&
+            fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[0L]],
+            "普通副本在真实零疲劳下完成结算");
+        peer.Send(69); Drain(peer);
+        peer.Send(70); Drain(peer);
+        peer.Send(71, [0, 0]);
+        That(Drain(peer).Any(packet => packet is { Kind: 1, Opcode: 71, Body.Length: 33 }) &&
+            fixture.Query("SELECT claimed FROM character_dungeon_card_rewards WHERE character_id=$p0", peer.Id) is [[1L]],
+            "再挑战失败前先实际领取免费牌，验证已领取资产保留");
+        string attempts = fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id);
+        string fatigue = fixture.Snapshot("SELECT * FROM character_fatigue WHERE character_id=$p0", peer.Id);
+        string items = fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id);
+        peer.Send(72, [1, 0]);
+        var returned = Drain(peer);
+        int ack = Array.FindIndex(returned, packet => packet is { Kind: 1, Opcode: 72, Body: [1, 1, 2] });
+        int state = Array.FindIndex(returned, packet => packet is { Kind: 0, Opcode: 3 });
+        int town = Array.FindIndex(returned, packet => packet is { Kind: 0, Opcode: 24 });
+        That(ack >= 0 && state > ack && town > state && returned.All(packet => packet.Opcode is not (28 or 29)) &&
+            fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id) == attempts &&
+            fixture.Snapshot("SELECT * FROM character_fatigue WHERE character_id=$p0", peer.Id) == fatigue &&
+            fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) == items,
+            "再挑战被拒后按ACK72→状态3→24回城，不预留新尝试、扣疲劳或更改已领奖资产");
+        peer.Send(72, [1, 0]);
+        That(Drain(peer).All(packet => packet.Opcode is not (28 or 29)) &&
+            fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id) == attempts,
+            "退场后迟到的重开请求不创建新实例");
     }
 
     static SkillPacketsTests.WireTree[] ExpectLevelRefresh(TcpPeer peer, byte level, ulong experience, bool town = false, bool completedMainline = false)

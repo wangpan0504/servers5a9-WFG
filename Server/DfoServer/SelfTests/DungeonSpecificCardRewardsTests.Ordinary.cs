@@ -37,10 +37,10 @@ internal static partial class DungeonSpecificCardRewardsTests
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)),
             checked((ushort)(bounds.Y + bounds.Height / 2)));
-        foreach (bool activeQuest in new[] { false, true })
+        foreach (var (activeQuest, tired) in new[] { (false, false), (true, false), (false, true) })
         {
             using var fixture = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
-                done.ToArray(), position: position);
+                done.ToArray(), position: position, fatigueRemaining: tired ? (ushort)1 : null);
             if (activeQuest)
             {
                 var candidate = quests.All.OrderBy(row => row.Id).First(row => row.Id < 30000 &&
@@ -98,6 +98,28 @@ internal static partial class DungeonSpecificCardRewardsTests
                     fixture.Session.BeginClearedHellSelection() is null, "普通哈林清图后也不开放深渊祭坛或超星空资格包");
                 output.Frames.Clear();
                 var before = fixture.Read();
+                if (tired)
+                {
+                    That(before.Fatigue?.Remaining == 0, "真实普通路线首次扣尽疲劳，仍可完成本次结算");
+                    await Dispatch([1, 0]);
+                    That(output.Frames.Count >= 3 && output.Frames[0][0] == 1 &&
+                        BinaryPrimitives.ReadUInt16LittleEndian(output.Frames[0].AsSpan(1)) == 72 &&
+                        output.Frames[0].AsSpan(16).SequenceEqual(new byte[] { 1, 1, 2 }) &&
+                        output.Frames[1][0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(output.Frames[1].AsSpan(1)) == 3 &&
+                        output.Frames[2][0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(output.Frames[2].AsSpan(1)) == 24 &&
+                        fixture.Session.Phase == SessionPhase.Town && fixture.Session.DungeonSnapshot is null,
+                        "疲劳耗尽的普通再挑战提交退场后回复回城选项，不等待不存在的重开成功");
+                    var after = fixture.Read();
+                    That(after.Fatigue == before.Fatigue && after.DungeonState == before.DungeonState &&
+                        JsonSerializer.Serialize(after.Inventory) == JsonSerializer.Serialize(before.Inventory) &&
+                        after.ActiveMainQuests.SequenceEqual(before.ActiveMainQuests),
+                        "重开拒绝及回城不重复扣疲劳、预留尝试、改资产或任务");
+                    int returnedFrames = output.Frames.Count;
+                    await Dispatch([1, 0]);
+                    That(output.Frames.Count == returnedFrames && fixture.Session.DungeonSnapshot is null,
+                        "退场后迟到的重复再挑战不能创建新实例或重复发布");
+                    return;
+                }
                 await Dispatch([2, 1]); await Dispatch([1, 1]);
                 That(output.Frames.Select(frame => BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(1)))
                     .SequenceEqual(new ushort[] { 72, 72, 15, 3, 27 }) && fixture.Session.Phase == SessionPhase.MapSelect &&

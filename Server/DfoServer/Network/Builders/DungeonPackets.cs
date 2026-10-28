@@ -7,6 +7,97 @@ using DfoServer.Network.Builders.Inventory;
 
 namespace DfoServer.Network.Builders;
 
+// 匹配客户端 ACK16 的独立分支；同一码可能按场景显示不同文案或动作，不能当作服务端资格枚举。
+internal enum DungeonSelectionError : ushort
+{
+    SilentDefault = 0, // 默认分支无提示。
+    NoAvailableDifficulty = 1, // dstr 49548: 没有可以进入的地图难度。
+    BroadcastOrPartyEligibility = 7, // dstr 22366: 进行强化直播时， 无法进入地下城。
+                                      // dstr 65073: 队伍中有人未满足条件， 无法进入%s。
+    LeaderOrBindingLimit = 8, // dstr 728: FAIL : 您不是队长， 不能选择地下城！
+                              // dstr 15083: 超过绑定角色的限制数量， 无法进入。
+    Silent = 9, // 默认分支无提示。
+    InsufficientGold = 10, // dstr 25047: 因[%s]金币不足， 无法进入地下城
+    MemberLevelTooHigh = 13, // dstr 46709: 队伍中存在Lv过高的角色， 因而无法进入地下城。
+    MemberLevelTooLow = 14, // dstr 46710: 队伍中存在Lv过低的角色， 因而无法进入地下城。
+    Untranslated22118 = 16, // dstr 22118: dnf_22118
+    RequiredMaterials = 17, // dstr 31363: 入场所需的材料或费用不足，无法入场。
+                            // dstr 47707: 因[%s]缺少入场材料， 无法进入。
+                            // dstr 47708: 因存在缺少入场材料的队员， 无法进入%s。
+    DailyLimitDialog = 18, // dstr 23126: 抱歉， 已经超出每日入场次数上限。
+    SelectionStateOrEligibility = 19, // dstr 727: FAIL : 处于无法选择状态， 不能选择地下城！
+                                      // dstr 25161: 超 · 星空裂缝
+                                      // dstr 25162: 队伍中有完成"%s"任务的队员， 无法入场。
+                                      // dstr 48015: 角色的Lv不符， 无法进入。
+                                      // dstr 67061: 因存在缺少未完成“前往圣者之鸣号”任务的队员， 无法进入。
+                                      // dstr 73464: 同一公会的冒险家需2人及以上才能入场。
+                                      // dstr 100003038: 队伍中有队员尚未完成时空裂缝任务， 无法入场。
+                                      // dstr 300000148: 当前状态下无法进入。
+    DungeonDifficultyOrLevel = 21, // dstr 726: FAIL : 您选择了不存在的地下城！
+                                   // dstr 60397: 地下城或者难度不符。
+                                   // dstr 70399: 队伍中存在Lv过低的玩家， 无法进入该地下城。
+    MemberFatigueOrClearCondition = 22, // dstr 49061: 玩家[%s]， 因入场所需的疲劳值(%d)不足， 无法挑战该地下城。
+                                       // dstr 300000147: 部分队友已通关， 无法进入。
+    MatchingInProgress = 23, // dstr 36288: 匹配中，无法使用
+    GroupMaterials = 27, // dstr 27156: 部分队员邀请函不足， 无法进入该地下城。
+                         // dstr 42462: 队伍中有队员的%s不足， 无法进入深渊派对。
+                         // dstr 60718: 队伍中存在缺少入场材料的队员，无法进入。
+    GroupInvitationOrShipTicket = 28, // dstr 27156: 部分队员邀请函不足， 无法进入该地下城。
+                                      // dstr 42711: 无乔安费雷诺的乘船票。\n\n入场材料可在乔安费雷诺帆船处购买或通过网吧在线奖励获得。
+    AdvancementRequired = 30, // dstr 100002282: 只有转职角色可以使用。
+    GuildMembershipRequired = 34, // dstr 73463: 只有加入公会的冒险家才能入场。
+    EnergyBlockadeCompleted = 57, // dstr 100008090: 存在已通关能量阻截战地下城的玩家， 无法进入。
+    MemberLevelRequired = 95, // dstr 25048: [%s]角色Lv低于入场要求， 无法进入该地下城。
+    MemberEntryCountExhausted = 97, // dstr 100007194: 队伍中存在已耗尽入场次数的队员， 无法进入。
+    Untranslated49522 = 106, // dstr 49517/49522: dnf_49517 / dnf_49522
+    Untranslated49523 = 107, // dstr 49517/49523: dnf_49517 / dnf_49523
+    DailyLimitOrPendingReward = 108, // dstr 75910: 尚未领取商会支援奖励， 无法进入。
+                                     // dstr 100008097: 超过每日进入次数限制， 无法进入地下城。
+                                     // dstr 100008101: 存在超过每日进入次数限制的队员， 无法进入地下城。
+    HellCharacterOrMerchantQuest = 109, // dstr 22534: 该功能不适用于地狱模式角色。
+                                        // dstr 300000151: 需要接受NPC商人特丽丝的任务[商人的考验]， 才能进入地下城。
+    AbyssMemberLevel = 111, // dstr 42463: 队伍中有队员的Lv不符合要求， 无法进入深渊派对。
+    SecurityVerification = 118, // dstr 65088: 密保卡和二级密码未通过验证， 无法进入。
+    MemberAntiMagic = 119, // dstr 75657: 队伍中存在抗魔值未达到要求的队员， 无法进入地下城。
+    RaidEntryUnavailable = 133, // dstr 32060: 抱歉， 当前状态下无法入场。
+                                // dstr 67018: 其他队伍已经入场或者归属于其他地下城， 目前无法入场。
+                                // dstr 67019: 该地下城由于受到卢克的诅咒而无法入场。
+    CurrentStateUnavailable = 159, // dstr 32022: 当前状态无法使用。
+    DungeonEntryRestrictions = 171, // dstr 32012: 仅限单人进入
+                                    // dstr 48110: 该地下城中无法开启练习模式
+                                    // dstr 49047: 队伍人数低于%d人， 无法进入该地下城。
+                                    // dstr 72967: 只有夫妻2人组队才能进入该地下城。
+    MemberLevelInsufficient = 172, // dstr 74121: 队伍中有队员的Lv不足， 无法进入该地下城。
+    MemberEntryLimit = 173, // dstr 27007: 因[%s]超过进入上限次数， 无法进入该地下城。
+                            // dstr 70538: 玩家[%s]的入场权限不足， 无法进入该地下城。
+    SoloOnly = 174, // dstr 60394: 该地下城仅限单人进入。
+    TournamentPoints = 180, // dstr 21608: 因[%s]的个人竞技大赛点数不足， 无法进入地下城
+    WinningFaction = 189, // dstr 21609: 因[%s]不是胜利势力， 无法进入地下城
+    WeeklyEntryLimit = 208, // dstr 100008099: 超过每周进入次数限制， 无法进入地下城。
+                            // dstr 100008100: 存在超过每周进入次数限制的队员， 无法进入地下城。
+    MinimumPartySize = 210, // dstr 46889: 队伍人数不足， 未达到该地下城要求的最少人数。
+    MinimumDungeonPartySize = 217, // dstr 48444: 尚不满足该地下城的最低人数。
+    Untranslated38381 = 225, // dstr 38381: dnf_38381
+    NoParty = 230, // dstr 46883: 该地下城无法组队进入。
+    ImperialArenaProperties = 233, // dstr 66084: 帝国竞技场地下城属性错误。
+    ImperialArenaDungeonMismatch = 234, // dstr 66085: 帝国竞技场首次进入的地下城与当前进入的地下城不同。
+    EpicCollectionOrHellDifficulty = 235, // dstr 19794: 已完成史诗收集， 无法进入该地下城。
+                                          // dstr 22587: 地狱模式角色无法挑战该难度的地下城。
+    ReturnForDailyUpdate = 238, // dstr 60736: 为了更新地下城每日信息， 即将返回城镇。
+    PartySizeOrSolo = 244, // dstr 40105: 当前队伍人数不符合地下城入场条件。
+                           // dstr 70757: 该地下城只限单人进入。
+    EntryTimeRestriction = 245, // dstr 40106: 只有在规定时间内， 才能进入该地下城。
+                                // dstr 100002345: 05:30~05:59期间， 无法进入魔界盟会地下城。
+    DungeonLimitOrStorageReward = 246, // dstr 40110: 超过该地下城每日可进入的次数上限。
+                                       // dstr 100000023: 已超过该地下城的最大入场次数。
+                                       // dstr 15082: 贮藏箱中有未领取的奖励， 无法进入。
+    FestivalOrSiegeRestriction = 247, // dstr 40111: 逆袭之谷、 南部溪谷开放过程中或是怪物攻城进行时， 无法进入该地下城。
+    SiegeRestriction = 248, // dstr 40112: 怪物攻城进行时， 无法进入该地下城。
+    AltarLevelRestriction = 249, // dstr 40113: Lv65以下的角色无法进入极限的祭坛。
+    DifficultyUnavailable = 254, // dstr 49556: 无法进入当前难度。
+    DungeonWeeklyLimit = 255 // dstr 67087: 已超过该地下城每周可进入次数。
+}
+
 // 两个u16是创建上下文，第二项非零时参与客户端可见性过滤，不能投影地面坐标。
 internal sealed record DungeonDropPacketItem(uint ObjectKey, short RecordSlot, ItemCore? Core,
     ushort ContextValue, ushort VisibilityFilter)
@@ -122,9 +213,19 @@ internal static class DungeonPackets
     public static byte[] SelectionAccepted() => [1];
 
     // ACK16 失败读取 success:u8、error:u16 和 memberSlot:u8；单人成员槽为0。
-    public static byte[] SelectionRejected(byte error = 9) => [0, error, 0, 0];
+    public static byte[] SelectionRejected(DungeonSelectionError error = DungeonSelectionError.Silent, byte memberSlot = 0)
+    {
+        if (memberSlot > 7) throw new ArgumentOutOfRangeException(nameof(memberSlot));
+        // 其他分支可能继续读取字段；枚举完整不代表四字节正文已逐项验证。
+        if (error is not (DungeonSelectionError.SilentDefault or DungeonSelectionError.NoAvailableDifficulty or
+            DungeonSelectionError.Silent or DungeonSelectionError.InsufficientGold or DungeonSelectionError.RequiredMaterials or
+            DungeonSelectionError.MemberFatigueOrClearCondition or DungeonSelectionError.GroupMaterials or
+            DungeonSelectionError.DungeonLimitOrStorageReward))
+            throw new ArgumentOutOfRangeException(nameof(error));
+        return [0, (byte)error, (byte)((ushort)error >> 8), memberSlot];
+    }
     // 本版0xAD显示次数/权限上限，不用于缺区域任务；缺任务沿错误9恢复，门票不足保留0x11。
-    public static byte[] HellPartyRejected(byte code) => [0, code, 0, 0];
+    public static byte[] HellPartyRejected(DungeonSelectionError code) => SelectionRejected(code);
     // NOTI28的匹配36B布局；调用方提供已审核的准入计划，构包不建立实例或确认加载。
     public static byte[] Information(DungeonEntryPlan plan, DungeonPoint? bossPosition = null)
     {

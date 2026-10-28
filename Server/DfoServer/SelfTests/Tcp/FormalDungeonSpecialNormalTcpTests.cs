@@ -26,9 +26,10 @@ internal static partial class FormalDungeonTcpTests
         int sequence = 0;
         foreach (var sample in new[] { (Id:9595,Tired:false,Ticket:false),(Id:9595,Tired:false,Ticket:true),(Id:5101,Tired:true,Ticket:true),
             (Id:5101,Tired:false,Ticket:true),(Id:400000016,Tired:false,Ticket:false),
-            (Id:400000016,Tired:true,Ticket:true),(Id:400000016,Tired:false,Ticket:true) }.Select(row => (row.Id,row.Tired,row.Ticket,Explicit:true))
-            .Concat(Enumerable.Range(5102,5).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:true)))
-            .Concat(Enumerable.Range(5101,6).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:false))))
+            (Id:400000016,Tired:true,Ticket:true),(Id:400000016,Tired:false,Ticket:true) }.Select(row => (row.Id,row.Tired,row.Ticket,Explicit:true,RetryWithoutTicket:false))
+            .Concat(Enumerable.Range(5102,5).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:true,RetryWithoutTicket:false)))
+            .Concat(Enumerable.Range(5101,6).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:false,RetryWithoutTicket:false)))
+            .Concat([(Id:9595,Tired:false,Ticket:true,Explicit:true,RetryWithoutTicket:true)]))
         {
             var definition = dungeons.Get(sample.Id);
             bool luke = definition.IsOrdinaryLuke;
@@ -58,7 +59,8 @@ internal static partial class FormalDungeonTcpTests
                 {
                     var items = resources.ItemResources;
                     var inventory = new InventoryService(items.Items,items.GoldLimits,items.EpicPieces);
-                    created = InventoryService.Commit(repository,owner,created,inventory.Grant(created,[new(ticket.ItemId,ticket.Count * 2)]));
+                    created = InventoryService.Commit(repository,owner,created,inventory.Grant(created,
+                        [new(ticket.ItemId,ticket.Count * (sample.RetryWithoutTicket ? 1 : 2))]));
                 }
                 if (sample.Id == 9595 && sample.Ticket || luke && sample.Explicit && !sample.Tired)
                 {
@@ -130,8 +132,8 @@ internal static partial class FormalDungeonTcpTests
             foreach (byte wrong in luke ? new byte[] { 0,1,3,4 } : new byte[] { 0 })
             {
                 request[4] = wrong;
-                peer.Send(16,request); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
-                That(fixture.Snapshot() == before,"非指定难度拒绝不扣票、疲劳或预留实例");
+                peer.Send(16,request); peer.Expect(1,16,[0,sample.Ticket ? (byte)9 : (byte)17,0,0]); peer.Barrier();
+                That(fixture.Snapshot() == before,"先检查缺票、再检查指定难度；拒绝不扣票、疲劳或预留实例");
             }
             if (luke)
             {
@@ -153,7 +155,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(16,request);
             if (sample.Tired || !sample.Ticket)
             {
-                peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+                peer.Expect(1,16,[0,sample.Tired ? (byte)22 : (byte)17,0,0]); peer.Barrier();
                 That(fixture.Snapshot() == before,"疲劳或普通门票不足时整次拒绝，已持有门票不被提前扣除");
                 continue;
             }
@@ -164,9 +166,9 @@ internal static partial class FormalDungeonTcpTests
             if (definition.OrdinaryEntryTicket is { } paidTicket)
             {
                 peer.Expect(0,14);
-                That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1",
-                    peer.Id,paidTicket.ItemId) is [[long remainingTicket]] && remainingTicket == paidTicket.Count,
-                    "持有两次所需材料，入场完整扣一次并持久化剩余数量");
+                That(fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1",
+                    peer.Id,paidTicket.ItemId) is [[long remainingTicket]] && remainingTicket == (sample.RetryWithoutTicket ? 0 : paidTicket.Count),
+                    "入场完整扣除一次材料并持久化剩余数量");
             }
             if (sample.Id == 400000016)
             {
@@ -242,6 +244,28 @@ internal static partial class FormalDungeonTcpTests
             }
             That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)
                 is [[long scalar]] && scalar == (sample.Id == 400000016 ? 4 : 1),"真实通关减少一次计数，跨图收集任务保留未齐状态");
+            if (sample.RetryWithoutTicket)
+            {
+                string attempts = fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id);
+                string fatigueAfterClear = fixture.Snapshot("SELECT * FROM character_fatigue WHERE character_id=$p0", peer.Id);
+                string assets = fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id);
+                peer.Send(72, [1, 0]);
+                var returned = PartyDungeonTcpTests.Drain(peer);
+                int ack = Array.FindIndex(returned, packet => packet is { Kind: 1, Opcode: 72, Body: [1, 1, 2] });
+                int state = Array.FindIndex(returned, packet => packet is { Kind: 0, Opcode: 3 });
+                int townNotice = Array.FindIndex(returned, packet => packet is { Kind: 0, Opcode: 24 });
+                That(ack >= 0 && state > ack && townNotice > state && returned.All(packet => packet.Opcode is not (28 or 29)) &&
+                    fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id) == attempts &&
+                    fixture.Snapshot("SELECT * FROM character_fatigue WHERE character_id=$p0", peer.Id) == fatigueAfterClear &&
+                    fixture.Snapshot("SELECT * FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid", peer.Id) == assets,
+                    "普通副本重试缺入场材料时按ACK72、状态3、24回城，不再扣费或创建实例");
+                That(fixture.Events().Any(row => row.GetProperty("Kind").GetString() == "formal_dungeon_return" &&
+                    row.GetProperty("Detail").TryGetProperty("Reason", out var reason) && reason.GetString() == "ordinary-retry-rejected" &&
+                    row.GetProperty("Detail").TryGetProperty("RejectReason", out var rejection) &&
+                    rejection.GetString()?.StartsWith("dungeon-required-item:", StringComparison.Ordinal) == true),
+                    "失败原因确为入场材料耗尽，不由其它资格拒绝替代");
+                continue;
+            }
             peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0",peer.Id) is [[long town,long zone]] &&
                 town == area.Town && zone == area.Area,"放弃普通副本返回实际入口地区");
