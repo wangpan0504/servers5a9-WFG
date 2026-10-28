@@ -212,6 +212,13 @@ internal static class TcpRegressionTests
         ("dungeon-dazzlement", FormalDungeonTcpTests.RunDazzlementAsync),
         ("hero-tomb-entry", FormalDungeonTcpTests.RunHeroTombAsync),
         ("assault-result-menu", FormalDungeonTcpTests.RunAssaultResultMenuAsync),
+        ("assault-hunt-quest", (_, _, resources) =>
+        {
+            AssaultHuntQuestTests.RunResources(resources.Archive, resources.Quests);
+            AssaultHuntQuestTests.Run(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources,
+                resources.Quests, resources.Learning);
+            return Task.CompletedTask;
+        }),
         ("operation-hope", FormalDungeonTcpTests.RunOperationHopeAsync),
         ("otherverse-ancient", FormalDungeonTcpTests.RunOtherverseAncientAsync),
         ("party-otherverse-ancient", PartyDungeonTcpTests.RunOtherverseAncientAsync),
@@ -456,7 +463,7 @@ internal static class TcpRegressionTests
         "experience-consumable-rules",
         "legacy-status-rules",
         "stackable-actions",
-        "gift-selection-tcp", "gift-selection-resources", "dungeon-entry-plan", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
+        "gift-selection-tcp", "gift-selection-resources", "dungeon-entry-plan", "assault-hunt-quest", "quest-continuation", "quest-manual-skip", "quest-ticket", "quest-specified-ticket", "quest-awakening-ticket",
         "quest-play-only", "quest-auto-meet", "quest-npc-mapping", "quest-hidden", "quest-replay", "quest-initialization",
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
         "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost"

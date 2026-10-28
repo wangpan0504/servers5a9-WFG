@@ -485,6 +485,7 @@ internal static class SelfTestRunner
         MiddleQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         MetroQuestEntryCoverageTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemQuestEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
+        AssaultHuntQuestTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HellPartyEntryTests.Run(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         HarlemMaterialDropTests.RunResources(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
         SleepyHollowMaterialDropTests.RunResources(towns,pvf,characters,itemResources,sharedQuests,sharedSkills);
