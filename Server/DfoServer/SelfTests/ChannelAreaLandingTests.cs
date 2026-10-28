@@ -22,7 +22,7 @@ internal static class ChannelAreaLandingTests
         var harlem = new ChannelEntry(new(2, 37), 22, "[harlem]");
         var fiend = new ChannelEntry(new(2, 39), 45, "[fiendwar]");
         var pvp = new ChannelEntry(new(2, 101), 24, "[pvp]");
-        foreach (var (group, area) in new[] { ("[impossible]", (byte)2), ("[ancient]", (byte)5) })
+        foreach (var (group, area) in new[] { ("[impossible]", (byte)2), ("[ancient]", (byte)0) })
         {
             var channel = new ChannelEntry(new(2, 24), 11, group);
             if (!towns.Areas.TryGetValue((17, area), out var destination))
@@ -32,9 +32,25 @@ internal static class ChannelAreaLandingTests
             }
             var completed = destination.Quests.Concat(destination.AnyQuests).ToHashSet();
             That(ChannelAreaLanding.Place(towns, channel, 95, completed) is { Town: 17 } spot && spot.Area == area,
-                "异界与远古频道分别到圣者之鸣号已登记副本入口");
-            That(ChannelAreaLanding.Place(towns, channel, 1, completed) is null, "特殊入口仍核对地区等级");
+                "异界频道到船尾、远古频道先进赛丽亚房间");
+            // 17/0 是圣者之鸣号的赛丽亚房间，本身没有等级/任务准入；等级核对仍由船尾 17/2 这一档覆盖。
+            if (area == 2)
+                That(ChannelAreaLanding.Place(towns, channel, 1, completed) is null, "特殊入口仍核对地区等级");
         }
+
+        // 远古入口在船头 17/3 的镇魂曲门后：17/5 自身只有回船头与本地 -1 -1 副本门两行，直接落 17/5 会跳过赛丽亚房间，
+        // 而从门口回甲板时又正好踩在船头的门口矩形上。落点必须与圣者之鸣号一致，17/0 → 17/1 → 17/3 → 17/5 步行链完整。
+        var ancientChannel = new ChannelEntry(new(2, 24), 11, "[ancient]");
+        var sainthornChannel = new ChannelEntry(new(2, 26), 26, "[sainthorn]");
+        var ancientSpot = ChannelAreaLanding.Place(towns, ancientChannel, 95, none);
+        That(ancientSpot is { Town: 17, Area: 0 } && ancientSpot == ChannelAreaLanding.Place(towns, sainthornChannel, 95, none),
+            "远古频道与圣者之鸣号同落赛丽亚房间 17/0，实际=" + ancientSpot);
+        // 步行链依赖镇17 Area5 与船头门的资源增量；未安装时只报告落点，不把资源缺失算成代码回归。
+        if (towns.Areas.ContainsKey((17, 1)) && towns.Areas.ContainsKey((17, 3)) && towns.Areas.ContainsKey((17, 5)))
+            That(towns.Areas[(17, 0)].Map(none).Links.Any(link => link.Town == 17 && link.Area == 1) &&
+                towns.Areas[(17, 1)].Map(none).Links.Any(link => link.Town == 17 && link.Area == 3) &&
+                towns.Areas[(17, 3)].Map(none).Links.Any(link => link.Town == 17 && link.Area == 5),
+                "赛丽亚房间经甲板、船头步行可达镇魂曲大厅 17/5");
 
         var elvenSpot = ChannelAreaLanding.Place(towns, elven, 1, none);
         That(elvenSpot is { Town: 38, Area: 0 } && elvenSpot != towns.Room, "艾尔文防线新选角落到艾尔文街道");

@@ -189,8 +189,9 @@ internal static class ChannelAreaLanding
         if (type == 26)
             return (17, 0);
         if (type == 11)
-            // 异界沿原船尾；远古复用已补登记的镇魂曲大厅，不能落到没有入口的锁门船头。
-            return name switch { "impossible" => (17, 2), "ancient" => (17, 5), _ => (38, 5) };
+            // 异界沿原船尾；远古与圣者之鸣号频道一致，先落赛丽亚房间 17/0，出门经甲板 17/1、船头 17/3 走到镇魂曲大厅 17/5。
+            // 不直接落 17/5：17/5 自身只有回船头与本地 -1 -1 副本门两行，直接落点会跳过赛丽亚房间。
+            return name switch { "impossible" => (17, 2), "ancient" => (17, 0), _ => (38, 5) };
         // 再战频道仍按原生38/1入城；此为本服RoomExit业务落点，非客户端03B876C0的默认映射。
         // 当前PVF town62 Stadium.twn 区域0及map的enter tagdungeon入口；等级/任务继续由Decide校验。
         if (type == 53)
