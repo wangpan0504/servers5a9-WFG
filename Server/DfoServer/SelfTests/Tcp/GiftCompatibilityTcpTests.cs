@@ -31,7 +31,7 @@ internal static class GiftCompatibilityTcpTests
         {
             writer.Write((short)65); writer.Write(1); writer.Write((byte)0); writer.Write((byte)0); writer.Write(row.ItemId);
             writer.Write((byte)(avatar.RequiresAbilityChoice ? 1 : 0));
-            if (avatar.RequiresAbilityChoice) { writer.Write(row.ItemId); writer.Write(row.DefaultAbility); }
+            if (avatar.RequiresAbilityChoice) { writer.Write(row.ItemId); writer.Write(row.ForcedAbility ?? checked((byte)row.DefaultAbility)); }
             writer.Write((byte)0);
         });
         byte[] OpenPet(short slot) => Build(writer => { writer.Write(slot); writer.Write(1); });
