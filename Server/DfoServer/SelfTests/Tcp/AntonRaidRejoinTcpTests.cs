@@ -126,6 +126,12 @@ internal static class AntonRaidRejoinTcpTests
             why + " 时断线和 668 不退票也不再扣");
         again.Send(833, Build(w => { w.Write((byte)0); w.Write(0u); w.Write(0x100u); w.Write(0u); w.Write(Name("")); }));
         That(AntonRaidTcpTests.Until(again, 0, 756).Body.Length >= 12, why + " 时重连后仍能 833 寻找队");
+        again.Send(15, new byte[4]);
+        Bytes(AntonRaidTcpTests.Until(again, 1, 15).Body, [1], why + " 时同角色仍能打开候战室选图");
+        AntonTcpProbe.Barrier(again, "重连后选图");
+        again.Send(132);
+        Bytes(AntonRaidTcpTests.Until(again, 1, 132).Body, [1], why + " 时同角色仍能退出选图回城");
+        AntonTcpProbe.Barrier(again, "重连后回城");
     }
 
     static string? LastReason(JsonElement[] events, string kind) => events.Last(row => row.GetProperty("Kind").GetString() == kind)

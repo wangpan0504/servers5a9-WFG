@@ -66,14 +66,9 @@ internal static class AntonRaidGapTcpTests
             fixture.Query("SELECT town, area FROM characters WHERE name='GapRich'") is [[19L, 0L]] &&
             fixture.Query("SELECT town, area FROM characters WHERE name='GapPoor'") is [[19L, 0L]],
             "票不足不扣队长的两张票，两人留在 19/0，不进候战室");
-        string?[] reasons = [];
-        bool accepted = true;
-        for (int i = 0; i < 20 && (reasons.Count(reason => reason == "entry-cost-insufficient") < 2 || accepted); i++)
-        {
-            await Task.Delay(200);
-            reasons = Reasons(fixture, "raid_start_request");
-            accepted = Accepted(fixture);
-        }
+        await fixture.StopAsync();
+        string?[] reasons = Reasons(fixture, "raid_start_request");
+        bool accepted = Accepted(fixture);
         That(reasons.Count(reason => reason == "entry-cost-insufficient") == 2 && reasons.Contains("squads-unassigned") &&
             reasons.Contains("not-leader") && !accepted,
             "失败原因分别是无票、未分队和非队长，没有一次开战成功。实际 " + string.Join(',', reasons) + " accepted=" + accepted);
@@ -93,6 +88,7 @@ internal static class AntonRaidGapTcpTests
             "关闭阶段推进时清 210 不发 586/596/597/601，也不进 Reward：" + report.Summary());
         That(fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[1L]],
             "关闭阶段推进仍按开战扣一张票");
+        await fixture.StopAsync();
         var events = fixture.Events();
         That(events.Any(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry" &&
                 row.GetProperty("Detail").GetProperty("Dungeon").GetInt32() == 210 &&
@@ -142,6 +138,7 @@ internal static class AntonRaidGapTcpTests
         That(opened.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }), "210 的 15 打开选图");
         AntonTcpProbe.RejectSelect(leader, member, 216);
         AntonTcpProbe.RejectSelect(leader, member, 210, 2);
+        AntonTcpProbe.RejectSelect(leader, member, 210, 0x00090000);
         AntonTcpProbe.RejectSelect(leader, member, 999);
         var leaderReport = new AntonTcpProbe.AntonProbeReport();
         var memberReport = new AntonTcpProbe.AntonProbeReport();
@@ -154,9 +151,25 @@ internal static class AntonRaidGapTcpTests
             AssertState(leaderReport, id, state);
             AssertState(memberReport, id, state);
         }
+        foreach (int dungeon in new[] { 212, 214, 213, 215 })
+        {
+            AntonTcpProbe.EnterSquad(leader, member, catalog, dungeon, leaderReport, memberReport);
+            byte state = dungeon == 215 ? (byte)2 : dungeon == 213 ? (byte)3 : (byte)1;
+            AssertState(leaderReport, dungeon, state);
+            AssertState(memberReport, dungeon, state);
+            SameRoom(leaderReport.Maps[^1], memberReport.Maps[^1], null, dungeon + " 清图迁移时两人地图键和坐标一致");
+        }
+        foreach (int dungeon in new[] { 210, 211, 212, 213, 214, 215, 216, 218, 219, 220, 221, 222, 223, 224 })
+        {
+            AssertState(leaderReport, dungeon, 2);
+            AssertState(memberReport, dungeon, 2);
+        }
+        That(leaderReport.Reward && memberReport.Reward, "双腿成功时两人均收到 587 Reward/0");
+        foreach (int dungeon in new[] { 218, 219, 220, 221, 222, 223, 224 })
+            AntonTcpProbe.RejectClosed(leader, member, dungeon);
         That(leaderReport.Opcode596 == 0 && leaderReport.Opcode597 == 0 && leaderReport.Opcode601 == 0 &&
             memberReport.Opcode596 == 0 && memberReport.Opcode597 == 0 && memberReport.Opcode601 == 0,
-            "双人清 210 不发 596/597/601");
+            "双人完整阶段 0 不发 596/597/601");
         That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[2L]],
             "双人开战各扣一张，进图和清 210 不再扣");
     }

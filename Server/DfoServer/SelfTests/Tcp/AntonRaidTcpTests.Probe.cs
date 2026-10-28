@@ -15,11 +15,17 @@ internal static partial class AntonRaidTcpTests
     // 进程内真实监听：频道 19 入口、单人开战、实机 25 字节 CMD16，以及阶段 0 的 586/Reward。
     public static async Task RunProbeAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        // 定向入口也核对真实安徒恩资源合同；只复用本轮目录，不调用整套核心自测。
+        var raids = RaidCatalog.Load(resources.Archive);
+        AntonRaidResourceTests.RunResources(resources.Archive, raids, resources.ItemResources.Items);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "anton-tcp-probe"), resources: resources);
         Directory.CreateDirectory(fixture.Options.DataDirectory);
         File.WriteAllText(Path.Combine(fixture.Options.DataDirectory, "raid-start.json"),
             """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""");
         await fixture.StartAsync();
+        string usage = await fixture.CliAsync(null, "--anton-probe");
+        That(usage.Contains("不连接", StringComparison.Ordinal) && usage.Contains("--steps", StringComparison.Ordinal),
+            "真实CLI默认只打印说明，不连接，列出步骤参数");
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         int discovered = AntonTcpProbe.ResolveGamePort("127.0.0.1", fixture.Options.ChannelPort, 19);
         That(discovered == endpoints[19], "频道握手选出的 19 号入口就是本进程的分类监听");
@@ -40,13 +46,21 @@ internal static partial class AntonRaidTcpTests
                 new InventoryService(items.Items, items.GoldLimits, items.EpicPieces).Grant(created, [new(10096296, 2)]));
         }
         var main = SelfTestCatalogs.Dungeons(resources.Archive);
-        var catalog = RaidCatalog.Load(resources.Archive).PrepareResources(resources.Archive, main, resources.ItemResources.Items,
+        var catalog = raids.PrepareResources(resources.Archive, main, resources.ItemResources.Items,
             antonMapPath: AntonRaidMapPaths.Bind(main.MapPath)).Find(0)!.Resources!.EntryCatalog!;
         That(catalog.Find(210) is not null && catalog.Ready && catalog.MissingMaps.IsEmpty, "探针使用与 Runtime 相同的已登记团本目录");
         using var peer = Open(fixture, "antonprobe", gamePort: endpoints[19], channelNumber: 19);
         peer.Select();
         Drain(peer);
-        var report = AntonTcpProbe.Play(peer, catalog);
+        string assets = fixture.Snapshot("SELECT * FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')<>10096296 ORDER BY 1,2");
+        string gold = fixture.Snapshot("SELECT id,gold FROM characters ORDER BY id");
+        var report = AntonTcpProbe.Play(peer, catalog, AntonTcpProbe.StopAfterForSteps("start,enter,phase,reward,card"));
+        That(report.Steps.SequenceEqual(new[] { "start", "enter", "phase", "reward", "card" }) && report.CardUnavailable,
+            "探针跑完五个步骤，并明确标记真实安徒恩翻牌策略未装配");
+        That(assets == fixture.Snapshot("SELECT * FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')<>10096296 ORDER BY 1,2") &&
+            gold == fixture.Snapshot("SELECT id,gold FROM characters ORDER BY id") &&
+            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]],
+            "真实 Reward、重复清图及重复660不增道具/金币/奖励回执，保留开战扣票");
         That(report.Started && report.Entered210 && report.Reward && report.Opcode586 > 0 &&
                 report.Opcode596 == 0 && report.Opcode597 == 0 && report.Opcode601 == 0,
             "假客户端跑完开战、210 和 Reward：" + report.Summary());
@@ -69,5 +83,17 @@ internal static partial class AntonRaidTcpTests
             events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() == 586) &&
             !events.Any(row => row.GetProperty("Kind").GetString() == "send" && row.GetProperty("Detail").GetProperty("Opcode").GetInt32() is 596 or 597),
             "server.jsonl 有进图 210、anton_phase_progress Reward 和 586，没有 596/597");
+        peer.Dispose();
+        await fixture.StopAsync();
+        await fixture.StartAsync("reopened");
+        using var reopened = Open(fixture, "antonprobe", gamePort: ChannelTcpTests.Endpoints(fixture)[19], channelNumber: 19);
+        reopened.Select();
+        Drain(reopened);
+        That(fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[1L]] &&
+            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]],
+            "重建Host保留一张票和零奖励回执，不将Reward当最终通关；不是跨进程恢复证明");
+        var restarted = AntonTcpProbe.Play(reopened, catalog, "start");
+        That(restarted.Started && fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[0L]],
+            "同角色重建Host后能重新开战，只扣保存的最后一张票");
     }
 }
