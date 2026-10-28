@@ -142,12 +142,26 @@ internal static partial class AntonRaidTcpTests
         // 01DC9C70的单人成组发送格式；退出后用原12处理器创建新普通Party，证明两套旧身份均已清除。
         leaving.Send(12, Build(w => { w.Write((byte)0); w.Write((byte)0); w.Write(Name("Party : 1")); w.Write((byte)4);
             w.Write(uint.MaxValue); w.Write((byte)5); w.Write((ushort)0); w.Write((byte)0); w.Write((byte)0); w.Write((ushort)0); w.Write((byte)7); }));
-        var solo = ReadUntil(leaving, 0, 9).Body;
-        int countAt = 41 + checked((int)U32(solo, 13));
+        // 退团后的目录worker也会发9；以本次26收齐创建结果，再按成员身份选自己的名册。
+        var created = new List<WirePacket>();
+        for (int n = 0; n < 256; n++)
+        {
+            var packet = leaving.Read(); created.Add(packet);
+            if (packet is { Kind: 0, Opcode: 26 }) break;
+        }
+        var own = created.Where(packet => packet is { Kind: 0, Opcode: 9 } && packet.Body.Length >= 41 &&
+                packet.Body[9] == 0 && packet.Body[12] == 0)
+            .Select(packet => (packet.Body, CountAt: 41 + checked((int)U32(packet.Body, 13))))
+            .Where(row => row.Body.Length > row.CountAt + 3 && row.Body[row.CountAt] > 0 &&
+                U16(row.Body, row.CountAt + 2) == leaving.Id).ToArray();
+        That(own.Length == 1, "原生成组必须返回唯一包含本人的完整名册，目录广播不能冒充创建结果");
+        var solo = own[0].Body;
+        int countAt = own[0].CountAt;
         That(U16(solo) == 1 && U16(solo, 2) == 9999 && U16(solo, 4) != originalParty && solo[9] == 0 && solo[12] == 0 &&
             solo[countAt] == 1 && solo[countAt + 1] == 0 && U16(solo, countAt + 2) == leaving.Id && solo.Length == countAt + 19,
             "退出后原生成组12成功取得新Party编号和唯一真实成员slot0");
-        Bytes(ReadUntil(leaving, 0, 26).Body, [0], "退出后新普通单人队正确安装host");
+        That(created.Last() is { Kind: 0, Opcode: 26 }, "原生成组在原收包预算内完成host通知");
+        Bytes(created.Last().Body, [0], "退出后新普通单人队正确安装host");
         That(fixture.Snapshot() == committed && fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2") == committedInventory,
             "候战室退出与重新普通成组不冒充未知退款，不再修改已提交资产");
         return Task.CompletedTask;
