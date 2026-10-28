@@ -47,17 +47,30 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
     {
         if (request.Body.Length != 2) return CommandResult.Unhandled;
         bool luke = context.Session.RaidCombatKind() == RaidKind.Luke;
-        var rejectedView = luke ? context.Session.RaidCombatView() : null;
+        var entryView = luke ? context.Session.RaidCombatView() : null;
+        var rejectedView = entryView;
         long epoch = context.Session.SelectionEpoch;
-        async Task<CommandResult> RejectLukeAsync()
+        Task<CommandResult> RejectLukeAsync()
         {
-            // 02344BEE..02344C02：失败WORD 0x12清660等待；不把不支持请求留成永久pending。
-            await context.Reply(CmdPacketType.SELECT_RAID_REWARD_CARD, [0, 0x12, 0], "raid_reward_rejected",
-                () => rejectedView is not null && context.Session.SelectionEpoch == epoch && context.Session.RaidCombatView()?.Instance == rejectedView.Instance);
-            return CommandResult.Handled;
+            // 02344BEE..02344C02：失败WORD 0x12清660等待；旧阶段拒绝不能清掉新窗口等待。
+            bool Current() => rejectedView is not null && context.Session.SelectionEpoch == epoch &&
+                context.Session.RaidCombatView() is { } current && current.Instance == rejectedView.Instance &&
+                current.Phase == rejectedView.Phase && current.State == rejectedView.State;
+            // 拒绝不是已提交资产，不使用QueuePublication仅保留会话的FIFO合同；泵写前重验阶段。
+            return Task.FromResult(context.Sender.TryPost(1, (ushort)CmdPacketType.SELECT_RAID_REWARD_CARD,
+                [0, 0x12, 0], "raid_reward_rejected", Current) ? CommandResult.Handled : CommandResult.CloseConnection);
         }
         if (luke && request.Body[0] is not (0 or 1)) return await RejectLukeAsync();
         if (lifecycle is not null) context.Session.CommitPendingLukePhase(lifecycle);
+        if (luke)
+        {
+            // 本请求可提交同阶段资格屏障；领取开始前冻结新窗口，领取后不得把旧失败重贴新阶段。
+            var settled = context.Session.RaidCombatView();
+            rejectedView = entryView is not null && settled is not null && context.Session.SelectionEpoch == epoch &&
+                settled.Instance == entryView.Instance && settled.Phase == entryView.Phase &&
+                (settled.State == entryView.State || entryView.State == AntonRaidBattleState.Fighting && settled.State == AntonRaidBattleState.Reward)
+                ? settled : null;
+        }
         var receipt = context.Session.ClaimRaidReward(request.Body[0], request.Body[1], rewards, items, gold, pieces,
             (clock ?? TimeProvider.System).GetUtcNow());
         if (receipt is null) return luke ? await RejectLukeAsync() : CommandResult.Unhandled;
