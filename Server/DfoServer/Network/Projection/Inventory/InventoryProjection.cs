@@ -135,7 +135,9 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main ||
                 suppressAvatarNotice && list == InventoryListType.Avatar;
             // 整理和ACK19回填后的同模板增量只更新属性；先清槽再以1681载入，保留图标effect而不播报获得。
+            // ACK19已安装的穿戴对象不能再清空：列表3仅更新已有对象，Actor也不重建本人的穿戴实例。
             var reloadSlots = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is { } now &&
+                !(preserveSkillSwitch && acknowledgedSlots?.Contains(slot) == true) &&
                 (suppressNotice ||
                     plan.BeforeIndex.Find(slot) is { } old && old.Core.ItemId != now.Core.ItemId)).ToArray();
             var updateType = suppressNotice ?
