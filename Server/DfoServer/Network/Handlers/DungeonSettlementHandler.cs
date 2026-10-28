@@ -151,10 +151,19 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 rush.Item?.ItemId ?? 0, rush.Item?.Count ?? 0), "formal_boss_rush_result", Guard);
         }
         else if (!cosmo && !war)
-        await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(effective),
-            result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
-            result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
-            result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience, receipt.PartySlot), "formal_clear_reward", Guard);
+        {
+            var cardBody = ExclusiveDropPackets.ClearCard(reward.Applied(effective),
+                result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
+                result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
+                result.Presentation.MonsterExperienceEntries, result.Presentation.MonsterBossExperience, receipt.PartySlot);
+            if (context.Session.PartyDungeon is { } instance)
+            {
+                instance.StartCards(context.Session);
+                context.PartyCardTemplate = new(instance, receipt, cardBody);
+                cardBody = DungeonSettlementPackets.PartyCardReward(cardBody, receipt.PartySlot, instance.CardSnapshot());
+            }
+            await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, cardBody, "formal_clear_reward", Guard);
+        }
         if (dungeons.Get(checked((int)receipt.Entry.DungeonId)).IsDazzlementTower)
             await DazzlementTowerProjection.StateAsync(context, Guard);
         if (result.LuckyStarGained)
@@ -232,7 +241,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var view = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("翻牌展示失效");
         var fatigue = receipt.Character.Fatigue ?? throw new InvalidOperationException("翻牌角色缺少疲劳owner");
         await context.Reply(CmdPacketType.CARD_SELECT_RIGHT_STATE, DungeonSettlementPackets.CardRights(checked((short)fatigue.Remaining), receipt.PartySlot), "formal_card_rights", () => context.Session.CanPublishDungeonSettlement(receipt));
-        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection);
+        if (context.Session.PartyDungeon is { } party && party.CardSnapshot() is { } snapshot && snapshot.Any(card => card?.FreeSelected == true))
+            await context.Reply(CmdPacketType.SELECT_CARD, DungeonSettlementPackets.CardSelected(view, snapshot), "party_card_sync", () => context.Session.CanPublishCardView(receipt, view));
+        context.Cards ??= new DungeonCardProjection(context, log, inventoryProjection, partyDungeons);
         await context.Cards.StartAsync(receipt);
         return CommandResult.Handled;
     }
@@ -259,7 +270,11 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             }
             receipt = selected.Receipt;
             var paidView = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("付费牌展示失效");
-            await context.Reply(CmdPacketType.SELECT_CARD,DungeonSettlementPackets.CardSelected(paidView),"formal_paid_card_selected",
+            var paidInstance = context.Session.PartyDungeon;
+            var paidSnapshot = paidInstance?.RecordCard(context.Session, paidView);
+            if (paidInstance is not null && partyDungeons is not null)
+                context.AfterDispatch = () => partyDungeons.PublishSettlementCard(paidInstance, context.Session);
+            await context.Reply(CmdPacketType.SELECT_CARD,DungeonSettlementPackets.CardSelected(paidView, paidSnapshot),"formal_paid_card_selected",
                 () => context.Session.CanPublishCardView(receipt,paidView));
             await DungeonCardMembershipProjection.RefreshAsync(context);
             if (selected.Inventory is { } inventory)
@@ -270,7 +285,11 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         else return CommandResult.Unhandled;
         if (receipt is null) return CommandResult.Unhandled;
         var view = context.Session.FormalCardState(receipt) ?? throw new InvalidOperationException("免费牌展示失效");
-        await context.Reply(CmdPacketType.SELECT_CARD, DungeonSettlementPackets.CardSelected(view), "formal_free_card_selected",
+        var instance = context.Session.PartyDungeon;
+        var cardSnapshot = instance?.RecordCard(context.Session, view);
+        if (instance is not null && partyDungeons is not null)
+            context.AfterDispatch = () => partyDungeons.PublishSettlementCard(instance, context.Session);
+        await context.Reply(CmdPacketType.SELECT_CARD, DungeonSettlementPackets.CardSelected(view, cardSnapshot), "formal_free_card_selected",
             () => context.Session.CanPublishCardView(receipt,view));
         if (free?.Inventory is { } freeInventory)
             await (inventoryProjection ?? throw new InvalidOperationException("免费牌缺少库存投影")).RefreshAsync(context, freeInventory);

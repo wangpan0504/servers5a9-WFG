@@ -94,6 +94,47 @@ internal static partial class PartyDungeonTcpTests
             }
         }
 
+        using (var group = new Coop(fixture, resources, "cardexit", new(38, 2, 1085, 249), [3145], 95, 4))
+        {
+            var peers = group.Peers;
+            group.Join(); group.Enter(3, 0); group.Load();
+            var maze = SelfTestCatalogs.Dungeons(resources.Archive).Get(3).Mazes.Single(m => m.SourceOrdinal == group.Information[7]);
+            var path = QuestStoryRouteTests.Path(maze.StaticTopology, new(group.Map[0], group.Map[1]),
+                new(group.Information[8], group.Information[9]));
+            foreach (var next in path.Skip(1)) { ClearRoom(); group.Move((byte)next.X, (byte)next.Y); group.Load(); }
+            ClearRoom(); group.Settle();
+            peers[3].Send(13);
+            var left = group.All(peers[3]);
+            CheckRemoved(left[3], 13);
+            peers[2].Dispose();
+            peers[0].Expect(0, 6);
+            Drain(peers[0]); Drain(peers[1]); Drain(peers[3]);
+            peers[1].Send(69); Drain(peers[1]);
+            peers[1].Send(70); Drain(peers[1]);
+            var updates = new List<WirePacket>();
+            for (int attempt = 0; attempt < 8 && !updates.Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[5] == 1); attempt++)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1));
+                updates.AddRange(Drain(peers[0]));
+            }
+            That(updates.Any(p => p is { Kind: 0, Opcode: 35 } && HasCardSeat(p.Body, 1)) &&
+                updates.Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[5] == 1),
+                "结算中离队及断线后自动翻牌仍通知在线幸存者");
+            That(!Drain(peers[3]).Any(p => p is { Kind: 1, Opcode: 71 }), "已离队成员不收到后续翻牌");
+            void ClearRoom()
+            {
+                var map = group.Map;
+                foreach (int offset in Enumerable.Range(0, map[18]).Select(index => 19 + index * 22)
+                    .Where(offset => map[offset + 21] == 0 && map[offset + 13] != 9).OrderBy(offset => map[offset + 13] == 3))
+                {
+                    ushort key = U16(map, offset + 6);
+                    peers[0].Send(39, FormalDungeonTcpTests.Death(key, peers[0].Id, map[offset + 12]));
+                    That(group.All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 38 } && U16(packet.Body) == key)),
+                        "结算离队夹具同步真实死亡");
+                }
+            }
+        }
+
         using (var group = new Coop(fixture, resources, "loadexit", new(38, 2, 1085, 249), [3145], 95, 2))
         {
             group.Join(); group.Enter(3, 0);

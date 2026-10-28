@@ -17,9 +17,9 @@ internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Lead
     public PartySettings Settings { get; init; } = PartySettings.Default;
     public Guid? EvildomWarBattleId { get; init; }
 }
-internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged }
+internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged, SettlementCard }
 internal sealed record PartyNotice(PartyNoticeKind Kind, PartyMember Recipient, PartyMember? Peer = null,
-    PartySnapshot? Party = null, uint PeerId = 0, Func<bool>? Guard = null);
+    PartySnapshot? Party = null, uint PeerId = 0, Func<bool>? Guard = null, PartyDungeonInstance? Dungeon = null);
 internal sealed record PartyResult(ushort Error, PartyNotice[] Notices)
 {
     public bool Accepted => Error == 0;
@@ -457,10 +457,10 @@ internal sealed partial class PartyService
         }
         return notices.ToArray();
     }
-    public void Publish(IEnumerable<PartyNotice> notices)
+    public void Publish(IEnumerable<PartyNotice> notices, bool presenceChanged = true)
     {
         foreach (var notice in notices)
             if (notice.Recipient.Actor.IsCurrent()) notice.Recipient.Actor.Session.PartyNoticeArrived?.Invoke(notice);
-        PresenceChanged();
+        if (presenceChanged) PresenceChanged();
     }
 }

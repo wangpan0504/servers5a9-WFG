@@ -12,6 +12,13 @@ namespace DfoServer.Game.Dungeons;
 internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonStore store, IEvildomWarStore? warStore = null,
     Func<int, int>? hiddenDraw = null, IEvildomWarGuideStore? guideStore = null)
 {
+    public void PublishSettlementCard(PartyDungeonInstance instance, GameSession source)
+    {
+        var notices = instance.Members.Where(member => !ReferenceEquals(member.Actor.Session, source) &&
+            ReferenceEquals(member.Actor.Session.PartyDungeon, instance))
+            .Select(member => new PartyNotice(PartyNoticeKind.SettlementCard, member, Dungeon: instance));
+        parties.Publish(notices, presenceChanged: false);
+    }
     public int RefundEvildomWar(GameSession session) => warStore is null ? 0 : session.RefundEvildomWar(warStore);
 
     public async Task RecoverEvildomWarAsync(GameSession session, EvildomWarCatalog catalog, CancellationToken stop = default)
@@ -158,6 +165,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
                 m.Actor.Session.FormalDungeonResultFocus() is null) ||
             party.Members.Select(m => m.Actor.Session.Phase).Distinct().Count() != 1) return [];
         if (MarriageDungeonAdmission.Applies(dungeon) && party.Members.Length != 2) return [];
+        var previousInstance = leader.PartyDungeon;
         var instance = new PartyDungeonInstance(Guid.NewGuid(), party, store);
         uint firstKey = party.Members.Max(m => Math.Max(m.Actor.Session.Selected?.DungeonState?.NextObjectKey ?? 65536u,
             (uint)m.Actor.Character.Id + 1));
@@ -202,6 +210,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
                 var committed = store.CommitPartyDungeonEntry(reservations.Select(r => r!).ToArray());
                 var notices = prepared.Select((p, index) => new PartyDungeonNotice(PartyDungeonNoticeKind.Entry, p.Member, party.Members,
                     p.Member.Actor.Session.InstallPartyDungeon(p.Preparation, committed[index], reservations[index]!, instance))).ToArray();
+                previousInstance?.ClearCards();
                 raidRun?.Install();
                 var war = warRun?.Install();
                 var entered = GameSession.ObserveRaidPartyRun(party.Members, instance.Id, notices, observeMap: false);

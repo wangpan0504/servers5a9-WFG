@@ -16,12 +16,55 @@ internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMemb
     DfoServer.Game.Raids.RaidStageFactKind? RaidEvent = null,
     EvildomWarView? WarView = null);
 
+internal sealed class PartySettlementCards
+{
+    readonly DungeonCardView?[] cards = new DungeonCardView?[8];
+    public void Record(DungeonCardView view) => cards[view.Slot] = view;
+    public DungeonCardView?[] Snapshot() => (DungeonCardView?[])cards.Clone();
+    public void Clear() => Array.Clear(cards);
+}
+
 // 共享实例拥有全员加载屏障、路线推进与击杀事实；掉落随机、地面物品及拾取归各角色账本。
 // 各Session的Run仅作为同一实例的角色账本投影，不能绕过此owner单独过图或发奖。
 internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyDungeonStore store)
 {
     [ThreadStatic] static PartyDungeonInstance? executing;
     readonly object gate = new();
+    readonly object cardGate = new();
+    PartySettlementCards? settlementCards;
+    public void StartCards(GameSession session)
+    {
+        lock (cardGate)
+            if (ReferenceEquals(session.PartyDungeon, this) && Members.Any(member => ReferenceEquals(member.Actor.Session, session)))
+                settlementCards ??= new PartySettlementCards();
+    }
+    public DungeonCardView?[] CardSnapshot()
+    {
+        lock (cardGate) return settlementCards?.Snapshot() ?? new DungeonCardView?[8];
+    }
+    public bool IsCardSnapshotCurrent(DungeonCardView?[] snapshot)
+    {
+        lock (cardGate) return settlementCards is not null && settlementCards.Snapshot().SequenceEqual(snapshot);
+    }
+    public DungeonCardView?[] RecordCard(GameSession session, DungeonCardView view)
+    {
+        lock (cardGate)
+        {
+            if (!ReferenceEquals(session.PartyDungeon, this) || !Members.Any(member =>
+                ReferenceEquals(member.Actor.Session, session) && member.Slot == view.Slot)) return CardSnapshot();
+            settlementCards ??= new PartySettlementCards();
+            settlementCards.Record(view);
+            return settlementCards.Snapshot();
+        }
+    }
+    internal void ClearCards()
+    {
+        lock (cardGate)
+        {
+            settlementCards?.Clear();
+            settlementCards = null;
+        }
+    }
     readonly QuestMarriagePartyClear? marriageParty = FreezeMarriageParty(id, party.Members);
     bool marriagePartyInvalid;
     PartyMember[] members = party.Members;
@@ -296,6 +339,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         if (result.Length == 0) return [];
         foreach (var member in current) member.Actor.Session.RemovePartyDungeon(this);
         members = [];
+        ClearCards();
         return result;
     });
 
@@ -308,6 +352,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         if (result.Length == 0) return [];
         foreach (var member in current) member.Actor.Session.RemovePartyDungeon(this);
         members = [];
+        ClearCards();
         return result;
     });
 
@@ -319,6 +364,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         if (result.Length == 0) return [];
         foreach (var member in current) member.Actor.Session.RemovePartyDungeon(this);
         members = [];
+        ClearCards();
         return result;
     });
 
@@ -332,6 +378,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
             removed = members.FirstOrDefault(m => ReferenceEquals(m.Actor.Session, session))?.Actor.Character.Id ?? 0;
             members = members.Where(m => !ReferenceEquals(m.Actor.Session, session)).ToArray();
             session.RemovePartyDungeon(this);
+            if (members.Length == 0) ClearCards();
         }
         if (removed == 0 || !Members.Any(m => m.IsCurrent() && ReferenceEquals(m.Actor.Session.PartyDungeon, this))) return [];
         return Execute(current =>

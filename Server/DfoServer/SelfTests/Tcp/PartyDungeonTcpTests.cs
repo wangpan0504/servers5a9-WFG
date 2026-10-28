@@ -8,6 +8,20 @@ namespace DfoServer.Testing;
 
 internal static partial class PartyDungeonTcpTests
 {
+    static bool HasCardSeat(byte[] body, int wanted)
+    {
+        if (body.Length < 164) return false;
+        int offset = checked(156 + (int)U32(body, 151) * 8);
+        for (int seat = 0; seat < 8; seat++)
+        {
+            if (offset >= body.Length) return false;
+            int count = body[offset++];
+            if (offset + count * 8 > body.Length) return false;
+            if (seat == wanted) return count > 0;
+            offset += count * 8;
+        }
+        return false;
+    }
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         OrdinaryLukePartyTests.Run(resources);
@@ -270,6 +284,9 @@ internal static partial class PartyDungeonTcpTests
                     That(playResult.Length == 9 + 7 * count && playResult[6] == 99 - slot * 20 && playResult[8] == count &&
                         Enumerable.Range(0, count).All(i => U16(playResult, 9 + 7 * i) == participants[i].Id) &&
                         settledPackets.Any(p => p is { Kind: 0, Opcode: 35 }), "真实多人报告选择本人行、按本人评分提交并发布完整名册与奖励");
+                    if (slot > 0)
+                        That(settledPackets.Any(p => p is { Kind: 0, Opcode: 35 } && HasCardSeat(p.Body, 0)),
+                            "迟到结算的成员收到先翻成员的免费牌");
                     string committedSettlement = fixture.Snapshot();
                     peer.Send(46, report);
                     That(Drain(peer).Any(p => p is { Kind: 0, Opcode: 34 }) && fixture.Snapshot() == committedSettlement,
@@ -280,25 +297,44 @@ internal static partial class PartyDungeonTcpTests
                     peer.Send(46, report);
                     That(!Drain(peer).Any(p => p is { Kind: 0, Opcode: 34 or 35 }) && fixture.Snapshot() == committedSettlement,
                         "已冻结的多人报告即使检查值有效也不能更改");
+                    if (slot == 0)
+                    {
+                        peer.Send(69); Drain(peer);
+                        peer.Send(70); Drain(peer);
+                        peer.Send(71, [0, 0]);
+                        That(Drain(peer).Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[1] == 0),
+                            "首名成员可在其他成员结算前翻牌");
+                    }
                 }
                 That(fixture.Query("SELECT count(*),count(DISTINCT instance_id) FROM character_dungeon_settlement_receipts") is [[long settled, 1L]] && settled == count,
                     "共享实例有两份角色结算且实例ID一致");
                 foreach (var peer in participants)
                 {
                     byte slot = checked((byte)Array.IndexOf(participants, peer));
+                    if (slot == 0) continue;
                     peer.Send(69); Drain(peer);
                     peer.Send(70);
-                    var rights = Drain(peer).Single(p => p is { Kind: 1, Opcode: 70 }).Body;
+                    var cardStart = Drain(peer);
+                    var rights = cardStart.Single(p => p is { Kind: 1, Opcode: 70 }).Body;
                     That(Enumerable.Range(0, 8).All(i => (U16(rights, 1 + i * 2) != ushort.MaxValue) == (i == slot)),
                         "翻牌资格只开放本人的原始队伍席位");
+                    That(cardStart.Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[1] == 0),
+                        "迟到进入翻牌页收到已揭示席位");
                     string beforeCard = fixture.Snapshot();
                     peer.Send(71, [0, (byte)((slot + 1) % count)]);
                     That(!Drain(peer).Any(p => p is { Kind: 1, Opcode: 71 }) && fixture.Snapshot() == beforeCard,
                         "不能领取其他成员位置的免费牌");
                     peer.Send(71, [0, slot]);
                     var revealed = Drain(peer).Single(p => p is { Kind: 1, Opcode: 71, Body.Length: 33 }).Body;
-                    That(Enumerable.Range(0, 8).All(i => revealed[1 + i * 4] == (i == slot ? 0 : 255)),
+                    That(revealed[1 + slot * 4] == slot,
                         "每名队员在真实队伍席位领取并揭示自己的免费牌");
+                    foreach (var other in participants.Where(member => !ReferenceEquals(member, peer)))
+                    {
+                        var updates = Drain(other);
+                        That(updates.Any(p => p is { Kind: 0, Opcode: 35 } && HasCardSeat(p.Body, slot)) &&
+                            updates.Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[1 + slot * 4] == slot),
+                            "队友收到翻牌者的牌面和所属席位揭示");
+                    }
                     string claimed = fixture.Snapshot();
                     peer.Send(71, [0, slot]);
                     That(Drain(peer).Any(p => p is { Kind: 1, Opcode: 71 }) && fixture.Snapshot() == claimed,

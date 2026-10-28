@@ -15,6 +15,21 @@ internal static class PartyProjection
             TownPackets.Actor(identity.Character, identity.Channel, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), identity.AdventureName,
                 identity.Phase == SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
                 identity.PremiumPcRoom), "party_actor");
+        if (notice.Kind == PartyNoticeKind.SettlementCard && notice.Dungeon is { } dungeon)
+        {
+            if (context.Stop.IsCancellationRequested || context.PartyCardTemplate is not { } template ||
+                !ReferenceEquals(template.Instance, dungeon) || !ReferenceEquals(context.Session.PartyDungeon, dungeon)) return;
+            var cards = dungeon.CardSnapshot();
+            var own = cards[template.Receipt.PartySlot] ?? new DfoServer.Game.Dungeons.DungeonCardView(null, false, null) { Slot = template.Receipt.PartySlot };
+            bool Current() => Guard() && !context.Stop.IsCancellationRequested &&
+                ReferenceEquals(context.Session.PartyDungeon, dungeon) && context.Session.CanPublishPartyCards(template.Receipt) &&
+                dungeon.IsCardSnapshotCurrent(cards);
+            context.Sender.Post(0, (ushort)NotiPacketType.CLEAR_DUNGEON_REWARD,
+                DungeonSettlementPackets.PartyCardReward(template.Body, template.Receipt.PartySlot, cards), "party_card_reward", Current);
+            context.Sender.Post(1, (ushort)CmdPacketType.SELECT_CARD,
+                DungeonSettlementPackets.CardSelected(own, cards), "party_card_selected", Current);
+            return;
+        }
         if (notice.Kind == PartyNoticeKind.Refused)
         {
             context.Sender.Post(1, (ushort)CmdPacketType.RESPONSE_PEER, PartyPackets.Failure(133), "party_refused", Guard);

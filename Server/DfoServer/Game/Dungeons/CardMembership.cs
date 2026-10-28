@@ -68,4 +68,5 @@ internal sealed record DungeonCardClaimPreparation(Character Expected, byte Side
 internal sealed record DungeonCardView(DungeonCardOptions? Options,bool FreeSelected,DungeonCardReward? Paid)
 {
     public byte Slot { get; init; }
+    public DungeonCardReward? Free { get; init; }
 }

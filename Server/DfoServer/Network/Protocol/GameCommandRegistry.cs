@@ -55,9 +55,11 @@ internal sealed class GameCommandRegistry
         context.Owner.Execute(() => true);
         commands.TryGetValue(request.Opcode, out var command);
         CommandResult result = CommandResult.Unhandled;
+        Action? after = null;
         using (var gates = await DispatchGateScope.EnterAsync(context, request, command?.SharedGate))
         {
             context.DispatchGates = gates;
+            context.AfterDispatch = null;
             // 共享门禁协调所有成员命令；本人应答也只能入队，不能等慢连接拖住整组。
             using var publication = !gates.HasShared ? null : context.Sender.QueuePublication(() =>
             {
@@ -71,7 +73,10 @@ internal sealed class GameCommandRegistry
             }
             // 异步处理结束后仍须属于当前账号；旧连接不能继续下一条业务。
             context.Owner.Execute(() => true);
+            after = context.AfterDispatch;
+            context.AfterDispatch = null;
         }
+        after?.Invoke();
         if (result == CommandResult.CloseConnection) await context.Sender.DrainAsync();
         return result;
     }
