@@ -224,6 +224,7 @@ internal static class SqliteMigrations
         new(109, "团本类型隔离与卢克两阶段生命周期", RaidLifecycleSchema.Upgrade),
         new(110, "角色疲劳每日恢复日戳", FatigueDailyResetSchema.Upgrade),
         new(111, "全局物品限次和周期补给", ServerItemUsageSchema.Upgrade),
+        new(112, "婚姻关系与共享资产账本", MarriageSchema.Upgrade),
     ];
 
     internal const string BossSelectionBuffSchema = """
@@ -2133,6 +2134,8 @@ internal static class SqliteMigrations
             (FatigueDailyResetSchema.Table,FatigueDailyResetSchema.Definition),
             (ServerItemUsageSchema.StateTable,ServerItemUsageSchema.StateDefinition),
             (ServerItemUsageSchema.AccountTable,ServerItemUsageSchema.AccountDefinition),
+            ("marriage_records",MarriageSchema.RecordsSql),
+            ("marriage_active_members",MarriageSchema.ActiveMembersSql),
             ("quest_eligibility_mail_dispatches",QuestEligibilityMailSchema),
             ("character_collectbox_state",CollectBoxStateTableSchema),
             ("character_collectbox_slots",CollectBoxSlotsTableSchema),

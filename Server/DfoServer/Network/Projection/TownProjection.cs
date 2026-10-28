@@ -20,7 +20,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
     CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null,
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
-    ServerEventService? events = null)
+    ServerEventService? events = null, MarriageProjection? marriage = null)
 {
     readonly TimeProvider timer = clock ?? TimeProvider.System;
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
@@ -41,6 +41,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     }
     public async Task<TownCharacterProjection> EnterAsync(GameConnectionContext context, bool resumeTown = false)
     {
+        marriage?.PrepareInitialization(context);
         if (devil is not null) context.Session.InitializeDevilContract(devil, timer.GetUtcNow());
         titles?.PrepareInitialization(context);
         adventure?.Prepare(context);
@@ -115,6 +116,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
                 "dungeon_enter_count_initialize");
         if (mailbox is not null)
             await mailbox.InitializeAsync(context);
+        if (marriage is not null)
+            await marriage.InitializeAsync(context);
         if (titles is not null)
             await titles.InitializeAsync(context);
         if (adventure is not null)
@@ -231,6 +234,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     public async Task TravelAsync(GameConnectionContext context, TownTravelReceipt receipt, bool auraTeleport = false, bool partyTeleport = false)
     {
         bool CanSend() => context.Session.CanPublishTravel(receipt);
+        if (marriage is not null)
+            await marriage.WeddingSceneAsync(context, receipt.Character, arrival: false, CanSend);
         auraTeleport |= partyTeleport;
         byte[]? prepare = partyTeleport ? TeleportPackets.PrepareAuraEffect(receipt.Character.Id) : null;
         byte[]? departure = auraTeleport ? TeleportPackets.AuraEffect(receipt.Character.Id, arrival: false) : null;
@@ -270,6 +275,11 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await context.Notify(NotiPacketType.SHOW_EFFECT, arrival, "teleport_aura_arrival", CanSend);
         if (joined && CanSend() && parties is not null)
             parties.Publish(parties.SceneChanged(context.Session));
+        if (marriage is not null)
+        {
+            await marriage.WeddingSceneAsync(context, receipt.Character, arrival: true, CanSend);
+            await marriage.HomeSceneAsync(context, receipt.Character, CanSend);
+        }
     }
 
     // 在地区切换触发客户端训练对象绑定前，先给出独立技能快照；不覆盖普通 NOTI19 双树。
@@ -443,10 +453,10 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     }
 
     public void Remove(GameConnectionContext context) => presence?.Remove(context.Sender);
-    public void Refresh(GameConnectionContext context)
+    public void Refresh(GameConnectionContext context, bool marriageOnly = false)
     {
         if (context.Session.Selected is { } c)
-            presence?.Refresh(context.Owner, context.Sender, c, context.Session.ReadAdventureName());
+            presence?.Refresh(context.Owner, context.Sender, c, context.Session.ReadAdventureName(), marriageOnly: marriageOnly);
     }
     public async Task DetachAsync(GameConnectionContext context)
     {

@@ -72,6 +72,7 @@ internal sealed record DungeonMaze(
     public bool IsUltimateAltar { get; init; }
     // 实验性（#259）：比赛副本的 1x1 单图迷宫，地图取自 PVF 地图反向 [dungeon] 声明。
     public bool IsTournament { get; init; }
+    public DungeonMap? WeddingCoupleRoom { get; init; }
     // 仅识别已确认的三个整数；原始 token 继续保留给资源诊断。
     public bool ConnectsQuest(uint questId, byte difficulty = 0, int state = 0) => QuestConnectionTokens.Count == 3 &&
         QuestConnectionTokens.All(token => token.Type == 0) &&
@@ -209,12 +210,17 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
         Path.StartsWith("dungeon/luke_normal/",StringComparison.OrdinalIgnoreCase) &&
         Marker("normal luke dungeon") && Marker("raid normal dungeon");
     public bool IsNormalFiendwar => Id == 400000016 && WarriorsDungeon == "normalfiend";
+    public bool IsWeddingCouple => Id == 3541 && Path.Equals("dungeon/china/chn_wedding_couple.dgn", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(DungeonType?.Trim(), "wedding couple", StringComparison.OrdinalIgnoreCase);
+    public bool HasWeddingCouplePartyLimit => RawSections.Where(row => row.Tag == "limit party count").ToArray() is
+        [{ Tokens: [{ Type: 0, Value: 2 }] }];
     // 普通安徒恩保留完整消耗数量；第三列1为消耗，不能把数量8忽略成免费入场。
     public DungeonRequiredItemRow? OrdinaryEntryTicket => RequiredItemRows is [{ Count: > 0, Third: 1 } ticket] &&
-        (ticket.Count == 1 || IsOrdinaryAnton) ? ticket : null;
+        (ticket.Count == 1 || IsOrdinaryAnton || IsWeddingCouple) ? ticket : null;
     public bool DisablePaidCard => RawSections.Where(row => row.Tag == "gold card use").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 0 }] }];
-    public bool DisableMonsterAndClearExperience => Marker("no experience monster and result");
+    public bool DisableMonsterAndClearExperience => Marker("no experience monster and result") ||
+        IsWeddingCouple && Marker("disable exp");
     public bool DeclaresStartFatigue => RawSections.Any(row => row.Tag == "use fatigue only start dungeon");
     // #511 [use fatigue only start dungeon] N：只认唯一一段且恰为一个 1..65535 的整数；其他形状返回 null（保持逐房扣点）。
     public ushort? StartFatigue => RawSections.Where(row => row.Tag == "use fatigue only start dungeon").ToArray() is

@@ -4,6 +4,7 @@ namespace DfoServer.Game.Characters;
 internal sealed record CharacterDeletion(ushort Id, ushort Slot, string Name, long Revision)
 {
     public bool AdventureBusy { get; init; }
+    public bool MarriageBusy { get; init; }
 }
 
 internal sealed record CharacterDeletionReceipt(ushort RosterIndex, CharacterDeletion Deleted, CharacterRosterSnapshot Roster);

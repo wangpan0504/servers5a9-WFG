@@ -11,7 +11,7 @@ namespace DfoServer.Testing;
 
 internal sealed record WirePacket(byte Kind, ushort Opcode, byte[] Body, bool Protected = false);
 // 独立实现测试帧与 CRC，不能调用服务端的 Frame、Parser、Builder 来自证。
-internal sealed class TcpPeer : IDisposable
+internal sealed partial class TcpPeer : IDisposable
 {
     public static readonly (byte Kind, ushort Opcode)[] Entry =
         [(1, 4), (0, 1382), (0, 2), (0, 2), (0, 13), (0, 988), (0, 356), (0, 13), (0, 13), (0, 950), (0, 53), (0, 427), (0, 1152), (0, 3), (0, 1153), (0, 22), (0, 23), (0, 24), (0, 1379), (0, 124)];
@@ -219,6 +219,12 @@ internal sealed class TcpPeer : IDisposable
     {
         var packet = Read();
         int countUpdates = 0;
+        while (opcode != 1016 && packet is { Kind: 0, Opcode: 1016 })
+        {
+            TestCheck.That(packet.Body.Length == 14 && U32(packet.Body, 0) != Id,
+                "异步婚姻属性只更新远端Actor且保持14字节合同");
+            packet = Read();
+        }
         bool griefAnnounced = false;
         // 选图附带的状态通知逐项校验后记录，550须按两祭坛及悲叹当前楼层逐项匹配真实账本；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
@@ -966,6 +972,7 @@ internal sealed class TcpPeer : IDisposable
                     mails.Add(packet.Body);
                     packet = Read();
                 }
+                    packet = ReadMarriageInitialization(packet, U16(prefix[0].Body, 9));
                 TestCheck.That(packet.Kind == 0 && packet.Opcode == 359, "角色称号三计数在邮件后、城镇状态前初始化");
                 TitleProgress = packet.Body;
                 TestCheck.That(TitleProgress.Length == 20 + U32(TitleProgress, 0) * 10, "成就列表必读16B最近完成尾部");

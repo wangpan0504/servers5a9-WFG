@@ -50,7 +50,10 @@ internal sealed partial class CharacterRepository
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            SELECT c.id,c.slot,c.name,c.revision,EXISTS(SELECT 1 FROM account_adventure_expedition_members m WHERE m.account=$account AND m.character_id=c.id)
+            SELECT c.id,c.slot,c.name,c.revision,EXISTS(SELECT 1 FROM account_adventure_expedition_members m WHERE m.account=$account AND m.character_id=c.id),
+              (EXISTS(SELECT 1 FROM marriage_active_members m WHERE m.character_id=c.id) OR
+               EXISTS(SELECT 1 FROM marriage_records r,json_each(r.aggregate_json,'$.Wedding.Gifts') gift
+                 WHERE json_extract(gift.value,'$.CharacterId')=c.id AND json_extract(gift.value,'$.Settled')=0))
             FROM characters c WHERE c.account=$account AND c.slot=$slot
             """;
         command.Parameters.AddWithValue("$account", account);
@@ -58,7 +61,7 @@ internal sealed partial class CharacterRepository
         using var reader = command.ExecuteReader();
         if (!reader.Read()) throw new InvalidDataException("Deletion slot absent");
         return new(checked((ushort)reader.GetInt32(0)), checked((ushort)reader.GetInt32(1)), reader.GetString(2), reader.GetInt64(3))
-            { AdventureBusy = reader.GetBoolean(4) };
+            { AdventureBusy = reader.GetBoolean(4), MarriageBusy = reader.GetBoolean(5) };
     }
 
     public CharacterDeletion Delete(AccountOwners.Lease owner, CharacterDeletion expected) => owner.Execute(() =>
@@ -69,6 +72,7 @@ internal sealed partial class CharacterRepository
         if (ReadDeletionTarget(db, tx, owner.Account, expected.Slot) != expected)
             throw new InvalidOperationException("Character deletion identity or revision changed");
         if (expected.AdventureBusy) throw new InvalidDataException("Character participates in an adventure expedition");
+        if (expected.MarriageBusy) throw new InvalidDataException("角色存在有效婚约或未结清婚礼礼金，不能删除");
         RequireDeletionDependencies(db, tx);
         RemoveTagEvildomCharacter(db, tx, owner.Account, expected.Id);
         using var command = db.CreateCommand();
@@ -176,7 +180,9 @@ internal sealed partial class CharacterRepository
             "character_server_item_usage",
             "account_adventure_receipts", "account_adventure_expedition_members", "account_adventure_expeditions",
             // 两端均以 ON DELETE CASCADE 清理，账号级冒险团好友不随单个角色删除。
-            "character_social_links"])
+            "character_social_links",
+            // 活动婚约已由删除事务显式拒绝；历史聚合不外键角色，不能随删角清账。
+            "marriage_active_members"])
             .ToHashSet(StringComparer.Ordinal);
         using var query = db.CreateCommand();
         query.Transaction = tx;

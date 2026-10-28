@@ -21,6 +21,8 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
 {
     [ThreadStatic] static PartyDungeonInstance? executing;
     readonly object gate = new();
+    readonly QuestMarriagePartyClear? marriageParty = FreezeMarriageParty(id, party.Members);
+    bool marriagePartyInvalid;
     PartyMember[] members = party.Members;
     readonly HashSet<ushort> loaded = [];
     readonly HashSet<ushort> deaths = [];
@@ -86,7 +88,11 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
                     throw new InvalidOperationException("Party dungeon participant changed");
                 var previous = executing;
                 executing = this;
-                try { return action(current); }
+                try
+                {
+                    ValidateMarriageParty(current);
+                    return action(current);
+                }
                 finally { executing = previous; }
             }
         });
@@ -99,6 +105,26 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
             current.Any(member => !member.Actor.Session.CanMoveWithParty())) return null;
         return reporter.ReportLukeFacility(symbol, value, operation);
     });
+
+    static QuestMarriagePartyClear? FreezeMarriageParty(Guid instance, PartyMember[] members)
+    {
+        if (members.Length != 2) return null;
+        var first = members[0].Actor.Character;
+        var second = members[1].Actor.Character;
+        return first.Marriage is { State: >= 1 and <= 3 } relation && second.Marriage?.Id == relation.Id &&
+            first.Id != second.Id && relation.IsMember(first.Id) && relation.IsMember(second.Id)
+            ? new(instance, relation.Id, first.Id, second.Id) : null;
+    }
+
+    void ValidateMarriageParty(PartyMember[] current)
+    {
+        if (marriageParty is { } frozen && (current.Length != 2 || current.Any(member =>
+            member.Actor.Character.Id != frozen.FirstId && member.Actor.Character.Id != frozen.SecondId ||
+            member.Actor.Session.Selected?.Marriage is not { State: >= 1 and <= 3 } relation || relation.Id != frozen.MarriageId)))
+            marriagePartyInvalid = true;
+        foreach (var member in current)
+            member.Actor.Session.SetMarriageDungeonWitness(this, marriagePartyInvalid ? null : marriageParty);
+    }
 
     public PartyDungeonNotice[] CompleteLoading(GameSession reporter) => Execute(current =>
     {
@@ -286,6 +312,8 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
         ushort removed;
         lock (gate)
         {
+            session.SetMarriageDungeonWitness(this, null);
+            marriagePartyInvalid = true;
             removed = members.FirstOrDefault(m => ReferenceEquals(m.Actor.Session, session))?.Actor.Character.Id ?? 0;
             members = members.Where(m => !ReferenceEquals(m.Actor.Session, session)).ToArray();
             session.RemovePartyDungeon(this);

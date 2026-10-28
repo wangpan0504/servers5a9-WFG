@@ -105,6 +105,7 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             party.Members.Any(m => m.Actor.Session.Phase != SessionPhase.MapSelect &&
                 m.Actor.Session.FormalDungeonResultFocus() is null) ||
             party.Members.Select(m => m.Actor.Session.Phase).Distinct().Count() != 1) return [];
+        if (MarriageDungeonAdmission.Applies(dungeon) && party.Members.Length != 2) return [];
         var instance = new PartyDungeonInstance(Guid.NewGuid(), party, store);
         uint firstKey = party.Members.Max(m => Math.Max(m.Actor.Session.Selected?.DungeonState?.NextObjectKey ?? 65536u,
             (uint)m.Actor.Character.Id + 1));

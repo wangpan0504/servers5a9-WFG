@@ -69,6 +69,21 @@ internal sealed class DungeonMapPool(ImmutableArray<DungeonMapPoolEntry> entries
         var bosses = maze.Bosses.Where(point => !hellParty || point != maze.HellParty?.Room).Distinct().ToArray();
         if (starts.Length == 0 || bosses.Length == 0) return maze;
         var start = starts[0]; var boss = bosses[0];
+        // 夫妻副本DGN仅声明BB单房，MAP以[dungeon]3541反向注册实际Boss图。
+        if (definition.IsWeddingCouple)
+        {
+            if (maze.Width != 1 || maze.Height != 1 || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
+                start != new DungeonPoint(0, 0) || boss != start || maze.GreedGrid.Cells is not [{ Index: 1 }] ||
+                maze.MapSpecification is not null || maze.MapAlternatives.Count != 0 || maze.LayeredMaps.Count != 0 ||
+                maze.ConditionalMaps.Count != 0 || maze.WarpMaps.Count != 0 || maze.StoryStages.Count != 0 ||
+                maze.BossEntrance is not null || maze.HellParty is not null ||
+                pool is not [{ Kind: "[boss]", Layouts: 2, Dungeons.Length: 1 } candidate] ||
+                candidate.Dungeons[0] != definition.Id ||
+                !candidate.Path.Equals("map/chn_wedding_couple_dungeon/chn_wedding_couple_01.map", StringComparison.OrdinalIgnoreCase))
+                return maze;
+            var room = new DungeonMap("boss", start, candidate.Id, candidate.Path);
+            return maze with { WeddingCoupleRoom = room, MapSpecification = [room] };
+        }
         // 绝望单层的BB是专用单房；只从同一DGN归属的唯一MAP解析，不通过名字或楼层算地图编号。
         // 第15/25/55层资源包含真实多房间，继续走下方普通连接解析。
         if (definition.IsDespairTower && maze.Width == 1 && maze.Height == 1 &&

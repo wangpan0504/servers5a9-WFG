@@ -10,7 +10,8 @@ namespace DfoServer.Network;
 
 internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol,
     Func<PacketCapture?, CancellationToken, Task>? runManagement, Func<OnlineCharacterView[]> onlineCharacters, Action onStarted, ServerLog log, GameChannelListeners gameChannels,
-    Protocol.NativeChannel? native = null, IDisposable? runtimeMemory = null, IAsyncDisposable? gameplayTimers = null)
+    Protocol.NativeChannel? native = null, IDisposable? runtimeMemory = null, IAsyncDisposable? gameplayTimers = null,
+    Func<CancellationToken, Task>? runWorld = null)
 {
     readonly ConcurrentDictionary<int, Task> active = new();
     int counter;
@@ -27,6 +28,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         var channel = new TcpListener(IPAddress.Parse(options.ListenAddress), options.ChannelPort);
         Task gm = Task.CompletedTask;
         Task http = Task.CompletedTask;
+        Task world = Task.CompletedTask;
         Task[] listeners = [];
         string starting = "Channel listener";
         try
@@ -66,6 +68,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             }));
             log.Write("server_ready", new { Pid = Environment.ProcessId });
             starting = "Running listeners";
+            if (runWorld is not null) world = runWorld(lifetime.Token);
             listeners = [Accept(channel, channelProtocol, true, lifetime.Token),
                 .. gameChannels.Bound.Select(entry => Accept(entry.Listener, gameProtocol, false, lifetime.Token, entry.Endpoint)),
                 .. (native is null ? Array.Empty<Task>() : [Accept(native.Listener, native, false, lifetime.Token)])];
@@ -75,6 +78,8 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
                 workers = [.. workers, gm];
             if (options.PacketHttpPort != 0)
                 workers = [.. workers, http];
+            if (runWorld is not null)
+                workers = [.. workers, world];
             await await Task.WhenAny(workers);
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
@@ -95,7 +100,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             native?.Stop();
             try
             {
-                await Task.WhenAll([.. listeners, gm, http]);
+                await Task.WhenAll([.. listeners, gm, http, world]);
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
             {

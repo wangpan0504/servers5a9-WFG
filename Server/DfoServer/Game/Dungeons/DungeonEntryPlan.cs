@@ -72,6 +72,7 @@ internal sealed record DungeonEntryPlan(
     public ushort StartFatigue { get; init; }
     public OperationHopeAdmission? Hope { get; init; }
     public (byte Job,byte Grow)? HopeRewardProfession { get; init; }
+    public MarriageDungeonAdmission? Marriage { get; init; }
     public bool UsesRoomFatigue => UsesFatigue && StartFatigue == 0 && Hope is null;
     // #510/#511 普通入场的 [required item]「物品 1 1」：入场提交时与疲劳、尝试号同事务扣除。
     public DungeonRequiredItemRow? EntryItem { get; init; }

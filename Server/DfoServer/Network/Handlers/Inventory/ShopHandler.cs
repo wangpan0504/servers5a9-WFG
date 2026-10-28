@@ -5,11 +5,13 @@ using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 using DfoServer.Infrastructure;
+using DfoServer.Game.Marriage;
+using DfoServer.Network.Projection;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopService cashShop, InventoryProjection projection,
-    ServerLog log) : IGameCommandModule
+    ServerLog log, MarriageShopService? marriageShop = null, MarriageProjection? marriageProjection = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -60,14 +62,46 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     {
         var request = ShopRequests.Buy(packet.Body);
         ShopPurchaseReceipt? receipt = null;
-        var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(17) :
-            context.Session.PlanAndCommitShopBuy(request.ShopId, character => shop.Buy(character, request, out receipt));
+        MarriageRecord? marriage = null;
+        InventoryResult result;
+        if (context.Activity?.BlocksTownActions == true) result = InventoryResult.Reject(17);
+        else if (marriageShop?.Handles(request.ItemId) == true)
+        {
+            result = InventoryResult.Reject(17);
+            if (context.Session.CaptureMarriage(false) is { } capture && context.Session.MarriageStore is { } store &&
+                store.FindMarriage(capture.Character.Id) is { } before)
+            {
+                var planned = marriageShop.Plan(capture.Character, before, request, out var after, out receipt);
+                result = planned;
+                if (planned.Accepted && after is not null)
+                {
+                    try
+                    {
+                        var saved = context.Session.CommitMarriage(capture, planned.Plan!, before, after, requireTown: false);
+                        result = saved?.Actor ?? InventoryResult.Reject(17);
+                        marriage = saved?.Record;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // 共享关系的竞争不重放购买，也不能让规划成功越过事务失败。
+                        result = InventoryResult.Reject(17);
+                        context.Session.RefreshMarriageProjection();
+                    }
+                }
+            }
+            log.Write("marriage_shop_buy", new { Connection = context.Id, request.NpcId, request.ShopId, request.ItemId,
+                request.Count, result.Accepted, result.Error, Revision = marriage?.Revision,
+                Result = result.Accepted ? "committed" : "rejected" });
+        }
+        else result = context.Session.PlanAndCommitShopBuy(request.ShopId, character => shop.Buy(character, request, out receipt));
         var committed = result.Receipt;
         // ACK先扣客户端材料、再增加获得量；不能在其前面推送已经叠好的最终奖励数量。
         await context.Reply(CmdPacketType.BUY_ITEM, ShopPackets.Bought(result, receipt, committed?.Character.Inventory),
             result.Accepted ? "npc_shop_bought" : "npc_shop_buy_rejected",
             () => committed is null || context.Session.CanPublishInventory(committed));
         await projection.RefreshAsync(context, result);
+        if (marriage is not null && marriageProjection is not null)
+            await marriageProjection.PublishAsync(context, marriage);
         return CommandResult.Handled;
     }
 

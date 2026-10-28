@@ -84,7 +84,9 @@ internal static class ServerRuntime
         accounts.EnsureDevelopmentAccount();
         var debugSettings = new GameDebugSettings();
         var expertStores = new ExpertJobStoreBoard();
-        var presence = new TownPresence(towns, channels.GameIdentity, clock, debugSettings, expertStores);
+        var marriageCatalog = GameWorld.Marriage.MarriageCatalog.Load(pvf);
+        var presence = new TownPresence(towns, channels.GameIdentity, clock, debugSettings, expertStores,
+            new Network.Builders.MarriageAppearance(marriageCatalog, itemResources.Items));
         var expertJobs = itemResources.ExpertJobs;
         string expertPolicyPath = Path.Combine(options.DataDirectory, "expert-job-compatibility.json");
         var expertPolicy = File.Exists(expertPolicyPath)
@@ -164,10 +166,16 @@ internal static class ServerRuntime
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService);
         var dungeonCatalog = DungeonCatalog.Load(pvf);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, events: events);
+        repository.MarriageResources = marriageCatalog;
+        var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, clock);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, events: events, marriage: marriageProjection);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
+        var marriageHandler = new MarriageHandler(repository, marriageCatalog, itemResources.Items,
+            new Game.Marriage.MarriageInventoryPlanner(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces),
+            towns, projection, online, inventoryProjection, log, clock);
+        var marriageScheduler = new MarriageWeddingScheduler(repository, marriageCatalog, itemResources.Items, online, marriageProjection, log, clock);
         // 装扮预设：容量/列表在选角就绪后下发；扩展券走CMD515 action216。
         var avatarPresetService = new Game.Inventory.Services.AvatarPresetService(itemResources.Items, itemResources.Contracts, towns, clock);
         var avatarPresetProjection = new Network.Projection.Inventory.AvatarPresetProjection();
@@ -448,7 +456,9 @@ internal static class ServerRuntime
             new ShopHandler(
                 new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock, serverItemRules),
                 cashShop,
-                inventoryProjection, log),
+                inventoryProjection, log,
+                new Game.Marriage.MarriageShopService(itemResources.Items, itemResources.Shops,
+                    itemResources.GoldLimits, itemResources.EpicPieces, marriageCatalog, clock), marriageProjection),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions, clock: clock), inventoryProjection, log,
                 new EquipmentResealService(itemResources.Items, itemResources.EquipmentReseals, itemResources.EpicPieces, clock)),
@@ -532,7 +542,7 @@ internal static class ServerRuntime
                 new FatigueConsumableHandler(new Game.Characters.FatigueConsumableService(itemResources.Items, towns, clock), inventoryProjection, log), rentalHandler, creatureHandler,
                 new InventoryPeriodExtensionService(itemResources.Items, towns, clock), new InventoryMileageService(itemResources.Items, towns, clock),
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler,
-                new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock)),
+                new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log,
                 new EquipmentTransportService(itemResources.Items.Get, itemResources.Items.ActionConsumable,
@@ -544,6 +554,7 @@ internal static class ServerRuntime
             new GrowUpChangeHandler(new Game.Characters.GrowUpChangeService(GrowUpChangeCatalog.Load(pvf), classChange),
                 levelProjection, inventoryProjection, questProjection, projection, log, clock),
             dungeon,
+            marriageHandler,
             new AgitWarHandler(),
             raidHandler,
             new RaidCombatHandler(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, clock, repository),
@@ -580,7 +591,8 @@ internal static class ServerRuntime
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
         Func<PacketCapture?, CancellationToken, Task>? management = gmCommands is null && gmWeb is null ? null : RunManagement;
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
-        return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache,lukeTimers);
+        return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache,lukeTimers,
+            runWorld: marriageScheduler.RunAsync);
 
         async Task RunManagement(PacketCapture? capture, CancellationToken stop)
         {

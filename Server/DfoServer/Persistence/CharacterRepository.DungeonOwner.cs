@@ -84,6 +84,8 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务：任一步失败整笔回滚，重复请求或提交失败都不会只扣一半。
     public DungeonEntryCommit CommitDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey, DungeonEntryCharge charge) => owner.Execute(() =>
     {
+        if (charge.Marriage is not null || charge.DungeonId == MarriageDungeonAdmission.DungeonId)
+            throw new InvalidOperationException("夫妻副本只能通过双方原子入场");
         if (charge.IsEmpty) throw new InvalidDataException("单人无费用入场使用原对象预留合同");
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitDungeonEntry");
@@ -150,6 +152,15 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             int? lukeDay = reservations[0].Charge.OrdinaryLukeEntry?.OrdinaryLukeDay;
             if (reservations.Any(r => r.Charge.OrdinaryLukeEntry?.OrdinaryLukeDay != lukeDay))
                 throw new InvalidDataException("组队普通卢克成员必须冻结同一入场业务日");
+            if (reservations.Any(r => r.Charge.Marriage is not null || r.Charge.DungeonId == MarriageDungeonAdmission.DungeonId))
+            {
+                var admission = reservations[0].Charge.Marriage;
+                var members = reservations.Select(row => row.Expected.Id).ToArray();
+                if (admission is null || reservations.Count != 2 || reservations.Any(row => row.Charge.Marriage != admission ||
+                    row.Charge.DungeonId != MarriageDungeonAdmission.DungeonId || !admission.HasTicketPayment(row.Charge.Items) ||
+                    row.Charge.Fatigue != 0) || members.Any(member => !admission.Matches(ReadMarriage(db, tx, member), members)))
+                    throw new InvalidOperationException("夫妻副本入场关系、成员或版本已变化");
+            }
             var result = new PartyDungeonEntryCommit[reservations.Count];
             var fatigue = new DungeonTransientFatigue?[reservations.Count];
             for (int i = 0; i < reservations.Count; i++)

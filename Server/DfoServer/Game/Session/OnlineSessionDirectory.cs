@@ -15,8 +15,11 @@ internal sealed record OnlineCharacterSnapshot(string Account, ushort CharacterI
 /// </summary>
 internal sealed record OnlineExpertJobConnection(Func<bool> TryReserve, Action Release,
     Func<bool> BlocksActions, Action Disconnect, Func<InventoryResult, byte[], Task> Publish);
+internal sealed record OnlineMarriageConnection(Func<InventoryResult, Task> PublishInventory,
+    Func<ushort, byte[], string, Func<bool>?, Task> Notify,
+    Func<DfoServer.Game.Town.TownTravelReceipt, Task> Travel, Action RefreshScene);
 internal sealed record ChatProbeConnection(int ConnectionId, GameSession Session, Action<ushort, byte[], string> Probe,
-    OnlineExpertJobConnection? ExpertJob = null)
+    OnlineExpertJobConnection? ExpertJob = null, OnlineMarriageConnection? Marriage = null)
 {
     // 仅限带角色身份守卫的受控展示；旧诊断Probe保持原行为。
     public Func<ushort, byte[], string, Func<bool>, bool>? GuardedProbe { get; init; }
@@ -44,8 +47,8 @@ internal sealed class OnlineSessionDirectory
 
     /// <summary>登记一条已认证连接；<paramref name="probe"/> 只负责把 opcode 与正文入本连接发送队列。</summary>
     public void RegisterConnection(int connectionId, GameSession session, Action<ushort, byte[], string> probe, OnlineExpertJobConnection? expertJob = null,
-        Func<ushort, byte[], string, Func<bool>, bool>? guardedProbe = null) =>
-        connections.Set(connectionId, new(connectionId, session, probe, expertJob) { GuardedProbe = guardedProbe });
+        Func<ushort, byte[], string, Func<bool>, bool>? guardedProbe = null, OnlineMarriageConnection? marriage = null) =>
+        connections.Set(connectionId, new(connectionId, session, probe, expertJob, marriage) { GuardedProbe = guardedProbe });
 
     /// <summary>按连接号查找在线会话；找不到返回 <c>null</c>（GM 据此回 ERR，不抛异常）。</summary>
     public ChatProbeConnection? FindConnection(int connectionId) =>
