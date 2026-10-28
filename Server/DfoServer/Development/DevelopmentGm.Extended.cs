@@ -157,9 +157,12 @@ internal static partial class DevelopmentGm
                     throw new InvalidDataException("可选参数只能是 amp:<类型>:<值>、seal:open、ability:<选项>、period:off、expire:<Unix秒>、quality:<1-100>");
                 }
                 // 品级只对普通装备有意义；百分比 1-100 换算成客户端实例品级种子（100 = 最上级）。
-                if (qualityPercent is not null && template.Kind != ItemKind.Equipment)
-                    throw new InvalidDataException("只有普通装备可以指定品级 quality:<1-100>");
                 int? qualitySeed = qualityPercent is { } qualityValue ? EquipmentQualityBox.SeedForPercent(qualityValue) : null;
+                if (template.Kind != ItemKind.Equipment)
+                {
+                    qualityPercent = null;
+                    qualitySeed = null;
+                }
                 if (clearPeriod && customExpire is not null) throw new InvalidDataException("期限不能同时改为不过期和指定时间");
                 var amplify = ParseAmplify(extra.FirstOrDefault(token => token.StartsWith("amp:", StringComparison.Ordinal)), false);
                 if (amplify.Type != 0 && template.Kind != ItemKind.Equipment) throw new InvalidDataException("只有普通装备可以增幅");

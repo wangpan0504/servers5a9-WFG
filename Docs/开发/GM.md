@@ -172,7 +172,7 @@ python3 Tools/GmWeb/gm_web.py --self-check
 | `wallet <角色>` | 读取金币、复活币、胜点、账号级货币（点券、代币券、晶块、灵魂等）及黑钻到期时间与是否有效 |
 | `currency <角色> <键> <set\|add\|sub> <数量>` | 修改单项货币；结果越出 0–2147483647 时整笔拒绝 |
 | `item-categories` / `item-search <偏移> <最低> <最高> <稀有度\|*> <分类\|*> [关键字]` | 按名称/ID、分类、等级、稀有度检索，每页 50 条 |
-| `grant <角色> <ID> <数量> <强化> <锻造> <mail\|direct> [amp:<类型1-4>:<值>] [seal:open] [ability:<选项>] [period:off] [expire:<Unix秒>] [quality:<1-100>]` | 邮件或直接入包；锻造只允许普通武器且不超过资源上限。可选参数各自最多一次、可任意组合；`quality` 只对普通装备有效，百分比换算成实例品级种子（100 = 最上级），非装备携带直接拒绝 |
+| `grant <角色> <ID> <数量> <强化> <锻造> <mail\|direct> [amp:<类型1-4>:<值>] [seal:open] [ability:<选项>] [period:off] [expire:<Unix秒>] [quality:<1-100>]` | 邮件或直接入包；锻造只允许普通武器且不超过资源上限。可选参数各自最多一次、可任意组合；`quality` 只对普通装备生效，百分比换算成实例品级种子（100 = 最上级）；非装备忽略有效的品级参数，错误范围仍拒绝 |
 | `set-grant <角色> <套装> <强化> <锻造> <mail\|direct>` | 按当前职业每部位一件；邮件方式超过 10 件时拆成多封（单封邮件原子投递） |
 | `item-delete <角色> <容器:位置:UID,…>` / `item-clear <角色> <容器>` | 按现有删除规划整批删除；UID 不符或锁定时整批保留，锁定物品保留 |
 | `mails <角色>` / `mail-delete <角色> <ID,…\|all> [force]` | 只读查看邮箱，回包含 `deletable` 与附件明细（物品、数量、强化、增幅、是否过期）；删除走 `MailboxService.ChangeState`，有未领取资产或已过期的邮件默认拒绝删除，`force` 时连同附件与金币一起删除 |
