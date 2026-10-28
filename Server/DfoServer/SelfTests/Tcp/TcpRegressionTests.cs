@@ -432,6 +432,7 @@ internal static class TcpRegressionTests
         ("keepalive", KeepaliveTcpTests.RunAsync),
         ("emotion", EmotionTcpTests.RunAsync),
         ("chat", ChatTcpTests.RunAsync),
+        ("luke-scene-namespace", LukeSceneNamespaceTcpTests.RunAsync),
         ("raid-create", RaidCreateTcpTests.RunAsync),
         ("anton-raid", AntonRaidTcpTests.RunAsync),
         ("anton-raid-rejoin", AntonRaidRejoinTcpTests.RunAsync),
@@ -475,6 +476,7 @@ internal static class TcpRegressionTests
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
+        "luke-scene-namespace",
         "luke-symbol103-handler",
         "luke-reward-restart",
         "class-change-rules",
