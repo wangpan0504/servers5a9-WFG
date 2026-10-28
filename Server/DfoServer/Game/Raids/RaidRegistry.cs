@@ -30,7 +30,7 @@ internal sealed record RaidJoinResult(bool Accepted, RaidInvitation? Invitation 
 internal sealed record RaidDirectoryChange(RaidParty? Party = null, RaidWaiting? Waiting = null, bool Removed = false);
 
 // 进程内招募聚合；锁内不访问数据库、不取得账号锁、不等待网络。业务先持原owner，双人操作按既有锁序。
-internal sealed class RaidRegistry
+internal sealed partial class RaidRegistry
 {
     readonly object gate = new();
     readonly Dictionary<uint, RaidParty> parties = [];

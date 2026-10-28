@@ -139,6 +139,39 @@ internal static class LukeRaidResourceTests
         That(resources.Issues.IsEmpty && resources.ResourcesReady,
             "实例级timer(1,5054)与缺键RESET(1,5063)经明确验证合同成立，不删除Issues结果冒充支持：" + string.Join(';', resources.Issues));
         That(resources.StartBlocker == "formal-raid-flow-unavailable", "资源齐全不代表阶段消费者与正式生产策略已就绪");
+        CheckRuleCapabilities(resources);
         Console.WriteLine($"PASS {Count - before} 卢克真实资源与实例级引用合同断言");
     }
+
+    // 期望独立来自本版逐条审计；调用开战实际守卫，不复制一份允许列表作为测试实现。
+    static void CheckRuleCapabilities(RaidResources resources)
+    {
+        // P1 13 / P2 27 原顺序；G只说明单条允许，不是完整原资源策略可运行。
+        string[] expected = ["STGGTGGTGGTSG", "GGGSGGGGSSSSSGGGSGSSGSSGSSG"];
+        var script = resources.Script;
+        That(script.Phases.Select(phase => phase.Rules.Length).SequenceEqual(expected.Select(value => value.Length)),
+            "规则能力矩阵与本版13/27条资源逐条对齐，资源变更不能静默复用旧结论");
+        for (int phaseIndex = 0; phaseIndex < script.Phases.Length; phaseIndex++)
+        {
+            var phase = script.Phases[phaseIndex];
+            var ids = phase.Dungeons.Select(dungeon => dungeon.Id).ToHashSet();
+            var maps = resources.Dungeons.Where(dungeon => ids.Contains(dungeon.Id)).SelectMany(dungeon => dungeon.MapIds).ToHashSet();
+            for (int index = 0; index < phase.Rules.Length; index++)
+            {
+                var rule = phase.Rules[index];
+                string? reason = LukeRaidStart.RuleRejection(rule, script, script, ids, maps, timersEnabled: true);
+                string? wanted = expected[phaseIndex][index] switch
+                {
+                    'S' => "luke-execution-symbol-consumer-unavailable",
+                    'T' => "luke-execution-policy-rule-unsupported",
+                    _ => null
+                };
+                string identity = $"P{phaseIndex + 1}-{index + 1} token={rule.Trigger[0].TokenIndex}";
+                That(reason == wanted, "原资源单条能力 " + identity + ": " + (reason ?? "clause-supported") + "，不是完整策略开放");
+                That(rule.Trigger.All(clause => clause.TokenIndex >= 0) && rule.Behavior.All(clause => clause.TokenIndex >= 0),
+                    "所有触发/动作保留原token定位：" + identity);
+            }
+        }
+    }
+
 }

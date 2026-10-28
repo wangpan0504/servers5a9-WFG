@@ -14,11 +14,33 @@ namespace DfoServer.Testing;
 // 卢克沿正式招募owner与真实门票核对拒绝边界，不用普通卢克Run充当攻坚。
 internal static class LukeRaidTcpTests
 {
-    public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
+    public static Task RunAsync(ServerOptions source, string root, TcpTestResources resources) =>
+        RunCoreAsync(source, root, resources, originalRules: false);
+
+    public static Task RunOriginalRuleGateAsync(ServerOptions source, string root, TcpTestResources resources) =>
+        RunCoreAsync(source, root, resources, originalRules: true);
+
+    static async Task RunCoreAsync(ServerOptions source, string root, TcpTestResources resources, bool originalRules)
     {
-        LukeRaidResourceTests.RunResources(resources.Archive, RaidCatalog.Load(resources.Archive), resources.ItemResources.Items);
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "luke-raid"), resources: resources);
+        if (!originalRules)
+            LukeRaidResourceTests.RunResources(resources.Archive, RaidCatalog.Load(resources.Archive), resources.ItemResources.Items);
+        var policy = originalRules ? LukeRaidStartTcpTests.OriginalRuleGatePolicy(resources) : null;
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, originalRules ? "luke-raid-original-gate" : "luke-raid"),
+            resources: resources, lukeStartPolicy: policy);
         await fixture.StartAsync();
+        if (originalRules)
+        {
+            var warning = fixture.Events().Single(row => row.GetProperty("Kind").GetString() == "resource_warning" &&
+                row.GetProperty("Detail").TryGetProperty("Source", out var name) && name.GetString() == "Luke raid start policy")
+                .GetProperty("Detail");
+            That(warning.GetProperty("Reason").GetString() == "luke-execution-symbol-consumer-unavailable",
+                "完整原资源由Runtime明确拒绝首个未闭合symbol消费者，不把任意启动失败当正确门禁");
+            var originalScript = policy!.ExecutionScript;
+            var firstRule = originalScript.Phases[0].Rules[0];
+            That(firstRule.Behavior.Where(clause => clause.Tag == "[set]" && clause.Symbol != "[1phase init]")
+                .Select(clause => originalScript.Symbols[clause.Symbol!]).SequenceEqual(new[] {117, 118, 119}),
+                "首阻塞定位原P1-1设施初始化117/118/119；不能因数值0猜测其原生副作用安全");
+        }
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
@@ -49,7 +71,7 @@ internal static class LukeRaidTcpTests
             foreach (var peer in peers) Drain(peer);
             string before = fixture.Snapshot();
             string Assets() => string.Join('\n', new[] { "character_inventory_items", "character_fatigue", "character_dungeon_state",
-                "character_dungeon_loot_receipts", "character_dungeon_growth_receipts" }
+                "character_dungeon_loot_receipts", "character_dungeon_growth_receipts", "character_raid_runs", "character_raid_reward_receipts" }
                 .Select(table => fixture.Snapshot($"SELECT * FROM {table} ORDER BY 1,2")));
             string assets = Assets();
             That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10159649")
@@ -88,7 +110,12 @@ internal static class LukeRaidTcpTests
             { leader.Send(666); Bytes(Until(leader, 1, 666).Body, [0, 19, 0], "满团重复开战仍拒绝"); }
             peers[1].Send(666); Bytes(Until(peers[1], 1, 666).Body, [0, 8, 0], "非队长错误优先");
             leader.Send(668, Build(w => w.Write(key))); Bytes(Until(leader, 1, 668).Body, [0, 19, 0], "招募不能冒充正式重入");
-            foreach (var peer in peers) Drain(peer);
+            foreach (var peer in peers)
+                Drain(peer, packet => That(packet.Opcode is not (14 or 28 or 29 or 583 or 586 or 587 or 594 or 600 or 601),
+                    "拒绝开战后没有费用差量、Run、阶段或奖励成功投影"));
+            That(fixture.Query("SELECT count(*) FROM character_raid_runs") is [[0L]] &&
+                fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]],
+                "完整门禁拒绝不建立任何团本Run或奖励权益");
             That(fixture.Snapshot() == before && Assets() == assets,
                 "一人/八人重复开战及费用报告无准备/阶段/迁移通知，完整位置、票、疲劳、回执不变");
             peers[7].Send(3, [1]); Until(peers[7], 1, 3); peers[7].Closed();
@@ -102,6 +129,9 @@ internal static class LukeRaidTcpTests
         That(starts.Length == 3 && starts.All(e => e.GetProperty("MissingDungeons").GetInt32() == 0 &&
             e.GetProperty("MissingMaps").GetInt32() == 0 && e.GetProperty("MissingItems").GetInt32() == 0 &&
             e.GetProperty("DefinitionIssues").GetInt32() == 0 && e.GetProperty("IssueSample").GetString() == ""),
-            "卢克START资源合同已完整但生产策略仍未配，不能把无解析问题当作开战许可");
+            originalRules ? "完整原规则策略被Runtime禁用后，真实666保持拒绝且不扣票" :
+                "卢克START资源合同已完整但生产策略仍未配，不能把无解析问题当作开战许可");
+        if (originalRules)
+            Console.WriteLine("EXPECTED BLOCK: Luke original 40-rule flow stopped at P1-1 / luke-execution-symbol-consumer-unavailable; admission guard tested, dungeon flow NOT executed.");
     }
 }

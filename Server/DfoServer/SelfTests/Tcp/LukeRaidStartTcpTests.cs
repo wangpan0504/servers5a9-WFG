@@ -41,6 +41,16 @@ internal static class LukeRaidStartTcpTests
         LukeRaidLifecycleTransactionTests.Run(resources,definition,policy);
     }
 
+    // 仅用于拒绝边界：保留全部原规则，复用明确合成的Run/奖励依赖，不冒充原版经济或通关策略。
+    internal static LukeRaidStartPolicy OriginalRuleGatePolicy(TcpTestResources resources)
+    {
+        var (definition, policy, _) = Prepare(resources, true, true, false, false);
+        var raw = definition.Resources!.Script;
+        That(raw.Issues.IsEmpty && raw.Phases.Select(phase => phase.Rules.Length).SequenceEqual(new[] {13, 27}),
+            "原规则门禁夹具要求完整13/27条，不以删规则消除未知消费者");
+        return policy with {Source = "selftest/original-rule-gate-with-synthetic-reward-dependencies", ExecutionScript = raw};
+    }
+
     static (RaidDefinition Definition,LukeRaidStartPolicy Policy,LukeRaidClockTests.Clock? Clock) Prepare(
         TcpTestResources resources,bool runDungeons,bool completePhases,bool timed,bool phaseTimeout)
     {

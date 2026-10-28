@@ -8,6 +8,25 @@ internal sealed partial class AntonRaidBattle
     LukeRaidClocks.Lease? lukeClockLease;
     bool lukeClockActive;
 
+    // 仅准备已激活的正数显示值；不发送596，也不代表客户端RESET/早退清理已实现。
+    internal uint? LukeRuleTimerSeconds(Guid instance, int phase, RaidTimer timer, long generation)
+    {
+        lock (gate)
+        {
+            if (Kind != RaidKind.Luke || instance != Instance || phase != current.Phase || generation <= 0 ||
+                timer.Kind is not (1 or 2) || timer.DungeonId <= 0 ||
+                !script.Phases.Any(row => row.Dungeons.Any(dungeon => dungeon.Id == timer.DungeonId)) ||
+                !lukeClockActive || lukeClockLease is not { IsStopped: false } || members.Count == 0 ||
+                current.ClockFaulted || current.PhaseExpired || pendingTransition is not null || TerminalRequested(current) ||
+                LukePhaseDueLocked() || current.TimerGenerations.GetValueOrDefault(timer) != generation ||
+                !current.Timers.TryGetValue(timer, out int duration) || duration is <= 0 or > 86400 ||
+                !current.TimerAnchors.TryGetValue(timer, out long anchor)) return null;
+            var remaining = TimeSpan.FromSeconds(duration) - lukeClock.GetElapsedTime(anchor);
+            if (remaining <= TimeSpan.Zero || remaining > TimeSpan.FromSeconds(duration)) return null;
+            return checked((uint)Math.Ceiling(remaining.TotalSeconds));
+        }
+    }
+
     internal void ActivateLukeClock(LukeRaidClocks.Lease lease)
     {
         lock (gate)

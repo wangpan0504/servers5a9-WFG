@@ -47,6 +47,7 @@ internal static class RaidCreateFlowTests
         RaidMemberTests.RunCore();
         AntonRaidStartTests.RunCore();
         AntonRaidRejoinTests.RunCore();
+        LukeRaidRejoinTests.RunCore();
         RaidPreparationTests.RunCore();
         LukeRaidStartTests.RunCoreAsync().GetAwaiter().GetResult();
         AntonRaidResourceTests.RunCore();
