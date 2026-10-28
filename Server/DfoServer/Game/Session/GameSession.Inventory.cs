@@ -61,6 +61,9 @@ internal sealed partial class GameSession
 
     InventoryResult CommitInventory(Character character, InventoryResult result, ushort qualificationError = 1)
     {
+        // 帝国双Actor资料在入场时冻结；所有库存用例共用提交门禁，涵盖穿脱、修理和耐久报告。
+        if (IsImperialArenaCombat && result.Plan?.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment) == true)
+            return InventoryResult.Reject(qualificationError);
         if (itemCycles is not null && result.Accepted && result.Plan is { } original)
             foreach (var use in original.UsedItems)
                 result = itemCycles.ApplyUsage(character, result, 0, use.ItemId, use.Count);

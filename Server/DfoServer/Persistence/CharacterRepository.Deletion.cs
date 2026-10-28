@@ -75,6 +75,7 @@ internal sealed partial class CharacterRepository
         if (expected.MarriageBusy) throw new InvalidDataException("角色存在有效婚约或未结清婚礼礼金，不能删除");
         RequireDeletionDependencies(db, tx);
         RemoveTagEvildomCharacter(db, tx, owner.Account, expected.Id);
+        RemoveImperialArenaCharacter(db, tx, owner.Account, expected.Id);
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.Parameters.AddWithValue("$id", expected.Id);

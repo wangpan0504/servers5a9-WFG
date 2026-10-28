@@ -89,7 +89,7 @@ internal static class ChannelPackets
     // 页签与换频道快照谓词读脚本类型（+8），不读 +0x1010。证据：evidence/anton-luke-channel-type-audit-20261021.txt。
     // 普通type22用于冒险团页准入（012AE420→028FB170）；其他未确认入口继续发0，避免扩大客户端模式变化。
     public static byte LoginChannelType(ChannelEntry channel) =>
-        channel.Type is 22 or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
+        channel.Type is 22 or 39 or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
 
     public static byte[] Endpoint(string address, int port, uint association = 0, byte channelType = 0)
     {

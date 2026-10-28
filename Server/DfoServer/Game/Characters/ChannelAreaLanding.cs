@@ -74,10 +74,12 @@ internal static class ChannelAreaLanding
     // 有落点城镇的谓词频道；服务端不保存旧频道，按存档城镇推断旧频道类型。
     static readonly (int Type, string Group)[] PredicateChannels =
         [(0x17, "[raid]"), (0x20, "[luke_raid]"), (FiendwarType, "[fiendwar]"), (EvildomWarType, "[evildom_war]"), (PreyRaidType, "[prey]"),
-         (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]"), (53, "[evildom_gathering]")];
+         (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]"), (53, "[evildom_gathering]"), (39, "[tag_tournament]")];
 
     // 01EB5BCD..5C0B另比较vt+38，01EB5780正是type53；跨入/离开再战不能复用旧城镇快照。
-    static (bool RaidTab, bool Evildom, bool TagEvildom) SnapshotPredicates(int type) => (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53);
+    // 01EB5790比较type39，虚表054946E0对应+3C；01EB5AF0同样比较新旧值。
+    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena) SnapshotPredicates(int type) =>
+        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39);
 
     public static Location? Place(TownCatalog towns, ChannelEntry channel, int level, IReadOnlySet<int> completed) =>
         Decide(towns, channel, level, completed).Spot;
@@ -170,6 +172,9 @@ internal static class ChannelAreaLanding
         // 当前PVF town62 Stadium.twn 区域0及map的enter tagdungeon入口；等级/任务继续由Decide校验。
         if (type == 53)
             return (62, 0);
+        // ARAD 03EFBB3E/43绑定CHANNEL_DNF_TAG_TOURNAMENT=39；正式PVF城镇48及贝雅特丽齐商店。
+        if (type == 39)
+            return (48, 0);
         return name switch
         {
             "elven_guard" => (38, 0),

@@ -14,8 +14,8 @@ internal sealed partial class GameSession
     readonly Dictionary<int, UsedConsumable> usedConsumables = new();
     InventoryPlan? pendingConsumableUse;
 
-    bool CanUseDungeonItem(int itemId) => formalDungeon is not { Entry.Maze.IsGriefTower: true } grief ||
-        grief.GriefItems?.CanUse(itemId) == true;
+    bool CanUseDungeonItem(int itemId) => !IsImperialArenaCombat &&
+        (formalDungeon is not { Entry.Maze.IsGriefTower: true } grief || grief.GriefItems?.CanUse(itemId) == true);
 
     void CommitDungeonItemUse(int itemId)
     {

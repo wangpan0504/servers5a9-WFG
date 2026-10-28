@@ -107,7 +107,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         {
             var departing = raidCombat?.Battle;
             // 移动和传送已逐次提交；这里只结束当前角色会话，不重写位置或进度。
-            Invalidate("not-requested");
+            try { CompleteCurrentImperialArena(); }
+            finally { Invalidate("not-requested"); }
             return departing;
         });
         if (battle?.Kind == Raids.RaidKind.Luke) battle.Publish(battle.View);
@@ -121,7 +122,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         {
             owner.Execute(() =>
             {
-                Invalidate("session-ended");
+                try { CompleteCurrentImperialArena(); }
+                finally { Invalidate("session-ended"); }
                 return true;
             });
         }

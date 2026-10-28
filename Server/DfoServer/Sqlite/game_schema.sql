@@ -1362,3 +1362,61 @@ CREATE TABLE character_raid_runs(
 CREATE UNIQUE INDEX character_raid_active ON character_raid_runs(character_id,raid_type) WHERE state=0;
 CREATE INDEX character_raid_clear_week ON character_raid_runs(character_id,raid_type,clear_week) WHERE state=2;
 CREATE INDEX character_raid_rewards_type_week ON character_raid_reward_receipts(character_id,raid_type,week_key,final_phase,instance_id);
+
+CREATE TABLE imperial_arena_daily_routes(
+  day INTEGER NOT NULL PRIMARY KEY CHECK(day>=20000101),
+  route_json TEXT NOT NULL CHECK(json_valid(route_json) AND json_type(route_json)='object')
+);
+
+CREATE TABLE account_imperial_arena_configuration(
+  account TEXT NOT NULL PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0),
+  first INTEGER NOT NULL CHECK(first BETWEEN 0 AND 65535),
+  second INTEGER NOT NULL CHECK(second BETWEEN 0 AND 65535),
+  CHECK((first=0 AND second=0) OR (first>0 AND second>0 AND first<>second))
+);
+
+CREATE TABLE account_imperial_arena_days(
+  account TEXT NOT NULL,day INTEGER NOT NULL CHECK(day>=20000101),
+  mode INTEGER NOT NULL CHECK(mode IN(1,2)),
+  hard_round INTEGER NOT NULL DEFAULT 0 CHECK(hard_round BETWEEN 0 AND 7),
+  PRIMARY KEY(account,day)
+);
+
+CREATE TABLE account_imperial_arena_runs(
+  account TEXT NOT NULL,instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  day INTEGER NOT NULL,week INTEGER NOT NULL,mode INTEGER NOT NULL CHECK(mode IN(1,2)),
+  first INTEGER NOT NULL CHECK(first BETWEEN 1 AND 65535),
+  second INTEGER NOT NULL CHECK(second BETWEEN 1 AND 65535 AND second<>first),
+  configuration_revision INTEGER NOT NULL CHECK(configuration_revision>0),
+  task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
+  admitted_at INTEGER NOT NULL CHECK(admitted_at>=0),
+  minimum_clear_ms INTEGER NOT NULL CHECK(minimum_clear_ms>0),
+  team_json TEXT NOT NULL CHECK(json_valid(team_json) AND json_array_length(team_json)=4),
+  route_json TEXT NOT NULL CHECK(json_valid(route_json)),
+  cleared_round INTEGER NOT NULL DEFAULT 0 CHECK(cleared_round BETWEEN 0 AND 7),
+  events_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(events_json)),
+  elapsed_ms INTEGER CHECK(elapsed_ms IS NULL OR elapsed_ms>=0),
+  closed INTEGER NOT NULL DEFAULT 0 CHECK(closed IN(0,1)),
+  ranked_week INTEGER,
+  PRIMARY KEY(account,instance_id),UNIQUE(first,task_attempt),
+  FOREIGN KEY(account,day) REFERENCES account_imperial_arena_days(account,day)
+);
+
+CREATE TABLE account_imperial_arena_challenge_claims(
+  account TEXT NOT NULL,week INTEGER NOT NULL CHECK(week>=20000101),
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  mail_id INTEGER NOT NULL CHECK(mail_id>0),
+  reward_json TEXT NOT NULL CHECK(json_valid(reward_json)),
+  PRIMARY KEY(account,week),
+  FOREIGN KEY(account,instance_id) REFERENCES account_imperial_arena_runs(account,instance_id)
+);
+
+CREATE TABLE account_imperial_arena_rewards(
+  account TEXT NOT NULL,day INTEGER NOT NULL,monster INTEGER NOT NULL CHECK(monster>0),
+  instance_id TEXT NOT NULL,event_id TEXT NOT NULL CHECK(length(event_id)=32),
+  reward_json TEXT NOT NULL CHECK(json_valid(reward_json)),
+  mail_id INTEGER NOT NULL CHECK(mail_id>=0),
+  PRIMARY KEY(account,day,monster),
+  FOREIGN KEY(account,instance_id) REFERENCES account_imperial_arena_runs(account,instance_id)
+);

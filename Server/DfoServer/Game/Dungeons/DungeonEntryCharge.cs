@@ -25,5 +25,6 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public MarriageDungeonAdmission? Marriage { get; init; }
     public DungeonEntryIncount? Incount { get; init; }
     public DfoServer.Game.TagEvildom.TagEvildomAdmission? TagEvildom { get; init; }
-    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Incount is null && TagEvildom is null && OrdinaryLukeEntry is null && Marriage is null;
+    public DfoServer.Game.ImperialArena.ImperialArenaAdmission? ImperialArena { get; init; }
+    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && TagEvildom is null && ImperialArena is null && OrdinaryLukeEntry is null;
 }

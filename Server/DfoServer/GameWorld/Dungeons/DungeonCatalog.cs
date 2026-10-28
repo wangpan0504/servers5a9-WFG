@@ -377,6 +377,18 @@ internal sealed class DungeonCatalog
     public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);
     internal string? DungeonPath(int id) => dungeons.GetValueOrDefault(id);
     internal string? MapPath(int id) => maps.GetValueOrDefault(id);
+
+    internal DungeonMaze ResolveImperialArenaMaze(DungeonDefinition definition, DungeonMaze maze, IReadOnlyList<int> opponents)
+    {
+        if (!ImperialArenaEntryPolicy.Supports(definition) || opponents.Count != maze.Width - 1 ||
+            opponents.Distinct().Count() != opponents.Count || maze.MapSpecification is null)
+            throw new InvalidDataException("帝国竞技场路线与正式资源不一致");
+        var selected = maze.MapSpecification.Select(map => map.Position.X == 0 ? map : new DungeonMap(map.Kind, map.Position,
+            opponents[map.Position.X - 1], maps.GetValueOrDefault(opponents[map.Position.X - 1]) ??
+            throw new InvalidDataException("帝国竞技场候选地图不在目录"))).ToArray();
+        if (selected.Any(map => !archive.Contains(map.Path))) throw new InvalidDataException("帝国竞技场候选地图不存在");
+        return maze with { MapSpecification = selected };
+    }
     public GriefTowerCatalog GriefTower => griefTower.Value;
 
     public static DungeonCatalog Load(PvfArchive pvf)

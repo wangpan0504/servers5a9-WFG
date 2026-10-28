@@ -52,6 +52,7 @@ internal sealed class PreparedDungeonDeath(ConfirmedDungeonMonsterDeath death, D
     public DungeonRunResult Result { get; } = result;
     internal int DummyStageIndex { get; } = dummyStageIndex;
     internal DfoServer.Game.TagEvildom.TagEvildomClearFact? TagEvildomClear { get; init; }
+    internal int? ImperialArenaRound { get; init; }
 }
 
 // 正式战斗组件持有的能力对象。协议 handler 不创建权威，也不把客户端死亡字段变成此事件。
@@ -705,6 +706,15 @@ internal sealed partial class SinglePlayerDungeonRun
             conditionClears && IsTerminalRoom());
         bool tagSettles = TagEvildomAdmission is not null && Phase == SinglePlayerDungeonPhase.Dungeon &&
             (TerminalBossCleared(confirmed.MonsterKey) || conditionClears && IsTerminalRoom());
+        int? imperialRound = null;
+        if (ImperialArenaAdmission is { } imperial && Phase == SinglePlayerDungeonPhase.Dungeon)
+        {
+            int x = current.Plan.Room.Map.Position.X;
+            var opponents = imperial.Route.Opponents(imperial.Mode);
+            if (x > 0 && x <= opponents.Length && opponents[x - 1].MapId == current.Plan.Room.Map.Id &&
+                opponents[x - 1].MonsterId == target.MonsterId) imperialRound = x;
+            tagSettles |= imperialRound == opponents.Length;
+        }
         // 明确的猎杀条件同样清退当前房间；非终点不产生通关事实，清退不产生击杀奖励。
         ushort[] culled = current.Altar is null && (settles || tagSettles || conditionClears) ? current.Plan.Monsters.Where(monster => monster.IsBlocking &&
             (conditionClears || !monster.IsBoss) &&
@@ -739,7 +749,8 @@ internal sealed partial class SinglePlayerDungeonRun
                 RoomClearFact = clearsQuestRoom ? new(nextIdentity,entry.DungeonId,current.Plan.Room.Map,
                     Array.AsReadOnly(deaths.Keys.Append(confirmed.EventId).ToArray())) : null
             }, nextStage)
-            { TagEvildomClear = tagSettles ? new(nextIdentity, confirmed.EventId, TagEvildomAdmission!) : null };
+            { TagEvildomClear = tagSettles && TagEvildomAdmission is not null ? new(nextIdentity, confirmed.EventId, TagEvildomAdmission) : null,
+                ImperialArenaRound = imperialRound };
         return new(DungeonRunOutcome.Accepted, pendingDeath);
     }
 
@@ -760,7 +771,7 @@ internal sealed partial class SinglePlayerDungeonRun
 
     public DungeonRunResult ConfirmCommittedDeath(PreparedDungeonDeath prepared)
     {
-        if (prepared.TagEvildomClear is not null) return Result(DungeonRunOutcome.Rejected);
+        if (prepared.TagEvildomClear is not null || prepared.ImperialArenaRound is not null) return Result(DungeonRunOutcome.Rejected);
         return ConfirmDeath(prepared);
     }
 
@@ -768,6 +779,13 @@ internal sealed partial class SinglePlayerDungeonRun
     {
         if (!ReferenceEquals(committed.Plan.Run, this) || committed.MailId == 0 ||
             committed.Plan.Death.TagEvildomClear is null) return Result(DungeonRunOutcome.Rejected);
+        return ConfirmDeath(committed.Plan.Death);
+    }
+
+    internal DungeonRunResult ConfirmCommittedImperialArenaDeath(DfoServer.Game.ImperialArena.ImperialArenaDeathCommit committed)
+    {
+        if (!ReferenceEquals(committed.Plan.Run, this) || committed.Plan.Death.ImperialArenaRound is null)
+            return Result(DungeonRunOutcome.Rejected);
         return ConfirmDeath(committed.Plan.Death);
     }
 

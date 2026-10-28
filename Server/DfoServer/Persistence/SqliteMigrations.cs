@@ -225,6 +225,8 @@ internal static class SqliteMigrations
         new(110, "角色疲劳每日恢复日戳", FatigueDailyResetSchema.Upgrade),
         new(111, "全局物品限次和周期补给", ServerItemUsageSchema.Upgrade),
         new(112, "婚姻关系与共享资产账本", MarriageSchema.Upgrade),
+        // 帝国竞技场分支的临时号 126 已被本地栈占用到 112，接在队尾顺延为 113。
+        new(113, "帝国竞技场编队、日券与领奖账本", ImperialArenaSchema.Upgrade),
     ];
 
     internal const string BossSelectionBuffSchema = """
@@ -2128,6 +2130,12 @@ internal static class SqliteMigrations
             (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
             (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),
             (TagEvildomRunSchema.Table,TagEvildomRunSchema.Definition),
+            ("imperial_arena_daily_routes",ImperialArenaSchema.Routes),
+            ("account_imperial_arena_configuration",ImperialArenaSchema.Configuration),
+            ("account_imperial_arena_days",ImperialArenaSchema.Days),
+            ("account_imperial_arena_runs",ImperialArenaSchema.Runs),
+            ("account_imperial_arena_rewards",ImperialArenaSchema.Rewards),
+            ("account_imperial_arena_challenge_claims",ImperialArenaSchema.Challenges),
             (OrdinaryLukeProgressSchema.Table,OrdinaryLukeProgressSchema.Definition),
             (OrdinaryLukeDropSchema.Table,OrdinaryLukeDropSchema.Definition),
             (DazzlementTowerSchema.Table,DazzlementTowerSchema.Definition),

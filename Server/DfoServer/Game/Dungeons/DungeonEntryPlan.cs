@@ -62,6 +62,8 @@ internal sealed record DungeonEntryPlan(
     public bool IsPractice { get; init; }
     // 仅由专用准入与当前TAG资源核验生成，不凭9608图号授予普通经济路径。
     public bool IsTagEvildom { get; init; }
+    public bool IsImperialArena { get; init; }
+    public bool IsTagSystem => IsTagEvildom || IsImperialArena;
     public bool HasFreeCombatConsumption => IsPractice || IsTrainingRoom || IsClassExperience;
     // 实验性（#259）：比赛副本（PVF [tournament dungeon] 1，[no fatigue]），不消耗疲劳。
     public bool IsTournament => Maze.IsTournament;
@@ -124,7 +126,8 @@ internal sealed record DungeonEntryPlan(
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
         bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null,
-        IReadOnlyDictionary<int,int>? bossWeights = null)
+        IReadOnlyDictionary<int,int>? bossWeights = null,
+        DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest);
@@ -142,15 +145,17 @@ internal sealed record DungeonEntryPlan(
         }
 
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
-            maze => catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty,bossWeights),allowClearedTerminalQuest:allowClearedTerminalQuest,
-            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze);
+            maze => imperialArena is null ? catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty,bossWeights) :
+                catalog.ResolveImperialArenaMaze(definition, maze, imperialArena.Route.Opponents(imperialArena.Mode).Select(row => row.MapId).ToArray()),allowClearedTerminalQuest:allowClearedTerminalQuest,
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze,imperialArena:imperialArena);
     }
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null)
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null,
+        DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null)
     {
         plan = null;
         reason = ValidateRequest(character, dungeonId, questId, difficulty, allowClearedQuest, quest,isReplay);
@@ -171,6 +176,14 @@ internal sealed record DungeonEntryPlan(
         {
             reason = "lost-land-mode-unsupported";
             return false;
+        }
+        if (dungeonId is 320 or 336 || imperialArena is not null)
+        {
+            if (imperialArena is null || imperialArena.DungeonId != dungeonId || !ReferenceEquals(imperialArena.Primary, character) ||
+                questId != 0 || difficulty != 0 || isReplay || practice || hellParty || hellLegend || partyRoute is not null ||
+                tagEvildom is not null || hope is not null || raid is not null || !ImperialArenaEntryPolicy.Supports(definition))
+            { reason = "imperial-arena-runtime-required"; return false; }
+            imperialArena.Validate();
         }
         // 当前PVF这两图为tag tournament 3/4、tagsystem ruleset2，不能由普通单角色Run消费或结算。
         // 9609/9610是中央竞技场剧情图，继续走已有剧情路线。
@@ -603,7 +616,8 @@ internal sealed record DungeonEntryPlan(
             IsTutorial = definition.IsTutorial,
             DisableClearReward = definition.DisableClearReward || lostLand,
             IsTagEvildom = tagEvildom is not null,
-            DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience || tagEvildom is not null,
+            IsImperialArena = imperialArena is not null,
+            DisableMonsterAndClearExperience = definition.DisableMonsterAndClearExperience || tagEvildom is not null || imperialArena is not null,
             DisableGiveupPenalty = definition.DisableGiveupPenalty,
             CoinLimit = definition.Id is >= 11006 and <= 11107 ? definition.CoinLimit : null,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
@@ -618,7 +632,7 @@ internal sealed record DungeonEntryPlan(
             TerminalLayerAcceptanceId = terminalAcceptance,
             RouteQuestId = routeQuest,
             IsOrdinaryHunt = ordinaryHunt,
-            QuestAcceptances = definition.IsClassExperience || practice || tagEvildom is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
+            QuestAcceptances = definition.IsClassExperience || practice || tagEvildom is not null || imperialArena is not null ? [] : character.ActiveMainQuests.ToImmutableArray(),
             ExperienceEquipmentModule = definition.RawSections.Any(row => row.Tag == "tower of despair") ? "despair tower" :
                 definition.RawSections.Any(row => row.Tag == "tower of scream") ? "scream tower" :
                 definition.DungeonType?.Trim().Trim('`', '[', ']') switch
