@@ -245,7 +245,11 @@ internal static partial class QuestStageRepositoryTests
         f.Repository.CommitQuestCompletion(f.Owner,plan);
         var beforeMigration = f.Read();
         DatabaseSchemaTests.RewindRaidLifecycle(f.Database);
-        f.Sql("UPDATE character_quest_completion_receipts SET rowid=17,rule_id='legacy-ordinary'; DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses; ALTER TABLE characters DROP COLUMN daily_booster_usage; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=52");
+        using(var db=new Microsoft.Data.Sqlite.SqliteConnection("Data Source="+f.OpenPath+";Pooling=False"))
+        {
+            db.Open();DatabaseSchemaTests.RewindPvpRankCompletion(db);
+        }
+        f.Sql(DatabaseSchemaTests.GuildExtensionFixtureRewindSql + "UPDATE character_quest_completion_receipts SET rowid=17,rule_id='legacy-ordinary'; DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses; ALTER TABLE characters DROP COLUMN daily_booster_usage; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=52");
         That(Scalar(f,"PRAGMA user_version") == "52" &&
             Scalar(f,"SELECT count(*) FROM pragma_table_info('characters') WHERE name='daily_booster_usage'") == "0",
             "旧receipt迁移输入为真实v52缺每日礼盒列结构");

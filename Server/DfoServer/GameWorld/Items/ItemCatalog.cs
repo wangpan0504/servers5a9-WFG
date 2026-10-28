@@ -390,6 +390,11 @@ internal sealed partial class ItemCatalog
 
     public StackableActionIdentity? StackableAction(int id) => StackableDefinition(id) is { } raw ? StackableActionCatalog.Read(raw) : null;
 
+    public GameWorld.Guilds.GuildMileageGiftDefinition? GuildMileageGift(int id) =>
+        StackableDefinition(id) is { } raw ? GameWorld.Guilds.GuildMileageGiftDefinition.Parse(raw, Get(id)) : null;
+    public GameWorld.Guilds.GuildExperienceGiftDefinition? GuildExperienceGift(int id) =>
+        StackableDefinition(id) is { } raw ? GameWorld.Guilds.GuildExperienceGiftDefinition.Parse(raw, Get(id)) : null;
+
     readonly ConcurrentDictionary<int, Lazy<PartnerTeleportDefinition?>> partnerTeleports = new();
     public PartnerTeleportDefinition? PartnerTeleport(int id)
     {
@@ -579,6 +584,8 @@ internal sealed partial class ItemCatalog
             CreatureInitialMode = kind == ItemKind.Creature && creatures?.Get(id) is { Egg: false, UsesExperienceItems: true } ? (byte)1 : (byte)0,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
             AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase),
+            AccountBoundAfterTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } tradeLimit &&
+                tradeLimit.Attachment.Equals("[account]", StringComparison.OrdinalIgnoreCase),
             PersonalCargoUpgradeTarget = cargoTarget,
             ShopPrice = ItemShopPrice.Parse(text, isEquipment, equipmentSellRate),
             Expiration = ItemExpiration.Parse(text),

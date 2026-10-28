@@ -24,6 +24,7 @@ internal static class GameSenderBudgetTests
         await PreparedBodyAsync();
         await QueuedPublicationAsync();
         await QueuedPartyCommandAsync();
+        await AcceptedPostAsync();
         Console.WriteLine($"PASS {TestCheck.Count - checks} game sender budget assertions");
     }
 
@@ -74,6 +75,24 @@ internal static class GameSenderBudgetTests
         await sender.DrainAsync();
         TestCheck.That(prepared == 1 && stream.Frames.Count == 2 && sender.PendingBytes == 0, "旧身份及到期代不写帧，预算完整释放");
         TestCheck.Bytes(stream.Frames[1], GameFrame.Build(0, 597, 1, [0, 2, 0, 0, 0]), "慢队列恢复写实际剩余2秒，不重新给10秒");
+    }
+
+    static async Task AcceptedPostAsync()
+    {
+        using var owner = new AccountOwners().Acquire("accepted-post", () => { });
+        using var stop = new CancellationTokenSource();
+        using var stream = new HeldStream();
+        var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
+        var held = sender.Send(0, 2, [1], "held");
+        await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        TestCheck.That(sender.TryPost(0, 47, [1, 2, 3], "result") && !held.IsCompleted && sender.PendingBytes == 36,
+            "完整结果被有界队列接受可立即确认，不等待慢socket");
+        TestCheck.That(!sender.TryPost(0, 47, new byte[checked((int)GameConnectionSender.MaxPendingBytes)], "overflow") &&
+            stop.IsCancellationRequested, "预算拒绝明确返回false，不能冒充结果已入队");
+        await FailuresAsync([held]);
+        await sender.DisposeAsync();
+        TestCheck.That(sender.PendingBytes == 0 && stream.Frames.Count == 0,
+            "拒绝及断线释放原队列，不把入队接受解释为客户端已收到");
     }
 
     static async Task QueuedPublicationAsync()

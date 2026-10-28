@@ -25,6 +25,9 @@ internal static class TcpRegressionTests
         ("packet-http", (options, root, _) => PacketCaptureTcpTests.RunHttpAsync(options, root)),
         ("town", TownProtocolTcpTests.RunAsync),
         ("party-dungeon", PartyDungeonTcpTests.RunAsync),
+        ("guild-dungeon-party", PartyDungeonTcpTests.RunGuildPartyBuffAsync),
+        ("monster-battle-level", FormalDungeonTcpTests.RunBattleLevelsAsync),
+        ("monster-ai", FormalDungeonTcpTests.RunMonsterAiAsync),
         ("party-dungeon-modes", PartyDungeonTcpTests.RunQuestAndHellAsync),
         ("social", SocialTcpTests.RunAsync),
         ("marriage", MarriageTcpTests.RunAsync),
@@ -189,6 +192,13 @@ internal static class TcpRegressionTests
             DungeonGrowthRepositoryTests.Run(resources.Towns, resources.Archive, resources.Characters);
             await FormalDungeonSessionTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         }),
+        ("beast-dungeon", (_, _, resources) =>
+        {
+            BeastDungeonEntryTests.RunMaps(resources.Archive);
+            BeastDungeonSessionTests.Run(resources);
+            return Task.CompletedTask;
+        }),
+        ("beast-gateway", RaidChannelLandingTcpTests.RunBeastGatewayAsync),
         ("grief-tower", FormalDungeonTcpTests.RunGriefAsync),
         ("durability", FormalDungeonTcpTests.RunDurabilityAsync),
         ("dungeon-training", FormalDungeonTcpTests.RunTrainingAsync),
@@ -261,6 +271,8 @@ internal static class TcpRegressionTests
         ("teleport", TeleportTcpTests.RunAsync),
         ("solo-party", SoloPartyTcpTests.RunAsync),
         ("pvp-training", PvpTrainingTcpTests.RunAsync),
+        ("steel-learning", SteelLearningTcpTests.RunAsync),
+        ("pvp-arena", PvpArenaTcpTests.RunAsync),
         ("pvp-private-character", PvpPrivateCharacterTcpTests.RunAsync),
         ("consumable-use-rules", (_, _, resources) =>
         {
@@ -294,6 +306,15 @@ internal static class TcpRegressionTests
         ("special-containers", SpecialContainerTcpTests.RunAsync),
         ("guild-medals", GuildMedalTcpTests.RunAsync),
         ("guild-directory", GuildDirectoryTcpTests.RunAsync),
+        ("guild-panel", GuildPanelTcpTests.RunAsync),
+        ("guild-management", GuildManagementTcpTests.RunAsync),
+        ("guild-applications", GuildApplicationTcpTests.RunAsync),
+        ("guild-governance", GuildGovernanceTcpTests.RunAsync),
+        ("guild-cargo", GuildCargoTcpTests.RunAsync),
+        ("guild-economy", GuildEconomyTcpTests.RunAsync),
+        ("guild-appearance", GuildAppearanceTcpTests.RunAsync),
+        ("guild-contribution", GuildContributionTcpTests.RunAsync),
+        ("guild-teleport", GuildTeleportTcpTests.RunAsync),
         ("guild-permit", GuildPermitTcpTests.RunAsync),
         ("guild-permit-sequential", GuildPermitSequentialTcpTests.RunAsync),
         ("currency", CurrencyTcpTests.RunAsync),
@@ -356,7 +377,6 @@ internal static class TcpRegressionTests
         ("avatar-ability-change", AvatarAbilityChangeTcpTests.RunAsync),
         ("avatar-socket", AvatarSocketTcpTests.RunAsync),
         ("mailbox", MailboxTcpTests.RunAsync),
-        ("chronicle-enchant", ChronicleEnchantTcpTests.RunAsync),
         ("gm-assets", DevelopmentAssetTcpTests.RunAsync),
         ("repair", RepairTcpTests.RunAsync),
         ("random-option", RandomOptionTcpTests.RunAsync),
@@ -364,6 +384,7 @@ internal static class TcpRegressionTests
         ("texture-change", TextureChangeTcpTests.RunAsync),
         ("equipment-upgrade", EquipmentUpgradeTcpTests.RunAsync),
         ("echon-equipment", EchonEquipmentTcpTests.RunAsync),
+        ("equipment-transmission", EquipmentTransmissionTcpTests.RunAsync),
         ("weapon-skin", WeaponSkinTcpTests.RunAsync),
         ("refinement", RefinementTcpTests.RunAsync),
         ("refinement-tickets", RefinementTicketTcpTests.RunAsync),

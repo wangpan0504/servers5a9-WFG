@@ -36,6 +36,7 @@ internal sealed class QuestLifecyclePlan
     public ushort QuestId { get; }
     public Guid AcceptanceId { get; }
     public Guid OperationId { get; }
+    internal DfoServer.Game.Pvp.PvpRatingSnapshot? PvpRating { get; set; }
     public ImmutableArray<ActiveMainQuest> ActiveAfter { get; }
     public InventoryPlan Inventory { get; }
     public QuestSceneEvent? SceneEvent { get; }
@@ -112,7 +113,7 @@ internal sealed class QuestLifecyclePlan
     }
 
     public static QuestLifecyclePlan Accept(Character expected, StoryQuest quest, QuestCatalog catalog,
-        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset now)
+        ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, DateTimeOffset now, int? pvpGrade = null)
     {
         var eligibility = QuestEligibility.Evaluate(expected, quest, catalog);
         if (!eligibility.Eligible || !eligibility.Visible && !QuestRelationProgress.DialogueChild(quest, catalog) &&
@@ -149,7 +150,7 @@ internal sealed class QuestLifecyclePlan
                 QuestRelationProgress.Initial(quest,catalog,QuestEligibility.Completed(expected)),
             // Full03 ACK31的type49分支在打开故事UI前即发送归零33；真实接取事务本身已满足此目标。
             "[play only]" when QuestStateProgress.Type(quest) == 49 => 0,
-            _ when QuestStateProgress.Type(quest) is not null => QuestStateProgress.Scalar(expected,quest),
+            _ when QuestStateProgress.Type(quest) is not null => QuestStateProgress.Scalar(expected,quest,pvpGrade),
             _ => throw new NotSupportedException("任务条件初值尚未确认: " + quest.Condition)
         };
         var gifts = quest.Definition!.AcceptanceRewards;
@@ -270,7 +271,7 @@ internal sealed class QuestLifecyclePlan
         return expected.Inventory with { Items = planned.ToImmutable() };
     }
 
-    public static QuestLifecyclePlan SetCondition(Character expected, StoryQuest quest, uint scalar, QuestCatalog? catalog = null)
+    public static QuestLifecyclePlan SetCondition(Character expected, StoryQuest quest, uint scalar, QuestCatalog? catalog = null, int? pvpGrade = null)
     {
         var active = expected.ActiveMainQuests.SingleOrDefault(value => value.QuestId == quest.Id)
             ?? throw new InvalidDataException("任务未接取");
@@ -282,7 +283,7 @@ internal sealed class QuestLifecyclePlan
             QuestClientSceneProgress.DungeonCinematic(quest));
         bool storage = QuestDazzlementStorage.Matches(quest) && scalar == 0;
         bool question = QuestQuestionProgress.TryCount(quest,out int answers) && scalar < answers;
-        bool state = QuestStateProgress.Type(quest) is not null && scalar == QuestStateProgress.Scalar(expected,quest);
+        bool state = QuestStateProgress.Type(quest) is not null && scalar == QuestStateProgress.Scalar(expected,quest,pvpGrade);
         bool observedClear = QuestDungeonClearProgress.ValidScalar(quest,scalar) && scalar == active.ConditionState;
         bool observedRental = QuestRentalProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
         bool observedEpic = QuestEpicProductionProgress.Supports(quest) && scalar == 0 && active.ConditionState == 0;
@@ -371,7 +372,14 @@ internal sealed class QuestLifecyclePlan
     internal static readonly int[] HarlemSeekingIds = [6053, 6056, 6059];
 
     internal static bool SeekingSubtype(StoryQuest quest) => quest.SubType == -1 || quest.SubType == 0 &&
-        (HarlemSeeking(quest) || QuestCycle.NormalDungeonMission(quest));
+        (HarlemSeeking(quest) || BeastSeeking(quest) || QuestCycle.NormalDungeonMission(quest));
+
+    // 魔兽材料任务10000（beast_acce_01）同样声明`seeking / sub type 0`，但[sub type]的含义与黑市EXP相同：
+    // 服务端寻物只读int data物品/数量对与真实库存。它比6053/6056/6059多一个约束——[dungeon info]整组只指向
+    // 魔兽网关5335–5339（参数-1），材料由魔兽阶段掉落提供；只放开这一个任务，且要求整组都是魔兽网关。
+    internal static bool BeastSeeking(StoryQuest quest) => quest is { Id: 10000, Condition: "[seeking]", SubType: 0, RewardType: "[item]" } &&
+        ValidSeeking(quest) && quest.Definition is { Diagnostics.Length: 0, Dungeons.Length: > 0 } definition &&
+        definition.Dungeons.All(row => row.Parameter == -1 && BeastDungeonRotation.IsGateway(unchecked((uint)row.DungeonId)));
 
     internal static bool HarlemSeeking(StoryQuest quest) => quest is { Condition: "[seeking]", SubType: 0, Grade: "[side]", RewardType: "[item]" } &&
         HarlemSeekingIds.Contains(quest.Id) && quest.MainQuest is null && quest.IntData.Count == 2 && quest.IntData[1] == 3 && ValidSeeking(quest) &&

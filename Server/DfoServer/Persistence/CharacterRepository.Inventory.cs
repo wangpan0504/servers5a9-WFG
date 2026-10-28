@@ -320,6 +320,7 @@ internal sealed partial class CharacterRepository
             throw new InventoryQualificationExpiredException();
         if (!plan.Changed)
             return current;
+        CommitGuildHongbaoPurchase(db, transaction, current, plan);
         WriteAccountItemRefills(db, transaction, owner.Account, current.Id, plan.AccountRefillClaims);
         using var command = db.CreateCommand();
         command.Transaction = transaction;

@@ -73,6 +73,8 @@ internal static partial class DungeonSettlementTests
         try
         {
             var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf);
+            RunGuildMileageStorage(growth);
+            RunGuildDungeonStorage(pvf);
             var repository = new CharacterRepository(path);
             var owners = new AccountOwners();
             using var owner = owners.Acquire("settlement", () => { });
@@ -191,11 +193,13 @@ internal static partial class DungeonSettlementTests
     private static CharacterLearningState Learning(ulong experience, ushort firstSp = 3) =>
         new(experience, Array.AsReadOnly(new[] { new CharacterSkillTree(0, firstSp, 4, []), new CharacterSkillTree(1, 8, 5, []) }));
 
-    private static (SinglePlayerDungeonRun Run, FixtureAuthority Authority) CreateRun(Character character)
+    private static (SinglePlayerDungeonRun Run, FixtureAuthority Authority) CreateRun(Character character,
+        Func<DungeonEntryPlan, DungeonEntryPlan>? configure = null, Guid? partyInstance = null)
     {
         var map = new DungeonMap("boss", new(0, 0), 76126, "map/settlement-fixture.map");
         var maze = new DungeonMaze(0, 1, 1, "fixture-only", [map.Position], [map.Position], [map], []);
         var entry = new DungeonEntryPlan(character.Id, character.Revision, 3, 3145, 0, 0, maze, map, map);
+        entry = configure?.Invoke(entry) ?? entry;
         var source = new DungeonRoomMonster(1, Array.AsReadOnly(new[] { 1, 0, 3, 100, 100, 0, 1, 1 }),
             "[fixed]", "[normal]", "monster/settlement-fixture.mob");
         var room = new DungeonRoomDefinition(map, [source], [], []);
@@ -203,6 +207,7 @@ internal static partial class DungeonSettlementTests
         var authority = new FixtureAuthority();
         if (!SinglePlayerDungeonRun.TryCreate(entry, character.DungeonState?.LastAttempt ?? 1, 1, new([plan], []), authority, out var run, out _))
             throw new InvalidOperationException("通关合成实例未建立");
+        if (partyInstance is { } shared) run!.BindPartyInstance(shared);
         run!.CompleteLoading(run.Snapshot.Identity, Guid.NewGuid());
         return (run, authority);
     }

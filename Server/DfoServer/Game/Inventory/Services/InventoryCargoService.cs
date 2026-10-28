@@ -17,7 +17,9 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
             InventoryListType.PersonalCargo => !template.PersonalCargoForbidden && !attach.Equals("trade delete", StringComparison.OrdinalIgnoreCase),
             InventoryListType.AccountCargo => !template.PvpFreeEquipment && !template.AccountCargoForbidden && core.EquipmentLockId == 0 && core.TradeRestriction != 1 &&
                 (attach.Equals("free", StringComparison.OrdinalIgnoreCase) || attach.Equals("account", StringComparison.OrdinalIgnoreCase) ||
-                 attach.Equals("sealing", StringComparison.OrdinalIgnoreCase)),
+                 attach.Equals("sealing", StringComparison.OrdinalIgnoreCase) ||
+                 attach.Equals("trade limit", StringComparison.OrdinalIgnoreCase) && core.Attr >> 5 != 0 ||
+                 attach.Length == 0 && template.AccountBoundAfterTrade),
             _ => true
         };
     }

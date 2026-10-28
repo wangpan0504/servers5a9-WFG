@@ -107,7 +107,7 @@ internal static class SkillLearning
     }
 
     public static SkillLearningResult Plan(byte job, byte growtype, byte characterLevel, CharacterLearningState current,
-        SkillLearningCommand command, SkillLearningCatalog catalog)
+        SkillLearningCommand command, SkillLearningCatalog catalog, bool steelUnlocked = false)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         if (!SkillPointLedger.SupportsGrowth(growtype, job) || !current.Initialized)
@@ -118,7 +118,7 @@ internal static class SkillLearning
             var synchronized = SkillPointLedger.Synchronize(job, growtype, characterLevel, current, catalog, contractLevels);
             var result = Plan(job, growtype, characterLevel, synchronized, command, catalog.Get,
                 SkillPointLedger.FreeBaseline(job, growtype, characterLevel, catalog, contractLevels),
-                synchronized.BonusSp is int bonus ? checked(catalog.TotalSp(characterLevel) + bonus) : null, contractLevels, synchronized.BonusTp is int tpBonus ? checked(catalog.TotalTp(characterLevel) + tpBonus) : null);
+                synchronized.BonusSp is int bonus ? checked(catalog.TotalSp(characterLevel) + bonus) : null, contractLevels, synchronized.BonusTp is int tpBonus ? checked(catalog.TotalTp(characterLevel) + tpBonus) : null, steelUnlocked);
             return result with { RequiresSynchronization = synchronized.Trees.Zip(current.Trees).Any(pair =>
                 pair.First.Sp != pair.Second.Sp || pair.First.Tp != pair.Second.Tp || !pair.First.Skills.SequenceEqual(pair.Second.Skills)) };
         }
@@ -128,7 +128,7 @@ internal static class SkillLearning
 
     internal static SkillLearningResult Plan(byte job, byte growtype, byte characterLevel, CharacterLearningState current,
         SkillLearningCommand command, Func<byte, ushort, SkillLearningDefinition> definition,
-        IReadOnlyDictionary<ushort, byte>? free = null, int? totalSp = null, int contractLevels = 0, int? totalTp = null)
+        IReadOnlyDictionary<ushort, byte>? free = null, int? totalSp = null, int contractLevels = 0, int? totalTp = null, bool steelUnlocked = false)
     {
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(command);
@@ -172,14 +172,16 @@ internal static class SkillLearning
             int level = learned?.Level ?? 0;
             if (resource.FixedLevel is not null)
                 return Fail(SkillLearningFailure.Mastered);
-            int maximum = Math.Min(resource.GetMaximum(growtype), resource.DeclaredMaximumLevels![growtype & 15]);
+            if (!entry.Decrease && resource.IsSteelLearning(growtype) && !steelUnlocked)
+                return Fail(SkillLearningFailure.Prerequisite);
+            int maximum = resource.GetLearningMaximum(growtype);
             int target = entry.Decrease ? Math.Min(level, Math.Max(free?.GetValueOrDefault(entry.Id) ?? 0, level - entry.Magnitude)) : level + entry.Magnitude;
             if (entry.Decrease && ((resource.IsFeatureSkill ? totalTp : totalSp) is null || learned is null))
                 return Fail(SkillLearningFailure.Unsupported);
             if (target > maximum || target > byte.MaxValue || !entry.Decrease && target <= level)
                 return Fail(SkillLearningFailure.Mastered);
             // 02D52330 的减五分支先于资源类型判断，达人契约对普通 SP 与 feature TP 的门槛同样生效。
-            if (!entry.Decrease && (long)characterLevel + contractLevels < resource.GetOrdinaryNextRequiredCharacterLevel(target - 1))
+            if (!entry.Decrease && (long)characterLevel + contractLevels < resource.GetNextRequiredCharacterLevel(target - 1,growtype))
                 return Fail(SkillLearningFailure.RequiredLevel);
             foreach (SkillPrerequisite prerequisite in entry.Decrease ? [] : resource.Prerequisites!)
             {

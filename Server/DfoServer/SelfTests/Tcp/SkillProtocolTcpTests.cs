@@ -28,7 +28,7 @@ internal static class SkillProtocolTcpTests
         ushort initialSp = checked((ushort)SkillCatalog.Load(pvf).GetLevelSpTotal(characterLevel));
         ulong initialExperience = growth.GetLevelStartExperience(characterLevel);
         ushort[] passiveIds = [12, 35, 177];
-        int passiveCost = passiveIds.Sum(id => catalog.Get(0, id).GetOrdinaryResourceSpCost(0, 0));
+        int passiveCost = passiveIds.Sum(id => catalog.Get(0, id).GetPointCost(0, 0));
         // 预置仅属隔离协议fixture，不替代生产正常升级或Windows发点验收。
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
@@ -38,6 +38,7 @@ internal static class SkillProtocolTcpTests
                 Level = characterLevel,
                 InitialLearning = new(initialExperience, Array.AsReadOnly(starting.InitialLearning.Trees.Select(tree => tree with { Sp = initialSp }).ToArray())),
                 AcceptedStoryLevel = 1,
+                CompletedQuests = [355],
                 ActiveMainQuests = [new(0, 3145, 1)],
                 Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(characters.Get(0))
             });

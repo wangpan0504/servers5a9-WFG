@@ -60,13 +60,13 @@ internal static class DailyRetainedBoosterTcpTests
             That(fixture.Query("SELECT SUM(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=$p0", Reward) is [[10L]],
                 "同服务日重复请求没有重复发奖");
         }
-        await clock.WaitForTimersAsync(0);
+        await clock.WaitForOneShotTimersAsync(0);
         using (var peer = Open(fixture))
         {
             peer.Select();
             That(peer.DailyBoosterUsed[Source] == 1, "重连从真实账本恢复已用次数");
             peer.Barrier();
-            await clock.WaitForTimersAsync(2);
+            await clock.WaitForOneShotTimersAsync(2);
             clock.Advance(TimeSpan.FromSeconds(1));
             // 没有发送请求，必须由连接独立时钟下发跨日显式zero。
             var notices = new List<WirePacket>();
@@ -75,7 +75,7 @@ internal static class DailyRetainedBoosterTcpTests
                 That(notices.Count < 200, "无请求的日切通知数量有界");
                 notices.Add(peer.Read());
             }
-            await clock.WaitForTimersAsync(2);
+            await clock.WaitForOneShotTimersAsync(2);
             notices.AddRange(PartyDungeonTcpTests.Drain(peer));
             var usedRows = notices.Where(row => row is { Kind: 0, Opcode: 541 })
                 .SelectMany(row => DailyBoosterProjectionTests.Decode(row.Body)).ToDictionary(row => row.Key, row => row.Value);
@@ -102,14 +102,14 @@ internal static class DailyRetainedBoosterTcpTests
             peer.Select(1);
             That(peer.DailyBoosterUsed[Source] == 0, "同连接换角显式覆盖上一角色已用值");
             peer.Barrier();
-            await clock.WaitForTimersAsync(2);
+            await clock.WaitForOneShotTimersAsync(2);
             using var replacement = Open(fixture);
             peer.Closed();
             replacement.Select();
             That(replacement.DailyBoosterUsed[Source] == 1, "接管连接从当前角色账本恢复，不被旧计时器归零");
             replacement.Barrier();
         }
-        await clock.WaitForTimersAsync(0);
+        await clock.WaitForOneShotTimersAsync(0);
         await fixture.StopAsync();
         That(clock.ActiveTimers == 0, "断线、换角、接管与停服回收全部daily时钟");
     }

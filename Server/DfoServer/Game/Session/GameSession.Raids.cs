@@ -58,6 +58,7 @@ internal sealed partial class GameSession
 
     void InvalidateRaids(bool disconnected = false)
     {
+        // 魔界大战开战记录随选角代次失效（CurrentEvildomWar 比较 SelectionEpoch），这里只清战斗状态。
         var registry = raidRegistry;
         AntonRaidDisconnectFact? fact = null;
         if (disconnected && registry is not null && raidCombat is { } combat)

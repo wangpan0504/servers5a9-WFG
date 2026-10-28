@@ -16,6 +16,7 @@ internal static partial class TagEvildomTcpTests
         // 原生15发完同栈紧跟16，测试不等待15 ACK才开始第二步。
         peer.Send(15, Build(w => { w.Write(dungeon); w.Write((ushort)0); }));
         peer.Send(16, Selection(dungeon));
+        // 已装双Actor仍有效时15直接ACK，不额外重发1393→1394；重发只属于真正过时的投影。
         peer.Expect(1, 15, [1]); peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
         peer.Expect(0, 27, new byte[42]);
         var information = peer.Expect(0, 28).Body;

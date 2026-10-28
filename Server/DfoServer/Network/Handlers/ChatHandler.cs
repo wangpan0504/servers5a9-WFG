@@ -34,7 +34,8 @@ namespace DfoServer.Network.Handlers;
 /// </para>
 /// </summary>
 internal sealed class ChatHandler(ChatService chat, InventoryProjection? inventory, ServerLog log,
-    NamedWhisperService? named = null, SelfCharacterScoreProjection? selfScore = null) : IGameCommandModule
+    NamedWhisperService? named = null, GuildContributionProjection? guildContribution = null,
+    SelfCharacterScoreProjection? selfScore = null) : IGameCommandModule
 {
     // 日志里的文本上限：单条聊天不能把热点日志撑大。
     const int LogTextLimit = 64;
@@ -148,6 +149,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             {
                 Connection = context.Id, Kind = kind.ToString(), dispatch.Recipients, dispatch.LayerFallback
             });
+            if (kind == ChatKind.Guild) guildContribution?.Chat(context);
             // 喇叭：记种类、类型字节与编码后的段落长度，便于定位"客户端的喇叭页签为什么没这一行"；
             // 不写正文（正文可能很长，且热点日志不应复制玩家文本）。
             if (kind is ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone)

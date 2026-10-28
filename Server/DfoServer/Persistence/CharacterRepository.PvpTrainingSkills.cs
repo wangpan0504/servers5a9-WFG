@@ -16,14 +16,30 @@ internal sealed partial class CharacterRepository
         if(command.ExecuteScalar() is not string json) return null;
         var state=JsonSerializer.Deserialize<PvpTrainingSkills>(json) ?? throw new InvalidDataException("空训练技能快照");
         state.Validate();
-        return state with {Learning=state.Learning with {Trees=Array.AsReadOnly(state.Learning.Trees.Select(tree=>tree.Freeze()).ToArray())}};
+        return state with {Learning=Freeze(state.Learning),Arena=state.Arena is null ? null : Freeze(state.Arena)};
+        static CharacterLearningState Freeze(CharacterLearningState value)=>value with
+            {Trees=Array.AsReadOnly(value.Trees.Select(tree=>tree.Freeze()).ToArray())};
     }
 
     public Character CommitPvpTrainingSkills(AccountOwners.Lease owner,PvpTrainingSkillPlan plan)=>owner.Execute(()=>
     {
         var expected=plan.Expected;plan.After.Validate();
-        if(plan.OperationId==Guid.Empty || !plan.Result.Success || plan.Result.State!=plan.After.Learning ||
-            expected.Position is not {Town:10,Area:4} || plan.After.Learning.Experience!=expected.Learning.Experience)
+        if(plan.OperationId==Guid.Empty || !plan.Result.Success || !Enum.IsDefined(plan.Kind) ||
+            plan.Result.State!=(plan.Kind==PvpSkillPlanKind.Training ? plan.After.Learning : plan.After.Arena) ||
+            plan.Kind==PvpSkillPlanKind.Training && expected.Position is not {Town:10,Area:4} ||
+            plan.Kind==PvpSkillPlanKind.Training && (plan.After.Arena!=expected.PvpTrainingSkills?.Arena ||
+                plan.After.ArenaJob!=expected.PvpTrainingSkills?.ArenaJob || plan.After.ArenaGrowType!=expected.PvpTrainingSkills?.ArenaGrowType) ||
+            plan.Kind!=PvpSkillPlanKind.Training && (plan.After.ArenaJob!=expected.Job || plan.After.ArenaGrowType!=(expected.GrowType & 15)) ||
+            plan.Kind==PvpSkillPlanKind.Arena && (plan.After.QuestId!=(expected.PvpTrainingSkills?.QuestId ?? 0) ||
+                plan.After.AcceptanceId!=(expected.PvpTrainingSkills?.AcceptanceId ?? Guid.Empty)) ||
+            plan.Kind!=PvpSkillPlanKind.Copy && (plan.After.CopyChoice!=(expected.PvpTrainingSkills?.CopyChoice ?? 0) ||
+                plan.After.CopyQuestId!=(expected.PvpTrainingSkills?.CopyQuestId ?? 0) ||
+                plan.After.CopyAcceptanceId!=(expected.PvpTrainingSkills?.CopyAcceptanceId ?? Guid.Empty)) ||
+            plan.Kind!=PvpSkillPlanKind.Training && !expected.ActiveMainQuests.SequenceEqual(plan.ActiveAfter) ||
+            plan.Kind==PvpSkillPlanKind.Copy && (expected.PvpTrainingSkills is not {CopyChoice:0} source ||
+                source.QuestId!=plan.After.CopyQuestId || source.AcceptanceId!=plan.After.CopyAcceptanceId ||
+                !DfoServer.Game.Quests.QuestEligibility.Completed(expected).Contains(source.QuestId)) ||
+            plan.After.Learning.Experience!=expected.Learning.Experience)
             throw new InvalidDataException("训练技能事务身份或规划无效");
         using var db=database.Open();using var write=db.BeginWrite("CharacterRepository.CommitPvpTrainingSkills");
         using var tx=write.Transaction;

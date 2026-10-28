@@ -15,7 +15,12 @@ internal sealed record DungeonEntryIncount(int Dungeon, DungeonIncountPeriod Per
     public DungeonIncountUsage? ExpectedUsage { get; init; }
 }
 
-internal sealed record DungeonEntryCommit(Character Character, DungeonIncountUsage? IncountUsage);
+internal sealed record BeastDungeonAdmission(int Day, int ExpectedUsed);
+
+internal sealed record DungeonEntryCommit(Character Character, DungeonIncountUsage? IncountUsage)
+{
+    public DfoServer.Game.Guild.GuildDungeonMembership? GuildMembership { get; init; }
+}
 
 internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, DungeonRunIdentity Identity, int MapId,
     WeeklyDungeonEntry? Weekly = null, GriefTowerAdmission? Grief = null)
@@ -27,8 +32,10 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public OperationHopeAdmission? Hope { get; init; }
     public MarriageDungeonAdmission? Marriage { get; init; }
     public DungeonEntryIncount? Incount { get; init; }
-    public DimensionDungeonAdmission? Dimension { get; init; }
+    public BeastDungeonAdmission? Beast { get; init; }
     public DfoServer.Game.TagEvildom.TagEvildomAdmission? TagEvildom { get; init; }
+    public DfoServer.Game.Guild.GuildDungeonAdmission? GuildDungeon { get; init; }
     public DfoServer.Game.ImperialArena.ImperialArenaAdmission? ImperialArena { get; init; }
-    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && TagEvildom is null && ImperialArena is null && OrdinaryLukeEntry is null && Dimension is null;
+    public DimensionDungeonAdmission? Dimension { get; init; }
+    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && Beast is null && TagEvildom is null && OrdinaryLukeEntry is null && GuildDungeon is null && ImperialArena is null && Dimension is null;
 }

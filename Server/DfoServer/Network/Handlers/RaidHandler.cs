@@ -11,6 +11,8 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers;
 
 // 招募及开战复用正式会话身份；首阶段提交与进图、战斗奖励按各自领域边界处理。
+// 魔界大战不是团本：建队走 SET_PARTY_INFO(kind=5)，开战走 C2S 1652（见 DungeonHandler.EvildomWar），
+// 这里不为它补建类型 6 的团本记录。
 internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegistry registry, OnlineSessionDirectory? online = null,
     AntonRaidStart? start = null, LukeRaidStart? lukeStart = null, AntonRaidRejoin? rejoin = null) : IGameCommandModule
 {
@@ -32,6 +34,12 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
     }
 
     RaidActor? Actor(GameConnectionContext context) => context.BlocksTownActions ? null : context.Session.CaptureRaidActor(registry);
+    // 频道类型只决定攻坚队类型；魔界大战（0x36 → 6）在 raid.lst 没有定义，不能要求目录存在。
+    bool MatchesChannel(RaidActor actor, byte type) => actor.Session.ChannelEntry is { } channel &&
+        RaidTypes.FromChannelType(channel.Type) == type;
+    // 1361 查询只认 raid.lst 里真有定义的团本；魔界大战的组队走 SET_PARTY_INFO(kind=5)，
+    // 不在这里补建类型 6 的记录，因此也不需要频道例外。
+    bool MatchesType(RaidActor actor, byte type) => MatchesChannel(actor, type) && catalog.Find(type) is not null;
 
     async Task<CommandResult> SearchAsync(GameConnectionContext context, Packet request)
     {
@@ -55,8 +63,6 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         await context.Notify(NotiPacketType.RAID_OTHER_CHANNEL_LIST, body, "raid_search_results", () => actor.IsCurrent);
         return CommandResult.Handled;
     }
-    bool MatchesType(RaidActor actor, byte type) => actor.Session.ChannelEntry is { } channel &&
-        RaidTypes.FromChannelType(channel.Type) == type && catalog.Find(type) is not null;
 
     async Task<CommandResult> RejoinAsync(GameConnectionContext context, Packet request)
     {
@@ -166,9 +172,10 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
 
     async Task<CommandResult> WaitingAsync(GameConnectionContext context, Packet request)
     {
-        if (request.Body.Length != 2 || request.Body[0] != 0 || Actor(context) is not { } actor || !MatchesType(actor, request.Body[1]))
+        if (request.Body.Length != 2 || request.Body[0] != 0 || Actor(context) is not { } actor || !MatchesChannel(actor, request.Body[1]))
             return CommandResult.Unhandled;
         byte type = request.Body[1];
+        if (catalog.Find(type) is null) return CommandResult.Unhandled;
         ushort? error = registry.AddWaiting(actor, type);
         log.Write("raid_waiting_request", new { Connection = context.Id, Self = actor.Character, RaidType = type, Accepted = error is null, Error = error });
         var replied = context.Reply(CmdPacketType.SET_RAID_WAITING, error is { } code ? RaidPackets.CreateFailure(code) : RaidPackets.WaitingSuccess,
@@ -220,6 +227,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         catch (InvalidDataException) { return CommandResult.Unhandled; }
         var actor = Actor(context);
         var definition = catalog.Find(parsed.RaidType);
+        // raid.lst 没有类型 6：魔界大战的建队走 SET_PARTY_INFO(kind=5)，这里不再为它破例建团本记录。
         var previousWaiting = actor is null ? null : registry.Waiting(actor);
         var party = actor is null || definition is null || !MatchesType(actor, parsed.RaidType) ? null :
             registry.Create(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name), definition.MemberMax, definition.StartMinimum);

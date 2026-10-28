@@ -61,6 +61,7 @@ internal sealed partial class GameSession
             ? formalDungeon?.Run.Snapshot.Identity.InstanceId ?? Guid.Empty
             : Guid.Empty;
         return new(ChannelEntry?.Identity ?? default, town.Town, town.Area, town.Map, town.OwnerKey(owner.Account,character.Id,
+            character.Guild?.Id ?? 0,
             character.Marriage is { State: 4 } marriage && marriage.IsMember(character.Id) ? marriage.Id : null,
             character.WeddingHall?.CeremonyId), instance);
     }

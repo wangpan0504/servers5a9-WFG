@@ -9,6 +9,8 @@ internal sealed record DungeonPlannedMonster(
     int CandidateLevel,
     DungeonRoomMonster? Source)
 {
+    public int? BattleLevelOverride { get; init; }
+    public int BattleLevel => BattleLevelOverride ?? CandidateLevel;
     // 当前生成房间的不可变来源；专项奖励不能仅凭同模板源行借用其它房间的终点资格。
     public DungeonMap? SourceMap { get; init; }
     public DungeonRoomAiCharacter? AiCharacter { get; init; }
@@ -37,6 +39,8 @@ internal sealed record DungeonPlannedSpecialObject(ushort ObjectKey, DungeonRoom
 internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyList<DungeonPlannedMonster> Monsters)
 {
     public DungeonAltarPlan? Altar { get; init; }
+    public IReadOnlyDictionary<ushort, byte> HellBattleLevelOverrides { get; init; } = System.Collections.Frozen.FrozenDictionary<ushort, byte>.Empty;
+    public byte BattleLevelFor(DungeonHellWaveMonster wave) => HellBattleLevelOverrides.GetValueOrDefault(wave.ObjectKey, wave.Level);
 
     internal static DungeonMonsterPlan FromAltarRoom(DungeonRoomDefinition room, ushort characterId, ushort firstObjectKey,
         int level, Func<int, int> draw)

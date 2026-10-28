@@ -21,7 +21,7 @@ internal static class ChannelAreaLandingTests
         var sky = new ChannelEntry(new(2, 11), 22, "[sky_catle]");
         var harlem = new ChannelEntry(new(2, 37), 22, "[harlem]");
         var fiend = new ChannelEntry(new(2, 39), 45, "[fiendwar]");
-        var pvp = new ChannelEntry(new(2, 40), 24, "[pvp]");
+        var pvp = new ChannelEntry(new(2, 101), 24, "[pvp]");
         foreach (var (group, area) in new[] { ("[impossible]", (byte)2), ("[ancient]", (byte)5) })
         {
             var channel = new ChannelEntry(new(2, 24), 11, group);
@@ -68,6 +68,10 @@ internal static class ChannelAreaLandingTests
         That(towns.Areas.ContainsKey((10, 0)) && towns.Areas[(10, 0)].Gate is not null, "决斗场城镇 10 在目录里且写有门口");
         That(ChannelAreaLanding.Place(towns, pvp, 1, none) is null, "决斗场等级不足时留在共享房间");
         That(ChannelAreaLanding.Place(towns, pvp, 95, none) is { Town: 10, Area: 0, X: 474, Y: 234 }, "决斗场等级达到后落到目录门口");
+        var unmatched = new ChannelEntry(new(2, 47), 8, "[pvp]");
+        That(ChannelAreaLanding.Place(towns, unmatched, 1, none) is null &&
+            ChannelAreaLanding.Place(towns, unmatched, 95, none) == ChannelAreaLanding.Place(towns, pvp, 95, none),
+            "无双频道沿原决斗地区落点与等级门禁，不能按普通返回地区出门");
         That(ChannelAreaLanding.Place(towns, new ChannelEntry(new(2, 19), 23, "[raid]"), 95, none) is { Town: 19, Area: 0 }, "安徒恩落到已有战舰门口");
         That(ChannelAreaLanding.Place(towns, new ChannelEntry(new(2, 31), 18, "[attackzone]"), 95, none) is { Town: 15, Area: 0 }, "攻击区落到已有城镇 15");
         That(towns.Areas[(19, 0)].Gate == new Location(19, 0, 474, 234), "安徒恩 474,234 是战舰区域目录门口");
@@ -226,7 +230,26 @@ internal static class ChannelAreaLandingTests
         using var reader = new StreamReader(stream);
         var script = ChannelCatalog.Parse(reader.ReadToEnd());
         // #740 房间出口按显式频道清单核对；再战魔界46沿已接入的type53特殊落点，不借用普通返回地区。
-        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 40, 41, 42, 43, 44, 45, 46 };
+        // 47=决斗场无双频道（type 8，33f95e72 接入）、48=帝国竞技场（type 39）同属按频道落点出门，不随普通频道回记住地区。
+        // 决斗场普通入口按客户端 etc/pvpchannellist.etc 登记为 101（原 40 已不存在），特殊出口清单随目录取号。
+        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 101, 41, 42, 43, 44, 45, 46, 47, 48, 49 };
+        var beastChannel = script.Channels.Single(row => row.Number == 49);
+        var beastEntry = new ChannelEntry(new(2, 49), beastChannel.Type, beastChannel.Group);
+        That(beastChannel.Type == 40 && beastChannel.Group == "[beast]",
+            "魔兽48号频道使用独立type40及资源分组");
+        That(ChannelAreaLanding.Decide(towns, beastEntry, 95, none).Reason == "channel-quest-required",
+            "魔兽落点不能绕过5927引导任务");
+        // 魔兽城镇51（中央公园）只有区域2带 `[dungeon gate]` 46 与地图里的 -1/-1 选图区域；落在 51/0（赛丽亚门厅）
+        // 或 51/1（中央公园广场）开图都只有底图没有气球。区域2没有 [gate]、也不与共享房间相连，
+        // 落点由地图首块可走矩形中心给出（用户 2026-10-28 实测“走进中央公园，一张地图都没有”）。
+        var beastDone = new HashSet<int> { 5927 };
+        var beastLanding = ChannelAreaLanding.RoomExit(towns, beastEntry, towns.Room, 95, beastDone);
+        That(beastLanding is { Town: 51, Area: 2 } && towns.IsPosition(beastLanding, beastDone),
+            "完成魔兽引导后共享房间出口落到带选图区域的等待区51/2，实际=" + beastLanding);
+        That(towns.Areas[(51, 2)].DungeonWorldMap == 46,
+            "魔兽等待区51/2声明 [dungeon gate] 46，五个气球5335–5339挂在该世界地图上");
+        That(towns.Areas[(51, 2)].Default.DungeonGates.Length > 0 && towns.Areas[(51, 1)].Default.DungeonGates.Length == 0,
+            "只有等待区51/2的地图含 -1/-1 选图区域，中央公园广场51/1没有");
         var tagChannel = script.Channels.Single(row => row.Number == 46);
         That(tagChannel.Type == 53 && tagChannel.Group == "[evildom_gathering]",
             "再战魔界46号频道保持独立type53与资源分组，不按频道编号猜普通语义");

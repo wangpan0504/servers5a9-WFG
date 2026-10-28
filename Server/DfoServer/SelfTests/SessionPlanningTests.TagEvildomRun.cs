@@ -39,20 +39,20 @@ internal static partial class SessionPlanningTests
         var clock = new DailyBoosterTestClock(DateTimeOffset.UnixEpoch);
         using var stop = new CancellationTokenSource();
         var wait = TagEvildomRevivalProjection.WaitUntilAsync(12_000, clock, stop.Token);
-        await clock.WaitForTimersAsync(1);
+        await clock.WaitForOneShotTimersAsync(1);
         clock.Advance(TimeSpan.FromMilliseconds(11_999));
         That(!wait.IsCompleted && clock.ActiveTimers == 1, "真实等待路径到12秒前仍保留唯一一次性定时器");
         clock.Advance(TimeSpan.FromMilliseconds(1));
         await wait.WaitAsync(TimeSpan.FromSeconds(5));
-        await clock.WaitForTimersAsync(0);
+        await clock.WaitForOneShotTimersAsync(0);
         That(wait.IsCompletedSuccessfully, "可控时钟到期使生产等待路径结束，不等待真实墙钟");
         using var cancelled = new CancellationTokenSource();
         var cancelledWait = TagEvildomRevivalProjection.WaitUntilAsync(24_000, clock, cancelled.Token);
-        await clock.WaitForTimersAsync(1);
+        await clock.WaitForOneShotTimersAsync(1);
         await cancelled.CancelAsync();
         try { await cancelledWait; throw new InvalidOperationException("取消后不能成功完成到期等待"); }
         catch (OperationCanceledException) when (cancelled.IsCancellationRequested) { }
-        await clock.WaitForTimersAsync(0);
+        await clock.WaitForOneShotTimersAsync(0);
         That(cancelledWait.IsCanceled, "退场/断线取消令牌释放实际定时器，不留下后台长任务");
         await TagEvildomRevivalProjection.WaitUntilAsync(11_000, clock, CancellationToken.None);
         That(clock.ActiveTimers == 0, "已经到期无需注册第二个定时器");
@@ -60,14 +60,14 @@ internal static partial class SessionPlanningTests
         var monotonic = new DailyBoosterTestClock(DateTimeOffset.UnixEpoch);
         var wallClock = new TagEvildomWallClock(monotonic);
         var rollbackWait = TagEvildomRevivalProjection.WaitUntilAsync(12_000, wallClock, CancellationToken.None);
-        await monotonic.WaitForTimersAsync(1);
+        await monotonic.WaitForOneShotTimersAsync(1);
         wallClock.Offset = TimeSpan.FromSeconds(-6);
         monotonic.Advance(TimeSpan.FromSeconds(12));
-        await monotonic.WaitForTimersAsync(1);
+        await monotonic.WaitForOneShotTimersAsync(1);
         That(!rollbackWait.IsCompleted, "墙钟回拨后首个物理计时器到期不等于角色复活截止");
         monotonic.Advance(TimeSpan.FromSeconds(6));
         await rollbackWait.WaitAsync(TimeSpan.FromSeconds(5));
-        await monotonic.WaitForTimersAsync(0);
+        await monotonic.WaitForOneShotTimersAsync(0);
         That(rollbackWait.IsCompletedSuccessfully, "原截止仍按当前墙钟重新等待，未提前发布");
 
         using var gate = new SemaphoreSlim(0, 1);
@@ -76,7 +76,7 @@ internal static partial class SessionPlanningTests
         That(!gated.IsCompleted, "已经到期的任务仍等待现有连接命令门禁");
         wallClock.Offset = TimeSpan.FromSeconds(-6);
         gate.Release();
-        await monotonic.WaitForTimersAsync(1);
+        await monotonic.WaitForOneShotTimersAsync(1);
         That(!gated.IsCompleted && gate.CurrentCount == 1, "获得门禁前墙钟回拨时释放门禁并重挂唯一截止，而非静默丢任务");
         monotonic.Advance(TimeSpan.FromSeconds(6));
         await gated.WaitAsync(TimeSpan.FromSeconds(5));

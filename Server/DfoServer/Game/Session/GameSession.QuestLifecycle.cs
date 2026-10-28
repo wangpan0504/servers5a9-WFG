@@ -73,6 +73,9 @@ internal sealed partial class GameSession
             quests.TryGet(parentId,out var closedParent) && QuestRelationProgress.ThresholdParent(closedParent,quests) &&
             closedParent.IntData.Contains(questId))
             return refusal with { Outcome = QuestLifecycleOutcome.Unchanged, Reason = "阈值父任务已交付并关闭未完成子任务" };
+        var rank = quest.Condition == "[pvp rank]" && action != QuestLifecycleAction.Giveup
+            ? pvpRatings?.Capture(owner,expected.Id) : null;
+        int? grade = rank is null ? null : pvpRatings!.Grade(rank);
         QuestLifecyclePlan plan;
         try
         {
@@ -87,11 +90,12 @@ internal sealed partial class GameSession
             {
                 plan = action switch
                 {
-                    QuestLifecycleAction.Accept => QuestLifecyclePlan.Accept(expected, quest, quests, items, goldLimits, pieces, DateTimeOffset.UtcNow),
+                    QuestLifecycleAction.Accept => QuestLifecyclePlan.Accept(expected, quest, quests, items, goldLimits, pieces, DateTimeOffset.UtcNow, grade),
                     QuestLifecycleAction.Giveup => QuestLifecyclePlan.Giveup(expected, quest, quests, DateTimeOffset.UtcNow),
                     QuestLifecycleAction.Condition => ConditionPlan(),
                     _ => throw new NotSupportedException("客户端条件需经过类型及场景事实校验")
                 };
+                plan.PvpRating = rank;
                 if (action == QuestLifecycleAction.Condition && expected.ActiveMainQuests.SequenceEqual(plan.ActiveAfter))
                     return refusal with { Outcome = QuestLifecycleOutcome.Unchanged, Reason = "当前条件已由实际场景或库存满足，无需再次保存" };
             }
@@ -139,7 +143,7 @@ internal sealed partial class GameSession
                 return QuestLifecyclePlan.SetCondition(expected,quest,clearActive.ConditionState);
             if (QuestStateProgress.Type(quest) is { } stateType && condition is { Channel: null, Reserved: 0 } stateReport &&
                 (stateReport.Value == 0 || stateType == 12 && stateReport.Value == 1))
-                return QuestLifecyclePlan.SetCondition(expected,quest,QuestStateProgress.Scalar(expected,quest));
+                return QuestLifecyclePlan.SetCondition(expected,quest,QuestStateProgress.Scalar(expected,quest,grade),pvpGrade:grade);
             if (QuestRelationProgress.ThresholdParent(quest,quests) && condition is { Channel: null, Value: 0, Reserved: 0 })
                 return QuestLifecyclePlan.SetCondition(expected,quest,
                     QuestRelationProgress.ThresholdScalar(quest,QuestEligibility.Completed(expected)));

@@ -24,6 +24,12 @@ Parser保留完整targetNpc、pathKind及坐标。GameSession校验当前owner�
 
 NPC地图坐标只用于资源身份，不能推出传送坐标公式。上述反向1140/90不等于静态NPC位置或NPC+30；所有C2S36原样保存和回送x/y。未知NPC关系在领域层拒绝、保留连接，不因targetNpc非零关闭会话。该传送不意味着普雷副本/团本已实现。
 
+### 红尾乔纳森的场景显示
+
+红尾乔纳森476由客户端地图加载。匹配PVF的中央公园地轨中心地图 `map/town/centralpark/centralpark_metrocenter.map` 在873,200放置该NPC，其 `npc/476_jonathan.npc` 另以 `[open visible event] 2395` 控制场景出现。地图有放置或小地图有标记不能代替该显示门禁。
+
+登录及原生换频道的NOTI108完整事件表包含2395的目录记录和12个零值的活动数值块，并保留赛丽亚2037、公会红包2378和当前开放团本事件。不额外伪造NPC Actor，不修改客户端PVF、地图阶段、等级或任务完成记录；交易窗口仍由既有时空石商店规则处理。事件表只恢复可见性，不开放其他活动或修改交易价格、资产与购买上限。
+
 ## 2. 出生点、返回地区和提交
 
 [GameSession.Select](../../Server/DfoServer/Game/Session/GameSession.cs)按账号与 slot 装载目标角色，[CharacterSelection](../../Server/DfoServer/Game/Characters/CharacterSelection.cs)负责入城准备规则：

@@ -72,7 +72,7 @@ internal sealed partial class GameSession
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         Guid instance, uint firstKey, PartyDungeonPreparation? shared = null, uint questId = 0,
-        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true)
+        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool beastMode = false, bool allowDimensionHidden = true)
     {
         LastFormalDungeonRejection = null;
         var retry = Phase == SessionPhase.Settlement ? FormalDungeonResultFocus() : null;
@@ -80,6 +80,7 @@ internal sealed partial class GameSession
         if (shared is not null)
         {
             var source = shared.Session.PreparedParty(shared).Dungeon.Entry;
+            beastMode = source.BeastMode;
             // 队员共用队长已冻结的物理迷宫，任务、槽位及接取身份仍由本人生成和提交。
             if (source.Hope is { } hope &&
                 !BeginOperationHope(hope.Catalog,catalog,requiredMaze:hope.MazeOrdinal)) return null;
@@ -89,7 +90,7 @@ internal sealed partial class GameSession
         }
         var prepared = PrepareFormalDungeon(dungeonId, questId, difficulty, catalog, rooms, drops, items, null, pieces, null, retry,
             prepareDrops: prepareDrops ?? previousDrops, shared: shared, partyFirstKey: firstKey, partyInstance: instance, partyAdmission: true,
-            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards, allowDimensionHidden: allowDimensionHidden);
+            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards, beastMode: beastMode, allowDimensionHidden: allowDimensionHidden);
         if (prepared is null && shared is not null) shared.Session.LastFormalDungeonRejection = LastFormalDungeonRejection;
         return owner.Execute(() =>
         {
@@ -101,9 +102,13 @@ internal sealed partial class GameSession
     }
 
     // 组队原子提交前只由队长时钟复核共同业务日；各成员不分别采样now，避免跨06:00裂成两天。
-    internal bool IsPartyAdmissionDayCurrent(PartyDungeonPreparation token) =>
-        PreparedParty(token).Dungeon.Entry.OrdinaryLukeDay is not { } day ||
-        day == QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow());
+    internal bool IsPartyAdmissionDayCurrent(PartyDungeonPreparation token)
+    {
+        var entry = PreparedParty(token).Dungeon.Entry;
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        return (entry.OrdinaryLukeDay is not { } day || day == QuestCycle.Day(now)) &&
+            (entry.BeastDay is not { } beastDay || beastDay == BeastDungeonRotation.ServiceDay(now));
+    }
 
     public PartyDungeonReservation? ReservePartyDungeon(PartyDungeonPreparation token) => owner.Execute(() =>
     {
@@ -120,6 +125,15 @@ internal sealed partial class GameSession
         if (!CanInstallRaidDungeon(dungeon.Entry)) return null;
         if (dungeon.Entry.OrdinaryLukeDay is { } day &&
             !repository.LoadOrdinaryLukeProgress(owner, Selected.Id).Allows(day, dungeon.Entry.DungeonId)) return null;
+        BeastDungeonAdmission? beast = null;
+        if (dungeon.Entry.BeastMode)
+        {
+            if (dungeon.Entry.BeastDay is not { } beastDay || !Selected.CompletedQuests.Contains(5927)) return null;
+            int id = checked((int)dungeon.Entry.DungeonId);
+            int used = repository.LoadBeastDungeonUsed(owner, Selected.Id, beastDay, id);
+            if (!BeastDungeonRotation.CanEnter(beastDay, id, used)) return null;
+            beast = new(beastDay, used);
+        }
         var costs = new List<ItemMaterialCost>();
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         EpicPieceCatalog? costPieces = dungeon.HellPieces ?? dungeon.EntryPieces ?? dungeon.ChannelCost?.Pieces;
@@ -148,11 +162,17 @@ internal sealed partial class GameSession
         if (dungeon.Entry.Dimension is { } dimension && dimension.Period != IncountPeriod(dimension.Catalog.DailyRow.CountKey)) return null;
 
         ushort fatigue = debugSettings?.InfiniteFatigue == true ? (ushort)0 : dungeon.Entry.StartFatigue;
+        DfoServer.Game.Guild.GuildDungeonAdmission? guildAdmission = null;
+        if (guildDungeons?.Find(dungeon.Entry.DungeonId) is not null)
+        {
+            guildAdmission = repository.PrepareGuildDungeonEntry(owner, Selected.Id, dungeon.Entry.DungeonId, guildDungeons);
+            if (guildAdmission is null) { LastFormalDungeonRejection = "guild-dungeon-unavailable"; return null; }
+        }
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
             { OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
-                Marriage = dungeon.Entry.Marriage,
-                DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Dimension = dungeon.Entry.Dimension }, incount)
+                DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
+                GuildDungeon = guildAdmission, Beast = beast, Dimension = dungeon.Entry.Dimension }, incount)
         {
             EvildomWar = dungeon.EvildomWarEntry is { Store: not null } activeWar
                 ? new(activeWar.Battle.View, activeWar.BindingToken,
@@ -173,6 +193,7 @@ internal sealed partial class GameSession
         var installing = plan.Dungeon with
         {
             PartyActors = instance.Members.OrderBy(member => member.Slot).Select(member => member.Actor.Character.Id).ToImmutableArray(),
+            GuildMemberships = result.GuildMemberships,
             PartySlot = instance.Members.Single(member => ReferenceEquals(member.Actor.Session, this)).Slot
         };
         if (committed.Revision != installing.Entry.CharacterRevision)
@@ -191,6 +212,8 @@ internal sealed partial class GameSession
         if (installing.EvildomWarEntry is { } war)
             war.Charged = true;
         formalDungeon = installing;
+        if (installing.Entry.BeastMode && installing.Entry.StartMap.Kind.Equals("beast", StringComparison.OrdinalIgnoreCase))
+            installing.BeastStages[installing.Entry.StartMap.Position] = 0;
         if (installing.Entry.Hope is not null) hopeSelection = null;
         PartyDungeon = instance;
         partyDungeonRun = instance.Id;

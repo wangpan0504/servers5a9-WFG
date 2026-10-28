@@ -115,22 +115,35 @@ internal static class GuildPermitTests
         return id;
     }
 
-    internal static void Information(byte[] body, string name, string master, ushort members, byte region, uint experience = 0)
+    internal static void Information(byte[] body, string name, string master, ushort members, byte region, uint experience = 0,
+        ushort? online = null, byte canInvite = 0)
     {
         using var reader = new BinaryReader(new MemoryStream(body));
-        That(Text(reader) == name && reader.ReadByte() == 0 && reader.ReadByte() == 0 &&
+        That(Text(reader) == name && reader.ReadByte() == canInvite && reader.ReadByte() == 0 &&
             reader.ReadUInt16() == members && reader.ReadByte() == 0 && Text(reader) == "" && reader.ReadByte() == 1,
             "70的名称、成员数量、公告与等级按匹配客户端顺序读取");
         That(reader.ReadByte() == 0 && reader.ReadByte() == 0 && reader.ReadUInt32() == 0 && reader.ReadUInt32() == experience &&
-            Text(reader) == master && Text(reader) == master && reader.ReadUInt16() == 0 && Text(reader) == "",
+            Text(reader) == master && Text(reader) == master && reader.ReadUInt16() == (online ?? 0) && Text(reader) == "",
             "徽章为u32，不套用其它版本u8；后续名称与列表仍对齐");
-        That(reader.ReadBytes(168).Length == 168 && reader.ReadByte() == 0, "固定职位表与空福利列表完整");
+        byte[] roles = reader.ReadBytes(168);
+        That(roles.Length == 168, "固定职位表完整");
+        if (online is not null) That(System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(roles.AsSpan(28)) ==
+            GuildRoleRules.PermissionMask, "自然入会70保留真实会长权限表，不再被零表覆盖");
+        byte benefits = reader.ReadByte();
+        for (int index = 0; index < benefits; index++)
+        {
+            reader.ReadByte(); reader.ReadUInt32(); reader.ReadByte(); reader.ReadUInt32();
+        }
         That(reader.ReadUInt32() == 0 && reader.ReadByte() == 0 && reader.ReadUInt32() == 0 && reader.ReadByte() == 0,
             "公会扩展状态保留空编码");
-        for (int index = 0; index < 4; index++) That(reader.ReadUInt32() == 0, "公会推荐与光环扩展保持未启用");
+        That(reader.ReadUInt32() == 0 && reader.ReadUInt32() == 0 &&
+            reader.ReadUInt32() == uint.MaxValue && reader.ReadUInt32() == uint.MaxValue,
+            "公会扩展无额外状态，未选光环使用本版成对清除值");
         That(reader.ReadUInt16() == 0 && reader.ReadByte() == 0 && reader.ReadByte() == region &&
             reader.ReadUInt32() == 0 && reader.ReadByte() == 0 && reader.ReadUInt32() > 0, "大区与真实创建日期保持原生位置");
-        for (int index = 0; index < 7; index++) That(reader.ReadUInt32() == 0, "末尾扩展值保持未启用");
+        That(reader.ReadUInt32() == 0 && reader.ReadUInt32() == 1, "新公会真实档位0和档内等级1");
+        That(reader.ReadUInt64() == experience, "现代成长尾累计经验与既有经验投影一致");
+        for (int index = 0; index < 3; index++) That(reader.ReadUInt32() == 0, "新公会保留字段及结晶余额为零");
         That(reader.ReadByte() == 0 && reader.BaseStream.Position == body.Length, "70消费完所有字段，无截断、错位或多余尾部");
     }
 

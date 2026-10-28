@@ -108,7 +108,7 @@ internal sealed partial class GameSession
 
     public bool CanPublishTagEvildom(TagEvildomProjection projection) => owner.Execute(() => Ready && Phase == SessionPhase.Town &&
         projection.Generation == owner.Generation && projection.Epoch == SelectionEpoch && projection.CharacterId == Selected?.Id &&
-        ReferenceEquals(projection.Roster, tagEvildomRoster));
+        ReferenceEquals(projection.Roster, selectedRoster));
 
     // 设置可能选择别的队首；只读装载选中双人，锁外做资源资格计算，提交前复核同一身份/版本。
     public TagEvildomCharacters? CaptureTagEvildomSettingCharacters(ITagEvildomConfigurationStore store,

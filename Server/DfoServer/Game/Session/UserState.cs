@@ -26,7 +26,7 @@ internal enum UserStateRequirement { Owner, CharacterSelected, WorldReady, Dunge
 internal static class UserStatePolicy
 {
     public static bool IsImplemented(UserState state) => state is UserState.CharacterSelect or UserState.EnteringWorld or
-        UserState.Town or UserState.DungeonSelect or UserState.Dungeon or UserState.TutorialDungeon or UserState.PvpRoom;
+        UserState.Town or UserState.DungeonSelect or UserState.Dungeon or UserState.TutorialDungeon or UserState.PvpRoom or UserState.PvpBattle;
 
     public static bool Meets(UserState state, UserStateRequirement requirement)
     {
@@ -35,16 +35,17 @@ internal static class UserStatePolicy
         {
             UserStateRequirement.Owner => true,
             UserStateRequirement.CharacterSelected => state != UserState.CharacterSelect,
-            UserStateRequirement.WorldReady => state is UserState.Town or UserState.DungeonSelect or UserState.Dungeon or UserState.TutorialDungeon or UserState.PvpRoom,
+            UserStateRequirement.WorldReady => state is UserState.Town or UserState.DungeonSelect or UserState.Dungeon or UserState.TutorialDungeon or UserState.PvpRoom or UserState.PvpBattle,
             UserStateRequirement.DungeonContext => state is UserState.Dungeon or UserState.TutorialDungeon,
             _ => false
         };
     }
 
     public static UserState Read(SessionPhase phase, bool selected, bool ready, bool selectingDungeon,
-        SinglePlayerDungeonPhase? dungeon, bool tutorial, bool pvpTraining = false)
+        SinglePlayerDungeonPhase? dungeon, bool tutorial, bool pvpTraining = false, bool pvpArena = false, bool pvpBattle = false)
     {
-        if (pvpTraining && phase != SessionPhase.PvpRoom || !pvpTraining && phase == SessionPhase.PvpRoom ||
+        if (pvpTraining && pvpArena || pvpBattle && !pvpArena ||
+            (pvpTraining || pvpArena) != (phase == SessionPhase.PvpRoom) ||
             !selected && (phase != SessionPhase.Unselected || ready || selectingDungeon || dungeon is not null) ||
             !ready && phase != SessionPhase.Unselected || selectingDungeon && dungeon is not null ||
             tutorial && dungeon is null && !(phase == SessionPhase.MapSelect && selectingDungeon))
@@ -52,7 +53,8 @@ internal static class UserStatePolicy
         return phase switch
         {
             SessionPhase.Unselected when !ready && !selectingDungeon && dungeon is null => selected ? UserState.EnteringWorld : UserState.CharacterSelect,
-            SessionPhase.PvpRoom when ready && selected && pvpTraining && !selectingDungeon && dungeon is null => UserState.PvpRoom,
+            SessionPhase.PvpRoom when ready && selected && (pvpTraining || pvpArena) && !selectingDungeon && dungeon is null =>
+                pvpBattle ? UserState.PvpBattle : UserState.PvpRoom,
             SessionPhase.Town when !selectingDungeon && dungeon is null => UserState.Town,
             SessionPhase.MapSelect when selectingDungeon && dungeon is null => UserState.DungeonSelect,
             // 时限可在命令门外到达；保留原实例的退出资格，战斗与移动由TimedOut门禁冻结。

@@ -144,6 +144,12 @@ internal static partial class GmWebServer
                 $"account {b.Account} equip-slots {b.Name}");
         });
         // 账号金库金币：账号共享；命令层在线安全（owner 内提交并同步在线快照），所以不需要小退。
+        app.MapPost("/api/weekly-entry-reset", (HttpContext http, KickBody b) =>
+        {
+            if (!Token.IsMatch(b.Account)) return Bad("账号无效");
+            if (b.Confirm != true) return Bad("需要二次确认");
+            return Run(http, data, "weekly-entry-reset", b.Account, "*", $"account {b.Account} weekly-entry-reset", null);
+        });
         app.MapPost("/api/vault-gold", (HttpContext http, VaultGoldBody b) =>
         {
             if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;

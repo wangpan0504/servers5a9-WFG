@@ -33,8 +33,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     TagEvildomRunProjection? tagEvildomRun = null, EvildomWarCatalog? evildomWar = null,
     DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null,
     DfoServer.Game.Raids.ILukeRaidLifecycleStore? lukeLifecycle = null,
-    DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null, ImperialArenaProjection? imperialArena = null,
-    EvildomWarRewardPolicy? evildomRewards = null, IEvildomWarRewardStore? evildomRewardStore = null) : IGameCommandModule
+    DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null,
+    EvildomWarRewardPolicy? evildomRewards = null, IEvildomWarRewardStore? evildomRewardStore = null,
+    ImperialArenaProjection? imperialArena = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -210,7 +211,15 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_party_entry.go）：op16 请求体 [7]=1（HellPartyRequestFlag）且 [8]=0 表示"挑战深渊派对"。
         // 实机样本：94D6591104000001 00FFFF 0000000000 E2170000 00 00000000（副本号 291100308=哈林 [dungeon] 列表里的黑暗都市）。
         // [16:20]（任务号 6114）深渊入场时不参与路线，按 questId=0 的普通入场处理。
-        bool hell = selection.Unknown7 == 1 && selection.Unknown8 == 0 && !direct && !continuation;
+        // 魔兽第六难度 = 难度4 + MAZE2（用户 2026-10-28 口径：MAZE 0/1/2 = 普通/深渊/魔兽拓扑）。
+        // 实机 2026-10-25T14:49:06 的副本310/难度4/[7]=0 是普通噩梦按钮；MAZE1 留给下面的深渊分支。
+        bool mazeBeast = BeastDungeonRotation.MatchesEntry(checked((int)selection.DungeonIndex), selection.Parameter, selection.Unknown7) &&
+            selection.Unknown8 == 0 && !direct && !continuation;
+        bool gatewayBeast = BeastDungeonRotation.IsGateway(selection.DungeonIndex) && selection.Unknown7 == 0 &&
+            selection.Unknown8 == 0 && selection.Unknown16 == 0 && selection.Parameter == 0 && !direct && !continuation &&
+            context.Session.ChannelEntry?.Type == ChannelAreaLanding.BeastType;
+        bool beastMode = mazeBeast || gatewayBeast;
+        bool hell = selection.Unknown7 == 1 && selection.Unknown8 == 0 && !direct && !continuation && !beastMode;
         // 03BBA474..03BBA48C把目标匹配结果写offset20；offset7仍是普通挑战深渊模式1。
         bool legend = hell && selection.Unknown20 == 1 &&
             before.CurrentDungeonSelection?.HellLegendDungeonId == selection.DungeonIndex;
@@ -229,8 +238,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (selection.DungeonIndex == 5000 && (!training || selection.Parameter != 0)) return await RejectAsync();
         if (selection.DungeonIndex == 7142 && (!experience || selection.Parameter != 0)) return await RejectAsync();
         // 回放由1459的完成事实/显式路线授权；附加Scene flags只保留审计，不套普通选图常量。
+        // 魔兽入场由 [7]=MAZE2 表示，深渊由 [7]=1 表示，普通噩梦仍是 [7]=0；三者不能互相吞并。
+        byte expectedFlag = mazeBeast ? selection.Unknown7 : (byte)(hell ? 1 : 0);
         if (selection.Unknown5 != 0 || selection.Unknown11 != 0 || !replay &&
-            (selection.Unknown7 != (hell ? 1 : 0) || selection.Unknown8 != (direct || practice ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
+            (selection.Unknown7 != expectedFlag || selection.Unknown8 != (direct || practice ? 1 : 0) || selection.Unknown9 != ushort.MaxValue ||
             selection.Unknown15 != 0 || selection.Unknown20 != (legend ? 1 : 0) || selection.Unknown21 != 0))
             return await RejectAsync();
         if (context.Session.HasMultiplePartyMembers?.Invoke() == true || context.Session.ReadEvildomWar() is not null)
@@ -240,9 +251,11 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, context.Session.CurrentParty?.Invoke()?.Members ?? []);
             var entered = partyDungeons.Enter(context.Session, selection.DungeonIndex, selection.Parameter,
                 dungeons, rooms, drops, items, pieces, prepareDrops,
-                questId: hell ? 0u : selection.Unknown16, hellParty: hell, hellLegend: legend, crackRewards: crackRewards);
+                questId: hell || beastMode ? 0u : selection.Unknown16, hellParty: hell, hellLegend: legend,
+                crackRewards: crackRewards, beastMode: beastMode);
             log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length > 0, Party = true,
                 Members = entered.Count(notice => notice.Kind == PartyDungeonNoticeKind.Entry), Dungeon = selection.DungeonIndex, Quest = selection.Unknown16, HellParty = hell, HellLegend = legend,
+                Beast = beastMode, Request = selection,
                 RejectReason = entered.Length == 0 ? context.Session.LastFormalDungeonRejection ?? "party-entry-unavailable" : null });
             if (entered.Length == 0) return await RejectAsync();
             await PartyDungeonProjection.PublishAsync(entered);
@@ -253,11 +266,14 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             (sealDoor ? context.Session.EnterFormalDungeon(selection.DungeonIndex, 0, selection.Parameter, dungeons, rooms,
                 drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
                 hellParty: true, sealDoor: true, crackRewards: crackRewards) : null) ??
-            context.Session.EnterFormalDungeon(selection.DungeonIndex, hell || legend ? 0u : selection.Unknown16, selection.Parameter, dungeons, rooms,
+            context.Session.EnterFormalDungeon(selection.DungeonIndex, hell || legend || beastMode ? 0u : selection.Unknown16, selection.Parameter, dungeons, rooms,
                 drops, items, pieces: pieces, prepareDrops: prepareDrops,tutorials: tutorials,tutorialScenes: tutorialScenes,
-                classExperience: experience, hellParty: hell || legend, hellLegend: legend, practice: practice, crackRewards: crackRewards);
+                classExperience: experience, hellParty: hell || legend, hellLegend: legend, practice: practice, crackRewards: crackRewards,
+                beastMode: beastMode);
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = receipt is not null, Replay = replay, Continuation = continuation,
-            Training = training, ClassExperience = experience, Practice = practice, HellParty = hell, HellLegend = legend,
+            Training = training, ClassExperience = experience, Practice = practice, HellParty = hell, HellLegend = legend, Beast = beastMode,
+            // 魔兽入场记下魔兽区块声明的过场图，实机日志能直接看出走的是魔兽布局而不是普通噩梦。
+            Cutscene = receipt?.Entry.Maze.BeastLayout?.CutsceneImage,
             SealDoor = sealDoor && receipt?.Entry.HellParty is not null, Request = selection, receipt?.Snapshot.Identity,
             RejectReason = receipt is null && !continuation && !replay ? context.Session.LastFormalDungeonRejection : null,
             HellTicket = receipt?.HellTicket, EntryItem = receipt?.Entry.EntryItem, StartFatigue = receipt?.Entry.StartFatigue,
@@ -295,8 +311,11 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 "formal_tournament_map_info", Guard);
         }
         else
-        await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
-            passiveItems: receipt.PassiveItems), "formal_start_map", Guard);
+        {
+            await MonsterAiProjection.SendAsync(context, receipt, "formal_monster_ai", Guard);
+            await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
+                passiveItems: receipt.PassiveItems), "formal_start_map", Guard);
+        }
         if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo)
             await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
         if (!receipt.HellConsumedSlots.IsDefaultOrEmpty && receipt.HellTicket is { } hellTicket)
@@ -332,7 +351,15 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main, [.. receipt.ChannelConsumedSlots]), "channel_town_entry_items", Guard);
         }
+        // 祭坛金币、入场票、深渊票、强袭与频道代价已各自投影过同槽位；入场货币只补未投影的槽位，同一格不重复下发。
+        var projectedSlots = new HashSet<short>();
+        if (receipt.SpecialEntry is { Gold: > 0 }) projectedSlots.Add(0);
+        foreach (var slot in receipt.EntryItemConsumedSlots) projectedSlots.Add(slot.Index);
+        foreach (var slot in receipt.ChannelConsumedSlots) projectedSlots.Add(slot.Index);
+        foreach (var slot in receipt.HellConsumedSlots) projectedSlots.Add(slot.Index);
+        foreach (var slot in receipt.AssaultConsumedSlots) projectedSlots.Add(slot.Index);
         var currencySlots = receipt.EntryChangedCurrencies.Select(ItemSlotBoundService.CurrencySlot).OfType<short>()
+            .Where(slot => !projectedSlots.Contains(slot))
             .Select(slot => new InventorySlot(InventoryListType.Main, slot)).ToArray();
         if (currencySlots.Length != 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
@@ -360,6 +387,10 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
 
         async Task<CommandResult> RejectAsync()
         {
+            // 每一条被拒的选图都留原始请求体，实机排错不用再靠猜标志位。
+            log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = false, Replay = replay, Continuation = continuation,
+                Training = training, ClassExperience = experience, Practice = practice, Beast = beastMode, Request = selection,
+                RejectReason = context.Session.LastFormalDungeonRejection ?? "selection-rejected", CharacterId = character.Id });
             bool CanSend() => context.Session.CanPublishFormalDungeonRejection(character, before.SelectionEpoch,
                 before.Phase, before.CurrentDungeonSelection);
             // 只结束本次入场等待，保留原选图和回城锚点；不发送成功、弹窗或自动回城通知。
@@ -533,6 +564,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         // 友方、非阻挡对象只应答退场，不发布经验、任务或结算；未知和已结算敌人仅审计。
         if (result.Reward is not { } reward)
         {
+            if (result.BeastRewardSlots.Length > 0)
+                await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
+                    InventoryListType.Main,[.. result.BeastRewardSlots]),"formal_beast_stage_reward",Guard);
             foreach (ushort key in result.CulledMonsterKeys)
                 await context.Notify(NotiPacketType.DIE_MONSTER, ExclusiveDropPackets.MonsterDeath(key, [], enteredDungeon), "formal_clear_room_cull", Guard);
             if (result.ImperialArenaDeath is { } imperialDeath)
@@ -573,6 +607,9 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (result.QuestDropSlots.Count > 0)
             await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
                 InventoryListType.Main,[.. result.QuestDropSlots]),"formal_quest_drop_items",Guard);
+        if (result.BeastRewardSlots.Length > 0)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST,InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main,[.. result.BeastRewardSlots]),"formal_beast_stage_reward",Guard);
         foreach (var change in result.EquipmentChanges.Where(change => change.Before.Core.ItemId == change.After.Core.ItemId))
             await context.Notify(NotiPacketType.GROWTH_ITEM_RENEW_DATA, EquipmentGrowthPackets.Experience(change.After, change.Gain),
                 "equipment_growth_experience", Guard);
@@ -679,6 +716,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 DungeonAltarPackets.StartMap(receipt.Entry, receipt.Snapshot.MapPayload), "formal_altar_next_map", Guard);
             return CommandResult.Handled;
         }
+        await MonsterAiProjection.SendAsync(context, receipt, "formal_monster_ai", Guard);
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
             receipt.Snapshot.MapOperation,receipt.Snapshot.MapPayload, receipt.PassiveItems), "formal_next_map", Guard);
         if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo && receipt.Snapshot.MapPayload != DungeonMapPayload.Cached)

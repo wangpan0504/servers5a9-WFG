@@ -47,6 +47,9 @@ internal sealed partial class GameSession
     public AssaultDailyCounts AssaultDailyCounts(DateTimeOffset localNow) => owner.Execute(() =>
         Selected is { } character ? repository.LoadAssaultDaily(owner, character.Id, AssaultModeEntryPolicy.DayKey(localNow)) : default);
 
+    public int BeastDungeonUsed(int day, int dungeonId) => owner.Execute(() =>
+        Selected is { } character ? repository.LoadBeastDungeonUsed(owner, character.Id, day, dungeonId) : 0);
+
     // 请求可以携带已接取的猎杀任务；任务资格和路线仍由正式入场校验，不影响1547的副本授权身份。
     AssaultModeAuthorization? CurrentAssaultAuthorization(Character character, uint dungeonId) =>
         assaultAuthorization is { } authorization && authorization.CharacterId == character.Id &&

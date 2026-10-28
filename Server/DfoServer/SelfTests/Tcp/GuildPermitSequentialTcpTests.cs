@@ -95,7 +95,8 @@ internal static class GuildPermitSequentialTcpTests
             invitee.Expect(1, 0x02E6, [0x01]);
             GuildPermitTests.Entered(invitee.Expect(0, 58).Body, checked((ushort)inviteeId), "顺序公会", "SeqInvitee");
             var joinedActor = invitee.Expect(0, 2).Body;
-            GuildPermitTests.Information(invitee.Expect(0, 70).Body, "顺序公会", "SeqMaster", 2, joinedActor[3]);
+            invitee.Expect(0, 127, [4]);
+            GuildPermitTests.Information(invitee.Expect(0, 70).Body, "顺序公会", "SeqMaster", 2, joinedActor[3], online: 1);
         }
 
         That(fixture.Query("SELECT name||':'||address||':'||master_character_id FROM guilds") is [[string guild]] &&

@@ -7,7 +7,7 @@ namespace DfoServer.Game.Dungeons;
 internal static class DungeonDropCreation
 {
     public static bool Supports(ItemKind kind) => kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or
-        ItemKind.Quest or ItemKind.CreatureConsumable or ItemKind.Emblem or ItemKind.Profession or ItemKind.GuardianGem or ItemKind.Talisman or ItemKind.Rune;
+        ItemKind.Quest or ItemKind.CreatureConsumable or ItemKind.Emblem or ItemKind.Profession or ItemKind.GuildMedal or ItemKind.GuardianGem or ItemKind.Talisman or ItemKind.Rune;
     // 使用既有物品创建合同，掉落装备参考端采用完整非负int随机种子，不沿用初始装备满品级。
     // count、耐久、封装与期限在死亡冻结时确定，拾取和SQL重试不重新创建。
     public static ItemCore Create(ItemTemplate template, int count, Func<int, int> draw, DateTimeOffset now,

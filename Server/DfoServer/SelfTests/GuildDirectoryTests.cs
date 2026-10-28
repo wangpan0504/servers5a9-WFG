@@ -20,6 +20,7 @@ internal static class GuildDirectoryTests
         public bool AddressTaken(string address) => Addresses.Contains(address);
         public long? GuildOf(ushort characterId) => null;
         public GuildMembership? GuildMembershipOf(ushort characterId) => null;
+        public GuildPanel? ReadGuildPanel(Game.Accounts.AccountOwners.Lease owner, ushort characterId) => null;
         public GuildPermitTarget? FindPermitTarget(string name) => null;
         public GuildCreateResult CreateGuild(Game.Accounts.AccountOwners.Lease owner, Game.Characters.Character expected, GuildCreatePlan plan) =>
             throw new NotSupportedException("查重测试不覆盖建会写路径");

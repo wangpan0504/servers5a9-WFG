@@ -81,19 +81,18 @@ internal sealed partial class GameSession
     public IReadOnlyList<DungeonEnterCount> EnterCounts() => owner.Execute(() =>
     {
         if (incounts is null || Selected is not { } character) return (IReadOnlyList<DungeonEnterCount>)[];
-        var stored = repository.LoadDungeonIncounts(owner, character.Id).ToDictionary(row => row.Dungeon);
         var now = IncountNow();
         var result = new List<DungeonEnterCount>();
         foreach (var row in incounts.Rows)
             if (row.Limit > 0)
             {
-                var period = DungeonIncountPolicy.Period(now, incounts.WeeklyResetDay(row.CountKey));
-                var usage = stored.TryGetValue(row.CountKey, out var saved) ?
-                    DungeonIncountPolicy.Current(saved.Usage, saved.Period, period) : default;
+                // 追加券写在 character_dungeon_incount_extra，批量读只含已用次数；投影必须走含追加额度的单项读。
+                var usage = repository.LoadDungeonIncount(owner, character.Id, row.CountKey,
+                    DungeonIncountPolicy.Period(now, incounts.WeeklyResetDay(row.CountKey)));
                 // 两祭坛由专用入场账本投影；通用账本从不扣这两项，不能随后以满次数覆盖真实剩余。
-                result.AddRange(DungeonIncountPolicy.Views(incounts.Dimension?.Contains(row.CountKey) == true
-                    ? row with { Limit = row.Limit + DimensionEntryTicketService.Extra(character.Inventory, IncountNow()) } : row,
-                    repository.LoadDungeonIncount(owner, character.Id, row.CountKey, IncountPeriod(row.CountKey)))
+                var viewRow = incounts.Dimension?.Contains(row.CountKey) == true
+                    ? row with { Limit = row.Limit + DimensionEntryTicketService.Extra(character.Inventory, IncountNow()) } : row;
+                result.AddRange(DungeonIncountPolicy.Views(viewRow, usage)
                     .Where(count => count.Dungeon is not (11006 or 11007)));
             }
         return result;

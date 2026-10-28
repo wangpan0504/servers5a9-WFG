@@ -85,7 +85,7 @@ internal static partial class DailyBoosterProjectionTests
             TestCheck.That(sent.Count == 0, "发送队列跨日后旧receipt视图被日期guard丢弃");
             await projection.RefreshAsync();
             TestCheck.That(Consume(sent).Values.All(value => value == 0), "丢弃旧日包后按实际服务日完整归零");
-            await clock.WaitForTimersAsync(1);
+            await clock.WaitForOneShotTimersAsync(1);
             // timer先醒、请求仍持门禁；退出时取消其等待，不可互相等待死锁。
             await context.CommandGate.WaitAsync();
             try

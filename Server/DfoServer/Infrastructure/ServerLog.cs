@@ -62,7 +62,14 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
                 $"Game server listening on TCP {Value("Game")}\nAdvertised game endpoint: {Value("AdvertisedGame")}\n" +
                 $"Native transport listening on TCP {Value("Native")}\n" +
                 $"GM control: {Value("Gm")}\nGM web: {Value("GmWeb")}\nGM packet queries: {Value("GmPacketQueries")}\nPacket HTTP: {Value("PacketHttp")}\nPacket capture: {Value("PacketCapture")}\nServer log: {Value("ServiceLog")}";
-        if (kind == "server_ready") return $"Server ready. PID={Value("Pid")}.";
+        if (kind == "server_ready")
+        {
+            // 版本/提交号/存档版本只有真正启动的宿主会带；自测等精简调用点维持原来的一行。
+            if (!fields.TryGetProperty("Commit", out _)) return $"Server ready. PID={Value("Pid")}.";
+            string commit = Value("Commit");
+            return $"Server ready. PID={Value("Pid")} Version={Value("ServerVersion")} " +
+                $"Commit={(commit.Length == 0 ? "unknown" : commit)} SaveVersion=v{Value("SaveVersion")}.";
+        }
         if (kind == "stopped") return $"Server stopped. PID={Value("Pid")}.";
         if (kind is "server_failed" or "listener_failed")
             return $"Server failed at {Value("Stage")}: {Value("Reason")}: {Value("Message")}";

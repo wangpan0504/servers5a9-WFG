@@ -97,7 +97,7 @@ internal static partial class FormalDungeonTcpTests
             async Task ResetAt(DateTimeOffset at)
             {
                 // 无客户端请求触发：礼盒、眩惑和服务日各有一个有界时钟，共用同一连接门禁。
-                await clock.WaitForTimersAsync(3);
+                await clock.WaitForOneShotTimersAsync(3);
                 clock.Advance(at - clock.GetUtcNow());
                 int chunks = 0;
                 bool tower = false;
@@ -117,11 +117,12 @@ internal static partial class FormalDungeonTcpTests
                     }
                     else peer.ValidateServiceDayNotice(packet);
                 }
-                await clock.WaitForTimersAsync(peer.DazzlementBindings is [0] ? 2 : 3);
+                // 服务日重新装填的是三只一次性定时器；公会服务的共享周期轮询不属于本次计数。
+                await clock.WaitForOneShotTimersAsync(peer.DazzlementBindings is [0] ? 2 : 3);
                 foreach (var packet in PartyDungeonTcpTests.Drain(peer)) peer.ValidateServiceDayNotice(packet);
             }
         }
-        await clock.WaitForTimersAsync(0);
+        await clock.WaitForOneShotTimersAsync(0);
 
         long Attempts() => (long)fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0", created.Id).Single()[0];
         long Bindings() => (long)fixture.Query("SELECT count(*) FROM account_dazzlement_tower_bindings").Single()[0];

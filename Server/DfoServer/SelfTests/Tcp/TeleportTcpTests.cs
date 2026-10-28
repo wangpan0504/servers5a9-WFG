@@ -187,7 +187,7 @@ internal static class TeleportTcpTests
             peer.Send(1426); peer.Expect(0, 23); peer.Expect(0, 24); peer.Barrier();
             CreateParty();
             var before = fixture.Query("SELECT revision,town,area,x,y FROM characters WHERE id=$p0", peer.Id)[0];
-            peer.Send(434, Party(39, 3, 783, 205, 0)); peer.Expect(1, 434, [0, 19, 0, 39, 0, 0, 0, 0, 0]); peer.Barrier();
+            peer.Send(434, Party(39, 3, 783, 205, 0)); peer.Expect(1, 434, [0, 7, 0, 39, 0, 0, 0, 0, 0]); peer.Barrier();
             That(before.SequenceEqual(fixture.Query("SELECT revision,town,area,x,y FROM characters WHERE id=$p0", peer.Id)[0]),
                 "光环仅接入source1，不伪造公会等其他来源权限");
             using (var observer = Open(fixture, "party-observer"))

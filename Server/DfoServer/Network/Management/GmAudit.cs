@@ -46,11 +46,17 @@ internal sealed class GmAudit(string path)
         var rows = new List<GmAuditEntry>();
         for (int i = lines.Length - 1; i >= 0 && rows.Count < limit; i--)
         {
-            try { if (JsonSerializer.Deserialize<GmAuditEntry>(lines[i], Json) is { } row) rows.Add(row); }
+            try { if (JsonSerializer.Deserialize<GmAuditEntry>(lines[i], Json) is { } row && Complete(row)) rows.Add(row); }
             catch (JsonException) { }
         }
         return [.. rows];
     }
+
+    // 反序列化会把 JSON 的显式 null 写进非空字段（外部工具或手改文件留下的占位行），
+    // 这类行不是本类写入的记录，按损坏行跳过，不能让筛选和导出在空引用上失败。
+    static bool Complete(GmAuditEntry row) =>
+        row.Operator is not null && row.Action is not null && row.Target is not null && row.Command is not null &&
+        row.Before is not null && row.After is not null && row.Result is not null;
 
     // 按账号（对象以“账号/角色”开头）、动作、时间范围、结果过滤；最多 5000 条，供网页筛选与导出使用。
     public GmAuditEntry[] Query(int limit, string? account, string? action, DateTimeOffset? from, DateTimeOffset? to, bool? ok)
@@ -71,7 +77,7 @@ internal sealed class GmAudit(string path)
         {
             try
             {
-                if (JsonSerializer.Deserialize<GmAuditEntry>(lines[i], Json) is not { } row) continue;
+                if (JsonSerializer.Deserialize<GmAuditEntry>(lines[i], Json) is not { } row || !Complete(row)) continue;
                 if (!string.IsNullOrEmpty(account) && !row.Target.StartsWith(account + "/", StringComparison.Ordinal) && row.Target != account) continue;
                 if (!string.IsNullOrEmpty(action) && !row.Action.Equals(action, StringComparison.Ordinal)) continue;
                 if (from is { } f && row.Time < f) continue;

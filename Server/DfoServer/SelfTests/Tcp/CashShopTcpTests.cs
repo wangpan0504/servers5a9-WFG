@@ -138,6 +138,7 @@ internal static partial class CashShopTcpTests
             "商城 TCP 事务保持 SQLite 完整性");
         await AvatarAsync(source, root, resources);
         await SkillTreeAsync(source, root, resources);
+        await HongbaoAsync(source, root, resources);
 
         string Snapshot() => PurchaseSnapshot(fixture);
     }

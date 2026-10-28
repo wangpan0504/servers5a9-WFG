@@ -32,8 +32,10 @@ internal sealed record RoomPortal(byte Town, byte Area, Rectangle Bounds, int Le
 internal readonly record struct TownScene(byte Town, byte Area, string Map, bool IsRoom)
 {
     public bool IsEpisode { get; init; }
+    public bool IsGuildHall => TownCatalog.IsGuildHallMap(Map);
     // 剧情城镇不变成赛丽亚房间；仅同屏、交互与普通聊天使用角色级隔离身份。
-    public string? OwnerKey(string account, ushort characterId, Guid? marriageId = null, Guid? ceremonyId = null) =>
+    public string? OwnerKey(string account, ushort characterId, uint guildId = 0, Guid? marriageId = null, Guid? ceremonyId = null) =>
+        IsGuildHall ? guildId == 0 ? $"guild-invalid:{account}:{characterId}" : $"guild:{guildId}" :
         Town == 39 && Area is >= 8 and < 38
             ? ceremonyId is { } wedding ? $"wedding:{wedding:N}" : $"wedding-unavailable:{account}:{characterId}"
             : Town == 101 && Area == 0
@@ -56,6 +58,15 @@ internal sealed record TownArea(byte Town, byte Area, int Level, int[] Quests, i
 
 internal sealed class TownCatalog
 {
+    public static bool IsGuildHallMap(string path)
+    {
+        string normalized = path.Trim().Replace('\\', '/');
+        if (normalized.StartsWith("map/", StringComparison.OrdinalIgnoreCase)) normalized = normalized[4..];
+        return (normalized.StartsWith("guildagit/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("guildagit_2019/", StringComparison.OrdinalIgnoreCase)) &&
+            normalized.EndsWith(".map", StringComparison.OrdinalIgnoreCase);
+    }
+    public bool IsGuildHall(Location position, IReadOnlySet<int> completed) => Scene(position, completed).IsGuildHall;
     static readonly IReadOnlySet<int> NoQuests = new HashSet<int>();
     public IReadOnlyDictionary<(byte, byte), TownArea> Areas { get; }
     public IReadOnlySet<byte> EpisodeTowns { get; init; } = new HashSet<byte>();
@@ -129,6 +140,28 @@ internal sealed class TownCatalog
         var map = area.Map(completed);
         // Native arrival can be inside the door but outside the walking rectangles.
         return map.Error is null && (map.Bounds.Any(r => Allowed(r.Quests, r.Conditions, completed) && r.Bounds.Contains(p.X, p.Y)) || map.Links.Any(l => l.Gate.Door && Allowed(l.Quests, l.Conditions, completed) && l.Gate.Contains(p.X, p.Y)));
+    }
+
+    /// <summary>
+    /// 地图自身的站立落点：地形首块可走矩形中心（[town movable area]），与玩家从外场走门进入后的实际落点一致。
+    /// 客户端菜单写死的旧版坐标（如公会大厅 2110/270）在现版地图上不可站时用它兜底。
+    /// </summary>
+    public Location? Spawn(Location target, IReadOnlySet<int>? completed = null)
+    {
+        completed ??= NoQuests;
+        if (!Areas.TryGetValue((target.Town, target.Area), out var area))
+            return null;
+        var map = area.Map(completed);
+        if (map.Error is not null)
+            return null;
+        foreach (var region in map.Bounds.Where(r => Allowed(r.Quests, r.Conditions, completed)))
+        {
+            long x = (long)region.Bounds.X + region.Bounds.Width / 2, y = (long)region.Bounds.Y + region.Bounds.Height / 2;
+            if (x is < 0 or > ushort.MaxValue || y is < 0 or > ushort.MaxValue) continue;
+            var spawn = target with { X = (ushort)x, Y = (ushort)y };
+            if (IsPosition(spawn, completed)) return spawn;
+        }
+        return null;
     }
 
     public bool HasDungeonEntrance(TownArea area, IReadOnlySet<int> completed, uint dungeonId)
@@ -445,9 +478,9 @@ internal sealed class TownCatalog
         var npcMoves = new Dictionary<uint, uint[]>();
         var npcExits = new HashSet<uint>();
         var lostLandNpcs = new HashSet<uint>();
+        var marriageDungeonNpcs = new HashSet<uint>();
         var equipmentTransportNpcs = new HashSet<uint>();
         var equipmentResealNpcs = new HashSet<uint>();
-        var marriageDungeonNpcs = new HashSet<uint>();
         var npcList = List(pvf.ReadText("npc/npc.lst"));
         foreach (uint id in maps.Values.SelectMany(m => m.Npcs).Select(n => n.Id).Distinct())
         {
@@ -458,6 +491,7 @@ internal sealed class TownCatalog
                 .Any(role => Regex.IsMatch(role.Groups[1].Value, @"`\[exit town\]`\s+0(?=\s|$)")))
                 npcExits.Add(id);
             if (HasLostLandEntryRole(text)) lostLandNpcs.Add(id);
+            if (HasMarriageDungeonEntryRole(text)) marriageDungeonNpcs.Add(id);
             string roles = string.Join("\n", Regex.Matches(text, @"\[role\](.*?)\[/role\]", RegexOptions.Singleline)
                 .Select(match => match.Groups[1].Value));
             if (Regex.IsMatch(roles, @"`\[trans using soul\]`\s+0(?=\s|$)")) equipmentTransportNpcs.Add(id);
@@ -483,9 +517,8 @@ internal sealed class TownCatalog
         }
         var catalog = new TownCatalog(areas, room, new(38, 0, checked((ushort)origin.Gate.X), checked((ushort)origin.Gate.Y)), TownDock.Load(pvf), LoadRoomPortals(pvf), npcMoves,dungeonMaps)
             { SpecialChannelQuests = LoadSpecialChannelQuests(pvf), NpcExits = npcExits, EpisodeTowns = episodes,
-                LostLandEntryNpcs = lostLandNpcs,
-                EquipmentTransportNpcs = equipmentTransportNpcs, EquipmentResealNpcs = equipmentResealNpcs,
-                MarriageDungeonEntryNpcs = marriageDungeonNpcs };
+                LostLandEntryNpcs = lostLandNpcs, MarriageDungeonEntryNpcs = marriageDungeonNpcs,
+                EquipmentTransportNpcs = equipmentTransportNpcs, EquipmentResealNpcs = equipmentResealNpcs };
         if (!catalog.IsPosition(room) || !catalog.IsPosition(catalog.InitialReturn))
             throw new InvalidDataException("PVF initial position outside native movable regions");
         return catalog;

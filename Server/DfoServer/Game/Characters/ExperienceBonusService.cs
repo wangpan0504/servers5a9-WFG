@@ -75,7 +75,7 @@ internal sealed class ExperienceBonusService(ItemCatalog items, RecoveryConsumab
                 .OrderBy(part => part.Source).ToImmutableArray() };
             _ = result.Total;
         }
-        return result;
+        return result with { GuildEntitlement = context.GuildEntitlement };
     }
 
     bool TryTemplate(ExperienceBonusRequest request, InventoryItem item, [NotNullWhen(true)] out ItemTemplate? template)

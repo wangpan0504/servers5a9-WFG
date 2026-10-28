@@ -12,9 +12,9 @@ namespace DfoServer.Testing;
 // 换频道先进赛丽亚房间再出门到频道地区（安徒恩除外）；原生换频道进出卢克 0x20 / 安徒恩 0x17 / 超时空之战 0x2D / 魔界大战 0x36 / 普雷 0x32 的落点与快照（ARAD 01EB5AF0 谓词）：
 // 普通→团本页签频道、进出魔界大战客户端不记快照，服务端必须按落点城镇入城；团本页签频道之间互换客户端留在原城，
 // 服务端必须保留原位置。每次换频道后按客户端随后的 same-area 位置回放与移动核对服务端接受（不再被 route-not-in-pvf 拒绝）。
-internal static class RaidChannelLandingTcpTests
+internal static partial class RaidChannelLandingTcpTests
 {
-    static readonly int[] RaidQuests = [12829, 2903, 8672, 8935, 3779, 4872];
+    static readonly int[] RaidQuests = [12829, 2903, 8672, 8935, 3779, 4872, 5927];
 
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -37,6 +37,8 @@ internal static class RaidChannelLandingTcpTests
         Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（留在房间）", area: 1);
         Switch(42, land: true, town: 38, "魔界大战 41→普雷 42（进赛丽亚房间，出门 59/0）", area: 1, exit: 59);
         Switch(19, land: false, town: null, "普雷 42→安徒恩 19（同为团本页签，客户端保留 59/0）");
+        Switch(49, land: true, town: 38, "团队频道→魔兽49（独立谓词，先进共享房间再出门到51/0）", area: 1, exit: 51);
+        Switch(normal, land: true, town: 38, "魔兽→普通重新入共享房间，不保留魔兽城镇快照", area: 1);
     }
 
     // 安徒恩频道页依赖 EVENT_INFO 事件 181（0xB5）与任务 12829：时段全开时入城事件表必须带齐四张团本卡与安徒恩事件，频道目录列出 19。
@@ -64,7 +66,8 @@ internal static class RaidChannelLandingTcpTests
             That(location[0] == (channel == 19 ? 19 : 38) && location[1] == (channel == 19 ? 0 : 1),
                 $"频道 {channel} 普通选角绑定真实初始地区，事件初始化不改变落点");
             peer.Barrier();
-            That(peer.EventInfoPayload.Length == 68 + 15 * 5, $"频道 {channel} EVENT_INFO 含2037、四项团本事件与默认诺兰2532");
+            That(peer.EventInfoPayload.Length == 163 + 15 * peer.ExpectedOpenEvents.Length,
+                $"频道 {channel} EVENT_INFO 同时保留2037、红包2378、乔纳森2395及卢克282/超时空2449/普雷414/安徒恩181与诺兰2532");
             That(peer.CompletedQuestHistory.Length > 0, $"频道 {channel} 下发已完成任务表");
             peer.Send(3, [1]); peer.Expect(1, 3, [1]); peer.Closed();
             fixture.Sql("UPDATE characters SET town=38,area=0,x=629,y=196 WHERE id=$p0", character.Id);
@@ -93,6 +96,8 @@ internal static class RaidChannelLandingTcpTests
             // 1379 只在入城位置是房间图时下发：保留快照看原位置，落点看频道落点区域。
             bool room = resources.Towns.IsRoom(land ? new Location(town!.Value, area, 0, 0) : Position(), completed);
             using var peer = Open(fixture, gamePort: endpoints[channel], channelNumber: channel);
+            if (channel == 49) That(peer.LoginEndpoint.Length > 3 && peer.LoginEndpoint[3] == 40,
+                "真实LOGIN帧保留魔兽类型40，不因目录已配置而遗漏实际应答");
             var packets = land
                 ? peer.Select(character.Slot, prepared: true, nativeSwitch: true, room: room)
                 : peer.Select(character.Slot, prepared: true, resumeTown: true, room: room);
@@ -144,7 +149,7 @@ internal static class RaidChannelLandingTcpTests
         Switch(43, land: false, town: null, "普通→五陵 43（0x38 谓词同普通）");
         // 魔界大战 0x36 的 vt+0x4C 与 0x38 不同：客户端不留快照，进赛丽亚房间，出门按频道落点。
         Switch(41, land: true, town: 38, "五陵 43→魔界大战 41（出门 67/0）", area: 1, exit: 67);
-        Switch(43, land: true, town: 38, "魔界大战 41→五陵 43（出门 117/0）", area: 1, exit: 117);
+        Switch(43, land: true, town: 38, "魔界大战 41→五陵 43（出门 117/1 入口图）", area: 1, exit: 117);
         // 117 不是频道专属城镇，五陵→普通谓词全同，保留五陵位置。
         Switch(normal, land: false, town: null, "五陵 43→普通（保留 117）");
         // 勇士对决 0x3F/0x3E 在团队页签谓词里：普通→勇士对决不留快照，出门 119；两者之间及与超时空之战 0x2D 互换保留快照。
@@ -155,7 +160,10 @@ internal static class RaidChannelLandingTcpTests
         Switch(45, land: true, town: 38, "魔界大战 41→勇士对决-排位 45（出门 119）", area: 1, exit: 119);
     }
 
-    // #613 选五陵出不去门：117/0 chn_Gate_xian.map 下方门通往 1/1，客户端实测发 SET_USER_AREA 01 01 0000 0000 05 75 00…（坐标 0,0）。
+    // 五陵频道入城与城内走动：落点 117/1 chn_fiendwar_xian_start.map 回赛丽亚房间的门上（1070,213），
+    // 沿 [town movable area] `340 341 100 50 117 2` 进五陵主城 117/2（云珂等 NPC 所在）。
+    // 117/0 chn_Gate_xian.map 是 Common/Gate_Seria.map 桩图，下方门通往 1/1，客户端实测发 SET_USER_AREA 01 01 0000 0000 05 75 00…（坐标 0,0）；
+    // 这条 0,0 落点解析（#613）仍按存档放在 117/0 的用例保留。
     public static async Task RunXianDoorAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "xian-village-door"), resources: resources);
@@ -181,23 +189,28 @@ internal static class RaidChannelLandingTcpTests
         TcpPeer Enter()
         {
             Switch(41, land: true, town: 38, "进五陵前先离开普通谓词", area: 1);
-            Switch(43, land: true, town: 38, "进赛丽亚房间，出门落五陵 117/0", area: 1, exit: 117);
+            Switch(43, land: true, town: 38, "进赛丽亚房间，出门落五陵 117/1", area: 1, exit: 117);
             var peer = Open(fixture, gamePort: endpoints[43], channelNumber: 43);
-            peer.Select(character.Slot, prepared: true, resumeTown: true, room: true);
+            // 117/1 入口图不是 Gate_Seria 房间图，重连恢复不发 1379，按非房间序列核对 124/24。
+            peer.Select(character.Slot, prepared: true, resumeTown: true, room: false);
             peer.Barrier();
-            // Switcher 在落点后右移 2 验证可走，这里只核对仍在 117/0 房间图。
-            That(Where().StartsWith("[[117,0,"), "五陵频道入城在 117/0 " + Where());
+            That(Where().StartsWith("[[117,1,"), "五陵频道入城在 117/1 入口图 " + Where());
             return peer;
         }
         using (var peer = Enter())
         {
-            // 右侧 -2 门：CMD 1426 回存档返回地区 117/1 的入口 1070,213。
-            peer.Travel(117, 1, 1070, 213, 117, 0, bottom: true);
-            That(Where() == "[[117,1,1070,213]]", "117/0 返回门进五陵 117/1 " + Where());
+            // 入口图 117/1 的 `340 341 100 50 117 2` 门：117/2 侧回门 `1478 345 100 50 117 1` 中心 1528,370。
+            peer.Travel(117, 2, 1528, 370, 117, 1);
+            That(Where() == "[[117,2,1528,370]]", "117/1 入口图进五陵主城 117/2 " + Where());
             peer.Send(3, [1]); peer.Expect(1, 3, [1]); peer.Closed();
         }
-        using (var peer = Enter())
+        // #613：把存档放到 117/0 桩图后再走下方门，客户端发 0,0，服务端按 PVF 入口解析落点。
+        fixture.Sql("UPDATE characters SET town=117,area=0,x=474,y=234 WHERE id=$p0", character.Id);
+        using (var peer = Open(fixture, gamePort: endpoints[43], channelNumber: 43))
         {
+            peer.Select(character.Slot, prepared: true, resumeTown: true, room: true);
+            peer.Barrier();
+            That(Where().StartsWith("[[117,0,"), "存档在 117/0 时保留快照 " + Where());
             var arrival = resources.Towns.Entrance(new(117, 0, 474, 234), new(1, 1, 0, 0), completed)
                 ?? throw new InvalidOperationException("FAIL: 1/1 没有可用入口");
             That(arrival is { Town: 1, Area: 1 } && resources.Towns.IsPosition(arrival, completed), "1/1 入口按 PVF 门口解析 " + arrival);

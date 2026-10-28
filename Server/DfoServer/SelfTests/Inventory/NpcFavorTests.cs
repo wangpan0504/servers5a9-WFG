@@ -83,6 +83,7 @@ internal static class NpcFavorTests
             var role=repository.Create(owner,new("Favor",place,place) { Level=20, Inventory=new([item with { Uid=0 }]) });
             using var db=new SqliteConnection("Data Source="+path+";Pooling=False");db.Open();
             using var sql=db.CreateCommand();
+            DatabaseSchemaTests.RemoveGuildExtensionSchema(db);
             // 真实v101升级保留原角色与完整库存，默认没有历史好感度。
             DatabaseSchemaTests.RewindRaidLifecycle(db);
             sql.CommandText="ALTER TABLE characters DROP COLUMN npc_favor; PRAGMA user_version=101";sql.ExecuteNonQuery();

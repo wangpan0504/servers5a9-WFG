@@ -10,8 +10,8 @@ internal sealed class ClientNoticeHandler(ServerLog log) : IGameCommandModule
         foreach (var opcode in new[]
         {
             CmdPacketType.USE_SKILL,
-            CmdPacketType.GUILD_ALL_MEMBER_LIST, CmdPacketType.SECURITY_STATUS,
-            CmdPacketType.FPS_PERFORMANCE_STATISTIC, CmdPacketType.SEARCH_GUILD_RANKING
+            CmdPacketType.SECURITY_STATUS,
+            CmdPacketType.FPS_PERFORMANCE_STATISTIC
         })
             commands.Register(opcode, NoticeAsync, nameof(ClientNoticeHandler));
     }

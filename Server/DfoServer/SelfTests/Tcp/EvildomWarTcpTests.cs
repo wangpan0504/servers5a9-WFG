@@ -117,13 +117,33 @@ internal static class EvildomWarTcpTests
                         writer.Write(scenario == "wrong-kind" ? (byte)0 : (byte)5);
                         writer.Write(scenario == "wrong-mode" ? (ushort)3 : (ushort)mode); writer.Write((byte)7);
                     }));
-                    That(All()[0].Any(packet => packet is { Kind: 0, Opcode: 9 }), "CMD12成功以真实NOTI9名册确认建队");
+                    byte partyKind = scenario == "wrong-kind" ? (byte)0 : (byte)5;
+                    ushort partyMode = scenario == "wrong-mode" ? (ushort)3 : mode;
+                    var created = All()[0].Last(packet => packet is { Kind: 0, Opcode: 9 } && U16(packet.Body, 2) == 9999).Body;
+                    That(created.Length == 63 && created[30] == partyKind && U16(created, 31) == partyMode &&
+                        created[^2] == partyKind && created[^1] == 0,
+                        "CMD12名册的设置与最终类型均为原请求值，不能在芮兹菜单前清成普通队伍");
                     foreach (var peer in peers.Skip(1))
                     {
                         leader.Send(10, Build(writer => { writer.Write(peer.Id); writer.Write((byte)0); writer.Write(0u); writer.Write(new byte[6]); }));
                         All();
                         peer.Send(11, Build(writer => { writer.Write(leader.Id); writer.Write((byte)0); writer.Write(0u); }));
-                        That(All(peer).Take(peers.IndexOf(peer) + 1).All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 9 })), "所有队员真实加入同一Party");
+                        That(All(peer).Take(peers.IndexOf(peer) + 1).All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 9 } &&
+                            U16(packet.Body, 2) == 9999 && packet.Body[^2] == partyKind)),
+                            "所有队员加入时最终安装同一Party类型，不能把魔界队伍覆盖为0");
+                    }
+                    if (scenario == "hard")
+                    {
+                        leader.Send(121, [1]);
+                        leader.Expect(1, 121, [1]);
+                        That(All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 9 } &&
+                            packet.Body[9] == 2 && packet.Body[^2] == 5 && packet.Body[^8] == 1)),
+                            "委任后的成员增量保持魔界类型5及新队长，开始菜单资格随真实队长转移");
+                        peers[1].Send(121, [0]);
+                        peers[1].Expect(1, 121, [1]);
+                        That(All(peers[1]).All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 9 } &&
+                            packet.Body[9] == 2 && packet.Body[^2] == 5 && packet.Body[^8] == 0)),
+                            "重新委任原队长不清除魔界类型，继续使用同一模式开战");
                     }
                 }
                 if (scenario == "ticket-solo")
@@ -350,6 +370,8 @@ internal static class EvildomWarTcpTests
                         {
                             peer.Send(46, DungeonSettlementProtocolTests.Report(peers.Select(member => (member.Id, (byte)99)).ToArray()));
                             That(All(peer)[peers.IndexOf(peer)].Any(packet => packet is { Kind: 0, Opcode: 34 }), "战役前置图复用真实角色结算后允许返回");
+                            // 原著小图没有普通白图翻牌；发35会让客户端开翻牌层，撤退与再选图都被结算阶段挡住。
+                            That(All(peer)[peers.IndexOf(peer)].All(packet => packet.Opcode != 35), "魔界小图不发普通白图通关翻牌35");
                         }
                         leader.Send(72, [1, 2]);
                         That(All().All(rows => rows.Any(packet => packet is { Kind: 1, Opcode: 72 })), "魔界全队结算返回等待区保持原战役");
@@ -399,6 +421,7 @@ internal static class EvildomWarTcpTests
         }
         GuideBindings(fixture, endpoints[41], resources, catalog);
         GuideDirectory(fixture, endpoints[41], resources, catalog);
+        RoomExit(fixture, endpoints[41], resources);
         Console.WriteLine($"PASS evildom war TCP {Count - before}");
     }
 
@@ -522,5 +545,39 @@ internal static class EvildomWarTcpTests
             writer.Write((byte)4); writer.Write(0u); writer.Write((byte)5); writer.Write((ushort)0); writer.Write((byte)0);
             writer.Write((byte)5); writer.Write(mode); writer.Write((byte)7);
         });
+    }
+
+    // 线上 2026-10-27 23:34–23:38（Connection 83）三次 CMD1426 全部落房间式 67/0 445,377，客户端随后自己发 CMD36 才到 67/1，
+    // 且房间式落点额外发一条取角色 Return（38/54）的 1379。魔界大战频道出门一次就应落到 67/1 广场（Issue #833）。
+    static void RoomExit(TcpTestFixture fixture, int port, TcpTestResources resources)
+    {
+        const string account = "warroomexit";
+        ushort slot;
+        using (var owner = new AccountOwners().Acquire(account, () => { }))
+        {
+            var candidate = CharacterCreation.Prepare("WarRoomExit", resources.Characters.Get(0),
+                resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0, 0, 95, candidate.InitialLearning with
+                { Experience = resources.Growth.GetLevelStartExperience(95) }, resources.Learning);
+            slot = new CharacterRepository(fixture.Database).Create(owner, candidate with
+                { Level = 95, AcceptedStoryLevel = 95, InitialLearning = learning }).Slot;
+        }
+        using var peer = Open(fixture, account, gamePort: port, channelNumber: 41);
+        // 38/1 不在魔界大战落点城镇 67，ClientKeepsTownSnapshot 为假，服务端按新入城重落共享房间而不是恢复快照，
+        // 客户端包序等同普通选角（22/23/24/1379/124）；resumeTown:true 会让夹具按恢复顺序期待23后紧跟1379。
+        peer.Select(slot, prepared: true, resumeTown: false, room: true);
+        That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", peer.Id) is [[38L, 1L]],
+            "夹具角色真实处在共享房间38/1");
+        peer.Send(1426);
+        var notices = Drain(peer);
+        var area = notices.Single(packet => packet is { Kind: 0, Opcode: 23 }).Body;
+        That(area.Length == 10 && U16(area) == peer.Id && area[2] == 67 && area[3] == 1 &&
+            U16(area, 4) == 656 && U16(area, 6) == 154 && area[8] == 0 && area[9] is 1 or 3 &&
+            notices.Any(packet => packet is { Kind: 0, Opcode: 24 }),
+            $"魔界大战房间出门一次直接落67/1广场656,154，不需要第二次门: {area[2]}/{area[3]} {U16(area,4)},{U16(area,6)}");
+        That(notices.All(packet => !(packet is { Kind: 0, Opcode: 1379 })),
+            "广场不是房间式区域，出门后不再发返回城镇取角色Return的1379");
+        That(fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) is [[67L, 1L, 656L, 154L]],
+            "落点已作为角色位置提交");
     }
 }

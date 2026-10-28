@@ -211,6 +211,48 @@ CREATE TABLE character_tutorial_state(
   character_id INTEGER PRIMARY KEY,account TEXT NOT NULL,dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),
   completed INTEGER NOT NULL CHECK(completed IN(0,1)),reward_received INTEGER NOT NULL CHECK(reward_received IN(0,1)),
   FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE IF NOT EXISTS guild_dungeon_progress(
+  guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 1 AND 4294967295),
+  clear_count INTEGER NOT NULL CHECK(clear_count BETWEEN 0 AND 4294967295),
+  last_clear_unix INTEGER NOT NULL CHECK(last_clear_unix>0),
+  PRIMARY KEY(guild_id,dungeon_id)
+);
+CREATE TABLE IF NOT EXISTS guild_dungeon_clear_receipts(
+  guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32 AND instance_id NOT GLOB '*[^0-9a-f]*'),
+  dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 1 AND 4294967295),
+  character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+  joined_at_unix INTEGER NOT NULL CHECK(joined_at_unix>=0),
+  committed_at_unix INTEGER NOT NULL CHECK(committed_at_unix>0),
+  PRIMARY KEY(guild_id,instance_id)
+);
+CREATE TABLE IF NOT EXISTS guild_hongbao_records(
+  record_id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(record_id BETWEEN 1 AND 4294967295),
+  guild_id INTEGER NOT NULL CHECK(guild_id>0),sender_account TEXT NOT NULL,
+  sender_name TEXT NOT NULL,item_id INTEGER NOT NULL CHECK(item_id>0),
+  total INTEGER NOT NULL CHECK(total>0),remaining INTEGER NOT NULL CHECK(remaining BETWEEN 0 AND total),
+  portions INTEGER NOT NULL CHECK(portions BETWEEN 5 AND 30),taken INTEGER NOT NULL CHECK(taken BETWEEN 0 AND portions),
+  created_at INTEGER NOT NULL CHECK(created_at>0),expires_at INTEGER NOT NULL CHECK(expires_at>created_at),
+  refunded INTEGER NOT NULL DEFAULT 0 CHECK(refunded IN(0,1))
+);
+CREATE TABLE IF NOT EXISTS guild_hongbao_claims(
+  record_id INTEGER NOT NULL REFERENCES guild_hongbao_records(record_id),account TEXT NOT NULL,
+  character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),name TEXT NOT NULL,
+  level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 255),amount INTEGER NOT NULL CHECK(amount>0),
+  ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 29),day_start_unix INTEGER NOT NULL,
+  created_at INTEGER NOT NULL CHECK(created_at>0),PRIMARY KEY(record_id,account),UNIQUE(record_id,ordinal)
+);
+CREATE INDEX IF NOT EXISTS guild_hongbao_list ON guild_hongbao_records(guild_id,expires_at,record_id);
+CREATE INDEX IF NOT EXISTS guild_hongbao_refund ON guild_hongbao_records(sender_account,refunded,expires_at);
+CREATE INDEX IF NOT EXISTS guild_hongbao_daily ON guild_hongbao_claims(account,day_start_unix);
+CREATE TABLE IF NOT EXISTS character_guild_hongbao_purchases(
+  character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  day_start_unix INTEGER NOT NULL CHECK(day_start_unix>=0),
+  cera INTEGER NOT NULL CHECK(cera BETWEEN 1 AND 2147483647),
+  PRIMARY KEY(character_id,day_start_unix)
+);
 CREATE TABLE character_tutorial_receipts(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,event_id TEXT NOT NULL CHECK(length(event_id)=32),
   kind TEXT NOT NULL CHECK(kind IN('death','settlement','reward','skip','clear')),
@@ -294,6 +336,35 @@ CREATE TABLE accounts(
     disabled INTEGER NOT NULL DEFAULT 0,
     revision INTEGER NOT NULL DEFAULT 1
 );
+
+CREATE TABLE guild_settings(
+    guild_id INTEGER PRIMARY KEY REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
+    promotion TEXT NOT NULL DEFAULT '',
+    tags INTEGER NOT NULL DEFAULT 0 CHECK(tags>=0 AND tags<=4294967295),
+    join_mode INTEGER NOT NULL DEFAULT 0 CHECK(join_mode IN(0,1)),
+    webpage INTEGER NOT NULL DEFAULT 0 CHECK(webpage IN(0,1))
+);
+CREATE TABLE guild_roles(
+    guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    grade INTEGER NOT NULL CHECK(grade BETWEEN 1 AND 5),
+    permissions INTEGER NOT NULL CHECK(permissions BETWEEN 0 AND 524287),
+    name TEXT NOT NULL,
+    PRIMARY KEY(guild_id,grade)
+);
+CREATE TABLE guild_membership_cooldowns(
+    character_id INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+    until_unix INTEGER NOT NULL CHECK(until_unix>=0)
+);
+CREATE TABLE guild_applications(
+    guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+    message TEXT NOT NULL DEFAULT '',
+    region INTEGER NOT NULL CHECK(region BETWEEN 0 AND 249),
+    created_at_unix INTEGER NOT NULL CHECK(created_at_unix>=0),
+    PRIMARY KEY(guild_id,character_id)
+);
+CREATE INDEX guild_applications_character ON guild_applications(character_id,guild_id);
 
 CREATE TABLE characters(
     id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(id BETWEEN 1 AND 65535),
@@ -447,13 +518,13 @@ CREATE TABLE character_quest_completion_receipts(
           before_experience INTEGER NOT NULL CHECK(before_experience>=0),after_experience INTEGER NOT NULL CHECK(after_experience>=before_experience AND after_experience<=before_experience+experience_amount),
           before_revision INTEGER NOT NULL CHECK(before_revision>=0),revision INTEGER NOT NULL CHECK(revision=before_revision+1),
           rewards TEXT NOT NULL CHECK(json_valid(rewards) AND json_type(rewards)='array' AND json_array_length(rewards)<=255),
-          clear_acceptance_id TEXT,condition_type INTEGER NOT NULL DEFAULT 3 CHECK(condition_type IN(0,1,2,3,4,6,12,17,19,25,31,39,40,42,44,45,49,60,64,65,67,70)),
+          clear_acceptance_id TEXT,condition_type INTEGER NOT NULL DEFAULT 3 CHECK(condition_type IN(0,1,2,3,4,5,6,12,17,19,25,31,39,40,42,44,45,49,60,64,65,67,70)),
           selector INTEGER NOT NULL DEFAULT 65535 CHECK(selector BETWEEN 0 AND 65535),multiplier INTEGER NOT NULL DEFAULT 1 CHECK(multiplier BETWEEN 1 AND 65535),
           consumed TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(consumed) AND json_type(consumed)='array' AND json_array_length(consumed)<=255),
           changed_items TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(changed_items) AND json_type(changed_items)='array'),
           plan_snapshot TEXT CHECK(plan_snapshot IS NULL OR (json_valid(plan_snapshot) AND json_type(plan_snapshot)='object')),
           CHECK((condition_type IN(1,3,45) AND (condition_type<>45 OR (clear_acceptance_id IS NOT NULL AND plan_snapshot IS NOT NULL)) AND clear_acceptance_id=acceptance_id AND event_id IS NOT NULL AND instance_id IS NOT NULL AND task_attempt IS NOT NULL AND epoch IS NOT NULL)
-            OR (condition_type IN(0,2,4,6,12,17,19,25,31,39,40,42,44,49,60,64,65,67,70) AND clear_acceptance_id IS NULL AND event_id IS NULL AND instance_id IS NULL AND task_attempt IS NULL AND epoch IS NULL AND plan_snapshot IS NOT NULL)),
+            OR (condition_type IN(0,2,4,5,6,12,17,19,25,31,39,40,42,44,49,60,64,65,67,70) AND clear_acceptance_id IS NULL AND event_id IS NULL AND instance_id IS NULL AND task_attempt IS NULL AND epoch IS NULL AND plan_snapshot IS NOT NULL)),
           PRIMARY KEY(character_id,acceptance_id),
           FOREIGN KEY(character_id,clear_acceptance_id) REFERENCES character_quest_clear_receipts(character_id,acceptance_id),
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
@@ -1258,6 +1329,49 @@ CREATE TABLE quest_eligibility_mail_dispatches(
     PRIMARY KEY(account,scope_character_id,quest_id)
 );
 
+CREATE TABLE account_pvp_total_teams(
+    account TEXT NOT NULL PRIMARY KEY,
+    team_id TEXT NOT NULL UNIQUE CHECK(length(team_id)=32 AND team_id NOT GLOB '*[^0-9a-f]*' AND team_id<>'00000000000000000000000000000000'),
+    revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0),
+    name TEXT NOT NULL UNIQUE CHECK(length(name) BETWEEN 2 AND 12),
+    first_id INTEGER,
+    second_id INTEGER,
+    third_id INTEGER,
+    CHECK(first_id IS NULL OR second_id IS NULL OR first_id<>second_id),
+    CHECK(first_id IS NULL OR third_id IS NULL OR first_id<>third_id),
+    CHECK(second_id IS NULL OR third_id IS NULL OR second_id<>third_id),
+    FOREIGN KEY(first_id,account) REFERENCES characters(id,account),
+    FOREIGN KEY(second_id,account) REFERENCES characters(id,account),
+    FOREIGN KEY(third_id,account) REFERENCES characters(id,account)
+);
+
+CREATE TABLE pvp_arena_match_results(
+    match_id TEXT NOT NULL PRIMARY KEY CHECK(length(match_id)=32 AND match_id NOT GLOB '*[^0-9a-f]*' AND match_id<>'00000000000000000000000000000000'),
+    result_json TEXT NOT NULL CHECK(json_valid(result_json) AND json_type(result_json)='object'),
+    finished_at INTEGER NOT NULL CHECK(finished_at>=0)
+);
+
+CREATE TABLE character_pvp_ratings(
+    character_id INTEGER NOT NULL PRIMARY KEY,
+    account TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0),
+    state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='object'),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+
+CREATE TABLE character_pvp_rating_claims(
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id TEXT NOT NULL REFERENCES pvp_arena_match_results(match_id),
+    character_id INTEGER NOT NULL,
+    account TEXT NOT NULL,
+    rating_mode INTEGER NOT NULL CHECK(typeof(rating_mode)='integer' AND rating_mode BETWEEN 0 AND 2),
+    outcome INTEGER NOT NULL CHECK(typeof(outcome)='integer' AND outcome BETWEEN 0 AND 3),
+    receipt_json TEXT CHECK(receipt_json IS NULL OR json_valid(receipt_json) AND json_type(receipt_json)='object'),
+    UNIQUE(match_id,character_id),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);
+CREATE INDEX ix_pvp_rating_pending ON character_pvp_rating_claims(account,character_id,rating_mode,sequence) WHERE receipt_json IS NULL;
+
 CREATE TABLE character_pvp_training_skills(
     character_id INTEGER PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
     state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='object'),
@@ -1331,6 +1445,257 @@ CREATE TABLE character_operation_hope_reward_receipts(
     FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
 );
 
+CREATE TABLE guild_cargo_state(
+  guild_id INTEGER PRIMARY KEY REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
+  capacity INTEGER NOT NULL DEFAULT 8 CHECK(capacity BETWEEN 8 AND 56)
+);
+CREATE TABLE guild_cargo_slots(
+  guild_id INTEGER NOT NULL REFERENCES guild_cargo_state(guild_id) ON DELETE RESTRICT,
+  slot_index INTEGER NOT NULL CHECK(slot_index BETWEEN 0 AND 55),
+  item_uid INTEGER NOT NULL UNIQUE,
+  account TEXT GENERATED ALWAYS AS ('guild:' || guild_id) STORED,
+  owner_character_id INTEGER NOT NULL DEFAULT 0 CHECK(owner_character_id=0),
+  PRIMARY KEY(guild_id,slot_index),
+  FOREIGN KEY(account,owner_character_id,item_uid)
+    REFERENCES character_inventory_items(account,owner_character_id,item_uid) ON DELETE RESTRICT
+);
+CREATE TABLE guild_cargo_history(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  created_at_unix INTEGER NOT NULL CHECK(created_at_unix BETWEEN 0 AND 4294967295),
+  kind INTEGER NOT NULL CHECK(kind IN(1,2)),
+  name TEXT NOT NULL,
+  item_core TEXT NOT NULL CHECK(json_valid(item_core)),
+  moved_count INTEGER NOT NULL CHECK(moved_count>0)
+);
+CREATE INDEX guild_cargo_history_recent ON guild_cargo_history(guild_id,id DESC);
+CREATE TABLE guild_cargo_receipts(
+  request_id TEXT PRIMARY KEY CHECK(length(request_id)=64 AND request_id NOT GLOB '*[^0-9A-Fa-f]*'),
+  fingerprint TEXT NOT NULL CHECK(length(fingerprint)=64),
+  account TEXT NOT NULL,
+  character_id INTEGER NOT NULL,
+  guild_id INTEGER NOT NULL,
+  revision INTEGER NOT NULL CHECK(revision>0),
+  destination_slot INTEGER NOT NULL CHECK(destination_slot>=0),
+  created_at_unix INTEGER NOT NULL
+);
+CREATE TRIGGER guild_cargo_exclusive_insert BEFORE INSERT ON guild_cargo_slots
+WHEN EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=NEW.item_uid) OR
+     EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid) OR
+     EXISTS(SELECT 1 FROM mailbox_attachments WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'guild cargo item already has a position'); END;
+CREATE TRIGGER guild_cargo_exclusive_update BEFORE UPDATE ON guild_cargo_slots
+WHEN EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid=NEW.item_uid) OR
+     EXISTS(SELECT 1 FROM character_title_book_slots WHERE item_uid=NEW.item_uid) OR
+     EXISTS(SELECT 1 FROM mailbox_attachments WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'guild cargo item already has a position'); END;
+CREATE TRIGGER inventory_not_guild_cargo_insert BEFORE INSERT ON character_inventory_slots
+WHEN EXISTS(SELECT 1 FROM guild_cargo_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in guild cargo'); END;
+CREATE TRIGGER inventory_not_guild_cargo_update BEFORE UPDATE ON character_inventory_slots
+WHEN EXISTS(SELECT 1 FROM guild_cargo_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in guild cargo'); END;
+CREATE TRIGGER title_not_guild_cargo_insert BEFORE INSERT ON character_title_book_slots
+WHEN EXISTS(SELECT 1 FROM guild_cargo_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in guild cargo'); END;
+CREATE TRIGGER title_not_guild_cargo_update BEFORE UPDATE ON character_title_book_slots
+WHEN EXISTS(SELECT 1 FROM guild_cargo_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in guild cargo'); END;
+CREATE TRIGGER mail_not_guild_cargo_insert BEFORE INSERT ON mailbox_attachments
+WHEN EXISTS(SELECT 1 FROM guild_cargo_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in guild cargo'); END;
+CREATE TRIGGER mail_not_guild_cargo_update BEFORE UPDATE ON mailbox_attachments
+WHEN EXISTS(SELECT 1 FROM guild_cargo_slots WHERE item_uid=NEW.item_uid)
+BEGIN SELECT RAISE(ABORT,'item is in guild cargo'); END;
+
+CREATE TABLE guild_economy(
+    guild_id INTEGER PRIMARY KEY REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    member_limit INTEGER NOT NULL DEFAULT 300 CHECK(member_limit IN (300,500,700,1000))
+);
+CREATE TABLE guild_benefits(
+    guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    type INTEGER NOT NULL CHECK(type IN (1,3,5,7)),
+    value INTEGER NOT NULL CHECK(value BETWEEN 0 AND 4294967295),
+    expires_unix INTEGER NOT NULL CHECK(expires_unix BETWEEN 0 AND 2147483647),
+    PRIMARY KEY(guild_id,type)
+);
+CREATE TABLE guild_economy_receipts(
+    request_id TEXT PRIMARY KEY CHECK(length(request_id)=64),
+    account TEXT NOT NULL,
+    character_id INTEGER NOT NULL,
+    guild_id INTEGER NOT NULL,
+    operation INTEGER NOT NULL CHECK(operation IN (1,2)),
+    content_id INTEGER NOT NULL,
+    source_uid INTEGER NOT NULL DEFAULT 0,
+    source_slot INTEGER NOT NULL DEFAULT 0,
+    amount INTEGER NOT NULL CHECK(amount>0),
+    created_at_unix INTEGER NOT NULL CHECK(created_at_unix BETWEEN 1 AND 2147483647)
+);
+CREATE TABLE guild_mileage_history(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    character_id INTEGER NOT NULL,
+    character_name TEXT NOT NULL,
+    kind INTEGER NOT NULL CHECK(kind IN (3,5,8)),
+    content_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL CHECK(amount BETWEEN 1 AND 2147483647),
+    created_at_unix INTEGER NOT NULL CHECK(created_at_unix BETWEEN 1 AND 2147483647)
+);
+CREATE INDEX guild_mileage_history_recent ON guild_mileage_history(guild_id,id DESC);
+CREATE TABLE guild_economy_events(
+    event_id TEXT PRIMARY KEY,
+    character_id INTEGER NOT NULL,
+    guild_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL CHECK(amount BETWEEN 0 AND 2147483647)
+);
+
+CREATE TABLE guild_appearance(
+  guild_id INTEGER PRIMARY KEY REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  mark INTEGER NOT NULL DEFAULT 0 CHECK(mark BETWEEN 0 AND 4294967295),
+  aura_mark INTEGER NOT NULL DEFAULT 4294967295 CHECK(aura_mark BETWEEN 0 AND 4294967295),
+  aura_frame INTEGER NOT NULL DEFAULT 4294967295 CHECK(aura_frame BETWEEN 0 AND 4294967295),
+  CHECK((aura_mark=4294967295)=(aura_frame=4294967295))
+);
+
+CREATE TABLE guild_attendance(
+  character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  joined_at_unix INTEGER NOT NULL CHECK(joined_at_unix>=0),
+  business_day_unix INTEGER NOT NULL,
+  observed_at_unix INTEGER NOT NULL CHECK(observed_at_unix>0 AND observed_at_unix>=joined_at_unix),
+  PRIMARY KEY(guild_id,business_day_unix,character_id,joined_at_unix)
+);
+
+CREATE TABLE guild_teleport_receipts(
+    request_id TEXT PRIMARY KEY CHECK(length(request_id)=64),
+    account TEXT NOT NULL,
+    character_id INTEGER NOT NULL,
+    guild_id INTEGER NOT NULL,
+    joined_at_unix INTEGER NOT NULL,
+    participants TEXT NOT NULL,
+    destination TEXT NOT NULL
+);
+
+CREATE TABLE guild_request_claims(
+    request_id TEXT PRIMARY KEY CHECK(length(request_id)=64),
+    kind INTEGER NOT NULL CHECK(kind BETWEEN 1 AND 6),
+    account TEXT NOT NULL,
+    character_id INTEGER NOT NULL
+);
+INSERT INTO guild_request_claims SELECT request_id,1,account,character_id FROM guild_cargo_receipts;
+INSERT INTO guild_request_claims SELECT request_id,2,account,character_id FROM guild_economy_receipts;
+INSERT INTO guild_request_claims SELECT request_id,3,account,character_id FROM guild_teleport_receipts;
+
+CREATE TABLE guild_experience_receipts(
+    character_id INTEGER NOT NULL,
+    event_id TEXT NOT NULL,
+    bonuses TEXT NOT NULL,
+    PRIMARY KEY(character_id,event_id)
+);
+
+CREATE TABLE guild_contribution_events(
+  event_id TEXT PRIMARY KEY,
+  character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  guild_id INTEGER REFERENCES guilds(guild_id) ON DELETE SET NULL,
+  joined_at_unix INTEGER NOT NULL CHECK(joined_at_unix>=0),
+  source INTEGER NOT NULL CHECK(source BETWEEN 1 AND 7),
+  business_day_unix INTEGER NOT NULL,
+  week_start_unix INTEGER NOT NULL,
+  points INTEGER NOT NULL CHECK(points>=0),
+  created_at_unix INTEGER NOT NULL CHECK(created_at_unix>0)
+);
+CREATE INDEX ix_guild_contribution_week ON guild_contribution_events(guild_id,character_id,joined_at_unix,week_start_unix);
+CREATE INDEX ix_guild_contribution_daily_cap ON guild_contribution_events(character_id,business_day_unix,source);
+CREATE UNIQUE INDEX ux_guild_contribution_daily ON guild_contribution_events(character_id,business_day_unix,source) WHERE source IN (1,2);
+CREATE TABLE guild_contribution_settlements(
+  guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  joined_at_unix INTEGER NOT NULL CHECK(joined_at_unix>=0),
+  week_start_unix INTEGER NOT NULL,
+  points INTEGER NOT NULL CHECK(points>0),
+  coins INTEGER NOT NULL CHECK(coins>0),
+  settled_at_unix INTEGER NOT NULL CHECK(settled_at_unix>0),
+  PRIMARY KEY(guild_id,character_id,joined_at_unix,week_start_unix)
+);
+
+CREATE TABLE guild_npc_progress(
+    guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    npc_id INTEGER NOT NULL,
+    level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 5),
+    upgrade_target INTEGER NOT NULL DEFAULT 0 CHECK(upgrade_target BETWEEN 0 AND 5),
+    upgrade_until INTEGER NOT NULL DEFAULT 0 CHECK(upgrade_until BETWEEN 0 AND 2147483647),
+    contract_until INTEGER NOT NULL DEFAULT 0 CHECK(contract_until BETWEEN 0 AND 2147483647),
+    PRIMARY KEY(guild_id,npc_id),
+    CHECK((upgrade_target=0 AND upgrade_until=0) OR (upgrade_target=level+1 AND upgrade_until>0))
+);
+CREATE INDEX guild_npc_due ON guild_npc_progress(upgrade_until) WHERE upgrade_until>0;
+CREATE TABLE guild_npc_receipts(
+    request_id TEXT PRIMARY KEY CHECK(length(request_id)=64),
+    account TEXT NOT NULL,
+    character_id INTEGER NOT NULL,
+    guild_id INTEGER NOT NULL,
+    joined_at INTEGER NOT NULL,
+    npc_id INTEGER NOT NULL,
+    action INTEGER NOT NULL,
+    argument INTEGER NOT NULL,
+    deadline INTEGER NOT NULL
+);
+
+CREATE TABLE guild_growth_item_receipts(
+  request_id TEXT PRIMARY KEY CHECK(length(request_id)=64),
+  account TEXT NOT NULL,character_id INTEGER NOT NULL,
+  guild_id INTEGER NOT NULL CHECK(guild_id>0),joined_at_unix INTEGER NOT NULL CHECK(joined_at_unix>=0),
+  source_uid INTEGER NOT NULL CHECK(source_uid>0),source_slot INTEGER NOT NULL CHECK(source_slot>=0),
+  item_id INTEGER NOT NULL CHECK(item_id>0),amount INTEGER NOT NULL CHECK(amount>0),
+  before_experience INTEGER NOT NULL CHECK(before_experience BETWEEN 0 AND 4294967295),
+  after_experience INTEGER NOT NULL CHECK(after_experience BETWEEN 0 AND 4294967295),
+  before_level INTEGER NOT NULL CHECK(before_level BETWEEN 1 AND 10),
+  after_level INTEGER NOT NULL CHECK(after_level BETWEEN 1 AND 10),
+  created_at_unix INTEGER NOT NULL CHECK(created_at_unix BETWEEN 1 AND 2147483647),
+  CHECK(after_experience=before_experience+amount)
+);
+
+CREATE TABLE guild_npc_crafts(
+  guild_id INTEGER PRIMARY KEY REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  npc_id INTEGER NOT NULL CHECK(npc_id=400001060),
+  benefit_id INTEGER NOT NULL CHECK(benefit_id>0),
+  public_funds INTEGER NOT NULL CHECK(public_funds>0),
+  reward_count INTEGER NOT NULL CHECK(reward_count>0),
+  deadline INTEGER NOT NULL CHECK(deadline BETWEEN 1 AND 2147483647),
+  craft_id TEXT NOT NULL UNIQUE CHECK(length(craft_id)=64)
+);
+CREATE INDEX guild_npc_crafts_due ON guild_npc_crafts(deadline,guild_id);
+CREATE TABLE guild_npc_craft_receipts(
+  request_id TEXT PRIMARY KEY CHECK(length(request_id)=64),
+  account TEXT NOT NULL,character_id INTEGER NOT NULL,guild_id INTEGER NOT NULL,
+  joined_at INTEGER NOT NULL,action INTEGER NOT NULL CHECK(action IN (4,5)),
+  benefit_id INTEGER NOT NULL,craft_id TEXT NOT NULL CHECK(length(craft_id)=64),
+  deadline INTEGER NOT NULL CHECK(deadline BETWEEN 1 AND 2147483647)
+);
+CREATE TABLE guild_recommended_channels(
+  guild_id INTEGER PRIMARY KEY REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  region INTEGER NOT NULL CHECK(typeof(region)='integer' AND region BETWEEN 0 AND 249),
+  channel INTEGER NOT NULL CHECK(typeof(channel)='integer' AND channel BETWEEN 1 AND 255)
+);
+
+CREATE TABLE character_beast_dungeon_entries(
+    character_id INTEGER NOT NULL,
+    account TEXT NOT NULL,
+    day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day>0),
+    dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 310 AND 314),
+    used INTEGER NOT NULL CHECK(used BETWEEN 0 AND 2),
+    PRIMARY KEY(character_id,day,dungeon_id),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
+CREATE TABLE guild_npc_craft_completions(
+  craft_id TEXT PRIMARY KEY CHECK(length(craft_id)=64),guild_id INTEGER NOT NULL,
+  benefit_id INTEGER NOT NULL,reward_count INTEGER NOT NULL CHECK(reward_count>0),
+  before_crystal INTEGER NOT NULL CHECK(before_crystal>=0),
+  after_crystal INTEGER NOT NULL CHECK(after_crystal=before_crystal+reward_count),
+  completed_at INTEGER NOT NULL CHECK(completed_at BETWEEN 1 AND 2147483647)
+);
+
 CREATE TABLE IF NOT EXISTS character_raid_reward_receipts(
     character_id INTEGER NOT NULL, account TEXT NOT NULL,
     instance_id TEXT NOT NULL CHECK(length(instance_id)=32 AND instance_id NOT GLOB '*[^0-9a-f]*' AND instance_id<>'00000000000000000000000000000000'),
@@ -1368,6 +1733,69 @@ CREATE TABLE character_raid_runs(
 CREATE UNIQUE INDEX character_raid_active ON character_raid_runs(character_id,raid_type) WHERE state=0;
 CREATE INDEX character_raid_clear_week ON character_raid_runs(character_id,raid_type,clear_week) WHERE state=2;
 CREATE INDEX character_raid_rewards_type_week ON character_raid_reward_receipts(character_id,raid_type,week_key,final_phase,instance_id);
+
+CREATE TABLE character_evildom_war_rewards(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL CHECK(length(battle_id)=32),
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
+  dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),mode INTEGER NOT NULL CHECK(mode BETWEEN 0 AND 2),
+  created_at INTEGER NOT NULL CHECK(created_at>=0),reward_json TEXT NOT NULL CHECK(json_valid(reward_json)),
+  mail_ids TEXT NOT NULL CHECK(json_valid(mail_ids)),delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN(0,1)),
+  PRIMARY KEY(character_id,battle_id),UNIQUE(character_id,instance_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE evildom_war_battles(
+  battle_id TEXT PRIMARY KEY NOT NULL CHECK(length(battle_id)=32),revision INTEGER NOT NULL CHECK(revision>=0),
+  deadline INTEGER NOT NULL CHECK(deadline>=0),checkpoint_json TEXT NOT NULL CHECK(json_valid(checkpoint_json)));
+CREATE TABLE character_evildom_war_hidden_rewards(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL CHECK(length(battle_id)=32),
+  reward_json TEXT NOT NULL CHECK(json_valid(reward_json)),mail_ids TEXT NOT NULL CHECK(json_valid(mail_ids)),
+  PRIMARY KEY(character_id,battle_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
+CREATE TABLE account_evildom_war_guides(
+  account TEXT NOT NULL,slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 1),
+  week INTEGER NOT NULL CHECK(week>0),character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
+  PRIMARY KEY(account,slot),UNIQUE(account,character_id),
+  FOREIGN KEY(account) REFERENCES accounts(account_id));
+CREATE TABLE character_evildom_war_seats(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL,binding_token TEXT NOT NULL CHECK(length(binding_token)=32),
+  state INTEGER NOT NULL DEFAULT 0 CHECK(state BETWEEN 0 AND 3),reconnect_until INTEGER CHECK(reconnect_until>=0),
+  payment_json TEXT NOT NULL CHECK(json_valid(payment_json)),latest_instance TEXT NOT NULL CHECK(length(latest_instance)=32),
+  PRIMARY KEY(character_id,battle_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account),FOREIGN KEY(battle_id) REFERENCES evildom_war_battles(battle_id));
+
+CREATE TABLE account_pvp_total_ratings(
+    account TEXT NOT NULL PRIMARY KEY,
+    team_id TEXT NOT NULL UNIQUE REFERENCES account_pvp_total_teams(team_id),
+    revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision>0),
+    state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='object')
+);
+CREATE TABLE account_pvp_total_rating_claims(
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id TEXT NOT NULL REFERENCES pvp_arena_match_results(match_id),
+    account TEXT NOT NULL,
+    team_id TEXT NOT NULL REFERENCES account_pvp_total_teams(team_id),
+    outcome INTEGER NOT NULL CHECK(typeof(outcome)='integer' AND outcome BETWEEN 0 AND 3),
+    receipt_json TEXT CHECK(receipt_json IS NULL OR json_valid(receipt_json) AND json_type(receipt_json)='object'),
+    UNIQUE(match_id,account)
+);
+CREATE INDEX ix_pvp_total_rating_pending ON account_pvp_total_rating_claims(account,sequence) WHERE receipt_json IS NULL;
+
+CREATE TABLE account_tag_evildom_challenges(
+  account TEXT NOT NULL,
+  day INTEGER NOT NULL CHECK(day>0),
+  week INTEGER NOT NULL CHECK(week>0),
+  team_index INTEGER NOT NULL CHECK(team_index BETWEEN 0 AND 2),
+  maze_ordinal INTEGER NOT NULL CHECK(maze_ordinal BETWEEN 0 AND 4),
+  dungeon_id INTEGER NOT NULL CHECK(dungeon_id IN(9608,400000095)),
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  first INTEGER NOT NULL CHECK(first BETWEEN 1 AND 65535),
+  second INTEGER NOT NULL CHECK(second BETWEEN 1 AND 65535 AND second<>first),
+  admitted_at INTEGER NOT NULL CHECK(admitted_at>=0),
+  sequence INTEGER NOT NULL CHECK(sequence>0),
+  state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 2),
+  PRIMARY KEY(account,day,team_index)
+);
 
 CREATE TABLE imperial_arena_daily_routes(
   day INTEGER NOT NULL PRIMARY KEY CHECK(day>=20000101),
@@ -1427,47 +1855,33 @@ CREATE TABLE account_imperial_arena_rewards(
   FOREIGN KEY(account,instance_id) REFERENCES account_imperial_arena_runs(account,instance_id)
 );
 
-CREATE TABLE account_tag_evildom_challenges(
-  account TEXT NOT NULL,
-  day INTEGER NOT NULL CHECK(day>0),
-  week INTEGER NOT NULL CHECK(week>0),
-  team_index INTEGER NOT NULL CHECK(team_index BETWEEN 0 AND 2),
-  maze_ordinal INTEGER NOT NULL CHECK(maze_ordinal BETWEEN 0 AND 4),
-  dungeon_id INTEGER NOT NULL CHECK(dungeon_id IN(9608,400000095)),
-  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
-  first INTEGER NOT NULL CHECK(first BETWEEN 1 AND 65535),
-  second INTEGER NOT NULL CHECK(second BETWEEN 1 AND 65535 AND second<>first),
-  admitted_at INTEGER NOT NULL CHECK(admitted_at>=0),
-  sequence INTEGER NOT NULL CHECK(sequence>0),
-  state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 2),
-  PRIMARY KEY(account,day,team_index)
+CREATE TABLE guild_ranking_party_clears(
+  guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),
+  members INTEGER NOT NULL CHECK(members BETWEEN 2 AND 4),created_at INTEGER NOT NULL CHECK(created_at>0),
+  PRIMARY KEY(guild_id,instance_id)
 );
-CREATE TABLE character_evildom_war_rewards(
-  character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL CHECK(length(battle_id)=32),
-  instance_id TEXT NOT NULL CHECK(length(instance_id)=32),task_attempt INTEGER NOT NULL CHECK(task_attempt>0),
-  dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),mode INTEGER NOT NULL CHECK(mode BETWEEN 0 AND 2),
-  created_at INTEGER NOT NULL CHECK(created_at>=0),reward_json TEXT NOT NULL CHECK(json_valid(reward_json)),
-  mail_ids TEXT NOT NULL CHECK(json_valid(mail_ids)),delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN(0,1)),
-  PRIMARY KEY(character_id,battle_id),UNIQUE(character_id,instance_id),
-  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+CREATE TABLE guild_ranking_months(
+  month INTEGER PRIMARY KEY CHECK(month BETWEEN 190001 AND 999912),
+  observed_at INTEGER NOT NULL CHECK(observed_at>0),rule_version TEXT NOT NULL,
+  entries TEXT NOT NULL CHECK(json_valid(entries) AND json_type(entries)='array')
+);
+CREATE INDEX guild_ranking_party_period ON guild_ranking_party_clears(created_at,guild_id);
 
-CREATE TABLE evildom_war_battles(
-  battle_id TEXT PRIMARY KEY NOT NULL CHECK(length(battle_id)=32),revision INTEGER NOT NULL CHECK(revision>=0),
-  deadline INTEGER NOT NULL CHECK(deadline>=0),checkpoint_json TEXT NOT NULL CHECK(json_valid(checkpoint_json)));
-CREATE TABLE character_evildom_war_hidden_rewards(
-  character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL CHECK(length(battle_id)=32),
-  reward_json TEXT NOT NULL CHECK(json_valid(reward_json)),mail_ids TEXT NOT NULL CHECK(json_valid(mail_ids)),
-  PRIMARY KEY(character_id,battle_id),
-  FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+CREATE TABLE guild_dungeon_reward_receipts(
+  character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),account TEXT NOT NULL,
+  guild_id INTEGER NOT NULL CHECK(guild_id>0),instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+  event_id TEXT NOT NULL CHECK(length(event_id)=32),dungeon_id INTEGER NOT NULL CHECK(dungeon_id>0),
+  reward_json TEXT NOT NULL CHECK(json_valid(reward_json) AND json_type(reward_json)='object'),
+  mail_id INTEGER NOT NULL CHECK(mail_id>0),PRIMARY KEY(character_id,instance_id)
+);
+CREATE INDEX guild_dungeon_reward_instance ON guild_dungeon_reward_receipts(guild_id,instance_id);
 
-CREATE TABLE account_evildom_war_guides(
-  account TEXT NOT NULL,slot INTEGER NOT NULL CHECK(slot BETWEEN 0 AND 1),
-  week INTEGER NOT NULL CHECK(week>0),character_id INTEGER NOT NULL CHECK(character_id BETWEEN 1 AND 65535),
-  PRIMARY KEY(account,slot),UNIQUE(account,character_id),
-  FOREIGN KEY(account) REFERENCES accounts(account_id));
-CREATE TABLE character_evildom_war_seats(
-  character_id INTEGER NOT NULL,account TEXT NOT NULL,battle_id TEXT NOT NULL,binding_token TEXT NOT NULL CHECK(length(binding_token)=32),
-  state INTEGER NOT NULL DEFAULT 0 CHECK(state BETWEEN 0 AND 3),reconnect_until INTEGER CHECK(reconnect_until>=0),
-  payment_json TEXT NOT NULL CHECK(json_valid(payment_json)),latest_instance TEXT NOT NULL CHECK(length(latest_instance)=32),
-  PRIMARY KEY(character_id,battle_id),
-  FOREIGN KEY(character_id,account) REFERENCES characters(id,account),FOREIGN KEY(battle_id) REFERENCES evildom_war_battles(battle_id));
+CREATE TABLE guild_dungeon_effective_progress(
+  guild_id INTEGER NOT NULL,
+  dungeon_id INTEGER NOT NULL,
+  effective_clear_units INTEGER NOT NULL CHECK(effective_clear_units BETWEEN 0 AND 4294967295),
+  decay_anchor_unix INTEGER NOT NULL CHECK(decay_anchor_unix>0),
+  PRIMARY KEY(guild_id,dungeon_id),
+  FOREIGN KEY(guild_id,dungeon_id) REFERENCES guild_dungeon_progress(guild_id,dungeon_id) ON DELETE CASCADE
+);

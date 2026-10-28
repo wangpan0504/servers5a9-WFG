@@ -42,6 +42,8 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
         log.Write("travel", new { Connection = context.Id, Accepted = accepted, Reason = session.TravelReason, Requested = requested, session.Selected?.Position, session.Selected?.Revision });
         if (accepted)
             await projection.TravelAsync(context, receipt!);
+        else if (session.TravelReason == "guild-membership-required")
+            await context.Reply(CmdPacketType.SET_USER_AREA, [0, 1, 0, requested.Town, requested.Area], "guild_hall_admission_denied");
         return CommandResult.Handled;
     }
 

@@ -84,6 +84,8 @@ internal sealed class ImperialArenaHandler(ImperialArenaProjection projection, S
         Game.ImperialArena.ImperialArenaProjection? result = null;
         try
         {
+            // 购券要求已发布的双Actor仍然有效；主角修理/金币变化后先就地重建一次，不再要求重登。
+            if (!context.BlocksTownActions) await projection.RefreshPairAsync(context);
             if (!context.BlocksTownActions) result = context.Session.PurchaseImperialArena(projection.Store, projection.Catalog, mode, projection.Now);
         }
         catch (InvalidOperationException error)

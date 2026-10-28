@@ -20,19 +20,23 @@ internal static class ChannelCatalogTests
         {
             string path = Path.Combine(root, "channel.txt");
             var embedded = Infrastructure.ServerRuntime.LoadChannels(path);
-            That(embedded.ServerIndex == 2 && embedded.Channels.Count == 39 && embedded.Entry(10).Identity == new ChannelIdentity(2, 10),
+            // 决斗场入口沿用原位置，编号由 40 改为客户端 etc/pvpchannellist.etc 实际登记的 101。
+            That(embedded.ServerIndex == 2 && embedded.Channels.Count >= 39 &&
+                embedded.Channels.Take(38).Select(row => row.Number).SequenceEqual(
+                    new[] { 1 }.Concat(Enumerable.Range(10, 37)).Select(number => number == 40 ? 101 : number)) &&
+                embedded.Entry(10).Identity == new ChannelIdentity(2, 10),
                 "无外置资源时从发行包内置脚本恢复全部入口");
             That(embedded.Channels.Single(row => row.Number == 39) ==
                 new ChannelDefinition(39, "<chn_channel_info_048>", 45, "[fiendwar]"),
                 "频道39进入团队频道超时空漩涡卡，类型45（CHANNEL_FIEND_WAR），名称使用客户端已有键");
-            That(embedded.Channels.Single(row => row.Number == 40) ==
-                new ChannelDefinition(40, "<chn_channel_info_039>", 24, "[pvp]"),
-                "频道40进入决斗场，类型24，名称使用客户端已有键");
+            That(embedded.Channels.Single(row => row.Number == 101) ==
+                new ChannelDefinition(101, "<chn_channel_info_039>", 24, "[pvp]"),
+                "频道101进入决斗场，类型24，名称使用客户端已有键（客户端 pvpchannellist.etc 未登记40）");
             That(embedded.Channels.Single(row => row.Number == 41) ==
-                new ChannelDefinition(41, "<chn_channel_info_062>", 54, "[evildom_war]") && embedded.Channels[^7].Number == 41,
+                new ChannelDefinition(41, "<chn_channel_info_062>", 54, "[evildom_war]"),
                 "频道41为魔界大战：CHANNEL_EVILDOM_WAR 类型54、分组[evildom_war]、名称键062，排在普雷之前不改动已有入口端口");
             That(embedded.Channels.Single(row => row.Number == 42) ==
-                new ChannelDefinition(42, "<chn_channel_info_054>", 50, "[prey]") && embedded.Channels[^6].Number == 42,
+                new ChannelDefinition(42, "<chn_channel_info_054>", 50, "[prey]"),
                 "频道42为普雷·伊希斯攻坚战：CHANNEL_PREY_RAID 类型50、分组[prey]、名称键054（伊希斯攻坚战），追加在末尾不改动已有入口端口");
             // 交易-拍卖行：PVF etc/channel_info.etc 客户端频道表写 `交易 - 拍卖行` 3（CHANNEL_TRADE）；ARAD 列表外层白名单 028FB090 含 3 不含 30
             // （CHANNEL_TRADE_GENERAL），特殊区域页分组表 01EBEC20 收录 [trade]。原 type 30 [goldenroad] 不进任何频道页。
@@ -40,17 +44,27 @@ internal static class ChannelCatalogTests
                 new ChannelDefinition(32, "<chn_channel_info_002>", 3, "[trade]"),
                 "频道32交易-拍卖行：CHANNEL_TRADE 类型3、分组[trade]、名称键002，进特殊区域页");
             That(embedded.Channels.Single(row => row.Number == 43) ==
-                new ChannelDefinition(43, "<chn_channel_info_055>", 56, "[xian_village]") && embedded.Channels[^5].Number == 43,
+                new ChannelDefinition(43, "<chn_channel_info_055>", 56, "[xian_village]"),
                 "频道43五陵：CHANNEL_XIAN_VILLAGE 类型56、分组[xian_village]、名称键055，追加在末尾不改动已有入口端口");
-            That(embedded.Channels[^4] == new ChannelDefinition(44, "<chn_channel_info_060>", 63, "[dnfaos_free]") &&
-                embedded.Channels[^3] == new ChannelDefinition(45, "<chn_channel_info_061>", 62, "[dnfaos_rank]"),
+            That(embedded.Channels.Single(row => row.Number == 44) == new ChannelDefinition(44, "<chn_channel_info_060>", 63, "[dnfaos_free]") &&
+                embedded.Channels.Single(row => row.Number == 45) == new ChannelDefinition(45, "<chn_channel_info_061>", 62, "[dnfaos_rank]"),
                 "频道44/45勇士对决-自由/排位：CHANNEL_DNFAOS_FREE 63、CHANNEL_DNFAOS_RANK 62，追加在末尾");
-            That(embedded.Channels[^2] == new ChannelDefinition(46, "<chn_channel_info_057>", 53, "[evildom_gathering]") &&
+            That(embedded.Channels.Single(row => row.Number == 46) == new ChannelDefinition(46, "<chn_channel_info_057>", 53, "[evildom_gathering]") &&
                 ChannelPackets.LoginChannelType(embedded.Entry(46)) == 53,
                 "再战魔界追加真实type53和本版名称057，ACK LOGIN不降成普通0，既有端口顺序保持");
-            That(embedded.Channels[^1] == new ChannelDefinition(48, "<chn_channel_info_049>", 39, "[tag_tournament]") &&
+            That(embedded.Channels.Single(row => row.Number == 47) == new ChannelDefinition(47, "<chn_channel_info_039>", 8, "[pvp]") &&
+                ChannelPackets.LoginChannelType(embedded.Entry(47)) == 8 && ChannelPackets.LoginChannelType(embedded.Entry(101)) == 24 &&
+                ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(47)))[3] == 8,
+                "无双频道末尾追加独立type8，保留传统24且LOGIN均发送真实类型，不复用旧频道端口");
+            That(embedded.Channels.Single(row => row.Number == 48) == new ChannelDefinition(48, "<chn_channel_info_049>", 39, "[tag_tournament]") &&
                 ChannelPackets.LoginChannelType(embedded.Entry(48)) == 39 && !ChannelAreaLanding.SameSnapshotPredicates(22, 39),
                 "帝国竞技场追加type39并隔离换频道快照，避让PK频道47");
+            That(embedded.Channels.Single(row => row.Number == 49) ==
+                new ChannelDefinition(49, "<chn_channel_info_beast>", 40, "[beast]"),
+                "魔兽追加49/type40及独立名称键，避开PK已登记47与竞技场48，不改原入口顺序");
+            That(ChannelPackets.LoginChannelType(embedded.Entry(49)) == 40 &&
+                ChannelPackets.Endpoint("127.0.0.1",10011,7,ChannelPackets.LoginChannelType(embedded.Entry(49)))[3] == 40,
+                "魔兽LOGIN保留type40，客户端实际模式及5927名册资格检查不能因0失效");
             That(embedded.Channels.Single(row => row.Number == 24).Type == 11 && embedded.Channels.Single(row => row.Number == 24).Group == "[ancient]",
                 "频道24仍是远古分组，类型11才会出现在远古地下城卡片");
             That(embedded.Channels.Single(row => row.Number == 35).Type == 11 && embedded.Channels.Single(row => row.Number == 35).Group == "[crack]",
@@ -67,6 +81,9 @@ internal static class ChannelCatalogTests
         var catalog = ChannelCatalog.Parse(source);
         That(ChannelAreaLanding.SameSnapshotPredicates(53, 53) && !ChannelAreaLanding.SameSnapshotPredicates(22, 53) &&
             !ChannelAreaLanding.SameSnapshotPredicates(53, 22), "再战vt+38独立参与换频道快照，同类型保留、普通互换不保留");
+        That(ChannelAreaLanding.SameSnapshotPredicates(40, 40) && !ChannelAreaLanding.SameSnapshotPredicates(22, 40) &&
+            !ChannelAreaLanding.SameSnapshotPredicates(40, 22) && !ChannelAreaLanding.SameSnapshotPredicates(40, 53) &&
+            !ChannelAreaLanding.SameSnapshotPredicates(40, 32), "魔兽vt+30独立参与换频道快照，仅同类型保留，不能沿用普通、再战或团队城镇");
         That(ChannelAreaLanding.ClientKeepsTownSnapshot(null, new(new(2, 46), 53, "[evildom_gathering]"), new(62, 0, 543, 255)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(null, new(new(2, 46), 53, "[evildom_gathering]"), new(38, 0, 543, 255)),
             "没有进程内频道历史时Stadium存档仍有53候选，不把普通城镇当53快照");

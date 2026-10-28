@@ -11,6 +11,9 @@ internal static class PvpTrainingWireTests
     public static void Run()
     {
         int before=Count;
+        That(PvpTrainingRequests.CopyChoice([1])==1 && PvpTrainingRequests.CopyChoice([2])==2,"1268保留原生同意和取消值");
+        foreach(byte[] invalid in new byte[][]{[],[0],[3],[1,0]})
+            Reject<InvalidDataException>(()=>PvpTrainingRequests.CopyChoice(invalid),"1268拒绝非法宽度或选择");
         // 固定字节来自各写包调用的宽度，不调用生产编码函数生成预期。
         byte[] combo=[0,2,0,0,0,0xD1,0xB5,0,0,0,1,0];
         That(PvpTrainingRequests.Create(combo) is {Title:"训",MapIndex:0,Setting:0,Kind:1,Mode:0},"CMD50连招入口完整正文");
@@ -28,10 +31,18 @@ internal static class PvpTrainingWireTests
         Bytes(PvpTrainingPackets.LeaveSeat(0x1234,6),[0x34,0x12,6,1,0,0,255,255],"NOTI43原生退出独立金样，模式6单席清空");
         var room=new PvpRoomSnapshot(0x1234,0,2,-1,0x5678,10,
             [new(1,0x2345),new(0,0),new(0,0),new(0,0),new(0,0),new(0,0),new(0,0),new(0,0)],0,0x12345678);
-        byte[] expected=[1,0,0x34,0x12,0,2,255,0x78,0x56,10,
+        byte[] expected=[1,0,0x34,0x12,0,0,0,0,0,2,255,0x78,0x56,10,
             1,0x45,0x23,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
             0,0x78,0x56,0x34,0x12];
-        That(PvpTrainingPackets.Room(room).SequenceEqual(expected),"NOTI41独立39字节金样验证固定八席与尾字段");
+        That(PvpTrainingPackets.Room(room).SequenceEqual(expected),"NOTI41独立43字节金样含默认标题长度、固定八席与尾字段");
+        byte[] named = [1,0,0x34,0x12,0,2,0,0,0,0xD1,0xB5,2,255,0x78,0x56,10,
+            1,0x45,0x23,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0x78,0x56,0x34,0x12];
+        Bytes(PvpTrainingPackets.Room(room with {Title="训"}),named,"NOTI41自定义CP936标题从真实reader分支读取");
+        byte[] preset = [1,0,0x34,0x12,1,2,255,0x78,0x56,10,
+            1,0x45,0x23,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+            0,0x78,0x56,0x34,0x12];
+        Bytes(PvpTrainingPackets.Room(room with {TitlePreset=1}),preset,"NOTI41预设标题分支省略字符串而非统一补四字节");
         Reject<InvalidDataException>(()=>PvpTrainingPackets.Room(room with {Seats=[]}),"缺席位拒绝");
         Reject<InvalidDataException>(()=>PvpTrainingPackets.Room(room with {TitlePreset=17}),"客户端越界标题拒绝");
         Reject<InvalidDataException>(()=>PvpTrainingPackets.Room(room with {LeaderSeat=8}),"队长索引不得超出八席");

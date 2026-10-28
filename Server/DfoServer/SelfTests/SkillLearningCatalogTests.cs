@@ -11,7 +11,7 @@ internal static class SkillLearningCatalogTests
     [
         "[type]", "[purchase cost]", "[maximum level]", "[growtype maximum level]", "[required level]",
         "[required level range]", "[pre required skill]", "[/purchase cost]", "[/pre required skill]", "[active]", "[unknown]", "[growtype fitness]", "[feature skill type]", "[combo set]",
-        "[passive]", "[skill class]", "[skill fitness growtype]", "[guild skill]", "[expert skill]"
+        "[passive]", "[skill class]", "[skill fitness growtype]", "[guild skill]", "[expert skill]", "[steel learning skill]"
     ];
 
     public static void RunCore()
@@ -32,6 +32,13 @@ internal static class SkillLearningCatalogTests
         Reject<InvalidDataException>(() => Command([new(5, 3), new(7, 8)]));
         Reject<InvalidDataException>(() => Command([new(5, 4), new(7, 8), new(5, 4)]));
         var active = Fixture([7], [4], [4, 4, 4, 4, 4, 4], [1], [0], []);
+        var steel=Parse([..active,new(3,19),new(0,1),new(0,50),new(0,200),new(0,4)]);
+        That(steel.SteelLearning==new SteelLearningRule(true,50,200,4) && steel.IsSteelLearning(0) &&
+            steel.GetPointCost(0,0)==14 && steel.GetLearningMaximum(0)==2 && steel.GetNextRequiredCharacterLevel(0,0)==5,
+            "偷学标签四参数独立解析，费用及门槛走集中规则");
+        foreach(int[] invalid in new int[][]{[1,50,200],[2,50,200,4],[1,101,200,4],[1,50,0,4],[1,50,200,-1]})
+            Reject<InvalidDataException>(()=>Parse([..active,new(3,19),..invalid.Select(value=>new PvfToken(0,value))]),
+                "畸形偷学声明不能默认为普通技能绕过门禁");
         That(Parse(active).Type == SkillType.Active && Parse(active).SlotGroup == 3, "主动类型保留且不依赖被动分组字段");
         var defaults = Parse(Fixture([7], [4], [4, 4, 4, 4, 4, 4], null, null, []));
         That(defaults.SupportsOrdinarySpLearning && defaults.GetOrdinaryNextRequiredCharacterLevel(0) == 1 &&

@@ -12,7 +12,7 @@ export function render(root, ctx) {
     ['infiniteFatigue', 'infinite-fatigue', '无限疲劳', '开启后选角显示满疲劳且不扣点。只对当前进程有效，重启恢复为开。'],
     ['ignoreAbsoluteExpiration', 'cash-shop-expiration', '忽略商城绝对日期', '开启后忽略物品的固定到期日。重启恢复为开。'],
     ['ignoreUsablePeriod', 'cash-shop-usable-period', '忽略商城相对期限', '开启后忽略使用后天数。重启恢复为关。'],
-    ['premiumPcRoom', 'pc-room', '网吧身份', '开启后本进程按网吧身份。不改黑钻期限，重启恢复为关。'],
+    ['premiumPcRoom', 'pc-room', '网吧身份', '开启后本进程按网吧身份。不改黑钻期限，重启恢复为开；数据目录 pc-room.json 写 {"enabled":false} 可永久关闭。'],
     ['summonWangFugui', 'summon-wangfugui', '召唤奶爸支援兵（王富贵，实验性）', '默认关闭，开启需要配套PVF支持（地图 [ai character] 含 20900 行）。每次进图在起始房间放出奶爸支援兵王富贵，塔与祭坛类副本不放；进图有问题先关掉开关再重新进图。只对当前进程有效，重启恢复为关。'],
     ['summonGuangbing', 'summon-guangbing', '召唤光兵（28号，实验性）', '默认关闭，开启需要配套PVF支持（地图 [ai character] 含 5409 行）。每次进图在起始房间放出28号（格斗家/气功师），与人偶2600261召唤的是同一个AIC；塔与祭坛类副本不放。进图有问题先关掉开关再重新进图。只对当前进程有效，重启恢复为关。'],
   ];

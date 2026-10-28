@@ -65,13 +65,14 @@ internal sealed class DungeonRoomCatalog
     private readonly IReadOnlyDictionary<int, string> monsters;
     private readonly IReadOnlyDictionary<int, string> passiveObjects;
     private readonly IReadOnlyDictionary<int, string> aiCharacters;
+    private readonly IReadOnlyDictionary<int, string> maps;
     private readonly Lazy<IReadOnlyDictionary<int, string>> cinematics;
     private readonly Lazy<DungeonHellPartyCatalog> hellParty;
 
     private DungeonRoomCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> monsters, IReadOnlyDictionary<int, string> passiveObjects,
-        IReadOnlyDictionary<int, string> aiCharacters)
+        IReadOnlyDictionary<int, string> aiCharacters, IReadOnlyDictionary<int, string> maps)
     {
-        (this.archive, this.monsters, this.passiveObjects, this.aiCharacters) = (archive, monsters, passiveObjects, aiCharacters);
+        (this.archive, this.monsters, this.passiveObjects, this.aiCharacters, this.maps) = (archive, monsters, passiveObjects, aiCharacters, maps);
         cinematics = new(() => DungeonCatalog.ParseDirectory(archive.ReadTokens("cinematic/cinematic.lst"),archive.ResolveString,"cinematic"));
         hellParty = new(() => DungeonHellPartyCatalog.Load(archive));
     }
@@ -82,7 +83,8 @@ internal sealed class DungeonRoomCatalog
         var monsters = DungeonCatalog.ParseDirectory(pvf.ReadTokens("monster/monster.lst"), pvf.ResolveString, "monster");
         var objects = ParsePassiveDirectory(pvf.ReadTokens("passiveobject/passiveobject.lst"), pvf.ResolveString);
         var actors = DungeonCatalog.ParseDirectory(pvf.ReadTokens("aicharacter/aicharacter.lst"),pvf.ResolveString,"aicharacter");
-        return new(pvf, monsters, objects, actors);
+        var maps = DungeonCatalog.ParseDirectory(pvf.ReadTokens("map/map.lst"), pvf.ResolveString, "map");
+        return new(pvf, monsters, objects, actors, maps);
     }
 
     internal static IReadOnlyDictionary<int, string> ParsePassiveDirectory(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
@@ -105,14 +107,28 @@ internal sealed class DungeonRoomCatalog
         return paths.AsReadOnly();
     }
 
+    public DungeonRoomDefinition? TryBeastMap(int mapId, int x, int y, int dungeonId)
+    {
+        if (mapId <= 0 || !maps.TryGetValue(mapId, out string? path) || !archive.Contains(path)) return null;
+        var source = archive;
+        var tokens = source.ReadTokens(path);
+        var roomMonsters = ReferenceEquals(source, archive) ? monsters : DungeonCatalog.ParseDirectory(source.ReadTokens("monster/monster.lst"), source.ResolveString, "monster");
+        var roomObjects = ReferenceEquals(source, archive) ? passiveObjects : ParsePassiveDirectory(source.ReadTokens("passiveobject/passiveobject.lst"), source.ResolveString);
+        return ParseResource(new("map", new(x, y), mapId, path), tokens, source.ResolveString, roomMonsters, roomObjects, source.Contains,
+            requirePassiveDefinitions: false, ResolveAiCharacter, allowUnresolvedSpecialMetadata: true);
+    }
+
     public DungeonRoomDefinition Get(DungeonMap map, bool requirePassiveDefinitions = true, bool allowUnresolvedSpecialMetadata = false)
     {
         string path = PvfArchive.NormalizePath(map.Path);
+        var source = archive.Contains(path) ? archive : null;
         if (map.Id < 0 || !path.StartsWith("map/", StringComparison.Ordinal) || !path.EndsWith(".map", StringComparison.Ordinal)
-            || !archive.Contains(path))
+            || source is null)
             throw new InvalidDataException("房间地图路径或索引无效");
-        var tokens = archive.ReadTokens(path);
-        var room = ParseResource(map with { Path = path }, tokens, archive.ResolveString, monsters, passiveObjects, archive.Contains,
+        var tokens = source.ReadTokens(path);
+        var roomMonsters = ReferenceEquals(source, archive) ? monsters : DungeonCatalog.ParseDirectory(source.ReadTokens("monster/monster.lst"), source.ResolveString, "monster");
+        var roomObjects = ReferenceEquals(source, archive) ? passiveObjects : ParsePassiveDirectory(source.ReadTokens("passiveobject/passiveobject.lst"), source.ResolveString);
+        var room = ParseResource(map with { Path = path }, tokens, source.ResolveString, roomMonsters, roomObjects, source.Contains,
             requirePassiveDefinitions,ResolveAiCharacter,allowUnresolvedSpecialMetadata);
         // 只读本房引用的MOB，同模板在本次操作内只解析一次；限制随资源行冻结，不另建全局缓存。
         var restrictions = new Dictionary<int, bool>();

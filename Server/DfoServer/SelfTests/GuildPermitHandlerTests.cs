@@ -237,10 +237,12 @@ internal static class GuildPermitHandlerTests
             inviteePeer.Clear();
             creatorPeer.Clear();
             await Dispatch(inviteePeer, 0x02E6, [0x01]);
-            That(inviteePeer.Sent.Select(frame => frame.Opcode).SequenceEqual(new ushort[] { 742, 58, 2, 70 }) &&
+            That(inviteePeer.Sent.Select(frame => frame.Opcode).SequenceEqual(new ushort[] { 742, 58, 2, 127, 70 }) &&
                 At(inviteePeer.Sent, 0, 1, 742, [1]), "认可方也收到入会、Actor与公会资料，不是只写成员表");
-            That(creatorPeer.Sent.Select(frame => frame.Opcode).SequenceEqual(new ushort[] { 14, 686, 71, 58, 2, 70 }),
+            That(creatorPeer.Sent.Select(frame => frame.Opcode).SequenceEqual(new ushort[] { 14, 686, 71, 58, 2, 127, 70 }),
                 "创建者按序收到金币、认可结果、建会、入会及资料投影");
+            That(At(creatorPeer.Sent, 5, 0, 127, [1]) && At(inviteePeer.Sent, 3, 0, 127, [4]),
+                "自然建会双方在70之前安装本人会长1与普通成员4职位，不能让客户端保留缺省6");
             That(At(creatorPeer.Sent, 0, 0, (ushort)NotiPacketType.UPDATE_ITEM_LIST) &&
                 creatorPeer.Sent[0].Action == "inventory_committed_delta" && DeltaGold(creatorPeer.Sent[0].Body) == 700_000,
                 "★ 金币差额（1,000,000 − 300,000）由创建者连接自己的背包投影发布");
@@ -302,8 +304,9 @@ internal static class GuildPermitHandlerTests
             online.Register(seqInviteeOwner, seqInviteePeer.Session);
             permits.Register(Pending(awayCreatorId, "guild-permit-away", seqInvitee.Id, "离线认证公会"));
             await Dispatch(seqInviteePeer, 0x02E6, [0x01]);
-            That(seqInviteePeer.Sent.Select(frame => frame.Opcode).SequenceEqual(new ushort[] { 742, 58, 2, 70 }) &&
-                At(seqInviteePeer.Sent, 0, 1, 742, [1]), "创建者离线时也向认可方下发完整入会状态");
+            That(seqInviteePeer.Sent.Select(frame => frame.Opcode).SequenceEqual(new ushort[] { 742, 58, 2, 127, 70 }) &&
+                At(seqInviteePeer.Sent, 0, 1, 742, [1]) && At(seqInviteePeer.Sent, 3, 0, 127, [4]),
+                "创建者离线时也向认可方下发完整入会状态，127 在 70 之前安装普通成员职位4");
             That(Scalar(path, "SELECT gold FROM characters WHERE id=" + awayCreatorId) is 700_000L &&
                 Scalar(path, "SELECT revision FROM characters WHERE id=" + awayCreatorId) is 1L,
                 "★ 离线建会扣了创建者的 300000 并推进 revision（下次上线选角读到最新快照）");

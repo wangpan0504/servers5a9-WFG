@@ -13,7 +13,8 @@ internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMemb
     FormalDungeonDeathResult? Death = null, Character? Previous = null, FormalDungeonPickupResult? Pickup = null,
     ushort Peer = 0, DfoServer.Game.Town.TownTravelReceipt? Travel = null,
     byte State = 0, byte Option = 0, QuestLifecycleReceipt? QuestScene = null, int LegendDungeon = 0, DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange = null,
-    DfoServer.Game.Raids.RaidStageFactKind? RaidEvent = null, EvildomWarView? WarView = null);
+    DfoServer.Game.Raids.RaidStageFactKind? RaidEvent = null,
+    EvildomWarView? WarView = null);
 
 // 共享实例拥有全员加载屏障、路线推进与击杀事实；掉落随机、地面物品及拾取归各角色账本。
 // 各Session的Run仅作为同一实例的角色账本投影，不能绕过此owner单独过图或发奖。
@@ -153,9 +154,12 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
         if (leaderScene is null || current.Any(m => m.Actor.Session.CurrentFormalDungeonScene() is not { } scene ||
             scene.Snapshot.CurrentMap != leaderScene.Snapshot.CurrentMap ||
             !scene.Snapshot.LivingMonsters.SequenceEqual(leaderScene.Snapshot.LivingMonsters))) return [];
-        if (reporter.MoveFormalDungeon(x, y, kind) is not { } first) return [];
+        // 全员先以同一时刻复核阶段门禁，再安装移动；不能在180秒边界逐人采样后拆散房间。
+        long beastAt = reporter.DungeonMovementTime;
+        if (current.Any(member => !member.Actor.Session.CanMoveBeastStage(x, y, beastAt))) return [];
+        if (reporter.MoveFormalDungeon(x, y, kind, beastAt) is not { } first) return [];
         var notices = current.Select(m => new PartyDungeonNotice(PartyDungeonNoticeKind.Move, m, current,
-            ReferenceEquals(m.Actor.Session, reporter) ? first : m.Actor.Session.MoveFormalDungeon(x, y, kind) ??
+            ReferenceEquals(m.Actor.Session, reporter) ? first : m.Actor.Session.MoveFormalDungeon(x, y, kind, beastAt) ??
                 throw new InvalidOperationException("共享房间推进的角色投影不一致"))).ToArray();
         loaded.Clear();
         return notices;

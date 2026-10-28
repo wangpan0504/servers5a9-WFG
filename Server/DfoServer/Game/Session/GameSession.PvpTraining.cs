@@ -28,7 +28,7 @@ internal sealed partial class GameSession
             return new PvpTrainingLifecycleReceipt(pvpTraining,false,pvpTrainingVersion);
         });
         bool CanBegin()=>!blocked && Ready && Phase==SessionPhase.Town &&
-            Selected is { Position.Town:10,Position.Area:4 } && pvpTraining is null && CurrentParty?.Invoke() is null &&
+            Selected is { Position.Town:10,Position.Area:4 } && pvpTraining is null && pvpMatching is null && CurrentParty?.Invoke() is null &&
             pendingRental is null && !HasPendingTownQuestCommit && !HasActiveDungeonContinuation &&
             !HasPendingQuestReplay && !HasPendingFormalCard;
     }

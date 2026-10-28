@@ -8,10 +8,14 @@ using DfoServer.Network.Management;
 
 namespace DfoServer.Network;
 
+// saveVersion 由装配入口传入本次程序使用的存档 schema 版本（0 表示未装配，例如自测宿主）；
+// 就绪文件与启动日志靠它标出「哪份程序配哪一版存档」，不在这里反向依赖 Persistence。
 internal sealed class ServerHost(ServerOptions options, IConnectionProtocol channelProtocol, IConnectionProtocol gameProtocol,
     Func<PacketCapture?, CancellationToken, Task>? runManagement, Func<OnlineCharacterView[]> onlineCharacters, Action onStarted, ServerLog log, GameChannelListeners gameChannels,
-    Protocol.NativeChannel? native = null, IDisposable? runtimeMemory = null, IAsyncDisposable? gameplayTimers = null,
-    Func<CancellationToken, Task>? runWorld = null)
+    Protocol.NativeChannel? native = null, IDisposable? runtimeMemory = null, IDisposable? guildInvitations = null,
+    IDisposable? guildEconomy = null, IDisposable? guildTeleport = null, IDisposable? guildNpcs = null,
+    Func<CancellationToken, Task>? runGuildHallWait = null, Func<CancellationToken, Task>? runWorld = null,
+    IAsyncDisposable? gameplayTimers = null, int saveVersion = 0)
 {
     readonly ConcurrentDictionary<int, Task> active = new();
     int counter;
@@ -19,6 +23,11 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
     public async Task RunAsync(CancellationToken stop)
     {
         using var ownedRuntimeMemory = runtimeMemory;
+        await using var ownedGameplayTimers = gameplayTimers;
+        using var ownedGuildInvitations = guildInvitations;
+        using var ownedGuildEconomy = guildEconomy;
+        using var ownedGuildTeleport = guildTeleport;
+        using var ownedGuildNpcs = guildNpcs;
         Directory.CreateDirectory(options.LogDirectory);
         bool retainPackets = options.PacketHttpPort != 0 || options.GmWebPort != 0;
         using var packetCapture = options.PacketCaptureDirectory is not null || retainPackets
@@ -28,6 +37,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
         var channel = new TcpListener(IPAddress.Parse(options.ListenAddress), options.ChannelPort);
         Task gm = Task.CompletedTask;
         Task http = Task.CompletedTask;
+        Task hallWait = Task.CompletedTask;
         Task world = Task.CompletedTask;
         Task[] listeners = [];
         string starting = "Channel listener";
@@ -46,6 +56,10 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             gameChannels.Start();
             starting = "Native listener";
             native?.Start();
+            starting = "Guild hall contribution worker";
+            if (runGuildHallWait is not null)
+                hallWait = runGuildHallWait(lifetime.Token);
+            if (hallWait.IsFaulted) await hallWait;
             var primary = gameChannels.Bound.Single(row => row.Endpoint.Entry.Identity.Number == GameWorld.Channels.ChannelCatalog.PrimaryChannelNumber);
             log.Write("listening", new { ChannelName = "#ch." + primary.Endpoint.Entry.Identity.Number,
                 Channel = channel.LocalEndpoint.ToString(), Game = primary.Listener.LocalEndpoint.ToString(), ChannelEntries = gameChannels.Endpoints,
@@ -64,9 +78,12 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             {
                 options.ChannelPort, options.GamePort, options.GmPort, options.GmWebPort, options.PacketHttpPort, options.AdvertisedAddress, options.ListenAddress,
                 options.PvfPath, options.DataDirectory, Pid = Environment.ProcessId, ChannelEntries = gameChannels.Endpoints,
-                NativePort = native?.Port ?? 0
+                NativePort = native?.Port ?? 0,
+                // 构建标识：程序集版本、构建提交号（源码 zip 构建为空）与存档 schema 版本。
+                ServerVersion = ServerBuildInfo.Version, Commit = ServerBuildInfo.Commit, SaveVersion = saveVersion
             }));
-            log.Write("server_ready", new { Pid = Environment.ProcessId });
+            log.Write("server_ready", new { Pid = Environment.ProcessId, ServerVersion = ServerBuildInfo.Version,
+                Commit = ServerBuildInfo.Commit, SaveVersion = saveVersion });
             starting = "Running listeners";
             if (runWorld is not null) world = runWorld(lifetime.Token);
             listeners = [Accept(channel, channelProtocol, true, lifetime.Token),
@@ -78,6 +95,8 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
                 workers = [.. workers, gm];
             if (options.PacketHttpPort != 0)
                 workers = [.. workers, http];
+            if (runGuildHallWait is not null)
+                workers = [.. workers, hallWait];
             if (runWorld is not null)
                 workers = [.. workers, world];
             await await Task.WhenAny(workers);
@@ -100,7 +119,7 @@ internal sealed class ServerHost(ServerOptions options, IConnectionProtocol chan
             native?.Stop();
             try
             {
-                await Task.WhenAll([.. listeners, gm, http, world]);
+                await Task.WhenAll([.. listeners, gm, http, hallWait, world]);
             }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
             {

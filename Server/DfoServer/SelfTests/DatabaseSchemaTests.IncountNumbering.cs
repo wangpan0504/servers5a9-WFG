@@ -359,7 +359,8 @@ internal static partial class DatabaseSchemaTests
         string sql = (string)Query(db, "SELECT sql FROM sqlite_schema WHERE type='table' AND name='" + table + "'")!;
         long schemaVersion = (long)Query(db, "PRAGMA schema_version")!;
         Execute(db, "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql='" +
-            sql.Replace("'", "''", StringComparison.Ordinal).Replace("60,64,65,67,70", "64,65,67,70", StringComparison.Ordinal) +
+            sql.Replace("'", "''", StringComparison.Ordinal).Replace(",4,5,6,", ",4,6,", StringComparison.Ordinal)
+                .Replace("60,64,65,67,70", "64,65,67,70", StringComparison.Ordinal) +
             "' WHERE type='table' AND name='" + table + "'; PRAGMA schema_version=" + (schemaVersion + 1) +
             "; PRAGMA writable_schema=OFF; SELECT * FROM " + table + " LIMIT 0");
         if (local == 62) Execute(db, "DROP TABLE account_dungeon_incount");

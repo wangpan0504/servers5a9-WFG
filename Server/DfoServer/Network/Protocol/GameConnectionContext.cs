@@ -44,6 +44,14 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public bool BlocksTownActions => Activity?.BlocksTownActions == true ||
         Session.Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement or SessionPhase.PvpRoom;
 
+    // 私有包序号只在本次连接内递增；从1开始，回绕到0前必须结束连接，不能复用已发序号。
+    uint monsterAiSerial;
+    internal uint NextMonsterAiSerial()
+    {
+        uint next = Interlocked.Increment(ref monsterAiSerial);
+        return next != 0 ? next : throw new InvalidOperationException("怪物AI私包序号已回绕，必须重建连接");
+    }
+
     public void Disconnect() => connection.Disconnect();
 
     public Task Reply(CmdPacketType opcode, byte[] body, string action, Func<bool>? canSend = null) => Sender.Send(1, (ushort)opcode, body, action, canSend);

@@ -75,6 +75,10 @@ internal sealed partial class GameSession
         {
             return InventoryResult.Reject(qualificationError) with { RejectReason = "qualification_expired" };
         }
+        catch (DfoServer.Game.Guild.GuildHongbaoPurchaseRejectedException)
+        {
+            return InventoryResult.Reject(qualificationError) with { RejectReason = "guild_hongbao_purchase_rejected" };
+        }
         return result with { Receipt = result.Accepted && result.Plan is not null
             ? new(Selected, owner.Generation, SelectionEpoch)
                 {

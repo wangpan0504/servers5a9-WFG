@@ -21,6 +21,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
 
     internal async Task RefreshCharacterAsync(GameConnectionContext context, Character character, string action, Func<bool> canSend)
     {
+        character=context.Session.ReadSkillCharacter(character);
         bool inDungeon = context.Session.Phase is SessionPhase.Dungeon or SessionPhase.Settlement;
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(character, context.Channel, adventureName: context.Session.ReadAdventureName(),
@@ -185,14 +186,14 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             if ((equipmentChanged || weaponSkinChanged) && (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
                 (appearanceChanged || weaponSkinChanged) && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement))
                 await context.Notify(NotiPacketType.USERINFO,
-                    TownPackets.Actor(current, context.Channel, adventureName: context.Session.ReadAdventureName(),
+                    TownPackets.Actor(context.Session.ReadSkillCharacter(current), context.Channel, adventureName: context.Session.ReadAdventureName(),
                         sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
                             ? ActorSceneState.Dungeon : ActorSceneState.Town,
                         premiumPcRoom: context.Session.PremiumPcRoom), "equipment_actor", CanSend);
             // 登记配置下的纯移动由上面的完整差量和Actor完成；其它装备/开栏变更仍同步完整本人属性。
             if (equipmentChanged && !preserveSkillSwitch || plan.EquipmentSlotFlagsAfter is not null)
                 await context.Notify(NotiPacketType.USERINFO,
-                    TownPackets.Player(current, stats.Compute(current), context.Session.ReadAdventureLevel(), context.Channel), "equipment_player", CanSend);
+                    TownPackets.Player(context.Session.ReadSkillCharacter(current), stats.Compute(context.Session.ReadSkillCharacter(current)), context.Session.ReadAdventureLevel(), context.Channel), "equipment_player", CanSend);
             context.Owner.Execute(() =>
             {
                 if ((equipmentChanged || weaponSkinChanged) && CanSend() && context.Session.Phase == SessionPhase.Town)

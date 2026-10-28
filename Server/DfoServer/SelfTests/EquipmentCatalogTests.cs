@@ -16,8 +16,15 @@ internal static class EquipmentCatalogTests
     public static void Run(PvfArchive pvf, EquipmentCatalog catalog)
     {
         int checks = Count;
-        That(catalog.TemplateCount == 178841 && catalog.TemplateIds.Count == 178841 &&
-            catalog.TemplateIds.Distinct().Count() == 178841, "完整装备索引178841项无重复ID");
+        int[] beastIds = [100300907, 100312601, 100322493];
+        That(catalog.TemplateCount == 178844 && catalog.TemplateIds.Count == 178844 &&
+            catalog.TemplateIds.Distinct().Count() == 178844 &&
+            catalog.TemplateIds.Count(id => !beastIds.Contains(id)) == 178841,
+            "完整装备索引保留原178841项并补登魔兽三件首饰，无重复ID");
+        string[] beastPaths = ["amulet/100300907.equ", "wrist/100312601.equ", "ring/100322493.equ"];
+        for (int beastIndex = 0; beastIndex < beastIds.Length; beastIndex++)
+            That(catalog.Get(beastIds[beastIndex]).ScriptPath == "equipment/character/common/" + beastPaths[beastIndex],
+                "魔兽首饰索引绑定原有真实装备脚本：" + beastIds[beastIndex]);
         int[] ids = [10400, 12400, 16400, 18400, 101010912, 102040571, 104010559, 106020596,
             108000525, 109000493, 106040493, 101030782, 114000248, 116000011];
         int[] weights = [1900, 1500, 800, 900, 2800, 2300, 1500, 2200, 3100, 2100, 2500, 4000, 3200, 2400];
@@ -58,7 +65,7 @@ internal static class EquipmentCatalogTests
                 definition.DeclaredSellPrice is not null || !definition.UnsupportedFields.Contains("sell price"))
                 throw new InvalidOperationException("FAIL 装备全索引路径、脚本类型或卖价边界: " + id);
         }
-        That(true, "全178841项真实脚本可读且全部缺卖价");
+        That(true, "全178844项真实脚本可读且全部缺卖价");
         Reject<KeyNotFoundException>(() => catalog.Get(0));
         Reject<KeyNotFoundException>(() => catalog.Get(-1));
         Reject<KeyNotFoundException>(() => catalog.Get(int.MaxValue));

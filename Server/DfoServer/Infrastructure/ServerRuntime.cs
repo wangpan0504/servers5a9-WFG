@@ -1,4 +1,5 @@
 using DfoServer.Development.Dungeons;
+using System.Collections.Immutable;
 using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Caching;
@@ -32,6 +33,24 @@ internal static class ServerRuntime
 {
     // 超时空之战的世界地图次数显示用；PVF 缺这份表时不下发，解析失败照常报错。
     static DungeonIncountCatalog? LoadIncounts(PvfArchive pvf) => pvf.Contains(DungeonIncountCatalog.Path) ? DungeonIncountCatalog.Load(pvf) : null;
+
+    // 网吧身份默认开：数据目录没有 pc-room.json 即为开，线上重启自动恢复为开；显式 {"enabled":false} 才关闭。
+    // TCP 夹具在临时数据目录写入该文件，避免线上默认值改写既有的选角、经验和虚弱断言。
+    static bool PremiumPcRoomDefault(string dataDirectory)
+    {
+        string path = Path.Combine(dataDirectory, "pc-room.json");
+        if (!File.Exists(path)) return true;
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            return !(document.RootElement.TryGetProperty("enabled", out var enabled) &&
+                enabled.ValueKind == System.Text.Json.JsonValueKind.False);
+        }
+        catch (System.Text.Json.JsonException error)
+        {
+            throw new InvalidDataException("pc-room.json 必须是 JSON 对象：" + path, error);
+        }
+    }
 
     internal static ChannelCatalog LoadChannels(string path)
     {
@@ -79,11 +98,27 @@ internal static class ServerRuntime
         var social = new Game.Social.SocialService(repository, online);
         var socialProjection = new SocialProjection(social);
         var parties = new Game.Party.PartyService(repository, clock, gameCache, guideStore: repository);
+        var pvpRatingCatalog = new GameWorld.Pvp.PvpRatingCatalog(pvf);
+        var pvpRatingCalculator = new Game.Pvp.PvpRatingCalculator(pvpRatingCatalog);
+        var pvpRatings = new Game.Pvp.PvpRatingSettlement(repository, pvpRatingCalculator);
+        var totalRatings = new Game.Pvp.PvpTotalRatingSettlement(repository, pvpRatings, pvpRatingCalculator);
+        var arenaRules = new GameWorld.Pvp.PvpArenaCatalog(pvf);
+        itemResources.Items.TryGet(Game.Pvp.PvpTotalTeamRename.CardId, out var totalRenameCard);
+        var totalTeams = new Game.Pvp.PvpTotalTeamService(repository, arenaRules, totalRenameCard, clock);
+        var arena = new Game.Pvp.PvpArenaService(gameCache, arenaRules, repository, ratings: pvpRatings,
+            totalTeams: totalTeams, totalRatings: totalRatings, totalSkills: learning);
         // GM notice 的公告出口：与 GM 聊天帧注入共用在线连接目录，帧内编码由 ServerNoticePackets 负责。
         var noticeSender = new GmNoticeSender(online);
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
         accounts.EnsureDevelopmentAccount();
-        var debugSettings = new GameDebugSettings();
+        // 网吧身份线上默认常开：本进程启动即为开，重启后自动恢复为开；GM 的 pc-room on/off 只改当前进程（不落盘）。
+        var debugSettings = new GameDebugSettings { PremiumPcRoom = PremiumPcRoomDefault(options.DataDirectory) };
+        var monsterBattleLevels = new DungeonBattleLevelConfiguration(options.DataDirectory);
+        monsterBattleLevels.Reload();
+        log.Write("monster_battle_level_config", new { Rules = monsterBattleLevels.Settings.Current.Rules.Count });
+        var monsterAi = new MonsterAiConfiguration(options.DataDirectory);
+        monsterAi.Reload();
+        log.Write("monster_ai_config", new { monsterAi.Settings.Current.Enabled, Rules = monsterAi.Settings.Current.Rules.Count });
         var expertStores = new ExpertJobStoreBoard();
         var marriageCatalog = GameWorld.Marriage.MarriageCatalog.Load(pvf);
         var presence = new TownPresence(towns, channels.GameIdentity, clock, debugSettings, expertStores,
@@ -112,6 +147,7 @@ internal static class ServerRuntime
         var titleCatalog = new TitleCatalog(pvf, quests);
         // 公会参数（建会花费、仓库格数、等级经验曲线）：数值只从 PVF 读，业务层不写死常数。
         var guildParameters = new GameWorld.Guilds.GuildParameterCatalog(pvf);
+        var guildDungeons = new GameWorld.Guilds.GuildDungeonCatalog(pvf);
         var titleService = new Game.Titles.TitleAchievementService(titleCatalog, quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var titleProjection = new TitleProjection(titleService);
         adventureCatalog ??= new GameWorld.Adventure.AdventureCatalog(pvf);
@@ -125,12 +161,12 @@ internal static class ServerRuntime
         var privateCharacters = new Game.Pvp.PvpPrivateCharacterService(characters,PvpPrivateCharacterCatalog.Load(pvf),
             learning,growth,itemResources.Items,towns);
         var experienceBonuses = new Game.Characters.ExperienceBonusService(itemResources.Items, itemResources.RecoveryConsumables,
-            GameWorld.Characters.ExperienceBonusCatalog.Load(pvf), clock: clock,
+            GameWorld.Characters.ExperienceBonusCatalog.Load(pvf), new Game.Guild.GuildExperienceBonusProvider(repository),
             missingTemplate: (request, item) => log.Write("resource_warning", new
             {
                 Source = "experience_bonus", Reason = "equipped_item_template_missing", CharacterId = request.Character.Id,
                 request.Event, request.DungeonId, ItemId = item.Core.ItemId, item.Uid, Slot = item.Position.Index
-            }));
+            }), clock: clock);
         tutorials ??= new TutorialCatalog(pvf);
         var questProjection = new QuestProjection(quests,questParameters,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,growth);
         var stats = new Game.Characters.CharacterStatComputer(characters);
@@ -166,10 +202,10 @@ internal static class ServerRuntime
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
         var weaponSkinProjection = new SkinStorageProjection(weaponSkinService);
         var dungeonCatalog = DungeonCatalog.Load(pvf);
-        var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         repository.MarriageResources = marriageCatalog;
         var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, clock);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, events: events, marriage: marriageProjection);
+        var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
@@ -188,9 +224,59 @@ internal static class ServerRuntime
         var rentalHandler = new RentalHandler(new RentalService(itemResources.Rental, itemResources.Items, towns, clock), inventoryProjection, log);
         var creatureHandler = new CreatureHandler(creatures, creatureProjection, log, inventoryProjection);
         // 建会认证的跨连接投递：被邀请方连接收 0x2AD/0x2AF，创建者连接收金币差额与 0x2AE/0x47/0x3A。
-        var guildProjection = new GuildProjection(inventoryProjection, presence);
+        var guildDungeonProjection = new GuildDungeonProjection(guildDungeons);
+        var guildPanels = new Game.Guild.GuildPanelService(repository, online);
+        var guildHongbao = new Game.Guild.GuildHongbaoService(repository, itemResources.GuildHongbao, clock);
+        var guildRanking = new Game.Guild.GuildRankingService(repository,
+            new GameWorld.Guilds.GuildRankingCatalog(pvf), guildDungeons, pvpRatingCatalog, clock);
+        var guildProjection = new GuildProjection(inventoryProjection, presence, guildPanels);
+        var guildInvitations = new Game.Guild.GuildInvitations();
+        var guildManagement = new Game.Guild.GuildManagementService(repository, online, guildInvitations, guildPermits);
+        var guildApplications = new Game.Guild.GuildApplications(repository, guildManagement, clock, guildRanking);
+        var guildManagementProjection = new GuildManagementProjection(guildManagement, guildPanels, presence) { Dungeons = guildDungeonProjection };
+        var guildCargoService = new Game.Guild.GuildCargoService(repository, itemResources.Items, itemResources.GuildCargo, online,
+            guildParameters.CargoSizeLimit, clock);
+        var guildCargoProjection = new GuildCargoProjection(guildCargoService, inventoryProjection);
+        var guildContents = itemResources.GuildContents;
+        var guildEconomyService = new Game.Guild.GuildEconomyService(repository, guildContents, itemResources.Items, guildManagement, clock,
+            state =>
+            {
+                foreach (var member in state.Members)
+                    online.Find(member.Account)?.TryDeliverGuildCargo(member.Id, new(state.GuildId));
+            });
+        var guildEconomyProjection = new GuildEconomyProjection(guildEconomyService,
+            error => log.Write("guild_benefit_expiry_failed", new { Error = error.Message }));
+        var guildEconomyHandler = new GuildEconomyHandler(guildEconomyService, guildEconomyProjection, inventoryProjection, log);
+        var guildContributionService = new Game.Guild.GuildContributionService(repository,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, guildManagement, clock);
+        var guildContribution = new GuildContributionProjection(guildContributionService, inventoryProjection, log, guildHongbao);
+        var guildHallWait = new Game.Guild.GuildHallWaitService(repository,
+            new GameWorld.Guilds.GuildHallWaitCatalog(pvf), online, guildContributionService, clock,
+            error => log.Write("guild_hall_contribution_failed", new { Error = error.Message }), guildRanking);
+        var guildNpcService = new Game.Guild.GuildNpcService(repository, new GameWorld.Guilds.GuildNpcCatalog(pvf),
+            guildParameters, guildManagement, error => log.Write("guild_npc_completion_failed", new { Error = error.Message }), clock,
+            crafts: new GameWorld.Guilds.GuildNpcCraftCatalog(pvf));
+        var guildNpcProjection = new GuildNpcProjection(guildNpcService);
+        var guildExperienceHandler = new GuildExperienceHandler(new Game.Guild.GuildExperienceService(repository,
+            itemResources.Items, guildParameters, guildManagement, clock), inventoryProjection, log);
+        var guildTeleportService = new Game.Guild.GuildTeleportService(repository, parties, towns, guildManagement, clock,
+            error => log.Write("guild_teleport_failed", new { Error = error.Message }));
+        var guildTeleportHandler = new GuildTeleportHandler(guildTeleportService, projection, log);
+        projection.GuildPanels = guildPanels;
+        projection.GuildDungeons = guildDungeonProjection;
+        projection.GuildEconomy = guildEconomyProjection;
+        projection.GuildNpcs = guildNpcProjection;
+        guildManagementProjection.AccountRefresh = context =>
+        {
+            if (context.Session.CaptureGuildManagement(requireTown: false) is not { } actor) return;
+            var account = guildApplications.Account(actor);
+            context.Sender.Post(1, (ushort)CmdPacketType.REQUEST_ACCOUNT_GUILD_LIST,
+                Network.Builders.GuildApplicationPackets.AccountIndex(account), "guild_account_index", actor.IsCurrent);
+            context.Sender.Post(1, (ushort)CmdPacketType.REQ_GUILD_INFO_OF_MY_CHARS,
+                Network.Builders.GuildApplicationPackets.AccountApplications(account), "guild_account_applications", actor.IsCurrent);
+        };
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
-            debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, serverItemRules);
+            debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules);
         var levelProjection = new CharacterLevelProjection(stats, questProjection);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
@@ -405,11 +491,11 @@ internal static class ServerRuntime
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
                 despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun,
                 evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun,
-                imperialArena: imperialArenaProjection, evildomRewards: warPolicy, evildomRewardStore: repository);
+                evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
-                prices: DungeonCardPriceCatalog.Load(pvf),hopeRewards:hopeRewards,dimensionRewards:dimensionRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons);
+                prices: DungeonCardPriceCatalog.Load(pvf),hopeRewards:hopeRewards,dimensionRewards:dimensionRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons, guildEconomyService, guildContributionService, goldLimits: itemResources.GoldLimits);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops,crackRewards);
         }
         else
@@ -432,12 +518,15 @@ internal static class ServerRuntime
             new NpcFavorHandler(new NpcFavorService(npcFavor, towns, clock), inventoryProjection, log),
             // 客户端保活：0x04FE/0x06BB 每 10 秒一次，服务端必须回同 opcode 帧（见 KeepaliveHandler）。
             new KeepaliveHandler(log),
-            new PvpTrainingHandler(new GameWorld.Pvp.PvpArcadeCatalog(pvf),new GameWorld.Pvp.PvpPracticeComboCatalog(pvf),quests,log,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces),
+            new PvpArenaHandler(arena, new PvpTrainingHandler(new GameWorld.Pvp.PvpArcadeCatalog(pvf),new GameWorld.Pvp.PvpPracticeComboCatalog(pvf),quests,log,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,learning), log, clock),
+            new PvpTotalTeamHandler(totalTeams, log, inventoryProjection),
+            new PvpMatchingHandler(arena, log, clock),
+            new PvpChannelHandler(gameChannels, log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
-                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters, tagEvildomProjection, clock, raidHandler,
-                imperialArena: imperialArenaProjection, warRewards: repository, partyDungeons: partyDungeons, warCatalog: warCatalog, warPolicy: warPolicy),
+                adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters,
+                guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler),
             new SocialHandler(repository, social, online, log),
-            new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection),
+            new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection, arena),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
             new AdventureExpeditionHandler(expeditionService, expeditionProjection, clock),
             new AdventureNameHandler(new Game.Adventure.AdventureNameService(adventureCatalog, itemResources.Items.AdventureNameTicket),
@@ -451,7 +540,8 @@ internal static class ServerRuntime
             new SkillSwitchInventoryHandler(skillSwitchInventory, log),
             new TownHandler(projection, log, tagEvildomProjection),
             new TeleportHandler(new Game.Town.TeleportService(towns, itemResources.Teleports, itemResources.Items.Get, clock,
-                options.TeleportPotionGates), projection, inventoryProjection, presence, log),
+                options.TeleportPotionGates), projection, inventoryProjection, presence, log, guildTeleportHandler),
+            guildTeleportHandler,
             new SettingsHandler(settings, log, projection),
             avatarPresetHandler,
             new MailboxHandler(mailbox, mailboxProjection, inventoryProjection),
@@ -487,6 +577,8 @@ internal static class ServerRuntime
                 itemResources.EpicPieces), inventoryProjection, log),
             new EquipmentUpgradeHandler(new InventoryEquipmentUpgradeService(itemResources.Items,
                 itemResources.EquipmentUpgrades, itemResources.EpicPieces, clock), inventoryProjection, log),
+            new EquipmentTransmissionHandler(new InventoryEquipmentTransmissionService(itemResources.Items,
+                itemResources.EquipmentTransmissions, itemResources.EpicPieces, clock), inventoryProjection, log),
             new LimitCubeHandler(new InventoryLimitCubeService(itemResources.Items, itemResources.LimitCubes,
                 itemResources.EpicPieces, itemResources.Contracts, itemResources.Boosters.DirectActivationItems,
                 debugSettings: debugSettings, attributePairs: attributePairs), inventoryProjection, log),
@@ -538,8 +630,7 @@ internal static class ServerRuntime
                 new InventoryAvatarPackageService(itemResources.Items, itemResources.AvatarPackages, itemResources.GoldLimits, itemResources.EpicPieces, debugSettings, clock), log, clock),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock), inventoryProjection),
-            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun,
-                imperialArena: imperialArenaProjection),
+            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun, imperialArenaProjection),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),
@@ -559,7 +650,7 @@ internal static class ServerRuntime
                     growthItems: itemResources.Items.CreatureGrowthItem, actionItems: itemResources.Items.ActionConsumable),levelUpItems,weaponSkinHandler,
                 new FatigueConsumableHandler(new Game.Characters.FatigueConsumableService(itemResources.Items, towns, clock), inventoryProjection, log), rentalHandler, creatureHandler,
                 new InventoryPeriodExtensionService(itemResources.Items, towns, clock), new InventoryMileageService(itemResources.Items, towns, clock),
-                new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler,
+                new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler, guildEconomyHandler, guildExperienceHandler,
                 new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler,
                 new DimensionEntryTicketService(itemResources.Items, clock),
                 incounts is null ? null : new DungeonIncountTicketHandler(new Game.Dungeons.DungeonIncountTicketService(itemResources.Items, incounts, towns, clock), repository, inventoryProjection, log)),
@@ -580,7 +671,19 @@ internal static class ServerRuntime
             new RaidCombatHandler(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, inventoryProjection, log, clock, repository),
             // 公会：创建窗口的两次查重（CMD 0x9C / 0x9D）、介绍校验（0x2E3）与建会认证链路（0x2E5 / 0x2E6 / 0x2E7）。
             // 顺序模式下创建者可能已经下线：接受认证时用离线账号租约提交，因此这里显式注入账号 owner 表。
-            new GuildHandler(new Game.Guild.GuildDirectory(repository, guildParameters), guildPermits, online, owners, log, guildProjection),
+            new GuildHandler(new Game.Guild.GuildDirectory(repository, guildParameters), guildPermits, online, owners, log, guildProjection, guildInvitations),
+            new GuildPanelHandler(guildPanels, log, guildNpcProjection, guildDungeonProjection),
+            new GuildHongbaoHandler(guildHongbao, inventoryProjection, log),
+            new GuildRankingHandler(guildRanking),
+            new GuildManagementHandler(guildManagement),
+            new GuildApplicationHandler(guildApplications, guildManagement, log),
+            new GuildGovernanceHandler(new Game.Guild.GuildGovernanceService(repository, guildManagement, channels: channels), log),
+            new GuildCargoHandler(guildCargoService, guildCargoProjection, log),
+            guildEconomyHandler,
+            new GuildNpcHandler(guildNpcService, guildNpcProjection, log),
+            new GuildAttendanceHandler(new Game.Guild.GuildAttendanceService(repository, clock)),
+            new GuildAppearanceHandler(new Game.Guild.GuildAppearanceService(repository,
+                new GameWorld.Guilds.GuildAppearanceCatalog(pvf), guildManagement), log),
             new AuctionHandler(itemResources.Items, auctions, inventoryProjection, auctionProbe.NextSearch, auctionProbe.NextAverage,
                 auctionProbe.NextMyList, log),
             new ClientNoticeHandler(log),
@@ -588,7 +691,7 @@ internal static class ServerRuntime
             // 两种喇叭投已实测可见的 0x76 喇叭页签（见 Docs/模块/聊天.md）。
             // 成员/目标查询走只读存储合同（repository），在线定位与投递走 OnlineSessionDirectory，不另建在线状态。
             new ChatHandler(new Game.Chat.ChatService(repository, new Game.Chat.ChatDelivery(online), repository), inventoryProjection, log,
-                new Game.Chat.NamedWhisperService(online, repository),
+                new Game.Chat.NamedWhisperService(online, repository), guildContribution,
                 new SelfCharacterScoreProjection(new Game.Characters.CharacterInvestmentService(itemResources.Items,
                     itemResources.CharacterInvestmentMetadata, itemResources.CollectBoxes, itemResources.RandomOptions)))
         ];
@@ -601,8 +704,7 @@ internal static class ServerRuntime
         log.Write("startup", new { Stage = "Command registration", State = "complete", Commands = commands.Count });
         var login = new LoginHandler(options, owners, accounts, channels, log);
         var native = new NativeChannel(options, online, log, new NpcFavorAppearanceService(npcFavor));
-        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null, enableLukeRaidStart: lukeStart is not null, itemCycles: serverItemCycles,
-            imperialArena: imperialArenaProjection, tagEvildomRun: tagEvildomRun);
+        var game = new GameProtocolHandler(options, login, commands, repository, towns, online, projection, log, createActivity, mailboxProjection, quests, debugSettings, adventureProjection,questEffects,itemResources.Contracts,stats,inventoryProjection,clock,guildProjection,passiveDrops,devil,creatures,creatureProjection,questStages,itemResources.Boosters,native,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,experienceBonuses,weaponSkinProjection,expertStores,presence,incounts: incounts,levels: levelProjection,social: social,parties: parties,operationHope: operationHope,prepareDungeon: dungeon is DungeonHandler formal ? formal.PreparePartyContext : null,guildManagement: guildManagementProjection,guildInvitations: guildInvitations,guildCargo: guildCargoProjection,guildEconomy: guildEconomyProjection,guildTeleport: guildTeleportHandler,guildTeleportService: guildTeleportService,guildNpcs: guildNpcProjection,enableLukeRaidStart: lukeStart is not null,arena: arena,guildDungeons: guildDungeons,pvpRatings: pvpRatings,tagEvildomRun: tagEvildomRun,imperialArena: imperialArenaProjection, monsterBattleLevels: monsterBattleLevels.Settings, monsterAi: monsterAi.Settings, itemCycles: serverItemCycles);
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;
@@ -610,10 +712,13 @@ internal static class ServerRuntime
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
                 DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows), stop, capture, options);
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
-        Func<PacketCapture?, CancellationToken, Task>? management = gmCommands is null && gmWeb is null ? null : RunManagement;
+        // 决斗维护也使用此生命周期；关闭两个GM入口时仍须配对及回收预约。
+        Func<PacketCapture?, CancellationToken, Task> management = RunManagement;
         log.Write("startup", new { Stage = "Runtime assembly", State = "complete", ElapsedMs = Math.Round(timer.Elapsed.TotalMilliseconds, 3) });
-        return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache,lukeTimers,
-            runWorld: marriageScheduler.RunAsync);
+        // 存档 schema 版本在这里交给宿主写进 ready.json 与启动日志；Network 不直接依赖 Persistence。
+        return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache,
+            guildInvitations,guildEconomyProjection,guildTeleportService,guildNpcService,guildHallWait.RunAsync,
+            runWorld: marriageScheduler.RunAsync, gameplayTimers: lukeTimers, saveVersion: SqliteMigrations.CurrentVersion);
 
         async Task RunManagement(PacketCapture? capture, CancellationToken stop)
         {
@@ -624,7 +729,8 @@ internal static class ServerRuntime
             {
                 stop.ThrowIfCancellationRequested();
                 // 仅在管理入口真正启动时预热；装配或前置监听失败不留下后台资源读取。
-                developmentCatalog.StartWarmup();
+                if (gmCommands is not null || gmWeb is not null) developmentCatalog.StartWarmup();
+                running.Add(MaintainPvp(lifetime.Token));
                 if (gmCommands is not null) running.Add(gmCommands(lifetime.Token));
                 if (gmWeb is not null) running.Add(gmWeb(capture, lifetime.Token));
                 await await Task.WhenAny(running);
@@ -645,6 +751,40 @@ internal static class ServerRuntime
                     throw new AggregateException("GM入口失败且退出收尾失败", failure, cleanup);
                 }
             }
+        }
+        async Task MaintainPvp(CancellationToken stop)
+        {
+            var time = clock ?? TimeProvider.System;
+            // 轮询使用实际服务节奏；注入时钟只判业务期限，不注册到其他玩法的专用定时器。
+            using var pulse = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            try
+            {
+                while (await pulse.WaitForNextTickAsync(stop))
+                {
+                    var expired = await arena.MaintainMatchingAsync(time.GetUtcNow(), stop, (room, exception) =>
+                        log.Write("pvp_maintenance_failed", new { Room = room, Error = exception.Message }));
+                    if (expired.Length != 0) arena.Publish(expired);
+                    // 每轮有限配对；双方连接忙时跳过，不创建独立后台任务或等待socket。
+                    for (int paired = 0; paired < 32; paired++)
+                    {
+                        var entry = await arena.PrepareNextOrdinaryMatchingAsync(time.GetUtcNow(), stop);
+                        if (entry is null) break;
+                        try
+                        {
+                            arena.Publish(entry.Initial.Select(notice => notice with
+                            {
+                                Kind = Game.Pvp.PvpArenaNoticeKind.Matching,
+                                MatchingId = entry.Load.Id,
+                                MatchingRatings = entry.Load.Members.Select((ticket, at) =>
+                                    KeyValuePair.Create(ticket.Actor.Character.Id, entry.Ratings[at])).ToImmutableDictionary()
+                            }));
+                            log.Write("pvp_matching_pair", new { Matching = entry.Load.Id, Room = entry.Room.Id });
+                        }
+                        finally { entry.Room.Commands.Release(); }
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
         }
         OnlineCharacterView[] OnlineCharacters() => online.Snapshot()
             .Select(character => new OnlineCharacterView(character.Account, character.CharacterId, character.Name,
@@ -671,7 +811,7 @@ internal static class ServerRuntime
         }
         string DevelopmentCommand(string line)
         {
-            string result = DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
+            string result = monsterBattleLevels.Answer(line) ?? monsterAi.Answer(line) ?? DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
                 mailbox, itemResources.Items, progress, cashShop, debugSettings, events, developmentCatalog,
                 online.FindConnection, log, noticeSender);
             log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });

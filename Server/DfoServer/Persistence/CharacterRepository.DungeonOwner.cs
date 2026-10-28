@@ -69,6 +69,9 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
     }
 
     public Character ReserveDungeonAttempt(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
+        WeeklyDungeonEntry? weekly = null) => ReserveDungeonEntry(owner, expected, nextObjectKey, weekly).Character;
+
+    public DungeonEntryCommit ReserveDungeonEntry(AccountOwners.Lease owner, Character expected, uint nextObjectKey,
         WeeklyDungeonEntry? weekly = null) => owner.Execute(() =>
     {
         var state = ReservationState(expected, nextObjectKey);
@@ -77,8 +80,9 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         using var tx = write.Transaction;
         ReserveInTransaction(db, tx, owner, expected, expected.Revision, state, nextObjectKey, weekly: weekly);
         var committed = Require(db, tx, owner.Account, expected.Name);
+        var membership = ReadDungeonGuildMembership(db, tx, expected.Id);
         tx.Commit();
-        return committed;
+        return new DungeonEntryCommit(committed, null) { GuildMembership = membership };
     });
 
     // #510/#511 入场票、入场一次性疲劳与尝试号预留同一写事务：任一步失败整笔回滚，重复请求或提交失败都不会只扣一半。
@@ -107,6 +111,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             throw new InvalidDataException("入场费用需要本次待安装实例的身份");
         AdmitOrdinaryLuke(db, tx, owner, expected, charge);
         AdmitDazzlementTower(db, tx, owner, expected, charge);
+        AdmitGuildDungeon(db, tx, expected.Id, charge);
         CharacterFatigueState? fatigueBefore = null, fatigueAfter = null;
         if (charge.Fatigue > 0)
         {
@@ -140,6 +145,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         CommitHopeAdmission(db, tx, owner, expected, charge);
         CommitGriefEntry(db, tx, owner, expected, charge, checked(revision + 1));
         WriteSpecialEntry(db, tx, owner, expected, charge, checked(revision + 1));
+        CommitBeastAdmission(db, tx, owner, expected, charge);
         if (fatigueBefore is not null && fatigueAfter is not null)
         {
             using var command = db.CreateCommand();
@@ -154,7 +160,18 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
         var committed = Require(db, tx, owner.Account, expected.Name);
         cachedFatigue = fatigueBefore is not null && fatigueAfter is not null
             ? new(charge.Hope is null ? CharacterFatigueState.StartDungeonRuleId : "operation-hope-first-area-v1", revision, fatigueBefore, fatigueAfter) : null;
-        return new DungeonEntryCommit(committed, charge.Incount?.Row is not null ? counted?.Usage : null);
+        return new DungeonEntryCommit(committed, charge.Incount?.Row is not null ? counted?.Usage : null)
+            { GuildMembership = ReadDungeonGuildMembership(db, tx, expected.Id) };
+    }
+
+    static DfoServer.Game.Guild.GuildDungeonMembership ReadDungeonGuildMembership(SqliteConnection db, SqliteTransaction tx, ushort id)
+    {
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = "SELECT guild_id,joined_at_unix FROM guild_members WHERE character_id=$id";
+        command.Parameters.AddWithValue("$id", id);
+        using var row = command.ExecuteReader();
+        return row.Read() ? new(id, checked((uint)row.GetInt64(0)), row.GetInt64(1)) : new(id, 0, 0);
     }
 
     public PartyDungeonEntryCommit[] CommitPartyDungeonEntry(IReadOnlyList<PartyDungeonReservation> reservations)
@@ -179,6 +196,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
                     throw new InvalidOperationException("夫妻副本入场关系、成员或版本已变化");
             }
             var result = new PartyDungeonEntryCommit[reservations.Count];
+            var memberships = new DfoServer.Game.Guild.GuildDungeonMembership[reservations.Count];
             var fatigue = new DungeonTransientFatigue?[reservations.Count];
             for (int i = 0; i < reservations.Count; i++)
             {
@@ -188,10 +206,13 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
                     count.Dungeon, count.Period, count.Row, null, count.Account, count.Increment, check: true);
                 if (count is not null && counted is null) throw new InvalidOperationException("组队成员入场次数已变化");
                 var character = CommitDungeonEntryInTransaction(db, tx, r.Owner, r.Expected, r.NextObjectKey, r.Charge, out fatigue[i], counted?.Usage);
+                memberships[i] = character.GuildMembership!;
                 result[i] = new(character.Character, r.Charge.Dimension is null && counted is not null && count is { Increment: true, Row: { } row }
                     ? [.. DungeonIncountPolicy.Views(row, counted.Usage)] : []);
             }
+            var frozenMemberships = System.Collections.Immutable.ImmutableArray.CreateRange(memberships);
             CommitEvildomWarEntryInTransaction(db, tx, reservations, result);
+            for (int i = 0; i < result.Length; i++) result[i] = result[i] with { GuildMemberships = frozenMemberships };
             tx.Commit();
             for (int i = 0; i < reservations.Count; i++)
                 InstallEntryFatigue(reservations[i].Owner, reservations[i].Charge, fatigue[i]);

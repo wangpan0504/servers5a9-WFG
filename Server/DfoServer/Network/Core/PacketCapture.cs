@@ -96,8 +96,8 @@ internal sealed class PacketCapture : IDisposable
             Interlocked.Increment(ref totalReceived);
         if (sessions?.TryGetValue(connection, out var session) == true)
             session.Count(send, opcode);
-        // 连同畸形认证包一起脱敏；旧扩展包也可能含凭据，不输出 body 或 raw。
-        bool redact = !channel && (!send || frame[0] == 1) && IsAuthentication(opcode);
+        // 连同畸形认证、房间密码包一起脱敏，不通过解析成功与否决定是否输出敏感正文。
+        bool redact = !channel && (!send || frame[0] == 1) && IsSensitiveCommand(opcode);
         ReadOnlySpan<byte> body = frame[Math.Min(header, frame.Length)..];
         if (recent is not null)
         {
@@ -119,7 +119,7 @@ internal sealed class PacketCapture : IDisposable
         var text = new StringBuilder();
         text.Append($"{timestamp:O} connection={connection} protocol={(channel ? "CHANNEL" : "GAME")} {(send ? "SEND" : "RECV")} kind=0x{frame[0]:X2} opcode=0x{opcode:X4} name={name} len={frame.Length} body=({body.Length}B)");
         if (redact)
-            text.Append(" [authentication payload redacted]\n");
+            text.Append(IsAuthentication(opcode) ? " [authentication payload redacted]\n" : " [pvp password payload redacted]\n");
         else
         {
             text.Append(" [");
@@ -163,6 +163,12 @@ internal sealed class PacketCapture : IDisposable
 
     internal static bool IsAuthentication(ushort opcode) => opcode is
         (ushort)CmdPacketType.LOGIN or (ushort)CmdPacketType.LOGIN_PRECHECK or (ushort)CmdPacketType.CLIENT_SPEC_STATISTIC;
+
+    internal static bool IsSensitiveCommand(ushort opcode) => IsAuthentication(opcode) || opcode is
+        (ushort)CmdPacketType.MAKE_PVP_ROOM or (ushort)CmdPacketType.ENTER_PVP_ROOM;
+
+    internal static string RedactedCommandBody(ushort opcode) => IsAuthentication(opcode)
+        ? "[login-redacted]" : "[pvp-password-redacted]";
 
     static void Hex(StringBuilder text, ReadOnlySpan<byte> bytes)
     {

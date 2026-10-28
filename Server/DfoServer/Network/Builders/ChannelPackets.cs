@@ -75,6 +75,7 @@ internal static class ChannelPackets
     const int LukeRaidType = 0x20;
     // 再战魔界：028FA250按+1010==0x35选择双角色UI和9608/400000095；该字段由ACK LOGIN类型写入。
     const int EvildomGatheringType = 0x35;
+    const int BeastType = 0x28;
 
     // ACK LOGIN 正文第 0 字节是结果，之后 ARAD 0233EA10 依次读 u8 年龄 [ebp-0x34b]、u8 网吧 [ebp-0x347]、u8 频道类型 [ebp-0x336]；
     // 频道类型经 0233EF02 → 028FA920 写入频道对象 +0x1010（02330DF0 读出），RaidModeSelectWindow 打开时 014C0D40 按它选信息框下标：
@@ -87,9 +88,11 @@ internal static class ChannelPackets
     // 0x20 → +0x492（tail[38]）判资格，发 0 时资格位不生效。逐个核对 43 处 0x17/0x20 读点：团本创建框/团本管理器类型表、频道类型 → 城镇
     // （03B876C0：0x17→19、0x20→32，与服务端落点一致）、团队频道内跳过若干普通频道 UI/提示、卢克频道快捷窗 0x5C9 与物品频道限制谓词 022C4430；
     // 页签与换频道快照谓词读脚本类型（+8），不读 +0x1010。证据：evidence/anton-luke-channel-type-audit-20261021.txt。
+    // 01714BC0/01714BCD：8显示无双决斗场，24显示传统决斗场；LOGIN不能将它们降为普通模式0。
     // 普通type22用于冒险团页准入（012AE420→028FB170）；其他未确认入口继续发0，避免扩大客户端模式变化。
+    // LOGIN接收端将类型写入模式+1010；魔兽谓词读取该字段是否为0x28，不能回落0。
     public static byte LoginChannelType(ChannelEntry channel) =>
-        channel.Type is 22 or 39 or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
+        channel.Type is 8 or 24 or 22 or 39 or BeastType or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
 
     public static byte[] Endpoint(string address, int port, uint association = 0, byte channelType = 0)
     {

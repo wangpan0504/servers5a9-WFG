@@ -54,6 +54,9 @@ internal sealed class QuestCatalog
     {
 
         var paths = Index(pvf);
+        const int beastQuest = 5927;
+        const string beastPath = "n_quest/new_quest/metrocenter/open_beast.qst";
+        if (!paths.ContainsKey(beastQuest) && pvf.Contains(beastPath)) paths.Add(beastQuest, beastPath);
         var maps = MapIndex(pvf);
         var cinematicTokens = pvf.ReadTokens("cinematic/cinematic.lst");
         var cinematics = new Dictionary<int,string>();

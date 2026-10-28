@@ -156,6 +156,10 @@ internal static class AdventureCoreTests
         byte[] refresh = AdventurePackets.Refresh(42, snapshot.State, catalog);
         That(refresh.Length == 50 && BinaryPrimitives.ReadUInt32LittleEndian(refresh.AsSpan(2)) == 40 &&
             BinaryPrimitives.ReadUInt64LittleEndian(refresh.AsSpan(14)) == snapshot.State.Experience, "1349只使用40B实体状态");
+        // 客户端0102F910把RAW+16起的u64写进管理器+0x190，01034220入城时用经验表按level+1算同一字段；
+        // 留0会让每次1349把1343刚算好的「下一级所需经验」覆盖成0。
+        That(BinaryPrimitives.ReadUInt64LittleEndian(refresh.AsSpan(22)) == catalog.Experience[snapshot.State.Level + 1],
+            "1349 RAW+16下发下一级所需经验，与1343消费者按经验表写入的字段一致");
         Persist(catalog, now);
         Migrate();
         Console.WriteLine($"PASS {Count - before} 冒险团基础资源、字节、账号查询与增量迁移断言");

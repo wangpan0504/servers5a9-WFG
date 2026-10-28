@@ -63,6 +63,13 @@ internal sealed class ImperialArenaProjection(IImperialArenaStore store, IImperi
         // 仅在城镇初始化恢复已结束/断线实例，不在挑战进行中提前结算。
         var mails = Store.CompleteImperialArenaRuns(context.Owner);
         if (context.Session.ReadImperialArena(Store, Now) is not { } snapshot) return true;
+        // 首次空编队在发 1393 前提交：客户端没有 runtimeActor(+4D8) 时，队伍设置、头像与入场按钮全部失效。
+        if (context.Session.EnsureImperialArenaTeam(Store, Now) is { } seeded && context.Session.CanPublishImperialArena(seeded))
+        {
+            log.Write("imperial_arena_team_seeded",
+                new { Connection = context.Id, First = seeded.State.Configuration.First, Second = seeded.State.Configuration.Second });
+            snapshot = seeded;
+        }
         if (!mails.IsEmpty)
             await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "imperial_arena_recovered_mail",
                 () => context.Session.CanPublishImperialArena(snapshot));
@@ -80,6 +87,36 @@ internal sealed class ImperialArenaProjection(IImperialArenaStore store, IImperi
         if (snapshot.State.Configuration.IsEmpty) return Guard();
         primary ??= context.Owner.Execute(() => context.Session.Selected is { } selected ? new TownCharacterProjection(selected, Now) : null);
         if (primary is null) return false;
+        var (installed, metadataSent) = await InstallPairAsync(context, snapshot, primary);
+        if (installed) return true;
+        if (!Guard()) return false;
+        log.Write("imperial_arena_pair_unavailable", new { Connection = context.Id, MetadataSent = metadataSent });
+        await context.Notify(NotiPacketType.AAS_TIPS, ServerNoticePackets.Build("帝国竞技场",
+            "双角色资料需要更新。请先分别登录两名90级角色，再以编队第一名登录。"), "imperial_arena_pair_notice", Guard);
+        if (metadataSent) { await town.ReturnToSelectionAsync(context, Guard); return false; }
+        return Guard();
+    }
+
+    // 购票与进图前就地重建一次双Actor：主角修理、金币或体力恢复让已装资料失效时不再要求重登。
+    // 只发 1393→1394，不推提示、不触发小退，失败时保持原状交给购票/入场准入拒绝。
+    public async Task<bool> RefreshPairAsync(GameConnectionContext context)
+    {
+        if (context.Session.ReadImperialArena(Store, Now) is not { } snapshot) return false;
+        if (snapshot.State.Configuration.IsEmpty) return false;
+        if (context.Session.HasCurrentImperialArenaPair(Store, Now)) return true;
+        var primary = context.Owner.Execute(() => context.Session.Selected is { } selected ? new TownCharacterProjection(selected, Now) : null);
+        if (primary is null) return false;
+        var (installed, _) = await InstallPairAsync(context, snapshot, primary);
+        if (!installed) log.Write("imperial_arena_pair_refresh_failed", new { Connection = context.Id });
+        return installed;
+    }
+
+    // 1393→1394 的双Actor安装循环。只负责安装与回执，提示与小退由调用方按场景决定。
+    async Task<(bool Installed, bool MetadataSent)> InstallPairAsync(GameConnectionContext context,
+        Game.ImperialArena.ImperialArenaProjection snapshot, TownCharacterProjection? primary)
+    {
+        bool Guard() => context.Session.CanPublishImperialArena(snapshot);
+        if (primary is null) return (false, false);
         var appearance = TagEvildomAppearance.Capture(primary.Character, primary.AppearanceTime);
         bool metadataSent = false;
         for (int attempt = 0; attempt < 2 && Guard(); attempt++)
@@ -100,13 +137,8 @@ internal sealed class ImperialArenaProjection(IImperialArenaStore store, IImperi
                 () => { bool accepted = PairGuard(); metadataSent |= accepted; return accepted; });
             bool sent = false;
             await context.Notify(NotiPacketType.TAG_TOURNAMENT_CHARACTER_INFO, body, "imperial_arena_character_info", () => sent = PairGuard());
-            if (sent && context.Session.MarkImperialArenaPairPublished(Store, pair, appearance, standby, Now)) return true;
+            if (sent && context.Session.MarkImperialArenaPairPublished(Store, pair, appearance, standby, Now)) return (true, metadataSent);
         }
-        if (!Guard()) return false;
-        log.Write("imperial_arena_pair_unavailable", new { Connection = context.Id, MetadataSent = metadataSent });
-        await context.Notify(NotiPacketType.AAS_TIPS, ServerNoticePackets.Build("帝国竞技场",
-            "双角色资料需要更新。请先分别登录两名90级角色，再以编队第一名登录。"), "imperial_arena_pair_notice", Guard);
-        if (metadataSent) { await town.ReturnToSelectionAsync(context, Guard); return false; }
-        return Guard();
+        return (false, metadataSent);
     }
 }

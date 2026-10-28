@@ -14,6 +14,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                // 物品周期两步在本线为 110/111，夹具基线取 110（疲劳日戳），升级时重跑这两步。
                 Execute(db,"DROP TABLE account_server_item_refills; DROP TABLE character_server_item_usage; PRAGMA user_version=110");
                 if (scenario == "conflict") Execute(db,"CREATE TABLE account_server_item_refills(incompatible INTEGER)");
                 if (scenario == "late-failure") Execute(db,"ALTER TABLE accounts DROP COLUMN disabled");

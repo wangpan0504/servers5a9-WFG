@@ -18,12 +18,11 @@ internal sealed record DungeonStaticTopology(
             return Unsupported(grid.UnsupportedReason!);
         if (maze.MapSpecification is null)
             return Unsupported("未提供显式地图，不能生成静态连接");
-        if (maze.IsLostLand && (maze.ResourceError is not null || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
-            maze.Starts[0] == maze.Bosses[0] || maze.QuestConnectionTokens.Count != 0 || maze.MapAlternatives.Count != 0 ||
-            maze.LayeredMaps.Count != 0 || maze.ConditionalMaps.Count != 0 || maze.DummyStages.Count != 0 ||
-            maze.StoryStages.Count != 0 || maze.BossEntrance is not null || maze.HellParty is not null ||
-            maze.IsTrainingRoom || maze.IsClassExperience || maze.IsGriefTower || maze.IsDespairTower || maze.IsUltimateAltar || maze.IsTournament))
-            return Unsupported("遗忘之地专用地图结构不匹配");
+        if (maze.BeastLayout is { } beast && (maze.Width != beast.Width || maze.Height != beast.Height ||
+            maze.Greed != beast.Greed || !maze.MapSpecification.SequenceEqual(beast.Maps) ||
+            !maze.Starts.SequenceEqual([beast.Start]) ||
+            !maze.Bosses.SequenceEqual(beast.Maps.Where(map => map.Kind == "Beast").TakeLast(1).Select(map => map.Position))))
+            return Unsupported("魔兽路线与冻结资源布局不一致");
         // 夫妻单房保留资源BB；身份由严格资源池绑定，不能变成普通图越界出口的豁免。
         if (maze.WeddingCoupleRoom is { } wedding && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
             grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss" } declared] && declared == wedding &&
@@ -32,6 +31,12 @@ internal sealed record DungeonStaticTopology(
             maze.LayeredMaps.Count == 0 && maze.WarpMaps.Count == 0 && maze.ConditionalMaps.Count == 0 &&
             maze.StoryStages.Count == 0 && maze.BossEntrance is null && maze.HellParty is null)
             return new([new(wedding, 0)], [], null);
+        if (maze.IsLostLand && (maze.ResourceError is not null || maze.Starts.Count != 1 || maze.Bosses.Count != 1 ||
+            maze.Starts[0] == maze.Bosses[0] || maze.QuestConnectionTokens.Count != 0 || maze.MapAlternatives.Count != 0 ||
+            maze.LayeredMaps.Count != 0 || maze.ConditionalMaps.Count != 0 || maze.DummyStages.Count != 0 ||
+            maze.StoryStages.Count != 0 || maze.BossEntrance is not null || maze.HellParty is not null ||
+            maze.IsTrainingRoom || maze.IsClassExperience || maze.IsGriefTower || maze.IsDespairTower || maze.IsUltimateAltar || maze.IsTournament))
+            return Unsupported("遗忘之地专用地图结构不匹配");
         // 该标记只由严格资源池设置；仍核对唯一实际地图，不能借它放行普通BB。
         if (maze.IsGriefTower && maze.ResourceError is null && maze.Width == 1 && maze.Height == 1 &&
             grid.Cells is [{ Index: 1 }] && maze.MapSpecification is [{ Kind: "boss" } grief] && grief == maze.GriefRoom &&
@@ -50,7 +55,8 @@ internal sealed record DungeonStaticTopology(
         var maps = new Dictionary<DungeonPoint, DungeonMap>();
         foreach (var map in maze.MapSpecification)
         {
-            if (map.Kind is not ("map" or "boss") || map.Id < 0 || string.IsNullOrWhiteSpace(map.Path))
+            if (map.Kind is not ("map" or "boss") && !(maze.BeastLayout is not null && map.Kind == "Beast") ||
+                map.Id < 0 || string.IsNullOrWhiteSpace(map.Path))
                 return Unsupported("地图身份或种类未支持");
             if (map.Position.X < 0 || map.Position.X >= grid.Width || map.Position.Y < 0 || map.Position.Y >= grid.Height ||
                 !maps.TryAdd(map.Position, map) && !maze.StoryStages.Any(stage => stage.Position == map.Position))

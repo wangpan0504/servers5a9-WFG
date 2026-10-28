@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 按改动路径选择需要运行的检查与 TCP 测试组：开发内循环只跑受影响部分，合并前用 -Full 执行全量。
 
@@ -84,6 +84,7 @@ $keywordGroups = [ordered]@{
     'PcRoom|PremiumContract' = 'presence','devil-contract','town','party-dungeon'
     'Story'      = 'story-digest','story-cinematic','story-scenes','story-quest-entry','story-publication'
     'Dungeon|GriefTower|Dazzlement|LostLand' = 'formal-dungeon','dungeon-growth','grief-tower','dungeon-training','class-experience','dungeon-revive','dungeon-altars','dungeon-despair','dungeon-dazzlement','hero-tomb-entry','dungeon-probe','dungeon-settlement','dungeon-entry-plan','lost-land'
+    'MonsterAi|MonsterBattleLevel' = 'monster-ai','monster-battle-level'
     'Booster'    = 'booster','booster-selection','booster-equipment','daily-retained-booster'
     'Inventory'  = 'inventory','consumable-use','inventory-persistence'
     'Items?/'    = 'inventory','shop','consumable-use'

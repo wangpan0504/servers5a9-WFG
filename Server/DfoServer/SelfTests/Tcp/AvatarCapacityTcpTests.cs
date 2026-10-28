@@ -28,13 +28,14 @@ internal static class AvatarCapacityTcpTests
             InventoryService.Commit(repository, owner, role, new CurrencyService(r.GoldLimits).Grant(role, CurrencyKind.Cera, 1_000_000));
         }
         string migrationAssets = MigrationAssets();
-        // 恢复v47实际缺列和两个槽位约束，覆盖新增列及350以上装扮槽迁移。
+        // 恢复v47实际缺列和两个槽位约束，并把领奖账本的段位类型5退回v47之后才有的v127之前结构。
         fixture.Sql("DROP TABLE character_skill_switch_inventory_items; DROP TABLE character_skill_switch_inventory; DROP TABLE character_quest_stage_claims; DROP TABLE character_quest_stage_witnesses");
         fixture.Sql("ALTER TABLE characters DROP COLUMN devil_usage; ALTER TABLE characters DROP COLUMN stamina_until; ALTER TABLE characters DROP COLUMN daily_booster_usage");
         fixture.Sql("ALTER TABLE characters DROP COLUMN avatar_expansion");
         DatabaseSchemaTests.RewindRaidLifecycle(fixture.Database);
-        fixture.Sql("PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(replace(sql,'CHECK(list_type<>1 OR slot_index<420)','CHECK(list_type<>1 OR slot_index<210)'),'CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419))','CHECK(slot_index BETWEEN 0 AND 351)') WHERE name='character_inventory_slots'; PRAGMA writable_schema=OFF; PRAGMA schema_version=9000; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=47");
+        fixture.Sql(DatabaseSchemaTests.GuildExtensionFixtureRewindSql + "PRAGMA writable_schema=ON; UPDATE sqlite_schema SET sql=replace(replace(sql,'CHECK(list_type<>1 OR slot_index<420)','CHECK(list_type<>1 OR slot_index<210)'),'CHECK(slot_index BETWEEN 0 AND 351 OR (list_type=1 AND slot_index BETWEEN 352 AND 419))','CHECK(slot_index BETWEEN 0 AND 351)') WHERE name='character_inventory_slots'; UPDATE sqlite_schema SET sql=replace(replace(sql,'condition_type IN(0,1,2,3,4,5,6,','condition_type IN(0,1,2,3,4,6,'),'condition_type IN(0,2,4,5,6,','condition_type IN(0,2,4,6,') WHERE name='character_quest_completion_receipts'; PRAGMA writable_schema=OFF; PRAGMA schema_version=9000; ALTER TABLE characters DROP COLUMN selected_skill_tree; PRAGMA user_version=47");
         That(fixture.Query("PRAGMA user_version") is [[47L]] &&
+            fixture.Query("SELECT instr(sql,'condition_type IN(0,1,2,3,4,5,6,')=0 AND instr(sql,'condition_type IN(0,2,4,5,6,')=0 FROM sqlite_schema WHERE name='character_quest_completion_receipts'") is [[1L]] &&
             fixture.Query("SELECT count(*) FROM sqlite_schema WHERE name IN('character_quest_stage_claims','character_quest_stage_witnesses')") is [[0L]] &&
             fixture.Query("SELECT count(*) FROM sqlite_schema WHERE name IN('character_skill_switch_inventory','character_skill_switch_inventory_items')") is [[0L]] &&
             fixture.Query("SELECT count(*) FROM pragma_table_info('characters') WHERE name IN('devil_usage','stamina_until','daily_booster_usage')") is [[0L]] &&

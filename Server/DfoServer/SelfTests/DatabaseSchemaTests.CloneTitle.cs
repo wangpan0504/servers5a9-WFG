@@ -16,6 +16,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                RewindRaidLifecycle(db);
                 Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('clone-title',0,'CloneOld',7,38,1,450,234,0,123)");
                 Check(Query(db, "SELECT clone_title_item_id FROM characters") is 0L, "新库称号动画缺省0");
                 RemoveSkillTreeExpansionSchema(db);

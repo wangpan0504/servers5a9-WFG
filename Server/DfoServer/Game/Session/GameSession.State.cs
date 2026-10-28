@@ -11,7 +11,9 @@ internal sealed partial class GameSession
         var dungeon = endingDungeon ? null : formalDungeon;
         return UserStatePolicy.Read(phase, Selected is not null, Ready,
             CurrentDungeonSelection is not null, dungeon?.Run.Phase,
-            CurrentDungeonSelection?.IsTutorial == true || dungeon?.Entry.IsTutorial == true, !endingPvp && pvpTraining is not null);
+            CurrentDungeonSelection?.IsTutorial == true || dungeon?.Entry.IsTutorial == true,
+            !endingPvp && pvpTraining is not null, !endingPvp && pvpArena is not null,
+            !endingPvp && pvpArena?.Room.Match?.Phase == DfoServer.Game.Pvp.PvpArenaMatchPhase.Fighting);
     }
 
     // 业务在原owner内完成上下文安装/提交后调用；旧连接收尾也只能清理自己的会话。
@@ -22,7 +24,12 @@ internal sealed partial class GameSession
         bool endingDungeon = next is not (SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement);
         bool endingPvp = next != SessionPhase.PvpRoom;
         _ = ReadState(next, endingDungeon, endingPvp);
-        if (endingPvp) pvpTraining = null;
+        if (next != SessionPhase.Town) Volatile.Write(ref pvpMatching, null);
+        if (endingPvp)
+        {
+            pvpTraining = null;
+            Volatile.Write(ref pvpArena, null);
+        }
         if (endingDungeon)
         {
             formalDungeon?.Run.CancelTagEvildom();

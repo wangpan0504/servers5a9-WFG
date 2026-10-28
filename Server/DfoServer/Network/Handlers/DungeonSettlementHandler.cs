@@ -21,7 +21,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     CharacterLevelProjection levelProjection, EpicPieceCatalog? pieces = null,
     DungeonCardRewardPolicy? cards = null, InventoryProjection? inventoryProjection = null,
     RentalCatalog? rental = null, Game.Events.ServerEventService? events = null,
-    GameWorld.Adventure.AdventureCatalog? adventure = null, PartyDungeonService? partyDungeons = null) : IGameCommandModule
+    GameWorld.Adventure.AdventureCatalog? adventure = null, PartyDungeonService? partyDungeons = null,
+    Game.Guild.GuildEconomyService? guildEconomy = null,
+    Game.Guild.GuildContributionService? guildContribution = null, GoldLimitCatalog? goldLimits = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -71,7 +73,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         var goldCardEvent = events?.Read(Game.Events.ServerEventService.DoubleGoldCardId);
         var result = context.Session.SettleFormalDungeon(participant.ActorId, participant.RankPoint, parsed.MaximumRankPoint,
             request.Body, dungeons, rewards, growth, cards, rental?.LuckyStarStackLimit ?? 0, goldCardEvent, adventure,items,pieces,
-            parsed.Participants.Select(member => member.ActorId).ToArray());
+            parsed.Participants.Select(member => member.ActorId).ToArray(), goldLimits);
         log.Write("formal_dungeon_settlement", new { Connection = context.Id, result.Outcome, participant.RankPoint,
             parsed.MaximumRankPoint, Members = parsed.Participants.Count,
             result.Reward, result.GainedExperience, result.ProficiencyGained, result.Card, result.GriefReward, result.MailId, result.Receipt?.Snapshot.Identity,
@@ -98,6 +100,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         // 超星空保留真实通关经验提交，但不发布普通结果页或翻牌奖励。
         bool cosmo = receipt.Entry.IsCosmo;
         bool grief = receipt.Entry.Maze.IsGriefTower;
+        // 魔界大战小图只发结果页（34）：没有普通白图的翻牌会员刷新与 35 通关奖励，否则翻牌层压住结算阶段。
+        bool war = result.EvildomWarClear;
         if (!tournament && !cosmo && !grief)
             await context.Notify(NotiPacketType.PLAY_RESULT, DungeonSettlementPackets.PlayResult(receipt.Character.Id, result.Presentation!, receipt.PartyActors), "formal_play_result", Guard);
         var previous = result.PreviousCharacter ?? throw new InvalidOperationException("通关结算缺少真实提交前角色");
@@ -118,7 +122,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 "formal_clear_skill_switch_inventory");
         await levelProjection.RefreshAsync(context, receipt.Character, previous.Level, "formal_clear_level_committed", Guard,
             previousLearning: previous.Learning);
-        if (!receipt.Entry.IsTutorial && !cosmo && !grief)
+        if (!receipt.Entry.IsTutorial && !cosmo && !grief && !war)
             await DungeonCardMembershipProjection.RefreshAsync(context);
         if (tournament)
         {
@@ -130,7 +134,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             await context.Notify(NotiPacketType.TOG_CLEAR_REWARD,GriefTowerPackets.ClearReward(receipt.ClearTimeMilliseconds,
                 result.Receipt.Entry.GriefLayer ?? throw new InvalidOperationException("悲叹通关缺少已冻结楼层"),
                 result.GriefReward ?? throw new InvalidOperationException("悲叹通关缺少已提交奖励")),"formal_grief_clear_reward",Guard);
-        else if (!cosmo)
+        else if (!cosmo && !war)
         await context.Notify(NotiPacketType.CLEAR_DUNGEON_REWARD, ExclusiveDropPackets.ClearCard(reward.Applied(effective),
             result.Presentation!.MonsterExperience, result.Card, checked((int)receipt.Entry.DungeonId), result.Options, result.BlackDiamond,
             result.Presentation.MonsterGrowthContractExperience, result.Presentation.MonsterEquipmentExperience,
@@ -163,6 +167,14 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         if (result.MailId is not null) context.Session.NotifyMailbox(receipt.Character.Id);
         if (cosmo) await DungeonSettlementProjection.RefreshCosmoRetryAsync(context);
+        guildEconomy?.PublishDungeonMileage(context.Session, result.GuildMileageGuildId != 0
+            ? result.GuildMileageGuildId : result.GuildDungeon?.GuildId ?? 0);
+        if (result.GuildDungeon is { } guildDungeon)
+        {
+            log.Write("guild_dungeon_clear_committed", new { Connection = context.Id, Guild = guildDungeon.GuildId,
+                receipt.Entry.DungeonId, receipt.Snapshot.Identity.InstanceId, Counts = guildDungeon.Counts });
+        }
+        if (result.GuildContribution is { } contribution) guildContribution?.Publish(contribution);
         return CommandResult.Handled;
     }
 
@@ -339,6 +351,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             // 261只更新结算页的再挑战资格，不能结束旧Scene；27沿已核验入口切换场景并清理旧结算层。
             await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(0, despairLayer: context.Session.DespairSelectionLayer()), "formal_retry_scene_transition", RetryGuard);
             await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(retry.Entry, retry.Snapshot.BossPosition), "formal_retry_information", RetryGuard);
+            await MonsterAiProjection.SendAsync(context, retry, "formal_retry_monster_ai", RetryGuard);
             await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(retry.Entry, retry.Monsters, retry.MapSeed,
                 passiveItems: retry.PassiveItems), "formal_retry_start_map", RetryGuard);
             if (!retry.HellConsumedSlots.IsDefaultOrEmpty)

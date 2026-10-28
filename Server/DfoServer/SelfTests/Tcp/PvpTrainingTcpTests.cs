@@ -1,5 +1,6 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Pvp;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
@@ -22,15 +23,16 @@ internal static class PvpTrainingTcpTests
         using(var owner=new AccountOwners().Acquire(account,()=>{}))
         {
             var seed=CharacterCreation.Prepare("TrainingTCP",resources.Characters.Get(0),position,resources.Towns.InitialReturn,resources.Learning.Get);
-            // 仅准备已完成的会面前置；2672必须在真实NPC场景通过31接取，不能预置训练活动槽。
-            id=repo.Create(owner,seed with {Level=60,AcceptedStoryLevel=60,CompletedQuests=[2670,2671],
+            // 五环均通过真实接取、场景条件和交付，不预置任何风云完成位。
+            id=repo.Create(owner,seed with {Level=60,AcceptedStoryLevel=60,
                 InitialLearning=SkillPointLedger.Synchronize(0,0,60,seed.InitialLearning with
                     {Experience=growth.GetLevelStartExperience(60)},resources.Learning)}).Id;
         }
         byte[] request=[0,2,0,0,0,0xD1,0xB5,0,0,0,3,81];
         await f.StartAsync();
         var endpoints=ChannelTcpTests.Endpoints(f);
-        using(var peer=Open(f,account,gamePort:endpoints[40],channelNumber:40))
+        byte pvp=ChannelTcpTests.PvpChannelNumber(f);
+        using(var peer=Open(f,account,gamePort:endpoints[pvp],channelNumber:pvp))
         {
             peer.Send(50,request);peer.Expect(1,50,[0,19,0]);
             peer.Send(29,[0,1,5,0,0,1,3]);peer.Expect(1,29,[0,0xD9,0]);
@@ -38,8 +40,13 @@ internal static class PvpTrainingTcpTests
             var adventureBefore=AdventureProgress();
             long experienceBefore=(long)f.Query("SELECT experience FROM characters WHERE id=$p0",id)[0][0];
             peer.Travel(10,0,474,234,38,1,bottom:true);
+            Meet(peer,2670);
+            peer.Send(31,[31,0,0x6F,0x0A]);peer.Expect(1,31,[1,0x6F,0x0A,1,0,0,0,0]);
+            QuestLifecycleTcpTests.DrainNotifications(peer);
+            peer.Send(33,[33,0,0x6F,0x0A,0,0]);peer.Expect(1,33,[0,19,0]);peer.Barrier();
             peer.Travel(10,1,450,234,10,0);
             peer.Travel(10,4,position.X,position.Y,10,1);
+            Meet(peer,2671,accepted:true);
             peer.Send(31,[31,0,0x70,0x0A]);
             peer.Expect(0,1233,[0]);
             That(peer.Expect(0,1234).Body.Length>=10,"已在道场首次接取时，ACK31前也装载独立技能双树");
@@ -179,14 +186,26 @@ internal static class PvpTrainingTcpTests
             That((long)f.Query("SELECT experience FROM characters WHERE id=$p0",id)[0][0]>experienceBefore &&
                 (adventureAfter.Level>adventureBefore.Level || adventureAfter.Level==adventureBefore.Level && adventureAfter.Experience>adventureBefore.Experience),
                 "普通训练原经验仍正常增加角色与账号冒险团，不受专用角色隔离误伤");
+            ordinarySkills=OrdinarySkills();
+            peer.Send(1268,[1]);var copied=SkillPacketsTests.DecodeInitialized(peer.Expect(0,19).Body);peer.Barrier();
+            That(copied[0].Skills.Any(skill=>skill.Id==5 && skill.Level>1) && ordinarySkills==OrdinarySkills() &&
+                f.Query("SELECT json_extract(state_json,'$.CopyChoice') FROM character_pvp_training_skills WHERE character_id=$p0",id) is [[1L]],
+                "1268选择1只复制训练活动页到独立正式PK技能，不污染普通双树");
             before=f.Snapshot();peer.Send(1268,[1]);peer.Send(1268,[2]);peer.Send(1269,[]);peer.Barrier();
-            That(before==f.Snapshot(),"未支持的复制选择不覆盖普通技能、不假复制或重新领秘籍");
+            That(before==f.Snapshot(),"复制决定持久化后重放或取消不再覆盖技能，也不重新给秘籍");
+            peer.Travel(10,1,550,330,10,4);
+            peer.Send(29,[0,1,5,0,0,1,0]);var arenaLearned=SkillPacketsTests.DecodeSuccess(peer.Expect(1,29).Body);
+            peer.Barrier();
+            That(arenaLearned.Skills.Single().Level==copied[0].Skills.Single(skill=>skill.Id==5).Level+1 &&
+                ordinarySkills==OrdinarySkills(),"离开道场后普通CMD29继续写正式PK域，普通方案保持完整");
             peer.Send(3,[0]);peer.Expect(1,3,[1]);peer.Closed();
         }
-        using(var peer=Open(f,account,gamePort:endpoints[40],channelNumber:40))
+        using(var peer=Open(f,account,gamePort:endpoints[pvp],channelNumber:pvp))
         {
             peer.Select(prepared:true);
-            foreach(ushort questId in new ushort[]{2672,2673,2674})
+            That(SkillPacketsTests.DecodeInitialized(peer.SkillInfo)[0].Skills.Single(skill=>skill.Id==5).Level>1,
+                "决斗频道重登恢复独立正式PK技能");
+            foreach(ushort questId in new ushort[]{2670,2671,2672,2673,2674})
             {
                 That(peer.CompletedQuestHistory[questId+4]==1,"重登保留训练完成位");
                 peer.Send(34,[34,0,(byte)(questId&255),(byte)(questId>>8),255,255,1,0,255,255]);
@@ -195,7 +214,57 @@ internal static class PvpTrainingTcpTests
             That(f.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE quest_id IN(2672,2673,2674)") is [[3L]],
                 "重登重发不重复领取三项训练奖励");
         }
+        using(var peer=Open(f,account))
+        {
+            peer.Select(prepared:true);
+            That(SkillPacketsTests.DecodeInitialized(peer.SkillInfo)[0].Skills.Single(skill=>skill.Id==5).Level==1,
+                "普通频道重登仍回放普通方案，不把决斗复制反写刷图技能");
+        }
+        const string cancelAccount="training-cancel";
+        ushort cancelId;
+        using(var owner=new AccountOwners().Acquire(cancelAccount,()=>{}))
+        {
+            var seed=CharacterCreation.Prepare("CancelTCP",resources.Characters.Get(0),position,resources.Towns.InitialReturn,resources.Learning.Get);
+            var created=repo.Create(owner,seed with {Level=60,AcceptedStoryLevel=60,CompletedQuests=[2674],
+                InitialLearning=SkillPointLedger.Synchronize(0,0,60,seed.InitialLearning with
+                    {Experience=growth.GetLevelStartExperience(60)},resources.Learning)});
+            cancelId=created.Id;
+            var profile=new PvpTrainingSkills(created.Learning,2674,Guid.NewGuid()) {Arena=created.Learning};
+            f.Sql("INSERT INTO character_pvp_training_skills VALUES($p0,$p1,$p2,$p3)",created.Id,
+                System.Text.Json.JsonSerializer.Serialize(profile),Guid.NewGuid().ToString("N"),created.Revision);
+        }
+        using(var peer=Open(f,cancelAccount,gamePort:endpoints[pvp],channelNumber:pvp))
+        {
+            peer.Select(prepared:true);peer.Barrier();
+            var before=SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
+            peer.Send(1268,[2]);var cancelled=SkillPacketsTests.DecodeInitialized(peer.Expect(0,19).Body);peer.Barrier();
+            That(System.Text.Json.JsonSerializer.Serialize(before)==System.Text.Json.JsonSerializer.Serialize(cancelled) &&
+                f.Query("SELECT json_extract(state_json,'$.CopyChoice') FROM character_pvp_training_skills WHERE character_id=$p0",cancelId) is [[2L]],
+                "1268取消保存真实决定，完整回放仍保留原正式PK双方案");
+            peer.Send(3,[0]);peer.Expect(1,3,[1]);peer.Closed();
+        }
+        using(var peer=Open(f,cancelAccount,gamePort:endpoints[pvp],channelNumber:pvp))
+        {
+            peer.Select(prepared:true);peer.Barrier();string before=f.Snapshot();
+            peer.Send(1268,[1]);peer.Barrier();
+            That(before==f.Snapshot() && f.Query("SELECT json_extract(state_json,'$.CopyChoice') FROM character_pvp_training_skills WHERE character_id=$p0",cancelId) is [[2L]],
+                "取消后重登及迟到确认不覆盖决定或角色版本");
+        }
         await f.StopAsync();
+        static void Meet(TcpPeer peer,ushort quest,bool accepted=false)
+        {
+            byte lo=(byte)quest,hi=(byte)(quest>>8);
+            if(!accepted)
+            {
+                peer.Send(31,[31,0,lo,hi]);peer.Expect(1,31,[1,lo,hi,1,0,0,0,0]);
+                QuestLifecycleTcpTests.DrainNotifications(peer);
+            }
+            peer.Send(33,[33,0,lo,hi,0,0]);peer.Expect(1,33,[1,lo,hi,0,0,0,0]);peer.Barrier();
+            peer.Send(34,[34,0,lo,hi,255,255,1,0,255,255]);
+            var reward=peer.Expect(1,34).Body;
+            That(reward[0]==1 && U16(reward,1)==quest && reward[3]==4,"真实NPC会面按本版type4交付并开放下一环");
+            QuestLifecycleTcpTests.DrainNotifications(peer);
+        }
         long ManualCount()=>(long)f.Query("SELECT COALESCE(SUM(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=10158452",id)[0][0];
         (long Level,long Experience) AdventureProgress()
         {var row=f.Query("SELECT level,experience FROM account_adventures WHERE account=$p0",account)[0];return ((long)row[0],(long)row[1]);}
@@ -204,10 +273,10 @@ internal static class PvpTrainingTcpTests
             f.Query("SELECT context,slot,skill_id,level FROM character_skill_bindings WHERE character_id=$p0 ORDER BY context,slot",id)});
         void CheckRoom(byte[] body,bool removed,byte mode=10)
         {
-            That(body.Length==39 && U16(body,0)==1 && U16(body,2)==id && body[4]==0 && body[5]==0 &&
-                body[6]==(removed?255:0) && U16(body,7)==0 && body[9]==mode && body[34]==0 && U32(body,35)==0,
-                "NOTI41固定八席完整包、队长索引与地图序号，不填MAP ID或缺省附加数据");
-            for(int seat=0;seat<8;seat++) That(body[10+seat*3]==0 && U16(body,11+seat*3)==(!removed && seat==0?id:ushort.MaxValue),
+            That(body.Length==43 && U16(body,0)==1 && U16(body,2)==id && body[4]==0 && U32(body,5)==0 && body[9]==0 &&
+                body[10]==(removed?255:0) && U16(body,11)==0 && body[13]==mode && body[38]==0 && U32(body,39)==0,
+                "NOTI41包含默认标题长度、固定八席、队长索引与地图序号");
+            for(int seat=0;seat<8;seat++) That(body[14+seat*3]==0 && U16(body,15+seat*3)==(!removed && seat==0?id:ushort.MaxValue),
                 "仅当前角色占席；空席严格用客户端FFFF哨兵");
         }
         static void Round(TcpPeer peer,byte action,int opponent,byte round,bool won)=>peer.Send(1287,Build(w=>

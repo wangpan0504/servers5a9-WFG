@@ -46,7 +46,7 @@ internal sealed class CharacterProgressReset(CharacterCatalog characters, SkillL
                 {
                     var resource = skills.Get(before.Job, skill.Id);
                     if (resource.FixedLevel is not null || skill.Level <= free.GetValueOrDefault(skill.Id)) continue;
-                    int required = resource.GetOrdinaryNextRequiredCharacterLevel(skill.Level - 1);
+                    int required = resource.GetNextRequiredCharacterLevel(skill.Level - 1, before.GrowType);
                     // 与学习门槛一致：达人契约减五对 feature TP 技能同样生效。
                     if (downgrade && level + contractLevels < required)
                         throw new InvalidDataException($"目标等级{level}低于已学技能{skill.Id} Lv{skill.Level}的需求等级{required}；请先洗点后再降级，或用 grow 重置技能树");

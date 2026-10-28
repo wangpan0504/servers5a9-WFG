@@ -6,16 +6,19 @@ namespace DfoServer.Game.Characters;
 
 internal enum ExperienceEvent { Kill, Clear, Quest }
 internal sealed record ExperienceBonusRate(ExperienceBonusSource Source, decimal Percent);
+internal sealed record GuildExperienceEntitlement(uint GuildId, long JoinedAtUnix, int Percent, long ExpiresUnix);
 // 只保存某次奖励已经冻结的分项；不持有第二份在线资格，也不负责开通尚未接入的系统。
 internal sealed record ExperienceBonuses(uint Ordinary, ImmutableArray<ExperienceBonusPart> Parts)
 {
+    public GuildExperienceEntitlement? GuildEntitlement { get; init; }
     public uint Extra => checked((uint)Parts.Aggregate(0UL, (total, part) => total + part.Amount));
     public uint Total => checked(Ordinary + Extra);
     public uint Amount(ExperienceBonusSource source) => checked((uint)Parts.Where(part => part.Source == source)
         .Aggregate(0UL, (total, part) => total + part.Amount));
 
     public ExperienceBonuses Scale(ushort multiplier) => new(checked(Ordinary * multiplier),
-        Parts.Select(part => part with { Amount = checked(part.Amount * multiplier) }).ToImmutableArray());
+        Parts.Select(part => part with { Amount = checked(part.Amount * multiplier) }).ToImmutableArray())
+        { GuildEntitlement = GuildEntitlement };
 
     // 封顶只分配实际到账，先基础后按固定来源顺序分配；所有显示分量之和不超过本次实际经验。
     public ExperienceBonuses Applied(uint gained)
@@ -84,6 +87,7 @@ internal sealed record ExperienceBonusContext
     public ImmutableArray<ExperienceBonusRate> Rates { get; init; } = [];
     public int PartyMembers { get; init; } = 1;
     public bool PartyHasAvatar { get; init; }
+    public GuildExperienceEntitlement? GuildEntitlement { get; init; }
 }
 
 // 后续组队、公会、冒险团及活动owner在原奖励规划时提供不可变资格快照。

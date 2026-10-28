@@ -25,22 +25,26 @@ internal static partial class TagEvildomTcpTests
         Character primary, standby;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
-            Character Create(string name, byte level, bool equipped = false)
+            Character Create(string name, byte level, bool equipped = false, bool secondTree = false)
             {
                 var plan = CharacterCreation.Prepare(name, profile, resources.Towns.Room, resources.Towns.InitialReturn, resources.Learning.Get);
                 var learning = SkillPointLedger.Synchronize(0, 0, level, plan.InitialLearning with { BonusSp = 0, BonusTp = 0 }, resources.Learning);
-                if (equipped)
+                if (secondTree)
                 {
                     var changed = SkillLearning.Plan(0, 0, level, learning, new(1, 0, [new(5, false, 1)]), resources.Learning);
                     That(changed.Success, "备用第二树按真实资源学习并与第一树分离");
                     learning = changed.State! with { SelectedTree = 1 };
                 }
-                return repository.Create(owner, plan with { Level = level, InitialLearning = learning,
-                    Inventory = new(equipped ? [new(0, new(InventoryListType.Equipment, template.EquipmentSlot), equipment)] : []) });
+                // 纯金币修理要求角色钱包够付全套装修理价，夹具按线上角色带真实金币。
+                var inventory = equipped
+                    ? plan.Inventory with { Gold = 10_000_000u, Items = [new(0, new(InventoryListType.Equipment, template.EquipmentSlot), equipment)] }
+                    : plan.Inventory with { Gold = 10_000_000u };
+                return repository.Create(owner, plan with { Level = level, InitialLearning = learning, Inventory = inventory });
             }
-            primary = Create("TagFirst", 95);
+            // 主角也带一件真实受损装备：线上作废已装双Actor的是进场前修理扣金币，夹具必须能复现这条路径。
+            primary = Create("TagFirst", 95, equipped: true);
             Create("TagLow", 94);
-            standby = Create("TagSecond", 95, true);
+            standby = Create("TagSecond", 95, equipped: true, secondTree: true);
             Create("TagTooLow", 93);
         }
         ResourceRoutes(resources, primary, standby);
@@ -77,6 +81,19 @@ internal static partial class TagEvildomTcpTests
             ExitRoom(peer, republish: true);
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", primary.Id) is [[62L, 0L]],
                 "真实53房间出口通过当前PVF准入和gate落中央竞技场62/0，并在新位置重发双角色资料");
+            // 修理只改主角自己的装备耐久与角色金币，账号钱包版本不变，已装的双Actor仍然有效；线上2026-10-28
+            // 02:54:54修理后两次入场都被拒绝，一次修理不能变成重登要求。
+            long gold = (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0", primary.Id)[0][0]!;
+            // 第三字段是源券槽位：-1 表示纯金币修理全部穿戴，不能拿装备槽号当券槽。
+            // 纯金币修理只回23，并按提交后的耐久下发差量；券容器不会整列重发，所以这里用屏障批量收通知。
+            peer.Send(23, Build(w => { w.Write((byte)0); w.Write((short)-1); w.Write((short)-1); w.Write((ushort)0); w.Write((byte)0); }));
+            peer.Expect(1, 23);
+            var repairNotices = PartyDungeonTcpTests.Drain(peer);
+            That(repairNotices.Any(row => row.Kind == 0 && row.Opcode == 14), "修理后按提交耐久下发差量");
+            That(fixture.Query("SELECT gold FROM characters WHERE id=$p0", primary.Id) is [[long repairedGold]] && repairedGold < gold,
+                "夹具真实扣金币修理主角装备");
+            That(repairNotices.All(row => !(row.Kind == 0 && row.Opcode is 1393 or 1394)),
+                "一次金币修理不作废已装双Actor，入场前不重发1393/1394");
             string beforeEntry = Economy(fixture);
             foreach (uint dungeon in new uint[] { 9608, 400000095 })
             {

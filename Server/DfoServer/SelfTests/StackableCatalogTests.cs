@@ -16,8 +16,15 @@ internal static class StackableCatalogTests
     {
         int checks = Count;
         var catalog = StackableCatalog.Load(pvf);
-        That(catalog.TemplateCount == 82227 && catalog.TemplateIds.Count == 82227 && catalog.TemplateIds[0] == 0,
-            "匹配索引全82227项包含金币ID0");
+        int[] beastIds = [10303237,10303238,10303240,10303241,10303242,10303243,10303244,10303245,
+            10303246,10303247,10303495,10303496,10303497,10303498,10303752,10305190,10305191];
+        That(catalog.TemplateCount == 82244 && catalog.TemplateIds.Count == 82244 && catalog.TemplateIds[0] == 0 &&
+            catalog.TemplateIds.Distinct().Count() == 82244 &&
+            catalog.TemplateIds.Count(id => !beastIds.Contains(id)) == 82227,
+            "匹配索引保留原82227项及金币ID0，再补登17项魔兽道具，无重复ID");
+        foreach (int id in beastIds)
+            That(catalog.Get(id).ScriptPath == $"stackable/{id / 1000 * 1000 + 1}/{id}.stk",
+                "魔兽道具索引绑定原有真实堆叠脚本：" + id);
         StackableFile gold = catalog.Get(0);
         That(gold.ScriptPath == "stackable/gold.stk" && gold.TypeDeclaration!.Label == "[waste]" &&
             gold.TypeDeclaration.Parameters.SequenceEqual(new[] { 0 }) && gold.DeclaredMinimumLevel == 1 &&
@@ -52,7 +59,7 @@ internal static class StackableCatalogTests
             }
         }
         StackableActionTests.Survey(Definitions());
-        That(true, "全部82227项真实脚本可读且ID路径保持对应");
+        That(true, "全部82244项真实脚本可读且ID路径保持对应");
         Reject<KeyNotFoundException>(() => catalog.Get(-1));
         Reject<KeyNotFoundException>(() => catalog.Get(int.MaxValue));
 

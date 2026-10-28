@@ -15,7 +15,7 @@ internal static class PvpPrivateCharacterTcpTests
         var repo=new CharacterRepository(f.Database,resources.Quests);
         using(var owner=new AccountOwners().Acquire(account,()=>{}))
             repo.Create(owner,new("Qualified",resources.Towns.Room,resources.Towns.InitialReturn){Level=85});
-        await f.StartAsync();var endpoints=ChannelTcpTests.Endpoints(f);
+        await f.StartAsync();var endpoints=ChannelTcpTests.Endpoints(f);byte pvp=ChannelTcpTests.PvpChannelNumber(f);
         ushort created;
         using(var peer=Open(f,account))
         {
@@ -43,7 +43,7 @@ internal static class PvpPrivateCharacterTcpTests
             peer.Send(4,[1,0]);peer.Expect(1,4,[0,96,0]);
             peer.Send(3,[0]);peer.Expect(1,3,[1]);peer.Closed();
         }
-        using(var peer=Open(f,account,gamePort:endpoints[40],channelNumber:40))
+        using(var peer=Open(f,account,gamePort:endpoints[pvp],channelNumber:pvp))
         {
             peer.Select(1,room:false);peer.Barrier();
             That(f.Query("SELECT town FROM characters WHERE id=$p0",created) is [[10L]],"专用角色在决斗频道真实选角，落点在原决斗地区");
@@ -107,6 +107,13 @@ internal static class PvpPrivateCharacterTcpTests
             string completed=f.Snapshot();peer.Send(34,[34,0,0x77,0x0A,255,255,1,0,255,255]);peer.Expect(1,34,[0,19,0]);peer.Barrier();
             That(completed==f.Snapshot(),"专用终末重复领奖不改奖励与完成状态");
 
+        }
+        using(var peer=Open(f,account,gamePort:endpoints[47],channelNumber:47))
+        {
+            That(peer.LoginEndpoint[3]==8,"无双频道LOGIN保持本版类型8");
+            peer.Select(1,room:false);peer.Barrier();
+            That(peer.Id==created && f.Query("SELECT town FROM characters WHERE id=$p0",created) is [[10L]],
+                "专用角色从传统转入无双仍沿用原身份及决斗地区");
         }
         await f.StopAsync();
         var privateCatalog=DfoServer.GameWorld.Characters.PvpPrivateCharacterCatalog.Load(resources.Archive);

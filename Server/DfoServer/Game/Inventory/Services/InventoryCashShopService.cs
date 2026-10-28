@@ -10,6 +10,7 @@ namespace DfoServer.Game.Inventory.Services;
 // 商品、扣点券及资源明确声明的契约或实物奖励在同一个库存计划提交。
 internal sealed partial class InventoryCashShopService(ItemCatalog catalog, CashShopCatalog shop, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CargoCatalog cargo,
     GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null, DevilContractService? devil = null,
+    DfoServer.GameWorld.Guilds.GuildHongbaoCatalog? hongbao = null,
     ServerItemUsageCatalog? serverItems = null)
 {
     readonly GameDebugSettings debug = debugSettings ?? new();
@@ -43,7 +44,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         var before = character.Inventory;
         var paid = before;
         ushort avatarExpansion = before.AvatarExpansion;
-        long total = 0, gold = 0, winPoints = 0;
+        long total = 0, gold = 0, winPoints = 0, cashOnly = 0;
         long? deadline = null;
         InventoryItem? nameTag = null;
         ushort characterSlots = before.AccountWallet.CharacterSlotCapacity;
@@ -97,6 +98,14 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 total += product.CeraPrice;
                 var template = !devilProduct && CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
                     contracts?.Recognizes(product.ItemId) != true ? catalog.Get(product.ItemId) : null;
+                // 本版红包购买确认只核真实点券；不能使用普通商品的代币券支付顺序。
+                if (template is not null && catalog.StackableAction(product.ItemId) is { Label: "[guild hongbao]" })
+                {
+                    if (hongbao is null || !hongbao.ByCommodity.TryGetValue(product.CommodityId, out var definition) ||
+                        definition.ItemId != product.ItemId || definition.Cera != product.CeraPrice || product.Count != 1 || character.Guild is not { Id: > 0 })
+                        return InventoryResult.Reject(17);
+                    cashOnly += product.CeraPrice;
+                }
                 if (catalog.IsSkillTreeExpansion(product.ItemId))
                 {
                     if (unlockSkillTree || product.Count != 1 || !character.Learning.Initialized ||
@@ -187,10 +196,12 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             }
         }
 
-        // 商城结算：客户端只上报「支付方式 0 = 点券」，代币券/欢乐代币券能不能花由服务端决定。
-        // 参考同族服务端口径，按官方瀑布语义依次扣 欢乐代币券 → 代币券 → 点券，扣到够为止；
-        // 只扣点券会让界面里代币券有余额、按钮可点的玩家买不成。
-        long paidCera = 0;
+        // 混合购物车先预留红包必须使用的真实点券，剩余普通商品再依次使用三种余额。
+        long cera = CurrencyWallet.Get(paid, CurrencyKind.Cera);
+        if (cashOnly > 0 && cashOnly > hongbao!.DailyCeraLimit) return InventoryResult.Reject(17);
+        if (cera < cashOnly) return InventoryResult.Reject(10);
+        if (cashOnly > 0) paid = CurrencyWallet.Set(paid, CurrencyKind.Cera, cera - cashOnly);
+        long paidCera = cashOnly;
         foreach (var kind in new[] { CurrencyKind.HappyTokenCera, CurrencyKind.TokenCera, CurrencyKind.Cera })
         {
             long balance = CurrencyWallet.Get(paid, kind);
@@ -250,7 +261,11 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             }
         receipt = new(products.ToImmutableArray(), bonuses);
         return new(true, 0, new(before, after with { CargoCapacity = cargoCapacity }, "cash_shop_buy", new(character, deadline), overflow)
-        { UnlockSkillTree = unlockSkillTree });
+        {
+            UnlockSkillTree = unlockSkillTree,
+            GuildHongbaoPurchase = cashOnly == 0 ? null : new(character.Guild!.Id, checked((int)cashOnly),
+                hongbao!.MinimumMembers, hongbao.DailyCeraLimit, DfoServer.Game.Guild.GuildAttendanceDay.Start(now.ToUnixTimeSeconds()))
+        });
 
         void Deadline(long? value)
         {

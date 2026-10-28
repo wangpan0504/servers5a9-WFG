@@ -16,6 +16,9 @@ internal static class ChannelAreaLanding
     // 魔界大战频道类型：ARAD 频道类型名表 03EFBF1D 写入 CHANNEL_EVILDOM_WAR = 0x36（同表 CHANNEL_EVILDOM_WAR_CHALLENGE = 0x40）。
     internal const int EvildomWarType = 0x36;
 
+    // 01EB5760（频道虚表 +0x30）只匹配 CHANNEL_BEAST 类型 0x28，01EB5AF0 也比较该谓词。
+    internal const int BeastType = 0x28;
+
     // 普雷·伊希斯攻坚战频道类型：ARAD 频道类型名表 03EFBE19 写入 CHANNEL_PREY_RAID = 0x32。页签分类 01EC58C6 经 vt+0x28（028FA400 含 0x32）放进团队页签；
     // 团队列表 017128D0 的 0x32 分支要（事件 414 在 EVENT_INFO 集合 或 当前频道 type 0x11/0x15）且任务 8935 完成且 Lv≥95 才列出。
     internal const int PreyRaidType = 0x32;
@@ -61,12 +64,12 @@ internal static class ChannelAreaLanding
         return Place(towns, channel, level, completed);
     }
 
-    // 已知旧频道类型时直接按01EB5AF0已证的团队页、魔界大战与再战魔界谓词比较。
+    // 已知旧频道类型时直接按01EB5AF0已证的团队页、魔兽、魔界大战与再战魔界谓词比较。
     internal static bool SameSnapshotPredicates(int previousType, int nextType) => SnapshotPredicates(previousType) == SnapshotPredicates(nextType);
 
-    // ARAD 01EB5AF0 逐项比较新旧频道的类型谓词（读频道脚本类型 +8，不读 ACK LOGIN 写入的 +0x1010）。区分这里各频道的是三项：
-    // vt+0x28（01EB5720 → 028FA400，type ∈ {0x17,0x19,0x20,0x2D,0x32,0x3E,0x3F}，即团队页签类型）、vt+0x4C（type==0x36）及vt+0x38（type==0x35）。
-    // 三项都一致时客户端记录换频道快照并按快照留在原城镇；任一项不同则不记快照，ACK4 按服务端城镇入城。
+    // ARAD 01EB5AF0 逐项比较新旧频道的类型谓词（读频道脚本类型 +8，不读 ACK LOGIN 写入的 +0x1010）。区分这里各频道的是四项：
+    // vt+0x28（01EB5720 → 028FA400，type ∈ {0x17,0x19,0x20,0x2D,0x32,0x3E,0x3F}，即团队页签类型）、vt+0x30（type==0x28）、vt+0x4C（type==0x36）及vt+0x38（type==0x35）。
+    // 四项都一致时客户端记录换频道快照并按快照留在原城镇；任一项不同则不记快照，ACK4 按服务端城镇入城。
     // 因此 普通(22)↔安徒恩 0x17/卢克 0x20/超时空之战 0x2D/普雷 0x32 互换不记快照，团队页签类型之间（如 0x20↔0x2D、0x20↔0x32）互换保留快照，
     // 魔界大战 0x36 与其余任何类型互换都不记快照。
     static readonly int[] RaidTabTypes = [0x17, 0x19, 0x20, FiendwarType, PreyRaidType, 0x3E, 0x3F];
@@ -74,12 +77,12 @@ internal static class ChannelAreaLanding
     // 有落点城镇的谓词频道；服务端不保存旧频道，按存档城镇推断旧频道类型。
     static readonly (int Type, string Group)[] PredicateChannels =
         [(0x17, "[raid]"), (0x20, "[luke_raid]"), (FiendwarType, "[fiendwar]"), (EvildomWarType, "[evildom_war]"), (PreyRaidType, "[prey]"),
-         (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]"), (53, "[evildom_gathering]"), (39, "[tag_tournament]")];
+         (DnfaosFreeType, "[dnfaos_free]"), (DnfaosRankType, "[dnfaos_rank]"), (53, "[evildom_gathering]"), (BeastType, "[beast]"), (39, "[tag_tournament]")];
 
     // 01EB5BCD..5C0B另比较vt+38，01EB5780正是type53；跨入/离开再战不能复用旧城镇快照。
-    // 01EB5790比较type39，虚表054946E0对应+3C；01EB5AF0同样比较新旧值。
-    static (bool RaidTab, bool Evildom, bool TagEvildom, bool ImperialArena) SnapshotPredicates(int type) =>
-        (RaidTabTypes.Contains(type), type == EvildomWarType, type == 53, type == 39);
+    // 01EB5760（vt+30）比较type40魔兽；01EB5790比较type39帝国竞技场，虚表054946E0对应+3C；01EB5AF0同样比较新旧值。
+    static (bool RaidTab, bool Beast, bool Evildom, bool TagEvildom, bool ImperialArena) SnapshotPredicates(int type) =>
+        (RaidTabTypes.Contains(type), type == BeastType, type == EvildomWarType, type == 53, type == 39);
 
     public static Location? Place(TownCatalog towns, ChannelEntry channel, int level, IReadOnlySet<int> completed) =>
         Decide(towns, channel, level, completed).Spot;
@@ -90,6 +93,8 @@ internal static class ChannelAreaLanding
             return new(null, "no-proven-town");
         // etc/enterablespecialchannel.etc 按频道键写入场任务；只对与分组同名的键生效（当前 fiendwar=8672、prey=8935）。
         if (towns.SpecialChannelQuests.TryGetValue(GroupName(channel.Group), out int channelQuest) && !completed.Contains(channelQuest))
+            return new(null, "channel-quest-required");
+        if (channel.Type == BeastType && !completed.Contains(5927))
             return new(null, "channel-quest-required");
         return DecideArea(towns, town, area, level, completed);
     }
@@ -114,7 +119,24 @@ internal static class ChannelAreaLanding
         {
             if (towns.Entrance(new(link.Town, link.Area, 0, 0), probe, completed) is { } door && towns.IsPosition(door, completed))
                 return new(door, "neighbor-door");
+            // 邻居是房间式区域时，它对回的门常是零尺寸标记（67/1 回 67/0 的 581,138 不在门矩形 581,139 内），
+            // Entrance 的“标记优先”给不出可站落点，循环会越到更远的邻居而落错位置。只在这一条明确的房间邻居上
+            // 改取本区一侧门矩形中心；TownCatalog.Entrance 与普通地图的门口判定不受影响（Issue #833）。
+            if (towns.IsRoom(new(link.Town, link.Area, 0, 0), completed))
+            {
+                int x = link.Gate.X + link.Gate.Width / 2, y = link.Gate.Y + link.Gate.Height / 2;
+                if (x is >= 0 and <= ushort.MaxValue && y is >= 0 and <= ushort.MaxValue)
+                {
+                    var center = new Location(town, area, (ushort)x, (ushort)y);
+                    if (towns.IsPosition(center, completed))
+                        return new(center, "room-door-center");
+                }
+            }
         }
+        // 频道专属区域可能既没有 [gate]，也没有通往共享房间的门：魔兽等待区 51/2 的选图入口是地图里的
+        // -1/-1 选图区域，没有任何 [gate]。此时按地图首块可走矩形中心落点（与玩家走门进入后的站位一致）。
+        if (towns.Spawn(probe, completed) is { } spawn)
+            return new(spawn, "map-spawn");
         return new(null, "no-standable-door");
     }
 
@@ -160,7 +182,7 @@ internal static class ChannelAreaLanding
         var name = GroupName(group);
         if (type == 23)
             return (19, 0);
-        if (type == 24)
+        if (type is 8 or 24)
             return (10, 0);
         if (type == 18)
             return (15, 0);
@@ -173,6 +195,12 @@ internal static class ChannelAreaLanding
         // 当前PVF town62 Stadium.twn 区域0及map的enter tagdungeon入口；等级/任务继续由Decide校验。
         if (type == 53)
             return (62, 0);
+        // 魔兽城镇51（中央公园）只有区域2声明 `[dungeon gate]` 46：魔兽世界地图46（worldmap/beast_metrocenter.wdm）
+        // 的五个气球5335–5339与难度开关都挂在这张图上，区域2的 centralpark_waiting.map 里另有 -1/-1 选图区域。
+        // 区域1是中央公园主广场，区域0是从赛丽亚房间进来的门厅（[gate] 474 234）；落 0/1 开图只有底图没有气球，
+        // 用户 2026-10-28 实测「走进中央公园，一张地图都没有」。
+        if (type == BeastType)
+            return (51, 2);
         // ARAD 03EFBB3E/43绑定CHANNEL_DNF_TAG_TOURNAMENT=39；正式PVF城镇48及贝雅特丽齐商店。
         if (type == 39)
             return (48, 0);
@@ -202,14 +230,18 @@ internal static class ChannelAreaLanding
             "fiendwar" => (115, 0),
             // 魔界大战：任务 talisman_00「[护石]未知的石头」写“该任务只能在魔界大战频道完成”，交任务 NPC 100000149 莫妮卡只摆在
             // town 67 TheEvildomWar_P.twn（艾尔丁纪念馆）区域 1；67 没有其他城镇或传送门进入，三个区域 need level 95、无任务。
-            // 区域 0 的 [gate] 474 234 是独立标签，TownCatalog 不读，落点由通往 67/1 的门口反推。
-            "evildom_war" => (67, 0),
+            // 区域 0 的 [gate] 474 234 是独立标签，TownCatalog 不读；67/0 又导入 gate_seria.map 是房间式区域，
+            // 落进去客户端还要再走一次门才进广场（Issue #833）。因此落点改为 67/1，由 Decide 取 67/0 一侧 656,154 的门口中心。
+            "evildom_war" => (67, 1),
             // 普雷·伊希斯攻坚战：etc/raid/prey/prey.etc [WAITING ROOM] 59 2；town 59 Prey_raid.twn（灰色墓地）区域 0..5 均 need level 95，
             // 区域 0 为 Gate_Prey.map（与 67/0 同为门口图）。59/0 与 59/2 均经 PreyChannelTests 资源测试可站，按用户决定取 59/0。
             "prey" => (59, 0),
-            // 五陵：town.lst 117 chn_Teaching_xian.twn 的 [name] 为`五陵`，与名称键 chn_channel_info_055=`五陵` 同名；区域 0 chn_Gate_xian.map
-            // 带 [gate] 474 234（need level 无），其余区域 need level 17/95。117 区域 4 连入遗迹城镇，不是频道专属城镇。
-            "xian_village" => (117, 0),
+            // 五陵：town.lst 117 chn_Teaching_xian.twn 的 [name] 为`五陵`，与名称键 chn_channel_info_055=`五陵` 同名。
+            // 区域 0 的 [gate] 474 234 落在 chn_Gate_xian.map——它是 Common/Gate_Seria.map 桩图，唯一出门通往 1/1（银色村庄大街），
+            // 进不了 117 其他区域，所以不能当落点。区域 1 chn_fiendwar_xian_start.map（need level 17）是五陵入口图：
+            // [town movable area] 里 1045 163 50 100 38 1 回赛丽亚房间、340 341 100 50 117 2 进五陵主城（NPC 云珂等在 117/2）。
+            // ui/warpgate/warpgate.xui 的五陵入口同样写 townIndex 117 areaIndex 1（clearQuest 8927）。117 区域 4 连入遗迹城镇，不是频道专属城镇。
+            "xian_village" => (117, 1),
             // 勇士对决：town.lst 119 dnfaos.twn；区域 0 的 Gate_dnfaos.map 在 Script.pvf 里不存在（Decide 报 admission-map-resource-missing），
             // 改取区域 1（need level 95），经 Decide 得邻门落点 270,148。
             "dnfaos_free" or "dnfaos_rank" => (119, 1),

@@ -372,7 +372,8 @@ internal static class QuestCoverage
     // 说明实际依赖；报告不解锁入口，也不把普通客户端通知充当这些玩法的完成事实。
     static string TargetRestriction(StoryQuest quest) => quest.Condition switch
     {
-        "[pvp match]" or "[pvp quest]" or "[pvp rank]" => "目标依赖决斗比赛、结果或段位状态；决斗领域尚未接入",
+        "[pvp match]" or "[pvp quest]" => "目标尚未接入本版比赛任务的条件消费者",
+        "[pvp rank]" => "段位目标仅支持单一非负段位整数且无子类型",
         "[raid phase clear]" => "目标依赖团本阶段、队伍和参与身份；团本领域尚未接入",
         "[custom multi condition]" when quest.SubType == 1 => "目标依赖特殊塔场景及多条件事件；对应塔流程尚未接入",
         "[custom multi condition]" when quest.Path.Contains("/pvp/",StringComparison.Ordinal) => "目标依赖决斗训练场多条件事件；对应场景及条件通道尚未接入",

@@ -19,6 +19,21 @@ public static class ServerApplication
 {
     public static async Task<int> RunAsync(string[] args)
     {
+        // 非 Serve 命令没有 ServerLog，内部兜底只覆盖起服路径；这里再兜一层，把未处理异常
+        // 转成退出码，避免 CLR 交给 Windows 错误报告弹出“应用程序错误”对话框。
+        try
+        {
+            return await RunCommandAsync(args);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"Server failed: {error}");
+            return 1;
+        }
+    }
+
+    static async Task<int> RunCommandAsync(string[] args)
+    {
         ServerCommand command;
         try
         {
@@ -189,8 +204,10 @@ public static class ServerApplication
             var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels));
             var adventureCatalog = Load("Adventure resources", () => new DfoServer.GameWorld.Adventure.AdventureCatalog(pvf));
             var growthCatalog = Load("Character growth resources", () => DfoServer.GameWorld.Characters.CharacterGrowthCatalog.Load(pvf, learning));
-            var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests, adventureCatalog, growthCatalog));
-            log?.Write("startup", new { Stage = "Database schema", State = "complete", Version = SqliteMigrations.CurrentVersion });
+            var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests,
+                adventureCatalog, growthCatalog, guildDungeonMileage: itemResources.GuildContents.DungeonMileage));
+            log?.Write("startup", new { Stage = "Database schema", State = "complete", Version = SqliteMigrations.CurrentVersion,
+                Commit = ServerBuildInfo.ShortCommit });
             if (command.Kind == ServerCommandKind.PrepareBookCharacter)
             {
                 OfflineBookPreparation.Run(options, characters, towns, repository, command.Arguments);

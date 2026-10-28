@@ -1346,7 +1346,10 @@ internal static partial class FormalDungeonTcpTests
             int offset = 4 + ordinal * 131;
             uint ground = U32(death, offset), itemId = U32(death, offset + 6), value = U32(death, offset + 10);
             That(keys.Add(ground) && ground != peer.Id && (itemId != 0 || value > 0), "各物品/金币保留独立key与合法核心");
-            byte[] pickup = new byte[20]; BinaryPrimitives.WriteUInt32LittleEndian(pickup, ground);
+            // 首件按客户端实机18B短式(key:u16 + form=1)发送，其余沿用20B长式：两式必须进入同一条拾取路径。
+            byte[] pickup = ordinal == 0 && ground <= ushort.MaxValue ? new byte[18] : new byte[20];
+            if (pickup.Length == 18) { BinaryPrimitives.WriteUInt16LittleEndian(pickup, (ushort)ground); pickup[2] = 1; }
+            else BinaryPrimitives.WriteUInt32LittleEndian(pickup, ground);
             long beforeGold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]);
             peer.Send(43, pickup);
             byte[] got = peer.Expect(0, 39).Body;
@@ -1440,7 +1443,7 @@ internal static partial class FormalDungeonTcpTests
         peer.Travel(38, 2, 1085, 249, 38, 0, kind: 5);
     }
     internal static byte[] Enter(TcpPeer peer, ushort questId = 3145, uint dungeonId = 3, Action<byte[]>? information = null,
-        ushort? requestQuestId = null, bool? incompleteHellQuest = null)
+        ushort? requestQuestId = null, bool? incompleteHellQuest = null, Action? beforeMap = null)
     {
         peer.Send(31,[31,0,(byte)questId,(byte)(questId >> 8)]);
         byte[] accepted = peer.Expect(1,31).Body;
@@ -1452,6 +1455,8 @@ internal static partial class FormalDungeonTcpTests
         peer.Send(16, selection);
         var entered = peer.Expect(0, 28).Body;
         That(entered.Length == 36, "正式NOTI28完整36B"); information?.Invoke(entered);
+        // 房间私有通知必须排在原生29之前，调用方在此按顺序消费。
+        beforeMap?.Invoke();
         return peer.Expect(0, 29).Body;
     }
     static void VerifyDummyBossEntry(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth)

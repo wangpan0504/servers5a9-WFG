@@ -78,7 +78,10 @@ internal sealed class DungeonDropGenerationPlan
                 throw new NotSupportedException("掉落候选包含尚未支持的新实例期限声明");
             if (pools.Any(pool => pool.TotalWeight < 0 || pool.Entries.Any(entry =>
                 !DungeonDropCreation.Supports(entry.Template.Kind) || entry.Template.StackLimit <= 0)))
-                throw new InvalidDataException("掉落生成计划须有完整普通资源候选池");
+                throw new InvalidDataException("掉落生成计划须有完整普通资源候选池: " + resourceSource + "; " +
+                    string.Join(",", pools.SelectMany(pool => pool.Entries).Where(entry =>
+                        !DungeonDropCreation.Supports(entry.Template.Kind) || entry.Template.StackLimit <= 0)
+                        .Select(entry => $"item={entry.Template.Id},kind={entry.Template.Kind},stack={entry.Template.StackLimit}")));
             if (!trial.RarityPools.IsDefaultOrEmpty && (trial.RarityPools.Any(row => row.Threshold < 0) ||
                 !trial.RarityPools.Select(row => row.Threshold).SequenceEqual(trial.RarityPools.Select(row => row.Threshold).Order()) ||
                 trial.RarityPools[^1].Threshold < DungeonDropRatePlan.RarityDenominator))

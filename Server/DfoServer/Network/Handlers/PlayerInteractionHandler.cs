@@ -11,7 +11,7 @@ using DfoServer.Network.Projection;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessionDirectory online, ServerLog log, PartyDungeonService? partyDungeons = null,
-    RaidHandler? raids = null, TownProjection? town = null) : IGameCommandModule
+    RaidHandler? raids = null, TownProjection? town = null, DfoServer.Game.Pvp.PvpArenaService? arena = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -43,7 +43,8 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
             Operation = operation, settings.Capacity, settings.Dungeon, result.Error });
         if (!result.Accepted)
             await context.Reply(CmdPacketType.SET_PARTY_INFO, SocialPackets.Ack(result.Error), "party_information_rejected");
-        else parties.Publish(result.Notices);
+        else
+            parties.Publish(result.Notices);
         return CommandResult.Handled;
     }
     Task<CommandResult> EndpointAsync(GameConnectionContext context, Packet request)
@@ -52,6 +53,8 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
         context.Session.SetPartyEndpoint(endpoint);
         log.Write("party_endpoint", new { Connection = context.Id, endpoint.Nat, endpoint.Port, endpoint.Mtu });
         parties.Publish(parties.EndpointChanged(context.Session));
+        if (arena is not null && context.Session.CurrentPvpArena is not null)
+            arena.Publish(arena.EndpointChanged(context.Session));
         return Task.FromResult(CommandResult.Handled);
     }
     async Task<CommandResult> RequestAsync(GameConnectionContext context, Packet request)
@@ -116,6 +119,11 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
     {
         bool kick = request.Opcode == (ushort)CmdPacketType.WALKOUT_PARTY_MEMBER;
         if (request.Body.Length != (kick ? 1 : 0)) throw new InvalidDataException("离队请求长度错误");
+        if (!kick && context.Session.CurrentPvpArena is not null && arena is not null)
+        {
+            arena.Publish(arena.Leave(context.Session));
+            return CommandResult.Handled;
+        }
         // 普通频道取消快速组队发空13；仅无真实队伍的选图上下文按取消恢复，不能伪造实际离队成功。
         if (!kick && town is not null && await town.RestoreDungeonSelectionAsync(context, CmdPacketType.LEAVE_PARTY))
             return CommandResult.Handled;
@@ -145,6 +153,7 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
         }
         var result = parties.Leave(context.Session, kick ? request.Body[0] : null, context.BlocksTownActions);
         log.Write(result.Accepted ? "party_left" : "party_rejected", new { Connection = context.Id, request.Opcode, result.Error });
+        // 魔界大战开战记录绑定队伍快照与选角代次：退队后 CurrentParty 不再等于记录里的快照，开战自动失效。
         var replied = context.Reply((CmdPacketType)request.Opcode, SocialPackets.Ack(result.Error), "party_leave_result");
         parties.Publish(result.Notices);
         await replied;

@@ -43,6 +43,8 @@ internal static partial class DungeonGrowthRepositoryTests
                 ActiveMainQuests = [new(0, 3145, 1)]
             };
             var initial = repository.Create(owner, fixture);
+            RunBeastStageRewards(owner, fixture, growth, root);
+            RunGuildExperienceStorage(owner, fixture, growth, root);
             var hunt = QuestEligibilityTests.Quest(100) with { Condition = "[hunt enemy]", IntData = [3,-1,1,1,2] };
             string huntPath = Path.Combine(root,"hunt.db");
             var huntRepository = new CharacterRepository(huntPath,new QuestCatalog(new() { [100] = hunt }));
@@ -485,12 +487,13 @@ internal static partial class DungeonGrowthRepositoryTests
             }
     }
 
-    private static (SinglePlayerDungeonRun Run, FixtureAuthority Authority) CreateRun(Character character)
+    private static (SinglePlayerDungeonRun Run, FixtureAuthority Authority) CreateRun(Character character, bool beast = false)
     {
-        var map = new DungeonMap("boss", new(0, 0), 76126, "map/growth-fixture.map");
-        var maze = new DungeonMaze(0, 1, 1, "fixture-only", [map.Position], [map.Position], [map], []);
+        var map = new DungeonMap(beast ? "Beast" : "boss", new(0, 0), 76126, "map/growth-fixture.map");
+        var maze = new DungeonMaze(0, 1, 1, "fixture-only", [map.Position], [map.Position], [map], [])
+        { BeastLayout = beast ? new(1,3,1,1,map.Position,[map]) { Greed = "fixture-only" } : null };
         var entry = new DungeonEntryPlan(character.Id, character.Revision, 3, 3145, 0, 0, maze, map, map)
-        { QuestAcceptances = character.ActiveMainQuests.ToImmutableArray() };
+        { QuestAcceptances = character.ActiveMainQuests.ToImmutableArray(), BeastMode = beast };
         var sources = new ushort[] { 20, 21 }.Select(_ => new DungeonRoomMonster(1,
             Array.AsReadOnly(new[] { 1, 0, 3, 100, 100, 0, 1, 1 }), "[fixed]", "[normal]", "monster/growth-fixture.mob")).ToArray();
         var room = new DungeonRoomDefinition(map, Array.AsReadOnly(sources), [], []);

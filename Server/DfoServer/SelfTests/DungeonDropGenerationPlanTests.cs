@@ -24,6 +24,12 @@ internal static class DungeonDropGenerationPlanTests
             "材料逐个落地不能通过原堆叠上限绕过500对象容量");
         var miss = plan.Generate(bound => bound - 1, DateTimeOffset.UtcNow);
         That(miss.IsEmpty, "可控随机未命中保持零结果，不通过增加触发率确保掉落");
+        var medal = stack with { Id = 100380021, Kind = ItemKind.GuildMedal, StackLimit = 1 };
+        var medals = new DungeonDropGenerationPlan("公会勋章真实类别", [new(1000,
+            new DungeonItemDropPool([new DungeonWeightedDropItem(medal, 1)]), 2, 2)]);
+        That(medals.MaximumObjects == 2 && medals.Generate(_ => 0, DateTimeOffset.UtcNow) is [{ Item.Kind: ItemKind.GuildMedal, Item.Count: 1 },
+                { Item.Kind: ItemKind.GuildMedal, Item.Count: 1 }] && medals.Generate(bound => bound - 1, DateTimeOffset.UtcNow).IsEmpty,
+            "公会勋章通过已有单件核心逐个生成，未命中仍空，不能删掉真实候选或保证掉落");
         var equipment = stack with { Id = 2000, Kind = ItemKind.Equipment, StackLimit = 1, Durability = 41 };
         var equipmentPool = new DungeonItemDropPool(new DungeonWeightedDropItem[] { new(equipment, 7) });
         var gear = new DungeonDropGenerationPlan("明确合成装备数量", [new(1000, equipmentPool, 2, 2)]);

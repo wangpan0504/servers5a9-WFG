@@ -31,6 +31,31 @@ internal static class RaidEntryEventsTests
             for (int index = 1; index < 12; index++) writer.Write(0u);
         });
         That(withRaid.AsSpan().SequenceEqual(expected), "EVENT_INFO 在 2037 之后逐个追加团本事件记录，数值块仍只有 2037");
+        byte[] withJonathan = Inflate(SeriaLuckPackets.EventInfoCompressed([2378, 2395, 2449, 282], [2395]));
+        byte[] expectedJonathan = Build(writer =>
+        {
+            writer.Write((ushort)5);
+            foreach (ushort id in new ushort[] { 2037, 2378, 2395, 2449, 282 })
+            {
+                writer.Write(id); writer.Write(1u); writer.Write(0u); writer.Write(0u); writer.Write((byte)0);
+            }
+            writer.Write((byte)2); writer.Write((ushort)2037); writer.Write(8u);
+            for (int index = 1; index < 12; index++) writer.Write(0u);
+            writer.Write((ushort)2395);
+            for (int index = 0; index < 12; index++) writer.Write(0u);
+        });
+        Bytes(withJonathan, expectedJonathan, "乔纳森2395同时有目录和活动数值块，赛丽亚、红包及团本原记录不变");
+        var withBeast = Inflate(SeriaLuckPackets.EventInfoCompressed([2378,2395,333,2449,282],[2395]));
+        Bytes(withBeast.AsSpan(0,2), [6,0], "魔兽333仅增加一条事件目录");
+        Bytes(withBeast.AsSpan(47,15), Build(writer =>
+        {
+            writer.Write((ushort)333); writer.Write(1u); writer.Write(0u); writer.Write(0u); writer.Write((byte)0);
+        }), "魔兽门禁使用已证目录记录，不编造活动数值字段");
+        Bytes(withBeast.AsSpan(62), withJonathan.AsSpan(47), "魔兽追加后团本记录、活动块与原完整尾部逐字节保留");
+        That(Throws(() => SeriaLuckPackets.EventInfoCompressed([2378], [2395])) &&
+            Throws(() => SeriaLuckPackets.EventInfoCompressed([2395], [2395, 2395])), "拒绝目录外活动状态和重复活动状态");
+        ushort[] tooManyActive = Enumerable.Range(3000, 255).Select(id => (ushort)id).ToArray();
+        That(Throws(() => SeriaLuckPackets.EventInfoCompressed(tooManyActive, tooManyActive)), "活动状态含赛丽亚后不能超过u8计数上限");
         That(Throws(() => SeriaLuckPackets.EventInfoCompressed([9])) && Throws(() => SeriaLuckPackets.EventInfoCompressed([2037])) &&
             Throws(() => SeriaLuckPackets.EventInfoCompressed([282, 282])), "拒绝事件 9（改变 026BE900 读宽）、重复 2037 与重复事件");
 

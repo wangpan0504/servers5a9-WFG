@@ -33,7 +33,7 @@ internal static class PvpTrainingPackets
     public static byte[] LeaveSeat(ushort roomId,byte mode) =>
         [(byte)roomId,(byte)(roomId>>8),mode,1,0,0,255,255];
 
-    // V31 NOTI41 023AE2BF：非公平决斗分支；固定八席，preset不携带动态标题。
+    // V31 NOTI41 023AE2BF：非公平分支固定八席；仅非零preset省略动态标题。
     // 原模型的附加字段显式传入，本Builder不凭默认值决定玩法状态。
     public static byte[] Room(PvpRoomSnapshot room)
     {
@@ -41,6 +41,14 @@ internal static class PvpTrainingPackets
             throw new InvalidDataException("训练房间编号、标题或席位表无效");
         using var stream=new MemoryStream(); using var writer=new BinaryWriter(stream);
         writer.Write((ushort)1);writer.Write(room.RoomId);writer.Write(room.TitlePreset);
+        if (room.TitlePreset == 0)
+        {
+            // 023AE400调用03BE26C0实际读取u32字节长及CP936；长度0使用客户端默认标题。
+            byte[] title = CharacterName.Encoding.GetBytes(room.Title);
+            if (title.Length >= 64 || room.Title.Any(char.IsControl))
+                throw new InvalidDataException("决斗房间标题超出客户端缓冲区或包含控制字符");
+            writer.Write((uint)title.Length); writer.Write(title);
+        }
         writer.Write(room.State);writer.Write(room.LeaderSeat);writer.Write(room.MapIndex);writer.Write(room.Mode);
         foreach(var seat in room.Seats) { writer.Write(seat.State);writer.Write(seat.CharacterId); }
         writer.Write(room.ExtraFlag);writer.Write(room.ExtraValue);

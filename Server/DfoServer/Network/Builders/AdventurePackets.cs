@@ -113,6 +113,10 @@ internal static class AdventurePackets
         writer.Write(actor);
         var raw = new byte[RefreshRawLength];
         U32(raw, 0, checked((uint)state.Level)); U64(raw, 8, state.Experience);
+        // 客户端0102F910把RAW+16起的u64直接写入管理器+0x190；1343消费者01034220对同一字段改用
+        // 经验表按level+1自行计算后写入。两条路径写同一份「下一级所需经验」，本服必须下发同一结果：
+        // 留0会让每个1349（入城、商店、远征、胶囊提取）到达后把该字段覆盖成0，面板经验显示失真。
+        U64(raw, 16, catalog.Experience.GetValueOrDefault(state.Level + 1));
         U64(raw, 24, state.CapsuleExperience); U32(raw, 32, Claims(state, catalog));
         writer.Write(raw.Length); writer.Write(raw); writer.Write(new byte[4]);
     });

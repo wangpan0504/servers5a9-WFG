@@ -40,7 +40,7 @@ internal static class UserStateTests
             {
                 UserState.CharacterSelect => requirement == UserStateRequirement.Owner,
                 UserState.EnteringWorld => requirement is UserStateRequirement.Owner or UserStateRequirement.CharacterSelected,
-                UserState.Town or UserState.DungeonSelect or UserState.PvpRoom => requirement != UserStateRequirement.DungeonContext,
+                UserState.Town or UserState.DungeonSelect or UserState.PvpRoom or UserState.PvpBattle => requirement != UserStateRequirement.DungeonContext,
                 UserState.Dungeon or UserState.TutorialDungeon => true,
                 _ => false
             };
@@ -50,6 +50,13 @@ internal static class UserStateTests
             "训练房必须有独立实例，不借用普通城镇或副本状态");
         Reject<InvalidOperationException>(()=>UserStatePolicy.Read(SessionPhase.PvpRoom,true,true,false,null,false),"无训练实例不能宣称训练房");
         Reject<InvalidOperationException>(()=>UserStatePolicy.Read(SessionPhase.Town,true,true,false,null,false,true),"普通城镇不能同时残留训练实例");
+        That(UserStatePolicy.Read(SessionPhase.PvpRoom,true,true,false,null,false,false,true)==UserState.PvpRoom &&
+            UserStatePolicy.Read(SessionPhase.PvpRoom,true,true,false,null,false,false,true,true)==UserState.PvpBattle,
+            "正式房间和战斗由原成员上下文决定，不借用训练实例");
+        Reject<InvalidOperationException>(()=>UserStatePolicy.Read(SessionPhase.PvpRoom,true,true,false,null,false,true,true),
+            "训练和正式房间不能同时占用会话");
+        Reject<InvalidOperationException>(()=>UserStatePolicy.Read(SessionPhase.PvpRoom,true,true,false,null,false,true,false,true),
+            "训练实例不能声明真人战斗");
         That(!UserStatePolicy.Meets((UserState)255, UserStateRequirement.Owner) &&
             !UserStatePolicy.Meets(UserState.Dungeon, (UserStateRequirement)255), "未定义状态和资格拒绝");
         Reject<InvalidOperationException>(() => UserStatePolicy.Read(SessionPhase.Town, true, false, false, null, false), "未就绪不能宣称城镇");
@@ -100,6 +107,21 @@ internal static class UserStateTests
             int called = 0;
             commands.Register(CmdPacketType.SET_USER_POSITION, (_, _) => { called++; return Task.FromResult(CommandResult.Handled); },
                 "state-fixture", UserStateRequirement.WorldReady);
+            using var firstAdmissionGate = new SemaphoreSlim(1, 1);
+            using var replacementAdmissionGate = new SemaphoreSlim(1, 1);
+            var selectedAdmissionGate = firstAdmissionGate;
+            var replacementSelected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            int replacementReads = 0, admitted = 0;
+            commands.Register(CmdPacketType.ENTER_PVP_ROOM, (_, _) =>
+            {
+                admitted++;
+                return Task.FromResult(CommandResult.Handled);
+            }, "admission-gate-fixture", UserStateRequirement.WorldReady, (_, _) =>
+            {
+                if (ReferenceEquals(selectedAdmissionGate, replacementAdmissionGate) && ++replacementReads == 2)
+                    replacementSelected.TrySetResult();
+                return selectedAdmissionGate;
+            });
             Reject<ArgumentOutOfRangeException>(() => commands.Register(CmdPacketType.CREATE_CHARACTER, (_, _) => Task.FromResult(CommandResult.Handled),
                 "state-fixture", (UserStateRequirement)255), "非法基础资格不能注册");
             commands.Seal();
@@ -119,6 +141,20 @@ internal static class UserStateTests
             That(session.GetState() == UserState.Town && session.CheckState(UserState.Town) &&
                 await commands.DispatchAsync(context, packet) == CommandResult.Handled && called == 1 && stream.Length == 0,
                 "就绪后基础分派放行，门禁本身不伪造网络响应");
+            await firstAdmissionGate.WaitAsync();
+            await replacementAdmissionGate.WaitAsync();
+            var entering = commands.DispatchAsync(context, new(1, (ushort)CmdPacketType.ENTER_PVP_ROOM, []));
+            That(!entering.IsCompleted && context.CommandGate.CurrentCount == 1 && admitted == 0,
+                "入房先等待目标门禁，不占本人门禁造成锁顺序反转");
+            selectedAdmissionGate = replacementAdmissionGate;
+            firstAdmissionGate.Release();
+            await replacementSelected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            That(!entering.IsCompleted && context.CommandGate.CurrentCount == 1 && firstAdmissionGate.CurrentCount == 1,
+                "等待期间目标房间变化时释放旧门禁，重新等待准确房间");
+            replacementAdmissionGate.Release();
+            That(await entering.WaitAsync(TimeSpan.FromSeconds(2)) == CommandResult.Handled && admitted == 1 &&
+                replacementAdmissionGate.CurrentCount == 1 && context.CommandGate.CurrentCount == 1,
+                "目标门禁重验后仅执行一次，完成时归还全部门禁");
             Task<CommandResult> waiting;
             await context.CommandGate.WaitAsync();
             try

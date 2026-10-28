@@ -17,6 +17,7 @@ internal static partial class DatabaseSchemaTests
         _ = new CharacterRepository(path);
         using (var db = Open(path))
         {
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE character_epic_production; DROP TABLE quest_eligibility_mail_dispatches; DROP TABLE character_pvp_training_skills; DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE character_social_links; DROP TABLE account_social_links; DROP TABLE account_social_requests");
             Execute(db, "INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction,gold) VALUES('talisman',0,'LegacyRune',7,38,1,450,234,0,123)");
             Execute(db, $"INSERT INTO character_inventory_items(item_uid,character_id,account,item_core) VALUES(12345,1,'talisman','{core}')");
@@ -50,6 +51,7 @@ internal static partial class DatabaseSchemaTests
         _ = new CharacterRepository(corrupt);
         using (var db = Open(corrupt))
         {
+            RewindRaidLifecycle(db);
             Execute(db, "DROP TABLE character_epic_production; DROP TABLE quest_eligibility_mail_dispatches; DROP TABLE character_pvp_training_skills; DROP TABLE account_pvp_private_characters; DROP TABLE character_operation_hope_reward_receipts; DROP TABLE character_social_links; DROP TABLE account_social_links; DROP TABLE account_social_requests");
             RemoveSkillTreeExpansionSchema(db);
             using var tx = db.BeginTransaction();

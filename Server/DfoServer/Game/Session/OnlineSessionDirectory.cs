@@ -46,8 +46,9 @@ internal sealed class OnlineSessionDirectory
     public GameSession? Find(string account) => sessions.TryGetValue(account, out var session) ? session : null;
 
     /// <summary>登记一条已认证连接；<paramref name="probe"/> 只负责把 opcode 与正文入本连接发送队列。</summary>
-    public void RegisterConnection(int connectionId, GameSession session, Action<ushort, byte[], string> probe, OnlineExpertJobConnection? expertJob = null,
-        Func<ushort, byte[], string, Func<bool>, bool>? guardedProbe = null, OnlineMarriageConnection? marriage = null) =>
+    public void RegisterConnection(int connectionId, GameSession session, Action<ushort, byte[], string> probe,
+        OnlineExpertJobConnection? expertJob = null, OnlineMarriageConnection? marriage = null,
+        Func<ushort, byte[], string, Func<bool>, bool>? guardedProbe = null) =>
         connections.Set(connectionId, new(connectionId, session, probe, expertJob, marriage) { GuardedProbe = guardedProbe });
 
     /// <summary>按连接号查找在线会话；找不到返回 <c>null</c>（GM 据此回 ERR，不抛异常）。</summary>

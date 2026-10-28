@@ -5,7 +5,7 @@ using DfoServer.Network.Projection.Inventory;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class GuildProjection(InventoryProjection inventory, TownPresence? presence = null)
+internal sealed class GuildProjection(InventoryProjection inventory, TownPresence? presence = null, GuildPanelService? panels = null)
 {
     public void Notice(GameConnectionContext context, GuildPermitNotice notice)
     {
@@ -42,7 +42,9 @@ internal sealed class GuildProjection(InventoryProjection inventory, TownPresenc
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Actor(character, context.Channel, adventureName: context.Session.ReadAdventureName(),
                 premiumPcRoom: context.Session.PremiumPcRoom), "guild_actor", CanSend);
-        await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(guild, context.Channel.ServerIndex), "guild_information", CanSend);
+        await context.Notify(NotiPacketType.GUILD_MEMBER_INFO, [guild.Grade], "guild_member_grade", CanSend);
+        await context.Notify(NotiPacketType.GUILD_INFO, GuildPackets.Information(guild, context.Channel.ServerIndex,
+            panels?.Read(context.Owner, character.Id, context.Channel.ServerIndex)), "guild_information", CanSend);
         context.Owner.Execute(() =>
         {
             if (CanSend()) presence?.Refresh(context.Owner, context.Sender, character);

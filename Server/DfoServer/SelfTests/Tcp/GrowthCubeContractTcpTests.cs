@@ -226,15 +226,17 @@ internal static class GrowthCubeContractTcpTests
         public override long TimestampFrequency => 1000;
         public override long GetTimestamp() { lock(sync) return milliseconds; }
         public override DateTimeOffset GetUtcNow() { lock(sync) return origin.AddMilliseconds(milliseconds); }
-        public int TimerCount { get { lock(sync) return timers.Count(timer => timer.Due != long.MaxValue); } }
+        // 契约计数不包含共享公会轮询；共享计时器仍真实推进、回调和释放。
+        public int TimerCount { get { lock(sync) return timers.Count(timer => timer.Period == 0 && timer.Due != long.MaxValue); } }
         public int CubeTimerCount { get { lock(sync) return timers.Count(timer => timer.Cube && timer.Due != long.MaxValue); } }
-        public int DailyTimerCount { get { lock(sync) return timers.Count(timer => !timer.Cube && timer.Due != long.MaxValue); } }
+        public int DailyTimerCount { get { lock(sync) return timers.Count(timer => timer.Period == 0 && !timer.Cube && timer.Due != long.MaxValue); } }
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             bool cube = dueTime == TimeSpan.FromSeconds(30);
+            bool shared = dueTime == period && (period == TimeSpan.FromSeconds(1) || period == TimeSpan.FromSeconds(5));
             lock(sync)
-                That(cube || dueTime != Timeout.InfiniteTimeSpan && milliseconds + (long)dueTime.TotalMilliseconds == 22 * 60 * 60 * 1000,
-                    "该场景只注册原生30秒晶体等待或当前服务日UTC22点通知，不接纳未知定时器");
+                That(shared || period == Timeout.InfiniteTimeSpan && (cube || dueTime != Timeout.InfiniteTimeSpan && milliseconds + (long)dueTime.TotalMilliseconds == 22 * 60 * 60 * 1000),
+                    "该场景只注册原生30秒晶体等待、当前服务日UTC22点通知或共享公会轮询，不接纳未知定时器");
             var timer = new ClockTimer(this,callback,state,cube);
             lock(sync) timers.Add(timer);
             timer.Change(dueTime,period);
@@ -247,7 +249,10 @@ internal static class GrowthCubeContractTcpTests
             {
                 milliseconds += checked((long)amount.TotalMilliseconds);
                 due = timers.Where(timer => timer.Due <= milliseconds).ToArray();
-                foreach(var timer in due) timer.Due = long.MaxValue;
+                foreach(var timer in due)
+                    timer.Due = timer.Period > 0
+                        ? checked(timer.Due + ((milliseconds - timer.Due) / timer.Period + 1) * timer.Period)
+                        : long.MaxValue;
             }
             foreach(var timer in due) timer.Callback(timer.State);
         }
@@ -257,14 +262,17 @@ internal static class GrowthCubeContractTcpTests
             public TimerCallback Callback { get; } = callback;
             public object? State { get; } = state;
             public long Due { get; set; } = long.MaxValue;
+            public long Period { get; private set; }
             bool disposed;
             public bool Change(TimeSpan dueTime,TimeSpan period)
             {
-                if(period != Timeout.InfiniteTimeSpan) throw new InvalidOperationException("该时钟只供一次性周期等待，不模拟其他定时器");
+                if(period != Timeout.InfiniteTimeSpan && period != TimeSpan.FromSeconds(1) && period != TimeSpan.FromSeconds(5))
+                    throw new InvalidOperationException("该时钟仅允许契约一次性等待和共享公会轮询");
                 lock(clock.sync)
                 {
                     if(disposed) return false;
                     Due = dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue : checked(clock.milliseconds+(long)dueTime.TotalMilliseconds);
+                    Period = period > TimeSpan.Zero ? (long)period.TotalMilliseconds : 0;
                     return true;
                 }
             }

@@ -19,14 +19,17 @@ internal static partial class FormalDungeonTcpTests
         var repository = new CharacterRepository(fixture.Database, resources.Quests);
         var items = resources.ItemResources;
         var grants = new InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
-        Character modern, ancient;
+        // 远古七图与镇17 Area5是独立资源增量；官方PVF未安装时服务器按设计拒绝落点，TCP只覆盖现代异界。
+        bool ancientAvailable = resources.Towns.Areas.ContainsKey((17, 5)) &&
+            SelfTestCatalogs.Dungeons(resources.Archive).ContainsDungeon(7101);
+        Character modern, ancient = null!;
         short ticket;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             modern = Seed("OVerseTcp", 2);
             modern = InventoryService.Commit(repository, owner, modern, grants.Grant(modern, [new(10161066, 2)]));
             ticket = modern.Inventory.Items.Single(item => item.Core.ItemId == 10161066).Position.Index;
-            ancient = Seed("AncientTcp", 5);
+            if (ancientAvailable) ancient = Seed("AncientTcp", 5);
 
             Character Seed(string name, byte areaId)
             {
@@ -76,40 +79,44 @@ internal static partial class FormalDungeonTcpTests
             Load(peer); Drain(peer);
             Return(peer);
         }
-        using (var peer = Open(fixture))
+        if (!ancientAvailable)
+            Console.WriteLine("SKIP 远古7101：官方PVF未安装镇17 Area5与七远古DGN资源增量，仅覆盖现代异界；缺资源时的落点拒绝见 ChannelAreaLandingTests");
+        else
         {
-            peer.Select(ancient.Slot, prepared: true, resumeTown: true, room: false);
-            That(peer.AncientGateEnergy == 0, "远古新增大厅初始化四字节772能量");
-            long fatigue = (long)fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", ancient.Id)[0][0];
-            SelectEntrance(peer);
-            peer.Send(16, Entry(7101, 2)); peer.Expect(0, 28); peer.Expect(0, 29);
-            bool cube = false, material = false;
-            Drain(peer, packet =>
+            using (var peer = Open(fixture))
             {
-                if (packet.Opcode != 14) return;
-                That(packet.Body.Length == 3 + U16(packet.Body, 1) * 123, "入场物品差量保持完整123字节行");
-                for (int at = 3; at < packet.Body.Length; at += 123)
+                peer.Select(ancient.Slot, prepared: true, resumeTown: true, room: false);
+                That(peer.AncientGateEnergy == 0, "远古新增大厅初始化四字节772能量");
+                long fatigue = (long)fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", ancient.Id)[0][0];
+                SelectEntrance(peer);
+                peer.Send(16, Entry(7101, 2)); peer.Expect(0, 28); peer.Expect(0, 29);
+                bool cube = false, material = false;
+                Drain(peer, packet =>
                 {
-                    if (U16(packet.Body, at) == 358)
+                    if (packet.Opcode != 14) return;
+                    That(packet.Body.Length == 3 + U16(packet.Body, 1) * 123, "入场物品差量保持完整123字节行");
+                    for (int at = 3; at < packet.Body.Length; at += 123)
                     {
-                        That(U32(packet.Body, at + 2) == 3037 && U32(packet.Body, at + 6) == 880, "远古入场14同步实际账号无色余额");
-                        cube = true;
+                        if (U16(packet.Body, at) == 358)
+                        {
+                            That(U32(packet.Body, at + 2) == 3037 && U32(packet.Body, at + 6) == 880, "远古入场14同步实际账号无色余额");
+                            cube = true;
+                        }
+                        if (U32(packet.Body, at + 2) == 3332)
+                        {
+                            That(U32(packet.Body, at + 6) == 90, "远古入场14同步十个入场材料消耗");
+                            material = true;
+                        }
                     }
-                    if (U32(packet.Body, at + 2) == 3332)
-                    {
-                        That(U32(packet.Body, at + 6) == 90, "远古入场14同步十个入场材料消耗");
-                        material = true;
-                    }
-                }
-            });
-            long remaining = (long)fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", ancient.Id)[0][0];
-            That(cube && material && remaining == fatigue - 6,
-                $"远古入场双材料和六点疲劳均真实提交与投影 cube={cube} material={material} fatigue={fatigue} remaining={remaining}");
-            Load(peer); Drain(peer); Return(peer);
+                });
+                That(cube && material && (long)fixture.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0", ancient.Id)[0][0] == fatigue - 6,
+                    "远古入场双材料和六点疲劳均真实提交与投影");
+                Load(peer); Drain(peer); Return(peer);
+            }
+            using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+                That(CurrencyWallet.Get(repository.LoadCharacter(owner, ancient.Slot).Inventory, CurrencyKind.ClearCube) == 880,
+                    "远古账号晶体扣款重读保持一次");
         }
-        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
-            That(CurrencyWallet.Get(repository.LoadCharacter(owner, ancient.Slot).Inventory, CurrencyKind.ClearCube) == 880,
-                "远古账号晶体扣款重读保持一次");
 
         void UseTicket(TcpPeer peer) => peer.Send(515, Build(writer =>
         { writer.Write(ticket); writer.Write((byte)0); writer.Write(0u); writer.Write(159u); writer.Write(0u); writer.Write(0u); }));

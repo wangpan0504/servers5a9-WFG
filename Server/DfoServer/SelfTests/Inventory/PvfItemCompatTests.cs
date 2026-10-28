@@ -17,6 +17,12 @@ internal static class PvfItemCompatTests
         That(resources.Items.Get(0).Id == 0, "编号 0 的金币占位可以加载");
         That(resources.Items.Get(490008569).QualityBox is { MinimumPercent: 100, MaximumPercent: 100 }, "黄金品级箱取最高品级");
         That(resources.Items.Get(10004946).ShopPrice.Limit is { AccountWide: true, Count: 2 }, "trade 限购按账号上限读取");
+        That(resources.Items.Get(10094768) is { Kind: GameWorld.Items.ItemKind.Consumable, AccountBoundAfterTrade: true, AccountCargoForbidden: false,
+            AttachType.Length: 0, StackableType: "[enchant waste] 0" }, "现场宝珠10094768的限次交易后账号绑定声明进入真实物品模板");
+        That(resources.Items.Get(10094771) is { Kind: GameWorld.Items.ItemKind.Profession, AccountBoundAfterTrade: true, AttachType.Length: 0 },
+            "同类附魔卡片10094771也按资源声明获得账号仓库资格，不按宝珠类型或编号特判");
+        That(resources.Items.Get(10002395) is { Kind: GameWorld.Items.ItemKind.Consumable, AccountCargoForbidden: false, AccountBoundAfterTrade: false } capsule &&
+            capsule.AttachType.Contains("[trade limit]", StringComparison.Ordinal), "真实宠物胶囊按限次交易模板读取，不伪装成无条件账号绑定");
         var rows = PvfScript.List(pvf.ReadText("equipment/equipment.lst")).Concat(PvfScript.List(pvf.ReadText("stackable/stackable.lst"))).ToArray();
         var unexpected = new ConcurrentBag<string>();
         Parallel.ForEach(rows, new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount / 2, 1, 8) }, row =>
