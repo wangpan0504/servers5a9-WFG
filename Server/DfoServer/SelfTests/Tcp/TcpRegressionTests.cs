@@ -441,6 +441,7 @@ internal static class TcpRegressionTests
         ("anton-raid-card600-601", AntonRaidGapTcpTests.RunCard600601Async),
         ("raid-start-minimum", AntonRaidTcpTests.RunMinimumAsync),
         ("luke-raid", LukeRaidTcpTests.RunAsync),
+        ("luke-symbol103-handler", LukeSymbol103HandlerTests.RunAsync),
         ("luke-raid-original-gate", LukeRaidTcpTests.RunOriginalRuleGateAsync),
         ("luke-raid-start", LukeRaidStartTcpTests.RunAsync),
         ("luke-raid-run", LukeRaidStartTcpTests.RunDungeonsAsync),
@@ -472,6 +473,7 @@ internal static class TcpRegressionTests
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
+        "luke-symbol103-handler",
         "luke-reward-restart",
         "class-change-rules",
         "levelup-ticket-rules",
