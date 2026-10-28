@@ -38,8 +38,11 @@ internal static class CargoTcpTests
                 Inventory = InventoryRewardGrantService.CreateStarter(characters.Get(0))
             });
             var items = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            // 上游把填充道具从50换成6，本地宝珠夹具保留在此之后入包，槽位仍由实际位置计算。
-            current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(0, 20_000_000), new(3299, 600), new(6, 1), new(beadId, 2)]));
+            current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(0, 20_000_000), new(3299, 600)]));
+            // 模拟旧存档中的工具；新获得入口会立即扩容，不再产生此实体。
+            current = repo.CommitInventory(owner, current, new(current.Inventory, current.Inventory with
+                { Items = current.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), new(6, GameWorld.Items.ItemKind.Consumable, 1))) }, "legacy_cargo_tool_fixture"));
+            current = InventoryService.Commit(repo, owner, current, items.Grant(current, [new(beadId, 2)]));
             var bead = current.Inventory.Items.Single(item => item.Core.ItemId == beadId);
             beadUid = bead.Uid;
             beadSlot = bead.Position.Index;
@@ -126,7 +129,8 @@ internal static class CargoTcpTests
             peer.Send(408, [65, 0]);
             peer.Expect(1, 408, [1]);
             That(U32(peer.Expect(0, 14).Body, 5) == uint.MaxValue, "personal upgrade consumes the requested tool");
-            Cargo(peer.Expect(0, 13).Body, 2, 32, 0, 0);
+            peer.Expect(0, 66, [1, 0, 40, 0]);
+            Cargo(peer.Expect(0, 13).Body, 2, 40, 0, 0);
             peer.Send(408, [65, 0]);
             peer.Expect(1, 408, [0, 17, 0]);
             peer.Barrier();
@@ -239,17 +243,14 @@ internal static class CargoTcpTests
         // 双端实收CMD20，长度前缀6，protobuf字段2=2、3=20、4=0。
         peer.Send(20, Convert.FromHexString("06000000100218142000"));
         peer.Expect(1, 20, [1, 4, 0, 0, 0, 8, 2, 16, 0]);
-        var clearSorted = peer.Expect(0, 1681).Body;
-        That(clearSorted[0] == 2 && U16(clearSorted, 1) == 1 && U16(clearSorted, 3) == 0 && U32(clearSorted, 5) == uint.MaxValue,
-            "个人仓库整理先用1681清除将重新载入的目标槽");
-        var sorted = peer.Expect(0, 1681).Body;
-        That(sorted[0] == 2 && U16(sorted, 1) == 2 && U16(sorted, 3) == 0 && U32(sorted, 5) == weaponId &&
-            U16(sorted, 126) == 7 && U32(sorted, 128) == uint.MaxValue,
-            "个人仓库整理下发槽0完整物品并清空槽7");
-        peer.Barrier();
+        var sorted = peer.Expect(0, 13).Body;
+        Cargo(sorted, 2, 8, 0, 1);
+        That(U16(sorted, 5) == 0 && U32(sorted, 7) == weaponId,
+            "个人仓库整理回放完整结果，原槽7由全量重载清除");
+        peer.Barrier(packet => That(packet.Opcode is not (14 or 1681), "个人整理沿全量与锁恢复路径，不重复差量或获得播报"));
     }
 
-    static void Transfer(TcpPeer peer, byte source, short sourceSlot, int sourceId, int count, byte target, short targetSlot, int targetId, int moved, short? actualTargetSlot = null)
+    internal static void Transfer(TcpPeer peer, byte source, short sourceSlot, int sourceId, int count, byte target, short targetSlot, int targetId, int moved, short? actualTargetSlot = null)
     {
         peer.Send(19, Build(w =>
         {

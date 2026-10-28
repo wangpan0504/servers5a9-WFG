@@ -115,7 +115,7 @@ internal sealed class InventoryCargoService(ItemCatalog catalog, CargoCatalog ca
         if (!template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
             return InventoryResult.Reject(17);
         ushort target = template.PersonalCargoUpgradeTarget;
-        if (target <= before.CargoCapacity || target > 264)
+        if (target <= before.CargoCapacity || !CargoCatalog.SupportsPersonalCapacity(target))
             return InventoryResult.Reject(19);
         var consumed = InventoryDeleteService.Plan(before, item.Position, item.Core.Value, 1);
         if (!consumed.Accepted)

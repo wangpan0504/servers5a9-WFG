@@ -22,7 +22,7 @@ internal static class SpecialContainerTcpTests
         {
             var role = repo.Create(owner, new("SpecialTcp", towns.Room, towns.InitialReturn) { AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills });
             var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            InventoryService.Commit(repo, owner, role, service.Grant(role, [new(101550507, 2), new(63000, 1), new(2680000, 1), new(24, 20)]));
+            InventoryService.Commit(repo, owner, role, service.Grant(role, [new(101550507, 2), new(63000, 2), new(2680000, 1), new(24, 20)]));
         }
         string identities = JsonSerializer.Serialize(fixture.Query("SELECT item_uid,json_remove(item_core,'$.SealFlag') FROM character_inventory_items ORDER BY item_uid"));
         byte[]? wornAvatar = null, wornPet = null;
@@ -31,10 +31,11 @@ internal static class SpecialContainerTcpTests
         {
             peer.Select();
             var details = peer.SpecialContainers[0].Body;
-            That(details.Length == 17 && details[0] == 1 && details[5] == 100 && details[11] == 1, "default pet detail arrives before Player with full fields");
+            That(details.Length == 33 && details[0] == 2 && details[5] == 100 && details[11] == 1, "default pet detail arrives before Player with full fields");
             int petUid = checked((int)U32(details, 1));
             That(peer.SpecialContainers[1].Body.Length == 335 && U16(peer.SpecialContainers[1].Body, 3) == 2 &&
-                peer.SpecialContainers[2].Body.Length == 372, "both dedicated lists initialized including artifacts and feed");
+                peer.SpecialContainers[2].Body.Length == 495, "both dedicated lists initialized including artifacts and feed");
+            PetMoves(peer);
             wornAvatar = peer.SpecialContainers[1].Body.AsSpan(5, 165).ToArray();
             peer.Send(19, Move(1, 0, 101550507, 3, 0, 0));
             peer.Expect(1, 19, Ack(1, 0, 3, 0));
@@ -50,13 +51,13 @@ internal static class SpecialContainerTcpTests
             peer.Expect(0, 105, details);
             wornPet = peer.Expect(0, 14).Body;
             That(wornPet.Length == 126 && wornPet[0] == 3 && U32(wornPet, 9) == petUid, "pet equip sends linked identity before Player");
-            peer.Expect(0, 14);
+            peer.Expect(0, 1681);
             CreatureActor(peer.Expect(0, 2).Body, 63000, "穿戴提交后的Actor创建当前宠物实体");
             peer.Expect(0, 2);
             peer.Send(19, Move(7, 140, 2680000, 3, 28, 0));
             peer.Expect(1, 19, Ack(7, 140, 3, 28));
             That(peer.Expect(0, 14).Body.Length == 126, "pet artifact uses ordinary core at Client slot28");
-            peer.Expect(0, 14); peer.Expect(0, 2); peer.Expect(0, 2);
+            peer.Expect(0, 1681); peer.Expect(0, 2); peer.Expect(0, 2);
             peer.Barrier();
             That(JsonSerializer.Serialize(fixture.Query("SELECT item_uid,json_remove(item_core,'$.SealFlag') FROM character_inventory_items ORDER BY item_uid")) == identities,
                 "TCP equip preserves UID and core fields other than artifact unsealing");
@@ -65,7 +66,7 @@ internal static class SpecialContainerTcpTests
         {
             var packets = peer.Select();
             CreatureActor(packets[2].Body, 63000, "重连Actor恢复原穿戴宠物模板");
-            That(peer.SpecialContainers[0].Body[0] == 1 && U16(peer.SpecialContainers[1].Body, 3) == 1 && U16(peer.SpecialContainers[2].Body, 1) == 1,
+            That(peer.SpecialContainers[0].Body[0] == 2 && U16(peer.SpecialContainers[1].Body, 3) == 1 && U16(peer.SpecialContainers[2].Body, 1) == 2,
                 "reconnect retains worn special items without duplicating bag entries");
             That(packets[3].Body[126] == 3, "reconnect Player includes avatar, pet and pet equipment together");
             peer.Send(19, Move(1, 2, 0, 3, 0, 101550507));
@@ -80,7 +81,8 @@ internal static class SpecialContainerTcpTests
             peer.Send(19, Move(7, 5, 0, 3, 26, 63000));
             peer.Expect(1, 19, Ack(7, 5, 3, 26));
             peer.Expect(0, 105); peer.Expect(0, 14);
-            var pet = peer.Expect(0, 14).Body;
+            That(U32(peer.Expect(0, 1681).Body, 5) == uint.MaxValue, "宠物卸下先无播报清除ACK图标，再完整载入以保留穿脱effect");
+            var pet = peer.Expect(0, 1681).Body;
             Bytes(pet.AsSpan(5), wornPet!.AsSpan(5), "reverse unequip retains complete pet core");
             CreatureActor(peer.Expect(0, 2).Body, 0, "宠物脱下提交后的Actor清除实体");
             peer.Expect(0, 2);
@@ -95,7 +97,7 @@ internal static class SpecialContainerTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
-            That(U16(peer.SpecialContainers[1].Body, 3) == 2 && U16(peer.SpecialContainers[2].Body, 1) == 2, "failed move remains rolled back after reconnect");
+            That(U16(peer.SpecialContainers[1].Body, 3) == 2 && U16(peer.SpecialContainers[2].Body, 1) == 3, "failed move remains rolled back after reconnect");
             peer.Barrier();
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
@@ -108,6 +110,45 @@ internal static class SpecialContainerTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT revision FROM characters"));
     }
 
+    static void PetMoves(TcpPeer peer)
+    {
+        foreach (var row in new (short From, short To, int Id, int Other, int Count)[]
+            { (0, 5, 63000, 0, 1), (5, 1, 63000, 63000, 1), (5, 1, 63000, 63000, 1), (5, 0, 63000, 0, 1),
+              (140, 141, 2680000, 0, 1), (141, 140, 2680000, 0, 1), (189, 191, 24, 0, 20), (191, 189, 24, 0, 20) })
+        {
+            peer.Send(19, Move(7, row.From, row.Id, 7, row.To, row.Other, row.Count));
+            peer.Expect(1, 19, Ack(7, row.From, 7, row.To, row.Count));
+            peer.Barrier(packet => That(packet.Opcode is not (13 or 14 or 105 or 1681),
+                "宠物、装备及饲料普通整件换格与同模板不同实例交换只回ACK，不重新载入图标或详情"));
+        }
+        peer.Send(19, Move(7, 189, 24, 7, 190, 0, 5));
+        peer.Expect(1, 19, Ack(7, 189, 7, 190, 5));
+        Feed(peer.Expect(0, 13).Body, 189, 15, 190, 5);
+        peer.Barrier(packet => That(packet.Opcode is not (14 or 105 or 1681), "宠物饲料拆分以无动画全量同步数量"));
+        peer.Send(19, Move(7, 190, 24, 7, 189, 24, 5));
+        peer.Expect(1, 19, Ack(7, 190, 7, 189, 5));
+        Bytes(peer.Expect(0, 14).Body.AsSpan(0, 9), [7, 1, 0, 190, 0, 255, 255, 255, 255], "饲料合并只清空耗尽的源格，不正数回填获得effect");
+        Feed(peer.Expect(0, 13).Body, 189, 20);
+        peer.Barrier(packet => That(packet.Opcode is not (14 or 105 or 1681), "饲料合并后的正数数量只用全量恢复"));
+
+        static void Feed(byte[] body, short first, uint count, short second = -1, uint secondCount = 0)
+        {
+            int items = second < 0 ? 4 : 5;
+            That(body[0] == 7 && U16(body, 1) == items && body.Length == 3 + 123 * items,
+                "宠物数量同步保留完整容器及123B核心");
+            var slots = Enumerable.Range(0, items).Select(i => 3 + 123 * i).ToArray();
+            int offset = slots.Single(i => U16(body, i) == first);
+            That(U32(body, offset + 2) == 24 && U32(body, offset + 6) == count, "饲料主堆的绝对数量正确");
+            if (second >= 0)
+            {
+                offset = slots.Single(i => U16(body, i) == second);
+                That(U32(body, offset + 2) == 24 && U32(body, offset + 6) == secondCount, "饲料分堆的绝对数量正确");
+            }
+            else
+                That(!slots.Any(i => U16(body, i) == 190), "合并后不恢复已清空源格");
+        }
+    }
+
     static void CreatureActor(byte[] body, uint template, string message)
     {
         const int nameWidth = 10; // SpecialTcp的CP936字节数。
@@ -117,13 +158,13 @@ internal static class SpecialContainerTcpTests
             body[offset + 8] == (template == 0 ? 0 : 1), message + "；同步模板与启用标志");
     }
 
-    static byte[] Move(byte fromList, short fromSlot, int fromId, byte toList, short toSlot, int toId) => Build(writer =>
+    static byte[] Move(byte fromList, short fromSlot, int fromId, byte toList, short toSlot, int toId, int count = 1) => Build(writer =>
     {
-        writer.Write(fromList); writer.Write(fromSlot); writer.Write(fromId); writer.Write(1);
+        writer.Write(fromList); writer.Write(fromSlot); writer.Write(fromId); writer.Write(count);
         writer.Write(toList); writer.Write(toSlot); writer.Write(toId); writer.Write(0); writer.Write(-1); writer.Write((ushort)0);
     });
-    static byte[] Ack(byte fromList, short fromSlot, byte toList, short toSlot) => Build(writer =>
+    static byte[] Ack(byte fromList, short fromSlot, byte toList, short toSlot, int count = 1) => Build(writer =>
     {
-        writer.Write((byte)1); writer.Write(fromList); writer.Write(fromSlot); writer.Write(1); writer.Write(toList); writer.Write(toSlot);
+        writer.Write((byte)1); writer.Write(fromList); writer.Write(fromSlot); writer.Write(count); writer.Write(toList); writer.Write(toSlot);
     });
 }

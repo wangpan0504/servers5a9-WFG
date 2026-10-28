@@ -165,19 +165,19 @@ internal static partial class FormalDungeonTcpTests
                     { writer.Write((byte)1); writer.Write((byte)family.Bag); writer.Write(bag); writer.Write(1); writer.Write((byte)3); writer.Write(family.Worn); }));
                     if (family.Worn is 26 or 33) That(peer.Expect(0, 105).Body[0] == 5, "换真实或幻化宠物保留全部详情UID通知");
                     int deltas = family.Worn is >= 26 and <= 29 ? 2 : 1;
-                    bool suppressNotice = family.Bag is InventoryListType.Main or InventoryListType.Avatar;
-                    ushort opcode = suppressNotice ? (ushort)1681 : (ushort)14;
                     for (int index = 0; index < deltas; index++)
                     {
-                        var delta = peer.Expect(0, opcode).Body;
                         byte list = index == 0 && deltas == 2 ? (byte)3 : (byte)family.Bag;
+                        bool suppressNotice = list != 3 && family.Bag is InventoryListType.Main or InventoryListType.Avatar or InventoryListType.Pet;
+                        ushort opcode = suppressNotice ? (ushort)1681 : (ushort)14;
+                        var delta = peer.Expect(0, opcode).Body;
                         short slot = list == 3 ? family.Worn : bag;
                         int beforeId = list == 3 ? toId : fromId;
                         int afterId = list == 3 ? fromId : toId;
                         if (suppressNotice && toId != 0 || beforeId != 0 && afterId != 0 && beforeId != afterId)
                         {
                             That(delta[0] == list && U16(delta, 1) == 1 && U16(delta, 3) == slot && U32(delta, 5) == uint.MaxValue,
-                                "普通装备及装扮卸装和互换先清ACK对象，宠物仍沿原模板覆盖规则");
+                                "返回包裹的装备、装扮及宠物先无播报清ACK对象，穿戴槽保留原模板覆盖规则");
                             delta = peer.Expect(0, opcode).Body;
                         }
                         That(delta[0] == list, "保留所属容器及宠物专属差量");
@@ -329,7 +329,8 @@ internal static partial class FormalDungeonTcpTests
             {
                 peer.Send(19, CreatureMove(bag, fromId, toId));
                 peer.Expect(1, 19, [1, 7, (byte)bag, (byte)(bag >> 8), 1, 0, 0, 0, 3, 26, 0]);
-                peer.Expect(0, 105); peer.Expect(0, 14); peer.Expect(0, 14);
+                peer.Expect(0, 105); peer.Expect(0, 14);
+                PetDelta(toId);
                 byte[] actor = peer.Expect(0, 2).Body;
                 int nameWidth = checked((int)U32(actor, 123));
                 int creatureOffset = 156 + nameWidth + actor[133 + nameWidth] * 25;
@@ -349,7 +350,7 @@ internal static partial class FormalDungeonTcpTests
                 peer.Expect(1, 19, Build(writer =>
                 { writer.Write((byte)1); writer.Write((byte)7); writer.Write(bag); writer.Write(1); writer.Write((byte)3); writer.Write((short)33); }));
                 peer.Expect(0, 105);
-                That(peer.Expect(0, 14).Body[0] == 7, "33由ACK移动，宠物背包仍发布完整提交差量");
+                That(PetDelta(toId)[0] == 7, "33由ACK移动，宠物背包仍发布完整提交差量");
                 byte[] actor = peer.Expect(0, 2).Body;
                 int nameWidth = checked((int)U32(actor, 123));
                 int creatureOffset = 156 + nameWidth + actor[133 + nameWidth] * 25;
@@ -357,6 +358,13 @@ internal static partial class FormalDungeonTcpTests
                     U32(actor, 94) == (real == 0 ? 0u : (uint)fromId), "选图及结算幻化保留成员状态；无真宠时清外观而不清幻化资产");
                 That(peer.Expect(0, 2).Body[0] == 1, "33独立外观声明之后才发Player");
                 peer.Barrier();
+            }
+
+            byte[] PetDelta(int toId)
+            {
+                if (toId != 0)
+                    That(U32(peer.Expect(0, 1681).Body, 5) == uint.MaxValue, "宠物返回包裹先无播报清槽");
+                return peer.Expect(0, 1681).Body;
             }
 
             byte[] CreatureMove(short bag, int fromId, int toId) => Build(writer =>

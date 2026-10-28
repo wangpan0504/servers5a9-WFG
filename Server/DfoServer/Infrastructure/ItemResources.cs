@@ -100,7 +100,7 @@ internal sealed class ItemResources
         Items = new(archive, equipment, stackable, Shops.EquipmentSellRate,
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures, echon: Echon,
-            newEchon: NewEchon);
+            newEchon: NewEchon, acquisitionCargo: Cargo.AcquisitionItems);
         epicPieceDrops = new(() => new(EpicPieces, Items.Get));
         expertJobs = new(() => ExpertJobScriptCatalog.Load(archive, Items, stackable));
         CollectBoxes = new(archive, Items);

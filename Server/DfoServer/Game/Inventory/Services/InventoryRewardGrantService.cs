@@ -75,6 +75,8 @@ internal static class InventoryRewardGrantService
         var overflow = new List<InventoryItem>();
         var placement = new RewardPlacement(inventory, rewards.Select(row => row.ItemId), allowOverflowMail, overflow);
         var now = utcNow ?? DateTimeOffset.UtcNow;
+        bool acquiredCargo = false;
+        long? acquisitionDeadline = null;
         for (int rewardIndex = 0; rewardIndex < rewards.Count; rewardIndex++)
         {
             var reward = rewards[rewardIndex];
@@ -110,9 +112,10 @@ internal static class InventoryRewardGrantService
                 continue;
             }
             var template = catalog.Get(reward.ItemId);
-            if (template.AcquisitionContract is { } acquired)
+            if (template.HasAcquisitionEffect)
             {
                 if (reward.Upgrade != 0 || reward.Refinement != 0) return InventoryResult.Reject(19);
+                long expires = 0;
                 if (instances is not null)
                 {
                     var incoming = instances[rewardIndex];
@@ -121,9 +124,23 @@ internal static class InventoryRewardGrantService
                         return InventoryResult.Reject(19);
                     try { incoming.Core.Validate(); }
                     catch (InvalidDataException) { return InventoryResult.Reject(19); }
+                    expires = incoming.ExpireTime;
                 }
-                try { wallet = wallet with { AccountWallet = wallet.AccountWallet.ActivateContract(acquired.Type, acquired.DurationSeconds, now, reward.Count) }; }
-                catch (OverflowException) { return InventoryResult.Reject(19); }
+                else if (template.AcquisitionContract is null)
+                {
+                    if (!template.Expiration.SupportsCreation) return InventoryResult.Reject(19);
+                    var effectCore = Create(template, utcNow: now, shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod);
+                    if (effectCore.IsExpired(now.ToUnixTimeSeconds())) return InventoryResult.Reject(19);
+                    expires = effectCore.ExpireTime;
+                }
+                var acquired = InventoryAcquisitionService.Plan(character with { Inventory = wallet }, template, reward.Count, now);
+                if (!acquired.Accepted) return acquired;
+                if (template.AcquisitionContract is null)
+                {
+                    acquiredCargo = true;
+                    if (expires > 0 && (acquisitionDeadline is null || expires < acquisitionDeadline)) acquisitionDeadline = expires;
+                }
+                wallet = acquired.Plan!.After;
                 continue;
             }
             if (instances is null && (template.IsPremiumService || !template.Expiration.SupportsCreation))
@@ -165,7 +182,8 @@ internal static class InventoryRewardGrantService
 
         var after = wallet with { Items = placement.Items() };
         after.Validate(allocating: true);
-        return new(true, 0, new(inventory, after, "reward_grant", overflowItems: overflow));
+        return new(true, 0, new(inventory, after, "reward_grant",
+            acquiredCargo ? new(character, acquisitionDeadline) : null, overflowItems: overflow));
     }
 
     // 地面等业务提供已冻结的完整核心；此入口不接存量UID，不确认来源资格或重复拾取。
@@ -196,17 +214,12 @@ internal static class InventoryRewardGrantService
             return InventoryResult.Reject(19);
         if (!legacyRune && core.Count > template.StackLimit)
             return InventoryResult.Reject(17);
-        if (template.AcquisitionContract is { } acquired)
-        {
-            var before = character.Inventory;
-            try
-            {
-                var afterContract = before with { AccountWallet = before.AccountWallet.ActivateContract(acquired.Type,
-                    acquired.DurationSeconds, utcNow ?? DateTimeOffset.UtcNow, core.Count) };
-                return new(true, 0, new(before, afterContract, "reward_grant_contract", new(character)));
-            }
-            catch (OverflowException) { return InventoryResult.Reject(19); }
-        }
+        // 地面拾取回执要求真实目标槽，尚不能提交无实体的即时资格；必须在写库前拒绝。
+        if (usePickupSlotPolicy && template.HasAcquisitionEffect)
+            return InventoryResult.Reject(19);
+        if (template.HasAcquisitionEffect)
+            return InventoryAcquisitionService.Plan(character, template, core.Count, utcNow ?? DateTimeOffset.UtcNow,
+                core.ExpireTime > 0 ? core.ExpireTime : null);
         if (template.IsPremiumService) return InventoryResult.Reject(19);
 
         // ItemCore及其附属值均不可变，直接共享完整核心；不重新Create或计算期限。

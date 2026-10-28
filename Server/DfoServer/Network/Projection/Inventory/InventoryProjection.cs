@@ -38,8 +38,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
     }
 
     public async Task RefreshAsync(GameConnectionContext context, InventoryResult result,
-        IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true, bool silentMainMove = false,
-        bool suppressMainNotice = false, bool suppressAvatarNotice = false)
+        IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true,
+        InventoryListType? silentMoveList = null, bool suppressMainNotice = false, InventoryListType? suppressMoveNoticeList = null)
     {
         if (!result.Accepted || result.Plan is not { Changed: true } plan)
             return;
@@ -86,10 +86,12 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         }
         var slots = changedSlots.Where(slot => (preserveSkillSwitch || acknowledgedSlots?.Contains(slot) != true) &&
             slot != new InventorySlot(InventoryListType.Equipment, 30) && !(inPlaceCreature && slot == creatureSlot)).ToArray();
-        bool rebuildMain = silentMainMove && changedSlots.Where(slot => slot.List == InventoryListType.Main)
+        bool reloadPersonalCargo = plan.Reason == "sort_item" && slots.Any(slot => slot.List == InventoryListType.PersonalCargo);
+        bool rebuildMoveList = silentMoveList.HasValue && changedSlots.Where(slot => slot.List == silentMoveList)
             .Select(plan.BeforeIndex.Find).Any(item => item is { Core.IsStackable: true } &&
                 receipt.Index.FindUid(item.Uid)?.Core.Count != item.Core.Count);
-        bool creatureDetailsChanged = changedSlots.Any(slot => !(inPlaceCreature && slot == creatureSlot) && receipt.Index.Find(slot)?.Creature is not null);
+        bool creatureDetailsChanged = silentMoveList != InventoryListType.Pet &&
+            changedSlots.Any(slot => !(inPlaceCreature && slot == creatureSlot) && receipt.Index.Find(slot)?.Creature is not null);
         bool reloadCreature = plan.Reason is "hatch_creature_egg" or "creature_change" or "creature_group_convert";
         if (creatureDetailsChanged && !reloadCreature)
             await context.Notify(NotiPacketType.CREATURE_ITEM_LIST, InventoryPackets.Creatures(current.Inventory), "creature_details_committed", CanSend);
@@ -112,18 +114,22 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_committed_full_list", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.SpecialFull(current.Inventory, InventoryListType.Talisman), "inventory_committed_full_list", CanSend);
         }
+        else if (reloadPersonalCargo)
+            await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.PersonalCargo), "personal_cargo_sorted", CanSend);
         else foreach (var list in slots.Select(slot => slot.List).Where(list => !mainExpansionChanged || list != InventoryListType.Main).Distinct().Order())
         {
-            if (silentMainMove && list == InventoryListType.Main)
+            if (list == silentMoveList)
             {
                 // ACK19已移动整件；数量变化才用13载入。1681仍会执行STK的新物品图标标记，不能代替无动画同步。
-                if (rebuildMain)
+                if (rebuildMoveList)
                 {
-                    var emptySlots = slots.Where(slot => slot.List == InventoryListType.Main && receipt.Index.Find(slot) is null).ToArray();
+                    var emptySlots = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is null).ToArray();
                     if (emptySlots.Length != 0)
                         await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(current.Inventory, list, emptySlots, index: receipt.Index),
-                            "inventory_main_move_empty", CanSend);
-                    await context.Notify(NotiPacketType.ITEM_LIST, InventoryPackets.Full(current.Inventory), "inventory_main_move_counts", CanSend);
+                            "inventory_move_empty", CanSend);
+                    await context.Notify(NotiPacketType.ITEM_LIST,
+                        list == InventoryListType.Main ? InventoryPackets.Full(current.Inventory) : InventoryPackets.SpecialFull(current.Inventory, list),
+                        "inventory_move_counts", CanSend);
                 }
                 continue;
             }
@@ -132,8 +138,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 await context.Notify(NotiPacketType.TITLE_BOOK_LIST, TitlePackets.Book(current.Inventory, (byte)list - 18), "title_book_committed", CanSend);
                 continue;
             }
-            bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main ||
-                suppressAvatarNotice && list == InventoryListType.Avatar;
+            bool suppressNotice = plan.Reason == "sort_item" || suppressMainNotice && list == InventoryListType.Main || list == suppressMoveNoticeList;
             // 包裹回填仍先清槽再载入，保留图标effect而不播报获得。
             // CMD19已安装的穿戴对象不能再清空；统一按容器保护，不用部位白名单遗漏宠物等槽。
             var reloadSlots = slots.Where(slot => slot.List == list && receipt.Index.Find(slot) is { } now &&
@@ -204,14 +209,16 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             });
         }
         // 全量重载会重建未变化的图标，锁通知必须覆盖同一批容器中的全部实例。
-        bool reloadLocks = rebuildMain || mainExpansionChanged || plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion ||
+        bool reloadLocks = reloadPersonalCargo || rebuildMoveList || mainExpansionChanged || plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion ||
             plan.Reason is "magic_box_open" or "rune_box_open";
         var lockSlots = reloadLocks ? changedSlots.Concat(current.Inventory.Items.Where(item =>
             plan.Reason == "magic_box_open" && item.Position.List is (InventoryListType.Main or InventoryListType.PersonalCargo or
                 InventoryListType.AccountCargo or InventoryListType.Avatar or InventoryListType.Pet or InventoryListType.GuildMedal or InventoryListType.Talisman) ||
-            (rebuildMain || mainExpansionChanged || plan.Reason == "rune_box_open") && item.Position.List == InventoryListType.Main ||
+            rebuildMoveList && item.Position.List == silentMoveList ||
+            (mainExpansionChanged || plan.Reason == "rune_box_open") && item.Position.List == InventoryListType.Main ||
             plan.Before.AvatarExpansion != current.Inventory.AvatarExpansion && item.Position.List == InventoryListType.Avatar ||
-            plan.Reason == "rune_box_open" && item.Position.List == InventoryListType.Talisman).Select(item => item.Position)) : changedSlots;
+            plan.Reason == "rune_box_open" && item.Position.List == InventoryListType.Talisman ||
+            reloadPersonalCargo && item.Position.List == InventoryListType.PersonalCargo).Select(item => item.Position)) : changedSlots;
         await RestoreLocksAsync(context, current.Inventory, lockSlots, plan.Before, CanSend, receipt.Index, plan.BeforeIndex);
         if (plan.ChangedCurrencies.Any(kind => kind is >= DfoServer.Game.Currency.CurrencyKind.Cera and <= DfoServer.Game.Currency.CurrencyKind.HappyTokenCera))
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
@@ -246,6 +253,10 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "overflow_mail_committed", CanSend);
         if (plan.Before.CargoCapacity != current.Inventory.CargoCapacity)
         {
+            // 66先更新打开的金库窗口；13先写入容量会让原生的“容量增加”判断跳过重绘。
+            if (current.Inventory.CargoCapacity > plan.Before.CargoCapacity)
+                await context.Notify(NotiPacketType.CERA_SPECIALITEM, CargoPackets.PersonalCapacity(current.Inventory.CargoCapacity),
+                    "personal_cargo_capacity_changed", CanSend);
             await context.Notify(NotiPacketType.ITEM_LIST, CargoPackets.Full(current.Inventory, InventoryListType.PersonalCargo), "personal_cargo_capacity", CanSend);
             await RestoreLocksAsync(context, current.Inventory, current.Inventory.Items.Where(item => item.Position.List == InventoryListType.PersonalCargo).Select(item => item.Position), canSend: CanSend, currentIndex: receipt.Index);
         }

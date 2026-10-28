@@ -15,6 +15,7 @@ internal sealed partial class ItemCatalog
     readonly IReadOnlyDictionary<int, string> stackable;
     readonly IReadOnlySet<int> premiumServiceItems;
     readonly IReadOnlyDictionary<int, PremiumContract> acquisitionContracts;
+    readonly IReadOnlyDictionary<int, AccountCargoAcquisition> acquisitionCargo;
     readonly GameWorld.Creatures.CreatureCatalog? creatures;
     readonly EchonEquipmentCatalog? echon;
     readonly EchonEquipmentCatalog? newEchon;
@@ -84,7 +85,8 @@ internal sealed partial class ItemCatalog
     public ItemCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment,
         IReadOnlyDictionary<int, string> stackable, int equipmentSellRate, IReadOnlySet<int>? premiumServiceItems = null,
         IReadOnlyDictionary<int, PremiumContract>? acquisitionContracts = null, GameWorld.Creatures.CreatureCatalog? creatures = null,
-        EchonEquipmentCatalog? echon = null, EchonEquipmentCatalog? newEchon = null)
+        EchonEquipmentCatalog? echon = null, EchonEquipmentCatalog? newEchon = null,
+        IReadOnlyDictionary<int, AccountCargoAcquisition>? acquisitionCargo = null)
     {
         pvf = archive;
         EquipmentGrowth = new(archive, equipment);
@@ -92,6 +94,7 @@ internal sealed partial class ItemCatalog
         this.stackable = stackable;
         this.premiumServiceItems = premiumServiceItems ?? new HashSet<int>();
         this.acquisitionContracts = acquisitionContracts ?? new Dictionary<int, PremiumContract>();
+        this.acquisitionCargo = acquisitionCargo ?? new Dictionary<int, AccountCargoAcquisition>();
         this.equipmentSellRate = equipmentSellRate;
         this.creatures = creatures;
         this.echon = echon;
@@ -600,14 +603,17 @@ internal sealed partial class ItemCatalog
             var match = Regex.Match(text.Section("explain"), @"(?:增加到|升级至|升级到|升级为)\s*(\d+)\s*格");
             if (match.Success)
                 cargoTarget = checked((ushort)int.Parse(match.Groups[1].Value));
+            // 旧银质工具的32格声明经兼容约定映射到本版40格，不映射其他表外容量。
+            if (cargoTarget == 32) cargoTarget = 40;
         }
         return new(id, kind, slot, (byte)minimum, (ushort)durability, stackLimit,
             Int("weight", 0), Int("rarity", 0), Int("grade", 0), text.Section("attach type"),
             jobMask, checked((ushort)Int("required skill", 0)),
             name, text.Section("stackable type").Replace("`", "").Trim())
         {
-            IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text),
+            IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text) || cargoTarget > 0 || acquisitionCargo.ContainsKey(id),
             AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),
+            AcquisitionAccountCargo = acquisitionCargo.GetValueOrDefault(id),
             OpensCreatureSkinSlot = !isEquipment && ReadCreatureSkinTicket(text),
             OpensAuraSkinSlot = !isEquipment && id == 490700411 && kind == ItemKind.Material && ReadAuraSkinAction(text),
             WeaponSubType = kind == ItemKind.Equipment && slot == 12 &&

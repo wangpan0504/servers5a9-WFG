@@ -35,7 +35,7 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
             foreach (int id in definition.Pools.SelectMany(pool => pool.Rewards).Where(row => row.Weight > 0).Select(row => row.ItemId).Distinct())
             {
                 if (Currency.CurrencyWallet.RewardKind(id) is not null || pieces.ByPiece.ContainsKey(id)) continue;
-                if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).AcquisitionContract is not null) continue;
+                if (contracts?.TryAcquisitionContract(id, out _) == true || catalog.Get(id).HasAcquisitionEffect) continue;
                 if (contracts?.Recognizes(id) == true)
                     return InventoryResult.Reject(19);
                 if (catalog.Get(id).IsPremiumService) return InventoryResult.Reject(19);
@@ -152,7 +152,7 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
                     result.Add(new(pair.Key, pair.Value, -1, 0, false));
                     continue;
                 }
-                if (contracts?.TryAcquisitionContract(pair.Key, out _) == true || catalog.Get(pair.Key).AcquisitionContract is not null)
+                if (contracts?.TryAcquisitionContract(pair.Key, out _) == true || catalog.Get(pair.Key).HasAcquisitionEffect)
                 {
                     result.Add(new(pair.Key, pair.Value, -1, 0, false));
                     continue;
@@ -188,6 +188,8 @@ internal sealed class InventoryMagicBoxService(ItemCatalog catalog, MagicBoxCata
         receipt = new(box.Core.ItemId, box.Position.Index, material?.Position.Index ?? (short)-1, opens, rows,
             request.RawListType, doubleRows, seriaSource ? luckBefore : 0, seriaSource ? luck : 0, displayRows);
         long? deadline = InventoryAvatarPackageService.EarliestDeadline(box, material is null ? [] : [material]);
+        if (grant.Plan.CharacterPrecondition?.QualificationExpiresAt is { } acquiredUntil && (deadline is null || acquiredUntil < deadline))
+            deadline = acquiredUntil;
         foreach (var item in after.Items.Concat(grant.Plan.OverflowItems))
             if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
                 (deadline is null || item.ExpireTime < deadline)) deadline = item.ExpireTime;

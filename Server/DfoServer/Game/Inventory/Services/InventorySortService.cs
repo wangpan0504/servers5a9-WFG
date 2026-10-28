@@ -34,33 +34,10 @@ internal static class InventorySortService
             .OrderBy(item => item.Position.Index).ToArray();
         foreach (var item in movable)
             planned.Remove(item.Position);
-        IEnumerable<InventoryItem> ordered = movable;
-        // 不支持的条件回退页面默认；时装默认稀有度需读模板，其余默认只用实例字段。
-        // 护石窗口整理菜单与背包同一套编号：1=按品级（稀有度/符文品级降序）；其余（含菜单里的「按组织」
-        // 与默认项）回页面默认，护石页按等级降序、符文页按阵营归组再按品级降序。
-        byte algorithm = page is not null ? condition == 1 ? (byte)1 : (byte)7
-            : list == InventoryListType.Avatar ? condition == 3 ? (byte)3 : (byte)1 : list != InventoryListType.Main ? (byte)0 : kind switch
-        {
-            ItemKind.Equipment when condition is 1 or 2 or 3 => condition,
-            ItemKind.Consumable when condition is 3 or 4 => condition,
-            ItemKind.Material or ItemKind.Profession when condition == 3 => condition,
-            _ => (byte)0
-        };
-        var sorted = algorithm switch
-        {
-            // 符文品级来自资源 `[rune option]` 而不是模板稀有度，按品级整理必须读符文定义。
-            1 when runePage => ordered.OrderByDescending(item => catalog.Rune(item.Core.ItemId)?.Grade ?? 0),
-            1 => ordered.OrderByDescending(item => RarityRank(catalog.Get(item.Core.ItemId).Rarity)),
-            2 => ordered.OrderByDescending(item => catalog.Get(item.Core.ItemId).MinimumLevel),
-            3 when kind is ItemKind.Equipment or ItemKind.Avatar => ordered.OrderBy(item => catalog.Get(item.Core.ItemId).EquipmentSlot),
-            3 => ordered.OrderBy(item => catalog.Get(item.Core.ItemId).StackableType, StringComparer.OrdinalIgnoreCase),
-            4 => ordered.OrderBy(item => item.ExpireTime <= 0 ? int.MaxValue : item.ExpireTime),
-            7 when runePage => ordered.OrderBy(item => catalog.Rune(item.Core.ItemId) is { } rune ? (int)rune.Camp : 0)
-                .ThenByDescending(item => catalog.Rune(item.Core.ItemId)?.Grade ?? 0),
-            7 => ordered.OrderByDescending(item => catalog.Get(item.Core.ItemId).MinimumLevel),
-            _ => ordered.OrderBy(item => item.Core.Kind)
-        };
-        ordered = sorted.ThenBy(item => item.Core.Kind).ThenBy(item => item.Core.ItemId).ThenBy(item => item.Position.Index);
+        // 仓库页码不是物品类型；先分组，再复用各物品栏页面的排序规则。
+        IEnumerable<InventoryItem> ordered = cargo
+            ? movable.GroupBy(item => item.Core.Kind).OrderBy(group => group.Key).SelectMany(group => Order(group, group.Key))
+            : Order(movable, kind);
         short slot = range.Start;
         foreach (var item in ordered)
         {
@@ -73,6 +50,37 @@ internal static class InventorySortService
         var after = before with { Items = planned.Values.OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray() };
         after.Validate();
         return new(true, 0, new(before, after, "sort_item"));
+
+        IOrderedEnumerable<InventoryItem> Order(IEnumerable<InventoryItem> input, ItemKind groupKind)
+        {
+            bool groupRunePage = runePage || cargo && groupKind == ItemKind.Rune;
+            bool groupSpecialPage = page is not null || cargo && groupKind is (ItemKind.Rune or ItemKind.Talisman);
+            // 不支持的条件回退页面默认；时装默认稀有度需读模板，其余默认只用实例字段。
+            // 护石窗口整理菜单与背包同一套编号：1=按品级；其余回页面默认。
+            byte algorithm = groupSpecialPage ? condition == 1 ? (byte)1 : (byte)7
+                : list == InventoryListType.Avatar ? condition == 3 ? (byte)3 : (byte)1 : list != InventoryListType.Main && !cargo ? (byte)0 : groupKind switch
+            {
+                ItemKind.Equipment when condition is 1 or 2 or 3 => condition,
+                ItemKind.Consumable when condition is 3 or 4 => condition,
+                ItemKind.Material or ItemKind.Profession when condition == 3 => condition,
+                _ => (byte)0
+            };
+            var sorted = algorithm switch
+            {
+                // 符文品级来自资源，不使用模板稀有度。
+                1 when groupRunePage => input.OrderByDescending(item => catalog.Rune(item.Core.ItemId)?.Grade ?? 0),
+                1 => input.OrderByDescending(item => RarityRank(catalog.Get(item.Core.ItemId).Rarity)),
+                2 => input.OrderByDescending(item => catalog.Get(item.Core.ItemId).MinimumLevel),
+                3 when groupKind is ItemKind.Equipment or ItemKind.Avatar => input.OrderBy(item => catalog.Get(item.Core.ItemId).EquipmentSlot),
+                3 => input.OrderBy(item => catalog.Get(item.Core.ItemId).StackableType, StringComparer.OrdinalIgnoreCase),
+                4 => input.OrderBy(item => item.ExpireTime <= 0 ? int.MaxValue : item.ExpireTime),
+                7 when groupRunePage => input.OrderBy(item => catalog.Rune(item.Core.ItemId) is { } rune ? (int)rune.Camp : 0)
+                    .ThenByDescending(item => catalog.Rune(item.Core.ItemId)?.Grade ?? 0),
+                7 => input.OrderByDescending(item => catalog.Get(item.Core.ItemId).MinimumLevel),
+                _ => input.OrderBy(item => item.Core.Kind)
+            };
+            return sorted.ThenBy(item => item.Core.Kind).ThenBy(item => item.Core.ItemId).ThenBy(item => item.Position.Index);
+        }
 
         bool InPage(InventoryItem item) => item.Position.List == list &&
             item.Position.Index >= range.Start && item.Position.Index <= range.End;

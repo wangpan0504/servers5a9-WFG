@@ -156,7 +156,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 }
                 else if (template is { PersonalCargoUpgradeTarget: > 0 })
                 {
-                    if (product.Count != 1 || template.PersonalCargoUpgradeTarget <= cargoCapacity || template.PersonalCargoUpgradeTarget > 264 ||
+                    if (product.Count != 1 || template.PersonalCargoUpgradeTarget <= cargoCapacity || !CargoCatalog.SupportsPersonalCapacity(template.PersonalCargoUpgradeTarget) ||
                         !template.AllowsUse(character.Level, character.Job) || !InventoryMoveService.RequiredSkillSatisfied(character, template))
                         return InventoryResult.Reject(17);
                     cargoCapacity = template.PersonalCargoUpgradeTarget;
@@ -219,7 +219,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             if (!spent.Accepted) return InventoryResult.Reject(10);
             paid = spent.Plan!.After;
         }
-        paid = paid with { AvatarExpansion = avatarExpansion };
+        paid = paid with { AvatarExpansion = avatarExpansion, CargoCapacity = cargoCapacity };
         // 主商品和附赠按真实货币归属合计；付费购买不能沿普通发奖的上限截断规则少发奖励。
         if (!CanGrantCurrencies(paid, rewards, new CurrencyService(goldLimits).CarryLimit(character)))
             return InventoryResult.Reject(17);
@@ -228,6 +228,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             ignoreUsablePeriod: ignoreUsablePeriod);
         if (!grant.Accepted)
             return grant;
+        Deadline(grant.Plan!.CharacterPrecondition?.QualificationExpiresAt);
         var overflow = grant.Plan!.OverflowItems;
         if (avatarRewards.Count != 0)
         {
@@ -260,7 +261,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 after = after with { ServerItems = usage };
             }
         receipt = new(products.ToImmutableArray(), bonuses);
-        return new(true, 0, new(before, after with { CargoCapacity = cargoCapacity }, "cash_shop_buy", new(character, deadline), overflow)
+        return new(true, 0, new(before, after, "cash_shop_buy", new(character, deadline), overflow)
         {
             UnlockSkillTree = unlockSkillTree,
             GuildHongbaoPurchase = cashOnly == 0 ? null : new(character.Guild!.Id, checked((int)cashOnly),
@@ -279,7 +280,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             try
             {
                 var template = catalog.Get(itemId);
-                return !template.IsPremiumService || template.AcquisitionContract is not null;
+                return !template.IsPremiumService || template.HasAcquisitionEffect;
             }
             catch (InvalidDataException) { return false; }
         }
