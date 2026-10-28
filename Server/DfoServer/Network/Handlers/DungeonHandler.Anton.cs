@@ -20,11 +20,13 @@ internal sealed partial class DungeonHandler
             {
                 using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
                 reason = "anton-entry-request-unproven";
+                // 实机 CMD16 是 25 字节，Unknown21 为 0xFFFFFFFF（pcap-manual-1235）。自测构造包该字段为 0。
+                // 只接受这两个值；其它 Unknown21 仍是 anton-entry-request-unproven。
                 if (context.Session.Phase == DfoServer.Game.Session.SessionPhase.MapSelect &&
                     selection.DungeonIndex <= int.MaxValue && selection.Parameter == 2 && selection.Unknown5 == 0 &&
                     selection.Unknown7 == 0 && selection.Unknown8 == 0 && selection.Unknown9 == ushort.MaxValue &&
                     selection.Unknown11 == 0 && selection.Unknown15 == 0 && selection.Unknown16 == 0 &&
-                    selection.Unknown20 == 0 && selection.Unknown21 == 0)
+                    selection.Unknown20 == 0 && selection.Unknown21 is 0 or uint.MaxValue)
                 {
                     // 大图确认可直接发送16；每次从原Battle和分队重新签发，不能借普通选图进入团本。
                     selected = antonRaid.Select(context.Session, (int)selection.DungeonIndex, party, out reason);

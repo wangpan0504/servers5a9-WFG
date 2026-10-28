@@ -53,12 +53,17 @@ internal static class CommandLineTests
             (["--gm"], ServerCommandKind.Gm),
             (["--prepare-jianying", "剑影", "audit"], ServerCommandKind.PrepareCharacter),
             (["--import-characters", "roles.txt"], ServerCommandKind.ImportCharacters),
+            (["--anton-probe"], ServerCommandKind.AntonProbe),
             (["--pvf-list", "sample.pvf", "character/"], ServerCommandKind.PvfList),
             (["--pvf-text", "sample.pvf", "character/character.lst"], ServerCommandKind.PvfText)
         ];
         foreach (var test in supported)
             That(ServerCommand.Parse(test.Arguments).Kind == test.Kind, string.Join(' ', test.Arguments));
         That(ServerCommand.Parse(["--selftest-tcp", "material-exchange,booster"]).Arguments.SequenceEqual(["material-exchange,booster"]), "TCP group selection preserved");
+        That(ServerCommand.Parse(["--anton-probe", "--host", "127.0.0.1", "--channel-port", "24100", "--account", "antonprobe"]).Arguments.SequenceEqual(
+            ["--host", "127.0.0.1", "--channel-port", "24100", "--account", "antonprobe"]), "anton probe keeps connection arguments");
+        That(Testing.AntonTcpProbe.IsUsageOnly([]) && Testing.AntonTcpProbe.IsUsageOnly(["--help"]) &&
+            !Testing.AntonTcpProbe.IsUsageOnly(["--host", "127.0.0.1"]), "anton probe without a host does not connect");
         foreach (string group in Testing.TcpRegressionTests.GroupNames)
             That(ServerCommand.Parse(["--selftest-tcp", group]).Kind == ServerCommandKind.TcpTest, "known TCP group " + group);
         foreach (string selection in new[] { "", "booster,", "booster,booster", "booster,unknown", "Booster" })

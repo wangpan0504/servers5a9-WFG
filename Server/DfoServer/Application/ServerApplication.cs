@@ -50,6 +50,12 @@ public static class ServerApplication
             Console.WriteLine(ServerCommand.Usage);
             return 0;
         }
+        // 无主机参数时只打印用法，不解析监听端口、不打开数据库、不连接。
+        if (command.Kind == ServerCommandKind.AntonProbe && AntonTcpProbe.IsUsageOnly(command.Arguments))
+        {
+            Console.WriteLine(AntonTcpProbe.Usage);
+            return 0;
+        }
         if (command.Kind is ServerCommandKind.PvfList or ServerCommandKind.PvfText)
         {
             using var archive = PvfArchive.Open(command.Arguments[0]);
@@ -95,6 +101,8 @@ public static class ServerApplication
             await TcpRegressionTests.RunAsync(options, command.Arguments.FirstOrDefault());
             return 0;
         }
+        if (command.Kind == ServerCommandKind.AntonProbe)
+            return AntonTcpProbe.Run(options, command.Arguments);
         using var log = command.Kind == ServerCommandKind.Serve ? new ServerLog(options.LogDirectory, Console.Out) : null;
         // 数据库慢操作（>1000ms）诊断出口：由装配入口把统一日志交给 Persistence，仓储不持有 ServerLog 实例。
         // 只在本入口生命周期内有效，日志释放后不保留全局引用。

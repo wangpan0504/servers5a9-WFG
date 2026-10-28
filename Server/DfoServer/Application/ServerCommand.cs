@@ -20,7 +20,8 @@ internal enum ServerCommandKind
     Gm,
     PrepareCharacter,
     PrepareBookCharacter,
-    ImportCharacters
+    ImportCharacters,
+    AntonProbe
 }
 
 internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments, bool PacketCapture = false)
@@ -50,6 +51,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --selftest-core            基础自测，无需 PVF
           --selftest                 完整服务端自测
           --selftest-tcp [测试组]    隔离 TCP 回归
+          --anton-probe [参数]       TCP 假客户端：默认不连接。见 Docs/开发/安徒恩TCP探针.md
           --scan-quests              只读任务覆盖与依赖检查，输出JSON
           --gm [命令]               开发管理命令
           --prepare-book <职业> <分支> <角色名> <审计目录> [账号]  开发用：创建指定职业分支的95级二觉角色
@@ -105,6 +107,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
             "--prepare-jianying" => (ServerCommandKind.PrepareCharacter, 2),
             "--prepare-book" => (ServerCommandKind.PrepareBookCharacter, -1),
             "--import-characters" => (ServerCommandKind.ImportCharacters, 1),
+            "--anton-probe" => (ServerCommandKind.AntonProbe, -1),
             _ => throw new InvalidDataException("未知命令：" + action)
         };
         if (argumentCount >= 0 && arguments.Length != argumentCount)
