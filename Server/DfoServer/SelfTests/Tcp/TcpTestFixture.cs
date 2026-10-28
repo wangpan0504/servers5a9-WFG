@@ -187,7 +187,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         return File.ReadAllText(prefix + ".stdout.txt").Trim();
     }
 
-    public async Task StartAsync(string phase = "initial", bool packetCapture = false, bool isolatedProcess = false)
+    public async Task StartAsync(string phase = "initial", bool packetCapture = false, bool isolatedProcess = false, TimeSpan? startupTimeout = null)
     {
         var startup = Stopwatch.StartNew();
         if (process is not null || hosted is not null)
@@ -271,6 +271,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         try
         {
             var deadline = Stopwatch.StartNew();
+            var readyTimeout = startupTimeout ?? TimeSpan.FromSeconds(45);
             while (!File.Exists(ready))
             {
                 if (hosted is { IsCompleted: true })
@@ -283,7 +284,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                     await errors!;
                     throw new InvalidOperationException("Fixture exited before ready: " + ReadDiagnostic(Path.Combine(Options.LogDirectory, "stderr.txt")));
                 }
-                if (deadline.Elapsed > TimeSpan.FromSeconds(45))
+                if (deadline.Elapsed > readyTimeout)
                     throw new TimeoutException("Fixture not ready: " + Root + "; " +
                         ReadinessDiagnostic(phase, deadline.Elapsed, ready, Path.Combine(Options.LogDirectory, "server.jsonl"), process, hosted));
                 await Task.Delay(50);
@@ -291,7 +292,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
 
             // ready.json 可能正处在 File.WriteAllText 的写入窗口。
             int pid = 0;
-            while (pid == 0 && deadline.Elapsed < TimeSpan.FromSeconds(45))
+            while (pid == 0 && deadline.Elapsed < readyTimeout)
             {
                 try
                 {

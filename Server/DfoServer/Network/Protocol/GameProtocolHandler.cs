@@ -41,7 +41,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Dungeons.DungeonBattleLevelSettings? monsterBattleLevels = null,
     DfoServer.Game.Dungeons.DungeonMonsterAiSettings? monsterAi = null,
     DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
-    DfoServer.Game.Raids.LukeRaidRejoin? lukeRejoin = null) : IConnectionProtocol
+    DfoServer.Game.Raids.LukeRaidRejoin? lukeRejoin = null, TradeHandler? trade = null) : IConnectionProtocol
 {
     // 断线诊断不得阻止剩余原清理，包括诊断后端自身失败；不以日志成功作为登记成功。
     void LogLukeDisconnect(string kind, object detail)
@@ -164,6 +164,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             { Connection = connection.Id, Error = error.GetType().Name, error.Message });
         prepareDungeon?.Invoke(context);
         long partyEpoch = session.SelectionEpoch;
+        DfoServer.Game.Trade.TradeParticipant? tradeParticipant = null;
         await using var partyDirectory = parties is null ? null : new PartyDirectoryProjection(context, parties, towns, log);
         context.PartyDirectory = partyDirectory;
         await using var arenaDirectory = arena is null ? null : new PvpArenaDirectoryProjection(context, arena, log);
@@ -231,6 +232,9 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     log.Write("recv", new { Connection = connection.Id, request.Kind, request.Opcode, Name = name, Body = body });
                 // 任务日周期与命令分派作为同一个重试单元：忙锁表示本次写事务未提交，重放不会把已提交结果记成成功；
                 // 成功应答在提交之后才发送，重试期间客户端不会先收到成功。
+                var beforeTrade = session.CapturePlayerTrade(requireEligible: false);
+                tradeParticipant = beforeTrade?.Participant ?? tradeParticipant;
+                var beforeTradeView = tradeParticipant is { } capturedTrade ? trade?.Find(capturedTrade) : null;
                 var (dispatched, result) = await SqliteBusyRetry.TryExecuteAsync(async () =>
                 {
                     // 另一连接的副职业交易会保留本门禁到发布完成；日周期也不能绕过它替换 Selected。
@@ -257,14 +261,29 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                     continue;
                 if (result == CommandResult.CloseConnection)
                     return;
+                var afterTrade = session.CapturePlayerTrade(requireEligible: false);
+                if (beforeTrade is { } before && afterTrade is { } after && before.Participant == after.Participant &&
+                    (before.Character.Position.Town != after.Character.Position.Town || before.Character.Position.Area != after.Character.Position.Area))
+                {
+                    if (beforeTradeView is { } previousView) trade?.Release(before.Participant, previousView);
+                    tradeParticipant = null;
+                }
                 if (!session.Ready || session.SelectionEpoch != partyEpoch)
                 {
+                    if (tradeParticipant is { } previous && beforeTradeView is { } previousView) trade?.Release(previous, previousView);
+                    tradeParticipant = null;
                     await PartyDungeonProjection.DetachAsync(context);
                     // 只拆上一选角代次；Ready期间恢复的真实席位已经绑定当前代次。
                     parties?.Detach(session, session.Ready ? session.SelectionEpoch : null);
                     if (arena is not null) arena.Publish(await arena.DetachAsync(session));
                 }
+                else if (session.Phase != SessionPhase.Town && tradeParticipant is { } previousTrade)
+                {
+                    if (beforeTradeView is { } previousView) trade?.Release(previousTrade, previousView);
+                    tradeParticipant = null;
+                }
                 partyEpoch = session.SelectionEpoch;
+                tradeParticipant ??= afterTrade?.Participant;
                 ushort currentSocial = session.Ready ? session.Selected?.Id ?? (ushort)0 : (ushort)0;
                 bool directoryChanged = socialCharacter != currentSocial || directoryEpoch != sender.Epoch || directoryPhase != session.Phase;
                 if (socialCharacter != currentSocial)
@@ -314,6 +333,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }
         finally
         {
+            if (tradeParticipant is { } departing) trade?.Release(departing);
             nativeRegistration?.Dispose();
             await dailyFatigue.DisposeAsync();
             await revival.DisposeAsync();

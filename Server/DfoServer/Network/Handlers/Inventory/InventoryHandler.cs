@@ -9,7 +9,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed partial class InventoryHandler(InventoryService inventory, InventoryProjection projection,
-    ServerLog? log = null) : IGameCommandModule
+    ServerLog? log = null, TradeHandler? trade = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -28,6 +28,7 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
 
     async Task<CommandResult> MoveAsync(GameConnectionContext context, Packet packet)
     {
+        if (trade is not null && await trade.TryMoveAsync(context, packet)) return CommandResult.Handled;
         var request = InventoryRequests.Move(packet.Body);
         var result = context.Session.MutateInventory(
             character => inventory.Move(character, request, context.Session.LoginWearRestatementWindowOpen),
