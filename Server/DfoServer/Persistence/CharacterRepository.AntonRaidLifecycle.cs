@@ -41,13 +41,14 @@ internal sealed partial class CharacterRepository : IAntonRaidLifecycleStore
                     if (previous.Instance != candidate.Instance || previous.RaidType != RaidKind.Anton || previous.Phase != candidate.Phase ||
                         previous.Event != candidate.Event || previous.Anchor != candidate.Anchor.ToUnixTimeSeconds() ||
                         previous.Week != candidate.Week || previous.Character != member.Character || previous.Source != member.Policy.Source ||
+                        candidate.TimedOut && (previous.Eligible || previous.CountsAsClear || previous.Reason != "phase-timeout") ||
                         !AntonRaidBattle.SameLukeOffers(previous.Offers, member.Policy.Offers))
                         throw new InvalidDataException("安徒恩阶段重放改变原事件或奖励");
                     result.Add(previous); continue;
                 }
                 if (candidate.Phase == 1 && reader.IsDBNull(3)) throw new InvalidDataException("安徒恩最终通关缺少阶段0回执");
             }
-            bool eligible = state == 0;
+            bool eligible = !candidate.TimedOut && state == 0;
             if (eligible && candidate.Phase == 1)
             {
                 command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=0 AND state=2 AND clear_week=$week AND instance_id<>$instance";
@@ -56,9 +57,9 @@ internal sealed partial class CharacterRepository : IAntonRaidLifecycleStore
             bool counts = eligible && candidate.Phase == 1;
             var receipt = new RaidPhaseEligibility(candidate.Instance, RaidKind.Anton, candidate.Phase, candidate.Event,
                 candidate.Anchor.ToUnixTimeSeconds(), member.Character, counts, eligible,
-                eligible ? "eligible" : "admission-abandoned-or-weekly-limit", member.Policy.Source, candidate.Week, member.Policy.Offers);
+                candidate.TimedOut ? "phase-timeout" : eligible ? "eligible" : "admission-abandoned-or-weekly-limit", member.Policy.Source, candidate.Week, member.Policy.Offers);
             command.Parameters["$receipt"].Value = JsonSerializer.Serialize(receipt);
-            command.Parameters["$state"].Value = candidate.Phase == 1 ? counts ? 2 : 1 : state;
+            command.Parameters["$state"].Value = candidate.TimedOut ? 1 : candidate.Phase == 1 ? counts ? 2 : 1 : state;
             command.Parameters["$clear"].Value = counts ? candidate.Week : DBNull.Value;
             command.CommandText = $"UPDATE character_raid_runs SET {prefix}_event=$event,{prefix}_anchor=$anchor,{prefix}_receipt=$receipt,state=$state" +
                 (candidate.Phase == 1 ? ",clear_week=$clear" : "") +

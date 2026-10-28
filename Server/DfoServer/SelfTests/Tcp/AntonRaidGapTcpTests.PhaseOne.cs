@@ -52,6 +52,9 @@ internal static partial class AntonRaidGapTcpTests
         string afterFirst = Assets();
         Claim(1, 0, false);
         That(afterFirst == Assets() && fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[1L]], "同牌回放不重复发放");
+        clock.Advance(600);
+        That(AntonTcpProbe.Barrier(peer, "UNIMPLEMENTED奖励期休息600").All(p => p.Opcode is not (587 or 596 or 597)) &&
+            afterFirst == Assets(), "UNIMPLEMENTED：600不替代缺少的第二牌种，不自动推进Reward或发奖");
         Claim(0, 0, true);
         peer.Send(42); AntonTcpProbe.Barrier(peer, "奖励后回候战室");
         foreach (int dungeon in new[] { 220, 221, 222, 223, 224 }) AntonTcpProbe.RejectClosed(peer, null, dungeon);

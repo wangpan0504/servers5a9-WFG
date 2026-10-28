@@ -73,6 +73,19 @@ internal static class AntonRaidStartTests
             const string balance = "SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=100";
             var expected = Recruit(actors[..20]);
             var original = sessions.Take(20).Select(s => s.Selected!).ToArray();
+            var emptyItems = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+            foreach (int? seconds in new int?[] { null, 0, 86401 })
+            {
+                var declaration = script with { Headers = seconds is { } value
+                    ? [new("[phase time over]", 0, [new(0, value, null)])] : [] };
+                var unavailable = definition with { Resources = definition.Resources! with { Script = declaration } };
+                var guarded = new AntonRaidStart(registry, parties, repository, towns, pieces, phaseProgress: true,
+                    rewards: new(declaration, emptyItems));
+                That(guarded.Start(actors[0], expected, unavailable) is { Error: 19, Reason: "anton-phase-timeout-unavailable" } &&
+                    Scalar(balance) == 60 && registry.IsCurrent(expected) && parties.Snapshot().Length == 0 &&
+                    sessions.Take(20).Select((s, i) => ReferenceEquals(s.Selected, original[i]) && s.StartedRaid is null).All(row => row),
+                    "缺失、零或越界阶段时限在扣票/绑定前拒绝，不猜期限或建立半成品实例");
+            }
             Reject<InvalidOperationException>(() => AccountOwners.Lease.ExecuteGroup(actors.Take(20).Select(a => (a.Owner, a.Character)).ToArray(), () => true),
                 "普通ExecuteGroup保持四人上限，不能被团本实现放大");
             AccountOwners.Lease.ExecuteRaid(actors.Take(20).Select(a => (a.Owner, a.Character)).ToArray(), () =>

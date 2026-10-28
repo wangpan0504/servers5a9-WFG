@@ -101,19 +101,23 @@ internal sealed partial class AntonRaidBattle
                 pendingTransition is not null || TerminalRequested(current)) return false;
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。
             var before = current;
+            if (LukePhaseDueLocked())
+            {
+                var expired = current with { PhaseExpired = true, Revision = current.Revision + 1,
+                    Dungeons = current.Dungeons.ToImmutableDictionary(row => row.Key, _ => RaidDungeonState.Hide),
+                    Timers = ImmutableDictionary<RaidTimer, int>.Empty,
+                    TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty,
+                    TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty,
+                    Deferred = ImmutableDictionary<int, RaidClause>.Empty,
+                    DeferredAnchors = ImmutableDictionary<int, long>.Empty, DeferredGenerations = ImmutableDictionary<int, long>.Empty };
+                if (Kind == RaidKind.Anton) CommitBattleCandidate(before, expired);
+                else current = expired;
+                return true;
+            }
             if (Kind == RaidKind.Anton)
             {
                 ExpireDueAntonClockLocked();
                 return !ReferenceEquals(before, current);
-            }
-            if (LukePhaseDueLocked())
-            {
-                current = current with { PhaseExpired = true, Revision = current.Revision + 1,
-                    Dungeons = current.Dungeons.ToImmutableDictionary(row => row.Key, _ => RaidDungeonState.Hide),
-                    Timers = ImmutableDictionary<RaidTimer, int>.Empty,
-                    TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty,
-                    TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty };
-                return true;
             }
             var due = current.Timers.Where(row => current.TimerAnchors.TryGetValue(row.Key, out long anchor) &&
                 lukeClock.GetElapsedTime(anchor) >= TimeSpan.FromSeconds(row.Value))

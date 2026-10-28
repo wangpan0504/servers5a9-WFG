@@ -231,7 +231,7 @@ internal sealed partial class AntonRaidBattle
     {
         if (ReferenceEquals(before, candidate)) return;
         candidate = ReconcileLukeRoutes(candidate);
-        if (Kind == RaidKind.Anton && antonRewards is not null && candidate.State == AntonRaidBattleState.Reward)
+        if (Kind == RaidKind.Anton && antonRewards is not null && (candidate.State == AntonRaidBattleState.Reward || candidate.PhaseExpired))
         {
             pendingTransition = candidate;
             _ = AntonPhaseSettlement.Capture(this, candidate.Phase);
