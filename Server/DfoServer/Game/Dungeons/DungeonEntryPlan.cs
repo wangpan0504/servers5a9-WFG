@@ -678,7 +678,8 @@ internal sealed record DungeonEntryPlan(
             }
         }
         if (quest is not null && (quest.Id != (questId == 0 ? routeQuest : questId) || quest.Definition is null ||
-            quest.Definition.Dungeons.Length != 0 && !quest.Definition.Dungeons.Any(row => row.DungeonId == dungeonId)))
+            quest.Definition.Dungeons.Length != 0 && !quest.Definition.Dungeons.Any(row => row.DungeonId == dungeonId) &&
+            !(ordinaryHunt && AssaultSpecialSupplyHunt(quest, difficulty))))
         {
             reason = "quest-dungeon-mismatch";
             return false;
@@ -802,6 +803,12 @@ internal sealed record DungeonEntryPlan(
         return plan with { EntryItem = ticket, StartFatigue = start, EntryCostNote = notes.Count == 0 ? null : string.Join(',', notes) };
     }
 
+    // 6084「[强袭模式]特殊补给」：猎杀四元组是任意副本，dungeon info 只列出强袭任务图。
+    static bool AssaultSpecialSupplyHunt(StoryQuest quest, byte difficulty) =>
+        quest is { Id: 6084, Grade: "[side]", Condition: "[hunt monster]", SubType: -1, MainQuest: null } &&
+        QuestHuntProgress.TryTargets(quest, out var targets) &&
+        targets.Any(target => target.DungeonId == -1 && target.MinimumDifficulty <= difficulty);
+
     static bool CanUseOrdinaryQuestRoute(DungeonDefinition definition, Character character, StoryQuest quest,
         uint dungeonId, uint questId, byte difficulty)
     {
@@ -811,6 +818,8 @@ internal sealed record DungeonEntryPlan(
         bool altarHunt = dungeonId is 11006 or 11007 && quest.Grade == "[side]" &&
             quest.Condition == "[hunt monster]" && QuestHuntProgress.TryTargets(quest,out var altarTargets) &&
             altarTargets.Any(target => target.DungeonId == dungeonId && target.MinimumDifficulty <= difficulty);
+        // 客户端接取后会把 6084 带进每张图的 C2S16；未列入 dungeon info 的普通图仍沿普通迷宫。
+        bool anyDungeonHunt = AssaultSpecialSupplyHunt(quest, difficulty);
         // 已支持的材料每日与每日累计通关任务保留接取身份，但不要求原资源不存在的任务迷宫。
         bool normalMission = QuestCycle.NormalDungeonMission(quest) &&
             (quest.Definition!.Dungeons.Any(row => row.DungeonId == dungeonId &&
@@ -827,15 +836,15 @@ internal sealed record DungeonEntryPlan(
         bool preyNormalClear = quest is { Id:8925, Grade:"[mission]", Condition:"[condition under clear]",
             SubType:6, IntData:[400000046,-1] } && dungeonId == 400000046;
         if (definition.IsTutorial || definition.IsClassExperience || dungeonId == 5000 || quest.Id != questId ||
-            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear && !normalMission && !dailyClear && !preyNormalClear || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
+            quest.SubType != -1 && !QuestLifecyclePlan.HarlemSeeking(quest) && !listClear && !normalMission && !dailyClear && !preyNormalClear && !anyDungeonHunt || quest.MainQuest is not null || quest.Definition is not { Diagnostics.Length: 0 } declared ||
             // 悲叹列表通关的目标由int data给出；已核对专用准入后不强求不存在的dungeon info。
-            // 其它支线仍须命中dungeon info，杀怪保留0..3，列表通关沿正式0..4难度域。
-            quest.Grade == "[side]" && !dailyClear && !altarHunt && !(definition.IsGriefTower && listClear) && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
+            // 其它支线仍须命中dungeon info，杀怪保留0..3，列表通关沿正式0..4难度域。任意副本猎杀不要求本图声明。
+            quest.Grade == "[side]" && !dailyClear && !altarHunt && !anyDungeonHunt && !(definition.IsGriefTower && listClear) && !declared.Dungeons.Any(row => row.DungeonId == dungeonId &&
                 (row.Parameter == -1 || (quest.Condition == "[hunt monster]" && row.Parameter is >= 0 and <= 3 ||
                     listClear && row.Parameter is >= 0 and <= 4) && row.Parameter <= difficulty)) ||
             quest.Grade == "[achievement]" && (declared.JobChange is not (2 or 3) ||
                 !declared.Dungeons.Any(row => row.DungeonId == dungeonId && row.Parameter is >= 0 and <= 3 && row.Parameter <= difficulty)) ||
-            quest.Grade is not ("[side]" or "[achievement]") && !autoDaily && !normalMission && !dailyClear && !preyNormalClear ||
+            quest.Grade is not ("[side]" or "[achievement]") && !autoDaily && !normalMission && !dailyClear && !preyNormalClear && !anyDungeonHunt ||
             definition.Mazes.Any(maze => maze.QuestConnectionTokens.Count != 0 &&
                 (maze.ConnectionQuestId is not { } connected || connected == questId))) return false;
         if (quest.Condition == "[hunt monster]" || normalMission && quest.Condition == "[hunt enemy]")
