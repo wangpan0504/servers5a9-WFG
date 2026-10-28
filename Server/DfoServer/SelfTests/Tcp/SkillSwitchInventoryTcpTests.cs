@@ -383,13 +383,15 @@ internal static class SkillSwitchInventoryTcpTests
         // 克隆在已穿原件上覆盖，来源UID/颜色由本次事务决定；再卸下并穿回空槽保持同一关联。
         foreach (var move in new[] { (Bag: (short)2, Id: aura.Core.ItemId, Target: 0),
             (Bag: (short)1, Id: clone.Core.ItemId, Target: aura.Core.ItemId),
+            (Bag: (short)1, Id: aura.Core.ItemId, Target: clone.Core.ItemId),
+            (Bag: (short)1, Id: clone.Core.ItemId, Target: aura.Core.ItemId),
             (Bag: (short)2, Id: 0, Target: clone.Core.ItemId),
             (Bag: (short)2, Id: clone.Core.ItemId, Target: 0) })
         {
             peer.Send(19, MoveItem(move.Bag, move.Id, 9, 1, 3, move.Target));
             peer.Expect(1, 19, MoveAck(move.Bag, 9, 1, 3));
             bool cloneWorn = move.Id == clone.Core.ItemId;
-            int actors = 0;
+            int actors = 0, equipmentCount = 0;
             peer.Barrier(packet =>
             {
                 That(packet.Kind == 0 && (packet.Opcode != 2 || packet.Body[0] == 0), "克隆覆盖、卸下及穿回同样不得发布本人Player");
@@ -404,11 +406,18 @@ internal static class SkillSwitchInventoryTcpTests
                             "Actor仍投影真实克隆模板、本次原件关联与借用颜色");
                     }
                 }
-                if (cloneWorn && packet.Opcode == 14 && packet.Body[0] == 3 && U32(packet.Body, 5) != uint.MaxValue)
-                    That(U16(packet.Body, 130) == 2 && U32(packet.Body, 132) == 3333002,
-                        "克隆自身孔位来自完整实例差量，不错误借用原件孔位");
+                if (packet.Opcode == 14 && packet.Body[0] == 3)
+                {
+                    equipmentCount++;
+                    That(U16(packet.Body, 1) == 1 && U16(packet.Body, 3) == 9 &&
+                        U32(packet.Body, 5) == (move.Id == 0 ? uint.MaxValue : (uint)move.Id),
+                        "光环覆盖交换只更新ACK19已安装的实例，不先清空穿戴对象；实际卸下才发送空槽");
+                    if (cloneWorn)
+                        That(U16(packet.Body, 130) == 2 && U32(packet.Body, 132) == 3333002,
+                            "克隆自身孔位来自完整实例差量，不错误借用原件孔位");
+                }
             });
-            That(actors == 1, "克隆移动保留一次本人Actor外观同步");
+            That(actors == 1 && equipmentCount == 1, "光环移动保留一次完整穿戴差量和本人Actor外观同步");
         }
         That(fixture.Snapshot("SELECT * FROM character_skills WHERE character_id=$p0 ORDER BY skill_id", created.Id) == skills,
             "穿脱和勾选只影响库存位置与偏好，不改变已学技能或等级");
