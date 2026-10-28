@@ -355,7 +355,7 @@ internal static class LukeRaidClockTests
                 Timer? next;
                 lock (gate)
                 {
-                    next = timers.FirstOrDefault(timer => !timer.Stopped && timer.Due <= stamp);
+                    next = timers.FirstOrDefault(timer => !timer.Stopped && !timer.Inert && timer.Due <= stamp);
                     if (next is null) return;
                     next.Due = long.MaxValue; Callbacks++;
                 }
@@ -365,7 +365,7 @@ internal static class LukeRaidClockTests
         }
         internal void FireQueued()
         {
-            Timer[] queued; lock (gate) queued = timers.Where(timer => !timer.Stopped).ToArray();
+            Timer[] queued; lock (gate) queued = timers.Where(timer => !timer.Stopped && !timer.Inert).ToArray();
             foreach (var timer in queued) timer.Callback(timer.State);
         }
         sealed class Timer(Clock clock, TimerCallback callback, object? state) : ITimer
@@ -374,13 +374,18 @@ internal static class LukeRaidClockTests
             internal readonly object? State = state;
             internal long Due = long.MaxValue;
             internal bool Stopped;
+            // 共享公会轮询（NPC到期1s、殿堂等待5s）与卢克阶段无关：接受注册但永不进入本时钟的到期推进与排队触发，
+            // 保证推进时钟只会触发卢克自己的到期；其余周期定时器仍必须拒绝。
+            internal bool Inert;
             public bool Change(TimeSpan dueTime, TimeSpan period)
             {
                 lock (clock.gate)
                 {
                 if (Stopped) return false;
-                That(period == Timeout.InfiniteTimeSpan, "每实例只有one-shot timer，不叠加周期任务");
-                Due = dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue : checked(clock.stamp + (long)Math.Ceiling(dueTime.TotalMilliseconds));
+                Inert = period != Timeout.InfiniteTimeSpan && dueTime == period &&
+                    (period == TimeSpan.FromSeconds(1) || period == TimeSpan.FromSeconds(5));
+                That(period == Timeout.InfiniteTimeSpan || Inert, "除共享公会轮询外只有one-shot timer，不叠加周期任务");
+                Due = Inert || dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue : checked(clock.stamp + (long)Math.Ceiling(dueTime.TotalMilliseconds));
                 return true;
                 }
             }
