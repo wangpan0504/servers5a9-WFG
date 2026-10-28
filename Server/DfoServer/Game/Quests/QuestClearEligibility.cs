@@ -77,9 +77,10 @@ internal static class QuestClearEligibility
             (entry.QuestId == 0 ? entry.ActiveQuestSlot == byte.MaxValue && entry.QuestAcceptanceId == Guid.Empty :
                 entry.QuestId < 30000 && entry.ActiveQuestSlot <= 29 && entry.QuestAcceptanceId != Guid.Empty &&
                 entry.QuestAcceptances.Any(row => row.QuestId == entry.QuestId && row.Slot == entry.ActiveQuestSlot && row.AcceptanceId == entry.QuestAcceptanceId)) &&
-            entry.RouteQuestId is > 0 and < 30000 &&
+            (entry.IsEvildomWarHidden && entry.PartyRoute is not null && entry.QuestId == 0 && entry.RouteQuestId == 0 ||
+             entry.RouteQuestId is > 0 and < 30000 &&
             (entry.PartyRoute is not null || entry.QuestAcceptances.Count(row => row.QuestId == entry.RouteQuestId) == 1 &&
-            entry.QuestAcceptances.Any(row => row.QuestId == entry.RouteQuestId && row.Slot <= 29 && row.AcceptanceId != Guid.Empty)) &&
+            entry.QuestAcceptances.Any(row => row.QuestId == entry.RouteQuestId && row.Slot <= 29 && row.AcceptanceId != Guid.Empty))) &&
             source.OperationId != Guid.Empty && source.OperationId == scene.OperationId && source.Identity == scene.Identity &&
             source.TemplateId == scene.TemplateId && source.SourceOrdinal == scene.SourceOrdinal &&
             entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } target] && target.TargetId == scene.TemplateId &&

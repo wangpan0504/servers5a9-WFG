@@ -18,11 +18,19 @@ internal sealed partial class CharacterRepository
         query.Parameters.AddWithValue("$id", id);
         query.Parameters.AddWithValue("$account", account);
         query.Parameters.AddWithValue("$dungeon", dungeon);
-        using var reader = query.ExecuteReader();
         // 跨日/跨周即视为重置；旧行在下一次入场时覆盖。
-        return reader.Read()
-            ? DungeonIncountPolicy.Current(new(reader.GetInt32(1), reader.GetInt32(3)), new(reader.GetInt32(0), reader.GetInt32(2)), now)
-            : default;
+        DungeonIncountUsage usage;
+        using (var reader = query.ExecuteReader())
+            usage = reader.Read()
+                ? DungeonIncountPolicy.Current(new(reader.GetInt32(1), reader.GetInt32(3)), new(reader.GetInt32(0), reader.GetInt32(2)), now)
+                : default;
+        query.CommandText = "SELECT day,daily_extra,week,weekly_extra FROM character_dungeon_incount_extra WHERE character_id=$id AND account=$account AND dungeon=$dungeon";
+        using var extra = query.ExecuteReader();
+        return extra.Read() ? usage with
+        {
+            DailyExtra = extra.GetInt32(0) == now.Day ? extra.GetInt32(1) : 0,
+            WeeklyExtra = extra.GetInt32(2) == now.Week ? extra.GetInt32(3) : 0
+        } : usage;
     }
 
     // 账号次数：存储周期与当前周期不同即视为 0。
@@ -91,7 +99,7 @@ internal sealed partial class CharacterRepository
         var character = consumption is null ? expected : CommitInventoryInTransaction(db, tx, owner, expected, consumption);
         if (increment && row is not null)
         {
-            usage = new(checked(usage.DailyUsed + 1), checked(usage.WeeklyUsed + 1));
+            usage = usage with { DailyUsed = checked(usage.DailyUsed + 1), WeeklyUsed = checked(usage.WeeklyUsed + 1) };
             using var command = db.CreateCommand();
             command.Transaction = tx;
             command.CommandText = """

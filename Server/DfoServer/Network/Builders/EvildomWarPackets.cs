@@ -5,9 +5,36 @@ namespace DfoServer.Network.Builders;
 
 internal static class EvildomWarPackets
 {
+    internal readonly record struct RewardRow(byte Type, int Value0, uint Value1);
+    internal sealed record RewardGroup(byte Key, RewardRow[] Rows);
+
     // 028F85F6读取成功u8，失败经028F8655读取公共u16；0080A920不使用该值，统一显示dstr 68129。
     // 没有可证的1652业务错误枚举，公共错误域置0；详细拒绝原因只写日志。
     public static byte[] Start(bool accepted) => accepted ? [1] : [0, 0, 0];
+
+    // 0239F4E0的原始读宽；调用方提供已经确认的展示值，本构包器不解释配置或产生资产。
+    public static byte[] Rewards(uint firstRaw, IReadOnlyList<RewardGroup> groups)
+    {
+        if (groups.Count > byte.MaxValue || groups.Any(group => group.Rows.Length > byte.MaxValue))
+            throw new ArgumentOutOfRangeException(nameof(groups), "魔界奖励组数及行数必须适配客户端u8");
+        byte[] body = new byte[5 + groups.Sum(group => 2 + group.Rows.Length * 9)];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, firstRaw);
+        body[4] = (byte)groups.Count;
+        int at = 5;
+        foreach (var group in groups)
+        {
+            body[at++] = group.Key;
+            body[at++] = (byte)group.Rows.Length;
+            foreach (var row in group.Rows)
+            {
+                body[at++] = row.Type;
+                BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(at), row.Value0);
+                BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at + 4), row.Value1);
+                at += 8;
+            }
+        }
+        return body;
+    }
 
     public static byte[] Info(byte mode, int remainingSeconds, IReadOnlyList<EvildomWarDungeonState> rows)
     {

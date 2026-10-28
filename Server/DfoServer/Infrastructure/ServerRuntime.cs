@@ -48,7 +48,8 @@ internal static class ServerRuntime
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null,
         GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
         GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null,
-        CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null)
+        CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
+        Func<int, int>? evildomHiddenDraw = null)
     {
         quests = quests.WithCreatures(itemResources.Creatures);
         var questStages = QuestStageGraph.Build(quests);
@@ -77,7 +78,7 @@ internal static class ServerRuntime
         var online = new OnlineSessionDirectory(gameCache);
         var social = new Game.Social.SocialService(repository, online);
         var socialProjection = new SocialProjection(social);
-        var parties = new Game.Party.PartyService(repository, clock, gameCache);
+        var parties = new Game.Party.PartyService(repository, clock, gameCache, guideStore: repository);
         // GM notice 的公告出口：与 GM 聊天帧注入共用在线连接目录，帧内编码由 ServerNoticePackets 负责。
         var noticeSender = new GmNoticeSender(online);
         var accounts = new AuthenticationService(new AuthenticationRepository(Path.Combine(options.DataDirectory, "game.db")));
@@ -304,6 +305,8 @@ internal static class ServerRuntime
         var developmentCatalog = new DevelopmentCatalog(pvf, itemResources, quests) { Stats = stats, Growth = growth, PvfPath = options.PvfPath, CacheDirectory = options.DataDirectory };
         IGameCommandModule dungeon;
         Game.Dungeons.PartyDungeonService? partyDungeons = null;
+        EvildomWarCatalog? warCatalog = null;
+        Game.Dungeons.EvildomWarRewardPolicy? warPolicy = null;
         IGameCommandModule? settlement = null;
         IGameCommandModule? questReplay = null;
         Func<GameSession, IGameConnectionActivity>? createActivity = null;
@@ -394,13 +397,15 @@ internal static class ServerRuntime
                 itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
             var despairRewards = new DungeonDespairRewardPolicy(DungeonAltarClearItemCatalog.Load(pvf),
                 itemResources.DungeonAltarItems, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            partyDungeons = new(parties, repository);
+            partyDungeons = new(parties, repository, repository, hiddenDraw: evildomHiddenDraw, guideStore: repository);
+            warCatalog = EvildomWarCatalog.Load(pvf,dungeonCatalog);
+            warPolicy = new(warCatalog,itemResources.Items,itemResources.Boosters);
             dungeon = new DungeonHandler(log, dungeonCatalog, rooms,
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
                 despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun,
-                evildomWar: EvildomWarCatalog.Load(pvf,dungeonCatalog), lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun,
-                imperialArena: imperialArenaProjection);
+                evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun,
+                imperialArena: imperialArenaProjection, evildomRewards: warPolicy, evildomRewardStore: repository);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
@@ -430,7 +435,7 @@ internal static class ServerRuntime
             new PvpTrainingHandler(new GameWorld.Pvp.PvpArcadeCatalog(pvf),new GameWorld.Pvp.PvpPracticeComboCatalog(pvf),quests,log,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters, tagEvildomProjection, clock, raidHandler,
-                imperialArena: imperialArenaProjection),
+                imperialArena: imperialArenaProjection, warRewards: repository, partyDungeons: partyDungeons, warCatalog: warCatalog, warPolicy: warPolicy),
             new SocialHandler(repository, social, online, log),
             new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection),
             new AdventureHandler(adventureProjection, adventureRepresentatives, expeditionProjection, clock, online),
@@ -556,7 +561,8 @@ internal static class ServerRuntime
                 new InventoryPeriodExtensionService(itemResources.Items, towns, clock), new InventoryMileageService(itemResources.Items, towns, clock),
                 new InventoryEquipmentPeriodChangeService(itemResources.Items, towns, clock), avatarPresetHandler,
                 new InventoryNpcFavorService(itemResources.Items.NpcFavorItem, npcFavor, towns, clock), marriageHandler,
-                new DimensionEntryTicketService(itemResources.Items, clock)),
+                new DimensionEntryTicketService(itemResources.Items, clock),
+                incounts is null ? null : new DungeonIncountTicketHandler(new Game.Dungeons.DungeonIncountTicketService(itemResources.Items, incounts, towns, clock), repository, inventoryProjection, log)),
             new CreatureTransportHandler(new Game.Creatures.CreatureTransportService(itemResources.Items.Get,
                 itemResources.Items.ActionConsumable, itemResources.Creatures, repository, () => creatureTransportMailPolicy, clock), inventoryProjection, log,
                 new EquipmentTransportService(itemResources.Items.Get, itemResources.Items.ActionConsumable,

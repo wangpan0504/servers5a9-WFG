@@ -40,6 +40,8 @@ internal sealed record DungeonEntryPlan(
     public bool AllowsCompanionAi { get; init; } = true;
     public bool IsTutorial { get; init; }
     public bool IsOrdinaryLuke { get; init; }
+    // 仅由当前战役冻结路线审核后设置，允许无任务接取的真实物件终末。
+    public bool IsEvildomWarHidden { get; init; }
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
     public int? OrdinaryLukeDay { get; init; }
     public bool DisableClearReward { get; init; }

@@ -191,6 +191,7 @@ internal sealed partial class GameSession
             classExperience || hellParty || hellLegend || sealDoor || practice)) return RejectFormal("operation-hope-admission-required");
         GriefTowerAdmission? grief = null;
         uint selectionDungeon = dungeonId;
+        if (war is not null) dungeonId = war.Battle.View.ActualDungeon(dungeonId);
         if (dungeonId <= int.MaxValue && catalog.GriefTower.FloorsByDungeon.TryGetValue((int)dungeonId, out var requestedGrief))
         {
             if (difficulty != 0 || retry is not null || classExperience || hellParty || hellLegend || sealDoor || practice)
@@ -453,6 +454,7 @@ internal sealed partial class GameSession
         if (partyAdmission && (entry.IsPractice || entry.IsTournament || entry.IsTrainingRoom || entry.IsClassExperience ||
             entry.IsTutorial || entry.IsQuestReplay || assault is not null)) return RejectFormal("party-mode-unsupported");
         if (partyAdmission && shared is null) entry = entry with { PartyRoute = entry };
+        if (war?.Battle.View.Hidden?.Dungeon == entry.DungeonId) entry = entry with { IsEvildomWarHidden = true };
         var prepared = PrepareFormalDungeonResources(expected,epoch,entry!,rooms,drops,items,draw,pieces,prepareDrops,
             training ? flow!.Destination : null,tutorialScenes,crackRewards,shared,partyFirstKey,partyInstance);
         if (prepared is not null && bossBuff is not null)
@@ -461,7 +463,7 @@ internal sealed partial class GameSession
             prepared = prepared with { Dungeon = prepared.Dungeon with { GriefItems = new(catalog.GriefTower), GriefAdmission = grief } };
         // 只有正式入场计入冒险团每周地下城信息：练习、训练、职业体验与比赛不消耗次数。
         WeeklyDungeonEntry? weekly = null;
-        if (tagEntry is null && imperialEntry is null && !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTournament && !entry.IsTrainingRoom &&
+        if (tagEntry is null && imperialEntry is null && war?.Charged != true && !entry.IsPractice && !entry.IsTutorial && !entry.IsClassExperience && !entry.IsTournament && !entry.IsTrainingRoom &&
             WeeklyDungeonPolicy.SlotOf(catalog.Get(checked((int)dungeonId))) is { } weeklySlot)
             weekly = new(WeeklyDungeonPolicy.WeekKey((timeProvider ?? TimeProvider.System).GetUtcNow()), weeklySlot);
         return prepared is null ? null : prepared with { ClassExperienceSelection = classExperience ? selection : null, Weekly = weekly,
@@ -677,7 +679,8 @@ internal sealed partial class GameSession
             Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
         // 原生clear condition/destroy object独立发送39，不要求OBJ另声明quest type。
         if (entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] && questCatalog is not null &&
-            expected.ActiveMainQuests.Any(active => active.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(active, entry)))
+            (entry.IsEvildomWarHidden ||
+             expected.ActiveMainQuests.Any(active => active.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(active, entry))))
         {
             var sources = plans.SelectMany(plan => plan.Room.PassiveObjects.Where(source => source.ObjectId == condition.TargetId &&
                 plan.Room.PassiveObjects.Count(other => other.ObjectId == source.ObjectId) == 1)).ToArray();
@@ -1361,6 +1364,7 @@ internal sealed partial class GameSession
         if (dungeon.Run.TagEvildomLife is not null) tagEvildomPair = null;
         if (dungeon.Entry.IsImperialArena) imperialArenaPair = null;
         var raidChange = ReleaseCurrentRaidDungeon();
+        ReleaseCurrentEvildomWarDungeon();
         formalDungeon = null;
         CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
         CancelDungeonContinuation();

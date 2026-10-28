@@ -15,7 +15,11 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     ExpertJobScriptCatalog? expertJobs = null, AdventureWeeklyProjection? weekly = null,
     AvatarPresetProjection? avatarPresets = null, AvatarPresetService? avatarPresetService = null,
     DfoServer.Game.Session.OnlineSessionDirectory? online = null, SocialProjection? social = null, DfoServer.Game.Pvp.PvpPrivateCharacterService? privateCharacters = null,
-    TagEvildomProjection? tagEvildom = null, TimeProvider? time = null, RaidHandler? raids = null, ImperialArenaProjection? imperialArena = null) : IGameCommandModule
+    TagEvildomProjection? tagEvildom = null, TimeProvider? time = null, RaidHandler? raids = null, ImperialArenaProjection? imperialArena = null,
+    DfoServer.Game.Dungeons.IEvildomWarRewardStore? warRewards = null,
+    DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null,
+    DfoServer.GameWorld.Dungeons.EvildomWarCatalog? warCatalog = null,
+    DfoServer.Game.Dungeons.EvildomWarRewardPolicy? warPolicy = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -83,6 +87,9 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         bool createdBase = avatarPresetService is not null && context.Session.InitializeAvatarPresets(avatarPresetService);
         // 进入场景后不再保留返回选角阶段的重复 C2S8 标记。
         context.SelectionRosterPushed = false;
+        int refundedWarSeats = partyDungeons?.RefundEvildomWar(context.Session) ?? 0;
+        if (refundedWarSeats > 0)
+            log.Write("evildom_war_entry_refunded", new { Connection = context.Id, Character = context.Session.Selected!.Id, Seats = refundedWarSeats });
         var c = context.Session.Selected!;
         log.Write("selected", new { Connection = context.Id, Character = c.Id, c.Position, c.Return, c.Revision, ResumeTown = resumeTown, NativeSwitch = nativeSwitch });
         if (createdBase)
@@ -93,6 +100,16 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         if (expertJobs is not null && context.Session.Selected is { ExpertJobType: >= 1 and <= 4 } selected)
             await context.Notify(NotiPacketType.EXPERT_JOB_INFO, ExpertJobPackets.Info(selected, expertJobs, includeQualifications: true), "expert_job_info");
         context.Session.MarkReady();
+        if (warRewards is not null)
+        {
+            var recovered = context.Session.RecoverEvildomWarRewards(warRewards, warPolicy);
+            if (!recovered.IsEmpty)
+            {
+                await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "evildom_war_reward_recovered",
+                    () => context.Owner.Execute(() => context.Session.Ready && ReferenceEquals(context.Session.Selected, c)));
+                log.Write("evildom_war_reward_recovered", new { Connection = context.Id, Character = c.Id, MailIds = recovered });
+            }
+        }
         if (tagEvildom is not null && !await tagEvildom.InitializeAsync(context, projectedCharacter)) return CommandResult.Handled;
         if (imperialArena is not null && !await imperialArena.InitializeAsync(context, projectedCharacter)) return CommandResult.Handled;
         // 预设容量与列表必须早于窗口打开；与每周配置同属就绪后、任务核对前的固定包序。
@@ -107,6 +124,18 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         await projection.ReconcileQuestsAsync(context);
         projection.Join(context);
         if (raids is not null) await raids.NotifyDisconnAsync(context);
+        if (partyDungeons is not null && warCatalog is not null)
+        {
+            await partyDungeons.RecoverEvildomWarAsync(context.Session, warCatalog, context.Stop);
+            if (context.Session.ReadEvildomWar() is { } recoveredWar && context.Session.CurrentParty?.Invoke() is { } recoveredParty)
+            {
+                await PartyDungeonProjection.PublishAsync(recoveredParty.Members.Select(member =>
+                    new DfoServer.Game.Dungeons.PartyDungeonNotice(DfoServer.Game.Dungeons.PartyDungeonNoticeKind.EvildomWarStarted,
+                        member, recoveredParty.Members, WarView: recoveredWar.Battle.View)));
+                log.Write("evildom_war_seat_recovered", new { Connection = context.Id, Character = c.Id,
+                    Battle = recoveredWar.Battle.View.BattleId, Revision = recoveredWar.Battle.View.Revision });
+            }
+        }
         return CommandResult.Handled;
     }
 

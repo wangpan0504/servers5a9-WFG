@@ -287,6 +287,13 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     void Invalidate(string reason, bool publishExpertJob = true)
     {
+        bool warPersistenceFailed = false;
+        try { if (owner.IsCurrent) DisconnectEvildomWar(); }
+        catch (Exception error)
+        {
+            warPersistenceFailed = true;
+            EvildomWarCleanupFailed?.Invoke(error);
+        }
         InvalidateRaids(reason == "session-ended");
         npcTownVisit = null;
         hopeSelection = null;
@@ -296,6 +303,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         // 原实例失效后，不让其迟到回执找到同账号的新Selected。
         tagEvildomPair = null;
         tagEvildomSelection = null;
+        ReleaseCurrentEvildomWarDungeon(cleanup: true, defer: warPersistenceFailed);
         evildomWar = null;
         formalDungeon?.Run.CancelTagEvildom();
         formalDungeon = null;

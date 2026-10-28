@@ -9,8 +9,44 @@ using System.Security.Cryptography;
 
 namespace DfoServer.Game.Dungeons;
 
-internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonStore store)
+internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonStore store, IEvildomWarStore? warStore = null,
+    Func<int, int>? hiddenDraw = null, IEvildomWarGuideStore? guideStore = null)
 {
+    public int RefundEvildomWar(GameSession session) => warStore is null ? 0 : session.RefundEvildomWar(warStore);
+
+    public async Task RecoverEvildomWarAsync(GameSession session, EvildomWarCatalog catalog, CancellationToken stop = default)
+    {
+        if (warStore is null) return;
+        // 首名重连者可能尚无Party；门禁在任何owner之外等待，避免同时重建两个同场队伍。
+        await parties.EvildomWarRecoveryGate.WaitAsync(stop);
+        try
+        {
+            if (session.LoadEvildomWarRecovery(warStore) is not { } recovery) return;
+            var view = recovery.Checkpoint.View;
+            var existing = parties.Snapshot().SingleOrDefault(p => p.EvildomWarBattleId == view.BattleId);
+            var partyGate = existing?.Commands;
+            if (partyGate is not null) await partyGate.WaitAsync(stop);
+            try
+            {
+                parties.Publish(parties.RemoveStaleEvildomWarMembers(view.BattleId));
+                existing = parties.Snapshot().SingleOrDefault(p => p.EvildomWarBattleId == view.BattleId);
+                EvildomWarBattle? battle = null;
+                foreach (var member in existing?.Members ?? [])
+                {
+                    try { battle = member.Actor.Session.ReadEvildomWar()?.Battle; }
+                    catch (InvalidOperationException) when (!member.Actor.Owner.IsCurrent) { }
+                    if (battle is not null) break;
+                }
+                battle ??= EvildomWarBattle.Restore(recovery.Checkpoint);
+                var notices = parties.RestoreEvildomWarMember(session, view.BattleId, recovery.Payment.Slot, view.Mode,
+                    party => session.RestoreEvildomWar(warStore, catalog, party, battle, recovery));
+                parties.Publish(notices);
+            }
+            finally { partyGate?.Release(); }
+        }
+        finally { parties.EvildomWarRecoveryGate.Release(); }
+    }
+
     public string? StartEvildomWar(GameSession leader, EvildomWarCatalog catalog)
     {
         var party = parties.Current(leader);
@@ -19,8 +55,12 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         return AccountOwners.Lease.ExecuteGroup(party.Members.Select(member => (member.Actor.Owner, member.Actor.Character.Id)).ToArray(), () =>
         {
             if (!parties.IsCurrent(party)) return "party-changed";
+            if (warStore is not null)
+                foreach (var member in party.Members) member.Actor.Session.RefundEvildomWar(warStore);
             foreach (var member in party.Members)
                 if (member.Actor.Session.EvildomWarStartRejection(catalog, party) is { } reason) return reason;
+            if (party.Settings.KindArgument == 2 && guideStore is not null && !leader.TryBindEvildomWarGuide(guideStore))
+                return "guide-account-limit";
             var deadline = leader.EvildomWarNow.AddSeconds(catalog.LimitTime);
             byte[] attributes = [0, 1, 2, 3];
             RandomNumberGenerator.Shuffle(attributes.AsSpan());
@@ -29,7 +69,12 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
             var dungeons = catalog.Dungeons.Where(row => row.Mode == party.Settings.KindArgument).Select(row =>
                 new EvildomWarDungeonState(row.Id, row.Kind, row.Kind == 0 ? attributes[ordinal++] : (byte)0,
                     row.Kind == 0 ? (byte)0 : (byte)3)).ToImmutableArray();
-            foreach (var member in party.Members) member.Actor.Session.StartEvildomWar(catalog, party, deadline, dungeons);
+            byte mode = checked((byte)party.Settings.KindArgument);
+            var hidden = EvildomWarHiddenPolicy.Select(mode, dungeons, catalog.HiddenDungeons, hiddenDraw ?? RandomNumberGenerator.GetInt32);
+            var battle = new EvildomWarBattle(mode, deadline, dungeons, hidden);
+            var bound = parties.BindEvildomWar(party, battle.View.BattleId);
+            if (bound is null) return "party-changed";
+            foreach (var member in bound.Members) member.Actor.Session.StartEvildomWar(catalog, bound, battle, warStore);
             return null;
         });
     }
@@ -39,8 +84,13 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
         var plans = members.Select(m => m.Actor.Session.PreparePartyExit(kind)).ToArray();
         if (plans.Any(p => p is null)) return [];
         var committed = store.CommitPartyDungeonExit(plans.Select(p => p!.Reservation).ToArray());
-        return members.Select((m, i) => m.Actor.Session.InstallPartyExit(plans[i]!, committed[i], m, members)).ToArray();
+        var notices = members.Select((m, i) => m.Actor.Session.InstallPartyExit(plans[i]!, committed[i], m, members)).ToArray();
+        return members[0].Actor.Session.ReadEvildomWar() is { } war
+            ? [..notices, ..EvildomWarNotices(members, war.Battle.View)] : notices;
     }
+
+    internal static PartyDungeonNotice[] EvildomWarNotices(PartyMember[] members, EvildomWarView view) => members.Select(member =>
+        new PartyDungeonNotice(PartyDungeonNoticeKind.EvildomWarUpdated, member, members, WarView: view)).ToArray();
 
     public PartyDungeonNotice[] ReturnSelection(GameSession leader)
     {
@@ -138,11 +188,16 @@ internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonSto
                 using var raidRun = GameSession.ReserveRaidPartyRun(prepared.Select(row => row.Preparation).ToArray(), out bool raidRequired);
                 raidReservation = raidRun;
                 if (raidRequired && raidRun is null) return [];
+                using var warRun = GameSession.ReserveEvildomWarPartyDungeon(prepared.Select(row => row.Preparation).ToArray(),
+                    instance.Id, out bool warRequired);
+                if (warRequired && warRun is null) return [];
                 var committed = store.CommitPartyDungeonEntry(reservations.Select(r => r!).ToArray());
                 var notices = prepared.Select((p, index) => new PartyDungeonNotice(PartyDungeonNoticeKind.Entry, p.Member, party.Members,
                     p.Member.Actor.Session.InstallPartyDungeon(p.Preparation, committed[index], reservations[index]!, instance))).ToArray();
                 raidRun?.Install();
-                return GameSession.ObserveRaidPartyRun(party.Members, instance.Id, notices, observeMap: false);
+                var war = warRun?.Install();
+                var entered = war is null ? notices : [..notices, ..EvildomWarNotices(party.Members, war)];
+                return GameSession.ObserveRaidPartyRun(party.Members, instance.Id, entered, observeMap: false);
             });
         }
         catch (Exception error) { entryFailure = error; throw; }

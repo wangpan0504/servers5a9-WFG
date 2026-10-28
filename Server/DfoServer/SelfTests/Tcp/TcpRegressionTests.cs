@@ -112,6 +112,7 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("action-consumables", ActionConsumableTcpTests.RunAsync),
+        ("dungeon-incount-ticket", DungeonIncountTicketTcpTests.RunAsync),
         ("stackable-actions", (_, _, resources) =>
         {
             StackableActionTests.RunResources(resources.Archive, resources.ItemResources.Items);

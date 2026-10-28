@@ -61,15 +61,52 @@ internal sealed partial class DungeonHandler
         if (lukeLifecycle is not null && notice.Kind is PartyDungeonNoticeKind.RaidBattleSync or PartyDungeonNoticeKind.Departure &&
             context.Session.CommitPendingLukePhase(lukeLifecycle))
             log.Write("raid_phase_committed", new { Connection = context.Id, RaidType = 1, Instance = context.Session.RaidCombatView()?.Instance });
+        var hiddenReward = notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { } hiddenView &&
+            context.Session.CanPublishEvildomWar(hiddenView) && evildomRewards is not null && evildomRewardStore is not null
+            ? context.Session.CommitEvildomWarHiddenReward(evildomRewards, evildomRewardStore) : null;
+        // 奖励规划和持久化先于发送队列预留；只消费当前战役真实完成事实。
+        var warReward = notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { Completed: true } completed &&
+            context.Session.CanPublishEvildomWar(completed) && evildomRewards is not null && evildomRewardStore is not null
+            ? context.Session.CommitEvildomWarReward(evildomRewards, evildomRewardStore) : null;
         using var publication = context.Sender.QueuePublication(notice.Recipient.Actor.IsCurrent);
-        if (notice.Kind == PartyDungeonNoticeKind.EvildomWarStarted)
+        if (notice.Kind is PartyDungeonNoticeKind.EvildomWarStarted or PartyDungeonNoticeKind.EvildomWarUpdated)
         {
-            var war = context.Session.ReadEvildomWar();
-            if (war is null) return;
-            await context.Notify(NotiPacketType.EVILDOM_WAR_INFO, EvildomWarPackets.Info(war.Mode,
-                (int)(war.Deadline - context.Session.EvildomWarNow).TotalSeconds,
-                war.Dungeons),
-                "evildom_war_info", () => ReferenceEquals(context.Session.ReadEvildomWar(), war));
+            if (notice.WarView is not { } view || !context.Session.CanPublishEvildomWar(view)) return;
+            if (notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated)
+                log.Write("evildom_war_progress", new { Connection = context.Id, view.BattleId, view.Revision,
+                    view.Completed, States = view.Dungeons.Select(row => new { row.Id, row.State }).ToArray() });
+            await context.Notify(NotiPacketType.EVILDOM_WAR_INFO, EvildomWarPackets.Info(view.Mode,
+                (int)(view.Deadline - context.Session.EvildomWarNow).TotalSeconds, view.Dungeons),
+                "evildom_war_info", () => context.Session.CanPublishEvildomWar(view));
+            if (hiddenReward is not null)
+            {
+                if (!hiddenReward.Commit.MailIds.IsEmpty)
+                    await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "evildom_war_hidden_reward_mail",
+                        () => context.Session.CanPublishEvildomWarHiddenReward(hiddenReward));
+                log.Write("evildom_war_hidden_reward_committed", new { Connection = context.Id, view.BattleId,
+                    Character = hiddenReward.Admission.CharacterId, hiddenReward.Commit.Duplicate,
+                    MailIds = hiddenReward.Commit.MailIds, Rule = EvildomWarRewardPolicy.HiddenRule });
+            }
+            if (warReward is not null)
+            {
+                bool sent = false;
+                bool Guard() => sent = context.Session.CanPublishEvildomWarReward(warReward);
+                if (context.Session.ShouldPublishEvildomWarReward(warReward))
+                {
+                    var groups = warReward.Commit.Plan.Reward.Items.GroupBy(row => row.Group).Select(group =>
+                        new EvildomWarPackets.RewardGroup(group.Key, group.Select(row =>
+                            new EvildomWarPackets.RewardRow(0, row.ItemId, checked((uint)row.Count))).ToArray())).ToArray();
+                    // 首字段和特殊展示类型的业务语义未闭合；本服只用通用物品图标及真实数量，首字段保留0。
+                    await context.Notify(NotiPacketType.EVILDOM_WAR_REWARD_LIST, EvildomWarPackets.Rewards(0, groups),
+                        "evildom_war_reward", Guard);
+                    if (sent) context.Session.ConfirmEvildomWarRewardPublished(warReward);
+                }
+                if (!warReward.Commit.MailIds.IsEmpty)
+                    await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "evildom_war_reward_mail", Guard);
+                log.Write("evildom_war_reward_committed", new { Connection = context.Id, view.BattleId,
+                    Character = warReward.Admission.CharacterId, warReward.Commit.Duplicate,
+                    MailIds = warReward.Commit.MailIds, Rule = EvildomWarRewardPolicy.Rule });
+            }
             return;
         }
         if (notice.Kind == PartyDungeonNoticeKind.RaidBattleSync)

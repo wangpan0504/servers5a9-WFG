@@ -12,7 +12,7 @@ namespace DfoServer.Game.Dungeons;
 //   日界 = UTC+8 06:00（本服统一业务日，同 QuestCycle；客户端文本 33348/42796“每日凌晨6点初始化”）；
 //   周界 = 周四 06:00（文本 68076/68109“每周四凌晨6点初始化”），[special weekly reset day] 的星期按 0=周日 编码；
 //   账号表重置键查 [reset info]：值 -1 = 每日，0..6 = 每周该星期（PVF 0→-1、1→4 与“每周四”吻合）。
-internal readonly record struct DungeonIncountUsage(int DailyUsed, int WeeklyUsed);
+internal readonly record struct DungeonIncountUsage(int DailyUsed, int WeeklyUsed, int DailyExtra = 0, int WeeklyExtra = 0);
 internal readonly record struct DungeonIncountPeriod(int Day, int Week);
 internal readonly record struct StoredDungeonIncount(int Dungeon, DungeonIncountPeriod Period, DungeonIncountUsage Usage);
 internal readonly record struct DungeonEnterCount(uint Dungeon, byte Daily, byte Weekly);
@@ -42,12 +42,13 @@ internal static class DungeonIncountPolicy
     }
 
     public static DungeonIncountUsage Current(DungeonIncountUsage stored, DungeonIncountPeriod storedPeriod, DungeonIncountPeriod now) =>
-        new(storedPeriod.Day == now.Day ? stored.DailyUsed : 0, storedPeriod.Week == now.Week ? stored.WeeklyUsed : 0);
+        new(storedPeriod.Day == now.Day ? stored.DailyUsed : 0, storedPeriod.Week == now.Week ? stored.WeeklyUsed : 0,
+            storedPeriod.Day == now.Day ? stored.DailyExtra : 0, storedPeriod.Week == now.Week ? stored.WeeklyExtra : 0);
 
-    public static int DailyRemaining(DungeonIncountRow row, DungeonIncountUsage usage) => Math.Max(0, row.Limit - usage.DailyUsed);
+    public static int DailyRemaining(DungeonIncountRow row, DungeonIncountUsage usage) => Math.Max(0, checked(row.Limit + usage.DailyExtra) - usage.DailyUsed);
     // 无周上限（第二值 <=0）：第二个 u8 回填日剩余，使 min(+0x6C68,+0x6C7C) 仍等于日剩余。
     public static int WeeklyRemaining(DungeonIncountRow row, DungeonIncountUsage usage) =>
-        row.WeeklyLimit > 0 ? Math.Max(0, row.WeeklyLimit - usage.WeeklyUsed) : DailyRemaining(row, usage);
+        row.WeeklyLimit > 0 ? Math.Max(0, checked(row.WeeklyLimit + usage.WeeklyExtra) - usage.WeeklyUsed) : DailyRemaining(row, usage);
 
     public static bool CanEnter(DungeonIncountRow row, DungeonIncountUsage usage) =>
         DailyRemaining(row, usage) > 0 && WeeklyRemaining(row, usage) > 0;

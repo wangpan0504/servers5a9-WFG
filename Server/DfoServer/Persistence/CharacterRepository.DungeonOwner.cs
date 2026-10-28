@@ -191,6 +191,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
                 result[i] = new(character.Character, r.Charge.Dimension is null && counted is not null && count is { Increment: true, Row: { } row }
                     ? [.. DungeonIncountPolicy.Views(row, counted.Usage)] : []);
             }
+            CommitEvildomWarEntryInTransaction(db, tx, reservations, result);
             tx.Commit();
             for (int i = 0; i < reservations.Count; i++)
                 InstallEntryFatigue(reservations[i].Owner, reservations[i].Charge, fatigue[i]);

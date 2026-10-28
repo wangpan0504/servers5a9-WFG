@@ -31,6 +31,7 @@ CreatureFileTests.Run();
 PvpPrivateCharacterFileTests.Run();
 TownEpisodeFileTests.Run();
 OperationHopeFileTests.Run();
+EvildomWarFileTests.Run();
 CustomAbilityFileTests.Run();
 TalismanFileTests.Run();
 LukeCardSetFileTests.Run();
