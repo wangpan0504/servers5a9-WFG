@@ -52,6 +52,9 @@ internal static class LukeRaidStartTests
                 var unsafeService=new LukeRaidStart(raids,parties,repository,towns,pieces,new("synthetic/unresolved-native-consumer",unsafeScript));
                 That(unsafeService.UnavailableReason(unsafeDefinition)=="luke-execution-symbol-consumer-unavailable",
                     "未闭合/未来symbol写入不能借583触发原生行为："+symbol);
+                That(LukeRaidStart.RuleRejection(unsafeScript.Phases[0].Rules[0], unsafeScript, unsafeScript,
+                    new HashSet<int>(), new HashSet<int>(), timersEnabled: false) == unsafeService.UnavailableReason(unsafeDefinition),
+                    "逐条能力查询与实际开战拒绝共用同一合同：" + symbol);
             }
 
             foreach(var (symbol,id) in new (string,int)[]{("[temple clear]",122),("[altar clear]",124),("[altar enterance clear]",140)})

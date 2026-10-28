@@ -72,7 +72,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         if (Actor(context) is not { } actor) return CommandResult.Unhandled;
         if (rejoin is not { Enabled: true })
         {
-            // ACK668成功会调用0055D870继续恢复正式界面；招募记录不能充当可重入的攻坚实例。
+            // ACK668的0055D870在Luke 0x20/Anton 0x17直接返回；成功ACK不安装团本或队伍，不能冒充恢复。
             log.Write("raid_start_request", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
                 Error = RaidPackets.CreateUnavailable, Reason = "formal-raid-rejoin-unavailable" });
             await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "raid_rejoin_rejected", () => actor.IsCurrent);

@@ -160,43 +160,50 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
             var ids = phase.Dungeons.Select(d => d.Id).ToHashSet();
             if (ids.Count != phase.Dungeons.Length || !ids.Order().SequenceEqual(original.Phases[index].Dungeons.Select(d => d.Id).Order()) ||
                 phase.Dungeons.Any(d => !script.Symbols.ContainsKey(d.HpSymbol))) return "luke-execution-policy-dungeon-mismatch";
-            bool Symbol(RaidClause clause) => clause.Symbol is not null && script.Symbols.ContainsKey(clause.Symbol);
-            bool Dungeon(RaidClause clause) => clause.DungeonId is { } id && ids.Contains(id);
-            bool State(RaidClause clause) => clause.State is { } state && Enum.IsDefined(state);
             var mapIds = definition.Resources.Dungeons.Where(row => ids.Contains(row.Id)).SelectMany(row => row.MapIds).ToHashSet();
-            bool Timer(RaidClause clause) => clause.Timer is { Kind: 1 or 2 } timer &&
-                original.Phases.Any(p => p.Dungeons.Any(d => d.Id == timer.DungeonId));
             foreach (var rule in phase.Rules)
-            {
-                if (policy.Timers is not null && rule.Behavior.Any(clause => clause.Tag == "[set timer]" &&
-                    (clause.RawIntegers.Length != 3 || clause.RawIntegers[2] is <= 0 or > 86400)))
-                    return "luke-timer-duration-unavailable";
-                if (rule.Behavior.Any(clause => clause.Tag == "[set]" && !SymbolWriteSupported(clause.Symbol, original)))
-                    return "luke-execution-symbol-consumer-unavailable";
-                if (rule.Trigger.Any(clause => clause.Operator is not null || !(clause.Tag switch
-                {
-                    "[if]" => Symbol(clause) && clause.RawIntegers.Length == 1,
-                    "[on change symbol]" => Symbol(clause),
-                    "[on change dungeon state]" => Dungeon(clause),
-                    "[check dungeon state]" => Dungeon(clause) && State(clause),
-                    "[check timer end]" => Timer(clause),
-                    "[on enter dungeon]" => Dungeon(clause),
-                    "[on enter map]" => clause.MapId is { } map && mapIds.Contains(map),
-                    _ => false
-                })) || rule.Behavior.Any(clause =>
-                    (clause.Tag == "[set]" ? clause.Operator is not (null or "[+]") : clause.Operator is not null) || !(clause.Tag switch
-                {
-                    "[set]" => Symbol(clause) && clause.RawIntegers.Length == 1,
-                    "[set dungeon state]" => Dungeon(clause) && State(clause),
-                    "[set timer]" => Timer(clause) && clause.RawIntegers.Length == 3 && clause.RawIntegers.All(v => v >= 0) &&
-                        clause.RawIntegers[0] == clause.Timer!.Kind && clause.RawIntegers[1] == clause.Timer.DungeonId,
-                    "[reset timer]" => Timer(clause) && clause.RawIntegers.Length == 2 &&
-                        clause.RawIntegers[0] == clause.Timer!.Kind && clause.RawIntegers[1] == clause.Timer.DungeonId,
-                    "[clear phase]" => clause.RawIntegers.IsEmpty,
-                    _ => false
-                }))) return "luke-execution-policy-rule-unsupported";
-            }
+                if (RuleRejection(rule, script, original, ids, mapIds, policy.Timers is not null) is { } reason)
+                    return reason;
         }
+        return null;
+    }
+
+    // 单条检查与开战守卫共用；null只说明条款支持，不代表整份策略、资源或原生流程已可运行。
+    internal static string? RuleRejection(RaidRule rule, RaidScript script, RaidScript original,
+        IReadOnlySet<int> ids, IReadOnlySet<int> mapIds, bool timersEnabled)
+    {
+        bool Symbol(RaidClause clause) => clause.Symbol is not null && script.Symbols.ContainsKey(clause.Symbol);
+        bool Dungeon(RaidClause clause) => clause.DungeonId is { } id && ids.Contains(id);
+        bool State(RaidClause clause) => clause.State is { } state && Enum.IsDefined(state);
+        bool Timer(RaidClause clause) => clause.Timer is { Kind: 1 or 2 } timer &&
+            original.Phases.Any(p => p.Dungeons.Any(d => d.Id == timer.DungeonId));
+        if (timersEnabled && rule.Behavior.Any(clause => clause.Tag == "[set timer]" &&
+            (clause.RawIntegers.Length != 3 || clause.RawIntegers[2] is <= 0 or > 86400)))
+            return "luke-timer-duration-unavailable";
+        if (rule.Behavior.Any(clause => clause.Tag == "[set]" && !SymbolWriteSupported(clause.Symbol, original)))
+            return "luke-execution-symbol-consumer-unavailable";
+        if (rule.Trigger.Any(clause => clause.Operator is not null || !(clause.Tag switch
+        {
+            "[if]" => Symbol(clause) && clause.RawIntegers.Length == 1,
+            "[on change symbol]" => Symbol(clause),
+            "[on change dungeon state]" => Dungeon(clause),
+            "[check dungeon state]" => Dungeon(clause) && State(clause),
+            "[check timer end]" => Timer(clause),
+            "[on enter dungeon]" => Dungeon(clause),
+            "[on enter map]" => clause.MapId is { } map && mapIds.Contains(map),
+            _ => false
+        })) || rule.Behavior.Any(clause =>
+            (clause.Tag == "[set]" ? clause.Operator is not (null or "[+]") : clause.Operator is not null) || !(clause.Tag switch
+        {
+            "[set]" => Symbol(clause) && clause.RawIntegers.Length == 1,
+            "[set dungeon state]" => Dungeon(clause) && State(clause),
+            "[set timer]" => Timer(clause) && clause.RawIntegers.Length == 3 && clause.RawIntegers.All(v => v >= 0) &&
+                clause.RawIntegers[0] == clause.Timer!.Kind && clause.RawIntegers[1] == clause.Timer.DungeonId,
+            "[reset timer]" => Timer(clause) && clause.RawIntegers.Length == 2 &&
+                clause.RawIntegers[0] == clause.Timer!.Kind && clause.RawIntegers[1] == clause.Timer.DungeonId,
+            "[clear phase]" => clause.RawIntegers.IsEmpty,
+            _ => false
+        }))) return "luke-execution-policy-rule-unsupported";
         return null;
     }
 

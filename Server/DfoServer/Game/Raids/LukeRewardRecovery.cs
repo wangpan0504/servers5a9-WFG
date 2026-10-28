@@ -18,8 +18,18 @@ internal sealed record LukeRewardRecoveryTarget(ushort Character, Guid Instance,
 }
 internal sealed record LukeRewardRecoverySnapshot(PreparedRaidReward Prepared, Guid Event, long Anchor,
     bool Claimed, ImmutableArray<uint> MailIds);
+// 分页按原实例主键推进；空页也可能有续页，不从时间或最新记录推断身份。
+internal sealed record LukeRewardRecoveryEntry(RaidPhaseEligibility Eligibility,
+    ImmutableArray<LukeRewardRecoverySnapshot> Claimed)
+{
+    // 同kind只能领取一张；已领取的其它备选牌不是剩余权益。
+    public ImmutableArray<RaidRewardOffer> AvailableOffers => Eligibility.Offers
+        .Where(offer => !Claimed.Any(receipt => receipt.Prepared.Kind == offer.Kind)).ToImmutableArray();
+}
+internal sealed record LukeRewardRecoveryPage(ImmutableArray<LukeRewardRecoveryEntry> Entries, Guid? NextAfter);
 internal interface ILukeRewardRecoveryStore : IRaidRewardStore
 {
+    LukeRewardRecoveryPage ListLukeRewardRecovery(AccountOwners.Lease owner, Character character, Guid? afterInstance = null, int limit = 16);
     LukeRewardRecoverySnapshot ReadLukeRewardRecovery(AccountOwners.Lease owner, Character character, LukeRewardRecoveryTarget target);
 }
 internal static class LukeRewardRecovery

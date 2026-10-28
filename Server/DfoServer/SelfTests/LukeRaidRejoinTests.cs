@@ -1,0 +1,204 @@
+using System.Collections.Immutable;
+using System.Text.Json;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
+using DfoServer.GameWorld.Dungeons;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Party;
+using DfoServer.Game.Raids;
+using DfoServer.Game.Session;
+using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Raids;
+using DfoServer.GameWorld.Towns;
+using DfoServer.Persistence;
+using Microsoft.Data.Sqlite;
+using static DfoServer.Testing.TestCheck;
+
+namespace DfoServer;
+
+internal static class LukeRaidRejoinTests
+{
+    internal static void RunCore()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "S5A9-luke-rejoin-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var leases = new List<AccountOwners.Lease>(); var sessions = new List<GameSession>();
+        bool passed = false;
+        try
+        {
+            string path = Path.Combine(root, "game.db");
+            var origin = new Location(1, 0, 10, 10);
+            var map = new TownMap("synthetic/rejoin.map", [new(new(0, 0, 30, 30), [], [])], [], false, []);
+            var towns = new TownCatalog(new() { [(1, 0)] = new(1, 0, 1, [], [], [], origin, map with { IsRoom = true }, [], []),
+                [(32, 0)] = new(32, 0, 1, [], [], [], new(32, 0, 10, 10), map with { Links = [new(new(10, 6, 4, 10), 32, 4, [], [])] }, [], []),
+                [(32, 4)] = new(32, 4, 1, [], [], [], null, map with { Links = [new(new(10, 6, 4, 10), 1, 0, [], []), new(new(10, 6, 4, 10), 32, 0, [], [])] }, [], []) },
+                origin, origin, new(0, [], []), [], new Dictionary<uint, uint[]>());
+            var owners = new AccountOwners(); var raids = new RaidRegistry();
+            var repository = new CharacterRepository(path); var parties = new PartyService(repository);
+            var records = new AntonRaidRejoin(true); raids.BindRejoin(records);
+            var recovery = new LukeRaidRejoin(raids, parties, records);
+            var script = AntonRaidBattleTests.Script(10, 20) with { WaitingRoom = new(32, 4), EntryCost = new(100, 1) };
+            var definition = new RaidDefinition(1, script.Path, 8, 1, 2) { Resources = new(script, [], [], [], [], []) };
+            var start = new LukeRaidStart(raids, parties, repository, towns,
+                new EpicPieceCatalog("[piece list]\n9001 9002\n[/piece list]"), new("synthetic/rejoin", script));
+            RaidActor Login(int index, bool create)
+            {
+                var owner = owners.Acquire("luke-rejoin-" + index, () => { }); leases.Add(owner);
+                if (create) repository.Create(owner, new("LkRej" + index, origin, origin) { Level = 90, CompletedQuests = [2903, 4872],
+                    Inventory = new([new InventoryItem(0, new(InventoryListType.Main, 121), new(100, ItemKind.Material, 2))]) });
+                var session = new GameSession(repository, towns, owner, entry: new(new(2, 20), 32, "[luke_raid]")); sessions.Add(session);
+                session.Select(0); session.MarkReady(); session.CurrentParty = () => parties.Current(session);
+                return session.CaptureRaidActor(raids)!;
+            }
+            void EnterWaiting(RaidActor actor)
+            {
+                That(actor.Session.LeaveRoom(), "从真实频道房间出口进入Luke频道街区");
+                That(actor.Session.Travel(new(32, 4, 12, 11, 5, 32, 0, 0)), "沿合成已登记城镇门正常进入候战区");
+            }
+            var actors = Enumerable.Range(0, 3).Select(index => Login(index, true)).ToArray();
+            raids.Create(actors[0], 1, "rejoin", "rejoin"u8.ToArray(), 8, 1);
+            foreach (var member in actors.Skip(1))
+            { raids.Invite(actors[0], member, 0); That(raids.Respond(member, actors[0].Character, true).Accepted, "原团邀请"); }
+            foreach (var member in actors) raids.Assign(actors[0], member.Character, 1);
+            var started = start.Start(actors[0], raids.Find(actors[0])!, definition, [], () => true);
+            That(started.Error == 0 && started.Receipt is not null, "真实SQL开团扣票和普通分队安装");
+            var battle = actors[0].Session.CurrentRaidBattle(actors[0])!;
+            var beforeRaid = raids.Find(actors[0])!; var beforeParty = parties.Current(actors[0].Session)!;
+            var fact = recovery.Capture(actors[2]);
+            That(fact is { Luke: not null } && fact.Instance == battle.Instance && fact.Slot == 2 && fact.Squad == 1 &&
+                fact.Luke.OriginalParty.Id == beforeParty.Id && fact.Luke.PartySlot == 2, "断线前捕获两个不同层次的精确槽位和原实例");
+            That(!recovery.RecordDisconnected(fact!), "旧owner仍有效不发布恢复候选");
+            actors[2].Session.End(); parties.Detach(actors[2].Session); actors[2].Owner.Dispose();
+            That(recovery.RecordDisconnected(fact!), "真实断线清理后登记原身份");
+            var fresh = Login(2, false);
+            string sql = Assets(path); var character = fresh.Session.Selected;
+            That(recovery.Restore(fresh, fact!.Key).Reason == "waiting-room-required" &&
+                fresh.Session.CurrentRaidBattle(fresh) is null && raids.Find(fresh) is null && Assets(path) == sql &&
+                ReferenceEquals(character, fresh.Session.Selected), "普通重登仍在房间时拒绝绑定，不暗中迁城或改SQL");
+            EnterWaiting(fresh);
+            sql = Assets(path); character = fresh.Session.Selected;
+            var wrongPhase = fact! with { Luke = new(fact!.Luke!.Original, battle, beforeParty, 2, fact.Luke.Phase + 1) };
+            That(!raids.RecordLukeDisconnected(raids.Find(actors[0])!, wrongPhase, records) && ReferenceEquals(records.Peek(fresh.Character), fact),
+                "不同阶段候选不能覆盖原断线资格");
+            Guid heldRun = Guid.NewGuid();
+            using (var held = battle.ReserveDungeon(new(battle.Instance, 0, 1, RaidKind.Luke), 10,
+                actors.Take(2).Select(a => (a, new DungeonRunIdentity(a.Character, 0, 1, heldRun, 1))).ToArray()))
+            {
+                That(held is not null && !recovery.Restore(fresh, fact.Key).Accepted && fresh.Session.CurrentRaidBattle(fresh) is null,
+                    "原团有在途Run预约时拒绝恢复，释放预约后才能继续");
+            }
+            That(records.Evaluate(fresh, fact!.Key, true, false).Reason == "luke-rejoin-wire-unavailable" && !fact.Attempted,
+                "共用候选容器不让旧Anton668诊断消费Luke预约或发假成功");
+            That(!recovery.Restore(fresh, fact.Key + 1).Accepted && fresh.Session.CurrentRaidBattle(fresh) is null, "错key拒绝且会话未安装");
+            That(!recovery.Restore(fresh with { Channel = new(2, 21) }, fact.Key).Accepted, "错频道拒绝");
+            That(!recovery.Restore(actors[2], fact.Key).Accepted, "旧owner请求拒绝");
+            actors[1].Session.CommandGate.Wait();
+            try { That(recovery.Restore(fresh, fact.Key).Reason == "command-busy", "全团命令忙时全部保持未安装"); }
+            finally { actors[1].Session.CommandGate.Release(); }
+            That(ReferenceEquals(character, fresh.Session.Selected) && Assets(path) == sql && raids.Find(fresh) is null,
+                "失败规划不改SQL资产、角色快照或registry");
+            var restored = recovery.Restore(fresh, fact.Key);
+            That(restored.Accepted && restored.Reason == "bound-without-wire" && ReferenceEquals(fresh.Session.CurrentRaidBattle(fresh), battle) &&
+                restored.Battle!.Instance == beforeRaid.Started!.InstanceId && restored.Battle.Phase == fact.Luke!.Phase,
+                "领域恢复绑定同一个Battle同phase，无新实例");
+            That(restored.Raid!.Key == beforeRaid.Key && restored.Raid.Members.Single(m => m.Actor == fresh) is { Slot: 2, Squad: 1 } &&
+                restored.Party!.Id == beforeParty.Id && restored.Party.Members.Single(m => ReferenceEquals(m.Actor.Session, fresh.Session)).Slot == 2,
+                "原团和原普通分队ID/槽位保持");
+            That(restored.Raid.Leader == actors[0].Character && restored.Party!.Leader == 0, "普通成员恢复不改原队长");
+            long revision = battle.View.Revision;
+            That(recovery.Restore(fresh, fact.Key).Reason == "already-bound" && battle.View.Revision == revision, "同新owner重复恢复幂等且不重锚时钟");
+            raids.RemoveSession(actors[2].Session, actors[2].Epoch);
+            That(raids.Find(fresh)?.Started?.InstanceId == battle.Instance && Assets(path) == sql &&
+                ReferenceEquals(character, fresh.Session.Selected), "旧session迟到清理不能移除新owner，恢复不写票据/资产/资格SQL");
+            var maze = new DungeonMaze(0, 1, 1, "1", [new(0, 0)], [new(0, 0)], [new("boss", new(0, 0), 77, "fixture/rejoin.map")], []);
+            var definitions = new[] { 10, 20 }.ToImmutableDictionary(id => id, id => new DungeonDefinition(id, "fixture/rejoin.dgn", 1, 90, [maze], []));
+            var catalog = new RaidDungeonCatalog(script, definitions, [], new Dictionary<int, string> { [77] = "fixture/rejoin.map" }, _ => true, 1);
+            var selection = new LukeRaidDungeonService(raids, parties, catalog,
+                new("synthetic/rejoin", [new(0, 10, 0), new(1, 20, 0)], LukeRaidRunEconomy.ControlledNoOrdinaryRewards));
+            var selected = selection.Select(actors[0].Session, 10, parties.Current(actors[0].Session));
+            That(selected.Length == 3 && fresh.Session.HasLukeRaidSelection,
+                "成功恢复后原队长走真实Luke选择器，三名成员均绑定同实例选择而非仅检测名册");
+            That(selection.CancelSelection(actors[0].Session, parties.Current(actors[0].Session)), "原选图合同恢复城镇状态");
+            var leaderFact = recovery.Capture(actors[0])!;
+            actors[0].Session.End(); parties.Detach(actors[0].Session); actors[0].Owner.Dispose();
+            That(recovery.RecordDisconnected(leaderFact), "原队长断线可保留身份，但不代表可恢复");
+            var leaderLogin = Login(0, false); EnterWaiting(leaderLogin);
+            var retainedRaid = raids.Find(actors[1])!; var retainedParty = parties.Current(actors[1].Session)!;
+            string beforeRejectedLeader = Assets(path);
+            That(recovery.Restore(leaderLogin, leaderFact.Key).Reason == "squad-leader-contract-unavailable" &&
+                ReferenceEquals(raids.Find(actors[1]), retainedRaid) && ReferenceEquals(parties.Current(actors[1].Session), retainedParty) &&
+                leaderLogin.Session.CurrentRaidBattle(leaderLogin) is null && leaderFact.Luke!.Bound is null &&
+                ReferenceEquals(records.Peek(leaderLogin.Character), leaderFact) && Assets(path) == beforeRejectedLeader,
+                "低slot原队长恢复会破坏现有选图锚点，必须原子拒绝且保留候选，不抢队长");
+            var nextFact = recovery.Capture(fresh)!;
+            fresh.Session.End(); parties.Detach(fresh.Session); fresh.Owner.Dispose();
+            var beforeLastExit = raids.Find(actors[1])!;
+            That(raids.Leave(actors[1], actors[1].Character)?.After is null && actors[1].IsCurrent &&
+                battle.CanRestoreLukeRejoin(nextFact.Luke!) && battle.View.State == AntonRaidBattleState.Fighting,
+                "控制最后成员RemoveCore已删除目录、但Battle/owner尚未清理的交错窗口");
+            That(!raids.RecordLukeDisconnected(beforeLastExit, nextFact, records) && records.Peek(fresh.Character) is null,
+                "登记规划与提交之间末位成员已退出，旧快照不能在DropParty后重新挂回候选");
+            actors[1].Session.End(); parties.Detach(actors[1].Session); actors[1].Owner.Dispose();
+            That(!recovery.RecordDisconnected(nextFact) && records.Peek(fresh.Character) is null,
+                "最后成员离线销毁团，不从断线记录重建Battle");
+            // 同一数据库第二次真实开团，独立于上面的仍Fighting末成员清理竞态。
+            var phaseActors = new[] { leaderLogin, Login(1, false), Login(2, false) };
+            raids.Create(phaseActors[0], 1, "phase", "phase"u8.ToArray(), 8, 1);
+            foreach (var member in phaseActors.Skip(1))
+            { raids.Invite(phaseActors[0], member, 0); That(raids.Respond(member, phaseActors[0].Character, true).Accepted, "阶段拒绝夹具真实入团"); }
+            foreach (var member in phaseActors) raids.Assign(phaseActors[0], member.Character, 1);
+            That(start.Start(phaseActors[0], raids.Find(phaseActors[0])!, definition, [], () => true).Error == 0,
+                "第二独立实例沿真实SQL消费剩余票，不手工改Battle阶段");
+            var phaseBattle = phaseActors[0].Session.CurrentRaidBattle(phaseActors[0])!;
+            var phaseFact = recovery.Capture(phaseActors[2])!;
+            phaseActors[2].Session.End(); parties.Detach(phaseActors[2].Session); phaseActors[2].Owner.Dispose();
+            That(recovery.RecordDisconnected(phaseFact), "兼容高slot候选登记成功");
+            var phaseLogin = Login(2, false); EnterWaiting(phaseLogin);
+            That(phaseBattle.CanRestoreLukeRejoin(phaseFact.Luke!) && phaseBattle.IsLukeWaitingRoom(phaseLogin) &&
+                phaseFact.Slot == 2 && parties.Current(phaseActors[0].Session)!.Leader == 0,
+                "pending变化之前候选phase/owner/位置及普通队长均兼容");
+            string phaseSql = Assets(path);
+            Guid ending = Guid.NewGuid();
+            var rows = phaseActors.Take(2).Select(a => (Actor: a, Identity: new DungeonRunIdentity(a.Character, 0, 1, ending, 1))).ToArray();
+            using (var run = phaseBattle.ReserveDungeon(new(phaseBattle.Instance, 0, 1, RaidKind.Luke), 10, rows))
+            {
+                That(run is not null, "终结屏障回归预留原正式Run"); run!.Install();
+                var facts = rows.Select(row => (row.Actor, new DungeonClearFact(row.Identity, 10, [Guid.NewGuid()])
+                    { ClearMap = new("boss", new(0, 0), 77, "fixture/rejoin.map") })).ToArray();
+                That(phaseBattle.CompleteLukeDungeon(facts) is not null && phaseBattle.HasPendingTransition &&
+                    recovery.Restore(phaseLogin, phaseFact.Key).Reason == "stale-reservation",
+                    "唯一新变化为Run终结待退出屏障，兼容高slot候选仍必须拒绝");
+                foreach (var row in rows) phaseBattle.ReleaseDungeon(row.Actor, ending);
+                That(phaseBattle.View.State == AntonRaidBattleState.Reward &&
+                    recovery.Restore(phaseLogin, phaseFact.Key).Reason == "stale-reservation" &&
+                    phaseLogin.Session.CurrentRaidBattle(phaseLogin) is null && Assets(path) == phaseSql,
+                    "Run全部退出后的Reward状态仍拒绝，不被低slot队长或位置拒绝掩盖");
+            }
+            passed = true;
+        }
+        finally
+        {
+            foreach (var session in sessions) try { session.End(); } catch (InvalidOperationException) { }
+            foreach (var lease in leases) lease.Dispose();
+            if (passed) Directory.Delete(root, true);
+        }
+    }
+
+    static string Assets(string path)
+    {
+        using var db = new SqliteConnection($"Data Source={path};Mode=ReadOnly"); db.Open();
+        using var tables = db.CreateCommand();
+        tables.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND (name='characters' OR name LIKE '%inventory%' OR name LIKE '%raid%') ORDER BY name";
+        var names = new List<string>(); using (var reader = tables.ExecuteReader()) while (reader.Read()) names.Add(reader.GetString(0));
+        var rows = new List<string>();
+        foreach (string name in names)
+        {
+            using var command = db.CreateCommand(); command.CommandText = "SELECT * FROM \"" + name.Replace("\"", "\"\"") + "\"";
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) rows.Add(name + ":" + JsonSerializer.Serialize(Enumerable.Range(0, reader.FieldCount)
+                .Select(i => reader.IsDBNull(i) ? null : reader.GetValue(i)).ToArray()));
+        }
+        return string.Join("\n", rows.Order(StringComparer.Ordinal));
+    }
+}

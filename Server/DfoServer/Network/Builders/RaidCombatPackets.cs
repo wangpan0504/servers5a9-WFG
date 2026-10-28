@@ -5,6 +5,22 @@ namespace DfoServer.Network.Builders;
 
 internal static class RaidCombatPackets
 {
+    // Luke专用准备层：02386120按1/4/4/4读取，01DD06DE忽略中间列并保存now+seconds。
+    // 零秒不是RESET，kind2 UI存在除零风险；本方法未接入正式投影。
+    public static byte[] LukePositiveTimer(sbyte kind, int dungeon, uint ignoredRaw, uint seconds)
+    {
+        if (kind is not (1 or 2)) throw new ArgumentOutOfRangeException(nameof(kind));
+        if (dungeon <= 0) throw new ArgumentOutOfRangeException(nameof(dungeon));
+        if (ignoredRaw != 0) throw new ArgumentOutOfRangeException(nameof(ignoredRaw));
+        if (seconds is 0 or > 86400) throw new ArgumentOutOfRangeException(nameof(seconds));
+        byte[] body = new byte[13];
+        body[0] = (byte)kind;
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(1), checked((uint)dungeon));
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(5), ignoredRaw);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), seconds);
+        return body;
+    }
+
     // 0239ED80只读u8已使用次数；02617674按phase资源上限判断，不是剩余数量。
     public static byte[] PhaseCoins(byte used) => used <= LukeRaidRevivalPolicy.PhaseLimit
         ? [used] : throw new ArgumentOutOfRangeException(nameof(used));

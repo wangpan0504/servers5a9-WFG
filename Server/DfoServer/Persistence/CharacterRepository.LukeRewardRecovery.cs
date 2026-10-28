@@ -3,6 +3,7 @@ using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Raids;
+using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Persistence;
 
@@ -28,14 +29,9 @@ internal sealed partial class CharacterRepository : ILukeRewardRecoveryStore
         using (var row = command.ExecuteReader())
         {
             if (!row.Read() || row.IsDBNull(0)) throw new InvalidDataException("没有该明确目标的已提交阶段资格");
-            eligibility = Decode<RaidPhaseEligibility>(row.GetString(0));
-            if (!eligibility.Eligible || eligibility.Instance != target.Instance || eligibility.Character != character.Id ||
-                eligibility.RaidType != RaidKind.Luke || eligibility.Phase != target.Phase || eligibility.Event == Guid.Empty ||
-                row.IsDBNull(1) || eligibility.Event.ToString("N") != row.GetString(1) || row.IsDBNull(2) ||
-                eligibility.Anchor != row.GetInt64(2) || string.IsNullOrWhiteSpace(eligibility.Source) ||
-                eligibility.Offers.IsDefaultOrEmpty || eligibility.Offers.Length > 32 || eligibility.Offers.Any(x => x is null) ||
-                eligibility.Offers.Select(x => (x.Kind, x.Card)).Distinct().Count() != eligibility.Offers.Length)
-                throw new InvalidDataException("阶段资格身份或牌面损坏");
+            eligibility = DecodeLukeEligibility(row.GetString(0), row.IsDBNull(1) ? null : row.GetString(1),
+                row.IsDBNull(2) ? null : row.GetInt64(2), target.Instance, target.Phase, character.Id);
+            if (!eligibility.Eligible) throw new InvalidDataException("没有该明确目标的已提交阶段资格");
         }
         var offer = eligibility.Offers.SingleOrDefault(x => x.Kind == target.Kind && x.Card == target.Card)
             ?? throw new InvalidDataException("原资格没有该牌面");
@@ -58,6 +54,87 @@ internal sealed partial class CharacterRepository : ILukeRewardRecoveryStore
             }
         return new LukeRewardRecoverySnapshot(prepared, eligibility.Event, eligibility.Anchor, claimed, mails);
     });
+
+    // 只读发现不接收资源目录，不自动选择牌面，也不调用领取或恢复Battle。
+    public LukeRewardRecoveryPage ListLukeRewardRecovery(AccountOwners.Lease owner, Character character,
+        Guid? afterInstance = null, int limit = 16) => owner.Execute(() =>
+    {
+        if (limit is < 1 or > 16 || afterInstance == Guid.Empty)
+            throw new InvalidDataException("历史资格分页参数无效");
+        using var db = database.Open(); using var tx = db.BeginRead();
+        var current = Require(db, tx, owner.Account, character.Name);
+        if (current.Id != character.Id || current.Revision != character.Revision)
+            throw new InvalidDataException("目标角色版本已变化");
+        using var command = db.CreateCommand(); command.Transaction = tx;
+        command.Parameters.AddWithValue("$id", character.Id); command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$after", afterInstance?.ToString("N") ?? "");
+        command.Parameters.AddWithValue("$limit", limit);
+        // 现有(character_id,instance_id)主键支持keyset；先取有界身份，避免加载所有历史JSON。
+        command.CommandText = "SELECT instance_id FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=1 AND instance_id>$after ORDER BY instance_id LIMIT $limit";
+        var instances = new List<Guid>(limit);
+        using (var rows = command.ExecuteReader())
+            while (rows.Read())
+            {
+                string raw = rows.GetString(0);
+                if (!Guid.TryParseExact(raw, "N", out var instance) || instance == Guid.Empty ||
+                    !string.Equals(raw, instance.ToString("N"), StringComparison.Ordinal))
+                    throw new InvalidDataException("历史实例主键损坏");
+                instances.Add(instance);
+            }
+        var entries = ImmutableArray.CreateBuilder<LukeRewardRecoveryEntry>();
+        command.Parameters.Add("$instance", SqliteType.Text); command.Parameters.Add("$phase", SqliteType.Integer);
+        foreach (var instance in instances)
+        {
+            command.Parameters["$instance"].Value = instance.ToString("N");
+            for (int phase = 0; phase < 2; phase++)
+            {
+                string prefix = phase == 0 ? "phase0" : "phase1";
+                command.CommandText = $"SELECT CASE WHEN length({prefix}_receipt)<=262144 THEN {prefix}_receipt END,{prefix}_event,{prefix}_anchor,length({prefix}_receipt) FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=1";
+                RaidPhaseEligibility eligibility;
+                using (var row = command.ExecuteReader())
+                {
+                    if (!row.Read() || row.IsDBNull(3)) continue;
+                    if (row.GetInt64(3) > 262144) throw new InvalidDataException("历史阶段资格超过读取上限");
+                    eligibility = DecodeLukeEligibility(row.GetString(0), row.IsDBNull(1) ? null : row.GetString(1),
+                        row.IsDBNull(2) ? null : row.GetInt64(2), instance, phase, character.Id, validateAllGrants: true);
+                }
+                if (!eligibility.Eligible) continue;
+                var claimed = ImmutableArray.CreateBuilder<LukeRewardRecoverySnapshot>();
+                command.Parameters["$phase"].Value = phase;
+                command.CommandText = "SELECT kind,card,CASE WHEN length(plan_json)<=262144 THEN plan_json END,CASE WHEN length(mail_ids)<=65536 THEN mail_ids END,account,raid_type FROM character_raid_reward_receipts WHERE character_id=$id AND instance_id=$instance AND phase=$phase ORDER BY kind LIMIT 33";
+                using (var rows = command.ExecuteReader())
+                    while (rows.Read())
+                    {
+                        var offer = eligibility.Offers.SingleOrDefault(x => x.Kind == rows.GetInt32(0) && x.Card == rows.GetInt32(1));
+                        if (claimed.Count >= 32 || offer is null || rows.IsDBNull(2) || rows.IsDBNull(3) ||
+                            rows.GetString(4) != owner.Account || rows.GetInt32(5) != (int)RaidKind.Luke)
+                            throw new InvalidDataException("历史领取回执身份或牌面损坏");
+                        var prepared = new PreparedRaidReward(instance, phase, offer.Kind, offer.Card, character.Id,
+                            eligibility.Source, offer.Grants, phase == 1, eligibility.Week) { RaidType = RaidKind.Luke };
+                        if (!RecoveryPlanMatches(rows.GetString(2), prepared)) throw new InvalidDataException("原领取回执不一致");
+                        var mails = Decode<ImmutableArray<uint>>(rows.GetString(3));
+                        if (mails.IsDefault) throw new InvalidDataException("原领取邮件回执损坏");
+                        claimed.Add(new(prepared, eligibility.Event, eligibility.Anchor, true, mails));
+                    }
+                entries.Add(new(eligibility, claimed.ToImmutable()));
+            }
+        }
+        return new LukeRewardRecoveryPage(entries.ToImmutable(), instances.Count == limit ? instances[^1] : null);
+    });
+
+    static RaidPhaseEligibility DecodeLukeEligibility(string json, string? savedEvent, long? savedAnchor,
+        Guid instance, int phase, ushort character, bool validateAllGrants = false)
+    {
+        var eligibility = Decode<RaidPhaseEligibility>(json);
+        if (eligibility.Instance != instance || eligibility.Character != character || eligibility.RaidType != RaidKind.Luke ||
+            eligibility.Phase != phase || eligibility.Event == Guid.Empty || eligibility.Event.ToString("N") != savedEvent ||
+            eligibility.Anchor != savedAnchor || string.IsNullOrWhiteSpace(eligibility.Source) ||
+            eligibility.Offers.IsDefaultOrEmpty || eligibility.Offers.Length > 32 || eligibility.Offers.Any(x => x is null) ||
+            eligibility.Offers.Select(x => (x.Kind, x.Card)).Distinct().Count() != eligibility.Offers.Length ||
+            (validateAllGrants && eligibility.Offers.Any(x => x.Grants.IsDefaultOrEmpty || x.Grants.Length > 32 || x.Grants.Any(g => g is null))))
+            throw new InvalidDataException("阶段资格身份或牌面损坏");
+        return eligibility;
+    }
 
     static bool RecoveryPlanMatches(string json, PreparedRaidReward prepared)
     {

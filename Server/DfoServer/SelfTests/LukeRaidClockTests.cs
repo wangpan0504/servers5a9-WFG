@@ -10,6 +10,7 @@ internal static class LukeRaidClockTests
     internal static void RunCore(RaidActor[] actors)
     {
         int before = Count;
+        PositiveTimerPreparation(actors);
         var clock = new Clock(); var store = new Store();
         var errors = new List<string>();
         var service = new LukeRaidClocks(clock, store, (stage, _) => errors.Add(stage), 1);
@@ -117,6 +118,64 @@ internal static class LukeRaidClockTests
             foreach (var actor in actors) That(result.JoinStart(actor), "定时实例只引用当前原成员");
             return result;
         }
+    }
+
+    static void PositiveTimerPreparation(RaidActor[] actors)
+    {
+        Bytes(Network.Builders.RaidCombatPackets.LukePositiveTimer(1, 5066, 0, 150),
+            [1, 0xca, 0x13, 0, 0, 0, 0, 0, 0, 150, 0, 0, 0], "596正数13B独立字节期望，明确中间raw0");
+        Bytes(Network.Builders.RaidCombatPackets.LukePositiveTimer(2, 5063, 0, 86400),
+            [2, 0xc7, 0x13, 0, 0, 0, 0, 0, 0, 0x80, 0x51, 1, 0], "596恢复类与一天上界独立字节期望");
+        foreach (var (kind, dungeon, raw, seconds) in new (sbyte, int, uint, uint)[]
+            {(-1, 10, 0, 1), (0, 10, 0, 1), (3, 10, 0, 1), (1, 0, 0, 1), (1, -1, 0, 1),
+             (1, 10, 1, 1), (1, 10, 0, 0), (2, 10, 0, 0), (1, 10, 0, 86401)})
+        {
+            bool rejected = false;
+            try { Network.Builders.RaidCombatPackets.LukePositiveTimer(kind, dungeon, raw, seconds); }
+            catch (ArgumentOutOfRangeException) { rejected = true; }
+            That(rejected, "596拒绝非法kind/key/raw/时长，零秒不能冒充RESET");
+        }
+        var clock = new Clock();
+        var service = new LukeRaidClocks(clock, new Store(), (_, _) => { });
+        try
+        {
+            var battle = new AntonRaidBattle(Script(false), kind: RaidKind.Luke, clock: clock);
+            foreach (var actor in actors) That(battle.JoinStart(actor), "596准备只引用当前领域actor，不安装网络策略");
+            var key = new RaidTimer(1, 10);
+            long generation = battle.View.TimerGenerations[key];
+            using var lease = service.Reserve(battle)!;
+            That(battle.LukeRuleTimerSeconds(battle.Instance, 0, key, generation) is null, "费用提交前预留时钟不准备显示");
+            lease.Activate();
+            var beforeQuery = battle.View;
+            That(battle.LukeRuleTimerSeconds(battle.Instance, 0, key, generation) == 5, "激活后取原单调deadline");
+            That(ReferenceEquals(beforeQuery, battle.View), "剩余时间查询不发布新View或推进规则");
+            That(battle.LukeRuleTimerSeconds(Guid.NewGuid(), 0, key, generation) is null &&
+                battle.LukeRuleTimerSeconds(battle.Instance, 1, key, generation) is null &&
+                battle.LukeRuleTimerSeconds(battle.Instance, 0, key, generation + 1) is null &&
+                battle.LukeRuleTimerSeconds(battle.Instance, 0, new(2, 10), generation) is null &&
+                battle.LukeRuleTimerSeconds(battle.Instance, 0, new(1, 999), generation) is null,
+                "不同实例/phase/代/key及未登记资源拒绝");
+            clock.AdvanceMillisecondsWithoutCallbacks(4100);
+            That(battle.LukeRuleTimerSeconds(battle.Instance, 0, key, generation) == 1, "正剩余0.9秒向上取整1，不回放初始5秒");
+            clock.AdvanceMillisecondsWithoutCallbacks(900);
+            That(battle.LukeRuleTimerSeconds(battle.Instance, 0, key, generation) is null, "正好截止但回调未执行也不准备零秒");
+            battle.SetMechanism(battle.Instance, battle.View.Revision, "[reset]", 1);
+            That(battle.LukeRuleTimerSeconds(battle.Instance, 0, key, generation) is null, "服务端RESET只返回不可准备，不假装客户端已清理");
+            battle.SetMechanism(battle.Instance, battle.View.Revision, "[init]", 0);
+            long next = battle.View.TimerGenerations[key];
+            That(next > generation && battle.LukeRuleTimerSeconds(battle.Instance, 0, key, generation) is null &&
+                battle.LukeRuleTimerSeconds(battle.Instance, 0, key, next) == 5, "重设签发新代，旧代不能借当前时长复活");
+            battle.SetMechanism(battle.Instance, battle.View.Revision, "[reset]", 0);
+            battle.SetMechanism(battle.Instance, battle.View.Revision, "[reset]", 1);
+            That(!battle.View.Timers.ContainsKey(key) &&
+                battle.LukeRuleTimerSeconds(battle.Instance, 0, key, next) is null, "未过期新代RESET确实删除timer并拒绝准备");
+            battle.SetMechanism(battle.Instance, battle.View.Revision, "[init]", 0);
+            next = battle.View.TimerGenerations[key];
+            That(battle.LukeRuleTimerSeconds(battle.Instance, 0, key, next) == 5, "离场检查前恢复有效正数timer");
+            foreach (var actor in actors) battle.DetachStart(actor);
+            That(battle.LukeRuleTimerSeconds(battle.Instance, 0, key, next) is null, "最后成员离开不再准备，不发送猜测删除包");
+        }
+        finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
     }
 
     static void PhaseReservedOperations(RaidActor[] actors)
@@ -346,6 +405,7 @@ internal static class LukeRaidClockTests
         {
             var timer = new Timer(this, callback, state); lock (gate) timers.Add(timer); timer.Change(dueTime, period); return timer;
         }
+        internal void AdvanceMillisecondsWithoutCallbacks(int milliseconds) { lock (gate) stamp += milliseconds; }
         internal void AdvanceWithoutCallbacks(int seconds) { lock (gate) stamp += seconds * 1000L; }
         internal void Advance(int seconds)
         {

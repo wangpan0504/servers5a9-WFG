@@ -9,6 +9,7 @@ internal sealed record AntonRaidDisconnectFact(
     ChannelIdentity Channel, byte Slot, byte Squad, Guid? Run, bool WasLoading)
 {
     public bool Attempted { get; set; }
+    internal LukeRaidRejoinReservation? Luke { get; init; }
 }
 
 internal sealed record AntonRaidRejoinDecision(
@@ -67,6 +68,7 @@ internal sealed class AntonRaidRejoin(bool enabled)
         {
             if (!Enabled || !byCharacter.TryGetValue(actor.Character, out var fact) || fact.Account != actor.Owner.Account)
                 return AntonRaidRejoinDecision.Reject("none");
+            if (fact.Luke is not null) return AntonRaidRejoinDecision.Reject("luke-rejoin-wire-unavailable", fact.Key);
             if (fact.Attempted) return AntonRaidRejoinDecision.Reject("already-attempted", fact.Key);
             if (fact.Channel != actor.Channel) return AntonRaidRejoinDecision.Reject("channel-mismatch", fact.Key);
             if (alreadyMember) return AntonRaidRejoinDecision.Reject("already-member", fact.Key);
@@ -90,6 +92,7 @@ internal sealed class AntonRaidRejoin(bool enabled)
             if (!byCharacter.TryGetValue(actor.Character, out var fact) || fact.Account != actor.Owner.Account)
                 return AntonRaidRejoinDecision.Reject("no-rejoin-record", key);
             if (fact.Key != key) return AntonRaidRejoinDecision.Reject("key-mismatch", key);
+            if (fact.Luke is not null) return AntonRaidRejoinDecision.Reject("luke-rejoin-wire-unavailable", fact.Key);
             if (fact.Attempted) return AntonRaidRejoinDecision.Reject("duplicate-rejoin", key);
             if (fact.Channel != actor.Channel) return AntonRaidRejoinDecision.Reject("channel-mismatch", key);
             if (ReferenceEquals(actor.Owner, fact.OldOwner) && actor.Epoch == fact.Epoch)
