@@ -18,6 +18,7 @@ internal sealed record LukeRaidStartPolicy(string Source, RaidScript ExecutionSc
     public LukeRaidRevivalPolicy? Revival { get; init; }
     public LukeRaidClockPolicy? Timers { get; init; }
     public LukeRaidPhaseTimeoutPolicy? PhaseTimeout { get; init; }
+    public LukeFacilityReportPolicy? Facilities { get; init; }
 }
 
 internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
@@ -109,7 +110,7 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
     string? PrepareBattle(out AntonRaidBattle? battle)
     {
         battle = null;
-        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival, policy.PhaseTimeout, policy.Run?.FixedRoute); }
+        try { battle = new AntonRaidBattle(policy.ExecutionScript, Guid.NewGuid(), RaidKind.Luke, policy.Completion, clock, policy.Revival, policy.PhaseTimeout, policy.Run?.FixedRoute, facilities: policy.Facilities); }
         catch (InvalidDataException) { return "luke-execution-policy-invalid"; }
         catch (KeyNotFoundException) { return "luke-execution-policy-reference-invalid"; }
         catch (IndexOutOfRangeException) { return "luke-execution-policy-field-invalid"; }
@@ -126,6 +127,8 @@ internal sealed class LukeRaidStart(RaidRegistry registry, PartyService parties,
             script.Phases.Length != definition.PhaseMax || original.Phases.Length != definition.PhaseMax ||
             !script.Symbols.OrderBy(p => p.Key).SequenceEqual(original.Symbols.OrderBy(p => p.Key)))
             return "luke-execution-policy-unavailable";
+        if (policy.Facilities is { } facilities && (!facilities.Valid || policy.Run is null ||
+            definition.Resources.LukeObjects is not { BindingCount: > 0 })) return "luke-facility-bridge-policy-unavailable";
         if (policy.Completion is { } completion && (!AntonRaidBattle.ValidLukeCompletion(completion) || policy.Run is null ||
             rewardItems is null || completion.Phases.Any(phase => phase.Rewards.Offers.Any(offer => offer.Grants.Any(grant =>
                 grant.Count <= 0 || !rewardItems.TryGet(grant.ItemId, out _)))))) return "luke-completion-policy-unavailable";

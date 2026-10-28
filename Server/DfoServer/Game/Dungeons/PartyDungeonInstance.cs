@@ -92,6 +92,14 @@ internal sealed class PartyDungeonInstance(Guid id, PartySnapshot party, IPartyD
         });
     }
 
+    public LukeFacilityReportReceipt? ReportLukeFacility(GameSession reporter, int symbol, uint value, byte operation) => Execute(current =>
+    {
+        if (pendingDeath is not null || pendingScene is not null || loaded.Count != 0 ||
+            !current.Any(member => ReferenceEquals(member.Actor.Session, reporter)) ||
+            current.Any(member => !member.Actor.Session.CanMoveWithParty())) return null;
+        return reporter.ReportLukeFacility(symbol, value, operation);
+    });
+
     public PartyDungeonNotice[] CompleteLoading(GameSession reporter) => Execute(current =>
     {
         if (!current.Any(m => ReferenceEquals(m.Actor.Session, reporter)) || !reporter.CanCompletePartyLoading()) return [];

@@ -14,7 +14,25 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.SELECT_RAID_REWARD_CARD, RewardAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.RAID_SET_SYMBOL, FacilityAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.RAID_MONSTER_HP, HpAsync, nameof(RaidCombatHandler), Game.Session.UserStateRequirement.DungeonContext);
+    }
+
+    async Task<CommandResult> FacilityAsync(GameConnectionContext context, Packet request)
+    {
+        if (!context.Session.AcceptsLukeFacilityReports || RaidRequests.LukeFacilitySymbol(request.Body) is not { } symbol || context.Session.PartyDungeon is not { } party)
+            return CommandResult.Unhandled;
+        // 忙锁重试先恢复原封存SQL；不能在回放同一662时重复执行设施增量。
+        if (lifecycle is not null) context.Session.CommitPendingLukePhase(lifecycle);
+        var receipt = party.ReportLukeFacility(context.Session, symbol, 1, 1);
+        if (receipt is null) return CommandResult.Unhandled; // 失败错误码未知，不编造通用成功。
+        if (lifecycle is not null) context.Session.CommitPendingLukePhase(lifecycle);
+        if (receipt.Result.Outcome == LukeFacilityReportOutcome.Applied)
+            log.Write("raid_facility_confirmed", new { Connection = context.Id, receipt.Battle, Run = receipt.Identity.InstanceId, Symbol = symbol });
+        context.Session.PublishRaidCombat();
+        // 静态028F85F6..028F8686的非零状态分支及缺省回调支持[01]；不推断失败正文。
+        await context.Reply(CmdPacketType.RAID_SET_SYMBOL, [1], "luke_facility_confirmed", () => context.Session.CanPublishLukeFacility(receipt));
+        return CommandResult.Handled;
     }
 
     Task<CommandResult> HpAsync(GameConnectionContext context, Packet request)
