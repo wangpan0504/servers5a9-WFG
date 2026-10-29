@@ -39,12 +39,16 @@ internal static class AntonRaidTimerTests
             try
             {
                 using var lease = service.Reserve(battle)!; lease.Activate();
-                Clear(battle, 210); Clear(battle, 213); Clear(battle, 215); Settle(battle, store); Rewards(battle);
+                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215); Settle(battle, store); Rewards(battle);
                 clock.Advance(179);
                 That(!battle.View.Deferred.Values.Any(row => row.Tag == "[open random hatchery]"), "180前不能预开随机目标");
                 clock.Advance(1);
                 int token = battle.View.Deferred.Single(row => row.Value.Tag == "[open random hatchery]").Key;
                 That(battle.View.Dungeons[dungeon] == RaidDungeonState.Hide, "UNIMPLEMENTED：180只产生随机待决，不猜目标或权重");
+                var unchanged = battle.View;
+                That(battle.CompleteDeferred(battle.Instance, battle.View.Revision, token, 219) is null &&
+                    battle.CompleteDeferred(battle.Instance, battle.View.Revision, token, 220) is null &&
+                    ReferenceEquals(unchanged, battle.View), "非HATCHERY INFO目标拒绝且不消费待决事件");
                 That(battle.CompleteDeferred(battle.Instance, battle.View.Revision, token, dungeon) is not null,
                     "显式选择HATCHERY INFO登记目标，仅验证其后已证计时规则");
                 var first = battle.View;
@@ -65,7 +69,7 @@ internal static class AntonRaidTimerTests
                     battle.View.TimerGenerations[new(3, dungeon)] == namedGeneration, "45到期只续timer1，timer3仍独立");
                 clock.Advance(5);
                 That(battle.View.TimerGenerations[new(3, dungeon)] > namedGeneration, "50到期独立续timer3");
-                Clear(battle, dungeon);
+                Clear(battle, actor, dungeon);
                 That(battle.View.Dungeons[dungeon] == RaidDungeonState.Close && battle.View.Timers[new(2, dungeon)] == 240,
                     "clear关闭目标并设timer2=240");
                 clock.Advance(239);
@@ -73,11 +77,11 @@ internal static class AntonRaidTimerTests
                 clock.Advance(1);
                 That(battle.View.Dungeons[dungeon] == RaidDungeonState.Open && battle.View.Timers[new(1, dungeon)] == 120 &&
                     battle.View.Timers[new(3, dungeon)] == 120, "240预留自然重开并重设120的新代");
-                Clear(battle, dungeon); Clear(battle, 219);
+                Clear(battle, actor, dungeon); Clear(battle, actor, 219);
                 clock.Advance(240); clock.FireQueued();
                 That(battle.View.Dungeons[dungeon] == RaidDungeonState.Hide && battle.View.Dungeons[220] == RaidDungeonState.Open &&
                     !battle.View.Deferred.Values.Any(row => row.DungeonId == dungeon), "219隐藏使旧240预留失效，迟到回调不能重开孵化场");
-                Clear(battle, 220); Settle(battle, store); Rewards(battle);
+                Clear(battle, actor, 220); Settle(battle, store); Rewards(battle);
                 int callbacks = clock.Callbacks; clock.Advance(3600);
                 That(clock.Callbacks == callbacks && errors.Count == 0, "Completed回收唯一租约，无孤儿回调");
             }
@@ -94,7 +98,7 @@ internal static class AntonRaidTimerTests
                 using var lease = service.Reserve(battle)!; clock.Advance(50); lease.Activate();
                 clock.AdvanceWithoutCallbacks(2400);
                 That(!battle.AllowsAntonEntry(210), "deadline已到即拒绝新入图，不等回调或借revision续期");
-                Clear(battle, 210, accepted: false); clock.FireQueued();
+                Clear(battle, actor, 210, accepted: false); clock.FireQueued();
                 var candidate = battle.PendingAntonSettlement();
                 That(candidate is { TimedOut: true, Phase: 0 } && !battle.View.PhaseExpired && battle.HasPendingTransition,
                     "失败SQL忙时封存同一候选，提交前不发布到期");
@@ -125,13 +129,31 @@ internal static class AntonRaidTimerTests
         }
     }
 
-    static void Clear(AntonRaidBattle battle, int dungeon, bool accepted = true)
+    // 真实规则计时回归也沿正式共享Run扣HP，不再借旧BindDungeon夹具跳过门槛。
+    static void Clear(AntonRaidBattle battle, RaidActor actor, int dungeon, bool accepted = true)
     {
-        var identity = new DungeonRunIdentity(1, 0, 1, Guid.NewGuid(), 1);
-        bool bound = battle.BindDungeon(identity, checked((uint)dungeon));
-        var result = bound ? battle.CompleteDungeon(new(identity, checked((uint)dungeon), [Guid.NewGuid()])
-            { ClearMap = new("boss", new(0, 0), 77, "fixture/anton-timer.map") }) : null;
-        That(accepted ? result is not null : !bound && result is null, "领域清图只接受当前开放且未到期目标");
+        var initial = battle.View;
+        int count = Math.Max(1, initial.Symbols[$"[{dungeon} dgn hp]"]);
+        for (int index = 0; index < (accepted ? count : 1); index++)
+        {
+            var identity = new DungeonRunIdentity(actor.Character, 0, 1, Guid.NewGuid(), 1);
+            using var reservation = battle.ReserveDungeon(new(battle.Instance, battle.View.Phase, 1), checked((uint)dungeon), [(actor, identity)]);
+            if (!accepted)
+            {
+                That(reservation is null && ReferenceEquals(initial, battle.View), "到期目标不预留正式Run或改变HP");
+                return;
+            }
+            That(reservation is not null, "真实资源目标允许正式Run预留");
+            reservation!.Install();
+            var fact = new DungeonClearFact(identity, checked((uint)dungeon), [Guid.NewGuid()])
+                { ClearMap = new("boss", new(0, 0), 77, "fixture/anton-timer.map") };
+            That(battle.CompleteAntonReservedDungeon(fact) is not null, "正式Run消费一次真实资源HP");
+            if (index + 1 < count)
+                That(battle.View.Dungeons[dungeon] == RaidDungeonState.Open &&
+                    battle.View.Symbols[$"[{dungeon} dgn hp]"] == count - index - 1,
+                    "真实多次门槛未归零前保持Open，不触发后续状态");
+            battle.ReleaseDungeon(actor, identity.InstanceId);
+        }
     }
 
     static void Settle(AntonRaidBattle battle, Store store)
