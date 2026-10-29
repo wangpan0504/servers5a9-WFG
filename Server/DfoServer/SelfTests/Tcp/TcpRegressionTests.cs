@@ -88,6 +88,7 @@ internal static class TcpRegressionTests
         ("quest-eligibility-mail", QuestEligibilityMailTcpTests.RunAsync),
         ("quest-account-sync", QuestAccountSynchronizationTcpTests.RunAsync),
         ("quest-hell-challenge", QuestHellChallengeTcpTests.RunAsync),
+        ("quest-hell-challenge-without-beast-meeting", QuestHellChallengeTcpTests.RunWithoutBeastMeetingAsync),
         ("quest-continuation", QuestLifecycleTcpTests.RunContinuationAsync),
         ("story-digest", StoryDigestTcpTests.RunAsync),
         ("quest-manual-skip", async (_, _, resources) =>
@@ -488,6 +489,7 @@ internal static class TcpRegressionTests
         "luke-scene-namespace",
         "luke-symbol103-handler",
         "luke-reward-restart",
+        "quest-hell-challenge-without-beast-meeting",
         "class-change-rules",
         "levelup-ticket-rules",
         "levelup-table-rules",
