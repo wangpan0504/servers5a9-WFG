@@ -6,6 +6,22 @@ namespace DfoServer.Network.Projection;
 
 internal static class PartyDungeonProjection
 {
+    // 先提交原分队退场，再确认请求；退出者发送失败也必须通知幸存成员。
+    public static async Task<CommandResult> DepartAsync(GameConnectionContext context,
+        PartyDungeonService? dungeons, PartyService? parties, Func<Task> acknowledge)
+    {
+        var departure = dungeons?.Depart(context.Session, preserveSolo: true);
+        if (departure is null || departure.Error != 0) return CommandResult.Unhandled;
+        try { await acknowledge(); }
+        finally
+        {
+            await PublishAsync(departure.DungeonNotices.Where(n => n.Kind != PartyDungeonNoticeKind.Departure));
+            (parties ?? throw new InvalidOperationException("组队副本缺少队伍服务")).Publish(departure.PartyNotices);
+            await PublishAsync(departure.DungeonNotices.Where(n => n.Kind == PartyDungeonNoticeKind.Departure));
+        }
+        return CommandResult.Handled;
+    }
+
     sealed class Gates(List<SemaphoreSlim> held) : IDisposable
     {
         public void Dispose()

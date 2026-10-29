@@ -24,7 +24,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     GameWorld.Adventure.AdventureCatalog? adventure = null, PartyDungeonService? partyDungeons = null,
     Game.Guild.GuildEconomyService? guildEconomy = null,
     Game.Guild.GuildContributionService? guildContribution = null, GoldLimitCatalog? goldLimits = null,
-    ImperialArenaProjection? imperialArena = null) : IGameCommandModule
+    ImperialArenaProjection? imperialArena = null, Game.Party.PartyService? parties = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -354,7 +354,22 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             }
         }
         if (context.Session.FormalDungeonResultFocus() is not { } current)
-            return CommandResult.Unhandled;
+        {
+            if (context.Session.AntonDungeonResultFocus() is not { } anton || context.Session.PartyDungeon is not { } squad)
+                return CommandResult.Unhandled;
+            if (state == 2)
+            {
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "formal_anton_result_focus", () => context.Session.CanPublishDungeonSettlement(anton));
+                return CommandResult.Handled;
+            }
+            // UNIMPLEMENTED：团本再次挑战/选其他图缺少原生流程证据，不能用普通重开或通用成功代替。
+            if (option != (byte)DungeonResultOption.ReturnTown) return CommandResult.Unhandled;
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, squad.Members);
+            return await PartyDungeonProjection.DepartAsync(context, partyDungeons, parties,
+                () => context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "formal_anton_result_return"));
+        }
         if (state == 2)
         {
             await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option), "formal_result_focus", () => context.Session.CanPublishDungeonSettlement(current));

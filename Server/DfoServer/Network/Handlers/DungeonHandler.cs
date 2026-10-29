@@ -803,17 +803,8 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         using var peers = party is null ? null : await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
         if (party is not null)
         {
-            var departure = partyDungeons?.Depart(context.Session, preserveSolo: true);
-            if (departure is null || departure.Error != 0) return CommandResult.Unhandled;
-            // 退场已提交；即使退出者收包失败，仍需向幸存者发布名册和主机变化。
-            try { await context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack"); }
-            finally
-            {
-                await PartyDungeonProjection.PublishAsync(departure.DungeonNotices.Where(n => n.Kind != PartyDungeonNoticeKind.Departure));
-                (parties ?? throw new InvalidOperationException("组队副本缺少队伍服务")).Publish(departure.PartyNotices);
-                await PartyDungeonProjection.PublishAsync(departure.DungeonNotices.Where(n => n.Kind == PartyDungeonNoticeKind.Departure));
-            }
-            return CommandResult.Handled;
+            return await PartyDungeonProjection.DepartAsync(context, partyDungeons, parties,
+                () => context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack"));
         }
         bool tag = context.Session.HasFormalTagEvildom;
         var receipt = context.Session.ReturnFromFormalDungeon();

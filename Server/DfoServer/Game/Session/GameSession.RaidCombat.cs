@@ -80,6 +80,14 @@ internal sealed partial class GameSession
     public AntonRaidBattleView? RaidCombatView() => owner.Execute(() =>
         raidCombat is { } raid && raid.Actor.IsCurrent ? raid.Battle.View : null);
 
+    // 团本单图没有普通46结算；只允许当前安徒恩已提交清图的菜单，不扩大普通翻牌资格。
+    internal FormalDungeonReceipt? AntonDungeonResultFocus() => owner.Execute(() =>
+        Ready && Phase == SessionPhase.Settlement && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton } &&
+        formalDungeon is { Entry.RaidEntry: not null, Run.ClearFact: not null } dungeon &&
+        !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
+        !HasPendingFormalCard && pendingQuestCompletion is null && !HasPendingQuestScene
+            ? FormalReceipt() : null);
+
     // 选图只读取原实例聚合，不另存一份初始战况；离团、换角与接管后不可重发旧列表。
     internal (RaidActor Actor, AntonRaidBattle Battle)? AntonRaidMap() => owner.Execute<(RaidActor, AntonRaidBattle)?>(() =>
         Ready && ChannelEntry?.Type == 23 && Selected?.Position is { Town: 19, Area: 2 } &&

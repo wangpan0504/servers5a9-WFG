@@ -134,6 +134,7 @@ internal sealed partial class GameSession
             DisableFatigueConsumption = controlled || entry.DisableFatigueConsumption,
             DisableGiveupPenalty = controlled || entry.DisableGiveupPenalty
         };
+        // UNIMPLEMENTED：团本单图地面掉落缺少匹配资源及原生合同，保留空掉落依赖，不套普通图奖池。
         var prepared = PrepareFormalDungeonResources(character, captured.SelectionEpoch, entry, rooms, null, null, draw, null,
             shared: shared, partyFirstKey: firstKey, partyInstance: partyInstance);
         if (prepared is null) return null;
