@@ -81,6 +81,14 @@ internal sealed partial class GameSession
         raidCombat is { } raid && raid.Actor.IsCurrent ? raid.Battle.View : null);
 
     // 团本单图没有普通46结算；只允许当前安徒恩已提交清图的菜单，不扩大普通翻牌资格。
+    // 安徒恩战况表在图内提交C2S72 `01 02`（回到城镇）：只允许当前Anton正式单图仍在Dungeon阶段且无待提交死亡/结算/地面操作，
+    // 复用42同一分队退场事务；不扣DGN HP、不产生ClearFact，也不代表`01 01`（进入地下城）已实现。
+    internal bool AntonDungeonBoardReturn() => owner.Execute(() =>
+        Ready && Phase == SessionPhase.Dungeon && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton } &&
+        formalDungeon is { Entry.RaidEntry: not null } dungeon &&
+        !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
+        !HasPendingFormalCard && pendingQuestCompletion is null && !HasPendingQuestScene);
+
     internal FormalDungeonReceipt? AntonDungeonResultFocus() => owner.Execute(() =>
         Ready && Phase == SessionPhase.Settlement && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton } &&
         formalDungeon is { Entry.RaidEntry: not null, Run.ClearFact: not null } dungeon &&

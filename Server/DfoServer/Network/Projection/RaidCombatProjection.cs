@@ -46,9 +46,9 @@ internal static class RaidCombatProjection
             !view.Symbols.TryGetValue("[is exist infection dungeon]", out int infected) ||
             !view.Symbols.TryGetValue("[infection dungeon index]", out int infectionDungeon)) return;
         bool Guard() => current() && battle.IsCurrent(view);
-        // 重进选图同步当前HP；关闭推进时仍只清感染存在位，585尾0本身不清symbol7。
+        // 重建选图同步当前583真实符号快照：DGN HP（50..63）与感染位均取view.Symbols；关闭阶段推进时HP保持PVF初值，不另造字段。
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
-            RaidCombatPackets.Symbols(battle.PhaseProgress ? battle.SymbolSnapshot(view) : [(7, infected)]), "raid_infection_state", Guard);
+            RaidCombatPackets.Symbols(battle.SymbolSnapshot(view)), "raid_infection_state", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_DUNGEON_STATE,
             RaidCombatPackets.Dungeons(0, battle.DungeonSnapshot(view), infectionDungeon),
             "raid_dungeon_snapshot", Guard);
