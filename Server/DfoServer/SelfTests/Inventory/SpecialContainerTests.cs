@@ -230,7 +230,7 @@ internal static class SpecialContainerTests
         {
             That(reader.ReadInt32() == 30 && reader.ReadUInt16() == 1 && reader.ReadInt32() == 3001, "avatar RAW first socket");
             reader.ReadBytes(18);
-            That(reader.ReadUInt16() == 239 && reader.ReadInt32() == -1, "avatar RAW fifth socket preserves sentinel");
+            That(reader.ReadUInt16() == 0xFFEF && reader.ReadInt32() == -1, "avatar RAW fifth socket preserves sentinel");
         }
     }
 

@@ -17,6 +17,26 @@ internal static class AvatarSocketTests
     public static void RunCore()
     {
         int checks = Count;
+        using (var stream = new MemoryStream())
+        {
+            using var writer = new BinaryWriter(stream);
+            var saved = new AvatarDetail { Socket0 = AvatarSocket.Empty(239), Socket1 = new(239, 3001),
+                Socket2 = new(16, 3002), Socket3 = new(0xFFEF, 3003) };
+            ItemListProtocolWriter.WriteAvatarSockets(writer, saved);
+            That(stream.ToArray().SequenceEqual(Convert.FromHexString(
+                "1E000000EFFFFFFFFFFFEFFFB90B00001000BA0B0000EFFFBB0B0000000000000000")),
+                "原生02973D10只接收FFEF多色孔；旧存档239及已镶嵌编号统一投影，白金、原生孔和关闭孔不变");
+            That(saved.Socket0 == AvatarSocket.Empty(239) && saved.Socket1 == new AvatarSocket(239, 3001),
+                "协议映射不改写已保存的孔型与徽章");
+        }
+        const string skin = "[equipment type]\n`[skin avatar]` 0\n[grade]\n2\n";
+        const string types = "[avatar type select]\n7 0 0 1000 0 0 0 0 0 0 4000 0 0 0 0 0 0 4400 0 0 2 `[M socket]` `[M socket]`\n[/avatar type select]";
+        That(ItemCatalog.ReadAvatarSockets(new PvfDocument(skin + types)) == new AvatarSocketTypes(239, 239, 0, 0, 0),
+            "特殊皮肤直接创建沿声明的永久带孔类型生成双彩孔，不依赖礼包类型索引");
+        That(ItemCatalog.ReadAvatarSockets(new PvfDocument(skin.Replace("\n2\n", "\n1\n") + types)) == default &&
+            ItemCatalog.ReadAvatarSockets(new PvfDocument(skin + "[avatar emblem socket num]\n0\n" + types)) == default &&
+            ItemCatalog.ReadAvatarSockets(new PvfDocument(skin + types.Replace("2 `[M socket]` `[M socket]`", "0"))) == default,
+            "普通高级皮肤、显式零孔及未声明孔型的特殊皮肤不自动开孔");
         byte[] body = [0, 0, 100, 0, 0, 0, 74, 0];
         var request = AvatarSocketRequests.Read(body);
         That(request == new AvatarSocketRequest(0, 100, 74), "C206按8字节读取时装槽、模板、材料槽");
@@ -116,6 +136,16 @@ internal static class AvatarSocketTests
 
     public static void RunResources(ItemCatalog items, AvatarPackageCatalog avatars)
     {
+        foreach (int id in new[] { 101580164, 101580166, 414580076, 401590018, 401590019 })
+        {
+            var template = items.Get(id);
+            var item = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Avatar, 0),
+                InventoryRewardGrantService.Create(template));
+            That(item.Avatar is { Socket0: { Type: 239, EmblemId: -1 }, Socket1: { Type: 239, EmblemId: -1 },
+                Socket2.Type: 0, Socket3.Type: 0, Socket4.Type: 0 }, "真实特殊皮肤与金秋光环直接创建双彩孔 " + id);
+        }
+        That(items.Get(415580044).AvatarSockets == default && items.Get(401590017).AvatarSockets == default,
+            "需开孔器的普通高级皮肤和无孔光环不因同部位被自动补孔");
         That(items.AvatarSocketOpener(7421) is { Item.Grade: 3, Mode: 2 } rare && rare.Allows(items.Get(101550535)) &&
             items.AvatarSocketOpener(10301316) is { Item.Grade: 1, Mode: 3 } skin && skin.Allows(items.Get(415580044)) &&
             avatars.GetAvatar(101550535).Types.Any(type => type.Sockets == new AvatarSocketTypes(1, 1, 0, 0, 0)) &&

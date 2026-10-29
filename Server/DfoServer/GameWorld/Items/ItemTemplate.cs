@@ -75,6 +75,11 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public ImmutableHashSet<string> GuardianGemEffects { get; init; } = [];
 }
 
-internal readonly record struct AvatarSocketTypes(ushort First, ushort Second, ushort Third, ushort Fourth, ushort Fifth);
+internal readonly record struct AvatarSocketTypes(ushort First, ushort Second, ushort Third, ushort Fourth, ushort Fifth)
+{
+    public AvatarSocketTypes WithDefaults(AvatarSocketTypes defaults) => new(
+        First == 0 ? defaults.First : First, Second == 0 ? defaults.Second : Second,
+        Third == 0 ? defaults.Third : Third, Fourth == 0 ? defaults.Fourth : Fourth, Fifth == 0 ? defaults.Fifth : Fifth);
+}
 
 internal sealed record StarterEquipment(byte Slot, ItemTemplate Template);

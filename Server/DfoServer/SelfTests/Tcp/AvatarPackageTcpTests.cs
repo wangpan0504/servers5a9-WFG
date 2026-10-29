@@ -130,12 +130,15 @@ internal static class AvatarPackageTcpTests
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "observed-selections"), gm: true, resources: resources);
         var items = resources.ItemResources.Items;
         var repository = new CharacterRepository(fixture.Database);
+        int[] directSkins = [101580164, 101580166, 414580076];
+        var direct = directSkins.Select((id, slot) => InventoryRewardGrantService.CreateItem(items.Get(id),
+            new(InventoryListType.Avatar, (short)slot), Core(id))).ToArray();
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
             repository.Create(owner, new("ObservedBox", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Job = 15, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(15).Skills,
                 Inventory = new([new(0, Bag(68), Core(490705413)), new(0, Bag(69), Core(490705389)), new(0, Bag(70), Core(490705390)), new(0, Bag(71), Core(490705389)), new(0, Bag(72), Core(490705390)),
-                    new(0, Bag(73), Core(490704635)), new(0, Bag(74), Core(490704635))])
+                    new(0, Bag(73), Core(490704635)), new(0, Bag(74), Core(490704635)), .. direct])
             });
         await fixture.StartAsync();
         BoosterTcpTests.SetExpirationDebug(fixture, true);
@@ -158,7 +161,9 @@ internal static class AvatarPackageTcpTests
         byte[] committedPetDetails = [];
         using (var peer = Open(fixture))
         {
-            peer.Select(); peer.Barrier();
+            peer.Select();
+            CheckAvatarRows(peer.SpecialContainers[1].Body, directSkins.Select(id => new AvatarPackageChoice(id, 0)).ToArray(), full: true);
+            peer.Barrier();
             var packages = resources.ItemResources.AvatarPackages;
             That(items.Get(415600033).Expiration is { AbsoluteTime: 0, Days: 0 } &&
                 packages.GetAvatar(415600033).Types[4].Days == 0 &&
@@ -208,21 +213,22 @@ internal static class AvatarPackageTcpTests
         {
             peer.Select(); peer.Barrier();
             CheckAvatarRows(peer.SpecialContainers[1].Body,
-                [new(415600033, 0), new(401590036, 0), new(401590037, 0), new(401590018, 0), new(401590019, 0)], full: true);
+                [new(415600033, 0), new(401590036, 0), new(401590037, 0), new(401590018, 0), new(401590019, 0),
+                    .. directSkins.Select(id => new AvatarPackageChoice(id, 0))], full: true);
             That(peer.SpecialContainers.Single(packet => packet.Opcode == 105).Body.SequenceEqual(committedPetDetails),
                 "重连仍恢复两个选择各自的完整宠物详情");
         }
         await fixture.StopAsync();
-        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[5L]] &&
+        That(fixture.Query("SELECT count(*) FROM inventory_avatar_details") is [[8L]] &&
             fixture.Query("SELECT count(*) FROM inventory_creature_details") is [[2L]] &&
-            fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[7L, 7L]],
-            "使徒与金秋光环各两项、两种宠物及武器装扮保存七个唯一实例，源礼盒均已扣除");
-        foreach (int id in new[] { 401590018, 401590019 })
+            fixture.Query("SELECT count(*),count(DISTINCT item_uid) FROM character_inventory_items") is [[10L, 10L]],
+            "三个直接创建皮肤与七项开箱奖励保存十个唯一实例，源礼盒均已扣除");
+        foreach (int id in new[] { 401590018, 401590019, 101580164, 101580166, 414580076 })
         {
             string json = (string)fixture.Query("SELECT d.detail FROM inventory_avatar_details d JOIN character_inventory_items i USING(item_uid) WHERE json_extract(i.item_core,'$.ItemId')=$p0", id).Single().Single()!;
             That(JsonSerializer.Deserialize<AvatarDetail>(json) ==
                 new AvatarDetail { Socket0 = new(239, -1), Socket1 = new(239, -1) },
-                "金秋光环完整详情持久化两个多色空孔，其余孔及期限保持零");
+                "金秋光环与特殊皮肤完整详情持久化两个多色空孔，其余孔及期限保持零");
         }
         ItemCore Core(int id) => InventoryRewardGrantService.Create(items.Get(id), shopExpiration: true);
         string State() => Snapshot(fixture) + JsonSerializer.Serialize(fixture.Query("SELECT item_uid,detail FROM inventory_creature_details ORDER BY item_uid"));
@@ -422,7 +428,7 @@ internal static class AvatarPackageTcpTests
         for (int socket = 0; socket < 5; socket++)
         {
             bool skinSocket = summary.ItemId == 401580026 && socket < 2;
-            That(U16(extra, 4 + socket * 6) == (skinSocket ? 239 : 0) &&
+            That(U16(extra, 4 + socket * 6) == (skinSocket ? 0xFFEF : 0) &&
                 U32(extra, 6 + socket * 6) == (skinSocket ? uint.MaxValue : 0),
                 "邮件摘要保留皮肤双空M孔及其他部位完整未开放孔位");
         }
@@ -445,12 +451,12 @@ internal static class AvatarPackageTcpTests
             That(body[at + 10] == 0 && U16(body, at + 11) == choice.Ability && U32(body, at + 123) == 30 && U32(body, at + 157) == 4,
                 "装扮Durability选项与完整附加块保留");
             if (choice.ItemId == 401580026)
-                That(U16(body, at + 127) == 239 && U32(body, at + 129) == uint.MaxValue &&
-                    U16(body, at + 133) == 239 && U32(body, at + 135) == uint.MaxValue, "type4皮肤投影两枚空M孔");
-            if (choice.ItemId is 401590018 or 401590019)
+                That(U16(body, at + 127) == 0xFFEF && U32(body, at + 129) == uint.MaxValue &&
+                    U16(body, at + 133) == 0xFFEF && U32(body, at + 135) == uint.MaxValue, "type4皮肤投影两枚空M孔");
+            if (choice.ItemId is 401590018 or 401590019 or 101580164 or 101580166 or 414580076)
                 Bytes(body.AsSpan(at + 123, 34), Convert.FromHexString(
-                    "1E000000EF00FFFFFFFFEF00FFFFFFFF000000000000000000000000000000000000"),
-                    "金秋光环发奖和重连均下发RAW30：双M孔、空徽章-1、其余三孔关闭");
+                    "1E000000EFFFFFFFFFFFEFFFFFFFFFFF000000000000000000000000000000000000"),
+                    "金秋光环及特殊皮肤发奖和重连均下发原生FFEF双M孔、空徽章-1及其余三孔关闭");
         }
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);

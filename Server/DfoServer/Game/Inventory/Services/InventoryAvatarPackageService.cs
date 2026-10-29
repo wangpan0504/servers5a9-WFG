@@ -133,7 +133,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
             if (expires != 0 && expires <= now.ToUnixTimeSeconds()) return InventoryResult.Reject(19);
             var core = InventoryRewardGrantService.Create(template, utcNow: now) with { Durability = ability, ExpireTime = expires };
             var prototype = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Avatar, 0), core);
-            var sockets = type.Sockets;
+            var sockets = type.Sockets.WithDefaults(template.AvatarSockets);
             prototype = prototype with { Avatar = prototype.Avatar! with
             {
                 Socket0 = AvatarSocket.Empty(sockets.First), Socket1 = AvatarSocket.Empty(sockets.Second),

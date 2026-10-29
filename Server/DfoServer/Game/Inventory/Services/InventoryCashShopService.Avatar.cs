@@ -47,7 +47,7 @@ internal sealed partial class InventoryCashShopService
         var core = InventoryRewardGrantService.Create(template, utcNow: now) with
             { Durability = request.AttributeValue, ExpireTime = expires };
         var created = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Avatar, 0), core);
-        var sockets = type.Sockets;
+        var sockets = type.Sockets.WithDefaults(template.AvatarSockets);
         reward = created with { Avatar = created.Avatar! with
         {
             Socket0 = AvatarSocket.Empty(sockets.First), Socket1 = AvatarSocket.Empty(sockets.Second),
