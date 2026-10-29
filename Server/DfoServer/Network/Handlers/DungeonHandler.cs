@@ -523,7 +523,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             var observation = new NativeDungeonScriptedDeathObservation(objectKey,scripted.RewriteFlag,
                 scripted.ChecksumMatches,Convert.ToHexString(SHA256.HashData(request.Body)));
             if (context.Session.HasDungeonAltar)
-                return await PublishAltarMonsterDeathAsync(context,objectKey,context.Session.ObserveDungeonAltarScriptedDeath(observation));
+                return await PublishAltarMonsterDeathAsync(context,objectKey,context.Session.ObserveDungeonAltarScriptedDeath(observation, growth));
             result = context.Session.ObserveFormalDungeonScriptedDeath(observation,rewards,growth);
         }
         else
@@ -541,7 +541,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             { Participants = statistics.Participants.Select(value => new NativeDungeonDeathParticipant(value.Kind,value.ObjectKey,
                 value.CumulativeHpDecrease,value.PositiveHpDecreaseCount)).ToImmutableArray() };
             if (context.Session.HasDungeonAltar)
-                return await PublishAltarMonsterDeathAsync(context,objectKey,context.Session.ObserveDungeonAltarDeath(observation));
+                return await PublishAltarMonsterDeathAsync(context,objectKey,context.Session.ObserveDungeonAltarDeath(observation, growth));
             audit = observation;
             result = context.Session.ObserveFormalDungeonDeath(observation,rewards,growth);
         }

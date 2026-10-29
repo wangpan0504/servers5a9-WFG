@@ -12,7 +12,7 @@ internal sealed partial class DungeonHandler
     async Task<CommandResult> AltarDeathAsync(GameConnectionContext context, Packet request)
     {
         if (!DungeonAltarRequests.TryParseDeaths(request.Body, out var keys)) return CommandResult.Unhandled;
-        var receipt = context.Session.ObserveDungeonAltarDeaths(keys, Convert.ToHexString(SHA256.HashData(request.Body)));
+        var receipt = context.Session.ObserveDungeonAltarDeaths(keys, Convert.ToHexString(SHA256.HashData(request.Body)), growth);
         return await PublishAltarDeathsAsync(context, receipt, keys.Length, CmdPacketType.DIE_BLOOD_MONSTER);
     }
 
@@ -28,6 +28,14 @@ internal sealed partial class DungeonHandler
     async Task<CommandResult> PublishAltarDeathsAsync(GameConnectionContext context, DungeonAltarReceipt? receipt,
         int count, CmdPacketType opcode, uint? objectKey = null)
     {
+        // 最后一击可能立即进入结算并替换角色快照，先发布原死亡事务的实际任务条件。
+        if (receipt?.QuestCharacter is { } character)
+        {
+            var quests = receipt;
+            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(character.ActiveMainQuests),
+                "formal_altar_quest_progress", () => context.Session.CanPublishDungeonAltar(quests));
+            context.Session.MarkDungeonAltarQuestsPublished(quests);
+        }
         // 重发39/255时也尝试恢复原SQL结果；已经冻结的奖励不会再次抽取。
         if (altarRewards is not null && context.Session.BeginDungeonAltarSettlement(altarRewards, growth) is { } settlement)
             receipt = settlement;
