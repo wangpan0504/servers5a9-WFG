@@ -5,6 +5,7 @@ using DfoServer.GameWorld.Towns;
 using DfoServer.GameWorld.Quests;
 using Microsoft.Data.Sqlite;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.Development;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
@@ -26,7 +27,8 @@ internal static class CharacterPreparationTests
             "独立任务目录非空且保留剑影职业/两次觉醒链");
         That(new[] { 10100, 2670, 6928, 8664, 8665, 8672, 6170, 8703, 8709, 2941 }.All(definition.MapQuests.Contains),
             "地图准入固定样本不因总数变化被省略");
-        var expected = main.Concat(definition.MapQuests).Concat(definition.JobQuests).ToHashSet();
+        var expected = main.Concat(definition.MapQuests).Concat(definition.JobQuests)
+            .Concat(InfernoQuestUnlock.PreparationQuestIds).ToHashSet();
         var pending = new Queue<int>(expected);
         var absentReferences = new SortedSet<int>();
         while (pending.TryDequeue(out int id))
@@ -37,8 +39,9 @@ internal static class CharacterPreparationTests
                 if (expected.Add(prerequisite)) pending.Enqueue(prerequisite);
             }
         RequireQuestSet(definition.CompletedQuests, expected, "准备完成任务闭包");
-        That(expected.Contains(8663) && expected.Contains(8702) && !expected.Contains(6766) && !expected.Contains(13700),
-            "准入前置保留，其他职业与纯显示标记不能混入真实完成记录");
+        That(expected.Contains(8663) && expected.Contains(8702) && !expected.Contains(6766) && !expected.Contains(13700) &&
+            InfernoQuestUnlock.PreparationQuestIds.All(expected.Contains),
+            "准入前置与深渊/时空裂缝外传保留，其他职业与纯显示标记不能混入真实完成记录");
         Reject<InvalidDataException>(() => RequireQuestSet(definition.CompletedQuests.Skip(1), expected, "漏项负例"),
             "集合校验拒绝少一项，不只验证数量");
         Reject<InvalidDataException>(() => RequireQuestSet(definition.CompletedQuests.Append(13700), expected, "多项负例"),

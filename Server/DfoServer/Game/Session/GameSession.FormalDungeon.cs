@@ -430,8 +430,8 @@ internal sealed partial class GameSession
                 return RejectFormal("boss-rush-catalog-unavailable");
             }
         }
-        // 时空裂缝：除区域 [hell quest] 外，副本头 [inferno quest] 也须已完成（世界地图同一副本声明为 [is clear quest]）。
-        if (entry.IsInfernoParty && catalog.Get(checked((int)dungeonId)).InfernoQuestId is int infernoQuest and > 0 && !done.Contains(infernoQuest))
+        // 时空裂缝：除区域 [hell quest] 外，副本头 [inferno quest] 也须已满足（世界地图同一副本声明为 [is clear quest]）。
+        if (entry.IsInfernoParty && catalog.Get(checked((int)dungeonId)).InfernoQuestId is int infernoQuest and > 0 && !InfernoQuestUnlock.Satisfied(infernoQuest, done))
             return RejectFormal("hell-party-quest-required:" + infernoQuest);
         if (hellParty && entry.HellParty is null && !entry.IsCosmo && !entry.IsInfernoParty) return RejectFormal("hell-party-room-unavailable");
         HellPartyTicket? hellTicket = null;
@@ -829,7 +829,7 @@ internal sealed partial class GameSession
         if (options.Length == 0) return "selection-dungeon-not-listed:" + optionDungeon;
         if (!options.Any(option => option.QuestId == -1 || (option.InProgress ?
                 expected.ActiveMainQuests.Any(active => active.QuestId == option.QuestId) ||
-                    partyRoute?.QuestAcceptances.Any(active => active.QuestId == option.QuestId) == true : done.Contains(option.QuestId))))
+                    partyRoute?.QuestAcceptances.Any(active => active.QuestId == option.QuestId) == true : InfernoQuestUnlock.Satisfied(option.QuestId, done))))
             return (options[0].InProgress ? "selection-quest-in-progress-required:" : "selection-quest-required:") + options[0].QuestId;
         if (!towns.HasDungeonEntrance(area, done, optionDungeon))
             return "selection-gate-unavailable";

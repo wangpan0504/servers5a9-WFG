@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Network.Builders;
@@ -108,8 +109,8 @@ internal static class CharacterProgressTcpTests
             var completed = completedAfterGrow.ToHashSet();
             That(history.Length == 30004 && U32(history) == 30000 && completed.All(id => id is > 0 and < 30000),
                 "重启选角的完成历史使用完整30000项表，持久任务编号合法");
-            That(Enumerable.Range(0, 30000).All(id => history[4 + id] == (id == 13700 || completed.Contains(id) ? 1 : 0)),
-                "重启选角逐项恢复已提交转职觉醒历史及独立月轮山显示位");
+            That(Enumerable.Range(0, 30000).All(id => history[4 + id] == (id == 13700 || InfernoQuestUnlock.Satisfied(id, completed) ? 1 : 0)),
+                "重启选角逐项恢复已提交转职觉醒历史、月轮山及时空裂缝外传显示位");
             Bytes(peer.SkillInfo, SkillPackets.Initialized(Role(0).Learning), "服务重启保留职业、技能和点数");
         }
         using (var peer = Open(fixture))

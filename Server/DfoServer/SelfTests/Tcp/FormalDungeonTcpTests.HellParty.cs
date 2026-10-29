@@ -95,9 +95,10 @@ internal static partial class FormalDungeonTcpTests
         }
         // 时空裂缝（[inferno dungeon]）：地轨中心 7539，op16 [4]=2、[7]=1。整条路线是深渊场地，没有密门房间：
         // DUNGEON_INFO 的 [10,11] 保持 FF，入场一次扣 30 张 3330 与 6 点疲劳。
+        // 只准备区域 [hell quest] 2900，不写入 10110；选图与入场按 InfernoQuestUnlock 视为已满足。
         var riftArea = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
             resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 7539));
-        var riftDone = new HashSet<int>(riftArea.Quests) { 2900, 10110 };
+        var riftDone = new HashSet<int>(riftArea.Quests) { 2900 };
         var riftWalk = riftArea.Map(riftDone).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(riftDone.Contains)).Bounds;
         var riftPosition = new Location(riftArea.Town, riftArea.Area,
             checked((ushort)(riftWalk.X + riftWalk.Width / 2)), checked((ushort)(riftWalk.Y + riftWalk.Height / 2)));
