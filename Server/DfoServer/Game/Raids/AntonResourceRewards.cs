@@ -38,6 +38,8 @@ internal sealed class AntonResourceRewards(RaidScript script, ItemCatalog items)
             var winner = squad.First(row => (selected -= row.RawB) < 0);
             // 023B2A54..2AAA无条件连续读取601全部10B。KB-20261026T063752-4691836ed4
             // 仅证明C秒显示、D整数、E动画，D/E/F没有正式取值来源；下列占位不发布，不能发短前缀。
+            // UNIMPLEMENTED：587 state3仅调整战况窗口，不能代替601保存结果及打开0xE5窗口。
+            // 需要匹配构建双腿结束的完整601/660/600样本，不能为触发翻牌而发布本占位值。
             result.Add(new(Source,
                 [new(1, 0, fixedGrants.ToImmutable(), []), new(0, 0, [new(winner.ItemId, 1)], [])],
                 new(0, checked((byte)index), 0, 0, 0, 0)) { PublishResult = false });

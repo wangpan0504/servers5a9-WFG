@@ -22,6 +22,15 @@ internal static partial class AntonRaidGapTcpTests
             "UNIMPLEMENTED：真实Reward不补601业务列，重复117不生成600完整展示");
         // 不重新抽奖；直接读资格事务已经冻结的原计划，随机结果以数据库为准。
         string frozen = fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs");
+        string waiting = State();
+        int callbacks = clock.Callbacks;
+        // 未发任何660时跨过休息600和阶段总限2400，不能由旧时钟代替领取。
+        clock.Advance(3000);
+        var idle = AntonTcpProbe.Barrier(peer, "Reward无领取跨过休息及总限");
+        That(idle.All(p => p.Opcode is not (587 or 596 or 597 or 600 or 601)) &&
+            waiting == State() && clock.Callbacks == callbacks &&
+            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]],
+            "Reward未领取不发奖、不自动推进、不执行旧阶段时钟；601展示仍UNIMPLEMENTED");
         foreach (byte[] body in new byte[][] { [], [1], [1, 0, 0], [2, 0], [1, 1], [0, 255] })
             Denied(body, "畸形长度或未配置kind/card不伪造展示和成功");
 
