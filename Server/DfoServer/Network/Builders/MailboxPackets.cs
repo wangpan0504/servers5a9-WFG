@@ -1,4 +1,5 @@
 using DfoServer.Game.Mailbox;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Network.Builders.Inventory;
 
@@ -130,6 +131,13 @@ internal static class MailboxPackets
     {
         var item = attachment?.Item;
         var core = item?.Core;
+        if (core is not null && CurrencyWallet.TokenKind(core.ItemId).HasValue)
+        {
+            if (mail.Attachments.Length != 1 || mail.Gold != 0)
+                throw new InvalidDataException("代币券邮件必须独立托管金额");
+            // 02E194A0按这两个模板读取邮件金额，只移除摘要，不向背包增加实物。
+            gold = checked((uint)core.Count);
+        }
         if (item?.Avatar is not null)
             core = core! with { Value = item.RemainingSeconds(now) };
         else if (item?.Creature is not null)

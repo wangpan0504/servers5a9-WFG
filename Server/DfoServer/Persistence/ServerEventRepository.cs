@@ -46,7 +46,7 @@ internal sealed class ServerEventRepository(string path) : IServerEventStore
         return committed;
     }
 
-    static ServerEventSchedule Read(SqliteConnection db, SqliteTransaction? tx, ushort eventId)
+    internal static ServerEventSchedule Read(SqliteConnection db, SqliteTransaction? tx, ushort eventId)
     {
         using var command = db.CreateCommand();
         command.Transaction = tx;

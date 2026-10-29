@@ -97,6 +97,10 @@ internal static class InventoryRewardGrantService
             {
                 if (reward.Upgrade != 0 || reward.Refinement != 0)
                     return InventoryResult.Reject();
+                // 代币券是足额兑换，不沿普通奖励的饱和加法吞掉超额面额。
+                if (CurrencyWallet.TokenKind(reward.ItemId) is not null &&
+                    reward.Count > int.MaxValue - CurrencyWallet.Get(wallet, currency))
+                    return InventoryResult.Reject(17);
                 wallet = currencies.Grant(character with { Inventory = wallet }, currency, reward.Count).Plan!.After;
                 continue;
             }

@@ -14,6 +14,7 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
     public const int StorageLimit = 10;
     public static CurrencyKind? MaterialCurrency(int itemId) => CurrencyWallet.RewardKind(itemId) is { } kind &&
         kind is >= CurrencyKind.BlackCube and <= CurrencyKind.GoldCube ? kind : null;
+    public static CurrencyKind? AttachmentCurrency(int itemId) => MaterialCurrency(itemId) ?? CurrencyWallet.TokenKind(itemId);
     public static long Fee(uint gold, int attachments, long attachmentValue = 0) =>
         checked(100L + attachments * 1000L + gold / 20L + attachmentValue / 20);
     public static long DailyGoldLimit(int level) => 10_000L * Math.Max(1, level) * Math.Max(1, level);
@@ -224,8 +225,8 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
         if (gold != 0 && gold > new CurrencyService(goldLimits).CarryLimit(character) - (long)character.Inventory.Gold)
             return MailboxError.GoldCarryLimit;
         var received = grants.ToImmutable();
-        foreach (var group in received.Where(item => MaterialCurrency(item.Core.ItemId).HasValue)
-            .GroupBy(item => MaterialCurrency(item.Core.ItemId)!.Value))
+        foreach (var group in received.Where(item => AttachmentCurrency(item.Core.ItemId).HasValue)
+            .GroupBy(item => AttachmentCurrency(item.Core.ItemId)!.Value))
             if (CurrencyWallet.Get(character.Inventory, group.Key) + group.Sum(item => (long)item.Core.Count) > int.MaxValue)
                 return MailboxError.InventoryFull;
         var grant = InventoryRewardGrantService.TryGrantItems(character, received, items, goldLimits, pieces, now);
@@ -249,8 +250,8 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
         {
             if (item.IsExpired(delivery.Created))
                 return MailboxResult.Reject(MailboxError.ExpiredItem);
-            var walletMaterial = MaterialCurrency(item.Core.ItemId).HasValue;
-            // 晶块仅在邮件中托管数量，领取回原账号钱包；点券、复活币和碎片不借实体附件放行。
+            var walletMaterial = AttachmentCurrency(item.Core.ItemId).HasValue;
+            // 晶块和两类代币券仅托管面额，领取回账号钱包；不放行其他货币或旧背包实物。
             if (CurrencyWallet.RewardKind(item.Core.ItemId) is not null && !walletMaterial || pieces.ByPiece.ContainsKey(item.Core.ItemId))
                 return MailboxResult.Reject(MailboxError.InvalidAttachment);
             var template = items.Get(item.Core.ItemId);

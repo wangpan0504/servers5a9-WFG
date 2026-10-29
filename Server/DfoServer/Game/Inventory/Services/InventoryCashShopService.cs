@@ -11,9 +11,11 @@ namespace DfoServer.Game.Inventory.Services;
 internal sealed partial class InventoryCashShopService(ItemCatalog catalog, CashShopCatalog shop, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, CargoCatalog cargo,
     GameDebugSettings? debugSettings = null, PremiumContractCatalog? contracts = null, AvatarPackageCatalog? avatars = null, DevilContractService? devil = null,
     DfoServer.GameWorld.Guilds.GuildHongbaoCatalog? hongbao = null,
-    ServerItemUsageCatalog? serverItems = null)
+    ServerItemUsageCatalog? serverItems = null, DfoServer.Game.Events.ServerEventService? events = null, TimeProvider? clock = null)
 {
     readonly GameDebugSettings debug = debugSettings ?? new();
+    readonly TimeProvider time = clock ?? TimeProvider.System;
+    public MileageShopCatalog Mileage => shop.Mileage;
     // 仅当前服务实例的调试开关；每次购买冻结一次状态，不改变其它发奖入口。
     public bool IgnoreAbsoluteExpiration
     {
@@ -32,19 +34,25 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         receipt = null;
         bool shopExpiration = IgnoreAbsoluteExpiration;
         bool ignoreUsablePeriod = IgnoreUsablePeriod;
-        var now = utcNow ?? DateTimeOffset.UtcNow;
-        if (request.CurrencyMode != 0 || request.GiftMode != 0 || request.Items.Count is < 1 or > 64 ||
+        var now = utcNow ?? time.GetUtcNow();
+        // 原生普通、积分及购物车来源为0、1、2；价格及费用类别仍由资源商品决定。
+        if (request.CurrencyMode is not (0 or 1 or 2) || request.GiftMode != 0 || request.Items.Count is < 1 or > 64 ||
             request.PaymentMode != request.Items[0].PaymentMode)
-            return InventoryResult.Reject(17);
+            return InventoryResult.Reject(17) with { RejectReason = "cash_shop_request_mode" };
 
         var products = new List<CashShopProduct>(request.Items.Count);
         var rewards = new List<InventoryReward>(request.Items.Count);
         var avatarRewards = new List<InventoryItem>();
         var bonuses = new Dictionary<int, IReadOnlyList<CashShopBonus>>();
+        var charges = new List<CashShopProduct>();
+        var activity = events?.Read(DfoServer.Game.Events.ServerEventService.MileageShopId);
+        bool? mileageCart = null;
+        bool requireEvent = false;
         var before = character.Inventory;
         var paid = before;
         ushort avatarExpansion = before.AvatarExpansion;
-        long total = 0, gold = 0, winPoints = 0, cashOnly = 0;
+        long total = 0, gold = 0, winPoints = 0, cashOnly = 0, hongbaoCera = 0, mileageCost = 0;
+        var mileageState = before.AccountWallet.MileageShop;
         long? deadline = null;
         InventoryItem? nameTag = null;
         ushort characterSlots = before.AccountWallet.CharacterSlotCapacity;
@@ -54,10 +62,35 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         bool unlockSkillTree = false;
         foreach (var requested in request.Items)
         {
-            var product = shop.Product(requested.CommodityId);
+            var product = shop.Product(requested.CommodityId) ?? shop.Mileage.Products.GetValueOrDefault(requested.CommodityId);
             if (product is null || product.Count <= 0 ||
                 requested.FirstOptionCount != 0 || requested.SecondOptionCount != 0)
                 return InventoryResult.Reject(17);
+            if (request.CurrencyMode == 1 && !product.IsMileage)
+                return InventoryResult.Reject(17) with { RejectReason = "mileage_source_product_mismatch" };
+            if (mileageCart.HasValue && mileageCart != product.IsMileage)
+                return InventoryResult.Reject(17) with { RejectReason = "mileage_mixed_cart" };
+            mileageCart = product.IsMileage;
+            if (product.IsMileage)
+            {
+                if (activity?.Active != true) return InventoryResult.Reject(17) with { RejectReason = "mileage_shop_closed" };
+                if (requested.PaymentMode != 0 || requested.RelatedItemId != 0 || requested.RelatedSlot != 0 ||
+                    product.CeraPrice != 0 || product.OtherPrice != 0 ||
+                    !AllowsReward(product.ItemId)) return InventoryResult.Reject(17) with { RejectReason = "mileage_reward_pending" };
+                requireEvent = true;
+                if (shop.Mileage.Limits.TryGetValue(product.CommodityId, out var limit))
+                {
+                    int used = mileageState.Purchases.GetValueOrDefault(product.CommodityId);
+                    if (!limit.Supported) return InventoryResult.Reject(17) with { RejectReason = "mileage_limit_pending" };
+                    if (used >= limit.Maximum) return InventoryResult.Reject(17) with { RejectReason = "mileage_purchase_limit" };
+                    mileageState = mileageState with { Purchases = mileageState.Purchases.SetItem(product.CommodityId, used + 1) };
+                }
+                mileageCost += product.MileagePrice;
+                rewards.Add(new(product.ItemId, product.Count));
+                products.Add(product);
+                continue;
+            }
+            bool onlyCash = shop.Mileage.CeraOnly.Contains(product.ItemId);
             if (!TryProductCoupon(character, requested, product, paid, now, out var afterCoupon, out var couponDeadline))
                 return InventoryResult.Reject(17);
             paid = afterCoupon;
@@ -100,6 +133,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             {
                 if (requested.PaymentMode != 0 || product.CeraPrice < 0) return InventoryResult.Reject(17);
                 total += product.CeraPrice;
+                gold += product.GoldPrice;
                 var template = !devilProduct && CurrencyWallet.RewardKind(product.ItemId) is null && !pieces.ByPiece.ContainsKey(product.ItemId) &&
                     contracts?.Recognizes(product.ItemId) != true ? catalog.Get(product.ItemId) : null;
                 // 本版红包购买确认只核真实点券；不能使用普通商品的代币券支付顺序。
@@ -108,7 +142,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                     if (hongbao is null || !hongbao.ByCommodity.TryGetValue(product.CommodityId, out var definition) ||
                         definition.ItemId != product.ItemId || definition.Cera != product.CeraPrice || product.Count != 1 || character.Guild is not { Id: > 0 })
                         return InventoryResult.Reject(17);
-                    cashOnly += product.CeraPrice;
+                    onlyCash = true;
+                    hongbaoCera += product.CeraPrice;
                 }
                 if (catalog.IsSkillTreeExpansion(product.ItemId))
                 {
@@ -142,6 +177,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                     if (tool is not null)
                     {
                         total -= product.CeraPrice;
+                        product = product with { CeraPrice = 0 };
                         Deadline(tool.ExpireTime);
                     }
                 }
@@ -188,6 +224,8 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
             if (total > int.MaxValue || gold > int.MaxValue || winPoints > int.MaxValue)
                 return InventoryResult.Reject(17);
             products.Add(product);
+            if (onlyCash) cashOnly += product.CeraPrice;
+            charges.Add(product);
 
             var productBonuses = shop.Bonus(product.CommodityId);
             if (productBonuses.Count == 0)
@@ -202,7 +240,7 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
 
         // 混合购物车先预留红包必须使用的真实点券，剩余普通商品再依次使用三种余额。
         long cera = CurrencyWallet.Get(paid, CurrencyKind.Cera);
-        if (cashOnly > 0 && cashOnly > hongbao!.DailyCeraLimit) return InventoryResult.Reject(17);
+        if (hongbaoCera > 0 && hongbaoCera > hongbao!.DailyCeraLimit) return InventoryResult.Reject(17);
         if (cera < cashOnly) return InventoryResult.Reject(10);
         if (cashOnly > 0) paid = CurrencyWallet.Set(paid, CurrencyKind.Cera, cera - cashOnly);
         long paidCera = cashOnly;
@@ -217,6 +255,10 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         }
         if (paidCera != total)
             return InventoryResult.Reject(10);
+        if (mileageCost > paid.AccountWallet.Mileage) return InventoryResult.Reject(10) with { RejectReason = "mileage_insufficient" };
+        paid = paid with { AccountWallet = paid.AccountWallet with
+            { Mileage = paid.AccountWallet.Mileage - checked((int)mileageCost), MileageShop = mileageState } };
+        if (gold > int.MaxValue || winPoints > int.MaxValue) return InventoryResult.Reject(17);
         foreach (var (kind, amount) in new[] { (CurrencyKind.Gold, gold), (CurrencyKind.WinPoint, winPoints) })
         {
             var spent = CurrencyService.Spend(paid, kind, checked((int)amount));
@@ -256,6 +298,27 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         if (nameTag is not null)
             after = after with { Items = after.Items.Where(item => item.Position != nameTag.Position).Append(nameTag).ToImmutableArray() };
         after = after with { AccountWallet = after.AccountWallet with { CharacterSlotCapacity = characterSlots } };
+        if (shop.Mileage.Available && activity?.Active == true && mileageCart == false)
+        {
+            long earned = 0;
+            try
+            {
+                foreach (var charge in charges)
+                    earned += shop.Mileage.Rebate(charge, charge.CeraPrice);
+            }
+            catch (OverflowException) { return InventoryResult.Reject(17); }
+            earned = Math.Min(earned, Math.Max(0L, (long)shop.Mileage.CashLimit - mileageState.CashEarned));
+            if (earned > 0)
+            {
+                if (earned > int.MaxValue - (long)after.AccountWallet.Mileage) return InventoryResult.Reject(17);
+                requireEvent = true;
+                after = after with { AccountWallet = after.AccountWallet with
+                {
+                    Mileage = after.AccountWallet.Mileage + (int)earned,
+                    MileageShop = mileageState with { CashEarned = checked(mileageState.CashEarned + (int)earned) }
+                } };
+            }
+        }
         if (serverItems is not null)
             foreach (var product in products)
             {
@@ -265,10 +328,12 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
                 after = after with { ServerItems = usage };
             }
         receipt = new(products.ToImmutableArray(), bonuses);
-        return new(true, 0, new(before, after, "cash_shop_buy", new(character, deadline), overflow)
+        if (requireEvent && activity!.Schedule.OverrideActive is null) Deadline(activity.Schedule.EndsAt);
+        return new(true, 0, new(before, after, "cash_shop_buy", new(character, deadline, time), overflow)
         {
+            RequiredEvent = requireEvent ? new(activity!.Schedule, time) : null,
             UnlockSkillTree = unlockSkillTree,
-            GuildHongbaoPurchase = cashOnly == 0 ? null : new(character.Guild!.Id, checked((int)cashOnly),
+            GuildHongbaoPurchase = hongbaoCera == 0 ? null : new(character.Guild!.Id, checked((int)hongbaoCera),
                 hongbao!.MinimumMembers, hongbao.DailyCeraLimit, DfoServer.Game.Guild.GuildAttendanceDay.Start(now.ToUnixTimeSeconds()))
         });
 

@@ -112,7 +112,7 @@ internal static class MailboxTests
             "实际时装、宠物模板的邮件领取完整保留详情，不重新创建默认值");
         TestCheck.That(f.Service.Deliver(new("virtual", recipient, "系统", "虚拟", 0,
             [new(0, stack.Position, new(2681762, DfoServer.GameWorld.Items.ItemKind.Consumable, 1))], now)).Error == MailboxError.InvalidAttachment,
-            "小晶块接入不放行未确认的账号点券附件");
+            "代币券托管不接受与PVF不符的消耗品核心");
         var overflow = f.Service.Deliver(new("capacity", recipient, "系统", "容量", 0,
             [new(0, source.Position, source.Core)], now));
         var filled = f.Receiver.MutateInventory(character =>

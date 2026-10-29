@@ -44,7 +44,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Raids.LukeRaidRejoin? lukeRejoin = null,
     DfoServer.Game.Guild.GuildNpcBenefitService? guildNpcBenefits = null,
     TradeHandler? trade = null,
-    PvpMissionProjection? pvpMissions = null, DfoServer.Game.Pvp.PvpMissionBook? missionBook = null) : IConnectionProtocol
+    PvpMissionProjection? pvpMissions = null, DfoServer.Game.Pvp.PvpMissionBook? missionBook = null,
+    DfoServer.Game.Events.ServerEventService? serverEvents = null) : IConnectionProtocol
 {
     // 断线诊断不得阻止剩余原清理，包括诊断后端自身失败；不以日志成功作为登记成功。
     void LogLukeDisconnect(string kind, object detail)
@@ -174,6 +175,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         DfoServer.Game.Trade.TradeParticipant? tradeParticipant = null;
         await using var partyDirectory = parties is null ? null : new PartyDirectoryProjection(context, parties, towns, log);
         context.PartyDirectory = partyDirectory;
+        await using var eventProjection = serverEvents is null ? null : new ServerEventProjection(context, serverEvents, projection, log, time ?? TimeProvider.System);
+        context.ServerEvents = eventProjection;
         await using var arenaDirectory = arena is null ? null : new PvpArenaDirectoryProjection(context, arena, log);
         long directoryEpoch = sender.Epoch;
         var directoryPhase = session.Phase;

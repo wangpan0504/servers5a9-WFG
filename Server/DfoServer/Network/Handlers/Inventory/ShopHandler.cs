@@ -40,7 +40,8 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
         }
         log.Write("cash_shop_buy", new { Connection = context.Id, Count = request.Items.Count,
             Commodities = string.Join(',', request.Items.Select(item => item.CommodityId)),
-            PaymentModes = string.Join(',', request.Items.Select(item => item.PaymentMode)), result.Accepted, result.Error,
+            PaymentModes = string.Join(',', request.Items.Select(item => item.PaymentMode)), request.CurrencyMode, request.GiftMode,
+            result.Accepted, result.Error, result.RejectReason,
             Result = result.Accepted ? "committed" : "rejected", Revision = result.Receipt?.Character.Revision });
         if (!result.Accepted || receipt is null)
         {
@@ -53,6 +54,9 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
                 CashShopPackets.Success(product, receipt.Bonuses.GetValueOrDefault(product.CommodityId)),
                 "cash_shop_buy_success", () => context.Session.CanPublishInventory(committed));
         await projection.RefreshAsync(context, result);
+        if (receipt.Products.Any(product => product.IsMileage))
+            await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
+                MileagePackets.Limits(committed.Character.Inventory.AccountWallet, cashShop.Mileage), "mileage_shop_limits", () => context.Session.CanPublishInventory(committed));
         if (result.Plan?.UnlockSkillTree == true)
             await projection.RefreshSkillTreeAsync(context, committed.Character, () => context.Session.CanPublishInventory(committed));
         return CommandResult.Handled;

@@ -578,6 +578,8 @@ CREATE TABLE account_wallets(
     revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
     rental_points INTEGER NOT NULL DEFAULT 0 CHECK(rental_points BETWEEN 0 AND 2147483647),
     mileage INTEGER NOT NULL DEFAULT 0 CHECK(mileage BETWEEN 0 AND 2147483647),
+    mileage_cash_earned INTEGER NOT NULL DEFAULT 0 CHECK(mileage_cash_earned BETWEEN 0 AND 2147483647),
+    mileage_shop_purchases TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(mileage_shop_purchases) AND json_type(mileage_shop_purchases)='object'),
     seria_luck INTEGER NOT NULL DEFAULT 0 CHECK(seria_luck BETWEEN 0 AND 8),
     premium_contracts TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(premium_contracts) AND json_type(premium_contracts)='object')
 );

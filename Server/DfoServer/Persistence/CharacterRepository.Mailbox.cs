@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Mailbox;
@@ -423,18 +424,24 @@ internal sealed partial class CharacterRepository
         // 按角色 id 重查收件人：查不到就返回 RecipientMissing（购买路径据此跳过托管行，而不是让外键回滚整笔）。
         if (FindMailRecipientById(db, tx, delivery.Recipient.Id) != delivery.Recipient)
             return (MailboxError.RecipientMissing, 0);
-        uint id = InsertMail(db, tx, delivery.Recipient, 0, delivery.SenderName, delivery.Text, delivery.Gold,
-            delivery.Created, delivery.Expires, delivery.Key, content);
-        var held = ImmutableArray.CreateBuilder<InventoryItem>();
-        for (int index = 0; index < delivery.Items.Length; index++)
+        uint firstId = 0;
+        foreach (var message in delivery.NativeMessages())
         {
-            var item = HoldMailItem(db, tx, delivery.Recipient, delivery.Items[index], delivery.Recipient.Account, delivery.Recipient.Id);
-            InsertMailAttachment(db, tx, id, index, 0, item);
-            held.Add(item);
+            // 首封保存整批原始内容；分封保留稳定key和系统邮件约束，整批重试不再次创建后续邮件。
+            uint id = InsertMail(db, tx, message.Recipient, 0, message.SenderName, message.Text, message.Gold,
+                message.Created, message.Expires, message.Key, firstId == 0 ? content : MailDeliveryContent(message));
+            if (firstId == 0) firstId = id;
+            var held = ImmutableArray.CreateBuilder<InventoryItem>();
+            for (int index = 0; index < message.Items.Length; index++)
+            {
+                var item = HoldMailItem(db, tx, message.Recipient, message.Items[index], message.Recipient.Account, message.Recipient.Id);
+                InsertMailAttachment(db, tx, id, index, 0, item);
+                held.Add(item);
+            }
+            AuditMail(db, tx, id, message.Recipient.Account, message.Recipient.Id, 0, "system", message.Created,
+                new { delivery.Key, message.Gold, Items = held.ToImmutable() });
         }
-        AuditMail(db, tx, id, delivery.Recipient.Account, delivery.Recipient.Id, 0, "system", delivery.Created,
-            new { delivery.Key, delivery.Gold, Items = held.ToImmutable() });
-        return (MailboxError.None, id);
+        return (MailboxError.None, firstId);
     }
 
     /// <summary>
@@ -452,6 +459,8 @@ internal sealed partial class CharacterRepository
         {
             item.Core.Validate();
             item.ValidateDetails(true);
+            if (CurrencyWallet.TokenKind(item.Core.ItemId).HasValue &&
+                (item.Core.Kind != GameWorld.Items.ItemKind.Material || item.ExpireTime != 0)) return false;
         }
         return true;
     }

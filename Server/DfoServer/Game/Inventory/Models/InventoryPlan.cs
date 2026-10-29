@@ -8,6 +8,10 @@ namespace DfoServer.Game.Inventory.Models;
 
 internal sealed record ItemUseIntent(int ItemId, int Count);
 internal sealed record AccountItemRefillClaim(int ItemId, AccountItemRefillState? Before, AccountItemRefillState After);
+internal sealed record InventoryEventPrecondition(DfoServer.Game.Events.ServerEventSchedule Schedule, TimeProvider Clock)
+{
+    public bool Matches(DfoServer.Game.Events.ServerEventSchedule actual) => actual == Schedule && actual.IsActive(Clock.GetUtcNow());
+}
 
 internal sealed class InventoryPlan
 {
@@ -26,6 +30,7 @@ internal sealed class InventoryPlan
     public byte? EquipmentSlotFlagsAfter { get; init; }
     public bool UnlockSkillTree { get; init; }
     public DfoServer.Game.Guild.GuildHongbaoPurchase? GuildHongbaoPurchase { get; init; }
+    public InventoryEventPrecondition? RequiredEvent { get; init; }
     readonly Lazy<InventoryIndex> beforeIndex;
     readonly Lazy<InventoryIndex> afterIndex;
     readonly Lazy<ImmutableArray<CurrencyKind>> currencies;
@@ -62,6 +67,7 @@ internal sealed class InventoryPlan
         EquipmentSlotFlagsAfter = EquipmentSlotFlagsAfter,
         UnlockSkillTree = UnlockSkillTree,
         GuildHongbaoPurchase = GuildHongbaoPurchase,
+        RequiredEvent = RequiredEvent,
         ExpBonus = ExpBonus
     };
     public InventoryIndex BeforeIndex => beforeIndex.Value;
@@ -70,6 +76,7 @@ internal sealed class InventoryPlan
     public ImmutableArray<CurrencyKind> ChangedCurrencies => currencies.Value;
     public ImmutableArray<int> ChangedEpicPieces => pieces.Value;
     public bool Changed => !Before.ServerItems.Same(After.ServerItems) || !AccountRefillClaims.IsEmpty || !BossSelectionBuff.Same(Before.BossSelectionBuff, After.BossSelectionBuff) || !Before.NpcFavor.SequenceEqual(After.NpcFavor) || UnlockSkillTree || !Before.ItemMakingSkills.Same(After.ItemMakingSkills) || !Before.Skins.Same(After.Skins) || !Before.AvatarPresets.Same(After.AvatarPresets) || !Before.ConsumableStates.SequenceEqual(After.ConsumableStates) || EquipmentSlotFlagsAfter is not null || Before.StaminaUntil != After.StaminaUntil || !Before.DevilUses.SequenceEqual(After.DevilUses) || Before.AvatarExpansion != After.AvatarExpansion || Before.AccountWallet.CharacterSlotCapacity != After.AccountWallet.CharacterSlotCapacity || OverflowItems.Length != 0 || ChangedSlots.Length != 0 || ChangedCurrencies.Length != 0 || Before.CubeContract != After.CubeContract || Before.AccountWallet.SeriaLuck != After.AccountWallet.SeriaLuck || !Before.AccountWallet.PremiumContracts.SequenceEqual(After.AccountWallet.PremiumContracts) || Before.Expansion != After.Expansion ||
+        !Before.AccountWallet.MileageShop.Same(After.AccountWallet.MileageShop) ||
         Before.GoldCarryLimit != After.GoldCarryLimit || Before.AuctionGoldLimit != After.AuctionGoldLimit ||
         Before.CargoCapacity != After.CargoCapacity || Before.AccountCargo.Capacity != After.AccountCargo.Capacity ||
         Before.AccountCargo.Gold != After.AccountCargo.Gold || !ShopPurchaseCount.Same(Before.ShopPurchases, After.ShopPurchases) ||

@@ -24,6 +24,7 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
     public static AccountWallet Empty { get; } = new(0, ImmutableSortedDictionary<CurrencyKind, int>.Empty);
     public ushort CharacterSlotCapacity { get; init; } = 32;
     public int Mileage { get; init; }
+    public MileageShopState MileageShop { get; init; } = MileageShopState.Empty;
     public ImmutableSortedDictionary<int, long> PremiumContracts => Contracts ?? ImmutableSortedDictionary<int, long>.Empty;
     public int Get(CurrencyKind kind) => kind switch
     {
@@ -63,10 +64,11 @@ internal sealed record AccountWallet(long Revision, ImmutableSortedDictionary<Cu
             throw new InvalidDataException("无效赛丽亚幸运值");
         return this with { SeriaLuck = value };
     }
-    public bool Same(AccountWallet other) => Revision == other.Revision && CharacterSlotCapacity == other.CharacterSlotCapacity && RentalPoints == other.RentalPoints && Mileage == other.Mileage && SeriaLuck == other.SeriaLuck &&
+    public bool Same(AccountWallet other) => Revision == other.Revision && CharacterSlotCapacity == other.CharacterSlotCapacity && RentalPoints == other.RentalPoints && Mileage == other.Mileage && MileageShop.Same(other.MileageShop) && SeriaLuck == other.SeriaLuck &&
         Balances.SequenceEqual(other.Balances) && PremiumContracts.SequenceEqual(other.PremiumContracts);
     public void Validate()
     {
+        MileageShop.Validate();
         if (CharacterSlotCapacity is < 32 or > 62 || Revision < 0 || RentalPoints < 0 || Mileage < 0 || SeriaLuck is < 0 or > 8 || Balances.Any(pair => !CurrencyWallet.IsAccount(pair.Key) || pair.Key is CurrencyKind.RentalPoint or CurrencyKind.Mileage || pair.Value <= 0) ||
             PremiumContracts.Any(pair => pair.Key <= 0 || pair.Value <= 0))
             throw new InvalidDataException("无效账号钱包快照");
@@ -111,4 +113,7 @@ internal static class CurrencyWallet
         2681762 => CurrencyKind.TokenCera, 2681917 => CurrencyKind.HappyTokenCera,
         _ => null
     };
+
+    public static CurrencyKind? TokenKind(int itemId) => RewardKind(itemId) is { } kind &&
+        kind is CurrencyKind.TokenCera or CurrencyKind.HappyTokenCera ? kind : null;
 }

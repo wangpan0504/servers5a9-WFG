@@ -174,6 +174,20 @@ internal static class MailboxProtocolTests
         TestCheck.That(MailboxService.TransferError(clean, template with { AttachType = "[account]" }, "a", "a", 1000) == MailboxError.None &&
             MailboxService.TransferError(clean, template with { AttachType = "[trade limit]" }, "a", "b", 1000) == MailboxError.None,
             "同账号与有剩余交易次数的实例允许");
+        var tokens = new[] { 2681762, 2681917 }.Select(id => new InventoryItem(0, new(InventoryListType.Main, 0),
+            new(id, ItemKind.Material, 720))).ToImmutableArray();
+        var delivery = new MailboxDelivery("tokens", new(1, "a", "Receiver", 0, 0, 60), "系统", "兑换", 17,
+            [clean with { Uid = 0 }, .. tokens], 1000);
+        var messages = delivery.NativeMessages().ToArray();
+        TestCheck.That(messages.Length == 3 && messages[0].Gold == 17 && messages[0].Items.Length == 1 &&
+            messages.Skip(1).All(row => row.Gold == 0 && row.Items.Length == 1) && messages[0].Key == delivery.Key &&
+            messages.Select(row => row.Key).Distinct().Count() == 3 && messages.All(row => row.Key.Length <= 128),
+            "普通附件及金币不混入代币券金额，两种代币各自独立显示");
+        foreach (var token in tokens)
+        {
+            var mail = new MailboxEntry(900, 0, 1, 0, "系统", "兑换", 0, 1000, null, 1, true, [new(90, token with { Uid = 100 })]);
+            CheckList(MailboxPackets.List(new([mail], 0), 1000), [mail], 0, 1000);
+        }
         Console.WriteLine($"PASS {TestCheck.Count - before} 邮件结构、列表独立消费与寄送资格断言");
     }
 
@@ -214,8 +228,10 @@ internal static class MailboxProtocolTests
                 uint key = reader.ReadUInt32();
                 TestCheck.That(reader.ReadByte() == 0 && remaining.ContainsKey(key), "摘要尾部合并 key 与额外字节");
                 var mail = remaining[key];
-                TestCheck.That(sender == mail.SenderId && name == mail.SenderName && seconds == mail.RemainingSeconds(now) && gold <= mail.Gold,
-                    "摘要的发送者、金币和期限独立核对");
+                uint amount = id is 2681762 or 2681917 ? checked((uint)attachment!.Item.Core.Count) :
+                    attachment is null || mail.Attachments[0] == attachment ? mail.Gold : 0;
+                TestCheck.That(sender == mail.SenderId && name == mail.SenderName && seconds == mail.RemainingSeconds(now) && gold == amount,
+                    "摘要的发送者、原生金额和期限独立核对，代币面额不记作金币");
                 if (attachment is not null)
                 {
                     var core = attachment.Item.Core;

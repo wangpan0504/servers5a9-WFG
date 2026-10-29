@@ -348,6 +348,8 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("mileage", MileageTcpTests.RunAsync),
+        ("mileage-shop", MileageShopTcpTests.RunAsync),
+        ("token-cera", MailboxTcpTests.RunTokenCeraAsync),
         ("cargo", CargoTcpTests.RunAsync),
         ("cargo-purchase", CargoPurchaseTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),

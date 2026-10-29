@@ -224,7 +224,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             await context.Notify(NotiPacketType.CERA, CurrencyPackets.Cera(current.Inventory.AccountWallet), "currency_committed_delta", CanSend);
         if (plan.ChangedCurrencies.Contains(DfoServer.Game.Currency.CurrencyKind.Mileage))
         {
-            bool gained = plan.Reason == "mileage_item" && current.Inventory.AccountWallet.Mileage > plan.Before.AccountWallet.Mileage;
+            bool gained = (plan.Reason is "mileage_item" or "cash_shop_buy") && current.Inventory.AccountWallet.Mileage > plan.Before.AccountWallet.Mileage;
             await context.Notify(gained ? NotiPacketType.UPDATE_MILEAGE_DATA : NotiPacketType.MILEAGE_DATA,
                 gained ? MileagePackets.Added(plan.Before.AccountWallet, current.Inventory.AccountWallet) : MileagePackets.State(current.Inventory.AccountWallet),
                 "mileage_committed_delta", CanSend);

@@ -22,6 +22,7 @@ StackableActionTests.Run();
 RandomOptionFileTests.Run();
 AmplificationFileTests.Run();
 AvatarTypeSelectionTests.Run();
+MileageShopFileTests.Run();
 TutorialFileTests.Run();
 RecoveryConsumableTests.Run();
 RecipeFileTests.Run();
