@@ -1,13 +1,41 @@
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
+using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 
 namespace DfoServer.Game.Characters;
 
-internal sealed record CharacterProgressResetPlan(Character Before, byte Level, byte GrowType, CharacterLearningState Learning);
+internal sealed record CharacterProgressResetPlan(Character Before, byte Level, byte GrowType, CharacterLearningState Learning)
+{
+    public byte Job { get; init; } = Before.Job;
+}
 
 internal sealed class CharacterProgressReset(CharacterCatalog characters, SkillLearningCatalog skills, CharacterGrowthCatalog growth)
 {
     public CharacterGrowthOptions GetOptions(byte job) => characters.Get(job).GrowthOptions;
+    public IEnumerable<byte> Jobs => characters.Jobs;
+
+    // 基础职业变化只为离线 GM 入口规划；资产保留原位，不隐式卸装或删除物品。
+    public CharacterProgressResetPlan PrepareProfession(Character before, byte job, byte grow, ItemCatalog items,
+        PremiumContractCatalog? contracts = null)
+    {
+        if (job > 15 || grow > 127) throw new InvalidDataException("基础职业或觉醒无效");
+        if (before.IsPvpPrivate) throw new InvalidDataException("决斗场专用角色不能改基础职业");
+        var candidate = before with { Job = job };
+        var planned = Rebuild(candidate, before.Level, grow, false);
+        candidate = candidate with { GrowType = grow, Learning = planned.Learning,
+            Skills = planned.Learning.Trees.Single(tree => tree.Context == planned.Learning.ActiveContext).Skills
+                .Select(skill => new CharacterSkill(skill.Id, skill.Level)).ToArray() };
+        if (job != before.Job)
+        {
+            foreach (var equipped in before.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment))
+                if (!InventoryMoveService.Allows(candidate, equipped.Position, equipped.Core, items,
+                    DateTimeOffset.UtcNow.ToUnixTimeSeconds(), contracts))
+                    throw new InvalidDataException("目标职业不能使用当前穿戴物品，请先卸下：" + equipped.Core.ItemId + "（槽位 " + equipped.Position.Index + "）");
+        }
+        return planned with { Before = before, Job = job };
+    }
 
     // Level保留已学技能并按新等级重算余额；Grow仍重建双技能树。
     public CharacterProgressResetPlan Prepare(Character before, CharacterProgressEdit request) =>
@@ -73,6 +101,11 @@ internal sealed class CharacterProgressReset(CharacterCatalog characters, SkillL
             throw new InvalidDataException("等级或转职重置目标不一致");
         byte level = request.Field == CharacterProgressField.Level ? checked((byte)request.Primary) : before.Level;
         byte grow = request.Field == CharacterProgressField.Grow ? checked((byte)request.Primary) : before.GrowType;
+        return Rebuild(before, level, grow, request.Field == CharacterProgressField.Level);
+    }
+
+    CharacterProgressResetPlan Rebuild(Character before, byte level, byte grow, bool levelChanged)
+    {
         var option = GetOptions(before.Job).GrowTypes.SingleOrDefault(value => value.Value == (grow & 15));
         if (option is null || (grow >> 4) > option.Awakenings.Count || !SkillPointLedger.SupportsGrowth(grow, before.Job))
             throw new InvalidDataException("当前职业不支持所选分支或觉醒阶段");
@@ -87,7 +120,7 @@ internal sealed class CharacterProgressReset(CharacterCatalog characters, SkillL
         if (sp > ushort.MaxValue || tp > ushort.MaxValue) throw new InvalidDataException("技能点总来源超出协议范围");
         var learning = initial.State! with
         {
-            Experience = request.Field == CharacterProgressField.Level ? growth.GetLevelStartExperience(level) : before.Learning.Experience,
+            Experience = levelChanged ? growth.GetLevelStartExperience(level) : before.Learning.Experience,
             SelectedTree = before.Learning.SelectedTree,
             BonusSp = bonusSp,
             BonusTp = bonusTp,

@@ -589,7 +589,7 @@ internal static class SelfTestRunner
         SkillRepositoryTests.Run(towns, pvf, characters);
         await SkillPublicationTests.RunAsync(towns, pvf, characters);
         DevelopmentGmTests.Run(towns, pvf, characters);
-        CharacterProgressResetTests.Run(towns, pvf, characters);
+        CharacterProgressResetTests.Run(towns, pvf, characters, itemResources);
         await ProtocolArchitectureTests.RunAsync(towns);
     }
 }

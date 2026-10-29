@@ -51,6 +51,41 @@ internal static partial class DevelopmentGm
         try
         {
             request.Validate();
+            if (request.Action == DevelopmentAction.ProfessionOptions)
+            {
+                var reset = progress ?? throw new InvalidOperationException("职业资源未装配");
+                return "OK " + JsonSerializer.Serialize(new
+                {
+                    baseJobChange = true,
+                    jobs = reset.Jobs.Select(job => new
+                    {
+                        job, name = reset.GetOptions(job).BaseName,
+                        branches = reset.GetOptions(job).GrowTypes.Select(option => new
+                        {
+                            branch = (int)option.Value, name = option.Label,
+                            awakenings = new[] { new { stage = 0, name = "未觉醒", growType = (int)option.Value } }
+                                .Concat(option.Awakenings.Select((label, index) => new
+                                { stage = index + 1, name = label, growType = ((index + 1) << 4) | option.Value }))
+                        })
+                    })
+                });
+            }
+            if (request.Action == DevelopmentAction.Profession)
+            {
+                if (find(request.Account) is not null) throw new InvalidOperationException("改基础职业前请退出该账号，离线后再执行");
+                var reset = progress ?? throw new InvalidOperationException("职业资源未装配");
+                var itemCatalog = items ?? throw new InvalidOperationException("物品资源未装配");
+                var professionCharacter = WithLease(owners, request.Account, lease =>
+                {
+                    var target = repository.ListRoster(lease).SingleOrDefault(role => string.Equals(role.Name, request.Name, StringComparison.OrdinalIgnoreCase))
+                        ?? throw new InvalidDataException("角色不存在");
+                    var before = repository.LoadCharacter(lease, target.Slot);
+                    return repository.ResetProgress(lease, reset.PrepareProfession(before, checked((byte)request.Primary),
+                        checked((byte)request.Secondary), itemCatalog, catalog?.Resources.Contracts));
+                });
+                return "OK " + JsonSerializer.Serialize(new { name = professionCharacter.Name, job = professionCharacter.Job, growType = professionCharacter.GrowType,
+                    rev = professionCharacter.Revision, message = "已写入基础职业、转职与觉醒，双技能树已按目标职业重建；重新登录后生效。" });
+            }
             if (request.Action == DevelopmentAction.ChatInject)
                 return InjectChatProbe(request, findConnection, log);
             if (request.Action == DevelopmentAction.InjectRaw)

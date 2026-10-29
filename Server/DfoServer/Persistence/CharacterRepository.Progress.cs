@@ -158,7 +158,7 @@ internal sealed partial class CharacterRepository
     public Character ResetProgress(AccountOwners.Lease owner, CharacterProgressResetPlan plan) => owner.Execute(() =>
     {
         plan.Learning.Validate();
-        if (!plan.Learning.Initialized || plan.Level is < 1 or > 95 || plan.GrowType > 127 ||
+        if (!plan.Learning.Initialized || plan.Job > 15 || plan.Level is < 1 or > 95 || plan.GrowType > 127 ||
             plan.Learning.SelectedTree != plan.Before.Learning.SelectedTree ||
             plan.Learning.BonusSp != (plan.Before.Learning.BonusSp ?? 0) || plan.Learning.BonusTp != (plan.Before.Learning.BonusTp ?? 0) ||
             plan.Learning.ExpertContractExpiresAt != plan.Before.Learning.ExpertContractExpiresAt)
@@ -173,21 +173,28 @@ internal sealed partial class CharacterRepository
             throw new InvalidOperationException("角色或技能快照已变化，请重试");
         using var cmd = db.CreateCommand();
         cmd.Transaction = tx;
-        cmd.CommandText = "UPDATE characters SET level=$level,grow_type=$grow,experience=$experience,revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
+        cmd.CommandText = "UPDATE characters SET job=$job,level=$level,grow_type=$grow,experience=$experience,revision=revision+1 WHERE id=$id AND account=$account AND revision=$revision";
         cmd.Parameters.AddWithValue("$id", current.Id);
         cmd.Parameters.AddWithValue("$account", owner.Account);
         cmd.Parameters.AddWithValue("$revision", current.Revision);
         cmd.Parameters.AddWithValue("$level", plan.Level);
+        cmd.Parameters.AddWithValue("$job", plan.Job);
         cmd.Parameters.AddWithValue("$grow", plan.GrowType);
         cmd.Parameters.AddWithValue("$experience", checked((long)plan.Learning.Experience));
         if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException("角色revision或所有者已变化");
         WriteLearning(db, tx, current.Id, plan.Learning);
         WriteCanonicalSkills(db, tx, current.Id, plan.Learning);
-        ResetSkillSwitchProfession(db, tx, current.Id, current.GrowType, plan.GrowType);
+        ResetSkillSwitchProfession(db, tx, current.Id, current.GrowType, plan.GrowType, current.Job != plan.Job);
+        if (current.Job != plan.Job)
+        {
+            // 训练及竞技场技能缓存带职业语义，旧职业缓存不能覆盖目标职业的新双树。
+            cmd.CommandText = "DELETE FROM character_pvp_training_skills WHERE character_id=$id";
+            cmd.ExecuteNonQuery();
+        }
         // GM等级/转职重置属于排除来源：改写里程但不改变账号冒险团总量。
         CreditExcludedState(db, tx, owner.Account, current, plan.Level, EffectivePosition(plan.Level, plan.Learning.Experience));
         var updated = Require(db, tx, owner.Account, current.Name);
-        if (updated.Level != current.Level || updated.GrowType != current.GrowType ||
+        if (updated.Job != current.Job || updated.Level != current.Level || updated.GrowType != current.GrowType ||
             updated.Learning.Experience != current.Learning.Experience)
             InvalidateQuestStages(db, tx, current.Id, "progress_reset");
         tx.Commit();

@@ -16,6 +16,7 @@ internal static class CharacterProgressTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        CharacterProgressResetTests.RunProfessions(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "gm-progress"), gm: true, resources: resources);
         var catalog = resources.Learning;
         var growth = SelfTestCatalogs.Growth(resources.Archive, catalog);
@@ -32,6 +33,9 @@ internal static class CharacterProgressTcpTests
             { Job = job, Level = 95, AcceptedStoryLevel = 1, Skills = profile.Skills, InitialLearning = learning,
                 Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(profile) });
         }
+        var baseProfile = resources.Characters.Get(0);
+        repository.Create(owner, new NewCharacter("GmBase", resources.Towns.Room, resources.Towns.InitialReturn)
+        { Job = 0, AcceptedStoryLevel = 1, Skills = baseProfile.Skills, InitialLearning = SkillLearning.Initialize(0, baseProfile.Skills, catalog).State! });
         Character Role(ushort slot) => repository.LoadCharacter(owner, slot);
         int[] completedAfterGrow = [];
         Directory.CreateDirectory(Path.GetDirectoryName(fixture.Options.PvfPath)!);
@@ -44,6 +48,21 @@ internal static class CharacterProgressTcpTests
         {
             That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, line, out string text), "GM端口返回 " + line);
             return text;
+        }
+        using (var professions = JsonDocument.Parse(Command("profession-options")[3..]))
+            That(professions.RootElement.GetProperty("baseJobChange").GetBoolean() &&
+                professions.RootElement.GetProperty("jobs").GetArrayLength() == resources.Characters.Jobs.Count(),
+                "真实GM端口返回完整资源职业目录与切换能力");
+        That(Command("profession GmBase 1 0 0").StartsWith("OK ") && Role(2).Job == 1 && Role(2).GrowType == 0,
+            "真实GM端口离线切换基础职业并持久化");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2);
+            var changed = Role(2);
+            Bytes(peer.SkillInfo, SkillPackets.Initialized(changed.Learning), "基础职业切换后重新选角下发目标职业技能");
+            That(Command("profession GmBase 2 0 0").StartsWith("ERR ") && Role(2).Revision == changed.Revision && Role(2).Job == 1,
+                "真实在线账号不能切换基础职业且存档保持不变");
+            peer.Barrier();
         }
         using (var peer = Open(fixture))
         {
@@ -124,7 +143,13 @@ internal static class CharacterProgressTcpTests
                 "空账本重启选角严格只投影月轮山显示位，不伪造其他任务完成记录");
             Bytes(peer.SkillInfo, SkillPackets.Initialized(role.Learning), "特殊职业重启回放默认连招、觉醒与点数");
         }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2);
+            That(Role(2).Job == 1 && Role(2).GrowType == 0, "服务重建后基础职业持久化保持");
+            Bytes(peer.SkillInfo, SkillPackets.Initialized(Role(2).Learning), "服务重建后目标基础职业双技能树回放");
+        }
         await fixture.StopAsync();
-        Console.WriteLine("PASS C# TCP GM等级/职业重置、默认连招与重登/重启回放；非Windows实机");
+        Console.WriteLine("PASS C# TCP GM等级/基础职业重置、默认连招与重登/重启回放；非Windows实机");
     }
 }

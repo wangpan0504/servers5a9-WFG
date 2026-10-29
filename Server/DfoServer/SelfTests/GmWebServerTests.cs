@@ -17,6 +17,7 @@ internal static class GmWebServerTests
         public List<string> Notified { get; } = [];
         public List<string> Returned { get; } = [];
         public bool InGame = true;
+        public bool RejectProfession;
         public List<string> Disconnected { get; } = [];
         public bool Disconnect(string account) { Disconnected.Add(account); return account == "acct"; }
         public GmAudit Audit { get; } = new(audit);
@@ -27,8 +28,10 @@ internal static class GmWebServerTests
         public string Command(string line)
         {
             Commands.Add(line);
+            if (RejectProfession && line.Contains(" profession ")) return "ERR 改基础职业前请退出该账号，离线后再执行";
             if (line.Contains(" items ")) return "OK {\"name\":\"Hero\",\"gold\":99,\"items\":[{\"list\":0,\"slot\":1,\"id\":100,\"name\":\"剑\",\"count\":1}]}";
             if (line == "exp-table") return "OK {\"max\":3,\"levels\":[{\"level\":1,\"start\":0,\"span\":1000},{\"level\":2,\"start\":1000,\"span\":2000},{\"level\":3,\"start\":3000,\"span\":0}]}";
+            if (line == "profession-options") return "OK {\"baseJobChange\":true,\"jobs\":[{\"job\":0,\"name\":\"鬼剑士\",\"branches\":[{\"branch\":0,\"name\":\"鬼剑士\",\"awakenings\":[{\"stage\":0,\"name\":\"未觉醒\",\"growType\":0}]}]}]}";
             if (line.StartsWith("item-filter")) return "OK {\"total\":0,\"offset\":0,\"items\":[]}";
             if (line.Contains(" stats ")) return "OK {\"stats\":{}}";
             if (line.Contains(" title-list ")) return "OK {\"total\":0,\"quests\":[]}";
@@ -211,6 +214,23 @@ internal static class GmWebServerTests
         TestCheck.That(failed.StatusCode == HttpStatusCode.BadRequest && (await failed.Content.ReadAsStringAsync()).Contains("金币失败"), "命令失败原样返回错误");
         TestCheck.That((await Post("/api/job", new { account = "acct", name = "Hero", branch = 1, awakening = 0, confirm = true })).IsSuccessStatusCode
             && data.Commands.Contains("account acct grow Hero 1 0"), "转职走 grow 命令");
+        var professions = await http.GetFromJsonAsync<JsonElement>("/api/professions");
+        TestCheck.That(professions.GetProperty("data").GetProperty("baseJobChange").GetBoolean() &&
+            professions.GetProperty("data").GetProperty("jobs")[0].GetProperty("branches")[0].GetProperty("awakenings")[0].GetProperty("growType").GetInt32() == 0,
+            "完整职业目录通过资源命令查询并保留真实觉醒编码");
+        TestCheck.That((await Post("/api/job", new { account = "acct", name = "Hero", job = 2, branch = 1, awakening = 2, confirm = true })).IsSuccessStatusCode &&
+            data.Commands.Contains("account acct profession Hero 2 1 2"), "显式基础职业使用独立原子切换命令");
+        int professionCommands = data.Commands.Count;
+        TestCheck.That((await Post("/api/job", new { account = "acct", name = "Hero", job = 16, branch = 0, awakening = 0, confirm = true })).StatusCode == HttpStatusCode.BadRequest &&
+            (await Post("/api/job", new { account = "acct", name = "Hero", job = -1, branch = 0, awakening = 0, confirm = true })).StatusCode == HttpStatusCode.BadRequest &&
+            (await Post("/api/job", new { account = "acct", name = "Hero", job = 2, branch = 0, awakening = 0 })).StatusCode == HttpStatusCode.BadRequest &&
+            (await Post("/api/job", new { account = "acct", name = "Hero", job = 2, branch = 0, awakening = 0, confirm = true }, header: false)).StatusCode == HttpStatusCode.Forbidden &&
+            data.Commands.Count == professionCommands, "基础职业越界、缺确认及缺请求头不执行任何命令");
+        data.RejectProfession = true;
+        var rejectedProfession = await Post("/api/job", new { account = "acct", name = "Hero", job = 2, branch = 0, awakening = 0, confirm = true });
+        TestCheck.That(rejectedProfession.StatusCode == HttpStatusCode.BadRequest &&
+            (await rejectedProfession.Content.ReadAsStringAsync()).Contains("退出该账号"), "基础职业真实命令拒绝原因传回HTTP，不伪报成功");
+        data.RejectProfession = false;
         TestCheck.That((await Post("/api/black-diamond", new { account = "acct", name = "Hero", days = 30, confirm = true })).IsSuccessStatusCode
             && data.Commands.Contains("account acct black-diamond Hero 30"), "黑钻开通走 black-diamond 命令");
         TestCheck.That((await Post("/api/black-diamond", new { account = "acct", name = "Hero", days = 0, confirm = true })).IsSuccessStatusCode
