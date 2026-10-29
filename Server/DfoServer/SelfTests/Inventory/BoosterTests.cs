@@ -155,6 +155,7 @@ internal static class BoosterTests
             emptyCostumeReceipt!.Rewards.Length == expectedCostume.Count,
             "空选择仍走固定包发放，不要求时装option");
         CeraPackageAvatarTests.Run(towns, itemResources);
+        BoosterUsePlacesTests.RunResources(towns, characters, itemResources);
         var contractRole = current with { Inventory = InventorySnapshot.Empty with { AccountWallet = AccountWallet.Empty } };
         foreach (int type in new[] { 22, 27 })
         {

@@ -25,6 +25,7 @@ internal static class BoosterSelectionTests
     {
         BoosterCooldownTests.RunCore();
         BoosterEpicExchangeTests.RunCore();
+        BoosterUsePlacesTests.RunCore();
         int checks = Count;
         RunRepeatedDisjointDeclarations();
         RunCustomAbilityGradeDeclarations();
