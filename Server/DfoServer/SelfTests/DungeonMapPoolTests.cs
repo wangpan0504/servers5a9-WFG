@@ -63,6 +63,7 @@ internal static class DungeonMapPoolTests
         OrdinaryCandidates();
         MixedDummyCandidates();
         ExplicitCandidates();
+        BossSelectionWeights();
         LostLandResources();
         GriefResource();
         // BossRush保留合法格内终点；格外Boss沿已有最远格规划且保留原声明。
@@ -318,6 +319,34 @@ internal static class DungeonMapPoolTests
         }
     }
 
+    static void BossSelectionWeights()
+    {
+        var start = new DungeonMap("map", new(0, 0), 100, "map/start.map");
+        var boss = new DungeonMap("boss", new(1, 0), 92689, "map/boss1.map")
+            { CandidateIds = [92689, 92690, 92697], CandidateWeights = [0, 0, 100] };
+        var maze = new DungeonMaze(0, 2, 1, "BBEE", [start.Position], [boss.Position], [start, boss], []);
+        var paths = new Dictionary<int, string>
+            { [100] = start.Path, [92689] = boss.Path, [92690] = "map/boss2.map", [92697] = "map/white.map" };
+        foreach (int[] weights in new[] { new[] { -1, 0, 101 }, new[] { 0, 0, 0 } })
+        {
+            var invalid = maze with { MapSpecification = [start, boss with { CandidateWeights = weights }] };
+            Reject<InvalidDataException>(() => DungeonCatalog.ResolveMapCandidates(invalid, paths, _ => true,
+                _ => throw new InvalidOperationException("非法权重不应抽样")), "负权重和全零候选仍拒绝且不抽样");
+        }
+        var character = new Character(99, 0, "StrongBossWeights", 0, new(38, 2, 1085, 249), null);
+        var definition = new DungeonDefinition(777, "dungeon/weighted.dgn", 1, 1, [maze], []);
+        foreach (int roll in new[] { 0, 99 })
+        {
+            int draws = 0;
+            int Draw(int bound) { That(bound == 100, "强力药水保留实际总权重100"); draws++; return roll; }
+            That(DungeonEntryPlan.TryCreate(definition, character, 777, 0, 0, out var entry, out string reason,
+                    resolveMaze: value => DungeonCatalog.ResolveMapCandidates(value, paths, _ => true, Draw)) &&
+                entry!.BossMap.Id == 92697 && entry.BossMap.Path == paths[92697] && draws == 1,
+                "合法强力0/0/100权重可完整规划入场，零权重不抽中：" + reason);
+        }
+        That(boss.CandidateWeights.SequenceEqual([0, 0, 100]), "入场不改共享强力权重");
+    }
+
     static void ExplicitCandidates()
     {
         var start = new DungeonMap("map",new(0,0),100,"map/start.map") { CandidateIds = [100,101,101] };
@@ -470,6 +499,17 @@ internal static class DungeonMapPoolTests
         }
         That(cosmoMaze.MapSpecification!.Single(map => map.Kind == "boss").CandidateWeights.SequenceEqual([45,45,10]),
             "角色药效不能污染共享迷宫或其他玩家的原权重");
+        foreach (int roll in new[] { 0, 99 })
+        {
+            var strongCharacter = new Character(98, 0, "StrongCosmoPlan", 0, new(54, 2, 0, 0), null) { Level = 95 };
+            int draws = 0;
+            int Draw(int bound) { draws++; return bound == 100 ? roll : 0; }
+            That(DungeonEntryPlan.TryCreate(catalog, strongCharacter, 7191, 0, 4, out var strongEntry, out string strongReason,
+                    draw: Draw, hellParty: true,
+                    bossWeights: new Dictionary<int, int> { [92689] = 0, [92690] = 0, [92697] = 100 }) &&
+                strongEntry is { IsCosmo: true, BossMap.Id: 92697, StartFatigue: 8 } && draws == 2,
+                "真实超星空接受强力0/0/100，保留选迷宫与终点各一次抽样：" + strongReason);
+        }
         That(ReferenceEquals(catalog.ResolveOrdinaryMaze(definition,actual,_ => throw new InvalidOperationException()),actual),
             "实际龙人之塔完整显式普通路线不进入地图池或重新抽图");
         // 仅将布局改为合成二房fixture，MAP归属、greed和type仍取实际PVF。
