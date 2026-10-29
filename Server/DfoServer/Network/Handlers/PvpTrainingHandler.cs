@@ -78,11 +78,12 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
         var request=PvpTrainingRequests.Create(packet.Body);
         // 普通大厅练习使用同版kind1/mode0，任务道场仍须匹配原接取及训练条件。
         if (request is { Kind: 1, MapIndex: 0, Setting: 0, Mode: 0 } &&
-            context.Session.Selected is { Position.Town: 10, Position.Area: 0 or 5 })
+            context.Session.Selected is { Position.Town: 10, Position.Area: <= 7 and not 4 })
         {
             var character = context.Session.Selected;
             var practice = context.Session.BeginPvpPractice(context.BlocksTownActions, combos.Resolve(character.Job, character.GrowType), expected: character);
-            log.Write("pvp_practice", new { Connection = context.Id, Accepted = practice is not null, Instance = practice?.Instance });
+            log.Write("pvp_practice", new { Connection = context.Id, Accepted = practice is not null, Instance = practice?.Instance,
+                character.Position.Town, character.Position.Area });
             if (practice is null)
                 await context.Reply(CmdPacketType.MAKE_PVP_ROOM, PvpTrainingPackets.Rejected(), "pvp_practice_rejected");
             else
@@ -99,7 +100,7 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
         var standalone = context.Session.Selected;
         var arcadePlan = request.Kind == 3 && standalone is not null ? arcade.Resolve(standalone.Job, standalone.GrowType, request.Mode - 1) : null;
         if (receipt is null && request is { Kind: 3, MapIndex: 0, Setting: 0, Mode: > 0 } && arcadePlan is not null &&
-            standalone is { Position.Town: 10, Position.Area: 0 or 4 or 5 })
+            standalone is { Position.Town: 10, Position.Area: <= 7 })
         {
             var practice = context.Session.BeginPvpPractice(context.BlocksTownActions, arcade: arcadePlan, expected: standalone);
             if (practice is not null)
@@ -113,7 +114,7 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
             }
         }
         log.Write("pvp_training",new {Connection=context.Id,packet.Opcode,Accepted=receipt is not null,
-            Mode=request.Mode,Instance=receipt?.Run.InstanceId});
+            request.Kind,Mode=request.Mode,Instance=receipt?.Run.InstanceId,Town=standalone?.Position.Town,Area=standalone?.Position.Area});
         if(receipt is null) await context.Reply(CmdPacketType.MAKE_PVP_ROOM,PvpTrainingPackets.Rejected(),"pvp_training_rejected");
         else
         {

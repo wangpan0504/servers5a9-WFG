@@ -84,6 +84,7 @@ internal static partial class PvpTrainingTcpTests
         using (var peer = Open(f, account, gamePort: port, channelNumber: 101))
         {
             peer.Select(prepared: true); peer.Barrier();
+            peer.Travel(10, 1, 450, 234, 10, 0); peer.Barrier();
             string before = f.Snapshot();
             Combo(0); peer.Send(881, [0]); peer.Barrier();
             That(before == f.Snapshot() && f.Query("SELECT count(*) FROM character_pvp_mission_facts WHERE character_id=$p0", id) is [[0L]],

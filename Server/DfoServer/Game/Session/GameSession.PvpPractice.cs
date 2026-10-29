@@ -24,7 +24,7 @@ internal sealed partial class GameSession
     internal PvpPracticeRun? BeginPvpPractice(bool blocked, ImmutableArray<PvpPracticeCombo> combos = default,
         PvpArcadeRoundPlan? arcade = null, Character? expected = null) => owner.Execute(() =>
     {
-        if (blocked || !Ready || Phase != SessionPhase.Town || Selected is not { Position.Town: 10, Position.Area: 0 or 4 or 5 } ||
+        if (blocked || !Ready || Phase != SessionPhase.Town || Selected is not { Position.Town: 10, Position.Area: <= 7 } ||
             ChannelEntry is null || !ChannelAreaLanding.IsPvpType(ChannelEntry.Type) ||
             pvpPractice is not null || pvpTraining is not null || pvpArena is not null || pvpMatching is not null ||
             CurrentParty?.Invoke() is not null || pendingRental is not null || HasPendingTownQuestCommit ||
