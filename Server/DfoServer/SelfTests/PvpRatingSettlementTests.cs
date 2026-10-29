@@ -156,5 +156,6 @@ internal static class PvpRatingSettlementTests
         }
         finally { Directory.Delete(root, true); }
         Console.WriteLine($"PASS {Count - beforeCount} 决斗评分持久来源、原子到账、重放及接管恢复断言");
+        PvpRecordTests.RunCore();
     }
 }

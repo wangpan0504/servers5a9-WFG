@@ -236,6 +236,8 @@ internal static class PvpArenaTcpTests
                 { Experience: 0, Rating: 900, Played: 0 } &&
             f.Query("SELECT count(*) FROM character_pvp_rating_claims WHERE receipt_json IS NOT NULL")[0][0] is 8L,
             "四局各消费双方来源一次，仅死亡胜局与有效56胜局各加450，取消和平局不加经验，不改匹配分");
+        PvpRecordTcpChecks.Score(f, host, host.Id, true);
+        PvpRecordTcpChecks.Score(f, guest, host.Id, false);
 
         void StartAnother()
         {
