@@ -61,8 +61,12 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                 if (phaseProgress)
                 {
                     int phaseSuccess = change.After.Symbols.TryGetValue("[1phase success]", out int success) ? success : -1;
+                    var raidDungeon = context.Session.FormalEnteredDungeonId;
+                    string hpSymbol = $"[{raidDungeon} dgn hp]";
                     log.Write("anton_phase_progress", new { Connection = context.Id, change.After.Phase,
-                        State = change.After.State.ToString(), PhaseSuccess = phaseSuccess, Timers = change.After.Timers.Count,
+                        State = change.After.State.ToString(), PhaseSuccess = phaseSuccess, Dungeon = raidDungeon,
+                        HpBefore = change.Before.Symbols.GetValueOrDefault(hpSymbol, -1), HpAfter = change.After.Symbols.GetValueOrDefault(hpSymbol, -1),
+                        Timers = change.After.Timers.Count,
                         Deferred = change.After.Deferred.Count, TimerUnit = "local-seconds" });
                 }
             }

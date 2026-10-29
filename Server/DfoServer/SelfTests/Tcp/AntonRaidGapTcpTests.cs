@@ -142,7 +142,8 @@ internal static partial class AntonRaidGapTcpTests
         AntonTcpProbe.RejectSelect(leader, member, 999);
         var leaderReport = new AntonTcpProbe.AntonProbeReport();
         var memberReport = new AntonTcpProbe.AntonProbeReport();
-        AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport);
+        for (int clear = 0; clear < 4; clear++)
+            AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport);
         That(leaderReport.Maps.Count > 0 && memberReport.Maps.Count > 0, "两人都能收到 29");
         SameRoom(leaderReport.Maps[0], memberReport.Maps[0], 32200, "进 210 时两人 29 都在起点 32200");
         SameRoom(leaderReport.Maps[^1], memberReport.Maps[^1], null, "清到 Boss 房时两人 29 的地图和坐标一致");
@@ -153,7 +154,8 @@ internal static partial class AntonRaidGapTcpTests
         }
         foreach (int dungeon in new[] { 212, 214, 213, 215 })
         {
-            AntonTcpProbe.EnterSquad(leader, member, catalog, dungeon, leaderReport, memberReport);
+            for (int clear = 0; clear < (dungeon is 213 or 215 ? 2 : 1); clear++)
+                AntonTcpProbe.EnterSquad(leader, member, catalog, dungeon, leaderReport, memberReport);
             byte state = dungeon == 215 ? (byte)2 : dungeon == 213 ? (byte)3 : (byte)1;
             AssertState(leaderReport, dungeon, state);
             AssertState(memberReport, dungeon, state);

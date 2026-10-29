@@ -26,7 +26,8 @@ internal static partial class AntonRaidGapTcpTests
         That(fixture.Query("SELECT raid_type,state FROM character_raid_runs") is [[0L,0L]], "正式666同扣票事务登记Anton生命周期");
         peer.Send(15, BitConverter.GetBytes(210u));
         That(AntonTcpProbe.Barrier(peer, "正式打开210").Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }), "正式开战能选210");
-        AntonTcpProbe.Enter(peer, catalog, 210, report, clear: true);
+        for (int clear = 0; clear < 4; clear++)
+            AntonTcpProbe.Enter(peer, catalog, 210, report, clear: true);
         AssertState(report, 211, 1); AssertState(report, 216, 2);
         clock.Advance(19);
         AntonTcpProbe.RejectClosed(peer, null, 216);
@@ -41,7 +42,8 @@ internal static partial class AntonRaidGapTcpTests
         clock.Advance(129); AntonTcpProbe.RejectClosed(peer, null, 211);
         clock.Advance(1); State(AntonTcpProbe.Barrier(peer, "211开放300秒"), 211, 0);
         foreach (int dungeon in new[] { 213, 215 })
-            AntonTcpProbe.Enter(peer, catalog, dungeon, report, clear: true, leave: dungeon != 215);
+            for (int clear = 0; clear < 2; clear++)
+                AntonTcpProbe.Enter(peer, catalog, dungeon, report, clear: true, leave: dungeon != 215 || clear == 0);
         That(report.Reward, "真实阶段0CLEAR PHASE抵达Reward");
         That(fixture.Query("SELECT state,phase0_receipt IS NOT NULL,phase1_receipt IS NOT NULL FROM character_raid_runs") is [[0L,1L,0L]],
             "Reward前已落阶段0完整资格和奖励计划，不提前记最终通关");
@@ -73,7 +75,8 @@ internal static partial class AntonRaidGapTcpTests
             "219正式29使用原表19206起点，实际坐标取DGN 0,1");
         AssertState(report, 218, 2); AssertState(report, 219, 2); AssertState(report, 220, 0);
         AntonTcpProbe.RejectClosed(peer, null, 218);
-        AntonTcpProbe.Enter(peer, catalog, 220, report, clear: true, leave: false);
+        for (int clear = 0; clear < 5; clear++)
+            AntonTcpProbe.Enter(peer, catalog, 220, report, clear: true, leave: clear < 4);
         That(fixture.Query("SELECT state,phase1_receipt IS NOT NULL,clear_week IS NOT NULL FROM character_raid_runs") is [[2L,1L,1L]],
             "220 CLEAR PHASE在领取前持久记录最终通关且只占一次");
         string completed = fixture.Snapshot("SELECT * FROM character_raid_runs");

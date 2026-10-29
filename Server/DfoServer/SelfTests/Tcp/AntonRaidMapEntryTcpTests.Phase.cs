@@ -98,6 +98,21 @@ internal static partial class AntonRaidMapEntryTcpTests
             }
             listener.Stop();
 
+            for (int remaining = 3; remaining > 0; remaining--)
+            {
+                var partial = ClearDungeon(210);
+                That(StateOf(partial, 210) == 0 && StateOf(partial, 212) == 2 &&
+                    sessions[0].RaidCombatView()!.Symbols["[210 dgn hp]"] == remaining,
+                    "双人Run仅扣一次HP，前三轮不开放后续图");
+                var symbols = partial.Last(packet => packet is { Kind: 0, Opcode: 583 }).Body;
+                That(Enumerable.Range(0, symbols[0]).Any(index =>
+                    BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + 8 * index)) == 50 &&
+                    BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(5 + 8 * index)) == remaining),
+                    "583真实symbol50按3/2/1同步HP，不以包存在代替字段验证");
+                if (remaining == 3)
+                    Bytes(partial.Last(packet => packet is { Kind: 0, Opcode: 587 }).Body, [2, 0], "首个Run只发布Fighting/0");
+                LeaveBoth();
+            }
             var afterBlack = ClearDungeon(210);
             AssertStates(afterBlack, new()
             {
@@ -116,10 +131,12 @@ internal static partial class AntonRaidMapEntryTcpTests
             var afterRed = ClearDungeon(214);
             That(StateOf(afterRed, 214) == 1 && StateOf(afterRed, 215) == 0, "214 clear 的 586 末字节是 close");
             LeaveBoth();
+            ClearDungeon(213); LeaveBoth();
             var afterLeg = ClearDungeon(213);
             That(StateOf(afterLeg, 213) == 3 && sessions[0].RaidCombatView() is { State: AntonRaidBattleState.Fighting, Phase: 0 } view &&
                 view.Symbols["[1phase success]"] == 0, "单腿 clear 发布 Clear，阶段成功仍是 0");
             LeaveBoth();
+            ClearDungeon(215); LeaveBoth();
             var afterSuccess = ClearDungeon(215);
             AssertStates(afterSuccess, new()
             {
@@ -238,8 +255,10 @@ internal static partial class AntonRaidMapEntryTcpTests
         {
             foreach (var (id, state) in expected)
                 That(StateOf(packets, id) == state, $"586 里 {id} 的状态字节为 {state}");
-            byte[] phase = packets.Last(packet => packet is { Kind: 0, Opcode: 587 }).Body;
-            Bytes(phase, fighting ? [2, 0] : [3, 0], fighting ? "未完成阶段时 587 仍是 Fighting/0" : "双腿成功后 587 是 Reward/0");
+            if (fighting)
+                That(!packets.Any(packet => packet is { Kind: 0, Opcode: 587 }), "同phase Fighting不重复发布587演出");
+            else
+                Bytes(packets.Last(packet => packet is { Kind: 0, Opcode: 587 }).Body, [3, 0], "双腿成功后587是Reward/0");
         }
 
         static byte StateOf(List<WirePacket> packets, int dungeon)

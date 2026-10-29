@@ -199,9 +199,12 @@ internal static class AntonTcpProbe
                 throw new InvalidOperationException("关闭阶段推进后清 210 仍推进了战况：" + report.Summary());
             return report;
         }
+        for (int clear = 1; clear < 4; clear++)
+            Enter(peer, catalog, 210, report, clear: true);
         ExpectClosed(peer, 211);
         foreach (int dungeon in new[] { 212, 214, 213, 215 })
-            Enter(peer, catalog, dungeon, report, clear: true, leave: dungeon != 215);
+            for (int clear = 0; clear < (dungeon is 213 or 215 ? 2 : 1); clear++)
+                Enter(peer, catalog, dungeon, report, clear: true, leave: dungeon != 215 || clear == 0);
         if (!report.Reward)
             throw new InvalidOperationException("213/215 清完后没有见到 Reward 态 587 [3,0]");
         if (report.Opcode586 == 0)
@@ -315,13 +318,10 @@ internal static class AntonTcpProbe
     internal static void Enter(TcpPeer peer, RaidDungeonCatalog catalog, int dungeon, AntonProbeReport report, bool clear,
         bool leave = true, bool requireClearNotice = true)
     {
-        if (dungeon != 210)
-        {
-            peer.Send(15, DungeonId(dungeon));
-            var opened = Flush(peer, "15 选图 " + dungeon);
-            if (!opened.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }))
-                throw new InvalidOperationException(dungeon + " 的 15 未被接受");
-        }
+        peer.Send(15, DungeonId(dungeon));
+        var opened = Flush(peer, "15 选图 " + dungeon);
+        if (!opened.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }))
+            throw new InvalidOperationException(dungeon + " 的 15 未被接受");
         byte[] request = (byte[])LiveSelect210.Clone();
         BinaryPrimitives.WriteUInt32LittleEndian(request, (uint)dungeon);
         peer.Send(16, request);
@@ -504,14 +504,11 @@ internal static class AntonTcpProbe
     internal static void EnterSquad(TcpPeer leader, TcpPeer member, RaidDungeonCatalog catalog, int dungeon,
         AntonProbeReport leaderReport, AntonProbeReport memberReport)
     {
-        if (dungeon != 210)
-        {
-            leader.Send(15, DungeonId(dungeon));
-            var selected = Flush(leader, "15 分队选择 " + dungeon);
-            _ = Barrier(member, "15 分队队员 " + dungeon);
-            if (!selected.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }))
-                throw new InvalidOperationException(dungeon + " 分队不能打开选图");
-        }
+        leader.Send(15, DungeonId(dungeon));
+        var selected = Flush(leader, "15 分队选择 " + dungeon);
+        _ = Barrier(member, "15 分队队员 " + dungeon);
+        if (!selected.Any(packet => packet is { Kind: 1, Opcode: 15, Body: [1] }))
+            throw new InvalidOperationException(dungeon + " 分队不能打开选图");
         byte[] request = (byte[])LiveSelect210.Clone();
         BinaryPrimitives.WriteUInt32LittleEndian(request, (uint)dungeon);
         leader.Send(16, request);

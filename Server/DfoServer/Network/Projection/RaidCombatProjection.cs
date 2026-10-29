@@ -23,8 +23,8 @@ internal static class RaidCombatProjection
             PostLukeSnapshot(context, luke, view, Guard);
         else if (context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)
         {
-            // 218 clear后的HP0等SET是资源明示事实，沿583已证symbol读宽同步。
-            if (anton.HasAntonRewards)
+            // DGN HP与资源SET共享原symbol快照；沿已证583读宽同步本次提交。
+            if (anton.HasAntonRewards || anton.PhaseProgress)
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
                     RaidCombatPackets.Symbols(anton.SymbolSnapshot(view)), "raid_symbol_snapshot", Guard);
             foreach (var row in anton.DungeonSnapshot(view))
@@ -46,9 +46,9 @@ internal static class RaidCombatProjection
             !view.Symbols.TryGetValue("[is exist infection dungeon]", out int infected) ||
             !view.Symbols.TryGetValue("[infection dungeon index]", out int infectionDungeon)) return;
         bool Guard() => current() && battle.IsCurrent(view);
-        // 显式清感染存在位，585尾0本身不清symbol7；其余HP/机关符号不伪造。
+        // 重进选图同步当前HP；关闭推进时仍只清感染存在位，585尾0本身不清symbol7。
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
-            RaidCombatPackets.Symbols([(7, infected)]), "raid_infection_state", Guard);
+            RaidCombatPackets.Symbols(battle.PhaseProgress ? battle.SymbolSnapshot(view) : [(7, infected)]), "raid_infection_state", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_DUNGEON_STATE,
             RaidCombatPackets.Dungeons(0, battle.DungeonSnapshot(view), infectionDungeon),
             "raid_dungeon_snapshot", Guard);

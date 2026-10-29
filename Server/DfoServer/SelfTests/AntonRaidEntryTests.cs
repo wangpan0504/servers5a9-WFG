@@ -94,7 +94,7 @@ internal static class AntonRaidEntryTests
         var script = new RaidScript("synthetic/anton-phase.etc", new(19, 2), null, null,
             ImmutableDictionary<string, int>.Empty.Add("[hp]", 1).Add("[dgn smoke open]", 2),
             [new RaidPhase("phase0",
-                [new(210, RaidDungeonState.Open, "[hp]", 4, 5), new(212, RaidDungeonState.Hide, "[hp]", 1, 5)],
+                [new(210, RaidDungeonState.Open, "[hp]", 4, 5), new(212, RaidDungeonState.Hide, "[hp212]", 1, 5)],
                 [new RaidRule(
                     [new("[if]", 0, null, "[dgn smoke open]", null, null, [0]),
                      new("[check dungeon state]", 1, 210, null, RaidDungeonState.Clear, null, [])],
@@ -114,18 +114,64 @@ internal static class AntonRaidEntryTests
 
         var opened = new AntonRaidBattle(script, antonPhaseProgress: true);
         That(opened.JoinStart(first) && opened.JoinStart(second) && opened.JoinStart(third) && opened.PhaseProgress, "显式开关只作用于本次聚合");
-        var identity = new DungeonRunIdentity(first.Character, 0, 1, Guid.NewGuid(), 1);
-        using (var pending = opened.ReserveDungeon(new(opened.Instance, 0, 1), 210, [(first, identity)])!) pending.Install();
-        var later = identity with { Epoch = identity.Epoch + 1 };
-        var change = opened.CompleteAntonReservedDungeon(new(later, 210, [Guid.NewGuid()]) { ClearMap = map });
-        That(change is not null && opened.View.Dungeons[210] == RaidDungeonState.Hide && opened.View.Dungeons[212] == RaidDungeonState.Open &&
+        for (int count = 1; count <= 4; count++)
+        {
+            var identity = new DungeonRunIdentity(first.Character, 0, 1, Guid.NewGuid(), 1);
+            var partner = identity with { CharacterId = second.Character };
+            using (var pending = opened.ReserveDungeon(new(opened.Instance, 0, 1), 210, [(first, identity), (second, partner)])!) pending.Install();
+            var later = identity with { Epoch = identity.Epoch + 1 };
+            var change = opened.CompleteAntonReservedDungeon(new(later, 210, [Guid.NewGuid()]) { ClearMap = map });
+            That(change is not null && opened.View.Symbols["[hp]"] == 4 - count, "每个共享Run只扣一次HP");
+            long revision = opened.View.Revision;
+            That(opened.CompleteAntonReservedDungeon(new(later, 210, [Guid.NewGuid()]) { ClearMap = map }) is null &&
+                opened.CompleteAntonReservedDungeon(new(partner, 210, [Guid.NewGuid()]) { ClearMap = map }) is null &&
+                opened.View.Revision == revision, "重复117和同Run第二角色不重复扣HP");
+            if (count < 4)
+                That(opened.View.Dungeons[210] == RaidDungeonState.Open && !opened.AllowsAntonEntry(212) &&
+                    opened.View.Timers.IsEmpty && opened.View.Deferred.IsEmpty, "HP尚余时保持开放且不触发后续图和计时");
+            opened.ReleaseDungeon(first, identity.InstanceId);
+            opened.ReleaseDungeon(second, identity.InstanceId);
+        }
+        That(opened.View.Dungeons[210] == RaidDungeonState.Hide && opened.View.Dungeons[212] == RaidDungeonState.Open &&
             opened.View.Symbols["[dgn smoke open]"] == 1 && opened.View.Timers[new RaidTimer(2, 211)] == 300 &&
-            opened.View.Deferred.Values.Any(clause => clause.Tag == "[reserve dungeon state]" && clause.DungeonId == 216 && clause.RawIntegers[2] == 20) &&
-            opened.View.State == AntonRaidBattleState.Fighting && opened.AllowsAntonEntry(212) && !opened.AllowsAntonEntry(210),
-            "210 清图按规则隐藏自身、开放 212，计时和延迟开图只保留原值");
-        That(opened.CompleteAntonReservedDungeon(new(later, 210, [Guid.NewGuid()]) { ClearMap = map }) is null &&
-            opened.ExpireTimer(opened.Instance, opened.View.Revision, new RaidTimer(2, 211)) is null,
-            "重复清图和未证时间单位都不能再次推进或触发计时行为");
+            opened.View.Deferred.Values.Any(clause => clause.Tag == "[reserve dungeon state]" && clause.DungeonId == 216) &&
+            opened.View.State == AntonRaidBattleState.Fighting && !opened.AllowsAntonEntry(210),
+            "第四个Run才触发210 clear及后续开图声明");
+        // 同一图被规则重新打开后重置HP；此前已经预留的另一分队不能扣新目标代。
+        var reopenScript = script with { Phases = [new RaidPhase("reopen",
+            [new(210, RaidDungeonState.Open, "[hp]", 1, 5)],
+            [Rule([On(210), Check(210, RaidDungeonState.Clear)], [State(210, RaidDungeonState.Open)])], [])] };
+        var reopened = new AntonRaidBattle(reopenScript, antonPhaseProgress: true);
+        That(reopened.JoinStart(first) && reopened.JoinStart(second), "重开夹具复用原成员");
+        var old = new DungeonRunIdentity(second.Character, 0, 1, Guid.NewGuid(), 1);
+        using (var pending = reopened.ReserveDungeon(new(reopened.Instance, 0, 2), 210, [(second, old)])!) pending.Install();
+        for (int round = 0; round < 2; round++)
+        {
+            var fresh = new DungeonRunIdentity(first.Character, 0, 1, Guid.NewGuid(), 1);
+            using (var pending = reopened.ReserveDungeon(new(reopened.Instance, 0, 1), 210, [(first, fresh)])!) pending.Install();
+            if (round == 1) reopened.SetMechanism(reopened.Instance, reopened.View.Revision, "[hp]", 0);
+            That(reopened.CompleteAntonReservedDungeon(new(fresh, 210, [Guid.NewGuid()]) { ClearMap = map }) is not null &&
+                reopened.View.Symbols["[hp]"] == 1 && reopened.AllowsAntonEntry(210),
+                "重开恢复PVF HP，显式0 HP的开放图仍能消费新Run且不产生负数");
+            reopened.ReleaseDungeon(first, fresh.InstanceId);
+        }
+        long currentRevision = reopened.View.Revision;
+        That(reopened.CompleteAntonReservedDungeon(new(old, 210, [Guid.NewGuid()]) { ClearMap = map }) is null &&
+            reopened.View.Revision == currentRevision, "旧目标代Run不能扣减重开后的HP");
+        reopened.ReleaseDungeon(second, old.InstanceId);
+        var deferredScript = reopenScript with { Phases = [reopenScript.Phases[0] with {
+            Rules = [Rule([On(210), Check(210, RaidDungeonState.Clear)],
+                [State(210, RaidDungeonState.Close), Reserve(210, 20)])] }] };
+        var deferredBattle = new AntonRaidBattle(deferredScript, antonPhaseProgress: true);
+        That(deferredBattle.JoinStart(first), "延迟重开夹具复用原成员");
+        var deferredIdentity = new DungeonRunIdentity(first.Character, 0, 1, Guid.NewGuid(), 1);
+        using (var pending = deferredBattle.ReserveDungeon(new(deferredBattle.Instance, 0, 1), 210, [(first, deferredIdentity)])!) pending.Install();
+        deferredBattle.CompleteAntonReservedDungeon(new(deferredIdentity, 210, [Guid.NewGuid()]) { ClearMap = map });
+        int token = deferredBattle.View.Deferred.Single().Key;
+        That(deferredBattle.CompleteDeferred(deferredBattle.Instance, deferredBattle.View.Revision, token) is not null &&
+            deferredBattle.View.Symbols["[hp]"] == 1 && deferredBattle.AllowsAntonEntry(210),
+            "显式调度能力重开也恢复声明HP；不由本夹具推断时间单位");
+        deferredBattle.ReleaseDungeon(first, deferredIdentity.InstanceId);
         var next = new DungeonRunIdentity(second.Character, 0, 1, Guid.NewGuid(), 1);
         using var follow = opened.ReserveDungeon(new(opened.Instance, 0, 2), 212, [(second, next)]);
         That(follow is not null && opened.ReserveDungeon(new(opened.Instance, 0, 3), 210, [(third, new DungeonRunIdentity(third.Character, 0, 1, Guid.NewGuid(), 1))]) is null,
