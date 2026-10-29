@@ -85,6 +85,11 @@ internal sealed partial class GameSession
 
     internal EvildomWarAdmission? ReadEvildomWar() => owner.Execute(() => Selected is { } character ? CurrentEvildomWar(character) : null);
 
+    internal bool CanRetreatEvildomWar() => owner.Execute(() => Ready && Phase == SessionPhase.Dungeon &&
+        Selected is { } character && CurrentEvildomWar(character) is { } war &&
+        formalDungeon is { Run.Phase: SinglePlayerDungeonPhase.Dungeon, Run.ClearFact: null } dungeon &&
+        ReferenceEquals(dungeon.EvildomWarEntry, war));
+
     internal void PersistEvildomWarCheckpoint(EvildomWarView before, EvildomWarCheckpoint after)
     {
         if (evildomWar is { Charged: true, Store: { } store } war)

@@ -276,7 +276,13 @@ internal sealed partial class GameSession
             dungeon.HasPendingFatigue || HasPendingQuestScene || dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement ||
             dungeon.PendingHopeReward is not null && !dungeon.HopeRewardConfirmed ||
             dungeon.PendingTutorialClear is not null) return null;
-        if (kind == PartyDungeonExitKind.HellSelection ? !CanBeginClearedHellSelection(0) : FormalDungeonResultFocus() is null)
+        bool canExit = kind switch
+        {
+            PartyDungeonExitKind.HellSelection => CanBeginClearedHellSelection(0),
+            PartyDungeonExitKind.EvildomWarRetreat => CanRetreatEvildomWar(),
+            _ => FormalDungeonResultFocus() is not null
+        };
+        if (!canExit)
             return null;
         if (kind == PartyDungeonExitKind.ResultSelection && dungeon.Entry.IsCosmo) return null;
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
@@ -322,7 +328,7 @@ internal sealed partial class GameSession
         }
         return prepared.Kind switch
         {
-            PartyDungeonExitKind.ResultReturn => new PartyDungeonNotice(PartyDungeonNoticeKind.ResultReturn, member, members,
+            PartyDungeonExitKind.ResultReturn or PartyDungeonExitKind.EvildomWarRetreat => new PartyDungeonNotice(PartyDungeonNoticeKind.ResultReturn, member, members,
                 Travel: new(committed, owner.Generation, SelectionEpoch) { RaidBattleChange = raidChange }),
             _ => new PartyDungeonNotice(prepared.Kind == PartyDungeonExitKind.SelectionReturn ? PartyDungeonNoticeKind.SelectionReturn :
                 prepared.Kind == PartyDungeonExitKind.ResultSelection ? PartyDungeonNoticeKind.ResultSelection : PartyDungeonNoticeKind.Selection,
