@@ -70,7 +70,8 @@ internal static class QuestCashRewardTests
             Fund(f,11,kind == CurrencyKind.TokenCera ? int.MaxValue : 22,
                 kind == CurrencyKind.HappyTokenCera ? int.MaxValue : 33);
             var before = f.Read();
-            That(f.Finish(ushort.MaxValue).Outcome == QuestFinishOutcome.Rejected && Same(before,f.Read()) && f.Receipts == 0,
+            That(f.Finish(ushort.MaxValue) is { Outcome: QuestFinishOutcome.InsufficientSpace, Failure: QuestCompletionFailure.InventoryCapacity } &&
+                Same(before,f.Read()) && f.Receipts == 0,
                 "任一券溢出整批拒绝，不饱和截断、不消耗材料/先发另一券");
         }
         using (var f = Make())

@@ -94,9 +94,32 @@ internal static class DevelopmentAssetTests
         TestCheck.That(session.ClaimMail(service, [crystal.Id]).Accepted &&
             session.Selected!.Inventory.AccountWallet.Get(CurrencyKind.ClearCube) == 1 &&
             session.Selected.Inventory.Items.All(item => item.Core.ItemId != 3037), "GM晶块领取进入真实账号钱包，不进入普通背包格");
+        string inventoryBeforeTokens = System.Text.Json.JsonSerializer.Serialize(session.Selected!.Inventory.Items);
+        uint goldBeforeTokens = session.Selected.Inventory.Gold;
+        TestCheck.That(Send("item Receiver 2681762 7").StartsWith("OK ") && Send("item Receiver 2681917 11").StartsWith("OK "),
+            "两种代币券可由原GM单物品命令投递邮件");
+        var tokens = f.Repository.LoadMailbox(f.ReceiverOwner, f.Receiver.Id, f.Now).Entries.Where(row =>
+            row.Attachments.Any(attachment => attachment.Item.Core.ItemId is 2681762 or 2681917)).ToArray();
+        TestCheck.That(tokens.Length == 2 && tokens.All(row => row.Attachments.Length == 1 &&
+            row.Attachments[0].Item.Core.Value == (row.Attachments[0].Item.Core.ItemId == 2681762 ? 7 : 11)) &&
+            tokens.Select(row => row.Attachments[0].Item.Uid).Distinct().Count() == 2 &&
+            f.ReadReceiver().Inventory.AccountWallet.Get(CurrencyKind.TokenCera) == 0 &&
+            f.ReadReceiver().Inventory.AccountWallet.Get(CurrencyKind.HappyTokenCera) == 0,
+            "GM代币邮件独立托管真实面额及UID，未领取不增加钱包余额");
+        TestCheck.That(session.ClaimMail(service, [tokens[0].Id, tokens[1].Id]).Accepted &&
+            session.Selected!.Inventory.AccountWallet.Get(CurrencyKind.TokenCera) == 7 &&
+            session.Selected.Inventory.AccountWallet.Get(CurrencyKind.HappyTokenCera) == 11 &&
+            session.Selected.Inventory.Gold == goldBeforeTokens &&
+            System.Text.Json.JsonSerializer.Serialize(session.Selected.Inventory.Items) == inventoryBeforeTokens,
+            "GM双代币领取进入各自账号钱包，不增加角色金币或普通背包实例");
+        var persistedTokens = f.ReadReceiver().Inventory.AccountWallet;
+        TestCheck.That(persistedTokens.Get(CurrencyKind.TokenCera) == 7 && persistedTokens.Get(CurrencyKind.HappyTokenCera) == 11,
+            "GM双代币领取余额已原子提交到持久账号钱包");
         string snapshot = f.Snapshot();
+        TestCheck.That(!session.ClaimMail(service, [tokens[0].Id, tokens[1].Id]).Accepted && f.Snapshot() == snapshot,
+            "已领取GM代币邮件重放不重复入账，不改邮件、UID或审计");
         foreach (var (command, account) in new[] { ("item Receiver 18400 11", "receiver"), ("item Receiver 18400 1", "sender"),
-            ("item Receiver 2147483647 1", "receiver"), ("item Receiver 2681762 1", "receiver"),
+            ("item Receiver 2147483647 1", "receiver"),
             ("item Receiver 3175 " + ((long)resources.Items.Get(3175).StackLimit + 1), "receiver") })
             TestCheck.That(Send(command, account).StartsWith("ERR ") && f.Snapshot() == snapshot, "无效GM发放不新增邮箱或UID: " + command);
         f.Execute("CREATE TRIGGER fail_gm_mail BEFORE INSERT ON mailbox_attachments WHEN NEW.ordinal=1 BEGIN SELECT RAISE(ABORT,'gm-mail-failure'); END;");

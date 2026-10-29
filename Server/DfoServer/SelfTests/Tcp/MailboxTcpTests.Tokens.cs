@@ -71,7 +71,7 @@ internal static partial class MailboxTcpTests
             state = State(); Extract(peer, rows.Select(row => row.ClaimId).ToArray()); peer.Expect(1, 95, [0, 21, 0]);
             peer.Barrier(NoPhysicalGrant); That(State() == state, "已领摘要重放不再增加余额或生成库存");
             int tokenBalance = 200;
-            foreach (var box in new[] { (Slot: (short)3, Id: 2683799, Token: 2681762, Amount: 720),
+            foreach (var box in new[] { (Slot: (short)3, Id: 2683799, Token: 2681762, Amount: 10000),
                 (Slot: (short)4, Id: 490705482, Token: 2681917, Amount: 200), (Slot: (short)5, Id: 10007481, Token: 2681917, Amount: 0) })
             {
                 var definition = r.Boosters.Get(box.Id);
@@ -110,12 +110,12 @@ internal static partial class MailboxTcpTests
         {
             peer.Select(prepared: true);
             var row = ReadList(peer.Mailbox.Single()).Summaries.Single(row => row.ClaimId == retryClaim);
-            Extract(peer, [row.ClaimId]); ExpectClaim(peer, [row]); Cera(peer, 925, happyBalance); peer.Barrier(NoPhysicalGrant);
+            Extract(peer, [row.ClaimId]); ExpectClaim(peer, [row]); Cera(peer, 10205, happyBalance); peer.Barrier(NoPhysicalGrant);
         }
         using (var peer = Open(fixture))
         {
             var entry = peer.Select(1, prepared: true);
-            Bytes(entry.Single(packet => packet.Kind == 0 && packet.Opcode == 53).Body, Balance(925, happyBalance),
+            Bytes(entry.Single(packet => packet.Kind == 0 && packet.Opcode == 53).Body, Balance(10205, happyBalance),
                 "同账号换角恢复已提交的两种代币余额"); peer.Barrier();
         }
         using (var peer = Open(fixture, "token-other"))
