@@ -8,10 +8,12 @@ internal sealed partial class GameSession
     PvpMatchingTicket? pvpMatching;
     internal PvpMatchingTicket? CurrentPvpMatching => Volatile.Read(ref pvpMatching);
 
-    internal bool CanRemainPvpMatching => Ready && Phase == SessionPhase.Town && Selected is not null &&
-        ChannelEntry?.Type is 8 or 24 && pvpArena is null && pvpTraining is null && CurrentParty?.Invoke() is null &&
+    bool CanUsePvpMatchingActivities => Ready && Selected is not null &&
+        ChannelEntry?.Type is 8 or 24 && pvpTraining is null && pvpPractice is null && CurrentParty?.Invoke() is null &&
         pendingRental is null && !HasPendingTownQuestCommit && !HasActiveDungeonContinuation &&
         !HasPendingQuestReplay && !HasPendingFormalCard;
+
+    internal bool CanRemainPvpMatching => CanUsePvpMatchingActivities && Phase == SessionPhase.Town && pvpArena is null;
 
     internal PvpArenaAdmission? CapturePvpMatchingAdmission() => owner.Execute(() =>
         CanRemainPvpMatching && PublicCharacter(Selected!.Id) is { } identity

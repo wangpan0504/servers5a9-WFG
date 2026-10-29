@@ -73,7 +73,7 @@ internal sealed class PvpTotalTeamService(IPvpTotalTeamStore store, PvpArenaCata
     {
         if (string.IsNullOrEmpty(name)) return Reject(PvpTotalTeamFailure.MissingName);
         if (!PvpTotalTeam.ValidName(name)) return Reject(PvpTotalTeamFailure.InvalidName);
-        if (session.CurrentPvpArena is not null || session.CurrentPvpMatching is not null)
+        if (session.CurrentPvpArena is { Room.IsMatching: true } or { Room.Match: not null } || session.CurrentPvpMatching is not null)
             return Reject(PvpTotalTeamFailure.ArenaActive);
         var selection = session.CapturePvpTotalRoster(indices, blocked);
         if (selection is null) return Reject(PvpTotalTeamFailure.InvalidLineup);

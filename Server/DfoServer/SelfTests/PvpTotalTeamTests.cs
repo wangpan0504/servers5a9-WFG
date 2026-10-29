@@ -75,22 +75,38 @@ internal static partial class PvpTotalTeamTests
                 service.CheckName(owner, "队伍甲") == PvpTotalTeamFailure.None &&
                 service.CheckName(other, "队伍甲") == PvpTotalTeamFailure.NameTaken,
                 "成功发布凭据保留原列表索引与原选角，已存在队名仍由真正注册原子占用");
+            Create(other, "OtherFirst", 1); Create(other, "OtherSecond", 2); Create(other, "OtherThird", 3);
+            var otherSession = Session(other); Select(otherSession);
             var arena = new PvpArenaService(memory, Catalog(), repository);
             var room = arena.Create(session, "总力门禁", PvpArenaMode.Individual, 0)!.Member.Room;
             try
             {
-                That(service.RegisterWithReceipt(session, "队伍甲", [2, 0, 1]).Failure == PvpTotalTeamFailure.ArenaActive &&
-                    !session.CanPublishPvpTotalRoster(publication.Selection!) && service.Read(owner)!.SameLineup(original),
-                    "进入决斗房间后拒绝变更代表角色，并抑制原城镇编队回执");
+                var changed = service.RegisterWithReceipt(session, "队伍甲", [0, 1, 2]);
+                That(changed is { Failure: PvpTotalTeamFailure.None, Team: not null } &&
+                    changed.Team.Characters.SequenceEqual(new ushort?[] { first.Id, second.Id, third.Id }) &&
+                    new CharacterRepository(path).ReadPvpTotalTeam(owner)!.SameLineup(changed.Team),
+                    "普通等候房实际换代表立即持久化，无需小退或换频道触发保存");
+                var waiting = service.RegisterWithReceipt(session, "队伍甲", [2, 0, 1]);
+                That(waiting is { Failure: PvpTotalTeamFailure.None, Selection: not null } &&
+                    waiting.Team!.Revision == original.Revision + 2 && waiting.Team.Characters.SequenceEqual(original.Characters) &&
+                    session.CanPublishPvpTotalRoster(waiting.Selection) && service.Read(owner)!.SameLineup(waiting.Team) &&
+                    !session.CanPublishPvpTotalRoster(publication.Selection!),
+                    "普通等候房允许编辑代表阵容，回执绑定本房间而非旧城镇凭据");
+                original = waiting.Team!;
+                That(arena.Join(otherSession, room, false) is not null && arena.SetReady(otherSession, true).Length == 2 &&
+                    arena.Start(session, DateTimeOffset.UtcNow).Length == 2 &&
+                    service.RegisterWithReceipt(session, "队伍甲", [2, 0, 1]).Failure == PvpTotalTeamFailure.ArenaActive &&
+                    !session.CanPublishPvpTotalRoster(waiting.Selection!) && service.Read(owner)!.SameLineup(original),
+                    "开战后禁止改阵容，等候房旧回执也立即失效");
                 arena.Leave(session);
+                That(!session.CanPublishPvpTotalRoster(waiting.Selection!), "离房后不能重发原等候房编队回执");
+                arena.Leave(otherSession);
             }
             finally { room.Commands.Release(); }
             That(new CharacterRepository(path).ReadPvpTotalTeam(owner)!.SameLineup(original), "重开库恢复同一队伍身份、名称与三角色");
             That(service.Register(session, "队伍乙", [2, 0, 1]) is null && service.Read(owner)!.SameLineup(original),
                 "注册阵容不能绕过改名费用事务");
 
-            Create(other, "OtherFirst", 1); Create(other, "OtherSecond", 2); Create(other, "OtherThird", 3);
-            var otherSession = Session(other); Select(otherSession);
             That(service.Register(otherSession, "队伍甲", [0, 1, 2]) is null && service.Read(other) is null,
                 "不同账号不能占用同一队名，冲突不留下半份编队");
             var otherTeam = service.Register(otherSession, "队伍乙", [0, 1, 2])!;
@@ -103,7 +119,7 @@ internal static partial class PvpTotalTeamTests
             That(service.Read(owner)!.SameLineup(original), "更新失败保留原阵容顺序和版本");
             Sql("DROP TRIGGER team_update_abort");
             var updated = service.Register(session, "队伍甲", [1, 2, 0])!;
-            That(updated.Id == original.Id && updated.Revision == 2 && updated.Characters.SequenceEqual(reordered.Characters),
+            That(updated.Id == original.Id && updated.Revision == original.Revision + 1 && updated.Characters.SequenceEqual(reordered.Characters),
                 "同名阵容调整只推进队伍版本，保留队伍身份");
             Reject<InvalidOperationException>(() => repository.SavePvpTotalTeam(owner, original, reordered,
                 selection.Members.Select(row => row.Character).ToImmutableArray()), "旧队伍版本不能覆盖新阵容");
@@ -124,7 +140,7 @@ internal static partial class PvpTotalTeamTests
             Sql("DROP TRIGGER team_delete_abort");
             repository.Delete(owner, repository.LoadDeletionTarget(owner, refreshed[first.Id].Slot));
             var incomplete = service.Read(owner)!;
-            That(incomplete.Id == original.Id && incomplete.Name == original.Name && incomplete.Revision == 3 &&
+            That(incomplete.Id == original.Id && incomplete.Name == original.Name && incomplete.Revision == updated.Revision + 1 &&
                 !incomplete.Complete && incomplete.Characters.SequenceEqual(new ushort?[] { second.Id, third.Id, null }),
                 "删角只清原稳定身份对应位置并使阵容不可用，队名和队伍身份保留");
             var replacementCharacter = Create(owner, "TeamNew", 1);
@@ -137,7 +153,7 @@ internal static partial class PvpTotalTeamTests
             var newRoster = repository.ListRoster(owner);
             byte Index(ushort id) => checked((byte)Array.FindIndex(newRoster.ToArray(), row => row.Id == id));
             var repaired = service.Register(session, "队伍甲", [Index(second.Id), Index(third.Id), Index(replacementCharacter.Id)])!;
-            That(repaired.Id == original.Id && repaired.Revision == 4 && repaired.Complete && repaired.Characters[2] == replacementCharacter.Id,
+            That(repaired.Id == original.Id && repaired.Revision == incomplete.Revision + 1 && repaired.Complete && repaired.Characters[2] == replacementCharacter.Id,
                 "重新发布后显式补齐阵容，保留队伍及名称并推进新版本");
             var restored = service.CaptureInitialization(session)!;
             That(restored.Team.SameLineup(repaired) && restored.Selection.Members.Select(row => row.RosterIndex)

@@ -43,7 +43,9 @@ internal sealed class PvpTotalTeamHandler(PvpTotalTeamService teams, ServerLog l
     async Task<CommandResult> SetAsync(GameConnectionContext context, Packet packet)
     {
         var request = PvpMatchingRequests.Team(packet.Body);
-        var result = teams.RegisterWithReceipt(context.Session, request.Name, request.CharacterIndices, context.BlocksTownActions);
+        // 编队允许普通等候房；具体阶段与房间门禁由Session校验，仍保留其它活动的占用。
+        var result = teams.RegisterWithReceipt(context.Session, request.Name, request.CharacterIndices,
+            context.Activity?.BlocksTownActions == true);
         log.Write("pvp_total_team_registration", new { Connection = context.Id, result.Failure, Team = result.Team?.Id,
             Revision = result.Team?.Revision });
         if (result.Selection is not { } selection)
@@ -79,7 +81,7 @@ internal sealed class PvpTotalTeamHandler(PvpTotalTeamService teams, ServerLog l
         PvpTotalTeamFailure.NameTaken => 1,
         PvpTotalTeamFailure.InvalidLineup => 2,
         PvpTotalTeamFailure.MissingName => 4,
-        PvpTotalTeamFailure.ArenaActive => 7,
+        PvpTotalTeamFailure.ArenaActive => 2,
         PvpTotalTeamFailure.InvalidName => 159,
         _ => throw new InvalidOperationException("总力编队缺少明确的拒绝原因")
     };

@@ -9,7 +9,9 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    bool CanConfigurePvpTotalRoster => CanRemainPvpMatching && pvpMatching is null;
+    bool CanConfigurePvpTotalRoster => CanUsePvpMatchingActivities && pvpMatching is null &&
+        (Phase == SessionPhase.Town && pvpArena is null ||
+         Phase == SessionPhase.PvpRoom && pvpArena is { IsCurrent: true, Room: { IsMatching: false, Match: null } });
 
     internal PvpTotalRosterSelection? CaptureStoredPvpTotalRoster(PvpTotalTeam team) => owner.Execute(() =>
     {
@@ -29,7 +31,8 @@ internal sealed partial class GameSession
     // 发送泵只核对已捕获的发布身份，不在队列守卫中查询SQLite。
     internal bool CanPublishPvpTotalRoster(PvpTotalRosterSelection selection) => CanConfigurePvpTotalRoster &&
         ReferenceEquals(selection.Actor.Owner, owner) && ReferenceEquals(selection.Actor.Session, this) &&
-        selection.Actor.IsCurrent() && ReferenceEquals(selection.Roster, selectedRoster) && MatchesRoster(selection.Roster);
+        selection.Actor.IsCurrent() && ReferenceEquals(selection.Room, pvpArena) &&
+        ReferenceEquals(selection.Roster, selectedRoster) && MatchesRoster(selection.Roster);
 
     internal PvpTotalRosterSelection? CapturePvpTotalRoster(ImmutableArray<byte> indices, bool blocked = false) => owner.Execute(() =>
     {
@@ -48,13 +51,15 @@ internal sealed partial class GameSession
             members.Add(new(index, row));
         }
         if (members.Select(row => row.Character.Id).Distinct().Count() != 3) return null;
-        return new PvpTotalRosterSelection(new SocialActor(owner, this, Selected!, SelectionEpoch), roster, members.MoveToImmutable());
+        return new PvpTotalRosterSelection(new SocialActor(owner, this, Selected!, SelectionEpoch), roster, members.MoveToImmutable())
+            { Room = pvpArena };
     });
 
     internal bool CanUsePvpTotalRoster(PvpTotalRosterSelection selection, bool matching = false) => owner.Execute(() =>
     {
         if (!(matching ? CanRemainPvpMatching : CanConfigurePvpTotalRoster) || !ReferenceEquals(selection.Actor.Owner, owner) ||
             !ReferenceEquals(selection.Actor.Session, this) || !selection.Actor.IsCurrent() ||
+            !ReferenceEquals(selection.Room, pvpArena) ||
             !ReferenceEquals(selection.Roster, selectedRoster) || !MatchesRoster(selection.Roster) ||
             selection.Members.IsDefault || selection.Members.Length != 3 ||
             selection.Members.Select(row => row.RosterIndex).Distinct().Count() != 3 ||

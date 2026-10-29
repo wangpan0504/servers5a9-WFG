@@ -83,6 +83,23 @@ internal static class PvpTotalTeamTcpTests
             That(f.Query("SELECT count(*) FROM account_pvp_total_teams WHERE account='total-tcp-other'") is [[0L]] &&
                 State() == saved, "另一账号虽曾名称预检通过，真正登记仍拒绝重名，不改原队伍");
         }
+        using (var peer = Open(f, "total-tcp", gamePort: endpoints[101], channelNumber: 101))
+        {
+            peer.Select(prepared: true, pvpTotalTeam: TeamBody("编队甲", 1, 2, 0)); peer.Barrier();
+            string beforeRoom = f.Snapshot();
+            peer.Send(50, [3, 0, 0, 0, 0, 0]); peer.Expect(1, 50, [1]); peer.Expect(0, 2);
+            var room = peer.Expect(0, 41).Body;
+            That(U16(room, 11) == first, "代表修改样本确实位于本人占席的普通等候房");
+            peer.Send(873, TeamBody("编队甲", 1, 2, 0));
+            peer.Expect(0, 804, TeamBody("编队甲", 1, 2, 0));
+            Actors(peer.Expect(0, 803).Body, peer.Id, second, third, first);
+            peer.Expect(1, 873, [1, 1, 2, 0]); peer.Barrier();
+            That(State() == saved && f.Snapshot() == beforeRoom,
+                "普通等候房873即时回放真实代表阵容，不误报斗兽场、不改角色资产或幂等版本");
+            peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            peer.Select(prepared: true, pvpTotalTeam: TeamBody("编队甲", 1, 2, 0)); peer.Barrier();
+            That(State() == saved, "代表切换的小退清除原房间，重选恢复同一持久编队");
+        }
         await f.StopAsync(); await f.StartAsync("restart");
         endpoints = ChannelTcpTests.Endpoints(f);
         using (var peer = Open(f, "total-tcp", gamePort: endpoints[47], channelNumber: 47))
