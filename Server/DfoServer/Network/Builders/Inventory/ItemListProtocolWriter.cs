@@ -45,7 +45,8 @@ internal static class ItemListProtocolWriter
         detail ??= new();
         foreach (var socket in new[] { detail.Socket0, detail.Socket1, detail.Socket2, detail.Socket3, detail.Socket4 })
         {
-            writer.Write(socket.Type);
+            // 02973D10 仅将 0xFFEF 识别为多色孔；模板与既有存档的掩码239不能原样下发。
+            writer.Write(socket.Type == 239 ? (ushort)0xFFEF : socket.Type);
             writer.Write(socket.EmblemId);
         }
     }

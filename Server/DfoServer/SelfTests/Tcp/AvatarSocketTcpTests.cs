@@ -61,7 +61,7 @@ internal static class AvatarSocketTcpTests
             peer.Send(206, rare); peer.Expect(1, 206, [0, 4, 0]); peer.Barrier();
             That(opened == Snapshot(), "已开孔重发拒绝，不再次消耗源");
             peer.Send(206, skin); peer.Expect(1, 206, [1, 1, 0, 75, 0]);
-            CheckRow(peer.Expect(0, 14).Body, 3, 1, 415580044, 239);
+            CheckRow(peer.Expect(0, 14).Body, 3, 1, 415580044, 0xFFEF);
             peer.Barrier();
             That(fixture.Query("SELECT COUNT(*) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10301316") is [[0L]],
                 "高级皮肤开双多色孔，最后一个开孔器耗尽");
@@ -77,7 +77,7 @@ internal static class AvatarSocketTcpTests
             var full = peer.SpecialContainers.Single(packet => packet is { Kind: 0, Opcode: 13 } && packet.Body[0] == 1).Body;
             That(full.Length == 335, "服务重建后完整时装列表保留两个165字节实例");
             CheckRow(full, 5, 0, 101550535, 1);
-            CheckRow(full, 170, 1, 415580044, 239);
+            CheckRow(full, 170, 1, 415580044, 0xFFEF);
             That(Identity() == identity && fixture.Query("PRAGMA integrity_check") is [["ok"]], "重建和重连恢复全部孔位，完整身份与数据库一致");
         }
         await fixture.StopAsync();

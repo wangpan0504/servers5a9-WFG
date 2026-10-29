@@ -275,6 +275,7 @@ internal static class AvatarPackageTests
 
     public static void RunResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
     {
+        SpecialSkinDefaults(towns, resources);
         ForcedOptionsResources(towns, resources, packages);
         DuplicateConstantMagnitudeResources(towns, resources, packages);
         FirstGrowResources(towns, resources, packages);
@@ -333,6 +334,26 @@ internal static class AvatarPackageTests
         PeriodDeadlinePlans(towns, resources);
         CapturedNoAbilitySelections(towns, resources, packages);
         LegacySelections(towns, resources, packages);
+    }
+
+    static void SpecialSkinDefaults(TownCatalog towns, ItemResources resources)
+    {
+        const int skinId = 101580164, boxId = 490704635;
+        foreach (ushort type in new ushort[] { 1, 2 })
+        {
+            var packages = new AvatarPackageCatalog(path => path.StartsWith("stackable/", StringComparison.Ordinal)
+                ? PackageText($"{skinId} 1 {type} 0")
+                : "[avatar type select]\n0 0 0 0 0 0 0 0 0 0 0 0 0 2 `[M socket]` `[M socket]`\n[/avatar type select]\n" +
+                    "[avatar select ability]\n0 `[PHYSICAL ABSOLUTE DEFENSE]` `+` 3.5\n[/avatar select ability]",
+                new Dictionary<int, string> { [skinId] = "skin.equ" }, new Dictionary<int, string> { [boxId] = "box.stk" });
+            var source = new InventoryItem(1000, Bag(), new(boxId, ItemKind.Consumable, 1));
+            var character = new Character(1, 0, "SkinDefaults", 0, towns.Room, towns.InitialReturn) { Inventory = new([source]) };
+            var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces);
+            var opened = service.Open(character, new AvatarPackageOpenRequest(73, 1, 1, 3, [skinId], [new(skinId, 0)]), out _);
+            That(opened.Accepted && opened.Plan!.After.Items.Single().Avatar is
+                { Socket0: { Type: 239, EmblemId: -1 }, Socket1: { Type: 239, EmblemId: -1 }, Socket2.Type: 0 },
+                "特殊皮肤礼包沿模板保留双彩孔，未开孔类型不覆盖默认孔，带孔类型也不重复加孔");
+        }
     }
 
     static void ForcedOptionsResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)

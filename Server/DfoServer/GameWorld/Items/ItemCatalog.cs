@@ -768,7 +768,19 @@ internal sealed partial class ItemCatalog
     {
         var types = new ushort[5];
         int count = Math.Clamp(Integers(text.Section("avatar emblem socket num")).FirstOrDefault(5), 0, 5), index = 0;
-        foreach (Match match in Regex.Matches(text.Block("emblem socket default"), @"\[\s*([ABCDSM])\s+socket\s*\]", RegexOptions.IgnoreCase))
+        string declaration = text.Block("emblem socket default");
+        // 特殊皮肤的孔型也可仅写在永久带孔类型中（如真·桐人、新春皮肤）；普通高级皮肤仍需开孔器。
+        if (count > 0 && !text.Has("emblem socket default") && text.ContainsString("equipment type", "[skin avatar]") &&
+            text.TryGetInt32("grade", out int grade) && grade >= 2)
+        {
+            var candidates = AvatarTypeSelectionFile.Parse(text).Where(row => row.Days == 0 && !row.Sockets.IsEmpty)
+                .Select(row => string.Join(" ", row.Sockets)).Distinct(StringComparer.Ordinal).ToArray();
+            if (candidates.Length > 1)
+                throw new InvalidDataException("特殊皮肤的永久孔型声明冲突");
+            if (candidates.Length == 1)
+                declaration = candidates[0];
+        }
+        foreach (Match match in Regex.Matches(declaration, @"\[\s*([ABCDSM])\s+socket\s*\]", RegexOptions.IgnoreCase))
         {
             if (index >= count)
                 break;
