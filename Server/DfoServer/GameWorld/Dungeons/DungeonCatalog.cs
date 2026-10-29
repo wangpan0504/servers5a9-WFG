@@ -560,7 +560,7 @@ internal sealed class DungeonCatalog
         static int WeightedIndex(IReadOnlyList<int> weights, Func<int,int> random)
         {
             int total = checked(weights.Sum());
-            if (total <= 0 || weights.Any(weight => weight <= 0)) throw new InvalidDataException("地图候选权重无效");
+            if (total <= 0 || weights.Any(weight => weight < 0)) throw new InvalidDataException("地图候选权重无效");
             int roll = random(total);
             if (roll < 0 || roll >= total) throw new InvalidDataException("地图权重随机值越界");
             for (int index = 0; index < weights.Count; index++)

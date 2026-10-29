@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -17,6 +18,7 @@ internal static class ConsumableUseTests
 
     public static void RunCore()
     {
+        BossSelectionMappings();
         var bossBuff = new BossSelectionBuff(490705256, 5, 2000,
             new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]));
         bossBuff.Validate();
@@ -147,10 +149,44 @@ internal static class ConsumableUseTests
             { MinimumLevel: 95, CoolTime: 60000, BossSelectionBuff: { BuffId: 300, DungeonId: 7191, Entries: 5 } } &&
             bossPotion.BossSelectionBuff.Weights.SequenceEqual(new BossSelectionWeight[] { new(92689, 40), new(92690, 40), new(92697, 20) }),
             "截图490705256由真实STK及两份variousbuff表解释为95级城镇药、40/40/20和5次，不按名称猜规则");
-        foreach (int id in new[] { 490012682, 490705137, 490705059 })
-            That(resources.RecoveryConsumables.TryGet(id, out var extra) &&
-                extra.BossSelectionBuff is { } effect && effect.BuffId == (id == 490705059 ? 1282 : 1275) &&
-                effect.Entries == (id == 490705059 ? 1 : 5), "不同白斯药水从真实资源映射保留强力权重与次数 " + id);
+        var use = new InventoryConsumableUseService(resources.RecoveryConsumables);
+        var now = new DateTimeOffset(2026, 10, 28, 5, 0, 0, TimeSpan.FromHours(8));
+        int seconds = checked((int)now.ToUnixTimeSeconds());
+        foreach (int id in new[] { 10309619, 490011948, 490012146, 490012453, 490012682, 490012695,
+            490013034, 490013050, 490013290, 490013596, 490014083, 490704250, 490704357, 490704395,
+            490705059, 490705069, 490705106, 490705137, 490705256 })
+        {
+            bool strong = id is 490012682 or 490705137;
+            bool daily = id is 490704395 or 490705059 or 490705069 or 490705256;
+            bool trade = daily || id == 490012453;
+            var template = resources.Items.Get(id);
+            That(resources.RecoveryConsumables.TryGet(id, out var extra) && extra is
+                { MinimumLevel: 95, CoolTime: 60000, RequiresDungeon: false, UseForbidden: false } &&
+                extra.CoolGroup == -id && extra.Jobs == ushort.MaxValue &&
+                extra.BossSelectionBuff is { } effect && effect.BuffId == (strong ? 1275 : id == 490705059 ? 1282 : 300) &&
+                effect.DungeonId == 7191 && effect.Entries == (id == 490705059 ? 1 : 5) &&
+                effect.Weights.SequenceEqual(new BossSelectionWeight[] {
+                    new(92689, strong ? 0 : 40), new(92690, strong ? 0 : 40), new(92697, strong ? 100 : 20) }),
+                "19款实际来源逐项保留普通、强力和一次药型的完整权重、次数、等级及冷却 " + id);
+            That(template.Kind == ItemKind.Consumable && template.AttachType.Trim().Trim('`').Trim() == (trade ? "[trade]" : "[account]") &&
+                template.Expiration == new ItemExpiration(DailyDelete: daily ? 1 : 0) &&
+                template.Expiration.Resolve(now) == (daily ? now.AddHours(1).ToUnixTimeSeconds() : 0) &&
+                Enumerable.Range(0, 16).All(job => extra!.Allows(95, (byte)job)) && !extra!.Allows(94, 0),
+                "真实目录保留账号/交易属性、四款六点日删及全部职业的95级资格 " + id);
+            var position = new InventorySlot(InventoryListType.Main, 3);
+            var core = new ItemCore(id, ItemKind.Consumable, 2)
+                { SortLockFlag = 1, Marker16 = 44, ExpireTime = template.Expiration.Resolve(now) };
+            Character character = new(1, 0, "Chase", 7, new(1, 0, 10, 10), null)
+                { Level = 95, Inventory = new([new(11, position, core)]) };
+            var request = new ConsumableUseRequest(position, 0, id, 0);
+            var planned = use.Plan(character, request, seconds);
+            That(planned.Accepted && planned.Plan!.After.Items.Single() == new InventoryItem(11, position, core with { Value = 1 }) &&
+                character.Inventory.Items.Single().Core == core && planned.Plan.CharacterPrecondition!.Matches(character, seconds),
+                "每款真实药水均经正规Plan仅扣指定UID一件并保留核心、原期限与前置 " + id);
+            That(!use.Plan(character with { Level = 94 }, request, seconds).Accepted &&
+                !use.Plan(character with { Inventory = new([new(11, position, core with { ExpireTime = seconds })]) }, request, seconds).Accepted,
+                "兼容映射和强力药均不能绕过等级或到期等号 " + id);
+        }
         That(resources.RecoveryConsumables.TryGet(1108, out var hp) && hp == Hp &&
             resources.RecoveryConsumables.TryGet(1114, out var mp) && mp == Mp,
             "匹配PVF两种药只保留最低等级和冷却原值/组，不把恢复效果带入服务端使用定义");
@@ -193,5 +229,31 @@ internal static class ConsumableUseTests
             That(resources.RecoveryConsumables.TryGet(id, out var blessing) && blessing.RevivalBlessing &&
                 blessing.RequiresDungeon && blessing.EffectMilliseconds == 1200000,
                 "旧端四种神圣祝福药水在当前PVF仍存在，服务端补二十分钟单次复活窗口");
+    }
+
+    static void BossSelectionMappings()
+    {
+        var ordinary = new BossSelectionBuffDefinition(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]);
+        var strong = new BossSelectionBuffDefinition(1275, 7191, 5, [new(92689, 0), new(92690, 0), new(92697, 100)]);
+        var definitions = new Dictionary<int, BossSelectionBuffDefinition> { [300] = ordinary, [1275] = strong };
+        int[] compatibility = [490012146, 490012453, 490012695, 490704250, 490704357, 490704395];
+        var absent = BossSelectionBuffDefinition.ParseMappings([], definitions);
+        That(absent.Count == 6 && compatibility.All(id => absent[id] == ordinary) && !absent.ContainsKey(500001),
+            "仅六个明确缺映射的普通药水复用已验证300，未知药剂不按类别或名称扩展");
+        That(BossSelectionBuffDefinition.ParseMappings([], new Dictionary<int, BossSelectionBuffDefinition> { [1275] = strong }).Count == 0,
+            "规范普通300缺失或未通过原合同验证时不创建兼容映射");
+        PvfTokenSection Row(int id, int buff) => new("index", [new(0, id)], [new("buff list", [new(0, buff)], [])]);
+        foreach (int id in compatibility)
+        {
+            foreach (var rows in new ImmutableArray<PvfTokenSection>[]
+            {
+                [Row(id, 9999)], [Row(id, 300), Row(id, 300)], [Row(id, 300), Row(id, 1275)],
+                [new("index", [new(0, id)], [])], [new("index", [new(0, id), new(0, 7)], [])]
+            })
+                That(!BossSelectionBuffDefinition.ParseMappings(rows, definitions).ContainsKey(id),
+                    "已有未知、重复、冲突或畸形声明均不被普通兼容覆盖 " + id);
+            That(BossSelectionBuffDefinition.ParseMappings([Row(id, 1275)], definitions)[id] == strong,
+                "已有合法显式映射按原定义装配，不强制替换为普通300 " + id);
+        }
     }
 }

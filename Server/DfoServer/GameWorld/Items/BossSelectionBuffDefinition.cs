@@ -47,9 +47,22 @@ internal sealed record BossSelectionBuffDefinition(int BuffId, int DungeonId, in
                 [new(92689, weights[0]), new(92690, weights[1]), new(92697, weights[2])]));
         }
         var mapping = new PvfTokenDocument(archive.ReadTokens("etc/variousbuffstackablelist.etc"), archive.ResolveString);
-        return mapping.Sections.Where(row => row.Name == "index" && row.Values is [{ Type: 0, Value: > 0 }])
+        return ParseMappings(mapping.Sections, definitions);
+    }
+
+    internal static ImmutableDictionary<int, BossSelectionBuffDefinition> ParseMappings(
+        ImmutableArray<PvfTokenSection> sections, IReadOnlyDictionary<int, BossSelectionBuffDefinition> definitions)
+    {
+        var declared = sections.Where(row => row.Name == "index").SelectMany(row => row.Values)
+            .Where(token => token.Type == 0).Select(token => token.Value).ToHashSet();
+        var result = sections.Where(row => row.Name == "index" && row.Values is [{ Type: 0, Value: > 0 }])
             .GroupBy(row => row.Values[0].Value).Where(group => group.Count() == 1 &&
                 group.Single().Children is [{ Name: "buff list", Values: [{ Type: 0 } value] }] && definitions.ContainsKey(value.Value))
-            .ToImmutableDictionary(group => group.Key, group => definitions[group.Single().Children[0].Values[0].Value]);
+            .ToImmutableDictionary(group => group.Key, group => definitions[group.Single().Children[0].Values[0].Value]).ToBuilder();
+        // 本服兼容这六款已核普通药水的缺失映射；任何原声明（包括无效声明）均不补写。
+        if (definitions.TryGetValue(300, out var ordinary))
+            foreach (int id in new[] { 490012146, 490012453, 490012695, 490704250, 490704357, 490704395 })
+                if (!declared.Contains(id)) result.Add(id, ordinary);
+        return result.ToImmutable();
     }
 }

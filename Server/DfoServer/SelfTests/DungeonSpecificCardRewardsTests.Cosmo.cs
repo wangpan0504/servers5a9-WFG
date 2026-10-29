@@ -36,12 +36,13 @@ internal static partial class DungeonSpecificCardRewardsTests
             items.Items, items.GoldLimits, items.EpicPieces, prices: Testing.SelfTestCatalogs.CardPrices(pvf));
         foreach (int bossRoll in new[] { 0, 45, 90 })
             VerifyCosmoExit(towns, pvf, characters, items, quests, skills, cards, bossRoll, candidates, ResolveDropItem);
+        VerifyCosmoExit(towns, pvf, characters, items, quests, skills, cards, 90, candidates, ResolveDropItem, strongBuff: true);
         That(ReferenceEquals(items.Items.Get(original.Id), original), "历史期限fixture不污染共享物品目录");
     }
 
     static void VerifyCosmoExit(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
         QuestCatalog quests, SkillLearningCatalog skills, DungeonCardRewardPolicy cards, int bossRoll,
-        DungeonItemDropCatalog candidates, Func<int, ItemTemplate> resolveDropItem)
+        DungeonItemDropCatalog candidates, Func<int, ItemTemplate> resolveDropItem, bool strongBuff = false)
     {
         var dungeons = Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = Testing.SelfTestCatalogs.Rooms(pvf);
@@ -65,11 +66,15 @@ internal static partial class DungeonSpecificCardRewardsTests
         if (bossRoll == 90)
         {
             var before = fixture.Read();
-            That(items.RecoveryConsumables.TryGet(490705256, out var potion) && potion.BossSelectionBuff is not null,
+            int potionId = strongBuff ? 490012682 : 490705256;
+            That(items.RecoveryConsumables.TryGet(potionId, out var potion) && potion.BossSelectionBuff is not null &&
+                potion.BossSelectionBuff.BuffId == (strongBuff ? 1275 : 300),
                 "超星空入场回归使用真实追击药效果定义");
             fixture.Repository.CommitInventory(fixture.Owner, before, new(before.Inventory, before.Inventory with
-            { BossSelectionBuff = new(490705256, 1, DailyBoosterUsage.NextReset(now).ToUnixTimeMilliseconds(), potion.BossSelectionBuff!) }, "test_boss_buff"));
+            { BossSelectionBuff = new(potionId, strongBuff ? 2 : 1, DailyBoosterUsage.NextReset(now).ToUnixTimeMilliseconds(), potion.BossSelectionBuff!) }, "test_boss_buff"));
             fixture.Session.ReturnToRoster(); fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
+            That(BossSelectionBuff.Same(fixture.Read().Inventory.BossSelectionBuff, fixture.Session.Selected!.Inventory.BossSelectionBuff),
+                "药效来源、权重、剩余次数和每日截止经重选恢复");
         }
         // 使用生产装配的完整奖励，覆盖三种领主与再挑战后的真实地面对象容量。
         var epicTable = DungeonHellEpicCatalog.Load(pvf);
@@ -121,13 +126,13 @@ internal static partial class DungeonSpecificCardRewardsTests
             fixture.Sql("CREATE TRIGGER fail_boss_entry BEFORE UPDATE ON character_dungeon_state BEGIN SELECT RAISE(ABORT,'boss entry rollback'); END");
             Reject<Microsoft.Data.Sqlite.SqliteException>(() => Enter(), "入场尝试号失败同时回滚药效扣次与票据");
             That(QuestCompletionRepositoryTests.Same(before, fixture.Read()) && fixture.Session.DungeonSnapshot is null,
-                "入场失败保留最后一次追击效果且不安装实例");
+                "入场失败保留原追击效果及次数且不安装实例");
             fixture.Sql("DROP TRIGGER fail_boss_entry");
         }
         var receipt = Enter()!;
         boostedPreparation = false;
         That(receipt is { Entry.IsCosmo: true }, "超星空结算回归沿真实准入：" + fixture.Session.LastFormalDungeonRejection);
-        if (bossRoll == 90) That(fixture.Read().Inventory.BossSelectionBuff is null,
+        if (bossRoll == 90 && !strongBuff) That(fixture.Read().Inventory.BossSelectionBuff is null,
             "真实入场以80命中白斯并与票据原子消费最后一次效果；原45/45/10在80不会命中白斯");
         That(receipt.Entry.BossMap.Id == (bossRoll == 0 ? 92689 : bossRoll == 45 ? 92690 : 92697),
             "结算回归分别覆盖三个带权重终点");
@@ -135,6 +140,17 @@ internal static partial class DungeonSpecificCardRewardsTests
             ItemCount(fixture.Read(), 3330) == (bossRoll == 45 ? 0 : 40) &&
             ItemCount(fixture.Read(), 10305821) == (bossRoll == 45 ? 0 : 4),
             "仅有通行证也能入场，通行证优先且不混扣邀请函及灵石");
+        if (strongBuff)
+        {
+            var saved = fixture.Read();
+            That(saved.Inventory.BossSelectionBuff is { ItemId: 490012682, Remaining: 1, Definition.BuffId: 1275 } &&
+                saved.Fatigue!.Remaining == 8 && saved.DungeonState!.LastAttempt == receipt.Snapshot.Identity.TaskAttempt,
+                "强力入场只扣一次药效、8疲劳和一次尝试，失败后重试不重扣");
+            fixture.Session.ReturnToRoster(); fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
+            That(BossSelectionBuff.Same(saved.Inventory.BossSelectionBuff, fixture.Session.Selected!.Inventory.BossSelectionBuff) &&
+                QuestCompletionRepositoryTests.Same(saved, fixture.Read()), "强力剩余一次及完整库存经重选恢复，不补造源药或重置次数");
+            return;
+        }
         string directory = Path.Combine(Path.GetTempPath(), "S5A9-cosmo-exit-" + Guid.NewGuid().ToString("N"));
         bool passed = false;
         try
