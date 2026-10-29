@@ -134,7 +134,9 @@ internal sealed partial class GameSession
             DisableFatigueConsumption = controlled || entry.DisableFatigueConsumption,
             DisableGiveupPenalty = controlled || entry.DisableGiveupPenalty
         };
-        // UNIMPLEMENTED：团本单图地面掉落缺少匹配资源及原生合同，保留空掉落依赖，不套普通图奖池。
+        // UNIMPLEMENTED：团本单图逐怪地面掉落缺少匹配资源及原生合同，资格、来源表、分配与重放尚未闭合；
+        // 保留空掉落依赖，不以可解析的普通怪表授予团本资格或套用普通图奖池。需匹配版本210自然战斗的
+        // 39/38地面、43/44、14与库存对照后，复用DungeonResourceDropPolicy.PrepareEntry。
         var prepared = PrepareFormalDungeonResources(character, captured.SelectionEpoch, entry, rooms, null, null, draw, null,
             shared: shared, partyFirstKey: firstKey, partyInstance: partyInstance);
         if (prepared is null) return null;
