@@ -27,8 +27,13 @@ internal static partial class TownProtocolTcpTests
             })
                 peer.Send(opcode);
             peer.Create("DoorTest", variant: 1);
+            var gradeRules = new DfoServer.GameWorld.Pvp.PvpRatingCatalog(resources.Archive);
+            var terra = new DfoServer.Game.Pvp.PvpRatingCalculator(gradeRules).Initial() with
+                { Experience = gradeRules.Experience[20], HighestGrade = 20, Initialized = true };
+            fixture.Sql("INSERT INTO character_pvp_ratings(account,character_id,revision,state_json) VALUES('10000',$p0,1,$p1)",
+                peer.Id, JsonSerializer.Serialize(terra));
             peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId];
-            peer.Select();
+            TownPresenceTcpTests.PvpGrade(peer.Select()[2].Body, 20);
             That(serverEvents.Read(ServerEventService.NolanVisibilityId) is { Active: true, Schedule: { Revision: 0, OverrideActive: null } } &&
                 fixture.Query("SELECT count(*) FROM server_events WHERE event_id=2532") is [[0L]],
                 "正常部署未配置2532时首次入城即投影诺兰，查询不补写活动配置");
@@ -76,7 +81,7 @@ internal static partial class TownProtocolTcpTests
             var goldOn = serverEvents.Override(ServerEventService.DoubleGoldCardId, true);
             var nolanOn = serverEvents.Override(ServerEventService.NolanVisibilityId, true);
             peer.ExpectedOpenEvents = [ServerEventService.NolanVisibilityId];
-            peer.Select();
+            TownPresenceTcpTests.PvpGrade(peer.Select()[2].Body, 20);
             Bytes(peer.CompletedQuestHistory, mapHistory, "返回选角再入城恢复同一月轮山显示标记");
             That(serverEvents.Read(ServerEventService.NolanVisibilityId) == nolanOn &&
                 serverEvents.Read(ServerEventService.DoubleGoldCardId) == goldOn,
@@ -126,7 +131,7 @@ internal static partial class TownProtocolTcpTests
         })
         {
             using var peer = Open(fixture);
-            peer.Select();
+            TownPresenceTcpTests.PvpGrade(peer.Select()[2].Body, 20);
             peer.Send(3, [mode]);
             peer.Expect(1, 3, [1]);
             peer.Closed();

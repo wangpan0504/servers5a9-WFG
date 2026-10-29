@@ -284,7 +284,7 @@ internal static class InventorySelfTests
             Reject(() => InventoryRequests.Sort([0, 0, 0, 0, 8]), "protobuf length mismatch rejects");
             Reject(() => InventoryRequests.Sort(Convert.FromHexString("0200000008FF")), "truncated varint rejects");
             Reject(() => InventoryRequests.Move(new byte[27]), "move truncated body rejects");
-            var actor = TownPackets.Actor(saved);
+            var actor = TownPackets.Actor(saved, 0);
             var roster = CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(saved)]);
             That(actor[133 + CharacterName.Encoding.GetByteCount(saved.Name)] == 5 && roster[36 + CharacterName.Encoding.GetByteCount(saved.Name)] == 5, "actor and roster share worn appearance count");
             CheckPlayerItems(saved.Inventory, "five starter items follow nested native readers");

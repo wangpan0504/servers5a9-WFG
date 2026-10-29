@@ -19,6 +19,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         public GameConnectionSender Sender { get; } = sender;
         public Scene Scene { get; set; } = scene;
         public Character Character { get; set; } = character;
+        public byte PvpGrade { get; set; }
         public ushort ScaledSpeed { get; set; } = 100;
         public string AdventureName { get; set; } = adventureName;
         public long Serial { get; } = serial;
@@ -62,7 +63,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     Bodies Capture(Member source)
     {
         var c = source.Character;
-        return new(TownPackets.Actor(c, source.Channel, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds(), source.AdventureName,
+        return new(TownPackets.Actor(c, source.PvpGrade, source.Channel, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds(), source.AdventureName,
             premiumPcRoom: debugSettings?.PremiumPcRoom == true), TownPackets.ActorState(c.Id),
             TownPackets.Position(c, false, source.ScaledSpeed), TownPackets.Position(c, true));
     }
@@ -97,7 +98,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     }
 
     public void Join(AccountOwners.Lease owner, GameConnectionSender sender, Character character, ChannelIdentity? entry = null,
-        string adventureName = "") => owner.Execute(() =>
+        string adventureName = "", byte pvpGrade = 0) => owner.Execute(() =>
     {
         lock (gate)
         {
@@ -105,7 +106,8 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
             // 同一角色被新generation选中时，只清理旧连接成员，不允许其稍后删掉新成员。
             if (characters.TryGetValue(character.Id, out var old))
                 RemoveCore(old.Sender);
-            var joined = new Member(owner, sender, SceneOf(owner, character, entry ?? channel), character, ++serial, adventureName);
+            var joined = new Member(owner, sender, SceneOf(owner, character, entry ?? channel), character, ++serial, adventureName)
+                { PvpGrade = pvpGrade };
             members.Add(sender, joined);
             characters.Add(character.Id, joined);
             if (!scenes.TryGetValue(joined.Scene, out var scene))
@@ -154,13 +156,14 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     });
     // 同一场景换装只更新快照。完成任务换成新的 PVF 阶段时先迁场景，再按入场投递。
     public void Refresh(AccountOwners.Lease owner, GameConnectionSender sender, Character character, string? adventureName = null,
-        bool broadcast = true, bool marriageOnly = false) => owner.Execute(() =>
+        bool broadcast = true, bool marriageOnly = false, byte? pvpGrade = null) => owner.Execute(() =>
     {
         lock (gate)
         {
             if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id)
                 throw new InvalidOperationException("外观刷新缺少当前场景成员");
             if (adventureName is not null) source.AdventureName = adventureName;
+            if (pvpGrade is { } grade) source.PvpGrade = grade;
             if (AlignPhase(source, character, "外观刷新缺少当前场景成员"))
                 return true;
             bool clearMarriage = source.Character.Marriage?.Active == true && character.Marriage?.Active != true;

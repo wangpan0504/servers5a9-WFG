@@ -166,8 +166,8 @@ internal static class GuildPanelTests
             That(masterSession.Selected?.Guild?.Grade == 1 && peerSession.Selected?.Guild?.Grade == 4 &&
                 repository.GuildMembershipOf(offline.Id)?.Grade == 2,
                 "本人会籍独立携带归一化职位，登录127不能依赖尚未请求的成员名单");
-            byte[] actor = TownPackets.Actor(masterSession.Selected!, new(2, 10));
-            That(actor[^15] == 2 && TownPackets.Actor(peerSession.Selected!, new(3, 12))[^15] == 3,
+            byte[] actor = TownPackets.Actor(masterSession.Selected!, 0, new(2, 10));
+            That(actor[^15] == 2 && TownPackets.Actor(peerSession.Selected!, 0, new(3, 12))[^15] == 3,
                 "0267F091的独立尾部大区与各自真实大区一致，成员关联不再拿0与实际大区比对失败");
             That(panel.OnlineCount == 2 && panel.Members.Single(member => member.Id == peer.Id) is { Channel: 12, Region: 3 } &&
                 panel.Members.Single(member => member.Id == offline.Id) is { Channel: 255, Region: 2 },

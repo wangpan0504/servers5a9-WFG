@@ -40,7 +40,7 @@ internal sealed partial class DungeonHandler
         {
             if (member.Actor.Session.PublicCharacter(member.Actor.Character.Id) is not { } identity) continue;
             await context.Notify(NotiPacketType.USERINFO,
-                TownPackets.Actor(identity.Character, identity.Channel, adventureName: identity.AdventureName,
+                TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, adventureName: identity.AdventureName,
                     sceneState: ActorSceneState.Dungeon, premiumPcRoom: identity.PremiumPcRoom), "party_dungeon_actor", guard);
             // 0267C569读取角色ID，0267C581按ID查找已安装Actor；完整属性包同样适用于当前副本队员。
             await context.Notify(NotiPacketType.USERINFO,

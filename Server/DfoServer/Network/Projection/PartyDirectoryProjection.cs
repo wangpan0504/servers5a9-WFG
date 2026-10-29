@@ -97,7 +97,7 @@ internal sealed class PartyDirectoryProjection : IAsyncDisposable
                     foreach (var member in members)
                         if (Scene(member!) != scene && (own is null || own.Members.All(m => m.Actor.Character.Id != member!.Character.Id)))
                             // 异区目录补齐公开资料；本队成员已安装，不能借查询重建引用。
-                            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(member!.Character, member.Channel,
+                            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(member!.Character, member.PvpGrade, member.Channel,
                                 DateTimeOffset.UtcNow.ToUnixTimeSeconds(), member.AdventureName,
                                 member.Phase == SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
                                 member.PremiumPcRoom), "party_directory_actor", QueryGuard);
@@ -126,7 +126,7 @@ internal sealed class PartyDirectoryProjection : IAsyncDisposable
                             var target = member.Actor.Session.PublicCharacter(member.Actor.Character.Id);
                             if (target is null) return false;
                             if (Scene(target) != scene)
-                                await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(target.Character, target.Channel,
+                                await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(target.Character, target.PvpGrade, target.Channel,
                                     DateTimeOffset.UtcNow.ToUnixTimeSeconds(), target.AdventureName,
                                     target.Phase == SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
                                     target.PremiumPcRoom), "party_directory_member_actor", () => Guard() && parties.IsCurrent(party));

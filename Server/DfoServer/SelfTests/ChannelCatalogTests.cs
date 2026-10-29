@@ -159,7 +159,7 @@ internal static class ChannelCatalogTests
         }
         var character = new Character(1, 0, "A", 0, new(38, 1, 450, 234), null);
         var stats = new CharacterStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-        byte[] actor = TownPackets.Actor(character, catalog.GameIdentity);
+        byte[] actor = TownPackets.Actor(character, 0, catalog.GameIdentity);
         byte[] player = TownPackets.Player(character, stats, 1, catalog.GameIdentity);
         Bytes(actor.AsSpan(0, 5), [0, 1, 0, 2, 10], "Actor按NOTI1身份进入本地角色表，不能沿用0/0");
         Bytes(player.AsSpan(0, 5), [1, 1, 0, 2, 10], "Player延续Actor的服务器和频道上下文");
@@ -173,7 +173,7 @@ internal static class ChannelCatalogTests
             foreach (var scene in new[] { ActorSceneState.Town, ActorSceneState.Dungeon })
             {
                 var role = character with { Name = "大区" + server, VisibilityFlags = 6 };
-                byte[] projected = TownPackets.Actor(role, new(server, 11), sceneState: scene);
+                byte[] projected = TownPackets.Actor(role, 0, new(server, 11), sceneState: scene);
                 int nameWidth = CharacterName.Encoding.GetByteCount(role.Name);
                 That(projected.Length == 243 + nameWidth && projected[132 + nameWidth] == (byte)scene,
                     "变长姓名与城镇/副本状态保留原Actor总长度及独立状态偏移");

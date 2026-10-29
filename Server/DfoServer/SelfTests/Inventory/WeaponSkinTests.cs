@@ -230,7 +230,7 @@ internal static class WeaponSkinTests
             { Job = 2, Level = 75, Emotion = 0xABCD, Inventory = new([clone, weapon]) { Skins = new([32000], 32000) } };
         foreach (var scene in new[] { ActorSceneState.Town, ActorSceneState.Dungeon })
         {
-            byte[] actor = TownPackets.Actor(role, sceneState: scene);
+            byte[] actor = TownPackets.Actor(role, 0, sceneState: scene);
             That(BinaryPrimitives.ReadInt32LittleEndian(actor.AsSpan(115)) == 32000 &&
                 BinaryPrimitives.ReadUInt16LittleEndian(actor.AsSpan(119)) == 0xABCD && actor[137] == (byte)scene,
                 "城镇及副本Actor在116B头部独立恢复幻化，不覆盖相邻心情或场景字段");
@@ -239,7 +239,7 @@ internal static class WeaponSkinTests
                 BinaryPrimitives.ReadInt32LittleEndian(actor.AsSpan(165)) == 31440,
                 "武器幻化不替换克隆实例、克隆来源或真实武器，三层外观分别交付原生消费者");
             var unselected = role with { Inventory = role.Inventory with { Skins = new([32000]) } };
-            byte[] canceled = TownPackets.Actor(unselected, sceneState: scene);
+            byte[] canceled = TownPackets.Actor(unselected, 0, sceneState: scene);
             That(BinaryPrimitives.ReadInt32LittleEndian(canceled.AsSpan(115)) == 0 &&
                 actor.AsSpan(0,115).SequenceEqual(canceled.AsSpan(0,115)) && actor.AsSpan(119).SequenceEqual(canceled.AsSpan(119)),
                 "取消幻化只清独立选择，不清克隆来源、真实装备及相邻字段");
@@ -249,7 +249,7 @@ internal static class WeaponSkinTests
         byte[] bareRoster = CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(rosterUnselected)]);
         That(roster.Length == bareRoster.Length, "名册包长不因武器幻化变化");
         That(RosterWeaponSkin(roster) == 32000 && RosterWeaponSkin(bareRoster) == 0 &&
-            RosterWeaponSkin(roster) == BinaryPrimitives.ReadInt32LittleEndian(TownPackets.Actor(role).AsSpan(115)),
+            RosterWeaponSkin(roster) == BinaryPrimitives.ReadInt32LittleEndian(TownPackets.Actor(role, 0).AsSpan(115)),
             "名册 tail[42..45] 与入城 Actor 正文115 写同一 Selected；未选外观保持0");
         byte[] withTail = RosterTail(roster);
         byte[] bareTail = RosterTail(bareRoster);

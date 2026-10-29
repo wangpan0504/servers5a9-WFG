@@ -25,7 +25,7 @@ internal sealed class CharacterLevelProjection(CharacterStatComputer stats, Ques
         bool professionChanged = previousGrowType is { } grow && grow != committed.GrowType;
         if (professionChanged || phase is SessionPhase.Town or SessionPhase.MapSelect)
             await context.Notify(NotiPacketType.USERINFO,
-                TownPackets.Actor(committed, context.Channel, adventureName: context.Session.ReadAdventureName(),
+                TownPackets.Actor(committed, context.Session.ReadPvpGrade(committed), context.Channel, adventureName: context.Session.ReadAdventureName(),
                     premiumPcRoom: context.Session.PremiumPcRoom), action + "_actor", canSend);
         await PlayerAsync(context,committed,action + "_player",canSend);
         // 图内完整19会清除技能31的临时武器，但其原生效果对象仍在，无法重新挂载。

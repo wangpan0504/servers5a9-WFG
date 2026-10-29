@@ -34,7 +34,7 @@ internal static class PvpArenaProjection
         // 只补新进入的角色，不能在换席和离房时重建已安装的角色引用。
         if (notice.Kind is PvpArenaNoticeKind.Room or PvpArenaNoticeKind.Seats or PvpArenaNoticeKind.Matching)
             foreach (var identity in characters)
-                Post(NotiPacketType.USERINFO, TownPackets.Actor(identity.SkillCharacter, identity.Channel,
+                Post(NotiPacketType.USERINFO, TownPackets.Actor(identity.SkillCharacter, identity.PvpGrade, identity.Channel,
                     adventureName: identity.AdventureName, premiumPcRoom: identity.PremiumPcRoom), "pvp_arena_actor");
         switch (notice.Kind)
         {

@@ -38,7 +38,7 @@ internal static class BlackDiamondTests
         {
             var c = new Character(1, 0, name, 1, new(1, 0, 1, 1), null)
             { Inventory = worn ? new([creature]) : InventorySnapshot.Empty };
-            byte[] ordinary = TownPackets.Actor(c, utcSeconds: now);
+            byte[] ordinary = TownPackets.Actor(c, 0, utcSeconds: now);
             int count = 133 + CharacterName.Encoding.GetByteCount(name);
             int pet = count + 1 + ordinary[count] * 25 + 22;
             int black = pet + 10 + checked((int)BinaryPrimitives.ReadUInt32LittleEndian(ordinary.AsSpan(pet + 4)));
@@ -47,13 +47,13 @@ internal static class BlackDiamondTests
             {
                 var actor = c with { Inventory = c.Inventory with
                     { AccountWallet = c.Inventory.AccountWallet.SetContractExpiry(56, diamond ? now + 1 : now) } };
-                byte[] active = TownPackets.Actor(actor, utcSeconds: now, premiumPcRoom: pcRoom);
+                byte[] active = TownPackets.Actor(actor, 0, utcSeconds: now, premiumPcRoom: pcRoom);
                 That(active[black] == (diamond ? 1 : 0) && active[black - 1] == (pcRoom ? 1 : 0) &&
                     ordinary.AsSpan(0, black - 1).SequenceEqual(active.AsSpan(0, black - 1)) &&
                     ordinary.AsSpan(black + 1).SequenceEqual(active.AsSpan(black + 1)),
                     "四种资格组合独立发送网吧index2和黑钻index3，名字/穿戴/宠物及其他字段保持");
-                Bytes(TownPackets.Actor(actor, utcSeconds: now + 1, premiumPcRoom: pcRoom),
-                    TownPackets.Actor(c, utcSeconds: now + 1, premiumPcRoom: pcRoom),
+                Bytes(TownPackets.Actor(actor, 0, utcSeconds: now + 1, premiumPcRoom: pcRoom),
+                    TownPackets.Actor(c, 0, utcSeconds: now + 1, premiumPcRoom: pcRoom),
                     "黑钻到期关闭index3但保留当前全局网吧身份，不把两位同时清零");
             }
         }

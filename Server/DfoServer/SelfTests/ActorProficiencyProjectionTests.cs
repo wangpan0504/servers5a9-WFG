@@ -21,8 +21,8 @@ internal static class ActorProficiencyProjectionTests
                 ? CharacterDungeonState.NewOrdinary with { ProficiencyLevel = level, ProficiencyExperience = experience }
                 : null
         };
-        byte[] low = TownPackets.Actor(Actor(137, 9_876_543_210UL));
-        byte[] high = TownPackets.Actor(Actor(138, 9_876_543_210UL));
+        byte[] low = TownPackets.Actor(Actor(137, 9_876_543_210UL), 0);
+        byte[] high = TownPackets.Actor(Actor(138, 9_876_543_210UL), 0);
         That(low.Length == high.Length, "熟练等级不改变Actor长度");
         int[] changed = Enumerable.Range(0, low.Length).Where(index => low[index] != high[index]).ToArray();
         // 等级与经验是相邻的12字节，除熟练等级自身的字节外不得影响任何后续字段。
@@ -31,7 +31,7 @@ internal static class ActorProficiencyProjectionTests
         That(BinaryPrimitives.ReadUInt32LittleEndian(low.AsSpan(low.Length - 35)) == 137 &&
             BinaryPrimitives.ReadUInt64LittleEndian(low.AsSpan(low.Length - 31)) == 9_876_543_210UL,
             "Actor尾部依次投影持久化熟练等级u32与当前级经验u64");
-        byte[] empty = TownPackets.Actor(Actor(0, 0, owner: false));
+        byte[] empty = TownPackets.Actor(Actor(0, 0, owner: false), 0);
         That(BinaryPrimitives.ReadUInt32LittleEndian(empty.AsSpan(empty.Length - 35)) == 0 &&
             BinaryPrimitives.ReadUInt64LittleEndian(empty.AsSpan(empty.Length - 31)) == 0,
             "缺少附属owner的角色熟练等级与经验保持0，不伪造进度");
@@ -45,7 +45,7 @@ internal static class ActorProficiencyProjectionTests
             BinaryPrimitives.ReadUInt32LittleEndian(player.AsSpan(7)) == 188 &&
             BinaryPrimitives.ReadUInt64LittleEndian(player.AsSpan(11)) == 871_311_064UL,
             "Player 17字节头在bytes2-5/bytes6-13投影熟练等级与当前级经验，首尾保留字节为0");
-        byte[] actor = TownPackets.Actor(owner);
+        byte[] actor = TownPackets.Actor(owner, 0);
         That(BinaryPrimitives.ReadUInt32LittleEndian(actor.AsSpan(actor.Length - 35)) ==
                 BinaryPrimitives.ReadUInt32LittleEndian(player.AsSpan(7)) &&
             BinaryPrimitives.ReadUInt64LittleEndian(actor.AsSpan(actor.Length - 31)) ==

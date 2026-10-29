@@ -24,7 +24,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
         character=context.Session.ReadSkillCharacter(character);
         bool inDungeon = context.Session.Phase is SessionPhase.Dungeon or SessionPhase.Settlement;
         await context.Notify(NotiPacketType.USERINFO,
-            TownPackets.Actor(character, context.Channel, adventureName: context.Session.ReadAdventureName(),
+            TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel, adventureName: context.Session.ReadAdventureName(),
                 sceneState: inDungeon ? ActorSceneState.Dungeon : ActorSceneState.Town,
                 premiumPcRoom: context.Session.PremiumPcRoom), action + "_actor", canSend);
         await context.Notify(NotiPacketType.USERINFO,
@@ -193,7 +193,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             if ((equipmentChanged || weaponSkinChanged) && (receipt.Phase is SessionPhase.Town or SessionPhase.MapSelect ||
                 (appearanceChanged || weaponSkinChanged) && receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement))
                 await context.Notify(NotiPacketType.USERINFO,
-                    TownPackets.Actor(context.Session.ReadSkillCharacter(current), context.Channel, adventureName: context.Session.ReadAdventureName(),
+                    TownPackets.Actor(context.Session.ReadSkillCharacter(current), context.Session.ReadPvpGrade(current), context.Channel, adventureName: context.Session.ReadAdventureName(),
                         sceneState: receipt.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
                             ? ActorSceneState.Dungeon : ActorSceneState.Town,
                         premiumPcRoom: context.Session.PremiumPcRoom), "equipment_actor", CanSend);

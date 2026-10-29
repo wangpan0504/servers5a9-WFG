@@ -51,6 +51,7 @@ internal static class SelfTestRunner
         PvpTotalBattleTests.RunCore();
         PvpTotalTeamTests.RunCore();
         PvpArenaWireTests.RunCore();
+        PvpGradeProjectionTests.RunCore();
         await PvpArenaSessionTests.RunCoreAsync();
         await PvpMatchingSessionTests.RunCoreAsync();
         OrdinaryLukeProgressTests.RunCore();

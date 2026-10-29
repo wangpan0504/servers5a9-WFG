@@ -37,7 +37,7 @@ internal static class PvpPrivateCharacterTests
         int tail=normalRoster.Length-10-48; // 单角色空穿戴行；后接固定10字节名册收尾。
         That(normalRoster.Where((value,index)=>value!=privateRoster[index]).Count()==1 &&
             privateRoster[tail+34]==1 && normalRoster[tail+34]==0,"名册仅已证tail34投影专用身份，不挪用相邻状态位");
-        var actor=TownPackets.Actor(ordinary,utcSeconds:0);var privateActor=TownPackets.Actor(special,utcSeconds:0);
+        var actor=TownPackets.Actor(ordinary, 0,utcSeconds:0);var privateActor=TownPackets.Actor(special, 0,utcSeconds:0);
         That(actor.Where((value,index)=>value!=privateActor[index]).Count()==1 && privateActor[5+43]==1 && actor[5+43]==0,
             "入城116字节块的43号字节只用0/1，同普通角色其他字段不变");
         EquipmentTransfers(ordinary);

@@ -118,7 +118,7 @@ internal static class RaidProjection
                 (!existing || !change.Before.Members.Any(old => ReferenceEquals(old.Actor.Session, m.Actor.Session) && old.Actor.Epoch == m.Actor.Epoch))))
                 if (member.Actor.Session.PublicCharacter(member.Actor.Character) is { } identity)
                     context.Sender.Post(0, (ushort)NotiPacketType.USERINFO,
-                        TownPackets.Actor(identity.Character, identity.Channel, adventureName: identity.AdventureName,
+                        TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, adventureName: identity.AdventureName,
                             premiumPcRoom: identity.PremiumPcRoom), "raid_member_actor",
                         // 编队可使旧成员快照失效，但仍在同团的角色身份不能一起丢弃。
                         () => recipient.Session.HasRaidKey(recipient, after.Key) &&
@@ -136,7 +136,7 @@ internal static class RaidProjection
         if (peer.Session.PublicCharacter(peer.Character) is not { } identity) return;
         bool Guard() => recipient.IsCurrent && peer.IsCurrent && recipient.Session.CanChangeTownParty && peer.Session.CanChangeTownParty;
         context.Sender.Post(0, (ushort)NotiPacketType.USERINFO,
-            TownPackets.Actor(identity.Character, identity.Channel, adventureName: identity.AdventureName,
+            TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, adventureName: identity.AdventureName,
                 premiumPcRoom: identity.PremiumPcRoom), "raid_peer_actor", Guard);
         context.Sender.Post(0, (ushort)(invite ? NotiPacketType.REQUEST_PEER : NotiPacketType.RESPONSE_PEER),
             RaidPackets.Peer(peer.Character, peerId, invite), "raid_peer", Guard);

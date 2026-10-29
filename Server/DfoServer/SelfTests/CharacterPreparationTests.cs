@@ -215,7 +215,7 @@ internal static class CharacterPreparationTests
         That(oldAfter.Name == old.Name && oldAfter.Revision == old.Revision && oldAfter.Position == old.Position && oldAfter.Level == 1 && oldAfter.AcceptedStoryLevel == 1 && oldAfter.CompletedQuests.Length == 0 && oldAfter.ActiveMainQuests.Length == 0, "other character unchanged");
         byte[] roster = CharacterPackets.Roster([CharacterRosterEntry.FromCharacter(role)]);
         That(BinaryPrimitives.ReadInt32LittleEndian(roster.AsSpan(17)) == 4 && roster.AsSpan(21, 4).SequenceEqual(name) && roster[27] == 0 && roster[28] == 0x25 && roster[29] == 95, "roster uses CP936 length and native job/grow/level offsets");
-        byte[] actor = TownPackets.Actor(role);
+        byte[] actor = TownPackets.Actor(role, 0);
         int afterName = 121 + 2 + 4 + name.Length;
         That(actor.AsSpan(afterName, 3).SequenceEqual(new byte[] { 0, 0x25, 95 }), "actor matches roster identity");
         byte[] player = TownPackets.Player(role, new CharacterStatComputer(characters).Compute(role), 1);
@@ -227,7 +227,7 @@ internal static class CharacterPreparationTests
             byte[] expandedPlayer = TownPackets.Player(expanded, new CharacterStatComputer(characters).Compute(expanded), 1);
             byte[] expected = player.ToArray();
             expected[143] = (byte)tree;
-            That(expandedPlayer.SequenceEqual(expected) && TownPackets.Actor(expanded)[^9] == tree,
+            That(expandedPlayer.SequenceEqual(expected) && TownPackets.Actor(expanded, 0)[^9] == tree,
                 "已开通Actor资格与Player当前方案一致，两组技能正文保持 " + tree);
         }
         byte[] complete = TownPackets.CompletedQuests(role);
