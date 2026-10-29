@@ -8,6 +8,7 @@ namespace DfoServer.GameWorld.Characters;
 
 internal sealed class CharacterCatalog(Dictionary<byte, CharacterProfile> profiles)
 {
+    public IEnumerable<byte> Jobs => profiles.Keys.Order();
     private readonly Dictionary<byte, CharacterAttributeDefinition> attributeDefinitions = new();
 
     public CharacterProfile Get(byte job) => profiles.GetValueOrDefault(job) ?? throw new InvalidDataException("Ordinary character job is not implemented");

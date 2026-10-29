@@ -60,7 +60,7 @@ internal static class DevelopmentCommands
             Directory.CreateDirectory(options.DataDirectory);
             using var databaseLock = new FileStream(Path.Combine(options.DataDirectory, "server.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             var repository = new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"));
-            bool reset = request.Action is DevelopmentAction.Level or DevelopmentAction.Grow or DevelopmentAction.GrowOptions;
+            bool reset = request.Action is DevelopmentAction.Level or DevelopmentAction.Grow or DevelopmentAction.GrowOptions or DevelopmentAction.Profession or DevelopmentAction.ProfessionOptions;
             ItemResources? resources = request.Action is DevelopmentAction.Item or DevelopmentAction.ItemInfo or DevelopmentAction.Items || reset ? new ItemResources(pvf) : null;
             MailboxService? mailbox = request.Action == DevelopmentAction.Item ? new MailboxService(repository, resources!.Items, resources.GoldLimits, resources.EpicPieces) : null;
             var learning = reset ? SkillLearningCatalog.Load(pvf, resources!.Contracts.ExpertSkillLevels) : null;

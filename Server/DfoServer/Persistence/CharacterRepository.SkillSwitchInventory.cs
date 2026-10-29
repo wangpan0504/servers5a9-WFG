@@ -124,9 +124,9 @@ internal sealed partial class CharacterRepository
     }
 
     static void ResetSkillSwitchProfession(
-        SqliteConnection db, SqliteTransaction tx, ushort characterId, byte previousGrow, byte currentGrow)
+        SqliteConnection db, SqliteTransaction tx, ushort characterId, byte previousGrow, byte currentGrow, bool baseJobChanged = false)
     {
-        if ((previousGrow & 15) == (currentGrow & 15))
+        if (!baseJobChanged && (previousGrow & 15) == (currentGrow & 15))
             return;
         using var command = db.CreateCommand();
         command.Transaction = tx;

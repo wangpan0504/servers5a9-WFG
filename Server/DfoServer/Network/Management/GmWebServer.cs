@@ -124,6 +124,7 @@ internal static partial class GmWebServer
     // 只读详情与物品库：全部是已有 GM 查询命令的 JSON 结果，不改库。
     static void MapReads(WebApplication app, IGmWebData data)
     {
+        app.MapGet("/api/professions", () => Reply(data.Command("profession-options")));
         app.MapGet("/api/characters/{account}/{name}/{section}", (string account, string name, string section, string? q, string? category, string? status, int? page, int? pageSize, string? job) =>
         {
             if (!Token.IsMatch(account) || !Token.IsMatch(name)) return Bad("账号或角色名无效");
@@ -325,7 +326,11 @@ internal static partial class GmWebServer
         {
             if (Invalid(b.Account, b.Name, b.Confirm) is { } bad) return bad;
             if (b.Branch is < 0 or > 5 || b.Awakening is < 0 or > 2) return Bad("分支或觉醒无效");
-            return Run(http, data, "job", b.Account, b.Name, $"account {b.Account} grow {b.Name} {b.Branch} {b.Awakening}", $"account {b.Account} show {b.Name}");
+            if (b.Job is < 0 or > 15) return Bad("基础职业无效");
+            string command = b.Job is { } job
+                ? $"account {b.Account} profession {b.Name} {job} {b.Branch} {b.Awakening}"
+                : $"account {b.Account} grow {b.Name} {b.Branch} {b.Awakening}";
+            return Run(http, data, "job", b.Account, b.Name, command, $"account {b.Account} show {b.Name}");
         });
         // 黑钻会员（契约类型 56）：账号级资格，与命令行 black-diamond 同一提交入口；天数 0 清空到期时间。
         app.MapPost("/api/black-diamond", (HttpContext http, BlackDiamondBody b) =>
@@ -392,7 +397,7 @@ internal static partial class GmWebServer
     internal sealed record GoldBody(string Account, string Name, long Gold, bool? Confirm);
     internal sealed record CurrencyBody(string Account, string Name, string Key, string Op, long Amount, bool? Confirm);
     internal sealed record LevelBody(string Account, string Name, int Level, bool? Confirm);
-    internal sealed record JobBody(string Account, string Name, int Branch, int Awakening, bool? Confirm);
+    internal sealed record JobBody(string Account, string Name, int Branch, int Awakening, bool? Confirm, int? Job = null);
     internal sealed record BlackDiamondBody(string Account, string Name, int Days, bool? Confirm);
     internal sealed record ExpertJobBody(string Account, string Name, int Type, int Level, bool? Confirm);
     internal sealed record DebugBody(string Key, string Value, bool? Confirm);
