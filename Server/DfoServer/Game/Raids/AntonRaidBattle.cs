@@ -292,7 +292,7 @@ internal sealed partial class AntonRaidBattle
         }
     }
 
-    // 安徒恩 SET TIMER / PHASE TIME OVER 的原值单位未闭合，拒绝把声明数字当成到期事实。
+    // 本入口拒绝外部把安徒恩声明原值当成到期事实；Runtime租约另沿本服秒制兼容策略调度。
     // 卢克仍走 ExpireLukeTimer。其它调用方必须自备已证单位，不能靠本入口猜测秒或毫秒。
     public AntonRaidBattleChange? ExpireTimer(Guid instance, long revision, RaidTimer timer)
     {
@@ -409,16 +409,20 @@ internal sealed partial class AntonRaidBattle
                             break;
                         case "[set dungeon state]":
                             int id = action.DungeonId!.Value; var next = action.State!.Value;
+                            // 显式hide也撤销旧待决：源图消失后，旧随机请求不能重新打开其孵化场。
+                            if (Kind == RaidKind.Anton && next == RaidDungeonState.Hide)
+                            {
+                                var cancelled = state.Deferred.Where(row =>
+                                    row.Value.Tag == "[reserve dungeon state]" && row.Value.DungeonId == id ||
+                                    row.Value.Tag == "[open random hatchery]" && script.Phases[state.Phase].Rules.Any(source =>
+                                        source.Behavior.Any(sourceAction => sourceAction.TokenIndex == row.Key) &&
+                                        source.Trigger.Any(trigger => trigger.Timer?.DungeonId == id)))
+                                    .Select(row => row.Key).ToArray();
+                                state = state with { Deferred = state.Deferred.RemoveRange(cancelled),
+                                    DeferredAnchors = state.DeferredAnchors.RemoveRange(cancelled), DeferredGenerations = state.DeferredGenerations.RemoveRange(cancelled) };
+                            }
                             if (state.Dungeons[id] != next)
                             {
-                                // 219 clear明确hide孵化场；旧clear留下的240预留不能越过这次隐藏重新开图。
-                                if (Kind == RaidKind.Anton && next == RaidDungeonState.Hide)
-                                {
-                                    var cancelled = state.Deferred.Where(row => row.Value.Tag == "[reserve dungeon state]" && row.Value.DungeonId == id)
-                                        .Select(row => row.Key).ToArray();
-                                    state = state with { Deferred = state.Deferred.RemoveRange(cancelled),
-                                        DeferredAnchors = state.DeferredAnchors.RemoveRange(cancelled), DeferredGenerations = state.DeferredGenerations.RemoveRange(cancelled) };
-                                }
                                 // 同Open不续HP；真正重开才开始新目标代，旧Run不能完成新代目标。
                                 if (next == RaidDungeonState.Open && (Kind == RaidKind.Luke || antonPhaseProgress || HasAntonRewards))
                                 {
