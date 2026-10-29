@@ -478,6 +478,9 @@ internal static class DungeonEntryPlanTests
                 "真实末层保留MAP自身boss类型和完整dummy演员，不伪造剧情死亡");
         }
         var plazaQuest = quests.Get(3946);
+        That(DungeonEntryPlan.TryCreate(catalog,character with { Level = 95 },310,0,0,out var plazaHell,out var plazaHellReason,
+            hellParty: true,quests: quests) && plazaHell is { HellParty.MapId: 60083, HellParty.RequiredItemCount: 28 },
+            "时间广场普通深渊使用真实密门和门票声明：" + plazaHellReason);
         var plazaCharacter = character with { Level = 88,CompletedQuests = [3945],
             ActiveMainQuests = [new(5,3946,1) { AcceptanceId = Guid.NewGuid() }] };
         That(DungeonEntryPlan.TryCreate(catalog,plazaCharacter,310,3946,0,out var plazaPlan,out var plazaReason,
