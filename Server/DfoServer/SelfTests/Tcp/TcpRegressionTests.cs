@@ -204,6 +204,7 @@ internal static class TcpRegressionTests
         }),
         ("beast-dungeon", (_, _, resources) =>
         {
+            if (!BeastFixtures.Enabled(resources)) return BeastFixtures.SkipAsync("beast-dungeon");
             BeastRewardAssetsTests.Run(resources);
             BeastDungeonEntryTests.RunMaps(resources.Archive);
             BeastDungeonSessionTests.Run(resources);
@@ -211,12 +212,15 @@ internal static class TcpRegressionTests
         }),
         ("beast-selection", async (source, root, resources) =>
         {
+            if (!BeastFixtures.Enabled(resources)) { BeastFixtures.Skip("beast-selection"); return; }
             BeastDungeonEntryTests.RunAccessoryQuest(resources.Archive, resources.ItemResources);
             BeastDungeonSelectionTests.Run(resources);
             await BeastSixthDifficultyTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
             await RaidChannelLandingTcpTests.RunBeastSelectionAsync(source, root, resources);
         }),
-        ("beast-gateway", RaidChannelLandingTcpTests.RunBeastGatewayAsync),
+        ("beast-gateway", (source, root, resources) => BeastFixtures.Enabled(resources)
+            ? RaidChannelLandingTcpTests.RunBeastGatewayAsync(source, root, resources)
+            : BeastFixtures.SkipAsync("beast-gateway")),
         ("grief-tower", FormalDungeonTcpTests.RunGriefAsync),
         ("durability", FormalDungeonTcpTests.RunDurabilityAsync),
         ("dungeon-training", FormalDungeonTcpTests.RunTrainingAsync),
