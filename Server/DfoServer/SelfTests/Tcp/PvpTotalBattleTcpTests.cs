@@ -81,6 +81,9 @@ internal static class PvpTotalBattleTcpTests
             f.Query("SELECT count(*) FROM character_pvp_rating_claims WHERE receipt_json IS NOT NULL")[0][0] is 6L &&
             f.Query("SELECT state_json FROM character_pvp_ratings").All(row => JsonSerializer.Deserialize<PvpRatingState>((string)row[0]) is { Played: 0 }) &&
             f.Snapshot() == assets, "总力整局只入账两支队伍及六份经验，不修改个人排位战绩或角色资产");
+        PvpRecordTcpChecks.Score(f, a, a.Id, true, member: 1);
+        PvpRecordTcpChecks.Score(f, b, a.Id, false, member: 1);
+        PvpRecordTcpChecks.Reject(a, PvpRecordTcpChecks.Request(a.Id, member: 0));
         a.Send(57);
         foreach (var peer in peers)
         { State(peer, 1); peer.Expect(0, 43); peer.Expect(0, 44, [0, 0]); peer.Expect(0, 44, [1, 0]); }

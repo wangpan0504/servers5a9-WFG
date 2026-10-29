@@ -24,6 +24,8 @@ internal static class PvpMatchingTcpTests
         byte pvp = ChannelTcpTests.PvpChannelNumber(f);
         using var a = Open(f, "matching-tcp-a", gamePort: endpoints[47], channelNumber: 47);
         That(a.LoginEndpoint[3] == 8, "真实无双频道LOGIN安装类型8，不能以类型0或传统24代替");
+        a.Send(375, PvpRecordTcpChecks.Request(35));
+        a.Expect(1, 375, [0]);
         a.Send(520, Queue()); a.Expect(1, 520, [0, 0x17, 0]);
         a.Send(521, [1, 0, 0]); a.Expect(1, 521, [0, 0x17, 0]);
         a.Select(prepared: true); a.Barrier();
@@ -38,6 +40,16 @@ internal static class PvpMatchingTcpTests
         b.Select(prepared: true); PvpArenaTcpTests.TownPeer(b, a.Id); b.Barrier();
         PvpArenaTcpTests.TownPeer(a, b.Id); a.Barrier();
         string assets = f.Snapshot();
+        PvpRecordTcpChecks.Score(f, a, a.Id, true);
+        PvpRecordTcpChecks.Score(f, a, b.Id, false);
+        foreach (byte view in new byte[] { 2, 3, 4, 5 }) PvpRecordTcpChecks.Score(f, a, a.Id, true, view: view);
+        PvpRecordTcpChecks.Reject(a, [.. PvpRecordTcpChecks.Request(a.Id), 0]);
+        PvpRecordTcpChecks.Reject(a, PvpRecordTcpChecks.Request(a.Id)[..7]);
+        PvpRecordTcpChecks.Reject(a, PvpRecordTcpChecks.Request(b.Id));
+        PvpRecordTcpChecks.Reject(a, PvpRecordTcpChecks.Request(a.Id, self: 0));
+        PvpRecordTcpChecks.Reject(a, PvpRecordTcpChecks.Request(a.Id, view: 7));
+        PvpRecordTcpChecks.Reject(a, PvpRecordTcpChecks.Request(a.Id, member: 3));
+        PvpRecordTcpChecks.Reject(a, PvpRecordTcpChecks.Request(a.Id, member: 0));
         a.Send(520, Queue(gameType: 7)); a.Expect(1, 520, [0, 0x17, 0]);
         a.Send(520, Queue()); a.Expect(1, 520, [1, 1, 0, 0, 0]);
         a.Send(520, Queue()); a.Expect(1, 520, [1, 1, 0, 0, 0]);
@@ -126,6 +138,10 @@ internal static class PvpMatchingTcpTests
             JsonSerializer.Deserialize<PvpRatingState>((string)rows.Single(row => Convert.ToInt64(row[0]) == b.Id)[2]) is
                 { Played: 1, Wins: 0, Losses: 1 } && assets == f.Snapshot(),
             "匹配TCP战斗使用独立评分来源，双方各入账一次且不改角色资产");
+        PvpRecordTcpChecks.Score(f, a, a.Id, true, wins: 1, recentWins: 1, streak: 1, highest: 1);
+        PvpRecordTcpChecks.Score(f, b, b.Id, true, losses: 1, recentLosses: 1);
+        PvpRecordTcpChecks.Score(f, b, a.Id, false, wins: 1, recentWins: 1, streak: 1, highest: 1);
+        PvpRecordTcpChecks.Score(f, a, a.Id, true, view: 5);
         a.Send(57);
         foreach (var peer in new[] { a, b })
         {

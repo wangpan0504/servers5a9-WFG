@@ -544,6 +544,7 @@ internal static class ServerRuntime
             new PvpTotalTeamHandler(totalTeams, log, inventoryProjection, totalTeamProjection),
             new PvpMatchingHandler(arena, log, clock),
             new PvpChannelHandler(gameChannels, log),
+            new PvpRecordHandler(new Game.Pvp.PvpRecordQuery(repository, repository), online, log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters,
                 guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler, totalTeamProjection, pvpMissions, pvpMissionBook),
