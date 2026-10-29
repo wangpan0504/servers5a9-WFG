@@ -261,6 +261,7 @@ internal static class TcpRegressionTests
                 resources.ItemResources, resources.Quests, resources.Learning);
             return Task.CompletedTask;
         }),
+        ("ekern-cycle", EkernCycleTcpTests.RunAsync),
         ("dungeon-settlement", async (_, _, resources) =>
         {
             DungeonItemDropCatalogTests.RunCore();

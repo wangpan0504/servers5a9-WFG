@@ -560,6 +560,7 @@ internal static class SelfTestRunner
         CharacterGrowthTests.Run(towns, pvf);
         DungeonKillExperienceCatalogTests.Run(pvf);
         DungeonSettlementTests.RunResources(pvf);
+        DungeonSettlementTests.RunEkernResources(pvf);
         DungeonSettlementTests.RunAdventureResources(pvf);
         DungeonSettlementTests.RunProficiencyResources(pvf);
         AdventureLedgerTests.Run(pvf);

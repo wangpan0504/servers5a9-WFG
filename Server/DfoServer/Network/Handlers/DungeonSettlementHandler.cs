@@ -109,6 +109,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainClear, reward.GrowthContractExperience, effective),
             PotionExperience = ExpBonusPolicy.Shown(plainClear, reward.GrowthContractExperience, reward.PotionExperience, effective) };
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
+        if (receipt.Entry.DungeonId is 5097 or 5098) await EkernCycleProjection.RefreshAsync(context,Guard);
         // 大会副本没有普通结算页：不发 34/35，改发 NOTI388（见 TournamentReward 注释）。
         bool tournament = receipt.Entry.IsTournament;
         // 超星空保留真实通关经验提交，但不发布普通结果页或翻牌奖励。

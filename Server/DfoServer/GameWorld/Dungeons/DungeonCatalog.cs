@@ -423,6 +423,8 @@ internal sealed class DungeonCatalog
     public TowerOfDespairCatalog Despair => despair.Value;
     private readonly Lazy<DungeonEnterCountCatalog> enterCounts;
     public DungeonEnterCountCatalog EnterCounts => enterCounts.Value;
+    private readonly Lazy<EkernCycleCatalog> ekernCycle;
+    public EkernCycleCatalog EkernCycle => ekernCycle.Value;
     private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps)
     {
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
@@ -432,6 +434,7 @@ internal sealed class DungeonCatalog
         altarAdmission = new(() => DungeonAltarAdmissionCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         despair = new(() => TowerOfDespairCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         enterCounts = new(() => DungeonEnterCountCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
+        ekernCycle = new(() => EkernCycleCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
     }
     public int DungeonCount => dungeons.Count;
     public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);

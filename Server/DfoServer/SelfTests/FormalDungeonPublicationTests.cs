@@ -928,6 +928,7 @@ internal static class FormalDungeonPublicationTests
             IReadOnlyList<DfoServer.Game.Guild.GuildDungeonMembership> frozen, IReadOnlyCollection<ushort> active) =>
             inner.ReadGuildDungeonPartyCount(owner, characterId, frozen, active);
         public Guid? LoadOrdinaryLukeDropEvent(AccountOwners.Lease owner, ushort characterId, int day, int sourceMonsterId) => inner.LoadOrdinaryLukeDropEvent(owner, characterId, day, sourceMonsterId);
+        public DfoServer.Game.Dungeons.EkernCycleProgress LoadEkernCycle(AccountOwners.Lease owner, ushort characterId, int day) => inner.LoadEkernCycle(owner,characterId,day);
         public DfoServer.Game.Dungeons.OrdinaryLukeProgress LoadOrdinaryLukeProgress(AccountOwners.Lease owner, ushort characterId) => inner.LoadOrdinaryLukeProgress(owner, characterId);
         public DfoServer.Game.Dungeons.DazzlementTowerState LoadDazzlementTower(AccountOwners.Lease owner) => inner.LoadDazzlementTower(owner);
         public DfoServer.Game.Dungeons.GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId) => inner.ReadGriefTower(owner, characterId);

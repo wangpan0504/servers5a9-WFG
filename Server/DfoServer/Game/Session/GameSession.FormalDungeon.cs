@@ -338,6 +338,12 @@ internal sealed partial class GameSession
         if (!practice && !training && !trainingRoom && !classExperience && assault is null && !hellParty &&
             !specialAdmission)
         {
+            if (dungeonId is 5097 or 5098)
+            {
+                var cycle = CaptureEkernCycle()!.Progress;
+                if (!catalog.EkernCycle.CanEnter(dungeonId,cycle.Normal,cycle.Trial))
+                    return RejectFormal("ekern-cycle-not-available");
+            }
             channelCost = EntryCost(expected, dungeonId, catalog.Get(checked((int)dungeonId)), pieces, channelTown, out string? costRejection);
             if (costRejection is not null) return RejectFormal(costRejection);
         }

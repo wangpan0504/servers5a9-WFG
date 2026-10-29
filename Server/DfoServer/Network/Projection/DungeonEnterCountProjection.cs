@@ -11,6 +11,7 @@ internal static class DungeonEnterCountProjection
         bool onlyForSelection = false)
     {
         if (catalog is null) return;
+        await EkernCycleProjection.RefreshAsync(context,guard);
         if (context.Session.CaptureDungeonEnterCounts(catalog.EnterCounts, onlyForSelection) is { } receipt)
             await PublishAsync(context, receipt, guard);
         await RefreshGriefAsync(context, catalog, guard, onlyForSelection);

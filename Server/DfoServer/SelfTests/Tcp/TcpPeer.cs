@@ -940,7 +940,7 @@ internal sealed partial class TcpPeer : IDisposable
         (SkinOwnership[] Owned, int[] Selected)? cutscenes = null, byte[]? expertJobInfo = null, bool nativeSwitch = false,
         ushort[]? tagEvildom = null, byte[][]? echonSets = null, byte[]? pvpTotalTeam = null, bool premiumPcRoom = false,
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
-        (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null)
+        (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1056,6 +1056,7 @@ internal sealed partial class TcpPeer : IDisposable
                     TestCheck.That(buff.Length == 17 && buff[0] == 1 && U32(buff, 1) == 1249 && U32(buff, 5) == 0,
                         "网吧身份入城在本人Player后补发487特权buff，永久实例三项动态整数为0");
                 }
+                if (ekernCycle is not null) Expect(0,656,ekernCycle);
                 foreach (int dungeonId in new[] { 11006, 11007 })
                 {
                     var count = Expect(0, 550).Body;

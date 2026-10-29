@@ -43,6 +43,8 @@ internal sealed class PreparedDungeonSettlement(DungeonClearFact fact, ReadOnlyS
     public DfoServer.Game.Inventory.Models.InventoryPlan? CreatureInventory { get; } = creatureInventory;
     public GriefTowerClearReward? Grief { get; } = grief;
     public BossRushClearReward? BossRush { get; } = bossRush;
+    public int? EkernDay { get; private set; }
+    public void FreezeEkernDay(int day) => EkernDay ??= day;
     public AncientGateClear? AncientGate { get; private set; }
     public void FreezeAncientGate(AncientGateClear? value)
     {

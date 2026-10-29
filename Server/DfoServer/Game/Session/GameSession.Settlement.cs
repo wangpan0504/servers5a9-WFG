@@ -215,6 +215,8 @@ internal sealed partial class GameSession
         if (prepared.Pending is null || prepared.Outcome is not (DungeonRunOutcome.Accepted or DungeonRunOutcome.Duplicate))
             return new FormalDungeonSettlementResult(DungeonRunOutcome.Rejected);
         prepared.Pending.FreezeAncientGate(ancientGate);
+        if (dungeon.Entry.DungeonId is 5097 or 5098 && !dungeon.Entry.IsPractice && dungeon.Entry.IsOrdinary)
+            prepared.Pending.FreezeEkernDay(ShopPurchaseCount.Today((timeProvider ?? TimeProvider.System).GetUtcNow()));
         var contributionDefinition = dungeons.Get(checked((int)dungeon.Entry.DungeonId));
         GuildContributionSource? contributionSource = null;
         if (dungeon.Entry.IsOrdinary && !dungeon.Entry.IsPractice && !dungeon.Entry.DisableClearReward)
