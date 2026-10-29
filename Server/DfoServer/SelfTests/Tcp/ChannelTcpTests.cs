@@ -31,6 +31,9 @@ internal static class ChannelTcpTests
             That(Regex.IsMatch(decoded, @"\[server\]\s+2\s"), "下发脚本属于服务器2，不依赖PVF中预存server0");
             That(Regex.IsMatch(decoded, @"(?m)^19 `<chn_channel_info_036>` 23 `\[raid\]` "),
                 "实际频道脚本保留CH.19的安徒恩名称、0x17类型和raid分组，不占用其他团本卡的类型");
+            foreach (int number in new[] { 101, 47, 51 })
+                That(Regex.IsMatch(decoded, @"(?m)^" + number + @" `<[A-Za-z0-9_]+>` (?:4|8|24) `\[pvp\]` 0 0 0 0 0 50 95 0 0 0 0 ``\r?$"),
+                    "实际下发三个决斗入口的50–95等级范围：" + number);
             (string Group, int Type)[] groups =
             [
                 ("elven_guard", 22), ("granfloris", 22), ("sky_catle", 22), ("behemoth", 22),

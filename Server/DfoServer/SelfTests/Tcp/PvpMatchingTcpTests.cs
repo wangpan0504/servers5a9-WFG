@@ -29,15 +29,14 @@ internal static class PvpMatchingTcpTests
         a.Select(prepared: true); a.Barrier();
         a.Send(195); a.Expect(1, 195, Build(w =>
         {
-            w.Write((byte)1); w.Write(0u); w.Write((byte)2);
-            foreach (uint number in new uint[] { pvp, 47 })
+            w.Write((byte)1); w.Write(0u); w.Write((byte)4);
+            foreach (uint number in new uint[] { pvp, 47, 51, 55 })
             { w.Write(number); w.Write(0u); w.Write(1u); }
         }));
         using var originalB = Open(f, "matching-tcp-b", gamePort: endpoints[47], channelNumber: 47);
         var b = originalB;
-        b.Select(prepared: true); b.Barrier();
-        a.Barrier(packet => That(packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 0 && U16(packet.Body, 121) == b.Id,
-            "另一匹配角色仍先沿真实城镇同屏发布"));
+        b.Select(prepared: true); PvpArenaTcpTests.TownPeer(b, a.Id); b.Barrier();
+        PvpArenaTcpTests.TownPeer(a, b.Id); a.Barrier();
         string assets = f.Snapshot();
         a.Send(520, Queue(gameType: 7)); a.Expect(1, 520, [0, 0x17, 0]);
         a.Send(520, Queue()); a.Expect(1, 520, [1, 1, 0, 0, 0]);
@@ -58,10 +57,7 @@ internal static class PvpMatchingTcpTests
         foreach (var peer in new[] { a, b })
         {
             peer.Expect(0, 506, [3]);
-            var seats = peer.Expect(0, 43).Body;
-            That(U16(seats, 0) == first.Room && seats[2] == 1 && seats[3] == 8 &&
-                Enumerable.Range(0, 8).All(at => U16(seats, 6 + at * 4) != peer.Id),
-                "预加载取消先关闭匹配窗口再清本人原席位");
+            PvpArenaTcpTests.Left(peer, first.Room, 1, peer == a ? (byte)0 : (byte)1);
         }
         a.Barrier(); b.Barrier();
         a.Send(520, Queue()); a.Expect(1, 520, [1, 1, 0, 0, 0]);
@@ -70,15 +66,13 @@ internal static class PvpMatchingTcpTests
         That(interrupted == Paired(b) && interrupted.Token != first.Token, "取消后重排建立全新匹配，不复用旧预约");
         b.Dispose();
         a.Expect(0, 506, [3]);
-        var disconnected = a.Expect(0, 43).Body;
-        That(Enumerable.Range(0, 8).All(at => U16(disconnected, 6 + at * 4) != a.Id),
-            "预加载对手断线后维护驱动关闭原预约并清除存活连接原席位");
+        PvpArenaTcpTests.Left(a, interrupted.Room, 1, 0);
+        a.Expect(0, 6, [(byte)b.Id, (byte)(b.Id >> 8)]);
         a.Barrier();
         using var replacementB = Open(f, "matching-tcp-b", gamePort: endpoints[47], channelNumber: 47);
-        replacementB.Select(prepared: true); replacementB.Barrier();
+        replacementB.Select(prepared: true); PvpArenaTcpTests.TownPeer(replacementB, a.Id); replacementB.Barrier();
         b = replacementB;
-        a.Barrier(packet => That(packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 0 && U16(packet.Body, 121) == b.Id,
-            "断线角色以新会话重新进入真实城镇同屏"));
+        PvpArenaTcpTests.TownPeer(a, b.Id); a.Barrier();
         a.Send(520, Queue()); a.Expect(1, 520, [1, 1, 0, 0, 0]);
         b.Send(520, Queue()); b.Expect(1, 520, [1, 1, 0, 0, 0]);
         var second = Paired(a);
@@ -145,9 +139,7 @@ internal static class PvpMatchingTcpTests
         b.Send(57);
         foreach (var peer in new[] { a, b })
         {
-            var cleared = peer.Expect(0, 43).Body;
-            That(Enumerable.Range(0, 8).All(at => U16(cleared, 6 + at * 4) != peer.Id),
-                "双方返回后精确清本人原匹配席位，不残留不可重开的私有房间");
+            PvpArenaTcpTests.Left(peer, second.Room, 1, peer == a ? (byte)0 : (byte)1);
             peer.Send(57); peer.Barrier();
             peer.Send(520, Queue()); peer.Expect(1, 520, [1, 1, 0, 0, 0]);
             peer.Send(521, [1, 0, 0]); peer.Expect(1, 521, [1]);

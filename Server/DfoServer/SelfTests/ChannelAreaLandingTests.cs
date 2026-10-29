@@ -13,9 +13,20 @@ namespace DfoServer;
 
 internal static class ChannelAreaLandingTests
 {
+    public static void RunPvp(TownCatalog towns)
+    {
+        var ordinaryPvp = new ChannelEntry(new(2, 51), 4, "[pvp]");
+        var none = new HashSet<int>();
+        That(ChannelAreaLanding.Place(towns, ordinaryPvp, 49, none) is null &&
+            ChannelAreaLanding.Place(towns, ordinaryPvp, 50, none) is { Town: 10, Area: 0, X: 474, Y: 234 },
+            "普通决斗入口复用10/0落点，50级边界仍服从资源门禁");
+        Console.WriteLine("PASS 普通决斗入口资源等级边界与10/0落点");
+    }
+
     public static void Run(TownCatalog towns, PvfArchive pvf)
     {
         int before = Count;
+        RunPvp(towns);
         var none = new HashSet<int>();
         var elven = new ChannelEntry(new(2, 1), 22, "[elven_guard]");
         var sky = new ChannelEntry(new(2, 11), 22, "[sky_catle]");
@@ -38,19 +49,23 @@ internal static class ChannelAreaLandingTests
                 That(ChannelAreaLanding.Place(towns, channel, 1, completed) is null, "特殊入口仍核对地区等级");
         }
 
-        // 远古入口在船头 17/3 的镇魂曲门后：17/5 自身只有回船头与本地 -1 -1 副本门两行，直接落 17/5 会跳过赛丽亚房间，
-        // 而从门口回甲板时又正好踩在船头的门口矩形上。落点必须与圣者之鸣号一致，17/0 → 17/1 → 17/3 → 17/5 步行链完整。
+        // 远古入口在船头 17/3：17/5 自身只有回船头与本地 -1 -1 副本门两行，直接落 17/5 会跳过赛丽亚房间，
+        // 而从门口回甲板时又正好踩在船头的门口矩形上。落点必须与圣者之鸣号一致，17/0 → 17/1 → 17/3 步行可达。
         var ancientChannel = new ChannelEntry(new(2, 24), 11, "[ancient]");
         var sainthornChannel = new ChannelEntry(new(2, 26), 26, "[sainthorn]");
         var ancientSpot = ChannelAreaLanding.Place(towns, ancientChannel, 95, none);
         That(ancientSpot is { Town: 17, Area: 0 } && ancientSpot == ChannelAreaLanding.Place(towns, sainthornChannel, 95, none),
             "远古频道与圣者之鸣号同落赛丽亚房间 17/0，实际=" + ancientSpot);
-        // 步行链依赖镇17 Area5 与船头门的资源增量；未安装时只报告落点，不把资源缺失算成代码回归。
+        // 步行链依赖镇17 Area5 与船头选图门的资源增量；未安装时只报告落点，不把资源缺失算成代码回归。
+        // 船头到 17/5 不是城镇门：正式 PVF 在 17/3 写的是本地 `-1 -1` 副本门（区域声明 `[dungeon gate]` 26），
+        // 由客户端开远古选图进入等待室 17/5；17/5 自己另有一行回船头的城镇门。
         if (towns.Areas.ContainsKey((17, 1)) && towns.Areas.ContainsKey((17, 3)) && towns.Areas.ContainsKey((17, 5)))
             That(towns.Areas[(17, 0)].Map(none).Links.Any(link => link.Town == 17 && link.Area == 1) &&
                 towns.Areas[(17, 1)].Map(none).Links.Any(link => link.Town == 17 && link.Area == 3) &&
-                towns.Areas[(17, 3)].Map(none).Links.Any(link => link.Town == 17 && link.Area == 5),
-                "赛丽亚房间经甲板、船头步行可达镇魂曲大厅 17/5");
+                towns.Areas[(17, 3)].DungeonWorldMap == 26 &&
+                towns.Areas[(17, 3)].Map(none).DungeonGates.Length > 0 &&
+                towns.Areas[(17, 5)].Map(none).Links.Any(link => link.Town == 17 && link.Area == 3),
+                "赛丽亚房间经甲板到船头，船头 -1 -1 门开远古选图 26，等待室 17/5 可回船头");
 
         var elvenSpot = ChannelAreaLanding.Place(towns, elven, 1, none);
         That(elvenSpot is { Town: 38, Area: 0 } && elvenSpot != towns.Room, "艾尔文防线新选角落到艾尔文街道");
@@ -248,7 +263,8 @@ internal static class ChannelAreaLandingTests
         // #740 房间出口按显式频道清单核对；再战魔界46沿已接入的type53特殊落点，不借用普通返回地区。
         // 47=决斗场无双频道（type 8，33f95e72 接入）、48=帝国竞技场（type 39）同属按频道落点出门，不随普通频道回记住地区。
         // 决斗场普通入口按客户端 etc/pvpchannellist.etc 登记为 101（原 40 已不存在），特殊出口清单随目录取号。
-        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 101, 41, 42, 43, 44, 45, 46, 47, 48, 49 };
+        // 55=自由练习频道（type 5，dc3f551b 接入），同属决斗类频道，房间出口不随普通频道回记住地区。
+        var specialChannels = new HashSet<int> { 19, 20, 23, 24, 26, 31, 32, 35, 36, 39, 101, 41, 42, 43, 44, 45, 46, 47, 48, 49, 51, 55 };
         var beastChannel = script.Channels.Single(row => row.Number == 49);
         var beastEntry = new ChannelEntry(new(2, 49), beastChannel.Type, beastChannel.Group);
         That(beastChannel.Type == 40 && beastChannel.Group == "[beast]",
@@ -271,6 +287,7 @@ internal static class ChannelAreaLandingTests
                 "魔兽等待区51/2声明 [dungeon gate] 46，五个气球5335–5339挂在该世界地图上");
             That(towns.Areas[(51, 2)].Default.DungeonGates.Length > 0 && towns.Areas[(51, 1)].Default.DungeonGates.Length == 0,
                 "只有等待区51/2的地图含 -1/-1 选图区域，中央公园广场51/1没有");
+            RunBeastReturn(towns);
         }
         else
         {
@@ -301,6 +318,52 @@ internal static class ChannelAreaLandingTests
                 : $"LAND {row.Number} type {row.Type} {row.Group} {decision.Spot.Town}/{decision.Spot.Area} {decision.Spot.X},{decision.Spot.Y} reason {decision.Reason}");
         }
         Console.WriteLine($"PASS {Count - before} 频道落点断言");
+    }
+
+    static void RunBeastReturn(TownCatalog towns)
+    {
+        int before = Count;
+        var beast = new ChannelEntry(new(2, 49), 40, "[beast]");
+        var ordinary = new ChannelEntry(new(2, 1), 22, "[elven_guard]");
+        string path = Path.Combine(Path.GetTempPath(), "S5A9-beast-return-" + Guid.NewGuid().ToString("N"), "game.db");
+        var repo = new CharacterRepository(path);
+        using var owner = new AccountOwners().Acquire("beast-return", () => { });
+        var completed = new HashSet<int> { 4840, 5927 };
+        var park = towns.ResolveRoomReturn(new(31, 1, 0, 0), null, 95, completed);
+        That(park is { Town: 31, Area: 1 } && towns.IsPosition(park, completed), "普通中央公园有真实可站的房间出口");
+        int index = 0;
+        foreach (byte area in new byte[] { 0, 1, 2 })
+        foreach (int? previous in new int?[] { null, 40, 22 })
+        {
+            var old = new Location(51, area, 474, 234);
+            var role = repo.Create(owner, new("BeastExit" + index++, old, old) { Level = 95, CompletedQuests = [4840, 5927] });
+            var history = new ChannelHistory();
+            if (previous is int type) history.Record(owner.Account, type);
+            var session = new GameSession(repo, towns, owner, entry: ordinary, channelHistory: history);
+            session.Select(role.Slot, resumeTown: true);
+            var restored = session.Selected!;
+            That(!session.TownSnapshotResumed && restored.Position == towns.Room && restored.Return == park,
+                "退出魔兽任一区域均重置专属快照、回房并保存普通中央公园，前频道=" + previous + " 区域=" + area);
+            That(TownTravel.LeaveRoom(restored, towns, completed, ordinary) is { Reason: "ready", Position: var exit } && exit == park,
+                "普通频道1426出门到31号中央公园，不再回51");
+            session.ReturnToRoster();
+            var saved = repo.LoadCharacter(owner, role.Slot);
+            long revision = saved.Revision;
+            var again = CharacterSelection.Prepare(repo, owner, saved, towns, completed, null, channel: ordinary);
+            That(again.Position == towns.Room && again.Return == park && again.Revision == revision,
+                "重登沿已保存的普通中央公园返回点，无重复位置写入");
+        }
+        var roomRole = repo.Create(owner, new("BeastBack", towns.Room, new(51, 1, 474, 234)) { Level = 95 });
+        var repaired = CharacterSelection.Prepare(repo, owner, roomRole, towns, completed, null, resumeTown: true, channel: ordinary);
+        That(repaired.Position == towns.Room && repaired.Return == park, "已在房间的旧51返回点同样修复");
+        var sameRole = repo.Create(owner, new("BeastSame", new(51, 2, 474, 234), park) { Level = 95 });
+        var same = CharacterSelection.Prepare(repo, owner, sameRole, towns, completed, null, resumeTown: true, channel: beast);
+        That(same.Position == sameRole.Position && same.Return == park, "仍在魔兽频道恢复时保留本频道位置");
+        var noPermission = repo.Create(owner, new("BeastGate", new(51, 2, 474, 234), null) { Level = 95 });
+        var denied = CharacterSelection.Prepare(repo, owner, noPermission, towns, new HashSet<int>(), null, channel: ordinary);
+        That(denied.Position == towns.Room && denied.Return == towns.InitialReturn, "缺正常中央公园前置时回安全初始地区，不绕过4840");
+        That(ChannelAreaLanding.PreservesRoomReturn(towns, 51), "专属中央公园内走动不污染普通房间返回地区");
+        Console.WriteLine($"PASS {Count - before} 魔兽频道返程断言");
     }
 
     static Character lukeStayedProbe(CharacterRepository repo, AccountOwners.Lease owner, TownCatalog towns) =>

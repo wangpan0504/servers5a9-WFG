@@ -63,7 +63,7 @@ internal static class BeastSixthDifficultyTests
             commands.Seal();
 
             // 魔兽入口区域：310 出现在该区域世界地图的选项里，位置取已解锁条件格的内部点。
-            var area = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+            var area = towns.Areas.Values.First(row => row.Town == 31 && row.DungeonWorldMap == 39 && row.DungeonWorldMap is { } world &&
                 towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 310));
             var completed = new HashSet<int>(area.Quests) { 5927 };
             if (area.AnyQuests.Length != 0) completed.Add(area.AnyQuests[0]);
@@ -77,6 +77,7 @@ internal static class BeastSixthDifficultyTests
             {
                 // 第六难度：难度4 + MAZE2，必须进入魔兽拓扑。
                 (Name: "sixth", Difficulty: (byte)4, Flag7: (byte)2, Beast: true, Enter: true),
+                (Name: "noticket", Difficulty: (byte)4, Flag7: (byte)2, Beast: true, Enter: false),
                 // 第五按钮的普通噩梦（实机 2026-10-25T14:49:06 的真实形状）：难度4、MAZE0，不能进魔兽。
                 (Name: "nightmare", Difficulty: (byte)4, Flag7: (byte)0, Beast: false, Enter: true),
                 // 低难度保持普通拓扑。
@@ -92,11 +93,14 @@ internal static class BeastSixthDifficultyTests
                     { Experience = growth.GetLevelStartExperience(95) }, learning);
                 repository.Create(lease, candidate with
                     { Level = 95, AcceptedStoryLevel = 95, CompletedQuests = completed.ToArray(), InitialLearning = synced });
+                if (name != "noticket") BeastDungeonSessionTests.GiveTickets(repository, lease);
                 var clock = new DailyBoosterTestClock(at);
                 var session = new GameSession(repository, towns, lease, questCatalog: SelfTestCatalogs.Quests(pvf), timeProvider: clock,
-                    items: itemResources.Items, goldLimits: itemResources.GoldLimits, pieces: itemResources.EpicPieces);
+                    items: itemResources.Items, goldLimits: itemResources.GoldLimits, pieces: itemResources.EpicPieces,
+                    entry: new(new(2,1),22,"[normal]"));
                 session.Select(0, resumeTown: true);
                 session.MarkReady();
+                That(session.BeginDungeonSelection() is not null, "第六入口请求先取得原生选图上下文");
                 using var lifetime = new CancellationTokenSource();
                 using var bytes = new MemoryStream();
                 await using var sender = new GameConnectionSender(lease, bytes, lifetime, 0, (_, _, _, _, _) => { });
@@ -115,7 +119,11 @@ internal static class BeastSixthDifficultyTests
                 }
                 if (!enter)
                 {
-                    That(scene?.Entry.BeastMode != true, $"深渊拓扑 MAZE1 不会被当成魔兽：{name} / 拒绝={session.LastFormalDungeonRejection}");
+                    That(scene?.Entry.BeastMode != true, $"无效魔兽入口不安装实例：{name} / 拒绝={session.LastFormalDungeonRejection}");
+                    if (name == "noticket")
+                        That(session.LastFormalDungeonRejection == "beast-ticket-required" &&
+                            repository.LoadBeastDungeonUsed(lease, session.Selected!.Id, BeastDungeonRotation.ServiceDay(at), 310) == 0,
+                            "beast-first-room:缺少两类票时拒绝且不占次数");
                     continue;
                 }
                 // 选图提交后一律先进 Loading，靠 CompleteFormalDungeonLoading 才落到 Dungeon。
@@ -127,6 +135,8 @@ internal static class BeastSixthDifficultyTests
                 if (!beast)
                 {
                     That(scene!.Entry.Maze.MapSpecification!.All(map => map.Kind != "Beast"), "普通难度进入 310 时不带任何魔兽格");
+                    That(repository.LoadBeastDungeonUsed(lease, session.Selected!.Id, BeastDungeonRotation.ServiceDay(at), 310) == 0,
+                        "普通五档不消费首版魔兽次数");
                     continue;
                 }
 
@@ -135,7 +145,19 @@ internal static class BeastSixthDifficultyTests
                     "魔兽入口使用十五格魔兽拓扑：" + name);
                 That(scene.Entry.BaseBossMap.Kind == "Beast" || scene.Entry.Maze.MapSpecification!.Contains(scene.Entry.BaseBossMap),
                     "魔兽入口的Boss格来自魔兽拓扑：" + name);
-                That(session.CompleteFormalDungeonLoading() is not null, "魔兽入口通过正式加载屏障：" + name);
+                var fatigue = session.Selected!.Fatigue;
+                That(await commands.DispatchAsync(context, new Packet(1, (ushort)CmdPacketType.FINISH_LOADING, new byte[7])) == CommandResult.Unhandled &&
+                    session.Phase == SessionPhase.Loading && repository.LoadBeastDungeonUsed(lease, session.Selected.Id, BeastDungeonRotation.ServiceDay(at), 310) == 0,
+                    "beast-first-room:错误加载正文不扣票次");
+                That(await commands.DispatchAsync(context, new Packet(1, (ushort)CmdPacketType.FINISH_LOADING, new byte[8])) == CommandResult.Handled &&
+                    session.Phase == SessionPhase.Dungeon && session.Selected!.Inventory.Items.Single(row => row.Core.ItemId == BeastDungeonTicket.Event).Core.Count == 4 &&
+                    session.Selected.Inventory.Items.Single(row => row.Core.ItemId == BeastDungeonTicket.Ordinary).Core.Count == 5 &&
+                    session.Selected.Fatigue == fatigue && repository.LoadBeastDungeonUsed(lease, session.Selected.Id, BeastDungeonRotation.ServiceDay(at), 310) == 1,
+                    "beast-first-room:真实加载Handler提交活动票、次数且不扣疲劳");
+                long revision = session.Selected!.Revision;
+                That(await commands.DispatchAsync(context, new Packet(1, (ushort)CmdPacketType.FINISH_LOADING, new byte[8])) == CommandResult.Unhandled &&
+                    session.Selected.Revision == revision,
+                    "beast-first-room:重放加载不重复扣费");
             }
         }
         finally

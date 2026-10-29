@@ -117,6 +117,9 @@ internal sealed partial class GameSession
             !(Phase == SessionPhase.MapSelect && formalDungeon is null ||
                 Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null) || HasPendingTownQuestCommit) return null;
         var dungeon = plan.Dungeon;
+        if (dungeon.Entry.BeastMode && !BeastDungeonRotation.IsGateway(dungeon.Entry.DungeonId) && !CanUseNativeBeastLocation()) return null;
+        if (dungeon.BeastSelection is { } beastSelection &&
+            (!CanSelectNativeBeast() || !ReferenceEquals(CurrentDungeonSelection, beastSelection))) return null;
         if (dungeon.EvildomWarEntry is { } admission && !ReferenceEquals(CurrentEvildomWar(Selected), admission)) return null;
         if (dungeon.Entry.DungeonId <= int.MaxValue && dungeon.Entry.StartFatigue > 0 &&
             CurrentEvildomWar(Selected) is { Charged: false } war && EvildomWarCostRejection(Selected, war.Catalog) is not null) return null;
@@ -133,6 +136,13 @@ internal sealed partial class GameSession
             int used = repository.LoadBeastDungeonUsed(owner, Selected.Id, beastDay, id);
             if (!BeastDungeonRotation.CanEnter(beastDay, id, used)) return null;
             beast = new(beastDay, used);
+            if (!BeastDungeonRotation.IsGateway(dungeon.Entry.DungeonId))
+            {
+                var beastTicket = dungeon.EntryPieces is { } ticketPieces
+                    ? BeastDungeonTicket.Plan(Selected.Inventory, ticketPieces, IncountNow()) : null;
+                if (beastTicket is null) { LastFormalDungeonRejection = "beast-ticket-required"; return null; }
+                beast = beast with { Ticket = beastTicket };
+            }
         }
         var costs = new List<ItemMaterialCost>();
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
@@ -168,6 +178,13 @@ internal sealed partial class GameSession
             guildAdmission = repository.PrepareGuildDungeonEntry(owner, Selected.Id, dungeon.Entry.DungeonId, guildDungeons);
             if (guildAdmission is null) { LastFormalDungeonRejection = "guild-dungeon-unavailable"; return null; }
         }
+        var training = PrepareGuildTraining(Selected, items);
+        if (training is not null)
+        {
+            items = items is null ? training.Inventory : items.WithAfter(training.Inventory.After);
+        }
+        // 只冻结原准备对象，正式效果在组队统一事务成功后的InstallPartyDungeon安装。
+        preparedPartyDungeon = plan with { Dungeon = dungeon with { GuildTraining = training?.Snapshot } };
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
             { OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
@@ -208,12 +225,16 @@ internal sealed partial class GameSession
             previous.Ground.ExpireRun();
         }
         installing.Ground.PublishPassiveEntry();
+        installing.BeastReservation = reservation.Charge.Beast is { Ticket: not null } beast ? beast : null;
         Selected = committed;
         if (installing.EvildomWarEntry is { } war)
             war.Charged = true;
         formalDungeon = installing;
         if (installing.Entry.BeastMode && installing.Entry.StartMap.Kind.Equals("beast", StringComparison.OrdinalIgnoreCase))
+        {
             installing.BeastStages[installing.Entry.StartMap.Position] = 0;
+            installing.BeastProgress?.Enter(0);
+        }
         if (installing.Entry.Hope is not null) hopeSelection = null;
         PartyDungeon = instance;
         partyDungeonRun = instance.Id;
@@ -233,7 +254,12 @@ internal sealed partial class GameSession
 
     internal void RemovePartyDungeon(PartyDungeonInstance instance)
     {
-        if (ReferenceEquals(PartyDungeon, instance)) PartyDungeon = null;
+        if (ReferenceEquals(PartyDungeon, instance))
+        {
+            if (Selected is { } character)
+                formalDungeon?.BeastProgress?.RemoveParticipant(character.Id, instance.Members.Length == 0);
+            PartyDungeon = null;
+        }
     }
 
     internal sealed record PartyExitPreparation(PartyDungeonExitReservation Reservation, long Epoch, object Context, PartyDungeonExitKind Kind);
@@ -284,6 +310,7 @@ internal sealed partial class GameSession
             dungeon.Ground.ExpireRun();
             raidChange = ReleaseCurrentRaidDungeon();
             ReleaseCurrentEvildomWarDungeon();
+            ReleaseBeastDungeonReservation();
             formalDungeon = null;
             CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
         }

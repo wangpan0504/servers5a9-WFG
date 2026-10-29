@@ -44,6 +44,8 @@ internal sealed partial class TcpPeer : IDisposable
     long UnixTime => (fixture?.UtcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
     public byte[] Roster { get; private set; } = [];
     public byte[] LoginEndpoint { get; private set; } = [];
+    public byte[] PvpTotalActors { get; private set; } = [];
+    public byte[] PvpMissions { get; private set; } = [];
     public byte[] SkillInfo { get; private set; } = [];
     public byte[] SceneSkillInfo { get; private set; } = [];
     public byte[] AvailableQuests { get; private set; } = [];
@@ -235,6 +237,7 @@ internal sealed partial class TcpPeer : IDisposable
         if (header[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)) == 2 && frame.Length >= 21 && frame[16] is 0 or 1)
             TestCheck.Bytes(frame.AsSpan(19, 2), [2, actorChannel], "USERINFO进入本次期待的频道Actor表，普通读取保持接收者频道");
         var packet = new WirePacket(header[0], BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1)), frame[16..], protectedFrame);
+        if (packet is { Kind: 1, Opcode: 4, Body.Length: >= 11 } && packet.Body[0] == 1) Id = U16(packet.Body, 9);
         if (packet is { Kind: 0, Opcode: 4, Body.Length: 1 }) staminaPercent = packet.Body[0];
         if (packet is { Kind: 0, Opcode: 127 })
         {
@@ -841,6 +844,37 @@ internal sealed partial class TcpPeer : IDisposable
         }
     }
 
+    public void CheckGuildPassiveBuffs(WirePacket packet)
+    {
+        var f = fixture ?? throw new InvalidOperationException("Guild passive assertions require a fixture");
+        long now = f.UtcNow.ToUnixTimeSeconds();
+        var rows = f.Query("""
+            SELECT b.value,b.expires_unix FROM guild_benefits b JOIN guild_members m ON m.guild_id=b.guild_id
+            WHERE m.character_id=$p0 AND b.type IN (3,5) AND b.value>0 AND (b.expires_unix=0 OR b.expires_unix>$p1)
+            ORDER BY b.type
+            """, Id, now).Select(row => (Id: Convert.ToUInt32(row[0]), Until: Convert.ToInt64(row[1]))).ToList();
+        var guardian = f.Query("""
+            SELECT COALESCE(p.level,1) FROM guild_members m LEFT JOIN guild_npc_progress p
+              ON p.guild_id=m.guild_id AND p.npc_id=400001060 WHERE m.character_id=$p0
+            """, Id);
+        TestCheck.That(guardian.Length == 1, "属性通知必须属于当前角色真实会籍");
+        uint level = Convert.ToUInt32(guardian[0][0]);
+        TestCheck.That(level is >= 1 and <= 5, "守护石初始化必须有合法实际档位");
+        rows.Add((1275 + level, 0));
+        TestCheck.That(packet is { Kind: 0, Opcode: 487 }, "公会属性通知类型必须匹配");
+        byte[] body = packet.Body;
+        TestCheck.That(body.Length == 1 + rows.Count * 16 && body[0] == rows.Count,
+            "入城完整安装当前公会属性，不能遗留通知或省略永久守护石");
+        for (int at = 0; at < rows.Count; at++)
+        {
+            int offset = 1 + at * 16;
+            long seconds = rows[at].Until == 0 ? 0 : Math.Max(0, rows[at].Until - now);
+            TestCheck.That(U32(body, offset) == rows[at].Id && U32(body, offset + 4) == 0 &&
+                Math.Abs((long)U32(body, offset + 8) - seconds) <= (seconds == 0 ? 0 : 1) &&
+                U32(body, offset + 12) == 0, "入城属性逐项匹配真实账本、剩余期限及零保留字段");
+        }
+    }
+
     public void ReadGuildDungeon() => CheckGuildDungeon(Expect(0, 744).Body);
 
     public void CheckGuildDungeon(byte[] body)
@@ -873,13 +907,20 @@ internal sealed partial class TcpPeer : IDisposable
             packet = Read();
         }
         TestCheck.That(packet is { Kind: 0, Opcode: 1773, Body.Length: 1080 },
-            "NPC初始化以固定1080字节福利快照结束");
+            "NPC初始化包含固定1080字节福利快照");
+        byte[] training = Expect(0, 1774).Body;
+        TestCheck.That(training.Length == 16 && training.All(value => value <= 3),
+            "NPC初始化恢复16格训练解锁与选择状态");
     }
 
     public byte[] CharacterFriends { get; private set; } = [];
     public byte[] AccountFriends { get; private set; } = [];
     public byte[] AccountFriendGroups { get; private set; } = [];
     public byte[] AccountFriendRequests { get; private set; } = [];
+
+    // 决斗入口频道类型取自 LOGIN 应答第 4 字节；原生登录不取该应答（LoginEndpoint 仍为空数组），按非决斗处理，
+    // 保持入城仍走共享房间与 1379。直接按下标读会在 NativeLoginTcpTests 抛 IndexOutOfRangeException。
+    bool PvpEntry => LoginEndpoint.Length > 3 && LoginEndpoint[3] is 4 or 5 or 8 or 24;
 
     public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
         (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null, bool expertContract = false,
@@ -891,6 +932,8 @@ internal sealed partial class TcpPeer : IDisposable
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null)
     {
+        // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
+        if (PvpEntry) room = false;
         // nativeSwitch：原生换频道新连接直接发选角4，不先请求名册；服务端按换频道判定是否保留客户端城镇快照。
         if (!resumeTown && !requestedRoster && !nativeSwitch)
             Send(8, [255, 255, 2]);
@@ -1176,7 +1219,20 @@ internal sealed partial class TcpPeer : IDisposable
             "client expansion reader stays within its three-stage table");
         TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
         if (expertJobInfo is not null) Expect(0, 205, expertJobInfo);
-        if (pvpTotalTeam is not null) Expect(0, 804, pvpTotalTeam);
+        if (PvpEntry)
+        {
+            PvpMissions = Expect(0, 323).Body;
+            if (fixture is not null) PvpMissionTcpChecks.Progress(fixture, Id, PvpMissions);
+            else PvpMissionTcpChecks.Parse(PvpMissions);
+        }
+        if (pvpTotalTeam is not null)
+        {
+            Expect(0, 804, pvpTotalTeam);
+            var actors = Expect(0, 803).Body;
+            PvpTotalActors = actors;
+            TestCheck.That(actors[0] == 1 && U16(actors, 1) == Id && actors[3] == 3,
+                "选角回放总力编队后安装本人的三名完整演员，满足开始前客户端门槛");
+        }
         TagEvildomInfo = (tagEvildom ?? []).Select(opcode => Expect(0, opcode)).ToArray();
         ReadWeeklyDungeon();
         // 新增的空历史356已逐包校验，并由CompletedQuestHistory暴露；

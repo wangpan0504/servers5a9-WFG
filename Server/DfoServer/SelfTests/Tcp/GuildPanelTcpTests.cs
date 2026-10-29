@@ -71,10 +71,12 @@ internal static class GuildPanelTcpTests
 
             // 先刷新信息，随后完整列表必须独立完成，不能等待不存在的同号339 ACK。
             master.Send(339, []);
+            CheckRanking(master);
             CheckInformation(master.Expect(0, 70).Body, 132, 2);
             master.ReadGuildNpcs();
             master.ReadGuildDungeon();
             master.Send(140, Build(writer => writer.Write(72u)));
+            CheckRanking(master);
             CheckInformation(master.Expect(0, 70).Body, 132, 2);
             var first = GuildPanelTests.DecodeMembers(master.Expect(1, 140).Body, true, true);
             var next = GuildPanelTests.DecodeMembers(master.Expect(1, 141).Body, false, true);
@@ -98,6 +100,7 @@ internal static class GuildPanelTcpTests
                 "真实入城登录贡献100同时进入本周与累计字段，离线夹具不虚增贡献");
 
             master.Send(67, []);
+            CheckRanking(master);
             CheckInformation(master.Expect(0, 70).Body, 132, 2);
             var ordinary = GuildPanelTests.DecodeMembers(master.Expect(1, 67).Body, true, false);
             var ordinaryNext = GuildPanelTests.DecodeMembers(master.Expect(1, 139).Body, false, false);
@@ -138,22 +141,26 @@ internal static class GuildPanelTcpTests
         {
             Enter(rankingPeer, 1);
             rankingPeer.Send(1506, [255, 255]);
-            byte[] summary = rankingPeer.Expect(1, 1506).Body;
+            byte[] summaryAck = rankingPeer.Expect(1, 1506).Body;
+            That(summaryAck.Length == 117 && summaryAck[0] == 1, "1506公共ACK成功字节不可用帧头kind代替");
+            byte[] summary = summaryAck[1..];
             That(summary.Length == 116 && BitConverter.ToInt32(summary, 0) == 0 && BitConverter.ToInt32(summary, 4) > 0 &&
                 BitConverter.ToSingle(summary, 8) > 0 && BitConverter.ToInt32(summary, 12) == 0,
                 "1506真实Runtime返回当前公会116B统计，首DWORD零初始化，外来UID引用不改为查询别会，也不伪造上月");
             rankingPeer.Send(1507, [0, 0, 1, 0]);
-            byte[] list = rankingPeer.Expect(1, 1507).Body;
+            byte[] listAck = rankingPeer.Expect(1, 1507).Body;
+            That(listAck.Length == 158 && listAck[0] == 1, "1507普通模式先消费公共成功字节，mode0不能被当成失败");
+            byte[] list = listAck[1..];
             That(list.Length == 157 && list[0] == 0 && U16(list, 1) == 2 && U16(list, 3) == 2 &&
                 U32(list, 5) == 71 && U16(list, 79) == 132,
-                "1507从真实两公会生成76B排行行，正文无前置标志位，成员数使用132而非页数");
+                "1507公共层之后从真实两公会生成76B排行行，成员数使用132而非页数");
             rankingPeer.Send(1507, [1, 2, 1, 0]);
             byte[] top = rankingPeer.Expect(1, 1507).Body;
-            That(top is [1, ..] && U16(top, 3) == 2, "前三名模式按原生模式字节回包");
+            That(top is [1, 1, ..] && top.Length == 158 && U16(top, 4) == 2, "前三名模式保留独立成功字节与原生模式字节");
             rankingPeer.Send(1507, [0, 0, 2, 0]);
-            rankingPeer.Expect(1, 1507, [0, 2, 0, 0, 0]);
-            rankingPeer.Send(1506, []); rankingPeer.Expect(1, 1506, new byte[116]);
-            rankingPeer.Send(1507, [0, 8, 1, 0]); rankingPeer.Expect(1, 1507, new byte[5]);
+            rankingPeer.Expect(1, 1507, [1, 0, 2, 0, 0, 0]);
+            rankingPeer.Send(1506, []); rankingPeer.Expect(1, 1506, [0, 0, 0]);
+            rankingPeer.Send(1507, [0, 8, 1, 0]); rankingPeer.Expect(1, 1507, [0, 0, 0]);
             rankingPeer.Send(156, Text("RankBarrier")); rankingPeer.Expect(1, 156, [1]);
         }
         await fixture.StopAsync();
@@ -161,6 +168,14 @@ internal static class GuildPanelTcpTests
             fixture.Query("SELECT count(*) FROM pragma_foreign_key_check") is [[0L]],
             "公会成员查询结束后隔离库及外键完整");
         Console.WriteLine($"PASS {Count - before} 公会面板刷新、成员分块与隔离 TCP 断言");
+    }
+
+    static void CheckRanking(TcpPeer peer)
+    {
+        byte[] body = peer.Expect(1, 1506).Body;
+        That(body.Length == 117 && body[0] == 1 && BitConverter.ToInt32(body, 5) == 1 &&
+            BitConverter.ToInt32(body, 13) == 0 && Math.Abs(BitConverter.ToSingle(body, 29) - 13.2f) < 0.0001,
+            "主窗口刷新必须先安装真实当前排名及132成员分数，再发70与名册，缺失上月仍为0");
     }
 
     static void Enter(TcpPeer peer, byte grade)
@@ -189,7 +204,26 @@ internal static class GuildPanelTcpTests
             {
                 That(ownGrade && information == (grade != 100), "有无公会的登录均安装准确职位且不伪造会籍");
                 peer.ReadWeeklyDungeon();
-                return;
+                peer.Send(156, Text("PanelBar"));
+                bool guardian = false;
+                for (int at = 0; at < 128; at++)
+                {
+                    var next = peer.Read();
+                    if (next is { Kind: 0, Opcode: 487 })
+                    {
+                        That(!guardian, "面板入城永久属性只安装一次");
+                        peer.CheckGuildPassiveBuffs(next);
+                        guardian = true;
+                    }
+                    else if (next is { Kind: 1, Opcode: 156 })
+                    {
+                        Bytes(next.Body, [1], "面板入城哨兵完成");
+                        That(guardian == (grade != 100), "仅真实公会成员入城安装永久守护石");
+                        return;
+                    }
+                    else That(next is { Kind: 0, Opcode: 2 }, "面板入城尾部仅允许同屏Actor和永久属性");
+                }
+                throw new InvalidOperationException("Guild panel entry did not reach barrier");
             }
         }
         throw new InvalidOperationException("公会成员TCP未完成入城序列");

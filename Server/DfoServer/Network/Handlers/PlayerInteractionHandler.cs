@@ -142,6 +142,14 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
         // 普通频道取消快速组队发空13；仅无真实队伍的选图上下文按取消恢复，不能伪造实际离队成功。
         if (!kick && town is not null && await town.RestoreDungeonSelectionAsync(context, CmdPacketType.LEAVE_PARTY))
             return CommandResult.Handled;
+        if (!kick && context.Session.ReadPvpPractice() is { } practice)
+        {
+            var left = context.Session.EndPvpPractice(practice);
+            if (left is not null)
+                await context.Notify(NotiPacketType.PVP_SEAT_STATE, PvpTrainingPackets.LeaveSeat(left.Actor.Character.Id, left.Mode is null ? (byte)6 : (byte)10),
+                    "pvp_practice_left", () => context.Session.CanPublishPvpPractice(left, removed: true));
+            return CommandResult.Handled;
+        }
         if (!kick && context.Session.ReadPvpTraining() is { } training)
         {
             var left = context.Session.EndPvpTraining(training.InstanceId);

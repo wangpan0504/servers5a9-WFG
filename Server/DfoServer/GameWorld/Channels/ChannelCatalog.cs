@@ -60,6 +60,15 @@ internal sealed partial class ChannelCatalog
                     i == 4 && (value < 0 || value > 255))
                     throw new InvalidDataException("频道数值字段无效");
             }
+            if (type is 4 or 5 or 8 or 24)
+            {
+                // 客户端将这两列读为等级下限/上限；上限0不会补默认，会拒绝所有角色。
+                float minimumLevel = float.Parse(tokens[9], CultureInfo.InvariantCulture);
+                float maximumLevel = float.Parse(tokens[10], CultureInfo.InvariantCulture);
+                if (minimumLevel < 1 || maximumLevel > 95 || minimumLevel > maximumLevel ||
+                    minimumLevel != MathF.Truncate(minimumLevel) || maximumLevel != MathF.Truncate(maximumLevel))
+                    throw new InvalidDataException($"频道{number}的PK等级范围必须是1..95内且下限不大于上限的整数");
+            }
             channels.Add(new(number, tokens[1][1..^1], type, tokens[3][1..^1]));
             if (channels.Count > 256)
                 throw new InvalidDataException("频道目录最多支持256项");

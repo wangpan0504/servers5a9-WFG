@@ -74,12 +74,18 @@ internal static partial class GuildAppearanceTcpTests
         for (int guard = 0; guard < 128; guard++)
         {
             var packet = peer.Read();
+            if (packet is { Kind: 0, Opcode: 487 }) { peer.CheckGuildPassiveBuffs(packet); continue; }
+            if (packet is { Kind: 0, Opcode: 488 })
+            {
+                Bytes(packet.Body, Convert.FromHexString("01FC040000"), "制造刷新只移除原守护石1276再恢复");
+                continue;
+            }
             if (packet.Kind == 0 && packet.Opcode == 744)
             {
                 peer.CheckGuildDungeon(packet.Body);
                 continue;
             }
-            That(packet.Kind == 0 && packet.Opcode is 2 or 70 or 127 or 1771 or 1772 or 1773 ||
+            That(packet.Kind == 0 && packet.Opcode is 2 or 70 or 127 or 1771 or 1772 or 1773 or 1774 ||
                 packet.Kind == 1 && packet.Opcode is 140 or 744 or 1454,
                 "生产广播只消费已确认的公会刷新与福利状态，不吞任意应答");
             if (packet.Opcode == 1772)
@@ -98,6 +104,7 @@ internal static partial class GuildAppearanceTcpTests
                     "真实1773首公有福利与1772相同，剩余39+50条严格归零");
             else
                 That(packet.Body.All(value => value == 0), "到期空福利快照清除原生生产倒计时");
+            That(peer.Expect(0, 1774).Body.Length == 16, "制造刷新同时恢复训练快照");
             return packet.Body;
         }
         throw new InvalidOperationException("Guardian craft snapshot was not received");

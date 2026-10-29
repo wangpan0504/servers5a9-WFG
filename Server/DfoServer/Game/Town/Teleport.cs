@@ -3,6 +3,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Items;
+using DfoServer.GameWorld.Guilds;
 using DfoServer.GameWorld.Towns;
 
 namespace DfoServer.Game.Town;
@@ -36,13 +37,33 @@ internal sealed record TeleportReceipt(TownTravelReceipt Travel, InventoryResult
 }
 internal sealed record TeleportResult(string Reason, TeleportReceipt? Receipt = null)
 {
-    public bool Accepted => Receipt is not null;
+    public bool Replayed { get; init; }
+    public bool Accepted => Receipt is not null || Replayed;
 }
+internal sealed record GuildMapTeleportCommit(string Reason, Character? Character = null, bool Replayed = false);
 
 internal sealed class TeleportService(TownCatalog towns, TeleportCatalog definitions, Func<int, ItemTemplate> item, TimeProvider? clock = null,
-    TeleportPotionGateMode potionGates = TeleportPotionGateMode.Open)
+    TeleportPotionGateMode potionGates = TeleportPotionGateMode.Open, int guildTeleportCost = 0)
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
+    public static bool IsGuildMap(PotionTeleportRequest request) => request is
+        { Slot: 0, ItemId: 0, Mode: 0, Target.Direction: 3 };
+
+    public (string Reason, TeleportPlan? Plan) GuildMap(Character character, PotionTeleportRequest request,
+        EpicPieceCatalog pieces, long now)
+    {
+        if (!IsGuildMap(request) || guildTeleportCost <= 0 || character.Guild is null)
+            return ("guild-teleport-unavailable", null);
+        // 0284FC70在237最后写的是地图来源3，不是角色朝向；切图沿用当前实际朝向。
+        var target = request.Target with { Direction = character.Position.Direction };
+        string access = Destination(character, target);
+        if (access != "ready") return (access, null);
+        var paid = InventoryMaterialConsumptionService.Plan(character.Inventory,
+            [new(GuildNpcCatalog.MemberCoinItem, guildTeleportCost)], pieces, DateTimeOffset.FromUnixTimeMilliseconds(now));
+        // 余额不足仍允许提交器先查询已提交回执，最后一笔花完余额的网络重放不能再次扣费。
+        return ("ready", Plan(character, target, new(character.Inventory, paid.Plan?.After ?? character.Inventory,
+            "guild_map_teleport", new(character)), character.TeleportCooldowns, now));
+    }
     // 返回实际穿戴光环声明的能力；`[none]` 以 Kind.None 表示“有光环但不提供传送”，与“没有光环”的null区分。
     public AuraAbilityDefinition? Aura(Character character, long now)
     {

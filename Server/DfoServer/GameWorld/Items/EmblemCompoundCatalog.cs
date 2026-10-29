@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Numerics;
 using System.Text.RegularExpressions;
 using PvfLib;
 using static PvfLib.PvfScript;
@@ -14,6 +15,7 @@ internal sealed record EmblemCompoundPool(int BoosterItemId, ImmutableArray<Embl
 internal sealed class EmblemCompoundCatalog
 {
     public const string RootPath = "etc/emblemcompound.etc";
+    public const string GuildRootPath = "etc/guildreform.etc";
     static readonly string[] JobNames =
     [
         "swordman", "fighter", "gunner", "mage", "priest", "at gunner", "thief", "at fighter",
@@ -22,28 +24,35 @@ internal sealed class EmblemCompoundCatalog
     ];
 
     readonly FrozenDictionary<(int Grade, int Count), EmblemCompoundPool> pools;
+    readonly FrozenDictionary<(int Level, int Grade, int Count), EmblemCompoundPool> guildPools;
 
     public EmblemCompoundCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
-        : this(archive.ReadText, stackable) { }
+        : this(archive.ReadText, stackable, archive.ReadText(GuildRootPath)) { }
 
-    internal EmblemCompoundCatalog(Func<string, string> read, IReadOnlyDictionary<int, string> stackable)
+    internal EmblemCompoundCatalog(Func<string, string> read, IReadOnlyDictionary<int, string> stackable,
+        string? guildText = null)
     {
-        var mappings = ParseMappings(read(RootPath));
+        string text = read(RootPath);
+        var mappings = ParseMappings(text);
+        var guildMappings = ParseGuildMappings(guildText ?? text);
         var loaded = new Dictionary<int, EmblemCompoundPool>();
+        var expanded = new Dictionary<int, ImmutableArray<EmblemCompoundRewardDefinition>>();
         var rewardMetadata = new Dictionary<int, (int Rarity, ImmutableHashSet<byte> PlatinumJobs)>();
         var result = new Dictionary<(int Grade, int Count), EmblemCompoundPool>();
-        foreach (var (key, boosterItemId) in mappings)
+        EmblemCompoundPool Load(int boosterItemId)
         {
             if (!loaded.TryGetValue(boosterItemId, out var pool))
             {
                 if (!stackable.TryGetValue(boosterItemId, out string? boosterPath))
                     throw new InvalidDataException($"徽章合成booster不在stackable列表: {boosterItemId}");
-                var rewards = ParsePool(read("stackable/" + boosterPath), boosterItemId, read, stackable, rewardMetadata);
+                var rewards = ParsePool(read("stackable/" + boosterPath), boosterItemId, read, stackable, rewardMetadata, expanded);
                 loaded.Add(boosterItemId, pool = new(boosterItemId, rewards));
             }
-            result.Add(key, pool);
+            return pool;
         }
+        foreach (var (key, boosterItemId) in mappings) result.Add(key, Load(boosterItemId));
         pools = result.ToFrozenDictionary();
+        guildPools = guildMappings.ToFrozenDictionary(row => row.Key, row => Load(row.Value));
     }
 
     public EmblemCompoundPool For(int grade, int count) =>
@@ -52,6 +61,34 @@ internal sealed class EmblemCompoundCatalog
             : throw new InvalidDataException($"徽章合成缺少grade={grade} count={count}映射");
 
     public IEnumerable<KeyValuePair<(int Grade, int Count), EmblemCompoundPool>> Entries => pools;
+
+    public EmblemCompoundPool? ForGuild(int level, int grade, int count) =>
+        guildPools.GetValueOrDefault((level, grade, count));
+
+    internal static FrozenDictionary<(int Level, int Grade, int Count), int> ParseGuildMappings(string text)
+    {
+        const string tag = "guild npc emblem compound info";
+        var mappings = new Dictionary<(int Level, int Grade, int Count), int>();
+        if (!text.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase)) return mappings.ToFrozenDictionary();
+        int[] values = Integers(Block(text, tag));
+        int at = 0;
+        while (at < values.Length)
+        {
+            if (values.Length - at < 3) throw new InvalidDataException("PVF公会徽章合成映射头截断");
+            int level = values[at++], grade = values[at++], maximum = values[at++];
+            if (level is < 1 or > 5 || grade <= 0 || maximum is < 2 or > 5)
+                throw new InvalidDataException($"PVF公会徽章合成映射头无效: level={level} grade={grade} count={maximum}");
+            if (values.Length - at < maximum - 1) throw new InvalidDataException("PVF公会徽章合成奖池映射截断");
+            for (int count = 2; count <= maximum; count++)
+            {
+                int booster = values[at++];
+                if (booster <= 0 || !mappings.TryAdd((level, grade, count), booster))
+                    throw new InvalidDataException($"PVF公会徽章合成映射无效或重复: level={level} grade={grade} count={count}");
+            }
+        }
+        if (mappings.Count == 0) throw new InvalidDataException("PVF公会徽章合成映射为空或未闭合");
+        return mappings.ToFrozenDictionary();
+    }
 
     internal static FrozenDictionary<(int Grade, int Count), int> ParseMappings(string text)
     {
@@ -87,14 +124,56 @@ internal sealed class EmblemCompoundCatalog
 
     static ImmutableArray<EmblemCompoundRewardDefinition> ParsePool(string text, int boosterItemId,
         Func<string, string> read, IReadOnlyDictionary<int, string> stackable,
-        Dictionary<int, (int Rarity, ImmutableHashSet<byte> PlatinumJobs)> metadata)
+        Dictionary<int, (int Rarity, ImmutableHashSet<byte> PlatinumJobs)> metadata,
+        Dictionary<int, ImmutableArray<EmblemCompoundRewardDefinition>>? expanded = null, HashSet<int>? visiting = null)
+    {
+        expanded ??= new(); visiting ??= new();
+        if (expanded.TryGetValue(boosterItemId, out var cached)) return cached;
+        if (visiting.Count >= 8 || !visiting.Add(boosterItemId))
+            throw new InvalidDataException($"徽章合成booster循环引用或嵌套过深: {boosterItemId}");
+        try
+        {
+            var result = ParsePoolContents(text, boosterItemId, read, stackable, metadata, expanded, visiting);
+            expanded.Add(boosterItemId, result); return result;
+        }
+        finally { visiting.Remove(boosterItemId); }
+    }
+
+    static ImmutableArray<EmblemCompoundRewardDefinition> ParsePoolContents(string text, int boosterItemId,
+        Func<string, string> read, IReadOnlyDictionary<int, string> stackable,
+        Dictionary<int, (int Rarity, ImmutableHashSet<byte> PlatinumJobs)> metadata,
+        Dictionary<int, ImmutableArray<EmblemCompoundRewardDefinition>> expanded, HashSet<int> visiting)
     {
         string body = Block(text, "booster info");
         if (body.Length == 0)
             throw new InvalidDataException($"徽章合成booster缺少奖励段: {boosterItemId}");
+        var characterPools = Regex.Matches(body, @"\[charactor\](.*?)\[/charactor\]", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        if (characterPools.Count > 0)
+        {
+            var rewards = ImmutableArray.CreateBuilder<EmblemCompoundRewardDefinition>();
+            var jobs = new HashSet<byte>();
+            foreach (Match characterPool in characterPools)
+            {
+                var header = Regex.Match(characterPool.Groups[1].Value,
+                    @"^\s*`\[([^\]]+)\]`\s+(\d+)\s+(\d+)\s+(\d+)\s+(.*)$", RegexOptions.Singleline);
+                int job = Array.IndexOf(JobNames, header.Groups[1].Value);
+                if (!header.Success || job < 0 || !jobs.Add((byte)job) ||
+                    header.Groups[2].Value != "1" || header.Groups[3].Value != "99" || header.Groups[4].Value != "1")
+                    throw new InvalidDataException($"徽章合成职业奖池资格或抽数不支持: {boosterItemId}");
+                var candidates = ParsePoolContents("[booster info]\n[stackable]\n1 " + header.Groups[5].Value +
+                    "\n[/stackable]\n[/booster info]", boosterItemId, read, stackable, metadata, expanded, visiting);
+                foreach (var candidate in candidates)
+                {
+                    if (candidate.Rarity != 6) throw new InvalidDataException($"职业徽章池含非白金奖励: {boosterItemId}");
+                    if (candidate.PlatinumJobs.Contains((byte)job)) rewards.Add(candidate with { PlatinumJobs = [(byte)job] });
+                }
+            }
+            if (rewards.Count is 0 or > 20000) throw new InvalidDataException($"职业徽章池有效候选数量无效: {boosterItemId}");
+            return rewards.ToImmutable();
+        }
         // S5A9原表把徽章写在[stackable]，部分参考资源使用[emblem]；两者都只在
         // 最终逐项确认为[avatar emblem]后接纳，不把任意booster堆叠奖励当徽章。
-        foreach (Match match in Regex.Matches(body, @"\[(?<kind>emblem|stackable)\](?<rows>.*?)\[/\k<kind>\]",
+        foreach (Match match in Regex.Matches(body, @"\[(?<kind>emblem|stackable|booster)\](?<rows>.*?)\[/\k<kind>\]",
             RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {
             string[] tokens = match.Groups["rows"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
@@ -121,6 +200,7 @@ internal sealed class EmblemCompoundCatalog
                 for (int digit = 0; digit < scale; digit++)
                     factor = checked(factor * 10);
                 var rewards = ImmutableArray.CreateBuilder<EmblemCompoundRewardDefinition>();
+                var branches = new List<(long Weight, ImmutableArray<EmblemCompoundRewardDefinition> Rewards)>();
                 long total = 0;
                 foreach (var row in rows)
                 {
@@ -129,6 +209,18 @@ internal sealed class EmblemCompoundCatalog
                         continue;
                     if (!stackable.TryGetValue(row.ItemId, out string? rewardPath))
                         throw new InvalidDataException($"徽章合成奖励不在stackable列表: {row.ItemId}");
+                    if (match.Groups["kind"].Value.Equals("booster", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (row.Count != 1) throw new InvalidDataException($"嵌套徽章池必须只开一个子池: {boosterItemId}");
+                        if (!expanded.TryGetValue(row.ItemId, out var child))
+                        {
+                            string childText = read("stackable/" + rewardPath);
+                            if (!Regex.IsMatch(Section(childText, "stackable type"), @"^\s*`\[booster\]`\s+\d+\s*$"))
+                                throw new InvalidDataException($"嵌套徽章池引用非booster: {row.ItemId}");
+                            child = ParsePool(childText, row.ItemId, read, stackable, metadata, expanded, visiting);
+                        }
+                        branches.Add((weight, child)); continue;
+                    }
                     if (!metadata.TryGetValue(row.ItemId, out var definition))
                     {
                         string rewardText = read("stackable/" + rewardPath);
@@ -143,6 +235,7 @@ internal sealed class EmblemCompoundCatalog
                     total = checked(total + weight);
                     rewards.Add(new(row.ItemId, weight, row.Count, definition.Rarity, definition.PlatinumJobs));
                 }
+                if (branches.Count > 0) return Flatten(branches, boosterItemId);
                 if (total > 0)
                     return rewards.ToImmutable();
             }
@@ -152,6 +245,31 @@ internal sealed class EmblemCompoundCatalog
             }
         }
         throw new InvalidDataException($"徽章合成booster没有正权重emblem奖池: {boosterItemId}");
+    }
+
+    static ImmutableArray<EmblemCompoundRewardDefinition> Flatten(
+        List<(long Weight, ImmutableArray<EmblemCompoundRewardDefinition> Rewards)> branches, int boosterItemId)
+    {
+        var totals = branches.Select(branch => branch.Rewards.Aggregate(BigInteger.Zero, (sum, row) => sum + row.Weight)).ToArray();
+        BigInteger scale = BigInteger.One;
+        foreach (var total in totals)
+        {
+            if (total <= 0) throw new InvalidDataException($"嵌套徽章池无正权重: {boosterItemId}");
+            scale = scale / BigInteger.GreatestCommonDivisor(scale, total) * total;
+            if (scale.GetBitLength() > 4096) throw new InvalidDataException($"嵌套徽章池概率精度超过上限: {boosterItemId}");
+        }
+        var rows = new List<(EmblemCompoundRewardDefinition Reward, BigInteger Weight)>();
+        for (int index = 0; index < branches.Count; index++)
+            foreach (var reward in branches[index].Rewards)
+            {
+                // 必须除以各子池总权重；直接乘父子原权重会改变不同大小子池的概率。
+                rows.Add((reward, branches[index].Weight * (BigInteger)reward.Weight * (scale / totals[index])));
+                if (rows.Count > 20000) throw new InvalidDataException($"嵌套徽章池展开超过上限: {boosterItemId}");
+            }
+        BigInteger gcd = rows.Select(row => row.Weight).Aggregate(BigInteger.GreatestCommonDivisor);
+        BigInteger sum = rows.Aggregate(BigInteger.Zero, (total, row) => total + row.Weight / gcd);
+        if (sum > long.MaxValue) throw new InvalidDataException($"嵌套徽章池权重溢出: {boosterItemId}");
+        return rows.Select(row => row.Reward with { Weight = (long)(row.Weight / gcd) }).ToImmutableArray();
     }
 
     internal static ImmutableHashSet<byte> PlatinumJobs(string text)

@@ -32,6 +32,7 @@ internal static class PvpArenaCatalogTests
         That(catalog.BattleDurationFor(8) == TimeSpan.FromSeconds(240) &&
             catalog.BattleDurationFor(24) == TimeSpan.FromSeconds(240) &&
             catalog.BattleDurationFor(0) == TimeSpan.FromSeconds(91) &&
+            catalog.BattleDurationFor(4) == TimeSpan.FromSeconds(91) &&
             catalog.BattleDurationFor(24, true) == TimeSpan.FromSeconds(180) &&
             catalog.BattleDurationFor(0, true) == TimeSpan.FromSeconds(120), "四种战斗时长独立装配，匹配与传统频道采用兼容大会列");
         foreach (int duration in new[] { 0, -1, 3_600_001 })

@@ -50,6 +50,13 @@ internal static class ImperialArenaTcpTests
                 "自动配队取当前角色为队首、名册里第一名其他90级非决斗角色为队友");
             That(fixture.Query("SELECT first,second FROM account_imperial_arena_configuration") is [[long seededFirst, long seededSecond]] &&
                 seededFirst == first.Id && seededSecond == second.Id, "自动配队落库稳定身份");
+            string beforeRoster = Assets() + fixture.Snapshot("SELECT * FROM account_imperial_arena_configuration");
+            for (int request = 0; request < 2; request++)
+            {
+                peer.Send(1470); peer.Expect(0, 1408, [0]); peer.Barrier();
+            }
+            That(beforeRoster == Assets() + fixture.Snapshot("SELECT * FROM account_imperial_arena_configuration"),
+                "帝国299同样以1408完成本地名册就绪，重复1470不改配置或资产、不伪造ACK");
             // 清空编队后仍须拒绝购券：不扣金币、不递增角色版本、不创建日券。
             fixture.Sql("DELETE FROM account_imperial_arena_configuration");
             string noTeam = Assets();
@@ -88,7 +95,8 @@ internal static class ImperialArenaTcpTests
                     {
                         ClearRoom(peer, map, room == 0 ? 0 : route[room - 1].MonsterId, clock, attempt == 0,
                             attempt == 0 && (mode == 1 || room == route.Length),
-                            room == 0 && attempt == 0 ? () => Restricted(peer) : null);
+                            room == 0 && attempt == 0 ? () => Restricted(peer) : null, final: room == route.Length,
+                            elapsedMilliseconds: checked((uint)(route.Length + 1) * 10_000u));
                         if (mode == 2 && room > 0 && room < route.Length)
                             That(fixture.Query("SELECT count(*) FROM mailbox_messages") is [[long current]] && current == mailBefore + attempt,
                                 "困难中途只冻结奖励，结束前不逐回合发信");
@@ -228,9 +236,9 @@ internal static class ImperialArenaTcpTests
     static void Return(TcpPeer peer, bool recoveredMail = false)
     {
         peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 3); peer.Expect(0, 24);
-        FormalDungeonTcpTests.RefreshedQuests(peer); peer.Expect(0, 2); peer.Expect(0, 2); peer.Expect(0, 19);
+        FormalDungeonTcpTests.RefreshedQuests(peer);
         if (recoveredMail) peer.Expect(0, 99);
-        peer.Expect(0, 1403); peer.Expect(0, 1400); peer.Expect(0, 1632); peer.Expect(0, 1393); peer.Expect(0, 1394); peer.Barrier();
+        peer.Expect(0, 1403); peer.Expect(0, 1400); peer.Expect(0, 1632); peer.Barrier();
     }
 
     static void NextDay(TcpPeer peer, DailyBoosterTestClock clock, TcpTestResources resources)
@@ -267,7 +275,8 @@ internal static class ImperialArenaTcpTests
         if (body is not null) Bytes(packet.Body, body, $"帝国跨日通知{opcode}包体");
     }
 
-    static void ClearRoom(TcpPeer peer, byte[] map, int opponent, DailyBoosterTestClock clock, bool reward, bool mail, Action? afterLoad = null)
+    static void ClearRoom(TcpPeer peer, byte[] map, int opponent, DailyBoosterTestClock clock, bool reward, bool mail, Action? afterLoad = null,
+        bool final = false, uint elapsedMilliseconds = 0)
     {
         FormalDungeonTcpTests.Load(peer); peer.Barrier(); afterLoad?.Invoke(); clock.Advance(TimeSpan.FromSeconds(10));
         var actors = Enumerable.Range(0, map[18]).Select(i => 19 + 22 * i)
@@ -280,6 +289,14 @@ internal static class ImperialArenaTcpTests
             {
                 That(peer.Expect(0, 1402).Body[0] == (reward ? 2 : 0), "帝国只展示本次实际新增奖励");
                 if (mail) peer.Expect(0, 99);
+                if (final)
+                {
+                    peer.Expect(0, 31, []);
+                    var result = peer.Expect(0, 1401).Body;
+                    That(result.Length == 16 && U32(result, 0) == 0 && U32(result, 4) == 0 &&
+                        U32(result, 8) == elapsedMilliseconds && U32(result, 12) == 0,
+                        "帝国首次及无新增奖励重打均以真实本局耗时打开专用结果窗，不伪造旧榜数据");
+                }
                 peer.Barrier(); return;
             }
             peer.Barrier();

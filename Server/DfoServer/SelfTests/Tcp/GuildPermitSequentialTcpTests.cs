@@ -114,7 +114,7 @@ internal static class GuildPermitSequentialTcpTests
         // 申请取出即删：建会之后再次入城不再有弹窗（屏障包证明入城序列后没有多余通知）。
         using (var invitee = Open(fixture, "20001"))
         {
-            Enter(invitee);
+            Enter(invitee, guildMember: true);
             Barriered(invitee);
         }
 
@@ -131,7 +131,7 @@ internal static class GuildPermitSequentialTcpTests
     /// 入城完成后固定跟720空正文与721五槽；有补投弹窗时0x2AD先到，调用方读弹窗后再调用
     /// <see cref="TcpPeer.ReadWeeklyDungeon"/>。
     /// </summary>
-    static void Enter(TcpPeer peer, ushort slot = 0, bool pendingPermit = false)
+    static void Enter(TcpPeer peer, ushort slot = 0, bool pendingPermit = false, bool guildMember = false)
     {
         peer.Send(8, [255, 255, 2]);                                 // 客户端选角前请求名册
         peer.Send(4, Build(writer => writer.Write(slot)));           // (1,4) SELECT_CHARACTER
@@ -140,7 +140,10 @@ internal static class GuildPermitSequentialTcpTests
             var packet = peer.Read();
             if (packet.Kind == 0 && packet.Opcode == 124)            // (0,124)：EnterAsync 的最后一条
             {
-                if (!pendingPermit) peer.ReadWeeklyDungeon();
+                if (pendingPermit) return;
+                peer.ReadWeeklyDungeon();
+                // 公会成员入城尾部固定补发被动属性（守护石1276），按真实账本核验而不是留给屏障。
+                if (guildMember) peer.CheckGuildPassiveBuffs(peer.Expect(0, 487));
                 return;
             }
         }

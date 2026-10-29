@@ -106,11 +106,17 @@ internal static class GuildManagementTests
             Sql("DROP TRIGGER fail_guild_notice");
             That(repository.ReadGuildManagement(masterOwner, master.Id) is { Revision: 1, Guild.Notice: "新公告" },
                 "SQL失败后公告和关系版本均保留原提交");
+            Sql($"""
+                INSERT INTO character_guild_npc_benefits(character_id,guild_id,joined_at,effect,benefit_id,remaining,deadline,selected)
+                VALUES({member.Id},1,1000,'guild trainer attack raid buff',5001,0,0,1);
+                """);
             var kick = repository.ChangeGuildManagement(masterIdentity,
                 new(GuildManagementAction.Leave, new(member.Id, memberOwner.Account, member.Name)), 1700000000);
             That(kick.Success && !kick.Voluntary && Number("SELECT count(*) FROM guild_membership_cooldowns") == 0 &&
                 memberSession.RefreshGuildManagement(repository, 1) is { State: null } && memberSession.Selected?.Guild is null,
                 "踢人立即清理会话资格且不增加主动退会限制");
+            That(Number($"SELECT count(*) FROM character_guild_npc_benefits WHERE character_id={member.Id}") == 0,
+                "踢人事务清除个人福利，不能仅靠秒级入会时间隔离同秒重入");
 
             var online = new OnlineSessionDirectory();
             online.Register(masterOwner, masterSession);

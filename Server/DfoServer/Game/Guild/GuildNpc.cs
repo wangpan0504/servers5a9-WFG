@@ -33,7 +33,9 @@ internal sealed class GuildNpcService : IDisposable
     readonly GuildParameterCatalog parameters;
     readonly GuildManagementService management;
     readonly GuildNpcCraftCatalog? crafts;
+    readonly GuildNpcBenefitCatalog? benefits;
     readonly Action<Exception>? onError;
+    readonly Action? completeItems;
     readonly TimeProvider clock;
     readonly ITimer timer;
     readonly object lifecycle = new();
@@ -41,11 +43,14 @@ internal sealed class GuildNpcService : IDisposable
     int active;
     int ticking;
     public GuildNpcService(IGuildNpcStore store, GuildNpcCatalog catalog, GuildParameterCatalog parameters, GuildManagementService management,
-        Action<Exception>? onError = null, TimeProvider? clock = null, GuildNpcCraftCatalog? crafts = null)
+        Action<Exception>? onError = null, TimeProvider? clock = null, GuildNpcCraftCatalog? crafts = null,
+        GuildNpcBenefitCatalog? benefits = null, Action? completeItems = null)
     {
         this.store = store; this.catalog = catalog; this.parameters = parameters; this.management = management;
         this.onError = onError; this.clock = clock ?? TimeProvider.System;
         this.crafts = crafts;
+        this.benefits = benefits;
+        this.completeItems = completeItems;
         // 只持有一个有界轮询计时器；到期事实保存在数据库，重开服务仍会继续完成。
         timer = this.clock.CreateTimer(_ => Tick(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
@@ -55,6 +60,12 @@ internal sealed class GuildNpcService : IDisposable
         if (!Enter()) return null;
         try { return actor.IsCurrent() ? store.ReadGuildNpcs(actor, catalog, Now) : null; }
         finally { Leave(); }
+    }
+    public GuildBenefit? GuardianBuff(GuildManagementIdentity actor)
+    {
+        var guardian = Read(actor)?.Npcs.FirstOrDefault(npc => npc.NpcId == GuildNpcCatalog.Guardian);
+        uint id = guardian is null ? 0 : benefits?.GuardianBuff(guardian.Level) ?? 0;
+        return id == 0 ? null : new(0, id, 0);
     }
     public GuildNpcCommit Change(GuildManagementIdentity actor, uint action, uint npcId, uint argument, string requestId)
     {
@@ -90,6 +101,7 @@ internal sealed class GuildNpcService : IDisposable
                 Publish(state);
             if (crafts is not null)
                 foreach (var state in store.CompleteGuildNpcCrafts(catalog, crafts, Now)) Publish(state);
+            completeItems?.Invoke();
         }
         catch (Exception error) when (error is not (OutOfMemoryException or AccessViolationException))
         { onError?.Invoke(error); }

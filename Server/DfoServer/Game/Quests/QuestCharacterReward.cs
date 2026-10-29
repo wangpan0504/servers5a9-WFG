@@ -49,7 +49,7 @@ internal static class QuestCharacterReward
             quest.Id == 6081 && quest.RewardType == "[hell legend]" && quest.Rewards is [{ Type: 0, Text: null, Value: 291100268 }]) &&
         quest.Definition is { SelectRewards.Length: 0 };
 
-    // 时间广场魔兽资格只记录完成。公告 mode 31 还没有客户端读者，这里不发物品、不发公告。
+    // 魔兽资格沿真实完成记录表达；ACK34 mode31打开原生资格窗，参数311不作为物品奖励。
     public static bool TryBeastQualification(StoryQuest quest) =>
         quest.Id == 5927 && quest.Path.EndsWith("open_beast.qst", StringComparison.OrdinalIgnoreCase) &&
         quest.RewardType == "[beast dungeon challenge]" && quest.Rewards is [{ Type: 0, Text: null, Value: 311 }] &&

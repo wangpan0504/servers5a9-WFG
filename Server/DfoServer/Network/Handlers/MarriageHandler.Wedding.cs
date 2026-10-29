@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Data.Common;
 using System.Security.Cryptography;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -53,7 +54,8 @@ internal sealed partial class MarriageHandler
         if (packet.Opcode == 1037)
         {
             uint target = MarriageWeddingRequests.Character(packet.Body);
-            if (target != before.ContextId && target != before.Other(actor.Id)) return await Reject(context, 1037, -2);
+            // 原生客户端以0查询本人伴侣；实际收件人仍由当前角色的有效婚约确定。
+            if (target != 0 && target != before.ContextId && target != before.Other(actor.Id)) return await Reject(context, 1037, -2);
             return await PartnerCardAsync(context, before);
         }
         if (packet.Opcode is 1038 or 1039)
@@ -142,12 +144,13 @@ internal sealed partial class MarriageHandler
         lock (offerGate)
         {
             offers.TryGetValue(capture.Character.Id, out offer);
-            if (offer is not null) offers.Remove(capture.Character.Id);
+            if (offer is not null && ReferenceEquals(offer.Target, context.Session) && offer.Operation == response.Operation &&
+                response.Target == offer.First.Character.Id && response.Reserved == 0 && response.Response <= 2)
+                offers.Remove(capture.Character.Id);
+            else offer = null;
         }
-        if (offer is null || !ReferenceEquals(offer.Target, context.Session) || offer.Operation != response.Operation ||
-            response.Target != offer.First.Character.Id || response.Reserved != 0 || response.Response > 2 ||
-            offer.Until < timer.GetUtcNow().ToUnixTimeSeconds() || !offer.Source.CommandGate.Wait(0))
-            return await Reject(context, 1035, -2);
+        if (offer is null || offer.Until < timer.GetUtcNow().ToUnixTimeSeconds() || !offer.Source.CommandGate.Wait(0))
+            return await Fail(-2);
         try
         {
             MarriageSessionCommit? saved = null;
@@ -160,20 +163,21 @@ internal sealed partial class MarriageHandler
                 IReadOnlyList<MailboxDelivery>? mail = null;
                 if (offer.Operation == 1)
                 {
-                    if (before is not null || store.FindMarriage(offer.First.Character.Id) is not null) return await Reject(context, 1035, -2);
+                    if (before is not null || store.FindMarriage(offer.First.Character.Id) is not null) return await Fail(-2);
                     long now = timer.GetUtcNow().ToUnixTimeSeconds();
                     if (!MarriageWeddingRules.CanEngageAgain(store.FindLatestMarriage(capture.Character.Id), catalog, now) ||
                         !MarriageWeddingRules.CanEngageAgain(store.FindLatestMarriage(offer.First.Character.Id), catalog, now))
-                        return await Reject(context, 1035, -2);
+                        return await Fail(-2);
                     after = MarriageWeddingRules.CreateEngagement(Guid.NewGuid(), (uint)RandomNumberGenerator.GetInt32(1, int.MaxValue),
                         offer.First.Character.Id, capture.Character.Id, timer.GetUtcNow().ToUnixTimeSeconds());
                 }
                 else
                 {
-                    if (before is null || !before.IsMember(offer.First.Character.Id)) return await Reject(context, 1035, -2);
+                    if (before is null || !before.IsMember(offer.First.Character.Id)) return await Fail(-2);
                     if (offer.Operation == 2)
                     {
-                        bool prepared = before.PrepareClears >= 5 && catalog.Quests.All(id => offer.First.Character.CompletedQuests.Contains(id) && capture.Character.CompletedQuests.Contains(id));
+                        // 准备任务提交已校验通关条件；预约以双方完成态为准，不重复依赖婚约累计次数。
+                        bool prepared = catalog.Quests.All(id => offer.First.Character.CompletedQuests.Contains(id) && capture.Character.CompletedQuests.Contains(id));
                         var reservation = MarriageWeddingRules.Reserve(before, catalog, Guid.NewGuid(), offer.First.Character.Id,
                             offer.ExtraA, offer.ExtraB, timer.GetUtcNow().ToUnixTimeSeconds(),
                             timer.GetUtcNow().ToUnixTimeSeconds() + catalog.Timing.SelectionSeconds[offer.ExtraB], prepared);
@@ -191,11 +195,11 @@ internal sealed partial class MarriageHandler
                 }
                 var firstPlan = planner.Plan(offer.First.Character, delta, timer.GetUtcNow(), gold);
                 var secondPlan = planner.Plan(capture.Character, [], timer.GetUtcNow());
-                if (firstPlan is null || secondPlan is null) return await Reject(context, 1035, -3);
+                if (firstPlan is null || secondPlan is null) return await Fail(-3);
                 saved = GameSession.CommitMarriageTogether(offer.Source, offer.First, context.Session, capture,
                     firstPlan, secondPlan, before, after, mail,
                     () => ReferenceEquals(offer.Second.Character, capture.Character) && offer.Second.Epoch == capture.Epoch);
-                if (saved is null) return await Reject(context, 1035, -2);
+                if (saved is null) return await Fail(-2);
                 await inventory.RefreshAsync(context, saved.Peer!);
                 if (online.FindConnectionByCharacterId(offer.First.Character.Id)?.Marriage is { } transport)
                     await transport.PublishInventory(saved.Actor);
@@ -206,7 +210,26 @@ internal sealed partial class MarriageHandler
             if (saved is not null) await PublishRelationshipAsync(context, saved.Record, offer.Operation == 7 ? (byte)7 : (byte)0);
             return CommandResult.Handled;
         }
+        catch (Exception error) when (error is InvalidDataException or ArgumentException or
+            InvalidOperationException or OverflowException or DbException)
+        {
+            log.Write("marriage_rejected", new { Connection = context.Id, Opcode = 1035, Error = error.Message });
+            return await Fail(-1);
+        }
         finally { offer.Source.CommandGate.Release(); }
+
+        async Task<CommandResult> Fail(int result)
+        {
+            await context.Reply((CmdPacketType)1035, MarriageWeddingPackets.ResponseAck(result, response.Target,
+                response.Operation, response.Response, (byte)response.Reserved, (byte)(response.Reserved >> 8)), "marriage_rejected");
+            // 原生1001先关闭发起人的等待框；失败也必须结束原会话的邀请，不能通知重登后的新会话。
+            if (offer is not null && online.FindConnectionByCharacterId(offer.First.Character.Id) is { } source &&
+                ReferenceEquals(source.Session, offer.Source) && source.Session.MarriageOwner.IsCurrent &&
+                source.Session.MarriageOwner.Generation == offer.First.Generation && source.Session.SelectionEpoch == offer.First.Epoch)
+                source.Probe(1001, MarriageWeddingPackets.ResponseResult(result, capture.Character.Id,
+                    offer.Operation, response.Response, offer.ExtraA, offer.ExtraB), "marriage_offer_failed");
+            return CommandResult.Handled;
+        }
     }
 
     IReadOnlyList<MailboxDelivery> RefundMail(MarriageRecord before, ImmutableArray<MarriageWeddingRefund> ledger)

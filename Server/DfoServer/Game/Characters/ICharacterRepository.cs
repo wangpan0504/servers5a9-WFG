@@ -73,6 +73,8 @@ internal interface ICharacterRepository
     void SwapSlots(AccountOwners.Lease owner, ushort slotA, ushort slotB);
     Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? returnPoint, InventoryPlan? inventory = null);
     Character CommitTeleport(AccountOwners.Lease owner, DfoServer.Game.Town.TeleportPlan plan);
+    DfoServer.Game.Town.GuildMapTeleportCommit CommitGuildMapTeleport(AccountOwners.Lease owner,
+        DfoServer.Game.Town.TeleportPlan plan, string requestId);
     Character CommitLearning(AccountOwners.Lease owner, Character expected, CharacterLearningState learning, int? totalSp = null, int? totalTp = null);
     Character CommitSkillLayout(AccountOwners.Lease owner, Character expected, CharacterLearningState learning);
     Character UpdateProgress(AccountOwners.Lease owner, CharacterProgressEdit edit);
@@ -150,6 +152,9 @@ internal interface ICharacterRepository
         System.Collections.Immutable.ImmutableArray<AccountIncountCharge> account = default, bool increment = true, bool check = true) =>
         throw new NotSupportedException("仓库不支持副本进入次数");
     int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) => throw new NotSupportedException("仓库不支持账号副本进入次数");
+    Character[] CommitBeastDungeonLoading(IReadOnlyList<BeastDungeonLoadingReservation> reservations) =>
+        throw new NotSupportedException("当前仓储不支持魔兽首房入场提交");
+    void CancelBeastDungeonReservation(string account, ushort characterId, Guid? instance) { }
     int LoadBeastDungeonUsed(AccountOwners.Lease owner, ushort characterId, int day, int dungeonId) =>
         throw new NotSupportedException("仓库不支持魔兽每日次数");
     int CommitBeastDungeonEntry(AccountOwners.Lease owner, ushort characterId, int day, int dungeonId) =>

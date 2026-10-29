@@ -54,6 +54,8 @@ internal static partial class TagEvildomTcpTests
         using (var peer = Open(fixture, gamePort: endpoints[46], channelNumber: 46))
         {
             That(peer.LoginEndpoint[3] == 53, "再战真实频道LOGIN类型53，不借魔界大战54或普通频道");
+            // 选角前不应公布城镇名册；后续SELECT严格包序同时验证没有迟到1408。
+            peer.Send(1470);
             peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
             Bytes(peer.TagEvildomInfo[0].Body, populated, "无编队的合格双角色入城提交第一支队伍并下发54B");
             Bytes(peer.TagEvildomInfo[1].Body, status, "无通关事实的真实1678初态46B");
@@ -65,6 +67,11 @@ internal static partial class TagEvildomTcpTests
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0", primary.Id) is [[38L, 1L]],
                 "type53仍按本版原生落38/1，不伪称默认62/0");
             string assets = Assets();
+            string configuration = fixture.Snapshot("SELECT * FROM account_tag_evildom_configuration");
+            RequestTeamRoster(peer);
+            RequestTeamRoster(peer);
+            That(Assets() == assets && configuration == fixture.Snapshot("SELECT * FROM account_tag_evildom_configuration"),
+                "重复1470只完成真实名册就绪，不修改已有第一队、角色或资产");
             foreach (byte[] invalid in new[] { Setting(0, 1), Setting(0, 0), Setting(0, 99), Setting(0, 2, region: 3) })
             {
                 peer.Send(1662, invalid); peer.Expect(1, 1662, [0, 19, 0]); peer.Expect(0, 1709); peer.Barrier();
@@ -123,6 +130,7 @@ internal static partial class TagEvildomTcpTests
             // ACK1663后等待原生7，不能服务端再主动小退一次。
             ReturnToSelection(peer);
             peer.Select(tagEvildom: [1677, 1678]); peer.Barrier();
+            RequestTeamRoster(peer);
             peer.Send(1662, Setting(0, 2)); peer.Expect(1, 1662, Accepted(populated));
             ReadConfiguration(peer, populated, status);
             peer.Send(1662, Setting(-1, -1)); peer.Expect(1, 1662, Accepted(empty));
@@ -150,6 +158,7 @@ internal static partial class TagEvildomTcpTests
         using (var ordinary = Open(fixture))
         {
             ordinary.Select();
+            ordinary.Send(1470); ordinary.Barrier();
             ordinary.Send(1662, Setting(0, 2)); ordinary.Expect(1, 1662, [0, 19, 0]); ordinary.Expect(0, 1709); ordinary.Barrier();
             ordinary.Send(15, Build(w => { w.Write(9608u); w.Write((ushort)0); })); ordinary.Closed();
         }
@@ -162,6 +171,7 @@ internal static partial class TagEvildomTcpTests
         await VerifyExpiredEquipmentAsync(fixture, endpoints[46], standby);
         await VerifyExpiredStandbyAsync(fixture, resources, endpoints[46], primary, standby);
         await fixture.StopAsync();
+        await VerifyMultipleTeamsAsync(source, root, resources);
         await VerifyClearAsync(source, root, resources);
         await VerifyDailyScheduleAsync(source, root, resources);
         Console.WriteLine($"PASS {Count - checks} 再战魔界真实频道、编队重置、双角色资料、准入拒绝与重登TCP断言");

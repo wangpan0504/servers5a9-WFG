@@ -41,7 +41,10 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Dungeons.DungeonBattleLevelSettings? monsterBattleLevels = null,
     DfoServer.Game.Dungeons.DungeonMonsterAiSettings? monsterAi = null,
     DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
-    DfoServer.Game.Raids.LukeRaidRejoin? lukeRejoin = null, TradeHandler? trade = null) : IConnectionProtocol
+    DfoServer.Game.Raids.LukeRaidRejoin? lukeRejoin = null,
+    DfoServer.Game.Guild.GuildNpcBenefitService? guildNpcBenefits = null,
+    TradeHandler? trade = null,
+    PvpMissionProjection? pvpMissions = null, DfoServer.Game.Pvp.PvpMissionBook? missionBook = null) : IConnectionProtocol
 {
     // 断线诊断不得阻止剩余原清理，包括诊断后端自身失败；不以日志成功作为登记成功。
     void LogLukeDisconnect(string kind, object detail)
@@ -73,7 +76,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items,
             goldLimits: goldLimits, pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
-            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles);
+            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
@@ -93,6 +96,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         context.Altar = altar;
         var lostLand = new LostLandProjection(context, projection, log, time);
         context.LostLand = lostLand;
+        var beast = new BeastDeadlineProjection(context, log, SqliteBusyRetry.IsBusy, time);
+        context.Beast = beast;
         var death = new DungeonDeathProjection(context, projection, log, time);
         context.Death = death;
         var revival = new DungeonRevivalProjection(context, log, time);
@@ -139,7 +144,9 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         session.PvpArenaNoticeArrived = notice => PvpArenaProjection.Notice(context, notice, stats);
         session.PvpArenaResultArrived = delivery =>
         {
-            bool queued = arena is not null && PvpArenaResultProjection.TryQueue(context, arena, delivery);
+            if (arena?.CanPublishResultDelivery(delivery) == true && missionBook is not null)
+                if (pvpMissions?.QueueRewards(context, session.RefreshPvpMissions(missionBook)) == false) return false;
+            bool queued = arena is not null && PvpArenaResultProjection.TryQueue(context, arena, delivery, pvpMissions);
             log.Write("pvp_arena_result_queued", new { Connection = context.Id, Match = delivery.Match.Id,
                 Character = delivery.Receipt.CharacterId, Queued = queued, Rule = delivery.Receipt.RuleVersion });
             return queued;
@@ -348,6 +355,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await elevator.DisposeAsync();
             await altar.DisposeAsync();
             await lostLand.DisposeAsync();
+            await beast.DisposeAsync();
             if (context.LukePhaseExit is { } lukeExit) await lukeExit.DisposeAsync();
             // 此处不持本人owner；在普通队伍/团名册/Session移除前冻结原身份。
             if (lukeRejoin is not null)

@@ -46,15 +46,26 @@ internal sealed class ImperialArenaProjection(IImperialArenaStore store, IImperi
             "imperial_arena_round_reward", guard);
         if (commit.MailId != 0)
             await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "imperial_arena_reward_mail", guard);
+        // 逐轮奖励窗不锁存副本通关；仅已提交的最后一轮发31，专用场景不会据此请求普通翻牌。
+        if (commit.Plan.Round == commit.Plan.Admission.Route.Opponents(commit.Plan.Admission.Mode).Length)
+        {
+            await context.Notify(NotiPacketType.ENABLE_CLEAR_DUNGEON, [], "imperial_arena_clear_enabled", guard);
+            await context.Notify(NotiPacketType.TAG_TOURNAMENT_RANKING_RESULT,
+                ImperialArenaPackets.Result(commit.Plan.ElapsedMilliseconds), "imperial_arena_result", guard);
+        }
         log.Write("imperial_arena_round_committed", new { Connection = context.Id, commit.Plan.Round, commit.MailId,
             commit.Duplicate, commit.Plan.ElapsedMilliseconds });
     }
 
     public async Task ReturnAsync(GameConnectionContext context, Game.Town.TownTravelReceipt receipt)
     {
-        var primary = await town.RefreshTagEvildomPrimaryAsync(context, receipt);
-        if (primary is not null) await InitializeAsync(context, primary);
-        else await town.ReturnToSelectionAsync(context, () => context.Session.CanPublishTravel(receipt));
+        if (!context.Session.CanPublishTravel(receipt)) return;
+        var mails = Store.CompleteImperialArenaRuns(context.Owner);
+        if (context.Session.ReadImperialArena(Store, Now) is not { } snapshot) return;
+        bool Guard() => context.Session.CanPublishTravel(receipt) && context.Session.CanPublishImperialArena(snapshot);
+        if (!mails.IsEmpty)
+            await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "imperial_arena_recovered_mail", Guard);
+        if (Guard()) await DeliverAsync(context, snapshot, activeCharacters: false);
     }
 
     public async Task<bool> InitializeAsync(GameConnectionContext context, TownCharacterProjection primary)
@@ -77,14 +88,14 @@ internal sealed class ImperialArenaProjection(IImperialArenaStore store, IImperi
     }
 
     public async Task<bool> DeliverAsync(GameConnectionContext context, Game.ImperialArena.ImperialArenaProjection snapshot,
-        TownCharacterProjection? primary = null)
+        TownCharacterProjection? primary = null, bool activeCharacters = true)
     {
         bool Guard() => context.Session.CanPublishImperialArena(snapshot);
         await context.Notify(NotiPacketType.TAG_TOURNAMENT_ENTERABLE, ImperialArenaPackets.Enterable(snapshot.State), "imperial_arena_enterable", Guard);
         var route = Store.ReadImperialArenaRoute(context.Owner, Catalog, snapshot.State.Period);
         await context.Notify(NotiPacketType.TAG_TOURNAMENT_MONSTER_INFO, ImperialArenaPackets.Opponents(route), "imperial_arena_opponents", Guard);
         await context.Notify(NotiPacketType.TAG_TOURNAMENT_HARD_MODE_INFO, ImperialArenaPackets.Challenge(ReadChallenge(context)), "imperial_arena_challenge", Guard);
-        if (snapshot.State.Configuration.IsEmpty) return Guard();
+        if (!activeCharacters || snapshot.State.Configuration.IsEmpty) return Guard();
         primary ??= context.Owner.Execute(() => context.Session.Selected is { } selected ? new TownCharacterProjection(selected, Now) : null);
         if (primary is null) return false;
         var (installed, metadataSent) = await InstallPairAsync(context, snapshot, primary);

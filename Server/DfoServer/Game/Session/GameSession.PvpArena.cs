@@ -17,7 +17,7 @@ internal sealed partial class GameSession
         Ready && Selected is not null && ratings.Recover(owner));
 
     bool CanEnterPvpArena => Ready && Phase == SessionPhase.Town && Selected is not null &&
-        ChannelEntry?.Type == 24 && pvpTraining is null && pvpArena is null && pvpMatching is null && CurrentParty?.Invoke() is null &&
+        ChannelEntry?.Type is 4 or 5 or 24 && pvpTraining is null && pvpArena is null && pvpMatching is null && CurrentParty?.Invoke() is null &&
         pendingRental is null && !HasPendingTownQuestCommit && !HasActiveDungeonContinuation &&
         !HasPendingQuestReplay && !HasPendingFormalCard;
 
@@ -40,9 +40,9 @@ internal sealed partial class GameSession
 
     internal PvpArenaDeparture? LeavePvpArena(PvpArenaMembership expected) => owner.Execute(() =>
     {
-        if (!ReferenceEquals(pvpArena, expected) || !expected.IsCurrent) return null;
+        if (!ReferenceEquals(pvpArena, expected) || !expected.IsCurrent || expected.Room.Member(expected.Token) is not { } member) return null;
         SetState(SessionPhase.Town);
-        return new PvpArenaDeparture(expected, ++pvpArenaVersion);
+        return new PvpArenaDeparture(expected, ++pvpArenaVersion, member.Seat);
     });
 
     internal bool CanPublishPvpArenaDeparture(PvpArenaDeparture departure) =>

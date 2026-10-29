@@ -47,6 +47,17 @@ internal static class PvpArenaSessionTests
             wrong.Select(0); wrong.MarkReady();
             That(arena.Create(wrong, "room", PvpArenaMode.Individual, 0) is null,
                 "普通频道不能借决斗命令安装正式房间");
+            using var ordinaryOwner = owners.Acquire("arena-ordinary", () => { });
+            var ordinary = Session(ordinaryOwner, "ArenaNormal", 4);
+            ordinary.Select(0); ordinary.MarkReady();
+            That(ordinary.UsesArenaSkills && ordinary.CapturePvpArenaAdmission() is not null &&
+                ordinary.CapturePvpMatchingAdmission() is null,
+                "普通决斗使用独立决斗技能并允许手动房间，不扩大自动匹配门禁");
+            var ordinaryCreated = arena.Create(ordinary, "ordinary", PvpArenaMode.Individual, 0)!;
+            That(ordinaryCreated.Member.IsCurrent && ordinary.GetState() == UserState.PvpRoom,
+                "type4在原Session和房间服务中安装真实成员");
+            ordinaryCreated.Member.Room.Commands.Release();
+            await arena.DetachAsync(ordinary);
             var parties = new DfoServer.Game.Party.PartyService(repository);
             guest.CurrentParty = () => parties.Current(guest);
             That(parties.SetInformation(guest, 0, DfoServer.Game.Party.PartySettings.Default).Accepted &&

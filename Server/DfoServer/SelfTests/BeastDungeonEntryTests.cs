@@ -19,6 +19,9 @@ internal static class BeastDungeonEntryTests
 {
     public static void RunCore()
     {
+        BeastRunProgressTests.RunCore();
+        BeastDungeonReservationTests.RunCore();
+        RunSeekingSources();
         int checks = Count;
         string root = Path.Combine(Path.GetTempPath(), "ServerS5A9-beast-entry-" + Guid.NewGuid().ToString("N"));
         try
@@ -270,7 +273,7 @@ internal static class BeastDungeonEntryTests
     }
 
     // 10000（new_quest/MetroCenter/beast_acce_01.qst）是魔兽材料任务：seeking / sub type 0，
-    // [dungeon info] 只指向五个魔兽网关5335–5339（参数-1）。此前它落到「任务条件初值尚未确认」，
+    // [dungeon info] 指向五个首版原图310–314或兼容网关5335–5339（参数-1）。此前它落到「任务条件初值尚未确认」，
     // 客户端点接受无任何反应。这里核对真实资源形状、接取初值与库存驱动进度。
     public static void RunAccessoryQuest(PvfLib.PvfArchive installed, DfoServer.Infrastructure.ItemResources items)
     {
@@ -290,10 +293,10 @@ internal static class BeastDungeonEntryTests
         var definition = quest!; // 缺索引时仅本测试目录登记正式reader解析的物理脚本。
         That(definition is { Condition: "[seeking]", SubType: 0, RewardType: "[item]" } &&
             definition.IntData.SequenceEqual([10303237, 220, 10303238, 180]) &&
-            definition.Definition!.Dungeons.Select(row => row.DungeonId).SequenceEqual(
-                Enumerable.Range(BeastDungeonRotation.FirstGatewayDungeonId, 5)) &&
+            (definition.Definition!.Dungeons.Select(row => row.DungeonId).SequenceEqual(Enumerable.Range(BeastDungeonRotation.FirstDungeonId, 5)) ||
+             definition.Definition.Dungeons.Select(row => row.DungeonId).SequenceEqual(Enumerable.Range(BeastDungeonRotation.FirstGatewayDungeonId, 5))) &&
             definition.Definition.Dungeons.All(row => row.Parameter == -1),
-            "10000真实资源为seeking子类型0、两件材料、五个魔兽网关");
+            "10000真实资源为seeking子类型0、两件材料、完整五个原图或兼容网关");
         That(QuestLifecyclePlan.BeastSeeking(definition) && QuestLifecyclePlan.SeekingSubtype(definition) &&
             QuestLifecyclePlan.ValidSeeking(definition) && QuestCoverage.HasSupportedTarget(definition, catalog),
             "魔兽材料任务按精确形状接入寻物目标");
@@ -336,5 +339,25 @@ internal static class BeastDungeonEntryTests
         try { action(); }
         catch (InvalidDataException error) when (error.Message == reason) { rejected = true; }
         That(rejected, message);
+    }
+
+    static void RunSeekingSources()
+    {
+        int checks = Count;
+        StoryQuest Quest(params int[] ids) => new(10000, "beast_acce_01.qst", "[seeking]", 0,
+            [10303237, 220, 10303238, 180], 598, -1, 90, 99, [5927], null, null, null, [], null, null, [])
+        { RewardType = "[item]", Definition = new([]) { Dungeons = [..ids.Select(id => new QuestDungeonRequirement(id, -1))] } };
+        var original = Quest(314, 311, 310, 313, 312);
+        That(QuestLifecyclePlan.BeastSeeking(original) && QuestLifecyclePlan.SeekingSubtype(original),
+            "首版10000接受完整原图310至314，资源顺序不影响接取");
+        That(QuestLifecyclePlan.BeastSeeking(Quest(5339, 5337, 5335, 5338, 5336)), "10000保留完整旧网关资源兼容");
+        foreach (var ids in new int[][] { [], [310], [310, 311, 312, 313], [310, 311, 312, 313, 313],
+            [310, 311, 312, 313, 5339], [310, 311, 312, 313, 315], [5335, 5336, 5337, 5338, 314] })
+            That(!QuestLifecyclePlan.BeastSeeking(Quest(ids)), "10000拒绝缺项、重复、混组及非魔兽图声明");
+        That(!QuestLifecyclePlan.BeastSeeking(original with { Id = 10001 }) &&
+            !QuestLifecyclePlan.BeastSeeking(original with { Definition = original.Definition! with
+                { Dungeons = [..original.Definition!.Dungeons.Select(row => row with { Parameter = 0 })] } }),
+            "原图支持不放宽任务号或参数");
+        Console.WriteLine($"PASS {Count - checks} 魔兽材料任务原图兼容断言");
     }
 }

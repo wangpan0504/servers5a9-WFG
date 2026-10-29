@@ -272,6 +272,12 @@ internal static class SqliteMigrations
         new(144, "账号皮肤仓", static (db, tx) => Execute(db, tx, AccountSkinStorageSchema.Definition)),
         new(145, "安徒恩复用两阶段通关生命周期", static (db, tx) =>
             ReplaceTableConstraint(db, tx, "character_raid_runs", "CHECK(raid_type=1)", "CHECK(raid_type IN(0,1))")),
+        new(146, "公会NPC限时福利与永久训练解锁", static (db, tx) => Execute(db, tx, GuildNpcBenefitSchema.Sql)),
+        new(147, "公会炼金个人生产与永久邮件结算", static (db, tx) => Execute(db, tx, GuildNpcItemCraftSchema.Sql)),
+        new(148, "原图魔兽首房入场预约", static (db, tx) => Execute(db, tx, BeastDungeonReservationSchema.Definition)),
+        new(149, "魔兽阶段奖励唯一凭据", static (db, tx) => Execute(db, tx, BeastStageRewardSchema.Definition)),
+        // dc1ffba1 原本占用 147，整合线上 147-149 已被公会炼金与魔兽占用，顺延为 150。
+        new(150, "决斗任务训练事实与一次性奖励", PvpMissionSchema.Upgrade),
     ];
 
     internal static class AccountSkinStorageSchema
@@ -2182,6 +2188,8 @@ internal static class SqliteMigrations
 
     internal static void ValidateSchema(SqliteConnection db, SqliteTransaction tx)
     {
+        BeastDungeonReservationSchema.Validate(db, tx);
+        BeastStageRewardSchema.Validate(db, tx);
         // 基线标识不能代替必需列检查；损坏或残缺结构不得进入监听阶段。
         foreach (string sql in RequiredColumns)
         {
@@ -2241,6 +2249,8 @@ internal static class SqliteMigrations
             (PvpTotalTeamSchema.Table,PvpTotalTeamSchema.Definition),
             (PvpTotalRatingSchema.StateTable,PvpTotalRatingSchema.StateDefinition),
             (PvpTotalRatingSchema.ClaimTable,PvpTotalRatingSchema.ClaimDefinition),
+            (PvpMissionSchema.FactTable,PvpMissionSchema.Facts),
+            (PvpMissionSchema.ClaimTable,PvpMissionSchema.Claims),
             (FatigueDailyResetSchema.Table,FatigueDailyResetSchema.Definition),
             (ServerItemUsageSchema.StateTable,ServerItemUsageSchema.StateDefinition),
             (ServerItemUsageSchema.AccountTable,ServerItemUsageSchema.AccountDefinition),
@@ -2270,6 +2280,10 @@ internal static class SqliteMigrations
             ("guild_ranking_months",GuildRankingSchema.Archives.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_dungeon_reward_receipts",GuildDungeonRewardSchema.Table.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_dungeon_effective_progress",GuildDungeonEffectiveSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_npc_common_benefits",GuildNpcBenefitSchema.Sql.Split(';')[0].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_guild_npc_benefits",GuildNpcBenefitSchema.Sql.Split(';')[1].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("guild_npc_training_receipts",GuildNpcBenefitSchema.Sql.Split(';')[2].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_guild_npc_item_crafts",GuildNpcItemCraftSchema.Sql.Split(';')[0].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_recommended_channels",GuildRecommendedChannelSchema.Sql.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)) })
         {
             using var query = db.CreateCommand(); query.Transaction = tx;
@@ -2293,6 +2307,8 @@ internal static class SqliteMigrations
 
     private static readonly string[] RequiredColumns =
     [
+        "SELECT character_id,account,instance_id,attempt,entry_epoch,day,dungeon_id,expected_used,state FROM character_beast_dungeon_reservations LIMIT 0",
+        "SELECT character_id,account,instance_id,stage,event_id,map_id,monster_key,item_id FROM character_beast_stage_rewards LIMIT 0",
         "SELECT guild_id,region,channel FROM guild_recommended_channels LIMIT 0",
         "SELECT owner_id,target_id,kind,created,memo FROM character_social_links LIMIT 0",
         "SELECT owner_account,target_account,created,memo,group_id FROM account_social_links LIMIT 0",
@@ -2320,6 +2336,10 @@ internal static class SqliteMigrations
         "SELECT request_id,account,character_id,guild_id,joined_at,action,benefit_id,craft_id,deadline FROM guild_npc_craft_receipts LIMIT 0",
         "SELECT craft_id,guild_id,benefit_id,reward_count,before_crystal,after_crystal,completed_at FROM guild_npc_craft_completions LIMIT 0",
         "SELECT request_id,account,character_id,guild_id,joined_at,npc_id,action,argument,deadline FROM guild_npc_receipts LIMIT 0",
+        "SELECT guild_id,effect,benefit_id,remaining,deadline FROM guild_npc_common_benefits LIMIT 0",
+        "SELECT character_id,guild_id,joined_at,effect,benefit_id,remaining,deadline,selected FROM character_guild_npc_benefits LIMIT 0",
+        "SELECT request_id,selection FROM guild_npc_training_receipts LIMIT 0",
+        "SELECT craft_id,character_id,guild_id,joined_at,npc_id,benefit_id,deadline,item_core,state,mail_id FROM character_guild_npc_item_crafts LIMIT 0",
         "SELECT request_id,account,character_id,guild_id,joined_at_unix,source_uid,source_slot,item_id,amount,before_experience,after_experience,before_level,after_level,created_at_unix FROM guild_growth_item_receipts LIMIT 0",
         "SELECT guild_id,member_limit FROM guild_economy LIMIT 0",
         "SELECT guild_id,type,value,expires_unix FROM guild_benefits LIMIT 0",

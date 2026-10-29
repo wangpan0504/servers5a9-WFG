@@ -48,7 +48,12 @@ internal static class TownTravelTests
         That(towns.Areas.ContainsKey((124, 0)) && towns.Areas.ContainsKey((1, 0)) && towns.Areas.ContainsKey((60, 1)), "no main-town or area-number whitelist");
         var maps = towns.Areas.Values.SelectMany(a => a.Phases.Prepend(a.Default)).DistinctBy(m => m.Path).ToArray();
         var originalMaps = maps.Where(map => !map.Path.StartsWith("map/town/beast_centralpark/",StringComparison.OrdinalIgnoreCase)).ToArray();
-        That(originalMaps.Length == (declaredRequiem ? 353 : 352) && maps.Count(m => m.Error is not null) == 1, "all original phase maps retained and missing optional resource exposed");
+        // gate_dnfaos.map 是本地正式 PVF 里远古就删掉的活动图入口（119/0 勇士对决），属于登记在案的缺失：
+        // 按路径白名单钉死，只允许这一张缺失；其它任何地图加载错误都算资源回归，不能再用「缺 1 张」这种计数掩盖。
+        var missingMaps = maps.Where(map => map.Error is not null).Select(map => map.Path).ToArray();
+        That(originalMaps.Length == (declaredRequiem ? 353 : 352) && missingMaps.Length == 1 &&
+            string.Equals(missingMaps[0], "map/gcontents/191030_dnfaos/town/gate_dnfaos.map", StringComparison.OrdinalIgnoreCase),
+            "all original phase maps retained and only the intentionally removed gate_dnfaos map is missing");
         That(maps.Where(map => map.Path.StartsWith("map/town/beast_centralpark/",StringComparison.OrdinalIgnoreCase)).All(map => map.Error is null),
             "newly indexed Beast town maps must load successfully");
         That(towns.Admission(new(119, 1, 0, 0), new(119, 0, 450, 234), 95, completed).StartsWith("map-resource-missing:"), "missing map never becomes a fabricated region");

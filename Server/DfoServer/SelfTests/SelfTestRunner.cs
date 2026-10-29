@@ -42,6 +42,7 @@ internal static class SelfTestRunner
         MarriageLifecycleTests.RunCore();
         MarriageDungeonTests.RunCore();
         PvpArenaTests.RunCore();
+        PvpMissionTests.RunCore();
         PvpArenaCatalogTests.RunCore();
         PvpRatingTests.RunCore();
         PvpRatingSettlementTests.RunCore();
@@ -176,6 +177,15 @@ internal static class SelfTestRunner
         GuildContributionTests.RunCore();
         GuildHallWaitTests.RunCore();
         GuildNpcTests.RunCore();
+        GuildNpcBenefitCatalogTests.RunCore();
+        GuildNpcBenefitPersistenceTests.RunCore();
+        GuildNpcItemCraftTests.RunCore();
+        GuildNpcBenefitWireTests.RunCore();
+        GuildNpcPassiveBuffTests.RunCore();
+        GuildTrainingTests.RunCore();
+        GuildNpcEmblemConsumptionTests.RunCore();
+        DfoServer.Testing.Inventory.GuildNpcEnhancementBonusTests.RunCore();
+        DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunCore();
         GuildExperienceGiftTests.RunCore();
         GuildTeleportTests.RunCore();
         GuildPermitTests.RunCore();
@@ -404,6 +414,7 @@ internal static class SelfTestRunner
         InventoryExpansionTests.RunResources(itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         EmblemCompoundTests.RunResources(itemResources);
+        DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunResources(itemResources);
         MonsterCardBindTests.RunResources(itemResources);
         GuildCompoundTests.RunResources(itemResources);
         AvatarCompoundTests.RunResources(itemResources);
@@ -471,6 +482,7 @@ internal static class SelfTestRunner
         QuestCatalogTests.Run(pvf);
         PvpArcadeCatalogTests.RunResources(pvf);
         PvpArenaCatalogTests.RunResources(pvf);
+        PvpMissionTests.RunResources(pvf);
         PvpPracticeComboCatalogTests.RunResources(pvf);
         QuestHarlemExpTests.Run(pvf);
         QuestHarlemExpTests.RunSeeking(pvf, itemResources);
@@ -535,6 +547,7 @@ internal static class SelfTestRunner
         SkillCatalogTests.Run(pvf);
         GuildParameterTests.Run(pvf);
         GuildNpcTests.RunResources(pvf);
+        GuildNpcBenefitCatalogTests.RunResources(pvf);
         GuildDungeonProgressTests.RunResources(pvf);
         GuildRankingTests.RunResources(pvf);
         GuildExperienceGiftTests.RunResources(itemResources.Items);

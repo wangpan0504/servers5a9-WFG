@@ -76,12 +76,19 @@ internal static class GuildManagementTcpTests
             master.Expect(1, 153, [0, 87, 0]);
             master.Send(153, [2]);
             master.Expect(1, 153, [0, 3, 0]);
+            fixture.Sql("""
+                INSERT INTO character_guild_npc_benefits(character_id,guild_id,joined_at,effect,benefit_id,remaining,deadline,selected)
+                SELECT character_id,guild_id,joined_at_unix,'guild trainer attack raid buff',5001,0,0,1
+                FROM guild_members WHERE character_id=$p0
+                """, targetId);
             master.Send(153, Target(2, "BWireTarget"));
             master.Expect(1, 153, [1, 2, .. Dstr("管理测试"), 0, .. Dstr("BWireTarget")]);
             Barrier(master);
             var cleared = Barrier(target);
             That(cleared.Contains((0, 151)) && fixture.Query("SELECT count(*) FROM guild_membership_cooldowns") is [[0L]],
                 "踢人确认完整且目标即时收到清会籍通知，被踢不增加主动退会限制");
+            That(fixture.Query("SELECT count(*) FROM character_guild_npc_benefits WHERE character_id=$p0", targetId) is [[0L]],
+                "真实踢人同时删除个人福利，立即重新受邀也不继承解锁或选择");
 
             master.Send(151, Target(2, "BWireTarget"));
             master.Expect(1, 151, [1]);
@@ -115,6 +122,7 @@ internal static class GuildManagementTcpTests
         for (int guard = 0; guard < 80; guard++)
         {
             var packet = peer.Read();
+            if (packet is { Kind: 0, Opcode: 487 }) peer.CheckGuildPassiveBuffs(packet);
             if (packet.Kind == 1 && packet.Opcode == 156)
             {
                 Bytes(packet.Body, [1], "公会管理后继查重哨兵成功");
@@ -140,6 +148,12 @@ internal static class GuildManagementTcpTests
                 peer.CheckGuildDungeon(packet.Body);
                 continue;
             }
+            if (packet is { Kind: 0, Opcode: 487 }) { peer.CheckGuildPassiveBuffs(packet); continue; }
+            if (packet is { Kind: 0, Opcode: 488 })
+            {
+                Bytes(packet.Body, Convert.FromHexString("01FC040000"), "普通成员刷新仅重置已投影的守护石1276");
+                continue;
+            }
             That(packet.Kind == 0 && packet.Opcode is 2 or 58 or 70 or 127 or 151 ||
                 packet.Kind == 1 && packet.Opcode is 140 or 141 or 744 or 1454,
                 "只允许跨连接成员刷新晚于前一连接哨兵到达");
@@ -152,7 +166,7 @@ internal static class GuildManagementTcpTests
         peer.Send(8, [255, 255, 2]);
         peer.Send(4, Build(writer => writer.Write((ushort)0)));
         for (int guard = 0; guard < 256; guard++)
-            if (peer.Read() is { Kind: 0, Opcode: 124 }) { peer.ReadWeeklyDungeon(); return; }
+            if (peer.Read() is { Kind: 0, Opcode: 124 }) { peer.ReadWeeklyDungeon(); Barrier(peer); return; }
         throw new InvalidOperationException("公会管理TCP未完成入城序列");
     }
     static string Text(BinaryReader reader) => CharacterName.Encoding.GetString(reader.ReadBytes(reader.ReadInt32()));

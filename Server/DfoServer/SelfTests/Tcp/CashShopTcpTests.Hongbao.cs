@@ -34,6 +34,8 @@ internal static partial class CashShopTcpTests
         await fixture.StartAsync();
         using var peer = Open(fixture);
         peer.Select();
+        // 购买者选角前就已是公会成员，入城尾部固定补发守护石1276（487），按真实账本核验后再发请求。
+        peer.CheckGuildPassiveBuffs(peer.Expect(0, 487));
         byte[] request = new byte[19]; request[2] = 1;
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(request.AsSpan(7), product.CommodityId);
         string before = PurchaseSnapshot(fixture);

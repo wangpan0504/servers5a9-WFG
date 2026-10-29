@@ -1,4 +1,4 @@
-CREATE TABLE character_luke_normal_drop_claims(
+﻿CREATE TABLE character_luke_normal_drop_claims(
           character_id INTEGER NOT NULL,
           account TEXT NOT NULL,
           day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day BETWEEN 10000101 AND 99991231),
@@ -1890,3 +1890,86 @@ CREATE TABLE guild_dungeon_effective_progress(
   PRIMARY KEY(guild_id,dungeon_id),
   FOREIGN KEY(guild_id,dungeon_id) REFERENCES guild_dungeon_progress(guild_id,dungeon_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS guild_npc_common_benefits(
+  guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  effect TEXT NOT NULL,benefit_id INTEGER NOT NULL CHECK(benefit_id>0),
+  remaining INTEGER NOT NULL CHECK(remaining BETWEEN 0 AND 32767),
+  deadline INTEGER NOT NULL CHECK(deadline BETWEEN 1 AND 2147483647),
+  PRIMARY KEY(guild_id,effect)
+);
+CREATE TABLE IF NOT EXISTS character_guild_npc_benefits(
+  character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  guild_id INTEGER NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+  joined_at INTEGER NOT NULL CHECK(joined_at>=0),
+  effect TEXT NOT NULL,benefit_id INTEGER NOT NULL CHECK(benefit_id>0),
+  remaining INTEGER NOT NULL CHECK(remaining BETWEEN 0 AND 32767),
+  deadline INTEGER NOT NULL CHECK(deadline BETWEEN 0 AND 2147483647),
+  selected INTEGER NOT NULL DEFAULT 0 CHECK(selected IN(0,1)),
+  PRIMARY KEY(character_id,guild_id,joined_at,benefit_id)
+);
+CREATE TABLE IF NOT EXISTS guild_npc_training_receipts(
+  request_id TEXT PRIMARY KEY REFERENCES guild_npc_receipts(request_id),
+  selection TEXT NOT NULL CHECK(json_valid(selection) AND json_type(selection)='array')
+);
+CREATE TABLE character_guild_npc_item_crafts(
+  craft_id TEXT PRIMARY KEY CHECK(length(craft_id)=64),
+  character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  guild_id INTEGER NOT NULL,joined_at INTEGER NOT NULL CHECK(joined_at>=0),
+  npc_id INTEGER NOT NULL CHECK(npc_id=400001065),
+  benefit_id INTEGER NOT NULL CHECK(benefit_id BETWEEN 7001 AND 7005),
+  deadline INTEGER NOT NULL CHECK(deadline BETWEEN 1 AND 2147483647),
+  item_core TEXT NOT NULL CHECK(json_valid(item_core)),
+  state INTEGER NOT NULL DEFAULT 0 CHECK(state IN(0,1,2)),
+  mail_id INTEGER NOT NULL DEFAULT 0 CHECK(mail_id>=0),
+  CHECK((state=1 AND mail_id>0) OR (state IN(0,2) AND mail_id=0))
+);
+CREATE UNIQUE INDEX guild_npc_item_craft_active ON character_guild_npc_item_crafts(character_id,npc_id) WHERE state=0;
+CREATE INDEX guild_npc_item_craft_due ON character_guild_npc_item_crafts(deadline) WHERE state=0;
+
+CREATE TABLE character_beast_dungeon_reservations(
+            character_id INTEGER NOT NULL,
+            account TEXT NOT NULL,
+            instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+            attempt INTEGER NOT NULL CHECK(attempt>0),
+            entry_epoch INTEGER NOT NULL CHECK(entry_epoch>0),
+            day INTEGER NOT NULL CHECK(day>0),
+            dungeon_id INTEGER NOT NULL CHECK(dungeon_id BETWEEN 310 AND 314),
+            expected_used INTEGER NOT NULL CHECK(expected_used BETWEEN 0 AND 1),
+            state INTEGER NOT NULL CHECK(state BETWEEN 0 AND 2),
+            PRIMARY KEY(character_id,instance_id),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX beast_pending_character ON character_beast_dungeon_reservations(character_id) WHERE state=0;
+
+CREATE TABLE character_beast_stage_rewards(
+    character_id INTEGER NOT NULL,
+    account TEXT NOT NULL,
+    instance_id TEXT NOT NULL CHECK(length(instance_id)=32),
+    stage INTEGER NOT NULL CHECK(stage BETWEEN 0 AND 5),
+    event_id TEXT NOT NULL CHECK(length(event_id)=32),
+    map_id INTEGER NOT NULL,
+    monster_key INTEGER NOT NULL CHECK(monster_key BETWEEN 1 AND 65535),
+    item_id INTEGER NOT NULL,
+    PRIMARY KEY(character_id,instance_id,stage),
+    UNIQUE(character_id,event_id),
+    FOREIGN KEY(character_id,account) REFERENCES characters(id,account) ON DELETE CASCADE
+);
+
+        CREATE TABLE character_pvp_mission_facts(
+            character_id INTEGER NOT NULL,account TEXT NOT NULL,
+            kind INTEGER NOT NULL CHECK(typeof(kind)='integer' AND kind IN(0,1)),
+            job INTEGER NOT NULL CHECK(typeof(job)='integer' AND job BETWEEN 0 AND 15),
+            parameter INTEGER NOT NULL CHECK(typeof(parameter)='integer' AND
+                (kind=0 AND parameter BETWEEN 0 AND 11 OR kind=1 AND parameter BETWEEN 0 AND 2)),
+            instance_id TEXT NOT NULL CHECK(length(instance_id)=32 AND instance_id NOT GLOB '*[^0-9a-f]*' AND instance_id<>'00000000000000000000000000000000'),
+            PRIMARY KEY(character_id,kind,job,parameter),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
+        CREATE TABLE character_pvp_mission_rewards(
+            character_id INTEGER NOT NULL,account TEXT NOT NULL,
+            mission_id INTEGER NOT NULL CHECK(typeof(mission_id)='integer' AND mission_id BETWEEN 1 AND 32767),
+            rewards_json TEXT NOT NULL CHECK(json_valid(rewards_json) AND json_type(rewards_json)='array'),
+            PRIMARY KEY(character_id,mission_id),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );

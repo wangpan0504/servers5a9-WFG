@@ -5,14 +5,15 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class GuildEconomyProjection(GuildEconomyService service, Action<Exception>? onError = null) : IDisposable
+internal sealed class GuildEconomyProjection(GuildEconomyService service, Action<Exception>? onError = null,
+    GuildNpcService? npcs = null) : IDisposable
 {
     readonly object gate = new();
     readonly Dictionary<GameSession, ITimer> timers = new();
     bool disposed;
     public void Post(GameConnectionContext context, bool force = false)
     {
-        if (context.Session.PlanGuildBuffProjection(service, force) is not { } receipt) return;
+        if (context.Session.PlanGuildBuffProjection(service, force, npcs) is not { } receipt) return;
         if (receipt.Removed.Length > 0)
             context.Sender.Post(0, (ushort)NotiPacketType.CHARACTER_DEL_BUFF,
                 GuildEconomyPackets.RemovedBuffs(receipt.Removed), "guild_benefits_removed", receipt.IsCurrent);

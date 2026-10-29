@@ -12,7 +12,7 @@ internal sealed class InventoryEmblemCompoundService(ItemCatalog items, EmblemCo
     readonly Func<long, long> draw = random ?? Random.Shared.NextInt64;
 
     public InventoryResult Apply(Character character, EmblemCompoundRequest request,
-        out EmblemCompoundReceipt? receipt, out string? rejection, DateTimeOffset? utcNow = null)
+        out EmblemCompoundReceipt? receipt, out string? rejection, DateTimeOffset? utcNow = null, int guildLevel = 0)
     {
         receipt = null;
         rejection = null;
@@ -49,7 +49,7 @@ internal sealed class InventoryEmblemCompoundService(ItemCatalog items, EmblemCo
         }
 
         EmblemCompoundPool pool;
-        try { pool = compounds.For(minimumGrade, request.Inputs.Length); }
+        try { pool = compounds.ForGuild(guildLevel, minimumGrade, request.Inputs.Length) ?? compounds.For(minimumGrade, request.Inputs.Length); }
         catch (InvalidDataException) { return Reject("grade-mapping", out rejection); }
         if (pool.Rewards.IsDefaultOrEmpty)
             return Reject("reward-pool", out rejection);
@@ -111,6 +111,9 @@ internal sealed class InventoryEmblemCompoundService(ItemCatalog items, EmblemCo
         return new(true, 0, new InventoryPlan(before, after, "emblem_compound",
             new InventoryCharacterPrecondition(character, deadline)));
     }
+
+    public bool UsesGuildPool(EmblemCompoundReceipt receipt, int level) =>
+        compounds.ForGuild(level, receipt.MinimumGrade, receipt.InputCount)?.BoosterItemId == receipt.BoosterItemId;
 
     EmblemCompoundRewardDefinition Pick(IReadOnlyList<EmblemCompoundRewardDefinition> candidates)
     {

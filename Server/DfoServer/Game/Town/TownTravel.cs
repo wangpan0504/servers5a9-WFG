@@ -40,7 +40,7 @@ internal static class TownTravel
         if (request.Town == 101 && (request.Area != 0 || character.Marriage is not { State: 4 } marriage || !marriage.IsMember(character.Id)))
             return TownTravelPlan.Reject("marriage-home-not-eligible");
         var target = new Location(request.Town, request.Area, request.X, request.Y, character.Position.Direction);
-        // 婚礼电影结束发送来源0/0、NPC0的普通CMD36；坐标必须对应资源中的婚礼NPC。
+        // 婚礼电影结束和大祭司离堂均发送来源0/0、NPC0的普通CMD36；落点按婚礼专用规则核对。
         if (character.Position is { Town: 39, Area: >= 8 and < 38 } && character.WeddingHall is not null &&
             request is { PreviousTown: 0, PreviousArea: 0, TargetNpc: 0, Movement: 5, PathKind: 0 } &&
             towns.IsWeddingMovieReturn(target, completed))

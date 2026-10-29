@@ -7,7 +7,8 @@ using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Dungeons;
 
-internal enum PartyDungeonNoticeKind { RaidBattleSync, RaidSelection, LoadingReplay, Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure, EvildomWarStarted, EvildomWarUpdated }
+// 取值只按名称使用、不做整数转换：上游新增 LoadingReplay（安徒恩重复进图回放），本地新增 BeastUpdated（魔兽阶段广播），两处并集保留。
+internal enum PartyDungeonNoticeKind { RaidBattleSync, RaidSelection, LoadingReplay, Selection, SelectionReturn, Entry, Loaded, Move, Death, Passive, Cinematic, Pickup, MemberLeft, Life, Pause, ResultSelection, ResultReturn, RetryEligibility, Departure, EvildomWarStarted, EvildomWarUpdated, BeastUpdated }
 internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMember Recipient,
     PartyMember[] Members, FormalDungeonReceipt? Scene = null, DungeonSelectionReceipt? Selection = null,
     FormalDungeonDeathResult? Death = null, Character? Previous = null, FormalDungeonPickupResult? Pickup = null,
@@ -70,13 +71,15 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     PartyMember[] members = party.Members;
     readonly HashSet<ushort> loaded = [];
     readonly HashSet<ushort> deaths = [];
-    sealed class PendingDeath(ushort key, Func<GameSession, FormalDungeonDeathResult> observe)
+    sealed class PendingDeath(ushort key, Func<GameSession, FormalDungeonDeathResult> observe, long? beastObservedAt)
     {
         public ushort Key { get; } = key;
+        public long? BeastObservedAt { get; } = beastObservedAt;
         public Func<GameSession, FormalDungeonDeathResult> Observe { get; } = observe;
         public Dictionary<ushort, PartyDungeonNotice> Completed { get; } = [];
     }
     PendingDeath? pendingDeath;
+    internal long? BeastDeathObservedAt => pendingDeath?.BeastObservedAt;
     sealed class PendingScene((DungeonMap, uint, string, int) key, Func<GameSession, QuestLifecycleReceipt?> observe)
     {
         public (DungeonMap, uint, string, int) Key { get; } = key;
@@ -180,6 +183,18 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     PartyDungeonNotice[] ReleaseLoading(PartyMember[] current)
     {
         if (current.Any(m => !loaded.Contains(m.Actor.Character.Id))) return [];
+        if (current.Any(member => member.Actor.Session.HasPendingBeastLoading))
+        {
+            var clock = current.Single(member => member.Slot == Leader).Actor.Session.BeastClock;
+            var reservations = current.Select(member => member.Actor.Session.PrepareBeastDungeonLoading(clock)).ToArray();
+            if (reservations.Any(row => row is null)) return [];
+            var pending = reservations.Select(row => row!).ToArray();
+            Character[] committed;
+            try { committed = store.CommitBeastDungeonLoading(pending); }
+            catch (BeastDungeonAdmissionRejectedException) { return []; }
+            for (int i = 0; i < current.Length; i++)
+                current[i].Actor.Session.InstallBeastDungeonLoading(pending[i], committed[i]);
+        }
         var notices = current.Select(m => new PartyDungeonNotice(PartyDungeonNoticeKind.Loaded, m, current,
             m.Actor.Session.CompleteFormalDungeonLoading() ?? m.Actor.Session.CurrentFormalDungeonScene() ??
                 throw new InvalidOperationException("全员加载屏障释放失败"))).ToArray();
@@ -279,7 +294,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
             AppendBattleNotices(current, notices);
             return notices.ToArray();
         }
-        pendingDeath = new(key, observe);
+        pendingDeath = new(key, observe, reporter.CaptureBeastRun()?.Progress.Timestamp);
         FinishPendingDeath(current, notices);
         AppendBattleNotices(current, notices);
         return notices.ToArray();
@@ -316,6 +331,9 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
                 new(PartyDungeonNoticeKind.Death, member, current, result.Receipt, Death: result, Previous: previous));
         }
         notices.AddRange(current.Select(m => pending.Completed[m.Actor.Character.Id]).Where(n => n.Death?.Receipt is not null));
+        var score = pending.Completed.Values.Select(notice => notice.Death?.BeastStageScore).FirstOrDefault(row => row is not null);
+        if (score is not null && !current[0].Actor.Session.ConfirmBeastPartyStage(score))
+            throw new InvalidOperationException("全员阶段资产提交后不能确认原共同计分候选");
         deaths.Add(pending.Key);
         pendingDeath = null;
     }

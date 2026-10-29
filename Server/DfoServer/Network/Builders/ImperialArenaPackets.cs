@@ -5,6 +5,17 @@ namespace DfoServer.Network.Builders;
 
 internal static class ImperialArenaPackets
 {
+    public static byte[] Result(long elapsedMilliseconds)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        // 0177B5F0固定读取四个u32并打开303结果窗；0178AA70按毫秒绘制第三项。
+        // 旧成绩与两个未接入的旧榜字段保持0；原生在旧成绩为0时复用本次真实耗时。
+        writer.Write(0u); writer.Write(0u);
+        writer.Write(checked((uint)elapsedMilliseconds)); writer.Write(0u);
+        return stream.ToArray();
+    }
+
     public static byte[] PreviousRank(uint rank)
     {
         using var stream = new MemoryStream();

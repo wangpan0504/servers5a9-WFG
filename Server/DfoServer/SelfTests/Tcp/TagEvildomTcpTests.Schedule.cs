@@ -44,8 +44,7 @@ internal static partial class TagEvildomTcpTests
         // 重选后沿原房间出口到中央竞技场，06点重开仍走原生15/16。
         clock.Advance(TimeSpan.FromMinutes(30));
         peer.ExpectUnusedDailyBoosterReset();
-        // 05:40 回城会清掉双角色标记，日界后的下一次 15 仍按未装双角色拒绝。
-        // 首次空编队的进图不依赖这条路径；这里先重选，让 1393 在新业务日重新装上。
+        // 新业务日重选仍按原生入城安装资料，退场本身保留已安装双角色。
         ReturnToSelection(peer);
         peer.Select(tagEvildom: [1677, 1678, 1393, 1394]);
         ExitRoom(peer, republish: true);
@@ -93,7 +92,6 @@ internal static partial class TagEvildomTcpTests
     {
         peer.Expect(0, 1709); peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]); peer.Expect(0, 24);
         FormalDungeonTcpTests.RefreshedQuests(peer);
-        peer.Expect(0, 2); peer.Expect(0, 2); peer.Expect(0, 19); peer.Expect(0, 1677);
-        peer.Expect(0, 1678, status ?? Gathering(mode)); peer.Expect(0, 1393); peer.Expect(0, 1394); peer.Barrier();
+        peer.Expect(0, 1678, status ?? Gathering(mode)); peer.Barrier();
     }
 }

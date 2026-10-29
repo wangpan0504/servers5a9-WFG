@@ -21,10 +21,12 @@ internal sealed class TagEvildomProjection(ITagEvildomConfigurationStore store,
     public async Task<bool> InitializeAsync(GameConnectionContext context, TownCharacterProjection primarySource)
     {
         // 共享TAG包依赖真实再战频道；普通频道、帝国竞技场不能冒充type53。
-        if (context.Session.ChannelEntry?.Type != 53 || context.Session.ReadTagEvildom(Store, Now) is not { } snapshot) return true;
+        if (context.Session.ChannelEntry?.Type != 53 || context.Session.RestoreTagEvildomTeamSelection(Store, Now) is not { } snapshot) return true;
         // 首次空编队在发 1677 前提交。已有队、不合格或备用技能未初始化时保持原快照。
         if (context.Session.EnsureTagEvildomTeam(Store, Now) is { } seeded &&
             context.Session.CanPublishTagEvildom(seeded)) snapshot = seeded;
+        log.Write("tag_evildom_team_selection", new { Connection = context.Id, snapshot.CharacterId,
+            snapshot.State.Configuration.SelectedTeam, snapshot.State.Configuration.Revision });
         return await DeliverAsync(context, snapshot, reportUnavailable: true, primarySource: primarySource);
     }
 
@@ -41,9 +43,15 @@ internal sealed class TagEvildomProjection(ITagEvildomConfigurationStore store,
         if (!Guard()) return false;
         if ((reportUnavailable || metadataSent || primaryChanged) && !snapshot.State.Configuration.Teams[snapshot.State.Configuration.SelectedTeam].Empty)
         {
-            log.Write("tag_evildom_character_info_unavailable", new { Connection = context.Id, Reason = "primary-or-standby-not-ready" });
+            var team = snapshot.State.Configuration.Teams[snapshot.State.Configuration.SelectedTeam];
+            bool primaryMismatch = team.First != snapshot.CharacterId;
+            string? primaryName = snapshot.Roster.Entries.FirstOrDefault(row => row.Id == team.First)?.Name;
+            log.Write("tag_evildom_character_info_unavailable", new { Connection = context.Id,
+                Reason = primaryMismatch ? "selected-character-not-team-primary" : "primary-or-standby-not-ready" });
             await context.Notify(NotiPacketType.AAS_TIPS,
-                ServerNoticePackets.Build("再战魔界", "编队已保留，但双角色技能或穿戴期限资料需要更新。请先分别登录两名角色，再以编队第一名角色登录。"),
+                ServerNoticePackets.Build("再战魔界", primaryMismatch
+                    ? $"当前选中编队的第一名角色是{primaryName ?? "其他角色"}，请使用该角色出战。新增或修改编队请点击城镇的队伍设置，分别登录角色不会新增编队。"
+                    : "当前编队已保留，但技能或穿戴期限资料需要更新。请分别登录当前编队的两名角色，再以第一名角色登录；新增或修改编队请使用队伍设置。"),
                 "tag_evildom_character_info_notice", Guard);
         }
         if (metadataSent || primaryChanged)

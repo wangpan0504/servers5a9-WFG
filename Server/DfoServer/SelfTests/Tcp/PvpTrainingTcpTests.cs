@@ -9,10 +9,11 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class PvpTrainingTcpTests
+internal static partial class PvpTrainingTcpTests
 {
     public static async Task RunAsync(ServerOptions source,string root,TcpTestResources resources)
     {
+        await PracticeAsync(source, root, resources);
         await using var f=new TcpTestFixture(source,Path.Combine(root,"pvp-training"),resources:resources);
         const string account="training-tcp";
         var repo=new CharacterRepository(f.Database,resources.Quests);
@@ -39,7 +40,6 @@ internal static class PvpTrainingTcpTests
             peer.Select(prepared:true);peer.Barrier();
             var adventureBefore=AdventureProgress();
             long experienceBefore=(long)f.Query("SELECT experience FROM characters WHERE id=$p0",id)[0][0];
-            peer.Travel(10,0,474,234,38,1,bottom:true);
             Meet(peer,2670);
             peer.Send(31,[31,0,0x6F,0x0A]);peer.Expect(1,31,[1,0x6F,0x0A,1,0,0,0,0]);
             QuestLifecycleTcpTests.DrainNotifications(peer);
@@ -67,6 +67,7 @@ internal static class PvpTrainingTcpTests
             That(f.Query("SELECT COUNT(*) FROM character_pvp_training_skills WHERE character_id=$p0",id) is [[1L]],"训练技能独立持久化");
             peer.Send(33,[33,0,0x70,0x0A,0x10,0,0]);peer.Expect(1,33,[1,0x70,0x0A,0,2,4,0]);
             string before=f.Snapshot();
+            string questsBefore = f.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0", id);
             peer.Send(50,request);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false);
             peer.Send(50,request);peer.Expect(1,50,[0,19,0]);
             peer.Send(33,[33,0,0x70,0x0A,0x40,0,0]);peer.Expect(1,33,[0,19,0]);
@@ -74,8 +75,12 @@ internal static class PvpTrainingTcpTests
             Round(peer,1,1201,1,true);Round(peer,0,9999,1,false);
             Round(peer,0,1201,1,false);Round(peer,0,1201,1,false);Round(peer,1,1201,1,true);
             Round(peer,0,1201,2,false);Round(peer,0,1202,2,false);Round(peer,1,1202,2,true);
+            peer.Expect(0,14);
+            PvpMissionTcpChecks.Progress(f, id, peer.Expect(0,578).Body);
             Round(peer,1,1202,2,true);peer.Barrier();
-            That(before==f.Snapshot(),"训练报告和全轮事实不绕过原子任务事务改库或发奖");
+            That(questsBefore == f.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0", id) &&
+                f.Query("SELECT mission_id FROM character_pvp_mission_rewards WHERE character_id=$p0", id) is [[604L]],
+                "道场MSN奖励独立原子提交，风云任务条件仍须原33通道消费");
             peer.Send(33,[33,0,0x70,0x0A,0x10,1,0]);peer.Expect(1,33,[0,19,0]);
             peer.Send(33,[33,0,0x70,0x0A,0x40,1,0]);peer.Expect(1,33,[0,19,0]);
             peer.Send(33,[33,0,0x70,0x0A,0x40,0,0]);peer.Expect(1,33,[1,0x70,0x0A,0,2,0,0]);peer.Barrier();
@@ -98,7 +103,6 @@ internal static class PvpTrainingTcpTests
             Round(peer,1,1202,2,true);peer.Barrier();
             That(f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=2672",id) is [[512L]],
                 "换角重连不恢复旧街机事实，更不接受迟到结算改任务");
-            peer.Travel(10,0,474,234,38,1,bottom:true);
             peer.Travel(10,1,450,234,10,0);
             peer.Travel(10,4,position.X,position.Y,10,1,beforeLocation:p=>
             {

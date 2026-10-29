@@ -7,7 +7,7 @@ internal sealed record GuildRankingMember(ushort Id, string Account, int Adventu
 internal sealed record GuildRankingParty(uint Dungeon, int Members, long Clears = 1);
 internal sealed record GuildRankingFact(uint Id, string Name, string Master, uint Mark, byte JoinMode,
     GuildRankingMember[] Members, int WeeklyUv, long Contribution, int Raids,
-    GuildDungeonClearCount[] Dungeons, GuildRankingParty[] Parties);
+    GuildDungeonClearCount[] Dungeons, GuildRankingParty[] Parties, int ActiveContents = 0);
 internal sealed record GuildRankingFactors(float Members, float WeeklyUv, float Dungeon, float Contents, float War,
     float Party, float Adventure, float Raid, float Pvp, float Event, float Contribution)
 {
@@ -85,7 +85,7 @@ internal sealed class GuildRankingService(IGuildRankingStore store, GuildRanking
             if (purification > 0) dungeon = Math.Max(dungeon, rules.DungeonMinimum);
             var factors = new GuildRankingFactors(Math.Min(rules.MemberMaximum, fact.Members.Length * rules.MemberRate),
                 Math.Min(rules.UvMaximum, fact.WeeklyUv * rules.UvRate), Math.Min(rules.DungeonMaximum, dungeon),
-                Math.Min(rules.ContentMaximum, fact.Parties.Select(row => row.Dungeon).Distinct().Count() * rules.ContentRate),
+                Math.Min(rules.ContentMaximum, fact.ActiveContents * rules.ContentRate),
                 0, fact.Parties.Sum(row => rules.Party(row.Dungeon) * row.Clears),
                 fact.Members.DistinctBy(member => member.Account).Sum(member => rules.Adventure(member.AdventureLevel)),
                 fact.Raids * rules.RaidPoint, fact.Members.Where(member => member.PvpExperience >= 0).Sum(member => rules.Duel(ratings.Grade(member.PvpExperience))),

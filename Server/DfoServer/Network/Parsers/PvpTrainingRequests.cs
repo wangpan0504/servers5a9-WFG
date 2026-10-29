@@ -5,6 +5,14 @@ namespace DfoServer.Network.Parsers;
 
 internal static class PvpTrainingRequests
 {
+    public static int Combo(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4) throw new InvalidDataException("连招目标报告需要四字节索引");
+        uint index = BinaryPrimitives.ReadUInt32LittleEndian(body);
+        return index < 12 ? (int)index : -1;
+    }
+    public static byte ArcadeMode(ReadOnlySpan<byte> body) => body.Length == 1 ? body[0] :
+        throw new InvalidDataException("道场末轮信号需要单字节模式");
     public static byte CopyChoice(ReadOnlySpan<byte> body) => body.Length==1 && body[0] is 1 or 2 ? body[0] :
         throw new InvalidDataException("训练复制选择需要原生单字节1或2");
     // V31 015C1C12/015D94D5：u8(0)，字节长u32+CP936标题，u16，u8×3。

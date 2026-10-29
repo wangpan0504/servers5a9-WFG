@@ -154,6 +154,15 @@ internal static class QuestProtocolTests
         Reject(() => QuestPackets.Finish(6080,4,0,[],0,[],1,hellChallenge: true),"深渊模式不能混合转职奖励");
         Reject(() => QuestPackets.Finish(6080,4,0,[],0,[],tpAmount: 2,hellChallenge: true),"深渊模式不能混合TP奖励");
         Reject(() => QuestPackets.Finish(6080,4,0,[],0,[],currencies: [new(354,3033,1)],hellChallenge: true),"深渊模式不能吞掉钱包材料奖励");
+        Check(QuestPackets.Finish(5927,4,17,[],123,[],beastQualification: true).SequenceEqual(
+            Convert.FromHexString("01271704110000001F")),"魔兽资格ACK34保留会面条件4和真实经验，mode31无物品count");
+        Reject(() => QuestPackets.Finish(5927,4,0,[],0,fixedRewards[..1],beastQualification: true),"魔兽资格模式不能吞掉物品奖励");
+        Reject(() => QuestPackets.Finish(5927,4,0,[],0,[],currencies: [new(354,3033,1)],beastQualification: true),"魔兽资格模式不能吞掉钱包奖励");
+        Reject(() => QuestPackets.Finish(5927,4,0,[],0,[],growType: 1,beastQualification: true),"魔兽资格不能混合转职");
+        Reject(() => QuestPackets.Finish(5927,4,0,[],0,[],tpAmount: 2,beastQualification: true),"魔兽资格不能混合TP");
+        Reject(() => QuestPackets.Finish(5927,4,0,[],0,[],hellChallenge: true,beastQualification: true),"魔兽资格不能混合深渊资格");
+        Reject(() => QuestPackets.Finish(5927,4,0,[],0,[],creatureEvolution: true,beastQualification: true),"魔兽资格不能混合宠物进化");
+        Reject(() => QuestPackets.Finish(5927,4,0,[],0,[],expertJobType: 1,beastQualification: true),"魔兽资格不能混合副职业");
         Check(QuestPackets.Finish(2702,0,0,[new(358,100)],0,[]).SequenceEqual(
                 Convert.FromHexString("018E0A000000000001006601640000000000")),
             "附魔师资格是普通寻物成功：消耗后再读 mode0 和零奖励，不发 ACK34 mode20");

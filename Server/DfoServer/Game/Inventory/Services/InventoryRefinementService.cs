@@ -8,7 +8,8 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
 {
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
-    public InventoryResult Refine(Character character, RefinementRequest request, out RefinementReceipt? receipt, DateTimeOffset? utcNow = null)
+    public InventoryResult Refine(Character character, RefinementRequest request, out RefinementReceipt? receipt, DateTimeOffset? utcNow = null,
+        int guildSuccessPercent = 0)
     {
         receipt = null;
         var before = character.Inventory;
@@ -72,7 +73,10 @@ internal sealed class InventoryRefinementService(ItemCatalog catalog, EquipmentR
         var paid = InventoryDeleteService.Plan(before, materialSlot, material.Core.Value, cost.Count);
         if (!paid.Accepted)
             return InventoryResult.Reject(17);
-        bool succeeded = (random ?? Random.Shared).Next(10000) < cost.SuccessWeight;
+        // 普通材料和便携炉共用锻造概率；直接等级券保持券本身的成功率。
+        int successWeight = ticket is null or { Portable: true }
+            ? InventoryEnhancementService.ApplyGuildSuccessBonus(cost.SuccessWeight, guildSuccessPercent) : cost.SuccessWeight;
+        bool succeeded = (random ?? Random.Shared).Next(10000) < successWeight;
         byte newLevel = succeeded ? desiredLevel : oldLevel;
         var after = paid.Plan!.After;
         if (succeeded)

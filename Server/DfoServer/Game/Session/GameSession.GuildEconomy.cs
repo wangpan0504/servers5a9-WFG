@@ -11,6 +11,9 @@ internal sealed partial class GameSession
 {
     GuildBenefit[] projectedGuildBenefits = [];
     ushort projectedGuildCharacter;
+    long projectedGuildEpoch;
+    long guildBuffProjectionVersion;
+    readonly HashSet<uint> projectedGuildBuffIds = [];
 
     public GuildGiftUseResult UseGuildMileageGift(InventorySlot slot, GuildEconomyService service,
         string requestId, bool blocked = false)
@@ -46,7 +49,8 @@ internal sealed partial class GameSession
         });
     }
 
-    public GuildBuffProjectionReceipt? PlanGuildBuffProjection(GuildEconomyService service, bool force)
+    public GuildBuffProjectionReceipt? PlanGuildBuffProjection(GuildEconomyService service, bool force,
+        GuildNpcService? npcs = null)
     {
         try
         {
@@ -56,14 +60,27 @@ internal sealed partial class GameSession
                 long now = service.Now;
                 var state = service.Store.ReadGuildEconomy(owner, character.Id, now);
                 var desired = state?.Benefits.Where(benefit => benefit.Type is 3 or 5 && benefit.Active(now)).ToArray() ?? [];
+                if (state is not null && npcs is not null && CaptureGuildManagement(requireTown: false) is { } actor &&
+                    npcs.GuardianBuff(actor) is { } guardian)
+                    desired = [.. desired, guardian];
                 long? deadline = state?.Benefits.Where(benefit => benefit.ExpiresUnix > now)
                     .Select(benefit => (long?)benefit.ExpiresUnix).Min();
-                bool changed = force || projectedGuildCharacter != character.Id || !projectedGuildBenefits.SequenceEqual(desired);
-                uint[] removed = changed ? projectedGuildBenefits.Select(benefit => benefit.Value).ToArray() : [];
+                long epoch = SelectionEpoch;
+                bool changed = force || projectedGuildCharacter != character.Id || projectedGuildEpoch != epoch ||
+                    !projectedGuildBenefits.SequenceEqual(desired);
+                bool sameSelection = projectedGuildCharacter == character.Id && projectedGuildEpoch == epoch;
+                if (!sameSelection) projectedGuildBuffIds.Clear();
+                // 保留本次选角出现过的资源ID；跳过的旧回执也不能让更早增益残留。
+                uint[] removed = changed ? projectedGuildBuffIds.Order().ToArray() : [];
+                foreach (var benefit in desired) projectedGuildBuffIds.Add(benefit.Value);
                 var added = changed ? desired : [];
                 projectedGuildCharacter = character.Id; projectedGuildBenefits = desired;
-                long epoch = SelectionEpoch;
-                bool Current() => owner.IsCurrent && Ready && SelectionEpoch == epoch && ReferenceEquals(Selected, character);
+                projectedGuildEpoch = epoch;
+                if (changed) guildBuffProjectionVersion++;
+                long version = guildBuffProjectionVersion;
+                // 无关角色快照更新不撤销待发增益；真正的增益变化则使旧回执失效。
+                bool Current() => owner.IsCurrent && Ready && SelectionEpoch == epoch && Selected?.Id == character.Id &&
+                    guildBuffProjectionVersion == version;
                 return new GuildBuffProjectionReceipt(removed, added, deadline, Current);
             });
         }

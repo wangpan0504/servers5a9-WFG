@@ -67,6 +67,14 @@ internal static partial class DungeonGrowthRepositoryTests
             That(Snapshot() == snapshot && Scalar("SELECT COUNT(*) FROM character_dungeon_growth_receipts") == receipts &&
                 run.IsPendingDeath(pending), "故障不留下经验、revision、物品、邮件、托管资产、审计或提前确认死亡");
             Execute("DROP TRIGGER beast_growth_abort");
+            That(Scalar("SELECT COUNT(*) FROM character_beast_stage_rewards") == 0,
+                "阶段唯一凭据随成长故障一并回滚");
+            Execute($"INSERT INTO character_beast_stage_rewards VALUES({current.Id},'growth-repository','{pending.Death.Identity.InstanceId:N}',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,{rewardId})");
+            string conflictSnapshot = Snapshot();
+            Reject<InvalidDataException>(() => repository.CommitDungeonGrowth(owner, current, run, pending, Reward(pending), growth,
+                questDrops: quest), "不同死亡不能复用同一实例角色阶段，即使成长事件ID不同");
+            That(Snapshot() == conflictSnapshot, "阶段冲突不能写入经验、物品或邮件");
+            Execute("DELETE FROM character_beast_stage_rewards");
             var committed = repository.CommitDungeonGrowth(owner, current, run, pending, Reward(pending), growth, questDrops: quest);
             That(committed.Character.Revision == current.Revision + 1 && !committed.Duplicate &&
                 committed.Character.Inventory.Items.Where(item => item.Core.ItemId == questId).Sum(item => item.Core.Count) == 1,
@@ -76,9 +84,16 @@ internal static partial class DungeonGrowthRepositoryTests
                       committed.BeastRewardSlots.Length == 1,
                 "有空位恰好发一罐，满包恰好生成一封溢出邮件");
             string committedSnapshot = Snapshot();
-            var replay = repository.CommitDungeonGrowth(owner, current, run, pending, Reward(pending), growth, questDrops: quest);
+            That(Scalar("SELECT COUNT(*) FROM character_beast_stage_rewards") == 1,
+                "提交只建立一份实例角色阶段凭据");
+            var reopened = new CharacterRepository(path);
+            var replay = reopened.CommitDungeonGrowth(owner, current, run, pending, Reward(pending), growth, questDrops: quest);
             That(replay.Duplicate && Snapshot() == committedSnapshot && replay.Character.Revision == committed.Character.Revision &&
                 replay.BeastRewardSlots.SequenceEqual(committed.BeastRewardSlots), "模拟提交返回丢失：原死亡重放不再发罐、邮件或任务物品");
+            Execute("UPDATE character_beast_stage_rewards SET item_id=1");
+            Reject<InvalidDataException>(() => reopened.CommitDungeonGrowth(owner, current, run, pending, Reward(pending), growth,
+                questDrops: quest), "重开仓库后仍严格复核阶段凭据来源，不能将损坏记录当成功");
+            Execute($"UPDATE character_beast_stage_rewards SET item_id={rewardId}");
             That(run.ConfirmCommittedDeath(pending).Outcome == DungeonRunOutcome.Accepted,
                 "数据库成功后才确认魔兽阶段死亡");
 

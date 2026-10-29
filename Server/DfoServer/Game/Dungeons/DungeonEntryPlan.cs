@@ -82,7 +82,7 @@ internal sealed record DungeonEntryPlan(
     public int? GriefLayer { get; init; }
     public bool IsBossRush { get; init; }
     public int TimeoutMilliseconds { get; init; }
-    public bool RequiresFatigueOwner => IsOrdinary && LostLand is null && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower && !IsBossRush;
+    public bool RequiresFatigueOwner => IsOrdinary && !(BeastMode && !BeastDungeonRotation.IsGateway(DungeonId)) && LostLand is null && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower && !IsBossRush;
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
@@ -120,7 +120,10 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
-    public bool IsTerminalMap(DungeonMap map) => BeastMode ? map.Kind == "Beast" && Maze.MapSpecification?.Contains(map) == true :
+    public bool IsTerminalMap(DungeonMap map) => BeastMode ? map.Kind == "Beast" &&
+        (BeastEncounterPlan.IsNative(this) ? map.Id == BeastEncounterPlan.Stage(this, 5).Map &&
+            Maze.MapSpecification?.Any(sentinel => sentinel.Kind == "Beast" && sentinel.Position == map.Position) == true :
+            Maze.MapSpecification?.Contains(map) == true) :
         LostLand is null && (Hope is { } hope ? OperationHopePlan.IsDeclaredTerminal(hope.Catalog,hope.MazeOrdinal,map.Id) : Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
         PassiveClearTerminalMap is { } passive ? map == passive :
         CinematicClearTerminalMap is { } cinematic ? map == cinematic :

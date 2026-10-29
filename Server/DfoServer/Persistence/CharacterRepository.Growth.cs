@@ -76,6 +76,7 @@ internal sealed partial class CharacterRepository
         // 同ID重读返回当前持久角色；不根据旧expected再次加经验，也不重发清图事实。
         if (duplicate)
         {
+            SaveOrVerifyBeastStageReward(db, tx, owner, beastReward, verifyOnly: true);
             VerifyCachedDungeonLoot(owner, expected.Id, prepared.Death.EventId, loot);
             CommitOrdinaryLukeDrop(db, tx, owner, run, prepared, loot, verifyOnly: true);
             VerifyQuestDrops(db,tx,owner.Account,expected.Id,prepared.Death.EventId,questDrops);
@@ -103,6 +104,7 @@ internal sealed partial class CharacterRepository
             !current.Skills.OrderBy(skill => skill.Id).SequenceEqual(expected.Skills.OrderBy(skill => skill.Id)))
             throw new InvalidOperationException("成长revision或完整学习前提已变化");
         command.Parameters.AddWithValue("$account", owner.Account);
+        SaveOrVerifyBeastStageReward(db, tx, owner, beastReward, verifyOnly: false);
         var inventory = beastReward?.Inventory ?? questDrops?.Inventory;
         if (inventory is not null)
             ValidateInventoryPlan(expected, inventory);

@@ -1,5 +1,6 @@
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Guild;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
@@ -9,7 +10,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class EmblemCompoundHandler(InventoryEmblemCompoundService compounds,
-    InventoryProjection projection, ServerLog log) : IGameCommandModule
+    InventoryProjection projection, ServerLog log, GuildNpcBenefitService? guildBenefits = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) =>
         commands.Register(CmdPacketType.COMPOUND_EMBLEM, Handle, nameof(EmblemCompoundHandler));
@@ -36,9 +37,10 @@ internal sealed class EmblemCompoundHandler(InventoryEmblemCompoundService compo
             (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         EmblemCompoundReceipt? receipt = null;
         string? rejection = null;
+        GuildNpcBenefitCommit? benefitCommit = null;
         var result = context.BlocksTownActions
             ? InventoryResult.Reject(22)
-            : context.Session.CompoundEmblem(request, compounds, out receipt, out rejection);
+            : context.Session.CompoundEmblem(request, compounds, out receipt, out rejection, out benefitCommit, guildBenefits);
         rejection ??= result.Accepted ? null : "blocked-state";
         bool CanSend() => result.Receipt is { } committed
             ? context.Session.CanPublishInventory(committed)
@@ -72,6 +74,7 @@ internal sealed class EmblemCompoundHandler(InventoryEmblemCompoundService compo
         await context.Reply(CmdPacketType.COMPOUND_EMBLEM, EmblemCompoundPackets.Success(receipt),
             "emblem_compound_committed", CanSend);
         await projection.RefreshAsync(context, result);
+        if (benefitCommit is not null) guildBenefits!.Publish(benefitCommit);
         return CommandResult.Handled;
     }
 }

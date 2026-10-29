@@ -20,6 +20,7 @@ internal static class MarriageWeddingTcpTests
         var catalog = MarriageCatalog.Load(resources.Archive);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "marriage-wedding"), resources: resources, clock: clock);
         await fixture.StartAsync();
+        await Ceremony(fixture, catalog, resources.Towns, clock, 0, missing: false, prepared: false);
         foreach (byte type in new byte[] { 0, 1, 2 })
             await Ceremony(fixture, catalog, resources.Towns, clock, type, missing: false);
         await Ceremony(fixture, catalog, resources.Towns, clock, 2, missing: true);
@@ -28,9 +29,10 @@ internal static class MarriageWeddingTcpTests
         Console.WriteLine($"PASS {Count - checks} marriage wedding TCP assertions");
     }
 
-    static async Task Ceremony(TcpTestFixture fixture, MarriageCatalog catalog, TownCatalog towns, Clock clock, byte type, bool missing)
+    static async Task Ceremony(TcpTestFixture fixture, MarriageCatalog catalog, TownCatalog towns, Clock clock, byte type, bool missing,
+        bool prepared = true)
     {
-        string suffix = type + (missing ? "fail" : "ok");
+        string suffix = type + (!prepared ? "quest" : missing ? "fail" : "ok");
         string accountA = "weddinga" + suffix, accountB = "weddingb" + suffix;
         using var first = Open(fixture, accountA);
         using var second = Open(fixture, accountB);
@@ -48,26 +50,80 @@ internal static class MarriageWeddingTcpTests
             if (ticket.Count > 0)
                 a = repository.Save(ownerA, a, a.Position, a.Return, new(a.Inventory, a.Inventory with
                 { Items = a.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), new(ticket.ItemId, ItemKind.Consumable, ticket.Count))) }, "marriage_fixture"));
-            var record = MarriageWeddingRules.CreateEngagement(Guid.NewGuid(), (uint)(200 + type + (missing ? 10 : 0)),
-                a.Id, b.Id, clock.GetUtcNow().ToUnixTimeSeconds()) with { PrepareClears = 5 };
+            var record = MarriageWeddingRules.CreateEngagement(Guid.NewGuid(), (uint)(200 + type + (!prepared ? 20 : missing ? 10 : 0)),
+                a.Id, b.Id, clock.GetUtcNow().ToUnixTimeSeconds()) with { PrepareClears = type == 0 ? 5 : 0 };
             repository.CommitMarriageTogether(ownerA, ownerB, a, b, new(a.Inventory, a.Inventory, "marriage_fixture"),
                 new(b.Inventory, b.Inventory, "marriage_fixture"), null, record);
         }
         foreach (ushort id in new[] { first.Id, second.Id })
             foreach (int quest in catalog.Quests)
-                fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id,daily_period,answer) VALUES($p0,$p1,0,0)", id, quest);
+                if (prepared || id == first.Id || quest != catalog.Quests[^1])
+                    fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id,daily_period,answer) VALUES($p0,$p1,0,0)", id, quest);
+        // 原生离堂回39/0；夹具同时满足该普通地区的真实准入，不绕过旅行门禁。
+        foreach (ushort id in new[] { first.Id, second.Id, guest.Id })
+            foreach (int quest in towns.Areas[(39, 0)].Quests)
+                fixture.Sql("INSERT OR IGNORE INTO character_completed_quests(character_id,quest_id,daily_period,answer) VALUES($p0,$p1,0,0)", id, quest);
         first.Select(); second.Select(); guest.Select();
         first.Barrier(); second.Barrier(); guest.Barrier();
-        first.Send(1034, Structured(Build(w => { w.Write((uint)second.Id); w.Write((byte)2); w.Write(type); w.Write((byte)0); })));
+        byte[] hallExit = Convert.FromHexString("27007508B40005000000000000000000");
+        if (type == 0 && prepared)
+        {
+            var before = fixture.Snapshot();
+            guest.Send(36, hallExit);
+            That(!Drain(guest).Any(p => p.Opcode is 23 or 1002) && fixture.Snapshot() == before,
+                "普通地区不能借真实礼堂离场请求取得切图权限");
+        }
+        if (type == 2 && !missing)
+        {
+            foreach (var peer in new[] { first, second })
+            {
+                peer.Send(2, Build(w => { w.Write((byte)5); w.Write(0x0100007fu); w.Write(0x0100007fu); w.Write((ushort)(30100 + peer.Id)); w.Write(512u); }));
+                PartyDungeonTcpTests.Drain(peer);
+            }
+            first.Send(10, Build(w => { w.Write(second.Id); w.Write((byte)0); w.Write(0u); w.Write(new byte[6]); }));
+            PartyDungeonTcpTests.Drain(first); PartyDungeonTcpTests.Drain(second);
+            second.Send(11, Build(w => { w.Write(first.Id); w.Write((byte)0); w.Write(0u); }));
+            That(PartyDungeonTcpTests.Drain(second).Any(p => p is { Kind: 0, Opcode: 9 }) &&
+                PartyDungeonTcpTests.Drain(first).Any(p => p is { Kind: 0, Opcode: 9 }), "原生婚礼请求在正式双人组队中验证");
+            PartyDungeonTcpTests.Drain(guest);
+        }
+        byte[] request = [.. Convert.FromHexString("9CF71A00000000005F00000070"),
+            .. Build(w => { w.Write((uint)second.Id); w.Write((byte)2); w.Write(type); w.Write((byte)0); })];
+        byte[] response = [.. Convert.FromHexString("70F81A00094CD704FFFFFFFFE0"),
+            .. Build(w => { w.Write((uint)first.Id); w.Write((byte)2); w.Write((ushort)0); w.Write((byte)0); })];
+        first.Send(1034, request);
         Bytes(first.Expect(1, 1034).Body, [1, .. Offer(second.Id, type)], "预约邀请ACK保留档位与等待选择");
         Bytes(second.Expect(0, 1000).Body, Offer(first.Id, type), "配偶接收同一档预约邀请");
-        second.Send(1035, Structured(Build(w => { w.Write((uint)first.Id); w.Write((byte)2); w.Write((ushort)0); w.Write((byte)0); })));
+        if (type == 2 && !missing)
+        {
+            guest.Send(1035, response); Rejected(guest, 1035);
+            second.Send(1035, Structured(Build(w => { w.Write((uint)guest.Id); w.Write((byte)2); w.Write((ushort)0); w.Write((byte)0); })));
+            Bytes(second.Expect(1, 1035).Body, Answer(-2, guest.Id, 0, ack: true), "无邀请者和错对象回应不能消费真实配偶的邀请");
+            first.Send(1034, request); Rejected(first, 1034);
+            That(repository.FindMarriage(first.Id) is { State: 1, Wedding: null }, "邀请未决时拒绝重复请求，不预约或扣费");
+            clock.Advance(TimeSpan.FromSeconds(61));
+            second.Send(1035, response);
+            Bytes(second.Expect(1, 1035).Body, Answer(-2, first.Id, 0, ack: true), "过期确认保留原预约操作与对象");
+            Bytes(first.Expect(0, 1001).Body, Answer(-2, second.Id, type, ack: false), "过期确认通知原发起人关闭等待窗口");
+            That(repository.FindMarriage(first.Id) is { State: 1, Wedding: null }, "过期确认不产生预约");
+            first.Send(1034, request); first.Expect(1, 1034); second.Expect(0, 1000);
+        }
+        second.Send(1035, response);
+        if (!prepared)
+        {
+            Bytes(second.Expect(1, 1035).Body, Answer(-1, first.Id, 0, ack: true), "缺少准备任务时错误回执仍保留预约操作，不能被客户端静默忽略");
+            Bytes(first.Expect(0, 1001).Body, Answer(-1, second.Id, type, ack: false), "确认失败也通知原发起人关闭等待窗口");
+            That(repository.FindMarriage(first.Id) is { State: 1, Wedding: null, PrepareClears: 5 } &&
+                fixture.Query("SELECT gold FROM characters WHERE id=$p0", first.Id) is [[10000000L]], "通关计数不能代替双方准备任务，拒绝不扣费");
+            return;
+        }
         var bNotices = Drain(second); var aNotices = Drain(first);
         byte[] responseAck = [1, .. Offer(first.Id, 0), 0], responseNotice = [.. Offer(second.Id, type), 0];
         That(bNotices.Any(p => p.Kind == 1 && p.Opcode == 1035 && p.Body.AsSpan().SequenceEqual(responseAck)) &&
             aNotices.Any(p => p.Opcode == 1001 && p.Body.AsSpan().SequenceEqual(responseNotice)),
             "预约双确认后发布成功，ACK复述答复保留字，通知携带原邀请档位");
         var reserved = repository.FindMarriage(first.Id)!;
+        That(reserved.PrepareClears == (type == 0 ? 5 : 0), "预约依据双方已完成任务，不要求或回填额外通关计数");
         var wedding = reserved.Wedding!;
         foreach (var notices in new[] { aNotices, bNotices })
         {
@@ -125,7 +181,19 @@ internal static class MarriageWeddingTcpTests
                 var movie = peer.Expect(0, 1010).Body;
                 That(movie.Length == 68 && U32(movie, 0) == reserved.ContextId && U32(movie, 4) == wedding.HallArea, "新人电影通知匹配本场礼堂");
             }
-            var movieGuest = guest.Expect(0, 1010).Body;
+            var guestMovie = guest.Read();
+            int precedingUpdates = 0;
+            while (guestMovie is { Kind: 0, Opcode: 9 or 1016 })
+            {
+                That(++precedingUpdates <= 8, "来宾电影前的队伍与新人属性更新数量有界");
+                if (guestMovie.Opcode == 9)
+                    That(guestMovie.Body is [1, ..], "组队新人状态变化发布正式队伍目录更新");
+                else That(guestMovie.Body.Length == 14 && U32(guestMovie.Body, 0) != guest.Id,
+                    "新人属性变化仍使用远端Actor的14字节婚姻投影");
+                guestMovie = guest.Read();
+            }
+            That(guestMovie is { Kind: 0, Opcode: 1010 }, "来宾在队伍目录更新后仍须接收本场电影");
+            var movieGuest = guestMovie.Body;
             That(movieGuest.Length == 68 && U32(movieGuest, 0) == reserved.ContextId, "同场来宾也收到婚礼电影");
             var committed = repository.FindMarriage(first.Id)!;
             That(committed.State == 4 && committed.Wedding!.Gifts is [{ Settled: true, Text: "新婚快乐" }] &&
@@ -138,14 +206,32 @@ internal static class MarriageWeddingTcpTests
             Drain(first); Drain(second); Drain(guest);
             var destination = towns.Areas.Values.SelectMany(area => area.Default.Npcs.Where(npc => npc.Id == 20013)
                 .Select(npc => new Location(area.Town, area.Area, checked((ushort)npc.X), checked((ushort)(npc.Y + 30))))).First();
+            if (type == 0)
+            {
+                foreach (int offset in new[] { 0, 1, 2, 4, 7, 9, 11, 15 })
+                {
+                    byte[] invalid = (byte[])hallExit.Clone();
+                    invalid[offset] ^= 1;
+                    var before = fixture.Snapshot();
+                    first.Send(36, invalid);
+                    That(!Drain(first).Any(p => p.Opcode is 23 or 1002) && fixture.Snapshot() == before,
+                        "礼堂离场不能更改目标地区、坐标、来源、NPC或路径类型");
+                }
+            }
             foreach (var peer in new[] { first, second, guest })
             {
-                peer.Send(36, Area(destination.Town, destination.Area, destination.X, destination.Y, 0, 0));
+                bool movieReturn = type == 0 && peer == first;
+                var target = movieReturn ? destination : new Location(39, 0, 2165, 180);
+                peer.Send(36, movieReturn ? Area(target.Town, target.Area, target.X, target.Y, 0, 0) : hallExit);
                 var returned = Drain(peer);
                 That(returned.Any(p => p.Opcode == 23) && returned.Any(p => p.Opcode == 1002 && p.Body[0] == 1) &&
                     fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", peer.Id) is [[long town, long area, long x, long y]] &&
-                    town == destination.Town && area == destination.Area && x == destination.X && y == destination.Y,
-                    "电影结束真实CMD36将新人和访客保存回婚礼NPC并解除临时婚服");
+                    town == target.Town && area == target.Area && x == target.X && y == target.Y,
+                    "电影结束及大祭司真实CMD36将新人和访客保存回普通地区并解除临时婚服");
+                var beforeReplay = fixture.Snapshot();
+                peer.Send(36, hallExit);
+                That(!Drain(peer).Any(p => p.Opcode is 23 or 1002) && fixture.Snapshot() == beforeReplay,
+                    "离堂后重放相同请求不再保存或重复发布婚服清理");
             }
             Drain(first); Drain(second); Drain(guest);
         }
@@ -162,17 +248,24 @@ internal static class MarriageWeddingTcpTests
         {
             var packet = peer.Read();
             if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "婚礼流程屏障成功"); return packets; }
-            That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 14 or 22 or 23 or 24 or 1001 or 1002 or 1003 or 1007 or 1016 ||
+            That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 14 or 22 or 23 or 24 or 26 or 153 or 1001 or 1002 or 1003 or 1007 or 1016 ||
                 packet.Kind == 1 && packet.Opcode is 1035 or 1041, $"婚礼切图只接收明确的投影和回执，实际{packet.Kind}/{packet.Opcode}");
             That(packet.Body.Length > 0, "婚礼流程通知必须有真实正文");
             if (packet.Opcode == 1002) That(packet.Body.Length == 71, "临时婚服71字节");
             if (packet.Opcode == 1007) That(packet.Body.Length == 79, "预约79字节");
+            if (packet.Opcode == 9) That(packet.Body[0] == 1, "双人预约切图仍发布正式组队信息");
+            if (packet.Opcode == 26) That(packet.Body.Length == 1, "组队主机通知保持单字节");
             packets.Add(packet);
         }
         throw new InvalidDataException("婚礼流程屏障前通知超过上限");
     }
     static byte[] Structured(byte[] body) => [.. new byte[13], .. body];
     static byte[] Offer(ushort target, byte type) => Build(w => { w.Write(0); w.Write((uint)target); w.Write((byte)2); w.Write(type); w.Write((byte)0); });
+    static byte[] Answer(int result, ushort target, byte type, bool ack) => Build(w =>
+    {
+        if (ack) w.Write((byte)1);
+        w.Write(result); w.Write((uint)target); w.Write((byte)2); w.Write(type); w.Write((byte)0); w.Write((byte)0);
+    });
     static void Rejected(TcpPeer peer, ushort opcode)
     {
         byte[] body = peer.Expect(1, opcode).Body;

@@ -11,7 +11,7 @@ internal sealed record PvpArenaMembership(PvpArenaRoom Room, Guid Token, SocialA
         ReferenceEquals(Actor.Session.CurrentPvpArena, this);
 }
 
-internal sealed record PvpArenaDeparture(PvpArenaMembership Member, long Version);
+internal sealed record PvpArenaDeparture(PvpArenaMembership Member, long Version, byte Seat);
 internal enum PvpArenaNoticeKind { Room, Seats, Ready, State, Start, Loaded, Connected, Death, Endpoints, MatchingCancelled, Matching, ResultReturned, TotalSelected, TotalProgress }
 internal sealed record PvpArenaNotice(PvpArenaMembership Recipient, PvpArenaRoomView View,
     PvpArenaDeparture? Departure = null)

@@ -41,7 +41,7 @@ internal sealed partial class GameSession
                 formalDungeon?.Run.HasPendingSettlement != true && !HasPendingQuestScene ? Selected : null;
             var instance = Phase is SessionPhase.Dungeon or SessionPhase.Settlement || cinematicTransition ? formalDungeon?.Run.Snapshot.Identity : null;
             var room = instance is not null && formalDungeon is { } dungeon
-                ? dungeon.Route.Rooms.Single(row => row.Room.Map == dungeon.Run.Snapshot.CurrentMap).Room : null;
+                ? dungeon.Run.CurrentMonsterPlan.Room : null;
             // 加载事实记录的是Advance前epoch；当前phase和完整Map确认已加载，提交再复验当前RunIdentity。
             bool loaded = instance is not null && formalDungeon is { Entry.IsClassExperience: false, Entry.IsPractice: false } current &&
                 current.Run.Phase is SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement &&

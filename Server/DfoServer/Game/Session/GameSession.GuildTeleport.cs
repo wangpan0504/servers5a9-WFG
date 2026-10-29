@@ -37,7 +37,7 @@ internal sealed partial class GameSession
         return true;
     });
 
-    // 与参考服保持一致：决斗场和超时空频道不能借公会传送离开频道区域。
+    // 决斗场和超时空频道不能借公会传送离开频道区域。
     bool CanGuildTeleport() => CanTeleport() && GuildTeleportBlocked?.Invoke() != true &&
-        ChannelEntry?.Type is not (8 or 24 or ChannelAreaLanding.FiendwarType) && Selected is { IsPvpPrivate: false };
+        ChannelEntry?.Type is not (4 or 5 or 8 or 24 or ChannelAreaLanding.FiendwarType) && Selected is { IsPvpPrivate: false };
 }

@@ -65,20 +65,20 @@ internal static class GuildCargoTcpTests
         using var peer = Open(fixture, "20001");
         EnterResumed(peer);
         // 先等新连接完成Join，再确认旧连接队列；跨连接通知不以另一连接的ACK作为完成条件。
-        peer.Barrier(packet => SameGuildPresence(packet, masterId));
-        master.Barrier(packet => SameGuildPresence(packet, peerId));
+        peer.Barrier(packet => SameGuildPresence(peer, packet, masterId));
+        master.Barrier(packet => SameGuildPresence(master, packet, peerId));
         using var foreign = Open(fixture, "20002");
         var visible = EnterResumed(foreign);
         That(!visible.Contains(masterId) && !visible.Contains(peerId), "相同guildagit地图中另一个公会不收到先进入成员的Actor");
         master.Barrier(packet =>
         {
             That(!IsActor(packet, foreignId), "公会大厅人物隔离不会广播另一个公会新进入的角色");
-            SameGuildPresence(packet, peerId);
+            SameGuildPresence(master, packet, peerId);
         });
         peer.Barrier(packet =>
         {
             That(!IsActor(packet, foreignId), "同会观察者也只收到本公会人物");
-            SameGuildPresence(packet, masterId);
+            SameGuildPresence(peer, packet, masterId);
         });
         byte[] Deposit(int count) => Build(writer =>
         {
@@ -149,12 +149,21 @@ internal static class GuildCargoTcpTests
     static bool IsActor(WirePacket packet, ushort id) => packet is { Kind: 0, Opcode: 2, Body.Length: > 122 } &&
         packet.Body[0] == 0 && U16(packet.Body, 1) == 1 && U16(packet.Body, 121) == id;
 
-    static void SameGuildPresence(WirePacket packet, ushort id) => That(IsActor(packet, id) ||
-        packet is { Kind: 0, Opcode: 3, Body.Length: 4 } && packet.Body[0] == 1 &&
-            U16(packet.Body, 1) == id && packet.Body[3] == 0 ||
-        packet is { Kind: 0, Opcode: 22, Body.Length: 9 } && U16(packet.Body, 0) == id ||
-        packet is { Kind: 0, Opcode: 23, Body.Length: 10 } && U16(packet.Body, 0) == id,
-        "入厅屏障仅接收指定同会角色的Actor、状态、地区和位置，不跳过其他通知");
+    static void SameGuildPresence(TcpPeer peer, WirePacket packet, ushort id)
+    {
+        // 入城尾部补发的公会被动属性（守护石1276）按真实账本单独核验，仍不接受其它通知。
+        if (packet is { Kind: 0, Opcode: 487 })
+        {
+            peer.CheckGuildPassiveBuffs(packet);
+            return;
+        }
+        That(IsActor(packet, id) ||
+            packet is { Kind: 0, Opcode: 3, Body.Length: 4 } && packet.Body[0] == 1 &&
+                U16(packet.Body, 1) == id && packet.Body[3] == 0 ||
+            packet is { Kind: 0, Opcode: 22, Body.Length: 9 } && U16(packet.Body, 0) == id ||
+            packet is { Kind: 0, Opcode: 23, Body.Length: 10 } && U16(packet.Body, 0) == id,
+            "入厅屏障仅接收指定同会角色的Actor、状态、地区和位置，不跳过其他通知");
+    }
 
     static HashSet<ushort> EnterResumed(TcpPeer peer)
     {

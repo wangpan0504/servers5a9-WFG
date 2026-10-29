@@ -78,6 +78,10 @@ internal static class PvpArenaPackets
         return stream.ToArray();
     }
 
+    // 023A2A24 按原席UID撤销本人房间引用；退出只清本人的原席，不能用完整空房间目录代替。
+    public static byte[] Left(PvpArenaRoomView room, byte seat) =>
+        [(byte)room.Id, (byte)(room.Id >> 8), Mode(room), 1, seat, 0, 255, 255];
+
     // NOTI44的0239B830只读seat:u8/ready:u8，不附房间号。
     public static byte[] Ready(byte seat, bool ready)
     {

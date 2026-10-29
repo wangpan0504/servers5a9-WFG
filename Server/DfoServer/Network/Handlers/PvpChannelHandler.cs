@@ -15,7 +15,7 @@ internal sealed class PvpChannelHandler(GameChannelListeners channels, ServerLog
         SessionRequests.Empty(packet.Body);
         var actor = context.Session.CaptureSocialActor();
         var endpoints = channels.Endpoints;
-        var available = endpoints.Where(row => row.Entry.Type is 8 or 24 && row.Entry.Group == "[pvp]").ToArray();
+        var available = endpoints.Where(row => row.Entry.Type is 4 or 5 or 8 or 24 && row.Entry.Group == "[pvp]").ToArray();
         bool accepted = actor is not null && available.Length != 0;
         if (accepted)
         {

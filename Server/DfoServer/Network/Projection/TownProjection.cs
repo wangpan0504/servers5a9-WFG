@@ -71,6 +71,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.USERINFO,
             TownPackets.Player(context.Session.ReadSkillCharacter(c), stats.Compute(context.Session.ReadSkillCharacter(c)), context.Session.ReadAdventureLevel(), context.Channel, appearanceTime), "player");
         await PcRoomBuffProjection.PostAsync(context);
+        await GuildTrainingProjection.PostAsync(context, clear: true);
         await DungeonEnterCountProjection.RefreshAsync(context, dungeons);
         // 本人Actor初始职位为6；成员名单和70均不会设置它，必须由127独立安装权限索引。
         await context.Notify(NotiPacketType.GUILD_MEMBER_INFO, [c.Guild?.Grade ?? (byte)100], "guild_member_grade_initialize");
@@ -352,6 +353,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         });
         if (!returning) return;
         if (context.LostLand is not null) await context.LostLand.StopAsync();
+        if (context.Beast is not null) await context.Beast.StopAsync();
         parties?.Detach(context.Session);
         await DetachAsync(context);
         if (departedParty is not null)
@@ -424,6 +426,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "formal_return_town_state", CanSend);
         // 返城重建Actor后补发网吧特权buff；副本内的buff栏不会保留系统buff。
         await PcRoomBuffProjection.PostAsync(context, CanSend);
+        await GuildTrainingProjection.PostAsync(context, clear: true);
         await context.Notify(NotiPacketType.AREA_USERS, TownPackets.Transition(receipt.Character), action, CanSend);
         if (context.Dazzlement is { HasBindings: true })
             await DazzlementTowerProjection.StateAsync(context, CanSend);
@@ -432,32 +435,6 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             await quests.RefreshAsync(context, receipt.Character, CanSend);
         if (context.Premiums is { } premiums) await premiums.StaminaAsync(receipt.Character, CanSend);
         Join(context, CanSend);
-    }
-
-    // TAG回城后下一次入场使用新双Actor；只刷新真实登录队首资料，不重复选角/邮箱等初始化协议。
-    public async Task<TownCharacterProjection?> RefreshTagEvildomPrimaryAsync(GameConnectionContext context, TownTravelReceipt receipt)
-    {
-        var character = receipt.Character;
-        var now = timer.GetUtcNow();
-        var appearance = DfoServer.Game.TagEvildom.TagEvildomAppearance.Capture(character, now);
-        bool Guard() => context.Session.CanPublishTravel(receipt) && appearance.Matches(character, timer.GetUtcNow());
-        if (!Guard()) return null;
-        bool actorSent = false, playerSent = false, skillsSent = !character.Learning.Initialized, combosSent = character.Job != 9;
-        bool premiumPcRoom = context.Session.PremiumPcRoom;
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel, now.ToUnixTimeSeconds(),
-            context.Session.ReadAdventureName(), premiumPcRoom: premiumPcRoom), "tag_evildom_return_actor", () => actorSent = Guard());
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Player(character, stats.Compute(character),
-            context.Session.ReadAdventureLevel(), context.Channel, now), "tag_evildom_return_player", () => playerSent = Guard());
-        if (character.Learning.Initialized)
-        {
-            await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(character.Learning,
-                learning is null ? null : id => learning.Get(character.Job, id).DefaultCommand), "tag_evildom_return_skills", () => skillsSent = Guard());
-            if (character.Job == 9)
-                await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(character.Learning), "tag_evildom_return_combos", () => combosSent = Guard());
-        }
-        if (!actorSent || !playerSent || !skillsSent || !combosSent || !Guard()) return null;
-        context.Premiums?.RecordPremiumAppearance(character, now.ToUnixTimeSeconds(), premiumPcRoom);
-        return new(character, now);
     }
 
     public async Task GiftEffectAsync(GameConnectionContext context, int itemId, Func<bool> guard)

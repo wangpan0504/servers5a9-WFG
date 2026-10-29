@@ -48,7 +48,7 @@ internal sealed partial class GameSession
                     Entry: (DungeonEntryPlan?)null, Room: (DfoServer.GameWorld.Dungeons.DungeonRoomDefinition?)null);
             var identity = Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? formalDungeon?.Run.Snapshot.Identity : null;
             var room = identity is not null && formalDungeon is { } dungeon
-                ? dungeon.Route.Rooms.FirstOrDefault(row => row.Room.Map == dungeon.Run.Snapshot.CurrentMap)?.Room : null;
+                ? dungeon.Run.CurrentMonsterPlan.Room : null;
             var pending = pendingQuestCompletion;
             bool samePending = pending is not null && ReferenceEquals(pending.Plan.Expected, Selected) &&
                 pending.SelectionEpoch == SelectionEpoch && pending.Phase == Phase && pending.DungeonIdentity == identity &&

@@ -858,6 +858,8 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_title_sections VALUES({{id}},'planning',0,1);
                 INSERT INTO character_epic_production VALUES({{id}},101000747,1000,1,2,1,0,0,0,0);
                 INSERT INTO character_pvp_training_skills VALUES({{id}},'{{training}}','1234567890abcdef1234567890abcdef',0);
+                INSERT INTO character_pvp_mission_facts VALUES({{id}},'planning',0,0,0,'1234567890abcdef1234567890abcdef');
+                INSERT INTO character_pvp_mission_rewards VALUES({{id}},'planning',1,'[]');
                 INSERT OR IGNORE INTO pvp_arena_match_results VALUES('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',0);
                 INSERT INTO character_evildom_war_rewards VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','1234567890abcdef1234567890abcdef',1,5422,1,0,'{}','[]',1);
                 INSERT INTO character_evildom_war_hidden_rewards VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','{}','[]');
@@ -874,7 +876,15 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_dungeon_incount VALUES({{id}},'planning',400000016,20261020,1,20261015,1);
                 INSERT INTO character_dungeon_incount_extra VALUES({{id}},'planning',5428,20261020,1,20261015,1);
                 INSERT INTO character_beast_dungeon_entries VALUES({{id}},'planning',20261020,310,1);
+                INSERT INTO character_beast_dungeon_reservations VALUES({{id}},'planning','abcdef1234567890abcdef1234567890',1,1,20261020,310,0,0);
+                INSERT INTO character_beast_stage_rewards VALUES({{id}},'planning','abcdef1234567890abcdef1234567890',0,'abcdef1234567890abcdef1234567891',400363,1,10303240);
                 INSERT INTO character_guild_hongbao_purchases(character_id,day_start_unix,cera) VALUES({{id}},2000000000,1);
+                INSERT INTO guilds(guild_id,name,address,master_character_id,created_at_unix)
+                  SELECT 65000,'删除福利夹具','deletion-benefits',id,1 FROM characters WHERE id<>{{id}} ORDER BY id LIMIT 1;
+                INSERT INTO character_guild_npc_benefits(character_id,guild_id,joined_at,effect,benefit_id,remaining,deadline,selected)
+                  VALUES({{id}},65000,1,'guild trainer attack raid buff',5001,0,0,1);
+                INSERT INTO character_guild_npc_item_crafts(craft_id,character_id,guild_id,joined_at,npc_id,benefit_id,deadline,item_core)
+                    VALUES(printf('%064d',{{id}}),{{id}},65000,1,400001065,7001,2000000000,'{}');
                 INSERT INTO character_server_item_usage VALUES({{id}},'{}');
                 """);
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");

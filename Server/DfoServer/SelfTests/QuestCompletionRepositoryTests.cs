@@ -405,6 +405,8 @@ internal static class QuestCompletionRepositoryTests
         public void SwapSlots(AccountOwners.Lease owner, ushort slotA, ushort slotB) => inner.SwapSlots(owner, slotA, slotB);
         public Character Save(AccountOwners.Lease owner, Character expected, Location position, Location? back, InventoryPlan? inventory = null) => inner.Save(owner, expected, position, back, inventory);
         public Character CommitTeleport(AccountOwners.Lease owner, DfoServer.Game.Town.TeleportPlan plan) => inner.CommitTeleport(owner, plan);
+        public DfoServer.Game.Town.GuildMapTeleportCommit CommitGuildMapTeleport(AccountOwners.Lease owner,
+            DfoServer.Game.Town.TeleportPlan plan, string requestId) => inner.CommitGuildMapTeleport(owner, plan, requestId);
         public DfoServer.Game.Dungeons.AssaultDailyCounts LoadAssaultDaily(AccountOwners.Lease owner, ushort characterId, int day) => inner.LoadAssaultDaily(owner, characterId, day);
         public DfoServer.Game.Dungeons.AssaultDailyCommit CommitAssaultClear(AccountOwners.Lease owner, Character expected, int day, bool hidden, DfoServer.Game.Inventory.Models.InventoryPlan? reward) => inner.CommitAssaultClear(owner, expected, day, hidden, reward);
         public DfoServer.Game.Dungeons.CrackDailyState LoadCrackDaily(AccountOwners.Lease owner, ushort characterId, int day) => inner.LoadCrackDaily(owner, characterId, day);

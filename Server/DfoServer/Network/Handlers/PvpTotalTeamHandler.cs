@@ -5,10 +5,12 @@ using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using DfoServer.Network.Protocol;
 using DfoServer.Network.Projection.Inventory;
+using DfoServer.Network.Projection;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class PvpTotalTeamHandler(PvpTotalTeamService teams, ServerLog log, InventoryProjection inventory) : IGameCommandModule
+internal sealed class PvpTotalTeamHandler(PvpTotalTeamService teams, ServerLog log, InventoryProjection inventory,
+    PvpTotalTeamProjection projection) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -51,6 +53,7 @@ internal sealed class PvpTotalTeamHandler(PvpTotalTeamService teams, ServerLog l
         {
             bool Current() => context.Session.CanPublishPvpTotalRoster(selection);
             using var publication = context.Sender.QueuePublication(Current);
+            await projection.PublishAsync(context, result.Team!, selection);
             await context.Reply(CmdPacketType.SET_PVP_TOTAL_MATCH_TEAM,
                 PvpMatchingPackets.TeamAccepted(selection.Members.Select(row => row.RosterIndex).ToImmutableArray()),
                 "pvp_total_team_registered", Current);

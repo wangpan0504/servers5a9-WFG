@@ -21,6 +21,8 @@ internal static class MarriageTcpTests
             fixture.Sql("UPDATE characters SET level=30,gold=1000000 WHERE id IN ($p0,$p1)", firstId, secondId);
             first.Select(); second.Select();
             first.Barrier(); second.Barrier();
+            first.Send(1037, Convert.FromHexString("FFFFFF7F0CEA1A0088D7C803B400000000"));
+            first.Expect(1, 1037, [0]);
             first.Send(1034, Request(secondId, 1));
             first.Expect(1, 1034, Ack(secondId, 1));
             second.Expect(0, 1000, Notice(firstId, 1));
@@ -58,6 +60,19 @@ internal static class MarriageTcpTests
             var card = first.Expect(1, 1037).Body;
             That(card.Length == 98 && card[0] == 1 && U32(card, 5) == context && card[43] == 30 && card[44] == 1,
                 "角色卡查询97字节真实配偶数据，保留上下文及职业字段");
+            // 匹配客户端的本人伴侣查询用Target=0；前13字节来自原生栈结构，不承载目标。
+            byte[] ownPartner = Convert.FromHexString("FFFFFF7F0CEA1A0088D7C803B400000000");
+            first.Send(1037, ownPartner);
+            Bytes(first.Expect(1, 1037).Body, card, "原生零目标查询返回当前婚约的同一伴侣卡，供婚礼窗口取得姓名");
+            second.Send(1037, ownPartner);
+            var firstCard = second.Expect(1, 1037).Body;
+            That(firstCard.Length == 98 && firstCard[0] == 1 && U32(firstCard, 5) == context && firstCard[43] == 30 && firstCard[44] == 0,
+                "双方零目标查询各自的真实伴侣，不能互换角色卡");
+            first.Send(1037, Structure(Build(w => w.Write(uint.MaxValue))));
+            first.Expect(1, 1037, [0]);
+            first.Send(1037, ownPartner[..^1]);
+            first.Expect(1, 1037, [0]);
+            first.Barrier();
             first.Send(1034, Request(secondId, 5));
             first.Expect(0, 14);
             first.Expect(1, 1034, Ack(secondId, 5));
@@ -72,6 +87,8 @@ internal static class MarriageTcpTests
             second.Expect(0, 1011, new byte[17]);
             That(fixture.Query("SELECT count(*) FROM marriage_active_members") is [[0L]] &&
                 fixture.Query("SELECT gold FROM characters WHERE id=$p0", firstId) is [[500000L]], "退婚扣真实费用并释放双方唯一关系");
+            first.Send(1037, ownPartner);
+            first.Expect(1, 1037, [0]);
             first.Send(1034, Request(secondId, 1)); Rejected(first, 1034);
             That(fixture.Query("SELECT count(*) FROM marriage_records") is [[1L]], "当日退婚后不能通过新求婚绕过冷却");
             first.Barrier(); second.Barrier();

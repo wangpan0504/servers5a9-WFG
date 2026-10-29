@@ -45,8 +45,10 @@ public static class RaidObjectEvidence
         // 只接受当前核验范围的根字段；未知/残缺外层不能被通用声明树降格为相邻字段。
         string[] scalar = ["player number", "pvp start area", "type", "greed", "far sight scroll", "middle sight scroll",
             "near sight scroll", "pathgate pos", "map name", "dungeon start area", "pathgate object", "pathgate recognize range"];
+        // ai character 是DungeonRoomCatalog已登记的根块；本地正式PVF给伙伴/支援兵在这些地图补了该行，
+        // 它不影响普通对象块的根层与无条件性，仍要求是已闭合块。
         string[] blocks = ["dungeon", "tile", "extended tile", "background animation", "sound", "animation", "passive object",
-            "monster", "monster specific ai", "event monster position", "dungeon movable area"];
+            "monster", "monster specific ai", "event monster position", "dungeon movable area", "ai character"];
         // 匹配client04273E81..3EBD：单字符串[mirror]仅写shadow枚举+798，再取下一顶层tag；不是对象条件块。
         int shadowCount = tokens.Count(token => token.Type == 3 && resolve(token.Value).Equals("[shadow type]", StringComparison.OrdinalIgnoreCase));
         var shadow = document.Sections.Where(row => row.Name == "shadow type").ToArray();

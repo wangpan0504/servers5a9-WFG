@@ -6,12 +6,12 @@ namespace DfoServer.Network.Builders;
 
 internal static class GuildRankingPackets
 {
-    // 正文从第 0 字节起就是原生模型：客户端 FUN_02351B80 原样读取 0x74 字节，
-    // 帧头 kind 已由 GameFrame 承载，正文不得再前置标志位。
+    // 公共分派器028F82A0先消费正文成功字节，排行回调02351B80再读取116B模型。
     public static byte[] Summary(GuildRankingSummary summary)
     {
-        byte[] body = new byte[116];
-        var data = body.AsSpan();
+        byte[] body = new byte[117];
+        body[0] = 1;
+        var data = body.AsSpan(1);
         Rank(data[4..], summary.Current); Rank(data[12..], summary.Official); Rank(data[20..], summary.Previous);
         Factors(data, summary.Current.Factors, false);
         if (summary.Official is { } official) Factors(data, official.Factors, true);
@@ -28,9 +28,9 @@ internal static class GuildRankingPackets
     static void Factors(Span<byte> data, GuildRankingFactors f, bool official)
     {
         int first = official ? 0x34 : 0x1c, second = official ? 0x60 : 0x4c;
-        float[] early = [f.Members, f.WeeklyUv, f.Dungeon, f.Contents, f.War, f.Party];
-        // 0x50 是公会成员决斗等级(PvP)，0x54 本版不渲染；顺序按显示侧 FUN_005b9b20 分类表排。
-        float[] late = [f.Adventure, f.Pvp, f.Raid, f.Event, f.Contribution];
+        // FUN_005b9b20：福利取0x30，组队取0x2c，攻坚取0x58；0x28/0x54不在本版九项中显示。
+        float[] early = [f.Members, f.WeeklyUv, f.Dungeon, f.War, f.Party, f.Contents];
+        float[] late = [f.Adventure, f.Pvp, f.Event, f.Raid, f.Contribution];
         for (int i = 0; i < early.Length; i++) BinaryPrimitives.WriteSingleLittleEndian(data[(first + i * 4)..], early[i]);
         for (int i = 0; i < late.Length; i++) BinaryPrimitives.WriteSingleLittleEndian(data[(second + i * 4)..], late[i]);
     }
@@ -38,9 +38,8 @@ internal static class GuildRankingPackets
     public static byte[] Page(GuildRankingPage page)
     {
         using var stream = new MemoryStream(); using var writer = new BinaryWriter(stream);
-        // 客户端 FUN_02345830 第一口读就是 mode，正文没有前置标志位；
-        // 多写一个字节会被当成 mode，count 随后错读成 0x0200，整页行数组全部报废。
-        writer.Write(page.Mode); writer.Write(page.Total); writer.Write(checked((ushort)page.Entries.Length));
+        // 公共层先读成功字节；02345830接到成功参数后才读取mode及行数组。
+        writer.Write((byte)1); writer.Write(page.Mode); writer.Write(page.Total); writer.Write(checked((ushort)page.Entries.Length));
         foreach (var entry in page.Entries)
         {
             writer.Write(entry.Id); writer.Write(entry.Rank); writer.Write(entry.Factors.Total);

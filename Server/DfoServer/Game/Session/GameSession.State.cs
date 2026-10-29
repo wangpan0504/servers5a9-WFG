@@ -12,7 +12,7 @@ internal sealed partial class GameSession
         return UserStatePolicy.Read(phase, Selected is not null, Ready,
             CurrentDungeonSelection is not null, dungeon?.Run.Phase,
             CurrentDungeonSelection?.IsTutorial == true || dungeon?.Entry.IsTutorial == true,
-            !endingPvp && pvpTraining is not null, !endingPvp && pvpArena is not null,
+            !endingPvp && (pvpTraining is not null || pvpPractice is not null), !endingPvp && pvpArena is not null,
             !endingPvp && pvpArena?.Room.Match?.Phase == DfoServer.Game.Pvp.PvpArenaMatchPhase.Fighting);
     }
 
@@ -28,10 +28,12 @@ internal sealed partial class GameSession
         if (endingPvp)
         {
             pvpTraining = null;
+            pvpPractice = null;
             Volatile.Write(ref pvpArena, null);
         }
         if (endingDungeon)
         {
+            ReleaseBeastDungeonReservation();
             formalDungeon?.Run.CancelTagEvildom();
             ReleaseCurrentRaidDungeon();
             ReleaseCurrentEvildomWarDungeon();

@@ -25,11 +25,13 @@ internal static class PvpArenaResultProjection
             checked((byte)delivery.Receipt.Change.Grade), unchecked((uint)delivery.Receipt.Change.ExperienceDelta), rows, tail);
     }
 
-    public static bool TryQueue(GameConnectionContext context, PvpArenaService arena, PvpArenaResultDelivery delivery)
+    public static bool TryQueue(GameConnectionContext context, PvpArenaService arena, PvpArenaResultDelivery delivery,
+        PvpMissionProjection? missions = null)
     {
         bool Current() => arena.CanPublishResultDelivery(delivery);
         if (!Current()) return false;
         byte[] body = Body(delivery);
+        if (missions?.Queue(context, update: true, Current) == false) return false;
         return context.Sender.TryPost(0, (ushort)NotiPacketType.END_PVP, body, "pvp_arena_result", Current);
     }
 }

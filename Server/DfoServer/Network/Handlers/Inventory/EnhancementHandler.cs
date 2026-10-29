@@ -1,5 +1,7 @@
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Guild;
+using DfoServer.GameWorld.Items;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
@@ -8,7 +10,8 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
-internal sealed class EnhancementHandler(InventoryEnhancementService service, InventoryProjection projection, ServerLog log) : IGameCommandModule
+internal sealed class EnhancementHandler(InventoryEnhancementService service, InventoryProjection projection, ServerLog log,
+    GuildNpcBenefitService? guildBenefits = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.UPGRADE_ITEM, Handle, nameof(EnhancementHandler));
     async Task<CommandResult> Handle(GameConnectionContext context, Packet packet)
@@ -29,7 +32,13 @@ internal sealed class EnhancementHandler(InventoryEnhancementService service, In
         var result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(InventoryEnhancementService.Rejection) :
             context.Session.PlanAndCommitInventory(character =>
             {
-                try { return service.Plan(character, request, out receipt); }
+                try
+                {
+                    int bonus = guildBenefits?.SuccessPercent(context.Session.CaptureGuildManagement(),
+                        request.Mode == EnhancementMode.Amplify ? "equip amplify upgrade buff" : "equip upgrade buff",
+                        (character.Inventory.Find(request.Target)?.Core.Upgrade ?? 0) + 1) ?? 0;
+                    return service.Plan(character, request, out receipt, guildSuccessPercent: bonus);
+                }
                 catch (Exception error) when (error is InvalidDataException or FileNotFoundException or KeyNotFoundException or OverflowException)
                 {
                     resourceInvalid = true;

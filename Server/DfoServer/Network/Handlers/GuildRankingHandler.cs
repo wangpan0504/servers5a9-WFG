@@ -18,7 +18,7 @@ internal sealed class GuildRankingHandler(GuildRankingService ranking) : IGameCo
         if (context.Session.CaptureGuildManagement(false) is not { } actor) return CommandResult.Handled;
         var summary = GuildRankingRequests.TrySummary(request.Body, out _) ? ranking.Summary(actor) : null;
         await context.Reply(CmdPacketType.GET_JOINED_GUILD_RANKING_INFO,
-            summary is null ? new byte[116] : GuildRankingPackets.Summary(summary), "guild_ranking_summary", actor.IsCurrent);
+            summary is null ? [0, 0, 0] : GuildRankingPackets.Summary(summary), "guild_ranking_summary", actor.IsCurrent);
         return CommandResult.Handled;
     }
 
@@ -26,7 +26,7 @@ internal sealed class GuildRankingHandler(GuildRankingService ranking) : IGameCo
     {
         if (context.Session.CaptureGuildPanelQuery() is not { } query) return CommandResult.Handled;
         byte[] body = GuildRankingRequests.TryPage(request.Body, out byte mode, out byte sort, out ushort page)
-            ? GuildRankingPackets.Page(ranking.Page(mode, sort, page)) : new byte[5];
+            ? GuildRankingPackets.Page(ranking.Page(mode, sort, page)) : [0, 0, 0];
         await context.Reply(CmdPacketType.SEARCH_GUILD_RANKING, body, "guild_ranking_page", query.IsCurrent);
         return CommandResult.Handled;
     }

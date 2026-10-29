@@ -369,6 +369,7 @@ internal static class LukeRaidRunTransactionTests
     }
     sealed class DelayedEntry(IPartyDungeonStore inner,Action before):IPartyDungeonStore
     {
+        public Character[] CommitBeastDungeonLoading(IReadOnlyList<BeastDungeonLoadingReservation> rows) => inner.CommitBeastDungeonLoading(rows);
         public PartyDungeonEntryCommit[] CommitPartyDungeonEntry(IReadOnlyList<PartyDungeonReservation> rows)
         {before();return inner.CommitPartyDungeonEntry(rows);}
         public Character[] CommitPartyDungeonExit(IReadOnlyList<PartyDungeonExitReservation> rows)=>inner.CommitPartyDungeonExit(rows);

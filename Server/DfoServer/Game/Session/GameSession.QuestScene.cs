@@ -30,7 +30,7 @@ internal sealed partial class GameSession
         if (dungeon.Entry.IsClassExperience || dungeon.Entry.IsPractice) return "体验/练习副本不记录任务物件";
         if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || pendingQuestCompletion is not null) return "存在未完成的死亡/结算/任务完成操作";
         var snapshot = dungeon.Run.Snapshot;
-        var room = dungeon.Route.Rooms.Single(row => row.Room.Map == snapshot.CurrentMap).Room;
+        var room = dungeon.Run.CurrentMonsterPlan.Room;
         var same = PassiveQuestSources(room,resources,true).Where(row => row.source.ObjectId == templateId).ToArray();
         if (same.Length == 0) return $"当前房间 {snapshot.CurrentMap.Id} 没有物件模板 {templateId}";
         int used = dungeon.QuestSceneEvents.Count(pair => pair.Key.Map == snapshot.CurrentMap && pair.Key.Template == (int)templateId && pair.Value.Committed);
@@ -81,7 +81,7 @@ internal sealed partial class GameSession
                 !dungeon.Run.HasPendingSettlement && pendingQuestCompletion is null
                 ? Selected : null;
             var snapshot = dungeon?.Run.Snapshot;
-            var room = snapshot is null ? null : dungeon!.Route.Rooms.Single(row => row.Room.Map == snapshot.CurrentMap).Room;
+            var room = snapshot is null ? null : dungeon!.Run.CurrentMonsterPlan.Room;
             return (Character: character, SelectionEpoch, Phase, Dungeon: dungeon, Snapshot: snapshot, Room: room);
         });
         if (capture.Character is not { } expected || capture.Dungeon is not { } current || capture.Snapshot is not { } scene || capture.Room is null)

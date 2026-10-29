@@ -93,6 +93,14 @@ internal static class PvpPrivateCharacterTcpTests
                     void Round(byte action,bool won)=>peer.Send(1287,Build(w=>
                     {w.Write(action);w.Write(opponent);w.Write(checked((byte)roundPlan.Mode.Rounds));w.Write(checked((byte)round));w.Write(0u);w.Write((byte)0);w.Write((byte)(won?1:0));w.Write((ushort)0);w.Write(0u);}));
                 }
+                if (quest is 2676 or 2679)
+                {
+                    peer.Expect(0,14);
+                    PvpMissionTcpChecks.Progress(f, created, peer.Expect(0,578).Body);
+                    int mission = quest == 2676 ? 604 : 605;
+                    That(f.Query("SELECT count(*) FROM character_pvp_mission_rewards WHERE character_id=$p0 AND mission_id=$p1", created, mission) is [[1L]],
+                        "专用角色完整道场胜利同样提交一次独立MSN袖珍罐，再继续原风云33流程");
+                }
                 byte channel=solo?(byte)0x10:(byte)0x40;
                 peer.Send(33,[33,0,lo,hi,channel,0,0]);peer.Expect(1,33,[1,lo,hi,0,0,0,0]);
                 peer.Send(52,[0,254]);peer.Expect(0,43);
