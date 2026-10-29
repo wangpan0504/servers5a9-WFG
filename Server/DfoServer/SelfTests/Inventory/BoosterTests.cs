@@ -36,6 +36,9 @@ internal static class BoosterTests
         BoosterBatchRandomTests.Run(That);
         BoosterGrowTypeTests.Run(towns, itemResources);
         BoosterRandomOptionTests.Run(towns, itemResources);
+        OrdinaryTenSourceResources(towns, itemResources);
+        OrdinaryEventCoinResources(itemResources);
+        OrdinaryTalmaResources(towns, itemResources);
         BoosterCreatureTests.RunResources(towns, itemResources);
         var random = new EdgeRandom();
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces, random);
@@ -420,7 +423,272 @@ internal static class BoosterTests
         Console.WriteLine($"PASS {Count - checks} booster assertions");
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(catalog.Get(id), count, now);
     }
+    // 保存普通奖池独立期望，继续使用既有booster注册入口。
+    static void OrdinaryTenSourceResources(TownCatalog towns, ItemResources resources)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var random = new EdgeRandom();
+        var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits,
+            resources.EpicPieces, random, contracts: resources.Contracts, randomOptions: resources.RandomOptions);
+        (int Id, bool Unseal, BoosterGrantedItem[] Rewards)[] cases =
+        [
+            (10157388, true, [new(101030330, 1), new(100090160, 1), new(100140155, 1), new(100190137, 1), new(100240145, 1), new(100290146, 1), new(100310733, 1), new(100310996, 1), new(100320847, 1)]),
+            (10157391, true, [new(101000323, 1), new(100090160, 1), new(100140155, 1), new(100190137, 1), new(100240145, 1), new(100290146, 1), new(100310733, 1), new(100310996, 1), new(100320847, 1)]),
+            (10157392, true, [new(101000323, 1), new(100090160, 1), new(100140155, 1), new(100190137, 1), new(100240145, 1), new(100290146, 1), new(100310733, 1), new(100310996, 1), new(100320847, 1)]),
+            (10157400, true, [new(101000323, 1), new(100080213, 1), new(100130206, 1), new(100180191, 1), new(100230191, 1), new(100280176, 1), new(100310733, 1), new(100310996, 1), new(100320847, 1)]),
+            (10157403, true, [new(101030330, 1), new(100080213, 1), new(100130206, 1), new(100180191, 1), new(100230191, 1), new(100280176, 1), new(100310733, 1), new(100310996, 1), new(100320847, 1)]),
+            (10157404, true, [new(101030330, 1), new(100080213, 1), new(100130206, 1), new(100180191, 1), new(100230191, 1), new(100280176, 1), new(100310733, 1), new(100310996, 1), new(100320847, 1)]),
+            (10157417, true, [new(101030330, 1), new(100070236, 1), new(100120229, 1), new(100170220, 1), new(100220210, 1), new(100270209, 1), new(100310733, 1), new(100310996, 1), new(100320847, 1)]),
+            (10306696, false, [new(10305787, 350)]),
+            (10306697, false, [new(10305787, 150)]),
+            (10306698, false, [new(10305787, 50)]),
+        ];
+        foreach (var test in cases)
+        {
+            var template = resources.Items.Get(test.Id);
+            var definition = resources.Boosters.Get(test.Id);
+            That(definition.Available && definition.Selection is null && definition.PackageRewards.IsDefaultOrEmpty &&
+                !definition.Lottery && definition.FirstGrowTypes.IsEmpty && definition.CooltimeMaintenance is null &&
+                definition.UnsealsRandomOptions == test.Unseal && definition.Pools.Length == test.Rewards.Length &&
+                definition.Pools.Select((pool, at) => pool.Draws == 1 && pool.JobTag is null &&
+                    pool.Rewards.SequenceEqual(new BoosterReward[] { new(test.Rewards[at].ItemId, 1000, test.Rewards[at].Count) })).All(value => value),
+                "ordinary exact saved pools and root unseal declaration " + test.Id);
+            That(template.Kind == ItemKind.Consumable && template.RequiredSkill == 0 &&
+                service.UsePlaces(test.Id) is { PendingRule: null, Village: false, SeriaRoom: false },
+                "ordinary source keeps real kind, required skill and unrestricted place declaration " + test.Id);
+            if (test.Unseal)
+                That(template.MinimumLevel == 1 && template.Jobs == ushort.MaxValue && template.StackLimit == 1000 &&
+                    template.Expiration.Resolve(now) == 0,
+                    "seven saved source qualifications remain all jobs at level one " + test.Id);
+            byte level = test.Unseal ? (byte)1 : Math.Max((byte)1, template.MinimumLevel);
+            byte job = test.Unseal ? (byte)0 : (byte)Enumerable.Range(0, 16).First(value => template.AllowsUse(level, (byte)value));
+            int openCount = test.Unseal ? 2 : 1;
+            var source = new InventoryItem(1, Bag(65), InventoryRewardGrantService.Create(template, 2, now));
+            var sentinel = new InventoryItem(2, Bag(66), InventoryRewardGrantService.Create(resources.Items.Get(1106), 3, now));
+            var role = new Character(1, 0, "OrdinaryTen", 0, towns.Room, towns.InitialReturn)
+            {
+                Job = job, Level = level, GrowType = 0,
+                Inventory = new([source, sentinel], Gold: 12345) { ReviveCoins = 3, WinPoints = 7 }
+            };
+            That(InventoryAvatarPackageService.SourceEligible(role, source, template),
+                "exact ordinary source fixture satisfies current real source qualification " + test.Id);
+            string before = JsonSerializer.Serialize(role.Inventory);
+            int calls = random.Calls;
+            var opened = service.Open(role, new(65, openCount), out var receipt, now);
+            var expected = test.Rewards.Select(row => new BoosterGrantedItem(row.ItemId, row.Count * openCount))
+                .OrderBy(row => row.ItemId).ToArray();
+            That(opened.Accepted && opened.Plan is not null && receipt is { Slot: 65 } && receipt.ItemId == test.Id &&
+                receipt.Rewards.OrderBy(row => row.ItemId).SequenceEqual(expected),
+                "exact ordinary source grants every independent saved pool and full receipt " + test.Id);
+            var plan = opened.Plan!;
+            var outputs = plan.After.Items.Where(item => item.Position != source.Position && item.Position != sentinel.Position).ToArray();
+            That(plan.Before == role.Inventory && JsonSerializer.Serialize(role.Inventory) == before &&
+                plan.Reason == "booster_open" && plan.UsedItems.SequenceEqual(new ItemUseIntent[] { new(test.Id, openCount) }) &&
+                plan.CharacterPrecondition is { } qualification && qualification.Matches(role, now.ToUnixTimeSeconds()) &&
+                plan.OverflowItems.IsEmpty && plan.AccountRefillClaims.IsEmpty && plan.DailyItemMails.IsEmpty &&
+                plan.ChangedCurrencies.IsEmpty && plan.ChangedEpicPieces.IsEmpty &&
+                JsonSerializer.Serialize(plan.After with { Items = role.Inventory.Items }) == before,
+                "complete plan preserves every non-item asset and leaves input unchanged " + test.Id);
+            That(plan.After.Find(sentinel.Position) == sentinel && (openCount == 2 ? plan.After.Find(source.Position) is null :
+                    plan.After.Find(source.Position) == source with { Core = source.Core with { Value = 1 } }) &&
+                outputs.GroupBy(item => item.Core.ItemId).Select(group => new BoosterGrantedItem(group.Key, group.Sum(item => item.Core.Count)))
+                    .OrderBy(row => row.ItemId).SequenceEqual(expected) &&
+                outputs.All(item => item.Uid == 0 && item.Avatar is null && item.Creature is null &&
+                    ItemSlotBoundService.Allows(plan.After, item.Position, item.Core.Kind)),
+                "exact output instances and source decrement leave unrelated instance intact " + test.Id);
+            foreach (var item in outputs)
+            {
+                var rewardTemplate = resources.Items.Get(item.Core.ItemId);
+                var baseline = InventoryRewardGrantService.Create(rewardTemplate, item.Core.Count, now);
+                if (test.Unseal)
+                {
+                    var rule = resources.RandomOptions.ResolveBoosterReward(rewardTemplate);
+                    var rolled = new[] { item.Core.Random0, item.Core.Random1, item.Core.Random2 };
+                    That(rewardTemplate.Kind == ItemKind.Equipment && rule is not null && item.Core.Random0.Type != 0 &&
+                        item.Core with { Random0 = default, Random1 = default, Random2 = default,
+                            RandomChangedIndex = baseline.RandomChangedIndex } == baseline &&
+                        rule.Pools.Where(pool => pool.Weight > 0).Any(pool =>
+                            rolled.Take(pool.Count).Select((value, at) => pool.Groups[at].Any(row => row.Weight > 0 &&
+                                new RandomOption(row.Type, row.Value1, row.Value2) == value)).All(value => value) &&
+                            rolled.Take(pool.Count).Select(value => value.Type).Distinct().Count() == pool.Count &&
+                            rolled.Skip(pool.Count).All(value => value == default)),
+                        "exact source equipment retains full creation core and legal current random-option pool " + test.Id + ":" + item.Core.ItemId);
+                    if (item.Core.ItemId is 101000323 or 101030330)
+                        That(rewardTemplate.EquipmentSlot == 12 && rewardTemplate.MinimumLevel == 85 && rewardTemplate.Jobs == 6657 &&
+                            rewardTemplate.Grade == 87 && rewardTemplate.Rarity == 2 && rewardTemplate.Durability == 45 &&
+                            rewardTemplate.WeaponSubType == (item.Core.ItemId == 101000323 ? 0 : 3) &&
+                            item.Core.Value == 999999998 && item.Core.Attr == 0 && item.Core.GenuineUpgrade == 0 &&
+                            item.Core.SealFlag == 0 && item.Core.ExpireTime == 0,
+                            "two saved weapon leaf fields stay distinct from source qualification and instance quality " + item.Core.ItemId);
+                }
+                else
+                    That(rewardTemplate.Id == 10305787 && rewardTemplate.Kind == ItemKind.Quest &&
+                        rewardTemplate.StackLimit == int.MaxValue && item.Core == baseline && item.Core.ExpireTime == 0,
+                        "saved useful-junk reward uses complete Quest core and explicit stack-limit fallback " + test.Id);
+            }
+            That(test.Unseal ? random.Calls > calls : random.Calls == calls,
+                "singleton reward IDs need no draw while unsealed instances still draw options " + test.Id);
+
+            // 统一核对各源容量拒绝，持久化与回滚沿用既有测试。
+            var fillerTemplate = resources.Items.Get(test.Rewards[0].ItemId);
+            var range = ItemSlotBoundService.Range(fillerTemplate.Kind, role.Inventory.Expansion);
+            var fillerCore = InventoryRewardGrantService.Create(fillerTemplate, fillerTemplate.StackLimit, now);
+            var blocked = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.AddRange(
+                Enumerable.Range(range.Start, range.End - range.Start + 1).Select(slot =>
+                    new InventoryItem(100 + slot, Bag((short)slot), fillerCore))) } };
+            string blockedBefore = JsonSerializer.Serialize(blocked.Inventory);
+            calls = random.Calls;
+            That(service.Open(blocked, new(65, openCount), out var rejected, now) is { Accepted: false, Error: 4, Plan: null } &&
+                rejected is null && random.Calls == calls && JsonSerializer.Serialize(blocked.Inventory) == blockedBefore,
+                "exact source full reward page rejects atomically before RNG and keeps all source and assets " + test.Id);
+        }
+    }
+
     static BoosterDefinition Parse(string pools) => BoosterCatalog.Parse("[stackable type]\n`[booster]` 0\n[booster info]\n" + pools + "\n[/booster info]");
+    // 三叶正文仅约束真实Catalog资源，不把保存路径或模板创建当作开盒成功。
+    static void OrdinaryEventCoinResources(ItemResources resources)
+    {
+        var now = new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero);
+        long[] weights = [1000, 1000, 1000, 1000, 10000, 80000, 1500, 1000, 1000, 1000, 1000,
+            50, 50, 50, 50, 50, 50, 50, 50, 50, 50];
+        (int SourceId, int LeafId, int SourceStackLimit)[] cases =
+            [(490005633, 490005702, int.MaxValue), (490005637, 490005703, int.MaxValue), (490005632, 490005704, 1000)];
+        foreach (var test in cases)
+        {
+            That(resources.Items.Contains(test.SourceId) && resources.Items.Contains(test.LeafId) &&
+                !resources.Items.ContainsEquipment(test.SourceId) && !resources.Items.ContainsEquipment(test.LeafId),
+                "活动硬币源及叶必须存在于当前真实stackable索引，不能用保存路径或预置模板替代 " + test.SourceId);
+            var source = resources.Items.Get(test.SourceId);
+            var leaf = resources.Items.Get(test.LeafId);
+            var definition = resources.Boosters.Get(test.SourceId);
+            var expectedRows = weights.Select((weight, index) => new BoosterReward(test.LeafId, weight, index + 10)).ToArray();
+            That(definition.Available && definition.Selection is null && definition.PackageRewards.IsDefaultOrEmpty &&
+                !definition.Lottery && !definition.NpcPocketPot && definition.FirstGrowTypes.IsEmpty && !definition.UnsealsRandomOptions &&
+                definition.CustomAbilityGrade is null && !definition.SetsDisjointInstanceType && !definition.SetsEpicExchangeInstanceType &&
+                definition.DailyRetainedLimit is null && definition.RuneBox is null && definition.CoolTime == 0 &&
+                definition.CoolGroup is null && definition.CooltimeMaintenance is null && definition.Pools.Length == 1 &&
+                definition.Pools[0] is { Draws: 1, JobTag: null, MinimumLevel: 0, MaximumLevel: int.MaxValue,
+                    GrowType: -1, RequiredKind: null } pool && pool.Rewards.SequenceEqual(expectedRows),
+                "三源各保留一个独立etc池及10到30的完整21条原权重行，不按同ID合并或固定发15个 " + test.SourceId);
+            That(source.Kind == ItemKind.Consumable && source.StackableType == "[booster] 0" &&
+                source.StackLimit == test.SourceStackLimit && source.MinimumLevel == 1 && source.MaximumLevel == int.MaxValue &&
+                source.Jobs == ushort.MaxValue &&
+                source.RequiredSkill == 0 && source.AttachType.Trim('`', ' ', '\r', '\n') == "[account]" &&
+                source.Expiration == new ItemExpiration() && source.Expiration.Resolve(now) == 0,
+                "活动硬币盒保留各自叠堆上限、账号绑定、源资格和无期限声明 " + test.SourceId);
+            That(leaf.Kind == ItemKind.Material && leaf.StackableType == "[material] 0" && leaf.StackLimit == int.MaxValue &&
+                leaf.MinimumLevel == 1 && leaf.MaximumLevel == int.MaxValue && leaf.Jobs == ushort.MaxValue && leaf.RequiredSkill == 0 &&
+                leaf.AttachType.Trim('`', ' ', '\r', '\n') == "[account]" && leaf.Expiration == new ItemExpiration() &&
+                leaf.Expiration.Resolve(now) == 0,
+                "三硬币是账号绑定材料，未声明stack limit使用maxint且没有绝对、相对或周期期限 " + test.LeafId);
+            foreach (int count in new[] { 10, 30 })
+            {
+                var core = InventoryRewardGrantService.Create(leaf, count, now);
+                That(core.ItemId == test.LeafId && core.Kind == ItemKind.Material && core.Count == count &&
+                    core.ExpireTime == 0 && core.SealFlag == 0,
+                    "真实材料模板创建保留10与30的数量端点和无期限核心，不等于开盒或扣材成功 " + test.LeafId);
+            }
+        }
+    }
+
+    static void OrdinaryTalmaResources(TownCatalog towns, ItemResources resources)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var random = new EdgeRandom();
+        var service = new InventoryBoosterService(resources.Items, resources.Boosters, resources.GoldLimits,
+            resources.EpicPieces, random, contracts: resources.Contracts, randomOptions: resources.RandomOptions);
+        (int SourceId, int Count)[] cases = [(490005948, 40), (490005949, 50), (490005950, 70)];
+        That(resources.Items.Contains(10161538) && !resources.Items.ContainsEquipment(10161538),
+            "塔尔玛材料必须来自当前真实stackable索引，不以pending或预置模板补齐");
+        var leaf = resources.Items.Get(10161538);
+        That(leaf.Kind == ItemKind.Material && leaf.StackableType == "[material] 0" &&
+            leaf.Grade == 1 && leaf.Rarity == 3 && leaf.MinimumLevel == 1 && leaf.MaximumLevel == int.MaxValue &&
+            leaf.Jobs == ushort.MaxValue && leaf.RequiredSkill == 0 && leaf.StackLimit == int.MaxValue &&
+            leaf.Durability == 0 && leaf.Weight == 0 && leaf.AttachType.Trim('`', ' ', '\r', '\n') == "[trade]" &&
+            leaf.Expiration == new ItemExpiration() && leaf.Expiration.Resolve(now) == 0 &&
+            !leaf.UseForbidden && !leaf.IsPremiumService && !leaf.HasAcquisitionEffect &&
+            CurrencyWallet.RewardKind(10161538) is null && !resources.EpicPieces.ByPiece.ContainsKey(10161538),
+            "真实塔尔玛叶是可交易材料，缺省叠maxint/无期限并走物理入包，不继承源账号绑定或90级资格");
+        foreach (var test in cases)
+        {
+            var template = resources.Items.Get(test.SourceId);
+            var definition = resources.Boosters.Get(test.SourceId);
+            That(definition.Available && definition.Selection is null && definition.PackageRewards.IsDefaultOrEmpty &&
+                !definition.Lottery && !definition.NpcPocketPot && definition.FirstGrowTypes.IsEmpty &&
+                !definition.UnsealsRandomOptions && definition.CustomAbilityGrade is null &&
+                !definition.SetsDisjointInstanceType && !definition.SetsEpicExchangeInstanceType &&
+                definition.DailyRetainedLimit is null && definition.RuneBox is null &&
+                definition.CoolTime == 0 && definition.CoolGroup is null && definition.CooltimeMaintenance is null &&
+                definition.Pools.Length == 1 && definition.Pools[0] is
+                    { Draws: 1, JobTag: null, MinimumLevel: 0, MaximumLevel: int.MaxValue, GrowType: -1, RequiredKind: null } pool &&
+                pool.Rewards.SequenceEqual(new BoosterReward[] { new(10161538, 1000, test.Count) }),
+                "三源各保留独立etc单池draw1和原权重1000及40/50/70数量，不套用21行活动硬币池 " + test.SourceId);
+            That(template.Kind == ItemKind.Consumable && template.StackableType == "[booster] 0" &&
+                template.Grade == 1 && template.Rarity == 3 && template.MinimumLevel == 90 &&
+                template.MaximumLevel == int.MaxValue && template.Jobs == ushort.MaxValue &&
+                template.RequiredSkill == 0 && template.StackLimit == 1000 && !template.UseForbidden &&
+                template.AttachType.Trim('`', ' ', '\r', '\n') == "[account]" &&
+                template.Expiration == new ItemExpiration() && template.Expiration.Resolve(now) == 0 &&
+                service.UsePlaces(test.SourceId) is { PendingRule: null, Village: false, SeriaRoom: false },
+                "塔尔玛源保留90级全职业账号绑定、叠1000及无期限/地点限制的真实资格 " + test.SourceId);
+            foreach (byte job in Enumerable.Range(0, 16).Select(value => (byte)value))
+            {
+                var source = new InventoryItem(1, Bag(65), InventoryRewardGrantService.Create(template, 2, now));
+                var sentinel = new InventoryItem(2, Bag(66), InventoryRewardGrantService.Create(resources.Items.Get(1106), 3, now));
+                var role = new Character(1, 0, "Talma", 0, towns.Room, towns.InitialReturn)
+                {
+                    Job = job, Level = 90, GrowType = 0,
+                    Inventory = new([source, sentinel], Gold: 12345) { ReviveCoins = 3, WinPoints = 7 }
+                };
+                That(InventoryAvatarPackageService.SourceEligible(role, source, template),
+                    "90级每职业满足塔尔玛源真实资格 " + test.SourceId + ":" + job);
+                string before = JsonSerializer.Serialize(role.Inventory);
+                int calls = random.Calls;
+                var opened = service.Open(role, new(65, 1), out var receipt, now);
+                That(opened.Accepted && opened.Plan is not null && receipt is { Slot: 65 } && receipt.ItemId == test.SourceId &&
+                    receipt.Rewards.SequenceEqual(new BoosterGrantedItem[] { new(10161538, test.Count) }),
+                    "原booster入口只开一盒，回执完整发40/50/70个塔尔玛材料 " + test.SourceId + ":" + job);
+                var plan = opened.Plan!;
+                var output = plan.After.Items.Where(item => item.Position != source.Position && item.Position != sentinel.Position).ToArray();
+                That(plan.Before == role.Inventory && JsonSerializer.Serialize(role.Inventory) == before &&
+                    plan.Reason == "booster_open" && plan.UsedItems.SequenceEqual(new ItemUseIntent[] { new(test.SourceId, 1) }) &&
+                    plan.CharacterPrecondition is { } qualification && qualification.Matches(role, now.ToUnixTimeSeconds()) &&
+                    plan.OverflowItems.IsEmpty && plan.AccountRefillClaims.IsEmpty && plan.DailyItemMails.IsEmpty &&
+                    plan.ChangedCurrencies.IsEmpty && plan.ChangedEpicPieces.IsEmpty &&
+                    JsonSerializer.Serialize(plan.After with { Items = role.Inventory.Items }) == before && random.Calls == calls,
+                    "单确定行无需随机，完整计划保留非物品资产及原输入快照 " + test.SourceId + ":" + job);
+                That(plan.After.Find(source.Position) == source with { Core = source.Core with { Value = 1 } } &&
+                    plan.After.Find(sentinel.Position) == sentinel && output.Length == 1 && output[0].Uid == 0 &&
+                    output[0].Core == new ItemCore(10161538, ItemKind.Material, test.Count) &&
+                    output[0].Avatar is null && output[0].Creature is null &&
+                    ItemSlotBoundService.Allows(plan.After, output[0].Position, ItemKind.Material),
+                    "源精确扣1余1，奖励进入真实材料分页且不改无关实例 " + test.SourceId + ":" + job);
+                if (job != 0) continue;
+                void RejectOpen(Character blocked, int count, ushort error, string boundary)
+                {
+                    string rejectedBefore = JsonSerializer.Serialize(blocked.Inventory);
+                    int rejectedCalls = random.Calls;
+                    That(service.Open(blocked, new(65, count), out var rejected, now) is
+                        { Accepted: false, Plan: null } failed && failed.Error == error && rejected is null &&
+                        random.Calls == rejectedCalls && JsonSerializer.Serialize(blocked.Inventory) == rejectedBefore,
+                        "塔尔玛源拒绝保全原源/材料/资产且无RNG：" + boundary + ":" + test.SourceId);
+                }
+                RejectOpen(role with { Level = 89 }, 1, 19, "低于90级");
+                RejectOpen(role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Replace(source,
+                    source with { Core = source.Core with { EquipmentLockId = 1 } }) } }, 1, 19, "安全锁");
+                RejectOpen(role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Replace(source,
+                    source with { Core = source.Core with { ExpireTime = checked((int)now.ToUnixTimeSeconds()) } }) } }, 1, 19, "精确到期");
+                RejectOpen(role, 3, 19, "请求数量超过源2盒");
+                var range = ItemSlotBoundService.Range(ItemKind.Material, role.Inventory.Expansion);
+                var full = InventoryRewardGrantService.Create(leaf, leaf.StackLimit, now);
+                var blockedPage = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.AddRange(
+                    Enumerable.Range(range.Start, range.End - range.Start + 1).Select(slot =>
+                        new InventoryItem(100 + slot, Bag((short)slot), full))) } };
+                RejectOpen(blockedPage, 1, 4, "真实材料页全满且已有堆达上限");
+            }
+        }
+    }
+
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
     static int I32(byte[] bytes, int at) => BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(at));
     static ushort U16(byte[] bytes, int at) => BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(at));
