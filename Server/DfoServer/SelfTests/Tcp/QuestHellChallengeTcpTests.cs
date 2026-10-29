@@ -9,9 +9,16 @@ namespace DfoServer.Testing;
 
 internal static partial class QuestHellChallengeTcpTests
 {
-    public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
+    public static Task RunAsync(ServerOptions options, string root, TcpTestResources resources) =>
+        RunAsync(options, root, resources, skipMissingBeastMeeting: false);
+
+    public static Task RunWithoutBeastMeetingAsync(ServerOptions options, string root, TcpTestResources resources) =>
+        RunAsync(options, root, resources, skipMissingBeastMeeting: true);
+
+    static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources, bool skipMissingBeastMeeting)
     {
-        await using var fixture = new TcpTestFixture(options, Path.Combine(root,"quest-hell-challenge"),resources: resources);
+        string fixtureName = skipMissingBeastMeeting ? "quest-hell-challenge-without-beast-meeting" : "quest-hell-challenge";
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root,fixtureName),resources: resources);
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         var repository = new CharacterRepository(fixture.Database,resources.Quests);
         await fixture.StartAsync();
@@ -29,7 +36,14 @@ internal static partial class QuestHellChallengeTcpTests
                 var location = resources.Towns.Room;
                 if (scenario.Quest == 5927 && scenario.Prerequisite)
                 {
-                    var area = resources.Towns.Areas.Values.First(area => area.Town == 31 && area.Default.Npcs.Any(npc => npc.Id == 598));
+                    var area = resources.Towns.Areas.Values.FirstOrDefault(area => area.Town == 31 && area.Default.Npcs.Any(npc => npc.Id == 598));
+                    if (area is null)
+                    {
+                        if (!skipMissingBeastMeeting)
+                            throw new InvalidDataException("魔兽5927正向TCP夹具缺少town31默认场景NPC598；默认完整组不省略该用例");
+                        Console.WriteLine("SKIP quest-hell-challenge quest=5927 prerequisite=true：匹配PVF缺少town31默认场景NPC598，仅魔兽会面正向TCP未执行；深渊及缺前置拒绝仍执行");
+                        continue;
+                    }
                     done.UnionWith(area.Quests);
                     if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
                     var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
