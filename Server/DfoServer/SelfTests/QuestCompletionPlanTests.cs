@@ -40,6 +40,16 @@ internal static class QuestCompletionPlanTests
             "正追加百分比按相同取整顺序计算");
         Check(QuestExperiencePolicy.Prepare(character, quest, Parameters(0,1780)).Amount == 0 &&
             QuestExperiencePolicy.Prepare(character, quest, Parameters(100,0)).Amount == 0,"零基础与零倍率使用同一计算");
+        var preparation = quest with { Id = 20737, Grade = "[wedding]", Condition = "[condition under clear]",
+            SubType = 22, IntData = [-1, -1, 5], Difficulty = null, Definition = new([]) { Job = "[all]" } };
+        var preparationReward = QuestExperiencePolicy.Prepare(character, preparation, parameters);
+        Check(preparationReward.DifficultyWeight == 100 && preparationReward.Amount == 100,
+            "结婚准备第一步缺省难度沿用参数查询默认百分比，不阻断已达成任务交付");
+        foreach (var unsupported in new[] { preparation with { Id = 20738 }, preparation with { Grade = "[side]" },
+            preparation with { SubType = 23 }, preparation with { IntData = [-1, 0, 5] } })
+            Reject(() => QuestExperiencePolicy.Prepare(character, unsupported, parameters), "缺省难度不扩大至第二步或未知任务形状");
+        Reject(() => QuestExperiencePolicy.Prepare(character, preparation with { Difficulty = "unknown" }, parameters),
+            "结婚准备显式未知难度仍拒绝");
         var clear = ClearFixture(character);
         Check(QuestCompletionPlan.MatchesClearedActiveQuest(character, clear), "活动槽已达成且稳定接取/clear匹配");
         Check(!QuestCompletionPlan.MatchesClearedActiveQuest(character with { CompletedQuests = [3145] }, clear), "重复已领奖拒绝");
