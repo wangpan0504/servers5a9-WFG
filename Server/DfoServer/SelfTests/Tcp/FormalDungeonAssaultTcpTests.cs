@@ -17,12 +17,13 @@ internal static partial class FormalDungeonTcpTests
     // 本用例走真实 1547→15→16 强袭入场、逐房清图与结算，锁定强袭 72{1,1} 同样走 ACK72{1,1}→ACK15→NOTI3 state1→完整NOTI27。
     public static async Task RunAssaultResultMenuAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        await RunAssaultResultMenuAsync(source, root, resources, 3, 7323, 0, true);
         await RunAssaultResultMenuAsync(source, root, resources, 3, 7323, 0);
         await RunAssaultResultMenuAsync(source, root, resources, 2, 7321, 6084);
     }
 
     static async Task RunAssaultResultMenuAsync(ServerOptions source, string root, TcpTestResources resources,
-        int day, uint mission, ushort questId)
+        int day, uint mission, ushort questId, bool missingMaterials = false)
     {
         string? previousDay = Environment.GetEnvironmentVariable(AssaultModePackets.DayIndexOverrideVariable);
         // 固定覆盖原菜单现场与接取6084后的周二隐藏关，不依赖运行当天的星期。
@@ -30,7 +31,7 @@ internal static partial class FormalDungeonTcpTests
         try
         {
             await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled },
-                Path.Combine(root, "assault-result-menu-" + day), gm: true, resources: resources);
+                Path.Combine(root, "assault-result-menu-" + day + (missingMaterials ? "-missing" : "")), gm: true, resources: resources);
             await fixture.StartAsync();
             using var peer = Open(fixture);
             peer.Create("AssaultMenu");
@@ -59,7 +60,8 @@ internal static partial class FormalDungeonTcpTests
                 var character = repository.LoadCharacter(owner, 0);
                 var items = resources.ItemResources;
                 var inventory = new InventoryService(items.Items, items.GoldLimits, items.EpicPieces);
-                character = InventoryService.Commit(repository, owner, character, inventory.Grant(character, [new(10161610, 10), new(2600014, 1)]));
+                character = InventoryService.Commit(repository, owner, character, inventory.Grant(character,
+                    missingMaterials ? [new(2600014, 1)] : [new(10161610, 10), new(2600014, 1)]));
                 potion = character.Inventory.Items.Single(item => item.Core.ItemId == 2600014).Position.Index;
             }
             peer.Select(prepared: true);
@@ -89,6 +91,15 @@ internal static partial class FormalDungeonTcpTests
                 That(fixture.Snapshot() == before, "已接任务但没有1547授权不能直接进入隐藏mission或扣费");
             }
             peer.Send(1547, [0x9F, 0x1C, 0, 0]);
+            if (missingMaterials)
+            {
+                string before = fixture.Snapshot();
+                peer.Expect(1, 1547, [0, 1, 0]);
+                peer.Expect(1, 16, [0, 0x11, 0, 0]);
+                peer.Barrier();
+                That(fixture.Snapshot() == before, "强袭材料不足不改变角色资产");
+                return;
+            }
             peer.Expect(1, 1547, Build(w => { w.Write((byte)1); w.Write(mission); w.Write(0u); }));
             if (questId != 0)
             {

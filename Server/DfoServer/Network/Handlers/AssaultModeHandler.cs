@@ -41,8 +41,13 @@ internal sealed class AssaultModeHandler(ServerLog log, AssaultModeCatalog? cata
             await context.Reply(CmdPacketType.SELECT_ASSAULT_MODE_DUNGEON, AssaultModePackets.SelectAccepted(selection.Mission),
                 "assault_mode_select_accepted");
         else
+        {
             await context.Reply(CmdPacketType.SELECT_ASSAULT_MODE_DUNGEON, AssaultModePackets.SelectRejected(),
                 "assault_mode_select_rejected");
+            if (decision.Reason == AssaultModeRejection.MissingItems)
+                await context.Reply(CmdPacketType.SELECT_DUNGEON, DungeonPackets.HellPartyRejected(DungeonSelectionError.RequiredMaterials),
+                    "assault_mode_materials_rejected");
+        }
         return CommandResult.Handled;
     }
 }
