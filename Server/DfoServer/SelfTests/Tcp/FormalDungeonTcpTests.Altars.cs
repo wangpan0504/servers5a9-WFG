@@ -8,6 +8,8 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Skills;
 using DfoServer.Persistence;
 using DfoServer.Network.Builders.Inventory;
+using DfoServer.Network.Builders;
+using DfoServer.Network;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -42,6 +44,7 @@ internal static partial class FormalDungeonTcpTests
             long trackerFirstDelay = 0;
             var runSpawnedKeys = new HashSet<ushort>();
             ushort questId = id == 11006 ? (ushort)5650 : (ushort)7340;
+            int huntNotifications = 0;
             Character created;
             using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{}))
             {
@@ -125,6 +128,9 @@ internal static partial class FormalDungeonTcpTests
             {
                 // 等待真实自动选难度和下一回合刷怪，确定覆盖慢调度，不靠快速死亡躲过计时通知。
                 while(spawnedRound < 1) ReadUntil(210);
+                That(huntNotifications == 1 &&
+                    fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", peer.Id, questId) is [[0L]],
+                    "7340真实目标死亡经39/255交叉报告只发送一次已提交任务条件");
                 That(spawnedRound == 1,"极限同实例自动选择后已严格校验第二回合210");
                 Console.WriteLine("PASS 极限297自动选择→215第二回合→210资源批次，复活前后保留同实例tracker");
             }
@@ -447,6 +453,18 @@ internal static partial class FormalDungeonTcpTests
                 for(int messages=0;messages<200;messages++)
                 {
                     var packet=peer.Read();
+                    if (packet is { Kind: 0, Opcode: (ushort)NotiPacketType.ACCEPTED_QUEST })
+                    {
+                        That(++huntNotifications == 1 && id == 11007,
+                            "祭坛只在已接任务真实目标条件改变时发送一次活动任务通知");
+                        var active = fixture.Query("SELECT slot,quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot", peer.Id)
+                            .Select(row => new ActiveMainQuest(Convert.ToByte(row[0]), Convert.ToUInt16(row[1]), Convert.ToUInt32(row[2]))).ToArray();
+                        That(active.Single(row => row.QuestId == questId).ConditionState == 0,
+                            "祭坛活动任务通知对应数据库已提交目标条件");
+                        Bytes(packet.Body, QuestPackets.ActiveList(active),
+                            "祭坛任务通知使用持久归零的完整活动任务列表");
+                        continue;
+                    }
                     if(packet.Kind == 0 && packet.Opcode is 210 or 213 or 215 or 297)
                     {
                         if(validateSpawn is not null) validateSpawn(packet);

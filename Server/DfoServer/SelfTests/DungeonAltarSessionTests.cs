@@ -1,8 +1,10 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Session;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Testing;
@@ -33,7 +35,8 @@ internal static class DungeonAltarSessionTests
         // 原生选图会自动携带关联支线任务；不能只测手工清零任务号的请求。
         foreach (var (dungeonId, questId, prerequisite) in new[] { (11006u, (ushort)5650, 63), (11007u, (ushort)7340, 7339) })
         {
-            using var linked = New(new Clock(), done.Append(prerequisite).Distinct().ToArray());
+            var clock = new Clock();
+            using var linked = New(clock, done.Append(prerequisite).Distinct().ToArray());
             var accepted = linked.Session.ChangeQuest(questId, DfoServer.Game.Quests.QuestLifecycleAction.Accept,
                 resources.Quests, items.Items, items.GoldLimits, items.EpicPieces);
             That(accepted?.Commit is not null, "合法接取祭坛关联支线：" + questId);
@@ -48,6 +51,105 @@ internal static class DungeonAltarSessionTests
             That(entered!.Monsters.Altar is not null && entered.Entry.QuestId == questId && entered.Entry.RouteQuestId == 0 &&
                 entered.Entry.QuestAcceptanceId == linked.Session.Selected!.ActiveMainQuests.Single(row => row.QuestId == questId).AcceptanceId,
                 "祭坛复用普通任务路线资格并冻结原接取，仍使用专用波次与次数事务");
+            if (dungeonId == 11007)
+            {
+                var hunts = resources.Quests.All.Where(quest => quest.Condition == "[hunt monster]" &&
+                    (quest.Id == 5650 || quest.DungeonIndex is 11006 or 11007 || quest.IntData.Count >= 4 && quest.IntData[0] is 11006 or 11007)).ToArray();
+                That(hunts.Select(quest => quest.Id).Order().SequenceEqual(new[] { 5650, 7340, 7341, 7343, 7344, 7345 }),
+                    "正式任务索引可加载的六条祭坛猎杀声明完整覆盖");
+                foreach (var quest in hunts)
+                {
+                    bool supported = QuestHuntProgress.TryTargets(quest, out var targets);
+                    That(supported == (quest.Grade != "[training]"), "祭坛同类普通猎杀声明可消费，training不扩大准入：" + quest.Id);
+                    if (!supported) continue;
+                    var active = new ActiveMainQuest(0, checked((ushort)quest.Id), QuestHuntProgress.Initial(quest)) { AcceptanceId = Guid.NewGuid() };
+                    var entry = entered.Entry with { DungeonId = quest.IntData[0] == 11007 ? 11007u : 11006u, QuestAcceptances = [active] };
+                    var remaining = ImmutableArray.Create(active);
+                    foreach (var hunt in targets)
+                    {
+                        var monster = new DungeonPlannedMonster(0, 100, hunt.MonsterId, 70, null);
+                        That(QuestHuntProgress.MonsterDeath(remaining, entry with { QuestAcceptances = [] }, resources.Quests, monster)
+                                .SequenceEqual(remaining), "祭坛同类目标仍只消费原接取身份");
+                        remaining = QuestHuntProgress.MonsterDeath(remaining, entry, resources.Quests, monster);
+                    }
+                    That(remaining.Single().ConditionState == 0, "祭坛各真实目标完整推进含木乃伊双通道：" + quest.Id);
+                }
+            }
+            var target = resources.Quests.Get(questId).IntData[2];
+            bool targetKilled = false;
+            while (!targetKilled)
+            {
+                var loaded = linked.Session.CompleteFormalDungeonLoading()!;
+                That(linked.Session.PrepareDungeonAltarUi(loaded), "任务祭坛沿真实加载准备波次");
+                var current = linked.Session.StartDungeonAltar(loaded)!;
+                while (!current.State.Completed && !targetKilled)
+                {
+                    if (current.State.WaitingForDifficulty)
+                        current = linked.Session.SelectDungeonAltarDifficulty(current.State.Choices.Last())!;
+                    clock.AdvanceTo(current.Due!.Value);
+                    current = linked.Session.TickDungeonAltar(current)!;
+                    if (current.Batch is not { } batch) continue;
+                    foreach (var actor in batch.Actors)
+                    {
+                        var beforeDeath = linked.Read();
+                        bool matches = actor.Phase.MonsterId == target;
+                        if (matches)
+                        {
+                            var selected = linked.Session.Selected;
+                            var snapshot = linked.Session.DungeonSnapshot;
+                            linked.Sql("CREATE TRIGGER fail_altar_hunt BEFORE UPDATE ON character_active_main_quests BEGIN SELECT RAISE(ABORT,'altar hunt rollback'); END");
+                            Reject<Microsoft.Data.Sqlite.SqliteException>(() =>
+                                linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth),
+                                "祭坛目标任务写入失败保留原死亡候选");
+                            That(linked.Read().Revision == beforeDeath.Revision &&
+                                ReferenceEquals(linked.Session.Selected, selected) && linked.Session.DungeonSnapshot!.Identity == snapshot!.Identity &&
+                                linked.Session.DungeonSnapshot.LivingMonsters.SequenceEqual(snapshot.LivingMonsters) &&
+                                linked.Read().ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == 1,
+                                "祭坛目标SQL失败不提交revision、条件或内存死亡");
+                            linked.Sql("DROP TRIGGER fail_altar_hunt");
+                        }
+                        current = linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth)!;
+                        var afterDeath = linked.Read();
+                        That(afterDeath.ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == (matches ? 0u : 1u),
+                            "祭坛只按真实目标击杀持久推进猎杀条件，不把通关或任意小怪当目标：" + questId);
+                        That(afterDeath.Learning.Experience == beforeDeath.Learning.Experience &&
+                            afterDeath.Level == beforeDeath.Level && afterDeath.Skills.SequenceEqual(beforeDeath.Skills) &&
+                            afterDeath.Learning.Trees.Zip(beforeDeath.Learning.Trees).All(pair =>
+                                pair.First.Context == pair.Second.Context && pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&
+                                pair.First.Skills.SequenceEqual(pair.Second.Skills) && pair.First.SameCombos(pair.Second)) &&
+                            afterDeath.DungeonState == beforeDeath.DungeonState && afterDeath.Inventory.Gold == beforeDeath.Inventory.Gold &&
+                            afterDeath.Inventory.Items.SequenceEqual(beforeDeath.Inventory.Items),
+                            "祭坛任务死亡不授普通经验、技能点、熟练度、金币或掉落");
+                        if (!matches) continue;
+                        targetKilled = true;
+                        That(current.QuestCharacter is not null && linked.Session.CanPublishDungeonAltar(current) &&
+                            linked.Session.MarkDungeonAltarQuestsPublished(current),
+                            "同一原对象SQL重试成功后提供已提交任务投影并可确认发送");
+                        long revision = afterDeath.Revision;
+                        That(linked.Session.ObserveDungeonAltarDeath(Observation(actor.ObjectKey), growth) is not null &&
+                            linked.Session.ObserveDungeonAltarDeaths([actor.ObjectKey], new string('B',64), growth) is null &&
+                            linked.Read().Revision == revision,
+                            "任务目标39与255混合重报不重复计数或递增revision");
+                        break;
+                    }
+                }
+                if (!targetKilled)
+                {
+                    var next = entered.Entry.Maze.StaticTopology.Links!.SelectMany(link =>
+                        new[] { (From: link.First, To: link.Second), (From: link.Second, To: link.First) })
+                        .Single(edge => edge.From == loaded.Snapshot.CurrentMap.Position && edge.To.X > edge.From.X).To;
+                    That(linked.Session.MoveFormalDungeon(checked((byte)next.X), checked((byte)next.Y)) is not null,
+                        "未出现目标前按真实祭坛连接推进下一房间");
+                }
+            }
+            That(linked.Session.ReturnFromFormalDungeon() is not null &&
+                linked.Repository.LoadCharacter(linked.Owner,0).ActiveMainQuests.Single(row => row.QuestId == questId).ConditionState == 0,
+                "已提交的祭坛目标进度退出并重读后保留，不依赖最终奖励结算");
+            var finished = linked.Session.FinishQuest(questId, ushort.MaxValue, resources.Quests,
+                SelfTestCatalogs.QuestRewardParameters(archive), items.Items, items.GoldLimits, items.EpicPieces, growth);
+            That(finished.Receipt is not null && linked.Read().CompletedQuests.Contains(questId) &&
+                linked.Read().ActiveMainQuests.All(row => row.QuestId != questId),
+                "祭坛任务沿原领奖事务完成并移出活动列表：" + questId);
         }
         foreach (uint dungeonId in new uint[] { 11006, 11007 })
         {
@@ -102,7 +204,7 @@ internal static class DungeonAltarSessionTests
                     .Where(edge => edge.From == loaded.Snapshot.CurrentMap.Position && edge.To.X > edge.From.X)
                     .Select(edge => edge.To).ToArray();
                 var firstActor = loaded.Monsters.Altar!.Actors[0];
-                That(session.ObserveDungeonAltarDeath(Observation(firstActor.ObjectKey)) is null,
+                That(session.ObserveDungeonAltarDeath(Observation(firstActor.ObjectKey), growth) is null,
                     "两祭坛39不能确认已分配但尚未计时发布的对象");
                 while (!current.State.Completed)
                 {
@@ -123,31 +225,31 @@ internal static class DungeonAltarSessionTests
                             {
                                 var observation = Observation(actor.ObjectKey);
                                 var zero = new NativeDungeonScriptedDeathObservation(actor.ObjectKey,1,true,new string('C',64));
-                                That(session.ObserveDungeonAltarScriptedDeath(zero with { ChecksumMatches = false }) is null &&
-                                    session.ObserveDungeonAltarScriptedDeath(zero with { MonsterKey = uint.MaxValue }) is null &&
-                                    session.ObserveDungeonAltarScriptedDeath(zero with { MonsterKey = ushort.MaxValue }) is null,
+                                That(session.ObserveDungeonAltarScriptedDeath(zero with { ChecksumMatches = false }, growth) is null &&
+                                    session.ObserveDungeonAltarScriptedDeath(zero with { MonsterKey = uint.MaxValue }, growth) is null &&
+                                    session.ObserveDungeonAltarScriptedDeath(zero with { MonsterKey = ushort.MaxValue }, growth) is null,
                                     "祭坛零参与者39仍拒绝错误摘要、溢出键和未发布对象");
-                                That(session.ObserveDungeonAltarDeath(observation with { ChecksumMatches = false }) is null &&
-                                    session.ObserveDungeonAltarDeath(observation with { MonsterKey = uint.MaxValue }) is null &&
-                                    session.ObserveDungeonAltarDeath(observation with { MonsterKey = ushort.MaxValue }) is null,
+                                That(session.ObserveDungeonAltarDeath(observation with { ChecksumMatches = false }, growth) is null &&
+                                    session.ObserveDungeonAltarDeath(observation with { MonsterKey = uint.MaxValue }, growth) is null &&
+                                    session.ObserveDungeonAltarDeath(observation with { MonsterKey = ushort.MaxValue }, growth) is null,
                                     "祭坛39拒绝错误校验和、溢出键与未知对象，仍可处理后续合法击杀");
-                                current = session.ObserveDungeonAltarDeath(observation)
+                                current = session.ObserveDungeonAltarDeath(observation, growth)
                                     ?? throw new InvalidOperationException("祭坛实际39死亡未推进");
-                                var deathReplay = session.ObserveDungeonAltarDeath(observation);
-                                var zeroReplay = session.ObserveDungeonAltarScriptedDeath(zero);
+                                var deathReplay = session.ObserveDungeonAltarDeath(observation, growth);
+                                var zeroReplay = session.ObserveDungeonAltarScriptedDeath(zero, growth);
                                 That(deathReplay is { RoundAdvanced: false } && deathReplay.Round == current.Round &&
                                     zeroReplay is { RoundAdvanced: false } && zeroReplay.Round == current.Round &&
                                     ReferenceEquals(session.Selected, entered.Character),
                                     "祭坛重复39只补发退场资格，不重复推进或写普通成长/掉落");
                             }
-                            That(session.ObserveDungeonAltarDeaths(keys, new string('B',64)) is null,
+                            That(session.ObserveDungeonAltarDeaths(keys, new string('B',64), growth) is null,
                                 "39之后重复255共用原死亡表，不推进另一回合");
                         }
                         else
                         {
-                            current = session.ObserveDungeonAltarDeaths(keys, new string('A',64))
+                            current = session.ObserveDungeonAltarDeaths(keys, new string('A',64), growth)
                                 ?? throw new InvalidOperationException("实际祭坛对象死亡未推进");
-                            That(session.ObserveDungeonAltarDeath(Observation(keys[0])) is { RoundAdvanced: false },
+                            That(session.ObserveDungeonAltarDeath(Observation(keys[0]), growth) is { RoundAdvanced: false },
                                 "255之后重报39可补发退场资格，不因上报协议不同重复推进");
                         }
                     }
@@ -158,7 +260,7 @@ internal static class DungeonAltarSessionTests
                 That(session.MoveFormalDungeon(checked((byte)next.X),checked((byte)next.Y)) is not null,
                     "无尽必须清完本房五回合才能沿实际地图连接换房");
                 That(!session.CanPublishDungeonAltar(current) && session.TickDungeonAltar(current) is null &&
-                    session.ObserveDungeonAltarDeath(Observation(current.State.Plan.Actors[^1].ObjectKey)) is null,
+                    session.ObserveDungeonAltarDeath(Observation(current.State.Plan.Actors[^1].ObjectKey), growth) is null,
                     "换房后旧房间的计时、尾怪重报及发布资格全部失效，不阻断新房加载");
             }
             var result = session.BeginDungeonAltarSettlement(policy,growth)!;
@@ -188,7 +290,7 @@ internal static class DungeonAltarSessionTests
             var abandoned = session.StartDungeonAltar(reloaded)!;
             That(session.ReturnFromFormalDungeon() is not null && !session.CanPublishDungeonAltar(abandoned) &&
                 session.TickDungeonAltar(abandoned) is null && session.DungeonSnapshot is null &&
-                session.ObserveDungeonAltarDeath(Observation(entered.Monsters.Altar!.Actors[0].ObjectKey)) is null &&
+                session.ObserveDungeonAltarDeath(Observation(entered.Monsters.Altar!.Actors[0].ObjectKey), growth) is null &&
                 session.CaptureDungeonEnterCounts(dungeons.EnterCounts)!.Counts.Single(row => row.Dungeon == dungeonId).Daily == 1,
                 "祭坛已启动波次退出后旧计时不能发布或复活实例，已提交的两次入场不退款");
             session.End();
