@@ -24,6 +24,18 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
         commands.Register(CmdPacketType.LEAVE_PARTY, LeaveAsync, nameof(PlayerInteractionHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.WALKOUT_PARTY_MEMBER, LeaveAsync, nameof(PlayerInteractionHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.CHANGE_HOST, TransferLeaderAsync, nameof(PlayerInteractionHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.CALL_PARTY_MEMBER_REALTIME_INFO, RealtimeAsync, nameof(PlayerInteractionHandler), UserStateRequirement.WorldReady);
+    }
+    async Task<CommandResult> RealtimeAsync(GameConnectionContext context, Packet request)
+    {
+        if (context.Session.CaptureSocialActor() is not { } actor) return CommandResult.Handled;
+        long membership = context.Session.PartyMembershipVersion;
+        var party = parties.Current(context.Session);
+        var rows = party?.Members.Select(member => (member.Actor.Character.Id, member.Slot)).ToArray() ?? [];
+        await context.Notify(NotiPacketType.PARTY_MEMBER_REALTIME_INFO, PartyPackets.Realtime(rows), "party_realtime_request",
+            () => actor.IsCurrent() && context.Session.PartyMembershipVersion == membership &&
+                (party is null ? parties.Current(context.Session) is null : parties.IsCurrent(party)));
+        return CommandResult.Handled;
     }
     Task<CommandResult> DirectoryAsync(GameConnectionContext context, Packet request)
     {
