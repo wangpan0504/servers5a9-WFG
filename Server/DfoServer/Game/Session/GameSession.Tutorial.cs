@@ -113,9 +113,12 @@ internal sealed partial class GameSession
     {
         var before = character.Tutorial ?? throw new InvalidOperationException("训练角色状态缺失");
         CharacterGrowthPlan? progress = null;
-        if (amount != 0)
+        if (amount != 0 || kind == "death")
         {
-            var result = CharacterGrowthPlan.AddExperience(character, amount, growth ?? throw new InvalidOperationException("训练成长目录缺失"));
+            var catalog = growth ?? throw new InvalidOperationException("训练成长目录缺失");
+            // 零经验训练击杀仍须保留完整成长候选，用于原死亡与事务回执核验。
+            var result = amount == 0 ? CharacterGrowthPlan.WithoutExperience(character, catalog)
+                : CharacterGrowthPlan.AddExperience(character, amount, catalog);
             progress = result.Plan ?? throw new InvalidDataException("训练成长候选无效: " + result.Failure);
         }
         var destination = complete ? formalDungeon?.OrdinaryReturnPosition ?? CurrentDungeonSelection?.ReturnPosition ?? character.Position : character.Position;

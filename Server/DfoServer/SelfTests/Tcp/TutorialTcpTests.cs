@@ -105,6 +105,7 @@ internal static class TutorialTcpTests
         Battle(0, 2, false);
         Battle(8, 3, true);
         Battle(15, 4, false);
+        Battle(4, 5, false);
         await fixture.StopAsync();
 
         void Battle(byte job, ushort slot, bool cinematic)
@@ -156,7 +157,7 @@ internal static class TutorialTcpTests
                     }
                     peer.Send(117, check); Drain(); cinematicCompleted = cleared;
                 }
-                else foreach (var actor in actors.Monsters.Where(row => row.IsBlocking && row.AiCharacter is null))
+                else foreach (var actor in actors.Monsters.Where(row => row.CanReportDeath && !row.IsScriptedRetirement))
                 {
                     Kill(actor);
                     if (job == 15 && expectedMap.Id == 70577 && actor == actors.Monsters.First(row => row.IsBlocking))
@@ -192,8 +193,26 @@ internal static class TutorialTcpTests
 
             void Kill(DungeonPlannedMonster actor)
             {
-                peer.Send(39, FormalDungeonTcpTests.Death(actor.ObjectKey, peer.Id, checked((byte)actor.CandidateLevel)));
+                bool zeroExperience = DungeonKillExperienceCatalog.GetDungeonWeight(definition) == 0;
+                var before = zeroExperience ? fixture.Query("SELECT c.experience,d.proficiency_level,d.proficiency_experience " +
+                    "FROM characters c JOIN character_dungeon_state d ON d.character_id=c.id WHERE c.id=$p0", peer.Id) : null;
+                byte[] report = FormalDungeonTcpTests.Death(actor.ObjectKey, peer.Id, checked((byte)actor.CandidateLevel));
+                peer.Send(39, report);
                 peer.Expect(0, 38); peer.Expect(0, 37); Drain();
+                if (zeroExperience)
+                {
+                    That(before![0].SequenceEqual(fixture.Query("SELECT c.experience,d.proficiency_level,d.proficiency_experience " +
+                        "FROM characters c JOIN character_dungeon_state d ON d.character_id=c.id WHERE c.id=$p0", peer.Id)[0]) &&
+                        fixture.Query("SELECT amount,before_experience,after_experience FROM character_dungeon_growth_receipts " +
+                            "WHERE character_id=$p0 AND monster_key=$p1", peer.Id, actor.ObjectKey) is [[0L, var previous, var current]] &&
+                        Equals(previous, current) &&
+                        fixture.Query("SELECT count(*) FROM character_tutorial_receipts " +
+                            "WHERE character_id=$p0 AND subject=$p1 AND kind='death' AND experience=0", peer.Id, actor.ObjectKey) is [[1L]],
+                        "零经验训练真实击杀提交两份原死亡回执，经验与熟练度不增加；包含敌对APC");
+                    string saved = fixture.Snapshot();
+                    peer.Send(39, report); Drain();
+                    That(fixture.Snapshot() == saved, "零经验训练死亡重发不改变任务、奖励、回执或revision");
+                }
             }
 
             void Drain()

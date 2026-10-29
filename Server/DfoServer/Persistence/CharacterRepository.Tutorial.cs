@@ -43,7 +43,8 @@ internal sealed partial class CharacterRepository
             plan.Kind is not ("death" or "settlement" or "reward" or "skip" or "clear") ||
             plan.Identity is { } identity && (identity.CharacterId != expected.Id || identity.QuestId != 0 ||
                 identity.TaskAttempt != expected.DungeonState?.LastAttempt || plan.MapId <= 0) ||
-            plan.Experience == 0 && plan.Growth is not null || plan.Experience > 0 && (plan.Growth is not { } growth ||
+            plan.Experience == 0 && plan.Growth is not null && plan.Kind != "death" ||
+            (plan.Experience > 0 || plan.Kind == "death") && (plan.Growth is not { } growth ||
                 growth.CharacterId != expected.Id || growth.Revision != expected.Revision ||
                 growth.RequestedExperience != plan.Experience || !SameLearning(growth.Before, expected.Learning)))
             throw new InvalidDataException("训练检查点不是原角色、实例和完整规划");
@@ -53,7 +54,7 @@ internal sealed partial class CharacterRepository
             plan.Kind is "skip" or "clear" && (!plan.After.Completed || plan.Experience != 0) ||
             plan.Kind == "death" && (plan.Death is null || plan.Death.Death.EventId != plan.EventId ||
                 plan.Death.Death.Identity != plan.Identity || plan.Death.Death.MonsterKey != plan.Subject ||
-                plan.Growth is null || plan.DeathReward is not { Amount: > 0 } reward || reward.Amount != plan.Experience ||
+                plan.Growth is null || plan.DeathReward is not { } reward || reward.Amount != plan.Experience ||
                 reward.MonsterId != plan.Death.Monster.MonsterId || reward.MonsterLevel != plan.Death.Monster.CandidateLevel ||
                 reward.ResourceSource != DungeonKillExperienceCatalog.ResourcePath || string.IsNullOrWhiteSpace(reward.RuleId) || reward.RuleId.Length > 128 ||
                 plan.After.Completed != (before.Completed || plan.Death.Result.ClearFact is not null)) ||
