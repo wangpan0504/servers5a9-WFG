@@ -230,6 +230,7 @@ internal static class SelfTestRunner
         ActionConsumableTests.RunCore();
         EquipmentPeriodChangeTests.RunCore();
         MileageTests.RunCore();
+        MileageShopTests.RunCore();
         PermanentGrowthTests.RunCore();
         DatabaseSchemaTests.RunPermanentStats();
         QuestSpecifiedTicketTests.RunCore();

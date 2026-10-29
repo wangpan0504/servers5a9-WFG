@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 
 namespace DfoServer.Game.Mailbox;
@@ -38,7 +41,32 @@ internal sealed record MailboxClaimPlan(InventoryPlan Inventory, ImmutableArray<
 internal readonly record struct MailboxStateChange(uint Id, ushort State);
 internal readonly record struct MailboxClaimChange(uint MailId, uint ClaimId, MailboxError Error = MailboxError.None);
 internal sealed record MailboxDelivery(string Key, MailboxRecipient Recipient, string SenderName, string Text, uint Gold,
-    ImmutableArray<InventoryItem> Items, long Created, long? Expires = null);
+    ImmutableArray<InventoryItem> Items, long Created, long? Expires = null)
+{
+    // ARAD代币券领取共用邮件金额字段，每封只能表示一种金额；普通附件及金币保持原组合。
+    public IEnumerable<MailboxDelivery> NativeMessages()
+    {
+        if (!Items.Any(item => CurrencyWallet.TokenKind(item.Core.ItemId).HasValue))
+        {
+            yield return this;
+            yield break;
+        }
+        var ordinary = Items.Where(item => !CurrencyWallet.TokenKind(item.Core.ItemId).HasValue).ToImmutableArray();
+        string prefix = "mail-part:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Key)));
+        int part = 0;
+        if (!ordinary.IsEmpty || Gold != 0)
+        {
+            yield return this with { Items = ordinary };
+            part++;
+        }
+        foreach (var item in Items.Where(item => CurrencyWallet.TokenKind(item.Core.ItemId).HasValue))
+        {
+            string key = part == 0 ? Key : prefix + ":" + part.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            yield return this with { Key = key, Items = [item], Gold = 0 };
+            part++;
+        }
+    }
+}
 
 internal sealed record MailboxReceipt(Character Character, long Generation, long SelectionEpoch);
 internal sealed record MailboxResult(MailboxError Error = MailboxError.None, Character? Character = null, uint MailId = 0)

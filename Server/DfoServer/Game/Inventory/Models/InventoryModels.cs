@@ -126,6 +126,7 @@ internal sealed record InventoryDeleteRequest(InventoryListType List, InventoryD
     public byte? ClientState { get; init; }
 }
 internal sealed class InventoryQualificationExpiredException() : InvalidOperationException("库存规划资格期限已过");
+internal sealed class InventoryEventRejectedException() : InvalidOperationException("商城活动已关闭、到期或版本变化");
 
 // 移动资格必须属于生成计划时的角色；不能把旧计划重新绑定到刷新后的expected。
 internal sealed class InventoryCharacterPrecondition(Character character, long? qualificationExpiresAt = null, TimeProvider? clock = null,

@@ -61,6 +61,28 @@ internal static class MileageTests
             using (var db=new SqliteGameDatabase(path).Open()) Sql(db,"UPDATE account_wallets SET mileage=456 WHERE account='keep'");
             using (var db=new SqliteGameDatabase(path).Open())
                 That(Scalar(db,"SELECT mileage FROM account_wallets WHERE account='keep'") is 456L,"重开库保留积分，不重复续增或重置");
+            using (var db = Raw())
+                Sql(db, "ALTER TABLE account_wallets DROP COLUMN mileage_cash_earned; ALTER TABLE account_wallets DROP COLUMN mileage_shop_purchases; " +
+                    "ALTER TABLE account_wallets ADD COLUMN mileage_shop_purchases TEXT; PRAGMA user_version=151");
+            Reject<InvalidDataException>(() => { using var _ = new SqliteGameDatabase(path).Open(); }, "v152拒绝同名未知列定义");
+            using (var db = Raw())
+            {
+                That(Scalar(db, "PRAGMA user_version") is 151L &&
+                    Scalar(db, "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='mileage_cash_earned'") is 0L &&
+                    Scalar(db, "SELECT mileage FROM account_wallets WHERE account='keep'") is 456L,
+                    "v152第二列失败回滚首列DDL及版本，保留原积分钱包");
+                Sql(db, "ALTER TABLE account_wallets DROP COLUMN mileage_shop_purchases");
+            }
+            using (var db = new SqliteGameDatabase(path).Open())
+            {
+                That(Scalar(db, "SELECT mileage_cash_earned||':'||mileage_shop_purchases FROM account_wallets WHERE account='keep'") is "0:{}" &&
+                    Scalar(db, "SELECT revision*100+rental_points FROM account_wallets WHERE account='keep'") is 917L,
+                    "v151增量升级仅初始化限购与消费累计，不回填历史消费或修改钱包版本");
+                Sql(db, "UPDATE account_wallets SET mileage_cash_earned=17,mileage_shop_purchases='{\"2001\":2}' WHERE account='keep'");
+            }
+            using (var db = new SqliteGameDatabase(path).Open())
+                That(Scalar(db, "SELECT mileage_cash_earned||':'||mileage_shop_purchases FROM account_wallets WHERE account='keep'") is "17:{\"2001\":2}",
+                    "重开保留已购份数与消费累计，不因服务重启恢复额度");
         }
         finally { Directory.Delete(root,true); }
         Console.WriteLine("PASS 商城积分钱包、原生通知及增量升级/DDL回滚断言");

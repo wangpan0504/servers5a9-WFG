@@ -8,7 +8,13 @@ namespace DfoServer.GameWorld.Items;
 
 // PVF 商城商品号与实际物品模板号分离；网络请求只携带商品号，费用和奖励必须从同一份资源目录解析。
 internal sealed record CashShopProduct(int CommodityId, int ItemId, int Count, int CeraPrice, string Section,
-    int DurationDays = 0, int ContractType = 0, int AvatarType = 0);
+    int DurationDays = 0, int ContractType = 0, int AvatarType = 0)
+{
+    public bool IsMileage { get; init; }
+    public int MileagePrice { get; init; }
+    public int OtherPrice { get; init; }
+    public int GoldPrice { get; init; }
+}
 internal sealed record CashShopBonus(int ItemId, int Count);
 
 internal sealed class CashShopCatalog
@@ -28,17 +34,20 @@ internal sealed class CashShopCatalog
 
     public FrozenDictionary<int, CashShopProduct> Products { get; }
     public FrozenDictionary<int, ImmutableArray<CashShopBonus>> Bonuses { get; }
+    public MileageShopCatalog Mileage { get; }
     public FrozenDictionary<int, FrozenDictionary<int, int>> CouponMappings { get; }
     readonly FrozenSet<int> couponProducts;
 
     CashShopCatalog(Dictionary<int, CashShopProduct> products,
-        Dictionary<int, ImmutableArray<CashShopBonus>>? bonuses = null,
-        Dictionary<int, Dictionary<int, int>>? coupons = null)
+        Dictionary<int, ImmutableArray<CashShopBonus>>? bonuses,
+        Dictionary<int, Dictionary<int, int>>? coupons, MileageShopCatalog mileage)
     {
         Products = products.ToFrozenDictionary();
         Bonuses = (bonuses ?? []).ToFrozenDictionary();
         CouponMappings = (coupons ?? []).ToFrozenDictionary(pair => pair.Key, pair => pair.Value.ToFrozenDictionary());
         couponProducts = CouponMappings.Values.SelectMany(mapping => mapping.Values).ToFrozenSet();
+        Mileage = mileage;
+        if (Products.Keys.Any(Mileage.Products.ContainsKey)) throw new InvalidDataException("普通商城与积分商城商品号重复");
     }
 
     public CashShopProduct? Product(int commodityId) => Products.GetValueOrDefault(commodityId);
@@ -55,10 +64,11 @@ internal sealed class CashShopCatalog
         string? bonusText = archive.Contains("etc/chn_cerashop_multibonus.etc")
             ? archive.ReadText("etc/chn_cerashop_multibonus.etc") : null;
         string? couponText = archive.Contains("etc/chn_coupon.etc") ? archive.ReadText("etc/chn_coupon.etc") : null;
-        return Parse(archive.ReadText(path), bonusText, couponText);
+        string? mileageText = archive.Contains("etc/mileageshop_chn.etc") ? archive.ReadText("etc/mileageshop_chn.etc") : null;
+        return Parse(archive.ReadText(path), bonusText, couponText, mileageText);
     }
 
-    internal static CashShopCatalog Parse(string text, string? bonusText = null, string? couponText = null)
+    internal static CashShopCatalog Parse(string text, string? bonusText = null, string? couponText = null, string? mileageText = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         var products = new Dictionary<int, CashShopProduct>();
@@ -92,12 +102,17 @@ internal sealed class CashShopCatalog
                     ? checked(580 + slot) : 0;
                 if (section == "selectable character premium" && Number(values[offset + 3], out int selectableDays) && selectableDays > 0)
                     durationDays = selectableDays;
-                products[commodity] = new(commodity, item, section == "avatar" ? 1 : count, price, section, durationDays, contractType, avatarType);
+                int goldPrice = 0;
+                if (width == 9 && section is not ("selectable character premium" or "charac premium package" or "privilege service"))
+                    if (!Number(values[offset + 3], out goldPrice) || goldPrice < 0)
+                        throw new InvalidDataException("商城商品金币价格无效: " + commodity);
+                products[commodity] = new(commodity, item, section == "avatar" ? 1 : count, price, section, durationDays, contractType, avatarType)
+                    { GoldPrice = goldPrice };
             }
         }
         if (products.Count == 0)
             throw new InvalidDataException("商城商品目录为空");
-        return new(products, ParseBonuses(bonusText), ParseCoupons(couponText));
+        return new(products, ParseBonuses(bonusText), ParseCoupons(couponText), new(new MileageShopFile(text, mileageText)));
     }
 
     static bool Number(string value, out int number) => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out number);

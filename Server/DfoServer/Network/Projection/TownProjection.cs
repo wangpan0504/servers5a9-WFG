@@ -20,9 +20,28 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
     CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null,
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
-    MarriageProjection? marriage = null, ServerEventService? events = null)
+    MarriageProjection? marriage = null, ServerEventService? events = null, MileageShopCatalog? mileageShop = null)
 {
     const ushort JonathanVisibleEvent = 2395;
+    internal bool MileageAvailable => mileageShop?.Available == true;
+
+    internal async Task ServerEventsAsync(GameConnectionContext context, Func<bool>? canSend = null)
+    {
+        // 108替换整张活动目录；积分入口更新不能清掉其他活动和各自数值段。
+        var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow());
+        openEvents = [GuildHongbaoPackets.OpenEvent, JonathanVisibleEvent, 333, .. openEvents];
+        if (events?.Read(ServerEventService.NolanVisibilityId).Active == true)
+            openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
+        bool mileage = MileageAvailable && events?.Read(ServerEventService.MileageShopId).Active == true;
+        if (mileage) openEvents = [.. openEvents, ServerEventService.MileageShopId];
+        await context.NotifyProtected(NotiPacketType.EVENT_INFO,
+            SeriaLuckPackets.EventInfoCompressed(openEvents, activeEvents: [JonathanVisibleEvent]),
+            canSend is null ? "seria_luck_event_initialize" : "server_events_changed", canSend);
+        if (mileage && context.Session.Selected is { } selected)
+            await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
+                MileagePackets.Limits(selected.Inventory.AccountWallet, mileageShop!), "mileage_shop_limits", canSend);
+        if (canSend?.Invoke() != false) context.ServerEvents?.Published(mileage);
+    }
     internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
     internal GuildEconomyProjection? GuildEconomy { get; set; }
     internal GuildNpcProjection? GuildNpcs { get; set; }
@@ -143,14 +162,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             GrowUpChangePackets.ManageInfo(context.Session.GrowUpChangeCount(), c.Level), "growup_change_info");
         await TrainingSkillsAsync(context, initializing: true);
         await LocationAsync(context, c, initial: true, transition: !resumeTown);
-        // EVENT_INFO整表替换事件集合：保留赛丽亚、公会红包、魔兽频道门禁（333，仅目录记录）及开放团本；2395是乔纳森脚本的独立出现门禁。
-        // 2532（诺兰）只在已提交服务状态为激活时追加。
-        var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow());
-        openEvents = [GuildHongbaoPackets.OpenEvent, JonathanVisibleEvent, 333, .. openEvents];
-        if (events?.Read(ServerEventService.NolanVisibilityId).Active == true)
-            openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
-        await context.NotifyProtected(NotiPacketType.EVENT_INFO,
-            SeriaLuckPackets.EventInfoCompressed(openEvents, activeEvents: [JonathanVisibleEvent]), "seria_luck_event_initialize");
+        await ServerEventsAsync(context);
         await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(c)), "fatigue_after_town_hud");
         await context.Notify(NotiPacketType.BOOSTER_GAGE, SeriaLuckPackets.Gauge(c.Inventory.AccountWallet.SeriaLuck,
             c.Inventory.AccountWallet.SeriaLuck), "seria_luck_gauge_initialize");

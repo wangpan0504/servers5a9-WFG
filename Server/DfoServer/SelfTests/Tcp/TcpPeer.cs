@@ -99,6 +99,7 @@ internal sealed partial class TcpPeer : IDisposable
     // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
     public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId];
     public byte[] EventInfoPayload { get; private set; } = [];
+    public byte[] MileageLimits { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
     public Dictionary<int, byte> DailyBoosterUsed { get; } = [];
@@ -1253,6 +1254,8 @@ internal sealed partial class TcpPeer : IDisposable
         {
             var events = Expect(0, 108);
             TestCheck.That(events.Protected, "入城的赛丽亚事件配置使用保护压缩帧");
+            if (ExpectedOpenEvents.Contains(ServerEventService.MileageShopId))
+                MileageLimits = Expect(0, 706).Body;
             var fatigue = Expect(0, 36);
             TestCheck.That(fatigue.Body.Length == 10, "EVENT_INFO建立城镇HUD后同步本版五个u16疲劳字段");
             using (var compressed = new MemoryStream(events.Body, writable: false))

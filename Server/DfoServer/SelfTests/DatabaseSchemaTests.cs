@@ -280,6 +280,8 @@ internal static partial class DatabaseSchemaTests
                 "ALTER TABLE characters DROP COLUMN blacklist_count",
                 "ALTER TABLE characters DROP COLUMN clone_title_item_id",
                 "ALTER TABLE characters DROP COLUMN selected_skill_tree",
+                "ALTER TABLE account_wallets DROP COLUMN mileage_cash_earned",
+                "ALTER TABLE account_wallets DROP COLUMN mileage_shop_purchases",
                 "ALTER TABLE character_teleport_cooldowns DROP COLUMN upgrade_aura_until",
                 "ALTER TABLE inventory_creature_details DROP COLUMN detail", "DROP TABLE account_client_settings", "DROP TABLE character_client_settings",
                 "DROP TABLE character_game_settings",

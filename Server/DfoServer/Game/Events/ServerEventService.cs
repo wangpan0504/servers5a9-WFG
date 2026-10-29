@@ -26,6 +26,8 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
 {
     public const ushort DoubleGoldCardId = 64;
     public const ushort NolanVisibilityId = 2532;
+    public const ushort MileageShopId = 266;
+    public event Action<ushort>? Changed;
     readonly TimeProvider time = clock ?? TimeProvider.System;
 
     public ServerEventState Read(ushort eventId)
@@ -53,6 +55,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
         var desired = edit(before);
         desired.Validate();
         var committed = store.Save(before, desired);
+        if (committed != before) Changed?.Invoke(eventId);
         return State(committed);
     }
 
@@ -61,7 +64,7 @@ internal sealed class ServerEventService(IServerEventStore store, TimeProvider? 
 
     public static void RequireRegistered(ushort eventId)
     {
-        if (eventId != DoubleGoldCardId && eventId != NolanVisibilityId)
-            throw new InvalidDataException("尚未登记该服务端活动；黄金卡牌双倍奖励为64，诺兰常驻状态为2532，公告74不是活动开关");
+        if (eventId != DoubleGoldCardId && eventId != NolanVisibilityId && eventId != MileageShopId)
+            throw new InvalidDataException("尚未登记该服务端活动；黄金卡牌双倍奖励为64，积分商城为266，诺兰常驻状态为2532，公告74不是活动开关");
     }
 }

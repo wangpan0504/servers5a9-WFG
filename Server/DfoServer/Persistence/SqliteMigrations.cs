@@ -280,7 +280,31 @@ internal static class SqliteMigrations
         new(150, "决斗任务训练事实与一次性奖励", PvpMissionSchema.Upgrade),
         // 222cd1db 的每日任务账本顺延到 151，避开公会炼金与魔兽占用的 147-149。
         new(151, "决斗每日任务独立服务日账本", PvpDailyMissionSchema.Upgrade),
+        new(152, "积分商城账号限购与消费返积分", AddMileageShopState),
     ];
+
+    static void AddMileageShopState(SqliteConnection db, SqliteTransaction tx)
+    {
+        foreach (var row in new[]
+        {
+            (Name: "mileage_cash_earned", Type: "INTEGER", Default: "0", Check: "CHECK(mileage_cash_earned BETWEEN 0 AND 2147483647)"),
+            (Name: "mileage_shop_purchases", Type: "TEXT", Default: "'{}'", Check: "CHECK(json_valid(mileage_shop_purchases) AND json_type(mileage_shop_purchases)='object')")
+        })
+        {
+            using var query = db.CreateCommand(); query.Transaction = tx;
+            query.CommandText = "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name=$name";
+            query.Parameters.AddWithValue("$name", row.Name);
+            if (Convert.ToInt32(query.ExecuteScalar()) == 0)
+                Execute(db, tx, $"ALTER TABLE account_wallets ADD COLUMN {row.Name} {row.Type} NOT NULL DEFAULT {row.Default} {row.Check}");
+            query.CommandText = "SELECT type,\"notnull\",dflt_value FROM pragma_table_info('account_wallets') WHERE name=$name";
+            using (var reader = query.ExecuteReader())
+                if (!reader.Read() || !reader.GetString(0).Equals(row.Type, StringComparison.OrdinalIgnoreCase) || reader.GetInt32(1) != 1 || reader.GetString(2) != row.Default)
+                    throw new InvalidDataException("未知积分商城列定义: " + row.Name);
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_wallets'";
+            if (query.ExecuteScalar() is not string sql || !sql.Contains(row.Check, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("积分商城列缺少正式约束: " + row.Name);
+        }
+    }
 
     internal static class AccountSkinStorageSchema
     {
@@ -2436,7 +2460,7 @@ internal static class SqliteMigrations
         "SELECT [character_id],[context],[sp],[tp] FROM [character_skill_points] LIMIT 0",
         "SELECT [character_id],[context],[slot],[skill_id],[level] FROM [character_skill_bindings] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[list_type],[slot_index],[item_uid_before],[item_uid_after],[item_id_before],[item_id_after],[value_before],[value_after],[item_kind_before],[item_kind_after],[count_before],[count_after],[count_delta],[core_hash_before],[core_hash_after] FROM [inventory_audit_log] LIMIT 0",
-        "SELECT [account],[revision],[rental_points],[mileage],[seria_luck],[premium_contracts],[character_slots] FROM [account_wallets] LIMIT 0",
+        "SELECT [account],[revision],[rental_points],[mileage],[mileage_cash_earned],[mileage_shop_purchases],[seria_luck],[premium_contracts],[character_slots] FROM [account_wallets] LIMIT 0",
         "SELECT charac_no,account,weapon,cloth,leather,light_armor,heavy_armor,plate,amulet,wrist,ring,support,magic_stone FROM item_making_skill_info LIMIT 0",
         "SELECT avatar_expansion FROM characters LIMIT 0",
         "SELECT devil_usage,stamina_until FROM characters LIMIT 0",
