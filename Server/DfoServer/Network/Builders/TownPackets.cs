@@ -291,8 +291,8 @@ internal static partial class TownPackets
         if (body[4 + 13700] == 0)
             body[4 + 13700] = 1;
         // 时空裂缝气球读同一张完成表的 [is clear quest]。区域深渊任务已完成后补外传显示位，
-        // 与 13700 一样不写存档；选图/入场资格见 InfernoQuestUnlock。
-        InfernoQuestUnlock.ApplyDisplayBits(body, done);
+        // 不写存档；已进入的真实外传链优先于显示兼容，选图/入场资格仍见 InfernoQuestUnlock。
+        InfernoQuestUnlock.ApplyDisplayBits(body, done, character.ActiveMainQuests);
         return body;
     }
 

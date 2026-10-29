@@ -35,13 +35,26 @@ internal static class WorldMapHoverTests
         BinaryPrimitives.WriteUInt32LittleEndian(history, 30000);
         history[4 + 13700] = 1;
         Bytes(TownPackets.CompletedQuests(character), history, "空历史只增加月轮山显示标记，不解锁其他节点");
-        foreach (var (inferno, hell) in InfernoQuestUnlock.Pairs)
+        foreach (var (inferno, hell, introduction) in InfernoQuestUnlock.Pairs)
         {
             var hellOnly = character with { CompletedQuests = [hell] };
             byte[] hellHistory = TownPackets.CompletedQuests(hellOnly);
             That(hellHistory[4 + hell] == 1 && hellHistory[4 + inferno] == 1 && hellHistory[4 + 13700] == 1 &&
                 hellOnly.CompletedQuests.SequenceEqual([hell]),
                 "完成区域深渊任务后补对应时空裂缝外传显示位，不写入角色存档 " + hell);
+            foreach(var started in new[]
+            {
+                hellOnly with {CompletedQuests=[hell,introduction]},
+                hellOnly with {AccountCompletedQuests=[introduction]},
+                hellOnly with {ActiveMainQuests=[new(0,checked((ushort)introduction),1){AcceptanceId=Guid.NewGuid()}]},
+                hellOnly with {ActiveMainQuests=[new(0,checked((ushort)inferno),0){AcceptanceId=Guid.NewGuid()}]}
+            })
+                That(TownPackets.CompletedQuests(started)[4+inferno]==0 &&
+                    !started.CompletedQuests.Contains(inferno) && !started.AccountCompletedQuests.Contains(inferno),
+                    "前半步已完成或任一步活动接取时，356保留后半步真实未完成位 " + inferno);
+            var finished=hellOnly with {CompletedQuests=[hell,introduction,inferno],QuestAnswers=hellOnly.QuestAnswers.Add(inferno,2)};
+            That(TownPackets.CompletedQuests(finished)[4+inferno]==3,
+                "外传真实完成后保留原完成位及回答，不被显示兼容覆盖 " + inferno);
         }
         var progressed = character with
         {
