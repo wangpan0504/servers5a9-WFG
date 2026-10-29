@@ -38,7 +38,7 @@ internal static partial class PartyDungeonTcpTests
             fixture.Sql("DROP TRIGGER reject_otherverse_party");
         }
         if (!ancientAvailable)
-            Console.WriteLine("SKIP 组队远古7101：官方PVF未安装镇17 Area5与七远古DGN资源增量，仅覆盖现代异界与拒绝回滚");
+            TestCheck.Skip("ancient.party-resource-missing", "组队远古7101：官方PVF未安装镇17 Area5与七远古DGN资源增量，仅覆盖现代异界与拒绝回滚");
         else
         {
             var ancientArea = resources.Towns.Areas[(17, 5)];

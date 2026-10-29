@@ -80,7 +80,7 @@ internal static partial class FormalDungeonTcpTests
             Return(peer);
         }
         if (!ancientAvailable)
-            Console.WriteLine("SKIP 远古7101：官方PVF未安装镇17 Area5与七远古DGN资源增量，仅覆盖现代异界；缺资源时的落点拒绝见 ChannelAreaLandingTests");
+            TestCheck.Skip("ancient.resource-missing", "远古7101：官方PVF未安装镇17 Area5与七远古DGN资源增量，仅覆盖现代异界；缺资源时的落点拒绝见 ChannelAreaLandingTests");
         else
         {
             using (var peer = Open(fixture))

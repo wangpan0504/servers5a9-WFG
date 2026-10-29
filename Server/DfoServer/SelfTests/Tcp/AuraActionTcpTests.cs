@@ -21,7 +21,7 @@ internal static class AuraActionTcpTests
         {
             That(template is { Id: ticket, Kind: ItemKind.Material, StackableType: "[material] 0" },
                 "原PVF保留材料券但无右键动作声明");
-            Console.WriteLine("SKIP aura-action positive: 当前PVF未声明490700411的action127；正向只对隔离候选资源运行");
+            TestCheck.Skip("aura-action.resource-action-missing", "aura-action positive: 当前PVF未声明490700411的action127；正向只对隔离候选资源运行");
             return;
         }
         That(template is { Kind: ItemKind.Material, StackableType: "[material] 0", OpensAuraSkinSlot: true } &&

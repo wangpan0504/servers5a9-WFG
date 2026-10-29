@@ -25,14 +25,14 @@ internal static class ClearAvatarTcpTests
             ("ClearAwaken", 3, 101500878, 0, 0x11),
             ("ClearSecond", 3, 101500878, 0, 0x21) };
         if (!resources.ItemResources.Items.ContainsEquipment(401600057))
-            Console.WriteLine("SKIP 空武器装扮TCP：指定模板401600057未在equipment.lst登记；槽10真实TCP未执行，核心合成规则不替代该覆盖");
+            TestCheck.Skip("clear-avatar.weapon-template-missing", "空武器装扮TCP：指定模板401600057未在equipment.lst登记；槽10真实TCP未执行，核心合成规则不替代该覆盖");
         else
         {
             var weapon = resources.ItemResources.Items.Get(401600057);
             if (weapon is { CloneAvatar: true, BorrowAvatarAppearance: true, EquipmentSlot: 10 })
                 cases.Add(("ClearWeapon", 10, 401600057, 0, 0));
             else
-                Console.WriteLine($"SKIP 空武器装扮TCP：指定模板401600057不满足夹具字段 CloneAvatar={weapon.CloneAvatar}, BorrowAvatarAppearance={weapon.BorrowAvatarAppearance}, EquipmentSlot={weapon.EquipmentSlot}；槽10真实TCP未执行");
+                TestCheck.Skip("clear-avatar.weapon-shape-mismatch", $"空武器装扮TCP：指定模板401600057不满足夹具字段 CloneAvatar={weapon.CloneAvatar}, BorrowAvatarAppearance={weapon.BorrowAvatarAppearance}, EquipmentSlot={weapon.EquipmentSlot}；槽10真实TCP未执行");
         }
         var roles = new List<Character>();
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))

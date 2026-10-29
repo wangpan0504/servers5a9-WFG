@@ -21,6 +21,8 @@ internal static class TcpRegressionTests
             await QuestCompletionPublicationTests.RunStageAsync(resources);
             await QuestLifecycleTcpTests.RunStageAsync(options,root,resources);
         }),
+        ("settings-snapshot-rules", (_, _, _) => { ClientSettingsSnapshotsTests.Run(); return Task.CompletedTask; }),
+        ("chat-rate-rules", (_, _, _) => { ChatServiceTests.RunRateRules(); return Task.CompletedTask; }),
         ("commands", (options, root, _) => CommandLineTcpTests.RunAsync(options, root)),
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
         ("packet-capture", async (options, root, _) =>
@@ -489,6 +491,8 @@ internal static class TcpRegressionTests
     // 自测已有的定向入口和全量普查按需运行，完整 TCP 只执行网络集成。
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
+        "settings-snapshot-rules",
+        "chat-rate-rules",
         "luke-scene-namespace",
         "luke-symbol103-handler",
         "luke-reward-restart",
@@ -504,7 +508,25 @@ internal static class TcpRegressionTests
         "story-cinematic", "story-scenes", "story-quest-entry", "story-publication", "quest-core-rewards", "dungeon-settlement",
         "dungeon-drop-storage", "inventory-persistence", "resource-survey", "consumable-use-rules", "dungeon-entry-cost"
     };
-    static IEnumerable<string> DefaultGroupNames => Groups.Select(group => group.Name).Where(name => !TargetedOnly.Contains(name));
+    internal static IEnumerable<string> DefaultGroupNames => Groups.Select(group => group.Name).Where(name => !TargetedOnly.Contains(name));
+    // 同一注册表供执行和机器可读清单使用；不是外部手填组表或覆盖证明。
+    internal static string RegistryJson() => JsonSerializer.Serialize(new
+    {
+        SchemaVersion = 1,
+        Purpose = "registration-only",
+        Execution = "not-run",
+        Runner = TcpTestReceipts.CaptureIdentity().Runner,
+        Groups = Groups.Select(group => new
+        {
+            group.Name,
+            Kind = group.Name == "resource-survey" ? "survey" : TargetedOnly.Contains(group.Name) ? "targeted" : "default"
+        }).ToArray(),
+        DefaultGroups = DefaultGroupNames.ToArray(),
+        TargetedGroups = Groups.Where(group => TargetedOnly.Contains(group.Name) && group.Name != "resource-survey").Select(group => group.Name).ToArray(),
+        SurveyGroups = Groups.Where(group => group.Name == "resource-survey").Select(group => group.Name).ToArray(),
+        Aliases = Aliases.ToDictionary(alias => alias.Key, alias => alias.Value.ToArray(), StringComparer.Ordinal)
+    });
+
     public static bool IsValidSelection(string selection)
     {
         string[] names = selection.Split(',');
@@ -542,23 +564,52 @@ internal static class TcpRegressionTests
     static async Task RunGroupsAsync(ServerOptions options, string root, string[] selected)
     {
         using var resources = new TcpTestResources(options);
-        foreach (var group in Groups.Where(group => selected.Contains(group.Name, StringComparer.Ordinal)))
+        string runId = Guid.NewGuid().ToString("N");
+        var identity = TcpTestReceipts.CaptureIdentity();
+        string durable = TcpTestReceipts.DurableDirectory(runId);
+        var ordered = Groups.Where(group => selected.Contains(group.Name, StringComparer.Ordinal)).ToArray();
+        string[] selection = ordered.Select(group => group.Name).ToArray();
+        foreach (var group in ordered)
         {
             int before = TestCheck.Count;
             long loadBefore = resources.LoadMs;
             var startupBefore = TcpTestFixture.StartupTotals;
             long allocated = GC.GetTotalAllocatedBytes();
             var watch = Stopwatch.StartNew();
-            await group.Run(options, root, resources);
-            using var process = Process.GetCurrentProcess();
-            File.WriteAllText(Path.Combine(root, group.Name + ".result.json"), JsonSerializer.Serialize(new
+            using var coverage = new TcpTestReceipts.Group(group.Name, runId, identity, selection: selection);
+            string localReceipt = Path.Combine(root, group.Name + ".result.json");
+            string durableReceipt = Path.Combine(durable, group.Name + ".json");
+            void Save(TcpTestReceipts.Receipt receipt)
             {
-                Passed = true, Assertions = TestCheck.Count - before, ElapsedMs = watch.ElapsedMilliseconds,
-                DriverPrivateBytes = process.PrivateMemorySize64, DriverWorkingSetBytes = process.WorkingSet64,
-                AllocatedBytes = GC.GetTotalAllocatedBytes() - allocated, SharedResourcesLoaded = resources.IsLoaded,
-                ResourceLoadMs = resources.LoadMs - loadBefore, FixtureStartMs = TcpTestFixture.StartupTotals.Milliseconds - startupBefore.Milliseconds,
-                FixtureStarts = TcpTestFixture.StartupTotals.Count - startupBefore.Count
-            }));
+                // 完整本地记录写好后才发布独立小收据；成功现场回收不删除独立收据。
+                TcpTestReceipts.WriteAtomic(localReceipt, receipt);
+                TcpTestReceipts.WriteAtomic(durableReceipt, receipt);
+            }
+            Save(coverage.Snapshot("running"));
+            try
+            {
+                await group.Run(options, root, resources);
+                using var process = Process.GetCurrentProcess();
+                Save(coverage.Snapshot("passed") with
+                {
+                    Assertions = TestCheck.Count - before, ElapsedMs = watch.ElapsedMilliseconds,
+                    DriverPrivateBytes = process.PrivateMemorySize64, DriverWorkingSetBytes = process.WorkingSet64,
+                    AllocatedBytes = GC.GetTotalAllocatedBytes() - allocated, SharedResourcesLoaded = resources.IsLoaded,
+                    ResourceLoadMs = resources.LoadMs - loadBefore, FixtureStartMs = TcpTestFixture.StartupTotals.Milliseconds - startupBefore.Milliseconds,
+                    FixtureStarts = TcpTestFixture.StartupTotals.Count - startupBefore.Count
+                });
+            }
+            catch (Exception error)
+            {
+                try
+                {
+                    Save(coverage.Snapshot(error is OperationCanceledException ? "interrupted" : "failed", error.GetType().FullName) with
+                    { Assertions = TestCheck.Count - before, ElapsedMs = watch.ElapsedMilliseconds });
+                }
+                catch (Exception saveError)
+                { Console.Error.WriteLine("WARN test receipt write failed: " + saveError.GetType().Name); }
+                throw;
+            }
             Console.WriteLine($"PASS TCP {group.Name}: {TestCheck.Count - before} assertions, {watch.Elapsed.TotalSeconds:F1}s " +
                 $"(resources {(resources.LoadMs - loadBefore) / 1000.0:F1}s, fixture starts {TcpTestFixture.StartupTotals.Count - startupBefore.Count} " +
                 $"in {(TcpTestFixture.StartupTotals.Milliseconds - startupBefore.Milliseconds) / 1000.0:F1}s)");

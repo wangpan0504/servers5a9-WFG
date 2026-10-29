@@ -17,6 +17,7 @@ internal enum ServerCommandKind
     SelfTest,
     SelfTestCore,
     TcpTest,
+    TcpTestList,
     Gm,
     PrepareCharacter,
     PrepareBookCharacter,
@@ -51,6 +52,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --selftest-core            基础自测，无需 PVF
           --selftest                 完整服务端自测
           --selftest-tcp [测试组]    隔离 TCP 回归
+          --selftest-tcp-list-json   只读导出测试组，不加载资源或创建数据库
           --anton-probe [参数]       TCP 假客户端：默认不连接。见 Docs/开发/安徒恩TCP探针.md
           --scan-quests              只读任务覆盖与依赖检查，输出JSON
           --gm [命令]               开发管理命令
@@ -103,6 +105,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
             "--selftest-core" => (ServerCommandKind.SelfTestCore, 0),
             "--selftest" => (ServerCommandKind.SelfTest, 0),
             "--selftest-tcp" => (ServerCommandKind.TcpTest, -1),
+            "--selftest-tcp-list-json" => (ServerCommandKind.TcpTestList, 0),
             "--gm" => (ServerCommandKind.Gm, -1),
             "--prepare-jianying" => (ServerCommandKind.PrepareCharacter, 2),
             "--prepare-book" => (ServerCommandKind.PrepareBookCharacter, -1),
@@ -120,8 +123,8 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
             throw new InvalidDataException("TCP 测试组必须是以下名称（多个组用逗号分隔，不得重复）：" + string.Join(',', TcpRegressionTests.GroupNames));
         if (kind == ServerCommandKind.InspectDungeon && !int.TryParse(arguments[0], NumberStyles.None, CultureInfo.InvariantCulture, out _))
             throw new InvalidDataException("副本列表索引必须为非负整数");
-        if (kind == ServerCommandKind.Help && options.Count != 0)
-            throw new InvalidDataException("--help 单独使用");
+        if (kind is ServerCommandKind.Help or ServerCommandKind.TcpTestList && options.Count != 0)
+            throw new InvalidDataException(action + " 单独使用");
         return new(kind, arguments) { Options = options };
     }
 }
