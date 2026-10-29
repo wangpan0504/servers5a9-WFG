@@ -28,6 +28,19 @@ internal sealed record DungeonEntryCommit(Character Character, DungeonIncountUsa
 internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, DungeonRunIdentity Identity, int MapId,
     WeeklyDungeonEntry? Weekly = null, GriefTowerAdmission? Grief = null)
 {
+    // 训练费独立于副本门票表达，付款仍在原入场事务中合并为一次背包提交。
+    public InventoryPlan? GuildTraining { get; init; }
+    public InventoryPlan? InventoryPayment
+    {
+        get
+        {
+            if (GuildTraining is not { } training) return Items;
+            if (Items is null) return training;
+            if (!ReferenceEquals(Items.After, training.Before))
+                throw new InvalidDataException("训练费用必须紧随本次入场票规划");
+            return Items.WithAfter(training.After);
+        }
+    }
     public DungeonSpecialEntry? Special { get; init; }
     public DazzlementTowerAdmission? Dazzlement { get; init; }
     public int DungeonId { get; init; }
@@ -40,5 +53,5 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public DfoServer.Game.Guild.GuildDungeonAdmission? GuildDungeon { get; init; }
     public DfoServer.Game.ImperialArena.ImperialArenaAdmission? ImperialArena { get; init; }
     public DimensionDungeonAdmission? Dimension { get; init; }
-    public bool IsEmpty => Items is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && Beast is null && TagEvildom is null && OrdinaryLukeEntry is null && GuildDungeon is null && ImperialArena is null && Dimension is null;
+    public bool IsEmpty => Items is null && GuildTraining is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && Beast is null && TagEvildom is null && OrdinaryLukeEntry is null && GuildDungeon is null && ImperialArena is null && Dimension is null;
 }

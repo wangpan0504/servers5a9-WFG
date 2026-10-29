@@ -114,7 +114,7 @@ internal sealed partial class CharacterRepository : ITagEvildomClearStore
     }
 
     static void CommitTagEvildomAdmission(SqliteConnection db, SqliteTransaction tx, AccountOwners.Lease owner,
-        Character expected, DungeonEntryCharge charge)
+        Character expected, DungeonEntryCharge charge, long reservedRevision)
     {
         if (charge.TagEvildom is not { } admission) return;
         admission.Validate();
@@ -123,8 +123,8 @@ internal sealed partial class CharacterRepository : ITagEvildomClearStore
             charge.Grief is not null || charge.Hope is not null || charge.Special is not null || charge.Incount is not null || charge.Weekly is not null)
             throw new InvalidDataException("再战准入不能混用其它副本身份、费用或次数");
         RequireTagEvildomConfiguration(ReadTagEvildomConfiguration(db, tx, owner.Account), admission.Configuration);
-        // 原预留已将主角revision与尝试号各推进一次；备用仍匹配同一原始只读快照。
-        RequireTagEvildomMember(db, tx, owner.Account, admission.Primary, checked(expected.Revision + 1));
+        // 主角使用本事务付款并预留后的实际版本；备用仍匹配原始只读快照。
+        RequireTagEvildomMember(db, tx, owner.Account, admission.Primary, reservedRevision);
         RequireTagEvildomMember(db, tx, owner.Account, admission.Standby, admission.Standby.Revision);
         var state = ReadTagEvildomState(db, tx, owner.Account,
             TagEvildomPeriod.At(DateTimeOffset.FromUnixTimeSeconds(admission.AdmittedAt)));

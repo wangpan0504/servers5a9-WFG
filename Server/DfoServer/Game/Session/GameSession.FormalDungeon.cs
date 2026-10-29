@@ -1026,15 +1026,14 @@ internal sealed partial class GameSession
             guildAdmission = repository.PrepareGuildDungeonEntry(owner, character.Id, installing.Entry.DungeonId, guildDungeons);
             if (guildAdmission is null) { LastFormalDungeonRejection = "guild-dungeon-unavailable"; return null; }
         }
-        // 训练币在所有入场票规划之后合并；原子入场失败时不会留下单独扣币。
+        // 训练币在所有入场票之后规划，独立表达费用，仍由原入场事务一并提交。
         var training = PrepareGuildTraining(character, entryItems);
         if (training is not null)
         {
-            entryItems = entryItems is null ? training.Inventory : entryItems.WithAfter(training.Inventory.After);
             installing = installing with { GuildTraining = training.Snapshot };
         }
         Character committed;
-        if (beastEntry || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
+        if (beastEntry || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             DungeonEntryCommit entryCommit;
@@ -1042,7 +1041,7 @@ internal sealed partial class GameSession
             {
                 entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                        prepared.Weekly,installing.GriefAdmission) { OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, Beast = beastAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
+                        prepared.Weekly,installing.GriefAdmission) { GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, Beast = beastAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
             }
             catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
             {
