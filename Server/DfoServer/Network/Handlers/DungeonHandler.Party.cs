@@ -161,6 +161,9 @@ internal sealed partial class DungeonHandler
                 await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(member.Actor.Character.Id), "party_selection_state", Guard);
             await PublishPartyHostAsync(context, notice.Members, Guard);
             RaidCombatProjection.Selection(context, Guard);
+            // 与修炼场指定直入、TAG/帝国15相同：城镇直入先发42B空27建立scene2，585之后、28/29之前；已在选图的不重复打开。
+            if (notice.Kind == PartyDungeonNoticeKind.RaidSelection && notice.SceneTransition)
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_direct_selection_scene", Guard);
             // 非零15已选定NPC副本，完成队伍场景投影即可，不重新打开普通副本列表。
             if (notice.Kind != PartyDungeonNoticeKind.RaidSelection && notice.Option == 0)
                 await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(notice.LegendDungeon,

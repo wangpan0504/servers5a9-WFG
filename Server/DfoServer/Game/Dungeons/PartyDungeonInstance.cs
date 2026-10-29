@@ -14,7 +14,7 @@ internal sealed record PartyDungeonNotice(PartyDungeonNoticeKind Kind, PartyMemb
     ushort Peer = 0, DfoServer.Game.Town.TownTravelReceipt? Travel = null,
     byte State = 0, byte Option = 0, QuestLifecycleReceipt? QuestScene = null, int LegendDungeon = 0, DfoServer.Game.Raids.AntonRaidBattleChange? RaidBattleChange = null,
     DfoServer.Game.Raids.RaidStageFactKind? RaidEvent = null,
-    EvildomWarView? WarView = null);
+    EvildomWarView? WarView = null, bool SceneTransition = false);
 
 internal sealed class PartySettlementCards
 {

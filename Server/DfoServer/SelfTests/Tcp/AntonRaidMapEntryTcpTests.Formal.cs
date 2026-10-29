@@ -101,6 +101,11 @@ internal static partial class AntonRaidMapEntryTcpTests
             peers[0].Send(15, new byte[4]);
             That(Read(peers[0]).Any(p => p.Opcode == 27), "原15零号打开安徒恩战况表场景");
             Read(peers[1]);
+            // 已由27进入选图的分队再发非零15只确认选择，不重复打开scene2。
+            peers[0].Send(15, BitConverter.GetBytes(210u));
+            var chosen = Read(peers[0]);
+            That(chosen.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }) && chosen.All(p => p.Opcode != 27) &&
+                Read(peers[1]).All(p => p.Opcode != 27), "选图内非零15不补27");
             // 末成员SQL失败不能留下首成员尝试号；另一分队随后可独立进入。
             fixture.Sql($"CREATE TRIGGER fail_formal_anton BEFORE UPDATE ON character_dungeon_state WHEN NEW.character_id={actors[1].Character} BEGIN SELECT RAISE(ABORT,'formal Anton rollback'); END");
             peers[0].Send(16, request); peers[0].Closed(); await workers[0].WaitAsync(TimeSpan.FromSeconds(5));
@@ -156,7 +161,15 @@ internal static partial class AntonRaidMapEntryTcpTests
                     "重试保留原Run及尝试号，不新增数据库提交");
             }
             peers[2].Send(15, BitConverter.GetBytes(210u));
-            That(Read(peers[2]).Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }), "原单人第二分队可沿非零15建立选择");
+            var direct = Read(peers[2]);
+            That(direct.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }), "原单人第二分队可沿非零15建立选择");
+            // 现场09:02城镇直发15(210)后无27，客户端停在TOWN；须先发与15零号现场相同的42B空27再接28/29。
+            int directState = direct.FindIndex(p => p is { Kind: 0, Opcode: 3 });
+            int directScene = direct.FindIndex(p => p is { Kind: 0, Opcode: 27 });
+            int directBoard = direct.FindIndex(p => p is { Kind: 0, Opcode: 585 });
+            That(direct.Count(p => p is { Kind: 0, Opcode: 27 }) == 1 && directState >= 0 && directState < directScene &&
+                (directBoard < 0 || directBoard < directScene), "城镇直入只补一次27，位于USER_STATE及585之后");
+            Bytes(direct[directScene].Body, new byte[42], "城镇直入27与15零号现场正文逐字节一致");
             peers[2].Send(16, request);
             That(Read(peers[2]).Any(p => p.Opcode == 29) && sessions[2].PartyDungeon != sessions[0].PartyDungeon &&
                 sessions[2].CurrentFormalDungeonScene()!.Entry.RaidEntry?.Squad == 2, "不同分队持独立Run，同属原Battle");
