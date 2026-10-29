@@ -1,4 +1,6 @@
 using static DfoServer.Testing.TestCheck;
+using System.Text.RegularExpressions;
+using PvfLib;
 using DfoServer.Game.Town;
 using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
@@ -12,22 +14,41 @@ namespace DfoServer;
 
 internal static class TownTravelTests
 {
-    public static void Run(TownCatalog towns, CharacterPreparation preparation)
+    public static void Run(TownCatalog towns, CharacterPreparation preparation, PvfArchive pvf)
     {
         int checks = Count;
 
         var completed = preparation.CompletedQuests.ToHashSet();
-        // 正式 PVF 在镇 17（SaintHorn）追加 Area5 时空之门·安魂曲（`Town/Sainthorn/TimeGateRequiemWR.map`，需 85 级、`[dungeon gate]` 26），
-        // 其余镇文件逐字节未变；基准计数随这份正式输入重钉，仍是精确等值，用于发现装载遗漏或未登记的资源变更。
+        // 两份已知输入只差镇17追加的Area5；按原始声明判分支，不能把loader漏项当作旧输入。
+        string saintHorn = pvf.ReadText("town/" + PvfScript.List(pvf.ReadText("town/town.lst"))[17]);
+        int[] declaredAreas = Regex.Matches(saintHorn, @"(?m)^\[area\]\s*(\d+)(?=\s|$)")
+            .Select(match => int.Parse(match.Groups[1].Value)).ToArray();
+        bool declaredRequiem = declaredAreas.Contains(5);
+        That(declaredAreas.SequenceEqual(Enumerable.Range(0, declaredRequiem ? 6 : 5)) &&
+            towns.Areas.Keys.Where(key => key.Item1 == 17).Select(key => (int)key.Item2).Order().SequenceEqual(declaredAreas),
+            "SaintHorn保留原始声明的全部区域，不能漏掉已声明的Area5或制造新区域");
+        if (declaredRequiem)
+        {
+            var declarations = Regex.Matches(saintHorn, @"(?ms)^\[area\]\s*5\s+`([^`]+)`(.*?)^\[/area\]");
+            That(declarations.Count == 1, "追加的安魂曲Area5必须有唯一完整声明");
+            string body = declarations[0].Groups[2].Value;
+            const string requiemPath = "map/town/sainthorn/timegaterequiemwr.map";
+            That(PvfArchive.NormalizePath("map/" + declarations[0].Groups[1].Value) == requiemPath &&
+                PvfScript.Number(PvfScript.Block(body, "permission"), "need level", 1) == 85 &&
+                Regex.IsMatch(body, @"`\[dungeon gate\]`\s+26(?=\s|$)") && PvfScript.Block(body, "phase").Length == 0 &&
+                towns.Areas[(17, 5)] is { Level: 85, DungeonWorldMap: 26, Phases.Length: 0, Default.Error: null } requiem &&
+                requiem.Default.Path == requiemPath,
+                "只认可原声明与正式目录一致的85级world26安魂曲Area5，无相位且地图可读");
+        }
         var originalAreas = towns.Areas.Where(row => row.Key.Item1 != 51).ToArray();
-        That(originalAreas.Length == 344 && originalAreas.Select(row => row.Key.Item1).Distinct().Count() == 65,
+        That(originalAreas.Length == (declaredRequiem ? 344 : 343) && originalAreas.Select(row => row.Key.Item1).Distinct().Count() == 65,
             "all original matching PVF town/area rows retained");
         That(!towns.Areas.ContainsKey((51,0)) || towns.Areas.Keys.Where(key => key.Item1 == 51).Select(key => key.Item2).Order().SequenceEqual(new byte[] {0,1,2}),
             "indexed Beast town adds all three original areas without replacing another town");
         That(towns.Areas.ContainsKey((124, 0)) && towns.Areas.ContainsKey((1, 0)) && towns.Areas.ContainsKey((60, 1)), "no main-town or area-number whitelist");
         var maps = towns.Areas.Values.SelectMany(a => a.Phases.Prepend(a.Default)).DistinctBy(m => m.Path).ToArray();
         var originalMaps = maps.Where(map => !map.Path.StartsWith("map/town/beast_centralpark/",StringComparison.OrdinalIgnoreCase)).ToArray();
-        That(originalMaps.Length == 353 && maps.Count(m => m.Error is not null) == 1, "all original phase maps retained and missing optional resource exposed");
+        That(originalMaps.Length == (declaredRequiem ? 353 : 352) && maps.Count(m => m.Error is not null) == 1, "all original phase maps retained and missing optional resource exposed");
         That(maps.Where(map => map.Path.StartsWith("map/town/beast_centralpark/",StringComparison.OrdinalIgnoreCase)).All(map => map.Error is null),
             "newly indexed Beast town maps must load successfully");
         That(towns.Admission(new(119, 1, 0, 0), new(119, 0, 450, 234), 95, completed).StartsWith("map-resource-missing:"), "missing map never becomes a fabricated region");
@@ -85,6 +106,6 @@ internal static class TownTravelTests
             "地图传送门 PathKind 6 按 warpgate 目标放行，不受存档返回点限制 原因=" + portalPlan.Reason);
         var doorPlan = TownTravel.Plan(inRoom, new(38, 0, 622, 196, 5, 38, 1, 0), towns, quests);
         That(!doorPlan.Accepted && doorPlan.Reason == "room-return-mismatch", "PathKind 0 仍绑定存档返回点 原因=" + doorPlan.Reason);
-        Console.WriteLine($"PASS {Count - checks} all-town assertions; towns=65, areas=343, maps=352");
+        Console.WriteLine($"PASS {Count - checks} all-town assertions; towns={originalAreas.Select(row => row.Key.Item1).Distinct().Count()}, areas={originalAreas.Length}, maps={originalMaps.Length}");
     }
 }

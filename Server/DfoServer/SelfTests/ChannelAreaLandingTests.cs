@@ -13,7 +13,7 @@ namespace DfoServer;
 
 internal static class ChannelAreaLandingTests
 {
-    public static void Run(TownCatalog towns)
+    public static void Run(TownCatalog towns, PvfArchive pvf)
     {
         int before = Count;
         var none = new HashSet<int>();
@@ -260,12 +260,26 @@ internal static class ChannelAreaLandingTests
         // 落点由地图首块可走矩形中心给出（用户 2026-10-28 实测“走进中央公园，一张地图都没有”）。
         var beastDone = new HashSet<int> { 5927 };
         var beastLanding = ChannelAreaLanding.RoomExit(towns, beastEntry, towns.Room, 95, beastDone);
-        That(beastLanding is { Town: 51, Area: 2 } && towns.IsPosition(beastLanding, beastDone),
-            "完成魔兽引导后共享房间出口落到带选图区域的等待区51/2，实际=" + beastLanding);
-        That(towns.Areas[(51, 2)].DungeonWorldMap == 46,
-            "魔兽等待区51/2声明 [dungeon gate] 46，五个气球5335–5339挂在该世界地图上");
-        That(towns.Areas[(51, 2)].Default.DungeonGates.Length > 0 && towns.Areas[(51, 1)].Default.DungeonGates.Length == 0,
-            "只有等待区51/2的地图含 -1/-1 选图区域，中央公园广场51/1没有");
+        // 分支依据原始城镇登记；已登记51但loader漏组时必须走原正向并失败。
+        if (PvfScript.List(pvf.ReadText("town/town.lst")).ContainsKey(51))
+        {
+            That(towns.Areas.Keys.Where(key => key.Item1 == 51).Select(key => key.Item2).Order().SequenceEqual(new byte[] { 0, 1, 2 }),
+                "原始城镇索引已登记51时必须完整装载0/1/2三区，不能把漏组降为缺输入");
+            That(beastLanding is { Town: 51, Area: 2 } && towns.IsPosition(beastLanding, beastDone),
+                "完成魔兽引导后共享房间出口落到带选图区域的等待区51/2，实际=" + beastLanding);
+            That(towns.Areas[(51, 2)].DungeonWorldMap == 46,
+                "魔兽等待区51/2声明 [dungeon gate] 46，五个气球5335–5339挂在该世界地图上");
+            That(towns.Areas[(51, 2)].Default.DungeonGates.Length > 0 && towns.Areas[(51, 1)].Default.DungeonGates.Length == 0,
+                "只有等待区51/2的地图含 -1/-1 选图区域，中央公园广场51/1没有");
+        }
+        else
+        {
+            var beastDecision = ChannelAreaLanding.Decide(towns, beastEntry, 95, beastDone);
+            That(!towns.Areas.Keys.Any(key => key.Item1 == 51) && beastDecision is { Spot: null, Reason: "town-not-in-catalog" } &&
+                beastLanding is null,
+                "当前未登记魔兽城镇51时频道落点精确拒绝，不能从物理地图猜造51/2或将普通返回地区当成魔兽落点");
+            Console.WriteLine("真实输入缺城镇51：未执行真实51/2落点正向；完整资源分支与合成Session正向另记");
+        }
         var tagChannel = script.Channels.Single(row => row.Number == 46);
         That(tagChannel.Type == 53 && tagChannel.Group == "[evildom_gathering]",
             "再战魔界46号频道保持独立type53与资源分组，不按频道编号猜普通语义");

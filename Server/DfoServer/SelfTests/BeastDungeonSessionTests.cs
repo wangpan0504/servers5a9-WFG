@@ -15,17 +15,27 @@ using static DfoServer.Testing.TestCheck;
 namespace DfoServer;
 
 // 在隔离文件库中走生产Session；合成角色与时钟不代表客户端点击或实机战斗。
-internal static class BeastDungeonSessionTests
+internal static partial class BeastDungeonSessionTests
 {
     public static void Run(TcpTestResources resources)
     {
+        using (var fixture = new BeastSessionFixture(resources)) Run(resources,fixture);
+        Run(resources,null);
+    }
+
+    static void Run(TcpTestResources resources, BeastSessionFixture? fixture)
+    {
+        var towns = fixture?.Towns ?? resources.Towns;
+        var itemCatalog = fixture?.Items ?? resources.ItemResources.Items;
+        Console.WriteLine(fixture is null ? "开始真实资源适用分支（缺输入不代表真实正向通过）" : "开始显式合成完整十五房/六阶段Session及Party（非真实PVF正向、非实机）");
+        int enteredCount = 0, unavailableCount = 0;
         int before = Count;
         string root = Path.Combine(Path.GetTempPath(), "S5A9-beast-session-" + Guid.NewGuid().ToString("N"));
         var owners = new AccountOwners();
         var repository = new CharacterRepository(Path.Combine(root,"game.db"),resources.Quests);
-        var catalog = SelfTestCatalogs.Dungeons(resources.Archive);
-        var rooms = SelfTestCatalogs.Rooms(resources.Archive);
-        var drops = SelfTestCatalogs.MonsterDrops(resources.Archive);
+        var catalog = fixture?.Dungeons ?? SelfTestCatalogs.Dungeons(resources.Archive);
+        var rooms = fixture?.Rooms ?? SelfTestCatalogs.Rooms(resources.Archive);
+        var drops = fixture?.Drops ?? SelfTestCatalogs.MonsterDrops(resources.Archive);
         var kills = SelfTestCatalogs.KillExperience(resources.Archive);
         try
         {
@@ -33,8 +43,15 @@ internal static class BeastDungeonSessionTests
             {
                 bool gateway = BeastDungeonRotation.IsGateway((uint)dungeon);
                 using var owner = owners.Acquire("beast-session-"+dungeon,()=>{});
-                var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
-                    resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeon));
+                var area = towns.Areas.Values.FirstOrDefault(row => row.DungeonWorldMap is { } world &&
+                    towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeon));
+                if (area is null)
+                {
+                    That(fixture is null && gateway,"合成完整夹具和真实普通入口必须有选图几何");
+                    VerifyMissingGatewayEntrance(resources,catalog,dungeon);
+                    unavailableCount++;
+                    continue;
+                }
                 var completed = new HashSet<int>(area.Quests) { 5927 };
                 if (area.AnyQuests.Length != 0) completed.Add(area.AnyQuests[0]);
                 completed.UnionWith(area.Map(completed).DungeonGates.First(gate => gate.Conditions.Length == 0).Quests);
@@ -47,23 +64,23 @@ internal static class BeastDungeonSessionTests
                 var at = new DateTimeOffset(2026,10,26,12,0,0,TimeSpan.FromHours(8));
                 while (!BeastDungeonRotation.Contains(BeastDungeonRotation.ServiceDay(at),dungeon)) at=at.AddDays(1);
                 var clock = new DailyBoosterTestClock(at);
-                var session = new GameSession(repository,resources.Towns,owner,questCatalog:resources.Quests,timeProvider:clock,
-                    items:resources.ItemResources.Items,goldLimits:resources.ItemResources.GoldLimits,pieces:resources.ItemResources.EpicPieces,
+                var session = new GameSession(repository,towns,owner,questCatalog:resources.Quests,timeProvider:clock,
+                    items:itemCatalog,goldLimits:resources.ItemResources.GoldLimits,pieces:resources.ItemResources.EpicPieces,
                     entry:gateway ? new(new(2,49),40,"[beast]") : null);
                 session.Select(0,resumeTown:true); session.MarkReady();
                 if (gateway)
                 {
-                    var wrongChannel = new GameSession(repository,resources.Towns,owner,questCatalog:resources.Quests,timeProvider:clock,
-                        items:resources.ItemResources.Items,goldLimits:resources.ItemResources.GoldLimits);
+                    var wrongChannel = new GameSession(repository,towns,owner,questCatalog:resources.Quests,timeProvider:clock,
+                        items:itemCatalog,goldLimits:resources.ItemResources.GoldLimits);
                     wrongChannel.Select(0,resumeTown:true); wrongChannel.MarkReady();
                     That(wrongChannel.EnterFormalDungeon((uint)dungeon,0,0,catalog,rooms,drops,
-                        items:resources.ItemResources.Items,pieces:resources.ItemResources.EpicPieces,beastMode:true) is null &&
+                        items:itemCatalog,pieces:resources.ItemResources.EpicPieces,beastMode:true) is null &&
                         wrongChannel.LastFormalDungeonRejection == "beast-gateway-channel-and-mode-required",
                         "裸Session不能绕过专属频道门禁");
                     int closed = Enumerable.Range(1,5).First(days=>!BeastDungeonRotation.Contains(BeastDungeonRotation.ServiceDay(at.AddDays(days)),dungeon));
                     clock.Advance(TimeSpan.FromDays(closed));
                     That(session.EnterFormalDungeon((uint)dungeon,0,0,catalog,rooms,drops,
-                        items:resources.ItemResources.Items,pieces:resources.ItemResources.EpicPieces,beastMode:true) is null &&
+                        items:itemCatalog,pieces:resources.ItemResources.EpicPieces,beastMode:true) is null &&
                         repository.LoadBeastDungeonUsed(owner,session.Selected!.Id,BeastDungeonRotation.ServiceDay(clock.GetUtcNow()),dungeon)==0,
                         "非开放日专属入口拒绝且不扣次");
                     clock.Advance(TimeSpan.FromDays(-closed));
@@ -73,9 +90,23 @@ internal static class BeastDungeonSessionTests
                 // 兼容入口的 PVF 难度表只有 `1 1 1 0 0`，客户端发 5 会被服务端以 difficulty-unsupported 拒绝，
                 // 这一点在没有第六按钮实机包之前不改行为。
                 byte difficulty = gateway ? (byte)2 : (byte)4;
+                string unchanged = JsonSerializer.Serialize(repository.LoadCharacter(owner,0));
                 var scene = session.EnterFormalDungeon((uint)dungeon,0,difficulty,catalog,rooms,drops,
-                    items:resources.ItemResources.Items,pieces:resources.ItemResources.EpicPieces,beastMode:true);
-                That(scene is not null,"真实魔兽Session完整路线准备及原子入场："+dungeon+" / 难度"+difficulty+" / "+session.LastFormalDungeonRejection);
+                    items:itemCatalog,pieces:resources.ItemResources.EpicPieces,beastMode:true,
+                    prepareDrops:fixture?.PrepareDrops);
+                if (fixture is null && SourceUnavailable(catalog,dungeon))
+                {
+                    string reason = gateway ? "entry-plan:beast-gateway-source-unavailable" : "entry-plan:beast-layout-resource-unavailable";
+                    That(scene is null && session.LastFormalDungeonRejection == reason &&
+                        JsonSerializer.Serialize(repository.LoadCharacter(owner,0)) == unchanged &&
+                        session.CurrentFormalDungeonScene() is null && session.Phase == SessionPhase.Town &&
+                        repository.LoadBeastDungeonUsed(owner,session.Selected!.Id,BeastDungeonRotation.ServiceDay(at),dungeon)==0,
+                        "真实坏兽布局经正式Session精确拒绝，不改角色、资产、疲劳、attempt或次数："+dungeon);
+                    unavailableCount++;
+                    continue;
+                }
+                enteredCount++;
+                That(scene is not null,"正式魔兽Session完整路线准备及原子入场："+dungeon+" / 难度"+difficulty+" / "+session.LastFormalDungeonRejection);
                 That(scene!.Entry.BeastMode && scene.Entry.Maze.MapSpecification!.Count == 15 &&
                     scene.Entry.Maze.StaticTopology.Supported && session.CompleteFormalDungeonLoading() is not null,
                     "五张魔兽图均通过正式Run及地图加载，不能只证明资源能打开");
@@ -132,13 +163,22 @@ internal static class BeastDungeonSessionTests
             }
         }
         finally { Directory.Delete(root,true); }
-        RunParty(resources,310);
-        RunParty(resources,BeastDungeonRotation.FirstGatewayDungeonId);
-        Console.WriteLine($"PASS {Count-before} 魔兽正式Session资源、加载与次数断言（非实机）");
+        RunParty(resources,310,fixture);
+        RunParty(resources,BeastDungeonRotation.FirstGatewayDungeonId,fixture);
+        if (fixture is not null)
+            That(enteredCount==10 && unavailableCount==0,"合成完整输入必须覆盖十入口及原单人/组队六阶段成功体");
+        Console.WriteLine($"PASS {Count-before} 魔兽Session {(fixture is null ? "真实资源适用分支" : "显式合成完整十五房/六阶段单人及组队")}断言（非实机）；成功入口{enteredCount}，缺依赖拒绝{unavailableCount}");
     }
 
-    static void RunParty(TcpTestResources resources, int dungeon)
+    static void RunParty(TcpTestResources resources, int dungeon, BeastSessionFixture? fixture)
     {
+        var towns = fixture?.Towns ?? resources.Towns;
+        var itemCatalog = fixture?.Items ?? resources.ItemResources.Items;
+        if (fixture is null && BeastDungeonRotation.IsGateway((uint)dungeon) && !towns.Areas.ContainsKey((51,2)))
+        {
+            Console.WriteLine("真实魔兽组队正向未执行：缺少已登记51/2入口；显式合成组队正向另行验证");
+            return;
+        }
         bool gateway=BeastDungeonRotation.IsGateway((uint)dungeon);
         string root = Path.Combine(Path.GetTempPath(), "S5A9-beast-party-" + Guid.NewGuid().ToString("N"));
         string path = Path.Combine(root,"game.db");
@@ -148,15 +188,15 @@ internal static class BeastDungeonSessionTests
         try
         {
             var repository = new CharacterRepository(path,resources.Quests);
-            var catalog = SelfTestCatalogs.Dungeons(resources.Archive);
-            var rooms = SelfTestCatalogs.Rooms(resources.Archive);
-            var drops = SelfTestCatalogs.MonsterDrops(resources.Archive);
+            var catalog = fixture?.Dungeons ?? SelfTestCatalogs.Dungeons(resources.Archive);
+            var rooms = fixture?.Rooms ?? SelfTestCatalogs.Rooms(resources.Archive);
+            var drops = fixture?.Drops ?? SelfTestCatalogs.MonsterDrops(resources.Archive);
             var kills = SelfTestCatalogs.KillExperience(resources.Archive);
             var items = resources.ItemResources;
-            var dropPolicy = new DungeonResourceDropPolicy(SelfTestCatalogs.DropRules(resources.Archive),items.DungeonDropItems,
-                drops.Get,items.Items.Get,items.DungeonSpecialDrops);
-            var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
-                resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeon));
+            var dropPolicy = fixture is null ? new DungeonResourceDropPolicy(SelfTestCatalogs.DropRules(resources.Archive),items.DungeonDropItems,
+                drops.Get,items.Items.Get,items.DungeonSpecialDrops) : null;
+            var area = towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
+                towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeon));
             var completed = new HashSet<int>(area.Quests) {5927};
             if (area.AnyQuests.Length != 0) completed.Add(area.AnyQuests[0]);
             completed.UnionWith(area.Map(completed).DungeonGates.First(gate => gate.Conditions.Length == 0).Quests);
@@ -172,8 +212,8 @@ internal static class BeastDungeonSessionTests
                 var learning = SkillPointLedger.Synchronize(0,0,95,candidate.InitialLearning with
                     {Experience=resources.Growth.GetLevelStartExperience(95)},resources.Learning);
                 repository.Create(owner,candidate with {Level=95,AcceptedStoryLevel=95,CompletedQuests=completed.ToArray(),InitialLearning=learning});
-                var session = new GameSession(repository,resources.Towns,owner,questCatalog:resources.Quests,timeProvider:clocks[i],
-                    items:resources.ItemResources.Items,goldLimits:resources.ItemResources.GoldLimits,pieces:resources.ItemResources.EpicPieces,
+                var session = new GameSession(repository,towns,owner,questCatalog:resources.Quests,timeProvider:clocks[i],
+                    items:itemCatalog,goldLimits:resources.ItemResources.GoldLimits,pieces:resources.ItemResources.EpicPieces,
                     entry:gateway ? new(new(2,49),40,"[beast]") : null);
                 session.Select(0,resumeTown:true); session.MarkReady(); return session;
             }).ToArray();
@@ -192,12 +232,21 @@ internal static class BeastDungeonSessionTests
                 using var command = db.CreateCommand(); command.CommandText=sql; command.ExecuteNonQuery();
             }
             PartyDungeonNotice[] Enter(Action? prepared=null) => service.Enter(sessions[0],(uint)dungeon,gateway ? (byte)0 : (byte)4,catalog,rooms,drops,
-                resources.ItemResources.Items,resources.ItemResources.EpicPieces,entry =>
+                itemCatalog,resources.ItemResources.EpicPieces,entry =>
                 {
                     prepared?.Invoke();
-                    return dropPolicy.PrepareEntry(entry);
+                    return fixture is null ? dropPolicy!.PrepareEntry(entry) : fixture.PrepareDrops(entry);
                 },beastMode:true);
             string initial = State();
+            if (fixture is null && SourceUnavailable(catalog,dungeon))
+            {
+                string reason = gateway ? "entry-plan:beast-gateway-source-unavailable" : "entry-plan:beast-layout-resource-unavailable";
+                That(Enter().Length==0 && sessions[0].LastFormalDungeonRejection==reason && State()==initial && Uncharged() &&
+                    sessions.All(session=>session.Phase==SessionPhase.MapSelect && session.CurrentFormalDungeonScene() is null && session.PartyDungeon is null),
+                    "真实坏兽布局经组队准备精确拒绝，全员角色、资产、疲劳、attempt和次数不变");
+                Console.WriteLine("真实魔兽组队六阶段正向未执行：源布局缺资源；已验证原子拒绝，显式合成正向另报");
+                return;
+            }
             bool advanced=false;
             That(Enter(()=> {if(!advanced){advanced=true;clocks[0].Advance(TimeSpan.FromSeconds(1));}}).Length==0 &&
                 State()==initial && Uncharged(),"准备中跨06:00时全队拒绝，次数与角色状态均不写入");

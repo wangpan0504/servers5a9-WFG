@@ -45,8 +45,9 @@ internal static class EvildomWarTcpTests
         That(academy.Mazes is [var academyMaze] && academyMaze.Width == 3 && academyMaze.Height == 2 &&
             academyMaze.MapSpecification!.Select(map => map.Id).SequenceEqual([500095, 500096, 500097, 500098]),
             "5424顶层完整布局兼容解析，尺寸与四张地图均保持真实资源");
+        // 固定本组业务时钟，保留全队1671整包精确断言；实际发送跨秒不应改变同一战况的测试预期。
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "evildom-war"), resources: resources, gm: true,
-            evildomHiddenDraw: _ => 0);
+            evildomHiddenDraw: _ => 0, clock: new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow));
         await fixture.StartAsync();
         That(DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out var fatigueMode) &&
             fatigueMode == "OK {\"infiniteFatigue\":false}", "魔界大战资格与扣费回归显式关闭开发无限疲劳");
@@ -172,7 +173,8 @@ internal static class EvildomWarTcpTests
                 }
                 int dungeon = mode == 0 ? 5420 : mode == 1 ? 5426 : 5440;
                 That(started.All(rows => rows.Single(packet => packet is { Kind: 0, Opcode: 1671 }).Body is { Length: 45 } body &&
-                    body[0] == 2 && body[1] == mode && U32(body, 6) == 5 && U32(body, 10) == dungeon), "1671先安装本模式五个真实PVF副本，客户端右侧面板可选");
+                    body[0] == 2 && body[1] == mode && U32(body, 2) == catalog.LimitTime &&
+                    U32(body, 6) == 5 && U32(body, 10) == dungeon), "1671先安装本模式五个真实PVF副本，客户端右侧面板可选");
                 var info = started[0].Single(packet => packet is { Kind: 0, Opcode: 1671 }).Body;
                 int[] stageOrder = scenario == "hard-solo"
                     ? [..Enumerable.Range(0, 4).Where(index => info[15 + index * 7] < 2), 4]
@@ -438,11 +440,11 @@ internal static class EvildomWarTcpTests
         That(Drain(leader).Any(packet => packet is { Kind: 0, Opcode: 9 }), "切换引导仍发送本人完整名册");
         // 同屏公告也必须移除原普通队伍；仅过滤显式查询会留下旧行。
         Observe(3);
-        Query(0);
+        Query(0, 2, send: true);
         foreach (ushort mode in new ushort[] { 0, 1 })
         {
             leader.Send(12, Information(mode)); Drain(leader);
-            Query(1);
+            Query(1, mode);
         }
 
         TcpPeer Participant(string account, string name)
@@ -472,12 +474,16 @@ internal static class EvildomWarTcpTests
             }
             throw new InvalidOperationException("FAIL 队伍目录公告未收敛");
         }
-        void Query(ushort count)
+        void Query(ushort count, ushort mode, bool send = false)
         {
-            byte[] request = new byte[58]; request[2] = 1; request[24] = 5;
-            BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(15), observer.Id);
-            "GuideDirectory"u8.CopyTo(request.AsSpan(26));
-            observer.Send(1404, request);
+            // 1404订阅会随队伍变化主动刷新；模式切换只消费该刷新，不能再遗留一次同形查询。
+            if (send)
+            {
+                byte[] request = new byte[58]; request[2] = 1; request[24] = 5;
+                BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(15), observer.Id);
+                "GuideDirectory"u8.CopyTo(request.AsSpan(26));
+                observer.Send(1404, request);
+            }
             for (int i = 0; i < 100; i++)
             {
                 var packet = observer.Read();
@@ -486,6 +492,9 @@ internal static class EvildomWarTcpTests
                     That(U16(packet.Body) == count && U16(packet.Body, 2) == count &&
                         (count == 0 ? packet.Body.Length == 4 : U16(packet.Body, 4) == party),
                         "魔界寻找队伍过滤引导，普通困难仍列出，页数随过滤结果计算");
+                    // Directory头4B；固定14B标题的完整info块中KindArgument位于42（action0另有1B标记）。
+                    if (count != 0) That(packet.Body.Length >= 44 && U16(packet.Body, 42) == mode,
+                        "目录订阅刷新对应本次切换的普通或困难模式");
                     return;
                 }
                 That(packet.Kind == 0, "查询等待期间只消费目录和城镇通知");

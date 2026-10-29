@@ -77,4 +77,20 @@ internal static class ItemCatalogTests
         Console.WriteLine($"PASS {Count - checks} item catalog assertions");
 
     }
+
+    internal static Dictionary<int, string> ReadOriginalIndexDeclarations(PvfArchive pvf, string root, int minimumId)
+    {
+        PvfToken[] tokens = pvf.ReadTokens(root + "/" + root + ".lst");
+        That(tokens.Length > 0 && tokens.Length % 2 == 0, "原始物品列表包含完整ID/path声明对：" + root);
+        var declarations = new Dictionary<int, string>(tokens.Length / 2);
+        for (int index = 0; index < tokens.Length; index += 2)
+        {
+            if (tokens[index].Type != 0 || tokens[index].Value < minimumId || tokens[index + 1].Type != 6)
+                throw new InvalidOperationException("FAIL 原始物品列表声明类型：" + root + " / " + index);
+            string path = PvfArchive.NormalizePath(root + "/" + pvf.ResolveString(tokens[index + 1].Value));
+            if (!declarations.TryAdd(tokens[index].Value, path))
+                throw new InvalidOperationException("FAIL 原始物品列表重复ID：" + root + " / " + tokens[index].Value);
+        }
+        return declarations;
+    }
 }
