@@ -1,6 +1,7 @@
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Network.Builders.Inventory;
@@ -269,11 +270,13 @@ internal static partial class TownPackets
         // 0/356 -> 023A0000 reads a raw 30000-byte table through 03BE25C0.
         byte[] body = new byte[30004];
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, 30000);
+        var done = new HashSet<int>();
         foreach (int id in character.CompletedQuests.Concat(character.AccountCompletedQuests))
         {
             if (id is <= 0 or >= 30000)
                 throw new InvalidDataException("Client quest table bounds");
             body[4 + id] = 1;
+            done.Add(id);
         }
         foreach (var (id,answer) in character.QuestAnswers.Concat(character.AccountQuestAnswers))
         {
@@ -287,6 +290,9 @@ internal static partial class TownPackets
         // 真实记录及回答校验后才补显示标记，不写存档、不授予奖励或入场资格。
         if (body[4 + 13700] == 0)
             body[4 + 13700] = 1;
+        // 时空裂缝气球读同一张完成表的 [is clear quest]。区域深渊任务已完成后补外传显示位，
+        // 与 13700 一样不写存档；选图/入场资格见 InfernoQuestUnlock。
+        InfernoQuestUnlock.ApplyDisplayBits(body, done);
         return body;
     }
 

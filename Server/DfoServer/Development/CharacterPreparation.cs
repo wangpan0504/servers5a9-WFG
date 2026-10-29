@@ -1,6 +1,7 @@
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.Game.Skills;
 using System.Text.RegularExpressions;
 using PvfLib;
@@ -88,8 +89,9 @@ internal sealed record CharacterPreparation(
 
         Collect(pvf.ReadText("etc/dock/docksysteminfo.etc"));
         int[] mapQuests = references.Where(scripts.ContainsKey).Order().ToArray();
-        var complete = main.Concat(mapQuests).Concat(jobs).ToHashSet();
+        var complete = main.Concat(mapQuests).Concat(jobs).Concat(InfernoQuestUnlock.PreparationQuestIds).ToHashSet();
         // Unlock tasks can be side/episode quests; include their actual prerequisite chain.
+        // 深渊派对与时空裂缝外传不在史诗/地图闭包内，离线剑影需显式纳入后才有深渊页与裂缝气球。
         var pending = new Queue<int>(complete);
         while (pending.TryDequeue(out int id))
             foreach (int prerequisite in Integers(Section(scripts[id], "pre required quest")))

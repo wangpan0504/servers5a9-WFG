@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text.RegularExpressions;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
 using PvfLib;
@@ -34,6 +35,14 @@ internal static class WorldMapHoverTests
         BinaryPrimitives.WriteUInt32LittleEndian(history, 30000);
         history[4 + 13700] = 1;
         Bytes(TownPackets.CompletedQuests(character), history, "空历史只增加月轮山显示标记，不解锁其他节点");
+        foreach (var (inferno, hell) in InfernoQuestUnlock.Pairs)
+        {
+            var hellOnly = character with { CompletedQuests = [hell] };
+            byte[] hellHistory = TownPackets.CompletedQuests(hellOnly);
+            That(hellHistory[4 + hell] == 1 && hellHistory[4 + inferno] == 1 && hellHistory[4 + 13700] == 1 &&
+                hellOnly.CompletedQuests.SequenceEqual([hell]),
+                "完成区域深渊任务后补对应时空裂缝外传显示位，不写入角色存档 " + hell);
+        }
         var progressed = character with
         {
             CompletedQuests = [3616, 3622], AccountCompletedQuests = [100],

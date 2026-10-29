@@ -925,8 +925,8 @@ internal static partial class FormalDungeonTcpTests
             peer.Select(slot, prepared: true);
             var history = peer.CompletedQuestHistory;
             That(history.Length == 30004 && U32(history) == 30000 &&
-                Enumerable.Range(0, 30000).All(id => history[4 + id] == (id == 13700 || completed.Contains(id) ? 1 : 0)),
-                "GM转职后选角逐项恢复真实历史及月轮山显示位，严格核对全部30000位");
+                Enumerable.Range(0, 30000).All(id => history[4 + id] == (id == 13700 || InfernoQuestUnlock.Satisfied(id, completed) ? 1 : 0)),
+                "GM转职后选角逐项恢复真实历史、月轮山及时空裂缝外传显示位，严格核对全部30000位");
             EntryTown(peer);
             Enter(peer);
             Load(peer);

@@ -36,6 +36,12 @@ internal static class HellPartyEntryTests
                 "拒绝越界、重复或过长的队伍槽位名单");
         Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.Silent), [0, 9, 0, 0], "缺任务拒绝保持原生失败恢复，不发送次数上限0xAD");
         Bytes(DungeonPackets.HellPartyRejected(DungeonSelectionError.RequiredMaterials), [0, 17, 0, 0], "缺门票保留材料不足拒绝");
+        That(InfernoQuestUnlock.Satisfied(10110, new HashSet<int> { 2900 }) &&
+            InfernoQuestUnlock.Satisfied(10110, new HashSet<int> { 10110 }) &&
+            !InfernoQuestUnlock.Satisfied(10110, new HashSet<int>()) &&
+            !InfernoQuestUnlock.Satisfied(10110, new HashSet<int> { 6080 }) &&
+            InfernoQuestUnlock.Pairs.All(pair => InfernoQuestUnlock.Satisfied(pair.InfernoQuest, new HashSet<int> { pair.HellQuest })),
+            "区域深渊任务视为满足对应时空裂缝外传选图与入场");
     }
 
     internal static void Run(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources items,
@@ -236,15 +242,24 @@ internal static class HellPartyEntryTests
                 riftRetry.Read().Inventory.Items.All(row => row.Core.ItemId != 3330),
                 "时空裂缝「再次挑战」按深渊模式重开：新尝试号、再扣 30 张邀请函与 6 点疲劳：" + riftRetry.Session.LastFormalDungeonRejection);
         }
-        using (var riftNoInfernoQuest = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+        using (var riftByHellQuest = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
             new HashSet<int>(riftGate) { 2900 }.Order().ToArray(), position: riftPosition, items: [(3330, 30)]))
         {
-            var saved = riftNoInfernoQuest.Read();
-            That(riftNoInfernoQuest.Session.EnterFormalDungeon(7539, 0, 2, dungeons, rooms, pieces: items.EpicPieces, hellParty: true) is null &&
-                riftNoInfernoQuest.Session.LastFormalDungeonRejection == "selection-quest-required:10110" &&
-                QuestCompletionRepositoryTests.Same(saved, riftNoInfernoQuest.Read()),
-                // 世界地图同一副本声明 10110 为 [is clear quest]，会话在选图阶段就先按缺少的选图任务拒绝；入场阶段的 [inferno quest] 复查是第二道。
-                "未完成 [inferno quest] 10110 时无法进入时空裂缝（选图阶段即拒绝），不扣票也不改角色：" + riftNoInfernoQuest.Session.LastFormalDungeonRejection);
+            var riftReceipt = riftByHellQuest.Session.EnterFormalDungeon(7539, 0, 2, dungeons, rooms, pieces: items.EpicPieces, hellParty: true);
+            That(riftReceipt is not null && riftByHellQuest.Session.LastFormalDungeonRejection is null &&
+                riftReceipt.Entry.IsInfernoParty && riftReceipt.HellTicket == new HellPartyTicket(3330, 30) &&
+                riftByHellQuest.Read().CompletedQuests.Contains(2900) && !riftByHellQuest.Read().CompletedQuests.Contains(10110),
+                "完成区域 [hell quest] 2900 即满足 7539 选图与 [inferno quest]，不要求已持久化 10110：" +
+                riftByHellQuest.Session.LastFormalDungeonRejection);
+        }
+        using (var riftNoHellQuest = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
+            riftGate.Order().ToArray(), position: riftPosition, items: [(3330, 30)]))
+        {
+            var saved = riftNoHellQuest.Read();
+            That(riftNoHellQuest.Session.EnterFormalDungeon(7539, 0, 2, dungeons, rooms, pieces: items.EpicPieces, hellParty: true) is null &&
+                riftNoHellQuest.Session.LastFormalDungeonRejection == "selection-quest-required:10110" &&
+                QuestCompletionRepositoryTests.Same(saved, riftNoHellQuest.Read()),
+                "未完成区域深渊任务时时空裂缝仍按缺少的选图任务拒绝，不扣票也不改角色：" + riftNoHellQuest.Session.LastFormalDungeonRejection);
         }
         using (var riftPoor = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, false, 95,
             riftDone.Order().ToArray(), position: riftPosition, items: [(3330, 29)]))
