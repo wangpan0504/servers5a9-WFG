@@ -356,6 +356,9 @@ internal sealed partial class AntonRaidBattle
             {
                 // 候选集合属于机制规则；调用方必须给出已验证目标，本层不凭ID范围猜孵化场。
                 if (selectedDungeon is not { } selected || !current.Dungeons.ContainsKey(selected)) return null;
+                // 安徒恩候选必须来自本版HATCHERY INFO的显式DGN列表；前两列语义不在此猜测。
+                if (Kind == RaidKind.Anton && !script.Headers.Where(row => row.Tag == "[hatchery info]")
+                    .SelectMany(row => row.Values.Skip(2)).Any(value => value.Number == selected)) return null;
                 id = selected; next = RaidDungeonState.Open;
             }
             else return null;
