@@ -310,6 +310,17 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (request.Body.Length != 2 || request.Body[0] is not (1 or 2) || request.Body[1] > 3)
             return CommandResult.Unhandled;
         byte state = request.Body[0], option = request.Body[1];
+        // 魔界Ins战况表在未通关时也发送72{1,2}，不能要求先产生结算菜单资格。
+        if (state == 1 && option == (byte)DungeonResultOption.ReturnTown && context.Session.CanRetreatEvildomWar() &&
+            context.Session.PartyDungeon is { } warParty)
+        {
+            using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, warParty.Members);
+            var notices = warParty.RetreatEvildomWar(context.Session);
+            log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "evildom-war-retreat", option,
+                Accepted = notices.Length > 0, Party = warParty.Id });
+            await PartyDungeonProjection.PublishAsync(notices);
+            return CommandResult.Handled;
+        }
         // 帝国末轮已提交专用奖励，不创建普通经验/翻牌结算；原生结果菜单仍发送72。
         if (option == 2 && imperialArena is not null && context.Session.CurrentImperialArenaResult() is { } imperialResult)
         {

@@ -386,6 +386,21 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         return result;
     });
 
+    public PartyDungeonNotice[] RetreatEvildomWar(GameSession leader) => Execute(current =>
+    {
+        if (!current.Any(m => m.Slot == Leader && ReferenceEquals(m.Actor.Session, leader)) ||
+            leader.ReadEvildomWar() is not { } war || pendingDeath is not null || pendingScene is not null ||
+            current.Any(m => !m.Actor.Session.CanRetreatEvildomWar() ||
+                !ReferenceEquals(m.Actor.Session.ReadEvildomWar()?.Battle, war.Battle))) return [];
+        // 战况表撤退保留队伍与战役；全员按原退场事务提交后才释放各自Run和发布等待区。
+        var result = PartyDungeonService.Exit(store, current, PartyDungeonExitKind.EvildomWarRetreat);
+        if (result.Length == 0) return [];
+        foreach (var member in current) member.Actor.Session.RemovePartyDungeon(this);
+        members = [];
+        ClearCards();
+        return result;
+    });
+
     public PartyDungeonNotice[] Detach(GameSession session)
     {
         ushort removed;

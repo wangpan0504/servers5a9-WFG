@@ -225,11 +225,64 @@ internal static class EvildomWarTcpTests
                     foreach (var peer in peers) GuildTrainingEntryTcpTests.CheckCoins(fixture, peer.Id, 19);
                 That(fixture.Snapshot() != assets && peers.All(peer => fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[30L]]),
                     "重复16和加载不再次收费，不按房间扣魔界大战疲劳");
+                WirePacket[][] RetreatAndReenter(int stage)
+                {
+                    string checkpointSql = "SELECT battle_id,deadline,checkpoint_json FROM evildom_war_battles WHERE battle_id=" +
+                        "(SELECT battle_id FROM character_evildom_war_seats WHERE character_id=$p0)";
+                    var saved = JsonSerializer.Deserialize<EvildomWarCheckpoint>((string)fixture.Query(checkpointSql, leader.Id)[0][2])!;
+                    string beforeRetreat = fixture.Snapshot();
+                    string beforeCheckpoint = fixture.Snapshot(checkpointSql, leader.Id);
+                    leader.Send(72, [2, 2]);
+                    leader.Send(72, [1, 0]);
+                    if (peers.Count > 1) peers[1].Send(72, [1, 2]);
+                    That(All(peers.Count > 1 ? peers[1] : leader).All(rows => !rows.Any(packet => packet.Opcode is 24 or 28 or 29 or 72)) &&
+                        fixture.Snapshot() == beforeRetreat && fixture.Snapshot(checkpointSql, leader.Id) == beforeCheckpoint,
+                        "战斗菜单焦点、非撤退选项及非队长不能结束原副本或修改战况");
+                    leader.Send(72, [1, 2]);
+                    var returned = All();
+                    That(returned.All(rows => rows.Any(packet => packet is { Kind: 1, Opcode: 72, Body: [1, 1, 2] }) &&
+                            rows.Any(packet => packet is { Kind: 0, Opcode: 3 }) && rows.Any(packet => packet is { Kind: 0, Opcode: 24 }) &&
+                            Array.FindIndex(rows, packet => packet.Opcode == 72) < Array.FindIndex(rows, packet => packet.Opcode == 24) &&
+                            !rows.Any(packet => packet.Opcode is 34 or 35 or 1673)),
+                        "未通关魔界Ins撤退按ACK72和城镇场景返回全队，不伪造结算或奖励: " + scenario);
+                    var reopened = JsonSerializer.Deserialize<EvildomWarCheckpoint>((string)fixture.Query(checkpointSql, leader.Id)[0][2])!;
+                    That(reopened.View.BattleId == saved.View.BattleId && reopened.View.Deadline == saved.View.Deadline &&
+                        reopened.View.Hidden == saved.View.Hidden &&
+                        reopened.View.Dungeons.Select(row => row.State).SequenceEqual(saved.View.Dungeons.Select(row => row.State == 1 ? (byte)0 : row.State)) &&
+                        returned.All(rows => rows.Single(packet => packet is { Kind: 0, Opcode: 1671 }).Body[16 + stage * 7] == 0),
+                        "撤退只重开当前未完成图，保留原战役期限、已完成进度和王座封锁");
+                    string returnedCheckpoint = fixture.Snapshot(checkpointSql, leader.Id);
+                    leader.Send(72, [1, 2]);
+                    That(All().All(rows => !rows.Any(packet => packet.Opcode is 24 or 72 or 1671)) &&
+                        fixture.Snapshot(checkpointSql, leader.Id) == returnedCheckpoint,
+                        "等待区重复撤退不重复退场或推进战况版本");
+                    uint target = U32(info, 10 + stage * 7);
+                    leader.Send(15, BitConverter.GetBytes(target));
+                    That(All().All(rows => rows.Any(packet => packet is { Kind: 0, Opcode: 27 })),
+                        "撤退保留完整队伍，全员可以直接重选原图");
+                    var retrySelection = (byte[])selection.Clone();
+                    BinaryPrimitives.WriteUInt32LittleEndian(retrySelection, target);
+                    leader.Send(16, retrySelection);
+                    var retry = All();
+                    That(retry.All(rows => rows.Any(packet => packet.Opcode == 28) && rows.Any(packet => packet.Opcode == 29)) &&
+                        peers.All(peer => fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[30L]] &&
+                            fixture.Query("SELECT used FROM character_weekly_dungeon WHERE character_id=$p0 AND slot=7", peer.Id) is [[1L]] &&
+                            fixture.Query("SELECT daily_used,weekly_used FROM character_dungeon_incount WHERE character_id=$p0 AND dungeon=5428", peer.Id) is [[1L, 1L]]),
+                        "撤退重进创建全队新Run，不重复扣疲劳、日周次数或冒险团周统计");
+                    foreach (var peer in peers) { peer.Send(37, new byte[8]); All(peer); }
+                    return retry;
+                }
+                if (scenario is "hard-solo" or "guide") entered = RetreatAndReenter(stageOrder[0]);
                 if (scenario is "hard" or "guide" or "normal-solo" or "hard-solo")
                 {
                     for (int step = 0; step < stageOrder.Length; step++)
                     {
                         int stage = stageOrder[step];
+                        if (step == 1 && scenario is "hard" or "normal-solo")
+                        {
+                            foreach (var peer in peers) { peer.Send(37, new byte[8]); All(peer); }
+                            entered = RetreatAndReenter(stage);
+                        }
                         uint stageDungeon = U32(info, 10 + stage * 7);
                         var stageEntry = entered[0].Single(packet => packet is { Kind: 0, Opcode: 28 }).Body;
                         byte[] map = entered[0].Single(packet => packet is { Kind: 0, Opcode: 29 }).Body;
