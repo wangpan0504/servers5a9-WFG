@@ -80,6 +80,7 @@ internal static class AntonRaidResourceTests
             (Change("[CHECK DUNGEON STATE]", 1, 218), "phase-dungeon-reference-missing"),
             (Change("[CHECK TIMER END]", 1, 9), "phase-timer-reference-missing"),
             (Change("[CLEAR PHASE]", 0, "[FUTURE RULE]"), "unsupported-clause"),
+            (Change("[CLEAR PHASE]", 0, "[FAIL PHASE]"), "unsupported-clause"),
             (Change("[STATE REWARD]", 1, "future_reward"), "unsupported-reward"),
             (Change("[STATE REWARD]", 3, "unverified"), "unsupported-reward"),
             (Change("[STATE REWARD]", 4, 0), "unsupported-reward"),

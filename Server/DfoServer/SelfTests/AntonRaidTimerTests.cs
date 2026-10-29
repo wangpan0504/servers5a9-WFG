@@ -27,7 +27,11 @@ internal static class AntonRaidTimerTests
         That(script.Headers.Single(row => row.Tag == "[phase time over]").Values.Select(row => row.Number).SequenceEqual(new[] { 2400, 2400 }) &&
             script.Headers.Single(row => row.Tag == "[phase break time]").Values.Single().Number == 600,
             "PHASE TIME OVER与休息只读匹配2400/2400、600；秒制仅本服约定");
+        That(script.Phases[0].Dungeons.All(row => row.PartyMax == (row.Id == 216 ? 1 : 5)),
+            "匹配PVF的PARTY MAX原值216=1、其它P1图=5，不解释并发语义");
         foreach (int dungeon in new[] { 221, 222, 223, 224 }) Hatchery(dungeon);
+        PhaseReset();
+        PendingHatcheryAfterVolcano();
         TimeoutRetry();
 
         void Hatchery(int dungeon)
@@ -84,6 +88,52 @@ internal static class AntonRaidTimerTests
                 Clear(battle, actor, 220); Settle(battle, store); Rewards(battle);
                 int callbacks = clock.Callbacks; clock.Advance(3600);
                 That(clock.Callbacks == callbacks && errors.Count == 0, "Completed回收唯一租约，无孤儿回调");
+            }
+            finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        }
+
+        void PhaseReset()
+        {
+            var battle = Battle(new LukeRaidClockTests.Clock(), false);
+            Clear(battle, actor, 210); Clear(battle, actor, 213);
+            int token = battle.View.Deferred.Single(row => row.Value.Tag == "[reserve dungeon state]" && row.Value.DungeonId == 216).Key;
+            That(battle.SetMechanism(battle.Instance, battle.View.Revision, "[1phase fail]", 1) is not null,
+                "显式领域失败符号消费真实重置规则，不伪装timer原厂单位已证");
+            That(battle.View.Dungeons[210] == RaidDungeonState.Open && battle.View.Symbols["[210 dgn hp]"] == 4 &&
+                new[] { 211, 212, 213, 214, 215, 216 }.All(id => battle.View.Dungeons[id] == RaidDungeonState.Hide) &&
+                battle.View.Symbols["[dgn smoke open]"] == 0 && battle.View.Symbols["[1phase fail]"] == 0 &&
+                battle.View.Symbols["[kill all character]"] == 1 && battle.View.Timers.IsEmpty,
+                "P1失败重开HP4黑雾并取消旧图计时；强杀仅是符号，不冒充角色死亡");
+            That(battle.CompleteDeferred(battle.Instance, battle.View.Revision, token) is null,
+                "旧舰炮预留不能越过P1重置提前开图");
+            Clear(battle, actor, 210);
+            That(battle.View.Symbols["[213 dgn hp]"] == 2 && battle.View.Symbols["[215 dgn hp]"] == 2 &&
+                battle.View.Dungeons[213] == RaidDungeonState.Open && battle.View.Dungeons[215] == RaidDungeonState.Open,
+                "重新四次黑雾后恢复两条腿的声明HP，不能继承上轮已清腿");
+        }
+
+        void PendingHatcheryAfterVolcano()
+        {
+            var clock = new LukeRaidClockTests.Clock(); var store = new Store();
+            var battle = Battle(clock, false);
+            var service = new LukeRaidClocks(clock, store, (_, _) => { });
+            try
+            {
+                using var lease = service.Reserve(battle)!; lease.Activate();
+                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215); Settle(battle, store); Rewards(battle);
+                clock.Advance(180);
+                int token = battle.View.Deferred.Single(row => row.Value.Tag == "[open random hatchery]").Key;
+                Clear(battle, actor, 219);
+                var heart = battle.View;
+                That(!heart.Deferred.ContainsKey(token) && !heart.DeferredAnchors.ContainsKey(token) &&
+                    !heart.DeferredGenerations.ContainsKey(token), "火山hide撤销来自其timer的旧随机孵化待决及代次");
+                foreach (int dungeon in new[] { 221, 222, 223, 224 })
+                    That(battle.CompleteDeferred(battle.Instance, heart.Revision, token, dungeon) is null,
+                        "心脏已开放后不能消费旧随机待决重开孵化场");
+                clock.Advance(240); clock.FireQueued();
+                That(ReferenceEquals(heart, battle.View) && heart.Dungeons[220] == RaidDungeonState.Open &&
+                    new[] { 218, 219, 221, 222, 223, 224 }.All(id => heart.Dungeons[id] == RaidDungeonState.Hide),
+                    "火山关闭链优先于迟到机制输入与回调，心脏HP不被修改");
             }
             finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
         }
