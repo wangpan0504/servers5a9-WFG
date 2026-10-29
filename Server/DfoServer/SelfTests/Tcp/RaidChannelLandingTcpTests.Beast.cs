@@ -40,9 +40,42 @@ internal static partial class RaidChannelLandingTcpTests
                 "出门落点经真实网络提交为51/2，不通过SQL传送进选图");
         }
         else
+        {
             That(landingDecision.Reason is "town-not-in-catalog" or "no-standable-door" &&
                 fixture.Snapshot("SELECT town,area FROM characters WHERE id=$p0",peer.Id) == "[[38,1]]",
                 "缺少已登记可站等待区时留在共享房间，不猜落点：" + landingDecision.Reason);
+            // 尚无合法网关选图上下文，仍实际发送形状合法的入场帧，证明拒绝原因及零提交。
+            string[] missingLandingStateSql =
+            [
+                "SELECT * FROM characters ORDER BY id",
+                "SELECT * FROM character_inventory_items ORDER BY item_uid",
+                "SELECT * FROM character_fatigue ORDER BY character_id",
+                "SELECT * FROM character_dungeon_state ORDER BY character_id",
+                "SELECT * FROM character_beast_dungeon_entries ORDER BY character_id,day,dungeon_id",
+                "SELECT * FROM character_beast_dungeon_reservations ORDER BY character_id,instance_id",
+                "SELECT * FROM character_beast_stage_rewards ORDER BY character_id,instance_id,stage"
+            ];
+            var missingLandingBefore = missingLandingStateSql.Select(sql => fixture.Snapshot(sql)).ToArray();
+            byte[] missingLandingRequest = new byte[25];
+            BinaryPrimitives.WriteUInt32LittleEndian(missingLandingRequest,5335);
+            missingLandingRequest[9]=255; missingLandingRequest[10]=255;
+            peer.Send(16,missingLandingRequest); peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+            for (int index=0;index<missingLandingStateSql.Length;index++)
+                That(fixture.Snapshot(missingLandingStateSql[index]) == missingLandingBefore[index],
+                    "缺等待区的真实网关请求不改变角色、成本、疲劳、尝试号、次数、预约或阶段奖励：" + missingLandingStateSql[index]);
+            peer.Send(3,[1]); peer.Expect(1,3,[1]); peer.Closed();
+            await fixture.StopAsync();
+            var missingLandingRejections = fixture.Events().Where(row => row.GetProperty("Kind").GetString() == "formal_dungeon_entry")
+                .Select(row => row.GetProperty("Detail")).ToArray();
+            That(missingLandingRejections.Length > 0 && missingLandingRejections.All(detail =>
+                    !detail.GetProperty("Accepted").GetBoolean() && detail.GetProperty("Beast").GetBoolean() &&
+                    detail.GetProperty("CharacterId").GetInt32() == peer.Id &&
+                    detail.GetProperty("Request").GetProperty("DungeonIndex").GetUInt32() == 5335 &&
+                    detail.GetProperty("RejectReason").GetString() == "beast-gateway-channel-and-mode-required"),
+                "缺等待区的真实网关请求精确拒绝为beast-gateway-channel-and-mode-required，不以通用失败包替代原因");
+            Console.WriteLine("beast-gateway：缺等待区拒绝及零提交断言完成；完整六阶段正向链仍需已登记可站的51/2等待区，本分支不证明正向通过。");
+            return;
+        }
         // 专属频道保留独立资源，第一版每日入侵名单只发布到普通频道原31/39。
         peer.Expect(0,27,peer.SelectionNoticeBody());
         byte[] request = new byte[25];

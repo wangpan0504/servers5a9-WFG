@@ -29,7 +29,26 @@ internal static class BeastDungeonSelectionTests
             })
             {
                 using var owner = owners.Acquire($"beast-select-{type}-{qualified}-{town}", () => { });
-                var area = resources.Towns.Areas.Values.First(row => row.Town == town && row.DungeonWorldMap is not null);
+                var towns = resources.Towns;
+                var area = towns.Areas.Values.FirstOrDefault(row => row.Town == town && row.DungeonWorldMap is not null);
+                if (area is null)
+                {
+                    That(town == 51 && !towns.Areas.Values.Any(row => row.Town == 51),
+                        "仅兼容已证整座城镇51缺失，不吞其他选图资源错误");
+                    var landing = ChannelAreaLanding.Decide(towns, new(new(2, 49), 40, "[beast]"), 95, new HashSet<int> { 5927 });
+                    That(!towns.Areas.ContainsKey((51, 2)) && landing.Spot is null && landing.Reason == "town-not-in-catalog",
+                        "真实缺51/2时频道入口精确拒绝，不伪造正式落点");
+                    // 仅为原矩阵的51行提供显式合成城镇几何；不修改共享目录或真实PVF。
+                    var syntheticGate = new Location(51, 2, 100, 100);
+                    var syntheticMap = new TownMap("map/selftest-beast-selection/synthetic-town51.map",
+                        [new(new(0, 0, 200, 200), [], [])], [], false, [])
+                        { DungeonGates = [new(new(80, 80, 40, 40), [], [])] };
+                    area = new(51, 2, 1, [], [], [], syntheticGate, syntheticMap, [], []) { DungeonWorldMap = 46 };
+                    var areas = towns.Areas.ToDictionary(row => row.Key, row => row.Value);
+                    areas.Add((51, 2), area);
+                    towns = new(areas, towns.Room, towns.InitialReturn, towns.Dock, towns.RoomPortals, towns.NpcMoves, towns.DungeonMaps);
+                    Console.WriteLine("beast-selection: 真实51/2入口已验证拒绝；原矩阵51行使用显式合成城镇输入");
+                }
                 var done = new HashSet<int>(area.Quests) { 4840, 12829, 3779 };
                 if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
                 done.UnionWith(area.Map(done).DungeonGates.First(gate => gate.Conditions.Length == 0).Quests);
@@ -42,8 +61,11 @@ internal static class BeastDungeonSelectionTests
                 repository.Create(owner, candidate with { Level = 95, AcceptedStoryLevel = 95, CompletedQuests = done.ToArray(), InitialLearning = learning });
                 var clock = new DailyBoosterTestClock(new DateTimeOffset(2026, 10, 26, 5, 59, 59, TimeSpan.FromHours(8)));
                 var entry = new ChannelEntry(new(2, 1), type, "[normal]");
-                var session = new GameSession(repository, resources.Towns, owner, questCatalog: resources.Quests, entry: entry, timeProvider: clock);
+                var session = new GameSession(repository, towns, owner, questCatalog: resources.Quests, entry: entry, timeProvider: clock);
                 session.Select(0, resumeTown: true);
+                if (town == 51)
+                    That(session.Selected?.Position == towns.Room && !session.TownSnapshotResumed,
+                        "持久51位置在普通频道选角后归回共享房间；本行验证归回后的拒绝，不代表在51/2内选图");
                 That(session.CaptureBeastDungeonSelection() is null, "未就绪和非选图阶段不提供入侵名单");
                 session.MarkReady();
                 That(session.CaptureBeastDungeonSelection() is null, "城镇阶段不提供入侵名单");

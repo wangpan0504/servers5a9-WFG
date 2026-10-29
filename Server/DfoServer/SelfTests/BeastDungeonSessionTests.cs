@@ -40,6 +40,11 @@ internal static partial class BeastDungeonSessionTests
         var drops = fixture?.Drops ?? SelfTestCatalogs.MonsterDrops(resources.Archive);
         var kills = SelfTestCatalogs.KillExperience(resources.Archive);
         var actualStageMaps = new HashSet<int>();
+        int[] availableNativeDungeons = fixture is null
+            ? Enumerable.Range(310,5).Where(id=>!catalog.Get(id).BeastLayouts.Any(layout=>layout.ResourceError is not null)).ToArray()
+            : [];
+        var expectedStageMaps = availableNativeDungeons.SelectMany(id=>Enumerable.Range(0,2).SelectMany(encounter=>
+            Enumerable.Range(0,6).Select(stage=>ExpectedStage(id,encounter,stage).Map))).ToHashSet();
         try
         {
             CheckTicketPolicy(resources);
@@ -113,11 +118,12 @@ internal static partial class BeastDungeonSessionTests
                 if (fixture is null && SourceUnavailable(catalog,dungeon))
                 {
                     string reason = gateway ? "entry-plan:beast-gateway-source-unavailable" : "entry-plan:beast-layout-resource-unavailable";
+                    var expectedPhase = gateway ? SessionPhase.Town : SessionPhase.MapSelect;
                     That(scene is null && session.LastFormalDungeonRejection == reason &&
                         JsonSerializer.Serialize(repository.LoadCharacter(owner,0)) == unchanged &&
-                        session.CurrentFormalDungeonScene() is null && session.Phase == SessionPhase.Town &&
+                        session.CurrentFormalDungeonScene() is null && session.Phase == expectedPhase &&
                         repository.LoadBeastDungeonUsed(owner,session.Selected!.Id,BeastDungeonRotation.ServiceDay(at),dungeon)==0,
-                        "真实坏兽布局经正式Session精确拒绝，不改角色、资产、疲劳、attempt或次数："+dungeon);
+                        $"真实坏兽布局经正式Session精确拒绝，不改角色、资产、疲劳、attempt或次数：{dungeon} / phase={session.Phase}, expected={expectedPhase} / reason={session.LastFormalDungeonRejection}, expected={reason}");
                     unavailableCount++;
                     continue;
                 }
@@ -211,15 +217,28 @@ internal static partial class BeastDungeonSessionTests
                         "未清完六阶段时保留正式战斗阶段，允许继续寻找其余阶段房");
                 }
             }
-            if (fixture is null) That(actualStageMaps.Count == 60, "beast-dynamic:五图两种遭遇的全部六十阶段MAP经过实际加载与死亡链");
+            if (fixture is null)
+            {
+                That(actualStageMaps.SetEquals(expectedStageMaps),
+                    $"beast-dynamic:可用原图各两种遭遇的固定六阶段MAP全部经过实际加载与死亡链：实际{actualStageMaps.Count}，期望{expectedStageMaps.Count}");
+                if (availableNativeDungeons.Length == 5)
+                    That(actualStageMaps.Count == 60, "beast-dynamic:五图两种遭遇的全部六十阶段MAP经过实际加载与死亡链");
+                else
+                    Console.WriteLine($"真实魔兽原图{string.Join(',',Enumerable.Range(310,5).Except(availableNativeDungeons))}两种遭遇的六阶段正向未执行：源布局缺资源；可用原图已验证{expectedStageMaps.Count}/60阶段MAP，缺依赖精确拒绝另验");
+            }
         }
         finally { Directory.Delete(root,true); }
         RunParty(resources,310,fixture);
         if (fixture is null)
         {
             // 超时终局依赖真实六阶段MAP与指定Boss，合成夹具不承担该正向。
-            RunParty(resources,310,null, timeout: true, pendingBoss: true);
-            RunParty(resources,310,null, timeout: true, pendingBoss: false);
+            if (availableNativeDungeons.Contains(310))
+            {
+                RunParty(resources,310,null, timeout: true, pendingBoss: true);
+                RunParty(resources,310,null, timeout: true, pendingBoss: false);
+            }
+            else
+                Console.WriteLine("真实魔兽组队两个超时终局正向未执行：原图310源布局缺资源；正常组队调用保留精确原子拒绝验证");
         }
         RunParty(resources,BeastDungeonRotation.FirstGatewayDungeonId,fixture);
         if (fixture is not null)
@@ -248,9 +267,23 @@ internal static partial class BeastDungeonSessionTests
         var eventTicket = new InventoryItem(1, new(InventoryListType.Main, 121), new(BeastDungeonTicket.Event, ItemKind.Material, 1));
         var normalTicket = new InventoryItem(2, new(InventoryListType.Main, 122), new(BeastDungeonTicket.Ordinary, ItemKind.Material, 1));
         var both = InventorySnapshot.Empty with { Items = [eventTicket, normalTicket] };
-        That(resources.ItemResources.Items.Get(BeastDungeonTicket.Event).Kind == ItemKind.Material &&
-            resources.ItemResources.Items.Get(BeastDungeonTicket.Ordinary).Kind == ItemKind.Material,
-            "正式PVF两类魔兽票均为材料类");
+        var items = resources.ItemResources.Items;
+        foreach (int id in new[] { BeastDungeonTicket.Event, BeastDungeonTicket.Ordinary })
+        {
+            if (items.Contains(id))
+            {
+                That(items.Get(id).Kind == ItemKind.Material, "正式PVF已登记魔兽票为材料类：" + id);
+            }
+            else
+            {
+                That(!items.TryGet(id, out _), "缺登记魔兽票不能伪造可用模板：" + id);
+                bool rejected = false;
+                try { items.Get(id); }
+                catch (InvalidDataException error) when (error.Message == "PVF 物品不存在: " + id) { rejected = true; }
+                That(rejected, "缺登记魔兽票沿正式目录精确拒绝：" + id);
+                Console.WriteLine("真实魔兽票" + id + "缺登记；以下仅验证既有显式库存输入下的票策略，不代表生产票可用");
+            }
+        }
         That(BeastDungeonTicket.Plan(both, pieces, now) is { ChangedSlots.Length: 1 } preferred &&
             preferred.ChangedSlots[0] == eventTicket.Position, "活动票优先于普通票");
         That(BeastDungeonTicket.Plan(both with { Items = [normalTicket] }, pieces, now)?.ChangedSlots[0] == normalTicket.Position,

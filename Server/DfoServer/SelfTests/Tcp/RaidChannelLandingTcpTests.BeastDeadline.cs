@@ -12,7 +12,8 @@ namespace DfoServer.Testing;
 internal static partial class RaidChannelLandingTcpTests
 {
     static async Task RunBeastNativeDeadlineAsync(TcpTestFixture fixture, TcpTestResources resources,
-        DailyBoosterTestClock clock, int port, ushort slot, int dungeon, bool timeout = true, int expectedUsed = 1)
+        DailyBoosterTestClock clock, int port, ushort slot, int dungeon, bool timeout = true, int expectedUsed = 1,
+        byte? expectedFirstRemaining = null)
     {
         int day = BeastDungeonRotation.ServiceDay(clock.GetUtcNow());
         var pair = BeastDungeonRotation.Pair(day);
@@ -30,7 +31,7 @@ internal static partial class RaidChannelLandingTcpTests
         peer.Send(15, new byte[4]); peer.Expect(1, 15, [1]);
         peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]); peer.Expect(0, 27);
         var display = new BeastDisplayWire(peer);
-        display.Selection(day, pair, anne ? (byte)0 : checked((byte)(3 - expectedUsed))); peer.Barrier();
+        display.Selection(day, pair, expectedFirstRemaining ?? (anne ? (byte)0 : checked((byte)(3 - expectedUsed)))); peer.Barrier();
         long previousRewards = Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_beast_stage_rewards WHERE character_id=$p0", peer.Id)[0][0]);
         byte[] request = new byte[25];
         BinaryPrimitives.WriteUInt32LittleEndian(request, checked((uint)dungeon));

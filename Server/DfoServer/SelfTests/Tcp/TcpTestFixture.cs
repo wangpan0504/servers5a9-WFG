@@ -23,7 +23,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
 
     internal bool HasIncompleteHellQuest(ushort characterId)
     {
-        var towns = resources?.Towns ?? throw new InvalidOperationException("选图预期需要本轮共享城镇资源");
+        var towns = townCatalog ?? resources?.Towns ?? throw new InvalidOperationException("选图预期需要本轮共享城镇资源");
         var position = Query("SELECT town,area FROM characters WHERE id=$p0", characterId).Single();
         if (towns.Areas[(Convert.ToByte(position[0]), Convert.ToByte(position[1]))].DungeonWorldMap is not { } world ||
             towns.DungeonMaps[world] is not { Error: null, HellDungeon: true } map || map.HellQuests.IsEmpty) return false;
@@ -48,6 +48,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     CancellationTokenSource? hostStop;
     readonly TcpTestResources? resources;
     readonly DfoServer.GameWorld.Quests.QuestCatalog? questCatalog;
+    readonly DfoServer.GameWorld.Towns.TownCatalog? townCatalog;
     readonly TimeProvider? clock;
     readonly DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy;
     readonly Func<int, int>? evildomHiddenDraw;
@@ -57,10 +58,11 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     public TcpTestFixture(ServerOptions source, string root, bool gm = false, TcpTestResources? resources = null,
         DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null, bool packetHttp = false,
         bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
-        Func<int, int>? evildomHiddenDraw = null)
+        Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null)
     {
         this.resources = resources;
         this.questCatalog = questCatalog;
+        this.townCatalog = townCatalog;
         this.clock = clock;
         this.lukeStartPolicy = lukeStartPolicy;
         this.evildomHiddenDraw = evildomHiddenDraw;
@@ -250,7 +252,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                         ? LoginCredentials.DevelopmentDigest : NativeLoginWire.Digest);
                 }
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
-                var runtime = ServerRuntime.Create(options, resources.Archive, repository, resources.Towns,
+                var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
                     options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw);
                 Volatile.Write(ref runtimeHost, runtime);
@@ -263,6 +265,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             if (evildomHiddenDraw is not null) throw new InvalidOperationException("显式魔界随机源需要同进程Runtime装配");
             if (lukeStartPolicy is not null) throw new InvalidOperationException("显式Luke执行策略需要真实同进程Runtime装配");
             if (questCatalog is not null) throw new InvalidOperationException("合成任务目录不能由真实子进程悄然替换");
+            if (townCatalog is not null) throw new InvalidOperationException("合成城镇目录不能由真实子进程悄然替换");
             process = Process.Start(StartInfo(packetCapture ? ["--packet-capture"] : [])) ?? throw new IOException("Server process did not start");
             output = CopyOutputAsync(process.StandardOutput, Path.Combine(Options.LogDirectory, "stdout.txt"));
             errors = CopyOutputAsync(process.StandardError, Path.Combine(Options.LogDirectory, "stderr.txt"));
