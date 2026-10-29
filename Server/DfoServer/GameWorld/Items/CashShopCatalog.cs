@@ -28,16 +28,24 @@ internal sealed class CashShopCatalog
 
     public FrozenDictionary<int, CashShopProduct> Products { get; }
     public FrozenDictionary<int, ImmutableArray<CashShopBonus>> Bonuses { get; }
+    public FrozenDictionary<int, FrozenDictionary<int, int>> CouponMappings { get; }
+    readonly FrozenSet<int> couponProducts;
 
     CashShopCatalog(Dictionary<int, CashShopProduct> products,
-        Dictionary<int, ImmutableArray<CashShopBonus>>? bonuses = null)
+        Dictionary<int, ImmutableArray<CashShopBonus>>? bonuses = null,
+        Dictionary<int, Dictionary<int, int>>? coupons = null)
     {
         Products = products.ToFrozenDictionary();
         Bonuses = (bonuses ?? []).ToFrozenDictionary();
+        CouponMappings = (coupons ?? []).ToFrozenDictionary(pair => pair.Key, pair => pair.Value.ToFrozenDictionary());
+        couponProducts = CouponMappings.Values.SelectMany(mapping => mapping.Values).ToFrozenSet();
     }
 
     public CashShopProduct? Product(int commodityId) => Products.GetValueOrDefault(commodityId);
     public IReadOnlyList<CashShopBonus> Bonus(int commodityId) => Bonuses.GetValueOrDefault(commodityId, []);
+    public bool IsCouponProduct(int commodityId) => couponProducts.Contains(commodityId);
+    public bool AllowsCoupon(int couponKey, int commodityId) =>
+        CouponMappings.TryGetValue(couponKey, out var mapping) && mapping.Values.Contains(commodityId);
 
     public static CashShopCatalog Load(PvfArchive archive)
     {
@@ -46,10 +54,11 @@ internal sealed class CashShopCatalog
             archive.Contains("etc/cerashop.etc") ? "etc/cerashop.etc" : "etc/ori_newcashshop.etc";
         string? bonusText = archive.Contains("etc/chn_cerashop_multibonus.etc")
             ? archive.ReadText("etc/chn_cerashop_multibonus.etc") : null;
-        return Parse(archive.ReadText(path), bonusText);
+        string? couponText = archive.Contains("etc/chn_coupon.etc") ? archive.ReadText("etc/chn_coupon.etc") : null;
+        return Parse(archive.ReadText(path), bonusText, couponText);
     }
 
-    internal static CashShopCatalog Parse(string text, string? bonusText = null)
+    internal static CashShopCatalog Parse(string text, string? bonusText = null, string? couponText = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         var products = new Dictionary<int, CashShopProduct>();
@@ -88,9 +97,28 @@ internal sealed class CashShopCatalog
         }
         if (products.Count == 0)
             throw new InvalidDataException("商城商品目录为空");
-        return new(products, ParseBonuses(bonusText));
+        return new(products, ParseBonuses(bonusText), ParseCoupons(couponText));
+    }
 
-        static bool Number(string value, out int number) => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out number);
+    static bool Number(string value, out int number) => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out number);
+
+    static Dictionary<int, Dictionary<int, int>> ParseCoupons(string? text)
+    {
+        var result = new Dictionary<int, Dictionary<int, int>>();
+        if (string.IsNullOrWhiteSpace(text)) return result;
+        var values = TokenPattern.Matches(PvfScript.Section(text, "coupon")).Select(match => match.Value).ToArray();
+        if (values.Length % 3 != 0) throw new InvalidDataException("商城优惠券映射行宽无效");
+        for (int index = 0; index < values.Length; index += 3)
+        {
+            if (!Number(values[index], out int key) || key <= 0 ||
+                !Number(values[index + 1], out int original) || original <= 0 ||
+                !Number(values[index + 2], out int mapped) || mapped <= 0)
+                throw new InvalidDataException("商城优惠券映射索引或商品号无效");
+            if (!result.TryGetValue(key, out var mapping)) result[key] = mapping = [];
+            if (!mapping.TryAdd(original, mapped) && mapping[original] != mapped)
+                throw new InvalidDataException("商城优惠券原商品映射冲突: " + original);
+        }
+        return result;
     }
 
     static Dictionary<int, ImmutableArray<CashShopBonus>> ParseBonuses(string? text)

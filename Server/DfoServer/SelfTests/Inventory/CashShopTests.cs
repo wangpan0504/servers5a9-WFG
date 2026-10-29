@@ -25,6 +25,7 @@ internal static partial class CashShopTests
         DailyItemExpirationTests.RunCore();
         ItemExpirationTests.RunCore();
         AvatarCore();
+        MappedCouponCore();
         int checks = Count;
         var now = new DateTimeOffset(2026, 10, 11, 10, 0, 0, TimeSpan.FromHours(8));
         var absolute = ItemExpiration.Parse(new PvfLib.PvfDocument("[expiration date]\n`2020-04-09 06:00:00`"));
@@ -138,7 +139,8 @@ internal static partial class CashShopTests
     static void RunWithLegacyExpirations(TownCatalog towns, CharacterCatalog characters, ItemResources resources)
     {
         var now = DateTimeOffset.UtcNow;
-        var product = resources.CashShop.Products.Values
+        var ordinaryProducts = resources.CashShop.Products.Values.Where(row => !resources.CashShop.IsCouponProduct(row.CommodityId));
+        var product = ordinaryProducts
             .OrderBy(row => row.CommodityId)
             .First(row => row.CeraPrice is > 0 and < 100_000 && row.Section is not ("avatar" or "visual" or "selectable character premium" or "charac premium package") &&
                 CurrencyWallet.RewardKind(row.ItemId) is null && !resources.Contracts.Recognizes(row.ItemId) &&
@@ -179,7 +181,7 @@ internal static partial class CashShopTests
             CurrencyWallet.RewardKind(row.ItemId) is null && !resources.Contracts.Recognizes(row.ItemId) && !resources.EpicPieces.ByPiece.ContainsKey(row.ItemId) &&
             LoadableItem(row.ItemId) is null).Select(row => row.CommodityId).ToArray();
         That(unloadable.Length == 0, "商城普通商品的道具模板均可加载: " + string.Join(",", unloadable.Take(10)));
-        var expired = resources.CashShop.Products.Values.First(row => row.CeraPrice > 0 && row.CeraPrice < 100_000 &&
+        var expired = ordinaryProducts.First(row => row.CeraPrice > 0 && row.CeraPrice < 100_000 &&
             row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
             !resources.Contracts.Recognizes(row.ItemId) && CurrencyWallet.RewardKind(row.ItemId) is null &&
             LoadableItem(row.ItemId)?.Expiration is { Days: 0, AbsoluteTime: > 0 } expiration && expiration.AbsoluteTime <= now.ToUnixTimeSeconds());
