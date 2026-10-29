@@ -26,6 +26,21 @@ internal static partial class AntonRaidGapTcpTests
         That(fixture.Query("SELECT raid_type,state FROM character_raid_runs") is [[0L,0L]], "正式666同扣票事务登记Anton生命周期");
         peer.Send(15, BitConverter.GetBytes(210u));
         That(AntonTcpProbe.Barrier(peer, "正式打开210").Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }), "正式开战能选210");
+        // 图内战况表：未清图时「回到城镇」72 01 02 走分队退场；「进入地下城」72 01 01 仍UNIMPLEMENTED，不回伪成功。
+        AntonTcpProbe.Enter(peer, catalog, 210, report, clear: false);
+        peer.Send(37, new byte[8]); AntonTcpProbe.Barrier(peer, "图内战况表加载210");
+        peer.Send(72, [1, 1]);
+        That(AntonTcpProbe.Barrier(peer, "图内战况表进入地下城未证").All(p => p.Opcode != 72), "图内72 01 01不伪造成功");
+        peer.Send(72, [1, 2]);
+        var boardReturn = AntonTcpProbe.Barrier(peer, "图内战况表回到城镇");
+        int boardAck = boardReturn.FindIndex(p => p is { Kind: 1, Opcode: 72 });
+        That(boardAck >= 0, "图内战况表回城必须有ACK72");
+        Bytes(boardReturn[boardAck].Body, [1, 1, 2], "图内回城复用ACK72原state/option");
+        That(boardReturn.FindIndex(p => p is { Kind: 0, Opcode: 24 }) > boardAck && boardReturn.All(p => p is not { Kind: 1, Opcode: 42 }),
+            "图内战况表退场提交后回候战室，不混发ACK42");
+        That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]], "图内回城不产生阶段奖励");
+        peer.Send(72, [1, 2]);
+        That(AntonTcpProbe.Barrier(peer, "回城后重复图内回城").All(p => p.Opcode != 72), "回城后旧战况表请求不能重复退场");
         for (int clear = 0; clear < 4; clear++)
         {
             AntonTcpProbe.Enter(peer, catalog, 210, report, clear: true, leave: clear != 0);

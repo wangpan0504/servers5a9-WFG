@@ -52,7 +52,11 @@ internal static partial class AntonRaidTcpTests
         Bytes(packets.Single(p => p is { Kind: 1, Opcode: 666 }).Body, [1], "配置覆盖从正常Runtime与666完成单人开战");
         Bytes(packets.Single(p => p.Opcode == 587).Body, [2, 0], "单人收到真实阶段通知");
         VerifyMap(packets.Single(p => p.Opcode == 585).Body);
-        Bytes(packets.Single(p => p.Opcode == 583).Body, [1, 7, 0, 0, 0, 0, 0, 0, 0], "开战显式清除旧感染存在位");
+        var symbols = packets.Single(p => p.Opcode == 583).Body;
+        int Symbol(int id) => Enumerable.Range(0, symbols[0]).Where(i => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + 8 * i)) == id)
+            .Select(i => System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(5 + 8 * i))).Single();
+        That(symbols.Length == 1 + symbols[0] * 8 && symbols[0] == 41 && Symbol(7) == 0 && Symbol(50) == 4,
+            "开战583发送完整真实符号快照：显式清除旧感染存在位，symbol50=[210 DGN HP]为PVF初值4");
         That(packets.Any(p => p.Opcode == 9) && packets.Any(p => p.Opcode == 594) && packets.Any(p => p.Opcode == 24),
             "单人完整分队、准备和迁移链");
         VerifyCosts(packets.Single(p => p.Opcode == 598).Body, [peer.Id], 2, 1);

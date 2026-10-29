@@ -355,6 +355,15 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         if (context.Session.FormalDungeonResultFocus() is not { } current)
         {
+            if (state == 1 && option == (byte)DungeonResultOption.ReturnTown && context.Session.PartyDungeon is { } boardSquad &&
+                context.Session.AntonDungeonBoardReturn())
+            {
+                // 图内安徒恩战况表「回到城镇」：沿已证42/结算回城的分队退场提交，提交后回ACK72原state/option。
+                using var boardPeers = await PartyDungeonProjection.AcquirePeersAsync(context, boardSquad.Members);
+                return await PartyDungeonProjection.DepartAsync(context, partyDungeons, parties,
+                    () => context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                        "anton_board_return_town"));
+            }
             if (context.Session.AntonDungeonResultFocus() is not { } anton || context.Session.PartyDungeon is not { } squad)
                 return CommandResult.Unhandled;
             if (state == 2)
