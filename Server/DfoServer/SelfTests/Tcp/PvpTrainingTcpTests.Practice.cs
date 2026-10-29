@@ -55,6 +55,15 @@ internal static partial class PvpTrainingTcpTests
             Enter();
             peer.Send(52, [0, 254]); peer.Expect(0, 43, left);PvpArenaTcpTests.TownReturn(peer); peer.Barrier();
             That(before == f.Snapshot(), "换角清除普通练习实例，重入不恢复旧实例或修改资产");
+            // 穿过真实地图连接进入酒馆；练习入口不能只识别登录落点和旧练习区。
+            peer.Travel(10, 1, 450, 234, 10, 0); peer.Barrier();
+            string tavernBefore = f.Snapshot();
+            Enter();
+            peer.Send(50, create); peer.Expect(1, 50, [0, 19, 0]);
+            peer.Send(52, [0, 254]); peer.Expect(0, 43, left);
+            PvpArenaTcpTests.TownReturn(peer); peer.Barrier();
+            That(tavernBefore == f.Snapshot(), "四类频道酒馆练习退回原地区且不改资产或任务");
+            peer.Travel(10, 0, 474, 234, 10, 1); peer.Barrier();
             if (channel == 55)
             {
                 using var observer = Open(f, "practice-observer", gamePort: endpoints[channel], channelNumber: channel);
