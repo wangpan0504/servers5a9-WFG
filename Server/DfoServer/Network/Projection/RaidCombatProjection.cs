@@ -72,6 +72,7 @@ internal static class RaidCombatProjection
             bool Show() => current() && context.RaidDisplay != identity;
             // 587同state/phase仍会重新安装原生动画；601只判断，587成功写帧才确认。
             // 两包在本人owner内连续入队，无网络等待；仅使用Post，不用于QueuePublished的提前guard。
+            // UNIMPLEMENTED：Anton正式策略缺601业务展示列；不能借普通69/70/71或Luke结果补阶段窗口。
             if (view.State == AntonRaidBattleState.Reward && context.Session.RaidCombatResult(view) is { } result)
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_RESULT, RaidCombatPackets.Result(result), "raid_phase_result", Show);
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_STATE, RaidCombatPackets.State(view), action, Show, () =>

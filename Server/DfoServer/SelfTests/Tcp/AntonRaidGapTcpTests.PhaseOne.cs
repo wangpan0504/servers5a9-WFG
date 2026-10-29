@@ -27,7 +27,16 @@ internal static partial class AntonRaidGapTcpTests
         peer.Send(15, BitConverter.GetBytes(210u));
         That(AntonTcpProbe.Barrier(peer, "正式打开210").Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }), "正式开战能选210");
         for (int clear = 0; clear < 4; clear++)
-            AntonTcpProbe.Enter(peer, catalog, 210, report, clear: true);
+        {
+            AntonTcpProbe.Enter(peer, catalog, 210, report, clear: true, leave: clear != 0);
+            if (clear != 0) continue;
+            peer.Send(72, [1, 2]);
+            var singleReturn = AntonTcpProbe.Barrier(peer, "阶段仍战斗时单图结算回城");
+            Bytes(singleReturn.Single(p => p is { Kind: 1, Opcode: 72 }).Body, [1, 1, 2], "不必等待阶段Reward即可退出已清单图");
+            That(singleReturn.Any(p => p is { Kind: 0, Opcode: 24 }) &&
+                fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]],
+                "单图退场回候战室且不替代660发阶段奖励");
+        }
         AssertState(report, 211, 1); AssertState(report, 216, 2);
         clock.Advance(19);
         AntonTcpProbe.RejectClosed(peer, null, 216);
@@ -45,6 +54,16 @@ internal static partial class AntonRaidGapTcpTests
             for (int clear = 0; clear < 2; clear++)
                 AntonTcpProbe.Enter(peer, catalog, dungeon, report, clear: true, leave: dungeon != 215 || clear == 0);
         That(report.Reward, "真实阶段0CLEAR PHASE抵达Reward");
+        string menuBefore = Assets();
+        peer.Send(72, [2, 1]);
+        var focus = AntonTcpProbe.Barrier(peer, "安徒恩结算焦点0201");
+        Bytes(focus.Single(p => p is { Kind: 1, Opcode: 72 }).Body, [1, 2, 1], "焦点只确认原状态，不退场或领牌");
+        foreach (byte[] unsupported in new byte[][] { [1, 0], [1, 1], [1, 3], [1], [3, 2] })
+        {
+            peer.Send(72, unsupported);
+            That(AntonTcpProbe.Barrier(peer, "未证团本菜单不伪造成功").All(p => p.Opcode != 72), "未知选项/畸形请求不回成功");
+        }
+        That(menuBefore == Assets(), "焦点及未实现选项不修改角色资产");
         That(fixture.Query("SELECT state,phase0_receipt IS NOT NULL,phase1_receipt IS NOT NULL FROM character_raid_runs") is [[0L,1L,0L]],
             "Reward前已落阶段0完整资格和奖励计划，不提前记最终通关");
         string phase0 = fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs");
@@ -58,7 +77,18 @@ internal static partial class AntonRaidGapTcpTests
         That(AntonTcpProbe.Barrier(peer, "UNIMPLEMENTED奖励期休息600").All(p => p.Opcode is not (587 or 596 or 597)) &&
             afterFirst == Assets(), "UNIMPLEMENTED：600不替代缺少的第二牌种，不自动推进Reward或发奖");
         Claim(0, 0, true);
-        peer.Send(42); AntonTcpProbe.Barrier(peer, "奖励后回候战室");
+        peer.Send(72, [1, 2]);
+        var returning = AntonTcpProbe.Barrier(peer, "奖励后EPLP回候战室");
+        int ack = returning.FindIndex(p => p is { Kind: 1, Opcode: 72 });
+        That(ack >= 0, "团本结算返回必须有ACK72");
+        Bytes(returning[ack].Body, [1, 1, 2], "返回城镇复用已证ACK72正文");
+        That(returning.FindIndex(p => p is { Kind: 0, Opcode: 3 }) > ack &&
+            returning.FindIndex(p => p is { Kind: 0, Opcode: 24 }) > ack && returning.All(p => p is not { Kind: 1, Opcode: 42 }),
+            "实际退场提交后ACK72先于本人状态及回城，不混发ACK42");
+        string townAssets = Assets();
+        peer.Send(72, [1, 2]);
+        That(AntonTcpProbe.Barrier(peer, "回城后重复EPLP").All(p => p.Opcode != 72) && townAssets == Assets(),
+            "旧菜单不能重复退场或修改新城镇状态");
         foreach (int dungeon in new[] { 220, 221, 222, 223, 224 }) AntonTcpProbe.RejectClosed(peer, null, dungeon);
         AntonTcpProbe.Enter(peer, catalog, 218, report, clear: true, leave: false);
         AssertState(report, 218, 0);
