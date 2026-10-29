@@ -186,7 +186,7 @@ internal sealed partial class AntonRaidBattle
             definition.Dungeons.ToImmutableDictionary(d => d.Id, d => d.InitialState),
             ImmutableDictionary<RaidTimer, int>.Empty)
             { LukePhaseCoinsUsed = SupportsLukeRevival && phase == 1 ? (byte)0 : null,
-                TimerSequence = timerSequence, DungeonGenerations = Kind == RaidKind.Luke || HasAntonRewards
+                TimerSequence = timerSequence, DungeonGenerations = Kind == RaidKind.Luke || antonPhaseProgress || HasAntonRewards
                 ? definition.Dungeons.ToImmutableDictionary(d => d.Id, d => d.InitialState == RaidDungeonState.Open ? 1L : 0L)
                 : ImmutableDictionary<int, long>.Empty }, null, null, null);
     }
@@ -233,7 +233,7 @@ internal sealed partial class AntonRaidBattle
     }
 
     // 正式进图预留的 Run 带 entry.Run，旧 CompleteDungeon 故意不消费它。开关打开后才按同一规则迁移战况。
-    // HP写入只沿资源SET，计时由Runtime拥有的有界时钟按本服秒制合同消费。
+    // 本服按不同正式Run扣一次DGN HP；资源SET仍可改写HP，不将该策略称为原厂伤害公式。
     internal AntonRaidBattleChange? CompleteAntonReservedDungeon(DungeonClearFact fact, int? week = null)
     {
         lock (gate)
@@ -246,13 +246,19 @@ internal sealed partial class AntonRaidBattle
                 entry.Identity.TaskAttempt != fact.Identity.TaskAttempt || fact.Identity.Epoch < entry.Identity.Epoch ||
                 entry.Phase != current.Phase || entry.Dungeon != fact.DungeonId ||
                 run.Phase != current.Phase || run.Dungeon != fact.DungeonId ||
-                HasAntonRewards && run.Generation != current.DungeonGenerations.GetValueOrDefault(checked((int)run.Dungeon))) return null;
+                run.Generation != current.DungeonGenerations.GetValueOrDefault(checked((int)run.Dungeon))) return null;
             var owner = run.Actors.FirstOrDefault(row => row.Identity == entry.Identity);
             if (owner.Actor is not { IsCurrent: true } actor) return null;
             int dungeon = checked((int)fact.DungeonId);
             if (!current.Dungeons.TryGetValue(dungeon, out var state) || state != RaidDungeonState.Open) return null;
             var before = current;
-            var after = Evaluate(before with { Dungeons = before.Dungeons.SetItem(dungeon, RaidDungeonState.Clear) }, dungeon, null, null);
+            var definition = script.Phases[run.Phase].Dungeons.Single(row => row.Id == dungeon);
+            if (!before.Symbols.TryGetValue(definition.HpSymbol, out int hp) || hp < 0) return null;
+            // 218等资源规则可显式将已重开的图HP设0；该图的下一次合法Run仍可产生clear，不减成负数。
+            int remaining = Math.Max(0, hp - 1);
+            var after = Evaluate(before with { Symbols = before.Symbols.SetItem(definition.HpSymbol, remaining),
+                Dungeons = before.Dungeons.SetItem(dungeon, remaining == 0 ? RaidDungeonState.Clear : RaidDungeonState.Open) },
+                remaining == 0 ? dungeon : null, hp != remaining ? definition.HpSymbol : null, null);
             run.ClearFacts.Add(actor, fact);
             if (after.State == AntonRaidBattleState.Reward) rewardWeek ??= week;
             CommitBattleCandidate(before, after);
@@ -354,11 +360,14 @@ internal sealed partial class AntonRaidBattle
             }
             else return null;
             var before = current;
+            bool reopen = Kind == RaidKind.Anton && antonPhaseProgress && next == RaidDungeonState.Open && before.Dungeons[id] != next;
+            var definition = reopen ? script.Phases[before.Phase].Dungeons.Single(row => row.Id == id) : null;
             CommitBattleCandidate(before, Evaluate(before with { Deferred = before.Deferred.Remove(token),
                 DeferredAnchors = before.DeferredAnchors.Remove(token), DeferredGenerations = before.DeferredGenerations.Remove(token),
-                DungeonGenerations = Kind == RaidKind.Anton && HasAntonRewards && next == RaidDungeonState.Open && before.Dungeons[id] != next
+                Symbols = definition is null ? before.Symbols : before.Symbols.SetItem(definition.HpSymbol, definition.HpRaw),
+                DungeonGenerations = Kind == RaidKind.Anton && (antonPhaseProgress || HasAntonRewards) && next == RaidDungeonState.Open && before.Dungeons[id] != next
                     ? before.DungeonGenerations.SetItem(id, checked(before.DungeonGenerations.GetValueOrDefault(id) + 1)) : before.DungeonGenerations,
-                Dungeons = before.Dungeons.SetItem(id, next) }, id, null, null));
+                Dungeons = before.Dungeons.SetItem(id, next) }, id, definition?.HpSymbol, null));
             return new(before, current);
         }
     }
@@ -408,11 +417,11 @@ internal sealed partial class AntonRaidBattle
                                         DeferredAnchors = state.DeferredAnchors.RemoveRange(cancelled), DeferredGenerations = state.DeferredGenerations.RemoveRange(cancelled) };
                                 }
                                 // 同Open不续HP；真正重开才开始新目标代，旧Run不能完成新代目标。
-                                if (next == RaidDungeonState.Open && (Kind == RaidKind.Luke || HasAntonRewards))
+                                if (next == RaidDungeonState.Open && (Kind == RaidKind.Luke || antonPhaseProgress || HasAntonRewards))
                                 {
                                     state = state with { DungeonGenerations = state.DungeonGenerations.SetItem(id,
                                         checked(state.DungeonGenerations.GetValueOrDefault(id) + 1)) };
-                                    if (Kind == RaidKind.Luke)
+                                    if (Kind == RaidKind.Luke || antonPhaseProgress)
                                     {
                                         var definition = script.Phases[state.Phase].Dungeons.Single(d => d.Id == id);
                                         bool hpChanged = state.Symbols[definition.HpSymbol] != definition.HpRaw;
