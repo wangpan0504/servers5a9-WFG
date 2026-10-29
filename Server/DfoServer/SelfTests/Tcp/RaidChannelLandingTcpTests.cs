@@ -4,6 +4,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Persistence;
+using PvfLib;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -37,7 +38,32 @@ internal static partial class RaidChannelLandingTcpTests
         Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（留在房间）", area: 1);
         Switch(42, land: true, town: 38, "魔界大战 41→普雷 42（进赛丽亚房间，出门 59/0）", area: 1, exit: 59);
         Switch(19, land: false, town: null, "普雷 42→安徒恩 19（同为团本页签，客户端保留 59/0）");
-        Switch(49, land: true, town: 38, "团队频道→魔兽49（独立谓词，先进共享房间再出门到51/0）", area: 1, exit: 51);
+        // 分支依据原始城镇登记，不用被测目录是否漏装来降低期望。
+        if (PvfScript.List(resources.Archive.ReadText("town/town.lst")).ContainsKey(51))
+        {
+            That(resources.Towns.Areas.Keys.Where(key => key.Item1 == 51).Select(key => key.Item2).Order().SequenceEqual(new byte[] { 0, 1, 2 }),
+                "原始城镇索引已登记51时必须完整装载0/1/2三区，不能把漏组降为缺输入");
+            Switch(49, land: true, town: 38, "团队频道→魔兽49（独立谓词，先进共享房间再出门到51/2）", area: 1, exit: 51);
+            That(fixture.Snapshot("SELECT town,area FROM characters WHERE id=$p0", character.Id) == "[[51,2]]",
+                "完整输入的真实换频道与1426出门仍须落到魔兽等待区51/2");
+        }
+        else
+        {
+            var decision = ChannelAreaLanding.Decide(resources.Towns, new(new(2, 49), 40, "[beast]"), 95,
+                character.CompletedQuests.ToHashSet());
+            That(!resources.Towns.Areas.Keys.Any(key => key.Item1 == 51) &&
+                decision is { Spot: null, Reason: "town-not-in-catalog" },
+                "真实缺城镇51时魔兽频道落点精确拒绝，不从原生物理地图猜造等待区");
+            // 前面的卢克出门已把普通返回地区更新为32/3；后续专属城镇保留该门口，不再沿用CreateRaider初始38/0。
+            const string returnSql = "SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0";
+            string returnBefore = fixture.Snapshot(returnSql, character.Id);
+            That(returnBefore == "[[32,3,754,211,0]]",
+                "进入缺资源魔兽频道前保存卢克路径后的真实普通返回门口32/3(754,211,0)");
+            Switch(49, land: true, town: 38, "团队频道→魔兽49（缺51时落点拒绝，共享房间按原返回地区出门；非魔兽落点正向）", area: 1, exit: 32);
+            That(fixture.Snapshot("SELECT town,area,x,y,direction,return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0", character.Id) == "[[32,3,754,211,0,32,3,754,211,0]]" &&
+                fixture.Snapshot(returnSql, character.Id) == returnBefore,
+                "缺51时1379与1426沿原普通返回门口32/3落库，返回五字段逐字节保持，不宣称魔兽等待区成功");
+        }
         Switch(normal, land: true, town: 38, "魔兽→普通重新入共享房间，不保留魔兽城镇快照", area: 1);
     }
 

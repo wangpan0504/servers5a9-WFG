@@ -104,6 +104,15 @@ internal static class BeastSixthDifficultyTests
                 var result = await commands.DispatchAsync(context, new Packet(1, (ushort)CmdPacketType.SELECT_DUNGEON,
                     Selection(310, difficulty, flag7)));
                 var scene = session.CurrentFormalDungeonScene();
+                if (beast && catalog.Get(310).BeastLayouts.Any(layout => layout.ResourceError is not null))
+                {
+                    That(result == CommandResult.Handled && scene is null &&
+                        session.LastFormalDungeonRejection == "entry-plan:beast-layout-resource-unavailable" &&
+                        session.Phase is not (SessionPhase.Loading or SessionPhase.Dungeon) &&
+                        repository.LoadBeastDungeonUsed(lease,session.Selected!.Id,BeastDungeonRotation.ServiceDay(at),310) == 0,
+                        "第六难度缺布局资源时明确拒绝且不扣次数：" + session.LastFormalDungeonRejection);
+                    continue;
+                }
                 if (!enter)
                 {
                     That(scene?.Entry.BeastMode != true, $"深渊拓扑 MAZE1 不会被当成魔兽：{name} / 拒绝={session.LastFormalDungeonRejection}");

@@ -34,8 +34,57 @@ internal static class DungeonCatalogTests
             "非普通类型与塔类不改变既有演员合同");
     }
 
+    static void VerifyOptionalBeastMissingMap()
+    {
+        var fixture = new Fixture();
+        // 复现真实缺登记的59453；普通迷宫使用独立且完整的地图，不能靠换图放行魔兽。
+        var tokens = fixture.Maze().Concat((PvfToken[])
+        [
+            ..fixture.Tag("Beast dungeon"),
+            ..fixture.Tag("BEAST LEVEL",fixture.Int(90),fixture.Int(120)),
+            ..fixture.Tag("size",fixture.Int(5),fixture.Int(3)),
+            ..fixture.Tag("greed",fixture.String("JJNNNNNNMMLLPPPPPPOODDHHHHHHGG")),
+            ..fixture.Tag("map specification",fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(59453)),
+            ..fixture.Tag("/map specification"),
+            ..fixture.Tag("start map",fixture.Int(0),fixture.Int(0)),
+            ..fixture.Tag("/start map"),
+            ..fixture.Tag("boss map",fixture.Int(-1),fixture.Int(-1)),
+            ..fixture.Tag("/boss map")
+        ]).ToArray();
+        DungeonDefinition? definition = null;
+        Exception? parseError = null;
+        try
+        {
+            definition = DungeonCatalog.ParseResource(310,"dungeon/optional-beast.dgn",tokens,fixture.Resolve,
+                new Dictionary<int,string> { [1] = "map/ordinary.map" },_ => true);
+        }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException)
+        {
+            parseError = error;
+        }
+        That(parseError is null && definition is not null,
+            "可选魔兽缺59453登记时仍须读取普通副本定义：" + parseError?.Message);
+        var ready = definition! with
+        {
+            MinimumLevel = 90, BasisLevel = 90,
+            RawSections = [..definition!.RawSections,new("difficulty level",[new(0,1),new(0,1),new(0,1),new(0,1),new(0,1)])]
+        };
+        var character = new Character(1,0,"OptionalBeast",1,new(1,0,1,1,0),null) { Level = 90, CompletedQuests = [5927] };
+        That(ready.Mazes is [{ ResourceError: null, MapSpecification: [{ Kind: "boss", Id: 1 }] }] &&
+            ready.BeastLayouts is [{ Maps.Count: 0 }] &&
+            ready.RawSections.Count(section => section.Tag == "beast dungeon") == 1 &&
+            DungeonEntryPlan.TryCreate(ready,character,310,0,0,out var ordinary,out _) && ordinary is { BeastMode: false },
+            "缺59453的可选魔兽块保留占位，原普通路线仍可真实入场");
+        That(!DungeonEntryPlan.TryCreate(ready,character,310,0,4,out _,out var reason,beastMode:true) &&
+            reason == "beast-layout-resource-unavailable",
+            "缺59453的魔兽入口必须精确拒绝，不能改选普通路线或猜地图");
+        That(!DungeonEntryPlan.TryCreate(ready with { BeastLayouts = [] },character,310,0,4,out _,out var missingReason,beastMode:true) &&
+            missingReason == "beast-layout-missing","没有魔兽布局声明时仍严格拒绝");
+    }
+
     public static void RunCore()
     {
+        VerifyOptionalBeastMissingMap();
         DungeonEntryPlanTests.RunCore();
         int checks = Count;
         VerifyChampionRates();
@@ -176,20 +225,72 @@ internal static class DungeonCatalogTests
             .Concat(fixture.Tag("size",fixture.Int(5),fixture.Int(3))).ToArray()),"未知标记不能用作放宽重复布局的边界");
         var firstBeast = beastTokens.Take(beastTokens.FindIndex(1,
             token => token.Type == 3 && fixture.Resolve(token.Value) == "[Beast dungeon]")).ToArray();
-        Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze().Concat(firstBeast).ToArray(), exists: false),
-            "魔兽引用缺失地图不能静默缩成剩余房间");
-        Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze().Concat(firstBeast.Select(token =>
-            token == fixture.Int(59453) ? fixture.Int(999999) : token)).ToArray()), "魔兽未登记地图不能保留为空路径");
+        UnsupportedBeast(firstBeast,"魔兽地图资源缺失: 59453","魔兽缺地图文件", path => !path.Contains("beast",StringComparison.Ordinal));
+        UnsupportedBeast(firstBeast.Select(token => token == fixture.Int(59453) ? fixture.Int(999999) : token).ToArray(),
+            "魔兽地图未登记: 999999","魔兽未登记地图");
         int firstMapEnd = Array.FindIndex(firstBeast, token => token.Type == 3 && fixture.Resolve(token.Value) == "[/map specification]");
-        Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze().Concat(firstBeast.Take(firstMapEnd))
+        UnsupportedBeast(firstBeast.Take(firstMapEnd)
             .Concat([fixture.String("map"),fixture.Int(0),fixture.Int(0),fixture.Int(59454)])
-            .Concat(firstBeast.Skip(firstMapEnd)).ToArray()), "魔兽同格重复地图不能任取首项掩盖歧义");
+            .Concat(firstBeast.Skip(firstMapEnd)).ToArray(),"魔兽地图坐标重复","魔兽同格重复地图");
+        int firstMapX = Array.FindIndex(firstBeast, token => token.Type == 3 && fixture.Resolve(token.Value) == "[map specification]") + 2;
+        UnsupportedBeast(firstBeast.Select((token,index) => index == firstMapX ? fixture.Int(5) : token).ToArray(),
+            "魔兽地图坐标超出尺寸","魔兽越界地图坐标");
+        UnsupportedBeast(firstBeast.Select(token => token.Type == 6 && fixture.Resolve(token.Value) == "Beast"
+            ? fixture.String("unknown") : token).ToArray(),"魔兽地图类型无效","魔兽未知地图种类");
         int firstStart = Array.FindIndex(firstBeast, token => token.Type == 3 && fixture.Resolve(token.Value) == "[start map]") + 1;
-        Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze().Concat(firstBeast.Select((token,index) =>
-            index == firstStart ? fixture.Int(1) : token)).ToArray()), "魔兽起点缺图不能回退第一间房");
-        Reject<InvalidDataException>(() => fixture.Parse(fixture.Maze().Concat(firstBeast.Select(token =>
-            token.Type == 6 && fixture.Resolve(token.Value) == "JJNNNNNNMMLLPPPPPPOODDHHHHHHGG" ? fixture.String("BB") : token)).ToArray()),
-            "魔兽门墙编码必须完整匹配自己的尺寸");
+        UnsupportedBeast(firstBeast.Select((token,index) => index == firstStart ? fixture.Int(1) : token).ToArray(),
+            "魔兽起点没有对应地图","魔兽缺起点图");
+        UnsupportedBeast(firstBeast.Select(token => token.Type == 6 && fixture.Resolve(token.Value) == "JJNNNNNNMMLLPPPPPPOODDHHHHHHGG"
+            ? fixture.String("BB") : token).ToArray(),"魔兽greed与尺寸不一致","魔兽错误门墙");
+        var beastCharacter = new Character(1,0,"BeastFixture",1,new(1,0,1,1,0),null) { Level = 90, CompletedQuests = [5927] };
+        var completeTokens = fixture.Beast();
+        UnsupportedBeast(completeTokens,"魔兽平衡表资源缺失: etc/BeastBalance.tbl","魔兽缺平衡表",
+            path => path != "etc/BeastBalance.tbl");
+        var complete = Ready(fixture.Parse(fixture.Maze().Concat(completeTokens).ToArray()));
+        bool beastAccepted = DungeonEntryPlan.TryCreate(complete,beastCharacter,310,0,4,out var beastPlan,out _,beastMode:true);
+        That(complete.BeastLayouts is [{ ResourceError: null, Maps.Count: 15 }] &&
+            beastAccepted &&
+            beastPlan is { BeastMode: true, MonsterBasisLevel: 90, BeastHpScale: 5, BeastAttackScale: 2.3 } &&
+            beastPlan.Maze.MapSpecification!.Count(map => map.Kind == "Beast") == 6 &&
+            beastPlan.Maze.StaticTopology is { Supported: true, Rooms.Count: 15, Links.Count: 22 },
+            "无资源合成夹具走真实解析与入场，保留十五格、六阶段、二十二连接及倍率");
+        var preview = complete.Mazes[0] with
+            { Bosses = [], MapSpecification = complete.Mazes[0].MapSpecification!.Select(map => map with { Kind = "Beast" }).ToArray() };
+        var gateway = complete with { Id = 5335, BeastFlag = true, Mazes = [preview] };
+        That(DungeonEntryPlan.GatewayMatches(gateway,complete) &&
+            DungeonEntryPlan.TryCreate(gateway,beastCharacter,5335,0,2,out _,out _,beastMode:true),
+            "合成合法兽布局可通过带身份标志的网关并保留实机难度2");
+        foreach (bool brokenFirst in new[] { true,false })
+        {
+            var bad = completeTokens.Select(token => token == fixture.Int(59453) ? fixture.Int(999999) : token).ToArray();
+            var mixedBeast = Ready(fixture.Parse(fixture.Maze().Concat(brokenFirst ? bad.Concat(completeTokens) : completeTokens.Concat(bad)).ToArray()));
+            That(mixedBeast.BeastLayouts.Count == 2 &&
+                mixedBeast.BeastLayouts[brokenFirst ? 0 : 1] is { ResourceError: not null, Maps.Count: 0 } &&
+                mixedBeast.BeastLayouts[brokenFirst ? 1 : 0] is { ResourceError: null, Maps.Count: 15 } &&
+                !DungeonEntryPlan.TryCreate(mixedBeast,beastCharacter,310,0,4,out _,out var reason,beastMode:true) &&
+                reason == "beast-layout-resource-unavailable" && !DungeonEntryPlan.GatewayMatches(gateway,mixedBeast) &&
+                !DungeonEntryPlan.TryCreate(mixedBeast,beastCharacter,310,0,4,out _,out var sharedReason,partyRoute:beastPlan,beastMode:true) &&
+                sharedReason == "beast-layout-resource-unavailable",
+                "任一坏兽块保留原序并阻止兽模式、网关和共享路线，不能丢坏留好：" + brokenFirst);
+        }
+
+        DungeonDefinition Ready(DungeonDefinition definition) => definition with
+        {
+            Id = 310, MinimumLevel = 90, BasisLevel = 90,
+            RawSections = [..definition.RawSections,new("difficulty level",[new(0,1),new(0,1),new(0,1),new(0,1),new(0,1)])]
+        };
+        void UnsupportedBeast(PvfToken[] tokens,string diagnostic,string name,Func<string,bool>? contains = null)
+        {
+            var definition = Ready(fixture.Parse(fixture.Maze().Concat(tokens).ToArray(),contains:contains));
+            var character = new Character(1,0,"BeastBad",1,new(1,0,1,1,0),null) { Level = 90, CompletedQuests = [5927] };
+            That(definition.Mazes is [{ ResourceError: null, MapSpecification.Count: 1 }] &&
+                definition.BeastLayouts is [{ ResourceError: not null, Maps.Count: 0 }] &&
+                definition.BeastLayouts[0].ResourceError!.Contains(diagnostic,StringComparison.Ordinal) &&
+                definition.RawSections.Count(row => row.Tag == "beast dungeon") == 1 &&
+                DungeonEntryPlan.TryCreate(definition,character,310,0,4,out var ordinary,out _) && ordinary is { BeastMode: false } &&
+                !DungeonEntryPlan.TryCreate(definition,character,310,0,4,out _,out var reason,beastMode:true) &&
+                reason == "beast-layout-resource-unavailable",name + "保留诊断且只拒绝兽模式，普通路线仍成功");
+        }
         VerifyOrdinaryMapOverrides();
         VerifyMapBlocks();
         VerifyGiveupPenaltyFlags();
@@ -364,14 +465,38 @@ internal static class DungeonCatalogTests
             That(rejected, name);
         }
 
-        // 正式 PVF 在 dungeon/dungeon.lst 追加 7101–7107 七个古代无限副本（ancient_infinited），其余条目未删未改；
-        // 官方基准 1372 增至 1379，本地五个魔兽兼容入口不变，合计 1384。基准随这份正式输入重钉，仍是精确等值，
-        // 用于发现装载遗漏或未登记的资源变更。
-        That(catalog.DungeonCount == 1384, "副本索引保留原1379项并追加五个魔兽兼容入口");
+        // 当前原始索引实测1372项；配套输入可追加七个古代无限副本和五个魔兽网关。
+        // 分支取原dungeon.lst完整声明，不按catalog漏装的数量降低期望，也不把物理DGN存在当作登记。
+        var declaredDungeons = PvfScript.List(pvf.ReadText("dungeon/dungeon.lst"));
+        int ancientDeclarations = Enumerable.Range(7101, 7).Count(declaredDungeons.ContainsKey);
+        int beastDeclarations = Enumerable.Range(5335, 5).Count(declaredDungeons.ContainsKey);
+        That(ancientDeclarations is 0 or 7 && beastDeclarations is 0 or 5,
+            "可选古代七图与魔兽五网关必须各自完整登记，不能把部分输入冒成完整或原始包");
+        int expectedDungeonCount = 1372 + ancientDeclarations + beastDeclarations;
+        That(declaredDungeons.Count == expectedDungeonCount && catalog.DungeonCount == expectedDungeonCount &&
+            declaredDungeons.All(row => catalog.ContainsDungeon(row.Key) &&
+                catalog.DungeonPath(row.Key) == PvfArchive.NormalizePath("dungeon/" + row.Value)),
+            "原1372项与可选增量逐ID/path完整装载，不允许目录漏项或凭物理文件补登记");
+        if (ancientDeclarations == 7 && beastDeclarations == 5)
+            That(catalog.DungeonCount == 1384, "副本索引保留原1379项并追加五个魔兽兼容入口");
         string[] gatewayNames = ["time_plaza", "canyon_of_beast", "hideout_of_fear", "gust_zone", "forest_of_redwitch"];
         for (int index = 0; index < gatewayNames.Length; index++)
-            That(catalog.Get(5335 + index).Path == $"dungeon/beast_metrocenter/beast_{gatewayNames[index]}.dgn",
-                "五个新增副本索引分别绑定独立魔兽入口：" + (5335 + index));
+        {
+            int gateway = 5335 + index;
+            if (declaredDungeons.ContainsKey(gateway))
+                That(catalog.Get(5335 + index).Path == $"dungeon/beast_metrocenter/beast_{gatewayNames[index]}.dgn",
+                    "五个新增副本索引分别绑定独立魔兽入口：" + (5335 + index));
+            else
+            {
+                bool missingRejected = false;
+                try { catalog.Get(gateway); }
+                catch (InvalidDataException error) when (error.Message == "副本索引不存在: " + gateway)
+                { missingRejected = true; }
+                That(!catalog.ContainsDungeon(gateway) && missingRejected,
+                    "当前未登记的魔兽网关沿正式目录精确拒绝，不猜DGN路径：" + gateway);
+            }
+        }
+        Console.WriteLine($"DUNGEON INDEX original=1372 ancient={ancientDeclarations} beast={beastDeclarations} total={expectedDungeonCount}; 未登记网关不代表真实魔兽入口正向通过");
         foreach (int rift in new[] { 316, 530 })
             That(catalog.Get(rift).AllowsDifficulty(3, false) && !catalog.Get(rift).AllowsDifficulty(0, false),
                 "裂缝副本只放行资源声明的难度 3：" + rift);
@@ -426,7 +551,7 @@ internal static class DungeonCatalogTests
         That(plaza.RawSections.Count(section => section.Tag == "beast dungeon") == 3 &&
             plaza.RawSections.Count(section => section.Tag == "boss map" && section.Tokens.SequenceEqual([new PvfToken(0,-1),new(0,-1)])) == 3,
             "真实时间广场三个魔兽区块及无普通Boss声明仍完整可查询");
-        That(plaza.BeastLayouts.Count == 3 && plaza.BeastLayouts.All(layout =>
+        That(plaza.BeastLayouts.Count == 3 && plaza.BeastLayouts.All(layout => layout.ResourceError is not null ||
             layout.LevelMin == 90 && layout.LevelMax == 120 && layout.Width == 5 && layout.Height == 3 &&
             layout.Start == new DungeonPoint(0,0) && layout.Maps.Count == 15 &&
             layout.BalanceTable == "etc/BeastBalance.tbl" &&
@@ -603,8 +728,21 @@ internal static class DungeonCatalogTests
             return tokens.ToArray();
         }
 
-        public DungeonDefinition Parse(PvfToken[] tokens, bool exists = true) => DungeonCatalog.ParseResource(3, "dungeon/test.dgn", tokens, Resolve,
-            new Dictionary<int, string> { [1] = "map/test.map", [2] = "map/second.map", [3] = "map/third.map",
-                [59453] = "map/beast-first.map", [59454] = "map/beast-second.map", [59455] = "map/beast-third.map" }, _ => exists);
+        public PvfToken[] Beast()
+        {
+            var maps = Enumerable.Range(0,15).SelectMany(index => new[]
+                { String(index >= 9 ? "Beast" : "map"),Int(index % 5),Int(index / 5),Int(59453 + index) }).ToArray();
+            return [..Tag("Beast dungeon"),..Tag("BEAST LEVEL",Int(90),Int(120)),..Tag("size",Int(5),Int(3)),
+                ..Tag("greed",String("JJNNNNNNMMLLPPPPPPOODDHHHHHHGG")),..Tag("map specification",maps),..Tag("/map specification"),
+                ..Tag("start map",Int(0),Int(0)),..Tag("/start map"),..Tag("boss map",Int(-1),Int(-1)),..Tag("/boss map"),
+                ..Tag("beast dungeon balance table",String("etc/BeastBalance.tbl"))];
+        }
+
+        public DungeonDefinition Parse(PvfToken[] tokens, bool exists = true,Func<string,bool>? contains = null) =>
+            DungeonCatalog.ParseResource(3,"dungeon/test.dgn",tokens,Resolve,
+                Enumerable.Range(59453,15).ToDictionary(id => id,id => $"map/beast/{id}.map")
+                    .Concat(new Dictionary<int,string> { [1] = "map/test.map",[2] = "map/second.map",[3] = "map/third.map" })
+                    .ToDictionary(row => row.Key,row => row.Value),contains ?? (_ => exists),
+                _ => "[MAX_HP]\n[NORMAL]\n5.00 5.00 5.00\n[/MAX_HP]\n[ATTACK]\n[NORMAL]\n2.30 0.00 0.00\n[/ATTACK]\n");
     }
 }

@@ -50,7 +50,7 @@ internal static partial class FormalDungeonTcpTests
         byte[] ordinary = (byte[])request.Clone();
         ordinary[8] = 0;
         peer.Send(16, ordinary);
-        peer.Expect(1, 16, [0, 9, 0, 0]);
+        peer.Expect(1, 16, [0, 22, 0, 0]);
         peer.Barrier();
         foreach (int offset in new[] { 5, 7, 9, 11, 15, 16, 20 })
         {

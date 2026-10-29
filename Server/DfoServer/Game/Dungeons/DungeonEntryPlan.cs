@@ -169,6 +169,8 @@ internal sealed record DungeonEntryPlan(
             try { source = catalog.Get(BeastDungeonRotation.SourceDungeonId(checked((int)dungeonId))); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
             { reason = "beast-gateway-source-unavailable"; return false; }
+            if (source.BeastLayouts.Any(layout => layout.ResourceError is not null))
+            { reason = "beast-gateway-source-unavailable"; return false; }
             if (!GatewayMatches(definition, source))
             { reason = "beast-gateway-layout-mismatch"; return false; }
             definition = definition with { BeastLayouts = source.BeastLayouts };
@@ -184,6 +186,7 @@ internal sealed record DungeonEntryPlan(
     // 其正文只是选图预览；入场时整条运行路线由同源布局替换（见 TryCreate 的 beast 分支），故只校验预览自洽。
     // 未声明该标志的兼容入口仍须与原魔兽十/十五房逐格对应，不放宽原规则。
     internal static bool GatewayMatches(DungeonDefinition gateway, DungeonDefinition source) =>
+        !source.BeastLayouts.Any(layout => layout.ResourceError is not null) &&
         source.BeastLayouts.FirstOrDefault() is { } layout &&
         (gateway.BeastFlag ? GatewayPreviewWellFormed(gateway) : GatewayMirrorsLayout(gateway, layout));
 
@@ -240,6 +243,8 @@ internal sealed record DungeonEntryPlan(
         { reason = "beast-gateway-mode-required"; return false; }
         if (beastMode && (!BeastDungeonRotation.SupportsDifficulty(dungeonId, difficulty) || questId != 0 || hellParty || practice || definition.BeastLayouts.Count == 0))
         { reason = "beast-layout-missing"; return false; }
+        if (beastMode && definition.BeastLayouts.Any(layout => layout.ResourceError is not null))
+        { reason = "beast-layout-resource-unavailable"; return false; }
         if (definition.Id != dungeonId)
         {
             reason = "dungeon-resource-mismatch";

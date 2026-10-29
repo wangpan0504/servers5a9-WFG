@@ -133,6 +133,7 @@ internal sealed record DungeonRequiredItem(int ItemId, int Count, int Flag);
 internal sealed record BeastDungeonLayout(int LevelMin, int LevelMax, int Width, int Height, DungeonPoint Start,
     IReadOnlyList<DungeonMap> Maps)
 {
+    public string? ResourceError { get; init; }
     public string Greed { get; init; } = "";
     public string? BalanceTable { get; init; }
     public string? MonsterDifficultyTable { get; init; }
@@ -653,7 +654,13 @@ internal sealed class DungeonCatalog
                     throw new InvalidDataException("beast dungeon 标记带有未知参数");
                 // 魔兽模式另有尺寸、地图种类和无普通Boss的布局，不归前一条普通迷宫。
                 Finish();
-                beasts.Add(ParseBeastLayout(sections, i, resolve, mapPaths, id, exists, readText));
+                try { beasts.Add(ParseBeastLayout(sections, i, resolve, mapPaths, id, exists, readText)); }
+                catch (Exception error) when (error is InvalidDataException or NotSupportedException)
+                {
+                    // 可选魔兽布局单独记录错误，保留原序；不能拖垮普通路线或丢弃后改选另一块。
+                    beasts.Add(new(0,0,0,0,default,[])
+                        { ResourceError = $"副本{id}魔兽布局{beasts.Count}: {error.Message}" });
+                }
                 continue;
             }
             if (section.Tag == "maze info")
@@ -804,9 +811,14 @@ internal sealed class DungeonCatalog
                 throw new InvalidDataException("魔兽地图坐标超出尺寸");
             int mapId = maps[at + 3].Value;
             string kind = resolve(maps[at].Value);
-            if (kind is not ("map" or "Beast") || !positions.Add(point) ||
-                !mapPaths.TryGetValue(mapId, out string? path) || !exists(path))
-                throw new InvalidDataException("魔兽地图类型、坐标或资源引用无效");
+            if (kind is not ("map" or "Beast"))
+                throw new InvalidDataException($"魔兽地图类型无效: {kind}, 地图{mapId}");
+            if (!positions.Add(point))
+                throw new InvalidDataException($"魔兽地图坐标重复: {point}, 地图{mapId}");
+            if (!mapPaths.TryGetValue(mapId, out string? path))
+                throw new InvalidDataException($"魔兽地图未登记: {mapId}");
+            if (!exists(path))
+                throw new InvalidDataException($"魔兽地图资源缺失: {mapId}, {path}");
             rows.Add(new(kind, point, mapId, path));
             at += 4;
         }
@@ -825,7 +837,7 @@ internal sealed class DungeonCatalog
         if (balance is { Length: > 0 })
         {
             if (!exists(balance) || readText is null)
-                throw new InvalidDataException("魔兽平衡表资源缺失");
+                throw new InvalidDataException("魔兽平衡表资源缺失: " + balance);
             var scale = BeastBalance.Normal(readText(balance));
             hp = scale.Hp;
             attack = scale.Attack;

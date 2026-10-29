@@ -18,13 +18,26 @@ internal static class StackableCatalogTests
         var catalog = StackableCatalog.Load(pvf);
         int[] beastIds = [10303237,10303238,10303240,10303241,10303242,10303243,10303244,10303245,
             10303246,10303247,10303495,10303496,10303497,10303498,10303752,10305190,10305191];
-        That(catalog.TemplateCount == 82244 && catalog.TemplateIds.Count == 82244 && catalog.TemplateIds[0] == 0 &&
-            catalog.TemplateIds.Distinct().Count() == 82244 &&
-            catalog.TemplateIds.Count(id => !beastIds.Contains(id)) == 82227,
-            "匹配索引保留原82227项及金币ID0，再补登17项魔兽道具，无重复ID");
+        var expected = ItemCatalogTests.ReadOriginalIndexDeclarations(pvf, "stackable", 0);
+        That(expected.Keys.Count(id => !beastIds.Contains(id)) == 82227 && expected.ContainsKey(0),
+            "原始堆叠列表保留82227项旧声明及金币ID0，新增魔兽声明逐项按实际列表判断");
+        That(catalog.TemplateCount == expected.Count && catalog.TemplateIds.Count == expected.Count &&
+            catalog.TemplateIds.Distinct().Count() == expected.Count &&
+            catalog.TemplateIds.SequenceEqual(expected.Keys.Order()),
+            "完整堆叠目录ID集合与独立原始列表逐项一致，无缺失或额外模板");
         foreach (int id in beastIds)
-            That(catalog.Get(id).ScriptPath == $"stackable/{id / 1000 * 1000 + 1}/{id}.stk",
-                "魔兽道具索引绑定原有真实堆叠脚本：" + id);
+        {
+            if (expected.TryGetValue(id, out string? path))
+                That(path == $"stackable/{id / 1000 * 1000 + 1}/{id}.stk" && catalog.Get(id).ScriptPath == path,
+                    "已声明魔兽道具绑定真实堆叠脚本：" + id);
+            else
+            {
+                KeyNotFoundException? missing = null;
+                try { _ = catalog.Get(id); }
+                catch (KeyNotFoundException error) { missing = error; }
+                That(missing?.Message == "堆叠物品列表没有指定模板ID", "未声明魔兽道具精确报告索引缺失：" + id);
+            }
+        }
         StackableFile gold = catalog.Get(0);
         That(gold.ScriptPath == "stackable/gold.stk" && gold.TypeDeclaration!.Label == "[waste]" &&
             gold.TypeDeclaration.Parameters.SequenceEqual(new[] { 0 }) && gold.DeclaredMinimumLevel == 1 &&
@@ -50,16 +63,17 @@ internal static class StackableCatalogTests
         // 验证全索引均可读取，特殊字段可以未知，但不能漏掉模板或默默用另一个文件。
         IEnumerable<StackableFile> Definitions()
         {
-            foreach (int id in catalog.TemplateIds)
+            foreach (int id in expected.Keys)
             {
                 var definition = catalog.Get(id);
-                if (definition.TemplateId != id || pvf.FindFile(definition.ScriptPath)?.DataType != 1)
+                if (definition.TemplateId != id || definition.ScriptPath != expected[id] ||
+                    pvf.FindFile(definition.ScriptPath)?.DataType != 1)
                     throw new InvalidOperationException("FAIL 堆叠索引模板路径或脚本类型不一致: " + id);
                 yield return definition;
             }
         }
         StackableActionTests.Survey(Definitions());
-        That(true, "全部82244项真实脚本可读且ID路径保持对应");
+        That(true, $"原始列表全部{expected.Count}项真实堆叠脚本可读且ID路径保持对应");
         Reject<KeyNotFoundException>(() => catalog.Get(-1));
         Reject<KeyNotFoundException>(() => catalog.Get(int.MaxValue));
 

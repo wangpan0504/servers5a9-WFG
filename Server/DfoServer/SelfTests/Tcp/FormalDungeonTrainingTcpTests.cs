@@ -60,7 +60,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(16,Convert.FromHexString("030000000000000000FFFF0000000000000000000000000000"));
             if (remaining == 0)
             {
-                peer.Expect(1,16,[0,9,0,0]); peer.Barrier();
+                peer.Expect(1,16,[0,22,0,0]); peer.Barrier();
                 That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[1L]],
                     "零疲劳普通副本仍拒绝，不安装第二份尝试");
             }

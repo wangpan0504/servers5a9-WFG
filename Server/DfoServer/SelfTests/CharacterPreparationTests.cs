@@ -244,7 +244,7 @@ internal static class CharacterPreparationTests
         }
 
         Console.WriteLine($"PASS {Count - count} character preparation assertions; main={definition.MainQuests.Length}, map={definition.MapQuests.Length}, completed={definition.CompletedQuests.Length}");
-        TownTravelTests.Run(towns, definition);
+        TownTravelTests.Run(towns, definition, pvf);
         DockTravelTests.Run(towns, definition);
         RoomPortalTests.Run(towns, definition);
         NpcTravelSpawnTests.Run(towns, definition);

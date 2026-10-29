@@ -17,14 +17,28 @@ internal static class EquipmentCatalogTests
     {
         int checks = Count;
         int[] beastIds = [100300907, 100312601, 100322493];
-        That(catalog.TemplateCount == 178844 && catalog.TemplateIds.Count == 178844 &&
-            catalog.TemplateIds.Distinct().Count() == 178844 &&
-            catalog.TemplateIds.Count(id => !beastIds.Contains(id)) == 178841,
-            "完整装备索引保留原178841项并补登魔兽三件首饰，无重复ID");
+        var expected = ItemCatalogTests.ReadOriginalIndexDeclarations(pvf, "equipment", 1);
+        That(expected.Keys.Count(id => !beastIds.Contains(id)) == 178841,
+            "原始装备列表保留178841项旧声明，新增魔兽声明逐项按实际列表判断");
+        That(catalog.TemplateCount == expected.Count && catalog.TemplateIds.Count == expected.Count &&
+            catalog.TemplateIds.Distinct().Count() == expected.Count &&
+            catalog.TemplateIds.SequenceEqual(expected.Keys.Order()),
+            "完整装备目录ID集合与独立原始列表逐项一致，无缺失或额外模板");
         string[] beastPaths = ["amulet/100300907.equ", "wrist/100312601.equ", "ring/100322493.equ"];
         for (int beastIndex = 0; beastIndex < beastIds.Length; beastIndex++)
-            That(catalog.Get(beastIds[beastIndex]).ScriptPath == "equipment/character/common/" + beastPaths[beastIndex],
-                "魔兽首饰索引绑定原有真实装备脚本：" + beastIds[beastIndex]);
+        {
+            int id = beastIds[beastIndex];
+            if (expected.TryGetValue(id, out string? path))
+                That(path == "equipment/character/common/" + beastPaths[beastIndex] &&
+                    catalog.Get(id).ScriptPath == path, "已声明魔兽首饰绑定真实装备脚本：" + id);
+            else
+            {
+                KeyNotFoundException? missing = null;
+                try { _ = catalog.Get(id); }
+                catch (KeyNotFoundException error) { missing = error; }
+                That(missing?.Message == "装备列表没有指定模板ID", "未声明魔兽首饰精确报告索引缺失：" + id);
+            }
+        }
         int[] ids = [10400, 12400, 16400, 18400, 101010912, 102040571, 104010559, 106020596,
             108000525, 109000493, 106040493, 101030782, 114000248, 116000011];
         int[] weights = [1900, 1500, 800, 900, 2800, 2300, 1500, 2200, 3100, 2100, 2500, 4000, 3200, 2400];
@@ -58,14 +72,15 @@ internal static class EquipmentCatalogTests
         That(catalog.Get(400990077).DeclaredUsableJobs is null && catalog.Get(106501565).DeclaredUsableJobs is null, "真实宠物与时装重复职业块未知");
         That(catalog.Get(105520410).DeclaredMinimumLevel is null, "真实重复等级声明未知");
         That(ReferenceEquals(catalog.Get(106040493), broom), "定义不可变缓存复用");
-        foreach (int id in catalog.TemplateIds)
+        foreach (int id in expected.Keys)
         {
             EquipmentFile definition = catalog.Get(id);
-            if (definition.TemplateId != id || pvf.FindFile(definition.ScriptPath)?.DataType != 1 ||
+            if (definition.TemplateId != id || definition.ScriptPath != expected[id] ||
+                pvf.FindFile(definition.ScriptPath)?.DataType != 1 ||
                 definition.DeclaredSellPrice is not null || !definition.UnsupportedFields.Contains("sell price"))
                 throw new InvalidOperationException("FAIL 装备全索引路径、脚本类型或卖价边界: " + id);
         }
-        That(true, "全178844项真实脚本可读且全部缺卖价");
+        That(true, $"原始列表全部{expected.Count}项真实装备脚本可读、路径一致且全部缺卖价");
         Reject<KeyNotFoundException>(() => catalog.Get(0));
         Reject<KeyNotFoundException>(() => catalog.Get(-1));
         Reject<KeyNotFoundException>(() => catalog.Get(int.MaxValue));
