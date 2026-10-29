@@ -165,6 +165,7 @@ internal static partial class QuestHellChallengeTcpTests
             void SendFinish(TcpPeer peer) => peer.Send(34,Build(writer => { writer.Write((ushort)34); writer.Write(scenario.Quest);
                 writer.Write(ushort.MaxValue); writer.Write((ushort)1); writer.Write(ushort.MaxValue); }));
         }
+        VerifyInfernoSidequests(fixture,resources);
         VerifyHarlemContinuation(fixture,resources);
         VerifyAlbertOrphan(fixture,resources);
     }

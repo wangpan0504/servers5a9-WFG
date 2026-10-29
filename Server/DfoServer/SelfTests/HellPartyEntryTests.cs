@@ -49,6 +49,10 @@ internal static class HellPartyEntryTests
     {
         int checks = Count;
         var growth = global::DfoServer.Testing.SelfTestCatalogs.Growth(pvf, skills);
+        foreach(var pair in InfernoQuestUnlock.Pairs)
+            That(quests.Get(pair.InfernoQuest).Prerequisites.SequenceEqual([pair.IntroductionQuest]) &&
+                quests.Get(pair.IntroductionQuest).Prerequisites.SequenceEqual([pair.HellQuest]),
+                "时空裂缝显示兼容的前半步来自真实任务链，不按编号相邻推算 " + pair.InfernoQuest);
         var dungeons = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf);
         var rooms = global::DfoServer.Testing.SelfTestCatalogs.Rooms(pvf);
 
