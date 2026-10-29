@@ -63,9 +63,12 @@ internal sealed class AntonRaidDungeonService(RaidRegistry registry, PartyServic
                 dungeon, mazes[0].SourceOrdinal)).ToArray();
             reason = "anton-entry-authorization-changed";
             if (selections.Any(selection => !selection.Admission.Actor.Session.CanBeginRaidDungeonSelection(selection.Admission))) return [];
-            return selections.Select(selection => new PartyDungeonNotice(PartyDungeonNoticeKind.RaidSelection,
+            // 安装前记录城镇来源：导航板非零15从TOWN直发16，客户端未进入选图模块2，29的0238FBC4门不会走初图createMap。
+            var fromTown = selections.Select(selection => selection.Admission.Actor.Session.Phase == SessionPhase.Town).ToArray();
+            return selections.Select((selection, index) => new PartyDungeonNotice(PartyDungeonNoticeKind.RaidSelection,
                 party.Members.Single(member => ReferenceEquals(member.Actor.Session, selection.Admission.Actor.Session)), party.Members,
-                Selection: selection.Admission.Actor.Session.InstallRaidDungeonSelection(selection))).ToArray();
+                Selection: selection.Admission.Actor.Session.InstallRaidDungeonSelection(selection),
+                SceneTransition: fromTown[index])).ToArray();
         });
         rejection = result.Length == 0 ? reason : null;
         return result;
