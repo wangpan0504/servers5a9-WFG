@@ -33,12 +33,14 @@ internal sealed class SkillGrantCatalog(Dictionary<(byte Job, byte Growth), Char
                     var free = initial.ToDictionary(skill => skill.Id, skill => skill.Level);
                     if (first > 0)
                         Merge(Read(stage[..(awakenings.Count == 0 ? stage.Length : awakenings[0].Index)], "skill"));
-                    foreach (Match awakening in awakenings)
+                    for (int awakeningIndex = 0; awakeningIndex < awakenings.Count; awakeningIndex++)
                     {
+                        Match awakening = awakenings[awakeningIndex];
                         int index = int.Parse(awakening.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
                         if (index > second) continue;
-                        int next = stage.IndexOf("[awakening ", awakening.Index + awakening.Length, StringComparison.Ordinal);
-                        Merge(Read(stage[awakening.Index..(next < 0 ? stage.Length : next)], "awakening skill"));
+                        // 仅数字阶段是边界；[awakening skill] 属于当前阶段，不能在赠技之前截断。
+                        int next = awakeningIndex + 1 < awakenings.Count ? awakenings[awakeningIndex + 1].Index : stage.Length;
+                        Merge(Read(stage[awakening.Index..next], "awakening skill"));
                     }
                     entries.Add((checked((byte)job.Key), checked((byte)(first | second << 4))),
                         free.OrderBy(pair => pair.Key).Select(pair => new CharacterSkill(pair.Key, pair.Value)).ToArray());

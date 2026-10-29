@@ -31,10 +31,17 @@ internal static class SkillQuickSlotsTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
-            // 当前实收job13/grow35/Lv95的11项学习请求，含主动和两组被动。
+            var before = Role();
+            var granted = before.Learning.Trees[0].Skills.Single(skill => skill.Id == 68);
+            That(granted is { Level: 1, Slot: >= 102 and < 138 }, "重建角色已获得CHR觉醒被动首级，保留初始被动绑定");
+            // 原实收批次在赠技补齐后会把68从一级加到十七级，超过Lv95门槛，仍应整批拒绝。
             peer.Send(29, Convert.FromHexString("000B6E0000036D0000085500000D6C00000B6B00000754000012440000105300001A5200001C4F00001F5000001F00"));
+            peer.Expect(1, 29, [0, 0xD9, 0]); peer.Barrier();
+            That(Role().Revision == before.Revision, "免费首级已存在时仍校验批次目标等级，后项失败不提交前序技能");
+            // 保持原目标等级16，仅将68的增量改为15；其它十项及槽位覆盖保留。
+            peer.Send(29, Convert.FromHexString("000B6E0000036D0000085500000D6C00000B6B000007540000124400000F5300001A5200001C4F00001F5000001F00"));
             var bought = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
-            That(bought.Skills.Select(skill => skill.Slot).SequenceEqual(new byte[] { 5, 6, 7, 8, 54, 9, 55, 10, 11, 150, 151 }),
+            That(bought.Skills.Select(skill => skill.Slot).SequenceEqual(new byte[] { 5, 6, 7, 8, 54, 9, granted.Slot, 10, 11, 150, 151 }),
                 "实收混合批次填满0–11，主动溢出150区，被动不占扩展栏");
             That(Role().Learning.Trees[0].Skills.Where(skill => skill.Slot < 12).Select(skill => skill.Slot)
                 .SequenceEqual(Enumerable.Range(0, 12).Select(slot => (byte)slot)), "实际SQL完整占用12格可见快捷栏");

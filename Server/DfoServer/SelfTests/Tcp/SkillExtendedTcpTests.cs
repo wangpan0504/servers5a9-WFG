@@ -200,6 +200,38 @@ internal static class SkillExtendedTcpTests
             That(trees.All(tree => tree.Skills.Where(skill => catalog.Get(job, skill.Id).Type == SkillType.Passive)
                 .All(skill => skill.Slot is >= 102 and < 138)), "特殊职业新角色被动不进入快捷栏 " + job);
         }
+        var avengerFree = catalog.FreeSkills(4, 0x24);
+        var avengerState = SkillLearning.Initialize(4, avengerFree, catalog).State! with
+            { BonusSp = 0, BonusTp = 0, Experience = growth.GetLevelStartExperience(95) };
+        avengerState = SkillPointLedger.Synchronize(4, 0x24, 95, avengerState, catalog);
+        // 保留旧双树遗漏的绑定，让正常选角入口负责补齐并持久化。
+        avengerState = avengerState with { Trees = Array.AsReadOnly(avengerState.Trees.Select(tree => tree with
+        {
+            Skills = Array.AsReadOnly(tree.Skills.Where(skill => skill.Id is not (120 or 135)).ToArray())
+        }).ToArray()) };
+        var avengerRole = repository.Create(owner, new NewCharacter("AwakenGrant", resources.Towns.Room, resources.Towns.InitialReturn)
+        { Job = 4, GrowType = 0x24, Level = 95, AcceptedStoryLevel = 1, Skills = avengerFree.ToArray(), InitialLearning = avengerState,
+            Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(resources.Characters.Get(4)) });
+        byte[] avengerProjection;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(avengerRole.Slot);
+            avengerProjection = peer.SkillInfo;
+            var initialized = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
+            var saved = Role(avengerRole.Slot).Learning;
+            That(initialized.Zip(saved.Trees).All(pair => pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp &&
+                pair.First.Skills.Select(skill => (skill.Slot, skill.Id, skill.Level))
+                    .SequenceEqual(pair.Second.Skills.Select(skill => (skill.Slot, skill.Id, skill.Level)))) &&
+                saved.Trees.Zip(avengerState.Trees).All(pair => pair.First.Skills.Count == pair.Second.Skills.Count + 2 &&
+                    pair.Second.Skills.All(skill => pair.First.Skills.Single(value => value.Id == skill.Id) == skill) &&
+                    pair.First.Skills.Any(skill => skill.Id == 120 && skill.Level == 1) &&
+                    pair.First.Skills.Any(skill => skill.Id == 135 && skill.Level == 1) &&
+                    pair.First.Skills.Single(skill => skill.Id == 119).Level == 10 &&
+                    pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp),
+                "旧双树选角持久补齐审判、恶魔屏障并完整投影，保留其余等级、绑定与余额");
+            peer.Barrier();
+        }
+        var avengerSaved = Role(avengerRole.Slot);
         await fixture.StopAsync();
         // 复现dd的默认三段斩：主树Lv18、副树Lv1，没有任何自定义指令存档。
         var free = catalog.FreeSkills(0, 5);
@@ -213,28 +245,38 @@ internal static class SkillExtendedTcpTests
             InitialLearning = defaultLearning.State!,
             Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0)) });
         var awakenedFree = catalog.FreeSkills(0, 0x15);
-        var awakenedState = SkillLearning.Initialize(0, awakenedFree, catalog).State! with
-            { Experience = growth.GetLevelStartExperience(48) };
-        awakenedState = SkillPointLedger.Synchronize(0, 0x15, 48, awakenedState, catalog);
+        var awakenedState = SkillLearning.Initialize(0, catalog.FreeSkills(0, 5), catalog).State! with
+            { Experience = growth.GetLevelStartExperience(51) };
+        awakenedState = SkillPointLedger.Synchronize(0, 0x15, 51, awakenedState, catalog);
         var awakenedRole = repository.Create(owner, new NewCharacter("GhostNight", resources.Towns.Room, resources.Towns.InitialReturn)
-        { Job = 0, GrowType = 0x15, Level = 48, AcceptedStoryLevel = 1, Skills = awakenedFree.ToArray(),
+        { Job = 0, GrowType = 0x15, Level = 51, AcceptedStoryLevel = 1, Skills = awakenedFree.ToArray(),
             InitialLearning = awakenedState,
             Inventory = DfoServer.Game.Inventory.Services.InventoryRewardGrantService.CreateStarter(resources.Characters.Get(0)) });
         await fixture.StartAsync("extended-restart");
         using (var peer = Open(fixture))
         {
+            peer.Select(avengerRole.Slot);
+            Bytes(peer.SkillInfo, avengerProjection, "服务重建后完整回放已补齐的觉醒双树");
+            var replay = Role(avengerRole.Slot);
+            That(replay.Revision == avengerSaved.Revision && replay.Learning.Trees.Zip(avengerSaved.Learning.Trees)
+                .All(pair => pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp && pair.First.Skills.SequenceEqual(pair.Second.Skills)),
+                "重复选角不再次补发技能、改变余额或增加revision");
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
             peer.Select(awakenedRole.Slot);
             var before = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
-            That(before.All(tree => tree.Skills.All(skill => skill.Id != 296)), "剑影觉醒夹具不提前赠送鬼夜");
+            That(before.All(tree => tree.Skills.Single(skill => skill.Id == 296) is { Level: 1, Slot: >= 54 and < 102 }),
+                "剑影觉醒按CHR赠送鬼夜一级并进入转职被动组");
             foreach (byte context in new byte[] { 0, 1 })
             {
-                byte expectedSlot = Enumerable.Range(54, 48).Select(value => (byte)value)
-                    .First(slot => before[context].Skills.All(skill => skill.Slot != slot));
+                byte expectedSlot = before[context].Skills.Single(skill => skill.Id == 296).Slot;
                 peer.Send(29, [context, 1, 0x28, 1, 0, 1, 0]);
                 var learned = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
                 That(learned.Context == context && learned.Sp == before[context].Sp - 45 && learned.Tp == before[context].Tp &&
-                    learned.Skills.Single() == new LearnedSkill(expectedSlot, 296, 1),
-                    "鬼夜首次学习返回真实转职被动槽位和扣除45SP后的ACK " + context);
+                    learned.Skills.Single() == new LearnedSkill(expectedSlot, 296, 2),
+                    "鬼夜免费一级之上正常付费学习二级，保留被动槽位并扣除45SP " + context);
                 var saved = Role(awakenedRole.Slot).Learning;
                 That(saved.Trees[context].Skills.Single(skill => skill.Id == 296) == learned.Skills.Single() &&
                     saved.Trees[context].Sp == learned.Sp && saved.Trees[1 - context].Sp == before[1 - context].Sp - (context == 1 ? 45 : 0),
@@ -242,13 +284,13 @@ internal static class SkillExtendedTcpTests
             }
             var current = Role(awakenedRole.Slot);
             peer.Send(29, Purchase(296, 1)); peer.Expect(1, 29, [0, 0xD9, 0]); peer.Barrier();
-            That(Role(awakenedRole.Slot).Revision == current.Revision, "Lv48不能再学鬼夜二级，失败不提交");
+            That(Role(awakenedRole.Slot).Revision == current.Revision, "Lv51不能再学鬼夜三级，失败不提交");
         }
         using (var peer = Open(fixture))
         {
             peer.Select(awakenedRole.Slot);
             var replay = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
-            That(replay.Zip(awakenedState.Trees).All(pair => pair.First.Skills.Single(skill => skill.Id == 296).Level == 1 &&
+            That(replay.Zip(awakenedState.Trees).All(pair => pair.First.Skills.Single(skill => skill.Id == 296).Level == 2 &&
                 pair.First.Skills.Single(skill => skill.Id == 296).Slot is >= 54 and < 102 && pair.First.Sp == pair.Second.Sp - 45),
                 "鬼夜断线重连恢复两树等级、被动槽位及余额");
             peer.Barrier();
@@ -294,7 +336,7 @@ internal static class SkillExtendedTcpTests
             peer.Barrier();
         }
         await fixture.StopAsync();
-        Console.WriteLine("PASS C# TCP TP、指令默认/保存/重登、特殊职业创建/学习及连招编排；非Windows验收");
+        Console.WriteLine("PASS C# TCP TP、觉醒赠技、指令默认/保存/重登、特殊职业创建/学习及连招编排；非Windows验收");
     }
 
     private static byte[] Purchase(ushort id, byte levels, bool decrease = false) =>
