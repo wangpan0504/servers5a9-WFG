@@ -73,7 +73,7 @@ internal static partial class PvpTrainingTcpTests
             That(before == Snapshot(), "旧generation拒绝不改变任何资产");
 
             string Snapshot() => string.Join('|', new[] { "characters", "character_inventory_items", "character_pvp_mission_facts",
-                "character_pvp_mission_rewards", "mailbox_messages", "mailbox_attachments", "currency_audit_log", "sqlite_sequence" }
+                "character_pvp_mission_rewards", "character_pvp_daily_missions", "mailbox_messages", "mailbox_attachments", "currency_audit_log", "sqlite_sequence" }
                 .Select(table => f.Snapshot("SELECT * FROM " + table + " ORDER BY rowid")));
         }
     }
@@ -93,7 +93,7 @@ internal static partial class PvpTrainingTcpTests
             foreach (int index in new[] { 0, 4, 8 })
             {
                 Combo(index); peer.Expect(0,14);
-                var rows = PvpMissionTcpChecks.Parse(peer.Expect(0,578).Body);
+                var rows = PvpMissionTcpChecks.Update(peer, f);
                 That(rows[(ushort)(565 + index / 4 * 13)].Current == 1, "训练后立即更新对应档任务，无需重登");
                 peer.Barrier(); before = f.Snapshot();
                 Combo(index); peer.Barrier();
@@ -101,7 +101,7 @@ internal static partial class PvpTrainingTcpTests
             }
             That(Emblems() == 190 && f.Query("SELECT count(*) FROM character_pvp_mission_rewards WHERE character_id=$p0", id) is [[3L]],
                 "三档连招准确发30加60加100，各只有一份回执");
-            peer.Send(52,[0,254]); peer.Expect(0,43,[(byte)id,(byte)(id >> 8),6,1,0,0,255,255]);
+            peer.Send(52,[0,254]); peer.Expect(0,43,[(byte)id,(byte)(id >> 8),6,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer);
             Combo(1); peer.Barrier();
             That(f.Query("SELECT count(*) FROM character_pvp_mission_facts WHERE character_id=$p0", id) is [[3L]],
                 "退出后的迟到报告不能复用原实例");
@@ -132,12 +132,12 @@ internal static partial class PvpTrainingTcpTests
                     Report(1, opponent, round, true);
                 }
                 peer.Expect(0,14);
-                var rows = PvpMissionTcpChecks.Parse(peer.Expect(0,578).Body);
+                var rows = PvpMissionTcpChecks.Update(peer, f);
                 That(rows[604].Current == 1 && rows[605].Current == (difficulty == 2 ? 1 : 0), "完整道场序列即时推进实际难度");
                 peer.Barrier(); before = f.Snapshot();
                 Report(1, plan.Allowed[^1].First(), plan.Allowed.Length, true); peer.Barrier();
                 That(before == f.Snapshot(), "末轮重放不重复袖珍罐");
-                peer.Send(13); peer.Expect(0,43,[(byte)id,(byte)(id >> 8),10,1,0,0,255,255]); peer.Barrier();
+                peer.Send(13); peer.Expect(0,43,[(byte)id,(byte)(id >> 8),10,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer); peer.Barrier();
 
                 void Report(byte action, int opponent, int round, bool won) => peer.Send(1287, Build(writer =>
                 { writer.Write(action); writer.Write(opponent); writer.Write((byte)plan.Allowed.Length); writer.Write((byte)round);

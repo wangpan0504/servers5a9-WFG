@@ -29,6 +29,7 @@ internal static partial class RaidChannelLandingTcpTests
             peer.Expect(1, 15, [1]);
             peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 1]);
             peer.Expect(0, 27, peer.SelectionNoticeBody(selectionCandidates: [pair.First, pair.Second]));
+            new BeastDisplayWire(peer).Selection(BeastDungeonRotation.ServiceDay(clock.GetUtcNow()), pair);
             That(!Enumerable.Range(310, 5).Any(peer.DungeonEnterCounts.ContainsKey),
                 "原五图不收到冒充Beast额度的550普通次数通知");
             peer.Barrier();
@@ -37,5 +38,10 @@ internal static partial class RaidChannelLandingTcpTests
         That(fixture.Query("SELECT count(*) FROM character_beast_dungeon_entries") is [[0L]],
             "查看每日两图及换普通频道均不写入或消耗Beast额度");
         await RunBeastNativeDeadlineAsync(fixture, resources, clock, endpoints[10], character.Slot, pair.First);
+        await RunBeastNativeDeadlineAsync(fixture, resources, clock, endpoints[10], character.Slot, pair.First,
+            timeout: false, expectedUsed: 2);
+        await RunBeastNativeDeadlineAsync(fixture, resources, clock, endpoints[10], character.Slot, pair.Second,
+            timeout: false);
+        await RunBeastPartyDisplayAsync(fixture, resources, clock, endpoints[10], position);
     }
 }

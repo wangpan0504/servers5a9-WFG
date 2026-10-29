@@ -1973,3 +1973,11 @@ CREATE TABLE character_beast_stage_rewards(
             PRIMARY KEY(character_id,mission_id),
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
+
+        CREATE TABLE character_pvp_daily_missions(
+            character_id INTEGER NOT NULL,account TEXT NOT NULL,
+            service_day INTEGER NOT NULL CHECK(typeof(service_day)='integer' AND service_day BETWEEN 1 AND 3652058),
+            state_json TEXT NOT NULL CHECK(json_valid(state_json) AND json_type(state_json)='object'),
+            PRIMARY KEY(character_id,service_day),
+            FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );

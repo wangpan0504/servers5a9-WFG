@@ -12,14 +12,14 @@ internal sealed partial class CharacterRepository : IPvpMissionProgressStore
     public PvpMissionProgress ReadPvpMissionProgress(AccountOwners.Lease owner, ushort characterId) =>
         ReadPvpMissionState(owner, characterId).Progress;
 
-    public PvpMissionState ReadPvpMissionState(AccountOwners.Lease owner, ushort characterId) => owner.Execute(() =>
+    public PvpMissionState ReadPvpMissionState(AccountOwners.Lease owner, ushort characterId, PvpMissionPeriod? period = null) => owner.Execute(() =>
     {
         using var db = database.Open();
         using var tx = db.BeginTransaction();
-        return ReadPvpMissionState(db, tx, owner.Account, characterId);
+        return ReadPvpMissionState(db, tx, owner.Account, characterId, period);
     });
 
-    static PvpMissionState ReadPvpMissionState(SqliteConnection db, SqliteTransaction tx, string account, ushort characterId)
+    static PvpMissionState ReadPvpMissionState(SqliteConnection db, SqliteTransaction tx, string account, ushort characterId, PvpMissionPeriod? period = null)
     {
         RequirePvpRatingCharacter(db, tx, account, characterId);
         using var command = db.CreateCommand();
@@ -54,7 +54,8 @@ internal sealed partial class CharacterRepository : IPvpMissionProgressStore
         command.CommandText = "SELECT mission_id FROM character_pvp_mission_rewards WHERE account=$account AND character_id=$id";
         var claimed = ImmutableHashSet.CreateBuilder<ushort>();
         using (var reader = command.ExecuteReader()) while (reader.Read()) claimed.Add(checked((ushort)reader.GetInt32(0)));
-        return new(progress with { ComboKeys = combos.ToImmutable(), ArcadeMask = arcade }, claimed.ToImmutable());
+        var state = new PvpMissionState(progress with { ComboKeys = combos.ToImmutable(), ArcadeMask = arcade }, claimed.ToImmutable());
+        return period is null ? state : ReadPvpDailyState(db, tx, account, characterId, period, state);
     }
 
     public Character CommitPvpMissions(AccountOwners.Lease owner, PvpMissionPlan plan) => owner.Execute(() =>
@@ -62,7 +63,7 @@ internal sealed partial class CharacterRepository : IPvpMissionProgressStore
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitPvpMissions");
         using var tx = write.Transaction;
-        if (!ReadPvpMissionState(db, tx, owner.Account, plan.Expected.Id).Same(plan.Before))
+        if (!ReadPvpMissionState(db, tx, owner.Account, plan.Expected.Id, plan.Period).Same(plan.Before))
             throw new InvalidOperationException("决斗任务规划来源已变化");
         var inventory = plan.Inventory.Plan ?? throw new InvalidDataException("决斗任务缺少奖励计划");
         // 角色revision、完整资产、溢出邮件均由公共提交器在本事务内处理。
@@ -96,6 +97,7 @@ internal sealed partial class CharacterRepository : IPvpMissionProgressStore
             claim.Parameters.AddWithValue("$rewards", JsonSerializer.Serialize(plan.Rewards[id]));
             claim.ExecuteNonQuery();
         }
+        if (plan.DailyChanged) WritePvpDailyState(db, tx, owner.Account, plan);
         tx.Commit();
         return inventory.Changed ? committed : plan.Expected;
     });

@@ -60,7 +60,7 @@ internal sealed partial class ChannelCatalog
                     i == 4 && (value < 0 || value > 255))
                     throw new InvalidDataException("频道数值字段无效");
             }
-            if (type is 4 or 5 or 8 or 24)
+            if (type is 4 or 5 or 8 or 13 or 24)
             {
                 // 客户端将这两列读为等级下限/上限；上限0不会补默认，会拒绝所有角色。
                 float minimumLevel = float.Parse(tokens[9], CultureInfo.InvariantCulture);

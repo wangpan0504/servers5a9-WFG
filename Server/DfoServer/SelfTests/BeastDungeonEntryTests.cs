@@ -20,6 +20,7 @@ internal static class BeastDungeonEntryTests
     public static void RunCore()
     {
         BeastRunProgressTests.RunCore();
+        BeastDisplayPacketTests.RunCore();
         BeastDungeonReservationTests.RunCore();
         RunSeekingSources();
         int checks = Count;

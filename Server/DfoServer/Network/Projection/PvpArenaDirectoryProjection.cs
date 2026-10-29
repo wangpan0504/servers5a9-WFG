@@ -45,7 +45,7 @@ internal sealed class PvpArenaDirectoryProjection : IAsyncDisposable
             {
                 long requested = Volatile.Read(ref version);
                 var session = context.Session;
-                if (session.ChannelEntry?.Type is not (4 or 5 or 24) || session.Phase != SessionPhase.Town ||
+                if (session.ChannelEntry?.Type is not (4 or 5 or 13 or 24) || session.Phase != SessionPhase.Town ||
                     session.CaptureSocialActor() is not { } actor) continue;
                 long sendEpoch = context.Sender.Epoch;
                 if (epoch != actor.Epoch)

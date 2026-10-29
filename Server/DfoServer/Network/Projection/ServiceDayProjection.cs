@@ -8,7 +8,7 @@ namespace DfoServer.Network.Projection;
 
 // 只管理当前选角的到点唤醒；各业务仍从原Session和持久化owner推进，不复制在线资格。
 internal sealed class ServiceDayProjection(GameConnectionContext context, ServerLog log, TownProjection town, TimeProvider? time = null,
-    Inventory.InventoryProjection? inventory = null) : IAsyncDisposable
+    Inventory.InventoryProjection? inventory = null, DfoServer.Game.Pvp.PvpMissionBook? missions = null, PvpMissionProjection? missionProjection = null) : IAsyncDisposable
 {
     readonly TimeProvider clock = time ?? TimeProvider.System;
     CancellationTokenSource? cancellation;
@@ -16,6 +16,8 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
     long epoch = -1;
     (long Epoch, int Day)? localPublished;
     (long Epoch, int Day)? legacyPublished;
+    int? missionDay;
+    long missionEpoch = -1;
     public async Task<bool> PublishAsync()
     {
         if (!context.Session.CanAdvanceServiceDay()) return false;
@@ -28,6 +30,17 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
             log.Write("fatigue_daily_reset", new { Connection = context.Id, Character = receipt.Character.Id,
                 Day = receipt.Character.Fatigue!.ResetDay, PreviousRemaining = receipt.Before.Fatigue!.Remaining,
                 Remaining = receipt.Character.Fatigue.Remaining, receipt.Character.Fatigue.Maximum, receipt.Character.Revision });
+        }
+        if (missions is not null)
+        {
+            if (missionEpoch == context.Session.SelectionEpoch && missionDay != missions.Period.Day && missionProjection is not null)
+            {
+                var reward = context.Session.RefreshPvpMissions(missions);
+                if (missions.Capture(context.Session) is { Daily.Length: 0 } || !missionProjection.QueueRewards(context, reward) ||
+                    !missionProjection.Queue(context, update: true)) return false;
+            }
+            missionDay = missions.Period.Day;
+            missionEpoch = context.Session.SelectionEpoch;
         }
         var cycle = context.Session.AdvanceServerItems(epoch != context.Session.SelectionEpoch);
         if (cycle is { Accepted: true, Receipt: { } committed, Plan: { } plan })
@@ -76,6 +89,8 @@ internal sealed class ServiceDayProjection(GameConnectionContext context, Server
             {
                 var now = clock.GetUtcNow();
                 var next = context.Session.NextServiceWake(now);
+                var missionReset = DfoServer.GameWorld.Time.ServiceDay.NextReset(now, clock.LocalTimeZone);
+                if (missions is not null && missionReset < next) next = missionReset;
                 var legacy = DailyBoosterUsage.NextReset(now);
                 if (legacy < next) next = legacy;
                 var delay = retrySeconds == 0 ? next - now : TimeSpan.FromSeconds(retrySeconds);

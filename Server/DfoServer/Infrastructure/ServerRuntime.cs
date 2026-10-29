@@ -105,10 +105,10 @@ internal static class ServerRuntime
         var pvpRatings = new Game.Pvp.PvpRatingSettlement(repository, pvpRatingCalculator);
         var totalRatings = new Game.Pvp.PvpTotalRatingSettlement(repository, pvpRatings, pvpRatingCalculator);
         var pvpMissionCatalog = new GameWorld.Pvp.PvpMissionCatalog(pvf);
-        foreach (var reward in pvpMissionCatalog.Definitions.SelectMany(row => row.Rewards).DistinctBy(row => row.ItemId))
+        foreach (var reward in pvpMissionCatalog.Definitions.Concat(pvpMissionCatalog.DailyDefinitions).SelectMany(row => row.Rewards).DistinctBy(row => row.ItemId))
             _ = itemResources.Items.Get(reward.ItemId);
         var pvpMissionBook = new Game.Pvp.PvpMissionBook(pvpMissionCatalog, repository, pvpRatings,
-            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock);
         var pvpMissions = new PvpMissionProjection(pvpMissionBook);
         var arenaRules = new GameWorld.Pvp.PvpArenaCatalog(pvf);
         itemResources.Items.TryGet(Game.Pvp.PvpTotalTeamRename.CardId, out var totalRenameCard);
@@ -516,7 +516,8 @@ internal static class ServerRuntime
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
-                prices: DungeonCardPriceCatalog.Load(pvf),hopeRewards:hopeRewards,dimensionRewards:dimensionRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons, guildEconomyService, guildContributionService, goldLimits: itemResources.GoldLimits);
+                prices: DungeonCardPriceCatalog.Load(pvf),hopeRewards:hopeRewards,dimensionRewards:dimensionRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons, guildEconomyService, guildContributionService, goldLimits: itemResources.GoldLimits,
+                imperialArena: imperialArenaProjection);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops,crackRewards);
         }
         else

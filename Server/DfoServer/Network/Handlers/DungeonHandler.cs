@@ -819,7 +819,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
         if (context.LostLand is not null) await context.LostLand.StopAsync();
-        if (context.Beast is not null) await context.Beast.StopAsync();
+        if (context.Beast is not null) await context.Beast.RefreshAsync();
         if (context.Altar is not null) await context.Altar.StopAsync();
         if (context.Death is not null) await context.Death.StopAsync();
         bool Guard() => context.Session.CanPublishTravel(receipt);

@@ -23,7 +23,8 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
     RentalCatalog? rental = null, Game.Events.ServerEventService? events = null,
     GameWorld.Adventure.AdventureCatalog? adventure = null, PartyDungeonService? partyDungeons = null,
     Game.Guild.GuildEconomyService? guildEconomy = null,
-    Game.Guild.GuildContributionService? guildContribution = null, GoldLimitCatalog? goldLimits = null) : IGameCommandModule
+    Game.Guild.GuildContributionService? guildContribution = null, GoldLimitCatalog? goldLimits = null,
+    ImperialArenaProjection? imperialArena = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -308,6 +309,23 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         if (request.Body.Length != 2 || request.Body[0] is not (1 or 2) || request.Body[1] > 3)
             return CommandResult.Unhandled;
         byte state = request.Body[0], option = request.Body[1];
+        // 帝国末轮已提交专用奖励，不创建普通经验/翻牌结算；原生结果菜单仍发送72。
+        if (option == 2 && imperialArena is not null && context.Session.CurrentImperialArenaResult() is { } imperialResult)
+        {
+            if (state == 2)
+            {
+                await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                    "imperial_arena_result_focus", () => context.Session.CanPublishFormalDungeon(imperialResult));
+                return CommandResult.Handled;
+            }
+            if (context.Session.ReturnFromImperialArenaResult(imperialResult) is not { } travel) return CommandResult.Unhandled;
+            await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
+                "imperial_arena_result_return", () => context.Session.CanPublishTravel(travel));
+            await town.ReturnFromFormalDungeonAsync(context, travel, "imperial_arena_result_town");
+            await imperialArena.ReturnAsync(context, travel);
+            log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "imperial_arena_result", travel.Character.Id, travel.Character.Position });
+            return CommandResult.Handled;
+        }
         if (state == 1 && option == 3 && context.Session.HasFormalDungeonContinuation())
         {
             log.Write("formal_quest_continuation_tail",new { Connection = context.Id, state, option });

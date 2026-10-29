@@ -17,7 +17,7 @@ internal sealed partial class GameSession
         Ready && Selected is not null && ratings.Recover(owner));
 
     bool CanEnterPvpArena => Ready && Phase == SessionPhase.Town && Selected is not null &&
-        ChannelEntry?.Type is 4 or 5 or 24 && pvpTraining is null && pvpArena is null && pvpMatching is null && CurrentParty?.Invoke() is null &&
+        ChannelEntry?.Type is 4 or 5 or 13 or 24 && pvpTraining is null && pvpArena is null && pvpMatching is null && CurrentParty?.Invoke() is null &&
         pendingRental is null && !HasPendingTownQuestCommit && !HasActiveDungeonContinuation &&
         !HasPendingQuestReplay && !HasPendingFormalCard;
 

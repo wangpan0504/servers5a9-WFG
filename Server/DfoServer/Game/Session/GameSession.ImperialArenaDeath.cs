@@ -16,6 +16,14 @@ internal sealed record ImperialArenaDeathPreparation(Character Character, long G
 
 internal sealed partial class GameSession
 {
+    public FormalDungeonReceipt? CurrentImperialArenaResult() => owner.Execute(() =>
+        Ready && Phase == SessionPhase.Settlement && formalDungeon is { ImperialArenaEntry: not null } dungeon &&
+        dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement && !dungeon.Run.HasPendingDeath &&
+        dungeon.PendingImperialArenaDeath is null && dungeon.PendingImperialArenaReward is null ? FormalReceipt() : null);
+
+    public DfoServer.Game.Town.TownTravelReceipt? ReturnFromImperialArenaResult(FormalDungeonReceipt expected) => owner.Execute(() =>
+        CurrentImperialArenaResult() is not null && CanPublishFormalDungeon(expected) ? ReturnFromFormalDungeon() : null);
+
     ImperialArenaDeathPreparation PrepareImperialArenaDeath(FormalDungeon dungeon, PreparedDungeonDeath pending)
     {
         if (dungeon.PendingImperialArenaDeath is { } previous)

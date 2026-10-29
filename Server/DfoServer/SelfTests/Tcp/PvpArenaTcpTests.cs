@@ -57,7 +57,11 @@ internal static class PvpArenaTcpTests
         guest.Barrier();
         TownPeer(host, guest.Id);
         host.Barrier();
-        string before = f.Snapshot();
+        var stableColumns = f.Query("PRAGMA table_info(characters)").Select(row => (string)row[1]).Where(column => column != "revision");
+        string StableCharacters() => f.Snapshot("SELECT " + string.Join(',', stableColumns.Select(column => "\"" + column + "\"")) + " FROM characters ORDER BY id");
+        string OtherItems() => f.Snapshot("SELECT * FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')<>10092640 ORDER BY item_uid");
+        string before = StableCharacters(), beforeItems = OtherItems();
+        var revisions = f.Query("SELECT id,revision FROM characters").ToDictionary(row => (long)row[0], row => (long)row[1]);
 
         // 预设标题3、地图0、密码pw、普通kind0/mode0。
         host.Send(50, [3, 0, 0, 1, 2, 0, 0, 0, (byte)'p', (byte)'w', 0, 0]);
@@ -208,7 +212,20 @@ internal static class PvpArenaTcpTests
         // 客人进房后目录不再刷新；删除通知沿用他在大厅最后收到的目录字段。
         State(guest, room, 0, 255, 0, 1);
         host.Barrier(); guest.Barrier();
-        That(before == f.Snapshot(), "正式房间、开战双屏障及死亡报告均不改角色资产和位置");
+        That(before == StableCharacters() && beforeItems == OtherItems(), "决斗保持角色位置、钱包及非证明物品完整状态");
+        foreach (var peer in new[] { host, guest })
+        {
+            var daily = JsonSerializer.Deserialize<PvpDailyMissionDay>((string)f.Query(
+                "SELECT state_json FROM character_pvp_daily_missions WHERE character_id=$p0 ORDER BY service_day DESC LIMIT 1", peer.Id)[0][0])!;
+            int expectedProof = daily.Entries.Where(row => row.Claimed).SelectMany(row => row.Mission.Rewards).Sum(row => row.Count);
+            That(f.Query("""
+                SELECT COALESCE(SUM(json_extract(item_core,'$.Value')),0) FROM character_inventory_items
+                WHERE owner_character_id=$p0 AND json_extract(item_core,'$.ItemId')=10092640
+                """, peer.Id) is [[long proof]] && proof == expectedProof &&
+                f.Query("SELECT revision FROM characters WHERE id=$p0", peer.Id) is [[long revision]] &&
+                revision == revisions[peer.Id] + peer.PvpMissionRewardBatches,
+                "唯一资产增量等于已领取每日奖励总和，每批通知绑定一次真实revision推进");
+        }
         That(f.Query("SELECT count(*) FROM pvp_arena_match_results")[0][0] is 4L,
             "结果后的离房和房主移交不重复记胜负");
         var ratingRows = f.Query("SELECT character_id,revision,state_json FROM character_pvp_ratings");
@@ -277,11 +294,13 @@ internal static class PvpArenaTcpTests
     internal static void Result(TcpTestFixture fixture, TcpPeer peer, byte winner,
         params (ushort Id, uint Kills)[] fighters)
     {
-        PvpMissionTcpChecks.Progress(fixture, peer.Id, peer.Expect(0, 578).Body);
+        PvpMissionTcpChecks.Update(peer, fixture);
         byte[] body = peer.Expect(0, 47).Body;
         var receipts = fixture.Query("SELECT receipt_json FROM character_pvp_rating_claims WHERE receipt_json IS NOT NULL")
             .Select(row => JsonSerializer.Deserialize<PvpRatingReceipt>((string)row[0])!).ToArray();
         var own = receipts.Where(row => row.CharacterId == peer.Id).MaxBy(row => row.Revision)!;
+        var frozen = JsonSerializer.Deserialize<PvpArenaResultRecord>((string)fixture.Query(
+            "SELECT result_json FROM pvp_arena_match_results WHERE match_id=$p0", own.MatchId.ToString("N"))[0][0])!;
         That(body.Length == 26 + 23 * fighters.Length && body[0] == winner && U32(body, 1) == 0 &&
             body[5] == own.Change.Grade && U32(body, 6) == unchecked((uint)own.Change.ExperienceDelta) && body[10] == fighters.Length,
             "真实47完整长度、胜席、胜点绝对余额及本人的持久评分回执一致");
@@ -289,6 +308,9 @@ internal static class PvpArenaTcpTests
         {
             int start = 11 + at * 23;
             var fighter = fighters[at];
+            var fact = frozen.Participants.Single(row => row.CharacterId == fighter.Id);
+            That(fact.Kills == fighter.Kills && fixture.Query("SELECT job FROM characters WHERE id=$p0", fighter.Id) is [[long job]] &&
+                fact.Job == job, "整局日常来源冻结真实基础职业及有效击杀，与普通/总力实际结果一致");
             That(U16(body, start) == fighter.Id && U32(body, start + 2) == fighter.Kills &&
                 body[start + 6] == receipts.Where(row => row.CharacterId == fighter.Id).MaxBy(row => row.Revision)!.Change.Grade &&
                 U32(body, start + 7) == 0 && U32(body, start + 11) == 0 && U32(body, start + 15) == 0 &&
@@ -318,8 +340,31 @@ internal static class PvpArenaTcpTests
         Bytes(body, expected, "正式普通房间按独立八席合同完整核对");
     }
 
-    internal static void Left(TcpPeer peer, ushort room, byte mode, byte seat) =>
+    internal static void Left(TcpPeer peer, ushort room, byte mode, byte seat)
+    {
         peer.Expect(0, 43, [(byte)room, (byte)(room >> 8), mode, 1, seat, 0, 255, 255]);
+        TownReturn(peer);
+    }
+
+    internal static void TownReturn(TcpPeer peer, DfoServer.GameWorld.Towns.Location? expected = null)
+    {
+        var saved = peer.SavedTownPosition();
+        var location = (expected ?? saved) with { Direction = saved.Direction };
+        That(location.Town == 10, "决斗退出必须返回本频道决斗城镇");
+        peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
+        var area = peer.Expect(0, 23).Body;
+        var expectedArea = Build(w =>
+        {
+            w.Write(peer.Id); w.Write(location.Town); w.Write(location.Area);
+            w.Write(location.X); w.Write(location.Y); w.Write(location.Direction); w.Write((byte)3);
+        });
+        Bytes(area, expectedArea, $"决斗退房区域实际{Convert.ToHexString(area)}，预期{Convert.ToHexString(expectedArea)}");
+        peer.Expect(0, 24, Build(w =>
+        {
+            w.Write(location.Town); w.Write(location.Area); w.Write((ushort)1); w.Write(peer.Id);
+            w.Write(location.X); w.Write(location.Y); w.Write(location.Direction); w.Write((byte)3); w.Write((byte)1);
+        }));
+    }
 
     static void Seats(TcpPeer peer, ushort room, byte mode, params (byte Seat, ushort Id, byte State)[] members) =>
         peer.Expect(0, 43, Build(w =>

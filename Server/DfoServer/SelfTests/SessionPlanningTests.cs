@@ -860,6 +860,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_pvp_training_skills VALUES({{id}},'{{training}}','1234567890abcdef1234567890abcdef',0);
                 INSERT INTO character_pvp_mission_facts VALUES({{id}},'planning',0,0,0,'1234567890abcdef1234567890abcdef');
                 INSERT INTO character_pvp_mission_rewards VALUES({{id}},'planning',1,'[]');
+                INSERT INTO character_pvp_daily_missions VALUES({{id}},'planning',1,'{"Day":1,"Entries":[]}');
                 INSERT OR IGNORE INTO pvp_arena_match_results VALUES('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','{}',0);
                 INSERT INTO character_evildom_war_rewards VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','1234567890abcdef1234567890abcdef',1,5422,1,0,'{}','[]',1);
                 INSERT INTO character_evildom_war_hidden_rewards VALUES({{id}},'planning','1234567890abcdef1234567890abcdef','{}','[]');
