@@ -17,7 +17,7 @@ internal sealed partial class GameSession
         if (plan is null) return new(PvpTotalTeamRenameFailure.InvalidCard);
         return admission.Actor.Execute(() =>
         {
-            if (!CanConfigurePvpTotalRoster || !ReferenceEquals(Selected, plan.Expected))
+            if (!CanRemainPvpMatching || pvpMatching is not null || !ReferenceEquals(Selected, plan.Expected))
                 return new PvpTotalTeamRenameResult(PvpTotalTeamRenameFailure.Unavailable);
             PvpTotalTeamRenameCommit? committed;
             try { committed = teams.CommitRename(owner, plan); }
@@ -35,7 +35,7 @@ internal sealed partial class GameSession
         });
     }
 
-    internal bool CanPublishPvpTotalTeamRename(SocialActor actor) => CanConfigurePvpTotalRoster &&
+    internal bool CanPublishPvpTotalTeamRename(SocialActor actor) => CanRemainPvpMatching && pvpMatching is null &&
         ReferenceEquals(actor.Owner, owner) && ReferenceEquals(actor.Session, this) && actor.IsCurrent() &&
         ReferenceEquals(Selected, actor.Character);
 }
