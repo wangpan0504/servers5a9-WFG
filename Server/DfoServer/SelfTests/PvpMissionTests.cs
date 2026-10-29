@@ -11,11 +11,12 @@ internal static class PvpMissionTests
 {
     public static void RunCore()
     {
+        PvpDailyMissionTests.RunCore();
         int before = Count;
         var definition = Read("normal", "arcade mode", "all", -1, 1)!;
         That(definition.Target == 1 && definition.Parameter == -1, "道场负难度参数不当作目标数");
-        That(Read("daily", "hereafter join", "all", 1, -1, dailyExtension: true) is null,
-            "日常grade后额外参数合法，但不混进普通任务书");
+        That(Read("daily", "hereafter join", "all", 1, -1, dailyExtension: true) is { Grade: 2, Group: 0 },
+            "日常grade后额外参数保留独立分组");
         Reject<InvalidDataException>(() => Read("normal", "hereafter join", "all", -1, -1), "负目标拒绝");
         Reject<InvalidDataException>(() => Read("normal", "hereafter join", "unknown", 1, -1), "未知比赛范围不默认全部");
         var combo = Read("normal", "combo clear", "swordman", 1, 4)!;
@@ -56,7 +57,13 @@ internal static class PvpMissionTests
     public static void RunResources(PvfArchive pvf)
     {
         int before = Count;
-        var definitions = new PvpMissionCatalog(pvf).Definitions;
+        var catalog = new PvpMissionCatalog(pvf);
+        var definitions = catalog.Definitions;
+        That(catalog.DailyDefinitions.Length == 16 && catalog.DailyDefinitions.Count(row => row.Grade == 2) == 12 &&
+            catalog.DailyDefinitions.Count(row => row.Grade == 4) == 4 &&
+            catalog.DailyDefinitions.Single(row => row.Id == 121).Jobs.SequenceEqual(new byte[] { 1, 7, 4 }) &&
+            catalog.DailyDefinitions.Single(row => row.Id == 140) is { Target: 9, Parameter: 9 },
+            "正式日常候选普通12/总力4，职业列表及总力9击杀不猜固定四token");
         That(definitions.Length == 154 && definitions.Count(row => row.Grade == 0) == 108 &&
             definitions.Count(row => row.Grade == 3) == 46, "正式索引普通108与总力46，日常及重复不混入任务树");
         That(definitions.Where(row => row.Parent != -1).All(row => definitions.Any(parent => parent.Id == row.Parent)),

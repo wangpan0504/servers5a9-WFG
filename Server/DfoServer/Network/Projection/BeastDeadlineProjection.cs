@@ -2,6 +2,7 @@ using DfoServer.Game.Dungeons;
 using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Protocol;
+using DfoServer.Network.Builders;
 
 namespace DfoServer.Network.Projection;
 
@@ -15,6 +16,12 @@ internal sealed class BeastDeadlineProjection(GameConnectionContext context, Ser
     Task pending = Task.CompletedTask;
     (Guid Instance, int Stage, int Completed, BeastTerminal Terminal)? published;
     internal Func<Task>? ResumePendingDeath { get; set; }
+    uint displaySerial;
+    bool hasDisplay;
+    internal Guid DisplayConnection { get; } = Guid.NewGuid();
+
+    internal uint NextDisplaySerial() => displaySerial < uint.MaxValue ? ++displaySerial :
+        throw new InvalidOperationException("魔兽显示序号耗尽，必须重建连接");
 
     internal async Task RefreshAsync()
     {
@@ -26,8 +33,27 @@ internal sealed class BeastDeadlineProjection(GameConnectionContext context, Ser
             if (published != identity && context.Session.CanPublishBeastRun(receipt))
             {
                 log.Write("formal_beast_progress", new { Connection = context.Id, View = view });
+                if (context.Session.Selected is { } selected && context.Session.FormalEnteredDungeonId is >= 310 and <= 314)
+                {
+                    await context.Sender.Send(0, BeastDisplayPackets.Opcode,
+                        BeastDisplayPackets.Progress(NextDisplaySerial(), DisplayConnection, selected.Id, view), "beast_display_progress", () =>
+                            context.Session.CanPublishBeastRun(receipt) &&
+                            Identity(receipt.Progress.View()) == identity);
+                    hasDisplay = true;
+                }
                 published = identity;
             }
+        }
+        else if (hasDisplay)
+        {
+            var previousCharacter = context.Session.Selected;
+            long generation = context.Owner.Generation, epoch = context.Session.SelectionEpoch;
+            await context.Sender.Send(0, BeastDisplayPackets.Opcode,
+                BeastDisplayPackets.Clear(NextDisplaySerial(), DisplayConnection, previousCharacter?.Id ?? 0), "beast_display_clear", () =>
+                    context.Owner.Generation == generation && context.Session.SelectionEpoch == epoch &&
+                    ReferenceEquals(context.Session.Selected, previousCharacter) && context.Session.CaptureBeastRun() is null);
+            published = null;
+            hasDisplay = false;
         }
         if (receipt is not null && ReferenceEquals(scheduled?.Progress, receipt.Progress)) return;
         await StopAsync();
@@ -38,6 +64,9 @@ internal sealed class BeastDeadlineProjection(GameConnectionContext context, Ser
         cancellation = CancellationTokenSource.CreateLinkedTokenSource(context.Stop, acquired.Stop);
         pending = RunAsync(receipt, acquired, cancellation.Token);
     }
+
+    static (Guid Instance, int Stage, int Completed, BeastTerminal Terminal) Identity(BeastProgressView view) =>
+        (view.InstanceId, view.Stage, view.CompletedStages, view.Terminal);
 
     async Task RunAsync(BeastRunReceipt receipt, BeastDeadlineLease acquired, CancellationToken stop)
     {

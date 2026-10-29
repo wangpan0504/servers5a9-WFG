@@ -331,6 +331,15 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Sender.ClearScene(SceneActorClear.Preserve).GetAwaiter().GetResult();
     }
 
+    internal static void QueuePvpReturn(GameConnectionContext context, Character character, Func<bool> current)
+    {
+        // 清席仅撤销房间引用；必须显式恢复城镇场景，避免仍在练习场时重置读取空房间。
+        using var publication = context.Sender.QueuePublication(current);
+        context.Sender.Post(0, (ushort)NotiPacketType.USER_STATE, TownPackets.ActorState(character.Id), "pvp_return_town_state", current);
+        context.Sender.Post(0, (ushort)NotiPacketType.USER_AREA, TownPackets.Position(character, true), "pvp_return_town_area", current);
+        context.Sender.Post(0, (ushort)NotiPacketType.AREA_USERS, TownPackets.Transition(character), "pvp_return_town_scene", current);
+    }
+
     internal void QueueRaidArrival(GameConnectionContext context, Character character, Func<bool> current)
     {
         context.Sender.Post(0, (ushort)NotiPacketType.USER_AREA, TownPackets.Position(character, true), "raid_waiting_area", current);
@@ -422,6 +431,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     {
         if (receipt.RaidBattleChange is not null) context.Session.PublishRaidCombat();
         bool CanSend() => context.Session.CanPublishTravel(receipt);
+        if (CanSend() && context.Beast is { } beastDisplay) await beastDisplay.RefreshAsync();
         if (CanSend()) GuildDungeonPartyBuffProjection.Post(context, clear: true);
         await context.Notify(NotiPacketType.USER_STATE, TownPackets.ActorState(receipt.Character.Id), "formal_return_town_state", CanSend);
         // 返城重建Actor后补发网吧特权buff；副本内的buff栏不会保留系统buff。

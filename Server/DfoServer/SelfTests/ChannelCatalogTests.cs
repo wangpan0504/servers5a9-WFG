@@ -60,10 +60,10 @@ internal static class ChannelCatalogTests
                 ChannelPackets.LoginChannelType(embedded.Entry(51)) == 4 &&
                 ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(51)))[3] == 4,
                 "普通决斗场使用原生51/type4与已有新手名称键，追加末尾且LOGIN保留实际类型");
-            That(embedded.Channels[^1] == new ChannelDefinition(55, "<channel_info_cname_505>", 5, "[pvp]") &&
-                ChannelPackets.LoginChannelType(embedded.Entry(55)) == 5 &&
-                ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(55)))[3] == 5,
-                "自由练习场追加原生55/type5，使用自由练习名称且LOGIN保留真实类型");
+            That(embedded.Channels[^1] == new ChannelDefinition(55, "<channel_info_cname_505>", 13, "[pvp]") &&
+                ChannelPackets.LoginChannelType(embedded.Entry(55)) == 13 &&
+                ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(55)))[3] == 13,
+                "自由练习场追加本服55/type13（新版集成自由练习场），使用自由练习名称且LOGIN保留真实类型");
             foreach (int number in new[] { 101, 47, 51, 55 })
             {
                 string channelRow = embedded.SourceText.Split('\n').Single(line => line.StartsWith(number + " ", StringComparison.Ordinal));
@@ -94,12 +94,12 @@ internal static class ChannelCatalogTests
         }
         finally { Directory.Delete(root, true); }
         var catalog = ChannelCatalog.Parse(source);
-        foreach (int pvpType in new[] { 4, 5, 8, 24 })
+        foreach (int pvpType in new[] { 4, 5, 8, 13, 24 })
             That(!ChannelAreaLanding.SameSnapshotPredicates(22, pvpType) &&
                 !ChannelAreaLanding.SameSnapshotPredicates(pvpType, 22) &&
                 ChannelAreaLanding.SameSnapshotPredicates(24, pvpType) &&
                 ChannelAreaLanding.LandsInChannelTown(new(new(2, 101), pvpType, "[pvp]")),
-                "四类决斗入口独立于普通快照且直接入城，决斗入口之间可保留决斗地区");
+                "决斗入口独立于普通快照且直接入城，决斗入口之间可保留决斗地区");
         That(ChannelAreaLanding.SameSnapshotPredicates(53, 53) && !ChannelAreaLanding.SameSnapshotPredicates(22, 53) &&
             !ChannelAreaLanding.SameSnapshotPredicates(53, 22), "再战vt+38独立参与换频道快照，同类型保留、普通互换不保留");
         That(!ChannelAreaLanding.SameSnapshotPredicates(22, 56) && !ChannelAreaLanding.SameSnapshotPredicates(56, 22) &&
@@ -116,7 +116,7 @@ internal static class ChannelCatalogTests
         Reject<InvalidDataException>(() => catalog.Entry(256), "无法放入Actor身份的频道号不能建立监听入口");
         That(ChannelCatalog.Parse(source.Replace("<chn_channel_info_028>", "<4::channel_info_dname_1>")).Channels[0].Number == 10,
             "允许已有的带索引字符串引用");
-        foreach (int type in new[] { 4, 5, 8, 24 })
+        foreach (int type in new[] { 4, 5, 8, 13, 24 })
         {
             string PvpSource(string minimum, string maximum) => source.Replace("[/server]",
                 $"101 `<chn_channel_info_039>` {type} `[pvp]` 0 0 0 0 0 {minimum} {maximum} 0 0 0 0 ``\n[/server]");

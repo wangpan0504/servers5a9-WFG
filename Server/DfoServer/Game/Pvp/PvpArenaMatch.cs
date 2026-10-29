@@ -9,6 +9,7 @@ internal enum PvpArenaOutcome { Win, Lose, Draw, Cancelled }
 internal sealed record PvpArenaFighter(Guid Membership, ushort CharacterId, byte Seat, byte Team)
 {
     public string Account { get; init; } = "";
+    public byte? Job { get; init; }
     public PvpRatingSnapshot? Rating { get; init; }
     public PvpTotalTeam? TotalTeam { get; init; }
 }
@@ -96,7 +97,7 @@ internal sealed class PvpArenaMatch
         // 首次失败后保留同一快照，重试不能更换时间或参与者来绕过去重。
         pendingRecord ??= new(Id, room, channel, Mode, Result.Standings.Select(row =>
             new PvpArenaResultParticipant(row.Fighter.Account, row.Fighter.CharacterId, row.Fighter.Seat,
-                row.Fighter.Team, row.Outcome) { Rating = row.Fighter.Rating, TotalTeam = row.Fighter.TotalTeam }).ToImmutableArray(), Result.Forfeit, now.ToUnixTimeSeconds())
+                row.Fighter.Team, row.Outcome) { Rating = row.Fighter.Rating, TotalTeam = row.Fighter.TotalTeam, Job = row.Fighter.Job, Kills = Kills(row.Fighter.Membership) }).ToImmutableArray(), Result.Forfeit, now.ToUnixTimeSeconds())
             { RatingMode = ratingMode };
         pendingRecord.Validate();
         return pendingRecord;

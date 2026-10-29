@@ -7,6 +7,8 @@ namespace DfoServer.Game.Pvp;
 internal sealed record PvpArenaResultParticipant(string Account, ushort CharacterId, byte Seat, byte Team,
     PvpArenaOutcome Outcome)
 {
+    public byte? Job { get; init; }
+    public uint Kills { get; init; }
     public PvpRatingSnapshot? Rating { get; init; }
     public PvpTotalTeam? TotalTeam { get; init; }
 }
@@ -20,7 +22,7 @@ internal sealed record PvpArenaResultRecord(Guid MatchId, Guid RoomInstance, ush
         if (MatchId == Guid.Empty || RoomInstance == Guid.Empty || !Enum.IsDefined(Mode) || !Enum.IsDefined(RatingMode) || FinishedAt < 0 ||
             Participants.IsDefault || Participants.Length is < 2 or > 8 ||
             Participants.Any(row => row is null || string.IsNullOrWhiteSpace(row.Account) || row.CharacterId is 0 or ushort.MaxValue ||
-                row.Seat > 7 || row.Team > 1 || !Enum.IsDefined(row.Outcome)) ||
+                row.Seat > 7 || row.Team > 1 || row.Job > 15 || !Enum.IsDefined(row.Outcome)) ||
             Participants.Select(row => row.Account).Distinct(StringComparer.Ordinal).Count() != Participants.Length ||
             Participants.Select(row => row.CharacterId).Distinct().Count() != Participants.Length ||
             Participants.Select(row => row.Seat).Distinct().Count() != Participants.Length ||

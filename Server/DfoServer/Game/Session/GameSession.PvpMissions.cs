@@ -55,9 +55,9 @@ internal sealed partial class GameSession
         var plan = book.Plan(actor.Owner, actor.Character, fact);
         return owner.Execute(() =>
         {
-            if (!actor.IsCurrent() || !ReferenceEquals(Selected, actor.Character) || Phase != capture.Phase || !valid() ||
+            if (!book.IsCurrent(plan) || !actor.IsCurrent() || !ReferenceEquals(Selected, actor.Character) || Phase != capture.Phase || !valid() ||
                 pendingQuestLifecycle is not null || pendingRental is not null || HasPendingTownQuestCommit || HasPendingFormalCard) return null;
-            if (plan.Missions.IsEmpty && plan.Before.Progress.Same(plan.Before.Progress.Apply(fact))) return null;
+            if (!plan.DailyChanged && plan.Missions.IsEmpty && plan.Before.Progress.Same(plan.Before.Progress.Apply(fact))) return null;
             Selected = book.Commit(owner, plan);
             completed = QuestEligibility.Completed(Selected);
             // 资产提交可能刷新任务对象；风云接取UUID不变，继续绑定同一实例的最新快照。

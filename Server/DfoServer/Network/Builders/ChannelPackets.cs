@@ -92,7 +92,7 @@ internal static class ChannelPackets
     // 普通type22用于冒险团页准入（012AE420→028FB170）；其他未确认入口继续发0，避免扩大客户端模式变化。
     // LOGIN接收端将类型写入模式+1010；魔兽谓词读取该字段是否为0x28，不能回落0。
     public static byte LoginChannelType(ChannelEntry channel) =>
-        channel.Type is 4 or 5 or 8 or 24 or 22 or 39 or BeastType or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
+        channel.Type is 4 or 5 or 8 or 13 or 24 or 22 or 39 or BeastType or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
 
     public static byte[] Endpoint(string address, int port, uint association = 0, byte channelType = 0)
     {

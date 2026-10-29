@@ -46,11 +46,20 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] LoginEndpoint { get; private set; } = [];
     public byte[] PvpTotalActors { get; private set; } = [];
     public byte[] PvpMissions { get; private set; } = [];
+    internal int PvpMissionRewardBatches { get; set; }
     public byte[] SkillInfo { get; private set; } = [];
     public byte[] SceneSkillInfo { get; private set; } = [];
     public byte[] AvailableQuests { get; private set; } = [];
     public byte[] CompletedQuestHistory { get; private set; } = [];
     public ushort Id { get; internal set; }
+
+    internal DfoServer.GameWorld.Towns.Location SavedTownPosition()
+    {
+        var row = (fixture ?? throw new InvalidOperationException("位置预期缺少隔离夹具"))
+            .Query("SELECT town,area,x,y,direction FROM characters WHERE id=$p0", Id).Single();
+        return new(Convert.ToByte(row[0]), Convert.ToByte(row[1]), Convert.ToUInt16(row[2]),
+            Convert.ToUInt16(row[3]), Convert.ToByte(row[4]));
+    }
 
     // 预期来自夹具的原持久位置、完成位与只读资源；不调用生产Session或Builder，也不接受收到的包体自证。
     internal byte[] SelectionNoticeBody(ushort griefLayer = 0, ushort despairLayer = 0, int legendDungeon = 0,
@@ -920,7 +929,7 @@ internal sealed partial class TcpPeer : IDisposable
 
     // 决斗入口频道类型取自 LOGIN 应答第 4 字节；原生登录不取该应答（LoginEndpoint 仍为空数组），按非决斗处理，
     // 保持入城仍走共享房间与 1379。直接按下标读会在 NativeLoginTcpTests 抛 IndexOutOfRangeException。
-    bool PvpEntry => LoginEndpoint.Length > 3 && LoginEndpoint[3] is 4 or 5 or 8 or 24;
+    bool PvpEntry => LoginEndpoint.Length > 3 && LoginEndpoint[3] is 4 or 5 or 8 or 13 or 24;
 
     public WirePacket[] Select(ushort slot = 0, bool prepared = false, (byte Kind, ushort Opcode)[]? inventoryNotices = null,
         (ushort Opcode, byte[] Body)[]? settings = null, byte? appearanceFlags = null, bool expertContract = false,
@@ -1224,6 +1233,7 @@ internal sealed partial class TcpPeer : IDisposable
             PvpMissions = Expect(0, 323).Body;
             if (fixture is not null) PvpMissionTcpChecks.Progress(fixture, Id, PvpMissions);
             else PvpMissionTcpChecks.Parse(PvpMissions);
+            PvpMissionTcpChecks.Daily(this, fixture);
         }
         if (pvpTotalTeam is not null)
         {

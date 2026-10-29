@@ -264,13 +264,13 @@ internal static partial class RaidChannelLandingTcpTests
         }
     }
 
-    static Character CreateRaider(TcpTestFixture fixture, TcpTestResources resources, string name, Location? initialPosition = null)
+    static Character CreateRaider(TcpTestFixture fixture, TcpTestResources resources, string name, Location? initialPosition = null, string? account = null)
     {
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         var position = initialPosition ?? new Location(38, 0, 629, 196);
         var done = new HashSet<int>(RaidQuests);
         done.UnionWith(resources.Towns.SpecialChannelQuests.Values);
-        using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+        using var owner = new AccountOwners().Acquire(account ?? fixture.Options.DevelopmentAccount, () => { });
         var candidate = CharacterCreation.Prepare(name, resources.Characters.Get(0), position, position, resources.Learning.Get);
         var learning = SkillPointLedger.Synchronize(0, 0, 95, candidate.InitialLearning with
             { Experience = growth.GetLevelStartExperience(95) }, resources.Learning);

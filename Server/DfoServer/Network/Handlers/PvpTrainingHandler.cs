@@ -145,8 +145,12 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
         {
             var left = request is { Seat: 0, State: 254 } ? context.Session.EndPvpPractice(practice) : null;
             if (left is not null)
+            {
                 await context.Notify(NotiPacketType.PVP_SEAT_STATE, PvpTrainingPackets.LeaveSeat(left.Actor.Character.Id, left.Mode is null ? (byte)6 : (byte)10),
                     "pvp_practice_exit", () => context.Session.CanPublishPvpPractice(left, removed: true));
+                TownProjection.QueuePvpReturn(context, left.Actor.Character,
+                    () => context.Session.CanPublishPvpPractice(left, removed: true));
+            }
             return CommandResult.Handled;
         }
         var run=context.Session.ReadPvpTraining();
@@ -155,9 +159,13 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
             ? context.Session.EndPvpTraining(run.InstanceId) : null;
         log.Write("pvp_training",new {Connection=context.Id,packet.Opcode,Accepted=receipt is not null,request.Seat,request.State});
         if(receipt is not null)
+        {
             await context.Notify(NotiPacketType.PVP_SEAT_STATE,PvpTrainingPackets.LeaveSeat(receipt.Run.Entry.Expected.Id,receipt.Run.Entry.IsCombo ? (byte)6 : (byte)10),
                 "pvp_training_exit",()=>context.Session.CanPublishPvpTraining(receipt));
-        // 匹配CMD52没有独立成功ACK合同；由NOTI43清本人席位完成返回。
+            TownProjection.QueuePvpReturn(context, receipt.Run.Entry.Expected,
+                () => context.Session.CanPublishPvpTraining(receipt));
+        }
+        // CMD52没有独立成功ACK合同；清席后显式完成城镇场景投影。
         return CommandResult.Handled;
     }
 

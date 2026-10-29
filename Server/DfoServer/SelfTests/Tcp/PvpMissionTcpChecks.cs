@@ -5,6 +5,63 @@ namespace DfoServer.Testing;
 
 internal static class PvpMissionTcpChecks
 {
+    internal static Dictionary<ushort, (uint Current, uint Target)> Update(TcpPeer peer, TcpTestFixture fixture)
+    {
+        var packet = peer.Read();
+        if (packet is { Kind: 0, Opcode: 14 })
+        {
+            peer.PvpMissionRewardBatches++;
+            var delta = packet.Body;
+            That(delta.Length == 3 + 123 * U16(delta, 1) && delta[0] == 0 && U16(delta, 1) > 0,
+                "日常自动奖励以正式123字节物品差量先于578发布");
+            for (int at = 3; at < delta.Length; at += 123)
+            {
+                That(U32(delta, at + 2) == 10092640 && fixture.Query("""
+                    SELECT count(*) FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
+                    WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=$p1
+                      AND json_extract(i.item_core,'$.ItemId')=10092640 AND json_extract(i.item_core,'$.Value')=$p2
+                    """, peer.Id, U16(delta, at), U32(delta, at + 6)) is [[1L]],
+                    "通知的胜利证明槽位、物品与数量必须对应已提交UID行");
+            }
+            packet = peer.Read();
+        }
+        That(packet is { Kind: 0, Opcode: 578 }, "资产差量后收到正式任务更新578");
+        var body = packet.Body;
+        Progress(fixture, peer.Id, body);
+        Daily(peer, fixture);
+        return Parse(body);
+    }
+
+    internal static void Daily(TcpPeer peer, TcpTestFixture? fixture)
+    {
+        DfoServer.Game.Pvp.PvpDailyMissionDay? saved = null;
+        if (fixture is not null)
+        {
+            var rows = fixture.Query("SELECT state_json FROM character_pvp_daily_missions WHERE character_id=$p0 ORDER BY service_day DESC LIMIT 1", peer.Id);
+            That(rows is [[string]], "首次选角必须已提交当天真实日常分配，不能只发临时列表");
+            saved = System.Text.Json.JsonSerializer.Deserialize<DfoServer.Game.Pvp.PvpDailyMissionDay>((string)rows[0][0]);
+        }
+        foreach (byte grade in new byte[] { 2, 4 })
+        {
+            var wire = peer.Expect(0, 579).Body;
+            That(wire.Length == 56 && wire[0] == grade && wire[1] == 3,
+                "579按普通/总力分组，各三行18字节，所有行带真实奖励扩展");
+            var ids = new HashSet<ushort>();
+            for (int at = 2; at < wire.Length; at += 18)
+            {
+                ushort id = U16(wire, at);
+                That(ids.Add(id) && U32(wire, at + 2) <= U32(wire, at + 6) && U32(wire, at + 6) > 0 &&
+                    U32(wire, at + 10) == 2 && U32(wire, at + 14) > 0, "579唯一ID、进度与胜利证明扩展");
+                if (saved is null) continue;
+                var row = saved.Entries.Single(entry => entry.Mission.Id == id);
+                That(row.Mission.Grade == grade && row.Mission.Target == U32(wire, at + 6) &&
+                    row.Mission.Rewards.Single().Count == U32(wire, at + 14) &&
+                    (!row.Claimed || U32(wire, at + 2) == U32(wire, at + 6)),
+                    "579逐行绑定持久化任务ID、目标、奖励快照和领取完成态");
+            }
+        }
+    }
+
     internal static Dictionary<ushort, (uint Current, uint Target)> Parse(byte[] body)
     {
         That(body.Length > 0 && body.Length == 1 + body[0] * 10 && body[0] is 115 or 118,

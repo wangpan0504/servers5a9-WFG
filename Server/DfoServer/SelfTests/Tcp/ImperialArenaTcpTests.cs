@@ -97,6 +97,10 @@ internal static class ImperialArenaTcpTests
                             attempt == 0 && (mode == 1 || room == route.Length),
                             room == 0 && attempt == 0 ? () => Restricted(peer) : null, final: room == route.Length,
                             elapsedMilliseconds: checked((uint)(route.Length + 1) * 10_000u));
+                        if (room == 0 && attempt == 0)
+                        {
+                            peer.Send(72, [2, 2]); peer.Send(72, [1, 2]); peer.Barrier();
+                        }
                         if (mode == 2 && room > 0 && room < route.Length)
                             That(fixture.Query("SELECT count(*) FROM mailbox_messages") is [[long current]] && current == mailBefore + attempt,
                                 "困难中途只冻结奖励，结束前不逐回合发信");
@@ -109,7 +113,8 @@ internal static class ImperialArenaTcpTests
                     That(fixture.Query("SELECT cleared_round,elapsed_ms FROM account_imperial_arena_runs ORDER BY admitted_at DESC LIMIT 1") is
                         [[long round, long elapsed]] && round == route.Length && elapsed == (route.Length + 1) * 10_000,
                         "帝国真实全路线、指定对手与单调耗时持久化");
-                    Return(peer);
+                    Return(peer, resultMenu: true);
+                    peer.Send(72, [1, 2]); peer.Barrier();
                 }
                 That(fixture.Query("SELECT count(*) FROM mailbox_messages") is [[long after]] && after == mailBefore + (mode == 1 ? route.Length : 1),
                     "每账号每日对手邮件永久幂等，重进不增发");
@@ -233,9 +238,18 @@ internal static class ImperialArenaTcpTests
         peer.Expect(1, 15, [1]); peer.Expect(0, 3); peer.Expect(0, 27); peer.Expect(0, 28);
         return peer.Expect(0, 29).Body;
     }
-    static void Return(TcpPeer peer, bool recoveredMail = false)
+    static void Return(TcpPeer peer, bool recoveredMail = false, bool resultMenu = false)
     {
-        peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 3); peer.Expect(0, 24);
+        if (resultMenu)
+        {
+            for (int repeat = 0; repeat < 2; repeat++)
+            {
+                peer.Send(72, [2, 2]); peer.Expect(1, 72, [1, 2, 2]);
+            }
+            peer.Send(72, [1, 2]); peer.Expect(1, 72, [1, 1, 2]);
+        }
+        else { peer.Send(42); peer.Expect(1, 42, [1]); }
+        peer.Expect(0, 3); peer.Expect(0, 24);
         FormalDungeonTcpTests.RefreshedQuests(peer);
         if (recoveredMail) peer.Expect(0, 99);
         peer.Expect(0, 1403); peer.Expect(0, 1400); peer.Expect(0, 1632); peer.Barrier();

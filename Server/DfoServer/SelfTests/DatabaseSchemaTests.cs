@@ -217,6 +217,7 @@ internal static partial class DatabaseSchemaTests
             RaidLifecycleUpgrade(root);
             PvpTotalRatingUpgrade(root);
             PvpMissionUpgrade(root);
+            PvpDailyUpgrade(root);
             PvpRankUpgrade(root);
             FatigueDailyUpgrade(root);
             ServerItemUpgrade(root);
@@ -2298,7 +2299,7 @@ internal static partial class DatabaseSchemaTests
     // 旧库夹具同时移除后续拍卖、公会、收集箱和Buff强化结构；子表先于所属表删除。
     static void DropLaterTables(SqliteConnection db)
     {
-        Execute(db, "DROP TABLE IF EXISTS character_pvp_mission_rewards; DROP TABLE IF EXISTS character_pvp_mission_facts");
+        Execute(db, "DROP TABLE IF EXISTS character_pvp_daily_missions; DROP TABLE IF EXISTS character_pvp_mission_rewards; DROP TABLE IF EXISTS character_pvp_mission_facts");
         RemoveSkillTreeExpansionSchema(db);
         DropSkillSwitchInventorySchema(db);
         DropCollectBoxSchema(db);
@@ -2527,6 +2528,8 @@ internal static partial class DatabaseSchemaTests
                 if (oldVersion < 94) Execute(db,"DROP TABLE IF EXISTS quest_eligibility_mail_dispatches");
                 if (oldVersion < 95) Execute(db,"DROP TABLE IF EXISTS character_pvp_training_skills");
                 if (oldVersion < 150) Execute(db,"DROP TABLE IF EXISTS character_pvp_mission_rewards; DROP TABLE IF EXISTS character_pvp_mission_facts");
+                // 222cd1db 的每日账本迁移在本整合线顺延到 151。
+                if (oldVersion < 151) Execute(db,"DROP TABLE IF EXISTS character_pvp_daily_missions");
                 if (oldVersion < 96) Execute(db,"DROP TABLE IF EXISTS account_pvp_private_characters");
                 if (oldVersion < 97) Execute(db,"DROP TABLE IF EXISTS character_operation_hope_reward_receipts");
                 if (oldVersion < 88) Execute(db, "DROP TABLE IF EXISTS character_dungeon_incount");

@@ -73,7 +73,7 @@ internal sealed partial class PvpArenaService
                 bool installed = false;
                 try
                 {
-                    var seat = room.Join(admission.Actor.Owner.Account, admission.Actor.Character.Id, 0)!;
+                    var seat = room.Join(admission.Actor.Owner.Account, admission.Actor.Character.Id, 0, job: admission.Actor.Character.Job)!;
                     var member = new PvpArenaMembership(room, seat.Token, admission.Actor, admission.Identity);
                     if (!session.InstallPvpArena(member)) return null;
                     rooms.Add(room.Id, room);
@@ -103,7 +103,7 @@ internal sealed partial class PvpArenaService
                     expected.Channel != ChannelKey(admission.Identity.Channel) || !expected.AcceptsPassword(password)) return null;
                 var current = expected.View().Members.Where(row => !row.Spectator).ToArray();
                 byte team = (byte)(current.Count(row => row.Team == 0) <= current.Count(row => row.Team == 1) ? 0 : 1);
-                var seat = expected.Join(admission.Actor.Owner.Account, admission.Actor.Character.Id, team, spectator);
+                var seat = expected.Join(admission.Actor.Owner.Account, admission.Actor.Character.Id, team, spectator, admission.Actor.Character.Job);
                 if (seat is null) return null;
                 var member = new PvpArenaMembership(expected, seat.Token, admission.Actor, admission.Identity);
                 if (!session.InstallPvpArena(member)) { expected.Leave(seat.Token); return null; }

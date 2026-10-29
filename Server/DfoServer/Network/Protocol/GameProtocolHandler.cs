@@ -103,7 +103,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var revival = new DungeonRevivalProjection(context, log, time);
         var tagRevival = new TagEvildomRevivalProjection(context, log, time);
         var tagDeadline = tagEvildomRun is null ? null : new TagEvildomDeadlineProjection(context, projection, tagEvildomRun, log, SqliteBusyRetry.IsBusy, time);
-        var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory);
+        var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory, missionBook, pvpMissions);
         session.ReturnToSelectionRequested = async () =>
         {
             await context.CommandGate.WaitAsync(connection.Stop);

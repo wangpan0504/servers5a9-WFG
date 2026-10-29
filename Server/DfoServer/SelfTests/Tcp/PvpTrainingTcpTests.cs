@@ -13,6 +13,7 @@ internal static partial class PvpTrainingTcpTests
 {
     public static async Task RunAsync(ServerOptions source,string root,TcpTestResources resources)
     {
+        await DailyAsync(source, root, resources);
         await PracticeAsync(source, root, resources);
         await using var f=new TcpTestFixture(source,Path.Combine(root,"pvp-training"),resources:resources);
         const string account="training-tcp";
@@ -76,7 +77,7 @@ internal static partial class PvpTrainingTcpTests
             Round(peer,0,1201,1,false);Round(peer,0,1201,1,false);Round(peer,1,1201,1,true);
             Round(peer,0,1201,2,false);Round(peer,0,1202,2,false);Round(peer,1,1202,2,true);
             peer.Expect(0,14);
-            PvpMissionTcpChecks.Progress(f, id, peer.Expect(0,578).Body);
+            PvpMissionTcpChecks.Update(peer, f);
             Round(peer,1,1202,2,true);peer.Barrier();
             That(questsBefore == f.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0", id) &&
                 f.Query("SELECT mission_id FROM character_pvp_mission_rewards WHERE character_id=$p0", id) is [[604L]],
@@ -90,12 +91,12 @@ internal static partial class PvpTrainingTcpTests
             peer.Send(33,[33,0,0x70,0x0A,0x40,0,0]);peer.Expect(1,33,[1,0x70,0x0A,0,2,0,0]);peer.Barrier();
             That(before==f.Snapshot(),"重复消费同一正式事实不新增事务或revision");
             peer.Send(12,Convert.FromHexString("000304000000000500000000000007"));peer.Expect(1,12,[0,21,0]);
-            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),10,1,0,0,255,255]);peer.Barrier();
+            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),10,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer, position);peer.Barrier();
             That(before==f.Snapshot(),"训练退出清房间且不改原位置、角色资产及接取UUID");
             Round(peer,1,1202,2,true);peer.Barrier();
             peer.Send(50,request);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false);
             // 共享离队入口仍支持主线训练房间退出，不能误走城镇队伍或重复注册CMD13。
-            peer.Send(13);CheckRoom(peer.Expect(0,41).Body,true);peer.Barrier();
+            peer.Send(13);peer.Expect(0,43,[(byte)id,(byte)(id>>8),10,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer, position);peer.Barrier();
             peer.Send(50,request);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false);
             peer.Send(7);peer.Expect(1,7,[1]);peer.Expect(0,2);
             peer.Select(prepared:true);peer.Barrier();
@@ -129,7 +130,7 @@ internal static partial class PvpTrainingTcpTests
             That(before==f.Snapshot(),"连招成功重放不额外写库或发奖");
             peer.Send(52,[1,254]);peer.Send(52,[0,0]);peer.Barrier();
             That(before==f.Snapshot(),"未证席位或状态不改当前训练与资产");
-            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),6,1,0,0,255,255]);
+            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),6,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer, position);
             peer.Send(52,[0,254]);peer.Barrier();
             peer.Send(33,[33,0,0x70,0x0A,0x20,0,0]);peer.Expect(1,33,[0,19,0]);
             peer.Send(50,combo);peer.Expect(1,50,[0,19,0]);
@@ -152,7 +153,7 @@ internal static partial class PvpTrainingTcpTests
             Round(peer,0,1202,2,false);Round(peer,1,1202,2,true);
             peer.Send(33,[33,0,0x71,0x0A,0x40,0,0]);peer.Expect(1,33,[0,19,0]);
             peer.Send(33,[33,0,0x71,0x0A,0x10,0,0]);peer.Expect(1,33,[1,0x71,0x0A,0,0,0,0]);
-            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),10,1,0,0,255,255]);
+            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),10,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer, position);
             peer.Send(34,[34,0,0x71,0x0A,255,255,1,0,255,255]);
             reward=peer.Expect(1,34).Body;
             That(reward[0]==1 && U16(reward,1)==2673 && reward[3]==60,"2673按mode2只消费胜利通道并交付原奖励");
@@ -167,7 +168,7 @@ internal static partial class PvpTrainingTcpTests
             peer.Send(29,[0,1,5,0,0,1,3]);That(peer.Expect(1,29).Body[0]==1,"末项训练自动加点真实提交");
             peer.Send(50,combo);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false,6);
             peer.Send(33,[33,0,0x72,0x0A,0x20,0,0]);peer.Expect(1,33,[1,0x72,0x0A,0,0,4,0]);
-            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),6,1,0,0,255,255]);
+            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),6,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer, position);
             peer.Send(50,request);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false);
             before=f.Snapshot();peer.Send(1269,[]);peer.Barrier();That(before==f.Snapshot(),"末轮未胜利不能预领秘籍");
             Round(peer,0,1201,1,false);Round(peer,1,1201,1,true);
@@ -179,7 +180,7 @@ internal static partial class PvpTrainingTcpTests
                 "实际秘籍和第三通道同事务持久化");
             before=f.Snapshot();peer.Send(1269,[]);peer.Barrier();That(before==f.Snapshot(),"同一胜利不能重复领秘籍");
             peer.Send(33,[33,0,0x72,0x0A,0x40,0,0]);peer.Expect(1,33,[1,0x72,0x0A,0,0,0,0]);
-            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),10,1,0,0,255,255]);
+            peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),10,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer, position);
             long tp=(long)f.Query("SELECT bonus_tp FROM character_tp_sources WHERE character_id=$p0",id)[0][0];
             peer.Send(34,[34,0,0x72,0x0A,255,255,1,0,255,255]);reward=peer.Expect(1,34).Body;
             That(reward[0]==1 && U16(reward,1)==2674 && reward[3]==60,"末项仍按真实训练条件和TP合同交付");

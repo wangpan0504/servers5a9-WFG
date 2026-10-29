@@ -178,8 +178,7 @@ internal sealed partial class DungeonHandler
                 await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_direct_selection_scene", Guard);
             // 非零15已选定NPC副本，完成队伍场景投影即可，不重新打开普通副本列表。
             if (notice.Kind != PartyDungeonNoticeKind.RaidSelection && notice.Option == 0)
-                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(notice.LegendDungeon,
-                    incompleteHellQuestMemberSlots: context.Session.IncompleteHellQuestMemberSlots()), "party_selection_notice", Guard);
+                await GriefTowerProjection.SelectionNoticeAsync(context, notice.LegendDungeon, "party_selection_notice", Guard);
             return;
         }
         if (notice.Kind == PartyDungeonNoticeKind.Death && notice.Death is { } death)

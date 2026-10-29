@@ -1,4 +1,5 @@
 using DfoServer.Game.Pvp;
+using System.Collections.Immutable;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Protocol;
 using DfoServer.Game.Inventory.Models;
@@ -28,8 +29,14 @@ internal sealed class PvpMissionProjection(PvpMissionBook book)
     internal bool Queue(GameConnectionContext context, bool update = false, Func<bool>? current = null)
     {
         if (book.Capture(context.Session) is not { } snapshot) return true;
-        return context.Sender.TryPost(0, (ushort)(update ? NotiPacketType.UPDATE_PVP_MISSION : NotiPacketType.PVP_MISSION_LIST),
+        bool Current() => snapshot.Actor.IsCurrent() && (current?.Invoke() ?? true);
+        if (!context.Sender.TryPost(0, (ushort)(update ? NotiPacketType.UPDATE_PVP_MISSION : NotiPacketType.PVP_MISSION_LIST),
             PvpMissionPackets.List(snapshot.Rows), update ? "pvp_mission_update" : "pvp_mission_initialize",
-            () => snapshot.Actor.IsCurrent() && (current?.Invoke() ?? true));
+            Current)) return false;
+        foreach (byte grade in new byte[] { 2, 4 })
+            if (!context.Sender.TryPost(0, (ushort)NotiPacketType.UPDATE_NEW_DAILY_PVP_MISSION,
+                PvpMissionPackets.Daily(grade, snapshot.Daily.Where(row => row.Grade == grade).ToImmutableArray()), "pvp_daily_missions",
+                () => Current() && snapshot.Period == book.Period)) return false;
+        return true;
     }
 }

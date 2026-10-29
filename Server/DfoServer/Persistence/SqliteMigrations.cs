@@ -278,6 +278,8 @@ internal static class SqliteMigrations
         new(149, "魔兽阶段奖励唯一凭据", static (db, tx) => Execute(db, tx, BeastStageRewardSchema.Definition)),
         // dc1ffba1 原本占用 147，整合线上 147-149 已被公会炼金与魔兽占用，顺延为 150。
         new(150, "决斗任务训练事实与一次性奖励", PvpMissionSchema.Upgrade),
+        // 222cd1db 的每日任务账本顺延到 151，避开公会炼金与魔兽占用的 147-149。
+        new(151, "决斗每日任务独立服务日账本", PvpDailyMissionSchema.Upgrade),
     ];
 
     internal static class AccountSkinStorageSchema
@@ -2251,6 +2253,7 @@ internal static class SqliteMigrations
             (PvpTotalRatingSchema.ClaimTable,PvpTotalRatingSchema.ClaimDefinition),
             (PvpMissionSchema.FactTable,PvpMissionSchema.Facts),
             (PvpMissionSchema.ClaimTable,PvpMissionSchema.Claims),
+            (PvpDailyMissionSchema.Table,PvpDailyMissionSchema.Sql),
             (FatigueDailyResetSchema.Table,FatigueDailyResetSchema.Definition),
             (ServerItemUsageSchema.StateTable,ServerItemUsageSchema.StateDefinition),
             (ServerItemUsageSchema.AccountTable,ServerItemUsageSchema.AccountDefinition),

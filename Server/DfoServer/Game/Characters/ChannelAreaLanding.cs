@@ -50,7 +50,7 @@ internal static class ChannelAreaLanding
     internal static bool LandsInChannelTown(ChannelEntry channel) => channel.Type == AntonRaidType || IsPvpType(channel.Type);
 
     // 01EB55E0 调用 03EF95B0；决斗频道与普通频道的快照谓词不同，不能恢复普通城镇。
-    internal static bool IsPvpType(int type) => type is 4 or 5 or 8 or 24;
+    internal static bool IsPvpType(int type) => type is 4 or 5 or 8 or 13 or 24;
 
     // 决斗地区城镇号：PVP 频道落点 10/0，存档的返回地区也可能记成 10。该城镇有普通地图连接，
     // 不能当普通地区解析返回；但仍是角色可停留的房间位置，不并入其他频道专属城镇。

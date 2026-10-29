@@ -17,7 +17,7 @@ internal sealed partial class CharacterRepository
         "character_evildom_war_hidden_rewards",
         "character_dungeon_incount_extra",
         "character_evildom_war_seats",
-        "character_pvp_mission_rewards", "character_pvp_mission_facts", "character_pvp_rating_claims", "character_pvp_ratings",
+        "character_pvp_daily_missions", "character_pvp_mission_rewards", "character_pvp_mission_facts", "character_pvp_rating_claims", "character_pvp_ratings",
         "character_luke_normal_drop_claims", "character_luke_normal_progress",
         "character_boss_selection_buff",
         "character_tutorial_receipts", "character_tutorial_state",

@@ -146,16 +146,25 @@ internal sealed class PlayerInteractionHandler(PartyService parties, OnlineSessi
         {
             var left = context.Session.EndPvpPractice(practice);
             if (left is not null)
+            {
                 await context.Notify(NotiPacketType.PVP_SEAT_STATE, PvpTrainingPackets.LeaveSeat(left.Actor.Character.Id, left.Mode is null ? (byte)6 : (byte)10),
                     "pvp_practice_left", () => context.Session.CanPublishPvpPractice(left, removed: true));
+                TownProjection.QueuePvpReturn(context, left.Actor.Character,
+                    () => context.Session.CanPublishPvpPractice(left, removed: true));
+            }
             return CommandResult.Handled;
         }
         if (!kick && context.Session.ReadPvpTraining() is { } training)
         {
             var left = context.Session.EndPvpTraining(training.InstanceId);
             if (left is not null)
-                await context.Notify(NotiPacketType.PVP_ROOM_INFO, PvpTrainingHandler.Room(left.Run, true), "pvp_training_left",
+            {
+                await context.Notify(NotiPacketType.PVP_SEAT_STATE, PvpTrainingPackets.LeaveSeat(left.Run.Entry.Expected.Id,
+                    left.Run.Entry.IsCombo ? (byte)6 : (byte)10), "pvp_training_left",
                     () => context.Session.CanPublishPvpTraining(left));
+                TownProjection.QueuePvpReturn(context, left.Run.Entry.Expected,
+                    () => context.Session.CanPublishPvpTraining(left));
+            }
             else await context.Reply(CmdPacketType.LEAVE_PARTY, SocialPackets.Ack(19), "pvp_training_leave_rejected");
             return CommandResult.Handled;
         }
