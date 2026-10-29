@@ -51,7 +51,7 @@ internal static class TitleTests
         {
             var character = new Character(1, 0, name, 0, new(1, 0, 10, 10), null)
             { Inventory = new(withCreature ? [title, creature] : [title]) };
-            byte[] baseline = TownPackets.Actor(character, utcSeconds: 1700000000);
+            byte[] baseline = TownPackets.Actor(character, 0, utcSeconds: 1700000000);
             int count = 133 + NameWidth(name);
             That(baseline[count + 1] == 13 && U32(baseline, count + 2) == 26071,
                 "装备称号始终位于外观表13槽，不误用旧端10槽或惩罚计分字段");
@@ -61,10 +61,10 @@ internal static class TitleTests
             {
                 var expected = (byte[])baseline.Clone();
                 System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(score), value);
-                Bytes(TownPackets.Actor(character with { BlacklistCount = value }, utcSeconds: 1700000000), expected,
+                Bytes(TownPackets.Actor(character with { BlacklistCount = value }, 0, utcSeconds: 1700000000), expected,
                     "被拉黑计分完整投影u32，阈值选择归客户端，不改装备、宠物、网吧或黑钻字段");
             }
-            Reject<InvalidDataException>(() => TownPackets.Actor(character with { BlacklistCount = -1 }),
+            Reject<InvalidDataException>(() => TownPackets.Actor(character with { BlacklistCount = -1 }, 0),
                 "负数计分不能进入客户端的有符号阈值判断");
         }
     }

@@ -30,7 +30,7 @@ internal static class EmotionTests
         Bytes(SettingsPackets.Emotion(300), [1, 44, 1], "ACK254成功为flag和完整u16");
         Bytes(SettingsPackets.Emotion(3, success: false), [0, 3, 0], "ACK254失败使用本版u16错误码");
         var character = new Character(1, 0, "Emotion", 0, new(38, 1, 450, 234), null);
-        byte[] baseline = TownPackets.Actor(character), actor = TownPackets.Actor(character with { Emotion = 300 });
+        byte[] baseline = TownPackets.Actor(character, 0), actor = TownPackets.Actor(character with { Emotion = 300 }, 0);
         Bytes(actor.AsSpan(119, 2), [44, 1], "Actor116B状态末尾承载心情，不使用A4的包尾偏移");
         actor[119] = actor[120] = 0;
         Bytes(actor, baseline, "心情投影只改变两个已确认字节，其余资产和身份字段不变");

@@ -47,12 +47,25 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     internal GuildNpcProjection? GuildNpcs { get; set; }
     internal GuildDungeonProjection? GuildDungeons { get; set; }
     readonly TimeProvider timer = clock ?? TimeProvider.System;
+    internal async Task PvpGradeRecoveredAsync(GameConnectionContext context, Character expected, long epoch, byte before)
+    {
+        bool Current() => context.Owner.Execute(() => context.Session.Ready &&
+            context.Session.SelectionEpoch == epoch && ReferenceEquals(context.Session.Selected, expected));
+        var after = context.Owner.Execute<byte?>(() => Current() ? context.Session.ReadPvpGrade(expected) : null);
+        if (after is not { } grade || grade == before) return;
+        // 复用登录后的既有恢复时序；仅等级变化时更新本人Actor，不推进评分或替换角色引用。
+        await context.Notify(NotiPacketType.USERINFO,
+            TownPackets.Actor(context.Session.ReadSkillCharacter(expected), grade, context.Channel,
+                timer.GetUtcNow().ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
+                premiumPcRoom: context.Session.PremiumPcRoom), "pvp_grade_recovered", Current);
+    }
+
     public async Task OtherPlayerAsync(GameConnectionContext context, DfoServer.Game.Session.PublicCharacterSnapshot snapshot,
         Func<bool> canSend)
     {
         var character = snapshot.SkillCharacter;
         var now = timer.GetUtcNow();
-        var actor = TownPackets.Actor(character, snapshot.Channel, now.ToUnixTimeSeconds(), snapshot.AdventureName,
+        var actor = TownPackets.Actor(character, snapshot.PvpGrade, snapshot.Channel, now.ToUnixTimeSeconds(), snapshot.AdventureName,
             snapshot.Phase == DfoServer.Game.Session.SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
             snapshot.PremiumPcRoom);
         var player = TownPackets.OtherPlayer(character, stats.Compute(character), snapshot.AdventureLevel,
@@ -84,7 +97,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         var appearanceTime = timer.GetUtcNow();
         bool premiumPcRoom = context.Session.PremiumPcRoom;
         await context.Notify(NotiPacketType.USERINFO,
-            TownPackets.Actor(context.Session.ReadSkillCharacter(c), context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
+            TownPackets.Actor(context.Session.ReadSkillCharacter(c), context.Session.ReadPvpGrade(c), context.Channel, appearanceTime.ToUnixTimeSeconds(), context.Session.ReadAdventureName(),
                 premiumPcRoom: premiumPcRoom), "actor");
         context.Premiums?.RecordPremiumAppearance(c, appearanceTime.ToUnixTimeSeconds(), premiumPcRoom);
         await context.Notify(NotiPacketType.USERINFO,
@@ -291,7 +304,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         bool joined = context.Owner.Execute(() =>
         {
             if (!CanSend()) return false;
-            presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel, context.Session.ReadAdventureName());
+            presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel, context.Session.ReadAdventureName(), pvpGrade: context.Session.ReadPvpGrade(receipt.Character));
             if (arrival is not null)
                 presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.SHOW_EFFECT, arrival, "teleport_aura_arrival_peer");
             return true;
@@ -329,7 +342,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             if (!query.IsCurrent() || !ReferenceEquals(context.Session.Selected, captured) || !(canJoin?.Invoke() ?? true)) return false;
             if (panel is not null)
                 GuildDungeons?.Post(context, panel, query.IsCurrent);
-            presence?.Join(context.Owner, context.Sender, captured, context.Channel, context.Session.ReadAdventureName());
+            presence?.Join(context.Owner, context.Sender, captured, context.Channel, context.Session.ReadAdventureName(), pvpGrade: context.Session.ReadPvpGrade(captured));
             GuildEconomy?.Post(context, force: true);
             return true;
         });
@@ -356,7 +369,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     {
         context.Sender.Post(0, (ushort)NotiPacketType.USER_AREA, TownPackets.Position(character, true), "raid_waiting_area", current);
         context.Sender.Post(0, (ushort)NotiPacketType.AREA_USERS, TownPackets.Transition(character), "raid_waiting_transition", current);
-        presence?.Join(context.Owner, context.Sender, character, context.Channel, context.Session.ReadAdventureName());
+        presence?.Join(context.Owner, context.Sender, character, context.Channel, context.Session.ReadAdventureName(), pvpGrade: context.Session.ReadPvpGrade(character));
     }
 
     public async Task ReturnToSelectionAsync(GameConnectionContext context, Func<bool>? canReturn = null)
@@ -415,7 +428,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Owner.Execute(() =>
         {
             if (CanSend())
-                presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel, context.Session.ReadAdventureName());
+                presence?.Join(context.Owner, context.Sender, receipt.Character, context.Channel, context.Session.ReadAdventureName(), pvpGrade: context.Session.ReadPvpGrade(receipt.Character));
             return true;
         });
     }
@@ -480,7 +493,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     public void Refresh(GameConnectionContext context, bool marriageOnly = false)
     {
         if (context.Session.Selected is { } c)
-            presence?.Refresh(context.Owner, context.Sender, c, context.Session.ReadAdventureName(), marriageOnly: marriageOnly);
+            presence?.Refresh(context.Owner, context.Sender, c, context.Session.ReadAdventureName(), marriageOnly: marriageOnly, pvpGrade: context.Session.ReadPvpGrade(c));
     }
     public async Task DetachAsync(GameConnectionContext context)
     {

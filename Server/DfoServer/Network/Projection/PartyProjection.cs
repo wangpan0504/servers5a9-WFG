@@ -12,7 +12,7 @@ internal static class PartyProjection
         bool Guard() => notice.Recipient.Actor.IsCurrent() && (notice.Guard?.Invoke() ?? true);
         void Post(NotiPacketType opcode, byte[] body, string action) => context.Sender.Post(0, (ushort)opcode, body, action, Guard);
         void Actor(PublicCharacterSnapshot identity) => Post(NotiPacketType.USERINFO,
-            TownPackets.Actor(identity.Character, identity.Channel, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), identity.AdventureName,
+            TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), identity.AdventureName,
                 identity.Phase == SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
                 identity.PremiumPcRoom), "party_actor");
         if (notice.Kind == PartyNoticeKind.SettlementCard && notice.Dungeon is { } dungeon)

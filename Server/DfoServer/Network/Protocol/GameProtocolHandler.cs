@@ -198,7 +198,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         if (result.Receipt is not { } receipt || inventory is null) return;
                         bool Guard() => session.CanPublishInventory(receipt);
                         await inventory.RefreshAsync(context, result);
-                        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Channel,
+                        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
                             adventureName: session.ReadAdventureName(), premiumPcRoom: session.PremiumPcRoom),
                             "expert_job_customer_owner_actor", Guard);
                         await context.Notify(NotiPacketType.EXPERT_JOB_INFO, info, "expert_job_customer_owner_info", Guard);

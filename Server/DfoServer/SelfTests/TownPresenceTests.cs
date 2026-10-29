@@ -178,12 +178,12 @@ internal static class TownPresenceTests
             await aSend.Send(1, 1347, [1], "after-equipment-refresh");
             var refreshed = Frames(aStream);
             That(refreshed.Count(f => f.Opcode == 2) == 2 && refreshed.All(f => f.Opcode != 6), "known peer receives appearance without leave or duplicate join");
-            That(refreshed.Last(f => f.Opcode == 2).Body.SequenceEqual(TownPackets.Actor(cb, adventureName: "BetaGroup")),
+            That(refreshed.Last(f => f.Opcode == 2).Body.SequenceEqual(TownPackets.Actor(cb, 0, adventureName: "BetaGroup")),
                 "换装保留当前成员昵称并使用实际提交的装备");
             presence.Refresh(b, bSend, cb, "NewBeta");
             await aSend.Send(1, 1347, [1], "after-name-refresh");
             Bytes(Frames(aStream).Last(f => f.Opcode == 2).Body,
-                TownPackets.Actor(cb, adventureName: "NewBeta"), "昵称更新复用成员身份和外观刷新，不离场或重复加入");
+                TownPackets.Actor(cb, 0, adventureName: "NewBeta"), "昵称更新复用成员身份和外观刷新，不离场或重复加入");
             presence.Remove(bSend);
             await aSend.Send(1, 1347, [1], "after-leave");
             That(Frames(aStream).Last(f => f.Opcode == 6).Body.SequenceEqual(TownPackets.RemoveActor(cb.Id)), "departure removes actual visible actor");
@@ -301,7 +301,7 @@ internal static class TownPresenceTests
             presence.Join(flightTarget, flightTargetSend, flightTargetCharacter);
             presence.Join(flightSource, flightSourceSend, flightSourceCharacter);
             await flightTargetStream.WriteStarted.WaitAsync(TimeSpan.FromSeconds(2));
-            That(flightTargetStream.Bytes().Length == (16 + TownPackets.Actor(flightSourceCharacter).Length) / 2, "remote Actor is already partially written when source becomes stale");
+            That(flightTargetStream.Bytes().Length == (16 + TownPackets.Actor(flightSourceCharacter, 0).Length) / 2, "remote Actor is already partially written when source becomes stale");
             using var flightReplacementCancel = new CancellationTokenSource();
             using var flightReplacement = owners.Acquire("flight-source", () => flightReplacementCancel.Cancel());
             presence.Remove(flightSourceSend);

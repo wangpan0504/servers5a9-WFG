@@ -31,8 +31,8 @@ internal static class TitleCloneTests
             foreach (uint id in new uint[] { 100331804, uint.MaxValue })
             {
                 var changed = original with { CloneTitleItemId = id };
-                Check(TownPackets.Actor(original, utcSeconds: now.ToUnixTimeSeconds()),
-                    TownPackets.Actor(changed, utcSeconds: now.ToUnixTimeSeconds()), 134 + NameWidth(name), id, "Actor");
+                Check(TownPackets.Actor(original, 0, utcSeconds: now.ToUnixTimeSeconds()),
+                    TownPackets.Actor(changed, 0, utcSeconds: now.ToUnixTimeSeconds()), 134 + NameWidth(name), id, "Actor");
                 Check(TownPackets.Player(original, stats, 1, utcNow: now),
                     TownPackets.Player(changed, stats, 1, utcNow: now), 127, id, "本人Player");
                 Check(TownPackets.OtherPlayer(original, stats, 1, default, now),

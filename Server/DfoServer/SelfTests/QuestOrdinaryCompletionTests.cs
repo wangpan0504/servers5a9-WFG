@@ -973,8 +973,8 @@ internal static class QuestOrdinaryCompletionTests
             using var db = f.Open();
             using var command = db.CreateCommand();
             command.CommandText = "SELECT job_type FROM character_expert_job";
-            byte[] actor = DfoServer.Network.Builders.TownPackets.Actor(commit.Character);
-            byte[] actorBlind = DfoServer.Network.Builders.TownPackets.Actor(commit.Character with { ExpertJobType = 0 });
+            byte[] actor = DfoServer.Network.Builders.TownPackets.Actor(commit.Character, 0);
+            byte[] actorBlind = DfoServer.Network.Builders.TownPackets.Actor(commit.Character with { ExpertJobType = 0 }, 0);
             That(result.Outcome == QuestFinishOutcome.Committed && commit.GainedExperience == 0 && commit.DirectGoldAmount == 0 &&
                 commit.ExpertJobType == sample.Type && commit.Consumed.Single() is { ItemId: 3037, Count: 100, Uid: 0 } &&
                 commit.Consumed[0].Position.Index == ItemSlotBoundService.CurrencySlot(CurrencyKind.ClearCube) &&
@@ -1002,7 +1002,7 @@ internal static class QuestOrdinaryCompletionTests
                 "完成后再次交付保持已完成，不重复扣晶块、不改类型");
             That(f.Session.MutateInventory(character => CurrencyService.SetGold(character, 20_000)).Accepted, "放弃前置金币");
             var given = f.Session.GiveUpExpertJob(scripts);
-            byte[] actorCleared = DfoServer.Network.Builders.TownPackets.Actor(given.Character!);
+            byte[] actorCleared = DfoServer.Network.Builders.TownPackets.Actor(given.Character!, 0);
             using var cleared = f.Open();
             using var clearedCommand = cleared.CreateCommand();
             clearedCommand.CommandText = "SELECT count(*) FROM character_expert_job";

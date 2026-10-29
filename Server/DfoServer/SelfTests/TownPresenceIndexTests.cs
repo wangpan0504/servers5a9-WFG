@@ -72,7 +72,7 @@ internal static class TownPresenceIndexTests
             Clear();
             presence.Refresh(peers[0].Owner, peers[0].Sender, source);
             await Drain();
-            That(Body(1, 2).Equals(Body(2, 2)) && Body(1, 2).Span.SequenceEqual(TownPackets.Actor(source)), "appearance shares one complete actor body");
+            That(Body(1, 2).Equals(Body(2, 2)) && Body(1, 2).Span.SequenceEqual(TownPackets.Actor(source, 0)), "appearance shares one complete actor body");
             That(peers.Skip(3).All(peer => peer.Sent.All(row => row.Opcode == 1347)), "appearance stays within the indexed scene");
             foreach (bool refresh in new[] { false, true })
             {

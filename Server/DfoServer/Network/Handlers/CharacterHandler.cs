@@ -120,7 +120,11 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         }
         if (arena is not null)
         {
+            var ratingBefore = context.Owner.Execute(() =>
+                (Character: context.Session.Selected!, Epoch: context.Session.SelectionEpoch,
+                    Grade: context.Session.ReadPvpGrade(context.Session.Selected!)));
             bool complete = arena.RecoverRatings(context.Session);
+            await projection.PvpGradeRecoveredAsync(context, ratingBefore.Character, ratingBefore.Epoch, ratingBefore.Grade);
             log.Write("pvp_rating_recovery", new { Connection = context.Id, Character = context.Session.Selected?.Id, Complete = complete });
         }
         if (missionBook is not null)

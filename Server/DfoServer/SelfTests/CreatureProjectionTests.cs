@@ -34,12 +34,12 @@ internal static class CreatureProjectionTests
 
         static void Check(Character character, uint itemId, string name, string message)
         {
-            byte[] body = TownPackets.Actor(character);
+            byte[] body = TownPackets.Actor(character, 0);
             int nameWidth = CharacterName.Encoding.GetByteCount(character.Name);
             int countOffset = 133 + nameWidth;
             // 按0267DF0B的独立读取顺序定位，状态在外观列表之前，不是NameTag之后。
             int stateOffset = 132 + nameWidth;
-            byte[] dungeon = TownPackets.Actor(character, sceneState: ActorSceneState.Dungeon);
+            byte[] dungeon = TownPackets.Actor(character, 0, sceneState: ActorSceneState.Dungeon);
             That(body[stateOffset] == 0 && dungeon[stateOffset] == 1 &&
                 body[stateOffset - 2] == 0 && body[stateOffset - 1] == 0 &&
                 body.AsSpan(0, stateOffset).SequenceEqual(dungeon.AsSpan(0, stateOffset)) &&

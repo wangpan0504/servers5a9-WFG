@@ -44,7 +44,7 @@ internal sealed class GuildManagementProjection(GuildManagementService service, 
             context.Sender.Post(0, (ushort)NotiPacketType.AREA_USERS,
                 TownPackets.Transition(character), "guild_hall_departure_transition", Current);
             context.Owner.Execute(() => { if (Current()) presence?.Join(context.Owner, context.Sender, character, context.Channel,
-                context.Session.ReadAdventureName()); return true; });
+                context.Session.ReadAdventureName(), pvpGrade: context.Session.ReadPvpGrade(character)); return true; });
         }
         if (receipt.State is null)
             context.Sender.Post(0, (ushort)NotiPacketType.GUILD_SECEDE_TO_USER, [], "guild_membership_cleared", Current);
@@ -55,12 +55,12 @@ internal sealed class GuildManagementProjection(GuildManagementService service, 
         if (receipt.ActorChanged && context.Session.Phase == SessionPhase.Town)
         {
             context.Sender.Post(0, (ushort)NotiPacketType.USERINFO,
-                TownPackets.Actor(character, context.Channel, adventureName: context.Session.ReadAdventureName(),
+                TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel, adventureName: context.Session.ReadAdventureName(),
                     premiumPcRoom: context.Session.PremiumPcRoom), "guild_member_actor",
                 () => Current() && context.Session.Phase == SessionPhase.Town);
             context.Owner.Execute(() =>
             {
-                if (Current()) presence?.Refresh(context.Owner, context.Sender, character);
+                if (Current()) presence?.Refresh(context.Owner, context.Sender, character, pvpGrade: context.Session.ReadPvpGrade(character));
                 return true;
             });
         }

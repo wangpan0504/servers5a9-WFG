@@ -40,17 +40,17 @@ internal static class AdventureNameTests
     static void ActorName()
     {
         var character = new Character(1, 0, "NameActor", 0, new(0, 0, 0, 0), null) { Emotion = 300 };
-        byte[] empty = TownPackets.Actor(character);
-        byte[] named = TownPackets.Actor(character, adventureName: "トリニティ");
+        byte[] empty = TownPackets.Actor(character, 0);
+        byte[] named = TownPackets.Actor(character, 0, adventureName: "トリニティ");
         byte[] field = new byte[17];
         CharacterName.Encoding.GetBytes("トリニティ").CopyTo(field, 0);
         Bytes(named.AsSpan(56, 17), field, "Actor在5B记录头之后的RAW偏移51传入独立CP936昵称，末尾保留NUL");
         Bytes(named.AsSpan(0, 56), empty.AsSpan(0, 56), "昵称不改身份或RAW前部字段");
         Bytes(named.AsSpan(73), empty.AsSpan(73), "昵称不覆盖后续字段、心情、角色名或资产外观");
-        byte[] longest = TownPackets.Actor(character, adventureName: new string('A', 16));
+        byte[] longest = TownPackets.Actor(character, 0, adventureName: new string('A', 16));
         That(longest.AsSpan(56, 16).ToArray().All(value => value == 'A') && longest[72] == 0,
             "16个ASCII字节与终止字节不能覆盖紧邻字段");
-        byte[] wide = TownPackets.Actor(character, adventureName: "A" + new string('测', 8));
+        byte[] wide = TownPackets.Actor(character, 0, adventureName: "A" + new string('测', 8));
         That(CharacterName.Encoding.GetString(wide, 56, 15) == "A" + new string('测', 7) && wide[71] == 0 && wide[72] == 0,
             "窄头顶字段按完整字符投影前缀，不拆开CP936双字节或收窄持久名称资格");
     }

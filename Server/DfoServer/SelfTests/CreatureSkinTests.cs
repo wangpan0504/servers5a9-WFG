@@ -44,13 +44,13 @@ internal static class CreatureSkinTests
         var skin = new InventoryItem(102, new(InventoryListType.Equipment, 33), new(63000, ItemKind.Creature, 102))
             { Creature = new() { Name = "Appearance" } };
         var appearance = character with { EquipmentSlotFlags = 32, Inventory = new([real, skin]) };
-        That(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(TownPackets.Actor(appearance, utcSeconds: 1000).AsSpan(94)) == 63000,
+        That(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(TownPackets.Actor(appearance, 0, utcSeconds: 1000).AsSpan(94)) == 63000,
             "Actor固定头89处投影独立幻化模板，不覆盖尾部真实宠物声明");
         foreach (var hidden in new[] { appearance with { EquipmentSlotFlags = 0 },
             appearance with { Inventory = new([skin]) }, appearance with { Inventory = new([real]) },
             appearance with { Inventory = new([real, skin with { Creature = skin.Creature! with { ExpireTime = 1000 } }]) },
             appearance with { Inventory = new([real with { Creature = real.Creature! with { ExpireTime = 1000 } }, skin]) } })
-            That(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(TownPackets.Actor(hidden, utcSeconds: 1000).AsSpan(94)) == 0,
+            That(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(TownPackets.Actor(hidden, 0, utcSeconds: 1000).AsSpan(94)) == 0,
                 "无真实宠物、无幻化、未解锁或任一到期时清独立外观，不能生成孤立假宠物");
 
         const string declaration = "[action type]\n`[open creature skin slot]`\n[action usable place]\n`[village]`\n[use action packet]\n0";

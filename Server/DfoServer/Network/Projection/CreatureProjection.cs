@@ -32,7 +32,7 @@ internal sealed class CreatureProjection(CreatureService service, TownPresence p
         if (phase == SessionPhase.Town)
             context.Owner.Execute(() =>
             {
-                if (Guard()) presence.Refresh(context.Owner, context.Sender, character, broadcast: false);
+                if (Guard()) presence.Refresh(context.Owner, context.Sender, character, broadcast: false, pvpGrade: context.Session.ReadPvpGrade(character));
                 return true;
             });
         if (old.Experience != current.Experience || old.Level != current.Level || old.Mode != current.Mode ||

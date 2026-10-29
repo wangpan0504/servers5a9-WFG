@@ -35,7 +35,7 @@ internal sealed class ClassChangeHandler(ClassChangeService service, CharacterLe
         var character = result.Character!;
         var plan = result.Plan!;
         // ACK502只收尾，不携带新职业；先安装实际Actor及双树，避免按旧分支解释成功结果。
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel,
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "class_change_actor", Guard);
         await SkillProjection.PublishAsync(context, character, "class_change_skills", "class_change_combo", Guard);
         await level.PlayerAsync(context, character, "class_change_player", Guard);

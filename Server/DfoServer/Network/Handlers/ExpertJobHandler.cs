@@ -62,7 +62,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             presence?.Publish(context.Owner, context.Sender, (ushort)NotiPacketType.CLOSE_EXPERT_JOB_STORE,
                 ExpertJobPackets.CloseStoreNotice(character.Id), "expert_job_store_closed");
         await SkillProjection.PublishAsync(context, character, "expert_job_giveup_skills", "expert_job_giveup_combo", Guard);
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel,
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_giveup_actor", Guard);
         await context.Reply(CmdPacketType.GIVEUP_EXPERT_JOB, ExpertJobPackets.GiveUpSuccess(result.FinalGold, result.GiveUpState),
@@ -103,7 +103,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
             }
             bool Crafted() => context.Session.CanPublishInventory(craftedReceipt);
             await inventory.RefreshAsync(context, crafted);
-            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Channel,
+            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
                 adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
                 "expert_job_compound_actor", Crafted);
             await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_compound_info");
@@ -164,7 +164,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         if (stores is not null && stores.TryGet(craftedReceipt.Character.Id, out var ownStore))
             stores.Open(ownStore with { Endurance = (uint)craftedReceipt.Character.ExpertMachineEndurance });
         await inventory.RefreshAsync(context, committed);
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Channel,
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_enchant_actor", Crafted);
         await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_enchant_info");
@@ -214,7 +214,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         }
         bool Crafted() => context.Session.CanPublishInventory(craftedReceipt);
         await inventory.RefreshAsync(context, committed);
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Channel,
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(craftedReceipt.Character, context.Session.ReadPvpGrade(craftedReceipt.Character), context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_extract_actor", Crafted);
         await NotifyInfo(context, craftedReceipt.Character, Crafted, "expert_job_extract_info");
@@ -270,7 +270,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         await inventory.RefreshAsync(context, committed, acknowledgedSlots: acknowledged);
         if (stores is not null && stores.TryGet(current.Id, out var ownStore))
             stores.Open(ownStore with { Endurance = (uint)receipt.Character.ExpertMachineEndurance });
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Channel,
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom), "expert_job_disjoint_actor", Current);
         await NotifyInfo(context, receipt.Character, Current, "expert_job_disjoint_info");
         var observed = context.Session.ObserveExpertJobTutorial(QuestExpertJobProgress.Disjointer, quests);
@@ -410,7 +410,7 @@ internal sealed partial class ExpertJobHandler(QuestCatalog quests, ExpertJobScr
         }
         bool Guard() => context.Session.CanPublishInventory(receipt);
         await inventory.RefreshAsync(context, committed);
-        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Channel,
+        await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(receipt.Character, context.Session.ReadPvpGrade(receipt.Character), context.Channel,
             adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
             "expert_job_machine_actor", Guard);
         await NotifyInfo(context, receipt.Character, Guard, "expert_job_machine_info");

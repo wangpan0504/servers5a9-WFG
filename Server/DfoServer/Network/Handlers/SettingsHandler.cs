@@ -39,7 +39,7 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         if (result.Changed && phase is SessionPhase.Town or SessionPhase.MapSelect)
         {
             await context.Notify(NotiPacketType.USERINFO,
-                TownPackets.Actor(character, context.Channel, adventureName: context.Session.ReadAdventureName(),
+                TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel, adventureName: context.Session.ReadAdventureName(),
                     premiumPcRoom: context.Session.PremiumPcRoom), "emotion_actor", Guard);
             context.Owner.Execute(() =>
             {

@@ -67,7 +67,7 @@ internal sealed partial class QuestCompletionHandler(QuestCatalog quests, QuestR
         bool profession = commit.ProfessionGrowType is not null;
         bool expertJob = commit.ExpertJobType is not null;
         if (expertJob)
-            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Channel,
+            await context.Notify(NotiPacketType.USERINFO, TownPackets.Actor(character, context.Session.ReadPvpGrade(character), context.Channel,
                 adventureName: context.Session.ReadAdventureName(), premiumPcRoom: context.Session.PremiumPcRoom),
                 "quest_expert_job_actor", Guard);
         if (profession)
