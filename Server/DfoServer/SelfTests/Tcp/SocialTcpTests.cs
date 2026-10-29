@@ -209,6 +209,7 @@ internal static class SocialTcpTests
             }));
             peer.Expect(0, 26, [0]);
         }
+        alpha.Send(166); alpha.Expect(0, 153, [0]); alpha.Barrier();
         alpha.Send(2, Convert.FromHexString("051A19ACF81A19ACF80075000200000C000000303065303163356130343163"));
         beta.Send(2, Convert.FromHexString("051A19ACF81A19ACF80075000200000C000000303065303163356130343163"));
         alpha.Barrier(); beta.Barrier();
@@ -218,6 +219,8 @@ internal static class SocialTcpTests
         PartyInfo(alpha, 2); PartyInfo(beta, 2);
         alpha.Expect(0, 2); alpha.Expect(0, 8, Peer(beta.Id, 0, false));
         alpha.Barrier(); beta.Barrier();
+        alpha.Send(166); alpha.Expect(0, 153, Realtime(2)); alpha.Barrier();
+        beta.Send(166); beta.Expect(0, 153, Realtime(2)); beta.Barrier();
         void Transfer(TcpPeer from, byte slot)
         {
             from.Send(121, [slot]); from.Expect(1, 121, [1]);
@@ -250,6 +253,7 @@ internal static class SocialTcpTests
         {
             alpha.Send(36, Area(38, step.Area, step.X, step.Y, 38, step.Previous, kind: 5));
             alpha.Batch((0, 23), (0, 24)); SceneInfo(alpha); alpha.Barrier();
+            alpha.Send(166); alpha.Expect(0, 153, Realtime(2)); alpha.Barrier();
             beta.Expect(0, 23, AreaNotice(alpha.Id, 38, step.Area, step.X, step.Y)); beta.Barrier();
             beta.Send(36, Area(38, step.Area, step.X, step.Y, 38, step.Previous, kind: 5));
             beta.Batch((0, 23), (0, 24), (0, 2), (0, 3), (0, 23), (0, 22)); SceneInfo(beta); beta.Barrier();
