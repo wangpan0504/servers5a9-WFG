@@ -55,7 +55,7 @@ internal sealed partial class GameSession
         if (dungeon.Entry.IsTutorial && dungeon.TutorialClearTarget is { } tutorialTarget)
             return (FormalReceipt(), tutorialTarget);
         // 剧情终点可以只有普通敌对APC；115引用真实死亡key，不将清场移除或友方NPC当成Boss死亡。
-        var terminal = dungeon.Route.Rooms.Single(room => room.Room.Map == snapshot.CurrentMap).Monsters
+        var terminal = dungeon.Run.CurrentMonsterPlan.Monsters
             .Where(monster => monster.CanReportDeath &&
                 !snapshot.LivingMonsters.Contains(monster.ObjectKey) && !dungeon.Run.IsCulledMonster(monster.ObjectKey)).ToArray();
         var boss = terminal.FirstOrDefault(monster => monster.ObjectKey == reportedBossKey) ??
@@ -77,7 +77,7 @@ internal sealed partial class GameSession
             !questCatalog.TryGet((int)dungeon.Entry.RouteQuestId,out var quest) || !QuestClientSceneProgress.DungeonCinematic(quest) ||
             quest.CinematicMapId != snapshot.CurrentMap.Id || !dungeon.Entry.IsTerminalMap(snapshot.CurrentMap) ||
             !quest.Definition!.Dungeons.Any(row => row.DungeonId == dungeon.Entry.DungeonId) ||
-            !dungeon.Route.Rooms.Single(room => room.Room.Map == snapshot.CurrentMap).Monsters.All(monster => !monster.CanReportDeath))
+            !dungeon.Run.CurrentMonsterPlan.Monsters.All(monster => !monster.CanReportDeath))
             return null;
         return quest;
     }
@@ -106,7 +106,7 @@ internal sealed partial class GameSession
         if (!Ready || Selected?.Id != actorId || Phase != SessionPhase.Settlement || formalDungeon is not { } dungeon ||
             dungeon.Run.ClearFact is null || dungeon.Run.HasPendingSettlement || !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap))
             return null;
-        var boss = dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Run.Snapshot.CurrentMap).Monsters
+        var boss = dungeon.Run.CurrentMonsterPlan.Monsters
             .SingleOrDefault(monster => monster.IsBoss && monster.ObjectKey == bossKey);
         return boss is not null &&
             dungeon.Authority.MatchesIssuedSpawn(dungeon.Run, bossKey, spawnLevel, spawnHp) &&

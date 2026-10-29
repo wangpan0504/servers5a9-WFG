@@ -22,15 +22,25 @@ internal sealed class TeleportHandler(TeleportService service, TownProjection to
     async Task<CommandResult> PotionAsync(GameConnectionContext context, Packet packet)
     {
         var request = TeleportRequests.Potion(packet.Body);
-        var result = context.Session.TeleportPotion(request, service, context.BlocksTownActions);
+        bool guildMap = TeleportService.IsGuildMap(request);
+        var result = guildMap
+            ? context.Session.TeleportGuildMap(request, service, context.Session.GuildRequestIdentity(packet.RequestSerial), context.BlocksTownActions)
+            : context.Session.TeleportPotion(request, service, context.BlocksTownActions);
         Log(context, packet, result);
+        if (result.Replayed)
+        {
+            await context.Reply(CmdPacketType.TELEPORT, TeleportPackets.Potion(request), "guild_map_teleport_replayed");
+            return CommandResult.Handled;
+        }
         if (result.Receipt is not { } receipt)
         {
-            await context.Reply(CmdPacketType.TELEPORT, TeleportPackets.PotionRejected(), "teleport_potion_rejected");
+            await context.Reply(CmdPacketType.TELEPORT, guildMap ? new byte[] { 0, 0, 0 } : TeleportPackets.PotionRejected(),
+                guildMap ? "guild_map_teleport_rejected" : "teleport_potion_rejected");
             return CommandResult.Handled;
         }
         bool CanSend() => context.Session.CanPublishTravel(receipt.Travel);
-        await context.Reply(CmdPacketType.TELEPORT, TeleportPackets.Potion(request), "teleport_potion_committed", CanSend);
+        await context.Reply(CmdPacketType.TELEPORT, TeleportPackets.Potion(request),
+            guildMap ? "guild_map_teleport_committed" : "teleport_potion_committed", CanSend);
         await inventory.RefreshAsync(context, receipt.Inventory, refreshEquipment: false, suppressMainNotice: true);
         await town.TravelAsync(context, receipt.Travel);
         return CommandResult.Handled;

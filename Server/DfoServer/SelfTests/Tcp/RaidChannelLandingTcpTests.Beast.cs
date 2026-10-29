@@ -43,7 +43,8 @@ internal static partial class RaidChannelLandingTcpTests
             That(landingDecision.Reason is "town-not-in-catalog" or "no-standable-door" &&
                 fixture.Snapshot("SELECT town,area FROM characters WHERE id=$p0",peer.Id) == "[[38,1]]",
                 "缺少已登记可站等待区时留在共享房间，不猜落点：" + landingDecision.Reason);
-        OpenSelection();
+        // 专属频道保留独立资源，第一版每日入侵名单只发布到普通频道原31/39。
+        peer.Expect(0,27,peer.SelectionNoticeBody());
         byte[] request = new byte[25];
         BinaryPrimitives.WriteUInt32LittleEndian(request,5335);
         request[9]=255; request[10]=255;

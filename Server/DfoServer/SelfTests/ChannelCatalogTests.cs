@@ -52,10 +52,25 @@ internal static class ChannelCatalogTests
             That(embedded.Channels.Single(row => row.Number == 46) == new ChannelDefinition(46, "<chn_channel_info_057>", 53, "[evildom_gathering]") &&
                 ChannelPackets.LoginChannelType(embedded.Entry(46)) == 53,
                 "再战魔界追加真实type53和本版名称057，ACK LOGIN不降成普通0，既有端口顺序保持");
-            That(embedded.Channels.Single(row => row.Number == 47) == new ChannelDefinition(47, "<chn_channel_info_039>", 8, "[pvp]") &&
+            That(embedded.Channels.Single(row => row.Number == 47) == new ChannelDefinition(47, "<chn_channel_info_045>", 8, "[pvp]") &&
                 ChannelPackets.LoginChannelType(embedded.Entry(47)) == 8 && ChannelPackets.LoginChannelType(embedded.Entry(101)) == 24 &&
                 ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(47)))[3] == 8,
                 "无双频道末尾追加独立type8，保留传统24且LOGIN均发送真实类型，不复用旧频道端口");
+            That(embedded.Channels.Single(row => row.Number == 51) == new ChannelDefinition(51, "<channel_info_cname_501>", 4, "[pvp]") &&
+                ChannelPackets.LoginChannelType(embedded.Entry(51)) == 4 &&
+                ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(51)))[3] == 4,
+                "普通决斗场使用原生51/type4与已有新手名称键，追加末尾且LOGIN保留实际类型");
+            That(embedded.Channels[^1] == new ChannelDefinition(55, "<channel_info_cname_505>", 5, "[pvp]") &&
+                ChannelPackets.LoginChannelType(embedded.Entry(55)) == 5 &&
+                ChannelPackets.Endpoint("127.0.0.1", 10011, channelType: ChannelPackets.LoginChannelType(embedded.Entry(55)))[3] == 5,
+                "自由练习场追加原生55/type5，使用自由练习名称且LOGIN保留真实类型");
+            foreach (int number in new[] { 101, 47, 51, 55 })
+            {
+                string channelRow = embedded.SourceText.Split('\n').Single(line => line.StartsWith(number + " ", StringComparison.Ordinal));
+                string[] fields = channelRow.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                That(fields[9] == "50" && fields[10] == "95",
+                    "实际决斗入口等级列与Town10/0的50级门槛及95级上限一致：" + number);
+            }
             That(embedded.Channels.Single(row => row.Number == 48) == new ChannelDefinition(48, "<chn_channel_info_049>", 39, "[tag_tournament]") &&
                 ChannelPackets.LoginChannelType(embedded.Entry(48)) == 39 && !ChannelAreaLanding.SameSnapshotPredicates(22, 39),
                 "帝国竞技场追加type39并隔离换频道快照，避让PK频道47");
@@ -79,6 +94,12 @@ internal static class ChannelCatalogTests
         }
         finally { Directory.Delete(root, true); }
         var catalog = ChannelCatalog.Parse(source);
+        foreach (int pvpType in new[] { 4, 5, 8, 24 })
+            That(!ChannelAreaLanding.SameSnapshotPredicates(22, pvpType) &&
+                !ChannelAreaLanding.SameSnapshotPredicates(pvpType, 22) &&
+                ChannelAreaLanding.SameSnapshotPredicates(24, pvpType) &&
+                ChannelAreaLanding.LandsInChannelTown(new(new(2, 101), pvpType, "[pvp]")),
+                "四类决斗入口独立于普通快照且直接入城，决斗入口之间可保留决斗地区");
         That(ChannelAreaLanding.SameSnapshotPredicates(53, 53) && !ChannelAreaLanding.SameSnapshotPredicates(22, 53) &&
             !ChannelAreaLanding.SameSnapshotPredicates(53, 22), "再战vt+38独立参与换频道快照，同类型保留、普通互换不保留");
         That(!ChannelAreaLanding.SameSnapshotPredicates(22, 56) && !ChannelAreaLanding.SameSnapshotPredicates(56, 22) &&
@@ -95,6 +116,17 @@ internal static class ChannelCatalogTests
         Reject<InvalidDataException>(() => catalog.Entry(256), "无法放入Actor身份的频道号不能建立监听入口");
         That(ChannelCatalog.Parse(source.Replace("<chn_channel_info_028>", "<4::channel_info_dname_1>")).Channels[0].Number == 10,
             "允许已有的带索引字符串引用");
+        foreach (int type in new[] { 4, 5, 8, 24 })
+        {
+            string PvpSource(string minimum, string maximum) => source.Replace("[/server]",
+                $"101 `<chn_channel_info_039>` {type} `[pvp]` 0 0 0 0 0 {minimum} {maximum} 0 0 0 0 ``\n[/server]");
+            foreach (var (minimum, maximum) in new[] { ("1", "95"), ("50", "95"), ("95", "95"), ("50.0", "95.0") })
+                That(ChannelCatalog.Parse(PvpSource(minimum, maximum)).Entry(101).Type == type,
+                    "决斗频道接受有效整数等级范围及其浮点写法");
+            foreach (var (minimum, maximum) in new[] { ("0", "0"), ("0", "95"), ("50", "0"), ("96", "95"), ("50", "96"), ("50.5", "95"), ("50", "94.5") })
+                Reject<InvalidDataException>(() => ChannelCatalog.Parse(PvpSource(minimum, maximum)),
+                    "决斗频道拒绝零值、倒置、越界或非整数等级范围");
+        }
         foreach (string bad in new[]
         {
             source.Replace("`<chn_channel_info_028>`", "`plain name`"),

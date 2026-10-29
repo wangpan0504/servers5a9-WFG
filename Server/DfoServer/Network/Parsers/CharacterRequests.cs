@@ -15,6 +15,11 @@ internal sealed record DeleteCharacterRequest(ushort RosterIndex, string Confirm
 internal sealed record ChangeCharacterSlotRequest(uint IndexA, uint IndexB);
 internal static class CharacterRequests
 {
+    public static void AllServerRoster(ReadOnlySpan<byte> body)
+    {
+        if (!body.IsEmpty) throw new InvalidDataException("跨大区编队名册请求正文必须为空");
+    }
+
     public static (byte Job,byte Grow) PvpPrivateCheck(ReadOnlySpan<byte> body)
     {
         if(body.Length!=8 || BinaryPrimitives.ReadUInt32LittleEndian(body)>15 || BinaryPrimitives.ReadUInt32LittleEndian(body[4..])>5)

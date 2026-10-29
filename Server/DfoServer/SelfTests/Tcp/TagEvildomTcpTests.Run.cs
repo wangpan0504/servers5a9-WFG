@@ -32,9 +32,8 @@ internal static partial class TagEvildomTcpTests
         peer.Send(42); peer.Expect(1, 42, [1]);
         peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]); peer.Expect(0, 24);
         FormalDungeonTcpTests.RefreshedQuests(peer);
-        // 真正刷新原登录队首，而不是冒用切换后的备用成为Selected；随后的1394才有可靠primary来源。
-        peer.Expect(0, 2); peer.Expect(0, 2); peer.Expect(0, 19);
-        peer.Expect(0, 1677); peer.Expect(0, 1678); peer.Expect(0, 1393); peer.Expect(0, 1394); peer.Barrier();
+        // 原生离图恢复队首，返城只更新次数；Barrier同时禁止再次清理、安装双成员。
+        peer.Expect(0, 1678); peer.Barrier();
     }
 
     static string Economy(TcpTestFixture fixture) => fixture.Snapshot("SELECT id,level,experience,gold,revive_coins FROM characters ORDER BY id") +
@@ -93,6 +92,7 @@ internal static partial class TagEvildomTcpTests
             for (int room = 0; room < 5; room++)
             {
                 FormalDungeonTcpTests.Load(peer); peer.Barrier();
+                peer.Send(1470); peer.Barrier();
                 clock.Advance(TimeSpan.FromSeconds(25));
                 if (room == 0)
                 {
@@ -121,6 +121,7 @@ internal static partial class TagEvildomTcpTests
             That(result.Length == 92 && U32(result, 80) is 2 or 3 && U32(result, 84) == 125_000 && U32(result, 88) == 0,
                 "1679只在真实五房终点提交后展示，使用首加载到末Boss的125秒单调耗时");
             shown = Enumerable.Range(0, checked((int)U32(result, 80))).Select(index => (U32(result, index * 8), U32(result, index * 8 + 4))).ToArray();
+            peer.Expect(0, 31, []);
             var counts = peer.Expect(0, 1678).Body; peer.Expect(0, 99); peer.Barrier();
             That(U32(counts, 0) == 1 && counts.AsSpan(16, 10).SequenceEqual(new byte[] { 2,0,0,0,0,2,1,0,0,0 }),
                 "周使用一次、两名真实原名册角色同时保护");

@@ -111,6 +111,7 @@ internal static partial class GuildAppearanceTcpTests
         master.Expect(1, 1737, [1]);
         byte[] state = master.Expect(0, 1771).Body;
         byte[] benefits = master.Expect(0, 1773).Body;
+        That(master.Expect(0, 1774).Body.Length == 16, "NPC查询包含完整训练状态");
         That(benefits.Length == 1080 && benefits.All(value => value == 0), "NPC查询发送完整空福利状态以清除旧生产倒计时");
         That(state.Length == 128 && BitConverter.ToUInt32(state, 0) == 400001060 &&
             BitConverter.ToUInt32(state, 4) == 1 && BitConverter.ToUInt32(state, 8) == 0,
@@ -147,6 +148,7 @@ internal static partial class GuildAppearanceTcpTests
         for (int guard = 0; guard < 128; guard++)
         {
             var packet = peer.Read();
+            if (packet is { Kind: 0, Opcode: 487 }) peer.CheckGuildPassiveBuffs(packet);
             if (packet.Kind == 1 && packet.Opcode == 156)
             {
                 Bytes(packet.Body, [1], "外观请求后的查重哨兵成功");
@@ -161,7 +163,7 @@ internal static partial class GuildAppearanceTcpTests
         peer.Send(8, [255, 255, 2]);
         peer.Send(4, Build(writer => writer.Write((ushort)0)));
         for (int guard = 0; guard < 256; guard++)
-            if (peer.Read() is { Kind: 0, Opcode: 124 }) { peer.ReadWeeklyDungeon(); return; }
+            if (peer.Read() is { Kind: 0, Opcode: 124 }) { peer.ReadWeeklyDungeon(); Drain(peer); return; }
         throw new InvalidOperationException("Guild appearance TCP did not enter town");
     }
 }

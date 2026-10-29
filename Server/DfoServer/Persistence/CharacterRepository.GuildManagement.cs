@@ -160,6 +160,9 @@ internal sealed partial class CharacterRepository : IGuildManagementStore
                 command.Parameters.AddWithValue("$guild", guildId);
                 command.Parameters.AddWithValue("$id", actual.Id);
                 if (command.ExecuteNonQuery() != 1) return new(34);
+                // 入会时间只有秒级精度；被踢后同秒重入也不能继承旧个人福利。
+                command.CommandText = "DELETE FROM character_guild_npc_benefits WHERE guild_id=$guild AND character_id=$id";
+                command.ExecuteNonQuery();
                 if (voluntary)
                 {
                     command.CommandText = """

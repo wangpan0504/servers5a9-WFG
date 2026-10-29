@@ -27,7 +27,7 @@ internal static class PvpArenaProjection
         {
             if (notice.Kind == PvpArenaNoticeKind.MatchingCancelled)
                 Post(NotiPacketType.INTEGRATE_MATCHING_STATE, PvpMatchingPackets.LoadingState(3), "pvp_matching_loading_cancelled");
-            Post(NotiPacketType.PVP_SEAT_STATE, PvpArenaPackets.SeatList(notice.View), "pvp_arena_left");
+            Post(NotiPacketType.PVP_SEAT_STATE, PvpArenaPackets.Left(notice.View, notice.Departure.Seat), "pvp_arena_left");
             return;
         }
         // 只补新进入的角色，不能在换席和离房时重建已安装的角色引用。

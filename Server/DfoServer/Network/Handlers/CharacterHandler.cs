@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Characters;
 using DfoServer.Network.Builders;
@@ -24,7 +24,9 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null,
     DfoServer.GameWorld.Dungeons.EvildomWarCatalog? warCatalog = null,
     DfoServer.Game.Dungeons.EvildomWarRewardPolicy? warPolicy = null,
-    ImperialArenaProjection? imperialArena = null, RaidHandler? raids = null) : IGameCommandModule
+    ImperialArenaProjection? imperialArena = null, RaidHandler? raids = null,
+    PvpTotalTeamProjection? totalTeamProjection = null, PvpMissionProjection? pvpMissions = null,
+    DfoServer.Game.Pvp.PvpMissionBook? missionBook = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -35,6 +37,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         commands.Register(CmdPacketType.DELETE_CHARACTER, DeleteAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHANGE_CHARAC_SLOT, ChangeSlotAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.GET_USERINFO, RosterAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.REQUEST_ALL_SERVER_CHARACINFO, AllServerRosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHARAC_VIEW_HIDDEN_CHARAC_INFO, HiddenRosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.STORY_DIGEST_UPDATE, StoryDigestAsync, nameof(CharacterHandler));
     }
@@ -120,13 +123,17 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
             bool complete = arena.RecoverRatings(context.Session);
             log.Write("pvp_rating_recovery", new { Connection = context.Id, Character = context.Session.Selected?.Id, Complete = complete });
         }
-        if (totalTeams?.CaptureInitialization(context.Session) is { } totalTeam)
+        if (missionBook is not null)
+        {
+            var reward = context.Session.RefreshPvpMissions(missionBook);
+            pvpMissions?.QueueRewards(context, reward);
+            projectedCharacter = projectedCharacter with { Character = context.Session.Selected! };
+        }
+        pvpMissions?.Queue(context);
+        if (totalTeamProjection is not null && totalTeams?.CaptureInitialization(context.Session) is { } totalTeam)
         {
             // 804消费者先取得当前Actor；必须在EnterAsync建立本人实体后回放原名册索引。
-            await context.Notify(NotiPacketType.PVP_TOTAL_MATCH_TEAM_INFO,
-                PvpMatchingPackets.Team(totalTeam.Team.Name,
-                    totalTeam.Selection.Members.Select(row => row.RosterIndex).ToImmutableArray()),
-                "pvp_total_team_initialize", () => context.Session.CanPublishPvpTotalRoster(totalTeam.Selection));
+            await totalTeamProjection.PublishAsync(context, totalTeam.Team, totalTeam.Selection);
             log.Write("pvp_total_team_initialize", new { Connection = context.Id, Team = totalTeam.Team.Id,
                 totalTeam.Team.Revision });
         }

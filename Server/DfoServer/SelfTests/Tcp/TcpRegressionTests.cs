@@ -201,9 +201,17 @@ internal static class TcpRegressionTests
         }),
         ("beast-dungeon", (_, _, resources) =>
         {
+            BeastRewardAssetsTests.Run(resources);
             BeastDungeonEntryTests.RunMaps(resources.Archive);
             BeastDungeonSessionTests.Run(resources);
             return Task.CompletedTask;
+        }),
+        ("beast-selection", async (source, root, resources) =>
+        {
+            BeastDungeonEntryTests.RunAccessoryQuest(resources.Archive, resources.ItemResources);
+            BeastDungeonSelectionTests.Run(resources);
+            await BeastSixthDifficultyTests.RunAsync(resources.Towns, resources.Archive, resources.Characters, resources.ItemResources);
+            await RaidChannelLandingTcpTests.RunBeastSelectionAsync(source, root, resources);
         }),
         ("beast-gateway", RaidChannelLandingTcpTests.RunBeastGatewayAsync),
         ("grief-tower", FormalDungeonTcpTests.RunGriefAsync),
@@ -327,6 +335,7 @@ internal static class TcpRegressionTests
         ("guild-cargo", GuildCargoTcpTests.RunAsync),
         ("guild-economy", GuildEconomyTcpTests.RunAsync),
         ("guild-appearance", GuildAppearanceTcpTests.RunAsync),
+        ("guild-npc-benefits", GuildNpcBenefitTcpTests.RunAsync),
         ("guild-contribution", GuildContributionTcpTests.RunAsync),
         ("guild-teleport", GuildTeleportTcpTests.RunAsync),
         ("guild-permit", GuildPermitTcpTests.RunAsync),

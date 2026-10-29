@@ -10,7 +10,7 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
     internal const ushort Rejection = 23;
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
 
-    public InventoryResult Plan(Character character, EnhancementRequest request, out EnhancementReceipt? receipt)
+    public InventoryResult Plan(Character character, EnhancementRequest request, out EnhancementReceipt? receipt, int guildSuccessPercent = 0)
     {
         receipt = null;
         var source = character.Inventory.Find(new(InventoryListType.Main, request.MaterialSlot));
@@ -20,16 +20,17 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         // 不绑定列表38槽位：勋章页任意槽、快捷栏与穿戴槽32都属于合法位置。
         if (target.Core.Kind == ItemKind.GuildMedal) return PlanMedal(character, request, out receipt);
         if (request.Mode == EnhancementMode.LuckyAmplify)
-            return amplification?.Plan(character, request, out receipt) ?? InventoryResult.Reject(Rejection);
+            return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
         var definition = enhancements.Get(source.Core.ItemId);
         if (request.Mode == EnhancementMode.Reinforce && definition is { Available: false })
-            return amplification?.Plan(character, request, out receipt) ?? InventoryResult.Reject(Rejection);
+            return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
         if (definition is null && request.Mode == EnhancementMode.Amplify)
-            return amplification?.Plan(character, request, out receipt) ?? InventoryResult.Reject(Rejection);
+            return amplification?.Plan(character, request, out receipt, guildSuccessPercent) ?? InventoryResult.Reject(Rejection);
         if (definition is null || !definition.Available || !enhancements.Allows(target.Core.ItemId, request.Mode)) return InventoryResult.Reject(Rejection);
         return Plan(character, request, Clock.GetUtcNow().ToUnixTimeSeconds(), definition,
             items.Get(source.Core.ItemId), items.Get(target.Core.ItemId),
-            () => (random ?? Random.Shared).Next(definition.Mode == EnhancementMode.RandomReinforce ? definition.RandomWeight : 10000), out receipt);
+            () => (random ?? Random.Shared).Next(definition.Mode == EnhancementMode.RandomReinforce ? definition.RandomWeight : 10000), out receipt,
+            guildSuccessPercent);
     }
 
     // 勋章强化：概率与惩罚取flag_upgrade_table目标等级行，材料为公会硬币，
@@ -80,7 +81,7 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
     }
 
     internal static InventoryResult Plan(Character character, EnhancementRequest request, long now, EnhancementDefinition definition,
-        ItemTemplate sourceTemplate, ItemTemplate targetTemplate, Func<int> roll, out EnhancementReceipt? receipt)
+        ItemTemplate sourceTemplate, ItemTemplate targetTemplate, Func<int> roll, out EnhancementReceipt? receipt, int guildSuccessPercent = 0)
     {
         receipt = null;
         var before = character.Inventory;
@@ -124,7 +125,10 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
                 remaining -= row.Weight;
             }
         }
-        bool succeeded = randomLevel || value < definition.SuccessWeight;
+        // 固定等级券和随机等级券保留自身奖池；仅逐级提升沿用公会相对成功率加成。
+        int successWeight = definition.Additional && definition.Level == 1 && !randomLevel
+            ? ApplyGuildSuccessBonus(definition.SuccessWeight, guildSuccessPercent) : definition.SuccessWeight;
+        bool succeeded = randomLevel || value < successWeight;
         byte oldLevel = target.Core.Upgrade, newLevel = succeeded ? desired : oldLevel;
         var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.ItemId, 1);
         if (!paid.Accepted) return InventoryResult.Reject(Rejection);
@@ -137,6 +141,13 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         receipt = new(request.Mode, request.Target, request.MaterialSlot, source.Core.Count - 1, oldLevel, newLevel, succeeded)
             { Path = randomLevel ? (byte)1 : (byte)0, InPlace = randomLevel };
         return new(true, 0, new(before, after, "equipment_enhancement_ticket", new(character, deadline)));
+    }
+
+    internal static int ApplyGuildSuccessBonus(int successWeight, int guildSuccessPercent)
+    {
+        if (successWeight is < 0 or > 10000 || guildSuccessPercent < 0)
+            throw new InvalidDataException("成功权重或公会成功率加成无效");
+        return (int)Math.Min(10000, successWeight * (100L + guildSuccessPercent) / 100);
     }
 
     static bool AllowsPart(byte part, int rule) => rule switch

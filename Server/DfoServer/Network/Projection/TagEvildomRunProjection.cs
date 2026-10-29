@@ -19,11 +19,13 @@ internal sealed class TagEvildomRunProjection(TagEvildomRewardCatalog rewards, I
     public FormalDungeonDeathResult? Commit(GameConnectionContext context, TagEvildomClearPreparation pending) =>
         context.Session.CommitFormalTagEvildomClear(pending, rewards, items, store);
 
-    public async Task ReturnAsync(GameConnectionContext context, TownProjection town, TownTravelReceipt receipt)
+    public async Task ReturnAsync(GameConnectionContext context, TownTravelReceipt receipt)
     {
-        var primary = await town.RefreshTagEvildomPrimaryAsync(context, receipt);
-        if (primary is not null) await configuration.InitializeAsync(context, primary);
-        else await town.ReturnToSelectionAsync(context, () => context.Session.CanPublishTravel(receipt));
+        if (!context.Session.CanPublishTravel(receipt) ||
+            context.Session.ReadTagEvildom(configuration.Store, configuration.Now) is not { } state) return;
+        // 24已走原生离图恢复队首；重发普通USERINFO及1393/1394会清理旧成员引用。
+        await context.Notify(NotiPacketType.EVILDOM_GATHERING, TagEvildomPackets.Gathering(state), "tag_evildom_return_counts",
+            () => context.Session.CanPublishTravel(receipt) && context.Session.CanPublishTagEvildom(state));
     }
 
     public async Task ClearAsync(GameConnectionContext context, TagEvildomClearReceipt receipt)
@@ -44,6 +46,9 @@ internal sealed class TagEvildomRunProjection(TagEvildomRewardCatalog rewards, I
                 committed.Plan.ElapsedMilliseconds);
             await context.Notify(NotiPacketType.EVILDOM_GATHERING_CLEAR_REWARD, TagEvildomRunPackets.ClearPresentation(presentation),
                 "tag_evildom_clear_reward", ResultGuard);
+            if (!sent) return;
+            // 1679只安装结果及展示计时；31独立锁存通关，不能伪造普通翻牌/任务的ClearFact。
+            await context.Notify(NotiPacketType.ENABLE_CLEAR_DUNGEON, [], "tag_evildom_clear_enabled", ResultGuard);
             if (!sent) return;
             // 仅本连接成功写出后标记；同一终点重传不重复弹结果窗，数据库回执仍独立永久幂等。
             context.Session.ConfirmTagEvildomResultPublished(receipt);

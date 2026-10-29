@@ -37,14 +37,16 @@ internal static class PvpTotalBattleTcpTests
         using var a = Open(f, "total-battle-0", gamePort: endpoints[47], channelNumber: 47);
         a.Select(prepared: true); a.Barrier();
         using var b = Open(f, "total-battle-1", gamePort: endpoints[47], channelNumber: 47);
-        b.Select(prepared: true); b.Barrier();
-        a.Barrier(packet => That(packet is { Kind: 0, Opcode: 2 } && U16(packet.Body, 121) == b.Id, "总力前仍走真实城镇同屏"));
+        b.Select(prepared: true); PvpArenaTcpTests.TownPeer(b, a.Id); b.Barrier();
+        PvpArenaTcpTests.TownPeer(a, b.Id); a.Barrier();
         var peers = new[] { a, b };
         for (int side = 0; side < 2; side++)
         {
             peers[side].Send(873, Build(w => { Text(w, "总力" + side); w.Write(new byte[] { 2, 0, 1 }); }));
-            peers[side].Expect(1, 873, [1, 2, 0, 1]); peers[side].Barrier();
+            peers[side].Expect(0, 804, Build(w => { Text(w, "总力" + side); w.Write(new byte[] { 2, 0, 1 }); }));
             teams[side] = [teams[side][2], teams[side][0], teams[side][1]];
+            CheckActors(peers[side].Expect(0, 803).Body, (peers[side].Id, teams[side]));
+            peers[side].Expect(1, 873, [1, 2, 0, 1]); peers[side].Barrier();
         }
         string assets = f.Snapshot();
         // 相同偏好、不同模式也不能配成一局；错误模式取消不能消费总力票据。
@@ -85,8 +87,7 @@ internal static class PvpTotalBattleTcpTests
         b.Send(57);
         foreach (var peer in peers)
         {
-            var cleared = peer.Expect(0, 43).Body;
-            That(Enumerable.Range(0, 8).All(at => U16(cleared, 6 + at * 4) != peer.Id), "总力双方返回后清原临时房间");
+            PvpArenaTcpTests.Left(peer, paired.Room, 8, peer == a ? (byte)0 : (byte)1);
             peer.Send(520, Queue(7)); peer.Expect(1, 520, [1, 1, 7, 0, 0]);
             peer.Send(521, [1, 7, 0]); peer.Expect(1, 521, [1]); peer.Barrier();
         }
@@ -98,11 +99,14 @@ internal static class PvpTotalBattleTcpTests
         clock.Advance(TimeSpan.FromSeconds(45)); Round(1, 1);
         b.Dispose();
         State(a, 1); a.Expect(0, 43); a.Expect(0, 44, [0, 0]);
+        a.Expect(0, 6, [(byte)b.Id, (byte)(b.Id >> 8)]);
         PvpArenaTcpTests.Result(f, a, 0, (a.Id, 0u)); a.Barrier();
         using (var replacement = Open(f, "total-battle-1", gamePort: endpoints[47], channelNumber: 47))
         {
             replacement.Select(prepared: true, pvpTotalTeam: Build(w => { Text(w, "总力1"); w.Write(new byte[] { 2, 0, 1 }); }));
+            PvpArenaTcpTests.TownPeer(replacement, a.Id);
             replacement.Barrier();
+            PvpArenaTcpTests.TownPeer(a, replacement.Id); a.Barrier();
         }
         That(f.Query("SELECT count(*) FROM account_pvp_total_rating_claims WHERE receipt_json IS NOT NULL")[0][0] is 4L &&
             f.Query("SELECT count(*) FROM character_pvp_rating_claims WHERE receipt_json IS NOT NULL")[0][0] is 12L &&
@@ -162,51 +166,7 @@ internal static class PvpTotalBattleTcpTests
         }
         uint Rating(int side) => f.Query("SELECT state_json FROM account_pvp_total_ratings WHERE account=$p0", "total-battle-" + side)
             is [[string json]] ? checked((uint)JsonSerializer.Deserialize<PvpRatingState>(json)!.Rating) : 900u;
-        void Actors(byte[] body)
-        {
-            using var r = Reader(body); That(r.ReadByte() == 2, "803完整发布双方六角色");
-            for (int side = 0; side < 2; side++)
-            {
-                That(r.ReadUInt16() == peers[side].Id && r.ReadByte() == 3, "803 owner为u16并带三角色");
-                for (byte index = 0; index < 3; index++)
-                {
-                    var actor = teams[side][index];
-                    That(r.ReadByte() == index && Text(r) == actor.Name && r.ReadByte() == 85 &&
-                        r.ReadByte() == actor.Job && r.ReadByte() == actor.GrowType, "803逐角色独立解析身份与真实等级");
-                    Skip(7); That(r.ReadInt32() == 89, "803属性块与本版Player共用89字节"); Skip(89);
-                    That(r.ReadByte() == actor.EquipmentSlotFlags, "803保留真实装备槽标志"); Skip(5);
-                    var worn = actor.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment && item.Position.Index != 30)
-                        .OrderBy(item => item.Position.Index).ToArray();
-                    That(r.ReadByte() == worn.Length, "803外观数量来自实际穿戴");
-                    foreach (var item in worn)
-                    {
-                        That(r.ReadByte() == item.Position.Index && r.ReadInt32() == item.Core.ItemId && r.ReadInt32() == 4,
-                            "803外观保留真实物品而非代表角色复制"); Skip(4 + 3 + 4 + 4 + 1);
-                    }
-                    Skip(8); That(r.ReadByte() == worn.Length, "803完整装备和外观共用真实穿戴");
-                    foreach (var item in worn)
-                    {
-                        That(item.Avatar is null && item.Creature is null && r.ReadByte() == item.Position.Index &&
-                            r.ReadInt32() == item.Core.ItemId, "803普通装备独立按本版顺序解析");
-                        Skip(4 + 1 + 2 + 2 + 4 + 4 + 1 + 3);
-                        int chronicles = r.ReadByte(); Skip(chronicles * 8 + 4);
-                        int sockets = r.ReadByte(); Skip(sockets * 4 + 2);
-                        That(r.ReadByte() == 0, "基础夹具没有随机属性变长支路"); Skip(10);
-                        Raw(); Raw(); Skip(1); Raw(); Raw(); Raw();
-                    }
-                    Skip(4); int runes = r.ReadByte(); Skip(runes * 4 + 2);
-                    int count = r.ReadByte(); byte active = r.ReadByte();
-                    var tree = actor.Learning.Trees.Single(row => row.Context == active);
-                    That(count == tree.Skills.Count, "803携带该角色真实技能树");
-                    foreach (var skill in tree.Skills.OrderBy(row => row.Slot))
-                        That(r.ReadByte() == skill.Slot && r.ReadUInt16() == skill.Id && r.ReadByte() == skill.Level, "803技能槽ID等级逐项匹配原角色");
-                    That(r.ReadUInt32() == 0, "803辅助列表为空"); Skip(20 + 8 + 8);
-                }
-            }
-            That(r.BaseStream.Position == body.Length, "803六角色独立解析至末字节，无技能换装错位");
-            void Skip(int bytes) => That(r.ReadBytes(bytes).Length == bytes, "803字段没有越界");
-            void Raw() { int length = r.ReadInt32(); That(length is >= 0 and <= 32, "803装备扩展有界"); Skip(length); }
-        }
+        void Actors(byte[] body) => CheckActors(body, (a.Id, teams[0]), (b.Id, teams[1]));
         void Round(byte first, byte second)
         {
             foreach (var peer in peers) peer.Expect(0, 806, Build(w =>
@@ -214,6 +174,52 @@ internal static class PvpTotalBattleTcpTests
         }
         void State(TcpPeer peer, byte state) => peer.Expect(0, 42, Build(w =>
         { w.Write(paired.Room); w.Write(state); w.Write((byte)0); w.Write(paired.Map); w.Write((byte)8); w.Write(0u); }));
+    }
+
+    internal static void CheckActors(byte[] body, params (ushort Owner, Character[] Characters)[] rosters)
+    {
+        using var r = Reader(body); That(r.ReadByte() == rosters.Length, "803完整发布双方六角色");
+        for (int side = 0; side < rosters.Length; side++)
+        {
+            That(r.ReadUInt16() == rosters[side].Owner && r.ReadByte() == 3, "803 owner为u16并带三角色");
+            for (byte index = 0; index < 3; index++)
+            {
+                var actor = rosters[side].Characters[index];
+                That(r.ReadByte() == index && Text(r) == actor.Name && r.ReadByte() == actor.Level &&
+                    r.ReadByte() == actor.Job && r.ReadByte() == actor.GrowType, "803逐角色独立解析身份与真实等级");
+                Skip(7); That(r.ReadInt32() == 89, "803属性块与本版Player共用89字节"); Skip(89);
+                That(r.ReadByte() == actor.EquipmentSlotFlags, "803保留真实装备槽标志"); Skip(5);
+                var worn = actor.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment && item.Position.Index != 30)
+                    .OrderBy(item => item.Position.Index).ToArray();
+                That(r.ReadByte() == worn.Length, "803外观数量来自实际穿戴");
+                foreach (var item in worn)
+                {
+                    That(r.ReadByte() == item.Position.Index && r.ReadInt32() == item.Core.ItemId && r.ReadInt32() == 4,
+                        "803外观保留真实物品而非代表角色复制"); Skip(4 + 3 + 4 + 4 + 1);
+                }
+                Skip(8); That(r.ReadByte() == worn.Length, "803完整装备和外观共用真实穿戴");
+                foreach (var item in worn)
+                {
+                    That(item.Avatar is null && item.Creature is null && r.ReadByte() == item.Position.Index &&
+                        r.ReadInt32() == item.Core.ItemId, "803普通装备独立按本版顺序解析");
+                    Skip(4 + 1 + 2 + 2 + 4 + 4 + 1 + 3);
+                    int chronicles = r.ReadByte(); Skip(chronicles * 8 + 4);
+                    int sockets = r.ReadByte(); Skip(sockets * 4 + 2);
+                    That(r.ReadByte() == 0, "基础夹具没有随机属性变长支路"); Skip(10);
+                    Raw(); Raw(); Skip(1); Raw(); Raw(); Raw();
+                }
+                Skip(4); int runes = r.ReadByte(); Skip(runes * 4 + 2);
+                int count = r.ReadByte(); byte active = r.ReadByte();
+                var tree = actor.Learning.Trees.Single(row => row.Context == active);
+                That(count == tree.Skills.Count, "803携带该角色真实技能树");
+                foreach (var skill in tree.Skills.OrderBy(row => row.Slot))
+                    That(r.ReadByte() == skill.Slot && r.ReadUInt16() == skill.Id && r.ReadByte() == skill.Level, "803技能槽ID等级逐项匹配原角色");
+                That(r.ReadUInt32() == 0, "803辅助列表为空"); Skip(20 + 8 + 8);
+            }
+        }
+        That(r.BaseStream.Position == body.Length, "803六角色独立解析至末字节，无技能换装错位");
+        void Skip(int bytes) => That(r.ReadBytes(bytes).Length == bytes, "803字段没有越界");
+        void Raw() { int length = r.ReadInt32(); That(length is >= 0 and <= 32, "803装备扩展有界"); Skip(length); }
     }
 
     static BinaryReader Reader(byte[] body) => new(new MemoryStream(body));

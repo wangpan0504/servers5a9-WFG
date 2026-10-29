@@ -8,7 +8,7 @@ using DfoServer.Network.Projection;
 namespace DfoServer.Network.Handlers;
 
 internal sealed class GuildPanelHandler(GuildPanelService service, ServerLog log, GuildNpcProjection? npcs = null,
-    GuildDungeonProjection? dungeons = null) : IGameCommandModule
+    GuildDungeonProjection? dungeons = null, GuildRankingService? ranking = null) : IGameCommandModule
 {
     const int RowsPerPacket = 128;
 
@@ -50,6 +50,7 @@ internal sealed class GuildPanelHandler(GuildPanelService service, ServerLog log
         var panel = service.Read(context.Owner, query.CharacterId, context.Channel.ServerIndex);
         if (panel is not null)
         {
+            await RankingAsync(context, query.IsCurrent);
             await context.Notify(NotiPacketType.GUILD_INFO,
                 GuildPackets.Information(panel.Guild, context.Channel.ServerIndex, panel), "guild_panel_information", query.IsCurrent);
             npcs?.Post(context);
@@ -70,6 +71,7 @@ internal sealed class GuildPanelHandler(GuildPanelService service, ServerLog log
             await context.Reply((CmdPacketType)request.Opcode, [0, 0, 0], "guild_panel_unavailable", query.IsCurrent);
             return CommandResult.Handled;
         }
+        await RankingAsync(context, query.IsCurrent);
         await context.Notify(NotiPacketType.GUILD_INFO,
             GuildPackets.Information(panel.Guild, context.Channel.ServerIndex, panel), "guild_panel_information", query.IsCurrent);
         for (int offset = 0; offset < panel.Members.Length || offset == 0; offset += RowsPerPacket)
@@ -86,5 +88,14 @@ internal sealed class GuildPanelHandler(GuildPanelService service, ServerLog log
         log.Write("guild_panel", new { Connection = context.Id, Character = query.CharacterId,
             Guild = panel.Guild.Id, Count = panel.Members.Length, Reference = reference });
         return CommandResult.Handled;
+    }
+
+    async Task RankingAsync(GameConnectionContext context, Func<bool> guard)
+    {
+        // 侧栏构造只读已安装的当前名次；1506回调仅复制缓存，不会重建已经打开的侧栏。
+        if (ranking is null || context.Session.CaptureGuildManagement(false) is not { } actor ||
+            ranking.Summary(actor) is not { } summary) return;
+        await context.Reply(CmdPacketType.GET_JOINED_GUILD_RANKING_INFO, GuildRankingPackets.Summary(summary),
+            "guild_panel_ranking", () => guard() && actor.IsCurrent());
     }
 }

@@ -50,6 +50,7 @@ internal static partial class FormalDungeonTcpTests
         byte[] ordinary = (byte[])request.Clone();
         ordinary[8] = 0;
         peer.Send(16, ordinary);
+        // 普通副本零疲劳按 dstr 49061 回业务错误22（疲劳值不足），不再是通用静默9。
         peer.Expect(1, 16, [0, 22, 0, 0]);
         peer.Barrier();
         foreach (int offset in new[] { 5, 7, 9, 11, 15, 16, 20 })

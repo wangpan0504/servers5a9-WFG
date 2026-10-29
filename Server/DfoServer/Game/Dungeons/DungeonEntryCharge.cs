@@ -15,7 +15,10 @@ internal sealed record DungeonEntryIncount(int Dungeon, DungeonIncountPeriod Per
     public DungeonIncountUsage? ExpectedUsage { get; init; }
 }
 
-internal sealed record BeastDungeonAdmission(int Day, int ExpectedUsed);
+internal sealed record BeastDungeonAdmission(int Day, int ExpectedUsed)
+{
+    public InventoryPlan? Ticket { get; init; }
+}
 
 internal sealed record DungeonEntryCommit(Character Character, DungeonIncountUsage? IncountUsage)
 {

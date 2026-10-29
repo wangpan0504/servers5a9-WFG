@@ -23,7 +23,7 @@ internal sealed class TagEvildomDeadlineProjection(GameConnectionContext context
         await context.Notify(NotiPacketType.AAS_TIPS, ServerNoticePackets.Build("再战魔界", "每日维护时间已到，返回中央竞技场。"),
             "tag_evildom_daily_return", Guard);
         await town.ReturnFromFormalDungeonAsync(context, receipt, "tag_evildom_daily_return");
-        await run.ReturnAsync(context, town, receipt);
+        await run.ReturnAsync(context, receipt);
         log.Write("tag_evildom_daily_return", new { Connection = context.Id, expected.Instance, expected.At });
     }
 

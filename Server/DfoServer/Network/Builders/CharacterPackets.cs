@@ -5,6 +5,9 @@ namespace DfoServer.Network.Builders;
 
 internal static class CharacterPackets
 {
+    // 1408：u8地区数，逐地区u8地区/u16待收人数。本服只有已发NOTI2的本地区名单。
+    public static byte[] AllServerRosterCounts() => [0];
+
     // 0233CDB0成功额外u8为可选提示；0继续命名。失败非150/151仅静默结束，沿既有拒绝码19不猜提示语义。
     public static byte[] PvpPrivateChecked(bool allowed) => allowed ? [1,0] : [0,19,0];
     public static byte[] HiddenRoster() => [1, 0];

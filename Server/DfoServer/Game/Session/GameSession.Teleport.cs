@@ -14,6 +14,11 @@ internal sealed partial class GameSession
     public TeleportResult TeleportPotion(PotionTeleportRequest request, TeleportService service, bool blocked = false) =>
         PlanTeleport(character => service.Potion(character, request, service.Clock.GetUtcNow().ToUnixTimeMilliseconds()), service.Clock, blocked);
 
+    public TeleportResult TeleportGuildMap(PotionTeleportRequest request, TeleportService service, string requestId,
+        bool blocked = false) => pieces is null ? new("guild-teleport-unavailable") :
+        PlanTeleport(character => service.GuildMap(character, request, pieces, service.Clock.GetUtcNow().ToUnixTimeMilliseconds()),
+            service.Clock, blocked, contextCurrent: CanGuildTeleport, guildRequestId: requestId);
+
     public TeleportResult TeleportSolo(SoloTeleportRequest request, TeleportService service, TeleportTarget? target,
         Func<bool>? targetCurrent = null, bool blocked = false) => PlanTeleport(character =>
         service.Solo(character, request, target, service.Clock.GetUtcNow().ToUnixTimeMilliseconds()), service.Clock, blocked, targetCurrent);
@@ -30,7 +35,7 @@ internal sealed partial class GameSession
     }
 
     TeleportResult PlanTeleport(Func<Character, (string Reason, TeleportPlan? Plan)> prepare, TimeProvider clock, bool blocked,
-        Func<bool>? targetCurrent = null, Func<bool>? contextCurrent = null)
+        Func<bool>? targetCurrent = null, Func<bool>? contextCurrent = null, string? guildRequestId = null)
     {
         var capture = owner.Execute(() => (Character: CanTeleport() && !blocked && contextCurrent?.Invoke() != false ? Selected : null, SelectionEpoch));
         if (capture.Character is not { } character) return new("invalid-state");
@@ -49,7 +54,14 @@ internal sealed partial class GameSession
                 plan.Cooldowns.AuraUntil == character.TeleportCooldowns.AuraUntil ? plan.Cooldowns.AuraUntil : checked(plan.Cooldowns.AuraUntil + elapsed),
                 plan.Cooldowns.UpgradeAuraUntil == character.TeleportCooldowns.UpgradeAuraUntil ? plan.Cooldowns.UpgradeAuraUntil : checked(plan.Cooldowns.UpgradeAuraUntil + elapsed),
                 plan.Cooldowns.PartyAuraUntil == character.TeleportCooldowns.PartyAuraUntil ? plan.Cooldowns.PartyAuraUntil : checked(plan.Cooldowns.PartyAuraUntil + elapsed)) };
-            Selected = repository.CommitTeleport(owner, plan);
+            if (guildRequestId is not null)
+            {
+                var committed = repository.CommitGuildMapTeleport(owner, plan, guildRequestId);
+                if (committed.Character is null)
+                    return new TeleportResult(committed.Reason) { Replayed = committed.Replayed };
+                Selected = committed.Character;
+            }
+            else Selected = repository.CommitTeleport(owner, plan);
             InvalidateImageCommunication();
             InvalidateExpertJobStore();
             var inventory = new InventoryResult(true, 0, plan.Inventory)

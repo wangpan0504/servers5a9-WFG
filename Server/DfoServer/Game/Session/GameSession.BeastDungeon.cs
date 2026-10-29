@@ -1,14 +1,46 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 
 namespace DfoServer.Game.Session;
 
+internal sealed record BeastDungeonSelectionReceipt(long Generation, long Epoch, Character Character,
+    DungeonSelectionContext Selection, int Day, ImmutableArray<(uint Dungeon, byte Remaining)> Counts);
+
 internal sealed partial class GameSession
 {
-    // 选图候选列表与次数同源：复用上面同一套门禁，避免两处判断漂移。
-    public int[] BeastSelectionCandidates() =>
-        [.. BeastSelectionCounts().Select(entry => (int)entry.Dungeon)];
+    // 首版只投影普通频道的原中央公园入口；名单不按剩余次数过滤，耗尽仍保留当日入侵身份。
+    public BeastDungeonSelectionReceipt? CaptureBeastDungeonSelection() => owner.Execute(() =>
+    {
+        if (!CanSelectNativeBeast() || Selected is not { } character || CurrentDungeonSelection is not { } selection)
+            return null;
+        int day = BeastDungeonRotation.ServiceDay(IncountNow());
+        var pair = BeastDungeonRotation.Pair(day);
+        var counts = ImmutableArray.CreateBuilder<(uint Dungeon, byte Remaining)>(2);
+        foreach (int dungeon in new[] { pair.First, pair.Second })
+        {
+            int used = repository.LoadBeastDungeonUsed(owner, character.Id, day, dungeon);
+            counts.Add(((uint)dungeon, (byte)Math.Clamp(BeastDungeonRotation.DailyLimit - used, 0, BeastDungeonRotation.DailyLimit)));
+        }
+        return new BeastDungeonSelectionReceipt(owner.Generation, SelectionEpoch, character, selection, day, counts.MoveToImmutable());
+    });
 
+    public bool CanPublishBeastDungeonSelection(BeastDungeonSelectionReceipt receipt) => owner.Execute(() =>
+        CanSelectNativeBeast() && receipt.Generation == owner.Generation && receipt.Epoch == SelectionEpoch &&
+        ReferenceEquals(Selected, receipt.Character) && ReferenceEquals(CurrentDungeonSelection, receipt.Selection) &&
+        receipt.Day == BeastDungeonRotation.ServiceDay(IncountNow()));
+
+    bool CanUseNativeBeastLocation() => Ready &&
+        ChannelEntry?.Type == ChannelAreaLanding.OrdinaryType && completed.Contains(5927) &&
+        Selected is { Position.Town: ChannelAreaLanding.CentralParkTown } character &&
+        towns.Areas.TryGetValue((character.Position.Town, character.Position.Area), out var area) && area.DungeonWorldMap == 39;
+
+    bool CanSelectNativeBeast() => CanUseNativeBeastLocation() && Phase == SessionPhase.MapSelect &&
+        Selected is { } character &&
+        CurrentDungeonSelection is { IsTutorial: false, IsClassExperience: false, Raid: null } selection &&
+        selection.SelectionEpoch == SelectionEpoch && selection.CharacterId == character.Id && selection.OriginPosition == character.Position;
+
+    // 独立5335–5339路线的既有次数暂保持；不向原310–314发送550混淆普通与Beast额度。
     public (uint Dungeon, byte Remaining)[] BeastSelectionCounts() => owner.Execute<(uint,byte)[]>(() =>
     {
         // 魔兽世界地图46（worldmap/beast_metrocenter.wdm）的气球编号就是 5335–5339，次数必须按这五个下发。

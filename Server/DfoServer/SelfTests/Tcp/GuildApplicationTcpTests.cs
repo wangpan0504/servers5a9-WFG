@@ -35,7 +35,7 @@ internal static class GuildApplicationTcpTests
         using (var master = Open(fixture))
         using (var target = Open(fixture, "20001"))
         {
-            Enter(master); Enter(target);
+            Enter(master, guildMember: true); Enter(target);
             string assets = fixture.Snapshot("SELECT id,gold,revision FROM characters ORDER BY id");
             target.Send(365, []);
             target.Expect(0, 308, [0]);
@@ -154,12 +154,18 @@ internal static class GuildApplicationTcpTests
         throw new InvalidOperationException("Guild application reply did not reach request barrier");
     }
 
-    static void Enter(TcpPeer peer)
+    static void Enter(TcpPeer peer, bool guildMember = false)
     {
         peer.Send(8, [255, 255, 2]);
         peer.Send(4, Build(writer => writer.Write((ushort)0)));
         for (int guard = 0; guard < 256; guard++)
-            if (peer.Read() is { Kind: 0, Opcode: 124 }) { peer.ReadWeeklyDungeon(); return; }
+        {
+            if (peer.Read() is not { Kind: 0, Opcode: 124 }) continue;
+            peer.ReadWeeklyDungeon();
+            // 公会成员入城尾部固定补发被动属性（守护石1276），按真实账本核验而不是丢弃。
+            if (guildMember) peer.CheckGuildPassiveBuffs(peer.Expect(0, 487));
+            return;
+        }
         throw new InvalidOperationException("Guild application TCP did not enter town");
     }
 

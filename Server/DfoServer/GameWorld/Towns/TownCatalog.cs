@@ -87,7 +87,9 @@ internal sealed class TownCatalog
 
     public bool IsWeddingMovieReturn(Location target, IReadOnlySet<int> completed) =>
         Areas.TryGetValue((target.Town, target.Area), out var area) && area.Map(completed) is { Error: null } map &&
-        map.Npcs.Any(npc => npc.Id == 20013 && npc.X == target.X && (long)npc.Y + 30 == target.Y);
+        // 本版大祭司离堂实发39/0/2165/180，与MAP中的NPC摆放坐标不同；兼容精确落点仍要求该地区实际有婚礼NPC。
+        map.Npcs.Any(npc => npc.Id == 20013 && (npc.X == target.X && (long)npc.Y + 30 == target.Y ||
+            target is { Town: 39, Area: 0, X: 2165, Y: 180 }));
     public IReadOnlyDictionary<int, TownDungeonMap> DungeonMaps { get; }
     // [golden commerce] 的菜单0x61打开遗忘之地选图；角色参数非零或声明不完整时不取得此入口。
     public IReadOnlySet<uint> LostLandEntryNpcs { get; init; } = new HashSet<uint>();

@@ -338,7 +338,7 @@ internal static class ChatTcpTests
 
     /// <summary>
     /// 收尾一个连接：同频道成员入场/离开会在屏障之前插入同屏投影帧（2/3/22/23/24 与虚弱 4），
-    /// 读到本次屏障 ACK 为止；出现其他通知即失败，避免把聊天之外的帧悄悄吞掉。
+    /// 公会成员还会补发公会被动属性 487；读到本次屏障 ACK 为止，其它通知仍失败。
     /// </summary>
     static void Settle(TcpPeer peer)
     {
@@ -348,6 +348,12 @@ internal static class ChatTcpTests
             var packet = peer.Read();
             if (packet.Kind == 1 && packet.Opcode == 1347)
                 return;
+            // 公会成员的守护石1276按真实账本核验，不当作可丢弃的噪声。
+            if (packet is { Kind: 0, Opcode: 487 })
+            {
+                peer.CheckGuildPassiveBuffs(packet);
+                continue;
+            }
             That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 22 or 23 or 24,
                 $"入城收尾只允许同屏/状态帧，实际 ({packet.Kind},{packet.Opcode})");
         }

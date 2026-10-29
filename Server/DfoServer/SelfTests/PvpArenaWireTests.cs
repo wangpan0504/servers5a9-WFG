@@ -82,6 +82,8 @@ internal static class PvpArenaWireTests
             !room.Member(guest.Token)!.Ready, "离房后房主变为原客人且准备取消");
         That(PvpArenaPackets.Rejected(true).SequenceEqual(new byte[] { 0, 4, 0 }) &&
             PvpArenaPackets.Rejected().SequenceEqual(new byte[] { 0, 19, 0 }), "入房拒绝区分密码对话框和通用拒绝");
+        That(PvpArenaPackets.Left(room.View(), 3).SequenceEqual(Convert.FromHexString("341202010300FFFF")),
+            "离房独立金样只清原本人席，不用完整八席空目录替代本人离房");
         ResultPacket();
         Console.WriteLine($"PASS {Count - before} 正式决斗请求及既有训练协议兼容断言");
         PvpMatchingWireTests.RunCore();

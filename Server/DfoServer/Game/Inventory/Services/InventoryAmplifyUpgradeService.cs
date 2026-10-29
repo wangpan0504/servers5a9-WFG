@@ -12,7 +12,7 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
     Random? random = null, TimeProvider? clock = null)
 {
     const ushort RejectCode = InventoryEnhancementService.Rejection;
-    public InventoryResult Plan(Character character, EnhancementRequest request, out EnhancementReceipt? receipt)
+    public InventoryResult Plan(Character character, EnhancementRequest request, out EnhancementReceipt? receipt, int guildSuccessPercent = 0)
     {
         receipt = null;
         var before = character.Inventory;
@@ -50,7 +50,8 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             return InventoryResult.Reject(RejectCode);
         var step = rules.Steps[old];
         bool portable = use?.Kind == AmplifyUseKind.Portable;
-        int failureWeight = AdjustedFailureWeight(step.FailureWeight, portable ? use!.SuccessBonusWeight : 0);
+        int failureWeight = AdjustedFailureWeight(step.FailureWeight, portable ? use!.SuccessBonusWeight : 0,
+            lucky ? 0 : guildSuccessPercent);
         if (!portable && !lucky && source.Core.ItemId != step.MaterialId)
             return InventoryResult.Reject(RejectCode);
         int count = portable || lucky ? 1 : step.MaterialCount;
@@ -128,12 +129,14 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
             "equipment_amplification_npc", new(character, deadline, clock)));
     }
 
-    internal static int AdjustedFailureWeight(int failureWeight, int successBonusWeight)
+    internal static int AdjustedFailureWeight(int failureWeight, int successBonusWeight, int guildSuccessPercent = 0)
     {
-        if (failureWeight is < 0 or > 100000 || successBonusWeight < 0)
+        if (failureWeight is < 0 or > 100000 || successBonusWeight < 0 || guildSuccessPercent < 0)
             throw new InvalidDataException("增幅失败权重或成功加成无效");
         // 第三参数30000表示基础成功权重乘1.3，不是直接增加30个百分点。
         long successWeight = (100000L - failureWeight) * (100000L + successBonusWeight) / 100000;
+        // 公会加成在原便携器加成之后按同一相对倍率计算，不叠加公共与个人福利。
+        successWeight = Math.Min(100000, successWeight) * (100L + guildSuccessPercent) / 100;
         return 100000 - (int)Math.Min(100000, successWeight);
     }
 

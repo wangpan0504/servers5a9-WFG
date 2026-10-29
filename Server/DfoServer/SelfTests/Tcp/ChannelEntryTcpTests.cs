@@ -54,8 +54,8 @@ internal static class ChannelEntryTcpTests
         alpha.Send(195);
         alpha.Expect(1, 195, Build(w =>
         {
-            w.Write((byte)1); w.Write(0u); w.Write((byte)3);
-            foreach (uint number in new uint[] { 11, pvp, 47 })
+            w.Write((byte)1); w.Write(0u); w.Write((byte)5);
+            foreach (uint number in new uint[] { 11, pvp, 47, 51, 55 })
             { w.Write(number); w.Write(0u); w.Write(1u); }
         }));
         foreach (var frames in new[] { alphaEntry, isolatedEntry })

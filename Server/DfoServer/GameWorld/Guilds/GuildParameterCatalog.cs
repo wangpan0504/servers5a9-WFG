@@ -26,6 +26,7 @@ internal sealed partial class GuildParameterCatalog
     {
         CreateCost = Scalar(guildText, "guild create cost", "建会花费");
         CargoSizeLimit = Scalar(guildText, "guild cargo size limit", "公会仓库格数");
+        TeleportCost = Scalar(reformText, "guild teleport cost", "公会地图传送贡献币费用");
         levelExperience = ParseLevelExperience(PvfScript.Block(reformText, "guild level exp"));
     }
 
@@ -34,6 +35,8 @@ internal sealed partial class GuildParameterCatalog
 
     /// <summary>公会仓库格数（`[guild cargo size limit]`）。</summary>
     public int CargoSizeLimit { get; }
+
+    public int TeleportCost { get; }
 
     /// <summary>指定档位与等级所需的公会经验；档位 0–4、等级 1–10，越界即拒绝而不是夹取。</summary>
     public int LevelExperience(int tier, int level)

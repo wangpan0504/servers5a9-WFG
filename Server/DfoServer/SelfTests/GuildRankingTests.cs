@@ -137,9 +137,20 @@ internal static class GuildRankingTests
                 INSERT INTO guild_dungeon_progress VALUES(1,102,10000,{now});
                 """);
             var current = service.Summary(actor)!.Current;
-            That(current.Factors is { WeeklyUv: 0.1f, Contents: 10, Party: 10 } && Math.Abs(current.Factors.Contribution - 2.001f) < 0.00001 &&
+            That(current.Factors is { WeeklyUv: 0.1f, Contents: 0, Party: 10 } && Math.Abs(current.Factors.Contribution - 2.001f) < 0.00001 &&
                 current.Factors.Dungeon > 50 && current.Factors.War == 0 && current.Factors.Event == 0,
-                "真实出勤角色去重，组队按实例计分而内容按地图去重，旧会籍事件不混入当月贡献");
+                "真实出勤角色去重，组队按实例计分且不会虚增福利，旧会籍事件不混入当月贡献");
+            Sql($"""
+                INSERT INTO guild_benefits VALUES(1,1,10,{now+1}),(1,3,167,{now}),(1,5,169,0),(1,7,0,0);
+                INSERT INTO guild_cargo_state(guild_id,capacity) VALUES(1,16);
+                INSERT INTO guild_economy(guild_id,member_limit) VALUES(1,500);
+                """);
+            That(service.Summary(actor)!.Current.Factors.Contents == 40,
+                "福利仅统计有效临时增益、永久福利和已购买扩容，不统计刚到期及耗尽次数");
+            clock.Unix++;
+            That(service.Summary(actor)!.Current.Factors.Contents == 30,
+                "福利到期即时退出排行计分，不改写购买事实或依赖维护轮询");
+            clock.Unix--;
             var old = current with { Factors = current.Factors with { Contribution = 77 }, Rank = 3 };
             repository.ObserveGuildRanking(new(202609, september, [old]));
             repository.ObserveGuildRanking(new(202609, september - 1, [current]));
@@ -151,28 +162,40 @@ internal static class GuildRankingTests
             That(reopened.OfficialRank(1) == 3 && reopened.OfficialRank(99) == 0,
                 "详情排名只取真实上月封存榜，缺失公会保留未排名");
             Reject<InvalidDataException>(() => repository.ObserveGuildRanking(new(202610, september, [])), "不能把当前事实写成别的月份");
-            byte[] summary = GuildRankingPackets.Summary(history);
+            byte[] summary = NativeModel(GuildRankingPackets.Summary(history), 116);
             That(summary.Length == 116 && BitConverter.ToInt32(summary, 0) == 0 && BitConverter.ToInt32(summary, 4) == 1 &&
                 BitConverter.ToInt32(summary, 12) == 3 && BitConverter.ToInt32(summary, 20) == 9 &&
                 BitConverter.ToSingle(summary, 112) == 77 && BitConverter.ToSingle(summary, 92) == current.Factors.Contribution,
                 "116B原生summary当前、上月、前期及11项因子独立排列，首DWORD零初始化不做标志位，绝不镜像上月");
-            var sentinel = current with { Factors = current.Factors with { Adventure = 78, Pvp = 56, Raid = 1234, Event = 9, Contribution = 10 } };
-            byte[] probe = GuildRankingPackets.Summary(new(sentinel, null, null));
-            That(BitConverter.ToSingle(probe, 0x4C) == 78 && BitConverter.ToSingle(probe, 0x50) == 56 &&
-                BitConverter.ToSingle(probe, 0x54) == 1234 && BitConverter.ToSingle(probe, 0x58) == 9 &&
-                BitConverter.ToSingle(probe, 0x5C) == 10,
-                "0x50按显示侧分类是决斗等级(PvP)，0x54本版不渲染，冒险团/贡献各归其位");
+            var sentinel = current with { Factors = new(11, 22, 33, 44, 55, 66, 77, 88, 99, 111, 122) };
+            var priorSentinel = sentinel with { Factors = new(12, 23, 34, 45, 56, 67, 78, 89, 100, 112, 123) };
+            byte[] probe = NativeModel(GuildRankingPackets.Summary(new(sentinel, priorSentinel, null)), 116);
+            // 独立按九个UI消费者取值，不复用Builder的排列数组。
+            int[] currentOffsets = [0x1c, 0x20, 0x5c, 0x24, 0x4c, 0x30, 0x50, 0x2c, 0x58];
+            int[] officialOffsets = [0x34, 0x38, 0x70, 0x3c, 0x60, 0x48, 0x64, 0x44, 0x6c];
+            float[] expected = [11, 22, 122, 33, 77, 44, 99, 66, 88];
+            for (int i = 0; i < expected.Length; i++)
+                That(BitConverter.ToSingle(probe, currentOffsets[i]) == expected[i] &&
+                    BitConverter.ToSingle(probe, officialOffsets[i]) == expected[i] + 1,
+                    $"原生九项第{i+1}项当前及上月各取独立正确因子");
+            That(BitConverter.ToSingle(probe, 0x28) == 55 && BitConverter.ToSingle(probe, 0x54) == 111,
+                "本版未显示的公会战和活动字段仍保留独立值，不挤占福利、组队或攻坚");
             var entries = Enumerable.Range(1, 12).Select(id => current with { Id = (uint)id, Name = "榜" + id, Master = "主" + id }).ToArray();
-            byte[] list = GuildRankingPackets.Page(new(0, 12, entries[..5]));
+            byte[] list = NativeModel(GuildRankingPackets.Page(new(0, 12, entries[..5])), 385);
             That(list.Length == 385 && list[0] == 0 && BitConverter.ToUInt16(list, 1) == 12 && BitConverter.ToUInt16(list, 3) == 5 &&
                 BitConverter.ToUInt32(list, 5) == 1 && list[5 + 12] == 0 && list[5 + 23] == 0 &&
                 BitConverter.ToUInt16(list, 5 + 74) == 1 && BitConverter.ToUInt32(list, 81) == 2,
-                "1507头5B(mode/u16/count)与76B行缓冲、NUL与成员u16按独立偏移核验，正文不前置标志位");
+                "1507公共层消费成功字节后，5B头及76B行缓冲按独立偏移核验");
             // 行内20起23B是公会名、43起31B是会长名：两列顺序由实机截图钉死，不得再对调。
             var encoding = CharacterName.Encoding;
             That(encoding.GetString(list, 5 + 20, 23).TrimEnd('\0') == "榜1" &&
                 encoding.GetString(list, 5 + 43, 31).TrimEnd('\0') == "主1",
                 "1507行20起写公会名、43起写会长名");
+            byte[] top = NativeModel(GuildRankingPackets.Page(new(1, 12, entries[..3])), 233);
+            That(top[0] == 1 && BitConverter.ToUInt16(top, 3) == 3 && BitConverter.ToUInt32(top, 5) == 1,
+                "前三名模式在公共成功字节之后读取mode，不能把total低字节当作mode");
+            That(NativeModel(GuildRankingPackets.Page(new(0, 12, [])), 5).SequenceEqual(new byte[] { 0, 12, 0, 0, 0 }),
+                "合法空页仍有成功包封装及完整模型，与业务失败分开");
             for (int i = 2; i <= 12; i++) Sql($"INSERT INTO guilds(guild_id,name,address,master_character_id,created_at_unix) VALUES({i},'榜{i}','rank-{i}',{character.Id},1000)");
             That(service.Page(0, 0, 1).Entries.Length == 5 && service.Page(0, 0, 3).Entries.Length == 2 &&
                 service.Page(0, 0, 4).Entries.Length == 0 && service.Page(1, 0, 1).Entries.Length == 3,
@@ -193,6 +216,14 @@ internal static class GuildRankingTests
                 "榜表碰撞整段回滚，不留下半套升级或版本前移");
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    // 028F82A0先从正文读成功字节，028F2970再把成功值传给排行回调；帧头kind不代替此字节。
+    static byte[] NativeModel(byte[] acknowledgement, int size)
+    {
+        That(acknowledgement.Length == size + 1 && acknowledgement[0] == 1,
+            "排行ACK必须先经公共层消费01成功字节，再读取完整原生模型");
+        return acknowledgement[1..];
     }
 
     public static void RunResources(PvfArchive pvf)

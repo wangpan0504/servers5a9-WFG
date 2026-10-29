@@ -77,7 +77,8 @@ internal sealed class PvpArenaHandler(PvpArenaService arena, PvpTrainingHandler 
 
     Task<CommandResult> SeatAsync(GameConnectionContext context, Packet packet)
     {
-        if (context.Session.ReadPvpTraining() is not null) return training.SeatAsync(context, packet);
+        if (context.Session.ReadPvpTraining() is not null || context.Session.ReadPvpPractice() is not null)
+            return training.SeatAsync(context, packet);
         var request = PvpTrainingRequests.Seat(packet.Body);
         if (context.Session.CurrentPvpArena is not { } member || member.Room.Member(member.Token) is not { } own)
             return Task.FromResult(CommandResult.Handled);

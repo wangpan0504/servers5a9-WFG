@@ -60,6 +60,7 @@ internal static partial class FormalDungeonTcpTests
             peer.Send(16,Convert.FromHexString("030000000000000000FFFF0000000000000000000000000000"));
             if (remaining == 0)
             {
+                // 普通副本零疲劳按 dstr 49061 回业务错误22（疲劳值不足），不再是通用静默9。
                 peer.Expect(1,16,[0,22,0,0]); peer.Barrier();
                 That(fixture.Query("SELECT last_attempt FROM character_dungeon_state WHERE character_id=$p0",peer.Id) is [[1L]],
                     "零疲劳普通副本仍拒绝，不安装第二份尝试");

@@ -88,11 +88,11 @@ internal static class ChannelPackets
     // 0x20 → +0x492（tail[38]）判资格，发 0 时资格位不生效。逐个核对 43 处 0x17/0x20 读点：团本创建框/团本管理器类型表、频道类型 → 城镇
     // （03B876C0：0x17→19、0x20→32，与服务端落点一致）、团队频道内跳过若干普通频道 UI/提示、卢克频道快捷窗 0x5C9 与物品频道限制谓词 022C4430；
     // 页签与换频道快照谓词读脚本类型（+8），不读 +0x1010。证据：evidence/anton-luke-channel-type-audit-20261021.txt。
-    // 01714BC0/01714BCD：8显示无双决斗场，24显示传统决斗场；LOGIN不能将它们降为普通模式0。
+    // 03EF95B0/028FA230将4纳入普通决斗准入；01714BC0/01714BCD：8显示无双决斗场，24显示传统决斗场；LOGIN均保留实际类型。
     // 普通type22用于冒险团页准入（012AE420→028FB170）；其他未确认入口继续发0，避免扩大客户端模式变化。
     // LOGIN接收端将类型写入模式+1010；魔兽谓词读取该字段是否为0x28，不能回落0。
     public static byte LoginChannelType(ChannelEntry channel) =>
-        channel.Type is 8 or 24 or 22 or 39 or BeastType or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
+        channel.Type is 4 or 5 or 8 or 24 or 22 or 39 or BeastType or AntonRaidType or LukeRaidType or EvildomWarType or FiendWarType or PreyRaidType or EvildomGatheringType ? (byte)channel.Type : (byte)0;
 
     public static byte[] Endpoint(string address, int port, uint association = 0, byte channelType = 0)
     {

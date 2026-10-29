@@ -40,6 +40,21 @@ internal static class PvpTotalPackets
         Func<Character, DfoServer.GameWorld.Characters.CharacterStats> stats)
     {
         Validate(rosters);
+        return WriteActors(rosters, stats);
+    }
+
+    // 023B4603的count1分支专门刷新大厅UI；开战前须先为本人安装三名真实队员。
+    public static byte[] OwnActors(PvpTotalBattleRoster roster,
+        Func<Character, DfoServer.GameWorld.Characters.CharacterStats> stats)
+    {
+        ImmutableArray<PvpTotalBattleRoster> rosters = [roster];
+        Validate(rosters, 1);
+        return WriteActors(rosters, stats);
+    }
+
+    static byte[] WriteActors(ImmutableArray<PvpTotalBattleRoster> rosters,
+        Func<Character, DfoServer.GameWorld.Characters.CharacterStats> stats)
+    {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write((byte)rosters.Length);
@@ -92,11 +107,11 @@ internal static class PvpTotalPackets
         return stream.ToArray();
     }
 
-    static void Validate(ImmutableArray<PvpTotalBattleRoster> rosters)
+    static void Validate(ImmutableArray<PvpTotalBattleRoster> rosters, int count = 2)
     {
-        if (rosters.IsDefault || rosters.Length != 2 || rosters.Any(row => !row.Team.Complete || row.Characters.Length != 3 ||
+        if (rosters.IsDefault || rosters.Length != count || rosters.Any(row => !row.Team.Complete || row.Characters.Length != 3 ||
             !row.Team.Characters.SequenceEqual(row.Characters.Select(actor => (ushort?)actor.Id))) ||
-            rosters.SelectMany(row => row.Characters).Select(row => row.Id).Distinct().Count() != 6)
-            throw new InvalidDataException("总力战斗演员必须属于两个真实三角色队伍");
+            rosters.SelectMany(row => row.Characters).Select(row => row.Id).Distinct().Count() != count * 3)
+            throw new InvalidDataException("总力演员必须属于指定数量的真实三角色队伍");
     }
 }

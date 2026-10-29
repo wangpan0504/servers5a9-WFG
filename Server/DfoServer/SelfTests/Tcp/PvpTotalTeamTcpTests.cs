@@ -17,6 +17,7 @@ internal static class PvpTotalTeamTcpTests
         await using var f = new TcpTestFixture(source, Path.Combine(root, "pvp-total-team"), resources: resources);
         var repository = new CharacterRepository(f.Database, resources.Quests);
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
+        var originals = new Dictionary<ushort, Character>();
         ushort first, second, third;
         using (var owner = new AccountOwners().Acquire("total-tcp", () => { }))
         {
@@ -41,27 +42,29 @@ internal static class PvpTotalTeamTcpTests
         {
             peer.Send(873, TeamBody("编队甲", 2, 0, 1)); peer.Expect(1, 873, [0, 2, 0]);
             peer.Select(prepared: true); peer.Barrier();
-            peer.Send(1426); peer.SendBarrier(); peer.Batch((0, 23), (0, 24), (1, 1347));
             That(f.Query("SELECT town,area FROM characters WHERE id=$p0", first) is [[10L, 0L]],
-                "无双频道普通角色离开共享房间后实际进入决斗地区10/0");
+                "无双频道普通角色选角直接进入决斗地区10/0");
             string assets = f.Snapshot();
             peer.Send(874, NameBody("编队甲")); peer.Expect(1, 874, [1]);
             peer.Send(873, TeamBody("", 2, 0, 1)); peer.Expect(1, 873, [0, 4, 0]);
             peer.Send(873, TeamBody("bad!", 2, 0, 1)); peer.Expect(1, 873, [0, 159, 0]);
             peer.Send(873, TeamBody("编队甲", 2, 0, 0)); peer.Expect(1, 873, [0, 2, 0]);
             peer.Send(873, TeamBody("编队甲", 2, 0, 3)); peer.Expect(1, 873, [0, 2, 0]);
-            peer.Send(873, TeamBody("编队甲", 2, 0, 1)); peer.Expect(1, 873, [1, 2, 0, 1]);
+            peer.Send(873, TeamBody("编队甲", 2, 0, 1)); peer.Expect(0, 804, TeamBody("编队甲", 2, 0, 1));
+            Actors(peer.Expect(0, 803).Body, peer.Id, third, first, second); peer.Expect(1, 873, [1, 2, 0, 1]);
             peer.Barrier();
             That(f.Query("SELECT revision,name,first_id,second_id,third_id FROM account_pvp_total_teams WHERE account='total-tcp'")
                 is [[1L, "编队甲", long a, long b, long c]] && a == third && b == first && c == second,
                 "873回传原列表索引，有持久槽空洞时仍按已发布顺序保存稳定ID");
             saved = State();
-            peer.Send(873, TeamBody("编队甲", 2, 0, 1)); peer.Expect(1, 873, [1, 2, 0, 1]);
+            peer.Send(873, TeamBody("编队甲", 2, 0, 1)); peer.Expect(0, 804, TeamBody("编队甲", 2, 0, 1));
+            Actors(peer.Expect(0, 803).Body, peer.Id, third, first, second); peer.Expect(1, 873, [1, 2, 0, 1]);
             peer.Send(874, NameBody("编队甲")); peer.Expect(1, 874, [1]);
             peer.Send(873, TeamBody("编队乙", 2, 0, 1)); peer.Expect(1, 873, [0, 159, 0]);
             peer.Barrier();
             That(State() == saved && f.Snapshot() == assets, "重复登记不推进队伍版本，改名不能绕过费用且编队不改角色资产");
-            peer.Send(873, TeamBody("编队甲", 1, 2, 0)); peer.Expect(1, 873, [1, 1, 2, 0]); peer.Barrier();
+            peer.Send(873, TeamBody("编队甲", 1, 2, 0)); peer.Expect(0, 804, TeamBody("编队甲", 1, 2, 0));
+            Actors(peer.Expect(0, 803).Body, peer.Id, second, third, first); peer.Expect(1, 873, [1, 1, 2, 0]); peer.Barrier();
             That(f.Query("SELECT revision,first_id,second_id,third_id FROM account_pvp_total_teams WHERE account='total-tcp'")
                 is [[2L, long d, long e, long g]] && d == second && e == third && g == first,
                 "873重排使用同一队伍身份并推进自己的版本");
@@ -86,7 +89,9 @@ internal static class PvpTotalTeamTcpTests
         {
             That(peer.LoginEndpoint[3] == 8, "总力编队重登无双频道保持真实类型8");
             peer.Select(prepared: true, pvpTotalTeam: TeamBody("编队甲", 1, 2, 0)); peer.Barrier();
-            peer.Send(873, TeamBody("编队甲", 1, 2, 0)); peer.Expect(1, 873, [1, 1, 2, 0]); peer.Barrier();
+            Actors(peer.PvpTotalActors, peer.Id, second, third, first);
+            peer.Send(873, TeamBody("编队甲", 1, 2, 0)); peer.Expect(0, 804, TeamBody("编队甲", 1, 2, 0));
+            Actors(peer.Expect(0, 803).Body, peer.Id, second, third, first); peer.Expect(1, 873, [1, 1, 2, 0]); peer.Barrier();
             That(State() == saved, "真实重启及重登回放原队伍和阵容，不另建身份或增加版本");
             peer.Send(875, RenameBody("编队甲", ushort.MaxValue)); peer.Expect(1, 875, [1, ..NameBody("编队甲")]);
             peer.Barrier();
@@ -132,10 +137,14 @@ internal static class PvpTotalTeamTcpTests
                 resources.Towns.InitialReturn, resources.Learning.Get);
             var inventory = name == "TotalFirst" ? seed.Inventory with
             { Items = seed.Inventory.Items.Add(new(0, new(InventoryListType.Main, 121), new(PvpTotalTeamRename.CardId, ItemKind.Material, 2))) } : seed.Inventory;
-            return repository.Create(owner, seed with { Level = 85, GrowType = grow, AcceptedStoryLevel = 85, Inventory = inventory,
+            var character = repository.Create(owner, seed with { Level = 85, GrowType = grow, AcceptedStoryLevel = 85, Inventory = inventory,
                 InitialLearning = SkillPointLedger.Synchronize(0, grow, 85, seed.InitialLearning with
                 { Experience = growth.GetLevelStartExperience(85) }, resources.Learning) });
+            originals.Add(character.Id, character);
+            return character;
         }
+        void Actors(byte[] body, ushort owner, params ushort[] ids) =>
+            PvpTotalBattleTcpTests.CheckActors(body, (owner, ids.Select(id => originals[id]).ToArray()));
     }
 
     static byte[] NameBody(string name) => Build(writer =>

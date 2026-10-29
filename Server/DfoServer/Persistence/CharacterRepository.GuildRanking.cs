@@ -76,6 +76,17 @@ internal sealed partial class CharacterRepository : IGuildRankingStore
             """, ("$month", GuildRankingService.MonthStart(now)), ("$now", now)))
         using (var row = query.ExecuteReader())
             while (row.Read()) Add(parties, checked((uint)row.GetInt64(0)), new(checked((uint)row.GetInt64(1)), row.GetInt32(2), row.GetInt64(3)));
+        // 福利按当前实际持有的内容类别计分；组队地图种类不代表购买了公会福利。
+        var contents = new Dictionary<uint, int>();
+        using (var query = ManagementCommand(db, tx, """
+            SELECT guild_id,COUNT(*) FROM (
+              SELECT guild_id,type FROM guild_benefits WHERE value>0 AND (type=7 OR expires_unix=0 OR expires_unix>$now)
+              UNION ALL SELECT guild_id,4 FROM guild_cargo_state WHERE capacity>8
+              UNION ALL SELECT guild_id,6 FROM guild_economy WHERE member_limit>300
+            ) GROUP BY guild_id
+            """, ("$now", now)))
+        using (var row = query.ExecuteReader())
+            while (row.Read()) contents.Add(checked((uint)row.GetInt64(0)), row.GetInt32(1));
         int previous = GuildRankingService.PreviousMonth(GuildRankingService.Month(now));
         var archives = new List<GuildRankingArchive>();
         using (var query = ManagementCommand(db, tx, """
@@ -87,7 +98,8 @@ internal sealed partial class CharacterRepository : IGuildRankingStore
         return new(identities.Select(g => new GuildRankingFact(g.Id, g.Name, g.Master, g.Mark, g.Mode,
             members.GetValueOrDefault(g.Id)?.ToArray() ?? [], activity.GetValueOrDefault(g.Id).Uv,
             activity.GetValueOrDefault(g.Id).Points, raids.GetValueOrDefault(g.Id),
-            dungeons.GetValueOrDefault(g.Id)?.ToArray() ?? [], parties.GetValueOrDefault(g.Id)?.ToArray() ?? [])).ToArray(), archives.ToArray());
+            dungeons.GetValueOrDefault(g.Id)?.ToArray() ?? [], parties.GetValueOrDefault(g.Id)?.ToArray() ?? [],
+            contents.GetValueOrDefault(g.Id))).ToArray(), archives.ToArray());
     }
 
     static void Add<T>(Dictionary<uint, List<T>> rows, uint guild, T value)

@@ -103,6 +103,9 @@ internal static class GuildGovernanceTcpTests
             using var reconnected = Open(fixture, "20001");
             Enter(reconnected);
             reconnected.Send(339, []);
+            var ranking = reconnected.Expect(1, 1506).Body;
+            That(ranking.Length == 117 && ranking[0] == 1 && BitConverter.ToInt32(ranking, 5) > 0,
+                "重连后普通公会刷新先安装当前排名");
             CheckRole(reconnected.Expect(0, 70).Body, 4, GuildGovernanceRules.Promotion, "见习成员");
             reconnected.ReadGuildNpcs();
             reconnected.ReadGuildDungeon();
@@ -126,7 +129,21 @@ internal static class GuildGovernanceTcpTests
             if (packet.Kind == 0 && packet.Opcode == 124)
             {
                 peer.ReadWeeklyDungeon();
-                return region ?? throw new InvalidOperationException("治理TCP未读取本人Actor大区");
+                peer.Send(156, GuildGovernanceTests.Text("GovBar"));
+                bool guardian = false;
+                for (int at = 0; at < 128; at++)
+                {
+                    var next = peer.Read();
+                    if (next is { Kind: 0, Opcode: 487 }) { peer.CheckGuildPassiveBuffs(next); guardian = true; }
+                    else if (next is { Kind: 1, Opcode: 156 })
+                    {
+                        Bytes(next.Body, [1], "治理入城哨兵完成");
+                        That(guardian, "治理入城安装永久守护石");
+                        return region ?? throw new InvalidOperationException("治理TCP未读取本人Actor大区");
+                    }
+                    else That(next is { Kind: 0, Opcode: 2 }, "治理入城尾部仅允许同屏Actor和永久属性");
+                }
+                throw new InvalidOperationException("Governance entry did not reach barrier");
             }
         }
         throw new InvalidOperationException("治理TCP未完成选角入城");
@@ -143,6 +160,8 @@ internal static class GuildGovernanceTcpTests
         peer.Expect(1, 1454);
         peer.Expect(1, 744);
         peer.ReadGuildDungeon();
+        peer.Expect(0, 488, Convert.FromHexString("01FC040000"));
+        peer.CheckGuildPassiveBuffs(peer.Expect(0, 487));
     }
 
     static void CheckRole(byte[] body, byte grade, uint permissions, string name,

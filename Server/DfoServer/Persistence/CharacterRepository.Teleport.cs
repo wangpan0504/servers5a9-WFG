@@ -60,6 +60,13 @@ internal sealed partial class CharacterRepository
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitTeleport");
         using var tx = write.Transaction;
+        var committed = CommitTeleportInTransaction(db, tx, owner, plan);
+        tx.Commit();
+        return committed;
+    });
+
+    Character CommitTeleportInTransaction(SqliteConnection db, SqliteTransaction tx, AccountOwners.Lease owner, TeleportPlan plan)
+    {
         var expected = plan.Expected;
         // 提交器返回同一事务内实读角色；不在其前后重复加载完整资产。
         var current = CommitInventoryInTransaction(db, tx, owner, expected, plan.Inventory);
@@ -93,7 +100,6 @@ internal sealed partial class CharacterRepository
         command.Parameters.AddWithValue("$upgrade", plan.Cooldowns.UpgradeAuraUntil);
         command.Parameters.AddWithValue("$party", plan.Cooldowns.PartyAuraUntil);
         command.ExecuteNonQuery();
-        tx.Commit();
         return current with { Revision = expected.Revision + 1, Position = plan.Position, Return = plan.Return, TeleportCooldowns = plan.Cooldowns };
-    });
+    }
 }

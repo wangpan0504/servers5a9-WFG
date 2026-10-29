@@ -335,6 +335,7 @@ internal static class LukeRaidLifecycleTransactionTests
     }
     sealed class BlockedEntryStore(IPartyDungeonStore inner):IPartyDungeonStore,IDisposable
     {
+        public Character[] CommitBeastDungeonLoading(IReadOnlyList<BeastDungeonLoadingReservation> rows) => inner.CommitBeastDungeonLoading(rows);
         public ManualResetEventSlim Entered {get;}=new();
         public ManualResetEventSlim Release {get;}=new();
         public PartyDungeonEntryCommit[] CommitPartyDungeonEntry(IReadOnlyList<PartyDungeonReservation> rows)

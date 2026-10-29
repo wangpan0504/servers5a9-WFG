@@ -15,21 +15,32 @@ internal static partial class QuestHellChallengeTcpTests
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         var repository = new CharacterRepository(fixture.Database,resources.Quests);
         await fixture.StartAsync();
-        // 六项定义和交付矩阵由资源自测覆盖；网络层选有关系后继的Ep1和带6045前置的原图Ep6。
+        // 复用资格任务网络矩阵：深渊有经验金币，魔兽5927沿参数表结算经验且无金币，均从真实接取交付。
         foreach (var scenario in new[] { (Quest: (ushort)6080, Prerequisite: false), (Quest: (ushort)6880, Prerequisite: true),
-            (Quest: (ushort)6080, Prerequisite: true) })
+            (Quest: (ushort)6080, Prerequisite: true), (Quest: (ushort)5927, Prerequisite: false),
+            (Quest: (ushort)5927, Prerequisite: true) })
         {
             var quest = resources.Quests.Get(scenario.Quest);
             string account = "hell323-" + scenario.Quest + (scenario.Prerequisite ? "p" : "r");
             Character created;
             using (var owner = new AccountOwners().Acquire(account,() => { }))
             {
+                var done = new HashSet<int>((scenario.Prerequisite ? quest.Prerequisites : []).Append(3145));
+                var location = resources.Towns.Room;
+                if (scenario.Quest == 5927 && scenario.Prerequisite)
+                {
+                    var area = resources.Towns.Areas.Values.First(area => area.Town == 31 && area.Default.Npcs.Any(npc => npc.Id == 598));
+                    done.UnionWith(area.Quests);
+                    if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
+                    var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+                    location = new(area.Town,area.Area,checked((ushort)(bounds.X + bounds.Width/2)),checked((ushort)(bounds.Y + bounds.Height/2)));
+                }
                 var candidate = CharacterCreation.Prepare("Hell" + scenario.Quest + (scenario.Prerequisite ? "P" : "R"),resources.Characters.Get(0),
-                    resources.Towns.Room,resources.Towns.InitialReturn,resources.Learning.Get);
+                    location,resources.Towns.InitialReturn,resources.Learning.Get);
                 var learning = SkillPointLedger.Synchronize(0,0,90,candidate.InitialLearning with
                     { Experience = growth.GetLevelStartExperience(90) },resources.Learning);
                 created = repository.Create(owner,candidate with { Level = 90, AcceptedStoryLevel = 90,
-                    CompletedQuests = (scenario.Prerequisite ? quest.Prerequisites : []).Append(3145).Distinct().ToArray(),
+                    CompletedQuests = done.Order().ToArray(),
                     InitialLearning = learning });
             }
             That(fixture.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]],
@@ -38,7 +49,8 @@ internal static partial class QuestHellChallengeTcpTests
             string saved = "";
             using (var peer = Open(fixture,account))
             {
-                peer.Select(prepared: true);
+                bool beastMeeting = scenario.Quest == 5927 && scenario.Prerequisite;
+                peer.Select(prepared: true, resumeTown: beastMeeting, room: !beastMeeting);
                 That(fixture.Query("SELECT quest_id,condition_state FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id) is [[6115L,1686L],[13056L,1686L]],"90级自动分配两项重叠等级每日，资格任务仍等待31");
                 string daily=fixture.Snapshot("SELECT slot,quest_id,condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id IN(6115,13056) ORDER BY slot",created.Id);
                 That(QuestLifecycleTcpTests.List(peer.AvailableQuests,90).Contains(scenario.Quest) == scenario.Prerequisite,
@@ -51,35 +63,47 @@ internal static partial class QuestHellChallengeTcpTests
                     That(State() == before,"缺少6045时31拒绝且无目标槽、奖励或完成回执");
                     continue;
                 }
-                peer.Expect(1,31,Build(writer => { writer.Write((byte)1); writer.Write(scenario.Quest); writer.Write(0u); writer.Write((byte)0); }));
+                uint initial = scenario.Quest == 5927 ? 1u : 0u;
+                peer.Expect(1,31,Build(writer => { writer.Write((byte)1); writer.Write(scenario.Quest); writer.Write(initial); writer.Write((byte)0); }));
                 peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
                 That(peer.CompletedQuestHistory.Length == 30004 && U32(peer.CompletedQuestHistory) == 30000 &&
                     peer.CompletedQuestHistory[4 + scenario.Quest] == 0,"接取后的356尚未把目标投影为已完成");
                 var active = fixture.Query("SELECT condition_state,acceptance_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,scenario.Quest);
-                That(active is [[0L,string]] && fixture.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,scenario.Quest) is [[0L]],
-                    "type4接取事实归零但尚未领奖或写目标完成位");
+                That(active is [[long scalar,string]] && scalar == initial && fixture.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,scenario.Quest) is [[0L]],
+                    "资格任务按真实子类型初始化，尚未领奖或写目标完成位");
                 string acceptance = (string)active[0][1];
                 That(Guid.TryParseExact(acceptance,"N",out var identity) && identity != Guid.Empty,"真实31生成非空接取身份");
                 before = State();
                 peer.Send(33,Build(writer => { writer.Write((ushort)33); writer.Write(scenario.Quest); writer.Write((ushort)0); }));
                 peer.Expect(1,33,Build(writer => { writer.Write((byte)1); writer.Write(scenario.Quest); writer.Write(0u); })); peer.Barrier();
-                That(State() == before,"已归零type4的真实33不重复保存或发奖");
+                That(scenario.Quest == 5927 ? State() != before : State() == before,
+                    "魔兽会面在实际NPC场景经33归零，已归零深渊33不重复保存或发奖");
+                That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,scenario.Quest) is [[0L]],
+                    "只有真实33完成会面后才进入资格交付");
                 long gold = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",created.Id)[0][0]);
                 var inventory = fixture.Query("SELECT item_uid,item_core FROM character_inventory_items WHERE character_id=$p0 ORDER BY item_uid",created.Id);
                 SendFinish(peer);
                 byte[] ack = peer.Expect(1,34).Body;
                 That(ack.Length == 9 && ack[0] == 1 && U16(ack,1) == scenario.Quest && ack[3] == 4 &&
-                    U32(ack,4) > 0 && ack[8] == 3,
-                    "真实34使用type4及深渊解锁mode3，不追加物品count或把资格参数1当物品");
+                    U32(ack,4) > 0 && ack[8] == (scenario.Quest == 5927 ? 31 : 3),
+                    "真实34保持会面type4，深渊mode3/魔兽mode31不追加物品count或将资格参数当物品");
                 var notices = Drain(peer);
+                That(scenario.Quest != 5927 || notices.All(packet => packet.Opcode != 1709),
+                    "魔兽资格由真实ACK34打开原生窗口，不再追加普通公告");
                 long goldAfter = Convert.ToInt64(fixture.Query("SELECT gold FROM characters WHERE id=$p0",created.Id)[0][0]);
-                byte[] goldUpdate = notices.Single(packet => packet.Opcode == 14).Body;
-                That(goldAfter > gold && goldUpdate[0] == 0 && U16(goldUpdate,1) == 1 && U16(goldUpdate,3) == 0 &&
-                    U32(goldUpdate,5) == 0 && U32(goldUpdate,9) == goldAfter,
-                    "mode3无金币增量行，14仍独立发布已提交Main0绝对金币");
+                if (scenario.Quest == 5927)
+                    That(goldAfter == gold && notices.All(packet => packet.Opcode != 14),
+                        "魔兽无金币奖励，不为开启窗口伪造金币或余额通知");
+                else
+                {
+                    byte[] goldUpdate = notices.Single(packet => packet.Opcode == 14).Body;
+                    That(goldAfter > gold && goldUpdate[0] == 0 && U16(goldUpdate,1) == 1 && U16(goldUpdate,3) == 0 &&
+                        U32(goldUpdate,5) == 0 && U32(goldUpdate,9) == goldAfter,
+                        "mode3无金币增量行，14仍独立发布已提交Main0绝对金币");
+                }
                 int available = notices.FindIndex(packet => packet.Opcode == 21), history = notices.FindIndex(packet => packet.Opcode == 356);
                 That(available >= 0 && history > available && notices.Take(available).Any(packet => packet.Opcode == 37),
-                    "交付先同步真实成长，再按21和356发布候选与完成历史");
+                    "交付按实际奖励同步成长，再按21和356发布候选与完成历史");
                 completed = notices[history].Body;
                 That(completed.Length == 30004 && U32(completed) == 30000 && completed[4 + scenario.Quest] == 1,
                     "34后的356独立核对实际目标完成位，不能只比较两份相同的错误投影");
@@ -99,7 +123,8 @@ internal static partial class QuestHellChallengeTcpTests
             }
             using (var peer = Open(fixture,account))
             {
-                peer.Select(prepared: true);
+                bool beastMeeting = scenario.Quest == 5927 && scenario.Prerequisite;
+                peer.Select(prepared: true, resumeTown: beastMeeting, room: !beastMeeting);
                 Bytes(peer.CompletedQuestHistory,completed,"断线重连356恢复同一完成表");
                 That(!QuestLifecycleTcpTests.List(peer.AvailableQuests,90).Contains(scenario.Quest) && State() == saved,
                     "重连不重新开放一次性深渊任务或重领奖");

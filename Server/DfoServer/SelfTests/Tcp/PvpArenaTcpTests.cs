@@ -13,17 +13,30 @@ internal static class PvpArenaTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await RunOrdinaryAsync(source, root, resources);
+        await RunOrdinaryAsync(source, root, resources, false);
+        await RunOrdinaryAsync(source, root, resources, true);
         await PvpTotalTeamTcpTests.RunAsync(source, root, resources);
         await PvpMatchingTcpTests.RunAsync(source, root, resources);
         await PvpTotalBattleTcpTests.RunAsync(source, root, resources);
     }
 
-    static async Task RunOrdinaryAsync(ServerOptions source, string root, TcpTestResources resources)
+    internal static void TownPeer(TcpPeer peer, ushort id)
+    {
+        var actor = peer.Expect(0, 2).Body;
+        That(actor[0] == 0 && U16(actor, 121) == id, "决斗大厅同屏发布真实城镇角色");
+        var state = peer.Expect(0, 3).Body;
+        That(state.Length == 4 && U16(state, 1) == id, "同屏状态绑定原角色");
+        var area = peer.Expect(0, 23).Body;
+        That(area.Length == 10 && U16(area) == id && area[2] == 10, "同屏区域位于决斗城镇");
+        var position = peer.Expect(0, 22).Body;
+        That(position.Length == 9 && U16(position) == id, "同屏位置绑定原角色");
+    }
+
+    static async Task RunOrdinaryAsync(ServerOptions source, string root, TcpTestResources resources, bool ordinaryChannel)
     {
         PvpRatingTests.RunResources(resources.Archive);
         var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
-        await using var f = new TcpTestFixture(source, Path.Combine(root, "pvp-arena"), resources: resources, clock: clock);
+        await using var f = new TcpTestFixture(source, Path.Combine(root, ordinaryChannel ? "pvp-ordinary" : "pvp-arena"), resources: resources, clock: clock);
         var repository = new CharacterRepository(f.Database, resources.Quests);
         Console.WriteLine("PVP fixture: repository initialized");
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
@@ -32,16 +45,18 @@ internal static class PvpArenaTcpTests
         Console.WriteLine("PVP fixture: characters prepared");
         await f.StartAsync();
         var endpoints = ChannelTcpTests.Endpoints(f);
-        byte pvp = ChannelTcpTests.PvpChannelNumber(f);
+        byte pvp = ordinaryChannel ? (byte)51 : ChannelTcpTests.PvpChannelNumber(f);
+        int battleSeconds = ordinaryChannel ? 180 : 240;
         using var host = Open(f, "arena-tcp-host", gamePort: endpoints[pvp], channelNumber: pvp);
+        That(host.LoginEndpoint[3] == (ordinaryChannel ? 4 : 24), "手动决斗入口LOGIN保留普通4或传统24的实际类型");
         host.Select(prepared: true);
         host.Barrier();
         using var guest = Open(f, "arena-tcp-guest", gamePort: endpoints[pvp], channelNumber: pvp);
         guest.Select(prepared: true);
+        TownPeer(guest, host.Id);
         guest.Barrier();
-        host.Barrier(packet => That(packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 0 &&
-            U16(packet.Body, 121) == guest.Id,
-            "另一角色选角只发布真实城镇角色"));
+        TownPeer(host, guest.Id);
+        host.Barrier();
         string before = f.Snapshot();
 
         // 预设标题3、地图0、密码pw、普通kind0/mode0。
@@ -163,8 +178,8 @@ internal static class PvpArenaTcpTests
         uint[] scores = new uint[8]; scores[0] = 20; scores[3] = 100;
         byte[] timeout = Build(w => { foreach (uint score in scores) w.Write(score); });
         guest.Send(56, timeout); guest.Barrier(); host.Barrier();
-        That(f.Query("SELECT count(*) FROM pvp_arena_match_results")[0][0] is 2L, "提前56不能结束240秒兼容大会时长");
-        clock.Advance(TimeSpan.FromSeconds(240));
+        That(f.Query("SELECT count(*) FROM pvp_arena_match_results")[0][0] is 2L, "提前56不能结束本频道资源时长");
+        clock.Advance(TimeSpan.FromSeconds(battleSeconds));
         host.Send(56, timeout); host.Barrier(); guest.Barrier();
         That(f.Query("SELECT count(*) FROM pvp_arena_match_results")[0][0] is 2L, "最小值胜方不能冒充最大值报告者");
         guest.Send(56, timeout);
@@ -173,7 +188,7 @@ internal static class PvpArenaTcpTests
         guest.Send(56, timeout); guest.Barrier(); host.Barrier();
         host.Send(57); Returned(); guest.Send(57); Returned();
         StartAnother(); LoadAll();
-        clock.Advance(TimeSpan.FromSeconds(254)); host.Barrier(); guest.Barrier();
+        clock.Advance(TimeSpan.FromSeconds(battleSeconds + 14)); host.Barrier(); guest.Barrier();
         That(f.Query("SELECT count(*) FROM pvp_arena_match_results")[0][0] is 3L, "无报告宽限结束前保留原局");
         clock.Advance(TimeSpan.FromSeconds(1));
         Result(f, host, 255, (host.Id, 0u), (guest.Id, 0u));
@@ -182,13 +197,13 @@ internal static class PvpArenaTcpTests
         clock.Advance(TimeSpan.FromSeconds(1)); Returned();
         host.Send(57); guest.Send(57); host.Barrier(); guest.Barrier();
         host.Send(13);
-        Seats(host, room, 2, (3, guest.Id, 2));
+        Left(host, room, 2, 0);
         State(guest, room, 1, 3, 1, 2);
         Seats(guest, room, 2, (3, guest.Id, 2));
         Ready(guest, 3, false);
         Room(host.Expect(0, 41).Body, room, 2, 3, 1, (3, guest.Id, 2));
         guest.Send(52, [3, 254]);
-        Seats(guest, room, 2);
+        Left(guest, room, 2, 3);
         State(host, room, 0, 255, 1, 2);
         // 客人进房后目录不再刷新；删除通知沿用他在大厅最后收到的目录字段。
         State(guest, room, 0, 255, 0, 1);
@@ -262,6 +277,7 @@ internal static class PvpArenaTcpTests
     internal static void Result(TcpTestFixture fixture, TcpPeer peer, byte winner,
         params (ushort Id, uint Kills)[] fighters)
     {
+        PvpMissionTcpChecks.Progress(fixture, peer.Id, peer.Expect(0, 578).Body);
         byte[] body = peer.Expect(0, 47).Body;
         var receipts = fixture.Query("SELECT receipt_json FROM character_pvp_rating_claims WHERE receipt_json IS NOT NULL")
             .Select(row => JsonSerializer.Deserialize<PvpRatingReceipt>((string)row[0])!).ToArray();
@@ -301,6 +317,9 @@ internal static class PvpArenaTcpTests
         });
         Bytes(body, expected, "正式普通房间按独立八席合同完整核对");
     }
+
+    internal static void Left(TcpPeer peer, ushort room, byte mode, byte seat) =>
+        peer.Expect(0, 43, [(byte)room, (byte)(room >> 8), mode, 1, seat, 0, 255, 255]);
 
     static void Seats(TcpPeer peer, ushort room, byte mode, params (byte Seat, ushort Id, byte State)[] members) =>
         peer.Expect(0, 43, Build(w =>

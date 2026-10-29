@@ -1,6 +1,7 @@
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Guild;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Projection.Inventory;
@@ -9,7 +10,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class RefinementHandler(InventoryRefinementService refinement, InventoryProjection projection,
-    IRefinementEffects? effects = null) : IGameCommandModule
+    IRefinementEffects? effects = null, GuildNpcBenefitService? guildBenefits = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands) => commands.Register(CmdPacketType.UPGRADE_ITEM_SEPARATE, Handle, nameof(RefinementHandler));
 
@@ -21,7 +22,9 @@ internal sealed class RefinementHandler(InventoryRefinementService refinement, I
         var result = context.Owner.Execute(() =>
         {
             var outcome = context.BlocksTownActions ? InventoryResult.Reject(4) :
-                context.Session.MutateInventory(character => refinement.Refine(character, request, out receipt), 4);
+                context.Session.MutateInventory(character => refinement.Refine(character, request, out receipt,
+                    guildSuccessPercent: guildBenefits?.SuccessPercent(context.Session.CaptureGuildManagement(),
+                        "equip upgrade separate buff", (character.Inventory.Find(request.Position)?.Core.GenuineUpgrade ?? 0) + 1) ?? 0), 4);
             if (outcome.Accepted)
                 committed = context.Session.Selected;
             return outcome;

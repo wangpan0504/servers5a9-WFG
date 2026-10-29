@@ -30,6 +30,10 @@ internal static partial class DatabaseSchemaTests
         DROP TABLE IF EXISTS guild_attendance;
         DROP TABLE IF EXISTS guild_contribution_settlements;
         DROP TABLE IF EXISTS guild_contribution_events;
+        DROP TABLE IF EXISTS guild_npc_training_receipts;
+        DROP TABLE IF EXISTS character_guild_npc_item_crafts;
+        DROP TABLE IF EXISTS character_guild_npc_benefits;
+        DROP TABLE IF EXISTS guild_npc_common_benefits;
         DROP TABLE IF EXISTS guild_npc_receipts;
         DROP TABLE IF EXISTS guild_growth_item_receipts;
         DROP TABLE IF EXISTS guild_npc_craft_receipts;
@@ -212,6 +216,7 @@ internal static partial class DatabaseSchemaTests
             PvpTotalTeamUpgrade(root);
             RaidLifecycleUpgrade(root);
             PvpTotalRatingUpgrade(root);
+            PvpMissionUpgrade(root);
             PvpRankUpgrade(root);
             FatigueDailyUpgrade(root);
             ServerItemUpgrade(root);
@@ -2293,6 +2298,7 @@ internal static partial class DatabaseSchemaTests
     // 旧库夹具同时移除后续拍卖、公会、收集箱和Buff强化结构；子表先于所属表删除。
     static void DropLaterTables(SqliteConnection db)
     {
+        Execute(db, "DROP TABLE IF EXISTS character_pvp_mission_rewards; DROP TABLE IF EXISTS character_pvp_mission_facts");
         RemoveSkillTreeExpansionSchema(db);
         DropSkillSwitchInventorySchema(db);
         DropCollectBoxSchema(db);
@@ -2520,6 +2526,7 @@ internal static partial class DatabaseSchemaTests
                 if (oldVersion < 93) Execute(db,"DROP TABLE IF EXISTS character_epic_production");
                 if (oldVersion < 94) Execute(db,"DROP TABLE IF EXISTS quest_eligibility_mail_dispatches");
                 if (oldVersion < 95) Execute(db,"DROP TABLE IF EXISTS character_pvp_training_skills");
+                if (oldVersion < 150) Execute(db,"DROP TABLE IF EXISTS character_pvp_mission_rewards; DROP TABLE IF EXISTS character_pvp_mission_facts");
                 if (oldVersion < 96) Execute(db,"DROP TABLE IF EXISTS account_pvp_private_characters");
                 if (oldVersion < 97) Execute(db,"DROP TABLE IF EXISTS character_operation_hope_reward_receipts");
                 if (oldVersion < 88) Execute(db, "DROP TABLE IF EXISTS character_dungeon_incount");

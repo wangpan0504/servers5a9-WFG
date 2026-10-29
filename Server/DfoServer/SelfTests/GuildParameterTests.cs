@@ -28,7 +28,7 @@ internal static class GuildParameterTests
     {
         int before = Count;
         var catalog = new GuildParameterCatalog(GuildText, Curve(rows => rows));
-        That(catalog.CreateCost == 300000 && catalog.CargoSizeLimit == 56,
+        That(catalog.CreateCost == 300000 && catalog.CargoSizeLimit == 56 && catalog.TeleportCost == 7,
             "建会花费与公会仓库格数按 `etc/guild.etc` 段落读取");
         That(catalog.LevelExperience(0, 1) == 1001 && catalog.LevelExperience(4, 10) == 5010,
             "公会等级经验按档位与等级定位");
@@ -41,6 +41,10 @@ internal static class GuildParameterTests
 
         Reject<InvalidDataException>(() => new GuildParameterCatalog("[guild create cost]\n0\n", Curve(rows => rows)),
             "建会花费缺失或非正数必须拒绝");
+        foreach (string cost in new[] { "", "[guild teleport cost]\n0\n" })
+            Reject<InvalidDataException>(() => new GuildParameterCatalog(GuildText,
+                Curve(rows => rows).Replace("[guild teleport cost]\n7\n", cost)),
+                "地图传送费用缺失或非正数不能退回免费传送");
         Reject<InvalidDataException>(() => new GuildParameterCatalog(GuildText, Curve(rows => rows.Skip(1).ToList())),
             "公会等级经验表缺行必须拒绝");
         Reject<InvalidDataException>(() => new GuildParameterCatalog(GuildText, Curve(rows => rows.Append(rows[0]).ToList())),
@@ -56,6 +60,7 @@ internal static class GuildParameterTests
         var catalog = new GuildParameterCatalog(pvf);
         That(catalog.CreateCost == 300000, "真实资源建会花费为 30 万（etc/guild.etc）");
         That(catalog.CargoSizeLimit == 56, "真实资源公会仓库为 56 格（etc/guild.etc）");
+        That(catalog.TeleportCost == 5, "真实公会地图传送费用为5枚贡献币，独立于公共传送次数");
         That(catalog.LevelExperience(0, 1) == 150000 && catalog.LevelExperience(4, 10) == 371740446,
             "真实资源公会等级经验曲线首尾与 etc/guildreform.etc 一致");
         Console.WriteLine($"PASS {Count - before} 公会参数真实资源断言");
@@ -70,6 +75,6 @@ internal static class GuildParameterTests
         for (int tier = 0; tier < Tiers.Length; tier++)
             for (int level = 1; level <= 10; level++)
                 rows.Add($"`{Tiers[tier]}` {level} {1000 * (tier + 1) + level}");
-        return "[guild level exp]\n" + string.Join(" ", mutate(rows)) + "\n[/guild level exp]\n";
+        return "[guild teleport cost]\n7\n[guild level exp]\n" + string.Join(" ", mutate(rows)) + "\n[/guild level exp]\n";
     }
 }

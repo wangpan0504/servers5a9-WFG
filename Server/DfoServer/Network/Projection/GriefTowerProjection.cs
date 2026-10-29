@@ -18,9 +18,12 @@ internal static class GriefTowerProjection
         RaidCombatProjection.Selection(context, guard);
         await DimensionEntranceProjection.RefreshAsync(context, guard);
         await DimensionEntranceProjection.AncientAsync(context, guard);
-        // 魔兽选图的气球来自这张候选列表：不填就只有底图，玩家点不到任何副本入口。
+        // OP27名单只负责首版原图入侵标识；五档标签保护和第六按钮由配套客户端补丁处理。
+        var beast = context.Session.CaptureBeastDungeonSelection();
+        bool CanSendSelection() => guard() && (beast is null || context.Session.CanPublishBeastDungeonSelection(beast));
         await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON,
             DungeonPackets.SelectionNotice(legendDungeon,grief?.Layer ?? 0,context.Session.DespairSelectionLayer(),
-                context.Session.IncompleteHellQuestMemberSlots(),context.Session.BeastSelectionCandidates()),eventName,guard);
+                context.Session.IncompleteHellQuestMemberSlots(),beast is null ? [] : [.. beast.Counts.Select(row => (int)row.Dungeon)]),
+            eventName,CanSendSelection);
     }
 }

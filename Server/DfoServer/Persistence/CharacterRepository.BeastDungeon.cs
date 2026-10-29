@@ -15,6 +15,11 @@ internal sealed partial class CharacterRepository
         if (current.Id != expected.Id || !current.CompletedQuests.Contains(5927) ||
             used != admission.ExpectedUsed || !BeastDungeonRotation.CanEnter(admission.Day, charge.DungeonId, used))
             throw new InvalidOperationException("魔兽任务资格、开放图或入场次数已变化");
+        if (admission.Ticket is not null)
+        {
+            ReserveBeastAdmission(db, tx, owner, expected, charge, admission);
+            return;
+        }
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """

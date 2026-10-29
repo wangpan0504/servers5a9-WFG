@@ -31,6 +31,12 @@ internal static class LukeRaidObjectTests
             That(RaidObjectEvidence.SetActionIncrement(repeat, Resolve) is null, "重复trigger/behavior拒绝");
         }
         That(RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[passive object]", 64249, 1, 2, 0, "[/passive object]"), Resolve), "完整根普通对象块");
+        var actorBlock = Tokens("[ai character]", 20900, 969, 302, 0, "[character]", "[normal]", 0, 0, "[/ai character]");
+        That(RaidObjectEvidence.UnconditionalPassiveObjects(actorBlock.Concat(Tokens("[passive object]", 64249, 1, 2, 0,
+            "[/passive object]")).ToArray(), Resolve), "本地PVF根ai character块不遮蔽普通对象出生");
+        That(!RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[ai character]", 20900, 969)
+            .Concat(Tokens("[passive object]", 64249, 1, 2, 0, "[/passive object]")).ToArray(), Resolve),
+            "未闭合ai character不降格为根字段");
         That(!RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[condition]", "[passive object]", 64249, 1, 2, 0,
             "[/passive object]", "[/condition]"), Resolve), "外层条件不能剥离成静态出生");
         That(!RaidObjectEvidence.UnconditionalPassiveObjects(Tokens("[condition]", "[passive object]", 64249, 1, 2, 0,

@@ -33,7 +33,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     GameWorld.Guilds.GuildDungeonCatalog? guildDungeons = null,
     Game.Pvp.PvpRatingSettlement? pvpRatings = null,
     DungeonBattleLevelSettings? monsterBattleLevels = null, DungeonMonsterAiSettings? monsterAi = null,
-    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null)
+    DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
+    DfoServer.Game.Guild.GuildNpcBenefitService? guildNpcBenefits = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 
@@ -170,6 +171,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (Selected is not null)
                 throw new InvalidDataException("Invalid selection state");
             var character = repository.LoadCharacter(owner, slot);
+            repository.CancelBeastDungeonReservation(owner.Account, character.Id, null);
             if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
                 throw new InvalidOperationException("Selection published roster identity changed");
             // 普通选角与原生换频道共用此门禁；拒绝发生在修复、扣费和位置保存之前。
@@ -198,9 +200,13 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             // 客户端没有保留换频道快照时（普通频道与团队页签频道互换、进出魔界大战等类型谓词不一致的换频道），按普通选角落点和包序。
             // 旧频道类型已知（同一服务端进程内的上一次选角）时直接比较谓词；否则按存档城镇推断。
             int? previousType = ChannelEntry is null ? null : channelHistory?.Previous(owner.Account);
-            bool resumed = resumeTown && (ChannelEntry is not null && previousType is int previous
+            bool resumed = resumeTown && !ChannelAreaLanding.LeavesBeastTown(ChannelEntry, character.Position) &&
+                (ChannelEntry is not null && previousType is int previous
                 ? ChannelAreaLanding.SameSnapshotPredicates(previous, ChannelEntry.Type)
                 : ChannelAreaLanding.ClientKeepsTownSnapshot(towns, ChannelEntry, character.Position));
+            // 修复旧版本把普通街道保留在决斗频道的存档；同类型重连也不能继续恢复错误城镇。
+            if (ChannelEntry is not null && ChannelAreaLanding.IsPvpType(ChannelEntry.Type) && character.Position.Town != 10)
+                resumed = false;
             character = CharacterSelection.Prepare(repository, owner, character, towns, quests, goldLimits, resumed, items, timeProvider, ChannelEntry);
             TownSnapshotResumed = resumed;
             if (ChannelEntry is not null)
@@ -322,6 +328,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         npcTownVisit = null;
         hopeSelection = null;
         pvpTraining = null;
+        pvpPractice = null;
         Volatile.Write(ref pvpArena, null);
         pvpArenaVersion++;
         pendingPvpSkills = null;
@@ -333,6 +340,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         ReleaseCurrentEvildomWarDungeon(cleanup: true, defer: warPersistenceFailed);
         evildomWar = null;
         formalDungeon?.Run.CancelTagEvildom();
+        ReleaseBeastDungeonReservation();
         formalDungeon = null;
         gameCache.Clear();
         ClearConsumableUse();

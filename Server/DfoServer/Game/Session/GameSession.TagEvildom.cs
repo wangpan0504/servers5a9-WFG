@@ -17,6 +17,24 @@ internal sealed partial class GameSession
             roster, owner.Generation, SelectionEpoch, Selected!.Id);
     });
 
+    // popup301选择已有队伍只重选其队首，不再发1662；入城时恢复该队，不能沿用上一队编号。
+    public TagEvildomProjection? RestoreTagEvildomTeamSelection(ITagEvildomConfigurationStore store, DateTimeOffset now) => owner.Execute(() =>
+    {
+        if (ChannelEntry?.Type != 53 || ReadTagEvildom(store, now) is not { } snapshot) return null;
+        var before = snapshot.State.Configuration;
+        for (int index = 0; index < before.Teams.Length; index++)
+        {
+            if (before.Teams[index].First != snapshot.CharacterId || index == before.SelectedTeam) continue;
+            var desired = before with { SelectedTeam = index };
+            if (TagEvildomConfiguration.ValidateChange(before, desired, repository.ListRoster(owner), snapshot.State.ProtectedMembers) != "ready")
+                return snapshot;
+            var committed = store.CommitTagEvildomConfiguration(owner, before, desired, TagEvildomPeriod.At(now));
+            tagEvildomPair = null;
+            return snapshot with { State = snapshot.State with { Configuration = committed } };
+        }
+        return snapshot;
+    });
+
     // 客户端进图按钮 0153A170 在两个 runtimeActor(+4D8) 为空时直接返回，不发 15 也不提示。
     // 1393/1394 只在已选队非空时发送，1662 又要等玩家先点设置。首次空编队因此两边互等。
     // 入城时若选中队为空、当前登录角色合格，且名册里还有另一名 95 级非决斗角色，

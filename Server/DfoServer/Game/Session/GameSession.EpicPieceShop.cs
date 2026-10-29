@@ -80,6 +80,6 @@ internal sealed partial class GameSession
         !HasActiveDungeonContinuation && !HasPendingQuestReplay && !dungeon.HasPendingFatigue &&
         !dungeon.Ground.HasPendingOperation && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement &&
         dungeon.Entry.HellParty is { } hell && dungeon.Run.Snapshot.CurrentMap.Id == hell.MapId &&
-        dungeon.Route.Rooms.Single(room => room.Room.Map == dungeon.Run.Snapshot.CurrentMap).Monsters
+        dungeon.Run.CurrentMonsterPlan.Monsters
             .All(monster => !monster.IsBlocking || !dungeon.Run.Snapshot.LivingMonsters.Contains(monster.ObjectKey));
 }

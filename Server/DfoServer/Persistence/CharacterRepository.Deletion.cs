@@ -11,11 +11,13 @@ internal sealed partial class CharacterRepository
     // 子账本先于父账本删除；未知的新外键依赖会使整笔事务失败，而不是留下半份存档。
     static readonly string[] DeletionTables =
     [
+        "character_beast_dungeon_reservations",
+        "character_beast_stage_rewards",
         "character_evildom_war_rewards",
         "character_evildom_war_hidden_rewards",
         "character_dungeon_incount_extra",
         "character_evildom_war_seats",
-        "character_pvp_rating_claims", "character_pvp_ratings",
+        "character_pvp_mission_rewards", "character_pvp_mission_facts", "character_pvp_rating_claims", "character_pvp_ratings",
         "character_luke_normal_drop_claims", "character_luke_normal_progress",
         "character_boss_selection_buff",
         "character_tutorial_receipts", "character_tutorial_state",
@@ -199,7 +201,9 @@ internal sealed partial class CharacterRepository
             "character_social_links", "guild_membership_cooldowns", "guild_applications", "guild_cargo_slots", "guild_attendance",
             "guild_contribution_events", "guild_contribution_settlements", "guild_npc_progress", "guild_npc_crafts",
             // 活动婚约已由删除事务显式拒绝；历史聚合不外键角色，不能随删角清账。
-            "marriage_active_members", "character_guild_hongbao_purchases"])
+            "marriage_active_members", "character_guild_hongbao_purchases",
+            // 个人NPC福利由角色外键级联清理，公共福利及请求历史不随单个成员删除。
+            "character_guild_npc_benefits", "character_guild_npc_item_crafts"])
             .ToHashSet(StringComparer.Ordinal);
         using var query = db.CreateCommand();
         query.Transaction = tx;

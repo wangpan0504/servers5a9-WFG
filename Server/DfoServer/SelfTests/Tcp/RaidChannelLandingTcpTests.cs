@@ -15,7 +15,7 @@ namespace DfoServer.Testing;
 // 服务端必须保留原位置。每次换频道后按客户端随后的 same-area 位置回放与移动核对服务端接受（不再被 route-not-in-pvf 拒绝）。
 internal static partial class RaidChannelLandingTcpTests
 {
-    static readonly int[] RaidQuests = [12829, 2903, 8672, 8935, 3779, 4872, 5927];
+    static readonly int[] RaidQuests = [12829, 2903, 8672, 8935, 3779, 4872, 4840, 5927];
 
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -64,7 +64,8 @@ internal static partial class RaidChannelLandingTcpTests
                 fixture.Snapshot(returnSql, character.Id) == returnBefore,
                 "缺51时1379与1426沿原普通返回门口32/3落库，返回五字段逐字节保持，不宣称魔兽等待区成功");
         }
-        Switch(normal, land: true, town: 38, "魔兽→普通重新入共享房间，不保留魔兽城镇快照", area: 1);
+        Switch(normal, land: true, town: 38, "魔兽→普通回房、1379及1426连接正常中央公园", area: 1, exit: 31);
+        Switch(normal, land: false, town: null, "普通频道重连仍保留正常中央公园位置");
     }
 
     // 安徒恩频道页依赖 EVENT_INFO 事件 181（0xB5）与任务 12829：时段全开时入城事件表必须带齐四张团本卡与安徒恩事件，频道目录列出 19。
@@ -85,6 +86,9 @@ internal static partial class RaidChannelLandingTcpTests
         foreach (byte channel in new byte[] { endpoints.Keys.Min(), 19 })
         {
             using var peer = Open(fixture, gamePort: endpoints[channel], channelNumber: channel);
+            if (channel is 101 or 47 or 51 or 55)
+                That(peer.LoginEndpoint[3] == (channel switch { 101 => 24, 47 => 8, 51 => 4, _ => 5 }),
+                    "连续换频道LOGIN绑定实际选中频道类型");
             peer.ExpectedOpenEvents = [282, 2449, 414, 181, ServerEventService.NolanVisibilityId];
             // 共享房间38/1与安徒恩战舰入口19/0均为房间图，严格保留两边的1379→事件初始化包序。
             var entry = peer.Select(character.Slot, prepared: true);
@@ -129,6 +133,9 @@ internal static partial class RaidChannelLandingTcpTests
                 : peer.Select(character.Slot, prepared: true, resumeTown: true, room: room);
             peer.Barrier();
             // 包序由 TcpPeer.Select 逐包核对：落点走普通选角序列，保留快照走换频道 1379/124/24 恢复序列。
+            var actor = packets.Single(packet => packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 0).Body;
+            That(actor[3] == 2 && actor[4] == channel && U16(actor, 121) == character.Id,
+                "换频道后本人Actor绑定目标频道，位置快照保留不代表仍在旧频道");
             var row = fixture.Query("SELECT town,area,x,y FROM characters WHERE id=$p0", character.Id)[0];
             byte t = (byte)(long)row[0]!, a = (byte)(long)row[1]!;
             ushort x = (ushort)(long)row[2]!, y = (ushort)(long)row[3]!;
@@ -165,6 +172,7 @@ internal static partial class RaidChannelLandingTcpTests
     // 特殊区域页频道：五陵 43 配合客户端补丁独立比较类型，跨五陵边界先进赛丽亚房间。
     public static async Task RunSpecialAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        await PvpLandingAsync(source, root, resources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "special-channel-landing"), resources: resources);
         await fixture.StartAsync();
         var endpoints = ChannelTcpTests.Endpoints(fixture);
@@ -256,10 +264,10 @@ internal static partial class RaidChannelLandingTcpTests
         }
     }
 
-    static Character CreateRaider(TcpTestFixture fixture, TcpTestResources resources, string name)
+    static Character CreateRaider(TcpTestFixture fixture, TcpTestResources resources, string name, Location? initialPosition = null)
     {
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
-        var position = new Location(38, 0, 629, 196);
+        var position = initialPosition ?? new Location(38, 0, 629, 196);
         var done = new HashSet<int>(RaidQuests);
         done.UnionWith(resources.Towns.SpecialChannelQuests.Values);
         using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });

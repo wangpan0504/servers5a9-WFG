@@ -459,11 +459,16 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (receipt.NavigationReplay) return CommandResult.Handled;
         bool published = false;
         bool Guard() => published = context.Session.CanPublishFormalDungeon(receipt);
+        if (!receipt.EntryItemConsumedSlots.IsDefaultOrEmpty)
+            await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(receipt.Character.Inventory,
+                InventoryListType.Main, [.. receipt.EntryItemConsumedSlots]), "beast_loading_ticket", Guard);
         await context.Reply(CmdPacketType.FINISH_LOADING, [1], "formal_loading_ack", Guard);
         await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "formal_loading_notice", Guard);
         await context.Notify(NotiPacketType.USER_STATE, DungeonPackets.DungeonPlayerState(receipt.Character.Id), "formal_player_state", Guard);
         // 进入副本重建Actor后补发网吧特权buff，否则buff栏在副本内是空的。
         await PcRoomBuffProjection.PostAsync(context, Guard);
+        town.GuildEconomy?.Post(context, force: true);
+        await GuildTrainingProjection.PostAsync(context);
         if (receipt.ScriptedReturnId != Guid.Empty)
         {
             if (published) context.Session.ConfirmScriptedReturnLoading(receipt);
@@ -473,6 +478,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(receipt.Character)), "formal_room_fatigue", Guard);
         if (context.Elevator is not null) await context.Elevator.StartAsync(receipt);
         if (context.LostLand is not null) await context.LostLand.StartAsync(receipt);
+        if (context.Beast is not null) await context.Beast.RefreshAsync();
         if (context.Altar is not null && context.Session.StartDungeonAltar(receipt) is { } altar)
             await context.Altar.WakeAsync(altar);
         if (receipt.HellPartyRoomCleared)
@@ -581,6 +587,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             return CommandResult.Handled;
         }
         bool Guard() => context.Session.CanPublishFormalDungeon(receipt);
+        if (context.Beast is not null) await context.Beast.RefreshAsync();
         // 02B0FA96读取第二个u16作为可见性过滤；普通掉落显式为0，位置由客户端死亡对象散落链确定。
         if (receipt.Character.Marriage is { State: 4 } marriage &&
             marriage.Members.TryGetValue(receipt.Character.Id, out var member) &&
@@ -767,6 +774,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo && receipt.Snapshot.MapPayload != DungeonMapPayload.Cached)
             await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO, hellInfo, "formal_hell_party_monster_info", Guard);
         if (published && receipt.ScriptedReturnId != Guid.Empty) context.Session.ConfirmScriptedReturnPresentation(receipt);
+        if (context.Beast is not null) await context.Beast.RefreshAsync();
         return CommandResult.Handled;
     }
 
@@ -811,13 +819,14 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         var receipt = context.Session.ReturnFromFormalDungeon();
         if (receipt is null) return CommandResult.Unhandled;
         if (context.LostLand is not null) await context.LostLand.StopAsync();
+        if (context.Beast is not null) await context.Beast.StopAsync();
         if (context.Altar is not null) await context.Altar.StopAsync();
         if (context.Death is not null) await context.Death.StopAsync();
         bool Guard() => context.Session.CanPublishTravel(receipt);
         await context.Reply(CmdPacketType.GIVEUP_GAME, DungeonPackets.GiveUpAccepted(), "formal_giveup_ack", Guard);
         await town.ReturnFromFormalDungeonAsync(context, receipt, "formal_return_town");
         if (tag && context.Session.ChannelEntry?.Type == 39 && imperialArena is not null) await imperialArena.ReturnAsync(context, receipt);
-        else if (tag && tagEvildomRun is not null) await tagEvildomRun.ReturnAsync(context, town, receipt);
+        else if (tag && tagEvildomRun is not null) await tagEvildomRun.ReturnAsync(context, receipt);
         log.Write("formal_dungeon_return", new { Connection = context.Id, Reason = "giveup", receipt.Character.Id, receipt.Character.Position });
         return CommandResult.Handled;
     }

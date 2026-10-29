@@ -7,7 +7,7 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    public bool UsesArenaSkills => ChannelEntry?.Type is 8 or 24;
+    public bool UsesArenaSkills => ChannelEntry?.Type is 4 or 5 or 8 or 24;
     SkillLearningCatalog? arenaSkillCatalog;
     public CharacterLearningState ReadSkillLearning(Character character) => UsesArenaSkills
         ? arenaSkillCatalog is { } skills ? PvpTrainingSkills.ArenaSource(character,skills) : PvpTrainingSkills.ArenaSource(character)
