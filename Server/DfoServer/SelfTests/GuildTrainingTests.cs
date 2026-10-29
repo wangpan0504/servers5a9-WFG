@@ -41,7 +41,16 @@ internal static class GuildTrainingTests
             "锁定币不能补足总额，未锁定堆叠仍不部分扣除");
         var entry = InventoryDeleteService.Plan(inventory, other.Position, other.Core.ItemId, 2).Plan!;
         var trainingAfterEntry = GameSession.PlanGuildTraining(entry.After, [Definition(0, 1)], pieces, now, 180)!;
-        var combined = entry.WithAfter(trainingAfterEntry.Inventory.After);
+        var charge = new DfoServer.Game.Dungeons.DungeonEntryCharge(entry, 0, new(1, 0, 1, Guid.NewGuid(), 1), 0)
+            { GuildTraining = trainingAfterEntry.Inventory };
+        var combined = charge.InventoryPayment!;
+        That(ReferenceEquals(charge.Items, entry) && ReferenceEquals(charge.Items.After, trainingAfterEntry.Inventory.Before),
+            "训练费单独表达，专用准入仍只按原门票计划校验");
+        var trainingOnly = charge with { Items = null, GuildTraining = paid.Inventory };
+        That(!trainingOnly.IsEmpty && ReferenceEquals(trainingOnly.InventoryPayment, paid.Inventory) && trainingOnly.Items is null,
+            "没有门票时训练费仍参与入场事务，不伪装成门票");
+        Reject<InvalidDataException>(() => _ = (charge with { GuildTraining = paid.Inventory }).InventoryPayment,
+            "训练付款不能覆盖没有衔接本次门票的资产快照");
         That(combined.Before == inventory && combined.After.Find(other.Position)!.Core.Count == 5 &&
             combined.After.Find(coin.Position)!.Core.Count == 7 && combined.ChangedSlots.Length == 2,
             "训练费用与已有入场票合并同一计划，保留最初资产快照和两类差量");

@@ -138,11 +138,11 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             counted = CommitDungeonIncountInTransaction(db, tx, owner, expected,
                 incount.Dungeon, incount.Period, incount.Row, null, incount.Account, incount.Increment) ??
                 throw new InvalidOperationException("入场次数在提交前已用尽");
-        long revision = charge.Items is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
+        long revision = charge.InventoryPayment is { } items ? CommitInventoryInTransaction(db, tx, owner, expected, items).Revision : expected.Revision;
         ReserveInTransaction(db, tx, owner, expected, revision, state, nextObjectKey, fatigueBefore, charge.Weekly);
-        CommitTagEvildomAdmission(db, tx, owner, expected, charge);
-        CommitImperialArenaAdmission(db, tx, owner, expected, charge);
-        CommitHopeAdmission(db, tx, owner, expected, charge);
+        CommitTagEvildomAdmission(db, tx, owner, expected, charge, checked(revision + 1));
+        CommitImperialArenaAdmission(db, tx, owner, expected, charge, checked(revision + 1));
+        CommitHopeAdmission(db, tx, owner, expected, charge, checked(revision + 1));
         CommitGriefEntry(db, tx, owner, expected, charge, checked(revision + 1));
         WriteSpecialEntry(db, tx, owner, expected, charge, checked(revision + 1));
         CommitBeastAdmission(db, tx, owner, expected, charge);

@@ -17,6 +17,7 @@ internal static class ImperialArenaTcpTests
     internal static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int checks = Count;
+        await GuildTrainingEntryTcpTests.VerifySoloAsync(source, root, resources, imperial: true);
         var clock = new DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-27T08:00:00+08:00"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "imperial-arena"), resources: resources, clock: clock);
         Character first, second;

@@ -10,7 +10,7 @@ internal sealed partial class CharacterRepository
 {
     // 只参与原入场写事务；调用方先预留尝试号，之后任务、疲劳和入场票一起提交。
     private void CommitHopeAdmission(SqliteConnection db,SqliteTransaction tx,AccountOwners.Lease owner,
-        Character expected,DungeonEntryCharge charge)
+        Character expected,DungeonEntryCharge charge,long reservedRevision)
     {
         if (charge.Hope is not { } admission)
         {
@@ -27,7 +27,6 @@ internal sealed partial class CharacterRepository
             OperationHopePlan.TryBind(admission.Catalog,acceptance.QuestId,admission.MazeOrdinal,expected.Level,charge.Identity,acceptance) is null)
             throw new InvalidDataException("希望任务必须来自本次原角色、空槽和可达资源候选");
         var current = Require(db,tx,owner.Account,expected.Name);
-        long reservedRevision = checked(expected.Revision+1+(charge.Items?.Changed == true ? 1 : 0));
         if (current.Id != expected.Id || current.Revision != reservedRevision || current.Level != expected.Level ||
             current.Job != expected.Job || current.GrowType != expected.GrowType || current.Position != expected.Position ||
             current.DungeonState?.LastAttempt != charge.Identity.TaskAttempt ||

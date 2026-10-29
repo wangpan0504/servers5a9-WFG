@@ -13,7 +13,7 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository : IImperialArenaRunStore
 {
     static void CommitImperialArenaAdmission(SqliteConnection db, SqliteTransaction tx, AccountOwners.Lease owner,
-        Character expected, DungeonEntryCharge charge)
+        Character expected, DungeonEntryCharge charge, long reservedRevision)
     {
         if (charge.ImperialArena is not { } admission) return;
         admission.Validate();
@@ -31,7 +31,7 @@ internal sealed partial class CharacterRepository : IImperialArenaRunStore
         command.Parameters.AddWithValue("$account", owner.Account);
         command.Parameters.AddWithValue("$first", admission.Primary.Id);
         command.Parameters.AddWithValue("$second", admission.Standby.Id);
-        command.Parameters.AddWithValue("$primary", checked(expected.Revision + 1));
+        command.Parameters.AddWithValue("$primary", reservedRevision);
         command.Parameters.AddWithValue("$standby", admission.Standby.Revision);
         command.CommandText = """
             SELECT count(*) FROM characters c WHERE account=$account AND level>=90 AND

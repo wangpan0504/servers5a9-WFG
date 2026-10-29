@@ -179,15 +179,11 @@ internal sealed partial class GameSession
             if (guildAdmission is null) { LastFormalDungeonRejection = "guild-dungeon-unavailable"; return null; }
         }
         var training = PrepareGuildTraining(Selected, items);
-        if (training is not null)
-        {
-            items = items is null ? training.Inventory : items.WithAfter(training.Inventory.After);
-        }
         // 只冻结原准备对象，正式效果在组队统一事务成功后的InstallPartyDungeon安装。
         preparedPartyDungeon = plan with { Dungeon = dungeon with { GuildTraining = training?.Snapshot } };
         return new PartyDungeonReservation(owner, Selected, plan.NextKey,
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
-            { OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
+            { GuildTraining = training?.Inventory, OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
                 GuildDungeon = guildAdmission, Beast = beast, Dimension = dungeon.Entry.Dimension }, incount)
         {
@@ -244,12 +240,13 @@ internal sealed partial class GameSession
         pendingDungeonContinuation = null;
         pendingQuestReplay = null;
         SetState(SessionPhase.Loading);
-        return FormalReceipt() with { EntryItemConsumedSlots = installing.HellTicket is null ? reservation.Charge.Items?.ChangedSlots ?? [] : [],
-            HellConsumedSlots = installing.HellTicket is not null ? reservation.Charge.Items?.ChangedSlots ?? [] : [],
+        var payment = reservation.Charge.InventoryPayment;
+        return FormalReceipt() with { EntryItemConsumedSlots = installing.HellTicket is null ? payment?.ChangedSlots ?? [] : [],
+            HellConsumedSlots = installing.HellTicket is not null ? payment?.ChangedSlots ?? [] : [],
             HellTicket = installing.HellTicket, LegendTicket = installing.LegendTicket,
             EntryFatigueCharged = reservation.Charge.Fatigue, EnterCounts = result.EnterCounts,
-            EntryChangedCurrencies = reservation.Charge.Items?.ChangedCurrencies ?? [],
-            ChannelConsumedSlots = installing.ChannelCost?.Consume is not null ? reservation.Charge.Items?.ChangedSlots ?? [] : [] };
+            EntryChangedCurrencies = payment?.ChangedCurrencies ?? [],
+            ChannelConsumedSlots = installing.ChannelCost?.Consume is not null ? payment?.ChangedSlots ?? [] : [] };
     });
 
     internal void RemovePartyDungeon(PartyDungeonInstance instance)

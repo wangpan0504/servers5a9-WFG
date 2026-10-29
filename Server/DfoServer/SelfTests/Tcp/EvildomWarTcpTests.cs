@@ -53,12 +53,12 @@ internal static class EvildomWarTcpTests
             fatigueMode == "OK {\"infiniteFatigue\":false}", "魔界大战资格与扣费回归显式关闭开发无限疲劳");
         var endpoints = ChannelTcpTests.Endpoints(fixture);
         int sequence = 0;
-        foreach (string scenario in new[] { "normal-solo", "hard-solo", "hard-duo", "normal-trio", "guide-overfull", "ticket-solo",
+        foreach (string scenario in new[] { "training-solo", "normal-solo", "hard-solo", "hard-duo", "normal-trio", "guide-overfull", "ticket-solo",
             "no-party", "wrong-kind", "wrong-mode", "not-leader", "fatigue", "daily", "weekly", "rollback", "hard", "normal", "guide" })
         {
-            byte mode = scenario is "normal" or "normal-solo" or "normal-trio" ? (byte)0 :
+            byte mode = scenario is "normal" or "normal-solo" or "normal-trio" or "training-solo" ? (byte)0 :
                 scenario is "guide" or "guide-overfull" ? (byte)2 : (byte)1;
-            int count = scenario switch { "normal-solo" or "hard-solo" or "guide" or "ticket-solo" => 1,
+            int count = scenario switch { "normal-solo" or "training-solo" or "hard-solo" or "guide" or "ticket-solo" => 1,
                 "hard-duo" or "guide-overfull" => 2, "normal-trio" => 3, _ => 4 };
             var peers = new List<TcpPeer>();
             try
@@ -75,9 +75,10 @@ internal static class EvildomWarTcpTests
                         { Experience = resources.Growth.GetLevelStartExperience(95) }, resources.Learning);
                         var role = new CharacterRepository(fixture.Database).Create(owner, candidate with
                         { Level = 95, AcceptedStoryLevel = 95, InitialLearning = learning,
-                            Inventory = scenario == "ticket-solo" ? candidate.Inventory with { Items = candidate.Inventory.Items.Add(
+                            Inventory = scenario is "training-solo" or "hard-duo" or "rollback" ? GuildTrainingEntryTcpTests.Coins(candidate.Inventory, resources) : scenario == "ticket-solo" ? candidate.Inventory with { Items = candidate.Inventory.Items.Add(
                                 new(0, new(InventoryListType.Main, 65), new(10310974, ItemKind.Consumable, 1) { ExpireTime = 2145852000 })) } : candidate.Inventory });
                         slot = role.Slot;
+                        if (scenario is "training-solo" or "hard-duo" or "rollback") GuildTrainingEntryTcpTests.SelectTraining(fixture, role.Id);
                         if (i == count - 1 && scenario == "fatigue")
                             fixture.Sql("UPDATE character_fatigue SET remaining=29,used=maximum-29 WHERE character_id=$p0", role.Id);
                         if (i == count - 1 && scenario is "daily" or "weekly" or "ticket-solo")
@@ -162,7 +163,7 @@ internal static class EvildomWarTcpTests
                 var requester = scenario == "not-leader" ? peers[1] : leader;
                 requester.Send(1652);
                 var started = All(requester);
-                bool accepted = scenario is "rollback" or "hard" or "normal" or "guide" or
+                bool accepted = scenario is "rollback" or "hard" or "normal" or "guide" or "training-solo" or
                     "normal-solo" or "hard-solo" or "hard-duo" or "normal-trio" or "ticket-solo";
                 That(started[peers.IndexOf(requester)].Any(packet => packet is { Kind: 1, Opcode: 1652 } && packet.Body.SequenceEqual(accepted ? new byte[] { 1 } : new byte[] { 0, 0, 0 })) &&
                     fixture.Snapshot() == assets, "1652资格拒绝或冻结战役，首次进图前不提前扣费: " + scenario);
@@ -201,6 +202,7 @@ internal static class EvildomWarTcpTests
                     leader.Expect(0, 9); leader.Closed();
                     That(peers.Skip(1).All(peer => !Drain(peer).Any(packet => packet.Opcode is 28 or 29)) && fixture.Snapshot() == assets,
                         "后续队员SQL失败，全队次数、疲劳和尝试号原子回滚");
+                    foreach (var peer in peers) GuildTrainingEntryTcpTests.CheckCoins(fixture, peer.Id, 20);
                     fixture.Sql("DROP TRIGGER reject_war");
                     continue;
                 }
@@ -219,6 +221,8 @@ internal static class EvildomWarTcpTests
                 leader.Send(16, selection);
                 All();
                 foreach (var peer in peers) { peer.Send(37, new byte[8]); All(peer); }
+                if (scenario is "training-solo" or "hard-duo")
+                    foreach (var peer in peers) GuildTrainingEntryTcpTests.CheckCoins(fixture, peer.Id, 19);
                 That(fixture.Snapshot() != assets && peers.All(peer => fixture.Query("SELECT used FROM character_fatigue WHERE character_id=$p0", peer.Id) is [[30L]]),
                     "重复16和加载不再次收费，不按房间扣魔界大战疲劳");
                 if (scenario is "hard" or "guide" or "normal-solo" or "hard-solo")
