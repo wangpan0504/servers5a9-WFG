@@ -425,6 +425,10 @@ internal sealed partial class ItemCatalog
 
     public StackableActionIdentity? StackableAction(int id) => StackableDefinition(id) is { } raw ? StackableActionCatalog.Read(raw) : null;
 
+    // [coupon]首参数是商品映射表索引，不是折扣百分比或库存槽位。
+    public int? CashShopCouponKey(int id) => StackableDefinition(id)?.TypeDeclaration is
+        { Label: "[coupon]", Parameters.Count: 2 } coupon && coupon.Parameters[0] > 0 ? coupon.Parameters[0] : null;
+
     public GameWorld.Guilds.GuildMileageGiftDefinition? GuildMileageGift(int id) =>
         StackableDefinition(id) is { } raw ? GameWorld.Guilds.GuildMileageGiftDefinition.Parse(raw, Get(id)) : null;
     public GameWorld.Guilds.GuildExperienceGiftDefinition? GuildExperienceGift(int id) =>

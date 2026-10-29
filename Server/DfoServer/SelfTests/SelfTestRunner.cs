@@ -401,6 +401,7 @@ internal static class SelfTestRunner
         await AssetPublicationTests.RunAsync(towns, pvf, characters, itemResources);
         await TownTravelPublicationTests.RunAsync(towns, characters, itemResources);
         CashShopTests.Run(towns, characters, itemResources);
+        CashShopTests.VerifyMappedCoupons(towns, itemResources);
         DfoServer.Testing.Inventory.PvfItemCompatTests.Run(pvf, itemResources);
         TalismanResourceTests.Run(pvf, itemResources.Items);
         PremiumContractTests.RunResources(itemResources, pvf);

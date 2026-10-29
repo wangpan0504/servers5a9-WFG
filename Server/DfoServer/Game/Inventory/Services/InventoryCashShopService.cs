@@ -56,8 +56,12 @@ internal sealed partial class InventoryCashShopService(ItemCatalog catalog, Cash
         {
             var product = shop.Product(requested.CommodityId);
             if (product is null || product.Count <= 0 ||
-                requested.FirstOptionCount != 0 || requested.SecondOptionCount != 0 || requested.RelatedItemId != 0 || requested.RelatedSlot != 0)
+                requested.FirstOptionCount != 0 || requested.SecondOptionCount != 0)
                 return InventoryResult.Reject(17);
+            if (!TryProductCoupon(character, requested, product, paid, now, out var afterCoupon, out var couponDeadline))
+                return InventoryResult.Reject(17);
+            paid = afterCoupon;
+            Deadline(couponDeadline);
             bool devilProduct = product.Section is "selectable character premium" or "charac premium package";
             if (devilProduct)
             {

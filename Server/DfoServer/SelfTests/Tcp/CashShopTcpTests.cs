@@ -32,11 +32,12 @@ internal static partial class CashShopTcpTests
     static async Task RunWithLegacyExpirationAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var now = DateTimeOffset.UtcNow;
-        var product = resources.ItemResources.CashShop.Products.Values.First(row =>
+        var ordinaryProducts = resources.ItemResources.CashShop.Products.Values.Where(row => !resources.ItemResources.CashShop.IsCouponProduct(row.CommodityId));
+        var product = ordinaryProducts.First(row =>
             row.CeraPrice > 0 && row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
             resources.ItemResources.Items.Get(row.ItemId).Kind is not DfoServer.GameWorld.Items.ItemKind.Equipment &&
             resources.ItemResources.Items.Get(row.ItemId).Expiration.Resolve(now) is var expiry && (expiry == 0 || expiry > now.ToUnixTimeSeconds()));
-        var expired = resources.ItemResources.CashShop.Products.Values.First(row => row.CeraPrice > 0 && row.CeraPrice < 100_000 &&
+        var expired = ordinaryProducts.First(row => row.CeraPrice > 0 && row.CeraPrice < 100_000 &&
             row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
             resources.ItemResources.Items.Get(row.ItemId).Kind == ItemKind.Consumable &&
             resources.ItemResources.Items.Get(row.ItemId).Expiration is { Days: 0, AbsoluteTime: > 0 } expiration && expiration.AbsoluteTime <= now.ToUnixTimeSeconds());
@@ -45,6 +46,7 @@ internal static partial class CashShopTcpTests
         var characters = resources.Characters;
         var repository = new CharacterRepository(fixture.Database);
         var owners = new AccountOwners();
+        ushort couponSlot;
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var current = repository.Create(owner, new("CashShopTcp", towns.Room, towns.InitialReturn)
@@ -52,6 +54,7 @@ internal static partial class CashShopTcpTests
                 Level = 60, AcceptedStoryLevel = 1, Skills = characters.Get(0).Skills,
                 Inventory = InventoryRewardGrantService.CreateStarter(characters.Get(0))
             });
+            couponSlot = CreateMappedCouponRole(repository, owner, resources);
             current = InventoryService.Commit(repository, owner, current,
                 new CurrencyService(resources.ItemResources.GoldLimits).Grant(current, CurrencyKind.Cera, product.CeraPrice + expired.CeraPrice));
         }
@@ -128,11 +131,17 @@ internal static partial class CashShopTcpTests
         }
         await fixture.StopAsync();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
-            That(repository.List(owner).Single().Inventory.Items.Single(row => row.Core.ItemId == expired.ItemId).Core.ExpireTime == ItemExpiration.MaximumUnixTime,
+        {
+            That(repository.List(owner).Single(role => role.Name == "CashShopTcp").Inventory.Items.Single(row => row.Core.ItemId == expired.ItemId).Core.ExpireTime == ItemExpiration.MaximumUnixTime,
                 "关闭开关不追溯修改已持久化调试物品");
+            var couponRole = repository.LoadCharacter(owner, couponSlot);
+            InventoryService.Commit(repository, owner, couponRole,
+                new CurrencyService(resources.ItemResources.GoldLimits).Grant(couponRole, CurrencyKind.Cera, 100_000));
+        }
         await fixture.StartAsync("restart");
         That(Command("cash-shop-expiration") == "OK {\"ignoreAbsoluteExpiration\":true}", "重建Runtime恢复默认开启");
         That(Command("cash-shop-usable-period") == "OK {\"ignoreUsablePeriod\":false}", "重建Runtime默认保留相对期限");
+        await MappedCouponAsync(fixture, resources, couponSlot);
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "商城 TCP 事务保持 SQLite 完整性");
