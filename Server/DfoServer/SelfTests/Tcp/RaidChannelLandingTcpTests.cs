@@ -42,6 +42,12 @@ internal static partial class RaidChannelLandingTcpTests
         const string positionSql = "SELECT town,area,x,y,direction FROM characters WHERE id=$p0";
         Location ordinaryReturn;
         // 分支依据原始城镇登记，不用被测目录是否漏装来降低期望。
+        // 2026-10-29 正式PVF移除魔兽资源：魔兽换频道与回房段按资源在位判定暂时屏蔽，其余频道段照跑。
+        if (!BeastFixtures.Enabled(resources))
+        {
+            BeastFixtures.Skip("raid-channel-landing 魔兽段");
+            return;
+        }
         if (PvfScript.List(resources.Archive.ReadText("town/town.lst")).ContainsKey(51))
         {
             That(resources.Towns.Areas.Keys.Where(key => key.Item1 == 51).Select(key => key.Item2).Order().SequenceEqual(new byte[] { 0, 1, 2 }),

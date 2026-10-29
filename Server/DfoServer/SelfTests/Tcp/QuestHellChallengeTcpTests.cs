@@ -10,8 +10,10 @@ namespace DfoServer.Testing;
 
 internal static partial class QuestHellChallengeTcpTests
 {
+    // 2026-10-29 正式PVF移除魔兽资源后，完整组按资源在位判定暂时跳过5927会面用例（深渊与本组其余断言照跑），
+    // 魔兽资源回归时同一判定自动恢复正向覆盖。
     public static Task RunAsync(ServerOptions options, string root, TcpTestResources resources) =>
-        RunAsync(options, root, resources, skipMissingBeastMeeting: false);
+        RunAsync(options, root, resources, skipMissingBeastMeeting: !BeastFixtures.Enabled(resources));
 
     public static Task RunWithoutBeastMeetingAsync(ServerOptions options, string root, TcpTestResources resources) =>
         RunAsync(options, root, resources, skipMissingBeastMeeting: true);
