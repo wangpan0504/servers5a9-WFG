@@ -38,6 +38,9 @@ internal static partial class RaidChannelLandingTcpTests
         Switch(41, land: true, town: 38, "超时空之战 39→魔界大战 41（留在房间）", area: 1);
         Switch(42, land: true, town: 38, "魔界大战 41→普雷 42（进赛丽亚房间，出门 59/0）", area: 1, exit: 59);
         Switch(19, land: false, town: null, "普雷 42→安徒恩 19（同为团本页签，客户端保留 59/0）");
+        const string returnSql = "SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0";
+        const string positionSql = "SELECT town,area,x,y,direction FROM characters WHERE id=$p0";
+        Location ordinaryReturn;
         // 分支依据原始城镇登记，不用被测目录是否漏装来降低期望。
         if (PvfScript.List(resources.Archive.ReadText("town/town.lst")).ContainsKey(51))
         {
@@ -46,6 +49,9 @@ internal static partial class RaidChannelLandingTcpTests
             Switch(49, land: true, town: 38, "团队频道→魔兽49（独立谓词，先进共享房间再出门到51/2）", area: 1, exit: 51);
             That(fixture.Snapshot("SELECT town,area FROM characters WHERE id=$p0", character.Id) == "[[51,2]]",
                 "完整输入的真实换频道与1426出门仍须落到魔兽等待区51/2");
+            ordinaryReturn = resources.Towns.ResolveRoomReturn(new(31,1,0,0),null,character.Level,
+                character.CompletedQuests.ToHashSet());
+            That(ordinaryReturn.Town == 31,"实际进入51后，普通频道选角归回正常中央公园，仍须有合法的31城镇返回门口");
         }
         else
         {
@@ -55,7 +61,6 @@ internal static partial class RaidChannelLandingTcpTests
                 decision is { Spot: null, Reason: "town-not-in-catalog" },
                 "真实缺城镇51时魔兽频道落点精确拒绝，不从原生物理地图猜造等待区");
             // 前面的卢克出门已把普通返回地区更新为32/3；后续专属城镇保留该门口，不再沿用CreateRaider初始38/0。
-            const string returnSql = "SELECT return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0";
             string returnBefore = fixture.Snapshot(returnSql, character.Id);
             That(returnBefore == "[[32,3,754,211,0]]",
                 "进入缺资源魔兽频道前保存卢克路径后的真实普通返回门口32/3(754,211,0)");
@@ -63,9 +68,17 @@ internal static partial class RaidChannelLandingTcpTests
             That(fixture.Snapshot("SELECT town,area,x,y,direction,return_town,return_area,return_x,return_y,return_direction FROM characters WHERE id=$p0", character.Id) == "[[32,3,754,211,0,32,3,754,211,0]]" &&
                 fixture.Snapshot(returnSql, character.Id) == returnBefore,
                 "缺51时1379与1426沿原普通返回门口32/3落库，返回五字段逐字节保持，不宣称魔兽等待区成功");
+            // 此分支从未到51，普通频道不能触发LeavesBeastTown归回31；严格保留已证32/3五字段。
+            ordinaryReturn = new(32,3,754,211,0);
         }
-        Switch(normal, land: true, town: 38, "魔兽→普通回房、1379及1426连接正常中央公园", area: 1, exit: 31);
-        Switch(normal, land: false, town: null, "普通频道重连仍保留正常中央公园位置");
+        Switch(normal, land: true, town: 38, $"魔兽→普通回房、1379及1426连接已证返回地区{ordinaryReturn.Town}/{ordinaryReturn.Area}", area: 1, exit: ordinaryReturn.Town);
+        string expectedReturn = $"[[{ordinaryReturn.Town},{ordinaryReturn.Area},{ordinaryReturn.X},{ordinaryReturn.Y},{ordinaryReturn.Direction}]]";
+        That(fixture.Snapshot(positionSql,character.Id) == expectedReturn && fixture.Snapshot(returnSql,character.Id) == expectedReturn,
+            "普通频道1379及1426之后完整位置和返回五字段与实际资源分支的唯一预期一致");
+        Switch(normal, land: false, town: null, $"普通频道重连仍保留已证返回地区{ordinaryReturn.Town}/{ordinaryReturn.Area}");
+        That(fixture.Snapshot(positionSql,character.Id) == $"[[{ordinaryReturn.Town},{ordinaryReturn.Area},{ordinaryReturn.X+2},{ordinaryReturn.Y},5]]" &&
+            fixture.Snapshot(returnSql,character.Id) == expectedReturn,
+            "普通频道重连保留原位置、same-area回放及原有移动，仅当前位置按Move增加2并转向5，返回五字段不丢失");
     }
 
     // 安徒恩频道页依赖 EVENT_INFO 事件 181（0xB5）与任务 12829：时段全开时入城事件表必须带齐四张团本卡与安徒恩事件，频道目录列出 19。

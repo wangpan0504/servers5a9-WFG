@@ -61,8 +61,13 @@ internal static partial class BeastDungeonSessionTests
             var sources = Enumerable.Range(310,5).ToArray();
             var gateways = Enumerable.Range(BeastDungeonRotation.FirstGatewayDungeonId,5).ToArray();
             pvf.Script("dungeon/dungeon.lst",sources.Concat(gateways).SelectMany(id=>new[] {I(id),pvf.S("selftest-beast/"+id+".dgn")}).ToArray());
-            pvf.Script("map/map.lst",Enumerable.Range(0,15).SelectMany(i=>new[] {I(MapFirst+i),pvf.S("selftest-beast/"+i+".map")}).ToArray());
-            pvf.Script("monster/monster.lst",I(Monster),pvf.S("selftest-beast/actor.mob"));
+            // 固定阶段ID只引用本地合成脚本；补足原图五图双遭遇合同，不恢复真实PVF资源。
+            var stages=sources.SelectMany(id=>Enumerable.Range(0,2).SelectMany(encounter=>
+                Enumerable.Range(0,6).Select(stage=>ExpectedStage(id,encounter,stage)))).ToArray();
+            pvf.Script("map/map.lst",Enumerable.Range(0,15).SelectMany(i=>new[] {I(MapFirst+i),pvf.S("selftest-beast/"+i+".map")})
+                .Concat(stages.SelectMany(stage=>new[] {I(stage.Map),pvf.S("selftest-beast/stage-"+stage.Map+".map")})).ToArray());
+            pvf.Script("monster/monster.lst",new[] {Monster}.Concat(stages.Select(stage=>stage.Boss).Distinct())
+                .SelectMany(id=>new[] {I(id),pvf.S("selftest-beast/actor.mob")}).ToArray());
             // 两个目录的解析器要求非空；占位从未被房间引用，不创建额外演员。
             pvf.Script("passiveobject/passiveobject.lst",I(0),pvf.S(""));
             pvf.Script("aicharacter/aicharacter.lst",I(0),pvf.S("selftest-beast/unused.aic"));
@@ -70,6 +75,9 @@ internal static partial class BeastDungeonSessionTests
             for(int i=0;i<15;i++)
                 pvf.Script("map/selftest-beast/"+i+".map",pvf.T("monster"),I(Monster),I(1),I(0),I(100),I(100),I(0),I(1),I(1),
                     pvf.S("[fixed]"),pvf.S(i>=9 ? "[boss]" : "[normal]"),pvf.T("/monster"));
+            foreach(var stage in stages)
+                pvf.Script("map/selftest-beast/stage-"+stage.Map+".map",pvf.T("monster"),I(stage.Boss),I(1),I(0),I(100),I(100),I(0),I(1),I(1),
+                    pvf.S("[fixed]"),pvf.S("[boss]"),pvf.T("/monster"));
             pvf.Text("etc/selftest-beast-balance.tbl","[MAX_HP]\n[NORMAL]\n5.00 5.00 5.00\n[/MAX_HP]\n[ATTACK]\n[NORMAL]\n2.30 0.00 0.00\n[/ATTACK]\n");
             foreach(int id in sources)
             {
@@ -113,7 +121,8 @@ internal static partial class BeastDungeonSessionTests
         static TownCatalog TownFixture(int[] sources,int[] gateways)
         {
             var room=new Location(38,1,100,100);
-            var origin=new Location(1,0,100,100);
+            // 显式合成原图入口仍须满足生产Town31/worldmap39；不是恢复实际PVF资源。
+            var origin=new Location(31,2,100,100);
             var gate=new Location(51,2,100,100);
             var bounds=new WalkRegion(new(0,0,200,200),[],[]);
             var dungeonGate=new WalkRegion(new(80,80,40,40),[],[]);
@@ -121,11 +130,11 @@ internal static partial class BeastDungeonSessionTests
             return new(new()
             {
                 [(38,1)]=new(38,1,1,[],[],[],room,map with {IsRoom=true,DungeonGates=[]},[],[]),
-                [(1,0)]=new(1,0,1,[],[],[],origin,map with {Links=[new(new(0,0,10,10),38,1,[],[])]},[],[]) {DungeonWorldMap=900},
+                [(31,2)]=new(31,2,1,[],[],[],origin,map with {Links=[new(new(0,0,10,10),38,1,[],[])]},[],[]) {DungeonWorldMap=39},
                 [(51,2)]=new(51,2,1,[],[],[],gate,map,[],[]) {DungeonWorldMap=901}
             },room,origin,new(0,[],[]),[],new Dictionary<uint,uint[]>(),new Dictionary<int,TownDungeonMap>
             {
-                [900]=new(900,"selftest-beast/source",[..sources.Select(id=>new TownDungeonOption(id,-1,false))]),
+                [39]=new(39,"selftest-beast/source",[..sources.Select(id=>new TownDungeonOption(id,-1,false))]),
                 [901]=new(901,"selftest-beast/gateway",[..gateways.Select(id=>new TownDungeonOption(id,-1,false))])
             });
         }
