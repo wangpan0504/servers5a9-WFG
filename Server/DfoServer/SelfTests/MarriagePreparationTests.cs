@@ -128,6 +128,22 @@ internal static class MarriagePreparationTests
             That(first.ActiveMainQuests.Single().ConditionState == 0 && repository.LoadQuestClear(firstOwner, first, 20737) is not null &&
                 repository.FindMarriage(relation.Id)?.PrepareClears == 5 && !first.CompletedQuests.Contains(20737),
                 "第五次真实两人清图形成原任务领奖凭据，尚未领取奖励或伪写完成位");
+            var parameters = global::DfoServer.Testing.SelfTestCatalogs.QuestRewardParameters(pvf);
+            var preparation = quests.Get(20737);
+            That(preparation.Difficulty is null, "正式结婚准备第一步资源省略难度声明");
+            var completion = QuestCompletionPlan.Prepare(first, preparation, ushort.MaxValue, quests, parameters,
+                items.Items, items.GoldLimits, items.EpicPieces, growth, DateTimeOffset.UtcNow,
+                repository.LoadQuestClear(firstOwner, first, 20737));
+            That(completion is { Outcome: QuestCompletionOutcome.Accepted, Plan: not null },
+                "五次通关后可规划正式任务完整领奖：" + completion.Reason);
+            var award = repository.CommitQuestCompletion(firstOwner, completion.Plan!);
+            var repeatedAward = repository.CommitQuestCompletion(firstOwner, completion.Plan!);
+            first = repository.LoadCharacter(firstOwner, first.Slot);
+            That(first.CompletedQuests.Contains(20737) && !first.ActiveMainQuests.Any(row => row.QuestId == 20737) &&
+                first.Inventory.Items.Where(item => item.Core.ItemId == 10002616).Sum(item => item.Core.Count) == 1 &&
+                award.ExperienceReward.DifficultyWeight == 100 && repeatedAward.Duplicate &&
+                repeatedAward.Character.Learning.Experience == first.Learning.Experience,
+                "完成位、单份稀有奖励及经验同事务落库，原领奖重放不重复到账");
             var current = repository.FindMarriage(relation.Id)!;
             repository.CommitMarriageSettlement(current, current with { Revision = current.Revision + 1, State = 4 });
             first = repository.LoadCharacter(firstOwner, first.Slot); second = repository.LoadCharacter(secondOwner, second.Slot);
@@ -155,7 +171,7 @@ internal static class MarriagePreparationTests
                 var source = SkillRepositoryTests.Fixture(name, towns, characters, learning);
                 var state = SkillPointLedger.Synchronize(0, 0, 30, source.InitialLearning with
                     { Experience = growth.GetLevelStartExperience(30), BonusSp = 0, BonusTp = 0 }, learning);
-                return repository.Create(owner, source with { Level = 30, InitialLearning = state,
+                return repository.Create(owner, source with { Level = 30, InitialLearning = state, DungeonState = CharacterDungeonState.NewOrdinary,
                     Skills = state.Trees.Single(tree => tree.Context == state.ActiveContext).Skills.Select(skill => new CharacterSkill(skill.Id, skill.Level)).ToArray() });
             }
             Character Accept(Character character, AccountOwners.Lease owner) => repository.CommitQuestLifecycle(owner,
