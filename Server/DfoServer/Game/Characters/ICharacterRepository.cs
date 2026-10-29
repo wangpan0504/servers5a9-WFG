@@ -109,6 +109,7 @@ internal interface ICharacterRepository
     int ReadGuildDungeonPartyCount(AccountOwners.Lease owner, ushort characterId,
         IReadOnlyList<DfoServer.Game.Guild.GuildDungeonMembership> frozen, IReadOnlyCollection<ushort> active);
     Guid? LoadOrdinaryLukeDropEvent(AccountOwners.Lease owner, ushort characterId, int day, int sourceMonsterId);
+    EkernCycleProgress LoadEkernCycle(AccountOwners.Lease owner, ushort characterId, int day);
     OrdinaryLukeProgress LoadOrdinaryLukeProgress(AccountOwners.Lease owner, ushort characterId);
     DazzlementTowerState LoadDazzlementTower(AccountOwners.Lease owner);
     GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId);

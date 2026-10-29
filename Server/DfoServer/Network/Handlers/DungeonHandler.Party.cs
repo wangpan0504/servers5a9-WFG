@@ -165,6 +165,7 @@ internal sealed partial class DungeonHandler
         {
             if (!await town.DetachForDungeonSelectionAsync(context, selection)) return;
             bool Guard() => context.Session.CanPublishDungeonSelection(selection);
+            await EkernCycleProjection.RefreshAsync(context,Guard);
             if (notice.Kind == PartyDungeonNoticeKind.ResultSelection)
                 await context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(1, (byte)DungeonResultOption.OtherDungeon), "party_result_selection", Guard);
             await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionOpened(), "party_selection_opened", Guard);

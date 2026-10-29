@@ -15,7 +15,7 @@ internal sealed partial class CharacterRepository
         "character_beast_stage_rewards",
         "character_evildom_war_rewards",
         "character_evildom_war_hidden_rewards",
-        "character_dungeon_incount_extra",
+        "character_dungeon_incount_extra", "character_ekern_cycle",
         "character_evildom_war_seats",
         "character_pvp_daily_missions", "character_pvp_mission_rewards", "character_pvp_mission_facts", "character_pvp_rating_claims", "character_pvp_ratings",
         "character_luke_normal_drop_claims", "character_luke_normal_progress",

@@ -97,6 +97,12 @@ internal sealed partial class CharacterRepository
             tx.Commit();
             return restored;
         }
+        if (prepared.EkernDay is { } ekernDay)
+        {
+            if (run.DungeonId is not (5097 or 5098) || run.Entry.IsPractice || !run.Entry.IsOrdinary)
+                throw new InvalidDataException("艾肯计数缺少正式通关事实");
+            WriteEkernClear(db,tx,owner,expected.Id,run.DungeonId,ekernDay);
+        }
         var creatureInventory = prepared.CreatureInventory;
         if (creatureInventory is not null)
         {

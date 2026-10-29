@@ -285,6 +285,7 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
             return CommandResult.Handled;
         }
         if (!context.Session.ConfirmNewDungeonSelection(receipt)) return CommandResult.Handled;
+        await EkernCycleProjection.RefreshAsync(context, () => context.Session.CanPublishDungeonSelection(receipt));
         int legendTarget = dungeons is null ? 0 : context.Session.PrepareLegendDungeonSelection(dungeons);
         if (!await projection.DetachForDungeonSelectionAsync(context, receipt))
             return CommandResult.Handled;

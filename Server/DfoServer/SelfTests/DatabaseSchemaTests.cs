@@ -2448,6 +2448,7 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             using (var db = Open(path))
             {
+                if (oldVersion < 153) Execute(db, "DROP TABLE character_ekern_cycle");
                 RemoveExperienceBonusSchema(db);
                 if (oldVersion < 141) Execute(db, "DROP TABLE guild_dungeon_effective_progress");
                 if (oldVersion < 140) Execute(db, "DROP TABLE guild_dungeon_reward_receipts");
@@ -2595,6 +2596,8 @@ internal static partial class DatabaseSchemaTests
                     receipts == (oldVersion >= 3 ? 1 : 0), "真实旧版连续迁移保留v3已有账本，v1/v2只建立空账本");
                 Check(Query(db, "SELECT count(*) FROM character_dungeon_state") is 0L,
                     "旧角色迁移不补造key、attempt或附属成长owner");
+                Check(Query(db, "SELECT count(*) FROM character_ekern_cycle") is 0L,
+                    "艾肯迁移只建立空循环进度，不从旧任务或入场记录补造通关");
                 Check(Query(db, "SELECT length(acceptance_id)=32 AND acceptance_id<>'00000000000000000000000000000000' FROM character_active_main_quests WHERE character_id=1") is 1L &&
                     Query(db, "SELECT count(*) FROM character_quest_clear_receipts") is 0L &&
                     Query(db, "SELECT count(*) FROM character_quest_completion_receipts") is 0L,

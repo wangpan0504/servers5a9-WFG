@@ -20,6 +20,17 @@ internal static partial class DungeonSettlementTests
     public static void RunCore()
     {
         int before = TestCheck.Count;
+        PvfToken[] cycleTokens = [new(3,1),.. new[] {48,-1,5097,3,48,-1,5098,1}.Select(value => new PvfToken(0,value)),new(3,2)];
+        string CycleTag(int id) => id == 1 ? "[dungeon cycle]" : "[/dungeon cycle]";
+        var cycle = EkernCycleCatalog.Read(cycleTokens,CycleTag);
+        Reject<InvalidDataException>(() => EkernCycleCatalog.Read(cycleTokens[..^1],CycleTag),"循环资源截断拒绝");
+        var changedCycle = cycleTokens.ToArray(); changedCycle[4] = new(0,4);
+        Reject<InvalidDataException>(() => EkernCycleCatalog.Read(changedCycle,CycleTag),"未经确认的循环阈值拒绝而不猜默认");
+        Check(cycle.CanEnter(5097,0,0) && !cycle.CanEnter(5098,0,0) && !cycle.CanEnter(5098,2,0) &&
+            cycle.CanEnter(5098,3,0) && !cycle.CanEnter(5098,3,1), "艾肯前三次仅前置图，第三次完成后开放试炼，试炼每日一次");
+        TestCheck.Bytes(DfoServer.Network.Builders.EkernCyclePackets.Info(new(0,3,0)),
+            new byte[] {2,233,19,0,0,3,0,0,0,0,0,0,0,0,0,0,0,234,19,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+            "656逐副本同步真实通关数，不用入场剩余次数替代");
         var role = new Character(1, 0, "Settle", 0, Location, Location);
         var (run, authority) = CreateRun(role);
         var unconfirmed = new DungeonClearFact(run.Snapshot.Identity, 3, [Guid.NewGuid()]);
