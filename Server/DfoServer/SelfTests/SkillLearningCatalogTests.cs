@@ -113,8 +113,9 @@ internal static class SkillLearningCatalogTests
             ghostNight.SupportsOrdinarySpLearning && ghostNight.GetMaximum(5) == 0 && ghostNight.GetMaximum(0x11) == 0 &&
             ghostNight.GetMaximum(0x15) == 30 && ghostNight.GetMaximum(0x25) == 30 &&
             ghostNight.GetOrdinaryNextRequiredCharacterLevel(0) == 48 && ghostNight.GetOrdinaryResourceSpCost(0, 5) == 45 &&
-            catalog.FreeSkills(0, 0x15).All(skill => skill.Id != 296),
-            "真实鬼夜缺class使用转职被动组，仍受剑影觉醒、Lv48与45SP资格限制且非免费赠技");
+            ghostNight.GetOrdinaryNextRequiredCharacterLevel(1) == 51 &&
+            catalog.FreeSkills(0, 0x15).Any(skill => skill.Id == 296 && skill.Level == 1),
+            "真实鬼夜缺class使用转职被动组，觉醒赠送一级，其后仍受等级与每阶45SP资格限制");
         That(ghost.Type == SkillType.Active && ghost.SlotGroup == 3 && ghost.SkillClass == 3 && ghost.SkillFitnessGrowtypeCount == 6,
             "真实鬼斩保留主动类型、分组及方向数量");
         foreach (ushort passiveId in new ushort[] { 174, 179, 511 })

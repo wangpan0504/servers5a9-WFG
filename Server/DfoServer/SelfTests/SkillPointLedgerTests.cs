@@ -30,6 +30,7 @@ internal static class SkillPointLedgerTests
         var awakening = catalog.FixedSkills(0).Single(skill => skill.Path.EndsWith("/ultimatecrossslash.skl", StringComparison.Ordinal));
         Check(awakening.GetFixedLevel(95, 0, 0) == 0 && awakening.GetFixedLevel(95, 0x11, 0) == 0 &&
             awakening.GetFixedLevel(95, 0x15, 0) == 10, "觉醒固定技能读取secondary资格，不赠送给其他转职");
+        AwakeningGrants(catalog);
         var add = SkillLearning.Plan(0, 0, level, state, new(0, 0, [new(5, false, 2)]), catalog);
         Check(add.Success && add.State!.Trees[0].Sp == total - 30 && add.Changes.Single().Level == 3,
             "多级学习逐级计费，另一树独立，额外来源保留");
@@ -131,6 +132,54 @@ internal static class SkillPointLedgerTests
             "职业重建和等级重算保留已开通权益及当前第二方案");
         Persist(towns, characters, catalog, growth, state, add.State!);
         Console.WriteLine($"PASS {TestCheck.Count - before} SP扣除、退款、固有成长、契约和来源存档断言");
+    }
+
+    private static void AwakeningGrants(SkillLearningCatalog catalog)
+    {
+        ushort[] avenger = [119, 120, 122, 135];
+        Check(catalog.FreeSkills(4, 4).All(skill => !avenger.Contains(skill.Id)) &&
+            catalog.FreeSkills(4, 0x13).All(skill => skill.Id is not (119 or 120 or 135)),
+            "未觉醒复仇者和其他分支不获得复仇者觉醒赠技");
+        foreach (byte growth in new byte[] { 0x14, 0x24 })
+            Check(avenger.All(id => catalog.FreeSkills(4, growth).Any(skill => skill.Id == id && skill.Level == 1)),
+                "数字觉醒阶段读取完整赠技段并累计保留一觉赠技 " + growth);
+        Check(catalog.FreeSkills(4, 0x13).All(skill => skill.Id != 222) &&
+            new ushort[] { 89, 93, 222 }.All(id => catalog.FreeSkills(4, 0x23).Any(skill => skill.Id == id)),
+            "驱魔一觉不提前获得二觉赠技，二觉累计两阶段资源");
+        var complete = SkillLearning.Initialize(4, catalog.FreeSkills(4, 0x24), catalog).State! with
+            { BonusSp = 137, BonusTp = 7 };
+        complete = SkillPointLedger.Synchronize(4, 0x24, 95, complete, catalog);
+        var paid = SkillLearning.Plan(4, 0x24, 95, complete, new(0, 0, [new(122, false, 15)]), catalog);
+        Check(paid.Success, "觉醒赠技之上的付费等级沿正常学习规划");
+        int legacyCharge = catalog.Get(4, 122).GetPointCost(0, 0x24);
+        var legacy = paid.State! with { Trees = Array.AsReadOnly(paid.State.Trees.Select(tree => tree with
+        {
+            Sp = checked((ushort)(tree.Sp - (tree.Context == 0 ? legacyCharge : 0))),
+            Skills = Array.AsReadOnly(tree.Skills.Where(skill => skill.Id is not (120 or 135))
+                .Select(skill => skill.Id == 1 ? skill with { Command = "04" } : skill).ToArray())
+        }).ToArray()) };
+        var repaired = SkillPointLedger.Synchronize(4, 0x24, 95, legacy, catalog);
+        Check(repaired.Trees.Zip(legacy.Trees).All(pair => pair.First.Sp == pair.Second.Sp + (pair.First.Context == 0 ? legacyCharge : 0) && pair.First.Tp == pair.Second.Tp &&
+            pair.Second.Skills.All(skill => pair.First.Skills.Single(value => value.Id == skill.Id) == skill) &&
+            pair.First.Skills.Count == pair.Second.Skills.Count + 2 &&
+            pair.First.Skills.Any(skill => skill.Id == 120 && skill.Level == 1) &&
+            pair.First.Skills.Any(skill => skill.Id == 135 && skill.Level == 1)) &&
+            repaired.BonusSp == 137 && repaired.BonusTp == 7,
+            "旧双树补齐审判与恶魔屏障并返还免费首级误扣费用，保留等级、槽位、指令和点数来源");
+        Check(repaired.Trees.All(tree => tree.Skills.Single(skill => skill.Id == 119).Level == 10) &&
+            ReferenceEquals(SkillPointLedger.Synchronize(4, 0x24, 95, repaired, catalog), repaired),
+            "末日审判者仍按固定规则十级，重复同步不创建新状态");
+        var reset = SkillPointLedger.Reset(4, 0x24, 95, repaired, 0, catalog, 0);
+        Check(reset.Success && reset.State!.Trees[0].Skills.Single(skill => skill.Id == 122).Level == 1 &&
+            reset.State.Trees[0].Skills.Single(skill => skill.Id == 120).Level == 1 &&
+            reset.State.Trees[0].Skills.Single(skill => skill.Id == 135).Level == 1 &&
+            reset.State.Trees[1].Skills.SequenceEqual(repaired.Trees[1].Skills),
+            "洗点保留觉醒免费一级和独立备用树");
+        var floor = SkillLearning.Plan(4, 0x24, 95, repaired, new(0, 0, [new(120, true, 1)]), catalog);
+        Check(floor.Success && floor.State!.Trees[0].Skills.Single(skill => skill.Id == 120).Level == 1 &&
+            floor.State.Trees[0].Sp == repaired.Trees[0].Sp &&
+            SkillLearning.Plan(4, 0x24, 95, repaired, new(0, 0, [new(135, false, 1)]), catalog).Failure == SkillLearningFailure.Mastered,
+            "觉醒赠技不能退款到零或突破子技能自身一级上限");
     }
 
     private static void Persist(TownCatalog towns, CharacterCatalog characters, SkillLearningCatalog catalog,
