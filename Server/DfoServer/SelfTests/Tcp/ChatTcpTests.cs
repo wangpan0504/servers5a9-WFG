@@ -7,6 +7,7 @@ using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.Persistence;
+using DfoServer.Testing.Inventory;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -54,7 +55,8 @@ internal static class ChatTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int before = Count;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "chat"), resources: resources);
+        var clock = new DailyBoosterTestClock(new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "chat"), resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
         var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
         var owners = new AccountOwners();
@@ -112,13 +114,21 @@ internal static class ChatTcpTests
         Settle(delta);
         int entry = Count;
 
+        // 先用真实有序请求确认上一场处理完，再推进短/长窗口；不依赖主机调度速度。
+        // 六条突发消息之间不推进单调时钟，保证真正测试同一秒的限流规则。
+        void NextChatWindow()
+        {
+            alpha.Barrier();
+            clock.Advance(TimeSpan.FromSeconds(10));
+        }
+
         // ① 房间隔离：选角落在赛丽亚房间（PVF IsRoom ⇒ 场景键含账号），普通聊天只投本人一帧。
+        NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(3, 4, 0, "房间"));
         Same(alpha.Expect(0, NoticeMessage).Body, MessageBody(3, 4, "房间"), "房间内普通聊天 0x0C 正文");
         beta.NoFrame(300, "房间按账号隔离：别的账号收不到普通聊天", (0, NoticeMessage));
         gamma.NoFrame(300, "房间按账号隔离：第三个账号也收不到", (0, NoticeMessage));
         delta.NoFrame(300, "另一频道的房间更收不到", (0, NoticeMessage));
-        Thread.Sleep(1100);
 
         // ② 离开房间进入同一公开城镇地图（38/0 街道），A、B、C 之后同场景；D 留在自己的房间。
         Leave(alpha);
@@ -129,6 +139,7 @@ internal static class ChatTcpTests
         Settle(beta);
 
         // ③ 普通聊天（type 3）：A、B、C 同场景各收一帧 [03][请求层 id][00][字节数][文本]；D（另一频道）不收。
+        NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(3, 4, 0, "普通聊天"));
         Same(alpha.Expect(0, NoticeMessage).Body, MessageBody(3, 4, "普通聊天"), "普通聊天下行 0x0C 正文");
         Same(beta.Expect(0, NoticeMessage).Body, MessageBody(3, 4, "普通聊天"), "同场景接收者收到同样的 0x0C 正文");
@@ -139,6 +150,7 @@ internal static class ChatTcpTests
         // 文本与记录配对时发 0x172（记录原样携带），发送者自己也收到同帧回显。
         byte[] linkText = Convert.FromHexString("7F7F5BB2D0C6C6B5C4C5A3C6A4B6CCBFE35D7F");
         byte[] linkRecord = LinkRecord();
+        NextChatWindow();
         alpha.Send(CommandItemHyperlink, HyperlinkBody(3, linkText));
         byte[] linkFrame = HyperLinkBody(3, 4, "ChatA", linkText, linkRecord);
         Same(alpha.Expect(0, NoticeHyperLink).Body, linkFrame, "物品链接发送者自己收到 0x172 回显（含 148B 记录）");
@@ -147,6 +159,7 @@ internal static class ChatTcpTests
         delta.NoFrame(400, "物品链接不投其他频道", (0, NoticeHyperLink), (0, NoticeMessage));
 
         // 记录为空（cnt=0）：退化回 0x0C 纯文本，链接文本原样、不带记录段。
+        NextChatWindow();
         alpha.Send(CommandItemHyperlink, HyperlinkBody(3, linkText, withRecord: false));
         byte[] plainLink = LinkMessageBody(3, 4, linkText);
         Same(alpha.Expect(0, NoticeMessage).Body, plainLink, "记录为空时发送者收到 0x0C 纯文本回显");
@@ -157,6 +170,7 @@ internal static class ChatTcpTests
         // 非法 0x01A8（文本长度 0）只记日志丢弃，不断线也不广播；后面的 ④ 继续用同一连接即证明未断。
         byte[] badLink = new byte[12];
         badLink[0] = 3;
+        NextChatWindow();
         alpha.Send(CommandItemHyperlink, badLink);
         alpha.NoFrame(400, "非法长度的物品链接不广播", (0, NoticeHyperLink), (0, NoticeMessage));
 
@@ -164,6 +178,7 @@ internal static class ChatTcpTests
         // 选角之后才写入 C 的成员行：成员表已变，但 C 会话的 Selected.Guild 仍为空，投递前锁内复核必须拒绝。
         fixture.Sql("INSERT INTO guild_members(guild_id,character_id,grade,contribution,member_memo,joined_at_unix,last_login_unix) " +
             "VALUES($p0,$p1,0,0,'',1700000000,0)", guildId, (int)profiles["ChatC"].Id);
+        NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(6, 3, 0, "公会聊天"));
         Same(alpha.Expect(0, NoticeMessage).Body, MessageBody(6, 3, "公会聊天"), "公会聊天下行 0x0C 正文");
         Same(beta.Expect(0, NoticeMessage).Body, MessageBody(6, 3, "公会聊天"), "同公会在线成员收到 0x0C");
@@ -172,6 +187,7 @@ internal static class ChatTcpTests
 
         // ⑤ 悄悄话（请求 type 0x2E）：arg 是目标角色 id，只投目标；发送者本人与其他角色都不收。
         // 下行显示 type 实测映射为 3（「普通」页签只渲染 3/6/0x37/0x38），不再是请求里的 0x2E。
+        NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(0x2E, 5, profiles["ChatB"].Id, "悄悄话"));
         Same(beta.Expect(0, NoticeMessage).Body, MessageBody(3, 5, "悄悄话"), "悄悄话只投目标角色的 0x0C 正文（显示 type=3）");
         alpha.NoFrame(400, "悄悄话不回显给发送者", (0, NoticeMessage));
@@ -179,25 +195,28 @@ internal static class ChatTcpTests
         delta.NoFrame(400, "悄悄话不投其他频道", (0, NoticeMessage));
 
         // 目标角色不存在：不发任何帧（只记 chat_whisper_offline），不自造失败包。
+        NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(0x2E, 5, 65000, "离线"));
         alpha.NoFrame(400, "悄悄话目标不存在时不发帧", (0, NoticeMessage));
 
         // ⑥ 节流：窗口清空后同一连接 1 秒内发 6 条，第 6 条被丢弃（其余 5 条各投 A、B、C）。
-        Thread.Sleep(1100);
+        NextChatWindow();
         for (int index = 0; index < 6; index++)
             alpha.Send(CommandSendMessage, SendBody(3, 7, 0, "节流" + index));
         for (int index = 0; index < ChatRateLimiter.ShortWindowLimit; index++)
         {
-            alpha.Expect(0, NoticeMessage);
-            beta.Expect(0, NoticeMessage);
-            gamma.Expect(0, NoticeMessage);
+            byte[] expected = MessageBody(3, 7, "节流" + index);
+            Same(alpha.Expect(0, NoticeMessage).Body, expected, "节流窗口内发送者按序收到前五条");
+            Same(beta.Expect(0, NoticeMessage).Body, expected, "节流窗口内接收者按序收到前五条");
+            Same(gamma.Expect(0, NoticeMessage).Body, expected, "节流窗口内第三个接收者按序收到前五条");
         }
+        alpha.Barrier(); // 第六条已经由真实请求队列处理；误发聊天会被严格屏障拒绝。
         alpha.NoFrame(500, "第 6 条被节流，不再下行", (0, NoticeMessage));
         beta.NoFrame(500, "第 6 条被节流，接收者也不收", (0, NoticeMessage));
         gamma.NoFrame(500, "第 6 条被节流，第三个接收者也不收", (0, NoticeMessage));
 
         // ⑦ 超长文本：入站先按 200 字节截断（日志可查），下行正文 = 8 字节头 + 200 字节文本，连接不断。
-        Thread.Sleep(1100);
+        NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(3, 6, 0, new string('x', 250)));
         byte[] longChat = alpha.Expect(0, NoticeMessage).Body;
         That(longChat.Length == 8 + 200 && BinaryPrimitives.ReadUInt32LittleEndian(longChat.AsSpan(4)) == 200 &&
@@ -208,12 +227,14 @@ internal static class ChatTcpTests
 
         // ⑧ 服务器喇叭（type 11）：槽位 68 放的是频道喇叭 37 ⇒ 物品不符拒绝，不扣也不广播。
         int channelMegaphoneBefore = CountSlot(68);
+        NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(11, 0, 68, "错槽"));
         alpha.NoFrame(400, "服务器喇叭槽位物品不匹配时拒绝且不广播", (0, NoticeMegaphone));
         That(CountSlot(68) == channelMegaphoneBefore && channelMegaphoneBefore == 1, "槽位不匹配不扣道具");
 
         // ⑨ 频道喇叭（type 13）：槽 68 扣 1 个，同频道的 A、B、C 各收一帧 0x76 喇叭行
         // （type 0x0B = Ch. 频道标签，str1=ChatA、str2=频道喇叭）；另一频道的 D 不收。
+        NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(13, 0, 68, "频道喇叭"));
         byte[] channelMegaphone = MegaphoneBody(0x0B, "ChatA", "频道喇叭");
         Same(alpha.Expect(0, NoticeMegaphone).Body, channelMegaphone, "频道喇叭 0x76 正文");
@@ -225,6 +246,7 @@ internal static class ChatTcpTests
 
         // ⑩ 服务器喇叭（type 11）：槽 67 扣 1 个（2→1），全服 4 个在线会话各收一帧 0x76 喇叭行
         // （type 0x0E = D&F 官方标签，客户端会忽略 str1），不弹 0x06AD 公告框。
+        NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(11, 0, 67, "服务器喇叭"));
         byte[] serverMegaphone = MegaphoneBody(0x0E, "ChatA", "服务器喇叭");
         Same(alpha.Expect(0, NoticeMegaphone).Body, serverMegaphone, "服务器喇叭 0x76 正文");

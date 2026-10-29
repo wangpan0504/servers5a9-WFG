@@ -1,3 +1,4 @@
+using System.Text.Json;
 using static DfoServer.Testing.TestCheck;
 using DfoServer.Application;
 
@@ -50,6 +51,7 @@ internal static class CommandLineTests
             (["--selftest-core"], ServerCommandKind.SelfTestCore),
             (["--selftest"], ServerCommandKind.SelfTest),
             (["--selftest-tcp"], ServerCommandKind.TcpTest),
+            (["--selftest-tcp-list-json"], ServerCommandKind.TcpTestList),
             (["--gm"], ServerCommandKind.Gm),
             (["--prepare-jianying", "剑影", "audit"], ServerCommandKind.PrepareCharacter),
             (["--import-characters", "roles.txt"], ServerCommandKind.ImportCharacters),
@@ -59,6 +61,28 @@ internal static class CommandLineTests
         ];
         foreach (var test in supported)
             That(ServerCommand.Parse(test.Arguments).Kind == test.Kind, string.Join(' ', test.Arguments));
+        Reject(["--selftest-tcp-list-json", "extra"]);
+        Reject(["--pvf-path", "missing.pvf", "--selftest-tcp-list-json"]);
+        Reject(["--data-dir", "unused", "--selftest-tcp-list-json"]);
+        using (var registry = JsonDocument.Parse(Testing.TcpRegressionTests.RegistryJson()))
+        {
+            var data = registry.RootElement;
+            That(data.GetProperty("SchemaVersion").GetInt32() == 1 && data.GetProperty("Execution").GetString() == "not-run",
+                "测试组导出只是注册表不是执行或覆盖证明");
+            string[] Names(string property) => data.GetProperty(property).EnumerateArray().Select(value => value.GetString()!).ToArray();
+            string[] ordered = data.GetProperty("Groups").EnumerateArray().Select(value => value.GetProperty("Name").GetString()!).ToArray();
+            That(ordered.Distinct(StringComparer.Ordinal).Count() == ordered.Length, "机器清单的注册组不重复");
+            That(Names("DefaultGroups").SequenceEqual(Testing.TcpRegressionTests.DefaultGroupNames), "默认执行与导出顺序相同");
+            That(Names("DefaultGroups").Concat(Names("TargetedGroups")).Concat(Names("SurveyGroups")).ToHashSet(StringComparer.Ordinal).SetEquals(ordered),
+                "默认/定向/普查分类完整覆盖注册组");
+            That(Names("DefaultGroups").Length + Names("TargetedGroups").Length + Names("SurveyGroups").Length == ordered.Length,
+                "注册分类之间不重叠");
+            foreach (var alias in data.GetProperty("Aliases").EnumerateObject())
+                That(alias.Value.EnumerateArray().Select(value => value.GetString()!).SequenceEqual(Testing.TcpRegressionTests.Expand([alias.Name])),
+                    "别名导出与实际展开保持相同顺序：" + alias.Name);
+            That(ordered.Concat(data.GetProperty("Aliases").EnumerateObject().Select(alias => alias.Name)).SequenceEqual(Testing.TcpRegressionTests.GroupNames),
+                "实际接受的全部名称与机器清单相符");
+        }
         That(ServerCommand.Parse(["--selftest-tcp", "material-exchange,booster"]).Arguments.SequenceEqual(["material-exchange,booster"]), "TCP group selection preserved");
         That(ServerCommand.Parse(["--anton-probe", "--host", "127.0.0.1", "--channel-port", "24100", "--account", "antonprobe"]).Arguments.SequenceEqual(
             ["--host", "127.0.0.1", "--channel-port", "24100", "--account", "antonprobe"]), "anton probe keeps connection arguments");

@@ -52,7 +52,7 @@ internal static partial class QuestHellChallengeTcpTests
                     {
                         if (!skipMissingBeastMeeting)
                             throw new InvalidDataException("魔兽5927正向TCP夹具缺少town31合法场景NPC598；默认完整组不省略该用例");
-                        Console.WriteLine($"SKIP {fixtureName} quest=5927 prerequisite=true：匹配PVF缺少town31合法场景NPC598，仅魔兽会面正向TCP未执行；深渊及缺前置拒绝仍执行");
+                        TestCheck.Skip("beast.meeting-npc-missing", $"{fixtureName} quest=5927 prerequisite=true：匹配PVF缺少town31合法场景NPC598，仅魔兽会面正向TCP未执行；深渊及缺前置拒绝仍执行");
                         continue;
                     }
                     var area = meeting.Area;

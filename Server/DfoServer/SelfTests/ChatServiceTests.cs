@@ -85,7 +85,7 @@ internal static class ChatServiceTests
         int before = Count;
         Parsing();
         Truncation();
-        Throttle();
+        RunRateRules();
         ChannelMapping();
         Wire();
         MegaphoneWire();
@@ -151,7 +151,8 @@ internal static class ChatServiceTests
             "混排截断不会切开末尾的双字节字符");
     }
 
-    static void Throttle()
+    // 独立确定性门禁复用核心原断言：只使用显式单调时钟，不启动网络或读取资源。
+    internal static void RunRateRules()
     {
         var clock = new ConsumableUseSessionTests.FakeClock();
         var limiter = new ChatRateLimiter(clock);

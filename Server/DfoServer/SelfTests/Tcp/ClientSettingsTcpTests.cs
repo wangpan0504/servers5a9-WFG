@@ -1,4 +1,3 @@
-using System.Text.Json;
 using DfoServer.Game.Settings;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -12,8 +11,23 @@ internal static class ClientSettingsTcpTests
     static readonly byte[] CreatorKeys = "I01\t134\nI02\t134\nI03\t134\nI04\t134\nC00\t77\nK02\t31\n"u8.ToArray();
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
+        var timings = new ClientSettingsTimings();
+        bool completed = false;
+        try
+        {
+            using (timings.Measure("total"))
+                await RunMeasuredAsync(source, root, resources, timings);
+            completed = true;
+        }
+        finally { timings.Write(root, completed); }
+    }
+
+    static async Task RunMeasuredAsync(ServerOptions source, string root, TcpTestResources resources, ClientSettingsTimings timings)
+    {
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "settings"), resources: resources);
-        await fixture.StartAsync();
+        using (timings.Measure("initial-start"))
+            await fixture.StartAsync();
+        using var accountPhase = timings.Measure("account-persistence-and-rejection");
         const string account = "settingsalice", otherAccount = "settingsbob";
         byte[] initial = Payload(204, 7), shared = Payload(204, 31), first = Payload(512, 63), second = Payload(512, 127);
         byte[] otherGame = Payload(204, 193), otherCharacter = Payload(512, 251);
@@ -25,13 +39,13 @@ internal static class ClientSettingsTcpTests
 
         using (var peer = Open(fixture, account))
         {
-            string assets = Assets(fixture);
+            string assets = Assets(fixture, timings);
             Save(peer, 197, initial);
             // 未选角不能用城镇事件作屏障，名称检查可证明保存没有插入额外回包。
             peer.Send(692, Name("SettingProbe"));
             peer.Expect(1, 692, [1]);
             CheckGame(fixture, account, initial);
-            That(Assets(fixture) == assets, "账号设置在入城前静默保存，不改其他表");
+            That(Assets(fixture, timings) == assets, "账号设置在入城前静默保存，不改其他表");
             Save(peer, 447, first);
             peer.Closed();
             That(fixture.Query("SELECT count(*) FROM character_client_settings") is [[0L]], "未选角的角色设置不能写库");
@@ -45,29 +59,29 @@ internal static class ClientSettingsTcpTests
             peer.Create("SettingTwo");
             secondId = peer.Id;
             Select(peer, 0, initial);
-            string assets = Assets(fixture);
+            string assets = Assets(fixture, timings);
             Save(peer, 197, shared);
             Save(peer, 447, first);
             peer.Barrier();
             CheckGame(fixture, account, shared);
             CheckCharacter(fixture, firstId, account, first);
-            That(Assets(fixture) == assets, "账号和角色设置提交不写角色revision及其他资产");
-            string stored = Settings(fixture);
+            That(Assets(fixture, timings) == assets, "账号和角色设置提交不写角色revision及其他资产");
+            string stored = Settings(fixture, timings);
             Save(peer, 197, shared);
             Save(peer, 447, first);
             peer.Barrier();
-            That(Settings(fixture) == stored && Assets(fixture) == assets, "相同设置重复提交无额外通知和数据变化");
+            That(Settings(fixture, timings) == stored && Assets(fixture, timings) == assets, "相同设置重复提交无额外通知和数据变化");
 
             ReturnSelection(peer);
             Select(peer, 0, shared, first);
             ReturnSelection(peer);
             Select(peer, 1, shared);
-            assets = Assets(fixture);
+            assets = Assets(fixture, timings);
             Save(peer, 447, second);
             peer.Barrier();
             CheckCharacter(fixture, firstId, account, first);
             CheckCharacter(fixture, secondId, account, second);
-            That(Assets(fixture) == assets, "同账号第二角色共享账号设置、单独保存角色设置");
+            That(Assets(fixture, timings) == assets, "同账号第二角色共享账号设置、单独保存角色设置");
             Exit(peer);
         }
 
@@ -99,10 +113,12 @@ internal static class ClientSettingsTcpTests
             Select(peer, 1, shared, second);
             Exit(peer);
         }
-        await fixture.StopAsync();
-        string persisted = Settings(fixture);
-        await fixture.StartAsync("restart");
-        That(Settings(fixture) == persisted, "重建服务和仓储保留两账号的完整设置");
+        using (timings.Measure("stop"))
+            await fixture.StopAsync();
+        string persisted = Settings(fixture, timings);
+        using (timings.Measure("repository-restart"))
+            await fixture.StartAsync("restart");
+        That(Settings(fixture, timings) == persisted, "重建服务和仓储保留两账号的完整设置");
         using (var peer = Open(fixture, account))
         {
             Select(peer, 0, shared, first);
@@ -128,10 +144,10 @@ internal static class ClientSettingsTcpTests
             {
                 using var peer = Open(fixture, account);
                 Select(peer, 0, shared, first);
-                string assets = Assets(fixture), stored = Settings(fixture);
+                string assets = Assets(fixture, timings), stored = Settings(fixture, timings);
                 peer.Send(opcode, body);
                 peer.Closed();
-                That(Settings(fixture) == stored && Assets(fixture) == assets, "非法设置长度或尾部断开连接，原值及资产不变");
+                That(Settings(fixture, timings) == stored && Assets(fixture, timings) == assets, "非法设置长度或尾部断开连接，原值及资产不变");
             }
         }
 
@@ -143,16 +159,16 @@ internal static class ClientSettingsTcpTests
         {
             using var peer = Open(fixture, account);
             Select(peer, 0, shared, first);
-            string assets = Assets(fixture), stored = Settings(fixture);
+            string assets = Assets(fixture, timings), stored = Settings(fixture, timings);
             fixture.Sql($"CREATE TRIGGER fail_settings BEFORE UPDATE ON {table} BEGIN SELECT RAISE(ABORT,'settings rollback'); END");
             try
             {
                 Save(peer, opcode, payload);
                 peer.Barrier();
-                That(Settings(fixture) == stored && Assets(fixture) == assets, "相同字节跳过写入，可通过拒绝UPDATE的触发器");
+                That(Settings(fixture, timings) == stored && Assets(fixture, timings) == assets, "相同字节跳过写入，可通过拒绝UPDATE的触发器");
                 Save(peer, opcode, Payload(payload.Length, 89));
                 peer.Closed();
-                That(Settings(fixture) == stored && Assets(fixture) == assets, "设置SQL失败关闭连接且不改变旧值及其他表");
+                That(Settings(fixture, timings) == stored && Assets(fixture, timings) == assets, "设置SQL失败关闭连接且不改变旧值及其他表");
             }
             finally
             {
@@ -164,10 +180,15 @@ internal static class ClientSettingsTcpTests
             Select(peer, 0, shared, first);
             Exit(peer);
         }
-        FirstEntry(fixture);
-        HotkeyScope(fixture);
-        QuickChatScope(fixture);
-        await CharacterScopeAsync(fixture);
+        accountPhase.Dispose();
+        using (timings.Measure("FirstEntry"))
+            FirstEntry(fixture, timings);
+        using (timings.Measure("HotkeyScope"))
+            HotkeyScope(fixture, timings);
+        using (timings.Measure("QuickChatScope"))
+            QuickChatScope(fixture, timings);
+        using (timings.Measure("character-scope"))
+            await CharacterScopeAsync(fixture, timings);
         using (var peer = Open(fixture, HotkeyAccount))
         {
             SelectHotkeys(peer, 0, 0, CommonKeys);
@@ -177,12 +198,13 @@ internal static class ClientSettingsTcpTests
             SelectHotkeys(peer, 2, 1, CreatorKeys);
             Exit(peer);
         }
-        await fixture.StopAsync();
+        using (timings.Measure("stop"))
+            await fixture.StopAsync();
         That(fixture.Query("PRAGMA user_version") is [[long version]] && version == DfoServer.Persistence.SqliteMigrations.CurrentVersion && fixture.Query("PRAGMA integrity_check") is [["ok"]]
             && fixture.Query("PRAGMA foreign_key_check").Length == 0, "设置TCP数据库版本及完整性正常");
     }
 
-    static void FirstEntry(TcpTestFixture fixture)
+    static void FirstEntry(TcpTestFixture fixture, ClientSettingsTimings timings)
     {
         foreach (byte job in Enumerable.Range(0, 16).Select(value => (byte)value))
         {
@@ -196,7 +218,7 @@ internal static class ClientSettingsTcpTests
             That(fixture.Query("SELECT count(*) FROM account_client_settings WHERE account=$p0", account) is [[0L]] &&
                 fixture.Query("SELECT count(*) FROM character_game_settings WHERE character_id=$p0", peer.Id) is [[0L]],
                 "尚未回送197时，预载不主动将合成标记写入存档");
-            string assets = Assets(fixture);
+            string assets = Assets(fixture, timings);
             if (job == 0)
             {
                 byte[] marker = new byte[204];
@@ -218,7 +240,7 @@ internal static class ClientSettingsTcpTests
                 Save(peer, 197, main);
                 peer.Barrier();
                 CheckGame(fixture, account, main);
-                That(Assets(fixture) == assets, "首次及后续UI保存保持角色revision和其他资产不变");
+                That(Assets(fixture, timings) == assets, "首次及后续UI保存保持角色revision和其他资产不变");
                 ReturnSelection(peer);
                 Select(peer, 0, main, combos: combos);
             }
@@ -233,7 +255,7 @@ internal static class ClientSettingsTcpTests
         peer.Barrier();
     }
 
-    static void HotkeyScope(TcpTestFixture fixture)
+    static void HotkeyScope(TcpTestFixture fixture, ClientSettingsTimings timings)
     {
         using (var peer = Open(fixture, HotkeyAccount))
         {
@@ -241,11 +263,11 @@ internal static class ClientSettingsTcpTests
             peer.Create("KeyMage", 3);
             peer.Create("KeyCreator", 10);
             peer.Select();
-            string assets = Assets(fixture);
+            string assets = Assets(fixture, timings);
             Save(peer, 198, CommonKeys);
             peer.Barrier();
             That(fixture.Query("SELECT profile,hex(hotkeys) FROM account_hotkey_settings WHERE account=$p0", HotkeyAccount)
-                is [[0L, string text]] && text == Convert.ToHexString(CommonKeys) && Assets(fixture) == assets,
+                is [[0L, string text]] && text == Convert.ToHexString(CommonKeys) && Assets(fixture, timings) == assets,
                 "198真实分派静默保存账号键位，不回推454或改变角色资产");
             Save(peer, 198, CommonKeys);
             peer.Barrier();
@@ -269,13 +291,13 @@ internal static class ClientSettingsTcpTests
         using (var peer = Open(fixture, HotkeyAccount))
         {
             SelectHotkeys(peer, 0, 0, CommonKeys);
-            string old = fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile"), assets = Assets(fixture);
+            string old = fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile"), assets = Assets(fixture, timings);
             fixture.Sql("CREATE TRIGGER hotkey_tcp_fail BEFORE UPDATE ON account_hotkey_settings BEGIN SELECT RAISE(ABORT,'hotkey failure'); END");
             try
             {
                 Save(peer, 198, CreatorKeys);
                 peer.Closed();
-                That(fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile") == old && Assets(fixture) == assets,
+                That(fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile") == old && Assets(fixture, timings) == assets,
                     "198 SQL失败无占位成功，保留原键位和角色资产");
             }
             finally { fixture.Sql("DROP TRIGGER hotkey_tcp_fail"); }
@@ -294,7 +316,7 @@ internal static class ClientSettingsTcpTests
 
     const string QuickChatAccount = "chatowner";
 
-    static void QuickChatScope(TcpTestFixture fixture)
+    static void QuickChatScope(TcpTestFixture fixture, ClientSettingsTimings timings)
     {
         byte[] main = Payload(ClientSettingsService.GameOptionLength, 41);
         byte[] bank0 = Payload(ClientSettingsService.QuickChatLength, 43), bank1 = Payload(ClientSettingsService.QuickChatLength, 151);
@@ -305,11 +327,11 @@ internal static class ClientSettingsTcpTests
             peer.Select();
             Save(peer, 197, main);
             peer.Barrier();
-            string assets = Assets(fixture);
+            string assets = Assets(fixture, timings);
             peer.Send(368, [0, .. Blob(bank0)]);
             peer.Barrier();
             That(fixture.Query("SELECT bank,hex(quick_chat) FROM account_quick_chat WHERE account=$p0 ORDER BY bank", QuickChatAccount)
-                is [[0L, string text]] && text == Convert.ToHexString(bank0) && Assets(fixture) == assets,
+                is [[0L, string text]] && text == Convert.ToHexString(bank0) && Assets(fixture, timings) == assets,
                 "368真实分派静默保存银行0完整300B，不回包、不写主设置或角色资产");
             peer.Send(368, [1, .. Blob(bank1)]);
             peer.Barrier();
@@ -383,7 +405,7 @@ internal static class ClientSettingsTcpTests
         peer.Barrier();
     }
 
-    static async Task CharacterScopeAsync(TcpTestFixture fixture)
+    static async Task CharacterScopeAsync(TcpTestFixture fixture, ClientSettingsTimings timings)
     {
         const string account = "scopeowner";
         byte[] mainA = TypedMain(0, 10, 20, 30, 40), mainB = TypedMain(15, 100, 90, 80, 70);
@@ -400,11 +422,11 @@ internal static class ClientSettingsTcpTests
             peer.Create("ScopeTwo");
             idB = peer.Id;
             peer.Select();
-            string assets = Assets(fixture);
+            string assets = Assets(fixture, timings);
             SavePair(peer, mainA, roleA, 6);
             CheckGame(fixture, account, mainA);
             CheckRoleMain(fixture, idA, account, mainA, roleA);
-            That(Assets(fixture) == assets, "八项角色设置保存不改变角色及资产表");
+            That(Assets(fixture, timings) == assets, "八项角色设置保存不改变角色及资产表");
 
             ReturnSelection(peer);
             // 新角色没有Main快照，首次只使用当前账号初值。
@@ -464,10 +486,12 @@ internal static class ClientSettingsTcpTests
             Select(peer, 1, mainA, roleB, mainB);
             Exit(peer);
         }
-        string saved = Settings(fixture);
-        await fixture.StopAsync();
-        await fixture.StartAsync("role-restart", isolatedProcess: true);
-        That(Settings(fixture) == saved, "四复选项及四透明度分角色存档在进程重启后完整保留");
+        string saved = Settings(fixture, timings);
+        using (timings.Measure("stop"))
+            await fixture.StopAsync();
+        using (timings.Measure("process-restart"))
+            await fixture.StartAsync("role-restart", isolatedProcess: true);
+        That(Settings(fixture, timings) == saved, "四复选项及四透明度分角色存档在进程重启后完整保留");
         using (var peer = Open(fixture, account))
         {
             Select(peer, 0, mainA, roleA, mainA);
@@ -607,12 +631,14 @@ internal static class ClientSettingsTcpTests
     static void CheckCharacter(TcpTestFixture fixture, ushort id, string account, byte[] payload) =>
         That(fixture.Query("SELECT account,hex(character_options) FROM character_client_settings WHERE character_id=$p0", id) is var rows
             && rows.Length == 1 && Equals(rows[0][0], account) && Equals(rows[0][1], Convert.ToHexString(payload)), "独立读库核对角色归属及完整设置字节");
-    static string Settings(TcpTestFixture fixture) => fixture.Snapshot("SELECT * FROM account_client_settings ORDER BY account") +
-        fixture.Snapshot("SELECT * FROM character_client_settings ORDER BY character_id") +
-        fixture.Snapshot("SELECT * FROM character_game_settings ORDER BY character_id") +
-        fixture.Snapshot("SELECT * FROM account_hotkey_settings ORDER BY account,profile") +
-        fixture.Snapshot("SELECT * FROM account_quick_chat ORDER BY account,bank");
-    static string Assets(TcpTestFixture fixture) => JsonSerializer.Serialize(fixture.Query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat') ORDER BY name")
-        .Select(row => fixture.Query($"SELECT * FROM [{row[0]}] ORDER BY rowid")));
+    static string Settings(TcpTestFixture fixture, ClientSettingsTimings timings)
+    {
+        using var measurement = timings.Measure("settings-snapshot");
+        return ClientSettingsSnapshots.Capture(fixture.Database, assets: false);
+    }
+    static string Assets(TcpTestFixture fixture, ClientSettingsTimings timings)
+    {
+        using var measurement = timings.Measure("assets-snapshot");
+        return ClientSettingsSnapshots.Capture(fixture.Database, assets: true);
+    }
 }

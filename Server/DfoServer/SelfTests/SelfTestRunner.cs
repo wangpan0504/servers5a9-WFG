@@ -77,6 +77,8 @@ internal static class SelfTestRunner
         Testing.TcpTestFixtureProcessTests.Run();
         StartupStageTests.Run();
         await Testing.TcpTestArtifactsTests.RunAsync();
+        Testing.TcpTestReceiptsTests.Run();
+        Testing.ClientSettingsSnapshotsTests.Run();
         CashShopTests.RunCore();
         PremiumContractTests.RunCore();
         GrowthCubeContractTests.RunCore();

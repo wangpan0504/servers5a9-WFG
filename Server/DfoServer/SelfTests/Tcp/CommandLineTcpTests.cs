@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace DfoServer.Testing;
 
 internal static class CommandLineTcpTests
@@ -23,6 +25,16 @@ internal static class CommandLineTcpTests
         string directHelp = await fixture.CliAsync(null, "--help");
         TestCheck.That(!directHelp.Contains("[startup]"), "help stdout is not polluted by service logs");
         TestCheck.That(directHelp.Contains("--server-ip", StringComparison.Ordinal) && directHelp.Contains("Data/Pvf/Script.pvf", StringComparison.Ordinal), "direct CLI help works without JSON or resources");
+
+        string registry = await fixture.CliAsync(null, "--selftest-tcp-list-json");
+        using (var parsed = JsonDocument.Parse(registry))
+        {
+            TestCheck.That(parsed.RootElement.GetProperty("Execution").GetString() == "not-run" &&
+                parsed.RootElement.GetProperty("DefaultGroups").GetArrayLength() > 0,
+                "真实CLI在无PVF目录输出纯JSON注册表，不假称执行");
+        }
+        TestCheck.That(!Directory.Exists(fixture.Options.DataDirectory) && !File.Exists(Path.Combine(fixture.Options.LogDirectory, "ready.json")),
+            "注册表命令不创建数据库或发布监听就绪");
 
         string text = new string('x', 128 * 1024) + "日志尾部";
         string output = Path.Combine(fixture.Root, "output-copy.txt");

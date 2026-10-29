@@ -50,6 +50,12 @@ public static class ServerApplication
             Console.WriteLine(ServerCommand.Usage);
             return 0;
         }
+        // 注册清单不经过ServerOptions、PVF、SQL或监听装配，不表示执行通过。
+        if (command.Kind == ServerCommandKind.TcpTestList)
+        {
+            Console.WriteLine(TcpRegressionTests.RegistryJson());
+            return 0;
+        }
         // 无主机参数时只打印用法，不解析监听端口、不打开数据库、不连接。
         if (command.Kind == ServerCommandKind.AntonProbe && AntonTcpProbe.IsUsageOnly(command.Arguments))
         {

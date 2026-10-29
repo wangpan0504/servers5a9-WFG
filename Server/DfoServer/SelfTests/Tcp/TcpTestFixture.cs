@@ -158,11 +158,11 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         string prefix = Path.Combine(Root, "cli", (++cliSequence).ToString("D3"));
         Directory.CreateDirectory(Path.GetDirectoryName(prefix)!);
         var start = StartInfo(arguments);
-        if (arguments.Length == 1 && arguments[0] == "--help")
+        if (arguments.Length == 1 && arguments[0] is "--help" or "--selftest-tcp-list-json")
         {
             start.ArgumentList.Clear();
             start.ArgumentList.Add(File.Exists(Path.Combine(Root, "S5A9Server.exe")) ? "--server" : Path.Combine(Root, "DfoServer.dll"));
-            start.ArgumentList.Add("--help");
+            start.ArgumentList.Add(arguments[0]);
         }
         using var child = Process.Start(start) ?? throw new IOException("CLI process did not start");
         var stdout = CopyOutputAsync(child.StandardOutput, prefix + ".stdout.txt");
