@@ -16,24 +16,26 @@ internal sealed class AvatarEmblemHandler(InventoryAvatarEmblemService service,
 
     async Task<CommandResult> Use(GameConnectionContext context, Packet packet)
     {
+        var capture = context.Owner.Execute(() =>
+            (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
+        bool CapturedCurrent() => context.Owner.Execute(() => ReferenceEquals(capture.Selected, context.Session.Selected) &&
+            capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);
         AvatarEmblemRequest request;
         try { request = AvatarEmblemRequests.Read(packet.Body); }
         catch (InvalidDataException)
         {
             log.Write("avatar_emblem", new { Connection = context.Id, Length = packet.Body.Length, Accepted = false, Reason = "malformed" });
-            await context.Reply(CmdPacketType.USE_EMBLEM, AvatarEmblemPackets.Failure(), "avatar_emblem_malformed");
+            await context.Reply(CmdPacketType.USE_EMBLEM, AvatarEmblemPackets.Failure(1), "avatar_emblem_malformed",
+                () => capture.Selected is not null && CapturedCurrent());
             return CommandResult.Handled;
         }
-        var capture = context.Owner.Execute(() =>
-            (context.Session.Selected, context.Session.SelectionEpoch, context.Session.Phase));
         AvatarEmblemReceipt? receipt = null;
         string? rejection = null;
         var result = context.BlocksTownActions ? InventoryResult.Reject(InventoryAvatarEmblemService.Rejection) :
             context.Session.PlanAndCommitInventory(character => service.Use(character, request, out receipt, out rejection),
                 InventoryAvatarEmblemService.Rejection);
         bool Guard() => result.Receipt is { } committed ? context.Session.CanPublishInventory(committed) :
-            context.Owner.Execute(() => ReferenceEquals(capture.Selected, context.Session.Selected) &&
-                capture.SelectionEpoch == context.Session.SelectionEpoch && capture.Phase == context.Session.Phase);
+            CapturedCurrent();
         log.Write("avatar_emblem", new
         {
             Connection = context.Id, List = (byte)request.Target.List, Slot = request.Target.Index,

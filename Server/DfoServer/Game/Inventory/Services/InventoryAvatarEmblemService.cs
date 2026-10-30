@@ -4,31 +4,49 @@ using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed class InventoryAvatarEmblemService(ItemCatalog items, TimeProvider? clock = null)
+internal sealed class InventoryAvatarEmblemService
 {
-    internal const ushort Rejection = 4;
+    internal const ushort Rejection = 1;
+    readonly Func<int, AvatarEmblemTargetDescriptor?> targetLookup;
+    readonly Func<int, AvatarEmblemMaterialDescriptor?> materialLookup;
+    readonly TimeProvider clock;
+
+    public InventoryAvatarEmblemService(ItemCatalog items, TimeProvider? clock = null)
+        : this(items.AvatarEmblemTarget, items.AvatarEmblemMaterial, clock)
+    {
+    }
+
+    public InventoryAvatarEmblemService(Func<int, AvatarEmblemTargetDescriptor?> targetLookup,
+        Func<int, AvatarEmblemMaterialDescriptor?> materialLookup, TimeProvider? clock = null)
+    {
+        this.targetLookup = targetLookup;
+        this.materialLookup = materialLookup;
+        this.clock = clock ?? TimeProvider.System;
+    }
 
     public InventoryResult Use(Character character, AvatarEmblemRequest request,
         out AvatarEmblemReceipt? receipt, out string? rejection)
     {
         receipt = null;
         rejection = "target";
-        long now = (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+        long now = clock.GetUtcNow().ToUnixTimeSeconds();
         var before = character.Inventory;
         var target = before.Find(request.Target);
         if (request.Target.List is not (InventoryListType.Avatar or InventoryListType.Equipment) ||
-            target is not { Uid: > 0, Core.Kind: ItemKind.Avatar, Core.EquipmentLockId: 0, Avatar: not null } ||
+            target is not { Uid: > 0, Core.Kind: ItemKind.Avatar, Avatar: not null } ||
             target.Core.ItemId != request.TargetItemId || target.IsExpired(now) ||
             !ItemSlotBoundService.Allows(before, target.Position, ItemKind.Avatar) ||
             request.Emblems.IsDefault || request.Emblems.Length is < 1 or > 5)
             return InventoryResult.Reject(Rejection);
+        if (target.Core.EquipmentLockId != 0) return InventoryResult.Reject(214);
         try
         {
-            var template = items.Get(target.Core.ItemId);
-            if (template.Id != target.Core.ItemId || template.Kind != ItemKind.Avatar)
+            var template = targetLookup(target.Core.ItemId);
+            if (template is null || template.ItemId != target.Core.ItemId || template.Kind != ItemKind.Avatar)
                 return InventoryResult.Reject(Rejection);
             var detail = target.Avatar;
             AvatarSocket[] sockets = [detail.Socket0, detail.Socket1, detail.Socket2, detail.Socket3, detail.Socket4];
+            if (sockets.All(socket => socket.Type == 0)) return InventoryResult.Reject(4);
             var usedSockets = new HashSet<byte>();
             var materials = new Dictionary<short, (InventoryItem Item, int Count)>();
             var materialOrder = new List<short>();
@@ -41,13 +59,15 @@ internal sealed class InventoryAvatarEmblemService(ItemCatalog items, TimeProvid
                     return InventoryResult.Reject(Rejection);
                 rejection = "material";
                 var material = before.Find(entry.Material);
-                if (material is not { Uid: > 0, Core.Kind: ItemKind.Emblem, Core.Count: > 0, Core.EquipmentLockId: 0 } ||
+                if (material is not { Uid: > 0, Core.Kind: ItemKind.Emblem, Core.Count: > 0 } ||
                     material.Core.ItemId != entry.MaterialItemId || material.IsExpired(now) ||
                     !ItemSlotBoundService.Allows(before, material.Position, ItemKind.Emblem))
                     return InventoryResult.Reject(Rejection);
-                var emblem = items.Get(material.Core.ItemId);
-                if (emblem.Id != material.Core.ItemId || emblem.Kind != ItemKind.Emblem ||
-                    (emblem.EmblemTargetSockets & sockets[entry.SocketIndex].Type) == 0)
+                if (material.Core.EquipmentLockId != 0) return InventoryResult.Reject(214);
+                var emblem = materialLookup(material.Core.ItemId);
+                if (emblem is null || emblem.ItemId != material.Core.ItemId || emblem.Kind != ItemKind.Emblem ||
+                    (emblem.SocketMask & sockets[entry.SocketIndex].Type) == 0 ||
+                    !AllowsTarget(emblem, template.OwnFlags16))
                 {
                     rejection = "incompatible-emblem";
                     return InventoryResult.Reject(Rejection);
@@ -56,14 +76,14 @@ internal sealed class InventoryAvatarEmblemService(ItemCatalog items, TimeProvid
                 if (required > material.Core.Count)
                 {
                     rejection = "insufficient-emblem";
-                    return InventoryResult.Reject(Rejection);
+                    return InventoryResult.Reject(17);
                 }
                 if (required == 1) materialOrder.Add(entry.MaterialSlot);
                 materials[entry.MaterialSlot] = (material, required);
                 if (material.ExpireTime > 0 && (expiry is null || material.ExpireTime < expiry))
                     expiry = material.ExpireTime;
                 // 保留孔型、克隆来源及染色，仅覆盖客户端明确选择的孔；旧徽章不返还。
-                sockets[entry.SocketIndex] = sockets[entry.SocketIndex] with { EmblemId = emblem.Id };
+                sockets[entry.SocketIndex] = sockets[entry.SocketIndex] with { EmblemId = emblem.ItemId };
             }
             var after = before;
             foreach (short slot in materialOrder)
@@ -94,4 +114,15 @@ internal sealed class InventoryAvatarEmblemService(ItemCatalog items, TimeProvid
             return InventoryResult.Reject(Rejection);
         }
     }
+
+    static bool AllowsTarget(AvatarEmblemMaterialDescriptor material, ushort targetFlags)
+    {
+        if (!material.HasMetadata35 || material.PrimaryIndices.IsDefault) return false;
+        if (material.PrimaryIndices.IsEmpty) return true;
+        return Intersects(material.PrimaryIndices, targetFlags) ||
+            !material.SecondaryIndices.IsDefault && Intersects(material.SecondaryIndices, targetFlags);
+    }
+
+    static bool Intersects(System.Collections.Immutable.ImmutableArray<int> indices, ushort targetFlags) =>
+        indices.Any(index => index is >= 0 and < 16 && (targetFlags & (1 << index)) != 0);
 }

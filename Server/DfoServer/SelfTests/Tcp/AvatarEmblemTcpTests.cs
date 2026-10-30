@@ -14,6 +14,7 @@ internal static class AvatarEmblemTcpTests
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
         var items = resources.ItemResources.Items;
+        Inventory.AvatarEmblemQualificationResourceTests.Run(items);
         var emblem = PvfScript.List(resources.Archive.ReadText("stackable/stackable.lst"))
             .Where(row => row.Value.Contains("emblem", StringComparison.OrdinalIgnoreCase))
             .Select(row => items.Get(row.Key)).First(item => item.Kind == ItemKind.Emblem && item.EmblemTargetSockets == 1);
@@ -39,14 +40,14 @@ internal static class AvatarEmblemTcpTests
         using (var peer = Open(fixture))
         {
             string beforeSelect = Snapshot();
-            peer.Send(201, pair); peer.Expect(1, 201, [0, 4, 0]);
+            peer.Send(201, pair); peer.Expect(1, 201, [0, 1, 0]);
             That(beforeSelect == Snapshot(), "未选角CMD201拒绝且不修改资产");
             peer.Select(); peer.Barrier();
             string before = Snapshot();
             foreach (byte[] bad in new[] { pair[..^1], pair.Concat(new byte[] { 0 }).ToArray(),
                 Request(skin, emblem.Id, 0, 0), Request(skin, emblem.Id, 2), Request(skin, emblem.Id + 1, 0) })
             {
-                peer.Send(201, bad); peer.Expect(1, 201, [0, 4, 0]); peer.Barrier();
+                peer.Send(201, bad); peer.Expect(1, 201, [0, 1, 0]); peer.Barrier();
                 That(before == Snapshot(), "畸形、重复孔、关闭孔及材料模板不符拒绝，连接保持可用");
             }
             fixture.Sql("CREATE TRIGGER fail_avatar_emblem_late BEFORE INSERT ON inventory_audit_log " +
@@ -64,7 +65,7 @@ internal static class AvatarEmblemTcpTests
             That(Identity() == identity && MaterialCount() == 0 && SocketCount() == 5,
                 "皮肤、光环、已穿戴普通装扮共用入口，五件材料恰好耗尽且不重建目标");
             string committed = Snapshot();
-            peer.Send(201, pair); peer.Expect(1, 201, [0, 4, 0]); peer.Barrier();
+            peer.Send(201, pair); peer.Expect(1, 201, [0, 1, 0]); peer.Barrier();
             That(committed == Snapshot(), "材料耗尽后重发不增加revision、不重复消费或篡改徽章");
         }
         await fixture.StopAsync();
