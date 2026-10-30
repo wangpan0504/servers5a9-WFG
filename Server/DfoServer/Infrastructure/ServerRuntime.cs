@@ -254,11 +254,12 @@ internal static class ServerRuntime
         var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, clock);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, itemResources.Items.Get);
+        var knightShields = new InventoryKnightShieldService(itemResources.Items.Get, itemResources.KnightShields, clock);
         var promotionPageService = enablePromotionPage && promotions is not null
             ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, itemResources.Items.Get) : null;
         var promotionPage = promotionPageService is not null
             ? new PromotionPageProjection(promotions!, promotionPageService) : null;
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items);
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, settingsProjection, questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService, items: itemResources.Items, knightShields: knightShields);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
@@ -619,7 +620,8 @@ internal static class ServerRuntime
                 itemResources.EpicPieces), collectBoxProjection, inventoryProjection, clock),
             new EpicProductionHandler(epicProduction,epicAbilities,epicPolicy,itemResources.Items,itemResources.GoldLimits,itemResources.EpicPieces,
                 epicProductionProjection,inventoryProjection,clock),
-            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log, tradeHandler),
+            new InventoryHandler(new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log, tradeHandler,
+                knightShields),
             new CubeContractHandler(new CubeContractService(itemResources.Contracts), inventoryProjection, log, clock),
             new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables, clock), log, tutorials, itemResources.Items, inventoryProjection,
                 new InventoryPremiumContractUseService(itemResources.Items, itemResources.Contracts, clock), creatures, creatureProjection, projection,

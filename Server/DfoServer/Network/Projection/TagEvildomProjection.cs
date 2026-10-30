@@ -110,7 +110,8 @@ internal sealed class TagEvildomProjection(ITagEvildomConfigurationStore store,
                     context.Session.CanPublishTagEvildomCharacters(Store, characters);
             }
             // 属性虚弱、名称装饰与装备到期均绑定同一构包时点；不为普通相对秒倒计时每秒重新加载全资产。
-            byte[] characterInfo = TagEvildomPackets.CharacterInfo(snapshot.CharacterId, characters.Standby, stats.Compute(characters.Standby), capturedTime);
+            byte[] characterInfo = TagEvildomPackets.CharacterInfo(snapshot.CharacterId, characters.Standby, stats.Compute(characters.Standby), capturedTime,
+                town?.KnightShieldDeck(characters.Standby));
             // 1393写player+1C的运行metadata，1677仅写player+8配置map，不能替代；1393必须在1394之前。
             await context.Notify(NotiPacketType.TAG_TOURNAMENT_TEAM_INFO,
                 TagEvildomPackets.ActiveTeam(snapshot), "tag_evildom_active_team", () =>

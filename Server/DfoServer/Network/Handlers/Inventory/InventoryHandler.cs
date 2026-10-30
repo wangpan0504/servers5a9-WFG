@@ -9,12 +9,14 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed partial class InventoryHandler(InventoryService inventory, InventoryProjection projection,
-    ServerLog? log = null, TradeHandler? trade = null) : IGameCommandModule
+    ServerLog? log = null, TradeHandler? trade = null, InventoryKnightShieldService? knightShields = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.DECREASE_DURABILITY, DecreaseDurabilityAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.MOVE_ITEMSPACE, MoveAsync, nameof(InventoryHandler));
+        if (knightShields is not null)
+            commands.Register(CmdPacketType.CHANGE_DECK_INFO, ChangeShieldDeckAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.SORT_ITEM, SortAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.DELETE_ITEM, DeleteAsync, nameof(InventoryHandler));
         commands.Register(CmdPacketType.DROP_ITEM, DiscardAsync, nameof(InventoryHandler));
@@ -28,8 +30,10 @@ internal sealed partial class InventoryHandler(InventoryService inventory, Inven
 
     async Task<CommandResult> MoveAsync(GameConnectionContext context, Packet packet)
     {
-        if (trade is not null && await trade.TryMoveAsync(context, packet)) return CommandResult.Handled;
         var request = InventoryRequests.Move(packet.Body);
+        if (knightShields is not null && InventoryKnightShieldService.Recognizes(request))
+            return await MoveShieldAsync(context, request);
+        if (trade is not null && await trade.TryMoveAsync(context, packet)) return CommandResult.Handled;
         var result = context.Session.MutateInventory(
             character => inventory.Move(character, request, context.Session.LoginWearRestatementWindowOpen),
             requireTown: IsCargo(request.Source.List) || IsCargo(request.Destination.List));

@@ -9,7 +9,8 @@ namespace DfoServer.Network.Builders;
 
 internal static class TagEvildomPackets
 {
-    public static byte[] CharacterInfo(ushort ownerUid, Character standby, CharacterStats attributes, DateTimeOffset now)
+    public static byte[] CharacterInfo(ushort ownerUid, Character standby, CharacterStats attributes, DateTimeOffset now,
+        DfoServer.Game.Inventory.Models.KnightShieldDeck? knightShieldDeck = null)
     {
         standby.Learning.Validate();
         if (!standby.Learning.Initialized) throw new InvalidDataException("TAG备用角色须有真实已初始化的技能树");
@@ -47,8 +48,8 @@ internal static class TagEvildomPackets
             writer.Write(skill.Slot); writer.Write(skill.Id); writer.Write(skill.Level);
         }
         writer.Write(0u); // 与普通Player的02676510空列表相同。
-        // 当前未启用守护者盾deck；原生缺key返回0且清槽用0。未来启用时须取真实deck，不能固定清空。
-        for (int slot = 0; slot < 5; slot++) writer.Write(0u);
+        // 028C7A17只在TAG分支读取五个i32；普通本人Player使用独立NOTI580初始化。
+        writer.Write(KnightShieldPackets.Deck(knightShieldDeck ?? standby.Inventory.ShieldDeck));
         EquipmentProtocolWriter.NameTag(writer, standby.Inventory, now.ToUnixTimeSeconds());
         // 未启用Privilege Service，与普通Actor state[88]=0一致；不能拿黑钻/达人期限代替。
         writer.Write(0L);

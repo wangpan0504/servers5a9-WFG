@@ -8,6 +8,7 @@ namespace DfoServer.Infrastructure;
 internal sealed class ItemResources
 {
     public ItemCatalog Items { get; }
+    public KnightShieldCatalog KnightShields { get; }
     public GoldLimitCatalog GoldLimits { get; }
     public CargoCatalog Cargo { get; }
     public GameWorld.Guilds.GuildCargoCatalog GuildCargo { get; }
@@ -106,6 +107,8 @@ internal sealed class ItemResources
             Contracts.RecognizedItems.Union(Boosters.DirectActivationItems).ToHashSet(),
             Contracts.ByItem.Where(row => Contracts.TryAcquisitionContract(row.Key, out _)).ToDictionary(), creatures: Creatures, echon: Echon,
             newEchon: NewEchon, acquisitionCargo: Cargo.AcquisitionItems);
+        // 匹配客户端02160930加载器固定读取ShieldWindowNewData.etc，不能并集旧任务表。
+        KnightShields = KnightShieldCatalog.Load(archive, KnightShieldCatalog.CurrentPath, Items);
         epicPieceDrops = new(() => new(EpicPieces, Items.Get));
         expertJobs = new(() => ExpertJobScriptCatalog.Load(archive, Items, stackable));
         CollectBoxes = new(archive, Items);

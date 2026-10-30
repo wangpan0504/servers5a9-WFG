@@ -287,7 +287,21 @@ internal static class SqliteMigrations
         new(156, "角色更名卡待改名资格", static (db, tx) => Execute(db, tx, CharacterRenameCardSchema.Definition)),
         new(157, "账号聊天表情指令", static (db, tx) => Execute(db, tx, ChatEmoticonSchema)),
         new(158, "账号最近聊天表情", static (db, tx) => Execute(db, tx, RecentEmoticonSchema)),
+        new(159, "守护者五位盾牌配置", AddKnightShieldDeckColumn),
     ];
+
+    const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
+
+    static void AddKnightShieldDeckColumn(SqliteConnection db, SqliteTransaction tx)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='knight_shield_deck'";
+        if (query.ExecuteScalar() is 0L) Execute(db, tx, "ALTER TABLE characters ADD COLUMN " + KnightShieldDeckColumn);
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='characters'";
+        if (query.ExecuteScalar() is not string sql || !sql.Contains(KnightShieldDeckColumn, StringComparison.Ordinal))
+            throw new InvalidDataException("守护者盾牌配置列结构不兼容");
+    }
 
     static void AddMileageShopState(SqliteConnection db, SqliteTransaction tx)
     {
@@ -2532,6 +2546,7 @@ internal static class SqliteMigrations
         "SELECT daily_booster_usage FROM characters LIMIT 0",
         "SELECT weapon_skin_state FROM characters LIMIT 0",
         "SELECT avatar_preset_state FROM characters LIMIT 0",
+        "SELECT knight_shield_deck FROM characters LIMIT 0",
         "SELECT [account],[currency_kind],[balance] FROM [account_currency_balances] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[currency_kind],[account_scope],[balance_before],[balance_after] FROM [currency_audit_log] LIMIT 0",
         "SELECT [account],[revision],[capacity],[gold] FROM [account_cargo] LIMIT 0",

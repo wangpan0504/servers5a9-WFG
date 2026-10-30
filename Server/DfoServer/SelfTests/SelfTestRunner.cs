@@ -106,6 +106,7 @@ internal static class SelfTestRunner
         TalismanInventoryTests.RunCore();
         CreatureSkinTests.RunCore();
         InventoryExpansionTests.RunCore();
+        KnightShieldTests.RunCore();
         CreatureEggTests.RunCore();
         BoosterCreatureTests.RunCore();
         BoosterNativeSelectionTests.RunCore();
@@ -434,6 +435,7 @@ internal static class SelfTestRunner
         CreatureEggTests.RunResources(itemResources.CreatureEggs, itemResources.Items);
         CreatureSkinMoveTests.RunResources(itemResources.Items);
         InventoryExpansionTests.RunResources(itemResources.Items);
+        KnightShieldTests.RunResources(pvf, itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
         EmblemCompoundTests.RunResources(itemResources);
         DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunResources(itemResources);

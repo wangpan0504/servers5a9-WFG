@@ -53,6 +53,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] AvailableQuests { get; private set; } = [];
     public byte[] CompletedQuestHistory { get; private set; } = [];
     public SkinStorageKey[] RecentSkins { get; private set; } = [];
+    public byte[] KnightShieldDeckBody { get; private set; } = [];
     public ushort Id { get; internal set; }
 
     internal DfoServer.GameWorld.Towns.Location SavedTownPosition()
@@ -956,7 +957,7 @@ internal sealed partial class TcpPeer : IDisposable
         ushort[]? tagEvildom = null, byte[][]? echonSets = null, byte[]? pvpTotalTeam = null, bool premiumPcRoom = false,
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
-        byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null)
+        byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null, int[]? knightShieldDeck = null)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1017,6 +1018,7 @@ internal sealed partial class TcpPeer : IDisposable
         SkillInfo = [];
         SceneSkillInfo = [];
         CompletedQuestHistory = [];
+        KnightShieldDeckBody = [];
         CollectBoxes = [];
         DungeonEnterCounts = [];
         for (int index = 2; index < afterCargo; index++)
@@ -1062,6 +1064,23 @@ internal sealed partial class TcpPeer : IDisposable
             }
             TestCheck.That(packet.Kind == expected[index].Kind && packet.Opcode == expected[index].Opcode,
                 $"entry packet order at {index}");
+            if (packet is { Kind: 0, Opcode: 356 })
+            {
+                // Actor头部为5B+116B状态+u16角色号+u32名字字节数，名字后才是职业。
+                var actor = middle.Single(row => row is { Kind: 0, Opcode: 2 } && row.Body[0] == 0).Body;
+                int jobOffset = checked(127 + (int)U32(actor, 123));
+                TestCheck.That(jobOffset < actor.Length, "盾牌初始化的职业必须来自完整Actor");
+                byte job = actor[jobOffset];
+                if (fixture is not null)
+                    TestCheck.That(job == Convert.ToByte(fixture.Query("SELECT job FROM characters WHERE id=$p0", Id).Single()[0]),
+                        "Actor职业与选中角色真实存档一致");
+                if (job == 12)
+                {
+                    int[] deck = knightShieldDeck ?? (fixture is not null ? System.Text.Json.JsonSerializer.Deserialize<int[]>(
+                        (string)fixture.Query("SELECT knight_shield_deck FROM characters WHERE id=$p0", Id).Single()[0]!)! : new int[5]);
+                    KnightShieldDeckBody = Expect(0, 580, Build(writer => { foreach (int item in deck) writer.Write(item); })).Body;
+                }
+            }
             if (packet is { Kind: 0, Opcode: 2 } && packet.Body is [1, ..])
             {
                 PlayerBody = packet.Body;

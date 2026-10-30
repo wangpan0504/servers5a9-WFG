@@ -18,6 +18,9 @@ internal static class InventoryMoveService
     public static InventoryResult Plan(Character character, InventoryMoveRequest request, ItemCatalog catalog, long utcSeconds,
         PremiumContractCatalog? contracts = null, bool loginWearRestatement = false)
     {
+        if (InventoryKnightShieldService.Recognizes(request) || character.Inventory.ShieldDeck.Items[0] != 0 &&
+            (request.Source == InventoryKnightShieldService.MainSlot || request.Destination == InventoryKnightShieldService.MainSlot))
+            return InventoryResult.Reject(CannotMoveItem);
         if (request.Source == new InventorySlot(InventoryListType.Equipment, 30) ||
             request.Destination == new InventorySlot(InventoryListType.Equipment, 30))
             return InventoryResult.Reject(CannotMoveItem);
