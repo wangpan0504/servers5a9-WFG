@@ -134,7 +134,7 @@ internal static class SkillLearning
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(definition);
         if (job > 15 || characterLevel is < 1 or > 95 || command.Context > 1 || command.Mode > 1 ||
-            command.Entries is null || command.Entries.Count is < 1 or > 255 ||
+            command.Entries is null || command.Entries.Count > 255 || command.Entries.Count == 0 && command.Mode != 1 ||
             command.Entries.Any(entry => entry is null || entry.Magnitude == 0) ||
             command.Entries.Select(entry => entry.Id).Distinct().Count() != command.Entries.Count)
             return Fail(SkillLearningFailure.InvalidRequest);
@@ -148,6 +148,10 @@ internal static class SkillLearning
         {
             return Fail(SkillLearningFailure.InvalidRequest);
         }
+
+        // 自动方案已一致时仍须确认操作完成；不伪造等级变化，也不为零变化重写技能树。
+        if (command.Entries.Count == 0)
+            return new(SkillLearningFailure.None, current, EmptyChanges());
 
         CharacterSkillTree source = current.Trees.Single(tree => tree.Context == command.Context);
         var working = source.Skills.ToDictionary(skill => skill.Id);

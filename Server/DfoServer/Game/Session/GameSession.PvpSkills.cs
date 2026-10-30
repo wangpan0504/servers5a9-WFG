@@ -48,6 +48,8 @@ internal sealed partial class GameSession
         {
             if(!SkillReady() || SelectionEpoch!=capture.SelectionEpoch || !ReferenceEquals(Selected,expected) ||
                 pendingPvpSkills!=capture.Pending) throw new InvalidOperationException("训练技能原选角或待提交计划失效");
+            if (capture.Pending is null && plan.After == expected.PvpTrainingSkills && plan.ActiveAfter.SequenceEqual(expected.ActiveMainQuests))
+                return plan.Result with {Receipt=new(expected,owner.Generation,SelectionEpoch){Phase=Phase}};
             pendingPvpSkills=(plan,request,capture.SelectionEpoch);
             var committed=repository.CommitPvpTrainingSkills(owner,plan);
             Selected=committed;completed=QuestEligibility.Completed(committed);pendingPvpSkills=null;
