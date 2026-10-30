@@ -1,10 +1,14 @@
+using System.Collections.Immutable;
+using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
+using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
+using DfoServer.Testing.Inventory;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -14,7 +18,11 @@ internal static partial class ConsumableUseTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "consumable-use"), resources: resources);
+        var clock = new DailyBoosterTestClock(new(DateTimeOffset.UtcNow.Date, TimeSpan.Zero));
+        int[] fallbackPotionIds = [490012146, 490012453, 490012695, 490704250, 490704357, 490704395];
+        int[] mappedPotionIds = [10309619, 490011948, 490013034, 490013050, 490013290,
+            490013596, 490014083, 490705069, 490705106, 490705137];
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "consumable-use"), resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
         ushort activeId;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -43,11 +51,18 @@ internal static partial class ConsumableUseTcpTests
             var candidate = CharacterCreation.Prepare("BossPotion", resources.Characters.Get(0), resources.Towns.Room,
                 resources.Towns.InitialReturn, resources.Learning.Get);
             var growth = SelfTestCatalogs.Growth(resources.Archive, resources.Learning);
-            foreach (var (id, name) in new[] { (490705256, "BossPotion"), (490012682, "StrongBoss"), (490705059, "OneBoss") })
+            foreach (var (id, name) in new[] { (490705256, "BossPotion"), (490012682, "StrongBoss"), (490705059, "OneBoss") }
+                .Concat(fallbackPotionIds.Select((id, index) => (id, "BossExtra" + index)))
+                .Concat(mappedPotionIds.Select((id, index) => (id, "BossMapped" + index))))
+            {
+                bool detailed = fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id);
+                var core = InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(id),
+                    detailed ? 2 : id == 490705256 ? 3 : 1, clock.GetUtcNow());
+                if (detailed) core = core with { Marker16 = 44, SortLockFlag = 1 };
                 repository.Create(owner, candidate with { Name = name, Level = 95, InitialLearning = SkillPointLedger.Synchronize(0, 0, 95,
                 candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(95) }, resources.Learning),
-                Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65),
-                    InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(id), id == 490705256 ? 3 : 1))) } });
+                Inventory = candidate.Inventory with { Items = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65), core)) } });
+            }
         }
         await fixture.StartAsync();
         using (var peer = Open(fixture))
@@ -66,21 +81,57 @@ internal static partial class ConsumableUseTcpTests
             That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id) is [[5L]],
                 "断线重连保留实际五次药效，不重复消费或补发");
         }
-        foreach (var (slot, id, count, buff) in new[] { (3, 490012682, 5, 1275), (4, 490705059, 1, 1282) })
+        foreach (var (slot, id, count, buff) in new[] { (3, 490012682, 5, 1275), (4, 490705059, 1, 1282) }
+            .Concat(fallbackPotionIds.Select((id, index) => (index + 5, id, 5, 300)))
+            .Concat(mappedPotionIds.Select((id, index) => (index + 11, id, 5, id == 490705137 ? 1275 : 300))))
         {
+            Character? installed = null;
             using (var peer = Open(fixture))
             {
-                peer.Select((ushort)slot); peer.Barrier();
+                peer.Select((ushort)slot, inventoryNotices: fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id) ? [(1, 713)] : null); peer.Barrier();
+                var beforeUse = fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id) ? Read(peer.Id) : null;
                 Use(peer, 65, 0, id); Accepted(peer, 65, 0, id); peer.Barrier();
                 That(fixture.Query("SELECT json_extract(state_json,'$.Remaining'),json_extract(state_json,'$.Definition.BuffId') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id)
                     is [[var remaining, var kind]] && Equals(remaining, (long)count) && Equals(kind, (long)buff),
-                    "强力五次与普通一次均经真实44消费，保存独立资源效果");
+                    "原三款、六款兼容与十款原映射来源均经真实44消费，保存各自资源效果 " + id);
+                if (beforeUse is not null)
+                {
+                    var source = beforeUse.Inventory.Find(new(InventoryListType.Main, 65))!;
+                    // 固定时钟为UTC零点（北京时间08:00），下个06:00独立换算为本日UTC22:00。
+                    long deadline = new DateTimeOffset(clock.GetUtcNow().UtcDateTime.Date.AddHours(22), TimeSpan.Zero).ToUnixTimeMilliseconds();
+                    That(source.Uid > 0 && source.Core.ItemId == id && source.Core is
+                        { Kind: ItemKind.Consumable, Count: 2, Marker16: 44, SortLockFlag: 1 } &&
+                        source.ExpireTime == (id is 490704395 or 490705069 ? deadline / 1000 : 0),
+                        "补齐来源保留真实日删差异与非零完整核心，不抹去期限 " + id);
+                    var expectedBuff = new BossSelectionBuff(id, count, deadline,
+                        new(buff, 7191, count, [new(92689, buff == 1275 ? 0 : 40),
+                            new(92690, buff == 1275 ? 0 : 40), new(92697, buff == 1275 ? 100 : 20)]));
+                    var expectedInventory = beforeUse.Inventory with
+                    {
+                        Items = beforeUse.Inventory.Items.Select(row => row.Uid == source.Uid
+                            ? row with { Core = row.Core with { Value = 1 } } : row).ToImmutableArray(),
+                        BossSelectionBuff = expectedBuff
+                    };
+                    installed = Read(peer.Id);
+                    That(installed.Revision == beforeUse.Revision + 1 &&
+                        BossSelectionBuff.Same(installed.Inventory.BossSelectionBuff, expectedBuff) &&
+                        JsonSerializer.Serialize(installed.Inventory) == JsonSerializer.Serialize(expectedInventory),
+                        "补齐来源真实44同事务只扣原UID一瓶，完整核心和原期限不变，完整权重/次数/日截止准确且只提交一版 " + id);
+                }
             }
             using (var peer = Open(fixture))
             {
-                peer.Select((ushort)slot); peer.Barrier();
+                peer.Select((ushort)slot, inventoryNotices: fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id) ? [(1, 713)] : null); peer.Barrier();
                 That(fixture.Query("SELECT json_extract(state_json,'$.Remaining') FROM character_boss_selection_buff WHERE character_id=$p0", peer.Id)
                     is [[var remaining]] && Equals(remaining, (long)count), "新药型重登保持真实次数，不赠药或续期");
+                if (installed is not null)
+                {
+                    var restored = Read(peer.Id);
+                    That(restored.Revision == installed.Revision &&
+                        BossSelectionBuff.Same(restored.Inventory.BossSelectionBuff, installed.Inventory.BossSelectionBuff) &&
+                        JsonSerializer.Serialize(restored.Inventory) == JsonSerializer.Serialize(installed.Inventory),
+                        "补齐来源经新连接选角及新Repository完整恢复源UID/核心/期限、原权重/次数和日截止，不续期或补药 " + id);
+                }
             }
         }
         using (var peer = Open(fixture))
@@ -163,6 +214,12 @@ internal static partial class ConsumableUseTcpTests
             peer.Expect(0, 4, [100]); peer.Barrier();
             That(fixture.Query("SELECT stamina_until,gold FROM characters WHERE id=$p0", peer.Id) is [[0L,0L]],
                 "CMD9恢复清除持久虚弱并实扣当前等级价格，不用免费契约兜底扣费");
+        }
+
+        Character Read(ushort id)
+        {
+            using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+            return new CharacterRepository(fixture.Database).List(owner).Single(row => row.Id == id);
         }
 
         string Assets() => fixture.Snapshot() + fixture.Snapshot("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid") +
