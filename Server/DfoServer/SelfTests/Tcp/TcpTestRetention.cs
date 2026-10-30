@@ -95,7 +95,7 @@ internal static class TcpTestRetention
         }
     }
 
-    // 共享 PVF 以硬链接放入各组目录，不计入现场体积。
+    // 按文件路径长度保守计量，PVF在硬链接失败后可能是完整副本，不能按扩展名忽略。
     static long Size(string directory)
     {
         long size = 0;
@@ -106,7 +106,7 @@ internal static class TcpTestRetention
                 continue;
             if ((attributes & FileAttributes.Directory) != 0)
                 size += Size(path);
-            else if (!path.EndsWith(".pvf", StringComparison.OrdinalIgnoreCase))
+            else
                 size += new FileInfo(path).Length;
         }
         return size;

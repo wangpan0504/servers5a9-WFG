@@ -102,6 +102,29 @@ internal static class TcpTestArtifactsTests
             }
         }
         RunRetention();
+        RunPvfBudget();
+    }
+
+    static void RunPvfBudget()
+    {
+        string parent = Path.Combine(Path.GetTempPath(), "dfo-tcp-pvf-budget-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(parent);
+        try
+        {
+            DateTime now = DateTime.UtcNow;
+            string CreateRun(int hours)
+            {
+                string root = Path.Combine(parent, Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(Path.Combine(root, "Data", "Pvf"));
+                File.WriteAllBytes(Path.Combine(root, "Data", "Pvf", "Script.pvf"), new byte[4096]);
+                Directory.SetLastWriteTimeUtc(root, now.AddHours(-hours));
+                return root;
+            }
+            string latest = CreateRun(1), older = CreateRun(2);
+            TcpTestRetention.Apply(parent, new TcpTestRetention.Policy(5, TimeSpan.FromDays(3), 4096), now);
+            TestCheck.That(Directory.Exists(latest) && !Directory.Exists(older), "PVF完整副本计入保留预算，最新失败现场仍保留");
+        }
+        finally { Directory.Delete(parent, true); }
     }
 
     // 保留策略：通过的旧轮次删除；失败轮次按数量、天数、体积裁剪且最新一个始终保留；运行中轮次不动。
