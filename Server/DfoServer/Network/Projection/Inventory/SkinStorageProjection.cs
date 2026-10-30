@@ -68,6 +68,9 @@ internal sealed class SkinStorageProjection(InventorySkinStorageService skins, P
             await context.Notify(NotiPacketType.SELECT_SKIN_LIST, SkinStoragePackets.EmoticonSelection(skins.EffectiveEmoticons(character)),
                 "instant_emoticon_selection_initialize", Guard);
         }
+        // 01764A90整份替换最近列表；空列表也须发送，清除同连接上一角色的记录。
+        await context.Notify(NotiPacketType.RECENT_ADD_SKIN_LIST, SkinStoragePackets.Recent(skins.Recent(character)),
+            "skin_storage_recent_initialize", Guard);
     }
 
     public async Task AddedAsync(GameConnectionContext context, InventoryCommitReceipt receipt, IReadOnlyList<SkinStorageKey> keys)
@@ -86,7 +89,7 @@ internal sealed class SkinStorageProjection(InventorySkinStorageService skins, P
             _ => SkinStoragePackets.Emoticons(view!, account)
         };
         await context.Notify(NotiPacketType.SKIN_CARGO_INFO, owned, "skin_storage_added", Guard);
-        await context.Notify(NotiPacketType.RECENT_ADD_SKIN_LIST, SkinStoragePackets.Recent(keys), "skin_storage_recent", Guard);
+        await context.Notify(NotiPacketType.RECENT_ADD_SKIN_LIST, SkinStoragePackets.Recent(skins.Recent(receipt.Character)), "skin_storage_recent", Guard);
         if (key.Type == InventorySkinStorageService.DamageFontType)
             await context.Notify(NotiPacketType.SELECT_SKIN_LIST, SkinStoragePackets.Selection(skins.EffectiveDamageFont(receipt.Character),
                 key.Type), "damage_font_selection_committed", Guard);

@@ -84,6 +84,26 @@ internal static class WeaponSkinTests
         Reject<InvalidDataException>(() => WeaponSkinFile.ReadItems(rows[..4], id => strings[id]), "幻化目录拒绝残缺记录");
 
         var oldState = JsonSerializer.Deserialize<SkinStorageState>("{\"Owned\":[32000],\"Selected\":32000}")!;
+        That(oldState.Recent.IsEmpty, "旧皮肤JSON缺少最近记录时保持可读，不虚构获得时间");
+        var acquired = oldState.Acquired([new(4, 32000)], 100).Acquired([new(3, 410000005), new(2, 3)], 200)
+            .Acquired([new(4, 32000)], 300);
+        acquired.Validate();
+        That(acquired.Recent.Select(row => row.Key).SequenceEqual([new(4, 32000), new(3, 410000005), new(2, 3)]) &&
+            acquired.Recent.Select(row => row.AcquiredAt).SequenceEqual([300L, 200L, 200L]),
+            "续期提升已有记录，批量顺序保留，类型和编号共同去重");
+        var restoredRecent = JsonSerializer.Deserialize<SkinStorageState>(JsonSerializer.Serialize(acquired))!;
+        That(restoredRecent.Same(acquired) && !oldState.Same(acquired), "最近记录参与快照判等并完整JSON恢复");
+        var boundedRecent = oldState.Acquired(Enumerable.Range(1, 300).Select(id => new SkinStorageKey(3, id)), 1);
+        That(boundedRecent.Recent.Length == 255 && boundedRecent.Recent[0].Key.SkinId == 1 &&
+            boundedRecent.Recent[^1].Key.SkinId == 255, "最近历史按原生u8数量有界，不在构包时溢出");
+        foreach (var invalidRecent in new SkinStorageState[]
+        {
+            acquired with { Recent = default },
+            acquired with { Recent = [new(new(5, 1), 1)] },
+            acquired with { Recent = [new(new(3, 0), 1)] },
+            acquired with { Recent = [new(new(3, 1), 0)] },
+            acquired with { Recent = [new(new(3, 1), 1), new(new(3, 1), 2)] }
+        }) Reject<InvalidDataException>(() => invalidRecent.Validate(), "最近历史拒绝缺省数组、错类型、错编号、无效时间和重复键");
         That(oldState.Owned.SequenceEqual([32000]) && oldState.Selected == 32000 && oldState.DamageFonts.IsEmpty &&
             oldState.SelectedDamageFont == 0, "武器JSON缺少字体字段时恢复为空字体仓库，不覆盖武器所有权");
         var fonts = oldState with { DamageFonts = [new(3, 2000000000), new(8, 0)], SelectedDamageFont = 3 };

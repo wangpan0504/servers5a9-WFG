@@ -123,7 +123,7 @@ internal static class WeaponSkinTcpTests
             Use(peer, 66);
             peer.Expect(1, 515, [1, 66, 0, 0, 199, 0, 0, 0]);
             peer.Expect(0, 1557, [4, 1, 0, 0, 125, 0, 0]);
-            peer.Expect(0, 1559, [1, 4, 0, 125, 0, 0]);
+            ExpectRecent(peer, 4, 32000);
             peer.Barrier();
             That(State().Owned.SequenceEqual([32000]) && State().Selected == 0 &&
                 fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=1 AND list_type=0 AND slot_index=66").Length == 0,
@@ -199,7 +199,7 @@ internal static class WeaponSkinTcpTests
             Use(peer, 65);
             peer.Expect(1, 515, [1, 65, 0, 0, 199, 0, 0, 0]);
             peer.Expect(0, 1557, Build(w => { w.Write((byte)4); w.Write((ushort)1); w.Write(101040572); }));
-            peer.Expect(0, 1559, Build(w => { w.Write((byte)1); w.Write((byte)4); w.Write(101040572); }));
+            ExpectRecent(peer, 4, 101040572);
             Select(peer, 101040572);
             peer.Expect(1, 1573, SelectionAck(101040572));
             That(U32(peer.Expect(0, 2).Body, 115) == 101040572, "1级剑士入库及选择65级光剑外观，ACK后立即投影Actor");
@@ -339,7 +339,7 @@ internal static class WeaponSkinTcpTests
                 w.Write((byte)1);w.Write((ushort)2);w.Write(30000);w.Write(0);w.Write(30069);w.Write(0);
                 w.Write((ushort)1);w.Write(30024);w.Write(0);
             }));
-            peer.Expect(0,1559,Build(w=>{w.Write((byte)1);w.Write((byte)1);w.Write(30024);}));
+            ExpectRecent(peer, 1, 30024);
             peer.Expect(0,1558,Build(w=>{w.Write((byte)1);w.Write((ushort)2);w.Write(30000);w.Write(30069);}));
 
             Use(peer,82);
@@ -348,7 +348,7 @@ internal static class WeaponSkinTcpTests
             {
                 w.Write((byte)3);w.Write((ushort)0);w.Write((ushort)1);w.Write(410000046);w.Write(0);
             }));
-            peer.Expect(0,1559,Build(w=>{w.Write((byte)1);w.Write((byte)3);w.Write(410000046);}));
+            ExpectRecent(peer, 3, 410000046);
             peer.Expect(0,1558,Build(w=>{w.Write((byte)3);w.Write(0);w.Write(0);w.Write(0);w.Write(0);}));
             peer.Barrier();
             That(AccountState().Cutscenes is [{SkinId:30024,ExpiresAt:0}] &&
@@ -387,7 +387,7 @@ internal static class WeaponSkinTcpTests
                 w.Write((byte)0);w.Write((ushort)1);w.Write(20000);w.Write(0);
                 w.Write((ushort)1);w.Write(420000001);w.Write(0);
             }));
-            peer.Expect(0,1559,Build(w=>{w.Write((byte)1);w.Write((byte)0);w.Write(420000001);}));
+            ExpectRecent(peer, 0, 420000001);
             peer.Expect(0,1558,Build(w=>{w.Write((byte)0);w.Write(20000);}));
             peer.Barrier();
             That(AccountState().PartyFrames is [{SkinId:420000001,ExpiresAt:0}] && State().PartyFrames.IsEmpty,
@@ -470,6 +470,34 @@ internal static class WeaponSkinTcpTests
             fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY item_uid") +
             fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id");
 
+        void ExpectRecent(TcpPeer peer, byte type, int id)
+        {
+            byte[] body = peer.Expect(0, 1559).Body;
+            var own = State(peer.Id);
+            var shared = AccountState();
+            var keys = own.Recent.Concat(shared.Recent).Where(row => Active(row.Key)).OrderByDescending(row => row.AcquiredAt)
+                .Select(row => row.Key).Distinct().ToArray();
+            // 此夹具每条所有权均来自前面的真实入库；按实际期限验证完整通知。
+            That(body.Length == 1 + 5 * keys.Length && body[0] == keys.Length && body[1] == type &&
+                U32(body, 2) == id, "入库后最近列表包含全部已提交记录，最新项在首位");
+            for (int at = 0; at < keys.Length; at++)
+                That(body[1 + at * 5] == keys[at].Type && U32(body, 2 + at * 5) == keys[at].SkinId,
+                    "最近完整替换通知保留此前的类别和编号顺序");
+            That((own.Recent.Concat(shared.Recent)).Any(row => row.Key == new SkinStorageKey(type, id) && row.AcquiredAt > 0),
+                "来源消费与最近获得时间同事务保存");
+
+            bool Active(SkinStorageKey key)
+            {
+                if (key.Type == 4) return own.Owned.Contains(key.SkinId);
+                var rows = key.Type switch
+                {
+                    0 => own.PartyFrames.Concat(shared.PartyFrames), 1 => own.Cutscenes.Concat(shared.Cutscenes),
+                    2 => own.DamageFonts.Concat(shared.DamageFonts), _ => own.Emoticons.Concat(shared.Emoticons)
+                };
+                return rows.Any(row => row.SkinId == key.SkinId && row.Active(fixture.UtcNow.ToUnixTimeSeconds()));
+            }
+        }
+
         void AddFont(TcpPeer peer,short slot,int id)
         {
             Use(peer,slot);
@@ -481,7 +509,7 @@ internal static class WeaponSkinTcpTests
                 foreach(var row in state.DamageFonts){w.Write(row.SkinId);w.Write(row.ExpiresAt);}
                 w.Write((ushort)0);
             }));
-            peer.Expect(0,1559,Build(w=>{w.Write((byte)1);w.Write((byte)2);w.Write(id);}));
+            ExpectRecent(peer, 2, id);
             peer.Expect(0,1558,Build(w=>{w.Write((byte)2);w.Write(state.SelectedDamageFont is >1 ? state.SelectedDamageFont : 1);}));
             peer.Barrier();
             That(fixture.Query("SELECT item_uid FROM character_inventory_slots WHERE character_id=1 AND list_type=0 AND slot_index=$p0",slot).Length==0,
@@ -524,7 +552,7 @@ internal static class WeaponSkinTcpTests
                 w.Write((byte)1);w.Write((ushort)(state.Cutscenes.Length+1));w.Write(30000);w.Write(0);
                 foreach(var row in state.Cutscenes){w.Write(row.SkinId);w.Write(row.ExpiresAt);}w.Write((ushort)0);
             }));
-            peer.Expect(0,1559,Build(w=>{w.Write((byte)1);w.Write((byte)1);w.Write(id);}));
+            ExpectRecent(peer, 1, id);
             peer.Expect(0,1558,Build(w=>
             {w.Write((byte)1);w.Write((ushort)state.SelectedCutscenes.Length);foreach(int skin in state.SelectedCutscenes)w.Write(skin);}));
             peer.Barrier();
