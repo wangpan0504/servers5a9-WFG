@@ -1,3 +1,6 @@
+using DfoServer.Game.Characters;
+using DfoServer.Game.Session;
+using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory.Models;
@@ -103,6 +106,7 @@ internal static class LotteryTcpTests
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters") is [[12345L]], "资源未声明费用时不额外扣金币");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "袖珍罐数据库完整性");
+        await MaterialCostAsync(source, root, resources);
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, shopExpiration: true);
         short SourceSlot()
         {
@@ -113,6 +117,173 @@ internal static class LotteryTcpTests
             JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
             JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
             JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
+    }
+    public static async Task MaterialCostAsync(ServerOptions source, string root, TcpTestResources resources)
+    {
+        // RED时先保存两个旧API独立观察，再断言；不依赖新增定义属性即可编译。
+        LotteryTests.RunMaterialCost(resources);
+        const int pot = 490705287, material = 490705286;
+        var items = resources.ItemResources;
+        var now = DateTimeOffset.UtcNow;
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "lottery-material"), resources: resources);
+        var repo = new CharacterRepository(fixture.Database);
+        var owners = new AccountOwners();
+        var random = new MaterialRandom();
+        var clock = new DailyBoosterTestClock(now);
+        var service = new InventoryBoosterService(items.Items, items.Boosters, items.GoldLimits, items.EpicPieces,
+            random, contracts: items.Contracts, clock: clock);
+        using (var owner = owners.Acquire("pot-material-plan", () => { }))
+        {
+            var created = repo.Create(owner, New("CostPlan", 1, 1));
+            var session = new GameSession(repo, resources.Towns, owner);
+            session.Select(created.Slot);
+            session.MarkReady();
+            var saved = session.Selected!;
+            var planned = service.OpenLottery(saved, new(0, 117), out var receipt, now);
+            That(planned.Accepted && receipt is { ItemId: 490705288, Count: 1 } &&
+                planned.Plan!.After.Find(Bag(117)) is null && planned.Plan.After.Find(Bag(3)) is null,
+                "真实资源同冻结计划同时扣罐、扣材并发完整奖励");
+            int calls = random.Calls;
+            string before = Snapshot(), frozen = JsonSerializer.Serialize(planned.Plan!.After), frozenReceipt = JsonSerializer.Serialize(receipt);
+            fixture.Sql("CREATE TRIGGER fail_material_plan BEFORE INSERT ON inventory_audit_log WHEN NEW.item_id_after=490705288 BEGIN SELECT RAISE(ABORT,'material plan rollback'); END");
+            Reject(() => session.PlanAndCommitBooster(_ => planned, service.UsePlaces(pot), pot), "奖励写入后的晚期审计失败传播");
+            That(Snapshot() == before && ReferenceEquals(session.Selected, saved) && random.Calls == calls &&
+                JsonSerializer.Serialize(planned.Plan.After) == frozen && JsonSerializer.Serialize(receipt) == frozenReceipt,
+                "晚期SQL失败原子回滚罐、材料、奖励、详情、版本、审计和UID，冻结结果不重抽");
+            fixture.Sql("DROP TRIGGER fail_material_plan");
+            var committed = session.PlanAndCommitBooster(_ => planned, service.UsePlaces(pot), pot);
+            That(committed.Accepted && session.Selected!.Revision == saved.Revision + 1 && random.Calls == calls &&
+                JsonSerializer.Serialize(new CharacterRepository(fixture.Database).List(owner).Single()) == JsonSerializer.Serialize(session.Selected),
+                "确认回滚后提交同一冻结结果一次，重开库保留完整结果");
+            before = Snapshot();
+            Reject(() => repo.CommitInventory(owner, saved, planned.Plan), "旧revision计划不能二次扣材或发奖");
+            That(Snapshot() == before, "旧revision失败不分配UID或增加审计");
+            var current = session.Selected!;
+            using var replacement = owners.Acquire("pot-material-plan", () => { });
+            Reject(() => repo.CommitInventory(owner, current, new(current.Inventory, current.Inventory, "stale_owner")),
+                "旧owner不能提交当前快照计划");
+            That(Snapshot() == before, "旧owner失败无资产变化");
+        }
+        using (var owner = owners.Acquire("pot-material-expiry", () => { }))
+        {
+            var created = repo.Create(owner, New("CostExpiry", 1, 1) with { Inventory = new([
+                new(0, Bag(117), Core(pot)), new(0, Bag(3), Core(material) with { ExpireTime = (int)now.AddSeconds(5).ToUnixTimeSeconds() })]) });
+            var session = new GameSession(repo, resources.Towns, owner);
+            session.Select(created.Slot);
+            session.MarkReady();
+            var planned = service.OpenLottery(session.Selected!, new(0, 117), out _, now);
+            That(planned.Accepted, "到期前材料可生成合法冻结计划");
+            string before = Snapshot();
+            int calls = random.Calls;
+            clock.Advance(TimeSpan.FromSeconds(5));
+            var rejected = session.PlanAndCommitBooster(_ => planned, service.UsePlaces(pot), pot);
+            That(!rejected.Accepted && rejected.RejectReason == "qualification_expired" && Snapshot() == before && random.Calls == calls,
+                "规划后材料恰到期经既有Commit资格拒绝，罐材料奖励和UID完整保留");
+        }
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repo.Create(owner, New("CostTcp", 2, 0));
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            string before = Snapshot();
+            Send(peer, 117);
+            peer.Expect(1, 27, [0, 19, 0]);
+            peer.Barrier();
+            That(Snapshot() == before, "完整CMD27无材料拒绝，不扣罐、不发奖、不增加审计或UID");
+        }
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var current = repo.List(owner).Single();
+            repo.CommitInventory(owner, current, new(current.Inventory,
+                current.Inventory with { Items = current.Inventory.Items.Add(new(0, Bag(3), Core(material, 2))) }, "material_test_seed"));
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            Send(peer, 117);
+            Ack(peer, sourceRemaining: 1, materialRemaining: 1);
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            string before = Snapshot();
+            fixture.Sql("CREATE TRIGGER fail_material_tcp BEFORE INSERT ON inventory_audit_log BEGIN SELECT RAISE(ABORT,'material tcp rollback'); END");
+            Send(peer, 117);
+            peer.Closed();
+            That(Snapshot() == before, "真实CMD27晚期SQL失败不回成功，罐材料奖励与UID整笔回滚");
+            fixture.Sql("DROP TRIGGER fail_material_tcp");
+        }
+        using (var peer = Open(fixture))
+        {
+            var selected = peer.Select();
+            BoosterTcpTests.Entry(selected[4].Body, 117, pot, 1, true);
+            BoosterTcpTests.Entry(selected[4].Body, 3, material, 1, true);
+            Send(peer, 117);
+            Ack(peer, sourceRemaining: 0, materialRemaining: 0);
+            peer.Barrier();
+            string before = Snapshot();
+            Send(peer, 117);
+            peer.Expect(1, 27, [0, 19, 0]);
+            peer.Barrier();
+            That(Snapshot() == before, "耗尽重放不重复扣材、发奖或分配UID");
+        }
+        string committedState = Snapshot();
+        await fixture.StopAsync();
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            peer.Barrier();
+            That(Snapshot() == committedState, "Runtime重建真实登录后完整保留两次扣材发奖结果");
+        }
+        await fixture.StopAsync();
+        That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
+            "材料开罐临时库完整性与外键保持");
+
+        NewCharacter New(string name, int pots, int materials) => new(name, resources.Towns.Room, resources.Towns.InitialReturn)
+        {
+            Job = 0, GrowType = 1, Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills,
+            Inventory = new([new(0, Bag(117), Core(pot, pots)), .. (materials == 0 ? Array.Empty<InventoryItem>() :
+                new InventoryItem[] { new(0, Bag(3), Core(material, materials)) })], Gold: 12345)
+        };
+        ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, now);
+        string Snapshot() => JsonSerializer.Serialize(fixture.Query("SELECT id,revision,gold FROM characters ORDER BY id")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT item_uid,item_core FROM character_inventory_items ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_inventory_slots ORDER BY character_id,list_type,slot_index")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM inventory_avatar_details ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM inventory_creature_details ORDER BY item_uid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT count(*) FROM inventory_audit_log")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT seq FROM sqlite_sequence WHERE name='character_inventory_items'"));
+        void Ack(TcpPeer peer, int sourceRemaining, int materialRemaining)
+        {
+            byte[] ack = peer.Expect(1, 27).Body;
+            That(ack.Length == 130 && ack[0] == 1 && U16(ack, 1) == 117 && U32(ack, 9) == 1 && U32(ack, 126) == 0,
+                "材料罐成功保持完整130B ACK27与单份奖励增量");
+            int id = (int)U32(ack, 5);
+            short slot = (short)U16(ack, 3);
+            That(id is >= 490705288 and <= 490705292, "实际回执为原五项之一，不跟入子盒");
+            byte[] delta = peer.Expect(0, 14).Body;
+            BoosterTcpTests.Entry(delta, 117, sourceRemaining == 0 ? -1 : pot, sourceRemaining);
+            BoosterTcpTests.Entry(delta, 3, materialRemaining == 0 ? -1 : material, materialRemaining);
+            int at = Enumerable.Range(0, U16(delta, 1)).Select(index => 3 + index * 123).Single(index => U16(delta, index) == slot);
+            var authoritative = delta.AsSpan(at, 123).ToArray();
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(authoritative.AsSpan(6), 1);
+            That(ack.AsSpan(3, 123).SequenceEqual(authoritative), "ACK奖励和已提交权威差量完整一致，仅堆叠数量用增量");
+        }
+        static void Reject(Action action, string message)
+        {
+            bool rejected = false;
+            try { action(); }
+            catch (Exception error) when (error is InvalidOperationException or SqliteException) { rejected = true; }
+            That(rejected, message);
+        }
+    }
+    sealed class MaterialRandom : Random
+    {
+        public int Calls { get; private set; }
+        public override long NextInt64(long maxValue) { Calls++; return 0; }
     }
     static InventorySlot Bag(short slot) => new(InventoryListType.Main, slot);
     static void Send(TcpPeer peer, short slot) => peer.Send(27, Build(writer => { writer.Write((ushort)0); writer.Write(slot); }));

@@ -36,6 +36,7 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     // 产物装备一律带交换资格位；随机奖池与固定礼包不在支持范围内。
     public bool GrantsEpicExchangeOrigin => SetsEpicExchangeInstanceType || (FromExchangeShop && Selection is not null);
     public byte? DailyRetainedLimit { get; init; }
+    public ItemMaterialCost? LotteryUseNeedItem { get; init; }
     // [legacy] 的随机礼盒只带族/档，产物池由 etc/runesystem.etc 的 [random choose info] 决定。
     public (int Family, int Tier)? RuneBox { get; init; }
     public int CoolTime { get; init; }
@@ -165,6 +166,24 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         // 固定商城礼包同样不能跳过资格、账本或实例属性字段。
         // 保留原文偏移，空声明仍须检查原文中的字符串值，不能被字符串掩码吞掉。
         string tags = Regex.Replace(text, "`[^`]*`", match => new string(' ', match.Length));
+        ItemMaterialCost? lotteryUseNeedItem = null;
+        var lotteryCosts = Regex.Matches(tags,
+            @"\[\s*/?\s*lottery\s+use\s+need\s+item[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        if (lotteryCosts.Count != 0)
+        {
+            var declaration = lotteryCosts[0];
+            int end = declaration.Index + declaration.Length;
+            int next = tags.IndexOf('[', end);
+            string[] values = text[end..(next < 0 ? text.Length : next)]
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (type != "upgradable legacy" || lotteryCosts.Count != 1 || text.Count(value => value == '`') % 2 != 0 ||
+                !declaration.Value.Equals("[lottery use need item]", StringComparison.OrdinalIgnoreCase) ||
+                !IsRootDeclaration(tags, declaration.Index) || values.Length != 2 ||
+                !int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out int materialId) || materialId <= 0 ||
+                !int.TryParse(values[1], NumberStyles.None, CultureInfo.InvariantCulture, out int materialCount) || materialCount <= 0)
+                return new([], "袖珍罐材料声明无效");
+            lotteryUseNeedItem = new(materialId, materialCount);
+        }
         byte? dailyLimit = null;
         if (tags.Contains("[total usable count]", StringComparison.OrdinalIgnoreCase))
         {
@@ -275,6 +294,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 ? new([new(1, rewards.ToImmutable())], Lottery: true,
                     // 当前PVF没有独立契约资格字段；只认五种NPC系列的完整命名，不把任意罐/礼盒按类型放行。
                     NpcPocketPot: Regex.IsMatch(PvfScript.Section(text, "name"), @"^\s*`[土火木水金]罐的(?:高级)?袖珍罐(?:\s|\()"))
+                    { LotteryUseNeedItem = lotteryUseNeedItem }
                 : new([], "袖珍罐总权重为零");
         }
         if (type == "usable cera package")

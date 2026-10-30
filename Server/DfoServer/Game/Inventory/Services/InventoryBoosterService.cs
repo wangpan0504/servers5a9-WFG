@@ -13,7 +13,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
 {
     public BoosterUsePlacesDefinition UsePlaces(int itemId) => boosters.UsePlaces(itemId);
     public InventoryResult Open(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt, DateTimeOffset? utcNow = null)
-        => OpenCore(character, request, out receipt, utcNow, ceraPackage: false);
+        => OpenCore(character, request, out receipt, out _, utcNow, ceraPackage: false);
 
     public (int Total, int Matching) CountMatchingPools(Character character, int itemId)
     {
@@ -30,11 +30,12 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         var source = character.Inventory.Find(new(InventoryListType.Main, request.Slot));
         if (source is not null && boosters.Get(source.Core.ItemId).RuneBox is not null)
             return OpenRuneBox(character, request, source, utcNow ?? (clock ?? TimeProvider.System).GetUtcNow(), out receipt);
-        var result = OpenCore(character, new(request.Slot, 1), out var opened, utcNow, ceraPackage: false, lottery: true);
+        var result = OpenCore(character, new(request.Slot, 1), out var opened, out var grantBefore, utcNow, ceraPackage: false, lottery: true);
         if (!result.Accepted)
             return result;
         var reward = opened!.Rewards.Single();
         var plan = result.Plan!;
+        var grantBeforeIndex = new InventoryIndex(grantBefore!);
         var destinations = plan.After.Items.Where(item => item.Core.ItemId == reward.ItemId &&
             item.Core.Count - PriorCount(item) > 0).ToArray();
         // ACK27展示首件；全部实例通过既有NOTI14差量同步，双倍装备不能挤进同一个UID。
@@ -46,10 +47,8 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
 
         int PriorCount(InventoryItem item)
         {
-            var prior = plan.BeforeIndex.Find(item.Position);
-            int count = prior?.Core.ItemId == reward.ItemId ? prior.Core.Count : 0;
-            return count - (item.Position == new InventorySlot(InventoryListType.Main, request.Slot) &&
-                prior?.Core.ItemId == reward.ItemId ? 1 : 0);
+            var prior = grantBeforeIndex.Find(item.Position);
+            return prior?.Core.ItemId == reward.ItemId ? prior.Core.Count : 0;
         }
     }
 
@@ -130,7 +129,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     {
         receipt = null;
         if (request.Choices.Length == 0)
-            return OpenCore(character, new(request.Slot, 1), out receipt, utcNow, ceraPackage: true);
+            return OpenCore(character, new(request.Slot, 1), out receipt, out _, utcNow, ceraPackage: true);
         return OpenCeraPackageAvatars(character, request, out receipt, utcNow);
     }
 
@@ -258,9 +257,10 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
     }
 
     InventoryResult OpenCore(Character character, BoosterOpenRequest request, out BoosterReceipt? receipt,
-        DateTimeOffset? utcNow, bool ceraPackage, bool lottery = false)
+        out InventorySnapshot? grantBefore, DateTimeOffset? utcNow, bool ceraPackage, bool lottery = false)
     {
         receipt = null;
+        grantBefore = null;
         bool shopExpiration = debugSettings?.IgnoreCashShopAbsoluteExpiration == true;
         bool ignoreUsablePeriod = debugSettings?.IgnoreCashShopUsablePeriod == true;
         var before = character.Inventory;
@@ -404,6 +404,22 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
             return InventoryResult.Reject(19);
         }
 
+        // 资格与全部候选先确认，再用同一冻结快照扣源及材料；任何失败都不抽取或修改原背包。
+        var paid = definition.DailyRetainedLimit is not null ? before :
+            InventoryDeleteService.Plan(before, source.Position, source.Core.Value, request.Count).Plan!.After;
+        long? materialDeadline = null;
+        if (lottery && definition.LotteryUseNeedItem is { } cost)
+        {
+            var material = InventoryMaterialConsumptionService.Plan(paid, [cost], pieces, now, request.Count);
+            if (!material.Accepted)
+                return InventoryResult.Reject(19) with { RejectReason = "lottery_material_insufficient" };
+            var materialAfter = material.Plan!.After;
+            foreach (var item in paid.Items)
+                if (item.ExpireTime > 0 && material.Plan!.AfterIndex.Find(item.Position) != item &&
+                    (materialDeadline is null || item.ExpireTime < materialDeadline))
+                    materialDeadline = item.ExpireTime;
+            paid = materialAfter;
+        }
         var totals = new Dictionary<int, int>();
         byte[]? trace = null;
         try
@@ -479,9 +495,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         }
         if (totals.Count is 0 or > BoosterReceipt.MaximumItems)
             return InventoryResult.Reject(4);
-        // 标准消耗释放源格后再规划所有奖励；全包、钱包超限等失败均保留整批礼包。
-        var paid = definition.DailyRetainedLimit is not null ? before :
-            InventoryDeleteService.Plan(before, source.Position, source.Core.Value, request.Count).Plan!.After;
+        // 所有奖励基于已扣源和材料的快照规划；容量或钱包失败时整份计划不提交。
         if (lottery && boosters.AllowsDevilDouble(source.Core.ItemId) &&
             DevilContractPolicy.TryConsume(paid, 1, DevilContractPolicy.LotteryAllowance(paid, now), now, out var doubled))
         {
@@ -587,6 +601,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         long? deadline = source.ExpireTime > 0 ? source.ExpireTime : null;
         if (grant.Plan.CharacterPrecondition?.QualificationExpiresAt is { } acquiredUntil && (deadline is null || acquiredUntil < deadline))
             deadline = acquiredUntil;
+        if (materialDeadline is not null && (deadline is null || materialDeadline < deadline)) deadline = materialDeadline;
         if (dailyDeadline is not null && (deadline is null || dailyDeadline < deadline)) deadline = dailyDeadline;
         foreach (var item in after.Items.Concat(grant.Plan.OverflowItems))
             if (item.ExpireTime > 0 && grant.Plan.BeforeIndex.Find(item.Position) != item &&
@@ -599,6 +614,7 @@ internal sealed class InventoryBoosterService(ItemCatalog catalog, BoosterCatalo
         if (cooled is null) return InventoryResult.Reject(19);
         after = cooled;
         var precondition = new InventoryCharacterPrecondition(character, deadline, clock, requirePosition: true);
+        grantBefore = paid;
         receipt = new(source.Core.ItemId, source.Position.Index, totals.Select(pair => new BoosterGrantedItem(pair.Key, pair.Value)).ToArray())
         {
             SelectionTrace = trace,

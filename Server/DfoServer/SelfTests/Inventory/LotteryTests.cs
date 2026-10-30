@@ -1,3 +1,7 @@
+using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Reflection;
+using System.Text.Json;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -87,6 +91,193 @@ internal static class LotteryTests
         That(duplicate.Available && duplicate.Pools[0].Rewards.Length == 2, "重复编号的不同行保留各自权重和数量");
         Console.WriteLine($"PASS {Count - checks} 袖珍罐资源、权重与原子规划断言");
         ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, now, shopExpiration: true);
+    }
+
+    // 仅使用旧生产已存在的API；同一测试文件先RED，再随生产候选GREEN。
+    public static void RunMaterialCost(TcpTestResources resources)
+    {
+        const int pot = 490705287, material = 490705286;
+        int checks = Count;
+        var items = resources.ItemResources;
+        var now = DateTimeOffset.UtcNow;
+        var random = new EdgeRandom();
+        var service = new InventoryBoosterService(items.Items, items.Boosters, items.GoldLimits, items.EpicPieces,
+            random, contracts: items.Contracts);
+        var role = new Character(1, 0, "PotCost", 0, resources.Towns.Room, resources.Towns.InitialReturn)
+            { Job = 0, GrowType = 1, Level = 95 };
+        var missingRole = role with { Inventory = new([new(1, Bag(117), Core(pot))]) };
+        var fundedRole = role with { Inventory = new([new(1, Bag(117), Core(pot)), new(2, Bag(3), Core(material, 2))]) };
+        string missingBefore = JsonSerializer.Serialize(missingRole), fundedBefore = JsonSerializer.Serialize(fundedRole);
+        int calls = random.Calls;
+        var missing = service.OpenLottery(missingRole, new(0, 117), out var missingReceipt, now);
+        int missingDraws = random.Calls - calls;
+        calls = random.Calls;
+        var funded = service.OpenLottery(fundedRole, new(0, 117), out var fundedReceipt, now);
+        int fundedDraws = random.Calls - calls;
+        int fundedMaterial = funded.Plan?.After.Items.Where(item => item.Core.ItemId == material).Sum(item => item.Core.Count) ?? -1;
+        bool missingPass = !missing.Accepted && missing.Plan is null && missingReceipt is null && missingDraws == 0 &&
+            JsonSerializer.Serialize(missingRole) == missingBefore;
+        bool fundedPass = funded.Accepted && fundedMaterial == 1 && fundedDraws == 1 &&
+            fundedReceipt is { ItemId: 490705288, Count: 1 } && funded.Plan!.After.Find(Bag(117)) is null &&
+            JsonSerializer.Serialize(fundedRole) == fundedBefore;
+        // 两个结果都先独立计算并保存；第一条断言失败也不会吞掉第二条RED观察。
+        Console.WriteLine(JsonSerializer.Serialize(new { Target = "lottery-material-two-independent-observations",
+            Missing = new { Passed = missingPass, missing.Accepted, HasPlan = missing.Plan is not null, Draws = missingDraws },
+            Funded = new { Passed = fundedPass, funded.Accepted, MaterialBefore = 2, MaterialAfter = fundedMaterial,
+                Draws = fundedDraws, Reward = fundedReceipt }, ExpectedCost = 1 }));
+        That(missingPass, "287无286材料必须不抽取、不扣罐、不产生奖励计划");
+        That(fundedPass, "287合法开罐必须同计划扣1罐和1份286，完整发一份奖励");
+
+        var definition = items.Boosters.Get(pot);
+        var rows = definition.Pools.Single().Rewards;
+        That(definition.Available && definition.Lottery && definition.Pools.Single().Draws == 1 &&
+            rows.Select(row => row.ItemId).SequenceEqual(Enumerable.Range(490705288, 5)) &&
+            rows.Select(row => row.Weight).SequenceEqual(new long[] { 75000, 15000, 4000, 4000, 2000 }) &&
+            rows.All(row => row.Count == 1) && rows.Sum(row => row.Weight) == 100000,
+            "287五项奖励、权重和单次数量逐行保持原资源");
+        long start = 0;
+        foreach (var row in rows)
+        {
+            foreach (long value in new[] { start, start + row.Weight - 1 })
+            {
+                random.Value = value;
+                calls = random.Calls;
+                var opened = service.OpenLottery(fundedRole, new(0, 117), out var receipt, now);
+                That(opened.Accepted && receipt is { Count: 1 } && receipt.ItemId == row.ItemId &&
+                    random.Calls == calls + 1 && random.LastMaximum == 100000 &&
+                    opened.Plan!.After.Find(Bag(3))!.Core.Count == 1 && opened.Plan.After.Find(Bag(117)) is null &&
+                    opened.Plan.After.Items.Where(item => item.Core.ItemId == row.ItemId).Sum(item => item.Core.Count) == 1 &&
+                    JsonSerializer.Serialize(fundedRole) == fundedBefore,
+                    "287每个权重区间两端完整扣材并发原行奖励 " + value);
+            }
+            start += row.Weight;
+        }
+        random.Value = 0;
+        foreach (var invalidRole in new[]
+        {
+            fundedRole with { Level = 84 },
+            fundedRole with { Inventory = fundedRole.Inventory with { Items = fundedRole.Inventory.Items.SetItem(0,
+                fundedRole.Inventory.Items[0] with { Core = Core(pot) with { EquipmentLockId = 1 } }) } },
+            fundedRole with { Inventory = fundedRole.Inventory with { Items = fundedRole.Inventory.Items.SetItem(0,
+                fundedRole.Inventory.Items[0] with { Core = Core(pot) with { ExpireTime = (int)now.ToUnixTimeSeconds() } }) } }
+        })
+        {
+            calls = random.Calls;
+            string before = JsonSerializer.Serialize(invalidRole);
+            var rejected = service.OpenLottery(invalidRole, new(0, 117), out var receipt, now);
+            That(!rejected.Accepted && rejected.Plan is null && receipt is null && random.Calls == calls &&
+                before == JsonSerializer.Serialize(invalidRole), "原等级、源锁和源期限资格在扣材及抽样前拒绝");
+        }
+        foreach (var badMaterial in new[]
+        {
+            new InventoryItem(2, Bag(3), Core(material) with { EquipmentLockId = 1 }),
+            new InventoryItem(2, Bag(3), Core(material) with { ExpireTime = (int)now.ToUnixTimeSeconds() }),
+            new InventoryItem(2, new(InventoryListType.PersonalCargo, 0), Core(material))
+        })
+        {
+            calls = random.Calls;
+            var rejected = service.OpenLottery(role with { Inventory = new([new(1, Bag(117), Core(pot)), badMaterial]) },
+                new(0, 117), out _, now);
+            That(!rejected.Accepted && rejected.Plan is null && random.Calls == calls,
+                "锁定、恰到期与仓库材料不能抵扣且不抽样");
+        }
+        var mixed = role with { Inventory = new([new(1, Bag(117), Core(pot)),
+            new(2, Bag(3), Core(material) with { ExpireTime = (int)now.ToUnixTimeSeconds() }),
+            new(3, Bag(4), Core(material) with { ExpireTime = (int)now.AddSeconds(5).ToUnixTimeSeconds() })]) };
+        var mixedOpen = service.OpenLottery(mixed, new(0, 117), out _, now);
+        That(mixedOpen.Accepted && mixedOpen.Plan!.After.Find(Bag(3)) == mixed.Inventory.Find(Bag(3)) &&
+            mixedOpen.Plan.After.Find(Bag(4)) is null &&
+            mixedOpen.Plan.CharacterPrecondition!.Matches(mixed, now.AddSeconds(4).ToUnixTimeSeconds()) &&
+            !mixedOpen.Plan.CharacterPrecondition.Matches(mixed, now.AddSeconds(5).ToUnixTimeSeconds()),
+            "跳过过期材料，只扣合法槽且被扣材料期限进入提交资格");
+        var unusedSoon = role with { Inventory = new([new(1, Bag(117), Core(pot)),
+            new(2, Bag(3), Core(material) with { ExpireTime = (int)now.AddSeconds(10).ToUnixTimeSeconds() }),
+            new(3, Bag(4), Core(material) with { ExpireTime = (int)now.AddSeconds(2).ToUnixTimeSeconds() })]) };
+        var unusedSoonOpen = service.OpenLottery(unusedSoon, new(0, 117), out _, now);
+        That(unusedSoonOpen.Accepted && unusedSoonOpen.Plan!.After.Find(Bag(3)) is null &&
+            unusedSoonOpen.Plan.After.Find(Bag(4)) == unusedSoon.Inventory.Find(Bag(4)) &&
+            unusedSoonOpen.Plan.CharacterPrecondition!.Matches(unusedSoon, now.AddSeconds(5).ToUnixTimeSeconds()) &&
+            !unusedSoonOpen.Plan.CharacterPrecondition.Matches(unusedSoon, now.AddSeconds(10).ToUnixTimeSeconds()),
+            "仅实际按Main槽序扣的材料进入deadline，不强加未消耗材料的临近期限");
+        var shortSource = mixed with { Inventory = mixed.Inventory with { Items = mixed.Inventory.Items.SetItem(0,
+            mixed.Inventory.Items[0] with { Core = Core(pot) with { ExpireTime = (int)now.AddSeconds(2).ToUnixTimeSeconds() } }) } };
+        var shortPlan = service.OpenLottery(shortSource, new(0, 117), out _, now).Plan!;
+        That(shortPlan.CharacterPrecondition!.Matches(shortSource, now.AddSeconds(1).ToUnixTimeSeconds()) &&
+            !shortPlan.CharacterPrecondition.Matches(shortSource, now.AddSeconds(2).ToUnixTimeSeconds()),
+            "材料期限只取更早截止，不能覆盖原源物品期限");
+
+        const string header = "[stackable type]\n`[upgradable legacy]` 1\n";
+        const string pool = "[int data]\n490705288 75000 1 490705289 15000 1 490705290 4000 1 490705291 4000 1 490705292 2000 1\n[/int data]\n";
+        string Cost(string body) => header + "[lottery use need item]\n" + body + "\n" + pool;
+        foreach (string invalid in new[] { "", "490705286", "490705286 1 2", "0 1", "490705286 0", "-1 1",
+            "490705286 -1", "2147483648 1", "490705286 2147483648", "`490705286` 1" })
+            That(!BoosterCatalog.Parse(Cost(invalid)).Available, "材料必须是完整两个正整数 " + invalid);
+        foreach (string invalid in new[]
+        {
+            Cost("490705286 1") + "[lottery use need item]\n490705286 1\n",
+            header + "[/lottery use need item]\n490705286 1\n" + pool,
+            header + "[etc]\n[lottery use need item]\n490705286 1\n[/etc]\n" + pool,
+            header + "[lottery use need item\n490705286 1\n" + pool,
+            Cost("490705286 1").Replace("[upgradable legacy]", "[booster]")
+        }) That(!BoosterCatalog.Parse(invalid).Available, "重复、孤立结束、嵌套、残缺及不适用入口材料声明整罐拒绝");
+
+        var archive = (PvfLib.PvfArchive)typeof(ItemCatalog).GetField("pvf", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(items.Items)!;
+        var isolated = new BoosterCatalog(archive, new Dictionary<int, string>());
+        var definitions = (ConcurrentDictionary<int, BoosterDefinition>)typeof(BoosterCatalog)
+            .GetField("definitions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(isolated)!;
+        var isolatedService = new InventoryBoosterService(items.Items, isolated, items.GoldLimits, items.EpicPieces,
+            random, contracts: items.Contracts);
+        definitions[pot] = BoosterCatalog.Parse(header + pool);
+        That(isolatedService.OpenLottery(missingRole, new(0, 117), out _, now).Accepted,
+            "无材料声明的罐保持原免费材料合同，不按源ID添加费用");
+        definitions[pot] = BoosterCatalog.Parse(header + "[explain]\n`[lottery use need item] 490705286 1`\n" + pool);
+        That(isolatedService.OpenLottery(missingRole, new(0, 117), out _, now).Accepted,
+            "说明文字里的同名字串不是材料声明");
+        definitions[pot] = BoosterCatalog.Parse(Cost("490705287 1"));
+        var sameId = role with { Inventory = new([new(1, Bag(117), Core(pot, 2))]) };
+        var sameIdOpen = isolatedService.OpenLottery(sameId, new(0, 117), out _, now);
+        That(sameIdOpen.Accepted && sameIdOpen.Plan!.After.Find(Bag(117)) is null,
+            "源和材料同ID时合计扣2，不能把同一份源计两次");
+        calls = random.Calls;
+        That(!isolatedService.OpenLottery(missingRole, new(0, 117), out _, now).Accepted && random.Calls == calls,
+            "源和材料同ID仅一件时拒绝且不抽样");
+        definitions[pot] = BoosterCatalog.Parse(Cost("490705286 3"));
+        var split = role with { Inventory = new([new(1, Bag(117), Core(pot)), new(2, Bag(3), Core(material)), new(3, Bag(4), Core(material, 2))]) };
+        var splitOpen = isolatedService.OpenLottery(split, new(0, 117), out _, now);
+        That(splitOpen.Accepted && splitOpen.Plan!.After.Find(Bag(3)) is null && splitOpen.Plan.After.Find(Bag(4)) is null,
+            "一条资源cost可跨多个合法堆叠足额扣材");
+
+        definitions[pot] = BoosterCatalog.Parse(Cost("490705286 1").Replace(pool, "[int data]\n490705286 1 1\n[/int data]\n"));
+        var materialReward = isolatedService.OpenLottery(fundedRole, new(0, 117), out var materialRewardReceipt, now);
+        That(materialReward.Accepted && materialRewardReceipt is { ItemId: material, Count: 1 } &&
+            materialRewardReceipt.RewardSlot == Bag(3) && materialReward.Plan!.After.Find(Bag(3))!.Core.Count == 2,
+            "材料ID等于奖励ID时按扣材后的grant增量回执，不能被净零资产抵消");
+        definitions[pot] = BoosterCatalog.Parse(Cost("490705286 1").Replace(pool, "[int data]\n490705287 1 1\n[/int data]\n"));
+        var sourceRewardRole = role with { Inventory = new([new(1, Bag(117), Core(pot, 2)), new(2, Bag(3), Core(material))]) };
+        var sourceReward = isolatedService.OpenLottery(sourceRewardRole, new(0, 117), out var sourceRewardReceipt, now);
+        That(sourceReward.Accepted && sourceRewardReceipt is { ItemId: pot, Count: 1 } &&
+            sourceRewardReceipt.RewardSlot == Bag(117) && sourceReward.Plan!.After.Find(Bag(117))!.Core.Count == 2 &&
+            sourceReward.Plan.After.Find(Bag(3)) is null, "源ID等于奖励ID时保留源扣除并正确回本次一份grant");
+        definitions[pot] = BoosterCatalog.Parse(Cost("490705287 1").Replace(pool, "[int data]\n490705287 1 1\n[/int data]\n"));
+        var allSameRole = role with { Inventory = new([new(1, Bag(117), Core(pot, 3))]) };
+        var allSame = isolatedService.OpenLottery(allSameRole, new(0, 117), out var allSameReceipt, now);
+        That(allSame.Accepted && allSameReceipt is { ItemId: pot, Count: 1 } && allSameReceipt.RewardSlot == Bag(117) &&
+            allSame.Plan!.After.Find(Bag(117))!.Core.Count == 2, "源材料奖励同ID仍扣两份并发一份，ACK不按净减少误拒绝");
+
+        var range = ItemSlotBoundService.Range(items.Items.Get(rows[0].ItemId).Kind, role.Inventory.Expansion);
+        var filled = Enumerable.Range(range.Start, range.End - range.Start + 1)
+            .Select(slot => new InventoryItem(slot + 1000, Bag((short)slot), Core(pot, 2))).ToArray();
+        var crowded = role with { Inventory = new([.. filled, new(2, Bag(3), Core(material, 2))]) };
+        string crowdedBefore = JsonSerializer.Serialize(crowded);
+        That(!service.OpenLottery(crowded, new(0, 117), out _, now).Accepted &&
+            JsonSerializer.Serialize(crowded) == crowdedBefore, "满容量失败不提交已规划的扣罐、扣材和奖励");
+        var freed = crowded with { Inventory = crowded.Inventory with { Items = crowded.Inventory.Items.Select(item =>
+            item.Position == Bag(117) ? item with { Core = Core(pot) } : item).ToImmutableArray() } };
+        var freedOpen = service.OpenLottery(freed, new(0, 117), out var freedReceipt, now);
+        That(freedOpen.Accepted && freedReceipt!.RewardSlot == Bag(117) && freedOpen.Plan!.After.Find(Bag(3))!.Core.Count == 1,
+            "最后一罐释放原格后合法发奖且仍精确扣材");
+        Console.WriteLine($"PASS {Count - checks} 袖珍罐材料解析、资格、权重与冻结规划断言");
+        ItemCore Core(int id, int count = 1) => InventoryRewardGrantService.Create(items.Items.Get(id), count, now);
     }
 
     // 符文箱([legacy] 0 + [rune random box] 族 档)：PVF 声明、[random choose info] 表、
@@ -331,9 +522,11 @@ internal static class LotteryTests
         public Queue<long>? Values { get; set; }
         public List<long> Bounds { get; } = [];
         public int Calls { get; private set; }
+        public long LastMaximum { get; private set; }
         public override long NextInt64(long maxValue)
         {
             Calls++;
+            LastMaximum = maxValue;
             if (Values is not null)
             {
                 That(Values.Count > 0, "预置抽取序列覆盖全部抽取");
