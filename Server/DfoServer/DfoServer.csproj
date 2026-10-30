@@ -17,6 +17,7 @@
     <EmbeddedResource Include="SelfTests/Fixtures/luke-scene-contract-vectors.json" LogicalName="DfoServer.SelfTests.LukeSceneContractVectors" />
     <EmbeddedResource Include="Resources/channel.txt" LogicalName="DfoServer.Resources.channel.txt" />
     <EmbeddedResource Include="Resources/independent-attribute-pairs.json" LogicalName="DfoServer.Resources.independent-attribute-pairs.json" />
+    <EmbeddedResource Include="Resources/cash-shop-promotions.json" LogicalName="DfoServer.Resources.cash-shop-promotions.json" />
     <EmbeddedResource Include="Sqlite/game_schema.sql" LogicalName="DfoServer.Sqlite.game_schema.sql" />
     <None Update="Resources/**" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Sqlite/*.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

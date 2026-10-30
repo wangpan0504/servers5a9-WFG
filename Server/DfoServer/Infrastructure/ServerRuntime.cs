@@ -62,9 +62,20 @@ internal static class ServerRuntime
         return ChannelCatalog.Parse(reader.ReadToEnd());
     }
 
+    // 单文件发行包只携带内置配置；目录部署仍优先使用外置文件。漏掉内置回退会让服务端在
+    // 「Cash shop promotions」阶段直接以 FileNotFoundException 结束（2026-10-30 实机）。
+    internal static string ReadShippedPromotionConfig()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "Resources", "cash-shop-promotions.json");
+        using var stream = File.Exists(path) ? File.OpenRead(path) :
+            typeof(ServerRuntime).Assembly.GetManifestResourceStream("DfoServer.Resources.cash-shop-promotions.json")
+            ?? throw new InvalidDataException("程序缺少内置商城促销配置");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     internal static CashShopPromotionCatalog LoadCashShopPromotions(ItemResources items) =>
-        CashShopPromotionCatalog.Load(Path.Combine(AppContext.BaseDirectory, "Resources", "cash-shop-promotions.json"),
-            items.CashShop, items.Items.Get);
+        CashShopPromotionCatalog.Parse(ReadShippedPromotionConfig(), items.CashShop, items.Items.Get);
 
     public static ServerHost Create(ServerOptions options, PvfArchive pvf, CharacterRepository repository, TownCatalog towns, CharacterCatalog characters,
         SkillLearningCatalog learning, ItemResources itemResources, ServerLog log, QuestCatalog quests,
