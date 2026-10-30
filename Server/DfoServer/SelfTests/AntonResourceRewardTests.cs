@@ -20,7 +20,9 @@ internal static class AntonResourceRewardTests
         That(resolved.MapSpecification!.Single(map => map.Position == resolved.Starts.Single()) is
             { Id: 19206, Position: { X: 0, Y: 1 }, Path: "map/219_blackvolcano/19206(6,0)s.map" },
             "19206按原表编号和MAP归属/BB选择，位置沿DGN而非文件名6,0");
-        var factory = new AntonResourceRewards(script, resources.ItemResources.Items);
+        var factory = new AntonResourceRewards(script, resources.ItemResources.Items, resources.ItemResources.Boosters);
+        Reject<InvalidDataException>(() => new AntonResourceRewards(script, resources.ItemResources.Items, null),
+            "非空正式奖励声明必须提供共享奖池目录，不能退回原箱绕过依赖校验");
         var first = factory.Create(false, _ => 0);
         var last = factory.Create(true, weight => weight - 1);
         That(first.Length == 2 && first.All(phase => phase.Source == AntonResourceRewards.Source && !phase.PublishResult),
@@ -33,15 +35,14 @@ internal static class AntonResourceRewardTests
             var pcroom = last[index].Offers.Single(offer => offer.Kind == 1);
             That(first[index].Offers.Select(offer => offer.Kind).Order().SequenceEqual(new byte[] { 0, 1 }) &&
                 normal.Card == 0 && first[index].Offers.All(offer => offer.Display.IsEmpty), "两个独立牌种沿已证0/1请求，未知600展示列保持空");
-            That(normal.Grants.Length == 2 && normal.Grants.All(grant => grant.Count == 1) &&
-                normal.Grants.Any(grant => grant.ItemId == rows.Single(row => row.Kind == "party_card").ItemId) &&
-                normal.Grants.Any(grant => grant.ItemId == rows.Single(row => row.Kind == "privilege_card").ItemId),
-                "本服每人party箱1和privilege福利1，编号完全取资源");
-            That(pcroom.Grants.Length == 3 && pcroom.Grants.Any(grant => grant.ItemId == rows.Single(row => row.Kind == "pcroom_card").ItemId),
-                "只有既有PC房资格增加pcroom箱1，不把RawA或RawD猜成数量");
-            That(first[index].Offers.Single(offer => offer.Kind == 0).Grants is [{ Count: 1 } head] && head.ItemId == squad[0].ItemId &&
+            That(normal.Grants is [{ ItemId: 10304529 } fate, { ItemId: 10093974, Count: 6 }] &&
+                fate.Count == (index == 0 ? 30 : 45), "86单池解析映射现网95产物数量，不发配置箱");
+            That(pcroom.Grants is [{ ItemId: 10304529 }, { ItemId: 10093974, Count: 11 }, { ItemId: 10093974, Count: 6 }],
+                "PC房资格沿原入口，三份实际奖励分别冻结，福利不丢失");
+            That(first[index].Offers.Single(offer => offer.Kind == 0).Grants is [{ ItemId: 10093974 } head] &&
+                head.Count == (index == 0 ? 19 : 58) &&
                 last[index].Offers.Single(offer => offer.Kind == 0).Grants is [{ Count: 1 } tail] && tail.ItemId == squad[^1].ItemId,
-                "本服相对权重抽样覆盖首尾边界，原始98/1/1与665/300/5/25/5不当数量发放");
+                "箱内权重首项为19/58材料，末项多池booster保持原箱，不套86单池算法");
         }
         Reject<InvalidDataException>(() => factory.Create(false, weight => weight), "越界随机结果不得冻结为合法奖励");
     }

@@ -143,7 +143,17 @@ internal static partial class AntonRaidGapTcpTests
         var leaderReport = new AntonTcpProbe.AntonProbeReport();
         var memberReport = new AntonTcpProbe.AntonProbeReport();
         for (int clear = 0; clear < 4; clear++)
-            AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport);
+        {
+            AntonTcpProbe.EnterSquad(leader, member, catalog, 210, leaderReport, memberReport, leave: clear != 0);
+            if (clear != 0) continue;
+            member.Send(72, [1, 2]); AntonTcpProbe.Barrier(member, "一人先退出原Run");
+            AntonTcpProbe.Barrier(leader, "同步先退出成员");
+            leader.Send(72, [1, 1]);
+            var incomplete = AntonTcpProbe.Barrier(leader, "86不完整原名单降为回城");
+            That(incomplete.Any(p => p is { Kind: 1, Opcode: 72, Body: [1, 1, 2] }) &&
+                incomplete.Any(p => p is { Kind: 0, Opcode: 24 }) && incomplete.All(p => p.Opcode != 27),
+                "名单不全才允许0101降option2，原Run成员释放后可重新编队进入");
+        }
         That(leaderReport.Maps.Count > 0 && memberReport.Maps.Count > 0, "两人都能收到 29");
         SameRoom(leaderReport.Maps[0], memberReport.Maps[0], 32200, "进 210 时两人 29 都在起点 32200");
         SameRoom(leaderReport.Maps[^1], memberReport.Maps[^1], null, "清到 Boss 房时两人 29 的地图和坐标一致");
@@ -155,7 +165,7 @@ internal static partial class AntonRaidGapTcpTests
         foreach (int dungeon in new[] { 212, 214, 213, 215 })
         {
             for (int clear = 0; clear < (dungeon is 213 or 215 ? 2 : 1); clear++)
-                AntonTcpProbe.EnterSquad(leader, member, catalog, dungeon, leaderReport, memberReport);
+                AntonTcpProbe.EnterSquad(leader, member, catalog, dungeon, leaderReport, memberReport, leave: dungeon != 215 || clear != 1);
             byte state = dungeon == 215 ? (byte)2 : dungeon == 213 ? (byte)3 : (byte)1;
             AssertState(leaderReport, dungeon, state);
             AssertState(memberReport, dungeon, state);
@@ -174,6 +184,22 @@ internal static partial class AntonRaidGapTcpTests
             "双人完整阶段 0 不发 596/597/601");
         That(fixture.Query("SELECT sum(json_extract(item_core,'$.Value')) FROM character_inventory_items WHERE json_extract(item_core,'$.ItemId')=10096296") is [[2L]],
             "双人开战各扣一张，进图和清 210 不再扣");
+        string frozen = fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs ORDER BY character_id");
+        member.Send(72, [1, 1]);
+        That(AntonTcpProbe.Barrier(member, "队员不能替全队选图").All(p => p.Opcode != 72), "86完整分队结算只接受队长操作");
+        leader.Send(72, [1, 1]);
+        var selectedLead = AntonTcpProbe.Barrier(leader, "全队结算选图队长");
+        var selectedMate = AntonTcpProbe.Barrier(member, "全队结算选图队员");
+        foreach (var selected in new[] { selectedLead, selectedMate })
+            That(selected.Any(p => p is { Kind: 1, Opcode: 72, Body: [1, 1, 1] }) &&
+                selected.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }) &&
+                selected.Any(p => p is { Kind: 0, Opcode: 27 } && p.Body.Length == 42) &&
+                selected.All(p => p.Opcode is not (24 or 28 or 29 or 660)), "完整分队逐人确认选图并建立95场景，不伪造回城或新Run");
+        That(frozen == fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs ORDER BY character_id") &&
+            fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[0L]], "选图不代领、重抽或清除未领奖成员资格");
+        leader.Send(72, [1, 0]);
+        That(AntonTcpProbe.Barrier(leader, "选图后的旧菜单").All(p => p.Opcode != 72), "旧结果菜单不能退出新的选图状态");
+
     }
 
     static void SameRoom(byte[] leader, byte[] member, uint? map, string why) =>

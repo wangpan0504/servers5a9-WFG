@@ -9,6 +9,7 @@ internal static partial class AntonRaidGapTcpTests
     // 读宽来源：01DC8B70、023B2A54..2AAA、01101417..01446；见副本协议翻牌章节。
     public static async Task RunCard600601Async(ServerOptions source, string root, TcpTestResources resources)
     {
+        AntonResourceRewardTests.Run(resources);
         var clock = new LukeRaidClockTests.Clock(DateTimeOffset.Parse("2026-10-28T00:00:00Z"));
         await using var fixture = await BootAsync(source, root, resources, "anton-raid-card600-601",
             """{"StartMinimumOverride":1,"AntonFormalEntryEnabled":true,"AntonPhaseProgressEnabled":true}""", clock);
@@ -22,6 +23,8 @@ internal static partial class AntonRaidGapTcpTests
             "UNIMPLEMENTED：真实Reward不补601业务列，重复117不生成600完整展示");
         // 不重新抽奖；直接读资格事务已经冻结的原计划，随机结果以数据库为准。
         string frozen = fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs");
+        That(frozen.Contains("10304529") && frozen.Contains("10093974") && !frozen.Contains("10304474") &&
+            !frozen.Contains("490703082"), "86单池算法按95现网PVF冻结实际材料，不把配置容器作为发奖物品");
         string waiting = State();
         int callbacks = clock.Callbacks;
         // 未发任何660时跨过休息600和阶段总限2400，不能由旧时钟代替领取。
@@ -47,6 +50,18 @@ internal static partial class AntonRaidGapTcpTests
         That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts") is [[2L]] &&
             frozen == fixture.Snapshot("SELECT phase0_event,phase0_receipt FROM character_raid_runs"),
             "两类奖励提交后保留原阶段资格和冻结计划");
+        clock.Advance(100);
+        AntonTcpProbe.Barrier(peer, "休息100秒");
+        peer.Send(666);
+        var prepare = AntonTcpProbe.Barrier(peer, "团长空666提前准备");
+        That(prepare.Any(p => p is { Kind: 1, Opcode: 666, Body: [1] }) &&
+            prepare.Any(p => p is { Opcode: 594, Body.Length: 0 }) &&
+            prepare.Any(p => p is { Opcode: 597, Body: [0,3,0,0,0] }), "86移植：团长提前开始且先准备3秒");
+        clock.Advance(2);
+        That(AntonTcpProbe.Barrier(peer, "准备未满").All(p => p is not { Opcode: 587, Body: [2,1] }), "准备2秒不得提前开始");
+        clock.Advance(1); clock.FireQueued();
+        That(AntonTcpProbe.Barrier(peer, "准备完成").Count(p => p is { Opcode: 587, Body: [2,1] }) == 1,
+            "团长准备后只启动一次P2，旧休息回调无权重复推进");
         assets = State();
         foreach (byte kind in new byte[] { 1, 0 })
         {
@@ -80,8 +95,8 @@ internal static partial class AntonRaidGapTcpTests
             That(packets.Count(p => p is { Kind: 1, Opcode: 660, Body: [1] }) == 1 && packets.All(p => p.Opcode != 601) &&
                 packets.IndexOf(display) < packets.FindIndex(p => p is { Kind: 1, Opcode: 660 }),
                 "合法660资产提交后先600再ACK01，不补601业务列");
-            That(packets.Any(p => p is { Kind: 0, Opcode: 587, Body: [2, 1] }) == advances,
-                "全部规定牌种确认后才发送阶段1的587");
+            That(packets.Any(p => p is { Kind: 0, Opcode: 587, Body: [5, 0] }) == advances,
+                "全部规定牌种确认后才发送休息态587");
             return packets;
         }
     }

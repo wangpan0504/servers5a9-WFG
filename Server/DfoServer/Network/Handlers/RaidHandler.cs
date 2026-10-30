@@ -134,6 +134,15 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         if (request.Body.Length != 0 || Actor(context) is not { } actor) return CommandResult.Unhandled;
         var party = registry.Find(actor);
         var definition = party is null ? null : catalog.Find(party.Type);
+        if (party?.Leader == actor.Character && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } battle &&
+            battle.View.State == AntonRaidBattleState.Intermission)
+        {
+            if (!battle.PrepareAntonNextPhase(actor)) return CommandResult.Unhandled;
+            log.Write("anton_phase2_preparing", new { Connection = context.Id, battle.Instance, Reason = "leader" });
+            await context.Reply(CmdPacketType.START_RAID, [1], "anton_phase2_preparing", () => actor.IsCurrent);
+            battle.Publish(battle.View);
+            return CommandResult.Handled;
+        }
         using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
         int members = party?.Members.Count(m => m.Actor.IsCurrent) ?? 0;
         bool supported = definition?.Type == 0 && start is not null || definition?.Type == 1 && lukeStart is not null;

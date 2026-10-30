@@ -13,6 +13,16 @@ namespace DfoServer.Testing;
 // 真实PVF规则与可控时钟；清图/选定孵化目标为显式领域事实，不冒充自然随机或实机战斗。
 internal static class AntonRaidTimerTests
 {
+    sealed class HatcheryRandom(int target) : Random
+    {
+        int calls;
+        public override int Next(int maxValue)
+        {
+            int omitted = target == 224 ? 0 : 3;
+            return calls++ == 0 ? omitted : Array.IndexOf(new[] { 221, 222, 223, 224 }.Where((_, i) => i != omitted).ToArray(), target);
+        }
+    }
+
     internal static void Run(string database, TcpTestResources resources)
     {
         var repository = new CharacterRepository(database);
@@ -31,30 +41,65 @@ internal static class AntonRaidTimerTests
             "匹配PVF的PARTY MAX原值216=1、其它P1图=5，不解释并发语义");
         foreach (int dungeon in new[] { 221, 222, 223, 224 }) Hatchery(dungeon);
         PhaseReset();
+        foreach (int dungeon in new[] { 212, 214 }) TimedPhaseReset(dungeon);
         PendingHatcheryAfterVolcano();
         TimeoutRetry();
+        IntermissionPreparation();
 
-        void Hatchery(int dungeon)
+        void IntermissionPreparation()
         {
             var clock = new LukeRaidClockTests.Clock(); var store = new Store();
             var battle = Battle(clock, false);
+            var service = new LukeRaidClocks(clock, store, (_, error) => throw error);
+            try
+            {
+                using var lease = service.Reserve(battle)!; lease.Activate();
+                Clear(battle, actor, 210); Clear(battle, actor, 213);
+                // 保留已安装原擎天Run，核对86不强制退场及95旧Run隔离。
+                var heldRun = Clear(battle, actor, 215, releaseLast: false); Settle(battle, store);
+                var reward = battle.View; var policy = battle.RewardPolicy(actor, 0)!;
+                foreach (var offer in policy.Offers)
+                    battle.ConfirmReward(actor, new(battle.Instance, 0, offer.Kind, offer.Card, actor.Character,
+                        policy.Source, offer.Grants, false, battle.RewardWeek ?? 0));
+                battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision);
+                That(battle.PrepareAntonNextPhase(actor), "休息可由当前成员进入已授权团长准备入口");
+                var preparing = battle.View;
+                That(!battle.PrepareAntonNextPhase(actor with { Epoch = actor.Epoch + 1 }) && ReferenceEquals(preparing, battle.View), "旧选角epoch无权提前开始或续期");
+                That(!battle.PrepareAntonNextPhase(actor) && ReferenceEquals(preparing, battle.View), "重复开始不续准备deadline");
+                clock.Advance(3);
+                That(battle.View is { Phase: 1, State: AntonRaidBattleState.Fighting }, "86不强制旧Run退场，准备完成仍可开启P2");
+                var started = battle.View;
+                var identity = new DungeonRunIdentity(actor.Character, 0, 1, Guid.NewGuid(), 1);
+                using var blocked = battle.ReserveDungeon(new(battle.Instance, 1, 1), 218, [(actor, identity)]);
+                That(blocked is null, "本人仍在旧Run时不能并行安装新Run");
+                battle.ReleaseDungeon(actor, heldRun); clock.FireQueued();
+                That(ReferenceEquals(started, battle.View), "旧Run退场和旧回调不重置P2或释放新占用");
+                Clear(battle, actor, 218);
+                That(battle.View.Phase == 1 && battle.View.Symbols["[218 dgn hp]"] == 0, "旧Run正常退出后保留P2合法进图能力");
+            }
+            finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        }
+
+        void Hatchery(int expectedDungeon)
+        {
+            var clock = new LukeRaidClockTests.Clock(); var store = new Store();
+            var battle = Battle(clock, false, expectedDungeon);
             var errors = new List<string>();
             var service = new LukeRaidClocks(clock, store, (stage, _) => errors.Add(stage));
             try
             {
                 using var lease = service.Reserve(battle)!; lease.Activate();
-                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215); Settle(battle, store); Rewards(battle);
+                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215); Settle(battle, store); Rewards(battle, clock);
                 clock.Advance(179);
                 That(!battle.View.Deferred.Values.Any(row => row.Tag == "[open random hatchery]"), "180前不能预开随机目标");
                 clock.Advance(1);
-                int token = battle.View.Deferred.Single(row => row.Value.Tag == "[open random hatchery]").Key;
-                That(battle.View.Dungeons[dungeon] == RaidDungeonState.Hide, "UNIMPLEMENTED：180只产生随机待决，不猜目标或权重");
-                var unchanged = battle.View;
-                That(battle.CompleteDeferred(battle.Instance, battle.View.Revision, token, 219) is null &&
-                    battle.CompleteDeferred(battle.Instance, battle.View.Revision, token, 220) is null &&
-                    ReferenceEquals(unchanged, battle.View), "非HATCHERY INFO目标拒绝且不消费待决事件");
-                That(battle.CompleteDeferred(battle.Instance, battle.View.Revision, token, dungeon) is not null,
-                    "显式选择HATCHERY INFO登记目标，仅验证其后已证计时规则");
+                var opened = new[] { 221, 222, 223, 224 }.Where(id => battle.View.Dungeons[id] == RaidDungeonState.Open).ToArray();
+                int dungeon = battle.View.Symbols["[infection dungeon index]"];
+                That(dungeon == expectedDungeon && opened.Length == 3 && opened.Contains(dungeon) && battle.View.Symbols["[is exist infection dungeon]"] == 1 &&
+                    !battle.View.Deferred.Values.Any(row => row.Tag == "[open random hatchery]"),
+                    "86移植：180自然四选三，感染从已开三图选一，一次消费待决");
+                That(opened.All(id => battle.View.Timers[new(1, id)] == 120 && battle.View.Timers[new(3, id)] == 120),
+                    "三张随机目标各有独立120计时");
                 var first = battle.View;
                 That(first.Timers[new(1, dungeon)] == 120 && first.Timers[new(3, dungeon)] == 120, "open同时设timer1/3各120");
                 clock.Advance(119);
@@ -74,6 +119,8 @@ internal static class AntonRaidTimerTests
                 clock.Advance(5);
                 That(battle.View.TimerGenerations[new(3, dungeon)] > namedGeneration, "50到期独立续timer3");
                 Clear(battle, actor, dungeon);
+                That(battle.View.Symbols["[is exist infection dungeon]"] == 0 && battle.View.Symbols["[infection dungeon index]"] == dungeon,
+                    "清感染场关闭感染效果，保留原身份供240重开");
                 That(battle.View.Dungeons[dungeon] == RaidDungeonState.Close && battle.View.Timers[new(2, dungeon)] == 240,
                     "clear关闭目标并设timer2=240");
                 clock.Advance(239);
@@ -81,11 +128,16 @@ internal static class AntonRaidTimerTests
                 clock.Advance(1);
                 That(battle.View.Dungeons[dungeon] == RaidDungeonState.Open && battle.View.Timers[new(1, dungeon)] == 120 &&
                     battle.View.Timers[new(3, dungeon)] == 120, "240预留自然重开并重设120的新代");
+                That(battle.View.Symbols["[is exist infection dungeon]"] == 1 && battle.View.Symbols["[infection dungeon index]"] == dungeon,
+                    "240重开恢复同一感染身份，不重新抽选");
+                int normal = opened.First(id => id != dungeon);
+                Clear(battle, actor, normal);
+                That(battle.View.Symbols["[is exist infection dungeon]"] == 1, "普通孵化场关闭不清感染效果");
                 Clear(battle, actor, dungeon); Clear(battle, actor, 219);
                 clock.Advance(240); clock.FireQueued();
                 That(battle.View.Dungeons[dungeon] == RaidDungeonState.Hide && battle.View.Dungeons[220] == RaidDungeonState.Open &&
                     !battle.View.Deferred.Values.Any(row => row.DungeonId == dungeon), "219隐藏使旧240预留失效，迟到回调不能重开孵化场");
-                Clear(battle, actor, 220); Settle(battle, store); Rewards(battle);
+                Clear(battle, actor, 220); Settle(battle, store); Rewards(battle, clock);
                 int callbacks = clock.Callbacks; clock.Advance(3600);
                 That(clock.Callbacks == callbacks && errors.Count == 0, "Completed回收唯一租约，无孤儿回调");
             }
@@ -112,6 +164,54 @@ internal static class AntonRaidTimerTests
                 "重新四次黑雾后恢复两条腿的声明HP，不能继承上轮已清腿");
         }
 
+        // 证据：etc/raid/anton.etc 的 OPEN→timer1=300、timer1到期→1PHASE FAIL；
+        // 现场2026-10-29 21:03:22→21:08:22对应300秒。隔离两张震颤，避免只证明同时到期。
+        void TimedPhaseReset(int failingDungeon)
+        {
+            var clock = new LukeRaidClockTests.Clock(); var store = new Store();
+            var battle = Battle(clock, false);
+            var errors = new List<string>();
+            var service = new LukeRaidClocks(clock, store, (stage, _) => errors.Add(stage));
+            try
+            {
+                using var lease = service.Reserve(battle)!; lease.Activate();
+                // 开战与黑雾归零不是同一起点；尚未开放震颤时不能启动其攻略计时。
+                clock.Advance(37);
+                That(battle.View.Timers.IsEmpty, "黑雾未归零时不启动震颤300或211重开300");
+                Clear(battle, actor, 210);
+                That(battle.View.Timers[new(1, failingDungeon)] == 300 &&
+                    battle.View.Timers[new(2, 211)] == 300 && !battle.View.Timers.ContainsKey(new(1, 211)),
+                    "210归零同时开始震颤攻略300与211重开300，尚未开始211攻略480");
+                Clear(battle, actor, failingDungeon == 212 ? 214 : 212);
+                var identity = new DungeonRunIdentity(actor.Character, 0, 1, Guid.NewGuid(), 1);
+                using var run = battle.ReserveDungeon(new(battle.Instance, 0, 1), 215, [(actor, identity)]);
+                That(run is not null, "失败前保留图内擎天Run以核对迟到清图"); run!.Install();
+                var fact = new DungeonClearFact(identity, 215, [Guid.NewGuid()])
+                    { ClearMap = new("boss", new(0, 0), 77, "fixture/anton-timer.map") };
+                clock.Advance(299);
+                That(battle.View.Dungeons[210] == RaidDungeonState.Hide &&
+                    battle.View.Dungeons[failingDungeon] == RaidDungeonState.Open &&
+                    battle.View.Symbols["[kill all character]"] == 0, "299秒前不得提前重置或签发强杀符号");
+                clock.Advance(1);
+                var reset = battle.View;
+                That(reset.Dungeons[210] == RaidDungeonState.Open && reset.Symbols["[210 dgn hp]"] == 4 &&
+                    new[] { 211, 212, 213, 214, 215, 216 }.All(id => reset.Dungeons[id] == RaidDungeonState.Hide) &&
+                    reset.Symbols["[kill all character]"] == 1 && reset.Symbols["[1phase fail]"] == 0 &&
+                    reset.Timers.IsEmpty && reset.Deferred.IsEmpty && store.Seen.Count == 0,
+                    "单张震颤300自然到期重置P1，取消211重开及旧预留，不生成阶段奖励或失败结算");
+                That(battle.CompleteAntonReservedDungeon(fact) is null && ReferenceEquals(reset, battle.View),
+                    "重置后仍在旧擎天内的迟到117事实不能扣HP或推进阶段");
+                battle.ReleaseDungeon(actor, identity.InstanceId);
+                Clear(battle, actor, 210);
+                var reopened = battle.View;
+                That(reopened.Symbols["[215 dgn hp]"] == 2 &&
+                    battle.CompleteAntonReservedDungeon(fact) is null && ReferenceEquals(reopened, battle.View),
+                    "重新开腿后旧Run仍不得消费新目标代HP");
+                That(errors.Count == 0, "自然重置没有时钟错误；强杀符号不等同客户端死亡验收");
+            }
+            finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        }
+
         void PendingHatcheryAfterVolcano()
         {
             var clock = new LukeRaidClockTests.Clock(); var store = new Store();
@@ -120,16 +220,12 @@ internal static class AntonRaidTimerTests
             try
             {
                 using var lease = service.Reserve(battle)!; lease.Activate();
-                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215); Settle(battle, store); Rewards(battle);
-                clock.Advance(180);
-                int token = battle.View.Deferred.Single(row => row.Value.Tag == "[open random hatchery]").Key;
+                Clear(battle, actor, 210); Clear(battle, actor, 213); Clear(battle, actor, 215); Settle(battle, store); Rewards(battle, clock);
+                clock.Advance(179);
                 Clear(battle, actor, 219);
                 var heart = battle.View;
-                That(!heart.Deferred.ContainsKey(token) && !heart.DeferredAnchors.ContainsKey(token) &&
-                    !heart.DeferredGenerations.ContainsKey(token), "火山hide撤销来自其timer的旧随机孵化待决及代次");
-                foreach (int dungeon in new[] { 221, 222, 223, 224 })
-                    That(battle.CompleteDeferred(battle.Instance, heart.Revision, token, dungeon) is null,
-                        "心脏已开放后不能消费旧随机待决重开孵化场");
+                That(!heart.Deferred.Values.Any(row => row.Tag == "[open random hatchery]") && !heart.Timers.ContainsKey(new(3, 219)),
+                    "火山先清撤销180开场计时，不留下随机待决");
                 clock.Advance(240); clock.FireQueued();
                 That(ReferenceEquals(heart, battle.View) && heart.Dungeons[220] == RaidDungeonState.Open &&
                     new[] { 218, 219, 221, 222, 223, 224 }.All(id => heart.Dungeons[id] == RaidDungeonState.Hide),
@@ -162,27 +258,38 @@ internal static class AntonRaidTimerTests
             finally { service.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
         }
 
-        AntonRaidBattle Battle(TimeProvider clock, bool timeout)
+        AntonRaidBattle Battle(TimeProvider clock, bool timeout, int? hatchery = null)
         {
-            var battle = new AntonRaidBattle(script, clock: clock, antonPhaseProgress: true,
-                antonRewards: new(script, resources.ItemResources.Items),
+            var battle = new AntonRaidBattle(script, clock: clock, antonPhaseProgress: true, antonHatcheryRandom: hatchery is { } id ? new HatcheryRandom(id) : null,
+                antonRewards: new(script, resources.ItemResources.Items, resources.ItemResources.Boosters),
                 phaseTimeout: timeout ? new("fixture/anton-local-seconds", [2400, 2400]) : null);
             That(battle.JoinStart(actor), "计时领域测试绑定当前actor和资源奖励"); return battle;
         }
-        void Rewards(AntonRaidBattle battle)
+        void Rewards(AntonRaidBattle battle, LukeRaidClockTests.Clock clock)
         {
             var view = battle.View; var policy = battle.RewardPolicy(actor, view.Phase)!;
             foreach (var offer in policy.Offers)
                 battle.ConfirmReward(actor, new(battle.Instance, view.Phase, offer.Kind, offer.Card, actor.Character,
                     policy.Source, offer.Grants, view.Phase == 1, battle.RewardWeek ?? 0));
             That(battle.AdvanceAfterRewards(battle.Instance, battle.View.Revision) is not null, "领域确认全部牌种后推进，不代表实际资产发放");
+            if (view.Phase == 0)
+            {
+                That(battle.View is { State: AntonRaidBattleState.Intermission, Phase: 0, AntonWaitSeconds: 595 }, "86移植：领奖齐进入595秒休息");
+                clock.Advance(594);
+                That(battle.View.State == AntonRaidBattleState.Intermission && !battle.View.AntonPreparing, "休息到期前不进入准备");
+                clock.Advance(1);
+                That(battle.View.AntonPreparing && battle.View.Phase == 0, "休息自然到期仍先准备，不直接进入P2");
+                clock.Advance(3); clock.FireQueued();
+                That(battle.View is { Phase: 1, State: AntonRaidBattleState.Fighting }, "准备3秒后初始化P2；迟到回调不能重置新阶段");
+            }
         }
     }
 
     // 真实规则计时回归也沿正式共享Run扣HP，不再借旧BindDungeon夹具跳过门槛。
-    static void Clear(AntonRaidBattle battle, RaidActor actor, int dungeon, bool accepted = true)
+    static Guid Clear(AntonRaidBattle battle, RaidActor actor, int dungeon, bool accepted = true, bool releaseLast = true)
     {
         var initial = battle.View;
+        Guid lastRun = Guid.Empty;
         int count = Math.Max(1, initial.Symbols[$"[{dungeon} dgn hp]"]);
         for (int index = 0; index < (accepted ? count : 1); index++)
         {
@@ -191,7 +298,7 @@ internal static class AntonRaidTimerTests
             if (!accepted)
             {
                 That(reservation is null && ReferenceEquals(initial, battle.View), "到期目标不预留正式Run或改变HP");
-                return;
+                return Guid.Empty;
             }
             That(reservation is not null, "真实资源目标允许正式Run预留");
             reservation!.Install();
@@ -202,8 +309,10 @@ internal static class AntonRaidTimerTests
                 That(battle.View.Dungeons[dungeon] == RaidDungeonState.Open &&
                     battle.View.Symbols[$"[{dungeon} dgn hp]"] == count - index - 1,
                     "真实多次门槛未归零前保持Open，不触发后续状态");
-            battle.ReleaseDungeon(actor, identity.InstanceId);
+            lastRun = identity.InstanceId;
+            if (releaseLast || index + 1 < count) battle.ReleaseDungeon(actor, identity.InstanceId);
         }
+        return lastRun;
     }
 
     static void Settle(AntonRaidBattle battle, Store store)

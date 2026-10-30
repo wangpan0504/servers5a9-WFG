@@ -398,7 +398,7 @@ internal static class ServerRuntime
         var lukeTimers = !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }));
         var antonRewards = raidSettings.AntonPhaseProgressEnabled && raidCatalog.Find(0)?.Resources?.Script is { } antonScript
-            ? new Game.Raids.AntonResourceRewards(antonScript, itemResources.Items) : null;
+            ? new Game.Raids.AntonResourceRewards(antonScript, itemResources.Items, itemResources.Boosters) : null;
         // 启动时解析全部奖励模板，避免开战持owner锁时首次读取PVF。
         if (antonRewards is not null) _ = antonRewards.Create(false);
         var lukeStart = lukeStartPolicy is null ? null : new Game.Raids.LukeRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, lukeStartPolicy, clock, itemResources.Items, lukeTimers);

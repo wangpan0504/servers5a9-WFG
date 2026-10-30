@@ -4,7 +4,7 @@ using DfoServer.GameWorld.Raids;
 
 namespace DfoServer.Game.Raids;
 
-internal enum AntonRaidBattleState : byte { Fighting = 2, Reward = 3, Completed = 4 }
+internal enum AntonRaidBattleState : byte { Fighting = 2, Reward = 3, Completed = 4, Intermission = 5 }
 internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Phase, AntonRaidBattleState State,
     ImmutableDictionary<string, int> Symbols, ImmutableDictionary<int, RaidDungeonState> Dungeons,
     ImmutableDictionary<RaidTimer, int> Timers)
@@ -19,6 +19,9 @@ internal sealed record AntonRaidBattleView(Guid Instance, long Revision, int Pha
     public ImmutableDictionary<int, LukeRouteProgress> LukeRoutes { get; init; } = ImmutableDictionary<int, LukeRouteProgress>.Empty;
     // 仅显式设施报告兼容模式使用，键最多为三个已证设施符号；随候选原子提交。
     public ImmutableDictionary<string, long> LukeFacilityWriteEpochs { get; init; } = ImmutableDictionary<string, long>.Empty;
+    public bool AntonPreparing { get; init; }
+    public long AntonWaitAnchor { get; init; }
+    public int AntonWaitSeconds { get; init; }
     public bool ClockFaulted { get; init; }
     public bool PhaseExpired { get; init; }
     public long PhaseClockGeneration { get; init; }
@@ -143,17 +146,22 @@ internal sealed partial class AntonRaidBattle
 
     public AntonRaidBattle(RaidScript script, Guid? instance = null, RaidKind kind = RaidKind.Anton,
         LukeRaidCompletionPolicy? completion = null, TimeProvider? clock = null, LukeRaidRevivalPolicy? revival = null, LukeRaidPhaseTimeoutPolicy? phaseTimeout = null,
-        LukeFixedCardRoute? fixedRoute = null, bool antonPhaseProgress = false, LukeFacilityReportPolicy? facilities = null, AntonResourceRewards? antonRewards = null)
+        LukeFixedCardRoute? fixedRoute = null, bool antonPhaseProgress = false, LukeFacilityReportPolicy? facilities = null, AntonResourceRewards? antonRewards = null, Random? antonHatcheryRandom = null)
     {
+        this.script = script;
         if (!script.Issues.IsEmpty || script.Phases.IsEmpty || script.Phases.Length > sbyte.MaxValue ||
             script.Symbols.Count > byte.MaxValue || script.Phases.Any(p => p.Dungeons.Length > byte.MaxValue))
             throw new InvalidDataException("攻坚阶段资源不完整或超出已证协议范围");
         if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
         if (antonPhaseProgress && kind != RaidKind.Anton) throw new InvalidDataException("阶段推进开关只属于安徒恩");
         this.antonPhaseProgress = antonPhaseProgress;
+        this.antonHatcheryRandom = antonHatcheryRandom ?? Random.Shared;
         if (antonRewards is not null && (kind != RaidKind.Anton || !antonPhaseProgress))
             throw new InvalidDataException("安徒恩正式奖励要求正式阶段推进");
         this.antonRewards = antonRewards;
+        if (antonRewards is not null && (AntonHeaderSeconds("[phase break time]") is <= 5 or > 86400 ||
+            AntonHeaderSeconds("[start delay time]") is <= 0 or > 86400))
+            throw new InvalidDataException("安徒恩休息或准备时长不完整");
         if (completion is not null && (kind != RaidKind.Luke || !ValidLukeCompletion(completion)))
             throw new InvalidDataException("卢克阶段策略不完整");
         if (revival is not null && (kind != RaidKind.Luke || script.Phases.Length != 2 || string.IsNullOrWhiteSpace(revival.Source)))
@@ -171,7 +179,6 @@ internal sealed partial class AntonRaidBattle
         lukeRevival = revival;
         lukeCompletion = completion; lukeClock = clock ?? TimeProvider.System;
         Kind = kind;
-        this.script = script;
         Instance = instance ?? Guid.NewGuid();
         if (Instance == Guid.Empty) throw new InvalidDataException("攻坚实例身份不能为空");
         current = ReconcileLukeRoutes(Initialize(0, 0));
@@ -333,6 +340,8 @@ internal sealed partial class AntonRaidBattle
             current = before.Phase + 1 == script.Phases.Length
                 ? before with { State = AntonRaidBattleState.Completed, Revision = before.Revision + 1, Timers = ImmutableDictionary<RaidTimer, int>.Empty,
                     TimerGenerations = ImmutableDictionary<RaidTimer, long>.Empty, TimerAnchors = ImmutableDictionary<RaidTimer, long>.Empty }
+                : HasAntonRewards ? before with { State = AntonRaidBattleState.Intermission, Revision = before.Revision + 1,
+                    AntonWaitAnchor = lukeClock.GetTimestamp(), AntonWaitSeconds = Math.Max(0, AntonHeaderSeconds("[phase break time]") - 5) }
                 : Initialize(before.Phase + 1, before.Revision + 1, Kind == RaidKind.Luke ? before.Symbols : null, before.TimerSequence);
             // 旧阶段实例不能在下一阶段再次产生clear，集合随阶段释放，不随游玩时长增长。
             entries.Clear();
@@ -492,6 +501,23 @@ internal sealed partial class AntonRaidBattle
                 _ => throw new InvalidDataException("未支持的攻坚触发器 " + clause.Tag)
             };
         }
+        if (Kind == RaidKind.Anton && antonPhaseProgress && state.Phase == 1 &&
+            state.Symbols.TryGetValue("[infection dungeon index]", out int infected) && infected != 0)
+            state = state with { Symbols = state.Symbols.SetItem("[is exist infection dungeon]",
+                state.Dungeons.GetValueOrDefault(infected, RaidDungeonState.Hide) == RaidDungeonState.Open ? 1 : 0) };
+        if (Kind == RaidKind.Anton && antonPhaseProgress && state.Phase == 1)
+            foreach (var id in script.Headers.Where(row => row.Tag == "[hatchery info]").SelectMany(row => row.Values.Skip(2)).Select(row => row.Number))
+            {
+                if (state.Dungeons.GetValueOrDefault(id, RaidDungeonState.Hide) == RaidDungeonState.Open) continue;
+                foreach (int kind in new[] { 1, 3 })
+                {
+                    var key = new RaidTimer(kind, id);
+                    state = state with { Timers = state.Timers.Remove(key), TimerAnchors = state.TimerAnchors.Remove(key),
+                        TimerGenerations = state.TimerGenerations.Remove(key) };
+                }
+                foreach (string key in new[] { $"[{id} hatchery fail]", $"[{id} hatchery named create]" })
+                    if (state.Symbols.ContainsKey(key)) state = state with { Symbols = state.Symbols.SetItem(key, 0) };
+            }
         return state;
     }
 }

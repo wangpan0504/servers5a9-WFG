@@ -178,6 +178,9 @@ internal sealed partial class DungeonHandler
             if (notice.Kind == PartyDungeonNoticeKind.RaidSelection && notice.SceneTransition)
                 await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_direct_selection_scene", Guard);
             // 非零15已选定NPC副本，完成队伍场景投影即可，不重新打开普通副本列表。
+            // 86结果选图语义映射至95已有27场景边界，不把团本选择投影为普通副本列表。
+            if (notice.Kind == PartyDungeonNoticeKind.ResultSelection && notice.SceneTransition)
+                await context.Notify(NotiPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionNotice(), "anton_result_selection_scene", Guard);
             if (notice.Kind != PartyDungeonNoticeKind.RaidSelection && notice.Option == 0)
                 await GriefTowerProjection.SelectionNoticeAsync(context, notice.LegendDungeon, "party_selection_notice", Guard);
             return;

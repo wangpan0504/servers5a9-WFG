@@ -96,6 +96,10 @@ internal sealed partial class GameSession
         !HasPendingFormalCard && pendingQuestCompletion is null && !HasPendingQuestScene
             ? FormalReceipt() : null);
 
+    internal bool CanRetryAntonResultDungeon() => owner.Execute(() =>
+        AntonDungeonResultFocus() is { } receipt && raidCombat is { } raid &&
+        raid.Battle.AllowsAntonEntry(checked((int)receipt.Entry.DungeonId)));
+
     // 选图只读取原实例聚合，不另存一份初始战况；离团、换角与接管后不可重发旧列表。
     internal (RaidActor Actor, AntonRaidBattle Battle)? AntonRaidMap() => owner.Execute<(RaidActor, AntonRaidBattle)?>(() =>
         Ready && ChannelEntry?.Type == 23 && Selected?.Position is { Town: 19, Area: 2 } &&

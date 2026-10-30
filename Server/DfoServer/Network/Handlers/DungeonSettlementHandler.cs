@@ -384,9 +384,19 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
                     "formal_anton_result_focus", () => context.Session.CanPublishDungeonSettlement(anton));
                 return CommandResult.Handled;
             }
-            // UNIMPLEMENTED：团本再次挑战/选其他图缺少原生流程证据，不能用普通重开或通用成功代替。
-            if (option != (byte)DungeonResultOption.ReturnTown) return CommandResult.Unhandled;
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, squad.Members);
+            if (option <= 1)
+            {
+                var notices = squad.AntonResultCommand(context.Session, option);
+                string eventName = notices.Length == 0 ? "unimplemented" :
+                    notices[0].Kind == PartyDungeonNoticeKind.ResultSelection ? "dungeon_entry" : "formal_dungeon_return";
+                log.Write(eventName, new { Connection = context.Id, Reason = "anton-result-command", Dungeon = anton.Entry.DungeonId, option,
+                    Accepted = notices.Length > 0, Party = squad.Id,
+                    Action = notices.FirstOrDefault()?.Kind.ToString() ?? "unimplemented-open-retry-or-invalid-cohort" });
+                await PartyDungeonProjection.PublishAsync(notices);
+                return notices.Length > 0 ? CommandResult.Handled : CommandResult.Unhandled;
+            }
+            if (option != (byte)DungeonResultOption.ReturnTown) return CommandResult.Unhandled;
             return await PartyDungeonProjection.DepartAsync(context, partyDungeons, parties,
                 () => context.Reply(CmdPacketType.EPLP_COMMAND, DungeonSettlementPackets.ResultCommand(state, option),
                     "formal_anton_result_return"));

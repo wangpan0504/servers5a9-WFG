@@ -80,7 +80,7 @@ internal static class AntonRaidStartTests
                     ? [new("[phase time over]", 0, [new(0, value, null)])] : [] };
                 var unavailable = definition with { Resources = definition.Resources! with { Script = declaration } };
                 var guarded = new AntonRaidStart(registry, parties, repository, towns, pieces, phaseProgress: true,
-                    rewards: new(declaration, emptyItems));
+                    rewards: new(declaration, emptyItems, null));
                 That(guarded.Start(actors[0], expected, unavailable) is { Error: 19, Reason: "anton-phase-timeout-unavailable" } &&
                     Scalar(balance) == 60 && registry.IsCurrent(expected) && parties.Snapshot().Length == 0 &&
                     sessions.Take(20).Select((s, i) => ReferenceEquals(s.Selected, original[i]) && s.StartedRaid is null).All(row => row),
