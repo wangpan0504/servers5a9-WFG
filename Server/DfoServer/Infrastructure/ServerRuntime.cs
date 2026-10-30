@@ -52,22 +52,24 @@ internal static class ServerRuntime
         }
     }
 
-    // 单文件发布只产出 exe；目录部署的程序集是 exe 旁边独立的 DfoServer.dll。
-    // 不能用 Assembly.Location 判断：单文件里它恒为空，IL3000 会直接把发布打红。
-    static bool IsSingleFileBundle =>
-        !File.Exists(Path.Combine(AppContext.BaseDirectory, typeof(ServerRuntime).Assembly.GetName().Name + ".dll"));
-
     static Stream OpenShipped(string logicalName) =>
         typeof(ServerRuntime).Assembly.GetManifestResourceStream(logicalName)
         ?? throw new InvalidDataException("程序缺少内置资源：" + logicalName);
 
-    // 默认位置：目录部署优先外置文件，运维不重建程序也能改配置；单文件发行包只用内置资源。
-    // 单文件安装目录里可能残留上一版目录式部署的 Resources，那份旧文件不得覆盖内置默认值
-    // （2026-10-30 实机：旧 channel.txt 少了 beast 频道，启动崩溃修好后仍会静默少一个频道）。
+    // 外置文件优先，任何部署形态都一样：运维直接改安装目录里的配置即可生效，不必重建程序；
+    // 文件缺失才回退同版本内置资源。外置文件同时是运维关闭某个频道的唯一开关
+    // （2026-10-30 实机：单文件发行包若绕过它就会把已关闭的频道又带回来），不能按部署形态跳过。
     static Stream OpenDefaultOrShipped(string shippedFile, string logicalName)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "Resources", shippedFile);
-        return !IsSingleFileBundle && File.Exists(path) ? File.OpenRead(path) : OpenShipped(logicalName);
+        return File.Exists(path) ? File.OpenRead(path) : OpenShipped(logicalName);
+    }
+
+    // 把实际生效的来源写进日志：改了外置文件却没生效时，能一眼看出读的是哪一份。
+    static void LogResourceSource(ServerLog log, string stage, string shippedFile)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "Resources", shippedFile);
+        log.Write("resource_source", new { Stage = stage, Source = File.Exists(path) ? "external" : "bundled", Path = path });
     }
 
     // 显式给出路径时始终按外置读取，供夹具与运维指定文件；缺失才回退内置脚本。
@@ -109,15 +111,14 @@ internal static class ServerRuntime
         var channels = LoadChannels();
         var gameChannels = new GameChannelListeners(options, channels);
         log.Write("startup", new { Stage = "Runtime assembly", State = "starting" });
-        // 单文件发行包不读外置 Resources，但旧目录留在原地会误导运维以为改了配置生效，明确报一次。
-        if (IsSingleFileBundle && Directory.Exists(Path.Combine(AppContext.BaseDirectory, "Resources")))
-            log.Write("resource_warning", new { Stage = "Resources directory", State = "ignored",
-                Directory = Path.Combine(AppContext.BaseDirectory, "Resources"), Reason = "single-file bundle" });
+        LogResourceSource(log, "Channel script", "channel.txt");
+        LogResourceSource(log, "Cash shop promotions", "cash-shop-promotions.json");
+        LogResourceSource(log, "Independent attribute pairs", "independent-attribute-pairs.json");
         if (!itemResources.ItemMakingSkills.Available)
             log.Write("resource_warning", new { Stage = "Item making skills", Missing = "etc/itemmakingskill.etc", Disabled = "带制作熟练度声明的配方" });
         var timer = Stopwatch.StartNew();
         var attributePairs = IndependentAttributePairCatalog.Load(
-            IsSingleFileBundle ? null : Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
+            Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
             itemResources.Items, itemResources.Boosters, itemResources.LimitCubes, itemResources.Enchantments,
             itemResources.EpicPieces, itemResources.Contracts, id => Game.Currency.CurrencyWallet.RewardKind(id) is not null,
             useBundledDefault: true);

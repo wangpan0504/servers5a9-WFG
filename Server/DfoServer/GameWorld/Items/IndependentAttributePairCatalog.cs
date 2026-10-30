@@ -81,13 +81,11 @@ internal sealed class IndependentAttributePairCatalog
             : new(AttributePairResolutionKind.RequiredUnavailable, Reason: errors.GetValueOrDefault(source.Family, "family_missing"));
     }
 
-    // path 为 null 表示单文件发行包：不读取安装目录里的外置文件，直接用同版本内嵌规则。
-    public static IndependentAttributePairCatalog Load(string? path, ItemCatalog items, BoosterCatalog boosters,
+    // 外置文件优先（运维直接改安装目录即可生效），文件缺失才回退同版本内嵌规则；坏配置仍拒绝。
+    public static IndependentAttributePairCatalog Load(string path, ItemCatalog items, BoosterCatalog boosters,
         LimitCubeCatalog cubes, EnchantmentCatalog enchantments, EpicPieceCatalog pieces,
         PremiumContractCatalog contracts, Func<int, bool> isCurrencyReward, bool useBundledDefault = false)
     {
-        if (path is null)
-            return LoadBundled(items, boosters, cubes, enchantments, pieces, contracts, isCurrencyReward);
         try { return Parse(File.ReadAllText(path), items, boosters, cubes, enchantments, pieces, contracts, isCurrencyReward); }
         catch (Exception error) when (useBundledDefault && error is FileNotFoundException or DirectoryNotFoundException)
         { return LoadBundled(items, boosters, cubes, enchantments, pieces, contracts, isCurrencyReward); }
