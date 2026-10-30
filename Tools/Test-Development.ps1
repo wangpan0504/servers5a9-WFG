@@ -34,12 +34,12 @@ try {
     }
     if ($Action -eq 'Run' -or (-not $InputDescriptor -and $Action -eq 'Plan')) {
         if ($Mode -eq 'Dev' -and ($Groups.Count -eq 0 -or @($Groups | Where-Object { $_ -notmatch '^[a-z0-9-]+$' }).Count)) { throw 'Dev需要显式、合法的Groups；未选范围不会执行。' }
-        $profile = $UseCache -and $Mode -eq 'Dev' -and $Groups.Count -eq 1 -and $Groups[0] -ceq 'chat-rate-rules' -and -not $PvfPath
+        $profile = $UseCache -and $Mode -eq 'Dev' -and $Groups.Count -eq 1 -and (Get-DevelopmentRuleProfile $Groups[0]) -and -not $PvfPath
         if ($ForceFresh -and -not $profile) { throw 'ForceFresh要求UseCache及已审单组profile，用于同key重验；普通Dev本来实跑。' }
-        $manifest = if ($profile) { Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile } else { $null }
+        $manifest = if ($profile) { Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile $Groups[0] } else { $null }
         $plan = if ($manifest) { Get-DevelopmentResultPlan $Store $manifest $null $CacheWaitSeconds } else { @{State='run';Reason='explicit-selected-scope-no-cache'} }
         if ($ForceFresh -and $plan.State -ne 'blocked') { $plan=@{State='run';Reason='forced-same-input-revalidation'} }
-        if ($manifest -and (Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile).Key -cne $manifest.Key) { throw '等待期间输入变化，需重新计划；不能复用旧key结果。' }
+        if ($manifest -and (Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile $Groups[0]).Key -cne $manifest.Key) { throw '等待期间输入变化，需重新计划；不能复用旧key结果。' }
         if ($Action -eq 'Plan') {
             $plan.Mode=$Mode; $plan.Scope=$Groups; $plan.OtherScopes='not-run'
             if($Mode -eq 'Full'){$plan.Scope=@('repository','build','architecture','pvflib','core');if($PvfPath){$plan.Scope+='resources'};$plan.TCP='not-run';$plan.Coverage='not-established'}
@@ -51,7 +51,7 @@ try {
             $result = Invoke-DevelopmentResultSingleFlight $Store $manifest {
                 param($held)
                 Invoke-DevelopmentSelectedRun $Repository $Store $Groups $Configuration $PvfPath $BudgetDirectory $Mode $manifest $held $BuildProfile $CompleteStageTimeoutSeconds
-            } -WaitSeconds $CacheWaitSeconds -ValidateInputs { (Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile).Key -ceq $manifest.Key } -ForceExecute:$ForceFresh
+            } -WaitSeconds $CacheWaitSeconds -ValidateInputs { (Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile $Groups[0]).Key -ceq $manifest.Key } -ForceExecute:$ForceFresh
         } else { $result = Invoke-DevelopmentSelectedRun $Repository $Store $Groups $Configuration $PvfPath $BudgetDirectory $Mode $null $null $BuildProfile $CompleteStageTimeoutSeconds }
         $result | ConvertTo-Json -Depth 30; if ($result.State -eq 'blocked') { exit 2 }; exit 0
     }

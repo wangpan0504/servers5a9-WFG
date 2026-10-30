@@ -22,6 +22,8 @@ internal static class TcpRegressionTests
             await QuestLifecycleTcpTests.RunStageAsync(options,root,resources);
         }),
         ("settings-snapshot-rules", (_, _, _) => { ClientSettingsSnapshotsTests.Run(); return Task.CompletedTask; }),
+        ("equipment-power-rules", (_, _, _) => { EquipmentPowerScoreTests.RunCore(); return Task.CompletedTask; }),
+        ("frame-crc-rules", (_, _, _) => { FrameCrcTests.Run(); return Task.CompletedTask; }),
         ("chat-rate-rules", (_, _, _) => { ChatServiceTests.RunRateRules(); return Task.CompletedTask; }),
         ("commands", (options, root, _) => CommandLineTcpTests.RunAsync(options, root)),
         ("startup", (options, root, _) => StartupTcpTests.RunAsync(options, root)),
@@ -500,6 +502,8 @@ internal static class TcpRegressionTests
     static readonly HashSet<string> TargetedOnly = new(StringComparer.Ordinal)
     {
         "settings-snapshot-rules",
+        "equipment-power-rules",
+        "frame-crc-rules",
         "chat-rate-rules",
         "luke-scene-namespace",
         "luke-symbol103-handler",

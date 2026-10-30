@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Collections.Immutable;
@@ -276,22 +277,30 @@ internal sealed partial class ItemCatalog
     // 逐项解析互不依赖（PVF 按位置读取、缓存与模板表均线程安全），有序并行后结果与串行一致；
     // 原先串行约占服务启动 4 秒。任一项失败仍以原异常终止装配。
     public IEnumerable<ItemTemplate> DropCandidates(bool includeSpecialEquipment = false) =>
-        PositiveDropCandidates().Where(template => AcceptDropCandidate(template, includeSpecialEquipment)).ToImmutableArray();
+        PositiveDropCandidates(null).Where(template => AcceptDropCandidate(template, includeSpecialEquipment)).ToImmutableArray();
+
+    internal IEnumerable<ItemTemplate> DropCandidatesProfiled(ItemDropDiagnostics diagnostics) =>
+        PositiveDropCandidates(diagnostics).Where(template => AcceptDropCandidate(template, false)).ToImmutableArray();
 
     // 同一归档/名册生命周期不变；只缓存成功解析的模板引用，普通与祭坛分别执行原过滤。
     // 失败不发布快照，下一次仍重新预筛；已有Get模板缓存和异常解包合同不变。
-    ImmutableArray<ItemTemplate> PositiveDropCandidates()
+    ImmutableArray<ItemTemplate> PositiveDropCandidates(ItemDropDiagnostics? diagnostics)
     {
         lock (dropCandidatesGate)
         {
             if (!dropCandidateSnapshot.IsDefault)
+            {
+                diagnostics?.Capture(dropCandidateSnapshot, true);
                 return dropCandidateSnapshot;
+            }
             var rows = equipment.Concat(stackable).OrderBy(row => row.Key).ToArray();
+            diagnostics?.Start(rows.Length);
             try
             {
                 var result = rows.AsParallel().AsOrdered().WithDegreeOfParallelism(Math.Clamp(Environment.ProcessorCount / 2, 1, 8))
-                    .Select(row => DropCandidate(row.Key, row.Value)).Where(template => template is not null)
+                    .Select(row => diagnostics is null ? DropCandidate(row.Key, row.Value) : ProfiledDropCandidate(row.Key, row.Value, diagnostics.Current)).Where(template => template is not null)
                     .Select(template => template!).ToImmutableArray();
+                diagnostics?.Capture(result, false);
                 dropCandidateSnapshot = result;
                 return result;
             }
@@ -307,7 +316,13 @@ internal sealed partial class ItemCatalog
         template.Kind is ItemKind.Equipment or ItemKind.Consumable or ItemKind.Material or ItemKind.Profession or ItemKind.Talisman or ItemKind.Rune ||
         includeSpecialEquipment && equipment.ContainsKey(template.Id) && template.Kind is ItemKind.Avatar or ItemKind.Creature or ItemKind.CreatureEquipment;
 
-    ItemTemplate? DropCandidate(int id, string path)
+    ItemTemplate? ProfiledDropCandidate(int id, string path, ItemDropDiagnostics.Worker worker)
+    {
+        try { return DropCandidate(id, path, worker); }
+        finally { worker.Processed++; }
+    }
+
+    ItemTemplate? DropCandidate(int id, string path, ItemDropDiagnostics.Worker? worker = null)
     {
         if (id <= 2)
             return null;
@@ -315,9 +330,18 @@ internal sealed partial class ItemCatalog
         // 缺失的premium STK是可选声明，不能被掉落预热重新变成启动失败。
         if (!isEquipment && premiumServiceItems.Contains(id) && !pvf.Contains("stackable/" + path))
             return null;
-        var document = isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) :
-            new PvfDocument(pvf.ReadText("stackable/" + path));
-        return ParsedDropCandidate(id, path, document);
+        var document = worker is null
+            ? (isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) : new PvfDocument(pvf.ReadText("stackable/" + path)))
+            : (isEquipment ? EquipmentFile.ReadScriptProfiled(pvf.ReadText, "equipment/" + path, worker.Observe)
+                : PvfDocumentReader.ReadProfiled(pvf.ReadText, "stackable/" + path, false, worker.Observe));
+        if (worker is null) return ParsedDropCandidate(id, path, document);
+        long allocated = GC.GetAllocatedBytesForCurrentThread(), started = Stopwatch.GetTimestamp();
+        try { return ParsedDropCandidate(id, path, document); }
+        finally
+        {
+            worker.TemplateTicks += Stopwatch.GetTimestamp() - started;
+            worker.TemplateBytes += GC.GetAllocatedBytesForCurrentThread() - allocated;
+        }
     }
 
     // 预筛已经读完同一脚本/import链；正候选复用文档进入原single-flight，不保留额外全文缓存。

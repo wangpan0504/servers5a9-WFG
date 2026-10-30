@@ -38,6 +38,22 @@ internal static class TcpTestReceiptsTests
             That(Count - count == 39 && result.Profile == "chat-rate-rules-v1" && result.CacheEligible,
                 "确定性profile执行原39条短长滑窗断言，不把其他聊天网络覆盖冒充完整");
         }
+        using (var profile = new TcpTestReceipts.Group("equipment-power-rules", id, identity))
+        {
+            int count = Count;
+            EquipmentPowerScoreTests.RunCore();
+            var result = profile.Snapshot("passed");
+            That(Count - count == 49 && result.Profile == "equipment-power-rules-v1" && result.CacheEligible,
+                "展示分profile执行原49条合成规则断言，不代表实际角色或资源验收");
+        }
+        using (var profile = new TcpTestReceipts.Group("frame-crc-rules", id, identity))
+        {
+            int count = Count;
+            DfoServer.FrameCrcTests.Run();
+            var result = profile.Snapshot("passed");
+            That(Count - count == 574 && result.Profile == "frame-crc-rules-v1" && result.CacheEligible,
+                "CRC profile保留全部574条含18条内存短读，不代表真实网络与超时验收");
+        }
         using (var unknown = new TcpTestReceipts.Group("not-audited", id, identity))
             That(unknown.Snapshot("passed").Coverage == "unknown" && !unknown.Snapshot("passed").CacheEligible,
                 "未迁移覆盖合同的组即使成功也保持unknown");

@@ -1,9 +1,18 @@
+. (Join-Path $PSScriptRoot 'DevelopmentRuleProfiles.ps1')
 # 可选验证结果库；不改变严格检查入口，不共享程序集、数据库或可写资源。
 Set-StrictMode -Version Latest
 function Get-ResultDigest([string]$Text) {
     [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Text))).ToLowerInvariant()
 }
-function Get-ResultFileDigest([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Get-ResultFileDigest([string]$Path) {
+    # 保留PowerShell当前位置/provider的字面路径语义；每次读取完整内容，不缓存mtime或摘要。
+    $provider=$null; $drive=$null
+    $resolved=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path,[ref]$provider,[ref]$drive)
+    if($provider.Name -cne 'FileSystem'){throw '文件摘要只接受文件系统路径。'}
+    $stream=[IO.File]::OpenRead($resolved)
+    try { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)).ToLowerInvariant() }
+    finally { $stream.Dispose() }
+}
 function ConvertTo-ResultCanonical($Value) {
     if ($null -eq $Value) { return 'null' }
     if ($Value -is [System.Collections.IDictionary]) {
@@ -27,9 +36,11 @@ function Get-ResultSourceManifest([string]$Root) {
             throw '不支持的输入路径：本次不能缓存。'
         }
         $full = Join-Path $Root $path
-        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { throw '源码缺失或子模块未展开：本次不能缓存。' }
-        if ((Get-Item -LiteralPath $full -Force).LinkType) { throw '符号链接输入尚未闭合：本次不能缓存。' }
-        $mode = if ($IsWindows) { [string](Get-Item -LiteralPath $full -Force).Attributes } else { [string][IO.File]::GetUnixFileMode($full) }
+        # 本次逐文件只查询一次元数据；下一次清单仍重新检查全部文件。
+        $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+        if ($item.PSIsContainer) { throw '源码缺失或子模块未展开：本次不能缓存。' }
+        if ($item.LinkType) { throw '符号链接输入尚未闭合：本次不能缓存。' }
+        $mode = if ($IsWindows) { [string]$item.Attributes } else { [string][IO.File]::GetUnixFileMode($full) }
         $files[$path] = @{ Digest = Get-ResultFileDigest $full; Mode = $mode }
     }
     $canonical = ConvertTo-ResultCanonical $files
@@ -83,9 +94,12 @@ function Write-ResultImmutable([string]$Directory, [string]$Text) {
 }
 function Test-ResultReceipt($Receipt, $Manifest, [string]$RunnerDigest) {
     foreach ($key in @('SchemaVersion','Execution','Passed','Status','Coverage','Skips','Identity','CacheEligible','Scope','Group','RunId','StartedUtc','CompletedUtc','SelectedGroups')) { if (-not $Receipt.ContainsKey($key)) { return $false } }
-    if ($Manifest.Inputs.Contains('Profile') -and $Manifest.Inputs.Profile -ceq 'chat-rate-rules-v1') {
-        if (-not $Receipt.ContainsKey('Profile') -or $Receipt.Profile -cne 'chat-rate-rules-v1' -or
-            -not $Receipt.ContainsKey('Assertions') -or $Receipt.Assertions -ne 39 -or
+    if ($Manifest.Inputs.Contains('Profile')) {
+        if (@($Manifest.Inputs.Scope).Count -ne 1) { return $false }
+        $profile=Get-DevelopmentRuleProfile ([string]$Manifest.Inputs.Scope[0])
+        if (-not $profile -or $Manifest.Inputs.Profile -cne $profile.Name) { return $false }
+        if (-not $Receipt.ContainsKey('Profile') -or $Receipt.Profile -cne $profile.Name -or
+            -not $Receipt.ContainsKey('Assertions') -or $Receipt.Assertions -ne $profile.Assertions -or
             -not $Receipt.ContainsKey('SharedResourcesLoaded') -or $Receipt.SharedResourcesLoaded -isnot [bool] -or $Receipt.SharedResourcesLoaded -ne $false) { return $false }
     }
     $started = [DateTimeOffset]::MinValue; $completed = [DateTimeOffset]::MinValue

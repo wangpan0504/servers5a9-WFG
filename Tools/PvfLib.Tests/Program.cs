@@ -15,6 +15,8 @@ if (args.Length > 0)
 PvfArchiveTests.Run();
 ArchiveIndexTests.Run();
 ArchiveBoundaryTests.Run();
+NumericTextTests.Run();
+DocumentReadDiagnosticsTests.Run();
 ScriptTests.Run();
 ItemModelTests.Run();
 EquipmentAuraAbilityTests.Run();

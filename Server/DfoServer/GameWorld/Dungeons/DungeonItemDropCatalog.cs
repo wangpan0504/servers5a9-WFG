@@ -53,6 +53,7 @@ internal sealed class DungeonItemDropCatalog
     }
 
     public static DungeonItemDropCatalog Load(ItemCatalog items) => new(items.DropCandidates());
+    internal static DungeonItemDropCatalog LoadProfiled(ItemCatalog items, ItemDropDiagnostics diagnostics) => new(items.DropCandidatesProfiled(diagnostics));
     public static DungeonItemDropCatalog LoadAltar(ItemCatalog items) => new(items.DropCandidates(includeSpecialEquipment: true).Where(template => template.Grade > 0));
     internal static DungeonItemDropCatalog Create(IEnumerable<ItemTemplate> templates) => new(templates);
 

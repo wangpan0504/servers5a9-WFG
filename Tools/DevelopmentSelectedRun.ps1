@@ -75,7 +75,7 @@ function Invoke-DevelopmentSelectedRun([string]$Repository, [string]$Store, [str
         $args += @('--selftest-tcp',($Groups -join ','))
         $environment = @{DFO_TCP_PARALLEL='1';DFO_TEST_RECEIPTS_DIR=(Join-Path $run 'receipts');DFO_TCP_SHARD_ROOT=(Join-Path $run 'fixtures');DFO_TEST_SOURCE_KEY=$source.Key;DFO_TEST_INPUT_KEY=''}
         if ($Manifest) {
-            $before = Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile
+            $before = Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile $Groups[0]
             if ($before.Key -cne $Manifest.Key) { throw '构建改变了缓存输入（例如首次还原包）；本次不运行缓存profile，请重新生成计划。' }
             $environment.DFO_TEST_INPUT_KEY=$Manifest.Key
         }
@@ -84,7 +84,7 @@ function Invoke-DevelopmentSelectedRun([string]$Repository, [string]$Store, [str
         if(-not (Test-DevelopmentArtifactWorkspaceUnchanged $Repository $Configuration $BuildProfile $workspace)){throw '执行期间实际构建设置变化，结果不可复用。'}
         [IO.File]::WriteAllText((Join-Path $run 'artifacts.json'),(ConvertTo-ResultCanonical @{Runner=(Get-ResultFileDigest $runner);Package=$artifactBefore;Source=$source.Key}))
         if ($Manifest) {
-            $after = Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile
+            $after = Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile $Groups[0]
             $receipts = @(Get-ChildItem -LiteralPath $environment.DFO_TEST_RECEIPTS_DIR -Recurse -File -Filter '*.json')
             if ($receipts.Count -ne 1) { throw '真实单组执行收据数量不符。' }
             return Save-DevelopmentResult $Store $Manifest $after $receipts[0].FullName $runner $HeldLock $artifactBefore

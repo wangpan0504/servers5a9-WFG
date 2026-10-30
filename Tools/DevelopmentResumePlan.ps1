@@ -4,7 +4,7 @@ function Get-DevelopmentGroupCatalog([string]$Repository) {
     $path = Join-Path $Repository 'Server/DfoServer/SelfTests/Tcp/TcpRegressionTests.cs'
     $text = [IO.File]::ReadAllText($path)
     # 整个已审核入口文件钉住指纹，含条件编译/多声明/注释变化均拒绝，不猜C#语义。
-    if ((Get-ResultDigest $text.Replace("`r`n","`n")) -cne '601c22d5598c65d928accbc30c8318c89ac566d458d5cdc45ba899b83c917570') { throw '注册入口文件已变化，须重新审核；请使用原CLI完整入口。' }
+    if ((Get-ResultDigest $text.Replace("`r`n","`n")) -cne 'ff75f616ec5cfeafb7526d395901218dcc2eb8b033d602078f561cfc49e5648c') { throw '注册入口文件已变化，须重新审核；请使用原CLI完整入口。' }
     $groups = [regex]::Match($text, '(?s)\bGroups\s*=\s*\[(.*?)\n\s*\];')
     $targeted = [regex]::Match($text, '(?s)\bTargetedOnly\s*=\s*new\(StringComparer.Ordinal\)\s*\{(.*?)\};')
     if (-not $groups.Success -or -not $targeted.Success) { throw '当前注册表声明形状未知。' }
@@ -46,7 +46,7 @@ function Get-DevelopmentResumeDecisions($Selected, $Receipts, $Manifest, [string
         $observed = @($Receipts | Where-Object { $_.Receipt.Group -ceq $group.Name })
         $reason = 'no-receipt'; $covered = $false
         if ($observed.Count) { $reason = 'coverage-or-input-unproven' }
-        if ($group.Name -ceq 'chat-rate-rules' -and $Manifest -and $Manifest.InputClosureProven -eq $true -and $CachedRecord) {
+        if ((Get-DevelopmentRuleProfile $group.Name) -and $Manifest -and $Manifest.InputClosureProven -eq $true -and $CachedRecord) {
             # 所有已知同组记录须一致完整；任何旧红、未知、partial均保守撤销本次核销。
             $valid = $observed.Count -gt 0
             foreach ($row in $observed) { if (-not (Test-ResultReceipt $row.Receipt $Manifest $RunnerDigest)) { $valid=$false } }
@@ -71,20 +71,28 @@ function Get-DevelopmentResumePlan([string]$Repository, [string]$Store, [string]
         $digest=Get-ResultFileDigest $file.FullName
         $package=Get-ProfileTreeDigest $file.DirectoryName
     }
-    if (-not $PvfPath -and $digest -and @($selected | Where-Object { $_.Name -ceq 'chat-rate-rules' }).Count) {
-        $manifest=Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile
-        $cache=Get-DevelopmentResultPlan $Store $manifest
-        if ($cache.State -ceq 'cached') {
-            $recordText=[IO.File]::ReadAllText($cache.Path)
-            if ([IO.Path]::GetFileNameWithoutExtension($cache.Path) -cne (Get-ResultDigest $recordText)) { throw '缓存记录内容校验失败。' }
-            $record=$recordText | ConvertFrom-Json -AsHashtable
-            if ((ConvertTo-ResultCanonical $record.Input) -cne (ConvertTo-ResultCanonical $manifest)) { throw '缓存记录输入变化。' }
-            if ($record.Reusable -is [bool] -and $record.Reusable -eq $true -and $record.Runner -ceq $digest -and $record.ArtifactPackage -ceq $package) { $cached=$record }
+    $decisions=[Collections.Generic.List[object]]::new()
+    $profiles=[Collections.Generic.List[object]]::new()
+    foreach ($group in $selected) {
+        $manifest=$null; $cached=$null
+        if (-not $PvfPath -and $digest -and (Get-DevelopmentRuleProfile $group.Name)) {
+            $manifest=Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile $group.Name
+            $cache=Get-DevelopmentResultPlan $Store $manifest
+            if ($cache.State -ceq 'cached') {
+                $recordText=[IO.File]::ReadAllText($cache.Path)
+                if ([IO.Path]::GetFileNameWithoutExtension($cache.Path) -cne (Get-ResultDigest $recordText)) { throw '缓存记录内容校验失败。' }
+                $record=$recordText | ConvertFrom-Json -AsHashtable
+                if ((ConvertTo-ResultCanonical $record.Input) -cne (ConvertTo-ResultCanonical $manifest)) { throw '缓存记录输入变化。' }
+                if ($record.Reusable -is [bool] -and $record.Reusable -eq $true -and $record.Runner -ceq $digest -and $record.ArtifactPackage -ceq $package) { $cached=$record }
+            }
+            $profiles.Add(@{Group=$group.Name;Manifest=$manifest})
         }
+        $decisions.Add((Get-DevelopmentResumeDecisions @($group) $receipts $manifest $digest $cached))
     }
-    if ($manifest -and (Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile).Key -cne $manifest.Key) { throw '计划期间实际输入闭包变化。' }
+    foreach ($profile in $profiles) {
+        if ((Get-ChatRateProfileManifest $Repository $Configuration $BuildProfile $profile.Group).Key -cne $profile.Manifest.Key) { throw '计划期间实际输入闭包变化。' }
+    }
     if ($Runner -and ((Get-ResultFileDigest $Runner) -cne $digest -or (Get-ProfileTreeDigest (Split-Path ([IO.Path]::GetFullPath($Runner)) -Parent)) -cne $package)) { throw '计划期间运行包变化。' }
-    $decisions=@(Get-DevelopmentResumeDecisions $selected $receipts $manifest $digest $cached)
     if ((Get-ResultSourceManifest $Repository).Key -cne $source.Key) { throw '生成计划期间源码变化。' }
     @{SchemaVersion=1;State='planned';Execution='not-run';Source=$source.Key;Runner=$digest;ArtifactPackage=$package;
       RegistryDigest=(Get-ResultFileDigest (Join-Path $Repository 'Server/DfoServer/SelfTests/Tcp/TcpRegressionTests.cs'));

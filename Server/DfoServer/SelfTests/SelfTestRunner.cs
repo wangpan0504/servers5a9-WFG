@@ -77,6 +77,7 @@ internal static class SelfTestRunner
         ConnectionAddressTests.Run();
         Testing.TcpTestFixtureProcessTests.Run();
         StartupStageTests.Run();
+        ItemDropDiagnosticsTests.Run();
         await Testing.TcpTestArtifactsTests.RunAsync();
         Testing.TcpTestReceiptsTests.Run();
         Testing.ClientSettingsSnapshotsTests.Run();
