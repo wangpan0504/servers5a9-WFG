@@ -290,10 +290,11 @@ internal sealed class AvatarPackageCatalog
     internal static ImmutableHashSet<byte> ParseAbilities(string text)
     {
         var tokens = Tokens(text);
-        var options = ImmutableHashSet.CreateBuilder<byte>();
+        var options = new Dictionary<byte, string[]>();
         for (int at = 0; at < tokens.Length;)
         {
-            if (tokens.Length - at < 4 || !byte.TryParse(tokens[at++], out byte option) || !options.Add(option)) return [];
+            int start = at;
+            if (tokens.Length - at < 4 || !byte.TryParse(tokens[at++], out byte option)) return [];
             string kind = tokens[at++];
             if (!Regex.IsMatch(kind, @"^`\[[^\]]+\]`$")) return [];
             if (kind == "`[SKILL_LEVEL]`")
@@ -303,8 +304,12 @@ internal sealed class AvatarPackageCatalog
             }
             else if (tokens[at++] is not ("`+`" or "`*`") ||
                 !decimal.TryParse(tokens[at++], NumberStyles.Float, CultureInfo.InvariantCulture, out _)) return [];
+            // 同一编号仅兼容完整原token完全一致的重复行；先校验整行，不能吞掉冲突或残缺声明。
+            var row = tokens[start..at];
+            if (options.TryGetValue(option, out var previous) && !previous.SequenceEqual(row, StringComparer.Ordinal)) return [];
+            options.TryAdd(option, row);
         }
-        return options.ToImmutable();
+        return options.Keys.ToImmutableHashSet();
     }
 
     internal static IReadOnlyDictionary<int, ImmutableHashSet<byte>> ParseAbilityCases(string text)
