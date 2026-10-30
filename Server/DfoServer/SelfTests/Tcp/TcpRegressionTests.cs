@@ -442,6 +442,7 @@ internal static class TcpRegressionTests
         ("booster", BoosterTcpTests.RunAsync),
         ("magic-box", MagicBoxTcpTests.RunAsync),
         ("lottery", LotteryTcpTests.RunAsync),
+        ("vending", VendingTcpTests.RunAsync),
         ("rune-box", RuneBoxTcpTests.RunAsync),
         ("limit-cube", LimitCubeTcpTests.RunAsync),
         ("booster-selection", BoosterSelectionTcpTests.RunAsync),
