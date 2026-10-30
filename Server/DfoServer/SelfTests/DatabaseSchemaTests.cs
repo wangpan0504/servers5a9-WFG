@@ -8,6 +8,7 @@ using DfoServer.GameWorld.Items;
 using DfoServer.Testing;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
+using System.Diagnostics;
 
 namespace DfoServer;
 
@@ -2454,10 +2455,22 @@ internal static partial class DatabaseSchemaTests
 
     private static void VerifyReleasedMigrations(string root)
     {
+        // 默认 fresh；显式开启仅复用本轮空库准备，版本范围和全部迁移断言不变。
+        bool reuseEmpty = Environment.GetEnvironmentVariable("DFO_SCHEMA_RELEASED_TEMPLATE") == "1";
+        long setupStarted = Stopwatch.GetTimestamp();
+        var template = reuseEmpty ? new ReleasedDatabaseTemplate(root) : null;
+        if (template is not null) VerifyReleasedTemplateContract(template, root);
+        double setupMs = Stopwatch.GetElapsedTime(setupStarted).TotalMilliseconds;
+        double prepareMs = 0, rewindMs = 0, verifyMs = 0;
+        int completedVersions = 0;
         foreach (int oldVersion in Enumerable.Range(1, SqliteMigrations.CurrentVersion - 1))
         {
             string path = Path.Combine(root, $"released-v{oldVersion}.db");
+            long phaseStarted = Stopwatch.GetTimestamp();
+            template?.CopyTo(path);
             _ = new CharacterRepository(path);
+            prepareMs += Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
+            phaseStarted = Stopwatch.GetTimestamp();
             using (var db = Open(path))
             {
                 if (oldVersion < 153) Execute(db, "DROP TABLE character_ekern_cycle");
@@ -2581,6 +2594,8 @@ internal static partial class DatabaseSchemaTests
                     Query(db, "SELECT count(*) FROM pragma_table_info('account_wallets') WHERE name='rental_points'") is long columns &&
                     columns == (oldVersion == 1 ? 0 : 1), "真实旧版模拟按v1/v2/v3保留已发布结构，移除后续副本owner表");
             }
+            rewindMs += Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
+            phaseStarted = Stopwatch.GetTimestamp();
             if (oldVersion == 13)
             {
                 foreach (bool incomplete in new[] { false, true })
@@ -2665,7 +2680,10 @@ internal static partial class DatabaseSchemaTests
             _ = new CharacterRepository(path);
             _ = new AuthenticationRepository(path);
             Check(Snapshot(path) == migrated, "真实迁移重开不重建账本或重复迁移");
+            verifyMs += Stopwatch.GetElapsedTime(phaseStarted).TotalMilliseconds;
+            completedVersions++;
         }
+        Console.WriteLine(FormattableString.Invariant($"[schema-released-preparation] mode={(reuseEmpty ? "private-template" : "fresh")} versions={completedVersions} setup_ms={setupMs:F1} prepare_ms={prepareMs:F1} rewind_ms={rewindMs:F1} migration_checks_ms={verifyMs:F1}"));
 
         string rollback = Path.Combine(root, "released-rollback.db");
         _ = new CharacterRepository(rollback);

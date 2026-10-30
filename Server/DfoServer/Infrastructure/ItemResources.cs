@@ -73,7 +73,9 @@ internal sealed class ItemResources
     public DungeonSpecialDropCatalog DungeonSpecialDrops => dungeonSpecialDrops.Value;
     public EpicPieceDropCatalog EpicPieceDrops => epicPieceDrops.Value;
 
-    public ItemResources(PvfArchive archive)
+    public ItemResources(PvfArchive archive) : this(archive, null) { }
+
+    internal ItemResources(PvfArchive archive, Func<ItemDropDiagnostics>? dropDiagnostics)
     {
         vendingMachines = new(() => new(archive));
         GoldLimits = new(archive);
@@ -135,7 +137,13 @@ internal sealed class ItemResources
         EquipmentUpgrades = new(archive);
         EquipmentTransmissions = new(archive);
         DarkRevelations = new(archive, equipment);
-        dungeonDropItems = new(() => DungeonItemDropCatalog.Load(Items));
+        dungeonDropItems = new(() =>
+        {
+            using var diagnostics = dropDiagnostics?.Invoke();
+            var result = diagnostics is null ? DungeonItemDropCatalog.Load(Items) : DungeonItemDropCatalog.LoadProfiled(Items, diagnostics);
+            diagnostics?.Complete();
+            return result;
+        });
         dungeonAltarItems = new(() => DungeonItemDropCatalog.LoadAltar(Items));
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
         MagicBoxes = new(archive, stackable);

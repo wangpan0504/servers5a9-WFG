@@ -12,7 +12,7 @@ internal static class TcpTestReceipts
     // 只列已逐一检查全部条件省略分支的入口；共享用例变化须重新审核，未知组保守不复用。
     static readonly HashSet<string> audited = new(StringComparer.Ordinal)
     {
-        "chat-rate-rules", "clear-avatar", "aura-action", "quest-hell-challenge", "quest-hell-challenge-without-beast-meeting"
+        "equipment-power-rules", "frame-crc-rules", "chat-rate-rules", "clear-avatar", "aura-action", "quest-hell-challenge", "quest-hell-challenge-without-beast-meeting"
     };
 
     internal sealed record Skip(string Code, string Reason);
@@ -74,7 +74,7 @@ internal static class TcpTestReceipts
             lock (skips) copy = [.. skips];
             return new()
             {
-                RunId = runId, Group = name, Profile = name == "chat-rate-rules" ? "chat-rate-rules-v1" : null, SelectedGroups = [.. selectedGroups], Status = status,
+                RunId = runId, Group = name, Profile = name switch { "equipment-power-rules" => "equipment-power-rules-v1", "frame-crc-rules" => "frame-crc-rules-v1", "chat-rate-rules" => "chat-rate-rules-v1", _ => null }, SelectedGroups = [.. selectedGroups], Status = status,
                 Coverage = copy.Length != 0 ? "partial" : complete ? "complete" : "unknown",
                 Identity = identity, Skips = copy, StartedUtc = started,
                 CompletedUtc = status == "running" ? null : DateTimeOffset.UtcNow, ErrorType = errorType

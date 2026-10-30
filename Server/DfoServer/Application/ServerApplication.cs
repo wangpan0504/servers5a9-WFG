@@ -185,7 +185,7 @@ public static class ServerApplication
 
             if (command.Kind == ServerCommandKind.Gm)
                 return DevelopmentCommands.RunGm(command.Arguments, options, pvf);
-            var itemResources = Load("Item resources", () => new ItemResources(pvf));
+            var itemResources = Load("Item resources", () => new ItemResources(pvf, StartupStage.DropDiagnostics(log)));
             var particularHell = Load("Particular hell party table", () => ParticularHellPartyCatalog.Load(pvf, itemResources.Items.Contains));
             if (particularHell.ItemsByDungeon.Count == 0)
                 throw new InvalidDataException("particularhellparty 表是空的");

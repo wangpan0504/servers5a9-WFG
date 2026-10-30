@@ -52,10 +52,16 @@ public sealed record EquipmentFile(int TemplateId, string ScriptPath,
     }
 
     /// <summary>读取装备的有效脚本视图；导入相对 equipment 根目录，本地声明覆盖父模板。</summary>
-    public static PvfDocument ReadScript(Func<string, string> readText, string path)
+    public static PvfDocument ReadScript(Func<string, string> readText, string path) => ReadScriptCore(readText, path, null);
+
+    public static PvfDocument ReadScriptProfiled(Func<string, string> readText, string path,
+        Action<bool, PvfDocumentReadMetrics> observe) => ReadScriptCore(readText, path, observe);
+
+    private static PvfDocument ReadScriptCore(Func<string, string> readText, string path,
+        Action<bool, PvfDocumentReadMetrics>? observe)
     {
         path = PvfArchive.NormalizePath(path);
-        var document = Read(path);
+        var document = Read(path, false);
         if (document.DeclarationCount("import script") == 0)
             return document;
         var chain = new HashSet<string>(StringComparer.Ordinal) { path };
@@ -69,7 +75,7 @@ public sealed record EquipmentFile(int TemplateId, string ScriptPath,
             path = PvfArchive.NormalizePath("equipment/" + reference.Groups[1].Value);
             if (!chain.Add(path))
                 throw new InvalidDataException("装备模板循环导入: " + path);
-            document = Read(path);
+            document = Read(path, true);
             documents.Add(document);
         }
         // 导入位置不影响覆盖顺序；共享只读字段索引，不再重新扫描子脚本。
@@ -78,9 +84,9 @@ public sealed record EquipmentFile(int TemplateId, string ScriptPath,
             result = documents[i].WithParent(result);
         return result;
 
-        PvfDocument Read(string source)
+        PvfDocument Read(string source, bool imported)
         {
-            try { return new PvfDocument(readText(source)); }
+            try { return observe is null ? new PvfDocument(readText(source)) : PvfDocumentReader.ReadProfiled(readText, source, imported, observe); }
             catch (FileNotFoundException exception)
             {
                 throw new InvalidDataException("装备模板文件缺失: " + source, exception);

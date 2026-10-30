@@ -21,6 +21,8 @@ internal static class PvfTokenDecoder
             return Encoding.Unicode.GetString(raw);
         Validate(raw);
         var result = new StringBuilder();
+        // 循环外复用数字缓冲，避免每个 token 的临时字符串；不足时保留原格式化路径。
+        Span<char> number = stackalloc char[64];
         // 从只读块直接格式化，避免另分配 raw 副本及完整 token 数组。
         for (int at = 0; at < raw.Length; at += 5)
         {
@@ -28,10 +30,19 @@ internal static class PvfTokenDecoder
             switch (raw[at])
             {
                 case 0:
-                    result.Append(value.ToString(CultureInfo.InvariantCulture)).Append(' ');
+                    if (value.TryFormat(number, out int integerLength, provider: CultureInfo.InvariantCulture))
+                        result.Append(number[..integerLength]);
+                    else
+                        result.Append(value.ToString(CultureInfo.InvariantCulture));
+                    result.Append(' ');
                     break;
                 case 2:
-                    result.Append(BitConverter.Int32BitsToSingle(value).ToString("F2", CultureInfo.InvariantCulture)).Append(' ');
+                    float single = BitConverter.Int32BitsToSingle(value);
+                    if (single.TryFormat(number, out int singleLength, "F2", CultureInfo.InvariantCulture))
+                        result.Append(number[..singleLength]);
+                    else
+                        result.Append(single.ToString("F2", CultureInfo.InvariantCulture));
+                    result.Append(' ');
                     break;
                 case 3:
                     result.Append('\n').Append(resolve(value)).Append('\n');

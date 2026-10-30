@@ -16,6 +16,18 @@ internal static class StartupStageTests
             int calls = 0;
             using (var log = new ServerLog(root, output))
             {
+                string? previousDiagnostic = Environment.GetEnvironmentVariable("DFO_STARTUP_DROP_DIAGNOSTICS");
+                try
+                {
+                    foreach (string? value in new string?[] { null, "0", "true", " 1" })
+                    {
+                        Environment.SetEnvironmentVariable("DFO_STARTUP_DROP_DIAGNOSTICS", value);
+                        That(StartupStage.DropDiagnostics(log) is null, "非精确1不创建候选诊断工厂");
+                    }
+                    Environment.SetEnvironmentVariable("DFO_STARTUP_DROP_DIAGNOSTICS", "1");
+                    That(StartupStage.DropDiagnostics(log) is not null && StartupStage.DropDiagnostics(null) is null, "候选诊断须精确开启且有日志出口");
+                }
+                finally { Environment.SetEnvironmentVariable("DFO_STARTUP_DROP_DIAGNOSTICS", previousDiagnostic); }
                 object expected = new();
                 That(ReferenceEquals(expected, StartupStage.Run(log, "Test catalog", () => { calls++; return expected; })) && calls == 1,
                     "启动诊断保持加载次数与返回对象，不增加资源遍历");
