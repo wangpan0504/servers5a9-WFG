@@ -82,12 +82,14 @@ internal static class TownTravel
             if (admission != "ready") return TownTravelPlan.Reject(admission);
             return towns.IsPosition(target, completed) ? new(target, character.Return, "ready") : TownTravelPlan.Reject("arrival-outside-map");
         }
-        // 原码 exit town 发送缓存来源的普通 C2S36；只允许本选角成功 NPC 入场留下的精确来源。
+        // 原码 exit town 及酒馆HUD退出均发送缓存来源的普通C2S36；只允许本选角成功NPC入场留下的精确来源。
         if (npcVisit is { } visit && request.TargetNpc == 0 && request.Movement == 5 && request.PathKind == 0 &&
             character.Position.Town == visit.Town && character.Position.Area == visit.Area &&
             request.Town == visit.Origin.Town && request.Area == visit.Origin.Area &&
-            request.X == visit.Origin.X && request.Y == visit.Origin.Y && towns.HasNpcExit(character.Position, completed))
+            request.X == visit.Origin.X && request.Y == visit.Origin.Y &&
+            (towns.HasNpcExit(character.Position, completed) || character.Position is { Town: 36 or 37, Area: 0 }))
         {
+            // 00D5BB80/00D632D0的配置/截屏HUD经03989E30返回，地图没有exit town NPC，不能据此拒绝真实出口。
             string admission = towns.DestinationAdmission(visit.Origin, character.Level, completed);
             return admission == "ready" ? new(visit.Origin with { Direction = character.Position.Direction }, character.Return, "ready")
                 : TownTravelPlan.Reject(admission);
