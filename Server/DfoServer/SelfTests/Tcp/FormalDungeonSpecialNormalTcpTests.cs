@@ -24,19 +24,25 @@ internal static partial class FormalDungeonTcpTests
         var dungeons = SelfTestCatalogs.Dungeons(resources.Archive);
         var growth = SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         int sequence = 0;
+        int preyDay = DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow);
+        int preyBranch = PreyNormalCatalog.BranchForDay(preyDay);
+        var preyRoute = dungeons.PreyNormal.Route(preyBranch);
         foreach (var sample in new[] { (Id:9595,Tired:false,Ticket:false),(Id:9595,Tired:false,Ticket:true),(Id:5101,Tired:true,Ticket:true),
             (Id:5101,Tired:false,Ticket:true),(Id:400000016,Tired:false,Ticket:false),
             (Id:400000016,Tired:true,Ticket:true),(Id:400000016,Tired:false,Ticket:true) }.Select(row => (row.Id,row.Tired,row.Ticket,Explicit:true,RetryWithoutTicket:false))
             .Concat(Enumerable.Range(5102,5).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:true,RetryWithoutTicket:false)))
             .Concat(Enumerable.Range(5101,6).Select(id => (Id:id,Tired:false,Ticket:true,Explicit:false,RetryWithoutTicket:false)))
-            .Concat([(Id:9595,Tired:false,Ticket:true,Explicit:true,RetryWithoutTicket:true)]))
+            .Concat([(Id:9595,Tired:false,Ticket:true,Explicit:true,RetryWithoutTicket:true)])
+            .Concat(preyRoute.Select(id => (Id:id,Tired:false,Ticket:true,Explicit:true,RetryWithoutTicket:false))))
         {
             var definition = dungeons.Get(sample.Id);
             bool luke = definition.IsOrdinaryLuke;
+            bool prey = definition.IsOrdinaryPrey;
             var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == sample.Id));
             var done = new HashSet<int>(area.Quests);
             done.UnionWith([3778,4872,8682]);
+            if (prey) done.Add(8925);
             if (sample.Id == 400000016) done.Add(8672); // 超时空频道准入任务，不能仅预置最后防线坐标绕过真实出门条件。
             if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
             var options = resources.Towns.DungeonMaps[area.DungeonWorldMap!.Value].Options.Where(option => option.DungeonId == sample.Id).ToArray();
@@ -45,7 +51,7 @@ internal static partial class FormalDungeonTcpTests
             var walk = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
             var position = new Location(area.Town,area.Area,(ushort)(walk.X+walk.Width/2),(ushort)(walk.Y+walk.Height/2));
             // 最后防线独立账号不继承普通频道历史，避免把副本准入用例变成跨类型换频道测试。
-            string account = sample.Id == 400000016 ? "entry608fiendwar" : luke ? "entryluke"+sequence : fixture.Options.DevelopmentAccount;
+            string account = sample.Id == 400000016 ? "entry608fiendwar" : prey ? "entryprey"+sequence : luke ? "entryluke"+sequence : fixture.Options.DevelopmentAccount;
             Character created;
             using (var owner = new AccountOwners().Acquire(account,() => { }))
             {
@@ -73,6 +79,9 @@ internal static partial class FormalDungeonTcpTests
             if (luke)
                 fixture.Sql("INSERT INTO character_luke_normal_progress(character_id,account,day,progress) VALUES($p0,$p1,$p2,$p3)",
                     created.Id, account, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow), sample.Id - 5101);
+            if (prey)
+                fixture.Sql("INSERT INTO character_prey_normal_progress(character_id,account,day,branch,progress) VALUES($p0,$p1,$p2,$p3,$p4)",
+                    created.Id,account,preyDay,preyBranch,preyRoute.IndexOf(sample.Id));
             int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : luke && !sample.Explicit ? 8 : 100;
             fixture.Sql("UPDATE character_fatigue SET remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
             // 最后防线只经频道39进入；普通选角先到共享房间，再出门到115/0，不能把上一角色的普通频道历史当作团本快照。
@@ -88,7 +97,7 @@ internal static partial class FormalDungeonTcpTests
             }
             else
                 peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
-            ushort questId = sample.Id == 9595 ? (ushort)2683 : luke ? (ushort)2902 : (ushort)8683;
+            ushort questId = prey ? (ushort)8926 : sample.Id == 9595 ? (ushort)2683 : luke ? (ushort)2902 : (ushort)8683;
             peer.Send(31,[(byte)31,0,(byte)questId,(byte)(questId >> 8)]);
             var accepted = peer.Expect(1,31).Body;
             That(accepted[0] == 1 && U16(accepted,1) == questId, "普通材料或累计通关任务经真实31接取");
@@ -101,6 +110,15 @@ internal static partial class FormalDungeonTcpTests
                 That(sequenceBody.Length == 16 && U32(sequenceBody) == 42 && sequenceBody[4] == sample.Id - 5101 &&
                     U32(sequenceBody,5) == (1u << (sample.Id - 5101)) - 1 && sequenceBody.AsSpan(9).SequenceEqual(new byte[7]),
                     "普通卢克各图查询602复述真实当日前置，机械王座返回阶段5/低五位");
+                peer.Barrier();
+            }
+            if (prey)
+            {
+                peer.Send(871,[203,0,0,0]);
+                byte[] body = peer.Expect(0,602).Body;
+                int completed = preyRoute.IndexOf(sample.Id);
+                That(body.Length == 16 && U32(body) == 203 && body[4] == completed && U32(body,5) == (1u << completed)-1 &&
+                    U32(body,9) == preyBranch && body.AsSpan(13).SequenceEqual(new byte[3]),"203查询返回当前真实分支与前序");
                 peer.Barrier();
             }
             if (sample.Id == 9595 && sample.Ticket)
@@ -136,7 +154,7 @@ internal static partial class FormalDungeonTcpTests
             }
             byte[] request = Selection(0);
             BinaryPrimitives.WriteUInt32LittleEndian(request,(uint)sample.Id);
-            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),sample.Explicit ? questId : 0u);
+            BinaryPrimitives.WriteUInt32LittleEndian(request.AsSpan(16),sample.Explicit && (!prey || sample.Id == PreyNormalCatalog.FinalDungeon) ? questId : 0u);
             string before = fixture.Snapshot();
             foreach (byte wrong in luke ? new byte[] { 0,1,3,4 } : new byte[] { 0 })
             {
@@ -175,9 +193,15 @@ internal static partial class FormalDungeonTcpTests
                 That(sequenceBody[4] == sample.Id - 5101 && U32(sequenceBody,5) == (1u << (sample.Id - 5101)) - 1,
                     "单人28之后、29之前刷新当前角色进度，不依赖选图缓存");
             }
+            if (prey)
+            {
+                byte[] body = peer.Expect(0,602).Body;
+                That(U32(body) == 203 && body[4] == preyRoute.IndexOf(sample.Id) && U32(body,9) == preyBranch,
+                    "普通普雷28与29之间投影当前路线");
+            }
             var map = peer.Expect(0,29).Body;
             That(U32(info,0) == sample.Id && info[4] == 2 && U32(map,14) == (sample.Id switch
-                { 9595 => 310353,5101 => 55916,5102 => 55924,5103 => 55935,5104 => 55940,5105 => 55950,5106 => 55954,_ => 400000000 }),"普通频道按28→29加载真实普通副本首图与指定难度");
+                { 9595 => 310353,5101 => 55916,5102 => 55924,5103 => 55935,5104 => 55940,5105 => 55950,5106 => 55954,_ => prey ? (uint)definition.Mazes.Single().MapSpecification!.Single(m => m.Position == definition.Mazes.Single().Starts.Single()).Id : 400000000 }),"普通频道按28→29加载真实普通副本首图与指定难度");
             if (definition.OrdinaryEntryTicket is { } paidTicket)
             {
                 peer.Expect(0,14);
@@ -211,7 +235,7 @@ internal static partial class FormalDungeonTcpTests
                     peer.Send(39,report);
                     var packets = Drain();
                     foreach (var notice in packets.Where(packet => packet.Kind == 0 && packet.Opcode == 38))
-                        PickupResourceDrops(fixture,peer,notice.Body,sample.Explicit ? questId : 0u);
+                        PickupResourceDrops(fixture,peer,notice.Body,sample.Explicit && (!prey || sample.Id == PreyNormalCatalog.FinalDungeon) ? questId : 0u);
                     var state = fixture.Snapshot();
                     peer.Send(39,report);
                     Drain();
@@ -258,7 +282,8 @@ internal static partial class FormalDungeonTcpTests
                 }
             }
             That(fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,questId)
-                is [[long scalar]] && scalar == (sample.Id == 400000016 ? 4 : 1),"真实通关减少一次计数，跨图收集任务保留未齐状态");
+                is [[long scalar]] && scalar == (sample.Id == 400000016 ? 4 : prey && sample.Id == PreyNormalCatalog.FinalDungeon ? 0 : 1),
+                "真实终点才减少目标图任务计数，跨图收集任务保留未齐状态");
             if (sample.RetryWithoutTicket)
             {
                 string attempts = fixture.Snapshot("SELECT * FROM character_dungeon_state WHERE character_id=$p0", peer.Id);
@@ -281,7 +306,17 @@ internal static partial class FormalDungeonTcpTests
                     "失败原因确为入场材料耗尽，不由其它资格拒绝替代");
                 continue;
             }
-            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            if (prey && sample.Id == PreyNormalCatalog.FinalDungeon)
+            {
+                peer.Send(72,[1,1]); peer.Expect(1,72,[1,1,2]);
+                peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+                That(fixture.Query("SELECT progress FROM character_prey_normal_progress WHERE character_id=$p0",peer.Id) is [[5L]],
+                    "本体下一图走回城释放实例且保留五图结算");
+            }
+            else
+            {
+                peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
+            }
             That(fixture.Query("SELECT town,area FROM characters WHERE id=$p0",peer.Id) is [[long town,long zone]] &&
                 town == area.Town && zone == area.Area,"放弃普通副本返回实际入口地区");
 
@@ -328,6 +363,14 @@ internal static partial class FormalDungeonTcpTests
                     }
                     if (packet is { Kind:0,Opcode:602 })
                     {
+                        if (prey)
+                        {
+                            var preyProgress = fixture.Query("SELECT progress FROM character_prey_normal_progress WHERE character_id=$p0",peer.Id);
+                            That(preyProgress is [[long preyCompleted]] && packet.Body.Length == 16 && U32(packet.Body) == 203 &&
+                                packet.Body[4] == preyCompleted && U32(packet.Body,5) == (1u << (int)preyCompleted)-1 && U32(packet.Body,9) == preyBranch,
+                                "结算203刷新对应实际持久化进度");
+                            packets.Add(packet); continue;
+                        }
                         var saved = fixture.Query("SELECT day,progress FROM character_luke_normal_progress WHERE character_id=$p0", peer.Id);
                         int completed = saved is [[long savedDay, long progress]] && savedDay == DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow)
                             ? checked((int)progress) : 0;

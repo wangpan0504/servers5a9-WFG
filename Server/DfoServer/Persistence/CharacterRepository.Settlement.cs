@@ -224,6 +224,7 @@ internal sealed partial class CharacterRepository
             """;
         command.ExecuteNonQuery();
         ClearOrdinaryLuke(db, tx, owner, run);
+        ClearPreyNormal(db, tx, owner, run);
         uint? griefMail = CommitGriefClear(db,tx,owner,expected,prepared);
         uint? bossRushMail = CommitBossRushClear(db,tx,owner,expected,prepared);
         long guildNow = DateTimeOffset.UtcNow.ToUnixTimeSeconds();

@@ -262,6 +262,7 @@ internal sealed partial class DungeonHandler
                 await PublishPartyHostAsync(context, notice.Members, Current);
                 await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(scene.Entry), "party_dungeon_information", Current);
                 if (OrdinaryLukeProgress.Applies(scene.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Current);
+                if (PreyNormalProgress.Applies(scene.Entry)) await PreyNormalSequenceProjection.RefreshAsync(context, Current);
                 await MonsterAiProjection.SendAsync(context, scene, "party_monster_ai", Current);
                 await context.Notify(NotiPacketType.START_MAP,
                     DungeonPackets.StartMap(scene.Entry, scene.Monsters, scene.MapSeed, passiveItems: scene.PassiveItems), "party_start_map", Current);

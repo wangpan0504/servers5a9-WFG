@@ -9,6 +9,14 @@
           UNIQUE(character_id,first_event_id),
           FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
+CREATE TABLE character_prey_normal_progress(
+          character_id INTEGER PRIMARY KEY,
+          account TEXT NOT NULL,
+          day INTEGER NOT NULL CHECK(typeof(day)='integer' AND day BETWEEN 10000101 AND 99991231),
+          branch INTEGER NOT NULL CHECK(typeof(branch)='integer' AND branch BETWEEN 1 AND 6),
+          progress INTEGER NOT NULL CHECK(typeof(progress)='integer' AND progress BETWEEN 0 AND 5),
+          FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+        );
 CREATE TABLE character_luke_normal_progress(
           character_id INTEGER PRIMARY KEY,
           account TEXT NOT NULL,

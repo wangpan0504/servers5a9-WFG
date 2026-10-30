@@ -146,7 +146,8 @@ internal static class KnightShieldTests
                 upgraded.Inventory.Items.IsEmpty && upgraded.Inventory.Gold == character.Inventory.Gold,
                 "158升级159只加空配置，不改旧角色revision或资产");
             command.CommandText = "PRAGMA user_version";
-            That(command.ExecuteScalar() is 159L, "盾牌迁移只追加159");
+            That(command.ExecuteScalar() is long version && version == SqliteMigrations.CurrentVersion,
+                "158旧库保留盾牌159迁移并连续升级至当前版本");
             command.CommandText = "CREATE TRIGGER fail_shield AFTER INSERT ON inventory_audit_log " +
                 "WHEN NEW.action_name='knight_shield_deck' BEGIN SELECT RAISE(ABORT,'shield rollback'); END";
             command.ExecuteNonQuery();

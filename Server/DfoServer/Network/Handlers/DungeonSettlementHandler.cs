@@ -110,6 +110,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             PotionExperience = ExpBonusPolicy.Shown(plainClear, reward.GrowthContractExperience, reward.PotionExperience, effective) };
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
         if (OrdinaryLukeProgress.Applies(receipt.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Guard);
+        if (PreyNormalProgress.Applies(receipt.Entry)) await PreyNormalSequenceProjection.RefreshAsync(context, Guard);
         if (receipt.Entry.DungeonId is 5097 or 5098) await EkernCycleProjection.RefreshAsync(context,Guard);
         // 大会副本没有普通结算页：不发 34/35，改发 NOTI388（见 TournamentReward 注释）。
         bool tournament = receipt.Entry.IsTournament;
@@ -423,6 +424,9 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             !current.Entry.IsClassExperience && !current.Entry.IsAltar && !current.Entry.IsDespair &&
             !current.Entry.IsCosmo && !current.Entry.IsInfernoParty && !current.Entry.BeastMode && !current.Entry.IsBossRush &&
             current.Entry.HellParty is null && current.Entry.RaidEntry is null && current.Entry.Hope is null;
+        // 普通普雷终末没有后继选图；沿既有单人/组队回城提交释放实例与结算占用。
+        if (option == 1 && current.Entry.IsOrdinaryPrey && current.Entry.DungeonId == 400000046)
+            option = (byte)DungeonResultOption.ReturnTown;
         if (context.Session.PartyDungeon is { } party)
         {
             using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, party.Members);
@@ -535,6 +539,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             {
                 await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(retry.Entry, retry.Snapshot.BossPosition), "formal_retry_information", RetryGuard);
                 if (OrdinaryLukeProgress.Applies(retry.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, RetryGuard);
+                if (PreyNormalProgress.Applies(retry.Entry)) await PreyNormalSequenceProjection.RefreshAsync(context, RetryGuard);
                 await MonsterAiProjection.SendAsync(context, retry, "formal_retry_monster_ai", RetryGuard);
                 await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(retry.Entry, retry.Monsters, retry.MapSeed,
                     passiveItems: retry.PassiveItems), "formal_retry_start_map", RetryGuard);

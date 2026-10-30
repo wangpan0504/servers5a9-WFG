@@ -45,6 +45,7 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public DazzlementTowerAdmission? Dazzlement { get; init; }
     public int DungeonId { get; init; }
     public DungeonEntryPlan? OrdinaryLukeEntry { get; init; }
+    public DungeonEntryPlan? PreyNormalEntry { get; init; }
     public OperationHopeAdmission? Hope { get; init; }
     public MarriageDungeonAdmission? Marriage { get; init; }
     public DungeonEntryIncount? Incount { get; init; }
@@ -53,5 +54,5 @@ internal sealed record DungeonEntryCharge(InventoryPlan? Items, ushort Fatigue, 
     public DfoServer.Game.Guild.GuildDungeonAdmission? GuildDungeon { get; init; }
     public DfoServer.Game.ImperialArena.ImperialArenaAdmission? ImperialArena { get; init; }
     public DimensionDungeonAdmission? Dimension { get; init; }
-    public bool IsEmpty => Items is null && GuildTraining is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && Beast is null && TagEvildom is null && OrdinaryLukeEntry is null && GuildDungeon is null && ImperialArena is null && Dimension is null;
+    public bool IsEmpty => Items is null && GuildTraining is null && Fatigue == 0 && Special is null && Dazzlement is null && Grief is null && Hope is null && Marriage is null && Incount is null && Beast is null && TagEvildom is null && OrdinaryLukeEntry is null && PreyNormalEntry is null && GuildDungeon is null && ImperialArena is null && Dimension is null;
 }

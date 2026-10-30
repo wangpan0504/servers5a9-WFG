@@ -420,6 +420,16 @@ internal sealed partial class GameSession
                 return RejectFormal("luke-normal-progress-locked");
             entry = entry! with { OrdinaryLukeDay = day };
         }
+        if (PreyNormalProgress.Applies(entry!))
+        {
+            var sharedAdmission = shared?.Session.PreparedParty(shared).Dungeon.Entry.PreyNormal;
+            if (shared is not null && sharedAdmission is null) return RejectFormal("party-prey-normal-day-missing");
+            int day = sharedAdmission?.Day ?? QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow());
+            var admission = sharedAdmission ?? new PreyNormalAdmission(day, PreyNormalCatalog.BranchForDay(day), catalog.PreyNormal);
+            if (!repository.LoadPreyNormalProgress(owner, expected.Id).Allows(admission, dungeonId))
+                return RejectFormal("prey-normal-progress-locked");
+            entry = entry! with { PreyNormal = admission };
+        }
         if (partyAdmission && (entry!.Maze.IsGriefTower || entry.IsBossRush || entry.IsAltar || entry.IsDespair || entry.IsTournament))
             return RejectFormal("party-special-dungeon-unsupported");
         if (entry!.IsBossRush && (practice || hellParty || questId != 0 || classExperience || training || trainingRoom))
@@ -870,6 +880,9 @@ internal sealed partial class GameSession
         if (installing.Entry.OrdinaryLukeDay is { } lukeDay &&
             (lukeDay != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow()) ||
              !repository.LoadOrdinaryLukeProgress(owner, character.Id).Allows(lukeDay, installing.Entry.DungeonId))) return null;
+        if (installing.Entry.PreyNormal is { } prey &&
+            (prey.Day != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow()) ||
+             !repository.LoadPreyNormalProgress(owner, character.Id).Allows(prey, installing.Entry.DungeonId))) return null;
         if (installing.GriefAdmission is { } grief &&
             grief.Decision.Day != QuestCycle.Day((timeProvider ?? TimeProvider.System).GetUtcNow())) return null;
         if (installing.Entry.IsPractice && (installing.Entry.HellParty is not null || installing.Entry.IsHellLegend ||
@@ -1033,7 +1046,7 @@ internal sealed partial class GameSession
             installing = installing with { GuildTraining = training.Snapshot };
         }
         Character committed;
-        if (beastEntry || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
+        if (beastEntry || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             DungeonEntryCommit entryCommit;
@@ -1041,7 +1054,7 @@ internal sealed partial class GameSession
             {
                 entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
-                        prepared.Weekly,installing.GriefAdmission) { GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, Beast = beastAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
+                        prepared.Weekly,installing.GriefAdmission) { GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, Beast = beastAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
             }
             catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
             {

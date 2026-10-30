@@ -222,6 +222,7 @@ internal static partial class DatabaseSchemaTests
             CloneTitleUpgrade(root);
             TagEvildomUpgrade(root);
             OrdinaryLukeUpgrade(root);
+            PreyNormalUpgrade(root);
             OrdinaryLukeDropUpgrade(root);
             PvpArenaResultUpgrade(root);
             PvpRatingUpgrade(root);
