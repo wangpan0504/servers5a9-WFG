@@ -52,24 +52,42 @@ internal static class ServerRuntime
         }
     }
 
-    internal static ChannelCatalog LoadChannels(string path)
+    // 单文件发布只产出 exe；目录部署的程序集是 exe 旁边独立的 DfoServer.dll。
+    // 不能用 Assembly.Location 判断：单文件里它恒为空，IL3000 会直接把发布打红。
+    static bool IsSingleFileBundle =>
+        !File.Exists(Path.Combine(AppContext.BaseDirectory, typeof(ServerRuntime).Assembly.GetName().Name + ".dll"));
+
+    static Stream OpenShipped(string logicalName) =>
+        typeof(ServerRuntime).Assembly.GetManifestResourceStream(logicalName)
+        ?? throw new InvalidDataException("程序缺少内置资源：" + logicalName);
+
+    // 默认位置：目录部署优先外置文件，运维不重建程序也能改配置；单文件发行包只用内置资源。
+    // 单文件安装目录里可能残留上一版目录式部署的 Resources，那份旧文件不得覆盖内置默认值
+    // （2026-10-30 实机：旧 channel.txt 少了 beast 频道，启动崩溃修好后仍会静默少一个频道）。
+    static Stream OpenDefaultOrShipped(string shippedFile, string logicalName)
     {
-        // 单文件发行包只携带内置脚本；目录部署仍优先使用外置配置。
-        using var stream = File.Exists(path) ? File.OpenRead(path) :
-            typeof(ServerRuntime).Assembly.GetManifestResourceStream("DfoServer.Resources.channel.txt")
-            ?? throw new InvalidDataException("程序缺少内置频道脚本");
-        using var reader = new StreamReader(stream);
-        return ChannelCatalog.Parse(reader.ReadToEnd());
+        string path = Path.Combine(AppContext.BaseDirectory, "Resources", shippedFile);
+        return !IsSingleFileBundle && File.Exists(path) ? File.OpenRead(path) : OpenShipped(logicalName);
     }
 
-    // 单文件发行包只携带内置配置；目录部署仍优先使用外置文件。漏掉内置回退会让服务端在
-    // 「Cash shop promotions」阶段直接以 FileNotFoundException 结束（2026-10-30 实机）。
+    // 显式给出路径时始终按外置读取，供夹具与运维指定文件；缺失才回退内置脚本。
+    internal static ChannelCatalog LoadChannels(string path) =>
+        ParseChannels(File.Exists(path) ? File.OpenRead(path) : OpenShipped("DfoServer.Resources.channel.txt"));
+
+    internal static ChannelCatalog LoadChannels() =>
+        ParseChannels(OpenDefaultOrShipped("channel.txt", "DfoServer.Resources.channel.txt"));
+
+    static ChannelCatalog ParseChannels(Stream stream)
+    {
+        using (stream)
+        using (var reader = new StreamReader(stream))
+            return ChannelCatalog.Parse(reader.ReadToEnd());
+    }
+
+    // 漏掉内置回退会让服务端在「Cash shop promotions」阶段直接以 FileNotFoundException 结束（2026-10-30 实机）。
     internal static string ReadShippedPromotionConfig()
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "Resources", "cash-shop-promotions.json");
-        using var stream = File.Exists(path) ? File.OpenRead(path) :
-            typeof(ServerRuntime).Assembly.GetManifestResourceStream("DfoServer.Resources.cash-shop-promotions.json")
-            ?? throw new InvalidDataException("程序缺少内置商城促销配置");
+        using var stream = OpenDefaultOrShipped("cash-shop-promotions.json", "DfoServer.Resources.cash-shop-promotions.json");
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
@@ -88,14 +106,18 @@ internal static class ServerRuntime
         quests = quests.WithCreatures(itemResources.Creatures);
         var questStages = QuestStageGraph.Build(quests);
         itemResources.Creatures.PrepareEvolutions();
-        var channels = LoadChannels(Path.Combine(AppContext.BaseDirectory, "Resources", "channel.txt"));
+        var channels = LoadChannels();
         var gameChannels = new GameChannelListeners(options, channels);
         log.Write("startup", new { Stage = "Runtime assembly", State = "starting" });
+        // 单文件发行包不读外置 Resources，但旧目录留在原地会误导运维以为改了配置生效，明确报一次。
+        if (IsSingleFileBundle && Directory.Exists(Path.Combine(AppContext.BaseDirectory, "Resources")))
+            log.Write("resource_warning", new { Stage = "Resources directory", State = "ignored",
+                Directory = Path.Combine(AppContext.BaseDirectory, "Resources"), Reason = "single-file bundle" });
         if (!itemResources.ItemMakingSkills.Available)
             log.Write("resource_warning", new { Stage = "Item making skills", Missing = "etc/itemmakingskill.etc", Disabled = "带制作熟练度声明的配方" });
         var timer = Stopwatch.StartNew();
         var attributePairs = IndependentAttributePairCatalog.Load(
-            Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
+            IsSingleFileBundle ? null : Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
             itemResources.Items, itemResources.Boosters, itemResources.LimitCubes, itemResources.Enchantments,
             itemResources.EpicPieces, itemResources.Contracts, id => Game.Currency.CurrencyWallet.RewardKind(id) is not null,
             useBundledDefault: true);

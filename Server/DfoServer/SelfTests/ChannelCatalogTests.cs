@@ -91,6 +91,10 @@ internal static class ChannelCatalogTests
             That(Infrastructure.ServerRuntime.LoadChannels(path).SourceText == source, "目录部署优先使用外置频道脚本");
             File.WriteAllText(path, "invalid");
             Reject<InvalidDataException>(() => Infrastructure.ServerRuntime.LoadChannels(path), "外置脚本错误仍拒绝，不静默覆盖配置");
+            // 默认入口按部署形态取脚本：目录部署读同版本外置文件，单文件发行包用内置脚本。
+            // 单文件安装目录里残留的旧 Resources 会让这里的 SourceText 与内置脚本不一致。
+            That(Infrastructure.ServerRuntime.LoadChannels().SourceText == embedded.SourceText,
+                "默认入口在任何部署形态都与内置脚本一致，遗留旧文件不覆盖内置默认值");
         }
         finally { Directory.Delete(root, true); }
         var catalog = ChannelCatalog.Parse(source);

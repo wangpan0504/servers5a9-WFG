@@ -56,11 +56,16 @@ internal static class SqliteDatabaseBootstrap
         return connectionString;
     }
 
+    // 单文件发布只产出 exe；目录部署的程序集是 exe 旁边独立的 DfoServer.dll。
+    static bool IsSingleFileBundle =>
+        !File.Exists(Path.Combine(AppContext.BaseDirectory, typeof(SqliteDatabaseBootstrap).Assembly.GetName().Name + ".dll"));
+
     static string ReadSchema(string? explicitPath)
     {
         string path = explicitPath ?? Path.Combine(AppContext.BaseDirectory, "Sqlite", "game_schema.sql");
         // 显式 schema 路径不能因文件缺失而退回默认结构；目录发布保留外部 SQL。
-        if (explicitPath is not null || File.Exists(path))
+        // 单文件发行包不读外置 Sqlite\：安装目录里上一版目录式部署留下的旧结构不得覆盖内置结构。
+        if (explicitPath is not null || (!IsSingleFileBundle && File.Exists(path)))
             return File.ReadAllText(path);
         using var stream = typeof(SqliteDatabaseBootstrap).Assembly.GetManifestResourceStream("DfoServer.Sqlite.game_schema.sql")
             ?? throw new InvalidDataException("程序缺少内置数据库结构");
