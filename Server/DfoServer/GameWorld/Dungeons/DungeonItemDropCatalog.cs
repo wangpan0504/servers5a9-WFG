@@ -42,6 +42,7 @@ internal sealed class DungeonItemDropPool
 internal sealed class DungeonItemDropCatalog
 {
     readonly IReadOnlyDictionary<(ItemKind Kind, int Grade, int Rarity), ImmutableArray<ItemTemplate>> buckets;
+    readonly IReadOnlyDictionary<(int Level, int Rarity), ImmutableArray<ItemTemplate>> equipmentLevels;
     private DungeonItemDropCatalog(IEnumerable<ItemTemplate> source)
     {
         var templates = source.ToArray();
@@ -50,6 +51,20 @@ internal sealed class DungeonItemDropCatalog
             throw new InvalidDataException("资源掉落候选模板重复或grade/rarity/权重非法");
         buckets = templates.GroupBy(template => (template.Kind, template.Grade, template.Rarity)).ToDictionary(
             group => group.Key, group => group.OrderBy(template => template.Id).ToImmutableArray());
+        equipmentLevels = templates.Where(template => template.Kind == ItemKind.Equipment)
+            .GroupBy(template => ((int)template.MinimumLevel, template.Rarity)).ToDictionary(
+                group => group.Key, group => group.OrderBy(template => template.Id).ToImmutableArray());
+    }
+
+    // 深渊等级引用对应装备minimum level；空池不借较低等级或其它稀有度补位。
+    public DungeonItemDropPool EquipmentLevelPool(int minimumLevel, int maximumLevel, int rarity)
+    {
+        if (rarity is < 0 or > 6 || maximumLevel < minimumLevel)
+            throw new ArgumentOutOfRangeException(nameof(rarity));
+        var result = new List<ItemTemplate>();
+        for (int level = Math.Max(1, minimumLevel); level <= Math.Min(200, maximumLevel); level++)
+            if (equipmentLevels.TryGetValue((level, rarity), out var entries)) result.AddRange(entries);
+        return new(result);
     }
 
     public static DungeonItemDropCatalog Load(ItemCatalog items) => new(items.DropCandidates());
