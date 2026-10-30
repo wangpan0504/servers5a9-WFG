@@ -27,6 +27,8 @@ internal static partial class FormalDungeonTcpTests
         done.UnionWith(resources.Towns.DungeonMaps[area.DungeonWorldMap!.Value].Options
             .Where(option => option.DungeonId == 8523 && option.QuestId > 0 && !option.InProgress).Select(option => option.QuestId));
         done.UnionWith(area.Map(done).DungeonGates.Where(gate => gate.Conditions.Length == 0).SelectMany(gate => gate.Quests));
+        // 已开放两条主线通路的独立角色；希望领奖不得清掉黑市阶段或区域准入完成位。
+        done.UnionWith([5936,6045,6115,6201,6301]);
         var bounds = area.Map(done).DungeonGates.First(gate => gate.Conditions.Length == 0 && gate.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town,area.Area,checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
         const string account = "hope-tcp";
@@ -43,6 +45,10 @@ internal static partial class FormalDungeonTcpTests
             created = InventoryService.Commit(repository,owner,created,service.Grant(created,[new(2600014,1)]));
             potion = created.Inventory.Items.Single(row => row.Core.ItemId == 2600014).Position.Index;
         }
+        // 独立夹具预置当日哈林日常已领，避免自动重新分配6115掩盖“最后活动槽”边界。
+        f.Sql("UPDATE characters SET quest_cycle_day=$p0 WHERE id=$p1; " +
+            "UPDATE character_completed_quests SET daily_period=$p0 WHERE character_id=$p1 AND quest_id=6115",
+            DfoServer.Game.Quests.QuestCycle.Day(f.UtcNow),created.Id);
         await f.StartAsync();
         That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(f.Options.GmPort,"infinite-fatigue off",out var mode) &&
             mode == "OK {\"infiniteFatigue\":false}","显式关闭默认开发无限疲劳，验证真实扣费");
@@ -76,6 +82,8 @@ internal static partial class FormalDungeonTcpTests
         using var retryPeer = Open(f,account); peer = retryPeer;
         // 换频道式重连保留已成功传送的真实城镇快照；普通名册选角会回个人房间。
         peer.Select(prepared:true,resumeTown:true,room:false); peer.Barrier();
+        That(f.Query("SELECT count(*) FROM character_active_main_quests WHERE character_id=$p0",created.Id) is [[0L]],
+            "希望单任务回归在入场前没有其它活动任务");
         peer.Send(1598,[]);peer.Expect(1,1598,[1,0,0,0,0]);
         peer.Send(15,Build(w=>w.Write((uint)8523)));peer.Expect(1,15,[1]);
         peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),1]);QuestLifecycleTcpTests.DrainNotifications(peer);
@@ -105,10 +113,35 @@ internal static partial class FormalDungeonTcpTests
             "真实网络完整四区域仅扣16疲劳");
         peer.Send(34,Build(w=>{w.Write((ushort)34);w.Write(quest);w.Write(ushort.MaxValue);w.Write((ushort)1);w.Write(ushort.MaxValue);}));
         That(peer.Expect(1,34).Body[0]==1,"原目标达成并真实终点死亡后34发奖");
-        QuestLifecycleTcpTests.DrainNotifications(peer);
+        var rewardNotices = new List<WirePacket>();
+        QuestLifecycleTcpTests.DrainNotifications(peer,rewardNotices.Add);
+        int activeIndex = rewardNotices.FindIndex(packet => packet.Opcode == 574);
+        int historyIndex = rewardNotices.FindIndex(packet => packet.Opcode == 356);
+        That(activeIndex >= 0 && rewardNotices[activeIndex].Body.AsSpan().SequenceEqual(new byte[4]) && historyIndex > activeIndex,
+            "希望最后活动槽领奖后按空574→356恢复完成历史，不能清除城镇开路资格；实际通知="+
+            string.Join(',',rewardNotices.Select(packet => packet.Opcode)));
+        var history = rewardNotices[historyIndex].Body;
+        That(U32(history) == 30000 && Enumerable.Range(1,29999).All(id => history[4+id] ==
+                (done.Contains(id) || id == 13700 ? 1 : 0)),
+            "希望领奖完整回放原完成位和显示兼容位，不把希望任务写成普通完成或伪造其它通路");
         That(f.Query("SELECT count(*) FROM character_operation_hope_reward_receipts WHERE character_id=$p0",created.Id) is [[1L]] &&
             f.Query("SELECT count(*) FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",created.Id,quest) is [[0L]],
             "同实例唯一收据且不污染普通完成历史");
+        peer.Send(42);peer.Expect(1,42,[1]);
+        peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);peer.Expect(0,24);
+        QuestLifecycleTcpTests.DrainNotifications(peer);
+        var current = position;
+        foreach (var (town,region) in new (byte,byte)[] { (54,1),(60,3),(60,1),(60,3),(54,1),(54,3),(63,0),(54,3),(54,1) })
+        {
+            var next = resources.Towns.Entrance(current,new(town,region,0,0),done) ??
+                throw new InvalidDataException("主线往返缺少实际入口："+town+"/"+region);
+            peer.Travel(town,region,next.X,next.Y,current.Town,current.Area);
+            current = next;
+        }
+        That(peer.CompletedQuestHistory[4+6045] == 1 && peer.CompletedQuestHistory[4+6201] == 1 &&
+            peer.CompletedQuestHistory[4+6301] == 1 &&
+            f.Query("SELECT town,area FROM characters WHERE id=$p0",created.Id) is [[54L,1L]],
+            "希望领奖返城后黑市→灰色墓地及黑市→中央竞技场主线通路均可往返，完成位保持");
 
         List<DungeonPoint> Route(DungeonPoint start,bool met)
         {
