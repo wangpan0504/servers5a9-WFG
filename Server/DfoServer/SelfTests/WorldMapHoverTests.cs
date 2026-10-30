@@ -39,9 +39,9 @@ internal static class WorldMapHoverTests
         {
             var hellOnly = character with { CompletedQuests = [hell] };
             byte[] hellHistory = TownPackets.CompletedQuests(hellOnly);
-            That(hellHistory[4 + hell] == 1 && hellHistory[4 + inferno] == 1 && hellHistory[4 + 13700] == 1 &&
+            That(hellHistory[4 + hell] == 1 && hellHistory[4 + inferno] == 0 && hellHistory[4 + 13700] == 1 &&
                 hellOnly.CompletedQuests.SequenceEqual([hell]),
-                "完成区域深渊任务后补对应时空裂缝外传显示位，不写入角色存档 " + hell);
+                "区域深渊资格不能提前完成时空裂缝外传；356零值无法撤销客户端已导入的完成位 " + hell);
             foreach(var started in new[]
             {
                 hellOnly with {CompletedQuests=[hell,introduction]},
@@ -56,6 +56,9 @@ internal static class WorldMapHoverTests
             That(TownPackets.CompletedQuests(finished)[4+inferno]==3,
                 "外传真实完成后保留原完成位及回答，不被显示兼容覆盖 " + inferno);
         }
+        var harlem = character with { CompletedQuests = [6045,6080] };
+        That(TownPackets.CompletedQuests(harlem)[4+6081] == 0 && TownPackets.CompletedQuests(harlem)[4+10112] == 0,
+            "Ep6资格也不提前完成星空裂缝或超星空外传");
         var progressed = character with
         {
             CompletedQuests = [3616, 3622], AccountCompletedQuests = [100],
