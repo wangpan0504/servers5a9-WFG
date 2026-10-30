@@ -559,10 +559,12 @@ internal static class ServerRuntime
                 despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun,
                 evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun,
                 evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection);
+            var cardPrices = DungeonCardPriceCatalog.Load(pvf);
+            var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items);
             settlement = new DungeonSettlementHandler(log, dungeonCatalog, DungeonClearExperienceCatalog.Load(pvf), growth, projection,
                 rooms, drops, itemResources.Items, levelProjection, itemResources.EpicPieces,
                 new Game.Dungeons.DungeonCardRewardPolicy(dropRules, dropCandidates, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces,
-                prices: DungeonCardPriceCatalog.Load(pvf),hopeRewards:hopeRewards,dimensionRewards:dimensionRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons, guildEconomyService, guildContributionService, goldLimits: itemResources.GoldLimits,
+                prices: cardPrices,hopeRewards:hopeRewards,dimensionRewards:dimensionRewards,tayberrsRewards:tayberrsRewards), inventoryProjection, itemResources.Rental, events, adventureCatalog, partyDungeons, guildEconomyService, guildContributionService, goldLimits: itemResources.GoldLimits,
                 imperialArena: imperialArenaProjection, parties: parties);
             questReplay = new QuestReplayHandler(questConnections,dungeonCatalog,rooms,log,drops,itemResources.Items,itemResources.EpicPieces,PrepareDrops,crackRewards);
         }

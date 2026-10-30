@@ -18,6 +18,8 @@ internal sealed record DungeonCardReward(int Gold, ItemCore? Item, string RuleId
     public ItemCore? HopeEquipment { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ItemCore? HopeSealingItem { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ItemCore? TayberrsWish { get; init; }
 
     public IEnumerable<ItemCore> Items()
     {
@@ -25,6 +27,7 @@ internal sealed record DungeonCardReward(int Gold, ItemCore? Item, string RuleId
         if (ExtraItem is not null) yield return ExtraItem;
         if (HopeEquipment is not null) yield return HopeEquipment;
         if (HopeSealingItem is not null) yield return HopeSealingItem;
+        if (TayberrsWish is not null) yield return TayberrsWish;
     }
 
     public void Validate()
@@ -36,6 +39,12 @@ internal sealed record DungeonCardReward(int Gold, ItemCore? Item, string RuleId
         ExtraItem?.Validate();
         HopeEquipment?.Validate();
         HopeSealingItem?.Validate();
+        TayberrsWish?.Validate();
+        if (TayberrsWish is not null && (TayberrsWish.ItemId != 10305617 ||
+            TayberrsWish.Kind != ItemKind.Material || Item is not { ItemId: 10305616 or 10309040 } ||
+            Item.ItemId == 10305616 && Item.Kind != ItemKind.Material ||
+            Item.ItemId == 10309040 && Item.Kind != ItemKind.Consumable))
+            throw new InvalidDataException("天空之愿只能随泰波尔斯苍穹碎片牌冻结");
         if (HopeSealingItem is not null && (HopeEquipment is null || HopeSealingItem.Kind!=ItemKind.Material))
             throw new InvalidDataException("希望封装材料只能随本次装备牌冻结");
         if (HopeEquipment is not null && (HopeEquipment.Kind!=ItemKind.Equipment || Item?.ItemId!=10307438))
@@ -48,7 +57,8 @@ internal sealed record DungeonCardReward(int Gold, ItemCore? Item, string RuleId
 // 与普通掉落共用PVF引用表及候选目录；倍率采用本服参考规则，不声称还原原服抽样。
 internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, DungeonItemDropCatalog candidates,
     ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, Func<int, int>? random = null,
-    DungeonCardPriceCatalog? prices = null, OperationHopeRewardPolicy? hopeRewards = null, DimensionRewardPolicy? dimensionRewards = null)
+    DungeonCardPriceCatalog? prices = null, OperationHopeRewardPolicy? hopeRewards = null, DimensionRewardPolicy? dimensionRewards = null,
+    TayberrsCardRewardPolicy? tayberrsRewards = null)
 {
     public const string Rule = "pvf-free-clear-card-v1";
     static readonly decimal[] DifficultyRates = [1.02m, 1.38m, 1.60m, 1.90m, 2.00m];
@@ -72,6 +82,9 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         long amount = checked((long)decimal.Floor(basis * DifficultyRates[difficulty] * confirmedKills));
         amount += (Next(gold.VariancePercent * 2 + 1) - gold.VariancePercent) * amount / 100;
         var now = utcNow ?? DateTimeOffset.UtcNow;
+        if (dungeon.IsTayberrs)
+            return (tayberrsRewards ?? throw new NotSupportedException("泰波尔斯缺少材料奖励策略"))
+                .Prepare(dungeon, checked((int)Math.Max(1, amount)), Next, now);
         if (dungeon.IsModernDimension || dungeon.IsAncientInfinite)
         {
             var policy = dimensionRewards ?? throw new NotSupportedException("异界远古缺少专属翻牌策略");
@@ -83,7 +96,6 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         // raid normal dungeon，但没有入场券，也不在类型 45 专表里。缺行时继续走下面的普通基准等级翻牌，
         // 不借用团本魔能石，也不把 NotSupportedException 抛出连接循环。
         if (dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsOperationHope || dungeon.IsNormalFiendwar ||
-            string.Equals(dungeon.WarriorsDungeon, "Tayberrs", StringComparison.OrdinalIgnoreCase) ||
             dungeon.IsOrdinaryAnton && (prices is null || dungeon.OrdinaryEntryTicket is not null ||
                 prices.SpecificRewards.ContainsKey(dungeon.Id)))
         {
@@ -172,7 +184,9 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         if (reward.Item is not { } item) return reward;
         if (!item.IsStackable) return reward with { ExtraItem = item };
         if (item.Value > int.MaxValue / 2) throw new InvalidDataException("双倍翻牌数量超界");
-        return reward with { Item = item with { Value = item.Value * 2 } };
+        if (reward.TayberrsWish?.Value > int.MaxValue / 2) throw new InvalidDataException("双倍天空之愿数量超界");
+        return reward with { Item = item with { Value = item.Value * 2 },
+            TayberrsWish = reward.TayberrsWish is { } wish ? wish with { Value = wish.Value * 2 } : null };
     }
 
     public DungeonCardDelivery PlanDelivery(Character character, IReadOnlyList<DungeonCardReward> rewards, byte targetLevel,
