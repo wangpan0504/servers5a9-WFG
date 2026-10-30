@@ -42,8 +42,12 @@ internal static class QuestCinematicSettlementTests
         done.UnionWith(area.Map(done).DungeonGates.First(gate => gate.Conditions.Length == 0 && !gate.Quests.Contains(3599)).Quests);
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town,area.Area,checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
-        foreach (var scenario in new[] { (Request:3599u,Finish:false,Replay:false,AllEnemies:true),(Request:0u,Finish:false,Replay:false,AllEnemies:false),
-            (Request:3599u,Finish:true,Replay:false,AllEnemies:false),(Request:3599u,Finish:false,Replay:true,AllEnemies:false) })
+        foreach (var scenario in new[] { (Request:3599u,Finish:false,Replay:false,AllEnemies:true,Early:false),
+            (Request:0u,Finish:false,Replay:false,AllEnemies:false,Early:false),
+            (Request:3599u,Finish:true,Replay:false,AllEnemies:false,Early:false),
+            (Request:3599u,Finish:false,Replay:true,AllEnemies:false,Early:false),
+            (Request:3599u,Finish:false,Replay:false,AllEnemies:false,Early:true),
+            (Request:0u,Finish:false,Replay:false,AllEnemies:true,Early:true) })
         {
             using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,74,
                 scenario.Replay ? done.Append(3599).ToArray() : done.ToArray(),position:position);
@@ -86,6 +90,17 @@ internal static class QuestCinematicSettlementTests
             That(f.Session.Phase == SessionPhase.Dungeon && f.Session.MoveFormalDungeon(1,0,1) is not null,
                 "原全清或APC演出未全清均只导航返回原基础76114");
             That(f.Session.EnableFormalDungeonSettlement() is null,"返回加载中仍不能发布结算");
+            if (scenario.Early)
+            {
+                var previous = f.Read(); var identity = f.Session.DungeonSnapshot!.Identity;
+                var early = f.Session.ChangeQuest(3599,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0));
+                var saved = f.Read();
+                That(early?.Outcome == QuestLifecycleOutcome.Committed && early.DungeonIdentity == identity &&
+                    f.Session.Phase == SessionPhase.Loading && saved.ActiveMainQuests.Single(row => row.QuestId == 3599).ConditionState == 0 &&
+                    f.Session.EnableFormalDungeonSettlement() is null &&
+                    QuestCompletionRepositoryTests.Same(previous with { Revision=saved.Revision,ActiveMainQuests=saved.ActiveMainQuests },saved),
+                    "3599返回基础图的终末33先于37也只保存原接取，不制造清图或资产");
+            }
             loaded = f.Session.CompleteFormalDungeonLoading()!;
             That(f.Query("SELECT count(*) FROM character_dungeon_growth_receipts") is long deathCount && deathCount == reported.Length,
                 "导航不伪造未报告演员的死亡或成长回执");
@@ -93,7 +108,8 @@ internal static class QuestCinematicSettlementTests
                 loaded.Monsters.Monsters.All(row => !row.CanReportDeath),
                 "真实叠层死亡后加载全非战斗终点产生合法ClearFact，不把62959当死亡Boss");
             var before = f.Read();
-            That(f.Session.EnableFormalDungeonSettlement() is null,"本次接取演出scalar1时不能提前发31");
+            That(scenario.Early ? f.Session.EnableFormalDungeonSettlement() is not null : f.Session.EnableFormalDungeonSettlement() is null,
+                "原ClearFact与持久演出scalar共同决定31资格");
             byte[] report = DungeonSettlementProtocolTests.Report(before.Id,99);
             That(DungeonSettlementRequests.TryParsePlayResult(report,out var parsed),"完整46正文沿原Parser");
             if (scenario.Replay)
@@ -104,9 +120,9 @@ internal static class QuestCinematicSettlementTests
                 That(f.Session.ReturnFromFormalDungeon() is not null,"3599回放结算保留正式返回城镇");
                 continue;
             }
-            That(f.Session.SettleFormalDungeon(parsed!.ActorId,parsed.RankPoint,parsed.MaximumRankPoint,report,dungeons,clears,growth).Outcome == DungeonRunOutcome.Rejected &&
+            if (!scenario.Early) That(f.Session.SettleFormalDungeon(parsed!.ActorId,parsed.RankPoint,parsed.MaximumRankPoint,report,dungeons,clears,growth).Outcome == DungeonRunOutcome.Rejected &&
                 QuestCompletionRepositoryTests.Same(before,f.Read()),"已有合法ClearFact仍须等演出许可，提前46不提交结算");
-            bool publication = scenario.Request == 3599 && !scenario.Finish;
+            bool publication = scenario.Request == 3599 && !scenario.Finish && !scenario.Early;
             if (publication) Publish(f,quests,items,rooms,parameters,growth,fail:true).GetAwaiter().GetResult();
             var progress = f.Session.ChangeQuest(3599,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0));
             That(progress?.Outcome is QuestLifecycleOutcome.Committed or QuestLifecycleOutcome.Unchanged &&
@@ -121,7 +137,7 @@ internal static class QuestCinematicSettlementTests
             if (scenario.Finish)
                 That(f.Session.FinishQuest(3599,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth).Receipt is not null,
                     "允许33和31后先沿正常34清任务槽，再完成46");
-            var settled = f.Session.SettleFormalDungeon(parsed.ActorId,parsed.RankPoint,parsed.MaximumRankPoint,report,dungeons,clears,growth);
+            var settled = f.Session.SettleFormalDungeon(parsed!.ActorId,parsed.RankPoint,parsed.MaximumRankPoint,report,dungeons,clears,growth);
             That(settled.Outcome == DungeonRunOutcome.Accepted && settled.Receipt is not null && f.Session.FormalDungeonResultFocus() is not null,
                 "演出许可后沿原结算事务完成真实奖励与结果页");
             var committed = f.Read();
@@ -309,35 +325,64 @@ internal static class QuestCinematicSettlementTests
         const ushort id = 3984;
         var quest = quests.Get(id);
         var entrance = MiddleQuestEntryTests.Entrance(towns,quest,312);
-        using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,89,entrance.Completed,position:entrance.Position);
-        That(f.Session.ChangeQuest(id,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
-            "3984换层路线沿真实前置接取");
-        var opening = f.Session.EnterFormalDungeon(312,id,0,dungeons,rooms)!;
-        var receipt = f.Session.CompleteFormalDungeonLoading()!;
-        var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology,opening.Entry.StartMap.Position,opening.Entry.BossMap.Position);
-        foreach (var point in path.Skip(1))
+        foreach (byte job in new byte[] { 2,0 })
+        foreach (ushort request in new ushort[] { id,0 })
+        foreach (bool early in new[] { true,false })
         {
-            foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking))
-                That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,monster),kills,growth).Outcome == DungeonRunOutcome.Accepted,
-                    "3984换层前只提交真实阻挡敌人");
-            That(f.Session.MoveFormalDungeon(checked((byte)point.X),checked((byte)point.Y)) is not null,"3984沿真实门墙走到演出图");
-            receipt = f.Session.CompleteFormalDungeonLoading()!;
+            using var f = new QuestSceneTests.Fixture(towns,characters,skills,growth,quests,false,89,entrance.Completed,job:job,position:entrance.Position);
+            That(f.Session.ChangeQuest(id,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
+                "3984换层路线沿真实前置接取");
+            var accepted = f.Read().ActiveMainQuests.Single(row => row.QuestId == id);
+            var opening = f.Session.EnterFormalDungeon(312,request,0,dungeons,rooms)!;
+            That(opening.Entry.RouteQuestId == id && QuestHuntProgress.Bound(accepted,opening.Entry),
+                "3984显式及普通0路线均绑定实际接取，不分复现职业");
+            var receipt = f.Session.CompleteFormalDungeonLoading()!;
+            var path = QuestStoryRouteTests.Path(opening.Entry.Maze.StaticTopology,opening.Entry.StartMap.Position,opening.Entry.BossMap.Position);
+            foreach (var point in path.Skip(1))
+            {
+                foreach (var monster in receipt.Monsters.Monsters.Where(row => row.IsBlocking))
+                    That(f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,monster),kills,growth).Outcome == DungeonRunOutcome.Accepted,
+                        "3984换层前只提交真实阻挡敌人");
+                That(f.Session.MoveFormalDungeon(checked((byte)point.X),checked((byte)point.Y)) is not null,"3984沿真实门墙走到演出图");
+                receipt = f.Session.CompleteFormalDungeonLoading()!;
+            }
+            var boss = receipt.Monsters.Monsters.Single(row => row.MonsterId == 74652);
+            That(receipt.Snapshot.CurrentMap.Id == 76979 &&
+                f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,boss),kills,growth).ClearFact is not null,
+                "74652死亡后仍在基础演出图，并形成通关事实");
+            var position = receipt.Snapshot.CurrentMap.Position;
+            That(f.Session.MoveFormalDungeon(checked((byte)position.X),checked((byte)position.Y),1) is not null,
+                "结算阶段接受演出末段的同坐标kind1");
+            var before = f.Read();
+            That(f.Session.ChangeQuest(id,QuestLifecycleAction.Giveup,quests,items.Items,items.GoldLimits,items.EpicPieces) is null &&
+                f.Session.ChangeQuest(id,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(0x10,0,0)) is null &&
+                f.Session.ChangeQuest(id,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,1,0)) is null &&
+                f.Session.ChangeQuest(3987,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0)) is null &&
+                QuestCompletionRepositoryTests.Same(before,f.Read()),"3984换层Loading仍拒绝放弃、错误通道、非零条件及另一演出");
+            QuestLifecycleReceipt? progress = early ? Condition() : null;
+            if (early) That(progress?.Outcome == QuestLifecycleOutcome.Committed && f.Session.Phase == SessionPhase.Loading &&
+                progress.Commit?.Plan.AcceptanceId == accepted.AcceptanceId &&
+                QuestCompletionRepositoryTests.Same(before with { Revision=progress.Character.Revision,
+                    ActiveMainQuests=progress.Character.ActiveMainQuests },f.Read()),
+                "3984终末33先于新层37时保存原接取条件");
+            var layer = f.Session.CompleteFormalDungeonLoading()!;
+            That(layer.Snapshot.CurrentMap.Id == 76989 && layer.Snapshot.CurrentMap.Kind == "layered","kind1进入真实叠层76989");
+            if (!early) progress = Condition();
+            That(progress?.Outcome == QuestLifecycleOutcome.Committed &&
+                f.Read().ActiveMainQuests.Single(row => row.QuestId == id).ConditionState == 0 &&
+                !f.Session.CanPublishQuestLifecycle(progress with { DungeonIdentity = opening.Snapshot.Identity }),
+                "叠层上的终末33仍保存原接取演出条件");
+            var after = f.Read();
+            That(Condition()?.Outcome == QuestLifecycleOutcome.Unchanged && QuestCompletionRepositoryTests.Same(after,f.Read()),
+                "3984跨加载重复终末33不重复提交");
+            That(f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth).Receipt?.Commit.Character.CompletedQuests.Contains(id) == true,
+                "演出条件归零后按原34交付3984");
+            That(f.Session.ReturnFromFormalDungeon() is not null,"3984完成后正常返回城镇");
+            before = f.Read();
+            That(Condition()?.Outcome == QuestLifecycleOutcome.Rejected && QuestCompletionRepositoryTests.Same(before,f.Read()),
+                "3984返城后的迟到演出33不能复用已离开的副本身份");
+            QuestLifecycleReceipt? Condition() => f.Session.ChangeQuest(id,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0));
         }
-        var boss = receipt.Monsters.Monsters.Single(row => row.MonsterId == 74652);
-        That(receipt.Snapshot.CurrentMap.Id == 76979 &&
-            f.Session.ObserveFormalDungeonDeath(FormalDungeonSessionTests.Observation(receipt,boss),kills,growth).ClearFact is not null,
-            "74652死亡后仍在基础演出图，并形成通关事实");
-        var position = receipt.Snapshot.CurrentMap.Position;
-        That(f.Session.MoveFormalDungeon(checked((byte)position.X),checked((byte)position.Y),1) is not null,
-            "结算阶段接受演出末段的同坐标kind1");
-        var layer = f.Session.CompleteFormalDungeonLoading()!;
-        That(layer.Snapshot.CurrentMap.Id == 76989 && layer.Snapshot.CurrentMap.Kind == "layered","kind1进入真实叠层76989");
-        var progress = f.Session.ChangeQuest(id,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,0));
-        That(progress?.Outcome == QuestLifecycleOutcome.Committed &&
-            f.Read().ActiveMainQuests.Single(row => row.QuestId == id).ConditionState == 0,
-            "叠层上的终末33仍保存原接取演出条件");
-        That(f.Session.FinishQuest(id,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth).Receipt?.Commit.Character.CompletedQuests.Contains(id) == true,
-            "演出条件归零后按原34交付3984");
     }
 
     // 合成发送故障后保留同Session检查发布边界；不是TCP断线重连恢复声明。

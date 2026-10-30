@@ -196,11 +196,12 @@ internal static class QuestPassiveClearTests
         if (area.AnyQuests.Length > 0) done.Add(area.AnyQuests[0]);
         var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
         var position = new Location(area.Town, area.Area, checked((ushort)(bounds.X + bounds.Width / 2)), checked((ushort)(bounds.Y + bounds.Height / 2)));
-        foreach (string mode in new[] { "normal", "rollback", "lost", "cinematic-first", "cinematic-last" })
+        foreach (string mode in new[] { "normal", "rollback", "lost", "cinematic-first", "cinematic-last", "cinematic-early", "cinematic-early-ordinary" })
         {
             bool lost = mode == "lost";
             bool cinematic = mode.StartsWith("cinematic-", StringComparison.Ordinal);
-            bool ordinary = lost || mode == "cinematic-first";
+            bool ordinary = lost || mode == "cinematic-first" || mode == "cinematic-early-ordinary";
+            bool early = mode.StartsWith("cinematic-early",StringComparison.Ordinal);
             using var f = new QuestSceneTests.Fixture(towns, characters, skills, growth, quests, lost, 86, done.ToArray(),
                 position: position, loseSettlement: lost);
             var accepted = f.Session.ChangeQuest(3858, QuestLifecycleAction.Accept, quests, items.Items, items.GoldLimits, items.EpicPieces);
@@ -240,6 +241,13 @@ internal static class QuestPassiveClearTests
             {
                 That(f.Session.MoveFormalDungeon(checked((byte)layer.Position.X), checked((byte)layer.Position.Y), 1) is not null,
                     "真实70484同坐标沿批准的叠层顺序进入物件层");
+                if (early && layer.Id == quest.CinematicMapId)
+                {
+                    CompleteCinematic();
+                    That(f.Session.Phase == SessionPhase.Loading && f.Session.EnableFormalDungeonSettlement() is null &&
+                        f.Query("SELECT count(*) FROM character_dungeon_scene_clear_receipts") is 0L,
+                        "3858进入演出层的33先于37只保存scalar，不制造物件清图或结算");
+                }
                 receipt = f.Session.CompleteFormalDungeonLoading()!;
                 That(receipt.Snapshot.CurrentMap == layer && receipt.Entry.BossMap.Id == 70484,
                     "层加载保留实际地图身份和原Boss投影");
@@ -254,7 +262,7 @@ internal static class QuestPassiveClearTests
             var identity = f.Session.DungeonSnapshot!.Identity;
             That(receipt.Snapshot.CurrentMap.Id == 70487 && receipt.Monsters.Room.PassiveObjects.Count == 6 &&
                 receipt.Monsters.Room.PassiveObjects[5].ObjectId == 69292 && !rooms.ReportsQuestDeath(receipt.Monsters.Room.PassiveObjects[5]) &&
-                f.Session.Phase == SessionPhase.Dungeon && before.ActiveMainQuests.Single(row => row.QuestId == 3858).ConditionState == 1,
+                f.Session.Phase == SessionPhase.Dungeon && before.ActiveMainQuests.Single(row => row.QuestId == 3858).ConditionState == (early ? 0u : 1u),
                 "真实末层唯一目标为普通物件row5，加载不伪造69292死亡或type65达成");
             byte[] body = QuestPassiveClearTcpTests.PassiveDeath(69292, 74);
             That(DungeonRequests.TryParsePassiveDeath(body, out var parsed) && parsed!.ChecksumMatches,

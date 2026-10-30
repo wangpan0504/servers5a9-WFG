@@ -53,6 +53,7 @@ internal static class MetroQuestEntryTcpTests
         var rooms = SelfTestCatalogs.Rooms(resources.Archive);
         if (stadiumOnly) { VerifyStadium(); return; }
         if (dailyOnly) { VerifyAutoDaily(); return; }
+        VerifyBibiCinematic();
         VerifyFaction(0, 3868, 3871, 3873);
         VerifyFaction(11, 3869, 3872, 3874);
         VerifyTerraDropChain(3954,3956,3871);
@@ -1855,6 +1856,68 @@ internal static class MetroQuestEntryTcpTests
                         action.Where(token => token.Type == 3).Select(token => resources.Archive.ResolveString(token.Value).ToUpperInvariant()).SequenceEqual(
                             ["[TRIGGER]","[ON START MAP]","[LIMIT]","[WHICH]","[CHARACTER]","[DO BEHAVIOR]","[ME]","[/TRIGGER]","[BEHAVIOR]","[CINEMATIC]","[/BEHAVIOR]"]),
                         "只核ON START MAP一次性触发2221原声明；入场与37不证明自然播放、死亡或清图");
+                }
+            }
+        }
+
+        // 合成39和剧情终末，经过正式wire入口验证换层通知先后，不代表客户端自然播放。
+        void VerifyBibiCinematic()
+        {
+            const ushort id = 3984;
+            var quest = resources.Quests.Get(id);
+            foreach (ushort request in new ushort[] { id,0 })
+            foreach (bool early in new[] { true,false })
+            {
+                var done = quest.Definition!.PrerequisiteGroups.Single().ToHashSet();
+                var entrance = Entrance(id,312,done);
+                string account = "bibi-"+request+(early ? "-early" : "-late");
+                var created = Create(account,"Bibi"+request+(early ? "E" : "L"),2,89,done,entrance);
+                using var peer = Open(fixture,account);
+                Select(peer,created); Accept(peer,id,1);
+                string acceptance = Identity(peer.Id,id);
+                var dungeon = dungeons.Get(312);
+                var maze = dungeon.Mazes.Single(row => row.ConnectsQuest(id));
+                uint next = checked((uint)(long)fixture.Query("SELECT next_object_key FROM character_dungeon_state WHERE character_id=$p0",peer.Id)[0][0]);
+                var plans = Plans(maze,peer.Id,next,dungeon.BasisLevel);
+                var map = Enter(peer,id,312,request,maze);
+                var path = QuestStoryRouteTests.Path(maze.StaticTopology,maze.Starts.Single(),maze.Bosses.Single());
+                for (int index=0;index<path.Length;index++)
+                {
+                    var plan = plans.Single(row => row.Room.Map == maze.MapSpecification!.Single(source => source.Position == path[index]));
+                    Actors(peer,map,plan,id,dungeon); FormalDungeonTcpTests.Load(peer); drain(peer,null);
+                    foreach (var actor in plan.Monsters.Where(row => row.IsBlocking))
+                    {
+                        That(actor.CanReportDeath && !actor.IsScriptedBoss,"比比路线只报告原普通阻挡敌人的合成死亡");
+                        peer.Send(39,FormalDungeonTcpTests.Death(actor.ObjectKey,peer.Id,checked((byte)actor.CandidateLevel)));
+                        drain(peer,null);
+                    }
+                    if (index+1<path.Length) map = MoveMap(peer,path[index+1],0);
+                }
+                That(U32(map,14) == 76979 && Scalar(peer.Id,id) == 1,"领主实际死亡不代替比比演出终末");
+                map = MoveMap(peer,path[^1],1);
+                Actors(peer,map,plans.Single(row => row.Room.Map.Id == 76989),id,dungeon);
+                string before = State(peer.Id);
+                // Loading中的非终末形状按原门禁忽略，不发送任务ACK；Barrier检查连接及无多余回包。
+                peer.Send(33,[33,0,0x90,0x0F,0x10,0,0]); peer.Barrier();
+                That(State(peer.Id) == before,"比比换层Loading错误通道不保存进度或资产");
+                if (!early) { FormalDungeonTcpTests.Load(peer); drain(peer,null); }
+                SendCondition();
+                That(Scalar(peer.Id,id) == 0 && Identity(peer.Id,id) == acceptance &&
+                    fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0 AND map_id=76989",peer.Id) is [[0L]] &&
+                    fixture.Query("SELECT count(*) FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3984",peer.Id) is [[0L]],
+                    "比比33在37前后均只达成原接取，不造末层死亡或提前领奖");
+                before = State(peer.Id); SendCondition();
+                That(State(peer.Id) == before,"比比重复终末33不重复保存");
+                if (early) { FormalDungeonTcpTests.Load(peer); drain(peer,null); }
+                peer.Send(46,DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99)); drain(peer,null);
+                Finish(peer,id,65);
+                That(fixture.Query("SELECT acceptance_id FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=3984",peer.Id)
+                    is [[string saved]] && saved == acceptance,"比比34唯一交付同一次接取");
+                Return(peer); Cleanup(peer,created,account);
+
+                void SendCondition()
+                {
+                    peer.Send(33,[33,0,0x90,0x0F,0,0]); peer.Expect(1,33,[1,0x90,0x0F,0,0,0,0]); drain(peer,null);
                 }
             }
         }
