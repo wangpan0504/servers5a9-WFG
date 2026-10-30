@@ -33,6 +33,7 @@ internal sealed partial class EnchantmentCatalog
     readonly Func<string, PvfTokenDocument>? readDocument;
     readonly Lazy<PvfTokenDocument> randomTitles;
     readonly ConcurrentDictionary<int, Lazy<EnchantmentDefinition?>> definitions = new();
+    readonly ConcurrentDictionary<int, Lazy<byte>> cardMaximums = new();
 
     public EnchantmentCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> stackable)
         : this(archive.ReadText, stackable, path => new(archive.ReadTokens(path), archive.ResolveString)) { }
@@ -45,6 +46,35 @@ internal sealed partial class EnchantmentCatalog
         this.readDocument = readDocument;
         randomTitles = new(() => readDocument?.Invoke("etc/randomtitleenchant.etc") ??
             throw new InvalidDataException("随机称号附魔缺少token读取器"));
+    }
+
+    // 卡片升级只读取实际目标的完整等级表，不把名称或附魔数值当成可升级资格。
+    public byte CardMaximumLevel(int cardId)
+    {
+        var pending = cardMaximums.GetOrAdd(cardId, id => new(() =>
+        {
+            if (readDocument is null || !stackable.TryGetValue(id, out string? path))
+                throw new InvalidDataException("卡片升级缺少token读取器或路径");
+            var document = readDocument("stackable/" + path);
+            var tables = document.Sections.Where(row => row.Name == "enchant table").ToArray();
+            if (!document.Diagnostics.IsEmpty || tables.Length != 1 || !tables[0].IsBlock || !tables[0].Values.IsEmpty)
+                throw new InvalidDataException("卡片升级等级表无效");
+            var levels = tables[0].Children;
+            if (levels.IsEmpty || levels.Length > 256)
+                throw new InvalidDataException("卡片升级等级表为空或越界");
+            for (int index = 0; index < levels.Length; index++)
+                if (levels[index].Name != "enchant index" || !levels[index].IsBlock ||
+                    levels[index].Values.Length != 1 || levels[index].Values[0].Type != 0 ||
+                    levels[index].Values[0].Value != index || levels[index].Children.IsEmpty)
+                    throw new InvalidDataException("卡片升级等级必须从零连续且保留效果");
+            return checked((byte)(levels.Length - 1));
+        }));
+        try { return pending.Value; }
+        catch
+        {
+            cardMaximums.TryRemove(new KeyValuePair<int, Lazy<byte>>(cardId, pending));
+            throw;
+        }
     }
 
     // 仅供显式属性对族校验完整效果；普通Get及CMD272不附加本族规则。
@@ -145,6 +175,9 @@ internal sealed partial class EnchantmentCatalog
         return new(itemId, cardIds.Count == 1 ? cardIds[0] : 0, (byte)index, targets, restricted.ToImmutable())
         { RandomCards = cardIds.Count == 1 ? null : new(cardIds.ToImmutable()), VillageOnly = villageOnly };
     }
+
+    public bool CanEnchantCard(int cardId, byte level, ItemKind kind, byte slot) =>
+        CardTargets(cardId, level)?.Contains((kind, slot)) == true;
 
     ImmutableHashSet<(ItemKind Kind, byte Slot)>? CardTargets(int cardId, int index)
     {

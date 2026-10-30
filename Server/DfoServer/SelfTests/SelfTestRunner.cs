@@ -105,6 +105,7 @@ internal static class SelfTestRunner
         AvatarPackageTests.RunCore();
         EmblemCompoundTests.RunCore();
         MonsterCardBindTests.RunCore();
+        MonsterCardUpgradeTests.RunCore();
         GuildCompoundTests.RunCore();
         EquipmentEmblemTests.RunCore();
         TextureChangeTests.RunCore();
@@ -426,6 +427,7 @@ internal static class SelfTestRunner
         EmblemCompoundTests.RunResources(itemResources);
         DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunResources(itemResources);
         MonsterCardBindTests.RunResources(itemResources);
+        MonsterCardUpgradeTests.RunResources(itemResources);
         GuildCompoundTests.RunResources(itemResources);
         AvatarCompoundTests.RunResources(itemResources);
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
