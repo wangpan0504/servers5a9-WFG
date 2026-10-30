@@ -662,6 +662,7 @@ internal static class ServerRuntime
                 guildBenefits: guildNpcBenefitService),
             new EnchantmentHandler(enchantmentService, inventoryProjection, log),
             new EquipmentEmblemHandler(new InventoryEquipmentEmblemService(itemResources.Items, clock), inventoryProjection, log),
+            new AvatarEmblemHandler(new InventoryAvatarEmblemService(itemResources.Items, clock), inventoryProjection, log),
             new TalismanHandler(new InventoryTalismanService(itemResources.Items),
                 new InventoryTalismanCompoundService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces),
                 itemResources.Items, inventoryProjection, log, clock),

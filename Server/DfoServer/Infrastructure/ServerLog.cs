@@ -117,6 +117,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
             "cash_shop_buy" => "Cash shop purchase",
             "avatar_dye" => "Avatar dye",
             "avatar_socket" => "Avatar socket opening",
+            "avatar_emblem" => "Avatar emblem embedding",
             _ => kind.Replace('_', ' ')
         };
         return title + ": " + DetailText(fields);
@@ -163,7 +164,7 @@ internal sealed class ServerLog(string directory, TextWriter? output = null) : I
         "formal_dungeon_settlement" or "formal_character_death" or "formal_character_revive" or "dungeon_selection_return" or "formal_dungeon_return" or
         "formal_quest_continuation" or "formal_quest_continuation_selection" or "dungeon_entry_probe" or "dungeon_probe_return" or
         "quest_lifecycle" or "quest_completion" or "consumable_use" or "class_change" or "growup_change" or "cube_contract_select" or "quest_quick_clear" or "quest_manual_complete" or "quest_hidden_open" or
-        "quest_ticket_use" or "creature_hatch" or "enhancement" or "chronicle_enchant" or "booster_open" or "random_option_change" or "equipment_texture_change" or "cash_shop_buy" or "avatar_dye" or "avatar_socket" or "gm" or "unimplemented" or "raid_rejoin_notice" or "raid_rejoin_candidate" ||
+        "quest_ticket_use" or "creature_hatch" or "enhancement" or "chronicle_enchant" or "booster_open" or "random_option_change" or "equipment_texture_change" or "cash_shop_buy" or "avatar_dye" or "avatar_socket" or "avatar_emblem" or "gm" or "unimplemented" or "raid_rejoin_notice" or "raid_rejoin_candidate" ||
         kind.EndsWith("_rejected", StringComparison.Ordinal) || kind.EndsWith("_failed", StringComparison.Ordinal);
 
     public void Flush() => file.Flush();

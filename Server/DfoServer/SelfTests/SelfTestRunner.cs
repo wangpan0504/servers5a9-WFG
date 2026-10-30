@@ -120,6 +120,7 @@ internal static class SelfTestRunner
         AvatarAbilityChangeTests.RunCore();
         InventoryQualificationTests.RunCore();
         AvatarSocketTests.RunCore();
+        AvatarEmblemTests.RunCore();
         AvatarDisjointTests.RunCore();
         AvatarPresetTests.RunCore();
         NpcFavorTests.RunCore();
