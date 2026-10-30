@@ -80,16 +80,53 @@ internal sealed partial class CharacterInvestmentMetadataCatalog
                 entry.Values[0].Type != 0 || entry.Values[0].Value is < 0 or > byte.MaxValue ||
                 !indices.Add(entry.Values[0].Value) || entry.Children.IsEmpty)
                 throw new InvalidDataException("建设附魔索引缺失、重复或结构无效");
-            // 复用已支持附魔族的完整整数向量边界；未知效果形状不冒充合法安装。
+            // 整数向量与已确认的完整技能块只验证安装元数据，不按效果大小计分。
             if (entry.Children.Select(row => row.Name).Distinct(StringComparer.Ordinal).Count() != entry.Children.Length ||
-                entry.Children.Any(row => row.IsBlock || !row.Children.IsEmpty || row.Values.IsEmpty ||
-                    row.Values.Any(token => token.Type != 0)))
-                throw new InvalidDataException("建设附魔效果不是唯一完整整数向量");
+                entry.Children.Any(row => row.Name == "all skill item container" ? !SkillContainer(row) :
+                    row.IsBlock || !row.Children.IsEmpty || row.Values.IsEmpty || row.Values.Any(token => token.Type != 0)))
+                throw new InvalidDataException("建设附魔效果重复或声明结构未支持");
         }
         return new(true, indices.Contains(index), indices.Contains(index) ? null : "unknown-enchant-index")
         {
             Targets = targets.ToImmutable()
         };
+    }
+
+    bool SkillContainer(PvfTokenSection container)
+    {
+        if (!container.IsBlock || !container.Values.IsEmpty || container.Children.IsEmpty)
+            return false;
+        foreach (var item in container.Children)
+        {
+            if (item.Name != "all skill item" || !Fields(item, 3))
+                return false;
+            var grow = item.Children.SingleOrDefault(row => row.Name == "item growtype");
+            var condition = item.Children.SingleOrDefault(row => row.Name == "skill apply condition");
+            var phase = item.Children.SingleOrDefault(row => row.Name == "skill phase");
+            if (grow is null || grow.IsBlock || !grow.Children.IsEmpty || grow.Values.Length != 2 ||
+                grow.Values[0].Type != 6 || resolve(grow.Values[0].Value) != "[all]" ||
+                grow.Values[1].Type != 0 || grow.Values[1].Value != 0 ||
+                condition is null || !Fields(condition, 5) || !Label(phase, "[all]"))
+                return false;
+            var group = condition.Children.SingleOrDefault(row => row.Name == "skill group");
+            var lower = condition.Children.SingleOrDefault(row => row.Name == "lower bound level");
+            var upper = condition.Children.SingleOrDefault(row => row.Name == "upper bound level");
+            var value = condition.Children.SingleOrDefault(row => row.Name == "value");
+            var extra = condition.Children.SingleOrDefault(row => row.Name == "extra condition");
+            if (!Label(group, "[active]") || !Integer(lower) || !Integer(upper) || !Integer(value) ||
+                lower!.Values[0].Value < 0 || upper!.Values[0].Value < lower!.Values[0].Value ||
+                !Label(extra, "[except for ex skill]", block: true))
+                return false;
+        }
+        return true;
+
+        // 固定字段集合必须完整且唯一；先拒绝重复，再按名读取，不能漏过未知子项。
+        static bool Fields(PvfTokenSection row, int count) => row.IsBlock && row.Values.IsEmpty &&
+            row.Children.Length == count && row.Children.Select(child => child.Name).Distinct(StringComparer.Ordinal).Count() == count;
+        static bool Integer(PvfTokenSection? row) => row is not null && !row.IsBlock && row.Children.IsEmpty &&
+            row.Values.Length == 1 && row.Values[0].Type == 0;
+        bool Label(PvfTokenSection? row, string label, bool block = false) => row is not null && row.IsBlock == block &&
+            row.Children.IsEmpty && row.Values.Length == 1 && row.Values[0].Type == 6 && resolve(row.Values[0].Value) == label;
     }
 
     public bool ValidateRandomTitle(uint value)

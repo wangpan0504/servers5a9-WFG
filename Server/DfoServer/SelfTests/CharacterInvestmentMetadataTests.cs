@@ -4,10 +4,11 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class CharacterInvestmentMetadataTests
+internal static partial class CharacterInvestmentMetadataTests
 {
     public static void RunCore()
     {
+        SpringSkillCardInvestment();
         var strings = new List<string>();
         var documents = new Dictionary<string, PvfTokenDocument>(StringComparer.Ordinal);
         string Resolve(int index) => strings[index];

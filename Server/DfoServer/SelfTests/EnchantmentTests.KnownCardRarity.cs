@@ -11,7 +11,7 @@ namespace DfoServer;
 
 internal static partial class EnchantmentTests
 {
-    static void Spring2020KnownCardRarityQualificationPlans()
+    internal static string Spring2020Card381Text()
     {
         // 真实381卡完整文本由root取证；仅宝珠包装和称号宿主为合成夹具。
         // 原始字节SHA256： 1844C83934DFE0D97476894FC5E4908C9E1131B69A8042C1BDC18817D5C2B20B.
@@ -103,6 +103,12 @@ internal static partial class EnchantmentTests
             "[unable use rarity]\n" +
             "`common` `uncommon` \n" +
             "[/unable use rarity]\n";
+        return card;
+    }
+
+    static void Spring2020KnownCardRarityQualificationPlans()
+    {
+        string card = Spring2020Card381Text();
         const int beadId = 490705300, cardId = 490705381, gearId = 990103;
         const long now = 2_000_000_000;
         // 最小普通宝珠结构；300→381映射另由保存证据绑定。
