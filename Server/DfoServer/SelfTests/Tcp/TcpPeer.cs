@@ -99,6 +99,8 @@ internal sealed partial class TcpPeer : IDisposable
     // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
     public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId];
     public byte[] EventInfoPayload { get; private set; } = [];
+    // 仅原生活动页专项显式启用；回调必须完整消费目录/扩展/状态尾段。
+    internal Action<byte[]>? ValidateNativePromotionEvents { get; set; }
     public byte[] MileageLimits { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
@@ -1265,28 +1267,45 @@ internal sealed partial class TcpPeer : IDisposable
             using (var compressed = new MemoryStream(events.Body, writable: false))
             using (var zlib = new ZLibStream(compressed, CompressionMode.Decompress))
             {
-                byte[] payload = new byte[163 + 15 * ExpectedOpenEvents.Length];
-                zlib.ReadExactly(payload);
-                TestCheck.That(zlib.ReadByte() == -1, $"事件正文必须恰好{payload.Length}B，解压不产生无界输出");
-                EventInfoPayload = payload;
-                TestCheck.Bytes(payload, Build(writer =>
+                if (ValidateNativePromotionEvents is { } validate)
                 {
-                    writer.Write((ushort)(4 + ExpectedOpenEvents.Length));
-                    foreach (ushort id in (ushort[])[2037, 2378, 2395, 333, .. ExpectedOpenEvents])
+                    byte[] bounded = new byte[32768];
+                    int length = 0;
+                    while (length < bounded.Length)
                     {
-                        writer.Write(id);
-                        writer.Write(1u);
-                        writer.Write(0u);
-                        writer.Write(0u);
-                        writer.Write((byte)0);
+                        int read = zlib.Read(bounded, length, bounded.Length - length);
+                        if (read == 0) break;
+                        length += read;
                     }
-                    writer.Write((byte)2);
-                    writer.Write((ushort)2037);
-                    writer.Write(8u);
-                    for (int index = 1; index < 12; index++) writer.Write(0u);
-                    writer.Write((ushort)2395);
-                    for (int index = 0; index < 12; index++) writer.Write(0u);
-                }), "独立核对赛丽亚2037、红包2378、乔纳森2395、魔兽333、开放团本及完整尾部，不能跳过门禁或覆盖原事件");
+                    TestCheck.That(zlib.ReadByte() == -1, "原生页面108解压不得超32768B");
+                    EventInfoPayload = bounded[..length];
+                    validate(EventInfoPayload);
+                }
+                else
+                {
+                    byte[] payload = new byte[163 + 15 * ExpectedOpenEvents.Length];
+                    zlib.ReadExactly(payload);
+                    TestCheck.That(zlib.ReadByte() == -1, $"事件正文必须恰好{payload.Length}B，解压不产生无界输出");
+                    EventInfoPayload = payload;
+                    TestCheck.Bytes(payload, Build(writer =>
+                    {
+                        writer.Write((ushort)(4 + ExpectedOpenEvents.Length));
+                        foreach (ushort id in (ushort[])[2037, 2378, 2395, 333, .. ExpectedOpenEvents])
+                        {
+                            writer.Write(id);
+                            writer.Write(1u);
+                            writer.Write(0u);
+                            writer.Write(0u);
+                            writer.Write((byte)0);
+                        }
+                        writer.Write((byte)2);
+                        writer.Write((ushort)2037);
+                        writer.Write(8u);
+                        for (int index = 1; index < 12; index++) writer.Write(0u);
+                        writer.Write((ushort)2395);
+                        for (int index = 0; index < 12; index++) writer.Write(0u);
+                    }), "独立核对赛丽亚2037、红包2378、乔纳森2395、魔兽333、开放团本及完整尾部，不能跳过门禁或覆盖原事件");
+                }
             }
             var gauge = Expect(0, 412);
             SeriaLuckInfo = gauge.Body;

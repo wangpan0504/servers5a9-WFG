@@ -53,6 +53,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy;
     readonly Func<int, int>? evildomHiddenDraw;
     readonly Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions;
+    readonly bool enablePromotionPage;
     int cliSequence;
     readonly string pvfSource;
     string? previousPhase;
@@ -60,12 +61,13 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null, bool packetHttp = false,
         bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
         Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
-        Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false)
+        Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false, bool enablePromotionPage = false)
     {
         if (sharedResourcePath && (resources is null ||
             !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Shared resource path requires the same read-only TcpTestResources");
         this.promotions = promotions;
+        this.enablePromotionPage = enablePromotionPage;
         this.resources = resources;
         this.questCatalog = questCatalog;
         this.townCatalog = townCatalog;
@@ -262,7 +264,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions, enablePromotionPage: enablePromotionPage);
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }

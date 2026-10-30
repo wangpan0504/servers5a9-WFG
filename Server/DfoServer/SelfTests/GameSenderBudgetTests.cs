@@ -23,6 +23,7 @@ internal static class GameSenderBudgetTests
         await ResultWrittenSequenceAsync();
         await PreparedBodyAsync();
         await QueuedPublicationAsync();
+        await RevalidatedProtectedAsync();
         await QueuedPartyCommandAsync();
         await AcceptedPostAsync();
         Console.WriteLine($"PASS {TestCheck.Count - checks} game sender budget assertions");
@@ -135,6 +136,48 @@ internal static class GameSenderBudgetTests
         }
         await sender.Send(1, 3, [6], "final-barrier");
         TestCheck.That(stream.Frames.Count == 5 && sender.PendingBytes == 0, "旧generation结果不入队，预算完整归还");
+    }
+
+    static async Task RevalidatedProtectedAsync()
+    {
+        using var owner = new AccountOwners().Acquire("revalidated-protected", () => { });
+        using var stop = new CancellationTokenSource();
+        using var stream = new HeldStream();
+        await using var sender = new GameConnectionSender(owner, stream, stop, 0, (_, _, _, _, _) => { });
+        Task held = sender.Send(0, 2, [1], "held-native-page");
+        await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        bool outer = true, pageCurrent = true, committed = true;
+        int committedChecks = 0;
+        using (sender.QueuePublication(() => outer))
+        {
+            Task stale = sender.SendProtectedRevalidated(0, 108, [2], "old-native-page", () => pageCurrent);
+            Task fresh = sender.SendProtectedRevalidated(0, 108, [3], "fresh-native-page", () => true);
+            Task original = sender.SendProtected(0, 108, [4], "original-committed-page",
+                () => { committedChecks++; return committed; });
+            long pending = sender.PendingBytes;
+            Task rejected = sender.SendProtectedRevalidated(0, 108, [9], "rejected-native-page", () => false);
+            TestCheck.That(stale.IsCompletedSuccessfully && fresh.IsCompletedSuccessfully && original.IsCompletedSuccessfully &&
+                rejected.IsCompletedSuccessfully && !held.IsCompleted && sender.PendingBytes == pending,
+                "共享原生活动页只入原有界队列，初始拒绝不占预算也不等待慢socket");
+        }
+        bool otherOuter = true;
+        using (sender.QueuePublication(() => otherOuter))
+            await sender.SendProtectedRevalidated(0, 108, [5], "stale-outer-native-page", () => true);
+        pageCurrent = false; committed = false; otherOuter = false;
+        Task standalone = sender.SendProtectedRevalidated(0, 108, [6], "standalone-native-page", () => true);
+        Task barrier = sender.Send(1, 3, [7], "native-page-barrier");
+        TestCheck.That(!standalone.IsCompleted && !barrier.IsCompleted && committedChecks == 1 &&
+            sender.PendingBytes <= GameConnectionSender.MaxPendingBytes,
+            "非共享入口保留真实发送等待，旧提交guard仍只在入队时检查");
+        stream.Release.TrySetResult();
+        await Task.WhenAll(held, standalone, barrier).WaitAsync(TimeSpan.FromSeconds(5));
+        TestCheck.That(stream.Frames.Count == 5 && sender.PendingBytes == 0 && committedChecks == 1,
+            "写前拒绝旧页面与失效外层会话，新页面和旧已提交结果保留且全部预算归还");
+        TestCheck.Bytes(stream.Frames[0], GameFrame.Build(0, 2, 0, [1]), "原受阻帧保持");
+        TestCheck.Bytes(stream.Frames[1], GameFrame.BuildProtected(0, 108, [3]), "当前新108完整使用Protected帧");
+        TestCheck.Bytes(stream.Frames[2], GameFrame.BuildProtected(0, 108, [4]), "旧提交结果不因后续revision失效被吞");
+        TestCheck.Bytes(stream.Frames[3], GameFrame.BuildProtected(0, 108, [6]), "非共享新入口保留原Protected发送");
+        TestCheck.Bytes(stream.Frames[4], GameFrame.Build(1, 3, 1, [7]), "Protected帧不改变原普通帧sequence");
     }
 
     static async Task QueuedPartyCommandAsync()

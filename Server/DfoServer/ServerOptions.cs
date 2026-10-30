@@ -39,6 +39,8 @@ internal sealed record ServerOptions
     // 每周地下城信息下发；默认 Slots（就绪后回读配置并下发721/720），Full 另发719，Off 回退旧行为。
     public Game.Adventure.AdventureWeeklyMode AdventureWeekly { get; init; } = Game.Adventure.AdventureWeeklyMode.Slots;
     public int SessionTtlSeconds { get; init; } = 300;
+    // 自制累计赠礼页面协议独立开关，不改变活动购买资格。
+    public bool EnablePromotionPage { get; init; }
     public string ProtocolVersion => "matched-client";
 
     public static ServerOptions Load(IReadOnlyDictionary<string, string>? arguments = null)
@@ -68,6 +70,12 @@ internal sealed record ServerOptions
                     "--pvf-path" => value with { PvfPath = StoragePath(argument, name) },
                     "--data-dir" => value with { DataDirectory = StoragePath(argument, name) },
                     "--session-ttl" => value with { SessionTtlSeconds = Number(argument, name) },
+                    "--promotion-page" => value with { EnablePromotionPage = argument switch
+                    {
+                        "Off" => false,
+                        "On" => true,
+                        _ => throw new InvalidDataException(name + " 必须为 Off 或 On")
+                    } },
                     "--dungeon-entry-probe" => value with { DevelopmentDungeonEntryProbe = Mode<DungeonEntryProbeMode>(argument, name) },
                     "--auction-probe" => value with { DevelopmentAuctionProbe = argument },
                     "--auction-seed" => value with { AuctionSeedCount = Number(argument, name) },

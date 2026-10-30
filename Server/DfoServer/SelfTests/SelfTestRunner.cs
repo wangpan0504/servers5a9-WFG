@@ -84,6 +84,12 @@ internal static class SelfTestRunner
         CashShopPromotionTests.RunCore();
         CashShopPromotionSessionTests.RunCore();
         CashShopPromotionPersistenceTests.RunCore();
+        CashShopPromotionPersistenceTests.RunPageCore();
+        Testing.PromotionPageSessionTests.RunCore();
+        CashShopPromotionPersistenceTests.RunPageRoutingCore();
+        MachinePromotionPageTests.RunCore();
+        PromotionNativeDesignPageTests.RunCore();
+        Testing.NativePromotionPageSessionTests.RunCore();
         PremiumContractTests.RunCore();
         GrowthCubeContractTests.RunCore();
         LimitCubeTests.RunCore();

@@ -9,6 +9,7 @@ internal static class CommandLineTests
     public static void Run()
     {
         int checks = Count;
+        RunPromotionPageOptions();
         void Reject(string[] arguments)
         {
             bool rejected = false;
@@ -174,5 +175,33 @@ internal static class CommandLineTests
             Directory.Delete(root, true);
         }
         Console.WriteLine($"PASS {Count - checks} command line assertions");
+    }
+
+    internal static void RunPromotionPageOptions()
+    {
+        int checks = Count;
+        That(!ServerOptions.Load().EnablePromotionPage, "页面协议未配置时默认关闭");
+        That(!ServerOptions.Load(ServerCommand.Parse(["--promotion-page", "Off"]).Options).EnablePromotionPage,
+            "页面协议可显式关闭");
+        That(ServerOptions.Load(ServerCommand.Parse(["--promotion-page", "On"]).Options).EnablePromotionPage,
+            "页面协议可通过正式运行参数独立开启");
+        var command = ServerCommand.Parse(["--promotion-page", "On", "--selftest-tcp", "cash-shop-promotions"]);
+        That(command.Kind == ServerCommandKind.TcpTest && command.Arguments.SequenceEqual(["cash-shop-promotions"]) &&
+            command.Options["--promotion-page"] == "On", "页面参数保留既有业务命令分派和参数");
+        var enabled = ServerOptions.Load(ServerCommand.Parse(["--promotion-page", "On", "--game-port", "25001"]).Options);
+        That(enabled.EnablePromotionPage && enabled.GamePort == 25001 && enabled.PacketCaptureDirectory is null,
+            "页面开关与既有运行参数共存，不附带启用抓包目录");
+        foreach (string[] arguments in new string[][]
+        {
+            ["--promotion-page"], ["--promotion-page", "--selftest-core"],
+            ["--promotion-page", "On", "--promotion-page", "Off"],
+            ["--promotion-page", ""], ["--promotion-page", " "],
+            ["--promotion-page", "on"], ["--promotion-page", "off"],
+            ["--promotion-page", "true"], ["--promotion-page", "1"],
+            ["--promotion-page", "Unknown"], ["--promotion-page", "On", "--help"]
+        })
+            DfoServer.Testing.TestCheck.Reject<InvalidDataException>(
+                () => ServerOptions.Load(ServerCommand.Parse(arguments).Options), "页面运行参数拒绝非法值、缺值、重复或旧命令禁用组合");
+        Console.WriteLine($"Promotion page command line: {Count - checks} checks passed.");
     }
 }

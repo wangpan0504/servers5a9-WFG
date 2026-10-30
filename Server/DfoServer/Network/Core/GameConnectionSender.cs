@@ -77,6 +77,17 @@ internal sealed class GameConnectionSender : IAsyncDisposable
         return done.Task;
     }
 
+    // 原生只读快照排队后仍须复核目录及角色；不改变已提交奖励的原发布语义。
+    internal Task SendProtectedRevalidated(byte kind, ushort opcode, byte[] body, string action, Func<bool> canSend)
+    {
+        if (queuedPublication.Value is not { } captureCurrent) return SendProtected(kind, opcode, body, action, canSend);
+        var outer = captureCurrent();
+        bool Current() => outer() && canSend();
+        if (!owner.Execute(Current)) return Task.CompletedTask;
+        return Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: Current, Protected: true)))
+            ? Task.CompletedTask : Task.FromException(new IOException("Game send queue unavailable"));
+    }
+
     // Written仅用于成功写帧后的本人owner内展示记账，不得执行网络等待或SQL。
     public void Post(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null, Action? written = null) =>
         TryPost(kind, opcode, body, action, canSend, written);

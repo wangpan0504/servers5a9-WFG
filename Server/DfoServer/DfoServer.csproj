@@ -15,6 +15,7 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <EmbeddedResource Include="GmWeb/*.html;GmWeb/*.css;GmWeb/*.js" LogicalName="DfoServer.GmWeb.%(Filename)%(Extension)" />
     <EmbeddedResource Include="SelfTests/Fixtures/luke-scene-contract-vectors.json" LogicalName="DfoServer.SelfTests.LukeSceneContractVectors" />
+    <EmbeddedResource Include="SelfTests/Fixtures/promotion-page-contract-vectors.json" LogicalName="DfoServer.SelfTests.PromotionPageContractVectors" />
     <EmbeddedResource Include="Resources/channel.txt" LogicalName="DfoServer.Resources.channel.txt" />
     <EmbeddedResource Include="Resources/independent-attribute-pairs.json" LogicalName="DfoServer.Resources.independent-attribute-pairs.json" />
     <EmbeddedResource Include="Resources/cash-shop-promotions.json" LogicalName="DfoServer.Resources.cash-shop-promotions.json" />

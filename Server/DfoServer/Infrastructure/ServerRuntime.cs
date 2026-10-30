@@ -103,7 +103,7 @@ internal static class ServerRuntime
         GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
         GameWorld.Adventure.AdventureExpeditionCatalog? expeditionCatalog = null, TimeProvider? clock = null,
         CharacterGrowthCatalog? growthCatalog = null, Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
-        Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null)
+        Func<int, int>? evildomHiddenDraw = null, Func<CashShopPromotionCatalog>? promotions = null, bool enablePromotionPage = false)
     {
         quests = quests.WithCreatures(itemResources.Creatures);
         var questStages = QuestStageGraph.Build(quests);
@@ -252,7 +252,11 @@ internal static class ServerRuntime
         var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, clock);
         var events = new Game.Events.ServerEventService(new ServerEventRepository(Path.Combine(options.DataDirectory, "game.db")), clock);
         var cashPromotions = promotions is null ? null : new Game.CashShopPromotions.CashShopPromotionService(promotions, itemResources.Items.Get);
-        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage);
+        var promotionPageService = enablePromotionPage && promotions is not null
+            ? new Game.CashShopPromotions.CashShopPromotionPageService(repository, itemResources.Items.Get) : null;
+        var promotionPage = promotionPageService is not null
+            ? new PromotionPageProjection(promotions!, promotionPageService) : null;
+        var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage, promotionCatalog: promotionPageService is null ? null : promotions, promotionPages: promotionPageService);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
@@ -628,7 +632,7 @@ internal static class ServerRuntime
                 cashShop,
                 inventoryProjection, log,
                 new Game.Marriage.MarriageShopService(itemResources.Items, itemResources.Shops,
-                    itemResources.GoldLimits, itemResources.EpicPieces, marriageCatalog, clock), marriageProjection, promotions: cashPromotions),
+                    itemResources.GoldLimits, itemResources.EpicPieces, marriageCatalog, clock), marriageProjection, promotions: cashPromotions, promotionPage: promotionPage, nativePromotionTown: promotionPageService is null ? null : projection),
             new RepairHandler(new InventoryRepairService(itemResources.Items, itemResources.Repair, towns, clock), inventoryProjection, log),
             new RandomOptionHandler(new InventoryRandomOptionService(itemResources.Items, itemResources.RandomOptions, clock: clock), inventoryProjection, log,
                 new EquipmentResealService(itemResources.Items, itemResources.EquipmentReseals, itemResources.EpicPieces, clock)),
@@ -762,7 +766,7 @@ internal static class ServerRuntime
             new ChatHandler(new Game.Chat.ChatService(repository, new Game.Chat.ChatDelivery(online), repository), inventoryProjection, log,
                 new Game.Chat.NamedWhisperService(online, repository), guildContribution,
                 new SelfCharacterScoreProjection(new Game.Characters.CharacterInvestmentService(itemResources.Items,
-                    itemResources.CharacterInvestmentMetadata, itemResources.CollectBoxes, itemResources.RandomOptions)))
+                    itemResources.CharacterInvestmentMetadata, itemResources.CollectBoxes, itemResources.RandomOptions)), promotionPage: promotionPage)
         ];
         foreach (var module in modules)
             module.Register(commands);

@@ -43,6 +43,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
           --pvf-path <文件>          资源文件，默认 Data/Pvf/Script.pvf
           --data-dir <目录>          存档目录，默认 Data，数据库名为 game.db
           --session-ttl <秒>         认证元数据有效期，默认 300
+          --promotion-page <Off|On>  自制累计赠礼页面协议，默认 Off；独立于活动购买开关
           --dungeon-entry-probe <模式>  独立开发诊断，默认 Disabled
           --auction-probe <参数>     拍卖行应答记录布局探针，默认关闭（关闭时走真实挂牌数据）
           --auction-seed <条数>      开发用拍卖行种子条数，默认 0（不种子）；表内已有挂牌时不写入
@@ -76,7 +77,7 @@ internal sealed record ServerCommand(ServerCommandKind Kind, string[] Arguments,
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         while (index < args.Length && args[index] is "--server-ip" or "--listen-ip" or
             "--channel-port" or "--game-port" or "--native-port" or "--channel-entry-port-base" or "--gm-port" or "--gm-web-port" or "--packet-http-port" or "--session-ttl" or
-            "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--adventure-weekly" or "--pvf-path" or "--data-dir")
+            "--dungeon-entry-probe" or "--auction-probe" or "--auction-seed" or "--teleport-potion-gates" or "--adventure-weekly" or "--promotion-page" or "--pvf-path" or "--data-dir")
         {
             string name = args[index++];
             if (index == args.Length || string.IsNullOrWhiteSpace(args[index]) || args[index].StartsWith("--", StringComparison.Ordinal))

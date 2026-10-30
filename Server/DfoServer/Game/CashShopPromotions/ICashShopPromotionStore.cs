@@ -31,6 +31,7 @@ internal interface ICashShopPromotionStore
 {
     PromotionProgress Read(AccountOwners.Lease owner, PromotionScope scope);
     PromotionProgress Read(AccountOwners.Lease owner, PromotionCatalogEntry entry);
+    PromotionLedgerSnapshot ReadPage(AccountOwners.Lease owner, PromotionCatalogEntry entry);
     PromotionPurchaseCommit? RestoreCommitted(AccountOwners.Lease owner, Guid orderId);
     PromotionPurchaseCommit Commit(AccountOwners.Lease owner, PromotionPurchasePlan plan, DateTimeOffset now);
 }
