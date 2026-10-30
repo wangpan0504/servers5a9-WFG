@@ -15,7 +15,8 @@ internal static partial class FormalDungeonTcpTests
     {
         LostLandSessionTests.Run(resources.Towns, resources.Archive, resources.Characters);
         int checks = Count;
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "lost-land"), resources: resources, clock: new AltarTimers(180));
+        var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-27T12:00:00+08:00"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "lost-land"), resources: resources, clock: clock);
         await fixture.StartAsync();
         var repository = new CharacterRepository(fixture.Database, resources.Quests);
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -31,6 +32,7 @@ internal static partial class FormalDungeonTcpTests
         }
         for (byte slot = 0; slot < 3; slot++)
         {
+            await clock.WaitForOneShotTimersAsync(0);
             using var peer = Open(fixture);
             peer.Select(slot, prepared: true, resumeTown: true, room: false);
             var initialMap = Enter(peer);
@@ -107,12 +109,24 @@ internal static partial class FormalDungeonTcpTests
                     "错误源房拒绝后，公主房的实收返程仍沿ACK45及缓存29回起点，不重扣次数");
                 Load(peer); peer.Barrier();
             }
-            if (slot < 2) peer.Expect(0, 31, []);
+            if (slot < 2)
+            {
+                // 礼盒日界、服务日和本次600秒等待均已注册；共享公会周期不计入。
+                await clock.WaitForOneShotTimersAsync(3);
+                clock.Advance(TimeSpan.FromSeconds(599)); peer.Barrier();
+                clock.Advance(TimeSpan.FromSeconds(1)); peer.Expect(0, 31, []);
+            }
             if (slot == 0)
             {
                 peer.Send(46, new byte[1]); peer.Barrier();
                 That(Convert.ToInt64(fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts").Single().Single()) == 0,
                     "到期后普通46不授予普通结算或翻牌");
+            }
+            if (slot == 1)
+            {
+                // 收到31后再等原生30秒宽限注册，只有无42槽推进宽限。
+                await clock.WaitForOneShotTimersAsync(3);
+                clock.Advance(TimeSpan.FromSeconds(30));
             }
             if (slot != 1) { peer.Send(42); peer.Expect(1, 42, [1]); }
             Town(peer);
