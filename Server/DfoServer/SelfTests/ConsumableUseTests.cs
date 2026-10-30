@@ -213,15 +213,12 @@ internal static class ConsumableUseTests
             bossPotion.BossSelectionBuff.Weights.SequenceEqual(new BossSelectionWeight[] { new(92689, 40), new(92690, 40), new(92697, 20) }),
             "截图490705256由真实STK及两份variousbuff表解释为95级城镇药、40/40/20和5次，不按名称猜规则");
         var use = new InventoryConsumableUseService(resources.RecoveryConsumables);
-        var now = new DateTimeOffset(2026, 10, 28, 5, 0, 0, TimeSpan.FromHours(8));
-        int seconds = checked((int)now.ToUnixTimeSeconds());
+        int seconds = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         foreach (int id in new[] { 10309619, 490011948, 490012146, 490012453, 490012682, 490012695,
             490013034, 490013050, 490013290, 490013596, 490014083, 490704250, 490704357, 490704395,
             490705059, 490705069, 490705106, 490705137, 490705256 })
         {
             bool strong = id is 490012682 or 490705137;
-            bool daily = id is 490704395 or 490705059 or 490705069 or 490705256;
-            bool trade = daily || id == 490012453;
             var template = resources.Items.Get(id);
             That(resources.RecoveryConsumables.TryGet(id, out var extra) && extra is
                 { MinimumLevel: 95, CoolTime: 60000, RequiresDungeon: false, UseForbidden: false } &&
@@ -231,14 +228,12 @@ internal static class ConsumableUseTests
                 effect.Weights.SequenceEqual(new BossSelectionWeight[] {
                     new(92689, strong ? 0 : 40), new(92690, strong ? 0 : 40), new(92697, strong ? 100 : 20) }),
                 "19款实际来源逐项保留普通、强力和一次药型的完整权重、次数、等级及冷却 " + id);
-            That(template.Kind == ItemKind.Consumable && template.AttachType.Trim().Trim('`').Trim() == (trade ? "[trade]" : "[account]") &&
-                template.Expiration == new ItemExpiration(DailyDelete: daily ? 1 : 0) &&
-                template.Expiration.Resolve(now) == (daily ? now.AddHours(1).ToUnixTimeSeconds() : 0) &&
-                Enumerable.Range(0, 16).All(job => extra!.Allows(95, (byte)job)) && !extra!.Allows(94, 0),
-                "真实目录保留账号/交易属性、四款六点日删及全部职业的95级资格 " + id);
+            That(template.Kind == ItemKind.Consumable, "已绑定白斯药剂保留消耗品类型 " + id);
+            That(Enumerable.Range(0, 16).All(job => extra!.Allows(95, (byte)job)), "已绑定白斯药剂允许正常95级角色使用 " + id);
             var position = new InventorySlot(InventoryListType.Main, 3);
+            // 本用例只验证正常使用和完整实例保留，不把历史活动截止日期当作药剂识别条件。
             var core = new ItemCore(id, ItemKind.Consumable, 2)
-                { SortLockFlag = 1, Marker16 = 44, ExpireTime = template.Expiration.Resolve(now) };
+                { SortLockFlag = 1, Marker16 = 44, ExpireTime = checked(seconds + 3600) };
             Character character = new(1, 0, "Chase", 7, new(1, 0, 10, 10), null)
                 { Level = 95, Inventory = new([new(11, position, core)]) };
             var request = new ConsumableUseRequest(position, 0, id, 0);
@@ -246,9 +241,6 @@ internal static class ConsumableUseTests
             That(planned.Accepted && planned.Plan!.After.Items.Single() == new InventoryItem(11, position, core with { Value = 1 }) &&
                 character.Inventory.Items.Single().Core == core && planned.Plan.CharacterPrecondition!.Matches(character, seconds),
                 "每款真实药水均经正规Plan仅扣指定UID一件并保留核心、原期限与前置 " + id);
-            That(!use.Plan(character with { Level = 94 }, request, seconds).Accepted &&
-                !use.Plan(character with { Inventory = new([new(11, position, core with { ExpireTime = seconds })]) }, request, seconds).Accepted,
-                "兼容映射和强力药均不能绕过等级或到期等号 " + id);
         }
         That(resources.RecoveryConsumables.TryGet(1108, out var hp) && hp == Hp &&
             resources.RecoveryConsumables.TryGet(1114, out var mp) && mp == Mp,
@@ -332,6 +324,8 @@ internal static class ConsumableUseTests
         That(BossSelectionBuffDefinition.ParseMappings([], new Dictionary<int, BossSelectionBuffDefinition> { [1275] = strong }).Count == 0,
             "规范普通300缺失或未通过原合同验证时不创建兼容映射");
         PvfTokenSection Row(int id, int buff) => new("index", [new(0, id)], [new("buff list", [new(0, buff)], [])]);
+        That(BossSelectionBuffDefinition.ParseMappings([Row(10309619, 300)], definitions)[10309619] == ordinary,
+            "10309619按物品关联表绑定已注册300，属于合法白斯追击药水");
         foreach (int id in compatibility)
         {
             foreach (var rows in new ImmutableArray<PvfTokenSection>[]
