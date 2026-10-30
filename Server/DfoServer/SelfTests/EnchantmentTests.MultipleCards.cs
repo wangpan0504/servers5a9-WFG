@@ -86,6 +86,55 @@ internal static partial class EnchantmentTests
         }
         That(observed.Count(value => value == first) == 3 && observed.Count(value => value == second) == 1 &&
             observed.Count(value => value == third) == 2, "重复非连续卡位保留3:1:2权重，所有位置均可达");
+        const string commonRestriction = "\n[unable use rarity]\n`common`\n[/unable use rarity]\n";
+        const string uncommonRestriction = "\n[unable use rarity]\n`uncommon`\n[/unable use rarity]\n";
+        var rarityCatalog = Catalog(bead, (_, files) =>
+        {
+            files["stackable/first.stk"] = card + commonRestriction;
+            files["stackable/second.stk"] = card + uncommonRestriction;
+        });
+        var rarityRule = rarityCatalog.Get(beadId) ?? throw new InvalidDataException("合法稀有度多卡定义缺失");
+        That(rarityRule.ExcludedTargetRarities.SetEquals([0, 1]) &&
+            rarityRule.RandomCards!.Positions.SequenceEqual(expected), "多卡已知禁集取并集，原重复位置与顺序不变");
+        foreach (int rarity in new[] { 0, 1 })
+        {
+            int beforeDraws = draws;
+            var rejected = Plan(role, 0, rarityRule, gear: titleTemplate with { Rarity = rarity });
+            That(!rejected.Accepted && rejected.Plan is null && draws == beforeDraws &&
+                role.Inventory.Find(source.Position) == source && role.Inventory.Find(target.Position) == target,
+                "非首候选禁集也在随机前拒绝，不抽取其它合法卡绕过目标资格");
+        }
+        for (int position = 0; position < expected.Length; position++)
+        {
+            int beforeDraws = draws;
+            var accepted = Plan(role, position, rarityRule, gear: titleTemplate with { Rarity = 2 });
+            That(accepted.Accepted && draws == beforeDraws + 1 &&
+                accepted.Plan!.After.Find(source.Position) == source with { Core = source.Core with { Value = 1 } } &&
+                accepted.Plan.After.Find(target.Position) == target with
+                { Core = target.Core with { EnchantCardId = expected[position], EnchantUpgrade = 0 } },
+                "禁集外目标沿原六位置3:1:2权重，仅扣一珠并保留完整目标核心");
+        }
+        foreach (int rarity in new[] { 0, 1, 2 })
+        {
+            var title = titleTemplate with { Rarity = rarity };
+            That(rarityCatalog.CanEnchantCard(first, 0, title) == (rarity != 0) &&
+                rarityCatalog.CanEnchantCard(second, 0, title) == (rarity != 1) &&
+                rarityCatalog.CanEnchantCard(first, 0, title.Kind, title.EquipmentSlot),
+                "完整目标查询保留各卡禁集，旧四参仍只查询真实等级与部位");
+        }
+        foreach (string unsupported in new[]
+        {
+            commonRestriction.Replace("`common`", "`normal`"),
+            commonRestriction.Replace("`common`", "`common` `normal`"),
+            commonRestriction.Replace("`common`", "`common` 42"),
+            commonRestriction + commonRestriction,
+            commonRestriction.Replace("[/unable use rarity]", "")
+        }) That(Load(bead, (_, files) => files["stackable/third.stk"] = card + unsupported) is null,
+            "任一候选含unknown/normal、非字符串余项或坏限制根块，不形成可执行定义且不抛新异常");
+        var quotedRarity = Load(bead, (_, files) => files["stackable/third.stk"] =
+            "[name]\n`[unable use rarity] normal [/unable use rarity]`\n" + card);
+        That(quotedRarity is not null && quotedRarity.ExcludedTargetRarities.IsEmpty,
+            "说明字符串内假限制标签不改变无字段旧卡的默认空禁集");
         int noDraws = draws;
         foreach (var rejected in new[]
         {

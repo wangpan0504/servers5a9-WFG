@@ -42,9 +42,11 @@ internal static partial class EnchantmentTests
             [0, 255, 255, 0, 20, 0, 0, 0, 0, 0], [0, 65, 0, 0, 255, 255, 0, 0, 0, 0] })
             Reject<InvalidDataException>(() => EnchantmentRequests.Read(body), "附魔结构或有符号槽位范围无效时拒绝");
         CatalogAndPlans();
+        Spring2020KnownCardRarityQualificationPlans();
         MultipleCardPlans();
         MultipleCardExtraQualificationPlans();
         EnchantmentResourceParsingFailures();
+        ExpertJobKnownCardRarityQualificationPlans();
     }
 
     static void CatalogAndPlans()

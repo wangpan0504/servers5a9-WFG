@@ -12,6 +12,9 @@ internal sealed record EnchantmentDefinition(int BeadItemId, int CardItemId, byt
     public RandomTitleEnchantmentPool? RandomTitle { get; init; }
     public RandomCardEnchantmentPool? RandomCards { get; init; }
     public bool VillageOnly { get; init; }
+    public ImmutableHashSet<int> ExcludedTargetRarities { get; init; } = [];
+    public bool AllowsTarget(ItemTemplate target) => Targets.Contains((target.Kind, target.EquipmentSlot)) &&
+        (LimitedItems.IsEmpty || LimitedItems.Contains(target.Id)) && !ExcludedTargetRarities.Contains(target.Rarity);
 }
 internal sealed record RandomCardEnchantmentPool(ImmutableArray<int> Positions)
 {
@@ -164,28 +167,57 @@ internal sealed partial class EnchantmentCatalog
         int index = Scalar(bead, "enchant index", optional: true);
         if (index is < 0 or > byte.MaxValue) return null;
         ImmutableHashSet<(ItemKind Kind, byte Slot)>? targets = null;
+        var excludedTargetRarities = ImmutableHashSet.CreateBuilder<int>();
         // 重复位置就是权重；只复用候选校验，不去重实际抽样列表。
         foreach (int cardId in cardIds.Distinct())
         {
             var allowed = CardTargets(cardId, index);
             if (allowed is null) return null;
-            targets = targets is null ? allowed : targets.Intersect(allowed);
+            targets = targets is null ? allowed.Targets : targets.Intersect(allowed.Targets);
+            excludedTargetRarities.UnionWith(allowed.ExcludedTargetRarities);
         }
         if (targets is null || targets.IsEmpty) return null;
         return new(itemId, cardIds.Count == 1 ? cardIds[0] : 0, (byte)index, targets, restricted.ToImmutable())
-        { RandomCards = cardIds.Count == 1 ? null : new(cardIds.ToImmutable()), VillageOnly = villageOnly };
+        { RandomCards = cardIds.Count == 1 ? null : new(cardIds.ToImmutable()), VillageOnly = villageOnly,
+            ExcludedTargetRarities = excludedTargetRarities.ToImmutable() };
     }
 
+    // 四参查询保留部位与等级语义；消费入口使用完整目标资格。
     public bool CanEnchantCard(int cardId, byte level, ItemKind kind, byte slot) =>
-        CardTargets(cardId, level)?.Contains((kind, slot)) == true;
+        CardTargets(cardId, level)?.Targets.Contains((kind, slot)) == true;
 
-    ImmutableHashSet<(ItemKind Kind, byte Slot)>? CardTargets(int cardId, int index)
+    public bool CanEnchantCard(int cardId, byte level, ItemTemplate target) =>
+        CardTargets(cardId, level) is { } rules && rules.Targets.Contains((target.Kind, target.EquipmentSlot)) &&
+        !rules.ExcludedTargetRarities.Contains(target.Rarity);
+
+    sealed record CardTargetRules(ImmutableHashSet<(ItemKind Kind, byte Slot)> Targets,
+        ImmutableHashSet<int> ExcludedTargetRarities);
+
+    CardTargetRules? CardTargets(int cardId, int index)
     {
         if (!stackable.TryGetValue(cardId, out var cardPath)) return null;
         string card = read("stackable/" + cardPath);
         var cardTypes = Fields(card, "stackable type");
         if (cardTypes.Count != 1 || !Regex.IsMatch(RawValues(card, cardTypes[0]), @"^\s*`\[material expert job\]`\s+1\s*$"))
             return null; // 当前确认的普通怪物卡资源族；其他独立附魔资源不能只凭名称冒充效果。
+        var excludedTargetRarities = ImmutableHashSet.CreateBuilder<int>();
+        // 真正无字段时保留旧行为；说明字符串内的标签不构成字段声明。
+        if (Regex.IsMatch(MaskStrings(card), @"\[/?unable use rarity(?=[\]\s]|$)"))
+        {
+            if (!TryRootBlock(card, "unable use rarity", out string? values) || values is null) return null;
+            var labels = Regex.Matches(values, "`([^`]*)`");
+            if (labels.Count == 0 || Regex.Replace(values, "`[^`]*`", "").Trim().Length != 0) return null;
+            foreach (Match label in labels)
+            {
+                int rarity = label.Groups[1].Value switch
+                {
+                    "common" => 0, "uncommon" => 1, "rare" => 2, "unique" => 3,
+                    "epic" => 4, "chronicle" => 5, "legendary" => 6, _ => -1
+                };
+                if (rarity < 0) return null; // 包括尚未证实的normal；不能丢弃未知标签后放行。
+                excludedTargetRarities.Add(rarity);
+            }
+        }
         var stringBlocks = Regex.Matches(MaskStrings(card), @"\[string data\](.*?)\[/string data\]", RegexOptions.Singleline);
         if (stringBlocks.Count != 1) return null;
         var strings = Regex.Matches(RawValues(card, stringBlocks[0]), "`([^`]*)`")
@@ -210,7 +242,7 @@ internal sealed partial class EnchantmentCatalog
             CultureInfo.InvariantCulture, out int value) && value == index).ToArray();
         // 空表或重复等级不能视作成功效果；卡片属性由客户端按完整Card/Upgrade派生。
         if (matching.Length != 1 || !matching[0].Groups[2].Value.Contains('[')) return null;
-        return targets.ToImmutable();
+        return new(targets.ToImmutable(), excludedTargetRarities.ToImmutable());
     }
 
     // 仅新多卡资格读取完整根块；说明字符串不参与标签和块层级判断。

@@ -64,8 +64,7 @@ internal sealed class InventoryEnchantmentService(ItemCatalog items, Enchantment
             source.IsExpired(now) || target.IsExpired(now) || beadTemplate.Id != source.Core.ItemId || beadTemplate.Kind != source.Core.Kind ||
             targetTemplate.Id != target.Core.ItemId || targetTemplate.Kind != target.Core.Kind || definition.BeadItemId != source.Core.ItemId ||
             definition.CardItemId <= 0 && definition.RandomTitle is null && definition.RandomCards is null ||
-            !definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)) ||
-            !definition.LimitedItems.IsEmpty && !definition.LimitedItems.Contains(target.Core.ItemId) ||
+            !definition.AllowsTarget(targetTemplate) ||
             !ItemSlotBoundService.Allows(before, source.Position, source.Core.Kind) ||
             !ItemSlotBoundService.Allows(before, target.Position, target.Core.Kind) || beadTemplate.UseForbidden ||
             character.Level < beadTemplate.MinimumLevel || (beadTemplate.Jobs & (1 << character.Job)) == 0 ||

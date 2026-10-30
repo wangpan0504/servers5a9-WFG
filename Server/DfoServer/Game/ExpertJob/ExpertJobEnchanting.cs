@@ -31,12 +31,11 @@ internal sealed class ExpertJobEnchanting(ExpertJobScriptCatalog scripts, ItemCa
         // 普通源沿既有配方；升级卡必须保留实例等级并校验该级的真实效果与适用部位。
         byte level = source.Core.EnchantUpgrade != 0 ? source.Core.EnchantUpgrade : definition?.Upgrade ?? 0;
         if (definition is null || definition.CardItemId != source.Core.ItemId ||
-            source.Core.EnchantUpgrade != 0 && !enchantments.CanEnchantCard(source.Core.ItemId, level, targetTemplate.Kind, targetTemplate.EquipmentSlot) ||
+            source.Core.EnchantUpgrade != 0 && !enchantments.CanEnchantCard(source.Core.ItemId, level, targetTemplate) ||
             target.Core.EnchantCardId == source.Core.ItemId && target.Core.EnchantUpgrade == level || sourceTemplate.UseForbidden ||
             character.Level < sourceTemplate.MinimumLevel || (sourceTemplate.Jobs & (1 << character.Job)) == 0 ||
             sourceTemplate.Kind != source.Core.Kind || targetTemplate.Kind != target.Core.Kind ||
-            !definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)) ||
-            !definition.LimitedItems.IsEmpty && !definition.LimitedItems.Contains(targetTemplate.Id) ||
+            !definition.AllowsTarget(targetTemplate) ||
             !ItemSlotBoundService.Allows(character.Inventory, sourceSlot, source.Core.Kind) ||
             !ItemSlotBoundService.Allows(character.Inventory, targetSlot, target.Core.Kind)) return null;
         try
