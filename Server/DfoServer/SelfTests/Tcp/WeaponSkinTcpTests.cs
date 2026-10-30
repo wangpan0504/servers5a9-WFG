@@ -152,6 +152,8 @@ internal static class WeaponSkinTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(weaponSkins: ([32000], 32000));
+            That(WeaponSkinTests.RosterWeaponAppearance(peer.Roster, 0) == 32000,
+                "重连名册槽12使用已选幻化，选角替代动画不再回读真实武器");
             That(WeaponSkinTests.RosterWeaponSkin(peer.Roster, 0) == 32000 &&
                 WeaponSkinTests.RosterWeaponSkin(peer.Roster, 1) == 0 &&
                 WeaponSkinTests.RosterWeaponSkin(peer.Roster, 2) == 0,

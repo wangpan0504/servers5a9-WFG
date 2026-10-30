@@ -1,4 +1,5 @@
 using DfoServer.Game.Characters;
+using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders.Inventory;
 
 namespace DfoServer.Network.Builders;
@@ -40,7 +41,7 @@ internal static class CharacterPackets
     // 02681030 读 u32 进 Data+49Ch；与 Actor 头 +6Eh 同一武器幻化字段。光环 u16 仍在 tail[46]。
     internal const int WeaponSkinTailOffset = 42;
 
-    public static byte[] Roster(CharacterRosterEntry[] rows, ushort capacity = 32)
+    public static byte[] Roster(CharacterRosterEntry[] rows, ushort capacity = 32, ItemCatalog? items = null)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -57,7 +58,7 @@ internal static class CharacterPackets
             // 02679930的首u8进入选角强制改名索引；第二u8保持原独立标志。
             writer.Write(new byte[] { character.RenamePending ? (byte)1 : (byte)0, 0, character.Job, character.GrowType, character.Level });
             writer.Write(new byte[10]);
-            EquipmentProtocolWriter.Appearance(writer, character.Equipment);
+            EquipmentProtocolWriter.RosterAppearance(writer, character.Equipment, character.WeaponSkin, items);
             byte[] tail = new byte[48];
             System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(tail, character.CloneTitleItemId);
             tail[24] = 3;
