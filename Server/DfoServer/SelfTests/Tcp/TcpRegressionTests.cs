@@ -272,6 +272,12 @@ internal static class TcpRegressionTests
             return Task.CompletedTask;
         }),
         ("ekern-cycle", EkernCycleTcpTests.RunAsync),
+        ("tayberrs-cards", (_, _, resources) =>
+        {
+            TayberrsCardRewardTests.RunCore();
+            TayberrsCardRewardTests.RunResources(resources.Archive, resources.ItemResources);
+            return Task.CompletedTask;
+        }),
         ("dungeon-settlement", async (_, _, resources) =>
         {
             DungeonItemDropCatalogTests.RunCore();

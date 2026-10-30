@@ -10,6 +10,7 @@ internal static class DungeonDropRuleCatalogTests
 {
     public static void RunCore()
     {
+        TayberrsCardRewardTests.RunCore();
         int checks = Count;
         var names = new Dictionary<int, string>();
         var source = new List<PvfToken>();

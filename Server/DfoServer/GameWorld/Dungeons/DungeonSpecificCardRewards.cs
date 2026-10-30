@@ -48,4 +48,53 @@ internal static class DungeonSpecificCardRewards
             throw new InvalidDataException("副本专用翻牌奖励权重总和必须为10000");
         return result.ToImmutableDictionary(row => row.Key, row => row.Value.ToImmutableArray());
     }
+    public static ImmutableArray<DungeonSpecificCardItem> ParseTayberrsPaid(IReadOnlyList<PvfToken> tokens, Func<int,string> resolve)
+    {
+        var result = ImmutableArray<DungeonSpecificCardItem>.Empty;
+        bool inside = false;
+        for (int at = 0; at < tokens.Count; at++)
+        {
+            if (tokens[at].Type != 3) continue;
+            string tag = resolve(tokens[at].Value).ToLowerInvariant();
+            if (tag == "[specific goldcard group]") inside = true;
+            else if (tag == "[/specific goldcard group]") inside = false;
+            else if (inside && tag == "[reward group]" && at + 1 < tokens.Count && tokens[at + 1] is { Type:0, Value:101 })
+            {
+                if (!result.IsEmpty) throw new InvalidDataException("泰波尔斯金币奖励组重复");
+                int[]? types = null, values = null;
+                bool closed = false;
+                for (at += 2; at < tokens.Count; at++)
+                {
+                    if (tokens[at].Type != 3) throw new InvalidDataException("金币奖励组含未知数据");
+                    tag = resolve(tokens[at].Value).ToLowerInvariant();
+                    if (tag == "[/reward group]") { closed = true; break; }
+                    if (tag is not ("[reward dungeon type list]" or "[reward item list]"))
+                        throw new NotSupportedException("金币奖励组含未知字段");
+                    int start = ++at;
+                    while (at < tokens.Count && tokens[at].Type == 0) at++;
+                    string end = "[/" + tag[1..];
+                    if (at >= tokens.Count || tokens[at].Type != 3 || resolve(tokens[at].Value).ToLowerInvariant() != end)
+                        throw new InvalidDataException("金币奖励组字段未闭合");
+                    int[] data = Enumerable.Range(start,at-start).Select(index => tokens[index].Value).ToArray();
+                    if (tag == "[reward dungeon type list]" && types is null) types = data;
+                    else if (tag == "[reward item list]" && values is null) values = data;
+                    else throw new InvalidDataException("金币奖励组字段重复");
+                }
+                if (!closed || types is not [71] || values is null || values.Length == 0 || values.Length % 3 != 0)
+                    throw new InvalidDataException("泰波尔斯金币奖励组类型或三列声明无效");
+                var rows = ImmutableArray.CreateBuilder<DungeonSpecificCardItem>();
+                for (int row = 0; row < values.Length; row += 3)
+                {
+                    if (values[row] <= 0 || values[row+1] <= 0 || values[row+2] <= 0)
+                        throw new InvalidDataException("金币奖励物品、权重、数量必须为正整数");
+                    rows.Add(new(values[row], values[row+1], values[row+2]));
+                }
+                if (rows.Sum(row => (long)row.Weight) != 10000)
+                    throw new InvalidDataException("泰波尔斯金币奖励权重不完整");
+                result = rows.ToImmutable();
+            }
+        }
+        return result;
+    }
+
 }

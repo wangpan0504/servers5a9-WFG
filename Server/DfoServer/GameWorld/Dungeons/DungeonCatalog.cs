@@ -181,6 +181,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public int DummyAppearCount => RawSections.Where(row => row.Tag == "dummy appear count").ToArray() is
         [{ Tokens: [{ Type: 0, Value: >= 0 and < ushort.MaxValue } count] }] ? count.Value : 0;
     public string? DungeonType { get; init; }
+    // 仅三个正式泰波尔斯模式，任务版与升级版继续走各自合同。
+    public bool IsTayberrs => Id is 291100320 or 291100322 or 5349 && WarriorsDungeon == "Tayberrs";
     public bool IsOperationHope => RawSections.Where(row => row.Tag == "operation hope dungeon").ToArray() is
         [{ Tokens: [{ Type: 0, Value: 1 }] }];
     public bool IsTutorial => RawSections.Where(row => row.Tag == "tutorial dungeon").ToArray() is

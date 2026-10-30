@@ -9,7 +9,7 @@ internal enum ClearRewardSectionUse
     NotGranted
 }
 
-// 专用翻牌沿既有策略消费默认行；未解释的特殊清图段不追加额外物品。
+// 专用翻牌及金币组按已接入消费者分类；未解释的特殊清图段不追加额外物品。
 internal static class ClearRewardSections
 {
     public const string Path = "etc/itemdropinfo_clearreward.etc";
@@ -38,6 +38,7 @@ internal static class ClearRewardSections
     {
         var rows = new List<(string, ClearRewardSectionUse)>();
         var stack = new Stack<string>();
+        bool tayberrsGold = false;
         for (int at = 0; at < tokens.Count; at++)
         {
             if (tokens[at].Type != 3) continue;
@@ -52,9 +53,12 @@ internal static class ClearRewardSections
             {
                 if (stack.Count == 0 || !string.Equals(stack.Pop(), name, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("通关奖励标签未闭合: " + name);
+                if (name == "reward group") tayberrsGold = false;
                 continue;
             }
-            bool insideRead = false;
+            if (name == "reward group" && stack.Contains("specific goldcard group") &&
+                at + 1 < tokens.Count && tokens[at + 1] is { Type:0, Value:101 }) tayberrsGold = true;
+            bool insideRead = tayberrsGold;
             foreach (string parent in stack)
                 if (parent is "gold card cost table" or "dungeon index privilege service reward rate")
                     insideRead = true;
@@ -62,7 +66,7 @@ internal static class ClearRewardSections
                 at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 45 or 71 or 72 or 75 or 76 };
             var use = insideRead || specific ? ClearRewardSectionUse.ReadAlready
                 : name is "gold card cost table" or "dungeon index privilege service reward rate"
-                    ? ClearRewardSectionUse.ReadAlready : name == "dungeon_index specific reward rate"
+                    ? ClearRewardSectionUse.ReadAlready : name is "dungeon_index specific reward rate" or "specific goldcard group"
                         ? ClearRewardSectionUse.PartlyRead : ClearRewardSectionUse.NotGranted;
             rows.Add((name, use));
             if (Containers.Contains(name)) stack.Push(name);
