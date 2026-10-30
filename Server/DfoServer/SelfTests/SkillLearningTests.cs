@@ -290,7 +290,33 @@ internal static class SkillLearningTests
             }
         }
         CommonSkills(actual, characters);
+        MissingTypeBatch(actual);
         Console.WriteLine($"PASS {Count - checks} resource skill learning assertions");
+    }
+
+    private static void MissingTypeBatch(SkillLearningCatalog catalog)
+    {
+        CharacterSkill[] initial = [new(1,1),new(8,1),new(61,1),new(64,1),new(114,1),new(119,10),new(123,1),
+            new(126,1),new(169,1),new(174,95),new(179,7),new(197,1),new(252,1),new(501,1),new(511,1)];
+        var initialized = SkillLearning.Initialize(4, initial, catalog).State!;
+        var state = initialized with { Trees = Array.AsReadOnly(initialized.Trees.Select(tree => tree with { Sp = 13320, Tp = 46 }).ToArray()) };
+        SkillLearningChangeRequest[] entries = [new(123,false,19),new(114,false,9),new(10,false,1),new(188,false,10),
+            new(189,false,10),new(190,false,1),new(124,false,5),new(116,false,33),new(131,false,1),new(121,false,10),
+            new(115,false,31),new(128,false,28),new(125,false,26),new(133,false,18),new(122,false,16),new(250,false,11),
+            new(251,false,7),new(253,false,8),new(254,false,3),new(118,false,5),new(134,false,13)];
+        var batch = SkillLearning.Plan(4, 0x24, 95, state, new(0, 0, entries), catalog.Get);
+        That(batch.Success && batch.Changes.Count == 21 && batch.State!.Trees[0].Sp == 1450 &&
+            batch.Changes.Single(skill => skill.Id == 253).Level == 8 && batch.State.Trees[0].Tp == 46 &&
+            batch.State.Trees[1].Sp == 13320 && batch.State.Trees[1].Skills.SequenceEqual(state.Trees[1].Skills),
+            "实收21项复仇者批次完整学习、扣11870SP且另一树保持原样");
+        var missing = SkillLearning.Plan(4, 0x24, 95, state, new(0, 0, [new(253,false,8),new(65535,false,1)]), catalog.Get);
+        That(missing.Failure == SkillLearningFailure.MissingSkill && missing.State is null && missing.Changes.Count == 0 &&
+            state.Trees.All(tree => tree.Sp == 13320 && tree.Skills.Count == initial.Length), "合法缺省技能后接非法资源仍整批拒绝且不改输入");
+        var insufficient = state with { Trees = Array.AsReadOnly(state.Trees.Select(tree => tree.Context == 0 ? tree with { Sp = 719 } : tree).ToArray()) };
+        That(SkillLearning.Plan(4, 0x24, 95, insufficient, new(0, 0, [new(253,false,8)]), catalog.Get).Failure == SkillLearningFailure.InsufficientSp &&
+            SkillLearning.Plan(4, 0x24, 93, state, new(0, 0, [new(253,false,8)]), catalog.Get).Failure == SkillLearningFailure.RequiredLevel &&
+            SkillLearning.Plan(4, 0x24, 95, state, new(0, 0, [new(253,false,31)]), catalog.Get).Failure == SkillLearningFailure.Mastered,
+            "毁灭强击仍受720SP、目标八级需Lv94及三十级上限约束");
     }
 
     private static void CommonSkills(SkillLearningCatalog catalog, CharacterCatalog characters)

@@ -40,6 +40,19 @@ internal static class SkillLearningCatalogTests
             Reject<InvalidDataException>(()=>Parse([..active,new(3,19),..invalid.Select(value=>new PvfToken(0,value))]),
                 "畸形偷学声明不能默认为普通技能绕过门禁");
         That(Parse(active).Type == SkillType.Active && Parse(active).SlotGroup == 3, "主动类型保留且不依赖被动分组字段");
+        var missingType = Parse(active[2..]);
+        That(missingType.Type == SkillType.Active && missingType.SlotGroup == 3 && missingType.SupportsOrdinarySpLearning &&
+            !missingType.UnsupportedFields.Contains("type"), "候选缺省类型仅用于完全缺失的声明，保留正常学习字段");
+        foreach (PvfToken[] declaration in new PvfToken[][]
+        {
+            [new(3, 0)], [new(3, 0), new(0, 0)], [new(3, 0), new(6, 10)],
+            [new(3, 0), new(6, 9), new(6, 14)]
+        })
+        {
+            var invalidType = Parse([.. active[2..], .. declaration]);
+            That(invalidType.Type == SkillType.Unknown && !invalidType.SupportsPointLearning && invalidType.UnsupportedFields.Contains("type"),
+                "显式空、错误token、未知及多值类型不采用缺省主动规则");
+        }
         var defaults = Parse(Fixture([7], [4], [4, 4, 4, 4, 4, 4], null, null, []));
         That(defaults.SupportsOrdinarySpLearning && defaults.GetOrdinaryNextRequiredCharacterLevel(0) == 1 &&
             defaults.GetOrdinaryNextRequiredCharacterLevel(2) == 3 && !defaults.UnsupportedFields.Contains("required level range"),
@@ -104,6 +117,16 @@ internal static class SkillLearningCatalogTests
     public static void Run(PvfArchive pvf)
     {
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.SkillLearning(pvf);
+        foreach ((byte job, ushort id, string command) in new[] { ((byte)4, (ushort)253, "01030304"), ((byte)8, (ushort)138, "03020304"), ((byte)8, (ushort)139, "01030304") })
+        {
+            var skill = catalog.Get(job, id);
+            That(skill.Type == SkillType.Active && skill.SlotGroup == 3 && skill.SupportsPointLearning &&
+                skill.DefaultCommand == command && !skill.UnsupportedFields.Contains("type"), "真实缺失类型资源进入主动组并解析默认指令 " + job + "/" + id);
+        }
+        var doomCrush = catalog.Get(4, 253);
+        That(doomCrush.GetMaximum(0x24) == 30 && doomCrush.GetMaximum(0x23) == 0 &&
+            doomCrush.GetOrdinaryNextRequiredCharacterLevel(7) == 94 && doomCrush.GetPointCost(0, 0x24) == 90,
+            "毁灭强击缺省兼容保留职业、上限、等级及每阶90SP资格");
         That(catalog.ActiveExpertContractLevels(1001, 1000) == catalog.ExpertContractLevels &&
             catalog.ActiveExpertContractLevels(1000, 1000) == 0 && catalog.ActiveExpertContractLevels(0, 1000) == 0,
             "目录只在契约有效时提供显式装配的资源加成，到期和无契约均为零");
