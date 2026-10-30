@@ -10,6 +10,22 @@ internal sealed partial class GameSession
     // 每连接一份，随会话创建/销毁；延迟创建才能拿到主构造函数注入的 TimeProvider（测试用假时钟）。
     ChatRateLimiter? chatRate;
 
+    public string PrepareChatEmoticons(DfoServer.GameWorld.Characters.ChatEmoticonCatalog catalog, string text) => owner.Execute(() =>
+    {
+        HashSet<ushort> allowed = Selected is { } character
+            ? catalog.Eligible(ChatEmoticonRules.Eligibility(character, (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()))
+                .Select(row => row.Id).ToHashSet() : [];
+        return ChatEmoticonRules.Prepare(text, allowed, ChatText.MaxBytes, out _);
+    });
+
+    public byte[] PrepareChatEmoticonBytes(DfoServer.GameWorld.Characters.ChatEmoticonCatalog catalog, byte[] text) => owner.Execute(() =>
+    {
+        HashSet<ushort> allowed = Selected is { } character
+            ? catalog.Eligible(ChatEmoticonRules.Eligibility(character, (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()))
+                .Select(row => row.Id).ToHashSet() : [];
+        return ChatEmoticonRules.FilterBytes(text, allowed);
+    });
+
     // Runtime 绑定本连接的聊天投递入口（与 GuildPermitNoticeArrived 同一形态）：目录只保存这一份 Session。
     public Action<ChatNotice>? ChatNoticeArrived { private get; set; }
 
@@ -49,16 +65,23 @@ internal sealed partial class GameSession
     /// （频道 + town/area 的 PVF 地图 + 房间账号），副本/选图/结算阶段再带本角色的副本实例身份，
     /// 避免同坐标但不同实例的角色互相收到普通聊天。
     /// </summary>
-    public ChatOrigin? ChatOrigin() => owner.Execute(() =>
-        Ready && Selected is { } character
-            ? new ChatOrigin(character.Id, character.Name, character.Guild is { } guild ? (long)guild.Id : null, ChatSceneOf(character))
-            : null);
+    public ChatOrigin? ChatOrigin(bool includeAdventureName = false) => owner.Execute(() =>
+    {
+        if (Selected is not { } character) return null;
+        long epoch = SelectionEpoch;
+        var channel = ChannelEntry?.Identity ?? default;
+        // 文字消息只依赖频道及角色身份，不把加载、结算或场景切换当作禁言条件。
+        bool Current() => owner.IsCurrent && SelectionEpoch == epoch && Selected?.Id == character.Id &&
+            (ChannelEntry?.Identity ?? default) == channel;
+        return new ChatOrigin(character.Id, character.Name, character.Guild is { } guild ? (long)guild.Id : null,
+            ChatSceneOf(character)) { AdventureName = includeAdventureName ? ReadAdventureName() : "", IsCurrent = Current };
+    });
 
     ChatScene ChatSceneOf(Character character)
     {
         var town = towns.Scene(character.Position, completed);
         Guid instance = Phase is SessionPhase.Loading or SessionPhase.Dungeon or SessionPhase.Settlement
-            ? formalDungeon?.Run.Snapshot.Identity.InstanceId ?? Guid.Empty
+            ? formalDungeon?.Run.Scene.Identity.InstanceId ?? Guid.Empty
             : Guid.Empty;
         return new(ChannelEntry?.Identity ?? default, town.Town, town.Area, town.Map, town.OwnerKey(owner.Account,character.Id,
             character.Guild?.Id ?? 0,
@@ -74,12 +97,41 @@ internal sealed partial class GameSession
     public bool TryDeliverChat(Func<ChatRecipient, bool> filter, ChatNotice notice)
     {
         Action<ChatNotice>? delivery;
+        ChatNotice outgoing = notice;
         try
         {
             delivery = owner.Execute(() =>
             {
                 if (!Ready || Selected is not { } character)
                     return null;
+                if (notice.Megaphone is { } megaphone)
+                {
+                    long epoch = SelectionEpoch;
+                    ushort id = character.Id;
+                    outgoing = notice with { Guard = () => owner.IsCurrent && Ready && SelectionEpoch == epoch && Selected?.Id == id &&
+                        (ChannelEntry?.Identity ?? default).ServerIndex == megaphone.Channel.ServerIndex &&
+                        (notice.Kind != ChatKind.ChannelMegaphone || (ChannelEntry?.Identity ?? default) == megaphone.Channel) &&
+                        (notice.Guard?.Invoke() ?? true) };
+                }
+                else
+                {
+                    long epoch = SelectionEpoch;
+                    ushort id = character.Id;
+                    bool ScopeCurrent()
+                    {
+                        if (notice.Origin is not { } origin || Selected is not { } current) return notice.Origin is null;
+                        return notice.Kind switch
+                        {
+                            ChatKind.Normal => ChatSceneOf(current) == origin.Scene,
+                            ChatKind.Guild => current.Guild?.Id == origin.GuildId &&
+                                (ChannelEntry?.Identity ?? default).ServerIndex == origin.Scene.Channel.ServerIndex,
+                            ChatKind.Whisper => (ChannelEntry?.Identity ?? default).ServerIndex == origin.Scene.Channel.ServerIndex,
+                            _ => true
+                        };
+                    }
+                    outgoing = notice with { Guard = () => owner.IsCurrent && Ready && SelectionEpoch == epoch && Selected?.Id == id &&
+                        ScopeCurrent() && (notice.Guard?.Invoke() ?? true) };
+                }
                 return filter(new ChatRecipient(owner.Account, character.Id,
                     character.Guild is { } guild ? (long)guild.Id : null, ChatSceneOf(character))) ? ChatNoticeArrived : null;
             });
@@ -91,7 +143,7 @@ internal sealed partial class GameSession
 
         if (delivery is null)
             return false;
-        delivery(notice);
+        delivery(outgoing);
         return true;
     }
 

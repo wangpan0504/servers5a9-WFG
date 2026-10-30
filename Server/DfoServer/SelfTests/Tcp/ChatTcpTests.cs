@@ -78,7 +78,12 @@ internal static class ChatTcpTests
                     Items = inventory.Items
                         .Add(new(0, new(InventoryListType.Main, 67), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(36), 2)))
                         .Add(new(0, new(InventoryListType.Main, 68), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(37), 1)))
+                        .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(36), 2)))
+                        .Add(new(0, new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(37), 2)))
                 };
+            if (name == "ChatD")
+                inventory = inventory with { Items = inventory.Items.Add(new(0,new(InventoryListType.Main,68),
+                    InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(37),2))) };
             profiles[name] = repository.Create(owner, candidate with { Level = 20, InitialLearning = learning, Inventory = inventory });
         }
 
@@ -121,11 +126,32 @@ internal static class ChatTcpTests
             alpha.Barrier();
             clock.Advance(TimeSpan.FromSeconds(10));
         }
+        byte[] QuoteRecord(int id, int seed)
+        {
+            byte[] bytes=Enumerable.Range(0,148).Select(index=>(byte)(seed+index*37)).ToArray();
+            BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(4),id);
+            return bytes;
+        }
+        byte[] QuoteRequest(byte type, byte[] text, params byte[][] records)=>QuoteWithArgument(type,0,text,records);
+        byte[] QuoteWithArgument(byte type,uint argument,byte[] text,params byte[][] records)=>Build(w=>
+        {
+            w.Write(type);w.Write((ushort)9999);w.Write(argument);w.Write((uint)text.Length);w.Write(text);
+            w.Write((byte)records.Length);foreach(byte[] record in records)w.Write(record);
+        });
+        byte[] equipment=QuoteRecord(100300325,19), stackable=QuoteRecord(1113,83);
+        byte[] mixedQuote=Text.GetBytes("\u007f\u001e M\u001f \u007f[强化项链]\u007f \u001e <\u001f \u007f[药剂]\u007f");
+        byte[] mixedExpected=Text.GetBytes("\u007f\u001e M\u001f \u007f[强化项链]\u007f  \u007f[药剂]\u007f");
+
+        byte[] firstQuote=Text.GetBytes("\u007f\u007f[首次装备]\u007f");
+        alpha.Send(CommandItemHyperlink,QuoteRequest(3,firstQuote,equipment));
+        Same(alpha.Expect(0,NoticeHyperLink).Body,HyperLinkBody(3,alpha.Id,"ChatA",firstQuote,equipment),
+            "首次聊天即引用装备也使用实际来源，不依赖最近聊天或伪造编号9999");
+        alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
 
         // ① 房间隔离：选角落在赛丽亚房间（PVF IsRoom ⇒ 场景键含账号），普通聊天只投本人一帧。
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(3, 4, 0, "房间"));
-        Same(alpha.Expect(0, NoticeMessage).Body, MessageBody(3, 4, "房间"), "房间内普通聊天 0x0C 正文");
+        Same(alpha.Expect(0, NoticeMessage).Body, MessageBody(3, alpha.Id, "房间"), "房间内普通聊天使用真实角色及分组");
         beta.NoFrame(300, "房间按账号隔离：别的账号收不到普通聊天", (0, NoticeMessage));
         gamma.NoFrame(300, "房间按账号隔离：第三个账号也收不到", (0, NoticeMessage));
         delta.NoFrame(300, "另一频道的房间更收不到", (0, NoticeMessage));
@@ -141,9 +167,9 @@ internal static class ChatTcpTests
         // ③ 普通聊天（type 3）：A、B、C 同场景各收一帧 [03][请求层 id][00][字节数][文本]；D（另一频道）不收。
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(3, 4, 0, "普通聊天"));
-        Same(alpha.Expect(0, NoticeMessage).Body, MessageBody(3, 4, "普通聊天"), "普通聊天下行 0x0C 正文");
-        Same(beta.Expect(0, NoticeMessage).Body, MessageBody(3, 4, "普通聊天"), "同场景接收者收到同样的 0x0C 正文");
-        Same(gamma.Expect(0, NoticeMessage).Body, MessageBody(3, 4, "普通聊天"), "同场景第三个角色也收到 0x0C 正文");
+        Same(alpha.Expect(0, NoticeMessage).Body, MessageBody(3, alpha.Id, "普通聊天"), "普通聊天不信任请求的发言人编号");
+        Same(beta.Expect(0, NoticeMessage).Body, MessageBody(3, alpha.Id, "普通聊天"), "同场景接收者收到真实来源");
+        Same(gamma.Expect(0, NoticeMessage).Body, MessageBody(3, alpha.Id, "普通聊天"), "第三个角色也收到完整0x0C正文");
         delta.NoFrame(400, "普通聊天不投不同频道", (0, NoticeMessage));
 
         // ③b 物品链接（CMD 0x01A8）：实测 179 字节正文（kind=3、19 字节链接文本、cnt=1、148 字节记录）。
@@ -152,16 +178,22 @@ internal static class ChatTcpTests
         byte[] linkRecord = LinkRecord();
         NextChatWindow();
         alpha.Send(CommandItemHyperlink, HyperlinkBody(3, linkText));
-        byte[] linkFrame = HyperLinkBody(3, 4, "ChatA", linkText, linkRecord);
+        byte[] linkFrame = HyperLinkBody(3, alpha.Id, "ChatA", linkText, linkRecord);
         Same(alpha.Expect(0, NoticeHyperLink).Body, linkFrame, "物品链接发送者自己收到 0x172 回显（含 148B 记录）");
         Same(beta.Expect(0, NoticeHyperLink).Body, linkFrame, "同场景接收者收到同一条 0x172 链接帧");
         Same(gamma.Expect(0, NoticeHyperLink).Body, linkFrame, "同场景第三个角色也收到 0x172 链接帧");
         delta.NoFrame(400, "物品链接不投其他频道", (0, NoticeHyperLink), (0, NoticeMessage));
 
+        alpha.Send(CommandItemHyperlink,QuoteRequest(3,mixedQuote,equipment,stackable));
+        byte[] mixedFrame=HyperLinkBody(3,alpha.Id,"ChatA",mixedExpected,equipment,stackable);
+        foreach(var peer in new[]{alpha,beta,gamma})
+            Same(peer.Expect(0,NoticeHyperLink).Body,mixedFrame,"普通频道装备和道具多引用保持两份完整148B记录及顺序");
+        alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
+
         // 记录为空（cnt=0）：退化回 0x0C 纯文本，链接文本原样、不带记录段。
         NextChatWindow();
         alpha.Send(CommandItemHyperlink, HyperlinkBody(3, linkText, withRecord: false));
-        byte[] plainLink = LinkMessageBody(3, 4, linkText);
+        byte[] plainLink = LinkMessageBody(3, alpha.Id, linkText);
         Same(alpha.Expect(0, NoticeMessage).Body, plainLink, "记录为空时发送者收到 0x0C 纯文本回显");
         Same(beta.Expect(0, NoticeMessage).Body, plainLink, "记录为空时同场景接收者也收到 0x0C 纯文本");
         Same(gamma.Expect(0, NoticeMessage).Body, plainLink, "记录为空时第三个接收者收到 0x0C 纯文本");
@@ -180,16 +212,24 @@ internal static class ChatTcpTests
             "VALUES($p0,$p1,0,0,'',1700000000,0)", guildId, (int)profiles["ChatC"].Id);
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(6, 3, 0, "公会聊天"));
-        Same(alpha.Expect(0, NoticeMessage).Body, MessageBody(6, 3, "公会聊天"), "公会聊天下行 0x0C 正文");
-        Same(beta.Expect(0, NoticeMessage).Body, MessageBody(6, 3, "公会聊天"), "同公会在线成员收到 0x0C");
-        gamma.NoFrame(400, "公会成员表在选角后追加时不投旧会话（锁内复核 Selected.Guild）", (0, NoticeMessage));
-        delta.NoFrame(400, "公会聊天不投非成员", (0, NoticeMessage));
+        byte[] guildMessage=Build(w=>{w.Write(new byte[]{6,0,0,0});w.Write(5u);w.Write("ChatA"u8);w.Write((byte)2);
+            byte[] text=Text.GetBytes("公会聊天");w.Write((uint)text.Length);w.Write(text);w.Write(0u);});
+        Same(alpha.Expect(0,65).Body,guildMessage,"公会65/type6包含两个前置标志、明确发言人和额外名字串");
+        Same(beta.Expect(0,65).Body,guildMessage,"同公会成员不依赖同屏Actor也可显示名字");
+        gamma.NoFrame(400, "公会成员表在选角后追加时不投旧会话（锁内复核 Selected.Guild）", (0,65),(0,NoticeMessage));
+        delta.NoFrame(400, "公会聊天不投非成员", (0,65),(0,NoticeMessage));
+
+        alpha.Send(CommandItemHyperlink,QuoteRequest(6,mixedQuote,equipment,stackable));
+        byte[] guildQuote=NamedLinkBody(6,"ChatA",mixedExpected,equipment,stackable);
+        Same(alpha.Expect(0,371).Body,guildQuote,"公会引用371包含前置标志、明确发言人及完整记录");
+        Same(beta.Expect(0,371).Body,guildQuote,"公会队友收到完整装备及道具记录，非成员不得收到");
+        alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
 
         // ⑤ 悄悄话（请求 type 0x2E）：arg 是目标角色 id，只投目标；发送者本人与其他角色都不收。
         // 下行显示 type 实测映射为 3（「普通」页签只渲染 3/6/0x37/0x38），不再是请求里的 0x2E。
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(0x2E, 5, profiles["ChatB"].Id, "悄悄话"));
-        Same(beta.Expect(0, NoticeMessage).Body, MessageBody(3, 5, "悄悄话"), "悄悄话只投目标角色的 0x0C 正文（显示 type=3）");
+        Same(beta.Expect(0, NoticeMessage).Body, MessageBody(3, alpha.Id, "悄悄话"), "旧角色ID兼容私聊使用实际发言人");
         alpha.NoFrame(400, "悄悄话不回显给发送者", (0, NoticeMessage));
         gamma.NoFrame(400, "悄悄话不投旁人", (0, NoticeMessage));
         delta.NoFrame(400, "悄悄话不投其他频道", (0, NoticeMessage));
@@ -205,7 +245,7 @@ internal static class ChatTcpTests
             alpha.Send(CommandSendMessage, SendBody(3, 7, 0, "节流" + index));
         for (int index = 0; index < ChatRateLimiter.ShortWindowLimit; index++)
         {
-            byte[] expected = MessageBody(3, 7, "节流" + index);
+            byte[] expected = MessageBody(3, alpha.Id, "节流" + index);
             Same(alpha.Expect(0, NoticeMessage).Body, expected, "节流窗口内发送者按序收到前五条");
             Same(beta.Expect(0, NoticeMessage).Body, expected, "节流窗口内接收者按序收到前五条");
             Same(gamma.Expect(0, NoticeMessage).Body, expected, "节流窗口内第三个接收者按序收到前五条");
@@ -219,7 +259,7 @@ internal static class ChatTcpTests
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(3, 6, 0, new string('x', 250)));
         byte[] longChat = alpha.Expect(0, NoticeMessage).Body;
-        That(longChat.Length == 8 + 200 && BinaryPrimitives.ReadUInt32LittleEndian(longChat.AsSpan(4)) == 200 &&
+        That(longChat.Length == 8 + 200 + 4 + 5 && BinaryPrimitives.ReadUInt32LittleEndian(longChat.AsSpan(4)) == 200 &&
             Text.GetString(longChat, 8, 200) == new string('x', 200),
             "超长聊天下行正文 = 8 字节头 + 200 字节文本（服务端 200 字节上限）");
         beta.Expect(0, NoticeMessage);
@@ -236,7 +276,7 @@ internal static class ChatTcpTests
         // （type 0x0B = Ch. 频道标签，str1=ChatA、str2=频道喇叭）；另一频道的 D 不收。
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(13, 0, 68, "频道喇叭"));
-        byte[] channelMegaphone = MegaphoneBody(0x0B, "ChatA", "频道喇叭");
+        byte[] channelMegaphone = MegaphoneBody(13, "ChatA", "频道喇叭", 2, 10, alpha.Id);
         Same(alpha.Expect(0, NoticeMegaphone).Body, channelMegaphone, "频道喇叭 0x76 正文");
         alpha.Expect(0, NoticeUpdateItemList); // 本人背包差量：槽 68 数量减 1
         Same(beta.Expect(0, NoticeMegaphone).Body, channelMegaphone, "同频道接收者收到 0x76 喇叭行");
@@ -248,7 +288,7 @@ internal static class ChatTcpTests
         // （type 0x0E = D&F 官方标签，客户端会忽略 str1），不弹 0x06AD 公告框。
         NextChatWindow();
         alpha.Send(CommandSendMessage, SendBody(11, 0, 67, "服务器喇叭"));
-        byte[] serverMegaphone = MegaphoneBody(0x0E, "ChatA", "服务器喇叭");
+        byte[] serverMegaphone = MegaphoneBody(11, "ChatA", "服务器喇叭", 2, 10, alpha.Id);
         Same(alpha.Expect(0, NoticeMegaphone).Body, serverMegaphone, "服务器喇叭 0x76 正文");
         alpha.Expect(0, NoticeUpdateItemList);
         Same(beta.Expect(0, NoticeMegaphone).Body, serverMegaphone, "服务器喇叭投同频道在线");
@@ -260,6 +300,116 @@ internal static class ChatTcpTests
         beta.Barrier();
         gamma.Barrier();
         delta.Barrier();
+
+        delta.Send(CommandSendMessage,SendBody(13,0,68,"另一频道"));
+        Same(delta.Expect(0,NoticeMegaphone).Body,MegaphoneBody(13,"ChatD","另一频道",2,11,delta.Id),
+            "其他频道发言携带自身频道和角色编号，不固定写主频道");
+        delta.Expect(0,NoticeUpdateItemList);
+        delta.Barrier();alpha.Barrier();beta.Barrier();gamma.Barrier();
+
+        // 引用与文字走相同资格和范围，专用372/371不能退化成公开普通聊天。
+        NextChatWindow();
+        string beforeQuoteReject=fixture.Snapshot();
+        alpha.Send(CommandItemHyperlink,QuoteWithArgument(13,69,mixedQuote,equipment,stackable));
+        alpha.Send(CommandItemHyperlink,QuoteWithArgument(11,65536,mixedQuote,equipment,stackable));
+        alpha.Send(CommandItemHyperlink,QuoteWithArgument(12,69,mixedQuote,equipment,stackable));
+        alpha.Send(CommandItemHyperlink,[..QuoteWithArgument(11,69,mixedQuote,equipment,stackable),0]);
+        byte[] shortRecords=QuoteWithArgument(11,69,mixedQuote,equipment,stackable);
+        shortRecords[11+mixedQuote.Length]=3;
+        alpha.Send(CommandItemHyperlink,shortRecords);
+        alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
+        That(fixture.Snapshot()==beforeQuoteReject,"引用的错误喇叭、越界槽、未知类型和畸形记录均不扣源或广播");
+
+        NextChatWindow();
+        foreach(var (type,slot,recipients) in new[]{((byte)11,(uint)69,4),((byte)13,(uint)70,3)})
+        {
+            alpha.Send(CommandItemHyperlink,QuoteWithArgument(type,slot,mixedQuote,equipment,stackable));
+            byte[] expected=LinkedMegaphoneBody(type,alpha.Id,10,"ChatA",mixedExpected,equipment,stackable);
+            foreach(var peer in new[]{alpha,beta,gamma,delta}.Take(recipients))
+                Same(peer.Expect(0,372).Body,expected,"喇叭多引用按真实来源逐字节保留记录，表情资格过滤不改物品核心");
+            alpha.Expect(0,NoticeUpdateItemList);
+            alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
+            That(CountSlot((short)slot)==1,"一次引用发送只扣一个对应喇叭，不重复消费");
+        }
+        alpha.Send(CommandItemHyperlink,QuoteWithArgument(11,69,mixedQuote));
+        byte[] quoteFallback=MegaphoneBody(11,"ChatA",Text.GetString(mixedExpected),2,10,alpha.Id);
+        foreach(var peer in new[]{alpha,beta,gamma,delta})
+            Same(peer.Expect(0,NoticeMegaphone).Body,quoteFallback,"缺记录仍以原喇叭通道回退，不把喇叭变成普通聊天");
+        alpha.Expect(0,NoticeUpdateItemList);
+        alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
+        That(CountSlot(69)==0,"喇叭引用降级后同样只消费本次一件源物品");
+        delta.Send(CommandItemHyperlink,QuoteWithArgument(13,68,mixedQuote,equipment,stackable));
+        Same(delta.Expect(0,372).Body,LinkedMegaphoneBody(13,delta.Id,11,"ChatD",mixedExpected,equipment,stackable),
+            "其他频道的引用喇叭保留自己的频道，只向该频道投递");
+        delta.Expect(0,NoticeUpdateItemList);
+        delta.Barrier();alpha.Barrier();beta.Barrier();gamma.Barrier();
+
+        foreach(byte mode in new byte[]{1,36,40,41})
+        {
+            NextChatWindow();
+            byte[] request=Build(w=>
+            {
+                w.Write(mode);w.Write((ushort)9999);w.Write(0u);w.Write((uint)mixedQuote.Length);w.Write(mixedQuote);
+                byte[] name=Text.GetBytes("ChatD");w.Write((uint)name.Length);w.Write(name);w.Write((byte)2);
+                w.Write((byte)2);w.Write(equipment);w.Write(stackable);
+            });
+            alpha.Send(CommandItemHyperlink,request);
+            Same(delta.Expect(0,371).Body,NamedLinkBody(mode==40?(byte)36:mode,"ChatA",mixedExpected,equipment,stackable),
+                "私聊和一对一引用按名字跨频道只投目标，40回复归一36且不丢装备或道具记录");
+            alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
+        }
+        NextChatWindow();
+        alpha.Send(CommandItemHyperlink,QuoteWithArgument(46,beta.Id,mixedQuote,equipment,stackable));
+        Same(beta.Expect(0,NoticeHyperLink).Body,HyperLinkBody(3,alpha.Id,"ChatA",mixedExpected,equipment,stackable),
+            "原角色ID兼容入口的引用仍只投目标，不丢目标参数或降为公开广播");
+        alpha.Barrier();beta.Barrier();gamma.Barrier();delta.Barrier();
+
+        // 队伍聊天使用正式邀请/接受名册，覆盖同场景旁观者、跨频道旁观者以及退队后的隔离。
+        NextChatWindow();
+        foreach (var peer in new[] { alpha, beta })
+        {
+            peer.Send(2, Build(w=>{w.Write((byte)5);w.Write(0x0100007fu);w.Write(0x0100007fu);w.Write((ushort)30000);w.Write(512u);}));
+            peer.Barrier();
+        }
+        byte[] Peer(ushort id, bool invitation) => Build(w=>{w.Write(id);w.Write((byte)0);w.Write(0u);if(invitation)w.Write(new byte[6]);});
+        alpha.Send(10,Peer(beta.Id,true));alpha.Expect(1,10,[1]);
+        beta.Expect(0,2);beta.Expect(0,7);
+        beta.Send(11,Peer(alpha.Id,false));beta.Expect(1,11);
+        byte[] PartyInfo(TcpPeer peer, int count)
+        {
+            for(int i=0;i<count;i++)peer.Expect(0,2);
+            peer.Batch((0,153),(0,11));
+            byte[] roster=peer.Expect(0,9).Body;
+            peer.Batch((0,11),(0,153),(0,26));
+            return roster;
+        }
+        var directoryRows=new List<byte[]> { PartyInfo(alpha,2) };PartyInfo(beta,2);alpha.Batch((0,2),(0,8));
+        void ObserverBarrier()=>gamma.Barrier(packet=>
+        {
+            That(packet is {Kind:0,Opcode:9} && directoryRows.Any(row=>row.SequenceEqual(packet.Body)),
+                "旁观者只允许接收已确认的公开队伍目录更新，不得收到队伍聊天");
+        });
+        alpha.Barrier();beta.Barrier();ObserverBarrier();delta.Barrier();
+        foreach(string text in new[]{"队伍测试", "\u007f\u001e M\u001f"})
+        {
+            alpha.Send(CommandSendMessage,SendBody(2,9999,0,text));
+            byte[] expected=MessageBody(2,alpha.Id,text);
+            Same(alpha.Expect(0,NoticeMessage).Body,expected,"队伍聊天使用原生type2及真实发言人编号");
+            Same(beta.Expect(0,NoticeMessage).Body,expected,"队友收到相同文字和完整表情标记");
+            alpha.Barrier();beta.Barrier();ObserverBarrier();delta.Barrier();
+        }
+        alpha.Send(CommandItemHyperlink,QuoteRequest(2,mixedQuote,equipment,stackable));
+        byte[] partyLinkExpected=HyperLinkBody(2,alpha.Id,"ChatA",mixedExpected,equipment,stackable);
+        Same(alpha.Expect(0,NoticeHyperLink).Body,partyLinkExpected,"队伍物品链接保留完整核心及真实发言人");
+        Same(beta.Expect(0,NoticeHyperLink).Body,partyLinkExpected,"队伍物品链接只投真实队友");
+        alpha.Barrier();beta.Barrier();ObserverBarrier();delta.Barrier();
+        beta.Send(13);beta.Expect(1,13,[1]);beta.Batch((0,9),(0,9));directoryRows.Add(PartyInfo(alpha,1));
+        alpha.Barrier();beta.Barrier();ObserverBarrier();
+        beta.Send(CommandSendMessage,SendBody(2,beta.Id,0,"已退队"));
+        beta.Barrier();alpha.Barrier();ObserverBarrier();delta.Barrier();
+        alpha.Send(CommandSendMessage,SendBody(2,alpha.Id,0,"单人队伍"));
+        Same(alpha.Expect(0,NoticeMessage).Body,MessageBody(2,alpha.Id,"单人队伍"),"单人队伍正常回显且不向已退队成员泄漏");
+        alpha.Barrier();beta.Barrier();ObserverBarrier();delta.Barrier();
 
         await fixture.StopAsync();
         var events = fixture.Events();
@@ -287,26 +437,26 @@ internal static class ChatTcpTests
                 row.GetProperty("Detail").GetProperty("Degraded").GetBoolean() &&
                 row.GetProperty("Detail").GetProperty("Recipients").GetInt32() == 3) == 1,
             "记录为空时记 item_hyperlink：Opcode=0x0C、MarkerPairs=1、Records=0、Degraded=true、Recipients=3");
-        That(events.Count(row => row.GetProperty("Kind").GetString() == "item_hyperlink_rejected") == 1,
-            "非法长度的物品链接记 item_hyperlink_rejected");
+        That(events.Count(row => row.GetProperty("Kind").GetString() == "item_hyperlink_rejected") == 4,
+            "非法长度、未知类型、未知尾部及记录截断各记一次拒绝，不假装成功");
         That(delivered("ChannelMegaphone", 3) == 1,
             "频道喇叭投递数 = 同频道在线 3（A/B/C），不含另一频道的 D");
         That(delivered("ServerMegaphone", 4) == 1, "服务器喇叭投递数 = 全服在线 4");
         // 喇叭专项日志：记种类/类型字节/两段编码长度，不写正文。
         That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_megaphone" &&
                 row.GetProperty("Detail").GetProperty("Variant").GetString() == "server" &&
-                row.GetProperty("Detail").GetProperty("Type").GetByte() == 0x0E &&
+                row.GetProperty("Detail").GetProperty("Type").GetByte() == 11 &&
                 row.GetProperty("Detail").GetProperty("SpeakerBytes").GetInt32() == 5 &&
                 row.GetProperty("Detail").GetProperty("TextBytes").GetInt32() == 10 &&
                 row.GetProperty("Detail").GetProperty("Recipients").GetInt32() == 4) == 1,
-            "服务器喇叭记 chat_megaphone：Variant=server、Type=0x0E、SpeakerBytes=5、TextBytes=10、Recipients=4");
+            "服务器喇叭日志使用type11，覆盖四个在线角色且不按频道限制");
         That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_megaphone" &&
                 row.GetProperty("Detail").GetProperty("Variant").GetString() == "channel" &&
-                row.GetProperty("Detail").GetProperty("Type").GetByte() == 0x0B &&
+                row.GetProperty("Detail").GetProperty("Type").GetByte() == 13 &&
                 row.GetProperty("Detail").GetProperty("SpeakerBytes").GetInt32() == 5 &&
                 row.GetProperty("Detail").GetProperty("TextBytes").GetInt32() == 8 &&
                 row.GetProperty("Detail").GetProperty("Recipients").GetInt32() == 3) == 1,
-            "频道喇叭记 chat_megaphone：Variant=channel、Type=0x0B、TextBytes=8、Recipients=3");
+            "频道喇叭日志使用type13，只投同分组同频道三个角色");
         That(events.All(row => row.GetProperty("Kind").GetString() != "chat_megaphone" ||
                 !row.GetProperty("Detail").GetRawText().Contains("服务器喇叭", StringComparison.Ordinal)),
             "chat_megaphone 日志不写正文（只记长度）");
@@ -319,15 +469,12 @@ internal static class ChatTcpTests
             "同一连接 1 秒内第 6 条记一次 chat_throttled");
         That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_whisper_offline") == 1,
             "悄悄话目标不存在记 chat_whisper_offline");
-        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_megaphone_rejected") == 1,
-            "服务器喇叭槽位物品不符记 chat_megaphone_rejected");
+        That(events.Count(row => row.GetProperty("Kind").GetString() == "chat_megaphone_rejected") == 3,
+            "文字与引用的两个错误道具槽和一个越界槽各记一次chat_megaphone_rejected");
         var normalDeliveries = events.Where(row => row.GetProperty("Kind").GetString() == "chat_delivered" &&
             row.GetProperty("Detail").GetProperty("Kind").GetString() == "Normal").ToArray();
-        That(normalDeliveries.Where(row => row.GetProperty("Detail").GetProperty("Recipients").GetInt32() > 1)
-                .All(row => row.GetProperty("Detail").GetProperty("LayerFallback").GetBoolean()) &&
-            normalDeliveries.Where(row => row.GetProperty("Detail").GetProperty("Recipients").GetInt32() == 1)
-                .All(row => !row.GetProperty("Detail").GetProperty("LayerFallback").GetBoolean()),
-            "普通聊天投给他人时记录层 id 兜底标记 LayerFallback=true，只投本人时标记为 false");
+        That(normalDeliveries.All(row=>!row.GetProperty("Detail").GetProperty("LayerFallback").GetBoolean()),
+            "普通聊天统一使用实际身份，不再记录虚构的层id兜底");
 
         Console.WriteLine($"PASS {Count - entry} 聊天线上帧/投递/扣减断言（本组共 {Count - before} 条，其余为入城契约）");
 
@@ -442,6 +589,7 @@ internal static class ChatTcpTests
         byte[] tail = Text.GetBytes(speaker);
         byte[] body = new byte[8 + text.Length + 1 + records.Length * 148 + 4 + tail.Length];
         body[0] = type;
+        body[3] = 2;
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), layer);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), checked((uint)text.Length));
         text.CopyTo(body, 8);
@@ -458,13 +606,38 @@ internal static class ChatTcpTests
     /// <c>NOTI 0x000C</c> 正文 = <c>[u8 显示 type][u16 层 id][u8 v=0][u32 CP936 字节数][CP936 文本]</c>；
     /// 物品链接的文本段是原始字节，测试侧不重新编码。
     /// </summary>
+    static byte[] NamedLinkBody(byte type,string speaker,byte[] text,params byte[][] records) => Build(w=>
+    {
+        w.Write(type);w.Write((byte)0);
+        if(type==6) w.Write(new byte[2]);
+        byte[] name=Text.GetBytes(speaker);
+        w.Write((uint)name.Length);w.Write(name);w.Write((byte)2);
+        w.Write((uint)text.Length);w.Write(text);
+        w.Write((byte)records.Length);foreach(var record in records)w.Write(record);
+        w.Write(0u);
+    });
+
+    static byte[] LinkedMegaphoneBody(byte type,ushort actor,byte channel,string speaker,byte[] text,params byte[][] records) => Build(w=>
+    {
+        w.Write(type);w.Write(new byte[]{2,0,channel});w.Write(actor);
+        byte[] name=Text.GetBytes(speaker);
+        w.Write((uint)name.Length);w.Write(name);
+        w.Write((uint)text.Length);w.Write(text);
+        w.Write((byte)records.Length);foreach(var record in records)w.Write(record);
+        w.Write(1u);w.Write((byte)'X');
+    });
+
     static byte[] LinkMessageBody(byte type, ushort layer, byte[] text)
     {
-        byte[] body = new byte[8 + text.Length];
+        byte[] name = Text.GetBytes("ChatA");
+        byte[] body = new byte[8 + text.Length + 4 + name.Length];
         body[0] = type;
+        body[3] = 2;
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), layer);
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), checked((uint)text.Length));
         text.CopyTo(body, 8);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8 + text.Length), (uint)name.Length);
+        name.CopyTo(body, 12 + text.Length);
         return body;
     }
 
@@ -473,13 +646,7 @@ internal static class ChatTcpTests
     /// </summary>
     static byte[] MessageBody(byte type, ushort layer, string text)
     {
-        byte[] bytes = Text.GetBytes(text);
-        byte[] body = new byte[8 + bytes.Length];
-        body[0] = type;
-        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), layer);
-        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), (uint)bytes.Length);
-        bytes.CopyTo(body, 8);
-        return body;
+        return LinkMessageBody(type, layer, Text.GetBytes(text));
     }
 
     /// <summary>
@@ -487,13 +654,16 @@ internal static class ChatTcpTests
     /// 三段 <c>[u32 CP936 字节数][CP936 字节]</c>（发言人 / 正文 / 占位）。
     /// 测试侧按文档布局自行编码，不调用服务端 Builder；<c>str3</c> 用生产占位 <c>X</c>。
     /// </summary>
-    static byte[] MegaphoneBody(byte type, string speaker, string text)
+    static byte[] MegaphoneBody(byte type, string speaker, string text, byte server = 0, byte channel = 0, ushort actor = 0)
     {
         byte[] speakerBytes = Text.GetBytes(speaker);
         byte[] textBytes = Text.GetBytes(text);
         byte[] tagBytes = Text.GetBytes("X");
         byte[] body = new byte[6 + 12 + speakerBytes.Length + textBytes.Length + tagBytes.Length];
         body[0] = type;
+        body[1] = server;
+        body[3] = channel;
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(4),actor);
         int offset = WriteMegaphoneString(body, 6, speakerBytes);
         offset = WriteMegaphoneString(body, offset, textBytes);
         WriteMegaphoneString(body, offset, tagBytes);

@@ -12,11 +12,11 @@ internal sealed class SelfCharacterScoreProjection(
 {
     public SelfCharacterScoreProjection(CharacterInvestmentService service) : this(service.Calculate, service.BoxExpiration) { }
 
-    public static bool Matches(ChatSend send) => send.Type == (byte)ChatKind.Normal &&
+    public static bool Matches(ChatSend send) => send.Type == (byte)ChatRequestType.Normal &&
         send.TargetName is null && string.Equals(send.Text, "#战力", StringComparison.Ordinal);
 
     internal const string MachineCommand = "#cp-score/1";
-    internal static bool MachineNamespace(ChatSend send) => send.Type == (byte)ChatKind.Normal && send.TargetName is null &&
+    internal static bool MachineNamespace(ChatSend send) => send.Type == (byte)ChatRequestType.Normal && send.TargetName is null &&
         send.Text.StartsWith(MachineCommand, StringComparison.Ordinal) &&
         (send.Text.Length == MachineCommand.Length || char.IsWhiteSpace(send.Text[MachineCommand.Length]));
     internal static string? MachineNonce(ChatSend send) => MachineNamespace(send) &&

@@ -82,8 +82,7 @@ internal sealed class SkinStorageHandler(InventorySkinStorageService skins, Inve
             request.FirstArgument == 0 && request.SecondArgument == 0 && request.List == 0 && request.Slot <= short.MaxValue;
         var position = new InventorySlot(InventoryListType.Main, valid ? (short)request.Slot : (short)-1);
         var result = !valid || context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(3) :
-            context.Session.PlanAndCommitInventory(character => skins.Add(character, position,
-                before.Phase == Game.Session.SessionPhase.Town), 3, requireTown: false);
+            context.Session.UseSkinStorage(skins, position);
         var receipt = result.Receipt;
         var keys = result.Plan is { } plan ? skins.Keys(plan.Before.Find(position)) : [];
         bool Guard() => receipt is not null ? context.Session.CanPublishInventory(receipt) : context.Owner.Execute(() =>

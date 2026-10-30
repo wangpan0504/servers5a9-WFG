@@ -20,6 +20,7 @@ internal sealed class TcpTestResources : IDisposable
     readonly Lazy<TutorialCatalog> tutorials;
     readonly Lazy<TutorialScenes> tutorialScenes;
     internal string PvfPath { get; }
+    readonly Lazy<ChatEmoticonCatalog> chatEmoticons;
     public PvfArchive Archive => archive.Value;
     public ItemResources ItemResources => items.Value;
     public CharacterCatalog Characters => characters.Value;
@@ -31,6 +32,7 @@ internal sealed class TcpTestResources : IDisposable
     public DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog Expeditions => expeditions.Value;
     public TutorialCatalog Tutorials => tutorials.Value;
     public TutorialScenes TutorialScenes => tutorialScenes.Value;
+    public ChatEmoticonCatalog ChatEmoticons => chatEmoticons.Value;
     public bool IsLoaded => archive.IsValueCreated;
     // 共享资源（PVF 及各目录）首次构建的累计耗时；计入触发加载的那一组。
     public long LoadMs => Interlocked.Read(ref loadMs);
@@ -56,6 +58,7 @@ internal sealed class TcpTestResources : IDisposable
         expeditions = new(() => Timed(() => new DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog(Archive)));
         tutorials = new(() => Timed(() => new TutorialCatalog(Archive)));
         tutorialScenes = new(() => Timed(() => new TutorialScenes(Archive, Tutorials, SelfTestCatalogs.Dungeons(Archive))));
+        chatEmoticons = new(() => Timed(() => ChatEmoticonCatalog.Load(Archive,ItemResources.Contracts)));
     }
 
     // 嵌套加载（目录依赖 PVF）只计外层，避免重复累加。

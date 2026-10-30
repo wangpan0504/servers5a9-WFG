@@ -31,6 +31,7 @@ internal static class ClientSettingsTcpTests
         const string account = "settingsalice", otherAccount = "settingsbob";
         byte[] initial = Payload(204, 7), shared = Payload(204, 31), first = Payload(512, 63), second = Payload(512, 127);
         byte[] otherGame = Payload(204, 193), otherCharacter = Payload(512, 251);
+        byte[] recents = Build(w => { w.Write(99); w.Write(1); w.Write(102); w.Write(new byte[60]); });
         Write(first, 48, 0);
         Write(second, 48, ushort.MaxValue);
         Write(initial, 90, 0);
@@ -59,7 +60,18 @@ internal static class ClientSettingsTcpTests
             peer.Create("SettingTwo");
             secondId = peer.Id;
             Select(peer, 0, initial);
+            byte[] chatMacro = [1, 0, 1, 0, 2, 0, 0, 0, (byte)'h', (byte)'i'];
+            peer.Send(472, chatMacro);
+            peer.Expect(1, 472, [1]);
+            peer.Expect(0, 411, fixture.ExpectedChatEmoticons(peer.Id));
+            That(fixture.Query("SELECT hex(macro) FROM account_chat_emoticons WHERE account=$p0 AND emoticon_id=1", account)
+                is [["6869"]], "聊天表情指令提交到账号并在成功后回放");
             string assets = Assets(fixture, timings);
+            peer.Send(1447, [.. Enumerable.Repeat((byte)0xA5, 13), .. recents]);
+            peer.Barrier();
+            That(fixture.Query("SELECT entries FROM account_recent_emoticons WHERE account=$p0", account) is [[byte[] storedRecents]] &&
+                storedRecents.SequenceEqual(recents) && Assets(fixture, timings) == assets,
+                "1447真实注册并静默保存18槽，不把保留区当表情或改变资产");
             Save(peer, 197, shared);
             Save(peer, 447, first);
             peer.Barrier();
@@ -76,6 +88,7 @@ internal static class ClientSettingsTcpTests
             Select(peer, 0, shared, first);
             ReturnSelection(peer);
             Select(peer, 1, shared);
+            Bytes(peer.RecentEmoticonInfo, recents, "同连接换角先回放1384，再由411重建最近两排");
             assets = Assets(fixture, timings);
             Save(peer, 447, second);
             peer.Barrier();
@@ -90,6 +103,7 @@ internal static class ClientSettingsTcpTests
             peer.Create("SettingOther");
             otherId = peer.Id;
             peer.Select();
+            Bytes(peer.RecentEmoticonInfo, new byte[72], "其他账号不继承最近表情，不补默认或解锁资格");
             That(peer.ClientSettings is [{ Opcode: 390 }], "未保存账号后段仅初始化角色光环选项，不重复重置主区");
             Save(peer, 447, otherCharacter);
             peer.Barrier();
@@ -122,6 +136,7 @@ internal static class ClientSettingsTcpTests
         using (var peer = Open(fixture, account))
         {
             Select(peer, 0, shared, first);
+            Bytes(peer.RecentEmoticonInfo, recents, "重建服务后重新登录恢复完整最近列表和原顺序");
             ReturnSelection(peer);
             Select(peer, 1, shared, second);
             Exit(peer);
@@ -179,6 +194,33 @@ internal static class ClientSettingsTcpTests
         {
             Select(peer, 0, shared, first);
             Exit(peer);
+        }
+        using (var peer = Open(fixture, account))
+        {
+            Select(peer, 0, shared, first);
+            string before = Settings(fixture, timings);
+            fixture.Sql("CREATE TRIGGER fail_emoticon BEFORE UPDATE ON account_chat_emoticons BEGIN SELECT RAISE(ABORT,'emoticon rollback'); END");
+            try
+            {
+                peer.Send(472, [1, 0, 1, 0, 2, 0, 0, 0, (byte)'n', (byte)'o']);
+                peer.Closed();
+                That(Settings(fixture, timings) == before, "聊天表情SQL失败不回复成功且保留原设置");
+            }
+            finally { fixture.Sql("DROP TRIGGER fail_emoticon"); }
+        }
+        using (var peer = Open(fixture, account))
+        {
+            Select(peer, 0, shared, first);
+            string before = Settings(fixture, timings), assets = Assets(fixture, timings);
+            fixture.Sql("CREATE TRIGGER fail_recent BEFORE UPDATE ON account_recent_emoticons BEGIN SELECT RAISE(ABORT,'recent rollback'); END");
+            try
+            {
+                peer.Send(1447, new byte[85]);
+                peer.Closed();
+                That(Settings(fixture, timings) == before && Assets(fixture, timings) == assets,
+                    "1447保存失败无成功ACK或列表回推，保留先前历史和全部资产");
+            }
+            finally { fixture.Sql("DROP TRIGGER fail_recent"); }
         }
         accountPhase.Dispose();
         using (timings.Measure("FirstEntry"))

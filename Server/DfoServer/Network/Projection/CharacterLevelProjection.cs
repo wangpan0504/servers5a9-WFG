@@ -45,5 +45,7 @@ internal sealed class CharacterLevelProjection(CharacterStatComputer stats, Ques
             await SkillGuideProjection.PublishAsync(context, committed, learning, canSend);
         if (quests is not null)
             await quests.RefreshAsync(context, committed, canSend, restoreCompletedQuests);
+        if (committed.Level != previousLevel && canSend() && context.ChatEmoticons is { } chat)
+            await chat.RefreshAsync();
     }
 }

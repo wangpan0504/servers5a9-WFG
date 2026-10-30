@@ -6,6 +6,41 @@ namespace DfoServer.Network.Parsers;
 
 internal static class SettingsRequests
 {
+    public static ImmutableArray<byte> RecentEmoticons(ReadOnlySpan<byte> body)
+    {
+        // 02602440整块发送85B，含13B不透明保留区；通知1384不带该前缀。
+        if (body.Length != 13 + ClientSettingsService.RecentEmoticonLength)
+            throw new InvalidDataException("最近表情请求必须是完整85字节");
+        var entries = ImmutableArray.Create(body[13..].ToArray());
+        ClientSettingsService.ValidateRecentEmoticons(entries);
+        return entries;
+    }
+
+    public static ImmutableArray<ChatEmoticonMacro> ChatEmoticons(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < 2) throw new InvalidDataException("聊天表情请求缺少数量");
+        int count = BinaryPrimitives.ReadUInt16LittleEndian(body);
+        if (count > 256) throw new InvalidDataException("聊天表情请求数量越界");
+        var rows = ImmutableArray.CreateBuilder<ChatEmoticonMacro>(count);
+        var seen = new HashSet<ushort>();
+        int offset = 2;
+        for (int i = 0; i < count; i++)
+        {
+            if (body.Length - offset < 6) throw new InvalidDataException("聊天表情请求不完整");
+            ushort id = BinaryPrimitives.ReadUInt16LittleEndian(body[offset..]);
+            uint size = BinaryPrimitives.ReadUInt32LittleEndian(body[(offset + 2)..]);
+            offset += 6;
+            if (id == 0 || id > 32767 || !seen.Add(id) || size > 259 || size > body.Length - offset)
+                throw new InvalidDataException("聊天表情编号或文本长度无效");
+            var text = body.Slice(offset, (int)size);
+            if (text.Contains((byte)0)) throw new InvalidDataException("聊天表情文本包含零字节");
+            rows.Add(new(id, ImmutableArray.Create(text.ToArray())));
+            offset += (int)size;
+        }
+        if (offset != body.Length) throw new InvalidDataException("聊天表情请求包含多余数据");
+        return rows.MoveToImmutable();
+    }
+
     public static ImmutableArray<byte> GameOptions(ReadOnlySpan<byte> body) => Blob(body, ClientSettingsService.GameOptionLength);
     public static ImmutableArray<byte> CharacterOptions(ReadOnlySpan<byte> body) => Blob(body, ClientSettingsService.CharacterOptionLength);
     public static (byte Bank, ImmutableArray<byte> Text) QuickChat(ReadOnlySpan<byte> body)

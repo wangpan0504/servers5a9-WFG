@@ -49,22 +49,102 @@ internal sealed class ClientSettingsRepository(string path) : IClientSettingsSto
         using var command = db.CreateCommand();
         command.Transaction = tx;
         command.CommandText = """
-            SELECT a.game_options,c.character_options,g.game_options,h.hotkeys,q0.quick_chat,q1.quick_chat FROM characters r
+            SELECT a.game_options,c.character_options,g.game_options,h.hotkeys,q0.quick_chat,q1.quick_chat,e.entries FROM characters r
             LEFT JOIN account_client_settings a ON a.account=r.account
             LEFT JOIN character_client_settings c ON c.character_id=r.id AND c.account=r.account
             LEFT JOIN character_game_settings g ON g.character_id=r.id AND g.account=r.account
             LEFT JOIN account_hotkey_settings h ON h.account=r.account AND h.profile=CASE WHEN r.job=10 THEN 1 ELSE 0 END
             LEFT JOIN account_quick_chat q0 ON q0.account=r.account AND q0.bank=0
             LEFT JOIN account_quick_chat q1 ON q1.account=r.account AND q1.bank=1
+            LEFT JOIN account_recent_emoticons e ON e.account=r.account
             WHERE r.id=$id AND r.account=$account
             """;
         command.Parameters.AddWithValue("$id", characterId);
         command.Parameters.AddWithValue("$account", owner.Account);
-        using var reader = command.ExecuteReader();
-        if (!reader.Read())
-            throw new InvalidDataException("设置角色不属于当前账号");
-        return new ClientSettingsSnapshot(Read(reader, 0), Read(reader, 1), Read(reader, 2), Read(reader, 3),
-            Read(reader, 4), Read(reader, 5));
+        ClientSettingsSnapshot snapshot;
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read()) throw new InvalidDataException("设置角色不属于当前账号");
+            snapshot = new(Read(reader, 0), Read(reader, 1), Read(reader, 2), Read(reader, 3), Read(reader, 4), Read(reader, 5),
+                RecentEmoticons: Read(reader, 6));
+        }
+        command.CommandText = "SELECT emoticon_id,macro FROM account_chat_emoticons WHERE account=$account ORDER BY emoticon_id";
+        using var macros = command.ExecuteReader();
+        var entries = ImmutableArray.CreateBuilder<ChatEmoticonMacro>();
+        while (macros.Read()) entries.Add(new(checked((ushort)macros.GetInt32(0)), ImmutableArray.Create((byte[])macros.GetValue(1))));
+        return snapshot with { ChatEmoticons = entries.ToImmutable() };
+    });
+
+    public bool SaveChatEmoticons(AccountOwners.Lease owner, ImmutableArray<ChatEmoticonMacro> macros) => owner.Execute(() =>
+    {
+        if (macros.IsDefaultOrEmpty) return false;
+        using var db = database.Open();
+        var pending = new List<ChatEmoticonMacro>();
+        using (var read = db.BeginRead())
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = read;
+            query.CommandText = "SELECT emoticon_id,macro FROM account_chat_emoticons WHERE account=$account";
+            query.Parameters.AddWithValue("$account", owner.Account);
+            var existing = new Dictionary<ushort, byte[]>();
+            using var reader = query.ExecuteReader();
+            while (reader.Read()) existing.Add(checked((ushort)reader.GetInt32(0)), (byte[])reader.GetValue(1));
+            pending.AddRange(macros.Where(row => !existing.TryGetValue(row.Id, out var previous) || !row.Text.AsSpan().SequenceEqual(previous)));
+        }
+        if (pending.Count == 0) return false;
+        using var write = db.BeginWrite("ClientSettingsRepository.SaveChatEmoticons");
+        using var tx = write.Transaction;
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            INSERT INTO account_chat_emoticons(account,emoticon_id,macro) VALUES($account,$id,$macro)
+            ON CONFLICT(account,emoticon_id) DO UPDATE SET macro=excluded.macro WHERE macro<>excluded.macro
+            """;
+        command.Parameters.AddWithValue("$account", owner.Account);
+        var id = command.Parameters.Add("$id", SqliteType.Integer);
+        var text = command.Parameters.Add("$macro", SqliteType.Blob);
+        bool changed = false;
+        foreach (var row in pending)
+        {
+            id.Value = row.Id;
+            text.Value = row.Text.ToArray();
+            changed |= command.ExecuteNonQuery() != 0;
+        }
+        command.CommandText = "SELECT COUNT(*),COALESCE(SUM(length(macro)),0) FROM account_chat_emoticons WHERE account=$account";
+        using var total = command.ExecuteReader();
+        if (!total.Read() || total.GetInt64(0) > 256 || total.GetInt64(1) > 63470)
+            throw new InvalidDataException("聊天表情配置超出通知帧容量");
+        total.Close();
+        tx.Commit();
+        return changed;
+    });
+
+    public bool SaveRecentEmoticons(AccountOwners.Lease owner, ImmutableArray<byte> entries) => owner.Execute(() =>
+    {
+        using var db = database.Open();
+        using (var read = db.BeginRead())
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = read;
+            query.CommandText = "SELECT e.entries FROM accounts a LEFT JOIN account_recent_emoticons e ON e.account=a.account_id WHERE a.account_id=$account";
+            query.Parameters.AddWithValue("$account", owner.Account);
+            using var reader = query.ExecuteReader();
+            if (!reader.Read()) throw new InvalidDataException("最近表情账号不存在");
+            if (!reader.IsDBNull(0) && entries.AsSpan().SequenceEqual((byte[])reader.GetValue(0))) return false;
+        }
+        using var write = db.BeginWrite("ClientSettingsRepository.SaveRecentEmoticons");
+        using var tx = write.Transaction;
+        using var command = db.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            INSERT INTO account_recent_emoticons(account,entries) VALUES($account,$entries)
+            ON CONFLICT(account) DO UPDATE SET entries=excluded.entries
+            """;
+        command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.Add("$entries", SqliteType.Blob).Value = entries.ToArray();
+        if (command.ExecuteNonQuery() != 1) throw new InvalidDataException("最近表情未提交");
+        tx.Commit();
+        return true;
     });
 
     public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text) => owner.Execute(() =>

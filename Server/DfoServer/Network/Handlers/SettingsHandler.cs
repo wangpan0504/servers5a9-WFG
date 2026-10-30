@@ -8,7 +8,8 @@ using DfoServer.Game.Session;
 
 namespace DfoServer.Network.Handlers;
 
-internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog log, TownProjection projection) : IGameCommandModule
+internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog log, TownProjection projection,
+    DfoServer.GameWorld.Characters.ChatEmoticonCatalog? emoticons = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -16,7 +17,39 @@ internal sealed class SettingsHandler(ClientSettingsService settings, ServerLog 
         commands.Register(CmdPacketType.SAVE_CHARACTER_OPTION, SaveCharacterAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_GAME_OPTION_2, SaveHotkeysAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.SAVE_GAME_OPTION_QUICKCHATTING, SaveQuickChatAsync, nameof(SettingsHandler));
+        commands.Register(CmdPacketType.SAVE_GAME_OPTION_CHATTING_EMOTICON, SaveChatEmoticonsAsync, nameof(SettingsHandler));
+        commands.Register(CmdPacketType.SAVE_RECENT_EMOTICON_LIST, SaveRecentEmoticonsAsync, nameof(SettingsHandler));
         commands.Register(CmdPacketType.CHANGE_EMOTION, ChangeEmotionAsync, nameof(SettingsHandler));
+    }
+
+    async Task<CommandResult> SaveChatEmoticonsAsync(GameConnectionContext context, Packet packet)
+    {
+        var macros = SettingsRequests.ChatEmoticons(packet.Body);
+        if (emoticons is not null && macros.Any(row => !emoticons.Contains(row.Id)))
+            throw new InvalidDataException("聊天表情编号不在当前资源名册");
+        bool changed = context.Session.SaveChatEmoticons(settings, macros);
+        var receipt = context.Session.LoadClientSettings(settings);
+        log.Write("client_settings_saved", new { Connection = context.Id, Scope = "account_chat_emoticons", Count = macros.Length, Changed = changed });
+        await context.Reply(CmdPacketType.SAVE_GAME_OPTION_CHATTING_EMOTICON, [1], "chat_emoticons_saved",
+            () => context.Session.CanPublishClientSettings(receipt));
+        if (context.ChatEmoticons is { } chat) await chat.RefreshAsync(force: true, saved: receipt);
+        return CommandResult.Handled;
+    }
+
+    Task<CommandResult> SaveRecentEmoticonsAsync(GameConnectionContext context, Packet packet)
+    {
+        var entries = SettingsRequests.RecentEmoticons(packet.Body);
+        if (emoticons is not null)
+            for (int offset = 0; offset < entries.Length; offset += sizeof(uint))
+            {
+                uint id = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(entries.AsSpan()[offset..]);
+                if (id != 0 && !emoticons.Contains((ushort)id))
+                    throw new InvalidDataException("最近表情编号不在当前资源名册");
+            }
+        bool changed = context.Session.SaveRecentEmoticons(settings, entries);
+        log.Write("client_settings_saved", new { Connection = context.Id, Scope = "account_recent_emoticons", Changed = changed });
+        // ACK1447是空消费者；保存不回推列表，避免覆盖客户端刚更新的最近使用顺序。
+        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> ChangeEmotionAsync(GameConnectionContext context, Packet packet)

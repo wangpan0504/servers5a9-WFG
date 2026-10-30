@@ -189,6 +189,18 @@ internal static partial class PartyDungeonTcpTests
         int consumablePickups = 0;
         for (int room = 0; room < 30; room++)
         {
+            if(room==0 && count==2)
+            {
+                alpha.Send(17,Build(w=> { w.Write((byte)2);w.Write(alpha.Id);w.Write(0u);w.Write(7u);w.Write("loading"u8); }));
+                foreach(var rows in All(alpha).Values)
+                {
+                    var text=rows.Single(p=>p is {Kind:0,Opcode:12}).Body;
+                    That(text[0]==2 && U16(text,1)==alpha.Id && U32(text,4)==7 && text.AsSpan(8,7).SequenceEqual("loading"u8),
+                        "已进入世界但尚未提交37的副本Loading阶段仍收到真实队伍广播");
+                    That(rows.All(p=>p is not {Kind:0,Opcode:30} && p is not {Kind:1,Opcode:37}),
+                        "聊天不提前释放副本加载屏障，不把房间Loading混同于选角未Ready");
+                }
+            }
             foreach (var peer in participants.Take(count - 1)) { peer.Send(37, new byte[8]); Drain(peer); }
             alpha.NoFrame(40, "缺少最后一人加载确认时不能释放屏障", (0, 30), (1, 37));
             participants[^1].Send(37, new byte[8]);
@@ -478,6 +490,8 @@ internal static partial class PartyDungeonTcpTests
                     "单项边框刷新不发送完整Player、端点、host或100%血蓝");
                 int sceneOffset = 132 + checked((int)U32(rows[actor].Body, 123));
                 That(rows[actor].Body[sceneOffset] == (dungeon ? 1 : 0), "边框刷新保留真实城镇或副本场景");
+                That(rows[actor].Body[^18] == (dungeon ? 0 : 100),
+                    "队伍边框及到期的Actor→成员增量保持场景血蓝字段，无需153补包，也不把城镇满血值写进副本");
             }
         }
 

@@ -4,7 +4,7 @@ using DfoServer.Game.Chat;
 namespace DfoServer.Network.Builders;
 
 /// <summary>
-/// 物品链接聊天行 <c>NOTI 0x0172 MESSAGE_HYPER_LINK</c> 的正文构造与降级决策。
+/// 聊天引用370/371/372及原通道降级；下述原码布局说明针对普通聊天370。
 /// <para>
 /// 依据（反汇编 <c>0x2E31740</c>，见 <c>Docs/协议/聊天.md</c> 第 7 节）：handler 读取
 /// <c>ReadU8 type(&lt;0x45)</c> → <c>ReadU16 layer</c> → <c>ReadU8 v(&lt;0xFA)</c> →
@@ -53,10 +53,10 @@ internal static class ItemLinkPackets
     /// 记录之后的尾串上限（wchar 数）：handler 以 <c>max = 0x11</c> 调用文本壳
     /// <c>0x3BE26C0</c>（内部 <c>ReadU32 len + ReadBytes</c>），超出会让客户端读不到。
     /// </summary>
-    public const int TailMaxChars = 0x11;
+    public const int TailMaxChars = 0x10;
 
-    /// <summary>尾串字节长度必须 <c>1..0x21</c>（<c>len2 &lt; 0x22</c>）。</summary>
-    public const int TailMaxBytes = 0x21;
+    /// <summary>03BE25F0要求尾串小于17字节。</summary>
+    public const int TailMaxBytes = 0x10;
 
     /// <summary>
     /// 尾串（发言人名字）的回落值：单字节 <c>?</c>（CP936 <c>0x3F</c>，<c>len2 = 1</c>）。
@@ -64,8 +64,7 @@ internal static class ItemLinkPackets
     /// </summary>
     public const string FallbackSpeaker = "?";
 
-    /// <summary><c>v</c> 固定 0，与 <c>0x000C</c> 一致（客户端按层 id 属主补行首发言人）。</summary>
-    const byte Version = 0;
+    /// <summary>历史v字段为来源服务器分组，正式投递不写死为0。</summary>
 
     /// <summary>
     /// 一次投递的最终形态：<paramref name="HyperLink"/> 为 true 时 <paramref name="Body"/> 是 <c>0x172</c> 正文；
@@ -74,8 +73,12 @@ internal static class ItemLinkPackets
     /// （也等于写出的记录条数）；<paramref name="Degraded"/> 表示走了纯文本回退，
     /// <paramref name="MarkersStripped"/> 表示截断造成标记不成对、文本里的 <c>0x7F</c> 已被剔除。
     /// </summary>
-    public readonly record struct Plan(bool HyperLink, byte[] Body, int Records, int MarkerPairs,
-        bool Degraded, bool MarkersStripped, bool Truncated);
+    public readonly record struct Plan(NotiPacketType Opcode, byte[] Body, int Records, int MarkerPairs,
+        bool Degraded, bool MarkersStripped, bool Truncated)
+    {
+        public bool HyperLink => Opcode is NotiPacketType.MESSAGE_HYPER_LINK or
+            NotiPacketType.MESSAGE_OTHER_CHANNEL_HYPER_LINK or NotiPacketType.MEGAPHONE_MSG_HYPER_LINK;
+    }
 
     /// <summary>
     /// 构造 <c>NOTI 0x0172</c> 正文，布局严格按
@@ -135,29 +138,76 @@ internal static class ItemLinkPackets
     /// </para>
     /// </summary>
     public static Plan Design(ChatKind kind, ushort layer, string speaker, ReadOnlyMemory<byte> textBytes,
-        byte[]? records)
+        byte[]? records, byte server = 0)
     {
-        byte[] text = Truncate(textBytes.Span, out bool truncated);
-        bool paired = CountLinkPairs(text, out int pairs);
-        bool stripped = false;
+        var content = Prepare(textBytes.Span, records, MaxTextBytes);
+        if (content.Degraded)
+        {
+            byte[] fallback = ChatPackets.MessageBytes(kind, layer, content.Text, out _, speaker, server);
+            return Result(content, NotiPacketType.MESSAGE, fallback);
+        }
+
+        byte[] body = Write(ChatWire.TypeOf(kind), layer, content.Text, content.Records, content.Pairs, speaker, server);
+        return Result(content, NotiPacketType.MESSAGE_HYPER_LINK, body);
+    }
+
+    public static Plan DesignNamed(NamedChatMessage message, ReadOnlySpan<byte> text, byte[]? records)
+    {
+        var content = Prepare(text, records, MaxTextBytes);
+        if (content.Degraded)
+            return Result(content, NotiPacketType.MESSAGE_OTHER_CHANNEL, ChatPackets.NamedMessage(message, content.Text));
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        ChatPackets.WriteNamedHeader(writer, message, content.Text);
+        WriteRecords(writer, content);
+        PacketEncoding.WriteString(writer, ChatText.Truncate(message.AdventureName, 16, out _));
+        return Result(content, NotiPacketType.MESSAGE_OTHER_CHANNEL_HYPER_LINK, stream.ToArray());
+    }
+
+    public static Plan DesignMegaphone(ChatKind kind, MegaphoneText message, ReadOnlySpan<byte> text, byte[]? records)
+    {
+        var content = Prepare(text, records, MegaphonePackets.TextMaxBytes);
+        if (content.Degraded)
+            return Result(content, NotiPacketType.MEGAPHONE_MSG, MegaphonePackets.BuildBytes(kind, message, content.Text));
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write(MegaphonePackets.TypeOf(kind));
+        writer.Write(message.Channel.ServerIndex);
+        writer.Write((byte)0);
+        writer.Write(message.Channel.Number);
+        writer.Write(message.Actor);
+        PacketEncoding.WriteString(writer, ChatText.Truncate(message.Speaker, MegaphonePackets.SpeakerMaxBytes, out _));
+        writer.Write(checked((uint)content.Text.Length));
+        writer.Write(content.Text);
+        WriteRecords(writer, content);
+        PacketEncoding.WriteString(writer, MegaphonePackets.Tag);
+        return Result(content, NotiPacketType.MEGAPHONE_MSG_HYPER_LINK, stream.ToArray());
+    }
+
+    readonly record struct Content(byte[] Text, List<byte[]> Records, int Pairs, bool Degraded, bool Stripped, bool Truncated);
+
+    static Content Prepare(ReadOnlySpan<byte> text, byte[]? records, int maximum)
+    {
+        int length = ChatEmoticonRules.ByteBoundary(text, maximum);
+        bool truncated = length < text.Length;
+        byte[] clipped = text[..length].ToArray();
+        bool paired = CountLinkPairs(clipped, out int pairs);
         if (!paired)
         {
-            text = RemoveMarkers(text);
+            clipped = RemoveMarkers(clipped);
             pairs = 0;
-            stripped = true;
         }
+        var valid = ValidRecords(records);
+        return new(clipped, valid, pairs, pairs == 0 || valid.Count < pairs || clipped.Length == 0, !paired, truncated);
+    }
 
-        List<byte[]> valid = ValidRecords(records);
-        if (pairs == 0 || valid.Count < pairs || text.Length == 0)
-        {
-            // 退化：沿用既有的 0x0C 文本行（长度仍是 1..255）。记录缺失时文本保持原样，
-            // 标记不成对时用上面剔除过 0x7F 的纯文本。
-            byte[] fallback = ChatPackets.MessageBytes(kind, layer, text, out _);
-            return new(false, fallback, valid.Count, pairs, true, stripped, truncated);
-        }
+    static Plan Result(Content content, NotiPacketType opcode, byte[] body) =>
+        new(opcode, body, content.Records.Count, content.Pairs, content.Degraded, content.Stripped, content.Truncated);
 
-        byte[] body = Write(ChatWire.TypeOf(kind), layer, text, valid, pairs, speaker);
-        return new(true, body, valid.Count, pairs, false, false, truncated);
+    static void WriteRecords(BinaryWriter writer, Content content)
+    {
+        writer.Write(checked((byte)content.Pairs));
+        for (int index = 0; index < content.Pairs; index++) writer.Write(content.Records[index]);
     }
 
     /// <summary>
@@ -169,7 +219,8 @@ internal static class ItemLinkPackets
     {
         pairs = 0;
         bool open = false;
-        int at = 0;
+        // 02591E30在整段首位跳过格式标志7F；它本身不是一条物品链接的开头。
+        int at = !text.IsEmpty && text[0] == LinkMarker ? 1 : 0;
         while (at < text.Length)
         {
             if (text[at] != LinkMarker)
@@ -216,14 +267,14 @@ internal static class ItemLinkPackets
     /// 编码（必填非空、<c>1..0x21</c> 字节）。
     /// </summary>
     static byte[] Write(byte type, ushort layer, ReadOnlySpan<byte> text, List<byte[]> records, int used,
-        string speaker)
+        string speaker, byte server = 0)
     {
         byte[] tail = SpeakerBytes(speaker);
 
         byte[] body = new byte[HeaderLength + text.Length + 1 + used * RecordLength + sizeof(uint) + tail.Length];
         body[0] = type;
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), layer);
-        body[3] = Version;
+        body[3] = server;
         BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), (uint)text.Length);
         text.CopyTo(body.AsSpan(HeaderLength));
         int offset = HeaderLength + text.Length;
@@ -240,8 +291,8 @@ internal static class ItemLinkPackets
     }
 
     /// <summary>
-    /// 把发言人名字编码成 <c>0x172</c> 的尾串字节：CP936，同时满足 <c>≤ 0x11</c> wchar 与
-    /// <c>≤ 0x21</c> 字节（两者取更严的一方），按字符边界截断、不切半个汉字。
+    /// 将来源名字编码为CP936尾串；容量按字节校验。
+    /// 最多16字节，按字符边界截断，不切开汉字。
     /// 名字为空或截空时回落 <see cref="FallbackSpeaker"/>（单字节 <c>0x3F</c>）：该字段必填非空。
     /// </summary>
     public static byte[] SpeakerBytes(string? speaker)
@@ -256,7 +307,7 @@ internal static class ItemLinkPackets
     /// <summary>按 CP936 字节上限截断，且不切开双字节字符；<paramref name="truncated"/> 表示确有截断。</summary>
     static byte[] Truncate(ReadOnlySpan<byte> text, out bool truncated)
     {
-        int length = ChatPackets.Cp936Boundary(text, MaxTextBytes);
+        int length = ChatEmoticonRules.ByteBoundary(text, MaxTextBytes);
         truncated = length < text.Length;
         return text[..length].ToArray();
     }
@@ -264,20 +315,11 @@ internal static class ItemLinkPackets
     /// <summary>剔除全部 <c>0x7F</c>（只删标记字节，不解码/重编码，保留其余 CP936 字节）。</summary>
     static byte[] RemoveMarkers(ReadOnlySpan<byte> text)
     {
-        int count = 0;
-        foreach (byte value in text)
-        {
-            if (value != LinkMarker)
-                count++;
-        }
-        byte[] result = new byte[count];
-        int at = 0;
-        foreach (byte value in text)
-        {
-            if (value != LinkMarker)
-                result[at++] = value;
-        }
-        return result;
+        bool keepFormat = !text.IsEmpty && text[0] == LinkMarker && text.Contains((byte)0x1e);
+        using var output = new MemoryStream(text.Length);
+        for (int at = 0; at < text.Length; at++)
+            if (text[at] != LinkMarker || at == 0 && keepFormat) output.WriteByte(text[at]);
+        return output.ToArray();
     }
 
     /// <summary>CP936 下一个字符的字节宽度：lead byte 且后面还有字节时是 2，否则 1。</summary>

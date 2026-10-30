@@ -160,7 +160,8 @@ internal static partial class TownPackets
             writer.Write(proficiency.Experience);
             writer.Write(character.VisibilityFlags); // 保留原无关显示位，三项外观开关与当前角色主设置一致。
             writer.Write(0u);
-            writer.Write((byte)0);
+            // 0267F04B覆盖Data+35C，城镇队伍HP/MP共用该百分比；外观刷新不能把已有100%清零。
+            writer.Write(sceneState == ActorSceneState.Town ? (byte)100 : (byte)0);
             writer.Write((ushort)0);
             // 0267F091 读取原属大区，经 03CECD60 写 player+3FC；TAG 候选将0当作空槽。
             // 此字段独立于头部频道身份，取实际角色所在大区，不改后面的列表哨兵FF。

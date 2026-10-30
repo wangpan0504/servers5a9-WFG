@@ -5,11 +5,11 @@ namespace DfoServer.Network.Builders;
 
 /// <summary>
 /// 喇叭通道 <c>NOTI 0x0076 MEGAPHONE_MSG</c>：客户端「喇叭」页签里的一行 <c>str1 : str2</c>，
-/// 行首带 <c>Ch. N</c> 或 <c>D&amp;F</c> 标签（2026-10-20 实机截图确认）。
+/// 两种玩家喇叭都保留发言人和来源频道，不使用官方公告标签。
 /// <para>
 /// 正文：<c>[u8 type][u8 B][u8 C][u8 D][u16LE E][str1][str2][str3]</c>，
-/// 每条 str = <c>u32LE 字节长度 + CP936 字节</c>。字段语义（实测）：<c>type</c> 是喇叭类型（决定标签与样式）、
-/// <c>B</c> 是频道号、<c>str1</c> 是发言人名字、<c>str2</c> 是正文、<c>str3</c> 是附加标记（画面不显示，给占位即可）。
+/// 每条str保留u32字节长度。023A3AE0按来源分组B、显示模式C、来源频道D、角色编号E读取；
+/// type11对应道具36，type13对应道具37，type14是1120官方路径。str1是角色名，str2是正文。
 /// </para>
 /// <para>
 /// 客户端硬性要求（此前所有失败的真因）：三条字符串<b>都必须非空</b>（<c>len ≥ 1</c>），
@@ -18,8 +18,7 @@ namespace DfoServer.Network.Builders;
 /// （不会切出半个汉字），截空时再回退成单字节占位，保证任何输入都不会生成 <c>len = 0</c> 的串。
 /// </para>
 /// <para>
-/// 行首的 <c>Ch. N</c> 标签取自<b>收件会话自己的频道信息</b>，裸注入帧（<c>B = 0</c>）显示 <c>Ch. 0</c> 属正常现象；
-/// <c>0x0E</c> 是官方 <c>D&amp;F</c> 标签，客户端会把发言人换成固定名（<c>str1</c> 被忽略）。
+/// 正式投递携带发送者的频道身份，不能以接收者频道或全0代替；来源与本机分组/频道匹配时客户端复用本地角色上下文。
 /// </para>
 /// </summary>
 internal static class MegaphonePackets
@@ -27,11 +26,11 @@ internal static class MegaphonePackets
     /// <summary>正文头长度：<c>[u8 type][u8 B][u8 C][u8 D][u16 E]</c>。</summary>
     public const int HeaderLength = 6;
 
-    /// <summary>服务器喇叭类型：左侧 <c>D&amp;F</c> 官方标签（客户端忽略 <c>str1</c>，适合全服公告）。</summary>
-    public const byte ServerType = 0x0E;
+    /// <summary>道具36的服务器喇叭类型，保留玩家发言人。</summary>
+    public const byte ServerType = (byte)ChatMessageType.ServerMegaphone;
 
-    /// <summary>频道喇叭类型：左侧 <c>Ch. N</c> 标签，<c>str1</c> 作为发言人显示。</summary>
-    public const byte ChannelType = 0x0B;
+    /// <summary>道具37的频道喇叭类型，保留玩家发言人及来源频道。</summary>
+    public const byte ChannelType = (byte)ChatMessageType.ChannelMegaphone;
 
     /// <summary><c>str1</c>（发言人）字节上限；客户端要求 <c>len &lt; 0x1E</c>，所以最多 29 字节。</summary>
     public const int SpeakerMaxBytes = 0x1E - 1;
@@ -50,7 +49,7 @@ internal static class MegaphonePackets
     const string TextFallback = " ";
 
     /// <summary>
-    /// 喇叭种类对应的 <c>type</c> 字节：服务器喇叭走官方 <c>D&amp;F</c> 标签，频道喇叭走 <c>Ch.</c> 标签 + 发言人。
+    /// 玩家服务器/频道喇叭对应原生type11/13，不能复用官方type14。
     /// 非喇叭种类直接抛出，避免静默按频道喇叭发出去。
     /// </summary>
     public static byte TypeOf(ChatKind kind) => kind switch
@@ -63,19 +62,32 @@ internal static class MegaphonePackets
     /// <summary>按种类构造一帧 <c>NOTI 0x0076</c> 正文，<c>str3</c> 用固定占位（生产入口）。</summary>
     public static byte[] Build(ChatKind kind, string speaker, string text) => Build(kind, speaker, text, null);
 
+    public static byte[] Build(ChatKind kind, MegaphoneText message) => Build(kind, message.Speaker, message.Text,
+        null, message.Channel.ServerIndex, message.Channel.Number, message.Actor);
+
+    public static byte[] BuildBytes(ChatKind kind, MegaphoneText message, byte[] text) => Build(kind, message.Speaker,
+        text.Length == 0 ? [(byte)' '] : text, null, message.Channel.ServerIndex, message.Channel.Number, message.Actor);
+
     /// <summary>
     /// 按种类构造一帧 <c>NOTI 0x0076</c> 正文；<paramref name="tag"/> 为 <c>null</c> 时用 <see cref="Tag"/>。
     /// 给出显式 <c>str3</c> 只用于复现实测帧，生产投递不要传。
     /// </summary>
-    public static byte[] Build(ChatKind kind, string speaker, string text, string? tag)
+    public static byte[] Build(ChatKind kind, string speaker, string text, string? tag,
+        byte server = 0, byte channel = 0, ushort actor = 0) =>
+        Build(kind, speaker, Encode(text, TextMaxBytes, TextFallback), tag, server, channel, actor);
+
+    static byte[] Build(ChatKind kind, string speaker, byte[] textBytes, string? tag,
+        byte server, byte channel, ushort actor)
     {
         byte[] speakerBytes = Encode(speaker, SpeakerMaxBytes, SpeakerFallback);
-        byte[] textBytes = Encode(text, TextMaxBytes, TextFallback);
         byte[] tagBytes = Encode(tag ?? Tag, TagMaxBytes, Tag);
 
         byte[] body = new byte[HeaderLength + 3 * sizeof(uint) + speakerBytes.Length + textBytes.Length + tagBytes.Length];
         body[0] = TypeOf(kind);
-        // B/C/D/E 固定 0：频道号等语义由客户端按收件会话补齐，裸帧拿不到（实测 B=0/B=28 都显示 Ch. 0）。
+        // 023A3AE0依次读取来源分组、显示模式、来源频道及角色编号；不能用接收者频道或全0代替。
+        body[1] = server;
+        body[3] = channel;
+        BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(4), actor);
         int offset = HeaderLength;
         offset = WriteString(body, offset, speakerBytes);
         offset = WriteString(body, offset, textBytes);

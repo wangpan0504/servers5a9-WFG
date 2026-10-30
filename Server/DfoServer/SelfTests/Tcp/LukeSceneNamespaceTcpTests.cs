@@ -38,6 +38,8 @@ internal static class LukeSceneNamespaceTcpTests
         first.Send(17, Body(Receipt));
         first.Barrier(); // 不接受任何机器响应或聊天回显，不能只用超时证明静默。
         observer.Barrier(); // 同频道接收者也不能收到机器广播。
+        first.Send(17, Body("#cp-promo/1 0123456789abcdef0123456789abcdef"));
+        first.Barrier(); observer.Barrier();
         Echo(first, observer);
 
         using var replacement = Open(fixture, "20082");
@@ -58,14 +60,17 @@ internal static class LukeSceneNamespaceTcpTests
         var events = fixture.Events();
         var received = events.Where(row => row.GetProperty("Kind").GetString() == "recv" &&
             row.GetProperty("Detail").GetProperty("Opcode").GetUInt16() == 17).ToArray();
-        That(received.Length == 9, "真实GameProtocol收到7个保留包与2个正常近似包");
+        That(received.Length == 10, "真实GameProtocol收到7个scene保留包、1个页面查询及2个正常近似包");
+        That(events.Count(row => row.GetProperty("Kind").GetString() == "cash_shop_promotion_page_query" &&
+            row.GetProperty("Detail").GetProperty("Status").GetString() == "unavailable") == 1,
+            "页面关闭时真实type3查询仍进入专属路由，不因业务枚举数值变化泄漏到聊天");
         That(received.Count(row => row.GetProperty("Detail").GetProperty("Body").GetString() == "[luke-scene-reserved-redacted]") == 7,
             "真实recv在状态门之前已脱敏全部机器正文");
         var unimplemented = events.Where(row => row.GetProperty("Kind").GetString() == "unimplemented" &&
             row.GetProperty("Detail").GetProperty("Opcode").GetUInt16() == 17).ToArray();
         That(unimplemented.Length == 3 && unimplemented.All(row =>
             row.GetProperty("Detail").GetProperty("Body").GetString() == "[luke-scene-reserved-redacted]"),
-            "三个未WorldReady包由真实分派写脱敏unimplemented");
+            "三个尚未选角的包由真实分派写脱敏unimplemented");
         That(events.Count(row => row.GetProperty("Kind").GetString() == "luke_scene_reserved") == 4,
             "四个WorldReady包实际到达专用拒绝handler，不借限流或未就绪掩盖");
         string log = File.ReadAllText(Path.Combine(fixture.Options.LogDirectory, "server.jsonl"));
@@ -87,8 +92,10 @@ internal static class LukeSceneNamespaceTcpTests
         sender.Send(17, Body(text));
         var expected = Build(writer =>
         {
-            writer.Write((byte)3); writer.Write((ushort)0); writer.Write((byte)0);
+            writer.Write((byte)3); writer.Write(sender.Id); writer.Write((byte)2);
             writer.Write((uint)text.Length); writer.Write(Encoding.ASCII.GetBytes(text));
+            byte[] name = Encoding.ASCII.GetBytes("SceneSend");
+            writer.Write((uint)name.Length); writer.Write(name);
         });
         Bytes(sender.Expect(0, 12).Body, expected, "普通近似根本人真实回显未被劫持");
         Bytes(observer.Expect(0, 12).Body, expected, "同场景旁观者收到精确近似根，证明其具备投递资格");

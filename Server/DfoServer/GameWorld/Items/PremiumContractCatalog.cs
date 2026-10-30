@@ -85,7 +85,7 @@ internal sealed class PremiumContractCatalog
         definition = Get(itemId)!;
         return definition is { DurationSeconds: > 0 } && !missingStackables.Contains(itemId) &&
             (definition.Type == 84 && Growth is not null && !GrowthEquipment.IsEmpty ||
-                definition.Type == 97 && Cubes.Length == 6);
+                definition.Type == 97 && Cubes.Length == 6 || definition.Type is 88 or 92);
     }
 
     public int EquipmentLevelAllowance(ItemTemplate template) => EquipmentLevelAllowance(template.Kind, template.EquipmentSlot);
@@ -120,10 +120,10 @@ internal sealed class PremiumContractCatalog
     // 配置可包含当前未安装的STK，保留编号与期限，仅让缺资源的实际操作不可用。
     internal void InspectStackables(IReadOnlyDictionary<int, string> stackable, Func<string, bool> contains)
     {
-        var ids = ByItem.Values.Where(row => row.Type is 22 or 27 or 84 or 97).Select(row => row.ItemId)
+        var ids = ByItem.Values.Where(row => row.Type is 22 or 27 or 84 or 97 or 88 or 92).Select(row => row.ItemId)
             .Concat(Cubes.Select(row => row.ItemId)).Distinct().Order();
         missingStackables = ids.Where(id => !stackable.TryGetValue(id, out string? path) || !contains("stackable/" + path)).ToFrozenSet();
-        ResourceWarnings = ByItem.Values.Where(row => row.Type is 22 or 27 or 84 or 97).GroupBy(row => row.Type)
+        ResourceWarnings = ByItem.Values.Where(row => row.Type is 22 or 27 or 84 or 97 or 88 or 92).GroupBy(row => row.Type)
             .Where(group => group.All(row => missingStackables.Contains(row.ItemId))).OrderBy(group => group.Key)
             .Select(group => new PremiumContractResourceWarning(group.Key, group.Count(), "no_contract_stk_available")).ToImmutableArray();
     }

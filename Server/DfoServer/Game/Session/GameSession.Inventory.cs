@@ -6,6 +6,10 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
+    public InventoryResult UseSkinStorage(InventorySkinStorageService service, InventorySlot position) =>
+        PlanAndCommitInventory(character => service.Add(character, position, Phase == SessionPhase.Town,
+            Phase == SessionPhase.Town && towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character))),
+            3, requireTown: false);
     public void InitializeDevilContract(DevilContractService service, DateTimeOffset now)
     {
         var captured = owner.Execute(() =>

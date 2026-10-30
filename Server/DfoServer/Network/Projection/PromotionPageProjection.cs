@@ -10,7 +10,7 @@ internal sealed class PromotionPageProjection(Func<CashShopPromotionCatalog> cur
 {
     const string MachineCommand = "#cp-promo/1";
 
-    internal static bool MachineNamespace(ChatSend send) => send.Type == (byte)ChatKind.Normal && send.TargetName is null &&
+    internal static bool MachineNamespace(ChatSend send) => send.Type == (byte)ChatRequestType.Normal && send.TargetName is null &&
         send.Text.StartsWith(MachineCommand, StringComparison.Ordinal) &&
         (send.Text.Length == MachineCommand.Length || char.IsWhiteSpace(send.Text[MachineCommand.Length]));
 

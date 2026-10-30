@@ -248,6 +248,10 @@ internal static class MarriageWeddingTcpTests
         {
             var packet = peer.Read();
             if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "婚礼流程屏障成功"); return packets; }
+            if(packet is {Kind:0,Opcode:411})
+            {
+                peer.ReadChatEmoticons(packet);packets.Add(packet);continue;
+            }
             That(packet.Kind == 0 && packet.Opcode is 2 or 3 or 4 or 6 or 9 or 11 or 14 or 22 or 23 or 24 or 26 or 153 or 1001 or 1002 or 1003 or 1007 or 1016 ||
                 packet.Kind == 1 && packet.Opcode is 1035 or 1041, $"婚礼切图只接收明确的投影和回执，实际{packet.Kind}/{packet.Opcode}");
             That(packet.Body.Length > 0, "婚礼流程通知必须有真实正文");

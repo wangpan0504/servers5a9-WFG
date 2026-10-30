@@ -17,6 +17,7 @@ internal static class SettingsProtocolTests
     public static void Run()
     {
         int before = Count;
+        ChatEmoticons();
         byte[] game = Enumerable.Range(0, 204).Select(i => (byte)i).ToArray();
         byte[] character = Enumerable.Repeat((byte)255, 512).ToArray();
         character[86] = 0;
@@ -57,6 +58,40 @@ internal static class SettingsProtocolTests
         QuickChatProtocol(game, character);
         TownVisibility();
         Console.WriteLine($"PASS {Count - before} client settings parser, projection and selection assertions");
+    }
+
+    static void ChatEmoticons()
+    {
+        byte[] body = [2, 0, 1, 0, 2, 0, 0, 0, (byte)'h', (byte)'i', 2, 0, 0, 0, 0, 0];
+        var rows = SettingsRequests.ChatEmoticons(body);
+        That(rows.Length == 2 && rows[0].Id == 1 && rows[0].Text.SequenceEqual(new byte[] { (byte)'h', (byte)'i' }) &&
+            rows[1].Id == 2 && rows[1].Text.IsEmpty, "聊天表情请求按编号读取完整文本");
+        byte[] maximum = [1, 0, 1, 0, 3, 1, 0, 0, .. Enumerable.Repeat((byte)'x', 259)];
+        That(SettingsRequests.ChatEmoticons(maximum)[0].Text.Length == 259, "聊天表情客户端接收容量内最后一字节合法");
+        byte[] tooLong = [1, 0, 1, 0, 4, 1, 0, 0, .. Enumerable.Repeat((byte)'x', 260)];
+        Reject<InvalidDataException>(() => SettingsRequests.ChatEmoticons(tooLong), "聊天表情不得超过客户端读宽");
+        foreach (byte[] invalid in new[] { body[..^1], body.Concat(new byte[] { 0 }).ToArray(),
+            new byte[] { 2, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 },
+            new byte[] { 1, 0, 1, 0, 1, 0, 0, 0, 0 } })
+            Reject<InvalidDataException>(() => SettingsRequests.ChatEmoticons(invalid), "聊天表情短包、重复或零字节拒绝");
+        var eligible = ImmutableArray.Create(new DfoServer.GameWorld.Characters.ChatEmoticonEntry(1, 0, "COMMON"),
+            new DfoServer.GameWorld.Characters.ChatEmoticonEntry(2, 1, "LEVEL"));
+        var catalog = new DfoServer.GameWorld.Characters.ChatEmoticonCatalog(eligible);
+        That(catalog.Eligible(0).Length == 1 && catalog.Eligible(1).Length == 2, "聊天表情按PVF等级门槛启用");
+        byte[] expected = [2, 0, 0, 0, 1, 0, 2, 0, 0, 0, (byte)'h', (byte)'i', 1, 0, 2, 0, 0, 0, 0, 0];
+        Bytes(SettingsPackets.ChatEmoticons(eligible, rows), expected, "411按目录发送编号及自定义文本");
+        byte[] recents = new byte[85];
+        recents.AsSpan(0, 13).Fill(0xA5);
+        BinaryPrimitives.WriteUInt32LittleEndian(recents.AsSpan(13), 2);
+        BinaryPrimitives.WriteUInt32LittleEndian(recents.AsSpan(21), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(recents.AsSpan(81), (uint)short.MaxValue);
+        var parsed = SettingsRequests.RecentEmoticons(recents);
+        Bytes(SettingsPackets.RecentEmoticons(parsed), recents[13..], "1447忽略不透明13B前缀，1384按18个u32原序回放，包括零槽和边界ID");
+        Bytes(SettingsPackets.RecentEmoticons(default), new byte[72], "缺省最近列表清空上一账号历史，不伪造默认表情");
+        foreach (byte[] invalid in new[] { recents[..^1], recents.Concat(new byte[] { 0 }).ToArray(), recents[13..] })
+            Reject<InvalidDataException>(() => SettingsRequests.RecentEmoticons(invalid), "最近列表拒绝短包、尾部及错误的72B请求布局");
+        BinaryPrimitives.WriteUInt32LittleEndian(recents.AsSpan(13), 0x10000);
+        Reject<InvalidDataException>(() => SettingsRequests.RecentEmoticons(recents), "最近列表不能截断高位并指向其他编号");
     }
 
     static void HotkeyProtocol()
@@ -199,6 +234,8 @@ internal static class SettingsProtocolTests
 
     sealed class SettingsStore : IClientSettingsStore
     {
+        public bool SaveRecentEmoticons(AccountOwners.Lease owner, ImmutableArray<byte> entries) => throw new NotSupportedException();
+        public bool SaveChatEmoticons(AccountOwners.Lease owner, ImmutableArray<ChatEmoticonMacro> macros) => throw new NotSupportedException();
         public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort id, uint itemId, long? expiresAt = null) => throw new NotSupportedException("此夹具只验证原有设置正文");
         public bool SaveEmotion(AccountOwners.Lease owner, ushort id, ushort emotion) => throw new NotSupportedException("此夹具只验证原有设置正文");
         ImmutableArray<byte> main;

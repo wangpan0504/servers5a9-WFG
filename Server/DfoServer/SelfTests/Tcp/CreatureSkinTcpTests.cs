@@ -248,5 +248,6 @@ internal static class CreatureSkinTcpTests
         int realOffset = 156 + nameWidth + body[133 + nameWidth] * 25;
         That(body[0] == 0 && body[132 + nameWidth] == 0 && U32(body, 94) == skin && U32(body, realOffset) == real,
             "城镇及重登分别恢复真实26声明和固定头独立外观，不以幻化覆盖真宠；卸真宠保留33资产但清外观");
+        That(body[^18] == 100, "穿脱真宠及宠物外观后的Actor保留城镇队伍血蓝100%，不能等下次建队的153纠正");
     }
 }

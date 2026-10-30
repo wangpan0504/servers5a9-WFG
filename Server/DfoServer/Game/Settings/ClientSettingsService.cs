@@ -8,6 +8,7 @@ internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServe
     public const int GameOptionLength = 204;
     public const int CharacterOptionLength = 512;
     public const int QuickChatLength = 300;
+    public const int RecentEmoticonLength = 18 * sizeof(uint);
     public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort characterId, uint itemId, long? expiresAt = null) =>
         store.SaveCloneTitle(owner, characterId, itemId, expiresAt);
     public bool? SaveEmotion(AccountOwners.Lease owner, ushort characterId, ushort emotion) =>
@@ -17,6 +18,7 @@ internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServe
     {
         var saved = store.Load(owner, characterId);
         if (!saved.Hotkeys.IsDefault) HotkeySettingsRules.Validate(saved.Hotkeys);
+        if (!saved.RecentEmoticons.IsDefault) ValidateRecentEmoticons(saved.RecentEmoticons);
         return saved;
     }
     public bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text)
@@ -48,6 +50,23 @@ internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServe
         if (bank > 1) throw new InvalidDataException("快捷聊天银行编号无效");
         Validate(text, QuickChatLength);
         return store.SaveQuickChat(owner, bank, text);
+    }
+
+    public bool SaveChatEmoticons(AccountOwners.Lease owner, ImmutableArray<ChatEmoticonMacro> macros) =>
+        store.SaveChatEmoticons(owner, macros);
+
+    public bool SaveRecentEmoticons(AccountOwners.Lease owner, ImmutableArray<byte> entries)
+    {
+        ValidateRecentEmoticons(entries);
+        return store.SaveRecentEmoticons(owner, entries);
+    }
+
+    public static void ValidateRecentEmoticons(ImmutableArray<byte> entries)
+    {
+        Validate(entries, RecentEmoticonLength);
+        for (int offset = 0; offset < entries.Length; offset += sizeof(uint))
+            if (System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(entries.AsSpan()[offset..]) > short.MaxValue)
+                throw new InvalidDataException("最近表情编号超出当前名册读宽");
     }
 
     static void Validate(ImmutableArray<byte> payload, int length)

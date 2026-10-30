@@ -26,9 +26,122 @@ internal static class ClientSettingsStoreTests
         RawAccountAndCanonicalCharacter();
         HotkeyStorage();
         QuickChatStorage();
+        ChatEmoticonStorage();
+        RecentEmoticonStorage();
+        ChatEmoticonPreviewUpgrade();
         ReadOnlyAndRollback();
         Migration();
         Console.WriteLine($"PASS {TestCheck.Count - before} 客户端设置规则、归属、持久化与迁移断言");
+    }
+
+    static void ChatEmoticonStorage()
+    {
+        using var f=new Fixture();
+        ImmutableArray<ChatEmoticonMacro> first=[new(1,[(byte)'h',(byte)'i'])];
+        Check(f.Service.SaveChatEmoticons(f.Owner,first),"聊天表情指令首次保存到账号");
+        Check(f.Service.Load(f.Owner,f.Second.Id).ChatEmoticons is [{Id:1,Text.Length:2}] &&
+            f.Service.Load(f.OtherOwner,f.Other.Id).ChatEmoticons.IsEmpty,"同账号角色共享表情指令，其他账号隔离");
+        using(var db=Open(f.Path))
+        using(var writer=db.BeginTransaction(deferred:false))
+            Check(!f.Service.SaveChatEmoticons(f.Owner,first),"相同表情指令在外部writer占用时只读返回");
+        f.Execute("CREATE TRIGGER fail_emoticon_insert BEFORE INSERT ON account_chat_emoticons WHEN NEW.emoticon_id=2 BEGIN SELECT RAISE(ABORT,'emoticon rollback'); END");
+        Reject<SqliteException>(()=>f.Service.SaveChatEmoticons(f.Owner,[new(1,[(byte)'x']),new(2,[(byte)'y'])]),
+            "整批表情配置末项失败回滚前面的更新");
+        Check(f.Service.Load(f.Owner,f.First.Id).ChatEmoticons[0].Text.SequenceEqual(first[0].Text) &&
+            (long)f.Query("SELECT count(*) FROM account_chat_emoticons")! == 1,"晚期失败保留原账号配置");
+        using var replacement=f.Owners.Acquire("settings-a",()=>{});
+        Reject<InvalidOperationException>(()=>f.Service.SaveChatEmoticons(f.Owner,first),"旧generation不能保存表情指令");
+    }
+
+    static void RecentEmoticonStorage()
+    {
+        using var f = new Fixture();
+        string assets = f.Assets();
+        byte[] raw = new byte[ClientSettingsService.RecentEmoticonLength];
+        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(0), 99);
+        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(4), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(68), 102);
+        var entries = raw.ToImmutableArray();
+        Check(f.Service.Load(f.Owner, f.First.Id).RecentEmoticons.IsDefault, "未保存最近列表不伪造记录");
+        Check(f.Service.SaveRecentEmoticons(f.Owner, entries), "最近18槽首次提交");
+        Check(Same(f.Service.Load(f.Owner, f.Second.Id).RecentEmoticons, entries) &&
+            f.Service.Load(f.OtherOwner, f.Other.Id).RecentEmoticons.IsDefault && f.Assets() == assets,
+            "最近列表同账号共享、其他账号隔离，不改变资产或角色revision");
+        using (var db = Open(f.Path))
+        using (var writer = db.BeginTransaction(deferred: false))
+            Check(!f.Service.SaveRecentEmoticons(f.Owner, entries), "外部writer下相同最近列表只读返回");
+        f.Execute("CREATE TRIGGER fail_recent BEFORE UPDATE ON account_recent_emoticons BEGIN SELECT RAISE(ABORT,'recent rollback'); END");
+        Reject<SqliteException>(() => f.Service.SaveRecentEmoticons(f.Owner, [.. new byte[72]]), "最近列表SQL失败不覆盖旧值");
+        f.Execute("DROP TRIGGER fail_recent");
+        Check(Same(new ClientSettingsRepository(f.Path).Load(f.Owner, f.First.Id).RecentEmoticons, entries) && f.Assets() == assets,
+            "重开恢复完整18槽及顺序，失败不改变资格、指令或资产");
+        Check(f.Service.SaveRecentEmoticons(f.Owner, [.. new byte[72]]) &&
+            f.Service.Load(f.Owner, f.First.Id).RecentEmoticons.All(value => value == 0), "显式空列表可以清除历史");
+        using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
+        Reject<InvalidOperationException>(() => f.Service.SaveRecentEmoticons(f.Owner, entries), "旧generation不能覆盖最近列表");
+        f.Integrity();
+    }
+
+    static void ChatEmoticonPreviewUpgrade()
+    {
+        const string removePromotions = "DROP TABLE cash_shop_promotion_awards;DROP TABLE cash_shop_promotion_progress;" +
+            "DROP TABLE cash_shop_promotion_orders;DROP TABLE cash_shop_promotion_rules;PRAGMA user_version=154;";
+        using (var f = new Fixture())
+        {
+            f.Service.SaveChatEmoticons(f.Owner,[new(1,[(byte)'o',(byte)'l',(byte)'d'])]);
+            string assets = f.Assets();
+            f.Execute(removePromotions);
+            var upgraded = new ClientSettingsRepository(f.Path);
+            Check(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion &&
+                upgraded.Load(f.Owner,f.First.Id).ChatEmoticons is [{Id:1,Text.Length:3}] &&
+                f.Query("SELECT hex(macro) FROM account_chat_emoticons") is "6F6C64" && f.Assets() == assets,
+                "兼容库补齐当前正式结构，保留全部玩家资产及宏字节");
+            f.Integrity();
+        }
+        using (var f = new Fixture())
+        {
+            f.Execute(removePromotions + "ALTER TABLE account_chat_emoticons ADD COLUMN unknown INTEGER;");
+            Reject<InvalidDataException>(()=>new ClientSettingsRepository(f.Path),"不能将未知结构冒认为受支持的聊天设置库");
+            Check(f.Query("PRAGMA user_version") is 154L &&
+                f.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='cash_shop_promotion_rules'") is 0L,
+                "兼容结构拒绝后版本与原表均不变，不提前提交迁移");
+        }
+        foreach (int version in new[] { 156, 157 })
+        {
+            using var f = new Fixture();
+            f.Service.SaveChatEmoticons(f.Owner,[new(1,[(byte)'o',(byte)'l',(byte)'d'])]);
+            var recent = new byte[72];
+            BinaryPrimitives.WriteUInt32LittleEndian(recent.AsSpan(68), 102);
+            f.Service.SaveRecentEmoticons(f.Owner,[.. recent]);
+            string assets = f.Assets();
+            f.Execute("DROP TABLE character_rename_pending;" +
+                (version == 156 ? "DROP TABLE account_recent_emoticons;" : "") + $"PRAGMA user_version={version};");
+            var restored = new ClientSettingsRepository(f.Path).Load(f.Owner,f.First.Id);
+            Check(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion &&
+                f.Query("SELECT count(*) FROM character_rename_pending") is 0L &&
+                restored.ChatEmoticons is [{Id:1,Text.Length:3}] && f.Assets() == assets,
+                "兼容库补齐当前更名资格表，保留宏及全部玩家资产，不补造改名资格");
+            Check(version == 156 ? restored.RecentEmoticons.IsDefault : Same(restored.RecentEmoticons,[.. recent]),
+                "兼容库的最近列表按原有内容恢复，不伪造默认历史");
+            f.Integrity();
+        }
+        using (var f = new Fixture())
+        {
+            f.Execute("DROP TABLE account_recent_emoticons;DROP TABLE account_chat_emoticons;PRAGMA user_version=156;");
+            _ = new ClientSettingsRepository(f.Path);
+            Check(Convert.ToInt64(f.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion &&
+                f.Query("SELECT count(*) FROM account_chat_emoticons") is 0L &&
+                f.Query("SELECT count(*) FROM account_recent_emoticons") is 0L,
+                "正式更名卡库顺序建立两张空聊天设置表，不误认成兼容库");
+        }
+        using (var f = new Fixture())
+        {
+            f.Execute("DROP TABLE character_rename_pending;ALTER TABLE account_recent_emoticons ADD COLUMN unknown INTEGER;PRAGMA user_version=157;");
+            Reject<InvalidDataException>(()=>new ClientSettingsRepository(f.Path),"未知最近列表结构不能冒认受支持的聊天设置库");
+            Check(f.Query("PRAGMA user_version") is 157L &&
+                f.Query("SELECT count(*) FROM sqlite_schema WHERE name='character_rename_pending'") is 0L,
+                "兼容升级拒绝后不提前建立更名资格或推进版本");
+        }
     }
 
     static void CloneTitleStorage()
@@ -578,7 +691,7 @@ internal static class ClientSettingsStoreTests
         {
             using var db = Open(Path);
             using var tables = db.CreateCommand();
-            tables.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat') ORDER BY name";
+            tables.CommandText = "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat','account_chat_emoticons','account_recent_emoticons') ORDER BY name";
             var names = new List<string>();
             using (var reader = tables.ExecuteReader())
                 while (reader.Read()) names.Add(reader.GetString(0));

@@ -151,6 +151,7 @@ internal static class SelfTestRunner
         await PacketHttpTests.RunAsync();
         ClientNoticeTests.Run();
         ChatServiceTests.Run();
+        ChatEmoticonTests.Run();
         AuctionNoticeTests.Run();
         AuctionReplyTests.Run();
         DungeonRequestTests.Run();

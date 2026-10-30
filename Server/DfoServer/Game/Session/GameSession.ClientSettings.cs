@@ -3,7 +3,7 @@ using DfoServer.Game.Settings;
 
 namespace DfoServer.Game.Session;
 
-internal sealed record ClientSettingsReceipt(ClientSettingsSnapshot Settings, long Generation, long SelectionEpoch, ushort CharacterId, byte VisibilityFlags, byte HotkeyProfile);
+internal sealed record ClientSettingsReceipt(ClientSettingsSnapshot Settings, long Generation, long SelectionEpoch, ushort CharacterId, byte VisibilityFlags, byte HotkeyProfile, byte Level);
 
 internal sealed partial class GameSession
 {
@@ -27,6 +27,25 @@ internal sealed partial class GameSession
     public bool SaveQuickChat(ClientSettingsService settings, byte bank, ImmutableArray<byte> text) => owner.Execute(() =>
         settings.SaveQuickChat(owner, bank, text));
 
+    public bool SaveChatEmoticons(ClientSettingsService settings, ImmutableArray<ChatEmoticonMacro> macros) => owner.Execute(() =>
+    {
+        if (Selected is null || !Ready) throw new InvalidDataException("保存聊天表情时没有选中角色");
+        return settings.SaveChatEmoticons(owner, macros);
+    });
+
+    public bool SaveRecentEmoticons(ClientSettingsService settings, ImmutableArray<byte> entries) => owner.Execute(() =>
+    {
+        if (Selected is null || !Ready) throw new InvalidDataException("保存最近表情时没有选中角色");
+        return settings.SaveRecentEmoticons(owner, entries);
+    });
+
+    public (DfoServer.GameWorld.Characters.ChatEmoticonEligibility Key, long Epoch)? ChatEmoticonEligibility(bool initializing = false) => owner.Execute(() =>
+        (Ready || initializing) && Selected is { } character
+            ? ((DfoServer.GameWorld.Characters.ChatEmoticonEligibility Key, long Epoch)?)
+                (DfoServer.Game.Chat.ChatEmoticonRules.Eligibility(character,
+                    (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()), SelectionEpoch)
+            : null);
+
     public bool SaveGameOptions(ClientSettingsService settings, ImmutableArray<byte> options) => owner.Execute(() =>
     {
         if (pendingRental is not null || HasPendingTownQuestCommit) return false;
@@ -49,11 +68,11 @@ internal sealed partial class GameSession
         byte flags = ClientSettingsRules.VisibilityFlags(restored.GameOptions);
         if (pendingRental is null && !HasPendingTownQuestCommit && character.VisibilityFlags != flags)
             Selected = character with { VisibilityFlags = flags };
-        return new ClientSettingsReceipt(restored, owner.Generation, SelectionEpoch, character.Id, flags, HotkeySettingsRules.Profile(character.Job));
+        return new ClientSettingsReceipt(restored, owner.Generation, SelectionEpoch, character.Id, flags, HotkeySettingsRules.Profile(character.Job), character.Level);
     });
 
     public bool CanPublishClientSettings(ClientSettingsReceipt receipt) => owner.Execute(() =>
         owner.Generation == receipt.Generation && SelectionEpoch == receipt.SelectionEpoch && Selected is { } character &&
         character.Id == receipt.CharacterId && character.VisibilityFlags == receipt.VisibilityFlags &&
-        HotkeySettingsRules.Profile(character.Job) == receipt.HotkeyProfile);
+        HotkeySettingsRules.Profile(character.Job) == receipt.HotkeyProfile && character.Level == receipt.Level);
 }
