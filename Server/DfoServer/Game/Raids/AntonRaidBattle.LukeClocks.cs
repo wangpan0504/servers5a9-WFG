@@ -72,6 +72,8 @@ internal sealed partial class AntonRaidBattle
         { lease.Schedule(retryDelay); return; }
         // 正常请求可能先恢复原候选；旧退避不能继续压住下一phase的新SET。
         lease.SetRetry(null);
+        if (AntonWaitRemainingLocked() is { } wait)
+        { lease.Schedule(wait); return; }
         if (pendingTransition is not null || TerminalRequested(current))
         { lease.Schedule(Timeout.InfiniteTimeSpan); return; }
         TimeSpan? earliest = LukePhaseRemainingLocked();
@@ -98,7 +100,9 @@ internal sealed partial class AntonRaidBattle
         lock (gate)
         {
             if (!ReferenceEquals(lukeClockLease, lease) || lease.IsStopped || !lukeClockActive || members.Count == 0 ||
-                pendingTransition is not null || TerminalRequested(current)) return false;
+                pendingTransition is not null) return false;
+            if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Intermission) return ExpireAntonWaitLocked();
+            if (TerminalRequested(current)) return false;
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。
             var before = current;
 

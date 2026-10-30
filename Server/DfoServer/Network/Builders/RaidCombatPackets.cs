@@ -34,6 +34,19 @@ internal static class RaidCombatPackets
         return body;
     }
 
+    public static byte[] AntonWaitTimer(uint seconds, uint endUnixSeconds)
+    {
+        byte[] body = new byte[13];
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(5), endUnixSeconds);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(9), seconds);
+        return body;
+    }
+
+    public static byte[] AntonWaitRemaining(byte slot, uint seconds)
+    {
+        byte[] body = PhaseRemaining(seconds); body[0] = slot; return body;
+    }
+
     // 02396E0E/1D：u8状态、i8阶段。只允许本模块已实现的阶段状态。
     public static byte[] State(AntonRaidBattleView view) => [(byte)view.State, checked((byte)view.Phase)];
 

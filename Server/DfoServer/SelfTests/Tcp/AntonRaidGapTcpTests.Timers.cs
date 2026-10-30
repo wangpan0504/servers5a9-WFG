@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
@@ -25,13 +26,51 @@ internal static partial class AntonRaidGapTcpTests
                 peer.Send(15, BitConverter.GetBytes(210u)); AntonTcpProbe.Barrier(peer, "超时测试选210");
                 AntonTcpProbe.Enter(peer, catalog, 210, report, clear: false, leave: false);
             }
-            else AntonTcpProbe.Enter(peer, catalog, 218, report, clear: false, leave: false);
+            else
+            {
+                peer.Send(666); AntonTcpProbe.Barrier(peer, "超时夹具团长提前准备");
+                clock.Advance(3);
+                That(AntonTcpProbe.Barrier(peer, "超时夹具P2开始").Any(p => p is { Opcode: 587, Body: [2,1] }), "P2超时从准备完成起算");
+                AntonTcpProbe.Enter(peer, catalog, 218, report, clear: false, leave: false);
+            }
             peer.Send(37, new byte[8]); AntonTcpProbe.Barrier(peer, "超时测试加载完成");
             string assets = fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY 1,2");
             string receipts = fixture.Snapshot("SELECT * FROM character_raid_reward_receipts ORDER BY 1,2");
-            clock.Advance(2399);
+            int advanced = 0;
+            if (phase == 1)
+            {
+                clock.Advance(179);
+                var early = AntonTcpProbe.Barrier(peer, "孵化180前");
+                That(early.All(packet => packet.Opcode != 585), "179秒不提前发布孵化选择");
+                clock.Advance(1);
+                var hatch = AntonTcpProbe.Barrier(peer, "自然孵化选择");
+                int index = hatch.FindLastIndex(packet => packet is { Kind: 0, Opcode: 585 });
+                That(index >= 0, "180秒自然发布585，不经测试注入随机目标");
+                var body = hatch[index].Body;
+                That(body.Length == 6 + 5 * body[1] && body[0] == 0, "585按95的reserved/count/rows/tail读宽");
+                int infected = BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(body.Length - 4));
+                var opened = Enumerable.Range(0, body[1]).Where(i => body[6 + 5 * i] == 0)
+                    .Select(i => BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(2 + 5 * i)))
+                    .Where(id => id is >= 221 and <= 224).ToArray();
+                That(opened.Length == 3 && opened.Contains(infected), "线上自然四选三，感染尾值属于已开图");
+                var symbols = hatch.Skip(index + 1).First(packet => packet is { Kind: 0, Opcode: 583 }).Body;
+                int Value(int id) => Enumerable.Range(0, symbols[0]).Where(i => BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(1 + i * 8)) == id)
+                    .Select(i => BinaryPrimitives.ReadInt32LittleEndian(symbols.AsSpan(5 + i * 8))).Single();
+                That(Value(7) == 1 && Value(8) == infected && Value(50) == 0,
+                    "585后583同步感染状态与P1剩余HP0，不改成累计次数");
+                advanced = 180;
+            }
+            clock.Advance(2399 - advanced);
             var before = AntonTcpProbe.Barrier(peer, "总deadline前一秒");
-            That(before.All(packet => packet.Opcode is not (24 or 596 or 597)), "2400前不退场、不猜timer wire");
+            That(before.All(packet => packet.Opcode != 24), "2400前不得退场");
+            foreach (var packet in before.Where(packet => packet.Opcode is 596 or 597))
+            {
+                That(phase == 1, "P1不新增阶段计时投影");
+                if (packet.Opcode == 597) Bytes(packet.Body, [0,1,0,0,0], "P2到期前槽0仍剩1秒");
+                else That(packet.Body.Length == 13 && packet.Body[0] == 0 &&
+                    U32(packet.Body, 1) == 0 && U32(packet.Body, 9) == 1,
+                    "P2机制广播只重发原deadline剩余1秒，不续期或提前清零");
+            }
             clock.Advance(1);
             var frames = new List<WirePacket>();
             for (int count = 0; count < 256; count++)

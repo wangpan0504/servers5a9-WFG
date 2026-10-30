@@ -181,6 +181,8 @@ internal static class AntonTcpProbe
         var place = started.LastOrDefault(p => p is { Kind: 0, Opcode: 23 } && p.Body.Length >= 4 && TcpPeer.U16(p.Body) == peer.Id);
         if (place is null || place.Body[2] != 19 || place.Body[3] != 2)
             throw new InvalidOperationException("666 后没有落在 19/2");
+        // 开战已消费的583也归入同一报告，供初值回归读取实际接收包。
+        Note(report, started);
         report.Started = true;
         FinishStep(report, elapsed, "start", "833/664/669/666 town=19/2");
         if (stopAfter == "start")
@@ -350,6 +352,19 @@ internal static class AntonTcpProbe
             peer.Send(37, new byte[8]);
             Note(report, Flush(peer, "37 下一房"));
             ClearRoom(peer, map.Body, report, out ushort nextBoss, out byte nextLevel, i + 1 == path.Length);
+            if (dungeon is 213 or 215 && i == 1)
+            {
+                // strongleg_lower/lower2.dgn 的第二房不是(0,0)终点；已死的有效房内怪也不能充当最终Boss。
+                var early = new byte[39];
+                BinaryPrimitives.WriteUInt16LittleEndian(early, peer.Id);
+                BinaryPrimitives.WriteUInt16LittleEndian(early.AsSpan(2), TcpPeer.U16(map.Body, 25));
+                BinaryPrimitives.WriteUInt32LittleEndian(early.AsSpan(13), map.Body[31]);
+                BinaryPrimitives.WriteUInt64LittleEndian(early.AsSpan(17), 504);
+                peer.Send(117, early);
+                var premature = Flush(peer, "擎天第二房伪终末 " + dungeon);
+                if (premature.Any(p => p is { Kind: 0, Opcode: 31 or 115 or 586 or 587 or 600 or 601 }))
+                    throw new InvalidOperationException("擎天第二房117被误认为单图或阶段终末");
+            }
             if (i + 1 == path.Length)
             {
                 bossKey = nextBoss;
@@ -365,6 +380,9 @@ internal static class AntonTcpProbe
         int seen = report.Opcode586;
         var cleared = Flush(peer, "117 确认 " + dungeon);
         Note(report, cleared);
+        // DungeonSettlementHandler.BossAsync 的团本分支只确认115并发布战况，不借用普通结算入口。
+        if (cleared.Any(p => p is { Kind: 0, Opcode: 31 or 34 or 35 or 600 or 601 } or { Kind: 1, Opcode: 72 }))
+            throw new InvalidOperationException(dungeon + " 的117误发普通结算、阶段牌面或未请求的EPLP确认");
         if (requireClearNotice && report.Opcode586 == seen && !cleared.Any(p => p is { Kind: 0, Opcode: 115 or 586 }))
             throw new InvalidOperationException(dungeon + " 的清图没有 586，117 也没有确认");
         if (cleared.Any(p => p is { Kind: 0, Opcode: 587, Body: [3, 0] }))
@@ -396,6 +414,12 @@ internal static class AntonTcpProbe
             peer.Send(39, FormalDungeonTcpTests.Death(key, peer.Id, level));
             var died = Flush(peer, "39 key " + key);
             Note(report, died);
+            // R2现场2026-10-29 21:03:48、PVF 32230/32250：擎天(0,1)的58020是普通生成行，死亡不能发布结果菜单包。
+            if (map[0] == 0 && map[1] == 1 && TcpPeer.U32(map, 14) is 32230 or 32250)
+            {
+                if (boss || died.Any(p => p.Opcode is 115 or 31 or 72))
+                    throw new InvalidOperationException("擎天(0,1)被标为Boss或死亡触发了结算/退场包");
+            }
             if (witness is not null)
                 Note(witnessReport!, Barrier(witness, "39 队员 key " + key));
             if (!died.Any(p => p is { Kind: 0, Opcode: 38 }))
@@ -502,7 +526,7 @@ internal static class AntonTcpProbe
     }
 
     internal static void EnterSquad(TcpPeer leader, TcpPeer member, RaidDungeonCatalog catalog, int dungeon,
-        AntonProbeReport leaderReport, AntonProbeReport memberReport)
+        AntonProbeReport leaderReport, AntonProbeReport memberReport, bool leave = true)
     {
         leader.Send(15, DungeonId(dungeon));
         var selected = Flush(leader, "15 分队选择 " + dungeon);
@@ -568,6 +592,7 @@ internal static class AntonTcpProbe
             throw new InvalidOperationException(dungeon + " 的分队清图没有 586，117 也没有确认");
         if (memberReport.Opcode586 == 0)
             throw new InvalidOperationException("队员没有收到 586");
+        if (!leave) return;
         leader.Send(42);
         member.Send(42);
         Note(leaderReport, Flush(leader, "42 返回候战室"));

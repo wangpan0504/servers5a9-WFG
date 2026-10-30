@@ -5,10 +5,10 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Projection;
 
 internal sealed record RaidCombatDisplayIdentity(Game.Session.GameSession Session, Game.Accounts.AccountOwners.Lease Owner,
-    long SelectionEpoch, ushort Character, Guid Instance, int Phase, AntonRaidBattleState State)
+    long SelectionEpoch, ushort Character, Guid Instance, int Phase, AntonRaidBattleState State, bool AntonPreparing)
 {
     public static RaidCombatDisplayIdentity Capture(RaidActor actor, AntonRaidBattleView view) =>
-        new(actor.Session, actor.Owner, actor.Epoch, actor.Character, view.Instance, view.Phase, view.State);
+        new(actor.Session, actor.Owner, actor.Epoch, actor.Character, view.Instance, view.Phase, view.State, view.AntonPreparing);
 }
 
 internal static class RaidCombatProjection
@@ -25,8 +25,7 @@ internal static class RaidCombatProjection
         {
             // DGN HP与资源SET共享原symbol快照；沿已证583读宽同步本次提交。
             if (anton.HasAntonRewards || anton.PhaseProgress)
-                context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
-                    RaidCombatPackets.Symbols(anton.SymbolSnapshot(view)), "raid_symbol_snapshot", Guard);
+                PostAntonSnapshot(context, anton, view, Guard);
             foreach (var row in anton.DungeonSnapshot(view))
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_CHANGE_DUNGEON_STATE,
                     RaidCombatPackets.DungeonState(row.Id, 0, row.State), "raid_dungeon_state", Guard);
@@ -46,12 +45,12 @@ internal static class RaidCombatProjection
             !view.Symbols.TryGetValue("[is exist infection dungeon]", out int infected) ||
             !view.Symbols.TryGetValue("[infection dungeon index]", out int infectionDungeon)) return;
         bool Guard() => current() && battle.IsCurrent(view);
-        // 重建选图同步当前583真实符号快照：DGN HP（50..63）与感染位均取view.Symbols；关闭阶段推进时HP保持PVF初值，不另造字段。
-        context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
-            RaidCombatPackets.Symbols(battle.SymbolSnapshot(view)), "raid_infection_state", Guard);
+        // 585尾值保留感染身份；01DCF210会对非零身份置symbol7=1，随后583恢复本次真实开闭值及剩余HP。
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_DUNGEON_STATE,
             RaidCombatPackets.Dungeons(0, battle.DungeonSnapshot(view), infectionDungeon),
             "raid_dungeon_snapshot", Guard);
+        context.Sender.Post(0, (ushort)NotiPacketType.RAID_SET_SYMBOL,
+            RaidCombatPackets.Symbols(battle.SymbolSnapshot(view)), "raid_infection_state", Guard);
     }
 
     internal static void Selection(GameConnectionContext context, Func<bool> current)
@@ -80,16 +79,38 @@ internal static class RaidCombatProjection
                 if (actor.IsCurrent && context.Session.CurrentRaidBattle(actor)?.Instance == view.Instance)
                     context.RaidDisplay = identity;
             });
+            if (view.State == AntonRaidBattleState.Intermission &&
+                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } anton)
+            {
+                // 86顺序STATE→SET_TIMER→REMAIN_TIME；泵写帧时重算剩余值，旧view不能续新阶段。
+                context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_SET_TIMER, 13,
+                    () => anton.AntonWaitSeconds(view) is { } seconds && seconds > 0
+                        ? RaidCombatPackets.AntonWaitTimer(seconds, checked((uint)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + seconds))) : null,
+                    "anton_wait_timer", () => current() && context.RaidDisplay == identity);
+                context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_REMAIN_TIME, 5,
+                    () => anton.AntonWaitSeconds(view) is { } seconds
+                        ? RaidCombatPackets.AntonWaitRemaining(view.AntonPreparing ? (byte)0 : (byte)1, seconds) : null,
+                    "anton_wait_remaining", () => current() && context.RaidDisplay == identity);
+                if (view.AntonPreparing)
+                    context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "anton_phase2_prepare", current);
+            }
             // 778没有阶段字段；对应587确实写出后才可按该phase解释used，不发送P1假计数。
             if (view.Phase == 1 && view.LukePhaseCoinsUsed is { } used)
                 context.Sender.Post(0, (ushort)NotiPacketType.RAID_PHASE_COIN_INFO,
                     RaidCombatPackets.PhaseCoins(used), "raid_phase_coins", () => current() && context.RaidDisplay == identity);
             if (view.State == AntonRaidBattleState.Fighting && view.PhaseClockGeneration > 0 &&
-                context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } battle)
+                context.Session.CurrentRaidBattle(actor) is { } battle && (battle.Kind == RaidKind.Luke || view.Phase == 1))
+            {
+                if (battle.Kind == RaidKind.Anton)
+                    context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_SET_TIMER, 13,
+                        () => battle.LukePhaseSeconds(view.Instance, view.Phase, view.PhaseClockGeneration) is { } remaining
+                            ? RaidCombatPackets.AntonWaitTimer(remaining, checked((uint)(DateTimeOffset.UtcNow.ToUnixTimeSeconds() + remaining))) : null,
+                        "anton_phase_timer", () => current() && context.RaidDisplay == identity);
                 context.Sender.PostPrepared(0, (ushort)NotiPacketType.RAID_REMAIN_TIME, 5,
                     () => battle.LukePhaseSeconds(view.Instance, view.Phase, view.PhaseClockGeneration) is { } seconds
-                        ? RaidCombatPackets.PhaseRemaining(seconds) : null, "luke_phase_remaining",
+                        ? RaidCombatPackets.PhaseRemaining(seconds) : null, battle.Kind == RaidKind.Anton ? "anton_phase_remaining" : "luke_phase_remaining",
                     () => current() && context.RaidDisplay == identity);
+            }
             return true;
         });
     }
