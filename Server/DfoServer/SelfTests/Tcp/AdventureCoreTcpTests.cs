@@ -25,6 +25,7 @@ internal static class AdventureCoreTcpTests
             AccountName(peer.Expect(0, 1375).Body, "");
             var selection = peer.Expect(0, 1343).Body;
             Information(selection, 0, "adventurea", 0);
+            SelectionContentsTcpTests.ExpectTowers(peer, fixture, resources, "adventurea");
             peer.Send(692, Name("GroupProbe")); peer.Expect(1, 692, [1]);
             peer.Send(1403, [1, 0]); peer.Expect(1, 1403, [0, 3, 0]);
             peer.Send(1403, [0, 0]); var query = peer.Expect(1, 1403).Body;
@@ -54,6 +55,7 @@ internal static class AdventureCoreTcpTests
             peer.Send(645); peer.Expect(1, 645, [1, 0]);
             AccountName(peer.Expect(0, 1375).Body, "测试团");
             Information(peer.Expect(0, 1343).Body, 0, "测试团", 2);
+            SelectionContentsTcpTests.ExpectTowers(peer, fixture, resources, "adventurea");
             peer.Send(692, Name("GroupProbe")); peer.Expect(1, 692, [1]);
             That(fixture.Query("SELECT level,experience,revision FROM account_adventures WHERE account='adventurea'") is [[1L, 0L, 7L]],
                 "所有信息请求、返回选角及存量高等级角色均不补发历史经验或奖励");
@@ -63,6 +65,7 @@ internal static class AdventureCoreTcpTests
             peer.Send(645); peer.Expect(1, 645, [1, 0]);
             AccountName(peer.Expect(0, 1375).Body, "");
             Information(peer.Expect(0, 1343).Body, 0, "adventureb", 0);
+            SelectionContentsTcpTests.ExpectTowers(peer, fixture, resources, "adventureb");
             peer.Send(692, Name("GroupProbe")); peer.Expect(1, 692, [1]);
         }
         await fixture.StopAsync();
@@ -72,6 +75,7 @@ internal static class AdventureCoreTcpTests
             peer.Send(645); peer.Expect(1, 645, [1, 0]);
             AccountName(peer.Expect(0, 1375).Body, "测试团");
             Information(peer.Expect(0, 1343).Body, 0, "测试团", 2);
+            SelectionContentsTcpTests.ExpectTowers(peer, fixture, resources, "adventurea");
             // 1343 名册行 offset42 是选角卡片熟练角标，客户端 010314C0 读入显示结构 +0x2C；
             // 服务端投影角色持久熟练等级而不是频道地域。放在重开之后设置，避免把熟练度
             // 计入账号开启经验，影响本用例对初始进度的断言。

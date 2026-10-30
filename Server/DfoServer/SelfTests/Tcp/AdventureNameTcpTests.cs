@@ -27,10 +27,12 @@ internal static class AdventureNameTcpTests
         using (var peer = Open(fixture))
         {
             peer.Send(645); peer.Expect(1, 645, [1, 0]); peer.Expect(0, 1375, new byte[5]); peer.Expect(0, 1343);
+            SelectionContentsTcpTests.ExpectTowers(peer, fixture, resources, fixture.Options.DevelopmentAccount);
             peer.Send(1444, Name("测试冒险团")); peer.Expect(1, 1444, new byte[] { 1 }.Concat(Name("测试冒险团")).ToArray());
             peer.Send(1438, Name("测试冒险团"));
             peer.Expect(1, 1438, new byte[] { 1 }.Concat(Name("测试冒险团")).ToArray());
-            peer.Expect(0, 1375, Name("测试冒险团").Concat(new byte[] { 0 }).ToArray()); peer.Expect(0, 1343); SelectionBarrier(peer);
+            peer.Expect(0, 1375, Name("测试冒险团").Concat(new byte[] { 0 }).ToArray()); peer.Expect(0, 1343);
+            SelectionBarrier(peer);
             peer.Send(1438, Name("Bypass")); peer.Expect(1, 1438, [0, 3, 0]); SelectionBarrier(peer);
             using (var other = Open(fixture, "nameother"))
             {

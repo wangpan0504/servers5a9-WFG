@@ -580,6 +580,9 @@ internal static class ServerRuntime
             dungeon = new DungeonProbeModule(log, catalog, options.DevelopmentDungeonEntryProbe, rooms, projection);
             createActivity = static session => new DungeonProbeState(session);
         }
+        var selectionContents = incounts is null ? null : new SelectionContentsProjection(
+            new Game.Characters.SelectionContentsRules(dungeonCatalog.Despair, dungeonCatalog.GriefTower, incounts,
+                warCatalog, lukeStartPolicy?.Completion?.Cycle));
         var skinService = new InventoryCreatureSkinService(itemResources.Items, clock);
         var levelUpItems = new LevelUpTicketHandler(
             new Game.Characters.LevelUpTicketService(itemResources.Items,growth,clock,characters,learning),
@@ -599,7 +602,7 @@ internal static class ServerRuntime
             new PvpRecordHandler(new Game.Pvp.PvpRecordQuery(repository, repository), online, log),
             new CharacterHandler(characters, projection, log, itemResources.GoldLimits, learning, tutorials, adventureProjection, expertJobs,
                 adventureWeeklyProjection, avatarPresetProjection, avatarPresetService, online, socialProjection, privateCharacters,
-                guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler, totalTeamProjection, pvpMissions, pvpMissionBook, itemResources.Items),
+                guildContribution, tagEvildomProjection, clock, arena, totalTeams, repository, partyDungeons, warCatalog, warPolicy, imperialArenaProjection, raidHandler, totalTeamProjection, pvpMissions, pvpMissionBook, itemResources.Items, selectionContents),
             new SocialHandler(repository, social, online, log),
             new PlayerInteractionHandler(parties, online, log, partyDungeons, raidHandler, projection, arena, tradeHandler),
             tradeHandler,

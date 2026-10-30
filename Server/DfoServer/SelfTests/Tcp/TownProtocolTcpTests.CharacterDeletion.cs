@@ -6,7 +6,7 @@ namespace DfoServer.Testing;
 
 internal static partial class TownProtocolTcpTests
 {
-    static void DeleteCharacters(TcpTestFixture fixture)
+    static void DeleteCharacters(TcpTestFixture fixture, TcpTestResources resources)
     {
         const string account = "delete-flow";
         ushort first, middle, highest, next;
@@ -39,6 +39,7 @@ internal static partial class TownProtocolTcpTests
             That(U16(adventure, 0) == 0 && U32(adventure, 14) == 7440 &&
                 adventure.Length == 22 + 7440 + U32(adventure, 18 + 7440),
                 "删除后仍按原账号初始化owner0、7440B主体和原生名称的选角冒险团信息");
+            SelectionContentsTcpTests.ExpectTowers(peer, fixture, resources, account);
             peer.Send(692, Name("删除中"));
             peer.Expect(1, 692, [1]);
             peer.Select(1);
