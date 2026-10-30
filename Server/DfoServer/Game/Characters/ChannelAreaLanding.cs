@@ -34,6 +34,8 @@ internal static class ChannelAreaLanding
     // 放进特殊区域页；原生 01EB5AF0 对 0x38 与普通 0x16 的谓词全部相同。配套 95JP 补丁额外比较五陵类型位，
     // 跨入或离开五陵不记录旧城镇快照，按普通选角进入共享赛丽亚房间，再由频道出口到 117/1。
     internal const int XianVillageType = 0x38;
+    internal const byte XianVillageTown = 117;
+    internal const int SpecialAreaType = 11;
 
     // 勇士对决：PVF etc/channel_info 名称键060 `勇士对决 - 自由`、061 `勇士对决 - 排位`；ARAD 类型名表 CHANNEL_DNFAOS_FREE = 0x3F、
     // CHANNEL_DNFAOS_RANK = 0x3E，外层白名单 028FB090 含两者，vt+0x74（{0x3E,0x3F}）放进特殊区域页；vt+0x28 团队页签谓词含两者。
@@ -76,11 +78,18 @@ internal static class ChannelAreaLanding
         if (channel is null || RoomExitUsesRememberedDistrict(channel) || LandsInChannelTown(channel) ||
             position.Town != towns.Room.Town || position.Area != towns.Room.Area)
             return null;
-        return Place(towns, channel, level, completed);
+        var landing = Place(towns, channel, level, completed);
+        if (landing is null || !towns.IsRoom(landing, completed)) return landing;
+        // 频道候选可能本身就是地区房间（如圣者之鸣号17/0、卢克32/0）。共享房间出门须直达街区，不能再进一层房间。
+        var outside = towns.DefaultReturn(landing, completed);
+        return outside is not null && outside.Town == landing.Town && !towns.IsRoom(outside, completed) &&
+            towns.DestinationAdmission(outside, level, completed) == "ready" && towns.IsPosition(outside, completed)
+            ? outside : null;
     }
 
     // 已知旧频道类型时直接按01EB5AF0已证的团队页、魔兽、魔界大战与再战魔界谓词比较。
-    internal static bool SameSnapshotPredicates(int previousType, int nextType) => SnapshotPredicates(previousType) == SnapshotPredicates(nextType);
+    internal static bool SameSnapshotPredicates(int previousType, int nextType) =>
+        previousType != SpecialAreaType && nextType != SpecialAreaType && SnapshotPredicates(previousType) == SnapshotPredicates(nextType);
 
     // ARAD 01EB5AF0 逐项比较新旧频道的类型谓词（读频道脚本类型 +8，不读 ACK LOGIN 写入的 +0x1010）。除vt+0x14的PVP位外，还区分以下谓词：
     // vt+0x28（01EB5720 → 028FA400，type ∈ {0x17,0x19,0x20,0x2D,0x32,0x3E,0x3F}，即团队页签类型）、vt+0x30（type==0x28）、vt+0x4C（type==0x36）及vt+0x38（type==0x35）。
@@ -167,6 +176,7 @@ internal static class ChannelAreaLanding
     {
         if (channel is null)
             return true;
+        if (channel.Type == SpecialAreaType) return false;
         // 决斗城镇有普通地图连接，不能据此把它当作普通频道快照；没有频道历史时按实际地区区分。
         if (IsPvpType(channel.Type)) return position.Town == 10;
         if (position.Town == 10) return false;
@@ -191,7 +201,7 @@ internal static class ChannelAreaLanding
     // 共享房间的返回地区只能落在普通地区：频道起始城镇（只能经频道进入的城镇与安徒恩直达战舰）的街区不参与，
     // 进入或城内切图一律沿用进入前的返回地区，避免战舰 19/1 被当成普通频道赛丽亚房间的出口（#740 回归）。
     internal static bool PreservesRoomReturn(TownCatalog towns, byte town) =>
-        town is AntonTown or BeastTown or PvpTown || IsChannelBoundTown(towns, town);
+        town is AntonTown or BeastTown or PvpTown or XianVillageTown || IsChannelBoundTown(towns, town);
 
     static string GroupName(string group) => group.Trim().TrimStart('[').TrimEnd(']');
 
@@ -211,7 +221,7 @@ internal static class ChannelAreaLanding
         if (type == 11)
             // 异界沿原船尾；远古与圣者之鸣号频道一致，先落赛丽亚房间 17/0，出门经甲板 17/1、船头 17/3 走到镇魂曲大厅 17/5。
             // 不直接落 17/5：17/5 自身只有回船头与本地 -1 -1 副本门两行，直接落点会跳过赛丽亚房间。
-            return name switch { "impossible" => (17, 2), "ancient" => (17, 0), _ => (38, 5) };
+            return name switch { "impossible" or "crack" => (17, 2), "ancient" => (17, 0), "deathtower" => (38, 5), _ => null };
         // 再战频道仍按原生38/1入城；此为本服RoomExit业务落点，非客户端03B876C0的默认映射。
         // 当前PVF town62 Stadium.twn 区域0及map的enter tagdungeon入口；等级/任务继续由Decide校验。
         if (type == 53)

@@ -129,8 +129,8 @@ internal static class ChannelAreaLandingTests
         var lukePlaced = CharacterSelection.Prepare(repo, owner, lukeHigh, towns, none, null, false, null, channel: luke);
         That(lukePlaced.Position == towns.Room, "卢克频道选角先进赛丽亚房间");
         var lukeExit = TownTravel.LeaveRoom(lukePlaced, towns, none, luke);
-        That(lukeExit.Position is { Town: 32, Area: 0, X: 474, Y: 234 } && lukeExit.Return == (ChannelAreaLanding.IsChannelBoundTown(towns, 32) ? lukePlaced.Return : towns.ResolveRoomReturn(lukeExit.Position!, lukeExit.Position, 95, none)),
-            "赛丽亚房间出门到卢克 32/0 门口，返回地区与原落点规则一致");
+        That(lukeExit.Position is { Town: 32, Area: 3, X: 754, Y: 211 } && lukeExit.Return == (ChannelAreaLanding.IsChannelBoundTown(towns, 32) ? lukePlaced.Return : towns.ResolveRoomReturn(lukeExit.Position!, lukeExit.Position, 95, none)),
+            "赛丽亚房间一次出门到卢克街区32/3，不再经32/0房间中转");
         That(TownTravel.LeaveRoom(lukeStayedProbe(repo, owner, towns), towns, none, luke).Position is { Town: var lowTown } && lowTown != 32, "卢克等级不足时按存档返回地区出门");
         var lukeLow = repo.Create(owner, new("Luke85", towns.Room, towns.InitialReturn) { Level = 85 });
         var lukeStayed = CharacterSelection.Prepare(repo, owner, lukeLow, towns, none, null, false, null, channel: luke);
