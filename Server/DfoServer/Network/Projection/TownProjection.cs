@@ -47,11 +47,11 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     internal GuildNpcProjection? GuildNpcs { get; set; }
     internal GuildDungeonProjection? GuildDungeons { get; set; }
     readonly TimeProvider timer = clock ?? TimeProvider.System;
-    internal async Task PvpGradeRecoveredAsync(GameConnectionContext context, Character expected, long epoch, byte before)
+    internal async Task PvpGradeRecoveredAsync(GameConnectionContext context, Character expected, long epoch, DfoServer.Game.Pvp.PvpDisplayGrade before)
     {
         bool Current() => context.Owner.Execute(() => context.Session.Ready &&
             context.Session.SelectionEpoch == epoch && ReferenceEquals(context.Session.Selected, expected));
-        var after = context.Owner.Execute<byte?>(() => Current() ? context.Session.ReadPvpGrade(expected) : null);
+        var after = context.Owner.Execute<DfoServer.Game.Pvp.PvpDisplayGrade?>(() => Current() ? context.Session.ReadPvpGrade(expected) : null);
         if (after is not { } grade || grade == before) return;
         // 复用登录后的既有恢复时序；仅等级变化时更新本人Actor，不推进评分或替换角色引用。
         await context.Notify(NotiPacketType.USERINFO,

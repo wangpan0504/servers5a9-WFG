@@ -12,10 +12,12 @@ internal sealed partial class GameSession
     public Func<PvpArenaResultDelivery, bool>? PvpArenaResultArrived { get; set; }
 
     // 在本账号owner内只读捕获评分；公开快照携带结果，广播不再访问其他账号或仓储。
-    internal byte ReadPvpGrade(DfoServer.Game.Characters.Character character) => owner.Execute(() =>
+    internal PvpDisplayGrade ReadPvpGrade(DfoServer.Game.Characters.Character character) => owner.Execute(() =>
     {
         if (Selected?.Id != character.Id) throw new InvalidOperationException("Stale pvp grade character");
-        return pvpRatings is null ? (byte)0 : checked((byte)pvpRatings.Grade(pvpRatings.Capture(owner, character.Id)));
+        if (pvpRatings is null) return default;
+        var rating = pvpRatings.Capture(owner, character.Id);
+        return new PvpDisplayGrade(checked((byte)pvpRatings.Grade(rating)), rating.State.PowerTitle);
     });
 
     internal bool RecoverPvpRatings(PvpRatingSettlement ratings) => owner.Execute(() =>

@@ -941,7 +941,7 @@ internal sealed partial class TcpPeer : IDisposable
         ushort[]? tagEvildom = null, byte[][]? echonSets = null, byte[]? pvpTotalTeam = null, bool premiumPcRoom = false,
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
-        byte? recoveredPvpGrade = null)
+        byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1232,7 +1232,7 @@ internal sealed partial class TcpPeer : IDisposable
         TestCheck.That(packets.Single(p => p is { Kind: 0, Opcode: 124 }).Body.Length == 0, "entry complete body empty");
         if (expertJobInfo is not null) Expect(0, 205, expertJobInfo);
         if (recoveredPvpGrade is { } recoveredGrade)
-            TownPresenceTcpTests.PvpGrade(Expect(0, 2).Body, recoveredGrade);
+            TownPresenceTcpTests.PvpGrade(Expect(0, 2).Body, recoveredGrade, recoveredPowerTitle);
         if (PvpEntry)
         {
             PvpMissions = Expect(0, 323).Body;
