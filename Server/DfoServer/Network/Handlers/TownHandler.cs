@@ -28,7 +28,7 @@ internal sealed class TownHandler(TownProjection projection, ServerLog log, TagE
         bool moved = session.Move(position ? movement : movement with { Movement = 0 });
         log.Write("position", new { Connection = context.Id, Accepted = moved, Character = session.Selected?.Id, session.Selected?.Position, session.Selected?.Revision });
         if (moved && (position || session.Selected!.Position != before))
-            projection.Move(context, position ? movement.ScaledSpeed : (ushort)100);
+            projection.Move(context, movement.ScaledSpeed);
         return Task.FromResult(CommandResult.Handled);
     }
 

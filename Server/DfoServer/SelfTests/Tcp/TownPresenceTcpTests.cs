@@ -170,7 +170,7 @@ internal static class TownPresenceTcpTests
             alpha.Send(631, motion);
             alpha.Barrier();
             beta.SendBarrier();
-            beta.Expect(0, 22, Position(alpha.Id, 634, 196, direction: 5));
+            beta.Expect(0, 22, Position(alpha.Id, 634, 196, direction: 5, speed: 513));
             beta.Expect(1, 1347, [1]);
             alpha.Send(35, Move(633, 196));
             alpha.Barrier();
