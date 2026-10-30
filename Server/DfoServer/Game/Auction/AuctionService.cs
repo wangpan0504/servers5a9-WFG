@@ -510,7 +510,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         }
         // 挂牌表把物品种类单独存了一列（条目字节里没有它）：与模板对不上说明这行是坏的，
         // 此时不能动状态（道具会真的消失），明确按「数据不可用」拒绝。
-        if (!InventoryTalismanCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template.Kind))
+        if (!InventoryKindCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template))
             return AuctionCancelDecision.Reject(AuctionCancelError.Unavailable,
                 $"挂牌记录的物品种类 {listing.ItemKind} 与模板 {listing.ItemTemplateId} 的 {template.Kind} 不符");
         ItemCore core;
@@ -617,7 +617,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         {
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable, $"模板解析失败（{error.GetType().Name}）：{error.Message}");
         }
-        if (!InventoryTalismanCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template.Kind))
+        if (!InventoryKindCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template))
             return AuctionBuyDecision.Reject(AuctionBuyError.Unavailable,
                 $"挂牌记录的物品种类 {listing.ItemKind} 与模板 {listing.ItemTemplateId} 的 {template.Kind} 不符");
         ItemCore core;
@@ -631,7 +631,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
         }
         // 托管邮件只能装普通实体：钱包货币与史诗碎片走账号钱包，不能借邮件托管（与邮箱投递同一口径）。
         bool legacyRune = core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
-        if (core.ItemId != listing.ItemTemplateId || !InventoryTalismanCompatibility.AcceptsKind(core.Kind, template.Kind) || core.Count <= 0 ||
+        if (core.ItemId != listing.ItemTemplateId || !InventoryKindCompatibility.AcceptsKind(core.Kind, template) || core.Count <= 0 ||
             core.Count != listing.ItemCount || !legacyRune && core.Count > template.StackLimit || core.IsExpired(now) ||
             CurrencyWallet.RewardKind(core.ItemId) is not null || pieces.ByPiece.ContainsKey(core.ItemId))
         {
@@ -766,7 +766,7 @@ internal sealed class AuctionService(IAuctionListingStore store, AuctionCategory
                 skipped.Add($"挂牌 {listing.ListingId}：模板解析失败（{error.GetType().Name}）");
                 continue;
             }
-            if (!InventoryTalismanCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template.Kind))
+            if (!InventoryKindCompatibility.AcceptsKind((ItemKind)listing.ItemKind, template))
             {
                 skipped.Add($"挂牌 {listing.ListingId}：物品种类 {listing.ItemKind} 与模板 {listing.ItemTemplateId} 的 {template.Kind} 不符");
                 continue;

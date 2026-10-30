@@ -50,7 +50,7 @@ internal static class TalismanInventoryTests
         var legacyRune = new InventoryItem(20, new(InventoryListType.Main, 65), new(RuneId, ItemKind.Consumable, 2001)
         { SortLockFlag = 1, EquipmentLockId = 4, Extension97 = 123 });
         var old = Character(legacyStone, legacyRune);
-        var migrated = InventoryTalismanCompatibility.Plan(old, catalog);
+        var migrated = InventoryKindCompatibility.Plan(old, catalog);
         var migratedRunes = migrated.Plan!.After.Items.Where(item => item.Core.Kind == ItemKind.Rune).ToArray();
         That(migrated.Accepted && migrated.Plan.Before == old.Inventory && old.Inventory.Items[0] == legacyStone &&
             old.Inventory.Items[1] == legacyRune && migrated.Plan.After.Find(new(InventoryListType.Talisman, 0)) is { Uid: 10 } migratedStone &&
@@ -60,12 +60,12 @@ internal static class TalismanInventoryTests
             migratedRunes.All(item => item.Core.EquipmentLockId == 4 && item.Core.Extension97 == 123), "历史超限符文守恒拆分，额外堆叠不复用原UID");
         var cargoRune = legacyRune with { Position = new(InventoryListType.AccountCargo, 2) };
         var cargo = Character(cargoRune) with { Inventory = new([cargoRune]) { AccountCargo = new(Capacity: 4) } };
-        var cargoResult = InventoryTalismanCompatibility.Plan(cargo, catalog);
+        var cargoResult = InventoryKindCompatibility.Plan(cargo, catalog);
         That(cargoResult.Accepted && cargoResult.Plan!.After.Items.All(item => item.Position.List == InventoryListType.AccountCargo) &&
             cargoResult.Plan.After.Find(cargoRune.Position)?.Uid == cargoRune.Uid && cargoResult.Plan.AccountCargoChanged,
             "账号仓库旧符文保持账号所有权及原格，拆分参与共享版本提交");
         var fullStones = Enumerable.Range(0, 70).Select(slot => StoneItem(slot + 100, (short)slot)).Append(legacyStone).ToArray();
-        var noSpace = InventoryTalismanCompatibility.Plan(Character(fullStones), catalog);
+        var noSpace = InventoryKindCompatibility.Plan(Character(fullStones), catalog);
         That(!noSpace.Accepted && noSpace.Plan is null && fullStones[^1] == legacyStone, "专用背包不足时迁移整批拒绝，不丢旧资产");
         var incoming = InventoryRewardGrantService.TryGrantItems(empty, [legacyStone with { Core = originalCore with { EquipmentLockId = 0 } },
             legacyRune with { Core = legacyRune.Core with { EquipmentLockId = 0 } }], catalog, Limits, Pieces, DateTimeOffset.FromUnixTimeSeconds(Now));

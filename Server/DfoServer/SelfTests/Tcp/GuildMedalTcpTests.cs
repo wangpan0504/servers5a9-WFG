@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
@@ -15,6 +17,7 @@ internal static class GuildMedalTcpTests
         var itemResources = resources.ItemResources;
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "guild-medals"), resources: resources);
         var repo = new CharacterRepository(fixture.Database);
+        long legacyUid;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var role = repo.Create(owner, new("MedalTcp", resources.Towns.Room, resources.Towns.InitialReturn)
@@ -22,8 +25,13 @@ internal static class GuildMedalTcpTests
                 Level = 95, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(0).Skills
             });
             var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-            InventoryService.Commit(repo, owner, role, service.Grant(role, [new(100380044, 2), new(90000, 2), new(90001, 1), new(90032, 2),
+            role = InventoryService.Commit(repo, owner, role, service.Grant(role, [new(100380044, 2), new(90000, 2), new(90001, 1), new(90032, 2),
                 new(490011648, 100)]));
+            var coin = role.Inventory.Find(new(InventoryListType.Main, 177))!;
+            legacyUid = coin.Uid;
+            var legacy = coin with { Position = new(InventoryListType.Main, 121), Core = coin.Core with { Kind = ItemKind.Material } };
+            InventoryService.Commit(repo, owner, role, new(true, 0, new(role.Inventory,
+                role.Inventory with { Items = role.Inventory.Items.Replace(coin, legacy) }, "legacy-guild-coin-fixture", new(role))));
         }
         int cost = itemResources.MedalUpgrades.Rules.CoinCost(itemResources.Items.Get(100380044).Rarity, 1);
         await fixture.StartAsync();
@@ -32,15 +40,26 @@ internal static class GuildMedalTcpTests
             peer.Select();
             var list = peer.SpecialContainers[3].Body;
             That(list.Length == 618 && list[0] == 38 && U16(list, 1) == 5, "nonempty medal/gem list has 123B entries");
-            peer.Send(80, EnhancementTests.Request(0, 38, 0, 100380044, 121, []));
+            That(fixture.Query("SELECT i.item_uid,json_extract(i.item_core,'$.Kind'),json_extract(i.item_core,'$.Value') " +
+                "FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=177", peer.Id)
+                is [[long uid, long kind, 100L]] && uid == legacyUid && kind == (int)ItemKind.Quest,
+                "选角通过真实库存事务归一旧材料硬币，保留原UID和100枚数量");
+            peer.Send(19, Move(0, 177, 490011648, 0, 178, 0));
+            peer.Expect(1, 19, MoveAck(0, 177, 0, 178)); peer.Expect(0, 13);
+            peer.Send(19, Move(0, 178, 490011648, 0, 177, 490011648));
+            peer.Expect(1, 19, MoveAck(0, 178, 0, 177)); peer.Expect(0, 14); peer.Expect(0, 13); peer.Barrier();
+            That(fixture.Query("SELECT i.item_uid,json_extract(i.item_core,'$.Value') FROM character_inventory_items i " +
+                "JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=177", peer.Id)
+                is [[long movedUid, 100L]] && movedUid == legacyUid, "任务页拆分再合堆保留原硬币UID和总数");
+            peer.Send(80, EnhancementTests.Request(0, 38, 0, 100380044, 177, []));
             var upgrade = peer.Expect(1, 80).Body;
-            That(upgrade.Length == 27 && upgrade[0] == 1 && upgrade[1] == 0 && U16(upgrade, 2) == 121 &&
+            That(upgrade.Length == 27 && upgrade[0] == 1 && upgrade[1] == 0 && U16(upgrade, 2) == 177 &&
                 U32(upgrade, 4) == 100 - cost && U16(upgrade, 8) == ushort.MaxValue && upgrade[10] == 0 && upgrade[11] == 0 &&
                 upgrade[12] == 0 && upgrade[13] == 1 && upgrade[14] == 38 && U16(upgrade, 15) == 0 &&
                 U16(upgrade, 17) == ushort.MaxValue && U16(upgrade, 19) == ushort.MaxValue && U32(upgrade, 21) == 0 &&
                 upgrade[25] == 0 && upgrade[26] == 0, "CMD80勋章+0必成回包带回列表38槽位与公会硬币绝对余量");
             peer.Barrier();
-            peer.Send(80, EnhancementTests.Request(0, 38, 0, 100380045, 121, []));
+            peer.Send(80, EnhancementTests.Request(0, 38, 0, 100380045, 177, []));
             peer.Expect(1, 80, [0, 23, 0]);
             peer.Barrier();
             peer.Send(19, Move(38, 1, 100380044, 0, 3, 0));

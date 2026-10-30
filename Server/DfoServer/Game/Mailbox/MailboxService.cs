@@ -256,7 +256,7 @@ internal sealed class MailboxService(IMailboxStore store, ItemCatalog items, Gol
                 return MailboxResult.Reject(MailboxError.InvalidAttachment);
             var template = items.Get(item.Core.ItemId);
             bool legacyRune = item.Core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
-            if (!InventoryTalismanCompatibility.AcceptsKind(item.Core.Kind, template.Kind) || !walletMaterial && !legacyRune && item.Core.Count > template.StackLimit ||
+            if (!InventoryKindCompatibility.AcceptsKind(item.Core.Kind, template) || !walletMaterial && !legacyRune && item.Core.Count > template.StackLimit ||
                 walletMaterial && (template.Kind != ItemKind.Material || item.ExpireTime != 0))
                 return MailboxResult.Reject(MailboxError.InvalidAttachment);
         }
