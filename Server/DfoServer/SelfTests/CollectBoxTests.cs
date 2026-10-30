@@ -39,6 +39,20 @@ internal static class CollectBoxTests
         [/collect box info]
         """;
 
+
+    const string Spring2020CatalogText = """
+        [collect box info]
+        [index] 8
+        [base expiration date] `2020-12-31 06:00:00`
+        [max expiration date] `2020-12-31 06:00:00`
+        [item position info]
+        3 3
+        490705309 6 490705314 6 490705310 6
+        490705307 6 490705306 6 490705308 6
+        490705312 6 490705313 6 490705311 6
+        [/collect box info]
+        """;
+
     public static void RunCore()
     {
         int before = Count;
@@ -79,6 +93,8 @@ internal static class CollectBoxTests
         That(permanent[1] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(permanent.AsSpan(2)) == 0 &&
             permanent[6] == 1, "无期限箱使用永久标志");
 
+        RunSpring2020Permanent();
+
         That(CollectBoxRequests.Select([2]) == 2 &&
             CollectBoxRequests.Add([2, 0, 7, 0, 104, 0, 0, 0]) == new CollectBoxAddRequest(2, 7, 104) &&
             CollectBoxRequests.Remove([2, 104, 0, 0, 0]) == new CollectBoxRemoveRequest(2, 104) &&
@@ -94,6 +110,58 @@ internal static class CollectBoxTests
             var character = new Character(1, 0, "CollectWire", 1, new(1, 1, 0, 0, 0), null);
             var inventory = new InventoryPlan(character.Inventory, character.Inventory, "collectbox_test");
             return CollectBoxResult.Accept(new(character, character.CollectBox, inventory));
+        }
+    }
+
+    static void RunSpring2020Permanent()
+    {
+        var box = new CollectBoxCatalog(Spring2020CatalogText).Get(8);
+        long cutoff = new DateTimeOffset(2020, 12, 31, 6, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds();
+        var old = CollectBoxState.Empty.Select(8).Add(8, 0, 490705309).Extend(8, cutoff - 1);
+        var packet = CollectBoxPackets.State(box, old, 8, cutoff + 1);
+        That(packet[6] == 1 && BinaryPrimitives.ReadUInt32LittleEndian(packet.AsSpan(2)) == 0,
+            "2020九珠箱常驻：历史过期存档仍发送永久位1和剩余0，避免原生消费者跳过属性");
+        That(box.BaseExpiration == cutoff && box.MaximumExpiration == cutoff && old.Expiration(8) == cutoff - 1 &&
+            packet[0] == 8 && packet[1] == 1 && packet[7] == 1 &&
+            BinaryPrimitives.ReadInt32LittleEndian(packet.AsSpan(8)) == 490705309,
+            "常驻解释保留资源声明、历史存档、选中状态和真实珠列表");
+        var beforeCutoff = CollectBoxPackets.State(box, CollectBoxState.Empty, 0, cutoff - 1);
+        That(beforeCutoff[1] == 0 && beforeCutoff[6] == 1 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(beforeCutoff.AsSpan(2)) == 0,
+            "常驻与活动时钟跨截止、是否选中和是否已有珠分离");
+
+        var nine = old;
+        foreach (var slot in box.Slots.Skip(1))
+            nine = nine.Add(8, slot.PhysicalSlot, slot.ItemId);
+        var full = CollectBoxPackets.State(box, nine, 8, cutoff + 86400);
+        var removed = nine.Remove(8, 0, 490705309);
+        var emptySlot = CollectBoxPackets.State(box, removed, 8, cutoff + 86400);
+        var readded = removed.Add(8, 0, 490705309);
+        Bytes(CollectBoxPackets.State(box, readded, 8, cutoff + 86400), full,
+            "九珠取下后重新放入按真实状态完整重放，不累积影子属性");
+        That(full[7] == 9 && emptySlot[7] == 8 && emptySlot[6] == 1 &&
+            Enumerable.Range(0, 9).Select(at => BinaryPrimitives.ReadInt32LittleEndian(full.AsSpan(8 + at * 4)))
+                .SequenceEqual(box.Slots.Select(slot => slot.ItemId)) &&
+            !Enumerable.Range(0, 8).Select(at => BinaryPrimitives.ReadInt32LittleEndian(emptySlot.AsSpan(8 + at * 4)))
+                .Contains(490705309), "常驻不改变九珠物理顺序，取下通知移除准确珠");
+        Bytes(CollectBoxPackets.State(box, old, 8, cutoff + 1), packet,
+            "另一个状态快照的九珠变更不污染原角色单珠快照");
+
+        CollectBoxEntry[] otherDefinitions =
+        [
+            new(9, 3, 3, cutoff, cutoff, box.Slots, []),
+            new(8, 1, 9, cutoff, cutoff, box.Slots, []),
+            new(8, 3, 3, cutoff, cutoff, box.Slots.SetItem(0, box.Slots[0] with { ItemId = 10007322 }), []),
+            new(8, 3, 3, cutoff, cutoff, box.Slots.SetItem(0, box.Slots[0] with { Metadata = 7 }), []),
+            new(8, 3, 3, cutoff, cutoff, box.Slots.SetItem(0, box.Slots[0] with { PhysicalSlot = 9 }), []),
+            new(8, 3, 3, cutoff, cutoff, box.Slots, [new(10007322, 1)])
+        ];
+        foreach (var other in otherDefinitions)
+        {
+            var unchanged = CollectBoxPackets.State(other, old, 0, cutoff + 1);
+            That(other.ResolveExpiration(cutoff - 1) == cutoff - 1 && unchanged[6] == 0 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(unchanged.AsSpan(2)) == uint.MaxValue,
+                "其它编号、几何或珠定义保留历史期限，不按index8泛化永久");
         }
     }
 
