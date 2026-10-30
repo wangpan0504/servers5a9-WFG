@@ -28,13 +28,15 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         if (document.Sections.Any(section => section.Children.Length != 0)) structureErrors.Add("恢复物品含未确认的嵌套声明");
         var errors = new List<string>(structureErrors);
         foreach (var duplicate in document.Sections.GroupBy(section => section.Name).Where(group => group.Count() != 1))
-            errors.Add("重复恢复物品字段：" + duplicate.Key);
+            if (duplicate.Key is not ("cool time" or "cooltime group") || !CompleteIntegerScalars(duplicate))
+                errors.Add("重复恢复物品字段：" + duplicate.Key);
         int? Scalar(string name)
         {
             var sections = document.Sections.Where(section => section.Name == name).ToArray();
             if (sections.Length == 0) return null;
-            if (sections is [{ Children.Length: 0, Values.Length: 1 }] && sections[0].Values[0].Type == 0)
-                return sections[0].Values[0].Value;
+            // 原客户端按脚本顺序直接赋值冷却标量，后声明覆盖前声明；畸形声明不参与兼容。
+            if ((sections.Length == 1 || name is "cool time" or "cooltime group") && CompleteIntegerScalars(sections))
+                return sections[^1].Values[0].Value;
             errors.Add("恢复物品整数声明不完整：" + name);
             return null;
         }
@@ -67,6 +69,9 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
             ExpBonusMilliseconds = duration is { Target: "myself" } ? duration.Milliseconds : null,
             StatChangeDuration = duration, EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits };
     }
+
+    static bool CompleteIntegerScalars(IEnumerable<PvfTokenSection> sections) =>
+        sections.All(section => section is { Children.Length: 0, Values: [{ Type: 0 }] });
 
     static int? ExpBonus(PvfTokenDocument document, string field, List<string> errors)
     {

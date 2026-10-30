@@ -38,7 +38,8 @@ internal static partial class ConsumableUseTcpTests
                     .Add(new(0, new(InventoryListType.Main, 66), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1113), 2)))
                     .Add(new(0, new(InventoryListType.Main, 67), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1016), 2)))
                     .Add(new(0, new(InventoryListType.Main, 68), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(6001), 2)))
-                    .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1073), 2))) } });
+                    .Add(new(0, new(InventoryListType.Main, 69), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(1073), 2)))
+                    .Add(new(0, new(InventoryListType.Main, 70), InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(2600021), 2))) } });
             activeId = created.Id;
             repository.Create(owner, candidate with { Name = "DungeonDose", Level = 20, InitialLearning = learning,
                 Inventory = candidate.Inventory with { Gold = checked((uint)resources.ItemResources.DevilContracts.RecoveryPrices[19]), Items = candidate.Inventory.Items
@@ -157,6 +158,10 @@ internal static partial class ConsumableUseTcpTests
             That(Count(65) == 2, "成功44原子扣指定源1件，ACK后只有合法屏障，无先行源14或伪造HP包");
             Use(peer, 65, 1, 1108); Refused(peer, 1, 1108); peer.Barrier();
             That(Count(65) == 2, "同组冷却拒绝保持连接及数量");
+            Use(peer, 70, 0, 2600021); Accepted(peer, 70, 0, 2600021); peer.Barrier();
+            That(Count(70) == 1, "精神刺激灵药经真实44应答并提交扣同UID一件");
+            Use(peer, 70, 1, 2600021); Refused(peer, 1, 2600021); peer.Barrier();
+            That(Count(70) == 1, "精神刺激原30分钟冷却生效，拒绝不扣件且连接可继续使用其它组物品");
             Use(peer, 66, 0, 1113); Accepted(peer, 66, 0, 1113); peer.Barrier();
             That(Count(66) == 1, "现场1113正常扣1件，组1不与组0别名，不因练习规则漏扣普通使用");
             Use(peer,67,0,1016); Accepted(peer,67,0,1016); peer.Barrier();
