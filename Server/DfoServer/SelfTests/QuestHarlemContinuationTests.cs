@@ -73,7 +73,7 @@ internal static class QuestHarlemContinuationTests
             That(branch.Session.ChangeQuest(6217,QuestLifecycleAction.Accept,quests,items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,
                 "哈林后旅程选择可真实接取");
             AtNpc(branch,question);
-            That(branch.Session.ChangeQuest(6217,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,answer,0))?.Commit is not null,
+            That(branch.Session.ChangeQuest(6217,QuestLifecycleAction.Condition,quests,items.Items,items.GoldLimits,items.EpicPieces,new(null,0,answer))?.Commit is not null,
                 "哈林后长短旅程真实回答 "+answer);
             That(branch.Session.FinishQuest(6217,ushort.MaxValue,quests,parameters,items.Items,items.GoldLimits,items.EpicPieces,growth).Receipt?.Commit is not null,
                 "旅程回答真实落库 "+answer);

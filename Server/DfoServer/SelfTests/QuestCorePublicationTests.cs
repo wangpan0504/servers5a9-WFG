@@ -152,7 +152,7 @@ internal static class QuestCorePublicationTests
                     {
                         That(f.Finish(ushort.MaxValue).Outcome == QuestFinishOutcome.Rejected && Same(accepted,f.Read()) && f.Receipts == 0,
                             "离开场景规则修复不放行未达成的目标："+quest.Condition);
-                        var condition = quest.Condition == "[question]" ? new QuestClientCondition(null,1,0) :
+                        var condition = quest.Condition == "[question]" ? new QuestClientCondition(null,0,1) :
                             new QuestClientCondition(quest.Condition == "[seek n meet npc]" ? (byte)0x20 : null,0,0);
                         That(f.Change(100,QuestLifecycleAction.Condition,condition)?.Commit is not null,
                             "真实源场景通过原进度入口保存目标："+quest.Condition);

@@ -135,7 +135,7 @@ internal static class MetroQuestEntryCoverageTests
                         "阵营问题不能从准备阶段注入答案：" + faction);
                     Accept(f, question.Id);
                     That(f.Session.ChangeQuest(checked((ushort)question.Id), QuestLifecycleAction.Condition, quests,
-                        items.Items, items.GoldLimits, items.EpicPieces, new(null, checked((byte)answer.Answer), 0))?.Commit is not null,
+                        items.Items, items.GoldLimits, items.EpicPieces, new(null, 0, checked((byte)answer.Answer)))?.Commit is not null,
                         "原NPC场景回答真实问题：" + question.Id);
                     Finish(f, question.Id);
                     That(f.Read().QuestAnswers.TryGetValue(question.Id, out byte saved) && saved == answer.Answer,
