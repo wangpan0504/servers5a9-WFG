@@ -144,7 +144,11 @@ internal static class CashShopPromotionTests
             "活动数超过16拒绝整个配置");
         var omittedEnabled = CashShopPromotionCatalog.Parse(Json(disabled).Replace("\"Enabled\":false,", ""), shop, Template);
         That(omittedEnabled.Product(105681)?.Availability == PromotionAvailability.Disabled, "未声明Enabled默认关闭");
-        var shipped = CashShopPromotionCatalog.Load(Path.Combine(AppContext.BaseDirectory, "Resources", "cash-shop-promotions.json"), shop, Template);
+        That(typeof(DfoServer.Infrastructure.ServerRuntime).Assembly
+                .GetManifestResourceStream("DfoServer.Resources.cash-shop-promotions.json") is not null,
+            "促销配置随程序集打包，单文件发行包不依赖外置文件");
+        var shipped = CashShopPromotionCatalog.Parse(
+            DfoServer.Infrastructure.ServerRuntime.ReadShippedPromotionConfig(), shop, Template);
         var shippedEntry = shipped.Activities[0];
         That(shipped.Activities.Length == 1 && shippedEntry.Error is null &&
             shippedEntry.Policy is { IsPermanent: false } shippedPolicy && shippedPolicy.CounterScope == rules.Scope &&
