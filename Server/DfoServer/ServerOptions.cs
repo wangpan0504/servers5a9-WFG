@@ -22,6 +22,8 @@ internal sealed record ServerOptions
     public int GmPort { get; init; }
     // 嵌入服务进程的 GM 网页站点；0 表示关闭。监听固定在 127.0.0.1。
     public int GmWebPort { get; init; }
+    // 充值页独立于管理开关，正式启动默认HTTP80；测试可分配隔离端口。
+    public int RechargeWebPort { get; init; } = 80;
     public int PacketHttpPort { get; init; }
     public string PvfPath { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data", "Pvf", "Script.pvf");
     public string DataDirectory { get; init; } = Path.Combine(AppContext.BaseDirectory, "Data");
@@ -66,6 +68,7 @@ internal sealed record ServerOptions
                     "--channel-entry-port-base" => value with { ChannelEntryPortBase = Number(argument, name) },
                     "--gm-port" => value with { GmPort = Number(argument, name) },
                     "--gm-web-port" => value with { GmWebPort = Number(argument, name) },
+                    "--recharge-web-port" => value with { RechargeWebPort = Number(argument, name) },
                     "--packet-http-port" => value with { PacketHttpPort = Number(argument, name) },
                     "--pvf-path" => value with { PvfPath = StoragePath(argument, name) },
                     "--data-dir" => value with { DataDirectory = StoragePath(argument, name) },
@@ -102,6 +105,10 @@ internal sealed record ServerOptions
             (new[] { value.ChannelPort, value.GamePort, value.GmPort, value.GmWebPort, value.PacketHttpPort }.Contains(value.NativePort) ||
              value.ChannelEntryPortBase != 0 && value.NativePort == value.ChannelEntryPortBase))
             throw new InvalidDataException("Invalid native port configuration");
+        if (value.RechargeWebPort is < 1 or > 65535 ||
+            new[] {value.ChannelPort,value.GamePort,value.NativePort,value.GmPort,value.PacketHttpPort}.Contains(value.RechargeWebPort) ||
+            value.ChannelEntryPortBase != 0 && value.ChannelEntryPortBase == value.RechargeWebPort)
+            throw new InvalidDataException("Invalid recharge web port configuration");
         // 种子逐条写库并在启动时构造条目快照，必须有上限；0 表示不种子。
         if (value.AuctionSeedCount > 10_000)
             throw new InvalidDataException("--auction-seed 必须在 0..10000 之间");

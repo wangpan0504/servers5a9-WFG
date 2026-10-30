@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>点券充值</title>
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { overflow: auto; }
+    body { margin: 0; color: #555; background: #fff; font: 13px "Microsoft YaHei", Arial, sans-serif; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .5; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #3387dc; outline-offset: 3px; }
+    .page { display: block; width: 760px; max-width: calc(100% - 24px); margin: 0 auto; }
+    .layout { display: table; width: 100%; table-layout: fixed; }
+    .main { display: table-cell; width: 590px; max-width: 100%; vertical-align: top; }
+    .tabs { height: 32px; white-space: nowrap; background: #f5f5f5; border-bottom: 1px solid #d9d9d9; }
+    .tab { width: 50%; height: 32px; padding: 0; border: 0; border-top: 2px solid transparent; background: transparent; color: #666; font-size: 14px; }
+    .tab + .tab { border-left: 1px solid #ebebeb; }
+    .tab[aria-selected="true"] { background: #fff; border-top-color: #3387dc; color: #555; }
+    .account { margin: 12px 32px 6px; line-height: 24px; overflow-wrap: anywhere; word-wrap: break-word; }
+    .account strong { color: #555; font-weight: 400; }
+    .link { padding: 0 3px; border: 0; background: transparent; color: #548bc3; }
+    .link:hover { text-decoration: underline; }
+    .account-input { width: 188px; max-width: 100%; height: 28px; padding: 0 7px; border: 1px solid #ccc; }
+    .balance { margin: 0 32px 12px; min-height: 32px; color: #888; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; word-wrap: break-word; }
+    .balance b { color: #555; font-weight: 400; }
+    .status-error { color: #b8513d; }
+    .amount-section { padding: 0 32px; }
+    .amount-grid { display: table; width: 100%; border-spacing: 8px 0; table-layout: fixed; }
+    .tile { position: relative; display: table-cell; height: 64px; padding: 8px 3px; border: 1px solid #e6e6e6; text-align: center; vertical-align: middle; background: #fff; color: #777; }
+    .tile.selected { border-color: #3387dc; }
+    .tile.selected:after { content: ""; position: absolute; top: 0; right: 0; border-top: 15px solid #3387dc; border-left: 15px solid transparent; }
+    .tile input[type="radio"] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .tile label { display: block; cursor: pointer; }
+    .coin { display: inline-block; width: 17px; height: 17px; margin-right: 6px; line-height: 15px; background: #f1ecda; border: 1px solid #c8b987; border-radius: 50%; color: #796638; font-size: 10px; vertical-align: 2px; }
+    .points { display: inline-block; color: #4e4e4e; font-size: 17px; line-height: 25px; }
+    .price { display: block; margin-top: 4px; font-size: 12px; }
+    .custom { width: 48px; min-width: 0; height: 21px; padding: 0 2px; border: 0; border-bottom: 1px solid #ddd; border-radius: 0; color: #555; background: transparent; text-align: center; }
+    .custom-price { display: block; margin-top: 4px; font-size: 12px; white-space: nowrap; }
+    .note { margin: 6px 8px 0; color: #999; font-size: 11px; line-height: 1.5; }
+    .target { margin: 16px 32px 0; line-height: 28px; }
+    .method { display: inline-block; min-height: 27px; padding: 0 8px; border: 1px solid transparent; background: #fff; color: #757575; line-height: 25px; }
+    .method[aria-pressed="true"] { border-color: #d2d2d2; background: #fcfcfc; }
+    .mark { display: inline-block; width: 17px; height: 17px; margin-right: 6px; line-height: 17px; border-radius: 3px; color: #fff; font-size: 10px; font-weight: bold; }
+    .uid { background: #27ac6a; } .name { background: #348fe1; }
+    .purchase { margin: 12px 32px 16px; }
+    .primary { min-height: 33px; padding: 0 18px; border: 1px solid #3387dc; border-radius: 2px; background: #3387dc; color: #fff; }
+    .primary:hover:enabled { background: #2378c7; }
+    .secondary { min-height: 33px; padding: 0 13px; border: 1px solid #d7d7d7; border-radius: 2px; background: #fff; color: #666; }
+    .members { padding: 0 32px; }
+    .members h2 { margin: 0 0 8px; color: #666; font-size: 13px; font-weight: 400; }
+    .membership-grid { display: table; width: 100%; border-spacing: 8px 0; table-layout: fixed; }
+    .member { display: table-cell; }
+    .member button { width: 100%; min-height: 64px; padding: 8px 3px; border: 1px solid #e6e6e6; background: #fff; color: #555; }
+    .member button[aria-pressed="true"] { border-color: #3387dc; }
+    .member strong { font-size: 15px; font-weight: 400; }
+    .member span { display: block; margin-top: 6px; color: #888; font-size: 12px; }
+    .side { display: table-cell; width: 170px; padding: 14px 12px 16px; border-left: 1px solid #ededed; color: #888; font-size: 11px; line-height: 1.7; vertical-align: bottom; }
+    .tips-title { margin-bottom: 6px; color: #aa8a5d; }
+    .side ul { margin: 0; padding-left: 14px; }
+    .side li + li { margin-top: 4px; }
+    .overlay { position: fixed; z-index: 2; top: 0; right: 0; bottom: 0; left: 0; padding: 42px 14px 20px; overflow: auto; background: rgba(20,30,40,.32); }
+    .dialog { width: 350px; max-width: 100%; margin: 0 auto; border: 1px solid #ddd; border-radius: 3px; background: #fff; box-shadow: 0 12px 42px rgba(0,0,0,.18); }
+    .dialog-head { position: relative; padding: 13px 42px 13px 16px; border-bottom: 1px solid #eee; }
+    .dialog-head h2 { margin: 0; font-size: 15px; font-weight: 400; }
+    .close { position: absolute; top: 8px; right: 10px; width: 28px; height: 28px; border: 0; background: transparent; color: #888; font-size: 21px; }
+    .dialog-body { padding: 16px; text-align: center; overflow-wrap: anywhere; word-wrap: break-word; }
+    .dialog-body p { margin: 0 0 12px; line-height: 1.7; }
+    .dialog-price { color: #d66a45; font-size: 19px; }
+    .actions button { margin: 3px; }
+    .success-icon { display: inline-block; width: 38px; height: 38px; margin-bottom: 10px; border-radius: 50%; background: #42a875; color: #fff; font-size: 21px; line-height: 38px; }
+    .success-title { display: block; margin-bottom: 10px; color: #4e9a71; font-size: 16px; font-weight: 400; }
+    .error { margin-top: 12px !important; color: #b8513d; font-size: 12px; }
+    @media (max-width: 800px) {
+      .layout, .main, .side { display: block; width: 100%; }
+      .side { padding: 10px 18px 12px; border-top: 1px solid #ededed; border-left: 0; }
+      .side ul { padding: 0; list-style: none; }
+      .side li, .side li + li { display: block; margin: 0 0 3px; }
+    }
+    @media (max-width: 520px) {
+      .page { max-width: calc(100% - 16px); }
+      .account { margin: 12px 12px 6px; }
+      .balance { margin-right: 12px; margin-left: 12px; }
+      .amount-section, .members { padding: 0 5px; }
+      .amount-grid, .membership-grid { border-spacing: 5px 0; }
+      .points { font-size: 15px; }
+      .coin { margin-right: 3px; }
+      .tile { padding-right: 1px; padding-left: 1px; }
+      .target { margin: 14px 12px 0; }
+      .purchase { margin: 12px 12px 14px; }
+      .purchase .primary { width: 100%; }
+      .side { padding: 10px 12px; }
+    }
+    @media (max-height: 480px) {
+      .account { margin-top: 8px; }
+      .balance { min-height: 0; margin-bottom: 8px; }
+      .target { margin-top: 10px; }
+      .purchase { margin-top: 10px; margin-bottom: 12px; }
+      .overlay { padding-top: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="layout" aria-label="充值">
+      <div class="main">
+        <div class="tabs" role="tablist" aria-label="充值类型"><button class="tab" id="pointsTab" role="tab" aria-selected="true" aria-controls="pointsContent" type="button">点券充值</button><button class="tab" id="blackTab" role="tab" aria-selected="false" aria-controls="blackContent" type="button">黑钻会员</button></div>
+        <div class="account">
+          <span>充值账号：</span><strong id="accountLabel">—</strong>
+        </div>
+        <div class="balance" aria-live="polite"><div id="balanceStatus">正在读取账号状态…</div><button class="link" id="refreshAccount" type="button">查询余额</button></div>
+        <div id="pointsContent" role="tabpanel" aria-labelledby="pointsTab">
+          <div class="amount-section">
+            <div class="amount-grid" role="radiogroup" aria-label="选择点券数量">
+              <div class="tile"><input id="amount500" type="radio" name="amount" value="500"><label for="amount500"><span class="coin" aria-hidden="true">✦</span><span class="points">500</span><span class="price">5 円</span></label></div>
+              <div class="tile selected"><input id="amount1000" type="radio" name="amount" value="1000" checked><label for="amount1000"><span class="coin" aria-hidden="true">✦</span><span class="points">1000</span><span class="price">10 円</span></label></div>
+              <div class="tile"><input id="amount3000" type="radio" name="amount" value="3000"><label for="amount3000"><span class="coin" aria-hidden="true">✦</span><span class="points">3000</span><span class="price">30 円</span></label></div>
+              <div class="tile"><input id="amountOther" type="radio" name="amount" value="other"><label for="amountOther">其他数量</label><span class="custom-price"><input class="custom" id="customPrice" type="number" min="1" max="21474836" step="1" placeholder="金额" aria-label="自定义金额"><span> 円</span></span></div>
+            </div>
+            <p class="note">充值数量为 100 的倍数，最少 100 点券。</p>
+          </div>
+        </div>
+        <div class="members" id="blackContent" role="tabpanel" aria-labelledby="blackTab" hidden>
+          <h2>选择黑钻会员时长</h2>
+          <div class="membership-grid" role="group" aria-label="选择黑钻时长">
+            <div class="member"><button type="button" data-days="30" data-price="20" aria-pressed="true"><strong>30 天</strong><span>20 円</span></button></div>
+            <div class="member"><button type="button" data-days="90" data-price="50" aria-pressed="false"><strong>90 天</strong><span>50 円</span></button></div>
+            <div class="member"><button type="button" data-days="180" data-price="90" aria-pressed="false"><strong>180 天</strong><span>90 円</span></button></div>
+          </div>
+        </div>
+        <div class="purchase"><button class="primary" id="rechargeButton" type="button" disabled>充值</button><p id="pageError" class="error" role="alert" hidden></p></div>
+      </div>
+      <aside class="side" aria-label="温馨提示"><div class="tips-title">温馨提示：</div><ul><li>免费充值，不收取费用。</li><li>兑换比例：1 円 = 100 点券。</li><li>点券和黑钻由同账号角色共享。</li><li>黑钻有效期内续期将累计时长。</li></ul></aside>
+    </section>
+  </main>
+  <div class="overlay" id="overlay" hidden>
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+      <div class="dialog-head"><h2 id="dialogTitle">确认充值</h2><button class="close" id="closeDialog" type="button" aria-label="关闭">×</button></div>
+      <div class="dialog-body">
+        <div id="payPrompt"><p>账号：<span id="dialogAccount"></span></p><p id="dialogItem"></p><p>金额 <strong class="dialog-price">￥<span id="dialogPrice"></span></strong></p><div class="actions"><button class="primary" id="confirmRecharge" type="button">确认充值</button><button class="secondary" id="backDialog" type="button">返回</button></div></div>
+        <div id="successResult" hidden><span class="success-icon" aria-hidden="true">✓</span><strong class="success-title" id="successTitle">充值成功</strong><p id="successBalance"></p><button class="primary" id="finishDialog" type="button">完成</button></div>
+        <p class="error" id="dialogError" role="alert" hidden></p>
+      </div>
+    </section>
+  </div>
+  <script>
+    (function () {
+      "use strict";
+      var root = "/comm-htdocs/pay/client/dnf/";
+      var account = "", tab = "points", days = 30, memberPrice = 20;
+      var known = false, busy = false, version = 0, pending = null;
+      var ticketContext = null, queryError = false;
+      function el(id) { return document.getElementById(id); }
+      function text(id, value) { el(id).textContent = value; }
+      function showError(id, message) { text(id, message || ""); el(id).hidden = !message; }
+      function each(selector, action) { Array.prototype.forEach.call(document.querySelectorAll(selector), action); }
+      function integer(value) { return isFinite(value) && Math.floor(value) === value; }
+      function identity() { return {ticket: ticketContext.ticket, ticketKey: ticketContext.ticketKey}; }
+      function validTicket() { return ticketContext && !queryError && /^[A-Za-z0-9_-]{1,30}\.[A-Za-z0-9_-]{22}$/.test(ticketContext.ticket) && integer(ticketContext.ticketKey) && ticketContext.ticketKey >= 1 && ticketContext.ticketKey <= 65535; }
+      function updateButtons() { el("rechargeButton").disabled = busy || !known; el("rechargeButton").textContent = tab === "points" ? "充值" : "开通"; }
+      function date(value) { return new Date(value * 1000).toLocaleString(); }
+      function describe(result) { return "点券余额：" + result.cera.toLocaleString() + "　黑钻：" + (result.blackDiamondExpiresAt > new Date().getTime() / 1000 ? date(result.blackDiamondExpiresAt) + " 到期" : "未开通"); }
+      function request(path, body, done) {
+        var xhr = new XMLHttpRequest(), completed = false;
+        function finish(error, data) { if (!completed) { completed = true; done(error, data); } }
+        xhr.open("POST", root + "api/" + path, true);
+        xhr.timeout = 12000;
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.setRequestHeader("X-Recharge-Request", "1");
+        xhr.onload = function () {
+          var data;
+          try { data = JSON.parse(xhr.responseText); } catch (error) { finish("服务回复无效，请查询余额核对结果"); return; }
+          finish(xhr.status === 200 && data.ok ? null : data.error || "请求失败", data);
+        };
+        xhr.onerror = xhr.ontimeout = function () { finish("连接中断，结果未确认，请先查询余额，不要重复提交"); };
+        xhr.send(JSON.stringify(body));
+      }
+      function refresh() {
+        var current = ++version;
+        known = false; updateButtons();
+        text("accountLabel", account || "—");
+        if (!validTicket()) { text("balanceStatus", "充值票据无效，请从游戏内重新打开充值页"); return; }
+        text("balanceStatus", "正在读取账号状态…");
+        request("status", identity(), function (error, data) {
+          if (current !== version) return;
+          known = !error;
+          if (!error && ticketContext) { account = data.result.account; text("accountLabel", account); }
+          el("balanceStatus").className = error ? "status-error" : "";
+          text("balanceStatus", error || describe(data.result));
+          updateButtons();
+        });
+      }
+      function updateTiles() { each(".tile", function (tile) { tile.className = "tile" + (tile.querySelector("input[type=radio]").checked ? " selected" : ""); }); }
+      each("input[name=amount]", function (radio) { radio.onchange = updateTiles; });
+      el("customPrice").oninput = el("customPrice").onfocus = function () { el("amountOther").checked = true; updateTiles(); };
+      function setTab(value) {
+        tab = value; el("pointsTab").setAttribute("aria-selected", String(value === "points")); el("blackTab").setAttribute("aria-selected", String(value === "black"));
+        el("pointsContent").hidden = value !== "points"; el("blackContent").hidden = value !== "black"; showError("pageError", ""); updateButtons();
+      }
+      el("pointsTab").onclick = function () { setTab("points"); };
+      el("blackTab").onclick = function () { setTab("black"); };
+      each(".member button", function (button) {
+        button.onclick = function () { days = Number(button.getAttribute("data-days")); memberPrice = Number(button.getAttribute("data-price")); each(".member button", function (item) { item.setAttribute("aria-pressed", String(item === button)); }); };
+      });
+      el("refreshAccount").onclick = refresh;
+      el("rechargeButton").onclick = function () {
+        if (!known || busy) return;
+        var selected = document.querySelector("input[name=amount]:checked").value;
+        var yuan = Number(el("customPrice").value);
+        var amount = selected === "other" ? yuan * 100 : Number(selected);
+        if (tab === "points" && (!integer(amount) || amount < 100 || amount > 2147483600 || amount % 100 !== 0)) { showError("pageError", "自定义金额须为1–21474836円的整数"); el("customPrice").focus(); return; }
+        pending = identity(); pending.kind = tab === "points" ? "cera" : "black-diamond"; pending.amount = tab === "points" ? amount : days;
+        showError("pageError", ""); showError("dialogError", "");
+        text("dialogTitle", tab === "points" ? "确认充值" : "确认开通"); text("confirmRecharge", tab === "points" ? "确认充值" : "确认开通");
+        text("dialogAccount", account); text("dialogItem", tab === "points" ? amount.toLocaleString() + " 点券" : "黑钻会员 " + days + " 天"); text("dialogPrice", (tab === "points" ? amount / 100 : memberPrice).toFixed(2));
+        el("payPrompt").hidden = false; el("successResult").hidden = true; el("confirmRecharge").disabled = false; el("overlay").hidden = false; el("confirmRecharge").focus();
+      };
+      function close() { if (!busy) { el("overlay").hidden = true; pending = null; el("rechargeButton").focus(); } }
+      el("closeDialog").onclick = el("backDialog").onclick = el("finishDialog").onclick = close;
+      el("overlay").onclick = function (event) { if (event.target === el("overlay")) close(); };
+      document.onkeydown = function (event) {
+        if (el("overlay").hidden) return;
+        if (event.keyCode === 27) close();
+        if (event.keyCode === 9) {
+          var controls = el("overlay").querySelectorAll("button"), active = [];
+          Array.prototype.forEach.call(controls, function (button) { if (!button.disabled && button.offsetHeight) active.push(button); });
+          if (!active.length) { event.preventDefault(); return; }
+          if (event.shiftKey && document.activeElement === active[0]) { event.preventDefault(); active[active.length - 1].focus(); }
+          else if (!event.shiftKey && document.activeElement === active[active.length - 1]) { event.preventDefault(); active[0].focus(); }
+        }
+      };
+      el("confirmRecharge").onclick = function () {
+        if (busy || !pending) return;
+        busy = true; version++; el("confirmRecharge").disabled = true; el("closeDialog").disabled = true; el("backDialog").disabled = true; text("confirmRecharge", "正在提交…"); updateButtons();
+        request("recharge", pending, function (error, data) {
+          busy = false; el("closeDialog").disabled = false; el("backDialog").disabled = false;
+          if (error) { known = false; showError("dialogError", error); text("confirmRecharge", "请先核对余额"); }
+          else { known = true; text("balanceStatus", describe(data.result)); text("successBalance", describe(data.result)); text("successTitle", pending.kind === "cera" ? "充值成功" : "开通成功"); el("payPrompt").hidden = true; el("successResult").hidden = false; el("finishDialog").focus(); }
+          updateButtons();
+        });
+      };
+      var query = location.search.substring(1).split("&"), values = Object.create(null);
+      query.forEach(function (part) { var at = part.indexOf("="); if (at > 0) { try { var key = decodeURIComponent(part.substring(0, at)); if (values[key] !== undefined) queryError = true; values[key] = decodeURIComponent(part.substring(at + 1).replace(/\+/g, " ")); } catch (error) { queryError = true; } } });
+      {
+        ticketContext = {ticket: values.ticket || "", ticketKey: /^[0-9]+$/.test(values.ticketKey || "") ? Number(values.ticketKey) : 0};
+        account = "";
+      }
+      if (location.pathname.indexOf(root + "diamond/") === 0) setTab("black");
+      refresh();
+    }());
+  </script>
+</body>
+</html>

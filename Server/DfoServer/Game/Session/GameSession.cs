@@ -346,6 +346,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         ReleaseBeastDungeonReservation();
         formalDungeon = null;
         gameCache.Clear();
+        rechargeTicket = null;
         ClearConsumableUse();
         publishedRoster = null;
         selectedRoster = null;

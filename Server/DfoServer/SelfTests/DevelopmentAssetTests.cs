@@ -5,6 +5,9 @@ using DfoServer.Game.Session;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Infrastructure;
 using DfoServer.Testing;
+using System.Text.Json;
+using System.Buffers.Binary;
+using DfoServer.Network.Builders.Inventory;
 
 namespace DfoServer;
 
@@ -60,10 +63,86 @@ internal static class DevelopmentAssetTests
         session.ReturnToRoster();
         session.Select(0);
         TestCheck.That(session.Selected!.Inventory.Gold == 88, "重新选择角色后恢复已写入的金币");
+        foreach (string invalid in new[] { "recharge", "recharge cera 0", "recharge cera 101", "recharge cera -100",
+            "recharge cera 2147483648", "recharge gold 100", "recharge black-diamond 0", "recharge black-diamond 3651", "recharge-status extra" })
+            TestCheck.That(Answer(invalid, _ => session).StartsWith("ERR "), "模拟充值参数严格拒绝: " + invalid);
+        snapshot = f.Snapshot();
+        TestCheck.That(Answer("account missing recharge-status").StartsWith("ERR ") &&
+            Answer("account missing recharge cera 100").StartsWith("ERR ") && f.Snapshot() == snapshot,
+            "未建角色账号不伪报成功、不生成钱包或虚构充值目标");
+        JsonElement Recharge(string line) => JsonSerializer.Deserialize<JsonElement>(Answer(line, _ => session)[3..]);
+        TestCheck.That(Recharge("recharge-status").GetProperty("cera").GetInt32() == 0 && f.Snapshot() == snapshot,
+            "充值状态不写库、不额外发放会员或疲劳");
+        TestCheck.That(Recharge("recharge cera 1000").GetProperty("cera").GetInt32() == 1000 &&
+            Recharge("recharge cera 500").GetProperty("cera").GetInt32() == 1500 &&
+            session.Selected.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 1500 && f.ReadReceiver().Inventory.AccountWallet.Get(CurrencyKind.Cera) == 0,
+            "点券按原账号owner累加并同步Selected，不影响另一账号");
+        snapshot = f.Snapshot();
+        f.Execute("CREATE TRIGGER fail_recharge BEFORE INSERT ON currency_audit_log WHEN NEW.action_name='gm_recharge' BEGIN SELECT RAISE(ABORT,'recharge failure'); END");
+        TestCheck.That(Answer("recharge cera 100", _ => session).StartsWith("ERR ") && f.Snapshot() == snapshot &&
+            session.Selected.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 1500, "晚期SQL失败回滚充值、审计与版本，不安装成功快照");
+        f.Execute("DROP TRIGGER fail_recharge");
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long expires = Recharge("recharge black-diamond 30").GetProperty("blackDiamondExpiresAt").GetInt64();
+        TestCheck.That(expires >= now + 30L * 86400 && expires <= DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30L * 86400 &&
+            Recharge("recharge black-diamond 90").GetProperty("blackDiamondExpiresAt").GetInt64() == expires + 90L * 86400 &&
+            f.Repository.LoadCharacter(owner, 1).BlackDiamondExpiresAt == expires + 90L * 86400,
+            "黑钻使用正式账号契约56，有效期后累计续期，同账号其他角色共享");
+        var credited = session.Selected;
+        TestCheck.That(JsonSerializer.Serialize(credited.Inventory with { AccountWallet = current.Inventory.AccountWallet, Gold = current.Inventory.Gold }) ==
+            JsonSerializer.Serialize(current.Inventory), "充值不重建UID、物品、角色金币或其他资产");
+        session.ReturnToRoster();
+        session.Select(1);
+        TestCheck.That(Recharge("recharge cera 100").GetProperty("cera").GetInt32() == 1600 &&
+            session.Selected!.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 1600, "自动选择存储角色不覆盖当前其他角色，账号钱包仍同步");
+        TestCheck.That(session.IssueRechargeTicket(DateTimeOffset.UtcNow) is null, "选角尚未Ready时不能签发充值票据");
+        session.MarkReady();
+        var ticketNow = DateTimeOffset.UtcNow;
+        snapshot = f.Snapshot();
+        var ticket = session.IssueRechargeTicket(ticketNow)!;
+        byte[] ticketPacket = CurrencyPackets.CeraTicket(ticket);
+        uint ticketLength = BinaryPrimitives.ReadUInt32LittleEndian(ticketPacket.AsSpan(1));
+        TestCheck.That(ticket.Token.StartsWith("sender.") && ticketLength == ticket.Token.Length && ticketLength is > 0 and < 64 &&
+            ticketPacket.Length == 9 + ticketLength && ticketPacket[0] == 1 &&
+            System.Text.Encoding.ASCII.GetString(ticketPacket, 5, (int)ticketLength) == ticket.Token &&
+            BinaryPrimitives.ReadUInt32LittleEndian(ticketPacket.AsSpan(5 + (int)ticketLength)) == ticket.Key &&
+            ticket.Key is > 0 and <= 65535 && ticket.ExpiresAt == ticketNow.AddMinutes(10) && f.Snapshot() == snapshot,
+            "ACK65完整长度前缀ASCII串和4字节key，签发不写资产或建立平行在线状态");
+        string ticketStatus = $"recharge-ticket-status {ticket.Token} {ticket.Key}";
+        TestCheck.That(Recharge(ticketStatus).GetProperty("account").GetString() == "sender" && f.Snapshot() == snapshot &&
+            Answer(ticketStatus).StartsWith("ERR "), "票据读取当前登录账号，不默认10000，不允许离线借用票据");
+        foreach (string invalid in new[] { $"recharge-ticket-status {ticket.Token} {ticket.Key % 65535 + 1}",
+            $"account sender {ticketStatus}", $"recharge-ticket-status receiver.{ticket.Token.Split('.')[1]} {ticket.Key}",
+            "recharge-ticket-status invalid 1", $"recharge-ticket {ticket.Token} {ticket.Key} cera 1" })
+            TestCheck.That(Answer(invalid, _ => session).StartsWith("ERR ") && f.Snapshot() == snapshot,
+                "错误key、篡改账号、旧式前缀及非法金额不形成充值: " + invalid.Split(' ')[0]);
+        TestCheck.Reject<InvalidDataException>(() => session.WithRechargeTicket(ticket.Token, ticket.Key, ticketNow.AddMinutes(10), () => true),
+            "票据到期端点拒绝");
+        TestCheck.That(Recharge($"recharge-ticket {ticket.Token} {ticket.Key} cera 100").GetProperty("cera").GetInt32() == 1700 &&
+            session.Selected.Inventory.AccountWallet.Get(CurrencyKind.Cera) == 1700,
+            "验票和加值在同一owner内，使用本次实际提交的钱包");
+        var nextTicket = session.IssueRechargeTicket(ticketNow)!;
+        TestCheck.That(!session.CanPublishRechargeTicket(ticket) && session.CanPublishRechargeTicket(nextTicket) &&
+            Answer(ticketStatus, _ => session).StartsWith("ERR "), "重新打开只保留一张票据，旧回执不能继续发布或充值");
+        session.ReturnToRoster();
+        session.Select(1);
+        session.MarkReady();
+        TestCheck.That(Answer($"recharge-ticket-status {nextTicket.Token} {nextTicket.Key}", _ => session).StartsWith("ERR "),
+            "返回选角及重选使原窗口票据失效");
+        var finalTicket = session.IssueRechargeTicket(ticketNow)!;
+        session.CommitDevelopmentInventory("Sibling", false, role => new(true, 0,
+            new(role.Inventory, CurrencyWallet.Set(role.Inventory, CurrencyKind.Cera, 2147483600), "test_limit")), "test");
+        snapshot = f.Snapshot();
+        TestCheck.That(Answer("recharge cera 100", _ => session).StartsWith("ERR ") && f.Snapshot() == snapshot,
+            "余额上限整笔拒绝，不饱和截断充值数量");
         using var replacement = f.Owners.Acquire("sender", () => { });
         snapshot = f.Snapshot();
         TestCheck.That(Answer("gold Sender 99", _ => session).StartsWith("ERR ") && f.Snapshot() == snapshot && replacement.IsCurrent,
             "旧目录引用不能设置金币或释放新owner");
+        TestCheck.That(Answer("recharge cera 100", _ => session).StartsWith("ERR ") && f.Snapshot() == snapshot && replacement.IsCurrent,
+            "旧generation不能充值或顶掉新owner");
+        TestCheck.That(Answer($"recharge-ticket {finalTicket.Token} {finalTicket.Key} cera 100", _ => session).StartsWith("ERR ") &&
+            f.Snapshot() == snapshot && replacement.IsCurrent, "旧generation票据不能触碰新owner资产");
         f.Integrity();
         Console.WriteLine($"PASS {TestCheck.Count - before} GM金币解析、角色隔离、原子提交与重新选角断言");
     }

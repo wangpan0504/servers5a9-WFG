@@ -121,7 +121,8 @@ internal sealed class PacketCapture : IDisposable
         text.Append($"{timestamp:O} connection={connection} protocol={(channel ? "CHANNEL" : "GAME")} {(send ? "SEND" : "RECV")} kind=0x{frame[0]:X2} opcode=0x{opcode:X4} name={name} len={frame.Length} body=({body.Length}B)");
         if (redact)
             text.Append(sceneReserved ? " [luke scene reserved payload redacted]\n" :
-                IsAuthentication(opcode) ? " [authentication payload redacted]\n" : " [pvp password payload redacted]\n");
+                IsAuthentication(opcode) ? " [authentication payload redacted]\n" :
+                opcode == (ushort)CmdPacketType.GEN_CERATICKET ? " [recharge ticket payload redacted]\n" : " [pvp password payload redacted]\n");
         else
         {
             text.Append(" [");
@@ -175,10 +176,10 @@ internal sealed class PacketCapture : IDisposable
         IsSceneReservedCommand(opcode, body) ? "[luke-scene-reserved-redacted]" : Convert.ToHexString(body);
 
     internal static bool IsSensitiveCommand(ushort opcode) => IsAuthentication(opcode) || opcode is
-        (ushort)CmdPacketType.MAKE_PVP_ROOM or (ushort)CmdPacketType.ENTER_PVP_ROOM;
+        (ushort)CmdPacketType.MAKE_PVP_ROOM or (ushort)CmdPacketType.ENTER_PVP_ROOM or (ushort)CmdPacketType.GEN_CERATICKET;
 
     internal static string RedactedCommandBody(ushort opcode) => IsAuthentication(opcode)
-        ? "[login-redacted]" : "[pvp-password-redacted]";
+        ? "[login-redacted]" : opcode == (ushort)CmdPacketType.GEN_CERATICKET ? "[recharge-ticket-redacted]" : "[pvp-password-redacted]";
 
     static void Hex(StringBuilder text, ReadOnlySpan<byte> bytes)
     {

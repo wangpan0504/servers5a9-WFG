@@ -1,4 +1,5 @@
 using DfoServer.Network.Management;
+using System.Text.Json;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
 
@@ -38,6 +39,25 @@ internal static class DevelopmentAssetTcpTests
             That(U16(delta, 1) == 3 && new[] { 3, 126, 249 }.All(at => U32(delta, at + 2) == 18400 && U32(delta, at + 6) == 999999998),
                 "真实领取按三件装备进入独立槽；开发超携带上限金币不阻止纯物品领取");
             peer.Barrier();
+            JsonElement Recharge(string command) => JsonSerializer.Deserialize<JsonElement>(Gm(command)[3..]);
+            That(Recharge("recharge cera 1000").GetProperty("cera").GetInt32() == 1000 &&
+                Recharge("recharge cera 500").GetProperty("cera").GetInt32() == 1500,
+                "真实GM TCP连续充值点券为累加而非覆盖，不需要网页指定角色");
+            long expires = Recharge("recharge black-diamond 30").GetProperty("blackDiamondExpiresAt").GetInt64();
+            That(Recharge("recharge black-diamond 90").GetProperty("blackDiamondExpiresAt").GetInt64() == expires + 90L * 86400,
+                "真实GM TCP续期累加正式黑钻契约");
+            Gm("recharge cera 101", accepted: false);
+            peer.Barrier();
+            var premium = peer.Expect(0, 1760).Body;
+            That(Enumerable.Range(0, premium[0]).Any(i => premium[1 + i * 9] == 56 &&
+                System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(premium.AsSpan(2 + i * 9)) > 0),
+                "GM充值复用主线黑钻契约刷新，保留当前1760目录");
+            foreach (byte kind in new byte[] { 0, 1 })
+                That(peer.Expect(0, 2).Body[0] == kind,"黑钻身份在原消息末端按Actor到Player刷新");
+            peer.Barrier();
+            That(fixture.Query("SELECT balance FROM account_currency_balances WHERE currency_kind=15") is [[1500L]] &&
+                Recharge("recharge-status").GetProperty("cera").GetInt32() == 1500,
+                "GM回复与独立读库一致，无效充值不改实际账号余额");
             That(fixture.Query("SELECT count(DISTINCT i.item_uid) FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE i.character_id=1 AND s.list_type=0 AND s.slot_index BETWEEN 9 AND 11") is [[3L]],
                 "装备领取三个持久UID无堆叠");
             string before = fixture.Snapshot("SELECT * FROM mailbox_messages ORDER BY mail_id");
