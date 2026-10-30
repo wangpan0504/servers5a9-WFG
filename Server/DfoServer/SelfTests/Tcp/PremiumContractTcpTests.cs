@@ -17,6 +17,18 @@ internal static class PremiumContractTcpTests
         foreach (var (id, type) in new[] { (33, 22), (45, 27) })
             foreach (bool shortRequest in new[] { true, false })
                 await VerifyExactLegacyAsync(options, root, resources, id, type, shortRequest);
+        foreach (var (id, type) in new[] { (33, 22), (45, 27) })
+            foreach (bool shortRequest in new[] { true, false })
+                await VerifyExactLegacyAsync(options, root, resources, id, type, shortRequest, lateRetained: true);
+        foreach (var (id, type) in new[] { (33, 22), (45, 27) })
+            foreach (bool shortRequest in new[] { true, false })
+                await VerifyExactLegacyAsync(options, root, resources, id, type, shortRequest, expiredExhausted: true);
+        foreach (var (id, type) in new[] { (33, 22), (45, 27) })
+            foreach (bool shortRequest in new[] { true, false })
+                await VerifyExactLegacyAsync(options, root, resources, id, type, shortRequest, overflow: true);
+        foreach (var (id, type) in new[] { (33, 22), (45, 27) })
+            foreach (bool shortRequest in new[] { true, false })
+                await VerifyExactLegacyAsync(options, root, resources, id, type, shortRequest, lateExhausted: true);
 
         const int itemId = 35;
         const int unsupportedItemId = 10000387;
@@ -198,9 +210,9 @@ internal static class PremiumContractTcpTests
     }
 
 
-    // C09增量仅补精确33/45的10/15B；原12个DOMAIN_SQL分区继续复用已核收证据。
+    // 保留原四例及late-retained/expired-exhausted/overflow；只追加精确33/45×10/15B的late-exhausted socket。
     static async Task VerifyExactLegacyAsync(ServerOptions options, string root, TcpTestResources resources,
-        int itemId, int type, bool shortRequest)
+        int itemId, int type, bool shortRequest, bool lateRetained = false, bool expiredExhausted = false, bool overflow = false, bool lateExhausted = false)
     {
         const short sourceSlot = 65;
         const uint token = uint.MaxValue;
@@ -211,11 +223,11 @@ internal static class PremiumContractTcpTests
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.FromUnixTimeSeconds(now));
         await using var fixture = new TcpTestFixture(options,
-            Path.Combine(root, $"premium-contract-c09-{itemId}-{(shortRequest ? 10 : 15)}"), resources: resources, clock: clock);
+            Path.Combine(root, $"premium-contract-c09-{itemId}-{(shortRequest ? 10 : 15)}{(lateRetained ? "-late-retained" : "")}{(expiredExhausted ? "-expired-exhausted" : "")}{(overflow ? "-overflow" : "")}{(lateExhausted ? "-late-exhausted" : "")}"), resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
         ushort sourceCharacter, sourceRosterSlot, siblingRosterSlot;
         long sourceUid;
-        var originalCore = new ItemCore(itemId, DfoServer.GameWorld.Items.ItemKind.Consumable, 2)
+        var originalCore = new ItemCore(itemId, DfoServer.GameWorld.Items.ItemKind.Consumable, expiredExhausted || lateExhausted ? 1 : 2)
             { SortLockFlag = 1, Marker16 = 77 };
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
@@ -231,15 +243,131 @@ internal static class PremiumContractTcpTests
         fixture.Sql("UPDATE account_wallets SET rental_points=9,mileage=11,seria_luck=3 WHERE account=$p0", fixture.Options.DevelopmentAccount);
         fixture.Sql("INSERT INTO account_currency_balances(account,currency_kind,balance) VALUES($p0,15,123) " +
             "ON CONFLICT(account,currency_kind) DO UPDATE SET balance=123", fixture.Options.DevelopmentAccount);
+        long expectedExpiry = overflow ? long.MaxValue : lateRetained ? checked(now + 3600) : expiredExhausted ? checked(now - 1) : 0;
+        if (lateRetained || expiredExhausted || overflow)
+            fixture.Sql("UPDATE account_wallets SET premium_contracts=$p0 WHERE account=$p1",
+                JsonSerializer.Serialize(new Dictionary<int, long> { [type] = expectedExpiry }), fixture.Options.DevelopmentAccount);
+        string latePartition = lateExhausted ? "late-exhausted" : "late-retained";
         await fixture.StartAsync();
-        long expectedExpiry = 0;
+        if (lateRetained || lateExhausted)
+        {
+            using var failed = Open(fixture);
+            failed.Select(sourceRosterSlot, inventoryNotices: [(1, 713)], premiumContracts: lateRetained, expertContract: lateRetained && type == 27);
+            if (lateRetained)
+            {
+                AssertExactPremium(failed.PremiumInfo);
+                if (type == 27) AssertExpertNotice(failed.ExpertContract, expectedExpiry);
+            }
+            long characterRevision = Scalar("SELECT revision FROM characters WHERE id=$p0", sourceCharacter);
+            long walletRevision = Scalar("SELECT revision FROM account_wallets WHERE account=$p0", fixture.Options.DevelopmentAccount);
+            long auditCount = Scalar("SELECT count(*) FROM inventory_audit_log");
+            long attemptedExpiry = lateExhausted ? checked(now + duration) : checked(expectedExpiry + duration);
+            // retained保持原同UID一件/Main65；exhausted必须在同一末段见证源item与slot均已删除。
+            string sourceWitness = lateExhausted
+                ? $"NOT EXISTS(SELECT 1 FROM character_inventory_items WHERE item_uid={sourceUid}) AND NOT EXISTS(SELECT 1 FROM character_inventory_slots WHERE item_uid={sourceUid})"
+                : $"(SELECT json_extract(item_core,'$.Value') FROM character_inventory_items WHERE item_uid={sourceUid})=1 AND (SELECT item_uid FROM character_inventory_slots WHERE character_id={sourceCharacter} AND list_type=0 AND slot_index=65)={sourceUid}";
+            string beforeLate = AllAssets();
+            fixture.Sql($$"""
+                CREATE TRIGGER fail_c09_late_retained AFTER UPDATE OF premium_contracts ON account_wallets
+                WHEN NEW.account='{{fixture.Options.DevelopmentAccount.Replace("'", "''")}}' AND NEW.revision={{walletRevision + 1}}
+                BEGIN
+                    SELECT CASE WHEN (SELECT revision FROM characters WHERE id={{sourceCharacter}})={{characterRevision + 1}}
+                        AND ({{sourceWitness}})
+                        AND (SELECT count(*) FROM inventory_audit_log)={{auditCount + 1}}
+                        AND json_extract(NEW.premium_contracts,'$."{{type}}"')={{attemptedExpiry}}
+                    THEN RAISE(ABORT,'C09 exact {{latePartition}} rollback')
+                    ELSE RAISE(ABORT,'C09 {{latePartition}} witness mismatch') END;
+                END;
+                """);
+            try
+            {
+                Send(failed); failed.Closed();
+                That(AllAssets() == beforeLate && Contracts().GetValueOrDefault(type) == expectedExpiry &&
+                    fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", sourceUid) is [[string core]] &&
+                    core == JsonSerializer.Serialize(originalCore),
+                    $"C09精确{latePartition}晚SQL失败无先发成功，完整表/序列/原UID及{originalCore.Value}件完整Core/旧期限回滚");
+            }
+            finally { fixture.Sql("DROP TRIGGER fail_c09_late_retained"); }
+        }
+        if (overflow)
+        {
+            using (var peer = Open(fixture))
+            {
+                peer.Select(sourceRosterSlot, inventoryNotices: [(1, 713)], premiumContracts: true, expertContract: type == 27);
+                AssertExactPremium(peer.PremiumInfo);
+                if (type == 27) AssertExpertNotice(peer.ExpertContract, expectedExpiry);
+                That(Contracts().GetValueOrDefault(type) == long.MaxValue &&
+                    fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", sourceUid) is [[string overflowCore]] &&
+                    overflowCore == JsonSerializer.Serialize(originalCore), "C09溢出前真实旧期限为long.MaxValue，保有原UID两件完整Core");
+                string before = AllAssets();
+                for (int attempt = 0; attempt < 2; attempt++)
+                {
+                    Send(peer); Reply(peer, false); peer.Barrier();
+                    That(AllAssets() == before, "C09合法源续期溢出及同正文重复均完整123收尾，全部SQL表及序列保持零变");
+                }
+            }
+            using (var peer = Open(fixture))
+            {
+                peer.Select(sourceRosterSlot, inventoryNotices: [(1, 713)], premiumContracts: true, expertContract: type == 27);
+                AssertExactPremium(peer.PremiumInfo);
+                if (type == 27) AssertExpertNotice(peer.ExpertContract, expectedExpiry);
+                string before = AllAssets();
+                Send(peer); Reply(peer, false); peer.Barrier();
+                That(AllAssets() == before, "C09溢出拒绝后真实重连同正文仍拒绝，不借重连消耗源或截断期限");
+                peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+                peer.Select(siblingRosterSlot, premiumContracts: true, expertContract: type == 27);
+                AssertExactPremium(peer.PremiumInfo);
+                if (type == 27) AssertExpertNotice(peer.ExpertContract, expectedExpiry);
+                That(Contracts() is var contracts && contracts.Count == 1 && contracts.GetValueOrDefault(type) == long.MaxValue &&
+                    fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", sourceUid) is [[string switchedCore]] &&
+                    switchedCore == JsonSerializer.Serialize(originalCore), "C09溢出拒绝后同账号换角仍为原期限，原UID两件完整Core未消耗或复制");
+            }
+            await fixture.StopAsync();
+            await fixture.StartAsync("c09-overflow-restart");
+            using (var peer = Open(fixture))
+            {
+                peer.Select(sourceRosterSlot, inventoryNotices: [(1, 713)], premiumContracts: true, expertContract: type == 27);
+                AssertExactPremium(peer.PremiumInfo);
+                if (type == 27) AssertExpertNotice(peer.ExpertContract, expectedExpiry);
+                string before = AllAssets();
+                Send(peer); Reply(peer, false); peer.Barrier();
+                That(AllAssets() == before && Contracts().GetValueOrDefault(type) == long.MaxValue &&
+                    fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", sourceUid) is [[string restartedCore]] &&
+                    restartedCore == JsonSerializer.Serialize(originalCore) && fixture.Query("PRAGMA foreign_key_check").Length == 0,
+                    "C09溢出拒绝后重启恢复原期限及原UID两件完整Core，再拒绝且全部表/序列零变");
+            }
+            return;
+        }
         using (var peer = Open(fixture))
         {
-            peer.Select(sourceRosterSlot, inventoryNotices: [(1, 713)]);
-            for (int remaining = 1; remaining >= 0; remaining--)
+            peer.Select(sourceRosterSlot, inventoryNotices: [(1, 713)],
+                premiumContracts: lateRetained || expiredExhausted, expertContract: (lateRetained || expiredExhausted) && type == 27);
+            if (lateRetained || lateExhausted)
+            {
+                if (lateRetained)
+                {
+                    AssertExactPremium(peer.PremiumInfo);
+                    if (type == 27) AssertExpertNotice(peer.ExpertContract, expectedExpiry);
+                }
+                That(fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", sourceUid) is [[string restored]] &&
+                    restored == JsonSerializer.Serialize(originalCore), $"C09晚SQL后新连接恢复原UID及{originalCore.Value}件完整Core再重试同正文");
+                if (lateExhausted) That(Contracts().Count == 0,
+                    "C09最后一件晚SQL回滚后无账号契约期限，原实体仍可用同正文合法重试");
+            }
+            if (expiredExhausted)
+            {
+                That(Contracts() is var expired && expired.Count == 1 && expired.GetValueOrDefault(type) == now - 1 &&
+                    peer.PremiumServices.Count == 2 && peer.PremiumServices.All(row => row.Key is 56 or 58 && row.Value == 0) &&
+                    fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", sourceUid) is [[string expiredCore]] &&
+                    expiredCore == JsonSerializer.Serialize(originalCore),
+                    "C09旧账号期限已过仍保留原值和原UID一件完整Core，选角1760仅56/58清除项且未激活22/27");
+                if (type == 27) That(peer.ExpertContract is [2, 0, 27, 0, 0, 0, 0, 0, 0, 0, 0],
+                    "C09已过期达人66完整清零，不将持有源实体冒成有效资格");
+            }
+            for (int remaining = expiredExhausted || lateExhausted ? 0 : 1; remaining >= 0; remaining--)
             {
                 // 在发送前用独立常量/上一笔持久期限冻结期待，不从Plan、Receipt或当前响应导出。
-                expectedExpiry = checked(Math.Max(now, expectedExpiry) + duration);
+                expectedExpiry = expiredExhausted ? checked(now + duration) : checked(Math.Max(now, expectedExpiry) + duration);
                 long characterRevision = Scalar("SELECT revision FROM characters WHERE id=$p0", sourceCharacter);
                 long walletRevision = Scalar("SELECT revision FROM account_wallets WHERE account=$p0", fixture.Options.DevelopmentAccount);
                 long auditCount = Scalar("SELECT count(*) FROM inventory_audit_log");
@@ -291,6 +419,11 @@ internal static class PremiumContractTcpTests
                 "C09同账号换角复用同一期限，不复制实体");
         }
         await fixture.StopAsync();
+        if (lateRetained || lateExhausted)
+            That(fixture.Events().Count(entry => entry.GetProperty("Kind").GetString() == "closed" &&
+                entry.GetProperty("Detail").GetProperty("Reason").GetString() == "SqliteException" &&
+                entry.GetProperty("Detail").GetProperty("Message").GetString() == $"SQLite Error 19: 'C09 exact {latePartition} rollback'.") == 1,
+                "C09精确晚SQL关闭唯一来自事务内源保留或删除/审计/续期见证，不用任意断线冒充回滚");
         await fixture.StartAsync("c09-exact-restart");
         using (var peer = Open(fixture))
         {
