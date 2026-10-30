@@ -265,7 +265,7 @@ internal static class ServerRuntime
         var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
         var totalTeamProjection = new PvpTotalTeamProjection(learning, stats, log);
         var marriageHandler = new MarriageHandler(repository, marriageCatalog, itemResources.Items,
-            new Game.Marriage.MarriageInventoryPlanner(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces),
+            new Game.Marriage.MarriageInventoryPlanner(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock),
             towns, projection, online, inventoryProjection, log, clock);
         var marriageScheduler = new MarriageWeddingScheduler(repository, marriageCatalog, itemResources.Items, online, marriageProjection, log, clock);
         // 装扮预设：容量/列表在选角就绪后下发；扩展券走CMD515 action216。
