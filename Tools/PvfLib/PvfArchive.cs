@@ -116,24 +116,29 @@ public sealed class PvfArchive : IDisposable
 
         entries = new(fileCount, new PvfPathKey.Comparer());
         var directories = new Dictionary<string, string>(StringComparer.Ordinal);
-        var rawDirectories = new Dictionary<int, string>();
+        var rawDirectories = new Dictionary<int, (string Path, bool Canonical)>();
         for (int i = 0; i < fileCount; i++)
         {
             int off = i * 24;
             int directory = I32(metadata, off + 4);
-            if (!rawDirectories.TryGetValue(directory, out string? dir))
-                rawDirectories.Add(directory, dir = strings.Resolve(directory));
+            if (!rawDirectories.TryGetValue(directory, out var dir))
+            {
+                string resolved = strings.Resolve(directory);
+                rawDirectories.Add(directory, dir = (resolved, PvfPath.IsCanonicalDirectory(resolved)));
+            }
             string name = strings.Resolve(I32(metadata, off));
-            string path = NormalizePath(dir + "/" + name);
+            bool canonical = dir.Canonical && PvfPath.IsCanonicalLeaf(name);
+            // 常规目录/叶名不拼接后再拆分；大小写、点段、分隔符和空白均保留原回退路径。
+            string? path = canonical ? null : NormalizePath(dir.Path + "/" + name);
             int group = Size(metadata, off + 8), start = Size(metadata, off + 12), size = Size(metadata, off + 16), type = Size(metadata, off + 20);
-            if (path.Length == 0 || group >= groups.Length || (long)start + size > groups[group].Size)
-                throw new InvalidDataException($"PVF 文件范围无效: {path}");
+            if (path?.Length == 0 || group >= groups.Length || (long)start + size > groups[group].Size)
+                throw new InvalidDataException($"PVF 文件范围无效: {path ?? (dir.Path.Length == 0 ? name : dir.Path + "/" + name)}");
             // 规范化之后共享目录，临时目录表在构建完成后释放；条目仍按首项顺序保存。
-            int slash = path.LastIndexOf('/');
-            var parent = slash < 0 ? ReadOnlySpan<char>.Empty : path.AsSpan(0, slash);
+            int slash = path?.LastIndexOf('/') ?? -1;
+            var parent = canonical ? dir.Path.AsSpan() : slash < 0 ? ReadOnlySpan<char>.Empty : path.AsSpan(0, slash);
             if (!directories.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(parent, out string? canonicalDirectory))
                 directories.Add(canonicalDirectory = parent.ToString(), canonicalDirectory);
-            string fileName = path[(slash + 1)..];
+            string fileName = canonical ? name : path![(slash + 1)..];
             entries.TryAdd(new(canonicalDirectory, fileName), new(type, size, group, start));
         }
     }
