@@ -165,6 +165,26 @@ internal static class DevilContractTcpTests
             That(peer.DevilService0[13 + 6 * 9] == 1 && U32(peer.DevilService0, 9 + 7 * 9) > 0,
                 "完整重启后保留各子服务期限和修理次数");
             peer.Barrier();
+            FormalDungeonTcpTests.EntryTown(peer);
+            FormalDungeonTcpTests.Enter(peer);
+            string before = State();
+            peer.Send(23, [0, 255, 255, 255, 255, 1, 0]);
+            peer.Expect(1, 23, [0, 19, 0]);
+            peer.Barrier();
+            That(State() == before, "自动修理在副本加载阶段不抢先消费契约次数");
+            FormalDungeonTcpTests.Load(peer);
+            peer.Send(23, [0, 255, 255, 255, 255, 1, 0]);
+            var ack = peer.Expect(1, 23).Body;
+            That(ack.Length == 10 && ack[0] == 1 && U32(ack, 1) == 1000,
+                "正式战斗按客户端触发执行自动修理，不要求存档已提前变成零耐久");
+            var notifications = PartyDungeonTcpTests.Drain(peer);
+            var main = notifications.Single(packet => packet.Kind == 0 && packet.Opcode == 14 && packet.Body[0] == 0).Body;
+            That(main.Length == 3 + U16(main, 1) * 123 &&
+                Enumerable.Range(0, U16(main, 1)).Select(index => 3 + index * 123)
+                    .Any(at => U16(main, at) == 3 && U32(main, at + 2) == 10400 && U16(main, at + 11) == 33) &&
+                notifications.Any(packet => packet.Kind == 1 && packet.Opcode == 905 && packet.Body[13 + 6 * 9] == 2) &&
+                fixture.Query("SELECT gold FROM characters") is [[1000L]],
+                "战斗自动修理用完整槽位差量同步权威耐久和次数2，金币保持不变");
         }
         VerifyStaminaExemptions(fixture, clock);
         await fixture.StopAsync();
