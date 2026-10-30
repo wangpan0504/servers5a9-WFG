@@ -21,6 +21,7 @@ internal static class EquipmentTransferSealTcpTests
         var assets = resources.ItemResources;
         var items = assets.Items;
         var catalog = assets.EquipmentTransports;
+        await PointTitleStoneAsync(options, root, resources);
         var stackable = PvfScript.List(resources.Archive.ReadText("stackable/stackable.lst"));
         foreach (int id in new[] { 10000705, 10000706, 10014812, 10007991, 10305043, 10309718, 10311613, 10305482, 10305483,
             490704269, 490704533, 490705031, 490705033 })
@@ -182,6 +183,125 @@ internal static class EquipmentTransferSealTcpTests
             packet.Body.Length==3+U16(packet.Body,1)*(packet.Body[0]==1?165:123),
             $"跨界发布使用完整123B库存增量: opcode={packet.Opcode}, length={packet.Body.Length}, body={Convert.ToHexString(packet.Body.AsSpan(0,Math.Min(12,packet.Body.Length)))}");
     }
+    static async Task PointTitleStoneAsync(ServerOptions options, string root, TcpTestResources resources)
+    {
+        var clock = TimeProvider.System;
+        var assets = resources.ItemResources;
+        var items = assets.Items;
+        var catalog = assets.EquipmentTransports;
+        That(items.Contains(490705481) && !items.ContainsEquipment(490705481) && items.ContainsEquipment(400330267),
+            "积分称号石及至尊称号须存在于当前真实目录，不以保存路径或模板注入替代");
+        var stone = items.Get(490705481);
+        var title = items.Get(400330267);
+        var action = items.ActionConsumable(490705481);
+        That(action is { Label: "[cargo transport stone]", Parameters: [4041], CoolTime: 1000 } &&
+            action.Places.SequenceEqual(new[] { "[seria room]" }) && !action.AllowsPlace("[village]") &&
+            stone.Kind == ItemKind.Consumable && stone.StackLimit == int.MaxValue && stone.MinimumLevel == 1 &&
+            stone.MaximumLevel == int.MaxValue && stone.RequiredSkill == 0 && stone.Jobs == ushort.MaxValue &&
+            stone.AttachType.Trim('`', ' ', '\r', '\n') == "[account]" &&
+            stone.Expiration == new ItemExpiration() && title.Kind == ItemKind.Equipment && title.EquipmentSlot == 13 &&
+            title.MinimumLevel == 1 && title.Rarity == 6 && title.AttachType.Trim('`', ' ', '\r', '\n') == "[trade]" &&
+            title.Expiration == new ItemExpiration(), "481动作4041、赛丽亚地点及267真实永久称号合同");
+        That(catalog.Rules.TryGetValue(4041, out _), "真实跨界表必须有4041，缺规则不能跳过本例");
+        var rule = catalog.Rules[4041];
+        That(rule.Grades.SequenceEqual(new[] { 1, 95, 1 }) && rule.RarityWeights.Count == 3 &&
+            rule.RarityWeights.GetValueOrDefault(2) == 1 && rule.RarityWeights.GetValueOrDefault(3) == 1 &&
+            rule.RarityWeights.GetValueOrDefault(6) == 1 && rule.EquipmentSlots.SetEquals(new byte[] { 13 }) &&
+            rule.StackableTypes.IsEmpty && rule.Included.Contains(400330267) && rule.Excluded.IsEmpty &&
+            rule.ExcludedProperties.IsEmpty && rule.StoneCost(title) == 1 && rule.StoneCost(items.Get(26596)) == 0,
+            "4041按实际白名单允许267、排除白名单外真实普通称号且只收1颗石头");
+        var original = InventoryRewardGrantService.Create(title);
+        var source = new InventoryItem(2, Bag(80), InventoryRewardGrantService.Create(stone, 2));
+        var target = new InventoryItem(1, Bag(9), original);
+        var role = new Character(1, 0, "TitlePlan", 0, resources.Towns.Room, null)
+        { Level = 95, Inventory = new([target, source]) { AccountCargo = new(Capacity: 8) } };
+        var service = new EquipmentTransportService(items.Get, items.ActionConsumable, catalog, assets.EpicPieces, null!, clock);
+        That(service.Plan(role, null, new(80, 9, 0, uint.MaxValue), "[seria room]", out var planned) == 0 &&
+            planned!.Transferred.Uid == target.Uid && planned.Transferred.Core == original &&
+            planned.Inventory.After.Find(Bag(9)) is null && planned.Inventory.After.Find(Bag(80))!.Core.Count == 1 &&
+            planned.Inventory.After.Find(new(InventoryListType.AccountCargo, 0)) == planned.Transferred,
+            "真实481到267沿既有mode0计划保原UID及完整Core、扣1并迁入账号金库");
+        That(service.Plan(role, null, new(80, 9, 0, 0), "[village]", out _) == 21,
+            "真实481的赛丽亚场景限制不放宽到普通城镇");
+        var expiredTarget = role with { Inventory = role.Inventory with
+            { Items = role.Inventory.Items.Replace(target, target with { Core = original with { ExpireTime = 1 } }) } };
+        var expiredSource = role with { Inventory = role.Inventory with
+            { Items = role.Inventory.Items.Replace(source, source with { Core = source.Core with { ExpireTime = 1 } }) } };
+        That(service.Plan(expiredTarget, null, new(80, 9, 0, 0), "[seria room]", out _) == 7 &&
+            service.Plan(expiredSource, null, new(80, 9, 0, 0), "[seria room]", out _) == 21,
+            "实例期限保护覆盖过期称号和过期源，永久模板不取消已有实例期限");
+
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "point-title481"), resources: resources, clock: clock);
+        var repository = new CharacterRepository(fixture.Database);
+        ushort characterId;
+        long targetUid, sourceUid;
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var created = repository.Create(owner, new("PointTitle", resources.Towns.Room, resources.Towns.InitialReturn)
+            {
+                Level = 95, AcceptedStoryLevel = 1, DungeonState = CharacterDungeonState.NewOrdinary,
+                Skills = resources.Characters.Get(0).Skills,
+                Inventory = new([new(0, Bag(9), original), new(0, Bag(10), original), new(0, Bag(80), source.Core)], Gold: 1234)
+            });
+            created = InventoryService.Commit(repository, owner, created, new(true, 0,
+                new(created.Inventory, created.Inventory with { AccountCargo = new(Capacity: 8),
+                    Items = created.Inventory.Items.AddRange(Enumerable.Range(1, 7).Select(index =>
+                        new InventoryItem(0, new(InventoryListType.AccountCargo, (short)index), original))) }, "fixture")));
+            characterId = created.Id;
+            targetUid = created.Inventory.Find(Bag(9))!.Uid;
+            sourceUid = created.Inventory.Find(Bag(80))!.Uid;
+        }
+        await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            fixture.Sql("CREATE TRIGGER fail_point_title481 AFTER INSERT ON inventory_audit_log WHEN NEW.action_name='equipment_transport' BEGIN SELECT RAISE(ABORT,'title transport rollback'); END");
+            string before = Assets();
+            peer.Send(557, Transport(80, 9, 0, uint.MaxValue)); peer.Expect(1, 557, [0, 7, 0]); peer.Barrier();
+            That(Assets() == before, "267金库跨界晚期SQL失败整笔回滚称号、源石、冷却、revision和审计");
+            fixture.Sql("DROP TRIGGER fail_point_title481");
+            peer.Send(557, Transport(80, 9, 0, uint.MaxValue));
+            peer.Expect(1, 557, Build(writer => { writer.Write((byte)1); writer.Write((ushort)80); writer.Write((ushort)9);
+                writer.Write((ushort)1); writer.Write((ushort)0); writer.Write((byte)0); }));
+            peer.Barrier(CheckTitleDelta);
+            That(fixture.Query("SELECT list_type,slot_index FROM character_inventory_slots WHERE item_uid=$p0", targetUid) is [[12L, 0L]] &&
+                Read(targetUid) == original && Read(sourceUid).Count == 1 &&
+                fixture.Query("SELECT gold FROM characters WHERE id=$p0", characterId) is [[1234L]],
+                "557真实成功返回余量1和目的格0，267保原UID及全部Core且不另扣金币");
+            before = Assets();
+            peer.Send(557, Transport(80, 9, 0, 0)); peer.Expect(1, 557, [0, 7, 0]); peer.Barrier();
+            That(Assets() == before, "旧源槽请求重放不能再次扣石或再迁移267");
+            await Task.Delay(1100); // 481真实cool time=1000，先等合法冷却结束再核满金库错误。
+            before = Assets();
+            peer.Send(557, Transport(80, 10, 0, 0)); peer.Expect(1, 557, [0, 19, 0]); peer.Barrier();
+            That(Assets() == before, "账号金库已满拒绝第二件267，保留剩余石头、称号和完整资产");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            That(Read(targetUid) == original && Read(sourceUid).Count == 1 &&
+                fixture.Query("SELECT list_type,slot_index FROM character_inventory_slots WHERE item_uid=$p0", targetUid) is [[12L, 0L]],
+                "重连重读保持已提交267及剩余1石，不重复执行跨界");
+        }
+        await fixture.StopAsync();
+        That(Read(targetUid) == original && Read(sourceUid).Count == 1, "停止测试服务后重新打开存储仍保留跨界完整结果");
+
+        ItemCore Read(long uid) => JsonSerializer.Deserialize<ItemCore>((string)fixture.Query(
+            "SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", uid).Single()[0]!)!;
+        string Assets() => fixture.Snapshot() + fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM account_wallets ORDER BY account") +
+            fixture.Snapshot("SELECT * FROM account_currency_balances ORDER BY account,currency_kind") +
+            fixture.Snapshot("SELECT * FROM character_consumable_states ORDER BY character_id,item_id") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY audit_id") +
+            fixture.Snapshot("SELECT * FROM mailbox_messages ORDER BY mail_id") +
+            fixture.Snapshot("SELECT * FROM mailbox_attachments ORDER BY attachment_id") +
+            fixture.Snapshot("SELECT * FROM sqlite_sequence ORDER BY name");
+        static void CheckTitleDelta(WirePacket packet) => That(packet.Opcode is 14 or 1681 && packet.Body.Length >= 3 &&
+            packet.Body.Length == 3 + U16(packet.Body, 1) * 123, "称号跨界沿既有完整123B库存投影");
+    }
+
+
     static InventorySlot Bag(short slot)=>new(InventoryListType.Main,slot);
     static byte[] Transport(ushort source,ushort target,byte mode,uint recipient)=>Build(writer=>{writer.Write(source);writer.Write(target);writer.Write(mode);writer.Write(recipient);});
     static byte[] Seal(short target,int item,short source,ushort state=0)=>Build(writer=>{writer.Write(target);writer.Write(item);writer.Write(source);writer.Write(state);});
