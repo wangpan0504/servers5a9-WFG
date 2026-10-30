@@ -48,13 +48,16 @@ internal static class SkillExtendedTcpTests
             peer.Select();
             var before = SkillPacketsTests.DecodeInitialized(peer.SkillInfo);
             peer.Send(331, [1, 5, 0, 3, 2, 128, 4]); peer.Expect(1, 331, [1]);
-            customized = peer.Expect(0, 19).Body;
+            peer.Barrier(); // 原生ACK应用指令，不能再用19重建正在编辑的图标。
+            peer.Send(7, []); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            peer.Select();
+            customized = peer.SceneSkillInfo;
             var commands = SkillPacketsTests.DecodeInitialized(customized);
             That(commands[0].Skills.Single(skill => skill.Id == 5).Command == "028004" &&
                 commands[1].Skills.All(skill => skill.Command == catalog.Get(0, skill.Id).DefaultCommand) &&
                 commands[0].Sp == before[0].Sp && commands[0].Tp == before[0].Tp, "TCP指令整数回推、主树隔离及点数不变");
             long revision = Role(0).Revision;
-            peer.Send(331, [1, 5, 0, 3, 2, 128, 4]); peer.Expect(1, 331, [1]); peer.Expect(0, 19, customized);
+            peer.Send(331, [1, 5, 0, 3, 2, 128, 4]); peer.Expect(1, 331, [1]); peer.Barrier();
             That(Role(0).Revision == revision, "相同指令免写入和revision");
         }
         using (var peer = Open(fixture))
@@ -65,11 +68,13 @@ internal static class SkillExtendedTcpTests
             var ack = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
             That(ack.Skills.Single().Command == "028004" && ack.Skills.Single().Level == 2, "升级ACK保留自定义指令");
             peer.Send(331, [1, 5, 0, 1, 4]); peer.Expect(1, 331, [1]);
-            That(SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body)[0].Skills.Single(skill => skill.Id == 5).Command == "04",
+            peer.Barrier();
+            That(Role(0).Learning.Trees[0].Skills.Single(skill => skill.Id == 5).Command == "04",
                 "实收恢复默认也通过331保存默认指令");
             peer.Send(332, []); peer.Expect(1, 332, [1]);
-            That(SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body).All(tree =>
-                tree.Skills.All(skill => skill.Command == catalog.Get(0, skill.Id).DefaultCommand)), "332清除自定义存档并显式恢复资源默认指令");
+            peer.Barrier();
+            That(Role(0).Learning.Trees.All(tree => tree.Skills.All(skill => skill.Command.Length == 0)),
+                "332清除自定义存档，由原生回调恢复默认，保持当前图标");
             ushort sp = ack.Sp;
             peer.Send(29, Purchase(tp.SkillId, 2));
             var bought = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
@@ -362,7 +367,7 @@ internal static class SkillExtendedTcpTests
             Bytes(peer.SceneSkillInfo, defaultReplay, "同连接重选默认角色恢复完整指令绑定");
             peer.Send(7, []); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
             peer.Select(0);
-            peer.Send(331, [1, 5, 0, 2, 2, 4]); peer.Expect(1, 331, [1]); peer.Expect(0, 19);
+            peer.Send(331, [1, 5, 0, 2, 2, 4]); peer.Expect(1, 331, [1]); peer.Barrier();
             peer.Send(7, []); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
             peer.Select(defaultRole.Slot);
             Bytes(peer.SceneSkillInfo, defaultReplay, "自定义角色切回默认角色不混入上一角色指令");

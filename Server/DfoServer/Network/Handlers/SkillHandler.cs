@@ -67,9 +67,8 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
         if (!result.Success) { log.Write("skill_commands_rejected", new { context.Id, result.Failure }); return CommandResult.Handled; }
         var receipt = result.Receipt ?? throw new InvalidOperationException("Missing skill commands receipt");
         bool Guard() => context.Session.CanPublishLearning(receipt);
+        // 原生331/332成功回调应用当前指令并刷新编辑器；完整19会再次重建面板，清掉仍在使用的图标和排列。
         await context.Reply(opcode, [1], "skill_commands_committed", Guard);
-        await SkillProjection.PublishAsync(context, receipt.Character, "skill_commands_info", "skill_commands_combo", Guard,
-            id => catalog.Get(receipt.Character.Job, id).DefaultCommand);
         await SkillSwitchInventoryProjection.RefreshLearningAsync(context, receipt);
         return CommandResult.Handled;
     }
@@ -199,7 +198,7 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
             return CommandResult.Handled;
         }
 
-        ushort? failure = result.Failure switch
+        ushort failure = result.Failure switch
         {
             SkillLearningFailure.MissingSkill => 0x0015,
             SkillLearningFailure.InsufficientSp => 0x0016,
@@ -207,12 +206,11 @@ internal sealed class SkillHandler(SkillLearningCatalog catalog, ServerLog log, 
             SkillLearningFailure.InsufficientTp => 0x0002,
             SkillLearningFailure.Mastered => 0x0012,
             SkillLearningFailure.RequiredLevel or SkillLearningFailure.Prerequisite => 0x00D9,
-            _ => null
+            // 公共失败尾负责结束学习等待，未支持或非法业务不能静默留下客户端等待状态。
+            _ => 0x00D9
         };
         log.Write("skill_purchase_rejected", new { Connection = context.Id, Reason = result.Failure.ToString(), parsed.Context, parsed.Mode });
-        if (failure is not ushort knownCode)
-            return CommandResult.Handled;
-        await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Failure(knownCode), "skill_purchase_rejected");
+        await context.Reply(CmdPacketType.BUY_SKILL, SkillPackets.Failure(failure), "skill_purchase_rejected");
         return CommandResult.Handled;
     }
 }

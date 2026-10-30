@@ -108,11 +108,11 @@ internal static class SkillPackets
     }
 
     public static byte[] Success(byte context, byte mode, CharacterLearningState state, IReadOnlyList<LearnedSkill> changes)
-        => Changes(context, mode, state, changes, allowEmpty: false);
+        => Changes(context, mode, state, changes, allowEmpty: mode == 1);
 
     // 仅正式训练事务可使用mode3，普通Success继续拒绝该模式。
     public static byte[] TrainingSuccess(byte mode,CharacterLearningState state,IReadOnlyList<LearnedSkill> changes)
-        => Changes(0,mode,state,changes,allowEmpty:false,training:true);
+        => Changes(0,mode,state,changes,allowEmpty:mode is 1 or 3,training:true);
 
     // 成长差量沿用ACK29；空列表只恢复当前树及点数，不清理客户端技能运行对象。
     public static byte[] Growth(byte context, CharacterLearningState state, IReadOnlyList<LearnedSkill> changes)

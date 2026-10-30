@@ -55,6 +55,9 @@ internal static class SkillLearningTests
             (job, id) => Definition(id, [0], 1, 1, 0, type: SkillType.Passive, skillClass: 4)).Failure == SkillLearningFailure.Capacity,
             "初始被动区满时整批拒绝，不溢出到特殊预留槽");
         var source = State(30, [new(8, 7, 1)]);
+        var unchanged = SkillLearning.Plan(0, 0, 10, source, new(0, 1, []), (_, _) => throw new InvalidOperationException("零变化不读取技能"));
+        That(unchanged.Success && ReferenceEquals(unchanged.State, source) && unchanged.Changes.Count == 0,
+            "自动方案已一致仍确认完成，不伪造技能变化或重建快照");
         var dependent = State(18, [new(0, 5, 1), new(1, 6, 1)]);
         var free = new Dictionary<ushort, byte>();
         var steal = new SkillLearningDefinition(0, 30, "skill/steal.skl", SkillType.Active, [25],

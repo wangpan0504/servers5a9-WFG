@@ -65,6 +65,13 @@ internal static partial class PvpTrainingTcpTests
             That(ordinarySkills==OrdinarySkills(),"训练重置、自动学习和换槽不修改角色普通双树点数或绑定");
             That(f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=2672",id) is [[262656L]],
                 "自动加点与独立快照同事务仅清第一通道");
+            string unchangedTraining=f.Snapshot();
+            peer.Send(29,[0,0,3]);
+            byte[] unchangedAck=peer.Expect(1,29).Body;
+            That(unchangedAck.Length==8 && unchangedAck[0]==1 && unchangedAck[6]==0 && unchangedAck[7]==3,
+                "重复自动加点零变化仍确认mode3，结束客户端等待");
+            peer.Barrier();
+            That(unchangedTraining==f.Snapshot(),"已确认训练零变化不重复写入或推进其它任务通道");
             That(f.Query("SELECT COUNT(*) FROM character_pvp_training_skills WHERE character_id=$p0",id) is [[1L]],"训练技能独立持久化");
             peer.Send(33,[33,0,0x70,0x0A,0x10,0,0]);peer.Expect(1,33,[1,0x70,0x0A,0,2,4,0]);
             string before=f.Snapshot();
@@ -165,7 +172,8 @@ internal static partial class PvpTrainingTcpTests
             peer.Expect(1,31,[1,0x72,0x0A,1,2,4,0,0]);QuestLifecycleTcpTests.DrainNotifications(peer);
             before=f.Snapshot();peer.Send(1269,[]);peer.Barrier();
             That(before==f.Snapshot(),"无胜利实例的空1269不能给秘籍");
-            peer.Send(29,[0,1,5,0,0,1,3]);That(peer.Expect(1,29).Body[0]==1,"末项训练自动加点真实提交");
+            peer.Send(29,[0,0,3]);
+            That(peer.Expect(1,29).Body is [1,0,_,_,_,_,0,3],"已有方案无需升级也可真实提交末项训练加点事实");
             peer.Send(50,combo);peer.Expect(1,50,[1]);CheckRoom(peer.Expect(0,41).Body,false,6);
             peer.Send(33,[33,0,0x72,0x0A,0x20,0,0]);peer.Expect(1,33,[1,0x72,0x0A,0,0,4,0]);
             peer.Send(52,[0,254]);peer.Expect(0,43,[(byte)id,(byte)(id>>8),6,1,0,0,255,255]);PvpArenaTcpTests.TownReturn(peer, position);
@@ -203,6 +211,20 @@ internal static partial class PvpTrainingTcpTests
             peer.Barrier();
             That(arenaLearned.Skills.Single().Level==copied[0].Skills.Single(skill=>skill.Id==5).Level+1 &&
                 ordinarySkills==OrdinarySkills(),"离开道场后普通CMD29继续写正式PK域，普通方案保持完整");
+            before=f.Snapshot();
+            for(int repeat=0;repeat<2;repeat++)
+            {
+                peer.Send(29,[0,0,1]);
+                That(peer.Expect(1,29).Body is [1,0,_,_,_,_,0,1],"正式决斗零变化自动加点正常确认并保留模式");
+                peer.Barrier();
+            }
+            peer.Send(29,[0,0,0]);peer.Expect(1,29,[0,0xD9,0]);peer.Barrier();
+            That(before==f.Snapshot(),"决斗重复自动加点及非法空手工请求均不改存档，拒绝后仍可继续操作");
+            peer.Send(331,[1,5,0,3,3,2,4]);peer.Expect(1,331,[1]);peer.Barrier();
+            var commands=System.Text.Json.JsonSerializer.Deserialize<PvpTrainingSkills>((string)f.Query(
+                "SELECT state_json FROM character_pvp_training_skills WHERE character_id=$p0",id)[0][0])!;
+            That(commands.Arena!.Trees[0].Skills.Single(skill=>skill.Id==5).Command=="030204" && ordinarySkills==OrdinarySkills(),
+                "决斗指令保存原始键序且不污染PVE或训练技能，也不回放19清掉编辑图标");
             peer.Send(3,[0]);peer.Expect(1,3,[1]);peer.Closed();
         }
         using(var peer=Open(f,account,gamePort:endpoints[pvp],channelNumber:pvp))
