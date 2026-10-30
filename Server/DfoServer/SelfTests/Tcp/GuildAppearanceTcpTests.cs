@@ -62,13 +62,13 @@ internal static partial class GuildAppearanceTcpTests
             master.Expect(1, 787, [0, 34, 0]);
             master.Send(787, Mark(3u | 3u << 16));
             master.Expect(1, 787, [1]);
-            Drain(master); Drain(member);
+            Drain(master, 3u | 3u << 16); Drain(member, 3u | 3u << 16);
             That(fixture.Query("SELECT mark FROM guild_appearance WHERE guild_id=96") is [[196611L]] &&
                 fixture.Query("SELECT public_funds FROM guilds WHERE guild_id=96") is [[4000L]],
                 "现代4B选择器按成长门槛开放首四图案及四背景，不套旧会标费用");
             master.Send(787, [7]);
             master.Expect(1, 787, [1]);
-            That(Drain(master).Contains((0, 70)) && Drain(member).Contains((0, 70)) &&
+            That(Drain(master, 7).Contains((0, 70)) && Drain(member, 7).Contains((0, 70)) &&
                 fixture.Query("SELECT mark FROM guild_appearance WHERE guild_id=96") is [[7L]] &&
                 fixture.Query("SELECT public_funds FROM guilds WHERE guild_id=96") is [[2000L]],
                 "真实787提交会标与扣款后向同会双方投影权威公会信息");
@@ -78,8 +78,8 @@ internal static partial class GuildAppearanceTcpTests
             That(fixture.Query("SELECT public_funds FROM guilds WHERE guild_id=96") is [[2000L]],
                 "同值网络重试不重复收费");
             master.Send(834, Aura(1, 0));
-            var masterPackets = Drain(master);
-            var memberPackets = Drain(member);
+            var masterPackets = Drain(master, 7);
+            var memberPackets = Drain(member, 7);
             That(!masterPackets.Contains((1, 834)) && masterPackets.Contains((0, 70)) && memberPackets.Contains((0, 70)) &&
                 fixture.Query("SELECT mark,aura_mark,aura_frame FROM guild_appearance WHERE guild_id=96") is [[7L, 1L, 0L]],
                 "真实834保存后发送权威信息，不伪造同号成功ACK");
@@ -97,6 +97,20 @@ internal static partial class GuildAppearanceTcpTests
             fixture.Sql("DROP TRIGGER g_tcp_abort");
             That(fixture.Snapshot("SELECT id,gold,revision FROM characters ORDER BY id") == assets,
                 "外观、出勤均不改写真实角色资产或资产revision");
+        }
+        await fixture.StopAsync();
+        await fixture.StartAsync();
+        using (var master = Open(fixture))
+        using (var member = Open(fixture, "20001"))
+        {
+            Enter(master, 7); Enter(member, 7);
+            Drain(master); Drain(member);
+            master.Send(8, Build(writer => { writer.Write(memberId); writer.Write((byte)3); }));
+            byte[] peerActor = master.Expect(0, 2).Body;
+            That(U16(peerActor, 121) == memberId, "重启重登后公开资料返回目标成员Actor");
+            GuildAppearanceTests.AssertActorMark(peerActor, 7);
+            That(master.Expect(0, 2).Body[0] == 3, "目标公会会标与公开资料一起返回");
+            Drain(master);
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] &&
@@ -141,29 +155,49 @@ internal static partial class GuildAppearanceTcpTests
     }
     static byte[] Aura(uint mark, uint frame) => Build(writer => { writer.Write(mark); writer.Write(frame); });
     static byte[] Text(string value) => GuildApplicationTests.Text(value);
-    static HashSet<(byte Kind, ushort Opcode)> Drain(TcpPeer peer)
+    static HashSet<(byte Kind, ushort Opcode)> Drain(TcpPeer peer, uint? expectedMark = null)
     {
         peer.Send(156, Text("GLookBarrier"));
         var packets = new HashSet<(byte Kind, ushort Opcode)>();
+        int actors = 0;
         for (int guard = 0; guard < 128; guard++)
         {
             var packet = peer.Read();
+            if (expectedMark is { } mark && packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 0)
+            {
+                GuildAppearanceTests.AssertActorMark(packet.Body, mark);
+                actors++;
+            }
             if (packet is { Kind: 0, Opcode: 487 }) peer.CheckGuildPassiveBuffs(packet);
             if (packet.Kind == 1 && packet.Opcode == 156)
             {
                 Bytes(packet.Body, [1], "外观请求后的查重哨兵成功");
+                That(expectedMark is null || actors > 0, "公会会标刷新实际重发Actor，不能只验证数据库或70通知");
                 return packets;
             }
             packets.Add((packet.Kind, packet.Opcode));
         }
         throw new InvalidOperationException("Guild appearance reply did not reach request barrier");
     }
-    static void Enter(TcpPeer peer)
+    static void Enter(TcpPeer peer, uint? expectedMark = null)
     {
         peer.Send(8, [255, 255, 2]);
         peer.Send(4, Build(writer => writer.Write((ushort)0)));
+        int actors = 0;
         for (int guard = 0; guard < 256; guard++)
-            if (peer.Read() is { Kind: 0, Opcode: 124 }) { peer.ReadWeeklyDungeon(); Drain(peer); return; }
+        {
+            var packet = peer.Read();
+            if (expectedMark is { } mark && packet is { Kind: 0, Opcode: 2 } && packet.Body[0] == 0)
+            {
+                GuildAppearanceTests.AssertActorMark(packet.Body, mark);
+                actors++;
+            }
+            if (packet is { Kind: 0, Opcode: 124 })
+            {
+                That(expectedMark is null || actors > 0, "重启重登实际接收带持久会标的Actor");
+                peer.ReadWeeklyDungeon(); Drain(peer); return;
+            }
+        }
         throw new InvalidOperationException("Guild appearance TCP did not enter town");
     }
 }
