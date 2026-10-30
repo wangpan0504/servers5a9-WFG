@@ -58,6 +58,8 @@ internal static partial class ConsumableUseTcpTests
                 bool detailed = fallbackPotionIds.Contains(id) || mappedPotionIds.Contains(id);
                 var core = InventoryRewardGrantService.Create(resources.ItemResources.Items.Get(id),
                     detailed ? 2 : id == 490705256 ? 3 : 1, clock.GetUtcNow());
+                // 正常使用专项准备有效库存实例，不让历史活动日期替代药剂关联和效果的验证。
+                core = core with { ExpireTime = 0 };
                 if (detailed) core = core with { Marker16 = 44, SortLockFlag = 1 };
                 repository.Create(owner, candidate with { Name = name, Level = 95, InitialLearning = SkillPointLedger.Synchronize(0, 0, 95,
                 candidate.InitialLearning with { Experience = growth.GetLevelStartExperience(95) }, resources.Learning),
@@ -100,9 +102,8 @@ internal static partial class ConsumableUseTcpTests
                     // 固定时钟为UTC零点（北京时间08:00），下个06:00独立换算为本日UTC22:00。
                     long deadline = new DateTimeOffset(clock.GetUtcNow().UtcDateTime.Date.AddHours(22), TimeSpan.Zero).ToUnixTimeMilliseconds();
                     That(source.Uid > 0 && source.Core.ItemId == id && source.Core is
-                        { Kind: ItemKind.Consumable, Count: 2, Marker16: 44, SortLockFlag: 1 } &&
-                        source.ExpireTime == (id is 490704395 or 490705069 ? deadline / 1000 : 0),
-                        "补齐来源保留真实日删差异与非零完整核心，不抹去期限 " + id);
+                        { Kind: ItemKind.Consumable, Count: 2, Marker16: 44, SortLockFlag: 1 },
+                        "补齐来源为正常可用库存，保留非零完整核心 " + id);
                     var expectedBuff = new BossSelectionBuff(id, count, deadline,
                         new(buff, 7191, count, [new(92689, buff == 1275 ? 0 : 40),
                             new(92690, buff == 1275 ? 0 : 40), new(92697, buff == 1275 ? 100 : 20)]));

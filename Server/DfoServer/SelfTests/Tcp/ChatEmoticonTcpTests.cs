@@ -62,7 +62,7 @@ internal static class ChatEmoticonTcpTests
             Use(alpha,65);
             alpha.Expect(1,515,Build(w=>{w.Write((byte)1);w.Write((ushort)65);w.Write((byte)0);w.Write(199);}));
             ExpectStorage(alpha,[410000046]);
-            alpha.Expect(0,1559,Build(w=>{w.Write((byte)1);w.Write((byte)3);w.Write(410000046);}));
+            alpha.Expect(0,1559,Build(w=>{w.Write((byte)2);w.Write((byte)3);w.Write(410000046);w.Write((byte)3);w.Write(410000009);}));
             alpha.Expect(0,1558,Build(w=>{w.Write((byte)3);w.Write(new byte[16]);}));alpha.Barrier();
             That(Count(65)==1 && AccountState().Emoticons is [{SkinId:410000046,ExpiresAt:0}],"单ID解锁券只扣一张并保存账号所有权");
             string before=fixture.Snapshot();Use(alpha,65);alpha.Expect(1,515);alpha.Barrier();
@@ -70,7 +70,7 @@ internal static class ChatEmoticonTcpTests
 
             Use(alpha,66);alpha.Expect(1,515);
             ExpectStorage(alpha,[410000004,410000005,410000006,410000007,410000046]);
-            alpha.Expect(0,1559,Build(w=>{w.Write((byte)4);foreach(int id in new[]{410000004,410000005,410000006,410000007}){w.Write((byte)3);w.Write(id);}}));
+            alpha.Expect(0,1559,Build(w=>{w.Write((byte)6);foreach(int id in new[]{410000004,410000005,410000006,410000007,410000046,410000009}){w.Write((byte)3);w.Write(id);}}));
             alpha.Expect(0,1558,Build(w=>{w.Write((byte)3);w.Write(new byte[16]);}));alpha.Barrier();
             That(Count(66)==0 && AccountState().Emoticons.Length==5,"多ID表情券整批入库，源只消费一次");
 

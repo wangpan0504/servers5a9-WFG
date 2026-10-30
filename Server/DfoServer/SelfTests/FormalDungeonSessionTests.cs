@@ -1496,9 +1496,10 @@ internal static class FormalDungeonSessionTests
         var kills = SelfTestCatalogs.KillExperience(pvf);
         var growth = SelfTestCatalogs.Growth(pvf);
         var clear = SelfTestCatalogs.ClearExperience(pvf);
-        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
-        var now = DateTimeOffset.UtcNow;
-        using var fixture = new Fixture("ShopSettle", towns, characters, learning, quests);
+        var clock = ShopFixtureClock(itemResources, rows.Select(row => row.Item).Concat([material, otherItem, cube]));
+        var now = clock.GetUtcNow();
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock);
+        using var fixture = new Fixture("ShopSettle", towns, characters, learning, quests, timeProvider: clock);
         fixture.SelectEntry();
         // 沿既有Delilah夹具用真实发放服务初始化3037账号钱包，不伪造背包币种或装备。
         Check(fixture.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
@@ -1697,6 +1698,16 @@ internal static class FormalDungeonSessionTests
         }
     }
 
+    static Testing.Inventory.DailyBoosterTestClock ShopFixtureClock(ItemResources resources, IEnumerable<int> items)
+    {
+        var now = DateTimeOffset.UtcNow;
+        long deadline = items.Select(id => resources.Items.Get(id).Expiration.AbsoluteTime)
+            .Where(value => value > 0).DefaultIfEmpty(long.MaxValue).Min();
+        // 准入用例统一准备可正常发放的材料与商品，不把历史活动日期混入场景资格回归。
+        if (deadline <= now.ToUnixTimeSeconds()) now = DateTimeOffset.FromUnixTimeSeconds(deadline).AddHours(-1);
+        return new(now);
+    }
+
     internal static void VerifyShopRoomAdmission(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
         const int targetShop = 400000097, nolan = 400001107, material = 490705400;
@@ -1707,13 +1718,13 @@ internal static class FormalDungeonSessionTests
         ];
         var learning = SelfTestCatalogs.SkillLearning(pvf);
         var quests = SelfTestCatalogs.Quests(pvf);
-        var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
-        var now = DateTimeOffset.UtcNow;
+        var clock = ShopFixtureClock(itemResources, rows.Select(row => row.Item).Append(material));
+        var now = clock.GetUtcNow();
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock);
         bool allRoomAccepted = true;
         foreach (var row in rows)
         {
-            using var room = new Fixture("ShopRoom" + Array.IndexOf(rows, row), towns, characters, learning, quests);
+            using var room = new Fixture("ShopRoom" + Array.IndexOf(rows, row), towns, characters, learning, quests, timeProvider: clock);
             PrepareRoom(room);
             var before = room.Read();
             ShopPurchaseReceipt? receipt = null;
@@ -1731,7 +1742,7 @@ internal static class FormalDungeonSessionTests
             Console.WriteLine(JsonSerializer.Serialize(new { kind = "room", itemId = row.Item,
                 accepted = result.Accepted, error = result.Error, quotaKeyValid, purchaseValid }));
         }
-        using var outside = new Fixture("ShopOutside", towns, characters, learning, quests);
+        using var outside = new Fixture("ShopOutside", towns, characters, learning, quests, timeProvider: clock);
         PrepareRoom(outside);
         Check(outside.Session.LeaveRoom() && outside.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)) &&
             outside.Session.Phase == SessionPhase.Town && !InRoom(outside), "外城负例真实出房并旅行到原38/2且仍为Ready Town");
@@ -1770,7 +1781,7 @@ internal static class FormalDungeonSessionTests
                 planned, accepted = result.Accepted, error = result.Error, materialUnchanged, inventoryUnchanged,
                 quotaUnchanged, characterUnchanged, sqlUnchanged, rejected }));
         }
-        using var leaving = new Fixture("ShopLeaving", towns, characters, learning, quests);
+        using var leaving = new Fixture("ShopLeaving", towns, characters, learning, quests, timeProvider: clock);
         PrepareRoom(leaving);
         Character? transition = null;
         string? transitionSql = null;
@@ -1805,8 +1816,13 @@ internal static class FormalDungeonSessionTests
             fixture.Session.Select(fixture.Created.Slot);
             fixture.Session.MarkReady();
             Check(fixture.Session.Phase == SessionPhase.Town && InRoom(fixture), "目标商店夹具真实选角并Ready且IsRoom为真");
-            Check(fixture.Session.MutateInventory(character => service.Grant(character, [new(material, 500)])).Accepted,
-                "房间夹具通过真实服务取得兑换材料");
+            InventoryResult? planned = null;
+            var granted = fixture.Session.MutateInventory(character => planned = InventoryRewardGrantService.TryGrantBatch(character,
+                [new(material, 500)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, now));
+            var template = itemResources.Items.Get(material);
+            Check(granted.Accepted,
+                $"房间夹具通过真实服务取得兑换材料：item={material}, error={granted.Error}, reason={granted.RejectReason}, " +
+                $"planned={planned is not null}, planError={planned?.Error}, kind={template.Kind}, stack={template.StackLimit}, expiration={template.Expiration}");
             fixture.Session.SetCharacterGold(fixture.Created.Name, 1_000_000);
         }
         static long CountItem(Character character, int item) => character.Inventory.Items
@@ -1869,9 +1885,9 @@ internal static class FormalDungeonSessionTests
         var quests = SelfTestCatalogs.Quests(pvf);
         var catalog = SelfTestCatalogs.Dungeons(pvf);
         var rooms = SelfTestCatalogs.Rooms(pvf);
-        var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
-        using (var town = new Fixture("ShopTown", towns, characters, learning, quests))
+        var clock = ShopFixtureClock(itemResources, rows.Select(row => row.Item).Append(material));
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock);
+        using (var town = new Fixture("ShopTown", towns, characters, learning, quests, timeProvider: clock))
         {
             Prepare(town, room: true);
             foreach (var row in rows)
@@ -1933,7 +1949,7 @@ internal static class FormalDungeonSessionTests
         }
 
         // 独立副本夹具从未买过八行，避免一次限额耗尽掩盖场景准入。
-        using var dungeon = new Fixture("ShopDungeon", towns, characters, learning, quests);
+        using var dungeon = new Fixture("ShopDungeon", towns, characters, learning, quests, timeProvider: clock);
         Prepare(dungeon);
         Check(dungeon.Session.BeginDungeonSelection() is not null &&
             dungeon.Session.EnterFormalDungeon(3, 3145, 0, catalog, rooms) is not null &&
@@ -1992,7 +2008,8 @@ internal static class FormalDungeonSessionTests
                     DfoServer.Game.Quests.QuestEligibility.Completed(fixture.Session.Selected!)), "目标商店合法夹具留在真实赛丽亚房间");
             }
             else fixture.SelectEntry();
-            Check(fixture.Session.MutateInventory(character => service.Grant(character, [new(material, 500)])).Accepted,
+            Check(fixture.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+                [new(material, 500)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock.GetUtcNow())).Accepted,
                 "场景夹具使用真实兑换材料实例");
             fixture.Session.SetCharacterGold(fixture.Created.Name, 1_000_000);
         }
@@ -2011,9 +2028,9 @@ internal static class FormalDungeonSessionTests
         ];
         var learning = SelfTestCatalogs.SkillLearning(pvf);
         var quests = SelfTestCatalogs.Quests(pvf);
-        var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
-        var now = DateTimeOffset.UtcNow;
+        var clock = ShopFixtureClock(itemResources, rows.Select(row => row.Item).Append(material));
+        var now = clock.GetUtcNow();
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock);
         foreach (var row in rows)
         {
             var template = itemResources.Items.Get(row.Item);
@@ -2029,7 +2046,7 @@ internal static class FormalDungeonSessionTests
             fillerKind = itemResources.Items.Get(490705421).Kind.ToString() }));
         Check(itemResources.Items.Get(material).Kind == DfoServer.GameWorld.Items.ItemKind.Material && itemResources.Items.Get(490705421).Kind == DfoServer.GameWorld.Items.ItemKind.Consumable,
             "容量夹具只用已证材料和消耗品分类");
-        using (var caps = new Fixture("ShopCaps", towns, characters, learning, quests))
+        using (var caps = new Fixture("ShopCaps", towns, characters, learning, quests, timeProvider: clock))
         {
             Prepare(caps);
             foreach (var row in rows.Where(value => value.Limit is not null))
@@ -2055,7 +2072,8 @@ internal static class FormalDungeonSessionTests
             caps.Session.ReturnToRoster(); caps.Session.Select(sibling.Slot); caps.Session.MarkReady();
             Check(caps.Session.Phase == SessionPhase.Town && towns.IsRoom(caps.Session.Selected!.Position,
                 DfoServer.Game.Quests.QuestEligibility.Completed(caps.Session.Selected!)) &&
-                caps.Session.MutateInventory(character => service.Grant(character, [new(material, 500)])).Accepted,
+                caps.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+                    [new(material, 500)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, now)).Accepted,
                 "同库兄弟角色真实选角留在赛丽亚房间并备足兑换材料");
             caps.Session.SetCharacterGold(sibling.Name, 1_000_000);
             var reopened = new CharacterRepository(caps.Path, quests);
@@ -2095,7 +2113,7 @@ internal static class FormalDungeonSessionTests
         })
         {
             var seed = CapacitySeed(test.Name, test.Row, test.Merge, test.FreeCost);
-            using var full = new Fixture(test.Name, towns, characters, learning, quests, prepared: seed);
+            using var full = new Fixture(test.Name, towns, characters, learning, quests, prepared: seed, timeProvider: clock);
             SelectRoom(full);
             var before = full.Read(); string sql = SqlSnapshot(full);
             var template = itemResources.Items.Get(test.Row.Item);
@@ -2115,7 +2133,7 @@ internal static class FormalDungeonSessionTests
             Console.WriteLine(JsonSerializer.Serialize(new { kind = "matrix-capacity", name = test.Name, itemId = test.Row.Item,
                 accepted = result.Accepted, error = result.Error, unchanged, placement }));
         }
-        using (var late = new Fixture("ShopLate", towns, characters, learning, quests))
+        using (var late = new Fixture("ShopLate", towns, characters, learning, quests, timeProvider: clock))
         {
             Prepare(late);
             var request = new DfoServer.Game.Inventory.Models.BuyItemRequest(490705424, 1, targetShop, nolan);
@@ -2142,7 +2160,8 @@ internal static class FormalDungeonSessionTests
         void Prepare(Fixture fixture)
         {
             SelectRoom(fixture);
-            Check(fixture.Session.MutateInventory(character => service.Grant(character, [new(material, 500)])).Accepted,
+            Check(fixture.Session.MutateInventory(character => InventoryRewardGrantService.TryGrantBatch(character,
+                [new(material, 500)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, now)).Accepted,
                 "矩阵夹具通过真实服务取得兑换材料");
             fixture.Session.SetCharacterGold(fixture.Created.Name, 1_000_000);
         }
@@ -2247,9 +2266,9 @@ internal static class FormalDungeonSessionTests
         ];
         var learning = SelfTestCatalogs.SkillLearning(pvf);
         var quests = SelfTestCatalogs.Quests(pvf);
-        var service = new InventoryService(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
-        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces);
-        var now = DateTimeOffset.UtcNow;
+        var clock = ShopFixtureClock(itemResources, rows.Select(row => row.Item).Append(material));
+        var now = clock.GetUtcNow();
+        var shop = new InventoryShopService(itemResources.Items, itemResources.Shops, itemResources.GoldLimits, itemResources.EpicPieces, clock);
         Check(rows.All(row => itemResources.Items.Get(row.Item).ShopPrice.Materials is [{ ItemId: material, Count: var cost }] && cost == row.Cost &&
             (row.Limit is { } cap ? itemResources.Items.Get(row.Item).ShopPrice.Limit is { AccountWide: true, ResetDaily: false } limit && limit.Count == cap :
                 itemResources.Items.Get(row.Item).ShopPrice.Limit is null)), "批量夹具仍绑定八项真实成本和七项永久账号上限，第八项无限购");
@@ -2377,7 +2396,8 @@ internal static class FormalDungeonSessionTests
             {
                 planned++;
                 var plan = shop.Buy(character, new(rows[0].Item, 2, targetShop, nolan), out _, now);
-                Check(plan.Accepted && replaced.Session.MutateInventory(current => service.Grant(current, [new(material, 1)])).Accepted,
+                Check(plan.Accepted && replaced.Session.MutateInventory(current => InventoryRewardGrantService.TryGrantBatch(current,
+                    [new(material, 1)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, now)).Accepted,
                     "同Session旧计划负例先合法规划，再真实提交一件材料替换Selected");
                 winner = replaced.Session.Selected!;
                 winnerSql = SqlSnapshot(replaced);
@@ -2396,7 +2416,7 @@ internal static class FormalDungeonSessionTests
         using (var revision = Prepare("BatchRev"))
         {
             var stale = revision.Session.Selected!;
-            var other = new GameSession(revision.Repository, towns, revision.Owner, questCatalog: quests);
+            var other = new GameSession(revision.Repository, towns, revision.Owner, questCatalog: quests, timeProvider: clock);
             other.Select(stale.Slot); other.MarkReady();
             Character? winner = null;
             string? winnerSql = null;
@@ -2406,7 +2426,8 @@ internal static class FormalDungeonSessionTests
                 revision.Session.PlanAndCommitShopBuy(targetShop, character =>
                 {
                     var plan = shop.Buy(character, new(rows[0].Item, 2, targetShop, nolan), out _, now);
-                    Check(plan.Accepted && other.MutateInventory(current => service.Grant(current, [new(material, 1)])).Accepted,
+                    Check(plan.Accepted && other.MutateInventory(current => InventoryRewardGrantService.TryGrantBatch(current,
+                        [new(material, 1)], itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, now)).Accepted,
                         "旧revision负例用另一正式Session真实提交一件材料，保留原计划角色引用");
                     winner = revision.Read(); winnerSql = SqlSnapshot(revision);
                     return plan;
@@ -2445,7 +2466,7 @@ internal static class FormalDungeonSessionTests
                     Same(before, takeover.Repository.LoadCharacter(replacement, before.Slot)) && SqlSnapshot(takeover) == sql,
                     "接管使旧owner和generation在提交前失效，不扣目标成本、发奖、写配额或审计");
                 takeover.Owner.Dispose();
-                var current = new GameSession(takeover.Repository, towns, replacement!, questCatalog: quests);
+                var current = new GameSession(takeover.Repository, towns, replacement!, questCatalog: quests, timeProvider: clock);
                 current.Select(before.Slot); current.MarkReady();
                 ShopPurchaseReceipt? receipt = null;
                 var result = current.PlanAndCommitShopBuy(targetShop,
@@ -2465,7 +2486,7 @@ internal static class FormalDungeonSessionTests
                 character => shop.Buy(character, new(rows[0].Item, 7, targetShop, nolan), out initialReceipt, now));
             Committed(race, before, initial, initialReceipt, rows[0], 7);
             var sibling = race.Repository.Create(race.Owner, Seed("BatchRaceB"));
-            var secondSession = new GameSession(race.Repository, towns, race.Owner, questCatalog: quests);
+            var secondSession = new GameSession(race.Repository, towns, race.Owner, questCatalog: quests, timeProvider: clock);
             secondSession.Select(sibling.Slot); secondSession.MarkReady();
             var a = race.Session.Selected!;
             var b = secondSession.Selected!;
@@ -2514,7 +2535,7 @@ internal static class FormalDungeonSessionTests
 
         Fixture Prepare(string name, NewCharacter? seed = null)
         {
-            var f = new Fixture(name, towns, characters, learning, quests, prepared: seed ?? Seed(name));
+            var f = new Fixture(name, towns, characters, learning, quests, prepared: seed ?? Seed(name), timeProvider: clock);
             try
             {
                 f.Session.Select(f.Created.Slot); f.Session.MarkReady();

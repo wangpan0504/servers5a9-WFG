@@ -480,6 +480,8 @@ internal static partial class FormalDungeonTcpTests
                         {
                             peer.Expect(0,115,[1,1,(byte)key,(byte)(key>>8)]); peer.Expect(0,31,[]);
                         }
+                        // 升级后的411在本次成长投影之后发送；下一次击杀前按真实资格完整校验，不能当作38读取。
+                        peer.Barrier(peer.ReadChatEmoticons);
                     }
                 }
                 That(visited.Count == 6 && deaths == 32 && fixture.Snapshot(questQuery,peer.Id) == originalQuest,
@@ -1119,6 +1121,7 @@ internal static partial class FormalDungeonTcpTests
                         peer.Expect(0, 31, []);
                     }
                     pickups += PickupResourceDrops(fixture, peer, death, 0);
+                    peer.Barrier(peer.ReadChatEmoticons);
                 }
             }
 
