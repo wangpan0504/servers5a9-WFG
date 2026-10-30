@@ -518,6 +518,7 @@ internal sealed partial class ItemCatalog
             throw new InvalidDataException("PVF 物品不存在: " + id);
         var text = parsed ?? (isEquipment ? EquipmentFile.ReadScript(pvf.ReadText, "equipment/" + path) :
             new PvfDocument(pvf.ReadText("stackable/" + path)));
+        string stackableType = isEquipment ? "" : ReadStackableType(pvf.ReadText("stackable/" + path));
         byte slot = 0;
         ItemKind kind;
         if (isEquipment)
@@ -530,7 +531,7 @@ internal sealed partial class ItemCatalog
         }
         else
         {
-            string type = Regex.Match(text.Section("stackable type"), @"\[([^\]]+)\]").Groups[1].Value.ToLowerInvariant();
+            string type = Regex.Match(stackableType, @"\[([^\]]+)\]").Groups[1].Value.ToLowerInvariant();
             if (type.Length == 0)
             {
                 // 品级箱等只有 action type、没有 stackable type。没有动作声明的仍留给专用容器。
@@ -613,7 +614,7 @@ internal sealed partial class ItemCatalog
         return new(id, kind, slot, (byte)minimum, (ushort)durability, stackLimit,
             Int("weight", 0), Int("rarity", 0), Int("grade", 0), text.Section("attach type"),
             jobMask, checked((ushort)Int("required skill", 0)),
-            name, text.Section("stackable type").Replace("`", "").Trim())
+            name, stackableType.Replace("`", "").Trim())
         {
             IsPremiumService = premiumServiceItems.Contains(id) || !isEquipment && IsPremiumStackable(text) || cargoTarget > 0 || acquisitionCargo.ContainsKey(id),
             AcquisitionContract = acquisitionContracts.GetValueOrDefault(id),
@@ -731,6 +732,12 @@ internal sealed partial class ItemCatalog
         var restrictions = tags.Where(tag => !tag.Equals("enable", StringComparison.OrdinalIgnoreCase)).ToArray();
         return restrictions.Length == 0 || restrictions.Any(tag => !tag.Equals("hardcore mode", StringComparison.OrdinalIgnoreCase));
     }
+
+    // 客户端依次覆盖堆叠类型；公会硬币先声明material、后声明quest，以最后声明决定分页。
+    internal static string ReadStackableType(string script) =>
+        Regex.Matches(script, @"^\[stackable type\](.*?)(?=\r?\n\[|\z)",
+            RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.IgnoreCase)
+            .LastOrDefault()?.Groups[1].Value.Trim() ?? "";
 
     internal static bool IsPremiumStackable(PvfDocument text) =>
         Regex.Match(text.Section("stackable type"), @"\[([^\]]+)\]").Groups[1].Value

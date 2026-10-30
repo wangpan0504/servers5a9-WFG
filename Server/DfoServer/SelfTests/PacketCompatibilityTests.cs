@@ -29,7 +29,11 @@ internal static class PacketCompatibilityTests
         Array.Clear(selection, 5, 4); // 仅归一服务端当前时间，其他字节必须完全一致。
         // 固定样本仅将 offset222 从职业0修正为初始城镇38，其余234B保持原合同。
         Match(selection, "4C0CC901DF0FA44EA4F658D90B0979D1FD45AAC6CE382086FE0EA3757D0D6E72", "selection initial town");
-        Match(TownPackets.Actor(character, 0), "70C8B1413118DC816BBE1113BDE7E3F7D3CF6BD7B2D489BD5EDD0C0454D27592", "actor");
+        byte[] actor = TownPackets.Actor(character, 0);
+        That(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(actor.AsSpan(73)) == 20000, "actor默认队伍边框");
+        // #878已把默认边框写入状态区+68；只归一这4B，其余正文继续核对原完整样本。
+        Array.Clear(actor, 73, 4);
+        Match(actor, "70C8B1413118DC816BBE1113BDE7E3F7D3CF6BD7B2D489BD5EDD0C0454D27592", "actor excluding corrected default party frame");
         Match(TownPackets.Player(character, new CharacterStatComputer(characters).Compute(character), 0), "F59CE65CDCA7929F745F6E04A6A4618BC00E865D4FA007C14299340D4ED0CEA9", "player");
         // 空历史的固定样本仅增加flags[13700]=1，月轮山显示位不写入角色存档。
         Match(TownPackets.CompletedQuests(character), "5508BAA1DB2D574236E6E16313C71431E90DC61F47152F90FDA3FCCC69AC2F68", "completed quests");

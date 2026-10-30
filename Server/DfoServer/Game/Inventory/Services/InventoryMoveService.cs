@@ -77,6 +77,14 @@ internal static class InventoryMoveService
         if (source is null || ExpiredMoveBlocked(source, sourceSlot, destinationSlot, utcSeconds) ||
             destination is not null && ExpiredMoveBlocked(destination, destinationSlot, sourceSlot, utcSeconds))
             return InventoryResult.Reject(CannotMoveItem);
+        var storedSource = source;
+        // 旧公会币在仓库及迁移空间不足时保留原分类；只归一本次移出的数量，剩余实例仍按原仓库合同保存。
+        if (source.Core.ItemId == GameWorld.Guilds.GuildNpcCatalog.MemberCoinItem && source.Core.Kind == ItemKind.Material)
+        {
+            var sourceTemplate = catalog.Get(source.Core.ItemId);
+            if (InventoryKindCompatibility.AcceptsKind(source.Core.Kind, sourceTemplate))
+                source = source with { Core = InventoryKindCompatibility.Normalize(source.Core, sourceTemplate) };
+        }
         if (throwOntoOccupied && sourceSlot.List != destinationSlot.List &&
             !(source.Core.IsStackable && destination!.Core.IsStackable && source.Core.ItemId == destination.Core.ItemId))
         {
@@ -207,7 +215,7 @@ internal static class InventoryMoveService
             if (count == source.Core.Count)
                 planned.Remove(sourceSlot);
             else
-                planned[sourceSlot] = source with { Core = source.Core with { Value = source.Core.Value - count } };
+                planned[sourceSlot] = storedSource with { Core = storedSource.Core with { Value = storedSource.Core.Value - count } };
         }
     }
 

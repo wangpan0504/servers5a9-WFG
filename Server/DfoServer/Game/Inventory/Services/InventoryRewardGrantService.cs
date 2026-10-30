@@ -157,9 +157,9 @@ internal static class InventoryRewardGrantService
             bool legacyRune = incomingInstance?.Core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
             if (incomingInstance is not null)
             {
-                if (!InventoryTalismanCompatibility.AcceptsKind(incomingInstance.Core.Kind, template.Kind))
+                if (!InventoryKindCompatibility.AcceptsKind(incomingInstance.Core.Kind, template))
                     return InventoryResult.Reject(19);
-                incomingInstance = incomingInstance with { Core = InventoryTalismanCompatibility.Normalize(incomingInstance.Core, template) };
+                incomingInstance = incomingInstance with { Core = InventoryKindCompatibility.Normalize(incomingInstance.Core, template) };
             }
             var prototype = incomingInstance is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement,
                 shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod,
@@ -199,11 +199,11 @@ internal static class InventoryRewardGrantService
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(pieces);
         bool legacyRune = core.Kind == ItemKind.Consumable && template.Kind == ItemKind.Rune;
-        if (core.ItemId != template.Id || !InventoryTalismanCompatibility.AcceptsKind(core.Kind, template.Kind))
+        if (core.ItemId != template.Id || !InventoryKindCompatibility.AcceptsKind(core.Kind, template))
             return InventoryResult.Reject();
-        core = InventoryTalismanCompatibility.Normalize(core, template);
+        core = InventoryKindCompatibility.Normalize(core, template);
         if (
-            core.Kind is not (ItemKind.Equipment or ItemKind.Talisman) && !core.IsStackable ||
+            core.Kind is not (ItemKind.Equipment or ItemKind.Talisman or ItemKind.GuildMedal) && !core.IsStackable ||
             CurrencyWallet.RewardKind(core.ItemId) is not null || pieces.ByPiece.ContainsKey(core.ItemId))
             return InventoryResult.Reject();
         try

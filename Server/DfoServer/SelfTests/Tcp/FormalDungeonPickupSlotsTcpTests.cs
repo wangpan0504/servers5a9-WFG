@@ -24,6 +24,7 @@ internal static partial class FormalDungeonTcpTests
         var gem = InventoryRewardGrantService.Create(items.Get(90000), 2);
         var filler = InventoryRewardGrantService.Create(items.Get(90032));
         var consumable = InventoryRewardGrantService.Create(items.Get(1013), 3);
+        var medal = InventoryRewardGrantService.Create(items.Get(100380045)) with { Attr = 3, GuardianGemKeys = 2, Extension97 = 77 };
         ushort id = 0;
         string saved;
         using (var peer = Open(fixture))
@@ -36,8 +37,10 @@ internal static partial class FormalDungeonTcpTests
                 var contents = role.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment && item.Position.Index != 12)
                     .Concat(Enumerable.Range(9, 56).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot), gear)))
                     .Concat(Enumerable.Range(49, 49).Select(slot => new InventoryItem(0, new(InventoryListType.GuildMedal, (short)slot), filler)))
+                    .Concat(Enumerable.Range(1, 48).Select(slot => new InventoryItem(0, new(InventoryListType.GuildMedal, (short)slot), medal)))
                     .Concat(Enumerable.Range(3, 6).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot), slot == 4 ? gem : slot == 5 ? consumable : gear)))
                     .Append(new(0, new(InventoryListType.Equipment, 12), gear))
+                    .Append(new(0, new(InventoryListType.Equipment, 32), medal))
                     .Concat(Enumerable.Range(65, 56).Select(slot => new InventoryItem(0, new(InventoryListType.Main, (short)slot),
                         InventoryRewardGrantService.Create(items.Get(1000), 1)))).ToImmutableArray();
                 InventoryService.Commit(repository, owner, role,
@@ -61,6 +64,8 @@ internal static partial class FormalDungeonTcpTests
             Discard(peer, InventoryListType.Main, 3, 1);
             Pickup(peer, ground, 3, gear);
             Pickup(peer, Discard(peer, InventoryListType.Main, 4, 2), 4, gem);
+            uint droppedMedal = Discard(peer, InventoryListType.Equipment, 32, 1);
+            Pickup(peer, droppedMedal, 0, medal, InventoryListType.GuildMedal);
             uint food = Discard(peer, InventoryListType.Main, 5, 3);
             string fullBag = Assets() + fixture.Snapshot("SELECT revision FROM characters WHERE id=$p0", id);
             peer.Send(43, PickupRequest(food));
@@ -108,21 +113,21 @@ internal static partial class FormalDungeonTcpTests
             return U32(notice, 6);
         }
 
-        void Pickup(TcpPeer peer, uint ground, short slot, ItemCore core)
+        void Pickup(TcpPeer peer, uint ground, short slot, ItemCore core, InventoryListType list = InventoryListType.Main)
         {
             byte[] request = PickupRequest(ground);
             peer.Send(43, request);
             byte[] notice = peer.Expect(0, 39).Body;
             That(notice.Length == 19 && U32(notice, 0) == ground && U16(notice, 16) == slot, "拾取通知使用实际目标槽");
             byte[] delta = peer.Expect(0, 14).Body;
-            That(delta.Length == 126 && delta[0] == 0 && U16(delta, 1) == 1 && U16(delta, 3) == slot &&
+            That(delta.Length == 126 && delta[0] == (byte)list && U16(delta, 1) == 1 && U16(delta, 3) == slot &&
                 U32(delta, 5) == core.ItemId && U32(delta, 9) == core.Value, "库存差量仍保留完整行、原品级或完整数量");
             peer.Expect(1, 43, [1]);
             peer.Barrier();
             var row = fixture.Query("""
                 SELECT i.item_uid,i.item_core FROM character_inventory_slots s JOIN character_inventory_items i USING(item_uid)
-                WHERE s.character_id=$p0 AND s.list_type=0 AND s.slot_index=$p1
-                """, peer.Id, slot).Single();
+                WHERE s.character_id=$p0 AND s.list_type=$p1 AND s.slot_index=$p2
+                """, peer.Id, (byte)list, slot).Single();
             That(Convert.ToInt64(row[0]) > 0 && JsonSerializer.Deserialize<ItemCore>((string)row[1]) == core,
                 "独立读库核对实际入包UID和完整核心，不以成功ACK代替保存证据");
             string old = Assets();

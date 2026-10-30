@@ -103,7 +103,7 @@ internal static class InventoryCoreGrantTests
         Reject(empty, new(3034, ItemKind.Material, 1), currencyTemplate, 1, "数值钱包不能伪装物理核心");
         var pieceTemplate = Template(50001, ItemKind.Material, int.MaxValue);
         Reject(empty, new(50001, ItemKind.Material, 1), pieceTemplate, 1, "账号史诗碎片不能伪装物理核心");
-        foreach (var kind in new[] { ItemKind.Avatar, ItemKind.Creature, ItemKind.CreatureEquipment, ItemKind.GuildMedal })
+        foreach (var kind in new[] { ItemKind.Avatar, ItemKind.Creature, ItemKind.CreatureEquipment })
         {
             var unsupported = Template(70000 + (int)kind, kind, 1);
             Reject(empty, new(unsupported.Id, kind, 1), unsupported, 1, "非普通装备/堆叠核心不借用此入口: " + kind);

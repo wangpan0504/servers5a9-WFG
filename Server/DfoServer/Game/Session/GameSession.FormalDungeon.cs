@@ -1532,7 +1532,7 @@ internal sealed partial class GameSession
         if (prepared is null) return new FormalDungeonPickupResult(DungeonRunOutcome.Rejected);
         var now = DateTimeOffset.UtcNow;
         InventoryResult plan;
-        if (original.InventoryOrigin is not null && goldLimits is not null && original.Core.Kind is ItemKind.CreatureEquipment or ItemKind.GuildMedal)
+        if (original.InventoryOrigin is not null && goldLimits is not null && original.Core.Kind == ItemKind.CreatureEquipment)
             plan = InventoryRewardGrantService.TryGrantItems(Selected, [new(0, new(InventoryListType.Main, 0), original.Core)],
                 items, goldLimits, pieces, now);
         else if (goldLimits is not null && (original.UsesCollectionLedger || !original.IsGold && pieces.ByPiece.ContainsKey(original.Core.ItemId)))

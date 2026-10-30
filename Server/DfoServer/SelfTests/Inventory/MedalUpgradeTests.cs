@@ -18,6 +18,41 @@ internal static class MedalUpgradeTests
     public static void RunCore()
     {
         int before = Count;
+        That(ItemCatalog.ReadStackableType("[stackable type]\n`[material]` 0\n[stackable type]\n`[quest]` 0") == "`[quest]` 0" &&
+            ItemCatalog.ReadStackableType("[stackable type]\n`[quest]` 0\n[stackable type]\n`[material]` 0") == "`[material]` 0",
+            "堆叠类型按声明顺序取最后一条，不按物品名称或固定类型优先级猜测");
+        var coin = new ItemTemplate(Coin, ItemKind.Quest, 0, 0, 0, 10000, 0, 0, 0, "[trade]", ushort.MaxValue, 0, "公会硬币");
+        var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        catalog.PrefillTemplates(new[] { coin }.ToDictionary(item => item.Id));
+        var legacy = new InventoryItem(42, new(InventoryListType.Main, 121), new(Coin, ItemKind.Material, 100)
+            { SortLockFlag = 1, Extension97 = 77 });
+        var old = new Character(1, 10000, "LegacyGuildCoin", 0, new(1, 0, 10, 10), null) { Inventory = new([legacy]) };
+        var migrated = InventoryKindCompatibility.Plan(old, catalog);
+        That(migrated.Accepted && migrated.Plan!.Before == old.Inventory &&
+            migrated.Plan.After.Find(new(InventoryListType.Main, 177)) == legacy with
+            { Position = new(InventoryListType.Main, 177), Core = legacy.Core with { Kind = ItemKind.Quest } },
+            "旧公会硬币迁入任务页，完整保留UID、数量、锁与扩展位，原快照不改");
+        var full = old with { Inventory = new([legacy, .. Enumerable.Range(177, 56).Select(slot =>
+            new InventoryItem(slot, new(InventoryListType.Main, (short)slot), new(Coin, ItemKind.Quest, 1)))]) };
+        That(!InventoryKindCompatibility.Plan(full, catalog).Accepted && full.Inventory.Find(legacy.Position) == legacy,
+            "任务页满时整批迁移拒绝，原硬币不丢失且仍能登录");
+        That(!InventoryKindCompatibility.AcceptsKind(ItemKind.Material, coin with { Id = Coin + 1 }),
+            "其他材料不能借精确公会硬币兼容转成任务物品");
+        foreach (var list in new[] { InventoryListType.PersonalCargo, InventoryListType.AccountCargo })
+        {
+            var stored = legacy with { Position = new(list, 0) };
+            var cargo = old with { Inventory = new([stored]) { AccountCargo = new(Capacity: 4) } };
+            var deferred = InventoryKindCompatibility.Plan(cargo, catalog);
+            That(deferred.Accepted && deferred.Plan!.After.Items.SequenceEqual(cargo.Inventory.Items),
+                "仓库旧硬币保持材料原实例，不在选角时接管账号仓库物品");
+            var taken = InventoryMoveService.Plan(cargo, new(stored.Position, Coin, 40, new(InventoryListType.Main, 177), 0, 0, -1, 0, 0), catalog, 0);
+            That(taken.Accepted && taken.Plan!.After.Find(stored.Position) == stored with { Core = stored.Core with { Value = 60 } } &&
+                taken.Plan.After.Find(new(InventoryListType.Main, 177)) is { Core.Kind: ItemKind.Quest, Core.Count: 40, Uid: 0 },
+                "仓库拆取只归一本次数量，剩余材料实例及UID保持，目标合法进入任务页");
+            var current = cargo with { Inventory = taken.Plan!.After };
+            That(!InventoryMoveService.Plan(current, new(new(InventoryListType.Main, 177), Coin, 40, new(list, 1), 0, 0, -1, 0, 0), catalog, 0).Accepted,
+                "当前任务类硬币不能重新存入仓库，不放宽任务物品仓储规则");
+        }
         string Resolve(int index) => index switch
         {
             -1 => "[table]", -2 => "[table type]", -3 => "[/table]",
@@ -70,13 +105,14 @@ internal static class MedalUpgradeTests
             "公会硬币权重按稀有度0..6读取；采用guild flag列而非普通rarity列");
         var medal = r.Items.Get(Medal);
         var rough = r.Items.Get(100380045);
-        That(medal.Kind == ItemKind.GuildMedal && medal.Rarity == 6 && rough.Rarity == 3 && r.Items.Get(Coin).Kind == ItemKind.Material,
-            "客户端实测勋章稀有度6/3与PVF一致，公会硬币是可堆叠材料");
+        That(medal.Kind == ItemKind.GuildMedal && medal.Rarity == 6 && rough.Rarity == 3 && r.Items.Get(Coin).Kind == ItemKind.Quest &&
+            r.Items.Get(Coin).StackableType == "[quest] 0",
+            "勋章稀有度6/3与PVF一致，公会硬币按最后声明进入任务页，与客户端分类一致");
         That(rules.CoinCost(medal.Rarity, 1) == 18 && rules.CoinCost(medal.Rarity, 2) == 36 && rules.CoinCost(medal.Rarity, 3) == 55 &&
             rules.CoinCost(rough.Rarity, 1) == 10, "四次实机读数18/36/55/10由公式复现");
 
         var coin = r.Items.Get(Coin);
-        var coinStack = new InventoryItem(2, new(InventoryListType.Main, 121), InventoryRewardGrantService.Create(coin, 100));
+        var coinStack = new InventoryItem(2, new(InventoryListType.Main, 177), InventoryRewardGrantService.Create(coin, 100));
         Character Bag(byte level = 0, int coins = 100, int expire = 0, byte lockId = 0, int materialId = Coin,
             InventorySlot? target = null)
         {
@@ -89,17 +125,17 @@ internal static class MedalUpgradeTests
             };
         }
         EnhancementRequest Request(InventorySlot target, EnhancementMode mode = EnhancementMode.Reinforce, int itemId = Medal) =>
-            new(mode, target, itemId, 121, -1, ReadOnlyMemory<byte>.Empty, -1, -1);
+            new(mode, target, itemId, 177, -1, ReadOnlyMemory<byte>.Empty, -1, -1);
         var bag = Bag(level: 0xE0);
         var service = new InventoryEnhancementService(r.Items, r.Enhancements, r.MedalUpgrades, new FixedRandom(0));
         var bagItem = bag.Inventory.Find(BagSlot)!;
         var result = service.Plan(bag, Request(BagSlot), out var receipt);
         That(result.Accepted && receipt is { OutcomeCode: 0, OldLevel: 0, NewLevel: 1, MaterialRemaining: 82, GoldCost: 0, InPlace: true } &&
             result.Plan!.After.Find(BagSlot) == bagItem with { Core = bagItem.Core with { Attr = 0xE1 } } &&
-            result.Plan.After.Find(new(InventoryListType.Main, 121))!.Core.Count == 82 && result.Plan.After.Gold == 0,
+            result.Plan.After.Find(new(InventoryListType.Main, 177))!.Core.Count == 82 && result.Plan.After.Gold == 0,
             "列表38勋章+0强化成功只改Attr低五位，按PVF扣18枚公会硬币且不收金币");
         var ack = EnhancementPackets.Ack(new(true, 0), receipt);
-        That(ack.Length == 27 && ack[1] == 0 && BitConverter.ToInt16(ack, 2) == 121 && BitConverter.ToInt32(ack, 4) == 82 &&
+        That(ack.Length == 27 && ack[1] == 0 && BitConverter.ToInt16(ack, 2) == 177 && BitConverter.ToInt32(ack, 4) == 82 &&
             ack[10] == 0 && ack[11] == 0 && ack[12] == 0 && ack[13] == 1 && ack[14] == 38 && BitConverter.ToInt16(ack, 15) == 0 &&
             BitConverter.ToInt16(ack, 17) == -1 && BitConverter.ToInt16(ack, 19) == -1, "勋章强化沿用CMD80的27B成功回包");
         foreach (var slot in new[] { new InventorySlot(InventoryListType.GuildMedal, 9),
@@ -116,7 +152,7 @@ internal static class MedalUpgradeTests
         var destroy = new InventoryEnhancementService(r.Items, r.Enhancements, r.MedalUpgrades, new FixedRandom(79999));
         var destroyed = destroy.Plan(Bag(level: 10, coins: 1000), Request(BagSlot), out receipt);
         That(destroyed.Accepted && receipt is { OutcomeCode: 3, OldLevel: 10, NewLevel: 0, Refunds.Length: 0 } &&
-            destroyed.Plan!.After.Find(BagSlot) is null && destroyed.Plan.After.Find(new(InventoryListType.Main, 121))!.Core.Count == 1000 - 202,
+            destroyed.Plan!.After.Find(BagSlot) is null && destroyed.Plan.After.Find(new(InventoryListType.Main, 177))!.Core.Count == 1000 - 202,
             "目标+11失败销毁，原槽清空、材料照扣并按当前方案不给补偿行");
         var boundary = new InventoryEnhancementService(r.Items, r.Enhancements, r.MedalUpgrades, new FixedRandom(15000));
         That(boundary.Plan(Bag(level: 1), Request(BagSlot), out receipt).Accepted && receipt is { OutcomeCode: 0, NewLevel: 2 },

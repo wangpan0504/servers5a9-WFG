@@ -35,6 +35,20 @@ internal static class DungeonPickupPlanningTests
         var pieces = new EpicPieceCatalog("[piece list]\n9000 10300000\n[/piece list]\n[equipment recipe info]\n[/equipment recipe info]");
         var fragment = new ItemTemplate(10300000, ItemKind.Material, 0, 1, 0, 1000, 0, 4, 1, "[trade]", ushort.MaxValue, 0, "碎片");
         var now = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000);
+        var medal = new ItemTemplate(100380045, ItemKind.GuildMedal, 32, 0, 0, 1, 0, 3, 0, "[trade]", ushort.MaxValue, 0, "磨损的勋章");
+        var medalCore = InventoryRewardGrantService.Create(medal) with { Attr = 3, GuardianGemKeys = 2, Extension97 = 77 };
+        var pickedMedal = DungeonPickupPlanning.Item(original, new(medalCore), medal, limits, pieces, now);
+        That(pickedMedal.Accepted && pickedMedal.Plan!.After.Find(new(InventoryListType.GuildMedal, 0)) is { Uid: 0 } picked &&
+            picked.Core == medalCore && original.Inventory.Items.IsEmpty,
+            "勋章拾取进入列表38，保留冻结强化、守护珠及完整扩展，不重新创建Core");
+        var fullMedals = original with { Inventory = new([.. Enumerable.Range(0, 49).Select(slot =>
+            new InventoryItem(slot + 1, new(InventoryListType.GuildMedal, (short)slot), medalCore)),
+            .. Enumerable.Range(3, 6).Select(slot => new InventoryItem(slot + 100, new(InventoryListType.Main, (short)slot), medalCore))]) };
+        That(!DungeonPickupPlanning.Item(fullMedals, new(medalCore), medal, limits, pieces, now).Accepted,
+            "勋章页和快捷栏都满时拒绝完整拾取，不覆盖已有勋章");
+        foreach (var kind in new[] { ItemKind.Avatar, ItemKind.Creature })
+            That(!InventoryRewardGrantService.TryGrantCore(original, new(medal.Id, kind, 1), medal with { Kind = kind }, pieces, now).Accepted,
+                "需要独立详情的装扮或宠物仍不能借完整Core入口发放");
         var full = original with { Inventory = new(Enumerable.Range(121, 56).Select(slot =>
             new InventoryItem(slot, new(InventoryListType.Main, (short)slot), new(2, ItemKind.Material, 1))).ToImmutableArray()) };
         var core = new ItemCore(fragment.Id, fragment.Kind, 3);
