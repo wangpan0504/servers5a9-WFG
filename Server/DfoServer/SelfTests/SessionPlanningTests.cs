@@ -889,6 +889,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_guild_npc_item_crafts(craft_id,character_id,guild_id,joined_at,npc_id,benefit_id,deadline,item_core)
                     VALUES(printf('%064d',{{id}}),{{id}},65000,1,400001065,7001,2000000000,'{}');
                 INSERT INTO character_server_item_usage VALUES({{id}},'{}');
+                INSERT INTO character_prey_normal_progress VALUES({{id}},'planning',20261031,3,4);
                 """);
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
         }

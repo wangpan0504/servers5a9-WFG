@@ -259,6 +259,8 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
     public bool IsOrdinaryLuke => Id is >= 5101 and <= 5106 &&
         Path.StartsWith("dungeon/luke_normal/",StringComparison.OrdinalIgnoreCase) &&
         Marker("normal luke dungeon") && Marker("raid normal dungeon");
+    public bool IsOrdinaryPrey => Id is >= 400000032 and <= 400000046 &&
+        Path.StartsWith("dungeon/gcontents/190606_prey_raid_normal/", StringComparison.OrdinalIgnoreCase) && !IsRaid;
     public bool IsAncientInfinite => Id is >= 7101 and <= 7107 &&
         Path.StartsWith("dungeon/ancient_infinited/", StringComparison.OrdinalIgnoreCase) &&
         RawSections.Where(row => row.Tag == "ancient dungeon").ToArray() is { Length: > 0 } ancient &&
@@ -367,6 +369,9 @@ internal sealed record DungeonDefinition(int Id, string Path, int? MinimumLevel,
             var plain = RawSections.Where(section => section.Tag == "difficulty").ToArray();
             if (designated.Length == 1 && designated[0].Tokens is [{ Type: 0, Value: >= 0 and <= 4 } locked])
                 return difficulty == locked.Value && (plain.Length == 0 || plain is [{ Tokens: [{ Type: 0, Value: var shown }] }] && shown == locked.Value);
+            // 普雷妮十五图仅声明difficulty 2，匹配客户端正常16请求也发2；不能按缺省0拒绝。
+            if (IsOrdinaryPrey && designated.Length == 0)
+                return difficulty == 2 && plain is [{ Tokens: [{ Type: 0, Value: 2 }] }];
             return IsTournament && designated.Length == 1 || difficulty == 0;
         }
         // 部分副本重复声明同一难度表；内容相同不构成冲突，未知或不一致声明仍拒绝。
@@ -427,6 +432,8 @@ internal sealed class DungeonCatalog
     public DungeonEnterCountCatalog EnterCounts => enterCounts.Value;
     private readonly Lazy<EkernCycleCatalog> ekernCycle;
     public EkernCycleCatalog EkernCycle => ekernCycle.Value;
+    private readonly Lazy<PreyNormalCatalog> preyNormal;
+    public PreyNormalCatalog PreyNormal => preyNormal.Value;
     private DungeonCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> dungeons, IReadOnlyDictionary<int, string> maps)
     {
         (this.archive, this.dungeons, this.maps) = (archive, dungeons, maps);
@@ -437,6 +444,7 @@ internal sealed class DungeonCatalog
         despair = new(() => TowerOfDespairCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         enterCounts = new(() => DungeonEnterCountCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
         ekernCycle = new(() => EkernCycleCatalog.Load(archive),LazyThreadSafetyMode.ExecutionAndPublication);
+        preyNormal = new(() => PreyNormalCatalog.Load(archive), LazyThreadSafetyMode.ExecutionAndPublication);
     }
     public int DungeonCount => dungeons.Count;
     public bool ContainsDungeon(int id) => dungeons.ContainsKey(id);

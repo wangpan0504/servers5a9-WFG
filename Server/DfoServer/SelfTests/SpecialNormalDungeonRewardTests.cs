@@ -18,6 +18,7 @@ internal static class SpecialNormalDungeonRewardTests
     public static void Run(TcpTestResources resources)
     {
         int before = Count;
+        PreyNormalRewardTests.Run(resources);
         var pvf = resources.Archive;
         var items = resources.ItemResources;
         var dungeons = SelfTestCatalogs.Dungeons(pvf);
@@ -67,7 +68,7 @@ internal static class SpecialNormalDungeonRewardTests
         catch (Exception error) { errors.Add($"Luke daily drops: {error}"); }
         try { VerifyLukeDayBoundary(); }
         catch (Exception error) { errors.Add($"Luke day: {error}"); }
-        try { VerifyPreyPrerequisite(); }
+        try { VerifyPreyRoutes(); VerifyPreyPrerequisite(); }
         catch (Exception error) { errors.Add($"quest 8925: {error}"); }
         foreach (ushort id in new ushort[] { 2903,8672 })
         {
@@ -76,7 +77,7 @@ internal static class SpecialNormalDungeonRewardTests
         }
         That(checkedCards.Count == 24 && cardFullBagChecked, "六图实际路线覆盖全部24种卡片源怪：" + string.Join("\n", errors));
         That(errors.Count == 0, "普通特殊副本完整奖励链：" + string.Join("\n", errors));
-        Console.WriteLine($"PASS {Count - before} 普通安徒恩、卢克和超时空正式死亡、拾取、通关与翻牌断言");
+        Console.WriteLine($"PASS {Count - before} 普通安徒恩、卢克、超时空和普雷正式死亡、拾取、通关与翻牌断言");
 
         (Location Position, HashSet<int> Completed) Entrance(int id)
         {
@@ -285,13 +286,15 @@ internal static class SpecialNormalDungeonRewardTests
             That(last?.ClearFact is not null && fixture.Session.Phase == SessionPhase.Settlement, $"{id}真实终点生成通关事实");
             beforeSettlement?.Invoke();
             var progressBefore = fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id);
-            if (definition.IsOrdinaryLuke)
+            var preyBefore = fixture.Repository.LoadPreyNormalProgress(fixture.Owner,fixture.Read().Id);
+            if (definition.IsOrdinaryLuke || definition.IsOrdinaryPrey)
             {
                 fixture.Sql("CREATE TRIGGER luke_progress_fail BEFORE INSERT ON character_dungeon_card_rewards BEGIN SELECT RAISE(ABORT,'luke progress rollback'); END");
                 string before = JsonSerializer.Serialize(fixture.Read());
                 Reject<SqliteException>(() => fixture.Session.SettleFormalDungeon(fixture.Read().Id, 99, 99, [6, 0, 8], dungeons, clears, growth, cards),
                     "进度已规划但末段卡牌账本SQL失败");
                 That(fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id) == progressBefore &&
+                    fixture.Repository.LoadPreyNormalProgress(fixture.Owner,fixture.Read().Id) == preyBefore &&
                     JsonSerializer.Serialize(fixture.Read()) == before, "晚失败回滚经验、进度与冻结牌，不提前安装内存");
                 fixture.Sql("DROP TRIGGER luke_progress_fail");
             }
@@ -303,12 +306,16 @@ internal static class SpecialNormalDungeonRewardTests
                 That(result.Card!.Item is { ItemId: 490007849, Value: 180 } && result.GainedExperience == 0 && result.ProficiencyGained == 0 &&
                     result.Options is { PaidDisabled: true, BlackDiamond: null }, "普通超时空180个材料、禁经验、无黄金牌和黑钻加牌");
             var progressAfter = fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id);
+            var preyAfter = fixture.Repository.LoadPreyNormalProgress(fixture.Owner,fixture.Read().Id);
+            if (definition.IsOrdinaryPrey)
+                That(preyAfter == preyBefore.Clear(entry!.Entry.PreyNormal!, (uint)id),"普通普雷真实结算与日进度同事务提交");
             if (definition.IsOrdinaryLuke)
                 That(progressAfter == progressBefore.Clear(entry!.Entry.OrdinaryLukeDay!.Value, (uint)id), "进度与实际清图结算同事务提交");
             var settled = JsonSerializer.Serialize(fixture.Read());
             fixture.Session.SettleFormalDungeon(fixture.Read().Id, 99, 99, [6, 0, 8], dungeons, clears, growth, cards);
             That(JsonSerializer.Serialize(fixture.Read()) == settled &&
-                fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id) == progressAfter, "重复结算不增加经验、资产和进度");
+                fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id) == progressAfter &&
+                fixture.Repository.LoadPreyNormalProgress(fixture.Owner,fixture.Read().Id) == preyAfter, "重复结算不增加经验、资产和进度");
             fixture.Session.AdvanceFormalDungeonCards(false);
             fixture.Session.AdvanceFormalDungeonCards(true);
             That(fixture.Session.SelectFormalDungeonFreeCard(0, 0) is not null, $"{id}免费牌实际领取");
@@ -369,6 +376,62 @@ internal static class SpecialNormalDungeonRewardTests
             }
         }
 
+        void VerifyPreyRoutes()
+        {
+            var box = items.Boosters.Get(490011518);
+            That(box.Available && box.Pools is [{ Draws:1 }] && box.Pools[0].Rewards.SequenceEqual(new BoosterReward[]
+                { new(10158964,4500,8),new(10158964,3300,9),new(10158964,2100,10),new(10158964,100,20) }),
+                "每日宝箱按原45%/33%/21%/1%给8/9/10/20个精炼时空石，不改为均匀区间");
+            var covered = new HashSet<int>();
+            for (int branch = 1; branch <= 6; branch++)
+            {
+                var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(
+                    new DateTimeOffset(2026,10,25,12,0,0,TimeSpan.FromHours(8)));
+                while (DfoServer.GameWorld.Dungeons.PreyNormalCatalog.BranchForDay(QuestCycle.Day(clock.GetUtcNow())) != branch)
+                    clock.Advance(TimeSpan.FromDays(1));
+                var route = dungeons.PreyNormal.Route(branch);
+                var (position, done) = Entrance(route[0]);
+                done.Add(8925);
+                using var fixture = new QuestSceneTests.Fixture(resources.Towns,resources.Characters,resources.Learning,
+                    growth,resources.Quests,false,95,done.ToArray(),position:position,timeProvider:clock);
+                That(fixture.Session.ChangeQuest(8926,QuestLifecycleAction.Accept,resources.Quests,
+                    items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,"接取原普通普雷每日考验");
+                for (int index = 0; index < 5; index++)
+                {
+                    int id = route[index]; covered.Add(id);
+                    var definition = dungeons.Get(id);
+                    That(definition.IsOrdinaryPrey && definition.AllowsDifficulty(2,false) && !definition.AllowsDifficulty(0,false) &&
+                        definition.StartFatigue == 10,"十五张普通普雷仅接通原声明难度2与入场10疲劳");
+                    var information = fixture.Session.CapturePreyNormalSequence()!;
+                    That(information.Info == new PreyNormalSequenceInfo((byte)index,(1u << index)-1,(uint)branch),
+                        "同一角色六条五图路线从无进度开始，不预造通关");
+                    string before = JsonSerializer.Serialize(fixture.Read());
+                    if (index < 4)
+                        That(fixture.Session.EnterFormalDungeon((uint)route[index+1],0,2,dungeons,rooms,monsters,items.Items,
+                            pieces:items.EpicPieces,prepareDrops:value => drops.PrepareEntry(value)) is null &&
+                            fixture.Session.LastFormalDungeonRejection == "prey-normal-progress-locked" &&
+                            JsonSerializer.Serialize(fixture.Read()) == before,"跳关拒绝且资产不变");
+                    Play(fixture,id,id == 400000046 ? 8926u : 0);
+                    That(fixture.Repository.LoadPreyNormalProgress(fixture.Owner,fixture.Read().Id).Completed == index+1,
+                        "真实死亡、拾取、结算与翻牌后推进当日一图");
+                }
+                var finish = fixture.Session.FinishQuest(8926,ushort.MaxValue,resources.Quests,
+                    SelfTestCatalogs.QuestRewardParameters(pvf),items.Items,items.GoldLimits,items.EpicPieces,growth);
+                That(finish.Outcome == QuestFinishOutcome.Committed &&
+                    fixture.Read().Inventory.Items.Any(row => row.Core.ItemId == 490011518 && row.Core.Count == 1),
+                    "本体真实通关后领取每日原资源宝箱");
+                string claimed = JsonSerializer.Serialize(fixture.Read());
+                fixture.Session.FinishQuest(8926,ushort.MaxValue,resources.Quests,
+                    SelfTestCatalogs.QuestRewardParameters(pvf),items.Items,items.GoldLimits,items.EpicPieces,growth);
+                That(JsonSerializer.Serialize(fixture.Read()) == claimed,"每日奖励重复领取不增发");
+                fixture.Session.ReturnToRoster(); fixture.Session.Select(0,resumeTown:true); fixture.Session.MarkReady();
+                That(fixture.Session.CapturePreyNormalSequence()!.Info.Stage == 5,"重选恢复当日五图进度");
+                clock.Advance(TimeSpan.FromDays(1));
+                That(fixture.Session.CapturePreyNormalSequence()!.Info.Stage == 0,"跨业务日清除旧日显示");
+            }
+            That(covered.Count == 15,"六条路线的真实奖励链覆盖全部十五张图");
+        }
+
         void VerifyPreyPrerequisite()
         {
             var quest = resources.Quests.Get(8925);
@@ -391,27 +454,31 @@ internal static class SpecialNormalDungeonRewardTests
                 items.Items,items.GoldLimits,items.EpicPieces)?.Commit is not null,"接取真实亚瑟的考验");
             var accepted = fixture.Read().ActiveMainQuests.Single(row => row.QuestId == 8925);
             That(accepted.ConditionState == 1,"原任务要求一次真实通关");
-            That(DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),400000046,8925,0,out var explicitPlan,out _,quest:quest,quests:resources.Quests) &&
+            That(DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),400000046,8925,2,out var explicitPlan,out _,quest:quest,quests:resources.Quests) &&
                 explicitPlan is { IsOrdinary:true,RouteQuestId:0 } && explicitPlan.QuestAcceptanceId == accepted.AcceptanceId &&
-                DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),400000046,0,0,out var ordinaryPlan,out _,quests:resources.Quests) &&
+                DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),400000046,0,2,out var ordinaryPlan,out _,quests:resources.Quests) &&
                 explicitPlan.BossMap == ordinaryPlan!.BossMap && explicitPlan.EntryItem == ordinaryPlan.EntryItem &&
                 explicitPlan.StartFatigue == ordinaryPlan.StartFatigue,"考验显式任务保留普通路线原终点、费用与接取身份");
             foreach (var invalid in new[] { quest with { SubType=11 }, quest with { Grade="[auto daily mission]" },
                 quest with { IntData=[400000016,-1] }, quest with { IntData=[400000046,4] },
                 quest with { IntData=[400000046,-1,5] } })
-                That(!DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),400000046,8925,0,out _,out _,quest:invalid,quests:resources.Quests),
+                That(!DungeonEntryPlan.TryCreate(dungeons,fixture.Read(),400000046,8925,2,out _,out _,quest:invalid,quests:resources.Quests),
                     "未知子型/专用每日、目标不符、难度不足和未确认累计次数不能借普通考验路线");
             That(!DungeonEntryPlan.TryCreate(dungeons,fixture.Read() with { ActiveMainQuests=[accepted with { AcceptanceId=Guid.Empty }] },
-                400000046,8925,0,out _,out _,quest:quest,quests:resources.Quests),"空接取身份不能进入考验路线");
+                400000046,8925,2,out _,out _,quest:quest,quests:resources.Quests),"空接取身份不能进入考验路线");
             var foreign = quest with { Id=29999 };
             That(!DungeonEntryPlan.TryCreate(dungeons,fixture.Read() with { ActiveMainQuests=[accepted with { QuestId=29999 }] },
-                400000046,29999,0,out _,out _,quest:foreign,quests:resources.Quests),"未知任务即使复制普雷单次考验形状也不开放路线");
-            Play(fixture,400000046,8925,0);
+                400000046,29999,2,out _,out _,quest:foreign,quests:resources.Quests),"未知任务即使复制普雷单次考验形状也不开放路线");
+            int preyDay = QuestCycle.Day(DateTimeOffset.UtcNow);
+            foreach (int id in dungeons.PreyNormal.Route(DfoServer.GameWorld.Dungeons.PreyNormalCatalog.BranchForDay(preyDay)).Take(4))
+                Play(fixture,id);
+            Play(fixture,400000046,8925,2);
             That(fixture.Read().ActiveMainQuests.Single(row => row.QuestId == 8925) is { ConditionState:0 } active &&
                 active.AcceptanceId == accepted.AcceptanceId,"普通普雷终末沿原接取身份推进考验");
             var result = fixture.Session.FinishQuest(8925,ushort.MaxValue,resources.Quests,
                 SelfTestCatalogs.QuestRewardParameters(pvf),items.Items,items.GoldLimits,items.EpicPieces,growth);
             That(result.Outcome == QuestFinishOutcome.Committed && fixture.Read().CompletedQuests.Contains(8925) &&
+                fixture.Read().Inventory.Items.Any(row => row.Core.ItemId == 10308559 && row.Core.Count == 8) &&
                 QuestEligibility.Evaluate(fixture.Read(),raidQuest,resources.Quests) is { Eligible:true,Visible:true },
                 "真实通关交付后开放前往夜之摩天楼任务：" + result.Reason);
             That(QuestEligibility.Candidates(fixture.Read(),resources.Quests).Contains(8935) &&

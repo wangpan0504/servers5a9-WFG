@@ -56,6 +56,7 @@ internal static class SelfTestRunner
         await PvpArenaSessionTests.RunCoreAsync();
         await PvpMatchingSessionTests.RunCoreAsync();
         OrdinaryLukeProgressTests.RunCore();
+        PreyNormalProgressTests.RunCore();
         SkillTreeExpansionTests.RunCore();
         WeeklyEntryResetTests.RunCore();
         CharacterPreparationTests.RunCore();

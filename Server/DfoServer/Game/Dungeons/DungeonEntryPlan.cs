@@ -46,6 +46,8 @@ internal sealed record DungeonEntryPlan(
     public double BeastHpScale { get; init; } = BeastDungeonRotation.NormalHpScale;
     public double BeastAttackScale { get; init; } = BeastDungeonRotation.NormalAttackScale;
     public bool IsOrdinaryLuke { get; init; }
+    public bool IsOrdinaryPrey { get; init; }
+    public PreyNormalAdmission? PreyNormal { get; init; }
     // 仅由当前战役冻结路线审核后设置，允许无任务接取的真实物件终末。
     public bool IsEvildomWarHidden { get; init; }
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
@@ -734,6 +736,7 @@ internal sealed record DungeonEntryPlan(
             BeastAttackScale = beastMode && definition.BeastLayouts[0].NormalAttackScale > 0 ? definition.BeastLayouts[0].NormalAttackScale : BeastDungeonRotation.NormalAttackScale,
             BasisLevel = definition.BasisLevel,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
+            IsOrdinaryPrey = definition.IsOrdinaryPrey,
             RecommendedQuestClear = !lostLand && !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
                 DungeonLuckyStarPolicy.IsRecommendedClear(definition, questId, routeQuest, character.Level),
             GuildMileageEligible = GameWorld.Guilds.GuildDungeonMileageEligibility.IsEligible(definition, character.Level),

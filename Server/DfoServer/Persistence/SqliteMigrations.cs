@@ -288,6 +288,7 @@ internal static class SqliteMigrations
         new(157, "账号聊天表情指令", static (db, tx) => Execute(db, tx, ChatEmoticonSchema)),
         new(158, "账号最近聊天表情", static (db, tx) => Execute(db, tx, RecentEmoticonSchema)),
         new(159, "守护者五位盾牌配置", AddKnightShieldDeckColumn),
+        new(160, "普通普雷每日分支与顺序进度", PreyNormalProgressSchema.Upgrade),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2337,6 +2338,7 @@ internal static class SqliteMigrations
             ("account_imperial_arena_rewards",ImperialArenaSchema.Rewards),
             ("account_imperial_arena_challenge_claims",ImperialArenaSchema.Challenges),
             (OrdinaryLukeProgressSchema.Table,OrdinaryLukeProgressSchema.Definition),
+            (PreyNormalProgressSchema.Table,PreyNormalProgressSchema.Definition),
             (OrdinaryLukeDropSchema.Table,OrdinaryLukeDropSchema.Definition),
             (DazzlementTowerSchema.Table,DazzlementTowerSchema.Definition),
             ("marriage_records",MarriageSchema.RecordsSql),

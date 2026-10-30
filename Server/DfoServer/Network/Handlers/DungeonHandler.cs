@@ -59,8 +59,18 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
 
     async Task<CommandResult> SequentialInfoAsync(GameConnectionContext context, Packet request)
     {
-        if (!DungeonRequests.TryParseSequentialInfo(request.Body, out uint sequenceId) ||
-            sequenceId != OrdinaryLukeProgress.SequenceId) return CommandResult.Unhandled;
+        if (!DungeonRequests.TryParseSequentialInfo(request.Body, out uint sequenceId)) return CommandResult.Unhandled;
+        if (sequenceId == DfoServer.GameWorld.Dungeons.PreyNormalCatalog.SequenceId)
+        {
+            var prey = context.Session.CapturePreyNormalSequence();
+            log.Write("prey_normal_sequence_query", new { Connection = context.Id, Sequence = sequenceId,
+                Accepted = prey is not null, prey?.Day, prey?.Info.Stage, prey?.Info.Branch });
+            if (prey is not null)
+                await context.Notify(NotiPacketType.SEQUENTIAL_DUNGEON_INFO, PreyNormalSequencePackets.Information(prey.Info),
+                    "prey_normal_sequence", () => context.Session.CanPublishPreyNormalSequence(prey));
+            return CommandResult.Handled;
+        }
+        if (sequenceId != OrdinaryLukeProgress.SequenceId) return CommandResult.Unhandled;
         var receipt = context.Session.CaptureOrdinaryLukeSequence(sequenceId);
         log.Write("ordinary_luke_sequence_query", new { Connection = context.Id, Sequence = sequenceId,
             Accepted = receipt is not null, receipt?.Day, receipt?.Info.Stage, receipt?.Info.ClearBits });
@@ -328,6 +338,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         else
             await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry, receipt.Snapshot.BossPosition), "formal_dungeon_information", Guard);
         if (OrdinaryLukeProgress.Applies(receipt.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Guard);
+        if (PreyNormalProgress.Applies(receipt.Entry)) await PreyNormalSequenceProjection.RefreshAsync(context, Guard);
         // 实验性（#259）：比赛副本先发 NOTI386 对阵/对手，再以 NOTI387 替代 NOTI29（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
         if (receipt.Monsters.Altar is not null)
         {
