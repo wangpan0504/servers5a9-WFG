@@ -30,8 +30,8 @@ internal static class CreatureSystemTcpTests
             catalog.ExperienceItem(10005896) is { Kind: 2, Amount: 1, CoolTime: 1000 } &&
             catalog.ExperienceItem(10005898) is { Kind: 3, Amount: 50 } && !catalog.RenameCard(10005895),
             "当前PVF三种普通宠物经验道具按标签注册，不再落入恢复药或改名卡路径");
-        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "creature-system"), resources: resources,
-            clock: new ConsumableUseSessionTests.FakeClock());
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root, "creature-system"), resources: resources, clock: clock);
         var repository = new CharacterRepository(fixture.Database);
         ushort id;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -42,7 +42,8 @@ internal static class CreatureSystemTcpTests
                 .Add(new(0, CreatureRules.EquippedSlot, new(63032, ItemKind.Creature, 0)) { Creature = new() { Satiety = 10 } })
                 .Add(new(0, new(InventoryListType.Pet, 189), new(24, ItemKind.CreatureConsumable, 2)))
                 .Add(new(0, new(InventoryListType.Pet, 190), new(25, ItemKind.CreatureConsumable, 1)))
-                .Add(new(0, new(InventoryListType.Pet, 191), new(10005895, ItemKind.CreatureConsumable, 2))) } });
+                .Add(new(0, new(InventoryListType.Pet, 191), new(10005895, ItemKind.CreatureConsumable, 2)))
+                .Add(new(0, new(InventoryListType.Pet, 192), new(490004549, ItemKind.CreatureConsumable, 2))) } });
             id = created.Id;
             repository.Create(owner, candidate with { Name = "PetGrow", Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(new(0, CreatureRules.EquippedSlot, new(63407, ItemKind.Creature, 0))
@@ -81,20 +82,33 @@ internal static class CreatureSystemTcpTests
             }
             That(Count(191) == 0 && ReadPet() is { Creature: { Level: 2, Experience: 2, Name: "小伙伴", Satiety: 10 } } capsulePet &&
                 capsulePet.Uid == uid, "实收44校验值原样返回；先消费ACK再102，同UID经验跨级，最后一件不重复发送14扣源");
+            byte[] Upgrade(uint check) => Build(writer => { writer.Write((ushort)192); writer.Write((byte)7); writer.Write(check); writer.Write(490004549); writer.Write(0); });
+            peer.Send(44, Upgrade(3));
+            peer.Expect(1, 44, [1, 192, 0, 7, 3, 0, 0, 0, .. Build(writer => writer.Write(490004549))]);
+            peer.Expect(0, 102, [3, 0, .. Build(writer => writer.Write(catalog.ExperienceAtLevel(3)))]); peer.Barrier();
             peer.Send(479); peer.Expect(0, 21); peer.Expect(0, 356); peer.Barrier();
             byte[] use = Build(writer => { writer.Write((ushort)189); writer.Write((byte)7); writer.Write(0u); writer.Write(24); writer.Write(0); });
             peer.Send(44, use);
             peer.Expect(1, 44, [1, 189, 0, 7, 0, 0, 0, 0, 24, 0, 0, 0]);
             peer.Expect(0, 103, Build(writer => { writer.Write((int)uid); writer.Write(40); })); peer.Barrier();
             That(Count(189) == 1 && ReadPet().Creature is { Satiety: 40, FeedSkillRecoveryRate: -20 },
-                "原生自动/主动喂食共用44，只扣一次饲料，103按i32饱食同步且无获得动画");
+                "升级券后可立即喂食，只扣一次饲料，103按i32饱食同步且无获得动画");
+            peer.Send(44, Upgrade(4));
+            peer.Expect(1, 44, [0, 123, 0, 7, 4, 0, 0, 0, .. Build(writer => writer.Write(490004549))]); peer.Barrier();
+            That(Count(192) == 1, "其它道具使用不清除升级券自身冷却，失败不扣件");
+            clock.Advance(TimeSpan.FromSeconds(1));
+            peer.Send(44, Upgrade(5));
+            peer.Expect(1, 44, [1, 192, 0, 7, 5, 0, 0, 0, .. Build(writer => writer.Write(490004549))]);
+            peer.Expect(0, 102, [4, 0, .. Build(writer => writer.Write(catalog.ExperienceAtLevel(4)))]); peer.Barrier();
+            That(Count(192) == 0 && ReadPet().Creature is { Level: 4, Satiety: 40 }, "饲料十秒冷却不阻塞自身冷却已结束的升级券");
             peer.Send(44, use); peer.Closed();
-            That(Count(189) == 1, "同请求冷却重放关闭原连接，不重发扣源ACK");
+            That(Count(189) == 1, "升级券不覆盖饲料成功记录，跨道具后同请求重放仍关闭原连接且不重发扣源ACK");
         }
         using (var peer = Open(fixture))
         {
             peer.Select(); peer.Barrier();
-            That(ReadPet().Uid == uid && ReadPet().Creature is { Level: 2, Experience: 2, Satiety: 40, Name: "小伙伴" },
+            That(ReadPet().Uid == uid && ReadPet().Creature is { Level: 4, Satiety: 40, Name: "小伙伴" } &&
+                ReadPet().Creature!.Experience == catalog.ExperienceAtLevel(4),
                 "重新连接保留胶囊经验、宠物名称和饱食，不自动再消费道具");
             string before = State();
             fixture.Sql("CREATE TRIGGER pet_feed_abort AFTER INSERT ON inventory_audit_log WHEN NEW.action_name='creature_feed' " +

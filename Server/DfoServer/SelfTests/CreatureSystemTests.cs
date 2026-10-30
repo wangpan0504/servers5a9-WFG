@@ -12,7 +12,7 @@ namespace DfoServer;
 
 internal static class CreatureSystemTests
 {
-    internal static CreatureCatalog Synthetic(bool itemGrowth = false)
+    internal static CreatureCatalog Synthetic(bool itemGrowth = false, int? cooldownGroup = null)
     {
         var files = new Dictionary<string, string>
         {
@@ -24,10 +24,13 @@ internal static class CreatureSystemTests
             ["stackable/rename.stk"] = "[stackable type]\n`[creature]` 1",
             ["stackable/growth.stk"] = "[stackable type]\n`[creature expitem]` 0\n[need material]\n100 3\n[/need material]",
             ["stackable/experience.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 1 50\n[/action type]\n[cool time]\n1000",
-            ["stackable/level.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 2 1\n[/action type]",
+            ["stackable/level.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 2 1\n[/action type]\n[cool time]\n1000",
             ["stackable/target-level.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 3 50\n[/action type]",
             ["stackable/invalid-experience.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 0 50\n[/action type]"
         };
+        if (cooldownGroup is { } group)
+            foreach (string file in new[] { "stackable/feed.stk", "stackable/experience.stk", "stackable/level.stk" })
+                files[file] += "\n[cooltime group]\n" + group;
         return new(path => files[path], path => path == "creature/pet.cre" ?
             itemGrowth ? new PvfLib.CreatureFile { Name = "初始宠物", MaximumLevel = 4, ItemsPerLevel = 25,
                 SelectiveGrowth = new() { UsingExperienceItem = 1, ItemA = 100, SelectLevel = -1 } } :
@@ -64,6 +67,9 @@ internal static class CreatureSystemTests
         That(CreatureRules.AdvanceSatiety(new() { Satiety = 0 }, 0, false, true).Satiety == 1,
             "饥饿宠物回城按旧端业务恢复一点，不永久卡死");
         var feed = catalog.Feed(24)!;
+        That(catalog.CooldownGroup(24) == -24 && catalog.CooldownGroup(200) == -200 &&
+            Synthetic(cooldownGroup: 0).CooldownGroup(24) == 0, "宠物道具默认按模板独立冷却，显式零组仍为合法共享组");
+        Reject<InvalidDataException>(() => Synthetic(cooldownGroup: -1).CooldownGroup(24), "拒绝负宠物冷却组");
         That(CreatureRules.Feed(detail, feed, 1000) is { Satiety: 40, FeedEffectExpiresAt: 1300, FeedSkillRecoveryRate: -20 },
             "饲料恢复量、持续时间和技能集气修正均取PVF");
         That(CreatureRules.Feed(new() { Satiety = 90, SatietyFraction = 5 }, feed, 1000) is { Satiety: 100, SatietyFraction: 0 },
