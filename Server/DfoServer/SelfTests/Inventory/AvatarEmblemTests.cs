@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
@@ -14,18 +13,25 @@ internal static class AvatarEmblemTests
     public static void RunCore()
     {
         int checks = Count;
-        var items = new ItemCatalog(null!, new Dictionary<int, string>
-            { [100] = "skin.equ", [101] = "aura.equ", [102] = "hat.equ" },
-            new Dictionary<int, string> { [300] = "red.stk", [301] = "blue.stk", [302] = "platinum.stk", [303] = "mixed.stk" }, 0);
-        items.PrefillTemplates(new Dictionary<int, ItemTemplate>
+        // 核心用例显式提供资源资格，不用空archive或模板Jobs默认值替代typed声明。
+        var targets = new Dictionary<int, AvatarEmblemTargetDescriptor>
         {
-            [100] = Template(100, ItemKind.Avatar), [101] = Template(101, ItemKind.Avatar), [102] = Template(102, ItemKind.Avatar),
-            [300] = Template(300, ItemKind.Emblem, 1), [301] = Template(301, ItemKind.Emblem, 2),
-            [302] = Template(302, ItemKind.Emblem, 16), [303] = Template(303, ItemKind.Emblem, 3)
-        });
+            [100] = new(100, ItemKind.Avatar, 1),
+            [101] = new(101, ItemKind.Avatar, 1),
+            [102] = new(102, ItemKind.Avatar, 1)
+        };
+        var materials = new Dictionary<int, AvatarEmblemMaterialDescriptor>
+        {
+            [300] = new(300, ItemKind.Emblem, 1, true, [0], []),
+            [301] = new(301, ItemKind.Emblem, 2, true, [0], []),
+            [302] = new(302, ItemKind.Emblem, 16, true, [0], []),
+            [303] = new(303, ItemKind.Emblem, 3, true, [0], [])
+        };
         var clock = new ConsumableUseSessionTests.FakeClock();
         clock.Advance(DateTimeOffset.FromUnixTimeSeconds(1000) - clock.GetUtcNow());
-        var service = new InventoryAvatarEmblemService(items, clock);
+        var service = new InventoryAvatarEmblemService(
+            id => targets.TryGetValue(id, out var target) ? target : null,
+            id => materials.TryGetValue(id, out var material) ? material : null, clock);
         var detail = new AvatarDetail
         {
             ExpireTime = 1100, ClearAvatarId = 123, ClearAvatarSourceUid = 789, Color1 = 1, Color2 = 2,
@@ -133,13 +139,45 @@ internal static class AvatarEmblemTests
             Request(new AvatarEmblemEntry(289, 300, 5)), pair with { Emblems = [] }, pair with { Emblems = default }
         })
             That(!service.Use(original, invalid, out _, out _).Accepted, "模板、归属、重复孔、空槽及非法条目领域层也拒绝");
+        var single = Request(new AvatarEmblemEntry(289, 300, 0));
+        InventoryAvatarEmblemService Qualified(ushort ownFlags, bool hasMetadata35, int[] primary, int[] secondary) => new(
+            id => targets.TryGetValue(id, out var target) ? target with { OwnFlags16 = ownFlags } : null,
+            id => materials.TryGetValue(id, out var material) ? material with
+                { HasMetadata35 = hasMetadata35, PrimaryIndices = [.. primary], SecondaryIndices = [.. secondary] } : null, clock);
+        void Denied(InventoryAvatarEmblemService candidate, Character role, AvatarEmblemRequest request, ushort error, string message)
+        {
+            var before = role.Inventory;
+            var beforeItems = before.Items.ToArray();
+            var result = candidate.Use(role, request, out var deniedReceipt, out _);
+            That(!result.Accepted && result.Error == error && result.Plan is null && deniedReceipt is null &&
+                ReferenceEquals(role.Inventory, before) && role.Inventory.Items.SequenceEqual(beforeItems), message);
+        }
+        That(Qualified(1, true, [0], []).Use(Role() with { Job = 15 }, single, out _, out _).Accepted,
+            "目标自身资格与材料L1相交时允许，当前异职业不替代目标资格");
+        Denied(Qualified(2, true, [0], []), Role() with { Job = 0 }, single, 1,
+            "当前角色职业匹配材料也不能放行不匹配的目标自身资格，generic1且无计划");
+        Denied(Qualified(1, false, [], []), Role(), single, 1,
+            "材料缺key35时不能借空L1放行，generic1且资产不变");
+        That(Qualified(0, true, [], [16]).Use(Role(), single, out _, out _).Accepted,
+            "key35存在且L1为空时短路通过，不检查目标空资格或L2索引16");
+        Denied(Qualified(ushort.MaxValue, true, [16], []), Role(), single, 1,
+            "材料common或未知职业索引16保持非空且不能通配目标全部16位资格");
+        That(Qualified(1, true, [1], [0]).Use(Role(), single, out _, out _).Accepted,
+            "材料L1非空时允许L2有效索引与目标自身资格相交");
+        Denied(service, Role(source: Material(count: 1)), pair, 17,
+            "同栈多孔按本批总量校验，缺料17且整批无计划或业务回执");
+        Denied(service, Role(Avatar() with { Core = Avatar().Core with { EquipmentLockId = 1 } }), single, 214,
+            "目标安全锁返回214且资产不变");
+        Denied(service, Role(source: Material() with { Core = Material().Core with { EquipmentLockId = 1 } }), single, 214,
+            "材料安全锁返回214且资产不变");
+        Denied(service, Role(Avatar() with { Avatar = detail with
+            { Socket0 = default, Socket1 = default, Socket2 = default, Socket3 = default, Socket4 = default } }), single, 4,
+            "目标实例五孔全无返回4，不把该码借给其他拒绝");
+        Denied(service, Role(), Request(new(289, 300, 0), new(289, 300, 0)), 1,
+            "重复物理孔返回未命名generic1且整批无计划或业务回执");
         clock.Advance(TimeSpan.FromSeconds(50));
         That(!used.Plan.CharacterPrecondition!.Matches(original) && !service.Use(original, pair, out _, out _).Accepted,
             "相同注入时钟到期后规划与提交前置同时拒绝");
         Console.WriteLine($"PASS {Count - checks} 装扮徽章解析、五孔、颜色、资产与期限断言");
     }
-
-    static ItemTemplate Template(int id, ItemKind kind, ushort mask = 0) =>
-        new(id, kind, 0, 1, 0, kind == ItemKind.Avatar ? 1 : 999, 0, 0, 0, "[trade]", ushort.MaxValue, 0, "emblem")
-        { EmblemTargetSockets = mask };
 }
