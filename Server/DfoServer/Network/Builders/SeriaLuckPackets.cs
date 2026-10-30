@@ -19,19 +19,24 @@ internal static class SeriaLuckPackets
     //   随后 026BE900 读 u8 m；m × { u16 事件号, 12 × u32 }（旧集合含事件 9 时先多读 u8+u16 表，因此不下发事件 9）。
     // 额外事件沿用 2037 的已验证记录形状（u32 1、两空串、标志 0）；需要活动状态的事件另附全零数值块。
     public static byte[] EventInfoCompressed(IReadOnlyList<ushort>? extraEvents = null,
-        IReadOnlyList<ushort>? activeEvents = null)
+        IReadOnlyList<ushort>? activeEvents = null, IReadOnlyList<EventInfoDesignPage>? designPages = null)
     {
         extraEvents ??= [];
         activeEvents ??= [];
+        designPages ??= [];
         if (extraEvents.Any(id => id is 0 or 9 or SeriaLuckEventId) || extraEvents.Distinct().Count() != extraEvents.Count)
             throw new InvalidDataException("EVENT_INFO 附加事件无效");
         if (activeEvents.Count >= byte.MaxValue || activeEvents.Any(id => !extraEvents.Contains(id)) ||
             activeEvents.Distinct().Count() != activeEvents.Count)
             throw new InvalidDataException("EVENT_INFO 活动状态必须唯一、存在于附加事件集合且不超过254项");
+        var directoryIds = extraEvents.Concat(designPages.Select(page => page.EventId)).ToArray();
+        if (directoryIds.Any(id => id is 0 or 9 or SeriaLuckEventId) ||
+            directoryIds.Distinct().Count() != directoryIds.Length || directoryIds.Length >= ushort.MaxValue)
+            throw new InvalidDataException("EVENT_INFO页面必须使用唯一非保留ID且总行数不超过u16");
         using var plain = new MemoryStream();
         using (var writer = new BinaryWriter(plain, System.Text.Encoding.UTF8, leaveOpen: true))
         {
-            writer.Write(checked((ushort)(1 + extraEvents.Count)));
+            writer.Write(checked((ushort)(1 + extraEvents.Count + designPages.Count)));
             writer.Write(SeriaLuckEventId);
             writer.Write(1u);
             writer.Write(0);
@@ -44,6 +49,24 @@ internal static class SeriaLuckPackets
                 writer.Write(0);
                 writer.Write(0);
                 writer.Write((byte)0);
+            }
+            foreach (var page in designPages)
+            {
+                writer.Write(page.EventId);
+                writer.Write(page.MetadataValue);
+                PacketEncoding.WriteString(writer, page.MetadataText1);
+                PacketEncoding.WriteString(writer, page.MetadataText2);
+                writer.Write((byte)1);
+                writer.Write(page.Record04);
+                writer.Write(page.Record08);
+                PacketEncoding.WriteString(writer, page.Title);
+                PacketEncoding.WriteString(writer, page.ShortName);
+                PacketEncoding.WriteString(writer, page.Link);
+                writer.Write(page.Record4C);
+                writer.Write(page.Record50);
+                PacketEncoding.WriteString(writer, page.Route);
+                PacketEncoding.WriteString(writer, page.Content);
+                writer.Write((byte)(page.Visible ? 1 : 0));
             }
             writer.Write((byte)(1 + activeEvents.Count));
             writer.Write(SeriaLuckEventId);

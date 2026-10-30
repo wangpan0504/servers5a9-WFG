@@ -13,7 +13,8 @@ using DfoServer.Network.Projection;
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopService cashShop, InventoryProjection projection,
-    ServerLog log, MarriageShopService? marriageShop = null, MarriageProjection? marriageProjection = null, CashShopPromotionService? promotions = null) : IGameCommandModule
+    ServerLog log, MarriageShopService? marriageShop = null, MarriageProjection? marriageProjection = null, CashShopPromotionService? promotions = null,
+    PromotionPageProjection? promotionPage = null, TownProjection? nativePromotionTown = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -71,6 +72,15 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
                     MileagePackets.Limits(committed.Character.Inventory.AccountWallet, cashShop.Mileage), "mileage_shop_limits", () => context.Session.CanPublishInventory(committed));
             if (result.Plan?.UnlockSkillTree == true)
                 await projection.RefreshSkillTreeAsync(context, committed.Character, () => context.Session.CanPublishInventory(committed));
+            if (promotion is not null && promotionPage is not null)
+            {
+                string status = promotionPage.Changed(context, promotion.Progress);
+                log.Write("cash_shop_promotion_page_changed", new { Connection = context.Id, Status = status, ProgressRevision = promotion.Progress.Revision });
+            }
+            if (promotion is not null && nativePromotionTown is not null &&
+                promotion.Progress.Scope == CashShopPromotionPageService.Scope && context.Session.CanPublishInventory(committed))
+                await nativePromotionTown.ServerEventsAsync(context, () => context.Session.CanPublishInventory(committed),
+                    minimumPromotionRevision: promotion.Progress.Revision);
         }
         catch (DbException error) when (promotion is not null)
         {

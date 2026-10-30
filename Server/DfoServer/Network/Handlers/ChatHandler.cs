@@ -35,7 +35,7 @@ namespace DfoServer.Network.Handlers;
 /// </summary>
 internal sealed class ChatHandler(ChatService chat, InventoryProjection? inventory, ServerLog log,
     NamedWhisperService? named = null, GuildContributionProjection? guildContribution = null,
-    SelfCharacterScoreProjection? selfScore = null) : IGameCommandModule
+    SelfCharacterScoreProjection? selfScore = null, PromotionPageProjection? promotionPage = null) : IGameCommandModule
 {
     // 日志里的文本上限：单条聊天不能把热点日志撑大。
     const int LogTextLimit = 64;
@@ -88,6 +88,15 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
         if (IsChatBlocked(context.Session))
         {
             log.Write("chat_blocked", new { Connection = context.Id, send.Type });
+            return CommandResult.Handled;
+        }
+
+        // 页面机器请求沿用限流和封禁；能力关闭仍吞掉其保留空间，不广播或泄漏机器文本。
+        if (PromotionPageProjection.MachineNamespace(send))
+        {
+            string? nonce = PromotionPageProjection.MachineNonce(send);
+            string status = nonce is null ? "invalid_request" : promotionPage?.Query(context, nonce) ?? "unavailable";
+            log.Write("cash_shop_promotion_page_query", new { Connection = context.Id, Status = status });
             return CommandResult.Handled;
         }
 

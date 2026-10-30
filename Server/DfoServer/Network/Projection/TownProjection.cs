@@ -9,6 +9,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Town;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Events;
+using DfoServer.Game.CashShopPromotions;
 
 namespace DfoServer.Network.Projection;
 
@@ -20,12 +21,14 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     IGuildPermitDeliverer? guildPermits = null, DfoServer.Game.Inventory.Services.DevilContractService? devil = null,
     CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null,
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
-    MarriageProjection? marriage = null, ServerEventService? events = null, MileageShopCatalog? mileageShop = null)
+    MarriageProjection? marriage = null, ServerEventService? events = null, MileageShopCatalog? mileageShop = null,
+    Func<CashShopPromotionCatalog>? promotionCatalog = null, CashShopPromotionPageService? promotionPages = null)
 {
     const ushort JonathanVisibleEvent = 2395;
     internal bool MileageAvailable => mileageShop?.Available == true;
 
-    internal async Task ServerEventsAsync(GameConnectionContext context, Func<bool>? canSend = null)
+    internal async Task ServerEventsAsync(GameConnectionContext context, Func<bool>? canSend = null,
+        long? minimumPromotionRevision = null)
     {
         // 108替换整张活动目录；积分入口更新不能清掉其他活动和各自数值段。
         var openEvents = DfoServer.Game.Raids.RaidEntryEvents.OpenEvents(RaidWindows, timer.GetUtcNow());
@@ -34,13 +37,32 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
             openEvents = [.. openEvents, ServerEventService.NolanVisibilityId];
         bool mileage = MileageAvailable && events?.Read(ServerEventService.MileageShopId).Active == true;
         if (mileage) openEvents = [.. openEvents, ServerEventService.MileageShopId];
-        await context.NotifyProtected(NotiPacketType.EVENT_INFO,
-            SeriaLuckPackets.EventInfoCompressed(openEvents, activeEvents: [JonathanVisibleEvent]),
-            canSend is null ? "seria_luck_event_initialize" : "server_events_changed", canSend);
+        IReadOnlyList<EventInfoDesignPage> designPages = [];
+        Func<bool>? publish = canSend;
+        if (promotionCatalog is not null && promotionPages is not null)
+        {
+            if (canSend?.Invoke() == false) return;
+            var catalog = promotionCatalog();
+            var capture = context.Session.CaptureNativePromotionPage(catalog);
+            if (capture is null) return;
+            // 页面On独立于购买资格；Disabled仍由同一只读服务校验真实账本。
+            var snapshot = promotionPages.Read(context.Owner, catalog, 10000);
+            bool Current() => canSend?.Invoke() != false && context.Session.CanPublishNativePromotionPage(
+                capture, promotionCatalog(), snapshot, minimumPromotionRevision);
+            if (!Current()) return;
+            designPages = PromotionNativeDesignPage.Create(snapshot) is { } page ? [page] : [];
+            publish = Current;
+        }
+        byte[] eventInfo = SeriaLuckPackets.EventInfoCompressed(openEvents, activeEvents: [JonathanVisibleEvent], designPages: designPages);
+        string action = canSend is null ? "seria_luck_event_initialize" : "server_events_changed";
+        if (designPages.Count != 0)
+            await context.Sender.SendProtectedRevalidated(0, (ushort)NotiPacketType.EVENT_INFO, eventInfo, action, publish!);
+        else
+            await context.NotifyProtected(NotiPacketType.EVENT_INFO, eventInfo, action, publish);
         if (mileage && context.Session.Selected is { } selected)
             await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
-                MileagePackets.Limits(selected.Inventory.AccountWallet, mileageShop!), "mileage_shop_limits", canSend);
-        if (canSend?.Invoke() != false) context.ServerEvents?.Published(mileage);
+                MileagePackets.Limits(selected.Inventory.AccountWallet, mileageShop!), "mileage_shop_limits", publish);
+        if (publish?.Invoke() != false) context.ServerEvents?.Published(mileage);
     }
     internal DfoServer.Game.Guild.GuildPanelService? GuildPanels { get; set; }
     internal GuildEconomyProjection? GuildEconomy { get; set; }

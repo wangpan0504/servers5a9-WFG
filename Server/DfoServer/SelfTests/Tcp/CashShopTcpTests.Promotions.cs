@@ -16,6 +16,7 @@ internal static partial class CashShopTcpTests
     public static async Task PromotionsAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         Inventory.CashShopPromotionSessionTests.Run(resources.Towns, resources.ItemResources);
+        PromotionPageSessionTests.RunPurchase(resources.Towns, resources.ItemResources);
         Inventory.CashShopPromotionSessionTests.RunBoundaries(resources);
         var items = resources.ItemResources;
         var rules = Inventory.CashShopPromotionSessionTests.Rules with { Products = [new(100004, 1, 1)] };
@@ -55,9 +56,10 @@ internal static partial class CashShopTcpTests
                 That(U32(peer.Expect(1, 64).Body, 6) == 100004, "重复商品行分别保持原成功ACK");
             peer.Expect(0, 14);
             That(U32(peer.Expect(0, 53).Body, 1) == 1800, "促销沿原库存和钱包投影顺序扣两行点券");
+            peer.Expect(0, 99, [1, 0]);
             peer.Barrier();
             That(fixture.Query("SELECT count FROM cash_shop_promotion_progress") is [[long count]] && count == 2 &&
-                fixture.Query("SELECT count(*) FROM mailbox_messages") is [[1L]], "图内SQL同步提交累计及一封赠礼，屏障前无邮件包");
+                fixture.Query("SELECT count(*) FROM mailbox_messages") is [[1L]], "图内SQL同步提交累计及一封赠礼，整车只提醒一次且不发布邮件列表");
             That(fixture.Query("SELECT created_at FROM mailbox_messages") is [[long created]] &&
                 created == clock.GetUtcNow().ToUnixTimeSeconds(), "真实TCP促销规划及邮件使用Runtime注入的未来时钟");
             peer.Send(42);
@@ -122,6 +124,7 @@ internal static partial class CashShopTcpTests
         await PromotionMatrixAsync(source, root, resources);
         await PromotionDisconnectAsync(source, root, resources);
         await PermanentContinuationAsync(source, root, resources);
+        await PromotionPageAsync(source, root, resources);
         string PromotionSnapshot() => PurchaseSnapshot(fixture) + string.Concat(new[] { "rules", "progress", "orders", "awards" }
             .Select(table => JsonSerializer.Serialize(fixture.Query("SELECT * FROM cash_shop_promotion_" + table + " ORDER BY rowid"))));
     }

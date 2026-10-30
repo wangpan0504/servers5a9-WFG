@@ -34,7 +34,8 @@ internal static class ServerLifetime
             if (File.Exists(Path.Combine(options.LogDirectory, "stop.request")))
                 throw new InvalidDataException("Remove prior stop.request before starting a new run");
             await ServerRuntime.Create(options, pvf, repository, towns, characters, learning, itemResources, log, quests,
-                adventureCatalog: adventureCatalog, growthCatalog: growthCatalog, promotions: promotions).RunAsync(stop.Token);
+                adventureCatalog: adventureCatalog, growthCatalog: growthCatalog, promotions: promotions,
+                enablePromotionPage: options.EnablePromotionPage).RunAsync(stop.Token);
         }
         finally
         {

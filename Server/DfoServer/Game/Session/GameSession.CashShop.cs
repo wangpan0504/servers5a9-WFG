@@ -63,6 +63,7 @@ internal sealed partial class GameSession
             try { saved = promotionStore.Commit(owner, plan, (timeProvider ?? TimeProvider.System).GetUtcNow()); }
             catch (Exception error) when (error is InvalidOperationException or OverflowException) { return InventoryResult.Reject(17); }
             Selected = saved.Character;
+            ObservePromotionPageCommit(catalog!, saved.Progress);
             if (!saved.MailIds.IsEmpty || !result.Plan.OverflowItems.IsEmpty) MarkMailboxRestore();
             commitMilliseconds = Stopwatch.GetElapsedTime(commitStarted).TotalMilliseconds;
             return result with { Receipt = InventoryReceipt(capture.Character) };
