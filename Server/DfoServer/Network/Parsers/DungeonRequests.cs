@@ -41,6 +41,14 @@ internal readonly record struct DungeonSelectionRequest(
 
 internal static class DungeonRequests
 {
+    public static bool TryParseSequentialInfo(ReadOnlySpan<byte> body, out uint sequenceId)
+    {
+        sequenceId = 0;
+        if (body.Length != 4) return false;
+        sequenceId = BinaryPrimitives.ReadUInt32LittleEndian(body);
+        return true;
+    }
+
     public static bool TryParseRidableOperation(ReadOnlySpan<byte> body, out DungeonRidableOperationRequest request)
     {
         request = default;

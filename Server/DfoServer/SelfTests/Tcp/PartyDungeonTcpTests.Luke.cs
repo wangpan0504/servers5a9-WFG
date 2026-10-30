@@ -23,6 +23,13 @@ internal static partial class PartyDungeonTcpTests
         int day=QuestCycle.Day(DateTimeOffset.UtcNow);
         fixture.Sql("INSERT INTO character_luke_normal_progress VALUES($p0,$p1,$p2,1)",alpha.Id,"lukeday0",day);
         group.Join(); group.Open();
+        for (int member = 0; member < group.Peers.Length; member++)
+        {
+            group.Peers[member].Send(871,[42,0,0,0]);
+            byte[] info = group.Peers[member].Expect(0,602).Body;
+            That(info.Length == 16 && U32(info) == 42 && info[4] == (member == 0 ? 1 : 0) && U32(info,5) == (member == 0 ? 1u : 0u),
+                "组队选图查询分别读取队长/队员进度，不广播队长资格");
+        }
         string before=fixture.Snapshot();
         alpha.Send(16,Coop.Selection(5102,0,2));
         That(group.All()[0].Any(p=>p is {Kind:1,Opcode:16,Body:[0,9,0,0]}) && fixture.Snapshot()==before,
@@ -30,7 +37,15 @@ internal static partial class PartyDungeonTcpTests
         foreach(int monster in resources.ItemResources.DungeonSpecialDrops.OrdinaryLukeCards.Keys)
             fixture.Sql("INSERT INTO character_luke_normal_drop_claims VALUES($p0,$p1,$p2,$p3,$p4,$p5)",
                 alpha.Id,"lukeday0",day,monster,Guid.NewGuid().ToString("N"),Guid.NewGuid().ToString("N"));
-        alpha.Send(16,Coop.Selection(5101,0,2)); group.ReadEntry(group.All()); group.Load();
+        alpha.Send(16,Coop.Selection(5101,0,2));
+        var entries = group.All();
+        for (int member = 0; member < entries.Length; member++)
+        {
+            var info = entries[member].Single(p=>p is {Kind:0,Opcode:602}).Body;
+            That(info[4] == (member == 0 ? 1 : 0) && U32(info,5) == (member == 0 ? 1u : 0u),
+                "组队进入场景前逐人同步自己的序列缓存");
+        }
+        group.ReadEntry(entries); group.Load();
         var maze=SelfTestCatalogs.Dungeons(resources.Archive).Get(5101).Mazes.Single();
         var route=QuestStoryRouteTests.Path(maze.StaticTopology,maze.Starts.Single(),maze.Bosses.Single());
         int checkedSources=0,pickups=0,questSources=0;

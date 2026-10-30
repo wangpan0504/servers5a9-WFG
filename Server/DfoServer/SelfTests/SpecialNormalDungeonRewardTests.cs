@@ -622,7 +622,11 @@ internal static class SpecialNormalDungeonRewardTests
             fixture.Sql("DROP TRIGGER luke_entry_fail");
             Play(fixture, 5101, beforeSettlement: () =>
             {
+                var sequence = fixture.Session.CaptureOrdinaryLukeSequence(42)!;
                 clock.Advance(TimeSpan.FromSeconds(1));
+                That(!fixture.Session.CanPublishOrdinaryLukeSequence(sequence) &&
+                    fixture.Session.CaptureOrdinaryLukeSequence(42)!.Info == new OrdinaryLukeSequenceInfo(0, 0),
+                    "06:00之后丢弃旧日待发序列，查询只显示新日进度");
                 // 防御性构造已存在更新日行，验证迟到旧Run仍可结算但不得覆盖它；不冒充自然双Run并发。
                 fixture.Sql("UPDATE character_luke_normal_progress SET day=20261026,progress=0");
             });
@@ -679,6 +683,10 @@ internal static class SpecialNormalDungeonRewardTests
                 {
                     var progress = fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id);
                     That(progress.Completed == index, "同一角色真实六图链按前序解锁，不预置进度");
+                    var sequence = fixture.Session.CaptureOrdinaryLukeSequence(42);
+                    That(sequence is not null && sequence.Info == new OrdinaryLukeSequenceInfo((byte)index, (1u << index) - 1) &&
+                        fixture.Session.CanPublishOrdinaryLukeSequence(sequence) && fixture.Session.CaptureOrdinaryLukeSequence(203) is null,
+                        "查询自己的真实前置；其它序列不得借用卢克记录");
                     if (index < 5)
                     {
                         string before = JsonSerializer.Serialize(fixture.Read());
@@ -693,7 +701,12 @@ internal static class SpecialNormalDungeonRewardTests
                 {
                     That(fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id).Completed == index + 1,
                         "每个实际终点仅推进一图");
+                    var sequence = fixture.Session.CaptureOrdinaryLukeSequence(42)!;
+                    That(sequence.Info == new OrdinaryLukeSequenceInfo((byte)(index + 1), (1u << (index + 1)) - 1),
+                        "实际结算提交后投影新进度");
                     fixture.Session.ReturnToRoster(); fixture.Session.Select(0, resumeTown: true); fixture.Session.MarkReady();
+                    That(!fixture.Session.CanPublishOrdinaryLukeSequence(sequence) &&
+                        fixture.Session.CaptureOrdinaryLukeSequence(42)!.Info == sequence.Info, "重登丢弃旧回执，重新读取保留进度");
                     That(fixture.Repository.LoadOrdinaryLukeProgress(fixture.Owner, fixture.Read().Id).Completed == index + 1,
                         "重登保留已提交每日进度");
                 }

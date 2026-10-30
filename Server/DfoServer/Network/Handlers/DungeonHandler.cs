@@ -39,6 +39,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
 {
     public void Register(GameCommandRegistry commands)
     {
+        commands.Register(CmdPacketType.SEQUENTIAL_DUNGEON_INFO, SequentialInfoAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.START_EVILDOM_WAR, StartEvildomWarAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.SELECT_DUNGEON, SelectAsync, nameof(DungeonHandler), UserStateRequirement.WorldReady);
         commands.Register(CmdPacketType.FINISH_LOADING, LoadedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
@@ -54,6 +55,19 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         commands.Register(CmdPacketType.DIE_BLOOD_MONSTER, AltarDeathAsync, nameof(DungeonHandler));
         commands.Register(CmdPacketType.BLOOD_ROUND_UI_PREPARE_FINISH_, AltarPreparedAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
         commands.Register(CmdPacketType.SELECT_ULTIMATE_DIFFICULTY, AltarDifficultyAsync, nameof(DungeonHandler), UserStateRequirement.DungeonContext);
+    }
+
+    async Task<CommandResult> SequentialInfoAsync(GameConnectionContext context, Packet request)
+    {
+        if (!DungeonRequests.TryParseSequentialInfo(request.Body, out uint sequenceId) ||
+            sequenceId != OrdinaryLukeProgress.SequenceId) return CommandResult.Unhandled;
+        var receipt = context.Session.CaptureOrdinaryLukeSequence(sequenceId);
+        log.Write("ordinary_luke_sequence_query", new { Connection = context.Id, Sequence = sequenceId,
+            Accepted = receipt is not null, receipt?.Day, receipt?.Info.Stage, receipt?.Info.ClearBits });
+        if (receipt is not null)
+            await context.Notify(NotiPacketType.SEQUENTIAL_DUNGEON_INFO, OrdinaryLukeSequencePackets.Information(receipt.Info),
+                "ordinary_luke_sequence", () => context.Session.CanPublishOrdinaryLukeSequence(receipt));
+        return CommandResult.Handled;
     }
 
     async Task<CommandResult> CharacterDeathAsync(GameConnectionContext context, Packet request)
@@ -313,6 +327,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             await context.Notify(NotiPacketType.BLOOD_INFO, DungeonAltarPackets.Information(receipt.Entry), "formal_altar_information", Guard);
         else
             await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(receipt.Entry, receipt.Snapshot.BossPosition), "formal_dungeon_information", Guard);
+        if (OrdinaryLukeProgress.Applies(receipt.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Guard);
         // 实验性（#259）：比赛副本先发 NOTI386 对阵/对手，再以 NOTI387 替代 NOTI29（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
         if (receipt.Monsters.Altar is not null)
             await context.Notify(NotiPacketType.START_BLOOD_MAP, DungeonAltarPackets.StartMap(receipt.Entry), "formal_altar_map", Guard);
