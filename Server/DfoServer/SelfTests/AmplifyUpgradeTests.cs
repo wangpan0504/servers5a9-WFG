@@ -1,4 +1,8 @@
 using System.Collections.Immutable;
+using DfoServer.Game.Accounts;
+using DfoServer.Persistence;
+using Microsoft.Data.Sqlite;
+using System.Text.Json;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
@@ -254,7 +258,107 @@ internal static class AmplifyUpgradeTests
         calls = rng.Calls;
         That(!pendingService.Plan(withProtection, request, out _).Accepted && rng.Calls == calls,
             "存在未实现使用资格的保护券时仍在随机前拒绝，不能静默跳过保护后销毁装备");
+        Exact433ProtectionCommit(resources, role, service, rng, request);
         Console.WriteLine($"PASS {Count - before} 当前PVF普通增幅、便携、幸运、金币及完整销毁规划断言");
+    }
+    static void Exact433ProtectionCommit(TcpTestResources resources, Character seed,
+        InventoryAmplifyUpgradeService service, FixedRandom random, EnhancementRequest request)
+    {
+        var r = resources.ItemResources;
+        That(r.AmplifyUpgrades.Get(490705433) is { Kind: AmplifyUseKind.Protection, RetainLevel: 0, PendingRule: null },
+            "真实433按无参数增幅保护动作装配，不从说明文字另加当前等级门槛");
+        string root = Path.Combine(Path.GetTempPath(), "s5a9-protection433-" + Guid.NewGuid().ToString("N"));
+        bool passed = false;
+        try
+        {
+            string database = Path.Combine(root, "game.db");
+            var repository = new CharacterRepository(database);
+            var owners = new AccountOwners();
+            foreach (var (level, success) in new[] { (9, false), (10, false), (10, true), (11, false), (11, true) })
+            {
+                using var owner = owners.Acquire($"protection433-{level}-{success}", () => { });
+                var actor = repository.Create(owner, new($"Guard{level}{(success ? 'S' : 'F')}", seed.Position, seed.Return)
+                {
+                    Job = seed.Job, Level = seed.Level,
+                    Inventory = seed.Inventory with { Items = [.. seed.Inventory.Items.Select(item => item with
+                        { Uid = 0, Core = item.Position == request.Target ? item.Core with { Attr = (byte)(0xE0 | level) } : item.Core }),
+                        new(0, MainSlot(122), InventoryRewardGrantService.Create(r.Items.Get(490705433), 2) with { ExpireTime = 0 })] }
+                });
+                var target = actor.Inventory.Find(request.Target)!;
+                var source = actor.Inventory.Find(MainSlot(request.MaterialSlot))!;
+                var protection = actor.Inventory.Find(MainSlot(122))!;
+                var step = r.AmplifyUpgrades.Rules.Steps[level];
+                That(target.Uid > 0 && source.Uid > 0 && protection.Uid > 0 &&
+                    new[] { target.Uid, source.Uid, protection.Uid }.Distinct().Count() == 3 &&
+                    step.FailureWeight is > 0 and < 100000, "433夹具使用真实持久UID及可达成功、失败边界");
+                random.Value = success ? step.FailureWeight : step.FailureWeight - 1;
+                int calls = random.Calls;
+                var result = service.Plan(actor, request, out var receipt);
+                bool consumed = !success && level >= 10;
+                int nextLevel = success ? level + 1 : consumed ? 0 : level;
+                var expected = actor.Inventory with { Gold = actor.Inventory.Gold - (uint)r.AmplifyUpgrades.Rules.Gold(r.Items.Get(target.Core.ItemId)),
+                    Items = actor.Inventory.Items.Select(item => item.Uid == target.Uid
+                        ? item with { Core = item.Core with { Attr = (byte)(0xE0 | nextLevel) } }
+                        : item.Uid == source.Uid ? item with { Core = item.Core with { Value = item.Core.Count - step.MaterialCount } }
+                        : item.Uid == protection.Uid && consumed ? item with { Core = item.Core with { Value = 1 } } : item).ToImmutableArray() };
+                That(result.Accepted && random.Calls == calls + 1 && receipt is { Refunds.IsEmpty: true } &&
+                    receipt.OldLevel == level && receipt.NewLevel == nextLevel && receipt.OutcomeCode == (success ? 0 : consumed ? 2 : 1) &&
+                    receipt.MaterialRemaining == source.Core.Count - step.MaterialCount &&
+                    receipt.TerminalSlot == (consumed ? 122 : -1) && receipt.TerminalRemaining == (consumed ? 1 : 0) &&
+                    Inventory(result.Plan!.After) == Inventory(expected),
+                    "433在+10尝试11及+11毁装失败只扣一张、装备归零原UID和完整核心保留；成功或+9保级失败不扣券，无销毁补偿");
+                if (level == 11 && !success)
+                {
+                    string before = Snapshot();
+                    Execute("CREATE TRIGGER fail_exact433_late BEFORE INSERT ON inventory_audit_log " +
+                        "WHEN NEW.action_name='equipment_amplification_npc' BEGIN SELECT RAISE(ABORT,'exact433 late rollback'); END");
+                    SqliteException? failure = null;
+                    try { InventoryService.Commit(repository, owner, actor, result); }
+                    catch (SqliteException error) { failure = error; }
+                    That(failure is { SqliteErrorCode: 19 } && failure.Message.Contains("exact433 late rollback", StringComparison.Ordinal) &&
+                        Snapshot() == before, "433保护失败末段SQL故障完整回滚装备、源、保护券、钱包、revision、审计及UID序列");
+                    Execute("DROP TRIGGER fail_exact433_late");
+                }
+                var committed = InventoryService.Commit(repository, owner, actor, result);
+                That(Inventory(committed.Inventory) == Inventory(expected) && committed.Revision == actor.Revision + 1,
+                    "433原计划提交只消费规划数量并递增一次revision，回滚恢复无需重抽随机");
+                var loaded = new CharacterRepository(database).LoadCharacter(owner, actor.Slot);
+                That(Inventory(loaded.Inventory) == Inventory(expected) && loaded.Revision == committed.Revision && random.Calls == calls + 1,
+                    "433成功、保护失败及不扣券分支重载保持完整持久实例，恢复提交不再次抽签");
+
+                string Snapshot()
+                {
+                    using var connection = new SqliteConnection("Data Source=" + database + ";Pooling=False");
+                    connection.Open();
+                    var rows = new List<string>();
+                    foreach (string table in new[] { "characters", "character_inventory_items", "character_inventory_slots",
+                        "inventory_audit_log", "currency_audit_log", "sqlite_sequence" })
+                    {
+                        using var command = connection.CreateCommand();
+                        command.CommandText = "SELECT * FROM " + table;
+                        using var reader = command.ExecuteReader();
+                        while (reader.Read()) { var row = new object[reader.FieldCount]; reader.GetValues(row); rows.Add(table + ":" + JsonSerializer.Serialize(row)); }
+                    }
+                    return JsonSerializer.Serialize(repository.LoadCharacter(owner, actor.Slot)) + JsonSerializer.Serialize(rows.OrderBy(row => row, StringComparer.Ordinal));
+                }
+                void Execute(string sql)
+                {
+                    using var connection = new SqliteConnection("Data Source=" + database + ";Pooling=False");
+                    connection.Open();
+                    using var command = connection.CreateCommand();
+                    command.CommandText = sql;
+                    command.ExecuteNonQuery();
+                }
+            }
+            passed = true;
+        }
+        finally
+        {
+            if (passed && Directory.Exists(root)) Directory.Delete(root, true);
+            else Console.Error.WriteLine("433回归失败现场保留：" + root);
+        }
+        static string Inventory(InventorySnapshot value) => JsonSerializer.Serialize(value with
+            { Items = value.Items.OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray() });
     }
     static InventorySlot MainSlot(short slot) => new(InventoryListType.Main, slot);
     internal sealed class FixedRandom(int value) : Random

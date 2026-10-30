@@ -154,6 +154,34 @@ internal static class AmplificationTests
                 { Attr = (byte)(0xE0 | expected), AmplifyType = 4, AmplifyValue = 6 },
                 "黄金书权重区间两端准确，覆盖原+12并保留高位及完整核心");
         }
+        // 三本2020新春黄金书权重取自已保存STK；这里只补逐ID终点和最低合法资格，不加载PVF。
+        foreach (var book in new (int Id, ImmutableArray<AmplificationLevel> Levels, (long Draw, byte Level)[] Ends)[]
+        {
+            (490705410, [new(3, 40), new(4, 30), new(5, 20), new(6, 10)], [(39, 3), (69, 4), (89, 5), (99, 6)]),
+            (490705411, [new(9, 45), new(10, 45), new(11, 8), new(12, 2)], [(44, 9), (89, 10), (97, 11), (99, 12)]),
+            (490705434, [new(10, 92), new(11, 6), new(12, 1), new(13, 1)], [(91, 10), (97, 11), (98, 12), (99, 13)])
+        })
+        {
+            var bookTemplate = sourceTemplate with { Id = book.Id };
+            var bookRole = highRole with { Inventory = new([source with { Core = source.Core with { ItemId = book.Id } }, high]) };
+            var bookUse = goldUse with { MaterialItemId = book.Id };
+            var bookRule = goldRule with { Levels = book.Levels };
+            var eligible = targetTemplate with { MinimumLevel = 55, Rarity = 2, Grade = 57 };
+            foreach (var (draw, expected) in book.Ends)
+            {
+                var gold = Plan(bookRole, bookUse, out receipt, bookRule, eligible, draw, book: bookTemplate);
+                That(gold.Accepted && receipt!.Level == expected && gold.Plan!.After.Find(MainSlot(9))!.Core.Upgrade == expected,
+                    $"黄金书{book.Id}权重终点{draw}得到+{expected}，Lv55/稀有度2/品级57为合法正例");
+            }
+            foreach (var (level, rarity, grade) in new (byte, int, int)[] { (54, 1, 57), (54, 2, 57), (55, 1, 57), (55, 2, 56) })
+            {
+                int beforeRejection = randomCalls;
+                var rejected = Plan(bookRole, bookUse, out receipt, bookRule,
+                    eligible with { MinimumLevel = level, Rarity = rarity, Grade = grade }, book: bookTemplate);
+                That(rejected.Error == 8 && rejected.Plan is null && receipt is null && randomCalls == beforeRejection,
+                    $"黄金书{book.Id}在随机前拒绝Lv{level}/稀有度{rarity}/品级{grade}，稀有度2修正后须达到55");
+            }
+        }
         int rolled = randomCalls;
         foreach (var bad in new[] { role with { Inventory = new([source with { Uid = 0 }, target]) },
             role with { Inventory = new([source with { Core = source.Core with { EquipmentLockId = 1 } }, target]) },
