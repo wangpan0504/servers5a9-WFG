@@ -330,11 +330,15 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         if (OrdinaryLukeProgress.Applies(receipt.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Guard);
         // 实验性（#259）：比赛副本先发 NOTI386 对阵/对手，再以 NOTI387 替代 NOTI29（依据来自 Go 项目反汇编，未经 V31 客户端验证）。
         if (receipt.Monsters.Altar is not null)
+        {
+            await MonsterAiProjection.SendAsync(context, receipt, "formal_altar_monster_ai", Guard);
             await context.Notify(NotiPacketType.START_BLOOD_MAP, DungeonAltarPackets.StartMap(receipt.Entry), "formal_altar_map", Guard);
+        }
         else if (receipt.Entry.IsTournament && receipt.Monsters.Tournament is { } tournament)
         {
             await context.Notify(NotiPacketType.TOURNAMENT_INFO, DungeonPackets.TournamentInfo(receipt.Entry, tournament),
                 "formal_tournament_info", Guard);
+            await MonsterAiProjection.SendAsync(context, receipt, "formal_tournament_monster_ai", Guard);
             await context.Notify(NotiPacketType.TOURNAMENT_MAP_INFO, DungeonPackets.TournamentMapInfo(receipt.Entry, receipt.MapSeed),
                 "formal_tournament_map_info", Guard);
         }
@@ -776,6 +780,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
         bool published = false;
         bool Guard() => published = context.Session.CanPublishFormalDungeon(receipt);
         await context.Reply(CmdPacketType.MOVE_MAP, DungeonPackets.MoveAccepted(), "formal_move_ack", Guard);
+        await MonsterAiProjection.SendAsync(context, receipt, "formal_monster_ai", Guard);
         if (receipt.Monsters.Altar is not null)
         {
             if (context.Altar is not null) await context.Altar.StopAsync();
@@ -783,7 +788,6 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
                 DungeonAltarPackets.StartMap(receipt.Entry, receipt.Snapshot.MapPayload), "formal_altar_next_map", Guard);
             return CommandResult.Handled;
         }
-        await MonsterAiProjection.SendAsync(context, receipt, "formal_monster_ai", Guard);
         await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(receipt.Entry, receipt.Monsters, receipt.MapSeed,
             receipt.Snapshot.MapOperation,receipt.Snapshot.MapPayload, receipt.PassiveItems), "formal_next_map", Guard);
         if (DungeonPackets.HellPartyMonsterInfo(receipt.Monsters) is { } hellInfo && receipt.Snapshot.MapPayload != DungeonMapPayload.Cached)

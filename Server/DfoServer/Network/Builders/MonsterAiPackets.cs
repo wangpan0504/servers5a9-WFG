@@ -10,6 +10,7 @@ internal static class MonsterAiPackets
 {
     public const ushort Opcode = 0x7FF0;
     public const int BodyLength = 56;
+    public const int ExtendedBodyLength = 72;
     // "MAI1"
     const uint Magic = 0x3149414D;
 
@@ -18,9 +19,10 @@ internal static class MonsterAiPackets
         if (serial == 0) throw new ArgumentOutOfRangeException(nameof(serial));
         if (dungeonId == 0) throw new ArgumentOutOfRangeException(nameof(dungeonId));
         if (mapId == 0) throw new ArgumentOutOfRangeException(nameof(mapId));
-        var body = new byte[BodyLength];
+        bool extended = profile.HitPoints.Mode != MonsterAiMode.Native || profile.Defense.Mode != MonsterAiMode.Native;
+        var body = new byte[extended ? ExtendedBodyLength : BodyLength];
         var span = body.AsSpan();
-        BinaryPrimitives.WriteUInt32LittleEndian(span, Magic);
+        BinaryPrimitives.WriteUInt32LittleEndian(span, extended ? 0x3249414D : Magic);
         BinaryPrimitives.WriteUInt32LittleEndian(span[4..], serial);
         BinaryPrimitives.WriteUInt32LittleEndian(span[8..], dungeonId);
         BinaryPrimitives.WriteUInt32LittleEndian(span[12..], mapId);
@@ -32,6 +34,11 @@ internal static class MonsterAiPackets
         Write(span[32..], profile.Sight);
         Write(span[40..], profile.MoveSpeed);
         Write(span[48..], profile.AttackSpeed);
+        if (extended)
+        {
+            Write(span[56..], profile.HitPoints);
+            Write(span[64..], profile.Defense);
+        }
         return body;
 
         // 原生模式不携带数字，客户端据此跳过固定值/倍率改写。

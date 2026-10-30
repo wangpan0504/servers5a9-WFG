@@ -33,7 +33,8 @@ internal static partial class SinglePlayerDungeonRunTests
 
         foreach (var invalid in new MonsterAiRule[][]
         {
-            [new(0, null)], [new(3, 0)], [new(3, null, new() { Value = -1 })], [new(3, null, new() { Multiplier = -0.5f })],
+            [new(0, 1)], [new(3, 0)], [new(3, null, new() { Value = -1 })], [new(3, null, new() { Multiplier = -0.5f })],
+            [new(0, null, HitPoints: new() { Value = 2 })], [new(0, null, Defense: new() { Multiplier = -1 })],
             [new(3, null, new() { Value = 1, Multiplier = 2 })], [new(3, null, new() { Value = 2147483647f })],
             [new(3, null, AttackSpeed: new() { Multiplier = float.PositiveInfinity })],
             [new(3, null), new(3, null)], [new(3, 5), new(3, 5)]
@@ -46,6 +47,20 @@ internal static partial class SinglePlayerDungeonRunTests
         settings.Replace([new(3, null, new() { Value = 2147483520f })], true);
         That(settings.Current.Resolve(3, 1).Warlike == new MonsterAiValue(MonsterAiMode.Fixed, 2147483520f),
             "float32可精确表示的最大合法固定值通过");
+        settings.Replace([new(0, null, Warlike: new() { Value = 30 }, HitPoints: new() { Multiplier = 4 }, Defense: new() { Multiplier = 2 }),
+            new(3, null, HitPoints: new() { Multiplier = 3 }), new(3, 7, Defense: new())], true);
+        That(settings.Current.Resolve(4, 8).HitPoints == new MonsterAiValue(MonsterAiMode.Multiplier, 4) &&
+            settings.Current.Resolve(3, 8).HitPoints == new MonsterAiValue(MonsterAiMode.Multiplier, 3) &&
+            settings.Current.Resolve(3, 7).Defense == MonsterAiValue.Native &&
+            settings.Current.Resolve(3, 7).Warlike == new MonsterAiValue(MonsterAiMode.Fixed, 30),
+            "全图、指定副本、指定地图逐字段继承，明确原生阻止倍率继承");
+        var extended = MonsterAiPackets.Encode(3, 4, 8, 9, new(1, 2), settings.Current.Resolve(4, 8));
+        That(extended.Length == 72 && BinaryPrimitives.ReadUInt32LittleEndian(extended) == 0x3249414D &&
+            BinaryPrimitives.ReadUInt32LittleEndian(extended.AsSpan(56)) == 2 &&
+            BinaryPrimitives.ReadSingleLittleEndian(extended.AsSpan(60)) == 4 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(extended.AsSpan(64)) == 2 &&
+            BinaryPrimitives.ReadSingleLittleEndian(extended.AsSpan(68)) == 2,
+            "MAI2保留MAI1前56字节布局并追加血量与防御倍率");
 
         // 交接样例的完整56字节与16字节包头的线上字节。
         byte[] golden = Convert.FromHexString("4D4149310100000033000000272A0100" +

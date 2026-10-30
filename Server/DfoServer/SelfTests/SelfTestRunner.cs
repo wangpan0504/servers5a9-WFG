@@ -355,6 +355,7 @@ internal static class SelfTestRunner
         DungeonSpecialDropCatalogTests.RunCore();
         DungeonItemDropCatalogTests.RunCore();
         DungeonDropGenerationPlanTests.RunCore();
+        DungeonDropControlTests.RunCore();
         EquipmentAmplificationDropTests.RunCore();
         GrowthPacketsTests.Run();
         SkillRequestTests.Run();

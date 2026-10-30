@@ -39,8 +39,9 @@ internal sealed class MonsterAiConfiguration(string dataDirectory)
         try
         {
             if (words[1] == "reload") Reload();
-            return "OK " + JsonSerializer.Serialize(new { enabled = Settings.Current.Enabled, rules = Settings.Current.Rules,
-                effective = "new-rooms" });
+            var snapshot = Settings.Current;
+            return "OK " + JsonSerializer.Serialize(new { enabled = snapshot.Enabled, rules = snapshot.Rules,
+                effective = "new-rooms", allDungeons = true, clientProtocol = 2, healthDefense = true });
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         { return "ERR " + error.Message; }

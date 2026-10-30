@@ -15,7 +15,7 @@ internal sealed record DungeonDropTrial(int Threshold, DungeonItemDropPool? Item
     int ProbabilityDenominator = DungeonDropRatePlan.ProbabilityDenominator,
     ImmutableArray<DungeonDropRarityPool> RarityPools = default, bool ReferenceGold = false, int Attempts = 1,
     bool GrowthContractEligible = false, ImmutableDictionary<int, int>? ItemCounts = null, bool IndividualObjects = false,
-    DungeonItemDropPool? EpicReplacementItems = null);
+    DungeonItemDropPool? EpicReplacementItems = null, DungeonDropCategory Category = DungeonDropCategory.Special);
 
 // 上游必须提供已解释的概率、数量与池；这里只按完整声明执行，不为未知资源列补类别。
 // 准备计划是不可变规则输入，不持有在线角色；原Run负责冻结实际随机结果。

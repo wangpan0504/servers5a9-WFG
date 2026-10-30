@@ -9,7 +9,8 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
     Func<int, DungeonMonsterDropDeclaration> resolveMonster, Func<int, ItemTemplate> resolveItem, DungeonSpecialDropCatalog? special = null,
     EquipmentAmplificationDropPolicy? amplification = null, HarlemMaterialDropPolicy? materials = null,
     HarlemHellEpicDropPolicy? harlemEpics = null, HarlemAbyssBonusDropPolicy? abyssBonuses = null, SleepyHollowMaterialDropPolicy? sleepyHollow = null,
-    OperationHopeRewardPolicy? hopeRewards = null, DimensionRewardPolicy? dimensionRewards = null)
+    OperationHopeRewardPolicy? hopeRewards = null, DimensionRewardPolicy? dimensionRewards = null,
+    DungeonDropControlSettings? dropControl = null)
 {
     public const string Rule = "pvf-monster-reference-v1";
     public static ImmutableArray<string> RetainedFields { get; } = ["drop prob[4]", "rarity rows[1..3]", "party member drop bonusrate",
@@ -25,6 +26,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             throw new NotSupportedException("普通卢克缺少已批准的24张专属卡片资源合同");
         var plans = new Dictionary<(int MonsterId, int Level, byte Type, byte SpawnType, int HellRolls, bool Boss, bool Wave, bool CanReward, bool CosmoBoss, bool LegendRare, bool SleepyHollowBoss, bool DimensionTerminal), DungeonDropGenerationPlan>();
         var epicEquipment = harlemEpics?.Pool(entry);
+        var dropMultipliers = dropControl?.Current.Resolve(entry);
         return monster =>
         {
             var key = (monster.MonsterId, monster.CandidateLevel, monster.RewardType, monster.SpawnType, monster.HellRewardRolls,
@@ -66,6 +68,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
                 plan = new(plan.ResourceSource + ";luke-normal-card-compat-v1;" + DungeonSpecialDropCatalog.CardPath, plan.Trials.Add(trial),
                     plan.ReferenceQuality, plan.Amplification) { OrdinaryLukeDailySource = monster.MonsterId };
             }
+            plan = DungeonDropControlSnapshot.Apply(plan, dropMultipliers);
             plans.Add(key, plan);
             return plan;
         };
@@ -127,10 +130,10 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
         var equipment = Pools(true);
         var trials = new List<DungeonDropTrial>
         {
-            new(Rate(0), null, 1, 1, gold, multiplier, ReferenceGold: true),
-            new(Rate(1), null, 1, 1, RarityPools: stackables),
-            new(Rate(2), null, 1, 1, RarityPools: equipment),
-            new(Rate(3), null, 1, 1, RarityPools: stackables)
+            new(Rate(0), null, 1, 1, gold, multiplier, ReferenceGold: true, Category: DungeonDropCategory.Gold),
+            new(Rate(1), null, 1, 1, RarityPools: stackables, Category: DungeonDropCategory.Materials),
+            new(Rate(2), null, 1, 1, RarityPools: equipment, Category: DungeonDropCategory.Equipment),
+            new(Rate(3), null, 1, 1, RarityPools: stackables, Category: DungeonDropCategory.Materials)
         };
         var declaration = resolveMonster(monsterId);
         if (declaration.Items is { Count: > 0 } rows)
@@ -138,7 +141,7 @@ internal sealed class DungeonResourceDropPolicy(DungeonDropRuleCatalog rules, Du
             var explicitItems = rows.Where(row => row.Parameter > 0).Select(row => new DungeonWeightedDropItem(resolveItem(row.ItemId), row.Parameter));
             var pool = new DungeonItemDropPool(explicitItems);
             if (pool.TotalWeight > 0)
-                trials.Add(new(DungeonExplicitDropPolicy.TriggerThreshold, pool, 1, 1));
+                trials.Add(new(DungeonExplicitDropPolicy.TriggerThreshold, pool, 1, 1, Category: DungeonDropCategory.MonsterItems));
         }
         if (special?.IndependentByMonster.TryGetValue(monsterId, out var independent) == true)
         foreach (var row in independent)
