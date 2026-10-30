@@ -169,6 +169,28 @@ internal static class ConsumableUseTests
 
     public static void RunResources(ItemResources resources)
     {
+        var mentalUse = new InventoryConsumableUseService(resources.RecoveryConsumables);
+        foreach (var (id, group, milliseconds) in new[]
+        {
+            (2600021, 13, 1800000), (10006457, 13, 1800000),
+            (7463, 0, 10000), (7464, 1, 10000), (7740, 0, 10000), (7741, 1, 10000),
+            (2680327, 2, 5000), (2680376, 2, 10000), (2680383, 2, 10000), (2680385, 2, 10000),
+            (2680452, 2, 10000), (2680751, 2, 10000), (2749001, 2, 10000), (2749003, 2, 10000),
+            (2749367, 2, 10000), (2749743, 2, 10000), (10002988, 2, 10000)
+        })
+        {
+            That(resources.RecoveryConsumables.TryGet(id, out var mental) && !mental.Unlimited &&
+                mental.CoolGroup == group && mental.CoolTime == milliseconds,
+                "重复冷却声明的原生消耗品仍取得正确资格及最终冷却：" + id);
+            var source = new InventoryItem(1, new(InventoryListType.Main, 65),
+                InventoryRewardGrantService.Create(resources.Items.Get(id), 2));
+            Character character = new(1, 0, "Mental", 0, new(1, 0, 10, 10), null)
+                { Level = 95, Inventory = new([source]) };
+            var result = mentalUse.Plan(character, new(source.Position, 0, id, 0), 0);
+            That(result.Accepted && result.Plan!.After.Find(source.Position)?.Core.Count == 1 &&
+                result.Plan.After.Find(source.Position)?.Uid == source.Uid,
+                "重复冷却声明消耗品使用规划严格扣同UID一件：" + id);
+        }
         foreach (var (id, duration, mode, bonus) in new[]
         {
             (490004594, 1800000, EnhancementPotionMode.Reinforce, 1000),

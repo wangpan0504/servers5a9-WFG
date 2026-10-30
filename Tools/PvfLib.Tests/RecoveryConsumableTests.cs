@@ -22,7 +22,20 @@ internal static class RecoveryConsumableTests
         result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid.Concat(new PvfToken[] { new(3, 5), new(0, 3035), new(0, 3) }).ToArray(), Resolve);
         That(result.DeclaredFields.Contains("need material"), "未实现副作用保留字段名，不能被恢复模型忽略");
         result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid.Concat(new PvfToken[] { new(3, 0), new(0, 20000) }).ToArray(), Resolve);
-        That(result.CoolTime is null && result.Diagnostics.Length != 0, "重复冷却声明保留诊断，不猜覆盖优先级");
+        That(result.CoolTime == 20000 && result.Diagnostics.IsEmpty, "重复冷却标量按原客户端顺序由最后一次完整声明覆盖");
+        result = RecoveryConsumableFile.Parse(2600021, "stackable/example.stk",
+            [..valid,new(3,0),new(0,10000),new(3,1),new(0,0)], Resolve);
+        That(result.CoolTime == 10000 && result.CoolGroup == 0 && result.Diagnostics.IsEmpty,
+            "相同冷却时间与显式组0重复声明幂等，不误拒绝精神刺激等原资源");
+        result = RecoveryConsumableFile.Parse(2680383, "stackable/example.stk", [..valid,new(3,1),new(0,3),new(3,1),new(0,2)], Resolve);
+        That(result.CoolGroup == 2 && result.Diagnostics.IsEmpty, "活动消耗品多个冷却组取最后声明，不误用第一组");
+        foreach (PvfToken[] tail in new PvfToken[][] { [new(3,1)],
+            [new(3,1),new(6,3)], [new(3,1),new(0,0),new(0,0)] })
+        {
+            result = RecoveryConsumableFile.Parse(2600021, "stackable/example.stk", [..valid,..tail], Resolve);
+            That(result.CoolGroup is null && !result.Diagnostics.IsEmpty,
+                "空字段、错类型与多值冷却声明仍拒绝，不借重复兼容放行");
+        }
         result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid[..^1], Resolve);
         That(result.HpRecovery is null && result.Diagnostics.Length != 0, "恢复四元组缺尾不能取得药剂资格");
         result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid.Select((token, at) => at == 7 ? new PvfToken(6, 3) : token).ToArray(), Resolve);
