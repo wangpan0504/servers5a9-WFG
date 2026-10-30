@@ -163,7 +163,8 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
             return new(true, 0, new(character.Inventory, character.Inventory with
                 { Skins = state with { SelectedCutscenes = ids } }, "skill_cutscene_select", new(character, deadline, Clock)));
         }
-        if (!request.AdditionalIds.IsDefaultOrEmpty && request.AdditionalIds.Any(id => id != 0)) return InventoryResult.Reject(19);
+        // 即时表情在下方按四个栏位校验，不能提前按单编号皮肤拒绝第二至第四栏。
+        if (request.Type != EmoticonType && request.AdditionalIds.Any(id => id != 0)) return InventoryResult.Reject(19);
         if (request.Type == PartyFrameType)
         {
             var frame = merged.PartyFrames.SingleOrDefault(row => row.SkinId == request.SkinId);
