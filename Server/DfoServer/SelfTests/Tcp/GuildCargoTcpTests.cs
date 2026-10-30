@@ -196,6 +196,8 @@ internal static class GuildCargoTcpTests
                     peer.Expect(0, 1557);
                     peer.Expect(0, 1558);
                 }
+                // 空角色恢复也须收到最近获得空列表，清除同连接上一角色残留。
+                peer.Expect(0, 1559, [0]);
                 peer.ReadWeeklyDungeon();
                 return actors;
             }

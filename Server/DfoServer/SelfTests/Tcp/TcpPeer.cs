@@ -52,6 +52,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] SceneSkillInfo { get; private set; } = [];
     public byte[] AvailableQuests { get; private set; } = [];
     public byte[] CompletedQuestHistory { get; private set; } = [];
+    public SkinStorageKey[] RecentSkins { get; private set; } = [];
     public ushort Id { get; internal set; }
 
     internal DfoServer.GameWorld.Towns.Location SavedTownPosition()
@@ -955,7 +956,7 @@ internal sealed partial class TcpPeer : IDisposable
         ushort[]? tagEvildom = null, byte[][]? echonSets = null, byte[]? pvpTotalTeam = null, bool premiumPcRoom = false,
         (SkinOwnership[] Owned, int Selected)? partyFrames = null,
         (SkinOwnership[] Owned, int[] Selected)? emoticons = null, SkinStorageState? accountSkins = null, byte[]? ekernCycle = null,
-        byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0)
+        byte? recoveredPvpGrade = null, byte recoveredPowerTitle = 0, SkinStorageKey[]? recentSkins = null)
     {
         // 三类决斗入口直接绑定非房间地区10/0；仍逐包断言1379不应出现，不跳过未知包。
         if (PvpEntry) room = false;
@@ -1433,6 +1434,16 @@ internal sealed partial class TcpPeer : IDisposable
                     for(int at=0;at<4;at++) w.Write(at < emote.Selected.Length ? emote.Selected[at] : 0);
                 }));
             }
+
+            byte[] recent = Expect(0, 1559).Body;
+            TestCheck.That(recent.Length >= 1 && recent.Length == 1 + recent[0] * 5,
+                "最近获得初始化保持u8数量和完整5B记录，空角色也清除旧列表");
+            RecentSkins = Enumerable.Range(0, recent[0]).Select(at => new SkinStorageKey(recent[1 + at * 5],
+                BinaryPrimitives.ReadInt32LittleEndian(recent.AsSpan(2 + at * 5)))).ToArray();
+            TestCheck.That(RecentSkins.All(key => key.Type <= 4 && key.SkinId > 0) &&
+                RecentSkins.Distinct().Count() == RecentSkins.Length, "最近获得类别有效且没有重复记录");
+            if (recentSkins is not null)
+                TestCheck.That(RecentSkins.SequenceEqual(recentSkins), "最近获得初始化逐项匹配指定归属、排序和完整内容");
 
             void AccountList(BinaryWriter writer, SkinOwnership[] rows)
             {

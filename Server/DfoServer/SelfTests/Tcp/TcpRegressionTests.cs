@@ -428,6 +428,7 @@ internal static class TcpRegressionTests
         ("equipment-transmission", EquipmentTransmissionTcpTests.RunAsync),
         ("weapon-skin", WeaponSkinTcpTests.RunAsync),
         ("emoticon", EmoticonTcpTests.RunAsync),
+        ("skin-recent", SkinRecentTcpTests.RunAsync),
         ("refinement", RefinementTcpTests.RunAsync),
         ("refinement-tickets", RefinementTicketTcpTests.RunAsync),
         ("disjoint", DisjointTcpTests.RunAsync),

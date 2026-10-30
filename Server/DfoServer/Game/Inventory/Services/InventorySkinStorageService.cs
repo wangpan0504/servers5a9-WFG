@@ -97,6 +97,9 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
         }
         var removed = InventoryDeleteService.Plan(before, position, token.Core.ItemId, 1);
         if (!removed.Accepted) return InventoryResult.Reject(3);
+        // 同一时钟刻度连续跨归属入库也保留实际顺序；不因时钟回拨把新记录排到后面。
+        long latest = before.Skins.Recent.Concat(before.AccountSkins.Recent).Select(row => row.AcquiredAt).DefaultIfEmpty(0).Max();
+        state = state.Acquired(Keys(token), Math.Max(now.UtcTicks, latest + 1));
         var after = definition.AccountWide
             ? removed.Plan!.After with { AccountSkins = state }
             : removed.Plan!.After with { Skins = state };
@@ -261,6 +264,33 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
             PartyFrames = Active(state.PartyFrames, skins.PartyFrames, now),
             Emoticons = Active(state.Emoticons, skins.Emoticons, now)
         };
+    }
+
+    public ImmutableArray<SkinStorageKey> Recent(Character character)
+    {
+        long now = Clock.GetUtcNow().ToUnixTimeSeconds();
+        var state = character.Inventory.Skins;
+        var account = character.Inventory.AccountSkins;
+        var owned = new HashSet<SkinStorageKey>();
+        // 券可保存制作候选表以外的真实武器，不能用该候选表收窄既有所有权。
+        foreach (int id in state.Owned)
+            if (items.Contains(id)) owned.Add(new(Type, id));
+        Add(CutsceneType, skins.Cutscenes, state.Cutscenes, account.Cutscenes);
+        Add(DamageFontType, skins.DamageFonts, state.DamageFonts, account.DamageFonts);
+        Add(PartyFrameType, skins.PartyFrames, state.PartyFrames, account.PartyFrames);
+        Add(EmoticonType, skins.Emoticons, state.Emoticons, account.Emoticons);
+        // 有真实时间的记录优先；旧存档只用有效所有权补齐，不虚构获得时间或写库。
+        return state.Recent.Concat(account.Recent).Where(row => owned.Contains(row.Key))
+            .OrderByDescending(row => row.AcquiredAt).Select(row => row.Key)
+            .Concat(owned.OrderBy(key => key.Type).ThenBy(key => key.SkinId))
+            .Distinct().Take(SkinStorageState.RecentLimit).ToImmutableArray();
+
+        void Add(byte type, FrozenSet<int> catalog, ImmutableArray<SkinOwnership> local, ImmutableArray<SkinOwnership> shared)
+        {
+            foreach (var row in local.Concat(shared))
+                if (row.Active(now) && row.SkinId != DefaultSkinId(type) && catalog.Contains(row.SkinId))
+                    owned.Add(new(type, row.SkinId));
+        }
     }
 
     static ImmutableArray<SkinOwnership> Active(ImmutableArray<SkinOwnership> owned, FrozenSet<int> catalog, long now) =>

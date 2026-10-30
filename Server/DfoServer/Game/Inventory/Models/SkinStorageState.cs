@@ -13,11 +13,21 @@ internal sealed record SkinStorageState(ImmutableArray<int> Owned, int Selected 
     public int SelectedPartyFrame { get; init; }
     public ImmutableArray<SkinOwnership> Emoticons { get; init; } = [];
     public ImmutableArray<int> SelectedEmoticons { get; init; } = [];
+    public const int RecentLimit = byte.MaxValue;
+    public ImmutableArray<SkinAcquisition> Recent { get; init; } = [];
     public bool Same(SkinStorageState other) => Selected == other.Selected && Owned.SequenceEqual(other.Owned) &&
         SelectedDamageFont == other.SelectedDamageFont && DamageFonts.SequenceEqual(other.DamageFonts) &&
         Cutscenes.SequenceEqual(other.Cutscenes) && SelectedCutscenes.SequenceEqual(other.SelectedCutscenes) &&
         SelectedPartyFrame == other.SelectedPartyFrame && PartyFrames.SequenceEqual(other.PartyFrames) &&
-        Emoticons.SequenceEqual(other.Emoticons) && SelectedEmoticons.SequenceEqual(other.SelectedEmoticons);
+        Emoticons.SequenceEqual(other.Emoticons) && SelectedEmoticons.SequenceEqual(other.SelectedEmoticons) &&
+        Recent.SequenceEqual(other.Recent);
+
+    // 最近记录随归属仓库一起提交；同一皮肤续期时移到前面，不无限累积历史。
+    public SkinStorageState Acquired(IEnumerable<SkinStorageKey> keys, long acquiredAt) => this with
+    {
+        Recent = keys.Select(key => new SkinAcquisition(key, acquiredAt)).Concat(Recent)
+            .DistinctBy(row => row.Key).Take(RecentLimit).ToImmutableArray()
+    };
     public ImmutableArray<int> CutsceneSelection(long now)
     {
         var active = SelectedCutscenes.Where(id => id == 30000 || Cutscenes.Any(row => row.SkinId == id && row.Active(now))).ToImmutableArray();
@@ -38,6 +48,10 @@ internal sealed record SkinStorageState(ImmutableArray<int> Owned, int Selected 
     // 非武器类别的选择可以指向账号皮肤仓的条目，account参数提供并集一侧；账号仓自身不保存选择。
     public void Validate(SkinStorageState? account = null)
     {
+        if (Recent.IsDefault || Recent.Length > RecentLimit || Recent.Any(row => row is null ||
+                row.Key.Type > 4 || row.Key.SkinId <= 0 || row.AcquiredAt <= 0 || row.AcquiredAt > DateTimeOffset.MaxValue.UtcTicks) ||
+            Recent.Select(row => row.Key).Distinct().Count() != Recent.Length)
+            throw new InvalidDataException("皮肤最近获得记录无效");
         if (Owned.IsDefault || Owned.Length > ushort.MaxValue || Owned.Any(id => id <= 0) ||
             Owned.Distinct().Count() != Owned.Length || Selected != 0 && !Owned.Contains(Selected))
             throw new InvalidDataException("角色武器外观所有权或选中项无效");
@@ -76,6 +90,8 @@ internal sealed record SkinStorageState(ImmutableArray<int> Owned, int Selected 
             throw new InvalidDataException("角色即时表情所有权、期限或选择无效");
     }
 }
+
+internal sealed record SkinAcquisition(SkinStorageKey Key, long AcquiredAt);
 
 internal sealed record SkinOwnership(int SkinId, int ExpiresAt)
 {
