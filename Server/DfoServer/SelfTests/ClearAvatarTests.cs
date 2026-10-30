@@ -8,12 +8,42 @@ using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Persistence;
 using Microsoft.Data.Sqlite;
+using PvfLib;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
 internal static class ClearAvatarTests
 {
+    public static void RunAllSourceTemplates(PvfArchive archive, ItemCatalog items)
+    {
+        int matched = 0;
+        var slots = new HashSet<byte>();
+        foreach (var (id, relative) in PvfScript.List(archive.ReadText("equipment/equipment.lst")))
+        {
+            string path = "equipment/" + relative;
+            if (!archive.Contains(path)) continue;
+            string text = archive.ReadText(path);
+            if (!text.Contains("`clear avatar`", StringComparison.Ordinal) && !text.Contains("[clear avatar]", StringComparison.Ordinal)) continue;
+            var template = items.Get(id);
+            if (!template.CloneAvatar) continue;
+            That(template.Kind == ItemKind.Avatar && template.EquipmentSlot <= 10,
+                "每个实际克隆模板均映射到已支持的来源部位：" + id);
+            var source = Avatar(1, new(InventoryListType.Avatar, 209), id, new());
+            var clone = Avatar(2, new(InventoryListType.Equipment, template.EquipmentSlot), id,
+                new() { ClearAvatarId = id, ClearAvatarSourceUid = 1 });
+            byte[] body = ClearAvatarPackets.Sources(new([source, clone]));
+            That(body.Length == 34 && body[1 + template.EquipmentSlot * 3] == template.EquipmentSlot &&
+                BitConverter.ToUInt16(body, 2 + template.EquipmentSlot * 3) == 221,
+                "每个实际克隆模板以原生三字节记录绑定包裹末格原件：" + id);
+            slots.Add(template.EquipmentSlot);
+            matched++;
+        }
+        That(matched > 0 && slots.IsSupersetOf(Enumerable.Range(0, 8).Select(slot => (byte)slot)) &&
+            slots.Contains(9) && slots.Contains(10), "名册逐项覆盖全部实际克隆族及普通八部位、光环和武器");
+        Console.WriteLine($"Clone source templates checked: {matched}; slots: {string.Join(',', slots.Order())}");
+    }
+
     public static void RunResources(CharacterCatalog characters, ItemCatalog items)
     {
         That(characters.Get(2).DefaultAvatarEquipment.GetValueOrDefault((byte)3) == 48600 &&
@@ -138,18 +168,32 @@ internal static class ClearAvatarTests
             details with { ClearAvatarId = 103, ClearAvatarSourceUid = originalSource.Uid });
         var sourceInventory = new InventorySnapshot([originalSource, duplicate, linked]);
         var sourcePacket = ClearAvatarPackets.Sources(sourceInventory);
-        That(sourcePacket.Length == 56 && sourcePacket[0] == 11 && BitConverter.ToInt32(sourcePacket, 17) == 16,
+        That(sourcePacket.Length == 34 && sourcePacket[0] == 11 && BitConverter.ToUInt16(sourcePacket, 11) == 16,
             "1449来源值按真实UID定位原件格加12，不把同模板副本或模板编号作为来源");
         sourceInventory = sourceInventory with { Items = [duplicate, linked, originalSource with { Position = new(InventoryListType.Avatar, 8) }] };
-        That(BitConverter.ToInt32(ClearAvatarPackets.Sources(sourceInventory), 17) == 20,
+        That(BitConverter.ToUInt16(ClearAvatarPackets.Sources(sourceInventory), 11) == 20,
             "原件移格后按提交后库存解析来源，不沿用穿戴时的旧槽号");
         foreach (var invalid in new[] { originalSource with { Position = new(InventoryListType.PersonalCargo, 0) },
             originalSource with { Uid = 34 }, originalSource with { Core = originalSource.Core with { ItemId = 104 } } })
         {
-            That(BitConverter.ToInt32(ClearAvatarPackets.Sources(new([duplicate, linked, invalid])), 17) == 0,
+            That(BitConverter.ToUInt16(ClearAvatarPackets.Sources(new([duplicate, linked, invalid])), 11) == 0,
                 "原件不在装扮包裹、UID或模板不匹配时清除客户端来源，不回退到同模板副本");
         }
         Reject<InvalidDataException>(() => (details with { ClearAvatarSourceUid = -1 }).Validate(), "克隆来源UID不得为负");
+        var allSources = Enumerable.Range(0, 11).SelectMany(slot => new[]
+        {
+            Avatar(100 + slot, new(InventoryListType.Avatar, (short)(slot * 2)), 100 + slot, details),
+            Avatar(200 + slot, new(InventoryListType.Equipment, (short)slot), 200 + slot,
+                details with { ClearAvatarId = 100 + slot, ClearAvatarSourceUid = 100 + slot })
+        }).ToImmutableArray();
+        using (var reader = new BinaryReader(new MemoryStream(ClearAvatarPackets.Sources(new(allSources)))))
+        {
+            That(reader.ReadByte() == 11, "来源表完整清除并重建十一部位");
+            for (byte slot = 0; slot < 11; slot++)
+                That(reader.ReadByte() == slot && reader.ReadUInt16() == slot * 2 + 12,
+                    "按原客户端u8/u16读取每个部位的真实来源，不能仅首条或零值偶然对齐");
+            That(reader.BaseStream.Position == reader.BaseStream.Length, "来源表在34B精确闭合，无遗留高位字节");
+        }
         RunPlayerExtensions(details);
         RunRepository(catalog, details);
         Console.WriteLine($"PASS {Count - checks} clear avatar覆盖、默认外观、完整资产及事务断言");
