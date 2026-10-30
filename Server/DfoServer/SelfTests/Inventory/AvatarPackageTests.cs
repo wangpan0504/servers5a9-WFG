@@ -15,6 +15,7 @@ internal static class AvatarPackageTests
 {
     public static void RunCore()
     {
+        IdenticalAbilityRows();
         ForcedOptionsParsing();
         var full = Package("101 1 3 0 102 2 4 37", 0);
         That(full.Recognized, "装扮族身份与当前可用性分别保留");
@@ -161,6 +162,39 @@ internal static class AvatarPackageTests
         }
     }
 
+    static void IdenticalAbilityRows()
+    {
+        // 保存53180的同块末两行；第一条断言用于test-only基线精确RED，不依赖PVF或产品host。
+        const string skill = "31 `[SKILL_LEVEL]` `[mage]` 365 1";
+        const string stat = "0 `[HP MAX]` `+` 100";
+        var single = AvatarPackageCatalog.ParseAvatar(AvatarText(skill));
+        var repeated = AvatarPackageCatalog.ParseAvatar(AvatarText(skill + " " + skill));
+        That(repeated.PendingRule is null && repeated.RequiresAbilityChoice && repeated.Abilities.SetEquals([31]) &&
+            repeated.Types.SequenceEqual(single.Types), "同块完全相同token的重复技能31行应保留唯一合法选项与原期限孔位");
+        foreach (var (body, expected) in new (string Body, byte[] Expected)[] {
+            (skill + "\n\t" + skill.Replace(" `", "\r\n`") + " " + skill, [31]),
+            (skill + " " + stat + " " + skill, [0, 31]), (stat + " " + stat, [0]) })
+        {
+            var actual = AvatarPackageCatalog.ParseAvatar(AvatarText(body));
+            That(actual.PendingRule is null && actual.RequiresAbilityChoice && actual.Abilities.SetEquals(expected) &&
+                actual.Types.SequenceEqual(single.Types), "段内相同完整token重复仅去重编号，允许分隔空白和非相邻重复且不丢期限孔位");
+        }
+        foreach (string conflicting in new[] {
+            "31 `[SKILL_LEVEL]` `[priest]` 365 1", "31 `[SKILL_LEVEL]` `[mage]` 366 1",
+            "31 `[SKILL_LEVEL]` `[mage]` 365 2", "31 `[SKILL_LEVEL]` `[mage]` 0365 1",
+            "031 `[SKILL_LEVEL]` `[mage]` 365 1", "31 `[SKILL_LEVEL]` `[mage]` 365",
+            "31 `[SKILL_LEVEL]` `[mage]` bad 1", "31 `[SKILL_LEVEL]` `[mage]` 365 -1",
+            "31 `[SKILL_LEVEL]` `[mage]` 365 1 unknown" })
+            That(AvatarPackageCatalog.ParseAvatar(AvatarText(skill + " " + conflicting)).PendingRule is not null,
+                "重复编号的职业/技能/等级/词法冲突或不完整非法行必须整件拒绝");
+        foreach (string conflicting in new[] {
+            "0 `[HP MAX]` `+` 101", "0 `[HP MAX]` `+` 1e2", "0 `[HP MAX]` `*` 100",
+            "0 `[HP  MAX]` `+` 100", "0 `[MP MAX]` `+` 100", "00 `[HP MAX]` `+` 100",
+            "0 `[HP MAX]` `+`", "0 `[HP MAX]` `+` bad" })
+            That(AvatarPackageCatalog.ParseAvatar(AvatarText(stat + " " + conflicting)).PendingRule is not null,
+                "段内非技能重复仍要求完整原token相同，不沿跨块幅度兼容放宽同编号冲突");
+    }
+
     static void DuplicateAbilityDeclarations()
     {
         const string stats = "0 `[HP MAX]` `+` 100 37 `[MP MAX]` `*` 1.5";
@@ -206,9 +240,17 @@ internal static class AvatarPackageTests
             AvatarText(stats) + "\n[avatar select ability]\n" + stats,
             "[avatar select ability]\n" + stats + Block(stats),
             AvatarText(stats) + Block(stats) + "\n[/avatar select ability]",
-            AvatarText(stats + " " + stats), AvatarText(stats + " " + stats) + Block(stats + " " + stats) })
+            AvatarText(stats + " 0 `[HP MAX]` `+` 101"),
+            AvatarText(stats + " 0 `[HP MAX]` `+` 101") + Block(stats + " 0 `[HP MAX]` `+` 101") })
             That(AvatarPackageCatalog.ParseAvatar(text).PendingRule is not null,
-                "任一空段、残缺、未知结构、开闭数量不符及段内重复索引均整件拒绝");
+                "任一空段、残缺、未知结构、开闭数量不符及段内同编号冲突均整件拒绝");
+        foreach (string text in new[] { AvatarText(stats + " " + stats),
+            AvatarText(stats + " " + stats) + Block(stats + " " + stats) })
+        {
+            var actual = AvatarPackageCatalog.ParseAvatar(text);
+            That(actual.PendingRule is null && actual.RequiresAbilityChoice && actual.Abilities.SetEquals([0, 37]),
+                "原完整同token段内重复两样本保留为正向回归，跨块一致性仍完整校验");
+        }
         That(AvatarPackageCatalog.ParseAvatar("[name]\n`[avatar select ability]文字[/avatar select ability]`") is
             { PendingRule: null, RequiresAbilityChoice: false } noChoice && noChoice.Abilities.SetEquals([0]),
             "字符串伪标签仍不构成能力声明，无声明保留属性0");
@@ -226,6 +268,9 @@ internal static class AvatarPackageTests
                 actual.Abilities.SetEquals([0, 1, 2]) && actual.Types.SequenceEqual(AvatarPackageCatalog.ParseAvatar(complete).Types),
                 "单个完整合法属性块后的唯一同名EOF尾闭保留全部能力、期限与孔位");
         }
+        That(AvatarPackageCatalog.ParseAvatar(AvatarText(stats + "\n0 `[HP MAX]` `+` 280") + "\n" + close) is
+            { PendingRule: null, RequiresAbilityChoice: true } identicalEof && identicalEof.Abilities.SetEquals([0, 1, 2]),
+            "完整同token重复行与唯一EOF尾闭同时出现仍保留全部合法编号");
         foreach (string text in new[] {
             complete + "\n1\n" + close,
             complete + "\n[name]\n`tail`\n" + close,
@@ -234,7 +279,7 @@ internal static class AvatarPackageTests
             complete + "\n" + close + "\n[name]\n`tail`",
             complete + "\n" + close + "\n" + close,
             complete + "\n[avatar select ability]\n" + close + "\n" + close,
-            AvatarText(stats + "\n0 `[HP MAX]` `+` 280") + "\n" + close,
+            AvatarText(stats + "\n0 `[HP MAX]` `+` 281") + "\n" + close,
             AvatarText("0 `[HP MAX]` `+`") + "\n" + close,
             "[avatar select ability]\n" + complete + "\n" + close,
             complete + "\n[import script]\n`other.equ`\n" + close,
@@ -281,6 +326,7 @@ internal static class AvatarPackageTests
         FirstGrowResources(towns, resources, packages);
         RankZeroResources(towns, resources, packages);
         AbilitySentinelResources(towns, resources, packages);
+        SharedCaseFullSelectionsResources(towns, resources, packages);
         var items = resources.Items;
         var service = new InventoryAvatarPackageService(items, packages, resources.GoldLimits, resources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
@@ -354,6 +400,192 @@ internal static class AvatarPackageTests
                 { Socket0: { Type: 239, EmblemId: -1 }, Socket1: { Type: 239, EmblemId: -1 }, Socket2.Type: 0 },
                 "特殊皮肤礼包沿模板保留双彩孔，未开孔类型不覆盖默认孔，带孔类型也不重复加孔");
         }
+    }
+
+    static void SharedCaseFullSelectionsResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
+    {
+        // 独立预期来自保存source/avatar/shared原文；不由正在被测的Catalog选择Max/Min作oracle。
+        // shared case只证明选项编号；这里不推断技能效果、钱包、落库或重连。
+        var samples = new (int SourceId, byte Category, byte Subcategory, int CoatId, bool RejectCoatZero,
+            byte[] SocketTypes, AvatarPackageChoice[] Choices)[]
+        {
+            (10304411, 0, 0, 40825, true, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(39186, 4), new(39601, 4), new(39952, 3), new(40342, 3), new(40825, 140), new(41220, 24), new(41545, 5), new(41997, 3), new(42218, 1)]),
+            (10304411, 0, 1, 40826, true, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(39187, 4), new(39602, 4), new(39953, 3), new(40343, 3), new(40826, 140), new(41221, 24), new(41546, 5), new(41998, 3), new(42217, 1)]),
+            (10304411, 1, 0, 44835, false, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(43179, 4), new(43604, 4), new(43945, 3), new(44346, 3), new(44835, 82), new(45228, 20), new(45546, 5), new(46010, 3), new(46217, 1)]),
+            (10304411, 1, 1, 44836, false, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(43180, 4), new(43605, 4), new(43946, 3), new(44347, 3), new(44836, 82), new(45229, 20), new(45547, 5), new(46011, 3), new(46216, 1)]),
+            (10304411, 2, 0, 48824, true, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(47184, 4), new(47599, 4), new(47943, 3), new(48343, 3), new(48824, 94), new(49218, 20), new(49543, 5), new(49997, 3), new(50217, 1)]),
+            (10304411, 2, 1, 48825, true, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(47185, 4), new(47600, 4), new(47944, 3), new(48344, 3), new(48825, 94), new(49219, 20), new(49544, 5), new(49998, 3), new(50216, 1)]),
+            (10304411, 3, 0, 1640037, true, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(1600051, 4), new(1610034, 4), new(1620033, 3), new(1630035, 3), new(1640037, 100), new(1650034, 20), new(1660035, 5), new(1670037, 3), new(1680015, 1)]),
+            (10304411, 3, 1, 1640038, true, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(1600052, 4), new(1610035, 4), new(1620034, 3), new(1630036, 3), new(1640038, 100), new(1650035, 20), new(1660036, 5), new(1670038, 3), new(1680014, 1)]),
+            (10304411, 4, 0, 52786, false, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(51174, 4), new(51560, 4), new(51920, 3), new(52340, 3), new(52786, 174), new(53180, 31), new(53541, 5), new(53975, 3), new(54217, 1)]),
+            (10304411, 4, 1, 52787, false, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(51175, 4), new(51561, 4), new(51921, 3), new(52341, 3), new(52787, 174), new(53181, 31), new(53542, 5), new(53976, 3), new(54216, 1)]),
+            (10304411, 5, 0, 56715, true, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(55118, 4), new(55494, 4), new(55893, 3), new(56289, 3), new(56715, 109), new(57108, 18), new(57494, 5), new(57907, 3), new(58217, 1)]),
+            (10304411, 5, 1, 56716, true, [1, 1, 2, 2, 4, 4, 8, 8, 0],
+                [new(55119, 4), new(55495, 4), new(55894, 3), new(56290, 3), new(56716, 109), new(57109, 18), new(57495, 5), new(57908, 3), new(58216, 1)]),
+            (10307447, 0, 0, 106501672, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561623, 4), new(106551595, 4), new(106571435, 3), new(106521519, 3), new(106501672, 174), new(106511617, 35), new(106541620, 3), new(106580960, 1), new(106531452, 5)]),
+            (10307447, 0, 1, 106501673, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561608, 4), new(106551596, 4), new(106571436, 3), new(106521520, 3), new(106501673, 174), new(106511618, 35), new(106541621, 3), new(106580961, 1), new(106531453, 5)]),
+            (10307447, 0, 2, 106501674, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561609, 4), new(106551597, 4), new(106571437, 3), new(106521521, 3), new(106501674, 174), new(106511619, 35), new(106541622, 3), new(106580962, 1), new(106531454, 5)]),
+            (10307447, 0, 3, 106501675, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561610, 4), new(106551598, 4), new(106571438, 3), new(106521522, 3), new(106501675, 174), new(106511620, 35), new(106541623, 3), new(106580963, 1), new(106531455, 5)]),
+            (10307447, 1, 0, 106501676, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561611, 4), new(106551599, 4), new(106571439, 3), new(106521523, 3), new(106501676, 174), new(106511621, 35), new(106541624, 3), new(106580964, 1), new(106531456, 5)]),
+            (10307447, 1, 1, 106501677, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561612, 4), new(106551600, 4), new(106571440, 3), new(106521524, 3), new(106501677, 174), new(106511622, 35), new(106541625, 3), new(106580965, 1), new(106531457, 5)]),
+            (10307447, 1, 2, 106501678, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561613, 4), new(106551601, 4), new(106571441, 3), new(106521525, 3), new(106501678, 174), new(106511623, 35), new(106541626, 3), new(106580966, 1), new(106531458, 5)]),
+            (10307447, 1, 3, 106501679, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561614, 4), new(106551602, 4), new(106571442, 3), new(106521526, 3), new(106501679, 174), new(106511624, 35), new(106541627, 3), new(106580967, 1), new(106531459, 5)]),
+            (10307447, 2, 0, 106501680, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561615, 4), new(106551603, 4), new(106571443, 3), new(106521527, 3), new(106501680, 174), new(106511625, 35), new(106541628, 3), new(106580968, 1), new(106531460, 5)]),
+            (10307447, 2, 1, 106501681, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561616, 4), new(106551604, 4), new(106571444, 3), new(106521528, 3), new(106501681, 174), new(106511626, 35), new(106541629, 3), new(106580969, 1), new(106531461, 5)]),
+            (10307447, 2, 2, 106501682, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561617, 4), new(106551605, 4), new(106571445, 3), new(106521529, 3), new(106501682, 174), new(106511627, 35), new(106541630, 3), new(106580970, 1), new(106531462, 5)]),
+            (10307447, 2, 3, 106501683, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561618, 4), new(106551606, 4), new(106571446, 3), new(106521530, 3), new(106501683, 174), new(106511628, 35), new(106541631, 3), new(106580971, 1), new(106531463, 5)]),
+            (10307447, 3, 0, 106501684, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561619, 4), new(106551607, 4), new(106571447, 3), new(106521531, 3), new(106501684, 174), new(106511629, 35), new(106541632, 3), new(106580972, 1), new(106531464, 5)]),
+            (10307447, 3, 1, 106501685, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561620, 4), new(106551608, 4), new(106571448, 3), new(106521532, 3), new(106501685, 174), new(106511630, 35), new(106541633, 3), new(106580973, 1), new(106531465, 5)]),
+            (10307447, 3, 2, 106501686, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561621, 4), new(106551609, 4), new(106571449, 3), new(106521533, 3), new(106501686, 174), new(106511631, 35), new(106541634, 3), new(106580974, 1), new(106531466, 5)]),
+            (10307447, 3, 3, 106501687, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561622, 4), new(106551610, 4), new(106571450, 3), new(106521534, 3), new(106501687, 174), new(106511632, 35), new(106541635, 3), new(106580975, 1), new(106531467, 5)]),
+            (10307447, 4, 0, 106501694, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561639, 4), new(106551617, 4), new(106571457, 3), new(106521541, 3), new(106501694, 174), new(106511639, 35), new(106541642, 3), new(106580980, 1), new(106531474, 5)]),
+            (10307447, 4, 1, 106501695, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561631, 4), new(106551618, 4), new(106571458, 3), new(106521542, 3), new(106501695, 174), new(106511640, 35), new(106541643, 3), new(106580981, 1), new(106531475, 5)]),
+            (10307447, 4, 2, 106501696, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561632, 4), new(106551619, 4), new(106571459, 3), new(106521543, 3), new(106501696, 174), new(106511641, 35), new(106541644, 3), new(106580982, 1), new(106531476, 5)]),
+            (10307447, 4, 3, 106501697, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561633, 4), new(106551620, 4), new(106571460, 3), new(106521544, 3), new(106501697, 174), new(106511642, 35), new(106541645, 3), new(106580983, 1), new(106531477, 5)]),
+            (10308343, 0, 0, 106501690, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561627, 4), new(106551613, 4), new(106571453, 3), new(106521537, 3), new(106501690, 174), new(106511635, 31), new(106541638, 3), new(106580976, 1), new(106531470, 5)]),
+            (10308343, 1, 0, 106501691, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561628, 4), new(106551614, 4), new(106571454, 3), new(106521538, 3), new(106501691, 174), new(106511636, 31), new(106541639, 3), new(106580977, 1), new(106531471, 5)]),
+            (10308343, 2, 0, 106501692, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561629, 4), new(106551615, 4), new(106571455, 3), new(106521539, 3), new(106501692, 174), new(106511637, 31), new(106541640, 3), new(106580978, 1), new(106531472, 5)]),
+            (10308343, 3, 0, 106501693, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561630, 4), new(106551616, 4), new(106571456, 3), new(106521540, 3), new(106501693, 174), new(106511638, 31), new(106541641, 3), new(106580979, 1), new(106531473, 5)]),
+            (10309294, 0, 0, 106501707, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561645, 4), new(106551632, 4), new(106571470, 3), new(106521556, 3), new(106501707, 174), new(106511652, 31), new(106541655, 3), new(106580993, 1), new(106531489, 5)]),
+            (10309321, 0, 0, 106501708, false, [1, 1, 2, 2, 4, 4, 8, 239, 8],
+                [new(106561646, 4), new(106551633, 4), new(106571471, 3), new(106521557, 3), new(106501708, 174), new(106511653, 31), new(106541656, 3), new(106580994, 1), new(106531490, 5)]),
+            (10310676, 0, 0, 106501560, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561509, 4), new(106551478, 4), new(106571348, 3), new(106521431, 3), new(106501560, 174), new(106511524, 31), new(106541521, 3), new(106580873, 1), new(106531356, 5)]),
+            (10310676, 1, 0, 106501561, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561510, 4), new(106551479, 4), new(106571349, 3), new(106521432, 3), new(106501561, 174), new(106511525, 31), new(106541522, 3), new(106580874, 1), new(106531357, 5)]),
+            (10310676, 2, 0, 106501562, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561511, 4), new(106551480, 4), new(106571350, 3), new(106521433, 3), new(106501562, 174), new(106511526, 31), new(106541523, 3), new(106580875, 1), new(106531358, 5)]),
+            (10310676, 3, 0, 106501563, false, [1, 1, 2, 2, 4, 4, 8, 0, 8],
+                [new(106561512, 4), new(106551481, 4), new(106571351, 3), new(106521434, 3), new(106501563, 174), new(106511527, 31), new(106541524, 3), new(106580876, 1), new(106531359, 5)]),
+        };
+        var now = DateTimeOffset.FromUnixTimeSeconds(2_000_000_000);
+        var service = new InventoryAvatarPackageService(resources.Items, packages, resources.GoldLimits, resources.EpicPieces);
+        int successes = 0, rejectedZeros = 0, incompleteSelections = 0;
+        foreach (var sample in samples)
+        {
+            string label = $"shared source={sample.SourceId} category={sample.Category}/{sample.Subcategory}";
+            var definition = packages.Get(sample.SourceId);
+            int expectedCoordinates = sample.SourceId switch { 10304411 => 12, 10307447 => 20, 10308343 => 4,
+                10309294 => 1, 10309321 => 1, 10310676 => 4, _ => throw new InvalidOperationException(label) };
+            var category = definition.Categories.Single(row => row.Category == sample.Category && row.Subcategory == sample.Subcategory);
+            var expectedRows = sample.Choices.Select((choice, index) => new AvatarPackageRow(choice.ItemId, 1,
+                sample.SocketTypes[index] == 0 ? (ushort)3 : (ushort)4, 0)).ToArray();
+            That(definition.Available && definition.SelectionCount == 0 && definition.FirstGrowTypes.IsEmpty &&
+                definition.Categories.Length == expectedCoordinates && category.Rows.SequenceEqual(expectedRows) &&
+                sample.Choices.Length == 9 && sample.Choices.Select(choice => choice.ItemId).Distinct().Count() == 9,
+                label + "真实selection0与九奖四元组符合独立保存预期，未补造分类或强制属性");
+            var coat = packages.GetAvatar(sample.CoatId);
+            byte coatOption = sample.Choices.Single(choice => choice.ItemId == sample.CoatId).Ability;
+            That(coat.PendingRule is null && coat.RequiresAbilityChoice && coat.Abilities.Contains(coatOption) &&
+                coat.Abilities.Contains(0) == !sample.RejectCoatZero && coat.Types.Length > 4 &&
+                coat.Types[4] is { Days: 0, Sockets: var coatSockets } && coatSockets == new AvatarSocketTypes(4, 4, 0, 0, 0),
+                label + "真实shared上衣保留非连续合法编号及永久双C，默认预览0不代替选择");
+            var sourceTemplate = resources.Items.Get(sample.SourceId);
+            var source = new InventoryItem(1000, Bag(), InventoryRewardGrantService.Create(sourceTemplate, 1, now));
+            var before = new InventorySnapshot([source], Gold: 321);
+            var character = new Character(1, 0, "SharedAvatar", 0, towns.Room, towns.InitialReturn)
+                { Job = 3, Level = 99, Inventory = before };
+            That(InventoryAvatarPackageService.SourceEligible(character, source, sourceTemplate) &&
+                definition.AllowsFirstGrowType(character.GrowType) && source.Core.Count == 1 &&
+                source.Core.EquipmentLockId == 0 && !source.IsExpired(now.ToUnixTimeSeconds()),
+                label + "先保留真实源等级/职业/技能/首转/锁/期限资格，不修改资源或启用忽略配置");
+            int[] ids = sample.Choices.Select(choice => choice.ItemId).ToArray();
+            var request = new AvatarPackageOpenRequest(73, 1, sample.Category, sample.Subcategory, ids, sample.Choices);
+            var result = service.Open(character, request, out var receipt, now);
+            That(result.Accepted && result.Plan is not null && receipt is not null && character.Inventory == before &&
+                result.Plan.Before == before && (result.Plan.After with { Items = before.Items }) == before &&
+                result.Plan.After.Find(Bag()) is null &&
+                result.Plan.After.Gold == before.Gold && result.Plan.After.Items.Length == 9 && result.Plan.OverflowItems.Length == 0 &&
+                receipt.ItemId == sample.SourceId && receipt.Rewards.OrderBy(row => row.ItemId).SequenceEqual(
+                    sample.Choices.OrderBy(choice => choice.ItemId).Select(choice => new BoosterGrantedItem(choice.ItemId, 1))),
+                label + "完整九奖成功规划仅扣一个源，保持原资产且不溢出，不提前提交背包; " +
+                $"accepted={result.Accepted} error={result.Error} plan={result.Plan is not null} receipt={receipt is not null}; " +
+                "leafGates=" + string.Join(" | ", sample.Choices.Select(choice =>
+                {
+                    var leaf = packages.GetAvatar(choice.ItemId);
+                    var template = resources.Items.Get(choice.ItemId);
+                    return $"id={choice.ItemId} pending={leaf.PendingRule ?? "none"} kind={template.Kind} " +
+                        $"creation={template.Expiration.SupportsCreation} type={category.Rows.Single(row => row.ItemId == choice.ItemId).Type}/{leaf.Types.Length} " +
+                        $"requiresChoice={leaf.RequiresAbilityChoice} choice={choice.Ability} allowed={leaf.Abilities.Contains(choice.Ability)}";
+                })));
+            for (int index = 0; index < sample.Choices.Length; index++)
+            {
+                var choice = sample.Choices[index];
+                byte socketType = sample.SocketTypes[index];
+                var reward = result.Plan!.After.Items.Single(item => item.Core.ItemId == choice.ItemId);
+                That(reward.Uid == 0 && reward.Position.List == InventoryListType.Avatar && reward.Core.Kind == ItemKind.Avatar &&
+                    reward.Core.Count == 1 && reward.Core.Value == 0 && reward.Core.Attr == 0 && reward.Core.ExpireTime == 0 &&
+                    reward.Core.Durability == choice.Ability && reward.Avatar is { ExpireTime: 0, ClearAvatarId: 0, Color1: 0, Color2: 0 } &&
+                    reward.Avatar.Socket0 == AvatarSocket.Empty(socketType) && reward.Avatar.Socket1 == AvatarSocket.Empty(socketType) &&
+                    reward.Avatar.Socket2 == AvatarSocket.Empty(0) && reward.Avatar.Socket3 == AvatarSocket.Empty(0) &&
+                    reward.Avatar.Socket4 == AvatarSocket.Empty(0),
+                    label + "全部九件保持独立选项、永久期限及原始五孔详情 id=" + choice.ItemId);
+            }
+            successes++;
+            Reject(character, request with { ItemIds = ids[..^1] }, "selection0缺一奖");
+            incompleteSelections++;
+            if (sample.RejectCoatZero)
+            {
+                var invalid = sample.Choices.Select(choice => choice.ItemId == sample.CoatId
+                    ? new AvatarPackageChoice(choice.ItemId, 0) : choice).ToArray();
+                Reject(character, request with { Choices = invalid }, "shared不存在option0");
+                rejectedZeros++;
+            }
+            if (sample.Category == 0 && sample.Subcategory == 0)
+            {
+                Reject(character with { Level = 0 }, request, "未满足原minimum level1");
+                if (sample.SourceId == 10309321)
+                    Reject(character with { Job = 0 }, request, "未满足原mage/creator职业");
+            }
+
+            void Reject(Character denied, AvatarPackageOpenRequest invalid, string reason)
+            {
+                var rejected = service.Open(denied, invalid, out var deniedReceipt, now);
+                That(!rejected.Accepted && rejected.Plan is null && deniedReceipt is null &&
+                    denied.Inventory == before && character.Inventory == before && before.Find(Bag()) == source &&
+                    before.Items.Length == 1 && before.Gold == 321,
+                    label + "拒绝" + reason + "时不扣源、不改完整原资产、不产生半份规划");
+            }
+        }
+        That(successes == 42 && rejectedZeros == 8 && incompleteSelections == 42 &&
+            samples.Select(sample => sample.SourceId).Distinct().Count() == 6,
+            "六来源42个完整九奖与8个非法0边均覆盖，不用导航计数冒充业务成功");
     }
 
     static void ForcedOptionsResources(TownCatalog towns, ItemResources resources, AvatarPackageCatalog packages)
