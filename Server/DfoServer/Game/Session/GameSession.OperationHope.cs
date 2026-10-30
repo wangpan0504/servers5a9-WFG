@@ -1,6 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeons;
+using DfoServer.Game.Quests;
 using DfoServer.GameWorld.Dungeons;
 
 namespace DfoServer.Game.Session;
@@ -95,6 +96,20 @@ internal sealed partial class GameSession
         hopeSelection is { } value && value.CharacterId == expected.Id && value.SelectionEpoch == epoch &&
         value.Admission.SourceRevision == expected.Revision ? value.Admission : null);
     public bool IsOperationHopeQuest(ushort questId) => owner.Execute(() => formalDungeon?.Run.HopeBinding?.Acceptance.QuestId == questId);
+
+    public QuestLifecycleReceipt? ObserveOperationHopeTrigger(ushort questId, QuestClientCondition condition) => owner.Execute(() =>
+    {
+        if (!Ready || Selected is not { } character || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) ||
+            condition is not { Channel: 0x10, Value: 0, Reserved: 0 } ||
+            formalDungeon is not { } dungeon || dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement ||
+            dungeon.Run.HopeBinding is not { } binding || binding.Acceptance.QuestId != questId ||
+            character.ActiveMainQuests.SingleOrDefault(row => row.QuestId == questId) is not { } active ||
+            active.AcceptanceId != binding.Acceptance.AcceptanceId || active.Slot != binding.Acceptance.Slot ||
+            active.ConditionState > 1 || !QuestHuntProgress.Bound(active, dungeon.Entry)) return null;
+        // 希望是专用分类，不能走普通猎杀资源门禁；33只回读已提交的死亡事实，不减少次数或写库。
+        return new QuestLifecycleReceipt(character, null, owner.Generation, SelectionEpoch, Phase, dungeon.Run.Snapshot.Identity,
+            "希望任务回读权威进度") { Outcome = QuestLifecycleOutcome.Unchanged };
+    });
 
     public OperationHopeFinishReceipt? FinishOperationHope(ushort questId, int selector, int multiplier,
         GameWorld.Quests.QuestCatalog quests, GameWorld.Quests.QuestRewardParameterCatalog parameters,

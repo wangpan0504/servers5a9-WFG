@@ -97,13 +97,28 @@ internal static partial class FormalDungeonTcpTests
         That(f.Query("SELECT daily_used,weekly_used FROM character_dungeon_incount WHERE character_id=$p0 AND dungeon=$p1",created.Id,incountRow.CountKey) is [[1L,1L]],
             "真实socket失败后重连重试只扣一次希望日周次数");
         var path=Route(new(map[0],map[1]),false);
+        int progressTransitions = 0;
         for(int index=0;index<path.Count;index++)
         {
             Load(peer);QuestLifecycleTcpTests.DrainNotifications(peer);
+            uint scalar = checked((uint)(long)f.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1", created.Id, quest)[0][0]);
+            var revision = f.Query("SELECT revision FROM characters WHERE id=$p0", created.Id)[0][0];
+            peer.Send(33, Build(w => { w.Write((ushort)33); w.Write(quest); w.Write((byte)0x10); w.Write((ushort)0); }));
+            peer.Expect(1, 33, Build(w => { w.Write((byte)1); w.Write(quest); w.Write(scalar); }));
+            QuestLifecycleTcpTests.DrainNotifications(peer);
+            That(Equals(f.Query("SELECT revision FROM characters WHERE id=$p0", created.Id)[0][0], revision), "希望原生33回读不会写进度或revision");
             foreach(int at in Enumerable.Range(0,map[18]).Select(i=>19+22*i).Where(at=>map[at+13]!=9 && map[at+21]==0).OrderBy(at=>map[at+13]==3))
             {
                 peer.Send(39,Death(U16(map,at+6),peer.Id,map[at+12]));
-                peer.Expect(0,38);QuestLifecycleTcpTests.DrainNotifications(peer);
+                peer.Expect(0,38);
+                var notices = new List<WirePacket>();
+                DrainDeath(notices);
+                foreach (var notice in notices.Where(row => row.Kind == 1 && row.Opcode == 33))
+                {
+                    Bytes(notice.Body, Build(w => { w.Write((byte)1); w.Write(quest); w.Write(0u); }), "希望目标死亡按单任务33投影完成，不重建任务槽");
+                    progressTransitions++;
+                    That(!notices.Any(row => row.Kind == 0 && row.Opcode == 574), "只有希望进度改变时不发整表574");
+                }
             }
             if(index+1==path.Count)break;
             var next=path[index+1];var move=new byte[100];move[0]=checked((byte)next.X);move[1]=checked((byte)next.Y);
@@ -111,6 +126,7 @@ internal static partial class FormalDungeonTcpTests
         }
         That((long)f.Query("SELECT remaining FROM character_fatigue WHERE character_id=$p0",created.Id)[0][0]==fatigueBefore-16,
             "真实网络完整四区域仅扣16疲劳");
+        That(progressTransitions == 1, "希望完整迷宫恰有一次权威目标完成UI转换");
         peer.Send(34,Build(w=>{w.Write((ushort)34);w.Write(quest);w.Write(ushort.MaxValue);w.Write((ushort)1);w.Write(ushort.MaxValue);}));
         That(peer.Expect(1,34).Body[0]==1,"原目标达成并真实终点死亡后34发奖");
         var rewardNotices = new List<WirePacket>();
@@ -142,6 +158,19 @@ internal static partial class FormalDungeonTcpTests
             peer.CompletedQuestHistory[4+6301] == 1 &&
             f.Query("SELECT town,area FROM characters WHERE id=$p0",created.Id) is [[54L,1L]],
             "希望领奖返城后黑市→灰色墓地及黑市→中央竞技场主线通路均可往返，完成位保持");
+
+        void DrainDeath(List<WirePacket> notices)
+        {
+            peer.SendBarrier();
+            for (int read = 0; read < 64; read++)
+            {
+                var packet = peer.Read();
+                if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "希望死亡投影完成屏障"); return; }
+                That(packet.Kind == 0 || packet is { Kind: 1, Opcode: 33 }, "希望死亡只允许通知及已确认的单任务进度ACK");
+                notices.Add(packet);
+            }
+            throw new InvalidDataException("希望死亡通知超过有界数量");
+        }
 
         List<DungeonPoint> Route(DungeonPoint start,bool met)
         {

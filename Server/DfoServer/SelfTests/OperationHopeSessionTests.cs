@@ -73,6 +73,15 @@ internal static class OperationHopeSessionTests
                     "同区过房不重复扣费，每新区域恰扣4");
                 long loadedRevision = f.Session.Selected.Revision;
                 That(f.Session.CompleteFormalDungeonLoading() is null && f.Session.Selected.Revision == loadedRevision,"重复加载不再次扣区域疲劳");
+                var progress = f.Session.ObserveOperationHopeTrigger(active.QuestId, new(0x10, 0, 0));
+                That(progress is { Outcome: Game.Quests.QuestLifecycleOutcome.Unchanged } &&
+                    progress.Character.ActiveMainQuests.Single(row => row.AcceptanceId == active.AcceptanceId).ConditionState == (targetObserved ? 0u : 1u) &&
+                    f.Session.Selected.Revision == loadedRevision && f.Session.CanPublishQuestLifecycle(progress),
+                    "希望33只回读本实例权威进度，未击杀不归零，重复查询不写revision");
+                That(f.Session.ObserveOperationHopeTrigger(active.QuestId, new(0x20, 0, 0)) is null &&
+                    f.Session.ObserveOperationHopeTrigger(active.QuestId, new(0x10, 1, 0)) is null &&
+                    f.Session.ObserveOperationHopeTrigger((ushort)(active.QuestId == 6171 ? 6172 : 6171), new(0x10, 0, 0)) is null,
+                    "其它任务、通道和客户端自报进度不能借希望入口推进");
                 foreach (var monster in loaded.Monsters.Monsters.Where(row => row.CanReportDeath && row.IsBlocking))
                 {
                     if (!f.Session.DungeonSnapshot!.LivingMonsters.Contains(monster.ObjectKey)) continue;
