@@ -1984,6 +1984,10 @@ CREATE TABLE character_beast_stage_rewards(
             FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
         );
 
+CREATE TABLE IF NOT EXISTS character_rename_pending(
+  character_id INTEGER NOT NULL,account TEXT NOT NULL,source_uid INTEGER NOT NULL CHECK(source_uid>0),
+  PRIMARY KEY(character_id),FOREIGN KEY(character_id,account) REFERENCES characters(id,account));
+
 CREATE TABLE IF NOT EXISTS character_ekern_cycle(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,service_day INTEGER NOT NULL CHECK(service_day>=0),
   normal_clears INTEGER NOT NULL CHECK(normal_clears BETWEEN 0 AND 3),

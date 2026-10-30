@@ -156,7 +156,7 @@ internal static partial class CashShopPromotionPersistenceTests
             "非空私有77分类拒绝不残留列、数据或版本修改");
         f.Sql.Execute("DROP INDEX cash_shop_promotion_single_successor");
         _ = new CharacterRepository(f.Sql.Path);
-        That(f.Sql.Query("PRAGMA user_version") is 155L && StableAssetSnapshot(f.Sql, includeBlacklist: true) == before &&
+        That(f.Sql.Query("PRAGMA user_version") is 156L && StableAssetSnapshot(f.Sql, includeBlacklist: true) == before &&
             f.Sql.Query("SELECT count(*) FROM characters WHERE selected_skill_tree<>-1") is 0L &&
             (string)f.Sql.Query("SELECT business_snapshot FROM cash_shop_promotion_orders")! == business &&
             f.Sql.Query("SELECT count(*) FROM cash_shop_promotion_rules WHERE rule_kind=0 AND carry_rules_snapshot IS NULL") is 1L,

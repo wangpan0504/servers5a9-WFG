@@ -26,7 +26,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
     DfoServer.Game.Dungeons.EvildomWarRewardPolicy? warPolicy = null,
     ImperialArenaProjection? imperialArena = null, RaidHandler? raids = null,
     PvpTotalTeamProjection? totalTeamProjection = null, PvpMissionProjection? pvpMissions = null,
-    DfoServer.Game.Pvp.PvpMissionBook? missionBook = null) : IGameCommandModule
+    DfoServer.Game.Pvp.PvpMissionBook? missionBook = null, ItemCatalog? renameItems = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -40,6 +40,8 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         commands.Register(CmdPacketType.REQUEST_ALL_SERVER_CHARACINFO, AllServerRosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.CHARAC_VIEW_HIDDEN_CHARAC_INFO, HiddenRosterAsync, nameof(CharacterHandler));
         commands.Register(CmdPacketType.STORY_DIGEST_UPDATE, StoryDigestAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.USE_RENAME_CARD, UseRenameCardAsync, nameof(CharacterHandler));
+        commands.Register(CmdPacketType.CHANGE_CHARAC_NAME, RenameCharacterAsync, nameof(CharacterHandler));
     }
 
     Task<CommandResult> StoryDigestAsync(GameConnectionContext context, Packet request)
@@ -67,7 +69,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         // 原生换频道直接发C2S4；普通选角先请求C2S8，返回选角也有已推送名册。
         bool resumeTown = !context.RosterRequested && !context.SelectionRosterPushed;
         ushort selection=CharacterRequests.Select(request.Body);
-        if(context.Session.PvpPrivateSelectionBlocked(selection))
+        if(context.Session.PvpPrivateSelectionBlocked(selection) || context.Session.RenameCardSelectionBlocked(selection))
         {
             // 023428B1的96明确显示当前频道不允许此操作，失败无额外body且重置选角UI。
             await context.Reply(CmdPacketType.SELECT_CHARACTER,[0,96,0],"pvp_private_channel_rejected");
