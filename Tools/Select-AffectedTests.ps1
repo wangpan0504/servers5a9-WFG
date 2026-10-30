@@ -11,6 +11,8 @@ pwsh Tools/Select-AffectedTests.ps1 -Run -Full -PvfPath <PVF>        # 合并前
 param(
     # 默认 origin/master（存在时），避免本地 master 过旧导致改动列表偏大。
     [string]$Base,
+    # 仅输出真实Git输入与优先顺序，不执行、不授权省略；必须明确Base。
+    [switch]$ConservativePlan,
     [switch]$Run,
     # 合并前全量 TCP；测试框架、表结构等改动在开发期只跑冒烟/定向组，合并前必须加此开关。
     [switch]$Full,
@@ -28,6 +30,16 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
+if ($ConservativePlan) {
+    if ($Run -or $Full -or $Paths -or $NoCache -or -not $IncludeUncommitted) {
+        throw 'ConservativePlan仅计划真实工作区，不能组合Run/Full/Paths/NoCache或排除未提交内容。'
+    }
+    . (Join-Path $PSScriptRoot 'DevelopmentAffectedPlan.ps1')
+    $plan=Get-DevelopmentAffectedPlan $root $Base
+    $plan | ConvertTo-Json -Depth 12
+    if ($plan.State -ceq 'blocked') { exit 2 }
+    exit 0
+}
 if (-not $ArtifactsPath) { $ArtifactsPath = Join-Path $root 'build/check' }
 if (-not $TimingsPath) {
     $cache = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'S5A9' } else { Join-Path $HOME '.cache/s5a9' }
