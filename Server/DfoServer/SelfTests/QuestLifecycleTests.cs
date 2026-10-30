@@ -258,6 +258,11 @@ internal static class QuestLifecycleTests
                 "未决租赁拒绝GM金币覆盖");
             Reject<InvalidOperationException>(() => f.Session.SetCardMembership(selected.Name, CardMembershipKind.BlackDiamond,
                 DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds()), "未决租赁不能借黑钻清除虚弱并覆盖待恢复的原快照");
+            var stored = f.Read();
+            foreach (string command in new[] { "recharge cera 100", "recharge black-diamond 30" })
+                That(Development.DevelopmentGm.Answer(command, f.Owner.Account, f.Repository, f.Owners, _ => f.Session).StartsWith("ERR ") &&
+                    Same(stored, f.Read()) && ReferenceEquals(selected, f.Session.Selected),
+                    "未决租赁拒绝点券及黑钻充值，不破坏原operation的恢复前提");
             That(f.Session.AcceptStoryDigest() is null && ReferenceEquals(selected,f.Session.Selected),
                 "未决租赁阻止剧情写入并保持原计划");
         }

@@ -789,9 +789,10 @@ internal static class ServerRuntime
         var channel = new ChannelProtocolHandler(options, gameChannels, channels, log);
         Func<CancellationToken, Task>? gmCommands = options.GmPort == 0 ? null : stop => DevelopmentGmServer.Run(options.GmPort, DevelopmentCommand, stop);
         var startedAt = DateTimeOffset.Now;
-        Func<PacketCapture?, CancellationToken, Task>? gmWeb = options.GmWebPort == 0 ? null : (capture, stop) => GmWebServer.RunAsync(options.GmWebPort,
+        var webReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Func<PacketCapture?, CancellationToken, Task> gmWeb = (capture, stop) => GmWebServer.RunWithRechargeAsync(options.GmWebPort, options.RechargeWebPort,
             new GmWebData(options, startedAt, online, new GmAccountDirectory(Path.Combine(options.DataDirectory, "game.db")),
-                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows), stop, capture, options);
+                DevelopmentCommand, mailbox, itemResources.GoldLimits, new Network.Management.GmItemExtras(pvf, null) { AvatarLog = message => log.Write("gm-avatar", new { Message = message }) }, new GmAudit(Path.Combine(options.DataDirectory, "gm-audit.jsonl")), raidWindows), stop, capture, options, () => webReady.TrySetResult());
         // 两个管理入口任一退出或失败都取消整个实例，与其他监听一致。
         // 决斗维护也使用此生命周期；关闭两个GM入口时仍须配对及回收预约。
         Func<PacketCapture?, CancellationToken, Task> management = RunManagement;
@@ -800,7 +801,7 @@ internal static class ServerRuntime
         return new ServerHost(options, channel, game, management, OnlineCharacters, Started, log, gameChannels,native,gameCache,
             guildInvitations,guildEconomyProjection,guildTeleportService,guildNpcService,guildHallWait.RunAsync,
             runWorld: marriageScheduler.RunAsync, gameplayTimers: lukeTimers, saveVersion: SqliteMigrations.CurrentVersion,
-            lukeRejoinCandidate: lukeRejoin is null ? null : lukeRejoin.DescribeCandidate);
+            lukeRejoinCandidate: lukeRejoin is null ? null : lukeRejoin.DescribeCandidate, managementReady: webReady.Task);
 
         async Task RunManagement(PacketCapture? capture, CancellationToken stop)
         {
@@ -811,7 +812,7 @@ internal static class ServerRuntime
             {
                 stop.ThrowIfCancellationRequested();
                 // 仅在管理入口真正启动时预热；装配或前置监听失败不留下后台资源读取。
-                if (gmCommands is not null || gmWeb is not null) developmentCatalog.StartWarmup();
+                if (gmCommands is not null || options.GmWebPort != 0) developmentCatalog.StartWarmup();
                 running.Add(MaintainPvp(lifetime.Token));
                 if (gmCommands is not null) running.Add(gmCommands(lifetime.Token));
                 if (gmWeb is not null) running.Add(gmWeb(capture, lifetime.Token));

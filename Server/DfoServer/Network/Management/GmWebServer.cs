@@ -51,10 +51,17 @@ internal interface IGmWebData
 // 写接口须带 X-GM-Request 头和 confirm=true，Origin 若存在必须同源，每次写操作写审计。
 internal static partial class GmWebServer
 {
-    public static async Task RunAsync(int port, IGmWebData data, CancellationToken stop,
-        PacketCapture? capture = null, ServerOptions? options = null)
+    public static Task RunAsync(int port, IGmWebData data, CancellationToken stop,
+        PacketCapture? capture = null, ServerOptions? options = null) => RunCoreAsync(port, null, data, stop, capture, options, null);
+
+    public static Task RunWithRechargeAsync(int port, int rechargePort, IGmWebData data, CancellationToken stop,
+        PacketCapture? capture = null, ServerOptions? options = null, Action? started = null) =>
+        RunCoreAsync(port, rechargePort, data, stop, capture, options, started);
+
+    static async Task RunCoreAsync(int port, int? rechargePort, IGmWebData data, CancellationToken stop,
+        PacketCapture? capture, ServerOptions? options, Action? started)
     {
-        if (port is < 1 or > 65535)
+        if (port is < 0 or > 65535 || port == 0 && rechargePort is null || rechargePort is < 1 or > 65535)
             throw new InvalidDataException("Invalid GM web port");
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
@@ -63,14 +70,17 @@ internal static partial class GmWebServer
             kestrel.AddServerHeader = false;
             // 任务“全部完成”会一次提交当前筛选的编号列表，3000 个编号的 JSON 超过 16KB。
             kestrel.Limits.MaxRequestBodySize = 128 * 1024;
-            kestrel.Listen(IPAddress.Loopback, port, listen => listen.Protocols = HttpProtocols.Http1);
+            foreach (int endpoint in new[] { port, rechargePort ?? 0 }.Where(value => value != 0).Distinct())
+                kestrel.Listen(IPAddress.Loopback, endpoint, listen => listen.Protocols = HttpProtocols.Http1);
         });
         await using var app = builder.Build();
         using var packetRequests = new SemaphoreSlim(8, 8);
-        Map(app, data);
+        Map(app, data, port != 0);
+        if (rechargePort is not null) MapRecharge(app, data);
         if (capture is not null && options is not null)
             MapPacketQueries(app, capture, options, data.Status().StartedAt, packetRequests, stop);
         await app.StartAsync(stop);
+        started?.Invoke();
         try { await Task.Delay(Timeout.Infinite, stop); }
         catch (OperationCanceledException) { }
         finally { await app.StopAsync(CancellationToken.None); }
@@ -80,7 +90,7 @@ internal static partial class GmWebServer
     static readonly Regex Amplify = new(@"^amp:[1-4]:[0-9]{1,10}$", RegexOptions.Compiled);
     static readonly Regex Tag = new(@"^[^\s\p{C}]{1,32}$", RegexOptions.Compiled);
 
-    internal static void Map(WebApplication app, IGmWebData data)
+    internal static void Map(WebApplication app, IGmWebData data, bool management = true)
     {
         app.Use(async (context, next) =>
         {
@@ -92,12 +102,15 @@ internal static partial class GmWebServer
             }
             context.Response.Headers["Cache-Control"] = "no-store";
             context.Response.Headers["X-Content-Type-Options"] = "nosniff";
-            context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+            bool recharge = context.Request.Path.StartsWithSegments(RechargeRoot.TrimEnd('/'), StringComparison.Ordinal);
+            context.Response.Headers["Content-Security-Policy"] = recharge
+                ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+                : "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
             if (!HttpMethods.IsGet(context.Request.Method))
             {
                 // 防跨站请求：自定义头无法由普通跨站表单带出；Origin 存在时必须与本机 Host 同源。
                 string? origin = context.Request.Headers.Origin;
-                if (context.Request.Headers["X-GM-Request"] != "1" ||
+                if (context.Request.Headers[recharge ? "X-Recharge-Request" : "X-GM-Request"] != "1" ||
                     origin is not null && origin != "http://" + context.Request.Host.Value)
                 {
                     context.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -106,6 +119,7 @@ internal static partial class GmWebServer
             }
             await next();
         });
+        if (!management) return;
         app.MapGet("/", () => Results.Text(Assets.Text("index.html"), "text/html; charset=utf-8"));
         app.MapGet("/assets/{name}", (string name) => Assets.Find(name) is { } asset
             ? Results.Text(asset.Text, asset.Type) : Results.NotFound());

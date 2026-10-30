@@ -38,6 +38,19 @@ internal static class CurrencyPackets
         return stream.ToArray();
     }
     public static byte[] GoldLimit(InventorySnapshot inventory) => [CurrencyService.UpgradeStage(inventory)];
+    public static byte[] CeraTicket(RechargeTicket ticket)
+    {
+        byte[] token = System.Text.Encoding.ASCII.GetBytes(ticket.Token);
+        if (token.Length is < 1 or >= 64 || RechargeTicket.Account(ticket.Token).Length == 0 || ticket.Key is 0 or > 65535)
+            throw new InvalidDataException("充值票据超出本版客户端的接收范围");
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
+        writer.Write((uint)token.Length);
+        writer.Write(token);
+        writer.Write(ticket.Key);
+        return stream.ToArray();
+    }
     // ACK980 公共成功字节之后，02367B78 固定读取 stage:u8 + result:i32。
     public static byte[] GoldLimitUpgraded(InventorySnapshot inventory) => [1, CurrencyService.UpgradeStage(inventory), 0, 0, 0, 0];
 }

@@ -37,6 +37,8 @@ internal enum DevelopmentAction
     CashShopUsablePeriod,
     Items,
     ItemInfo,
+    Recharge,
+    RechargeStatus,
     Wallet,
     Currency,
     ItemCategories,
@@ -82,6 +84,8 @@ internal enum DevelopmentAction
 internal sealed record DevelopmentRequest(DevelopmentAction Action, string Account, string Name, int Primary, int Secondary)
 {
     public DevelopmentEventRequest? Event { get; init; }
+    public string? WebTicket { get; init; }
+    public uint WebTicketKey { get; init; }
     // 仅 item 使用：普通装备强化 0–31，其他种类须为 0，由统一创建策略复验。
     public int Upgrade { get; init; }
     // chat-inject（诊断）：测试正文变体（L1/L2/L3，已转大写）与剩余整行文本（可含空格）；0x0C 正文带 CP936 文本。
@@ -96,6 +100,8 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
     // 扩展命令：是否需要角色名，以及角色名之后参数个数的范围。
     static readonly Dictionary<string, (DevelopmentAction Action, bool Named, int Min, int Max)> Extended = new()
     {
+        ["recharge"] = (DevelopmentAction.Recharge, false, 2, 2),
+        ["recharge-status"] = (DevelopmentAction.RechargeStatus, false, 0, 0),
         ["wallet"] = (DevelopmentAction.Wallet, true, 0, 0),
         ["currency"] = (DevelopmentAction.Currency, true, 3, 3),
         ["item-categories"] = (DevelopmentAction.ItemCategories, false, 0, 0),
@@ -202,6 +208,20 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
             var notice = new DevelopmentRequest(DevelopmentAction.Notice, account, target, 0, 0) { Text = text };
             notice.Validate();
             return notice;
+        }
+        if (op is "recharge-ticket" or "recharge-ticket-status")
+        {
+            bool status = op == "recharge-ticket-status";
+            if (i != 0 || tokens.Length != (status ? 3 : 5) ||
+                !uint.TryParse(tokens[2], NumberStyles.None, CultureInfo.InvariantCulture, out uint key) || key is 0 or > 65535)
+                throw new InvalidDataException("用法：recharge-ticket-status <票据> <key> | recharge-ticket <票据> <key> <cera|black-diamond> <数量>");
+            var ticketRequest = new DevelopmentRequest(status ? DevelopmentAction.RechargeStatus : DevelopmentAction.Recharge,
+                Game.Currency.RechargeTicket.Account(tokens[1]), "", 0, 0)
+            {
+                WebTicket = tokens[1], WebTicketKey = key, Args = status ? [] : [tokens[3], tokens[4]]
+            };
+            ticketRequest.Validate();
+            return ticketRequest;
         }
         if (op == "event")
         {
@@ -361,6 +381,23 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
                 throw new InvalidDataException("基础职业0–15、分支0–5、觉醒0–2");
             return;
         }
+        if (Action is DevelopmentAction.Recharge or DevelopmentAction.RechargeStatus)
+        {
+            if (WebTicket is not null && (Game.Currency.RechargeTicket.Account(WebTicket) != Account || WebTicketKey is 0 or > 65535) ||
+                WebTicket is null && WebTicketKey != 0)
+                throw new InvalidDataException("充值票据与账号不一致");
+            if (Name.Length != 0 || Primary != 0 || Secondary != 0 || Args.IsDefault ||
+                Args.Length != (Action == DevelopmentAction.Recharge ? 2 : 0))
+                throw new InvalidDataException("用法：recharge-status | recharge <cera|black-diamond> <点券数量|天数>");
+            if (Action == DevelopmentAction.Recharge)
+            {
+                int amount = Integer(Args[1]);
+                if (Args[0] == "cera" ? amount < 100 || amount % 100 != 0 :
+                    Args[0] != "black-diamond" || amount is < 1 or > 3650)
+                    throw new InvalidDataException("点券须为正数且为100的倍数；黑钻天数范围1–3650");
+            }
+            return;
+        }
         if (Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue or
             DevelopmentAction.PcRoom or DevelopmentAction.SummonWangFugui or DevelopmentAction.SummonGuangbing)
         {
@@ -421,7 +458,7 @@ internal sealed record DevelopmentRequest(DevelopmentAction Action, string Accou
     public bool Writes => Action == DevelopmentAction.Event ? Event?.Operation != "status" :
         Action == DevelopmentAction.Profession ? true :
         Action is DevelopmentAction.CashShopExpiration or DevelopmentAction.CashShopUsablePeriod or DevelopmentAction.InfiniteFatigue or DevelopmentAction.PcRoom or DevelopmentAction.SummonWangFugui or DevelopmentAction.SummonGuangbing ? Primary >= 0 :
-        Action is DevelopmentAction.LukeRewardClaim or DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify or DevelopmentAction.ItemEdit or DevelopmentAction.Rename or DevelopmentAction.CharDelete or DevelopmentAction.TitleComplete ||
+        Action is DevelopmentAction.Recharge or DevelopmentAction.LukeRewardClaim or DevelopmentAction.Currency or DevelopmentAction.Grant or DevelopmentAction.SetGrant or DevelopmentAction.ItemDelete or DevelopmentAction.ItemClear or DevelopmentAction.MailDelete or DevelopmentAction.QuestChain or DevelopmentAction.QuestBatch or DevelopmentAction.ItemAmplify or DevelopmentAction.ItemEdit or DevelopmentAction.Rename or DevelopmentAction.CharDelete or DevelopmentAction.TitleComplete ||
         Action == DevelopmentAction.EquipSlots && Args.Length == 1 ||
         Action == DevelopmentAction.ExpertJob && Args.Length == 2 ||
         Action is DevelopmentAction.Level or DevelopmentAction.Story or DevelopmentAction.Grow or DevelopmentAction.QuestAdd or DevelopmentAction.QuestRemove or DevelopmentAction.QuestClear or DevelopmentAction.Skill or DevelopmentAction.Gold or DevelopmentAction.Item or DevelopmentAction.Sp or DevelopmentAction.Tp or DevelopmentAction.Contract or DevelopmentAction.BlackDiamond or DevelopmentAction.GoldCard or DevelopmentAction.WeeklyEntryReset;

@@ -420,6 +420,7 @@ internal static class TcpRegressionTests
         ("avatar-emblem", AvatarEmblemTcpTests.RunAsync),
         ("mailbox", MailboxTcpTests.RunAsync),
         ("gm-assets", DevelopmentAssetTcpTests.RunAsync),
+        ("recharge-web", RechargeWebTcpTests.RunAsync),
         ("repair", RepairTcpTests.RunAsync),
         ("random-option", RandomOptionTcpTests.RunAsync),
         ("equipment-quality", EquipmentQualityTcpTests.RunAsync),

@@ -123,6 +123,18 @@ internal static partial class DevelopmentGm
                 var scoreItems = items ?? catalog?.Resources.Items ?? throw new InvalidDataException("装备评分目录未装配");
                 return Ok(EquipmentInvestmentScore.Calculate(snapshot, scoreItems.Get));
             }
+            if (request.Action is DevelopmentAction.Recharge or DevelopmentAction.RechargeStatus)
+            {
+                var rechargeSession = find(request.Account);
+                if (request.WebTicket is { } ticket)
+                {
+                    if (rechargeSession is null)
+                        throw new InvalidDataException("充值票据所属游戏连接已关闭，请重新登录后打开充值页");
+                    return rechargeSession.WithRechargeTicket(ticket, request.WebTicketKey, DateTimeOffset.UtcNow,
+                        () => Recharge(repository, owners, rechargeSession, request));
+                }
+                return Recharge(repository, owners, rechargeSession, request);
+            }
             if (request.Action >= DevelopmentAction.Wallet)
                 return ExecuteExtended(repository, owners, find(request.Account), request, mailbox,
                     catalog ?? throw new InvalidOperationException("开发GM资源目录未装配"));

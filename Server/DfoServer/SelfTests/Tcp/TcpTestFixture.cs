@@ -141,7 +141,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
 
     static ServerOptions AllocatePorts(ServerOptions source, bool gm, bool packetHttp)
     {
-        TcpListener[] reservations = Enumerable.Range(0, 2 + (gm ? 1 : 0) + (packetHttp ? 1 : 0)).Select(_ => new TcpListener(IPAddress.Loopback, 0)).ToArray();
+        TcpListener[] reservations = Enumerable.Range(0, 3 + (gm ? 1 : 0) + (packetHttp ? 1 : 0)).Select(_ => new TcpListener(IPAddress.Loopback, 0)).ToArray();
         try
         {
             foreach (var listener in reservations)
@@ -152,7 +152,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 ChannelPort = ports[0],
                 GamePort = ports[1],
                 GmPort = gm ? ports[2] : 0,
-                PacketHttpPort = packetHttp ? ports[gm ? 3 : 2] : 0
+                PacketHttpPort = packetHttp ? ports[gm ? 3 : 2] : 0,
+                RechargeWebPort = ports[^1]
             };
         }
         finally
@@ -180,7 +181,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         info.WorkingDirectory = Root;
         foreach (string argument in new[] { "--server-ip", Options.AdvertisedAddress, "--listen-ip", Options.ListenAddress,
             "--channel-port", Options.ChannelPort.ToString(), "--game-port", Options.GamePort.ToString(),
-            "--gm-port", Options.GmPort.ToString(), "--session-ttl", Options.SessionTtlSeconds.ToString() })
+            "--gm-port", Options.GmPort.ToString(), "--recharge-web-port", Options.RechargeWebPort.ToString(), "--session-ttl", Options.SessionTtlSeconds.ToString() })
             info.ArgumentList.Add(argument);
         if (Options.PacketHttpPort != 0)
         {
