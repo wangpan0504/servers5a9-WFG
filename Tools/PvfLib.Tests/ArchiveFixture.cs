@@ -8,6 +8,12 @@ namespace PvfLib.Tests;
 internal static class ArchiveFixture
 {
     public static byte[] Create(bool variant, params (string Path, int Type, byte[] Bytes)[] files)
+        => CreateEntries(variant, files.Select(file => ((string?)null, file.Path, file.Type, file.Bytes)).ToArray());
+
+    public static byte[] CreateParts(bool variant, params (string Directory, string Name, int Type, byte[] Bytes)[] files)
+        => CreateEntries(variant, files.Select(file => ((string?)file.Directory, file.Name, file.Type, file.Bytes)).ToArray());
+
+    private static byte[] CreateEntries(bool variant, (string? Directory, string Name, int Type, byte[] Bytes)[] files)
     {
         using var names = new MemoryStream();
         using var body = new MemoryStream();
@@ -15,8 +21,10 @@ internal static class ArchiveFixture
         for (int i = 0; i < files.Length; i++)
         {
             Put(table, i * 24, checked((int)names.Length * 2));
-            names.Write(Encoding.UTF8.GetBytes(files[i].Path + '\0'));
-            Put(table, i * 24 + 4, -1);
+            names.Write(Encoding.UTF8.GetBytes(files[i].Name + '\0'));
+            Put(table, i * 24 + 4, files[i].Directory is null ? -1 : checked((int)names.Length * 2));
+            if (files[i].Directory is not null)
+                names.Write(Encoding.UTF8.GetBytes(files[i].Directory + '\0'));
             Put(table, i * 24 + 8, i);
             Put(table, i * 24 + 16, files[i].Bytes.Length);
             Put(table, i * 24 + 20, files[i].Type);
