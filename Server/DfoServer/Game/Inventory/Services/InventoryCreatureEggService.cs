@@ -37,6 +37,8 @@ internal sealed class InventoryCreatureEggService(CreatureEggCatalog eggs, ItemC
         // 宠物模板的等级不能直接当作角色使用等级；成长资格不借普通装备穿戴规则推定。
         // 蛋是已拥有的独立宠物实例：只转换模板，完整UID、详情、实例期限和其它核心保持原事实。
         var detail = source.Creature;
+        if (detail.Name.Length == 0)
+            detail = detail with { Name = DfoServer.Game.Creatures.CreatureRules.DefaultName(definition.DefaultName) };
         if (definition.OutputMode == 1 && detail.Mode == 0)
             detail = detail with { Mode = 1, Mode1Field0 = 10, Mode1Field1 = 5 };
         var hatched = source with { Core = source.Core with { ItemId = definition.OutputItemId, SealFlag = 0 }, Creature = detail };

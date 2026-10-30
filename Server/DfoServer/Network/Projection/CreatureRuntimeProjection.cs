@@ -41,7 +41,8 @@ internal sealed class CreatureRuntimeProjection(GameConnectionContext context, C
     {
         var selected = context.Owner.Execute(() => context.Session.Ready ? context.Session.Selected : null);
         var pet = selected is null ? null : service.Equipped(selected, service.Clock.GetUtcNow().ToUnixTimeSeconds());
-        if (pet?.Creature is { Mode: 0 } && service.Catalog.Get(pet.Core.ItemId) is { UsesExperienceItems: true })
+        if (pet?.Creature is { } detail && service.Catalog.Get(pet.Core.ItemId) is { } definition &&
+            (detail.Mode == 0 && definition.UsesExperienceItems || detail.Name.Length == 0 && definition.Name.Length > 0))
         {
             var normalized = context.Session.PlanAndCommitInventory(character => service.Normalize(character,
                 service.Clock.GetUtcNow().ToUnixTimeSeconds()), 123, requireTown: false);

@@ -40,7 +40,7 @@ internal static class CreatureGroupTcpTests
                 .Add(Book(69,10003716,100)).Add(Book(70,2683441,29))
                 .Add(Pet(8,100330534)).Add(Pet(9,100330627)).Add(Pet(10,100330625)).Add(Pet(11,100330629))
                 .Add(Pet(12,100330631)).Add(Pet(13,100330631)).Add(Pet(14,100330804)).Add(Pet(15,100330534))
-                .Add(new(0,CreatureRules.EquippedSlot,new(63002,ItemKind.Creature,0)) { Creature=new() }) } });
+                .Add(new(0,CreatureRules.EquippedSlot,new(63002,ItemKind.Creature,0)) { Creature=new() { Name="keep" } }) } });
         }
         await fixture.StartAsync();
         var original=Read();

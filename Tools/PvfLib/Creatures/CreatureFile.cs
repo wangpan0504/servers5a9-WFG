@@ -19,6 +19,7 @@ public sealed record CreatureSelectiveGrowth
 // 仅提取服务端使用的CRE原始声明，运动、AI、技能脚本等继续由客户端消费。
 public sealed record CreatureFile
 {
+    public string? Name { get; init; }
     public int? MaximumLevel { get; init; }
     public int? StartLevel { get; init; }
     public int? EvolutionLevel { get; init; }
@@ -39,8 +40,11 @@ public sealed record CreatureFile
         var growth = One(fields, "selective grow creature");
         var children = growth?.Children ?? [];
         var slots = One(fields, "artifact slot");
+        var name = One(fields, "name");
         return new()
         {
+            Name = name is null ? null : name.Values is [{ Type: 6 } text] ? resolve(text.Value) :
+                throw new InvalidDataException("CRE名称不是单个字符串"),
             MaximumLevel = Scalar(fields, "max level"), StartLevel = Scalar(fields, "start level"),
             EvolutionLevel = Scalar(fields, "evolution level"), EvolutionQuest = Scalar(fields, "evolution quest"),
             EvolutionSpecies = Scalar(fields, "evolution creature id"),

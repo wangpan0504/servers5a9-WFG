@@ -25,7 +25,7 @@ internal static class CreatureEggTests
         const string eggText = "[equipment type]\n`[creature]` 0\n[sub type]\n1\n[creature species]\n20\n[output index]\n7002";
         const string outputText = "[equipment type]\n`[creature]` 0\n[sub type]\n0\n[creature species]\n20";
         var definition = CreatureEggCatalog.Read(new(eggText), new(outputText), egg, output);
-        That(definition == new CreatureEggDefinition(7001, 7002, 20), "孵化定义来自蛋subtype1与单一output index，目标同species且subtype0");
+        That(definition == new CreatureEggDefinition(7001, 7002, 20) { DefaultName = "宠物" }, "孵化定义来自蛋subtype1与单一output index，目标同species且subtype0");
         foreach (string invalid in new[] { eggText.Replace("7002", "7001"), eggText.Replace("\n1\n", "\n0\n"),
             eggText + "\n[output index]\n7002", eggText.Replace("7002", "7002 7003"), eggText.Replace("`[creature]` 0", "`[creature]` 1") })
             That(CreatureEggCatalog.Read(new(invalid), new(outputText), egg, output) is null,
@@ -40,6 +40,11 @@ internal static class CreatureEggTests
         { Inventory = new([new InventoryItem(63, position, core) { Creature = detail }]) };
         var result = InventoryCreatureEggService.Plan(character, position, 1000, definition!, egg);
         var hatched = result.Plan!.After.Find(position)!;
+        var source = character.Inventory.Find(position)!;
+        var unnamed = source with { Creature = source.Creature! with { Name = "" } };
+        var namedHatch = InventoryCreatureEggService.Plan(character with { Inventory = new([unnamed]) }, position, 1000, definition!, egg).Plan!.After.Find(position)!;
+        That(namedHatch.Creature!.Name == "宠物" && namedHatch.Uid == source.Uid,
+            "旧空名宠物蛋孵化补目标默认名，不要求额外使用改名卡");
         That(result.Accepted && result.Plan.CharacterPrecondition!.Matches(character, 1000) && result.Plan.ChangedSlots.SequenceEqual(new[] { position }) &&
             hatched == new InventoryItem(63, position, core with { ItemId = 7002, SealFlag = 0 }) { Creature = detail } &&
             character.Inventory.Find(position)!.Core.ItemId == 7001,
@@ -72,7 +77,8 @@ internal static class CreatureEggTests
     public static void RunResources(CreatureEggCatalog eggs, ItemCatalog items)
     {
         var definition = eggs.Get(63022);
-        That(definition == new CreatureEggDefinition(63022, 63023, 20) && eggs.Get(63023) is null,
+        That(definition is { EggItemId: 63022, OutputItemId: 63023, Species: 20, DefaultName.Length: > 0 } &&
+            definition.DefaultName == items.Get(63023).CreatureName && eggs.Get(63023) is null,
             "匹配波比蛋63022单向输出63023，目标subtype0不可再次孵化");
         That(items.Get(63022) is { Kind: ItemKind.Creature, EquipmentSlot: 26 } &&
             items.Get(63023) is { Kind: ItemKind.Creature, EquipmentSlot: 26 }, "样本来自equipment Creature而非宽泛STK消耗品");

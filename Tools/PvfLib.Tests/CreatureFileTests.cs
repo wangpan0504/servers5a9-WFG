@@ -19,6 +19,11 @@ internal static class CreatureFileTests
             { UsingExperienceItem: 1, ItemA: 10093073, ItemB: 10093074, SpeciesA: 345, SpeciesB: 346, SelectLevel: 2 } &&
             result.ArtifactSlots.SequenceEqual(new[] { "red", "blue" }), "CRE嵌套成长区保留真实物品、种类和等级除数，装备槽独立读取");
         var plain = CreatureFile.Parse([new(3, 0), new(0, 1)], Resolve);
+        string NameResolve(int at) => at == 0 ? "[name]" : "波比";
+        That(CreatureFile.Parse([new(3, 0), new(6, 1)], NameResolve).Name == "波比" && plain.Name is null,
+            "CRE原始名称完整解析，缺字段保持缺失");
+        Reject<InvalidDataException>(() => CreatureFile.Parse([new(3, 0), new(0, 1)], NameResolve));
+        Reject<InvalidDataException>(() => CreatureFile.Parse([new(3, 0), new(6, 1), new(3, 0), new(6, 1)], NameResolve));
         That(plain.SelectiveGrowth is null && plain.StartLevel is null && plain.ItemsPerLevel is null && plain.MaximumLevel == 1,
             "缺失原始字段保持缺失，不在解析器中生成玩法默认值");
         Reject<InvalidDataException>(() => CreatureFile.Parse(tokens.Concat(new PvfToken[] { new(3, 0), new(0, 100) }).ToArray(), Resolve));

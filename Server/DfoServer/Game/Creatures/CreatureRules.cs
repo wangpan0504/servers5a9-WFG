@@ -1,10 +1,18 @@
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Creatures;
 
 namespace DfoServer.Game.Creatures;
 
 internal static class CreatureRules
 {
+    public static string DefaultName(string name)
+    {
+        // 105最多读取30字节，Actor最多31字节；按CP936完整字符截取，不能切断汉字。
+        Span<byte> buffer = stackalloc byte[30];
+        CharacterName.Encoding.GetEncoder().Convert(name.AsSpan(), buffer, true, out int chars, out _, out _);
+        return name[..chars];
+    }
     public static readonly InventorySlot EquippedSlot = new(InventoryListType.Equipment, 26);
 
     public static CreatureDetail AdvanceSatiety(CreatureDetail detail, long seconds, bool fighting, bool reviveInTown = false, int foodRate = 0)

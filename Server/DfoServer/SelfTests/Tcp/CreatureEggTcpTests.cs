@@ -13,6 +13,7 @@ internal static class CreatureEggTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
+        CreatureEggTests.RunResources(resources.ItemResources.CreatureEggs, resources.ItemResources.Items);
         const int eggId = 63022, outputId = 63023;
         var detail = new CreatureDetail { Name = "保留", Satiety = 73, Experience = 55, Level = 2, TailFlag = 1, ExpireTime = int.MaxValue };
         var core = new ItemCore(eggId, ItemKind.Creature, 0)

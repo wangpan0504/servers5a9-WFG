@@ -36,7 +36,7 @@ internal static class CreatureChangeTcpTests
                 .Add(new(0, new(InventoryListType.Main,74), new(490705419,ItemKind.Consumable,2)))
                 .Add(new(0, new(InventoryListType.Main,75), new(490705419,ItemKind.Consumable,1)))
                 .Add(Pet(8)).Add(Pet(9)).Add(Pet(10))
-                .Add(new(0,CreatureRules.EquippedSlot,new(63002,ItemKind.Creature,0)) { Creature = new() }) } });
+                .Add(new(0,CreatureRules.EquippedSlot,new(63002,ItemKind.Creature,0)) { Creature = new() { Name = "keep" } }) } });
         }
         await fixture.StartAsync();
         var original = Read();

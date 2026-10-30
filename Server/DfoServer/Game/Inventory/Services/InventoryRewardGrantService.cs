@@ -394,6 +394,7 @@ internal static class InventoryRewardGrantService
         else if (template.Kind == ItemKind.Creature)
             item = item with { Core = core with { ExpireTime = 0 }, Creature = new()
             {
+                Name = DfoServer.Game.Creatures.CreatureRules.DefaultName(template.CreatureName ?? template.Name),
                 ExpireTime = core.ExpireTime, Mode = template.CreatureInitialMode,
                 Mode1Field0 = template.CreatureInitialMode == 1 ? (byte)10 : (byte)0,
                 Mode1Field1 = template.CreatureInitialMode == 1 ? (byte)5 : (byte)0
