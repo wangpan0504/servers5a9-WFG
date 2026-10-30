@@ -92,7 +92,13 @@ internal static partial class PvpTrainingTcpTests
             That(oldOwnerState == AtomicSnapshot(), "接管后旧owner不写资产、每日领取或分配");
         }
         // 使用另一真实连接验证无请求日切；静态时钟临近下一次六点。
-        using (var owner = owners.Acquire("daily-live", () => { })) repo.Create(owner, Seed("DailyLive"));
+        using (var owner = owners.Acquire("daily-live", () => { }))
+        {
+            var character = repo.Create(owner, Seed("DailyLive"));
+            // 新建连接角色的疲劳日戳与虚拟时钟一致，避免墙钟日期改变日切前提。
+            f.Sql("UPDATE character_fatigue_reset_days SET service_day=$p0 WHERE character_id=$p1",
+                FatigueDailyReset.Day(clock.GetUtcNow(), clock.LocalTimeZone), character.Id);
+        }
         await f.StartAsync();
         var endpoints = ChannelTcpTests.Endpoints(f);
         string Saved(ushort id) => f.Snapshot("SELECT * FROM character_pvp_daily_missions WHERE character_id=$p0 ORDER BY service_day", id);
