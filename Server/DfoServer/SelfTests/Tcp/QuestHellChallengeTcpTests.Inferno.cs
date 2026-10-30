@@ -13,6 +13,7 @@ internal static partial class QuestHellChallengeTcpTests
     // #866 截图三项是外传第二步，不以普通深渊资格任务或静态支持数量代替实际接取。
     static void VerifyInfernoSidequests(TcpTestFixture fixture,TcpTestResources resources)
     {
+        QuestHellChainTests.Run(resources);
         var growth=SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         var repository=new CharacterRepository(fixture.Database,resources.Quests);
         foreach(ushort id in new ushort[] {5783,10104,10106})
