@@ -52,7 +52,7 @@ internal static class SocialTcpTests
             string replyTarget = MessageName();
             That(replyTarget == "SocialA" && messageReader.BaseStream.Position == incoming.Length,
                 "接收方1vs1窗口按发送者寻址，不能把自己设为回复对象");
-            beta.Send(17, Named(36, "一对一回复", replyTarget));
+            beta.Send(17, Named(40, "一对一回复", replyTarget));
             alpha.Expect(0, 65, Build(w => { w.Write((byte)36); w.Write((byte)0); WriteName(w, "SocialB"); w.Write((byte)2);
                 WriteName(w, "一对一回复"); WriteName(w, "TeamB"); WriteName(w, "SocialB"); }));
             alpha.Send(17, Named(1, "悄悄话"));

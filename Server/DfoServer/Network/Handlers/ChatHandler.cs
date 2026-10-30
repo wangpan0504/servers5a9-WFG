@@ -17,15 +17,15 @@ namespace DfoServer.Network.Handlers;
 /// 协议事实（反汇编 + 实机双向确认）：聊天行 <c>NOTI 0x000C</c> 的正文是
 /// <c>[u8 显示 type][u16 层 id][u8 v][u32 CP936 字节数][CP936 文本]</c>，客户端按长度读文本
 /// （<c>0 &lt; len &lt; 0x100</c>，否则显示「信息长度有误」）。显示 type 不是入站 kind 的原值：
-/// 普通/队伍/悄悄话 = <c>3</c>、公会/攻坚队 = <c>6</c>（实测「普通」页签只渲染 <c>{3,6,0x37,0x38}</c>，
-/// 蓝/绿/紫 kind 不显示，见 <see cref="ChatWire"/>）。两种喇叭走已实测可见的 <c>NOTI 0x0076</c> 喇叭页签
-/// （发言人 + 正文，服务器喇叭 <c>0x0E</c> 官方标签、频道喇叭 <c>0x0B</c> 频道标签），
+/// 队伍 = <c>2</c>、普通/悄悄话 = <c>3</c>、公会 = <c>6</c>，见 <see cref="ChatWire"/>。
+/// 两种喇叭走已实测可见的 <c>NOTI 0x0076</c> 喇叭页签
+/// （发言人、正文及来源身份，服务器喇叭type11、频道喇叭type13），
 /// 由 <see cref="MegaphonePackets"/> 构造、<c>ChatProjection</c> 投递。
 /// 物品链接的正文是客户端已格式化的 CP936 链接文本（<c>0x7F 0x7F [物品名] 0x7F</c>）与
 /// <c>cnt × 148</c> 字节物品记录；文本与记录都在 <see cref="ChatNotice"/> 里走到投递侧，
-/// 由 <see cref="ItemLinkPackets"/> 按 <c>NOTI 0x172</c> 布局组帧（记录缺失/不配对时退化 <c>0x0C</c>），
+/// 由 <see cref="ItemLinkPackets"/> 按370/371/372组帧，记录缺失只退化原通道文字，
 /// 见 <see cref="ItemHyperlinkAsync"/>。
-/// 字节合同见 <c>Docs/协议/聊天.md</c>；层 id 兜底等已知缺陷见 <c>Docs/模块/聊天.md</c>。
+/// 字节合同见 <c>Docs/协议/聊天.md</c>，投递资格见 <c>Docs/模块/聊天.md</c>。
 /// </para>
 /// <para>
 /// 本服普通频道精确全文“#战力”与明确的客户端机器命令是自助评分入口；其余合法 <c>0x0011</c> 走正式投递
@@ -35,7 +35,8 @@ namespace DfoServer.Network.Handlers;
 /// </summary>
 internal sealed class ChatHandler(ChatService chat, InventoryProjection? inventory, ServerLog log,
     NamedWhisperService? named = null, GuildContributionProjection? guildContribution = null,
-    SelfCharacterScoreProjection? selfScore = null, PromotionPageProjection? promotionPage = null) : IGameCommandModule
+    SelfCharacterScoreProjection? selfScore = null, DfoServer.GameWorld.Characters.ChatEmoticonCatalog? emoticons = null,
+    PromotionPageProjection? promotionPage = null) : IGameCommandModule
 {
     // 日志里的文本上限：单条聊天不能把热点日志撑大。
     const int LogTextLimit = 64;
@@ -45,8 +46,8 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
 
     public void Register(GameCommandRegistry commands)
     {
-        commands.Register(CmdPacketType.SEND_MESSAGE, SendAsync, nameof(ChatHandler), UserStateRequirement.WorldReady);
-        commands.Register(CmdPacketType.ITEM_HYPERLINK_MESSAGE, ItemHyperlinkAsync, nameof(ChatHandler), UserStateRequirement.WorldReady);
+        commands.Register(CmdPacketType.SEND_MESSAGE, SendAsync, nameof(ChatHandler), UserStateRequirement.CharacterSelected);
+        commands.Register(CmdPacketType.ITEM_HYPERLINK_MESSAGE, ItemHyperlinkAsync, nameof(ChatHandler), UserStateRequirement.CharacterSelected);
     }
 
     async Task<CommandResult> SendAsync(GameConnectionContext context, Packet packet)
@@ -75,10 +76,12 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
 
         if (send.TargetName is not null && named is not null)
         {
+            if (emoticons is not null && send.Text.Contains('\x1e'))
+                send = send with { Text = context.Session.PrepareChatEmoticons(emoticons, send.Text) };
             var result = named.Send(context.Session, send);
             log.Write(result.Accepted ? "chat_delivered" : "chat_rejected", new
             {
-                Connection = context.Id, Kind = send.Type == 36 ? "OneToOne" : "Whisper",
+                Connection = context.Id, Kind = (ChatRequestType)send.Type is ChatRequestType.OneToOne or ChatRequestType.OneToOneReply ? "OneToOne" : "Whisper",
                 result.Recipients, Reason = result.TargetOffline ? "target-offline" : result.Rejection
             });
             return CommandResult.Handled;
@@ -117,6 +120,8 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
         }
 
         // 其余普通/公会/悄悄话与喇叭完全保留原投递与扣减路径。
+        if (emoticons is not null && send.Text.Contains('\x1e'))
+            send = send with { Text = context.Session.PrepareChatEmoticons(emoticons, send.Text) };
         string text = ChatText.Truncate(send.Text, out bool truncated);
         bool known = ChatService.TryKind(send.Type, out var kind);
         uint target = kind is ChatKind.Whisper or ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone ? send.Arg : 0;
@@ -134,29 +139,16 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
         var origin = context.Session.ChatOrigin();
         if (origin is null)
         {
-            log.Write("chat_rejected", new { Connection = context.Id, Reason = "not-ready", send.Type });
+            log.Write("chat_rejected", new { Connection = context.Id, Reason = "no-character", send.Type });
             return CommandResult.Handled;
         }
 
-        // 两种喇叭：先校验槽位/道具并走既有背包提交路径扣 1 个；扣减失败不广播，避免"没扣钱也喊话"。
-        InventoryResult? deduction = null;
-        if (kind is ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone)
-        {
-            int itemId = ChatService.MegaphoneItemId(kind);
-            if (send.Arg > short.MaxValue)
-            {
-                log.Write("chat_megaphone_rejected", new { Connection = context.Id, Slot = send.Arg, Item = itemId, Reason = "slot-range" });
-                return CommandResult.Handled;
-            }
-            deduction = context.Session.UseChatMegaphone((ushort)send.Arg, itemId);
-            if (!deduction.Accepted)
-            {
-                log.Write("chat_megaphone_rejected", new { Connection = context.Id, Slot = send.Arg, Item = itemId, Reason = "deduct-failed" });
-                return CommandResult.Handled;
-            }
-        }
+        if (kind == ChatKind.Guild) origin = origin with { AdventureName = context.Session.ReadAdventureName() };
 
-        var dispatch = chat.Broadcast(send, origin);
+        // 两种喇叭：先校验槽位/道具并走既有背包提交路径扣 1 个；扣减失败不广播，避免"没扣钱也喊话"。
+        if (!TryConsumeMegaphone(context, send, kind, out var deduction)) return CommandResult.Handled;
+
+        var dispatch = chat.Broadcast(send, origin, context.Session);
         if (dispatch.TargetOffline)
             log.Write("chat_whisper_offline", new { Connection = context.Id, Target = send.Arg });
         else if (dispatch.Rejection is { } reason)
@@ -177,6 +169,7 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
                 {
                     Connection = context.Id,
                     Variant = kind == ChatKind.ServerMegaphone ? "server" : "channel",
+                    SourceServer = origin.Scene.Channel.ServerIndex, SourceChannel = origin.ChannelNumber, Actor = origin.CharacterId,
                     megaphone.Type, megaphone.SpeakerBytes, megaphone.TextBytes, dispatch.Recipients
                 });
             }
@@ -189,23 +182,9 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
     }
 
     /// <summary>
-    /// 物品链接 <c>CMD 0x01A8</c>：读 kind → 跳过 6 字节未定头 → <c>u32 文本字节数</c> → 链接文本 →
-    /// <c>u8 cnt</c> → <c>cnt × 148</c> 记录字节。校验失败只记 <c>item_hyperlink_rejected</c> 并丢弃，
-    /// 不返回 <see cref="CommandResult.CloseConnection"/>：聊天输入不能成为断线触发器。
-    /// <para>
-    /// 投递：文本与记录一起随 <see cref="ChatNotice"/> 广播（普通按同场景、公会按成员，发送者自己也回显），
-    /// Network 侧 <see cref="ChatProjection"/> 用 <see cref="ItemLinkPackets.Design"/> 决定：
-    /// 文本里的收尾 <c>0x7F</c> 条数与 148 字节记录配对时发 <c>NOTI 0x172 MESSAGE_HYPER_LINK</c>
-    /// （携带记录，收件人可点击查看装备）；记录为空/条数不足/截断后标记不成对时退化 <c>NOTI 0x000C</c>
-    /// 纯文本（现有"看得见但不可点"行为）。<c>0x172</c> 的尾串写本连接的角色名（行首发言人），
-    /// 不猜其他来源。层 id 取本连接最近一次 <c>0x0011</c> 上报值
-    /// （424 头部第 1..6 字节语义未定，不从中猜层 id），没有上报值时写 0；
-    /// <c>type==3</c> 的层过滤仍可能让层 id 不同的收件人丢帧，属既有已知限制。
-    /// </para>
-    /// <para>
-    /// 记录也完整保存在 <see cref="GameSession.LastItemHyperlink"/>（只保留最新一条）供诊断复用；
-    /// 投递本身以通知里携带的那一份为准，避免连续两条链接在并发投递时读到后一条的记录。
-    /// </para>
+    /// 物品引用沿用文字的身份、路由和喇叭扣费；完整解析头部、具名目标及148字节记录。
+    /// 普通/队伍使用370，具名私聊/公会使用371，喇叭使用372；记录不足时只退化原通道文字。
+    /// 畸形请求不消费、不断线；实际文本和记录随同一通知投递，最近样本仅用于诊断。
     /// </summary>
     async Task<CommandResult> ItemHyperlinkAsync(GameConnectionContext context, Packet packet)
     {
@@ -226,39 +205,84 @@ internal sealed class ChatHandler(ChatService chat, InventoryProjection? invento
             return CommandResult.Handled;
         }
 
+        if (IsChatBlocked(context.Session))
+        {
+            log.Write("chat_blocked", new { Connection = context.Id, link.Kind });
+            return CommandResult.Handled;
+        }
+
+        var namedType = NamedWhisperService.ResponseType(link.Kind);
+        bool isNamed = link.Request.TargetName is not null;
+        ChatKind kind = ChatKind.Whisper;
+        if (isNamed ? named is null || namedType is null : !ChatService.TryKind(link.Kind, out kind))
+        {
+            log.Write("item_hyperlink_rejected", new { Connection = context.Id, Reason = "unsupported-type", link.Kind });
+            return CommandResult.Handled;
+        }
+
         var origin = context.Session.ChatOrigin();
         if (origin is null)
         {
-            log.Write("chat_rejected", new { Connection = context.Id, Reason = "not-ready", link.Kind });
+            log.Write("chat_rejected", new { Connection = context.Id, Reason = "no-character", link.Kind });
             return CommandResult.Handled;
         }
 
-        ushort layer = context.Session.LastChatLayer ?? 0;
-        var dispatch = chat.BroadcastHyperlink(link.Kind, layer, link.Text, link.Records, origin);
-        if (dispatch.Rejection is { } reason)
+        if (kind == ChatKind.Guild) origin = origin with { AdventureName = context.Session.ReadAdventureName() };
+        if (emoticons is not null && link.Text.Contains((byte)0x1e))
+            link = link with { Text = context.Session.PrepareChatEmoticonBytes(emoticons, link.Text) };
+        if (!TryConsumeMegaphone(context, link.Request, kind, out var deduction)) return CommandResult.Handled;
+        var dispatch = isNamed
+            ? named!.Send(context.Session, link.Request, link.Text, link.Records)
+            : chat.Broadcast(link.Request, origin, context.Session, link.Text, link.Records);
+        if (!dispatch.Accepted)
         {
             log.Write("item_hyperlink_rejected", new
             {
-                Connection = context.Id, Reason = reason, link.Kind, TextBytes = link.Text.Length,
+                Connection = context.Id, Reason = dispatch.TargetOffline ? "target-offline" : dispatch.Rejection,
+                link.Kind, TextBytes = link.Text.Length,
                 Records = link.Records.Length / ChatRequests.HyperlinkRecordLength
             });
-            return CommandResult.Handled;
         }
-
-        // 只保留实际进入投递的最近一条：记录字节完整留在会话快照里，供后续诊断/点击查看装备复用。
-        context.Session.RememberItemHyperlink(link);
-        ChatService.TryKind(link.Kind, out var kind);
-        var plan = ItemLinkPackets.Design(kind, layer, origin.Name, link.Text, link.Records);
-        log.Write("item_hyperlink", new
+        else
         {
-            Connection = context.Id, Kind = kind.ToString(),
-            Opcode = plan.HyperLink ? (int)NotiPacketType.MESSAGE_HYPER_LINK : (int)NotiPacketType.MESSAGE,
-            TextBytes = link.Text.Length,
-            Records = link.Records.Length / ChatRequests.HyperlinkRecordLength,
-            plan.MarkerPairs, plan.Degraded, plan.MarkersStripped, plan.Truncated,
-            RecordHex = HexHead(link.Records), Head = HexHead(link.Text), dispatch.Recipients
-        });
+            context.Session.RememberItemHyperlink(link);
+            if (kind == ChatKind.Guild) guildContribution?.Chat(context);
+            var plan = isNamed || kind == ChatKind.Guild
+                ? ItemLinkPackets.DesignNamed(new(namedType ?? ChatMessageType.Guild, 0, origin.Name,
+                    origin.Scene.Channel.ServerIndex, ""), link.Text, link.Records)
+                : kind is ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone
+                    ? ItemLinkPackets.DesignMegaphone(kind, new(origin.Name, "")
+                        { Channel = origin.Scene.Channel, Actor = origin.CharacterId }, link.Text, link.Records)
+                    : ItemLinkPackets.Design(kind, origin.CharacterId, origin.Name, link.Text, link.Records,
+                        origin.Scene.Channel.ServerIndex);
+            log.Write("item_hyperlink", new
+            {
+                Connection = context.Id, Kind = kind.ToString(), Opcode = (int)plan.Opcode,
+                SourceServer = origin.Scene.Channel.ServerIndex, SourceChannel = origin.ChannelNumber,
+                TextBytes = link.Text.Length, Records = link.Records.Length / ChatRequests.HyperlinkRecordLength,
+                plan.MarkerPairs, plan.Degraded, plan.MarkersStripped, plan.Truncated,
+                RecordHex = HexHead(link.Records), Head = HexHead(link.Text), dispatch.Recipients
+            });
+        }
+        if (deduction is { Accepted: true } && inventory is not null)
+            await inventory.RefreshAsync(context, deduction);
         return CommandResult.Handled;
+    }
+
+    bool TryConsumeMegaphone(GameConnectionContext context, ChatSend request, ChatKind kind, out InventoryResult? deduction)
+    {
+        deduction = null;
+        if (kind is not (ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone)) return true;
+        int itemId = ChatService.MegaphoneItemId(kind);
+        if (request.Arg > short.MaxValue)
+        {
+            log.Write("chat_megaphone_rejected", new { Connection = context.Id, Slot = request.Arg, Item = itemId, Reason = "slot-range" });
+            return false;
+        }
+        deduction = context.Session.UseChatMegaphone((ushort)request.Arg, itemId);
+        if (deduction.Accepted) return true;
+        log.Write("chat_megaphone_rejected", new { Connection = context.Id, Slot = request.Arg, Item = itemId, Reason = "deduct-failed" });
+        return false;
     }
 
     /// <summary>日志摘要：前 <see cref="LogHexLimit"/> 字节的十六进制；空数组返回 <c>"-"</c>。</summary>

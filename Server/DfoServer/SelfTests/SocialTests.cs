@@ -25,7 +25,7 @@ internal static class SocialTests
             "1376行首大区2不能写角色42，角色名在前、冒险团唯一键在后");
         Bytes(SocialPackets.AccountFriends([friend with { Online = false, Channel = 0 }]).AsSpan(1, 3).ToArray(),
             [2, 0, 2], "离线行保留本服大区和频道服务器，不使用角色ID或离线哨兵覆盖大区");
-        Bytes(ChatPackets.NamedMessage(new(36, 0, "A", 2, "hi") { AdventureName = "TeamA" }),
+        Bytes(ChatPackets.NamedMessage(new(DfoServer.Game.Chat.ChatMessageType.OneToOne, 0, "A", 2, "hi") { AdventureName = "TeamA" }),
             Convert.FromHexString("2400010000004102020000006869050000005465616D410100000041"),
             "1对1正文后先读附加名字串，再读发送者作为会话对象，不能让接收端回复自己");
         var captured = SocialRequests.Account(Convert.FromHexString("0400000031323371030000003132330103000000313233"), 1439);
@@ -84,11 +84,17 @@ internal static class SocialTests
             var named = new NamedWhisperService(online, repo);
             var send = new ChatSend(36, 1, 0, 2, "hi") { TargetName = "SocialB" };
             That(named.Send(sa, send).Rejection == "blacklisted" && received is null, "被拉黑者1对1消息不投递");
+            That(named.Send(sa,send,[0x7f,0x7f,(byte)'X',0x7f],new byte[148]).Rejection=="blacklisted" && received is null,
+                "物品引用不能绕过具名私聊的黑名单资格");
             repo.ChangeCharacterLink(other, "SocialA", true, true, "", now);
             That(named.Send(sa, send).Accepted && received is { Name: "SocialA", Text: "hi" }, "解除后按名字只投目标，消息保留发送者身份");
             sb.ReturnToRoster();
             That(named.Send(sa, send).TargetOffline, "切角中的旧角色不继续接收");
-            sb.Select(0); sb.MarkReady(); other = sb.CaptureSocialActor()!;
+            sb.Select(0);
+            That(!sb.Ready && named.Send(sa,send).TargetOffline,"具名私聊接收侧仍保留Ready门禁，不向尚未进入世界的目标投递");
+            That(named.Send(sa,send,[0x7f,0x7f,(byte)'X',0x7f],new byte[148]).TargetOffline,
+                "引用与文字共用接收Ready门禁，选角加载中不会收到371广播");
+            sb.MarkReady(); other = sb.CaptureSocialActor()!;
             var catalog = AdventureCoreTests.SyntheticCatalog();
             repo.InitializeAdventure(a, catalog, now); repo.InitializeAdventure(b, catalog, now);
             Execute("UPDATE account_adventures SET name=CASE account WHEN 'sociala' THEN 'TeamA' ELSE 'TeamB' END,name_initialized=1");

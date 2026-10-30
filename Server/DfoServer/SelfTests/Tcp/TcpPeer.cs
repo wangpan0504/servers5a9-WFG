@@ -105,6 +105,16 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] MileageLimits { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
     public WirePacket[] ClientSettings { get; private set; } = [];
+    public byte[] ChatEmoticonInfo { get; private set; } = [];
+    public byte[] RecentEmoticonInfo { get; private set; } = [];
+
+    internal void ReadChatEmoticons(WirePacket packet)
+    {
+        var expected=fixture?.ExpectedChatEmoticons(Id)??throw new InvalidOperationException("表情通知缺少夹具资源与角色资格");
+        TestCheck.That(packet is {Kind:0,Opcode:411},"聊天表情通知使用411");
+        TestCheck.Bytes(packet.Body,expected,"表情通知逐字节对应当前角色资格和账号指令");
+        ChatEmoticonInfo=packet.Body;
+    }
     public Dictionary<int, byte> DailyBoosterUsed { get; } = [];
     public byte[][] InitialDailyBoosterPackets { get; private set; } = [];
     public byte[] InitialGameOptions { get; private set; } = [];
@@ -639,6 +649,7 @@ internal sealed partial class TcpPeer : IDisposable
         TestCheck.That(body.Length > 134 && body[0] == 0 && U16(body, 1) == 1, "会员刷新使用完整单角色Actor，不以Player冒充PC房字段");
         int count = checked(133 + (int)U32(body, 123));
         TestCheck.That(count < body.Length && body[count - 1] == (dungeon ? 1 : 0), "会员刷新保持当前城镇或副本成员状态");
+        TestCheck.That(body[^18] == (dungeon ? 0 : 100), "完整Actor同步正确场景的队伍血蓝百分比，不把城镇既有实时信息覆盖为零");
         int pet = checked(count + 1 + body[count] * 25 + 22);
         int pcroom = checked(pet + 9 + (int)U32(body, pet + 4));
         TestCheck.That(pcroom + 1 < body.Length && body[pcroom] == (pcRoom ? 1 : 0) && body[pcroom + 1] == (active ? 1 : 0),
@@ -1342,6 +1353,12 @@ internal sealed partial class TcpPeer : IDisposable
                 writer.Write(checked((byte)ids.Length));
                 foreach (ushort id in ids) { writer.Write(id); writer.Write(guideCount); }
             })).Body).ToArray();
+            var expectedChatEmoticons = fixture?.ExpectedChatEmoticons(Id);
+            if (expectedChatEmoticons is not null)
+            {
+                RecentEmoticonInfo = Expect(0, 1384, fixture!.ExpectedRecentEmoticons(Id)).Body;
+                ChatEmoticonInfo = Expect(0, 411, expectedChatEmoticons).Body;
+            }
             var expectedSettings = (settings ?? []).ToList();
             if (!expectedSettings.Any(option => option.Opcode == 390))
             {

@@ -65,7 +65,7 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
     public ImmutableArray<SkinStorageKey> Keys(InventoryItem? item) => item is not null && skins.Token(item.Core.ItemId) is { } token
         ? token.SkinIds.Select(id => new SkinStorageKey(token.Type, token.Type == Type ? item.Core.EnchantCardId : id)).ToImmutableArray() : [];
 
-    public InventoryResult Add(Character character, InventorySlot position, bool town)
+    public InventoryResult Add(Character character, InventorySlot position, bool town, bool seriaRoom = false)
     {
         var now = Clock.GetUtcNow();
         var before = character.Inventory;
@@ -75,7 +75,8 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
             skins.Token(token.Core.ItemId) is not { } definition ||
             !items.Get(token.Core.ItemId).AllowsUse(character.Level, character.Job) ||
             !definition.Places.IsEmpty && !definition.Places.Contains("[all]") &&
-                !definition.Places.Contains(town ? "[village]" : "[dungeon]"))
+                !definition.Places.Contains(town ? "[village]" : "[dungeon]") &&
+                !(town && seriaRoom && definition.Places.Contains("[seria room]")))
             return InventoryResult.Reject(3) with { RejectReason = "invalid_skin_token_or_context" };
         // 账号归属的券写入账号皮肤仓，其余写入角色皮肤仓；选中项始终留在角色身上。
         var state = definition.AccountWide ? before.AccountSkins : before.Skins;

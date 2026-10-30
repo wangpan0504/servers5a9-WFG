@@ -59,6 +59,44 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     }
     CancellationTokenSource? hostStop;
     readonly TcpTestResources? resources;
+    internal byte[] ExpectedRecentEmoticons(ushort id) =>
+        Query("SELECT e.entries FROM characters c JOIN account_recent_emoticons e ON e.account=c.account WHERE c.id=$p0", id)
+            is [[byte[] entries]] ? entries : new byte[72];
+
+    internal byte[]? ExpectedChatEmoticons(ushort id)
+    {
+        if (resources is null) return null;
+        var character = Query("SELECT account,level FROM characters WHERE id=$p0", id).Single();
+        var marriage = Query("SELECT r.aggregate_json FROM marriage_records r JOIN marriage_active_members m ON m.marriage_id=r.marriage_id WHERE m.character_id=$p0", id)
+            .Select(row=>JsonSerializer.Deserialize<DfoServer.Game.Marriage.MarriageRecord>((string)row[0])!).FirstOrDefault();
+        ulong low=0,high=0;byte tail=0;
+        var rights = Query("SELECT premium_contracts FROM account_wallets WHERE account=$p0",character[0]);
+        if (rights is [[string json]])
+            foreach(var (type,expiry) in JsonSerializer.Deserialize<Dictionary<int,long>>(json)!)
+            {
+                if(expiry<=UtcNow.ToUnixTimeSeconds()) continue;
+                if(type is >0 and <64) low|=1UL<<type;
+                else if(type is >=64 and <128) high|=1UL<<(type-64);
+                else if(type is >=128 and <132) tail|=(byte)(1<<(type-128));
+            }
+        var rows = resources.ChatEmoticons.Eligible(new DfoServer.GameWorld.Characters.ChatEmoticonEligibility(Convert.ToByte(character[1]),
+            marriage is {State:4},marriage?.Members.GetValueOrDefault(id)?.LovePoints??0,low,high,tail));
+        if (rows.IsEmpty) return null;
+        var macros = Query("SELECT emoticon_id,macro FROM account_chat_emoticons WHERE account=$p0", character[0])
+            .ToDictionary(row => Convert.ToUInt16(row[0]), row => (byte[])row[1]);
+        return TcpPeer.Build(writer =>
+        {
+            writer.Write((ushort)rows.Length);
+            for (int i = 0; i < rows.Length; i++)
+            {
+                writer.Write((ushort)i);
+                writer.Write(rows[i].Id);
+                byte[] text = macros.GetValueOrDefault(rows[i].Id) ?? [];
+                writer.Write((uint)text.Length);
+                writer.Write(text);
+            }
+        });
+    }
     readonly DfoServer.GameWorld.Quests.QuestCatalog? questCatalog;
     readonly DfoServer.GameWorld.Towns.TownCatalog? townCatalog;
     readonly TimeProvider? clock;

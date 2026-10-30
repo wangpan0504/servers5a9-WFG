@@ -6,14 +6,16 @@ namespace DfoServer.Testing;
 // 每次完整快照独占一个只读连接和一致读事务；不缓存表名、行或跨请求资产。
 internal static class ClientSettingsSnapshots
 {
-    const string Tables = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat') ORDER BY name";
+    const string Tables = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('account_client_settings','character_client_settings','character_game_settings','account_hotkey_settings','account_quick_chat','account_chat_emoticons','account_recent_emoticons') ORDER BY name";
     static readonly string[] SettingsQueries =
     [
         "SELECT * FROM account_client_settings ORDER BY account",
         "SELECT * FROM character_client_settings ORDER BY character_id",
         "SELECT * FROM character_game_settings ORDER BY character_id",
         "SELECT * FROM account_hotkey_settings ORDER BY account,profile",
-        "SELECT * FROM account_quick_chat ORDER BY account,bank"
+        "SELECT * FROM account_quick_chat ORDER BY account,bank",
+        "SELECT * FROM account_chat_emoticons ORDER BY account,emoticon_id",
+        "SELECT * FROM account_recent_emoticons ORDER BY account"
     ];
 
     public static string Capture(string database, bool assets)

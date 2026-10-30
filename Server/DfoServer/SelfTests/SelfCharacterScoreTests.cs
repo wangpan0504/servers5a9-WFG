@@ -19,7 +19,7 @@ internal static class SelfCharacterScoreTests
             That(!SelfCharacterScoreProjection.Matches(new(3, 0, 0, 0, text)), "只全文精确命令，不trim/前缀：" + text);
         foreach (byte kind in new byte[] { 6, 46, 11, 13, 36, 255 })
             That(!SelfCharacterScoreProjection.Matches(new(kind, 0, 0, 0, "#战力")), "非普通频道不劫持：" + kind);
-        That(SelfCharacterScoreProjection.Matches(new((byte)ChatKind.Normal, 0, 0, 0, "#战力")), "普通频道精确命令有效");
+        That(SelfCharacterScoreProjection.Matches(new((byte)ChatRequestType.Normal, 0, 0, 0, "#战力")), "普通频道精确命令有效");
         await Routing();
         await ConcurrentCapture();
         await RejectedQueue();

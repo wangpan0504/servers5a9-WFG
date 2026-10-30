@@ -46,7 +46,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     TradeHandler? trade = null,
     PvpMissionProjection? pvpMissions = null, DfoServer.Game.Pvp.PvpMissionBook? missionBook = null,
     DfoServer.Game.Events.ServerEventService? serverEvents = null,
-    DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null,
+    DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null, SettingsProjection? settingsProjection = null,
     DfoServer.GameWorld.Items.RecoveryConsumableCatalog? consumables = null) : IConnectionProtocol
 {
     // 断线诊断不得阻止剩余原清理，包括诊断后端自身失败；不以日志成功作为登记成功。
@@ -84,6 +84,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
+        context.ChatEmoticons = settingsProjection?.CreateChatEmoticons(context);
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);
         if (boosters is not null) context.BoosterUses = new(context, boosters, log, time,
@@ -338,6 +339,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         if (cubeConsumption is not null) await cubeConsumption.RefreshAsync();
                         if (context.Creatures is { } creatureClock) await creatureClock.RefreshAsync();
                         if (skins is not null) await skins.RefreshAsync(context);
+                        if (context.ChatEmoticons is { } chatEmoticons) await chatEmoticons.RefreshAsync();
                     }
                     finally { context.CommandGate.Release(); }
                     return true;

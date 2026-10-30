@@ -1,3 +1,6 @@
+using DfoServer.Game.Party;
+using DfoServer.Game.Session;
+
 namespace DfoServer.Game.Chat;
 
 /// <summary>
@@ -30,11 +33,11 @@ internal interface IChatDirectoryStore
 /// <para>
 /// 协议事实（反汇编 + 实机收包，见 <c>Docs/协议/聊天.md</c>）：<c>NOTI 0x000C</c> 正文是
 /// <c>[u8 显示 type][u16 层 id][u8 v][u32 CP936 字节数][CP936 文本]</c>，客户端按长度读文本（<c>0 &lt; len &lt; 0x100</c>）；
-/// 显示 type 由 <see cref="ChatWire"/> 映射（普通/队伍/悄悄话 = 3、公会/攻坚队 = 6，蓝/绿/紫 kind 在「普通」页签不渲染）；
-/// <c>type==3</c> 时客户端还要求层 id 等于收件人自己的当前层 id，否则丢弃。两种喇叭走已实测可见的
-/// <c>NOTI 0x0076</c> 喇叭页签（发言人 + 正文，<c>0x0E</c>/<c>0x0B</c> 类型由 Network 侧 Builder 选定，
+/// 显示 type 由 <see cref="ChatWire"/> 映射（队伍2、普通/悄悄话3、公会6）；
+/// 正式通知使用真实发言人编号和来源服务器分组，不把接收者编号或请求引用当作发言人。两种喇叭走
+/// <c>NOTI 0x0076</c> 喇叭页签（发言人 + 正文，type11/13由Network侧Builder选定，
 /// 三条串非空与 29/511/16 字节上限也在那里截断）。物品链接 <c>CMD 0x01A8</c> 的正文由
-/// <see cref="BroadcastHyperlink"/> 原样投递，不做 CP936 往返；文本与 148 字节记录一起进
+/// 物品链接原样投递，不做 CP936 往返；文本与 148 字节记录一起进
 /// <see cref="ChatNotice"/>，由 Network 侧决定发 <c>0x172</c>（可点击）还是退化 <c>0x0C</c>。
 /// </para>
 /// </summary>
@@ -52,8 +55,18 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
     /// <summary>把请求 type 翻译成逻辑种类；未定义的 type 返回 false，由调用方按未处理拒绝。</summary>
     public static bool TryKind(byte type, out ChatKind kind)
     {
-        kind = (ChatKind)type;
-        return Enum.IsDefined(kind);
+        ChatKind? selected = (ChatRequestType)type switch
+        {
+            ChatRequestType.Normal => ChatKind.Normal,
+            ChatRequestType.Party => ChatKind.Party,
+            ChatRequestType.Guild => ChatKind.Guild,
+            ChatRequestType.LegacyCharacterWhisper => ChatKind.Whisper,
+            ChatRequestType.ServerMegaphone => ChatKind.ServerMegaphone,
+            ChatRequestType.ChannelMegaphone => ChatKind.ChannelMegaphone,
+            _ => null
+        };
+        kind = selected ?? default;
+        return selected is not null;
     }
 
     /// <summary>喇叭对应的背包道具 id；非喇叭返回 0（调用方据此不做扣减）。</summary>
@@ -79,56 +92,63 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
     /// </summary>
     static ChatNotice NoticeOf(ChatKind kind, ChatSend request, ChatOrigin sender, byte[]? textBytes,
         byte[]? itemRecords = null) =>
-        new(kind, request.Layer, sender.ChannelNumber, Text: textBytes is null ? WireText(request) : "",
-            TextBytes: textBytes, ItemRecords: itemRecords, Speaker: sender.Name);
+        new(kind, sender.CharacterId, sender.ChannelNumber, Text: textBytes is null ? WireText(request) : "",
+            TextBytes: textBytes, ItemRecords: itemRecords, Speaker: sender.Name) { Origin = sender, Guard = sender.IsCurrent };
 
-    public ChatDispatch Broadcast(ChatSend request, ChatOrigin sender)
+    public ChatDispatch Broadcast(ChatSend request, ChatOrigin sender, GameSession? source = null,
+        byte[]? textBytes = null, byte[]? itemRecords = null)
     {
         if (!TryKind(request.Type, out var kind))
             return ChatDispatch.Rejected("unsupported-type");
         return kind switch
         {
-            ChatKind.Normal => Normal(request, sender),
-            ChatKind.Guild => Guild(request, sender),
-            ChatKind.Whisper => Whisper(request, sender),
-            ChatKind.ServerMegaphone => Megaphone(sender, ChatKind.ServerMegaphone, request.Text),
-            ChatKind.ChannelMegaphone => Megaphone(sender, ChatKind.ChannelMegaphone, request.Text),
-            _ => ChatDispatch.Rejected("unsupported-type")
-        };
-    }
-
-    /// <summary>
-    /// 物品链接 <c>CMD 0x01A8</c>：正文已经是客户端格式化好的链接文本（含 <c>0x7F</c> 标记的 CP936 字节），
-    /// 服务端不解析物品、也不做 CP936 → 宽字符 → CP936 的往返，按 kind 的既有范围原样广播，
-    /// 并把 <c>148</c> 字节物品记录随通知一起带给 Network 侧，由它构造可点击的 <c>NOTI 0x172</c>
-    /// （记录缺失或与标记不配对时退化回 <c>0x0C</c> 纯文本，见 <c>ItemLinkPackets.Design</c>）。
-    /// 424 只带 kind、不带目标角色，所以只支持普通（3）与公会（6）；悄悄话没有目标参数，
-    /// 队伍/攻坚队聊天入口尚未实现，全部拒绝而不猜投递范围。
-    /// </summary>
-    public ChatDispatch BroadcastHyperlink(byte type, ushort layer, byte[] text, byte[] records, ChatOrigin sender)
-    {
-        if (!TryKind(type, out var kind))
-            return ChatDispatch.Rejected("unsupported-type");
-        var request = new ChatSend(type, layer, 0, (uint)text.Length, "");
-        return kind switch
-        {
-            ChatKind.Normal => Normal(request, sender, text, records),
-            ChatKind.Guild => Guild(request, sender, text, records),
-            ChatKind.Whisper => ChatDispatch.Rejected("hyperlink-target-missing"),
+            ChatKind.Normal => Normal(request, sender, textBytes, itemRecords),
+            ChatKind.Party => Party(request, sender, source, textBytes, itemRecords),
+            ChatKind.Guild => Guild(request, sender, textBytes, itemRecords),
+            ChatKind.Whisper => Whisper(request, sender, textBytes, itemRecords),
+            ChatKind.ServerMegaphone or ChatKind.ChannelMegaphone => Megaphone(sender, kind, request.Text, textBytes, itemRecords),
             _ => ChatDispatch.Rejected("unsupported-type")
         };
     }
 
     /// <summary>
     /// 普通聊天：只投递同场景（频道 + town/area 的 PVF 地图 + 房间账号 + 副本实例）的在线角色，
-    /// 单人时就是自己一个人。层 id 用发送者的兜底：服务端没有收件人当前层 id 的权威来源，
-    /// 客户端 type==3 的过滤会把层 id 不匹配的通知丢掉——这是已知缺陷，日志里以 LayerFallback 标记。
+    /// 单人时仅本人；发送前再次验证接收者的实际场景。
+    /// 不信任客户端声明的发言人编号。
     /// </summary>
     ChatDispatch Normal(ChatSend request, ChatOrigin sender, byte[]? textBytes = null, byte[]? itemRecords = null)
     {
         var notice = NoticeOf(ChatKind.Normal, request, sender, textBytes, itemRecords);
         int recipients = Deliver(sender, recipient => recipient.Scene == sender.Scene, notice);
-        return new(true, recipients, LayerFallback: recipients > 1);
+        return new(true, recipients);
+    }
+
+    ChatDispatch Party(ChatSend request, ChatOrigin sender, GameSession? source, byte[]? textBytes = null,
+        byte[]? itemRecords = null)
+    {
+        var party = source?.CurrentParty?.Invoke();
+        if (party is null) return ChatDispatch.Rejected("not-in-party");
+        var members = party.Members.Select(member => (Member: member, Membership: member.Actor.Session.PartyMembershipVersion)).ToArray();
+        var own = members.FirstOrDefault(row => ReferenceEquals(row.Member.Actor.Session, source) &&
+            row.Member.Actor.Character.Id == sender.CharacterId);
+        bool Current((PartyMember Member, long Membership) row) => row.Member.IsCurrent() &&
+            row.Member.Actor.Session.PartyMembershipVersion == row.Membership;
+        // 读取版本期间发生退队或重新入队时不使用旧名册；之后按各自成员版本复核，不因改队名或资产更新丢消息。
+        if (own.Member is null || !ReferenceEquals(source!.CurrentParty?.Invoke(), party) || !Current(own))
+            return ChatDispatch.Rejected("stale-party");
+        var blocked = social?.BlockingCharacters(sender.CharacterId);
+        var notice = NoticeOf(ChatKind.Party, request, sender, textBytes, itemRecords);
+        int recipients = 0;
+        foreach (var member in members)
+        {
+            if (blocked?.Contains(member.Member.Actor.Character.Id) == true) continue;
+            bool Guard() => Current(own) && Current(member);
+            if (!Guard()) continue;
+            if (delivery.DeliverTo(member.Member.Actor.Owner.Account,
+                recipient => recipient.CharacterId == member.Member.Actor.Character.Id && Guard(), notice with { Guard = Guard }))
+                recipients++;
+        }
+        return new(true, recipients);
     }
 
     /// <summary>
@@ -142,7 +162,10 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
             return ChatDispatch.Rejected("not-in-guild");
         var accounts = new HashSet<string>(directory.GuildMemberAccounts(guildId), StringComparer.Ordinal);
         var notice = NoticeOf(ChatKind.Guild, request, sender, textBytes, itemRecords);
-        int recipients = Deliver(sender, recipient => recipient.GuildId == guildId && accounts.Contains(recipient.Account), notice);
+        notice = notice with { Named = new(ChatMessageType.Guild,0,sender.Name,sender.Scene.Channel.ServerIndex,
+            textBytes is null ? WireText(request) : "") { AdventureName = sender.AdventureName } };
+        int recipients = Deliver(sender, recipient => recipient.GuildId == guildId && accounts.Contains(recipient.Account) &&
+            recipient.Scene.Channel.ServerIndex == sender.Scene.Channel.ServerIndex, notice);
         return new(true, recipients);
     }
 
@@ -150,28 +173,31 @@ internal sealed class ChatService(IChatDirectoryStore directory, IChatDelivery d
     /// 悄悄话：<c>u32 arg</c> 是目标角色 id。先按 id 解析账号找到在线会话，再只投给目标角色。
     /// 目标不在线时当前没有合适的失败包，只由调用方记 <c>chat_whisper_offline</c>，不自造包。
     /// </summary>
-    ChatDispatch Whisper(ChatSend request, ChatOrigin sender)
+    ChatDispatch Whisper(ChatSend request, ChatOrigin sender, byte[]? textBytes = null, byte[]? itemRecords = null)
     {
         if (request.Arg is 0 or > ushort.MaxValue)
             return ChatDispatch.Rejected("target-range");
         ushort target = (ushort)request.Arg;
         if (social?.IsBlocked(target, sender.CharacterId) == true) return ChatDispatch.Rejected("blacklisted");
-        var notice = NoticeOf(ChatKind.Whisper, request, sender, null);
+        var notice = NoticeOf(ChatKind.Whisper, request, sender, textBytes, itemRecords);
         string? account = directory.AccountOfCharacter(target);
-        return account is not null && delivery.DeliverTo(account, recipient => recipient.CharacterId == target, notice)
+        return account is not null && delivery.DeliverTo(account, recipient => recipient.CharacterId == target &&
+            recipient.Scene.Channel.ServerIndex == sender.Scene.Channel.ServerIndex, notice)
             ? new(true, 1)
             : new(false, 0, TargetOffline: true);
     }
 
     /// <summary>
     /// 两种喇叭：走已实测可见的 <c>NOTI 0x0076</c> 喇叭页签（<c>发言人 : 正文</c>，类型由 Network 侧按种类选定：
-    /// 服务器喇叭 <c>0x0E</c> 官方标签、频道喇叭 <c>0x0B</c> 频道标签）。服务器喇叭投全服在线，频道喇叭只投同频道。
+    /// 服务器喇叭type11投同分组的全部频道，频道喇叭type13只投同分组同频道，均携带真实来源身份。
     /// </summary>
-    ChatDispatch Megaphone(ChatOrigin sender, ChatKind kind, string text)
+    ChatDispatch Megaphone(ChatOrigin sender, ChatKind kind, string text, byte[]? textBytes = null, byte[]? itemRecords = null)
     {
-        var notice = new ChatNotice(kind, 0, sender.ChannelNumber, Megaphone: new MegaphoneText(sender.Name, text));
+        var notice = new ChatNotice(kind, sender.CharacterId, sender.ChannelNumber,
+            Megaphone: new MegaphoneText(sender.Name, text) { Channel = sender.Scene.Channel, Actor = sender.CharacterId })
+            { Origin = sender, Guard = sender.IsCurrent, TextBytes = textBytes, ItemRecords = itemRecords };
         int recipients = kind == ChatKind.ServerMegaphone
-            ? Deliver(sender, _ => true, notice)
+            ? Deliver(sender, recipient => recipient.Scene.Channel.ServerIndex == sender.Scene.Channel.ServerIndex, notice)
             : Deliver(sender, recipient => recipient.Scene.Channel == sender.Scene.Channel, notice);
         return new(true, recipients);
     }

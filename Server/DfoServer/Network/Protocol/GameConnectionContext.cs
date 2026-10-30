@@ -24,6 +24,7 @@ internal sealed class GameConnectionContext(ConnectionContext connection, Accoun
     public CancellationToken Stop => connection.Stop;
     public AccountOwners.Lease Owner { get; } = owner;
     public GameSession Session { get; } = session;
+    public DfoServer.Network.Projection.ChatEmoticonProjection? ChatEmoticons { get; set; }
     public GameConnectionSender Sender { get; } = sender;
     // 后台翻牌与本连接收包共用执行边界，提交后的差量发布完才允许下次资产修改。
     public SemaphoreSlim CommandGate => Session.CommandGate;

@@ -1176,6 +1176,14 @@ CREATE TABLE account_quick_chat(
   account TEXT NOT NULL REFERENCES accounts(account_id),bank INTEGER NOT NULL CHECK(bank IN (0,1)),
   quick_chat BLOB NOT NULL CHECK(typeof(quick_chat)='blob' AND length(quick_chat)=300),
   PRIMARY KEY(account,bank));
+CREATE TABLE account_chat_emoticons(
+  account TEXT NOT NULL REFERENCES accounts(account_id),
+  emoticon_id INTEGER NOT NULL CHECK(emoticon_id BETWEEN 1 AND 32767),
+  macro BLOB NOT NULL CHECK(typeof(macro)='blob' AND length(macro)<=259),
+  PRIMARY KEY(account,emoticon_id));
+CREATE TABLE account_recent_emoticons(
+  account TEXT PRIMARY KEY NOT NULL REFERENCES accounts(account_id),
+  entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)=72));
 CREATE TABLE character_dungeon_passive_pickups(
   character_id INTEGER NOT NULL,account TEXT NOT NULL,
   ground_key INTEGER NOT NULL CHECK(ground_key BETWEEN 1 AND 65535),

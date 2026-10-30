@@ -11,7 +11,9 @@ internal enum ChatHyperlinkError : byte
     LengthZero,
     LengthTooLarge,
     TextOverrun,
-    RecordsOverrun
+    RecordsOverrun,
+    InvalidTarget,
+    TrailingData
 }
 
 /// <summary>
@@ -23,21 +25,21 @@ internal enum ChatHyperlinkError : byte
 /// 频道喇叭 <c>0D00004400000009000000C6B5B5C0C0AEB0C831</c>。
 /// <para>
 /// 物品链接 <c>CMD 0x01A8</c> 的完整正文（实测 179 字节）：
-/// <c>[u8 kind][u16 未定][u32 未定][u32 文本字节数][CP936 链接文本][u8 cnt][cnt × 148 记录字节]</c>。
-/// 头部 1..6 的语义尚未钉死，解析按实测偏移跳过；记录内容语义也未定，先完整保留。
+/// <c>[u8 kind][u16 reference][u32 arg][DSTR文本][可选目标名字及分组][u8 cnt][cnt × 148记录]</c>。
+/// 02E2E470与CMD17共用头部生产者；arg在喇叭中为源槽位，具名目标先于记录写入。
 /// </para>
 /// </summary>
 internal static class ChatRequests
 {
     public const int HeaderLength = 11;
 
-    /// <summary>0x01A8 正文的固定前缀：<c>kind</c> + 6 字节未定头部 + <c>u32 文本字节数</c>。</summary>
+    /// <summary>0x01A8固定前缀：<c>kind:u8,reference:u16,arg:u32,textLength:u32</c>。</summary>
     public const int HyperlinkHeaderLength = 11;
 
     /// <summary>0x01A8 的 <c>kind</c> 在第 0 字节（与 0x0011 的 <c>u8 type</c> 同源）。</summary>
     public const int HyperlinkKindOffset = 0;
 
-    /// <summary>0x01A8 的 <c>u32 文本字节数</c> 在偏移 7（实测）；偏移 1..6 的 6 字节语义未定。</summary>
+    /// <summary>0x01A8 的 <c>u32 文本字节数</c> 在偏移7，与CMD17相同。</summary>
     public const int HyperlinkTextLengthOffset = 7;
 
     /// <summary>0x01A8 的单条物品记录长度（实测；记录内容语义未定）。</summary>
@@ -65,20 +67,12 @@ internal static class ChatRequests
         if (textLength > (uint)(body.Length - HeaderLength))
             return false;
         send = new(type, layer, arg, textLength, ChatText.Encoding.GetString(body.Slice(HeaderLength, (int)textLength)));
-        if (type is 1 or 36 or 41)
+        if (HasNamedTarget(type))
         {
             int at = HeaderLength + (int)textLength;
-            if (body.Length < at + 5) return false;
-            int length = BinaryPrimitives.ReadInt32LittleEndian(body[at..]);
-            if (length is < 1 or > 12 || body.Length != at + 5 + length) return false;
-            try
-            {
-                string name = DfoServer.Game.Characters.CharacterName.Encoding.GetString(body.Slice(at + 4, length));
-                if (!DfoServer.Game.Characters.CharacterName.IsValid(name)) return false;
-                send = send with { TargetName = name, TargetServer = body[^1] };
-            }
-            catch (System.Text.DecoderFallbackException) { return false; }
+            if (!TryNamedTarget(body, ref at, ref send) || at != body.Length) return false;
         }
+        else if (body.Length != HeaderLength + (int)textLength) return false;
         return true;
     }
 
@@ -122,6 +116,19 @@ internal static class ChatRequests
 
         int textOffset = HyperlinkHeaderLength;
         int countOffset = textOffset + (int)textLength;
+        var request = new ChatSend(body[0], BinaryPrimitives.ReadUInt16LittleEndian(body[1..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(body[3..]), textLength, "");
+        // 02E2E470在正文后先写名字和分组，最后才写记录数；不能把名字长度误作记录数。
+        if (HasNamedTarget(request.Type) && !TryNamedTarget(body, ref countOffset, ref request))
+        {
+            error = ChatHyperlinkError.InvalidTarget;
+            return false;
+        }
+        if (countOffset == body.Length)
+        {
+            error = ChatHyperlinkError.RecordsOverrun;
+            return false;
+        }
         int count = body[countOffset];
         int recordsOffset = countOffset + 1;
         int recordsLength = count * HyperlinkRecordLength;
@@ -130,11 +137,35 @@ internal static class ChatRequests
             error = ChatHyperlinkError.RecordsOverrun;
             return false;
         }
+        if (recordsLength != body.Length - recordsOffset)
+        {
+            error = ChatHyperlinkError.TrailingData;
+            return false;
+        }
 
         error = ChatHyperlinkError.None;
-        link = new(body[HyperlinkKindOffset],
+        link = new(request,
             body.Slice(textOffset, (int)textLength).ToArray(),
             body.Slice(recordsOffset, recordsLength).ToArray());
         return true;
+    }
+
+    static bool HasNamedTarget(byte type) => (ChatRequestType)type is ChatRequestType.Whisper or
+        ChatRequestType.OneToOne or ChatRequestType.OneToOneReply or ChatRequestType.WhisperReply;
+
+    static bool TryNamedTarget(ReadOnlySpan<byte> body, ref int at, ref ChatSend request)
+    {
+        if (body.Length - at < 5) return false;
+        int length = BinaryPrimitives.ReadInt32LittleEndian(body[at..]);
+        if (length is < 1 or > 12 || body.Length - at < 5 + length) return false;
+        try
+        {
+            string name = DfoServer.Game.Characters.CharacterName.Encoding.GetString(body.Slice(at + 4, length));
+            if (!DfoServer.Game.Characters.CharacterName.IsValid(name)) return false;
+            request = request with { TargetName = name, TargetServer = body[at + 4 + length] };
+            at += 5 + length;
+            return true;
+        }
+        catch (System.Text.DecoderFallbackException) { return false; }
     }
 }

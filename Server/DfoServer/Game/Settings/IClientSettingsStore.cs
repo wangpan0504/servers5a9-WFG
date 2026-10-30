@@ -11,6 +11,8 @@ internal interface IClientSettingsStore
     bool SaveCharacterOptions(AccountOwners.Lease owner, ushort characterId, ImmutableArray<byte> payload);
     bool SaveHotkeys(AccountOwners.Lease owner, byte profile, ImmutableArray<byte> text);
     bool SaveQuickChat(AccountOwners.Lease owner, byte bank, ImmutableArray<byte> text);
+    bool SaveChatEmoticons(AccountOwners.Lease owner, ImmutableArray<ChatEmoticonMacro> macros);
+    bool SaveRecentEmoticons(AccountOwners.Lease owner, ImmutableArray<byte> entries);
     bool SaveEmotion(AccountOwners.Lease owner, ushort characterId, ushort emotion);
     bool? SaveCloneTitle(AccountOwners.Lease owner, ushort characterId, uint itemId, long? expiresAt = null);
 }

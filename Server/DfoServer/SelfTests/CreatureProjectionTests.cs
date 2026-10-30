@@ -40,11 +40,15 @@ internal static class CreatureProjectionTests
             // 按0267DF0B的独立读取顺序定位，状态在外观列表之前，不是NameTag之后。
             int stateOffset = 132 + nameWidth;
             byte[] dungeon = TownPackets.Actor(character, 0, sceneState: ActorSceneState.Dungeon);
+            int vitalityOffset = body.Length - 18;
             That(body[stateOffset] == 0 && dungeon[stateOffset] == 1 &&
                 body[stateOffset - 2] == 0 && body[stateOffset - 1] == 0 &&
+                body[vitalityOffset] == 100 && dungeon[vitalityOffset] == 0 &&
                 body.AsSpan(0, stateOffset).SequenceEqual(dungeon.AsSpan(0, stateOffset)) &&
-                body.AsSpan(stateOffset + 1).SequenceEqual(dungeon.AsSpan(stateOffset + 1)),
-                "Actor默认城镇状态0，副本状态1仅改变Level后第三字节，保留其余报文");
+                body.AsSpan(stateOffset + 1, vitalityOffset - stateOffset - 1).SequenceEqual(
+                    dungeon.AsSpan(stateOffset + 1, vitalityOffset - stateOffset - 1)) &&
+                body.AsSpan(vitalityOffset + 1).SequenceEqual(dungeon.AsSpan(vitalityOffset + 1)),
+                "Actor仅按场景改变Level后第三字节与队伍血蓝百分比，保留宠物及其他字段的完整报文");
             // 既有Actor头、25B穿戴摘要和22B前置尾字段；独立定位0267B3B0的三个读取值。
             int offset = countOffset + 1 + body[countOffset] * 25 + 22;
             That(body[offset - 6] == 0 && dungeon[offset - 6] == 0,

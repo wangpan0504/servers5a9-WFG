@@ -3,8 +3,10 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using DfoServer.Game.CashShopPromotions;
+using DfoServer.Game.Chat;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
+using DfoServer.Network.Projection;
 using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
@@ -74,6 +76,11 @@ internal static class MachinePromotionPageTests
 
     static void Queries()
     {
+        var request = new ChatSend(3, 0, 0, 44, "#cp-promo/1 " + Nonce);
+        That(PromotionPageProjection.MachineNamespace(request) && PromotionPageProjection.MachineNonce(request) == Nonce,
+            "实际投影入口按包内普通聊天类型3识别，不把业务枚举当wire值");
+        That(!PromotionPageProjection.MachineNamespace(request with { Type = 0 }),
+            "业务枚举的数值不能伪装成普通聊天机器请求");
         That(MachinePromotionQuery.Parse(3, null, "#cp-promo/1 " + Nonce, out string? nonce) ==
             PromotionQueryRoute.Query && nonce == Nonce, "精确44字符合法命令必须被接受");
         foreach (string text in new[] { "#cp-promo/1", "#cp-promo/1 bad", "#cp-promo/1  " + Nonce,

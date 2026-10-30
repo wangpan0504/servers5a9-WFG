@@ -5,6 +5,34 @@ namespace DfoServer.Network.Builders;
 
 internal static class SettingsPackets
 {
+    public static byte[] RecentEmoticons(ImmutableArray<byte> entries)
+    {
+        if (entries.IsDefault) return new byte[DfoServer.Game.Settings.ClientSettingsService.RecentEmoticonLength];
+        DfoServer.Game.Settings.ClientSettingsService.ValidateRecentEmoticons(entries);
+        return entries.ToArray();
+    }
+
+    public static byte[] ChatEmoticons(ImmutableArray<DfoServer.GameWorld.Characters.ChatEmoticonEntry> eligible,
+        ImmutableArray<DfoServer.Game.Settings.ChatEmoticonMacro> saved)
+    {
+        var macros = saved.IsDefault ? new Dictionary<ushort, ImmutableArray<byte>>() : saved.ToDictionary(row => row.Id, row => row.Text);
+        int length = 2 + eligible.Sum(row => 8 + (macros.TryGetValue(row.Id, out var text) ? text.Length : 0));
+        byte[] body = new byte[length];
+        BinaryPrimitives.WriteUInt16LittleEndian(body, checked((ushort)eligible.Length));
+        int offset = 2;
+        for (int i = 0; i < eligible.Length; i++)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(offset), checked((ushort)i));
+            BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(offset + 2), eligible[i].Id);
+            var text = macros.GetValueOrDefault(eligible[i].Id);
+            int size = text.IsDefault ? 0 : text.Length;
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset + 4), checked((uint)size));
+            if (size != 0) text.AsSpan().CopyTo(body.AsSpan(offset + 8));
+            offset += 8 + size;
+        }
+        return body;
+    }
+
     public static byte[] Emotion(ushort value, bool success = true)
     {
         byte[] body = new byte[3];

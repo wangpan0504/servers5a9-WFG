@@ -5,6 +5,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Chat;
 using DfoServer.Game.Session;
+using DfoServer.Game.Party;
 using DfoServer.Development;
 using DfoServer.GameWorld.Channels;
 using DfoServer.GameWorld.Towns;
@@ -17,6 +18,7 @@ using DfoServer.Network.Projection;
 using DfoServer.Network.Protocol;
 using DfoServer.Persistence;
 using static DfoServer.Testing.TestCheck;
+using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer;
 
@@ -90,6 +92,7 @@ internal static class ChatServiceTests
         Wire();
         MegaphoneWire();
         ItemLinkWire();
+        ExtendedItemLinks();
         Routing();
         ProbeBodies();
         NoticeWire();
@@ -99,6 +102,80 @@ internal static class ChatServiceTests
         ChatInjectCommand();
         InjectRawCommand();
         Console.WriteLine($"PASS {Count - before} 聊天解析、截断、节流、频道映射、正文、物品链接、喇叭、公告、投递规则、诊断正文与 GM 注入断言");
+    }
+
+    static void ExtendedItemLinks()
+    {
+        byte[] text = ChatText.Encoding.GetBytes("\u007f\u001e M\u001f \u007f[装备]\u007f \u007f[药剂]\u007f");
+        byte[][] records = [Enumerable.Range(0,148).Select(i=>(byte)(19+i*37)).ToArray(),
+            Enumerable.Range(0,148).Select(i=>(byte)(83+i*17)).ToArray()];
+        BinaryPrimitives.WriteInt32LittleEndian(records[0].AsSpan(4),100300325);
+        BinaryPrimitives.WriteInt32LittleEndian(records[1].AsSpan(4),1113);
+        byte[] rawRecords = [..records[0],..records[1]];
+        void Name(BinaryWriter w,string value) { byte[] bytes=ChatText.Encoding.GetBytes(value);w.Write((uint)bytes.Length);w.Write(bytes); }
+        byte[] Expected(byte type,bool megaphone,bool linked) => Build(w=>
+        {
+            w.Write(type);
+            if (megaphone) { w.Write(new byte[]{2,0,10});w.Write((ushort)19);Name(w,"QuoteRole"); }
+            else
+            {
+                w.Write((byte)0);
+                if(type==6) w.Write(new byte[]{3,1});
+                Name(w,"QuoteRole");w.Write((byte)2);
+            }
+            w.Write((uint)text.Length);w.Write(text);
+            if(linked) { w.Write((byte)2);foreach(var record in records)w.Write(record); }
+            Name(w,megaphone?"X":"TeamA");
+            if(!linked && type==36) Name(w,"QuoteRole");
+        });
+        foreach(byte type in new byte[]{1,36,40,41})
+        {
+            byte[] body=Build(w=>
+            {
+                w.Write(type);w.Write((ushort)9999);w.Write(0u);w.Write((uint)text.Length);w.Write(text);
+                Name(w,"Peer");w.Write((byte)2);w.Write((byte)2);foreach(var record in records)w.Write(record);
+            });
+            That(ChatRequests.TryParseHyperlink(body,out var parsed,out _) && parsed.Request.TargetName=="Peer" &&
+                parsed.Request.TargetServer==2 && parsed.Request.Layer==9999 && parsed.Records.SequenceEqual(rawRecords),
+                "私聊引用先解析目标名字和分组，再读取完整物品记录，不把名字长度当记录数");
+            byte[] bad=(byte[])body.Clone();
+            BinaryPrimitives.WriteInt32LittleEndian(bad.AsSpan(11+text.Length),13);
+            That(!ChatRequests.TryParseHyperlink(bad,out _,out var error) && error==ChatHyperlinkError.InvalidTarget,
+                "非法私聊目标独立拒绝，不尝试借用上一目标");
+            That(!ChatRequests.TryParseHyperlink([..body,0],out _,out error) && error==ChatHyperlinkError.TrailingData,
+                "记录之后不能携带无法解释的尾部");
+            var mode=NamedWhisperService.ResponseType(type)!.Value;
+            var named=new NamedChatMessage(mode,0,"QuoteRole",2,"") { AdventureName="TeamA" };
+            var plan=ItemLinkPackets.DesignNamed(named,text,rawRecords);
+            Bytes(plan.Body,Expected((byte)mode,false,true),"371保留原始混合正文、两条记录及附加名字，不追加65的一对一会话尾串");
+            That(plan.Opcode==NotiPacketType.MESSAGE_OTHER_CHANNEL_HYPER_LINK && plan.MarkerPairs==2 && !plan.Degraded,
+                "具名私聊与回复使用专用371而不是普通370");
+            var fallback=ItemLinkPackets.DesignNamed(named,text,[]);
+            Bytes(fallback.Body,Expected((byte)mode,false,false),"记录不足降级65仍保留私聊类型、发言人及一对一会话对象");
+            That(fallback.Opcode==NotiPacketType.MESSAGE_OTHER_CHANNEL,"私聊引用退化不能变成公开普通聊天");
+        }
+        var guild=ItemLinkPackets.DesignNamed(new(ChatMessageType.Guild,0,"QuoteRole",2,"")
+            { GuildFlag=3,GuildColorFlag=1,AdventureName="TeamA" },text,rawRecords);
+        Bytes(guild.Body,Expected(6,false,true),"公会引用371携带两字节标志和附加名字，来源不依赖同屏Actor");
+        foreach(var kind in new[]{ChatKind.ServerMegaphone,ChatKind.ChannelMegaphone})
+        {
+            byte type=kind==ChatKind.ServerMegaphone?(byte)11:(byte)13;
+            var message=new MegaphoneText("QuoteRole","") {Channel=new(2,10),Actor=19};
+            var plan=ItemLinkPackets.DesignMegaphone(kind,message,text,rawRecords);
+            Bytes(plan.Body,Expected(type,true,true),"372喇叭引用保留真实分组、频道、角色编号及两条完整物品记录");
+            That(plan.Opcode==NotiPacketType.MEGAPHONE_MSG_HYPER_LINK,"喇叭引用不能使用370或纯文字118");
+            var fallback=ItemLinkPackets.DesignMegaphone(kind,message,text,[]);
+            Bytes(fallback.Body,Expected(type,true,false),"喇叭无可用记录时只退化原喇叭通道，仍保留表情和来源");
+            That(fallback.Opcode==NotiPacketType.MEGAPHONE_MSG,"喇叭降级不改变显示页签或广播类型");
+        }
+        byte[] clipped=[..Enumerable.Repeat((byte)'a',254),0x7f,0x1e,0x20,77,0x1f];
+        var boundary=ItemLinkPackets.Design(ChatKind.Normal,19,"QuoteRole",clipped,[]);
+        That(boundary.Truncated && BinaryPrimitives.ReadUInt32LittleEndian(boundary.Body.AsSpan(4))==254,
+            "链接截断不能留下半个内嵌表情标记");
+        byte[] hornRequest=Build(w=>{w.Write((byte)13);w.Write((ushort)0);w.Write(118u);w.Write((uint)text.Length);w.Write(text);
+            w.Write((byte)2);foreach(var record in records)w.Write(record);});
+        That(ChatRequests.TryParseHyperlink(hornRequest,out var horn,out _) && horn.Request.Arg==118 && horn.Kind==13,
+            "424喇叭头部必须保留实际扣费槽位");
     }
 
     static void Parsing()
@@ -180,17 +257,14 @@ internal static class ChatServiceTests
     }
 
     /// <summary>
-    /// 实测的显示 type 映射（2026-10-21）：「普通」页签只渲染 <c>type ∈ {3, 6, 0x37, 0x38}</c>，
-    /// 蓝 <c>0x32</c>/绿 <c>0x0A</c>/紫 <c>0x35</c>/天蓝 <c>0x39</c> 都不显示，因此普通/队伍/悄悄话 = 3、
-    /// 公会/攻坚队 = 6。队伍与攻坚队聊天入口尚未实现，但映射先固定，避免将来挑到不渲染的 kind。
+    /// 既有普通/公会显示保持，队伍按匹配原码使用2；不能从其他显示type推断队伍必须映射成普通。
     /// </summary>
     static void ChannelMapping()
     {
-        That(ChatWire.TypeOf(ChatChannel.Normal) == 3 && ChatWire.TypeOf(ChatChannel.Party) == 3 &&
-            ChatWire.TypeOf(ChatChannel.Whisper) == 3 && ChatWire.TypeOf(ChatChannel.Guild) == 6 &&
-            ChatWire.TypeOf(ChatChannel.Raid) == 6,
-            "实测可显示映射：普通/队伍/悄悄话=3，公会/攻坚队=6（蓝/绿/紫 kind 不渲染）");
-        That(ChatWire.ChannelOf(ChatKind.Normal) == ChatChannel.Normal &&
+        That(ChatWire.TypeOf(ChatChannel.Normal) == 3 && ChatWire.TypeOf(ChatChannel.Party) == 2 &&
+            ChatWire.TypeOf(ChatChannel.Whisper) == 3 && ChatWire.TypeOf(ChatChannel.Guild) == 6,
+            "普通和悄悄话保持3，队伍使用原生2，公会保持6");
+        That(ChatWire.ChannelOf(ChatKind.Normal) == ChatChannel.Normal && ChatWire.ChannelOf(ChatKind.Party) == ChatChannel.Party &&
             ChatWire.ChannelOf(ChatKind.Whisper) == ChatChannel.Whisper &&
             ChatWire.ChannelOf(ChatKind.Guild) == ChatChannel.Guild,
             "入站 kind 归到对应显示频道（普通/悄悄话/公会）");
@@ -198,6 +272,10 @@ internal static class ChatServiceTests
             "喇叭不走 0x000C，没有显示 type 映射而不是静默发出一个聊天行");
         Reject<ArgumentOutOfRangeException>(() => ChatWire.TypeOf(ChatKind.ChannelMegaphone),
             "频道喇叭同样没有 0x000C 显示 type");
+        Reject<ArgumentOutOfRangeException>(() => ChatWire.TypeOf(ChatChannel.Raid),"未核定的攻坚显示通道不能借用公会6");
+        foreach(var type in new[]{ChatRequestType.Context5,ChatRequestType.Context8,ChatRequestType.Context9,
+            ChatRequestType.Named7,ChatRequestType.Named64,ChatRequestType.NamedReply66,ChatRequestType.Item898Megaphone})
+            That(!ChatService.TryKind((byte)type,out _),"有wire枚举不代表业务已接入，不能自动广播未知上下文");
     }
 
     static void Wire()
@@ -205,33 +283,33 @@ internal static class ChatServiceTests
         // 0x0C MESSAGE：[u8 type][u16 层 id][u8 v=0][u32 CP936 字节数][CP936 文本]，长度 1..255。
         // 前两条是 22:4x 实机 inject-raw 的成功样本，直接当期望值，不调用服务端 Builder 反算。
         Bytes(ChatPackets.Message(ChatKind.Normal, 4, "TEST-A"),
-            Convert.FromHexString("0304000006000000544553542D41"), "实测帧：普通聊天 0x0C 正文 TEST-A");
+            Convert.FromHexString("0304000006000000544553542D4100000000"), "普通聊天正文及原生必读尾串长度头");
         Bytes(ChatPackets.Message(ChatKind.Normal, 4, "测试中文"),
-            Convert.FromHexString("0304000008000000B2E2CAD4D6D0CEC4"), "实测帧：普通聊天 0x0C 正文 测试中文（长度是 CP936 字节数）");
+            Convert.FromHexString("0304000008000000B2E2CAD4D6D0CEC400000000"), "普通聊天中文正文及原生尾串");
         Bytes(ChatPackets.Message(ChatKind.Guild, 0x1234, "GUILD"),
-            Convert.FromHexString("06341200050000004755494C44"), "公会聊天正文首字节 0x06、层 id 小端、文本 GUILD");
+            Convert.FromHexString("06341200050000004755494C4400000000"), "公会聊天正文及原生尾串");
         // 实测（2026-10-21）「普通」页签只渲染 type ∈ {3,6,0x37,0x38}：悄悄话必须与普通同色，
         // 不能再用 0x2E（客户端不渲染），因此正文首字节是映射后的 3。
-        Bytes(ChatPackets.Message(ChatKind.Whisper, 0, "hi"), Convert.FromHexString("03000000020000006869"),
+        Bytes(ChatPackets.Message(ChatKind.Whisper, 0, "hi"), Convert.FromHexString("0300000002000000686900000000"),
             "悄悄话正文首字节映射为 3（实测「普通」页签只渲染 3/6/0x37/0x38）、文本 hi");
 
-        // 空正文：长度字段写 0，正文只有 8 字节头（与"无正文"兼容）。
-        Bytes(ChatPackets.Message(ChatKind.Normal, 4), Convert.FromHexString("0304000000000000"), "不传文本 = 空正文，长度 0");
-        Bytes(ChatPackets.Message(ChatKind.Normal, 4, ""), Convert.FromHexString("0304000000000000"), "空字符串同样写长度 0");
+        // 空正文仍保留正文及发言人的两个长度头。
+        Bytes(ChatPackets.Message(ChatKind.Normal, 4), Convert.FromHexString("030400000000000000000000"), "空正文保留两个DSTR长度头");
+        Bytes(ChatPackets.Message(ChatKind.Normal, 4, ""), Convert.FromHexString("030400000000000000000000"), "空正文与空尾串均有长度头");
         That(ChatPackets.HeaderLength == 8 && ChatPackets.MaxTextBytes == 0xFF &&
-            ChatPackets.Message(ChatKind.Normal, 4).Length == 8 && ChatPackets.Message(ChatKind.Normal, 4, "").Length == 8,
+            ChatPackets.Message(ChatKind.Normal, 4).Length == 12 && ChatPackets.Message(ChatKind.Normal, 4, "").Length == 12,
             "0x0C 头固定 8 字节（type + 层 id + v + 长度），正文长度上限 0xFF");
 
         // 255 字节上限：300 个 ASCII 只保留前 255 字节，长度字段同步为 255。
         byte[] longAscii = ChatPackets.Message(ChatKind.Normal, 1, new string('a', 300), out bool asciiCut);
-        That(asciiCut && longAscii.Length == 8 + 255 &&
-            BinaryPrimitives.ReadUInt32LittleEndian(longAscii.AsSpan(4)) == 255 && longAscii.AsSpan(8).IndexOfAnyExcept((byte)'a') < 0,
+        That(asciiCut && longAscii.Length == 12 + 255 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(longAscii.AsSpan(4)) == 255 && longAscii.AsSpan(8,255).IndexOfAnyExcept((byte)'a') < 0,
             "300 字节 ASCII 按 255 字节截断，长度字段 255、帧长 263");
 
         // 汉字按字符边界截断：200 个汉字 = 400 字节 ⇒ 只保留 127 个完整汉字（254 字节），不切半个字。
         byte[] longCn = ChatPackets.Message(ChatKind.Normal, 1, new string('汉', 200), out bool cnCut);
         int cnLength = (int)BinaryPrimitives.ReadUInt32LittleEndian(longCn.AsSpan(4));
-        That(cnCut && cnLength == 254 && longCn.Length == 8 + cnLength &&
+        That(cnCut && cnLength == 254 && longCn.Length == 12 + cnLength &&
             ChatText.Encoding.GetString(longCn, 8, cnLength) == new string('汉', 127),
             "超长中文按字符边界截到 254 字节（127 个完整汉字），解码无半个字");
     }
@@ -244,26 +322,33 @@ internal static class ChatServiceTests
     {
         // 2026-10-20 23:5x 实机截图确认的整帧（type=0x0B、str1=AAA、str2=MEGA-11-WHITELIST、str3=BBB）：
         // [0B][B=00][C=00][D=00][E=0000] + [03000000 AAA] + [11000000 MEGA-11-WHITELIST] + [03000000 BBB]
-        Bytes(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "AAA", "MEGA-11-WHITELIST", "BBB"),
+        Bytes(MegaphonePackets.Build(ChatKind.ServerMegaphone, "AAA", "MEGA-11-WHITELIST", "BBB"),
             Convert.FromHexString("0B000000000003000000414141110000004D4547412D31312D57484954454C49535403000000424242"),
-            "实测帧：频道喇叭 0x76 正文逐字节一致（三段长度都是 CP936 字节数）");
+            "历史type11显示样本保持完整三条DSTR，不据此把道具37误映射到11");
 
         // 两种喇叭的确切整帧（角色名「测试2」5 字节、正文「喇叭测试」8 字节、占位 X 1 字节），用于实机验收对照。
         Bytes(MegaphonePackets.Build(ChatKind.ServerMegaphone, "测试2", "喇叭测试"),
-            Convert.FromHexString("0E000000000005000000B2E2CAD43208000000C0AEB0C8B2E2CAD40100000058"),
-            "服务器喇叭整帧：type=0x0E、str1 测试2（5B）、str2 喇叭测试（8B）、str3 X（1B）");
-        Bytes(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "测试2", "喇叭测试"),
             Convert.FromHexString("0B000000000005000000B2E2CAD43208000000C0AEB0C8B2E2CAD40100000058"),
-            "频道喇叭整帧：type=0x0B，其余三串与服务器喇叭相同");
+            "服务器喇叭整帧：type11、角色名5B、正文8B、兼容尾串1B");
+        Bytes(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "测试2", "喇叭测试"),
+            Convert.FromHexString("0D000000000005000000B2E2CAD43208000000C0AEB0C8B2E2CAD40100000058"),
+            "频道喇叭整帧：type13，其余三串与服务器喇叭相同");
 
         That(MegaphonePackets.HeaderLength == 6 && MegaphonePackets.SpeakerMaxBytes == 29 &&
             MegaphonePackets.TextMaxBytes == 511 && MegaphonePackets.TagMaxBytes == 16,
             "0x76 头 6 字节；三条串上限分别是 29/511/16 字节（客户端要求 len < 0x1E/0x200/0x11）");
-        That(MegaphonePackets.TypeOf(ChatKind.ServerMegaphone) == 0x0E &&
-            MegaphonePackets.TypeOf(ChatKind.ChannelMegaphone) == 0x0B,
-            "服务器喇叭 type=0x0E（D&F 官方标签）、频道喇叭 type=0x0B（Ch. 频道标签 + 发言人）");
+        That(MegaphonePackets.TypeOf(ChatKind.ServerMegaphone) == 11 &&
+            MegaphonePackets.TypeOf(ChatKind.ChannelMegaphone) == 13,
+            "玩家服务器喇叭type11，频道喇叭type13，不混入官方type14");
         Reject<ArgumentOutOfRangeException>(() => MegaphonePackets.TypeOf(ChatKind.Normal),
             "非喇叭种类没有 0x76 类型，直接抛出而不是静默按频道喇叭发出去");
+        var source = new MegaphoneText("测试2","喇叭测试") { Channel = new(2,31), Actor = 0x1234 };
+        Bytes(MegaphonePackets.Build(ChatKind.ServerMegaphone,source),
+            Convert.FromHexString("0B02001F341205000000B2E2CAD43208000000C0AEB0C8B2E2CAD40100000058"),
+            "服务器喇叭携带真实来源分组、频道及小端角色编号");
+        Bytes(MegaphonePackets.Build(ChatKind.ChannelMegaphone,source),
+            Convert.FromHexString("0D02001F341205000000B2E2CAD43208000000C0AEB0C8B2E2CAD40100000058"),
+            "频道喇叭不能用全0或接收者频道代替来源身份");
 
         // 空发言人 / 空正文 / 空占位都回退成单字节：client 在任一条 len=0 时丢弃整帧。
         var empty = MegaphoneFields(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "", ""));
@@ -300,16 +385,16 @@ internal static class ChatServiceTests
         // 服务器喇叭 0x0E / 频道喇叭 0x0B：str3 由 Builder 保证非空，正文与发言人各自编码。
         var server = MegaphoneFields(MegaphonePackets.Build(ChatKind.ServerMegaphone, "测试2", "喇叭测试"));
         var channel = MegaphoneFields(MegaphonePackets.Build(ChatKind.ChannelMegaphone, "测试2", "喇叭测试"));
-        That(server.Type == 0x0E && channel.Type == 0x0B, "服务器喇叭发 0x0E、频道喇叭发 0x0B");
+        That(server.Type == 11 && channel.Type == 13, "服务器喇叭发11、频道喇叭发13");
         That(server.Speaker == "测试2" && server.Text == "喇叭测试" && server.SpeakerBytes == 5 && server.TextBytes == 8,
             "服务器喇叭 str1=发言人、str2=正文，长度按 CP936 字节数");
         That(channel.Speaker == "测试2" && channel.Text == "喇叭测试" &&
             server.TagBytes >= 1 && channel.TagBytes >= 1,
             "频道喇叭同样带发言人与正文，两种喇叭的 str3 都非空");
         That(server.B == 0 && server.C == 0 && server.D == 0 && server.E == 0,
-            "B/C/D/E 固定 0（频道标签由客户端按收件会话补齐，裸帧显示 Ch. 0 属正常）");
+            "未指定来源的底层诊断构包保留0，正式投递使用MegaphoneText来源身份");
         var measured = MegaphonePackets.Measure(ChatKind.ServerMegaphone, "测试2", "喇叭测试");
-        That(measured.Type == 0x0E && measured.SpeakerBytes == 5 && measured.TextBytes == 8,
+        That(measured.Type == 11 && measured.SpeakerBytes == 5 && measured.TextBytes == 8,
             "Measure 与真实帧一致（投递日志用它记类型与段落长度，不写正文）");
     }
 
@@ -390,10 +475,10 @@ internal static class ChatServiceTests
         That(ItemLinkPackets.SpeakerBytes(speaker).SequenceEqual(Convert.FromHexString("B2E2CAD432")),
             "SpeakerBytes(测试2) = CP936 B2E2CAD432（5 字节）");
         byte[] longBytes = ItemLinkPackets.SpeakerBytes(new string('测', 30));
-        That(longBytes.Length == 32 && ChatText.Encoding.GetString(longBytes) == new string('测', 16),
-            "30 个汉字截到 16 个字符 = 32 字节（0x21 字节上限优先，不切半个汉字）");
-        That(ItemLinkPackets.SpeakerBytes(new string('a', 30)).Length == 0x11,
-            "30 个 ASCII 截到 0x11 = 17 字节（wchar 上限优先）");
+        That(longBytes.Length == 16 && ChatText.Encoding.GetString(longBytes) == new string('测', 8),
+            "17是03BE25F0的字节接收容量，中文尾串最多16字节，不能误放大为33字节");
+        That(ItemLinkPackets.SpeakerBytes(new string('a', 30)).Length == 16,
+            "ASCII尾串也必须小于17字节");
         That(ItemLinkPackets.SpeakerBytes("").SequenceEqual(new byte[] { 0x3F }) &&
             ItemLinkPackets.SpeakerBytes(null).SequenceEqual(new byte[] { 0x3F }),
             "空/缺失名字编码为单字节 ?（字段必填非空）");
@@ -406,7 +491,7 @@ internal static class ChatServiceTests
 
         // 记录为空：退化 0x0C，文本原样（含 0x7F），长度 19。
         var empty = ItemLinkPackets.Design(ChatKind.Normal, 4, speaker, text, null);
-        Bytes(empty.Body, ChatPackets.MessageBytes(ChatKind.Normal, 4, text, out _),
+        Bytes(empty.Body, ChatPackets.MessageBytes(ChatKind.Normal, 4, text, out _, speaker),
             "记录为空时退化 0x0C 正文，文本逐字节原样");
         That(!empty.HyperLink && empty.Degraded && empty.MarkerPairs == 1 && empty.Records == 0 &&
             BinaryPrimitives.ReadUInt32LittleEndian(empty.Body.AsSpan(4)) == 19,
@@ -417,7 +502,7 @@ internal static class ChatServiceTests
         That(ItemLinkPackets.CountLinkPairs(twoLinks, out int twoPairs) && twoPairs == 2,
             "两条相邻链接文本的收尾标记数 = 2");
         var shortfall = ItemLinkPackets.Design(ChatKind.Normal, 4, speaker, twoLinks, record);
-        Bytes(shortfall.Body, ChatPackets.MessageBytes(ChatKind.Normal, 4, twoLinks, out _),
+        Bytes(shortfall.Body, ChatPackets.MessageBytes(ChatKind.Normal, 4, twoLinks, out _, speaker),
             "记录条数少于标记条数时退化 0x0C，文本原样");
         That(!shortfall.HyperLink && shortfall.Degraded && shortfall.MarkerPairs == 2 && shortfall.Records == 1,
             "记录不足：Degraded=true、MarkerPairs=2、Records=1");
@@ -588,9 +673,9 @@ internal static class ChatServiceTests
             var service = new ChatService(store, delivery);
             var dispatch = service.Broadcast(new ChatSend(3, 4, 0, 2, "hi"), Sender());
             That(dispatch.Accepted && dispatch.Recipients == 2, "普通聊天只投同场景在线角色（自己 + 同场景一人）");
-            That(delivery.Notice is { Kind: ChatKind.Normal, Layer: 4, Channel: 10, Text: "hi" },
+            That(delivery.Notice is { Kind: ChatKind.Normal, Layer: 100, Channel: 10, Text: "hi", Origin.Scene.Channel.ServerIndex:2 },
                 "普通聊天通知带请求层 id、发送者频道与实际正文");
-            That(dispatch.LayerFallback, "投给他人时 0x0C 层 id 用发送者兜底，日志必须标 LayerFallback");
+            That(!dispatch.LayerFallback,"正式通知使用真实发言人身份，不再把编号解释为收件人层id");
         }
         {
             // 正文按 CP936 200 字节上限截断后才进通知：下行与 chat_send 日志看到的是同一份文本。
@@ -618,7 +703,8 @@ internal static class ChatServiceTests
             var dispatch = new ChatService(store, delivery).Broadcast(new ChatSend(6, 3, 0, 2, "hi"), Sender(guildId: 7));
             That(dispatch.Accepted && dispatch.Recipients == 2,
                 "公会聊天只投同公会：成员表内且会话快照公会 id 一致（成员表已删/未同步的会话不投）");
-            That(delivery.Notice is { Kind: ChatKind.Guild, Layer: 3, Text: "hi" }, "公会聊天通知首字节 0x06、带正文");
+            That(delivery.Notice is { Kind: ChatKind.Guild, Layer: 100, Named.Mode:ChatMessageType.Guild, Named.Text:"hi" },
+                "公会文本使用带明确名字、分组及公会标志的65/type6");
         }
         {
             var delivery = new Delivery(Recipient("peer", 101, null, Scene(10)));
@@ -636,7 +722,7 @@ internal static class ChatServiceTests
                 Recipient("bystander", 302, null, Scene(10)));
             var dispatch = new ChatService(store, delivery).Broadcast(new ChatSend(0x2E, 2, 300, 2, "hi"), Sender());
             That(dispatch.Accepted && dispatch.Recipients == 1, "悄悄话只投目标角色（同账号其他角色/旁人都不投）");
-            That(delivery.Notice is { Kind: ChatKind.Whisper, Layer: 2, Text: "hi" }, "悄悄话通知首字节 0x2E、带正文");
+            That(delivery.Notice is { Kind: ChatKind.Whisper, Layer: 100, Text: "hi" },"原有角色ID私聊兼容入口仍保留真实发言人");
         }
         {
             var delivery = new Delivery(Recipient("bystander", 302, null, Scene(10)));
@@ -656,14 +742,16 @@ internal static class ChatServiceTests
         [
             Recipient("self", 100, null, Scene(10)),
             Recipient("same-channel", 101, null, Scene(10)),
-            Recipient("other-channel", 102, null, Scene(11))
+            Recipient("other-channel", 102, null, Scene(11)),
+            Recipient("other-server", 103, null, Scene(10) with { Channel = new(3,10) })
         ];
         {
             var delivery = new Delivery(online);
             var dispatch = new ChatService(store, delivery).Broadcast(new ChatSend(11, 0, 67, 2, "hi"), Sender());
-            That(dispatch.Accepted && dispatch.Recipients == 3, "服务器喇叭投全服在线");
-            That(delivery.Notice is { Kind: ChatKind.ServerMegaphone, Layer: 0, Channel: 10,
-                    Megaphone: { Speaker: "发送者", Text: "hi" } },
+            That(dispatch.Accepted && dispatch.Recipients == 3 && delivery.Filter!(online[2]) && !delivery.Filter(online[3]),
+                "服务器喇叭覆盖2分组全部频道，但不得广播到其他服务器分组");
+            That(delivery.Notice is { Kind: ChatKind.ServerMegaphone, Layer: 100, Channel: 10,
+                    Megaphone: { Speaker: "发送者", Text: "hi", Channel.ServerIndex:2, Channel.Number:10, Actor:100 } },
                 "服务器喇叭通知带发言人（角色名）与正文，走 0x76 喇叭页签");
         }
         {
@@ -680,6 +768,14 @@ internal static class ChatServiceTests
             var delivery = new Delivery();
             var dispatch = new ChatService(store, delivery).Broadcast(new ChatSend(9, 0, 0, 2, "hi"), Sender());
             That(!dispatch.Accepted && dispatch.Rejection == "unsupported-type" && delivery.Deliveries == 0, "未定义 type 拒绝且不投递");
+        }
+        {
+            var delivery = new Delivery();
+            var dispatch = new ChatService(store, delivery).Broadcast(new ChatSend(2, 100, 0, 2, "hi"), Sender());
+            That(!dispatch.Accepted && dispatch.Rejection == "not-in-party" && delivery.Deliveries == 0,
+                "队伍聊天没有实际队伍上下文时拒绝，不广播给同场景旁观者");
+            Bytes(ChatPackets.Message(ChatKind.Party,100,"hi","Sender"),
+                Convert.FromHexString("026400000200000068690600000053656E646572"),"队伍通知使用原生type2而非普通3");
         }
 
         That(ChatService.MegaphoneItemId(ChatKind.ServerMegaphone) == 36 && ChatService.MegaphoneItemId(ChatKind.ChannelMegaphone) == 37 &&
@@ -698,21 +794,21 @@ internal static class ChatServiceTests
         // [03][0400][00][04000000] + 54455354
         foreach (var variant in new[] { ChatProbeVariant.L1, ChatProbeVariant.L2, ChatProbeVariant.L3 })
         {
-            Bytes(ChatProbes.Body(variant, 4, "TEST"), Convert.FromHexString("030400000400000054455354"),
+            Bytes(ChatProbes.Body(variant, 4, "TEST"), Convert.FromHexString("03040000040000005445535400000000"),
                 variant + " 正文 = [03][layer][v=0][u32 CP936 字节数][CP936 文本]");
             Bytes(ChatProbes.Body(variant, 4, "TEST"), ChatPackets.Message(ChatKind.Normal, 4, "TEST"),
                 variant + " 对英文文本与生产 builder 逐字节一致");
             Bytes(ChatProbes.Body(variant, 4, "测试中文"), ChatPackets.Message(ChatKind.Normal, 4, "测试中文"),
                 variant + " 对中文文本与生产 builder 逐字节一致");
         }
-        That(ChatProbes.Body(ChatProbeVariant.L1, 4, "TEST").Length == 12,
+        That(ChatProbes.Body(ChatProbeVariant.L1, 4, "TEST").Length == 16,
             "0x0C 诊断正文 = 8 字节头 + 4 字节文本");
         // L3 约定传超长文本：与生产 builder 一样按字符边界截到 255 字节并标记截断。
         byte[] longProbe = ChatProbes.Body(ChatProbeVariant.L3, 4, new string('a', 300), out bool probeCut);
         That(probeCut, "L3 超长文本标记截断");
         Bytes(longProbe, ChatPackets.Message(ChatKind.Normal, 4, new string('a', 300)),
             "L3 超长文本与生产 builder 逐字节一致（含 255 字节截断）");
-        That(longProbe.Length == 8 + ChatPackets.MaxTextBytes, "L3 截断后帧长 = 8 字节头 + 255 字节文本");
+        That(longProbe.Length == 12 + ChatPackets.MaxTextBytes, "L3截断后保留尾串长度头");
 
         // P3E 文本 TEST：A=1、B=1、字符数 4、UTF-16LE 8 字节、CP936 字节数 4、CP936 4 字节。
         // [01000000][01000000][04000000] + 5400450053005400 + [04000000] + 54455354
@@ -822,6 +918,59 @@ internal static class ChatServiceTests
             session.Select(0);
             session.MarkReady();
 
+            var actor = session.CaptureSocialActor()!;
+            PartySnapshot? currentParty = new(1,[new(actor,session.PublicCharacter(actor.Character.Id)!,0)],0,1);
+            session.CurrentParty = () => currentParty;
+            var partyDelivery = new Delivery(Recipient(owner.Account,actor.Character.Id,null,Scene(10)));
+            var partyChat = new ChatService(new Store(),partyDelivery);
+            var partyResult = partyChat.Broadcast(new ChatSend(2,9999,0,2,"hi"),session.ChatOrigin()!,session);
+            var queuedParty = partyDelivery.Notice!;
+            That(partyResult.Accepted && partyResult.Recipients==1 && queuedParty.Layer==actor.Character.Id && queuedParty.Guard!(),
+                "单人队伍从现有会话名册投递，不能冒用请求中的发言人编号");
+            currentParty = currentParty with { Revision = 2 };
+            That(queuedParty.Guard!(),"无成员变化的队伍快照更新不丢弃已排队聊天");
+            session.AdvancePartyMembership();
+            That(!queuedParty.Guard!(),"退出并重新进入队伍后旧成员版本的排队聊天不发布");
+            currentParty = null;
+            That(partyChat.Broadcast(new ChatSend(2,0,0,2,"hi"),session.ChatOrigin()!,session).Rejection=="not-in-party",
+                "离队后不能继续使用旧队伍名册");
+
+            ChatNotice? heldMegaphone = null;
+            session.ChatNoticeArrived = notice => heldMegaphone = notice;
+            var foreignHorn = new ChatNotice(ChatKind.ChannelMegaphone,1,10,
+                Megaphone:new("Speaker","hi") { Channel = new(0,10), Actor = 1 });
+            session.TryDeliverChat(_=>true,foreignHorn);
+            That(!heldMegaphone!.Guard!(),"初筛误放行时，发送前仍拒绝非本频道的频道喇叭");
+            session.TryDeliverChat(_=>true,foreignHorn with { Kind = ChatKind.ServerMegaphone });
+            That(heldMegaphone!.Guard!(),"服务器喇叭在相同分组内不按接收者频道限制");
+            var queuedMegaphone = heldMegaphone;
+            session.TryDeliverChat(_=>true,foreignHorn with { Kind = ChatKind.ServerMegaphone,
+                Megaphone = foreignHorn.Megaphone! with { Channel = new(2,10) } });
+            That(!heldMegaphone!.Guard!(),"即使初筛误放行，服务器喇叭也不能跨服务器分组写出");
+            var origin = session.ChatOrigin()!;
+            var ordinary = new ChatNotice(ChatKind.Normal,origin.CharacterId,origin.ChannelNumber,Text:"hi") { Origin = origin };
+            session.TryDeliverChat(_=>true,ordinary with { Origin = origin with { Scene = origin.Scene with { Map = "other.map" } } });
+            That(!heldMegaphone!.Guard!(),"普通聊天写出前仍校验完整场景，不向其他房间或副本实例泄漏");
+            session.TryDeliverChat(_=>true,ordinary with { Origin = origin with { Scene = origin.Scene with { Channel = new(0,2) } } });
+            That(!heldMegaphone!.Guard!(),"普通消息仍不能在出队时跨频道写入");
+            session.TryDeliverChat(_=>true,ordinary with { Kind = ChatKind.Guild, Origin = origin with { GuildId = 7 } });
+            That(!heldMegaphone!.Guard!(),"公会消息写出前复核当前角色公会，不沿用入队时的旧资格");
+            session.TryDeliverChat(_=>true,ordinary);
+            var queuedOrdinary = heldMegaphone;
+            That(queuedOrdinary!.Guard!(),"合法同场景普通消息可发布");
+            session.ReturnToRoster();
+            That(session.ChatOrigin() is null,"未选择角色不能冒用旧角色发送消息");
+            session.Select(0);
+            That(!queuedMegaphone!.Guard!(),"同连接重新选择同角色后旧喇叭投递失效");
+            That(!queuedOrdinary.Guard!(),"同连接重选后普通聊天旧排队消息也失效");
+            var entering = session.ChatOrigin()!;
+            var heldBeforeEntering = heldMegaphone;
+            bool deliveredEntering = session.TryDeliverChat(_=>true,new(ChatKind.Normal,entering.CharacterId,entering.ChannelNumber,Text:"entering")
+                { Origin = entering, Guard = entering.IsCurrent });
+            That(!session.Ready && entering.IsCurrent!() && !deliveredEntering && ReferenceEquals(heldBeforeEntering,heldMegaphone),
+                "发送来源只需选中频道角色，但接收仍保留原Ready门禁");
+            session.ChatNoticeArrived = null;
+
             using var stop = new CancellationTokenSource();
             using var stream = new MemoryStream();
             var frames = new List<(byte Kind, ushort Opcode, byte[] Body, string Action)>();
@@ -850,10 +999,19 @@ internal static class ChatServiceTests
             }
 
             That(delivery.Deliveries == 3, "L1/L2/L3 前缀文本仍按普通聊天逐条进入正式投递");
-            That(delivery.Notice is { Kind: ChatKind.Normal, Layer: 4, Text: "L3 TEST" },
+            That(delivery.Notice is { Kind: ChatKind.Normal, Layer: 1, Text: "L3 TEST" },
                 "正式投递仍使用普通聊天 0x0C 通知，并带上真正的聊天正文");
             That(frames.All(frame => frame.Action != "chat_probe"), "生产路径不再发送 chat_probe 诊断帧");
             That(context.Session.LastChatLayer == 4, "ChatHandler 记录该连接最近一次聊天层 id");
+            That(!session.Ready && delivery.Notice!.Guard!(),"真实命令分派使用CharacterSelected门禁，不把进入世界阶段当作禁言");
+            ChatProjection.Notice(context,delivery.Notice!);
+            await DrainAsync();
+            That(frames.All(frame=>frame.Action!="chat_message"),"原生聊天投影仍不向未Ready角色写出消息");
+            session.MarkReady();
+            ChatProjection.Notice(context,delivery.Notice!);
+            await DrainAsync();
+            That(frames.Count(frame=>frame.Action=="chat_message")==1,"接收上下文Ready后按原协议正常写出聊天消息");
+            frames.RemoveAll(frame=>frame.Action=="chat_message");
 
             // 服务器喇叭扣减失败（该会话主背包没有喇叭）：不进入投递，也不发任何 0x76 喇叭帧。
             await commands.DispatchAsync(context, new Packet(1, (ushort)CmdPacketType.SEND_MESSAGE, SendBody(11, 0, 67, "喇叭")));
@@ -863,13 +1021,15 @@ internal static class ChatServiceTests
 
             // 投影：带喇叭文本的通知发 0x76（type 0x0E = 服务器喇叭），三段长度按 CP936 字节数。
             ChatProjection.Notice(context, new ChatNotice(ChatKind.ServerMegaphone, 0, 10,
-                Megaphone: new MegaphoneText("ChatA", "hi")));
+                Megaphone: new MegaphoneText("ChatA", "hi") { Channel = new(2,10), Actor = 24 }));
             await DrainAsync();
             var noticeFrame = frames.Single(frame => frame.Action == "chat_megaphone");
-            var expectedMegaphone = MegaphoneBody(0x0E, "ChatA", "hi");
+            var expectedMegaphone = MegaphoneBody(11, "ChatA", "hi");
+            expectedMegaphone[1]=2;expectedMegaphone[3]=10;
+            BinaryPrimitives.WriteUInt16LittleEndian(expectedMegaphone.AsSpan(4),24);
             That(noticeFrame.Opcode == (ushort)NotiPacketType.MEGAPHONE_MSG &&
                 Convert.ToHexString(noticeFrame.Body) == Convert.ToHexString(expectedMegaphone),
-                "服务器喇叭投影为 0x76：type=0x0E、str1=ChatA、str2=hi、str3 非空");
+                "服务器喇叭投影为118/type11，保留来源身份、角色名和正文");
             That(frames.All(frame => frame.Opcode != (ushort)NotiPacketType.AAS_TIPS), "喇叭不再发 0x06AD 公告弹框");
 
             // 投影：普通聊天的 0x0C 带正文，长度是 CP936 字节数（与实测帧同布局）。
@@ -877,7 +1037,7 @@ internal static class ChatServiceTests
             await DrainAsync();
             var messageFrame = frames.Single(frame => frame.Action == "chat_message");
             That(messageFrame.Opcode == (ushort)NotiPacketType.MESSAGE &&
-                Convert.ToHexString(messageFrame.Body) == "0304000008000000B2E2CAD4D6D0CEC4",
+                Convert.ToHexString(messageFrame.Body) == "0304000008000000B2E2CAD4D6D0CEC400000000",
                 "普通聊天投影为 0x0C：正文 = [03][layer][v=0][CP936 字节数][测试中文]");
 
             await context.Reply(ClientFailurePackets.Create(ClientClassChangeError.AdvancementQuestInProgress),
@@ -915,6 +1075,73 @@ internal static class ChatServiceTests
             That(!events.Contains("\"Kind\":\"chat_probe\""), "生产路径不再记录 chat_probe 日志");
             That(events.Contains("\"Kind\":\"chat_send\"") && events.Contains("\"Text\":\"L1 TEST\""),
                 "L1 前缀文本按普通聊天记录 chat_send");
+
+            // 用真实会话索引、投递和发送队列覆盖入城边界，不靠延时推断无消息。
+            using var receivingOwner = owners.Acquire("chat-entry-boundary", () => { });
+            repository.Create(receivingOwner,new NewCharacter("BoundaryRole",point,point));
+            var receiving = new GameSession(repository,towns,receivingOwner);
+            using var receivingStop = new CancellationTokenSource();
+            using var receivingStream = new MemoryStream();
+            var received = new List<byte[]>();
+            await using var receivingSender = new GameConnectionSender(receivingOwner,receivingStream,receivingStop,0,
+                (kind,opcode,_,body,_)=> { if(kind==0 && opcode==12) received.Add(body.ToArray()); });
+            var receivingContext = new GameConnectionContext(new(2,IPAddress.Loopback,receivingStream,receivingStop),
+                receivingOwner,receiving,receivingSender);
+            var online = new OnlineSessionDirectory();
+            online.Register(owner,session); online.Register(receivingOwner,receiving);
+            var broadcast = new ChatService(new Store(),new ChatDelivery(online));
+            session.ChatNoticeArrived = notice=>ChatProjection.Notice(context,notice);
+            receiving.ChatNoticeArrived = notice=>ChatProjection.Notice(receivingContext,notice);
+            async Task CheckBroadcast(string phase,bool shouldReceive)
+            {
+                int before=received.Count;
+                var origin=session.ChatOrigin()!;
+                var result=broadcast.Broadcast(new(3,9999,0,2,"hi"),origin,session);
+                await receivingSender.DrainAsync(); await sender.DrainAsync();
+                That(result.Accepted && result.Recipients==(session.Ready?1:0)+(shouldReceive?1:0),phase+"：投递数量只包含就绪接收者");
+                That(received.Count==before+(shouldReceive?1:0),phase+"：实际写出的广播帧符合接收门禁");
+            }
+            try
+            {
+                await CheckBroadcast("未选择角色",false);
+                receiving.Select(0);
+                That(receiving.GetState()==UserState.EnteringWorld && !receiving.Ready,"选角已装载角色但入城投影尚未完成");
+                await CheckBroadcast("选角加载未MarkReady",false);
+                receiving.MarkReady();
+                await CheckBroadcast("入城完成",true);
+                receiving.ReturnToRoster();
+                await CheckBroadcast("返回选角",false);
+                receiving.Select(0);
+                await CheckBroadcast("同连接重选加载中",false);
+                receiving.MarkReady();
+                await CheckBroadcast("同连接重选完成",true);
+                session.ReturnToRoster(); session.Select(0);
+                await CheckBroadcast("发送者已选择角色但尚未Ready",true);
+                session.MarkReady();
+
+                using var heldStop=new CancellationTokenSource();
+                using var heldStream=new GameSenderBudgetTests.HeldStream();
+                int heldMessages=0;
+                await using var heldSender=new GameConnectionSender(receivingOwner,heldStream,heldStop,0,
+                    (kind,opcode,_,_,_)=> { if(kind==0 && opcode==12) heldMessages++; });
+                var heldContext=new GameConnectionContext(new(3,IPAddress.Loopback,heldStream,heldStop),receivingOwner,receiving,heldSender);
+                receiving.ChatNoticeArrived=notice=>ChatProjection.Notice(heldContext,notice);
+                var held=heldSender.Send(1,ushort.MaxValue,[],"chat_boundary_hold");
+                try
+                {
+                    await heldStream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    var accepted=broadcast.Broadcast(new(3,9999,0,2,"hi"),session.ChatOrigin()!,session);
+                    That(accepted.Recipients==2 && heldSender.PendingBytes>0,"消息在接收者Ready时确实进入发送队列");
+                    receiving.ReturnToRoster(); receiving.Select(0); receiving.MarkReady();
+                }
+                finally { heldStream.Release.TrySetResult(); }
+                await held; await heldSender.DrainAsync();
+                That(heldMessages==0,"排队后回选角并重新就绪，旧角色epoch消息仍不能写入新上下文");
+                var current=broadcast.Broadcast(new(3,9999,0,2,"hi"),session.ChatOrigin()!,session);
+                await heldSender.DrainAsync(); await sender.DrainAsync();
+                That(current.Recipients==2 && heldMessages==1,"重选完成的新消息恢复接收，不遗留禁收状态");
+            }
+            finally { session.ChatNoticeArrived=null; receiving.ChatNoticeArrived=null; }
         }
         finally { Directory.Delete(root, true); }
     }
@@ -1035,7 +1262,7 @@ internal static class ChatServiceTests
             await DrainAsync();
             That(result == CommandResult.Handled && delivery.Deliveries == 1,
                 "0x01A8 分派为 Handled 并进入一次普通聊天投递");
-            That(delivery.Notice is { Kind: ChatKind.Normal, Layer: 7, Text: "", Speaker: "LinkRole" } &&
+            That(delivery.Notice is { Kind: ChatKind.Normal, Layer: 1, Text: "", Speaker: "LinkRole" } &&
                 delivery.Notice.TextBytes is { } noticeBytes &&
                 noticeBytes.SequenceEqual(expectedText) && delivery.Notice.ItemRecords is { } noticeRecords &&
                 noticeRecords.SequenceEqual(expectedRecord),
@@ -1048,10 +1275,10 @@ internal static class ChatServiceTests
             await DrainAsync();
             var messageFrame = frames.Single(frame => frame.Action == "chat_hyperlink");
             That(messageFrame.Opcode == (ushort)NotiPacketType.MESSAGE_HYPER_LINK &&
-                messageFrame.Body.AsSpan().SequenceEqual(HyperLinkBody(3, 7, "LinkRole", expectedText, expectedRecord)),
+                messageFrame.Body.AsSpan().SequenceEqual(HyperLinkBody(3, 1, "LinkRole", expectedText, expectedRecord)),
                 "投影出的 0x172 正文逐字节保留 0x7F 链接文本与 148 字节记录，尾串为发送者角色名，没有 CP936 往返改写");
             That(Convert.ToHexString(messageFrame.Body) ==
-                "0307000013000000" + Convert.ToHexString(expectedText) + "01" + Convert.ToHexString(expectedRecord) +
+                "0301000013000000" + Convert.ToHexString(expectedText) + "01" + Convert.ToHexString(expectedRecord) +
                 "080000004C696E6B526F6C65",
                 "投影帧十六进制：type=3、层 id=7、长度 19、cnt=1、原样记录、尾串 [8][LinkRole]");
 
@@ -1066,7 +1293,7 @@ internal static class ChatServiceTests
             await DrainAsync();
             var degradedFrame = frames.Last(frame => frame.Action == "chat_hyperlink");
             That(degradedFrame.Opcode == (ushort)NotiPacketType.MESSAGE &&
-                degradedFrame.Body.AsSpan().SequenceEqual(ChatPackets.MessageBytes(ChatKind.Normal, 7, twoLinks, out _)),
+                degradedFrame.Body.AsSpan().SequenceEqual(ChatPackets.MessageBytes(ChatKind.Normal, 1, twoLinks, out _, delivery.Notice!.Speaker)),
                 "记录条数少于收尾标记时投影为 0x0C 纯文本（文本原样、无记录段）");
 
             // 非法正文：四种情况都只丢弃并记日志，绝不 CloseConnection，也不投递。
@@ -1160,10 +1387,10 @@ internal static class ChatServiceTests
             using var log = new ServerLog(Path.Combine(root, "Logs"));
             var posted = new List<(ushort Opcode, byte[] Body, string Action)>();
             var target = new ChatProbeConnection(7, session, (opcode, body, action) => posted.Add((opcode, body, action)));
-            string expected = "030900000400000054455354";
+            string expected = "03090000040000005445535400000000";
             string reply = DevelopmentGm.Answer("chat-inject 7 L2 TEST", "chat-inject", repository, owners, _ => null,
                 findConnection: id => id == 7 ? target : null, log: log);
-            That(reply == "OK injected variant=L2 bytes=12 body=" + expected + " connection=7 layer=9",
+            That(reply == "OK injected variant=L2 bytes=16 body=" + expected + " connection=7 layer=9",
                 "chat-inject 回复实际正文、连接号与连接最近层 id");
             That(posted.Count == 1 && posted[0].Action == "gm_chat_inject" &&
                 posted[0].Opcode == (ushort)NotiPacketType.MESSAGE && Convert.ToHexString(posted[0].Body) == expected,
@@ -1196,10 +1423,10 @@ internal static class ChatServiceTests
                 "AAS 超长正文按 600 字节截断，回复标记 (truncated)");
 
             // 0x000C 中文正文：GM 与生产 builder 共用同一段编码，长度按 CP936 字节数。
-            string chineseExpected = "0309000008000000B2E2CAD4D6D0CEC4";
+            string chineseExpected = "0309000008000000B2E2CAD4D6D0CEC400000000";
             string chinese = DevelopmentGm.Answer("chat-inject 7 L2 测试中文", "chat-inject", repository, owners, _ => null,
                 findConnection: id => id == 7 ? target : null, log: log);
-            That(chinese == "OK injected variant=L2 bytes=16 body=" + chineseExpected + " connection=7 layer=9" &&
+            That(chinese == "OK injected variant=L2 bytes=20 body=" + chineseExpected + " connection=7 layer=9" &&
                 posted[^1].Opcode == (ushort)NotiPacketType.MESSAGE &&
                 Convert.ToHexString(posted[^1].Body) == chineseExpected,
                 "chat-inject 中文正文按 CP936 字节数编码，与生产 builder 逐字节一致");
@@ -1208,7 +1435,7 @@ internal static class ChatServiceTests
             string longChat = DevelopmentGm.Answer("chat-inject 7 L3 " + new string('a', 300), "chat-inject",
                 repository, owners, _ => null, findConnection: id => id == 7 ? target : null, log: log);
             That(longChat.EndsWith(" layer=9 (truncated)", StringComparison.Ordinal) &&
-                posted[^1].Body.Length == 8 + ChatPackets.MaxTextBytes &&
+                posted[^1].Body.Length == 12 + ChatPackets.MaxTextBytes &&
                 BinaryPrimitives.ReadUInt32LittleEndian(posted[^1].Body.AsSpan(4)) == ChatPackets.MaxTextBytes,
                 "chat-inject 超长 0x000C 正文按 255 字节截断并在回复标记 (truncated)");
 
@@ -1227,7 +1454,7 @@ internal static class ChatServiceTests
             var fallbackTarget = new ChatProbeConnection(8, fallbackSession, (_, _, _) => { });
             string fallback = DevelopmentGm.Answer("chat-inject 8 L3 TEST", "chat-inject-2", repository, owners, _ => null,
                 findConnection: id => id == 8 ? fallbackTarget : null, log: log);
-            That(fallback == "OK injected variant=L3 bytes=12 body=030000000400000054455354 connection=8 layer=0(fallback)",
+            That(fallback == "OK injected variant=L3 bytes=16 body=03000000040000005445535400000000 connection=8 layer=0(fallback)",
                 "没有聊天层 id 时使用 0 并标注 fallback");
 
             // GM notice：复用在线连接目录（真实 GameSession），按 all/角色名 定向投 0x06AD 公告弹框。

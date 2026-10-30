@@ -26,6 +26,7 @@ AmplificationFileTests.Run();
 AvatarTypeSelectionTests.Run();
 MileageShopFileTests.Run();
 TutorialFileTests.Run();
+ChatEmoticonFileTests.Run();
 RecoveryConsumableTests.Run();
 RecipeFileTests.Run();
 EquipmentEmancipationTests.Run();

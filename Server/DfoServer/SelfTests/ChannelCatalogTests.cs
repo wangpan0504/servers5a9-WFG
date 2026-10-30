@@ -163,8 +163,8 @@ internal static class ChannelCatalogTests
         byte[] player = TownPackets.Player(character, stats, 1, catalog.GameIdentity);
         Bytes(actor.AsSpan(0, 5), [0, 1, 0, 2, 10], "Actor按NOTI1身份进入本地角色表，不能沿用0/0");
         Bytes(player.AsSpan(0, 5), [1, 1, 0, 2, 10], "Player延续Actor的服务器和频道上下文");
-        Bytes(actor.AsSpan(actor.Length - 23), [6, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0],
-            "Actor独立23B尾向量包含真实原属大区且保留其余字段");
+        Bytes(actor.AsSpan(actor.Length - 23), [6, 0, 0, 0, 0, 100, 0, 0, 2, 0, 0, 0, 0, 0, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0],
+            "Actor独立23B尾向量包含城镇血蓝百分比、真实原属大区并保留其余字段");
         Bytes(player.AsSpan(5), TownPackets.Player(character, stats, 1).AsSpan(5), "身份修正不改变Player属性与装备布局");
         That(actor[3] == body[344] && actor[4] == body[346] && player[3] == body[344] && player[4] == body[346],
             "复现原生本地/跨频道比较，登录和角色包选择同一个角色存储上下文");
@@ -179,8 +179,8 @@ internal static class ChannelCatalogTests
                     "变长姓名与城镇/副本状态保留原Actor总长度及独立状态偏移");
                 Bytes(projected.AsSpan(0, 5), [0, 1, 0, server, 11], "头部大区与频道号各自保留");
                 Bytes(projected.AsSpan(projected.Length - 23),
-                    [6, 0, 0, 0, 0, 0, 0, 0, server, 0, 0, 0, 0, 0, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0],
-                    "独立尾向量确认显示位后8B为实际大区，不硬改0配置、不覆盖FF哨兵");
+                    [6, 0, 0, 0, 0, scene == ActorSceneState.Town ? (byte)100 : (byte)0, 0, 0, server, 0, 0, 0, 0, 0, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0],
+                    "独立尾向量确认场景百分比及显示位后8B的实际大区，不硬改0配置、不覆盖FF哨兵");
             }
         }
         Console.WriteLine($"PASS {Count - before} 频道资源字段、原生名称引用与共享身份断言");

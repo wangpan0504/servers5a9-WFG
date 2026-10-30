@@ -29,12 +29,11 @@ internal static class LukeSceneNamespaceTests
             "#cp-luke-scene\0private","#cp-luke-scene\u007fprivate","#cp-luke-scene\tprivate",
             "#cp-luke-scene/1 中文", "#cp-luke-scene/1 "+new string('a',1000)})reserved.Add(Body(text));
         foreach(byte kind in new byte[]{1,3,6,11,13,36,41,46,255})reserved.Add(Body(Receipt,kind));
-        // 声明正文只含根，实际尾部不是分隔符：普通聊天会切掉尾部，分类必须识别该结束边界。
+        // 声明正文只含根、实际仍有尾部：普通解析器拒绝，预留入口仍须独立识别并先行隔离。
         foreach (byte suffix in new byte[] { (byte)'x', (byte)'X', 0x80, 0xff })
         {
             var truncated=Body("#cp-luke-scene").Concat(new byte[] { suffix }).Concat(Encoding.ASCII.GetBytes(Id)).ToArray();
-            That(ChatRequests.TryParse(truncated,out var parsed)&&parsed.Text=="#cp-luke-scene",
-                "对抗样本确实被普通解析器截为保留根");
+            That(!ChatRequests.TryParse(truncated,out _),"普通聊天也拒绝未消费尾部，不以截短正文绕过预留入口");
             reserved.Add(truncated);
         }
         var extra=good.Concat(new byte[]{0x42}).ToArray();reserved.Add(extra);

@@ -52,6 +52,12 @@ internal static class PlayerInteractionTests
         var endpoint = PartyRequests.Endpoint(endpointBody);
         Bytes(PartyPackets.Realtime([(0x1234, 2)]), Convert.FromHexString("013412640002"),
             "城镇队伍HUD按本版Data+35C安装100百分比及真实槽位");
+        var vitalityCharacter = new Character(4, 0, "PartyVitals", 0, new(0, 0, 0, 0), null);
+        byte[] townActor = TownPackets.Actor(vitalityCharacter, 0);
+        byte[] dungeonActor = TownPackets.Actor(vitalityCharacter, 0, sceneState: ActorSceneState.Dungeon);
+        That(townActor[^18] == 100 && dungeonActor[^18] == 0 && townActor.Length == dungeonActor.Length &&
+            townActor.Zip(dungeonActor).Count(pair => pair.First != pair.Second) == 2,
+            "Actor尾部百分比与153使用同一城镇100%合同，副本保持原值；只改变场景位及百分比，不移动字段");
         That(PartyRequests.Leader([1]) == 1, "真实委任121请求读取目标槽位而非角色ID");
         Reject<InvalidDataException>(() => PartyRequests.Leader([]), "委任请求不能缺少槽位");
         Reject<InvalidDataException>(() => PartyRequests.Leader([1, 0]), "委任请求不能携带多余字段");

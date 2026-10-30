@@ -31,8 +31,10 @@ internal static class PacketCompatibilityTests
         Match(selection, "4C0CC901DF0FA44EA4F658D90B0979D1FD45AAC6CE382086FE0EA3757D0D6E72", "selection initial town");
         byte[] actor = TownPackets.Actor(character, 0);
         That(System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(actor.AsSpan(73)) == 20000, "actor默认队伍边框");
-        // #878已把默认边框写入状态区+68；只归一这4B，其余正文继续核对原完整样本。
+        That(actor[^18] == 100,"Actor明确携带城镇队伍血蓝百分比，不能作为保留字节清零");
+        // 固定旧样本只归一已核定的默认边框与城镇血蓝，其他字节仍严格比较。
         Array.Clear(actor, 73, 4);
+        actor[^18] = 0;
         Match(actor, "70C8B1413118DC816BBE1113BDE7E3F7D3CF6BD7B2D489BD5EDD0C0454D27592", "actor excluding corrected default party frame");
         Match(TownPackets.Player(character, new CharacterStatComputer(characters).Compute(character), 0), "F59CE65CDCA7929F745F6E04A6A4618BC00E865D4FA007C14299340D4ED0CEA9", "player");
         // 空历史的固定样本仅增加flags[13700]=1，月轮山显示位不写入角色存档。

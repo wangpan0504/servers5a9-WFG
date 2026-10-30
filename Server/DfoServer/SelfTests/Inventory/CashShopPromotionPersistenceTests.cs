@@ -26,7 +26,7 @@ internal static partial class CashShopPromotionPersistenceTests
 {
     public static void RunCore()
     {
-        That(SqliteMigrations.CurrentVersion == 156, "保留正式1至155，更名卡资格顺延156");
+        That(SqliteMigrations.CurrentVersion >= 156, "保留正式1至155，更名卡资格顺延156");
         int before = Count;
         using var f = new Fixture();
         That(f.Sql.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('cash_shop_promotion_rules','cash_shop_promotion_orders','cash_shop_promotion_progress','cash_shop_promotion_awards')") is 4L,
@@ -287,7 +287,7 @@ internal static partial class CashShopPromotionPersistenceTests
         f.Sql.Execute("DROP TABLE cash_shop_promotion_orders");
         That(f.Sql.Snapshot() == before, "迁移失败保留原钱包角色库存邮件任务技能和持续状态");
         _ = new CharacterRepository(f.Sql.Path);
-        That(StableAssetSnapshot(f.Sql, includeBlacklist: true) == original && f.Sql.Query("PRAGMA user_version") is 156L &&
+        That(StableAssetSnapshot(f.Sql, includeBlacklist: true) == original && Convert.ToInt64(f.Sql.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion &&
             f.Sql.Query("SELECT count(*) FROM characters WHERE selected_skill_tree<>-1") is 0L, "受影响v65布局连续正式迁移及促销154/155，保留黑名单计分持续状态与所有原数据");
         That(f.Sql.Query("SELECT group_concat(sql,'') FROM (SELECT sql FROM sqlite_schema WHERE name LIKE 'cash_shop_promotion_%' ORDER BY name)") is string upgradedSchema && upgradedSchema.Replace("\r\n", "\n", StringComparison.Ordinal) == freshSchema.Replace("\r\n", "\n", StringComparison.Ordinal),
             "新库完整SQL与65到106迁移的四表索引和冻结约束完全一致");
@@ -308,7 +308,7 @@ internal static partial class CashShopPromotionPersistenceTests
             "DROP TABLE cash_shop_promotion_awards; DROP TABLE cash_shop_promotion_progress; DROP TABLE cash_shop_promotion_orders; DROP TABLE cash_shop_promotion_rules; PRAGMA user_version=153");
         string before = StableAssetSnapshot(f.Sql, includeBlacklist: true);
         _ = new CharacterRepository(f.Sql.Path);
-        That(f.Sql.Query("PRAGMA user_version") is 156L && StableAssetSnapshot(f.Sql, includeBlacklist: true) == before &&
+        That(Convert.ToInt64(f.Sql.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion && StableAssetSnapshot(f.Sql, includeBlacklist: true) == before &&
             f.Sql.Query($"SELECT count(*) FROM character_ekern_cycle WHERE character_id={f.Character.Id} AND service_day=20261029 AND normal_clears=2 AND trial_clears=1") is 1L &&
             f.Sql.Query("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('cash_shop_promotion_rules','cash_shop_promotion_orders','cash_shop_promotion_progress','cash_shop_promotion_awards')") is 4L,
             "正式153非空艾肯循环升级156新增促销与空更名资格，原通关与全部旧资产逐字保留");
@@ -323,7 +323,7 @@ internal static partial class CashShopPromotionPersistenceTests
         using (var db = f.Sql.Open()) DatabaseSchemaTests.RemoveSkillTreeExpansionSchema(db);
         f.Sql.Execute("DROP TABLE cash_shop_promotion_awards; DROP TABLE cash_shop_promotion_progress; DROP TABLE cash_shop_promotion_orders; DROP TABLE cash_shop_promotion_rules; ALTER TABLE characters DROP COLUMN blacklist_count; PRAGMA user_version=64");
         _ = new CharacterRepository(f.Sql.Path);
-        That(f.Sql.Query("PRAGMA user_version") is 156L && f.Sql.Query("SELECT max(blacklist_count) FROM characters") is 0L &&
+        That(Convert.ToInt64(f.Sql.Query("PRAGMA user_version")) == SqliteMigrations.CurrentVersion && f.Sql.Query("SELECT max(blacklist_count) FROM characters") is 0L &&
             f.Sql.Query("SELECT count(*) FROM characters WHERE selected_skill_tree<>-1") is 0L &&
             StableAssetSnapshot(f.Sql) == before, "受影响64布局连续补正式迁移与促销154/155，全部旧资产原样且计分默认为0");
         That(f.Sql.Query("SELECT group_concat(sql,'') FROM (SELECT sql FROM sqlite_schema WHERE name LIKE 'cash_shop_promotion_%' ORDER BY name)") is string migrated && migrated.Replace("\r\n", "\n", StringComparison.Ordinal) == fresh.Replace("\r\n", "\n", StringComparison.Ordinal),

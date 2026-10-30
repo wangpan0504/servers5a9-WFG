@@ -25,7 +25,8 @@ internal static class ExperienceConsumableTcpTests
                 { ("Capsule", 49, ExperienceConsumableTests.PercentItem), ("CapsuleRoll", 60, ExperienceConsumableTests.FixedItem),
                   ("CapsuleMap", 16, ExperienceConsumableTests.PercentItem), ("OldBook", 1, 1034),
                   ("MillionBook", 60, 1231), ("TenMilBook", 60, 1232), ("CappedBook", 94, 1232),
-                  ("TownCapsule", 60, 10005340), ("GuideTown", 14, 1034), ("GuideMap", 14, 1034) })
+                  ("TownCapsule", 60, 10005340), ("GuideTown", 14, 1034), ("GuideMap", 14, 1034),
+                  ("EmoteLevel", 19, ExperienceConsumableTests.PercentItem) })
             {
                 var inventory = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65),
                     new(item, GameWorld.Items.ItemKind.Consumable, 2)));
@@ -148,6 +149,15 @@ internal static class ExperienceConsumableTcpTests
             That(repository.LoadCharacter(readOwner, created[7].Slot).Inventory.Find(new(InventoryListType.Main, 65)) is null,
                 "城镇与赛丽亚并集胶囊在房间和公开城镇均可经CMD30消费，不重复扣源");
 
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(created[10].Slot);
+            var packets = Use(peer, created[10], growth.GetLevelExperienceSpan(19) * 10 / 100, 20);
+            var expected = fixture.ExpectedChatEmoticons(peer.Id);
+            if (expected is not null && resources.ChatEmoticons.Eligible(19).Length != resources.ChatEmoticons.Eligible(20).Length)
+                Bytes(packets.Single(packet => packet is { Kind: 0, Opcode: 411 }).Body, expected,
+                    "升级跨过PVF等级门槛后刷新账号聊天表情配置");
         }
         await fixture.StopAsync(); await fixture.StartAsync();
         using (var peer = Open(fixture))

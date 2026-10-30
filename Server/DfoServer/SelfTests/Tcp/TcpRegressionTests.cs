@@ -460,6 +460,8 @@ internal static class TcpRegressionTests
         ("keepalive", KeepaliveTcpTests.RunAsync),
         ("emotion", EmotionTcpTests.RunAsync),
         ("chat", ChatTcpTests.RunAsync),
+        ("chat-emoticon", ChatEmoticonTcpTests.RunAsync),
+        ("packet-compatibility", (_, _, resources) => { PacketCompatibilityTests.Run(resources.Characters); return Task.CompletedTask; }),
         ("luke-scene-namespace", LukeSceneNamespaceTcpTests.RunAsync),
         ("raid-create", RaidCreateTcpTests.RunAsync),
         ("anton-raid", AntonRaidTcpTests.RunAsync),

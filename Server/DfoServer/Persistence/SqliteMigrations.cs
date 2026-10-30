@@ -285,6 +285,8 @@ internal static class SqliteMigrations
         new(154, "商城累计规则期与原子订单", CashShopPromotionSchema.EnsureBase),
         new(155, "商城常驻累计精确前驱衔接", CashShopPromotionSchema.EnsureContinuation),
         new(156, "角色更名卡待改名资格", static (db, tx) => Execute(db, tx, CharacterRenameCardSchema.Definition)),
+        new(157, "账号聊天表情指令", static (db, tx) => Execute(db, tx, ChatEmoticonSchema)),
+        new(158, "账号最近聊天表情", static (db, tx) => Execute(db, tx, RecentEmoticonSchema)),
     ];
 
     static void AddMileageShopState(SqliteConnection db, SqliteTransaction tx)
@@ -1925,6 +1927,9 @@ internal static class SqliteMigrations
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
         RejectPreviousPromotionSchema(db, tx, version);
+        // 仅接管结构精确匹配的兼容库，保留聊天配置并补齐当前正式结构。
+        if (version == 154 && current >= 157 && IsChatEmoticonPreview(db, tx, version)) version = 153;
+        else if (version is 156 or 157 && current >= 158 && IsChatEmoticonPreview(db, tx, version)) version = 155;
         if (current >= 155 && CashShopPromotionSchema.IsPreviousPrivateVersion(db, tx, version)) version = 76;
         // 第三批验收曾用v92保存助战回执，正式v92已用于护石；只识别完整旧组合再补跑。
         if (version == 92 && current >= 98 && IsPartyDungeonPreview(db, tx)) version = 91;
@@ -1990,6 +1995,35 @@ internal static class SqliteMigrations
         }
         ValidateSchema(db, tx);
         tx.Commit();
+    }
+
+    static bool IsChatEmoticonPreview(SqliteConnection db, SqliteTransaction tx, long version)
+    {
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN " +
+            "('cash_shop_promotion_rules','cash_shop_promotion_orders','cash_shop_promotion_progress','cash_shop_promotion_awards')";
+        long promotions = (long)query.ExecuteScalar()!;
+        if (version == 154 && promotions != 0 || version != 154 && promotions != 4) return false;
+        if (version != 154)
+        {
+            query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='character_rename_pending'";
+            if (query.ExecuteScalar() is not 0L) return false;
+        }
+        query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_chat_emoticons'";
+        if (query.ExecuteScalar() is not string sql) return false;
+        static string Normalize(string value) => string.Concat(value.Where(c => !char.IsWhiteSpace(c)))
+            .Replace("IFNOTEXISTS", "", StringComparison.OrdinalIgnoreCase).TrimEnd(';');
+        if (!string.Equals(Normalize(sql), Normalize(ChatEmoticonSchema), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("聊天表情兼容结构不匹配，不能补跑正式迁移");
+        if (version == 157)
+        {
+            query.CommandText = "SELECT sql FROM sqlite_schema WHERE type='table' AND name='account_recent_emoticons'";
+            if (query.ExecuteScalar() is not string recent ||
+                !string.Equals(Normalize(recent), Normalize(RecentEmoticonSchema), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("聊天表情兼容库的最近列表结构不匹配");
+        }
+        return true;
     }
 
     static void RejectPreviousPromotionSchema(SqliteConnection db, SqliteTransaction tx, long version)
@@ -2423,6 +2457,7 @@ internal static class SqliteMigrations
         "SELECT charac_no,selected,cube_type FROM cube_premium LIMIT 0",
         "SELECT account,profile,hotkeys FROM account_hotkey_settings LIMIT 0",
         "SELECT account,bank,quick_chat FROM account_quick_chat LIMIT 0",
+        "SELECT account,emoticon_id,macro FROM account_chat_emoticons LIMIT 0",
         "SELECT character_id,account,dungeon_id,completed,reward_received FROM character_tutorial_state LIMIT 0",
         "SELECT character_id,account,event_id,kind,instance_id,task_attempt,epoch,map_id,subject,experience,before_revision,revision,plan_snapshot FROM character_tutorial_receipts LIMIT 0",
         "SELECT character_id,account,list_type,slot_index,item_uid FROM character_title_book_slots LIMIT 0",
@@ -2596,6 +2631,22 @@ internal static class SqliteMigrations
             bank INTEGER NOT NULL CHECK(bank IN (0,1)),
             quick_chat BLOB NOT NULL CHECK(typeof(quick_chat)='blob' AND length(quick_chat)=300),
             PRIMARY KEY(account,bank)
+        );
+        """;
+
+    internal const string ChatEmoticonSchema = """
+        CREATE TABLE IF NOT EXISTS account_chat_emoticons(
+            account TEXT NOT NULL REFERENCES accounts(account_id),
+            emoticon_id INTEGER NOT NULL CHECK(emoticon_id BETWEEN 1 AND 32767),
+            macro BLOB NOT NULL CHECK(typeof(macro)='blob' AND length(macro)<=259),
+            PRIMARY KEY(account,emoticon_id)
+        );
+        """;
+
+    internal const string RecentEmoticonSchema = """
+        CREATE TABLE IF NOT EXISTS account_recent_emoticons(
+            account TEXT PRIMARY KEY NOT NULL REFERENCES accounts(account_id),
+            entries BLOB NOT NULL CHECK(typeof(entries)='blob' AND length(entries)=72)
         );
         """;
 
