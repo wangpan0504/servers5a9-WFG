@@ -15,7 +15,7 @@ internal static class PvfTokenDecoder
         return tokens;
     }
 
-    internal static string Text(ReadOnlySpan<byte> raw, int dataType, Func<int, string> resolve)
+    internal static string Text(ReadOnlySpan<byte> raw, int dataType, PvfLib.Format.PvfStringPool strings)
     {
         if (dataType == 3)
             return Encoding.Unicode.GetString(raw);
@@ -45,10 +45,14 @@ internal static class PvfTokenDecoder
                     result.Append(' ');
                     break;
                 case 3:
-                    result.Append('\n').Append(resolve(value)).Append('\n');
+                    result.Append('\n');
+                    strings.AppendTo(result, value);
+                    result.Append('\n');
                     break;
                 case 6:
-                    result.Append('`').Append(resolve(value)).Append("` ");
+                    result.Append('`');
+                    strings.AppendTo(result, value);
+                    result.Append("` ");
                     break;
                 // 文本是有损展示；引用及组合数值由调用方通过原始 token 解释。
                 case 5:

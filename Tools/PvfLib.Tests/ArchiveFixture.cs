@@ -13,7 +13,12 @@ internal static class ArchiveFixture
     public static byte[] CreateParts(bool variant, params (string Directory, string Name, int Type, byte[] Bytes)[] files)
         => CreateEntries(variant, files.Select(file => ((string?)file.Directory, file.Name, file.Type, file.Bytes)).ToArray());
 
-    private static byte[] CreateEntries(bool variant, (string? Directory, string Name, int Type, byte[] Bytes)[] files)
+    public static byte[] CreateStringPools(bool variant, byte[] narrowSuffix, byte[] wide,
+        params (string Path, int Type, byte[] Bytes)[] files)
+        => CreateEntries(variant, files.Select(file => ((string?)null, file.Path, file.Type, file.Bytes)).ToArray(), narrowSuffix, wide);
+
+    private static byte[] CreateEntries(bool variant, (string? Directory, string Name, int Type, byte[] Bytes)[] files,
+        byte[]? narrowSuffix = null, byte[]? wide = null)
     {
         using var names = new MemoryStream();
         using var body = new MemoryStream();
@@ -34,7 +39,9 @@ internal static class ArchiveFixture
             Put(groups, i * 8, checked((int)body.Length));
             Put(groups, i * 8 + 4, files[i].Bytes.Length);
         }
-        byte[] pools = [.. new byte[8], .. Pool(names.ToArray(), false), .. Pool(Encoding.Unicode.GetBytes("甲A\0"), true)];
+        if (narrowSuffix is not null)
+            names.Write(narrowSuffix);
+        byte[] pools = [.. new byte[8], .. Pool(names.ToArray(), false), .. Pool(wide ?? Encoding.Unicode.GetBytes("甲A\0"), true)];
         byte[] header = new byte[48];
         Put(header, 0, 0x69706B6E);
         Put(header, 24, files.Length);

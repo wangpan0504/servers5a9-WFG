@@ -213,7 +213,7 @@ public sealed class PvfArchive : IDisposable
         var entry = FindEntry(path);
         if (entry.DataType is not (1 or 3))
             throw new InvalidDataException("PVF 文件不支持文本解码: " + path);
-        return PvfTokenDecoder.Text(ReadEntry(entry), entry.DataType, ResolveString);
+        return PvfTokenDecoder.Text(ReadEntry(entry), entry.DataType, strings!);
     }
 
     public string ResolveString(int value)

@@ -16,6 +16,7 @@ PvfArchiveTests.Run();
 ArchiveIndexTests.Run();
 ArchiveBoundaryTests.Run();
 NumericTextTests.Run();
+StringTextTests.Run();
 DocumentReadDiagnosticsTests.Run();
 ScriptTests.Run();
 ItemModelTests.Run();

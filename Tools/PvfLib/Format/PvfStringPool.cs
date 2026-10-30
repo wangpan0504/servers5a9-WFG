@@ -22,9 +22,41 @@ internal sealed class PvfStringPool
 
     internal string Resolve(int value)
     {
+        ReadOnlySpan<byte> bytes = Locate(value, out bool unicode);
+        if (unicode)
+            return Encoding.Unicode.GetString(bytes);
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            return FallbackEncoding.Value.GetString(bytes);
+        }
+    }
+
+    internal void AppendTo(StringBuilder target, int value)
+    {
+        ReadOnlySpan<byte> bytes = Locate(value, out bool unicode);
+        Encoding encoding = SelectEncoding(bytes, unicode, out int count);
+        // 先完整验证并选择编码，不能把失败的 UTF-8 前缀写入后再追加回退文本。
+        const int InlineChars = 256;
+        if (count > InlineChars)
+        {
+            // 长字符串保留原分配路径，不扩大栈或引入长期持有的大缓冲。
+            target.Append(encoding.GetString(bytes));
+            return;
+        }
+        Span<char> buffer = stackalloc char[InlineChars];
+        int written = encoding.GetChars(bytes, buffer);
+        target.Append(buffer[..written]);
+    }
+
+    private ReadOnlySpan<byte> Locate(int value, out bool unicode)
+    {
+        unicode = (value & 1) != 0;
         if (value < 0)
-            return "";
-        bool unicode = (value & 1) != 0;
+            return [];
         byte[] pool = unicode ? wide : ansi;
         int start = unicode ? value - 1 : value / 2, step = unicode ? 2 : 1;
         if (start >= pool.Length)
@@ -34,15 +66,26 @@ internal sealed class PvfStringPool
             end += step;
         if (end + step > pool.Length)
             throw new InvalidDataException("PVF 字符串未终止");
+        return pool.AsSpan(start, end - start);
+    }
+
+    private static Encoding SelectEncoding(ReadOnlySpan<byte> bytes, bool unicode, out int count)
+    {
         if (unicode)
-            return Encoding.Unicode.GetString(pool, start, end - start);
+        {
+            count = Encoding.Unicode.GetCharCount(bytes);
+            return Encoding.Unicode;
+        }
         try
         {
-            return StrictUtf8.GetString(pool, start, end - start);
+            count = StrictUtf8.GetCharCount(bytes);
+            return StrictUtf8;
         }
         catch (DecoderFallbackException)
         {
-            return FallbackEncoding.Value.GetString(pool, start, end - start);
+            Encoding fallback = FallbackEncoding.Value;
+            count = fallback.GetCharCount(bytes);
+            return fallback;
         }
     }
 
