@@ -165,6 +165,9 @@ internal static class ServerRuntime
         var monsterAi = new MonsterAiConfiguration(options.DataDirectory);
         monsterAi.Reload();
         log.Write("monster_ai_config", new { monsterAi.Settings.Current.Enabled, Rules = monsterAi.Settings.Current.Rules.Count });
+        var dropControl = new DungeonDropConfiguration(options.DataDirectory);
+        dropControl.Reload();
+        log.Write("dungeon_drop_config", new { dropControl.Settings.Current.Enabled, Rules = dropControl.Settings.Current.Rules.Length });
         var expertStores = new ExpertJobStoreBoard();
         var marriageCatalog = GameWorld.Marriage.MarriageCatalog.Load(pvf);
         var presence = new TownPresence(towns, channels.GameIdentity, clock, debugSettings, expertStores,
@@ -507,7 +510,8 @@ internal static class ServerRuntime
             log.Write("startup",new { Stage="Operation Hope rewards",State="complete",Rule=OperationHopeRewardPolicy.Rule });
             var resourceDrops = new DungeonResourceDropPolicy(dropRules, dropCandidates, drops.Get, itemResources.Items.Get,
                 specialDrops, amplificationDrops, materialDrops, harlemEpics, abyssBonuses,
-                new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards);
+                new SleepyHollowMaterialDropPolicy(SleepyHollowRewardCatalog.Load(dungeonCatalog, rooms), itemResources.Items.Get),hopeRewards,dimensionRewards,dropControl.Settings);
+            dropControl.Inspect = new DungeonDropInspection(dungeonCatalog, rooms, resourceDrops, dropControl.Settings).Query;
             passiveDrops = new(dungeonCatalog.Get, itemResources.Items.Get, DungeonDropRuleCatalog.LoadObjects(pvf), dropCandidates, amplificationDrops);
             int epicPermille = 1000;
             string? fragmentRate = Environment.GetEnvironmentVariable("DFO_HELL_EPIC_FRAGMENT_PERMILLE");
@@ -896,7 +900,7 @@ internal static class ServerRuntime
         }
         string DevelopmentCommand(string line)
         {
-            string result = monsterBattleLevels.Answer(line) ?? monsterAi.Answer(line) ?? DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
+            string result = monsterBattleLevels.Answer(line) ?? monsterAi.Answer(line) ?? dropControl.Answer(line) ?? DevelopmentGm.Answer(line, options.DevelopmentAccount, repository, owners, online.Find,
                 mailbox, itemResources.Items, progress, cashShop, debugSettings, events, developmentCatalog,
                 online.FindConnection, log, noticeSender);
             log.Write("gm", new { Ok = result.StartsWith("OK ", StringComparison.Ordinal), Result = result.Length > 180 ? result[..180] : result });

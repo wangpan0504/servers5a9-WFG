@@ -28,9 +28,11 @@ internal sealed record MonsterAiParameter
 
 // 未填写的字段为null：地图规则继承副本默认，副本默认规则或完全没有规则时保持原生。
 internal sealed record MonsterAiRule(uint DungeonId, int? MapId, MonsterAiParameter? Warlike = null, MonsterAiParameter? Sight = null,
-    MonsterAiParameter? MoveSpeed = null, MonsterAiParameter? AttackSpeed = null);
+    MonsterAiParameter? MoveSpeed = null, MonsterAiParameter? AttackSpeed = null,
+    MonsterAiParameter? HitPoints = null, MonsterAiParameter? Defense = null);
 
-internal sealed record MonsterAiProfile(MonsterAiValue Warlike, MonsterAiValue Sight, MonsterAiValue MoveSpeed, MonsterAiValue AttackSpeed)
+internal sealed record MonsterAiProfile(MonsterAiValue Warlike, MonsterAiValue Sight, MonsterAiValue MoveSpeed, MonsterAiValue AttackSpeed,
+    MonsterAiValue HitPoints = default, MonsterAiValue Defense = default)
 {
     public static MonsterAiProfile Native { get; } = new(MonsterAiValue.Native, MonsterAiValue.Native, MonsterAiValue.Native, MonsterAiValue.Native);
 }
@@ -45,7 +47,7 @@ internal sealed class DungeonMonsterAiSnapshot
     public DungeonMonsterAiSnapshot(IEnumerable<MonsterAiRule> source, bool enabled)
     {
         var rows = source.ToArray();
-        if (rows.Length > 1024 || rows.Any(rule => rule is null || rule.DungeonId == 0 || rule.MapId is <= 0 ||
+        if (rows.Length > 1024 || rows.Any(rule => rule is null || rule.DungeonId == 0 && rule.MapId is not null || rule.MapId is <= 0 ||
             !AllParametersValid(rule)) ||
             rows.Select(rule => (rule.DungeonId, rule.MapId)).Distinct().Count() != rows.Length)
             throw new InvalidDataException("怪物AI规则必须有唯一副本/地图身份，四项参数只能设置固定值或倍率之一，且必须为非负有限float32");
@@ -54,19 +56,22 @@ internal sealed class DungeonMonsterAiSnapshot
         rules = rows.ToFrozenDictionary(rule => (rule.DungeonId, rule.MapId));
     }
 
-    static bool AllParametersValid(MonsterAiRule rule) => new[] { rule.Warlike, rule.Sight, rule.MoveSpeed, rule.AttackSpeed }
-        .All(parameter => parameter is null || parameter.IsValid);
+    static bool AllParametersValid(MonsterAiRule rule) => new[] { rule.Warlike, rule.Sight, rule.MoveSpeed, rule.AttackSpeed,
+        rule.HitPoints, rule.Defense }.All(parameter => parameter is null || parameter.IsValid) &&
+        rule.HitPoints?.Value is null && rule.Defense?.Value is null;
 
     // 地图规则逐字段覆盖副本默认；没有任何匹配时四项全部原生。
     public MonsterAiProfile Resolve(uint dungeon, int map)
     {
         rules.TryGetValue((dungeon, null), out var fallback);
         rules.TryGetValue((dungeon, map), out var exact);
-        return new(Field(exact?.Warlike, fallback?.Warlike), Field(exact?.Sight, fallback?.Sight),
-            Field(exact?.MoveSpeed, fallback?.MoveSpeed), Field(exact?.AttackSpeed, fallback?.AttackSpeed));
+        rules.TryGetValue((0, null), out var global);
+        return new(Field(exact?.Warlike, fallback?.Warlike, global?.Warlike), Field(exact?.Sight, fallback?.Sight, global?.Sight),
+            Field(exact?.MoveSpeed, fallback?.MoveSpeed, global?.MoveSpeed), Field(exact?.AttackSpeed, fallback?.AttackSpeed, global?.AttackSpeed),
+            Field(exact?.HitPoints, fallback?.HitPoints, global?.HitPoints), Field(exact?.Defense, fallback?.Defense, global?.Defense));
         // 非空对象本身也是明确配置，不能用“里面没有数字”判断为缺失。
-        static MonsterAiValue Field(MonsterAiParameter? first, MonsterAiParameter? second) =>
-            (first ?? second)?.Resolve() ?? MonsterAiValue.Native;
+        static MonsterAiValue Field(MonsterAiParameter? first, MonsterAiParameter? second, MonsterAiParameter? third) =>
+            (first ?? second ?? third)?.Resolve() ?? MonsterAiValue.Native;
     }
 }
 

@@ -36,6 +36,16 @@ internal static partial class FormalDungeonTcpTests
         CaptureAi(out var reloaded);
         That(BinaryPrimitives.ReadSingleLittleEndian(reloaded.AsSpan(28)) == 70f && U32(reloaded, 4) == 1,
             "GM重载后新连接使用新参数，私有包序号按连接重新从1开始");
+        Write("{\"Enabled\":true,\"Rules\":[{\"DungeonId\":0,\"HitPoints\":{\"Multiplier\":3},\"Defense\":{\"Multiplier\":2}}]}");
+        Reload(true);
+        var expandedMap = CaptureAi(out var expanded);
+        That(expanded.Length == 72 && U32(expanded, 0) == 0x3249414D && U32(expanded, 8) == 3 &&
+            U32(expanded, 12) == U32(expandedMap, 14) && U32(expanded, 56) == 2 &&
+            BinaryPrimitives.ReadSingleLittleEndian(expanded.AsSpan(60)) == 3 && U32(expanded, 64) == 2 &&
+            BinaryPrimitives.ReadSingleLittleEndian(expanded.AsSpan(68)) == 2,
+            "全图规则在真实入场生成MAI2，血防值与正式房间身份一致");
+        Write("{\"Enabled\":true,\"Rules\":[{\"DungeonId\":3,\"Warlike\":{\"Value\":70}}]}");
+        Reload(true);
         Write("{\"Enabled\":true,\"Rules\":[{\"DungeonId\":3,\"Warlike\":{\"Value\":70}}],\"Typo\":1}");
         Reload(false);
         CaptureAi(out var kept);

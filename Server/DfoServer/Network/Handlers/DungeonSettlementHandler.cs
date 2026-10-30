@@ -524,6 +524,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             if (retry.Monsters.Altar is not null)
             {
                 await context.Notify(NotiPacketType.BLOOD_INFO, DungeonAltarPackets.Information(retry.Entry), "formal_altar_retry_information", RetryGuard);
+                await MonsterAiProjection.SendAsync(context, retry, "formal_altar_retry_monster_ai", RetryGuard);
                 await context.Notify(NotiPacketType.START_BLOOD_MAP, DungeonAltarPackets.StartMap(retry.Entry), "formal_altar_retry_map", RetryGuard);
                 if (retry.SpecialEntry is { Gold: > 0 })
                     await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(retry.Character.Inventory,
