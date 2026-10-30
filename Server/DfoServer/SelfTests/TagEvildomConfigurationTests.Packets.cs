@@ -67,6 +67,15 @@ internal static partial class TagEvildomConfigurationTests
             });
             Bytes(TagEvildomPackets.CharacterInfo(101, standby with { Learning = standby.Learning with { SelectedTree = selected } }, attributes, DateTimeOffset.FromUnixTimeSeconds(1700000000)), expected,
                 "1394独立逐字段预期验证真实UID/备用姓名/属性/双称号/真实当前树SP和稳定skillSlot，不混另一树也不写未开通FF");
+            var shieldDeck = new DfoServer.Game.Inventory.Models.KnightShieldDeck([101, 0, 102, 0, 0]);
+            byte[] expectedShield = (byte[])expected.Clone();
+            BinaryPrimitives.WriteInt32LittleEndian(expectedShield.AsSpan(expectedShield.Length - 36), 101);
+            BinaryPrimitives.WriteInt32LittleEndian(expectedShield.AsSpan(expectedShield.Length - 28), 102);
+            var currentStandby = standby with { Learning = standby.Learning with { SelectedTree = selected } };
+            Bytes(TagEvildomPackets.CharacterInfo(101, currentStandby, attributes, DateTimeOffset.FromUnixTimeSeconds(1700000000), shieldDeck),
+                expectedShield, "TAG旧盾只读推导在原生既有20B位置写入，不追加字段或改变其它属性");
+            Bytes(TagEvildomPackets.CharacterInfo(101, currentStandby with { Inventory = standby.Inventory with { ShieldDeck = shieldDeck } },
+                attributes, DateTimeOffset.FromUnixTimeSeconds(1700000000)), expectedShield, "TAG持久化盾配置同样按原位编码");
         }
         Reject<InvalidDataException>(() => TagEvildomPackets.CharacterInfo(101, standby with { Learning = CharacterLearningState.Uninitialized }, attributes,
             DateTimeOffset.FromUnixTimeSeconds(1700000000)), "未初始化技能不以假SP/空树冒充TAG完整角色资料");

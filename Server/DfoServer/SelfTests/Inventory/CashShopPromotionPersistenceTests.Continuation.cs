@@ -160,7 +160,7 @@ internal static partial class CashShopPromotionPersistenceTests
             f.Sql.Query("SELECT count(*) FROM characters WHERE selected_skill_tree<>-1") is 0L &&
             (string)f.Sql.Query("SELECT business_snapshot FROM cash_shop_promotion_orders")! == business &&
             f.Sql.Query("SELECT count(*) FROM cash_shop_promotion_rules WHERE rule_kind=0 AND carry_rules_snapshot IS NULL") is 1L,
-            "非空私有77升级155只补规则元数据，订单资格原快照/UID/累计/钱包全部逐字保留");
+            "非空私有77升级156补规则元数据与空盾配置，订单资格原快照/UID/累计/钱包全部逐字保留");
         f.Configuration = new(CashShopPromotionTests.PilotRules(), true); f.Rules = f.Configuration.Rules; f.Catalog = f.MakeCatalog(true);
         That(f.Store.Commit(f.Owner, f.Plan(1), f.Now).Progress.Count == 33,
             "非空私有77升级后原v1正常购买接原32，不清零或重算历史");

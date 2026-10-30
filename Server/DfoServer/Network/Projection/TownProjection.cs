@@ -22,10 +22,13 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null,
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
     MarriageProjection? marriage = null, ServerEventService? events = null, MileageShopCatalog? mileageShop = null,
-    Func<CashShopPromotionCatalog>? promotionCatalog = null, CashShopPromotionPageService? promotionPages = null, ItemCatalog? items = null)
+    Func<CashShopPromotionCatalog>? promotionCatalog = null, CashShopPromotionPageService? promotionPages = null, ItemCatalog? items = null,
+    DfoServer.Game.Inventory.Services.InventoryKnightShieldService? knightShields = null)
 {
     const ushort JonathanVisibleEvent = 2395;
     internal bool MileageAvailable => mileageShop?.Available == true;
+    internal DfoServer.Game.Inventory.Models.KnightShieldDeck KnightShieldDeck(Character character) =>
+        knightShields?.EffectiveDeck(character) ?? character.Inventory.ShieldDeck;
 
     internal async Task ServerEventsAsync(GameConnectionContext context, Func<bool>? canSend = null,
         long? minimumPromotionRevision = null)
@@ -146,6 +149,10 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         await context.Notify(NotiPacketType.EQUIPMENT_RENTAL_LIST, RentalPackets.State(c.Inventory, DateTimeOffset.UtcNow), "rental_state_initialize");
         // 空历史也须初始化月轮山显示标记；后续所有356均由同一Builder保留它。
         await context.Notify(NotiPacketType.CLEAR_QUEST_LIST, TownPackets.CompletedQuests(c), "completed_quests");
+        // 本人Player已建立后再发送，023D0060要求当前角色及盾牌UI对象均存在。
+        if (c.Job == DfoServer.Game.Inventory.Services.InventoryKnightShieldService.Job)
+            await context.Notify(NotiPacketType.SEND_DECK_INFO, KnightShieldPackets.Deck(KnightShieldDeck(c)),
+                "knight_shield_deck_initialize");
         if (c.Learning.Initialized)
             await context.Notify(NotiPacketType.SKILLINFO, SkillPackets.Initialized(context.Session.ReadSkillLearning(c)), "skill_info");
         if (c.Learning.ExpertContractExpiresAt > 0)

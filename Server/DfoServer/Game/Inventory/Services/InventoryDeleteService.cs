@@ -44,6 +44,8 @@ internal static class InventoryDeleteService
     }
     public static InventoryResult Plan(InventorySnapshot before, InventorySlot position, int value, int count)
     {
+        if (before.ShieldDeck.Items[0] != 0 && position == InventoryKnightShieldService.MainSlot)
+            return InventoryResult.Reject();
         var item = before.Find(position);
         if (!TryDelete(item, value, count, out var remaining))
             return InventoryResult.Reject();

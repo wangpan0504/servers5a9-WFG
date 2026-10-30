@@ -143,7 +143,8 @@ internal sealed class ImperialArenaProjection(IImperialArenaStore store, IImperi
             var standby = TagEvildomAppearance.Capture(pair.Standby, now);
             bool PairGuard() => appearance.Matches(pair.Primary, Now) && standby.Matches(pair.Standby, Now) &&
                 context.Session.CanPublishImperialArenaCharacters(Store, pair);
-            var body = TagEvildomPackets.CharacterInfo(snapshot.CharacterId, pair.Standby, stats.Compute(pair.Standby), now);
+            var body = TagEvildomPackets.CharacterInfo(snapshot.CharacterId, pair.Standby, stats.Compute(pair.Standby), now,
+                town.KnightShieldDeck(pair.Standby));
             await context.Notify(NotiPacketType.TAG_TOURNAMENT_TEAM_INFO, ImperialArenaPackets.ActiveTeam(snapshot), "imperial_arena_active_team",
                 () => { bool accepted = PairGuard(); metadataSent |= accepted; return accepted; });
             bool sent = false;
