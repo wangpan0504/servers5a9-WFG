@@ -9,7 +9,7 @@ internal static class ClearAvatarPackets
         index ??= new(inventory);
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
-        // 028697E0在count=11时先清旧表，02869DB0将来源格减12后查本人装扮包裹。
+        // 028697E0逐行读取u8部位、u16来源格；写成u32会使后续部位全部错位。
         writer.Write((byte)11);
         for (byte slot = 0; slot < 11; slot++)
         {
@@ -19,7 +19,7 @@ internal static class ClearAvatarPackets
             bool valid = source is { Avatar: not null, Position.List: InventoryListType.Avatar } &&
                 source.Core.ItemId == detail!.ClearAvatarId;
             writer.Write(slot);
-            writer.Write(valid ? checked(source!.Position.Index + 12) : 0);
+            writer.Write(valid ? checked((ushort)(source!.Position.Index + 12)) : (ushort)0);
         }
         return stream.ToArray();
     }

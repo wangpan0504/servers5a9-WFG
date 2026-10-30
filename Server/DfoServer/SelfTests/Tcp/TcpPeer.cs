@@ -1124,8 +1124,8 @@ internal sealed partial class TcpPeer : IDisposable
         }
         var avatars = Expect(0, 13);
         CloneAvatarSources = Expect(0, 1449).Body;
-        TestCheck.That(CloneAvatarSources.Length == 56 && CloneAvatarSources[0] == 11 &&
-            Enumerable.Range(0, 11).All(index => CloneAvatarSources[1 + index * 5] == index),
+        TestCheck.That(CloneAvatarSources.Length == 34 && CloneAvatarSources[0] == 11 &&
+            Enumerable.Range(0, 11).All(index => CloneAvatarSources[1 + index * 3] == index),
             "装扮包裹初始化后完整恢复十一槽来源表，清除上一角色的关联状态");
         var pets = Expect(0, 13);
         var medals = Expect(0, 13);

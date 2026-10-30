@@ -15,6 +15,7 @@ internal static class ClearAvatarTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         ClearAvatarTests.RunResources(resources.Characters, resources.ItemResources.Items);
+        ClearAvatarTests.RunAllSourceTemplates(resources.Archive, resources.ItemResources.Items);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "clear-avatar"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         int originalCoat = resources.Characters.Get(0).DefaultAvatarEquipment[3];
@@ -206,7 +207,7 @@ internal static class ClearAvatarTcpTests
             for (byte slot = 0; slot < 11; slot++)
             {
                 w.Write(slot);
-                w.Write(slot == linkedSlot && bagSlot >= 0 ? bagSlot + 12 : 0);
+                w.Write((ushort)(slot == linkedSlot && bagSlot >= 0 ? bagSlot + 12 : 0));
             }
         });
         static void Verify(byte[] actor, byte[] player, string name, short slot, int physical, int appearance, ushort color, ushort secondColor = 8)
