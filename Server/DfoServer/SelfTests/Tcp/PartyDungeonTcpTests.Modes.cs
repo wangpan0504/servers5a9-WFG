@@ -15,6 +15,7 @@ internal static partial class PartyDungeonTcpTests
 {
     internal static async Task RunQuestAndHellAsync(ServerOptions source,string root,TcpTestResources resources)
     {
+        HellApcFactionTests.RunResources(resources);
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"party-modes"),resources:resources);
         await fixture.StartAsync();
         foreach (var (questId,dungeonId) in new (ushort,uint)[] { (5934,291100318),(6032,291100319),(3842,191) })
