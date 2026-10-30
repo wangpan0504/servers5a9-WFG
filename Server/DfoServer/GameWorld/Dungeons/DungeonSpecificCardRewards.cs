@@ -23,7 +23,7 @@ internal static class DungeonSpecificCardRewards
                 seen = inside = true;
             }
             else if (tag == "[/dungeon_index specific reward rate]") inside = false;
-            else if (inside && tag == "[dungeon type]" && at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 45 or 72 or 75 or 76 })
+            else if (inside && tag == "[dungeon type]" && at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 45 or 71 or 72 or 75 or 76 })
             {
                 int start = at + 2;
                 at = start;

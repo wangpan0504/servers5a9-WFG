@@ -9,7 +9,7 @@ internal enum ClearRewardSectionUse
     NotGranted
 }
 
-// 价格与强袭段沿用原解析器；副本专表只消费类型72的黎明裂缝默认行，其余不追加额外物品。
+// 专用翻牌沿既有策略消费默认行；未解释的特殊清图段不追加额外物品。
 internal static class ClearRewardSections
 {
     public const string Path = "etc/itemdropinfo_clearreward.etc";
@@ -58,9 +58,9 @@ internal static class ClearRewardSections
             foreach (string parent in stack)
                 if (parent is "gold card cost table" or "dungeon index privilege service reward rate")
                     insideRead = true;
-            bool dawn = name == "dungeon type" && stack.Contains("dungeon_index specific reward rate") &&
-                at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 72 };
-            var use = insideRead || dawn ? ClearRewardSectionUse.ReadAlready
+            bool specific = name == "dungeon type" && stack.Contains("dungeon_index specific reward rate") &&
+                at + 1 < tokens.Count && tokens[at + 1] is { Type: 0, Value: 45 or 71 or 72 or 75 or 76 };
+            var use = insideRead || specific ? ClearRewardSectionUse.ReadAlready
                 : name is "gold card cost table" or "dungeon index privilege service reward rate"
                     ? ClearRewardSectionUse.ReadAlready : name == "dungeon_index specific reward rate"
                         ? ClearRewardSectionUse.PartlyRead : ClearRewardSectionUse.NotGranted;

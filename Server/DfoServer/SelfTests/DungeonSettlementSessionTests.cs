@@ -35,6 +35,7 @@ internal static class DungeonSettlementSessionTests
         var quests = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
         DungeonSpecificCardRewardsTests.RunCosmoResources(towns, pvf, characters, itemResources, quests, learning);
         DungeonSpecificCardRewardsTests.RunOrdinarySelectionResources(towns, pvf, characters, itemResources, quests, learning);
+        DungeonSpecificCardRewardsTests.RunTayberrsResources(towns, pvf, characters, itemResources, quests, learning);
         var clear = global::DfoServer.Testing.SelfTestCatalogs.ClearExperience(pvf);
         var definition = dungeons.Get(3);
         var maps = definition.Mazes.Single(maze => maze.ConnectsQuest(3145)).MapSpecification!;

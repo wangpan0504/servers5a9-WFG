@@ -83,6 +83,7 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         // raid normal dungeon，但没有入场券，也不在类型 45 专表里。缺行时继续走下面的普通基准等级翻牌，
         // 不借用团本魔能石，也不把 NotSupportedException 抛出连接循环。
         if (dungeon.DungeonType == "crackofdaybreak dungeon" || dungeon.IsOperationHope || dungeon.IsNormalFiendwar ||
+            string.Equals(dungeon.WarriorsDungeon, "Tayberrs", StringComparison.OrdinalIgnoreCase) ||
             dungeon.IsOrdinaryAnton && (prices is null || dungeon.OrdinaryEntryTicket is not null ||
                 prices.SpecificRewards.ContainsKey(dungeon.Id)))
         {
