@@ -197,6 +197,8 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
                 learning is null ? null : id => learning.Get(c.Job, id).DefaultCommand), "skill_commands_after_scene");
         if (c.Job == 9 && c.Learning.Initialized)
             await context.Notify(NotiPacketType.COMBO_SKILL_INFO, SkillPackets.Combos(context.Session.ReadSkillLearning(c)), "skill_combo_initialize");
+        if (learning is not null)
+            await SkillGuideProjection.PublishAsync(context, c, learning);
         if (settings is not null && settingReceipt is not null)
             await settings.InitializeAsync(context, settingReceipt);
         if (quests is not null)

@@ -5,7 +5,8 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection;
 
-internal sealed class CharacterLevelProjection(CharacterStatComputer stats, QuestProjection? quests = null)
+internal sealed class CharacterLevelProjection(CharacterStatComputer stats, QuestProjection? quests = null,
+    DfoServer.GameWorld.Characters.SkillLearningCatalog? learning = null)
 {
     public Task PlayerAsync(GameConnectionContext context, Character committed, string action, Func<bool> canSend) =>
         context.Notify(NotiPacketType.USERINFO,
@@ -39,6 +40,9 @@ internal sealed class CharacterLevelProjection(CharacterStatComputer stats, Ques
             else
                 await SkillProjection.PublishAsync(context, committed, action + "_skills", action + "_combo", canSend);
         }
+        if (learning is not null && previousLevel < DfoServer.Game.Skills.SkillGuidePolicy.EndLevel &&
+            committed.Level >= DfoServer.Game.Skills.SkillGuidePolicy.EndLevel)
+            await SkillGuideProjection.PublishAsync(context, committed, learning, canSend);
         if (quests is not null)
             await quests.RefreshAsync(context, committed, canSend, restoreCompletedQuests);
     }

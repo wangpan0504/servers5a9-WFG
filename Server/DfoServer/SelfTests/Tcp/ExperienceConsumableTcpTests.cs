@@ -25,7 +25,7 @@ internal static class ExperienceConsumableTcpTests
                 { ("Capsule", 49, ExperienceConsumableTests.PercentItem), ("CapsuleRoll", 60, ExperienceConsumableTests.FixedItem),
                   ("CapsuleMap", 16, ExperienceConsumableTests.PercentItem), ("OldBook", 1, 1034),
                   ("MillionBook", 60, 1231), ("TenMilBook", 60, 1232), ("CappedBook", 94, 1232),
-                  ("TownCapsule", 60, 10005340) })
+                  ("TownCapsule", 60, 10005340), ("GuideTown", 14, 1034), ("GuideMap", 14, 1034) })
             {
                 var inventory = candidate.Inventory.Items.Add(new(0, new(InventoryListType.Main, 65),
                     new(item, GameWorld.Items.ItemKind.Consumable, 2)));
@@ -64,6 +64,25 @@ internal static class ExperienceConsumableTcpTests
             Use(peer, after, growth.GetLevelExperienceSpan(50) * 10 / 100, 50);
             before = fixture.Snapshot(); peer.Send(30, [65, 0]); peer.Expect(1, 30, [0, 19, 0]); peer.Barrier();
             That(fixture.Snapshot() == before, "同槽连续消费到空后，不重用上次增量响应");
+        }
+        foreach (int index in new[] { 8, 9 })
+        {
+            using var peer = Open(fixture);
+            var before = created[index];
+            peer.Select(before.Slot);
+            That(peer.SkillGuideInfo.Length > 0 && peer.SkillGuideInfo.All(body =>
+                Enumerable.Range(0, body[0]).All(row => body[3 + row * 3] == 0)), "14级选角完整恢复技能引导");
+            if (index == 9) { FormalDungeonTcpTests.EntryTown(peer); FormalDungeonTcpTests.Enter(peer); FormalDungeonTcpTests.Load(peer); }
+            var packets = Use(peer, before, 100, 15);
+            var ids = resources.Learning.SkillIds(before.Job);
+            var guides = packets.Where(packet => packet is { Kind: 0, Opcode: 1497 }).ToArray();
+            That(guides.Length == (ids.Count + 254) / 255, "城镇及副本14升15均完整刷新所有职业技能引导");
+            foreach (var pair in guides.Zip(ids.Chunk(255)))
+                Bytes(pair.First.Body, Build(writer =>
+                {
+                    writer.Write(checked((byte)pair.Second.Length));
+                    foreach (ushort id in pair.Second) { writer.Write(id); writer.Write((byte)5); }
+                }), "跨15级通知逐项为真实完整u16技能编号及停止次数5");
         }
         fixture.Sql($"CREATE TRIGGER capsule_tcp_abort AFTER UPDATE OF level ON characters WHEN NEW.id={created[1].Id} BEGIN SELECT RAISE(ABORT,'capsule tcp rollback'); END");
         string failed;

@@ -61,14 +61,14 @@ internal static class GuildCargoTcpTests
             """, masterId, peerId, foreignId);
         await fixture.StartAsync();
         using var master = Open(fixture);
-        EnterResumed(master);
+        EnterResumed(master, fixture);
         using var peer = Open(fixture, "20001");
-        EnterResumed(peer);
+        EnterResumed(peer, fixture);
         // 先等新连接完成Join，再确认旧连接队列；跨连接通知不以另一连接的ACK作为完成条件。
         peer.Barrier(packet => SameGuildPresence(peer, packet, masterId));
         master.Barrier(packet => SameGuildPresence(master, packet, peerId));
         using var foreign = Open(fixture, "20002");
-        var visible = EnterResumed(foreign);
+        var visible = EnterResumed(foreign, fixture);
         That(!visible.Contains(masterId) && !visible.Contains(peerId), "相同guildagit地图中另一个公会不收到先进入成员的Actor");
         master.Barrier(packet =>
         {
@@ -165,7 +165,7 @@ internal static class GuildCargoTcpTests
             "入厅屏障仅接收指定同会角色的Actor、状态、地区和位置，不跳过其他通知");
     }
 
-    static HashSet<ushort> EnterResumed(TcpPeer peer)
+    static HashSet<ushort> EnterResumed(TcpPeer peer, TcpTestFixture fixture)
     {
         // 正式原生换频道恢复路径保留已提交城镇；不通过GM移动或伪造Session准入。
         peer.Send(4, Build(writer => writer.Write((ushort)0)));
@@ -181,6 +181,12 @@ internal static class GuildCargoTcpTests
                 // 武器、伤害字体、技能插画与恒有原生默认20000的组队头像框；本夹具角色没有即时表情条目，服务端不发该类别。
                 peer.Expect(0, 24);
                 peer.Expect(0, 19);
+                foreach (var ids in fixture.SkillGuideIds(0).Chunk(255))
+                    peer.Expect(0, 1497, Build(writer =>
+                    {
+                        writer.Write(checked((byte)ids.Length));
+                        foreach (ushort id in ids) { writer.Write(id); writer.Write((byte)5); }
+                    }));
                 // 19之后是角色设置回放：本夹具未保存账号设置与键位，服务端只补发非默认的390，173/454不出现（同9f6b45e4）。
                 peer.Expect(0, 390);
                 peer.Expect(0, 21);

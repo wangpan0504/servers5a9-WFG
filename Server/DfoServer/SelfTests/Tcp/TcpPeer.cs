@@ -48,6 +48,7 @@ internal sealed partial class TcpPeer : IDisposable
     public byte[] PvpMissions { get; private set; } = [];
     internal int PvpMissionRewardBatches { get; set; }
     public byte[] SkillInfo { get; private set; } = [];
+    public byte[][] SkillGuideInfo { get; private set; } = [];
     public byte[] SceneSkillInfo { get; private set; } = [];
     public byte[] AvailableQuests { get; private set; } = [];
     public byte[] CompletedQuestHistory { get; private set; } = [];
@@ -1313,6 +1314,15 @@ internal sealed partial class TcpPeer : IDisposable
                     "场景后仅可补默认指令，完整两树余额、绑定、等级与已保存指令保持");
             }
             if (combos is not null) Expect(0, 447, combos);
+            var guideFixture = fixture ?? throw new InvalidOperationException("技能引导回放必须核对实际选中角色");
+            var guideCharacter = guideFixture.Query("SELECT job,level FROM characters WHERE id=$p0", Id).Single();
+            var guideIds = guideFixture.SkillGuideIds(Convert.ToByte(guideCharacter[0]));
+            byte guideCount = Convert.ToByte(guideCharacter[1]) >= 15 ? (byte)5 : (byte)0;
+            SkillGuideInfo = guideIds.Chunk(255).Select(ids => Expect(0, 1497, Build(writer =>
+            {
+                writer.Write(checked((byte)ids.Length));
+                foreach (ushort id in ids) { writer.Write(id); writer.Write(guideCount); }
+            })).Body).ToArray();
             var expectedSettings = (settings ?? []).ToList();
             if (!expectedSettings.Any(option => option.Opcode == 390))
             {

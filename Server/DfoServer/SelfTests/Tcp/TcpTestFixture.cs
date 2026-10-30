@@ -21,6 +21,18 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     public ServerOptions Options { get; private set; }
     public DateTimeOffset UtcNow => (clock ?? TimeProvider.System).GetUtcNow();
 
+    readonly Dictionary<byte, ushort[]> skillGuideIds = new();
+    internal IReadOnlyList<ushort> SkillGuideIds(byte job)
+    {
+        if (resources is not null) return resources.Learning.SkillIds(job);
+        if (skillGuideIds.TryGetValue(job, out var cached)) return cached;
+        using var archive = PvfLib.PvfArchive.Open(pvfSource);
+        var ids = PvfLib.PvfScript.List(archive.ReadText("skill/" + DfoServer.GameWorld.Characters.SkillLearningCatalog.Lists[job]))
+            .Select(entry => checked((ushort)entry.Key)).Order().ToArray();
+        skillGuideIds[job] = ids;
+        return ids;
+    }
+
     internal bool HasIncompleteHellQuest(ushort characterId)
     {
         var towns = townCatalog ?? resources?.Towns ?? throw new InvalidOperationException("选图预期需要本轮共享城镇资源");
