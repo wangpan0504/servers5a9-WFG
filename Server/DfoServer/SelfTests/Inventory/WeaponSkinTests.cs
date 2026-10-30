@@ -326,8 +326,12 @@ internal static class WeaponSkinTests
             ([], 0, 0)
         };
         foreach (var sample in cases)
+        foreach (var effect in new (byte Level, byte Amplify)[] { (0, 0), (10, 0), (12, 3), (31, 4) })
         {
-            var character = role with { Inventory = new([.. sample.Items]) { Skins = new([32000], sample.Skin) } };
+            var equipment = sample.Items.Select(item => item.Position.Index == 12
+                ? item with { Core = item.Core with { Attr = effect.Level, AmplifyType = effect.Amplify } }
+                : item).ToArray();
+            var character = role with { Inventory = new([.. equipment]) { Skins = new([32000], sample.Skin) } };
             var before = character.Inventory;
             var row = CharacterRosterEntry.FromCharacter(character);
             byte[] actor = TownPackets.Actor(character, 0);
@@ -344,27 +348,41 @@ internal static class WeaponSkinTests
                 byte slot = reader.ReadByte();
                 int id = reader.ReadInt32();
                 That(reader.ReadInt32() == 4, "名册显示条目保留4B染色扩展");
-                reader.ReadInt32();
-                reader.ReadBytes(3);
+                int colors = reader.ReadInt32();
+                byte packed = reader.ReadByte();
+                reader.ReadBytes(2);
                 int marker = reader.ReadInt32();
                 reader.ReadBytes(5);
+                if (slot == 12)
+                {
+                    bool armed = equipment.Any(item => item.Position.Index == 12);
+                    That(packed == (armed ? (effect.Level << 1) | (effect.Amplify != 0 ? 1 : 0) : 0),
+                        "选角武器外观的强化等级与增幅标志来自真实武器；无武器时为零");
+                    var visibleSource = sample.Skin > 0 ? equipment.SingleOrDefault(item => item.Position.Index == 12)
+                        : equipment.SingleOrDefault(item => item.Position.Index == 10);
+                    if (sample.Skin > 0 || sample.Visible == ordinary.Core.ItemId)
+                        That(colors == ((visibleSource?.Avatar?.Color1 ?? 0) | (visibleSource?.Avatar?.Color2 ?? 0) << 16),
+                            "选角武器解析为槽12后仍保留所选外观的染色");
+                }
                 That(received.TryAdd(slot, (id, marker)), "名册不重复投影同一穿戴槽");
             }
             That(sample.Visible == 0 ? !received.ContainsKey(12) : received[12].Id == sample.Visible,
                 "选角动画读取槽12时按幻化、克隆来源或武器装扮、真实武器回退");
             if (sample.Skin != 0 || sample.Visible == ordinary.Core.ItemId)
-                That(received[12].Marker == 0, "已解析的选角显示编号不再次套用克隆来源");
+                That(received[12].Marker == 0 && !received.ContainsKey(10),
+                    "已解析的选角显示编号不重复输出装扮槽，确保原生安装真实武器特效");
             That(reader.ReadBytes(48).Length == 48 && reader.ReadBytes(10).SequenceEqual(new byte[] { 1,0,0,0,0,0,0,0,0,0 }) &&
                 reader.BaseStream.Position == body.Length, "有效外观替换保持名册尾部及边界");
-            That(character.Inventory == before && row.Equipment.SequenceEqual(sample.Items.OrderBy(item => item.Position.Index)) &&
+            That(character.Inventory == before && row.Equipment.SequenceEqual(equipment.OrderBy(item => item.Position.Index)) &&
                 actor.SequenceEqual(TownPackets.Actor(character, 0)), "选角仅改wire视图，不改库存、原始名册或城镇Actor");
         }
     }
 
     internal static int RosterWeaponSkin(byte[] body, int rowIndex = 0) => ReadRosterRow(body, rowIndex).Skin;
     internal static int RosterWeaponAppearance(byte[] body, int rowIndex = 0) => ReadRosterRow(body, rowIndex).Weapon;
+    internal static byte RosterWeaponEffect(byte[] body, int rowIndex = 0) => ReadRosterRow(body, rowIndex).Effect;
 
-    static (int Skin, int Weapon) ReadRosterRow(byte[] body, int rowIndex)
+    static (int Skin, int Weapon, byte Effect) ReadRosterRow(byte[] body, int rowIndex)
     {
         using var reader = new BinaryReader(new MemoryStream(body));
         reader.ReadBytes(15);
@@ -375,13 +393,16 @@ internal static class WeaponSkinTests
             reader.ReadBytes(15);
             int items = reader.ReadByte();
             int weapon = 0;
+            byte effect = 0;
             for (int i = 0; i < items; i++)
             {
                 byte slot = reader.ReadByte();
                 int item = reader.ReadInt32();
                 if (slot == 12) weapon = item;
                 reader.ReadBytes(reader.ReadInt32());
-                reader.ReadBytes(3);
+                byte packed = reader.ReadByte();
+                if (slot == 12) effect = packed;
+                reader.ReadBytes(2);
                 int clear = reader.ReadInt32();
                 if (slot == 9 && clear > 0)
                     reader.ReadBytes(reader.ReadInt32());
@@ -390,7 +411,7 @@ internal static class WeaponSkinTests
             }
             byte[] tail = reader.ReadBytes(48);
             if (row == rowIndex)
-                return (BinaryPrimitives.ReadInt32LittleEndian(tail.AsSpan(CharacterPackets.WeaponSkinTailOffset)), weapon);
+                return (BinaryPrimitives.ReadInt32LittleEndian(tail.AsSpan(CharacterPackets.WeaponSkinTailOffset)), weapon, effect);
         }
         throw new InvalidDataException("名册行不存在");
     }

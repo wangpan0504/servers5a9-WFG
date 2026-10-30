@@ -45,13 +45,19 @@ internal static class WeaponSkinTcpTests
             "组队头像框与即时表情按0429E5F0的SKN[type]映射读到类别0和3，默认头像框20000在册而表情没有默认");
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "weapon-skin"), resources: resources);
         var repo = new CharacterRepository(fixture.Database);
+        var weaponTemplate = Weapon(9);
+        var equippedWeapon = weaponTemplate with { Position = new(InventoryListType.Equipment, 12),
+            Core = weaponTemplate.Core with { Attr = 12, AmplifyType = 3, AmplifyValue = 150 } };
+        var weaponAvatar = new InventoryItem(0, new(InventoryListType.Equipment, 10),
+            InventoryRewardGrantService.Create(assets.Items.Get(104600021)))
+            { Avatar = new() { Color1 = 3, Color2 = 7 } };
         var owners = new AccountOwners();
         using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             repo.Create(owner, new("SkinGunner", resources.Towns.Room, resources.Towns.InitialReturn)
             {
                 Job = 2, Level = 75, AcceptedStoryLevel = 1, Skills = resources.Characters.Get(2).Skills,
-                Inventory = new([Weapon(9), Weapon(35), Weapon(36), Weapon(37),
+                Inventory = new([equippedWeapon, weaponAvatar, Weapon(9), Weapon(35), Weapon(36), Weapon(37),
                     Material(121, 490704411, 2), Material(122, 490704427, 2),
                     Material(71, 10160911, 1), Material(72, 10161605, 1), Material(73, 10303302, 1),
                     Material(74, 10303302, 1), Material(75, 10160602, 1),
@@ -154,6 +160,8 @@ internal static class WeaponSkinTcpTests
             peer.Select(weaponSkins: ([32000], 32000));
             That(WeaponSkinTests.RosterWeaponAppearance(peer.Roster, 0) == 32000,
                 "重连名册槽12使用已选幻化，选角替代动画不再回读真实武器");
+            That(WeaponSkinTests.RosterWeaponEffect(peer.Roster, 0) == 25,
+                "重连名册已选幻化仍携带真实武器的12级增幅特效");
             That(WeaponSkinTests.RosterWeaponSkin(peer.Roster, 0) == 32000 &&
                 WeaponSkinTests.RosterWeaponSkin(peer.Roster, 1) == 0 &&
                 WeaponSkinTests.RosterWeaponSkin(peer.Roster, 2) == 0,
@@ -173,6 +181,9 @@ internal static class WeaponSkinTcpTests
             That(Snapshot() == before && Core(65).Value == 2, "SQL恢复后可重试；相同来源券正常合堆，模具不足时不删除剩余武器");
             peer.Send(7); peer.Expect(1, 7, [1]);
             byte[] canceledRoster = peer.Expect(0, 2).Body;
+            That(WeaponSkinTests.RosterWeaponAppearance(canceledRoster, 0) == 104600021 &&
+                WeaponSkinTests.RosterWeaponEffect(canceledRoster, 0) == 25,
+                "取消幻化并返回选角后，武器装扮仍按真实武器12级增幅投影");
             That(WeaponSkinTests.RosterWeaponSkin(canceledRoster, 0) == 0 &&
                 WeaponSkinTests.RosterWeaponSkin(canceledRoster, 1) == 0,
                 "取消幻化后返回选角，名册与入城字段同为0");

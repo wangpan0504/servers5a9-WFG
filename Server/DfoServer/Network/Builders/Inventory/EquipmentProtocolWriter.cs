@@ -48,25 +48,32 @@ internal static class EquipmentProtocolWriter
         }
         // 选角替代动画02AB6760会重新读槽12模板，忽略独立幻化字段及克隆来源。
         // 只投影视图编号，不构造虚假库存实例，也不改真实装备或城镇Actor。
-        writer.Write(checked((byte)(items.Length + (weapon is null ? 1 : 0))));
+        // 02ABF52E遇到槽10会跳过槽12，导致特效读取的Actor+C8C未安装。
+        // 已解析的武器显示只输出槽12，让02ABA5D0同时安装强化和增幅。
+        writer.Write(checked((byte)(items.Length - (avatar is null ? 0 : 1) + (weapon is null ? 1 : 0))));
         var source = weaponSkin > 0 ? weapon : avatar;
+        // 外观编号及染色来自显示层；强化等级和增幅标志始终来自真实武器。
+        byte weaponEffect = PackEffect(weapon?.Core);
         foreach (var item in items)
             if (item.Position.Index == 12)
-                AppearanceEntry(writer, 12, visibleId, source, resolved: true);
-            else
+                AppearanceEntry(writer, 12, visibleId, source, resolved: true, packedEffect: weaponEffect);
+            else if (item.Position.Index != 10)
                 AppearanceEntry(writer, checked((byte)item.Position.Index), item.Core.ItemId, item);
         if (weapon is null)
-            AppearanceEntry(writer, 12, visibleId, source, resolved: true);
+            AppearanceEntry(writer, 12, visibleId, source, resolved: true, packedEffect: weaponEffect);
     }
 
-    static void AppearanceEntry(BinaryWriter writer, byte slot, int itemId, InventoryItem? item, bool resolved = false)
+    static byte PackEffect(ItemCore? core) => (byte)(((core?.Attr ?? 0) << 1) | (core is { AmplifyType: not 0 } ? 1 : 0));
+
+    static void AppearanceEntry(BinaryWriter writer, byte slot, int itemId, InventoryItem? item, bool resolved = false,
+        byte? packedEffect = null)
     {
         var core = item?.Core;
         writer.Write(slot);
         writer.Write(itemId);
         // 02675DE0 -> 028F2A80 必读一个4B资源扩展，普通装备初始化为零。
         ItemListProtocolWriter.WriteAvatarColors(writer, item?.Avatar);
-        writer.Write((byte)(((core?.Attr ?? 0) << 1) | (core is { AmplifyType: not 0 } ? 1 : 0)));
+        writer.Write(packedEffect ?? PackEffect(core));
         writer.Write(core?.GenuineUpgrade ?? (byte)0);
         writer.Write(core?.EmancipateLevel ?? (byte)0);
         writer.Write(resolved ? 0 : item?.Avatar?.ClearAvatarId ?? core?.Marker16 ?? 0);
