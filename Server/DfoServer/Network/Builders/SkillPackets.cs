@@ -4,6 +4,20 @@ namespace DfoServer.Network.Builders;
 
 internal static class SkillPackets
 {
+    public static byte[] Guide(IReadOnlyList<ushort> ids, byte count)
+    {
+        if (ids.Count > byte.MaxValue || ids.Distinct().Count() != ids.Count)
+            throw new InvalidDataException("技能引导分片超长或编号重复");
+        byte[] body = new byte[1 + ids.Count * 3];
+        body[0] = checked((byte)ids.Count);
+        for (int i = 0; i < ids.Count; i++)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1 + i * 3), ids[i]);
+            body[3 + i * 3] = count;
+        }
+        return body;
+    }
+
     public static byte[] TreeChanged(CharacterLearningState state)
     {
         state.Validate();

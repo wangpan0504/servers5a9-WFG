@@ -10,6 +10,12 @@ internal static class SkillPacketsTests
     public static void Run()
     {
         int checks = Count;
+        Bytes(SkillPackets.Guide([1, 0x1234], 5), [2, 1, 0, 5, 0x34, 0x12, 5],
+            "1497使用u8条数、完整u16技能编号及单字节次数");
+        Bytes(SkillPackets.Guide([1], 0), [1, 1, 0, 0], "低等级显式清除同客户端前一角色的计数");
+        That(DfoServer.Game.Skills.SkillGuidePolicy.DisplayCount(14) == 0 &&
+            DfoServer.Game.Skills.SkillGuidePolicy.DisplayCount(15) == 5 &&
+            DfoServer.Game.Skills.SkillGuidePolicy.DisplayCount(95) == 5, "技能引导15级边界包含满级");
         void Reject(Action action, string name)
         {
             try
@@ -23,6 +29,8 @@ internal static class SkillPacketsTests
             }
             throw new InvalidOperationException("FAIL expected packet rejection: " + name);
         }
+        Reject(() => SkillPackets.Guide([1, 1], 5), "技能引导拒绝重复编号");
+        Reject(() => SkillPackets.Guide(Enumerable.Range(0, 256).Select(id => (ushort)id).ToArray(), 5), "技能引导不截断256项计数");
         var zero = State(new(0, 0, 0, [new(0, 5, 1)]), new(1, 0, 0, [new(0, 5, 1)]));
         byte[] sample = Convert.FromHexString("1E0000000813120C080010001A06080010051801120C080010001A06080010051801");
         That(SkillPackets.Initialized(zero).SequenceEqual(sample), "fixed NOTI19 sample includes zero-valued required fields and two actual bindings");

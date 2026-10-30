@@ -210,6 +210,8 @@ internal sealed class SkillLearningCatalog
     private SkillGrantCatalog grants = null!;
     private SkillCatalog points = null!;
     public int ExpertContractLevels { get; }
+    public IReadOnlyList<ushort> SkillIds(byte job) => Array.AsReadOnly(paths.Keys.Where(key => key.Job == job)
+        .Select(key => key.SkillId).Order().ToArray());
     public int ActiveExpertContractLevels(long expiresAt, long utcSeconds) => expiresAt > 0 && expiresAt > utcSeconds ? ExpertContractLevels : 0;
     public IReadOnlyList<CharacterSkill> FreeSkills(byte job, byte growth) =>
         Array.AsReadOnly(grants.Get(job, growth).Where(skill => paths.ContainsKey((job, skill.Id))).ToArray());

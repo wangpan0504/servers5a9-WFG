@@ -330,7 +330,7 @@ internal static class ServerRuntime
         };
         var cashShop = new InventoryCashShopService(itemResources.Items, itemResources.CashShop, itemResources.GoldLimits, itemResources.EpicPieces, itemResources.Cargo,
             debugSettings, itemResources.Contracts, itemResources.AvatarPackages, devil, itemResources.GuildHongbao, serverItemRules, events, clock);
-        var levelProjection = new CharacterLevelProjection(stats, questProjection);
+        var levelProjection = new CharacterLevelProjection(stats, questProjection, learning);
         var levelUpProjection = new LevelUpTicketProjection(inventoryProjection,levelProjection);
         var questEffects=new Game.Quests.QuestSkipEffects(itemResources.Items,learning,itemResources.GoldLimits,itemResources.EpicPieces);
         var commands = new GameCommandRegistry();
