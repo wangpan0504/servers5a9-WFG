@@ -70,6 +70,11 @@ internal static class ChannelCatalogTests
                 string[] fields = channelRow.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 That(fields[9] == "50" && fields[10] == "95",
                     "实际决斗入口等级列与Town10/0的50级门槛及95级上限一致：" + number);
+                int minimumGrade = int.Parse(fields[5], System.Globalization.CultureInfo.InvariantCulture);
+                int maximumGrade = int.Parse(fields[6], System.Globalization.CultureInfo.InvariantCulture);
+                foreach (int grade in new[] { 0, 1, 5, 20, 29 })
+                    That(minimumGrade <= grade && grade <= maximumGrade,
+                        $"实际PK入口{number}按原生01705040准入决斗等级{grade}，不将有段位角色锁在频道列表外");
             }
             That(embedded.Channels.Single(row => row.Number == 48) == new ChannelDefinition(48, "<chn_channel_info_049>", 39, "[tag_tournament]") &&
                 ChannelPackets.LoginChannelType(embedded.Entry(48)) == 39 && !ChannelAreaLanding.SameSnapshotPredicates(22, 39),
@@ -123,6 +128,14 @@ internal static class ChannelCatalogTests
             "允许已有的带索引字符串引用");
         foreach (int type in new[] { 4, 5, 8, 13, 24 })
         {
+            string GradeSource(string minimum, string maximum) => source.Replace("[/server]",
+                $"101 `<chn_channel_info_039>` {type} `[pvp]` 0 {minimum} {maximum} 0 0 50 95 0 0 0 0 ``\n[/server]");
+            foreach (var (minimum, maximum) in new[] { ("0", "0"), ("0", "29"), ("5", "9"), ("20", "20"), ("0.0", "29.0"), ("0", "255") })
+                That(ChannelCatalog.Parse(GradeSource(minimum, maximum)).Entry(101).Type == type,
+                    "合法决斗等级范围允许按需限段，零段专用配置仍有效");
+            foreach (var (minimum, maximum) in new[] { ("-1", "29"), ("5", "4"), ("0", "256"), ("0.5", "29"), ("0", "28.5") })
+                Reject<InvalidDataException>(() => ChannelCatalog.Parse(GradeSource(minimum, maximum)),
+                    "决斗等级列拒绝负数、倒置、超出Actor字节或非整数");
             string PvpSource(string minimum, string maximum) => source.Replace("[/server]",
                 $"101 `<chn_channel_info_039>` {type} `[pvp]` 0 0 0 0 0 {minimum} {maximum} 0 0 0 0 ``\n[/server]");
             foreach (var (minimum, maximum) in new[] { ("1", "95"), ("50", "95"), ("95", "95"), ("50.0", "95.0") })

@@ -62,6 +62,12 @@ internal sealed partial class ChannelCatalog
             }
             if (type is 4 or 5 or 8 or 13 or 24)
             {
+                // 原生01705040比较Actor Data+30C与频道的决斗等级范围；与下方角色等级列分开。
+                float minimumGrade = float.Parse(tokens[5], CultureInfo.InvariantCulture);
+                float maximumGrade = float.Parse(tokens[6], CultureInfo.InvariantCulture);
+                if (minimumGrade < 0 || maximumGrade > byte.MaxValue || minimumGrade > maximumGrade ||
+                    minimumGrade != MathF.Truncate(minimumGrade) || maximumGrade != MathF.Truncate(maximumGrade))
+                    throw new InvalidDataException($"频道{number}的决斗等级范围必须是0..255内且下限不大于上限的整数");
                 // 客户端将这两列读为等级下限/上限；上限0不会补默认，会拒绝所有角色。
                 float minimumLevel = float.Parse(tokens[9], CultureInfo.InvariantCulture);
                 float maximumLevel = float.Parse(tokens[10], CultureInfo.InvariantCulture);
