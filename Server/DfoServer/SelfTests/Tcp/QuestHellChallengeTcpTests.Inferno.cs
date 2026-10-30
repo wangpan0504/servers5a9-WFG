@@ -16,7 +16,7 @@ internal static partial class QuestHellChallengeTcpTests
         QuestHellChainTests.Run(resources);
         var growth=SelfTestCatalogs.Growth(resources.Archive,resources.Learning);
         var repository=new CharacterRepository(fixture.Database,resources.Quests);
-        foreach(ushort id in new ushort[] {5783,10104,10106})
+        foreach(ushort id in new ushort[] {5783,10104,10106,10108,10110})
         {
             var quest=resources.Quests.Get(id);
             int hell=InfernoQuestUnlock.Pairs.Single(pair=>pair.InfernoQuest==id).HellQuest;

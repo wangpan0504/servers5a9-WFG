@@ -278,13 +278,11 @@ internal static partial class TownPackets
         // 0/356 -> 023A0000 reads a raw 30000-byte table through 03BE25C0.
         byte[] body = new byte[30004];
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(body, 30000);
-        var done = new HashSet<int>();
         foreach (int id in character.CompletedQuests.Concat(character.AccountCompletedQuests))
         {
             if (id is <= 0 or >= 30000)
                 throw new InvalidDataException("Client quest table bounds");
             body[4 + id] = 1;
-            done.Add(id);
         }
         foreach (var (id,answer) in character.QuestAnswers.Concat(character.AccountQuestAnswers))
         {
@@ -298,9 +296,8 @@ internal static partial class TownPackets
         // 真实记录及回答校验后才补显示标记，不写存档、不授予奖励或入场资格。
         if (body[4 + 13700] == 0)
             body[4 + 13700] = 1;
-        // 时空裂缝气球读同一张完成表的 [is clear quest]。区域深渊任务已完成后补外传显示位，
-        // 不写存档；已进入的真实外传链优先于显示兼容，选图/入场资格仍见 InfernoQuestUnlock。
-        InfernoQuestUnlock.ApplyDisplayBits(body, done, character.ActiveMainQuests);
+        // 356的零值不会撤销客户端已导入的完成项；时空裂缝外传只能发布真实完成位。
+        // 选图/入场的区域深渊兼容独立保留在InfernoQuestUnlock，不借用任务完成集合显示入口。
         return body;
     }
 

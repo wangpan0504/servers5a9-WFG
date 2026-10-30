@@ -1,9 +1,7 @@
-using DfoServer.Game.Characters;
-
 namespace DfoServer.Game.Dungeons;
 
 // 本服时空裂缝资格：区域 [hell quest] 完成后，将对应 [inferno quest] / 世界地图 [is clear quest]
-// 视为选图与入场已满足。NOTI356仅在外传链尚未进入时补显示位，已进入的链保持真实任务状态。
+// 视为选图与入场已满足。客户端完成表保持真实外传状态，不能用任务号提前补显示位。
 internal static class InfernoQuestUnlock
 {
     public static readonly (int InfernoQuest, int HellQuest, int IntroductionQuest)[] Pairs =
@@ -27,14 +25,5 @@ internal static class InfernoQuestUnlock
         foreach (var (inferno, hell, _) in Pairs)
             if (inferno == questId && done.Contains(hell)) return true;
         return false;
-    }
-
-    public static void ApplyDisplayBits(byte[] body, IReadOnlySet<int> done, IReadOnlyList<ActiveMainQuest> active)
-    {
-        foreach (var (inferno, hell, introduction) in Pairs)
-            // 21仍会列出真实可接外传；此时伪完成位会与31活动槽冲突，重登也不能重新补回。
-            if (body[4 + inferno] == 0 && done.Contains(hell) && !done.Contains(introduction) &&
-                !active.Any(row => row.QuestId == introduction || row.QuestId == inferno))
-                body[4 + inferno] = 1;
     }
 }

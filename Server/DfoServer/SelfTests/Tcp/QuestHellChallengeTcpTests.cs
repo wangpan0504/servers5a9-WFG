@@ -168,6 +168,7 @@ internal static partial class QuestHellChallengeTcpTests
                 writer.Write(ushort.MaxValue); writer.Write((ushort)1); writer.Write(ushort.MaxValue); }));
         }
         VerifyInfernoSidequests(fixture,resources);
+        VerifyOnlineSidequestChains(fixture,resources);
         VerifyHarlemContinuation(fixture,resources);
         VerifyAlbertOrphan(fixture,resources);
     }
