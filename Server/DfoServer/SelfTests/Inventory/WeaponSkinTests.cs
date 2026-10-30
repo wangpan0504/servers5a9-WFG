@@ -230,6 +230,14 @@ internal static class WeaponSkinTests
             { Job = 2, Level = 75, Emotion = 0xABCD, Inventory = new([clone, weapon]) { Skins = new([32000], 32000) } };
         foreach (var scene in new[] { ActorSceneState.Town, ActorSceneState.Dungeon })
         {
+            int Frame(SkinStorageState own, SkinStorageState account, long now) => BinaryPrimitives.ReadInt32LittleEndian(
+                TownPackets.Actor(role with { Inventory = role.Inventory with { Skins = own, AccountSkins = account } },
+                    0, utcSeconds: now, sceneState: scene).AsSpan(73));
+            That(Frame(SkinStorageState.Empty, SkinStorageState.Empty, 1999999999) == 20000 &&
+                Frame(frameState, SkinStorageState.Empty, 1999999999) == 420000001 &&
+                Frame(frameState, SkinStorageState.Empty, 2000000000) == 20000 &&
+                Frame(accountSelected, accountOwned, 1999999999) == 420000002,
+                "真实组队Actor状态+68使用角色与账号并集，默认和到期回退20000，城镇副本一致");
             byte[] actor = TownPackets.Actor(role, 0, sceneState: scene);
             That(BinaryPrimitives.ReadInt32LittleEndian(actor.AsSpan(115)) == 32000 &&
                 BinaryPrimitives.ReadUInt16LittleEndian(actor.AsSpan(119)) == 0xABCD && actor[137] == (byte)scene,

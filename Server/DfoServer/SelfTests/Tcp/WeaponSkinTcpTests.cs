@@ -13,6 +13,14 @@ namespace DfoServer.Testing;
 
 internal static class WeaponSkinTcpTests
 {
+    internal static void AssertFrameActor(WirePacket packet, int frame, ushort? character = null)
+    {
+        That(packet is { Kind: 0, Opcode: 2, Body.Length: > 123 } && packet.Body[0] == 0 &&
+            U16(packet.Body, 1) == 1 && U32(packet.Body, 73) == frame &&
+            (character is null || U16(packet.Body, 121) == character),
+            "真实Actor携带当前边框及正确角色身份，不以仓库预览代替公开字段");
+    }
+
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var assets = resources.ItemResources;
@@ -368,6 +376,7 @@ internal static class WeaponSkinTcpTests
             That(State().SelectedPartyFrame == 0, "组队头像框未选择时角色存档保持0，服务端仍按原生默认20000下发");
             peer.Send(1573,Build(w=>{w.Write(0);w.Write(20000);w.Write(new byte[36]);}));
             peer.Expect(1,1573,Build(w=>{w.Write((byte)1);w.Write(0);w.Write(20000);w.Write(new byte[36]);}));
+            AssertFrameActor(peer.Expect(0,2), 20000);
             peer.Barrier();
             That(State().SelectedPartyFrame == 20000, "组队头像框默认20000可以成为本角色选择并写入角色存档");
 
@@ -386,6 +395,7 @@ internal static class WeaponSkinTcpTests
 
             peer.Send(1573,Build(w=>{w.Write(0);w.Write(420000001);w.Write(new byte[36]);}));
             peer.Expect(1,1573,Build(w=>{w.Write((byte)1);w.Write(0);w.Write(420000001);w.Write(new byte[36]);}));
+            AssertFrameActor(peer.Expect(0,2), 420000001);
             peer.Barrier();
             That(State().SelectedPartyFrame == 420000001, "账号皮肤仓的头像框可以成为本角色选择，选择仍保存在角色存档");
 

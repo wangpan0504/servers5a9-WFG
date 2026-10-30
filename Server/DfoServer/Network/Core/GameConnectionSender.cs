@@ -15,7 +15,7 @@ internal sealed class GameConnectionSender : IAsyncDisposable
 {
     // 按包体及帧头计费，包含活动消息；共享包体在每个接收连接独立计费。
     internal const long MaxPendingBytes = 2 * 1024 * 1024;
-    sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false, Action? Written = null, Func<byte[]?>? Prepare = null, Action? AfterWritten = null);
+    sealed record Output(byte Kind, ushort Opcode, byte[] Body, string Action, TaskCompletionSource? Done = null, Func<bool>? CanSend = null, bool Protected = false, Action? Written = null, Func<byte[]?>? Prepare = null, Action? AfterWritten = null, bool AllowShorter = false);
     sealed record Message(long Epoch, Output? Own = null, RemoteTownActor? Enter = null, (ushort, long)? Move = null,
         (ushort Id, long Membership, byte[]? Effect, Func<bool>? Current, byte[]? Prepare, byte[]? DestinationArea, bool HideActor)? Leave = null,
         TaskCompletionSource? Barrier = null, RemoteTownActor? Refresh = null, SceneActorClear Actors = SceneActorClear.Delete, long Bytes = 0, bool IsClear = false);
@@ -86,11 +86,12 @@ internal sealed class GameConnectionSender : IAsyncDisposable
     internal bool TryPost(byte kind, ushort opcode, byte[] body, string action, Func<bool>? canSend = null, Action? written = null, Action? afterWritten = null) =>
         Enqueue(new(Epoch, new(kind, opcode, body, action, CanSend: canSend, Written: written, AfterWritten: afterWritten)));
 
-    // 固定长度预算；发送泵本人owner内即时构包，不得执行SQL或网络等待。null代表原身份失效。
-    internal void PostPrepared(byte kind, ushort opcode, int bodyLength, Func<byte[]?> prepare, string action, Func<bool> canSend)
+    // 默认固定长度；变长快照可显式按上限预算。泵内不得执行SQL或网络等待，null代表原身份失效。
+    internal void PostPrepared(byte kind, ushort opcode, int bodyLength, Func<byte[]?> prepare, string action, Func<bool> canSend,
+        bool allowShorter = false)
     {
         if (bodyLength is < 0 or > 65520) throw new ArgumentOutOfRangeException(nameof(bodyLength));
-        Enqueue(new(Epoch, new(kind, opcode, new byte[bodyLength], action, CanSend: canSend, Prepare: prepare)));
+        Enqueue(new(Epoch, new(kind, opcode, new byte[bodyLength], action, CanSend: canSend, Prepare: prepare, AllowShorter: allowShorter)));
     }
 
     // 共享副本先完整规划并提交；发布只入原有有界发送队列，不持队伍/连接门禁等待慢客户端。
@@ -284,7 +285,8 @@ internal sealed class GameConnectionSender : IAsyncDisposable
                             ? own.Prepare is { } prepare ? prepare() : own.Body : null);
                         if (body is not null)
                         {
-                            if (body.Length != own.Body.Length) throw new InvalidDataException("发送时包体长度超过固定预算合同");
+                            if (body.Length > own.Body.Length || !own.AllowShorter && body.Length != own.Body.Length)
+                                throw new InvalidDataException("发送时包体长度违反预留预算合同");
                             await Write(own.Kind, own.Opcode, body, own.Action, own.Protected);
                             if (own.Written is { } written) owner.Execute(() => { written(); return true; });
                             own.AfterWritten?.Invoke();

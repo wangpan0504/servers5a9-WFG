@@ -17,7 +17,7 @@ internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Lead
     public PartySettings Settings { get; init; } = PartySettings.Default;
     public Guid? EvildomWarBattleId { get; init; }
 }
-internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged, SettlementCard }
+internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged, SettlementCard, FrameChanged }
 internal sealed record PartyNotice(PartyNoticeKind Kind, PartyMember Recipient, PartyMember? Peer = null,
     PartySnapshot? Party = null, uint PeerId = 0, Func<bool>? Guard = null, PartyDungeonInstance? Dungeon = null);
 internal sealed record PartyResult(ushort Error, PartyNotice[] Notices)
@@ -434,6 +434,22 @@ internal sealed partial class PartyService
             var member = party?.Members.Single(m => ReferenceEquals(m.Actor.Session, session));
             return party is null || member is null ? [] : [new(PartyNoticeKind.SceneChanged, member, Party: party,
                 Guard: () => Latest(party, member))];
+        }
+    }
+    public PartyNotice[] FrameChanged(GameSession session, PublicCharacterSnapshot identity)
+    {
+        lock (gate)
+        {
+            var party = parties.SnapshotValues().FirstOrDefault(p => p.Members.Any(m =>
+                ReferenceEquals(m.Actor.Session, session) && m.IsCurrent()));
+            if (party is null || !identity.IsUnchanged()) return [];
+            var source = party.Members.Single(m => ReferenceEquals(m.Actor.Session, session)) with { Identity = identity };
+            return party.Members.Select(member =>
+            {
+                var phase = member.Actor.Session.Phase;
+                return new PartyNotice(PartyNoticeKind.FrameChanged, member, Peer: source, Party: party,
+                    Guard: () => identity.IsCurrent() && session.Phase == identity.Phase && Latest(party, member, phase));
+            }).ToArray();
         }
     }
     public void Detach(GameSession session, long? retainedEpoch = null) => Publish(DetachNotices(session, retainedEpoch));

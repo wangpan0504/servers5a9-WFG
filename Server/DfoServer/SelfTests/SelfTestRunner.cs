@@ -300,6 +300,7 @@ internal static class SelfTestRunner
         TownSelectionTests.Run();
         TeleportTests.RunCore();
         SoloPartyTests.RunCore();
+        await PartyFramePublicationTests.RunAsync();
         TownDungeonMapTests.Run();
         WorldMapHoverTests.Run();
         InventoryChangeTests.Run();

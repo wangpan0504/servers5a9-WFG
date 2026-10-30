@@ -11,7 +11,7 @@ using DfoServer.Network.Protocol;
 namespace DfoServer.Network.Projection.Inventory;
 
 internal sealed class InventoryProjection(CharacterStatComputer stats, TownProjection town, EpicPieceCatalog pieces,
-    CreatureProjection? creatures = null)
+    CreatureProjection? creatures = null, SkinStorageProjection? skins = null)
 {
     public Task RefreshTitleAppearanceAsync(GameConnectionContext context, Character character, Func<bool> canSend) =>
         RefreshCharacterAsync(context, character, "clone_title", canSend);
@@ -185,6 +185,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
                 "echon_set_committed", CanSend);
         bool equipmentChanged = changedSlots.Any(slot => slot.List == InventoryListType.Equipment && !(inPlaceCreature && slot == creatureSlot));
         bool weaponSkinChanged = plan.Before.Skins.Selected != current.Inventory.Skins.Selected;
+        if (skins is not null && plan.Before.Skins.SelectedPartyFrame != current.Inventory.Skins.SelectedPartyFrame)
+            await skins.RefreshPartyFrameAsync(context, receipt);
         if (refreshEquipment && (equipmentChanged || weaponSkinChanged || plan.EquipmentSlotFlagsAfter is not null))
         {
             bool appearanceChanged = plan.ChangedSlots.Any(slot => slot.List == InventoryListType.Equipment &&

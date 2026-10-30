@@ -69,12 +69,19 @@ internal static class SoloPartyTests
             That(parties.SetInformation(session, 0, settings).Notices.Length == 0 &&
                 ReferenceEquals(originalParty, parties.Current(session)), "相同请求不重复分配队伍");
             var changed = parties.SetInformation(session, 1, settings with { TitleCode = 5 });
+            var frameIdentity = session.PublicCharacter(session.Selected!.Id)!;
+            var frameNotices = parties.FrameChanged(session, frameIdentity);
+            That(frameNotices is [{ Kind: PartyNoticeKind.FrameChanged }] && frameNotices[0].Guard!(),
+                "边框通知复用当前队伍，保留提交后的源公开快照");
             That(created.Notices.All(n => n.Guard?.Invoke() == false) && changed.Notices.All(n => n.Guard?.Invoke() == true),
                 "设置更新使旧队伍发布授权失效");
             That(JsonSerializer.Serialize(repository.LoadCharacter(owner, 0)) == stored, "建队和修改不写资产或revision");
             session.Move(new(11, 10, 0, 0, 0, 0));
+            That(frameNotices[0].Guard!(), "普通移动不吞掉已入队的边框刷新，出队时投影最新角色");
+            var phaseFrames = parties.FrameChanged(session, session.PublicCharacter(session.Selected!.Id)!);
             That(changed.Notices.All(n => n.Guard?.Invoke() == true), "城镇移动保留队伍身份");
             session.BeginDungeonSelection();
+            That(!phaseFrames[0].Guard!(), "接收者切换阶段后不发送旧边框通知");
             That(changed.Notices.All(n => n.Guard?.Invoke() == false) && !parties.SetInformation(session, 0, settings).Accepted,
                 "选图阶段不发布排队的旧城镇名册或修改设置");
             session.ReturnFromDungeonSelection(false);

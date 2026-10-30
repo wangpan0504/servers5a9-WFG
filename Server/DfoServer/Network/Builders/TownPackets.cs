@@ -91,6 +91,10 @@ internal static partial class TownPackets
             state[7] = 1;
             // 0267F6FB只接受1；与名册tail34同源，不在ACK4或Player追加未证字段。
             state[43] = character.IsPvpPrivate ? (byte)1 : (byte)0;
+            // 0267F78D将状态+44h写入Data+488；023BC931据此安装真实组队栏边框。
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(state.AsSpan(68),
+                InventorySkinStorageService.Merged(character.Inventory).PartyFrameSelection(
+                    utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
             // 0267B42E/0267B43F将头部+59h转为独立外观实体；真实宠物仍由尾部声明。
             System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(state.AsSpan(89),
                 InventoryCreatureSkinService.AppearanceTemplateId(character, utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()));

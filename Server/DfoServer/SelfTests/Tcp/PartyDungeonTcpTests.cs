@@ -8,6 +8,11 @@ namespace DfoServer.Testing;
 
 internal static partial class PartyDungeonTcpTests
 {
+    sealed class FrameClock : TimeProvider
+    {
+        public DateTimeOffset Now = DateTimeOffset.UtcNow;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
     static bool HasCardSeat(byte[] body, int wanted)
     {
         if (body.Length < 164) return false;
@@ -37,9 +42,11 @@ internal static partial class PartyDungeonTcpTests
         bool rejectRetry = false)
     {
         bool checkFatigue = count == 2 && !rollback;
+        bool checkFrames = count == 2 && !rollback && !rejectRetry;
+        var frameClock = checkFrames ? new FrameClock() : null;
         await using var fixture = new TcpTestFixture(source with { DevelopmentDungeonEntryProbe = DungeonEntryProbeMode.Disabled },
             Path.Combine(root, "party-dungeon-" + count + (rollback ? "-rollback" : rejectRetry ? "-retry-rejected" : "")),
-            gm: checkFatigue, resources: resources);
+            gm: checkFatigue, resources: resources, clock: frameClock);
         await fixture.StartAsync();
         if (checkFatigue)
             That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
@@ -65,11 +72,22 @@ internal static partial class PartyDungeonTcpTests
                 fixture.Sql("UPDATE character_fatigue SET used=maximum,remaining=0 WHERE character_id=$p0", peer.Id);
             if (count == 4 && ReferenceEquals(peer, participants[^1]))
                 fixture.Sql("UPDATE character_dungeon_state SET next_object_key=65536 WHERE character_id=$p0", peer.Id);
-            peer.Select(prepared: true);
+            var frames = DfoServer.Game.Inventory.Models.SkinStorageState.Empty with
+                { PartyFrames = [new(420000001, 0), new(420000002, checked((int)(frameClock?.Now.ToUnixTimeSeconds() ?? 0) + 120))] };
+            if (checkFrames && ReferenceEquals(peer, alpha))
+                fixture.Sql("INSERT INTO account_skin_storage(account,state_json) SELECT account,$p1 FROM characters WHERE id=$p0",
+                    peer.Id, System.Text.Json.JsonSerializer.Serialize(frames));
+            peer.Select(prepared: true, accountSkins: checkFrames && ReferenceEquals(peer, alpha) ? frames : null);
             peer.Send(1426); Drain(peer);
             peer.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5)); Drain(peer);
         }
         foreach (var peer in participants) Drain(peer);
+        if (checkFrames)
+        {
+            alpha.Send(1573, Build(w => { w.Write(0); w.Write(420000001); w.Write(new byte[36]); }));
+            var selectedFrame = Drain(alpha);
+            WeaponSkinTcpTests.AssertFrameActor(selectedFrame.Single(p => p is { Kind: 0, Opcode: 2 }), 420000001, alpha.Id);
+        }
         for (int slot = 0; slot < count; slot++)
         {
             participants[slot].Send(2, Build(w =>
@@ -93,6 +111,19 @@ internal static partial class PartyDungeonTcpTests
             var accepted = All(invited);
             That(participants.Take(Array.IndexOf(participants, invited) + 1).All(peer => accepted[peer].Any(p => p is { Kind: 0, Opcode: 9 })),
                 "接受后为所有已加入成员更新真实队伍");
+            if (checkFrames)
+                foreach (var rows in accepted.Values)
+                    WeaponSkinTcpTests.AssertFrameActor(rows.Single(p => p is { Kind: 0, Opcode: 2 } && p.Body[0] == 0 &&
+                        U16(p.Body, 121) == alpha.Id), 420000001, alpha.Id);
+        }
+        if (checkFrames)
+        {
+            SelectFrame(20000, false); SelectFrame(420000001, false);
+            beta.Send(36, Area(38, 0, 622, 196, 38, 2, kind: 5)); All(beta);
+            beta.Send(36, Area(38, 2, 1085, 249, 38, 0, kind: 5));
+            var rejoined = All(beta)[beta];
+            WeaponSkinTcpTests.AssertFrameActor(rejoined.Single(p => p is { Kind: 0, Opcode: 2 } && p.Body[0] == 0 &&
+                U16(p.Body, 121) == alpha.Id), 420000001, alpha.Id);
         }
         alpha.Send(15, new byte[4]);
         foreach (var peer in participants)
@@ -165,6 +196,17 @@ internal static partial class PartyDungeonTcpTests
                     "全员加载完成后释放屏障并激活全部队员");
             if (room == 0)
             {
+                if (checkFrames)
+                {
+                    SelectFrame(20000, true); SelectFrame(420000001, true); SelectFrame(420000002, true);
+                    frameClock!.Now += TimeSpan.FromSeconds(121);
+                    alpha.Send(1426);
+                    var expired = All(alpha);
+                    That(expired[alpha].Any(p => p is { Kind: 0, Opcode: 1558 } && p.Body[0] == 0 && U32(p.Body, 1) == 20000),
+                        "限时边框在线到期恢复仓库默认选择");
+                    CheckFrameUpdates(expired, 20000, true);
+                    SelectFrame(420000001, true);
+                }
                 beta.Send(40, [0x74, 0, 4, 1, 0, 0]);
                 That(All(beta).Values.All(rows => rows.Any(p => p is { Kind: 0, Opcode: 32 } && U16(p.Body) == beta.Id && p.Body[2] == 0)),
                     "成员死亡向全员同步，其他成员仍可继续战斗");
@@ -402,6 +444,32 @@ internal static partial class PartyDungeonTcpTests
         }
         throw new InvalidOperationException("FAIL 共享普通副本未在有界路线内完成");
 
+        void SelectFrame(int frame, bool dungeon)
+        {
+            alpha.Send(1573, Build(w => { w.Write(0); w.Write(frame); w.Write(new byte[36]); }));
+            var updates = All(alpha);
+            That(updates[alpha].Any(p => p is { Kind: 1, Opcode: 1573 } && p.Body[0] == 1),
+                "组队中选择真实账号边框成功，副本不被城镇门禁误拒绝");
+            CheckFrameUpdates(updates, frame, dungeon);
+        }
+
+        void CheckFrameUpdates(Dictionary<TcpPeer, WirePacket[]> updates, int frame, bool dungeon)
+        {
+            foreach (var rows in updates.Values)
+            {
+                int actor = Array.FindIndex(rows, p => p is { Kind: 0, Opcode: 2 });
+                int roster = Array.FindIndex(rows, p => p is { Kind: 0, Opcode: 9 });
+                That(actor >= 0 && roster > actor && rows[roster].Body[9] == 2,
+                    "真实边框先更新角色公开数据再发送成员名册，不要求退队重组");
+                WeaponSkinTcpTests.AssertFrameActor(rows[actor], frame, alpha.Id);
+                That(rows.Count(p => p is { Kind: 0, Opcode: 2 }) == 1 &&
+                    rows.All(p => p.Kind != 0 || p.Opcode is not (11 or 26 or 153)),
+                    "单项边框刷新不发送完整Player、端点、host或100%血蓝");
+                int sceneOffset = 132 + checked((int)U32(rows[actor].Body, 123));
+                That(rows[actor].Body[sceneOffset] == (dungeon ? 1 : 0), "边框刷新保留真实城镇或副本场景");
+            }
+        }
+
         void CheckRoster(WirePacket[] rows, ushort transition)
         {
             int roster = Array.FindIndex(rows, p => p is { Kind: 0, Opcode: 9 });
@@ -447,7 +515,7 @@ internal static partial class PartyDungeonTcpTests
         {
             var packet = peer.Read();
             if (packet is { Kind: 1, Opcode: 1347 }) { Bytes(packet.Body, [1], "组队TCP屏障"); return rows.ToArray(); }
-            That(packet.Kind == 0 || packet.Opcode is 10 or 11 or 12 or 13 or 14 or 15 or 16 or 29 or 31 or 33 or 34 or 37 or 41 or 43 or 45 or 46 or 69 or 70 or 71 or 72 or 42 or 132 or 905 or 1652,
+            That(packet.Kind == 0 || packet.Opcode is 10 or 11 or 12 or 13 or 14 or 15 or 16 or 29 or 31 or 33 or 34 or 37 or 41 or 43 or 45 or 46 or 69 or 70 or 71 or 72 or 42 or 132 or 905 or 1652 or 1573,
                 $"组队批量投影只包含已登记的应答或通知，实际{packet.Kind}/{packet.Opcode}");
             rows.Add(packet);
         }
