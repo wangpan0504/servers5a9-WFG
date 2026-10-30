@@ -1510,10 +1510,14 @@ internal static class MetroQuestEntryTcpTests
             RejectAccept(peer, job == 0 ? (ushort)3869 : (ushort)3868);
             Accept(peer, questionId, QuestQuestionProgress.Unanswered);
             string unanswered = State(peer.Id);
-            peer.Send(33, [33, 0, (byte)questionId, (byte)(questionId >> 8), 255, 0]);
+            peer.Send(33, [33, 0, (byte)questionId, (byte)(questionId >> 8), 0, 255]);
             peer.Expect(1, 33, [0, 19, 0]); peer.Barrier();
             That(State(peer.Id) == unanswered, "越界回答不改问题哨兵或提前保存答案");
-            Condition(peer, questionId, choice, choice);
+            peer.Send(33, [33, 0, (byte)questionId, (byte)(questionId >> 8), 0, choice]);
+            var answerAck = peer.Expect(1, 33).Body;
+            That(answerAck.Length == 7 && answerAck[0] == 1 && U16(answerAck, 1) == questionId &&
+                U32(answerAck, 3) == choice, "原生类型0加答案请求回执保留零基选项");
+            drain(peer, null);
             That(fixture.Query("SELECT answer FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1", peer.Id, questionId).Length == 0,
                 "33只保存原活动选择，回答完成记录必须等34");
             Finish(peer, questionId, 42);

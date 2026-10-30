@@ -152,10 +152,11 @@ internal sealed partial class GameSession
                 (capture.Phase == SessionPhase.Town || capture.Entry is { } parentEntry && parentEntry.RouteQuestId == quest.Id &&
                     expected.ActiveMainQuests.Any(active => active.QuestId == quest.Id && QuestHuntProgress.Bound(active,parentEntry))))
                 return QuestLifecyclePlan.SetCondition(expected,quest,QuestRelationProgress.Initial(quest,quests,expected.CompletedQuests,expected.ActiveMainQuests));
-            if (condition is { Channel: null, Reserved: 0 } answer && capture.Phase == SessionPhase.Town &&
-                QuestQuestionProgress.OrdinaryChoice(quest,answer.Value,quests) &&
+            // 问题请求由0202B480写入类型0和答案，尾字节不是其它条件通道的保留位。
+            if (condition is { Channel: null, Value: 0 } answer && capture.Phase == SessionPhase.Town &&
+                QuestQuestionProgress.OrdinaryChoice(quest,answer.Reserved,quests) &&
                 HasDialogueNpc(quest.IntData[0]))
-                return QuestLifecyclePlan.SetCondition(expected,quest,answer.Value);
+                return QuestLifecyclePlan.SetCondition(expected,quest,answer.Reserved);
             if (quest.Condition is "[hunt enemy]" or "[hunt monster]" && QuestHuntProgress.TryTargets(quest,out var hunt) &&
                 condition is { Channel: 0x10 or 0x20 or 0x40, Value: 0, Reserved: 0 } report &&
                 (report.Channel == 0x10 ? 0 : report.Channel == 0x20 ? 1 : 2) < hunt.Length &&

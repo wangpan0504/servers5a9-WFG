@@ -338,9 +338,10 @@ internal static class QuestOrdinaryCompletionTests
                 f.Prepare(ushort.MaxValue).Plan is null,"问题接取未选答案不能默认交付成第一个分支");
             var unchanged = f.Read();
             That(f.Change(100,QuestLifecycleAction.Condition,new(0x10,1,0))?.Commit is null &&
-                f.Change(100,QuestLifecycleAction.Condition,new(null,3,0))?.Commit is null && Same(unchanged,f.Read()),
+                f.Change(100,QuestLifecycleAction.Condition,new(null,0,3))?.Commit is null &&
+                f.Change(100,QuestLifecycleAction.Condition,new(null,1,0))?.Commit is null && Same(unchanged,f.Read()),
                 "问题仅接受匹配客户端普通回答通道和资源中的零基选项");
-            That(f.Change(100,QuestLifecycleAction.Condition,new(null,1,0))!.Character.ActiveMainQuests.Single().ConditionState == 1 &&
+            That(f.Change(100,QuestLifecycleAction.Condition,new(null,0,1))!.Character.ActiveMainQuests.Single().ConditionState == 1 &&
                 f.Prepare(ushort.MaxValue).Plan is { ConditionType: 42, Answer: 1 },"第二个选项保存零基scalar1，不误当第一回答完成标记");
             TestCheck.Reject<IOException>(() => f.Finish(ushort.MaxValue),"回答及奖励提交后返回丢失");
             var result = f.Finish(ushort.MaxValue).Receipt!.Commit; var restored = f.Read();
@@ -357,7 +358,7 @@ internal static class QuestOrdinaryCompletionTests
         using (var f = new Fixture(towns,characters,learning,growth,parameters,items,question,materialCount: 0,
             active: [],definitions: [question,.. answerBranches]))
         {
-            f.Change(100,QuestLifecycleAction.Accept); f.Change(100,QuestLifecycleAction.Condition,new(null,2,0)); var before = f.Read();
+            f.Change(100,QuestLifecycleAction.Accept); f.Change(100,QuestLifecycleAction.Condition,new(null,0,2)); var before = f.Read();
             f.Sql("CREATE TRIGGER question_abort AFTER INSERT ON character_quest_completion_receipts BEGIN SELECT RAISE(ABORT,'question rollback'); END");
             TestCheck.Reject<SqliteException>(() => f.Finish(ushort.MaxValue),"回答回执末段失败");
             That(Same(before,f.Read()) && f.Read().QuestAnswers.Count == 0 && f.Receipts == 0,
@@ -911,7 +912,7 @@ internal static class QuestOrdinaryCompletionTests
             That(f.Read().ActiveMainQuests.Single().ConditionState==QuestQuestionProgress.Unanswered &&
                 QuestCompletionPlan.Prepare(f.Read(),question,ushort.MaxValue,f.Catalog,parameters,items.Items,
                     items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow).Plan is null,"重选不把客户端进行中1写回成第二个答案");
-            f.Change(3868,QuestLifecycleAction.Condition,new(null,choice,0));
+            f.Change(3868,QuestLifecycleAction.Condition,new(null,0,choice));
             That(f.Read().ActiveMainQuests.Single().ConditionState==choice &&
                 QuestQuestionProgress.ClientState(choice)==choice,"选择0/1/2继续保留原零基答案");
             var finished=f.Finish(ushort.MaxValue,3868).Receipt!.Commit.Character;

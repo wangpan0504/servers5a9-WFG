@@ -31,6 +31,7 @@ internal static class QuestRequests
             return false;
         // 022806CB..06E4只在10/20/40通道写额外字节；未知通道不能借7B形状入库。
         if (body.Length == 7 && body[4] is not (0x10 or 0x20 or 0x40)) return false;
+        // 问题的6B布局末两字节是类型0、答案；由领域按任务类型解释，不全局互换其它通道。
         request = new(BinaryPrimitives.ReadUInt16LittleEndian(body[2..]), body.Length == 7 ? body[4] : null,
             body[^2], body[^1]);
         return true;

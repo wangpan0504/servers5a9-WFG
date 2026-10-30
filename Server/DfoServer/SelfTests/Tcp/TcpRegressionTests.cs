@@ -103,6 +103,7 @@ internal static class TcpRegressionTests
         {
             QuestProtocolTests.Run();
             QuestOrdinaryCompletionTests.RunQuestionState(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning);
+            QuestFactionSelectionTests.Run(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning);
             return Task.CompletedTask;
         }),
         ("quest-ticket", (_, _, resources) => QuestTicketTests.RunAsync(resources.Towns,resources.Archive,resources.Characters,resources.ItemResources,resources.Learning)),
