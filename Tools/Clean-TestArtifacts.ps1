@@ -2,7 +2,7 @@
 .SYNOPSIS
 按默认授权的保留策略手动清理 build/tcp-tests 下的 TCP 测试现场（与每轮 TCP 启动时的自动回收规则一致）。
 
-通过的轮次直接删除；失败轮次保留最近 KeepFailed 个、KeepDays 天内且总量不超过 MaxGB（不计硬链接的 PVF），
+通过的轮次直接删除；失败轮次保留最近 KeepFailed 个、KeepDays 天内且总量不超过 MaxGB（保守统计全部文件路径长度，包含 PVF 和硬链接），
 最新一个失败现场始终保留；正在运行（.running 被占用）的轮次和非 GUID 目录不处理，不跟随符号链接或 junction。
 
 .EXAMPLE
@@ -36,7 +36,7 @@ function Get-RunSize([string]$dir) {
     foreach ($item in Get-ChildItem -LiteralPath $dir -Force) {
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
         if ($item.PSIsContainer) { $sum += Get-RunSize $item.FullName }
-        elseif ($item.Extension -ne '.pvf') { $sum += $item.Length }
+        else { $sum += $item.Length }
     }
     $sum
 }

@@ -209,7 +209,7 @@ macOS/Linux 的仓库检查改用 `pwsh -NoProfile -File Tools/Check-Repository.
 每轮 TCP 回归生成独立的 `build/tcp-tests/<GUID>`，运行期间以 `.running` 占用标记保护。以下回收属于默认授权，无需另行确认：
 
 - **通过的轮次**：记录各组耗时到 `build/tcp-tests/timings.json`（供并行分片均衡）后整轮删除；设置 `DFO_TCP_TIMINGS=<文件>` 时同时合并写入该共享文件，多个工作树共用历史耗时。`Tools/Select-AffectedTests.ps1` 默认使用 `%LOCALAPPDATA%/S5A9/tcp-timings.json`（其他平台为 `~/.cache/s5a9/tcp-timings.json`），不写入任何工作树。需要保留成功现场时设置 `DFO_KEEP_TCP_ARTIFACTS=1`。
-- **失败、取消或中断的轮次**：保留现场。每轮 TCP 启动时自动裁剪：只保留最近 `DFO_TCP_KEEP_FAILED`（默认 5）个、`DFO_TCP_KEEP_DAYS`（默认 3）天内、合计不超过 `DFO_TCP_MAX_GB`（默认 5 GB，不计硬链接的 PVF）的失败现场；最新一个失败现场始终保留。旧版本遗留的已通过轮次一并删除。
+- **失败、取消或中断的轮次**：保留现场。每轮 TCP 启动时自动裁剪：只保留最近 `DFO_TCP_KEEP_FAILED`（默认 5）个、`DFO_TCP_KEEP_DAYS`（默认 3）天内、合计不超过 `DFO_TCP_MAX_GB`（默认 5 GB，按全部文件路径长度保守统计，包含 PVF 及硬链接）的失败现场；最新一个失败现场始终保留，可能超额。硬链接失败会回退完整复制，不能按扩展名排除资源；此预算不等于磁盘实际分配量。旧版本遗留的已通过轮次一并删除。
 - 手动清理用 `Tools/Clean-TestArtifacts.ps1`（`-WhatIf` 预览，`-All` 删除全部非运行中轮次），规则与自动回收一致。
 
 回收只处理当前工作树 `build/tcp-tests` 下 GUID 命名的直接子目录，跳过运行中的轮次，不跟随符号链接或 junction，不触碰其他工作树、会话目录和正式运行的玩家数据；共享资源使用硬链接时只删除链接。清理失败会报告警告并保留剩余文件。
