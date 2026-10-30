@@ -292,6 +292,10 @@ internal sealed class InventorySkinStorageService(ItemCatalog items, SkinStorage
         Merged(character).EmoticonSelection(Clock.GetUtcNow().ToUnixTimeSeconds())
             .Where(id => id == 0 || skins.Emoticons.Contains(id)).ToImmutableArray();
 
+    public bool CanSendEmoticon(Character character, int skinId) => skinId > 0 && skins.Emoticons.Contains(skinId) &&
+        character.Inventory.Skins.Emoticons.Concat(character.Inventory.AccountSkins.Emoticons)
+            .Any(row => row.SkinId == skinId && row.Active(Clock.GetUtcNow().ToUnixTimeSeconds()));
+
     public bool NeedsEmoticonReset(Character character) => !character.Inventory.Skins.SelectedEmoticons.IsEmpty &&
         !character.Inventory.Skins.SelectedEmoticons.SequenceEqual(EffectiveEmoticons(character));
 

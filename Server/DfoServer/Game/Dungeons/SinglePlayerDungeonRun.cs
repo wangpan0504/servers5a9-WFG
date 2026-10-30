@@ -252,6 +252,9 @@ internal sealed partial class SinglePlayerDungeonRun
             .Select(monster => monster.ObjectKey).ToArray()))
         { MapOperation = mapOperation, MapPayload = mapPayload, ConsumedFatigue = consumedFatigue, BossPosition = BossPosition(activeDummyStage) };
 
+    // 跨会话展示守卫只读不可变身份及房间，不能构造会枚举可变怪物集合的完整Snapshot。
+    internal (DungeonRunIdentity Identity, DungeonMap Map) Scene => (identity, current.Plan.Room.Map);
+
     private DungeonPoint BossPosition(int stage) => dummyRooms.Length > 0 ? dummyRooms[stage].Plan.Room.Map.Position : storyDummyBosses ? storyBossPosition : entry.BossMap.Position;
 
     // 父脚本子actor的收尾不进入普通击杀集合，不能借此触发清图、经验或任务事实。

@@ -73,7 +73,8 @@ internal static partial class PartyDungeonTcpTests
             if (count == 4 && ReferenceEquals(peer, participants[^1]))
                 fixture.Sql("UPDATE character_dungeon_state SET next_object_key=65536 WHERE character_id=$p0", peer.Id);
             var frames = DfoServer.Game.Inventory.Models.SkinStorageState.Empty with
-                { PartyFrames = [new(420000001, 0), new(420000002, checked((int)(frameClock?.Now.ToUnixTimeSeconds() ?? 0) + 120))] };
+                { PartyFrames = [new(420000001, 0), new(420000002, checked((int)(frameClock?.Now.ToUnixTimeSeconds() ?? 0) + 120))],
+                    Emoticons = checkFrames ? [new(410000046, 0)] : [] };
             if (checkFrames && ReferenceEquals(peer, alpha))
                 fixture.Sql("INSERT INTO account_skin_storage(account,state_json) SELECT account,$p1 FROM characters WHERE id=$p0",
                     peer.Id, System.Text.Json.JsonSerializer.Serialize(frames));
@@ -198,6 +199,16 @@ internal static partial class PartyDungeonTcpTests
             {
                 if (checkFrames)
                 {
+                    string beforeEmoticon = fixture.Snapshot();
+                    alpha.Send(1559, Build(w => w.Write(410000046)));
+                    var emotes = All(alpha);
+                    foreach (var rows in emotes.Values)
+                    {
+                        Bytes(rows.Single(p => p is { Kind: 0, Opcode: 1535 }).Body,
+                            Build(w => { w.Write(alpha.Id); w.Write(410000046); }), "真实组队副本内本人及队友按同一成员编号播放表情");
+                        That(rows.All(p => p.Opcode != 1559 && p.Opcode != 14), "即时表情不伪造ACK或发送库存变更");
+                    }
+                    That(fixture.Snapshot() == beforeEmoticon, "副本播放表情不修改资产、进度或revision");
                     SelectFrame(20000, true); SelectFrame(420000001, true); SelectFrame(420000002, true);
                     frameClock!.Now += TimeSpan.FromSeconds(121);
                     alpha.Send(1426);

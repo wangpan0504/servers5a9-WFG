@@ -140,6 +140,9 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         });
         // 聊天投递入口绑定本条连接：服务端从在线会话目录按快照选中本会话后，由这里把 0x0C/0x76 入本连接队列。
         session.ChatNoticeArrived = notice => ChatProjection.Notice(context, notice);
+        session.EmoticonArrived = notice => context.Sender.Post(0, (ushort)NotiPacketType.EMOTICON,
+            DfoServer.Network.Builders.Inventory.SkinStoragePackets.Emoticon(notice.MemberId, notice.SkinId),
+            "instant_emoticon", notice.Guard);
         session.ExpertJobStoreClosed = id =>
         {
             if (expertStores?.TryClose(id, out _) == true)

@@ -265,7 +265,7 @@ internal static class ServerRuntime
         var avatarPresetService = new Game.Inventory.Services.AvatarPresetService(itemResources.Items, itemResources.Contracts, towns, clock);
         var avatarPresetProjection = new Network.Projection.Inventory.AvatarPresetProjection();
         var avatarPresetHandler = new Network.Handlers.AvatarPresetHandler(avatarPresetService, avatarPresetProjection, inventoryProjection, log);
-        var weaponSkinHandler = new SkinStorageHandler(weaponSkinService, inventoryProjection, weaponSkinProjection, log);
+        var weaponSkinHandler = new SkinStorageHandler(weaponSkinService, inventoryProjection, weaponSkinProjection, log, online);
         // GM 团本时段：入城投影与 GM 网页共用同一实例，网页写入后下一次入城/换频道即按新表下发 EVENT_INFO。
         var raidWindows = new Game.Raids.RaidEntryStore(options.DataDirectory);
         projection.RaidWindows = raidWindows;
