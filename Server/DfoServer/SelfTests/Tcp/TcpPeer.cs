@@ -830,13 +830,14 @@ internal sealed partial class TcpPeer : IDisposable
         }
     });
 
-    // 选角就绪后的固定包序：先0x063D装扮预设容量与列表，再720空正文与721五槽。
+    // 选角就绪后的固定包序：先0x063D装扮预设已应用槽与列表，再720空正文与721五槽。
     // 自定义入城读取器读到124后须调用本方法，避免把这三包留给后续断言。
     public void ReadWeeklyDungeon()
     {
         AvatarPresetList = Expect(0, 1597).Body;
-        TestCheck.That(AvatarPresetList.Length >= 2 && AvatarPresetList[1] <= AvatarPresetList[0],
-            "装扮预设容量与列表先于每周地下城下发，条目数不超过容量");
+        TestCheck.That(AvatarPresetList.Length >= 2 && AvatarPresetList[1] is >= 1 and <= 6 &&
+            AvatarPresetList[0] < AvatarPresetList[1],
+            "装扮预设先于每周地下城下发，记录数决定容量、已应用槽在范围内");
         NpcFavor = Expect(0, 746).Body;
         TestCheck.That(NpcFavor.Length >= 1, "好感度快照有u8行数");
         int favorOffset = 1;

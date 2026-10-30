@@ -82,6 +82,24 @@ internal sealed class AvatarPresetService(ItemCatalog catalog, PremiumContractCa
                 return InventoryResult.Reject(Rejection);
         var working = character;
         long? deadline = null;
+        // 先穿入目标实例：占用部位沿公共移动规则直接互换，空部位先穿会释放背包格。
+        // 不能先卸装，否则背包满时连最终不增加背包占用的合法换装也会被拒绝。
+        foreach (var part in preset.Parts)
+        {
+            var item = Find(working.Inventory, part.ItemUid)!;
+            var target = new InventorySlot(InventoryListType.Equipment, part.Slot);
+            if (item.Position == target) continue;
+            var step = Move(working, item.Position, item.Core.ItemId, target);
+            if (!step.Accepted) return step;
+            var after = step.Plan!.After;
+            // 普通穿戴克隆会借用被替换装扮的外观；预设切换只恢复已保存搭配，不能因直接互换串套。
+            // 先保留实例原详情，再由下方 RestoreCloneAppearance 回放该预设快照（含旧档兼容）。
+            if (catalog.Get(item.Core.ItemId) is { CloneAvatar: true, BorrowAvatarAppearance: true })
+                after = after with { Items = after.Items.Select(moved => moved.Uid == item.Uid
+                    ? moved with { Avatar = item.Avatar } : moved).ToImmutableArray() };
+            working = working with { Inventory = after };
+            Merge(step.Plan.CharacterPrecondition);
+        }
         var targets = preset.Parts.ToDictionary(part => part.Slot);
         var worn = working.Inventory.Items.Where(item => item.Position.List == InventoryListType.Equipment &&
             item.Position.Index is >= 0 and <= 11 && item.Avatar is not null).ToArray();
@@ -95,16 +113,6 @@ internal sealed class AvatarPresetService(ItemCatalog catalog, PremiumContractCa
             working = working with { Inventory = step.Plan!.After };
             Merge(step.Plan.CharacterPrecondition);
         }
-        foreach (var part in preset.Parts)
-        {
-            var item = Find(working.Inventory, part.ItemUid)!;
-            var target = new InventorySlot(InventoryListType.Equipment, part.Slot);
-            if (item.Position == target) continue;
-            var step = Move(working, item.Position, item.Core.ItemId, target);
-            if (!step.Accepted) return step;
-            working = working with { Inventory = step.Plan!.After };
-            Merge(step.Plan.CharacterPrecondition);
-        }
         // 应用预设按快照回写克隆外观：物品可能被旧逻辑清过，或玩家在别的预设下改过外观/染色。
         foreach (var part in preset.Parts)
             working = working with { Inventory = RestoreCloneAppearance(working.Inventory, part) };
@@ -112,7 +120,7 @@ internal sealed class AvatarPresetService(ItemCatalog catalog, PremiumContractCa
         var presets = state.With(preset with { Parts = Capture(working.Inventory) }) with { ActiveSlot = slot };
         try { presets.Validate(); }
         catch (InvalidDataException) { return InventoryResult.Reject(Rejection); }
-        // 装扮栏必须留一格空位才能逐个卸下；每个位置来自上一步提交后的快照。
+        // 所有步骤只操作不可变计划；最后卸装真的无空格或任一资格失败时，整笔不提交。
         return new(true, 0, new(character.Inventory, working.Inventory with { AvatarPresets = presets }, "avatar_preset_select",
             new InventoryCharacterPrecondition(character, deadline, Clock)));
 

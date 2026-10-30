@@ -90,11 +90,18 @@ internal static class AvatarPresetTests
         // 空名写长度0：客户端FUN_03be25f0走回退分支，显示自己的默认标签（0xB743）。
         Bytes(AvatarPresetPackets.Update(new AvatarPreset(0, "", [])), [0, 0, 0, 0, 0, 0],
             "空名写长度0与零部位，客户端回退到默认标签");
-        var state = new AvatarPresetState(3, [preset]);
-        Bytes(AvatarPresetPackets.List(state), [3, 3, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, .. record],
-            "0x063D整表：容量与容量等长的条目数，槽2真实记录前后各补空名零部位占位");
-        Bytes(AvatarPresetPackets.List(AvatarPresetState.Empty), [1, 1, 0, 0, 0, 0, 0, 0],
+        var state = new AvatarPresetState(3, [preset], 2);
+        Bytes(AvatarPresetPackets.List(state), [2, 3, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, .. record],
+            "0x063D整表：已应用槽2、记录数3；槽0和1补空名零部位占位");
+        Bytes(AvatarPresetPackets.List(AvatarPresetState.Empty), [0, 1, 0, 0, 0, 0, 0, 0],
             "空预设也回放一条空占位，客户端按记录条数画格子");
+        var six = new AvatarPresetState(6, [], 5);
+        Bytes(AvatarPresetPackets.List(six),
+            [5, 6, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0,
+                3, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0],
+            "六格已应用末槽5，不得把容量6写入首字段造成客户端越界回槽0");
+        That(AvatarPresetPackets.List(six with { ActiveSlot = 0 })[0] == 0,
+            "容量相同的整表仍须按已应用槽写首字段");
     }
 
     static void State()
@@ -277,10 +284,50 @@ internal static class AvatarPresetTests
             wear.After.Find(new(InventoryListType.Equipment, 1))?.Uid == 12 &&
             wear.After.Items.Single(item => item.Uid == 10).Position.List == InventoryListType.Avatar &&
             wear.After.Items.Single(item => item.Uid == 11).Position.List == InventoryListType.Avatar &&
-            wear.After.Find(new(InventoryListType.Avatar, 2))?.Uid == 10 &&
-            wear.After.Find(new(InventoryListType.Avatar, 3))?.Uid == 11,
-            "选择预设先卸下不匹配时装到空格，再按UID穿齐目标部位");
+            wear.After.Find(new(InventoryListType.Avatar, 1))?.Uid == 10 &&
+            wear.After.Find(new(InventoryListType.Avatar, 0))?.Uid == 11,
+            "选择预设按UID直接互换目标部位，旧装扮回到目标腾出的背包格");
         That(wear.Before.Find(worn0.Position) == worn0, "选择预设计划不原地修改当前快照");
+        var fillers = Enumerable.Range(2, 103).Select(index => new InventoryItem(100 + index,
+            new(InventoryListType.Avatar, (short)index), new(1001, ItemKind.Avatar, 100 + index)) { Avatar = new() });
+        var full = target with { Inventory = target.Inventory with
+            { AvatarExpansion = 0, Items = [.. target.Inventory.Items, .. fillers] } };
+        var fullSwap = service.PlanSelect(full, 0);
+        That(fullSwap.Accepted && fullSwap.Plan!.After.Items.Length == full.Inventory.Items.Length &&
+            fullSwap.Plan.After.Find(new(InventoryListType.Equipment, 0))?.Uid == 13 &&
+            fullSwap.Plan.After.Find(new(InventoryListType.Equipment, 1))?.Uid == 12 &&
+            fullSwap.Plan.After.Items.All(item => full.Inventory.Items.Single(before => before.Uid == item.Uid)
+                with { Position = item.Position } == item),
+            "满包装扮仍可直接互换整套，所有UID、核心和完整详情仅变位置");
+        var release = full with { Inventory = full.Inventory with
+        {
+            Items = [.. full.Inventory.Items.Where(item => item.Uid != 11).Select(item => item.Uid == 12
+                ? bagC with { Uid = 12, Position = item.Position, Core = bagC.Core with { Value = 12 } } : item)],
+            AvatarPresets = AvatarPresetState.Empty.With(new AvatarPreset(0, "先穿再卸", [Part(5, 12, 1004)]))
+        } };
+        var released = service.PlanSelect(release, 0);
+        That(released.Accepted && released.Plan!.After.Find(new(InventoryListType.Equipment, 5))?.Uid == 12 &&
+            released.Plan.After.Find(new(InventoryListType.Equipment, 0)) is null &&
+            released.Plan.After.Find(new(InventoryListType.Avatar, 0))?.Uid == 10,
+            "满包先穿空部位释放背包格，再卸多余部位，最终空间足够就成功");
+        var noRoom = full with { Inventory = full.Inventory with
+            { AvatarPresets = AvatarPresetState.Empty.With(new AvatarPreset(0, "不足", [Part(0, 13, 1003)])) } };
+        var rejectedFull = service.PlanSelect(noRoom, 0);
+        That(!rejectedFull.Accepted && rejectedFull.Plan is null &&
+            noRoom.Inventory.Find(new(InventoryListType.Equipment, 0)) == worn0 &&
+            noRoom.Inventory.Find(new(InventoryListType.Avatar, 1)) == bagB,
+            "先互换后仍无空间卸多余部位时整笔拒绝，未修改原快照");
+        var lateFailure = target with { Inventory = target.Inventory with
+        {
+            Items = [.. target.Inventory.Items, bagC],
+            AvatarPresets = AvatarPresetState.Empty.With(new AvatarPreset(0, "后续错位",
+                [Part(0, 13, 1003), Part(1, 14, 1004)]))
+        } };
+        var rejectedLate = service.PlanSelect(lateFailure, 0);
+        That(!rejectedLate.Accepted && rejectedLate.Plan is null &&
+            lateFailure.Inventory.Find(new(InventoryListType.Equipment, 0)) == worn0 &&
+            lateFailure.Inventory.Find(new(InventoryListType.Avatar, 1)) == bagB,
+            "首部位可互换但后部位资格不符时，不提交前面的成功步骤");
         var missing = target with { Inventory = target.Inventory with
             { AvatarPresets = AvatarPresetState.Empty.With(new AvatarPreset(0, "缺件", [Part(0, 999, 1003)])) } };
         That(!service.PlanSelect(missing, 0).Accepted, "预设引用的时装已不存在时整笔拒绝");
@@ -349,6 +396,14 @@ internal static class AvatarPresetTests
         var cloneWorn = new InventoryItem(30, new(InventoryListType.Equipment, 0), new(2001, ItemKind.Avatar, 30))
             { Avatar = new() { ClearAvatarId = 1001, ClearAvatarSourceUid = 31, Color1 = 5, Color2 = 6 } };
         var clonePeer = new InventoryItem(32, new(InventoryListType.Equipment, 1), new(2002, ItemKind.Avatar, 32)) { Avatar = new() };
+        var plainClone = cloneWorn with { Position = new(InventoryListType.Avatar, 0), Avatar = new() };
+        var plainRole = Role(worn0, plainClone);
+        plainRole = plainRole with { Inventory = plainRole.Inventory with
+            { AvatarPresets = AvatarPresetState.Empty.With(new AvatarPreset(0, "无复制外观", [Part(0, 30, 2001)])) } };
+        var plainApplied = service.PlanSelect(plainRole, 0);
+        That(plainApplied.Accepted && plainApplied.Plan!.After.Find(new(InventoryListType.Equipment, 0)) is
+            { Uid: 30, Avatar: { ClearAvatarId: 0, ClearAvatarSourceUid: 0, Color1: 0, Color2: 0 } },
+            "应用未复制外观的克隆预设时，不借用被换下的普通装扮及其染色");
         var cloneBase = Role(lookSource, cloneWorn, clonePeer);
         var cloneRole = cloneBase with
         {
