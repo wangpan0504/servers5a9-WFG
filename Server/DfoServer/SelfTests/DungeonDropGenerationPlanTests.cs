@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Dungeons;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.GameWorld.Items;
@@ -63,6 +64,65 @@ internal static class DungeonDropGenerationPlanTests
             "绝对日期已过但相对期限有效时不误删奖励");
         Reject<InvalidDataException>(() => DungeonDropCreation.Create(expired, 1, _ => 0, deadline),
             "底层创建仍拒绝过期资产，不借掉落容错延长其它入口期限");
+        EpicDropBonus(stack, equipment);
         Console.WriteLine($"PASS {Count - before} 完整掉落生成数量、未命中及独立装备属性断言");
+    }
+
+    static void EpicDropBonus(ItemTemplate stack, ItemTemplate equipment)
+    {
+        var pools = Enumerable.Range(0, 7).Select(index => new DungeonItemDropPool([
+            new DungeonWeightedDropItem(equipment with { Id = 5000 + index, Rarity = index }, 1)])).ToArray();
+        int[] thresholds = [100000, 300000, 500000, 700000, 800000, 900000, 1000000];
+        var rarity = thresholds.Select((value, index) => new DungeonDropRarityPool(value, pools[index])).ToImmutableArray();
+        var alternate = new DungeonItemDropPool([new DungeonWeightedDropItem(equipment with { Id = 6004, Rarity = 4 }, 1)]);
+        rarity = rarity.SetItem(4, rarity[4] with { AlternateItems = alternate, AlternatePermille = 250,
+            SecondaryItems = pools[4], SecondaryPermille = 125 });
+        var replacement = new DungeonItemDropPool([new DungeonWeightedDropItem(equipment with { Id = 7004, Rarity = 4 }, 1)]);
+        var trial = new DungeonDropTrial(1234, null, 1, 1, RarityPools: rarity, Attempts: 2,
+            GrowthContractEligible: true, EpicReplacementItems: replacement);
+        var guaranteed = new DungeonDropTrial(10000, pools[4], 1, 1);
+        var gold = new DungeonDropTrial(10000, null, 1, 1, new DungeonDropGoldReference(95, 100, 0));
+        var fragment = new DungeonDropTrial(10000, new DungeonItemDropPool([new DungeonWeightedDropItem(stack, 1)]), 1, 1);
+        var original = new DungeonDropGenerationPlan("明确合成固定史诗药剂策略", [trial, guaranteed, gold, fragment])
+            { OrdinaryLukeDailySource = 5004 };
+        var doubled = original.WithEpicDropBonus(100);
+        int[] expected = [88888, 266666, 444444, 622222, 822222, 911111, 1000000];
+        That(doubled.Trials[0].RarityPools.Select(row => row.Threshold).SequenceEqual(expected) &&
+            doubled.Trials[0].RarityPools[4].Threshold - doubled.Trials[0].RarityPools[3].Threshold == 200000 &&
+            original.Trials[0].RarityPools.Select(row => row.Threshold).SequenceEqual(thresholds),
+            "固定100加成将史诗绝对区间翻倍，非史诗按原比例累计取整且不改原计划");
+        That(doubled.Trials[0] with { RarityPools = trial.RarityPools } == trial &&
+            doubled.Trials.Skip(1).SequenceEqual(original.Trials.Skip(1)) && doubled.MaximumObjects == original.MaximumObjects &&
+            doubled.ResourceSource == original.ResourceSource && doubled.OrdinaryLukeDailySource == 5004 &&
+            doubled.ReferenceQuality == original.ReferenceQuality && ReferenceEquals(doubled.Amplification, original.Amplification),
+            "只改稀有度阈值；原触发率、次数、条件分支、池、史诗替换、容量和卢克来源完整保留");
+        for (int index = 0; index < 7; index++)
+            That(ReferenceEquals(doubled.Trials[0].RarityPools[index].Items, rarity[index].Items) &&
+                doubled.Trials[0].RarityPools[index].AlternatePermille == rarity[index].AlternatePermille &&
+                doubled.Trials[0].RarityPools[index].SecondaryPermille == rarity[index].SecondaryPermille,
+                "固定史诗加成不改池内部权重和分支概率");
+        var simple = new DungeonDropGenerationPlan("合成稀有度边界", [trial with { Attempts = 1, RarityPools =
+            thresholds.Select((value, index) => new DungeonDropRarityPool(value, pools[index])).ToImmutableArray(), EpicReplacementItems = null }]);
+        var enhanced = simple.WithEpicDropBonus(100);
+        int ItemAt(DungeonDropGenerationPlan plan, int roll, out int draws)
+        {
+            int calls = 0;
+            int id = plan.Generate(bound => { calls++; return bound == 1000000 ? roll : 0; }, DateTimeOffset.UnixEpoch).Single().Item!.ItemId;
+            draws = calls;
+            return id;
+        }
+        That(ItemAt(simple, 650000, out int beforeDraws) == 5003 && ItemAt(enhanced, 650000, out int afterDraws) == 5004 &&
+            beforeDraws == afterDraws && ItemAt(enhanced, 822221, out _) == 5004 && ItemAt(enhanced, 822222, out _) == 5005,
+            "真实生成在扩大后的史诗区间边界变化，保持相同抽样次数且上界仍排他");
+        var capped = original.WithEpicDropBonus(int.MaxValue);
+        That(capped.Trials[0].RarityPools.Select(row => row.Threshold).SequenceEqual(new[] { 0, 0, 0, 0, 1000000, 1000000, 1000000 }) &&
+            capped.Trials[0].Threshold == 1234 && capped.Trials[0].Attempts == 2 && capped.MaximumObjects == original.MaximumObjects,
+            "巨大加成以原稀有度分母封顶，不能溢出、增加触发或额外抽奖");
+        That(ReferenceEquals(original.WithEpicDropBonus(0), original) &&
+            ReferenceEquals(new DungeonDropGenerationPlan("直接奖励不加成", [guaranteed, gold, fragment]).WithEpicDropBonus(100).Trials[0], guaranteed) &&
+            ReferenceEquals(new DungeonDropGenerationPlan("非完整七池不扩展", [trial with { RarityPools = rarity.RemoveAt(0) }])
+                .WithEpicDropBonus(100).Trials[0].RarityPools[0], rarity[1]),
+            "零加成复用原计划，直接史诗、金币、碎片和非完整七池不受药剂改变");
+        Reject<InvalidDataException>(() => original.WithEpicDropBonus(-1), "负史诗加成不静默改成零或反向扣减");
     }
 }

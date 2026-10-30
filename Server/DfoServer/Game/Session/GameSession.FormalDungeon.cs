@@ -1431,7 +1431,8 @@ internal sealed partial class GameSession
                     // 个人掉落沿用第一档；队内有效成长契约人数对应的其余档位尚未接入。
                     int bonus = GrowthContractPolicy.Active(Selected, contracts?.Growth, now.ToUnixTimeSeconds()) &&
                         !dungeon.Entry.IsTutorial && !dungeon.Entry.IsTrainingRoom ? contracts!.Growth!.IndependentDropPercent[0] : 0;
-                    return generation.WithGrowthContract(bonus).Generate(dungeon.Draw, now);
+                    int epicBonus = EpicDropPotionBonus(Selected, now);
+                    return generation.WithGrowthContract(bonus).WithEpicDropBonus(epicBonus).Generate(dungeon.Draw, now);
                 }, generation.ResourceSource, daily);
             }
             else loot = dungeon.Ground.GetOrFreeze(pending, () =>

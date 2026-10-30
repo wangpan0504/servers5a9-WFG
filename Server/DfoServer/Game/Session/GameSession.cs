@@ -35,7 +35,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DungeonBattleLevelSettings? monsterBattleLevels = null, DungeonMonsterAiSettings? monsterAi = null,
     DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
     DfoServer.Game.Guild.GuildNpcBenefitService? guildNpcBenefits = null,
-    DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null)
+    DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null,
+    RecoveryConsumableCatalog? consumables = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 

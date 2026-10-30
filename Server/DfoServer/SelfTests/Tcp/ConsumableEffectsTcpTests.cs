@@ -24,9 +24,67 @@ internal static partial class ConsumableUseTcpTests
             repository.CommitInventory(owner, dose, new(dose.Inventory, dose.Inventory with
                 { StaminaUntil = clock.GetUtcNow().ToUnixTimeSeconds()+600 }, "timed_weakness_fixture"));
             Create(owner, "GiftCaster", 70, [(7789,1)]);
+            Create(owner, "EpicDose", 95, [(490000413,3),(490002458,2),(490004594,2),(10004688,2)]);
+            var variant = Create(owner, "WeakVariant", 40, [(490003621,3)]);
+            repository.CommitInventory(owner, variant, new(variant.Inventory, variant.Inventory with
+                { StaminaUntil = clock.GetUtcNow().ToUnixTimeSeconds()+600 }, "variant_weakness_fixture"));
         }
         using (var owner = owners.Acquire("beta", () => { })) Create(owner, "GiftTarget", 1, []);
         await fixture.StartAsync();
+        using (var peer = Open(fixture))
+        {
+            peer.Select(2);
+            Use(peer,65,0,490000413); Accepted(peer,65,0,490000413); peer.Barrier();
+            long until = clock.GetUtcNow().ToUnixTimeMilliseconds() + 600000;
+            That(fixture.Query("SELECT kind,until_ms FROM character_consumable_states WHERE character_id=$p0 ORDER BY kind",peer.Id)
+                    .Select(row => (Convert.ToInt32(row[0]), Convert.ToInt64(row[1]))).SequenceEqual(new[] { (0,until),(1,until) }),
+                "史诗Buff药剂真实44成功后同事务保存十分钟效果和冷却");
+            string snapshot = fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id);
+            Use(peer,65,1,490000413); Refused(peer,1,490000413); peer.Barrier();
+            That(fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
+                "史诗药新token冷却拒绝不重扣、不续期");
+            peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2); peer.Select(2);
+            That(peer.RestoredConsumableStates.Select(packet => packet.Opcode).SequenceEqual(new ushort[] { 172,174 }) &&
+                fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id=" + peer.Id) == snapshot,
+                "史诗药重选恢复实际剩余时限，不再扣源或重新起算");
+            Use(peer,66,2,490002458); Accepted(peer,66,2,490002458); peer.Barrier();
+            That(fixture.Query("SELECT item_id FROM character_consumable_states WHERE character_id=$p0 AND kind=0",peer.Id) is [[490002458L]],
+                "同类固定史诗药替换旧效果，不叠加多份掉率");
+            foreach (var (slot, id, duration) in new[] { (67,490004594,1800000), (68,10004688,180000) })
+            {
+                Use(peer,(ushort)slot,3,id); Accepted(peer,(ushort)slot,3,id); peer.Barrier();
+                long end = clock.GetUtcNow().ToUnixTimeMilliseconds()+duration;
+                That(fixture.Query("SELECT kind,until_ms FROM character_consumable_states WHERE character_id=$p0 AND item_id=$p1 ORDER BY kind",peer.Id,id)
+                        .Select(row => (Convert.ToInt32(row[0]),Convert.ToInt64(row[1]))).SequenceEqual(new[] { (0,end),(1,end) }) &&
+                    fixture.Query("SELECT json_extract(item_core,'$.Value') FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) " +
+                        "WHERE s.character_id=$p0 AND list_type=0 AND slot_index=$p1",peer.Id,slot) is [[1L]],
+                    "真实44强化或增幅药剂扣一瓶并保存各自三十分钟、三分钟效果与冷却："+id);
+            }
+            string upgrades = fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id="+peer.Id);
+            peer.Send(7); peer.Expect(1,7,[1]); peer.Expect(0,2); peer.Select(2);
+            foreach (var (id, seconds) in new[] { (490004594,1800), (10004688,180) })
+                That(peer.RestoredConsumableStates.Select(packet => packet.Opcode).SequenceEqual(new ushort[] { 172,174 }) &&
+                    peer.RestoredConsumableStates.All(packet => Enumerable.Range(0,packet.Body[0]).Any(index =>
+                        U32(packet.Body,1+index*8) == (uint)id && U32(packet.Body,5+index*8) == (uint)seconds)),
+                    "升级药剂重选沿原生172/174整表恢复各自真实剩余秒数："+id);
+            That(fixture.Snapshot("SELECT * FROM character_consumable_states WHERE character_id="+peer.Id) == upgrades,
+                "真实双模式重选保持原截止和库存，不续期、不清另一模式或重扣");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(3);
+            Use(peer,65,0,490003621); Accepted(peer,65,0,490003621); peer.Expect(0,4,[100]); peer.Barrier();
+            That(fixture.Query("SELECT stamina_until FROM characters WHERE id=$p0",peer.Id) is [[0L]] &&
+                fixture.Query("SELECT until_ms FROM character_consumable_states WHERE character_id=$p0 AND kind=0",peer.Id)
+                    is [[var end]] && Convert.ToInt64(end) == clock.GetUtcNow().ToUnixTimeMilliseconds()+600000,
+                "十分钟活动变体真实44立即解除虚弱并保存自己的十分钟药效");
+            FormalDungeonTcpTests.EntryTown(peer); FormalDungeonTcpTests.Enter(peer); FormalDungeonTcpTests.Load(peer);
+            peer.Send(40,[0x74,0,4,1,0,0]); peer.Expect(0,32,[(byte)peer.Id,(byte)(peer.Id>>8),0,0]); peer.Barrier();
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id>>8),0]);
+            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            That(fixture.Query("SELECT stamina_until FROM characters WHERE id=$p0",peer.Id) is [[0L]],
+                "活动变体实际TCP死亡返城继续免虚弱，不仅发送成功应答");
+        }
         using (var peer = Open(fixture))
         {
             peer.Select();

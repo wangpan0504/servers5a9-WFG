@@ -43,6 +43,10 @@ internal sealed partial class GameSession
         if (!service.TryDefinition(request.ItemId, out var definition)) return Reject("unsupported-template");
         if (definition.BossSelectionBuff is not null && captured.Guard.Phase != SessionPhase.Town)
             return Reject("boss-potion-requires-town");
+        if (definition.EpicDropBuff is not null && captured.Guard.Phase != SessionPhase.Town)
+            return Reject("epic-potion-requires-town");
+        if (definition.EnhancementPotion is not null && captured.Guard.Phase != SessionPhase.Town)
+            return Reject("enhancement-potion-requires-town");
         if (definition.TownGiftItem != 0 && captured.Guard.Phase != SessionPhase.Town) return Reject("gift_requires_town");
         if (definition.SummonsApc && captured.Guard.Phase != SessionPhase.Dungeon) return Reject("summon_requires_dungeon");
         if (definition.RequiresDungeon && captured.Guard.Phase != SessionPhase.Dungeon) return Reject("projectile_requires_dungeon");
