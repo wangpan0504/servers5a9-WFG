@@ -25,6 +25,10 @@ internal static class CollectBoxTcpTests
         var extension = box.Extensions.First(row => row.ItemId != slot.ItemId);
         var collectedTemplate = itemResources.Items.Get(slot.ItemId);
         var extensionTemplate = itemResources.Items.Get(extension.ItemId);
+        var spring = itemResources.CollectBoxes.Get(8);
+        var springSlot = spring.Slots.Single(row => row.PhysicalSlot == 0 && row.ItemId == 490705309 && row.Metadata == 6);
+        var springTemplate = itemResources.Items.Get(springSlot.ItemId);
+        long springHistoricalExpiry = spring.MaximumExpiration!.Value - 1;
         var now = DateTimeOffset.FromUnixTimeSeconds(Math.Max(1, box.BaseExpiration!.Value - 3600));
         var clock = new FixedClock(now);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "collectbox"), resources: resources, clock: clock);
@@ -32,6 +36,7 @@ internal static class CollectBoxTcpTests
         var draft = new Character(1, 0, "CollectTcpDraft", 0, resources.Towns.Room, resources.Towns.InitialReturn);
         draft = Grant(draft, collectedTemplate, Math.Min(2, collectedTemplate.StackLimit), now, itemResources.EpicPieces);
         draft = Grant(draft, extensionTemplate, extension.RequiredCount, now, itemResources.EpicPieces);
+        draft = Grant(draft, springTemplate, Math.Min(2, springTemplate.StackLimit), now, itemResources.EpicPieces);
         var repository = new CharacterRepository(fixture.Database);
         Character created;
         var owners = new AccountOwners();
@@ -41,6 +46,11 @@ internal static class CollectBoxTcpTests
                 Inventory = draft.Inventory,
                 AcceptedStoryLevel = 1
             });
+        fixture.Sql("INSERT INTO character_collectbox_expirations(character_id,account,box_index,expires_at) VALUES($p0,$p1,$p2,$p3)",
+            created.Id, fixture.Options.DevelopmentAccount, spring.Index, springHistoricalExpiry);
+        var springItem = created.Inventory.Items.Single(item => item.Core.ItemId == springSlot.ItemId);
+        ushort springSourceSlot = checked((ushort)springItem.Position.Index);
+        int springCount = springItem.Core.Count;
         var sourceItem = created.Inventory.Items.Single(item => item.Core.ItemId == slot.ItemId);
         var ticket = created.Inventory.Items.Single(item => item.Core.ItemId == extension.ItemId);
         ushort sourceSlot = checked((ushort)sourceItem.Position.Index);
@@ -141,6 +151,51 @@ internal static class CollectBoxTcpTests
             peer.Expect(1, 1025, [1]);
             peer.Barrier();
         }
+        // 同一角色和数据库保留原续期箱覆盖，再核历史过期的原2020春节九珠箱。
+        clock.Now = DateTimeOffset.FromUnixTimeSeconds(Math.Max(now.ToUnixTimeSeconds(), spring.MaximumExpiration.Value + 1));
+        byte[] springReplay;
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            var initialSpring = Box(peer, spring.Index);
+            That(initialSpring.Body.Length == 8 && initialSpring.Body[1] == 0 && initialSpring.Body[6] == 1 &&
+                initialSpring.Body[7] == 0 && U32(initialSpring.Body, 2) == 0 &&
+                fixture.Query("SELECT expires_at FROM character_collectbox_expirations WHERE character_id=$p0 AND box_index=$p1",
+                    created.Id, spring.Index) is [[long savedSpringExpiry]] && savedSpringExpiry == springHistoricalExpiry,
+                "九珠历史过期库进城仍发永久位1剩余0，历史记录不被重写");
+
+            peer.Send(1024, Add(spring.Index, springSourceSlot, springSlot.ItemId));
+            Delta(peer, springSourceSlot, springCount == 1 ? -1 : springSlot.ItemId, springCount - 1);
+            ValidateState(peer.Expect(0, 1030), spring.Index, springSlot.ItemId, selected: false, permanent: true);
+            peer.Expect(1, 1024, [1]);
+            peer.Send(1025, Remove(spring.Index, springSlot.ItemId));
+            Delta(peer, springSourceSlot, springSlot.ItemId, springCount);
+            var removedSpring = peer.Expect(0, 1030);
+            That(removedSpring.Body.Length == 8 && removedSpring.Body[7] == 0 && removedSpring.Body[6] == 1 &&
+                U32(removedSpring.Body, 2) == 0, "九珠取下发布空列表并保持常驻期限");
+            peer.Expect(1, 1025, [1]);
+            peer.Send(1024, Add(spring.Index, springSourceSlot, springSlot.ItemId));
+            Delta(peer, springSourceSlot, springCount == 1 ? -1 : springSlot.ItemId, springCount - 1);
+            var readdedSpring = peer.Expect(0, 1030);
+            ValidateState(readdedSpring, spring.Index, springSlot.ItemId, selected: false, permanent: true);
+            springReplay = readdedSpring.Body;
+            peer.Expect(1, 1024, [1]);
+            peer.Barrier();
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select();
+            Bytes(Box(peer, spring.Index).Body, springReplay, "九珠正常重连从真实库回放相同永久位和珠列表");
+            peer.Send(1025, Remove(spring.Index, springSlot.ItemId));
+            Delta(peer, springSourceSlot, springSlot.ItemId, springCount);
+            var removedSpring = peer.Expect(0, 1030);
+            That(removedSpring.Body[7] == 0 && removedSpring.Body[6] == 1 && U32(removedSpring.Body, 2) == 0 &&
+                fixture.Query("SELECT expires_at FROM character_collectbox_expirations WHERE character_id=$p0 AND box_index=$p1",
+                    created.Id, spring.Index) is [[long savedSpringExpiry]] && savedSpringExpiry == springHistoricalExpiry,
+                "九珠重连后正常取回，历史期限仍独立保存");
+            peer.Expect(1, 1025, [1]);
+            peer.Barrier();
+        }
         That(fixture.Query("SELECT count(*) FROM character_collectbox_slots WHERE character_id=$p0", created.Id) is [[0L]] &&
             fixture.Query("SELECT selected_box FROM character_collectbox_state WHERE character_id=$p0", created.Id)
                 is [[long persistedSelection]] && persistedSelection == box.Index &&
@@ -159,11 +214,11 @@ internal static class CollectBoxTcpTests
 
     static WirePacket Box(TcpPeer peer, byte box) => peer.CollectBoxes.Single(packet => packet.Body[0] == box);
 
-    static void ValidateState(WirePacket packet, byte box, int itemId, bool selected)
+    static void ValidateState(WirePacket packet, byte box, int itemId, bool selected, bool permanent = false)
     {
         That(packet.Kind == 0 && packet.Opcode == 1030 && packet.Body.Length == 12 &&
-            packet.Body[0] == box && packet.Body[1] == (selected ? 1 : 0) && packet.Body[6] == 0 &&
-            packet.Body[7] == 1 && BinaryPrimitives.ReadInt32LittleEndian(packet.Body.AsSpan(8)) == itemId,
+            packet.Body[0] == box && packet.Body[1] == (selected ? 1 : 0) && packet.Body[6] == (permanent ? 1 : 0) &&
+            (!permanent || U32(packet.Body, 2) == 0) && packet.Body[7] == 1 && BinaryPrimitives.ReadInt32LittleEndian(packet.Body.AsSpan(8)) == itemId,
             "COLLECT_BOX变更通知包含精确箱、选择、期限与物品序列");
     }
 

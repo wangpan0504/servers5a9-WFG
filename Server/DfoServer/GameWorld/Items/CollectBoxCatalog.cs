@@ -10,6 +10,9 @@ internal sealed record CollectBoxExtensionDefinition(int ItemId, int RequiredCou
 
 internal sealed class CollectBoxEntry
 {
+    static readonly int[] Spring2020BeadIds =
+        [490705309, 490705314, 490705310, 490705307, 490705306, 490705308, 490705312, 490705313, 490705311];
+    readonly bool isPermanentSpring2020;
     readonly ImmutableDictionary<int, CollectBoxSlotDefinition> slotsByItem;
     readonly ImmutableDictionary<int, CollectBoxExtensionDefinition> extensionsByItem;
 
@@ -31,6 +34,9 @@ internal sealed class CollectBoxEntry
         MaximumExpiration = maximumExpiration;
         Slots = slots.ToImmutableArray();
         Extensions = extensions.ToImmutableArray();
+        isPermanentSpring2020 = index == 8 && rows == 3 && slotsPerRow == 3 && Extensions.IsEmpty &&
+            Slots.Length == Spring2020BeadIds.Length && Slots.Select((slot, at) =>
+                slot.PhysicalSlot == at && slot.ItemId == Spring2020BeadIds[at] && slot.Metadata == 6).All(match => match);
         slotsByItem = Slots.Where(slot => slot.ItemId > 0).ToImmutableDictionary(slot => slot.ItemId);
         extensionsByItem = Extensions.ToImmutableDictionary(extension => extension.ItemId);
     }
@@ -41,6 +47,9 @@ internal sealed class CollectBoxEntry
 
     public long? ResolveExpiration(long? saved)
     {
+        // 2020春节原九珠收集箱按常驻政策解析有效期限，资源日期与历史存档保持原值。
+        if (isPermanentSpring2020)
+            return null;
         long? resolved = saved ?? BaseExpiration ?? MaximumExpiration;
         return resolved is { } value && MaximumExpiration is { } maximum ? Math.Min(value, maximum) : resolved;
     }
