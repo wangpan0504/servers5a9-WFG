@@ -64,7 +64,7 @@ internal static class HarlemHellEpicDropTests
         Reject<InvalidDataException>(() => new HarlemHellEpicDropPolicy([1], ordinaryPool, cosmoPool: ordinaryPool), "超星空不接受90级候选");
         Reject<InvalidDataException>(() => new HarlemHellEpicDropPolicy([1], new DungeonItemDropPool(new[] { old })),
             "本服哈林普通规则不接受80/85级史诗");
-        var natural = DungeonItemDropCatalog.Create([old, normal with { Id = 8000, Rarity = 0, Grade = 1, CreationRate = 1 }]);
+        var natural = DungeonItemDropCatalog.Create([old, normal with { Id = 8000, MinimumLevel = 1, Rarity = 0, Grade = 1, CreationRate = 1 }]);
         var resource = new DungeonResourceDropPolicy(dropRules, natural, id => new(id, "monster/合成.mob", null, null),
             id => templates[id], harlemEpics: local);
         var hellRules = DungeonHellDropRules.Parse("""

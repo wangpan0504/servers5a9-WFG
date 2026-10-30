@@ -169,6 +169,33 @@ internal static class DungeonDropRuleCatalogTests
             fragmentHell.Extend(emptyPlan, 90, 1, 8, 4, suppressEpicFragments: true).Trials.Length == 1 &&
             fragmentHell.Extend(emptyPlan, 90, 1, 0).Trials.IsEmpty,
             "默认开启本服碎片骰，只在深渊末波奖励点生成；哈林抑制和零奖励不混入碎片");
+        // 时间广场基准90、引用90/6/3；grade86的80级装备不得混入84至92级奖励。
+        var levelItems = new[]
+        {
+            Template(8100, ItemKind.Equipment, 30) with { MinimumLevel = 80, Grade = 86, Rarity = 4 },
+            Template(8500, ItemKind.Equipment, 7) with { MinimumLevel = 85, Grade = 93, Rarity = 4 },
+            Template(9000, ItemKind.Equipment, 11) with { MinimumLevel = 90, Grade = 100, Rarity = 4 },
+            Template(9500, ItemKind.Equipment, 13) with { MinimumLevel = 95, Grade = 90, Rarity = 4 }
+        };
+        var levelHell = new DungeonHellRewardPolicy(DungeonHellDropRules.Parse("""
+            [dungeon difficulty drop prob] 90 90 335 875 1000 1400 1000
+            [basis of rarity dicision] 1 0 599000 993000 993000 1000000 1000001 1000001
+            [item drop ref table] 90 6 3
+            """), DungeonItemDropCatalog.Create(levelItems));
+        var levelPlan = levelHell.Extend(emptyPlan, 90, 1, 8);
+        That(levelPlan.Trials.Single().RarityPools[4].Items.Entries.Select(row => row.Template.Id).SequenceEqual([8500, 9000]) &&
+            levelPlan.Trials.Single().RarityPools[4].Items.Entries.Select(row => row.CumulativeWeight).SequenceEqual([7, 18]),
+            "时间广场深渊按装备最低等级选85/90级候选，排除grade命中的80/95级并保留相对权重");
+        That(levelPlan.Trials.Single() is { Threshold: 876, ProbabilityDenominator: 1001, Attempts: 8 },
+            "修正候选等级不改深渊命中率、分母及奖励骰数");
+        That(levelPlan.Trials.Single().RarityPools[0].Items.Entries.IsEmpty &&
+            new DungeonHellRewardPolicy(DungeonHellDropRules.Parse("""
+                [dungeon difficulty drop prob] 90 90 335 875 1000 1400 1000
+                [basis of rarity dicision] 1 0 599000 993000 993000 1000000 1000001 1000001
+                [item drop ref table] 90 6 3
+                """), DungeonItemDropCatalog.Create([levelItems[0]]))
+                .Extend(emptyPlan, 90, 1, 8).Trials.Single().RarityPools[4].Items.Entries.IsEmpty,
+            "深渊缺指定稀有度或等级候选时保持空池，不向80级回退");
         int firstSamples = 0, secondSamples = 0;
         var firstAssets = cached.Generate(_ => { firstSamples++; return 0; }, DateTimeOffset.FromUnixTimeSeconds(1800000000));
         var secondAssets = cached.Generate(bound => { secondSamples++; return bound - 1; }, DateTimeOffset.FromUnixTimeSeconds(1800000000));

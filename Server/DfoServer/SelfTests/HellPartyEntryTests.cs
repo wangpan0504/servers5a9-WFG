@@ -523,6 +523,15 @@ internal static class HellPartyEntryTests
             DungeonMonsterPlan.FromRoom(runRoom, 99, 10).WithHellWaves([new(1, 125, 1050, 20, 0, 0, 0)], 99).Monsters.All(monster => monster.HellRewardRolls == 0),
             "只有最后一波带 hellparty 奖励骰；单独一波就是最后一波，rewardRolls=0（D 档）时没有");
         var hellRules = DungeonHellDropRules.TryLoad(pvf);
+        var plaza = global::DfoServer.Testing.SelfTestCatalogs.Dungeons(pvf).Get(310);
+        var plazaRange = hellRules!.GradeRange(plaza.BasisLevel!.Value)!.Value;
+        var plazaPool = items.DungeonDropItems.EquipmentLevelPool(plazaRange.Minimum, plazaRange.Maximum, 4);
+        That(plaza.BasisLevel == 90 && plazaRange == (84, 92) &&
+            items.Items.Get(100340441) is { MinimumLevel: 80, Grade: 86 } &&
+            plazaPool.Entries.All(row => row.Template.Id != 100340441) &&
+            plazaPool.Entries.Select(row => row.Template.MinimumLevel).Distinct().Order().SequenceEqual(new byte[] { 85, 90 }),
+            "时间广场真实PVF深渊史诗候选为85/90级，排除截图80级grade86辅助装备");
+
         That(hellRules is not null && hellRules.Rate(91, 1) == 875 && hellRules.Rate(50, 4) == 1000 && hellRules.Rate(10, 1) == 0 &&
             hellRules.Rarity(1) is { } rarityA && rarityA[1] == 599000 && rarityA[6] == 1000001 &&
             hellRules.Rarity(2) is { } rarityB && rarityB.Zip(rarityB.Skip(1)).All(pair => pair.Second >= pair.First) && rarityB[6] == 1000002 &&

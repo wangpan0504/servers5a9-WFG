@@ -22,7 +22,7 @@ internal sealed class DungeonHellRewardPolicy(DungeonHellDropRules rules, Dungeo
             rules.GradeRange(basisLevel) is not { } range) return plan;
         var pools = Enumerable.Range(0, 7).Select(index => new DungeonDropRarityPool(rarity[index],
             index == 4 && epicEquipment is not null ? epicEquipment :
-                candidates.ReferencePool(true, range.Minimum, range.Maximum, index))).ToImmutableArray();
+                candidates.EquipmentLevelPool(range.Minimum, range.Maximum, index))).ToImmutableArray();
         var trial = new DungeonDropTrial(Math.Clamp(rate + 1, 0, Denominator), null, 1, 1, ProbabilityDenominator: Denominator,
             RarityPools: pools, Attempts: rolls);
         var trials = plan.Trials.Append(trial);
