@@ -223,7 +223,7 @@ internal static class DungeonSettlementPackets
             body[2 + index * 4] = byte.MaxValue;
         }
         body[1 + slot * 4] = slot;
-        // 免费牌从NOTI35预载，ACK71只揭示本人免费席；未开放的付费席保持FF。
+        // 选择窗口由本地待选位置展示，汇总按成员恢复；不把各人的本地牌面合成共享牌列。
         return body;
     }
 
@@ -232,58 +232,56 @@ internal static class DungeonSettlementPackets
         if (view.Slot >= 8) throw new ArgumentOutOfRangeException(nameof(view));
         if (partyCards is not null && partyCards.Count != 8) throw new ArgumentException("队伍牌面必须包含八席", nameof(partyCards));
         if (partyCards is null && view.Paid is null && view.FreeSelected) return FreeCardSelected(view.Slot);
-        var paidItems = view.Paid is null ? [] : Display(view.Paid);
-        int count = paidItems.Count;
-        byte[] body = new byte[33+count*8];
-        body[0] = 1;
-        int at = 1;
+        var members = partyCards?.ToArray() ?? new DungeonCardView?[8];
+        members[view.Slot] = view;
+        if (members.Where((member, slot) => member is not null && member.Slot != slot).Any())
+            throw new ArgumentException("翻牌结果的成员槽不一致", nameof(partyCards));
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        writer.Write((byte)1);
         for (int slot = 0; slot < 8; slot++)
         {
-            body[at++] = (slot == view.Slot ? view.FreeSelected : partyCards?[slot]?.FreeSelected == true) ? (byte)slot : byte.MaxValue;
-            body[at++] = slot == view.Slot && view.Paid is not null ? view.Slot : byte.MaxValue;
-            body[at++] = slot == view.Slot ? checked((byte)count) : (byte)0;
-            if (slot == view.Slot)
-                foreach (var item in paidItems) Pair(item.Id, item.Count);
-            body[at++] = 0;
+            var member = members[slot];
+            var items = member?.Paid is { } reward ? Display(reward) : [];
+            writer.Write(member?.FreeSelected == true ? (byte)slot : byte.MaxValue);
+            writer.Write(member?.Paid is not null ? (byte)slot : byte.MaxValue);
+            writer.Write(checked((byte)items.Count));
+            foreach (var item in items) { writer.Write(item.Id); writer.Write(item.Count); }
+            writer.Write((byte)0);
         }
-        return body;
-        void Pair(uint item,uint amount)
-        {
-            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at),item);
-            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(at+4),amount);
-            at += 8;
-        }
+        return stream.ToArray();
     }
+
+    // 0233B698未为71注册专用失败读取器；只发公共失败前缀，不猜测业务错误码或伪造选中。
+    public static byte[] CardRejected() => [0, 0, 0];
 
     public static byte[] PartyCardReward(byte[] original, byte ownSlot, IReadOnlyList<DungeonCardView?> cards)
     {
         if (ownSlot >= 8 || cards.Count != 8) throw new ArgumentOutOfRangeException(nameof(ownSlot));
         int start = checked(156 + (int)BinaryPrimitives.ReadUInt32LittleEndian(original.AsSpan(151)) * 8);
-        int end = start;
-        var seats = new byte[8][];
-        for (int slot = 0; slot < 8; slot++)
-        {
-            int length = checked(1 + original[end] * 8);
-            seats[slot] = original.AsSpan(end, length).ToArray();
-            end += length;
-            if (slot != ownSlot && cards[slot] is { FreeSelected: true, Free: { } reward })
-            {
-                var items = Display(reward);
-                seats[slot] = new byte[1 + items.Count * 8];
-                seats[slot][0] = checked((byte)items.Count);
-                for (int index = 0; index < items.Count; index++)
-                {
-                    BinaryPrimitives.WriteUInt32LittleEndian(seats[slot].AsSpan(1 + index * 8), items[index].Id);
-                    BinaryPrimitives.WriteUInt32LittleEndian(seats[slot].AsSpan(5 + index * 8), items[index].Count);
-                }
-            }
-        }
-        byte[] result = new byte[start + seats.Sum(seat => seat.Length) + original.Length - end];
-        original.AsSpan(0, start).CopyTo(result);
         int at = start;
-        foreach (var seat in seats) { seat.CopyTo(result, at); at += seat.Length; }
-        original.AsSpan(end).CopyTo(result.AsSpan(at));
-        return result;
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        stream.Write(original.AsSpan(0, start));
+        for (int group = 0; group < 3; group++)
+        {
+            for (int slot = 0; slot < 8; slot++)
+            {
+                int length = checked(1 + original[at] * 8);
+                if (group != 1 && cards[slot] is { FreeSelected: true } selected)
+                {
+                    var reward = group == 0 ? selected.Free : selected.BlackDiamond;
+                    var items = reward is null ? [] : Display(reward);
+                    stream.WriteByte(checked((byte)items.Count));
+                    foreach (var item in items) { writer.Write(item.Id); writer.Write(item.Count); }
+                }
+                else stream.Write(original.AsSpan(at, length));
+                at += length;
+            }
+            if (group == 0) { stream.Write(original.AsSpan(at, 4)); at += 4; }
+        }
+        stream.Write(original.AsSpan(at));
+        return stream.ToArray();
     }
 
     public static byte[] ResultCommand(byte state, byte option) => [1, state, option];

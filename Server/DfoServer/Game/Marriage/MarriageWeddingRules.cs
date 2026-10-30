@@ -16,14 +16,11 @@ internal static class MarriageWeddingRules
     public const byte InCeremony = 3;
     public const byte Married = 4;
 
-    // 匹配客户端 FUN_01e4fc40；职业编号的奇偶没有性别语义。
-    public static int SexGroup(int job) => job is 0 or 2 or 4 or 7 or 8 or 9 or 13 or 15 ? 1 : 0;
-
     public static bool EligibleProposal(ushort firstId, int firstLevel, int firstJob, bool firstAvailable,
         ushort secondId, int secondLevel, int secondJob, bool secondAvailable, int minimumLevel) =>
         firstId != 0 && secondId != 0 && firstId != secondId && firstAvailable && secondAvailable &&
         minimumLevel > 0 && firstLevel >= minimumLevel && secondLevel >= minimumLevel &&
-        firstJob >= 0 && secondJob >= 0 && SexGroup(firstJob) != SexGroup(secondJob);
+        firstJob >= 0 && secondJob >= 0;
 
     public static MarriageRecord CreateEngagement(Guid id, uint contextId, ushort firstId, ushort secondId, long now)
     {

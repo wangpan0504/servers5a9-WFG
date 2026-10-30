@@ -63,10 +63,17 @@ internal sealed record FormalFreeCardResult(FormalDungeonReceipt Receipt, Invent
     uint? MailId, bool Duplicate);
 
 internal sealed record DungeonCardClaimPreparation(Character Expected, byte Side, DungeonCardDelivery Delivery,
-    DateTimeOffset Time);
+    DateTimeOffset Time)
+{
+    public byte Choice { get; init; }
+}
 
 internal sealed record DungeonCardView(DungeonCardOptions? Options,bool FreeSelected,DungeonCardReward? Paid)
 {
+    internal const int ChoiceCount = 4;
     public byte Slot { get; init; }
+    public byte FreeChoice { get; init; }
+    public byte PaidChoice { get; init; }
     public DungeonCardReward? Free { get; init; }
+    public DungeonCardReward? BlackDiamond { get; init; }
 }

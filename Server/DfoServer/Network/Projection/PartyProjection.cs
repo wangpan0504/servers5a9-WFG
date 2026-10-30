@@ -19,11 +19,12 @@ internal static class PartyProjection
         {
             if (context.Stop.IsCancellationRequested || context.PartyCardTemplate is not { } template ||
                 !ReferenceEquals(template.Instance, dungeon) || !ReferenceEquals(context.Session.PartyDungeon, dungeon)) return;
-            var cards = dungeon.CardSnapshot();
+            IReadOnlyList<DfoServer.Game.Dungeons.DungeonCardView?> cards = notice.CardEvent.IsDefault
+                ? dungeon.CardSnapshot() : notice.CardEvent;
             var own = cards[template.Receipt.PartySlot] ?? new DfoServer.Game.Dungeons.DungeonCardView(null, false, null) { Slot = template.Receipt.PartySlot };
             bool Current() => Guard() && !context.Stop.IsCancellationRequested &&
                 ReferenceEquals(context.Session.PartyDungeon, dungeon) && context.Session.CanPublishPartyCards(template.Receipt) &&
-                dungeon.IsCardSnapshotCurrent(cards);
+                (notice.CardEvent.IsDefault ? dungeon.IsCardSnapshotCurrent(cards) : dungeon.CanPublishCardSnapshot(cards));
             context.Sender.Post(0, (ushort)NotiPacketType.CLEAR_DUNGEON_REWARD,
                 DungeonSettlementPackets.PartyCardReward(template.Body, template.Receipt.PartySlot, cards), "party_card_reward", Current);
             context.Sender.Post(1, (ushort)CmdPacketType.SELECT_CARD,

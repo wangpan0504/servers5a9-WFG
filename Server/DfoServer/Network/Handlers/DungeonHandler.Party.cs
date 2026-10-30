@@ -51,7 +51,7 @@ internal sealed partial class DungeonHandler
             .Select(m => new PartyEndpointRow(m.Actor.Character.Id, m.Actor.Session.PartyEndpoint!, m.Actor.Session.PeerAccount)).ToArray());
         // 名册处理会立即按Actor端点创建peer；必须先恢复地址和账号，避免以0.0.0.0/账号0启动连接。
         await context.Notify(NotiPacketType.USER_UDP_IP_PORT, endpoints, "party_dungeon_endpoints_before_roster", guard);
-        // NOTI6清场会清空对应队伍槽；完整名册重新绑定后，再恢复可能被替换的成员对象端点及实时信息。
+        // 进房等路径可能已清空队伍槽；名册绑定后再恢复端点和实时信息，选图则沿用原成员对象。
         var party = context.Session.CurrentParty?.Invoke() ?? throw new InvalidOperationException("组队场景缺少当前队伍名册");
         var channel = members[0].Identity.Channel;
         await context.Notify(NotiPacketType.PARTY_INFO,
@@ -163,7 +163,9 @@ internal sealed partial class DungeonHandler
         }
         if (notice.Kind is PartyDungeonNoticeKind.RaidSelection or PartyDungeonNoticeKind.Selection or PartyDungeonNoticeKind.ResultSelection && notice.Selection is { } selection)
         {
-            if (!await town.DetachForDungeonSelectionAsync(context, selection)) return;
+            IReadOnlySet<ushort>? preservePartyActors = notice.Kind == PartyDungeonNoticeKind.Selection && notice.Option == 0
+                ? notice.Members.Select(member => member.Actor.Character.Id).ToHashSet() : null;
+            if (!await town.DetachForDungeonSelectionAsync(context, selection, preservePartyActors)) return;
             bool Guard() => context.Session.CanPublishDungeonSelection(selection);
             await EkernCycleProjection.RefreshAsync(context,Guard);
             if (notice.Kind == PartyDungeonNoticeKind.ResultSelection)

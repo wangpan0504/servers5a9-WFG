@@ -12,11 +12,13 @@ namespace DfoServer.Game.Dungeons;
 internal sealed class PartyDungeonService(PartyService parties, IPartyDungeonStore store, IEvildomWarStore? warStore = null,
     Func<int, int>? hiddenDraw = null, IEvildomWarGuideStore? guideStore = null)
 {
-    public void PublishSettlementCard(PartyDungeonInstance instance, GameSession source)
+    // 调用方已提交领取并仍持有队伍命令门禁；这里只冻结事件、同步入发送队列，不等待队友上报或网络。
+    public void PublishSettlementCard(PartyDungeonInstance instance, GameSession source, IReadOnlyList<DungeonCardView?> snapshot)
     {
+        var frozen = snapshot.ToImmutableArray();
         var notices = instance.Members.Where(member => !ReferenceEquals(member.Actor.Session, source) &&
             ReferenceEquals(member.Actor.Session.PartyDungeon, instance))
-            .Select(member => new PartyNotice(PartyNoticeKind.SettlementCard, member, Dungeon: instance));
+            .Select(member => new PartyNotice(PartyNoticeKind.SettlementCard, member, Dungeon: instance) { CardEvent = frozen });
         parties.Publish(notices, presenceChanged: false);
     }
     public int RefundEvildomWar(GameSession session) => warStore is null ? 0 : session.RefundEvildomWar(warStore);

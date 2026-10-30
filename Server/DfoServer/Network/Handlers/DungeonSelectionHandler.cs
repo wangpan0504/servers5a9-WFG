@@ -175,7 +175,8 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
                 int target = context.Session.PrepareLegendDungeonSelection(dungeons);
                 selected = selected.Select(n => n with { LegendDungeon = target }).ToArray();
             }
-            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length > 0, Party = true, Members = selected.Length });
+            log.Write("dungeon_entry", new { Connection = context.Id, Accepted = selected.Length > 0, Party = true,
+                Members = selected.Length, PreservePartyActors = selected.Length > 0 });
             if (selected.Length == 0)
                 await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "party_selection_rejected");
             else await PartyDungeonProjection.PublishAsync(selected);

@@ -121,15 +121,16 @@ internal static class DungeonSettlementSessionTests
             Check(repeat is { Duplicate:true } && repeat.Reward == selected!.Reward && Same(paid,f.Read()) &&
                 f.Session.SelectFormalDungeonPaidCard(1,1,policy) is null &&
                 (!member || f.Query("SELECT used FROM character_gold_card_uses") is 1L),
-                "两种请求选择同一本人席重复回放，不再耗次；其他席不取得奖励");
+                "两种付费行请求同列重复回放，不再耗次；已领取后改选另一列拒绝");
             var beforeFree = f.Session.Selected!;
-            var claimedFree = f.Session.SelectFormalDungeonFreeCard(0,0);
+            var claimedFree = f.Session.SelectFormalDungeonFreeCard(0,3);
             Check(claimedFree?.Inventory?.Receipt is { } freeReceipt && f.Session.CanPublishInventory(freeReceipt) &&
                 f.Session.Selected!.Inventory.Gold == beforeFree.Inventory.Gold + cleared.Card!.Gold + (cleared.BlackDiamond?.Gold ?? 0) &&
                 f.Query("SELECT claimed FROM character_dungeon_card_rewards") is 1L,
                 "选免费牌才同事务发放普通与黑钻奖励，付费选择不代替免费领取");
             var view = f.Session.FormalCardState(f.Session.FormalDungeonResultFocus()!)!;
-            Check(view.FreeSelected && view.Paid == selected!.Reward,"手动或自动免费揭示保留此前付费牌面，不覆盖已付款结果");
+            Check(view.FreeSelected && view.FreeChoice == 3 && view.PaidChoice == 0 && view.Paid == selected!.Reward,
+                "第四列免费牌与第一列付费牌独立，免费揭示不覆盖已付款结果");
             if (full) Check(f.Count("mailbox_attachments") == 3,"满背包付费奖励也进入永久邮件，三份核心各保存一次");
             FormalDungeonSettlementResult Finish() => f.Session.SettleFormalDungeon(f.Created.Id,99,99,[10,11,12],dungeons,clear,growth,policy);
         }
@@ -520,9 +521,9 @@ internal static class DungeonSettlementSessionTests
                 f.Session.AdvanceFormalDungeonCards(true) is not null && f.Session.AdvanceFormalDungeonCards(true) is not null,
                 "69和70合法顺序及精确重复只推进结算展示状态");
             Check(f.Session.SelectFormalDungeonFreeCard(1, 0) is null && f.Session.SelectFormalDungeonFreeCard(0, 8) is null &&
-                f.Session.SelectFormalDungeonFreeCard(0, 0) is not null && f.Session.SelectFormalDungeonFreeCard(0, 0) is not null &&
+                f.Session.SelectFormalDungeonFreeCard(0, 3) is not null && f.Session.SelectFormalDungeonFreeCard(0, 3) is not null &&
                 f.Session.SelectFormalDungeonFreeCard(0, 4) is null && f.Session.FormalDungeonResultFocus() is not null,
-                "只允许本人免费行，重复幂等、其他成员席拒绝，72焦点不退出或发奖");
+                "免费行任意有效列可选，同列重复幂等、领取后改列拒绝，72焦点不退出或发奖");
             Check(ReferenceEquals(committed, f.Session.Selected) && Same(committed, f.Read()) && f.Settlements == 1 &&
                 f.Kills == completed.Count && f.Session.Phase == SessionPhase.Settlement,
                 "空翻牌全过程不新增物品金币、扣费用或再次写经验");

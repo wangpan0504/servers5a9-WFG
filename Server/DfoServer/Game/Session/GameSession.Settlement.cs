@@ -36,6 +36,7 @@ internal sealed partial class GameSession
         public bool AutoRevealScheduled { get; set; }
         public DungeonCardReward? BlackDiamond { get; set; }
         public DungeonCardReward? Paid { get; set; }
+        public byte? PaidCard { get; set; }
         public uint GainedExperience { get; set; }
         public uint ProficiencyGained { get; set; }
         public bool LuckyStarGained { get; set; }
@@ -374,7 +375,8 @@ internal sealed partial class GameSession
         if (!Ready || Phase != SessionPhase.Settlement || formalDungeon?.Entry.IsCosmo == true || formalDungeon?.Entry.Maze.IsGriefTower == true ||
             formalDungeon?.Entry.IsBossRush == true ||
             formalDungeon?.Settlement is not { Committed: true, CardsShown: true } settlement ||
-            row != 0 || card != formalDungeon.PartySlot || settlement.SelectedCard is { } old && old != card)
+            row != 0 || card >= DungeonCardView.ChoiceCount || settlement.SelectedCard is { } old && old != card ||
+            settlement.Claim is { } pending && (pending.Side != 0 || pending.Choice != card))
             return null;
         if (settlement.SelectedCard is not null)
             return new(FormalReceipt(), null, settlement.MailId, true);
@@ -382,10 +384,10 @@ internal sealed partial class GameSession
         bool duplicate = false;
         if (settlement.Pending.Card is { } frozen)
         {
-            if (settlement.Claim is { Side: not 0 }) return null;
             var policy = settlement.CardPolicy ?? throw new InvalidOperationException("免费牌缺少发放规则");
             DungeonCardReward[] rewards = settlement.Pending.Options?.BlackDiamond is { } bonus ? [frozen, bonus] : [frozen];
-            var claim = settlement.Claim ??= new(Selected!, 0, policy.PlanDelivery(Selected!, rewards, Selected!.Level), DateTimeOffset.UtcNow);
+            var claim = settlement.Claim ??= new(Selected!, 0, policy.PlanDelivery(Selected!, rewards, Selected!.Level), DateTimeOffset.UtcNow)
+                { Choice = card };
             if (!ReferenceEquals(Selected, claim.Expected)) throw new InvalidOperationException("免费牌待提交快照已变化");
             var committed = repository.CommitFreeDungeonCard(owner, claim.Expected, settlement.Pending, claim.Delivery);
             Selected = committed.Character;
@@ -416,9 +418,12 @@ internal sealed partial class GameSession
         return true;
     });
 
-    public FormalFreeCardResult? RevealFormalDungeonCard(FormalDungeonReceipt receipt) => owner.Execute(() =>
-        MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed: true, CardsShown: true, SelectedCard: null }
-            ? SelectFormalDungeonFreeCard(0, formalDungeon.PartySlot) : null);
+    public FormalFreeCardResult? RevealFormalDungeonCard(FormalDungeonReceipt receipt) => owner.Execute<FormalFreeCardResult?>(() =>
+    {
+        if (!MatchesCardInstance(receipt) || formalDungeon?.Settlement is not { Committed: true, CardsShown: true, SelectedCard: null })
+            return null;
+        return SelectFormalDungeonFreeCard(0, formalDungeon.PartySlot);
+    });
 
     bool MatchesCardInstance(FormalDungeonReceipt receipt) => Ready && Phase == SessionPhase.Settlement &&
         receipt.Generation == owner.Generation && receipt.SelectionEpoch == SelectionEpoch &&
@@ -436,23 +441,29 @@ internal sealed partial class GameSession
     public DungeonCardView? FormalCardState(FormalDungeonReceipt receipt) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed:true } settlement
             ? new DungeonCardView(settlement.Pending.Options,settlement.SelectedCard is not null,settlement.Paid)
-                { Slot = formalDungeon.PartySlot, Free = settlement.Card } : null);
+                { Slot = formalDungeon.PartySlot, FreeChoice = settlement.SelectedCard ?? 0, PaidChoice = settlement.PaidCard ?? 0,
+                    Free = settlement.Card, BlackDiamond = settlement.BlackDiamond } : null);
 
     public bool CanPublishCardView(FormalDungeonReceipt receipt,DungeonCardView view) => owner.Execute(() =>
         MatchesCardInstance(receipt) && formalDungeon?.Settlement is { Committed:true,CardsShown:true } settlement &&
-        (settlement.SelectedCard is not null) == view.FreeSelected && settlement.Paid == view.Paid && formalDungeon.PartySlot == view.Slot);
+        settlement.SelectedCard == (view.FreeSelected ? view.FreeChoice : null) && settlement.Paid == view.Paid &&
+        settlement.PaidCard == (view.Paid is null ? null : view.PaidChoice) && formalDungeon.PartySlot == view.Slot &&
+        settlement.Card == view.Free && settlement.BlackDiamond == view.BlackDiamond);
 
-    public FormalPaidCardResult? SelectFormalDungeonPaidCard(byte row,byte member,DungeonCardRewardPolicy cards,
+    public FormalPaidCardResult? SelectFormalDungeonPaidCard(byte row,byte choice,DungeonCardRewardPolicy cards,
         DateTimeOffset? utcNow = null) => owner.Execute(() =>
     {
         if (row is not (1 or 2) || !Ready || Phase != SessionPhase.Settlement || Selected is null ||
             formalDungeon?.Settlement is not { Committed:true,CardsShown:true } settlement || settlement.Pending.Options is not { } options ||
-            options.PaidDisabled || member != formalDungeon.PartySlot || settlement.Claim is { Side: not 1 })
+            options.PaidDisabled || choice >= DungeonCardView.ChoiceCount ||
+            settlement.Claim is { } pending && (pending.Side != 1 || pending.Choice != choice))
             return null;
         var now = utcNow ?? DateTimeOffset.UtcNow;
-        if (settlement.Paid is not null) return new FormalPaidCardResult(FormalReceipt(),settlement.Paid,null,null,true);
+        if (settlement.Paid is not null) return settlement.PaidCard == choice
+            ? new FormalPaidCardResult(FormalReceipt(),settlement.Paid,null,null,true) : null;
         if (Selected.Inventory.Gold < options.Price) return null;
-        var claim = settlement.Claim ??= new(Selected, 1, cards.PlanDelivery(Selected,[options.Paid],Selected.Level,options.Price,now), now);
+        var claim = settlement.Claim ??= new(Selected, 1, cards.PlanDelivery(Selected,[options.Paid],Selected.Level,options.Price,now), now)
+            { Choice = choice };
         var before = claim.Expected;
         if (!ReferenceEquals(Selected, before)) throw new InvalidOperationException("付费牌待提交快照已变化");
         var committed = repository.CommitPaidDungeonCard(owner,before,settlement.Pending,claim.Delivery,claim.Time);
@@ -463,6 +474,7 @@ internal sealed partial class GameSession
         }
         Selected = committed.Character;
         settlement.Paid = committed.Reward;
+        settlement.PaidCard = choice;
         settlement.Claim = null;
         InventoryResult? inventory = committed.Inventory is { } plan ? new(true,0,plan)
         {

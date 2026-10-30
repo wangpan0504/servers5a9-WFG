@@ -14,7 +14,7 @@ internal static class TownPresenceConcurrencyTests
         int before = TestCheck.Count;
         await VisibilityAsync();
         await CancellationAsync();
-        Console.WriteLine($"PASS {TestCheck.Count - before} 城镇跨账号锁序、广播可见性与取消收尾断言");
+        Console.WriteLine($"PASS {TestCheck.Count - before} 城镇跨账号锁序、可见性、选图离场与取消收尾断言");
     }
 
     static async Task VisibilityAsync()
@@ -29,8 +29,12 @@ internal static class TownPresenceConcurrencyTests
         using var b = owners.Acquire("scene-b", () => { });
         using var stopA = new CancellationTokenSource();
         using var stopB = new CancellationTokenSource();
-        await using var sendA = new GameConnectionSender(a, Stream.Null, stopA, 0, (_, _, _, _, _) => { });
-        await using var sendB = new GameConnectionSender(b, Stream.Null, stopB, 0, (_, _, _, _, _) => { });
+        var sentA = new List<(byte Kind, ushort Opcode, byte[] Body)>();
+        var sentB = new List<(byte Kind, ushort Opcode, byte[] Body)>();
+        await using var sendA = new GameConnectionSender(a, Stream.Null, stopA, 0,
+            (kind, opcode, _, body, _) => sentA.Add((kind, opcode, body.ToArray())));
+        await using var sendB = new GameConnectionSender(b, Stream.Null, stopB, 0,
+            (kind, opcode, _, body, _) => sentB.Add((kind, opcode, body.ToArray())));
         var roleA = new Character(1, 0, "SceneA", 1, location, location);
         var roleB = new Character(2, 0, "SceneB", 1, location, location);
         presence.Join(a, sendA, roleA);
@@ -68,6 +72,35 @@ internal static class TownPresenceConcurrencyTests
         await Task.WhenAll(Task.Run(() => presence.Remove(sendA)), Task.Run(() => presence.Remove(sendB)));
         await Task.WhenAll(Drain(sendA), Drain(sendB));
         TestCheck.That(presence.Count == 0, "并发精确离场回收全部索引");
+
+        using var observer = owners.Acquire("scene-observer", () => { });
+        using var stopObserver = new CancellationTokenSource();
+        var sentObserver = new List<(byte Kind, ushort Opcode, byte[] Body)>();
+        await using var sendObserver = new GameConnectionSender(observer, Stream.Null, stopObserver, 0,
+            (kind, opcode, _, body, _) => sentObserver.Add((kind, opcode, body.ToArray())));
+        presence.Join(a, sendA, roleA);
+        presence.Join(b, sendB, roleB);
+        presence.Join(observer, sendObserver, new(3, 0, "Observer", 1, location, location));
+        await Task.WhenAll(Drain(sendA), Drain(sendB), Drain(sendObserver));
+        sentA.Clear();
+        sentB.Clear();
+        sentObserver.Clear();
+        presence.Remove(sendA, preserveActors: new HashSet<ushort> { roleA.Id, roleB.Id });
+        await sendA.ClearScene(SceneActorClear.Hide);
+        await Task.WhenAll(Drain(sendA), Drain(sendB), Drain(sendObserver));
+        TestCheck.That(sentB.Any(frame => frame is { Kind: 0, Opcode: 3 } &&
+            frame.Body.SequenceEqual(new byte[] { 2, 1, 0, 1, 1, 0, 0 })) && sentB.All(frame => frame.Opcode != 6),
+            "组队选图在队友视图中只隐藏实体，不发送删除Actor的6号通知");
+        TestCheck.That(sentObserver.Any(frame => frame is { Kind: 0, Opcode: 6 } &&
+            frame.Body.SequenceEqual(new byte[] { 1, 0 })) && sentObserver.All(frame => frame is not { Kind: 0, Opcode: 3, Body.Length: 7 }),
+            "非队友城镇观察者仍删除离场Actor，不改变原有离场语义");
+        TestCheck.That(new byte[] { 2, 3 }.All(id => sentA.Any(frame => frame is { Kind: 0, Opcode: 3 } &&
+            frame.Body.SequenceEqual(new byte[] { 2, id, 0, 1, id, 0, 0 }))) && sentA.All(frame => frame.Opcode != 6),
+            "本人选图清场隐藏旧实体并清理同屏账本，不销毁已缓存Actor");
+        presence.Remove(sendB);
+        presence.Remove(sendObserver);
+        await Task.WhenAll(Drain(sendB), Drain(sendObserver));
+        TestCheck.That(presence.Count == 0, "保留Actor的选图离场仍回收全部城镇成员索引");
     }
 
     static async Task CancellationAsync()

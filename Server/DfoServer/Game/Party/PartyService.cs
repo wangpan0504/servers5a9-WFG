@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Caching;
 using DfoServer.Game.Dungeons;
@@ -19,7 +20,10 @@ internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Lead
 }
 internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged, SettlementCard, FrameChanged }
 internal sealed record PartyNotice(PartyNoticeKind Kind, PartyMember Recipient, PartyMember? Peer = null,
-    PartySnapshot? Party = null, uint PeerId = 0, Func<bool>? Guard = null, PartyDungeonInstance? Dungeon = null);
+    PartySnapshot? Party = null, uint PeerId = 0, Func<bool>? Guard = null, PartyDungeonInstance? Dungeon = null)
+{
+    public ImmutableArray<DungeonCardView?> CardEvent { get; init; }
+}
 internal sealed record PartyResult(ushort Error, PartyNotice[] Notices)
 {
     public bool Accepted => Error == 0;

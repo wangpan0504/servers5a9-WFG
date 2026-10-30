@@ -233,7 +233,7 @@ internal static class DungeonSettlementProtocolTests
         var free = new DungeonCardReward(123, null, "fixture", "fixture", 1);
         var bonus = new DungeonCardReward(456, null, "fixture", "fixture", 1);
         var cards = new DungeonCardView?[8];
-        cards[1] = new(null, true, bonus) { Slot = 1, Free = bonus };
+        cards[1] = new(null, true, bonus) { Slot = 1, FreeChoice = 1, PaidChoice = 1, Free = bonus };
         cards[3] = new(null, false, null) { Slot = 3, Free = free };
         var firstRun = new PartySettlementCards();
         var secondRunWithSameSeed = new PartySettlementCards();
@@ -245,14 +245,41 @@ internal static class DungeonSettlementProtocolTests
         That(firstRun.Snapshot()[1] == cards[1], "实例快照不能修改原始牌面");
         firstRun.Clear();
         That(firstRun.Snapshot().All(card => card is null), "结算结束后释放全部已记录席位");
+        firstRun.Record(cards[1]! with { Paid = null });
+        var committedFree = firstRun.Snapshot();
+        firstRun.Record(cards[1]!);
+        That(firstRun.CanPublish(committedFree) && !firstRun.Snapshot().SequenceEqual(committedFree),
+            "已提交免费事件可在后续付费事件之后出队，不因快照变化而漏掉中间通知");
+        var forged = firstRun.Snapshot();
+        forged[1] = forged[1]! with { FreeChoice = 0 };
+        That(!firstRun.CanPublish(forged), "不能发布不属于该成员实际领取的旧选择");
+        forged = firstRun.Snapshot();
+        forged[1] = forged[1]! with { Paid = free };
+        That(!firstRun.CanPublish(forged), "付费事件必须保持已提交奖励，不能替换另一份结果");
+        firstRun.Clear();
+        That(!firstRun.CanPublish(committedFree), "实例清理后旧翻牌事件失效");
         var original = DungeonSettlementPackets.CardReward(reward, 1200, free);
         var combined = DungeonSettlementPackets.PartyCardReward(original, 0, cards);
         That(combined.Length == original.Length + 8 && combined[156] == 1 && U32(combined, 161) == 123 &&
             combined[165] == 1 && U32(combined, 170) == 456 && combined[174] == 0 && combined[175] == 0,
             "35聚合已翻免费牌，未翻席保持空，费用和尾段整体平移");
         var reveal = DungeonSettlementPackets.CardSelected(new DungeonCardView(null, true, null) { Slot = 0 }, cards);
-        That(reveal[1] == 0 && reveal[5] == 1 && reveal[13] == 255 && reveal[6] == 255,
-            "71揭示已翻原席，不公开队友付费牌");
+        var members = CardMembers(reveal);
+        That(members[0].Free == 0 && members[1].Free == 1 && members[1].Paid == 1 &&
+            members[1].Items.SequenceEqual(new (uint, uint)[] { (0, 456) }),
+            "71揭示全队免费及付费牌，携带队友实际付费奖励");
+        cards[1] = cards[1]! with { FreeChoice = 3, PaidChoice = 0, BlackDiamond = free };
+        var ownView = new DungeonCardView(null, true, free) { Slot = 0, FreeChoice = 3, PaidChoice = 0, Free = free };
+        members = CardMembers(DungeonSettlementPackets.CardSelected(ownView, cards));
+        That(members[0].Free == 0 && members[0].Paid == 0 && members[1].Free == 1 && members[1].Paid == 1 &&
+            members[0].Items.SequenceEqual(new (uint, uint)[] { (0, 123) }) &&
+            members[1].Items.SequenceEqual(new (uint, uint)[] { (0, 456) }),
+            "成员可以选择相同位置，结果按真实成员投影而不抢占或覆盖另一人的奖励");
+        var allRewards = CardRewards(DungeonSettlementPackets.PartyCardReward(original, 0, cards));
+        That(allRewards[0][1].SequenceEqual(new (uint, uint)[] { (0, 456) }) &&
+            allRewards[2][1].SequenceEqual(new (uint, uint)[] { (0, 123) }),
+            "35同时恢复队友免费及黑钻实际奖励，奖励分组仍按成员而不是牌列排列");
+        Bytes(DungeonSettlementPackets.CardRejected(), [0, 0, 0], "71拒绝只包含公共失败前缀，不伪造选中状态");
         foreach (byte slot in new byte[] { 0, 1, 3, 7 })
         {
             var rights = DungeonSettlementPackets.CardRights(87, slot);
@@ -290,6 +317,43 @@ internal static class DungeonSettlementProtocolTests
             That(Enumerable.Range(0, 8).All(i => onlyFree[1 + i * 4] == (i == slot ? slot : 255) && onlyFree[2 + i * 4] == 255),
                 "仅免费翻牌同样按本人原始槽位确认");
         }
+    }
+
+    internal static (byte Free, byte Paid, (uint Item, uint Count)[] Items)[] CardMembers(byte[] body)
+    {
+        using var reader = new BinaryReader(new MemoryStream(body));
+        That(reader.ReadByte() == 1, "71完整状态带成功前缀");
+        var members = new (byte Free, byte Paid, (uint Item, uint Count)[] Items)[8];
+        for (int slot = 0; slot < members.Length; slot++)
+        {
+            byte free = reader.ReadByte(), paid = reader.ReadByte(), count = reader.ReadByte();
+            var items = new (uint, uint)[count];
+            for (int index = 0; index < count; index++) items[index] = (reader.ReadUInt32(), reader.ReadUInt32());
+            That(reader.ReadByte() == 0, "71成员尾标志保持原值");
+            members[slot] = (free, paid, items);
+        }
+        That(reader.BaseStream.Position == body.Length, "71完整消费八组成员状态和全部奖励");
+        return members;
+    }
+
+    internal static (uint Item, uint Count)[][][] CardRewards(byte[] body)
+    {
+        using var reader = new BinaryReader(new MemoryStream(body));
+        reader.BaseStream.Position = checked(156 + U32(body, 151) * 8);
+        var groups = new (uint Item, uint Count)[3][][];
+        for (int group = 0; group < groups.Length; group++)
+        {
+            groups[group] = new (uint Item, uint Count)[8][];
+            for (int slot = 0; slot < 8; slot++)
+            {
+                var items = new (uint Item, uint Count)[reader.ReadByte()];
+                for (int index = 0; index < items.Length; index++) items[index] = (reader.ReadUInt32(), reader.ReadUInt32());
+                groups[group][slot] = items;
+            }
+            if (group == 0) reader.ReadUInt32();
+        }
+        That(reader.BaseStream.Position == body.Length - 34, "35三组奖励之后保留完整公共尾段");
+        return groups;
     }
 
     internal static byte[] Report(ushort actorId, byte point) => Report([(actorId, point)]);

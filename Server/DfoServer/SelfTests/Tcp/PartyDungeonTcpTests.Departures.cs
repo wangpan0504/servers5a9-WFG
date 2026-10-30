@@ -112,14 +112,15 @@ internal static partial class PartyDungeonTcpTests
             peers[1].Send(69); Drain(peers[1]);
             peers[1].Send(70); Drain(peers[1]);
             var updates = new List<WirePacket>();
-            for (int attempt = 0; attempt < 8 && !updates.Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[5] == 1); attempt++)
+            for (int attempt = 0; attempt < 8 && !updates.Any(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] } && p.Body[5] == 1); attempt++)
             {
                 await Task.Delay(TimeSpan.FromSeconds(1));
                 updates.AddRange(Drain(peers[0]));
             }
             That(updates.Any(p => p is { Kind: 0, Opcode: 35 } && HasCardSeat(p.Body, 1)) &&
-                updates.Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[5] == 1),
-                "结算中离队及断线后自动翻牌仍通知在线幸存者");
+                updates.Any(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] } &&
+                    DungeonSettlementProtocolTests.CardMembers(p.Body)[1].Free == 1),
+                "结算中离队及断线后个人自动翻牌仍按原成员归属通知在线幸存者");
             That(!Drain(peers[3]).Any(p => p is { Kind: 1, Opcode: 71 }), "已离队成员不收到后续翻牌");
             void ClearRoom()
             {
