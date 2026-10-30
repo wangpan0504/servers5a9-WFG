@@ -44,12 +44,12 @@ internal static partial class DungeonSpecificCardRewardsTests
             Reject<NotSupportedException>(() => withoutTable.Prepare(definition, difficulty, 1, draw: _ => 0),
                 "泰波尔斯缺少专表时明确拒绝，不能生成普通装备：" + dungeonId);
             var options = policy.PrepareOptions(definition, difficulty, 1, membership, now)!;
-            That(options.Paid.Item is { Count: 1 } paid && paid.ItemId == itemId &&
+            That(options.Paid.Item is { Count: 1 } paid && paid.ItemId == 10158700 &&
                 options.PaidDisabled == definition.DisablePaidCard &&
                 options.UseGoldCard == !definition.DisablePaidCard &&
                 (definition.DisableBlackDiamondCardReward ? options.BlackDiamond is null :
                     options.BlackDiamond?.Item is { Count: 1 } diamond && diamond.ItemId == itemId),
-                "泰波尔斯付费候选沿专表，实际黄金牌与黑钻禁用标记优先于会员：" + dungeonId);
+                "泰波尔斯金币牌独立抽时空石，实际黄金牌与黑钻禁用标记优先于会员：" + dungeonId);
         }
 
         const int representative = 291100320;

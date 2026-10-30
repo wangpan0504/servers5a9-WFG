@@ -145,7 +145,10 @@ internal static class ParticularHellPartyTests
             DungeonCardPriceCatalog.Load(pvf).SpecificRewards is var specific && specific.ContainsKey(530) &&
             new[] { 291100320, 291100322, 5349 }.All(specific.ContainsKey),
             "副本专表保留黎明裂缝并接入三种泰波尔斯固定奖励，未解释子表仍未发放");
-        foreach (string name in new[] { "special dungeon clear reward", "specific goldcard group",
+        That(sections.Any(row => row.Name == "specific goldcard group" && row.Use == ClearRewardSectionUse.PartlyRead) &&
+            DungeonCardPriceCatalog.Load(pvf).TayberrsPaidRewards.Length == 4,
+            "金币奖励只接入类型71的101组，其余组保留未发放状态");
+        foreach (string name in new[] { "special dungeon clear reward",
             "chronicle set reward rate", "reward dungeon type list", "reward item list" })
             That(sections.Any(row => row.Name == name && row.Use == ClearRewardSectionUse.NotGranted),
                 "未证明的通关奖励段不发放 " + name);

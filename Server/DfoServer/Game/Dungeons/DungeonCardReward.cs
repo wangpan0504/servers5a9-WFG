@@ -124,6 +124,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         CardMembership membership, DateTimeOffset now, Events.ServerEventState? goldCardEvent = null, byte job = 0, byte grow = 0)
     {
         if (prices is null) return null;
+        if (dungeon.BasisLevel is not > 0 || difficulty >= DifficultyRates.Length || confirmedKills < 0)
+            throw new InvalidDataException("翻牌选项需要明确的副本等级、难度和非负的已提交击杀数");
         if (goldCardEvent is not null)
         {
             if (goldCardEvent.Schedule.EventId != Events.ServerEventService.DoubleGoldCardId)
@@ -132,7 +134,8 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
         }
         bool golden = !dungeon.DisablePaidCard && membership.GoldCardAvailable(now.ToUnixTimeSeconds());
         bool doubled = !dungeon.DisablePaidCard && goldCardEvent?.Active == true;
-        var paid = Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false) with { Gold = 0 };
+        var paid = dungeon.IsTayberrs ? PrepareTayberrsPaid(dungeon, now)
+            : Prepare(dungeon,difficulty,confirmedKills,utcNow:now,job:job,grow:grow,includeHopeEquipment:false) with { Gold = 0 };
         if (doubled) paid = DoubleItems(paid);
         return new(paid,
             golden ? 0 : prices.Price(dungeon.BasisLevel ?? throw new InvalidDataException("付费牌没有基准等级")), golden,membership,
@@ -143,6 +146,24 @@ internal sealed class DungeonCardRewardPolicy(DungeonDropRuleCatalog rules, Dung
             DoublePaidItems = doubled,
             GoldCardEventRevision = goldCardEvent?.Schedule.Revision ?? 0
         };
+    }
+
+    DungeonCardReward PrepareTayberrsPaid(DungeonDefinition dungeon, DateTimeOffset now)
+    {
+        if (prices is null || prices.TayberrsPaidRewards.IsEmpty)
+            throw new NotSupportedException("泰波尔斯缺少类型71金币奖励组，不能重复免费奖励");
+        var draw = random ?? Random.Shared.Next;
+        int roll = draw(10000);
+        if (roll is < 0 or >= 10000) throw new InvalidDataException("金币翻牌随机值越界");
+        foreach (var row in prices.TayberrsPaidRewards)
+        {
+            if (roll >= row.Weight) { roll -= row.Weight; continue; }
+            var reward = new DungeonCardReward(0, DungeonDropCreation.Create(items.Get(row.ItemId), row.Count, draw, now),
+                Rule, DungeonCardPriceCatalog.ResourcePath + ";" + dungeon.Path, now.ToUnixTimeSeconds());
+            reward.Validate();
+            return reward;
+        }
+        throw new InvalidDataException("金币翻牌未命中完整奖励组");
     }
 
     public static DungeonCardReward DoubleItems(DungeonCardReward reward)

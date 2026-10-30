@@ -11,6 +11,8 @@ internal sealed class DungeonCardPriceCatalog
     public ImmutableDictionary<int, ImmutableArray<DungeonSpecificCardItem>> SpecificRewards { get; private init; } =
         ImmutableDictionary<int, ImmutableArray<DungeonSpecificCardItem>>.Empty;
 
+    public ImmutableArray<DungeonSpecificCardItem> TayberrsPaidRewards { get; private init; } = [];
+
     public static DungeonCardPriceCatalog Load(PvfArchive archive) => Parse(archive.ReadTokens(ResourcePath), archive.ResolveString);
 
     internal static DungeonCardPriceCatalog Parse(IReadOnlyList<PvfToken> tokens, Func<int,string> resolve)
@@ -37,7 +39,8 @@ internal sealed class DungeonCardPriceCatalog
         }
         return new(result.OrderBy(row => row.Level).ToArray())
         {
-            SpecificRewards = DungeonSpecificCardRewards.Parse(tokens, resolve)
+            SpecificRewards = DungeonSpecificCardRewards.Parse(tokens, resolve),
+            TayberrsPaidRewards = DungeonSpecificCardRewards.ParseTayberrsPaid(tokens, resolve)
         };
     }
 
