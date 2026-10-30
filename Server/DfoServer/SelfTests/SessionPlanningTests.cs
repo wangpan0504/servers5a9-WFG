@@ -877,6 +877,7 @@ internal static partial class SessionPlanningTests
                 INSERT INTO character_dungeon_incount VALUES({{id}},'planning',400000016,20261020,1,20261015,1);
                 INSERT INTO character_dungeon_incount_extra VALUES({{id}},'planning',5428,20261020,1,20261015,1);
                 INSERT INTO character_ekern_cycle VALUES({{id}},'planning',739917,3,1);
+                INSERT INTO character_rename_pending VALUES({{id}},'planning',95001);
                 INSERT INTO character_beast_dungeon_entries VALUES({{id}},'planning',20261020,310,1);
                 INSERT INTO character_beast_dungeon_reservations VALUES({{id}},'planning','abcdef1234567890abcdef1234567890',1,1,20261020,310,0,0);
                 INSERT INTO character_beast_stage_rewards VALUES({{id}},'planning','abcdef1234567890abcdef1234567890',0,'abcdef1234567890abcdef1234567891',400363,1,10303240);

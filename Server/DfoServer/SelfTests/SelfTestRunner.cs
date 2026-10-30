@@ -14,6 +14,7 @@ internal static class SelfTestRunner
     public static async Task RunCoreAsync()
     {
         if (await LukeRewardRestartTests.TryRunWorkerAsync()) return;
+        CharacterRenameCardTests.RunCore();
         await LukePhaseExitOwnerTests.RunCoreAsync();
         ClientRequestSequenceTests.RunCore();
         EquipmentPowerScoreTests.RunCore();

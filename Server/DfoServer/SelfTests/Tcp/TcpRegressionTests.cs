@@ -367,6 +367,7 @@ internal static class TcpRegressionTests
         ("cash-shop-promotions", CashShopTcpTests.PromotionsAsync),
         ("name-tag", NameTagTcpTests.RunAsync),
         ("character-slots", CharacterSlotsTcpTests.RunAsync),
+        ("character-rename-card", CharacterRenameCardTcpTests.RunAsync),
         ("devil-contract", DevilContractTcpTests.RunAsync),
         ("devil-quest", (_, _, resources) =>
         {

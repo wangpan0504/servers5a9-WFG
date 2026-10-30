@@ -32,7 +32,8 @@ internal sealed partial class CharacterRepository
                 EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$prey_quest),
                 EXISTS(SELECT 1 FROM account_pvp_private_characters p WHERE p.character_id=c.id),c.clone_title_item_id,
                 coalesce(json_extract(c.weapon_skin_state,'$.Selected'),0),
-                EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$beast_quest)
+                EXISTS(SELECT 1 FROM character_completed_quests q WHERE q.character_id=c.id AND q.quest_id=$beast_quest),
+                EXISTS(SELECT 1 FROM character_rename_pending p WHERE p.character_id=c.id AND p.account=c.account)
             FROM characters c WHERE c.account=$account ORDER BY c.slot
             """;
         var rows = new List<CharacterRosterEntry>();
@@ -48,7 +49,8 @@ internal sealed partial class CharacterRepository
                     PreyEligible: CharacterRosterEntry.IsPreyEligible(reader.GetInt64(10) != 0, level), IsPvpPrivate: reader.GetInt64(11)!=0,
                     // 魔兽频道（type 0x28）的选角前资格：完成 5927 才置位，客户端据此决定是否弹 1099。
                     BeastEligible: reader.GetInt64(14) != 0)
-                    { CloneTitleItemId = checked((uint)reader.GetInt64(12)), WeaponSkin = checked((int)reader.GetInt64(13)) });
+                    { CloneTitleItemId = checked((uint)reader.GetInt64(12)), WeaponSkin = checked((int)reader.GetInt64(13)),
+                        RenamePending = reader.GetInt64(15) != 0 });
             }
         if (rows.Count == 0)
             return [];

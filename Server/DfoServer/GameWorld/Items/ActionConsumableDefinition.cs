@@ -27,6 +27,7 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
                 { Label: "[add dimension dungeon enter count]", Parameters: [> 0 and <= 5] } or
                 // 装扮预设扩展券（CMD515 action216）：无参数，容量由所属玩法落库。
                 { Label: "[add avatar preset]", Parameters.Count: 0 } or
+                { Label: "[character name change]", Parameters.Count: 0 } or
                 { Label: "[add dungeon incount item limit count]", Parameters: [> 0, 0, 0] } or
                 { Label: "[extend item period]", Parameters: [0, > 0] } or
                 { Label: "[creature transport stone]" or "[cargo transport stone]" or "[avatar transport stone]" or
@@ -37,7 +38,8 @@ internal sealed record ActionConsumableDefinition(ItemTemplate Item, string Labe
             raw.HasMinimumLevel && raw.DeclaredMinimumLevel is null || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not { Count: > 0 } ||
-            raw.DeclaredActionUsablePlaces?.Any(place => place is not ("[village]" or "[seria room]" or "[dungeon]" or "[all]")) == true ||
+            raw.DeclaredActionUsablePlaces?.Any(place => place is not ("[village]" or "[seria room]" or "[dungeon]" or "[all]") &&
+                !(action.Label == "[character name change]" && place == "[dont use assult]")) == true ||
             file.DeclaredFields.Contains("cool time") && file.CoolTime is null or < 0 ||
             file.DeclaredFields.Contains("cooltime group") && file.CoolGroup is null or < 0 ||
             file.DeclaredFields.Contains("cooltime maintenance") && file.CooltimeMaintenance is null ||

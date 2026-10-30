@@ -54,7 +54,8 @@ internal static class CharacterPackets
         {
             writer.Write(character.Slot);
             PacketEncoding.WriteString(writer, character.Name);
-            writer.Write(new byte[] { 0, 0, character.Job, character.GrowType, character.Level });
+            // 02679930的首u8进入选角强制改名索引；第二u8保持原独立标志。
+            writer.Write(new byte[] { character.RenamePending ? (byte)1 : (byte)0, 0, character.Job, character.GrowType, character.Level });
             writer.Write(new byte[10]);
             EquipmentProtocolWriter.Appearance(writer, character.Equipment);
             byte[] tail = new byte[48];

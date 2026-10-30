@@ -14,6 +14,7 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
     byte Level, ImmutableArray<InventoryItem> Equipment, bool FiendWarEligible = false,
     bool AntonEligible = false, bool LukeEligible = false, bool BeastEligible = false, bool PreyEligible = false, bool IsPvpPrivate = false)
 {
+    public bool RenamePending { get; init; }
     public uint CloneTitleItemId { get; init; }
     // 与 Actor 116B 头偏移 110 同源：名册 tail[42..45] → Data+49Ch → 选角预览 +0A9Ch。
     public int WeaponSkin { get; init; }

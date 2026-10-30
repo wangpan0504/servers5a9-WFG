@@ -284,6 +284,7 @@ internal static class SqliteMigrations
         new(153, "艾肯每日循环通关进度", static (db, tx) => Execute(db, tx, EkernCycleSchema.Definition)),
         new(154, "商城累计规则期与原子订单", CashShopPromotionSchema.EnsureBase),
         new(155, "商城常驻累计精确前驱衔接", CashShopPromotionSchema.EnsureContinuation),
+        new(156, "角色更名卡待改名资格", static (db, tx) => Execute(db, tx, CharacterRenameCardSchema.Definition)),
     ];
 
     static void AddMileageShopState(SqliteConnection db, SqliteTransaction tx)
@@ -2321,6 +2322,7 @@ internal static class SqliteMigrations
             ("account_evildom_war_guides",EvildomWarGuideSchema.Table.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (EvildomWarHiddenRewardSchema.Table,EvildomWarHiddenRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_ekern_cycle",EkernCycleSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
+            ("character_rename_pending",CharacterRenameCardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_dungeon_progress",GuildDungeonProgressSchema.Definition.Split(';')[0].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("guild_dungeon_clear_receipts",GuildDungeonProgressSchema.Definition.Split(';')[1].Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_guild_hongbao_purchases",GuildHongbaoPurchaseSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
