@@ -1,6 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Creatures;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Creatures;
 using DfoServer.GameWorld.Items;
 using DfoServer.Network.Builders;
@@ -28,9 +29,9 @@ internal static class CreatureSystemTests
             ["stackable/invalid-experience.stk"] = "[stackable type]\n`[creature]` 1\n[action type]\n`[creature use item]` 0 50\n[/action type]"
         };
         return new(path => files[path], path => path == "creature/pet.cre" ?
-            itemGrowth ? new PvfLib.CreatureFile { MaximumLevel = 4, ItemsPerLevel = 25,
+            itemGrowth ? new PvfLib.CreatureFile { Name = "初始宠物", MaximumLevel = 4, ItemsPerLevel = 25,
                 SelectiveGrowth = new() { UsingExperienceItem = 1, ItemA = 100, SelectLevel = -1 } } :
-            new PvfLib.CreatureFile { MaximumLevel = 4, EvolutionLevel = 2, EvolutionSpecies = 11 } : new PvfLib.CreatureFile { MaximumLevel = 4 },
+            new PvfLib.CreatureFile { Name = "初始宠物", MaximumLevel = 4, EvolutionLevel = 2, EvolutionSpecies = 11 } : new PvfLib.CreatureFile { Name = "进化宠物", MaximumLevel = 4 },
             new Dictionary<int, string> { [7001] = "test/pet.equ", [7002] = "test/evolved.equ" },
             new Dictionary<int, string> { [24] = "feed.stk", [25] = "rename.stk", [100] = "growth.stk",
                 [200] = "experience.stk", [201] = "level.stk", [202] = "target-level.stk", [203] = "invalid-experience.stk" },
@@ -42,6 +43,7 @@ internal static class CreatureSystemTests
         int before = Count;
         var catalog = Synthetic();
         var definition = catalog.Get(7001)!;
+        DefaultNames(catalog);
         That(definition is { Species: 10, MaximumLevel: 4, EvolutionSpecies: 11, OutputItemId: 7002 } &&
             catalog.Evolution(definition, 11)?.ItemId == 7002, "宠物种类和进化使用CRE与EQU的真实关联");
         That(catalog.Get(1) is null && catalog.Feed(1) is null && !catalog.RenameCard(24) && catalog.RenameCard(25),
@@ -169,5 +171,34 @@ internal static class CreatureSystemTests
             !service.Feed(capsuleRole with { Inventory = new([experienceSource]) }, new(experienceSource.Position, 1, 200, 0), 1000).Accepted,
             "胶囊拒绝畸形校验值、额外参数、过期源和无穿戴宠物，不产生空成功");
         Console.WriteLine($"PASS {Count - before} 宠物资源、成长、饱食与匹配原生协议断言");
+    }
+
+    static void DefaultNames(CreatureCatalog catalog)
+    {
+        var template = new ItemTemplate(7001, ItemKind.Creature, 26, 1, 0, 1, 0, 1, 1, "[trade]", ushort.MaxValue, 0, "物品名")
+            { CreatureName = catalog.Get(7001)!.Name };
+        var granted = InventoryRewardGrantService.CreateItem(template, new(InventoryListType.Pet, 0),
+            InventoryRewardGrantService.Create(template));
+        That(granted.Creature is { Name: "初始宠物", Level: 1, Satiety: 100 }, "统一授予使用CRE实体默认名，不用空串或装备物品名");
+        That(CreatureRules.DefaultName(new string('中', 16)) == new string('中', 15), "默认名按30字节完整汉字截取");
+        foreach (string? name in new string?[] { null, "" })
+            That(CreatureCatalog.Read(1, 1, new PvfLib.PvfDocument("[name]\n`物品默认名`"),
+                new PvfLib.CreatureFile { Name = name }).Name == "物品默认名", "CRE未声明或显式空名称时回退EQU名称");
+        var room = new DfoServer.GameWorld.Towns.Location(38, 1, 1, 1);
+        var source = granted with { Uid = 101, Position = CreatureRules.EquippedSlot, Core = granted.Core with { Value = 101 },
+            Creature = granted.Creature! with { Name = "", Level = 2, Experience = 3, ExpireTime = 2000 } };
+        var card = new InventoryItem(102, new(InventoryListType.Pet, 190), new(25, ItemKind.CreatureConsumable, 2));
+        var character = new Character(1, 0, "PetName", 0, room, room) { Inventory = new([source, card]) };
+        var service = new CreatureService(catalog);
+        var normalized = service.Normalize(character, 1000).Plan!.After.Find(CreatureRules.EquippedSlot)!;
+        That(normalized.Uid == source.Uid && normalized.Core == source.Core &&
+            normalized.Creature == source.Creature with { Name = "初始宠物" }, "旧空名归一仅补默认名，保留成长期限与UID");
+        var custom = source with { Creature = source.Creature! with { Name = "自定义" } };
+        var customCharacter = character with { Inventory = new([custom, card]) };
+        That(service.Normalize(customCharacter, 1000).Plan!.After.Find(CreatureRules.EquippedSlot) == custom,
+            "非空自定义名归一不覆盖");
+        var reset = service.Rename(customCharacter, card.Position, "", 1000).Plan!.After;
+        That(reset.Find(CreatureRules.EquippedSlot)!.Creature!.Name == "初始宠物" && reset.Find(card.Position)!.Core.Count == 1,
+            "空名改名仍消费一次卡，恢复实际资源默认名");
     }
 }

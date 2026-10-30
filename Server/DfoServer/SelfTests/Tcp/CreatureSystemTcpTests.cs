@@ -60,6 +60,8 @@ internal static class CreatureSystemTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select();
+            peer.Expect(0, 101, [.. Build(writer => writer.Write(peer.Id)), .. Name(CreatureRules.DefaultName(belz.Name))]);
+            That(ReadPet().Creature!.Name == CreatureRules.DefaultName(belz.Name), "旧空名宠物选角后按CRE名称持久化并通知");
             peer.Send(101, Build(writer => writer.Write(peer.Id)));
             peer.Expect(0, 104, Build(writer => writer.Write(peer.Id))); peer.Barrier();
             byte[] message = [3, 0, 0, .. Build(writer => writer.Write((int)peer.Id)), .. Name("你好")];
@@ -105,6 +107,7 @@ internal static class CreatureSystemTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(1);
+            peer.Expect(0, 101, [.. Build(writer => writer.Write(peer.Id)), .. Name(CreatureRules.DefaultName(catalog.Get(63407)!.Name))]);
             peer.Barrier();
             InventoryItem exchangeMaterial;
             using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
@@ -130,6 +133,7 @@ internal static class CreatureSystemTcpTests
         using (var peer = Open(fixture))
         {
             peer.Select(2);
+            peer.Expect(0, 101, [.. Build(writer => writer.Write(peer.Id)), .. Name(CreatureRules.DefaultName(catalog.Get(63407)!.Name))]);
             peer.Send(44, Build(writer => { writer.Write((ushort)66); writer.Write((byte)0); writer.Write(1u); writer.Write(10098004); writer.Write(0); }));
             peer.Expect(1, 44, Build(writer => { writer.Write((byte)1); writer.Write((ushort)66); writer.Write((byte)0); writer.Write(1u); writer.Write(10098004); }));
             peer.Expect(0, 102, [21, 1, 200, 0, 0, 0, 10, 5]);

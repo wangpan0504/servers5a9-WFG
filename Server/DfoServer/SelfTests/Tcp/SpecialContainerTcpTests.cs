@@ -1,5 +1,7 @@
 using System.Text.Json;
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Creatures;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Persistence;
@@ -13,6 +15,7 @@ internal static class SpecialContainerTcpTests
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var itemResources = resources.ItemResources;
+        string defaultPetName = CreatureRules.DefaultName(itemResources.Creatures.Get(63000)!.Name);
         var characters = resources.Characters;
         var towns = resources.Towns;
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "special-containers"), resources: resources);
@@ -31,7 +34,21 @@ internal static class SpecialContainerTcpTests
         {
             peer.Select();
             var details = peer.SpecialContainers[0].Body;
-            That(details.Length == 33 && details[0] == 2 && details[5] == 100 && details[11] == 1, "default pet detail arrives before Player with full fields");
+            using (var reader = new BinaryReader(new MemoryStream(details)))
+            {
+                That(reader.ReadByte() == 2, "选角在Player之前下发两只宠物详情");
+                var petUids = new HashSet<int>();
+                for (int index = 0; index < 2; index++)
+                {
+                    That(petUids.Add(reader.ReadInt32()), "同模板宠物详情保留独立UID");
+                    That(reader.ReadByte() == 100 && reader.ReadByte() == 0 && reader.ReadInt32() == 0 &&
+                        reader.ReadByte() == 1, "初始宠物详情保留饱食度、模式、经验和等级");
+                    string name = CharacterName.Encoding.GetString(reader.ReadBytes(reader.ReadInt32()));
+                    That(defaultPetName.Length > 0 && name == defaultPetName && reader.ReadByte() == 0,
+                        "新授予宠物详情携带非空默认名称与完整尾标志");
+                }
+                That(reader.BaseStream.Position == reader.BaseStream.Length, "宠物详情名称变长后两条记录仍完整对齐");
+            }
             int petUid = checked((int)U32(details, 1));
             That(peer.SpecialContainers[1].Body.Length == 335 && U16(peer.SpecialContainers[1].Body, 3) == 2 &&
                 peer.SpecialContainers[2].Body.Length == 495, "both dedicated lists initialized including artifacts and feed");
@@ -52,7 +69,7 @@ internal static class SpecialContainerTcpTests
             wornPet = peer.Expect(0, 14).Body;
             That(wornPet.Length == 126 && wornPet[0] == 3 && U32(wornPet, 9) == petUid, "pet equip sends linked identity before Player");
             peer.Expect(0, 1681);
-            CreatureActor(peer.Expect(0, 2).Body, 63000, "穿戴提交后的Actor创建当前宠物实体");
+            CreatureActor(peer.Expect(0, 2).Body, 63000, defaultPetName, "穿戴提交后的Actor创建当前宠物实体");
             peer.Expect(0, 2);
             peer.Send(19, Move(7, 140, 2680000, 3, 28, 0));
             peer.Expect(1, 19, Ack(7, 140, 3, 28));
@@ -65,7 +82,7 @@ internal static class SpecialContainerTcpTests
         using (var peer = Open(fixture))
         {
             var packets = peer.Select();
-            CreatureActor(packets[2].Body, 63000, "重连Actor恢复原穿戴宠物模板");
+            CreatureActor(packets[2].Body, 63000, defaultPetName, "重连Actor恢复原穿戴宠物模板");
             That(peer.SpecialContainers[0].Body[0] == 2 && U16(peer.SpecialContainers[1].Body, 3) == 1 && U16(peer.SpecialContainers[2].Body, 1) == 2,
                 "reconnect retains worn special items without duplicating bag entries");
             That(packets[3].Body[126] == 3, "reconnect Player includes avatar, pet and pet equipment together");
@@ -76,7 +93,7 @@ internal static class SpecialContainerTcpTests
             Bytes(avatar.AsSpan(5), wornAvatar!.AsSpan(2), "reverse unequip keeps avatar extra data");
             var presetCleared = peer.Expect(0, 1599).Body;
             That(presetCleared is [0, 0, 0, 0, 0, 0], "卸下全部时装后1号橱窗同步为空部位");
-            CreatureActor(peer.Expect(0, 2).Body, 63000, "时装脱下不会清空仍穿戴的宠物");
+            CreatureActor(peer.Expect(0, 2).Body, 63000, defaultPetName, "时装脱下不会清空仍穿戴的宠物");
             peer.Expect(0, 2);
             peer.Send(19, Move(7, 5, 0, 3, 26, 63000));
             peer.Expect(1, 19, Ack(7, 5, 3, 26));
@@ -84,7 +101,7 @@ internal static class SpecialContainerTcpTests
             That(U32(peer.Expect(0, 1681).Body, 5) == uint.MaxValue, "宠物卸下先无播报清除ACK图标，再完整载入以保留穿脱effect");
             var pet = peer.Expect(0, 1681).Body;
             Bytes(pet.AsSpan(5), wornPet!.AsSpan(5), "reverse unequip retains complete pet core");
-            CreatureActor(peer.Expect(0, 2).Body, 0, "宠物脱下提交后的Actor清除实体");
+            CreatureActor(peer.Expect(0, 2).Body, 0, "", "宠物脱下提交后的Actor清除实体");
             peer.Expect(0, 2);
             peer.Barrier();
             string before = Snapshot();
@@ -149,13 +166,15 @@ internal static class SpecialContainerTcpTests
         }
     }
 
-    static void CreatureActor(byte[] body, uint template, string message)
+    static void CreatureActor(byte[] body, uint template, string expectedName, string message)
     {
         const int nameWidth = 10; // SpecialTcp的CP936字节数。
         That(body[132 + nameWidth] == 0, "城镇宠物Actor保持成员状态0，不混入副本加载状态");
         int offset = 156 + nameWidth + body[133 + nameWidth] * 25;
-        That(body[0] == 0 && U32(body, offset) == template && U32(body, offset + 4) == 0 &&
-            body[offset + 8] == (template == 0 ? 0 : 1), message + "；同步模板与启用标志");
+        int creatureNameWidth = checked((int)U32(body, offset + 4));
+        That(body[0] == 0 && U32(body, offset) == template &&
+            CharacterName.Encoding.GetString(body, offset + 8, creatureNameWidth) == expectedName &&
+            body[offset + 8 + creatureNameWidth] == (template == 0 ? 0 : 1), message + "；同步模板、名称与启用标志");
     }
 
     static byte[] Move(byte fromList, short fromSlot, int fromId, byte toList, short toSlot, int toId, int count = 1) => Build(writer =>

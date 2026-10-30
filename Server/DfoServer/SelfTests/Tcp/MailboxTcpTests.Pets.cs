@@ -1,4 +1,6 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Creatures;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Mailbox;
@@ -46,7 +48,28 @@ internal static partial class MailboxTcpTests
                 "初始邮件包含两只蛋及本版Creature摘要前缀");
             Extract(peer, rows.Select(row => row.ClaimId).ToArray());
             ExpectClaim(peer, rows);
-            That(peer.Expect(0, 105).Body[0] == 2, "整封领取先发布两只宠物的完整详情");
+            var details = peer.Expect(0, 105).Body;
+            That(details[0] == 2, "整封领取先发布两只宠物的完整详情");
+            using (var reader = new BinaryReader(new MemoryStream(details)))
+            {
+                reader.ReadByte();
+                for (int index = 0; index < 2; index++)
+                {
+                    int petUid = reader.ReadInt32();
+                    reader.ReadByte();
+                    byte mode = reader.ReadByte();
+                    reader.ReadInt32();
+                    if (mode == 1) reader.ReadBytes(2);
+                    reader.ReadByte();
+                    string name = CharacterName.Encoding.GetString(reader.ReadBytes(reader.ReadInt32()));
+                    reader.ReadByte();
+                    That(name.Length > 0 && name == CreatureRules.DefaultName(itemResources.Creatures.Get(63022)!.Name) &&
+                        fixture.Query("SELECT json_extract(detail,'$.Name') FROM inventory_creature_details WHERE item_uid=$p0", petUid)
+                            is [[string stored]] && stored == name,
+                        "新授予宠物邮件领取的105含非空资源名，名称与持久化详情一致");
+                }
+                That(reader.BaseStream.Position == reader.BaseStream.Length, "领取宠物详情字段完整对齐");
+            }
             var delta = peer.Expect(0, 14).Body;
             That(delta[0] == 7 && U16(delta, 1) == 2, "空间足够时一次领取两只蛋，两个Pet槽均同步");
             peer.Barrier();

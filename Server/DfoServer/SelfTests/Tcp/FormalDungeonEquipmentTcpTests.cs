@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Creatures;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
@@ -229,8 +230,13 @@ internal static partial class FormalDungeonTcpTests
                             {
                                 int creatureOffset = 156 + nameWidth + actor[133 + nameWidth] * 25;
                                 uint real = family.Worn == 33 ? 63001u : (uint)fromId;
+                                int creatureNameWidth = checked((int)U32(actor, creatureOffset + 4));
+                                string creatureName = CharacterName.Encoding.GetString(actor, creatureOffset + 8, creatureNameWidth);
+                                string expectedName = real == 0 ? "" :
+                                    CreatureRules.DefaultName(resources.ItemResources.Creatures.Get(checked((int)real))!.Name);
                                 That(U16(actor, 121) == peer.Id && U32(actor, creatureOffset) == real &&
-                                    U32(actor, creatureOffset + 4) == 0 && actor[creatureOffset + 8] == (real == 0 ? 0 : 1) &&
+                                    creatureName == expectedName && (real == 0 || creatureNameWidth > 0) &&
+                                    actor[creatureOffset + 8 + creatureNameWidth] == (real == 0 ? 0 : 1) &&
                                     U32(actor, 94) == (family.Worn == 33 ? (uint)fromId : 0u),
                                     "副本Actor分别投影真实26与独立幻化；幻化穿脱不覆盖真实宠物模板和启用位");
                             }

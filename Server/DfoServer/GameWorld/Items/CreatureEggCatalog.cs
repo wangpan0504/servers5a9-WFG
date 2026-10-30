@@ -7,6 +7,7 @@ namespace DfoServer.GameWorld.Items;
 internal sealed record CreatureEggDefinition(int EggItemId, int OutputItemId, int Species)
 {
     public byte OutputMode { get; init; }
+    public string DefaultName { get; init; } = "";
 }
 
 internal sealed class CreatureEggCatalog(PvfArchive archive, IReadOnlyDictionary<int, string> equipment, ItemCatalog items)
@@ -36,7 +37,8 @@ internal sealed class CreatureEggCatalog(PvfArchive archive, IReadOnlyDictionary
             !target.TryGetInt32("sub type", out int targetSubtype) || targetSubtype != 0 ||
             !target.TryGetInt32("creature species", out int targetSpecies) || targetSpecies != species || output.CreatureInitialMode > 1)
             return null;
-        return new(egg.Id, output.Id, species) { OutputMode = output.CreatureInitialMode };
+        return new(egg.Id, output.Id, species) { OutputMode = output.CreatureInitialMode,
+            DefaultName = output.CreatureName ?? output.Name };
     }
 
     static bool CreatureType(PvfDocument document) => Regex.IsMatch(document.Section("equipment type"),

@@ -14,6 +14,7 @@ internal sealed record CreatureDefinition(int ItemId, int Species, bool Egg, int
     int EvolutionLevel, bool EvolutionQuest, int EvolutionSpecies, int OutputItemId,
     int SkillRecoveryTime, int OverSkillRecoveryTime, int OverSkillLevel)
 {
+    public string Name { get; init; } = "";
     public bool UsesExperienceItems { get; init; }
     public int ItemsPerLevel { get; init; } = 25;
     public int SelectEvolutionLevel { get; init; } = -1;
@@ -142,6 +143,7 @@ internal sealed class CreatureCatalog
             script.EvolutionSpecies ?? 0, Integer(item, "output index", 0),
             script.SkillRecoveryTime ?? 0, script.OverSkillRecoveryTime ?? 0, script.OverSkillLevel ?? 0)
         {
+            Name = string.IsNullOrEmpty(script.Name) ? item.Section("name").Trim('`', ' ', '\r', '\n') : script.Name,
             UsesExperienceItems = script.SelectiveGrowth is { UsingExperienceItem: not (null or 0) } growth &&
                 (growth.ItemA is >= 0 || growth.ItemB is >= 0 || growth.ExperienceItem is >= 0),
             ItemsPerLevel = divisor,

@@ -115,6 +115,8 @@ internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? tim
             !Catalog.RenameCard(card.Core.ItemId) || !CreatureRules.ValidName(name)) return InventoryResult.Reject(123);
         var consumed = InventoryDeleteService.Plan(character.Inventory, cardSlot, card.Core.ItemId, 1);
         if (!consumed.Accepted || consumed.Plan is null) return InventoryResult.Reject(123);
+        if (name.Length == 0)
+            name = CreatureRules.DefaultName(Catalog.Get(creature.Core.ItemId)?.Name ?? "");
         var renamed = creature with { Creature = detail with { Name = name } };
         var after = consumed.Plan.After with { Items = consumed.Plan.After.Items.Replace(creature, renamed) };
         return new(true, 0, new(character.Inventory, after, "creature_rename", Deadline(character, creature, card)));
@@ -154,9 +156,14 @@ internal sealed class CreatureService(CreatureCatalog catalog, TimeProvider? tim
     public InventoryResult Normalize(Character character, long now)
     {
         var item = Equipped(character, now);
-        if (item?.Creature is not { Mode: 0 } detail || Catalog.Get(item.Core.ItemId) is not { UsesExperienceItems: true })
+        if (item?.Creature is not { } detail || Catalog.Get(item.Core.ItemId) is not { } definition)
             return new(true, 0, new(character.Inventory, character.Inventory, "creature_normalize", new(character)));
-        return Replace(character, item, item with { Creature = detail with { Mode = 1, Mode1Field0 = 10, Mode1Field1 = 5 } },
+        var updated = detail;
+        if (detail.Name.Length == 0 && definition.Name.Length > 0)
+            updated = updated with { Name = CreatureRules.DefaultName(definition.Name) };
+        if (detail.Mode == 0 && definition.UsesExperienceItems)
+            updated = updated with { Mode = 1, Mode1Field0 = 10, Mode1Field1 = 5 };
+        return Replace(character, item, item with { Creature = updated },
             "creature_normalize");
     }
 

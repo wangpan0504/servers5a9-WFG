@@ -649,6 +649,7 @@ internal sealed partial class ItemCatalog
                 text.TryGetInt32("sub type", out int weaponSubType) && weaponSubType >= 0 ? weaponSubType : -1,
             CreatureSubType = kind == ItemKind.Creature ? ReadCreatureSubType(text) : -1,
             CreatureInitialMode = kind == ItemKind.Creature && creatures?.Get(id) is { Egg: false, UsesExperienceItems: true } ? (byte)1 : (byte)0,
+            CreatureName = kind == ItemKind.Creature ? creatures?.Get(id)?.Name : null,
             PersonalCargoForbidden = impossible.Contains("charac cargo", StringComparison.OrdinalIgnoreCase),
             AccountCargoForbidden = impossible.Contains("account cargo", StringComparison.OrdinalIgnoreCase),
             AccountBoundAfterTrade = !isEquipment && StackableTradeLimitDeclaration.Read(text) is { } tradeLimit &&
