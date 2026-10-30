@@ -6,6 +6,7 @@ using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Dungeons;
 using DfoServer.Persistence;
+using DfoServer.Network.Builders;
 using static DfoServer.Testing.TestCheck;
 using static DfoServer.Testing.TcpPeer;
 
@@ -70,6 +71,7 @@ internal static partial class FormalDungeonTcpTests
         peer.ExpectUnusedDailyBoosterReset();
         OpenSelection(0, 1);
         That(peer.DungeonEnterCounts[11008] == (1, 0), "绝望跨游戏日重新选图恢复一次，历史回执不混入本日");
+        var pendingMailboxMails = new HashSet<uint>();
         var first = EnterTower(11008);
         Load(peer);
         That(Amount(4473) == 2 && U32(first, 14) == 15130, "正式绝望首进加载真实首层且不扣失败邀请函");
@@ -101,12 +103,17 @@ internal static partial class FormalDungeonTcpTests
                     if (layer == 100) That(map[at + 12] == 92, "100层保留梁月AIC自身92级，不套用70级奖励参考等级");
                     byte[] death = Death(key, peer.Id, map[at + 12]);
                     long mailBefore = MailCount();
+                    var mailIdsBefore = MailIds();
                     peer.Send(39, death);
                     var packets = Drain();
                     if (MailCount() > mailBefore)
                     {
                         That(packets.Any(row => row.Opcode == 99), "已提交的通关溢出邮件必须发布99邮箱提醒");
                         overflowNotices++;
+                        var deliveredMails = MailIds().Except(mailIdsBefore).ToArray();
+                        That(deliveredMails.Length == MailCount() - mailBefore,
+                            "本次通关新邮件完整属于当前在线角色与账号");
+                        pendingMailboxMails.UnionWith(deliveredMails);
                     }
                     That(packets.Any(row => row.Opcode == 38 && U16(row.Body, 0) == key), "已登记敌对演员CMD39死亡得到NOTI38确认");
                     if (layer == 1) That(packets.TakeWhile(row => row.Opcode != 348).Any(row => row.Opcode == 37),
@@ -176,6 +183,8 @@ internal static partial class FormalDungeonTcpTests
         long Amount(int item) => (long)fixture.Query("SELECT coalesce(sum(json_extract(item_core,'$.Value')),0) FROM character_inventory_items WHERE character_id=$p0 AND json_extract(item_core,'$.ItemId')=$p1", peer.Id, item)[0][0];
         long EntryCount() => (long)fixture.Query("SELECT count(*) FROM dungeon_special_entry_receipts WHERE character_id=$p0", peer.Id)[0][0];
         long MailCount() => (long)fixture.Query("SELECT count(*) FROM mailbox_messages WHERE recipient_id=$p0", peer.Id)[0][0];
+        uint[] MailIds() => fixture.Query("SELECT mail_id FROM mailbox_messages WHERE recipient_id=$p0 AND recipient_account=$p1 ORDER BY mail_id",
+            peer.Id, fixture.Options.DevelopmentAccount).Select(row => checked((uint)(long)row[0])).ToArray();
         byte[] Request(uint id) { var body = Selection(); BinaryPrimitives.WriteUInt32LittleEndian(body, id); BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(16), 0); return body; }
         byte[] EnterTower(uint id)
         {
@@ -207,7 +216,47 @@ internal static partial class FormalDungeonTcpTests
         void ReturnTown()
         {
             peer.Send(42); peer.Expect(1, 42, [1]); peer.Expect(0, 3, [1, (byte)peer.Id, (byte)(peer.Id >> 8), 0]);
-            peer.Expect(0, 24); RefreshedQuests(peer); peer.Barrier();
+            peer.Expect(0, 24); RefreshedQuests(peer);
+            if (pendingMailboxMails.Count != 0)
+            {
+                using var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { });
+                long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                var page = new CharacterRepository(fixture.Database).LoadMailbox(owner, peer.Id, now);
+                var ownedMails = MailIds().ToHashSet();
+                var visibleMails = page.Entries.Select(mail => mail.Id).ToHashSet();
+                That(peer.Id == created.Id && pendingMailboxMails.All(ownedMails.Contains) &&
+                    page.Entries.All(mail => mail.RecipientId == peer.Id) &&
+                    pendingMailboxMails.Count(id => !visibleMails.Contains(id)) <= page.NotLoaded,
+                    "返城恢复同账号当前角色邮箱；本次新邮件在真实首页或未加载页内，不串角色或漏信");
+                var attachments = page.Entries.SelectMany(mail => mail.Attachments).ToArray();
+                var avatars = attachments.Where(row => row.Item.Avatar is not null).Select(row => row.Item.Core.ItemId).ToHashSet();
+                var creatures = attachments.Where(row => row.Item.Creature is not null).Select(row => row.Item.Core.ItemId).ToHashSet();
+                foreach (var expectedBody in MailboxPackets.List(page, now))
+                {
+                    var body = peer.Expect(0, 97).Body;
+                    var actual = MailboxTcpTests.ReadList(body, avatars, creatures);
+                    var expected = MailboxTcpTests.ReadList(expectedBody, avatars, creatures);
+                    Bytes(body.AsSpan(0, 2), expectedBody.AsSpan(0, 2), "返城97按真实首页重置、后续批次追加");
+                    That(body.Length == expectedBody.Length && actual.Details.SequenceEqual(expected.Details) &&
+                        actual.Summaries.Select(row => (row.ClaimId, row.MailId, row.ItemId, row.Gold))
+                            .SequenceEqual(expected.Summaries.Select(row => (row.ClaimId, row.MailId, row.ItemId, row.Gold))),
+                        "返城97完整正文、状态及每个领取对象、邮件ID、物品和金币逐项等于持久收件箱");
+                    for (int index = 0; index < expected.Summaries.Length; index++)
+                    {
+                        Bytes(actual.Summaries[index].Core, expected.Summaries[index].Core, "返城97完整123B附件核心保持");
+                        Bytes(actual.Summaries[index].Extra ?? [], expected.Summaries[index].Extra ?? [], "返城97特殊附件RAW保持");
+                    }
+                    int detailBytes = expected.Details.Sum(detail =>
+                    {
+                        var mail = page.Entries.Single(row => row.Id == detail.Id);
+                        return 23 + CharacterName.Encoding.GetByteCount(mail.SenderName) + CharacterName.Encoding.GetByteCount(mail.Text);
+                    });
+                    That(U16(body, body.Length - detailBytes - 4) == Math.Min(short.MaxValue, page.NotLoaded),
+                        "返城97保留真实20封首页之外的未加载计数，不把分页冒作丢信");
+                }
+                pendingMailboxMails.Clear();
+            }
+            peer.Barrier();
         }
         List<WirePacket> Drain()
         {

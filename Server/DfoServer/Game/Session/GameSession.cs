@@ -34,7 +34,8 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     Game.Pvp.PvpRatingSettlement? pvpRatings = null,
     DungeonBattleLevelSettings? monsterBattleLevels = null, DungeonMonsterAiSettings? monsterAi = null,
     DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
-    DfoServer.Game.Guild.GuildNpcBenefitService? guildNpcBenefits = null)
+    DfoServer.Game.Guild.GuildNpcBenefitService? guildNpcBenefits = null,
+    DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 
@@ -325,6 +326,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         GuildManagementClosing?.Invoke();
         ObserveGuildPresence();
         InvalidateRaids(reason == "session-ended");
+        mailboxRestore = null;
         npcTownVisit = null;
         hopeSelection = null;
         pvpTraining = null;

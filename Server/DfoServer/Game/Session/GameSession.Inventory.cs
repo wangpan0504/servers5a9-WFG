@@ -83,15 +83,17 @@ internal sealed partial class GameSession
         {
             return InventoryResult.Reject(qualificationError) with { RejectReason = "guild_hongbao_purchase_rejected" };
         }
-        return result with { Receipt = result.Accepted && result.Plan is not null
-            ? new(Selected, owner.Generation, SelectionEpoch)
-                {
-                    Phase = Phase,
-                    DungeonIdentity = formalDungeon?.Run.Snapshot.Identity,
-                    PreviousQuests = character.ActiveMainQuests,
-                    PreviousSkillSwitchInventory = character.SkillSwitchInventory
-                } : null };
+        if (result.Accepted && result.Plan is { OverflowItems.IsEmpty: false }) MarkMailboxRestore();
+        return result with { Receipt = result.Accepted && result.Plan is not null ? InventoryReceipt(character) : null };
     }
+
+    InventoryCommitReceipt InventoryReceipt(Character previous) => new(Selected!, owner.Generation, SelectionEpoch)
+    {
+        Phase = Phase,
+        DungeonIdentity = formalDungeon?.Run.Snapshot.Identity,
+        PreviousQuests = previous.ActiveMainQuests,
+        PreviousSkillSwitchInventory = previous.SkillSwitchInventory
+    };
 
     public bool CanPublishInventory(InventoryCommitReceipt receipt) => owner.Execute(() =>
         Ready && receipt.Generation == owner.Generation && Phase == receipt.Phase &&
@@ -159,11 +161,11 @@ internal sealed partial class GameSession
         bool requireTown, bool allowSettlement, SessionPhase? requiredPhase = null, Func<bool>? additionalGuard = null,
         int? consumableItemId = null, InventorySlot? usedItem = null)
     {
-        var capture = owner.Execute(() => (Character: CanPlan() ? Selected : null,
-            SelectionEpoch, Phase, Dungeon: formalDungeon, Identity: formalDungeon?.Run.Snapshot.Identity));
-        if (capture.Character is not { } character)
+        var capture = CaptureInventoryPlan(requireTown, allowSettlement, requiredPhase, additionalGuard, consumableItemId, usedItem);
+        if (capture is null)
             return InventoryResult.Reject(invalidStateError);
 
+        Character character = capture.Character;
         // 只读资源解析和批量规划不占用所属账号锁；此回调不能写库或修改在线状态。
         var result = plan(character);
         if (result is { Accepted: true, Plan: { } planned } && UsedItemId(character) is > 0 and var usedId &&
@@ -181,9 +183,7 @@ internal sealed partial class GameSession
         return owner.Execute(() =>
         {
             // 换角、接管及 GM/其他业务替换快照后，不能把旧随机结果提交给新的状态，也不自动重抽。
-            if (!CanPlan() || SelectionEpoch != capture.SelectionEpoch || Phase != capture.Phase ||
-                !ReferenceEquals(formalDungeon, capture.Dungeon) || formalDungeon?.Run.Snapshot.Identity != capture.Identity ||
-                !ReferenceEquals(Selected, character))
+            if (!InventoryPlanIsCurrent(capture, requireTown, allowSettlement, requiredPhase, additionalGuard, consumableItemId, usedItem))
                 return InventoryResult.Reject(invalidStateError);
             if (result.Plan?.UnlockSkillTree == true && (HasClassExperienceContext || Selected?.Position is { Town: 10, Area: 4 }))
                 return InventoryResult.Reject(invalidStateError);
@@ -192,21 +192,38 @@ internal sealed partial class GameSession
             return committed;
         });
 
-        bool CanPlan()
-        {
-            if (pendingRental is not null || additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
-                requiredPhase is { } expected && Phase != expected || formalDungeon?.PendingTutorialClear is not null) return false;
-            if (UsedItemId(Selected) is { } itemId && !CanUseDungeonItem(itemId)) return false;
-            // 城镇未提交手册和已安装回答缓存可随库存自然失效；副本继续保留专用取放资格。
-            if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();
-            return (Phase == SessionPhase.Town || !HasUncommittedQuestQuickClear) &&
-                !HasActiveDungeonContinuation && !HasPendingQuestReplay &&
-                formalDungeon?.Ground.HasPendingOperation != true &&
-                (Phase == SessionPhase.Town || Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
-                    formalDungeon is { HasPendingFatigue: false } dungeon && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement);
-        }
-
         int? UsedItemId(Character character) => usedItem is { } slot ?
             character.Inventory.Find(slot)?.Core.ItemId ?? 0 : consumableItemId;
     }
+    sealed record InventoryPlanningCapture(Character Character, long Epoch, SessionPhase Phase, FormalDungeon? Dungeon,
+        DfoServer.Game.Dungeons.DungeonRunIdentity? Identity);
+
+    InventoryPlanningCapture? CaptureInventoryPlan(bool requireTown, bool allowSettlement = false,
+        SessionPhase? requiredPhase = null, Func<bool>? additionalGuard = null,
+        int? consumableItemId = null, InventorySlot? usedItem = null) => owner.Execute(() =>
+            CanPlanInventory(requireTown, allowSettlement, requiredPhase, additionalGuard, consumableItemId, usedItem)
+                ? new InventoryPlanningCapture(Selected!, SelectionEpoch, Phase, formalDungeon, formalDungeon?.Run.Snapshot.Identity) : null);
+
+    bool InventoryPlanIsCurrent(InventoryPlanningCapture capture, bool requireTown, bool allowSettlement = false,
+        SessionPhase? requiredPhase = null, Func<bool>? additionalGuard = null,
+        int? consumableItemId = null, InventorySlot? usedItem = null) =>
+        CanPlanInventory(requireTown, allowSettlement, requiredPhase, additionalGuard, consumableItemId, usedItem) &&
+        SelectionEpoch == capture.Epoch && Phase == capture.Phase && ReferenceEquals(formalDungeon, capture.Dungeon) &&
+        formalDungeon?.Run.Snapshot.Identity == capture.Identity && ReferenceEquals(Selected, capture.Character);
+
+    bool CanPlanInventory(bool requireTown, bool allowSettlement, SessionPhase? requiredPhase, Func<bool>? additionalGuard,
+        int? consumableItemId = null, InventorySlot? usedItem = null)
+    {
+        if (pendingRental is not null || additionalGuard?.Invoke() == false || !Ready || Selected is null || HasPendingTownQuestCommit || HasPendingFormalCard ||
+            requiredPhase is { } expected && Phase != expected || formalDungeon?.PendingTutorialClear is not null) return false;
+        if ((usedItem is { } slot ? Selected.Inventory.Find(slot)?.Core.ItemId ?? 0 : consumableItemId) is { } itemId && !CanUseDungeonItem(itemId)) return false;
+        // 城镇未提交手册和已安装回答缓存可随库存自然失效；副本继续保留专用取放资格。
+        if (requireTown) return Phase == SessionPhase.Town || allowSettlement && CanUseSettlementNpcServices();
+        return (Phase == SessionPhase.Town || !HasUncommittedQuestQuickClear) &&
+            !HasActiveDungeonContinuation && !HasPendingQuestReplay &&
+            formalDungeon?.Ground.HasPendingOperation != true &&
+            (Phase == SessionPhase.Town || Phase is SessionPhase.Dungeon or SessionPhase.Settlement &&
+                formalDungeon is { HasPendingFatigue: false } dungeon && !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement);
+    }
+
 }

@@ -149,6 +149,7 @@ internal sealed class InventoryCharacterPrecondition(Character character, long? 
         (utcSeconds ?? (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds()) >= qualificationExpiresAt.Value;
     // 组合多个移动步骤时取最早到期；只供同一程序集内的业务规划读取。
     internal long? QualificationExpiresAt => qualificationExpiresAt;
+    internal DfoServer.GameWorld.Towns.Location? RequiredPosition => position;
     public bool Matches(Character value, long? utcSeconds = null) => MatchesIdentity(value) && !IsExpired(utcSeconds);
 }
 

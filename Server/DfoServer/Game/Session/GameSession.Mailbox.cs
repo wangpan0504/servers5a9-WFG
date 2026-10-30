@@ -91,6 +91,10 @@ internal sealed partial class GameSession
         (initializing ? !Ready && Phase == SessionPhase.Unselected : Ready && Phase == SessionPhase.Town) &&
         receipt.Generation == owner.Generation && SelectionEpoch == receipt.SelectionEpoch && Selected?.Id == receipt.Character.Id);
 
+    // 新邮件提示只绑定当前在线角色；列表和邮件操作仍由城镇发布门约束。
+    public bool CanPublishMailboxAlarm(MailboxReceipt receipt) => owner.Execute(() =>
+        Ready && receipt.Generation == owner.Generation && SelectionEpoch == receipt.SelectionEpoch && Selected?.Id == receipt.Character.Id);
+
     public (MailboxPage Page, MailboxReceipt Receipt)? RefreshMailbox(MailboxService service, MailboxReceipt receipt) =>
         owner.Execute<(MailboxPage Page, MailboxReceipt Receipt)?>(() =>
         {
@@ -101,12 +105,34 @@ internal sealed partial class GameSession
 
     // Runtime 绑定原连接的有界通知入口；目录仍只保存这一份 Session。
     public Action<MailboxReceipt>? MailboxArrived { private get; set; }
-    public void NotifyMailbox(ushort recipientId)
+    // 仅保留一个同选角提示；邮件内容始终从存储读取，旧回调不能清除新提示。
+    internal sealed record MailboxRestoreHint(ushort CharacterId, long Epoch);
+    MailboxRestoreHint? mailboxRestore;
+    void MarkMailboxRestore()
+    {
+        if (Ready && Selected is { } character && Phase != SessionPhase.Town)
+            mailboxRestore = new(character.Id, SelectionEpoch);
+    }
+    public MailboxRestoreHint? PendingMailboxRestore() => owner.Execute(() =>
+        mailboxRestore is { } hint && hint.Epoch == SelectionEpoch && Selected?.Id == hint.CharacterId &&
+        Ready && Phase == SessionPhase.Town ? hint : null);
+    public void ConfirmMailboxRestore(MailboxRestoreHint hint) => owner.Execute(() =>
+    {
+        if (ReferenceEquals(mailboxRestore, hint) && hint.Epoch == SelectionEpoch && Selected?.Id == hint.CharacterId &&
+            Ready && Phase == SessionPhase.Town) mailboxRestore = null;
+        return true;
+    });
+
+    public void NotifyMailbox(ushort recipientId, bool restoreOnTown = false)
     {
         try
         {
-            var notice = owner.Execute(() => Ready && Selected?.Id == recipientId ?
-                (MailboxArrived, new MailboxReceipt(Selected, owner.Generation, SelectionEpoch)) : default);
+            var notice = owner.Execute(() =>
+            {
+                if (!Ready || Selected?.Id != recipientId) return default;
+                if (restoreOnTown) MarkMailboxRestore();
+                return (MailboxArrived, new MailboxReceipt(Selected, owner.Generation, SelectionEpoch));
+            });
             notice.Item1?.Invoke(notice.Item2!);
         }
         catch (InvalidOperationException) when (!owner.IsCurrent) { /* 刚被目录替换的原连接不接收新邮件提示。 */ }

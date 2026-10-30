@@ -1,0 +1,38 @@
+[
+  {
+    "Enabled": false,
+    "DisabledReason": "奖励最终使用、完整SQL保存与邮件领取链尚未闭环；积分、优惠券、黄金书、材料兑换及增幅保护等消费者仍有未证项",
+    "RuleKind": "pilot",
+    "Rules": {
+      "Scope": {
+        "Campaign": "spring-2020",
+        "Period": "replica-1",
+        "RulesVersion": "v1",
+        "Realm": "default",
+        "Group": "package"
+      },
+      "CycleLength": 10,
+      "Cycles": 3,
+      "OverflowFrom": 31,
+      "OverflowItemId": 490705415,
+      "OverflowCount": 1,
+      "MaximumPurchases": 5000,
+      "Products": [
+        { "CommodityId": 105681, "ItemId": 490705385, "Units": 1 },
+        { "CommodityId": 108726, "ItemId": 490705385, "Units": 1 },
+        { "CommodityId": 108727, "ItemId": 490705385, "Units": 1 }
+      ],
+      "Tiers": [
+        { "Sequence": 2, "ItemId": 490705441, "Count": 1 },
+        { "Sequence": 3, "ItemId": 490705442, "Count": 1 },
+        { "Sequence": 4, "ItemId": 490705443, "Count": 1 },
+        { "Sequence": 5, "ItemId": 490705444, "Count": 1 },
+        { "Sequence": 6, "ItemId": 490705445, "Count": 1 },
+        { "Sequence": 7, "ItemId": 490705446, "Count": 1 },
+        { "Sequence": 8, "ItemId": 490705447, "Count": 1 },
+        { "Sequence": 9, "ItemId": 490705448, "Count": 1 },
+        { "Sequence": 10, "ItemId": 490705449, "Count": 1 }
+      ]
+    }
+  }
+]

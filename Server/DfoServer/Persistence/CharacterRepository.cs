@@ -13,9 +13,11 @@ namespace DfoServer.Persistence;
 // 资源目录由 Runtime 装配后注入：冒险团经验账本与角色成长需要同一份等级经验表与倍率。
 internal sealed partial class CharacterRepository(string path, DfoServer.GameWorld.Quests.QuestCatalog? quests = null,
     DfoServer.GameWorld.Adventure.AdventureCatalog? adventureCatalog = null,
-    DfoServer.GameWorld.Characters.CharacterGrowthCatalog? growthCatalog = null, int guildDungeonMileage = 0)
+    DfoServer.GameWorld.Characters.CharacterGrowthCatalog? growthCatalog = null, int guildDungeonMileage = 0,
+    Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, TimeProvider? promotionClock = null)
     : ICharacterRepository, DfoServer.Game.Mailbox.IMailboxStore, IAuctionListingStore, DfoServer.Game.Creatures.ICreatureTransportStore,
-      DfoServer.Game.Inventory.Services.IEquipmentTransportStore
+      DfoServer.Game.Inventory.Services.IEquipmentTransportStore,
+      DfoServer.Game.CashShopPromotions.ICashShopPromotionStore
 {
     readonly SqliteGameDatabase database = new(path);
     public Character[] List(AccountOwners.Lease owner) => owner.Execute(() =>

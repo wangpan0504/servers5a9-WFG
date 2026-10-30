@@ -81,6 +81,7 @@ internal static partial class DatabaseSchemaTests
                 Execute(db, "ALTER TABLE characters DROP COLUMN weapon_skin_state; DROP TABLE character_permanent_stats");
                 RemoveMainlineAdventureAdditions(db);
                 if (branch == 67) Execute(db, "DROP TABLE account_dungeon_incount");
+                if (branch == 67) RemoveEmptyPromotionFixtureSchema(db);
                 RewindRaidLifecycle(db);
                 Execute(db, $"PRAGMA user_version={branch}");
                 Check(Query(db, SkinColumnSql) is 0L && Query(db, MainlineV62To66Sql) is 5L &&

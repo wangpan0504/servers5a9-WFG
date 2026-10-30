@@ -80,6 +80,9 @@ internal static class SelfTestRunner
         Testing.TcpTestReceiptsTests.Run();
         Testing.ClientSettingsSnapshotsTests.Run();
         CashShopTests.RunCore();
+        CashShopPromotionTests.RunCore();
+        CashShopPromotionSessionTests.RunCore();
+        CashShopPromotionPersistenceTests.RunCore();
         PremiumContractTests.RunCore();
         GrowthCubeContractTests.RunCore();
         LimitCubeTests.RunCore();

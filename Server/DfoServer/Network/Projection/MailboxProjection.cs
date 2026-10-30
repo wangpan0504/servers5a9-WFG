@@ -15,13 +15,31 @@ internal sealed class MailboxProjection(MailboxService service, OnlineSessionDir
         var page = context.Session.OpenMailbox(service, initializing: true);
         await ListAsync(context, page.Page, page.Receipt, initializing: true);
     }
-    public async Task ListAsync(GameConnectionContext context, MailboxPage page, MailboxReceipt receipt, bool initializing = false)
+    public async Task<bool> ListAsync(GameConnectionContext context, MailboxPage page, MailboxReceipt receipt, bool initializing = false, Func<bool>? canSend = null)
     {
+        bool skipped = false;
+        bool CanSend()
+        {
+            bool current = (canSend?.Invoke() ?? true) && context.Session.CanPublishMailbox(receipt, initializing);
+            skipped |= !current;
+            return current;
+        }
         foreach (var body in MailboxPackets.List(page, DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
-            await context.Notify(NotiPacketType.MAILBOX_MAIL_LIST, body, "mailbox_list", () => context.Session.CanPublishMailbox(receipt, initializing));
+            await context.Notify(NotiPacketType.MAILBOX_MAIL_LIST, body, "mailbox_list", CanSend);
+        return !skipped;
+    }
+    public async Task RestoreAsync(GameConnectionContext context, Func<bool> canSend)
+    {
+        var pending = context.Owner.Execute(() => canSend() ? context.Session.PendingMailboxRestore() : null);
+        if (pending is null) return;
+        var page = context.Owner.Execute<(MailboxPage Page, MailboxReceipt Receipt)?>(() =>
+            canSend() && ReferenceEquals(context.Session.PendingMailboxRestore(), pending)
+                ? context.Session.OpenMailbox(service) : null);
+        if (page is { } current && await ListAsync(context, current.Page, current.Receipt, canSend: canSend) && canSend())
+            context.Session.ConfirmMailboxRestore(pending);
     }
     public void Alarm(GameConnectionContext context, MailboxReceipt receipt) => context.Sender.Post(0,
-        (ushort)NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "mailbox_arrived", () => context.Session.CanPublishMailbox(receipt));
+        (ushort)NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "mailbox_arrived", () => context.Session.CanPublishMailboxAlarm(receipt));
     public void Arrived(MailboxResult result)
     {
         if (result.Accepted && result.Recipient is { } recipient)

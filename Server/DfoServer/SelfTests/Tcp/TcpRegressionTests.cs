@@ -357,6 +357,7 @@ internal static class TcpRegressionTests
         ("cargo-purchase", CargoPurchaseTcpTests.RunAsync),
         ("shop", ShopTcpTests.RunAsync),
         ("cash-shop", CashShopTcpTests.RunAsync),
+        ("cash-shop-promotions", CashShopTcpTests.PromotionsAsync),
         ("name-tag", NameTagTcpTests.RunAsync),
         ("character-slots", CharacterSlotsTcpTests.RunAsync),
         ("devil-contract", DevilContractTcpTests.RunAsync),

@@ -123,6 +123,7 @@ internal static partial class DatabaseSchemaTests
                 { Inventory = InventorySnapshot.Empty with { Gold = 23456 } });
             using (var db = Open(path))
             {
+                if (version == 78) RemoveEmptyPromotionFixtureSchema(db);
                 RewindZeroExperience(db);
                 Execute(db, "DROP TABLE character_quest_daily_clear;ALTER TABLE character_expert_job DROP COLUMN learned_recipes");
                 if (version == 78) Execute(db, "ALTER TABLE character_teleport_cooldowns DROP COLUMN party_aura_until");
