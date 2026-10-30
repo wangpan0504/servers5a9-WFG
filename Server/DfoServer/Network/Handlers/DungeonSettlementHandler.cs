@@ -109,6 +109,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         { GrowthContractExperience = GrowthContractPolicy.AppliedBonus(plainClear, reward.GrowthContractExperience, effective),
             PotionExperience = ExpBonusPolicy.Shown(plainClear, reward.GrowthContractExperience, reward.PotionExperience, effective) };
         bool Guard() => context.Session.CanPublishDungeonSettlement(receipt);
+        if (OrdinaryLukeProgress.Applies(receipt.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, Guard);
         if (receipt.Entry.DungeonId is 5097 or 5098) await EkernCycleProjection.RefreshAsync(context,Guard);
         // 大会副本没有普通结算页：不发 34/35，改发 NOTI388（见 TournamentReward 注释）。
         bool tournament = receipt.Entry.IsTournament;
@@ -532,6 +533,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
             else
             {
                 await context.Notify(NotiPacketType.DUNGEON_INFO, DungeonPackets.Information(retry.Entry, retry.Snapshot.BossPosition), "formal_retry_information", RetryGuard);
+                if (OrdinaryLukeProgress.Applies(retry.Entry)) await OrdinaryLukeSequenceProjection.RefreshAsync(context, RetryGuard);
                 await MonsterAiProjection.SendAsync(context, retry, "formal_retry_monster_ai", RetryGuard);
                 await context.Notify(NotiPacketType.START_MAP, DungeonPackets.StartMap(retry.Entry, retry.Monsters, retry.MapSeed,
                     passiveItems: retry.PassiveItems), "formal_retry_start_map", RetryGuard);

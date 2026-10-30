@@ -94,6 +94,15 @@ internal static partial class FormalDungeonTcpTests
             That(accepted[0] == 1 && U16(accepted,1) == questId, "普通材料或累计通关任务经真实31接取");
             Drain();
             SelectMap(peer, incompleteHellQuest: HasIncompleteHellQuest(resources, created));
+            if (luke)
+            {
+                peer.Send(871, [42,0,0,0]);
+                byte[] sequenceBody = peer.Expect(0,602).Body;
+                That(sequenceBody.Length == 16 && U32(sequenceBody) == 42 && sequenceBody[4] == sample.Id - 5101 &&
+                    U32(sequenceBody,5) == (1u << (sample.Id - 5101)) - 1 && sequenceBody.AsSpan(9).SequenceEqual(new byte[7]),
+                    "普通卢克各图查询602复述真实当日前置，机械王座返回阶段5/低五位");
+                peer.Barrier();
+            }
             if (sample.Id == 9595 && sample.Ticket)
             {
                 // tutorial表中的正式团本索引不能借普通选图进入；拒绝后仍须能进入原普通副本。
@@ -160,6 +169,12 @@ internal static partial class FormalDungeonTcpTests
                 continue;
             }
             var info = peer.Expect(0,28).Body;
+            if (luke)
+            {
+                byte[] sequenceBody = peer.Expect(0,602).Body;
+                That(sequenceBody[4] == sample.Id - 5101 && U32(sequenceBody,5) == (1u << (sample.Id - 5101)) - 1,
+                    "单人28之后、29之前刷新当前角色进度，不依赖选图缓存");
+            }
             var map = peer.Expect(0,29).Body;
             That(U32(info,0) == sample.Id && info[4] == 2 && U32(map,14) == (sample.Id switch
                 { 9595 => 310353,5101 => 55916,5102 => 55924,5103 => 55935,5104 => 55940,5105 => 55950,5106 => 55954,_ => 400000000 }),"普通频道按28→29加载真实普通副本首图与指定难度");
@@ -309,6 +324,17 @@ internal static partial class FormalDungeonTcpTests
                             U32(packet.Body,0) == Convert.ToInt64(fixture.Query(
                                 "SELECT rental_points FROM account_wallets WHERE account=$p0",account).Single()[0]),
                             "结算幸运星通知对应实际账号余额");
+                        continue;
+                    }
+                    if (packet is { Kind:0,Opcode:602 })
+                    {
+                        var saved = fixture.Query("SELECT day,progress FROM character_luke_normal_progress WHERE character_id=$p0", peer.Id);
+                        int completed = saved is [[long savedDay, long progress]] && savedDay == DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow)
+                            ? checked((int)progress) : 0;
+                        That(luke && packet.Body.Length == 16 && U32(packet.Body) == 42 && packet.Body[4] == completed &&
+                            U32(packet.Body,5) == (1u << completed) - 1 && packet.Body.AsSpan(9).SequenceEqual(new byte[7]),
+                            "结算602逐次对应本角色真实当日提交进度，拒绝其它图或伪造前置");
+                        packets.Add(packet);
                         continue;
                     }
                     That(packet.Kind == 0 && packet.Opcode is 3 or 4 or 13 or 14 or 21 or 34 or 35 or 36 or 37 or 38 or 31 or 115 or 356 or 574 or 1379,
