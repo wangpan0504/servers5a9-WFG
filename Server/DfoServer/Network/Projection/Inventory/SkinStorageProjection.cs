@@ -1,13 +1,39 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
+using DfoServer.Game.Party;
+using DfoServer.Game.Session;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection.Inventory;
 
-internal sealed class SkinStorageProjection(InventorySkinStorageService skins)
+internal sealed class SkinStorageProjection(InventorySkinStorageService skins, PartyService? parties = null, TownPresence? presence = null)
 {
+    public async Task RefreshPartyFrameAsync(GameConnectionContext context, InventoryCommitReceipt receipt)
+    {
+        if (!context.Session.CanPublishInventory(receipt) ||
+            context.Session.PublicCharacter(receipt.Character.Id) is not { } identity ||
+            !ReferenceEquals(identity.Character, receipt.Character)) return;
+        context.Owner.Execute(() =>
+        {
+            if (identity.IsUnchanged() && identity.Phase == SessionPhase.Town)
+                presence?.Refresh(context.Owner, context.Sender, identity.Character, identity.AdventureName,
+                    broadcast: false, pvpGrade: identity.PvpGrade, allowMissing: true);
+            return true;
+        });
+        var notices = parties?.FrameChanged(context.Session, identity) ?? [];
+        if (notices.Length != 0)
+            parties!.Publish(notices, presenceChanged: false);
+        else
+            await context.Notify(NotiPacketType.USERINFO,
+                TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, adventureName: identity.AdventureName,
+                    sceneState: identity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
+                        ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: identity.PremiumPcRoom),
+                "party_frame_actor", identity.IsUnchanged);
+    }
+
     public async Task InitializeAsync(GameConnectionContext context, Character character)
     {
         long epoch = context.Session.SelectionEpoch;
@@ -102,6 +128,7 @@ internal sealed class SkinStorageProjection(InventorySkinStorageService skins)
             await context.Notify(NotiPacketType.SKIN_CARGO_INFO, SkinStoragePackets.PartyFrames(view, account), "party_frame_expired", Guard);
             await context.Notify(NotiPacketType.SELECT_SKIN_LIST, SkinStoragePackets.Selection(view.SelectedPartyFrame,
                 InventorySkinStorageService.PartyFrameType), "party_frame_expired_selection", Guard);
+            await RefreshPartyFrameAsync(context, receipt);
         }
         if (!result.Plan.Before.Skins.SelectedEmoticons.SequenceEqual(receipt.Character.Inventory.Skins.SelectedEmoticons))
         {

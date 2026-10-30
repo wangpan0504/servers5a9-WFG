@@ -13,7 +13,7 @@ internal static class PartyProjection
         void Post(NotiPacketType opcode, byte[] body, string action) => context.Sender.Post(0, (ushort)opcode, body, action, Guard);
         void Actor(PublicCharacterSnapshot identity) => Post(NotiPacketType.USERINFO,
             TownPackets.Actor(identity.Character, identity.PvpGrade, identity.Channel, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), identity.AdventureName,
-                identity.Phase == SessionPhase.Town ? ActorSceneState.Town : ActorSceneState.Dungeon,
+                identity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement ? ActorSceneState.Dungeon : ActorSceneState.Town,
                 identity.PremiumPcRoom), "party_actor");
         if (notice.Kind == PartyNoticeKind.SettlementCard && notice.Dungeon is { } dungeon)
         {
@@ -46,6 +46,28 @@ internal static class PartyProjection
             var channel = party.Members[0].Identity.Channel;
             var members = party.Members.Select(m => (m.Slot, m.Actor.Character.Id)).ToArray();
             byte[] Realtime() => PartyPackets.Realtime(party.Members.Select(m => (m.Actor.Character.Id, m.Slot)).ToArray());
+            if (notice.Kind == PartyNoticeKind.FrameChanged && notice.Peer is { } changed)
+            {
+                // 仓库回执不更新Data+488；先安装变化者，再由名册消费者重绘边框。
+                // 不重发完整Player、血蓝、端点或主机，避免干扰正在进行的战斗与面板。
+                // 远端慢队列不能因源角色移动或无关库存revision而吞掉唯一刷新；出队时读取最新不可变角色。
+                bool actorPrepared = false;
+                byte[]? PrepareActor()
+                {
+                    if (changed.Actor.Session.Selected is not { } current || current.Id != changed.Identity.Character.Id) return null;
+                    var body = TownPackets.Actor(current, changed.Identity.PvpGrade, changed.Identity.Channel,
+                            adventureName: changed.Identity.AdventureName,
+                            sceneState: changed.Identity.Phase is SessionPhase.Dungeon or SessionPhase.Settlement
+                                ? ActorSceneState.Dungeon : ActorSceneState.Town, premiumPcRoom: changed.Identity.PremiumPcRoom);
+                    actorPrepared = true;
+                    return body;
+                }
+                context.Sender.PostPrepared(0, (ushort)NotiPacketType.USERINFO, 65520, PrepareActor,
+                    "party_frame_actor", Guard, allowShorter: true);
+                context.Sender.Post(0, (ushort)NotiPacketType.PARTY_INFO, PartyPackets.Members(party.Id, channel.ServerIndex,
+                    checked((byte)channel.Number), members, party.Leader, party.Settings), "party_frame_members", () => actorPrepared && Guard());
+                return;
+            }
             if (notice.Kind == PartyNoticeKind.SceneChanged)
             {
                 // 只恢复切区者的队伍栏；重复Actor会替换客户端成员引用并触发入队音效。

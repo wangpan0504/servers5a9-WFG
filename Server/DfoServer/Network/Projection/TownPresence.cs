@@ -156,12 +156,15 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     });
     // 同一场景换装只更新快照。完成任务换成新的 PVF 阶段时先迁场景，再按入场投递。
     public void Refresh(AccountOwners.Lease owner, GameConnectionSender sender, Character character, string? adventureName = null,
-        bool broadcast = true, bool marriageOnly = false, byte? pvpGrade = null) => owner.Execute(() =>
+        bool broadcast = true, bool marriageOnly = false, byte? pvpGrade = null, bool allowMissing = false) => owner.Execute(() =>
     {
         lock (gate)
         {
             if (!members.TryGetValue(sender, out var source) || !ReferenceEquals(source.Owner, owner) || source.Character.Id != character.Id)
+            {
+                if (allowMissing) return false;
                 throw new InvalidOperationException("外观刷新缺少当前场景成员");
+            }
             if (adventureName is not null) source.AdventureName = adventureName;
             if (pvpGrade is { } grade) source.PvpGrade = grade;
             if (AlignPhase(source, character, "外观刷新缺少当前场景成员"))

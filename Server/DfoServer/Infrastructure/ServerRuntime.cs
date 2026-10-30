@@ -208,7 +208,7 @@ internal static class ServerRuntime
             Weapons = itemResources.Skins.Weapons.Count, DamageFonts = itemResources.Skins.DamageFonts.Count,
             Cutscenes = itemResources.Skins.Cutscenes.Count,
             Enabled = itemResources.Skins.Recipes.Count > 0 && itemResources.Skins.Weapons.Count > 0 });
-        var weaponSkinProjection = new SkinStorageProjection(weaponSkinService);
+        var weaponSkinProjection = new SkinStorageProjection(weaponSkinService, parties, presence);
         var dungeonCatalog = DungeonCatalog.Load(pvf);
         repository.MarriageResources = marriageCatalog;
         var marriageProjection = new MarriageProjection(repository, marriageCatalog, online, clock);
@@ -216,7 +216,7 @@ internal static class ServerRuntime
         var projection = new TownProjection(towns, stats, presence, itemResources.EpicPieces, mailboxProjection, new SettingsProjection(settings), questProjection, learning, titleProjection, adventureProjection, clock, guildPermitDelivery, devil, collectBoxProjection, weaponSkinProjection, parties: parties, epicProduction: epicProductionProjection, dungeons: dungeonCatalog, marriage: marriageProjection, events: events, mileageShop: itemResources.CashShop.Mileage);
         var creatures = new Game.Creatures.CreatureService(itemResources.Creatures, clock, towns, itemResources.Items);
         var creatureProjection = new CreatureProjection(creatures, presence, questProjection);
-        var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection);
+        var inventoryProjection = new InventoryProjection(stats, projection, itemResources.EpicPieces, creatureProjection, weaponSkinProjection);
         var totalTeamProjection = new PvpTotalTeamProjection(learning, stats, log);
         var marriageHandler = new MarriageHandler(repository, marriageCatalog, itemResources.Items,
             new Game.Marriage.MarriageInventoryPlanner(itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces),
