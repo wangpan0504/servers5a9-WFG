@@ -38,6 +38,7 @@ internal sealed class CreatureCatalog
     readonly ConcurrentDictionary<int, CreatureFeedDefinition> feeds = new();
     readonly ConcurrentDictionary<int, Lazy<CreatureExperienceItemDefinition?>> experienceItems = new();
     readonly ConcurrentDictionary<int, int> foodRates = new();
+    readonly ConcurrentDictionary<int, int> cooldownGroups = new();
     readonly Lazy<IReadOnlyDictionary<int, int[]>> evolutionItems;
 
     public bool Available => thresholds.Length != 0 && species.Count != 0;
@@ -179,6 +180,15 @@ internal sealed class CreatureCatalog
             throw new InvalidDataException("宠物饲料持续时间、集气修正或饱食恢复声明无效");
         return feeds.GetOrAdd(itemId, new CreatureFeedDefinition(itemId, minimum, cool, data[2], data[0], data[1]));
     }
+
+    public int CooldownGroup(int itemId) => cooldownGroups.GetOrAdd(itemId, id =>
+    {
+        if (!stackable.TryGetValue(id, out string? path)) throw new InvalidDataException("宠物使用道具缺少资源");
+        var script = new PvfDocument(read("stackable/" + path));
+        if (!script.Has("cooltime group")) return -id;
+        int group = Integer(script, "cooltime group", 0);
+        return group >= 0 ? group : throw new InvalidDataException("宠物道具冷却组不能为负数");
+    });
 
     public bool RenameCard(int itemId)
     {

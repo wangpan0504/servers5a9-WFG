@@ -5,8 +5,8 @@ namespace DfoServer.Game.Session;
 
 internal sealed partial class GameSession
 {
-    sealed record CreatureFeedUse(ConsumableUseRequest Request, long SelectionEpoch, long Timestamp, int CoolTime);
-    CreatureFeedUse? creatureFeedUse;
+    sealed record CreatureFeedUse(ConsumableUseRequest Request, long SelectionEpoch, long Timestamp, int CoolTime, int CoolGroup);
+    readonly Dictionary<int, CreatureFeedUse> creatureFeedUses = new();
     sealed class CreatureClock(ushort characterId, long epoch, long uid, CreatureDetail detail, long timestamp, long frequency)
     {
         public Guid CycleId { get; } = Guid.NewGuid();
@@ -95,16 +95,19 @@ internal sealed partial class GameSession
         var feed = service.Catalog.Feed(request.ItemId);
         int coolTime = feed?.CoolTime ?? service.Catalog.GrowthFood(request.ItemId)?.CoolTime ??
             service.Catalog.ExperienceItem(request.ItemId)?.CoolTime ?? 0;
+        int coolGroup = service.Catalog.CooldownGroup(request.ItemId);
         var planned = service.Feed(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds());
         return owner.Execute(() =>
         {
             if (!CanPublishConsumable(captured.Guard) || !CanUseConsumable())
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "creature-state-changed");
             if (!CanUseDungeonItem(request.ItemId)) return Reject("grief-item-not-allowed-or-exhausted");
-            if (creatureFeedUse is { } previous && previous.SelectionEpoch == SelectionEpoch &&
-                service.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(previous.CoolTime))
-                return previous.Request == request ? new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "creature-ambiguous-repeat") :
-                    Reject("creature-feed-cooldown");
+            // 缺省冷却按模板独立；只有PVF声明同组时才互相限制，不能把所有宠物道具绑在最后一次喂食上。
+            if (RecentCreatureFeed(request, service))
+                return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "creature-ambiguous-repeat");
+            if (creatureFeedUses.Values.Any(previous => previous.SelectionEpoch == SelectionEpoch && previous.CoolGroup == coolGroup &&
+                service.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(coolTime)))
+                return Reject("creature-feed-cooldown");
             if (!planned.Accepted) return Reject("creature-feed-source");
             var source = character.Inventory.Find(request.Position)!;
             if (source.IsExpired(service.Clock.GetUtcNow().ToUnixTimeSeconds())) return Reject("creature-feed-expired");
@@ -112,12 +115,12 @@ internal sealed partial class GameSession
                 planned = planned with { Plan = feedPlan.WithAfter(feedPlan.After, usedItems: [new(request.ItemId, 1)]) };
             var committed = CommitInventory(character, planned);
             if (committed.Accepted) CommitDungeonItemUse(request.ItemId);
-            creatureFeedUse = new(request, SelectionEpoch, service.Clock.GetTimestamp(), coolTime);
+            creatureFeedUses[request.ItemId] = new(request, SelectionEpoch, service.Clock.GetTimestamp(), coolTime, coolGroup);
             return new ConsumableUseResult(ConsumableUseOutcome.Committed, "creature-fed", committed, UseGuard()) { SourceUid = source.Uid };
         });
     }
 
     public bool RecentCreatureFeed(ConsumableUseRequest request, CreatureService service) => owner.Execute(() =>
-        creatureFeedUse is { } previous && previous.SelectionEpoch == SelectionEpoch && previous.Request == request &&
+        creatureFeedUses.TryGetValue(request.ItemId, out var previous) && previous.SelectionEpoch == SelectionEpoch && previous.Request == request &&
         service.Clock.GetElapsedTime(previous.Timestamp) < TimeSpan.FromMilliseconds(previous.CoolTime));
 }

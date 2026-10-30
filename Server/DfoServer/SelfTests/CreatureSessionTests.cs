@@ -29,8 +29,10 @@ internal static class CreatureSessionTests
                 { Creature = new() { Satiety = 10 } };
             repository.Create(owner, candidate with { Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(Pet(equipped)).Add(Pet(new(InventoryListType.Pet, 0)))
+                .Add(new(0, new(InventoryListType.Pet, 192), new(24, ItemKind.CreatureConsumable, 1)))
                 .Add(new(0, new(InventoryListType.Pet, 189), new(24, ItemKind.CreatureConsumable, 1)))
-                .Add(new(0, new(InventoryListType.Pet, 190), new(200, ItemKind.CreatureConsumable, 2))) } });
+                .Add(new(0, new(InventoryListType.Pet, 190), new(200, ItemKind.CreatureConsumable, 2)))
+                .Add(new(0, new(InventoryListType.Pet, 191), new(201, ItemKind.CreatureConsumable, 1))) } });
             var clock = new ConsumableUseSessionTests.FakeClock();
             var service = new CreatureService(CreatureSystemTests.Synthetic(), clock);
             var session = new GameSession(repository, towns, owner);
@@ -45,7 +47,6 @@ internal static class CreatureSessionTests
             That(fed.Outcome == ConsumableUseOutcome.Committed && session.Selected!.Inventory.Find(request.Position) is null &&
                 session.RecentCreatureFeed(request, service) && session.FeedCreature(request, service).Outcome == ConsumableUseOutcome.CloseConnection,
                 "最后一份饲料消费后仍识别歧义重放，不再次扣除或盲发失败ACK");
-            clock.Advance(TimeSpan.FromSeconds(10));
             var capsuleRequest = new ConsumableUseRequest(new(InventoryListType.Pet, 190), 1, 200, 0);
             var beforeCapsule = session.Selected!;
             Sql("CREATE TRIGGER fail_creature_capsule AFTER INSERT ON inventory_audit_log WHEN NEW.action_name='creature_feed' " +
@@ -59,8 +60,8 @@ internal static class CreatureSessionTests
             Sql("DROP TRIGGER fail_creature_capsule");
             That(session.FeedCreature(capsuleRequest, service).Outcome == ConsumableUseOutcome.Committed &&
                 session.Selected!.Inventory.Find(equipped)!.Creature is { Level: 1, Experience: 1 } &&
-                session.Selected.Inventory.Find(capsuleRequest.Position)!.Core.Count == 1,
-                "失败后可提交同请求，宠物经验和源数量一并落库");
+                session.Selected.Inventory.Find(capsuleRequest.Position)!.Core.Count == 1 && session.RecentCreatureFeed(request, service),
+                "饲料冷却不阻塞独立胶囊，失败后可提交同请求且不覆盖饲料成功重放记录");
             That(session.FeedCreature(capsuleRequest, service).Outcome == ConsumableUseOutcome.CloseConnection &&
                 session.FeedCreature(capsuleRequest with { OpaqueCheck = 2 }, service).Outcome == ConsumableUseOutcome.Rejected,
                 "胶囊遵守原喂食重放与冷却，不连续扣除或重复发送消费ACK");
@@ -69,6 +70,14 @@ internal static class CreatureSessionTests
                 repository.LoadCharacter(owner, 0).Inventory.Find(equipped) is { Core.ItemId: 7002, Creature: { Level: 2, Experience: 2 } } &&
                 session.Selected!.Inventory.Find(capsuleRequest.Position) is null,
                 "冷却后最后一件胶囊可消费，经验与同UID进化保存后可重载");
+            That(session.FeedCreature(request with { Position = new(InventoryListType.Pet, 192), OpaqueCheck = 3 }, service).Outcome == ConsumableUseOutcome.Rejected,
+                "使用其它宠物道具不清除原饲料模板的冷却");
+            clock.Advance(TimeSpan.FromSeconds(9));
+            var levelRequest = new ConsumableUseRequest(new(InventoryListType.Pet, 191), 4, 201, 0);
+            That(session.FeedCreature(levelRequest, service).Outcome == ConsumableUseOutcome.Committed &&
+                session.Selected!.Inventory.Find(equipped)!.Creature is { Level: 3, Experience: 5 }, "升级券按原经验阈值提交等级");
+            That(session.FeedCreature(request with { Position = new(InventoryListType.Pet, 192), OpaqueCheck = 5 }, service).Outcome == ConsumableUseOutcome.Committed &&
+                session.RecentCreatureFeed(levelRequest, service), "升级券冷却不阻塞饲料，喂食仍保留升级券重放识别");
             ticket = session.PrepareCreatureTick(service)!;
             session.PlanAndCommitInventory(character =>
             {
@@ -94,6 +103,18 @@ internal static class CreatureSessionTests
                 repository.LoadCharacter(owner, 0).Inventory.Find(equipped) == before.Inventory.Find(equipped),
                 "时钟SQL失败整笔回滚UID详情，不安装或提前发送变化");
             Sql("DROP TRIGGER fail_creature_clock");
+            repository.Create(owner, candidate with { Name = "PetGroup", Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
+                .Add(Pet(equipped))
+                .Add(new(0, new(InventoryListType.Pet, 189), new(24, ItemKind.CreatureConsumable, 1)))
+                .Add(new(0, new(InventoryListType.Pet, 190), new(200, ItemKind.CreatureConsumable, 1))) } });
+            session.ReturnToRoster(); session.Select(1); session.MarkReady();
+            var grouped = new CreatureService(CreatureSystemTests.Synthetic(cooldownGroup: 7), clock);
+            That(session.FeedCreature(request, grouped).Outcome == ConsumableUseOutcome.Committed &&
+                session.FeedCreature(capsuleRequest, grouped).Outcome == ConsumableUseOutcome.Rejected,
+                "明确同组的饲料与胶囊仍互相限制，重选角色不沿用旧角色记录");
+            clock.Advance(TimeSpan.FromSeconds(1));
+            That(session.FeedCreature(capsuleRequest, grouped).Outcome == ConsumableUseOutcome.Committed &&
+                session.RecentCreatureFeed(request, grouped), "共享组按当前道具冷却判定，后用胶囊仍保留饲料成功请求歧义");
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject<InvalidOperationException>(() => session.SettleCreatureTick(ticket, service, force: true), "旧generation不能提交宠物时钟");
 
