@@ -273,7 +273,7 @@ internal static class MarriageWeddingTcpTests
     }
     sealed class Clock : TimeProvider
     {
-        long seconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long seconds = new DateTimeOffset(DateTime.Today.AddHours(12)).ToUnixTimeSeconds();
         public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeSeconds(Interlocked.Read(ref seconds));
         public void Advance(TimeSpan value) => Interlocked.Add(ref seconds, checked((long)value.TotalSeconds));
     }
