@@ -17,8 +17,9 @@ internal static class QuestCinematicSettlementTcpTests
     internal static void Verify(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain)
     {
-        foreach (var scenario in new[] { (Request:(ushort)3599,FinishFirst:false,AllEnemies:true,Potion:1),(Request:(ushort)0,FinishFirst:false,AllEnemies:false,Potion:2),
-            (Request:(ushort)3599,FinishFirst:true,AllEnemies:false,Potion:0) })
+        foreach (var scenario in new[] { (Request:(ushort)3599,FinishFirst:false,AllEnemies:true,Potion:1,Early:false),
+            (Request:(ushort)0,FinishFirst:false,AllEnemies:false,Potion:2,Early:true),
+            (Request:(ushort)3599,FinishFirst:true,AllEnemies:false,Potion:0,Early:true) })
         {
             var area = resources.Towns.Areas.Values.First(row => row.Level <= 74 && row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == 96 &&
@@ -71,21 +72,33 @@ internal static class QuestCinematicSettlementTcpTests
                     Drain();
                 }
                 That(enabled == 0,"真实叠层击杀不能提前许可非战斗终点结算");
-                Move(1); Load(76114,cached:true);
+                Move(1);
+                if (scenario.Early)
+                {
+                    peer.Send(33,[33,0,15,14,0,0]); peer.Expect(1,33,[1,15,14,0,0,0,0]); Drain();
+                    That(enabled == 0 && fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3599",peer.Id)
+                        is [[0L]] && fixture.Query("SELECT count(*) FROM character_dungeon_settlement_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                        "3599返回Loading早到33保存原接取但不提前发布31或结算");
+                }
+                Load(76114,cached:true);
                 That(fixture.Query("SELECT count(*) FROM character_dungeon_growth_receipts WHERE character_id=$p0",peer.Id)
                     is [[long deathCount]] && deathCount == reported.Length,
                     "APC演出返回只保留实际39回执，不替其余八敌创建死亡或经验");
-                That(enabled == 0 && fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3599",peer.Id)
-                    is [[1L]],"返回原演出终点仍等待本次接取33");
+                That(enabled == (scenario.Early ? 1 : 0) && fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3599",peer.Id)
+                    is [[long scalar]] && scalar == (scenario.Early ? 0 : 1),"返回原演出终点按实际37与已存33共同决定许可");
                 RejectDummy();
                 byte[] report = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99);
                 string before = State();
-                peer.Send(46,report); Drain();
-                That(State() == before && enabled == 0,"TCP提前46不能绕过演出许可或提交奖励");
+                if (!scenario.Early)
+                {
+                    peer.Send(46,report); Drain();
+                    That(State() == before && enabled == 0,"TCP提前46不能绕过演出许可或提交奖励");
+                }
                 peer.Send(33,[33,0,15,14,0x10,0,0]); peer.Expect(1,33,[0,19,0]); Drain();
-                That(State() == before && enabled == 0,"演出错误通道33不持久达成或发布31");
+                That(State() == before && enabled == (scenario.Early ? 1 : 0),"演出错误通道33不持久达成或发布31");
                 peer.Send(33,[33,0,15,14,0,0]); peer.Expect(1,33,[1,15,14,0,0,0,0]);
-                peer.Expect(0,31,[]); enabled++; Drain();
+                if (!scenario.Early) { peer.Expect(0,31,[]); enabled++; }
+                Drain();
                 That(enabled == 1 && bossChecks == 0 && fixture.Query(
                     "SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=3599",peer.Id) is [[0L]],
                     "终末33先持久原接取再ACK33及唯一空31，不编造115");
@@ -147,10 +160,10 @@ internal static class QuestCinematicSettlementTcpTests
                 }
                 void RejectDummy()
                 {
-                    string saved = State();
+                    string saved = State(); int previousEnabled = enabled;
                     peer.Send(39,ScriptDeath(dummyKey,peer.Id));
                     peer.Expect(0,38,[(byte)dummyKey,(byte)(dummyKey >> 8),0,0,0,0,255,0,0]); Drain();
-                    That(State() == saved && enabled == 0,"62959友方退场不计死亡、发经验或创建结算");
+                    That(State() == saved && enabled == previousEnabled,"62959友方退场不计死亡、发经验或创建结算");
                 }
                 void Finish()
                 {

@@ -25,6 +25,7 @@ internal static class QuestPassiveClearTcpTests
         VerifyZeroKill(fixture,resources,growth,drain);
         VerifyMagtonium(fixture,resources,growth,drain);
         VerifyLayeredCinematic(fixture,resources,growth,drain,dungeons);
+        VerifyLayeredCinematic(fixture,resources,growth,drain,dungeons,early:true);
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,3738,102,16120,76530,
             [0,0,7,5,4,6,5,15],[76532,76533,76534]);
         VerifyPassiveHunt(fixture,resources,growth,drain,dungeons,5947,291100293,109034854,292105331,
@@ -327,14 +328,14 @@ internal static class QuestPassiveClearTcpTests
 
     // 一个跨层成功代表：真实70201基础Boss、70487末层、独立39/33和34；事件正文仍明确合成。
     static void VerifyLayeredCinematic(TcpTestFixture fixture, TcpTestResources resources, CharacterGrowthCatalog growth,
-        Action<TcpPeer, Action<WirePacket>?> drain, DungeonCatalog dungeons)
+        Action<TcpPeer, Action<WirePacket>?> drain, DungeonCatalog dungeons, bool early = false)
     {
-        const string account = "layered-movie-3858";
+        string account = early ? "layered-movie-3858-early" : "layered-movie-3858";
         var entrance = MiddleQuestEntryTests.Entrance(resources.Towns,resources.Quests.Get(3858),193);
         Character created;
         using (var owner = new AccountOwners().Acquire(account,() => { }))
         {
-            var candidate = CharacterCreation.Prepare("LayerMovie",resources.Characters.Get(0),
+            var candidate = CharacterCreation.Prepare(early ? "LayerMovieE" : "LayerMovie",resources.Characters.Get(0),
                 entrance.Position,entrance.Position,resources.Learning.Get);
             var learning = SkillPointLedger.Synchronize(0,0,86,candidate.InitialLearning with
                 { Experience=growth.GetLevelStartExperience(86) },resources.Learning);
@@ -376,19 +377,29 @@ internal static class QuestPassiveClearTcpTests
             {
                 Move(layer.Position,1);
                 That(U32(map,14) == layer.Id,"3858原叠层顺序保留实际地图身份");
+                if (early && layer.Id == 70487)
+                {
+                    peer.Send(33,[33,0,18,15,0,0]); peer.Expect(1,33,[1,18,15,0,0,0,0]); Drain();
+                    That(Scalar() is [[0L]] && enabled == 0 && fixture.Query(
+                        "SELECT count(*) FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id) is [[0L]],
+                        "3858进入目标层的33先于37保存演出条件，不代替物件39或签发31");
+                }
                 FormalDungeonTcpTests.Load(peer); Drain();
             }
             That(U32(map,14) == 70487 && map[18] == 3 && U32(map,27) == 56501 && map[32] == 5 && map[40] == 1 &&
                 U32(map,49) == 68004 && map[54] == 9 && map[62] == 1 &&
                 U32(map,71) == 68004 && map[76] == 9 && map[84] == 1 &&
                 new[] { U16(map,25), U16(map,47), U16(map,69) }.Distinct().Count() == 3 &&
-                enabled == 0 && Scalar() is [[1L]],
+                enabled == 0 && Scalar() is [[long scalar]] && scalar == (early ? 0 : 1),
                 "真实70487保留友方APC56501及两个独立68004特殊父对象，加载不达成演出或清图");
             string saved = State();
-            peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
-            That(State() == saved,"3858未收到演出终末时34拒绝且不写奖励");
+            if (!early)
+            {
+                peer.Send(34,[34,0,18,15,255,255,1,0,255,255]); peer.Expect(1,34,[0,19,0]); Drain();
+                That(State() == saved,"3858未收到演出终末时34拒绝且不写奖励");
+            }
             peer.Send(39,passive); peer.Expect(0,574); peer.Expect(0,31,[]); enabled++; Drain();
-            That(enabled == 1 && bossChecks == 0 && Scalar() is [[1L]] && fixture.Query(
+            That(enabled == 1 && bossChecks == 0 && Scalar() is [[long sceneScalar]] && sceneScalar == (early ? 0 : 1) && fixture.Query(
                 "SELECT source_type,dungeon_id,map_id,template_id,length(death_events)/16,quest_id FROM character_dungeon_scene_clear_receipts WHERE character_id=$p0",peer.Id)
                 is [["PassiveObject",193L,70487L,69292L,long sceneDeaths,0L]] && sceneDeaths == deaths,
                 "3858普通0绑定唯一末层scene与实际死亡集合，39不代替type65，空31不造115");

@@ -19,6 +19,37 @@ internal sealed partial class GameSession
         DungeonRunIdentity? Identity, QuestClientCondition? Condition);
     private PendingQuestLifecycle? pendingQuestLifecycle;
 
+    // 仅接收已经批准的同坐标演出导航终末；初次加载和水平换房仍须等待37。
+    private static bool CinematicLoadingTransition(FormalDungeon dungeon, StoryQuest movie)
+    {
+        var entry = dungeon.Entry;
+        var run = dungeon.Run;
+        var current = run.Snapshot.CurrentMap;
+        if (entry.IsClassExperience || entry.IsPractice || entry.IsQuestReplay ||
+            entry.RouteQuestId != movie.Id || !QuestClientSceneProgress.DungeonCinematic(movie) ||
+            run.Phase != SinglePlayerDungeonPhase.Loading || run.LastLoadingFact is not { } loaded ||
+            loaded.Map.Position != current.Position)
+            return false;
+        if (run.Snapshot.MapOperation == DungeonMapOperation.RestoreBase)
+            // 原Run已批准从末层返回缓存基础图；3599的返回演出与基础图演出编号不同。
+            return current == entry.BaseBossMap && current.Id == movie.CinematicMapId &&
+                loaded.Map.Kind == "layered" && entry.Maze.LayeredMaps.Contains(loaded.Map);
+        if (run.Snapshot.MapOperation != DungeonMapOperation.AdvanceLayer ||
+            loaded.Map != entry.BaseBossMap || !entry.Maze.LayeredMaps.Contains(current))
+            return false;
+        // 3858在目标层开图时播放任务CMT，终末可先于该层37；不据此确认物件或清图。
+        if (current.Id == movie.CinematicMapId) return true;
+        if (movie.CinematicMapId != loaded.Map.Id ||
+            entry.Maze.LayeredMaps.Count(map => map.Position == current.Position) != 1)
+            return false;
+        // 3984普通Boss清图后由CinematicSettlementLayer批准换层，保留原清图终点。
+        if (run.ClearFact?.ClearMap == loaded.Map) return true;
+        // 3991非战斗基础图的演出向下换层，仍使用已核对的相同ACT/CMT与原末层终点。
+        return entry.CinematicClearTerminalMap == current &&
+            dungeon.Route.Rooms.Single(row => row.Room.Map == loaded.Map).Room.CinematicLayerReturn is { } source &&
+            source.CinematicId == movie.IntData[0] && source.CinematicPath == movie.CinematicPath;
+    }
+
     public QuestLifecycleReceipt? ChangeQuest(ushort questId, QuestLifecycleAction action, QuestCatalog quests,
         ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, QuestClientCondition? condition = null)
     {
@@ -27,13 +58,7 @@ internal sealed partial class GameSession
             // CMT在发送换层45后即可终末，33会早于新层37；只复用已加载基础图及本次批准换层身份。
             bool cinematicTransition = action == QuestLifecycleAction.Condition && condition is { Channel: null, Value: 0, Reserved: 0 } &&
                 Phase == SessionPhase.Loading && formalDungeon is { } changing &&
-                changing.Run.Phase == SinglePlayerDungeonPhase.Loading &&
-                changing.Entry.CinematicClearTerminalMap == changing.Run.Snapshot.CurrentMap &&
-                changing.Run.LastLoadingFact?.Map == changing.Entry.BaseBossMap &&
-                quests.TryGet(questId,out var movie) && QuestClientSceneProgress.DungeonCinematic(movie) &&
-                movie.CinematicMapId == changing.Entry.BaseBossMap.Id &&
-                changing.Route.Rooms.Single(row => row.Room.Map == changing.Entry.BaseBossMap).Room.CinematicLayerReturn is { } source &&
-                source.CinematicId == movie.IntData[0] && source.CinematicPath == movie.CinematicPath;
+                quests.TryGet(questId,out var movie) && CinematicLoadingTransition(changing,movie);
             Character? character = Ready && Selected is not null && Phase != SessionPhase.Unselected &&
                 (Phase != SessionPhase.Loading || cinematicTransition) &&
                 pendingRental is null && pendingCommunication is null && pendingQuestCompletion is null && pendingQuestQuickClear is not { CommitStarted: true } &&
