@@ -226,7 +226,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await context.Reply(CmdPacketType.LOGIN, ChannelPackets.Endpoint(connection.ServerAddress(options),
                 native?.Port ?? login.Channel.Port, nativeRegistration?.Token ?? 0, ChannelPackets.LoginChannelType(login.Channel.Entry)), "endpoint");
             var roster = session.PrepareRoster();
-            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "roster",
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity, items), "roster",
                 () => session.CanPublishRoster(roster));
             session.MarkRosterPublished(roster);
             // 忙锁重试耗尽只记录诊断并丢弃当前包；记录阶段、opcode 与尝试次数，便于和同连接其它包关联。

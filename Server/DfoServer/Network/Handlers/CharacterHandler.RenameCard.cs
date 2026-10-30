@@ -44,7 +44,7 @@ internal sealed partial class CharacterHandler
             result == CharacterRenameFailure.None ? [1] : [0, (byte)error, (byte)(error >> 8)], "character_rename_ack", Guard);
         if (roster is not null)
         {
-            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity),
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity, renameItems),
                 "character_rename_roster", Guard);
             context.Session.MarkRosterPublished(roster);
         }

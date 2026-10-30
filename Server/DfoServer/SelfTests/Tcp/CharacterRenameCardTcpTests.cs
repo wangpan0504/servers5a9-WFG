@@ -18,13 +18,16 @@ internal static class CharacterRenameCardTcpTests
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "character-rename-card"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
         ushort characterId;
+        int actualWeapon;
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {
             var dummy = repository.Create(owner, new("RenameHole", resources.Towns.Room, resources.Towns.InitialReturn));
             var candidate = CharacterCreation.Prepare("RenameTcp", resources.Characters.Get(0), resources.Towns.Room,
                 resources.Towns.InitialReturn, resources.Learning.Get);
+            actualWeapon = candidate.Inventory.Items.SingleOrDefault(item => item.Position.List == InventoryListType.Equipment && item.Position.Index == 12)?.Core.ItemId ?? 0;
             var role = repository.Create(owner, candidate with { Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
-                .Add(new(0, new(InventoryListType.Main, 65), new(2660698, ItemKind.Consumable, 2))) } });
+                .Add(new(0, new(InventoryListType.Main, 65), new(2660698, ItemKind.Consumable, 2)))
+                .Add(new(0, new(InventoryListType.Equipment, 10), new(int.MaxValue, ItemKind.Avatar, 0)) { Avatar = new() }) } });
             characterId = role.Id;
             repository.Delete(owner, repository.LoadDeletionTarget(owner, dummy.Slot));
         }
@@ -53,7 +56,12 @@ internal static class CharacterRenameCardTcpTests
         {
             CheckRoster(peer.Roster, "RenameTcp", true);
             peer.Send(135, CharacterRenameCardTests.Body(0, "RenameTcp", "RenamedTcp"));
-            peer.Expect(1, 135, [1]); CheckRoster(peer.Expect(0, 2).Body, "RenamedTcp", false); RosterBarrier(peer);
+            peer.Expect(1, 135, [1]);
+            byte[] renamedRoster = peer.Expect(0, 2).Body;
+            CheckRoster(renamedRoster, "RenamedTcp", false);
+            That(Inventory.WeaponSkinTests.RosterWeaponAppearance(renamedRoster) == actualWeapon,
+                "改名成功刷新名册也使用资源目录，缺装扮模板回退真实武器");
+            RosterBarrier(peer);
             That(Remaining() == 1 && Pending() == 0 && fixture.Query("SELECT id,slot,name FROM characters WHERE id=$p0", characterId)
                 is [[long id, 1L, "RenamedTcp"]] && id == characterId, "重启后改名保留ID与持久槽，清一次资格不再扣卡");
             Rename(peer, 0, "RenamedTcp", "Again", [0, 0, 0]);

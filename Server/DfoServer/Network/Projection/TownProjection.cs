@@ -22,7 +22,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
     CollectBoxProjection? collectBoxes = null, SkinStorageProjection? weaponSkins = null, DfoServer.Game.Party.PartyService? parties = null,
     EpicProductionProjection? epicProduction = null, DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
     MarriageProjection? marriage = null, ServerEventService? events = null, MileageShopCatalog? mileageShop = null,
-    Func<CashShopPromotionCatalog>? promotionCatalog = null, CashShopPromotionPageService? promotionPages = null)
+    Func<CashShopPromotionCatalog>? promotionCatalog = null, CashShopPromotionPageService? promotionPages = null, ItemCatalog? items = null)
 {
     const ushort JonathanVisibleEvent = 2395;
     internal bool MileageAvailable => mileageShop?.Available == true;
@@ -422,7 +422,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.SelectionRosterPushed = true;
         await context.Reply(CmdPacketType.RETURN_SELECT_CHARACTER, SessionPackets.ReturnToSelection(), "return_selection_ack");
         var roster = context.Session.PrepareRoster();
-        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "return_selection_roster",
+        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity, items), "return_selection_roster",
             () => context.Session.CanPublishRoster(roster));
         context.Session.MarkRosterPublished(roster);
     }

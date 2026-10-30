@@ -213,7 +213,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         else receipt = context.Session.CreateCharacterForClient(parsed.Name, characters.Get(parsed.Job), learning, tutorials?.Get(parsed.Job));
         bool CanSend() => context.Session.CanPublishCreation(receipt);
         await context.Reply(CmdPacketType.CREATE_CHARACTER, CharacterPackets.Created(receipt.Created), "create_committed", CanSend);
-        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity), "created_roster", CanSend);
+        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity, renameItems), "created_roster", CanSend);
         context.Session.MarkRosterPublished(receipt.Roster);
         return CommandResult.Handled;
     }
@@ -236,7 +236,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
             result.Accepted ? "character_delete_committed" : "character_delete_rejected", CanSend);
         if (result.Receipt is { } receipt)
         {
-            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity), "deleted_roster", CanSend);
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity, renameItems), "deleted_roster", CanSend);
             context.Session.MarkRosterPublished(receipt.Roster);
             // ACK6的消费者随后发空C2S645；新名册已主动下发，后续显式C2S8可以正常刷新。
             context.RosterRequested = true;
@@ -266,7 +266,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         }
         // 同索引/名册不匹配没有写库，仍用当前名册覆盖客户端本地拖动结果，使其退出拖动状态。
         await context.Reply(CmdPacketType.CHANGE_CHARAC_SLOT, CharacterPackets.SlotChanged(), "character_slot_ack", CanSend);
-        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity),
+        await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(receipt.Roster.Entries.ToArray(), receipt.Roster.Capacity, renameItems),
             "character_slot_roster", CanSend);
         context.Session.MarkRosterPublished(receipt.Roster);
         return CommandResult.Handled;
@@ -297,7 +297,7 @@ internal sealed partial class CharacterHandler(CharacterCatalog characters, Town
         if (context.RosterRequested)
         {
             var roster = context.Session.PrepareRoster();
-            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity), "requested_roster",
+            await context.Notify(NotiPacketType.USERINFO, CharacterPackets.Roster(roster.Entries.ToArray(), roster.Capacity, renameItems), "requested_roster",
                 () => context.Session.CanPublishRoster(roster));
             context.Session.MarkRosterPublished(roster);
         }

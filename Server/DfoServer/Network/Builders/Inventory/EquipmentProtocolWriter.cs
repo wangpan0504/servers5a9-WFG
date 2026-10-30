@@ -28,21 +28,52 @@ internal static class EquipmentProtocolWriter
         var items = equipment.Where(item => item.Position.List == InventoryListType.Equipment && item.Position.Index != 30).OrderBy(item => item.Position.Index).ToArray();
         writer.Write(checked((byte)items.Length));
         foreach (var item in items)
+            AppearanceEntry(writer, checked((byte)item.Position.Index), item.Core.ItemId, item);
+    }
+
+    public static void RosterAppearance(BinaryWriter writer, IEnumerable<InventoryItem> equipment, int weaponSkin, ItemCatalog? catalog)
+    {
+        var items = equipment.Where(item => item.Position.List == InventoryListType.Equipment && item.Position.Index != 30)
+            .OrderBy(item => item.Position.Index).ToArray();
+        var weapon = items.SingleOrDefault(item => item.Position.Index == 12);
+        var avatar = items.SingleOrDefault(item => item.Position.Index == 10);
+        int visibleId = weaponSkin > 0 ? weaponSkin : avatar?.Avatar is { ClearAvatarId: > 0 } clear
+            ? clear.ClearAvatarId : avatar is not null && (catalog is null ||
+                catalog.TryGet(avatar.Core.ItemId, out var template) && !template.CloneAvatar)
+                ? avatar.Core.ItemId : 0;
+        if (visibleId == 0)
         {
-            var core = item.Core;
-            writer.Write(checked((byte)item.Position.Index));
-            writer.Write(core.ItemId);
-            // 02675DE0 -> 028F2A80 必读一个4B资源扩展，普通装备初始化为零。
-            ItemListProtocolWriter.WriteAvatarColors(writer, item.Avatar);
-            writer.Write((byte)((core.Attr << 1) | (core.AmplifyType == 0 ? 0 : 1)));
-            writer.Write(core.GenuineUpgrade);
-            writer.Write(core.EmancipateLevel);
-            writer.Write(item.Avatar?.ClearAvatarId ?? core.Marker16);
-            if (item.Position.Index == 9 && item.Avatar is { ClearAvatarId: > 0 })
-                ItemListProtocolWriter.WriteAvatarSockets(writer, item.Avatar);
-            writer.Write(core.EnchantCardId);
-            writer.Write(core.EnchantUpgrade);
+            Appearance(writer, items);
+            return;
         }
+        // 选角替代动画02AB6760会重新读槽12模板，忽略独立幻化字段及克隆来源。
+        // 只投影视图编号，不构造虚假库存实例，也不改真实装备或城镇Actor。
+        writer.Write(checked((byte)(items.Length + (weapon is null ? 1 : 0))));
+        var source = weaponSkin > 0 ? weapon : avatar;
+        foreach (var item in items)
+            if (item.Position.Index == 12)
+                AppearanceEntry(writer, 12, visibleId, source, resolved: true);
+            else
+                AppearanceEntry(writer, checked((byte)item.Position.Index), item.Core.ItemId, item);
+        if (weapon is null)
+            AppearanceEntry(writer, 12, visibleId, source, resolved: true);
+    }
+
+    static void AppearanceEntry(BinaryWriter writer, byte slot, int itemId, InventoryItem? item, bool resolved = false)
+    {
+        var core = item?.Core;
+        writer.Write(slot);
+        writer.Write(itemId);
+        // 02675DE0 -> 028F2A80 必读一个4B资源扩展，普通装备初始化为零。
+        ItemListProtocolWriter.WriteAvatarColors(writer, item?.Avatar);
+        writer.Write((byte)(((core?.Attr ?? 0) << 1) | (core is { AmplifyType: not 0 } ? 1 : 0)));
+        writer.Write(core?.GenuineUpgrade ?? (byte)0);
+        writer.Write(core?.EmancipateLevel ?? (byte)0);
+        writer.Write(resolved ? 0 : item?.Avatar?.ClearAvatarId ?? core?.Marker16 ?? 0);
+        if (slot == 9 && item?.Avatar is { ClearAvatarId: > 0 })
+            ItemListProtocolWriter.WriteAvatarSockets(writer, item.Avatar);
+        writer.Write(core?.EnchantCardId ?? 0);
+        writer.Write(core?.EnchantUpgrade ?? (byte)0);
     }
 
     public static void Player(BinaryWriter writer, InventorySnapshot inventory, long? utcSeconds = null)

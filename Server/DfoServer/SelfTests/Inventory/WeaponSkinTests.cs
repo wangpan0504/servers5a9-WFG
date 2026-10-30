@@ -270,11 +270,81 @@ internal static class WeaponSkinTests
         That(Enumerable.Range(0, 48).All(i => i is >= CharacterPackets.WeaponSkinTailOffset and < CharacterPackets.WeaponSkinTailOffset + 4 ||
                 withTail[i] == bareTail[i]), "幻化只改 tail[42..45]，资格位、光环使能与克隆称号不变");
         That(withTail[46] == 1 && bareTail[46] == 1 && CharacterPackets.WeaponSkinTailOffset == 42, "光环使能不被幻化字段挤掉");
+        RosterPriority(role, clone, weapon);
         RosterRepository();
         Console.WriteLine($"PASS {Count - checks} 武器幻化资源、原生正文、来源核心与所有权边界断言");
     }
 
-    internal static int RosterWeaponSkin(byte[] body, int rowIndex = 0)
+    static void RosterPriority(Character role, InventoryItem clone, InventoryItem weapon)
+    {
+        var ordinary = clone with { Core = clone.Core with { ItemId = 104600021 }, Avatar = new() { Color1 = 3, Color2 = 7 } };
+        var emptyClone = clone with { Avatar = new() };
+        var missing = ordinary with { Core = ordinary.Core with { ItemId = int.MaxValue } };
+        var items = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
+        var template = new ItemTemplate(ordinary.Core.ItemId, ItemKind.Avatar, 10, 1, 0, 1, 0, 0, 0, "[trade]", ushort.MaxValue, 0, "Weapon avatar");
+        items.PrefillTemplates(new Dictionary<int, ItemTemplate>
+        {
+            [ordinary.Core.ItemId] = template,
+            [clone.Core.ItemId] = template with { Id = clone.Core.ItemId, CloneAvatar = true }
+        });
+        var cases = new (InventoryItem[] Items, int Skin, int Visible)[]
+        {
+            ([clone, weapon], 32000, 32000),
+            ([clone, weapon], 0, 104600021),
+            ([ordinary, weapon], 0, 104600021),
+            ([weapon], 0, 31440),
+            ([weapon], 32000, 32000),
+            ([ordinary], 0, 104600021),
+            ([emptyClone, weapon], 0, 31440),
+            ([emptyClone, weapon], 32000, 32000),
+            ([emptyClone], 0, 0),
+            ([emptyClone], 32000, 32000),
+            ([missing, weapon], 0, 31440),
+            ([missing, weapon], 32000, 32000),
+            ([missing], 0, 0),
+            ([], 32000, 32000),
+            ([], 0, 0)
+        };
+        foreach (var sample in cases)
+        {
+            var character = role with { Inventory = new([.. sample.Items]) { Skins = new([32000], sample.Skin) } };
+            var before = character.Inventory;
+            var row = CharacterRosterEntry.FromCharacter(character);
+            byte[] actor = TownPackets.Actor(character, 0);
+            byte[] body = CharacterPackets.Roster([row], items: items);
+            using var reader = new BinaryReader(new MemoryStream(body));
+            reader.ReadBytes(15);
+            reader.ReadUInt16();
+            reader.ReadBytes(reader.ReadInt32());
+            reader.ReadBytes(15);
+            int count = reader.ReadByte();
+            var received = new Dictionary<byte, (int Id, int Marker)>();
+            for (int i = 0; i < count; i++)
+            {
+                byte slot = reader.ReadByte();
+                int id = reader.ReadInt32();
+                That(reader.ReadInt32() == 4, "名册显示条目保留4B染色扩展");
+                reader.ReadInt32();
+                reader.ReadBytes(3);
+                int marker = reader.ReadInt32();
+                reader.ReadBytes(5);
+                That(received.TryAdd(slot, (id, marker)), "名册不重复投影同一穿戴槽");
+            }
+            That(sample.Visible == 0 ? !received.ContainsKey(12) : received[12].Id == sample.Visible,
+                "选角动画读取槽12时按幻化、克隆来源或武器装扮、真实武器回退");
+            if (sample.Skin != 0 || sample.Visible == ordinary.Core.ItemId)
+                That(received[12].Marker == 0, "已解析的选角显示编号不再次套用克隆来源");
+            That(reader.ReadBytes(48).Length == 48 && reader.ReadBytes(10).SequenceEqual(new byte[] { 1,0,0,0,0,0,0,0,0,0 }) &&
+                reader.BaseStream.Position == body.Length, "有效外观替换保持名册尾部及边界");
+            That(character.Inventory == before && row.Equipment.SequenceEqual(sample.Items.OrderBy(item => item.Position.Index)) &&
+                actor.SequenceEqual(TownPackets.Actor(character, 0)), "选角仅改wire视图，不改库存、原始名册或城镇Actor");
+        }
+    }
+
+    internal static int RosterWeaponSkin(byte[] body, int rowIndex = 0) => ReadRosterRow(body, rowIndex).Skin;
+    internal static int RosterWeaponAppearance(byte[] body, int rowIndex = 0) => ReadRosterRow(body, rowIndex).Weapon;
+
+    static (int Skin, int Weapon) ReadRosterRow(byte[] body, int rowIndex)
     {
         using var reader = new BinaryReader(new MemoryStream(body));
         reader.ReadBytes(15);
@@ -284,10 +354,12 @@ internal static class WeaponSkinTests
             reader.ReadBytes(reader.ReadInt32());
             reader.ReadBytes(15);
             int items = reader.ReadByte();
+            int weapon = 0;
             for (int i = 0; i < items; i++)
             {
                 byte slot = reader.ReadByte();
-                reader.ReadInt32();
+                int item = reader.ReadInt32();
+                if (slot == 12) weapon = item;
                 reader.ReadBytes(reader.ReadInt32());
                 reader.ReadBytes(3);
                 int clear = reader.ReadInt32();
@@ -298,7 +370,7 @@ internal static class WeaponSkinTests
             }
             byte[] tail = reader.ReadBytes(48);
             if (row == rowIndex)
-                return BinaryPrimitives.ReadInt32LittleEndian(tail.AsSpan(CharacterPackets.WeaponSkinTailOffset));
+                return (BinaryPrimitives.ReadInt32LittleEndian(tail.AsSpan(CharacterPackets.WeaponSkinTailOffset)), weapon);
         }
         throw new InvalidDataException("名册行不存在");
     }
