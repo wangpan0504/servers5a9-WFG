@@ -121,6 +121,7 @@ internal static class SelfTestRunner
         InventoryQualificationTests.RunCore();
         AvatarSocketTests.RunCore();
         AvatarEmblemTests.RunCore();
+        await AvatarEmblemMalformedGuardTests.RunCoreAsync();
         AvatarDisjointTests.RunCore();
         AvatarPresetTests.RunCore();
         NpcFavorTests.RunCore();
@@ -427,6 +428,7 @@ internal static class SelfTestRunner
         CreatureSkinMoveTests.RunResources(itemResources.Items);
         InventoryExpansionTests.RunResources(itemResources.Items);
         AvatarPackageTests.RunResources(towns, itemResources, itemResources.AvatarPackages);
+        AvatarEmblemQualificationResourceTests.Run(itemResources.Items);
         EmblemCompoundTests.RunResources(itemResources);
         DfoServer.Testing.Inventory.GuildNpcEmblemPoolTests.RunResources(itemResources);
         MonsterCardBindTests.RunResources(itemResources);
