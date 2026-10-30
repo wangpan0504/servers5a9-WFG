@@ -9,7 +9,7 @@ internal static class MonsterCardBindPackets
     {
         if (receipt.DeletedSlots.Length is < 1 or > 5 || receipt.Rewards.Length is < 1 or > 5)
             throw new InvalidDataException("怪物卡片合成成功回执删除或奖励数量无效");
-        byte[] body = new byte[5 + receipt.DeletedSlots.Length * 2 + receipt.Rewards.Length * 11];
+        byte[] body = new byte[6 + receipt.DeletedSlots.Length * 2 + receipt.Rewards.Length * 11];
         body[0] = 1;
         BinaryPrimitives.WriteUInt16LittleEndian(body.AsSpan(1), checked((ushort)receipt.SynthesizerSlot));
         body[3] = checked((byte)receipt.DeletedSlots.Length);
@@ -30,6 +30,8 @@ internal static class MonsterCardBindPackets
             body[at + 10] = reward.Extra;
             at += 11;
         }
+        // 014409FA 在奖励表后还读取一字节结果标志；具体业务语义未闭合，保留默认关闭。
+        body[at++] = 0;
         if (at != body.Length)
             throw new InvalidDataException("怪物卡片合成成功回执宽度变化");
         return body;

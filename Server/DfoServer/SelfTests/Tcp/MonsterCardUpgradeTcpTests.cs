@@ -98,6 +98,19 @@ internal static class MonsterCardUpgradeTcpTests
                 rows.Any(row => Convert.ToInt64(row[1]) == 233 && Convert.ToInt64(row[4]) == 2 && Convert.ToInt64(row[5]) == 0) &&
                 rows.All(row => Convert.ToInt64(row[2]) > 0),
                 "普通卡整堆三张仅一张升级，材料只扣一张，新实例分配真实UID，剩余五张不丢失");
+            peer.Send(603, Convert.FromHexString("00E9000100E900"));
+            peer.Expect(1, 603, Convert.FromHexString("0101240E000001"));
+            peer.Expect(0, 14);
+            peer.Barrier();
+            rows = Rows("StackTcp");
+            That(rows.Sum(row => Convert.ToInt64(row[4])) == 4 &&
+                rows.Any(row => Convert.ToInt64(row[1]) == 233 && Convert.ToInt64(row[4]) == 1 && Convert.ToInt64(row[5]) == 1),
+                "目标同源堆留一张升级、另扣一张材料，实际落库和差量同步一致");
+            string afterSameSource = Snapshot("StackTcp");
+            peer.Send(603, Convert.FromHexString("00E9000100E900"));
+            peer.Expect(1, 603, [0, 22, 0]);
+            peer.Barrier();
+            That(Snapshot("StackTcp") == afterSameSource, "同源堆仅余目标时拒绝重发，资产和revision不变");
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,

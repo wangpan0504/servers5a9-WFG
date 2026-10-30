@@ -20,6 +20,8 @@ internal sealed class InventoryMonsterCardBindService(ItemCatalog items, Monster
         var now = utcNow ?? DateTimeOffset.UtcNow;
         long seconds = now.ToUnixTimeSeconds();
         var before = character.Inventory;
+        if (request.CardSlots.IsDefaultOrEmpty || request.CardSlots.Any(slot => slot is < 0 or > 351 || slot == request.SynthesizerSlot))
+            return Reject("invalid-slots", out rejection);
         if (before.Find(request.SynthesizerPosition) is not { } synthesizer ||
             synthesizer.Position.List != InventoryListType.Main || synthesizer.Core.ItemId <= 0 ||
             synthesizer.Core.Count < 1 || synthesizer.Core.EquipmentLockId != 0 || synthesizer.IsExpired(seconds))
@@ -63,6 +65,9 @@ internal sealed class InventoryMonsterCardBindService(ItemCatalog items, Monster
         }
         if (inputRarity < 0)
             return Reject("material-state", out rejection);
+        foreach (var group in cards.GroupBy(card => card.Position))
+            if (group.First().Core.Count < group.Count())
+                return Reject("material-count", out rejection);
 
         int outputRarity;
         bool rarityUpgraded;
