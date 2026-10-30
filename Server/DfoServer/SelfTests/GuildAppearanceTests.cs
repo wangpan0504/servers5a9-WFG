@@ -124,10 +124,31 @@ internal static class GuildAppearanceTests
                 Number("SELECT mark FROM guild_appearance") == (19u | 3u << 16), "旧会话不能修改外观");
             var reopened = new CharacterRepository(path);
             That(reopened.ReadGuildAppearance(masterOwner, master.Id) == new GuildAppearance(19u | 3u << 16), "重开数据库保留外观");
+            var reopenedSession = new GameSession(reopened, towns, masterOwner);
+            reopenedSession.Select(0); reopenedSession.MarkReady();
+            var loaded = reopenedSession.Selected!;
+            AssertActorMark(TownPackets.Actor(loaded, 0), 19u | 3u << 16);
+            AssertActorMark(TownPackets.Actor(loaded with { Guild = null }, 0), 0);
+            AssertActorMark(TownPackets.Actor(loaded with { Guild = loaded.Guild! with { Appearance = new(7) } }, 0), 7);
             Sql("DELETE FROM guilds WHERE guild_id=1");
             That(Number("SELECT count(*) FROM guild_appearance") == 0 && Number("SELECT count(*) FROM pragma_foreign_key_check") == 0,
                 "解散外键清除外观，不留下孤立记录");
         }
         finally { SqliteConnection.ClearAllPools(); Directory.Delete(root, true); }
+    }
+
+    internal static void AssertActorMark(byte[] body, uint expected)
+    {
+        That(body.Length > 134 && body[0] == 0 && BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(1)) == 1,
+            "会标检查使用完整单角色Actor");
+        int equipment = checked(133 + (int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(123)));
+        int pet = checked(equipment + 1 + body[equipment] * 25 + 22);
+        int guildName = checked(pet + 9 + (int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(pet + 4)) + 6);
+        int mark = checked(guildName + 4 + (int)BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(guildName)));
+        That(BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(mark)) == expected,
+            "角色公会名称后的u32保留持久会标图案与背景，不被Actor清零");
+        That(BinaryPrimitives.ReadUInt16LittleEndian(body.AsSpan(mark + 4)) == 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(mark + 6)) == 0,
+            "会标不侵占后续独立公会字段");
     }
 }

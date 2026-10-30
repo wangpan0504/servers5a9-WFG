@@ -136,7 +136,8 @@ internal static partial class TownPackets
             // 0267E030读取u32到Data+350；02AA7BFC起按100/200/300选择GradeB/C/D，不能写装备称号ID。
             writer.Write(character.BlacklistCount);
             PacketEncoding.WriteString(writer, character.Guild?.Name ?? "");
-            writer.Write(0u);
+            // 0267771A→02DAB190将此packed值写入公会图案/背景缓存；零值会覆盖已保存会标。
+            writer.Write(character.Guild?.Appearance.Mark ?? 0u);
             writer.Write((ushort)0); // 026775E3 / 026775F9: mandatory fields after the name.
             writer.Write(0u);
             writer.Write((byte)1); // 0267E0A8 默认1，写DTO bool。
