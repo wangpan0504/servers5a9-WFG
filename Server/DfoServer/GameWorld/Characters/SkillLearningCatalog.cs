@@ -309,9 +309,12 @@ internal sealed class SkillLearningCatalog
             i--;
         }
 
-        SkillType type = fields.TryGetValue("type", out PvfToken[]? kind) && kind.Length == 1 && kind[0].Type == 6
-            ? resolve(kind[0].Value) switch { "[active]" => SkillType.Active, "[passive]" => SkillType.Passive, _ => SkillType.Unknown }
-            : SkillType.Unknown;
+        // 本地候选兼容规则：仅缺失声明采用主动类型；原生缺省语义仍待确认。
+        SkillType type = !fields.TryGetValue("type", out PvfToken[]? kind)
+            ? SkillType.Active
+            : kind.Length == 1 && kind[0].Type == 6
+                ? resolve(kind[0].Value) switch { "[active]" => SkillType.Active, "[passive]" => SkillType.Passive, _ => SkillType.Unknown }
+                : SkillType.Unknown;
         if (type == SkillType.Unknown)
             unsupported.Add("type");
         // 04231EF2..04231F4B 将 class 编码标量 +110 初始化为0；只有标签缺失时沿用。

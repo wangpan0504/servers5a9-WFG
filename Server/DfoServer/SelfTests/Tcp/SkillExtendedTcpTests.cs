@@ -231,7 +231,42 @@ internal static class SkillExtendedTcpTests
                 "旧双树选角持久补齐审判、恶魔屏障并完整投影，保留其余等级、绑定与余额");
             peer.Barrier();
         }
+        byte doomSlot;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(avengerRole.Slot);
+            var before = Role(avengerRole.Slot);
+            That(before.Learning.Trees.All(tree => tree.Sp == 13320 && tree.Tp == 46 && tree.Skills.All(skill => skill.Id != 253)),
+                "复仇者缺失类型夹具使用正常95级来源且未预先赠送毁灭强击");
+            peer.Send(29, [0, 2, 253, 0, 0, 8, 255, 255, 0, 1, 0]);
+            peer.Expect(1, 29, [0, 0x15, 0]);
+            peer.Barrier();
+            var rejected = Role(avengerRole.Slot);
+            That(rejected.Revision == before.Revision && rejected.Learning.Trees[0].Sp == 13320 &&
+                rejected.Learning.Trees[0].Skills.All(skill => skill.Id != 253),
+                "合法毁灭强击后接不存在资源仍整批拒绝，无前序扣点或等级提交");
+            peer.Send(29, Purchase(253, 8));
+            var single = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
+            doomSlot = single.Skills.Single().Slot;
+            That(single.Sp == 12600 && single.Tp == 46 && single.Skills.Single() == new LearnedSkill(doomSlot, 253, 8) &&
+                (doomSlot < 12 || doomSlot is >= 150 and < 198), "缺失类型技能正常CMD29返回八级主动槽位并仅扣720SP");
+            var saved = Role(avengerRole.Slot);
+            That(saved.Revision == before.Revision + 1 && saved.Learning.Trees[1].Sp == 13320 &&
+                saved.Learning.Trees[1].Skills.All(skill => skill.Id != 253), "单项学习提交一次且备用树保持原样");
+            peer.Send(29, [1, 2, 251, 0, 0, 7, 253, 0, 0, 8, 0]);
+            var mixed = SkillPacketsTests.DecodeSuccess(peer.Expect(1, 29).Body);
+            That(mixed.Context == 1 && mixed.Sp == 12040 && mixed.Tp == 46 &&
+                mixed.Skills.Select(skill => (skill.Id, skill.Level)).SequenceEqual(new[] { ((ushort)251, (byte)7), ((ushort)253, (byte)8) }) &&
+                Role(avengerRole.Slot).Learning.Trees[0].Sp == 12600, "备用树混合批次接受缺省类型主动并独立扣点");
+            peer.Barrier();
+        }
         var avengerSaved = Role(avengerRole.Slot);
+        using (var peer = Open(fixture))
+        {
+            peer.Select(avengerRole.Slot);
+            avengerProjection = peer.SkillInfo;
+            peer.Barrier();
+        }
         await fixture.StopAsync();
         // 复现dd的默认三段斩：主树Lv18、副树Lv1，没有任何自定义指令存档。
         var free = catalog.FreeSkills(0, 5);
@@ -261,6 +296,12 @@ internal static class SkillExtendedTcpTests
             That(replay.Revision == avengerSaved.Revision && replay.Learning.Trees.Zip(avengerSaved.Learning.Trees)
                 .All(pair => pair.First.Sp == pair.Second.Sp && pair.First.Tp == pair.Second.Tp && pair.First.Skills.SequenceEqual(pair.Second.Skills)),
                 "重复选角不再次补发技能、改变余额或增加revision");
+            var learnedReplay = SkillPacketsTests.DecodeInitialized(peer.SceneSkillInfo);
+            That(learnedReplay[0].Sp == 12600 && learnedReplay[1].Sp == 12040 && learnedReplay.All(tree => tree.Tp == 46 &&
+                tree.Skills.Single(skill => skill.Id == 253).Level == 8 && tree.Skills.Single(skill => skill.Id == 253).Command == "01030304") &&
+                learnedReplay[0].Skills.Single(skill => skill.Id == 253).Slot == doomSlot &&
+                learnedReplay[1].Skills.Single(skill => skill.Id == 253).Slot == avengerSaved.Learning.Trees[1].Skills.Single(skill => skill.Id == 253).Slot,
+                "缺省类型技能重登及夹具重建恢复真实双树余额、等级、槽位和默认指令");
             peer.Barrier();
         }
         using (var peer = Open(fixture))
