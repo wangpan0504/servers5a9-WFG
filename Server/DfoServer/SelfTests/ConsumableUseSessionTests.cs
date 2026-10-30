@@ -20,6 +20,8 @@ internal static class ConsumableUseSessionTests
     public static void Run(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
         RunTimedStates(towns, characters, archive);
+        RunStaminaVariant(towns, characters, archive);
+        RunEpicDropStates(towns, characters, archive);
         RunRevivalTimeouts(towns, characters, archive);
         var bossDefinition = ConsumableUseTests.Hp with { ItemId = 490705256,
             BossSelectionBuff = new(300, 7191, 5, [new(92689, 40), new(92690, 40), new(92697, 20)]) };
@@ -195,6 +197,118 @@ internal static class ConsumableUseSessionTests
             "真实副本拒绝带城镇/房间并集声明的盒，而无声明保留既有副本合法地点");
     }
 
+    static void RunEpicDropStates(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        var effect = new EpicDropBuffDefinition(1136, 100) { ItemIds = ImmutableHashSet.Create(490000413, 490002458) };
+        var definition = new RecoveryConsumableDefinition(490000413, 1, 600000, -490000413)
+            { EpicDropBuff = effect, EffectMilliseconds = 600000, EffectMaintenance = 15, CooltimeMaintenance = 7 };
+        var catalog = new RecoveryConsumableCatalog([definition, definition with { ItemId = 490002458 }, ConsumableUseTests.Mp]);
+        using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog))
+        {
+            f.Select();
+            That(f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0,
+                "未成功使用的固定史诗药剂不因持有物品产生掉率加成");
+            var used = f.Use();
+            var saved = f.Read();
+            long until = saved.Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds;
+            That(used.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 &&
+                f.Session.EpicDropPotionBonus(saved, f.Clock.GetUtcNow()) == 100 && f.Session.CanPublishConsumable(used.Guard!),
+                "固定史诗在城镇正规消费后与持续状态同事务落库，实际掉落输入获得百分百加成");
+            That(!f.Session.CanPublishConsumable(used.Guard! with { Generation = used.Guard!.Generation + 1 }) &&
+                !f.Session.CanPublishConsumable(used.Guard! with { SelectionEpoch = used.Guard!.SelectionEpoch + 1 }),
+                "固定药剂消费结果仍核对账号generation和选角epoch");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(1));
+            f.Session.ReturnToRoster(); f.Select();
+            That(!f.Session.CanPublishConsumable(used.Guard!) && f.Count == 2 &&
+                f.Read().Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect).UntilMilliseconds == until &&
+                f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 100,
+                "同角色重选仅恢复原药效截止，不续期或二次消费，旧消费投影失效");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(599998));
+            var beforeExpiry = f.Read();
+            That(f.Session.EpicDropPotionBonus(beforeExpiry, f.Clock.GetUtcNow()) == 100,
+                "固定史诗截止前一毫秒仍参与真实掉落规划，不按UI秒数提前失效");
+            f.Clock.Advance(TimeSpan.FromMilliseconds(1));
+            That(f.Session.EpicDropPotionBonus(beforeExpiry, f.Clock.GetUtcNow()) == 0 && Same(beforeExpiry, f.Read()),
+                "固定史诗恰到期不再加成，纯资格检查不改库、不补药或延长截止");
+            var now = f.Clock.GetUtcNow();
+            var contaminated = beforeExpiry with { Inventory = beforeExpiry.Inventory with { ConsumableStates = [
+                new(ConsumableStateKind.Effect, 490000413, now.ToUnixTimeMilliseconds() + 1000, 15, 251),
+                new(ConsumableStateKind.Effect, 490002458, now.ToUnixTimeMilliseconds() + 2000, 15, 252),
+                new(ConsumableStateKind.Cooldown, 490000413, now.ToUnixTimeMilliseconds() + 999999, 7, 251),
+                new(ConsumableStateKind.Effect, 490703675, now.ToUnixTimeMilliseconds() + 999999, 15, 253)] } };
+            That(f.Session.EpicDropPotionBonus(contaminated, now) == 100 &&
+                f.Session.EpicDropPotionBonus(contaminated, now.AddMilliseconds(1999)) == 100 &&
+                f.Session.EpicDropPotionBonus(contaminated, now.AddMilliseconds(2000)) == 0,
+                "旧存档多份同族取最大而不相加，未知星空效果和未到期冷却不能冒充掉率效果");
+            using var replacement = f.Owners.Acquire(f.Owner.Account, () => { });
+            Reject<InvalidOperationException>(() => f.Session.CanPublishConsumable(used.Guard!),
+                "接管后旧generation不能发布固定药剂消费结果");
+            That(f.Repository.LoadCharacter(replacement, 0).Inventory.Find(f.Request.Position)!.Core.Count == 2,
+                "旧owner失效不重跑固定药剂消费或破坏已提交数量");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog))
+        {
+            f.Select();
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+                "固定史诗城镇限制回归沿真实入口旅行");
+            f.Session.BeginDungeonSelection();
+            var before = f.Read();
+            That(f.Use().Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()),
+                "选图阶段不能消费仅城镇固定史诗药剂");
+            That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                    global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null, "固定史诗限制回归建立实际正式副本");
+            before = f.Read();
+            That(f.Use(1).Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) &&
+                f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0,
+                "副本里拒绝城镇药剂且不扣源、改revision或创建效果");
+        }
+        using (var f = new Fixture(towns, characters, hp: definition, consumables: catalog))
+        {
+            f.Select();
+            var before = f.Read();
+            f.Sql("CREATE TRIGGER fail_epic_potion AFTER INSERT ON character_consumable_states WHEN NEW.kind=0 BEGIN SELECT RAISE(ABORT,'epic potion rollback'); END");
+            Reject<Microsoft.Data.Sqlite.SqliteException>(() => f.Use(), "固定史诗效果账本写入失败不先提交消耗");
+            That(Same(before, f.Read()) && Same(before, f.Session.Selected!) && f.Count == 3 &&
+                f.Session.EpicDropPotionBonus(f.Session.Selected!, f.Clock.GetUtcNow()) == 0,
+                "固定史诗SQL失败回滚源、revision和药效，掉落输入没有未提交加成");
+        }
+    }
+
+    static void RunStaminaVariant(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        var definition = new RecoveryConsumableDefinition(490003621, 1, 600000, -490003621)
+            { EffectMilliseconds = 600000, EffectMaintenance = 7, CooltimeMaintenance = 7 };
+        using var f = new Fixture(towns, characters, hp: definition, level: 40);
+        f.Select();
+        f.Session.MutateInventory(character => new(true, 0, new(character.Inventory,
+            character.Inventory with { StaminaUntil = f.Clock.GetUtcNow().ToUnixTimeSeconds() + 600 }, "variant_weakness_fixture")));
+        var used = f.Use();
+        long until = f.Clock.GetUtcNow().ToUnixTimeMilliseconds() + 600000;
+        That(used.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 && f.Read().Inventory.StaminaUntil == 0 &&
+            f.Read().Inventory.ConsumableStates.Single(row => row.Kind == ConsumableStateKind.Effect) is
+                { ItemId: 490003621, Maintenance: 7 } state && state.UntilMilliseconds == until,
+            "十分钟活动防虚弱真实消费立即解除既有虚弱，与自身十分钟截止原子落库");
+        That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+            "活动防虚弱用例沿真实副本入口旅行");
+        EnterAndReturn();
+        That(f.Read().Inventory.StaminaUntil == 0 && f.Count == 2,
+            "活动防虚弱实际正式副本撤退仍免虚弱，不仅在使用瞬间恢复一次");
+        f.Clock.Advance(TimeSpan.FromMilliseconds(600000));
+        EnterAndReturn();
+        That(f.Read().Inventory.StaminaUntil > f.Clock.GetUtcNow().ToUnixTimeSeconds() && f.Count == 2,
+            "活动药剂恰满自身十分钟后真实撤退恢复虚弱惩罚，不沿用标准三十分钟期限或再扣药");
+
+        void EnterAndReturn()
+        {
+            f.Session.BeginDungeonSelection();
+            That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                    global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null && f.Session.ReturnFromFormalDungeon() is not null,
+                "活动防虚弱用例真实入图完成加载再撤退，不直接调用虚弱纯函数");
+        }
+    }
+
     static void RunTimedStates(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
         var definition = new RecoveryConsumableDefinition(10087825, 1, 1800000, 5)
@@ -335,18 +449,22 @@ internal static class ConsumableUseSessionTests
         public FakeClock Clock { get; } = new();
         public InventoryConsumableUseService Service { get; }
         public ConsumableUseRequest Request { get; }
-        public Fixture(TownCatalog towns, CharacterCatalog characters, bool lost = false, RecoveryConsumableDefinition? hp = null)
+        public Fixture(TownCatalog towns, CharacterCatalog characters, bool lost = false, RecoveryConsumableDefinition? hp = null,
+            RecoveryConsumableCatalog? consumables = null, byte level = 16)
         {
             hp ??= ConsumableUseTests.Hp;
             Request = new(new(InventoryListType.Main, 65), 0, hp.ItemId, 0);
             Directory.CreateDirectory(root); Repository = new(Path.Combine(root, "game.db")); Owner = Owners.Acquire("potion-session", () => { });
             var candidate = CharacterCreation.Prepare("Potion", characters.Get(0), towns.Room, towns.InitialReturn, null);
-            Repository.Create(Owner, candidate with { Level = 16, Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
+            Repository.Create(Owner, candidate with { Level = level, Inventory = candidate.Inventory with { Items = candidate.Inventory.Items
                 .Add(new(0, new(InventoryListType.Main, 65), new(hp.ItemId, ItemKind.Consumable, 3) { Marker16 = 44, SortLockFlag = 1 }))
                 .Add(new(0, new(InventoryListType.Main, 66), new(1114, ItemKind.Consumable, 2))) } });
             var store = lost ? new QuestCompletionRepositoryTests.LostResultRepository(Repository) { LoseInventoryResult = true } : null;
-            Session = new(store is null ? Repository : store, towns, Owner, timeProvider: hp.EffectMilliseconds > 0 || hp.BossSelectionBuff is not null ? Clock : null);
-            Service = new(new([hp, ConsumableUseTests.Mp]), Clock);
+            consumables ??= new([hp, ConsumableUseTests.Mp]);
+            _ = consumables.EpicDropBuffs;
+            Session = new(store is null ? Repository : store, towns, Owner,
+                timeProvider: hp.EffectMilliseconds > 0 || hp.BossSelectionBuff is not null ? Clock : null, consumables: consumables);
+            Service = new(consumables, Clock);
         }
         public void Select() { Session.Select(0); Session.MarkReady(); }
         public Character Read() => Repository.LoadCharacter(Owner, 0);

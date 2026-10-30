@@ -5,7 +5,8 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryEnhancementService(ItemCatalog items, EnhancementCatalog enhancements, MedalUpgradeCatalog medals,
-    Random? random = null, TimeProvider? clock = null, InventoryAmplifyUpgradeService? amplification = null)
+    Random? random = null, TimeProvider? clock = null, InventoryAmplifyUpgradeService? amplification = null,
+    RecoveryConsumableCatalog? consumables = null)
 {
     internal const ushort Rejection = 23;
     public TimeProvider Clock { get; } = clock ?? TimeProvider.System;
@@ -30,7 +31,10 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         return Plan(character, request, Clock.GetUtcNow().ToUnixTimeSeconds(), definition,
             items.Get(source.Core.ItemId), items.Get(target.Core.ItemId),
             () => (random ?? Random.Shared).Next(definition.Mode == EnhancementMode.RandomReinforce ? definition.RandomWeight : 10000), out receipt,
-            guildSuccessPercent);
+            guildSuccessPercent, consumables is null ? 0 : EnhancementPotionPolicy.ActiveBonusWeight(
+                character.Inventory.ConsumableStates, consumables.EnhancementPotions,
+                definition.Mode == EnhancementMode.Amplify ? EnhancementPotionMode.Amplify : EnhancementPotionMode.Reinforce,
+                Clock.GetUtcNow().ToUnixTimeMilliseconds()));
     }
 
     // 勋章强化：概率与惩罚取flag_upgrade_table目标等级行，材料为公会硬币，
@@ -81,7 +85,8 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
     }
 
     internal static InventoryResult Plan(Character character, EnhancementRequest request, long now, EnhancementDefinition definition,
-        ItemTemplate sourceTemplate, ItemTemplate targetTemplate, Func<int> roll, out EnhancementReceipt? receipt, int guildSuccessPercent = 0)
+        ItemTemplate sourceTemplate, ItemTemplate targetTemplate, Func<int> roll, out EnhancementReceipt? receipt,
+        int guildSuccessPercent = 0, int potionSuccessBonusWeight = 0)
     {
         receipt = null;
         var before = character.Inventory;
@@ -128,6 +133,8 @@ internal sealed class InventoryEnhancementService(ItemCatalog items, Enhancement
         // 固定等级券和随机等级券保留自身奖池；仅逐级提升沿用公会相对成功率加成。
         int successWeight = definition.Additional && definition.Level == 1 && !randomLevel
             ? ApplyGuildSuccessBonus(definition.SuccessWeight, guildSuccessPercent) : definition.SuccessWeight;
+        if (definition.Additional && definition.Level == 1 && !randomLevel)
+            successWeight = EnhancementPotionPolicy.AdjustedSuccessWeight(successWeight * 10, potionSuccessBonusWeight) / 10;
         bool succeeded = randomLevel || value < successWeight;
         byte oldLevel = target.Core.Upgrade, newLevel = succeeded ? desired : oldLevel;
         var paid = InventoryDeleteService.Plan(before, source.Position, source.Core.ItemId, 1);

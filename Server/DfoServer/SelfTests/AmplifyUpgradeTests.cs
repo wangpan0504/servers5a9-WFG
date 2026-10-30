@@ -259,8 +259,95 @@ internal static class AmplifyUpgradeTests
         That(!pendingService.Plan(withProtection, request, out _).Accepted && rng.Calls == calls,
             "存在未实现使用资格的保护券时仍在随机前拒绝，不能静默跳过保护后销毁装备");
         Exact433ProtectionCommit(resources, role, service, rng, request);
+        PotionBoundaries(resources, role, request);
         Console.WriteLine($"PASS {Count - before} 当前PVF普通增幅、便携、幸运、金币及完整销毁规划断言");
     }
+
+    static void PotionBoundaries(TcpTestResources resources, Character seed, EnhancementRequest request)
+    {
+        var r = resources.ItemResources;
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        var random = new FixedRandom(0);
+        var service = new InventoryAmplifyUpgradeService(r.Items, r.AmplifyUpgrades, r.Enhancements,
+            r.Disjoint, r.GoldLimits, r.EpicPieces, resources.Towns, random, clock, r.RecoveryConsumables);
+        var target = seed.Inventory.Find(request.Target)!;
+        var actor = seed with { Inventory = seed.Inventory with { Items = seed.Inventory.Items.Replace(target,
+            target with { Core = target.Core with { Attr = 0xE9 } }) } };
+        long until = clock.GetUtcNow().ToUnixTimeMilliseconds() + 180000;
+        var reinforcementRules = new EnhancementCatalog(path => path.StartsWith("stackable/", StringComparison.Ordinal)
+                ? "[equipment reinforcement ticket]\n1 60 `additional` -1\n" : "",
+            new Dictionary<int,string> { [490705402] = "potion-ticket.stk" },
+            new Dictionary<int,string> { [target.Core.ItemId] = "potion-gear.equ" });
+        var reinforcementService = new InventoryEnhancementService(r.Items, reinforcementRules, r.MedalUpgrades,
+            random, clock, consumables: r.RecoveryConsumables);
+        var coupon = new InventoryItem(3, MainSlot(65),
+            InventoryRewardGrantService.Create(r.Items.Get(490705402), 2) with { ExpireTime = 0 });
+        var reinforce = actor with { Inventory = actor.Inventory with { Items = [coupon,
+            target with { Core = target.Core with { Attr = 0xE0, AmplifyType = 0, AmplifyValue = 0 } }], ConsumableStates =
+            [new(ConsumableStateKind.Effect, 490004594, until, 7, -490004594)] } };
+        random.Value = 6000;
+        int reinforceCalls = random.Calls;
+        That(reinforcementService.Plan(reinforce, request with { Mode = EnhancementMode.Reinforce, MaterialSlot = 65 },
+                out var reinforceReceipt).Accepted && reinforceReceipt is { Succeeded: true, NewLevel: 1 } && random.Calls == reinforceCalls + 1,
+            "实际强化服务从持久药效读取1000并改变相同6000抽样结果，不仅直接传策略参数");
+        var treated = actor with { Inventory = actor.Inventory with { ConsumableStates =
+            [new(ConsumableStateKind.Effect, 10004688, until, 7, 20150129)] } };
+        int baseFailure = r.AmplifyUpgrades.Rules.Steps[9].FailureWeight;
+        That(baseFailure is > 0 and < 100000, "药剂服务回归选实际存在成功失败两区间的+9普通资源行");
+        random.Value = baseFailure - 1;
+        int calls = random.Calls;
+        var plain = service.Plan(actor, request, out var plainReceipt);
+        var boosted = service.Plan(treated, request, out var boostedReceipt);
+        That(plain.Accepted && plainReceipt is { OutcomeCode: 1, NewLevel: 9 } && boosted.Accepted &&
+            boostedReceipt is { OutcomeCode: 0, NewLevel: 10 } && random.Calls == calls + 2 &&
+            boostedReceipt.MaterialRemaining == plainReceipt.MaterialRemaining && boosted.Plan!.After.Gold == plain.Plan!.After.Gold &&
+            boosted.Plan.After.Find(request.Target) == actor.Inventory.Find(request.Target)! with
+                { Core = actor.Inventory.Find(request.Target)!.Core with { Attr = 0xEA } },
+            "真实普通增幅同一基础失败边界有药升十无药保九，每次只抽一次且金币材料和完整UID契约相同");
+        var wrongMode = treated with { Inventory = treated.Inventory with { ConsumableStates =
+            [new(ConsumableStateKind.Effect, 490004594, until, 7, -490004594)] } };
+        That(service.Plan(wrongMode, request, out var wrongReceipt).Accepted && wrongReceipt is { OutcomeCode: 1, NewLevel: 9 },
+            "实际增幅服务不能借强化模式药效改变结果");
+
+        var portableSource = new InventoryItem(3, MainSlot(65),
+            InventoryRewardGrantService.Create(r.Items.Get(10007839), 2) with { ExpireTime = 0 });
+        var portable = actor with { Inventory = actor.Inventory with { Items =
+            [actor.Inventory.Find(request.Target)!, portableSource], Gold = 0 } };
+        var portableTreated = portable with { Inventory = portable.Inventory with { ConsumableStates = treated.Inventory.ConsumableStates } };
+        random.Value = InventoryAmplifyUpgradeService.AdjustedFailureWeight(baseFailure, 30000) - 1;
+        calls = random.Calls;
+        var portablePlain = service.Plan(portable, request with { MaterialSlot = 65 }, out var portablePlainReceipt);
+        var portableBoost = service.Plan(portableTreated, request with { MaterialSlot = 65 }, out var portableBoostReceipt);
+        That(portablePlain.Accepted && portablePlainReceipt is { OutcomeCode: 1, NewLevel: 9, GoldCost: 0, MaterialRemaining: 1 } &&
+            portableBoost.Accepted && portableBoostReceipt is { OutcomeCode: 0, NewLevel: 10, GoldCost: 0, MaterialRemaining: 1 } &&
+            random.Calls == calls + 2 && portableBoost.Plan!.After.Gold == 0,
+            "真实新便携器保留原三成相对加成后再接药效，同一边界不重抽、不收金币或增加源扣费");
+
+        var luckySource = portableSource with { Core = InventoryRewardGrantService.Create(r.Items.Get(10007407), 2) with { ExpireTime = 0 } };
+        var lucky = portable with { Inventory = portable.Inventory with { Items = [portable.Inventory.Find(request.Target)!, luckySource] } };
+        var luckyTreated = lucky with { Inventory = lucky.Inventory with { ConsumableStates = treated.Inventory.ConsumableStates } };
+        var luckyRow = r.AmplifyUpgrades.Lucky[9];
+        foreach (int roll in new[] { luckyRow.DownWeight * 1000 - 1, (luckyRow.DownWeight + luckyRow.SameWeight) * 1000 - 1,
+            (luckyRow.DownWeight + luckyRow.SameWeight) * 1000 }.Distinct())
+        {
+            random.Value = roll;
+            calls = random.Calls;
+            var without = service.Plan(lucky, request with { MaterialSlot = 65, Mode = EnhancementMode.LuckyAmplify }, out var beforeReceipt);
+            var withPotion = service.Plan(luckyTreated, request with { MaterialSlot = 65, Mode = EnhancementMode.LuckyAmplify }, out var afterReceipt);
+            That(without.Accepted && withPotion.Accepted && beforeReceipt == afterReceipt && random.Calls == calls + 2 &&
+                without.Plan!.After.Find(request.Target) == withPotion.Plan!.After.Find(request.Target),
+                "实际幸运增幅三段边界加药前后完整结果相同，仍每次只抽一次");
+        }
+        clock.Advance(TimeSpan.FromMilliseconds(180000));
+        random.Value = 6000;
+        That(reinforcementService.Plan(reinforce, request with { Mode = EnhancementMode.Reinforce, MaterialSlot = 65 },
+                out var reinforceExpired).Accepted && reinforceExpired is { Succeeded: false, NewLevel: 0 },
+            "实际强化服务在持久效果恰到期时不再提高成功率，不按物品类别永久加成");
+        random.Value = baseFailure - 1;
+        That(service.Plan(treated, request, out var expired).Accepted && expired == plainReceipt,
+            "实际服务在药效截止等号恢复原失败结果，残留持久行不继续提高成功率");
+    }
+
     static void Exact433ProtectionCommit(TcpTestResources resources, Character seed,
         InventoryAmplifyUpgradeService service, FixedRandom random, EnhancementRequest request)
     {

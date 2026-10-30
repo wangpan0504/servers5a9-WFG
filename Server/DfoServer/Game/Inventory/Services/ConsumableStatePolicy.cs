@@ -14,7 +14,7 @@ internal static class ConsumableStatePolicy
     internal const int StaminaRecoveryItem = ConsumableSpecialItems.StaminaRecoveryItem;
 
     public static bool RecoversStamina(InventorySnapshot inventory, long now) => inventory.ConsumableStates.Any(row =>
-        row.Kind == ConsumableStateKind.Effect && row.ItemId == StaminaRecoveryItem && row.Active(now));
+        row.Kind == ConsumableStateKind.Effect && ConsumableSpecialItems.IsStaminaRecovery(row.ItemId) && row.Active(now));
 
     public static InventorySnapshot? Activate(InventorySnapshot inventory, RecoveryConsumableDefinition definition, long now, bool sessionCooldown = false)
     {
@@ -24,6 +24,15 @@ internal static class ConsumableStatePolicy
         // 四种神圣祝福共用一次资格；再次使用覆盖截止，不叠加次数或保留另一种药的旧资格。
         if (definition.RevivalBlessing)
             rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && ConsumableSpecialItems.IsRevivalBlessing(row.ItemId));
+        if (ConsumableSpecialItems.IsStaminaRecovery(definition.ItemId))
+            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
+                ConsumableSpecialItems.IsStaminaRecovery(row.ItemId));
+        // 固定同族药剂覆盖效果期限，不叠加倍率；家族成员只来自已验证的资源映射。
+        if (definition.EpicDropBuff is { } epic)
+            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId && epic.IsFamilyItem(row.ItemId));
+        if (definition.EnhancementPotion is { } enhancement)
+            rows.RemoveAll(row => row.Kind == ConsumableStateKind.Effect && row.ItemId != definition.ItemId &&
+                enhancement.IsFamilyItem(row.ItemId));
         void Put(ConsumableStateKind kind, int duration, byte maintenance)
         {
             if (duration <= 0) return;

@@ -9,7 +9,7 @@ namespace DfoServer.Game.Inventory.Services;
 
 internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyUpgradeCatalog upgrades, EnhancementCatalog enhancements,
     DisjointCatalog disjoint, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces, TownCatalog towns,
-    Random? random = null, TimeProvider? clock = null)
+    Random? random = null, TimeProvider? clock = null, RecoveryConsumableCatalog? consumables = null)
 {
     const ushort RejectCode = InventoryEnhancementService.Rejection;
     public InventoryResult Plan(Character character, EnhancementRequest request, out EnhancementReceipt? receipt, int guildSuccessPercent = 0)
@@ -52,6 +52,10 @@ internal sealed class InventoryAmplifyUpgradeService(ItemCatalog items, AmplifyU
         bool portable = use?.Kind == AmplifyUseKind.Portable;
         int failureWeight = AdjustedFailureWeight(step.FailureWeight, portable ? use!.SuccessBonusWeight : 0,
             lucky ? 0 : guildSuccessPercent);
+        if (!lucky && consumables is not null)
+            failureWeight = 100000 - EnhancementPotionPolicy.AdjustedSuccessWeight(100000 - failureWeight,
+                EnhancementPotionPolicy.ActiveBonusWeight(before.ConsumableStates, consumables.EnhancementPotions,
+                    EnhancementPotionMode.Amplify, (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeMilliseconds()));
         if (!portable && !lucky && source.Core.ItemId != step.MaterialId)
             return InventoryResult.Reject(RejectCode);
         int count = portable || lucky ? 1 : step.MaterialCount;

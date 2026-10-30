@@ -46,7 +46,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     TradeHandler? trade = null,
     PvpMissionProjection? pvpMissions = null, DfoServer.Game.Pvp.PvpMissionBook? missionBook = null,
     DfoServer.Game.Events.ServerEventService? serverEvents = null,
-    DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null) : IConnectionProtocol
+    DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null,
+    DfoServer.GameWorld.Items.RecoveryConsumableCatalog? consumables = null) : IConnectionProtocol
 {
     // 断线诊断不得阻止剩余原清理，包括诊断后端自身失败；不以日志成功作为登记成功。
     void LogLukeDisconnect(string kind, object detail)
@@ -67,6 +68,9 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         using var login = await loginHandler.AuthenticateAsync(connection);
         if (login is null)
             return;
+        // 资源映射在账号状态锁外共享预热，死亡冻结阶段只查询不可变结果。
+        _ = consumables?.EpicDropBuffs;
+        _ = consumables?.EnhancementPotions;
         await using var sender = new GameConnectionSender(login.Owner, connection.Stream, connection.Lifetime, login.Sequence, (kind, opcode, sequence, body, action) =>
         {
             // 保活回包不逐条记 send；连接心跳由 KeepaliveHandler 的 keepalive 汇总覆盖。
@@ -78,7 +82,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items,
             goldLimits: goldLimits, pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
-            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore);
+            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);

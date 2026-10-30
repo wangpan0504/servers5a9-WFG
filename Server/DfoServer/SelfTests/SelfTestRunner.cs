@@ -353,6 +353,7 @@ internal static class SelfTestRunner
         SkillLayoutTests.Run();
         ItemRequestTests.Run();
         ConsumableUseTests.RunCore();
+        EnhancementPotionTests.RunCore();
         UpgradeChronicleServiceTests.RunCore();
         ChronicleEnchantTests.RunCore();
         OtherverseAncientTests.RunCore();
@@ -433,6 +434,7 @@ internal static class SelfTestRunner
         MagicBoxTests.Run(towns, itemResources);
         InventorySelfTests.Run(towns, pvf, characters, itemResources);
         ConsumableUseTests.RunResources(itemResources);
+        EnhancementPotionTests.RunResources(itemResources.RecoveryConsumables.EnhancementPotions);
         ConsumableUseSessionTests.Run(towns, characters, pvf);
         await MailboxTests.RunAsync(towns, characters, itemResources, pvf);
         DevelopmentAssetTests.RunResources(towns, itemResources);

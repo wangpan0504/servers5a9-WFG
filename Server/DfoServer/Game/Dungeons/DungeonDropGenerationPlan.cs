@@ -27,6 +27,41 @@ internal sealed class DungeonDropGenerationPlan
     public bool ReferenceQuality { get; }
     public int? OrdinaryLukeDailySource { get; init; }
     public EquipmentAmplificationDropPolicy? Amplification { get; }
+    // 本服固定史诗药剂策略：只扩展完整稀有度骰的史诗区间，不增加装备触发或抽样次数。
+    public DungeonDropGenerationPlan WithEpicDropBonus(int percent)
+    {
+        if (percent < 0) throw new InvalidDataException("史诗掉落加成不能为负");
+        if (percent == 0) return this;
+        bool changed = false;
+        var trials = Trials.Select(trial =>
+        {
+            var pools = trial.RarityPools;
+            if (pools.IsDefaultOrEmpty || pools.Length != 7 || pools[^1].Threshold != DungeonDropRatePlan.RarityDenominator ||
+                !pools[4].CandidatePools.Any(pool => pool.TotalWeight > 0) ||
+                pools[4].CandidatePools.SelectMany(pool => pool.Entries).Any(row =>
+                    row.Template is not { Kind: ItemKind.Equipment, Rarity: 4 })) return trial;
+            int denominator = DungeonDropRatePlan.RarityDenominator;
+            int original = pools[4].Threshold - pools[3].Threshold;
+            int enhanced = (int)Math.Min(denominator, (long)original * (100L + percent) / 100);
+            if (enhanced == original) return trial;
+            var adjusted = ImmutableArray.CreateBuilder<DungeonDropRarityPool>(7);
+            long nonEpic = 0;
+            int previous = 0;
+            for (int index = 0; index < pools.Length; index++)
+            {
+                int width = pools[index].Threshold - previous;
+                previous = pools[index].Threshold;
+                if (index != 4) nonEpic += width;
+                int cumulative = checked((int)(nonEpic * (denominator - enhanced) / (denominator - original)));
+                if (index >= 4) cumulative += enhanced;
+                adjusted.Add(pools[index] with { Threshold = cumulative });
+            }
+            changed = true;
+            return trial with { RarityPools = adjusted.ToImmutable() };
+        }).ToImmutableArray();
+        return changed ? new(ResourceSource, trials, ReferenceQuality, Amplification) { OrdinaryLukeDailySource = OrdinaryLukeDailySource } : this;
+    }
+
     public DungeonDropGenerationPlan WithGrowthContract(int percent)
     {
         if (percent < 0) throw new InvalidDataException("成长契约掉落加成不能为负");
