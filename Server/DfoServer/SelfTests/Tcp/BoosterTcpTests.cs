@@ -260,6 +260,43 @@ internal static class BoosterTcpTests
             peer.Barrier();
         }
         That(fixture.Query("SELECT gold FROM characters WHERE slot=4") is [[12345L]], "免费礼盒解封不扣普通解封金币");
+        using (var owner = owners.Acquire(fixture.Options.DevelopmentAccount, () => { }))
+            repo.Create(owner, new("PurgedBox", towns.Room, towns.InitialReturn)
+            {
+                Job = 12, GrowType = 35, Level = 95, AcceptedStoryLevel = 1, Skills = characters.Get(12).Skills,
+                Inventory = new([new(0, Bag(69), Core(10309039, 120))])
+            });
+        using (var peer = Open(fixture))
+        {
+            peer.Select(5);
+            // 不持有兑换材料；[need material] 不是使用费用。
+            SendOpen(peer, 69, 1);
+            ExpectAck(peer, 10309039, 69, [(10305892, 1)]);
+            byte[] delta = peer.Expect(0, 14).Body;
+            Entry(delta, 69, 10309039, 119);
+            short rewardSlot = (short)U16(delta, Enumerable.Range(0, U16(delta, 1)).Select(i => 3 + i * 123)
+                .Single(at => U32(delta, at + 2) == 10305892));
+            Entry(delta, rewardSlot, 10305892, 1);
+            SendOpen(peer, 69, 119);
+            ExpectAck(peer, 10309039, 69, [(10305892, 119)]);
+            delta = peer.Expect(0, 14).Body;
+            Entry(delta, 69, -1, 0);
+            Entry(delta, rewardSlot, 10305892, 120);
+            peer.Barrier();
+            string consumed = Snapshot();
+            SendOpen(peer, 69, 1);
+            peer.Expect(1, 160, [0, 19, 0]);
+            peer.Barrier();
+            That(Snapshot() == consumed, "黎明结晶耗尽后重放不重复发奖");
+        }
+        using (var peer = Open(fixture))
+        {
+            byte[] full = peer.Select(5)[4].Body;
+            That(Enumerable.Range(0, U16(full, 3)).Select(i => 5 + i * 123)
+                .Any(at => U32(full, at + 2) == 10305892 && U32(full, at + 6) == 120),
+                "重连恢复黎明结晶单开及批量开启的完整奖励数量");
+            peer.Barrier();
+        }
         await fixture.StopAsync();
         That(fixture.Query("SELECT gold FROM characters WHERE slot=0") is [[12345L]], "ordinary boxes never infer an extra gold fee");
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "booster database integrity");
