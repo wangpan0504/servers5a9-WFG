@@ -419,8 +419,8 @@ internal static class MailboxPersistenceTests
             var after = Receiver.Inventory;
             foreach (var item in items)
             {
-                var list = item.Core.Kind switch { ItemKind.Avatar => InventoryListType.Avatar, ItemKind.Creature => InventoryListType.Pet, _ => InventoryListType.Main };
-                short slot = list != InventoryListType.Main ? (short)0 : item.Core.IsStackable ? (short)121 : (short)9;
+                var list = ItemSlotBoundService.List(item.Core.Kind);
+                short slot = ItemSlotBoundService.Range(item.Core.Kind, after).Start;
                 while (after.Find(new(list, slot)) is not null) slot++;
                 after = after with { Items = after.Items.Add(item with { Position = new(list, slot) }) };
             }

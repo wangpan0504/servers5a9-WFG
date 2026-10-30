@@ -39,7 +39,7 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
 
     public async Task RefreshAsync(GameConnectionContext context, InventoryResult result,
         IReadOnlySet<InventorySlot>? acknowledgedSlots = null, bool refreshEquipment = true,
-        InventoryListType? silentMoveList = null, bool suppressMainNotice = false, InventoryListType? suppressMoveNoticeList = null)
+        InventoryListType? silentMoveList = null, bool suppressMainNotice = false, InventoryListType? suppressMoveNoticeList = null, bool suppressMailboxNotice = false)
     {
         if (!result.Accepted || result.Plan is not { Changed: true } plan)
             return;
@@ -249,8 +249,8 @@ internal sealed class InventoryProjection(CharacterStatComputer stats, TownProje
             Enumerable.Range(0, 8).Any(slot => DevilContractPolicy.Expiry(plan.Before.AccountWallet, slot) !=
                 DevilContractPolicy.Expiry(current.Inventory.AccountWallet, slot)))
             await DungeonCardMembershipProjection.RefreshAsync(context, includeOverview: false);
-        if (!plan.OverflowItems.IsEmpty)
-            await context.Notify(NotiPacketType.MAILBOX_ALARM, MailboxPackets.Alarm(), "overflow_mail_committed", CanSend);
+        if (!suppressMailboxNotice && !plan.OverflowItems.IsEmpty && CanSend())
+            context.Session.NotifyMailbox(receipt.Character.Id, restoreOnTown: true);
         if (plan.Before.CargoCapacity != current.Inventory.CargoCapacity)
         {
             // 66先更新打开的金库窗口；13先写入容量会让原生的“容量增加”判断跳过重绘。

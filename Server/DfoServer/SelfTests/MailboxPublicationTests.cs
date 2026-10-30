@@ -21,7 +21,8 @@ internal static class MailboxPublicationTests
         var session = new GameSession(fixture.Repository, towns, fixture.ReceiverOwner);
         session.Select(0);
         var initialization = new MailboxReceipt(session.Selected!, fixture.ReceiverOwner.Generation, session.SelectionEpoch);
-        TestCheck.That(session.CanPublishMailbox(initialization, initializing: true) && !session.CanPublishMailbox(initialization),
+        TestCheck.That(session.CanPublishMailbox(initialization, initializing: true) && !session.CanPublishMailbox(initialization) &&
+            !session.CanPublishMailboxAlarm(initialization),
             "入城邮箱属于选角初始化阶段，普通响应仍等待 ready");
         session.MarkReady();
         TestCheck.That(!session.CanPublishMailbox(initialization, initializing: true) && session.CanPublishMailbox(initialization),
@@ -43,7 +44,8 @@ internal static class MailboxPublicationTests
         var old = new MailboxReceipt(session.Selected!, fixture.ReceiverOwner.Generation, session.SelectionEpoch);
         projection.Alarm(context, old);
         session.ReturnToRoster();
-        TestCheck.That(!session.CanPublishMailbox(old) && !session.CanPublishMailbox(initialization, initializing: true),
+        TestCheck.That(!session.CanPublishMailbox(old) && !session.CanPublishMailboxAlarm(old) &&
+            !session.CanPublishMailbox(initialization, initializing: true),
             "返回选角使两类邮箱发布回执失效");
         stream.Release.TrySetResult();
         await sender.Send(1, 1347, [1], "test_barrier");
@@ -67,6 +69,27 @@ internal static class MailboxPublicationTests
         gmData.NotifyMailArrived(fixture.ReceiverOwner.Account, "Receiver");
         await sender.Send(1, 1347, [1], "test_barrier");
         TestCheck.That(stream.Frames.Count == 6 && BitConverter.ToUInt16(stream.Frames[4], 1) == 99, "GM 提醒：匹配的在线角色收到一次 MAILBOX_ALARM");
+        // 非城镇仍投递新邮件提示，但不开放邮件列表或操作；沿用真实选图/返城入口。
+        session.BeginDungeonSelection();
+        var outsideTown = new MailboxReceipt(session.Selected!, fixture.ReceiverOwner.Generation, session.SelectionEpoch);
+        TestCheck.That(session.CanPublishMailboxAlarm(outsideTown) && !session.CanPublishMailbox(outsideTown) &&
+            session.RefreshMailbox(null!, outsideTown) is null &&
+            !session.SendMail(null!, null!).Accepted && !session.ClaimMail(null!, []).Accepted &&
+            !session.ChangeMailState(null!, [], 0).Accepted && !session.QueryMailRecipient(null!, "Receiver").Accepted,
+            "非城镇新邮件可提醒，列表与收发及状态操作仍拒绝");
+        TestCheck.That(!session.CanPublishMailboxAlarm(outsideTown with { Generation = outsideTown.Generation + 1 }) &&
+            !session.CanPublishMailboxAlarm(outsideTown with { SelectionEpoch = outsideTown.SelectionEpoch + 1 }),
+            "新邮件提示仍拒绝不匹配的 generation 和选角 epoch");
+        session.NotifyMailbox(fixture.Receiver.Id, restoreOnTown: true);
+        await sender.Send(1, 1347, [1], "test_barrier");
+        TestCheck.That(stream.Frames.Count == 8 && BitConverter.ToUInt16(stream.Frames[6], 1) == 99 &&
+            stream.Frames[6].AsSpan(16).SequenceEqual(new byte[] { 1, 0 }) && session.PendingMailboxRestore() is null,
+            "非城镇99提示经原连接实际投递，返城恢复提示尚不消费");
+        session.ReturnFromDungeonSelection();
+        var restore = session.PendingMailboxRestore();
+        TestCheck.That(restore is not null && session.CanPublishMailbox(outsideTown), "返城保留当前选角邮件恢复提示并恢复列表发布资格");
+        session.ConfirmMailboxRestore(restore!);
+        TestCheck.That(session.PendingMailboxRestore() is null, "当前返城恢复提示仍按原身份消费");
         // GM 强制小退：无连接钩子、角色名不符、账号不在线都不动会话；匹配时经连接钩子回到选角。
         var account = fixture.ReceiverOwner.Account;
         TestCheck.That(!await online.ForceReturnToSelectionAsync(account) && session.Selected is not null, "未安装连接钩子时强制小退不改变会话");
@@ -78,9 +101,11 @@ internal static class MailboxPublicationTests
             session.Phase == SessionPhase.Unselected && !session.Ready, "匹配角色强制小退后回到选角（角色名不区分大小写）");
         TestCheck.That(!await online.ForceReturnToSelectionAsync(account) && hookCalls == 1, "已在选角界面时再次强制小退无效果");
         session.Select(0); session.MarkReady();
+        var ownerReceipt = new MailboxReceipt(session.Selected!, fixture.ReceiverOwner.Generation, session.SelectionEpoch);
         using var replacement = fixture.Owners.Acquire(fixture.ReceiverOwner.Account, () => { });
         session.NotifyMailbox(fixture.Receiver.Id);
-        TestCheck.That(stream.Frames.Count == 6 && replacement.IsCurrent, "过期目录引用不向新连接投递或释放新 owner");
+        TestCheck.Reject<InvalidOperationException>(() => session.CanPublishMailboxAlarm(ownerReceipt), "旧 owner 不能发布新邮件提示");
+        TestCheck.That(stream.Frames.Count == 8 && replacement.IsCurrent, "过期目录引用不向新连接投递或释放新 owner");
         stop.Cancel();
         Console.WriteLine($"PASS {TestCheck.Count - before} 邮件慢接收者隔离、epoch与原连接通知断言");
     }

@@ -1,4 +1,6 @@
+using System.Data.Common;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.CashShopPromotions;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Network.Builders.Inventory;
 using DfoServer.Network.Parsers.Inventory;
@@ -11,7 +13,7 @@ using DfoServer.Network.Projection;
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopService cashShop, InventoryProjection projection,
-    ServerLog log, MarriageShopService? marriageShop = null, MarriageProjection? marriageProjection = null) : IGameCommandModule
+    ServerLog log, MarriageShopService? marriageShop = null, MarriageProjection? marriageProjection = null, CashShopPromotionService? promotions = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -24,13 +26,14 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
     async Task<CommandResult> BuyCeraShop(GameConnectionContext context, Packet packet)
     {
         CashShopPurchaseReceipt? receipt = null;
+        PromotionPurchaseCommit? promotion = null;
         CashShopPurchaseRequest request;
         InventoryResult result;
         try
         {
             request = CashShopRequests.Buy(packet.Body);
             result = context.Activity?.BlocksTownActions == true ? InventoryResult.Reject(17) :
-                context.Session.PlanAndCommitInventory(character => cashShop.Buy(character, request, out receipt), 17, requireTown: false);
+                context.Session.BuyCashShop(request, cashShop, promotions, out receipt, out promotion);
         }
         catch (InvalidDataException)
         {
@@ -38,7 +41,12 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
             await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM, CashShopPackets.Failure(), "cash_shop_buy_malformed");
             return CommandResult.Handled;
         }
-        log.Write("cash_shop_buy", new { Connection = context.Id, Count = request.Items.Count,
+        if (promotion is not null)
+            log.Write("cash_shop_buy", new { Connection = context.Id, Count = request.Items.Count,
+                Order = promotion.OrderId.ToString("N")[..12], Campaign = promotion.Progress.Scope.Campaign,
+                promotion.Cost, MailCount = promotion.MailIds.Length, result.Accepted, result.Error,
+                Result = "committed", Revision = result.Receipt?.Character.Revision });
+        else log.Write("cash_shop_buy", new { Connection = context.Id, Count = request.Items.Count,
             Commodities = string.Join(',', request.Items.Select(item => item.CommodityId)),
             PaymentModes = string.Join(',', request.Items.Select(item => item.PaymentMode)), request.CurrencyMode, request.GiftMode,
             result.Accepted, result.Error, result.RejectReason,
@@ -49,16 +57,26 @@ internal sealed class ShopHandler(InventoryShopService shop, InventoryCashShopSe
             return CommandResult.Handled;
         }
         var committed = result.Receipt ?? throw new InvalidOperationException("商城购买缺少提交回执");
-        foreach (var product in receipt.Products)
-            await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM,
-                CashShopPackets.Success(product, receipt.Bonuses.GetValueOrDefault(product.CommodityId)),
-                "cash_shop_buy_success", () => context.Session.CanPublishInventory(committed));
-        await projection.RefreshAsync(context, result);
-        if (receipt.Products.Any(product => product.IsMileage))
-            await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
-                MileagePackets.Limits(committed.Character.Inventory.AccountWallet, cashShop.Mileage), "mileage_shop_limits", () => context.Session.CanPublishInventory(committed));
-        if (result.Plan?.UnlockSkillTree == true)
-            await projection.RefreshSkillTreeAsync(context, committed.Character, () => context.Session.CanPublishInventory(committed));
+        try
+        {
+            foreach (var product in receipt.Products)
+                await context.Reply(CmdPacketType.BUY_CERASHOP_ITEM,
+                    CashShopPackets.Success(product, receipt.Bonuses.GetValueOrDefault(product.CommodityId)),
+                    "cash_shop_buy_success", () => context.Session.CanPublishInventory(committed));
+            await projection.RefreshAsync(context, result, suppressMailboxNotice: promotion is { MailIds.Length: > 0 });
+            if (promotion is { MailIds.Length: > 0 } && context.Session.CanPublishInventory(committed))
+                context.Session.NotifyMailbox(committed.Character.Id, restoreOnTown: true);
+            if (receipt.Products.Any(product => product.IsMileage))
+                await context.Notify(NotiPacketType.CASH_SHOP_PURCHASE_LIMIT_INFO,
+                    MileagePackets.Limits(committed.Character.Inventory.AccountWallet, cashShop.Mileage), "mileage_shop_limits", () => context.Session.CanPublishInventory(committed));
+            if (result.Plan?.UnlockSkillTree == true)
+                await projection.RefreshSkillTreeAsync(context, committed.Character, () => context.Session.CanPublishInventory(committed));
+        }
+        catch (DbException error) when (promotion is not null)
+        {
+            // 促销已提交；后续SQL发布失败不能触发外层重放购买。
+            throw new IOException("Committed promotion purchase publication failed", error);
+        }
         return CommandResult.Handled;
     }
 

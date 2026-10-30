@@ -19,6 +19,7 @@ internal sealed class TcpTestResources : IDisposable
     readonly Lazy<DfoServer.GameWorld.Adventure.AdventureExpeditionCatalog> expeditions;
     readonly Lazy<TutorialCatalog> tutorials;
     readonly Lazy<TutorialScenes> tutorialScenes;
+    internal string PvfPath { get; }
     public PvfArchive Archive => archive.Value;
     public ItemResources ItemResources => items.Value;
     public CharacterCatalog Characters => characters.Value;
@@ -37,9 +38,10 @@ internal sealed class TcpTestResources : IDisposable
 
     public TcpTestResources(ServerOptions options)
     {
+        PvfPath = Path.GetFullPath(options.PvfPath);
         archive = new(() => Timed(() =>
         {
-            var pvf = PvfArchive.Open(options.PvfPath);
+            var pvf = PvfArchive.Open(PvfPath);
 
             Console.WriteLine("TCP 共享 PVF 已加载");
             return pvf;

@@ -469,6 +469,7 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         if (quests is not null)
             await quests.RefreshAsync(context, receipt.Character, CanSend);
         if (context.Premiums is { } premiums) await premiums.StaminaAsync(receipt.Character, CanSend);
+        if (mailbox is not null) await mailbox.RestoreAsync(context, CanSend);
         Join(context, CanSend);
     }
 

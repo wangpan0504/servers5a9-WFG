@@ -45,7 +45,8 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
     DfoServer.Game.Guild.GuildNpcBenefitService? guildNpcBenefits = null,
     TradeHandler? trade = null,
     PvpMissionProjection? pvpMissions = null, DfoServer.Game.Pvp.PvpMissionBook? missionBook = null,
-    DfoServer.Game.Events.ServerEventService? serverEvents = null) : IConnectionProtocol
+    DfoServer.Game.Events.ServerEventService? serverEvents = null,
+    DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null) : IConnectionProtocol
 {
     // 断线诊断不得阻止剩余原清理，包括诊断后端自身失败；不以日志成功作为登记成功。
     void LogLukeDisconnect(string kind, object detail)
@@ -77,7 +78,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items,
             goldLimits: goldLimits, pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
-            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits);
+            monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session));
         if (creatures is not null && creatureProjection is not null)
             context.Creatures = new(context, creatures, creatureProjection, log);

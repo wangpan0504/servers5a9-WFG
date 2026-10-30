@@ -282,6 +282,8 @@ internal static class SqliteMigrations
         new(151, "决斗每日任务独立服务日账本", PvpDailyMissionSchema.Upgrade),
         new(152, "积分商城账号限购与消费返积分", AddMileageShopState),
         new(153, "艾肯每日循环通关进度", static (db, tx) => Execute(db, tx, EkernCycleSchema.Definition)),
+        new(154, "商城累计规则期与原子订单", CashShopPromotionSchema.EnsureBase),
+        new(155, "商城常驻累计精确前驱衔接", CashShopPromotionSchema.EnsureContinuation),
     ];
 
     static void AddMileageShopState(SqliteConnection db, SqliteTransaction tx)
@@ -1921,6 +1923,8 @@ internal static class SqliteMigrations
         long version = (long)query.ExecuteScalar()!;
         if (version < BaselineVersion || version > current)
             throw new InvalidDataException($"数据库版本 {version} 不在当前支持范围 {BaselineVersion}–{current}");
+        RejectPreviousPromotionSchema(db, tx, version);
+        if (current >= 155 && CashShopPromotionSchema.IsPreviousPrivateVersion(db, tx, version)) version = 76;
         // 第三批验收曾用v92保存助战回执，正式v92已用于护石；只识别完整旧组合再补跑。
         if (version == 92 && current >= 98 && IsPartyDungeonPreview(db, tx)) version = 91;
         // 两类预览库按互斥结构识别，不以同号版本替代已发布迁移。
@@ -1985,6 +1989,23 @@ internal static class SqliteMigrations
         }
         ValidateSchema(db, tx);
         tx.Commit();
+    }
+
+    static void RejectPreviousPromotionSchema(SqliteConnection db, SqliteTransaction tx, long version)
+    {
+        if (version is not (66 or 67)) return;
+        using var query = db.CreateCommand();
+        query.Transaction = tx;
+        query.CommandText = "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN " +
+            "('cash_shop_promotion_rules','cash_shop_promotion_orders','cash_shop_promotion_progress','cash_shop_promotion_awards')";
+        if (query.ExecuteScalar() is 0L) return;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('character_dungeon_settlement_receipts') " +
+            "WHERE name IN ('other_bonus_experience','bonus_json')";
+        bool experience = query.ExecuteScalar() is 2L;
+        query.CommandText = "SELECT count(*) FROM pragma_table_info('characters') WHERE name='weapon_skin_state'";
+        bool skin = query.ExecuteScalar() is 1L;
+        if (!experience || version == 67 && !skin)
+            throw new InvalidDataException("未部署商城累计旧版本与已发布结构不符；不能将WIP66/67当作正式版本升级");
     }
 
     internal static bool IsLocalIncountNumbering(SqliteConnection db, SqliteTransaction tx)
@@ -2226,6 +2247,7 @@ internal static class SqliteMigrations
             using var reader = query.ExecuteReader();
         }
         DungeonDropCollectionSchema.Validate(db, tx, required: true);
+        CashShopPromotionSchema.Validate(db, tx);
         GriefTowerSchema.Validate(db, tx);
         GriefTowerSchema.ValidateClear(db, tx);
         foreach (var (table, expected) in SocialSchema.Tables)
@@ -2426,6 +2448,10 @@ internal static class SqliteMigrations
         "SELECT character_id,context,root_id,children FROM character_skill_combos LIMIT 0",
         "SELECT character_id,bonus_sp FROM character_skill_point_sources LIMIT 0",
         "SELECT account,expires_at FROM account_expert_contracts LIMIT 0",
+        "SELECT campaign,period,realm,promotion_group,rules_version,rules_snapshot FROM cash_shop_promotion_rules LIMIT 0",
+        "SELECT order_id,account,recipient_id,campaign,period,realm,promotion_group,rules_version,business_snapshot,count,revision,mail_ids,committed_at FROM cash_shop_promotion_orders LIMIT 0",
+        "SELECT account,campaign,period,realm,promotion_group,count,revision FROM cash_shop_promotion_progress LIMIT 0",
+        "SELECT account,campaign,period,realm,promotion_group,rules_version,global_purchase,order_id,reward_snapshot,mail_id FROM cash_shop_promotion_awards LIMIT 0",
         "SELECT [key],[value] FROM [schema_metadata] LIMIT 0",
         "SELECT character_id,account,potion_until,aura_until,upgrade_aura_until,party_aura_until FROM character_teleport_cooldowns LIMIT 0",
         "SELECT character_id,account,until_unix,permille FROM character_exp_bonus LIMIT 0",

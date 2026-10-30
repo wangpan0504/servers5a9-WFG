@@ -66,6 +66,7 @@ internal static partial class DatabaseSchemaTests
                     VALUES({legacy.Id},'permanent-schema','old-event','old-instance',3145,1,1,3,76126,zeroblob(16),x'01',1,
                       10,2,13,0,'old','old',1,1,0,13,1,1);
                     """);
+                RemoveEmptyPromotionFixtureSchema(db);
                 RemoveExperienceBonusSchema(db);
                 RewindRaidLifecycle(db);
                 Execute(db, "DROP TABLE character_permanent_stats; PRAGMA user_version=66");

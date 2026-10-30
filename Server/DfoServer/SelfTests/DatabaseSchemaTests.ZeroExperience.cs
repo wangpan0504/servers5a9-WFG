@@ -26,6 +26,7 @@ internal static partial class DatabaseSchemaTests
                 CREATE INDEX zero_schema_index ON character_dungeon_growth_receipts(account);
                 CREATE TRIGGER zero_schema_trigger AFTER UPDATE ON character_dungeon_growth_receipts BEGIN SELECT 1; END;
                 """);
+            RemoveEmptyPromotionFixtureSchema(db);
             RewindZeroExperience(db);
             RewindRaidLifecycle(db);
             Execute(db, "PRAGMA user_version=77");
@@ -56,6 +57,7 @@ internal static partial class DatabaseSchemaTests
         using (var db = Open(path))
         {
             Execute(db, "UPDATE character_dungeon_growth_receipts SET amount=13,after_experience=13");
+            RemoveEmptyPromotionFixtureSchema(db);
             RewindZeroExperience(db);
             RewindRaidLifecycle(db);
             Execute(db, "ALTER TABLE character_dungeon_settlement_receipts ADD COLUMN unexpected INTEGER;PRAGMA user_version=77");

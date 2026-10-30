@@ -60,6 +60,17 @@ internal static partial class DatabaseSchemaTests
 
     const string SettlementColumns = "character_id,account,event_id,instance_id,quest_id,task_attempt,epoch,dungeon_id,map_id,death_events,report_body,generation,base_experience,rank_experience,total_experience,rank_bonus_index,rule_id,resource_source,before_level,after_level,before_experience,after_experience,revision";
 
+    // 仅供已发布旧库夹具移除后续活动结构；存在累计、订单或奖励事实时必须拒绝回退。
+    internal static void RemoveEmptyPromotionFixtureSchema(SqliteConnection db)
+    {
+        Check(Query(db, "SELECT (SELECT count(*) FROM cash_shop_promotion_awards)+" +
+            "(SELECT count(*) FROM cash_shop_promotion_progress)+(SELECT count(*) FROM cash_shop_promotion_orders)+" +
+            "(SELECT count(*) FROM cash_shop_promotion_rules)") is 0L,
+            "已发布旧库夹具只移除全空的后续活动结构，不丢弃累计或订单事实");
+        Execute(db, "DROP TABLE cash_shop_promotion_awards; DROP TABLE cash_shop_promotion_progress; " +
+            "DROP TABLE cash_shop_promotion_orders; DROP TABLE cash_shop_promotion_rules");
+    }
+
     internal static void RemoveExperienceBonusSchema(SqliteConnection db)
     {
         RewindZeroExperience(db);
@@ -887,6 +898,7 @@ internal static partial class DatabaseSchemaTests
         new AuthenticationService(new AuthenticationRepository(path)).Create("breakdown-history", "fixture-password");
         using (var db = Open(path))
         {
+            RemoveEmptyPromotionFixtureSchema(db);
             RewindSettlementBreakdown(db);
             Execute(db, $$"""
                 INSERT INTO characters(account,slot,name,revision,town,area,x,y,direction)
@@ -2449,6 +2461,7 @@ internal static partial class DatabaseSchemaTests
             using (var db = Open(path))
             {
                 if (oldVersion < 153) Execute(db, "DROP TABLE character_ekern_cycle");
+                if (oldVersion is 66 or 67 or 77 or 78) RemoveEmptyPromotionFixtureSchema(db);
                 RemoveExperienceBonusSchema(db);
                 if (oldVersion < 141) Execute(db, "DROP TABLE guild_dungeon_effective_progress");
                 if (oldVersion < 140) Execute(db, "DROP TABLE guild_dungeon_reward_receipts");

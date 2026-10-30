@@ -52,14 +52,20 @@ internal sealed class TcpTestFixture : IAsyncDisposable
     readonly TimeProvider? clock;
     readonly DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy;
     readonly Func<int, int>? evildomHiddenDraw;
+    readonly Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions;
     int cliSequence;
     readonly string pvfSource;
     string? previousPhase;
     public TcpTestFixture(ServerOptions source, string root, bool gm = false, TcpTestResources? resources = null,
         DfoServer.GameWorld.Quests.QuestCatalog? questCatalog = null, TimeProvider? clock = null, bool packetHttp = false,
         bool connectionAddress = false, DfoServer.Game.Raids.LukeRaidStartPolicy? lukeStartPolicy = null,
-        Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null)
+        Func<int, int>? evildomHiddenDraw = null, DfoServer.GameWorld.Towns.TownCatalog? townCatalog = null,
+        Func<DfoServer.GameWorld.Items.CashShopPromotionCatalog>? promotions = null, bool sharedResourcePath = false)
     {
+        if (sharedResourcePath && (resources is null ||
+            !Path.GetFullPath(source.PvfPath).Equals(Path.GetFullPath(resources.PvfPath), StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Shared resource path requires the same read-only TcpTestResources");
+        this.promotions = promotions;
         this.resources = resources;
         this.questCatalog = questCatalog;
         this.townCatalog = townCatalog;
@@ -75,7 +81,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
             AdvertisedAddress = connectionAddress ? "connection" : "127.0.0.1",
             NativePort = 0,
             DataDirectory = Path.Combine(Root, "Data"),
-            PvfPath = Path.Combine(Root, "Data", "Pvf", "Script.pvf"),
+            PvfPath = sharedResourcePath ? source.PvfPath : Path.Combine(Root, "Data", "Pvf", "Script.pvf"),
             LogDirectory = Path.Combine(Root, "Logs"),
             SessionTtlSeconds = 300
         };
@@ -231,6 +237,8 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         if (resources is not null && !isolatedProcess)
         {
             var quests = (questCatalog ?? resources.Quests).WithCreatures(resources.ItemResources.Creatures);
+            var promotionCatalog = promotions is null ? ServerRuntime.LoadCashShopPromotions(resources.ItemResources) : null;
+            DfoServer.GameWorld.Items.CashShopPromotionCatalog CurrentPromotions() => promotions?.Invoke() ?? promotionCatalog!;
             TcpTestDatabaseTemplate.CopyIfMissing(Database, Path.GetDirectoryName(Root)!);
             hostStop = new();
             var options = Options with { PacketCaptureDirectory = packetCapture ? Options.LogDirectory : null };
@@ -241,7 +249,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 using var log = new ServerLog(options.LogDirectory);
                 // 与正式启动装配相同的成长及冒险团目录，不能把TCP中的账号经验默默禁用。
                 var repository=new CharacterRepository(Database,quests,resources.Adventure,resources.Growth,
-                    guildDungeonMileage: resources.ItemResources.GuildContents.DungeonMileage);
+                    guildDungeonMileage: resources.ItemResources.GuildContents.DungeonMileage, promotions: CurrentPromotions, promotionClock: clock);
                 // 旧测试允许先种角色再由原生登录自动注册；正式账本要求账号先存在。
                 // 只补孤立的合成角色账号，不覆盖已有密码、禁用状态或 revision。
                 var authentication = new AuthenticationService(new AuthenticationRepository(Database));
@@ -254,7 +262,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
-                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw);
+                    options.DevelopmentDungeonEntryProbe == DungeonEntryProbeMode.Disabled ? resources.TutorialScenes : null, resources.Adventure, resources.Expeditions, clock,resources.Growth,lukeStartPolicy,evildomHiddenDraw, promotions: CurrentPromotions);
                 Volatile.Write(ref runtimeHost, runtime);
                 try { await runtime.RunAsync(hostStop.Token); }
                 finally { Volatile.Write(ref runtimeHost, null); }
@@ -264,6 +272,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         {
             if (evildomHiddenDraw is not null) throw new InvalidOperationException("显式魔界随机源需要同进程Runtime装配");
             if (lukeStartPolicy is not null) throw new InvalidOperationException("显式Luke执行策略需要真实同进程Runtime装配");
+            if (promotions is not null) throw new InvalidOperationException("合成促销目录不能由真实子进程悄然替换");
             if (questCatalog is not null) throw new InvalidOperationException("合成任务目录不能由真实子进程悄然替换");
             if (townCatalog is not null) throw new InvalidOperationException("合成城镇目录不能由真实子进程悄然替换");
             process = Process.Start(StartInfo(packetCapture ? ["--packet-capture"] : [])) ?? throw new IOException("Server process did not start");

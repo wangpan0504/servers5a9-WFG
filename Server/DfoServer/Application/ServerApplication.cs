@@ -218,8 +218,10 @@ public static class ServerApplication
             var learning = Load("Skill resources", () => SkillLearningCatalog.Load(pvf, itemResources.Contracts.ExpertSkillLevels));
             var adventureCatalog = Load("Adventure resources", () => new DfoServer.GameWorld.Adventure.AdventureCatalog(pvf));
             var growthCatalog = Load("Character growth resources", () => DfoServer.GameWorld.Characters.CharacterGrowthCatalog.Load(pvf, learning));
+            var promotionCatalog = Load("Cash shop promotions", () => ServerRuntime.LoadCashShopPromotions(itemResources));
+            DfoServer.GameWorld.Items.CashShopPromotionCatalog CurrentPromotions() => promotionCatalog;
             var repository = Load("Database initialization", () => new CharacterRepository(Path.Combine(options.DataDirectory, "game.db"), quests,
-                adventureCatalog, growthCatalog, guildDungeonMileage: itemResources.GuildContents.DungeonMileage));
+                adventureCatalog, growthCatalog, guildDungeonMileage: itemResources.GuildContents.DungeonMileage, promotions: CurrentPromotions));
             log?.Write("startup", new { Stage = "Database schema", State = "complete", Version = SqliteMigrations.CurrentVersion,
                 Commit = ServerBuildInfo.ShortCommit });
             if (command.Kind == ServerCommandKind.PrepareBookCharacter)
@@ -242,7 +244,7 @@ public static class ServerApplication
                 Roster = opening.Roster.ToString(CultureInfo.InvariantCulture) });
             stage = "Runtime and listeners";
             await ServerLifetime.RunAsync(options, pvf, repository, towns, characters, learning, itemResources, quests, log!,
-                adventureCatalog, growthCatalog);
+                adventureCatalog, growthCatalog, promotions: CurrentPromotions);
             return 0;
         }
         catch (Exception error) when (log is not null)

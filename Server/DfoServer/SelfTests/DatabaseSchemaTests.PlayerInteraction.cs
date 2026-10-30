@@ -27,6 +27,7 @@ internal static partial class DatabaseSchemaTests
             var peer = repository.Create(peerOwner, new NewCharacter("PreviewB", new(38, 1, 450, 234), null));
             using (var db = Open(path))
             {
+                if (version == 78) RemoveEmptyPromotionFixtureSchema(db);
                 RewindObjectKeys(db);
                 SeedObjectKeyReceipts(db, role.Id, "old-event", new string('a', 32), 1, hasObjectInstance: false);
                 RewindZeroExperience(db);
