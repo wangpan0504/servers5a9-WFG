@@ -33,6 +33,24 @@ internal static class BoosterTests
             That(failed, name);
         }
         var catalog = itemResources.Items;
+        var purged = itemResources.Boosters.Get(10309039);
+        That(catalog.Get(10309039).Name == "净化的异形结晶" && purged.Available &&
+            purged.Pools is [{ Draws: 1, Rewards: [{ ItemId: 10305892, Weight: 1000, Count: 1 }] }],
+            "净化的异形结晶按真实PVF开启为一个异形结晶，黎明掉落标记不能屏蔽奖池");
+        const string daybreakBox = "[stackable type]\n`[booster]` 0\n[daybreak drop item]\n1\n" +
+            "[booster info]\n[etc]\n1 10305892 1000 1\n[/etc]\n[/booster info]";
+        That(BoosterCatalog.Parse(daybreakBox).Available, "完整根级黎明标记保留普通开箱奖励");
+        foreach (string bad in new[] { "", "0", "2", "-1", "x", "1 1", "1\n[daybreak drop item]\n1" })
+            That(!BoosterCatalog.Parse(daybreakBox.Replace("[daybreak drop item]\n1", "[daybreak drop item]\n" + bad)).Available,
+                "未确认或畸形黎明标记不放行开箱");
+        That(!BoosterCatalog.Parse(daybreakBox.Replace("[daybreak drop item]\n1\n", "")
+            .Replace("[etc]", "[daybreak drop item]\n1\n[etc]")).Available,
+            "嵌套黎明标记不能跳过奖池校验");
+        That(!itemResources.Boosters.Get(10305892).Available && !itemResources.Boosters.Get(10305893).Available,
+            "带黎明标记的异形结晶与碎片仍是材料，不能作为礼盒消费");
+        That(itemResources.Boosters.Get(10312269).Pools is [{ Rewards: [{ ItemId: 10309039, Count: 1 }] }] &&
+            itemResources.Boosters.Get(10312270).Pools is [{ Rewards: [{ ItemId: 10305892, Count: 10 }] }],
+            "同类外盒保留真实内层净化结晶和直接十个结晶两种不同用途");
         BoosterBatchRandomTests.Run(That);
         BoosterGrowTypeTests.Run(towns, itemResources);
         BoosterRandomOptionTests.Run(towns, itemResources);

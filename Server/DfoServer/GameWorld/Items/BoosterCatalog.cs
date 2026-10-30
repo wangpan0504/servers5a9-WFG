@@ -225,9 +225,23 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         foreach (string tag in new[] { "effect maintenance", "total weekly usable count",
             "total accumulated usable count", "use count limit all server item", "usable datetime",
             "random box", "random box removal items", "raid booster item", "convert boost item", "check usable itemlevel",
-            "daybreak drop item", "battle royal", "usable game server type", "usable server type" })
+            "battle royal", "usable game server type", "usable server type" })
             if (tags.Contains("[" + tag + "]", StringComparison.OrdinalIgnoreCase))
                 return new([], tag);
+        // 黎明材料和净化结晶共用的来源标记，不替代 booster info 的奖励声明。
+        // 只接入匹配资源已确认的根级值1；未知形态继续拒绝。
+        var daybreakDeclarations = Regex.Matches(tags,
+            @"\[\s*/?\s*daybreak\s+drop\s+item[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
+        if (daybreakDeclarations.Count != 0)
+        {
+            var declaration = daybreakDeclarations[0];
+            int start = declaration.Index + declaration.Length;
+            int end = tags.IndexOf('[', start);
+            if (type != "booster" || daybreakDeclarations.Count != 1 || text.Count(value => value == '`') % 2 != 0 ||
+                declaration.Value != "[daybreak drop item]" || !IsRootDeclaration(tags, declaration.Index) ||
+                text[start..(end < 0 ? text.Length : end)].Trim() != "1")
+                return new([], "daybreak drop item");
+        }
         var serverDeclarations = Regex.Matches(tags,
             @"\[\s*/?\s*action\s+usable\s+server\s+type[^\]\r\n]*\]?", RegexOptions.IgnoreCase);
         if (serverDeclarations.Count != 0)
