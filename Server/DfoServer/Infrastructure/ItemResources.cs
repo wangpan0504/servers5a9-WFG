@@ -35,6 +35,8 @@ internal sealed class ItemResources
     public CashShopCatalog CashShop { get; }
     public DevilContractCatalog DevilContracts { get; }
     public MagicBoxCatalog MagicBoxes { get; }
+    readonly Lazy<VendingMachineCatalog> vendingMachines;
+    public VendingMachineCatalog VendingMachines => vendingMachines.Value;
     public PremiumContractCatalog Contracts { get; }
     public RecoveryConsumableCatalog RecoveryConsumables { get; }
     public UpgradeChronicleCatalog UpgradeChronicles { get; }
@@ -73,6 +75,7 @@ internal sealed class ItemResources
 
     public ItemResources(PvfArchive archive)
     {
+        vendingMachines = new(() => new(archive));
         GoldLimits = new(archive);
         Cargo = new(archive);
         Shops = new(archive);
