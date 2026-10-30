@@ -291,7 +291,7 @@ internal static class WeaponSkinTcpTests
                 { ExpiresAt=(int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()-1 } : row).ToImmutableArray()
         };
         fixture.Sql("UPDATE characters SET weapon_skin_state=$p0 WHERE id=1",JsonSerializer.Serialize(expired));
-        await fixture.StartAsync();
+        await fixture.StartAsync("skin-expiry");
         using (var peer = Open(fixture))
         {
             peer.Select(2, weaponSkins: ([101040572], 101040572));
@@ -354,6 +354,16 @@ internal static class WeaponSkinTcpTests
             That(State().SelectedEmoticons.SequenceEqual([410000046,0,0,0]),
                 "账号皮肤仓的即时表情可以成为本角色4栏选择，选择仍保存在角色存档");
 
+            // 第一栏能保存并不能覆盖四栏：第二至第四栏曾被单编号校验提前拒绝。
+            for (int slot = 1; slot < 4; slot++)
+            {
+                int[] selection = new int[4];
+                selection[slot] = 410000046;
+                ChooseEmoticons(peer, selection);
+                peer.Barrier();
+                That(State().SelectedEmoticons.SequenceEqual(selection), "账号表情在第二至第四栏按原位置保存，前导空位不压缩");
+            }
+
             // 490010773是正式的[account]归属永久头像框券，用它验证账号仓入库；其余头像框券都带已过的[date]期限。
             That(State().SelectedPartyFrame == 0, "组队头像框未选择时角色存档保持0，服务端仍按原生默认20000下发");
             peer.Send(1573,Build(w=>{w.Write(0);w.Write(20000);w.Write(new byte[36]);}));
@@ -386,6 +396,45 @@ internal static class WeaponSkinTcpTests
             peer.Barrier();
             That(State(2).SelectedCutscenes.SequenceEqual([30024]) && State(2).Cutscenes.IsEmpty,
                 "同账号其他角色看见并能选择账号皮肤仓的插画，自身角色仓仍为空");
+        }
+        await fixture.StopAsync();
+
+        // 仅在临时夹具离线补充角色所有权，验证四栏完整预设及重新启动后的回放。
+        int[] emoteIds = assets.Skins.Emoticons.Where(id => id != 410000046).Order().Take(4).ToArray();
+        That(emoteIds.Length == 4, "正式资源提供四个不同的即时表情样本");
+        SkinOwnership[] ownedEmotes = emoteIds.Select(id => new SkinOwnership(id, 0)).ToArray();
+        var sibling = State(2) with { Emoticons = ownedEmotes.ToImmutableArray() };
+        fixture.Sql("UPDATE characters SET weapon_skin_state=$p0 WHERE id=2", JsonSerializer.Serialize(sibling));
+        await fixture.StartAsync("emoticon-preset");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(1, cutscenes: ([], [30024]), emoticons: (ownedEmotes, []), accountSkins: AccountState());
+            ChooseEmoticons(peer, emoteIds);
+            peer.Barrier();
+            That(State(2).SelectedEmoticons.SequenceEqual(emoteIds), "角色拥有的四个即时表情可整单保存");
+            string saved = Snapshot();
+            ChooseEmoticons(peer, emoteIds);
+            peer.Barrier();
+            That(Snapshot() == saved, "重复保存相同表情预设不写入revision或资产");
+            foreach (int[] invalid in new int[][]
+                { [emoteIds[0], emoteIds[0], 0, 0], [20000, 0, 0, 0], [.. emoteIds, 410000046] })
+            {
+                byte[] body = EmoticonBody(invalid);
+                peer.Send(1573, body); peer.Expect(1, 1573, [0, 19, 0]);
+                peer.Barrier();
+                That(Snapshot() == saved, "重复编号、错误类别及第五栏表情均整单拒绝，不覆盖已保存预设");
+            }
+        }
+        await fixture.StopAsync();
+        await fixture.StartAsync("emoticon-replay");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(1, cutscenes: ([], [30024]), emoticons: (ownedEmotes, emoteIds), accountSkins: AccountState());
+            That(State(2).SelectedEmoticons.SequenceEqual(emoteIds), "服务重建并重连后完整回放四栏表情预设");
+            ChooseEmoticons(peer, [0, emoteIds[1], 0, emoteIds[3]]);
+            ChooseEmoticons(peer, [0, 0, 0, 0]);
+            peer.Barrier();
+            That(State(2).SelectedEmoticons.SequenceEqual([0, 0, 0, 0]), "有空栏位的预设与清空全部表情均可保存");
         }
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
@@ -433,6 +482,17 @@ internal static class WeaponSkinTcpTests
         {
             byte[] body=Build(w=>{w.Write(1);foreach(int id in ids)w.Write(id);w.Write(new byte[(10-ids.Length)*4]);});
             peer.Send(1573,body);peer.Expect(1,1573,[(byte)1,..body]);
+        }
+        byte[] EmoticonBody(int[] ids) => Build(w =>
+        {
+            w.Write(3);
+            foreach (int id in ids) w.Write(id);
+            w.Write(new byte[(10 - ids.Length) * 4]);
+        });
+        void ChooseEmoticons(TcpPeer peer, int[] ids)
+        {
+            byte[] body = EmoticonBody(ids);
+            peer.Send(1573, body); peer.Expect(1, 1573, [(byte)1, .. body]);
         }
         void ExpectCutscenes(TcpPeer peer,SkinStorageState state)
         {
