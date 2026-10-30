@@ -76,7 +76,7 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
     internal async Task<CommandResult> CreateAsync(GameConnectionContext context,Packet packet)
     {
         var request=PvpTrainingRequests.Create(packet.Body);
-        // 普通大厅练习使用同版kind1/mode0，任务道场仍须匹配原接取及训练条件。
+        // 普通练习覆盖决斗城镇各地区；10/4仍先匹配原接取及训练条件。
         if (request is { Kind: 1, MapIndex: 0, Setting: 0, Mode: 0 } &&
             context.Session.Selected is { Position.Town: 10, Position.Area: <= 7 and not 4 })
         {
@@ -109,7 +109,8 @@ internal sealed class PvpTrainingHandler(PvpArcadeCatalog arcade,PvpPracticeComb
                 using var publication = context.Sender.QueuePublication(Current);
                 await context.Reply(CmdPacketType.MAKE_PVP_ROOM, PvpTrainingPackets.Created(), "pvp_arcade_created", Current);
                 await context.Notify(NotiPacketType.PVP_ROOM_INFO, Room(practice.Actor.Character.Id, false, 10), "pvp_arcade_room", Current);
-                log.Write("pvp_arcade", new { Connection = context.Id, Instance = practice.Instance, Mode = arcadePlan.Mode.Index });
+                log.Write("pvp_arcade", new { Connection = context.Id, Instance = practice.Instance, Mode = arcadePlan.Mode.Index,
+                    Town = standalone.Position.Town, Area = standalone.Position.Area });
                 return CommandResult.Handled;
             }
         }

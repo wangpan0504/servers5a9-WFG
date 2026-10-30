@@ -55,14 +55,38 @@ internal static partial class PvpTrainingTcpTests
             Enter();
             peer.Send(52, [0, 254]); peer.Expect(0, 43, left);PvpArenaTcpTests.TownReturn(peer); peer.Barrier();
             That(before == f.Snapshot(), "换角清除普通练习实例，重入不恢复旧实例或修改资产");
-            // 穿过真实地图连接进入酒馆；练习入口不能只识别登录落点和旧练习区。
-            peer.Travel(10, 1, 450, 234, 10, 0); peer.Barrier();
-            string tavernBefore = f.Snapshot();
-            Enter();
-            peer.Send(50, create); peer.Expect(1, 50, [0, 19, 0]);
-            peer.Send(52, [0, 254]); peer.Expect(0, 43, left);
-            PvpArenaTcpTests.TownReturn(peer); peer.Barrier();
-            That(tavernBefore == f.Snapshot(), "四类频道酒馆练习退回原地区且不改资产或任务");
+            // 保留四类频道的酒馆覆盖；频道101继续走入侧厅并验证独立道场。
+            byte previousArea = 0;
+            var targets = channel == 101
+                ? new Location[] { new(10, 1, 450, 234), new(10, 2, 260, 251) }
+                : new Location[] { new(10, 1, 450, 234) };
+            foreach (var target in targets)
+            {
+                That(resources.Towns.Areas[(10, previousArea)].Default.Links.Any(link =>
+                    link.Gate.Door && link.Town == target.Town && link.Area == target.Area),
+                    "通过真实城镇连接从大厅进入酒馆及侧厅");
+                peer.Travel(target.Town, target.Area, target.X, target.Y, 10, previousArea); peer.Barrier();
+                before = f.Snapshot();
+                Enter();
+                peer.Send(50, create); peer.Expect(1, 50, [0, 19, 0]);
+                peer.Send(52, [0, 254]); peer.Expect(0, 43, left);
+                PvpArenaTcpTests.TownReturn(peer, target); peer.Barrier();
+                That(before == f.Snapshot(), "酒馆及侧厅普通练习退出回到原地区，不改任务或资产");
+                if (channel == 101)
+                {
+                    byte[] arcade = (byte[])create.Clone(); arcade[^2] = 3; arcade[^1] = 81;
+                    peer.Send(50, arcade); peer.Expect(1, 50, [1]);
+                    That(peer.Expect(0, 41).Body[13] == 10, "酒馆及侧厅也能建立无风云任务的独立道场");
+                    peer.Send(13); peer.Expect(0, 43, [(byte)id, (byte)(id >> 8), 10, 1, 0, 0, 255, 255]);
+                    PvpArenaTcpTests.TownReturn(peer, target); peer.Barrier();
+                    That(before == f.Snapshot(), "独立道场退出保留原地区、任务及资产，不借任务训练身份");
+                }
+                previousArea = target.Area;
+            }
+            if (previousArea == 2)
+            {
+                peer.Travel(10, 1, 450, 234, 10, 2); peer.Barrier();
+            }
             peer.Travel(10, 0, 474, 234, 10, 1); peer.Barrier();
             if (channel == 55)
             {
