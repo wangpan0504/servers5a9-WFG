@@ -74,6 +74,19 @@ internal static class TownTravelTests
         That(towns.Admission(new(60, 0, 474, 234), ashPoint, 94) == "target-quest-required", "OR permission requires one completion");
         That(towns.Admission(new(17, 0, 474, 234), new(17, 1, 600, 220), 95, new HashSet<int> { 6359 }) == "target-excluded-by-quest", "except quest not inverted into an unlock");
         That(towns.Areas[(54, 1)].Map(new HashSet<int> { 5936 }).Path.EndsWith("blackmarket_before.map") && towns.Areas[(54, 1)].Map(completed).Path.EndsWith("blackmarket_liberation.map"), "last completed town phase selects matching geometry");
+        foreach (int unlock in new[] { 6201,6212 })
+        {
+            var history = new HashSet<int> { 5936,6045,unlock,6301 };
+            That(towns.Admission(new(54,1,0,0),new(60,3,0,0),95,history) == "ready" &&
+                towns.Admission(new(54,3,0,0),new(63,0,0,0),95,history) == "ready",
+                "两种灰色墓地前史均开放黑市主线通路，中央竞技场使用剧情区域63");
+            history.Remove(unlock);
+            That(towns.Admission(new(54,1,0,0),new(60,3,0,0),95,history) == "target-quest-required",
+                "缺少灰色墓地前置不能因显示主线而放行");
+            history.Remove(6301);
+            That(towns.Admission(new(54,3,0,0),new(63,0,0,0),95,history) == "target-quest-required",
+                "中央竞技场仍需实际完成6301，不以账号旅程标记代替");
+        }
         var row = TownCatalog.Rows("[town movable area]\n0 0 10 10 57 2\n[check condition]\n1\n[/check condition]\n20 0 10 10 57 33\n[/town movable area]", "town movable area", 6);
         That(row[0].Conditions.SequenceEqual(new[] { 1 }) && row[1].Conditions.Length == 0, "special instance condition belongs only to its preceding route");
         That(towns.IsRoom(new(17, 0, 474, 234), completed) && towns.DefaultReturn(new(17, 0, 474, 234), completed) is { Town: 17, Area: 1 }, "legacy regional rooms use their own town return");

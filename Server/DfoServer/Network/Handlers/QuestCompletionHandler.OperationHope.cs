@@ -34,6 +34,9 @@ internal sealed partial class QuestCompletionHandler
                 commit.ChangedSlots.Where(slot => slot.List == list).ToArray()),"operation_hope_reward_inventory",Guard);
         await context.Notify(NotiPacketType.ACCEPTED_QUEST,QuestPackets.ActiveList(commit.Character.ActiveMainQuests),
             "operation_hope_reward_active",Guard);
+        // 最后一个活动槽领奖产生空574，会清客户端完成集合；切回城镇前恢复真实开路与阶段位。
+        await context.Notify(NotiPacketType.CLEAR_QUEST_LIST,TownPackets.CompletedQuests(commit.Character),
+            "operation_hope_reward_completed",Guard);
         return CommandResult.Handled;
     }
 }
