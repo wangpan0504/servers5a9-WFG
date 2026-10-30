@@ -21,6 +21,7 @@ internal static class HellPartyEntryTests
 {
     internal static void RunCore()
     {
+        HellApcFactionTests.RunCore();
         Bytes(DungeonPackets.SelectionNotice(), new byte[42], "空深渊资格名单保持原42字节选图通知");
         byte[] expected = new byte[46];
         expected[8] = 2; expected[11] = 3;

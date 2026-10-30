@@ -80,17 +80,19 @@ internal sealed record DungeonMonsterPlan(DungeonRoomDefinition Room, IReadOnlyL
 
     public uint NextObjectKey => (uint)Monsters.Select(monster => (int)monster.ObjectKey)
         .Concat(SpecialObjects.Select(actor => (int)actor.ObjectKey)).Concat(HellWaves.Select(wave => (int)wave.ObjectKey)).DefaultIfEmpty(0).Max() + 1;
-    // 实验性（未在95客户端实证）：深渊派对房间柱子的波次怪（START_MAP 隐藏模板行 + NOTI 679）。不进 Monsters：不参与清房/开门判定，也不产生经验/掉落。
+    // 深渊柱子波次的隐藏模板（START_MAP + NOTI679）；对应敌对演员同时在Monsters参与死亡、清房及奖励。
     public IReadOnlyList<DungeonHellWaveMonster> HellWaves { get; init; } = Array.Empty<DungeonHellWaveMonster>();
-    // 给波次怪分配 object key（跳过角色 key）与 START_MAP 行序号（参考项目 running index：普通/APC 分别接着既有行往后排）。
+    // 给波次怪分配 object key（跳过角色 key）；深渊APC使用独立索引区间，不能读取MAP友军行。
     public DungeonMonsterPlan WithHellWaves(IReadOnlyList<DungeonHellWaveMonster> waves, ushort characterId, int rewardRolls = 0)
     {
         int next = (int)NextObjectKey;
         int normalIndex = Monsters.Count(monster => monster.SpawnType < 5);
-        int apcIndex = Monsters.Count(monster => monster.SpawnType >= 5) + SpecialObjects.Count;
+        // 02A0B720：0..63读取MAP的APC阵营；64..127使用深渊出生点并明确设置敌对100。
+        int apcIndex = 64;
         var result = new List<DungeonHellWaveMonster>();
         foreach (var wave in waves)
         {
+            if (wave.Type >= 5 && apcIndex >= 128) throw new InvalidDataException("深渊APC超过客户端独立索引容量");
             if (next == characterId) next++;
             if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("深渊波次 object key 超出 ushort 范围");
             result.Add(wave with { ObjectKey = (ushort)next++, PacketIndex = wave.Type >= 5 ? apcIndex++ : normalIndex++ });
