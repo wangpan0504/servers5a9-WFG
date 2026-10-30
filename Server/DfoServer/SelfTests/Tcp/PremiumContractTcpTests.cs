@@ -14,6 +14,10 @@ internal static class PremiumContractTcpTests
 {
     public static async Task RunAsync(ServerOptions options, string root, TcpTestResources resources)
     {
+        foreach (var (id, type) in new[] { (33, 22), (45, 27) })
+            foreach (bool shortRequest in new[] { true, false })
+                await VerifyExactLegacyAsync(options, root, resources, id, type, shortRequest);
+
         const int itemId = 35;
         const int unsupportedItemId = 10000387;
         const short slot = 65;
@@ -191,6 +195,147 @@ internal static class PremiumContractTcpTests
             long remaining = expiry - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             That(duration >= remaining && duration <= remaining + 5, "1760投影同一账号已提交到期时间的剩余期限");
         }
+    }
+
+
+    // C09增量仅补精确33/45的10/15B；原12个DOMAIN_SQL分区继续复用已核收证据。
+    static async Task VerifyExactLegacyAsync(ServerOptions options, string root, TcpTestResources resources,
+        int itemId, int type, bool shortRequest)
+    {
+        const short sourceSlot = 65;
+        const uint token = uint.MaxValue;
+        const long duration = 604800;
+        That(resources.ItemResources.Contracts.TryConsumableContract(itemId, out var definition) &&
+            definition.Type == type && definition.DurationSeconds == duration &&
+            resources.ItemResources.Items.Get(itemId).AllowsUse(1, 0), "C09精确33/45及七日资源声明");
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.FromUnixTimeSeconds(now));
+        await using var fixture = new TcpTestFixture(options,
+            Path.Combine(root, $"premium-contract-c09-{itemId}-{(shortRequest ? 10 : 15)}"), resources: resources, clock: clock);
+        var repository = new CharacterRepository(fixture.Database);
+        ushort sourceCharacter, sourceRosterSlot, siblingRosterSlot;
+        long sourceUid;
+        var originalCore = new ItemCore(itemId, DfoServer.GameWorld.Items.ItemKind.Consumable, 2)
+            { SortLockFlag = 1, Marker16 = 77 };
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var creation = CharacterCreation.Prepare("ExactC09A", resources.Characters.Get(0), resources.Towns.Room,
+                resources.Towns.InitialReturn, resources.Learning.Get);
+            var created = repository.Create(owner, creation with { Inventory = creation.Inventory with
+                { Items = creation.Inventory.Items.Add(new(0, new(InventoryListType.Main, sourceSlot), originalCore)) } });
+            sourceCharacter = created.Id; sourceRosterSlot = created.Slot;
+            sourceUid = created.Inventory.Find(new(InventoryListType.Main, sourceSlot))!.Uid;
+            siblingRosterSlot = repository.Create(owner, creation with { Name = "ExactC09B" }).Slot;
+        }
+        fixture.Sql("INSERT INTO account_wallets(account) VALUES($p0) ON CONFLICT(account) DO NOTHING", fixture.Options.DevelopmentAccount);
+        fixture.Sql("UPDATE account_wallets SET rental_points=9,mileage=11,seria_luck=3 WHERE account=$p0", fixture.Options.DevelopmentAccount);
+        fixture.Sql("INSERT INTO account_currency_balances(account,currency_kind,balance) VALUES($p0,15,123) " +
+            "ON CONFLICT(account,currency_kind) DO UPDATE SET balance=123", fixture.Options.DevelopmentAccount);
+        await fixture.StartAsync();
+        long expectedExpiry = 0;
+        using (var peer = Open(fixture))
+        {
+            peer.Select(sourceRosterSlot, inventoryNotices: [(1, 713)]);
+            for (int remaining = 1; remaining >= 0; remaining--)
+            {
+                // 在发送前用独立常量/上一笔持久期限冻结期待，不从Plan、Receipt或当前响应导出。
+                expectedExpiry = checked(Math.Max(now, expectedExpiry) + duration);
+                long characterRevision = Scalar("SELECT revision FROM characters WHERE id=$p0", sourceCharacter);
+                long walletRevision = Scalar("SELECT revision FROM account_wallets WHERE account=$p0", fixture.Options.DevelopmentAccount);
+                long auditCount = Scalar("SELECT count(*) FROM inventory_audit_log");
+                string stable = StableAssets();
+                Send(peer); Reply(peer, true);
+                AssertExactPremium(peer.Expect(0, 1760).Body);
+                if (type == 27)
+                {
+                    var notice = peer.Expect(0, 66).Body;
+                    That(notice.Length == 11 && U16(notice, 0) == 2 && notice[2] == 27 &&
+                        BinaryPrimitives.ReadInt64LittleEndian(notice.AsSpan(3)) == expectedExpiry - now,
+                        "C09同连接66按注入时钟投影同一已提交27期限");
+                }
+                peer.Barrier(); // 默认屏障不吞未知包，额外源14会使本例失败。
+                That(Scalar("SELECT revision FROM characters WHERE id=$p0", sourceCharacter) == characterRevision + 1 &&
+                    Scalar("SELECT revision FROM account_wallets WHERE account=$p0", fixture.Options.DevelopmentAccount) == walletRevision + 1 &&
+                    Contracts() is var contracts && contracts.Count == 1 && contracts.GetValueOrDefault(type) == expectedExpiry &&
+                    Scalar("SELECT count(*) FROM inventory_audit_log") == auditCount + 1 && StableAssets() == stable,
+                    "C09实际CMD44每笔只提交一次角色/账号revision、精确续期且保留其它资产");
+                var source = fixture.Query("SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", sourceUid);
+                That(remaining == 0 ? source.Length == 0 &&
+                    Scalar("SELECT count(*) FROM character_inventory_slots WHERE item_uid=$p0", sourceUid) == 0 :
+                    source is [var row] && (string)row[0] == JsonSerializer.Serialize(originalCore with { Value = remaining }),
+                    "C09同UID精确扣一件、保留全部Core，最后一件移除源及槽");
+                var audit = fixture.Query("SELECT action_name,item_uid_before,count_before,count_after,count_delta " +
+                    "FROM inventory_audit_log ORDER BY audit_id DESC LIMIT 1").Single();
+                That((string)audit[0] == "use_premium_contract" && Convert.ToInt64(audit[1]) == sourceUid &&
+                    Convert.ToInt64(audit[2]) == remaining + 1 && Convert.ToInt64(audit[3]) == remaining &&
+                    Convert.ToInt64(audit[4]) == -1, "C09真实单件消费审计");
+            }
+            string exhausted = AllAssets();
+            Send(peer); Reply(peer, false); peer.Barrier();
+            That(AllAssets() == exhausted, "C09同正文耗尽后123完整收尾，全部SQL行和序列不变");
+        }
+        using (var peer = Open(fixture))
+        {
+            peer.Select(sourceRosterSlot, premiumContracts: true, expertContract: type == 27);
+            AssertExactPremium(peer.PremiumInfo);
+            if (type == 27) AssertExpertNotice(peer.ExpertContract, expectedExpiry);
+            string before = AllAssets();
+            Send(peer); Reply(peer, false); peer.Barrier();
+            That(AllAssets() == before, "C09真实重连不恢复已耗尽实体或重复续期");
+            peer.Send(7); peer.Expect(1, 7, [1]); peer.Expect(0, 2);
+            peer.Select(siblingRosterSlot, premiumContracts: true, expertContract: type == 27);
+            AssertExactPremium(peer.PremiumInfo);
+            if (type == 27) AssertExpertNotice(peer.ExpertContract, expectedExpiry);
+            That(Contracts().Count == 1 && Contracts().GetValueOrDefault(type) == expectedExpiry &&
+                Scalar("SELECT count(*) FROM character_inventory_items WHERE item_uid=$p0", sourceUid) == 0,
+                "C09同账号换角复用同一期限，不复制实体");
+        }
+        await fixture.StopAsync();
+        await fixture.StartAsync("c09-exact-restart");
+        using (var peer = Open(fixture))
+        {
+            peer.Select(sourceRosterSlot, premiumContracts: true, expertContract: type == 27);
+            AssertExactPremium(peer.PremiumInfo);
+            if (type == 27) AssertExpertNotice(peer.ExpertContract, expectedExpiry);
+            That(Contracts().Count == 1 && Contracts().GetValueOrDefault(type) == expectedExpiry &&
+                Scalar("SELECT count(*) FROM character_inventory_items WHERE item_uid=$p0", sourceUid) == 0 &&
+                fixture.Query("PRAGMA foreign_key_check").Length == 0, "C09重启恢复已提交期限及耗尽状态");
+        }
+
+        long Scalar(string sql, params object[] values) => Convert.ToInt64(fixture.Query(sql, values).Single().Single());
+        Dictionary<int, long> Contracts() => JsonSerializer.Deserialize<Dictionary<int, long>>(
+            (string)fixture.Query("SELECT premium_contracts FROM account_wallets WHERE account=$p0", fixture.Options.DevelopmentAccount).Single()[0])!;
+        void Send(TcpPeer peer) => peer.Send(44, Build(writer =>
+        {
+            writer.Write((ushort)sourceSlot);
+            if (!shortRequest) writer.Write((byte)0);
+            writer.Write(token); writer.Write(itemId);
+            if (!shortRequest) writer.Write(0);
+        }));
+        void Reply(TcpPeer peer, bool accepted) => peer.Expect(1, 44, Build(writer =>
+        { writer.Write((byte)(accepted ? 1 : 0)); writer.Write(accepted ? (ushort)sourceSlot : (ushort)123);
+            writer.Write((byte)0); writer.Write(token); writer.Write(itemId); }));
+        void AssertExactPremium(byte[] body)
+        {
+            That(body.Length == 1 + body[0] * 9, "C09完整1760数量与布局");
+            var entries = new Dictionary<byte, long>();
+            for (int i = 0; i < body[0]; i++)
+                That(entries.TryAdd(body[1 + i * 9], BinaryPrimitives.ReadInt64LittleEndian(body.AsSpan(2 + i * 9))), "C09目录不重复");
+            That(entries.GetValueOrDefault((byte)type) == expectedExpiry - now && entries.ContainsKey((byte)type) &&
+                entries.All(row => row.Key == type || row.Key is 56 or 58 && row.Value == 0),
+                "C09目录对应同一已提交精确类型，附加56/58只清除旧状态");
+        }
+        string StableAssets() => string.Concat(fixture.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN " +
+            "('characters','character_inventory_items','character_inventory_slots','account_wallets','inventory_audit_log','sqlite_sequence') ORDER BY name")
+            .Select(row => Table((string)row[0]))) +
+            fixture.Snapshot("SELECT * FROM character_inventory_items WHERE item_uid<>$p0 ORDER BY item_uid", sourceUid) +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots WHERE item_uid<>$p0 ORDER BY item_uid", sourceUid) +
+            fixture.Snapshot("SELECT account,rental_points,mileage,seria_luck FROM account_wallets ORDER BY account") +
+            fixture.Snapshot("SELECT * FROM characters WHERE id<>$p0 ORDER BY id", sourceCharacter);
+        string AllAssets() => string.Concat(fixture.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .Select(row => Table((string)row[0])));
+        string Table(string name) => name + ":" + JsonSerializer.Serialize(fixture.Query("SELECT * FROM \"" + name.Replace("\"", "\"\"") + "\"")
+            .Select(row => JsonSerializer.Serialize(row)).Order(StringComparer.Ordinal).ToArray());
     }
 
     static void AssertExpertNotice(byte[] body, long expiry)
