@@ -28,8 +28,11 @@ internal sealed class ExpertJobEnchanting(ExpertJobScriptCatalog scripts, ItemCa
         var sourceTemplate = items.Get(source.Core.ItemId);
         var targetTemplate = items.Get(target.Core.ItemId);
         var definition = enchantments.Get(recipe.BeadId);
+        // 普通源沿既有配方；升级卡必须保留实例等级并校验该级的真实效果与适用部位。
+        byte level = source.Core.EnchantUpgrade != 0 ? source.Core.EnchantUpgrade : definition?.Upgrade ?? 0;
         if (definition is null || definition.CardItemId != source.Core.ItemId ||
-            target.Core.EnchantCardId == source.Core.ItemId && target.Core.EnchantUpgrade == definition.Upgrade || sourceTemplate.UseForbidden ||
+            source.Core.EnchantUpgrade != 0 && !enchantments.CanEnchantCard(source.Core.ItemId, level, targetTemplate.Kind, targetTemplate.EquipmentSlot) ||
+            target.Core.EnchantCardId == source.Core.ItemId && target.Core.EnchantUpgrade == level || sourceTemplate.UseForbidden ||
             character.Level < sourceTemplate.MinimumLevel || (sourceTemplate.Jobs & (1 << character.Job)) == 0 ||
             sourceTemplate.Kind != source.Core.Kind || targetTemplate.Kind != target.Core.Kind ||
             !definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)) ||
@@ -73,7 +76,7 @@ internal sealed class ExpertJobEnchanting(ExpertJobScriptCatalog scripts, ItemCa
             int experience = character.ExpertJobExperience;
             if (success)
             {
-                var changed = target with { Core = target.Core with { EnchantCardId = source.Core.ItemId, EnchantUpgrade = definition.Upgrade } };
+                var changed = target with { Core = target.Core with { EnchantCardId = source.Core.ItemId, EnchantUpgrade = level } };
                 inventory = inventory with { Items = inventory.Items.Replace(target, changed) };
                 var gain = scripts.MonsterCardExp(1, scripts.Level(1, character.ExpertJobExperience));
                 experience = checked(experience + gain.Min + (gain.Max > gain.Min ? next(gain.Max - gain.Min + 1) : 0));

@@ -41,6 +41,14 @@ internal sealed class MonsterCardBindCatalog
     public IReadOnlyDictionary<int, int> SphereUpgradeChances => sphereUpgradeChances;
     public IEnumerable<MonsterCardBindUpgradeRow> UpgradeRows => upgradeRows.Values;
 
+    public int CardUpgradeChance(int rarity, int materials)
+    {
+        if (materials is < 1 or > 4 || !upgradeRows.TryGetValue(rarity, out var row) ||
+            row.Weights.Length < materials || row.Weights[materials - 1] is < 1 or > 100)
+            throw new InvalidDataException("卡片升级稀有度或材料数没有有效成功率");
+        return row.Weights[materials - 1];
+    }
+
     public static bool IsSphere(int bindType) => bindType is >= 3 and <= 5;
 
     public MonsterCardBindPool Pool(int bindType, int rarity)
@@ -104,7 +112,7 @@ internal sealed class MonsterCardBindCatalog
     {
         var rows = new Dictionary<int, MonsterCardBindUpgradeRow>();
         // 现场 Script.pvf 的 [upgrade info] 没有成对 [/upgrade info]，只靠下一标签切行。
-        // 该块属于未注册的 CMD1122；缺省不得阻断 CMD414 目录加载。
+        // 该块由CMD603按目标稀有度与材料张数取成功率；缺省不得阻断CMD414目录加载。
         foreach (Match match in Regex.Matches(body, @"\[upgrade info\](.*?)(?:\[/upgrade info\]|(?=\[)|$)",
             RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {

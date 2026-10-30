@@ -649,6 +649,8 @@ internal static class ServerRuntime
                 itemResources.EmblemCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log, guildNpcBenefitService),
             new MonsterCardBindHandler(new InventoryMonsterCardBindService(itemResources.Items,
                 itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
+            new MonsterCardUpgradeHandler(new InventoryMonsterCardUpgradeService(itemResources.Items, itemResources.Enchantments,
+                itemResources.MonsterCardBinds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new GuildCompoundHandler(new InventoryGuildCompoundService(itemResources.Items,
                 itemResources.GuildCompounds, itemResources.GoldLimits, itemResources.EpicPieces), inventoryProjection, log),
             new AvatarCompoundHandler(new InventoryAvatarCompoundService(itemResources.Items,

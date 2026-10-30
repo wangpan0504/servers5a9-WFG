@@ -72,7 +72,8 @@ internal static class ExpertJobActionTests
             var targetTemplate = items.Get(10400);
             var cardRecipe = scripts.KnownCards(1).Order().Select(id => scripts.TryCardRecipe(id, out var recipe) ? recipe : null)
                 .First(recipe => recipe is { RequiredLevel: 9 } && items.Get(recipe.CardId).MinimumLevel <= 50 && resources.Enchantments.Get(recipe.BeadId) is { } definition &&
-                    definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)))!;
+                    definition.Targets.Contains((targetTemplate.Kind, targetTemplate.EquipmentSlot)) &&
+                    resources.Enchantments.CardMaximumLevel(recipe.CardId) > 0)!;
             var cardCore = InventoryRewardGrantService.Create(items.Get(cardRecipe.CardId));
             var cardSlot = new InventorySlot(InventoryListType.Main, ItemSlotBoundService.Range(cardCore.Kind, InventorySnapshot.Empty).Start);
             var enchanter = repository.Create(owner, new("EnchantTest", towns.Room, towns.InitialReturn)
@@ -98,6 +99,26 @@ internal static class ExpertJobActionTests
             That(enchanted is { Succeeded: true } && enchanted.Inventory.After.Find(cardSlot) is null &&
                 enchanted.Inventory.After.Find(gearSlot)!.Core.EnchantCardId == cardRecipe.CardId,
                 "已学卡片配方真实消耗卡、材料并保留目标UID写入附魔");
+            var sourceCard = enchanter.Inventory.Find(cardSlot)!;
+            if (resources.Enchantments.CardMaximumLevel(cardRecipe.CardId) == 0)
+                throw new InvalidDataException("附魔回归样本需要至少一个升级等级");
+            var upgradedSource = enchanter with { Inventory = enchanter.Inventory with
+            {
+                Items = enchanter.Inventory.Items.Replace(sourceCard, sourceCard with
+                { Core = sourceCard.Core with { EnchantUpgrade = 1 } })
+            } };
+            var upgradedPlan = enchanting.Plan(upgradedSource, cardRecipe.RecipeId, gearSlot, cardSlot);
+            That(upgradedPlan is { Succeeded: true } && upgradedPlan.Inventory.After.Find(gearSlot)!.Core.EnchantUpgrade == 1 &&
+                upgradedPlan.Inventory.After.Find(cardSlot) is null,
+                "升级卡普通附魔真实写入源卡等级，不因配方宝珠默认等级降级");
+            var enchantedTarget = upgradedSource.Inventory.Find(gearSlot)!;
+            var repeated = upgradedSource with { Inventory = upgradedSource.Inventory with
+            {
+                Items = upgradedSource.Inventory.Items.Replace(enchantedTarget, enchantedTarget with
+                { Core = enchantedTarget.Core with { EnchantCardId = cardRecipe.CardId, EnchantUpgrade = 1 } })
+            } };
+            That(enchanting.Plan(repeated, cardRecipe.RecipeId, gearSlot, cardSlot) is null,
+                "相同卡片同一升级等级附魔拒绝重复扣料");
             Sql("CREATE TRIGGER fail_enchant BEFORE INSERT ON character_expert_meta BEGIN SELECT RAISE(ABORT,'enchant failure'); END");
             Reject<SqliteException>(() => repository.CommitExpertJobAction(owner, enchanted), "附魔末段耐久写失败回滚卡、材料及目标");
             That(repository.LoadCharacter(owner, 1).Revision == enchanter.Revision &&

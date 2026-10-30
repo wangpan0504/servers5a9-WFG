@@ -148,7 +148,7 @@ internal static class MonsterCardBindTests
         That(bind.SphereUpgradeChances[3] == 200 && bind.SphereUpgradeChances[5] == 200,
             "现场五卡升级附加按张数给出200，不并入本次普通奖励核心");
         That(bind.UpgradeRows.Any(row => row.Rarity == 0 && row.Weights[0] == 100),
-            "upgrade infos仍按CMD1122升级权重保存，不参与414合成概率");
+            "upgrade infos按CMD603升级成功率保存，不参与414合成概率");
     }
 
     static byte[] Body(ushort synthesizer, params ushort[] cards)
