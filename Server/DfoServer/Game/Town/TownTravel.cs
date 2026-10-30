@@ -114,7 +114,10 @@ internal static class TownTravel
         // 有坐标切图保留请求落点；返回地区单独解析，不能用门口覆盖客户端坐标。
         // 频道起始城镇（安徒恩战舰 19、只能经频道进入的 67 等）内走动不改返回地区，离开频道后仍回进入前的普通地区。
         var kept = OrdinaryDistrict(character.Return);
-        var back = target.Town == 101 ? character.Return : ChannelAreaLanding.PreservesRoomReturn(towns, target.Town) && kept is not null
+        var back = target.Town == 101 ? character.Return :
+            towns.IsRoom(target, completed) && ChannelAreaLanding.PreservesRoomReturn(towns, character.Position.Town)
+            ? kept ?? towns.ResolveRoomReturn(towns.Room, null, character.Level, completed)
+            : ChannelAreaLanding.PreservesRoomReturn(towns, target.Town) && kept is not null
             ? kept
             : towns.IsRoom(target, completed)
             ? towns.Entrance(target, character.Position, completed)
@@ -152,5 +155,5 @@ internal static class TownTravel
     }
 
     // 共享房间的返回地区只能是普通地区：频道起始城镇（安徒恩战舰 19）的街区不参与，旧存档按初始地区修复。
-    static Location? OrdinaryDistrict(Location? saved) => saved is { Town: ChannelAreaLanding.AntonTown } ? null : saved;
+    static Location? OrdinaryDistrict(Location? saved) => saved is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.XianVillageTown } ? null : saved;
 }

@@ -20,7 +20,7 @@ internal static class CharacterSelection
         // 其余频道专属城镇（战舰 19、普雷 118 等）的房间登记了自己的默认地区，换成赛丽亚房间会丢掉。
         var returnSource = leavingBeastTown
             ? new Location(ChannelAreaLanding.CentralParkTown, 1, 0, 0)
-            : character.Position.Town == ChannelAreaLanding.PvpTown ? towns.Room : character.Position;
+            : character.Position.Town is ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown ? towns.Room : character.Position;
         if (resumeTown && towns.IsGuildHall(character.Position, completed))
         {
             var admitted = repository is Game.Guild.IGuildHallStore hall
@@ -46,7 +46,7 @@ internal static class CharacterSelection
                 || area.Map(completed).Error is not null)
                 throw new InvalidDataException("频道重连的城镇地图不可用");
             // 旧存档可能把战舰街区记成返回地区；共享房间的 1379 与出门都取它，按初始地区修复，位置保持不变。
-            if (character.Return is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.BeastTown })
+            if (character.Return is { Town: ChannelAreaLanding.AntonTown or ChannelAreaLanding.BeastTown or ChannelAreaLanding.XianVillageTown })
                 character = repository.Save(owner, character, character.Position,
                     towns.ResolveRoomReturn(towns.Room, OrdinaryDistrict(character.Return), character.Level, completed));
         }
@@ -94,7 +94,7 @@ internal static class CharacterSelection
         // 共享房间的返回地区只能是普通地区：频道起始城镇（安徒恩战舰 19）的街区不参与，旧存档按初始地区修复。
         Location? OrdinaryDistrict(Location? saved) => saved?.Town switch
         {
-            ChannelAreaLanding.AntonTown or ChannelAreaLanding.PvpTown => null,
+            ChannelAreaLanding.AntonTown or ChannelAreaLanding.PvpTown or ChannelAreaLanding.XianVillageTown => null,
             ChannelAreaLanding.BeastTown => new(ChannelAreaLanding.CentralParkTown, 1, 0, 0),
             _ => saved
         };

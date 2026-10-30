@@ -15,7 +15,7 @@ namespace DfoServer.Testing;
 // 服务端必须保留原位置。每次换频道后按客户端随后的 same-area 位置回放与移动核对服务端接受（不再被 route-not-in-pvf 拒绝）。
 internal static partial class RaidChannelLandingTcpTests
 {
-    static readonly int[] RaidQuests = [12829, 2903, 8672, 8935, 3779, 4872, 4840, 5927];
+    static readonly int[] RaidQuests = [12829, 2903, 8672, 8935, 3779, 4872, 4840, 5927, 3280];
 
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -183,6 +183,7 @@ internal static partial class RaidChannelLandingTcpTests
                 if (next is { Kind: 0, Opcode: 1379 }) next = peer.Read();
                 That(next is { Kind: 1, Opcode: 1347 }, $"{label}：出门包序 23/24/(1379)/1347");
                 That(location[2] == exitTown && Town() == exitTown, $"{label}：赛丽亚房间出门到 {exitTown}（实际 {Where()}）");
+                That(!resources.Towns.IsRoom(Position(), completed), $"{label}：一次出门直达街区，不能再进地区房间");
             }
             peer.Send(3, [1]); peer.Expect(1, 3, [1]); peer.Closed();
         };
@@ -207,6 +208,26 @@ internal static partial class RaidChannelLandingTcpTests
         Switch(normal, land: true, town: 38, "五陵 43→普通（恢复普通房间）", area: 1);
         Switch(43, land: true, town: 38, "普通房间→五陵 43（出门到五陵入口）", area: 1, exit: 117);
         Switch(normal, land: true, town: 38, "再次离开五陵", area: 1);
+        foreach (byte channel in new byte[] { 23, 26, 24, 35 })
+        {
+            byte destination = channel == 23 ? (byte)38 : (byte)17;
+            Switch(channel, land: true, town: 38, $"进入特殊频道{channel}", area: 1, exit: destination);
+            That(fixture.Snapshot("SELECT town,area FROM characters WHERE id=$p0", character.Id) ==
+                (channel == 23 ? "[[38,5]]" : channel == 24 ? "[[17,1]]" : "[[17,2]]"),
+                "亡者峡谷、异界、远古及裂缝各自出口与资源入口一致");
+        }
+        Switch(35, land: true, town: 38, "同type11频道重连也重新入房", area: 1, exit: 17);
+        Switch(47, land: true, town: 10, "特殊频道到决斗地区");
+        Switch(24, land: true, town: 38, "决斗地区到远古频道一次出门到甲板", area: 1, exit: 17);
+        Switch(47, land: true, town: 10, "远古到决斗地区");
+        Switch(26, land: true, town: 38, "决斗地区到异界频道一次出门到船尾", area: 1, exit: 17);
+        string savedReturn = fixture.Snapshot("SELECT return_town,return_area,return_x,return_y FROM characters WHERE id=$p0", character.Id);
+        Switch(43, land: true, town: 38, "异界到五陵", area: 1, exit: 117);
+        That(fixture.Snapshot("SELECT return_town,return_area,return_x,return_y FROM characters WHERE id=$p0", character.Id) == savedReturn,
+            "五陵入场和出门均保留之前的普通返回地区");
+        Switch(normal, land: true, town: 38, "五陵返回普通频道不再回五陵", area: 1, exit: 17);
+        fixture.Sql("UPDATE characters SET town=38,area=1,x=450,y=234,return_town=117,return_area=1,return_x=1070,return_y=213 WHERE id=$p0", character.Id);
+        Switch(normal, land: false, town: null, "普通房间重连修复旧五陵返回地区", exit: 38);
         // 勇士对决 0x3F/0x3E 在团队页签谓词里：普通→勇士对决不留快照，出门 119；两者之间及与超时空之战 0x2D 互换保留快照。
         Switch(44, land: true, town: 38, "普通→勇士对决-自由 44（出门 119）", area: 1, exit: 119);
         Switch(45, land: false, town: null, "勇士对决-自由 44→排位 45（同为团本页签）");
@@ -254,9 +275,14 @@ internal static partial class RaidChannelLandingTcpTests
         }
         using (var peer = Enter())
         {
+            string ordinaryReturn = fixture.Snapshot("SELECT return_town,return_area,return_x,return_y FROM characters WHERE id=$p0", character.Id);
             // 入口图 117/1 的 `340 341 100 50 117 2` 门：117/2 侧回门 `1478 345 100 50 117 1` 中心 1528,370。
             peer.Travel(117, 2, 1528, 370, 117, 1);
             That(Where() == "[[117,2,1528,370]]", "117/1 入口图进五陵主城 117/2 " + Where());
+            peer.Travel(117, 1, 390, 366, 117, 2);
+            peer.Travel(38, 1, 450, 234, 117, 1, returnTown: 117);
+            That(fixture.Snapshot("SELECT return_town,return_area,return_x,return_y FROM characters WHERE id=$p0", character.Id) == ordinaryReturn,
+                "五陵城内往返及步行回房均不覆盖进入前普通返回地区");
             peer.Send(3, [1]); peer.Expect(1, 3, [1]); peer.Closed();
         }
         // #613：把存档放到 117/0 桩图后再走下方门，客户端发 0,0，服务端按 PVF 入口解析落点。

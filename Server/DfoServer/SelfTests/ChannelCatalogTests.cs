@@ -104,6 +104,11 @@ internal static class ChannelCatalogTests
             !ChannelAreaLanding.SameSnapshotPredicates(53, 22), "再战vt+38独立参与换频道快照，同类型保留、普通互换不保留");
         That(!ChannelAreaLanding.SameSnapshotPredicates(22, 56) && !ChannelAreaLanding.SameSnapshotPredicates(56, 22) &&
             ChannelAreaLanding.SameSnapshotPredicates(56, 56), "五陵补丁独立比较类型，普通互换不保留快照，同类型仍保留");
+        foreach (int type in new[] { 11, 22, 56, 24, 39, 53, 54, 32 })
+            That(!ChannelAreaLanding.SameSnapshotPredicates(11, type) && !ChannelAreaLanding.SameSnapshotPredicates(type, 11),
+                "type11各分组进出均重新入房，同类型也不能继承另一特殊地区快照");
+        That(!ChannelAreaLanding.ClientKeepsTownSnapshot(null, new(new(2, 24), 11, "[ancient]"), new(38, 0, 622, 196)),
+            "无频道历史时type11仍不恢复普通城镇快照");
         That(ChannelAreaLanding.SameSnapshotPredicates(40, 40) && !ChannelAreaLanding.SameSnapshotPredicates(22, 40) &&
             !ChannelAreaLanding.SameSnapshotPredicates(40, 22) && !ChannelAreaLanding.SameSnapshotPredicates(40, 53) &&
             !ChannelAreaLanding.SameSnapshotPredicates(40, 32), "魔兽vt+30独立参与换频道快照，仅同类型保留，不能沿用普通、再战或团队城镇");
