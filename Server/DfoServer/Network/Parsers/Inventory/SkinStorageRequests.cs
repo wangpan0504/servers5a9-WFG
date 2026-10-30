@@ -6,6 +6,12 @@ namespace DfoServer.Network.Parsers.Inventory;
 
 internal static class SkinStorageRequests
 {
+    public static int Emoticon(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4) throw new InvalidDataException("即时表情发送请求应为4字节");
+        return BinaryPrimitives.ReadInt32LittleEndian(body);
+    }
+
     public static MakeWeaponSkinRequest Make(ReadOnlySpan<byte> body)
     {
         if (body.Length != 8) throw new InvalidDataException("武器幻化制作请求应为8字节");

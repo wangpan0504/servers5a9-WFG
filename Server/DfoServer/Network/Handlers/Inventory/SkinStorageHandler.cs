@@ -7,16 +7,29 @@ using DfoServer.Network.Parsers.Inventory;
 using DfoServer.Network.Projection.Inventory;
 using DfoServer.Network.Protocol;
 using DfoServer.Network.Parsers;
+using DfoServer.Game.Session;
 
 namespace DfoServer.Network.Handlers.Inventory;
 
 internal sealed class SkinStorageHandler(InventorySkinStorageService skins, InventoryProjection inventory,
-    SkinStorageProjection projection, ServerLog log) : IGameCommandModule
+    SkinStorageProjection projection, ServerLog log, OnlineSessionDirectory online) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
         commands.Register(CmdPacketType.MAKE_SKIN, Make, nameof(SkinStorageHandler));
         commands.Register(CmdPacketType.SELECT_SKIN, Select, nameof(SkinStorageHandler));
+        commands.Register(CmdPacketType.SEND_EMOTICON, SendEmoticon, nameof(SkinStorageHandler), UserStateRequirement.WorldReady);
+    }
+
+    Task<CommandResult> SendEmoticon(GameConnectionContext context, Packet packet)
+    {
+        int skinId;
+        try { skinId = SkinStorageRequests.Emoticon(packet.Body); }
+        catch (InvalidDataException) { return Task.FromResult(CommandResult.Handled); }
+        var notice = context.Session.CaptureEmoticon(skins, skinId);
+        if (notice is not null) online.DeliverEmoticon(notice);
+        // 未发现专用ACK消费者；播放由NOTI1535驱动，本人也通过同一投递路径收到。
+        return Task.FromResult(CommandResult.Handled);
     }
 
     async Task<CommandResult> Make(GameConnectionContext context, Packet packet)

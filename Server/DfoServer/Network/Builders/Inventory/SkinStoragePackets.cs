@@ -6,6 +6,14 @@ namespace DfoServer.Network.Builders.Inventory;
 
 internal static class SkinStoragePackets
 {
+    public static byte[] Emoticon(ushort memberId, int skinId)
+    {
+        var body = new byte[6];
+        BinaryPrimitives.WriteUInt16LittleEndian(body, memberId);
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(2), skinId);
+        return body;
+    }
+
     public static void WriteUserInfo(BinaryWriter writer, SkinStorageState state, long? now = null)
     {
         // 0267AC80：类别数及每类u8类型/u8数量/u32编号；过期字体回退原生默认1。

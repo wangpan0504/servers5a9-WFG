@@ -111,6 +111,14 @@ internal sealed class OnlineSessionDirectory
         return delivered;
     }
 
+    public int DeliverEmoticon(EmoticonNotice notice)
+    {
+        int delivered = 0;
+        foreach (var session in sessions.SnapshotValues())
+            if (session.TryDeliverEmoticon(notice)) delivered++;
+        return delivered;
+    }
+
     // GM 强制小退：账号在线且有角色在游戏中时让其回到选角；没有在线会话或角色不匹配返回 false。
     public Task<bool> ForceReturnToSelectionAsync(string account, string? characterName = null) =>
         Find(account) is { } session ? session.ForceReturnToSelectionAsync(characterName) : Task.FromResult(false);

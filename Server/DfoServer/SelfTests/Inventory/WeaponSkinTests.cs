@@ -21,6 +21,12 @@ internal static class WeaponSkinTests
 {
     public static void RunCore()
     {
+        That(SkinStorageRequests.Emoticon([46, 27, 112, 24]) == 410000174,
+            "1559发送的是完整小端i32皮肤编号，不是方向或预设槽位");
+        foreach (int length in new[] { 0, 1, 3, 5, 8 })
+            Reject<InvalidDataException>(() => SkinStorageRequests.Emoticon(new byte[length]), "表情发送拒绝非4字节正文");
+        Bytes(SkinStoragePackets.Emoticon(0x1234, 410000174), [0x34, 0x12, 46, 27, 112, 24],
+            "1535播放正文只有成员u16与皮肤i32，不带ACK、数量或方向");
         int checks = Count;
         That(SkinStorageRequests.Make([4, 2, 0, 0, 0, 0, 35, 0]) ==
             new MakeWeaponSkinRequest(4, 2, new(InventoryListType.Main, 35)), "1599使用原生8B类别、配方、容器和槽位");
