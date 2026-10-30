@@ -12,11 +12,12 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer;
 
-internal static class MarriagePersistenceTests
+internal static partial class MarriagePersistenceTests
 {
     public static void RunCore()
     {
         int checks = Count;
+        InventoryDeadlines();
         HomeTravelAfterDivorce();
         using (var f = new Fixture())
         {

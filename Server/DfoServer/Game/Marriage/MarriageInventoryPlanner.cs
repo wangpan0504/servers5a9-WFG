@@ -7,13 +7,15 @@ using DfoServer.GameWorld.Items;
 namespace DfoServer.Game.Marriage;
 
 // 同一计划包含全部成本与产物，由关系仓储在同一个写事务中提交。
-internal sealed class MarriageInventoryPlanner(ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces)
+internal sealed class MarriageInventoryPlanner(ItemCatalog items, GoldLimitCatalog goldLimits, EpicPieceCatalog pieces,
+    TimeProvider? clock = null)
 {
     public InventoryPlan? Plan(Character character, IReadOnlyList<MarriageItemDelta> changes,
         DateTimeOffset now, uint gold = 0)
     {
         if (gold > int.MaxValue || character.Inventory.Gold < gold) return null;
         var after = character.Inventory with { Gold = character.Inventory.Gold - gold };
+        long? deadline = null;
         foreach (var change in changes.Where(row => row.MemberId == character.Id && row.Count < 0))
         {
             if (change.Count == int.MinValue || change.ItemId <= 0) return null;
@@ -28,7 +30,11 @@ internal sealed class MarriageInventoryPlanner(ItemCatalog items, GoldLimitCatal
             else consumed = InventoryMaterialConsumptionService.Plan(after,
                 [new ItemMaterialCost(change.ItemId, -change.Count)], pieces, now);
             if (!consumed.Accepted) return null;
-            after = consumed.Plan!.After;
+            var consumedPlan = consumed.Plan!;
+            KeepDeadline(consumedPlan.CharacterPrecondition?.QualificationExpiresAt ?? 0);
+            foreach (var position in consumedPlan.ChangedSlots)
+                KeepDeadline(consumedPlan.BeforeIndex.Find(position)?.ExpireTime ?? 0);
+            after = consumedPlan.After;
         }
         var rewards = changes.Where(row => row.MemberId == character.Id && row.Count > 0)
             .Select(row => new InventoryReward(row.ItemId, row.Count)).ToArray();
@@ -37,8 +43,17 @@ internal sealed class MarriageInventoryPlanner(ItemCatalog items, GoldLimitCatal
             var granted = InventoryRewardGrantService.TryGrantBatch(character with { Inventory = after },
                 rewards, items, goldLimits, pieces, now);
             if (!granted.Accepted) return null;
-            after = granted.Plan!.After;
+            var grantedPlan = granted.Plan!;
+            KeepDeadline(grantedPlan.CharacterPrecondition?.QualificationExpiresAt ?? 0);
+            foreach (var position in grantedPlan.ChangedSlots)
+                KeepDeadline(grantedPlan.AfterIndex.Find(position)?.ExpireTime ?? 0);
+            after = grantedPlan.After;
         }
-        return new(character.Inventory, after, "marriage", new(character));
+        return new(character.Inventory, after, "marriage", new(character, deadline, clock));
+
+        void KeepDeadline(long expiresAt)
+        {
+            if (expiresAt > 0 && (deadline is null || expiresAt < deadline)) deadline = expiresAt;
+        }
     }
 }
