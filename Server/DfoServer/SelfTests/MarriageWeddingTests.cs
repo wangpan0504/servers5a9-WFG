@@ -13,15 +13,16 @@ internal static class MarriageWeddingTests
     public static void RunCore()
     {
         int checks = Count;
-        int[] maleJobs = [0, 2, 4, 7, 8, 9, 13, 15];
-        That(Enumerable.Range(0, 16).Where(job => MarriageWeddingRules.SexGroup(job) == 1).SequenceEqual(maleJobs),
-            "结婚性别采用本版原生职业映射，7/8/9不按奇偶错分");
         That(MarriageWeddingRules.EligibleProposal(1, 30, 7, true, 2, 30, 3, true, 30) &&
-            !MarriageWeddingRules.EligibleProposal(1, 30, 7, true, 2, 30, 8, true, 30) &&
-            !MarriageWeddingRules.EligibleProposal(1, 29, 7, true, 2, 30, 3, true, 30) &&
+            MarriageWeddingRules.EligibleProposal(1, 30, 7, true, 2, 30, 8, true, 30) &&
+            MarriageWeddingRules.EligibleProposal(1, 30, 3, true, 2, 30, 1, true, 30) &&
+            MarriageWeddingRules.EligibleProposal(1, 30, 7, true, 2, 30, 7, true, 30),
+            "求婚允许异性、同性及同职业角色，不再以性别限制配对");
+        That(!MarriageWeddingRules.EligibleProposal(1, 29, 7, true, 2, 30, 3, true, 30) &&
             !MarriageWeddingRules.EligibleProposal(1, 30, 7, true, 1, 30, 3, true, 30) &&
-            !MarriageWeddingRules.EligibleProposal(1, 30, 7, false, 2, 30, 3, true, 30),
-            "求婚检查双方等级、不同角色、性别与已有关系资格");
+            !MarriageWeddingRules.EligibleProposal(1, 30, 7, false, 2, 30, 3, true, 30) &&
+            !MarriageWeddingRules.EligibleProposal(1, 30, -1, true, 2, 30, 3, true, 30),
+            "求婚保留等级、不同角色、有效职业与已有关系资格检查");
 
         var record = MarriageWeddingRules.CreateEngagement(Guid.NewGuid(), 123, 1, 2, 1000);
         That(record is { State: 1, Revision: 1, FirstId: 1, SecondId: 2, CreatedAt: 1000 } &&

@@ -68,6 +68,16 @@ internal static partial class PartyDungeonTcpTests
             // 只准备普通路线的前置资格；战斗、奖励和清图均经过真实生产协议。
             fixture.Sql("INSERT INTO character_completed_quests(character_id,quest_id) VALUES($p0,3145)", peer.Id);
             fixture.Sql("UPDATE characters SET revive_coins=1 WHERE id=$p0", peer.Id);
+            if (checkFrames)
+            {
+                int member = Array.IndexOf(participants, peer);
+                string account = member == 0 ? "partyalpha" : "partybeta";
+                That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort,
+                    $"account {account} black-diamond PartyMember{member} 30", out var reply) && reply.StartsWith("OK ", StringComparison.Ordinal),
+                    "两名成员沿实际契约入口准备独立黑钻附加牌");
+                fixture.Sql("UPDATE characters SET gold=1000 WHERE id=$p0", peer.Id);
+            }
+            if (count == 4) fixture.Sql("UPDATE characters SET gold=1000 WHERE id=$p0", peer.Id);
             if (checkFatigue && ReferenceEquals(peer, rejectRetry ? alpha : beta))
                 fixture.Sql("UPDATE character_fatigue SET used=maximum,remaining=0 WHERE character_id=$p0", peer.Id);
             if (count == 4 && ReferenceEquals(peer, participants[^1]))
@@ -126,21 +136,14 @@ internal static partial class PartyDungeonTcpTests
             WeaponSkinTcpTests.AssertFrameActor(rejoined.Single(p => p is { Kind: 0, Opcode: 2 } && p.Body[0] == 0 &&
                 U16(p.Body, 121) == alpha.Id), 420000001, alpha.Id);
         }
-        alpha.Send(15, new byte[4]);
-        foreach (var peer in participants)
+        OpenSelection();
+        if (checkFrames)
         {
-            var opened = Drain(peer);
-            That(opened.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }) &&
-                opened.Any(p => p is { Kind: 0, Opcode: 27, Body.Length: 42 }), "队长选图同时打开全员客户端");
-            var players = opened.Where(p => p is { Kind: 0, Opcode: 2 } && p.Body[0] == 1).ToArray();
-            That(players.Length == count && players.Select(p => U16(p.Body, 22)).ToHashSet().SetEquals(participants.Select(p => p.Id)),
-                "选图完整安装双方战斗属性与技能，角色ID未套用其他客户端偏移");
-            That(opened.Any(p => p is { Kind: 0, Opcode: 6 } && U16(p.Body) != peer.Id),
-                "选图实际经过远端角色清场，覆盖客户端队伍槽被移除的现场");
-            CheckRoster(opened, 27);
-            int host = Array.FindIndex(opened, p => p is { Kind: 0, Opcode: 26, Body: [0] });
-            That(host >= 0 && host < Array.FindIndex(opened, p => p is { Kind: 0, Opcode: 27 }),
-                "所有客户端必须先安装真实UDP主机槽位再切入选图，队员不能沿用未初始化主机");
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                ReturnSelection();
+                OpenSelection();
+            }
         }
         byte[] selection = Convert.FromHexString("030000000000000000FFFF0000000000000000000000000000");
         alpha.Send(15, BitConverter.GetBytes(3u));
@@ -366,9 +369,10 @@ internal static partial class PartyDungeonTcpTests
                     {
                         peer.Send(69); Drain(peer);
                         peer.Send(70); Drain(peer);
-                        peer.Send(71, [0, 0]);
-                        That(Drain(peer).Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[1] == 0),
-                            "首名成员可在其他成员结算前翻牌");
+                        peer.Send(71, [0, 3]);
+                        That(Drain(peer).Any(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] } &&
+                            DungeonSettlementProtocolTests.CardMembers(p.Body)[0].Free == 0),
+                            "一号成员可在其他成员结算前选择第四列免费牌");
                     }
                 }
                 That(fixture.Query("SELECT count(*),count(DISTINCT instance_id) FROM character_dungeon_settlement_receipts") is [[long settled, 1L]] && settled == count,
@@ -383,28 +387,31 @@ internal static partial class PartyDungeonTcpTests
                     var rights = cardStart.Single(p => p is { Kind: 1, Opcode: 70 }).Body;
                     That(Enumerable.Range(0, 8).All(i => (U16(rights, 1 + i * 2) != ushort.MaxValue) == (i == slot)),
                         "翻牌资格只开放本人的原始队伍席位");
-                    That(cardStart.Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[1] == 0),
+                    That(cardStart.Any(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] } &&
+                        DungeonSettlementProtocolTests.CardMembers(p.Body)[0].Free == 0),
                         "迟到进入翻牌页收到已揭示席位");
-                    string beforeCard = fixture.Snapshot();
-                    peer.Send(71, [0, (byte)((slot + 1) % count)]);
-                    That(!Drain(peer).Any(p => p is { Kind: 1, Opcode: 71 }) && fixture.Snapshot() == beforeCard,
-                        "不能领取其他成员位置的免费牌");
-                    peer.Send(71, [0, slot]);
-                    var revealed = Drain(peer).Single(p => p is { Kind: 1, Opcode: 71, Body.Length: 33 }).Body;
-                    That(revealed[1 + slot * 4] == slot,
-                        "每名队员在真实队伍席位领取并揭示自己的免费牌");
+                    peer.Send(71, [0, 3]);
+                    var revealed = Drain(peer).Single(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] }).Body;
+                    That(DungeonSettlementProtocolTests.CardMembers(revealed)[slot].Free == slot,
+                        "每人可选择同一位置的免费牌，各自领取且按真实成员投影结果");
                     foreach (var other in participants.Where(member => !ReferenceEquals(member, peer)))
                     {
                         var updates = Drain(other);
                         That(updates.Any(p => p is { Kind: 0, Opcode: 35 } && HasCardSeat(p.Body, slot)) &&
-                            updates.Any(p => p is { Kind: 1, Opcode: 71 } && p.Body[1 + slot * 4] == slot),
+                            updates.Any(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] } &&
+                                DungeonSettlementProtocolTests.CardMembers(p.Body)[slot].Free == slot),
                             "队友收到翻牌者的牌面和所属席位揭示");
+                        if (checkFrames)
+                            That(updates.Any(p => p is { Kind: 0, Opcode: 35 } &&
+                                DungeonSettlementProtocolTests.CardRewards(p.Body)[2][slot].Length != 0),
+                                "队友同时收到黑钻附加奖励，不再只保留自己的附加行");
                     }
                     string claimed = fixture.Snapshot();
-                    peer.Send(71, [0, slot]);
+                    peer.Send(71, [0, 3]);
                     That(Drain(peer).Any(p => p is { Kind: 1, Opcode: 71 }) && fixture.Snapshot() == claimed,
                         "重复领取本人牌不再次增加金币或物品");
                 }
+                if (checkFrames || count == 4) VerifyIndependentPaidCards();
                 if (rejectRetry)
                 {
                     That(DfoServer.Network.Management.DevelopmentGmClient.TryExecute(fixture.Options.GmPort, "infinite-fatigue off", out _),
@@ -420,6 +427,8 @@ internal static partial class PartyDungeonTcpTests
                         fixture.Snapshot("SELECT * FROM character_fatigue ORDER BY character_id") == fatigue &&
                         fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") == assets,
                         "成员疲劳不足时整队提交回城并确认选项2，不重复扣费、预留或发奖");
+                    OpenSelection();
+                    ReturnSelection();
                     alpha.Send(72, [1, 0]);
                     That(All(alpha).Values.All(rows => rows.All(p => p.Opcode is not (28 or 29))),
                         "退场后的旧再挑战不会安装新副本");
@@ -449,8 +458,9 @@ internal static partial class PartyDungeonTcpTests
                 {
                     foreach (var rows in result.Values) CheckRoster(rows, 27);
                     That(result.Values.All(rows => rows.Any(p => p is { Kind: 0, Opcode: 27 })), "结算返回选图使四人保持同一阶段");
-                    alpha.Send(132);
-                    That(All(alpha).Values.All(rows => rows.Any(p => p is { Kind: 0, Opcode: 24 })), "队长取消选图，全员返回城镇");
+                    ReturnSelection();
+                    OpenSelection();
+                    ReturnSelection();
                 }
                 Console.WriteLine($"INFO 组队{count}人真实消耗品拾取槽断言命中 {consumablePickups} 次（随机掉落；0次不代表覆盖）");
                 return;
@@ -464,6 +474,54 @@ internal static partial class PartyDungeonTcpTests
             map = moved[alpha].Single(p => p is { Kind: 0, Opcode: 29 }).Body;
             foreach (var rows in moved.Values)
                 Bytes(map, rows.Single(p => p is { Kind: 0, Opcode: 29 }).Body, "队员触门使全员进入同一下一房间");
+        }
+
+        void VerifyIndependentPaidCards()
+        {
+            foreach (var peer in participants) Drain(peer);
+            var goldBefore = participants.ToDictionary(peer => peer.Id,
+                peer => (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id)[0][0]!);
+            foreach (var peer in participants) peer.Send(71, [1, 1]);
+            var published = All(alpha);
+            foreach (var peer in participants) published[peer] = [.. published[peer], .. Drain(peer)];
+            var claims = fixture.Query("SELECT character_id FROM character_dungeon_card_options WHERE paid_reward_json IS NOT NULL");
+            That(claims.Length == count && published.Values.All(packets => packets.All(p =>
+                p is not { Kind: 1, Opcode: 71, Body: [0, ..] })),
+                "同时选择同一位置的付费牌全部成功，各人都有独立领取回执");
+            var rows = new List<(byte Free, byte Paid, (uint Item, uint Count)[] Items)[]>();
+            foreach (var peer in participants)
+            {
+                var events = published[peer].Where(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] })
+                    .Select(p => DungeonSettlementProtocolTests.CardMembers(p.Body)).ToArray();
+                That(events.Length == count && events.Select(members => members.Count(member => member.Paid != byte.MaxValue))
+                    .SequenceEqual(Enumerable.Range(1, count)),
+                    "连续快速翻牌时每次提交均向每位成员排队通知，不只收到最后一份汇总快照");
+                rows.Add(events[^1]);
+                var amounts = fixture.Query("SELECT paid_cost,json_extract(paid_reward_json,'$.Gold') FROM character_dungeon_card_options WHERE character_id=$p0", peer.Id);
+                That(amounts is [[long cost, long gain]] && fixture.Query("SELECT gold FROM characters WHERE id=$p0", peer.Id) is [[long after]] &&
+                    after == goldBefore[peer.Id] - cost + gain,
+                    "每人只扣自己的费用、增加自己的奖励金币，不影响其他成员");
+            }
+            That(rows.All(members => Enumerable.Range(0, count).All(slot => members[slot].Free == slot && members[slot].Paid == slot &&
+                    members[slot].Items.Length > 0)) && rows.All(members => Enumerable.Range(0, 8).All(slot =>
+                    members[slot].Free == rows[0][slot].Free && members[slot].Paid == rows[0][slot].Paid &&
+                    members[slot].Items.SequenceEqual(rows[0][slot].Items))),
+                "各客户端完整成员归属和付费奖励一致，不因选择相同位置而覆盖结果");
+            foreach (var group in new[] { 0, 2 })
+            {
+                var first = DungeonSettlementProtocolTests.CardRewards(published[alpha].Last(p => p is { Kind: 0, Opcode: 35 }).Body)[group];
+                var second = DungeonSettlementProtocolTests.CardRewards(published[beta].Last(p => p is { Kind: 0, Opcode: 35 }).Body)[group];
+                That((group != 0 && !checkFrames || Enumerable.Range(0, count).All(slot => first[slot].Length > 0)) &&
+                    Enumerable.Range(0, 8).All(slot => first[slot].SequenceEqual(second[slot])),
+                    "两侧普通免费及黑钻奖励逐成员一致，不互相覆盖或漏行");
+            }
+            string claimed = fixture.Snapshot();
+            beta.Send(71, [2, 1]);
+            That(Drain(beta).Any(p => p is { Kind: 1, Opcode: 71, Body: [1, ..] }) && fixture.Snapshot() == claimed,
+                "已领取付费列重复请求只回放，不再扣费或发奖");
+            beta.Send(71, [1, 0]);
+            That(Drain(beta).Any(p => p is { Kind: 1, Opcode: 71, Body: [0, 0, 0] }) && fixture.Snapshot() == claimed,
+                "已取得一张付费牌不能改选第二张，拒绝后资产保持不变");
         }
         throw new InvalidOperationException("FAIL 共享普通副本未在有界路线内完成");
 
@@ -495,6 +553,35 @@ internal static partial class PartyDungeonTcpTests
             }
         }
 
+        void OpenSelection()
+        {
+            alpha.Send(15, new byte[4]);
+            foreach (var peer in participants)
+            {
+                var opened = Drain(peer);
+                That(opened.Any(p => p is { Kind: 1, Opcode: 15, Body: [1] }) &&
+                    opened.Any(p => p is { Kind: 0, Opcode: 27, Body.Length: 42 }), "队长选图同时打开全员客户端");
+                var players = opened.Where(p => p is { Kind: 0, Opcode: 2 } && p.Body[0] == 1).ToArray();
+                That(players.Length == count && players.Select(p => U16(p.Body, 22)).ToHashSet().SetEquals(participants.Select(p => p.Id)),
+                    "选图完整安装所有成员战斗属性与技能，角色ID未套用其他客户端偏移");
+                That(opened.All(p => p is not { Kind: 0, Opcode: 6 }) && opened.Any(p =>
+                    p is { Kind: 0, Opcode: 3, Body.Length: 7 } && p.Body[0] == 2 && U16(p.Body, 1) != peer.Id &&
+                    p.Body[3] == 1 && U16(p.Body, 1) == U16(p.Body, 4) && p.Body[6] == 0),
+                    "普通组队选图双向隐藏城镇实体，不发送销毁Actor及队伍引用的通知");
+                CheckRoster(opened, 27);
+                int host = Array.FindIndex(opened, p => p is { Kind: 0, Opcode: 26, Body: [0] });
+                That(host >= 0 && host < Array.FindIndex(opened, p => p is { Kind: 0, Opcode: 27 }),
+                    "重复选图及通关回城后无需交换队长，仍先同步真实主机再打开全员选图");
+            }
+        }
+
+        void ReturnSelection()
+        {
+            alpha.Send(132);
+            That(All(alpha).Values.All(rows => rows.Any(p => p is { Kind: 1, Opcode: 132, Body: [1] }) &&
+                rows.Any(p => p is { Kind: 0, Opcode: 24 })), "队长取消选图，全员确认返回原城镇");
+        }
+
         void CheckRoster(WirePacket[] rows, ushort transition)
         {
             int roster = Array.FindIndex(rows, p => p is { Kind: 0, Opcode: 9 });
@@ -506,7 +593,7 @@ internal static partial class PartyDungeonTcpTests
             int scene = Array.FindIndex(rows, p => p.Kind == 0 && p.Opcode == transition);
             That(lastPlayer >= 0 && endpointBefore > lastPlayer && roster > endpointBefore && endpointAfter > roster &&
                 realtime > endpointAfter && host > realtime && scene > host,
-                "角色重建后先恢复端点供名册立即创建peer，再补发端点、实时信息和主机，最后切换场景");
+                "角色更新后先恢复端点，再同步名册、端点、实时信息和主机，最后切换场景");
             var endpoints = rows[endpointBefore].Body;
             Bytes(endpoints, rows[endpointAfter].Body, "名册前后恢复同一批真实端点");
             That(endpoints.Length == 1 + count * 22 && endpoints[0] == count, "端点覆盖所有组队成员");
@@ -523,7 +610,7 @@ internal static partial class PartyDungeonTcpTests
             // 独立按S5A9读宽消费完整名册，不能仅验证存在opcode9或复用生产Builder自证。
             That(U16(body) == 1 && U16(body, 2) == 9999 && body[9] == 0, "重绑使用完整有效队伍名册");
             int at = checked(17 + (int)U32(body, 13) + 24);
-            That(body[at++] == count, "清场后恢复全部成员而非只有本人");
+            That(body[at++] == count, "名册覆盖全部成员而非只有本人");
             for (byte slot = 0; slot < count; slot++, at += 8)
                 That(body[at] == slot && U16(body, at + 1) == participants[slot].Id,
                     "每个队伍槽重新绑定原角色ID，包含队长及接收者");

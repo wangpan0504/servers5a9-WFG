@@ -22,6 +22,19 @@ internal sealed class PartySettlementCards
     readonly DungeonCardView?[] cards = new DungeonCardView?[8];
     public void Record(DungeonCardView view) => cards[view.Slot] = view;
     public DungeonCardView?[] Snapshot() => (DungeonCardView?[])cards.Clone();
+    public bool CanPublish(IReadOnlyList<DungeonCardView?> snapshot)
+    {
+        if (snapshot.Count != cards.Length) return false;
+        for (int slot = 0; slot < cards.Length; slot++)
+        {
+            if (snapshot[slot] is not { } previous) continue;
+            if (previous.Slot != slot || cards[slot] is not { } current) return false;
+            if (previous.FreeSelected && (!current.FreeSelected || previous.FreeChoice != current.FreeChoice ||
+                previous.Free != current.Free || previous.BlackDiamond != current.BlackDiamond)) return false;
+            if (previous.Paid is not null && (previous.PaidChoice != current.PaidChoice || previous.Paid != current.Paid)) return false;
+        }
+        return true;
+    }
     public void Clear() => Array.Clear(cards);
 }
 
@@ -43,9 +56,13 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     {
         lock (cardGate) return settlementCards?.Snapshot() ?? new DungeonCardView?[8];
     }
-    public bool IsCardSnapshotCurrent(DungeonCardView?[] snapshot)
+    public bool IsCardSnapshotCurrent(IReadOnlyList<DungeonCardView?> snapshot)
     {
         lock (cardGate) return settlementCards is not null && settlementCards.Snapshot().SequenceEqual(snapshot);
+    }
+    public bool CanPublishCardSnapshot(IReadOnlyList<DungeonCardView?> snapshot)
+    {
+        lock (cardGate) return settlementCards?.CanPublish(snapshot) == true;
     }
     public DungeonCardView?[] RecordCard(GameSession session, DungeonCardView view)
     {

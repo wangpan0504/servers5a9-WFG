@@ -434,14 +434,16 @@ internal sealed class TownProjection(TownCatalog towns, CharacterStatComputer st
         context.Session.MarkRosterPublished(roster);
     }
 
-    public async Task<bool> DetachForDungeonSelectionAsync(GameConnectionContext context, DungeonSelectionReceipt receipt)
+    public async Task<bool> DetachForDungeonSelectionAsync(GameConnectionContext context, DungeonSelectionReceipt receipt,
+        IReadOnlySet<ushort>? preservePartyActors = null)
     {
         Task? detached = context.Owner.Execute(() =>
         {
             if (!context.Session.CanPublishDungeonSelection(receipt))
                 return null;
-            Remove(context);
-            return context.Sender.ClearScene();
+            // 普通组队选图只退城镇实体；删除Actor会清掉队伍槽并使客户端重新创建P2P peer。
+            presence?.Remove(context.Sender, preserveActors: preservePartyActors);
+            return context.Sender.ClearScene(preservePartyActors is not null ? SceneActorClear.Hide : SceneActorClear.Delete);
         });
         if (detached is null)
             return false;
