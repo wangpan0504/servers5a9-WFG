@@ -19,16 +19,17 @@ internal static class MonsterCardBindTests
         var parsed = MonsterCardBindRequests.Read(Body(65, 233, 234));
         That(parsed.SynthesizerSlot == 65 && parsed.CardSlots.SequenceEqual([(short)233, (short)234]),
             "CMD414按合成器槽、张数和卡片Main槽解析");
+        That(MonsterCardBindRequests.Read(Body(65, 233, 233)).CardSlots.SequenceEqual([(short)233, (short)233]),
+            "CMD414保留同一源堆选入的两张卡片，不去重源槽");
         foreach (byte[] malformed in new byte[][]
         {
             [], [1], [65, 0], [65, 0, 1], [65, 0, 2, 1],
             [65, 0, 0], [65, 0, 6, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0],
             [0x60, 1, 2, 1, 0, 2, 0],
-            [65, 0, 2, 65, 0, 233, 0],
-            [65, 0, 2, 233, 0, 233, 0]
+            [65, 0, 2, 65, 0, 233, 0]
         })
             Reject<InvalidDataException>(() => MonsterCardBindRequests.Read(malformed),
-                "CMD414拒绝长度、槽位、合成器占用和重复卡片槽");
+                "CMD414拒绝长度、槽位和合成器占用卡片槽");
 
         var contents = MonsterCardBindCatalog.ParsePools("""
             [bind result info]
@@ -77,6 +78,17 @@ internal static class MonsterCardBindTests
             same.Plan.After.Find(new(InventoryListType.Main, 233))?.Core.ItemId == 2001,
             "先扣合成器与卡片，奖励可复用刚腾出的卡片槽");
 
+        var repeated = fixture.Service(Rolls(100, 0)).Apply(fixture.Character((65, 9000, 1), (233, 1001, 3)),
+            new(65, [233, 233]), out var repeatedReceipt, out _);
+        That(repeated.Accepted && repeatedReceipt!.DeletedSlots.SequenceEqual([(short)233, (short)233]) &&
+            repeated.Plan!.After.Find(new(InventoryListType.Main, 233))?.Core.Count == 1 &&
+            repeated.Plan.After.Items.Single(row => row.Core.ItemId == 2001).Core.Count == 1,
+            "同源堆两张合成保留两个删除项，实际扣两张并只发一张奖励");
+        var insufficient = fixture.Service(_ => throw new InvalidOperationException("unexpected draw")).Apply(
+            fixture.Character((65, 9000, 1), (233, 1001, 1)), new(65, [233, 233]), out _, out var insufficientReason);
+        That(!insufficient.Accepted && insufficient.Plan is null && insufficientReason == "material-count",
+            "重复源槽总张数不足时在抽奖前拒绝，不生成扣除计划");
+
         var upgraded = fixture.Service(Rolls(0, 0)).Apply(fixture.Character((65, 9000, 1), (233, 1001, 1), (234, 1002, 1)),
             request, out var upgradedReceipt, out var upgradedRejection);
         That(upgraded.Accepted && upgradedRejection is null && upgradedReceipt is
@@ -114,10 +126,12 @@ internal static class MonsterCardBindTests
             "卡片页满且输入堆仍有剩余时回23，原快照不扣材料");
 
         That(Convert.ToHexString(MonsterCardBindPackets.Success(new(65, 0, 0, 0, false, [233, 234],
-                [new(233, 3619, 1, 0)]))) == "01410002E900EA0001E900230E00000100000000" &&
+                [new(233, 3619, 1, 0)]))) == "01410002E900EA0001E900230E0000010000000000" &&
             Convert.ToHexString(MonsterCardBindPackets.Failure()) == "001600" &&
             Convert.ToHexString(MonsterCardBindPackets.Failure(23)) == "001700",
-            "成功ACK含合成器槽、删除槽和奖励slot/itemId/value/extra，失败写u16错误码");
+            "成功ACK含完整奖励表及原生消费者必读的尾标志，失败写u16错误码");
+        That(MonsterCardBindPackets.Success(upgradedReceipt!)[^1] == 0,
+            "尾标志语义未闭合，不能用稀有度升档结果冒充该字段");
         Console.WriteLine($"PASS {Count - checks} 怪物卡片合成协议、奖池、升档及领域事务断言");
     }
 

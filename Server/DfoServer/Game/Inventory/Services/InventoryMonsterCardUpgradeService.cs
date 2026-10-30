@@ -15,8 +15,7 @@ internal sealed class InventoryMonsterCardUpgradeService(ItemCatalog items, Ench
         receipt = null;
         rejection = null;
         if (request.MaterialSlots.IsDefaultOrEmpty || request.MaterialSlots.Length > 4 || request.TargetSlot is < 0 or > 351 ||
-            request.MaterialSlots.Any(slot => slot is < 0 or > 351 || slot == request.TargetSlot) ||
-            request.MaterialSlots.Distinct().Count() != request.MaterialSlots.Length)
+            request.MaterialSlots.Any(slot => slot is < 0 or > 351))
             return Reject("invalid-slots", out rejection);
         var now = utcNow ?? DateTimeOffset.UtcNow;
         var before = character.Inventory;
@@ -35,6 +34,11 @@ internal sealed class InventoryMonsterCardUpgradeService(ItemCatalog items, Ench
             return Reject("upgrade-resource", out rejection);
         }
         var materials = new List<InventoryItem>(request.MaterialSlots.Length);
+        // 原生选择栏每次从源堆移入一张，重复源槽代表多张；目标必须另留一张。
+        foreach (var group in request.MaterialSlots.GroupBy(slot => slot))
+            if (before.Find(new(InventoryListType.Main, group.Key)) is not { } source ||
+                source.Core.Count < group.Count() + (group.Key == request.TargetSlot ? 1 : 0))
+                return Reject("material-count", out rejection);
         foreach (short slot in request.MaterialSlots)
         {
             var source = before.Find(new(InventoryListType.Main, slot));
@@ -55,8 +59,9 @@ internal sealed class InventoryMonsterCardUpgradeService(ItemCatalog items, Ench
         byte nextLevel = checked((byte)(target!.Core.EnchantUpgrade + 1));
         var changed = target with { Core = target.Core with { Value = 1, EnchantUpgrade = nextLevel } };
         var upgradedInventory = after;
-        if (target.Core.Count == 1)
-            upgradedInventory = after with { Items = after.Items.Replace(target, changed) };
+        var remainingTarget = after.Find(target.Position)!;
+        if (remainingTarget.Core.Count == 1)
+            upgradedInventory = after with { Items = after.Items.Replace(remainingTarget, changed) };
         else
         {
             // 一次仅升级一张；其余堆叠仍保留原等级，完整实例属性和期限不重建。

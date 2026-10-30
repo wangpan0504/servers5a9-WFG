@@ -20,10 +20,14 @@ internal static class MonsterCardUpgradeTests
         That(request.TargetSlot == 233 && request.MaterialSlots.SequenceEqual([(short)234, (short)235]),
             "CMD603独立解析Main目标、材料数及每个Main材料槽");
         foreach (string invalid in new[] { "", "00E900", "00E90000", "00E9000500EA00", "01E9000100EA00",
-            "00E9000101EA00", "00E9000100E900", "00E9000200EA0000EA00", "0060010100EA00",
+            "00E9000101EA00", "0060010100EA00",
             "00E90001006001", "00E9000100EA0000", "00E9000100EA" })
             Reject<InvalidDataException>(() => MonsterCardUpgradeRequests.Read(Convert.FromHexString(invalid)),
-                "CMD603拒绝缺项、尾字节、非Main容器、越界及同槽重复");
+                "CMD603拒绝缺项、尾字节、非Main容器及越界");
+        That(MonsterCardUpgradeRequests.Read(Convert.FromHexString("00E9000200EA0000EA00")).MaterialSlots
+                .SequenceEqual([(short)234, (short)234]) &&
+            MonsterCardUpgradeRequests.Read(Convert.FromHexString("00E9000100E900")).MaterialSlots[0] == 233,
+            "CMD603保留重复材料源槽及与目标同源的材料，张数交领域校验");
         That(Convert.ToHexString(MonsterCardUpgradePackets.Success(new(true, 10310789, 1))) == "010185549D0001" &&
             Convert.ToHexString(MonsterCardUpgradePackets.Success(new(false, 10310789, 0))) == "010085549D0000" &&
             Convert.ToHexString(MonsterCardUpgradePackets.Failure()) == "001600",
@@ -47,6 +51,27 @@ internal static class MonsterCardUpgradeTests
             split.Plan.After.Items.Count(row => row.Core is { ItemId: 1001, Value: 1, EnchantUpgrade: 1 }) == 1 &&
             split.Plan.After.Items.Single(row => row.Core.EnchantUpgrade == 1).Uid == 0,
             "堆叠只升级一张，旧等级余量保留原UID，新增实例等待提交分配UID");
+        var repeated = fixture.Service(0).Apply(fixture.Role(materialCount: 3), new(233, [234, 234]), out _, out _);
+        That(repeated.Accepted && repeated.Plan!.After.Find(new(InventoryListType.Main, 234))?.Core.Count == 1 &&
+            repeated.Plan.After.Find(target.Position)?.Core.EnchantUpgrade == 1,
+            "重复材料源槽扣实际两张，目标只升级一张");
+        foreach (int count in new[] { 3, 4 })
+        {
+            var sameSource = fixture.Role(targetCount: count);
+            var sameSuccess = fixture.Service(0).Apply(sameSource, new(233, [233, 233]), out _, out _);
+            That(sameSuccess.Accepted && sameSuccess.Plan!.After.Items.Where(row => row.Core.ItemId == 1001)
+                    .Sum(row => row.Core.Count) == count &&
+                sameSuccess.Plan.After.Items.Count(row => row.Core.EnchantUpgrade == 1 && row.Core.Count == 1) == 1 &&
+                sameSource.Inventory.Find(target.Position)?.Core.Count == count,
+                "目标同源堆扣两张材料后升级一张，覆盖原槽仅余目标及需要分堆，原快照不变");
+            var sameFailed = fixture.Service(80).Apply(sameSource, new(233, [233, 233]), out _, out _);
+            That(sameFailed.Accepted && sameFailed.Plan!.After.Find(target.Position)?.Core is { EnchantUpgrade: 0 } remaining &&
+                remaining.Count == count - 2,
+                "目标同源堆概率失败仅扣两张材料，保留目标及其余未升级卡");
+        }
+        foreach (var invalidRequest in new MonsterCardUpgradeRequest[] { new(233, [234, 234]), new(233, [233]) })
+            That(!fixture.Service(0).Apply(role, invalidRequest, out _, out var countReason).Accepted && countReason == "material-count",
+                "不足重复材料或不能另留目标一张时整笔拒绝");
         var mergeRole = fixture.Role(targetCount: 3, materialCount: 2);
         var existing = new InventoryItem(999, new(InventoryListType.Main, 236), target.Core with { Value = 4, EnchantUpgrade = 1 });
         mergeRole = mergeRole with { Inventory = mergeRole.Inventory with { Items = mergeRole.Inventory.Items.Add(existing) } };

@@ -17,11 +17,10 @@ internal static class MonsterCardBindRequests
         if (synthesizer > 351)
             throw new InvalidDataException("怪物卡片合成器槽位无效");
         var slots = ImmutableArray.CreateBuilder<short>(count);
-        var seen = new HashSet<short>();
         for (int index = 0; index < count; index++)
         {
             ushort slot = BinaryPrimitives.ReadUInt16LittleEndian(body[(3 + index * 2)..]);
-            if (slot > 351 || slot == synthesizer || !seen.Add(checked((short)slot)))
+            if (slot > 351 || slot == synthesizer)
                 throw new InvalidDataException("怪物卡片合成卡片槽位无效");
             slots.Add(checked((short)slot));
         }

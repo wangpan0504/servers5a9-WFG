@@ -25,10 +25,10 @@ internal static class MonsterCardBindTcpTests
         var binder = InventoryRewardGrantService.CreateItem(binderTemplate,
             new(InventoryListType.Main, binderSlot), InventoryRewardGrantService.Create(binderTemplate, 1));
         var first = InventoryRewardGrantService.CreateItem(cardTemplate,
-            new(InventoryListType.Main, card0), InventoryRewardGrantService.Create(cardTemplate, 1));
+            new(InventoryListType.Main, card0), InventoryRewardGrantService.Create(cardTemplate, 2));
         var second = InventoryRewardGrantService.CreateItem(cardTemplate,
             new(InventoryListType.Main, card1), InventoryRewardGrantService.Create(cardTemplate, 1));
-        byte[] request = Request(binderSlot, card0, card1);
+        byte[] request = Request(binderSlot, card0, card0);
 
         await using var fixture = new TcpTestFixture(options, Path.Combine(root, "monster-card-bind"), resources: resources);
         var repository = new CharacterRepository(fixture.Database);
@@ -83,10 +83,11 @@ internal static class MonsterCardBindTcpTests
             byte[] ack = peer.Expect(1, 414).Body;
             That(ack.Length >= 15 && ack[0] == 1 && U16(ack, 1) == (ushort)binderSlot && ack[3] == 2,
                 "CMD414成功先返回带合成器槽和两张删除槽的ACK");
-            That(U16(ack, 4) == (ushort)card0 && U16(ack, 6) == (ushort)card1,
-                "ACK删除槽与请求卡片槽一致，不含合成器槽");
+            That(U16(ack, 4) == (ushort)card0 && U16(ack, 6) == (ushort)card0,
+                "ACK保留重复源槽两次单张删除，不含合成器槽");
             byte rewardCount = ack[8];
-            That(rewardCount >= 1 && ack.Length == 9 + rewardCount * 11, "奖励行按slot/itemId/value/extra展开");
+            That(rewardCount >= 1 && ack.Length == 10 + rewardCount * 11 && ack[^1] == 0,
+                "奖励行按slot/itemId/value/extra展开并带原生必读尾标志0");
             committedRewardItemId = checked((int)U32(ack, 11));
             int rewardValue = checked((int)U32(ack, 15));
             That(committedRewardItemId > 0 && rewardValue > 0 && ack[19] == 0,
