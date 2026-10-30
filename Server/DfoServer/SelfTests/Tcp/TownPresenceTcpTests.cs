@@ -22,7 +22,7 @@ internal static class TownPresenceTcpTests
             beta.Create("PresenceB", job: 1);
             var ratingRules = new DfoServer.GameWorld.Pvp.PvpRatingCatalog(resources.Archive);
             var initialRating = new DfoServer.Game.Pvp.PvpRatingCalculator(ratingRules).Initial();
-            var terraRating = initialRating with { Experience = ratingRules.Experience[20] - 1, HighestGrade = 20, Initialized = true };
+            var terraRating = initialRating with { Experience = ratingRules.Experience[20] - 1, HighestGrade = 20, Initialized = true, PowerTitle = 9 };
             fixture.Sql("INSERT INTO character_pvp_ratings(account,character_id,revision,state_json) VALUES($p0,$p1,1,$p2)",
                 "alpha", alpha.Id, System.Text.Json.JsonSerializer.Serialize(terraRating));
             using (var seedOwner = new AccountOwners().Acquire("alpha", () => { }))
@@ -30,11 +30,11 @@ internal static class TownPresenceTcpTests
                     new(Guid.NewGuid(), Guid.NewGuid(), 296, DfoServer.Game.Pvp.PvpArenaMode.Individual,
                         [new("alpha", alpha.Id, 0, 0, DfoServer.Game.Pvp.PvpArenaOutcome.Win),
                          new("beta", beta.Id, 1, 1, DfoServer.Game.Pvp.PvpArenaOutcome.Lose)], false, 0));
-            var alphaActor = alpha.Select(premiumPcRoom: true, recoveredPvpGrade: 20)[2].Body;
+            var alphaActor = alpha.Select(premiumPcRoom: true, recoveredPvpGrade: 20, recoveredPowerTitle: 9)[2].Body;
             var betaActor = beta.Select(premiumPcRoom: true)[2].Body;
             AssertBlackDiamondActor(alphaActor, active: false, pcRoom: true);
             AssertBlackDiamondActor(betaActor, active: false, pcRoom: true);
-            PvpGrade(alphaActor, 19);
+            PvpGrade(alphaActor, 19, 9);
             PvpGrade(betaActor, 0);
             That(fixture.Query("SELECT count(*) FROM character_pvp_rating_claims WHERE receipt_json IS NOT NULL") is [[2L]],
                 "登录恢复双方真实来源，19升20补发，0不变不额外发Actor");
@@ -57,7 +57,7 @@ internal static class TownPresenceTcpTests
             var aEntry = alpha.Batch((0, 2), (0, 3), (0, 23), (0, 22), (1, 1347));
             That(aEntry[0].Body[0] == 0 && U16(aEntry[0].Body, 121) == beta.Id && bEntry[2].Body[0] == 0 && U16(bEntry[2].Body, 121) == alpha.Id, "mutual public actor snapshots");
             PvpGrade(aEntry[0].Body, 0);
-            PvpGrade(bEntry[2].Body, 20);
+            PvpGrade(bEntry[2].Body, 20, 9);
             Bytes(aEntry[2].Body, Build(w => { w.Write(beta.Id); w.Write((byte)38); w.Write((byte)0);
                 w.Write((ushort)622); w.Write((ushort)196); w.Write((byte)0); w.Write((byte)3); }),
                 "远端23携带同一地图与显示位，创建实体而不切换接收者地图");
@@ -95,7 +95,7 @@ internal static class TownPresenceTcpTests
             alpha.Expect(0, 9);
             alpha.Send(12, Convert.FromHexString("000304000000000500000000000007"));
             var alphaParty = alpha.Batch((0, 2), (0, 153), (0, 11), (0, 9), (0, 11), (0, 153), (0, 26));
-            PvpGrade(alphaParty[0].Body, 20);
+            PvpGrade(alphaParty[0].Body, 20, 9);
             alpha.Barrier(); beta.Expect(0, 9); beta.Barrier();
             alpha.Send(13); alpha.Expect(1, 13, [1]); alpha.Expect(0, 9); alpha.Barrier();
             beta.Expect(0, 9); beta.Barrier();
@@ -113,7 +113,7 @@ internal static class TownPresenceTcpTests
                 var refreshed = beta.Expect(0, 2).Body;
                 That(U16(refreshed, 121) == alpha.Id, "黑钻刷新只替换原同屏成员，不更换成员身份或场景");
                 AssertBlackDiamondActor(refreshed, active);
-                PvpGrade(refreshed, 20);
+                PvpGrade(refreshed, 20, 9);
                 beta.Expect(1, 1347, [1]);
                 beta.Barrier();
                 That(fixture.Snapshot("SELECT * FROM account_wallets WHERE account='beta'") +
@@ -198,7 +198,7 @@ internal static class TownPresenceTcpTests
                 beta.SendBarrier();
                 beta.Expect(0, 6, Build(w => w.Write(alpha.Id)));
                 beta.Expect(1, 1347, [1]);
-                PvpGrade(replacement.Select()[2].Body, 20);
+                PvpGrade(replacement.Select()[2].Body, 20, 9);
                 // 旧连接 finally 已结束后，GM 必须仍找到新会话并原地更新其 Selected。
                 string gm = await fixture.CliAsync(null, "--gm", "account", "alpha", "level", "PresenceA", "40");
                 That(gm.StartsWith("OK ", StringComparison.Ordinal), "GM uses online replacement session");
@@ -239,11 +239,11 @@ internal static class TownPresenceTcpTests
         Console.WriteLine("PASS C# TCP presence: private/public scenes, snapshots, movement, scene clear, takeover, online GM and return selection");
     }
 
-    internal static void PvpGrade(byte[] body, byte expected)
+    internal static void PvpGrade(byte[] body, byte expected, byte powerTitle = 0)
     {
         int offset = checked(130 + (int)U32(body, 123));
-        That(body[0] == 0 && body[offset] == expected && body[offset + 1] == 0,
-            "Actor当前决斗等级与原评分一致，未知第二字节保持0: " + expected);
+        That(body[0] == 0 && body[offset] == expected && body[offset + 1] == powerTitle,
+            "Actor分别保留决斗等级与战斗力称谓: " + expected + "/" + powerTitle);
     }
 
     static byte[] Position(ushort id, ushort x, ushort y, byte direction = 0, ushort speed = 100) => Build(w =>

@@ -8,7 +8,7 @@ namespace DfoServer.Game.Session;
 internal sealed record PublicCharacterSnapshot(Character Character, ChannelIdentity Channel, SessionPhase Phase,
     int AdventureLevel, string AdventureName, bool PremiumPcRoom, Func<bool> IsCurrent, Func<bool> IsUnchanged)
 {
-    public byte PvpGrade { get; init; }
+    public DfoServer.Game.Pvp.PvpDisplayGrade PvpGrade { get; init; }
     public bool ArenaSkills { get; init; }
     public CharacterLearningState? ArenaLearning { get; init; }
     public Character SkillCharacter => ArenaSkills ? Character with {Learning=ArenaLearning ?? DfoServer.Game.Pvp.PvpTrainingSkills.ArenaSource(Character)} : Character;

@@ -73,11 +73,12 @@ internal static partial class TownPackets
     static (uint Level, ulong Experience) Proficiency(Character character) =>
         (character.DungeonState?.ProficiencyLevel ?? 0u, character.DungeonState?.ProficiencyExperience ?? 0UL);
 
-    public static byte[] Actor(Character character, byte pvpGrade, ChannelIdentity channel = default, long? utcSeconds = null,
+    public static byte[] Actor(Character character, DfoServer.Game.Pvp.PvpDisplayGrade pvpGrade, ChannelIdentity channel = default, long? utcSeconds = null,
         string adventureName = "", ActorSceneState sceneState = ActorSceneState.Town, bool premiumPcRoom = false)
     {
         if (character.BlacklistCount < 0)
             throw new InvalidDataException("角色被拉黑计分不能为负数");
+        if (pvpGrade.PowerTitle > 9) throw new InvalidDataException("战斗力称谓超出客户端范围");
         using (var stream = new MemoryStream())
         using (var writer = new BinaryWriter(stream))
         {
@@ -110,8 +111,8 @@ internal static partial class TownPackets
             writer.Write(character.Job);
             writer.Write(character.GrowType);
             writer.Write(character.Level);
-            writer.Write(pvpGrade); // 02677060：u8写入Data+30C当前决斗等级。
-            writer.Write((byte)0); // 02677110：独立Data+314，业务语义待确认。
+            writer.Write(pvpGrade.Level); // 02677060：u8写入Data+30C当前决斗等级。
+            writer.Write(pvpGrade.PowerTitle); // 02677110写Data+314；02D83E60非零时映射到21至29档称谓。
             // 0267DF0B读入成员DTO+1C；原生45发送门禁要求副本成员状态非零。
             writer.Write((byte)sceneState);
             EquipmentProtocolWriter.Appearance(writer, character.Inventory);

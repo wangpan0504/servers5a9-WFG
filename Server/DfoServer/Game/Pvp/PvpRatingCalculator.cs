@@ -4,7 +4,16 @@ namespace DfoServer.Game.Pvp;
 
 internal enum PvpRatingMode { Ordinary, Matching, Total }
 internal sealed record PvpRatingState(int Experience, int Rating, int HighestRating, int HighestGrade,
-    int Played, int Wins, int Losses, int Draws, int WinStreak, int LossStreak, bool Initialized);
+    int Played, int Wins, int Losses, int Draws, int WinStreak, int LossStreak, bool Initialized)
+{
+    // GM指定的战斗力称谓；旧存档缺省为无称谓，结算沿用同一快照保留。
+    public byte PowerTitle { get; init; }
+}
+
+internal readonly record struct PvpDisplayGrade(byte Level, byte PowerTitle = 0)
+{
+    public static implicit operator PvpDisplayGrade(byte level) => new(level);
+}
 internal sealed record PvpRatingChange(PvpRatingState Before, PvpRatingState After, int BeforeGrade, int Grade)
 {
     public int ExperienceDelta => After.Experience - Before.Experience;
@@ -89,7 +98,7 @@ internal sealed class PvpRatingCalculator(PvpRatingCatalog rules)
             state.HighestRating < state.Rating || state.HighestGrade < rules.Grade(state.Experience) ||
             state.HighestGrade >= rules.OrdinaryPoints.Length || state.Played < 0 || state.Wins < 0 ||
             state.Losses < 0 || state.Draws < 0 || state.WinStreak < 0 || state.LossStreak < 0 ||
-            state.WinStreak != 0 && state.LossStreak != 0)
+            state.WinStreak != 0 && state.LossStreak != 0 || state.PowerTitle > 9)
             throw new InvalidDataException("决斗评分赛前快照无效");
     }
     static int Select(System.Collections.Immutable.ImmutableArray<PvpRatingWeight> rows, int value, int fallback)

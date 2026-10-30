@@ -28,7 +28,15 @@ internal static class PvpGradeProjectionTests
             "泰拉石四星20只改变Actor普通等级后的首个u8，不改包长、熟练、技能或外观");
         That(terra[gradeOffset] == 20 && terra[gradeOffset + 1] == 0 && terra[gradeOffset - 1] == 85 &&
             terra[gradeOffset - 2] == 17 && terra[gradeOffset + 2] == 0,
-            "决斗等级与普通等级、职业、未知辅助字节、场景字节保持独立");
+            "决斗等级与普通等级、职业、无特殊称谓、场景字节保持独立");
+        for (byte title = 1; title <= 9; title++)
+        {
+            byte[] named = TownPackets.Actor(character, new(20, title), utcSeconds: 1000);
+            That(named[gradeOffset] == 20 && named[gradeOffset + 1] == title &&
+                Enumerable.Range(0, terra.Length).Where(index => named[index] != terra[index])
+                    .SequenceEqual(new[] { gradeOffset + 1 }), "武者至武尊只投影独立称谓字段：" + title);
+        }
+        Reject<InvalidDataException>(() => TownPackets.Actor(character, new(20, 10)), "拒绝超出客户端范围的称谓");
 
         string root = Path.Combine(Path.GetTempPath(), "S5A9-pvp-grade-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -51,10 +59,17 @@ internal static class PvpGradeProjectionTests
             var snapshot = session.PublicCharacter(selected.Id)!;
             That(snapshot.PvpGrade == 1 && ReferenceEquals(snapshot.Character, selected) && ReferenceEquals(session.Selected, selected),
                 "公开等级捕获不替换Selected或成员引用");
+            store.State = store.State with { PowerTitle = 9 };
+            var titled = session.PublicCharacter(selected.Id)!;
+            That(titled.PvpGrade == new PvpDisplayGrade(1, 9) && snapshot.PvpGrade == 1,
+                "称谓与经验等级同源捕获，既有公开快照保持不可变");
+            That(calculator.Calculate(store.State, PvpRatingMode.Matching, PvpArenaOutcome.Win, calculator.Initial()).After.PowerTitle == 9 &&
+                calculator.CalculateTotalCharacterExperience(store.State, PvpArenaOutcome.Lose).After.PowerTitle == 9,
+                "匹配与总力结算保留GM指定称谓");
             session.ReturnToRoster();
             That(!snapshot.IsCurrent() && session.PublicCharacter(selected.Id) is null,
                 "返回选角后旧公开快照仍按原epoch失效");
-            store.State = store.State with { Experience = 0 };
+            store.State = store.State with { Experience = 0, PowerTitle = 0 };
             session.Select(0); session.MarkReady();
             That(session.PublicCharacter(selected.Id)!.PvpGrade == 0 && !snapshot.IsCurrent(),
                 "重新选角读取新持久评分且旧快照不能复活");

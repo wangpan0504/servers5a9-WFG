@@ -19,7 +19,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
         public GameConnectionSender Sender { get; } = sender;
         public Scene Scene { get; set; } = scene;
         public Character Character { get; set; } = character;
-        public byte PvpGrade { get; set; }
+        public DfoServer.Game.Pvp.PvpDisplayGrade PvpGrade { get; set; }
         public ushort ScaledSpeed { get; set; } = 100;
         public string AdventureName { get; set; } = adventureName;
         public long Serial { get; } = serial;
@@ -98,7 +98,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     }
 
     public void Join(AccountOwners.Lease owner, GameConnectionSender sender, Character character, ChannelIdentity? entry = null,
-        string adventureName = "", byte pvpGrade = 0) => owner.Execute(() =>
+        string adventureName = "", DfoServer.Game.Pvp.PvpDisplayGrade pvpGrade = default) => owner.Execute(() =>
     {
         lock (gate)
         {
@@ -156,7 +156,7 @@ internal sealed class TownPresence(TownCatalog towns, ChannelIdentity channel = 
     });
     // 同一场景换装只更新快照。完成任务换成新的 PVF 阶段时先迁场景，再按入场投递。
     public void Refresh(AccountOwners.Lease owner, GameConnectionSender sender, Character character, string? adventureName = null,
-        bool broadcast = true, bool marriageOnly = false, byte? pvpGrade = null, bool allowMissing = false) => owner.Execute(() =>
+        bool broadcast = true, bool marriageOnly = false, DfoServer.Game.Pvp.PvpDisplayGrade? pvpGrade = null, bool allowMissing = false) => owner.Execute(() =>
     {
         lock (gate)
         {
