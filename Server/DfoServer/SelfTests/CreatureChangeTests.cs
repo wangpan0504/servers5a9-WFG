@@ -49,12 +49,23 @@ internal static class CreatureChangeTests
             Raw with { ActionDeclaration = new("[change creature]", [-1,0,1,15]) },
             Raw with { ActionDeclaration = new("[change creature]", [-1,-1,2]) },
             Raw with { HasMaximumLevel = true }, Raw with { HasCreatureMinimumLevel = true },
-            Raw with { HasUsableJobs = true }, Raw with { DeclaredActionUsablePlaces = null }
+            Raw with { HasUsableJobs = true }, Raw with { HasActionUsablePlace = true, DeclaredActionUsablePlaces = null },
+            Raw with { DeclaredActionUsablePlaces = [] }, Raw with { DeclaredActionUsablePlaces = ["[unknown]"] }
         }) That(CreatureChangeDefinition.Parse(raw, Book) is null, "畸形声明和未确认参数变体不猜测成功语义");
         var fixedDefinition = CreatureChangeDefinition.Parse(Raw with { ActionDeclaration = new("[change creature]", [7001,7002,1,-1]),
             DeclaredActionLimitIndexes = [], DeclaredActionResultLimitIndexes = [] }, Book);
         That(fixedDefinition is { SourceItemId: 7001 } && fixedDefinition.Select(0) == 7002,
             "固定转换读取动作前两参数，与宠物最低等级独立");
+        var unrestricted = CreatureChangeDefinition.Parse(Raw with { ActionDeclaration = new("[change creature]", [7001,7002,1,-1]),
+            DeclaredActionLimitIndexes = [], DeclaredActionResultLimitIndexes = [], DeclaredActionUsablePlaces = null }, Book);
+        That(unrestricted is { TownOnly: false, SourceItemId: 7001, MakePermanent: true },
+            "固定转换未声明地点时不凭空要求城镇标签，末项-1保留永久转换意图");
+        That(CreatureChangeDefinition.Parse(Raw with { DeclaredMinimumLevel = null }, Book) is { MinimumLevel: 1 } &&
+            CreatureChangeDefinition.Parse(Raw with { HasMinimumLevel = true, DeclaredMinimumLevel = null }, Book) is null,
+            "缺省最低等级按1级，显式畸形等级仍拒绝");
+        That(CreatureChangeDefinition.Parse(Raw with { DeclaredActionUsablePlaces = ["[village]", "[seria room]"] }, Book)
+            is { TownOnly: true }, "城镇并列赛丽亚房间仍按城镇限制，不误拒绝等价声明");
+        var standardUse = new ActionConsumableDefinition(Book, "[change creature]", [-1,-1,2,0],0,-9000,0,0,["[village]"]);
 
         var pet = new InventoryItem(11, new(InventoryListType.Pet, 8), new(7001, ItemKind.Creature, 11)
         {
@@ -65,7 +76,7 @@ internal static class CreatureChangeTests
         ItemTemplate Item(int id) => id == 9000 ? Book : new(id, ItemKind.Creature, 26, 1, 0, 1, 0, 0, 0, "[trade]", 65535, 0, "pet") { CreatureSubType = 0 };
         int draws = 0;
         var service = new CreatureChangeService(Item, _ => definition, CreatureSystemTests.Synthetic(),
-            new ConsumableUseSessionTests.FakeClock(), total => { draws++; return total-1; });
+            new ConsumableUseSessionTests.FakeClock(), total => { draws++; return total-1; }, actionItems: _ => standardUse);
         var result = service.Plan(character, book.Position, pet.Position);
         var potentialUse = new ActionConsumableDefinition(Book, "[change creature random]", [7001,7001,1,2,2,3],1000,-9000,0,0,[]);
         var potentialService = new CreatureChangeService(Item, _ => potential, CreatureSystemTests.Synthetic(),
@@ -110,7 +121,7 @@ internal static class CreatureChangeTests
         That(!missing.Plan(character, book.Position, pet.Position).Accepted, "完整候选核对先于随机，不删除缺失候选改变概率");
         var exchangeBook = CreatureChangeDefinition.Parse(Raw with { DeclaredNeededMaterials = [9000,1] }, Book)!;
         var fromShop = new CreatureChangeService(Item, _ => exchangeBook,
-            CreatureSystemTests.Synthetic(), new ConsumableUseSessionTests.FakeClock(), _ => 0);
+            CreatureSystemTests.Synthetic(), new ConsumableUseSessionTests.FakeClock(), _ => 0, actionItems: _ => standardUse);
         That(fromShop.Plan(character, book.Position, pet.Position).Plan!.After.Find(book.Position)!.Core.Count == 1 &&
             fromShop.Plan(last, book.Position, pet.Position).Plan!.After.Find(book.Position) is null,
             "兑换材料即使与源同ID也不重复扣除，最后一本仍可正常使用");
@@ -118,13 +129,45 @@ internal static class CreatureChangeTests
         That(precondition.Matches(character,1999999999) && !precondition.Matches(character,2000000000) &&
             !precondition.Matches(character with { Revision = character.Revision + 1 },1900000000), "提交复验实际到期时刻与角色revision");
         var unchangedTarget = new CreatureChangeService(Item, _ => definition with { Candidates = [new(7001,1)] },
-            CreatureSystemTests.Synthetic(), new ConsumableUseSessionTests.FakeClock(), _ => 0)
+            CreatureSystemTests.Synthetic(), new ConsumableUseSessionTests.FakeClock(), _ => 0, actionItems: _ => standardUse)
             .Plan(character, book.Position, pet.Position);
         That(unchangedTarget.Accepted && !unchangedTarget.Plan!.CharacterPrecondition!.Matches(character,2000000000),
             "随机结果同原模板时仍消耗书，并复验没有变化的目标期限");
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        int timedDraws = 0;
+        var timed = new CreatureChangeService(Item, _ => unrestricted, CreatureSystemTests.Synthetic(), clock,
+            _ => { timedDraws++; return 0; }, actionItems: _ => standardUse with { CoolTime = 1000, Places = [] });
+        var timedResult = timed.Plan(character, book.Position, pet.Position, false);
+        That(timedResult.Accepted && timedResult.Plan!.After.ConsumableStates is [{ Kind: ConsumableStateKind.Cooldown }],
+            "缺省地点的固定转换允许合法图内规划，冷却与源扣耗同一快照");
+        That(timedResult.Plan!.After.Find(pet.Position) == pet with { Core = pet.Core with { ItemId = 7002, ExpireTime = 0 },
+            Creature = pet.Creature with { ExpireTime = 0 } },
+            "永久转换清除核心及宠物详情期限，保留UID、名字、等级、经验与附魔");
+        var nextPet = pet with { Uid = 13, Position = new(InventoryListType.Pet,9), Core = pet.Core with { Value = 13 } };
+        var afterTimed = character with { Inventory = timedResult.Plan!.After with { Items = timedResult.Plan.After.Items.Add(nextPet) } };
+        That(!timed.Plan(afterTimed, book.Position, nextPet.Position, false).Accepted && timedDraws == 1,
+            "冷却期间对另一合法目标拒绝且不消耗源、不重抽");
+        clock.Advance(TimeSpan.FromMilliseconds(1000));
+        That(timed.Plan(afterTimed, book.Position, nextPet.Position, false).Accepted && timedDraws == 2,
+            "独立冷却到期后恢复转换，不能永久拦截源");
+        That(!service.Plan(character, book.Position, pet.Position, false).Accepted,
+            "显式城镇限制仍拦截图内转换");
         That(StackableActionRequests.TryUse(Convert.FromHexString("4A000000000000400000000700000008000000"), out var request) &&
             request == new StackableActionUseRequest(74,0,0,64,7,8), "实收19B转换请求解析为源74、目标Pet槽8，不当作五个i32");
         Bytes(StackableActionPackets.Used(request), [1,74,0,0,64,0,0,0], "成功515仅8B，不追加私有目标字段");
         Bytes(StackableActionPackets.Rejected(request), [0,0,0,74,0,0,64], "失败515的动作只占一字节");
+    }
+
+    public static void RunResources(DfoServer.Infrastructure.ItemResources resources)
+    {
+        foreach (int id in new[] { 2683295,10004867,10005432,10006000,10088295,10093337,10093339,10093466,10093467,
+            10098010,10098011,10098012,10098013,10098014,10098015,10146456,10151798,490000173,490004004 })
+        {
+            var definition = resources.Items.CreatureChange(id);
+            That(definition is { SourceItemId: > 0, Random: false, TownOnly: false, Candidates.Length: 1 },
+                $"真实固定转换{id}缺省地点定义完整接通");
+            That(resources.Items.ActionConsumable(id) is { Label: "[change creature]" },
+                $"真实固定转换{id}接入统一动作冷却消费定义");
+        }
     }
 }

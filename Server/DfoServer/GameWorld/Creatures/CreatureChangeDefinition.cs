@@ -14,6 +14,7 @@ internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, in
     public int ConsumeCount { get; init; } = 1;
     public bool TownOnly { get; init; } = true;
     public bool Random { get; init; }
+    public bool MakePermanent { get; init; }
     public long TotalWeight => Candidates.Sum(row => (long)row.Weight);
 
     public static CreatureChangeDefinition? Parse(StackableFile raw, ItemTemplate template)
@@ -23,13 +24,14 @@ internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, in
         if (raw.TemplateId != template.Id || template.Kind != ItemKind.Consumable || template.UseForbidden ||
             raw.TypeDeclaration is not { Label: "[etc]" or "[waste]", Parameters: [0] } ||
             (random ? action!.Parameters.Count < 5 : action is not { Label: "[change creature]", Parameters.Count: 4 }) ||
-            raw.DeclaredMinimumLevel is not >= 1 || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
-            raw.DeclaredMaximumLevel < raw.DeclaredMinimumLevel ||
+            raw.HasMinimumLevel && raw.DeclaredMinimumLevel is not >= 1 || raw.HasMaximumLevel && raw.DeclaredMaximumLevel is null ||
+            raw.DeclaredMaximumLevel < (raw.DeclaredMinimumLevel ?? 1) ||
             raw.HasCreatureMinimumLevel && raw.DeclaredCreatureMinimumLevel is not (>= 1 and <= 255) ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is not { Count: > 0 } ||
             raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 ||
-            (!random && raw.DeclaredActionUsablePlaces is not ["[village]"]) ||
-            random && raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not ["[village]"] ||
+            raw.HasActionUsablePlace && raw.DeclaredActionUsablePlaces is not { Count: > 0 } ||
+            raw.DeclaredActionUsablePlaces is { } places &&
+                (!places.Contains("[village]") || places.Any(place => place is not ("[village]" or "[seria room]"))) ||
             raw.DeclaredActionLimitIndexes is not { } limits || limits.Any(id => id <= 0) ||
             raw.DeclaredActionResultLimitIndexes is not { } results || results.Count % 3 != 0)
             return null;
@@ -63,10 +65,11 @@ internal sealed record CreatureChangeDefinition(int ItemId, int SourceItemId, in
         else return null;
         if (candidates.Sum(row => (long)row.Weight) <= 0) return null;
 
-        return new(template.Id, random ? -1 : source, raw.DeclaredMinimumLevel.Value, raw.DeclaredMaximumLevel ?? int.MaxValue,
+        return new(template.Id, random ? -1 : source, raw.DeclaredMinimumLevel ?? 1, raw.DeclaredMaximumLevel ?? int.MaxValue,
             raw.DeclaredCreatureMinimumLevel ?? 1,
             random ? candidates.Select(row => row.ItemId).Append(source).ToImmutableHashSet() : limits.ToImmutableHashSet(), candidates.ToImmutable())
-            { TownOnly = !random || raw.HasActionUsablePlace, Random = random };
+            { TownOnly = raw.DeclaredActionUsablePlaces is not null, Random = random,
+                MakePermanent = !random && source > 0 && action.Parameters[3] == -1 };
     }
 
     public int Select(long roll)

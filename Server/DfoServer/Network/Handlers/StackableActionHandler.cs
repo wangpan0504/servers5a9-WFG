@@ -385,7 +385,7 @@ internal sealed class StackableActionHandler(QuestCatalog quests,ItemCatalog ite
                     new(InventoryListType.Pet, (short)targetIndex), request.SecondArgument, capture.Phase == Game.Session.SessionPhase.Town)
                 : creatureChanges.Plan(character, new(InventoryListType.Main, (short)request.Slot), new(InventoryListType.Pet, (short)targetIndex),
                     capture.Phase == Game.Session.SessionPhase.Town),
-                0, requireTown: request.Action == CreatureChangeDefinition.Action, requiredPhase: capture.Phase,
+                0, requireTown: false, requiredPhase: capture.Phase,
                 usedItem: new(InventoryListType.Main, (short)request.Slot));
         bool Guard() => result.Receipt is { } receipt ? context.Session.CanPublishInventory(receipt) :
             context.Owner.Execute(() => ReferenceEquals(context.Session.Selected, capture.Selected) &&

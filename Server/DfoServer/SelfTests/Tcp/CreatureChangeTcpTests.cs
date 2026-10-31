@@ -87,6 +87,7 @@ internal static class CreatureChangeTcpTests
         }
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0,
             "转换与失败恢复后数据库完整");
+        await RunPermanentAsync(options, root, resources);
 
         Character Read()
         {
@@ -97,6 +98,80 @@ internal static class CreatureChangeTcpTests
             fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
             fixture.Snapshot("SELECT * FROM inventory_creature_details ORDER BY item_uid") +
             fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_consumable_states ORDER BY character_id,item_id,kind") +
+            fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY rowid");
+    }
+
+    static async Task RunPermanentAsync(ServerOptions options, string root, TcpTestResources resources)
+    {
+        // 该原始STK明确承诺永久，且省略最低等级与地点；不能只接通入口却保留旧期限。
+        That(resources.ItemResources.Items.CreatureChange(490000173) is
+            { SourceItemId: 400990101, MinimumLevel: 1, TownOnly: false, MakePermanent: true } &&
+            resources.ItemResources.Items.ActionConsumable(490000173) is { CoolTime: 1000 },
+            "永久兑换券按实际资源恢复缺省资格、永久目标和一秒冷却");
+        var clock = new ConsumableUseSessionTests.FakeClock();
+        await using var fixture = new TcpTestFixture(options, Path.Combine(root,"creature-permanent"), resources:resources, clock:clock);
+        var repository = new CharacterRepository(fixture.Database);
+        using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
+        {
+            var candidate = CharacterCreation.Prepare("PetForever",resources.Characters.Get(0),resources.Towns.Room,
+                resources.Towns.InitialReturn,resources.Learning.Get);
+            var pets = new short[] { 11,12,13 }.Select(slot => new InventoryItem(0,new(InventoryListType.Pet,slot),
+                new(400990101,ItemKind.Creature,0) { EnchantCardId=12345, Extension27=87 })
+                { Creature=new() { Name="keep", Level=3, Experience=6, Satiety=77, ExpireTime=2000000000 } });
+            repository.Create(owner,candidate with { Inventory=candidate.Inventory with { Items=candidate.Inventory.Items
+                .Add(new(0,new(InventoryListType.Main,76),new(490000173,ItemKind.Consumable,2)))
+                .Add(new(0,new(InventoryListType.Main,77),new(490000173,ItemKind.Consumable,1))).AddRange(pets) } });
+        }
+        await fixture.StartAsync();
+        var original = Read();
+        using (var peer = Open(fixture))
+        {
+            peer.Select(); peer.Send(515,Request(76,11)); ExpectConverted(peer,76,11,400990102, false);
+            var pet=original.Inventory.Find(new(InventoryListType.Pet,11))!;
+            That(Read().Inventory.Find(pet.Position) == pet with { Core=pet.Core with { ItemId=400990102,ExpireTime=0 },
+                Creature=pet.Creature! with { ExpireTime=0 } } &&
+                fixture.Query("SELECT count(*) FROM character_consumable_states WHERE item_id=490000173 AND kind=1") is [[1L]],
+                "真实永久兑换保留原实例完整属性，清除两处期限并同事务保存冷却");
+            string before=State();
+            peer.Send(515,Request(76,12)); peer.Expect(1,515,[0,0,0,76,0,0,64]); peer.Barrier();
+            That(State()==before,"一秒冷却内更换合法目标仍拒绝，源、期限、目标与账本均不改变");
+            clock.Advance(TimeSpan.FromMilliseconds(1000));
+            peer.Send(515,Request(76,12)); ExpectConverted(peer,76,12,400990102, false);
+            That(Read().Inventory.Find(new(InventoryListType.Main,76)) is null,"冷却结束可使用最后一张永久券并正常清槽");
+        }
+        using (var peer=Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            string before=State();
+            fixture.Sql("CREATE TRIGGER fail_permanent_change AFTER INSERT ON inventory_audit_log WHEN NEW.action_name='creature_change' " +
+                "BEGIN SELECT RAISE(ABORT,'permanent change rollback'); END");
+            peer.Send(515,Request(77,13)); peer.Closed();
+            That(State()==before,"末段SQL失败同时回滚源券、模板、永久期限、冷却及审计，不先发成功");
+            fixture.Sql("DROP TRIGGER fail_permanent_change");
+        }
+        using (var peer=Open(fixture))
+        {
+            peer.Select(); peer.Send(515,Request(77,13)); ExpectConverted(peer,77,13,400990102, false);
+        }
+        await fixture.StopAsync(); await fixture.StartAsync("restore");
+        using (var peer=Open(fixture))
+        {
+            peer.Select(); peer.Barrier();
+            That(new short[] {11,12,13}.All(slot => Read().Inventory.Find(new(InventoryListType.Pet,slot)) is
+                { Core.ItemId:400990102, Core.ExpireTime:0, Creature.ExpireTime:0 }),
+                "真实重启恢复全部永久目标，不恢复旧期限或再次扣券");
+        }
+        Character Read()
+        {
+            using var owner=new AccountOwners().Acquire(fixture.Options.DevelopmentAccount,()=>{});
+            return repository.LoadCharacter(owner,0);
+        }
+        string State() => fixture.Snapshot("SELECT * FROM characters ORDER BY id") +
+            fixture.Snapshot("SELECT * FROM character_inventory_items ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM inventory_creature_details ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_inventory_slots ORDER BY item_uid") +
+            fixture.Snapshot("SELECT * FROM character_consumable_states ORDER BY character_id,item_id,kind") +
             fixture.Snapshot("SELECT * FROM inventory_audit_log ORDER BY rowid");
     }
 
@@ -105,7 +180,7 @@ internal static class CreatureChangeTcpTests
 
     static void Select(TcpPeer peer) => peer.Select(inventoryNotices: [(1,713),(1,713),(1,713)]);
 
-    static void ExpectConverted(TcpPeer peer, ushort source, ushort target)
+    static void ExpectConverted(TcpPeer peer, ushort source, ushort target, uint itemId = 400990451, bool itemCycle = true)
     {
         peer.Expect(1,515,[1,(byte)source,(byte)(source>>8),0,64,0,0,0]);
         byte[] empty = new byte[126];
@@ -114,9 +189,9 @@ internal static class CreatureChangeTcpTests
         peer.Expect(0,14,empty);
         peer.Expect(0,105);
         var changed = peer.Expect(0,14).Body;
-        That(changed.Length == 3+123 && changed[0] == 7 && U16(changed,3) == target && U32(changed,5) == 400990451,
+        That(changed.Length == 3+123 && changed[0] == 7 && U16(changed,3) == target && U32(changed,5) == itemId,
             "ACK后只清目标Pet槽、发105详情及完整123B核心，没有106或私有ACK尾部");
-        peer.Expect(1,713);
+        if (itemCycle) peer.Expect(1,713);
         peer.Barrier();
     }
 }
