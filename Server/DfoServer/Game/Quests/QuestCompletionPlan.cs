@@ -281,7 +281,7 @@ internal sealed class QuestCompletionPlan
             bool rental = QuestRentalProgress.Supports(quest);
             bool expertTutorial = QuestExpertJobProgress.Tutorial(quest);
             // 同一拒绝不能掩盖资源差异；保留原门禁，仅报告实际未支持的声明。
-            if (quest.SubType != -1 && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && !expertTutorial && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) && !QuestLifecyclePlan.BeastSeeking(quest) && !QuestCycle.NormalDungeonMission(quest) && !QuestDazzlementStorage.Matches(quest))
+            if (quest.SubType != -1 && !QuestClearEligibility.ProtectsActors(quest) && !parent && !QuestClientSceneProgress.TownRange(quest) && !dungeonClear && !rental && !expertTutorial && QuestStateProgress.Type(quest) is null && !QuestLifecyclePlan.HarlemSeeking(quest) && !QuestLifecyclePlan.BeastSeeking(quest) && !QuestCycle.NormalDungeonMission(quest) && !QuestDazzlementStorage.Matches(quest))
                 throw new NotSupportedException($"任务交付子类型未支持: condition={quest.Condition}, sub_type={quest.SubType}");
             if (quest.RewardType != "[item]" && profession is null && expertJob is null && !characterReward && !creatureReward && !QuestRelationProgress.ZeroRewardChild(quest) && !QuestCoverage.GoldOnlyReward(quest))
                 throw new NotSupportedException($"任务交付奖励声明未支持: reward_type={quest.RewardType ?? "<absent>"}, gold_multiple={quest.DeclaredGoldMultiple}, reward_tokens={quest.Rewards.Count}");

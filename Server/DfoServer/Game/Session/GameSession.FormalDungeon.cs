@@ -1340,6 +1340,7 @@ internal sealed partial class GameSession
         uint objectKey = normal?.MonsterKey ?? scripted!.MonsterKey;
         var currentRoom = dungeon.Run.CurrentMonsterPlan;
         var target = currentRoom.Monsters.SingleOrDefault(monster => monster.ObjectKey == objectKey);
+        target ??= objectKey <= ushort.MaxValue ? dungeon.Run.PublishedFriendlyActor((ushort)objectKey) : null;
         if (target is null && objectKey <= ushort.MaxValue && currentRoom.HellWaves.Any(wave => wave.ObjectKey == objectKey))
         {
             // 实验性：深渊波次怪死亡只登记（回 DIE_MONSTER，无经验/掉落/清房影响）。
@@ -1360,6 +1361,8 @@ internal sealed partial class GameSession
             ushort key = checked((ushort)objectKey);
             if (target is not { CanReportDeath: false })
                 return new FormalDungeonDeathResult(issued.Outcome,MonsterKey:key) { ReportedTarget = target };
+            if (dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement)
+                return new FormalDungeonDeathResult(DungeonRunOutcome.Rejected) { ReportedTarget = target };
             dungeon.Run.RetireNonCombatObject(key);
             return new FormalDungeonDeathResult(issued.Outcome,FormalReceipt(),key) { ReportedTarget = target };
         }

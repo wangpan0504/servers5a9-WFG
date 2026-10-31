@@ -51,6 +51,7 @@ internal static class QuestCoverage
         .Where(field => !KnownFields.Contains(field.Name) &&
             !(field.Name is "episode town use" or "npc visivility not revert" && QuestEpisodeEntry.Supports(quest)) &&
             !(field.Name == "npc dialog" && QuestHiddenEntry.NpcDialogueShape(quest)) &&
+            !(field.Name is "stand by area" or "hidden set" && QuestStandbyEntry.Supports(quest)) &&
             !(field.Name == "cleared quest" && QuestHiddenEntry.ClearedNpcDialogueShape(quest)) &&
             !(field.Name == "pvp private expose" && DfoServer.Game.Pvp.PvpTrainingExposure.TryRead(quest,out _)) &&
             !(field.Name == "sub reward" && DfoServer.Game.Pvp.PvpTrainingProgress.Manual(quest)) &&
@@ -296,7 +297,7 @@ internal static class QuestCoverage
                 bool state = QuestStateProgress.Type(quest) is not null;
                 bool rental = QuestRentalProgress.Supports(quest);
                 bool expertTutorial = QuestExpertJobProgress.Tutorial(quest);
-                if (quest.SubType != -1 && !parent && !range && !dungeonClear && !state && !rental && !expertTutorial && !QuestLifecyclePlan.SeekingSubtype(quest) && !QuestDazzlementStorage.Matches(quest)) reasons.Add("目标子类型尚未接入");
+                if (quest.SubType != -1 && !QuestClearEligibility.ProtectsActors(quest) && !parent && !range && !dungeonClear && !state && !rental && !expertTutorial && !QuestLifecyclePlan.SeekingSubtype(quest) && !QuestDazzlementStorage.Matches(quest)) reasons.Add("目标子类型尚未接入");
                 if (quest.MainQuest is not null && !QuestRelationProgress.DialogueChild(quest,catalog))
                     reasons.Add("隐藏子任务的实际对话及交付入口未接入");
                 bool target = HasSupportedTarget(quest,catalog);

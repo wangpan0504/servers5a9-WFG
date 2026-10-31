@@ -100,6 +100,7 @@ internal sealed partial class CharacterRepository
         var targets = current.ActiveMainQuests.Where(row => row.ConditionState > 0 && QuestHuntProgress.Bound(row, entry) &&
             quests is not null && quests.TryGet(row.QuestId, out var quest) && QuestCoverage.HasOrdinaryDeclarations(quest) &&
             (QuestClearEligibility.IsSingleMap(quest) && row.ConditionState == 1 && quest.IntData[0] == clearMap?.Id &&
+                QuestClearEligibility.HasRequiredActors(quest,run,prepared.Result.Snapshot) &&
                 (quest.DungeonIndex is null or < 0 || quest.DungeonIndex == entry.DungeonId) ||
              clear is not null && (QuestEligibility.InspectResource(quest).Entry is QuestResourceEntry.Ordinary or QuestResourceEntry.Dialogue or QuestResourceEntry.Creature ||
                     QuestAutoDailyPlan.Supports(quest)) &&

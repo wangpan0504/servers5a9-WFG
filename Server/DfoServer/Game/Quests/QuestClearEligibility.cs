@@ -7,8 +7,17 @@ namespace DfoServer.Game.Quests;
 internal static class QuestClearEligibility
 {
     // 地图号是第一项。末尾 -1 与 dungeon info 的不限难度相同，仍是这一张图。
-    public static bool IsSingleMap(StoryQuest quest) => quest.Condition == "[clear map]" && quest.SubType == -1 &&
-        quest.IntData is [> 0] or [> 0, -1];
+    public static bool IsSingleMap(StoryQuest quest) => quest.Condition == "[clear map]" &&
+        (quest.SubType == -1 && (quest.IntData is [> 0] or [> 0, -1]) || ProtectsActors(quest));
+
+    // 0201C410的sub0分支进入0200F350：首项为地图，后续每个APC均须仍存活且属于友方。
+    internal static bool ProtectsActors(StoryQuest quest) => quest.Condition == "[clear map]" && quest.SubType == 0 &&
+        quest.IntData.Count >= 2 && quest.IntData.All(value => value > 0) &&
+        quest.IntData.Skip(1).Distinct().Count() == quest.IntData.Count - 1;
+
+    internal static bool HasRequiredActors(StoryQuest quest, SinglePlayerDungeonRun run, DungeonRunSnapshot snapshot) =>
+        !ProtectsActors(quest) || snapshot.CurrentMap == run.CurrentMonsterPlan.Room.Map &&
+        quest.IntData.Skip(1).All(id => run.HasLivingFriendlyActor(id,snapshot));
 
     // 任务声明验证目标可以是基础Boss格；物件末层的物理ClearMap仍记真实层。
     internal static bool MatchesClearMap(StoryQuest quest, DungeonEntryPlan entry, DungeonClearFact clear) =>

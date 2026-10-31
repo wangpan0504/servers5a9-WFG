@@ -4,6 +4,7 @@ using DfoServer.Game.Auth;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeons;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Marriage;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Skills;
@@ -144,6 +145,29 @@ internal static class MarriagePreparationTests
                 award.ExperienceReward.DifficultyWeight == 100 && repeatedAward.Duplicate &&
                 repeatedAward.Character.Learning.Experience == first.Learning.Experience,
                 "完成位、单份稀有奖励及经验同事务落库，原领奖重放不重复到账");
+            var secondPreparation = quests.Get(20738);
+            That(secondPreparation is { Difficulty: null, Condition: "[seeking]", SubType: -1, IntData: [10002610, 1] },
+                "结婚准备第二步保留真实省略难度的寻物声明");
+            first = repository.CommitQuestLifecycle(firstOwner,QuestLifecyclePlan.Accept(first,secondPreparation,quests,
+                items.Items,items.GoldLimits,items.EpicPieces,DateTimeOffset.UtcNow)).Character;
+            var secondCompletion = QuestCompletionPlan.Prepare(first,secondPreparation,ushort.MaxValue,quests,parameters,
+                items.Items,items.GoldLimits,items.EpicPieces,growth,DateTimeOffset.UtcNow);
+            That(secondCompletion is { Outcome: QuestCompletionOutcome.Accepted, Plan: not null },
+                "婚约、前置及真实材料齐备后第二步可规划领奖："+secondCompletion.Reason);
+            var beforeSecond = first;
+            Sql("CREATE TRIGGER fail_second_preparation AFTER INSERT ON character_quest_completion_receipts WHEN NEW.quest_id=20738 BEGIN SELECT RAISE(ABORT,'second preparation rollback'); END");
+            Reject<SqliteException>(() => repository.CommitQuestCompletion(firstOwner,secondCompletion.Plan!),
+                "第二步领奖末段失败");
+            That(QuestCompletionRepositoryTests.Same(beforeSecond,repository.LoadCharacter(firstOwner,first.Slot)),
+                "第二步失败不扣材料、不保存完成或奖励");
+            Sql("DROP TRIGGER fail_second_preparation");
+            var secondAward = repository.CommitQuestCompletion(firstOwner,secondCompletion.Plan!);
+            var secondReplay = repository.CommitQuestCompletion(firstOwner,secondCompletion.Plan!);
+            first = repository.LoadCharacter(firstOwner,first.Slot);
+            That(first.CompletedQuests.Contains(20738) && first.ActiveMainQuests.All(row=>row.QuestId!=20738) &&
+                secondAward.Consumed is [{ ItemId: 10002610, Count: 1 }] && secondAward.ExperienceReward.DifficultyWeight==100 &&
+                secondReplay.Duplicate && QuestCompletionRepositoryTests.Same(first,secondReplay.Character),
+                "第二步按真实材料原子交付，重放不重复扣料或奖励");
             var current = repository.FindMarriage(relation.Id)!;
             repository.CommitMarriageSettlement(current, current with { Revision = current.Revision + 1, State = 4 });
             first = repository.LoadCharacter(firstOwner, first.Slot); second = repository.LoadCharacter(secondOwner, second.Slot);
@@ -171,7 +195,13 @@ internal static class MarriagePreparationTests
                 var source = SkillRepositoryTests.Fixture(name, towns, characters, learning);
                 var state = SkillPointLedger.Synchronize(0, 0, 30, source.InitialLearning with
                     { Experience = growth.GetLevelStartExperience(30), BonusSp = 0, BonusTp = 0 }, learning);
+                var material = items.Items.Get(10002610);
+                var range = ItemSlotBoundService.Range(material.Kind,source.Inventory);
+                short slot = (short)Enumerable.Range(range.Start,range.End-range.Start+1).First(index=>
+                    source.Inventory.Items.All(item=>item.Position!=new InventorySlot(InventoryListType.Main,(short)index)));
                 return repository.Create(owner, source with { Level = 30, InitialLearning = state, DungeonState = CharacterDungeonState.NewOrdinary,
+                    Inventory = source.Inventory with { Items = source.Inventory.Items.Add(new(0,new(InventoryListType.Main,slot),
+                        InventoryRewardGrantService.Create(material,1))) },
                     Skills = state.Trees.Single(tree => tree.Context == state.ActiveContext).Skills.Select(skill => new CharacterSkill(skill.Id, skill.Level)).ToArray() });
             }
             Character Accept(Character character, AccountOwners.Lease owner) => repository.CommitQuestLifecycle(owner,

@@ -17,7 +17,7 @@ internal static class QuestExperiencePolicy
     // 不因没有difficulty而在条件完成后卡住交付，也不放开其它未确认目标或奖励。
     internal static bool AllowsOmittedDifficulty(StoryQuest quest) =>
         QuestExpertJobReward.AllowsOmittedDifficulty(quest) || QuestCoverage.GoldOnlyReward(quest) ||
-        QuestMarriageProgress.Preparation(quest) && QuestCoverage.HasOrdinaryDeclarations(quest) ||
+        QuestMarriageProgress.Supports(quest) && QuestCoverage.HasOrdinaryDeclarations(quest) ||
         quest is { Condition: "[meet npc]", SubType: -1, IntData: [> 0], RewardType: "[item]" } &&
         QuestCoverage.HasOrdinaryDeclarations(quest);
 

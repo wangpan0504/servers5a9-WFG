@@ -45,9 +45,14 @@ internal static class QuestCompletionPlanTests
         var preparationReward = QuestExperiencePolicy.Prepare(character, preparation, parameters);
         Check(preparationReward.DifficultyWeight == 100 && preparationReward.Amount == 100,
             "结婚准备第一步缺省难度沿用参数查询默认百分比，不阻断已达成任务交付");
+        var secondPreparation = preparation with { Id = 20738, Condition = "[seeking]", SubType = -1, IntData = [10002610, 1] };
+        Check(QuestExperiencePolicy.Prepare(character, secondPreparation, parameters) is { DifficultyWeight: 100, Amount: 100 },
+            "结婚准备第二步真实寻物形状共用缺省难度，不在取得材料后卡住交付");
         foreach (var unsupported in new[] { preparation with { Id = 20738 }, preparation with { Grade = "[side]" },
-            preparation with { SubType = 23 }, preparation with { IntData = [-1, 0, 5] } })
-            Reject(() => QuestExperiencePolicy.Prepare(character, unsupported, parameters), "缺省难度不扩大至第二步或未知任务形状");
+            preparation with { SubType = 23 }, preparation with { IntData = [-1, 0, 5] },
+            secondPreparation with { Id = 20739 }, secondPreparation with { SubType = 0 },
+            secondPreparation with { IntData = [10002610, 0] }, secondPreparation with { Difficulty = "unknown" } })
+            Reject(() => QuestExperiencePolicy.Prepare(character, unsupported, parameters), "结婚缺省难度不扩大至未知任务或畸形目标");
         Reject(() => QuestExperiencePolicy.Prepare(character, preparation with { Difficulty = "unknown" }, parameters),
             "结婚准备显式未知难度仍拒绝");
         var clear = ClearFixture(character);

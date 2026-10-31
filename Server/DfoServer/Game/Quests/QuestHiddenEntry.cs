@@ -29,7 +29,8 @@ internal static class QuestHiddenEntry
             [{ Values.Length: 0, Children.Length: 0 }] &&
         quest.Definition.Values("npc dialog")[0].Value == quest.IntData[0];
 
-    public static bool Direct(StoryQuest quest, QuestCatalog catalog) => (ImmediateShape(quest) || NpcDialogueShape(quest)) &&
+    public static bool Direct(StoryQuest quest, QuestCatalog catalog) =>
+        (ImmediateShape(quest) || NpcDialogueShape(quest) || QuestStandbyEntry.Supports(quest)) &&
         QuestCoverage.HasOrdinaryDeclarations(quest) && QuestCoverage.HasRequiredReferences(quest,catalog) &&
         QuestCoverage.HasSupportedTarget(quest,catalog);
 

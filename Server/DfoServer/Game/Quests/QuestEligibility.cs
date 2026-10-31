@@ -41,7 +41,7 @@ internal static class QuestEligibility
             return new(QuestResourceEntry.Dedicated, "exception filter需要已确认的单字符串character声明");
         if (quest.MainQuest is not null)
             return new(QuestResourceEntry.Dialogue, "子任务需要父任务及资源顺序的真实入口");
-        if (QuestHiddenEntry.ImmediateShape(quest) || QuestHiddenEntry.NpcDialogueShape(quest))
+        if (QuestHiddenEntry.ImmediateShape(quest) || QuestHiddenEntry.NpcDialogueShape(quest) || QuestStandbyEntry.Supports(quest))
             return new(QuestResourceEntry.Hidden, "隐藏任务通过合格21候选和884请求开启");
         if (QuestAntonUnlockEntry.Supports(quest))
             return new(QuestResourceEntry.Ordinary, "本服安徒恩解锁任务的奈恩入口；仍须原前置和材料");
@@ -186,9 +186,9 @@ internal static class QuestEligibility
         return new(true, false, "角色条件满足");
     }
 
-    // 明确只面向已转职角色的接取型祝贺会面不执行转职；不扩展到普通会面或混合目标。
+    // 祝贺会面面向已转职角色，不执行转职；普通会面仍须实际对话，sub1才按接取事实归零。
     internal static bool TransferredAutoMeet(StoryQuest quest)
-        => quest is { Grade: "[common unique]", Condition: "[meet npc]", SubType: 1,
+        => quest is { Grade: "[common unique]", Condition: "[meet npc]", SubType: -1 or 1,
             RewardType: "[item]", IntData: [> 0], Definition: { JobChange: 1 } definition } &&
             !definition.TargetCharacters.IsEmpty && definition.TargetCharacters.All(target =>
                 target.GrowType is >= 1 and <= 5 && target.Awakening == -1 && Jobs.Contains(target.Job));
