@@ -53,11 +53,11 @@ internal sealed partial class CharacterRepository : IGuildRankingStore
             while (row.Read()) activity.Add(checked((uint)row.GetInt64(0)), (row.GetInt32(1), row.GetInt64(2)));
         var raids = new Dictionary<uint, int>();
         using (var query = ManagementCommand(db, tx, """
-            SELECT guild_id,COUNT(*) FROM (
-              SELECT m.guild_id,r.character_id,r.instance_id FROM character_raid_reward_receipts r
-              JOIN guild_members m ON m.character_id=r.character_id AND m.joined_at_unix<=r.created_at
-              WHERE r.final_phase=1 AND r.created_at BETWEEN $month AND $now GROUP BY m.guild_id,r.character_id,r.instance_id
-            ) GROUP BY guild_id
+            SELECT e.guild_id,COUNT(*) FROM guild_contribution_events e
+            JOIN guild_members m ON m.character_id=e.character_id AND m.guild_id=e.guild_id
+                AND m.joined_at_unix=e.joined_at_unix
+            WHERE e.source=5 AND e.points>0 AND e.created_at_unix BETWEEN $month AND $now
+            GROUP BY e.guild_id
             """, ("$month", GuildRankingService.MonthStart(now)), ("$now", now)))
         using (var row = query.ExecuteReader())
             while (row.Read()) raids.Add(checked((uint)row.GetInt64(0)), row.GetInt32(1));

@@ -37,6 +37,9 @@ internal sealed partial class CharacterRepository : IRaidStartStore
             using var tx = write.Transaction;
             if (kind == RaidKind.Luke || reservations.Any(row => row.Lifecycle is not null))
                 AdmitRaidLifecycle(db, tx, instance, reservations, kind);
+            if (kind == RaidKind.Fiendwar)
+                AdmitFiendwarRecovery(db, tx, instance, reservations, definition.Resources.Script.EntryCost
+                    ?? throw new InvalidDataException("漩涡开战缺少原门票声明"));
             var committed = ImmutableArray.CreateBuilder<Character>(reservations.Count);
             foreach (var r in reservations)
                 committed.Add(SaveInTransaction(db, tx, r.Actor.Owner, r.Expected, r.Position, r.Expected.Return,
@@ -62,7 +65,10 @@ internal sealed partial class CharacterRepository : IRaidStartStore
         command.Parameters.AddWithValue("$week", (object?)admission.Week ?? DBNull.Value);
         foreach (var row in rows)
         {
+            var membership = ReadDungeonGuildMembership(db, tx, row.Expected.Id);
             command.Parameters["$id"].Value = row.Expected.Id; command.Parameters["$account"].Value = row.Actor.Owner.Account;
+            command.Parameters.AddWithValue("$guild", membership.GuildId);
+            command.Parameters.AddWithValue("$joined", membership.JoinedAtUnix);
             if (admission.WeeklyLimit is { } limit)
             {
                 command.CommandText = "SELECT count(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND raid_type=$type AND state=2 AND clear_week=$week";
@@ -107,12 +113,14 @@ internal sealed partial class CharacterRepository : IRaidStartStore
             }
             command.CommandText = """
                 UPDATE character_raid_runs SET state=1 WHERE character_id=$id AND account=$account AND raid_type=$type AND state=0 AND instance_id<>$instance;
-                INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state)
-                SELECT id,account,$instance,$type,$source,$at,0 FROM characters WHERE id=$id AND account=$account;
+                INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state,guild_id,guild_joined_at)
+                SELECT id,account,$instance,$type,$source,$at,0,$guild,$joined FROM characters WHERE id=$id AND account=$account;
                 """;
             command.ExecuteNonQuery();
             command.CommandText = "SELECT COUNT(*) FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance";
             if (Convert.ToInt32(command.ExecuteScalar()) != 1) throw new InvalidDataException("卢克入场角色归属已变化");
+            command.Parameters.RemoveAt("$guild");
+            command.Parameters.RemoveAt("$joined");
         }
     }
 }

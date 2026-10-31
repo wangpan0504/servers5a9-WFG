@@ -1,5 +1,6 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Raids;
@@ -12,10 +13,32 @@ namespace DfoServer.Testing;
 
 internal static partial class FiendwarRaidTcpTests
 {
+    internal static void VerifyPotentialPotion(TcpTestFixture fixture, TcpPeer peer, bool accepted, uint check)
+    {
+        var source = fixture.Query("SELECT s.slot_index,i.item_uid,i.item_core FROM character_inventory_items i JOIN character_inventory_slots s USING(item_uid) WHERE s.character_id=$p0 AND s.list_type=0 AND json_extract(i.item_core,'$.ItemId')=10312385", peer.Id).Single();
+        ushort slot = Convert.ToUInt16(source[0]);
+        long uid = Convert.ToInt64(source[1]);
+        var before = System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)source[2])!;
+        long audits = Convert.ToInt64(fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0", peer.Id)[0][0]);
+        peer.Send(44, Build(writer => { writer.Write(slot); writer.Write((byte)0); writer.Write(check); writer.Write(10312385); writer.Write(0); }));
+        var rows = AntonTcpProbe.Barrier(peer, "fiendwar potential potion");
+        Bytes(rows.Single(row => row is { Kind: 1, Opcode: 44 }).Body,
+            Build(writer => { writer.Write(accepted ? (byte)1 : (byte)0); writer.Write(accepted ? slot : (ushort)123);
+                writer.Write((byte)0); writer.Write(check); writer.Write(10312385); }),
+            "潜能药通过真实44完整回应，保留源槽和核验值");
+        That(!rows.Any(row => row is { Kind: 0, Opcode: 14 }), "潜能药成功由ACK自扣，不重复发送源14");
+        var after = System.Text.Json.JsonSerializer.Deserialize<ItemCore>((string)fixture.Query(
+            "SELECT item_core FROM character_inventory_items WHERE item_uid=$p0", uid)[0][0])!;
+        That(after == (accepted ? before with { Value = before.Value - 1 } : before) &&
+            Convert.ToInt64(fixture.Query("SELECT count(*) FROM inventory_audit_log WHERE character_id=$p0", peer.Id)[0][0]) == audits + (accepted ? 1 : 0),
+            "潜能药只在合法副本实际扣原UID一瓶并提交一条审计，拒绝保留完整Core和审计");
+    }
+
     internal static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         var clock = new LukeRaidClockTests.Clock();
         DatabaseSchemaTests.FiendwarUpgrade(Path.Combine(root, "fiendwar-schema"));
+        DatabaseSchemaTests.RaidGuildContributionUpgrade(Path.Combine(root, "fiendwar-schema"));
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "fiendwar-flow"), resources: resources, clock: clock);
         await fixture.StartAsync();
         var repository = new CharacterRepository(fixture.Database);

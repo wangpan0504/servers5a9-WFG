@@ -156,7 +156,11 @@ internal sealed class NpcShopCatalog
     }
 }
 
-internal sealed record ItemPurchaseLimit(bool AccountWide, int Count, bool ResetDaily);
+internal enum ItemPurchasePeriod { Legacy, Daily, Weekly, Monthly, Accumulate }
+internal sealed record ItemPurchaseLimit(bool AccountWide, int Count, bool ResetDaily)
+{
+    public ItemPurchasePeriod Period { get; init; }
+}
 // [sale limit] 是物品级收购上限：账号内各角色共享，每日 UTC+8 06:00 重置。
 internal sealed record ItemSaleLimit(bool AccountWide, int Count);
 internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<ItemMaterialCost> Materials, ItemPurchaseLimit? Limit)
@@ -164,6 +168,7 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
     int? EquipmentValue { get; init; }
     int EquipmentSellRate { get; init; }
     public ItemSaleLimit? SaleLimit { get; init; }
+    public ItemPurchaseLimit? PeriodicLimit { get; init; }
 
     public int GetSellGold(ushort durability, ushort maximumDurability)
     {
@@ -199,6 +204,25 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
                 throw new InvalidDataException("NPC 限购定义无效");
             limit = new(account, count, text.Has("reset daily purchase item"));
         }
+        ItemPurchaseLimit? periodicLimit = null;
+        foreach (string body in text.Sections("purchase limit"))
+        {
+            var declaration = Regex.Match(body, @"\A\s*`(account|character)`\s+`(daily|weekly|monthly|accumulate)`\s+([0-9]+)\s*\z", RegexOptions.IgnoreCase);
+            if (!declaration.Success || !int.TryParse(declaration.Groups[3].Value, out int maximum) || maximum <= 0)
+                throw new InvalidDataException("NPC 商品周期限购声明无效");
+            // 原生0413D9C4..0413DB06逐次重写范围、周期和数量；每条完整后采用最后一条。
+            periodicLimit = new(declaration.Groups[1].Value.Equals("account", StringComparison.OrdinalIgnoreCase), maximum, false)
+            {
+                Period = declaration.Groups[2].Value.ToLowerInvariant() switch
+                {
+                    "daily" => ItemPurchasePeriod.Daily,
+                    "weekly" => ItemPurchasePeriod.Weekly,
+                    "monthly" => ItemPurchasePeriod.Monthly,
+                    "accumulate" => ItemPurchasePeriod.Accumulate,
+                    _ => throw new InvalidDataException("NPC 商品限购周期未知")
+                }
+            };
+        }
         string saleLimited = text.Section("sale limit");
         ItemSaleLimit? saleLimit = null;
         if (saleLimited.Length != 0)
@@ -215,7 +239,8 @@ internal sealed record ItemShopPrice(int Gold, int SellGold, ImmutableArray<Item
         {
             EquipmentValue = equipment ? value >= 0 ? value : (int)gold : null,
             EquipmentSellRate = equipmentSellRate,
-            SaleLimit = saleLimit
+            SaleLimit = saleLimit,
+            PeriodicLimit = periodicLimit
         };
         return equipment ? result with { SellGold = result.GetSellGold(0, 0) } : result;
     }

@@ -43,17 +43,8 @@ internal sealed class MarriageShopService(ItemCatalog catalog, NpcShopCatalog sh
         var now = timer.GetUtcNow();
         var inventory = character.Inventory;
         var paid = inventory;
-        if (price.Limit is { } limit)
-        {
-            int today = ShopPurchaseCount.Today(now);
-            var key = new ShopPurchaseCount(request.NpcId, request.ItemId, limit.AccountWide, limit.ResetDaily,
-                limit.ResetDaily ? today : 0, count);
-            var previous = inventory.ShopPurchases.SingleOrDefault(key.SameKey);
-            int current = previous?.Effective(today) ?? 0;
-            if ((long)current + count > limit.Count) return InventoryResult.Reject(0x85);
-            key = key with { Count = current + count };
-            paid = paid with { ShopPurchases = previous is null ? paid.ShopPurchases.Add(key) : paid.ShopPurchases.Replace(previous, key) };
-        }
+        if (!ShopPurchaseLimitService.TryPlan(inventory, price, request.NpcId, request.ItemId, count, now, out paid, out long? quotaDeadline))
+            return InventoryResult.Reject(0x85);
         long gold = (long)price.Gold * count;
         long love = 0;
         foreach (var cost in price.Materials.Where(row => row.ItemId == LoveMaterialId))
@@ -133,6 +124,7 @@ internal sealed class MarriageShopService(ItemCatalog catalog, NpcShopCatalog sh
         }
         after = updated;
         receipt = new(request.ItemId, count, position, core, paid, materials.ToImmutable());
-        return new(true, 0, new(inventory, resultInventory, "marriage_shop_buy"));
+        return new(true, 0, new(inventory, resultInventory, "marriage_shop_buy",
+            quotaDeadline is { } cutoff ? new(character, cutoff, timer) : null));
     }
 }

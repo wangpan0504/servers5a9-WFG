@@ -753,6 +753,8 @@ internal static partial class SessionPlanningTests
             new AuthenticationService(new AuthenticationRepository(Database)).Create(Owner.Account, "fixture-password");
             string training=JsonSerializer.Serialize(new DfoServer.Game.Pvp.PvpTrainingSkills(
                 new(0,[new(0,0,0,[]),new(1,0,0,[])]),0,Guid.Empty));
+            string fiendwarPayment = JsonSerializer.Serialize(new DfoServer.Game.Raids.FiendwarPaymentSnapshot(
+                [new(0, new(InventoryListType.Main, 121), new ItemCore(10306760, ItemKind.Material, 1))]));
             Sql($$"""
                 INSERT INTO account_client_settings VALUES('planning',zeroblob(204));
                 INSERT INTO account_card_memberships(account,black_diamond_expires,gold_card_expires,revision) VALUES('planning',9999999999,9999999999,7);
@@ -839,6 +841,12 @@ internal static partial class SessionPlanningTests
                   1,0,1,-1,'test','test',1,1,0,1,1);
                 INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state)
                   VALUES({{id}},'planning','abcdef1234567890abcdef1234567890',1,'fixture/delete',1,0);
+                INSERT INTO character_raid_runs(character_id,account,instance_id,raid_type,source,admitted_at,state)
+                  VALUES({{id}},'planning','fedcba1234567890abcdef1234567890',2,'fixture/delete-fiendwar',1,0);
+                INSERT INTO character_fiendwar_recovery(character_id,instance_id,owner_generation,selection_epoch,state,payment_json)
+                  VALUES({{id}},'fedcba1234567890abcdef1234567890',1,1,0,'{{fiendwarPayment}}');
+                INSERT INTO character_fiendwar_title_facts(character_id,account,quest_id,total,applied)
+                  VALUES({{id}},'planning',7007,5,2);
                 INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at)
                   VALUES({{id}},'planning','1234567890abcdef1234567890abcdef',1,0,2,20261022,1,'{}','[]',1);
                 INSERT INTO character_dungeon_card_rewards(character_id,account,instance_id,plan_json,reward_json,mail_id,revision) VALUES({{id}},'planning','instance','{}','{}',NULL,1);

@@ -67,6 +67,9 @@ internal sealed partial class CharacterRepository : IAntonRaidLifecycleStore
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("安徒恩阶段条件提交未命中原身份");
             result.Add(receipt);
         }
+        if (candidate.Phase == 1 && !candidate.TimedOut)
+            CommitRaidGuildContribution(db, tx, candidate.Instance, RaidKind.Anton, result,
+                candidate.GuildParties, candidate.Anchor.ToUnixTimeSeconds());
         tx.Commit(); return result.MoveToImmutable();
     }
 }

@@ -23,14 +23,14 @@ internal sealed partial class CharacterRepository
         "character_boss_selection_buff",
         "character_tutorial_receipts", "character_tutorial_state",
         "character_grief_tower_clears", "character_grief_tower_entries", "character_grief_tower",
-        "character_title_book_slots", "character_title_progress", "character_title_sections",
+        "character_fiendwar_title_facts", "character_title_book_slots", "character_title_progress", "character_title_sections",
         "character_dungeon_card_options", "character_dungeon_card_rewards",
         "character_dungeon_drop_pickups", "character_dungeon_drop_objects", "character_dungeon_drop_batches",
         "character_dungeon_passive_pickups",
         "character_dungeon_pickup_receipts", "character_dungeon_loot_receipts",
         "character_quest_stage_claims", "character_quest_stage_witnesses",
         "character_operation_hope_reward_receipts",
-        "character_raid_reward_receipts", "character_raid_runs",
+        "character_fiendwar_recovery", "character_raid_reward_receipts", "character_raid_runs",
         "character_quest_completion_receipts", "character_quest_clear_receipts", "character_quest_daily_clear", "character_quest_drop_receipts",
         "character_dungeon_settlement_receipts", "character_dungeon_scene_clear_receipts",
         "character_dungeon_growth_receipts", "character_adventure_credits",
@@ -158,6 +158,8 @@ internal sealed partial class CharacterRepository
         }
         command.CommandText = "DELETE FROM shop_purchase_counts WHERE account=$account AND character_id=$id";
         command.ExecuteNonQuery();
+        command.CommandText = "DELETE FROM item_purchase_counts WHERE account=$account AND character_id=$id";
+        command.ExecuteNonQuery();
         // 发给其他角色的邮件保留发送者快照；本角色收件邮箱连同历史和托管资产一并清理。
         command.CommandText = "DELETE FROM mailbox_audit_log WHERE mail_id IN (SELECT mail_id FROM mailbox_messages WHERE recipient_id=$id AND recipient_account=$account)";
         command.ExecuteNonQuery();
@@ -188,7 +190,7 @@ internal sealed partial class CharacterRepository
     {
         var affected = DeletionTables.Concat(["characters", "cube_premium", "item_making_skill_info", "character_inventory_items", "character_inventory_slots",
             "inventory_avatar_details", "inventory_creature_details", "mailbox_messages", "mailbox_attachments", "mailbox_audit_log",
-            "shop_purchase_counts", "account_completed_quests", "account_pvp_private_characters", "account_adventure_representatives",
+            "shop_purchase_counts", "item_purchase_counts", "account_completed_quests", "account_pvp_private_characters", "account_adventure_representatives",
             // ON DELETE SET NULL保留眩惑本周名额，不能加入按角色删除的表清单。
             "account_dazzlement_tower_bindings",
             "account_pvp_total_teams",

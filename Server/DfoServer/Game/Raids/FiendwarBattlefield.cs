@@ -31,7 +31,13 @@ internal sealed record FiendwarMerchant(int Area, int Kind, int X, int Y, DateTi
 internal sealed record FiendwarFieldState(Guid Instance, long Revision, DateTimeOffset Started, DateTimeOffset Deadline,
     ImmutableDictionary<int, FiendwarAreaState> Areas, ImmutableDictionary<string, int> Symbols,
     ImmutableDictionary<int, string> Dungeons, ImmutableDictionary<FiendwarTimerKey, FiendwarTimer> Timers,
-    FiendwarMerchant? Merchant, long NextUnit, ulong RandomState, bool Cleared = false, bool Failed = false);
+    FiendwarMerchant? Merchant, long NextUnit, ulong RandomState, bool Cleared = false, bool Failed = false)
+{
+    // 成就要求本次全程未拆设施；恢复、重发和最终状态归零不能抹除既有事实。
+    internal bool FacilitiesDestroyed { get; init; }
+    // 原生基地危险检查6/7/8区域的敌军容器；区域倒计时Warning不是此判据。
+    internal bool BaseThreatened { get; init; }
+}
 internal sealed record FiendwarFieldEvent(FiendwarOp? Kind = null, int Id = 0, string? Key = null);
 internal sealed record FiendwarFieldChange(FiendwarFieldState State, ImmutableArray<FiendwarInstruction> Effects);
 
@@ -184,6 +190,8 @@ internal sealed class FiendwarBattlefield(FiendwarScript script, FiendwarPacing 
         }
         void Symbol(string key, int value)
         {
+            if (value == 1 && key is "[radar state]" or "[battery state]")
+                state = state with { FacilitiesDestroyed = true };
             if (state.Symbols.GetValueOrDefault("[movie command center on]") == 1 && value == 1 &&
                 key is "[top command center state]" or "[mid command center state]" or "[bot command center state]") return;
             if (state.Symbols.GetValueOrDefault(key) == value) return;
@@ -196,7 +204,8 @@ internal sealed class FiendwarBattlefield(FiendwarScript script, FiendwarPacing 
         {
             var old = state.Areas[id];
             if (old == value) return;
-            state = state with { Areas = state.Areas.SetItem(id, value) };
+            state = state with { Areas = state.Areas.SetItem(id, value),
+                BaseThreatened = state.BaseThreatened || id is 6 or 7 or 8 && value.Enemy is not null };
             if (old.State != value.State)
             {
                 string symbol = $"[{id} area state]";

@@ -37,19 +37,10 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         var before = character.Inventory;
         var after = before;
         var now = utcNow ?? Clock.GetUtcNow();
-        int today = ShopPurchaseCount.Today(now);
         if (serverItems is not null && !ServerItemUsageState.TryConsume(before.ServerItems, serverItems, 2, request.ItemId, count,
             now, Clock.LocalTimeZone, out _)) return InventoryResult.Reject(0x85);
-        if (price.Limit is { } limit)
-        {
-            var key = new ShopPurchaseCount(request.NpcId, request.ItemId, limit.AccountWide, limit.ResetDaily, limit.ResetDaily ? today : 0, count);
-            var previous = before.ShopPurchases.SingleOrDefault(key.SameKey);
-            int current = previous?.Effective(today) ?? 0;
-            if ((long)current + count > limit.Count)
-                return InventoryResult.Reject(0x85);
-            key = key with { Count = current + count };
-            after = after with { ShopPurchases = previous is null ? after.ShopPurchases.Add(key) : after.ShopPurchases.Replace(previous, key) };
-        }
+        if (!ShopPurchaseLimitService.TryPlan(before, price, request.NpcId, request.ItemId, count, now, out after, out long? deadline))
+            return InventoryResult.Reject(0x85);
         long goldCost = (long)price.Gold * count;
         if (goldCost > int.MaxValue || after.Gold < goldCost)
             return InventoryResult.Reject(10);
@@ -115,7 +106,6 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
             receivedCore = received.Core;
         }
         receipt = new(request.ItemId, count, position, receivedCore, paid, materials.ToImmutable());
-        long? deadline = price.Limit is { ResetDaily: true } ? DailyBoosterUsage.NextReset(now).ToUnixTimeSeconds() : null;
         foreach (var consumedSlot in spent.Plan.ChangedSlots)
             if (spent.Plan.BeforeIndex.Find(consumedSlot) is { ExpireTime: > 0 } input &&
                 (deadline is null || input.ExpireTime < deadline)) deadline = input.ExpireTime;
@@ -141,9 +131,14 @@ internal sealed class InventoryShopService(ItemCatalog catalog, NpcShopCatalog s
         if (!shops.Shops.Values.Any(shop => shop.NpcId == npcId) && !shops.IsTradingNpc(npcId))
             return null;
         int today = ShopPurchaseCount.Today(utcNow ?? DateTimeOffset.UtcNow);
-        return character.Inventory.ShopPurchases.Where(row => row.NpcId == npcId && row.Effective(today) > 0 &&
-            catalog.Get(row.ItemId).ShopPrice.Limit is { } limit && limit.AccountWide == row.AccountWide && limit.ResetDaily == row.ResetDaily)
-            .OrderBy(row => row.ItemId).ToArray();
+        var stock = shops.Shops.Values.Where(shop => shop.NpcId == npcId || shop.Raid).SelectMany(shop => shop.Items).ToHashSet();
+        if (shops.Trading.TryGetValue(npcId, out var trading)) stock.UnionWith(trading.Keys);
+        return character.Inventory.ShopPurchases.Where(row => row.Effective(today) > 0 &&
+            (row.Period == ItemPurchasePeriod.Legacy ? row.NpcId == npcId &&
+                catalog.Get(row.ItemId).ShopPrice.Limit is { } limit && limit.AccountWide == row.AccountWide && limit.ResetDaily == row.ResetDaily :
+                stock.Contains(row.ItemId) && catalog.Get(row.ItemId).ShopPrice.PeriodicLimit is { } periodic &&
+                periodic.AccountWide == row.AccountWide && periodic.Period == row.Period))
+            .OrderBy(row => row.Period).ThenBy(row => row.ItemId).ToArray();
     }
 
     public InventoryResult Sell(Character character, SellItemRequest request)

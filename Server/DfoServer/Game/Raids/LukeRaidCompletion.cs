@@ -69,12 +69,20 @@ internal sealed partial class AntonRaidBattle
         public bool FinalPhase { get; }
         public LukePhaseCompletionPolicy Policy { get; }
         public ImmutableArray<LukePhaseMember> Members { get; }
+        public ImmutableDictionary<ushort, ImmutableArray<ushort>> GuildParties { get; }
+        public bool FiendwarNoFacilities { get; }
+        public bool FiendwarNoBaseThreat { get; }
         private LukePhaseSettlement(AntonRaidBattle battle, int phase)
         {
             var policy = battle.lukeCompletion!;
             Instance = battle.Instance; RaidType = battle.Kind; Phase = phase; FinalPhase = phase + 1 == battle.PhaseCount; Anchor = battle.lukeClock.GetUtcNow();
             Week = policy.Cycle.Key(Anchor); Source = policy.Source; WeeklyClearLimit = policy.WeeklyClearLimit;
             Policy = policy.Phases[phase];
+            GuildParties = battle.guildClearParties.ToImmutableDictionary();
+            FiendwarNoFacilities = battle.Kind == RaidKind.Fiendwar && battle.fiendwarDefinition is { Guide: false } &&
+                battle.current.Fiendwar is { FacilitiesDestroyed: false };
+            FiendwarNoBaseThreat = battle.Kind == RaidKind.Fiendwar && battle.fiendwarDefinition is { Guide: false } &&
+                battle.current.Fiendwar is { BaseThreatened: false };
             if (Week <= 0 || Anchor.ToUnixTimeSeconds() < 0) throw new InvalidDataException("卢克终结周期或时间无效");
             Members = battle.originalLukeMembers.Values.OrderBy(actor => actor.Character).Select(actor =>
                 new LukePhaseMember(actor.Character, actor.Owner.Account, battle.lukeParticipation.GetValueOrDefault((phase, actor.Character)),

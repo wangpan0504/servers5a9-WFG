@@ -17,6 +17,9 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     // 来自角色设置的场景显示位，不改写位置、进度或资产revision。
     public byte VisibilityFlags { get; init; } = 6;
     public ushort Emotion { get; init; }
+    // 仅当前选角的城镇形态；不保存到角色库，也不继承到重登后的角色。
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ConsumableDisguiseAppearance? Disguise { get; init; }
     public uint CloneTitleItemId { get; init; }
     // 被其他角色拉黑后的有效计分，不是本人黑名单条目数；客户端据此选择惩罚称号。
     public int BlacklistCount { get; init; }
@@ -65,6 +68,11 @@ internal sealed record Character(ushort Id, ushort Slot, string Name, long Revis
     public int ExpertMachineEndurance { get; init; } = 300;
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public long BlackDiamondExpiresAt => Inventory.AccountWallet.ContractExpiry(56);
+}
+
+internal sealed record ConsumableDisguiseAppearance(Guid Identity, byte Type, int FormId, int SourceItemId, long UntilMilliseconds)
+{
+    public bool Active(long now) => UntilMilliseconds > now;
 }
 
 internal sealed record ActiveMainQuest(byte Slot, ushort QuestId, uint ConditionState)

@@ -8,7 +8,9 @@ internal static class RecoveryConsumableTests
     {
         string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]",
             "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]", "[quest exp bonus rate]", "[exp bonus rate]",
-            "[total usable count]", "[attach type]", "[trade]", "[account]", "[action usable dungeon]", "[/action usable dungeon]"];
+            "[total usable count]", "[attach type]", "[trade]", "[account]", "[action usable dungeon]", "[/action usable dungeon]",
+            "[stat change]", "[/stat change]", "physical attack", "%", "physical attack bonus",
+            "[stackable type]", "[disguise]", "[string data]", "[/string data]", "monster", "[int data]", "[/int data]"];
         string Resolve(int at) => strings[at];
         PvfToken[] valid = [new(3, 0), new(0, 10000), new(3, 1), new(0, 0), new(3, 2),
             new(6, 3), new(0, 410), new(0, 1000), new(6, 4)];
@@ -17,6 +19,37 @@ internal static class RecoveryConsumableTests
         That(questPotion.QuestExpBonusPermille == 500 && questPotion.ExpBonusPermille == 1000 &&
             questPotion.ExpBonusMilliseconds == 7200000, "任务和普通经验倍率独立保留，持续时间来自自身效果声明");
         var result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid, Resolve);
+        PvfToken[] disguiseHeader = [new(3,24),new(6,25),new(0,0)];
+        PvfToken[] disguiseTail = [new(3,26),new(6,28),new(3,27),new(3,29),new(0,63039),new(0,60),new(3,30)];
+        var disguise = RecoveryConsumableFile.Parse(10312386, "stackable/disguise.stk", [..disguiseHeader,..disguiseTail], Resolve);
+        That(disguise.Disguise == new DisguiseDeclaration("monster",63039,60) && disguise.Diagnostics.IsEmpty,
+            "变身保留完整形态及秒数，源模板ID与形态ID分离");
+        foreach (PvfToken[] tail in new PvfToken[][] {
+            [new(3,26),new(6,28),new(3,27)],
+            [new(3,26),new(6,28),new(3,27),new(3,29),new(0,63039),new(3,30)],
+            [..disguiseTail,new(3,29),new(0,63039),new(0,60),new(3,30)],
+            [new(3,26),new(6,28),new(3,27),new(3,29),new(0,63039),new(0,0),new(3,30)] })
+        {
+            var invalidDisguise = RecoveryConsumableFile.Parse(10312386,"stackable/disguise.stk",[..disguiseHeader,..tail],Resolve);
+            That(invalidDisguise.Disguise is null && !invalidDisguise.Diagnostics.IsEmpty,
+                "缺失、截断、重复及非正时长不产生可兑现形态");
+        }
+        var statPotion = RecoveryConsumableFile.Parse(1, "stackable/stat.stk", [..valid,
+            new(3,19),new(6,3),new(0,175),new(6,21),new(6,22),new(0,12),new(6,23),new(3,20),
+            new(3,7),new(0,60000),new(6,4)], Resolve);
+        That(statPotion.StatChanges.SequenceEqual(new StatChangeDeclaration[]
+            { new("+",175,"physical attack"), new("%",12,"physical attack bonus") }) &&
+            statPotion.StatChangeDuration is { Milliseconds: 60000, Target: "myself" } && statPotion.Diagnostics.IsEmpty,
+            "持续属性保留原操作、整数值、属性名及持续时间，不把属性数值当服务端攻击状态");
+        foreach (PvfToken[] tail in new PvfToken[][] { [new(3,19),new(3,20)],
+            [new(3,19),new(6,3),new(0,175),new(3,20)],
+            [new(3,19),new(6,3),new(6,3),new(6,21),new(3,20)],
+            [new(3,19),new(6,3),new(0,175),new(6,21),new(3,20),new(3,19),new(6,3),new(0,12),new(6,23),new(3,20)] })
+        {
+            var malformed = RecoveryConsumableFile.Parse(1, "stackable/stat.stk", [..valid,..tail], Resolve);
+            That(malformed.StatChanges.IsEmpty && !malformed.Diagnostics.IsEmpty,
+                "空、缺尾、错误类型或重复属性声明不产生部分属性向量");
+        }
         That(result.ActionUsableDungeons is null, "未声明可用地下城时保持缺失，不添加漩涡专属限制");
         var restricted = RecoveryConsumableFile.Parse(10312384, "stackable/fiendwar.stk",
             [..valid, new(3,17), new(0,291100339), new(0,5350), new(3,18)], Resolve);

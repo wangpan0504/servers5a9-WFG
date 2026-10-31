@@ -225,6 +225,12 @@ public static class ServerApplication
                 adventureCatalog, growthCatalog, guildDungeonMileage: itemResources.GuildContents.DungeonMileage, promotions: CurrentPromotions));
             log?.Write("startup", new { Stage = "Database schema", State = "complete", Version = SqliteMigrations.CurrentVersion,
                 Commit = ServerBuildInfo.ShortCommit });
+            if (command.Kind == ServerCommandKind.Serve)
+            {
+                var recovery = Load("Fiendwar interruption recovery", () => repository.RecoverInterruptedFiendwar(DateTimeOffset.UtcNow));
+                log?.Write("startup", new { Stage = "Fiendwar interruption recovery", State = "complete",
+                    recovery.Refunded, recovery.Abandoned, recovery.MissingPayment });
+            }
             if (command.Kind == ServerCommandKind.PrepareBookCharacter)
             {
                 OfflineBookPreparation.Run(options, characters, towns, repository, command.Arguments);

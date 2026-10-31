@@ -35,6 +35,7 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
 
     public TitleAchievementResult Trigger(Character character, TitleTriggerRequest request, DateTimeOffset now)
     {
+        if (FiendwarTitleFacts.IsQuest(request.QuestId)) return TitleAchievementResult.Reject(request.QuestId);
         if (!titles.Quests.TryGetValue(request.QuestId, out var definition) ||
             !QuestEligibility.Evaluate(character, definition.Quest, quests, allowAboveMaximum: true).Eligible)
             return TitleAchievementResult.Reject(request.QuestId, 1);
@@ -67,7 +68,8 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
         return (Prepare(character, Rows(accepted), 0, now), [.. wanted.Except(accepted)]);
     }
 
-    public TitleAchievementResult Reconcile(Character character, DateTimeOffset now)
+    public TitleAchievementResult Reconcile(Character character, DateTimeOffset now,
+        ImmutableArray<FiendwarTitleCounter> fiendwarFacts = default, int requested = 0, bool includeStateFacts = true)
     {
         var completed = QuestEligibility.Completed(character);
         var legacy = titles.Adjustments.Where(row => completed.Contains(row.QuestId)).Select(row => row.AchievementId).ToHashSet();
@@ -76,7 +78,19 @@ internal sealed class TitleAchievementService(TitleCatalog titles, QuestCatalog 
             character.TitleProgress.GetValueOrDefault(definition.Quest.Id)?.Remaining.Complete != true &&
             QuestEligibility.Evaluate(character, definition.Quest, quests, allowAboveMaximum: true).Eligible &&
             (legacy.Contains(definition.Quest.Id) || CheckStateFact(character, definition.Quest, now, completed))).Select(definition => (definition.Quest.Id, default(TitleCounters))).ToArray();
-        return Prepare(character, candidates, 0, now);
+        var updates = includeStateFacts ? candidates.ToDictionary(row => row.Id, row => row.Item2) : new Dictionary<int, TitleCounters>();
+        var consumed = ImmutableArray.CreateBuilder<FiendwarTitleCounter>();
+        foreach (var fact in fiendwarFacts.IsDefault ? [] : fiendwarFacts)
+        {
+            if (!fact.Valid || !titles.Quests.TryGetValue(fact.Quest, out var definition) ||
+                !titles.QuestCategories.GetValueOrDefault(fact.Quest, []).Contains(1) ||
+                !QuestEligibility.Evaluate(character, definition.Quest, quests, allowAboveMaximum: true).Eligible) continue;
+            var remaining = character.TitleProgress.GetValueOrDefault(fact.Quest)?.Remaining ?? definition.Initial;
+            updates[fact.Quest] = remaining.Subtract(new(checked((ushort)fact.Pending), 0, 0));
+            consumed.Add(fact);
+        }
+        var result = Prepare(character, updates.Select(row => (row.Key, row.Value)).ToArray(), requested, now);
+        return result.Plan is { } plan ? result with { Plan = plan with { FiendwarFacts = consumed.ToImmutable() } } : result;
     }
 
     bool CheckStateFact(Character character, StoryQuest quest, DateTimeOffset now, HashSet<int>? completed = null)

@@ -52,7 +52,7 @@ internal sealed partial class CharacterRepository
 
     public Character CommitTitleAchievement(AccountOwners.Lease owner, TitleAchievementPlan plan) => owner.Execute(() =>
     {
-        if (!plan.Changed) return plan.Before;
+        if (!plan.Changed && plan.FiendwarFacts.IsDefaultOrEmpty) return plan.Before;
         using var db = database.Open();
         using var write = db.BeginWrite("CharacterRepository.CommitTitleAchievement");
         using var tx = write.Transaction;
@@ -72,6 +72,11 @@ internal sealed partial class CharacterRepository
             !current.TitleProgress.OrderBy(pair => pair.Key).SequenceEqual(expected.TitleProgress.OrderBy(pair => pair.Key)) ||
             !current.TitleSections.SetEquals(expected.TitleSections) || !plan.Sections.IsSupersetOf(expected.TitleSections) ||
             expected.TitleProgress.Keys.Any(id => !plan.Progress.ContainsKey(id))) throw new InvalidOperationException("称号规划所属角色、版本或进度已变化");
+        if (!plan.Changed)
+        {
+            ApplyFiendwarTitleFacts(db, tx, owner, expected.Id, plan.FiendwarFacts);
+            return current;
+        }
         if (plan.Inventory.Changed) current = CommitInventoryInTransaction(db, tx, owner, current, plan.Inventory);
         else
         {
@@ -116,6 +121,7 @@ internal sealed partial class CharacterRepository
             var (postalError, _) = DeliverMailInTransaction(db, tx, delivery);
             if (postalError != MailboxError.None) throw new InvalidOperationException("称号奖励邮件无法提交：" + postalError);
         }
+        ApplyFiendwarTitleFacts(db, tx, owner, expected.Id, plan.FiendwarFacts);
         return current with { TitleProgress = plan.Progress, TitleSections = plan.Sections };
     }
 }

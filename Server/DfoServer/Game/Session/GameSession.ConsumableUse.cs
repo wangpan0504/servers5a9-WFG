@@ -50,6 +50,9 @@ internal sealed partial class GameSession
         if (definition.TownGiftItem != 0 && captured.Guard.Phase != SessionPhase.Town) return Reject("gift_requires_town");
         if (definition.SummonsApc && captured.Guard.Phase != SessionPhase.Dungeon) return Reject("summon_requires_dungeon");
         if (definition.RequiresDungeon && captured.Guard.Phase != SessionPhase.Dungeon) return Reject("projectile_requires_dungeon");
+        if (definition.Disguise is not null && (captured.Guard.Phase != SessionPhase.Town ||
+            character.Disguise?.Active(service.Clock.GetUtcNow().ToUnixTimeMilliseconds()) == true))
+            return Reject("disguise_requires_untransformed_town_character");
         var preliminary = service.Plan(character, request, service.Clock.GetUtcNow().ToUnixTimeSeconds());
         return owner.Execute(() =>
         {
@@ -117,6 +120,9 @@ internal sealed partial class GameSession
             if (freeEffects is { } effects) formalDungeon!.FreeConsumableEffects = effects;
             usedConsumables[definition.CoolGroup] = new(request, source.Uid, service.Clock.GetTimestamp(), definition.CoolTime, service.Clock)
                 { Maintenance = preserve ? (byte)0 : definition.CooltimeMaintenance };
+            if (definition.Disguise is { } disguise)
+                pendingDisguise = new(disguise, request.ItemId, SelectionEpoch,
+                    checked(service.Clock.GetUtcNow().ToUnixTimeMilliseconds() + disguise.Seconds * 1000L));
             return new ConsumableUseResult(ConsumableUseOutcome.Committed, preserve ? "dungeon-preserved" : "committed", result, UseGuard())
                 { SourceUid = source.Uid, PreserveSource = preserve,
                     NativeNoConsumption = preserve && !definition.EffectsAfterAcknowledgement, TownGiftItem = definition.TownGiftItem };
@@ -148,5 +154,6 @@ internal sealed partial class GameSession
         creatureFeedUses.Clear();
         levelUpCooldowns.Clear();
         pendingConsumableUse = null;
+        pendingDisguise = null;
     }
 }

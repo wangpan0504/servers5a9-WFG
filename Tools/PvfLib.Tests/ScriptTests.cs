@@ -28,6 +28,12 @@ internal static class ScriptTests
         var union = new PvfDocument("[impossible contents]\n`ban redeemitem`\n[/impossible contents]\n\n[impossible contents]\n`gift`\n[/impossible contents]\n").Block("impossible contents");
         That(union.Contains("ban redeemitem") && union.Contains("gift"), "impossible contents 多块按并集读取");
         That(PvfScript.Block("[x]a", "x") == "", "incomplete block is absent");
+        That(new PvfDocument("[x]\n0", new("[x]\n1")).Sections("x").Single().Trim() == "0" &&
+            new PvfDocument("[y]\n2", new("[x]\n1")).Sections("x").Single().Trim() == "1",
+            "重复字段视图本层显式零覆盖父层、缺省时继承");
+        That(new PvfDocument("[x]\n1\n[y]\n9\n[x]\n2").Sections("x").Select(value => value.Trim()).SequenceEqual(new[] { "1", "2" }),
+            "重复字段保留声明顺序且不吞掉夹在中间的其他字段");
+        That(new PvfDocument("[x]\n").Sections("x").Single() == "", "显式空声明仍保留给消费方拒绝");
         RootInteger();
         TokenDocument();
         AiCharacter();

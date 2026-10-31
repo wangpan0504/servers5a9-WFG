@@ -308,6 +308,12 @@ internal static class SqliteMigrations
         new(165, "漩涡引导账号周角色绑定", static (db, tx) => Execute(db, tx,
             RaidLifecycleSchema.FiendwarGuideBindings.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
         new(166, "普通安徒恩每日分支与顺序进度", AntonNormalProgressSchema.Upgrade),
+        new(167, "商品账号与角色周期限购", ItemPurchaseLimitSchema.Upgrade),
+        new(168, "攻坚开战原会籍快照", RaidGuildContributionSchema.Upgrade),
+        new(169, "漩涡系统中断原票与断线资格", (db, tx) => Execute(db, tx,
+            FiendwarRecoverySchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
+        new(170, "漩涡真实成就事实与消费水位", (db, tx) => Execute(db, tx,
+            FiendwarTitleFactsSchema.Definition.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal))),
     ];
 
     const string KnightShieldDeckColumn = "knight_shield_deck TEXT NOT NULL DEFAULT '[0,0,0,0,0]' CHECK(json_valid(knight_shield_deck) AND json_type(knight_shield_deck)='array' AND json_array_length(knight_shield_deck)=5)";
@@ -2372,7 +2378,7 @@ internal static class SqliteMigrations
             ("character_pvp_training_skills",PvpTrainingSkillsSchema),
             ("account_pvp_private_characters",PvpPrivateCharacterSchema),
             ("character_operation_hope_reward_receipts",OperationHopeRewardSchema.Definition),
-            ("character_raid_runs",RaidLifecycleSchema.FiendwarDefinition),
+            ("character_raid_runs",RaidGuildContributionSchema.Definition),
             ("character_raid_reward_receipts",RaidLifecycleSchema.FiendwarRewardDefinition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             (TagEvildomConfigurationSchema.Table,TagEvildomConfigurationSchema.Definition),
             (TagEvildomConfigurationSchema.ClearanceTable,TagEvildomConfigurationSchema.ClearanceDefinition),
@@ -2419,6 +2425,8 @@ internal static class SqliteMigrations
             ("character_evildom_war_seats",EvildomWarRecoverySchema.Seats.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("account_evildom_war_guides",EvildomWarGuideSchema.Table.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("account_fiendwar_guides",RaidLifecycleSchema.FiendwarGuideBindings),
+            ("character_fiendwar_recovery",FiendwarRecoverySchema.Definition),
+            ("character_fiendwar_title_facts",FiendwarTitleFactsSchema.Definition),
             (EvildomWarHiddenRewardSchema.Table,EvildomWarHiddenRewardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_ekern_cycle",EkernCycleSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
             ("character_rename_pending",CharacterRenameCardSchema.Definition.Replace(" IF NOT EXISTS", "", StringComparison.Ordinal)),
@@ -2606,6 +2614,7 @@ internal static class SqliteMigrations
         "SELECT [item_uid],[character_id],[account],[owner_character_id],[item_core],[created_at],[updated_at] FROM [character_inventory_items] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[personal_capacity_before],[personal_capacity_after],[account_capacity_before],[account_capacity_after],[account_gold_before],[account_gold_after] FROM [cargo_audit_log] LIMIT 0",
         "SELECT [account],[character_id],[npc_id],[item_id],[reset_daily],[day],[count] FROM [shop_purchase_counts] LIMIT 0",
+        "SELECT [account],[character_id],[item_id],[period],[day],[count] FROM [item_purchase_counts] LIMIT 0",
         "SELECT [account],[revision],[order_hash],[counts] FROM [account_epic_books] LIMIT 0",
         "SELECT [audit_id],[created_at],[account],[character_id],[generation],[action_name],[order_hash],[piece_index],[count_before],[count_after] FROM [epic_piece_audit_log] LIMIT 0",
         "SELECT [item_uid],[detail] FROM [inventory_avatar_details] LIMIT 0",

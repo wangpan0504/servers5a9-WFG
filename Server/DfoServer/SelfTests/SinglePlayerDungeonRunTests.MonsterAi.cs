@@ -120,6 +120,30 @@ internal static partial class SinglePlayerDungeonRunTests
         var disabled = Create();
         settings.Replace([new(3, null, Warlike: new() { Value = 90 })], true);
         That(disabled.CurrentMonsterAi is null, "已安装房间的关闭状态不受热改影响，只有新房间重新解析");
+        // 团本遭遇倍率必须实际进入Run和线上包，不能只验证领域公式。
+        settings.Replace([], false);
+        foreach (int count in new[] { 1, 2, 3, 4, 8 })
+        {
+            var scale = new Game.Raids.FiendwarCombatScale(Enumerable.Range(1, count).Select(n => (ushort)n), sharedBoss: count > 4);
+            That(SinglePlayerDungeonRun.TryCreate(entry with { FiendwarScale = scale }, 1, 100, route, authority,
+                out var scaled, out var reason), "关闭GM配置仍应用原遭遇倍率:" + reason);
+            var actual = scaled!.CurrentMonsterAi;
+            if (count >= 4)
+            {
+                That(actual is null, "四人及共享Boss满倍率不额外改写原生属性");
+                continue;
+            }
+            That(actual is { HitPoints.Mode: MonsterAiMode.Multiplier, AttackPower.Mode: MonsterAiMode.Multiplier } &&
+                actual.HitPoints.Number == scale.HpPercent / 100f && actual.AttackPower.Number == scale.AttackPercent / 100f,
+                "人数冻结同时投影HP与攻击倍率");
+            var combat = MonsterAiPackets.Encode(5, 3, 1, 9, new(0, 0), actual!);
+            That(combat.Length == 80 && BinaryPrimitives.ReadUInt32LittleEndian(combat) == 0x3349414D &&
+                BinaryPrimitives.ReadUInt32LittleEndian(combat.AsSpan(72)) == 2 &&
+                BinaryPrimitives.ReadSingleLittleEndian(combat.AsSpan(76)) == scale.AttackPercent / 100f &&
+                BinaryPrimitives.ReadSingleLittleEndian(combat.AsSpan(60)) == scale.HpPercent / 100f,
+                "MAI3保留身份和HP字段并将冻结攻击倍率送到第七参数");
+            That(ReferenceEquals(scaled.MonsterAiRooms.Freeze(3, start), actual), "同房共享快照不重算遭遇人数");
+        }
         VerifyMonsterAiFile();
         Console.WriteLine($"PASS monster ai: {Count-before} checks");
 

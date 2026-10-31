@@ -31,7 +31,7 @@ internal static class FiendwarGuideTcpTests
                 CompletedQuests = [8672], InitialLearning = learning });
             var items = resources.ItemResources;
             var funded = InventoryService.Commit(repository, owner, role,
-                InventoryRewardGrantService.TryGrantBatch(role, [new(10306760, 2), new(10309054, 3)],
+                InventoryRewardGrantService.TryGrantBatch(role, [new(10306760, 2), new(10309054, 3), new(10312385, 2)],
                     items.Items, items.GoldLimits, items.EpicPieces, clock.GetUtcNow()));
             repository.CommitInventory(owner, funded, new(funded.Inventory, funded.Inventory with { ReviveCoins = 20 }, "fixture_guide_coins"));
         }
@@ -42,6 +42,7 @@ internal static class FiendwarGuideTcpTests
         var symbols = new Dictionary<uint, uint>();
         var clears = new Dictionary<byte, (uint Daily, uint Weekly)>();
         Select();
+        FiendwarRaidTcpTests.VerifyPotentialPotion(fixture, peer, false, 10);
         That(clears.Count == 4 && clears[2] == (0u, 0u), "初次登录四类团本次数初始化为真实零记录");
         for (int route = 0; route < 2; route++)
         {
@@ -72,6 +73,9 @@ internal static class FiendwarGuideTcpTests
             That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE character_id=$p0 AND raid_type=2 AND state=2", peer.Id)
                 is [[long completed]] && completed == route + 1, "原单世界终杀提交真实共享type2通关");
             That(clears[2] == (1u, (uint)route + 1), "真实终杀后主动刷新漩涡日周次数，无需重新登录");
+            That(fixture.Query("SELECT count(*),COALESCE(sum(points),0) FROM guild_contribution_events WHERE character_id=$p0 AND source=5", peer.Id)
+                is [[long contributions, 0L]] && contributions == route + 1,
+                "独立原版引导真实通关使用相同贡献账本，无公会不赠分也不阻止通关");
             peer.Send(1403, [0, 0]);
             var adventure = Read().Single(row => row is { Kind: 1, Opcode: 1403 }).Body;
             That(adventure[0] == 1 && U32(adventure, 19 + 32) == (uint)route + 1,
@@ -177,6 +181,11 @@ internal static class FiendwarGuideTcpTests
                 }
                 peer.Send(37, new byte[8]); Read();
                 if (dungeon == 5350 && route == 0 && step == 0)
+                {
+                    FiendwarRaidTcpTests.VerifyPotentialPotion(fixture, peer, true, 11);
+                    FiendwarRaidTcpTests.VerifyPotentialPotion(fixture, peer, false, 12);
+                }
+                if (dungeon == 5350 && route == 0 && step == 0)
                     for (int revival = 0; revival < 6; revival++)
                     {
                         peer.Send(40, [0x74, 0, 4, 1, 0, 0]); Read();
@@ -189,6 +198,8 @@ internal static class FiendwarGuideTcpTests
                     if (map[offset + 21] == 1 || map[offset + 13] == 9) continue;
                     peer.Send(39, FormalDungeonTcpTests.Death(U16(map, offset + 6), peer.Id, map[offset + 12]));
                     That(Read().Any(row => row is { Kind: 0, Opcode: 38 }), "引导原房间怪物真实死亡");
+                    That(fixture.Query("SELECT count(*) FROM character_fiendwar_title_facts WHERE character_id=$p0", peer.Id) is [[0L]],
+                        "官方Guide真实击杀与清图不产生团队漩涡称号事实");
                 }
             }
         }

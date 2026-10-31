@@ -108,6 +108,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         var death = new DungeonDeathProjection(context, projection, log, time);
         context.Death = death;
         var revival = new DungeonRevivalProjection(context, log, time);
+        var disguise = new ConsumableDisguiseProjection(context, projection, log, time);
         var tagRevival = new TagEvildomRevivalProjection(context, log, time);
         var tagDeadline = tagEvildomRun is null ? null : new TagEvildomDeadlineProjection(context, projection, tagEvildomRun, log, SqliteBusyRetry.IsBusy, time);
         var dailyFatigue = new ServiceDayProjection(context, log, projection, time, inventory, missionBook, pvpMissions);
@@ -372,6 +373,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                         }
                         await dailyFatigue.RefreshAsync();
                         await revival.RefreshAsync();
+                        await disguise.RefreshAsync();
                         await tagRevival.RefreshAsync();
                         if (tagDeadline is not null) await tagDeadline.RefreshAsync();
                         if (context.BoosterUses is { } boosterUses) await boosterUses.RefreshAsync();
@@ -403,6 +405,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             nativeRegistration?.Dispose();
             await dailyFatigue.DisposeAsync();
             await revival.DisposeAsync();
+            await disguise.DisposeAsync();
             await tagRevival.DisposeAsync();
             if (tagDeadline is not null) await tagDeadline.DisposeAsync();
             if (context.BoosterUses is { } boosterUses) await boosterUses.DisposeAsync();

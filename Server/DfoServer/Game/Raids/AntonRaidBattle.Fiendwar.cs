@@ -247,6 +247,7 @@ internal sealed partial class AntonRaidBattle
                 field = fiendwarEngine.CompleteArea(field, 31, lukeClock.GetUtcNow()).State;
             }
             else field = fiendwarEngine!.CompleteArea(field, encounter.Area, lukeClock.GetUtcNow()).State;
+            RecordGuildClearParty(facts.Select(row => row.Actor.Character));
             foreach (var row in facts)
             {
                 run.ClearFacts.Add(row.Actor, row.Fact);

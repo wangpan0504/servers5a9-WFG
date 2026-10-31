@@ -31,6 +31,7 @@ internal sealed partial class AntonRaidBattle
         public Dictionary<RaidActor, long> MapEpochs { get; } = [];
         public Dictionary<RaidActor, DungeonClearFact> ClearFacts { get; } = [];
         public HashSet<ushort> RosterContributions { get; } = [];
+        public bool GuildPartyRecorded { get; set; }
         public bool Cleared => ClearFacts.Count != 0;
         public bool AntonEnergyConfirmed { get; set; }
         public long EnergyReturnEpoch { get; set; }
@@ -165,6 +166,7 @@ internal sealed partial class AntonRaidBattle
             // 第一次ClearPhase产生Reward候选即结束旧阶段业务；随后只补原Run已提交成员事实，
             // 不再扣HP、改图状态或执行旧阶段symbol/timer行为。
             // Evaluate可能拒绝未知执行语义；在它成功前不消费已提交事实，原Run可完整重放。
+            RecordGuildClearParty(facts.Select(row => row.Actor.Character));
             foreach (var row in facts)
             {
                 run.ClearFacts.Add(row.Actor, row.Fact);

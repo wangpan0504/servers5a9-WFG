@@ -232,6 +232,9 @@ internal static partial class DatabaseSchemaTests
             PvpRatingUpgrade(root);
             PvpTotalTeamUpgrade(root);
             RaidLifecycleUpgrade(root);
+            RaidGuildContributionUpgrade(root);
+            FiendwarRecoveryUpgrade(root);
+            FiendwarTitlesUpgrade(root);
             PvpTotalRatingUpgrade(root);
             PvpMissionUpgrade(root);
             PvpDailyUpgrade(root);

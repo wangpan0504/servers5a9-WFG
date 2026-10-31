@@ -32,7 +32,7 @@ internal sealed record MonsterAiRule(uint DungeonId, int? MapId, MonsterAiParame
     MonsterAiParameter? HitPoints = null, MonsterAiParameter? Defense = null);
 
 internal sealed record MonsterAiProfile(MonsterAiValue Warlike, MonsterAiValue Sight, MonsterAiValue MoveSpeed, MonsterAiValue AttackSpeed,
-    MonsterAiValue HitPoints = default, MonsterAiValue Defense = default)
+    MonsterAiValue HitPoints = default, MonsterAiValue Defense = default, MonsterAiValue AttackPower = default)
 {
     public static MonsterAiProfile Native { get; } = new(MonsterAiValue.Native, MonsterAiValue.Native, MonsterAiValue.Native, MonsterAiValue.Native);
 }
@@ -88,7 +88,7 @@ internal sealed class DungeonMonsterAiSettings
 
 // 同一个组队实例的角色投影共享本次房间访问的快照，热改不能令同房队员拿到不同参数；
 // 回访或换房按当时配置重新解析，因此只保留最近一次访问。
-internal sealed class DungeonMonsterAiRooms(DungeonMonsterAiSettings? settings, float hitPointMultiplier = 1)
+internal sealed class DungeonMonsterAiRooms(DungeonMonsterAiSettings? settings, float hitPointMultiplier = 1, float attackPowerMultiplier = 1)
 {
     readonly object gate = new();
     (uint Dungeon, int Map)? frozen;
@@ -108,6 +108,8 @@ internal sealed class DungeonMonsterAiRooms(DungeonMonsterAiSettings? settings, 
                 float configured = resolved.HitPoints.Mode == MonsterAiMode.Multiplier ? resolved.HitPoints.Number : 1;
                 profile = resolved with { HitPoints = new(MonsterAiMode.Multiplier, configured * hitPointMultiplier) };
             }
+            if (attackPowerMultiplier != 1)
+                profile = (profile ?? MonsterAiProfile.Native) with { AttackPower = new(MonsterAiMode.Multiplier, attackPowerMultiplier) };
             return profile;
         }
     }

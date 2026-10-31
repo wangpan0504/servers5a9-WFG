@@ -15,7 +15,8 @@ internal sealed partial class CharacterRepository
     // 成功返回后调用方在原owner内确认死亡并发布Selected；这里不修改实例或发送通知。
     public DungeonGrowthCommit CommitDungeonGrowth(AccountOwners.Lease owner, Character expected,
         SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog catalog,
-        FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null) => owner.Execute(() =>
+        FrozenDungeonGroundDeath? loot = null, QuestDropPlan? questDrops = null, DfoServer.Game.Inventory.Services.EquipmentGrowthPlan? equipmentGrowth = null,
+        DfoServer.Game.Raids.AntonRaidBattle.FiendwarTitleDeath? fiendwarTitle = null) => owner.Execute(() =>
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(run);
@@ -35,6 +36,8 @@ internal sealed partial class CharacterRepository
             reward.MonsterLevel != prepared.Monster.CandidateLevel || reward.ResourceSource != DungeonKillExperienceCatalog.ResourcePath)
             throw new InvalidDataException("成长提交需要本角色当前实例的待提交死亡及符合副本声明的经验");
         var death = prepared.Death;
+        if (fiendwarTitle is not null && (!ReferenceEquals(fiendwarTitle.Run, run) || !ReferenceEquals(fiendwarTitle.Death, prepared)))
+            throw new InvalidDataException("漩涡成就凭证不属于原死亡候选");
         var identity = death.Identity;
         if (equipmentGrowth is not null && (!ReferenceEquals(equipmentGrowth.Expected, expected) ||
             equipmentGrowth.EventId != death.EventId || equipmentGrowth.Identity != identity))
@@ -165,6 +168,7 @@ internal sealed partial class CharacterRepository
             }
         }
         WriteDungeonGrowthReceipt(db, tx, owner, expected, prepared, reward, plan, proficiencyGained);
+        RecordFiendwarTitleDeath(db, tx, owner, fiendwarTitle);
         SaveCommittedGuildExperience(db, tx, expected.Id, death.EventId, committedBonuses);
         if (questDrops is not null) SaveQuestDrops(db,tx,owner.Account,questDrops,inventoryCharacter.Inventory);
         CommitOrdinaryLukeDrop(db, tx, owner, run, prepared, loot);

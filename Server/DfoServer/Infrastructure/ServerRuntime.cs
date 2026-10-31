@@ -713,6 +713,7 @@ internal static class ServerRuntime
             new ConsumableUseHandler(new InventoryConsumableUseService(itemResources.RecoveryConsumables, clock), log, tutorials, itemResources.Items, inventoryProjection,
                 new InventoryPremiumContractUseService(itemResources.Items, itemResources.Contracts, clock), creatures, creatureProjection, projection,
                 new Game.ExpertJob.ExpertJobLearning(expertJobs, itemResources.Items, clock), expertJobs),
+            new ConsumableDisguiseHandler(projection, log, clock),
             weaponSkinHandler,
             rentalHandler,
             new CurrencyHandler(new Game.Currency.CurrencyService(itemResources.GoldLimits), inventoryProjection),

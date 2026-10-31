@@ -1,5 +1,6 @@
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
+using DfoServer.GameWorld.Items;
 
 namespace DfoServer.Network.Builders.Inventory;
 
@@ -12,14 +13,22 @@ internal static class ShopPackets
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         writer.Write((byte)1);
-        writer.Write(rows.Length);
-        foreach (var row in rows)
+        var legacy = rows.Where(row => row.Period == ItemPurchasePeriod.Legacy).ToArray();
+        var periodic = rows.Where(row => row.Period != ItemPurchasePeriod.Legacy).ToArray();
+        writer.Write(legacy.Length);
+        foreach (var row in legacy)
         {
             writer.Write(row.ItemId);
             writer.Write(row.Count);
         }
-        // 0235024F..0235032D 共消费四组i32计数和(itemId,count)；后两组分别合入前两组缓存。
-        writer.Write(0);
+        // 旧式限购写062CEC30，新purchase limit写062CEC44；两种缓存不能混写。
+        writer.Write(periodic.Length);
+        foreach (var row in periodic)
+        {
+            writer.Write(row.ItemId);
+            writer.Write(row.Count);
+        }
+        // 后两组分别合入前两组缓存，当前无需追加行。
         writer.Write(0);
         writer.Write(0);
         return stream.ToArray();

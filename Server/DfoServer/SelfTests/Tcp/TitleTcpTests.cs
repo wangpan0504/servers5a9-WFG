@@ -13,12 +13,13 @@ using static DfoServer.Testing.TcpPeer;
 
 namespace DfoServer.Testing;
 
-internal static class TitleTcpTests
+internal static partial class TitleTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         int checks = Count;
         var real = new TitleCatalog(resources.Archive, resources.Quests);
+        FiendwarFacts(resources, Path.Combine(root, "fiendwar-title-facts"));
         var registered = resources.Quests.All.Where(quest => quest.Grade == "[title]").ToArray();
         That(real.Quests[6583].Quest.Condition == "[seeking]" && real.Quests[6583].Quest.SubType == 25 &&
             real.Quests[6583].Quest.IntData.SequenceEqual([-7, 5]) && real.RewardSlot(6583, 26691) == (1, 73),

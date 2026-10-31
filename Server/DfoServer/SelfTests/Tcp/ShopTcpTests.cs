@@ -8,7 +8,7 @@ using static DfoServer.Testing.TestCheck;
 
 namespace DfoServer.Testing;
 
-internal static class ShopTcpTests
+internal static partial class ShopTcpTests
 {
     public static async Task RunAsync(ServerOptions source, string root, TcpTestResources resources)
     {
@@ -327,6 +327,7 @@ internal static class ShopTcpTests
         await fixture.StopAsync();
         That(fixture.Query("PRAGMA integrity_check") is [["ok"]] && fixture.Query("PRAGMA foreign_key_check").Length == 0, "shop TCP database integrity");
         await VerifyTargetBatchAndRoomAdmissionAsync(source, root, resources);
+        await VerifyPeriodicLimitsAsync(source, root, resources);
 
         void Counts(TcpPeer peer)
         {

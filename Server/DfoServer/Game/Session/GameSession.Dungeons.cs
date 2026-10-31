@@ -35,7 +35,9 @@ internal sealed partial class GameSession
         {
             var equipmentGrowth = items is null ? null : Game.Inventory.Services.EquipmentGrowthPlan.Create(expected, run, prepared,
                 items, (timeProvider ?? TimeProvider.System).GetUtcNow(), timeProvider);
-            committed = repository.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth);
+            var fiendwar = raidCombat is { Battle.Kind: Raids.RaidKind.Fiendwar } raid
+                ? raid.Battle.CaptureFiendwarTitleDeath(raid.Actor, run, prepared) : null;
+            committed = repository.CommitDungeonGrowth(owner, expected, run, prepared, reward, catalog, loot, questDrops, equipmentGrowth, fiendwar);
         }
         if (committed.Character.Id != expected.Id || committed.Character.Revision < expected.Revision)
             throw new InvalidOperationException("副本成长提交结果不属于原角色或revision回退");
