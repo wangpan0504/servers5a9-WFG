@@ -49,6 +49,12 @@ internal static class BoosterEpicExchangeSkinPropagationTests
         var special = service.Make(marked, new(4, 2, weapon.Position));
         That(plain.Accepted && special.Accepted && plain.Plan is not null && special.Plan is not null,
             "带来源装备仍可执行既有合法外观制作，不新增限制");
+        var restricted = ordinary with { Inventory = ordinary.Inventory with { Items = ordinary.Inventory.Items.Replace(weapon,
+            weapon with { Core = weapon.Core with { DisjointForbidden = true } }) } };
+        string restrictedBefore = JsonSerializer.Serialize(restricted);
+        var rejected = service.Make(restricted, new(4, 2, weapon.Position));
+        That(rejected is { Accepted: false, Error: 93, Plan: null } && JsonSerializer.Serialize(restricted) == restrictedBefore,
+            "同模板受限实例不可用幻化消耗，原武器和模具保持");
         var after = special.Plan!.After;
         var tokens = after.Items.Where(item => item.Core.ItemId == tokenTemplate.Id).ToArray();
         That(tokens.Length > 0 && tokens.All(item => item.Core.Kind == ItemKind.Consumable &&

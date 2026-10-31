@@ -59,6 +59,9 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
     public bool IsRental { get; init; }
     // 服务端装备实例来源；旧 JSON 为 null，不从模板或未知 wire 位推断。
     public EpicExchangeOrigin? EpicExchangeOrigin { get; init; }
+    // 礼包创建时写入的服务端实例限制；旧实例不按模板反推，不占未知客户端位。
+    public bool DisjointForbidden { get; init; }
+    public bool DestructionSoulForbidden { get; init; }
     public EchonSet? EchonSet { get; init; }
     [JsonIgnore] public byte Upgrade => (byte)(Attr & 0x1F);
     [JsonIgnore] public bool IsStackable => Kind is ItemKind.Consumable or ItemKind.Material or ItemKind.Quest or
@@ -71,7 +74,8 @@ internal sealed record ItemCore(int ItemId, ItemKind Kind, int Value)
         if (ItemId <= 0 || !Enum.IsDefined(Kind) || Value < 0 || IsStackable && Value == 0 || EmblemSocketCount > 2 || SortLockFlag > 1 ||
             Kind != ItemKind.Creature && SealFlag > 1 || Chronicle0.Id == 0 && Chronicle1.Id != 0 ||
             Random0.Type == 0 && (Random1.Type != 0 || Random2.Type != 0) || Random1.Type == 0 && Random2.Type != 0 ||
-            EpicExchangeOrigin is { } origin && (Kind != ItemKind.Equipment || origin.Version != 1 || origin.SourceItemId <= 0))
+            EpicExchangeOrigin is { } origin && (Kind != ItemKind.Equipment || origin.Version != 1 || origin.SourceItemId <= 0) ||
+            DisjointForbidden && Kind != ItemKind.Equipment || DestructionSoulForbidden && !DisjointForbidden)
             throw new InvalidDataException("无效物品核心");
         if (Kind == ItemKind.Talisman)
             TalismanSocketColors.Read(this).Validate();

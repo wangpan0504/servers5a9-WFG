@@ -78,6 +78,12 @@ internal static class EpicExchangeTests
             grantedTarget == target,
             "target is one fresh instance with exchange count 1 and no inherited upgrades");
         var plan = result.Plan!;
+        var restrictedSource = sourceItem with { Core = sourceItem.Core with { DisjointForbidden = true, DestructionSoulForbidden = true } };
+        var restricted = funded with { Inventory = funded.Inventory with { Items = [restrictedSource] } };
+        var restrictedExchange = exchange.Exchange(restricted, source, target, 9, now);
+        That(restrictedExchange.Accepted && restrictedExchange.Plan!.After.Items.Single().Core is
+            { DisjointForbidden: true, DestructionSoulForbidden: true, Extension119: 3 },
+            "休亚交换重建装备时保留实例限制，不能通过更换模板解除限制");
         That(plan.Reason == "epic_exchange" && plan.ChangedSlots.Length > 0, "plan reports epic exchange and changed slots");
 
         // 同编号目标等于重掷品级：客户端按同稀有度装备开放，服务端不再拒绝。

@@ -65,7 +65,9 @@ internal sealed class EpicExchangeService(EpicExchangeCatalog catalog, ItemCatal
         {
             // 交换次数 +1 并保持交换资格位；bits6..7 保持 0，强化/增幅/锻造/附魔不继承。
             core = InventoryRewardGrantService.Create(target, utcNow: now);
-            core = core with { Extension119 = (byte)(((count + 1) << 1) | 1) };
+            core = core with { Extension119 = (byte)(((count + 1) << 1) | 1),
+                DisjointForbidden = source.Core.DisjointForbidden,
+                DestructionSoulForbidden = source.Core.DestructionSoulForbidden };
         }
         catch (InvalidDataException)
         {

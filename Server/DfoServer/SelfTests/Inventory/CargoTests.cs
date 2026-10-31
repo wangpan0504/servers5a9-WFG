@@ -345,7 +345,8 @@ internal static class CargoTests
             That(!cargo.Gold(limitFixture, 1, false).Accepted, "withdraw cannot overflow character carry limit");
             var weapon = current.Inventory.Find(new(InventoryListType.Equipment, 12))!;
             var detailed = weapon with { Core = weapon.Core with { Attr = 9, EnchantCardId = 123, AmplifyValue = 78,
-                Rune = 42, Random0 = new(1, 2, 3), GuardianGemKeys = 1234567, Extension114 = new(2, 345), SortLockFlag = 1 } };
+                Rune = 42, Random0 = new(1, 2, 3), GuardianGemKeys = 1234567, Extension114 = new(2, 345), SortLockFlag = 1,
+                DisjointForbidden = true, DestructionSoulForbidden = true } };
             current = Commit(new(true, 0, new(current.Inventory, current.Inventory with { Items = current.Inventory.Items.Replace(weapon, detailed) }, "cargo_fixture")));
             current = Commit(Move(detailed.Position, new(InventoryListType.PersonalCargo, 7)));
             That(current.Inventory.Find(new(InventoryListType.PersonalCargo, 7)) == detailed with { Position = new(InventoryListType.PersonalCargo, 7) },

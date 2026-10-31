@@ -32,6 +32,7 @@ internal sealed record BoosterDefinition(ImmutableArray<BoosterPool> Pools, stri
     public bool UnsealsRandomOptions { get; init; }
     public int? CustomAbilityGrade { get; init; }
     public bool SetsDisjointInstanceType { get; init; }
+    public bool ForbidsDestructionSouls { get; init; }
     public bool SetsEpicExchangeInstanceType { get; init; }
     // 休亚商店在售的选组礼盒：PVF 没写交换声明，但产物同样是在休亚处兑换来的。
     public bool FromExchangeShop { get; init; }
@@ -197,7 +198,7 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
         bool setsDisjointInstanceType = disjointDeclarations.Count != 0;
         if (setsDisjointInstanceType)
         {
-            if (type != "booster selection")
+            if (type is not ("booster selection" or "upgradable legacy"))
                 return new([], "set disjoint instance type");
             foreach (Match declaration in disjointDeclarations)
             {
@@ -310,7 +311,8 @@ internal sealed class BoosterCatalog(PvfArchive archive, IReadOnlyDictionary<int
                 ? new([new(1, rewards.ToImmutable())], Lottery: true,
                     // 当前PVF没有独立契约资格字段；只认五种NPC系列的完整命名，不把任意罐/礼盒按类型放行。
                     NpcPocketPot: Regex.IsMatch(PvfScript.Section(text, "name"), @"^\s*`[土火木水金]罐的(?:高级)?袖珍罐(?:\s|\()"))
-                    { LotteryUseNeedItem = lotteryUseNeedItem }
+                    { LotteryUseNeedItem = lotteryUseNeedItem, SetsDisjointInstanceType = setsDisjointInstanceType,
+                        ForbidsDestructionSouls = setsDisjointInstanceType }
                 : new([], "袖珍罐总权重为零");
         }
         if (type == "usable cera package")

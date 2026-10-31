@@ -165,6 +165,13 @@ internal static class ChronicleEnchantTests
             var planned = service.Plan(role, request, out var receipt);
             That(planned.Accepted && receipt is { Succeeded: false } && planned.Plan!.After.Find(request.Target) is null,
                 "真实普通气息按第二条阈值失败，预先冻结共享分解返还和销毁");
+            var original = role.Inventory.Find(request.Target)!;
+            var restricted = role with { Inventory = role.Inventory with { Items = role.Inventory.Items.Replace(original,
+                original with { Core = original.Core with { DisjointForbidden = true, DestructionSoulForbidden = true } }) } };
+            var restrictedPlan = service.Plan(restricted, request, out var restrictedReceipt);
+            That(restrictedPlan.Accepted && restrictedReceipt is { Succeeded: false } &&
+                restrictedReceipt.Refunds.SequenceEqual(receipt!.Refunds.Where(row => row.ItemId != items.Disjoint.Souls[items.Items.Get(gearId).Rarity]?.ItemId)),
+                "气息附魔毁装同样消费实例灵魂限制，其他返还和失败语义保留");
             string before = Snapshot();
             Sql("CREATE TRIGGER fail_chronicle_destroy BEFORE INSERT ON inventory_audit_log " +
                 "WHEN NEW.action_name='chronicle_enchant' BEGIN SELECT RAISE(ABORT,'destruction rollback'); END");

@@ -43,6 +43,7 @@ internal static class AuctionCancelTests
         Wire();
         Snapshot();
         Commit();
+        Commit(restricted: true);
         Rollback();
         Console.WriteLine($"PASS {Count - checks} auction cancel assertions");
     }
@@ -181,9 +182,10 @@ internal static class AuctionCancelTests
     }
 
     /// <summary>取消上架的完整业务：同事务的 state=2 + 道具回背包 + 审计；各类拒绝都不动挂牌状态。</summary>
-    static void Commit()
+    static void Commit(bool restricted = false)
     {
-        using var f = new Fixture();
+        using var f = new Fixture(restricted);
+        var expectedCore = f.Character.Inventory.Find(SourceSlot)!.Core;
         // ① 先把一件装备挂上去（走真实上架路径：扣背包 + 写挂牌同一事务）。
         f.RegisterAndTrack();
         That(f.Listing("state") == 0L && f.Character.Inventory.Find(SourceSlot) is null, "上架成功后挂牌在售、背包源槽已空");
@@ -207,6 +209,9 @@ internal static class AuctionCancelTests
         // ③ 三条后果：挂牌 state=2、道具回到背包（属性原样）、审计留下 auction_cancel。
         That(f.Listing("state") == (long)AuctionListingState.Cancelled, "★ 独立读库确认挂牌已置为 state=2（已下架）");
         var returned = after.Inventory.Items.Single(item => item.Core.ItemId == SampleTemplate);
+        That(returned.Core == expectedCore && f.Repository.LoadCharacter(f.Owner, after.Slot).Inventory.Items
+            .Single(item => item.Core.ItemId == SampleTemplate).Core == expectedCore,
+            "拍卖取消实际落库保持完整核心及实例限制 " + restricted);
         That(returned.Core.Attr == 2 && returned.Core.Durability == 45 && returned.Core.Count == 1,
             "★ 道具回到背包且强化/耐久等实例字段原样保留（不是重新创建的白板实例）");
         That(returned!.Uid != f.SourceUid, "还回来的是新 UID 的实例（上架时那条物品行已被删除，这是同一份核心的新行）");
@@ -281,7 +286,7 @@ internal static class AuctionCancelTests
         public int ListingId { get; private set; }
         public long SourceUid { get; private set; }
 
-        public Fixture()
+        public Fixture(bool restricted = false)
         {
             Directory.CreateDirectory(root);
             string path = Path.Combine(root, "game.db");
@@ -294,7 +299,8 @@ internal static class AuctionCancelTests
                 AuctionPackets.ItemEntrySnapshot, AuctionPackets.ItemCoreFromEntry);
             // 源槽 27 放样本装备（Attr/耐久非默认值，用来验证「还回来的是同一个实例」）；其余格子留空给「背包满」用例。
             var inventory = new InventorySnapshot([
-                new(0, SourceSlot, new ItemCore(SampleTemplate, ItemKind.Equipment, 999_999_998) { Attr = 2, Durability = 45 })
+                new(0, SourceSlot, new ItemCore(SampleTemplate, ItemKind.Equipment, 999_999_998) { Attr = 2, Durability = 45,
+                    DisjointForbidden = restricted, DestructionSoulForbidden = restricted })
             ]);
             Character = Repository.Create(Owner, new("Canceller", new(38, 1, 450, 234, 0), null) { Level = 95, Inventory = inventory with { Gold = 1_000_000 } });
             SourceUid = Character.Inventory.Find(SourceSlot)!.Uid;

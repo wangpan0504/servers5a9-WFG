@@ -5,7 +5,7 @@ namespace DfoServer.Game.Inventory.Services;
 internal static class DisjointResultCalculator
 {
     public static InventoryReward[] Calculate(DisjointCatalog config, ItemTemplate template, Random random,
-        InventoryReward[]? machineRewards = null)
+        InventoryReward[]? machineRewards = null, bool grantSouls = true)
     {
         var rewards = new Dictionary<int, int>();
         int rarity = template.Rarity;
@@ -36,7 +36,7 @@ internal static class DisjointResultCalculator
             }
         }
         // 新版PVF的灵魂、独立产物和碎片是公共追加规则，不能因使用玩家机器而丢失。
-        if (!config.ExcludedSouls.Contains(template.Id) && config.Souls[rarity] is { } soul && Percent() < soul.NormalChance)
+        if (grantSouls && !config.ExcludedSouls.Contains(template.Id) && config.Souls[rarity] is { } soul && Percent() < soul.NormalChance)
         {
             int count = LevelCount(soul.LevelDivisor);
             if (Percent() < soul.GreatChance) count++;

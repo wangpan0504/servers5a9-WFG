@@ -214,7 +214,8 @@ internal static class MailboxTests
             Repository = new(Path.Combine(root, "game.db"));
             var equipment = InventoryRewardGrantService.Create(resources.Items.Get(18400)) with { Attr = 7, EnchantCardId = 123,
                 EnchantUpgrade = 1, AmplifyType = 1, AmplifyValue = 25, Rune = 3, Random0 = new(1, 2, 3), RandomChangedIndex = 255,
-                EpicExchangeOrigin = withEpicOrigin ? new EpicExchangeOrigin(1, 490705251) : null };
+                EpicExchangeOrigin = withEpicOrigin ? new EpicExchangeOrigin(1, 490705251) : null,
+                DisjointForbidden = withEpicOrigin, DestructionSoulForbidden = withEpicOrigin };
             Repository.Create(SenderOwner, new("MailSender", towns.Room, towns.InitialReturn) { Level = 60,
                 Inventory = new([new(0, new(InventoryListType.Main, 9), equipment),
                     new(0, new(InventoryListType.Main, 121), InventoryRewardGrantService.Create(material, 10))], Gold: 1_000_000) });

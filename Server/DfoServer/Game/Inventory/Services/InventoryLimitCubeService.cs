@@ -145,6 +145,8 @@ internal sealed class InventoryLimitCubeService(ItemCatalog items, LimitCubeCata
                 EnchantUpgrade = target.Core.EnchantUpgrade,
                 SealFlag = target.Core.SealFlag,
                 EpicExchangeOrigin = target.Core.EpicExchangeOrigin,
+                DisjointForbidden = target.Core.DisjointForbidden,
+                DestructionSoulForbidden = target.Core.DestructionSoulForbidden,
                 // 实例位随转换保留：交换资格与已交换次数属于实例，不属于模板。
                 Extension119 = target.Core.Extension119
             };

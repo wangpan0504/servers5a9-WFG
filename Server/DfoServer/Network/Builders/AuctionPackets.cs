@@ -52,6 +52,8 @@ internal static class AuctionPackets
     /// <summary>读取条目快照字段所需的最小长度（最大用到封印 @13）。</summary>
     const int EntryMinimumLength = 14;
     const int EpicExchangeTrailerSize = 12;
+    const int DisjointTrailerSize = 8;
+    const uint DisjointTrailerMagic = 0x31524A44; // 持久BLOB专用ASCII "DJR1"，不属于客户端条目。
     const uint EpicExchangeTrailerMagic = 0x4F585045; // 持久BLOB专用ASCII "EPXO"，不属于客户端条目。
 
     public static byte[] ServiceNotice(byte serviceType)
@@ -272,11 +274,12 @@ internal static class AuctionPackets
     static int RemainingSeconds(long expiresAtUnix, long now) => (int)Math.Clamp(expiresAtUnix - now, 0, int.MaxValue);
 
     /// <summary>
-    /// 挂牌持久快照：旧核心123B；带装备来源时另附12B服务端trailer。
+    /// 挂牌持久快照：旧核心123B；装备来源追加12B、分解限制追加8B服务端trailer，按此顺序组合。
     /// 前123B仍由唯一物品编码入口产生；trailer不能作为客户端条目发送。
     /// </summary>
     public static byte[] ItemEntrySnapshot(ItemCore core)
     {
+        if (core.DisjointForbidden || core.DestructionSoulForbidden) core.Validate();
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
         ItemListProtocolWriter.Write(writer, 0, core);
@@ -285,6 +288,11 @@ internal static class AuctionPackets
             writer.Write(EpicExchangeTrailerMagic);
             writer.Write(origin.Version);
             writer.Write(origin.SourceItemId);
+        }
+        if (core.DisjointForbidden)
+        {
+            writer.Write(DisjointTrailerMagic);
+            writer.Write(core.DestructionSoulForbidden ? 3u : 1u);
         }
         return stream.ToArray();
     }
@@ -303,17 +311,19 @@ internal static class AuctionPackets
     /// **没有写在条目里的**：物品种类（`Kind`，挂牌表单独一列，因此由调用方传入）、
     /// `IsRental`（租赁标记不入客户端核心；上架本来就拒绝带期限与租赁实例，还回来的实例不会是租赁）。
     ///
-    /// 来源仅从完整135B持久trailer恢复，旧123B不推断来源。未知长度、magic、版本、源ID或种类拒绝。
-    /// 旧程序只能读123B，回退前须处理135B存档，不能静默截断来源。
-    /// 快照损坏（长度不为123/135B、两个计数字节与实际内容不符）时抛
+    /// 来源和限制只从完整trailer恢复，旧123B不推断。未知长度、magic、版本、源ID、限制位或种类拒绝。
+    /// 新快照长度为123/131/135/143B；回退旧程序前须处理其不支持的存档，不能静默截断元数据。
+    /// 快照损坏（长度或两个冗余计数字节与实际内容不符）时抛
     /// <see cref="InvalidDataException"/>：调用方必须**拒绝取消**而不是拿半个核心去发放。
     /// </summary>
     public static ItemCore ItemCoreFromEntry(byte[] entry, ItemKind kind)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        if (entry.Length != ItemListProtocolWriter.EntrySize &&
-            entry.Length != ItemListProtocolWriter.EntrySize + EpicExchangeTrailerSize)
-            throw new InvalidDataException($"拍卖行物品条目快照长度应为123B或135B，实际 {entry.Length}B");
+        int extra = entry.Length - ItemListProtocolWriter.EntrySize;
+        bool hasOrigin = extra == EpicExchangeTrailerSize || extra == EpicExchangeTrailerSize + DisjointTrailerSize;
+        bool hasRestrictions = extra == DisjointTrailerSize || extra == EpicExchangeTrailerSize + DisjointTrailerSize;
+        if (extra != 0 && !hasOrigin && !hasRestrictions)
+            throw new InvalidDataException($"拍卖行物品条目快照长度无效：{entry.Length}B");
         using var stream = new MemoryStream(entry, writable: false);
         using var reader = new BinaryReader(stream);
         _ = reader.ReadInt16(); // [0..1] 槽位：挂牌保存时固定写 0，不属于核心。
@@ -384,13 +394,22 @@ internal static class AuctionPackets
             throw new InvalidDataException("拍卖行物品条目快照的字段宽度与编码入口不一致");
 
         EpicExchangeOrigin? origin = null;
-        if (entry.Length != ItemListProtocolWriter.EntrySize)
+        if (hasOrigin)
         {
             if (reader.ReadUInt32() != EpicExchangeTrailerMagic)
                 throw new InvalidDataException("拍卖行装备来源trailer标识无效");
             origin = new(reader.ReadInt32(), reader.ReadInt32());
             if (kind != ItemKind.Equipment || origin.Version != 1 || origin.SourceItemId <= 0)
                 throw new InvalidDataException("拍卖行装备来源版本、源编号或物品种类无效");
+        }
+        uint restrictions = 0;
+        if (hasRestrictions)
+        {
+            if (reader.ReadUInt32() != DisjointTrailerMagic)
+                throw new InvalidDataException("拍卖行装备限制trailer标识无效");
+            restrictions = reader.ReadUInt32();
+            if (kind != ItemKind.Equipment || restrictions is not (1 or 3))
+                throw new InvalidDataException("拍卖行装备限制或物品种类无效");
         }
 
         var core = new ItemCore(itemId, kind, value)
@@ -437,7 +456,9 @@ internal static class AuctionPackets
             Extension114 = new ItemExtension(extension114Flag, extension114Value),            Extension119 = extension119,
             Extension120 = extension120,
             Extension121 = extension121,
-            EpicExchangeOrigin = origin
+            EpicExchangeOrigin = origin,
+            DisjointForbidden = (restrictions & 1) != 0,
+            DestructionSoulForbidden = (restrictions & 2) != 0
         };
         // 两个计数字节是冗余信息（写入端按「非零个数」算）：与读回来的内容不符说明快照被改坏，
         // 宁可拒绝发道具，也不把半个核心还进背包。

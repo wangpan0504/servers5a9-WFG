@@ -55,6 +55,21 @@ internal static class UpgradeChronicleServiceTests
         var result = service.Upgrade(character, BlueprintSlot, Blueprint, TargetSlot, Target);
         That(result.Accepted && result.Plan is not null, "配方匹配时接受");
         var after = result.Plan!.After;
+        foreach (int ticketType in new[] { 0, 1 })
+        {
+            var restricted = character with { Inventory = before with { Items = before.Items.Replace(before.Find(TargetSlot)!,
+                before.Find(TargetSlot)! with { Core = before.Find(TargetSlot)!.Core with
+                    { DisjointForbidden = true, DestructionSoulForbidden = true } }) } };
+            var restrictedRecipes = new UpgradeChronicleCatalog([new UpgradeChronicleDefinition(Blueprint,
+                [new UpgradeChronicleRecipe(0, [Target], [new ItemMaterialCost(Cube, 100), new ItemMaterialCost(Cloth, 20)], Output, 1)])
+                { TicketType = ticketType }]);
+            var restrictedService = new InventoryUpgradeChronicleService(restrictedRecipes, catalog,
+                new EpicPieceCatalog("[piece list]\n60000 70001\n[/piece list]"));
+            var converted = restrictedService.Upgrade(restricted, BlueprintSlot, Blueprint, TargetSlot, Target);
+            That(converted.Accepted && converted.Plan!.After.Find(TargetSlot)!.Core is
+                { DisjointForbidden: true, DestructionSoulForbidden: true },
+                "设计图清除或保留打造时均不能解除实例限制 " + ticketType);
+        }
         That(after.Find(BlueprintSlot) is null, "设计图被整件消耗");
         var upgraded = after.Items.Single(item => item.Uid == 12);
         That(upgraded.Core.ItemId == Output && upgraded.Position == TargetSlot && upgraded.Core.Attr == 7 &&

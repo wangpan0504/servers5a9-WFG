@@ -91,7 +91,8 @@ internal sealed class InventoryUpgradeChronicleService(UpgradeChronicleCatalog r
         {
             // 低级勇者及魔法封印转圣物明确清除原打造，实例身份、品级与剩余期限仍沿用。
             core = InventoryRewardGrantService.Create(output, utcNow: now) with
-            { Value = core.Value, ExpireTime = core.ExpireTime, SortLockFlag = core.SortLockFlag };
+            { Value = core.Value, ExpireTime = core.ExpireTime, SortLockFlag = core.SortLockFlag,
+                DisjointForbidden = core.DisjointForbidden, DestructionSoulForbidden = core.DestructionSoulForbidden };
         }
         if (definition.TicketType is 1 or 4 or 6 or 18)
             core = core with { EmblemSocketCount = 0, Emblem1 = 0, Emblem2 = 0 };
