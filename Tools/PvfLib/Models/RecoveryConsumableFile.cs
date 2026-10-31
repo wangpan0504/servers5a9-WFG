@@ -20,6 +20,7 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
     public byte? EffectMaintenance { get; init; }
     public byte? CooltimeMaintenance { get; init; }
     public ImmutableArray<int> LimitDungeons { get; init; } = [];
+    public ImmutableArray<int>? ActionUsableDungeons { get; init; }
 
     public static RecoveryConsumableFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -65,12 +66,22 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         int? questBonus = ExpBonus(document, "quest exp bonus rate", errors);
         var limits = document.Sections.Where(section => section.Name == "limit dungeon")
             .SelectMany(section => section.Values).Where(token => token.Type == 0).Select(token => token.Value).ToImmutableArray();
+        var usableSections = document.Sections.Where(section => section.Name == "action usable dungeon").ToArray();
+        ImmutableArray<int>? usable = null;
+        if (usableSections.Length != 0)
+        {
+            if (usableSections is [{ Children.Length: 0, Values.Length: > 0 } section] &&
+                section.Values.All(token => token.Type == 0 && token.Value > 0))
+                usable = section.Values.Select(token => token.Value).ToImmutableArray();
+            else errors.Add("恢复物品可用地下城声明不完整");
+        }
         return new(id, path, stackable, coolTime, group, hp, mp,
             document.Sections.Select(section => section.Name).ToImmutableArray(), errors.ToImmutableArray())
         { SubType = subType, TotalUsableCount = totalUses, StructureDiagnostics = structureErrors.ToImmutableArray(),
             ExpBonusPermille = bonus, QuestExpBonusPermille = questBonus,
             ExpBonusMilliseconds = duration is { Target: "myself" } ? duration.Milliseconds : null,
-            StatChangeDuration = duration, EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits };
+            StatChangeDuration = duration, EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits,
+            ActionUsableDungeons = usable };
     }
 
     static bool CompleteIntegerScalars(IEnumerable<PvfTokenSection> sections) =>

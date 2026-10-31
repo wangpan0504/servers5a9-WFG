@@ -58,6 +58,9 @@ internal sealed partial class GameSession
                 return new ConsumableUseResult(ConsumableUseOutcome.CloseConnection, "state-changed");
             if (!CanUseDungeonItem(request.ItemId))
                 return Reject("grief-item-not-allowed-or-exhausted");
+            if (definition.AllowedDungeons is { } allowed &&
+                (Phase != SessionPhase.Dungeon || formalDungeon is not { } restricted || !allowed.Contains(restricted.Entry.DungeonId)))
+                return Reject("potion_dungeon_not_allowed");
             if ((definition.SummonsApc || definition.RequiresDungeon) && (formalDungeon?.CharacterDead != false ||
                 formalDungeon.Run.Phase != DfoServer.Game.Dungeons.SinglePlayerDungeonPhase.Dungeon))
                 return Reject(definition.SummonsApc ? "summon_requires_living_dungeon_character" : "projectile_requires_living_dungeon_character");

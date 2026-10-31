@@ -25,6 +25,7 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public EpicDropBuffDefinition? EpicDropBuff { get; init; }
     public EnhancementPotionDefinition? EnhancementPotion { get; init; }
     public ImmutableHashSet<uint> ExcludedDungeons { get; init; } = ImmutableHashSet<uint>.Empty;
+    public ImmutableHashSet<uint>? AllowedDungeons { get; init; }
     public bool Allows(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
         job < 16 && (Jobs & (1 << job)) != 0;
 }
@@ -77,6 +78,7 @@ internal sealed class RecoveryConsumableCatalog
             file.DeclaredFields.Contains("cool time") && file.CoolTime is null || file.CoolTime < 0 ||
             file.DeclaredFields.Contains("cooltime group") && file.CoolGroup is null || file.CoolGroup < 0 ||
             file.DeclaredFields.Contains("sub type") && file.SubType is null ||
+            file.DeclaredFields.Contains("action usable dungeon") && file.ActionUsableDungeons is null ||
             ConsumableSpecialItems.IsStaminaRecovery(file.TemplateId) &&
                 (file.Diagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 }) ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is null ||
@@ -121,6 +123,7 @@ internal sealed class RecoveryConsumableCatalog
             Unlimited = raw.TypeDeclaration.Label == "[unlimited waste]",
             TownGiftItem = raw.TypeDeclaration.Label == "[unlimited waste]" ? ConsumableSpecialItems.TownGiftItem(file.TemplateId) : 0,
             RevivalBlessing = revival,
+            AllowedDungeons = file.ActionUsableDungeons?.Select(id => checked((uint)id)).ToImmutableHashSet(),
             ExcludedDungeons = revival ? file.LimitDungeons.Select(id => checked((uint)id)).ToImmutableHashSet() : ImmutableHashSet<uint>.Empty };
     }
 

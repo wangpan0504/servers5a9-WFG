@@ -19,6 +19,7 @@ internal static class ConsumableUseSessionTests
 {
     public static void Run(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
     {
+        RunDungeonRestrictions(towns, characters, archive);
         RunTimedStates(towns, characters, archive);
         RunStaminaVariant(towns, characters, archive);
         RunEpicDropStates(towns, characters, archive);
@@ -306,6 +307,39 @@ internal static class ConsumableUseSessionTests
                     global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
                 f.Session.CompleteFormalDungeonLoading() is not null && f.Session.ReturnFromFormalDungeon() is not null,
                 "活动防虚弱用例真实入图完成加载再撤退，不直接调用虚弱纯函数");
+        }
+    }
+
+    static void RunDungeonRestrictions(TownCatalog towns, CharacterCatalog characters, PvfArchive archive)
+    {
+        foreach (bool allowed in new[] { false, true })
+        using (var f = new Fixture(towns, characters, hp: ConsumableUseTests.Hp with
+            { ItemId = 10312384, AllowedDungeons = ImmutableHashSet.Create(allowed ? 3U : 5350U) }))
+        {
+            f.Select();
+            var before = f.Read();
+            That(f.Use().Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) && f.Count == 3,
+                "副本专用补给在城镇拒绝，不扣数量、不启动冷却或改变持久revision");
+            That(f.Session.LeaveRoom() && f.Session.Travel(new(38, 2, 1085, 249, 5, 38, 0, 0)),
+                "副本专用补给回归沿真实入口旅行");
+            f.Session.BeginDungeonSelection();
+            That(f.Use().Outcome == ConsumableUseOutcome.Rejected && f.Count == 3,
+                "选图界面没有正式副本身份时仍不能消费专用药");
+            That(f.Session.EnterFormalDungeon(3, 0, 0, global::DfoServer.Testing.SelfTestCatalogs.Dungeons(archive),
+                global::DfoServer.Testing.SelfTestCatalogs.Rooms(archive)) is not null &&
+                f.Session.CompleteFormalDungeonLoading() is not null, "专用药建立真实正式副本");
+            before = f.Read();
+            var result = f.Use();
+            if (!allowed)
+                That(result.Outcome == ConsumableUseOutcome.Rejected && Same(before, f.Read()) && f.Count == 3,
+                    "真实副本不在原允许名单时完整拒绝，不以处于Dungeon代替副本资格");
+            else
+            {
+                That(result.Outcome == ConsumableUseOutcome.Committed && f.Count == 2 && f.Session.CanPublishConsumable(result.Guard!),
+                    "名单内真实副本沿原事务消费一次，前面的场景拒绝不占用冷却");
+                That(f.Use(1).Outcome == ConsumableUseOutcome.Rejected && f.Count == 2,
+                    "专用品仍使用原冷却组，不能因名单允许而重复消费");
+            }
         }
     }
 

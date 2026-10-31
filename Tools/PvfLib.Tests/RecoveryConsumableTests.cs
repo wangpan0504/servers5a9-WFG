@@ -8,7 +8,7 @@ internal static class RecoveryConsumableTests
     {
         string[] strings = ["[cool time]", "[cooltime group]", "[hp recovery]", "+", "myself", "[need material]", "[sub type]",
             "[stat change duration]", "party", "[effect maintenance]", "[cooltime maintenance]", "[quest exp bonus rate]", "[exp bonus rate]",
-            "[total usable count]", "[attach type]", "[trade]", "[account]"];
+            "[total usable count]", "[attach type]", "[trade]", "[account]", "[action usable dungeon]", "[/action usable dungeon]"];
         string Resolve(int at) => strings[at];
         PvfToken[] valid = [new(3, 0), new(0, 10000), new(3, 1), new(0, 0), new(3, 2),
             new(6, 3), new(0, 410), new(0, 1000), new(6, 4)];
@@ -17,6 +17,19 @@ internal static class RecoveryConsumableTests
         That(questPotion.QuestExpBonusPermille == 500 && questPotion.ExpBonusPermille == 1000 &&
             questPotion.ExpBonusMilliseconds == 7200000, "任务和普通经验倍率独立保留，持续时间来自自身效果声明");
         var result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid, Resolve);
+        That(result.ActionUsableDungeons is null, "未声明可用地下城时保持缺失，不添加漩涡专属限制");
+        var restricted = RecoveryConsumableFile.Parse(10312384, "stackable/fiendwar.stk",
+            [..valid, new(3,17), new(0,291100339), new(0,5350), new(3,18)], Resolve);
+        That(restricted.ActionUsableDungeons is { } allowed && allowed.SequenceEqual(new[] {291100339,5350}) && restricted.Diagnostics.IsEmpty,
+            "团队与引导允许名单按原声明保留，不把DGN编号当地图编号");
+        foreach (PvfToken[] tail in new PvfToken[][] { [new(3,17),new(3,18)], [new(3,17),new(0,0),new(3,18)],
+            [new(3,17),new(0,-1),new(3,18)], [new(3,17),new(6,3),new(3,18)],
+            [new(3,17),new(0,5350),new(3,18),new(3,17),new(0,5351),new(3,18)] })
+        {
+            var malformed = RecoveryConsumableFile.Parse(10312384, "stackable/fiendwar.stk", [..valid,..tail], Resolve);
+            That(malformed.ActionUsableDungeons is null && !malformed.Diagnostics.IsEmpty,
+                "空、非正整数、错误类型和重复可用地下城声明不能降级成无限制");
+        }
         That(result.CoolTime == 10000 && result.CoolGroup == 0 && result.HpRecovery == new RecoveryDeclaration("+", 410, 1000, "myself") &&
             result.MpRecovery is null && result.Diagnostics.IsEmpty, "恢复原四元组、冷却声明和显式组0无损保存，不推断单位");
         result = RecoveryConsumableFile.Parse(1108, "stackable/example.stk", valid.Concat(new PvfToken[] { new(3, 5), new(0, 3035), new(0, 3) }).ToArray(), Resolve);
