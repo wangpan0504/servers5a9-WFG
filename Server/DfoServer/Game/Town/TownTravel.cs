@@ -31,8 +31,11 @@ internal static class TownTravel
         return towns.IsPosition(target, completed) ? target : null;
     }
 
-    public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null, NpcTownVisit? npcVisit = null)
+    public static TownTravelPlan Plan(Character character, AreaRequest request, TownCatalog towns, IReadOnlySet<int> completed, ChannelEntry? channel = null, NpcTownVisit? npcVisit = null,
+        bool fiendwarWaiting = false, bool fiendwarGuideWaiting = false, bool fiendwarActive = false)
     {
+        if (!ChannelAreaLanding.AllowsFiendwarTown(channel, request.Town))
+            return TownTravelPlan.Reject("fiendwar-channel-town-mismatch");
         if (character.IsPvpPrivate && request.Town != 10) return TownTravelPlan.Reject("pvp-private-town-only");
         if (request.Town == 39 && request.Area is >= 8 and < 38 &&
             (character.Position.Town != 39 || character.Position.Area != request.Area || character.WeddingHall is null))
@@ -104,6 +107,18 @@ internal static class TownTravel
             (request.PathKind == 5 ||
              request.PathKind != 0 && towns.RoomPortals.Any(p => p.Town == target.Town && p.Area == target.Area));
         string reason = towns.Admission(character.Position, target, character.Level, completed, character.Return, portal, request.TargetNpc);
+        // 57/1的团队门condition1、引导门condition2；真实未开战攻坚队及模式由Session核验。
+        // 仅解释对应模式的已证门，不放行其他地图或跨模式条件。
+        if (reason == "route-state-required" && (fiendwarWaiting || fiendwarGuideWaiting) && channel?.Type == ChannelAreaLanding.FiendwarType &&
+            character.Position is { Town: 57, Area: 1 } && target is { Town: 57 } && target.Area == (fiendwarGuideWaiting ? 33 : 2) && request is { TargetNpc: 0, PathKind: 0 } &&
+            towns.Areas[(57, 1)].Map(completed).Links.Any(link => link.Town == 57 && link.Area == target.Area && link.Gate.Door &&
+                link.Quests.All(completed.Contains) && link.Conditions.SequenceEqual(new[] { fiendwarGuideWaiting ? 2 : 1 }))) reason = "ready";
+        // 引导路线的设施岔路使用原condition3。Session随后仍以当前Battle预留移动并校验本模式邻接和进度。
+        if (reason == "route-state-required" && fiendwarActive && channel?.Type == ChannelAreaLanding.FiendwarType &&
+            character.Position is { Town: 57, Area: >= 33 and <= 43 } && target is { Town: 57, Area: >= 33 and <= 43 } &&
+            request is { TargetNpc: 0, PathKind: 0 } && towns.Areas[(57, character.Position.Area)].Map(completed).Links.Any(link =>
+                link.Town == 57 && link.Area == target.Area && link.Gate.Door && link.Quests.All(completed.Contains) &&
+                link.Conditions.SequenceEqual(new[] { 3 }))) reason = "ready";
         if (reason != "ready")
             return TownTravelPlan.Reject(reason);
         // 目标地图没有回连来源的门时客户端发 0,0（实测五陵 117/0 → 1/1）；0,0 不可站时按 PVF 入口解析落点。

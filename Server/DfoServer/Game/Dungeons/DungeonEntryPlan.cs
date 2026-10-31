@@ -51,6 +51,8 @@ internal sealed record DungeonEntryPlan(
     public bool IsOrdinaryLuke { get; init; }
     public bool IsOrdinaryPrey { get; init; }
     public PreyNormalAdmission? PreyNormal { get; init; }
+    public bool IsOrdinaryAnton { get; init; }
+    public AntonNormalAdmission? AntonNormal { get; init; }
     // 仅由当前战役冻结路线审核后设置，允许无任务接取的真实物件终末。
     public bool IsEvildomWarHidden { get; init; }
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
@@ -58,6 +60,7 @@ internal sealed record DungeonEntryPlan(
     public int? BeastDay { get; init; }
     public bool DisableClearReward { get; init; }
     public DfoServer.Game.Raids.RaidDungeonIdentity? RaidEntry { get; init; }
+    public DfoServer.Game.Raids.FiendwarCombatScale? FiendwarScale { get; init; }
     // 仅由团本准入根据当前maze和精确OBJ/ACT证据冻结，不以模板号单独授予清图资格。
     public DfoServer.GameWorld.Raids.LukeObjectBinding? LukeEnergyObject { get; init; }
     public bool DisableMonsterAndClearExperience { get; init; }
@@ -532,7 +535,7 @@ internal sealed record DungeonEntryPlan(
         if (raid is not null)
         {
             if (!Enum.IsDefined(raid.Kind) || raid.InstanceId == Guid.Empty || raid.Squad < 1 ||
-                raid.Squad > (raid.Kind == DfoServer.Game.Raids.RaidKind.Luke ? 2 : 5) ||
+                raid.Squad > (raid.Kind == DfoServer.Game.Raids.RaidKind.Fiendwar ? 8 : raid.Kind == DfoServer.Game.Raids.RaidKind.Luke ? 2 : 5) ||
                 questId != 0 || difficulty != 2 ||
                 raid.Kind == DfoServer.Game.Raids.RaidKind.Prey && raid.Squad != 1 ||
                 isReplay || practice || hellParty || tagEvildom is not null || hope is not null)
@@ -745,7 +748,7 @@ internal sealed record DungeonEntryPlan(
             BeastAttackScale = beastMode && definition.BeastLayouts[0].NormalAttackScale > 0 ? definition.BeastLayouts[0].NormalAttackScale : BeastDungeonRotation.NormalAttackScale,
             BasisLevel = definition.BasisLevel,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
-            IsOrdinaryPrey = definition.IsOrdinaryPrey,
+            IsOrdinaryPrey = definition.IsOrdinaryPrey, IsOrdinaryAnton = definition.IsOrdinaryAnton,
             RecommendedQuestClear = !lostLand && !isReplay && !practice && !definition.IsTutorial && !definition.IsClassExperience && dungeonId != 5000 &&
                 DungeonLuckyStarPolicy.IsRecommendedClear(definition, questId, routeQuest, character.Level),
             GuildMileageEligible = GameWorld.Guilds.GuildDungeonMileageEligibility.IsEligible(definition, character.Level),

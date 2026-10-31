@@ -111,6 +111,7 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             throw new InvalidDataException("入场费用需要本次待安装实例的身份");
         AdmitOrdinaryLuke(db, tx, owner, expected, charge);
         AdmitPreyNormal(db, tx, owner, expected, charge);
+        AdmitAntonNormal(db, tx, owner, expected, charge);
         AdmitDazzlementTower(db, tx, owner, expected, charge);
         AdmitGuildDungeon(db, tx, expected.Id, charge);
         CharacterFatigueState? fatigueBefore = null, fatigueAfter = null;
@@ -187,6 +188,9 @@ internal sealed partial class CharacterRepository : IPartyDungeonStore
             int? lukeDay = reservations[0].Charge.OrdinaryLukeEntry?.OrdinaryLukeDay;
             if (reservations.Any(r => r.Charge.OrdinaryLukeEntry?.OrdinaryLukeDay != lukeDay))
                 throw new InvalidDataException("组队普通卢克成员必须冻结同一入场业务日");
+            var anton = reservations[0].Charge.AntonNormalEntry?.AntonNormal;
+            if (reservations.Any(r => r.Charge.AntonNormalEntry?.AntonNormal != anton))
+                throw new InvalidDataException("组队普通安徒恩成员必须冻结同一业务日、分支与资源");
             var prey = reservations[0].Charge.PreyNormalEntry?.PreyNormal;
             if (reservations.Any(r => r.Charge.PreyNormalEntry?.PreyNormal != prey))
                 throw new InvalidDataException("组队普通普雷成员必须冻结同一业务日、分支与资源");

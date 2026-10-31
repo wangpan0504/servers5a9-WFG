@@ -14,12 +14,16 @@ internal static partial class DatabaseSchemaTests
             using (var db = Open(path))
             {
                 Execute(db, "INSERT INTO characters(id,account,slot,name,revision,town,area,x,y,direction,gold) VALUES(1,'prey-old',0,'PreyOld',7,38,1,450,234,0,123)");
-                using (var tx = db.BeginTransaction())
-                {
-                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_raid_runs", "CHECK(raid_type IN(0,1,3))", "CHECK(raid_type IN(0,1))");
-                    SqliteMigrations.ReplaceTableConstraint(db, tx, "character_raid_reward_receipts", "CHECK(raid_type IN(0,1,3))", "CHECK(raid_type IN(0,1))");
-                    tx.Commit();
-                }
+                // 夹具明确还原162约束，不调用生产迁移的“保留已知后续结构”兼容分支。
+                Execute(db, """
+                    PRAGMA writable_schema=ON;
+                    UPDATE sqlite_schema SET sql=replace(sql,'CHECK(raid_type IN(0,1,2,3))','CHECK(raid_type IN(0,1))')
+                      WHERE name IN('character_raid_runs','character_raid_reward_receipts');
+                    UPDATE sqlite_schema SET sql=replace(sql,
+                      'state=2 AND clear_week IS NOT NULL AND clear_week>0 AND ((raid_type=2 AND phase0_event IS NOT NULL AND phase1_event IS NULL) OR (raid_type<>2 AND phase1_event IS NOT NULL))',
+                      'state=2 AND clear_week IS NOT NULL AND clear_week>0 AND phase1_event IS NOT NULL') WHERE name='character_raid_runs';
+                    PRAGMA writable_schema=OFF; PRAGMA schema_version=9001;
+                    """);
                 Execute(db, "DROP INDEX character_raid_account_admission; PRAGMA user_version=162");
                 foreach (int type in new[] { 0, 1 })
                 {

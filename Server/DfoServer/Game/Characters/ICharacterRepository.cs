@@ -115,6 +115,7 @@ internal interface ICharacterRepository
     EkernCycleProgress LoadEkernCycle(AccountOwners.Lease owner, ushort characterId, int day);
     OrdinaryLukeProgress LoadOrdinaryLukeProgress(AccountOwners.Lease owner, ushort characterId);
     PreyNormalProgress LoadPreyNormalProgress(AccountOwners.Lease owner, ushort characterId);
+    AntonNormalProgress LoadAntonNormalProgress(AccountOwners.Lease owner, ushort characterId);
     DazzlementTowerState LoadDazzlementTower(AccountOwners.Lease owner);
     GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId);
     DungeonSpecialEntryUsage LoadSpecialEntryUsage(AccountOwners.Lease owner, Character expected, int day, DungeonSpecialEntryKind kind);

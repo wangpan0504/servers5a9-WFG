@@ -31,7 +31,7 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
     public const int PreyEntryQuest = 8935;
     public const byte PreyEntryLevel = 95;
 
-    public static bool IsFiendWarEligible(bool questCompleted, bool guildMember) => questCompleted && guildMember;
+    public static bool IsFiendWarEligible(bool questCompleted, bool guildMember) => questCompleted;
 
     public static bool IsPreyEligible(bool questCompleted, byte level) => questCompleted && level >= PreyEntryLevel;
 

@@ -240,13 +240,19 @@ internal static partial class PartyDungeonTcpTests
             var rejected = group.All();
             if (continueToNext)
             {
-                group.ReadEntry(rejected); group.Load();
+                group.ReadEntry(rejected);
+                That(rejected.All(rows => rows.Single(packet => packet is {Kind:0,Opcode:602}).Body is
+                    [28,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0]), "普通安徒恩全队首图分别同步个人零进度");
+                group.Load();
                 var maze = definition.Mazes.Single();
                 var route = QuestStoryRouteTests.Path(maze.StaticTopology,new(group.Map[0],group.Map[1]),
                     new(group.Information[8],group.Information[9]));
                 foreach (var point in route.Skip(1))
                 { group.Clear(); group.Move((byte)point.X,(byte)point.Y); group.Load(); }
                 group.Clear(); group.Settle();
+                foreach (var peer in group.Peers)
+                    That(fixture.Query("SELECT progress FROM character_anton_normal_progress WHERE character_id=$p0",peer.Id) is [[1L]],
+                        "共享首图结算逐成员持久推进，不借用队长记录");
                 foreach (var peer in group.Peers)
                 { peer.Send(69); group.All(peer); peer.Send(70); group.All(peer); peer.Send(71,[0,0]); group.All(peer); }
                 group.Peers[0].Send(72,[1,0]);

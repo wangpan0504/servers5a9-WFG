@@ -26,6 +26,7 @@ internal sealed record LukeRaidCompletionPolicy(string Source, int WeeklyClearLi
     ImmutableArray<LukePhaseCompletionPolicy> Phases, LukeParticipationCutoff Cutoff);
 internal sealed record LukePhaseMember(ushort Character, string Account, int CommittedRuns, bool Present)
 {
+    public RaidPhaseRewardPolicy? FrozenRewards { get; init; }
     public ImmutableArray<RaidRewardOffer> Offers { get; init; }
 }
 internal sealed record LukePhaseCommit(ImmutableArray<RaidPhaseEligibility> Members);
@@ -44,10 +45,11 @@ internal sealed partial class AntonRaidBattle
     readonly Dictionary<(int Phase, ushort Character), int> lukeParticipation = [];
     readonly Dictionary<int, LukePhaseSettlement> lukeSettlements = [];
     readonly Dictionary<int, LukePhaseCommit> lukePhaseCommits = [];
+    readonly ImmutableDictionary<ushort, ImmutableArray<RaidPhaseRewardPolicy>> memberRewardPolicies;
 
     internal static bool ValidLukeCompletion(LukeRaidCompletionPolicy policy) => !string.IsNullOrWhiteSpace(policy.Source) &&
         policy.WeeklyClearLimit > 0 && policy.Cycle is { Valid: true } && policy.Cutoff == LukeParticipationCutoff.TerminalCommittedFacts &&
-        !policy.Phases.IsDefault && policy.Phases.Length == 2 && policy.Phases.All(phase => phase is not null && phase.Rewards is not null && phase.MinimumCommittedRuns >= 0 && phase.WeeklyEligibilityLimit > 0 &&
+        !policy.Phases.IsDefault && policy.Phases.Length is 1 or 2 && policy.Phases.All(phase => phase is not null && phase.Rewards is not null && phase.MinimumCommittedRuns >= 0 && phase.WeeklyEligibilityLimit > 0 &&
             !string.IsNullOrWhiteSpace(phase.Rewards.Source) && !phase.Rewards.Offers.IsDefaultOrEmpty && phase.Rewards.Offers.Length <= 32 &&
             phase.Rewards.Offers.All(offer => offer is not null && offer.Kind is 0 or 1 && offer.Display.IsEmpty && !offer.Grants.IsDefaultOrEmpty && offer.Grants.Length <= 32 && (offer.LukeResult is null || offer.LukeResult.Matches(offer)))) &&
         policy.Phases.Select((phase, index) => phase.Rewards.Result.Phase == index && phase.Rewards.Result.Result is 0 or 2 &&
@@ -64,25 +66,33 @@ internal sealed partial class AntonRaidBattle
         public int Week { get; }
         public string Source { get; }
         public int WeeklyClearLimit { get; }
+        public bool FinalPhase { get; }
         public LukePhaseCompletionPolicy Policy { get; }
         public ImmutableArray<LukePhaseMember> Members { get; }
         private LukePhaseSettlement(AntonRaidBattle battle, int phase)
         {
             var policy = battle.lukeCompletion!;
-            Instance = battle.Instance; RaidType = battle.Kind; Phase = phase; Anchor = battle.lukeClock.GetUtcNow();
+            Instance = battle.Instance; RaidType = battle.Kind; Phase = phase; FinalPhase = phase + 1 == battle.PhaseCount; Anchor = battle.lukeClock.GetUtcNow();
             Week = policy.Cycle.Key(Anchor); Source = policy.Source; WeeklyClearLimit = policy.WeeklyClearLimit;
             Policy = policy.Phases[phase];
             if (Week <= 0 || Anchor.ToUnixTimeSeconds() < 0) throw new InvalidDataException("卢克终结周期或时间无效");
             Members = battle.originalLukeMembers.Values.OrderBy(actor => actor.Character).Select(actor =>
                 new LukePhaseMember(actor.Character, actor.Owner.Account, battle.lukeParticipation.GetValueOrDefault((phase, actor.Character)),
                     actor.IsCurrent && battle.members.ContainsKey(actor))
-                    { Offers = battle.originalLukePolicies.GetValueOrDefault(actor.Character, policy.Phases.Select(p => p.Rewards).ToImmutableArray())[phase].Offers }).ToImmutableArray();
+                { FrozenRewards = battle.memberRewardPolicies.GetValueOrDefault(actor.Character).IsDefaultOrEmpty
+                    ? null : battle.memberRewardPolicies[actor.Character][phase],
+                    Offers = battle.originalLukePolicies.GetValueOrDefault(actor.Character, policy.Phases.Select(p => p.Rewards).ToImmutableArray())[phase].Offers }).ToImmutableArray();
+        }
+        internal RaidPhaseRewardPolicy RewardsFor(ushort character)
+        {
+            var member = Members.Single(member => member.Character == character);
+            return member.FrozenRewards ?? (member.Offers.IsDefault ? Policy.Rewards : Policy.Rewards with { Offers = member.Offers });
         }
         internal static LukePhaseSettlement Capture(AntonRaidBattle battle, int phase)
         {
             lock (battle.gate)
             {
-                if (battle.Kind is not (RaidKind.Luke or RaidKind.Prey) || battle.lukeCompletion is null || phase is not (0 or 1) || phase != battle.current.Phase ||
+                if (battle.Kind is not (RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar) || battle.lukeCompletion is null || phase is not (0 or 1) || phase != battle.current.Phase ||
                     battle.pendingTransition is not { State: AntonRaidBattleState.Reward } terminal || terminal.Phase != phase ||
                     battle.originalLukeMembers.Count is < 1 or > 8) throw new InvalidOperationException("不存在可密封卢克终结事实");
                 if (battle.lukeSettlements.TryGetValue(phase, out var existing)) return existing;
@@ -115,13 +125,13 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate) return lukePhaseCommits.GetValueOrDefault(phase)?.Members.SingleOrDefault(row => row.Character == character);
     }
-    bool RequiresReward(RaidActor actor, int phase) => Kind is not (RaidKind.Luke or RaidKind.Prey) || lukeCompletion is null ||
+    bool RequiresReward(RaidActor actor, int phase) => Kind is not (RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar) || lukeCompletion is null ||
         lukePhaseCommits.GetValueOrDefault(phase)?.Members.Any(row => row.Character == actor.Character && row.Eligible) == true;
 
     bool AllRewardsConfirmed(int phase)
     {
         // 断线/离团不撤回已密封领奖义务；不能用当前在线members过滤后跳过未领奖者。
-        if (Kind is RaidKind.Luke or RaidKind.Prey && lukeCompletion is not null)
+        if (Kind is RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar && lukeCompletion is not null)
             return lukePhaseCommits.TryGetValue(phase, out var committed) && committed.Members.Where(row => row.Eligible)
                 .All(row => row.Offers.Select(offer => offer.Kind).Distinct().All(kind => rewards.Contains((row.Character, phase, kind))));
         if (Kind == RaidKind.Anton && antonRewards is not null)
@@ -146,8 +156,8 @@ internal sealed partial class AntonRaidBattle
                 receipt.Members.Length != candidate.Members.Length || receipt.Members.Select(row => row.Character).Distinct().Count() != receipt.Members.Length ||
                 receipt.Members.Any(row => row.Instance != Instance || row.RaidType != Kind || row.Phase != candidate.Phase ||
                     row.Event != candidate.Event || row.Anchor != candidate.Anchor.ToUnixTimeSeconds() || row.Week != candidate.Week ||
-                    row.Source != candidate.Policy.Rewards.Source || !candidate.Members.Any(member => member.Character == row.Character &&
-                        SameLukeOffers(row.Offers, member.Offers))))
+                    !candidate.Members.Any(member => member.Character == row.Character) ||
+                    row.Source != candidate.RewardsFor(row.Character).Source || !SameLukeOffers(row.Offers, candidate.RewardsFor(row.Character).Offers)))
                 throw new InvalidDataException("卢克阶段回执不属于原密封候选");
             if (lukePhaseCommits.TryGetValue(candidate.Phase, out var previous))
             {

@@ -110,11 +110,14 @@ internal sealed partial class GameSession
         PlanAndCommitInventory(plan, invalidStateError, requireTown, false, requiredPhase, usedItem: usedItem);
 
     public InventoryResult PlanAndCommitShopBuy(int shopId, Func<Character, InventoryResult> plan) =>
-        PlanAndCommitInventory(plan, 17, requireTown: shopId == 400000097, allowSettlement: false,
-            additionalGuard: shopId == 400000097
-                ? () => Phase == SessionPhase.Town && Selected is { } character &&
-                    towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character))
-                : null);
+        PlanAndCommitInventory(plan, 17, requireTown: shopId is 400000097 or 305, allowSettlement: false,
+            additionalGuard: shopId switch
+            {
+                400000097 => () => Phase == SessionPhase.Town && Selected is { } character &&
+                    towns.IsRoom(character.Position, DfoServer.Game.Quests.QuestEligibility.Completed(character)),
+                305 => CanBuyFiendwarMerchant,
+                _ => null
+            });
 
     public InventoryResult SellAtShop(SellItemRequest request, InventoryShopService shop) =>
         PlanAndCommitInventory(character => shop.Sell(character, request), requireTown: false);

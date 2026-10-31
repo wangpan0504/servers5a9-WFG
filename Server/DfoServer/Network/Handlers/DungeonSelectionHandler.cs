@@ -13,7 +13,8 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
     DfoServer.GameWorld.Dungeons.DungeonCatalog? dungeons = null,
     DfoServer.Game.Dungeons.PartyDungeonService? partyDungeons = null, TagEvildomProjection? tagEvildom = null, TagEvildomRunProjection? tagRun = null,
     DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null, DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null,
-    ImperialArenaProjection? imperialArena = null, DfoServer.Game.Raids.AntonRaidDungeonService? preyRaid = null) : IGameCommandModule
+    ImperialArenaProjection? imperialArena = null, DfoServer.Game.Raids.AntonRaidDungeonService? preyRaid = null,
+    DfoServer.Game.Raids.FiendwarDungeonService? fiendwarRaid = null) : IGameCommandModule
 {
     public void Register(GameCommandRegistry commands)
     {
@@ -84,6 +85,31 @@ internal sealed class DungeonSelectionHandler(TownProjection projection, ServerL
         if (!context.Session.CheckState(UserStateRequirement.WorldReady)) return CommandResult.Unhandled;
         if (context.Activity?.BlocksTownActions == true)
             return CommandResult.Unhandled;
+        if (context.Session.ChannelEntry?.Type == 45 && fiendwarRaid is not null)
+        {
+            DfoServer.Game.Dungeons.PartyDungeonNotice[] selected = [];
+            string? reason = "fiendwar-raid-required";
+            if (entry.DungeonIndex <= int.MaxValue && fiendwarRaid.Find(context.Session) is { } raid)
+            {
+                var existing = context.Session.CurrentParty?.Invoke();
+                using var commands = existing is not null && context.DispatchGates?.Holds(context, existing.Commands) == true
+                    ? await PartyDungeonProjection.AcquirePeersAsync(context, existing.Members)
+                    : DfoServer.Game.Raids.RaidStartCommands.TryEnter(fiendwarRaid.EncounterMembers(context.Session, raid), context.Session);
+                if (commands is not null)
+                {
+                    var party = context.Session.Phase == SessionPhase.Town
+                        ? fiendwarRaid.Group(context.Session, (int)entry.DungeonIndex, out reason) : context.Session.CurrentParty?.Invoke();
+                    if (party is not null) selected = fiendwarRaid.Select(context.Session, (int)entry.DungeonIndex, party, out reason,
+                        replay: context.Session.Phase == SessionPhase.Loading);
+                }
+                else reason = "fiendwar-member-command-busy";
+            }
+            log.Write("fiendwar_selection", new { Connection = context.Id, Dungeon = entry.DungeonIndex, Members = selected.Length, Reason = reason });
+            if (selected.Length == 0)
+                await context.Reply(CmdPacketType.ENTER_SELECT_DUNGEON, DungeonPackets.SelectionUnavailable(), "fiendwar_selection_rejected");
+            else await PartyDungeonProjection.PublishAsync(selected);
+            return CommandResult.Handled;
+        }
         var raidService = context.Session.ChannelEntry?.Type == 50 ? preyRaid : antonRaid;
         if (entry.DungeonIndex != 0 && context.Session.ChannelEntry?.Type is 23 or 50 && raidService is { Enabled: true } &&
             (context.Session.StartedRaid is not null || entry.DungeonIndex <= int.MaxValue && raidService.Contains((int)entry.DungeonIndex)))

@@ -14,6 +14,13 @@ internal static class RaidAdmissionPlan
 
     public static string? Rejection(ChannelEntry? channel, Character character)
     {
+        if (channel?.Type == ChannelAreaLanding.FiendwarType)
+        {
+            if (character.Level < 95) return "fiendwar-level-required";
+            if (!DfoServer.Game.Quests.QuestEligibility.Completed(character).Contains(CharacterRosterEntry.FiendWarEntryQuest))
+                return "fiendwar-entry-quest-required";
+            return null;
+        }
         if (channel?.Type == 0x20)
         {
             if (character.Level is < LukeMinimumLevel or > LukeMaximumLevel) return "luke-level-required";

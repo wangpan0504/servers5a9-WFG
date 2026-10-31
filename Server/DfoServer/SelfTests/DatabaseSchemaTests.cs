@@ -222,9 +222,11 @@ internal static partial class DatabaseSchemaTests
             CloneTitleUpgrade(root);
             TagEvildomUpgrade(root);
             OrdinaryLukeUpgrade(root);
+            AntonNormalUpgrade(Path.Combine(root, "anton-normal"));
             PreyNormalUpgrade(root);
             FrozenLootVersionCollisionUpgrade(root);
             PreyGuideUpgrade(Path.Combine(root, "prey-guide"));
+            FiendwarUpgrade(Path.Combine(root, "fiendwar"));
             OrdinaryLukeDropUpgrade(root);
             PvpArenaResultUpgrade(root);
             PvpRatingUpgrade(root);

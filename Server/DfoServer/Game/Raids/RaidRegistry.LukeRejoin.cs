@@ -10,7 +10,7 @@ internal sealed partial class RaidRegistry
         lock (gate)
         {
             if (!UsesRejoinCandidates(candidates) || fact.Luke is not { } reservation ||
-                !IsCurrent(expected) || expected.Type != 1 || expected.Key != fact.Key || expected.Channel != fact.Channel ||
+                !IsCurrent(expected) || expected.Type is not (1 or 2) || expected.Type != (byte)reservation.Battle.Kind || expected.Key != fact.Key || expected.Channel != fact.Channel ||
                 expected.Started?.InstanceId != fact.Instance || fact.OldOwner.IsCurrent ||
                 expected.Members.Any(m => m.Actor.Character == fact.Character) ||
                 !reservation.Battle.CanRestoreLukeRejoin(reservation)) return false;
@@ -23,7 +23,7 @@ internal sealed partial class RaidRegistry
     {
         lock (gate)
         {
-            if (fact.Luke is null || !IsCurrent(expected) || expected.Type != 1 ||
+            if (fact.Luke is null || !IsCurrent(expected) || expected.Type is not (1 or 2) || expected.Type != (byte)fact.Luke.Battle.Kind ||
                 expected.Started?.InstanceId != fact.Instance || expected.Key != fact.Key || expected.Channel != fact.Channel ||
                 replacement.Character != fact.Character || replacement.Owner.Account != fact.Account ||
                 !replacement.IsCurrent || fact.OldOwner.IsCurrent || FindCore(replacement) is not null ||

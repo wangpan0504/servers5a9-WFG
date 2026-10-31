@@ -13,7 +13,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if ((Kind is not (RaidKind.Luke or RaidKind.Prey) && !HasAntonRewards) || instance != Instance || phase != current.Phase || generation <= 0 ||
+            if ((Kind is not (RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar) && !HasAntonRewards) || instance != Instance || phase != current.Phase || generation <= 0 ||
                 (timer.Kind is not (1 or 2) && !(HasAntonRewards && timer.Kind == 3)) || timer.DungeonId <= 0 ||
                 !script.Phases.Any(row => row.Dungeons.Any(dungeon => dungeon.Id == timer.DungeonId)) ||
                 !lukeClockActive || lukeClockLease is not { IsStopped: false } || members.Count == 0 ||
@@ -31,9 +31,10 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if ((Kind is not (RaidKind.Luke or RaidKind.Prey) && !HasAntonRewards) || lease.Battle != this || lease.IsStopped || lukeClockLease is not null || members.Count == 0)
+            if ((Kind is not (RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar) && !HasAntonRewards) || lease.Battle != this || lease.IsStopped || lukeClockLease is not null || members.Count == 0)
             { lease.Dispose(); return; }
             lukeClockLease = lease; lukeClockActive = true;
+            if (Kind == RaidKind.Fiendwar) AnchorFiendwarClockLocked();
             // 构造Battle发生在费用SQL之前；初始SET从实际提交后的激活时刻起算。
             long now = lukeClock.GetTimestamp();
             current = current with { TimerAnchors = current.Timers.Keys.ToImmutableDictionary(timer => timer, _ => now),
@@ -83,7 +84,7 @@ internal sealed partial class AntonRaidBattle
         { lease.Schedule(lukeWait > TimeSpan.Zero ? lukeWait : TimeSpan.FromSeconds(1)); return; }
         if (pendingTransition is not null || TerminalRequested(current))
         { lease.Schedule(Timeout.InfiniteTimeSpan); return; }
-        TimeSpan? earliest = LukePhaseRemainingLocked();
+        TimeSpan? earliest = Kind == RaidKind.Fiendwar ? FiendwarClockRemainingLocked() : LukePhaseRemainingLocked();
         if (LukeRejoinRemainingLocked() is { } rejoin && (earliest is null || rejoin < earliest)) earliest = rejoin;
         foreach (var timer in current.Timers)
         {
@@ -122,6 +123,7 @@ internal sealed partial class AntonRaidBattle
             if (Kind == RaidKind.Anton && current.State == AntonRaidBattleState.Intermission) return ExpireAntonWaitLocked();
             if (Kind == RaidKind.Luke && current.State == AntonRaidBattleState.Intermission) return false;
             if (TerminalRequested(current)) return false;
+            if (Kind == RaidKind.Fiendwar) return TickFiendwarLocked();
             // 本实例最多30个(kind,DGN)键；只处理当前已到期代，不在一次回调内追逐新建零秒timer。
             var before = current;
 

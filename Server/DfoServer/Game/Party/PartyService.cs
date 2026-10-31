@@ -17,6 +17,7 @@ internal sealed record PartySnapshot(ushort Id, PartyMember[] Members, byte Lead
     public SemaphoreSlim Commands { get; } = new(1, 1);
     public PartySettings Settings { get; init; } = PartySettings.Default;
     public Guid? EvildomWarBattleId { get; init; }
+    public Guid? FiendwarBattleId { get; init; }
 }
 internal enum PartyNoticeKind { Invite, Accepted, Refused, Updated, Removed, Endpoints, SceneChanged, LeaderChanged, SettlementCard, FrameChanged }
 internal sealed record PartyNotice(PartyNoticeKind Kind, PartyMember Recipient, PartyMember? Peer = null,

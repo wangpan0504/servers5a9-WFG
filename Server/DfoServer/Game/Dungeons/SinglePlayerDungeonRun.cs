@@ -285,7 +285,7 @@ internal sealed partial class SinglePlayerDungeonRun
         DungeonMonsterAiSettings? monsterAi, DungeonMonsterAiRooms? sharedMonsterAi)
     {
         BattleLevels = sharedBattleLevels ?? new(battleLevels);
-        MonsterAiRooms = sharedMonsterAi ?? new(monsterAi);
+        MonsterAiRooms = sharedMonsterAi ?? new(monsterAi, (entry.FiendwarScale?.HpPercent ?? 100) / 100f);
         scriptedTransitLayer = ResolveScriptedTransitLayer(entry.PartyRoute ?? entry, route);
         if (scriptedTransitLayer is not null)
             entry = entry with { TerminalLayerMap = null, TerminalLayerQuestId = 0,

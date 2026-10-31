@@ -14,6 +14,8 @@ internal sealed record RaidResources(RaidScript Script, ImmutableArray<RaidDunge
     public RaidDungeonCatalog? EntryCatalog { get; init; }
     public LukeRaidObjectCatalog? LukeObjects { get; init; }
     public LukeCardSetCatalog? LukeCardSet { get; init; }
+    public FiendwarScript? Fiendwar { get; init; }
+    public RaidResources? FiendwarGuide { get; init; }
     public bool ResourcesReady => Issues.IsEmpty && MissingFormalDungeons.IsEmpty && MissingFormalMaps.IsEmpty && MissingItems.IsEmpty;
     // 即使资源完整，计费、候战室迁移及阶段权威输入仍未闭合，不能把此结果当作开战许可。
     public string StartBlocker => !Issues.IsEmpty ? "formal-raid-definition-unsupported" :
@@ -28,12 +30,21 @@ internal static class RaidResourceLoader
 
     public static RaidResources Load(PvfArchive pvf, RaidDefinition raid, DungeonCatalog dungeons, ItemCatalog items,
         Func<int, string?>? mapPath = null, IReadOnlyDictionary<int, string>? supplementalMaps = null)
+        => LoadMode(pvf, raid, dungeons, items, mapPath, supplementalMaps, false);
+
+    static RaidResources LoadMode(PvfArchive pvf, RaidDefinition raid, DungeonCatalog dungeons, ItemCatalog items,
+        Func<int, string?>? mapPath, IReadOnlyDictionary<int, string>? supplementalMaps, bool guide)
     {
         mapPath ??= dungeons.MapPath;
-        var script = raid.Type == 3 ? PreyGuideScript.Parse(pvf.ReadTokens(raid.Path), pvf.ReadTokens(raid.Path + ".symbol"), pvf.ResolveString) :
+        var fiendwar = raid.Type == 2 ? guide
+            ? FiendwarScript.ParseGuide(raid.Path, pvf.ReadTokens(raid.Path),
+                pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString)
+            : FiendwarScript.Parse(raid.Path, pvf.ReadTokens(raid.Path),
+                pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString) : null;
+        var script = fiendwar?.Script ?? (raid.Type == 3 ? PreyGuideScript.Parse(pvf.ReadTokens(raid.Path), pvf.ReadTokens(raid.Path + ".symbol"), pvf.ResolveString) :
             RaidScriptParser.Parse(raid.Path, pvf.ReadTokens(raid.Path),
             pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString,
-            raid.Type == 1 ? RaidScriptKind.Luke : RaidScriptKind.Anton);
+            raid.Type == 1 ? RaidScriptKind.Luke : RaidScriptKind.Anton));
         IReadOnlyDictionary<int, string> tutorial = ImmutableDictionary<int, string>.Empty;
         List<RaidIssue> issues = [];
         try
@@ -46,8 +57,11 @@ internal static class RaidResourceLoader
         catch (InvalidDataException error) { issues.Add(new("tutorial-list-invalid", TutorialListPath, 0, error.Message)); }
         var result = Check(script, tutorial, dungeons.DungeonPath, mapPath, pvf.Contains,
             pvf.ReadTokens, pvf.ResolveString, ItemExists);
-        result = result with { Issues = result.Issues.AddRange(issues) };
-        return raid.Type is 0 or 1 or 3 ? result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, mapPath, raid.Type, supplementalMaps) } : result;
+        result = result with { Issues = result.Issues.AddRange(issues), Fiendwar = fiendwar };
+        if (raid.Type is 0 or 1 or 2 or 3)
+            result = result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, mapPath, raid.Type, supplementalMaps) };
+        return raid.Type == 2 && !guide
+            ? result with { FiendwarGuide = LoadMode(pvf, raid, dungeons, items, mapPath, supplementalMaps, true) } : result;
 
         bool ItemExists(int id)
         {

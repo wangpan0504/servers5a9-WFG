@@ -933,6 +933,7 @@ internal static class FormalDungeonPublicationTests
         public DfoServer.Game.Dungeons.EkernCycleProgress LoadEkernCycle(AccountOwners.Lease owner, ushort characterId, int day) => inner.LoadEkernCycle(owner,characterId,day);
         public DfoServer.Game.Dungeons.OrdinaryLukeProgress LoadOrdinaryLukeProgress(AccountOwners.Lease owner, ushort characterId) => inner.LoadOrdinaryLukeProgress(owner, characterId);
         public DfoServer.Game.Dungeons.PreyNormalProgress LoadPreyNormalProgress(AccountOwners.Lease owner, ushort characterId) => inner.LoadPreyNormalProgress(owner, characterId);
+        public DfoServer.Game.Dungeons.AntonNormalProgress LoadAntonNormalProgress(AccountOwners.Lease owner, ushort characterId) => inner.LoadAntonNormalProgress(owner, characterId);
         public DfoServer.Game.Dungeons.DazzlementTowerState LoadDazzlementTower(AccountOwners.Lease owner) => inner.LoadDazzlementTower(owner);
         public DfoServer.Game.Dungeons.GriefTowerProgress ReadGriefTower(AccountOwners.Lease owner, ushort characterId) => inner.ReadGriefTower(owner, characterId);
         public DfoServer.Game.Dungeons.DungeonSpecialEntryUsage LoadSpecialEntryUsage(AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.DungeonSpecialEntryKind kind) => inner.LoadSpecialEntryUsage(owner, expected, day, kind);

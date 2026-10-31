@@ -30,6 +30,7 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
         var result = ImmutableArray.CreateBuilder<RaidPhaseEligibility>(candidate.Members.Length);
         foreach (var member in candidate.Members)
         {
+            var frozenRewards = candidate.RewardsFor(member.Character);
             command.Parameters["$id"].Value = member.Character; command.Parameters["$account"].Value = member.Account;
             command.CommandText = $"SELECT state,source,{prefix}_event,{prefix}_anchor,{prefix}_receipt FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=$type";
             int state = -1; string? source = null;
@@ -45,15 +46,15 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
                         if (source != candidate.Source || reader.GetString(2) != candidate.Event.ToString("N") || reader.GetInt64(3) != candidate.Anchor.ToUnixTimeSeconds() ||
                             previous.Instance != candidate.Instance || previous.RaidType != candidate.RaidType || previous.Phase != candidate.Phase ||
                             previous.Event != candidate.Event || previous.Anchor != candidate.Anchor.ToUnixTimeSeconds() ||
-                            previous.Character != member.Character || previous.Week != candidate.Week || previous.Source != candidate.Policy.Rewards.Source ||
-                            !AntonRaidBattle.SameLukeOffers(previous.Offers, member.Offers))
+                            previous.Character != member.Character || previous.Week != candidate.Week || previous.Source != frozenRewards.Source ||
+                            !AntonRaidBattle.SameLukeOffers(previous.Offers, frozenRewards.Offers))
                             throw new InvalidDataException("卢克阶段终结事件或来源发生变化");
                         result.Add(previous); continue;
                     }
                 }
             }
             bool present = state == 0 && member.Present && source == candidate.Source;
-            bool counts = present && candidate.Phase == 1;
+            bool counts = present && candidate.FinalPhase;
             string reason = state < 0 ? "admission-missing" : source != candidate.Source ? "admission-source-changed" :
                 !present ? "admission-abandoned" : "eligible";
             if (counts)
@@ -72,15 +73,15 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
                 { eligible = false; reason = "phase-eligibility-limit"; }
             }
             var receipt = new RaidPhaseEligibility(candidate.Instance, candidate.RaidType, candidate.Phase, candidate.Event,
-                candidate.Anchor.ToUnixTimeSeconds(), member.Character, counts, eligible, reason, candidate.Policy.Rewards.Source, candidate.Week, member.Offers);
+                candidate.Anchor.ToUnixTimeSeconds(), member.Character, counts, eligible, reason, frozenRewards.Source, candidate.Week, frozenRewards.Offers);
             result.Add(receipt);
             // 缺行不能补造；删角后Import同id仍无原instance能力。已放弃行只记拒绝结果，不重新激活。
             if (state < 0) continue;
             command.Parameters["$receipt"].Value = JsonSerializer.Serialize(receipt);
-            command.Parameters["$state"].Value = candidate.Phase == 1 ? counts ? 2 : 1 : state;
+            command.Parameters["$state"].Value = candidate.FinalPhase ? counts ? 2 : 1 : state;
             command.Parameters["$clear"].Value = counts ? candidate.Week : DBNull.Value;
             command.CommandText = $"UPDATE character_raid_runs SET {prefix}_event=$event,{prefix}_anchor=$anchor,{prefix}_receipt=$receipt,state=$state" +
-                (candidate.Phase == 1 ? ",clear_week=$clear" : "") +
+                (candidate.FinalPhase ? ",clear_week=$clear" : "") +
                 $" WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=$type AND {prefix}_event IS NULL";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("卢克阶段回执条件提交未命中原身份");
         }

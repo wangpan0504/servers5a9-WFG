@@ -69,7 +69,8 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
         else
         {
             // 仅Luke新发奖要求666签发的两阶段资格；旧Anton回执已在上方优先重放。
-            if (prepared.Phase is not (0 or 1) || prepared.FinalPhase != (prepared.Phase == 1)) return null;
+            if (prepared.RaidType == RaidKind.Fiendwar ? prepared.Phase != 0 || !prepared.FinalPhase :
+                prepared.Phase is not (0 or 1) || prepared.FinalPhase != (prepared.Phase == 1)) return null;
             string prefix = prepared.Phase == 0 ? "phase0" : "phase1";
             command.CommandText = $"SELECT {prefix}_receipt,{prefix}_event,{prefix}_anchor FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=$type";
             using var eligibilityRow = command.ExecuteReader();

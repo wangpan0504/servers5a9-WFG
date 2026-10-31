@@ -19,7 +19,7 @@ using PvfLib;
 
 namespace DfoServer;
 
-// 超时空之战入口（卡名超时空漩涡，频道 39，type 45 CHANNEL_FIEND_WAR [fiendwar]）：落点、换频道快照、最后防线选图副本。数据全部读匹配的 Script.pvf，非实机。
+// 普通超时空之战与漩涡团队的独立入口、频道隔离和普通副本计数。数据读取匹配PVF，非实机。
 internal static class FiendwarChannelTests
 {
     const int EnterQuest = 8672;
@@ -43,19 +43,28 @@ internal static class FiendwarChannelTests
             "etc/enterablespecialchannel.etc 读出 fiendwar=8672、anton=12829");
         That(towns.Areas[(115, 0)] is { Level: 90, Gate: null } && towns.Areas[(115, 1)].DungeonWorldMap == 201,
             "最后防线 115/0 要求 90 级且无 [gate]，115/1 选图 201");
-        That(ChannelAreaLanding.IsChannelBoundTown(towns, 115), "最后防线只经频道进入");
+        That(towns.Areas[(38, 0)].Map(cleared).Npcs.Any(npc => npc.Id == 400000040) &&
+            towns.NpcMoves[400000040].Contains(400000041u) && towns.Areas[(115, 0)].Map(cleared).Npcs.Any(npc => npc.Id == 400000041),
+            "普通超时空之战由艾尔文天界支援兵400000040传送至115/0的400000041");
+        That(towns.Areas[(57, 1)].Map(cleared).Npcs.Any(npc => npc.Id == 624) &&
+            towns.Areas[(57, 2)].Map(cleared).Npcs.Any(npc => npc.Id == 625), "团队招募和候战NPC分别在57/1、57/2");
         That(!ChannelAreaLanding.IsChannelBoundTown(towns, 38) && !ChannelAreaLanding.IsChannelBoundTown(towns, 19),
             "普通城镇和安徒恩战舰不算频道专属城镇");
 
         var missing = ChannelAreaLanding.Decide(towns, fiend, 95, none);
         That(missing.Spot is null && missing.Reason == "channel-quest-required", "未完成 8672 的超时空之战频道留在共享房间");
-        var low = ChannelAreaLanding.Decide(towns, fiend, 89, cleared);
-        That(low.Spot is null && low.Reason.StartsWith("admission-", StringComparison.Ordinal), "89 级按 115/0 的 need level 留在共享房间: " + low.Reason);
-        var landing = ChannelAreaLanding.Decide(towns, fiend, 90, cleared);
-        That(landing.Spot == new Location(115, 0, 1301, 428) && landing.Reason == "neighbor-door" && towns.IsPosition(landing.Spot!, cleared),
-            "90 级完成 8672 落到主城通往 115/1 的门口中心 1301,428: " + landing.Spot + " " + landing.Reason);
+        var low = ChannelAreaLanding.Decide(towns, fiend, 94, cleared);
+        That(low.Spot is null && low.Reason == "admission-level-required", "漩涡团队要求95级");
+        var landing = ChannelAreaLanding.Decide(towns, fiend, 95, cleared);
+        That(landing.Spot is { Town: 57, Area: 0 } && towns.IsPosition(landing.Spot!, cleared), "漩涡团队使用57/0门厅");
         Console.WriteLine($"ASSERT fiendwar lands {landing.Spot} reason {landing.Reason}");
-        var spot = landing.Spot!;
+        var spot = ChannelAreaLanding.RoomExit(towns, fiend, towns.Room, 95, cleared)!;
+        var normalSpot = ChannelAreaLanding.DecideArea(towns, 115, 0, 90, cleared).Spot!;
+        That(spot is { Town: 57, Area: 1 }, "共享房间出门进入57/1招募街区");
+        foreach (int other in new[] { 22, 23, 32, 50, 54 })
+            That(!ChannelAreaLanding.SameSnapshotPredicates(other, 45) && !ChannelAreaLanding.SameSnapshotPredicates(45, other),
+                $"漩涡与频道类型{other}双向清除快照");
+        That(ChannelAreaLanding.SameSnapshotPredicates(45, 45), "两个漩涡频道保留合法快照");
 
         That(!ChannelAreaLanding.ClientKeepsTownSnapshot(towns, fiend, new(38, 0, 1, 1)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(towns, elven, spot) &&
@@ -77,9 +86,9 @@ internal static class FiendwarChannelTests
         var learning = SelfTestCatalogs.SkillLearning(pvf);
         NewCharacter Role(string name, byte level) =>
             CharacterCreation.Prepare(name, characters.Get(0), street, streetReturn, learning.Get) with { Level = level, CompletedQuests = [EnterQuest] };
-        var role = repo.Create(owner, Role("Fiend90", 90) with { Inventory = item });
-        var bare = repo.Create(owner, Role("Fiend90Bare", 90) with { Inventory = InventorySnapshot.Empty });
-        var weak = repo.Create(owner, Role("Fiend89", 89));
+        var role = repo.Create(owner, Role("Fiend95", 95) with { Inventory = item });
+        var bare = repo.Create(owner, Role("Fiend95Bare", 95) with { Inventory = InventorySnapshot.Empty });
+        var weak = repo.Create(owner, Role("Fiend94", 94));
 
         // 22 -> 超时空之战 原生换频道：客户端不留快照，先进赛丽亚房间（返回地区仍是原街道），出门到最后防线 115/0。
         var history = new ChannelHistory();
@@ -90,6 +99,12 @@ internal static class FiendwarChannelTests
         session.MarkReady();
         That(session.LeaveRoom() && session.Selected!.Position == spot && session.Selected.Return == streetReturn,
             "赛丽亚房间出门到最后防线 115/0，返回地区仍是原街道: " + session.TravelReason);
+        That(!session.Travel(new(115, 0, normalSpot.X, normalSpot.Y, 5, 57, 1, 0, 400000041)) &&
+            session.TravelReason == "fiendwar-channel-town-mismatch" && session.Selected!.Position == spot,
+            "漩涡频道拒绝伪造普通超时空NPC传送且不保存位置");
+        var waiting = towns.Spawn(new(57, 2, 0, 0), cleared)!;
+        That(!session.Travel(new(57, 2, waiting.X, waiting.Y, 5, 57, 1, 0, 625)) && session.Selected!.Position == spot,
+            "未创建攻坚队不能通过候战NPC进入57/2");
         session.ReturnToRoster();
         session = new GameSession(repo, towns, owner, entry: fiend, channelHistory: history);
         session.Select(role.Slot, resumeTown: true);
@@ -97,13 +112,13 @@ internal static class FiendwarChannelTests
         session.ReturnToRoster();
         foreach (var other in new[] { weak })
         {
-            // 低等级/未完成任务：无频道落点，赛丽亚房间出门回原街道。
+            // 正式选角门禁拒绝低等级，不能借共享房间绕过。
             session = new GameSession(repo, towns, owner, entry: fiend);
-            session.Select(other.Slot, resumeTown: true);
-            That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room && session.Selected.Return == streetReturn,
-                "89 级换入超时空之战频道按 PVF 等级留在共享房间: " + other.Name);
-            session.MarkReady();
-            That(session.LeaveRoom() && session.Selected!.Position.Town == street.Town, "89 级换入超时空之战频道按 PVF 等级留在共享房间，出门回原街道: " + session.TravelReason);
+            bool rejected = false;
+            try { session.Select(other.Slot, resumeTown: true); }
+            catch (Game.Raids.RaidAdmissionException error) when (error.Message == "fiendwar-level-required") { rejected = true; }
+            That(rejected && session.Selected is null && repo.LoadCharacter(owner, other.Slot).Position == street,
+                "94级在正式选角前拒绝且不保存位置");
             session.ReturnToRoster();
         }
         // 离开最后防线 115/0回普通频道：谓词不同不留快照，进赛丽亚房间，出门到普通频道落点；无落点频道出门回进入前街道。
@@ -122,6 +137,16 @@ internal static class FiendwarChannelTests
         session.Select(role.Slot, resumeTown: true);
         That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room && session.Selected.Return == streetReturn,
             "离开超时空之战频道到无落点频道回共享房间，返回原街道");
+        session.ReturnToRoster();
+
+        var stale = repo.Create(owner, Role("OldFiend", 95));
+        repo.Save(owner, stale, normalSpot, streetReturn);
+        session = new GameSession(repo, towns, owner, entry: fiend, channelHistory: history);
+        session.Select(stale.Slot, resumeTown: true);
+        That(!session.TownSnapshotResumed && session.Selected!.Position == towns.Room,
+            "同类型频道重连也修复历史115存档，不沿用旧普通地图");
+        session.MarkReady();
+        That(session.LeaveRoom() && session.Selected!.Position == spot, "旧115存档修复后能进入真实57/1招募区");
         session.ReturnToRoster();
 
         // 最后防线 115/1 选图 201 -> 400000016：90 级、持有 490007844 x1，不扣除。
@@ -241,7 +266,7 @@ internal static class FiendwarChannelTests
         var shared5349 = incounts.Find(5349)!;
         That(repo.CommitDungeonIncountEntry(owner, counted, shared5349.CountKey, period, shared5349, null) is { Usage: { DailyUsed: 1, WeeklyUsed: 1 } },
             "按行首记次");
-        var allCounts = new GameSession(repo, towns, owner, entry: fiend, incounts: incounts);
+        var allCounts = new GameSession(repo, towns, owner, entry: elven, incounts: incounts);
         allCounts.Select(counted.Slot);
         allCounts.MarkReady();
         var listed = allCounts.EnterCounts();
@@ -316,12 +341,13 @@ internal static class FiendwarChannelTests
 
         void EnterCounted(Character character, bool accepted, int itemsBefore, DungeonEnterCount before, DungeonEnterCount? after)
         {
-            var s = new GameSession(repo, towns, owner, entry: fiend, incounts: incounts);
+            var s = new GameSession(repo, towns, owner, entry: elven, incounts: incounts);
             s.Select(character.Slot);
             s.MarkReady();
-            That(s.Selected!.Position == towns.Room && s.LeaveRoom(), "超时空之战频道选角在赛丽亚房间，出门: " + s.TravelReason);
-            var door = towns.Entrance(spot, new(115, 1, 0, 0), cleared)!;
-            That(s.Selected!.Position == spot && s.EnterCounts().Single(c => c.Dungeon == Dungeon) == before && s.EnterCounts().Count == 16,
+            That(s.Selected!.Position == towns.Room && s.LeaveRoom() &&
+                s.Travel(new(115, 0, normalSpot.X, normalSpot.Y, 5, 38, 0, 0, 400000041)), "普通频道经天界支援兵进入115/0: " + s.TravelReason);
+            var door = towns.Entrance(normalSpot, new(115, 1, 0, 0), cleared)!;
+            That(s.Selected!.Position == normalSpot && s.EnterCounts().Single(c => c.Dungeon == Dungeon) == before && s.EnterCounts().Count == 16,
                 $"入城下发次数 {string.Join(',', s.EnterCounts())}");
             That(s.Travel(new(115, 1, door.X, door.Y, 5, 115, 0, 0)), "计数会话走到 115/1: " + s.TravelReason);
             int held() => s.Selected!.Inventory.Items.Where(row => row.Core.ItemId == RequiredItem).Sum(row => row.Core.Value);
@@ -339,12 +365,15 @@ internal static class FiendwarChannelTests
 
         void Enter(Character character, bool accepted)
         {
-            var s = new GameSession(repo, towns, owner, entry: fiend);
+            var s = new GameSession(repo, towns, owner, entry: elven);
             s.Select(character.Slot);
             s.MarkReady();
             That(s.Selected!.Position == towns.Room && s.LeaveRoom(), "超时空之战频道选角在赛丽亚房间，出门: " + s.TravelReason);
-            That(s.Selected!.Position == spot, "正式选角落到最后防线");
-            var door = towns.Entrance(spot, new(115, 1, 0, 0), cleared)!;
+            That(!s.Travel(new(57, 1, spot.X, spot.Y, 5, 38, 0, 0, 624)) &&
+                s.TravelReason == "fiendwar-channel-town-mismatch", "普通频道拒绝伪造团队招募NPC传送");
+            That(s.Travel(new(115, 0, normalSpot.X, normalSpot.Y, 5, 38, 0, 0, 400000041)), "普通频道经天界支援兵进入115/0: " + s.TravelReason);
+            That(s.Selected!.Position == normalSpot, "普通超时空之战保留真实NPC入口");
+            var door = towns.Entrance(normalSpot, new(115, 1, 0, 0), cleared)!;
             That(s.Travel(new(115, 1, door.X, door.Y, 5, 115, 0, 0)) && s.Selected!.Return == streetReturn,
                 "最后防线主城走到 115/1，返回地区不变: " + s.TravelReason);
             int before = s.Selected!.Inventory.Items.Where(row => row.Core.ItemId == RequiredItem).Sum(row => row.Core.Value);

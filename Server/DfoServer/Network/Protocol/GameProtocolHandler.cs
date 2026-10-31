@@ -166,7 +166,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             SocialPackets.Name(name), "account_friend_deleted", guard);
         ushort socialCharacter = 0;
         session.PartyNoticeArrived = notice => PartyProjection.Notice(context, notice);
-        session.RaidNoticeArrived = (change, actor) => RaidProjection.Notice(context, change, actor, enableLukeRaidStart);
+        session.RaidNoticeArrived = (change, actor) => RaidProjection.Notice(context, change, actor, enableLukeRaidStart, projection);
         session.RaidBattleNoticeArrived = (view, actor) => RaidCombatProjection.Notice(context, view, actor);
         session.AutomaticRaidRewardArrived = async receipt =>
         {

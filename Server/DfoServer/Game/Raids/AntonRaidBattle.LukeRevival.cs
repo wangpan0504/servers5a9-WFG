@@ -14,7 +14,7 @@ internal sealed partial class AntonRaidBattle
 {
     readonly LukeRaidRevivalPolicy? lukeRevival;
     readonly HashSet<RevivalReservation> lukeRevivalReservations = [];
-    internal bool SupportsLukeRevival => Kind == RaidKind.Luke && lukeRevival is not null;
+    internal bool SupportsLukeRevival => Kind == RaidKind.Luke && lukeRevival is not null || Kind == RaidKind.Fiendwar && fiendwarDefinition is not null;
 
     // 最多八个当前角色死亡事实；能力对象私有铸造，SQL前只预留，成功后不再按动态阶段拒绝。
     internal sealed class RevivalReservation : IDisposable
@@ -38,6 +38,7 @@ internal sealed partial class AntonRaidBattle
                     battle.pendingTransition is not null || TerminalRequested(battle.current) || battle.LukePhaseDueLocked() ||
                     !battle.members.ContainsKey(actor) || !battle.dungeonRuns.TryGetValue(identity.InstanceId, out var run) ||
                     !run.Installed || !run.Active.Contains(actor) || run.Phase != battle.current.Phase ||
+                    battle.Kind == RaidKind.Fiendwar && (!battle.fiendwarEncounters.TryGetValue(run.Id, out var encounter) || battle.lukeClock.GetUtcNow() >= encounter.Deadline) ||
                     battle.current.DungeonGenerations.GetValueOrDefault(checked((int)run.Dungeon)) != run.Generation ||
                     battle.current.Dungeons.GetValueOrDefault(checked((int)run.Dungeon)) is not (RaidDungeonState.Open or RaidDungeonState.Clear) ||
                     !battle.entries.TryGetValue((identity.InstanceId, actor.Character), out var entry) ||
@@ -48,8 +49,9 @@ internal sealed partial class AntonRaidBattle
                     return null;
                 int used = run.Phase == 0 ? run.RevivalUsed : battle.current.LukePhaseCoinsUsed ?? 0;
                 int reserved = battle.lukeRevivalReservations.Count(row => run.Phase == 0 ? ReferenceEquals(row.run, run) : row.run.Phase == run.Phase);
-                int limit = run.Phase == 0 ? LukeRaidRevivalPolicy.DungeonLimit : LukeRaidRevivalPolicy.PhaseLimit;
-                if (used + reserved >= limit) return null;
+                // 原版漩涡引导不限制复活币；团队仍按DGN共享上限，扣币与死亡事实校验不变。
+                int? limit = battle.Kind == RaidKind.Fiendwar ? run.RevivalLimit : run.Phase == 0 ? LukeRaidRevivalPolicy.DungeonLimit : LukeRaidRevivalPolicy.PhaseLimit;
+                if (limit is { } maximum && used + reserved >= maximum) return null;
                 var reservation = new RevivalReservation(battle, run, actor, death);
                 battle.lukeRevivalReservations.Add(reservation);
                 return reservation;

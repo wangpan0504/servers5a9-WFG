@@ -43,6 +43,8 @@ internal static partial class FormalDungeonTcpTests
             bool luke = definition.IsOrdinaryLuke;
             bool prey = definition.IsOrdinaryPrey;
             bool anton = definition.IsOrdinaryAnton;
+            int antonBranch = sample.Id is >= 9599 and <= 9602 ? sample.Id - 9598 : sample.Id is >= 9603 and <= 9606 ? sample.Id - 9602 : 1;
+            int antonIndex = anton ? dungeons.AntonNormalSequence.Routes[antonBranch - 1].IndexOf(sample.Id) : 0;
             var area = resources.Towns.Areas.Values.First(row => row.DungeonWorldMap is { } world &&
                 resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == sample.Id));
             var done = new HashSet<int>(area.Quests);
@@ -85,24 +87,18 @@ internal static partial class FormalDungeonTcpTests
             if (luke)
                 fixture.Sql("INSERT INTO character_luke_normal_progress(character_id,account,day,progress) VALUES($p0,$p1,$p2,$p3)",
                     created.Id, account, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow), sample.Id - 5101);
+            // 本夹具逐图测试奖励及协议，明确建立前序；零进度自然六图链另有Session回归。
+            if (anton)
+                fixture.Sql("INSERT INTO character_anton_normal_progress(character_id,account,day,branch,progress) VALUES($p0,$p1,$p2,$p3,$p4)",
+                    created.Id, account, DfoServer.Game.Quests.QuestCycle.Day(DateTimeOffset.UtcNow), antonBranch, antonIndex);
             if (prey)
                 fixture.Sql("INSERT INTO character_prey_normal_progress(character_id,account,day,branch,progress) VALUES($p0,$p1,$p2,$p3,$p4)",
                     created.Id,account,preyDay,preyBranch,preyRoute.IndexOf(sample.Id));
             int fatigue = sample.Tired ? definition.StartFatigue!.Value-1 : luke && !sample.Explicit ? 8 : 100;
             fixture.Sql("UPDATE character_fatigue SET remaining=$p0 WHERE character_id=$p1",fatigue,created.Id);
-            // 最后防线只经频道39进入；普通选角先到共享房间，再出门到115/0，不能把上一角色的普通频道历史当作团本快照。
-            using var peer = sample.Id == 400000016 ? Open(fixture,account,gamePort:ChannelTcpTests.Endpoints(fixture)[39],channelNumber:39) : Open(fixture,account);
-            if (sample.Id == 400000016)
-            {
-                var entry = peer.Select(created.Slot,prepared:done.Count != 0);
-                That(entry.Single(packet => packet is { Kind:0,Opcode:24 }).Body.AsSpan(0,2).SequenceEqual(new byte[] { 38,1 }) &&
-                    U32(entry.Single(packet => packet is { Kind:0,Opcode:1379 }).Body) == 115,
-                    "超时空普通选角绑定共享房间，并以1379指定最后防线出门城镇");
-                peer.Travel(115,0,1301,428,38,1,bottom:true);
-                peer.Travel(position.Town,position.Area,position.X,position.Y,115,0);
-            }
-            else
-                peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
+            // 普通超时空115沿普通频道；39/type45已归漩涡57，不能借团队落点验证普通副本。
+            using var peer = Open(fixture,account);
+            peer.Select(created.Slot,prepared:done.Count != 0,resumeTown:true,room:false);
             ushort questId = prey ? (ushort)8926 : anton ? (ushort)2683 : luke ? (ushort)2902 : (ushort)8683;
             peer.Send(31,[(byte)31,0,(byte)questId,(byte)(questId >> 8)]);
             var accepted = peer.Expect(1,31).Body;
@@ -125,6 +121,14 @@ internal static partial class FormalDungeonTcpTests
                 int completed = preyRoute.IndexOf(sample.Id);
                 That(body.Length == 16 && U32(body) == 203 && body[4] == completed && U32(body,5) == (1u << completed)-1 &&
                     U32(body,9) == preyBranch && body.AsSpan(13).SequenceEqual(new byte[3]),"203查询返回当前真实分支与前序");
+                peer.Barrier();
+            }
+            if (anton)
+            {
+                peer.Send(871,[28,0,0,0]);
+                var body = peer.Expect(0,602).Body;
+                That(body.Length == 16 && U32(body) == 28 && body[4] == antonIndex && U32(body,5) == (1u << antonIndex)-1 &&
+                    U32(body,9) == antonBranch && body.AsSpan(13).SequenceEqual(new byte[3]), "序列28查询反映实际当日前序及分支");
                 peer.Barrier();
             }
             if (sample.Id == 9595 && sample.Ticket)
@@ -204,6 +208,12 @@ internal static partial class FormalDungeonTcpTests
                 byte[] body = peer.Expect(0,602).Body;
                 That(U32(body) == 203 && body[4] == preyRoute.IndexOf(sample.Id) && U32(body,9) == preyBranch,
                     "普通普雷28与29之间投影当前路线");
+            }
+            if (anton)
+            {
+                var body = peer.Expect(0,602).Body;
+                That(body.Length == 16 && U32(body) == 28 && body[4] == antonIndex && U32(body,9) == antonBranch,
+                    "安徒恩28之后29之前同步个人门禁进度");
             }
             var map = peer.Expect(0,29).Body;
             That(U32(info,0) == sample.Id && info[4] == 2 && U32(map,14) == (sample.Id switch
@@ -400,6 +410,14 @@ internal static partial class FormalDungeonTcpTests
                     }
                     if (packet is { Kind:0,Opcode:602 })
                     {
+                        if (anton)
+                        {
+                            var antonProgress = fixture.Query("SELECT progress,branch FROM character_anton_normal_progress WHERE character_id=$p0",peer.Id);
+                            That(antonProgress is [[long antonCompleted, long savedBranch]] && packet.Body.Length == 16 && U32(packet.Body) == 28 &&
+                                packet.Body[4] == antonCompleted && U32(packet.Body,5) == (1u << (int)antonCompleted)-1 && U32(packet.Body,9) == savedBranch &&
+                                packet.Body.AsSpan(13).SequenceEqual(new byte[3]), "安徒恩每次602与本角色已提交进度完全一致");
+                            packets.Add(packet); continue;
+                        }
                         if (prey)
                         {
                             var preyProgress = fixture.Query("SELECT progress FROM character_prey_normal_progress WHERE character_id=$p0",peer.Id);

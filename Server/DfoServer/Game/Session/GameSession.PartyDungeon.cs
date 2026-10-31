@@ -119,6 +119,7 @@ internal sealed partial class GameSession
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         return (entry.OrdinaryLukeDay is not { } day || day == QuestCycle.Day(now)) &&
             (entry.PreyNormal is not { } prey || prey.Day == QuestCycle.Day(now)) &&
+            (entry.AntonNormal is not { } anton || anton.Day == QuestCycle.Day(now)) &&
             (entry.BeastDay is not { } beastDay || beastDay == BeastDungeonRotation.ServiceDay(now));
     }
 
@@ -140,6 +141,8 @@ internal sealed partial class GameSession
         if (!CanInstallRaidDungeon(dungeon.Entry)) return null;
         if (dungeon.Entry.OrdinaryLukeDay is { } day &&
             !repository.LoadOrdinaryLukeProgress(owner, Selected.Id).Allows(day, dungeon.Entry.DungeonId)) return null;
+        if (dungeon.Entry.AntonNormal is { } anton &&
+            !repository.LoadAntonNormalProgress(owner, Selected.Id).Allows(anton, dungeon.Entry.DungeonId)) return null;
         if (dungeon.Entry.PreyNormal is { } prey &&
             !repository.LoadPreyNormalProgress(owner, Selected.Id).Allows(prey, dungeon.Entry.DungeonId)) return null;
         BeastDungeonAdmission? beast = null;
@@ -199,6 +202,7 @@ internal sealed partial class GameSession
             new(items, fatigue, dungeon.Run.Snapshot.Identity, dungeon.Entry.StartMap.Id, plan.Weekly)
             { GuildTraining = training?.Inventory, OrdinaryLukeEntry = dungeon.Entry.OrdinaryLukeDay is null ? null : dungeon.Entry,
                 PreyNormalEntry = dungeon.Entry.PreyNormal is null ? null : dungeon.Entry,
+                AntonNormalEntry = dungeon.Entry.AntonNormal is null ? null : dungeon.Entry,
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
                 GuildDungeon = guildAdmission, Beast = beast, Dimension = dungeon.Entry.Dimension }, incount)
         {

@@ -24,6 +24,7 @@ internal sealed partial class AntonRaidBattle
         public FacilityLedger? FacilityLedger { get; set; }
         public bool FacilityLedgerAmbiguous { get; set; }
         public int RevivalUsed { get; set; }
+        public int? RevivalLimit { get; init; }
         public Dictionary<RaidActor, long> RevivedDeaths { get; } = [];
         public bool Installed { get; set; }
         public bool EnterConsumed { get; set; }
@@ -48,14 +49,17 @@ internal sealed partial class AntonRaidBattle
         internal AntonRaidBattleChange? ReleasedChange { get; private set; }
         private DungeonReservation(AntonRaidBattle battle, RaidDungeonRun run) { this.battle = battle; this.run = run; }
         internal static DungeonReservation? Prepare(AntonRaidBattle battle, RaidDungeonIdentity identity,
-            uint dungeon, (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects, LukeRouteLease? route, int? mazeOrdinal)
+            uint dungeon, (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects, LukeRouteLease? route, int? mazeOrdinal, int? coinLimit)
         {
             lock (battle.gate)
             {
                 if (objects is not null && (battle.Kind != RaidKind.Luke || objects.Dungeon != dungeon || actors.Length == 0 || objects.Run != actors[0].Identity.InstanceId) ||
+                    battle.Kind == RaidKind.Fiendwar &&
+                        (coinLimit is not null && coinLimit is not (> 0 and <= byte.MaxValue) ||
+                         coinLimit is null && battle.fiendwarDefinition?.Guide != true) ||
                     identity.Kind != battle.Kind || identity.InstanceId != battle.Instance ||
                     battle.Kind == RaidKind.Prey && (identity.Squad != 1 || actors.Length != 1 || !battle.AllowsPreyEntry(checked((int)dungeon))) ||
-                    identity.Phase != battle.current.Phase || identity.Squad < 1 || identity.Squad > (battle.Kind == RaidKind.Luke ? 2 : 5) ||
+                    identity.Phase != battle.current.Phase || identity.Squad < 1 || identity.Squad > (battle.Kind == RaidKind.Fiendwar ? 8 : battle.Kind == RaidKind.Luke ? 2 : 5) ||
                     battle.Kind == RaidKind.Anton && !battle.AntonEntryOpenLocked(checked((int)dungeon)) ||
                     !battle.AllowsLukeThroneLocked(checked((int)dungeon)) ||
                     TerminalRequested(battle.current) || battle.LukePhaseDueLocked() || battle.pendingTransition is not null ||
@@ -66,7 +70,7 @@ internal sealed partial class AntonRaidBattle
                     actors.Select(actor => actor.Identity.InstanceId).Distinct().Count() != 1 ||
                     battle.lukeEnergyObjects && dungeon is 5063 or 5066 &&
                         (identity.Phase != 1 || objects?.Energy is null || objects.MazeOrdinal != mazeOrdinal) ||
-                    battle.dungeonRuns.Count >= (battle.Kind == RaidKind.Luke ? 2 : 5) || battle.lukeRevivalReservations.Any(row => row.Squad == identity.Squad) ||
+                    battle.dungeonRuns.Count >= (battle.Kind == RaidKind.Fiendwar ? 8 : battle.Kind == RaidKind.Luke ? 2 : 5) || battle.lukeRevivalReservations.Any(row => row.Squad == identity.Squad) ||
                     battle.dungeonRuns.Values.Any(run => run.Squad == identity.Squad) ||
                     battle.Kind == RaidKind.Luke && battle.dungeonRuns.Values.Any(run => run.Phase == identity.Phase &&
                         run.Dungeon == dungeon && run.Generation != battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon))) ||
@@ -77,7 +81,9 @@ internal sealed partial class AntonRaidBattle
                     ? route is null || route.Dungeon != dungeon || route.Phase != identity.Phase || route.MazeOrdinal != mazeOrdinal || !battle.IsLukeRouteCurrent(route)
                     : route is not null) return null;
                 var run = new RaidDungeonRun(actors[0].Identity.InstanceId, identity.Phase, dungeon, identity.Squad,
-                    battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon)), actors) { Objects = objects, Route = route };
+                    battle.current.DungeonGenerations.GetValueOrDefault(checked((int)dungeon)), actors)
+                    { Objects = objects, Route = route, RevivalLimit = coinLimit };
+                if (!battle.ReserveFiendwarEncounter(run)) return null;
                 if (!battle.dungeonRuns.TryAdd(run.Id, run)) return null;
                 return new(battle, run);
             }
@@ -105,7 +111,7 @@ internal sealed partial class AntonRaidBattle
             {
                 if (finished) return;
                 finished = true;
-                if (battle.dungeonRuns.TryGetValue(run.Id, out var current) && ReferenceEquals(current, run)) battle.dungeonRuns.Remove(run.Id);
+                if (battle.dungeonRuns.TryGetValue(run.Id, out var current) && ReferenceEquals(current, run)) { battle.dungeonRuns.Remove(run.Id); battle.fiendwarEncounters.Remove(run.Id); }
                 ReleasedChange = battle.CommitPendingTransition();
             }
         }
@@ -113,8 +119,8 @@ internal sealed partial class AntonRaidBattle
 
     internal DungeonReservation? ReserveDungeon(RaidDungeonIdentity identity, uint dungeon,
         (RaidActor Actor, DungeonRunIdentity Identity)[] actors, LukeRaidObjectRegistration? objects = null,
-        LukeRouteLease? route = null, int? mazeOrdinal = null) =>
-        DungeonReservation.Prepare(this, identity, dungeon, actors, objects, route, mazeOrdinal);
+        LukeRouteLease? route = null, int? mazeOrdinal = null, int? coinLimit = null) =>
+        DungeonReservation.Prepare(this, identity, dungeon, actors, objects, route, mazeOrdinal, coinLimit);
 
     // 各成员的正式事务全部确认后调用。先验证整批，再记录一次共享Run推进，不接受部分候选事实。
     internal AntonRaidBattleChange? CompleteLukeDungeon((RaidActor Actor, DungeonClearFact Fact)[] facts)
@@ -265,7 +271,7 @@ internal sealed partial class AntonRaidBattle
             ScheduleLukeClockLocked();
             return;
         }
-        if (Kind is RaidKind.Luke or RaidKind.Prey && candidate.State != AntonRaidBattleState.Fighting && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0 || lukeCompletion is not null))
+        if (Kind is RaidKind.Luke or RaidKind.Prey or RaidKind.Fiendwar && candidate.State != AntonRaidBattleState.Fighting && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0 || lukeCompletion is not null))
         {
             pendingTransition = candidate;
             if (lukeCompletion is not null && candidate.State == AntonRaidBattleState.Reward)
@@ -274,6 +280,8 @@ internal sealed partial class AntonRaidBattle
             if (!before.Timers.IsEmpty)
                 current = before with { Timers = before.Timers.Clear(), TimerGenerations = before.TimerGenerations.Clear(), TimerAnchors = before.TimerAnchors.Clear(),
                     TimerSequence = candidate.TimerSequence, Revision = before.Revision + 1 };
+            if (Kind == RaidKind.Fiendwar)
+                current = candidate with { State = before.State, Revision = before.Revision + 1 };
             ScheduleLukeClockLocked();
             return;
         }
@@ -317,7 +325,14 @@ internal sealed partial class AntonRaidBattle
                 CommitBattleCandidate(current, RemovePreyArea(DamagePreyShip(current, PreyHeader("[single defence fail]")), checked((int)run.Dungeon)));
             run.Active.Remove(actor);
             if (Kind == RaidKind.Anton) entries.Remove((run.Id, actor.Character));
-            if (run.Active.Count == 0) dungeonRuns.Remove(run.Id);
+            if (run.Active.Count == 0)
+            {
+                if (fiendwarEncounters.TryGetValue(run.Id, out var encounter) && current.FiendwarDungeonTimers.ContainsKey(encounter.Area))
+                    current = current with { FiendwarDungeonTimers = current.FiendwarDungeonTimers.Remove(encounter.Area), Revision = current.Revision + 1 };
+                dungeonRuns.Remove(run.Id); fiendwarEncounters.Remove(run.Id); fiendwarBossReports.Remove(run.Id);
+                if (current.FiendwarExpiredRuns.Contains(run.Id))
+                    current = current with { FiendwarExpiredRuns = current.FiendwarExpiredRuns.Remove(run.Id), Revision = current.Revision + 1 };
+            }
         }
         var transition = CommitPendingTransition();
         return transition is not null || !ReferenceEquals(before, current) ? new(before, current) : null;

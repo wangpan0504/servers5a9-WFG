@@ -5,8 +5,8 @@ namespace DfoServer.Game.Raids;
 internal sealed partial class AntonRaidBattle
 {
     readonly Dictionary<ushort, long> lukeDisconnectAnchors = [];
-    internal GameWorld.Raids.RaidWaitingRoom? LukeWaitingRoom => Kind == RaidKind.Luke ? script.WaitingRoom : null;
-    bool LukeRejoinOpenLocked() => Kind == RaidKind.Luke && current.State != AntonRaidBattleState.Completed &&
+    internal GameWorld.Raids.RaidWaitingRoom? LukeWaitingRoom => Kind is RaidKind.Luke or RaidKind.Fiendwar ? script.WaitingRoom : null;
+    bool LukeRejoinOpenLocked() => Kind is RaidKind.Luke or RaidKind.Fiendwar && current.State != AntonRaidBattleState.Completed &&
         !current.ClockFaulted && !current.PhaseExpired && !LukePhaseDueLocked();
 
     internal void ReserveLukeDisconnect(RaidActor actor)
@@ -22,7 +22,8 @@ internal sealed partial class AntonRaidBattle
 
     internal bool IsLukeWaitingRoom(RaidActor actor)
     {
-        lock (gate) return script.WaitingRoom is { } room && actor.Session.ChannelEntry is { Type: 0x20 } channel &&
+        lock (gate) return script.WaitingRoom is { } room && actor.Session.ChannelEntry is { } channel &&
+            RaidTypes.FromChannelType(channel.Type) == (byte)Kind &&
             channel.Identity == actor.Channel && actor.Session.Selected?.Position is { } position &&
             position.Town == room.Town && position.Area == room.Area;
     }
@@ -58,6 +59,14 @@ internal sealed partial class AntonRaidBattle
             members.EnsureCapacity(members.Count + 1);
             if (!install()) return false;
             members.Add(replacement, policy);
+            if (Kind == RaidKind.Fiendwar && current.Fiendwar is { } field)
+            {
+                int area = reservation.FiendwarArea ?? FiendwarBaseArea;
+                if (area != FiendwarBaseArea && (current.FiendwarPositions.Values.Count(value => value == area) >= 4 ||
+                    fiendwarEncounters.Values.Any(encounter => encounter.Area == area))) area = FiendwarBaseArea;
+                current = ProjectFiendwar(current with { FiendwarPositions = current.FiendwarPositions.SetItem(replacement.Character, area) },
+                    fiendwarEngine!.Occupy(field, area, true, lukeClock.GetUtcNow()).State);
+            }
             lukeDisconnectAnchors.Remove(replacement.Character);
             originalLukeMembers[replacement.Character] = replacement;
             // 已提交参与、资格、已领kind集合不变；新视图使旧快照失效，但不重新锚定阶段时钟。

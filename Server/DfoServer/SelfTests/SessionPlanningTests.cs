@@ -893,6 +893,7 @@ internal static partial class SessionPlanningTests
                     VALUES(printf('%064d',{{id}}),{{id}},65000,1,400001065,7001,2000000000,'{}');
                 INSERT INTO character_server_item_usage VALUES({{id}},'{}');
                 INSERT INTO character_prey_normal_progress VALUES({{id}},'planning',20261031,3,4);
+                INSERT INTO character_anton_normal_progress VALUES({{id}},'planning',20261031,3,4);
                 """);
             TestCheck.That(PrivateRows(id).All(value => value > 0), "删除夹具覆盖当前全部角色私有表和外键账本");
         }
