@@ -11,11 +11,11 @@ internal sealed partial class GameSession
     {
         if (pendingRental is not null || HasPendingTownQuestCommit || Selected is not { } character || !Ready)
             return ((DfoServer.Game.Characters.Character?)null, (ushort)3, false);
-        bool? changed = settings.SaveEmotion(owner, character.Id, emotion);
-        if (changed is null) return ((DfoServer.Game.Characters.Character?)null, (ushort)1, false);
+        var saved = settings.SaveEmotion(owner, character, emotion);
+        if (saved.Error != 0) return ((DfoServer.Game.Characters.Character?)null, saved.Error, false);
         bool visibleChanged = character.Emotion != emotion;
         if (visibleChanged) Selected = character with { Emotion = emotion };
-        return (Selected, (ushort)0, changed.Value || visibleChanged);
+        return (Selected, (ushort)0, saved.Changed || visibleChanged);
     });
 
     public bool SaveHotkeys(ClientSettingsService settings, ImmutableArray<byte> text) => owner.Execute(() =>

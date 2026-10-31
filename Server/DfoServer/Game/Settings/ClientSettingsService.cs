@@ -3,7 +3,8 @@ using DfoServer.Game.Accounts;
 
 namespace DfoServer.Game.Settings;
 
-internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServer.GameWorld.Characters.CharacterEmotionCatalog? emotions = null)
+internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServer.GameWorld.Characters.CharacterEmotionCatalog? emotions = null,
+    DfoServer.GameWorld.Quests.TitleCatalog? titles = null)
 {
     public const int GameOptionLength = 204;
     public const int CharacterOptionLength = 512;
@@ -11,8 +12,11 @@ internal sealed class ClientSettingsService(IClientSettingsStore store, DfoServe
     public const int RecentEmoticonLength = 18 * sizeof(uint);
     public bool? SaveCloneTitle(AccountOwners.Lease owner, ushort characterId, uint itemId, long? expiresAt = null) =>
         store.SaveCloneTitle(owner, characterId, itemId, expiresAt);
-    public bool? SaveEmotion(AccountOwners.Lease owner, ushort characterId, ushort emotion) =>
-        emotions?.CanSelect(emotion) == true ? store.SaveEmotion(owner, characterId, emotion) : null;
+    public (ushort Error, bool Changed) SaveEmotion(AccountOwners.Lease owner, DfoServer.Game.Characters.Character character, ushort emotion)
+    {
+        ushort error = EmotionSelectionRules.Error(emotions, titles, character, emotion);
+        return error == 0 ? ((ushort)0, store.SaveEmotion(owner, character.Id, emotion)) : (error, false);
+    }
 
     public ClientSettingsSnapshot Load(AccountOwners.Lease owner, ushort characterId)
     {

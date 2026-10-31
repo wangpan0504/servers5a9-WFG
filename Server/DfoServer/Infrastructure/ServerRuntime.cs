@@ -188,14 +188,14 @@ internal static class ServerRuntime
         var mailbox = new Game.Mailbox.MailboxService(repository, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces);
         var mailboxProjection = new MailboxProjection(mailbox, online);
         var creatureTransportMailPolicy = new CreatureTransportMailPolicy(1);
+        var titleCatalog = new TitleCatalog(pvf, quests);
         var settings = new ClientSettingsService(new ClientSettingsRepository(Path.Combine(options.DataDirectory, "game.db")),
-            CharacterEmotionCatalog.Load(pvf));
+            CharacterEmotionCatalog.Load(pvf), titleCatalog);
         var chatEmoticons = ChatEmoticonCatalog.Load(pvf, itemResources.Contracts);
         var settingsProjection = new SettingsProjection(settings, chatEmoticons);
         var questParameters = QuestRewardParameterCatalog.Load(pvf);
         var questConnections = QuestConnectionCatalog.Load(pvf);
         var imageCommunication = ImageCommunicationCatalog.Load(pvf, towns);
-        var titleCatalog = new TitleCatalog(pvf, quests);
         // 公会参数（建会花费、仓库格数、等级经验曲线）：数值只从 PVF 读，业务层不写死常数。
         var guildParameters = new GameWorld.Guilds.GuildParameterCatalog(pvf);
         var guildDungeons = new GameWorld.Guilds.GuildDungeonCatalog(pvf);

@@ -17,6 +17,7 @@ internal static class EmotionTests
     public static void RunCore()
     {
         int start = Count;
+        EmotionSelectionTests.RunCore();
         Dictionary<int, string> strings = new() { [1] = "[EMOTION INFO]", [2] = "[/EMOTION INFO]", [3] = "", [4] = "name", [5] = "-name", [6] = "$END" };
         PvfToken[] row = [new(0, 300), new(0, 1), new(0, 1), new(6, 3), new(6, 3), new(0, 0), new(0, 0), new(0, 1), new(6, 4), new(6, 5), new(6, 5), new(6, 6)];
         PvfToken[] source = [new(3, 1), .. row, new(3, 2)];
