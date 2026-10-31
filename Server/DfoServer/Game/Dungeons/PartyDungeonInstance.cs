@@ -290,6 +290,10 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
     {
         if (!current.Any(m => ReferenceEquals(m.Actor.Session,reporter)) || pendingDeath is not null ||
             reporter.CurrentFormalDungeonScene() is not { } scene) return [];
+        bool energy = current.Any(member => member.Actor.Session.IsLukeEnergyDungeon);
+        if (energy && (loaded.Count != 0 || current.Any(member => !member.Actor.Session.IsLukeEnergyDungeon ||
+            member.Actor.Session.CurrentFormalDungeonScene() is not { Snapshot.Phase: SinglePlayerDungeonPhase.Dungeon or SinglePlayerDungeonPhase.Settlement } loadedScene ||
+            loadedScene.Snapshot.CurrentMap != scene.Snapshot.CurrentMap))) return [];
         var reportKey = (reporter.Selected!.Id,scene.Snapshot.CurrentMap,template,fingerprint);
         int ordinal = sequenced ? sceneReports.GetValueOrDefault(reportKey) : 0;
         var key = (scene.Snapshot.CurrentMap,template,fingerprint,ordinal);
@@ -297,7 +301,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         {
             if (sequenced) sceneReports[reportKey] = ordinal+1;
             var repeated = new List<PartyDungeonNotice>();
-            AppendEvildomWarNotices(current, repeated);
+            AppendBattleNotices(current, repeated);
             return repeated.ToArray();
         }
         if (pendingScene is not null && pendingScene.Key != key) return [];
@@ -305,7 +309,18 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         foreach (var member in current)
         {
             ushort id = member.Actor.Character.Id;
-            if (!pending.Completed.ContainsKey(id)) pending.Completed.Add(id,pending.Observe(member.Actor.Session));
+            if (!pending.Completed.ContainsKey(id))
+            {
+                var receipt = pending.Observe(member.Actor.Session);
+                // 能源图必须全员持久化；SQL失败保留已提交成员，重放只补剩余事务。
+                if (!energy || receipt is not null) pending.Completed.Add(id, receipt);
+            }
+        }
+        if (energy && pending.Completed.Count != current.Length)
+        {
+            // 无成员提交的非法报告不得占住事件；部分提交仍保留原候选供重放补齐。
+            if (pending.Completed.Count == 0) pendingScene = null;
+            return [];
         }
         var notices = current.Where(m => pending.Completed[m.Actor.Character.Id] is not null).Select(m =>
             new PartyDungeonNotice(PartyDungeonNoticeKind.Passive,m,current,m.Actor.Session.CurrentFormalDungeonScene(),
@@ -317,7 +332,7 @@ internal sealed partial class PartyDungeonInstance(Guid id, PartySnapshot party,
         }
         pendingScene = null;
         var completed = new List<PartyDungeonNotice>(notices);
-        AppendEvildomWarNotices(current, completed);
+        AppendBattleNotices(current, completed);
         return completed.ToArray();
     });
 

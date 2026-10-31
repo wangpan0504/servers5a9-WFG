@@ -7,6 +7,8 @@ namespace DfoServer.Game.Session;
 internal sealed partial class GameSession
 {
     internal bool IsFormalRaidDungeon => owner.Execute(() => formalDungeon?.Entry.RaidEntry is not null);
+    internal bool IsLukeEnergyDungeon => owner.Execute(() => formalDungeon is
+        { Entry.RaidEntry: { Kind: RaidKind.Luke, Phase: 1 }, Entry.LukeEnergyObject.IsEnergy: true });
 
     // 调用方已持原四人owner组；资源准备完成，SQL尚未开始。
     internal static AntonRaidBattle.DungeonReservation? ReserveRaidPartyRun(PartyDungeonPreparation[] prepared, out bool required)

@@ -18,6 +18,13 @@ public static class RaidObjectEvidence
     // 精确接受 ON SET ACTION → DO BEHAVIOR ME 0 → 单一 RAID SET SYMBOL [+]1。
     // ON DESTROY、条件、重复trigger、额外behavior与其它运算都不是这份证据。
     public static int? SetActionIncrement(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
+        => SetActionOne(tokens, resolve, "+");
+
+    // 能源装置使用赋值1；不将其降格为设施的增量报告。
+    public static int? SetActionAssignment(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve)
+        => SetActionOne(tokens, resolve, "=");
+
+    static int? SetActionOne(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve, string operation)
     {
         var document = new PvfTokenDocument(tokens, resolve);
         if (!document.Diagnostics.IsEmpty || document.Sections.Any(row => row.Name is not ("motion" or "trigger" or "behavior"))) return null;
@@ -32,7 +39,7 @@ public static class RaidObjectEvidence
             trigger[2].Name != "me" || trigger[2].Values is not [{ Type: 0, Value: 0 }] ||
             behavior.Length != 2 || behavior.Any(row => !row.Children.IsEmpty) ||
             behavior[0].Name != "raid set symbol" || behavior[0].Values is not [{ Type: 0 }] ||
-            behavior[1].Name != "+" || behavior[1].Values is not [{ Type: 0, Value: 1 }]) return null;
+            behavior[1].Name != operation || behavior[1].Values is not [{ Type: 0, Value: 1 }]) return null;
         return behavior[0].Values[0].Value;
     }
 

@@ -784,7 +784,9 @@ internal sealed partial class GameSession
             { BeastEncounters = beastEncounters.AsReadOnly() };
         // 原生clear condition/destroy object独立发送39，不要求OBJ另声明quest type。
         if (entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] && questCatalog is not null &&
-            (entry.IsEvildomWarHidden ||
+            (entry.IsEvildomWarHidden || entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
+                entry.LukeEnergyObject is { } energy && energy.MatchesEnergy(entry.DungeonId, entry.Maze, entry.BossMap,
+                    condition.TargetId, energy.Ordinal) ||
              expected.ActiveMainQuests.Any(active => active.QuestId == entry.RouteQuestId && QuestHuntProgress.Bound(active, entry))))
         {
             var sources = plans.SelectMany(plan => plan.Room.PassiveObjects.Where(source => source.ObjectId == condition.TargetId &&

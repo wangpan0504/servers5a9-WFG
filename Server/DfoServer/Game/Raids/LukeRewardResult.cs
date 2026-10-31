@@ -1,18 +1,25 @@
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
+using System.Collections.Immutable;
 
 namespace DfoServer.Game.Raids;
 
-// nullable区分未提供和显式零；不把缺失的未知列补成零。只支持本次原箱结果，不是选择前预览。
+// nullable区分未提供和显式零；完整结果沿本次已冻结实际产物，不是选择前预览。
 internal sealed record LukeRewardResultSpec(byte? RawCode, uint? ItemId, ushort? DisplayNumber,
     byte? RawFlag, uint? RawTail1, uint? EnchantUpgrade)
 {
-    internal bool Matches(RaidRewardOffer offer) => RawCode.HasValue && RawFlag.HasValue && RawTail1.HasValue &&
-        EnchantUpgrade is <= byte.MaxValue && !offer.Grants.IsDefault && offer.Grants is [{ ItemId: > 0, Count: > 0 and <= ushort.MaxValue } grant] &&
-        ItemId == (uint)grant.ItemId && DisplayNumber == grant.Count;
+    internal bool Matches(RaidRewardOffer offer) => !offer.Grants.IsDefaultOrEmpty &&
+        !offer.LukeAdditionalResults.IsDefault && offer.LukeAdditionalResults.Length == offer.Grants.Length - 1 &&
+        Matches(offer.Grants[0]) && offer.LukeAdditionalResults.Zip(offer.Grants.Skip(1)).All(pair => pair.First.Matches(pair.Second));
+    internal bool Matches(InventoryReward grant) => RawCode.HasValue && RawFlag.HasValue && RawTail1.HasValue &&
+        EnchantUpgrade is <= byte.MaxValue && grant is { ItemId: > 0, Count: > 0 and <= ushort.MaxValue } &&
+        ItemId == (uint)grant.ItemId && DisplayNumber == grant.Count && EnchantUpgrade == grant.EnchantUpgrade;
 }
 
-internal sealed record LukeRewardResult(byte Kind, ushort Owner, byte Card, LukeRewardResultSpec Item);
+internal sealed record LukeRewardResult(byte Kind, ushort Owner, byte Card, LukeRewardResultSpec Item)
+{
+    public ImmutableArray<LukeRewardResultSpec> AdditionalItems { get; init; } = [];
+}
 
 internal static class LukeRewardResults
 {
@@ -22,11 +29,10 @@ internal static class LukeRewardResults
         if (receipt.Prepared.RaidType != RaidKind.Luke || receipt.Offer.LukeResult is not { } spec ||
             !spec.Matches(receipt.Offer) || receipt.Prepared.Kind != receipt.Offer.Kind || receipt.Prepared.Card != receipt.Offer.Card ||
             !receipt.Prepared.Grants.SequenceEqual(receipt.Offer.Grants)) return null;
-        var grant = receipt.Prepared.Grants.Single();
-        if (!items.TryGet(grant.ItemId, out var template) || !IsOriginalBox(template)) return null;
-        var core = InventoryRewardGrantService.Create(template, utcNow: now, upgrade: grant.Upgrade, refinement: grant.Refinement);
-        return spec.EnchantUpgrade == core.EnchantUpgrade
-            ? new(receipt.Prepared.Kind, receipt.Prepared.Character, receipt.Prepared.Card, spec) : null;
+        foreach (var grant in receipt.Prepared.Grants)
+            if (!items.TryGet(grant.ItemId, out _) && Currency.CurrencyWallet.RewardKind(grant.ItemId) is null) return null;
+        return new(receipt.Prepared.Kind, receipt.Prepared.Character, receipt.Prepared.Card, spec)
+            { AdditionalItems = receipt.Offer.LukeAdditionalResults };
     }
 
     internal static bool IsOriginalBox(ItemTemplate item) => item.Kind == ItemKind.Consumable &&

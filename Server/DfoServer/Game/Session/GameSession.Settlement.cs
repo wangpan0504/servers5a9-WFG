@@ -505,7 +505,7 @@ internal sealed partial class GameSession
 
     public CardMembership SetCardMembership(string name,CardMembershipKind kind,long expires) => owner.Execute(() =>
     {
-        if (HasPendingDevelopmentWalletChange)
+        if (HasPendingInventoryCommit)
             throw new InvalidOperationException("当前业务结果待确认，不能覆盖账号契约快照");
         var result = repository.SetCardMembership(owner,name,kind,expires);
         if (Selected is { } selected)

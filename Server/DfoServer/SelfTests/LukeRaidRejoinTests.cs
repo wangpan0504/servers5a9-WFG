@@ -36,12 +36,13 @@ internal static class LukeRaidRejoinTests
                 origin, origin, new(0, [], []), [], new Dictionary<uint, uint[]>());
             var owners = new AccountOwners(); var raids = new RaidRegistry();
             var repository = new CharacterRepository(path); var parties = new PartyService(repository);
-            var records = new AntonRaidRejoin(true); raids.BindRejoin(records);
+            var clock = new LukeRaidClockTests.Clock(DateTimeOffset.UtcNow);
+            var records = new AntonRaidRejoin(true, clock: clock); raids.BindRejoin(records);
             var recovery = new LukeRaidRejoin(raids, parties, records);
             var script = AntonRaidBattleTests.Script(10, 20) with { WaitingRoom = new(32, 4), EntryCost = new(100, 1) };
             var definition = new RaidDefinition(1, script.Path, 8, 1, 2) { Resources = new(script, [], [], [], [], []) };
             var start = new LukeRaidStart(raids, parties, repository, towns,
-                new EpicPieceCatalog("[piece list]\n9001 9002\n[/piece list]"), new("synthetic/rejoin", script));
+                new EpicPieceCatalog("[piece list]\n9001 9002\n[/piece list]"), new("synthetic/rejoin", script), clock: clock);
             RaidActor Login(int index, bool create)
             {
                 var owner = owners.Acquire("luke-rejoin-" + index, () => { }); leases.Add(owner);
@@ -83,8 +84,8 @@ internal static class LukeRaidRejoinTests
                         That(recovery.TryCaptureForDisconnect(actors[2].Session, out var reason) is null && reason == "owner-busy-or-stale",
                             "可选自动捕获遇其它owner占用零等待放弃");
                         actors[2].Session.End(); parties.Detach(actors[2].Session); actors[2].Owner.Dispose();
-                        That(!recovery.TryRecordDisconnected(fact!, out reason) && reason == "owner-busy-or-stale" && records.Peek(actors[2].Character) is null,
-                            "自动登记也不等待幸存者事务，不排队或留下半记录");
+                        That(!recovery.TryRecordDisconnected(fact!, out reason) && reason == "owner-busy-or-stale" && ReferenceEquals(records.Peek(actors[2].Character), fact),
+                            "自动登记不等待幸存者事务，保留已捕获的五分钟身份预约");
                     });
                     That(cleanup.Wait(TimeSpan.FromSeconds(5)) && !release.IsSet && !actors[2].Owner.IsCurrent,
                         "占用者尚未释放时原Session/Party/owner清理已完成");
@@ -108,9 +109,9 @@ internal static class LukeRaidRejoinTests
             That(actors[0].Owner.Execute(() => true), "失败后线程组合标记和owner均可正常使用");
             That(recovery.TryRecordDisconnected(fact!, out var recordedReason) && recordedReason == "recorded", "占用释放后自动登记原身份，不依赖旧owner仍有效");
             var fresh = Login(2, false);
-            var captureOnly = new AntonRaidRejoin(false, lukeCandidatesEnabled: true);
+            var captureOnly = new AntonRaidRejoin(false, lukeCandidatesEnabled: true, clock: clock);
             That(captureOnly.Record(fact!) && captureOnly.Peek(fresh.Character) == fact && !captureOnly.Enabled &&
-                !captureOnly.HasCandidate(fresh.Character) && !captureOnly.DescribeNotice(fresh, true, false).Matched &&
+                captureOnly.HasCandidate(fresh.Character) && !captureOnly.DescribeNotice(fresh, true, false).Matched &&
                 !captureOnly.Evaluate(fresh, fact!.Key, true, false).Matched,
                 "仅Luke内部候选开关不打开Anton通知或668，不把候选当重返成功");
             string sql = Assets(path); var character = fresh.Session.Selected;
@@ -166,25 +167,46 @@ internal static class LukeRaidRejoinTests
             That(recovery.RecordDisconnected(leaderFact), "原队长断线可保留身份，但不代表可恢复");
             var leaderLogin = Login(0, false); EnterWaiting(leaderLogin);
             var retainedRaid = raids.Find(actors[1])!; var retainedParty = parties.Current(actors[1].Session)!;
-            string beforeRejectedLeader = Assets(path);
-            That(recovery.Restore(leaderLogin, leaderFact.Key).Reason == "squad-leader-contract-unavailable" &&
-                ReferenceEquals(raids.Find(actors[1]), retainedRaid) && ReferenceEquals(parties.Current(actors[1].Session), retainedParty) &&
-                leaderLogin.Session.CurrentRaidBattle(leaderLogin) is null && leaderFact.Luke!.Bound is null &&
-                ReferenceEquals(records.Peek(leaderLogin.Character), leaderFact) && Assets(path) == beforeRejectedLeader,
-                "低slot原队长恢复会破坏现有选图锚点，必须原子拒绝且保留候选，不抢队长");
-            var nextFact = recovery.Capture(fresh)!;
-            fresh.Session.End(); parties.Detach(fresh.Session); fresh.Owner.Dispose();
-            var beforeLastExit = raids.Find(actors[1])!;
-            That(raids.Leave(actors[1], actors[1].Character)?.After is null && actors[1].IsCurrent &&
-                battle.CanRestoreLukeRejoin(nextFact.Luke!) && battle.View.State == AntonRaidBattleState.Fighting,
-                "控制最后成员RemoveCore已删除目录、但Battle/owner尚未清理的交错窗口");
-            That(!raids.RecordLukeDisconnected(beforeLastExit, nextFact, records) && records.Peek(fresh.Character) is null,
-                "登记规划与提交之间末位成员已退出，旧快照不能在DropParty后重新挂回候选");
-            actors[1].Session.End(); parties.Detach(actors[1].Session); actors[1].Owner.Dispose();
-            That(!recovery.RecordDisconnected(nextFact) && records.Peek(fresh.Character) is null,
-                "最后成员离线销毁团，不从断线记录重建Battle");
+            string leaderAssets = Assets(path);
+            var leaderRestored = recovery.Restore(leaderLogin, leaderFact.Key);
+            That(leaderRestored.Accepted && leaderRestored.Party!.Leader == retainedParty.Leader &&
+                leaderRestored.Raid!.Leader == retainedRaid.Leader && Assets(path) == leaderAssets,
+                "原队长回团保留继任队长，不改变资产");
+            That(selection.Select(actors[1].Session, 10, parties.Current(actors[1].Session)).Length == 3,
+                "低slot旧队长回来后，继任队长仍能为完整分队选择地下城");
+            That(selection.CancelSelection(actors[1].Session, parties.Current(actors[1].Session)), "重返后取消选图正常");
+            foreach (var disconnect in new[] { fresh, leaderLogin, actors[1] })
+            {
+                var reserved = recovery.Capture(disconnect)!;
+                That(reserved is not null, "连续断线保留各成员原槽位");
+                disconnect.Session.End(); parties.Detach(disconnect.Session); disconnect.Owner.Dispose();
+                That(recovery.RecordDisconnected(reserved!), "全团最后一人离线后仍可登记原预约");
+            }
+            That(raids.Find(leaderFact.Key, leaderFact.Channel) is { Members.IsEmpty: true } &&
+                records.Peek(fresh.Character) is not null, "全团离线保留同一原团五分钟，不复制资产");
+            clock.Advance(299);
+            var allBack = new[] { Login(2, false), Login(0, false), Login(1, false) };
+            foreach (var returning in allBack)
+            {
+                EnterWaiting(returning);
+                That(recovery.Restore(returning, leaderFact.Key).Accepted &&
+                    ReferenceEquals(returning.Session.CurrentRaidBattle(returning), battle),
+                    "全团与普通分队均消失后，第299秒依次返回同一实例");
+            }
+            That(parties.Current(allBack[0].Session) is { Members.Length: 3 } recreated &&
+                allBack.All(actor => parties.Current(actor.Session)?.Id == recreated.Id),
+                "首位重返重建分队，其余成员汇合而非另建平行分队");
+            foreach (var disconnect in allBack)
+            {
+                var reserved = recovery.Capture(disconnect)!;
+                disconnect.Session.End(); parties.Detach(disconnect.Session); disconnect.Owner.Dispose();
+                That(recovery.RecordDisconnected(reserved), "重返后再次断线以本次离线重新计五分钟");
+            }
+            clock.Advance(300);
+            That(records.Peek(fresh.Character) is null && raids.Count == 0,
+                "恰好五分钟原预约及空团回收，不可用历史key复活实例");
             // 同一数据库第二次真实开团，独立于上面的仍Fighting末成员清理竞态。
-            var phaseActors = new[] { leaderLogin, Login(1, false), Login(2, false) };
+            var phaseActors = new[] { Login(0, false), Login(1, false), Login(2, false) };
             raids.Create(phaseActors[0], 1, "phase", "phase"u8.ToArray(), 8, 1);
             foreach (var member in phaseActors.Skip(1))
             { raids.Invite(phaseActors[0], member, 0); That(raids.Respond(member, phaseActors[0].Character, true).Accepted, "阶段拒绝夹具真实入团"); }
@@ -212,9 +234,9 @@ internal static class LukeRaidRejoinTests
                     "唯一新变化为Run终结待退出屏障，兼容高slot候选仍必须拒绝");
                 foreach (var row in rows) phaseBattle.ReleaseDungeon(row.Actor, ending);
                 That(phaseBattle.View.State == AntonRaidBattleState.Reward &&
-                    recovery.Restore(phaseLogin, phaseFact.Key).Reason == "stale-reservation" &&
-                    phaseLogin.Session.CurrentRaidBattle(phaseLogin) is null && Assets(path) == phaseSql,
-                    "Run全部退出后的Reward状态仍拒绝，不被低slot队长或位置拒绝掩盖");
+                    recovery.Restore(phaseLogin, phaseFact.Key).Accepted &&
+                    ReferenceEquals(phaseLogin.Session.CurrentRaidBattle(phaseLogin), phaseBattle) && Assets(path) == phaseSql,
+                    "Run退出后可恢复原Reward阶段，已提交奖励资格和资产不重抽");
             }
             passed = true;
         }

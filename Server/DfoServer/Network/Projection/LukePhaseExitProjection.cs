@@ -6,31 +6,54 @@ using DfoServer.Network.Protocol;
 
 namespace DfoServer.Network.Projection;
 
-// 本连接最多一个失败退场任务；不拥有阶段时钟，不发未知失败状态或伪造死亡。
+// 本连接一个退场执行器和一个待办槽；不拥有阶段时钟，不发未知失败状态或伪造死亡。
 internal sealed class LukePhaseExitProjection(GameConnectionContext context, PartyDungeonService dungeons, TownProjection town, ServerLog log, ILukeRaidLifecycleStore? lifecycle) : IAsyncDisposable
 {
     readonly object gate = new();
     readonly CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(context.Stop);
     Task pending = Task.CompletedTask;
-    Guid scheduled;
+    sealed record ExitRequest(AntonRaidBattleView View, RaidActor Actor, Guid? Run);
+    (Guid Instance, int Phase, Guid? Run)? scheduled;
+    ExitRequest? requested;
+    bool running;
     bool disposed;
     internal Task Completion { get { lock (gate) return pending; } }
 
     internal void Notice(AntonRaidBattleView view, RaidActor actor)
     {
-        if (!view.PhaseExpired) return;
+        Guid? run = view.PhaseExpired ? null : context.Session.CurrentRaidBattle(actor)?.LukeEnergyReturnRun(actor);
+        if (!view.PhaseExpired && run is null) return;
         lock (gate)
         {
-            if (disposed || scheduled == view.Instance || !pending.IsCompleted) return;
-            scheduled = view.Instance;
-            pending = ExitAsync(view, actor);
+            var identity = (view.Instance, view.Phase, run);
+            if (disposed || scheduled == identity) return;
+            scheduled = identity;
+            requested = new(view, actor, run);
+            if (!running) { running = true; pending = DrainAsync(); }
         }
     }
 
-    async Task ExitAsync(AntonRaidBattleView view, RaidActor actor)
+    async Task DrainAsync()
     {
         // Notice可能来自本人owner或Battle发布；等待门禁必须离开该同步调用链。
         await Task.Yield();
+        while (true)
+        {
+            ExitRequest request;
+            lock (gate)
+            {
+                if (disposed || requested is null) { running = false; return; }
+                request = requested;
+                requested = null;
+            }
+            await ExitAsync(request);
+        }
+    }
+
+    async Task ExitAsync(ExitRequest request)
+    {
+        var (view, actor, run) = request;
+        string reason = run is null ? "phase" : "energy";
         int failures = 0;
         bool returnCommitted = false;
         AntonRaidBattle? originalBattle = null;
@@ -46,7 +69,8 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                     {
                         gates = await DispatchGateScope.EnterAsync(context, stop.Token);
                         if (!actor.IsCurrent || context.Session.CurrentRaidBattle(actor) is not { } battle ||
-                            battle.Instance != view.Instance || !battle.View.PhaseExpired) return;
+                            battle.Instance != view.Instance ||
+                            (run is { } runId ? !battle.RequiresLukeEnergyReturn(actor, runId) : !battle.View.PhaseExpired)) return;
                         originalBattle = battle;
                         prefix = battle.Kind.ToString().ToLowerInvariant();
                     }
@@ -54,7 +78,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                     catch (InvalidOperationException) when (!context.Owner.IsCurrent) { return; }
                     if (context.Session.PartyDungeon is not { } instance)
                     {
-                        if (context.Session.Phase == Game.Session.SessionPhase.MapSelect)
+                        if (run is null && context.Session.Phase == Game.Session.SessionPhase.MapSelect)
                         {
                             var returned = context.Session.ReturnFromDungeonSelection();
                             if (returned is null) { context.Disconnect(); return; }
@@ -65,6 +89,8 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                         }
                         return;
                     }
+                    // 能源回调只能退当时被标记的原Run；旧回调不能退出后来安装的新图。
+                    if (run is { } expected && instance.Id != expected) return;
                     using var peers = await PartyDungeonProjection.AcquirePeersAsync(context, instance.Members, stop.Token);
                     var departure = dungeons.Depart(context.Session);
                     if (departure.Error != 0)
@@ -76,7 +102,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
                     }
                     returnCommitted = true;
                     await PartyDungeonProjection.PublishAsync(departure.DungeonNotices);
-                    log.Write(prefix + "_phase_expired", new { Connection = context.Id, view.Instance, view.Phase, Reason = "local-policy", State = "returned" });
+                    log.Write(prefix + "_" + reason + "_exit", new { Connection = context.Id, view.Instance, view.Phase, Run = run, Reason = "local-policy", State = "returned" });
                     return;
                 }
                 finally { gates?.Dispose(); }
@@ -91,7 +117,7 @@ internal sealed class LukePhaseExitProjection(GameConnectionContext context, Par
             catch (Exception error) when (error is IOException or InvalidOperationException or DbException)
             {
                 log.Write(prefix + "_phase_exit_failed", new { Connection = context.Id, view.Instance, view.Phase, Error = error.Message });
-                if (!returnCommitted && error is (DbException or InvalidDataException)) originalBattle?.FaultExpiredLukePhase(view.Instance);
+                if (run is null && !returnCommitted && error is (DbException or InvalidDataException)) originalBattle?.FaultExpiredLukePhase(view.Instance);
                 context.Disconnect();
                 return;
             }

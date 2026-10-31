@@ -24,7 +24,9 @@ internal static class LukeRaidTcpTests
     {
         if (!originalRules)
             LukeRaidResourceTests.RunResources(resources.Archive, RaidCatalog.Load(resources.Archive), resources.ItemResources.Items);
-        var policy = originalRules ? LukeRaidStartTcpTests.OriginalRuleGatePolicy(resources) : null;
+        var policy = LukeRaidStartTcpTests.OriginalRuleGatePolicy(resources);
+        // 默认Runtime现已提供生产策略；显式损坏配置必须拒绝，不能回退默认策略后误扣票。
+        if (!originalRules) policy = policy with { Source = "" };
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, originalRules ? "luke-raid-original-gate" : "luke-raid"),
             resources: resources, lukeStartPolicy: policy);
         await fixture.StartAsync();
@@ -130,7 +132,7 @@ internal static class LukeRaidTcpTests
             e.GetProperty("MissingMaps").GetInt32() == 0 && e.GetProperty("MissingItems").GetInt32() == 0 &&
             e.GetProperty("DefinitionIssues").GetInt32() == 0 && e.GetProperty("IssueSample").GetString() == ""),
             originalRules ? "完整原规则策略被Runtime禁用后，真实666保持拒绝且不扣票" :
-                "卢克START资源合同已完整但生产策略仍未配，不能把无解析问题当作开战许可");
+                "显式损坏的执行策略不能因默认生产可用而回退开战");
         if (originalRules)
             Console.WriteLine("EXPECTED BLOCK: Luke original 40-rule flow stopped at P1-1 / luke-execution-symbol-consumer-unavailable; admission guard tested, dungeon flow NOT executed.");
     }

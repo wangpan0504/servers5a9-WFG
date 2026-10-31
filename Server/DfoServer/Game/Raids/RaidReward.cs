@@ -23,6 +23,7 @@ internal sealed record RaidRewardOffer(byte Kind, byte Card, ImmutableArray<Inve
 {
     // 历史JSON缺属性保持null；Anton仍仅使用原8B Display。
     public LukeRewardResultSpec? LukeResult { get; init; }
+    public ImmutableArray<LukeRewardResultSpec> LukeAdditionalResults { get; init; } = [];
     public ImmutableArray<LukeRewardResultSpec> PreyDisplay { get; init; } = [];
 }
 internal sealed record RaidPhaseRewardPolicy(string Source, ImmutableArray<RaidRewardOffer> Offers, RaidResultDisplay Result)

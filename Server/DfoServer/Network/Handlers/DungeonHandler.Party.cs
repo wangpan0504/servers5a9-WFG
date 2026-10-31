@@ -356,7 +356,9 @@ internal sealed partial class DungeonHandler
             string fingerprint = Convert.ToHexString(SHA256.HashData(request.Body));
             var notices = instance.ObservePassive(context.Session,passive!.ObjectIdentifier,fingerprint,
                 session => session.ObserveFormalPassiveDeath(passive.ObjectIdentifier,passive.ChecksumMatches,fingerprint,rooms));
-            log.Write("formal_passive_death",new { Connection = context.Id, Party = instance.Id, Accepted = notices.Length > 0, Request = passive });
+            log.Write("formal_passive_death",new { Connection = context.Id, Party = instance.Id, Accepted = notices.Length > 0, Request = passive,
+                EnergyRejection = notices.Length == 0 && context.Session.IsLukeEnergyDungeon
+                    ? context.Session.DiagnosePassiveEvent(passive.ObjectIdentifier, rooms) : null });
             await PartyDungeonProjection.PublishAsync(notices);
             return CommandResult.Handled;
         }

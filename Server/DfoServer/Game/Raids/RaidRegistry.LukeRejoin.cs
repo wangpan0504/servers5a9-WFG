@@ -13,7 +13,6 @@ internal sealed partial class RaidRegistry
                 !IsCurrent(expected) || expected.Type != 1 || expected.Key != fact.Key || expected.Channel != fact.Channel ||
                 expected.Started?.InstanceId != fact.Instance || fact.OldOwner.IsCurrent ||
                 expected.Members.Any(m => m.Actor.Character == fact.Character) ||
-                !expected.Members.Any(m => m.Squad == fact.Squad && m.Actor.IsCurrent) ||
                 !reservation.Battle.CanRestoreLukeRejoin(reservation)) return false;
             return candidates.Record(fact);
         }
@@ -30,7 +29,8 @@ internal sealed partial class RaidRegistry
                 !replacement.IsCurrent || fact.OldOwner.IsCurrent || FindCore(replacement) is not null ||
                 expected.Members.Length >= expected.Capacity || expected.Members.Any(m => m.Slot == fact.Slot ||
                     m.Actor.Character == fact.Character || m.Actor.Owner.Account == fact.Account)) return null;
-            var restored = expected with { Members = expected.Members.Add(new(replacement, fact.Slot, fact.Squad)), Revision = revision + 1 };
+            var restored = expected with { Members = expected.Members.Add(new(replacement, fact.Slot, fact.Squad)),
+                Leader = expected.Members.IsEmpty ? replacement.Character : expected.Leader, Revision = revision + 1 };
             if (!install()) return null;
             revision++;
             parties[expected.Key] = restored;

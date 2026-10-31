@@ -7,13 +7,25 @@ namespace DfoServer.Testing;
 internal static partial class LukeRaidRunTcpTests
 {
     // 真实Runtime/666/15/16/39/42/660；奖励/终结阈值为显式合成策略，不发送未解释600。
-    internal static void Phases(TcpTestFixture fixture,TcpPeer[] peers,RaidScript raw,byte[] roster,RaidDungeonCatalog catalog)
+    internal static void Phases(TcpTestFixture fixture,TcpPeer[] peers,RaidScript raw,byte[] roster,RaidDungeonCatalog catalog,bool energyObjects=false)
     {
         var members=peers.Take(4).ToArray();var others=peers.Skip(4).ToArray();
         var captain=members.Single(peer=>peer.Id==Leader(roster));
         var instance=(string)fixture.Query("SELECT instance_id FROM character_raid_runs WHERE character_id=$p0 AND state=0",captain.Id)[0][0]!;
         for(byte phase=0;phase<2;phase++)
         {
+            if(phase==1&&energyObjects)
+                foreach(int energy in new[]{5063,5066})
+                {
+                    var entered=Enter(members,captain,energy);Load(members);
+                    Clear(fixture,members,others,captain,entered[0],catalog,phase,
+                        expectedHp:(raw.Symbols[raw.Phases[1].Dungeons.Single(row=>row.Id==energy).HpSymbol],0),
+                        passiveTarget:energy==5063?64062:64060);
+                    That(fixture.Query("SELECT count(*) FROM character_dungeon_scene_clear_receipts WHERE dungeon_id=$p0 AND quest_id=0",energy)
+                        is [[4L]],"能源图队长及三名队员逐人保存真实无任务场景清图，不依赖普通46");
+                    foreach(var peer in members.Where(peer=>peer!=captain))Return(members,peer,true,resultCommand:true);
+                    Return(members,captain,true,resultCommand:true);
+                }
             int dungeon=phase==0?5054:5311;
             var definition=raw.Phases[phase].Dungeons.Single(row=>row.Id==dungeon);
             for(int run=0;run<definition.HpRaw;run++)

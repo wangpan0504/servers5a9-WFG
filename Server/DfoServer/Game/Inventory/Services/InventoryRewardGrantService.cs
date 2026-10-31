@@ -7,7 +7,10 @@ using DfoServer.Game.Currency;
 
 namespace DfoServer.Game.Inventory.Services;
 
-internal sealed record InventoryReward(int ItemId, int Count, byte Upgrade = 0, byte Refinement = 0, int? CustomAbilityGrade = null, int? Quality = null);
+internal sealed record InventoryReward(int ItemId, int Count, byte Upgrade = 0, byte Refinement = 0, int? CustomAbilityGrade = null, int? Quality = null)
+{
+    public byte EnchantUpgrade { get; init; }
+}
 internal static class InventoryRewardGrantService
 {
     // 普通创建策略：满耐久、100%品级种子；强化/锻造默认零，显式奖励可指定，期限与部位来自 CHR/PVF。
@@ -94,7 +97,8 @@ internal static class InventoryRewardGrantService
         for (int rewardIndex = 0; rewardIndex < rewards.Count; rewardIndex++)
         {
             var reward = rewards[rewardIndex];
-            if (reward.Count <= 0 || reward.Upgrade > 31 || reward.Refinement > 127)
+            if (reward.Count <= 0 || reward.Upgrade > 31 || reward.Refinement > 127 ||
+                reward.EnchantUpgrade != 0 && (!catalog.TryGet(reward.ItemId, out var card) || !card.IsMonsterCard))
                 return InventoryResult.Reject();
             if (pieces.ByPiece.TryGetValue(reward.ItemId, out var piece))
             {
@@ -174,7 +178,7 @@ internal static class InventoryRewardGrantService
             var prototype = incomingInstance is null ? Create(template, utcNow: now, upgrade: reward.Upgrade, refinement: reward.Refinement,
                 shopExpiration: shopExpiration, ignoreUsablePeriod: ignoreUsablePeriod,
                 echonGrade: template.Echon is not null && reward.CustomAbilityGrade is { } grade ? (byte)grade : null,
-                quality: reward.Quality) : incomingInstance.Core;
+                quality: reward.Quality) with { EnchantUpgrade = reward.EnchantUpgrade } : incomingInstance.Core;
             if (prototype.ItemId != template.Id || prototype.Kind != template.Kind || instances?[rewardIndex].IsExpired(now.ToUnixTimeSeconds()) == true)
                 return InventoryResult.Reject(19);
             if (prototype.IsExpired(now.ToUnixTimeSeconds()))

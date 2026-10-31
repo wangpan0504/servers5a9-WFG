@@ -15,13 +15,30 @@ internal static class LukeRaidResourceRulesTests
         RunRoute(script, actors, completion, 1);
         RunRoute(script, actors, completion, 2);
         EnergyBranches(script, actors);
+        That(LukeRaidPhaseTimeoutPolicy.Shared95.Matches(script) &&
+            LukeRaidPhaseTimeoutPolicy.Shared95.Seconds.SequenceEqual(new[] { 2700, 3600 }),
+            "本服45/60分钟显式策略仍严格匹配原资源35/40分钟，不改PVF声明");
+        var pacing = new LukeRaidPacingPolicy("95jp/luke/shared-pacing-v1", 300, 600, 5);
+        foreach (int count in new[] { 1, 4, 8 })
+            for (int scenario = 0; scenario < 4; scenario++)
+                RunRoute(script, actors.Take(count).ToArray(), completion, 1, pacing, scenario);
     }
 
-    static void RunRoute(RaidScript script, RaidActor[] actors, LukeRaidCompletionPolicy completion, int route)
+    static void RunRoute(RaidScript script, RaidActor[] actors, LukeRaidCompletionPolicy completion, int route,
+        LukeRaidPacingPolicy? pacing = null, int scenario = 0)
     {
         int before=Count;var characters=actors.Select(actor=>actor.Session.Selected).ToArray();
         That(script.Phases.Sum(phase=>phase.Rules.Length)==40&&script.Issues.IsEmpty,"直接消费当前完整40规则，不删除危险规则伪称原资源");
-        var battle=new AntonRaidBattle(script,kind:RaidKind.Luke,completion:completion);
+        if (pacing is not null)
+        {
+            var original = script;
+            var adapted = pacing.Adapt(original);
+            That(original.Phases.Sum(phase => phase.Rules.Length) == 40 && adapted.Phases.Sum(phase => phase.Rules.Length) == 38 &&
+                ReferenceEquals(adapted.Phases[0], original.Phases[0]), "统一节奏只派生P2差量，不改原40条资源或P1");
+            That(adapted.Phases[1].Rules.All(rule => !rule.Trigger.Any(clause => clause.Tag == "[on giveup dungeon]" &&
+                clause.DungeonId is 5061 or 5062)), "离开任一王座均不再全团关闭能源/踢能源队");
+        }
+        var battle=new AntonRaidBattle(script,kind:RaidKind.Luke,completion:completion,pacing:pacing);
         foreach(var actor in actors)That(battle.JoinStart(actor),"原始角色身份登记到纯解释器");
         foreach(int dungeon in route == 1 ? new[] {5054,5055,5056} : new[] {5054,5056,5055})
             for(int run=0;run<3;run++)
@@ -34,7 +51,7 @@ internal static class LukeRaidResourceRulesTests
                 if(dungeon!=(route==1?5056:5055)||run!=2)That(!battle.HasPendingTransition,"原P1未完成三图各三次不能终结");
                 Exit(rows);
             }
-        That(battle.HasPendingTransition&&battle.PendingLukeSettlement()?.Members.Take(4).All(member=>member.CommittedRuns==9)==true,
+        That(battle.HasPendingTransition&&battle.PendingLukeSettlement()?.Members.Take(Math.Min(4, actors.Length)).All(member=>member.CommittedRuns==9)==true,
             "原P1九Run才形成成功终结，参与按Run而非角色数累计");
         CommitDomainOnly();
         That(battle.View.Phase==1&&battle.View.Dungeons[5311]==RaidDungeonState.Open&&battle.View.Dungeons[5313]==RaidDungeonState.Open&&
@@ -49,6 +66,14 @@ internal static class LukeRaidResourceRulesTests
                 !battle.View.Timers.ContainsKey(new(1,5063)),"原祭坛计数、关能源及RESET缺键幂等执行");
         }
         That(battle.View.Symbols["[temple clear]"]==2&&battle.View.Dungeons[5061]==RaidDungeonState.Open,"原双圣殿计数打开王座路线");
+        if (pacing is not null)
+        {
+            UnifiedThrones();
+            That(actors.Select((actor,index)=>ReferenceEquals(actor.Session.Selected,characters[index])).All(value=>value),
+                "统一节奏纯领域检查不修改角色资产或伪造死亡");
+            Console.WriteLine($"PASS {Count-before} Luke shared pacing members={actors.Length} scenario={scenario} domain-only");
+            return;
+        }
         var throne=Enter(5061);
         battle.ObserveLukeRun(throne[0].Identity.InstanceId,throne,55845);
         That(battle.View.Dungeons[5066]==RaidDungeonState.Open&&battle.View.Timers[new(1,5066)]==150,
@@ -93,8 +118,9 @@ internal static class LukeRaidResourceRulesTests
             failure.ReleaseDungeon(actors[3], id);
             That(ReferenceEquals(view, failure.View), "重复退出不重复GiveUp：" + abandonedDungeon);
             failure.EndLukePhase(failure.Instance, 0);
-            That(failure.View.Deferred.Values.Any(action => action.Tag == "[fail phase]") && failure.View.Symbols["[kill all character]"] == 1,
-                "原阶段到期生成失败/kill事实，尚未驱动真实全团死亡消费者");
+            That(failure.View.PhaseExpired && failure.View.Deferred.IsEmpty && failure.View.Timers.IsEmpty &&
+                failure.View.Dungeons.Values.All(state => state == RaidDungeonState.Hide) && failure.View.Symbols["[kill all character]"] == 1,
+                "原阶段到期提交失败/封图事实，真实安全退场由独立SQL协调者处理");
         }
         That(actors.Select((actor,index)=>ReferenceEquals(actor.Session.Selected,characters[index])).All(value=>value),"原40条纯领域规则不修改真实角色、资产或伪造死亡");
         Console.WriteLine($"PASS {Count-before} 卢克当前40规则、九Run/route{route}与timer纯领域断言（非线上机制验收）");
@@ -120,6 +146,95 @@ internal static class LukeRaidResourceRulesTests
             battle.AcceptLukeSettlement(candidate,new(candidate.Members.Select(member=>new RaidPhaseEligibility(candidate.Instance,RaidKind.Luke,
                 candidate.Phase,candidate.Event,candidate.Anchor.ToUnixTimeSeconds(),member.Character,candidate.Phase==1,false,"fixture/domain-only",
                 candidate.Policy.Rewards.Source,candidate.Week,candidate.Policy.Rewards.Offers)).ToImmutableArray()));
+        }
+
+        void UnifiedThrones()
+        {
+            var attack = new RaidTimer(1, 5066); var recovery = new RaidTimer(2, 5066);
+            That(battle.View.Dungeons[5066] == RaidDungeonState.Open && !battle.View.Timers.ContainsKey(attack) &&
+                !battle.View.LukeEnergyActivated, "双圣殿后能源和王座同时开放，候战选图不提前增长");
+            long initial = 0;
+            byte energySquad = actors.Length > 4 ? (byte)2 : (byte)1;
+            if (scenario == 1)
+            {
+                var early = Enter(5066, energySquad);
+                initial = battle.View.TimerGenerations[attack];
+                That(battle.View.LukeEnergyActivated && battle.View.Timers[attack] == 600, "首次实际进入能源启动十分钟增长");
+                Clear(5066, early); Exit(early);
+                That(!battle.View.Timers.ContainsKey(attack) && battle.View.Timers[recovery] == 300,
+                    "可先压能源，恢复窗口五分钟，攻击旧代失效");
+                That(battle.ExpireLukeTimer(battle.Instance, attack, initial) is null, "压能源后迟到攻击时钟不触发满能源");
+            }
+            var light = Enter(5061); battle.ObserveLukeRun(light[0].Identity.InstanceId, light, 55845);
+            if (scenario != 1) initial = battle.View.TimerGenerations[attack];
+            That(battle.View.Dungeons[5061] == RaidDungeonState.Open, "未压能源也可直接进入光王座Boss地图");
+            (RaidActor Actor, DungeonRunIdentity Identity)[] concurrent = [];
+            if (scenario >= 2 && actors.Length == 8) concurrent = Enter(5066, 2);
+            long target = battle.View.DungeonGenerations[5066];
+            if (scenario is 0 or 3)
+            {
+                That(battle.ExpireLukeTimer(battle.Instance, attack, initial) is not null &&
+                    battle.View.Symbols["[energy save effect]"] == 2 && battle.View.Symbols["[kill all character]"] == 0 &&
+                    battle.View.LukeEnergyBlocked && battle.View.Dungeons[5066] == RaidDungeonState.Open,
+                    "满能源保留effect2并锁王座，安全退场不产生KILL死亡信号");
+                That(light.All(row => battle.RequiresLukeEnergyReturn(row.Actor, row.Identity.InstanceId)), "只标记当时王座原Run等待安全退场");
+                var blocked = battle.View;
+                Clear(5061, light);
+                That(ReferenceEquals(blocked, battle.View), "满能源后迟到王座清图不再推进通关");
+                Exit(light);
+                var blockedId = Guid.NewGuid();
+                var blockedRows = actors.Take(4).Select(actor => (actor, new DungeonRunIdentity(actor.Character, 0, 1, blockedId, 1))).ToArray();
+                using var denied = battle.ReserveDungeon(new(battle.Instance, 1, 1, RaidKind.Luke), 5061, blockedRows);
+                That(denied is null, "满能源后不能通过再次选图绕过真实压制");
+                That(concurrent.All(row => !battle.RequiresLukeEnergyReturn(row.Actor, row.Identity.InstanceId)),
+                    "满能源不标记或退出并行能源队");
+                That(battle.View.Symbols["[kick out character]"] == 0 && battle.View.DungeonGenerations[5066] == target,
+                    "慢打退出光王座不踢能源队或重建能源目标");
+                var pressed = concurrent.Length == 0 ? Enter(5066, energySquad) : concurrent;
+                Clear(5066, pressed); Exit(pressed); concurrent = [];
+                That(!battle.View.LukeEnergyBlocked && battle.View.Symbols["[energy save effect]"] == 0 && battle.View.Timers[recovery] == 300,
+                    "满能源后仍须真实清图压制，不自动完成");
+                light = Enter(5061); battle.ObserveLukeRun(light[0].Identity.InstanceId, light, 55845);
+                That(light.All(row => !battle.RequiresLukeEnergyReturn(row.Actor, row.Identity.InstanceId)), "压制后新王座Run不受旧退场标记影响");
+            }
+            var beforeLightClear = battle.View;
+            Clear(5061, light); Exit(light);
+            That(battle.View.Dungeons[5062] == RaidDungeonState.Open &&
+                battle.View.Dungeons[5066] == beforeLightClear.Dungeons[5066] &&
+                battle.View.Symbols["[energy save effect]"] == beforeLightClear.Symbols["[energy save effect]"],
+                "光王座清图开放暗王座，能源开闭及效果原样延续");
+            if (scenario == 2)
+            {
+                That(battle.View.TimerGenerations[attack] == initial && battle.View.DungeonGenerations[5066] == target,
+                    "光王座快打完成不暂停或重置正在增长的能源");
+                var pressed = concurrent.Length == 0 ? Enter(5066, energySquad) : concurrent;
+                Clear(5066, pressed); Exit(pressed);
+                That(battle.View.Dungeons[5066] == RaidDungeonState.Close && battle.View.Symbols["[energy save effect]"] == 0,
+                    "先打完光王座后再压能源；并行能源Run也能完成原目标");
+            }
+            else
+            {
+                That(!battle.View.Timers.ContainsKey(attack) && battle.View.Timers[recovery] == 300 &&
+                    battle.View.TimerGenerations[recovery] == beforeLightClear.TimerGenerations[recovery] &&
+                    battle.View.TimerAnchors[recovery] == beforeLightClear.TimerAnchors[recovery],
+                    "光王座通关不重开能源、不清零压制剩余时长");
+            }
+            var dark = Enter(5062); battle.ObserveLukeRun(dark[0].Identity.InstanceId, dark, 55846);
+            Exit(dark);
+            var retained = battle.View;
+            That(retained.Symbols["[kick out character]"] == 0 && retained.Dungeons[5062] == RaidDungeonState.Open,
+                "退出暗王座可继续压能源，已完成光王座不会回退");
+            if (retained.Timers.TryGetValue(recovery, out _))
+            {
+                long old = retained.TimerGenerations[recovery];
+                That(battle.ExpireLukeTimer(battle.Instance, recovery, old) is not null &&
+                    battle.ExpireLukeTimer(battle.Instance, recovery, old) is null, "恢复只重开一次能源");
+            }
+            var lastPress = Enter(5066, energySquad); Clear(5066, lastPress); Exit(lastPress);
+            dark = Enter(5062); battle.ObserveLukeRun(dark[0].Identity.InstanceId, dark, 55846); Clear(5062, dark); Exit(dark);
+            That(battle.HasPendingTransition && battle.View.Timers.IsEmpty, "同一成员可真实完成两路及暗王座终结，终结停时钟");
+            CommitDomainOnly();
+            That(battle.View.State == AntonRaidBattleState.Completed, "统一规则完成两阶段领域流程，不代表SQL或客户端验收");
         }
     }
 

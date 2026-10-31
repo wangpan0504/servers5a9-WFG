@@ -370,15 +370,18 @@ internal static class ServerRuntime
                 new System.Text.Json.JsonSerializerOptions { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow })
                 ?? throw new InvalidDataException("攻坚开战配置不能为空")
             : new Game.Raids.RaidStartSettings();
-        // 仅显式Luke Run策略装配静态对象证据；与正式副本共用同一房间目录，不增加网络写入口。
+        var raidDefinitions = raidSettings.Apply(GameWorld.Raids.RaidCatalog.Load(pvf));
+        if (lukeStartPolicy is null && raidDefinitions.Find(1) is { } productionLuke)
+            lukeStartPolicy = Game.Raids.LukeProductionPolicy.Create(
+                GameWorld.Raids.RaidResourceLoader.Load(pvf, productionLuke, dungeonCatalog, itemResources.Items),
+                itemResources.Items, itemResources.Boosters);
+        // 正式Luke Run策略装配静态对象证据；与普通副本共用房间目录。
         var lukeObjectRooms = lukeStartPolicy?.Run is null ? null : DungeonRoomCatalog.Load(pvf);
-        var raidCatalog = raidSettings.Apply(GameWorld.Raids.RaidCatalog.Load(pvf)).PrepareResources(pvf, dungeonCatalog, itemResources.Items,
-            lukeObjectRooms, lukeStartPolicy?.Run is { Mazes.IsDefaultOrEmpty: false } objectPolicy
-                ? objectPolicy.Mazes.Where(row => row.Phase == 0).Select(row => (row.Dungeon, row.MazeOrdinal)).ToArray() : null,
+        var raidCatalog = raidDefinitions.PrepareResources(pvf, dungeonCatalog, itemResources.Items,
+            lukeObjectRooms,
             antonMapPath: GameWorld.Raids.AntonRaidMapPaths.Bind(dungeonCatalog.MapPath),
             antonMapPoolPaths: GameWorld.Raids.AntonRaidMapPaths.Paths,
-            lukeResourceChoices: lukeStartPolicy?.Run?.FixedRouteOptions is { } routeOptions
-                ? entry => Game.Raids.LukeFixedCardRoute.ResourceChoices(routeOptions, entry) : null);
+            lukeResourceChoices: lukeStartPolicy?.Run is { } objectPolicy ? objectPolicy.ObjectChoices : null);
         if (raidCatalog.Find(1)?.Resources?.LukeObjects is { Issues.IsEmpty: false } objectEvidence)
             log.Write("resource_warning", new { Source = "Luke static object evidence", Reasons = objectEvidence.Issues.ToArray(), objectEvidence.RoomFailures, objectEvidence.RouteWarnings, objectEvidence.BlockingRouteIssues });
         if (raidCatalog.Find(1)?.Resources?.LukeCardSet is { Issues.IsEmpty: false } cardSetEvidence)
@@ -387,6 +390,10 @@ internal static class ServerRuntime
             log.Write("startup", new { Stage = "Luke fixed route resource inspection", State = "diagnostic-only",
                 Mazes = Game.Raids.LukeFixedCardRoute.InspectResources(diagnosticOptions, diagnosticCatalog, raidCatalog.Find(1)!.Resources!.LukeObjects) });
         lukeStartPolicy = Game.Raids.LukeFixedCardRoute.Resolve(lukeStartPolicy, raidCatalog.Find(1));
+        lukeStartPolicy = Game.Raids.LukeSanctumRoute.Resolve(lukeStartPolicy, raidCatalog.Find(1));
+        if (lukeStartPolicy?.Run?.CardRoute is { } cardRoute)
+            log.Write("startup", new { Stage = "Luke resource triplet route", State = "complete", cardRoute.GroupCount,
+                Selection = "server-uniform-group-frozen-per-battle", Progress = "accepted-shared-run-clear" });
         if (lukeStartPolicy?.Run?.FixedRoute is { } fixedRoute)
             log.Write("startup", new { Stage = "Luke explicit fixed compatibility route", State = "complete",
                 fixedRoute.Options.Version, fixedRoute.Options.ResourceFingerprint, fixedRoute.Options.Group,
@@ -405,12 +412,14 @@ internal static class ServerRuntime
                 Phases = resourceCompletion.Phases.Select((phase, index) => new { Phase = index, phase.MinimumCommittedRuns,
                     phase.WeeklyEligibilityLimit, phase.Rewards.Offers, phase.Rewards.Result }).ToArray() });
         var raidRegistry = new Game.Raids.RaidRegistry(clock);
-        var antonRejoin = new Game.Raids.AntonRaidRejoin(raidSettings.AntonRejoinEnabled, lukeCandidatesEnabled: lukeStartPolicy is not null);
+        var antonRejoin = new Game.Raids.AntonRaidRejoin(raidSettings.AntonRejoinEnabled, lukeCandidatesEnabled: lukeStartPolicy is not null, clock: clock);
         raidRegistry.BindRejoin(antonRejoin);
         var antonRun = raidCatalog.Find(0)?.Resources?.EntryCatalog is { } antonCatalog
             ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, antonCatalog, raidSettings.AntonFormalEntryEnabled) : null;
         if (!raidSettings.AntonFormalEntryEnabled)
             log.Write("resource_warning", new { Source = "Anton formal entry", Reason = "anton-entry-waiting-client-resources" });
+        var lukeAutomaticRewards = new Game.Raids.LukeAutomaticRewards(repository, owners, online, repository.LoadCharacterById,
+            itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, clock ?? TimeProvider.System);
         var preyReady = raidCatalog.Find(3)?.Resources is { ResourcesReady: true, EntryCatalog.Ready: true };
         var preyRun = preyReady ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, raidCatalog.Find(3)!.Resources!.EntryCatalog!, true, Game.Raids.RaidKind.Prey) : null;
         var preyRewards = preyReady ? new Game.Raids.PreyGuideRewards(raidCatalog.Find(3)!.Resources!.Script, itemResources.Items, itemResources.Boosters) : null;
@@ -419,6 +428,7 @@ internal static class ServerRuntime
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }),
             rewardAbandoned: view => log.Write("anton_phase_progress", new { view.Instance, view.Phase, view.Revision,
                 State = view.State.ToString(), Reason = "reward-wait-expired-offline-unclaimed-abandoned" }),
+            settleLukeRewards: lukeAutomaticRewards.SettleAsync,
             rewardDue: battle =>
             {
                 var view = battle.View;
@@ -439,7 +449,7 @@ internal static class ServerRuntime
             log.Write("resource_warning", new { Source = "Luke raid start policy", Reason = unavailable });
             lukeStart = null;
         }
-        // 只捕获仍存活实例的断线身份，不启用任何Luke重返通知或成功应答。
+        // 原实例五分钟候选与835/668共用，不恢复进程重启前的活跃Battle。
         var lukeRejoin = lukeStart is null ? null : new Game.Raids.LukeRaidRejoin(raidRegistry, parties, antonRejoin);
         var lukeRun = lukeStart is not null && lukeStartPolicy?.Run is { } runPolicy &&
             raidCatalog.Find(1)?.Resources?.EntryCatalog is { } runCatalog
@@ -450,7 +460,7 @@ internal static class ServerRuntime
             lukeRun = null;
         }
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
-            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards, raidSettings.AntonPhaseProgressEnabled || preyReady ? lukeTimers : null, preyRewards), lukeStart, antonRejoin, parties);
+            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards, raidSettings.AntonPhaseProgressEnabled || preyReady ? lukeTimers : null, preyRewards), lukeStart, antonRejoin, parties, lukeRejoin, projection);
         if (raidSettings.AntonRejoinEnabled)
             log.Write("resource_warning", new { Source = "Anton raid rejoin", Reason = "rejoin-recovery-sequence-unknown" });
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);

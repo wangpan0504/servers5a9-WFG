@@ -89,6 +89,9 @@ internal static class LukeRaidRunTests
             "已离开Run但未提交清图的成员不因共享Cleared获得参与资格");
         ObjectiveGenerations();
         LukeFixedCardRouteTests.RunCore(actors);
+        LukeMemberRouteTests.RunCore(actors);
+        LukeEnergyObjectTests.RunCore(actors);
+        LukeSanctumObjectRulesTests.RunCore(actors);
         Console.WriteLine($"PASS {Count - before} 卢克Run预留、阶段屏障和成员事实断言");
 
         void ObjectiveGenerations()
@@ -252,11 +255,12 @@ internal static class LukeRaidRunTests
             That(departing.EndLukePhase(departing.Instance, 1) is null, "非当前phase的deadline拒绝");
             departing.EndLukePhase(departing.Instance, 0);
             var failed = departing.View;
-            That(failed.Deferred[93].Tag == "[fail phase]" &&
+            That(failed.PhaseExpired && failed.Deferred.IsEmpty && failed.Timers.IsEmpty &&
+                failed.Dungeons.Values.All(value=>value==RaidDungeonState.Hide) &&
                 departing.CompleteDeferred(departing.Instance, failed.Revision, 93, 10) is null &&
                 departing.EndLukePhase(departing.Instance, 0) is null &&
                 departing.ReserveDungeon(new(departing.Instance, 0, 1, RaidKind.Luke), 10, Bindings(0)) is null,
-                "未消费终结请求保持guard，不假发失败状态或允许重新入图");
+                "资源FAIL提交原失败退场事实并封图清计时，不发猜测失败包、不允许重新入图或重复终结");
 
             void Control(int value) => state.SetMechanism(state.Instance, state.View.Revision, "[control]", value);
         }

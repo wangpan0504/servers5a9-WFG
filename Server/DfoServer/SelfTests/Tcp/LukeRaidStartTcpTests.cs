@@ -21,6 +21,8 @@ internal static class LukeRaidStartTcpTests
     public static Task RunFixedRouteAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,fixedRoute:true);
     public static Task RunFacilitiesAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true,true,facilities:true);
     public static Task RunDungeonsAsync(ServerOptions source,string root,TcpTestResources resources) => RunCoreAsync(source,root,resources,true);
+    public static Task RunEnergyObjectsAsync(ServerOptions source,string root,TcpTestResources resources) =>
+        RunCoreAsync(source,root,resources,true,true,energyObjects:true);
 
     public static Task RunPhasesAsync(ServerOptions source,string root,TcpTestResources resources) =>
         RunCoreAsync(source,root,resources,true,true);
@@ -114,10 +116,19 @@ internal static class LukeRaidStartTcpTests
         return (definition,policy,phaseClock);
     }
 
-    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false,bool resourceRewards=false,bool fixedRoute=false,bool facilities=false,bool disconnectCandidates=false)
+    static async Task RunCoreAsync(ServerOptions source,string root,TcpTestResources resources,bool runDungeons,bool completePhases=false,bool timed=false,bool phaseTimeout=false,bool resourceRewards=false,bool fixedRoute=false,bool facilities=false,bool disconnectCandidates=false,bool energyObjects=false)
     {
         var (definition,policy,phaseClock)=Prepare(resources,runDungeons,completePhases,timed,phaseTimeout);
         var raw=definition.Resources!.Script;var catalog=definition.Resources.EntryCatalog!;
+        if(energyObjects)
+        {
+            // 保留真实能源图及清图条件；仅合成阶段准备和两图开门，不能称原40条规则全流程。
+            var phase=policy.ExecutionScript.Phases[1];
+            policy=policy with {Run=policy.Run! with {UseEnergyObjects=true},
+                ExecutionScript=policy.ExecutionScript with {Phases=policy.ExecutionScript.Phases.SetItem(1,phase with {
+                    Rules=phase.Rules.SetItem(0,phase.Rules[0] with {Behavior=phase.Rules[0].Behavior.AddRange(
+                        new[]{5063,5066}.Select(id=>new RaidClause("[set dungeon state]",930+id,id,null,RaidDungeonState.Open,null,[])))})})}};
+        }
         if(facilities)
         {
             // 只用第二个spread设施作为合成终结门，独立验证662→原资格SQL；不冒充原全团规则。
@@ -372,15 +383,17 @@ internal static class LukeRaidStartTcpTests
             else if(phaseTimeout) LukeRaidRunTcpTests.PhaseTimeout(fixture,peers.ToArray(),phaseClock!);
             else if(timed) await LukeRaidRunTcpTests.TimersAsync(fixture,peers.ToArray());
             else if(completePhases) LukeRaidRunTcpTests.Phases(fixture,peers.ToArray(),raw,
-                full[0].Single(p=>p.Opcode==9).Body,catalog);
+                full[0].Single(p=>p.Opcode==9).Body,catalog,energyObjects);
             else if(runDungeons) LukeRaidRunTcpTests.Parties(fixture,peers.ToArray(),raw.Phases[0].Dungeons.Select(row=>row.Id).ToArray(),
                 full[0].Single(p=>p.Opcode==9).Body,full[4].Single(p=>p.Opcode==9).Body,catalog);
 
             void CheckInitialSnapshot(List<WirePacket> frames)
             {
                 var symbols=frames.Single(p=>p.Opcode==583).Body;
-                That(symbols.Length==1+raw.Symbols.Count*8&&symbols[0]==raw.Symbols.Count,"初态583完整有界符号表");
+                int symbolCount=raw.Symbols.Count+(energyObjects?2:0);
+                That(symbols.Length==1+symbolCount*8&&symbols[0]==symbolCount,"初态583完整有界符号表");
                 var actual=Enumerable.Range(0,symbols[0]).ToDictionary(i=>checked((int)U32(symbols,1+i*8)),i=>checked((int)U32(symbols,5+i*8)));
+                if(energyObjects)That(actual[113]==0&&actual[114]==0,"ACT原值113/114独立初始化，不映射138/139");
                 foreach(var symbol in raw.Symbols)
                 {
                     int expected=raw.Phases[0].Dungeons.FirstOrDefault(d=>d.HpSymbol==symbol.Key)?.HpRaw??0;
@@ -415,13 +428,18 @@ internal static class LukeRaidStartTcpTests
         }
         finally{foreach(var peer in peers)peer.Dispose();}
         await fixture.StopAsync();
+        if(energyObjects)
+        {
+            var objects=LukeRaidObjectCatalog.Load(resources.Archive,catalog,SelfTestCatalogs.Rooms(resources.Archive),policy.Run!.ObjectChoices(catalog));
+            LukeRaidLifecycleTransactionTests.Run(resources,definition with {Resources=definition.Resources! with {LukeObjects=objects}},policy,energyObjects:true);
+        }
         if(facilities)
             That(fixture.Events().Any(e=>e.GetProperty("Kind").GetString()=="closed"&&
                 e.GetProperty("Detail").GetProperty("Reason").GetString()=="SqliteException"&&
                 e.GetProperty("Detail").GetProperty("Message").GetString()!.Contains("luke facility last member rollback",StringComparison.Ordinal)),
                 "设施失败连接确由末成员资格SQL注入关闭，不以任意断线冒充回滚证据");
         if(phaseTimeout) LukeRaidRunTransactionTests.Run(resources,definition,policy,phaseExpiry:true);
-        if(completePhases&&!resourceRewards&&!facilities)
+        if(completePhases&&!resourceRewards&&!facilities&&!energyObjects)
         {
             LukeRaidLifecycleTransactionTests.Run(resources,definition,policy);
             using var deletionOwner=owners.Acquire("lukestart4",()=>{});

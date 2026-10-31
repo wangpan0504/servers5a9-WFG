@@ -8,6 +8,7 @@ namespace DfoServer.Game.Raids;
 internal sealed record LukeFacilityReportPolicy(string Source, bool AcceptAuthenticatedClientActionReports)
 {
     public bool Valid => !string.IsNullOrWhiteSpace(Source) && AcceptAuthenticatedClientActionReports;
+    public bool UseResourceBudgets { get; init; }
 }
 internal enum LukeFacilityReportOutcome { Rejected, Applied, Duplicate }
 internal sealed record LukeFacilityLedgerMismatch(Guid Run, int Phase, uint Dungeon, string Symbol, int Expected, int Actual, long ExpectedWriteEpoch, long ActualWriteEpoch);
@@ -16,6 +17,7 @@ internal sealed record LukeFacilityReportResult(LukeFacilityReportOutcome Outcom
 internal sealed partial class AntonRaidBattle
 {
     readonly LukeFacilityReportPolicy? lukeFacilities;
+    readonly LukeSanctumObjectRules? lukeFacilityRules;
     internal bool AcceptsLukeFacilityReports => lukeFacilities is not null;
     LukeObjectBinding? CreateFacilityRoom(RaidDungeonRun run, ImmutableArray<LukeObjectBinding>? bindings)
     {
@@ -27,6 +29,7 @@ internal sealed partial class AntonRaidBattle
         binding.ActionOrdinal, binding.ActionPath) switch
     {
         (5054, 64249, 117, 0, "passiveobject/actionobject/map/luke_raid/phase1/sanctum_of_birth/action/luke_mainmchine_destroy_raid.act") => "[birth sanctum object]",
+        (5054, 64250, 117, 0, "passiveobject/actionobject/map/luke_raid/phase1/sanctum_of_birth/action/luke_mainmchine_destroy_mistral_raid.act") => "[birth sanctum object]",
         (5055, 64251, 118, 0, "passiveobject/actionobject/map/luke_raid/phase1/sanctum_of_extinction/action/mainmchine_destroy_raid.act") => "[extinction sanctum object]",
         (5056, 64252, 119, 1, "passiveobject/actionobject/map/luke_raid/phase1/sanctum_of_spread/action/censor_machine_broken_front_raid.act") => "[spread sanctum object]",
         _ => null
@@ -53,6 +56,7 @@ internal sealed partial class AntonRaidBattle
     // 其它机制覆盖计数后不再猜测归属；保留当前权威值并允许强制退出清理。
     AntonRaidBattleView RevertLukeFacilityReports(RaidDungeonRun run)
     {
+        if (lukeFacilityRules is not null) return current;
         if (lukeFacilities is null || run.FacilityLedger is not { } ledger) return current;
         int actual = current.Symbols[ledger.Symbol];
         if (run.FacilityLedgerAmbiguous || actual != ledger.Expected ||
@@ -99,9 +103,14 @@ internal sealed partial class AntonRaidBattle
             if (pendingTransition is not null || current.State != AntonRaidBattleState.Fighting || !CurrentObjective(run))
                 return new(LukeFacilityReportOutcome.Rejected);
             // 只给资源已证birth/extinction设置怪物条件，spreadfront绝不新增清房门槛。
-            if (binding.ObjectId is 64249 or 64251 && snapshot.LivingMonsters.Count != 0)
+            if (binding.ObjectId is 64249 or 64250 or 64251 && snapshot.LivingMonsters.Count != 0)
                 return new(LukeFacilityReportOutcome.Rejected);
             string name = FacilitySymbol(binding)!;
+            if (lukeFacilityRules?.Budget(binding.Room.Dungeon) is { } budget)
+            {
+                if (budget.Symbol != name || current.Symbols[name] < 0) return new(LukeFacilityReportOutcome.Rejected);
+                if (current.Symbols[name] >= budget.Cap) return new(LukeFacilityReportOutcome.Duplicate);
+            }
             var previous = run.FacilityLedger;
             if (previous is not null && (run.FacilityLedgerAmbiguous || current.Symbols[name] != previous.Expected ||
                 current.LukeFacilityWriteEpochs.GetValueOrDefault(name) != previous.WriteEpoch))

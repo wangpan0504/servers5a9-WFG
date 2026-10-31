@@ -15,11 +15,13 @@ internal sealed class LukeRaidObjectRegistration
     public int MazeOrdinal { get; }
     public int ObservedRooms => observed.Count;
     public int ObservedObjects => observed.Sum(room => rooms[room].Length);
+    public LukeObjectBinding? Energy { get; }
 
     public LukeRaidObjectRegistration(Guid run, int dungeon, DungeonMaze maze, LukeRaidObjectCatalog catalog)
     {
         if (run == Guid.Empty) throw new ArgumentException("对象登记缺少原Run身份", nameof(run));
         Run = run; Dungeon = dungeon; MazeOrdinal = maze.SourceOrdinal;
+        Energy = catalog.Energy(dungeon, maze);
         var builder = ImmutableDictionary.CreateBuilder<LukeObjectRoom, ImmutableArray<LukeObjectBinding>>();
         if (maze.MapSpecification is { Count: <= 64 } maps)
             foreach (var map in maps)

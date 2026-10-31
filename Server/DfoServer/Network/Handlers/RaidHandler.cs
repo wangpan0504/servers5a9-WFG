@@ -15,7 +15,7 @@ namespace DfoServer.Network.Handlers;
 // 这里不为它补建类型 6 的团本记录。
 internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegistry registry, OnlineSessionDirectory? online = null,
     AntonRaidStart? start = null, LukeRaidStart? lukeStart = null, AntonRaidRejoin? rejoin = null,
-    Game.Party.PartyService? parties = null) : IGameCommandModule
+    Game.Party.PartyService? parties = null, LukeRaidRejoin? lukeRejoin = null, TownProjection? town = null) : IGameCommandModule
 {
     public RaidHandler(ServerLog log) : this(log, RaidCatalog.Empty, new RaidRegistry()) { }
 
@@ -71,6 +71,32 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         try { key = RaidRequests.Rejoin(request.Body); }
         catch (InvalidDataException) { return CommandResult.Unhandled; }
         if (context.Session.CaptureRaidRejoinActor(registry) is not { } actor) return CommandResult.Unhandled;
+        if (lukeRejoin is not null && rejoin?.Peek(actor.Character)?.Luke is not null)
+        {
+            var before = registry.Find(key, actor.Channel);
+            var restored = lukeRejoin.Restore(actor, key, callerCommandHeld: true);
+            log.Write("luke_raid_rejoin", new { Connection = context.Id, Self = actor.Character, Key = key.ToString("X8"),
+                restored.Accepted, restored.Reason, Phase = restored.Battle?.Phase, Contract = "waiting-room-rejoin" });
+            if (restored is { Accepted: true, Raid: { } raid, Party: { } squad, Battle: { } view })
+            {
+                var travel = town is null ? null : context.Session.ReturnLukeRejoinToWaiting(actor);
+                if (travel is null)
+                {
+                    await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "luke_rejoin_travel_failed", () => actor.IsCurrent);
+                    return CommandResult.Handled;
+                }
+                await town!.TravelAsync(context, travel);
+                if (before is not null) registry.Publish(new(before, raid));
+                parties!.Publish(squad.Members.Select(member => new Game.Party.PartyNotice(Game.Party.PartyNoticeKind.Updated,
+                    member, Party: squad)));
+                bool Current() => actor.IsCurrent && actor.Session.CanPublishRaid(actor, raid) && actor.Session.CanPublishRaidBattle(actor, view);
+                context.Sender.Post(0, (ushort)NotiPacketType.PREPARE_START_RAID, [], "luke_rejoin_prepare", Current);
+                RaidCombatProjection.Notice(context, view, actor);
+                await context.Reply(CmdPacketType.REJOIN_RAID, [1], "luke_rejoined", Current);
+            }
+            else await context.Reply(CmdPacketType.REJOIN_RAID, RaidPackets.CreateFailure(), "luke_rejoin_rejected", () => actor.IsCurrent);
+            return CommandResult.Handled;
+        }
         if (rejoin is not { Enabled: true })
         {
             // ACK668的0055D870在Luke 0x20/Anton 0x17直接返回；成功ACK不安装团本或队伍，不能冒充恢复。
@@ -97,12 +123,18 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
     // 入城完成后下发。客户端无本地团记录且 key 高位匹配时才会自动发 668；异频道不下发，避免走到缺低 16 位的提示回调。
     internal async Task NotifyDisconnAsync(GameConnectionContext context)
     {
-        if (rejoin is not { Enabled: true } || context.Session.Selected is not { } character || !rejoin.HasCandidate(character.Id)) return;
+        if (rejoin is null || context.Session.Selected is not { } character || !rejoin.HasCandidate(character.Id)) return;
         if (Actor(context) is not { } actor)
         {
             log.Write("raid_rejoin_rejected", new { Connection = context.Id, Character = character.Id, Reason = "rejoin-actor-unavailable" });
             return;
         }
+        if (lukeRejoin?.CanNotice(actor) == true && rejoin.Peek(actor.Character) is { } luke)
+        {
+            await context.Notify(NotiPacketType.RAID_DISCONN_INFO, RaidPackets.DisconnInfo(luke.Key), "luke_rejoin_notice", () => actor.IsCurrent);
+            return;
+        }
+        if (!rejoin.Enabled) return;
         var notice = Describe(actor);
         if (!notice.Matched)
         {
@@ -136,6 +168,19 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         if (request.Body.Length != 0 || Actor(context) is not { } actor) return CommandResult.Unhandled;
         var party = registry.Find(actor);
         var definition = party is null ? null : catalog.Find(party.Type);
+        if (party?.Leader == actor.Character && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Luke } luke &&
+            luke.View.State == AntonRaidBattleState.Intermission)
+        {
+            bool prepared = luke.PrepareLukeNextPhase(actor);
+            await context.Reply(CmdPacketType.START_RAID, prepared ? [1] : RaidPackets.StartFailure(RaidPackets.StartUnavailable),
+                prepared ? "luke_phase2_preparing" : "luke_phase2_unavailable", () => actor.IsCurrent);
+            if (prepared)
+            {
+                log.Write("luke_phase2_preparing", new { Connection = context.Id, luke.Instance, Reason = "leader" });
+                luke.Publish(luke.View);
+            }
+            return CommandResult.Handled;
+        }
         if (party?.Leader == actor.Character && context.Session.CurrentRaidBattle(actor) is { Kind: RaidKind.Anton } battle &&
             battle.View.State == AntonRaidBattleState.Intermission)
         {

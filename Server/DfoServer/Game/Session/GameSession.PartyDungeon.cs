@@ -285,7 +285,7 @@ internal sealed partial class GameSession
             PartyDungeonExitKind.HellSelection => CanBeginClearedHellSelection(0),
             PartyDungeonExitKind.EvildomWarRetreat => CanRetreatEvildomWar(),
             PartyDungeonExitKind.ResultSelection or PartyDungeonExitKind.ResultReturn =>
-                FormalDungeonResultFocus() is not null || AntonDungeonResultFocus() is not null,
+                FormalDungeonResultFocus() is not null || RaidDungeonResultFocus() is not null,
             _ => FormalDungeonResultFocus() is not null
         };
         if (!canExit)

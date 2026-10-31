@@ -116,7 +116,7 @@ internal sealed partial class GameSession
         if (controlled && (selected is null || !ReferenceEquals(selected.Admission, admission) || selected.Dungeon != dungeonId ||
             admission.Kind == RaidKind.Luke && (selected.Route is { } route
                 ? admission.Battle?.IsLukeRouteCurrent(route) != true || route.Dungeon != selected.Dungeon || route.MazeOrdinal != selected.MazeOrdinal
-                : admission.Battle?.UsesFixedRoute(admission.Phase) == true || admission.LukePolicy?.Maze(admission.Phase, selected.Dungeon) != selected.MazeOrdinal)))
+                : admission.Battle?.UsesLukeRoute(admission.Phase) == true || admission.LukePolicy?.Maze(admission.Phase, selected.Dungeon) != selected.MazeOrdinal)))
             return RejectFormal(prefix + "-entry-selection-changed");
         var identity = new RaidDungeonIdentity(admission.InstanceId, admission.Phase, admission.Squad, admission.Kind);
         var sharedEntry = shared?.Session.PreparedParty(shared).Dungeon.Entry;
@@ -125,9 +125,14 @@ internal sealed partial class GameSession
         if (!DungeonEntryPlan.TryCreate(definition, character, dungeonId, 0, difficulty, out var entry, out string reason,
             draw: draw, resolveMaze: maze => admission.Catalog.ResolveMaze(definition, maze, draw), partyRoute: sharedEntry, raid: controlled ? identity : null, raidMaze: selected?.MazeOrdinal))
             return RejectFormal(prefix + "-entry-plan:" + reason);
+        var energy = admission.Kind == RaidKind.Luke && admission.LukePolicy?.UseEnergyObjects == true && admission.Phase == 1
+            ? admission.LukeObjects?.Energy((int)dungeonId, entry!.Maze) : null;
+        if (admission.Kind == RaidKind.Luke && admission.LukePolicy?.UseEnergyObjects == true && dungeonId is 5063 or 5066 && energy is null)
+            return RejectFormal("luke-energy-object-resource-unavailable");
         entry = entry! with
         {
             RaidEntry = identity,
+            LukeEnergyObject = energy,
             CoinLimit = controlled && admission.Kind != RaidKind.Prey ? 0 : definition.CoinLimit, AllowsCompanionAi = false,
             DisableMonsterAndClearExperience = controlled || entry!.DisableMonsterAndClearExperience,
             DisableClearReward = controlled || entry.DisableClearReward,

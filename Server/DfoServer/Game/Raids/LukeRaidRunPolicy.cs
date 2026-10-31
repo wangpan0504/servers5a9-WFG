@@ -10,9 +10,28 @@ internal sealed record LukeRaidRunPolicy(string Source, ImmutableArray<LukeRaidM
 {
     public LukeFixedCardRouteOptions? FixedRouteOptions { get; init; }
     public LukeFixedCardRoute? FixedRoute { get; init; }
+    public bool UseResourceCardRoute { get; init; }
+    public LukeSanctumRoute? CardRoute { get; init; }
+    public bool UseEnergyObjects { get; init; }
+    public IReadOnlyList<(int Dungeon, int MazeOrdinal)> ObjectChoices(RaidDungeonCatalog catalog)
+    {
+        var sanctums = UseResourceCardRoute ? LukeSanctumRoute.ResourceChoices(catalog) :
+            FixedRouteOptions is { } options ? LukeFixedCardRoute.ResourceChoices(options, catalog) :
+            Mazes.Where(row => row.Phase == 0).Select(row => (row.Dungeon, row.MazeOrdinal)).ToArray();
+        return sanctums.Concat(UseEnergyObjects ? Mazes.Where(row => row.Phase == 1 && row.Dungeon is 5063 or 5066)
+            .Select(row => (row.Dungeon, row.MazeOrdinal)) : []).Distinct().ToArray();
+    }
+
+    public string? EnergyRejection(RaidDungeonCatalog catalog, LukeRaidObjectCatalog? objects) => !UseEnergyObjects ? null :
+        !new[] { 5063, 5066 }.All(id => Maze(1, id) is { } ordinal &&
+            catalog.Find(id)?.Mazes.SingleOrDefault(maze => maze.SourceOrdinal == ordinal) is { } maze &&
+            objects?.Energy(id, maze) is not null) ? "luke-energy-object-resource-unavailable" : null;
     public string? Rejection(RaidDungeonCatalog catalog)
     {
         if (FixedRouteOptions is not null) return "luke-fixed-route-unresolved";
+        if (UseResourceCardRoute) return "luke-card-route-unresolved";
+        if (CardRoute is { } cards && (FixedRoute is not null || !cards.Matches(catalog) || !cards.Matches(catalog.Script)))
+            return "luke-card-route-catalog-changed";
         if (string.IsNullOrWhiteSpace(Source) || catalog.Type != 1 || !catalog.MapsReady ||
             Economy != LukeRaidRunEconomy.ControlledNoOrdinaryRewards || Mazes.IsDefaultOrEmpty ||
             Mazes.Length > catalog.Script.Phases.Sum(phase => phase.Dungeons.Length) ||
