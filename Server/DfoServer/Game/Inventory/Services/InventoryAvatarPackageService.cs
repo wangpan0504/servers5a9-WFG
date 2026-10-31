@@ -87,8 +87,7 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
                 var avatar = packages.GetAvatar(row.ItemId);
                 // 没有可选属性的光环、武器装扮由客户端带一项哨兵值；它不是玩家选择，统一落到0。
                 bool hasChoice = options.TryGetValue(row.ItemId, out byte ability);
-                if (template.Kind != ItemKind.Avatar || !template.Expiration.SupportsCreation || avatar.PendingRule is not null ||
-                    !avatar.Types.IsEmpty && row.Type >= avatar.Types.Length) return InventoryResult.Reject(19);
+                if (ValidateRowDefinition(row, template, avatar) is not null) return InventoryResult.Reject(19);
                 if (row.ForcedAbility is byte forced && (!hasChoice || ability != forced || !avatar.Abilities.Contains(forced)))
                     return InventoryResult.Reject(19);
                 if (avatar.RequiresAbilityChoice)
@@ -185,4 +184,16 @@ internal sealed class InventoryAvatarPackageService(ItemCatalog items, AvatarPac
         .ThenBy(row => row.Count).ThenBy(row => row.Type).ThenBy(row => row.DefaultAbility).ThenBy(row => row.ForcedAbility)
         .SequenceEqual(right.OrderBy(row => row.ItemId).ThenBy(row => row.Count).ThenBy(row => row.Type)
             .ThenBy(row => row.DefaultAbility).ThenBy(row => row.ForcedAbility));
+    internal static string? ValidateRowDefinition(AvatarPackageRow row, ItemTemplate template, AvatarPackageItemDefinition avatar)
+    {
+        if (row.Count == 0 || template.Id != row.ItemId || template.Kind != ItemKind.Avatar ||
+            !template.Expiration.SupportsCreation || avatar.PendingRule is not null ||
+            !avatar.Types.IsEmpty && row.Type >= avatar.Types.Length)
+            return "avatar_row_definition";
+        if (avatar.RequiresAbilityChoice && avatar.Abilities.IsEmpty ||
+            row.ForcedAbility is byte forced && (!avatar.Abilities.Contains(forced) ||
+                !avatar.RequiresAbilityChoice && forced is not (0 or byte.MaxValue)))
+            return "avatar_row_ability";
+        return null;
+    }
 }

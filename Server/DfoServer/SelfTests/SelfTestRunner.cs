@@ -21,6 +21,7 @@ internal static class SelfTestRunner
         EquipmentInvestmentScoreTests.RunCore();
         CharacterInvestmentScoreTests.RunCore();
         CharacterInvestmentMetadataTests.RunCore();
+        DfoServer.Testing.Inventory.SpringTreasureDropTests.RunCore();
         ChronicleInvestmentTests.RunCore();
         DimensionEnergyInvestmentTests.RunCore();
         EquipmentQualityInvestmentTests.RunCore();
@@ -89,6 +90,7 @@ internal static class SelfTestRunner
         Testing.ClientSettingsSnapshotsTests.Run();
         CashShopTests.RunCore();
         CashShopPromotionTests.RunCore();
+        PromotionConsumerValidationTests.RunCore();
         CashShopPromotionSessionTests.RunCore();
         CashShopPromotionPersistenceTests.RunCore();
         CashShopPromotionPersistenceTests.RunPageCore();
@@ -450,6 +452,7 @@ internal static class SelfTestRunner
         MonsterCardUpgradeTests.RunResources(itemResources);
         GuildCompoundTests.RunResources(itemResources);
         AvatarCompoundTests.RunResources(itemResources);
+        DfoServer.Testing.Inventory.SpringTreasureDropTests.RunResources(itemResources);
         AvatarDyeTests.RunResources(itemResources.Items, itemResources.AvatarDyes);
         AvatarSocketTests.RunResources(itemResources.Items, itemResources.AvatarPackages);
         MagicBoxTests.Run(towns, itemResources);
@@ -587,6 +590,7 @@ internal static class SelfTestRunner
         GuildExperienceGiftTests.RunResources(itemResources.Items);
         GuildCreationTests.Run(towns, characters, itemResources, pvf);
         CollectBoxTests.RunResources(towns, itemResources);
+        PromotionConsumerValidationTests.RunResources(itemResources);
         CharacterGrowthCatalogTests.Run(pvf);
         CharacterGrowthTests.Run(towns, pvf);
         DungeonKillExperienceCatalogTests.Run(pvf);

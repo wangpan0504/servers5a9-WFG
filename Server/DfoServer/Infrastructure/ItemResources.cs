@@ -7,6 +7,8 @@ namespace DfoServer.Infrastructure;
 // 仅用于启动装配及测试夹具；业务服务直接接收实际使用的目录。
 internal sealed class ItemResources
 {
+    readonly Lazy<IndependentAttributePairCatalog> attributePairs;
+    public IndependentAttributePairCatalog AttributePairs => attributePairs.Value;
     public ItemCatalog Items { get; }
     public KnightShieldCatalog KnightShields { get; }
     public GoldLimitCatalog GoldLimits { get; }
@@ -56,6 +58,8 @@ internal sealed class ItemResources
     public GameWorld.Creatures.CreatureCatalog Creatures { get; }
     public GameWorld.Creatures.CreatureGroupCatalog CreatureGroups { get; }
     public AvatarPackageCatalog AvatarPackages { get; }
+    readonly Lazy<SpringTreasureAvatarCatalog> springTreasureAvatars;
+    public SpringTreasureAvatarCatalog SpringTreasureAvatars => springTreasureAvatars.Value;
     public EmblemCompoundCatalog EmblemCompounds { get; }
     public MonsterCardBindCatalog MonsterCardBinds { get; }
     public GuildDungeonCompoundCatalog GuildCompounds { get; }
@@ -128,6 +132,7 @@ internal sealed class ItemResources
         MedalUpgrades = new(archive);
         CreatureEggs = new(archive, equipment, Items);
         AvatarPackages = new(archive, equipment, stackable);
+        springTreasureAvatars = new(() => SpringTreasureAvatarCatalog.Load(AvatarPackages, Items.Get, CharacterInvestmentMetadata.ReadSet));
         EmblemCompounds = new(archive, stackable);
         MonsterCardBinds = new(archive);
         GuildCompounds = new(archive);
@@ -151,5 +156,9 @@ internal sealed class ItemResources
         dungeonSpecialDrops = new(() => DungeonSpecialDropCatalog.Load(archive));
         MagicBoxes = new(archive, stackable);
         Rental = RentalCatalog.Load(archive);
+        attributePairs = new(() => IndependentAttributePairCatalog.Load(
+            Path.Combine(AppContext.BaseDirectory, "Resources", "independent-attribute-pairs.json"),
+            Items, Boosters, LimitCubes, Enchantments, EpicPieces, Contracts,
+            id => Game.Currency.CurrencyWallet.RewardKind(id) is not null, useBundledDefault: true));
     }
 }

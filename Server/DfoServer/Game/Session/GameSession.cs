@@ -36,7 +36,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.Game.Inventory.Services.ServerItemCycleService? itemCycles = null,
     DfoServer.Game.Guild.GuildNpcBenefitService? guildNpcBenefits = null,
     DfoServer.Game.CashShopPromotions.ICashShopPromotionStore? promotionStore = null,
-    RecoveryConsumableCatalog? consumables = null)
+    RecoveryConsumableCatalog? consumables = null, SpringTreasureDropPolicy? springTreasure = null)
 {
     readonly GameCacheScope gameCache = owner.CreateCacheScope();
 

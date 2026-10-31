@@ -43,6 +43,7 @@ internal static partial class EnchantmentTests
             Reject<InvalidDataException>(() => EnchantmentRequests.Read(body), "附魔结构或有符号槽位范围无效时拒绝");
         CatalogAndPlans();
         Spring2020KnownCardRarityQualificationPlans();
+        OrderedRaritySubtypes();
         MultipleCardPlans();
         MultipleCardExtraQualificationPlans();
         EnchantmentResourceParsingFailures();
@@ -222,6 +223,7 @@ internal static partial class EnchantmentTests
     {
         MultipleCardResourcePlans(resources, enchantments);
         MultipleCardExtraQualificationResources(resources, enchantments);
+        Spring2020RealBeadQualificationResources(resources);
         var definition = enchantments.Get(490705314);
         That(definition is { CardItemId: 10309006, Upgrade: 0 } && definition.Targets.SetEquals(
             new[] { (ItemKind.Equipment, (byte)19), (ItemKind.Equipment, (byte)20), (ItemKind.Equipment, (byte)21) }),

@@ -102,7 +102,7 @@ internal sealed partial class TcpPeer : IDisposable
     // EVENT_INFO 在2037后先追加开放团本事件，再追加默认可见的诺兰；显式off用例单独移除2532。
     public ushort[] ExpectedOpenEvents { get; set; } = [ServerEventService.NolanVisibilityId];
     public byte[] EventInfoPayload { get; private set; } = [];
-    // 仅原生活动页专项显式启用；回调必须完整消费目录/扩展/状态尾段。
+    // 专项回调另核精确累计与状态；通用路径同样完整消费已知目录/扩展/状态尾段。
     internal Action<byte[]>? ValidateNativePromotionEvents { get; set; }
     public byte[] MileageLimits { get; private set; } = [];
     public byte[] CubeContractInfo { get; private set; } = [];
@@ -1300,27 +1300,23 @@ internal sealed partial class TcpPeer : IDisposable
             using (var compressed = new MemoryStream(events.Body, writable: false))
             using (var zlib = new ZLibStream(compressed, CompressionMode.Decompress))
             {
-                if (ValidateNativePromotionEvents is { } validate)
+                byte[] bounded = new byte[32768];
+                int length = 0;
+                while (length < bounded.Length)
                 {
-                    byte[] bounded = new byte[32768];
-                    int length = 0;
-                    while (length < bounded.Length)
-                    {
-                        int read = zlib.Read(bounded, length, bounded.Length - length);
-                        if (read == 0) break;
-                        length += read;
-                    }
-                    TestCheck.That(zlib.ReadByte() == -1, "原生页面108解压不得超32768B");
-                    EventInfoPayload = bounded[..length];
-                    validate(EventInfoPayload);
+                    int read = zlib.Read(bounded, length, bounded.Length - length);
+                    if (read == 0) break;
+                    length += read;
                 }
+                TestCheck.That(zlib.ReadByte() == -1, "事件108解压不得超32768B");
+                EventInfoPayload = bounded[..length];
+                if (ValidateNativePromotionEvents is { } validate)
+                    validate(EventInfoPayload);
+                else if (length != 163 + 15 * ExpectedOpenEvents.Length)
+                    CashShopTcpTests.AssertPromotionNativeEvents(EventInfoPayload, null, null, ExpectedOpenEvents);
                 else
                 {
-                    byte[] payload = new byte[163 + 15 * ExpectedOpenEvents.Length];
-                    zlib.ReadExactly(payload);
-                    TestCheck.That(zlib.ReadByte() == -1, $"事件正文必须恰好{payload.Length}B，解压不产生无界输出");
-                    EventInfoPayload = payload;
-                    TestCheck.Bytes(payload, Build(writer =>
+                    TestCheck.Bytes(EventInfoPayload, Build(writer =>
                     {
                         writer.Write((ushort)(4 + ExpectedOpenEvents.Length));
                         foreach (ushort id in (ushort[])[2037, 2378, 2395, 333, .. ExpectedOpenEvents])

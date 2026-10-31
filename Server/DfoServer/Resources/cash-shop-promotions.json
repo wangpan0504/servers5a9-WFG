@@ -1,7 +1,7 @@
 [
   {
-    "Enabled": false,
-    "DisabledReason": "奖励最终使用、完整SQL保存与邮件领取链尚未闭环；积分、优惠券、黄金书、材料兑换及增幅保护等消费者仍有未证项",
+    "Enabled": true,
+    "DisabledReason": "",
     "RuleKind": "pilot",
     "Rules": {
       "Scope": {

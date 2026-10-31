@@ -48,6 +48,7 @@ internal sealed record ItemTemplate(int Id, ItemKind Kind, byte EquipmentSlot, b
     public bool DisjointForbidden { get; init; }
     public bool IsOperationHope { get; init; }
     public bool BossDrop { get; init; }
+    public bool IsLegacyEquipment { get; init; }
     public bool IsMonsterCard { get; init; }
     public int? MonsterCardBindType { get; init; }
     public bool AmplifyPollutionForbidden { get; init; }
