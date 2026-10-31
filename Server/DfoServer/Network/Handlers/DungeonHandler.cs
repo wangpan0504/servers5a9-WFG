@@ -718,8 +718,18 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             previousLevel, "formal_level_committed", Guard,
             previousLearning: previousCharacter?.Learning);
         bool closed = quests is not null && await quests.CloseReadyChildrenAsync(context);
-        if (!closed && result.PreviousQuests is { } previous && receipt.Character.ActiveMainQuests.Any(row => previous.Any(old => old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)))
-            await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);
+        if (!closed && result.PreviousQuests is { } previous)
+        {
+            var changed = receipt.Character.ActiveMainQuests.Where(row => previous.Any(old =>
+                old.AcceptanceId == row.AcceptanceId && old.ConditionState != row.ConditionState)).ToArray();
+            var hope = changed.SingleOrDefault(row => context.Session.IsOperationHopeQuest(row.QuestId));
+            if (changed.Any(row => row != hope))
+                await context.Notify(NotiPacketType.ACCEPTED_QUEST, QuestPackets.ActiveList(receipt.Character.ActiveMainQuests), "formal_hunt_conditions", Guard);
+            // 574先清空再重新接取，不能替代33的原位进度/完成回调；队伍成员也复用本死亡投影。
+            if (hope is not null)
+                await context.Reply(CmdPacketType.SET_QUEST_TRIGGER, QuestPackets.ClearTrigger(hope.QuestId, hope.ConditionState),
+                    "operation_hope_hunt_condition", Guard);
+        }
         if (result.ClearFact is not null && !potionClear)
             await EnableSettlementAsync(context, result.MonsterKey);
         await PublishEpicPieceShopAsync(context, prepare: true);
