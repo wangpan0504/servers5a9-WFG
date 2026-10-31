@@ -68,8 +68,11 @@ internal static class CharacterProgressTcpTests
         {
             peer.Select();
             peer.Send(29, [0, 1, 5, 0, 0, 1, 0]); peer.Expect(1, 29);
-            peer.Send(331, [1, 5, 0, 3, 2, 3, 4]); peer.Expect(1, 331); peer.Expect(0, 19);
+            peer.Send(331, [1, 5, 0, 3, 2, 3, 4]); peer.Expect(1, 331, [1]);
+            peer.Barrier(); // 原生ACK应用指令，不用完整19重建仍在编辑的技能面板。
             var learned = Role(0);
+            That(learned.Learning.Trees[0].Skills.Single(skill => skill.Id == 5).Command == "020304",
+                "自定义指令成功ACK后已按原始键序持久化");
             That(Command("level GmTcp0 60").StartsWith("OK "), "在线GM改等级提交");
             var role = Role(0);
             var free60 = SkillPointLedger.FreeBaseline(0, 0, 60, catalog);
@@ -78,7 +81,7 @@ internal static class CharacterProgressTcpTests
                     pair.First.Sp == catalog.TotalSp(60) + 137 - SkillPointLedger.Spent(pair.First.Skills, free60, 0, id => catalog.Get(0, id)) &&
                     pair.First.Tp == catalog.TotalTp(60) + 7 - SkillPointLedger.Spent(pair.First.Skills, free60, 0, id => catalog.Get(0, id), tp: true) &&
                     pair.Second.Skills.Where(skill => catalog.Get(0, skill.Id).FixedLevel is null).All(pair.First.Skills.Contains)) &&
-                role.Learning.Trees[0].Skills.Single(skill => skill.Id == 5) is { Level: 2 } ghost && ghost.Command != "" &&
+                role.Learning.Trees[0].Skills.Single(skill => skill.Id == 5) is { Level: 2 } ghost && ghost.Command == "020304" &&
                 role.Learning.Trees[0].Sp < role.Learning.Trees[1].Sp, "在线GM改等级保留已学技能与指令，SP/TP按新总额减已学费用重算");
             peer.SendBarrier();
             var assigned = peer.Expect(0,574).Body;
