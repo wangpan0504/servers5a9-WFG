@@ -84,13 +84,13 @@ internal sealed partial class GameSession
     // 安徒恩战况表在图内提交C2S72 `01 02`（回到城镇）：只允许当前Anton正式单图仍在Dungeon阶段且无待提交死亡/结算/地面操作，
     // 复用42同一分队退场事务；不扣DGN HP、不产生ClearFact，也不代表`01 01`（进入地下城）已实现。
     internal bool AntonDungeonBoardReturn() => owner.Execute(() =>
-        Ready && Phase == SessionPhase.Dungeon && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton } &&
+        Ready && Phase == SessionPhase.Dungeon && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Prey } &&
         formalDungeon is { Entry.RaidEntry: not null } dungeon &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         !HasPendingFormalCard && pendingQuestCompletion is null && !HasPendingQuestScene);
 
     internal FormalDungeonReceipt? AntonDungeonResultFocus() => owner.Execute(() =>
-        Ready && Phase == SessionPhase.Settlement && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton } &&
+        Ready && Phase == SessionPhase.Settlement && raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Anton or RaidKind.Prey } &&
         formalDungeon is { Entry.RaidEntry: not null, Run.ClearFact: not null } dungeon &&
         !dungeon.Run.HasPendingDeath && !dungeon.Run.HasPendingSettlement && !dungeon.Ground.HasPendingOperation &&
         !HasPendingFormalCard && pendingQuestCompletion is null && !HasPendingQuestScene
@@ -98,7 +98,8 @@ internal sealed partial class GameSession
 
     internal bool CanRetryAntonResultDungeon() => owner.Execute(() =>
         AntonDungeonResultFocus() is { } receipt && raidCombat is { } raid &&
-        raid.Battle.AllowsAntonEntry(checked((int)receipt.Entry.DungeonId)));
+        (raid.Battle.Kind == RaidKind.Prey ? raid.Battle.AllowsPreyEntry(checked((int)receipt.Entry.DungeonId)) :
+            raid.Battle.AllowsAntonEntry(checked((int)receipt.Entry.DungeonId))));
 
     // 选图只读取原实例聚合，不另存一份初始战况；离团、换角与接管后不可重发旧列表。
     internal (RaidActor Actor, AntonRaidBattle Battle)? AntonRaidMap() => owner.Execute<(RaidActor, AntonRaidBattle)?>(() =>
@@ -130,7 +131,7 @@ internal sealed partial class GameSession
     {
         var completedChange = owner.Execute<AntonRaidBattleChange?>(() =>
         {
-            if (raidCombat is not { } raid || raid.Battle.Kind == RaidKind.Luke || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
+            if (raidCombat is not { } raid || raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey || !raid.Actor.IsCurrent || formalDungeon is not { } dungeon ||
                 receipt.Generation != owner.Generation || receipt.SelectionEpoch != SelectionEpoch ||
                 receipt.Snapshot.Identity != dungeon.Run.Snapshot.Identity || dungeon.Run.ClearFact is not { } fact ||
                 fact.Identity != receipt.Snapshot.Identity || !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap)) return null;
@@ -157,7 +158,7 @@ internal sealed partial class GameSession
     // 纯生命周期writer在自身owner短读取之后执行，不在本分队owner/Battle/Party领域锁内扩锁或等待SQL。
     internal bool CommitPendingLukePhase(ILukeRaidLifecycleStore store)
     {
-        var battle = owner.Execute(() => raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Luke } raid ? raid.Battle : null);
+        var battle = owner.Execute(() => raidCombat is { Actor.IsCurrent: true, Battle.Kind: RaidKind.Luke or RaidKind.Prey } raid ? raid.Battle : null);
         if (battle?.PendingLukeSettlement() is not { } candidate) return false;
         var receipt = store.CommitLukePhase(candidate);
         _ = battle.AcceptLukeSettlement(candidate, receipt);
@@ -193,9 +194,9 @@ internal sealed partial class GameSession
                 var old = raid.Receipts.Where(r => r.Key.Kind == kind).Select(r => r.Value).MaxBy(r => r.Prepared.Phase);
                 return old is not null && old.Prepared.Card == card ? new RaidRewardCapture(raid, character, old.Prepared, old.Offer, old) : null;
             }
-            var eligibility = raid.Battle.Kind == RaidKind.Luke ? raid.Battle.LukeEligibility(character.Id, phase) :
+            var eligibility = raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey ? raid.Battle.LukeEligibility(character.Id, phase) :
                 raid.Battle.HasAntonRewards ? raid.Battle.AntonEligibility(character.Id, phase) : null;
-            if ((raid.Battle.Kind == RaidKind.Luke || raid.Battle.HasAntonRewards) && eligibility is not { Eligible: true }) return null;
+            if ((raid.Battle.Kind is RaidKind.Luke or RaidKind.Prey || raid.Battle.HasAntonRewards) && eligibility is not { Eligible: true }) return null;
             var policy = raid.Battle.RewardPolicy(raid.Actor, phase);
             var offer = policy?.Offers.SingleOrDefault(o => o.Kind == kind && o.Card == card);
             if (offer is null) return null;

@@ -51,6 +51,7 @@ internal sealed partial class AntonRaidBattle
             {
                 if (objects is not null && (battle.Kind != RaidKind.Luke || objects.Dungeon != dungeon || actors.Length == 0 || objects.Run != actors[0].Identity.InstanceId) ||
                     identity.Kind != battle.Kind || identity.InstanceId != battle.Instance ||
+                    battle.Kind == RaidKind.Prey && (identity.Squad != 1 || actors.Length != 1 || !battle.AllowsPreyEntry(checked((int)dungeon))) ||
                     identity.Phase != battle.current.Phase || identity.Squad < 1 || identity.Squad > (battle.Kind == RaidKind.Luke ? 2 : 5) ||
                     battle.Kind == RaidKind.Anton && !battle.AntonEntryOpenLocked(checked((int)dungeon)) ||
                     TerminalRequested(battle.current) || battle.LukePhaseDueLocked() || battle.pendingTransition is not null ||
@@ -243,7 +244,7 @@ internal sealed partial class AntonRaidBattle
             ScheduleLukeClockLocked();
             return;
         }
-        if (Kind == RaidKind.Luke && candidate.State != AntonRaidBattleState.Fighting && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0 || lukeCompletion is not null))
+        if (Kind is RaidKind.Luke or RaidKind.Prey && candidate.State != AntonRaidBattleState.Fighting && (dungeonRuns.Count != 0 || lukeRevivalReservations.Count != 0 || lukeCompletion is not null))
         {
             pendingTransition = candidate;
             if (lukeCompletion is not null && candidate.State == AntonRaidBattleState.Reward)
@@ -288,6 +289,11 @@ internal sealed partial class AntonRaidBattle
             if (Kind == RaidKind.Luke && run.Active.Count == 1 && run.Installed && !run.Cleared && pendingTransition is null && CurrentObjective(run))
                 CommitBattleCandidate(current, Evaluate(RevertLukeFacilityReports(run), null, null, null,
                     new(RaidStageFactKind.GiveUpDungeon, run.Phase, checked((int)run.Dungeon))));
+            if (Kind == RaidKind.Prey && run.Active.Count == 1 && run.Installed && !run.Cleared &&
+                pendingTransition is null && CurrentObjective(run) && script.Phases[run.Phase].Dungeons
+                    .Any(row => row.Id == run.Dungeon && PreyDungeonType(row) == 5) &&
+                Enumerable.Range(1, 16).Any(slot => current.Symbols[$"[area_{slot}]"] == run.Dungeon))
+                CommitBattleCandidate(current, RemovePreyArea(DamagePreyShip(current, PreyHeader("[single defence fail]")), checked((int)run.Dungeon)));
             run.Active.Remove(actor);
             if (Kind == RaidKind.Anton) entries.Remove((run.Id, actor.Character));
             if (run.Active.Count == 0) dungeonRuns.Remove(run.Id);

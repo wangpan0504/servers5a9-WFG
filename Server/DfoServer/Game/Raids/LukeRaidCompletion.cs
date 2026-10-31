@@ -54,6 +54,7 @@ internal sealed partial class AntonRaidBattle
     internal sealed class LukePhaseSettlement
     {
         public Guid Instance { get; }
+        public RaidKind RaidType { get; }
         public Guid Event { get; } = Guid.NewGuid();
         public int Phase { get; }
         public DateTimeOffset Anchor { get; }
@@ -65,7 +66,7 @@ internal sealed partial class AntonRaidBattle
         private LukePhaseSettlement(AntonRaidBattle battle, int phase)
         {
             var policy = battle.lukeCompletion!;
-            Instance = battle.Instance; Phase = phase; Anchor = battle.lukeClock.GetUtcNow();
+            Instance = battle.Instance; RaidType = battle.Kind; Phase = phase; Anchor = battle.lukeClock.GetUtcNow();
             Week = policy.Cycle.Key(Anchor); Source = policy.Source; WeeklyClearLimit = policy.WeeklyClearLimit;
             Policy = policy.Phases[phase];
             if (Week <= 0 || Anchor.ToUnixTimeSeconds() < 0) throw new InvalidDataException("卢克终结周期或时间无效");
@@ -77,7 +78,7 @@ internal sealed partial class AntonRaidBattle
         {
             lock (battle.gate)
             {
-                if (battle.Kind != RaidKind.Luke || battle.lukeCompletion is null || phase is not (0 or 1) || phase != battle.current.Phase ||
+                if (battle.Kind is not (RaidKind.Luke or RaidKind.Prey) || battle.lukeCompletion is null || phase is not (0 or 1) || phase != battle.current.Phase ||
                     battle.pendingTransition is not { State: AntonRaidBattleState.Reward } terminal || terminal.Phase != phase ||
                     battle.originalLukeMembers.Count is < 1 or > 8) throw new InvalidOperationException("不存在可密封卢克终结事实");
                 if (battle.lukeSettlements.TryGetValue(phase, out var existing)) return existing;
@@ -91,7 +92,8 @@ internal sealed partial class AntonRaidBattle
     internal static bool SameLukeOffers(ImmutableArray<RaidRewardOffer> left, ImmutableArray<RaidRewardOffer> right) =>
         !left.IsDefault && !right.IsDefault && left.Length == right.Length && left.Zip(right).All(pair =>
             pair.First.Kind == pair.Second.Kind && pair.First.Card == pair.Second.Card && SameRewardDisplay(pair.First.Display, pair.Second.Display) &&
-            pair.First.Grants.SequenceEqual(pair.Second.Grants) && pair.First.LukeResult == pair.Second.LukeResult);
+            pair.First.Grants.SequenceEqual(pair.Second.Grants) && pair.First.LukeResult == pair.Second.LukeResult &&
+            pair.First.PreyDisplay.SequenceEqual(pair.Second.PreyDisplay));
     // Anton正式600含嵌套不可变数组；持久JSON往返后须比内容，不能要求空表或数组引用相同。
     static bool SameRewardDisplay(ImmutableArray<RaidRewardDisplayRow> left, ImmutableArray<RaidRewardDisplayRow> right) =>
         !left.IsDefault && !right.IsDefault && left.Length == right.Length && left.Zip(right).All(pair =>
@@ -108,13 +110,13 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate) return lukePhaseCommits.GetValueOrDefault(phase)?.Members.SingleOrDefault(row => row.Character == character);
     }
-    bool RequiresReward(RaidActor actor, int phase) => Kind != RaidKind.Luke || lukeCompletion is null ||
+    bool RequiresReward(RaidActor actor, int phase) => Kind is not (RaidKind.Luke or RaidKind.Prey) || lukeCompletion is null ||
         lukePhaseCommits.GetValueOrDefault(phase)?.Members.Any(row => row.Character == actor.Character && row.Eligible) == true;
 
     bool AllRewardsConfirmed(int phase)
     {
         // 断线/离团不撤回已密封领奖义务；不能用当前在线members过滤后跳过未领奖者。
-        if (Kind == RaidKind.Luke && lukeCompletion is not null)
+        if (Kind is RaidKind.Luke or RaidKind.Prey && lukeCompletion is not null)
             return lukePhaseCommits.TryGetValue(phase, out var committed) && committed.Members.Where(row => row.Eligible)
                 .All(row => row.Offers.Select(offer => offer.Kind).Distinct().All(kind => rewards.Contains((row.Character, phase, kind))));
         if (Kind == RaidKind.Anton && antonRewards is not null)
@@ -137,7 +139,7 @@ internal sealed partial class AntonRaidBattle
         {
             if (!lukeSettlements.TryGetValue(candidate.Phase, out var expected) || !ReferenceEquals(expected, candidate) ||
                 receipt.Members.Length != candidate.Members.Length || receipt.Members.Select(row => row.Character).Distinct().Count() != receipt.Members.Length ||
-                receipt.Members.Any(row => row.Instance != Instance || row.RaidType != RaidKind.Luke || row.Phase != candidate.Phase ||
+                receipt.Members.Any(row => row.Instance != Instance || row.RaidType != Kind || row.Phase != candidate.Phase ||
                     row.Event != candidate.Event || row.Anchor != candidate.Anchor.ToUnixTimeSeconds() || row.Week != candidate.Week ||
                     row.Source != candidate.Policy.Rewards.Source || !SameLukeOffers(row.Offers, candidate.Policy.Rewards.Offers) || !candidate.Members.Any(member => member.Character == row.Character)))
                 throw new InvalidDataException("卢克阶段回执不属于原密封候选");

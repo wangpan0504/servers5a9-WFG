@@ -33,7 +33,7 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
     TagEvildomRunProjection? tagEvildomRun = null, EvildomWarCatalog? evildomWar = null,
     DfoServer.Game.Raids.LukeRaidDungeonService? lukeRaid = null,
     DfoServer.Game.Raids.ILukeRaidLifecycleStore? lukeLifecycle = null,
-    DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null,
+    DfoServer.Game.Raids.AntonRaidDungeonService? antonRaid = null, DfoServer.Game.Raids.AntonRaidDungeonService? preyRaid = null,
     EvildomWarRewardPolicy? evildomRewards = null, IEvildomWarRewardStore? evildomRewardStore = null,
     ImperialArenaProjection? imperialArena = null) : IGameCommandModule
 {
@@ -179,14 +179,14 @@ internal sealed partial class DungeonHandler(ServerLog log, DungeonCatalog dunge
             context.Session.SelectionEpoch, context.Session.Phase, context.Session.CurrentDungeonSelection));
         var character = before.Selected;
         if (character is not null && before.Ready && before.Phase == SessionPhase.Loading &&
-            context.Session.ChannelEntry?.Type == 23 && antonRaid is { Enabled: true } &&
-            (context.Session.StartedRaid is not null || selection.DungeonIndex <= int.MaxValue && antonRaid.Contains((int)selection.DungeonIndex)))
+            context.Session.ChannelEntry?.Type is 23 or 50 && (context.Session.ChannelEntry.Type == 50 ? preyRaid : antonRaid) is { Enabled: true } &&
+            (context.Session.StartedRaid is not null || selection.DungeonIndex <= int.MaxValue && (context.Session.ChannelEntry.Type == 50 ? preyRaid : antonRaid)?.Contains((int)selection.DungeonIndex) == true))
             return await SelectAntonAsync(context, selection);
         if (character is null || !before.Ready || before.Phase is not (SessionPhase.Town or SessionPhase.MapSelect) ||
             context.BlocksTownActions)
             return CommandResult.Unhandled;
-        if (context.Session.ChannelEntry?.Type == 23 && (context.Session.StartedRaid is not null ||
-            selection.DungeonIndex <= int.MaxValue && antonRaid?.Contains((int)selection.DungeonIndex) == true))
+        if (context.Session.ChannelEntry?.Type is 23 or 50 && (context.Session.StartedRaid is not null ||
+            selection.DungeonIndex <= int.MaxValue && (context.Session.ChannelEntry.Type == 50 ? preyRaid : antonRaid)?.Contains((int)selection.DungeonIndex) == true))
             return await SelectAntonAsync(context, selection);
         if (context.Session.ChannelEntry?.Type == 32 && context.Session.StartedRaid is not null)
         {

@@ -8,6 +8,8 @@ internal static class TcpRegressionTests
     static readonly (string Name, Func<ServerOptions, string, TcpTestResources, Task> Run)[] Groups =
     [
         ("knight-shield", KnightShieldTcpTests.RunAsync),
+        ("prey-guide", PreyGuideTests.RunAsync),
+        ("prey-guide-flow", PreyGuideTcpTests.RunAsync),
         ("anton-raid-phase-timer-221-224", AntonRaidGapTcpTests.RunPhaseTimersAsync),
         ("anton-raid-reward-formal", (_, _, resources) =>
         {

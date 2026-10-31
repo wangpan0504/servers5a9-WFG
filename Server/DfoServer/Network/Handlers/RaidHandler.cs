@@ -57,7 +57,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         var body = RaidPackets.SearchResults((uint)matches.Length, offset, rows.Select(p =>
             (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
                 p.Members.Single(m => m.Actor.Character == p.Leader).Squad, RaidProjection.CanStart(p, lukeStart is not null),
-                checked((byte)p.Members.Length))).ToArray());
+                checked((byte)p.Members.Length))).ToArray(), rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet());
         log.Write("raid_search_request", new { Connection = context.Id, parsed.RaidType, parsed.Offset,
             Total = matches.Length, Returned = rows.Length });
         // 查询回复是请求时的只读快照；目录并发变化不能吞掉唯一756、令原生窗口继续等待。
@@ -163,17 +163,17 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         }
         using var publication = context.Sender.QueuePublication(() => actor.IsCurrent);
         int members = party?.Members.Count(m => m.Actor.IsCurrent) ?? 0;
-        bool supported = definition?.Type == 0 && start is not null || definition?.Type == 1 && lukeStart is not null;
+        bool supported = definition?.Type is 0 or 3 && start is not null && (definition.Type == 0 || party!.Guide && definition.Resources?.EntryCatalog?.Ready == true) || definition?.Type == 1 && lukeStart is not null;
         bool mayStart = party is not null && supported && party.Leader == actor.Character &&
             (party.Started is not null || members >= definition!.StartMinimum);
         bool creating = mayStart && party!.Started is null;
-        using var commands = creating && definition!.Type == 0 ? RaidStartCommands.TryEnter(party!, context.Session) : null;
+        using var commands = creating && definition!.Type is 0 or 3 ? RaidStartCommands.TryEnter(party!, context.Session) : null;
         using var lukeCommands = mayStart && definition!.Type == 1 ? RaidStartCommandScope.TryEnter(context, party!) : null;
         var check = party is null ? new RaidStartCheck(RaidPackets.StartUnavailable, "no-raid") :
             RaidStartCheck.Evaluate(party.Leader == actor.Character, members, definition);
-        var result = !mayStart ? new RaidStartResult(check.Error, check.Reason) : party!.Started is not null && definition!.Type == 0
+        var result = !mayStart ? new RaidStartResult(check.Error, check.Reason) : party!.Started is not null && definition!.Type is 0 or 3
             ? new RaidStartResult(0, "already-started", Replay: true)
-            : definition!.Type == 0
+            : definition!.Type is 0 or 3
                 ? commands is null ? new RaidStartResult(19, "raid-member-command-busy") : start!.Start(actor, party!, definition)
                 : lukeCommands is null ? new RaidStartResult(19, "raid-member-command-busy")
                     : lukeStart!.Start(actor, party!, definition, lukeCommands.Parties, lukeCommands.IsCurrent);
@@ -217,7 +217,8 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
             var rows = registry.List(actor.Channel, type);
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_LIST, RaidPackets.RaidListBatch(rows.Select(p =>
                 (p.Key, p.TitleBytes, p.Type, p.Leader, CharacterName.Encoding.GetBytes(p.LeaderName),
-                    p.Members.Single(m => m.Actor.Character == p.Leader).Squad, p.Type == 1 && RaidProjection.CanStart(p, lukeStart is not null))).ToArray()), "raid_recruiting_list",
+                    p.Members.Single(m => m.Actor.Character == p.Leader).Squad, p.Type == 1 && RaidProjection.CanStart(p, lukeStart is not null))).ToArray(),
+                    rows.Where(p => p.Guide).Select(p => p.Key).ToHashSet()), "raid_recruiting_list",
                 () => actor.IsCurrent && registry.IsListSnapshot(actor.Channel, type, rows));
             var waitRows = registry.Waiting(actor.Channel, type);
             context.Sender.Post(0, (ushort)NotiPacketType.RAID_WAITING_LIST, RaidPackets.WaitingList(waitRows
@@ -261,8 +262,10 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         var definition = catalog.Find(parsed.RaidType);
         // raid.lst 没有类型 6：魔界大战的建队走 SET_PARTY_INFO(kind=5)，这里不再为它破例建团本记录。
         var previousWaiting = actor is null ? null : registry.Waiting(actor);
-        var party = actor is null || definition is null || !MatchesType(actor, parsed.RaidType) ? null :
-            registry.Create(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name), definition.MemberMax, definition.StartMinimum);
+        bool guide = parsed.RaidType == 3 && parsed.Field210 == 1 && parsed.Field211 == 0 && parsed.Field214 == 0;
+        bool validMode = parsed.RaidType != 3 || parsed.Field210 <= 1 && parsed.Field211 == 0 && parsed.Field214 == 0;
+        var party = !validMode || actor is null || definition is null || !MatchesType(actor, parsed.RaidType) ? null :
+            registry.Create(actor, parsed.RaidType, parsed.Name, CharacterName.Encoding.GetBytes(parsed.Name), guide ? 1 : definition.MemberMax, guide ? 1 : definition.StartMinimum, guide);
         log.Write("raid_create_request", new { Connection = context.Id, parsed.RaidType, parsed.Name, Accepted = party is not null,
             Reason = party is null ? "raid-admission-or-membership" : null, Key = party?.Key.ToString("X8"), definition?.MemberMax, definition?.StartMinimum });
         if (party is null)
@@ -329,7 +332,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         bool accepted = party is not null && MatchesType(actor, party.Type);
         byte[] body = accepted ? RaidPackets.Information(parsed.Mode, party!.Key, party.TitleBytes, party.Type, party.Leader,
             CharacterName.Encoding.GetBytes(party.LeaderName), RaidProjection.Members(party), party.Started is null ? (byte)0 : (byte)2,
-            party.Started?.Phase ?? 0, RaidProjection.CanStart(party, lukeStart is not null)) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
+            party.Started?.Phase ?? 0, RaidProjection.CanStart(party, lukeStart is not null), guide: party.Guide) : RaidPackets.InformationFailure(parsed.Mode, parsed.Key);
         await context.Reply(CmdPacketType.REQUEST_RAID_INFO, body, "raid_information", () => actor.IsCurrent && (!accepted || registry.IsCurrent(party!)));
         return CommandResult.Handled;
     }
@@ -380,7 +383,7 @@ internal sealed class RaidHandler(ServerLog log, RaidCatalog catalog, RaidRegist
         // 01DC65B0归一化参数为0/1，02173DB0明确传0；自动费用检测另发1，均不代表扣票确认。
         if (request.Body.Length != 1 || request.Body[0] > 1) return CommandResult.Unhandled;
         log.Write("raid_entry_cost_request", new { Connection = context.Id, Flag = request.Body[0] });
-        if (Actor(context) is { } actor && registry.Find(actor) is { } party && party.Type == 0 && catalog.Find(party.Type)?.Resources?.Script.EntryCost is { } cost)
+        if (Actor(context) is { } actor && registry.Find(actor) is { } party && (party.Type == 0 || party.Type == 3 && party.Guide) && catalog.Find(party.Type)?.Resources?.Script.EntryCost is { } cost)
         {
             var rows = party.Members.Where(m => m.Actor.IsCurrent).OrderBy(m => m.Slot)
                 .Select(m => AntonRaidStart.Cost(m.Actor, cost, party.Started is not null)).ToArray();

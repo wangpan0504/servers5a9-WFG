@@ -12,7 +12,8 @@ namespace DfoServer.Game.Raids;
 
 internal sealed record RaidStarted(Guid InstanceId, DateTimeOffset StartedAt,
     ImmutableArray<(ushort Character, byte Slot, byte Squad)> Participants, byte Phase = 0);
-internal sealed record RaidLifecycleAdmission(string Source, DateTimeOffset At, int? Week = null, int? WeeklyLimit = null);
+internal sealed record RaidLifecycleAdmission(string Source, DateTimeOffset At, int? Week = null, int? WeeklyLimit = null,
+    int? DailyAccountLimit = null);
 internal sealed record RaidStartReservation(RaidActor Actor, Character Expected, Location Position, InventoryPlan Inventory)
 {
     public RaidLifecycleAdmission? Lifecycle { get; init; }
@@ -53,7 +54,7 @@ internal sealed class RaidStartCommands : IDisposable
 
 internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties, IRaidStartStore store,
     TownCatalog towns, EpicPieceCatalog pieces, TimeProvider? clock = null, bool phaseProgress = false,
-    AntonResourceRewards? rewards = null, LukeRaidClocks? timers = null)
+    AntonResourceRewards? rewards = null, LukeRaidClocks? timers = null, PreyGuideRewards? preyRewards = null)
 {
     public RaidChange? Leave(RaidActor actor, ushort target)
     {
@@ -77,7 +78,8 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
     {
         if (expected.Leader != actor.Character) return new(8, "not-leader");
         if (expected.Started is not null) return new(0, "already-started", Replay: true);
-        if (definition.Type != 0 || definition.Resources?.Script is not { Issues.IsEmpty: true, EntryCost: { } cost, WaitingRoom: { } room })
+        bool prey = definition.Type == 3 && expected.Guide && expected.Capacity == 1 && expected.Members.Length == 1 && preyRewards is not null;
+        if (definition.Type != 0 && !prey || definition.Resources?.Script is not { Issues.IsEmpty: true, EntryCost: { } cost, WaitingRoom: { } room })
             return new(19, "anton-start-definition-unavailable");
         if (definition.Resources.MissingItems.Contains(cost.ItemId)) return new(19, "entry-cost-resource-missing");
         if (expected.Members.Length < definition.StartMinimum) return new(22, "too-few-members");
@@ -88,25 +90,36 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         var reservations = PlanReservations(expected, cost, room, towns, pieces, now, out var rejection);
         if (rejection is not null) return new(19, rejection);
         // 资源政策只由Runtime装配；不改变显式领域夹具或关闭阶段推进时的行为。
-        if (rewards is not null)
+        if (!prey && rewards is not null)
             reservations = reservations.Select(row => row with { Lifecycle = new( AntonResourceRewards.Source, now,
                 Game.Dungeons.DungeonIncountPolicy.Period(now).Week, RaidRewardRules.WeeklyClearLimit) }).ToImmutableArray();
         // etc/raid/anton.etc [PHASE TIME OVER]；沿Luke现有秒制与激活锚点，是本服约定，非客户端原厂证明。
         LukeRaidPhaseTimeoutPolicy? timeout = null;
-        if (rewards is not null)
+        if (!prey && rewards is not null)
         {
             var limits = definition.Resources.Script.Headers.Where(row => row.Tag == "[phase time over]").ToArray();
             if (limits is not [var limit]) return new(19, "anton-phase-timeout-unavailable");
             timeout = new("anton-local-phase-seconds-v1;etc/raid/anton.etc", limit.Values.Select(row => row.Number).ToImmutableArray());
             if (!timeout.Matches(definition.Resources.Script)) return new(19, "anton-phase-timeout-unavailable");
         }
-        var battle = new AntonRaidBattle(definition.Resources.Script, antonPhaseProgress: phaseProgress, clock: clock, antonRewards: rewards, phaseTimeout: timeout);
+        var completion = prey ? preyRewards!.Create(actor.Session.PremiumPcRoom) : null;
+        if (completion is not null)
+        {
+            int daily = definition.Resources.Script.Headers.Single(row => row.Tag == "[daily account enter limit]").Values.Single().Number;
+            reservations = reservations.Select(row => row with { Lifecycle = new(completion.Source, now,
+                completion.Cycle.Key(now), completion.WeeklyClearLimit, daily) }).ToImmutableArray();
+            int total = definition.Resources.Script.Headers.Single(row => row.Tag == "[phase total time over]").Values.Single().Number;
+            timeout = new(PreyGuideRewards.Source, [total, total]);
+        }
+        var kind = prey ? RaidKind.Prey : RaidKind.Anton;
+        var battle = new AntonRaidBattle(definition.Resources.Script, kind: kind, completion: completion,
+            antonPhaseProgress: !prey && phaseProgress, clock: clock, antonRewards: prey ? null : rewards, phaseTimeout: timeout);
         var timerLease = timers?.Reserve(battle);
         if (timers is not null && timerLease is null) return new(19, "anton-clock-capacity");
         bool installed = false;
         try
         {
-            var startResult = AccountOwners.Lease.ExecuteRaid(reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
+            var startResult = RaidOwnerGroup.Execute(kind, reservations.Select(r => (r.Actor.Owner, r.Expected.Id)).ToArray(), () =>
             {
                 if (registry.Find(actor)?.Started is not null) return new RaidStartResult(0, "already-started", Replay: true);
                 var combat = new List<Game.Session.GameSession.RaidCombatStartBinding>();
@@ -119,7 +132,7 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
                 var result = registry.CommitStart(actor, expected, reservations, cost, () => parties.CreateRaidSquads(expected, () =>
                 {
                     var instance = battle.Instance;
-                    var committed = store.CommitRaidStart(RaidKind.Anton, definition, instance, reservations);
+                    var committed = store.CommitRaidStart(kind, definition, instance, reservations);
                     for (int i = 0; i < reservations.Length; i++)
                         reservations[i].Actor.Session.InstallRaidStart(reservations[i], committed[i]);
                     foreach (var binding in combat) binding.Install();

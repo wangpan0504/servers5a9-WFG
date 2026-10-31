@@ -22,6 +22,7 @@ internal sealed record RaidParty(uint Key, byte Type, string Title, byte[] Title
     public string LeaderName => Members.Single(m => m.Actor.Character == Leader).Actor.Name;
     public RaidStarted? Started { get; init; }
     public int StartMinimum { get; init; } = 1;
+    public bool Guide { get; init; }
 }
 internal sealed record RaidChange(RaidParty Before, RaidParty? After, RaidActor? Removed = null, bool Kicked = false);
 internal sealed record RaidWaiting(RaidActor Actor, byte Type);
@@ -188,15 +189,15 @@ internal sealed partial class RaidRegistry
     static bool Same(RaidActor a, RaidActor b) => ReferenceEquals(a.Session, b.Session) && a.Epoch == b.Epoch &&
         ReferenceEquals(a.Owner, b.Owner) && a.Character == b.Character;
 
-    public RaidParty? Create(RaidActor actor, byte type, string title, byte[] titleBytes, int capacity, int startMinimum = 1) => actor.Owner.Execute(() =>
+    public RaidParty? Create(RaidActor actor, byte type, string title, byte[] titleBytes, int capacity, int startMinimum = 1, bool guide = false) => actor.Owner.Execute(() =>
     {
         lock (gate)
         {
-            if (!actor.CanManage || capacity is < 1 or > 255 || FindCore(actor) is not null ||
+            if (!actor.CanManage || capacity is < 1 or > 255 || guide && (type != 3 || capacity != 1 || startMinimum != 1) || FindCore(actor) is not null ||
                 parties.Values.Any(p => p.Members.Any(m => m.Actor.Character == actor.Character && m.Actor.IsCurrent))) return null;
             uint key = Allocate(actor.Channel);
             var party = new RaidParty(key, type, title, titleBytes, actor.Channel, actor.Character,
-                [new(actor, 0)], capacity, ++revision) { StartMinimum = startMinimum };
+                [new(actor, 0, guide ? (byte)1 : (byte)0)], capacity, ++revision) { StartMinimum = startMinimum, Guide = guide };
             parties.Add(key, party);
             waiting.Remove(actor.Character);
             return party;

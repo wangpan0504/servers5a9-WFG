@@ -28,6 +28,9 @@ internal static class RaidLifecycleSchema
         )
         """;
     internal static string AntonDefinition => Definition.Replace("CHECK(raid_type=1)", "CHECK(raid_type IN(0,1))", StringComparison.Ordinal);
+    internal static string PreyDefinition => AntonDefinition.Replace("IN(0,1)", "IN(0,1,3)", StringComparison.Ordinal);
+    internal static string PreyRewardDefinition => RewardDefinition.Replace("CHECK(raid_type IN(0,1))", "CHECK(raid_type IN(0,1,3))", StringComparison.Ordinal);
+    internal const string PreyIndexes = "CREATE INDEX character_raid_account_admission ON character_raid_runs(account,raid_type,admitted_at);";
     internal const string Indexes = """
         CREATE UNIQUE INDEX character_raid_active ON character_raid_runs(character_id,raid_type) WHERE state=0;
         CREATE INDEX character_raid_clear_week ON character_raid_runs(character_id,raid_type,clear_week) WHERE state=2;

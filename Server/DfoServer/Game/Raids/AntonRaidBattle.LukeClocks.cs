@@ -13,7 +13,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if ((Kind != RaidKind.Luke && !HasAntonRewards) || instance != Instance || phase != current.Phase || generation <= 0 ||
+            if ((Kind is not (RaidKind.Luke or RaidKind.Prey) && !HasAntonRewards) || instance != Instance || phase != current.Phase || generation <= 0 ||
                 (timer.Kind is not (1 or 2) && !(HasAntonRewards && timer.Kind == 3)) || timer.DungeonId <= 0 ||
                 !script.Phases.Any(row => row.Dungeons.Any(dungeon => dungeon.Id == timer.DungeonId)) ||
                 !lukeClockActive || lukeClockLease is not { IsStopped: false } || members.Count == 0 ||
@@ -31,7 +31,7 @@ internal sealed partial class AntonRaidBattle
     {
         lock (gate)
         {
-            if ((Kind != RaidKind.Luke && !HasAntonRewards) || lease.Battle != this || lease.IsStopped || lukeClockLease is not null || members.Count == 0)
+            if ((Kind is not (RaidKind.Luke or RaidKind.Prey) && !HasAntonRewards) || lease.Battle != this || lease.IsStopped || lukeClockLease is not null || members.Count == 0)
             { lease.Dispose(); return; }
             lukeClockLease = lease; lukeClockActive = true;
             // 构造Battle发生在费用SQL之前；初始SET从实际提交后的激活时刻起算。

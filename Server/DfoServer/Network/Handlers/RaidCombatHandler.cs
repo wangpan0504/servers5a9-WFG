@@ -109,6 +109,9 @@ internal sealed class RaidCombatHandler(IRaidRewardStore rewards, ItemCatalog it
         if (receipt.Prepared.RaidType == RaidKind.Anton && DisplayGuard())
             await context.Notify(NotiPacketType.RAID_REWARD_LIST, RaidCombatPackets.Reward(receipt.Prepared.Kind, receipt.Offer.Display),
                 "raid_reward_display", DisplayGuard);
+        if (receipt.Prepared.RaidType == RaidKind.Prey && DisplayGuard())
+            await context.Notify(NotiPacketType.RAID_REWARD_LIST, PreyRewardPackets.Reward(receipt.Prepared.Character, receipt.Offer),
+                "prey_reward_display", DisplayGuard);
         bool sent = false;
         await context.Reply(CmdPacketType.SELECT_RAID_REWARD_CARD, [1], "raid_reward_selected", () => sent = Guard());
         if (sent) context.Session.ConfirmRaidRewardPublished(receipt);

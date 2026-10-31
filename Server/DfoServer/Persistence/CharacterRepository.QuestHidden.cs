@@ -20,7 +20,11 @@ internal sealed partial class CharacterRepository : IQuestHiddenHistoryStore
             SELECT EXISTS(SELECT 1 FROM characters WHERE id=$id AND account=$account AND revision=$revision)
               AND (SELECT count(*) FROM
                 (SELECT 1 FROM character_dungeon_settlement_receipts
-                 WHERE character_id=$id AND account=$account AND dungeon_id=$dungeon LIMIT $count))=$count
+                 WHERE character_id=$id AND account=$account AND dungeon_id=$dungeon
+                 UNION ALL
+                 SELECT 1 FROM character_raid_runs WHERE character_id=$id AND account=$account
+                   AND raid_type=3 AND state=2 AND phase1_event IS NOT NULL AND $dungeon=291100397
+                 LIMIT $count))=$count
             """;
         return Convert.ToInt32(command.ExecuteScalar()) != 0;
     });

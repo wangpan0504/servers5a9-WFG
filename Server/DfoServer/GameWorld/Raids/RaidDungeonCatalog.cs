@@ -17,7 +17,7 @@ internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<
     public ImmutableArray<int> MissingDungeons => Script.Phases.SelectMany(phase => phase.Dungeons).Select(row => row.Id)
         .Distinct().Where(id => !DungeonPaths.ContainsKey(id)).Order().ToImmutableArray();
     public bool Ready => Script.Issues.IsEmpty && MapsReady;
-    public bool MapsReady => Type is 0 or 1 && MissingMaps.IsEmpty &&
+    public bool MapsReady => Type is 0 or 1 or 3 && MissingMaps.IsEmpty &&
         Script.Phases.SelectMany(phase => phase.Dungeons).All(row => definitions.ContainsKey(row.Id));
     // 保留原列顺序，仅投影整数；业务层不得直接依赖PVF解析记录或推定列含义。
     public int[] LukeCardMapColumns(int group)
@@ -46,7 +46,8 @@ internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<
     internal static RaidDungeonCatalog Load(PvfArchive pvf, RaidResources resources, Func<int, string?> mapPath, byte type = 0,
         IReadOnlyDictionary<int, string>? supplementalMaps = null)
     {
-        if (type is not (0 or 1)) throw new InvalidDataException("未登记团本目录类型");
+        if (type is not (0 or 1 or 3)) throw new InvalidDataException("未登记团本目录类型");
+        string prefix = type switch { 0 => "dungeon/anton/", 1 => "dungeon/luke/", _ => "dungeon/kcontents3/isysraid_guide/" };
         var maps = new Dictionary<int, string>();
         var missing = ImmutableArray.CreateBuilder<int>();
         foreach (int id in resources.Dungeons.SelectMany(row => row.MapIds).Concat(supplementalMaps?.Keys ?? []).Distinct().Order())
@@ -63,13 +64,13 @@ internal sealed class RaidDungeonCatalog(RaidScript script, ImmutableDictionary<
         foreach (var row in resources.Dungeons)
         {
             string? path = row.FormalFileExists ? row.FormalPath : type == 0 && row.TutorialFileExists ? row.TutorialPath : null;
-            if (path is null || !path.StartsWith(type == 0 ? "dungeon/anton/" : "dungeon/luke/", StringComparison.Ordinal)) continue;
+            if (path is null || !path.StartsWith(prefix, StringComparison.Ordinal)) continue;
             paths.Add(row.Id, path);
             if (row.MapIds.Any(id => !maps.ContainsKey(id))) continue;
             var definition = DungeonCatalog.ParseResource(row.Id, path, pvf.ReadTokens(path), pvf.ResolveString, maps, pvf.Contains);
             // 正式定义本身须带raid标记；普通安徒恩的raid normal标记不能借用正式授权。
             if (!definition.RawSections.Any(section => section.Tag == "raid dungeon" && section.Tokens is [{ Type: 0, Value: 1 }]) ||
-                !definition.Path.StartsWith(type == 0 ? "dungeon/anton/" : "dungeon/luke/", StringComparison.Ordinal)) continue;
+                !definition.Path.StartsWith(prefix, StringComparison.Ordinal)) continue;
             entries.Add(row.Id, definition);
         }
         return new(resources.Script, entries.ToImmutable(), missing.ToImmutable(), maps.ToImmutableDictionary(), pvf.Contains, type, paths.ToImmutable(),

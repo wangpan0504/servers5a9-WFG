@@ -10,10 +10,11 @@ internal sealed partial class DungeonHandler
 {
     async Task<CommandResult> SelectAntonAsync(GameConnectionContext context, DungeonSelectionRequest selection)
     {
+        var service = context.Session.ChannelEntry?.Type == 50 ? preyRaid : antonRaid;
         var party = context.Session.CurrentParty?.Invoke();
         string? reason = "anton-entry-waiting-client-resources";
         PartyDungeonNotice[] selected = [], entered = [];
-        if (antonRaid is { Enabled: true } && partyDungeons is not null)
+        if (service is { Enabled: true } && partyDungeons is not null)
         {
             reason = "anton-entry-party-dispatch-gate-mismatch";
             if (party is not null && context.DispatchGates?.Holds(context, party.Commands) == true)
@@ -30,7 +31,7 @@ internal sealed partial class DungeonHandler
                 {
                     // 大图确认可直接发送16；首次从原Battle签发，Loading只验证并重放原Run。
                     bool replay = context.Session.Phase == DfoServer.Game.Session.SessionPhase.Loading;
-                    selected = antonRaid.Select(context.Session, (int)selection.DungeonIndex, party, out reason, replayLoading: replay);
+                    selected = service.Select(context.Session, (int)selection.DungeonIndex, party, out reason, replayLoading: replay);
                     try
                     {
                         if (replay) entered = selected;
@@ -48,10 +49,10 @@ internal sealed partial class DungeonHandler
             }
         }
         log.Write("formal_dungeon_entry", new { Connection = context.Id, Accepted = entered.Length != 0, Party = true,
-            RaidType = 0, Replay = entered.Any(notice => notice.Kind == PartyDungeonNoticeKind.LoadingReplay),
+            RaidType = context.Session.ChannelEntry?.Type == 50 ? 3 : 0, Replay = entered.Any(notice => notice.Kind == PartyDungeonNoticeKind.LoadingReplay),
             Dungeon = selection.DungeonIndex, RaidInstance = context.Session.StartedRaid?.InstanceId,
             Members = entered.Length, Runs = entered.Select(notice => notice.Scene?.Snapshot.Identity.InstanceId).Distinct().ToArray(),
-            RejectReason = reason, MissingMaps = antonRaid?.MissingMaps });
+            RejectReason = reason, MissingMaps = service?.MissingMaps });
         if (entered.Length != 0) await PartyDungeonProjection.PublishAsync(entered);
         else await context.Reply(CmdPacketType.SELECT_DUNGEON, DungeonPackets.SelectionRejected(), "anton_entry_rejected");
         return CommandResult.Handled;

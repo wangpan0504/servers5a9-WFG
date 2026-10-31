@@ -25,7 +25,10 @@ internal sealed record RaidClause(string Tag, int TokenIndex, int? DungeonId, st
 }
 internal sealed record RaidRule(ImmutableArray<RaidClause> Trigger, ImmutableArray<RaidClause> Behavior);
 // 未闭合的列保持原始顺序，不能解释成数量或概率。
-internal sealed record RaidReward(string Kind, int RawA, int RawB, int ItemId, int RawD);
+internal sealed record RaidReward(string Kind, int RawA, int RawB, int ItemId, int RawD)
+{
+    internal int? RawE { get; init; }
+}
 internal sealed record RaidPhase(string Name, ImmutableArray<RaidDungeon> Dungeons,
     ImmutableArray<RaidRule> Rules, ImmutableArray<RaidReward> Rewards)
 {
@@ -398,7 +401,7 @@ internal static class RaidScriptParser
         }
     }
 
-    static ImmutableArray<RaidField> Fields(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve,
+    internal static ImmutableArray<RaidField> Fields(IReadOnlyList<PvfToken> tokens, Func<int, string> resolve,
         Action<string, int, string> issue)
     {
         var fields = ImmutableArray.CreateBuilder<RaidField>();

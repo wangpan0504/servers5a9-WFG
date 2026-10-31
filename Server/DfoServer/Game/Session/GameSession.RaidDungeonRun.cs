@@ -40,19 +40,20 @@ internal sealed partial class GameSession
         change = null;
         if (members.Length is < 1 or > 4) return false;
         var first = members[0].Actor.Session;
-        if (first.raidCombat is not { Battle.Kind: RaidKind.Luke } firstRaid) return false;
+        if (first.raidCombat is not { Battle.Kind: RaidKind.Luke or RaidKind.Prey } firstRaid) return false;
         var facts = new List<(RaidActor Actor, DungeonClearFact Fact)>();
         foreach (var member in members)
         {
             var session = member.Actor.Session;
             if (session.raidCombat is not { } raid || !ReferenceEquals(raid.Battle, firstRaid.Battle) || !raid.Actor.IsCurrent ||
                 session.formalDungeon is not { Run.ClearFact: { } fact } dungeon || dungeon.Run.HasPendingDeath ||
-                dungeon.Entry.RaidEntry is not { Kind: RaidKind.Luke } entry || entry.InstanceId != raid.Battle.Instance ||
+                dungeon.Entry.RaidEntry is not { } entry || entry.Kind != firstRaid.Battle.Kind || entry.InstanceId != raid.Battle.Instance ||
                 fact.Identity.InstanceId != instance || fact.Identity != dungeon.Run.Snapshot.Identity ||
                 !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap)) return false;
             facts.Add((raid.Actor, fact));
         }
-        change = firstRaid.Battle.CompleteLukeDungeon(facts.ToArray());
+        change = firstRaid.Battle.Kind == RaidKind.Prey
+            ? firstRaid.Battle.CompletePreyDungeon(facts.ToArray()) : firstRaid.Battle.CompleteLukeDungeon(facts.ToArray());
         return facts.All(row => firstRaid.Battle.HasDungeonContribution(row.Actor, instance));
     }
 

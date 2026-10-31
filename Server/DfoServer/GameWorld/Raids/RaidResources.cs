@@ -30,7 +30,8 @@ internal static class RaidResourceLoader
         Func<int, string?>? mapPath = null, IReadOnlyDictionary<int, string>? supplementalMaps = null)
     {
         mapPath ??= dungeons.MapPath;
-        var script = RaidScriptParser.Parse(raid.Path, pvf.ReadTokens(raid.Path),
+        var script = raid.Type == 3 ? PreyGuideScript.Parse(pvf.ReadTokens(raid.Path), pvf.ReadTokens(raid.Path + ".symbol"), pvf.ResolveString) :
+            RaidScriptParser.Parse(raid.Path, pvf.ReadTokens(raid.Path),
             pvf.Contains(raid.Path + ".symbol") ? pvf.ReadTokens(raid.Path + ".symbol") : [], pvf.ResolveString,
             raid.Type == 1 ? RaidScriptKind.Luke : RaidScriptKind.Anton);
         IReadOnlyDictionary<int, string> tutorial = ImmutableDictionary<int, string>.Empty;
@@ -46,7 +47,7 @@ internal static class RaidResourceLoader
         var result = Check(script, tutorial, dungeons.DungeonPath, mapPath, pvf.Contains,
             pvf.ReadTokens, pvf.ResolveString, ItemExists);
         result = result with { Issues = result.Issues.AddRange(issues) };
-        return raid.Type is 0 or 1 ? result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, mapPath, raid.Type, supplementalMaps) } : result;
+        return raid.Type is 0 or 1 or 3 ? result with { EntryCatalog = RaidDungeonCatalog.Load(pvf, result, mapPath, raid.Type, supplementalMaps) } : result;
 
         bool ItemExists(int id)
         {

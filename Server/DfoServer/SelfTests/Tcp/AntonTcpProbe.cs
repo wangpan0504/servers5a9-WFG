@@ -403,7 +403,8 @@ internal static class AntonTcpProbe
         int count = map[18];
         if (map.Length < 19 + count * 22)
             throw new InvalidOperationException("29 演员表被截断");
-        for (int i = 0; i < count; i++)
+        // 部分圣地将Boss排在演员表首行；先确认其他敌人，再击杀会立即结束Run的Boss。
+        foreach (int i in Enumerable.Range(0, count).OrderBy(index => map[19 + index * 22 + 13] == 3))
         {
             int offset = 19 + i * 22;
             if (map[offset + 21] == 1 || map[offset + 13] == 9)

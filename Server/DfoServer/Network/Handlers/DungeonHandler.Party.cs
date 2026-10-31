@@ -66,7 +66,7 @@ internal sealed partial class DungeonHandler
     {
         if (lukeLifecycle is not null && notice.Kind is PartyDungeonNoticeKind.RaidBattleSync or PartyDungeonNoticeKind.Departure &&
             context.Session.CommitPendingLukePhase(lukeLifecycle))
-            log.Write("raid_phase_committed", new { Connection = context.Id, RaidType = 1, Instance = context.Session.RaidCombatView()?.Instance });
+            log.Write("raid_phase_committed", new { Connection = context.Id, RaidType = context.Session.RaidCombatKind(), Instance = context.Session.RaidCombatView()?.Instance });
         var hiddenReward = notice.Kind == PartyDungeonNoticeKind.EvildomWarUpdated && notice.WarView is { } hiddenView &&
             context.Session.CanPublishEvildomWar(hiddenView) && evildomRewards is not null && evildomRewardStore is not null
             ? context.Session.CommitEvildomWarHiddenReward(evildomRewards, evildomRewardStore) : null;
@@ -119,7 +119,7 @@ internal sealed partial class DungeonHandler
         {
             if (notice.RaidBattleChange is { } change)
                 log.Write(notice.RaidEvent is null ? "raid_run_clear" : "raid_run_event", new { Connection = context.Id,
-                    Event = notice.RaidEvent?.ToString(), RaidType = 1, Instance = change.After.Instance,
+                    Event = notice.RaidEvent?.ToString(), RaidType = context.Session.RaidCombatKind(), Instance = change.After.Instance,
                     Run = notice.Scene?.Snapshot.Identity.InstanceId, Dungeon = notice.Scene?.Entry.DungeonId,
                     Members = notice.Members.Length, change.After.Phase, BeforeRevision = change.Before.Revision,
                     AfterRevision = change.After.Revision, State = change.After.State.ToString() });

@@ -27,7 +27,7 @@ internal sealed class RaidCatalog(ImmutableDictionary<byte, RaidDefinition> defi
         IReadOnlyDictionary<int, string>? antonMapPoolPaths = null)
     {
         var prepared = Definitions;
-        foreach (byte type in new byte[] { 0, 1 })
+        foreach (byte type in new byte[] { 0, 1, 3 })
             if (Find(type) is { } raid)
             {
                 var resources = RaidResourceLoader.Load(pvf, raid, dungeons, items, type == 0 ? antonMapPath : null,

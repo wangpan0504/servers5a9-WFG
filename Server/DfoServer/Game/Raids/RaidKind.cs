@@ -2,8 +2,8 @@ using DfoServer.Game.Accounts;
 
 namespace DfoServer.Game.Raids;
 
-// 仅当前实际接入的两种攻坚；不同容量边界不扩大普通队伍ExecuteGroup。
-internal enum RaidKind : byte { Anton = 0, Luke = 1 }
+// 类型编号来自 raid.lst；普雷当前只接入单人引导，不扩大普通队伍容量。
+internal enum RaidKind : byte { Anton = 0, Luke = 1, Prey = 3 }
 
 internal static class RaidOwnerGroup
 {
@@ -11,6 +11,7 @@ internal static class RaidOwnerGroup
     {
         RaidKind.Anton => AccountOwners.Lease.ExecuteRaid(members, action),
         RaidKind.Luke => AccountOwners.Lease.ExecuteRaidGroup(members, 8, action),
+        RaidKind.Prey when members.Count == 1 => AccountOwners.Lease.ExecuteGroup(members, action),
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 }

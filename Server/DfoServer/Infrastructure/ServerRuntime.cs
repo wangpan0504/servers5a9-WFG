@@ -398,7 +398,11 @@ internal static class ServerRuntime
             ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, antonCatalog, raidSettings.AntonFormalEntryEnabled) : null;
         if (!raidSettings.AntonFormalEntryEnabled)
             log.Write("resource_warning", new { Source = "Anton formal entry", Reason = "anton-entry-waiting-client-resources" });
-        var lukeTimers = !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
+        var preyReady = raidCatalog.Find(3)?.Resources is { ResourcesReady: true, EntryCatalog.Ready: true };
+        var preyRun = preyReady ? new Game.Raids.AntonRaidDungeonService(raidRegistry, parties, raidCatalog.Find(3)!.Resources!.EntryCatalog!, true, Game.Raids.RaidKind.Prey) : null;
+        var preyRewards = preyReady ? new Game.Raids.PreyGuideRewards(raidCatalog.Find(3)!.Resources!.Script, itemResources.Items, itemResources.Boosters) : null;
+        if (preyRewards is not null) _ = preyRewards.Create(false);
+        var lukeTimers = !preyReady && !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
             repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }),
             rewardAbandoned: view => log.Write("anton_phase_progress", new { view.Instance, view.Phase, view.Revision,
                 State = view.State.ToString(), Reason = "reward-wait-expired-unclaimed-abandoned" }));
@@ -423,7 +427,7 @@ internal static class ServerRuntime
             lukeRun = null;
         }
         var raidHandler = new RaidHandler(log, raidCatalog, raidRegistry, online,
-            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards, raidSettings.AntonPhaseProgressEnabled ? lukeTimers : null), lukeStart, antonRejoin, parties);
+            new Game.Raids.AntonRaidStart(raidRegistry, parties, repository, towns, itemResources.EpicPieces, clock, raidSettings.AntonPhaseProgressEnabled, antonRewards, raidSettings.AntonPhaseProgressEnabled || preyReady ? lukeTimers : null, preyRewards), lukeStart, antonRejoin, parties);
         if (raidSettings.AntonRejoinEnabled)
             log.Write("resource_warning", new { Source = "Anton raid rejoin", Reason = "rejoin-recovery-sequence-unknown" });
         new StaminaHandler(new(itemResources.DevilContracts), inventoryProjection, log, clock).Register(commands);
@@ -578,7 +582,7 @@ internal static class ServerRuntime
                 growth, DungeonKillExperienceCatalog.Load(pvf), projection, levelProjection,
                 drops, itemResources.Items, itemResources.EpicPieces, itemResources.GoldLimits, questProjection, PrepareDrops,tutorials,tutorialScenes,crackRewards,altarRewards,
                 despairRewards,titleService,titleProjection,inventoryProjection,partyDungeons,stats,parties,epicPieceShop,tagEvildomRun,
-                evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun,
+                evildomWar: warCatalog, lukeRaid: lukeRun, lukeLifecycle: repository, antonRaid: antonRun, preyRaid: preyRun,
                 evildomRewards: warPolicy, evildomRewardStore: repository, imperialArena: imperialArenaProjection);
             var cardPrices = DungeonCardPriceCatalog.Load(pvf);
             var tayberrsRewards = new Game.Dungeons.TayberrsCardRewardPolicy(cardPrices, itemResources.Boosters, itemResources.Items);
@@ -737,7 +741,7 @@ internal static class ServerRuntime
                 itemResources.EpicPieces, itemResources.Contracts, clock), inventoryProjection, log),
             new MagicBoxHandler(new InventoryMagicBoxService(itemResources.Items, itemResources.MagicBoxes, itemResources.GoldLimits, itemResources.EpicPieces,
                 contracts: itemResources.Contracts, debugSettings: debugSettings, clock: clock), inventoryProjection),
-            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun, imperialArenaProjection),
+            new DungeonSelectionHandler(projection, log, tutorials, selectionDungeons, partyDungeons, tagEvildomProjection, tagEvildomRun, lukeRun, antonRun, imperialArenaProjection, preyRun),
             new OperationHopeHandler(operationHope,selectionDungeons,log),
             new AssaultModeHandler(log, assaultMode, itemResources.EpicPieces, clock, itemResources.Items, itemResources.GoldLimits),
             new QuestLifecycleHandler(quests, itemResources.Items, itemResources.GoldLimits, itemResources.EpicPieces, log, questProjection),

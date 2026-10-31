@@ -35,12 +35,12 @@ internal static class RaidProjection
         party.Members.OrderBy(m => m.Slot).Select(m => (m.Actor.Character, CharacterName.Encoding.GetBytes(m.Actor.Name), m.Squad)).ToArray();
     public static byte[] Record(RaidParty party, bool enableLuke = false) => RaidPackets.UpdateRecord(party.Key, party.TitleBytes, party.Type,
         party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
-        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party, enableLuke));
+        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party, enableLuke), party.Guide);
     public static byte[] List(RaidParty party, bool enableLuke = false) => RaidPackets.RaidList(party.Key, party.TitleBytes, party.Type,
         party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName), party.Members.Single(m => m.Actor.Character == party.Leader).Squad,
-        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party, enableLuke));
+        party.Started is null ? (byte)0 : (byte)2, party.Started?.Phase ?? 0, CanStart(party, enableLuke), party.Guide);
 
-    internal static bool CanStart(RaidParty party, bool enableLuke = false) => (party.Type == 0 || party.Type == 1 && enableLuke) && party.Started is null &&
+    internal static bool CanStart(RaidParty party, bool enableLuke = false) => (party.Type == 0 || party.Type == 1 && enableLuke || party.Type == 3 && party.Guide) && party.Started is null &&
         party.Members.Length >= party.StartMinimum && party.Members.All(m => m.Squad != 0 && m.Actor.IsCurrent);
 
     public static void Cost(GameConnectionContext context, RaidCostStatus[] rows, RaidActor recipient, Func<bool>? current = null) =>
@@ -71,7 +71,7 @@ internal static class RaidProjection
             receipt.Resync ? "raid_start_inventory_resync" : "raid_start_cost_committed", Guard);
         context.Sender.Post(0, (ushort)NotiPacketType.RAID_MODIFY,
             RaidPackets.UpdateRecord(party.Key, party.TitleBytes, party.Type, party.Leader, CharacterName.Encoding.GetBytes(party.LeaderName),
-                party.Members.Single(m => m.Actor.Character == party.Leader).Squad), "raid_start_record", Guard);
+                party.Members.Single(m => m.Actor.Character == party.Leader).Squad, guide: party.Guide), "raid_start_record", Guard);
         foreach (var notice in receipt.Squads.Where(n => ReferenceEquals(n.Recipient.Actor.Session, recipient.Session)))
         {
             var original = notice.Guard;
@@ -88,6 +88,13 @@ internal static class RaidProjection
         if (party.Type == (byte)RaidKind.Luke && receipt.Battle is { } initial &&
             recipient.Session.CurrentRaidBattle(recipient) is { } currentBattle)
             RaidCombatProjection.PostLukeSnapshot(context, currentBattle, initial, Guard);
+        if (party.Type == (byte)RaidKind.Prey && receipt.Battle is { } preyInitial &&
+            recipient.Session.CurrentRaidBattle(recipient) is { } preyBattle)
+        {
+            context.Sender.Post(0, (ushort)NotiPacketType.PREY_RAID, RaidCombatPackets.PreyStatus(1), "prey_started", Guard);
+            RaidCombatProjection.PostPreySnapshot(context, preyBattle, preyInitial,
+                () => Guard() && recipient.Session.CanPublishRaidBattle(recipient, preyInitial));
+        }
         if (party.Type == (byte)RaidKind.Anton && receipt.Battle is { } antonInitial &&
             recipient.Session.CurrentRaidBattle(recipient) is { } antonBattle)
             RaidCombatProjection.PostAntonSnapshot(context, antonBattle, antonInitial,

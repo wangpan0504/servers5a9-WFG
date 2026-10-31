@@ -70,12 +70,12 @@ internal sealed partial class CharacterRepository : IRaidRewardStore
             // 仅Luke新发奖要求666签发的两阶段资格；旧Anton回执已在上方优先重放。
             if (prepared.Phase is not (0 or 1) || prepared.FinalPhase != (prepared.Phase == 1)) return null;
             string prefix = prepared.Phase == 0 ? "phase0" : "phase1";
-            command.CommandText = $"SELECT {prefix}_receipt,{prefix}_event,{prefix}_anchor FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=1";
+            command.CommandText = $"SELECT {prefix}_receipt,{prefix}_event,{prefix}_anchor FROM character_raid_runs WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=$type";
             using var eligibilityRow = command.ExecuteReader();
             if (!eligibilityRow.Read() || eligibilityRow.IsDBNull(0) ||
                 JsonSerializer.Deserialize<RaidPhaseEligibility>(eligibilityRow.GetString(0)) is not { Eligible: true } eligibility ||
                 eligibility.Character != expected.Id || eligibility.Week != prepared.Week || eligibility.Source != prepared.Source ||
-                eligibility.Instance != prepared.Instance || eligibility.RaidType != RaidKind.Luke || eligibility.Phase != prepared.Phase ||
+                eligibility.Instance != prepared.Instance || eligibility.RaidType != prepared.RaidType || eligibility.Phase != prepared.Phase ||
                 eligibility.Event == Guid.Empty || eligibility.Event.ToString("N") != eligibilityRow.GetString(1) ||
                 eligibility.Anchor != eligibilityRow.GetInt64(2) || eligibility.Offers.IsDefault ||
                 eligibility.Offers.SingleOrDefault(offer => offer.Kind == prepared.Kind && offer.Card == prepared.Card) is not { } authorized ||
