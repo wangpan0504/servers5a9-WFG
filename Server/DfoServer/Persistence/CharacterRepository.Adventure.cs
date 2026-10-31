@@ -213,11 +213,27 @@ internal sealed partial class CharacterRepository
         using (var reader = query.ExecuteReader()) while (reader.Read()) roster.Add(new(checked((ushort)reader.GetInt32(0)),
             checked((ushort)reader.GetInt32(1)), reader.GetString(2), checked((byte)reader.GetInt32(3)),
             checked((byte)reader.GetInt32(4)), checked((byte)reader.GetInt32(5)), checked((uint)reader.GetInt64(6)), reader.GetInt64(7)));
-        // 推荐地下城按角色累计、账号求和；u16饱和与90CN一致，其余内容当前没有服务端来源，保持0。
+        // 推荐地下城保留原有u16饱和；团本只汇总既有合资格终局，不把入场、阶段奖励或失败计为通关。
         query.CommandText = "SELECT coalesce(sum(recommended_dungeon_clears),0) FROM character_dungeon_state WHERE account=$account";
         var counts = new ushort[AdventureContent.Count];
         counts[AdventureContent.RecommendedDungeon] = (ushort)Math.Min((long)query.ExecuteScalar()!, ushort.MaxValue);
-        return new(state, roster.ToImmutable()) { ContentCounts = ImmutableArray.Create(counts) };
+        query.CommandText = """
+            SELECT raid_type,count(*) FROM character_raid_runs
+            WHERE account=$account AND state=2 AND raid_type IN(1,2,3) GROUP BY raid_type
+            """;
+        var raids = new AdventureRaidClears();
+        using (var reader = query.ExecuteReader()) while (reader.Read())
+        {
+            uint clears = (uint)Math.Min(reader.GetInt64(1), uint.MaxValue);
+            raids = reader.GetInt32(0) switch
+            {
+                1 => raids with { Luke = clears },
+                2 => raids with { Fiendwar = clears },
+                3 => raids with { Prey = clears },
+                _ => raids
+            };
+        }
+        return new(state, roster.ToImmutable()) { ContentCounts = ImmutableArray.Create(counts), RaidClears = raids };
     }
 
 }

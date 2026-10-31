@@ -48,8 +48,8 @@ internal sealed record AdventureState(long Revision, string Name, int CreatedDat
             throw new InvalidDataException("账号冒险团持久状态非法");
     }
 }
-// 内容通关累计按内容类型索引；type0为推荐地下城。当前只有推荐地下城有服务端通关来源（写入1343的u32@16），
-// 其余内容未接入时不伪造数值；收藏分类状态不使用该数组，见AdventureSnapshot.Collections。
+// 旧内容计数数组目前只定义type0推荐地下城（写入1343的u32@16）；团本使用具名的RaidClears，
+// 不猜测其余索引；收藏分类状态不使用该数组，见AdventureSnapshot.Collections。
 internal static class AdventureContent
 {
     public const int Count = 20;
@@ -57,11 +57,14 @@ internal static class AdventureContent
 }
 // 收藏分类状态：Count 是已收集的不同转职数，Complete 表示该类在资源里声明的转职已全部收集。
 internal readonly record struct AdventureCollection(ushort Count, bool Complete);
+// 已有团本真实终局账本的账号汇总，与收藏分类及推荐地下城的历史u16计数分开。
+internal readonly record struct AdventureRaidClears(uint Luke, uint Fiendwar, uint Prey);
 
 internal sealed record AdventureSnapshot(AdventureState State, ImmutableArray<AdventureMember> Members)
 {
     // 内容通关累计按账号汇总；默认全零，读取时由角色级计数填充。
     public ImmutableArray<ushort> ContentCounts { get; init; } = ImmutableArray.Create(new ushort[AdventureContent.Count]);
+    public AdventureRaidClears RaidClears { get; init; }
 
     // 收藏分类状态：按PVF [expert list] 分类统计已收集的不同转职数，同一分支的多个角色只计一次。
     // 角色簿左侧分类按钮由客户端FUN_00D8F1C0按显示槽3字节判定：有符号byte0>=0、有符号byte1>0才记为已收集，

@@ -198,6 +198,14 @@ internal static partial class FiendwarRaidTcpTests
             foreach (var peer in peers) Drain(peer);
             That(peers.All(peer => fixture.Query("SELECT state FROM character_raid_runs WHERE character_id=$p0", peer.Id) is [[2L]]),
                 "两世界机制、汇合及正式死亡后只产生一次整团通关");
+            foreach (var peer in peers)
+            {
+                peer.Send(1403, [0, 0]);
+                var adventure = Drain(peer).Single(row => row is { Kind: 1, Opcode: 1403 }).Body;
+                That(adventure[0] == 1 && U32(adventure, 19 + 32) == 1 &&
+                    U32(adventure, 19 + 28) == 0 && U32(adventure, 19 + 36) == 0,
+                    "1/4/8人正式终局后原生冒险团面板读取本账号真实漩涡累计，不串其他团本");
+            }
             That(peers.All(peer => results.Contains(peer.Id) && victories.Contains(peer.Id)),
                 "原生601结果与1523胜利到达每个角色，不套用587");
             foreach (var peer in peers)

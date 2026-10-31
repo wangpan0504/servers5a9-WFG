@@ -14,7 +14,7 @@ internal static class AdventurePackets
     // 基本信息页「内容熟练度」由客户端按独立 u32 读取（2026-10-22 哨兵探针+实机截图逐项对上）：
     // 推荐地下城通关@16、卢克攻坚@28、超时空漩涡@32、普雷·伊希斯攻坚战@36、
     // 无双决斗场获胜@44、绝望之塔100层@48、悲叹之塔100层@52。
-    // 当前只有推荐地下城通关有账号级累计来源；其余六项尚无统计，保持 0，不借用收藏表或其他字段。
+    // 推荐地下城与三类团本使用各自账号级真实累计；决斗场及双塔暂无统计，保持0。
     public const int RecommendedClearOffset = 16;
     public const int LukeRaidClearOffset = 28;
     public const int MetroRaidClearOffset = 32;
@@ -53,11 +53,13 @@ internal static class AdventurePackets
         var raw = new byte[InformationRawLength];
         U32(raw, 0, checked((uint)snapshot.State.Level)); U64(raw, 8, snapshot.State.Experience);
         U32(raw, LoginDaysOffset, checked((uint)snapshot.State.LoginStreakDays));
-        // 内容熟练度按内容各自独立的 u32 下发；当前只有推荐地下城通关有账号级累计来源，
-        // 其余六项没有统计数据，保持 0，不借用收藏分类表伪造。
+        // 内容熟练度使用独立u32，不借用收藏分类表；团本不沿用推荐地下城的u16上限。
         var counts = snapshot.ContentCounts;
         U32(raw, RecommendedClearOffset, counts.Length > AdventureContent.RecommendedDungeon
             ? counts[AdventureContent.RecommendedDungeon] : 0u);
+        U32(raw, LukeRaidClearOffset, snapshot.RaidClears.Luke);
+        U32(raw, MetroRaidClearOffset, snapshot.RaidClears.Fiendwar);
+        U32(raw, PreyRaidClearOffset, snapshot.RaidClears.Prey);
         U16(raw, 68, checked((ushort)snapshot.Members.Length));
         AdventureMember? best = null;
         int at = 0;
