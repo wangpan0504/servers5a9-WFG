@@ -127,6 +127,7 @@ internal static class AvatarPackageTcpTests
     public static async Task RunObservedSelectionsAsync(ServerOptions source, string root, TcpTestResources resources)
     {
         await GiftCompatibilityTcpTests.RunAsync(source, root, resources);
+        await MixedAvatarPackageTcpTests.RunAsync(source, root, resources);
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "observed-selections"), gm: true, resources: resources);
         var items = resources.ItemResources.Items;
         var repository = new CharacterRepository(fixture.Database);
