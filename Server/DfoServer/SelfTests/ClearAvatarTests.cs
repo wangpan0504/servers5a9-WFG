@@ -15,10 +15,11 @@ namespace DfoServer;
 
 internal static class ClearAvatarTests
 {
-    public static void RunAllSourceTemplates(PvfArchive archive, ItemCatalog items)
+    public static IReadOnlyList<ItemTemplate> RunAllSourceTemplates(PvfArchive archive, ItemCatalog items)
     {
         int matched = 0;
         var slots = new HashSet<byte>();
+        var weapons = new List<ItemTemplate>();
         foreach (var (id, relative) in PvfScript.List(archive.ReadText("equipment/equipment.lst")))
         {
             string path = "equipment/" + relative;
@@ -37,12 +38,21 @@ internal static class ClearAvatarTests
                 BitConverter.ToUInt16(body, 2 + template.EquipmentSlot * 3) == 221,
                 "每个实际克隆模板以原生三字节记录绑定包裹末格原件：" + id);
             slots.Add(template.EquipmentSlot);
+            if (template.EquipmentSlot == 10) weapons.Add(template);
             matched++;
         }
         That(matched > 0 && slots.IsSupersetOf(Enumerable.Range(0, 8).Select(slot => (byte)slot)) &&
             slots.Contains(9) && slots.Contains(10), "名册逐项覆盖全部实际克隆族及普通八部位、光环和武器");
         Console.WriteLine($"Clone source templates checked: {matched}; slots: {string.Join(',', slots.Order())}");
+        return weapons;
     }
+
+    // 只选真实名册扫描提供的候选，不为适配模板改变TCP角色职业、等级或技能。
+    internal static ItemTemplate? SelectEmptyWeaponTemplate(IEnumerable<ItemTemplate> templates) => templates
+        .Where(template => template is { Kind: ItemKind.Avatar, EquipmentSlot: 10, CloneAvatar: true,
+            BorrowAvatarAppearance: true, MinimumLevel: <= 95, RequiredSkill: 0, PvpFreeEquipment: false } &&
+            (template.Jobs & 1) != 0)
+        .MinBy(template => template.Id);
 
     public static void RunResources(CharacterCatalog characters, ItemCatalog items)
     {
@@ -58,6 +68,7 @@ internal static class ClearAvatarTests
     public static void RunCore()
     {
         int checks = Count;
+        RunWeaponFixtureSelection();
         var catalog = new ItemCatalog(null!, new Dictionary<int, string>(), new Dictionary<int, string>(), 0);
         var templates = Enumerable.Range(0, 12).SelectMany(slot => new[] { Template(slot), Template(slot, true) })
             .Append(new ItemTemplate(300, ItemKind.Equipment, 12, 1, 10, 1, 0, 0, 0, "[trade]", ushort.MaxValue, 0, "weapon"));
@@ -205,6 +216,23 @@ internal static class ClearAvatarTests
             That(result.Accepted, "合法装扮覆盖、卸装和空槽穿戴均可规划");
             return result;
         }
+    }
+
+    static void RunWeaponFixtureSelection()
+    {
+        var valid = Template(10, true) with { MinimumLevel = 95, Jobs = 1 };
+        var other = valid with { Id = valid.Id + 1 };
+        That(SelectEmptyWeaponTemplate([other, valid]) == valid &&
+            SelectEmptyWeaponTemplate([valid, other]) == valid,
+            "真实武器克隆候选按编号确定选择，不依赖名册枚举顺序，95级和本职业边界可用");
+        foreach (var invalid in new[] { valid with { Kind = ItemKind.Equipment }, valid with { EquipmentSlot = 9 },
+            valid with { CloneAvatar = false }, valid with { BorrowAvatarAppearance = false },
+            valid with { MinimumLevel = 96 }, valid with { Jobs = 2 }, valid with { Jobs = 0 },
+            valid with { RequiredSkill = 1 }, valid with { PvpFreeEquipment = true } })
+            That(SelectEmptyWeaponTemplate([invalid]) is null &&
+                SelectEmptyWeaponTemplate([invalid, other]) == other,
+                "不以错误类型、部位、克隆标记或不可穿戴模板填补空武器TCP覆盖");
+        That(SelectEmptyWeaponTemplate([]) is null, "无兼容真实候选时保持缺失，不合成替代模板");
     }
 
     static void RunPlayerExtensions(AvatarDetail details)
