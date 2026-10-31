@@ -179,15 +179,22 @@ internal static partial class LukeRaidRunTcpTests
                 // 未参与的第二队按真实资格处理；P1原门槛为0，不能借漏领奖跳过休息屏障。
                 foreach (var peer in others) { peer.Send(660, [1, 0]); Drain(peer, true); foreach (var other in peers.Where(other => other != peer)) Drain(other, true); }
                 leader.Send(666); Bytes(Until(leader, 1, 666).Body, [1], "团长真实提前启动P2，不重复扣票");
-                Drain(leader, true); clock.Advance(3);
-                foreach (var peer in peers) Drain(peer, true);
+                AwaitPhaseTwo(clock, peers.ToArray(), leader);
                 foreach (int dungeon in new[] { 5311, 5313, 5057, 5058, 5059, 5060, 5064, 5065, 5061, 5066, 5062 }) Run(dungeon, 1);
                 That(fixture.Query("SELECT count(*) FROM character_raid_runs WHERE instance_id=$p0 AND state=2", instance)
                     is [[long p2]] && p2 == count, "完整P2自然前置和光暗王座才记成功通关");
                 if (recovery)
                 {
-                    ushort original = leader.Id; leader.Dispose();
-                    await WaitAsync(() => fixture.LukeRejoinCandidate(original) is { OldOwnerReleased: true }, "领奖阶段真实离线完成清理");
+                    ushort original = leader.Id;
+                    var previousCandidate = fixture.LukeRejoinCandidate(original)!;
+                    That(previousCandidate is { Phase: 0, OldOwnerReleased: true } &&
+                        previousCandidate.Instance.ToString("N") == instance,
+                        "P1重返仍保留旧候选，不能把旧owner释放当作本轮断线完成");
+                    leader.Dispose();
+                    await WaitAsync(() => fixture.LukeRejoinCandidate(original) is { Phase: 1, OldOwnerReleased: true } current &&
+                        current.Instance == previousCandidate.Instance && current.Key == previousCandidate.Key &&
+                        current.RaidSlot == previousCandidate.RaidSlot && current.Squad == previousCandidate.Squad,
+                        "领奖阶段同实例P2新候选真实离线完成清理");
                     if (recoveryMode != 0)
                     {
                         leader = Open(fixture, "lkprod1_0", gamePort: port, channelNumber: 20);
@@ -195,8 +202,30 @@ internal static partial class LukeRaidRunTcpTests
                         if (recoveryMode == 2) { leader.Select(1); That(leader.Id != original, "同账号改玩另一角色，不恢复原Battle"); }
                     }
                     clock.Advance(186);
-                    await WaitAsync(() => fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE instance_id=$p0", instance) is [[3L]],
-                        "P2离线/在线选角/其它角色均超时结算原角色两类奖励");
+                    var rewardWait = System.Diagnostics.Stopwatch.StartNew();
+                    var lastStep = TimeSpan.Zero;
+                    int retrySteps = 0;
+                    Guid rewardInstance = Guid.ParseExact(instance, "N");
+                    await WaitAsync(() =>
+                    {
+                        var receipts = fixture.Query("SELECT character_id,phase,kind FROM character_raid_reward_receipts WHERE instance_id=$p0 ORDER BY phase,kind", instance);
+                        if (receipts.Length == 3) return true;
+                        // 原10秒轮询中只驱动已登记的本实例一秒重排；ACK不代表门禁释放。
+                        // 每次至少相隔一秒墙钟，不追赶补发，最多5步；这不是生产等待承诺。
+                        long beforeStamp = clock.GetTimestamp();
+                        if (receipts.Length < 3 && retrySteps < 5 && rewardWait.Elapsed - lastStep >= TimeSpan.FromSeconds(1) &&
+                            clock.PendingDeadlines.Count(row => row.Instance == rewardInstance && row.Due == beforeStamp + 1000) == 1)
+                        {
+                            lastStep = rewardWait.Elapsed;
+                            int beforeCallbacks = clock.Callbacks;
+                            clock.Advance(1);
+                            retrySteps++;
+                            var after = fixture.Query("SELECT character_id,phase,kind FROM character_raid_reward_receipts WHERE instance_id=$p0 ORDER BY phase,kind", instance);
+                            Console.WriteLine($"Luke recovery mode={recoveryMode} retry={retrySteps}/5 stamp={beforeStamp}->{clock.GetTimestamp()} callbacks={beforeCallbacks}->{clock.Callbacks} receipts={string.Join(";", after.Select(row => string.Join(",", row)))}");
+                            return after.Length == 3;
+                        }
+                        return false;
+                    }, "P2离线/在线选角/其它角色均超时结算原角色两类奖励");
                     clock.Advance(10);
                     That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE instance_id=$p0", instance) is [[3L]], "离线自动结算幂等，不重抽或重复发奖");
                     That(fixture.Query("SELECT count(*) FROM character_raid_reward_receipts WHERE instance_id=$p0 AND character_id<>$p1", instance, original)
@@ -243,4 +272,67 @@ internal static partial class LukeRaidRunTcpTests
             That(false, message);
         }
     }
+    static void AwaitPhaseTwo(LukeRaidClockTests.Clock clock, TcpPeer[] peers, TcpPeer leader)
+    {
+        // 1347只屏障连接，不代表全团时钟已取得命令门禁并提交P2；以真实587为完成事实。
+        var ordered = new[] { leader }.Concat(peers.Where(peer => peer != leader)).ToArray();
+        That(ordered.Length == peers.Length && ordered.Select(peer => peer.Id).Distinct().Count() == peers.Length,
+            "P2屏障包含队长及全部唯一成员，不遗漏另一分队");
+        var latest = new Dictionary<ushort, string>();
+        var observed = new HashSet<ushort>();
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        int virtualSeconds = 0;
+        DrainStep(0, clock.Callbacks);
+        // 额外五次只覆盖生产既有一秒重调度，是测试观察上限，不是新的阶段时长合同。
+        for (int step = 1; step <= 6; step++)
+        {
+            CheckDeadline();
+            int callbacksBefore = clock.Callbacks;
+            int advance = step == 1 ? 3 : 1;
+            clock.Advance(advance);
+            virtualSeconds += advance;
+            DrainStep(step, callbacksBefore);
+            if (ordered.All(peer => observed.Contains(peer.Id) && latest.GetValueOrDefault(peer.Id) == "0201"))
+            {
+                That(true, "全部成员实际收到P2 Fighting的587后才发送选图，未用连接ACK代替阶段完成");
+                return;
+            }
+        }
+        That(false, "P2真实阶段屏障超出3+5秒虚拟上限：" + State());
+
+        void DrainStep(int step, int callbacksBefore)
+        {
+            var phaseFrames = new Dictionary<ushort, string[]>();
+            foreach (var peer in ordered)
+            {
+                CheckDeadline();
+                var frames = Drain(peer, true);
+                var phases = frames.Where(packet => packet is { Kind: 0, Opcode: 587 }).ToArray();
+                foreach (var packet in phases)
+                {
+                    That(packet.Body.Length == 2, "P2屏障仅按完整两字节587读取阶段");
+                    latest[peer.Id] = Convert.ToHexString(packet.Body);
+                    if (packet.Body is [2, 1]) observed.Add(peer.Id);
+                }
+                phaseFrames[peer.Id] = phases.Select(packet => Convert.ToHexString(packet.Body)).ToArray();
+                CheckDeadline();
+            }
+            Console.WriteLine("Luke P2 phase barrier: " + System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Step = step, VirtualSeconds = virtualSeconds, CallbacksBefore = callbacksBefore,
+                CallbacksAfter = clock.Callbacks, ElapsedMilliseconds = elapsed.Elapsed.TotalMilliseconds,
+                PhaseFrames = phaseFrames, Latest = latest,
+                Missing = ordered.Where(peer => !observed.Contains(peer.Id) || latest.GetValueOrDefault(peer.Id) != "0201")
+                    .Select(peer => peer.Id).ToArray()
+            }));
+        }
+        string State() => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            VirtualSeconds = virtualSeconds, Callbacks = clock.Callbacks, ElapsedMilliseconds = elapsed.Elapsed.TotalMilliseconds,
+            Latest = latest, Missing = ordered.Where(peer => !observed.Contains(peer.Id) || latest.GetValueOrDefault(peer.Id) != "0201")
+                .Select(peer => peer.Id).ToArray()
+        });
+        void CheckDeadline() => That(elapsed.Elapsed < TimeSpan.FromSeconds(10), "P2真实阶段屏障超出原10秒墙钟上限：" + State());
+    }
+
 }

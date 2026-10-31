@@ -44,10 +44,6 @@ internal sealed record DungeonEntryPlan(
     // 地图自带原生 [ai character] 行的房间照常叠加伴侣行。
     public bool AllowsCompanionAi { get; init; } = true;
     public bool IsTutorial { get; init; }
-    // 专属5335–5339入口走普通请求；旧310–314的独立特殊请求仍共用魔兽账本。
-    public bool BeastMode { get; init; }
-    public double BeastHpScale { get; init; } = BeastDungeonRotation.NormalHpScale;
-    public double BeastAttackScale { get; init; } = BeastDungeonRotation.NormalAttackScale;
     public bool IsOrdinaryLuke { get; init; }
     public bool IsOrdinaryPrey { get; init; }
     public PreyNormalAdmission? PreyNormal { get; init; }
@@ -57,7 +53,6 @@ internal sealed record DungeonEntryPlan(
     public bool IsEvildomWarHidden { get; init; }
     // 正式普通卢克准入冻结；组队共用入场日，但进度与源怪日资格仍按角色独立。
     public int? OrdinaryLukeDay { get; init; }
-    public int? BeastDay { get; init; }
     public bool DisableClearReward { get; init; }
     public DfoServer.Game.Raids.RaidDungeonIdentity? RaidEntry { get; init; }
     public DfoServer.Game.Raids.FiendwarCombatScale? FiendwarScale { get; init; }
@@ -92,7 +87,7 @@ internal sealed record DungeonEntryPlan(
     public int? GriefLayer { get; init; }
     public bool IsBossRush { get; init; }
     public int TimeoutMilliseconds { get; init; }
-    public bool RequiresFatigueOwner => IsOrdinary && !(BeastMode && !BeastDungeonRotation.IsGateway(DungeonId)) && LostLand is null && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower && !IsBossRush;
+    public bool RequiresFatigueOwner => IsOrdinary && LostLand is null && !IsTrainingRoom && !IsClassExperience && !IsTournament && !IsPractice && !Maze.IsGriefTower && !IsBossRush;
     public bool UsesFatigue => RequiresFatigueOwner && !DisableFatigueConsumption;
     // #511 普通入场的 [use fatigue only start dungeon] N：入场提交时一次扣 N，之后首次房间不再逐房扣点。0 = 沿用逐房一点。
     public ushort StartFatigue { get; init; }
@@ -130,10 +125,7 @@ internal sealed record DungeonEntryPlan(
     public bool IndividualMapMovement { get; init; }
     public bool InitializationCounterSupported { get; init; }
     public bool IsQuestReplay { get; init; }
-    public bool IsTerminalMap(DungeonMap map) => BeastMode ? map.Kind == "Beast" &&
-        (BeastEncounterPlan.IsNative(this) ? map.Id == BeastEncounterPlan.Stage(this, 5).Map &&
-            Maze.MapSpecification?.Any(sentinel => sentinel.Kind == "Beast" && sentinel.Position == map.Position) == true :
-            Maze.MapSpecification?.Contains(map) == true) :
+    public bool IsTerminalMap(DungeonMap map) =>
         LostLand is null && (Hope is { } hope ? OperationHopePlan.IsDeclaredTerminal(hope.Catalog,hope.MazeOrdinal,map.Id) : Maze.DummyStages.Count > 0 ? map == Maze.DummyStages[^1] :
         PassiveClearTerminalMap is { } passive ? map == passive :
         CinematicClearTerminalMap is { } cinematic ? map == cinematic :
@@ -156,7 +148,7 @@ internal sealed record DungeonEntryPlan(
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,
         bool hellParty = false, bool hellLegend = false, bool practice = false, bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null,
-        IReadOnlyDictionary<int,int>? bossWeights = null, bool beastMode = false,
+        IReadOnlyDictionary<int,int>? bossWeights = null,
         DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null, DimensionDungeonAdmission? dimension = null)
     {
         plan = null;
@@ -174,76 +166,17 @@ internal sealed record DungeonEntryPlan(
             return false;
         }
 
-        if (beastMode && BeastDungeonRotation.IsGateway(dungeonId))
-        {
-            // 兼容入口正文使用普通迷宫；阶段身份来自原支援兵中同源的独立魔兽布局。
-            // 必须逐格吻合，不能把任意5335号正文借原布局替换后放行。
-            DungeonDefinition source;
-            try { source = catalog.Get(BeastDungeonRotation.SourceDungeonId(checked((int)dungeonId))); }
-            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
-            { reason = "beast-gateway-source-unavailable"; return false; }
-            if (source.BeastLayouts.Any(layout => layout.ResourceError is not null))
-            { reason = "beast-gateway-source-unavailable"; return false; }
-            if (!GatewayMatches(definition, source))
-            { reason = "beast-gateway-layout-mismatch"; return false; }
-            definition = definition with { BeastLayouts = source.BeastLayouts };
-        }
-
         return TryCreate(definition, character, dungeonId, questId, difficulty, out plan, out reason, allowClearedQuest, quest,draw,quests,
             maze => imperialArena is null ? catalog.ResolveOrdinaryMaze(definition,maze,draw,hellParty,bossWeights) :
                 catalog.ResolveImperialArenaMaze(definition, maze, imperialArena.Route.Opponents(imperialArena.Mode).Select(row => row.MapId).ToArray()),allowClearedTerminalQuest:allowClearedTerminalQuest,
-            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze,beastMode:beastMode,imperialArena:imperialArena,dimension:dimension);
+            hellParty:hellParty,hellLegend:hellLegend,practice:practice,bossCellFromBossMap:bossCellFromBossMap,grief:grief,hope:hope,partyRoute:partyRoute,tagEvildom:tagEvildom,tagMaze:tagMaze,imperialArena:imperialArena,dimension:dimension);
     }
-
-    // 魔兽专属入口的选图合同，两种已证实形状：官方入口声明单整数 [beast dungeon] 1（客户端写 runtime+551），
-    // 其正文只是选图预览；入场时整条运行路线由同源布局替换（见 TryCreate 的 beast 分支），故只校验预览自洽。
-    // 未声明该标志的兼容入口仍须与原魔兽十/十五房逐格对应，不放宽原规则。
-    internal static bool GatewayMatches(DungeonDefinition gateway, DungeonDefinition source) =>
-        !source.BeastLayouts.Any(layout => layout.ResourceError is not null) &&
-        source.BeastLayouts.FirstOrDefault() is { } layout &&
-        (gateway.BeastFlag ? GatewayPreviewWellFormed(gateway) : GatewayMirrorsLayout(gateway, layout));
-
-    static bool GatewayPreviewWellFormed(DungeonDefinition gateway) =>
-        gateway.Mazes.Count == 1 && gateway.Mazes[0] is { MapSpecification: { Count: > 0 } maps } maze &&
-        maps.Select(map => map.Position).Distinct().Count() == maps.Count &&
-        maps.All(map => map.Kind is "map" or "Beast") &&
-        maze.Starts.Count == 1 && maps.Any(map => map.Position == maze.Starts[0]) &&
-        // 官方预览的 [boss map] 是 -1 -1（不声明）；若声明，必须指向 Beast 房。
-        maze.Bosses.All(boss => maps.Any(map => map.Position == boss && map.Kind == "Beast"));
-
-    static bool GatewayMirrorsLayout(DungeonDefinition gateway, BeastDungeonLayout layout) =>
-        gateway.Mazes.Count == 1 &&
-        gateway.Mazes[0] is { MapSpecification: { } maps } maze && maps.Count == layout.Maps.Count &&
-        maps.Select(map => map.Position).Distinct().Count() == maps.Count &&
-        maps.All(map => map.Kind == "map" && layout.Maps.Any(stage => stage.Position == map.Position && stage.Id == map.Id && stage.Path == map.Path)) &&
-        maze.Width == layout.Width && maze.Height == layout.Height && maze.Greed == layout.Greed &&
-        maze.Starts.SequenceEqual([layout.Start]) &&
-        maze.Bosses.SequenceEqual(layout.Maps.Where(map=>map.Kind=="Beast").Select(map=>map.Position).TakeLast(1));
-
-    // 魔兽运行路线：官方入口正文只是选图预览，入场时用同源布局整条替换尺寸、房间与终末；
-    // 入场计划与静态拓扑必须走同一变换，避免两处各自拼装后互相不一致。
-    internal static DungeonMaze ApplyBeastLayout(DungeonMaze maze, BeastDungeonLayout layout) => maze with
-    {
-        Width = layout.Width,
-        Height = layout.Height,
-        Greed = layout.Greed,
-        BeastLayout = layout,
-        Starts = [layout.Start],
-        Bosses = [layout.Maps.Last(map => map.Kind == "Beast").Position],
-        MapSpecification = layout.Maps,
-        QuestConnectionTokens = [],
-        HellParty = null,
-        LayeredMaps = [],
-        StoryStages = [],
-        DummyStages = [],
-        ConditionalMaps = []
-    };
 
     internal static bool TryCreate(DungeonDefinition definition, Character character, uint dungeonId, uint questId,
         byte difficulty, out DungeonEntryPlan? plan, out string reason, bool allowClearedQuest = false, StoryQuest? quest = null,
         Func<int,int>? draw = null, QuestCatalog? quests = null, Func<DungeonMaze,DungeonMaze>? resolveMaze = null,bool isReplay = false,
         Func<ActiveMainQuest,bool>? allowClearedTerminalQuest = null,bool hellParty = false,bool hellLegend = false,bool practice = false,
-        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null, bool beastMode = false,
+        bool bossCellFromBossMap = false, GriefTowerAdmission? grief = null, OperationHopeAdmission? hope = null, DungeonEntryPlan? partyRoute = null, DfoServer.Game.TagEvildom.TagEvildomAdmission? tagEvildom = null, int? tagMaze = null, DfoServer.Game.Raids.RaidDungeonIdentity? raid = null, int? raidMaze = null,
         DfoServer.Game.ImperialArena.ImperialArenaAdmission? imperialArena = null, DimensionDungeonAdmission? dimension = null)
     {
         plan = null;
@@ -252,12 +185,9 @@ internal sealed record DungeonEntryPlan(
         if (hellParty && (questId != 0 || isReplay)) { reason = "hell-party-quest-or-replay-unsupported"; return false; }
         if (reason != "resource-request-ready")
             return false;
-        if (BeastDungeonRotation.IsGateway(dungeonId) && !beastMode)
-        { reason = "beast-gateway-mode-required"; return false; }
-        if (beastMode && (!BeastDungeonRotation.SupportsDifficulty(dungeonId, difficulty) || questId != 0 || hellParty || practice || definition.BeastLayouts.Count == 0))
-        { reason = "beast-layout-missing"; return false; }
-        if (beastMode && definition.BeastLayouts.Any(layout => layout.ResourceError is not null))
-        { reason = "beast-layout-resource-unavailable"; return false; }
+        // 已退役入口不能借普通路线重新启用。
+        if (dungeonId is >= 5335 and <= 5339)
+        { reason = "dungeon-mode-unsupported"; return false; }
         if (definition.Id != dungeonId)
         {
             reason = "dungeon-resource-mismatch";
@@ -359,7 +289,6 @@ internal sealed record DungeonEntryPlan(
         if (partyRoute is { } shared)
         {
             if (shared.PartyRoute is not null || shared.DungeonId != dungeonId || shared.Difficulty != difficulty ||
-                shared.BeastMode != beastMode ||
                 shared.IsPractice || shared.IsTutorial || shared.IsClassExperience || shared.IsTrainingRoom || shared.IsTournament ||
                 shared.IsQuestReplay || shared.IsBossRush || (shared.HellParty is not null || shared.IsCosmo) != hellParty || shared.IsHellLegend != hellLegend ||
                 (shared.Hope is null) != (hope is null) || hope is not null && (shared.Hope is not { } sharedHope ||
@@ -564,15 +493,6 @@ internal sealed record DungeonEntryPlan(
         try { maze = resolveMaze is null ? candidates[0] : resolveMaze(candidates[0]); }
         catch (Exception error) when (error is InvalidDataException or NotSupportedException or FileNotFoundException)
         { reason = "dungeon-resource-unavailable"; return false; }
-        // 官方魔兽专属入口的选图预览用 [boss map] -1 -1 表示“终点就是那个阶段房”，并把它记作 Beast；
-        // 入场时整条路线会按同源魔兽布局重建，这里只把预览规格规范化成单起点单终点，供通用校验使用。
-        if (beastMode && definition.BeastFlag && maze.Bosses.Count == 0 && maze.StoryStages.Count == 0 &&
-            maze.MapSpecification is { } beastPreview && beastPreview.LastOrDefault(map => map.Kind == "Beast") is { } previewBoss)
-            maze = maze with
-            {
-                MapSpecification = beastPreview.Select(map => ReferenceEquals(map, previewBoss) ? map with { Kind = "boss" } : map).ToArray(),
-                Bosses = [previewBoss.Position]
-            };
         LostLandAdmission? lostLandAdmission = null;
         if ((lostLand || maze.IsLostLand) && !LostLandAdmission.TryCreate(definition, maze, out lostLandAdmission))
         { reason = "lost-land-resource-unsupported"; return false; }
@@ -711,20 +631,6 @@ internal sealed record DungeonEntryPlan(
         // 实验性（未在95客户端实证；依据参考项目 dungeon_hell_room.go / A21 FindHellMapRoom）：深渊房间不是新增房间，而是 [seal door pos] 那个普通房间
         // 在深渊派对模式下改用 [seal door map index] 的深渊地图（柱子 + 波次 + 固定小怪）。起点/Boss/分层/条件/剧情图占用同一坐标时无法替换，按不可用拒绝。
         var planMaze = maze;
-        if (beastMode)
-        {
-            var layout = definition.BeastLayouts[0];
-            var beastMaps = layout.Maps;
-            if (beastMaps.Count != (long)layout.Width * layout.Height || beastMaps.Any(map => map.Path.Length == 0) ||
-                beastMaps.Select(map => map.Position).Distinct().Count() != beastMaps.Count ||
-                beastMaps.Count(map => map.Kind == "Beast") != BeastDungeonRotation.StageRewardItems.Length ||
-                !DungeonGreedGrid.Read(layout.Width, layout.Height, layout.Greed).Supported ||
-                beastMaps.SingleOrDefault(map => map.Position == layout.Start) is not { } beastStart)
-            { reason = "beast-layout-incomplete"; return false; }
-            planMaze = ApplyBeastLayout(maze, layout);
-            starts = [beastStart];
-            terminal = beastMaps.Last(map => map.Kind == "Beast");
-        }
         // 实验性：传奇深渊把房间换成 [seal door legend map index] 图（黑暗都市 313169），其余同普通深渊。
         var activeHell = hellParty && maze.HellParty is { } baseRoom && hellLegend ? baseRoom with { MapId = baseRoom.LegendMapId } : maze.HellParty;
         var activeHellPath = hellLegend ? maze.HellLegendPath : maze.HellPartyPath;
@@ -742,10 +648,7 @@ internal sealed record DungeonEntryPlan(
         var active = questId == 0 || isReplay ? null : character.ActiveMainQuests.Single(quest => quest.QuestId == questId);
         plan = new(character.Id, character.Revision, dungeonId,isReplay ? 0 : questId, active?.Slot ?? byte.MaxValue, difficulty, planMaze, starts[0], terminal)
         {
-            BeastMode = beastMode,
             LostLand = lostLandAdmission,
-            BeastHpScale = beastMode && definition.BeastLayouts[0].NormalHpScale > 0 ? definition.BeastLayouts[0].NormalHpScale : BeastDungeonRotation.NormalHpScale,
-            BeastAttackScale = beastMode && definition.BeastLayouts[0].NormalAttackScale > 0 ? definition.BeastLayouts[0].NormalAttackScale : BeastDungeonRotation.NormalAttackScale,
             BasisLevel = definition.BasisLevel,
             IsOrdinaryLuke = definition.IsOrdinaryLuke,
             IsOrdinaryPrey = definition.IsOrdinaryPrey, IsOrdinaryAnton = definition.IsOrdinaryAnton,
@@ -763,9 +666,9 @@ internal sealed record DungeonEntryPlan(
             DisableGiveupPenalty = definition.DisableGiveupPenalty,
             CoinLimit = definition.Id is >= 11006 and <= 11107 ? definition.CoinLimit : null,
             DisableFatigueConsumption = definition.DisableFatigueConsumption,
-            MonsterBasisLevel = beastMode ? definition.BeastLayouts[0].LevelMin : definition.BasisLevel,
+            MonsterBasisLevel = definition.BasisLevel,
             QuestAcceptanceId = active?.AcceptanceId ?? Guid.Empty,
-            BaseBossMap = beastMode ? terminal : bosses[0],
+            BaseBossMap = bosses[0],
             HasExplicitClearMap = layoutQuest is not null && QuestClearEligibility.IsSingleMap(layoutQuest),
             QuestClearMap = questClearMap,
             TerminalLayerMap = terminalLayer,
@@ -987,9 +890,9 @@ internal sealed record DungeonEntryPlan(
             return "dungeon-unsupported";
         if (questId >= 30000)
             return "quest-unsupported";
-        // 魔兽兼容入口的选图面板有六个难度按钮（0–5，实机点击样本为2）；其它副本上限仍是4。
+        // 普通副本保持既有五档难度范围。
         // 这条只放行取值，仍由 SupportsDifficulty 与网关分支决定是否真的能进。
-        if (difficulty > (BeastDungeonRotation.IsGateway(dungeonId) ? 5 : 4) ||
+        if (difficulty > 4 ||
             questId == 0 && dungeonId is 3 or 5 or 6 or 7 or 8 or 9 or 1000 && difficulty != 0)
             return "difficulty-unsupported";
         if (character.Level is < 1 or > 95)

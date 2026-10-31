@@ -7,11 +7,11 @@ namespace DfoServer.Persistence;
 internal sealed partial class CharacterRepository
 {
     Character ReadDungeonGrowthCharacter(SqliteConnection db, SqliteTransaction tx, string account,
-        Character expected, QuestDropPlan? drops, bool stageReward = false)
+        Character expected, QuestDropPlan? drops)
     {
         // 命中掉落声明但未中奖/已满上限也依赖库存；寻物任务会在击杀末尾按实时持有量刷新。
         // 保守回退原完整读取，不让空奖励或同revision的工具修改绕过资产前提。
-        if (stageReward || drops is { ReadsInventory: true } || drops?.Inventory.Changed == true ||
+        if (drops is { ReadsInventory: true } || drops?.Inventory.Changed == true ||
             drops is not null && quests is not null && expected.ActiveMainQuests.Any(active =>
                 quests.TryGet(active.QuestId, out var quest) && quest.Condition is "[seeking]" or "[seek n meet npc]"))
             return Require(db, tx, account, expected.Name);

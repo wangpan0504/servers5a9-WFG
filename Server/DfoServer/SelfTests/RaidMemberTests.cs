@@ -19,6 +19,7 @@ internal static class RaidMemberTests
     public static void RunCore()
     {
         int before = Count;
+        RaidCleanupPublicationTests.RunCore();
         var info = RaidRequests.Information([2, 1, 0, 19, 2]);
         That(info.Mode == 2 && info.Key == 0x02130001, "1361严格消费mode和key");
         var management = RaidRequests.Manager([0,0,0,0, 7,0,0,0, 5,0,0,0]);
@@ -181,16 +182,33 @@ internal static class RaidMemberTests
             registry.Publish(registry.Assign(leader, member.Character, 2)!);
             await healthy.Send(1, 1278, [1], "healthy-barrier").WaitAsync(TimeSpan.FromSeconds(2));
             That(!held.IsCompleted && healthyStream.Length > 0, "慢团员写入阻塞时，发布返回且健康团员完成必要通知和后续应答");
-            registry.Publish(registry.Assign(leader, member.Character, 3)!);
+            var latest = registry.Assign(leader, member.Character, 3)!;
+            var expectedStateIds = latest.After!.Members.OrderBy(row => row.Slot).Select(row => row.Actor.Character).ToArray();
+            That(latest.After.Members.All(row => !row.Inactive), "慢发布夹具未提交离开状态，完整快照各成员必须为活动0");
+            registry.Publish(latest);
             Task barrier = sender.Send(1, 1278, [1], "barrier");
             That(sender.PendingBytes <= GameConnectionSender.MaxPendingBytes && !barrier.IsCompleted,
                 "多人投影使用原连接有界预算，可靠等待仍受慢写入约束");
             stream.Release.TrySetResult();
             await Task.WhenAll(held, barrier).WaitAsync(TimeSpan.FromSeconds(5));
+            string evidence = $"count={stream.Frames.Count},pendingBytes={sender.PendingBytes},frames=" +
+                string.Join(";", stream.Frames.Select(row => row.Length >= 3
+                    ? $"{row[0]}/{BinaryPrimitives.ReadUInt16LittleEndian(row.AsSpan(1))}/{row.Length}" : $"short/{row.Length}"));
             That(stream.Frames.Count == 7 && sender.PendingBytes == 0,
-                "旧成员快照丢弃，保留新角色Actor及最新列表/记录/成员/活动状态帧，预算归零");
-            That(BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[5].AsSpan(1)) == 765,
-                "最新名册之后携带完整765活动状态，慢接收不丢失状态快照");
+                "旧成员快照丢弃，保留新角色Actor、最新列表/记录/成员及活动状态帧，预算归零：" + evidence);
+            That(stream.Frames.All(row => row.Length >= 16), "全部帧必须保留完整头：" + evidence);
+            That(stream.Frames.Select(row => (row[0], BinaryPrimitives.ReadUInt16LittleEndian(row.AsSpan(1))))
+                .SequenceEqual(new (byte, ushort)[] { (0, 2), (0, 2), (0, 590), (0, 591), (0, 591), (0, 765), (1, 1278) }),
+                "慢接收者恢复后精确消费身份、最新名册和765状态，再到后续应答：" + evidence);
+            var expectedStates = new byte[4 + expectedStateIds.Length * 3];
+            BinaryPrimitives.WriteUInt32LittleEndian(expectedStates, checked((uint)expectedStateIds.Length));
+            for (int index = 0; index < expectedStateIds.Length; index++)
+            {
+                BinaryPrimitives.WriteUInt16LittleEndian(expectedStates.AsSpan(4 + index * 3), expectedStateIds[index]);
+                expectedStates[6 + index * 3] = 0;
+            }
+            Bytes(stream.Frames[5].AsSpan(16).ToArray(), expectedStates,
+                "765按最新成员slot顺序完整写出u32人数及每个u16角色/字面活动0，不接受缺失、重复或旧成员");
             byte[] actorFrame = stream.Frames[1];
             That(actorFrame.Length > 139 && actorFrame[0] == 0 &&
                 BinaryPrimitives.ReadUInt16LittleEndian(actorFrame.AsSpan(1)) == 2 &&

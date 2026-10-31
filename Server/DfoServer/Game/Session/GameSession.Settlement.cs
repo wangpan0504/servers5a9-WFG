@@ -52,7 +52,6 @@ internal sealed partial class GameSession
             return ((FormalDungeonReceipt, ushort?)?)null;
         var snapshot = dungeon.Run.Snapshot;
         if (!dungeon.Entry.IsTerminalMap(snapshot.CurrentMap)) return ((FormalDungeonReceipt, ushort?)?)null;
-        if (dungeon.Entry.BeastMode && dungeon.BeastStages.Count < 6) return ((FormalDungeonReceipt, ushort?)?)null;
         if (dungeon.Entry.IsTutorial && dungeon.TutorialClearTarget is { } tutorialTarget)
             return (FormalReceipt(), tutorialTarget);
         // 剧情终点可以只有普通敌对APC；115引用真实死亡key，不将清场移除或友方NPC当成Boss死亡。

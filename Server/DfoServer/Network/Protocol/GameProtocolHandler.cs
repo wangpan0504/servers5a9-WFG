@@ -81,7 +81,7 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         }, connection.CaptureSent);
         var session = new GameSession(repository, towns, login.Owner, login.Identity, quests, debugSettings, login.Channel.Entry,questEffects, contracts,
             timeProvider: time, passiveDrops: passiveDrops, creatures: creatures, stageGraph: stageGraph, items: items,
-            goldLimits: goldLimits, pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
+            pieces: pieces, experienceBonuses: experienceBonuses, incounts: incounts,
             channelHistory: channelHistory, operationHope: operationHope, guildDungeons: guildDungeons, pvpRatings: pvpRatings,
             monsterBattleLevels: monsterBattleLevels, monsterAi: monsterAi, itemCycles: itemCycles, guildNpcBenefits: guildNpcBenefits, promotionStore: promotionStore, consumables: consumables, springTreasure: springTreasure);
         var context = new GameConnectionContext(connection, login.Owner, session, sender, createActivity?.Invoke(session))
@@ -105,8 +105,6 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
         context.Altar = altar;
         var lostLand = new LostLandProjection(context, projection, log, time);
         context.LostLand = lostLand;
-        var beast = new BeastDeadlineProjection(context, log, SqliteBusyRetry.IsBusy, time);
-        context.Beast = beast;
         var death = new DungeonDeathProjection(context, projection, log, time);
         context.Death = death;
         var revival = new DungeonRevivalProjection(context, log, time);
@@ -392,6 +390,11 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
                 if (result == CommandResult.Unhandled)
                     log.Write("unimplemented", new { Connection = connection.Id, Phase = session.Phase.ToString(), request.Kind,
                         request.Opcode, Name = name, Length = request.Body.Length, Body = body });
+                // 1278的ACK只证明回包；此处才是本请求分派与自动刷新均完成、门禁已释放的尾界。
+                // 不表示独立后台任务永久空闲，不新增客户端协议，也不记录账号或请求正文。
+                if (request.Opcode == (ushort)CmdPacketType.CHECK_USER_CONNECTION)
+                    log.Write("command_completed", new { Connection = connection.Id, Generation = login.Owner.Generation,
+                        session.SelectionEpoch, Character = session.Selected?.Id, request.Sequence, request.RequestSerial, request.Opcode });
             }
         }
         finally
@@ -411,7 +414,6 @@ internal sealed class GameProtocolHandler(ServerOptions options, LoginHandler lo
             await elevator.DisposeAsync();
             await altar.DisposeAsync();
             await lostLand.DisposeAsync();
-            await beast.DisposeAsync();
             if (context.LukePhaseExit is { } lukeExit) await lukeExit.DisposeAsync();
             // 此处不持本人owner；在普通队伍/团名册/Session移除前冻结原身份。
             if (lukeRejoin is not null)

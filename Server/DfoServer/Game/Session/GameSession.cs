@@ -27,7 +27,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
     DfoServer.Game.Quests.QuestSkipEffects? questEffects = null, PremiumContractCatalog? contracts = null, TimeProvider? timeProvider = null,
     DfoServer.Game.Dungeons.DungeonPassiveDropPolicy? passiveDrops = null,
     Game.Creatures.CreatureService? creatures = null, GameWorld.Quests.QuestStageGraph? stageGraph = null,
-    ItemCatalog? items = null, GoldLimitCatalog? goldLimits = null, EpicPieceCatalog? pieces = null,
+    ItemCatalog? items = null, EpicPieceCatalog? pieces = null,
     ExperienceBonusService? experienceBonuses = null, GameWorld.Dungeons.DungeonIncountCatalog? incounts = null,
     ChannelHistory? channelHistory = null, GameWorld.Dungeons.OperationHopeCatalog? operationHope = null,
     GameWorld.Guilds.GuildDungeonCatalog? guildDungeons = null,
@@ -131,39 +131,47 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
 
     public void ReturnToRoster()
     {
-        var battle = owner.Execute(() =>
-        {
-            var departing = raidCombat?.Battle;
-            // 移动和传送已逐次提交；这里只结束当前角色会话，不重写位置或进度。
-            try { CompleteCurrentImperialArena(); }
-            finally { Invalidate("not-requested"); }
-            return departing;
-        });
-        if (battle?.Kind == Raids.RaidKind.Luke) battle.Publish(battle.View);
+        var notices = new DepartureNotices();
+        Exception? failure = null;
+        try { ReturnToRoster(notices); }
+        catch (Exception error) { failure = error; throw; }
+        finally { notices.Publish(failure); }
     }
+
+    // 需要在外层owner中复验的用例传入本次收尾容器，由最外层退出锁后发布。
+    internal void ReturnToRoster(DepartureNotices notices) => owner.Execute(() =>
+    {
+        notices.Battle = raidCombat?.Battle;
+        // 移动和传送已逐次提交；这里只结束当前角色会话，不重写位置或进度。
+        try { CompleteCurrentImperialArena(); }
+        finally { Invalidate("not-requested", notices); }
+        return true;
+    });
 
     public void End()
     {
-        var departingBattle = raidCombat?.Battle;
-        // 断线时旧 generation 已不能拿锁，仍要让这个会话自己的代数失效。
+        var notices = new DepartureNotices { Battle = raidCombat?.Battle };
+        Exception? failure = null;
+        // 断线时旧generation已不能拿锁，仍要让这个会话自己的代数失效。
         try
         {
-            owner.Execute(() =>
+            try
             {
-                try { CompleteCurrentImperialArena(); }
-                finally { Invalidate("session-ended"); }
-                return true;
-            });
+                owner.Execute(() =>
+                {
+                    try { CompleteCurrentImperialArena(); }
+                    finally { Invalidate("session-ended", notices); }
+                    return true;
+                });
+            }
+            catch (InvalidOperationException ex) when (ex.Message == "Stale account generation")
+            {
+                Invalidate("session-ended", notices, publishExpertJob: false);
+            }
+            finally { gameCache.Dispose(); }
         }
-        catch (InvalidOperationException ex) when (ex.Message == "Stale account generation")
-        {
-            Invalidate("session-ended", publishExpertJob: false);
-        }
-        finally
-        {
-            gameCache.Dispose();
-            if (departingBattle?.Kind == Raids.RaidKind.Luke) departingBattle.Publish(departingBattle.View);
-        }
+        catch (Exception error) { failure = error; throw; }
+        finally { notices.Publish(failure); }
     }
 
     public bool MatchesSelection(long epoch, ushort characterId) =>
@@ -181,7 +189,6 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             if (Selected is not null)
                 throw new InvalidDataException("Invalid selection state");
             var character = repository.LoadCharacter(owner, slot);
-            repository.CancelBeastDungeonReservation(owner.Account, character.Id, null);
             if (expected is not null && (character.Id != expected.Id || character.Slot != expected.Slot || character.Name != expected.Name))
                 throw new InvalidOperationException("Selection published roster identity changed");
             // 普通选角与原生换频道共用此门禁；拒绝发生在修复、扣费和位置保存之前。
@@ -210,7 +217,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
             // 客户端没有保留换频道快照时（普通频道与团队页签频道互换、进出魔界大战等类型谓词不一致的换频道），按普通选角落点和包序。
             // 旧频道类型已知（同一服务端进程内的上一次选角）时直接比较谓词；否则按存档城镇推断。
             int? previousType = ChannelEntry is null ? null : channelHistory?.Previous(owner.Account);
-            bool resumed = resumeTown && !ChannelAreaLanding.LeavesBeastTown(ChannelEntry, character.Position) &&
+            bool resumed = resumeTown && !ChannelAreaLanding.LeavesRetiredTown(character.Position) &&
                 ChannelAreaLanding.AllowsFiendwarTown(ChannelEntry, character.Position.Town) &&
                 (ChannelEntry is not null && previousType is int previous
                 ? ChannelAreaLanding.SameSnapshotPredicates(previous, ChannelEntry.Type)
@@ -332,7 +339,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         });
     }
 
-    void Invalidate(string reason, bool publishExpertJob = true)
+    void Invalidate(string reason, DepartureNotices notices, bool publishExpertJob = true)
     {
         bool warPersistenceFailed = false;
         try { if (owner.IsCurrent) DisconnectEvildomWar(); }
@@ -343,7 +350,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         }
         GuildManagementClosing?.Invoke();
         ObserveGuildPresence();
-        InvalidateRaids(reason == "session-ended");
+        InvalidateRaids(notices, reason == "session-ended");
         mailboxRestore = null;
         npcTownVisit = null;
         hopeSelection = null;
@@ -360,7 +367,6 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         ReleaseCurrentEvildomWarDungeon(cleanup: true, defer: warPersistenceFailed);
         evildomWar = null;
         formalDungeon?.Run.CancelTagEvildom();
-        ReleaseBeastDungeonReservation();
         formalDungeon = null;
         gameCache.Clear();
         rechargeTicket = null;
@@ -381,5 +387,7 @@ internal sealed partial class GameSession(ICharacterRepository repository, TownC
         CurrentDungeonSelection = null;
         SetState(SessionPhase.Unselected);
         TravelReason = reason;
+        // 名册已移除；记录故障仍须传播，但不能让旧角色停留在半失效状态。
+        notices.CommitDisconnect();
     }
 }

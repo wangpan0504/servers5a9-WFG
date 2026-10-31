@@ -174,7 +174,6 @@ internal static class SelfTestRunner
         AuctionReplyTests.Run();
         DungeonRequestTests.Run();
         DungeonEntryCostTests.RunCore();
-        BeastDungeonEntryTests.RunCore();
         AssaultModePacketTests.Run();
         RiftDailyPacketTests.Run();
         ParticularHellPartyTests.Run();
@@ -407,9 +406,7 @@ internal static class SelfTestRunner
 
     public static async Task RunAsync(TownCatalog towns, PvfArchive pvf, CharacterCatalog characters, ItemResources itemResources)
     {
-        BeastDungeonEntryTests.RunMaps(pvf);
         BattlePassCatalogTests.Run(pvf);
-        BeastDungeonEntryTests.RunAccessoryQuest(pvf, itemResources);
         MarriageResourceTests.Run(pvf);
         var marriageCatalog = DfoServer.GameWorld.Marriage.MarriageCatalog.Load(pvf);
         MarriageCoupleTests.Run(marriageCatalog, itemResources.Items);
@@ -527,7 +524,7 @@ internal static class SelfTestRunner
         DungeonMapPoolTests.Run(pvf);
         BossRushTests.Run(pvf);
         await DungeonEntryProbeTests.RunAsync(towns, pvf, characters, itemResources);
-        await BeastSixthDifficultyTests.RunAsync(towns, pvf, characters, itemResources);
+        await DungeonRetiredEntryTests.RunAsync(towns, pvf, characters, itemResources);
         await DungeonSelectionReturnTests.RunAsync(towns, characters, itemResources);
         QuestCatalogTests.Run(pvf);
         PvpArcadeCatalogTests.RunResources(pvf);

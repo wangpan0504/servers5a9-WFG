@@ -21,7 +21,7 @@ internal static class BoosterCreatureTests
         foreach (string bad in new[] { "", "0 400990271 1 1", "1 400990271 -1 1", "1 400990271 1 0", "1 400990271 1", "1 0 1 1" })
             That(!Parse(bad).Available, "宠物随机池拒绝空、负权重、无效数量及残缺行");
         That(!BoosterCatalog.Parse("[stackable type]\n`[booster]` 0\n[booster info]\n[avatar]\n1 400990271 1 1\n[/avatar]\n[/booster info]").Available,
-            "宠物池兼容不放开其他未实现奖励族");
+            "缺少装扮尾列的畸形奖池行保持拒绝，不把宠物三元行宽套用于装扮");
     }
 
     public static void RunResources(TownCatalog towns, ItemResources resources)

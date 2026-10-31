@@ -109,6 +109,11 @@ internal sealed class LukeRaidClocks(TimeProvider clock, ILukeRaidLifecycleStore
                 {
                     var beforeReward = Battle.View;
                     try { await settle(Battle); }
+                    catch (LukeRewardPublicationException error)
+                    {
+                        // 已提交资产与阶段推进不因展示失败倒退；仍发布下方最终战况。
+                        Report("luke-auto-reward-publish", error);
+                    }
                     catch (Exception error)
                     { failures = Math.Min(failures + 1, 30); Report("luke-auto-reward", error); return; }
                     if (!ReferenceEquals(beforeReward, Battle.View)) Battle.Publish(Battle.View, error => Report("recipient", error));

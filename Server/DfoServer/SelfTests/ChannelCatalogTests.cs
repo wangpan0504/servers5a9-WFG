@@ -14,6 +14,11 @@ internal static class ChannelCatalogTests
         int before = Count;
         const string row = "10 `<chn_channel_info_028>` 1 `[granfloris]` 5 0 0 0 0 0 0 0 0 0 0 ``";
         string source = "[server]\n2\n" + row + "\n[/server]\n";
+        foreach (string retiredRow in new[] { row.Replace(" 1 `[granfloris]`", " 40 `[granfloris]`"),
+            row.Replace("`[granfloris]`", "`[beast]`"),
+            row.Replace("`[granfloris]`", "`[BEAST]`"), row.Replace("`[granfloris]`", "`[BeAsT]`") })
+            Reject<InvalidDataException>(() => ChannelCatalog.Parse("[server]\n2\n" + retiredRow + "\n[/server]\n"),
+                "旧外置频道type40或专属分组明确拒绝，不能重新发布退役入口");
         string root = Path.Combine(Path.GetTempPath(), "S5A9-channel-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         try
@@ -79,12 +84,8 @@ internal static class ChannelCatalogTests
             That(embedded.Channels.Single(row => row.Number == 48) == new ChannelDefinition(48, "<chn_channel_info_049>", 39, "[tag_tournament]") &&
                 ChannelPackets.LoginChannelType(embedded.Entry(48)) == 39 && !ChannelAreaLanding.SameSnapshotPredicates(22, 39),
                 "帝国竞技场追加type39并隔离换频道快照，避让PK频道47");
-            That(embedded.Channels.Single(row => row.Number == 49) ==
-                new ChannelDefinition(49, "<chn_channel_info_beast>", 40, "[beast]"),
-                "魔兽追加49/type40及独立名称键，避开PK已登记47与竞技场48，不改原入口顺序");
-            That(ChannelPackets.LoginChannelType(embedded.Entry(49)) == 40 &&
-                ChannelPackets.Endpoint("127.0.0.1",10011,7,ChannelPackets.LoginChannelType(embedded.Entry(49)))[3] == 40,
-                "魔兽LOGIN保留type40，客户端实际模式及5927名册资格检查不能因0失效");
+            That(embedded.Channels.All(row => row.Number != 49 && row.Type != 40),
+                "内置目录不发布退役49/type40频道");
             That(embedded.Channels.Single(row => row.Number == 24).Type == 11 && embedded.Channels.Single(row => row.Number == 24).Group == "[ancient]",
                 "频道24仍是远古分组，类型11才会出现在远古地下城卡片");
             That(embedded.Channels.Single(row => row.Number == 35).Type == 11 && embedded.Channels.Single(row => row.Number == 35).Group == "[crack]",
@@ -114,9 +115,6 @@ internal static class ChannelCatalogTests
                 "type11各分组进出均重新入房，同类型也不能继承另一特殊地区快照");
         That(!ChannelAreaLanding.ClientKeepsTownSnapshot(null, new(new(2, 24), 11, "[ancient]"), new(38, 0, 622, 196)),
             "无频道历史时type11仍不恢复普通城镇快照");
-        That(ChannelAreaLanding.SameSnapshotPredicates(40, 40) && !ChannelAreaLanding.SameSnapshotPredicates(22, 40) &&
-            !ChannelAreaLanding.SameSnapshotPredicates(40, 22) && !ChannelAreaLanding.SameSnapshotPredicates(40, 53) &&
-            !ChannelAreaLanding.SameSnapshotPredicates(40, 32), "魔兽vt+30独立参与换频道快照，仅同类型保留，不能沿用普通、再战或团队城镇");
         That(ChannelAreaLanding.ClientKeepsTownSnapshot(null, new(new(2, 46), 53, "[evildom_gathering]"), new(62, 0, 543, 255)) &&
             !ChannelAreaLanding.ClientKeepsTownSnapshot(null, new(new(2, 46), 53, "[evildom_gathering]"), new(38, 0, 543, 255)),
             "没有进程内频道历史时Stadium存档仍有53候选，不把普通城镇当53快照");

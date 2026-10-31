@@ -105,6 +105,7 @@ internal static partial class FiendwarRaidTcpTests
                 That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 11, Body: [1, ..] }), "被踢者可重新申请，团长接受后恢复真实名册");
                 foreach (var peer in peers.Skip(1)) Drain(peer);
             }
+            CompletePriorCommands();
             leader.Send(666);
             That(Drain(leader).Any(row => row is { Kind: 1, Opcode: 666, Body: [1] }), "多人不预设路线分队也能开团");
             foreach (var peer in peers.Skip(1))
@@ -259,6 +260,63 @@ internal static partial class FiendwarRaidTcpTests
                 "重返及重复请求不重扣门票、不新建入场或重抽奖励");
             foreach (var peer in peers.Where(peer => peer != fresh)) Drain(peer);
             return fresh;
+        }
+
+        void CompletePriorCommands()
+        {
+            var wait = Stopwatch.StartNew();
+            foreach (var peer in peers)
+            {
+                // 先固定当前连接/代际/选角epoch，不能借旧连接或旧1278日志满足本次屏障。
+                System.Text.Json.JsonElement previous = default;
+                while (wait.Elapsed < TimeSpan.FromSeconds(10))
+                {
+                    var events = fixture.Events();
+                    var selected = events.LastOrDefault(row => row.GetProperty("Kind").GetString() == "selected" &&
+                        row.GetProperty("Detail").GetProperty("Character").GetUInt16() == peer.Id);
+                    if (selected.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                    {
+                        int currentConnection = selected.GetProperty("Detail").GetProperty("Connection").GetInt32();
+                        previous = events.LastOrDefault(row => row.GetProperty("Kind").GetString() == "command_completed" &&
+                            row.GetProperty("Detail").GetProperty("Connection").GetInt32() == currentConnection &&
+                            row.GetProperty("Detail").GetProperty("Character").ValueKind == System.Text.Json.JsonValueKind.Number &&
+                            row.GetProperty("Detail").GetProperty("Character").GetUInt16() == peer.Id);
+                    }
+                    if (previous.ValueKind != System.Text.Json.JsonValueKind.Undefined) break;
+                    Task.Delay(10).GetAwaiter().GetResult();
+                }
+                That(previous.ValueKind != System.Text.Json.JsonValueKind.Undefined,
+                    $"开战前取得成员{peer.Id}本连接完成身份，不能只凭ACK");
+                var before = previous.GetProperty("Detail");
+                int connection = before.GetProperty("Connection").GetInt32();
+                long generation = before.GetProperty("Generation").GetInt64();
+                long epoch = before.GetProperty("SelectionEpoch").GetInt64();
+                ulong serial = before.GetProperty("RequestSerial").GetUInt64();
+                ushort sequence = peer.NextClientSequence;
+                int eventBoundary = fixture.Events().Length;
+                That(wait.Elapsed < TimeSpan.FromSeconds(10), "发送1278前仍在10秒轮询/阶段边界预算内");
+                Drain(peer); // 原1278 ACK[1]与所有既有Observe包断言仍逐包执行；单次读沿原socket超时。
+                That(wait.Elapsed < TimeSpan.FromSeconds(10), "1278读取后核10秒阶段边界，不声称中断socket读取");
+                bool completed = false;
+                while (wait.Elapsed < TimeSpan.FromSeconds(10))
+                {
+                    completed = fixture.Events().Skip(eventBoundary).Any(row =>
+                    {
+                        if (row.GetProperty("Kind").GetString() != "command_completed") return false;
+                        var detail = row.GetProperty("Detail");
+                        return detail.GetProperty("Connection").GetInt32() == connection &&
+                            detail.GetProperty("Generation").GetInt64() == generation &&
+                            detail.GetProperty("SelectionEpoch").GetInt64() == epoch &&
+                            detail.GetProperty("Character").GetUInt16() == peer.Id &&
+                            detail.GetProperty("Opcode").GetUInt16() == 1278 &&
+                            detail.GetProperty("Sequence").GetUInt16() == sequence &&
+                            detail.GetProperty("RequestSerial").GetUInt64() > serial;
+                    });
+                    if (completed) break;
+                    Task.Delay(10).GetAwaiter().GetResult();
+                }
+                That(completed, $"成员{peer.Id}连接{connection}/代际{generation}/epoch{epoch}/1278序号{sequence}完成全部请求刷新，10秒轮询/阶段边界预算内不重发开战");
+            }
         }
 
         List<WirePacket> Drain(TcpPeer peer)

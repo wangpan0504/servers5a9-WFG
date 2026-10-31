@@ -160,15 +160,6 @@ internal interface ICharacterRepository
         System.Collections.Immutable.ImmutableArray<AccountIncountCharge> account = default, bool increment = true, bool check = true) =>
         throw new NotSupportedException("仓库不支持副本进入次数");
     int LoadAccountDungeonIncount(AccountOwners.Lease owner, int dungeon, int period) => throw new NotSupportedException("仓库不支持账号副本进入次数");
-    Character[] CommitBeastDungeonLoading(IReadOnlyList<BeastDungeonLoadingReservation> reservations) =>
-        throw new NotSupportedException("当前仓储不支持魔兽首房入场提交");
-    void CancelBeastDungeonReservation(string account, ushort characterId, Guid? instance) { }
-    int LoadBeastDungeonUsed(AccountOwners.Lease owner, ushort characterId, int day, int dungeonId) =>
-        throw new NotSupportedException("仓库不支持魔兽每日次数");
-    int CommitBeastDungeonEntry(AccountOwners.Lease owner, ushort characterId, int day, int dungeonId) =>
-        throw new NotSupportedException("仓库不支持魔兽每日次数");
-    int ResetBeastDungeonDay(AccountOwners.Lease owner, ushort characterId, int day) =>
-        throw new NotSupportedException("仓库不支持魔兽每日次数");
     DfoServer.Game.Dungeons.CrackDailyState LoadCrackDaily(DfoServer.Game.Accounts.AccountOwners.Lease owner, ushort characterId, int day);
     DfoServer.Game.Dungeons.CrackDailyCommit CommitCrackClear(DfoServer.Game.Accounts.AccountOwners.Lease owner, Character expected, int day, DfoServer.Game.Dungeons.CrackDailyState state, DfoServer.Game.Inventory.Models.InventoryPlan? reward);
 }

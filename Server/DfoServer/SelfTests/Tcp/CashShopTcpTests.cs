@@ -5,6 +5,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.GameWorld.Items;
 using DfoServer.Persistence;
+using DfoServer.Infrastructure;
 using DfoServer.Network.Management;
 using static DfoServer.Testing.TcpPeer;
 using static DfoServer.Testing.TestCheck;
@@ -37,10 +38,19 @@ internal static partial class CashShopTcpTests
             row.CeraPrice > 0 && row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
             resources.ItemResources.Items.Get(row.ItemId).Kind is not DfoServer.GameWorld.Items.ItemKind.Equipment &&
             resources.ItemResources.Items.Get(row.ItemId).Expiration.Resolve(now) is var expiry && (expiry == 0 || expiry > now.ToUnixTimeSeconds()));
-        var expired = ordinaryProducts.First(row => row.CeraPrice > 0 && row.CeraPrice < 100_000 &&
-            row.Section is not ("visual" or "selectable character premium" or "charac premium package") &&
-            resources.ItemResources.Items.Get(row.ItemId).Kind == ItemKind.Consumable &&
-            resources.ItemResources.Items.Get(row.ItemId).Expiration is { Days: 0, AbsoluteTime: > 0 } expiration && expiration.AbsoluteTime <= now.ToUnixTimeSeconds());
+        // 固定真实历史促销主货；资源变化须明确失败，不能悄然选中另一种购买发布链。
+        var expired = ordinaryProducts.Single(row => row.CommodityId == 105681);
+        var expiredTemplate = resources.ItemResources.Items.Get(expired.ItemId);
+        That(expired is { ItemId: 490705385, Count: 1, CeraPrice: > 0 and < 100_000, Section: "package" } &&
+            expiredTemplate.Kind == ItemKind.Consumable &&
+            expiredTemplate.Expiration is { Days: 0, AbsoluteTime: > 0 } expiration && expiration.AbsoluteTime <= now.ToUnixTimeSeconds(),
+            "历史期限夹具明确使用过期的105681促销主货");
+        var promotionConfig = JsonSerializer.Deserialize<PromotionConfiguration[]>(ServerRuntime.ReadShippedPromotionConfig())!;
+        That(promotionConfig.Single(row => row.Rules.Products.Any(item => item.CommodityId == expired.CommodityId)) is
+            { Enabled: true, Rules: var promotionRules } &&
+            promotionRules.Scope == new PromotionScope("spring-2020", "replica-1", "v1", "default", "package") &&
+            promotionRules.Products.Contains(new PromotionProduct(105681, 490705385, 1)),
+            "历史期限夹具绑定真实启用的原促销规则期和单套映射");
         await using var fixture = new TcpTestFixture(source, Path.Combine(root, "cash-shop"), gm: true, resources: resources);
         var towns = resources.Towns;
         var characters = resources.Characters;
@@ -124,9 +134,17 @@ internal static partial class CashShopTcpTests
                 "历史商品NOTI14中对应物品条目的期限下发2037安全上限");
             That(U32(peer.Expect(0,53).Body,1) == 0 && fixture.Query("SELECT COALESCE((SELECT balance FROM account_currency_balances WHERE currency_kind=15),0)") is [[long paid]] && paid == 0,
                 "调试购买仍原子扣款并投影真实余额");
+            AssertPromotionNativeRefresh(peer.Expect(0, 108), 1, false, peer.ExpectedOpenEvents);
+            peer.Barrier();
+            That(fixture.Query("SELECT count,revision FROM cash_shop_promotion_progress") is [[1L, 1L]] &&
+                fixture.Query("SELECT count(*) FROM cash_shop_promotion_orders") is [[1L]] &&
+                fixture.Query("SELECT count(*) FROM cash_shop_promotion_awards") is [[0L]],
+                "历史促销购买只提交一套累计和一张订单，首套没有跨档赠礼");
+            string beforeInsufficientFunds = Snapshot();
             peer.Send(64, body);
             Bytes(peer.Expect(1,64).Body, [0,0,0], "开启期限调试仍拒绝点券不足");
             peer.Barrier();
+            That(Snapshot() == beforeInsufficientFunds, "点券不足不改变库存、邮件、钱包、审计或促销累计订单和赠礼账本");
             That(Command("cash-shop-expiration off") == "OK {\"ignoreAbsoluteExpiration\":false}", "GM关闭后回读实际状态");
         }
         await fixture.StopAsync();
@@ -150,7 +168,10 @@ internal static partial class CashShopTcpTests
         await HongbaoAsync(source, root, resources);
         await LimitCubeTcpTests.RunPurchasedTicketsAsync(source, root, resources);
 
-        string Snapshot() => PurchaseSnapshot(fixture);
+        string Snapshot() => PurchaseSnapshot(fixture) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM cash_shop_promotion_orders ORDER BY rowid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM cash_shop_promotion_progress ORDER BY rowid")) +
+            JsonSerializer.Serialize(fixture.Query("SELECT * FROM cash_shop_promotion_awards ORDER BY rowid"));
     }
 
     static string PurchaseSnapshot(TcpTestFixture fixture) => JsonSerializer.Serialize(fixture.Query("SELECT id,revision,gold,revive_coins,win_points FROM characters ORDER BY id")) +

@@ -423,7 +423,7 @@ internal sealed class DungeonSettlementHandler(ServerLog log, DungeonCatalog dun
         }
         bool ordinaryRetry = current.Entry.IsOrdinary && !current.Entry.IsPractice && !current.Entry.IsTrainingRoom &&
             !current.Entry.IsClassExperience && !current.Entry.IsAltar && !current.Entry.IsDespair &&
-            !current.Entry.IsCosmo && !current.Entry.IsInfernoParty && !current.Entry.BeastMode && !current.Entry.IsBossRush &&
+            !current.Entry.IsCosmo && !current.Entry.IsInfernoParty && !current.Entry.IsBossRush &&
             current.Entry.HellParty is null && current.Entry.RaidEntry is null && current.Entry.Hope is null;
         // 普通普雷终末没有后继选图；沿既有单人/组队回城提交释放实例与结算占用。
         if (option == 1 && current.Entry.IsOrdinaryPrey && current.Entry.DungeonId == 400000046)

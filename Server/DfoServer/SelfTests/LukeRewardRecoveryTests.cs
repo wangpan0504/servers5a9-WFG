@@ -19,6 +19,7 @@ internal static class LukeRewardRecoveryTests
     public static void RunCore()
     {
         LukeRewardDiscoveryTests.RunCore();
+        LukeAutomaticRewardTests.RunCore();
         int before=Count;
         string id=Guid.NewGuid().ToString("N");
         That(DevelopmentRequest.Parse($"luke-reward-inspect Hero 1 {id} 0 0 0","account") is {Writes:false,Action:DevelopmentAction.LukeRewardInspect},"检查历史资格是只读命令");

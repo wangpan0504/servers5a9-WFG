@@ -37,6 +37,7 @@ internal sealed partial class TcpPeer : IDisposable
     readonly TcpTestFixture? fixture;
     ushort sequence;
     ushort clientSequence;
+    internal ushort NextClientSequence => clientSequence;
     bool requestedRoster;
     readonly byte channelNumber;
     byte? staminaPercent;
@@ -66,20 +67,16 @@ internal sealed partial class TcpPeer : IDisposable
 
     // 预期来自夹具的原持久位置、完成位与只读资源；不调用生产Session或Builder，也不接受收到的包体自证。
     internal byte[] SelectionNoticeBody(ushort griefLayer = 0, ushort despairLayer = 0, int legendDungeon = 0,
-        bool? incompleteHellQuest = null, IReadOnlyList<int>? selectionCandidates = null)
+        bool? incompleteHellQuest = null)
     {
         bool missing = incompleteHellQuest ?? (fixture ?? throw new InvalidOperationException("选图预期缺少夹具")).HasIncompleteHellQuest(Id);
         int shift = missing ? 2 : 0;
-        int candidates = selectionCandidates?.Count ?? 0;
-        byte[] expected = new byte[42 + shift + candidates * 4];
+        byte[] expected = new byte[42 + shift];
         expected[8] = missing ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(9 + shift), legendDungeon);
         BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(20 + shift), despairLayer);
         BinaryPrimitives.WriteUInt16LittleEndian(expected.AsSpan(39 + shift), griefLayer);
-        // 末字节是魔兽选图候选计数，每项 int32 跟着往后排；空列表保持原 42 字节。
-        expected[41 + shift] = (byte)candidates;
-        for (int i = 0; i < candidates; i++)
-            BinaryPrimitives.WriteInt32LittleEndian(expected.AsSpan(42 + shift + i * 4), selectionCandidates![i]);
+        // 退役候选计数保留为零，不改变现有字段偏移。
         return expected;
     }
     public WirePacket[] SpecialContainers { get; private set; } = [];
@@ -285,7 +282,6 @@ internal sealed partial class TcpPeer : IDisposable
             packet = Read();
         }
         bool griefAnnounced = false;
-        WirePacket? beastDailyFirst = null;
         // 选图附带的状态通知逐项校验后记录，550须按两祭坛及悲叹当前楼层逐项匹配真实账本；保留原27及正文断言。
         while (kind == 0 && opcode == 27 && packet.Kind == 0 &&
                (packet.Opcode == 1536 && packet.Body.Length == 5 || packet.Opcode == 1303 && packet.Body.Length == 2 ||
@@ -300,7 +296,7 @@ internal sealed partial class TcpPeer : IDisposable
                 GriefTowerClearInfo = packet.Body;
                 griefAnnounced = true;
             }
-            else if (!ConsumeBeastDailyCount(packet, ref beastDailyFirst))
+            else
             {
                 TestCheck.That(griefAnnounced && ++countUpdates == 1,
                     "亡者峡谷状态之后只允许一组两祭坛与悲叹次数通知，不扩展普通选图包序");
@@ -308,7 +304,6 @@ internal sealed partial class TcpPeer : IDisposable
             }
             packet = Read();
         }
-        TestCheck.That(beastDailyFirst is null, "魔兽日次数通知必须成对，不能只发一张");
         TestCheck.That(packet.Kind == kind && packet.Opcode == opcode, $"packet order: expected ({kind},{opcode}), got ({packet.Kind},{packet.Opcode})");
         if (body is not null)
             TestCheck.Bytes(packet.Body, body, $"body ({kind},{opcode})");
@@ -357,38 +352,6 @@ internal sealed partial class TcpPeer : IDisposable
 
     // 已显式校验悲叹状态的选图用例使用同一真实账本断言，不交给27的兼容读取再次猜测前置包。
     public void ExpectAltarEnterCounts() => ReadDungeonEnterCounts(Read());
-
-    // 打开选图时服务端会在27之前补发当天两张魔兽图的剩余次数。只有副本编号、先后顺序和本人
-    // 魔兽账本全部对得上才消费这两条；其余550继续走原有祭坛守卫，不放宽通用包序。
-    bool ConsumeBeastDailyCount(WirePacket packet, ref WirePacket? first)
-    {
-        if (fixture is null || packet is not { Kind: 0, Opcode: 550, Body.Length: 6 }) return false;
-        int day = DfoServer.Game.Dungeons.BeastDungeonRotation.ServiceDay(fixture.UtcNow);
-        var pair = DfoServer.Game.Dungeons.BeastDungeonRotation.Pair(day);
-        uint target = U32(packet.Body, 0);
-        if (first is null)
-        {
-            if (target != (uint)pair.First) return false;
-            first = packet;
-            return true;
-        }
-        if (target != (uint)pair.Second) return false;
-        CheckBeastDailyCount(first, (uint)pair.First, day);
-        CheckBeastDailyCount(packet, target, day);
-        first = null;
-        return true;
-    }
-
-    void CheckBeastDailyCount(WirePacket packet, uint dungeon, int day)
-    {
-        long used = Convert.ToInt64(fixture!.Query("""
-            SELECT COALESCE((SELECT used FROM character_beast_dungeon_entries
-                WHERE character_id=$p0 AND account=$p1 AND day=$p2 AND dungeon_id=$p3),0);
-            """, Id, fixture.Options.DevelopmentAccount, day, (int)dungeon)[0][0]);
-        byte remaining = (byte)Math.Max(0, DfoServer.Game.Dungeons.BeastDungeonRotation.DailyLimit - used);
-        TestCheck.That(packet.Body[4] == remaining && packet.Body[5] == remaining,
-            "魔兽" + dungeon + "日次数等于本人魔兽账本剩余，日周同值");
-    }
 
     void ReadDungeonEnterCounts(WirePacket first)
     {
@@ -1322,14 +1285,14 @@ internal sealed partial class TcpPeer : IDisposable
                 EventInfoPayload = bounded[..length];
                 if (ValidateNativePromotionEvents is { } validate)
                     validate(EventInfoPayload);
-                else if (length != 163 + 15 * ExpectedOpenEvents.Length)
+                else if (length != 148 + 15 * ExpectedOpenEvents.Length)
                     CashShopTcpTests.AssertPromotionNativeEvents(EventInfoPayload, null, null, ExpectedOpenEvents);
                 else
                 {
                     TestCheck.Bytes(EventInfoPayload, Build(writer =>
                     {
-                        writer.Write((ushort)(4 + ExpectedOpenEvents.Length));
-                        foreach (ushort id in (ushort[])[2037, 2378, 2395, 333, .. ExpectedOpenEvents])
+                        writer.Write((ushort)(3 + ExpectedOpenEvents.Length));
+                        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. ExpectedOpenEvents])
                         {
                             writer.Write(id);
                             writer.Write(1u);
@@ -1343,7 +1306,7 @@ internal sealed partial class TcpPeer : IDisposable
                         for (int index = 1; index < 12; index++) writer.Write(0u);
                         writer.Write((ushort)2395);
                         for (int index = 0; index < 12; index++) writer.Write(0u);
-                    }), "独立核对赛丽亚2037、红包2378、乔纳森2395、魔兽333、开放团本及完整尾部，不能跳过门禁或覆盖原事件");
+                    }), "独立核对赛丽亚2037、红包2378、乔纳森2395、开放团本及完整尾部，不能跳过门禁或覆盖原事件");
                 }
             }
             var gauge = Expect(0, 412);

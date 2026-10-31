@@ -79,9 +79,8 @@ internal static partial class CashShopTcpTests
                 "ACK260之前第二方案与真实技能镜像已提交");
             string primaryCommands = JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_skill_commands WHERE character_id=$p0 AND context=0 ORDER BY skill_id", peer.Id));
             peer.Send(331, [1, 5, 0, 3, 2, 128, 4]); peer.Expect(1, 331, [1]);
-            var customized = SkillPacketsTests.DecodeInitialized(peer.Expect(0, 19).Body);
             peer.Barrier();
-            That(customized[1].Skills.Single(skill => skill.Id == 5).Command == "028004" &&
+            That(fixture.Query("SELECT hex(keys) FROM character_skill_commands WHERE character_id=$p0 AND context=1 AND skill_id=5", peer.Id) is [["028004"]] &&
                 JsonSerializer.Serialize(fixture.Query("SELECT * FROM character_skill_commands WHERE character_id=$p0 AND context=0 ORDER BY skill_id", peer.Id)) == primaryCommands,
                 "无context指令请求编辑当前第二树，第一树全部指令保持");
             before = Snapshot();

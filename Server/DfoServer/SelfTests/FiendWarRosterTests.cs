@@ -1,4 +1,4 @@
-﻿using DfoServer.Game.Accounts;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.GameWorld.Towns;
 using DfoServer.Network.Builders;
@@ -72,7 +72,7 @@ internal static class FiendWarRosterTests
             var both = repository.Create(owner, Role("FwBoth", [8672]));
             var questOnly = repository.Create(owner, Role("FwQuest", [8672]));
             var guildOnly = repository.Create(owner, Role("FwGuild", [10]));
-            // 魔兽频道（type 0x28）走同一条投影：完成 5927 才置 tail[39]，缺任务必须为 0。
+            // 旧资格历史仍可读取，但不再开启专用名册标志。
             var beastDone = repository.Create(owner, Role("FwBeast", [5927]));
             var beastMiss = repository.Create(owner, Role("FwPlain", [10]));
             using (var db = new SqliteConnection("Data Source=" + path + ";Pooling=False"))
@@ -90,11 +90,8 @@ internal static class FiendWarRosterTests
             var roster = repository.ListRoster(owner);
             bool Flag(ushort id) => roster.Single(row => row.Id == id).FiendWarEligible;
             TestCheck.That(Flag(both.Id) && Flag(questOnly.Id) && !Flag(guildOnly.Id), "名册查询要求任务完成，无公会也可获得资格");
-            bool BeastFlag(ushort id) => roster.Single(row => row.Id == id).BeastEligible;
-            TestCheck.That(BeastFlag(beastDone.Id) && !BeastFlag(beastMiss.Id),
-                "名册查询按 character_completed_quests 打开魔兽资格（tail[39]）");
-            TestCheck.That(TailOf(roster.Single(row => row.Id == beastDone.Id))[39] == 1 &&
-                TailOf(roster.Single(row => row.Id == beastMiss.Id))[39] == 0, "完成 5927 的角色名册尾部 tail[39]=1");
+            TestCheck.That(TailOf(roster.Single(row => row.Id == beastDone.Id))[39] == 0 &&
+                TailOf(roster.Single(row => row.Id == beastMiss.Id))[39] == 0, "旧5927历史可读但名册保留字节始终为零");
             var full = repository.List(owner);
             TestCheck.That(CharacterPackets.Roster(roster).SequenceEqual(CharacterPackets.Roster(full.Select(CharacterRosterEntry.FromCharacter).ToArray())),
                 "轻量名册与完整角色的资格字节一致");

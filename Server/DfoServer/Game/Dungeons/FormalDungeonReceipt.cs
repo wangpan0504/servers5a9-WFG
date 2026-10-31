@@ -61,8 +61,6 @@ internal sealed record FormalDungeonDeathResult(DungeonRunOutcome Outcome, Forma
     public IReadOnlyList<InventorySlot> QuestDropSlots { get; init; } = [];
     public IReadOnlyList<ushort> CulledMonsterKeys { get; init; } = [];
     public DungeonRoomClearFact? RoomClearFact { get; init; }
-    public ImmutableArray<InventorySlot> BeastRewardSlots { get; init; } = [];
-    public BeastStageScore? BeastStageScore { get; init; }
     public DfoServer.GameWorld.Dungeons.DungeonPoint? BossPositionUpdate { get; init; }
     public BossRushHud? BossRushHud { get; init; }
 }

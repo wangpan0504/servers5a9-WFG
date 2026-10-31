@@ -25,16 +25,6 @@ internal sealed partial class GameSession
     {
         public uint NextObjectKey { get; set; }
         public GuildTrainingSnapshot? GuildTraining { get; init; }
-        public Dictionary<DungeonPoint, int> BeastStages { get; } = [];
-        public DungeonSelectionContext? BeastSelection { get; init; }
-        public BeastDungeonAdmission? BeastReservation { get; set; }
-        public InventoryPlan? BeastLoadingPayment { get; set; }
-        public HashSet<int> BeastRewardedStages { get; } = [];
-        public double BeastHpScale { get; init; } = BeastDungeonRotation.NormalHpScale;
-        public double BeastAttackScale { get; init; } = BeastDungeonRotation.NormalAttackScale;
-        public long? BeastDeadline { get; set; }
-        public BeastRunProgress? BeastProgress { get; init; }
-        public Func<FormalDungeonDeathResult>? PendingBeastDeath { get; set; }
         public ImmutableArray<ushort> PartyActors { get; init; } = [];
         public ImmutableArray<DfoServer.Game.Guild.GuildDungeonMembership> GuildMemberships { get; init; } = [];
         public byte PartySlot { get; init; }
@@ -139,11 +129,11 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false,
         bool hellParty = false, bool hellLegend = false, bool sealDoor = false, bool practice = false,
-        CrackDimensionRewardServices? crackRewards = null, bool beastMode = false)
+        CrackDimensionRewardServices? crackRewards = null)
     {
         LastFormalDungeonRejection = null;
         var prepared = PrepareFormalDungeon(dungeonId,questId,difficulty,catalog,rooms,drops,items,draw,pieces,requiredCharacter,retry,
-            prepareDrops,tutorials,tutorialScenes,classExperience,hellParty,hellLegend,sealDoor,practice,crackRewards,beastMode: beastMode);
+            prepareDrops,tutorials,tutorialScenes,classExperience,hellParty,hellLegend,sealDoor,practice,crackRewards);
         if (prepared is null) { LastFormalDungeonRejection ??= "prepare-returned-null"; return null; }
         var installed = owner.Execute(() => CanEnterFormalDungeon(retry) ? InstallFormalDungeon(prepared) : null);
         if (installed is null) LastFormalDungeonRejection ??= "state-changed-before-install";
@@ -161,10 +151,9 @@ internal sealed partial class GameSession
         Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops = null,
         TutorialCatalog? tutorials = null, TutorialScenes? tutorialScenes = null, bool classExperience = false, bool hellParty = false,
         bool hellLegend = false, bool sealDoor = false, bool practice = false,
-        CrackDimensionRewardServices? crackRewards = null, bool beastMode = false, PartyDungeonPreparation? shared = null,
+        CrackDimensionRewardServices? crackRewards = null, PartyDungeonPreparation? shared = null,
         uint? partyFirstKey = null, Guid? partyInstance = null, bool partyAdmission = false, bool allowDimensionHidden = true)
     {
-        beastMode = retry?.Entry.BeastMode ?? beastMode;
         // 普通超时空之战与漩涡团队分别走普通入口和原Battle授权，不能从通用16请求串入。
         if (dungeonId == 400000016 && ChannelEntry?.Type is not (null or ChannelAreaLanding.OrdinaryType))
             return RejectFormal("normal-fiendwar-ordinary-channel-required");
@@ -183,16 +172,6 @@ internal sealed partial class GameSession
             catalog.DungeonPath((int)dungeonId)?.StartsWith("dungeon/fiendwar_kr/", StringComparison.Ordinal) == true &&
             catalog.Get((int)dungeonId).IsRaid)
             return RejectFormal("fiendwar-raid-admission-required");
-        // 难度不在这里卡：实机确认包带的是玩家在选图面板上选中的难度（样本为2），
-        // 兼容网关的布局固定取源副本的 BeastLayouts[0]，难度只影响客户端显示。
-        if (BeastDungeonRotation.IsGateway(dungeonId) && (!beastMode || ChannelEntry?.Type != ChannelAreaLanding.BeastType ||
-            expected.Position is not { Town: 51, Area: 2 } || questId != 0 ||
-            classExperience || hellParty || hellLegend || sealDoor || practice))
-            return RejectFormal("beast-gateway-channel-and-mode-required");
-        bool nativeBeast = beastMode && !BeastDungeonRotation.IsGateway(dungeonId);
-        if (nativeBeast && (questId != 0 || classExperience || hellParty || hellLegend || sealDoor || practice ||
-            !owner.Execute(() => retry is null ? CanSelectNativeBeast() : CanUseNativeBeastLocation())))
-            return RejectFormal("beast-native-selection-required");
         DazzlementTowerAdmission? dazzlement = null;
         if (dungeonId <= int.MaxValue && catalog.DungeonPath((int)dungeonId)?.StartsWith("dungeon/towers/towerofdazzlement", StringComparison.Ordinal) == true &&
             catalog.Get((int)dungeonId).IsDazzlementTower)
@@ -308,7 +287,7 @@ internal sealed partial class GameSession
         DimensionDungeonAdmission? dimension = null;
         if (!practice && dungeonId <= int.MaxValue && incounts?.Dimension is { } dimensionCatalog && dimensionCatalog.Contains((int)dungeonId))
         {
-            if (hellParty || classExperience || beastMode) return RejectFormal("dimension-mode-conflict");
+            if (hellParty || classExperience) return RejectFormal("dimension-mode-conflict");
             var period = IncountPeriod(dimensionCatalog.DailyRow.CountKey);
             var usage = repository.LoadDungeonIncount(owner, expected.Id, dimensionCatalog.DailyRow.CountKey, period);
             var hidden = repository.LoadDungeonIncount(owner, expected.Id, DimensionDungeonCatalog.Entrance, period);
@@ -402,19 +381,10 @@ internal sealed partial class GameSession
             hellParty: hellParty,hellLegend: hellLegend,practice: practice,
             // 频道专属城镇的选图副本（超时空之战 400000016 的 [boss map] 6 0 只写 `map`）按客户端规则把 Boss 坐标格当 Boss 图；其他副本不变。
             bossCellFromBossMap: channelTown && questId == 0 && !practice && !specialAdmission,grief:grief,hope:hope,partyRoute:approvedPartyRoute,tagEvildom:tagEntry?.Admission,tagMaze:tagEntry?.MazeOrdinal,
-            bossWeights: bossBuff?.Definition.Weights.ToDictionary(row => row.MapId, row => row.Weight), beastMode: beastMode, imperialArena: imperialEntry?.Admission, dimension: dimension))
+            bossWeights: bossBuff?.Definition.Weights.ToDictionary(row => row.MapId, row => row.Weight), imperialArena: imperialEntry?.Admission, dimension: dimension))
             return RejectFormal(hellParty ? "hell-party-entry-plan:" + entryReason : "entry-plan:" + entryReason);
         if (marriageAdmission is not null) entry = entry! with { Marriage = marriageAdmission };
         if (dimension is not null) entry = entry! with { Dimension = dimension, DimensionRewardProfession = (expected.Job, expected.GrowType) };
-        if (beastMode && entry is not { BeastMode: true }) return RejectFormal("beast-layout-missing");
-        if (entry is { BeastMode: true })
-        {
-            int? sharedDay = shared?.Session.PreparedParty(shared).Dungeon.Entry.BeastDay;
-            if (shared is not null && sharedDay is null) return RejectFormal("party-beast-day-missing");
-            entry = entry with { BeastDay = sharedDay ?? BeastDungeonRotation.ServiceDay((timeProvider ?? TimeProvider.System).GetUtcNow()) };
-        }
-        if (beastMode && entry is not null && catalog.Get(checked((int)dungeonId)).BeastLayouts.FirstOrDefault() is { NormalHpScale: > 0 } layout)
-            entry = entry with { BeastHpScale = layout.NormalHpScale, BeastAttackScale = layout.NormalAttackScale };
         // 普通卢克目前只证实单人Run额度；组队共享/个人语义未闭合，不把十二次解释成每人十二次。
         // 祭坛、绝望之塔等原有限额仍由EntryPlan设置，不受这项窄范围投影影响。
         if (!partyAdmission && entry!.IsOrdinary && catalog.Get(checked((int)dungeonId)) is { IsOrdinaryLuke:true } luke)
@@ -560,8 +530,7 @@ internal sealed partial class GameSession
             // 普通入场票已覆盖相同物品时，频道代价只保留次数；超星空通行证规划字段仍完整传入提交阶段。
             Dungeon = (assault is null ? prepared.Dungeon : prepared.Dungeon with { Assault = assault.Selection, AssaultRewards = assault.Rewards }) with { EvildomWarEntry = war, TagEvildomEntry = tagEntry, ImperialArenaEntry = imperialEntry, HellTicket = hellTicket, LegendTicket = legendTicket, HellPieces = pieces, CosmoPasses = cosmoPasses,
                 CosmoInvitationCount = cosmoDefinitionForCost?.CosmoInvitationCount ?? 0, CosmoStoneCount = cosmoDefinitionForCost?.CosmoStoneCount ?? 0, EntryPieces = pieces, SpecialEntry = specialEntry, Dazzlement = dazzlement,
-                ChannelCost = channelCost is { Consume: not null } && entry.EntryItem is not null ? channelCost with { Consume = null } : channelCost,
-                BeastSelection = nativeBeast && retry is null ? selection : null } };
+                ChannelCost = channelCost is { Consume: not null } && entry.EntryItem is not null ? channelCost with { Consume = null } : channelCost } };
 
         // 普通0只在选中显式末层目标后核对该原接取，不按请求0查库或给裸state0补资格。
         bool HasOriginalTerminalClear(ActiveMainQuest original) =>
@@ -656,8 +625,7 @@ internal sealed partial class GameSession
             var participantDungeon = new FormalDungeon(participant.Entry, source.Route, participant, participantAuthority, source.MapSeed,
                 participantGround, source.Pools, draw ?? RandomNumberGenerator.GetInt32, source.PrepareDrops, participantDropPlans)
                 { NextObjectKey = shared.Session.PreparedParty(shared).NextKey, QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, EntryPieces = pieces,
-                    HellRewardPlans = source.HellRewardPlans, CrackRewards = crackRewards ?? source.CrackRewards,
-                    BeastProgress = source.BeastProgress };
+                    HellRewardPlans = source.HellRewardPlans, CrackRewards = crackRewards ?? source.CrackRewards };
             return new(expected, epoch, participantDungeon, shared.Session.PreparedParty(shared).NextKey);
         }
         if (state.LastAttempt == long.MaxValue) return RejectFormal("attempt-overflow");
@@ -675,7 +643,6 @@ internal sealed partial class GameSession
             if (!companionRows.IsEmpty) entry = entry with { CompanionMapRows = companionRows };
         }
         var plans = new List<DungeonMonsterPlan>();
-        var beastEncounters = new List<BeastEncounterRoom>();
         int bossRushOffset = 0;
         uint next = firstObjectKey;
         uint mapSeed = checked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue));
@@ -719,22 +686,6 @@ internal sealed partial class GameSession
             }
             if (entry.IsBossRush && bossRushOffset != bossRush!.Bosses.Length)
                 return RejectFormal("boss-rush-monster-count-mismatch");
-            if (BeastEncounterPlan.IsNative(entry))
-            {
-                foreach (var sentinel in entry.Maze.MapSpecification!.Where(map => map.Kind == "Beast"))
-                for (int stage = 0; stage < 6; stage++)
-                {
-                    var definition = BeastEncounterPlan.Stage(entry, stage);
-                    var room = rooms.TryBeastMap(definition.Map, sentinel.Position.X, sentinel.Position.Y, checked((int)entry.DungeonId))
-                        ?? throw new InvalidDataException("魔兽阶段MAP未登记");
-                    room = room with { Map = room.Map with { Kind = "Beast" } };
-                    if (next > ushort.MaxValue) throw new DungeonObjectKeyOverflowException("魔兽阶段对象key超界");
-                    var plan = DungeonMonsterPlan.FromRoom(room, expected.Id, checked((ushort)next), entry.MonsterBasisLevel,
-                        playerTeam: entry.PlayerTeam);
-                    beastEncounters.Add(new(stage, sentinel.Position, definition.Boss, plan));
-                    if (plan.Monsters.Count > 0 || plan.SpecialObjects.Count > 0 || plan.HellWaves.Count > 0) next = plan.NextObjectKey;
-                }
-            }
             if (entry.IsAltar && (plans.Any(plan => plan.Altar is null || plan.Altar.Definition.Ultimate != (entry.DungeonId == 11007)) ||
                 plans.Sum(plan => plan.Altar!.Rounds.Select(row => row.Round).Distinct().Count()) != (entry.DungeonId == 11006 ? 15 : 7)))
                 return RejectFormal("altar-room-round-contract-mismatch");
@@ -752,7 +703,7 @@ internal sealed partial class GameSession
             Func<DungeonPlannedMonster, DungeonDropGenerationPlan>? prepareMonsterDrops;
             try { prepareMonsterDrops = prepareDrops?.Invoke(entry); }
             catch (Exception error) when (error is NotSupportedException or FileNotFoundException) { return RejectFormal("drop-plan-unsupported"); }
-            foreach (var plan in plans.Concat(beastEncounters.Select(row => row.Plan)))
+            foreach (var plan in plans)
             foreach (var monster in plan.Monsters.Where(monster =>
                 monster.HellWave is not null && monster.HellRewardRolls > 0 && monster.Source is null ||
                 monster.IsBlocking && monster.Source is not null &&
@@ -799,8 +750,7 @@ internal sealed partial class GameSession
         else if (prepareDrops is not null && !entry.IsTagSystem && !entry.IsClassExperience && !entry.IsTournament && !entry.IsPractice && !entry.IsAltar)
             throw new InvalidDataException("集合掉落生成计划必须同时装配实际物品依赖");
         var route = new DungeonFixedRoute(Array.AsReadOnly(plans.ToArray()),
-            Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()))
-            { BeastEncounters = beastEncounters.AsReadOnly() };
+            Array.AsReadOnly(topology.Links!.Select(link => new DungeonRouteConnection(link.First, link.Second)).ToArray()));
         // 原生clear condition/destroy object独立发送39，不要求OBJ另声明quest type。
         if (entry.Maze.ClearConditions is [{ Type: "destroy object", Count: 1 } condition] && questCatalog is not null &&
             (entry.IsEvildomWarHidden || entry.RaidEntry is { Kind: DfoServer.Game.Raids.RaidKind.Luke, Phase: 1 } &&
@@ -859,9 +809,7 @@ internal sealed partial class GameSession
         var dungeon = new FormalDungeon(run!.Entry, route, run, authority, mapSeed,
             ground, pools, draw ?? RandomNumberGenerator.GetInt32, prepareDrops, dropPlans.ToImmutable())
             { NextObjectKey = next, QuestDrops = questDrops, OrdinaryReturnPosition = ordinaryReturn, HellRewardPlans = hellRewardPlans.ToImmutable(),
-                CrackRewards = crackRewards, AltarStartedTimestamp = (timeProvider ?? TimeProvider.System).GetTimestamp(),
-                BeastHpScale = entry.BeastHpScale, BeastAttackScale = entry.BeastAttackScale,
-                BeastProgress = BeastEncounterPlan.IsNative(entry) ? new(run.Snapshot.Identity.InstanceId, BeastClock) : null };
+                CrackRewards = crackRewards, AltarStartedTimestamp = (timeProvider ?? TimeProvider.System).GetTimestamp() };
         return new(expected,epoch,dungeon,next);
     }
 
@@ -901,10 +849,6 @@ internal sealed partial class GameSession
         // 先持久预留本实例key/attempt；通知失败不重新安装或复用原实例身份。
         var character = prepared.Character;
         var installing = prepared.Dungeon;
-        if (installing.Entry.BeastMode && !BeastDungeonRotation.IsGateway(installing.Entry.DungeonId) && !CanUseNativeBeastLocation()) return null;
-        if (installing.BeastSelection is { } beastSelection &&
-            (!CanSelectNativeBeast() || !ReferenceEquals(CurrentDungeonSelection, beastSelection)))
-            return null;
         if (installing.TagEvildomEntry is { } tagEntry &&
             !ReferenceEquals(CurrentTagEvildomSelection(character, prepared.SelectionEpoch, installing.Entry.DungeonId), tagEntry)) return null;
         if (installing.ImperialArenaEntry is { } imperialEntry &&
@@ -1049,25 +993,6 @@ internal sealed partial class GameSession
         if (installing.Dazzlement is { } dazzlement &&
             (dazzlement != DazzlementTowerAdmission.At(IncountNow()) || repository.LoadDazzlementTower(owner).Rejection(character.Id, dazzlement) is not null))
             return null;
-        bool beastEntry = installing.Entry.BeastMode;
-        int beastDay = installing.Entry.BeastDay ?? 0;
-        if (beastEntry && (installing.Entry.BeastDay is null || beastDay != BeastDungeonRotation.ServiceDay((timeProvider ?? TimeProvider.System).GetUtcNow())))
-            { LastFormalDungeonRejection = "beast-service-day-changed"; return null; }
-        int beastUsed = beastEntry ? repository.LoadBeastDungeonUsed(owner, character.Id, beastDay, checked((int)installing.Entry.DungeonId)) : 0;
-        if (beastEntry && !character.CompletedQuests.Contains(5927))
-            { LastFormalDungeonRejection = "beast-qualification-required"; return null; }
-        if (beastEntry && !BeastDungeonRotation.CanEnter(beastDay, checked((int)installing.Entry.DungeonId),
-            beastUsed))
-            { LastFormalDungeonRejection = "beast-entry-unavailable"; return null; }
-        BeastDungeonAdmission? beastAdmission = beastEntry ? new(beastDay, beastUsed) : null;
-        if (beastEntry && !BeastDungeonRotation.IsGateway(installing.Entry.DungeonId))
-        {
-            var ticket = installing.EntryPieces is { } ticketPieces
-                ? BeastDungeonTicket.Plan(character.Inventory, ticketPieces, IncountNow()) : null;
-            if (ticket is null) { LastFormalDungeonRejection = "beast-ticket-required"; return null; }
-            beastAdmission = beastAdmission! with { Ticket = ticket };
-            installing.BeastReservation = beastAdmission;
-        }
         DfoServer.Game.Guild.GuildDungeonAdmission? guildAdmission = null;
         if (guildDungeons?.Find(installing.Entry.DungeonId) is not null)
         {
@@ -1081,7 +1006,7 @@ internal sealed partial class GameSession
             installing = installing with { GuildTraining = training.Snapshot };
         }
         Character committed;
-        if (beastEntry || training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
+        if (training is not null || entryItems is not null || entryIncount is not null || entryFatigue > 0 || installing.Entry.OrdinaryLukeDay is not null || installing.Entry.PreyNormal is not null || installing.GriefAdmission is not null || installing.SpecialEntry is not null || installing.Dazzlement is not null || installing.Entry.Hope is not null || installing.TagEvildomEntry is not null || installing.ImperialArenaEntry is not null || guildAdmission is not null)
         {
             // 入场票、入场一次性疲劳、每周地下城计数与尝试号预留同一写事务：重复请求或提交失败都不会只扣一半。
             DungeonEntryCommit entryCommit;
@@ -1090,7 +1015,7 @@ internal sealed partial class GameSession
                 entryCommit = repository.CommitDungeonEntry(owner, character, prepared.NextKey,
                     new DungeonEntryCharge(entryItems, entryFatigue, installing.Run.Snapshot.Identity, installing.Entry.StartMap.Id,
                         prepared.Weekly,installing.GriefAdmission) { GuildTraining = training?.Inventory, OrdinaryLukeEntry = installing.Entry.OrdinaryLukeDay is null ? null : installing.Entry, PreyNormalEntry = installing.Entry.PreyNormal is null ? null : installing.Entry,
-                AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, Beast = beastAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
+                AntonNormalEntry = installing.Entry.AntonNormal is null ? null : installing.Entry, Special = installing.SpecialEntry, Dazzlement = installing.Dazzlement, DungeonId = checked((int)installing.Entry.DungeonId), Hope = installing.Entry.Hope, Incount = entryIncount, TagEvildom = installing.TagEvildomEntry?.Admission, GuildDungeon = guildAdmission, ImperialArena = installing.ImperialArenaEntry?.Admission, Dimension = installing.Entry.Dimension });
             }
             catch (DfoServer.Game.Guild.GuildDungeonAdmissionRejectedException)
             {
@@ -1131,11 +1056,6 @@ internal sealed partial class GameSession
         }
         Selected = committed;
         formalDungeon = installing;
-        if (installing.Entry.BeastMode && installing.Entry.StartMap.Kind.Equals("beast", StringComparison.OrdinalIgnoreCase))
-        {
-            installing.BeastStages[installing.Entry.StartMap.Position] = 0;
-            installing.BeastProgress?.Enter(0);
-        }
         tagEvildomSelection = null;
         imperialArenaSelection = null;
         if (installing.Entry.Hope is not null) hopeSelection = null;
@@ -1191,14 +1111,6 @@ internal sealed partial class GameSession
                 !ReferenceEquals(formalDungeon,dungeon) || dungeon.Run.Snapshot.Identity != identity ||
                 dungeon.Run.HasScriptedTransit && ScriptedNavigationBlocked(dungeon) ||
                 dungeon.Run.HasPendingDeath || dungeon.Run.HasPendingSettlement || identity.Epoch == long.MaxValue) return null;
-            if (dungeon.BeastReservation is not null)
-            {
-                if (PartyDungeon is not null || PrepareBeastDungeonLoading() is not { } reservation) return null;
-                Character[] committed;
-                try { committed = repository.CommitBeastDungeonLoading([reservation]); }
-                catch (BeastDungeonAdmissionRejectedException) { LastFormalDungeonRejection = "beast-loading-admission-changed"; return null; }
-                InstallBeastDungeonLoading(reservation, committed[0]);
-            }
             if (dungeon.Entry.Hope is not null && debugSettings?.InfiniteFatigue != true)
             {
                 dungeon.HasPendingFatigue = true;
@@ -1219,10 +1131,7 @@ internal sealed partial class GameSession
             pendingDungeonContinuation = null;
             pendingQuestReplay = null;
             SetState(dungeon.Run.Phase == SinglePlayerDungeonPhase.Settlement ? SessionPhase.Settlement : SessionPhase.Dungeon);
-            var receipt = FormalReceipt() with { LostLandStarted = lostLandStarted,
-                EntryItemConsumedSlots = dungeon.BeastLoadingPayment?.ChangedSlots ?? [],
-                EntryChangedCurrencies = dungeon.BeastLoadingPayment?.ChangedCurrencies ?? [] };
-            dungeon.BeastLoadingPayment = null;
+            var receipt = FormalReceipt() with { LostLandStarted = lostLandStarted };
             return receipt;
         });
     }
@@ -1283,22 +1192,7 @@ internal sealed partial class GameSession
         return dungeon.Run.OperateRidable(dungeon.Run.Snapshot.Identity,operation,resourceId,new(mapX,mapY));
     });
 
-    internal long DungeonMovementTime => formalDungeon?.BeastProgress?.Timestamp ??
-        (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
-
-    internal bool CanMoveBeastStage(byte x, byte y, long at) => owner.Execute(() =>
-        formalDungeon is { } dungeon && CanMoveBeastStage(dungeon, new(x, y), at));
-
-    static bool CanMoveBeastStage(FormalDungeon dungeon, DungeonPoint target, long at)
-    {
-        if (dungeon.BeastProgress is { } progress) return progress.CanObserveAt(at);
-        bool nextStage = dungeon.Entry.BeastMode && !dungeon.BeastStages.ContainsKey(target) &&
-            dungeon.Entry.Maze.MapSpecification?.Any(map => map.Position == target && map.Kind.Equals("beast", StringComparison.OrdinalIgnoreCase)) == true;
-        return !nextStage || dungeon.BeastDeadline is not { } deadline || at < deadline ||
-            dungeon.BeastStages.Count < BeastDungeonRotation.TimedStage - 1;
-    }
-
-    public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0, long? beastAt = null) => owner.Execute(() =>
+    public FormalDungeonReceipt? MoveFormalDungeon(byte x, byte y, byte moveKind = 0) => owner.Execute(() =>
     {
         if (!CanMutatePartyDungeon || !Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.CharacterDead && PartyDungeon is null ||
             dungeon.Ground.HasPendingOperation || dungeon.PendingTutorialClear is not null || HasPendingQuestScene) return null;
@@ -1325,25 +1219,10 @@ internal sealed partial class GameSession
         }
         bool settlementLayer = Phase == SessionPhase.Settlement && moveKind == 1 && CinematicSettlementLayer(dungeon,target);
         if (Phase != SessionPhase.Dungeon && !settlementLayer) return null;
-        long beastNow = beastAt ?? DungeonMovementTime;
-        bool beastRoom = dungeon.Entry.Maze.MapSpecification?.Any(map => map.Position == target && map.Kind.Equals("beast", StringComparison.OrdinalIgnoreCase)) == true;
-        bool beastNew = dungeon.Entry.BeastMode && beastRoom && !dungeon.BeastStages.ContainsKey(target);
-        int beastNext = dungeon.BeastStages.Count;
-        if (!CanMoveBeastStage(dungeon, target, beastNow))
-            return null;
         var result = moveKind == 1 || target == dungeon.Run.Snapshot.CurrentMap.Position && dungeon.Run.Snapshot.CurrentMap.Kind == "layered"
             ? dungeon.Run.MoveLayer(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target,moveKind == 1,settlementLayer)
             : dungeon.Run.Move(dungeon.Run.Snapshot.Identity,Guid.NewGuid(),target);
         if (result.Outcome != DungeonRunOutcome.Accepted) return null;
-        if (dungeon.Entry.BeastMode)
-        {
-            if (beastNew) dungeon.BeastStages[target] = beastNext;
-            int stage = beastRoom && dungeon.BeastStages.TryGetValue(target, out int bound) ? bound : -1;
-            if (stage >= 0 && dungeon.BeastProgress is { } progress && stage >= progress.View().CompletedStages && !progress.Enter(stage, beastNow))
-                throw new InvalidOperationException("原图魔兽移动与共享阶段绑定不一致");
-            if (dungeon.BeastProgress is null && stage >= BeastDungeonRotation.TimedStage - 1 && dungeon.BeastDeadline is null)
-                dungeon.BeastDeadline = beastNow + BeastDungeonRotation.LimitSeconds;
-        }
         SetState(SessionPhase.Loading);
         return FormalReceipt();
     });
@@ -1370,9 +1249,6 @@ internal sealed partial class GameSession
     {
         if (!CanMutatePartyDungeon || !Ready || Selected is null || Phase is not (SessionPhase.Dungeon or SessionPhase.Settlement) || formalDungeon is not { } dungeon || dungeon.Ground.HasPendingOperation || dungeon.Run.HasPendingPassiveClear || HasPendingQuestScene)
             return new FormalDungeonDeathResult(DungeonRunOutcome.Rejected);
-        long? beastObservedAt = PartyDungeon?.BeastDeathObservedAt ?? dungeon.BeastProgress?.Timestamp;
-        if (beastObservedAt is { } observedAt && !dungeon.BeastProgress!.CanObserveAt(observedAt) && !dungeon.Run.HasPendingDeath)
-            return new(DungeonRunOutcome.Rejected);
         uint objectKey = normal?.MonsterKey ?? scripted!.MonsterKey;
         var currentRoom = dungeon.Run.CurrentMonsterPlan;
         var target = currentRoom.Monsters.SingleOrDefault(monster => monster.ObjectKey == objectKey);
@@ -1386,8 +1262,6 @@ internal sealed partial class GameSession
                     { SpecialChildRetired = waveOutcome == DungeonRunOutcome.Accepted }
                 : new FormalDungeonDeathResult(waveOutcome);
         }
-        if (BeastEncounterPlan.IsNative(dungeon.Entry) && target is null)
-            return new FormalDungeonDeathResult(DungeonRunOutcome.Rejected);
         var issued = normal is not null ? dungeon.Authority.ValidateAndIssue(dungeon.Run,dungeon.Run.Snapshot.Identity,normal) :
             dungeon.Authority.ValidateAndIssueScripted(dungeon.Run,dungeon.Run.Snapshot.Identity,scripted!);
         if (issued.Death is null)
@@ -1420,14 +1294,6 @@ internal sealed partial class GameSession
         if (preparation.Outcome != DungeonRunOutcome.Accepted)
             return new FormalDungeonDeathResult(preparation.Outcome) { ReportedTarget = target };
         var pending = preparation.Pending!;
-        if (dungeon.BeastProgress is not null)
-            dungeon.PendingBeastDeath ??= () => ObserveDungeonDeath(normal, scripted, rewards, growth);
-        BeastStageScore? beastScore = null;
-        if (pending.BeastRoomClear is not null && dungeon.BeastProgress is { } progress)
-        {
-            int stage = dungeon.Run.BeastStageAt(pending.BeastRoomClear.Map.Position);
-            beastScore = progress.Prepare(stage, beastObservedAt) ?? throw new InvalidOperationException("魔兽阶段死亡未取得当前计分候选");
-        }
         if (pending.ImperialArenaRound is not null)
             return new FormalDungeonDeathResult(DungeonRunOutcome.Accepted, MonsterKey: pending.Death.MonsterKey)
                 { PendingImperialArenaDeath = PrepareImperialArenaDeath(dungeon, pending), ReportedTarget = target };
@@ -1515,25 +1381,7 @@ internal sealed partial class GameSession
                 pending.Death.Identity,pending.Result.Snapshot.CurrentMap.Id,pending.Monster.MonsterId,pending.Monster.EnemyType,pending.Result.ClearFact is not null,
                 dungeon.Draw,frozen.At);
         var questDrop = dungeon.PendingQuestDrop;
-        if (!pending.BeastStageRewardFrozen)
-        {
-            BeastStageRewardPlan? stageReward = null;
-            if (dungeon.Entry.BeastMode && pending.BeastRoomClear is { } clear &&
-                dungeon.BeastStages.TryGetValue(clear.Map.Position, out int stage) && !dungeon.BeastRewardedStages.Contains(stage))
-            {
-                if (items is null || pieces is null || goldLimits is null)
-                    throw new InvalidOperationException("阶段奖励服务未装配，不能确认清房");
-                stageReward = BeastStageRewardPlan.Create(Selected, dungeon.Run, pending, stage, questDrop, items, goldLimits,
-                    pieces, frozen.At);
-            }
-            pending.FreezeBeastStageReward(stageReward);
-        }
         var committed = CommitDungeonGrowth(SelectionEpoch, Selected, dungeon.Run, pending, reward, growth, loot, questDrop);
-        if (pending.BeastStageReward is { } grantedStage)
-            dungeon.BeastRewardedStages.Add(grantedStage.Stage);
-        if (beastScore is not null && PartyDungeon is null && !dungeon.BeastProgress!.Confirm(beastScore))
-            throw new InvalidOperationException("已提交阶段奖励不能确认原计分候选");
-        dungeon.PendingBeastDeath = null;
         if (committed.Commit.CommittedBonuses is { } actualBonuses)
             reward = reward with { Bonuses = actualBonuses, Amount = actualBonuses.Total };
         dungeon.PendingDeathReward = null;
@@ -1567,8 +1415,6 @@ internal sealed partial class GameSession
             ReportedTarget = target,
             PreviousQuests = previousQuests,
             QuestDropSlots = questDrop?.Inventory.ChangedSlots ?? [],
-            BeastRewardSlots = committed.Commit.BeastRewardSlots,
-            BeastStageScore = beastScore,
             RoomClearFact = committed.Death.RoomClearFact,
             BossPositionUpdate = committed.Death.BossPositionUpdate,
             CulledMonsterKeys = committed.Death.CulledMonsterKeys
@@ -1664,7 +1510,6 @@ internal sealed partial class GameSession
         // 原生离图保留双成员并恢复队首；返城提交只更新主角记录，不能据此作废已安装的备用资料。
         var raidChange = ReleaseCurrentRaidDungeon();
         ReleaseCurrentEvildomWarDungeon();
-        ReleaseBeastDungeonReservation();
         formalDungeon = null;
         CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
         CancelDungeonContinuation();

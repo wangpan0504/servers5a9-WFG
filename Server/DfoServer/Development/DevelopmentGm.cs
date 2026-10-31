@@ -103,7 +103,7 @@ internal static partial class DevelopmentGm
                     ? session.ResetDungeonEntries()
                     : WithLease(owners, request.Account, repository.ResetDungeonEntries);
                 return "OK " + JsonSerializer.Serialize(cleared) +
-                    " 已清零该账号所有副本的入场次数（日/周次数、账号次数、冒险团面板、魔兽、强袭、魔界塔、悲叹塔、" +
+                    " 已清零该账号所有副本的入场次数（日/周次数、账号次数、冒险团面板、强袭、魔界塔、悲叹塔、" +
                     "祭坛/绝望、卢克团本周通关、再战魔界周次数）。在线角色回到选角并再次进入后刷新；正在进行中的副本需退出重进。";
             }
             if (request.Action == DevelopmentAction.CharacterScoreNotice)

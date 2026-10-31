@@ -16,28 +16,12 @@ internal static class StackableCatalogTests
     {
         int checks = Count;
         var catalog = StackableCatalog.Load(pvf);
-        int[] beastIds = [10303237,10303238,10303240,10303241,10303242,10303243,10303244,10303245,
-            10303246,10303247,10303495,10303496,10303497,10303498,10303752,10305190,10305191];
         var expected = ItemCatalogTests.ReadOriginalIndexDeclarations(pvf, "stackable", 0);
-        That(expected.Keys.Count(id => !beastIds.Contains(id)) == 82227 && expected.ContainsKey(0),
-            "原始堆叠列表保留82227项旧声明及金币ID0，新增魔兽声明逐项按实际列表判断");
+        That(expected.ContainsKey(0), "实际堆叠列表保留金币ID0，不限定修改版PVF的模板总数");
         That(catalog.TemplateCount == expected.Count && catalog.TemplateIds.Count == expected.Count &&
             catalog.TemplateIds.Distinct().Count() == expected.Count &&
             catalog.TemplateIds.SequenceEqual(expected.Keys.Order()),
             "完整堆叠目录ID集合与独立原始列表逐项一致，无缺失或额外模板");
-        foreach (int id in beastIds)
-        {
-            if (expected.TryGetValue(id, out string? path))
-                That(path == $"stackable/{id / 1000 * 1000 + 1}/{id}.stk" && catalog.Get(id).ScriptPath == path,
-                    "已声明魔兽道具绑定真实堆叠脚本：" + id);
-            else
-            {
-                KeyNotFoundException? missing = null;
-                try { _ = catalog.Get(id); }
-                catch (KeyNotFoundException error) { missing = error; }
-                That(missing?.Message == "堆叠物品列表没有指定模板ID", "未声明魔兽道具精确报告索引缺失：" + id);
-            }
-        }
         StackableFile gold = catalog.Get(0);
         That(gold.ScriptPath == "stackable/gold.stk" && gold.TypeDeclaration!.Label == "[waste]" &&
             gold.TypeDeclaration.Parameters.SequenceEqual(new[] { 0 }) && gold.DeclaredMinimumLevel == 1 &&
@@ -56,9 +40,13 @@ internal static class StackableCatalogTests
             recipe.TypeDeclaration.Parameters.SequenceEqual(new[] { 1 }) && recipe.DeclaredPrice == 1000 &&
             recipe.DeclaredMinimumLevel is null, "真实列表中的equ扩展配方按token脚本读取，不猜装备分类");
         That(catalog.Get(10002064).TypeDeclaration!.Parameters.SequenceEqual(new[] { 3, 0 }), "实际优惠券保留额外参数而不猜枚举");
-        That(catalog.Get(2660474).TypeDeclaration is null && catalog.Get(2660474).UnsupportedFields.Contains("stackable type") &&
-            catalog.Get(10002199).DeclaredPrice is null && catalog.Get(10002199).UnsupportedFields.Contains("price"),
-            "真实重复标签保留unsupported不猜覆盖规则");
+        StackableFile repeatedType = catalog.Get(2660474);
+        That(repeatedType.TypeDeclaration is { Label: "[cera package]", Parameters: [0] } &&
+            !repeatedType.UnsupportedFields.Contains("stackable type"),
+            "真实完整重复堆叠类型按末声明读取，不误报unsupported");
+        StackableFile repeatedPrice = catalog.Get(10002199);
+        That(repeatedPrice.DeclaredPrice is null && repeatedPrice.UnsupportedFields.Contains("price"),
+            "真实重复价格仍保留unsupported，不猜覆盖规则");
         That(ReferenceEquals(catalog.Get(1051), potion), "lazy查询复用不可变定义");
         // 验证全索引均可读取，特殊字段可以未知，但不能漏掉模板或默默用另一个文件。
         IEnumerable<StackableFile> Definitions()

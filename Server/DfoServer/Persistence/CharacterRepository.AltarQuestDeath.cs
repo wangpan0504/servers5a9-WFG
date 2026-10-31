@@ -13,7 +13,7 @@ internal sealed partial class CharacterRepository
         SinglePlayerDungeonRun run, PreparedDungeonDeath prepared, DungeonExperienceReward reward, CharacterGrowthCatalog growth)
     {
         if (quests is null || !run.Entry.IsAltar || !run.IsPendingDeath(prepared) ||
-            prepared.Death.Identity.CharacterId != expected.Id || prepared.BeastStageReward is not null ||
+            prepared.Death.Identity.CharacterId != expected.Id ||
             reward != DungeonKillExperiencePolicy.PlanAltarQuestDeath(run, prepared))
             throw new InvalidDataException("祭坛任务提交需要原角色死亡和明确的专用零奖励规则");
         var death = prepared.Death;

@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
@@ -183,21 +182,8 @@ internal static class MileageShopTcpTests
     }
     static void Events(TcpPeer peer, bool active)
     {
-        var packet = peer.Expect(0, 108);
-        That(packet.Protected, "积分入口更新沿原生保护压缩EVENT_INFO");
-        byte[] expected = Build(w =>
-        {
-            ushort[] ids = active ? [2037, 2378, 2395, 333, 2532, 266] : [2037, 2378, 2395, 333, 2532];
-            w.Write((ushort)ids.Length);
-            foreach (ushort id in ids) { w.Write(id); w.Write(1u); w.Write(0u); w.Write(0u); w.Write((byte)0); }
-            w.Write((byte)2); w.Write((ushort)2037); w.Write(8u);
-            for (int i = 1; i < 12; i++) w.Write(0u);
-            w.Write((ushort)2395); for (int i = 0; i < 12; i++) w.Write(0u);
-        });
-        using var source = new MemoryStream(packet.Body);
-        using var zlib = new ZLibStream(source, CompressionMode.Decompress);
-        var actual = new byte[expected.Length]; zlib.ReadExactly(actual);
-        Bytes(actual, expected, "活动266开关与时间边界保留其他活动和完整数值段");
-        That(zlib.ReadByte() == -1, "活动目录没有多余未验证尾部");
+        // 266变化只改积分入口；原生促销保持零累计，完整目录仍不得恢复退役333。
+        ushort[] extraEvents = active ? [ServerEventService.NolanVisibilityId, 266] : [ServerEventService.NolanVisibilityId];
+        CashShopTcpTests.AssertPromotionNativeRefresh(peer.Expect(0, 108), 0, false, extraEvents);
     }
 }

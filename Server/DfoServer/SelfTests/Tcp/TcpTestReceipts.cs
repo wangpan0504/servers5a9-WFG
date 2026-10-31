@@ -12,7 +12,7 @@ internal static class TcpTestReceipts
     // 只列已逐一检查全部条件省略分支的入口；共享用例变化须重新审核，未知组保守不复用。
     static readonly HashSet<string> audited = new(StringComparer.Ordinal)
     {
-        "equipment-power-rules", "frame-crc-rules", "chat-rate-rules", "clear-avatar", "aura-action", "quest-hell-challenge", "quest-hell-challenge-without-beast-meeting"
+        "equipment-power-rules", "frame-crc-rules", "chat-rate-rules", "clear-avatar", "aura-action", "quest-hell-challenge"
     };
 
     internal sealed record Skip(string Code, string Reason);

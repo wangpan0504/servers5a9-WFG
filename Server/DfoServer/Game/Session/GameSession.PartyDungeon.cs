@@ -83,7 +83,7 @@ internal sealed partial class GameSession
         DungeonCatalog catalog, DungeonRoomCatalog rooms, DungeonMonsterDropCatalog? drops, ItemCatalog? items,
         EpicPieceCatalog? pieces, Func<DungeonEntryPlan, Func<DungeonPlannedMonster, DungeonDropGenerationPlan>>? prepareDrops,
         Guid instance, uint firstKey, PartyDungeonPreparation? shared = null, uint questId = 0,
-        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool beastMode = false, bool allowDimensionHidden = true)
+        bool hellParty = false, bool hellLegend = false, CrackDimensionRewardServices? crackRewards = null, bool allowDimensionHidden = true)
     {
         LastFormalDungeonRejection = null;
         var retry = Phase == SessionPhase.Settlement ? FormalDungeonResultFocus() : null;
@@ -91,7 +91,6 @@ internal sealed partial class GameSession
         if (shared is not null)
         {
             var source = shared.Session.PreparedParty(shared).Dungeon.Entry;
-            beastMode = source.BeastMode;
             // 队员共用队长已冻结的物理迷宫，任务、槽位及接取身份仍由本人生成和提交。
             if (source.Hope is { } hope &&
                 !BeginOperationHope(hope.Catalog,catalog,requiredMaze:hope.MazeOrdinal)) return null;
@@ -101,7 +100,7 @@ internal sealed partial class GameSession
         }
         var prepared = PrepareFormalDungeon(dungeonId, questId, difficulty, catalog, rooms, drops, items, null, pieces, null, retry,
             prepareDrops: prepareDrops ?? previousDrops, shared: shared, partyFirstKey: firstKey, partyInstance: instance, partyAdmission: true,
-            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards, beastMode: beastMode, allowDimensionHidden: allowDimensionHidden);
+            hellParty: hellParty, hellLegend: hellLegend, crackRewards: crackRewards, allowDimensionHidden: allowDimensionHidden);
         if (prepared is null && shared is not null) shared.Session.LastFormalDungeonRejection = LastFormalDungeonRejection;
         return owner.Execute(() =>
         {
@@ -119,8 +118,7 @@ internal sealed partial class GameSession
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         return (entry.OrdinaryLukeDay is not { } day || day == QuestCycle.Day(now)) &&
             (entry.PreyNormal is not { } prey || prey.Day == QuestCycle.Day(now)) &&
-            (entry.AntonNormal is not { } anton || anton.Day == QuestCycle.Day(now)) &&
-            (entry.BeastDay is not { } beastDay || beastDay == BeastDungeonRotation.ServiceDay(now));
+            (entry.AntonNormal is not { } anton || anton.Day == QuestCycle.Day(now));
     }
 
     public PartyDungeonReservation? ReservePartyDungeon(PartyDungeonPreparation token) => owner.Execute(() =>
@@ -130,9 +128,6 @@ internal sealed partial class GameSession
             !(Phase == SessionPhase.MapSelect && formalDungeon is null ||
                 Phase == SessionPhase.Settlement && FormalDungeonResultFocus() is not null) || HasPendingTownQuestCommit) return null;
         var dungeon = plan.Dungeon;
-        if (dungeon.Entry.BeastMode && !BeastDungeonRotation.IsGateway(dungeon.Entry.DungeonId) && !CanUseNativeBeastLocation()) return null;
-        if (dungeon.BeastSelection is { } beastSelection &&
-            (!CanSelectNativeBeast() || !ReferenceEquals(CurrentDungeonSelection, beastSelection))) return null;
         if (dungeon.EvildomWarEntry is { } admission && !ReferenceEquals(CurrentEvildomWar(Selected), admission)) return null;
         if (dungeon.Entry.DungeonId <= int.MaxValue && dungeon.Entry.StartFatigue > 0 &&
             CurrentEvildomWar(Selected) is { Charged: false } war && EvildomWarCostRejection(Selected, war.Catalog) is not null) return null;
@@ -145,22 +140,6 @@ internal sealed partial class GameSession
             !repository.LoadAntonNormalProgress(owner, Selected.Id).Allows(anton, dungeon.Entry.DungeonId)) return null;
         if (dungeon.Entry.PreyNormal is { } prey &&
             !repository.LoadPreyNormalProgress(owner, Selected.Id).Allows(prey, dungeon.Entry.DungeonId)) return null;
-        BeastDungeonAdmission? beast = null;
-        if (dungeon.Entry.BeastMode)
-        {
-            if (dungeon.Entry.BeastDay is not { } beastDay || !Selected.CompletedQuests.Contains(5927)) return null;
-            int id = checked((int)dungeon.Entry.DungeonId);
-            int used = repository.LoadBeastDungeonUsed(owner, Selected.Id, beastDay, id);
-            if (!BeastDungeonRotation.CanEnter(beastDay, id, used)) return null;
-            beast = new(beastDay, used);
-            if (!BeastDungeonRotation.IsGateway(dungeon.Entry.DungeonId))
-            {
-                var beastTicket = dungeon.EntryPieces is { } ticketPieces
-                    ? BeastDungeonTicket.Plan(Selected.Inventory, ticketPieces, IncountNow()) : null;
-                if (beastTicket is null) { LastFormalDungeonRejection = "beast-ticket-required"; return null; }
-                beast = beast with { Ticket = beastTicket };
-            }
-        }
         var costs = new List<ItemMaterialCost>();
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         EpicPieceCatalog? costPieces = dungeon.HellPieces ?? dungeon.EntryPieces ?? dungeon.ChannelCost?.Pieces;
@@ -204,7 +183,7 @@ internal sealed partial class GameSession
                 PreyNormalEntry = dungeon.Entry.PreyNormal is null ? null : dungeon.Entry,
                 AntonNormalEntry = dungeon.Entry.AntonNormal is null ? null : dungeon.Entry,
                 DungeonId = checked((int)dungeon.Entry.DungeonId), Hope = dungeon.Entry.Hope, Marriage = dungeon.Entry.Marriage,
-                GuildDungeon = guildAdmission, Beast = beast, Dimension = dungeon.Entry.Dimension }, incount)
+                GuildDungeon = guildAdmission, Dimension = dungeon.Entry.Dimension }, incount)
         {
             EvildomWar = dungeon.EvildomWarEntry is { Store: not null } activeWar
                 ? new(activeWar.Battle.View, activeWar.BindingToken,
@@ -240,16 +219,10 @@ internal sealed partial class GameSession
             previous.Ground.ExpireRun();
         }
         installing.Ground.PublishPassiveEntry();
-        installing.BeastReservation = reservation.Charge.Beast is { Ticket: not null } beast ? beast : null;
         Selected = committed;
         if (installing.EvildomWarEntry is { } war)
             war.Charged = true;
         formalDungeon = installing;
-        if (installing.Entry.BeastMode && installing.Entry.StartMap.Kind.Equals("beast", StringComparison.OrdinalIgnoreCase))
-        {
-            installing.BeastStages[installing.Entry.StartMap.Position] = 0;
-            installing.BeastProgress?.Enter(0);
-        }
         if (installing.Entry.Hope is not null) hopeSelection = null;
         PartyDungeon = instance;
         partyDungeonRun = instance.Id;
@@ -271,11 +244,7 @@ internal sealed partial class GameSession
     internal void RemovePartyDungeon(PartyDungeonInstance instance)
     {
         if (ReferenceEquals(PartyDungeon, instance))
-        {
-            if (Selected is { } character)
-                formalDungeon?.BeastProgress?.RemoveParticipant(character.Id, instance.Members.Length == 0);
             PartyDungeon = null;
-        }
     }
 
     internal sealed record PartyExitPreparation(PartyDungeonExitReservation Reservation, long Epoch, object Context, PartyDungeonExitKind Kind);
@@ -334,7 +303,6 @@ internal sealed partial class GameSession
             dungeon.Ground.ExpireRun();
             raidChange = ReleaseCurrentRaidDungeon();
             ReleaseCurrentEvildomWarDungeon();
-            ReleaseBeastDungeonReservation();
             formalDungeon = null;
             CrossConsumableCooldownBoundary(ConsumableMaintenance.Town);
         }

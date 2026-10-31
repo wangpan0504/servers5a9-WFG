@@ -27,7 +27,7 @@ internal sealed class SpringTreasureDropPolicy
 
     static bool SupportedMode(DungeonEntryPlan entry) => entry.DungeonId != 530 && entry.IsOrdinary && entry.QuestId == 0 &&
         !entry.IsPractice && !entry.IsTrainingRoom && !entry.IsClassExperience && !entry.IsTutorial && !entry.IsQuestReplay &&
-        entry.RaidEntry is null && !entry.BeastMode && !entry.IsOrdinaryLuke && !entry.IsOrdinaryPrey &&
+        entry.RaidEntry is null && !entry.IsOrdinaryLuke && !entry.IsOrdinaryPrey &&
         entry.Hope is null && entry.Dimension is null && entry.LostLand is null && entry.GriefLayer is null &&
         !entry.IsAltar && !entry.IsDespair && !entry.IsTournament && !entry.IsBossRush && !entry.IsTagSystem && !entry.IsTagEvildom && !entry.IsImperialArena &&
         !entry.IsAncientInfinite && entry.HellParty is null && entry.HellPartyMode == 0 && !entry.IsInfernoParty &&

@@ -17,12 +17,6 @@ internal sealed partial class DungeonHandler
     public void PreparePartyContext(GameConnectionContext context)
     {
         context.Session.PartyDungeonNoticeArrived = notice => PublishPartyNoticeAsync(context, notice);
-        if (context.Beast is { } beast) beast.ResumePendingDeath = async () =>
-        {
-            var previous = context.Session.Selected;
-            if (context.Session.ResumePendingBeastDeath() is { } result)
-                await PublishDeathAsync(context, result, previous, result.MonsterKey, new { Source = "beast_deadline_recovery" });
-        };
         if (partyDungeons is not null) context.LukePhaseExit = new(context, partyDungeons, town, log, lukeLifecycle);
     }
 
@@ -149,12 +143,6 @@ internal sealed partial class DungeonHandler
             GuildDungeonPartyBuffProjection.Post(context);
             await PublishPartyHostAsync(context, notice.Members, () => notice.Recipient.IsCurrent() &&
                 context.Session.PartyDungeon is { } instance && instance.Members.Contains(notice.Recipient));
-            if (context.Beast is not null) await context.Beast.RefreshAsync();
-            return;
-        }
-        if (notice.Kind == PartyDungeonNoticeKind.BeastUpdated)
-        {
-            if (context.Beast is not null) await context.Beast.RefreshAsync();
             return;
         }
         if (notice.Kind == PartyDungeonNoticeKind.SelectionReturn && notice.Selection is { } returning)
@@ -307,9 +295,6 @@ internal sealed partial class DungeonHandler
                 break;
             case PartyDungeonNoticeKind.Loaded:
                 if (scene.NavigationReplay) break;
-                if (!scene.EntryItemConsumedSlots.IsDefaultOrEmpty)
-                    await context.Notify(NotiPacketType.UPDATE_ITEM_LIST, InventoryPackets.Delta(scene.Character.Inventory,
-                        InventoryListType.Main, [.. scene.EntryItemConsumedSlots]), "party_beast_loading_ticket", Current);
                 await context.Reply(CmdPacketType.FINISH_LOADING, [1], "party_loading_ack", Current);
                 await context.Notify(NotiPacketType.FINISH_LOADING, DungeonPackets.LoadingNotice(), "party_loading_release", Current);
                 foreach (var member in notice.Members)
@@ -327,7 +312,6 @@ internal sealed partial class DungeonHandler
                 if (scene.Entry.UsesFatigue)
                     await context.Notify(NotiPacketType.FATIGUE, FatiguePackets.Current(context.Session.FatigueForClient(scene.Character)), "party_room_fatigue", Current);
                 if (context.Elevator is not null) await context.Elevator.StartAsync(scene);
-                if (context.Beast is not null) await context.Beast.RefreshAsync();
                 if (scene.HellPartyRoomCleared)
                     await context.Notify(NotiPacketType.HELL_PARTY_CLEAR,DungeonPackets.HellPartyCleared(),"party_hell_clear",Current);
                 if (scene.Snapshot.Phase == SinglePlayerDungeonPhase.Settlement)
@@ -343,7 +327,6 @@ internal sealed partial class DungeonHandler
                 if (DungeonPackets.HellPartyMonsterInfo(scene.Monsters) is { } moveHell && scene.Snapshot.MapPayload != DungeonMapPayload.Cached)
                     await context.Notify(NotiPacketType.HELL_PARTY_MONSTER_INFO,moveHell,"party_hell_monsters",Current);
                 if (published && scene.ScriptedReturnId != Guid.Empty) context.Session.ConfirmScriptedReturnPresentation(scene);
-                if (context.Beast is not null) await context.Beast.RefreshAsync();
                 break;
         }
     }

@@ -12,6 +12,8 @@ $survey=@(Select-DevelopmentResumeGroups $catalog 'Survey' @())
 Assert (($default.Count+$targeted.Count+$survey.Count) -eq $catalog.Count) '三分类不漏不重。'
 Assert ($survey.Count -eq 1 -and $survey[0].Name -eq 'resource-survey') '普查不是普通targeted。'
 Assert ('chat-rate-rules' -cin @($targeted | ForEach-Object Name)) '纯规则属于定向。'
+Assert ('retired-dungeon-entry' -cin @($default | ForEach-Object Name)) '退役入口拒绝回归仍属于默认必跑。'
+Assert (-not (Get-DevelopmentRuleProfile 'retired-dungeon-entry')) '退役业务回归不扩展纯规则缓存白名单。'
 Reject { Select-DevelopmentResumeGroups $catalog 'Explicit' @('chat-rate-rules','chat-rate-rules') } '重复选择拒绝。'
 Reject { Select-DevelopmentResumeGroups $catalog 'Explicit' @('not-a-registered-group') } '未知组拒绝。'
 Reject { Select-DevelopmentResumeGroups $catalog 'Default' @('chat-rate-rules') } '隐含范围不混显式组。'

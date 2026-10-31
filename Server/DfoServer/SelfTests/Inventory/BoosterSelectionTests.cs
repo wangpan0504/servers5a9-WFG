@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Text.Json;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory.Models;
 using DfoServer.Game.Inventory.Services;
 using DfoServer.Game.Session;
@@ -211,7 +212,8 @@ internal static class BoosterSelectionTests
         var service = new InventoryBoosterService(catalog, itemResources.Boosters, itemResources.GoldLimits, itemResources.EpicPieces);
         var now = DateTimeOffset.UtcNow;
         var serverDefinition = itemResources.Boosters.Get(10305490);
-        That(serverDefinition.Available && serverDefinition.Selection is { SelectionCount: 1, Categories.Length: 1 } serverSelection &&
+        That(serverDefinition is { Available: true, CoolTime: 1000, CoolGroup: null, CooltimeMaintenance: null } &&
+            serverDefinition.Selection is { SelectionCount: 1, Categories.Length: 1 } serverSelection &&
             serverSelection.Categories[0] is { Category: 0, Subcategory: 0, PendingRule: null } serverCategory &&
             serverCategory.Rewards.SequenceEqual(new BoosterChoice[] { new(10305489, 20), new(10305487, 20) }),
             "真实普通服礼盒保留单选及两个各20数量的原始候选");
@@ -512,8 +514,21 @@ internal static class BoosterSelectionTests
             var serverRewardIds = new List<int>();
             foreach (int rewardId in new[] { 10305489, 10305487 })
             {
+                if (serverRewardIds.Count == 1)
+                {
+                    var beforeCooldown = serverSession.Selected;
+                    string cooldownSnapshot = Snapshot();
+                    BoosterReceipt? cooldownReceipt = null;
+                    var deniedCooldown = serverSession.PlanAndCommitBooster(role =>
+                        service.Open(role, Select(3, [rewardId]), out cooldownReceipt, now),
+                        service.UsePlaces(10305490), 10305490);
+                    That(!deniedCooldown.Accepted && deniedCooldown.Error == 19 && deniedCooldown.Plan is null &&
+                        cooldownReceipt is null && ReferenceEquals(serverSession.Selected, beforeCooldown) && Snapshot() == cooldownSnapshot,
+                        "普通服礼盒同一时刻第二次使用按真实1000毫秒冷却拒绝，角色、审计及UID序列全不变");
+                }
+                var openAt = now.AddMilliseconds(serverRewardIds.Count * 1000L);
                 BoosterReceipt? serverReceipt = null;
-                var committed = serverSession.PlanAndCommitBooster(role => service.Open(role, Select(3, [rewardId]), out serverReceipt, now),
+                var committed = serverSession.PlanAndCommitBooster(role => service.Open(role, Select(3, [rewardId]), out serverReceipt, openAt),
                     service.UsePlaces(10305490), 10305490);
                 serverRewardIds.Add(rewardId);
                 var inventory = serverSession.Selected!.Inventory;
@@ -523,6 +538,8 @@ internal static class BoosterSelectionTests
                     inventory.Items.Where(item => item.Core.ItemId != 10305490).Select(item => item.Core.ItemId).Order().SequenceEqual(serverRewardIds.Order()) &&
                     inventory.Items.Where(item => item.Core.ItemId != 10305490).All(item => item.Core.Count == 20 && item.Uid > 0) &&
                     inventory.Items.Select(item => item.Uid).Distinct().Count() == inventory.Items.Length &&
+                    inventory.ConsumableStates.SequenceEqual(new[]
+                    { new ConsumableState(ConsumableStateKind.Cooldown, 10305490, openAt.ToUnixTimeMilliseconds() + 1000, 0, -10305490) }) &&
                     serverSession.Selected.Revision == serverSaved.Revision + serverRewardIds.Count,
                     "普通服礼盒经真实Session每次只扣一只源并持久化所选20份，不提前发未选奖励 " + rewardId);
             }
@@ -532,7 +549,10 @@ internal static class BoosterSelectionTests
             That(!serverSession.PlanAndCommitBooster(role => service.Open(role, Select(3, [10305489]), out _, now),
                 service.UsePlaces(10305490), 10305490).Accepted && Snapshot() == snapshot,
                 "普通服礼盒耗尽后重放不重复发奖、分配UID或推进revision与审计");
-            var nextAuraPlan = nativeService.Open(auraCommitted, Select(70, [101590028]), out _, now).Plan!;
+            var nextAuraResult = nativeService.Open(auraCommitted, Select(70, [101590028]), out var nextAuraReceipt, now);
+            That(nextAuraResult.Accepted && nextAuraResult.Plan is not null && nextAuraReceipt is not null,
+                "旧owner拒绝前先确认无冷却光环盒的后续请求确有完整合法计划和回执");
+            var nextAuraPlan = nextAuraResult.Plan!;
             using var replacement = owners.Acquire(owner.Account, () => { });
             Reject(() => session.MutateInventory(role => service.Open(role, Select(4, [10000871]), out _)), "old generation cannot open or replay a selection");
             Reject(() => repo.CommitInventory(owner, auraCommitted, nextAuraPlan), "旧owner不能提交带光环详情的新合法计划");
@@ -958,8 +978,51 @@ internal static class BoosterSelectionTests
             "限定兼容按实际选择预检，不因同分类内未选中的不安全候选额外拒绝");
         definitions[10000743] = BoosterCatalog.Parse(marker + "[stackable type]\n`[booster]` 0\n" +
             "[booster info]\n[equipment]\n1 401030066 1 1\n[/equipment]\n[/booster info]");
-        That(!guarded.Open(syntheticRole, new(3, 1), out _, now).Accepted,
-            "随机奖池不进入选择盒的限定兼容范围");
+        var randomEquipment = guarded.Open(syntheticRole, new(3, 1), out var randomReceipt, now);
+        var randomTemplate = catalog.Get(401030066);
+        That(randomTemplate is { Kind: ItemKind.Equipment, Echon: null,
+                Expiration: { Days: 30, AbsoluteTime: 0, DailyDelete: 0, WeeklyDeleteDay: null } },
+            "普通限制装备池字面期望绑定完整30天装备模板，不借实际计划生成oracle");
+        var randomExpected = syntheticRole.Inventory with { Items = [new(0, Bag(9),
+            new ItemCore(401030066, ItemKind.Equipment, 999_999_998)
+            {
+                Durability = randomTemplate.Durability,
+                SealFlag = randomTemplate.AttachType.Contains("[sealing]", StringComparison.OrdinalIgnoreCase) ? (byte)1 : (byte)0,
+                ExpireTime = checked((int)Math.Min(now.ToUnixTimeSeconds() + 30 * 86400L, 2_145_823_200)),
+                DisjointForbidden = true, DestructionSoulForbidden = false
+            })] };
+        That(randomEquipment.Accepted && randomEquipment.Plan is not null &&
+            JsonSerializer.Serialize(randomEquipment.Plan.After) == JsonSerializer.Serialize(randomExpected) &&
+            randomReceipt is not null && JsonSerializer.Serialize(randomReceipt) ==
+                JsonSerializer.Serialize(new BoosterReceipt(10000743, 3, [new BoosterGrantedItem(401030066, 1)])) &&
+            randomEquipment.Plan.ChangedCurrencies.IsEmpty && randomEquipment.Plan.OverflowItems.IsEmpty &&
+            JsonSerializer.Serialize(syntheticRole) == beforeCrossedDeclaration,
+            "普通装备奖池沿已确认合同保存分解限制而不增加毁装灵魂限制，完整库存及回执一致且不就地扣源");
+        int unsafePiece = resources.EpicPieces.ByPiece.Keys.First();
+        int unsafeContract = resources.Boosters.DirectActivationItems.First();
+        That(catalog.Get(1106).Kind == ItemKind.Consumable && CurrencyWallet.RewardKind(1106) is null &&
+            !resources.EpicPieces.ByPiece.ContainsKey(1106) && !resources.Boosters.DirectActivationItems.Contains(1106) &&
+            CurrencyWallet.RewardKind(1) is not null && resources.EpicPieces.ByPiece.ContainsKey(unsafePiece) &&
+            resources.Boosters.DirectActivationItems.Contains(unsafeContract) && !catalog.Contains(int.MaxValue),
+            "普通限制奖池五类负例分别绑定普通消耗品、钱包、史诗碎片、直接激活契约与缺失模板");
+        foreach (int unsafeId in new[] { 1106, 1, unsafePiece, unsafeContract, int.MaxValue })
+        {
+            // 前池合法也不能先发奖；第二池所有正权重候选必须预检，不能只检查随机命中项。
+            definitions[10000743] = BoosterCatalog.Parse(marker + "[stackable type]\n`[booster]` 0\n" +
+                "[booster info]\n[equipment]\n1 401030066 1 1\n[/equipment]\n" +
+                "[etc]\n1 401030066 1 1 " + unsafeId + " 1 1\n[/etc]\n[/booster info]");
+            var unsafeDefinition = definitions[10000743];
+            That(unsafeDefinition.Available && unsafeDefinition.SetsDisjointInstanceType &&
+                unsafeDefinition.Pools.Length == 2 && unsafeDefinition.Pools.All(pool => pool.Draws == 1 &&
+                    pool.Rewards.All(reward => reward.Weight > 0)) &&
+                unsafeDefinition.Pools[0].Rewards.SequenceEqual(new BoosterReward[] { new(401030066, 1, 1) }) &&
+                unsafeDefinition.Pools[1].Rewards.SequenceEqual(new BoosterReward[] { new(401030066, 1, 1), new(unsafeId, 1, 1) }),
+                "不安全双池已完整解析且全部候选正权重，拒绝必须来自服务预检而非解析器 " + unsafeId);
+            var denied = guarded.Open(syntheticRole, new(3, 1), out var deniedReceipt, now);
+            That(!denied.Accepted && denied.Plan is null && deniedReceipt is null &&
+                JsonSerializer.Serialize(syntheticRole) == beforeCrossedDeclaration,
+                "普通限制奖池含非装备、钱包、碎片、契约或缺失模板时整包拒绝，不发前池且全部输入资产不变 " + unsafeId);
+        }
 
         foreach (string value in new[] { "0", "3" })
         {

@@ -5,14 +5,13 @@ namespace DfoServer.Game.Characters;
 
 // 名册只包含身份、穿戴外观、武器幻化选择与选角前客户端门槛位，不能作为可提交的完整角色快照。
 // ARAD 03B55580 在选角前按频道类型读名册行的资格字节，为 0 时弹 IRDPopupWindow 1099：
-//   type 0x17 +0x491 dstr 66087 安徒恩；type 0x20 +0x492 dstr 66088 卢克；type 0x28 +0x493 dstr 66089 魔兽；
+//   type 0x17 +0x491 dstr 66087 安徒恩；type 0x20 +0x492 dstr 66088 卢克；
 //   type 0x2D +0x499 dstr 75560 超时空漩涡；type 0x32 +0x494 dstr 32116 普雷·伊希斯。
 // 条件取自 dstr 原文 + etc/enterablespecialchannel.etc 的任务号（证据 evidence/roster-raid-flags-20261021.txt，
 // evidence/popup1099-fiendwar-roster-flag-20261021.txt，KB-20261021T015635-5c920e4e59）。
-// 魔兽（+0x493）按 enterablespecialchannel.etc 的 beast=5927。已安装客户端的 quest.lst 有这一行。
 internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name, byte Job, byte GrowType,
     byte Level, ImmutableArray<InventoryItem> Equipment, bool FiendWarEligible = false,
-    bool AntonEligible = false, bool LukeEligible = false, bool BeastEligible = false, bool PreyEligible = false, bool IsPvpPrivate = false)
+    bool AntonEligible = false, bool LukeEligible = false, bool PreyEligible = false, bool IsPvpPrivate = false)
 {
     public bool RenamePending { get; init; }
     public uint CloneTitleItemId { get; init; }
@@ -24,8 +23,6 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
     public const int AntonEntryQuest = 12829;
     // luke=2903（LukeRaid/Luke_enter_01.qst「[卢克团队模式]制造者卢克 (1/2)」，前置主线 4872）。
     public const int LukeEntryQuest = 2903;
-    // beast=5927（MetroCenter/open_beast.qst）。
-    public const int BeastEntryQuest = 5927;
     // prey=8935（GContents/190606_Isys_normal/Isys_normal_clear_03.qst「[伊希斯攻坚战]前往夜之摩天楼」）；
     // dstr 32116 另写“须达到Lv95以上”。
     public const int PreyEntryQuest = 8935;
@@ -42,7 +39,6 @@ internal sealed record CharacterRosterEntry(ushort Id, ushort Slot, string Name,
         FiendWarEligible: IsFiendWarEligible(character.CompletedQuests.Contains(FiendWarEntryQuest), character.Guild is not null),
         AntonEligible: character.CompletedQuests.Contains(AntonEntryQuest),
         LukeEligible: character.CompletedQuests.Contains(LukeEntryQuest),
-        BeastEligible: character.CompletedQuests.Contains(BeastEntryQuest),
         PreyEligible: IsPreyEligible(character.CompletedQuests.Contains(PreyEntryQuest), character.Level), IsPvpPrivate: character.IsPvpPrivate)
         { CloneTitleItemId = character.CloneTitleItemId, WeaponSkin = character.Inventory.Skins.Selected };
 }

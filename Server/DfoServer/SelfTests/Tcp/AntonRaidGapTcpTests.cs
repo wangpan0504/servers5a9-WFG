@@ -36,7 +36,10 @@ internal static partial class AntonRaidGapTcpTests
                 w.Write(leader.Id); if (member is not null) w.Write(member.Id);
                 w.Write(0u); w.Write(context); w.Write((byte)2); w.Write(value); w.Write(99u);
             });
-            foreach (var peer in member is null ? new[] { leader } : new[] { leader, member })
+            // 1278只屏障本连接：先完成上报者的695，再核另一连接已排队的634，不能用队长屏障跨连接抢跑。
+            var recipients = member is null ? new[] { leader } :
+                ReferenceEquals(reporter, leader) ? new[] { leader, member } : new[] { member, leader };
+            foreach (var peer in recipients)
             {
                 var received = AntonTcpProbe.Barrier(peer, "695百分比投影" + value);
                 Bytes(received.Single(p => p is { Kind: 0, Opcode: 634 }).Body, expected,

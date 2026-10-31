@@ -74,6 +74,9 @@ internal static class QuestCatalogTests
         int checks = 0;
         void Check(bool ok, string name) { checks++; if (!ok) throw new Exception("FAIL: " + name); }
         var catalog = global::DfoServer.Testing.SelfTestCatalogs.Quests(pvf);
+        var indexedQuests = PvfScript.List(pvf.ReadText("n_quest/quest.lst"));
+        Check(catalog.TryGet(5927,out _) == indexedQuests.ContainsKey(5927),
+            "孤立open_beast脚本不再为未登记5927注入回退任务");
         var first = catalog.Get(3145);
         Check(first.Grade == "[epic]" && first.Difficulty == "1" && first.RewardType == "[item]" &&
             first.DeclaredGoldMultiple is null && first.DeclaredIgnoreLevelForExperience is null && first.Attributes.Count == 0,

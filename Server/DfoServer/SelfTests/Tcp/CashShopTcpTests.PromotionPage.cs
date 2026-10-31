@@ -142,7 +142,7 @@ internal static partial class CashShopTcpTests
         }
     }
 
-    static void AssertPromotionNativeRefresh(WirePacket packet, long count, bool disabled, IReadOnlyList<ushort> extraEvents)
+    internal static void AssertPromotionNativeRefresh(WirePacket packet, long count, bool disabled, IReadOnlyList<ushort> extraEvents)
         => AssertPromotionNativeEvents(ReadPromotionNativeRefresh(packet), count, disabled, extraEvents);
 
     // 只有缺少前史订单的合成累计夹具使用此入口，完整校验只读页与已知原累计。
@@ -182,10 +182,10 @@ internal static partial class CashShopTcpTests
             byte[] bytes = reader.ReadBytes(length);
             return Encoding.GetEncoding(936, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback).GetString(bytes);
         }
-        That(reader.ReadUInt16() == 5 + extraEvents.Count, "页面只追加10999，原完整活动目录项数保留");
-        foreach (ushort id in (ushort[])[2037, 2378, 2395, 333, .. extraEvents])
+        That(reader.ReadUInt16() == 4 + extraEvents.Count, "页面只追加10999，原完整活动目录项数保留");
+        foreach (ushort id in (ushort[])[2037, 2378, 2395, .. extraEvents])
             That(reader.ReadUInt16() == id && reader.ReadUInt32() == 1 && Text() == "" && Text() == "" && reader.ReadByte() == 0,
-                "原赛丽亚/红包/乔纳森/魔兽/开放活动每字段保留");
+                "原赛丽亚/红包/乔纳森/开放活动每字段保留");
         That(reader.ReadUInt16() == 10999 && reader.ReadUInt32() == 1 && Text() == "" && Text() == "" && reader.ReadByte() == 1,
             "原生10999唯一完整元数据及扩展标志");
         That(reader.ReadByte() == 2 && reader.ReadByte() == 4 && Text() == "众神降世礼包 多重购买有惊喜" &&

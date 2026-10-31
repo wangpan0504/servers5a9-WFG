@@ -9,7 +9,7 @@ using PvfLib;
 
 namespace DfoServer;
 
-// 名册尾部 tail[37]安徒恩 / tail[38]卢克 / tail[39]魔兽5927 / tail[41]普雷·伊希斯。tail[40]超时空漩涡仍看公会。
+// 名册尾部 tail[37]安徒恩 / tail[38]卢克 / tail[39]保留零字节 / tail[41]普雷·伊希斯。tail[40]超时空漩涡仍看公会。
 // 证据 evidence/roster-raid-flags-20261021.txt（ARAD 03B55580 频道类型分支 + 02676A00 读序 + dstr 66087/66088/66089/32116）。
 internal static class RaidRosterFlagTests
 {
@@ -20,8 +20,8 @@ internal static class RaidRosterFlagTests
     {
         int checks = TestCheck.Count;
         TestCheck.That(CharacterPackets.AntonEligibleTailOffset == 37 && CharacterPackets.LukeEligibleTailOffset == 38 &&
-            CharacterPackets.BeastEligibleTailOffset == 39 && CharacterPackets.FiendWarEligibleTailOffset == 40 &&
-            CharacterPackets.PreyEligibleTailOffset == 41, "tail[37..41] 依次为安徒恩/卢克/魔兽/超时空漩涡/普雷");
+            CharacterPackets.ReservedSpecialChannelTailOffset == 39 && CharacterPackets.FiendWarEligibleTailOffset == 40 &&
+            CharacterPackets.PreyEligibleTailOffset == 41, "tail[37..41] 依次为安徒恩/卢克/保留零/超时空漩涡/普雷");
         TestCheck.That(CharacterRosterEntry.IsPreyEligible(true, 95) && CharacterRosterEntry.IsPreyEligible(true, 100) &&
             !CharacterRosterEntry.IsPreyEligible(true, 94) && !CharacterRosterEntry.IsPreyEligible(false, 100), "普雷要求任务 8935 且 Lv95 以上");
         RunPacket();
@@ -90,8 +90,8 @@ internal static class RaidRosterFlagTests
         TestCheck.That(luke[38] == 1 && OnlyDiffers(luke, none, 38), "完成 2903：只有 tail[38]=1");
         TestCheck.That(prey[41] == 1 && OnlyDiffers(prey, none, 41), "完成 8935 且 Lv95：只有 tail[41]=1");
         TestCheck.That(preyLow[41] == 0 && preyLow.SequenceEqual(none), "完成 8935 但 Lv94：tail[41]=0");
-        TestCheck.That(beast[39] == 1 && OnlyDiffers(beast, none, 39), "完成 5927：只有 tail[39]=1");
-        TestCheck.That(all[37] == 1 && all[38] == 1 && all[39] == 1 && all[41] == 1 && all[40] == 0, "四项任务打开对应资格位，超时空漩涡仍需公会");
+        TestCheck.That(beast[39] == 0 && beast.SequenceEqual(none), "旧5927完成历史不能激活已退役入口，tail[39]固定0");
+        TestCheck.That(all[37] == 1 && all[38] == 1 && all[39] == 0 && all[41] == 1 && all[40] == 0, "三项现行任务打开对应资格位，退役位保持零，超时空漩涡仍需公会");
     }
 
     static bool OnlyDiffers(byte[] tail, byte[] baseline, int offset) =>
@@ -133,22 +133,19 @@ internal static class RaidRosterFlagTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
-    // 资源核对：常量必须与 PVF etc/enterablespecialchannel.etc 及任务文件一致；魔兽任务 5927 未注册（因此 tail[39] 不实现）。
+    // 资源核对：常量必须与 PVF etc/enterablespecialchannel.etc 及任务文件一致；退役保留位不依赖资源资格。
     public static void RunResources(TownCatalog towns, PvfArchive pvf)
     {
         int checks = TestCheck.Count;
         int Quest(string key) => towns.SpecialChannelQuests.TryGetValue(key, out int quest) ? quest : -1;
         TestCheck.That(Quest("anton") == CharacterRosterEntry.AntonEntryQuest && Quest("luke") == CharacterRosterEntry.LukeEntryQuest &&
-            Quest("prey") == CharacterRosterEntry.PreyEntryQuest && Quest("fiendwar") == CharacterRosterEntry.FiendWarEntryQuest && Quest("beast") == 5927,
-            "enterablespecialchannel.etc：anton=12829 luke=2903 prey=8935 fiendwar=8672 beast=5927");
+            Quest("prey") == CharacterRosterEntry.PreyEntryQuest && Quest("fiendwar") == CharacterRosterEntry.FiendWarEntryQuest,
+            "enterablespecialchannel.etc：anton=12829 luke=2903 prey=8935 fiendwar=8672");
         string list = pvf.ReadText("n_quest/quest.lst");
         string? File(int id) => Regex.Match(list, $@"(?<!\d){id}\s+`([^`]+)`") is { Success: true } m ? m.Groups[1].Value : null;
         TestCheck.That(File(12829) is { } a && a.Contains("Anton_dimension_enter", StringComparison.OrdinalIgnoreCase) &&
             File(2903) is { } l && l.Contains("Luke_enter_01", StringComparison.OrdinalIgnoreCase) &&
             File(8935) is { } p && p.Contains("Isys_normal_clear_03", StringComparison.OrdinalIgnoreCase), "入场任务均在 quest.lst 注册");
-        string? beastQuest = File(5927);
-        TestCheck.That(beastQuest is null || beastQuest.Contains("open_beast", StringComparison.OrdinalIgnoreCase),
-            "quest.lst 若有 5927，路径必须是 open_beast；纯净包没有这一行");
         string antonQuest = pvf.ReadText("n_quest/" + File(12829)!.Replace('\\', '/'));
         TestCheck.That(Regex.IsMatch(antonQuest, @"\[level\]\s+85\s+99") &&
             Regex.IsMatch(antonQuest, @"\[pre required quest\]\s+3779"), "安徒恩权威准入常量匹配PVF等级及前置");

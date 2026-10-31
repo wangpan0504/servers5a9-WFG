@@ -431,7 +431,13 @@ internal static class ServerRuntime
         var fiendwarRewards = fiendwarReady ? new Game.Raids.FiendwarRewards(raidCatalog.Find(2)!.Resources!.Fiendwar!, itemResources.Items, itemResources.Boosters, raidCatalog.Find(2)!.Resources!.FiendwarGuide?.Fiendwar) : null;
         if (fiendwarRewards is not null) _ = fiendwarRewards.Create(false);
         var lukeTimers = !preyReady && !fiendwarReady && !raidSettings.AntonPhaseProgressEnabled && lukeStartPolicy?.Timers is null && lukeStartPolicy?.PhaseTimeout is null ? null : new Game.Raids.LukeRaidClocks(clock ?? TimeProvider.System,
-            repository, (stage, error) => log.Write("raid_timer_failed", new { Stage = stage, Reason = error.GetType().Name, error.Message }),
+            repository, (stage, error) => log.Write("raid_timer_failed", new
+            {
+                Stage = stage, Reason = error.GetType().Name, error.Message, error.StackTrace,
+                PublicationFailures = (error as Game.Raids.LukeRewardPublicationException ??
+                    error.Data["LukeRewardPublicationFailures"] as AggregateException)?.InnerExceptions
+                    .Select(failure => new { Reason = failure.GetType().Name, failure.Message, failure.StackTrace }).ToArray()
+            }),
             rewardAbandoned: view => log.Write("anton_phase_progress", new { view.Instance, view.Phase, view.Revision,
                 State = view.State.ToString(), Reason = "reward-wait-expired-offline-unclaimed-abandoned" }),
             settleLukeRewards: lukeAutomaticRewards.SettleAsync,

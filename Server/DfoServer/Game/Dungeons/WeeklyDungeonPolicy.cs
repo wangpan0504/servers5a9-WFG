@@ -59,6 +59,6 @@ internal sealed record WeeklyDungeonEntry(int Week, int Slot);
 // GM 刷新账号地下城入场次数的结果：按存储分类统计清零的行数。
 // Week 是冒险团面板当前周；各玩法的周期键按各自规则计算（日键/周键/自定义游戏日）。
 internal sealed record DungeonEntryResetResult(string Account, int Week,
-    int PanelRows, int CharacterDailyRows, int CharacterWeeklyRows, int AccountRows, int BeastRows, int AssaultRows,
+    int PanelRows, int CharacterDailyRows, int CharacterWeeklyRows, int AccountRows, int AssaultRows,
     int DazzlementRows, int GriefAccountRows, int GriefCharacterRows, int SpecialEntryRows, int DespairRows,
     int RaidRows, int TagClearanceRows, int TagChallengeRows);

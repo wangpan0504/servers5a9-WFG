@@ -29,7 +29,6 @@ internal enum PartyDungeonExitKind { SelectionReturn, ResultReturn, ResultSelect
 // 全员入场费用和尝试号必须在同一事务提交，不能由协调器依次调用单人提交。
 internal interface IPartyDungeonStore
 {
-    Character[] CommitBeastDungeonLoading(IReadOnlyList<BeastDungeonLoadingReservation> reservations);
     PartyDungeonEntryCommit[] CommitPartyDungeonEntry(IReadOnlyList<PartyDungeonReservation> reservations);
     Character[] CommitPartyDungeonExit(IReadOnlyList<PartyDungeonExitReservation> reservations);
 }
