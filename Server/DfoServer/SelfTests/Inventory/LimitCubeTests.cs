@@ -20,6 +20,7 @@ internal static class LimitCubeTests
     public static void RunCore()
     {
         int checks = Count;
+        RunCooldown();
         byte[] observed = Convert.FromHexString("5F00CE913F1D5500");
         That(LimitCubeRequests.Read(observed) == new LimitCubeRequest(95, TargetId, 85),
             "CMD338按实收8B解析目标槽、目标模板和变更券槽");
@@ -139,6 +140,37 @@ internal static class LimitCubeTests
         Console.WriteLine($"PASS {Count - checks} 变更券目录、权重、原子规划及338号协议断言");
     }
 
+    static void RunCooldown()
+    {
+        var fixture = new Fixture(cooldown: 1000);
+        var character = fixture.StackableCharacter(materialCount: 2, targetCount: 2);
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+        var service = fixture.Service(_ => 0);
+        var request = new LimitCubeRequest(95, TargetId, 85);
+        var result = service.Apply(character, request, out _, out _, now);
+        That(result.Accepted && result.Plan!.After.ConsumableStates is
+            [{ Kind: ConsumableStateKind.Cooldown, ItemId: Fixture.GenericTicket, CoolGroup: -Fixture.GenericTicket }],
+            "带合法冷却的变更券不误拒绝，冷却与目标、券、材料及产出合入同一计划");
+        var changed = character with { Inventory = result.Plan!.After };
+        That(!service.Apply(changed, request, out _, out var reason, now.AddMilliseconds(999)).Accepted && reason == "cooldown" &&
+            service.Apply(changed, request, out _, out _, now.AddMilliseconds(1000)).Accepted,
+            "变更券冷却在抽取前拒绝，精确到期后允许剩余目标和券继续使用");
+        var template = fixture.Items.Get(Fixture.GenericTicket);
+        foreach (var restricted in new[] { template with { MinimumLevel = 96 }, template with { Jobs = 2 },
+            template with { RequiredSkill = 1234 }, template with { UseForbidden = true } })
+        {
+            fixture.Items.PrefillTemplates(new Dictionary<int, ItemTemplate> { [Fixture.GenericTicket] = restricted });
+            That(!service.Apply(character, request, out _, out var restriction, now).Accepted && restriction == "qualification",
+                "变更券的等级、职业、技能和禁用标记不能因专用入口被绕过");
+        }
+        foreach (string value in new[] { "-1", "1000 2", "1000\n[cool time]\n2000" })
+        {
+            var bad = new LimitCubeCatalog(_ => Fixture.StackableText + "\n[cool time]\n" + value,
+                new Dictionary<int, string> { [Fixture.GenericTicket] = "bad-cooldown.stk" });
+            Reject<InvalidDataException>(() => bad.Get(Fixture.GenericTicket), "非法或冲突的冷却声明不能忽略");
+        }
+    }
+
     public static void RunEpicExchangeOriginPropagation()
     {
         var now = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
@@ -216,6 +248,12 @@ internal static class LimitCubeTests
 
     public static void RunResources(ItemResources resources)
     {
+        foreach (int id in new[] { 10305519, 10308383, 10312491 })
+        {
+            var cooldown = resources.LimitCubes.Get(id);
+            That(cooldown is { Results.Length: 4 } && cooldown.Materials.SequenceEqual(new[] { new ItemMaterialCost(3037, 10) }),
+                "带1000毫秒冷却的真实变更券保留完整目标、四项产出和十个账号无色 " + id);
+        }
         IndependentAttributePairTests.RunResources(resources);
         var definition = resources.LimitCubes.Get(TicketId);
         That(definition is not null &&
@@ -272,7 +310,7 @@ internal static class LimitCubeTests
         public ItemCatalog Items { get; }
         public LimitCubeCatalog Cubes { get; }
 
-        public Fixture(bool equipmentToStackable = false)
+        public Fixture(bool equipmentToStackable = false, int cooldown = 0)
         {
             var stackable = new Dictionary<int, string>
             {
@@ -314,6 +352,7 @@ internal static class LimitCubeTests
             if (equipmentToStackable)
                 files["stackable/equipment-ticket.stk"] = files["stackable/equipment-ticket.stk"]
                     .Replace("201 1 1", ResultA + " 1 1", StringComparison.Ordinal);
+            if (cooldown > 0) files["stackable/ticket.stk"] += "\n[cool time]\n" + cooldown;
             Cubes = new(path => files[path], stackable, equipment);
             Items = new(null!, equipment, stackable, 0);
             Items.PrefillTemplates(new Dictionary<int, ItemTemplate>
