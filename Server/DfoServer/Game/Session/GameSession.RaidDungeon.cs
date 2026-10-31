@@ -147,7 +147,7 @@ internal sealed partial class GameSession
             RaidEntry = identity,
             FiendwarScale = admission.FiendwarScale,
             LukeEnergyObject = energy,
-            CoinLimit = controlled && admission.Kind is not (RaidKind.Prey or RaidKind.Fiendwar) ? 0 : definition.CoinLimit, AllowsCompanionAi = false,
+            CoinLimit = controlled && admission.Kind is not (RaidKind.Prey or RaidKind.Fiendwar) ? 0 : definition.CoinLimit,
             DisableMonsterAndClearExperience = controlled || entry!.DisableMonsterAndClearExperience,
             DisableClearReward = controlled || entry.DisableClearReward,
             DisableFatigueConsumption = controlled || entry.DisableFatigueConsumption,

@@ -187,8 +187,10 @@ internal static class RaidMemberTests
                 "多人投影使用原连接有界预算，可靠等待仍受慢写入约束");
             stream.Release.TrySetResult();
             await Task.WhenAll(held, barrier).WaitAsync(TimeSpan.FromSeconds(5));
-            That(stream.Frames.Count == 6 && sender.PendingBytes == 0,
-                "旧成员快照丢弃，仍保留新角色Actor及最新列表/记录/成员帧，预算归零");
+            That(stream.Frames.Count == 7 && sender.PendingBytes == 0,
+                "旧成员快照丢弃，保留新角色Actor及最新列表/记录/成员/活动状态帧，预算归零");
+            That(BinaryPrimitives.ReadUInt16LittleEndian(stream.Frames[5].AsSpan(1)) == 765,
+                "最新名册之后携带完整765活动状态，慢接收不丢失状态快照");
             byte[] actorFrame = stream.Frames[1];
             That(actorFrame.Length > 139 && actorFrame[0] == 0 &&
                 BinaryPrimitives.ReadUInt16LittleEndian(actorFrame.AsSpan(1)) == 2 &&

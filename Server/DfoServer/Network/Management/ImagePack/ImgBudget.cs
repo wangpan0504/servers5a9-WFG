@@ -3,7 +3,7 @@ using System.IO.Compression;
 namespace DfoServer.Network.Management.ImagePack;
 
 // IMG/NPK 解码预算（#959）。依据 2026-10-31 本机客户端 ImagePacks2 只读统计
-// （D:/dnf90/95_V31.0.24.0/.../ImagePacks2：7649 个 NPK、151527 个 IMG、15000966 帧、0 解析错误）：
+// （ImagePacks2：7649 个 NPK、151527 个 IMG、15000966 帧、0 解析错误）：
 // 单 IMG 最大 69,120,277 字节（sprite_interface.NPK）、单 IMG 最大帧数 3293（sprite_item_stackable.NPK）、
 // 最大边 3584、单帧最大 RGBA/解压 10,243,200 字节。各预算均留至少 4 倍余量；超出视为损坏输入并拒绝。
 internal static class ImgBudget
