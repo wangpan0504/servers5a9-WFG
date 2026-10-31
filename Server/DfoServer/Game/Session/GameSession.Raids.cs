@@ -21,6 +21,23 @@ internal sealed partial class GameSession
         try { return owner.Execute(() => actor.IsCurrent && CanChangeTownParty ? Selected : null); }
         catch (InvalidOperationException) when (!owner.IsCurrent) { return null; }
     }
+    internal RaidCostStatus CaptureRaidCost(RaidActor actor, GameWorld.Raids.RaidCost cost, bool committed)
+    {
+        try
+        {
+            return owner.Execute(() =>
+            {
+                long now = (timeProvider ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
+                long count = actor.IsCurrent && Selected is { } character ? character.Inventory.Items
+                    .Where(item => item.Position.List == Inventory.Models.InventoryListType.Main && item.Core.ItemId == cost.ItemId &&
+                        item.Core.EquipmentLockId == 0 && !item.Core.IsExpired(now)).Sum(item => (long)item.Core.Count) : 0;
+                return new RaidCostStatus(actor.Character, committed ? (byte)2 : count >= cost.Count ? (byte)1 : (byte)0,
+                    (short)Math.Clamp(count, 0, short.MaxValue));
+            });
+        }
+        catch (InvalidOperationException) when (!owner.IsCurrent) { return new(actor.Character, 0, 0); }
+    }
+    internal RaidParty? CaptureRaidRoster(RaidActor actor) => owner.Execute(() => actor.IsCurrent ? raidRegistry?.Find(actor) : null);
     internal bool MatchesRaidStart(RaidStartReservation reservation) => reservation.Actor.IsCurrent && CanChangeTownParty &&
         ReferenceEquals(Selected, reservation.Expected);
     internal void InstallRaidStart(RaidStartReservation reservation, Characters.Character committed)

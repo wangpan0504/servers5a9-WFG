@@ -42,6 +42,10 @@ internal static class LukeRaidRunTests
                 battle.View is { State: AntonRaidBattleState.Fighting, Phase: 0 } && first.All(row => battle.HasDungeonContribution(row.Actor, row.Identity.InstanceId)),
                 "已正式提交全队清图保留四份参与；入场预留/旧Run存在时不提交Reward转换");
             That(battle.CompleteLukeDungeon(facts) is null, "同Run重放不重复推进或参与");
+            var clears = battle.RosterClears(battle.View)!;
+            That(first.All(row => clears.GetValueOrDefault(row.Actor.Character) == 1) &&
+                second.All(row => clears.GetValueOrDefault(row.Actor.Character) == 0),
+                "卢克通关列只展示已提交成员事实，未清图另一队保持零，重放不重复计数");
             That(battle.ReserveDungeon(identity, 11, first) is null, "pending拒绝新的入场预留");
             if (secondCommits)
             {

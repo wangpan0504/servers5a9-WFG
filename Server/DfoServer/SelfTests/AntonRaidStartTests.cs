@@ -38,15 +38,29 @@ internal static class AntonRaidStartTests
                     [new(210, RaidDungeonState.Open, "[hp]", 4, 5), new(211, RaidDungeonState.Hide, "[hp]", 1, 1)], [], [])], [], []);
             var definition = new RaidDefinition(0, script.Path, 20, 10, 1) { Resources = new(script, [], [], [], [], []) };
             var service = new AntonRaidStart(registry, parties, repository, towns, pieces);
+            var costClock = new LukeRaidClockTests.Clock();
+            int costNow = checked((int)costClock.GetUtcNow().ToUnixTimeSeconds());
             var actors = Enumerable.Range(0, 30).Select(i =>
             {
                 var lease = ownership.Acquire("anton-start-" + i, () => { }); owners.Add(lease);
                 repository.Create(lease, new("AntS" + i, origin, origin) { Level = 85, CompletedQuests = [12829, 3779],
-                    Inventory = new([new InventoryItem(0, new(InventoryListType.Main, 121), new(100, ItemKind.Material, 2))]) });
-                var session = new GameSession(repository, towns, lease, entry: new(new(2, 19), 23, "[raid]"));
+                    Inventory = new([new InventoryItem(0, new(InventoryListType.Main, 121), new(100, ItemKind.Material, 2)),
+                        .. i == 29 ? new InventoryItem[] {
+                            new(0, new(InventoryListType.Main, 122), new(200, ItemKind.Material, 99) { ExpireTime = costNow }),
+                            new(0, new(InventoryListType.Main, 123), new(200, ItemKind.Material, 77) { EquipmentLockId = 1 }),
+                            new(0, new(InventoryListType.Main, 124), new(200, ItemKind.Material, 3) { ExpireTime = costNow + 10 }),
+                            new(0, new(InventoryListType.Main, 125), new(200, ItemKind.Material, 1)) } : []]) });
+                var session = new GameSession(repository, towns, lease, entry: new(new(2, 19), 23, "[raid]"), timeProvider: costClock);
                 sessions.Add(session); session.Select(0); session.MarkReady();
                 return session.CaptureRaidActor(registry)!;
             }).ToArray();
+            That(AntonRaidStart.Cost(actors[29], new(200, 4)) is { State: 1, Count: 4 } &&
+                AntonRaidStart.Cost(actors[29], new(200, 5)) is { State: 0, Count: 4 },
+                "费用只统计未过期且未锁定票据，无期限GM票仍可用，按真实数量判断就绪");
+            costClock.Advance(10);
+            That(AntonRaidStart.Cost(actors[29], new(200, 2)) is { State: 0, Count: 1 } &&
+                AntonRaidStart.Cost(actors[29], new(200, 2), committed: true) is { State: 2, Count: 1 },
+                "费用按注入时钟在截止秒过期，开战已提交状态独立于剩余库存");
 
             RaidParty Recruit(RaidActor[] members)
             {

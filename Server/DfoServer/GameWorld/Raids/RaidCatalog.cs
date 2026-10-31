@@ -10,6 +10,9 @@ namespace DfoServer.GameWorld.Raids;
 internal sealed record RaidDefinition(byte Type, string Path, int MemberMax, int StartMinimum, int PhaseMax)
 {
     public RaidResources? Resources { get; init; }
+    public RaidCost? EntryCost { get; init; }
+    public RaidCost? GuideEntryCost { get; init; }
+    public RaidCost? Cost(bool guide) => guide ? GuideEntryCost : EntryCost;
 }
 
 internal sealed class RaidCatalog(ImmutableDictionary<byte, RaidDefinition> definitions)
@@ -59,7 +62,27 @@ internal sealed class RaidCatalog(ImmutableDictionary<byte, RaidDefinition> defi
         int? minimum = First(tokens, resolve, "[raid start minimum member]") ?? First(tokens, resolve, "[fiendwar start minimum member]");
         int? phases = First(tokens, resolve, "[phase max]");
         if (member is not > 0 || minimum is not > 0 || minimum > member || phases is not > 0) return null;
-        return new(type, PvfArchive.NormalizePath(path), member.Value, minimum.Value, phases.Value);
+        var fields = RaidScriptParser.Fields(tokens, resolve, (_, _, _) => { });
+        var headers = new List<RaidField>();
+        int phaseDepth = 0;
+        foreach (var field in fields)
+        {
+            if (field.Tag is "[phase]" or "[single phase]") { phaseDepth++; continue; }
+            if (field.Tag is "[/phase]" or "[/single phase]") { phaseDepth = Math.Max(0, phaseDepth - 1); continue; }
+            if (phaseDepth == 0) headers.Add(field);
+        }
+        RaidCost? Cost(string tag)
+        {
+            var rows = headers.Select((field, index) => (field, index)).Where(row => row.field.Tag == tag).ToArray();
+            string end = "[/" + tag[1..];
+            if (rows is not [var row] || row.field.Values is not [{ Type: 0, Number: > 0 } item, { Type: 0, Number: > 0 } count] ||
+                headers.Count(field => field.Tag == end) != 1 || row.index + 1 >= headers.Count || headers[row.index + 1].Tag != end ||
+                !headers[row.index + 1].Values.IsEmpty) return null;
+            return new(item.Number, count.Number);
+        }
+        // 费用来自原始团本头，独立于战斗资源是否已装配；引导票不能替代普通票。
+        return new(type, PvfArchive.NormalizePath(path), member.Value, minimum.Value, phases.Value)
+        { EntryCost = Cost("[entry cost]"), GuideEntryCost = Cost("[single entry cost]") };
     }
 
     // 第一处顶层出现的整数值；同名标签再次出现（如各区 [MEMBER MAX]）不影响，因为标签名不同。

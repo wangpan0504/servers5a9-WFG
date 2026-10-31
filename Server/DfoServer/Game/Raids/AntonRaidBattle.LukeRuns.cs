@@ -29,6 +29,7 @@ internal sealed partial class AntonRaidBattle
         public bool EnterConsumed { get; set; }
         public Dictionary<RaidActor, long> MapEpochs { get; } = [];
         public Dictionary<RaidActor, DungeonClearFact> ClearFacts { get; } = [];
+        public HashSet<ushort> RosterContributions { get; } = [];
         public bool Cleared => ClearFacts.Count != 0;
         public bool AntonEnergyConfirmed { get; set; }
         public long EnergyReturnEpoch { get; set; }

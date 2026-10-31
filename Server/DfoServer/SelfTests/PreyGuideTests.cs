@@ -117,8 +117,11 @@ internal static class PreyGuideTests
                 reservation!.Install();
                 var fact = new DungeonClearFact(identity, checked((uint)dungeon), [Guid.NewGuid()])
                     { ClearMap = new DungeonMap("boss", new(0, 0), 77, "fixture/prey-boss.map") };
+                int oldClears = battle.RosterClears(battle.View)!.GetValueOrDefault(actor.Character);
                 That(battle.CompletePreyDungeon([(actor, fact)]) is not null, "合成权威事实验证领域推进");
                 That(battle.CompletePreyDungeon([(actor, fact)]) is null, "正式Run清图重复回放幂等");
+                That(battle.RosterClears(battle.View)!.GetValueOrDefault(actor.Character) == oldClears + 1,
+                    "普雷通关列复用本阶段真实参与次数，重放不增计数");
                 battle.ReleaseDungeon(actor, identity.InstanceId);
             }
             void Settle(int phase)

@@ -42,7 +42,7 @@ internal sealed partial class GameSession
         change = null;
         if (members.Length is < 1 or > 4) return false;
         var first = members[0].Actor.Session;
-        if (first.raidCombat is not { Battle.Kind: RaidKind.Luke or RaidKind.Prey } firstRaid) return false;
+        if (first.raidCombat is not { Battle.Kind: RaidKind.Anton or RaidKind.Luke or RaidKind.Prey } firstRaid) return false;
         var facts = new List<(RaidActor Actor, DungeonClearFact Fact)>();
         foreach (var member in members)
         {
@@ -53,6 +53,11 @@ internal sealed partial class GameSession
                 fact.Identity.InstanceId != instance || fact.Identity != dungeon.Run.Snapshot.Identity ||
                 !dungeon.Entry.IsTerminalMap(dungeon.Run.Snapshot.CurrentMap)) return false;
             facts.Add((raid.Actor, fact));
+        }
+        if (firstRaid.Battle.Kind == RaidKind.Anton)
+        {
+            change = firstRaid.Battle.RecordAntonPartyClears(facts.ToArray());
+            return change is not null;
         }
         change = firstRaid.Battle.Kind == RaidKind.Prey
             ? firstRaid.Battle.CompletePreyDungeon(facts.ToArray()) : firstRaid.Battle.CompleteLukeDungeon(facts.ToArray());

@@ -71,15 +71,17 @@ internal static class RaidPackets
     //   服务端 TownPackets.Select 写的是 Character.Id）；成员窗口 02177872/0217788A 也只按这个 u16 找角色对象取等级/名字/职业。
     // u8 +0x04；str(0x100) +0x08（缺省 dstr 669「没有名字」，写角色名）；u8 +0x28；u8 +0x2C；u8 +0x2D；u8 +0x2E；u32 +0x30；u8 +0x34；u8 +0x35；
     // u8 +0x38；u32 +0x3C；u16 +0x40；u32 X；u8 丢弃；str(0x11) +0x44；u8 +0x64；u16 +0x66；u32 +0x68；u32 m + m×(u32,u32)；
-    // u8 +0x80；u32 +0x84；u8 +0x81；u16 +0x88；u8 +0x8A。除角色号、名字、+0x2D分队外语义未证明，写0（空串L=0、m=0）。
-    public static void WriteMember(BinaryWriter writer, ushort character, byte[] name, byte squad = 0)
+    // u8 +0x80；u32 +0x84；u8 +0x81；u16 +0x88；u8 +0x8A。
+    // 02178237读取+0x38并以7AFA格式显示个人当前阶段通关数；其余未证字段保持0。
+    public static void WriteMember(BinaryWriter writer, ushort character, byte[] name, byte squad = 0, byte clearCount = 0)
     {
         writer.Write(character);
         writer.Write((byte)0);
         WriteText(writer, name, TextLimit);
         writer.Write(new byte[] { 0, 0, squad, 0 }); // +0x2D由0216CCBD/021747xx按界面分队比较，其余保持未知零值。
         writer.Write(0u);                    // +0x30
-        writer.Write(new byte[3]);           // +0x34 +0x35 +0x38
+        writer.Write((ushort)0);             // +0x34 +0x35
+        writer.Write(clearCount);            // +0x38，原生u8通关数
         writer.Write(0u);                    // +0x3C
         writer.Write((ushort)0);             // +0x40
         writer.Write(0u);                    // X
@@ -135,10 +137,11 @@ internal static class RaidPackets
         foreach (var (character, name) in members) WriteMember(writer, character, name);
     });
 
-    public static byte[] OpenWithSquads(uint key, IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members) => Build(writer =>
+    public static byte[] OpenWithSquads(uint key, IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members,
+        IReadOnlyDictionary<ushort, byte>? clearCounts = null) => Build(writer =>
     {
         writer.Write(key); writer.Write(3u);
-        WriteMembers(writer, members);
+        WriteMembers(writer, members, clearCounts);
     });
 
     public static byte[] RaidListBatch(IReadOnlyList<(uint Key, byte[] Title, byte Type, ushort Leader, byte[] Name, byte Squad, bool CanStart)> rows,
@@ -168,12 +171,13 @@ internal static class RaidPackets
 
     // 02349A20成功：mode0读记录，mode1读成员，mode2两者；21失败仍读mode/key。
     public static byte[] Information(byte mode, uint key, byte[] title, byte type, ushort leader, byte[] name,
-        IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members, byte state = 0, byte phase = 0, bool canStart = false, bool guide = false) => Build(writer =>
+        IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members, byte state = 0, byte phase = 0, bool canStart = false, bool guide = false,
+        IReadOnlyDictionary<ushort, byte>? clearCounts = null) => Build(writer =>
     {
         if (mode > 2) throw new InvalidDataException("团本查询mode错误");
         writer.Write((byte)1); writer.Write(mode); writer.Write(key);
         if (mode is 0 or 2) WriteRecord(writer, key, title, type, leader, name, members.Single(m => m.Character == leader).Squad, state, phase, canStart, guide);
-        if (mode is 1 or 2) WriteMembers(writer, members);
+        if (mode is 1 or 2) WriteMembers(writer, members, clearCounts);
     });
 
     public static byte[] InformationFailure(byte mode, uint key) => Build(writer =>
@@ -181,10 +185,12 @@ internal static class RaidPackets
         writer.Write((byte)0); writer.Write((ushort)21); writer.Write(mode); writer.Write(key);
     });
 
-    static void WriteMembers(BinaryWriter writer, IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members)
+    static void WriteMembers(BinaryWriter writer, IReadOnlyList<(ushort Character, byte[] Name, byte Squad)> members,
+        IReadOnlyDictionary<ushort, byte>? clearCounts = null)
     {
         writer.Write(checked((byte)members.Count));
-        foreach (var member in members) WriteMember(writer, member.Character, member.Name, member.Squad);
+        foreach (var member in members) WriteMember(writer, member.Character, member.Name, member.Squad,
+            clearCounts?.GetValueOrDefault(member.Character) ?? 0);
     }
 
     // 023A1070/023A12D0：服务器和频道取本地全局，不在本消息中重复写入。

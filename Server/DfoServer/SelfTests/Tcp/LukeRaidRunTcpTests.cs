@@ -204,20 +204,20 @@ internal static partial class LukeRaidRunTcpTests
         return U16(roster,entries[0]+1);
     }
 
-    static void Select(TcpPeer captain,int dungeon)
+    static void Select(TcpPeer captain,int dungeon,bool native=false)
     {
-        captain.Send(15,BitConverter.GetBytes(dungeon));
-        // 原生客户端连续提交；不等15应答、不借普通15=0或27目录。
+        captain.Send(15,BitConverter.GetBytes(native?0:dungeon));
+        // 实测原生流程先15=0，目标图及FFFFFFFF尾字段在16中提交；同时保留非零15兼容用例。
         captain.Send(16,Build(w=>{w.Write(dungeon);w.Write((byte)2);w.Write((ushort)0);w.Write((byte)0);w.Write((byte)0);
-            w.Write(ushort.MaxValue);w.Write(0u);w.Write((byte)0);w.Write(0u);w.Write((byte)0);w.Write(0u);}));
+            w.Write(ushort.MaxValue);w.Write(0u);w.Write((byte)0);w.Write(0u);w.Write((byte)0);w.Write(native?uint.MaxValue:0u);}));
     }
     static List<WirePacket>[] Enter(TcpPeer[] members,TcpPeer captain,int dungeon)
     {
-        Select(captain,dungeon);
+        Select(captain,dungeon,native:true);
         var leading=Drain(captain);
         var rows=members.Select(peer=>peer==captain?leading:Drain(peer)).ToArray();
         That(leading.Any(p=>p is {Kind:1,Opcode:15,Body:[1]})&&!leading.Any(p=>p is {Kind:1,Opcode:16}),
-            "候战室非零15成功，连续16沿原28/29通知进入而不伪造ACK");
+            "候战室原生15零值成功，连续16沿原28/29通知进入而不伪造ACK");
         byte[] map=rows[0].Single(p=>p is {Kind:0,Opcode:29}).Body;
         foreach(var frames in rows)
         {
@@ -282,11 +282,15 @@ internal static partial class LukeRaidRunTcpTests
         }
         throw new InvalidOperationException("Luke Run通知超过有界预算");
     }
-    static void Validate(WirePacket packet) => That(packet.Kind==0 && packet.Opcode==597 && packet.Body.Length==5 && packet.Body[0] is 0 or 1 && U32(packet.Body,1)<=86400 || packet.Kind==0&&packet.Opcode is
+    static void Validate(WirePacket packet)
+    {
+        if (packet is { Kind: 1, Opcode: 1361 }) { RaidPanelTests.ReadClears(packet.Body); return; }
+        That(packet.Kind==0 && packet.Opcode==597 && packet.Body.Length==5 && packet.Body[0] is 0 or 1 && U32(packet.Body,1)<=86400 || packet.Kind==0&&packet.Opcode is
         2 or 3 or 4 or 6 or 7 or 8 or 9 or 11 or 13 or 14 or 21 or 22 or 23 or 24 or 26 or 27 or 28 or 29 or 30 or 31 or 37 or 38 or 153 or 356 or 583 or 586 or 587 or 590 or 591 or 593 or 594 or 598 ||
         packet.Kind==1&&packet.Opcode is 15 or 16 or 37 or 42 or 45 || packet is {Kind:1,Opcode:662,Body:[1]} ||
         packet is {Kind:1,Opcode:72,Body:[1,1,2] or [1,2,2]} ||
         packet is {Kind:0,Opcode:835,Body.Length:7} || packet is {Kind:1,Opcode:668,Body:[1] or [0,19,0]},
         $"Luke Run只消费已证通知/应答：{packet.Kind}/{packet.Opcode}");
+    }
 
 }
