@@ -16,7 +16,8 @@ internal static partial class TagEvildomTcpTests
 
     static async Task VerifyMultipleTeamsAsync(ServerOptions source, string root, TcpTestResources resources)
     {
-        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "tag-evildom-teams"), resources: resources);
+        var clock = new DfoServer.Testing.Inventory.DailyBoosterTestClock(DateTimeOffset.Parse("2026-10-27T08:00:00+08:00"));
+        await using var fixture = new TcpTestFixture(source, Path.Combine(root, "tag-evildom-teams"), resources: resources, clock: clock);
         var roles = new List<Character>();
         using (var owner = new AccountOwners().Acquire(fixture.Options.DevelopmentAccount, () => { }))
         {

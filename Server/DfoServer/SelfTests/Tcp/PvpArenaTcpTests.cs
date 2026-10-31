@@ -35,7 +35,8 @@ internal static class PvpArenaTcpTests
     static async Task RunOrdinaryAsync(ServerOptions source, string root, TcpTestResources resources, bool ordinaryChannel)
     {
         PvpRatingTests.RunResources(resources.Archive);
-        var clock = new Inventory.DailyBoosterTestClock(DateTimeOffset.UtcNow);
+        // 固定当日UTC零点，全部推进最多555秒，不跨越UTC+8的06:00日切；屏障仍逐包严格核验。
+        var clock = new Inventory.DailyBoosterTestClock(new DateTimeOffset(DateTimeOffset.UtcNow.UtcDateTime.Date, TimeSpan.Zero));
         await using var f = new TcpTestFixture(source, Path.Combine(root, ordinaryChannel ? "pvp-ordinary" : "pvp-arena"), resources: resources, clock: clock);
         var repository = new CharacterRepository(f.Database, resources.Quests);
         Console.WriteLine("PVP fixture: repository initialized");
