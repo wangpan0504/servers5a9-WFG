@@ -95,6 +95,10 @@ internal sealed partial class GameSession
                         { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "任务目标或NPC场景尚未满足" };
             }
         }
+        // #897：安徒恩解锁任务与接取同一城镇合同，任意真实城镇地图交付，不限奈恩所在图，赛丽亚房间等城镇房间也可交付；副本/结算内不交付。
+        if (QuestAntonUnlockEntry.Supports(quest) && (captured.Phase != SessionPhase.Town || !QuestAntonUnlockEntry.AtTown(expected, towns)))
+            return new(QuestFinishOutcome.Rejected, RejectionReceipt: rejection)
+                { Failure = QuestCompletionFailure.EligibilityChanged, Reason = "安徒恩解锁任务须在真实城镇地图交付" };
         if (captured.Pending is { } incomplete && (incomplete.Plan.QuestId != questId || incomplete.Plan.RewardSelector != selector ||
             incomplete.Plan.Multiplier != multiplier || incomplete.SelectionEpoch != captured.SelectionEpoch || incomplete.Phase != captured.Phase ||
             incomplete.DungeonIdentity != captured.Identity || !ReferenceEquals(incomplete.Plan.Expected, expected)))

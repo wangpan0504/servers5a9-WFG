@@ -34,7 +34,7 @@ internal static class QuestAntonUnlockTests
             { Level = 85, CompletedQuests = [3779] };
         That(QuestAntonUnlockEntry.Supports(quest) && !quest.Definition.ExposedByNpc &&
             QuestEligibility.Candidates(character, catalog).SequenceEqual([12829]),
-            "奈恩窄入口仅增加合格候选，不改原exposed0");
+            "城镇窄入口仅增加合格候选，不改原exposed0");
         foreach (var rejected in new[] { character with { Level = 84 }, character with { CompletedQuests = [] },
             character with { CompletedQuests = [3779, 12829] }, character with { ActiveMainQuests = [new(0, 12829, 1)] } })
             That(!QuestEligibility.Evaluate(rejected, quest, catalog).Eligible, "安徒恩原等级、前置、一次接取与完成规则不绕过");
@@ -49,7 +49,7 @@ internal static class QuestAntonUnlockTests
             quest with { Definition = quest.Definition with { FirstExposedByNpc = 1 } }
         })
             That(!QuestAntonUnlockEntry.Supports(changed) && QuestEligibility.InspectResource(changed).Entry != QuestResourceEntry.Ordinary,
-                "相邻任务或改变资源合同不能继承奈恩豁免");
+                "相邻任务或改变资源合同不能继承城镇入口豁免");
         var unknown = quest with { Definition = quest.Definition with { Fields = [new("unknown unlock field", [], [])] } };
         That(!QuestCoverage.HasOrdinaryDeclarations(unknown), "入口不吞掉未知资源声明");
     }
@@ -62,6 +62,19 @@ internal static class QuestAntonUnlockTests
             .Where(point => point.X is >= 0 and <= ushort.MaxValue && point.Y is >= 0 and <= ushort.MaxValue)
             .Select(point => new Location(point.Town, point.Area, (ushort)point.X, (ushort)point.Y))
             .First(position => towns.IsPosition(position, completed));
+    }
+
+    // #897复现点：赛丽亚38/1。优先取该真实城镇区域，只要求不含奈恩332且不是房间。
+    internal static Location TownAwayFromNain(TownCatalog towns)
+    {
+        var completed = new HashSet<int> { 3779 };
+        return towns.Areas.Values.OrderBy(area => area is { Town: 38, Area: 1 } ? 0 : 1)
+            .Where(area => area.Map(completed) is { Error: null, IsRoom: false } map && map.Npcs.All(npc => npc.Id != 332))
+            .SelectMany(area => area.Map(completed).Bounds.Select(region =>
+                (area.Town, area.Area, X: region.Bounds.X + region.Bounds.Width / 2, Y: region.Bounds.Y + region.Bounds.Height / 2)))
+            .Where(point => point.X is >= 0 and <= ushort.MaxValue && point.Y is >= 0 and <= ushort.MaxValue)
+            .Select(point => new Location(point.Town, point.Area, (ushort)point.X, (ushort)point.Y))
+            .First(position => towns.IsPosition(position, completed) && !towns.IsRoom(position, completed));
     }
 
     public static void RunResources(TownCatalog towns, CharacterCatalog characters, ItemResources items,
@@ -79,10 +92,10 @@ internal static class QuestAntonUnlockTests
         };
         using var f = new QuestOrdinaryCompletionTests.Fixture(towns, characters, learning, growth, parameters,
             items, quest, materialCount: 0, active: [], definitions: quests.All.ToArray(), configure: Configure, resumeTown: true);
-        That(QuestAntonUnlockEntry.AtNpc(f.Read(), towns) && !CharacterRosterEntry.FromCharacter(f.Read()).AntonEligible,
-            "未交付者即使在奈恩地图也无安徒恩频道资格");
+        That(towns.IsPosition(f.Read().Position, QuestEligibility.Completed(f.Read())) && !CharacterRosterEntry.FromCharacter(f.Read()).AntonEligible,
+            "未交付者即使在城镇也无安徒恩频道资格");
         That(f.Change(12829, QuestLifecycleAction.Accept)?.Outcome == QuestLifecycleOutcome.Committed,
-            "真实奈恩地图接取原寻物任务");
+            "真实城镇地图接取原寻物任务");
         var before = f.Read();
         That(f.Finish(ushort.MaxValue, 12829).Outcome == QuestFinishOutcome.Rejected && Same(before, f.Read()),
             "没有账号金色小晶块时拒绝交付且不写完成");
@@ -122,7 +135,7 @@ internal static class QuestAntonUnlockTests
             resumeTown: true, loseResult: true))
         {
             That(lost.Change(12829, QuestLifecycleAction.Accept)?.Outcome == QuestLifecycleOutcome.Committed,
-                "返回丢失夹具沿真实奈恩接取");
+                "返回丢失夹具沿真实城镇接取");
             That(lost.Session.PlanAndCommitInventory(character => new InventoryResult(true, 0,
                 new InventoryPlan(character.Inventory, character.Inventory with
                 { AccountWallet = character.Inventory.AccountWallet.Set(CurrencyKind.GoldCube, 100) }, "anton_test_funding"))).Accepted,
@@ -137,12 +150,47 @@ internal static class QuestAntonUnlockTests
                 Same(persisted, lost.Read()) && lost.Receipts == 1 && lost.Session.CanPublishQuestCompletion(recovered.Receipt),
                 "相同34恢复冻结计划与同一回执，不再扣钱包或分配奖励UID");
         }
+        var away = TownAwayFromNain(towns);
+        using (var town = new QuestOrdinaryCompletionTests.Fixture(towns, characters, learning, growth, parameters,
+            items, quest, materialCount: 0, active: [], definitions: quests.All.ToArray(),
+            configure: source => Configure(source) with { Position = away }, resumeTown: true))
+        {
+            That(town.Read().Position is var at && (at.Town, at.Area) == (away.Town, away.Area) &&
+                towns.IsPosition(at, QuestEligibility.Completed(town.Read())),
+                "夹具位于不含奈恩的真实城镇区域");
+            var accept = town.Change(12829, QuestLifecycleAction.Accept);
+            That(accept?.Outcome == QuestLifecycleOutcome.Committed,
+                "#897 非奈恩城镇（赛丽亚38/1）也可接取安徒恩解锁任务：" + accept?.Reason);
+            That(town.Session.PlanAndCommitInventory(character => new InventoryResult(true, 0,
+                new InventoryPlan(character.Inventory, character.Inventory with
+                { AccountWallet = character.Inventory.AccountWallet.Set(CurrencyKind.GoldCube, 100) }, "anton_test_funding"))).Accepted,
+                "非奈恩城镇夹具真实钱包准备");
+            var delivered = town.Finish(ushort.MaxValue, 12829);
+            That(delivered.Outcome == QuestFinishOutcome.Committed && town.Read().CompletedQuests.Contains(12829),
+                "#897 非奈恩城镇也可交付安徒恩解锁任务：" + delivered.Reason);
+        }
+        using (var room = new QuestOrdinaryCompletionTests.Fixture(towns, characters, learning, growth, parameters,
+            items, quest, materialCount: 0, definitions: quests.All.ToArray(),
+            configure: source => Configure(source) with { Position = towns.Room, CompletedQuests = [3779] }))
+        {
+            That(room.Session.PlanAndCommitInventory(character => new InventoryResult(true, 0,
+                new InventoryPlan(character.Inventory, character.Inventory with
+                { AccountWallet = character.Inventory.AccountWallet.Set(CurrencyKind.GoldCube, 100) }, "anton_test_funding"))).Accepted,
+                "城镇外夹具真实钱包准备");
+            That(towns.IsRoom(room.Read().Position, QuestEligibility.Completed(room.Read())), "夹具位于赛丽亚房间38/1");
+            var roomDelivered = room.Finish(ushort.MaxValue, 12829);
+            That(roomDelivered.Outcome == QuestFinishOutcome.Committed && room.Read().CompletedQuests.Contains(12829),
+                "#897 赛丽亚房间38/1也可交付安徒恩解锁任务：" + roomDelivered.Reason);
+        }
         using var wrong = new QuestOrdinaryCompletionTests.Fixture(towns, characters, learning, growth, parameters,
             items, quest, materialCount: 0, active: [], definitions: quests.All.ToArray(),
             configure: source => Configure(source) with { Position = towns.Room });
-        var wrongBefore = wrong.Read();
-        That(wrong.Change(12829, QuestLifecycleAction.Accept)?.Outcome == QuestLifecycleOutcome.Rejected &&
-            Same(wrongBefore, wrong.Read()), "远离奈恩地图的伪造31不改变存档");
+        That(towns.IsRoom(wrong.Read().Position, QuestEligibility.Completed(wrong.Read())), "接取夹具位于赛丽亚房间38/1");
+        var roomAccept = wrong.Change(12829, QuestLifecycleAction.Accept);
+        That(roomAccept?.Outcome == QuestLifecycleOutcome.Committed,
+            "#897 赛丽亚房间38/1也可接取安徒恩解锁任务：" + roomAccept?.Reason);
+        That(!QuestAntonUnlockEntry.AtTown(wrong.Read() with { Position = new Location(255, 255, 0, 0) }, towns),
+            "不存在的城镇区域不算真实城镇地图");
     }
 
 }
