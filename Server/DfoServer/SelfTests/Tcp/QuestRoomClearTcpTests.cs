@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Quests;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld.Characters;
 using DfoServer.GameWorld.Dungeons;
@@ -13,8 +14,9 @@ namespace DfoServer.Testing;
 
 internal static class QuestRoomClearTcpTests
 {
-    // 借用quests已启动服务与共享资源；真实3525/3560资源、生产Handler和合成普通39，不代表Windows演出验收。
-    // 3525 CompleteNpc 362 在城镇地图，92247/92251没有该NPC，图内与结算父34拒绝，回城后再交。3578/1276不在城镇地图，结算34仍按子完成集交付。
+    // 借用quests已启动服务与共享资源；真实顺序父/末子资源、生产Handler和合成普通39，不代表Windows演出验收。
+    // 3525/362、3540/57、3494/362 覆盖图内与结算父34拒绝、回城后交付；3748/76 仅核对城镇 NPC。
+    // 3578/1276、3146/1247 不在城镇地图，结算34仍按子完成集交付。
     internal static void Verify(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
         Action<TcpPeer,Action<WirePacket>?> drain)
     {
@@ -22,11 +24,16 @@ internal static class QuestRoomClearTcpTests
         bool TownNpc(uint id) => resources.Towns.Areas.Values.Any(area =>
             area.Default.Npcs.Any(npc => npc.Id == id) ||
             area.Phases.Any(phase => phase.Npcs.Any(npc => npc.Id == id)));
-        That(TownNpc(58) && TownNpc(362) && !TownNpc(1247) && !TownNpc(1276),
-            "根特顺序父CompleteNpc在城镇地图，3146/3578交付NPC不在城镇地图");
+        That(TownNpc(58) && TownNpc(362) && TownNpc(57) && TownNpc(76) &&
+            !TownNpc(1247) && !TownNpc(1276),
+            "顺序父城镇交付NPC在城镇地图，3146/3578对话NPC不在");
         foreach (bool ordinary in new[] { false,true }) VerifyCase(fixture,resources,growth,drain,dungeons,ordinary);
         foreach (bool ordinary in new[] { false,true }) VerifyGrandine(fixture,resources,growth,drain,dungeons,ordinary);
         foreach (bool ordinary in new[] { false,true }) VerifySeaTrain(fixture,resources,growth,drain,dungeons,ordinary);
+        foreach (bool ordinary in new[] { false,true }) VerifyTownNpcParent(fixture,resources,growth,drain,dungeons,ordinary,
+            3540,3564,3565,83,92360,"night");
+        foreach (bool ordinary in new[] { false,true }) VerifyTownNpcParent(fixture,resources,growth,drain,dungeons,ordinary,
+            3494,3817,3818,163,91599,"gbl");
         QuestDarkElfGuardTcpTests.Verify(fixture,resources,growth,drain,dungeons);
         QuestHarlemRidingTcpTests.Verify(fixture,resources,growth,drain);
     }
@@ -473,6 +480,157 @@ internal static class QuestRoomClearTcpTests
             fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)+
             fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id)+
             fixture.Snapshot("SELECT * FROM character_dungeon_growth_receipts WHERE character_id=$p0 ORDER BY combat_sequence",created.Id);
+    }
+
+    // 3540/3494：末子清图后图内与结算父34拒绝，回城再交。叠层图只从入场 maze.MapSpecification 取，找不到就停。
+    static void VerifyTownNpcParent(TcpTestFixture fixture,TcpTestResources resources,CharacterGrowthCatalog growth,
+        Action<TcpPeer,Action<WirePacket>?> drain,DungeonCatalog dungeons,bool ordinary,
+        int parent,int previousChild,int child,uint dungeon,int targetMap,string tag)
+    {
+        var parentQuest = resources.Quests.Get(parent);
+        var childQuest = resources.Quests.Get(child);
+        // #972：带 CompleteNpc 的末清图子（如 3818）保留到结算翻牌后对话，回城父34一并关闭；无 CompleteNpc 的末子（如 3565）清图即归档。
+        bool dialogueChild = QuestRelationProgress.ClearDialogueChild(childQuest,resources.Quests);
+        That(QuestRelationProgress.SequentialParent(parentQuest,resources.Quests) && parentQuest.CompleteNpc > 0 &&
+            parentQuest.IntData.Contains(previousChild) && parentQuest.IntData.Contains(child) &&
+            childQuest.Condition == "[clear map]" && childQuest.IntData[0] == targetMap &&
+            childQuest.Definition!.Dungeons.Any(row => row.DungeonId == dungeon),
+            "顺序父保留真实子任务与末子清图目标：" + parent);
+        byte level = checked((byte)parentQuest.MinimumLevel);
+        var area = resources.Towns.Areas.Values.First(row => row.Level <= level && row.DungeonWorldMap is { } world &&
+            resources.Towns.DungeonMaps[world].Options.Any(option => option.DungeonId == dungeon));
+        var done = new HashSet<int>(area.Quests) { 3145,4873,previousChild };
+        done.UnionWith(parentQuest.Prerequisites);
+        if (area.AnyQuests.Length != 0) done.Add(area.AnyQuests[0]);
+        var bounds = area.Map(done).Bounds.First(row => row.Conditions.Length == 0 && row.Quests.All(done.Contains)).Bounds;
+        var position = new Location(area.Town,area.Area,checked((ushort)(bounds.X+bounds.Width/2)),checked((ushort)(bounds.Y+bounds.Height/2)));
+        string account = ordinary ? tag + "-zero" : tag + "-parent";
+        Character created;
+        using (var owner = new AccountOwners().Acquire(account,() => { }))
+        {
+            var candidate = CharacterCreation.Prepare(ordinary ? tag + "Zero" : tag + "Quest",
+                resources.Characters.Get(0),position,position,resources.Learning.Get);
+            var learning = SkillPointLedger.Synchronize(0,0,level,candidate.InitialLearning with
+                { Experience = growth.GetLevelStartExperience(level) },resources.Learning);
+            created = new CharacterRepository(fixture.Database).Create(owner,candidate with
+                { Level = level,AcceptedStoryLevel = level,CompletedQuests = done.ToArray(),InitialLearning = learning });
+        }
+        ushort requested = ordinary ? (ushort)0 : checked((ushort)parent);
+        using (var peer = Open(fixture,account))
+        {
+            peer.Select(created.Slot,prepared:true,resumeTown:true,room:false);
+            That(peer.Id == created.Id,"同类顺序父选角绑定本条实际角色：" + parent);
+            byte[] information = [];
+            var map = FormalDungeonTcpTests.Enter(peer,checked((ushort)parent),dungeon,row => information = row,requestQuestId:requested);
+            FormalDungeonTcpTests.Load(peer);
+            int enabled = 0,bossChecks = 0;
+            var dead = new HashSet<ushort>();
+            Drain();
+            var maze = dungeons.Get(checked((int)dungeon)).Mazes.Single(row => row.SourceOrdinal == information[7]);
+            var overlay = maze.MapSpecification?.FirstOrDefault(row => row.Id == targetMap);
+            That(overlay is not null,
+                "入场 maze 的 MapSpecification 须含任务叠层图，找不到不改规格房号：" + parent + "/" + targetMap +
+                " 现有=" + string.Join("|",(maze.MapSpecification ?? []).Select(row => row.Id)));
+            var target = overlay!;
+            var boss = maze.MapSpecification!.Single(row => row.Position == maze.Bosses.Single());
+            peer.Send(31,QuestRequest(31,checked((ushort)child),[]));
+            peer.Expect(1,31,[1,(byte)child,(byte)(child >> 8),1,0,0,0,0]);
+            Drain();
+            var path = QuestStoryRouteTests.Path(maze.StaticTopology,new(map[0],map[1]),target.Position);
+            foreach (var next in path.Skip(1)) { KillRoom(); Move(next); }
+            That(U32(map,14) == targetMap,"正式Run到达任务叠层图：" + targetMap);
+            KillRoom();
+            if (dialogueChild)
+                That(fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,child).Length == 0 &&
+                    fixture.Query("SELECT condition_state FROM character_active_main_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,child) is [[0L]] &&
+                    fixture.Query("SELECT quest_id,map_id FROM character_quest_clear_receipts WHERE character_id=$p0 AND quest_id=$p1",peer.Id,child)
+                        is [[long clearedChild,long clearedMap]] && clearedChild == child && clearedMap == targetMap,
+                    "带对话NPC的末清图子保存清图凭据但保留到结算后对话：" + child);
+            else
+                That(fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,child) is [[long archived]] &&
+                    archived == child &&
+                    fixture.Query("SELECT quest_id,experience_amount FROM character_quest_completion_receipts WHERE character_id=$p0 AND quest_id=$p1",peer.Id,child)
+                        is [[long childId,0L]] && childId == child,
+                    "末子零奖励自动归档，不发金币：" + child);
+            string cleared = State();
+            peer.Send(34,QuestRequest(34,checked((ushort)parent),[255,255,1,0,255,255]));
+            peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == cleared &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,parent).Length == 0,
+                "叠层图没有城镇 CompleteNpc，末子归档后不能在图内提前交付父任务：" + parent);
+            if (!dialogueChild)
+            {
+                peer.Send(33,QuestRequest(33,checked((ushort)parent),[0,0]));
+                peer.Expect(1,33,[1,(byte)parent,(byte)(parent >> 8),0,0,0,0]); Drain();
+                That(State() == cleared,"父33读取实际子完成后的归零状态：" + parent);
+            }
+            peer.Send(34,QuestRequest(34,checked((ushort)child),[255,255,1,0,255,255]));
+            peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == cleared,(dialogueChild ? "结算翻牌前图内子34不交付：" : "已自动归档子任务的迟到34不再次发奖：") + child);
+            if (target.Position != boss.Position)
+            {
+                var toBoss = QuestStoryRouteTests.Path(maze.StaticTopology,target.Position,boss.Position);
+                foreach (var next in toBoss.Skip(1)) { KillRoom(); Move(next); }
+                That(U32(map,14) == boss.Id,"中途叠层完成后继续原Boss终点：" + boss.Id);
+                KillRoom();
+            }
+            That(enabled == 1 && bossChecks == 1,"实际Boss死亡才许可结算：" + parent);
+            var report = DfoServer.DungeonSettlementProtocolTests.Report(peer.Id,99);
+            peer.Send(46,report); Drain();
+            string settled = State();
+            peer.Send(34,QuestRequest(34,checked((ushort)parent),[255,255,1,0,255,255]));
+            peer.Expect(1,34,[0,19,0]); Drain();
+            That(State() == settled &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,parent).Length == 0,
+                "Boss房没有城镇 CompleteNpc，结算中不能交付父任务：" + parent);
+            long goldBefore = (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id).Single()[0];
+            peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3,[1,(byte)peer.Id,(byte)(peer.Id >> 8),0]);
+            peer.Expect(0,24); peer.Expect(0,21); peer.Expect(0,356); peer.Barrier();
+            peer.Send(34,QuestRequest(34,checked((ushort)parent),[255,255,1,0,255,255]));
+            var finished = peer.Expect(1,34).Body;
+            That(finished.Length >= 4 && finished[0] == 1 && U16(finished,1) == parent,"回城后真实34交付已完成全部子项的顺序父：" + parent);
+            Drain();
+            var receipts = fixture.Query(
+                "SELECT quest_id,experience_amount FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",peer.Id);
+            long goldAfter = (long)fixture.Query("SELECT gold FROM characters WHERE id=$p0",peer.Id).Single()[0];
+            That(goldAfter >= goldBefore &&
+                receipts.Any(row => (long)row[0] == parent && (long)row[1] > 0) &&
+                (dialogueChild || receipts.Any(row => (long)row[0] == child && (long)row[1] == 0)) &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,parent)
+                    is [[long doneParent]] && doneParent == parent &&
+                fixture.Query("SELECT quest_id FROM character_completed_quests WHERE character_id=$p0 AND quest_id=$p1",peer.Id,child)
+                    is [[long doneChild]] && doneChild == child &&
+                fixture.Query("SELECT quest_id FROM character_active_main_quests WHERE character_id=$p0 AND quest_id IN ($p1,$p2)",peer.Id,parent,child).Length == 0,
+                "回城父34发放经验（PVF 无金币倍率则金币不增加），末子保持零奖励：" + parent);
+            if (parentQuest.DeclaredGoldMultiple is > 0)
+                That(goldAfter > goldBefore,"声明金币倍率的顺序父回城34发放金币：" + parent);
+
+            void Drain() => drain(peer,packet =>
+            {
+                if (packet.Opcode == 31) enabled++;
+                if (packet.Opcode == 115) bossChecks++;
+            });
+            void Kill(int offset)
+            {
+                ushort key = U16(map,offset+6);
+                if (!dead.Add(key)) return;
+                peer.Send(39,FormalDungeonTcpTests.Death(key,peer.Id,map[offset+12])); Drain();
+            }
+            void KillRoom()
+            {
+                foreach (int offset in Enumerable.Range(0,map[18]).Select(at => 19+22*at).Where(at => map[at+21] == 0)) Kill(offset);
+            }
+            void Move(DungeonPoint point)
+            {
+                var request = new byte[100]; request[0] = checked((byte)point.X); request[1] = checked((byte)point.Y);
+                peer.Send(45,request); peer.Expect(1,45,[1]); map = peer.Expect(0,29).Body;
+                FormalDungeonTcpTests.Load(peer); Drain();
+            }
+        }
+        string State() => fixture.Snapshot("SELECT revision,experience,gold FROM characters WHERE id=$p0",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_active_main_quests WHERE character_id=$p0 ORDER BY slot",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_quest_completion_receipts WHERE character_id=$p0 ORDER BY quest_id",created.Id)+
+            fixture.Snapshot("SELECT * FROM character_completed_quests WHERE character_id=$p0 ORDER BY quest_id",created.Id);
     }
 
     static byte[] GrandineRetirement(ushort key,ushort reporter)
