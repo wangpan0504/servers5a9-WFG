@@ -16,6 +16,7 @@ internal static partial class FormalDungeonTcpTests
 {
     public static async Task RunSpecialNormalAsync(ServerOptions source,string root,TcpTestResources resources)
     {
+        BossRushTests.Run(resources.Archive);
         SpecialNormalDungeonRewardTests.Run(resources);
         await using var fixture = new TcpTestFixture(source,Path.Combine(root,"special-normal-entry"),gm:true,resources:resources);
         await fixture.StartAsync();
@@ -430,6 +431,37 @@ internal static partial class FormalDungeonTcpTests
             BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(5)) is >= 100000 and <= 120000,
             "1487 入场 rank/score 为 0，剩余毫秒取自 120 秒时限");
         Load(peer);
+        int score = 0;
+        var seen = new HashSet<int>();
+        foreach (var point in new[] { (X:1,Y:2), (X:0,Y:2) })
+        {
+            byte[] move = new byte[100];
+            move[0] = (byte)point.X;
+            move[1] = (byte)point.Y;
+            peer.Send(45, move);
+            peer.Expect(1, 45, [1]);
+            byte[] battleMap = peer.Expect(0, 29).Body;
+            That(battleMap.Length >= 41 && battleMap[18] == 1 &&
+                bosses.Contains(checked((int)U32(battleMap, 27))),
+                $"337战斗房必须生成专表内可计分怪物，实际模板={U32(battleMap, 27)}");
+            int id = checked((int)U32(battleMap,27));
+            That(seen.Add(id),"不同战斗房不重复分配同一计分怪");
+            Load(peer);
+            QuestLifecycleTcpTests.DrainNotifications(peer);
+            var report = Death(U16(battleMap,25),peer.Id,battleMap[31]);
+            peer.Send(39,report);
+            var notices = new List<WirePacket>();
+            QuestLifecycleTcpTests.DrainNotifications(peer,notices.Add);
+            score += catalog.BossRush.SoulFor(bosses.IndexOf(id));
+            var hud = notices.Single(packet => packet.Opcode == 1487).Body;
+            That(hud.Length == 9 && hud[0] == catalog.BossRush.RankOf(score) &&
+                U32(hud,1) == score,"真实击杀刷新1487分数与对应段位");
+            peer.Send(39,report);
+            notices.Clear();
+            QuestLifecycleTcpTests.DrainNotifications(peer,notices.Add);
+            That(notices.All(packet => packet.Opcode != 1487),"重复死亡报告不再次计分或刷新段位");
+        }
+        That(score >= 20 && catalog.BossRush.RankOf(score) > 0,"沿自然房间击杀能够跨过首档段位阈值");
         peer.Send(42); peer.Expect(1,42,[1]); peer.Expect(0,3); peer.Expect(0,24); RefreshedQuests(peer); peer.Barrier();
     }
 }

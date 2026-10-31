@@ -158,6 +158,24 @@ internal sealed class DungeonRoomCatalog
         };
     }
 
+    public DungeonRoomDefinition WithBossRushMonsters(DungeonRoomDefinition room, BossRushCatalog catalog, int offset)
+    {
+        if (offset < 0 || offset + room.Monsters.Count > catalog.Bosses.Length)
+            throw new InvalidDataException("BossRush 房间怪物数量超过专表名单");
+        // 按路线资源行顺序消费专表；仅替换模板，保留地图位置、等级和品级声明。
+        var result = room.Monsters.Select((source, index) =>
+        {
+            int id = catalog.Bosses[offset + index];
+            if (!monsters.TryGetValue(id, out string? path) || !archive.Contains(path))
+                throw new InvalidDataException("BossRush 怪物定义不存在：" + id);
+            var raw = source.RawValues.ToArray();
+            raw[0] = id;
+            return source with { MonsterId = id, RawValues = Array.AsReadOnly(raw), Path = path,
+                ChampionRestricted = ParseChampionRestriction(archive.ReadTokens(path), archive.ResolveString) };
+        }).ToArray();
+        return room with { Monsters = Array.AsReadOnly(result) };
+    }
+
     public DungeonRoomDefinition WithLostLandWarps(DungeonRoomDefinition room)
     {
         var warps = new List<DungeonLostLandWarp>();
