@@ -5,6 +5,8 @@ namespace PvfLib;
 // 恢复四元组只保留原值，第三项不推断为治疗时间或倍率。
 public sealed record RecoveryDeclaration(string Operation, int Amount, int Auxiliary, string Target);
 public sealed record StatChangeDurationDeclaration(int Milliseconds, string Target, int? Parameter);
+public sealed record StatChangeDeclaration(string Operation, int Amount, string Stat);
+public sealed record DisguiseDeclaration(string Kind, int FormId, int Seconds);
 
 public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, StackableFile Stackable,
     int? CoolTime, int? CoolGroup, RecoveryDeclaration? HpRecovery, RecoveryDeclaration? MpRecovery,
@@ -17,10 +19,12 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
     public int? QuestExpBonusPermille { get; init; }
     public int? ExpBonusMilliseconds { get; init; }
     public StatChangeDurationDeclaration? StatChangeDuration { get; init; }
+    public ImmutableArray<StatChangeDeclaration> StatChanges { get; init; } = [];
     public byte? EffectMaintenance { get; init; }
     public byte? CooltimeMaintenance { get; init; }
     public ImmutableArray<int> LimitDungeons { get; init; } = [];
     public ImmutableArray<int>? ActionUsableDungeons { get; init; }
+    public DisguiseDeclaration? Disguise { get; init; }
 
     public static RecoveryConsumableFile Parse(int id, string path, PvfToken[] tokens, Func<int, string> resolve)
     {
@@ -60,6 +64,8 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         int? coolTime = Scalar("cool time"), group = Scalar("cooltime group"), subType = Scalar("sub type"), totalUses = Scalar("total usable count");
         var hp = Recovery("hp recovery"); var mp = Recovery("mp recovery");
         var duration = Duration(document, resolve, errors);
+        var statChanges = StatChangesFrom(document, resolve, errors);
+        var disguise = stackable.TypeDeclaration?.Label == "[disguise]" ? DisguiseFrom(document, resolve, errors) : null;
         byte? effects = Maintenance(document, "effect maintenance", 4, errors);
         byte? cooldowns = Maintenance(document, "cooltime maintenance", 3, errors);
         int? bonus = ExpBonus(document, "exp bonus rate", errors);
@@ -80,12 +86,46 @@ public sealed record RecoveryConsumableFile(int TemplateId, string ScriptPath, S
         { SubType = subType, TotalUsableCount = totalUses, StructureDiagnostics = structureErrors.ToImmutableArray(),
             ExpBonusPermille = bonus, QuestExpBonusPermille = questBonus,
             ExpBonusMilliseconds = duration is { Target: "myself" } ? duration.Milliseconds : null,
-            StatChangeDuration = duration, EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits,
-            ActionUsableDungeons = usable };
+            StatChangeDuration = duration, StatChanges = statChanges,
+            EffectMaintenance = effects, CooltimeMaintenance = cooldowns, LimitDungeons = limits,
+            ActionUsableDungeons = usable, Disguise = disguise };
+    }
+
+    static DisguiseDeclaration? DisguiseFrom(PvfTokenDocument document, Func<int, string> resolve, List<string> errors)
+    {
+        var kinds = document.Sections.Where(section => section.Name == "string data").ToArray();
+        var parameters = document.Sections.Where(section => section.Name == "int data").ToArray();
+        if (kinds.Length == 0 && parameters.Length == 0) return null;
+        if (kinds is [{ Children.Length: 0, Values: [{ Type: 6 } kind] }] &&
+            parameters is [{ Children.Length: 0, Values: [{ Type: 0, Value: > 0 } form, { Type: 0, Value: > 0 } seconds] }])
+            return new(resolve(kind.Value), form.Value, seconds.Value);
+        // 变身只保留完整的一组形态与时长，不从多选或随机向量挑一个默认值。
+        errors.Add("变身形态及持续时间声明不完整");
+        return null;
     }
 
     static bool CompleteIntegerScalars(IEnumerable<PvfTokenSection> sections) =>
         sections.All(section => section is { Children.Length: 0, Values: [{ Type: 0 }] });
+
+    static ImmutableArray<StatChangeDeclaration> StatChangesFrom(PvfTokenDocument document,
+        Func<int, string> resolve, List<string> errors)
+    {
+        var sections = document.Sections.Where(section => section.Name == "stat change").ToArray();
+        if (sections.Length == 0) return [];
+        if (sections is [{ Children.Length: 0 } section] && section.Values.Length > 0 && section.Values.Length % 3 == 0)
+        {
+            var entries = ImmutableArray.CreateBuilder<StatChangeDeclaration>(section.Values.Length / 3);
+            for (int i = 0; i < section.Values.Length; i += 3)
+            {
+                if (section.Values[i].Type != 6 || section.Values[i + 1].Type != 0 || section.Values[i + 2].Type != 6)
+                    break;
+                entries.Add(new(resolve(section.Values[i].Value), section.Values[i + 1].Value, resolve(section.Values[i + 2].Value)));
+            }
+            if (entries.Count == section.Values.Length / 3) return entries.MoveToImmutable();
+        }
+        errors.Add("持续属性声明不完整");
+        return [];
+    }
 
     // 日次数仅兼容相同完整值的重复声明，冲突值继续保留诊断及无效状态。
     static bool AllowsRepeatedScalar(string name, IEnumerable<PvfTokenSection> sections) =>

@@ -141,6 +141,25 @@ internal static class GuildRankingTests
                 current.Factors.Dungeon > 50 && current.Factors.War == 0 && current.Factors.Event == 0,
                 "真实出勤角色去重，组队按实例计分且不会虚增福利，旧会籍事件不混入当月贡献");
             Sql($"""
+                INSERT INTO character_raid_reward_receipts(character_id,account,instance_id,phase,kind,card,week_key,final_phase,plan_json,mail_ids,created_at,raid_type)
+                VALUES({character.Id},'guild-ranking','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',0,0,1,20261022,1,json_object(),'[]',{now},2);
+                """);
+            That(repository.ReadGuildRanking(now).Facts.Single().Raids == 0,
+                "旧翻牌收据没有原会籍成功事件，不能按当前公会补造通关排行");
+            Sql($"""
+                INSERT INTO guild_contribution_events VALUES('rank-raid',{character.Id},1,1000,5,{GuildAttendanceDay.Start(now)},{week},1000,{now});
+                INSERT INTO guild_contribution_events VALUES('rank-raid-old',{character.Id},1,999,5,{GuildAttendanceDay.Start(now)},{week},1000,{now});
+                INSERT INTO guild_contribution_events VALUES('rank-raid-none',{character.Id},NULL,0,5,{GuildAttendanceDay.Start(now)},{week},0,{now});
+                INSERT INTO guild_contribution_events VALUES('rank-raid-future',{character.Id},1,1000,5,{GuildAttendanceDay.Start(now)},{week},250,{now+1});
+                """);
+            That(repository.ReadGuildRanking(now).Facts.Single().Raids == 1,
+                "真实成功事件按次数计排行，不用同会倍率金额反推，旧会籍、零归属及未来事件均排除");
+            Sql($"UPDATE guild_members SET joined_at_unix=1001 WHERE character_id={character.Id}");
+            That(repository.ReadGuildRanking(now).Facts.Single().Raids == 0,
+                "退会重入不能把旧代次真实通关搬到新会籍");
+            Sql($"UPDATE guild_members SET joined_at_unix=1000 WHERE character_id={character.Id}");
+            Sql("DELETE FROM guild_contribution_events WHERE event_id LIKE 'rank-raid%'; DELETE FROM character_raid_reward_receipts WHERE instance_id='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'");
+            Sql($"""
                 INSERT INTO guild_benefits VALUES(1,1,10,{now+1}),(1,3,167,{now}),(1,5,169,0),(1,7,0,0);
                 INSERT INTO guild_cargo_state(guild_id,capacity) VALUES(1,16);
                 INSERT INTO guild_economy(guild_id,member_limit) VALUES(1,500);

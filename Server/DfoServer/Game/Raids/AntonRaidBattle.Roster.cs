@@ -34,6 +34,11 @@ internal sealed partial class AntonRaidBattle
                     row.Fact.Identity.TaskAttempt != entry.Identity.TaskAttempt || row.Fact.Identity.Epoch < entry.Identity.Epoch) return null;
             var before = current;
             bool changed = false;
+            if (!run.GuildPartyRecorded)
+            {
+                RecordGuildClearParty(facts.Select(row => row.Actor.Character));
+                run.GuildPartyRecorded = true;
+            }
             foreach (var row in facts)
                 if (run.RosterContributions.Add(row.Actor.Character))
                 { RecordRosterClear(run.Phase, row.Actor.Character); changed = true; }

@@ -94,8 +94,11 @@ internal sealed record InventorySnapshot(ImmutableArray<InventoryItem> Items, us
             DevilUses.Select(row => row.Slot).Distinct().Count() != DevilUses.Length)
             throw new InvalidDataException("魔王契约次数账本无效");
         EpicPieces.Validate();
-        if (ShopPurchases.IsDefault || ShopPurchases.Any(row => row.NpcId < 0 || row.ItemId <= 0 || row.Count <= 0 || row.Day < 0) ||
-            ShopPurchases.Select(row => (row.NpcId, row.ItemId, row.AccountWide, row.ResetDaily)).Distinct().Count() != ShopPurchases.Length)
+        if (ShopPurchases.IsDefault || ShopPurchases.Any(row => row.NpcId < 0 || row.ItemId <= 0 || row.Count <= 0 || row.Day < 0 ||
+                !Enum.IsDefined(row.Period) || row.Period != ItemPurchasePeriod.Legacy && (row.NpcId != 0 || row.ResetDaily ||
+                    (row.Period == ItemPurchasePeriod.Accumulate ? row.Day != 0 : row.Day == 0 || row.Day > DateOnly.MaxValue.DayNumber ||
+                        row.Day != ShopPurchaseCount.PeriodDay(row.Day, row.Period)))) ||
+            ShopPurchases.Select(row => (row.NpcId, row.ItemId, row.AccountWide, row.ResetDaily, row.Period)).Distinct().Count() != ShopPurchases.Length)
             throw new InvalidDataException("无效商店限购快照");
         if (ReviveCoins < 0 || WinPoints < 0 || GoldCarryLimit < 0 || AuctionGoldLimit < 0 ||
             CargoCapacity is < 8 or > 264 || AccountCargo.Capacity > 240 || AccountCargo.Revision < 0 || AccountCargo.Gold < 0 ||

@@ -43,6 +43,13 @@ internal static class ConsumableUseTests
         }
         byte[] body = [65, 0, 0, 0xEF, 0xCD, 0xAB, 0x89, 0x54, 4, 0, 0, 0, 0, 0, 0];
         var request = ConsumableUseRequests.Read(body);
+        var disguiseRequest = ConsumableDisguiseRequests.Read([1,60,0,0,0,0x42,0x5b,0x9d,0]);
+        That(disguiseRequest is { Type: 1, Seconds: 60, ItemId: 10312514 },
+            "211按9B保留类型、秒数和源物品模板，形态ID不在请求中");
+        foreach (int length in new[] {0,8,10})
+            Reject<InvalidDataException>(() => ConsumableDisguiseRequests.Read(new byte[length]),"211拒绝截断及未知尾");
+        ConsumableDisguiseRequests.Cancel([]);
+        Reject<InvalidDataException>(() => ConsumableDisguiseRequests.Cancel([0]),"212只接受原生空正文");
         That(request.Position == new InventorySlot(InventoryListType.Main, 65) && request.OpaqueCheck == 0x89ABCDEF && request.ItemId == 1108 && request.Argument == 0,
             "普通44正文按已证15B独立字段解析，不把opaque当时间戳或数量");
         Bytes(ConsumableUsePackets.Ack(request, true), [1, 65, 0, 0, 0xEF, 0xCD, 0xAB, 0x89, 0x54, 4, 0, 0], "成功ACK44完整12B保留原slot/list/check/itemId");
@@ -70,6 +77,22 @@ internal static class ConsumableUseTests
             "可用地下城名单独立进入使用资格，未声明的普通药不受新增限制");
         That(RecoveryConsumableCatalog.Read(dungeonRestricted with { ActionUsableDungeons = null }) is null,
             "存在但解析失败的可用地下城声明不能回退成任意场景使用");
+        var nativeStat = dungeonRestricted with
+        {
+            Stackable = declaration with { HasUseActionPacket = true, DeclaredUseActionPacket = 1 },
+            StatChangeDuration = new(60000, "myself", null),
+            StatChanges = [new("+",175,"physical attack"),new("%",12,"physical attack bonus")]
+        };
+        That(RecoveryConsumableCatalog.Read(nativeStat) is { EffectMilliseconds: 60000, AllowedDungeons.Count: 2 },
+            "非零action标记不误拦原生优先构造的普通持续属性药，保留时限和真实副本名单");
+        foreach (var invalid in new[] { nativeStat with { StatChanges = [] }, nativeStat with { StatChangeDuration = null },
+            nativeStat with { StructureDiagnostics = ["invalid structure"] },
+            nativeStat with { Stackable = nativeStat.Stackable with { DeclaredUseActionPacket = null } },
+            nativeStat with { Stackable = nativeStat.Stackable with { DeclaredUseActionPacket = 2 } },
+            nativeStat with { DeclaredFields = nativeStat.DeclaredFields.Add("action type") },
+            nativeStat with { Stackable = nativeStat.Stackable with { TypeDeclaration = new("[disguise]",[0]) } } })
+            That(RecoveryConsumableCatalog.Read(invalid) is null,
+                "属性药分支不放行缺效果、未知action标记、资产动作、变身或损坏结构");
         foreach (int subtype in new[] { 0, 1, 4, 5, 6, 99 })
         {
             var other = raw with
@@ -182,8 +205,13 @@ internal static class ConsumableUseTests
             That(resources.RecoveryConsumables.TryGet(id, out var potion) && potion.AllowedDungeons is { } dungeons &&
                 dungeons.SetEquals(fiendwarDungeons) && potion.CoolTime == 10000,
                 "漩涡实际普通恢复及解状态补给保留团队26图与引导9图名单和原冷却");
-        That(!resources.RecoveryConsumables.TryGet(10312385, out _) && !resources.RecoveryConsumables.TryGet(10312386, out _),
-            "潜能药声明use action packet1，变身药属于disguise，两者不能冒充普通恢复药消费成功");
+        That(resources.RecoveryConsumables.TryGet(10312385, out var potential) &&
+            potential.AllowedDungeons is { } potentialDungeons && potentialDungeons.SetEquals(fiendwarDungeons) &&
+            potential is { CoolTime: 60000, CoolGroup: 10, EffectMilliseconds: 60000 },
+            "潜能药按原生持续属性使用分支保留团队及引导35图、60秒持续和组10冷却");
+        That(resources.RecoveryConsumables.TryGet(10312386, out var orc) &&
+            orc is { CoolTime: 60000, Disguise: { Type: 1, FormId: 63039, Seconds: 60 }, AllowedDungeons: null },
+            "兽人药从真实资源解析城镇怪物形态和时长，44扣药后仍须211兑现，不借属性药分支伪造效果");
         var mentalUse = new InventoryConsumableUseService(resources.RecoveryConsumables);
         foreach (var (id, group, milliseconds) in new[]
         {

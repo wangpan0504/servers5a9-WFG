@@ -36,12 +36,14 @@ internal sealed partial class AntonRaidBattle
         public DateTimeOffset Anchor { get; }
         public int Week { get; }
         public ImmutableArray<(ushort Character, string Account, RaidPhaseRewardPolicy Policy)> Members { get; }
+        public ImmutableDictionary<ushort, ImmutableArray<ushort>> GuildParties { get; }
         private AntonPhaseSettlement(AntonRaidBattle battle, int phase)
         {
             battle.FreezeAntonResultLocked();
             Instance = battle.Instance; Phase = phase; Anchor = battle.lukeClock.GetUtcNow();
             TimedOut = battle.pendingTransition!.PhaseExpired;
             Week = battle.rewardWeek ?? Game.Dungeons.DungeonIncountPolicy.Period(Anchor).Week;
+            GuildParties = battle.guildClearParties.ToImmutableDictionary();
             Members = battle.originalAntonMembers.Values.OrderBy(actor => actor.Character)
                 .Where(actor => actor.IsCurrent && battle.members.ContainsKey(actor))
                 .Select(actor => (actor.Character, actor.Owner.Account, battle.members[actor][phase])).ToImmutableArray();

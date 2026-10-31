@@ -312,6 +312,7 @@ internal sealed class TcpTestFixture : IAsyncDisposable
                     authentication.Create(account, account == LoginCredentials.DevelopmentAccount
                         ? LoginCredentials.DevelopmentDigest : NativeLoginWire.Digest);
                 }
+                repository.RecoverInterruptedFiendwar(UtcNow);
                 repository.OpenAdventureLedger(DateTimeOffset.UtcNow);
                 var runtime = ServerRuntime.Create(options, resources.Archive, repository, townCatalog ?? resources.Towns,
                     resources.Characters, resources.Learning, resources.ItemResources, log, quests, resources.Tutorials,
@@ -475,6 +476,21 @@ internal sealed class TcpTestFixture : IAsyncDisposable
         {
             await FinishProcessAsync(child);
         }
+    }
+
+    // 只终止本夹具创建且仍持有句柄的独立服务，验证无会话收尾的真实进程中断。
+    internal async Task CrashAsync()
+    {
+        if (hosted is not null || process is null || process.HasExited)
+            throw new InvalidOperationException("崩溃测试要求本夹具仍存活的独立子进程");
+        var child = process; process = null;
+        try
+        {
+            child.Kill(entireProcessTree: true);
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            TestCheck.That(child.ExitCode != 0, "原服务未执行正常退出便被精确终止");
+        }
+        finally { await FinishProcessAsync(child); }
     }
 
     async Task FinishProcessAsync(Process child)

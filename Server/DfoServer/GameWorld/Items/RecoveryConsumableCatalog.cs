@@ -25,11 +25,14 @@ internal sealed record RecoveryConsumableDefinition(int ItemId, int MinimumLevel
     public BossSelectionBuffDefinition? BossSelectionBuff { get; init; }
     public EpicDropBuffDefinition? EpicDropBuff { get; init; }
     public EnhancementPotionDefinition? EnhancementPotion { get; init; }
+    public ConsumableDisguiseDefinition? Disguise { get; init; }
     public ImmutableHashSet<uint> ExcludedDungeons { get; init; } = ImmutableHashSet<uint>.Empty;
     public ImmutableHashSet<uint>? AllowedDungeons { get; init; }
     public bool Allows(byte level, byte job) => !UseForbidden && level >= MinimumLevel && level <= MaximumLevel &&
         job < 16 && (Jobs & (1 << job)) != 0;
 }
+
+internal sealed record ConsumableDisguiseDefinition(byte Type, int FormId, int Seconds);
 
 internal sealed class RecoveryConsumableCatalog
 {
@@ -68,8 +71,15 @@ internal sealed class RecoveryConsumableCatalog
         EpicDropBuffDefinition? epicBuff = null, EnhancementPotionDefinition? enhancementPotion = null)
     {
         var raw = file.Stackable;
-        if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId || LegacyStatusConsumableDefinition.IsNativeItem(file.TemplateId) ||
-            (raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[throw]" or "[set]" } &&
+        // 原生工厂优先构造普通持续属性对象；use action packet并不将它改成515动作类。
+        bool nativeStatUse = raw.TypeDeclaration?.Label is "[waste]" or "[unlimited waste]" &&
+            file.StatChangeDuration is { Milliseconds: > 0 } && !file.StatChanges.IsEmpty &&
+            file.StructureDiagnostics.IsEmpty;
+        bool nativeDisguise = raw.TypeDeclaration is { Label: "[disguise]", Parameters: [0] } &&
+            file.Disguise is { Kind: "monster", FormId: > 0, Seconds: > 0 and <= int.MaxValue / 1000 } &&
+            file.Diagnostics.IsEmpty;
+        if (file.TemplateId <= 0 || raw.TemplateId != file.TemplateId || raw.TypeDeclaration is null || LegacyStatusConsumableDefinition.IsNativeItem(file.TemplateId) ||
+            (raw.TypeDeclaration is not { Label: "[waste]" or "[unlimited waste]" or "[throw]" or "[set]" } && !nativeDisguise &&
                 !(raw.TypeDeclaration is { Label: "[expert town potion]", Parameters: [0] } &&
                     (bossBuff is not null || epicBuff is not null || enhancementPotion is not null)) &&
                 !(enhancementPotion is not null && raw.TypeDeclaration is
@@ -83,7 +93,9 @@ internal sealed class RecoveryConsumableCatalog
             ConsumableSpecialItems.IsStaminaRecovery(file.TemplateId) &&
                 (file.Diagnostics.Length != 0 || file.StatChangeDuration is not { Target: "myself", Milliseconds: > 0 }) ||
             raw.HasUsableJobs && raw.DeclaredUsableJobs is null ||
-            raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 || file.DeclaredFields.Contains("action type") || raw.HasBoosterInfo)
+            raw.HasUseActionPacket && raw.DeclaredUseActionPacket != 0 &&
+                !(raw.DeclaredUseActionPacket == 1 && nativeStatUse) ||
+            file.DeclaredFields.Contains("action type") || raw.HasBoosterInfo)
             return null;
         if ((bossBuff is not null || epicBuff is not null) && (file.StructureDiagnostics.Length != 0 ||
             raw.DeclaredActionUsablePlaces is not { Count: > 0 } places ||
@@ -114,6 +126,7 @@ internal sealed class RecoveryConsumableCatalog
             BossSelectionBuff = bossBuff,
             EpicDropBuff = epicBuff,
             EnhancementPotion = enhancementPotion,
+            Disguise = nativeDisguise ? new(1, file.Disguise!.FormId, file.Disguise.Seconds) : null,
             RequiresDungeon = revival || file.DeclaredFields.Contains("summon npc") || raw.TypeDeclaration.Label is "[throw]" or "[set]", EffectsAfterAcknowledgement = file.SubType == 2,
             ExpBonusPermille = expBonus ? file.ExpBonusPermille!.Value : 0,
             QuestExpBonusPermille = file.QuestExpBonusPermille is > 0 && file.ExpBonusMilliseconds is > 0 ? file.QuestExpBonusPermille.Value : 0,

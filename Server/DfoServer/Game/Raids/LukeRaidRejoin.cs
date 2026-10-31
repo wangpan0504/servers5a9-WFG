@@ -131,11 +131,24 @@ internal sealed class LukeRaidRejoin(RaidRegistry registry, PartyService parties
                 if (!callerCommandHeld && !reservation.Battle.IsLukeWaitingRoom(actor)) return new(false, "waiting-room-required");
                 if (raid.Type == 2)
                 {
-                    var battlefield = registry.RestoreLukeMember(raid, fact, actor, () => reservation.Battle.RestoreLukeMember(reservation, actor,
-                        () => actor.Session.InstallLukeRejoin(actor, reservation.Battle)));
-                    if (battlefield is null) return new(false, "binding-conflict");
-                    reservation.Bound = actor;
-                    return new(true, "bound-without-wire", battlefield, null, reservation.Battle.View);
+                    // 全团owner和命令门禁已持有；持久CAS在目录/Battle gate外，失败不能发重返成功。
+                    if (!actor.Session.ChangeFiendwarRejoin(reservation.Original, actor, reservation.Battle))
+                        return new(false, "persistent-rejoin-expired-or-stale");
+                    bool installed = false;
+                    try
+                    {
+                        var battlefield = registry.RestoreLukeMember(raid, fact, actor, () => reservation.Battle.RestoreLukeMember(reservation, actor,
+                            () => actor.Session.InstallLukeRejoin(actor, reservation.Battle)));
+                        if (battlefield is null) return new(false, "binding-conflict");
+                        reservation.Bound = actor;
+                        installed = true;
+                        return new(true, "bound-without-wire", battlefield, null, reservation.Battle.View);
+                    }
+                    finally
+                    {
+                        if (!installed && !actor.Session.ChangeFiendwarRejoin(reservation.Original, actor, reservation.Battle, undo: true))
+                            throw new InvalidOperationException("漩涡重返安装失败后原持久资格未能归还");
+                    }
                 }
                 RaidParty? restored = null;
                 var restoredParty = parties.RestoreLukeRaidMember(ordinary, reservation.OriginalParty, actor, reservation.PartySlot, fact.Squad, _ =>

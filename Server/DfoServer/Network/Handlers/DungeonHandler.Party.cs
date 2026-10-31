@@ -58,6 +58,15 @@ internal sealed partial class DungeonHandler
 
     async Task PublishPartyNoticeAsync(GameConnectionContext context, PartyDungeonNotice notice)
     {
+        if (notice.Kind == PartyDungeonNoticeKind.FiendwarTitles)
+        {
+            if (titles is null || titleProjection is null || inventoryProjection is null) return;
+            var result = context.Session.UpdateTitleAchievements(titles, fiendwarOnly: true);
+            await titleProjection.PublishAsync(context, result, inventoryProjection);
+            if (result.Plan is { Changed: true }) log.Write("fiendwar_title_facts_applied", new
+                { Connection = context.Id, Character = result.Receipt?.Character.Id, Quests = result.Plan.FiendwarFacts.Select(row => row.Quest).ToArray() });
+            return;
+        }
         if (lukeLifecycle is not null && notice.Kind is PartyDungeonNoticeKind.RaidBattleSync or PartyDungeonNoticeKind.Departure &&
             context.Session.CommitPendingLukePhase(lukeLifecycle))
             log.Write("raid_phase_committed", new { Connection = context.Id, RaidType = context.Session.RaidCombatKind(), Instance = context.Session.RaidCombatView()?.Instance });

@@ -63,6 +63,10 @@ internal static class PartyDungeonProjection
         await Task.WhenAll(batch.Where(n => n.Kind is PartyDungeonNoticeKind.Death or PartyDungeonNoticeKind.Loaded or PartyDungeonNoticeKind.Move &&
                 n.Scene?.Entry.IsCosmo == true && n.Recipient.Actor.Session.FormalDungeonResultFocus() is not null)
             .Select(n => PublishOneAsync(n with { Kind = PartyDungeonNoticeKind.RetryEligibility })));
+        // 原死亡与战场通知全部完成后才消费称号；不能换掉仍被前序投影引用的角色快照。
+        await Task.WhenAll(batch.Where(n => n.Kind is PartyDungeonNoticeKind.Death or PartyDungeonNoticeKind.RaidBattleSync &&
+                n.Recipient.Actor.Session.RaidCombatKind() == Game.Raids.RaidKind.Fiendwar)
+            .GroupBy(n => n.Recipient.Actor.Session).Select(group => PublishOneAsync(group.Last() with { Kind = PartyDungeonNoticeKind.FiendwarTitles })));
     }
 
     // 连接清理从命令门禁外进入，先串行队伍，再等待剩余连接；不得拿实例锁等待账号锁。

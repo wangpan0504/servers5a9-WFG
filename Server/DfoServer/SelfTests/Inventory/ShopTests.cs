@@ -23,6 +23,7 @@ internal static class ShopTests
 {
     public static void Run(TownCatalog towns, CharacterCatalog characters, ItemResources itemResources)
     {
+        ShopPurchaseLimitTests.RunResources(towns, itemResources);
         int checks = Count;
         void Reject(Action action, string name)
         {

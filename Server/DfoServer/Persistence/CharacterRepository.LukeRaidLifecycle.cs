@@ -84,7 +84,14 @@ internal sealed partial class CharacterRepository : ILukeRaidLifecycleStore
                 (candidate.FinalPhase ? ",clear_week=$clear" : "") +
                 $" WHERE character_id=$id AND account=$account AND instance_id=$instance AND raid_type=$type AND {prefix}_event IS NULL";
             if (command.ExecuteNonQuery() != 1) throw new InvalidOperationException("卢克阶段回执条件提交未命中原身份");
+            if (counts && eligible && candidate.FiendwarNoFacilities)
+                AddFiendwarTitleFact(db, tx, member.Character, member.Account, 7005);
+            if (counts && eligible && candidate.FiendwarNoBaseThreat)
+                AddFiendwarTitleFact(db, tx, member.Character, member.Account, 7004);
         }
+        if (candidate.FinalPhase)
+            CommitRaidGuildContribution(db, tx, candidate.Instance, candidate.RaidType, result,
+                candidate.GuildParties, candidate.Anchor.ToUnixTimeSeconds());
         tx.Commit();
         return new(result.ToImmutable());
     }

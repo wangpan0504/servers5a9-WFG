@@ -61,6 +61,7 @@ internal sealed partial class AntonRaidBattle
             candidate = RemovePreyArea(candidate, dungeon);
             candidate = EvaluatePrey(candidate, repeatable ? null : dungeon, definition.HpSymbol, null, dungeon);
             // 执行成功才消费本Run；同一死亡/117重放不能再触发产物、商人或阶段候选。
+            RecordGuildClearParty([row.Actor.Character]);
             run.ClearFacts.Add(row.Actor, row.Fact);
             var key = (run.Phase, row.Actor.Character);
             lukeParticipation[key] = checked(lukeParticipation.GetValueOrDefault(key) + 1);

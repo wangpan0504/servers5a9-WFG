@@ -152,8 +152,11 @@ internal static partial class TownPackets
             // USERINFO Actor：026777A0 读 type:u8 + expertness:u32 进局部DTO+3B0/+3B4；0267E541 后 02D8B110→015034E0 装回活 I。
             writer.Write(character.ExpertJobType);
             writer.Write(checked((uint)character.ExpertJobExperience));
-            writer.Write((byte)0);
-            writer.Write(0u);
+            // 0267E0D8→Data+3C8/+3CC；02AC3100→02A94A00按type1读取怪物形态，而非源药剂ID。
+            var disguise = sceneState == ActorSceneState.Town && character.Disguise is { } form &&
+                form.Active(checked((utcSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()) * 1000)) ? form : null;
+            writer.Write(disguise?.Type ?? (byte)0);
+            writer.Write(disguise?.FormId ?? 0);
             writer.Write(0u);
             writer.Write((ushort)0);
             writer.Write(new byte[2]);

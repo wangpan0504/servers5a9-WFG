@@ -24,16 +24,8 @@ internal sealed partial class AntonRaidBattle
         var payments = ImmutableArray.CreateBuilder<FiendwarPayment>(reservations.Length);
         foreach (var row in reservations)
         {
-            var items = ImmutableArray.CreateBuilder<InventoryItem>();
-            foreach (var item in row.Inventory.Before.Items.Where(item => item.Core.ItemId == cost.ItemId))
-            {
-                int remaining = row.Inventory.After.Items.SingleOrDefault(after => after.Uid == item.Uid)?.Core.Count ?? 0;
-                int removed = item.Core.Count - remaining;
-                if (removed > 0) items.Add(item with { Uid = 0, Core = item.Core with { Value = removed } });
-            }
-            if (row.Lifecycle is not { } lifecycle || items.Sum(item => item.Core.Count) != cost.Count || items.Count > 10)
-                throw new InvalidDataException("漩涡退票缺少完整实际扣费计划");
-            payments.Add(new(row.Actor.Character, row.Actor.Owner.Account, lifecycle.At.ToUnixTimeSeconds(), items.ToImmutable()));
+            var payment = FiendwarPaymentSnapshot.Capture(row, cost);
+            payments.Add(new(row.Actor.Character, row.Actor.Owner.Account, row.Lifecycle!.At.ToUnixTimeSeconds(), payment.Items));
         }
         fiendwarPayments = payments.ToImmutable();
     }
@@ -71,4 +63,6 @@ internal sealed partial class AntonRaidBattle
             fiendwarFailureCommitted = true;
         }
     }
+
+    internal DateTimeOffset FiendwarRecoveryNow => lukeClock.GetUtcNow();
 }

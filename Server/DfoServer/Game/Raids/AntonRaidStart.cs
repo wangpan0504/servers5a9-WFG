@@ -64,6 +64,9 @@ internal sealed class AntonRaidStart(RaidRegistry registry, PartyService parties
         {
             var departingBattle = actor.Session.CurrentRaidBattle(actor);
             var beforeBattle = departingBattle?.View;
+            if (target == actor.Character && actor.CanManage && departingBattle is { Kind: RaidKind.Fiendwar } &&
+                registry.Find(actor)?.Started?.InstanceId == departingBattle.Instance)
+                actor.Session.RecordFiendwarDeparture(actor, departingBattle, disconnected: false);
             var change = registry.Leave(actor, target);
             if (change is { Before.Started: { } started, Removed: { } departed })
                 departed.Session.DetachRaidCombatStart(departed, started.InstanceId);

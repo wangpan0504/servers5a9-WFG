@@ -502,7 +502,7 @@ internal sealed partial class CharacterRepository
             .OrderBy(item => item.Position.List).ThenBy(item => item.Position.Index).ToImmutableArray();
         var purchases = ReadShopPurchases(db, account, characterId, transaction).AddRange(shared.Purchases)
             .OrderBy(row => row.NpcId).ThenBy(row => row.ItemId).ThenByDescending(row => row.AccountWide)
-            .ThenBy(row => row.ResetDaily).ToImmutableArray();
+            .ThenBy(row => row.ResetDaily).ThenBy(row => row.Period).ToImmutableArray();
         var inventory = new InventorySnapshot(items, expansion, gold)
         {
             ReviveCoins = coins, WinPoints = wins, GoldCarryLimit = carry, AuctionGoldLimit = auction,

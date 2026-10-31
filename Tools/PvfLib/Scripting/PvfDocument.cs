@@ -142,6 +142,17 @@ public sealed class PvfDocument
         return false;
     }
 
+    // 按源顺序保留全部标量声明，由消费者逐条校验并采用对应资源的覆盖规则。
+    public IReadOnlyList<string> Sections(string tag)
+    {
+        if (!fields.TryGetValue(tag, out var field)) return parent?.Sections(tag) ?? [];
+        if (field.Count == 1) return [text.AsSpan(field.Start, field.End - field.Start).TrimStart().ToString()];
+        var declarations = Regex.Matches(text, @"^\[" + Regex.Escape(tag) + @"\](.*?)(?=\n\[|\z)",
+            RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        if (declarations.Count != field.Count) throw new InvalidDataException("PVF重复字段索引不完整: " + tag);
+        return declarations.Select(declaration => declaration.Groups[1].Value.TrimStart()).ToArray();
+    }
+
     public string Section(string tag) => fields.TryGetValue(tag, out var field)
         ? text.AsSpan(field.Start, field.End - field.Start).TrimStart().ToString()
         : parent?.Section(tag) ?? "";

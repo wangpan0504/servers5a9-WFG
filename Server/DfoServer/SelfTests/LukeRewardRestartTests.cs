@@ -95,7 +95,7 @@ internal static partial class LukeRewardRestartTests
                 },kill:true);
                 if(beforeCommit)
                 {
-                    That(Snapshot(db)==initial,"提交前突然终止后新连接看到全部写入回滚，原资格保留");
+                    That(await SnapshotAfterCrashAsync(db)==initial,"提交前突然终止后新连接看到全部写入回滚，原资格保留");
                     await WorkerAsync(root,manifest with{Nonce=Guid.NewGuid().ToString("N"),Replay=true,Recover=true,BeforeCommit=false},signal=>
                     {
                         That(signal.Stage=="REPLAY","新进程真实GM恢复原未领权益");
@@ -144,6 +144,8 @@ internal static partial class LukeRewardRestartTests
         string host=Environment.ProcessPath??throw new InvalidOperationException("测试进程host未知");
         var start=new ProcessStartInfo(host){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true};
         if(Path.GetFileNameWithoutExtension(host).Equals("dotnet",StringComparison.OrdinalIgnoreCase))start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, typeof(LukeRewardRestartTests).Assembly.GetName().Name + ".dll"));
+        // 单文件发行入口仍需宿主转交标记；开发DLL入口不接受该标记。
+        if(Environment.GetCommandLineArgs().Skip(1).Contains("--server",StringComparer.Ordinal))start.ArgumentList.Add("--server");
         start.ArgumentList.Add("--selftest-core");start.Environment[WorkerVariable]=file;
         using var child=Process.Start(start)??throw new IOException("测试child启动失败");child.StandardInput.Close();
         string label=input.Recover?"recover":input.Replay?"replay":input.BeforeCommit?"precommit":"committed";
@@ -194,8 +196,30 @@ internal static partial class LukeRewardRestartTests
         var connection=new SqliteConnection(new SqliteConnectionStringBuilder{DataSource=path,Mode=readOnly?SqliteOpenMode.ReadOnly:SqliteOpenMode.ReadWriteCreate,Pooling=false}.ToString());
         connection.Open();return connection;
     }
-    static string Snapshot(string path)
+    static async Task<string> SnapshotAfterCrashAsync(string path)
     {
+        var elapsed=Stopwatch.StartNew();
+        for(int attempt=0;;attempt++)
+        {
+            try
+            {
+                string result=Snapshot(path);
+                if(attempt>0)Console.WriteLine($"Luke restart WAL truncation wait: attempts={attempt}, elapsed_ms={elapsed.ElapsedMilliseconds}");
+                return result;
+            }
+            catch(IOException error) when(OperatingSystem.IsWindows()&&elapsed.Elapsed<TimeSpan.FromSeconds(5)&&
+                error.InnerException is SqliteException{SqliteExtendedErrorCode:1546})
+            {
+                // 原child已精确终止并回收；只等Windows释放WAL截断资源，每轮仍用新只读连接完整取证。
+                await Task.Delay(25);
+            }
+        }
+    }
+    static string Snapshot(string path,[System.Runtime.CompilerServices.CallerLineNumber]int caller=0)
+    {
+        string reading="sqlite_master";
+        try
+        {
         using var db=Open(path,true);using var transaction=db.BeginRead();
         using var command=db.CreateCommand();command.Transaction=transaction;
         command.CommandText="SELECT name FROM sqlite_master WHERE type='table' ORDER BY name";
@@ -203,6 +227,7 @@ internal static partial class LukeRewardRestartTests
         var result=new List<object>();
         foreach(string table in tables)
         {
+            reading=table;
             string escaped="\""+table.Replace("\"","\"\"",StringComparison.Ordinal)+"\"";
             command.CommandText="SELECT * FROM "+escaped;
             using var reader=command.ExecuteReader();var rows=new List<string>();
@@ -213,5 +238,8 @@ internal static partial class LukeRewardRestartTests
             rows.Sort(StringComparer.Ordinal);result.Add(new{Table=table,Rows=rows});
         }
         return JsonSerializer.Serialize(result);
+        }
+        catch(SqliteException error)
+        {throw new IOException($"重启快照失败：调用行{caller}，表{reading}，SQLite扩展码{error.SqliteExtendedErrorCode}",error);}
     }
 }

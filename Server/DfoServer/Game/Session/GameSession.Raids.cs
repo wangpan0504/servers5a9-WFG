@@ -80,6 +80,7 @@ internal sealed partial class GameSession
         internal RaidRemovalNotices? Removal;
         internal AntonRaidBattle? Battle;
         internal AntonRaidDisconnectFact? Disconnect;
+        internal Exception? PersistenceFailure;
 
         internal void CommitDisconnect()
         {
@@ -92,6 +93,7 @@ internal sealed partial class GameSession
             var registry = Registry; var removal = Removal; var battle = Battle;
             Registry = null; Removal = null; Battle = null;
             List<Exception> failures = [];
+            if (PersistenceFailure is { } persistence) { PersistenceFailure = null; failures.Add(persistence); }
             try { if (removal is not null) registry!.PublishRemoval(removal); }
             catch (Exception error) { failures.Add(error); }
             try { if (battle?.Kind == RaidKind.Luke) battle.Publish(battle.View); }
@@ -115,7 +117,12 @@ internal sealed partial class GameSession
             fact ??= registry.CaptureAntonDisconnect(combat.Actor, combat.Battle,
                 inRun ? PartyDungeon?.Id ?? partyDungeonRun : null, Phase == SessionPhase.Loading);
         }
-        if (raidCombat is { } previous) previous.Battle.DetachStart(previous.Actor);
+        if (raidCombat is { } previous)
+        {
+            try { RecordFiendwarDeparture(previous.Actor, previous.Battle, disconnected); }
+            catch (Exception error) { notices.PersistenceFailure = error; }
+            previous.Battle.DetachStart(previous.Actor);
+        }
         raidCombat = null;
         raidDungeonAdmission = null;
         raidRegistry = null;

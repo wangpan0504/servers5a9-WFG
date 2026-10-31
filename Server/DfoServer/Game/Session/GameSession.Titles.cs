@@ -14,12 +14,18 @@ internal sealed partial class GameSession
     public InventorySnapshot? ReadPublicTitleBook(ushort characterId) => owner.Execute(() =>
         Ready && Selected is not null ? repository.ReadPublicTitleBook(owner, characterId) : null);
     public TitleAchievementResult UpdateTitleAchievements(TitleAchievementService service, TitleTriggerRequest? request = null,
-        bool initializing = false)
+        bool initializing = false, bool fiendwarOnly = false)
     {
         var captured = owner.Execute(() => (Character: Selected, SelectionEpoch, Phase, Dungeon: formalDungeon));
         if (captured.Character is not { } character || !CanUpdate()) return TitleAchievementResult.Reject(request?.QuestId ?? 0);
-        var result = request is { } trigger ? service.Trigger(character, trigger, DateTimeOffset.UtcNow) :
-            service.Reconcile(character, DateTimeOffset.UtcNow);
+        bool formalFiendwar = request is null || FiendwarTitleFacts.IsQuest(request.Value.QuestId);
+        var facts = formalFiendwar ? repository.LoadFiendwarTitleFacts(owner, character.Id) : [];
+        if (fiendwarOnly && facts.IsEmpty || request is { } reported && FiendwarTitleFacts.IsQuest(reported.QuestId) &&
+            !facts.Any(row => row.Quest == reported.QuestId)) return TitleAchievementResult.Reject(request?.QuestId ?? 0);
+        // 客户端417仅唤醒已提交事实的消费，Delta不参与漩涡六项成就计数。
+        var result = formalFiendwar ? service.Reconcile(character, DateTimeOffset.UtcNow, facts, request?.QuestId ?? 0,
+                includeStateFacts: !fiendwarOnly && request is null) :
+            service.Trigger(character, request!.Value, DateTimeOffset.UtcNow);
         return owner.Execute(() =>
         {
             if (!CanUpdate() || SelectionEpoch != captured.SelectionEpoch || Phase != captured.Phase ||

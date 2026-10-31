@@ -55,6 +55,9 @@ internal static class LukeRaidLifecycleTransactionTests
                 sessions.Add(session);session.Select(0);session.MarkReady();session.CurrentParty=()=>parties.Current(session);
             }
             var actors=sessions.Select(session=>session.CaptureRaidActor(raids)!).ToArray();
+            Sql($"INSERT INTO guilds(guild_id,name,address,master_character_id,created_at_unix) VALUES(380,'团本贡献','raid-contribution',{actors[0].Character},1000)");
+            foreach(var actor in actors)
+                Sql($"INSERT INTO guild_members(guild_id,character_id,grade,joined_at_unix) VALUES(380,{actor.Character},4,1000)");
             void Create()
             {
                 That(raids.Create(actors[0],1,"Life","Life"u8.ToArray(),8,1) is not null,"原Registry创建阶段事务团");
@@ -187,7 +190,21 @@ internal static class LukeRaidLifecycleTransactionTests
                                 "阶段事务失败零部分资格/通关，密封原候选保留且不开放Reward");
                             Sql("DROP TRIGGER fail_phase");
                         }
+                        if(phase==1&&!stageDenied)
+                        {
+                            Sql($"CREATE TRIGGER fail_guild_credit BEFORE INSERT ON guild_contribution_events WHEN NEW.source=5 AND NEW.character_id={actors[3].Character} BEGIN SELECT RAISE(ABORT,'guild contribution rollback'); END");
+                            Reject<SqliteException>(()=>repository.CommitLukePhase(candidate),"真实公会贡献末成员写入失败");
+                            That(Snapshot()==snapshot&&ReferenceEquals(battle.PendingLukeSettlement(),candidate),
+                                "终局和公会贡献使用同一事务，末段失败回滚所有通关、贡献和公会版本");
+                            Sql("DROP TRIGGER fail_guild_credit");
+                        }
                         var committed=repository.CommitLukePhase(candidate);battle.AcceptLukeSettlement(candidate,committed);
+                        if(phase==1&&!stageDenied)
+                        {
+                            using var guildDb=new SqliteConnection("Data Source="+path);guildDb.Open();using var guildQuery=guildDb.CreateCommand();
+                            guildQuery.CommandText=$"SELECT count(*) FROM guild_contribution_events WHERE source=5 AND points=1000 AND event_id LIKE 'raid:1:{candidate.Instance:N}:%'";
+                            That(Convert.ToInt32(guildQuery.ExecuteScalar())==4,"卢克只给真实参与四人按同会四人倍率各1000，不给另外四名挂机成员发分");
+                        }
                         foreach(var actor in actors)
                         {
                             var saved=ReadCommitted(candidate.Instance,phase,actor);
@@ -382,7 +399,7 @@ internal static class LukeRaidLifecycleTransactionTests
         {
             using var db=new SqliteConnection("Data Source="+path);db.Open();using var command=db.CreateCommand();
             List<string> result=[];
-            foreach(string table in new[]{"character_raid_runs","character_raid_reward_receipts","characters","character_inventory_items","inventory_audit_log"})
+            foreach(string table in new[]{"character_raid_runs","character_raid_reward_receipts","characters","character_inventory_items","inventory_audit_log","guild_members","guilds","guild_contribution_events"})
             {
                 command.CommandText="SELECT * FROM "+table;using var reader=command.ExecuteReader();List<object[]> rows=[];
                 while(reader.Read()){object[] row=new object[reader.FieldCount];reader.GetValues(row);rows.Add(row);}result.Add(JsonSerializer.Serialize(rows));

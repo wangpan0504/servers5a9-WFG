@@ -722,6 +722,16 @@ CREATE TABLE shop_purchase_counts(
     PRIMARY KEY(account,character_id,npc_id,item_id,reset_daily)
 );
 
+CREATE TABLE item_purchase_counts(
+    account TEXT NOT NULL,
+    character_id INTEGER NOT NULL CHECK(character_id BETWEEN 0 AND 65535),
+    item_id INTEGER NOT NULL CHECK(item_id>0),
+    period INTEGER NOT NULL CHECK(period BETWEEN 1 AND 4),
+    day INTEGER NOT NULL CHECK((period=4 AND day=0) OR (period BETWEEN 1 AND 3 AND day BETWEEN 1 AND 3652058)),
+    count INTEGER NOT NULL CHECK(count BETWEEN 1 AND 2147483647),
+    PRIMARY KEY(account,character_id,item_id,period)
+);
+
 CREATE TABLE account_epic_books(
     account TEXT PRIMARY KEY,
     revision INTEGER NOT NULL CHECK(revision>=1),
@@ -1762,6 +1772,8 @@ CREATE TABLE character_raid_runs(
     phase0_event TEXT, phase0_anchor INTEGER, phase0_receipt TEXT,
     phase1_event TEXT, phase1_anchor INTEGER, phase1_receipt TEXT,
     clear_week INTEGER,
+    guild_id INTEGER CHECK(guild_id BETWEEN 0 AND 4294967295),
+    guild_joined_at INTEGER CHECK((guild_id IS NULL AND guild_joined_at IS NULL) OR (guild_id IS NOT NULL AND guild_joined_at IS NOT NULL AND ((guild_id=0 AND guild_joined_at=0) OR (guild_id>0 AND guild_joined_at>=0)))),
     PRIMARY KEY(character_id,instance_id),
     CHECK((phase0_event IS NULL AND phase0_anchor IS NULL AND phase0_receipt IS NULL) OR
         (phase0_event IS NOT NULL AND phase0_anchor IS NOT NULL AND phase0_receipt IS NOT NULL AND length(phase0_event)=32 AND phase0_anchor>=0 AND json_valid(phase0_receipt) AND json_type(phase0_receipt)='object')),
@@ -2111,3 +2123,26 @@ CREATE TRIGGER IF NOT EXISTS cash_shop_promotion_valid_predecessor BEFORE INSERT
               AND realm=NEW.carry_realm AND promotion_group=NEW.carry_group AND rules_snapshot=NEW.carry_rules_snapshot AND rule_kind=0)
             THEN RAISE(ABORT,'promotion predecessor must be frozen and exact') END;
     END;
+
+-- 漩涡原票与断线资格仅支持系统中断退票，不重建战斗。
+
+CREATE TABLE character_fiendwar_recovery(
+  character_id INTEGER NOT NULL, instance_id TEXT NOT NULL,
+  owner_generation INTEGER NOT NULL CHECK(owner_generation>0),
+  selection_epoch INTEGER NOT NULL CHECK(selection_epoch>=0),
+  state INTEGER NOT NULL CHECK(state IN(0,1,2)),
+  rejoin_until INTEGER,
+  payment_json TEXT NOT NULL CHECK(json_valid(payment_json) AND json_type(payment_json)='object'),
+  PRIMARY KEY(character_id,instance_id),
+  CHECK((state=0 AND (rejoin_until IS NULL OR rejoin_until>=0)) OR (state IN(1,2) AND rejoin_until IS NOT NULL AND rejoin_until>=0)),
+  FOREIGN KEY(character_id,instance_id) REFERENCES character_raid_runs(character_id,instance_id) ON DELETE CASCADE
+);
+
+CREATE TABLE character_fiendwar_title_facts(
+  character_id INTEGER NOT NULL, account TEXT NOT NULL,
+  quest_id INTEGER NOT NULL CHECK(quest_id BETWEEN 7003 AND 7008),
+  total INTEGER NOT NULL CHECK(total BETWEEN 1 AND 65535),
+  applied INTEGER NOT NULL DEFAULT 0 CHECK(applied>=0 AND applied<=total),
+  PRIMARY KEY(character_id,quest_id),
+  FOREIGN KEY(character_id,account) REFERENCES characters(id,account)
+);

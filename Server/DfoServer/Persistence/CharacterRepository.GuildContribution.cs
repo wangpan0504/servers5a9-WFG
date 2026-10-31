@@ -25,11 +25,17 @@ internal sealed partial class CharacterRepository : IGuildContributionStore
     internal GuildContributionCommit CreditGuildContributionInTransaction(SqliteConnection db, SqliteTransaction tx,
         AccountOwners.Lease owner, ushort id, GuildContributionSource source, string eventId, long now,
         int? awardedPoints = null, GuildDungeonMembership? expectedMembership = null)
+        => CreditGuildContributionInTransaction(db, tx, owner.Account, id, source, eventId, now, awardedPoints, expectedMembership);
+
+    // 团本终局只持原生命周期事务，不在这里重新取得在线账号或嵌套写事务。
+    GuildContributionCommit CreditGuildContributionInTransaction(SqliteConnection db, SqliteTransaction tx,
+        string account, ushort id, GuildContributionSource source, string eventId, long now,
+        int? awardedPoints, GuildDungeonMembership? expectedMembership)
     {
         if (eventId.Length is < 1 or > 256 || now is <= 0 or > int.MaxValue)
             throw new InvalidDataException("公会贡献事件无效");
         using (var ownership = ManagementCommand(db, tx, "SELECT 1 FROM characters WHERE id=$id AND account=$account",
-            ("$id", id), ("$account", owner.Account)))
+            ("$id", id), ("$account", account)))
             if (ownership.ExecuteScalar() is null) return new(3);
         int amount = awardedPoints ?? GuildContributionRules.Points(source);
         if (amount <= 0 || expectedMembership is { } expected && expected.CharacterId != id)
@@ -46,7 +52,7 @@ internal sealed partial class CharacterRepository : IGuildContributionStore
                     throw new InvalidDataException("公会贡献事件归属不符");
                 return new(0);
             }
-        var state = ReadManagement(db, tx, owner.Account, id);
+        var state = ReadManagement(db, tx, account, id);
         // 尚未入会的登录不是公会登录；加入公会后当天首次真实重登仍可领取。
         if (state is null && source is GuildContributionSource.Login or GuildContributionSource.Chat)
             return new(0);
@@ -79,7 +85,7 @@ internal sealed partial class CharacterRepository : IGuildContributionStore
         command.Parameters.AddWithValue("$guildId", state is null ? DBNull.Value : state.Guild.Id);
         command.Parameters.AddWithValue("$joinedAt", joined); command.Parameters.AddWithValue("$week", week);
         command.Parameters.AddWithValue("$points", state is null ? 0 : amount); command.Parameters.AddWithValue("$now", now);
-        command.Parameters.AddWithValue("$account", owner.Account);
+        command.Parameters.AddWithValue("$account", account);
         if (command.ExecuteNonQuery() != 1) return new(3);
         if (state is null) return new(0);
         long revision = TouchManagement(db, tx, state.Guild.Id);

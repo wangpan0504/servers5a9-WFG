@@ -42,12 +42,19 @@ internal sealed class LukeRewardPrecommitObserver : IDisposable
             throw new PlatformNotSupportedException("提交前观察器仅已登记Linux/Windows x64 ABI，不跳过测试");
         string file=OperatingSystem.IsWindows()?"e_sqlite3.dll":"libe_sqlite3.so";
         string rid=OperatingSystem.IsWindows()?"win-x64":"linux-x64";
-        library=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"runtimes",rid,"native",file));
+        string developmentLibrary=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"runtimes",rid,"native",file));
         var comparison=OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal;
-        // Repository已实际初始化provider；只接受它已经加载的本项目runtime模块，不偷偷另装系统SQLite。
+        // Repository已实际初始化provider；单文件原生库由.NET释放到其公布的搜索目录，不能另装SQLite。
         using var process=Process.GetCurrentProcess();
         var modules=process.Modules.Cast<ProcessModule>().Where(module=>Path.GetFileName(module.FileName).Equals(file,comparison)).ToArray();
-        if(modules.Length!=1||!Path.GetFullPath(modules[0].FileName).Equals(library,comparison))
+        if(modules.Length!=1)
+            throw new PlatformNotSupportedException("真实SQLite provider模块不唯一");
+        library=Path.GetFullPath(modules[0].FileName);
+        var nativeDirectories=(AppContext.GetData("NATIVE_DLL_SEARCH_DIRECTORIES") as string??"")
+            .Split(Path.PathSeparator,StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory=>Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)));
+        if(!library.Equals(developmentLibrary,comparison)&&!nativeDirectories.Any(directory=>
+            directory.Equals(Path.GetDirectoryName(library),comparison)))
             throw new PlatformNotSupportedException("真实SQLite provider模块路径不匹配项目runtime");
         native=NativeLibrary.Load(library);
         T Bind<T>(string name) where T:Delegate=>Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(native,name));

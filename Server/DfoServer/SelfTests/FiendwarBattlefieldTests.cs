@@ -54,6 +54,22 @@ internal static class FiendwarBattlefieldTests
         That(radar.Symbols["[radar state]"] == 1 && radar.Symbols["[movie radar on]"] == 1 &&
             radar.Symbols["[battery state]"] == 0, "雷达真实完成只激活自己的效果");
         var battery = engine.CompleteArea(initial, 17, start.AddSeconds(10)).State;
+        That(!initial.FacilitiesDestroyed && radar.FacilitiesDestroyed && battery.FacilitiesDestroyed &&
+            engine.SetSymbol(radar, "[radar state]", 0, start.AddSeconds(11)).State.FacilitiesDestroyed,
+            "未拆设施成就保存不可逆历史，设施恢复或状态归零不洗掉本次已拆事实");
+        var warning = initial with { Areas = initial.Areas.SetItem(14, initial.Areas[14] with { Warning = true }) };
+        That(!engine.Occupy(warning, 14, true, start.AddSeconds(11)).State.BaseThreatened,
+            "非基地前线的敌军及普通区域倒计时Warning不能充当基地危险");
+        foreach (int area in new[] { 6, 7, 8 })
+        {
+            var threatened = engine.Occupy(initial with { Areas = initial.Areas.SetItem(area,
+                new(Enemy: new(100, 1))) }, area, true, start.AddSeconds(11)).State;
+            That(threatened.BaseThreatened && engine.CompleteArea(threatened, area, start.AddSeconds(12)).State.BaseThreatened,
+                "原生三个基地前线任一出现敌军即锁存，清理敌军不洗掉已发生的危险");
+            var neutral = engine.Occupy(initial with { Areas = initial.Areas.SetItem(area,
+                new(Monster: new(101, 1), Warning: true)) }, area, true, start.AddSeconds(11)).State;
+            That(!neutral.BaseThreatened, "前线中立怪与Warning本身不等于敌军威胁");
+        }
         That(battery.Symbols["[battery state]"] == 1 && battery.Timers.ContainsKey(new("activate_battery", 17)), "炮塔独立冷却规则保留");
         var one = engine.CompleteArea(initial, 27, start.AddSeconds(20)).State;
         That(one.Symbols["[top command center state]"] == 0 && one.Timers[new("top_restore_center", 27)].End == start.AddSeconds(1460) &&

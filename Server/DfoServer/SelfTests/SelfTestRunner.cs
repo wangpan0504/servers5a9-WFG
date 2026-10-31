@@ -94,6 +94,7 @@ internal static class SelfTestRunner
         Testing.TcpTestReceiptsTests.Run();
         Testing.ClientSettingsSnapshotsTests.Run();
         CashShopTests.RunCore();
+        Testing.Inventory.ShopPurchaseLimitTests.RunCore();
         CashShopPromotionTests.RunCore();
         PromotionConsumerValidationTests.RunCore();
         CashShopPromotionSessionTests.RunCore();
